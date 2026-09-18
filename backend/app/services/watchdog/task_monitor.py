@@ -10,7 +10,7 @@ sessions-list). Stale-task ownership lies with task_runner._check_dispatch_ack.
 
 import logging
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from fastapi import HTTPException
 from sqlalchemy import or_, and_
@@ -18,13 +18,64 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.agent import Agent
-from app.models.task import Task, TaskComment
+from app.models.task import Task, TaskComment, TaskEvent
 from app.redis_client import RedisKeys, get_redis, try_claim_heal
 from app.services.activity import emit_event
 from app.services.task_state import lock_and_set
-from app.utils import utcnow
+from app.utils import ensure_aware, utcnow
 
 logger = logging.getLogger("mc.watchdog")
+
+# Silent-card watchdog (report-only). A card in in_progress OR waiting with
+# no agent turn and no non-system comment for this long is reported to the
+# Board Lead — never auto-moved. One notify per silent phase (DB, not Redis
+# TTL: a 1h key is what stacked identical watchdog_notify comments overnight).
+#
+# The threshold is per status, not an exception list: the status already
+# carries the intent ("waiting" = parked on purpose, "in_progress" = someone
+# should be working), so a deliberately parked card only alerts once the
+# park itself looks forgotten. A whitelist ("never alert on waiting") would
+# silence genuinely forgotten parked cards forever.
+SILENT_CARD_STATUSES = ("in_progress", "waiting")
+SILENT_CARD_THRESHOLD_MINUTES = {
+    "in_progress": 30,
+    "waiting": 12 * 60,  # parked ≠ forgotten: alert after half a day
+}
+# A watched status missing from the map falls back to the STRICTEST
+# threshold in the map, never to "never alert": forgetting to add a status
+# must not re-create the whitelist through the back door. Worst case of the
+# fallback is an over-eager alert — loud, and a human sees it. A
+# quiet default would be the exact failure mode this check exists to catch.
+SILENT_CARD_FALLBACK_THRESHOLD_MINUTES = min(
+    SILENT_CARD_THRESHOLD_MINUTES.values()
+)
+
+# Second stage (_check_lead_notify_escalations below): a stage-1 lead
+# message that got NO lead reaction for this long is reported to the
+# operator — exactly once per silent phase. "Lead reaction" is explicit:
+# a comment posted by the Board Lead on the card, or a status change
+# authored by the Board Lead, both AFTER the stage-1 message.
+LEAD_NOTIFY_OPERATOR_ESCALATION_MINUTES = 30
+# Stage-1 messages this escalation watches. Both end in the same dead end:
+# the Lead is addressed on the card, and if he never reads it, nobody
+# louder is ever told (incident 2026-09-12 07:16: 81 minutes, no reaction).
+LEAD_NOTIFY_COMMENT_TYPES = ("watchdog_notify", "blocker_lead_notify")
+
+# Retract path (candidate A, 2026-09-17): every comment type that can open a
+# silent-card alert (stage 1 AND stage 2). One shared retraction check covers
+# both — a card that moves again closes whichever alert is still open, up to
+# and including the operator-facing lead_escalation Approval.
+SILENT_CARD_ALERT_COMMENT_TYPES = (*LEAD_NOTIFY_COMMENT_TYPES, "lead_escalated_notify")
+
+_SILENT_CARD_OPEN_CHILD = frozenset({
+    "inbox", "in_progress", "review", "waiting", "user_test", "blocked",
+})
+
+
+def _dt_max(*values: datetime | None) -> datetime | None:
+    """Return the latest timezone-aware instant, ignoring Nones."""
+    aware = [ensure_aware(v) for v in values if v is not None]
+    return max(aware) if aware else None
 
 
 class TaskMonitorMixin:
@@ -665,6 +716,18 @@ class TaskMonitorMixin:
         if not completed_parent.project_id:
             return
 
+        # C2 (PR #533 Nacharbeit Runde 3, Rex review B1): mirrors the fix in
+        # tasks.py's inline phase-auto-advance. `run_control.is_(None)` used
+        # to sit as a filter on this query — a filter removes the held row
+        # from the result set instead of halting the walk, so the query
+        # returned the next *unheld* phase after it and started that one
+        # (leapfrog). Since this runs on every watchdog tick as long as
+        # completed_parent stays "done", every phase behind the hold gets
+        # force-started on successive ticks — one `mc hold` cascades the
+        # rest of the project into parallel in_progress. The check now runs
+        # AFTER selecting the immediate next phase by sort_order: if that
+        # phase is held, stop — the phase stays "inbox" and is picked up
+        # automatically on the first tick after release.
         next_phase = (await session.exec(
             select(Task).where(
                 Task.project_id == completed_parent.project_id,
@@ -674,7 +737,7 @@ class TaskMonitorMixin:
             ).order_by(Task.sort_order.asc()).limit(1)
         )).first()
 
-        if not next_phase:
+        if not next_phase or next_phase.run_control is not None:
             return
 
         try:
@@ -874,15 +937,34 @@ class TaskMonitorMixin:
         now = utcnow()
 
         for dep in all_deps:
-            # Only check if the dependent task is still actively waiting
-            task = await session.get(Task, dep.task_id)
-            if not task or task.status not in ("inbox", "in_progress"):
+            # ── Fresh status reads BEFORE any decision (identity-map trap) ──
+            # With expire_on_commit=False everywhere in this codebase,
+            # session.get() returns the cached object from THIS session's
+            # identity map — if another session resolved the dependency (or
+            # dispatched the waiting task) since this session last saw it,
+            # the cached "failed"/"inbox" would still produce a zombie
+            # approval for a problem that no longer exists. Column selection
+            # bypasses the identity map (see the review_stuck guard in
+            # _check_review_tasks for the same pattern).
+            task_row = (await session.exec(
+                select(Task.status).where(Task.id == dep.task_id)
+            )).first()
+            if task_row is None or task_row not in ("inbox", "in_progress"):
                 continue
 
-            # Check dependency task
-            dep_task = await session.get(Task, dep.depends_on_task_id)
-            if not dep_task or dep_task.status not in ("failed", "blocked"):
+            dep_row = (await session.exec(
+                select(Task.status, Task.updated_at).where(Task.id == dep.depends_on_task_id)
+            )).first()
+            if dep_row is None or dep_row.status not in ("failed", "blocked"):
                 continue
+
+            task = await session.get(Task, dep.task_id)
+            dep_task = await session.get(Task, dep.depends_on_task_id)
+            if not task or not dep_task:
+                continue
+            # Use the FRESH status/updated_at below, not the cached object's
+            dep_status = dep_row.status
+            dep_updated_at = dep_row.updated_at
 
             # ── `blocked` ist NICHT terminal (Fix D, Incident 2026-07-04) ──
             # Ein blockierter Upstream hat einen aktiven Loesungsweg:
@@ -891,7 +973,7 @@ class TaskMonitorMixin:
             # denselben Vorfall (im Incident: 60s nach dem Ursprungs-Blocker).
             # Zombie-Eskalation nur, wenn der Upstream >60min blocked ist UND
             # kein offener Fall existiert (Leiter faktisch tot = Safety-Net).
-            if dep_task.status == "blocked":
+            if dep_status == "blocked":
                 pending_upstream = (await session.exec(
                     select(Approval).where(
                         Approval.task_id == dep_task.id,
@@ -902,8 +984,8 @@ class TaskMonitorMixin:
                     )
                 )).first()
                 blocked_minutes = (
-                    (now - dep_task.updated_at).total_seconds() / 60
-                    if dep_task.updated_at else 0
+                    (now - dep_updated_at).total_seconds() / 60
+                    if dep_updated_at else 0
                 )
                 if pending_upstream is not None or blocked_minutes < 60:
                     continue
@@ -934,7 +1016,7 @@ class TaskMonitorMixin:
                     action_type="dependency_zombie",
                     description=(
                         f"Task '{task.title}' wartet auf '{dep_task.title}' "
-                        f"die im Status '{dep_task.status}' steht. "
+                        f"die im Status '{dep_status}' steht. "
                         f"Dependency wird nie erfuellt — manuelle Aufloesung noetig."
                     ),
                 )
@@ -945,13 +1027,13 @@ class TaskMonitorMixin:
 
             await emit_event(
                 session, "task.dependency_zombie",
-                f"Zombie-Dependency: '{task.title}' wartet auf '{dep_task.title}' ({dep_task.status})",
+                f"Zombie-Dependency: '{task.title}' wartet auf '{dep_task.title}' ({dep_status})",
                 board_id=task.board_id, task_id=task.id,
                 severity="warning",
             )
             logger.warning(
                 "Dependency zombie: '%s' waits on '%s' (status=%s)",
-                task.title, dep_task.title, dep_task.status,
+                task.title, dep_task.title, dep_status,
             )
 
     async def _check_review_tasks(self, session: AsyncSession) -> None:
@@ -1105,6 +1187,29 @@ class TaskMonitorMixin:
                 from app.models.approval import Approval
                 from datetime import timedelta
 
+                # `review_tasks` was fetched once at the top of this method
+                # (line ~975) and — with expire_on_commit=False everywhere in
+                # this codebase — never refreshes afterwards. If a *different*
+                # session finished the review in the meantime (e.g. the
+                # reviewer approved it while this tick was still working
+                # through the list), `task.status` here is stale. Re-read the
+                # status fresh right before creating the operator approval so
+                # an already-closed card doesn't land in Mark's inbox.
+                # Column selection with intent — select(Task) would hit the
+                # session's identity map and hand back this same stale
+                # object (expire_on_commit=False), silently turning this
+                # guard into a no-op. Only select(Task.status) bypasses it.
+                current_status = (await session.exec(
+                    select(Task.status).where(Task.id == task.id)
+                )).first()
+                if current_status != "review":
+                    logger.info(
+                        "Review-stuck approval skipped for '%s' (%dmin) — "
+                        "status is now '%s', not 'review' anymore",
+                        task.title, int(age_minutes), current_status,
+                    )
+                    continue
+
                 existing = (await session.exec(
                     select(Approval).where(
                         Approval.task_id == task.id,
@@ -1192,6 +1297,24 @@ class TaskMonitorMixin:
         if await redis.get(dedup_key):
             return  # Already nudged, cooldown running
 
+        # ── Fresh status check BEFORE nudging (identity-map trap) ──
+        # `task` was fetched once at the top of _check_review_tasks and, with
+        # expire_on_commit=False, never refreshes. If the reviewer (or the
+        # lead) closed the review while this tick was still walking the list,
+        # the cached "review" is stale and the nudge would land on a card
+        # that no longer waits for a decision. Column selection bypasses the
+        # session's identity map — same pattern as the review_stuck guard.
+        current_status = (await session.exec(
+            select(Task.status).where(Task.id == task.id)
+        )).first()
+        if current_status != "review":
+            logger.info(
+                "Decision-missing nudge skipped for '%s' — status is now "
+                "'%s', not 'review' anymore",
+                task.title, current_status,
+            )
+            return
+
         # Nudge reviewer via TaskComment (Pattern A 29-PATTERNS.md)
         reviewer_agent = await session.get(Agent, task.assigned_agent_id)
         if reviewer_agent:
@@ -1224,6 +1347,651 @@ class TaskMonitorMixin:
             "Review decision missing nudge for '%s' (comment %dmin ago)",
             task.title, int(comment_age_min),
         )
+
+    async def _check_silent_cards(self, session: AsyncSession) -> None:
+        """Report silent in_progress/waiting cards to the Board Lead.
+
+        A card is silent when, for its status's threshold in
+        ``SILENT_CARD_THRESHOLD_MINUTES`` (a status missing from the map
+        falls back to the strictest listed threshold), there has been
+        neither an agent turn on this card nor a non-system comment.
+        The watchdog posts exactly one ``watchdog_notify`` per silent phase
+        (until real activity resumes) and does **not** change status.
+
+        Why this exists: the other watchdogs either skip in_progress
+        (assuming someone is working) or auto-block/reset. Three live
+        incidents (finished card left in_progress, waiting parent with
+        all children done, wrapper-alive/turn-dead worker) were caught
+        by a human, not the system.
+
+        Dedup is DB-based on the last ``watchdog_notify``, not a Redis
+        TTL — a 1h key is what stacked a dozen identical reminders
+        overnight. If another watchdog already posted ``watchdog_notify``
+        in this silent phase, we stay quiet (one message, not two).
+        """
+        from app.models.approval import Approval
+        from app.models.board import Board
+
+        result = await session.exec(
+            select(Task)
+            .join(Board, Board.id == Task.board_id)
+            .where(
+                Task.status.in_(SILENT_CARD_STATUSES),  # type: ignore[union-attr]
+                Board.is_archived == False,  # noqa: E712
+            )
+        )
+        candidates = result.all()
+        if not candidates:
+            return
+
+        now = utcnow()
+
+        for task in candidates:
+            threshold = timedelta(minutes=SILENT_CARD_THRESHOLD_MINUTES.get(
+                task.status, SILENT_CARD_FALLBACK_THRESHOLD_MINUTES,
+            ))
+            if not task.board_id:
+                continue
+            if task.review_decision == "hold":
+                continue
+            if task.run_control in ("stopped", "manual_hold"):
+                continue
+
+            agent = None
+            if task.assigned_agent_id:
+                agent = await session.get(Agent, task.assigned_agent_id)
+            if agent is not None and getattr(agent, "operational_mode", "active") == "paused":
+                continue
+
+            children = list((await session.exec(
+                select(Task).where(Task.parent_task_id == task.id)
+            )).all())
+
+            # Parent still waiting on open children: orchestration, not silence.
+            # The silent *child* (if any) is selected on its own row.
+            if any(c.status in _SILENT_CARD_OPEN_CHILD for c in children):
+                continue
+
+            # Callback-wait on a still-open card: same — the blocking child
+            # is the one to report if *it* is silent.
+            if task.blocked_by_task_id is not None:
+                blocker = await session.get(Task, task.blocked_by_task_id)
+                if blocker is not None and blocker.status in _SILENT_CARD_OPEN_CHILD:
+                    continue
+
+            # in_progress parent, all children done, phase_approval done:
+            # _check_stuck_orchestrator_close already nudges (and may
+            # auto-close). Stay out of that conversation.
+            if (
+                task.status == "in_progress"
+                and children
+                and any(
+                    c.delegation_type == "phase_approval" and c.status == "done"
+                    for c in children
+                )
+                and not any(
+                    c.delegation_type == "phase_approval"
+                    and c.status in ("inbox", "in_progress", "review")
+                    for c in children
+                )
+            ):
+                continue
+
+            # Operator already has a ticket on this card — don't add a
+            # second report (existing watchdogs must not get louder).
+            pending_approval = (await session.exec(
+                select(Approval).where(
+                    Approval.task_id == task.id,
+                    Approval.status == "pending",
+                )
+            )).first()
+            if pending_approval is not None:
+                continue
+
+            last_activity = await self._silent_card_last_activity_at(
+                session, task, agent, children,
+            )
+            if last_activity is None:
+                last_activity = ensure_aware(task.created_at) if task.created_at else now
+            else:
+                last_activity = ensure_aware(last_activity)
+
+            silent_for = now - last_activity
+            if silent_for < threshold:
+                continue
+
+            last_notify = (await session.exec(
+                select(TaskComment)
+                .where(
+                    TaskComment.task_id == task.id,
+                    TaskComment.comment_type == "watchdog_notify",
+                )
+                .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
+                .limit(1)
+            )).first()
+            if (
+                last_notify is not None
+                and last_notify.created_at is not None
+                and ensure_aware(last_notify.created_at) >= last_activity
+            ):
+                continue  # same silent phase, already reported (us or another watchdog)
+
+            lead_result = await session.exec(
+                select(Agent).where(
+                    Agent.board_id == task.board_id,
+                    Agent.is_board_lead == True,  # noqa: E712
+                )
+            )
+            lead = lead_result.first()
+            if lead is None:
+                logger.debug(
+                    "Silent card '%s' has no Board Lead — skip (no operator escalate)",
+                    (task.title or "")[:60],
+                )
+                continue
+
+            minutes_silent = int(silent_for.total_seconds() / 60)
+            assigned_name = agent.name if agent else "unzugewiesen"
+            child_line = ""
+            if children:
+                done_n = sum(1 for c in children if c.status == "done")
+                child_line = f"Kinder: {done_n}/{len(children)} done\n"
+
+            msg = (
+                f"STILLE KARTE: \"{task.title}\" steht seit {minutes_silent}min "
+                f"auf `{task.status}` — kein Agenten-Zug, kein Kommentar.\n\n"
+                f"**Board-Lead {lead.name}:** bitte pruefen. "
+                f"Der Waechter aendert den Status NICHT.\n\n"
+                f"Task-ID: {task.id}\n"
+                f"Agent: {assigned_name}\n"
+                f"Letzte echte Aktivitaet: vor {minutes_silent}min\n"
+                f"{child_line}"
+                f"Wenn du nicht reagierst, greift die bestehende Operator-Eskalation."
+            )
+            session.add(TaskComment(
+                task_id=task.id,
+                author_type="system",
+                content=msg,
+                comment_type="watchdog_notify",
+            ))
+            await session.commit()
+
+            try:
+                await emit_event(
+                    session,
+                    "task.silent_card",
+                    f"Stille Karte: '{task.title}' ({task.status}, {minutes_silent}min) "
+                    f"→ Lead {lead.name}",
+                    board_id=task.board_id,
+                    task_id=task.id,
+                    agent_id=lead.id,
+                    severity="warning",
+                    detail={
+                        "status": task.status,
+                        "minutes_silent": minutes_silent,
+                        "lead_id": str(lead.id),
+                        "source": "silent_card_watchdog",
+                    },
+                )
+            except Exception as e:  # noqa: BLE001 — notify already persisted
+                logger.debug("silent_card event emit failed: %s", e)
+
+            logger.info(
+                "Silent card reported to lead %s: '%s' (%s, %dmin)",
+                lead.name, (task.title or "")[:60], task.status, minutes_silent,
+            )
+
+    async def _silent_card_last_activity_at(
+        self,
+        session: AsyncSession,
+        task: Task,
+        agent: Agent | None,
+        children: list[Task],
+    ) -> datetime | None:
+        """Latest real activity on this card (not system comments, not heartbeats).
+
+        Counts:
+        - agent/user comments on this task (system/watchdog_notify ignored —
+          counting those as activity is what restacks reminders)
+        - assigned agent's last_task_activity_at, but only if they are
+          actually on THIS card (the column is agent-global)
+        - ack_at / started_at (work started)
+        - last child completed_at/updated_at (so a parent whose children
+          just finished is not flagged for 30 min)
+        Deliberately omitted: updated_at (any metadata PATCH resets it),
+        last_seen_at (wrapper heartbeat ≠ a turn).
+        """
+        last_real_comment = (await session.exec(
+            select(TaskComment)
+            .where(
+                TaskComment.task_id == task.id,
+                TaskComment.author_type != "system",
+            )
+            .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
+            .limit(1)
+        )).first()
+
+        turn_at = None
+        if (
+            agent is not None
+            and agent.current_task_id == task.id
+            and agent.last_task_activity_at is not None
+        ):
+            turn_at = agent.last_task_activity_at
+
+        child_times = [
+            (c.completed_at or c.updated_at)
+            for c in children
+        ]
+
+        return _dt_max(
+            last_real_comment.created_at if last_real_comment else None,
+            turn_at,
+            task.ack_at,
+            task.started_at,
+            *child_times,
+        )
+
+    async def _lead_reacted_after(
+        self,
+        session: AsyncSession,
+        task: Task,
+        lead: Agent,
+        since: datetime,
+    ) -> bool:
+        """Explicit definition of "the Lead reacted" (task card, 2026-09-12).
+
+        Reaction means, AFTER ``since`` (the stage-1 message):
+        - the Board Lead posted ANY comment on the card himself, or
+        - the card's status changed with the Board Lead as the author
+          (``mc review``/``mc done``/PATCH — every real status change is a
+          TaskEvent row).
+        System comments, watchdog messages and other agents' activity do
+        NOT count — they are exactly the noise the Lead is not reading.
+        """
+        lead_comment = (await session.exec(
+            select(TaskComment)
+            .where(
+                TaskComment.task_id == task.id,
+                TaskComment.author_agent_id == lead.id,
+                TaskComment.author_type == "agent",
+                TaskComment.created_at > since,  # type: ignore[union-attr]
+            )
+            .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
+            .limit(1)
+        )).first()
+        if lead_comment is not None:
+            return True
+
+        status_event = (await session.exec(
+            select(TaskEvent)
+            .where(
+                TaskEvent.task_id == task.id,
+                TaskEvent.agent_id == lead.id,
+                TaskEvent.created_at > since,  # type: ignore[union-attr]
+            )
+            .order_by(TaskEvent.created_at.desc())  # type: ignore[union-attr]
+            .limit(1)
+        )).first()
+        return status_event is not None
+
+    async def _check_lead_notify_escalations(self, session: AsyncSession) -> None:
+        """Second stage: an unanswered lead message goes to the operator.
+
+        Stage 1 (silent-card watchdog, blocker lead-triage FYI) posts
+        ``watchdog_notify``/``blocker_lead_notify`` addressed to the Board
+        Lead. If the Lead does not react within
+        LEAD_NOTIFY_OPERATOR_ESCALATION_MINUTES, the operator is told —
+        via a pending ``lead_escalation`` Approval + a push through the
+        existing approval fan-out (Telegram/Slack).
+
+        Exactly once per silent phase, deduped in the DB: the last
+        stage-1 message is compared against the last
+        ``lead_escalated_notify`` system comment. No new task status, no
+        schema change, no repeated reminders — a second stage-1 message
+        (new silent phase) legitimately opens a new escalation window.
+        """
+        from app.models.approval import Approval
+        from app.models.board import Board
+
+        result = await session.exec(
+            select(TaskComment)
+            .join(Task, Task.id == TaskComment.task_id)
+            .join(Board, Board.id == Task.board_id)
+            .where(
+                TaskComment.author_type == "system",
+                TaskComment.comment_type.in_(LEAD_NOTIFY_COMMENT_TYPES),  # type: ignore[union-attr]
+                Board.is_archived == False,  # noqa: E712
+            )
+            .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
+        )
+        stage1_messages = result.all()
+        if not stage1_messages:
+            return
+
+        now = utcnow()
+        seen_tasks: set[uuid.UUID] = set()
+
+        for stage1 in stage1_messages:
+            if stage1.task_id in seen_tasks:
+                continue  # newest stage-1 message per task wins
+            seen_tasks.add(stage1.task_id)
+
+            task = await session.get(Task, stage1.task_id)
+            if task is None or task.status in ("done", "failed", "aborted"):
+                continue
+
+            # Same deliberate-silence conditions as _check_silent_cards:
+            # a card the stage-1 watchdog deliberately stays quiet on must
+            # not wake the operator 30 minutes later through the LOUDER
+            # channel (review feedback B1, PR #525).
+            if task.review_decision == "hold":
+                continue  # Lead parked this card on purpose
+            if task.run_control in ("stopped", "manual_hold"):
+                continue  # operator/lead-controlled hold
+
+            if stage1.created_at is None:
+                continue
+            stage1_at = ensure_aware(stage1.created_at)
+
+            waiting_for = now - stage1_at
+            if waiting_for < timedelta(minutes=LEAD_NOTIFY_OPERATOR_ESCALATION_MINUTES):
+                continue
+
+            lead = None
+            if task.board_id:
+                lead_result = await session.exec(
+                    select(Agent).where(
+                        Agent.board_id == task.board_id,
+                        Agent.is_board_lead == True,  # noqa: E712
+                    )
+                )
+                lead = lead_result.first()
+            if lead is None:
+                continue
+
+            if await self._lead_reacted_after(session, task, lead, stage1_at):
+                continue
+
+            # Paused assigned agent: stage 1 stays silent on purpose (#518).
+            if task.assigned_agent_id:
+                assigned_agent = await session.get(Agent, task.assigned_agent_id)
+                if (
+                    assigned_agent is not None
+                    and getattr(assigned_agent, "operational_mode", "active") == "paused"
+                ):
+                    continue
+
+            # Operator already has a live decision ticket on this card —
+            # a second, parallel channel would be noise, not escalation.
+            pending_approval = (await session.exec(
+                select(Approval).where(
+                    Approval.task_id == task.id,
+                    Approval.status == "pending",
+                )
+            )).first()
+            if pending_approval is not None:
+                continue
+
+            # Exactly-once: only escalate if no escalation marker exists
+            # AFTER the newest stage-1 message of this silent phase.
+            last_escalation = (await session.exec(
+                select(TaskComment)
+                .where(
+                    TaskComment.task_id == task.id,
+                    TaskComment.comment_type == "lead_escalated_notify",
+                )
+                .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
+                .limit(1)
+            )).first()
+            if (
+                last_escalation is not None
+                and last_escalation.created_at is not None
+                and ensure_aware(last_escalation.created_at) >= stage1_at
+            ):
+                continue
+
+            minutes_waiting = int(waiting_for.total_seconds() / 60)
+            assigned_name = "unzugewiesen"
+            if task.assigned_agent_id:
+                assigned = await session.get(Agent, task.assigned_agent_id)
+                if assigned is not None:
+                    assigned_name = assigned.name
+
+            msg = (
+                f"ESKALATION STUFE 2: \"{task.title}\" — Board-Lead {lead.name} "
+                f"hat seit {minutes_waiting}min nicht auf die Lead-Meldung reagiert.\n\n"
+                f"**Operator:** der Lead wurde {minutes_waiting}min zuvor auf dieser "
+                f"Karte angeschrieben und hat weder kommentiert noch den Status "
+                f"geaendert. Bitte selbst pruefen.\n\n"
+                f"Task-ID: {task.id}\n"
+                f"Status: {task.status}\n"
+                f"Agent: {assigned_name}\n"
+                f"Lead-Meldung vom: {stage1_at.isoformat()}"
+            )
+            # Marker and effect commit TOGETHER (review feedback B2, PR #525):
+            # committing the ``lead_escalated_notify`` marker before the
+            # Approval means an approval-write failure leaves a marker that
+            # claims an escalation that never happened — and exactly-once
+            # dedup then suppresses the real escalation forever. One
+            # transaction: either both exist or neither does.
+            approval = Approval(
+                board_id=task.board_id,
+                task_id=task.id,
+                agent_id=task.assigned_agent_id,
+                action_type="lead_escalation",
+                description=(
+                    f"Lead {lead.name} hat seit {minutes_waiting}min nicht auf die "
+                    f"Lead-Meldung bei \"{task.title}\" reagiert"
+                ),
+                payload={
+                    "stage1_comment_type": stage1.comment_type,
+                    "stage1_at": stage1_at.isoformat(),
+                    "minutes_waiting": minutes_waiting,
+                    "lead_id": str(lead.id),
+                    "task_status": task.status,
+                },
+                status="pending",
+                expires_at=now + timedelta(hours=24),
+            )
+            session.add(approval)
+            session.add(TaskComment(
+                task_id=task.id,
+                author_type="system",
+                content=msg,
+                comment_type="lead_escalated_notify",
+            ))
+            await session.commit()
+
+            try:
+                from app.services import operator_approvals
+                await operator_approvals.send_approval(
+                    approval.id, assigned_name, task.title,
+                    f"Lead-Meldung ohne Reaktion seit {minutes_waiting}min "
+                    f"(Lead: {lead.name}).",
+                )
+            except Exception as e:  # noqa: BLE001 — Approval+Marker sind persistiert,
+                # der Operator sieht es im Approval-Inbox auch ohne Push
+                logger.warning(
+                    "Lead-escalation operator push failed for '%s': %s",
+                    task.title, e,
+                )
+
+            try:
+                await emit_event(
+                    session,
+                    "task.lead_notify_escalated",
+                    f"Stufe 2: Lead {lead.name} reagierte nicht ({minutes_waiting}min) "
+                    f"auf '{task.title}' → Operator",
+                    board_id=task.board_id,
+                    task_id=task.id,
+                    agent_id=lead.id,
+                    severity="warning",
+                    detail={
+                        "stage1_comment_type": stage1.comment_type,
+                        "minutes_waiting": minutes_waiting,
+                        "lead_id": str(lead.id),
+                        "source": "lead_notify_escalation",
+                    },
+                )
+            except Exception as e:  # noqa: BLE001 — Eskalation ist persistiert
+                logger.debug("lead_notify_escalated event emit failed: %s", e)
+
+            logger.info(
+                "Lead notify escalated to operator: '%s' (lead %s, %dmin no reaction)",
+                (task.title or "")[:60], lead.name, minutes_waiting,
+            )
+
+    async def _check_silent_card_retractions(self, session: AsyncSession) -> None:
+        """Retract stage-1/stage-2 silent-card alerts once the card moves again.
+
+        A watchdog without a retract path degrades into noise: two
+        ``lead_escalation`` approvals from last night (18:49, 01:36) are
+        still sitting in the operator's pending list hours after the cards
+        they were about resumed. Nobody closes them, so Mark has to open
+        each one by hand and work out whether it still applies.
+
+        "Moves again" is deliberately NOT a status change — a status flip
+        can come from a watchdog, a reassign, or a human, none of which
+        prove a turn ran. Instead this reuses
+        :meth:`_silent_card_last_activity_at`, the exact same evidence
+        (a non-system comment, an agent turn recorded on THIS card, ack/
+        start, or a child completing) that :meth:`_check_silent_cards`
+        already uses to decide a card is silent. Symmetric definition:
+        whatever proves the card is quiet also proves it woke up.
+
+        Retraction is always visible: a ``watchdog_retract`` TaskComment on
+        the card naming the resolved alert and the activity timestamp that
+        closed it, plus — if a stage-2 ``lead_escalation`` Approval is
+        still pending — the Approval is superseded (never approved/
+        rejected: that stays the operator's own decision, same convention
+        as :mod:`app.services.approval_cleanup`) and the same channel that
+        pushed the escalation (Telegram/Slack) is told via
+        ``operator_approvals.update_resolved`` so it does not just vanish
+        from the pending list. Never touches ``task.status``.
+        """
+        from app.models.approval import Approval
+
+        result = await session.exec(
+            select(TaskComment)
+            .where(TaskComment.comment_type.in_(SILENT_CARD_ALERT_COMMENT_TYPES))  # type: ignore[union-attr]
+            .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
+        )
+        alerts = result.all()
+        if not alerts:
+            return
+
+        latest_alert_by_task: dict[uuid.UUID, TaskComment] = {}
+        for comment in alerts:
+            if comment.task_id is None or comment.task_id in latest_alert_by_task:
+                continue  # first hit per task, in DESC order, is the newest alert
+            latest_alert_by_task[comment.task_id] = comment
+
+        for task_id, alert in latest_alert_by_task.items():
+            if alert.created_at is None:
+                continue
+            alert_at = ensure_aware(alert.created_at)
+
+            task = await session.get(Task, task_id)
+            if task is None:
+                continue
+
+            last_retract = (await session.exec(
+                select(TaskComment)
+                .where(
+                    TaskComment.task_id == task_id,
+                    TaskComment.comment_type == "watchdog_retract",
+                )
+                .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
+                .limit(1)
+            )).first()
+            if (
+                last_retract is not None
+                and last_retract.created_at is not None
+                and ensure_aware(last_retract.created_at) >= alert_at
+            ):
+                continue  # this alert phase is already retracted
+
+            agent = None
+            if task.assigned_agent_id:
+                agent = await session.get(Agent, task.assigned_agent_id)
+            children = list((await session.exec(
+                select(Task).where(Task.parent_task_id == task.id)
+            )).all())
+
+            last_activity = await self._silent_card_last_activity_at(
+                session, task, agent, children,
+            )
+            if last_activity is None:
+                continue
+            last_activity = ensure_aware(last_activity)
+            if last_activity <= alert_at:
+                continue  # still silent — nothing moved after the alert
+
+            resolver_note = (
+                f"Karte bewegt sich wieder: echte Aktivitaet seit "
+                f"{last_activity.isoformat()} (Alarm vom {alert_at.isoformat()})."
+            )
+            session.add(TaskComment(
+                task_id=task.id,
+                author_type="system",
+                content=(
+                    f"ALARM ZURUECKGEZOGEN: \"{task.title}\" — {resolver_note}\n\n"
+                    f"Task-ID: {task.id}"
+                ),
+                comment_type="watchdog_retract",
+            ))
+
+            pending_escalation = (await session.exec(
+                select(Approval).where(
+                    Approval.task_id == task.id,
+                    Approval.status == "pending",
+                    Approval.action_type == "lead_escalation",
+                )
+            )).first()
+            if pending_escalation is not None:
+                pending_escalation.status = "superseded"
+                pending_escalation.resolved_at = utcnow()
+                pending_escalation.resolver_note = resolver_note
+                session.add(pending_escalation)
+
+            await session.commit()
+
+            try:
+                await emit_event(
+                    session,
+                    "task.silent_card_retracted",
+                    f"Alarm zurueckgezogen: '{task.title}' bewegt sich seit "
+                    f"{last_activity.isoformat()} wieder",
+                    board_id=task.board_id,
+                    task_id=task.id,
+                    severity="info",
+                    detail={
+                        "alert_at": alert_at.isoformat(),
+                        "last_activity_at": last_activity.isoformat(),
+                        "approval_closed": pending_escalation is not None,
+                        "source": "silent_card_retraction",
+                    },
+                )
+            except Exception as e:  # noqa: BLE001 — retract comment already persisted
+                logger.debug("silent_card_retracted event emit failed: %s", e)
+
+            if pending_escalation is not None:
+                try:
+                    from app.services import operator_approvals
+                    await operator_approvals.update_resolved(
+                        pending_escalation.id, "superseded", resolver_note,
+                    )
+                except Exception as e:  # noqa: BLE001 — Approval is persisted either way
+                    logger.warning(
+                        "Retract operator push failed for '%s': %s",
+                        task.title, e,
+                    )
+
+            logger.info(
+                "Silent-card alert retracted for '%s' (active since %s)",
+                (task.title or "")[:60], last_activity.isoformat(),
+            )
 
     async def _check_undispatched_tasks(self, session: AsyncSession) -> None:
         """Find tasks that are assigned but were never dispatched, and re-dispatch them.

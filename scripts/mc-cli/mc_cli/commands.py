@@ -14,11 +14,11 @@ import os
 import re
 import sys
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Any, Callable
 
 from .client import Client
 from .config import Config
-from .errors import UsageError
+from .errors import ServerError, UsageError
 
 
 @dataclass(frozen=True)
@@ -48,6 +48,25 @@ def _emit(data) -> None:
         print(data.get("id"))
         return
     print(json.dumps(data, indent=2, default=str))
+
+
+def _require_result(resp, *, verb: str) -> Any:
+    """Ein schreibendes Verb darf nicht ohne Beleg mit 0 enden.
+
+    Zweite Schicht zu `client._send` (siehe dessen Docstring): `_send` faellt
+    schon bei leerem 2xx-Body hart. Hier steht der Vertrag der Verben selbst
+    — `patch`/`review`/`delegate`/`group-doc` existieren WEGEN des Belegs
+    (neuer Status, Urteil, angelegte Karte). Kommt hier trotzdem `None` an,
+    ist die Wirkung unbelegt und ein Exit 0 waere eine Luege: genau die Form,
+    in der eine `mc delegate` ohne Karte nach Erfolg aussah (Live-Vorfall).
+    """
+    if resp is None:
+        raise ServerError(
+            f"{verb}: Server bestaetigt den Aufruf, liefert aber kein Ergebnis — "
+            f"die Wirkung ist unbelegt. Pruefe den Zustand mit `mc task` bzw. "
+            f"`mc detail`, bevor du den Aufruf wiederholst."
+        )
+    return resp
 
 
 def resolve_text_arg(value: str | None, *, verb: str) -> str:
@@ -92,7 +111,7 @@ def _patch_status(client: Client, cfg: Config, status: str, **extra) -> int:
     board_id, task_id = cfg.require_task_context()
     body = {"status": status, **{k: v for k, v in extra.items() if v is not None}}
     resp = client.request("PATCH", f"/api/v1/agent/boards/{board_id}/tasks/{task_id}", body=body)
-    _emit(resp)
+    _emit(_require_result(resp, verb=f"Statuswechsel nach '{status}'"))
     return 0
 
 
@@ -109,8 +128,9 @@ def _cmd_ack(args, client, cfg):
     Erfolg behandeln.
 
     Kontext-Fortschreibung (W5-E, 2026-09-11): nach dem ACK schreibt die CLI
-    TASK_ID/BOARD_ID/X_DISPATCH_ATTEMPT_ID der GEACKTEN Karte nach
-    /tmp/mc-context.env. Ohne das arbeiteten alle nachgelagerten Verben
+    TASK_ID/BOARD_ID/X_DISPATCH_ATTEMPT_ID der GEACKTEN Karte in die Context-
+    Datei (MC_CONTEXT_ENV_PATH, Legacy /tmp/mc-context.env). Ohne das arbeiteten
+    alle nachgelagerten Verben
     (`mc patch`, `mc comment`, …) auf der Karte aus dem ALTEN Kontext —
     gefaehrlich, weil die Stale-Pruefung des Backends nicht scheitert,
     sobald die alte Attempt-ID noch gueltig ist, sondern die FALSCHE Karte
@@ -233,24 +253,35 @@ def _cmd_ack(args, client, cfg):
     return 0
 
 
-def _write_context_file(*, task_id: str, board_id: str, attempt_id: str) -> None:
-    """Schreibt /tmp/mc-context.env (poll.sh-Format, poll.sh:489).
+def _write_context_file(*, task_id: str, board_id: str, attempt_id: str) -> str:
+    """Schreibt die Context-Datei (MC_CONTEXT_ENV_PATH, Legacy
+    /tmp/mc-context.env; poll.sh-Format). Gibt den Pfad zurueck.
 
     Fehler sind LAUT: schlaegt das Schreiben fehl, arbeitet der naechste
     `mc`-Call sonst still auf dem alten Kontext — genau der W5-E-Bug.
     Darum UsageError (exit != 0) statt stderr-Warnung.
+
+    W5 (2026-09-13): pro-Agent-Pfade (~/.mc/agents/<slug>/mc-context.env)
+    werden 0600 angelegt — Attempt-IDs gehoeren nicht vor die Welt. Der
+    Legacy-/tmp-Pfad bleibt wie bisher (poll.sh chmod 644).
     """
+    from .config import DEFAULT_CONTEXT_ENV_PATH, context_env_path
+
+    path = context_env_path()
     try:
-        with open("/tmp/mc-context.env", "w", encoding="utf-8") as f:
+        with open(path, "w", encoding="utf-8") as f:
             f.write(f"TASK_ID={task_id}\n")
             f.write(f"BOARD_ID={board_id}\n")
             f.write(f"X_DISPATCH_ATTEMPT_ID={attempt_id}\n")
+        if path != DEFAULT_CONTEXT_ENV_PATH:
+            os.chmod(path, 0o600)
     except OSError as e:
         raise UsageError(
-            f"/tmp/mc-context.env nicht schreibbar: {e}. "
+            f"{path} nicht schreibbar: {e}. "
             "Nachfolgende mc-Calls arbeiten sonst auf dem ALTEN Task — "
             "erst Schreibrechte fixen, dann weiterarbeiten."
         ) from e
+    return path
 
 
 def _force_close_open_checklist(client: Client, cfg: Config) -> int:
@@ -529,25 +560,113 @@ def _cmd_review(args, client, cfg):
 # when no --feedback is given; reject hard-requires --feedback locally so the
 # author always gets an actionable reason.
 
-def _review_decision(client, cfg, *, decision: str, comment: str):
+_VERB_FEEDBACK_HINT = {
+    "reject": ' --feedback "..."',
+    "review-note": ' --decision ... --feedback "..."',
+}
+
+
+def _resolve_review_target(args, client, cfg, *, verb: str) -> tuple[str, str]:
+    """Return (board_id, task_id) for a review verb — explicitly, never guessed.
+
+    A review verb decides SOMEONE ELSE'S card. The env TASK_ID that poll.sh
+    injects is YOUR card, which makes it the wrong default here far more often
+    than the right one: a reviewer ran `mc reject` with no argument and hit its
+    own round-1 review card — the only card sitting in `review` — which then
+    fell `review` -> `inbox` carrying review_decision=changes_requested and
+    triggered a pointless correction re-dispatch.
+
+    So: an explicit task-id is taken as given, no questions asked. Without one
+    we look at the card the env actually points to and decide whether it can
+    possibly be a review target:
+
+      * it carries `source_task_id` -> it IS a review card (delegation_type
+        "review"), i.e. the card you are reviewing FROM. Never the target. We
+        refuse and name the id it points at, so the next command is a copy-paste
+        away — naming a structural reference is not the same as guessing one.
+      * it is not in `review` -> a review decision has nothing to act on. Refuse
+        and ask for the id.
+      * otherwise -> the review-handoff case: handle_review_handoff assigned the
+        AUTHOR's card to you and dispatched you on it. The env id is correct and
+        this path stays exactly as it was.
+    """
+    explicit = (getattr(args, "task_id", None) or "").strip()
     board_id, task_id = cfg.require_task_context()
+    if explicit:
+        return board_id, task_id  # __main__ already folded it into cfg.task_id
+
+    detail = client.request(
+        "GET", f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/detail"
+    )
+    task = detail.get("task") if isinstance(detail, dict) else None
+    if not isinstance(task, dict):
+        task = detail if isinstance(detail, dict) else {}
+
+    source_task_id = task.get("source_task_id")
+    status = task.get("status")
+
+    if source_task_id:
+        raise UsageError(
+            f"mc {verb} braucht die Task-ID der Karte, die du reviewst.\n"
+            f"Deine eigene Karte ({task_id}) ist eine Review-Karte — sie verweist "
+            f"per source_task_id auf das Review-Ziel.\n"
+            f"Ruf auf:\n"
+            f"  mc {verb} {source_task_id}{_VERB_FEEDBACK_HINT.get(verb, '')}"
+        )
+
+    if status != "review":
+        raise UsageError(
+            f"mc {verb} braucht die Task-ID der Karte, die du reviewst.\n"
+            f"Deine eigene Karte ({task_id}) steht auf '{status}' — auf ihr gibt es "
+            f"nichts zu entscheiden, und geraten wird hier nicht.\n"
+            f"Ruf auf:\n"
+            f"  mc {verb} <task-id>{_VERB_FEEDBACK_HINT.get(verb, '')}\n"
+            f"Ist die Autorenkarte bereits geschlossen, halte dein Urteil mit "
+            f"`mc review-note <task-id> --decision ... --feedback \"...\"` fest."
+        )
+
+    return board_id, task_id
+
+
+def _review_decision(args, client, cfg, *, decision: str, comment: str, verb: str):
+    board_id, task_id = _resolve_review_target(args, client, cfg, verb=verb)
     resp = client.request(
         "POST",
         f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/review",
         body={"decision": decision, "comment": comment},
     )
-    _emit(resp)
+    _emit(_require_result(resp, verb=f"mc {verb}"))
     return 0
+
+
+def _add_review_target_task_id(p):
+    """Positional task-id for the review verbs.
+
+    Deliberately NOT _add_optional_task_id: there the env TASK_ID is the right
+    default, because those verbs act on your own card. A review verb acts on
+    someone else's, so the env id is a fallback only in the one shape where it
+    provably is the author's card — see _resolve_review_target.
+    """
+    p.add_argument(
+        "task_id", nargs="?", default=None,
+        help=(
+            "Task-UUID der Karte, die du reviewst (die des AUTORS). Ohne Angabe "
+            "nur gueltig, wenn du per Review-Handoff direkt auf dieser Karte "
+            "dispatcht wurdest — sonst bricht der Aufruf mit der noetigen ID ab."
+        ),
+    )
 
 
 def _cmd_approve(args, client, cfg):
     """mc approve [--feedback ...] — Review approven (decision=approve)."""
     comment = (getattr(args, "feedback", None) or "").strip() or "Approved."
-    return _review_decision(client, cfg, decision="approve", comment=comment)
+    return _review_decision(
+        args, client, cfg, decision="approve", comment=comment, verb="approve",
+    )
 
 
 def _add_approve_args(p):
-    _add_optional_task_id(p)
+    _add_review_target_task_id(p)
     p.add_argument(
         "--feedback",
         default=None,
@@ -563,15 +682,71 @@ def _cmd_reject(args, client, cfg):
             "mc reject: --feedback ist Pflicht — der Author braucht einen "
             "konkreten Grund, was geaendert werden soll."
         )
-    return _review_decision(client, cfg, decision="request_changes", comment=feedback)
+    return _review_decision(
+        args, client, cfg, decision="request_changes", comment=feedback, verb="reject",
+    )
 
 
 def _add_reject_args(p):
-    _add_optional_task_id(p)
+    _add_review_target_task_id(p)
     p.add_argument(
         "--feedback",
         required=True,
         help="Pflicht — was muss der Author aendern? Wird als review-comment gespeichert.",
+    )
+
+
+def _cmd_review_note(args, client, cfg):
+    """mc review-note <task-id> --decision ... --feedback ... — Nachzuegler-Review.
+
+    For the case the normal verbs cannot serve: the author's card has already
+    left `review` (it is `done`), so POST /review answers 409 and the verdict
+    has nowhere formal to go. Seen on PR #500, where a well-argued
+    request_changes survived only as a feedback comment because both author
+    cards were closed.
+
+    Records the verdict on the author's card — review comment +
+    review_decision — and changes NO status. Reopening a closed card stays a
+    separate, deliberate act; a late note must not do it by surprise.
+    """
+    feedback = (getattr(args, "feedback", None) or "").strip()
+    if not feedback:
+        raise UsageError(
+            "mc review-note: --feedback ist Pflicht — ein Nachtrag ohne "
+            "Begruendung ist kein Urteil."
+        )
+    if not (getattr(args, "task_id", None) or "").strip():
+        raise UsageError(
+            "mc review-note: die Task-ID der reviewten Karte ist Pflicht.\n"
+            "  mc review-note <task-id> --decision request_changes --feedback \"...\"\n"
+            "Die env-TASK_ID ist deine EIGENE Karte und wird hier nicht geraten."
+        )
+
+    board_id, task_id = cfg.require_task_context()
+    resp = client.request(
+        "POST",
+        f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/review-note",
+        body={"decision": args.decision, "comment": feedback},
+    )
+    _emit(_require_result(resp, verb="mc review-note"))
+    return 0
+
+
+def _add_review_note_args(p):
+    p.add_argument(
+        "task_id", nargs="?", default=None,
+        help="Pflicht — Task-UUID der reviewten Karte (NICHT deine eigene).",
+    )
+    p.add_argument(
+        "--decision",
+        default="request_changes",
+        choices=["approve", "request_changes", "hold"],
+        help="Urteil (default: request_changes).",
+    )
+    p.add_argument(
+        "--feedback",
+        required=True,
+        help="Pflicht — die Begruendung des Nachtrag-Urteils.",
     )
 
 
@@ -815,12 +990,7 @@ def _preflight_finish(client: Client, cfg, target_status: str) -> dict:
 
     # 4. Idempotenz: kürzliche reflection vom gleichen Agent → skip POST.
     # Verhindert dupe-comments wenn der Agent in einem Retry-Loop landet.
-    try:
-        comments = client.request("GET", f"{base}/comments") or []
-        if isinstance(comments, dict):
-            comments = comments.get("comments") or []
-    except Exception:
-        comments = []
+    comments = _fetch_task_comments(client, base)
     own_recent_reflection = _has_recent_self_reflection(
         comments, agent_id=task.get("assigned_agent_id"),
         window_s=_REFLECTION_DEDUP_WINDOW_S,
@@ -831,7 +1001,22 @@ def _preflight_finish(client: Client, cfg, target_status: str) -> dict:
         "skip_patch": False,
         "recent_reflection": own_recent_reflection,
         "target_status": target_status,
+        "comments": comments,
     }
+
+
+def _fetch_task_comments(client: Client, base: str) -> list:
+    """GET {base}/comments, tolerant gegen Lesefehler — ein fehlgeschlagener
+    Read darf einen Preflight nicht mit einer Exception abbrechen (siehe
+    ursprüngliche Kommentar-Idempotenz oben: lieber ein gelegentliches
+    Duplicate als ein blockierter Abschluss)."""
+    try:
+        comments = client.request("GET", f"{base}/comments") or []
+        if isinstance(comments, dict):
+            comments = comments.get("comments") or []
+    except Exception:
+        comments = []
+    return comments
 
 
 def _has_recent_self_reflection(comments, agent_id, window_s) -> bool:
@@ -867,6 +1052,125 @@ def _has_recent_self_reflection(comments, agent_id, window_s) -> bool:
     return False
 
 
+# `mc finish --needs-decision` — fertige Karte, offene Menschen-Entscheidung.
+#
+# Vorfall 11.09.2026: eine Karte war um 05:40 fertig (CI gruen, Beweislauf
+# bestanden, Reflexion geschrieben) und stand um 08:30 immer noch auf
+# `in_progress` — der Worker hatte statt `mc finish` einen Kommentar
+# "Zurueckgestellt, wartet auf Rollout-Entscheid" gepostet. Ueber
+# `blocked_by_task_id` hing die Elternkarte dadurch auf `blocked`, und gemerkt
+# hat es ein Mensch: fuer `in_progress` gibt es keinen Waechter, weil das
+# System annimmt, es arbeite jemand daran.
+#
+# Der Worker hat sich nicht falsch verhalten — ihm fehlte der Weg. "Fertig,
+# aber jemand muss entscheiden" war kein Zustand, den die CLI ausdruecken
+# konnte. Bewusst KEIN neuer Status dafuer: die Karte schliesst regulaer, die
+# Elternkarte wird frei, und die Frage geht zwei Wege gleichzeitig —
+#
+#   1. als offene Thread-Frage an den Operator (POST /tasks/current/ask, der
+#      in #496 gehaertete Weg: eine offene Frage ueberlebt dort eine bereits
+#      beendete Karte und wird weiter zugestellt),
+#   2. als Kommentar `needs_decision` AN der Karte, damit die Frage auffindbar
+#      an ihr haengt statt nur als Meldung zu verpuffen.
+#
+# Der ask-Endpunkt loest den Task ueber `agent.current_task_id` auf. Nach dem
+# PATCH auf `done` ist das fuer einen gewoehnlichen Worker ein 409 — die Frage
+# muss also VOR dem Statuswechsel raus. Reihenfolge ist Vertrag, siehe
+# tests/test_finish_needs_decision.py.
+_NEEDS_DECISION_TO = "mark"
+_NEEDS_DECISION_PRIORITY = "high"
+
+
+def _validate_decision_question(raw: str) -> str:
+    """Frage normalisieren — leer ist schlimmer als gar nicht gefragt.
+
+    Eine leere `--needs-decision`-Frage wuerde eine geschlossene Karte mit
+    einem inhaltslosen Wartezeichen zuruecklassen: der Operator sieht, dass
+    etwas entschieden werden soll, aber nicht was. Darum harter Abbruch,
+    lokal und vor jedem HTTP-Call.
+    """
+    question = (raw or "").strip()
+    if not question:
+        raise UsageError(
+            "--needs-decision braucht eine konkrete Frage. Eine leere Frage ist "
+            "schlimmer als keine — der Operator saehe ein Wartezeichen ohne "
+            "Inhalt. Beispiel:\n"
+            '  mc finish --needs-decision "Rollout heute abend oder erst nach '
+            'dem Release?" "<Reflexion>"'
+        )
+    return question
+
+
+def _needs_decision_already_posted(comments, question: str) -> bool:
+    """Der belastbare Marker fuer 'Frage ist schon draussen': ein
+    `needs_decision`-Kommentar AN DER KARTE, der genau diese Frage enthaelt.
+
+    Review-Befund PR #528: der Versand hing vorher an `should_post_comment`
+    (dem Reflexions-Dedup) bzw. am `skip_patch`-Kurzschluss (Karte schon im
+    Zielstatus) — beides sagt nichts darueber aus, ob DIESE Frage je gestellt
+    wurde. Eine fremde/separate Reflexion im 300s-Fenster liess die Frage
+    lautlos verpuffen; die Sache selbst (der Kommentar) ist der einzige
+    Marker, der nicht taeuscht.
+    """
+    for c in comments:
+        if c.get("comment_type") != "needs_decision":
+            continue
+        if question in (c.get("content") or ""):
+            return True
+    return False
+
+
+def _send_decision_question_if_new(client: Client, cfg, comments, question: str) -> bool:
+    """Sendet die Frage nur, wenn noch kein passender `needs_decision`-
+    Kommentar auf der Karte haengt. Gibt zurueck, ob in DIESEM Aufruf
+    tatsaechlich gesendet wurde (fuer die PATCH-Fail-Fehlermeldung unten)."""
+    if _needs_decision_already_posted(comments, question):
+        return False
+    _post_decision_question(client, cfg, question)
+    return True
+
+
+def _post_decision_question(client: Client, cfg, question: str) -> None:
+    """Die Frage auf beide Wege legen: Operator-Thread und Karte.
+
+    Reihenfolge mit Absicht: erst der ask-Endpunkt (der Call, der fehlschlagen
+    KANN — 409 ohne aktiven Task, 403 ohne chat:write), danach der Kommentar.
+    Faellt der erste um, bricht `mc finish` ab, bevor irgendetwas geschrieben
+    wurde — die Karte bleibt offen statt still mit einer verschluckten Frage
+    zu schliessen.
+    """
+    board_id, task_id = cfg.require_task_context()
+    client.request(
+        "POST",
+        "/api/v1/agent/tasks/current/ask",
+        body={
+            "question": question,
+            "blocking": False,  # die Karte schliesst — hier wird nichts geparkt
+            "to": _NEEDS_DECISION_TO,
+            "priority": _NEEDS_DECISION_PRIORITY,
+            "options": None,
+            "default": None,
+            "deadline": None,
+        },
+    )
+    client.request(
+        "POST",
+        f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/comments",
+        body={
+            "comment_type": "needs_decision",
+            "content": (
+                "**Entscheid offen** — die Arbeit an dieser Karte ist fertig, "
+                "die Karte wird geschlossen. Offen ist nur noch eine "
+                "menschliche Entscheidung.\n\n"
+                f"**Frage an den Operator**\n{question}\n\n"
+                "Die Frage liegt zusaetzlich als offene Frage im Thread dieser "
+                "Karte. Eine Antwort dort schliesst sie; was aus der "
+                "Entscheidung folgt, gehoert auf eine neue Karte."
+            ),
+        },
+    )
+
+
 def _cmd_finish(args, client, cfg):
     """Reflexion posten + Status auf done (oder review mit --review).
 
@@ -885,6 +1189,10 @@ def _cmd_finish(args, client, cfg):
     `mc review` separat re-tryen kann.
     """
     _validate_reflection(args.message)
+    needs_decision = getattr(args, "needs_decision", None)
+    decision_question = (
+        _validate_decision_question(needs_decision) if needs_decision is not None else None
+    )
     # Normalize recognised headers to canonical German (idempotent on canonical
     # input) so the POSTed reflection — and thus the memory pipeline's lesson
     # extraction — always sees the canonical `## <German>` headers even when the
@@ -903,8 +1211,29 @@ def _cmd_finish(args, client, cfg):
     # human_review_required) — ab hier IMMER den adjustierten Wert nutzen.
     target_status = pre.get("target_status", target_status)
 
+    # Die Frage haengt an einer EIGENEN Bedingung (existiert bereits ein
+    # `needs_decision`-Kommentar mit genau dieser Frage?), nicht am
+    # Reflexions-Dedup und nicht am `skip_patch`-Kurzschluss — Review-Befund
+    # PR #528: beide vorherigen Gates konnten die Frage lautlos schlucken,
+    # waehrend die Karte trotzdem schliesst. Laeuft VOR dem skip_patch-Return
+    # und VOR der Reflexion, damit die Reihenfolge (ask → Karten-Kommentar →
+    # Reflexion → PATCH) fuer den Fall erhalten bleibt, in dem beides noch
+    # aussteht.
+    if decision_question:
+        if pre.get("skip_patch"):
+            # Preflight ist hier frueh zurueckgekehrt (kein PATCH noetig) und
+            # hat darum noch keine Comments geholt — extra Read, NUR wenn
+            # tatsaechlich eine Frage im Spiel ist (sonst bleibt der reine
+            # No-Op-Pfad unveraendert: ein GET, sonst nichts).
+            _, _, base = _agent_base(cfg)
+            comments_for_question = _fetch_task_comments(client, base)
+        else:
+            comments_for_question = pre.get("comments", [])
+        _send_decision_question_if_new(client, cfg, comments_for_question, decision_question)
+
     if pre.get("skip_patch"):
-        # Task ist schon im Ziel-Status — beides skipped, klares Signal.
+        # Task ist schon im Ziel-Status — PATCH und Reflexion bleiben aus,
+        # klares Signal. Die Frage (falls noetig) ist oben bereits raus.
         print(f"# Task ist bereits in Status '{target_status}', nichts zu tun")
         return 0
 
@@ -928,11 +1257,23 @@ def _cmd_finish(args, client, cfg):
     except Exception as exc:
         # Comment ist ggf. schon im Audit-Trail. Klare Message zum recovery
         # statt nacktem HTTP-Stacktrace, damit der Agent weiss was zu tun ist.
+        extra = (
+            "\n# Die Frage ist bereits gestellt (Thread + Karten-Kommentar) — "
+            "NICHT erneut `--needs-decision` aufrufen."
+            if decision_question else ""
+        )
         if pre["should_post_comment"]:
             print(
                 f"# Reflexion wurde gepostet, aber Status-PATCH fehlgeschlagen: {exc}\n"
                 f"# Retry NUR den Status (kein neuer Comment) mit:\n"
-                f"#   mc {'review' if target_status == 'review' else 'done'}",
+                f"#   mc {'review' if target_status == 'review' else 'done'}{extra}",
+                file=sys.stderr,
+            )
+        elif decision_question:
+            print(
+                f"# Status-PATCH fehlgeschlagen: {exc}\n"
+                f"# Retry NUR den Status mit:\n"
+                f"#   mc {'review' if target_status == 'review' else 'done'}{extra}",
                 file=sys.stderr,
             )
         raise
@@ -960,6 +1301,18 @@ def _add_finish_args(p):
             "Offene Checklist-Items automatisch auf done setzen bevor `mc finish` "
             "den Task schliesst. Ohne --force bricht der Pre-Flight mit UsageError ab "
             "wenn Items offen sind."
+        ),
+    )
+    p.add_argument(
+        "--needs-decision",
+        dest="needs_decision",
+        metavar="FRAGE",
+        help=(
+            "Die Arbeit ist fertig, offen ist nur noch eine menschliche "
+            "Entscheidung: schliesst die Karte GANZ NORMAL (Reflexionspflicht "
+            "unveraendert) und legt die Frage an den Operator — als offene Frage "
+            "im Thread der Karte und als Kommentar an der Karte. Kein neuer "
+            "Status, kein Liegenlassen. Leere Frage wird abgelehnt."
         ),
     )
 
@@ -1302,7 +1655,8 @@ def _cmd_group_doc(args, client, cfg):
         f"/api/v1/agent/groups/{args.group_id}/document",
         body={"content": content},
     )
-    _emit(resp)
+    _emit(_require_result(resp, verb="mc group-doc"))
+    return 0
 
 
 def _add_group_doc_args(p):
@@ -1516,7 +1870,25 @@ def _cmd_delegate(args, client, cfg):
     """
     import uuid as _uuid
 
-    board_id, _task_id = cfg.require_task_context()
+    # Board resolution (Task f8c9cdb9, 2026-09-16): `mc delegate` demanded
+    # TASK_ID+BOARD_ID up front via require_task_context(), which made
+    # `--parent <task-id>` unusable in exactly the situation it exists for — a
+    # Board Lead with no active task and therefore no dispatch context in the
+    # env. The parent is named explicitly, so the only thing actually needed is
+    # the board the delegation lands on: take it from the env when a dispatch
+    # context is present, otherwise from the caller's own /me record. The real
+    # guards (parent exists, same board, not closed, ownership) stay on the
+    # backend — this only removes the CLI's premature refusal.
+    board_id = cfg.board_id
+    if not board_id:
+        me = client.request("GET", "/api/v1/agent/me")
+        board_id = me.get("board_id") if isinstance(me, dict) else None
+        if not board_id:
+            raise UsageError(
+                "BOARD_ID ist nicht gesetzt und /api/v1/agent/me liefert kein "
+                "Board — `mc delegate` braucht ein Ziel-Board. Setze BOARD_ID "
+                "in der Env oder ordne den Agent einem Board zu."
+            )
 
     if not args.description or len(args.description.strip()) < 10:
         raise UsageError(
@@ -1560,16 +1932,18 @@ def _cmd_delegate(args, client, cfg):
         body["origin_thread_id"] = args.origin_thread
     if getattr(args, "parent", None):
         body["parent_task_id"] = args.parent
+    if getattr(args, "repo", None):
+        body["repo_id"] = args.repo
+    if getattr(args, "no_repo_reason", None):
+        body["no_repo_reason"] = args.no_repo_reason
 
     resp = client.request(
         "POST",
         f"/api/v1/agent/boards/{board_id}/delegate",
         body=body,
     )
+    _require_result(resp, verb="mc delegate")
     _emit(resp)
-    if isinstance(resp, dict) and resp.get("warning"):
-        import sys as _sys
-        print(f"WARNUNG: {resp['warning']}", file=_sys.stderr)
     return 0
 
 
@@ -1612,8 +1986,35 @@ def _add_delegate_args(p):
             "eigene aktive Karte. Nutze das, wenn du keine aktive Karte hast (kein "
             "409 'Kein aktiver Task') oder bewusst an einer ANDEREN Karte als deiner "
             "eigenen aktiven anhaengen willst. Ohne --parent UND ohne aktive Karte "
-            "entsteht eine Wurzelkarte ohne Parent/Callback (die Antwort weist "
-            "darauf explizit hin)."
+            "lehnt der Server mit 409 ab — es entsteht KEINE Wurzelkarte mehr. Ohne "
+            "aktiven Task ist --parent damit der einzige Weg zu delegieren, und "
+            "TASK_ID/BOARD_ID muessen dafuer nicht in der Env stehen (das Board "
+            "kommt notfalls aus /api/v1/agent/me)."
+        ),
+    )
+    p.add_argument(
+        "--repo",
+        metavar="SLUG_OR_UUID",
+        help=(
+            "Registry-Repo fuer die neue Karte binden (ADR-052) — UUID oder "
+            "Name-Slug ('owner/name' oder nur 'name'). Aufloesung + Aktiv-Check "
+            "passiert server-seitig; ein unbekanntes oder deaktiviertes Repo "
+            "lehnt der Server ab. Jede Karte, die unsere eigene Codebasis "
+            "anfasst, sollte das setzen — ohne Bindung landet ein Ad-hoc-Task "
+            "(kein Projekt) im gemeinsamen Ad-hoc-Repo."
+        ),
+    )
+    p.add_argument(
+        "--no-repo-reason",
+        metavar="GRUND",
+        help=(
+            "Bewusst OHNE Repo-Bindung delegieren, mit Begruendung. Der Server "
+            "lehnt sonst jede Delegation ab, deren Titel/Beschreibung konkrete "
+            "Datei-Fundstellen nennt ('pfad/datei.py:123') und die weder --repo "
+            "noch ein Projekt traegt — solche Karten landeten sonst im "
+            "gemeinsamen Ad-hoc-Klon statt in der Codebasis. Nutze das fuer "
+            "Recherche/Doku oder Arbeit in einem anderen Repo; der Grund wird "
+            "als Kommentar an der Karte dokumentiert."
         ),
     )
 
@@ -2270,23 +2671,18 @@ def _cmd_recover(args, client, cfg):
     # Context-File so schreiben dass nachfolgende mc-Calls den Header setzen
     # koennen. poll.sh schreibt diese Datei normalerweise bei new_task —
     # beim manuellen `mc recover` ausserhalb von poll.sh muss der CLI das
-    # selbst tun.
-    try:
-        with open("/tmp/mc-context.env", "w", encoding="utf-8") as f:
-            f.write(f"TASK_ID={task['id']}\n")
-            f.write(f"BOARD_ID={task.get('board_id') or ''}\n")
-            f.write(f"X_DISPATCH_ATTEMPT_ID={task.get('dispatch_attempt_id') or ''}\n")
-    except OSError as e:
-        raise UsageError(
-            f"/tmp/mc-context.env nicht schreibbar: {e}. "
-            "Nachfolgende mc-Calls arbeiten sonst auf dem ALTEN Task — "
-            "erst Schreibrechte fixen, dann weiterarbeiten."
-        ) from e
+    # selbst tun. W5: ueber _write_context_file (MC_CONTEXT_ENV_PATH, 0600
+    # auf Pro-Agent-Pfaden) statt hartcodiertem /tmp-Literal.
+    ctx_path = _write_context_file(
+        task_id=task["id"],
+        board_id=task.get("board_id") or "",
+        attempt_id=task.get("dispatch_attempt_id") or "",
+    )
     # Prompt auf stdout (agent liest das) — kein JSON-Wrapping
     print(f"# Recovery-Prompt fuer Task {task['id']}")
     print(f"# Title: {task['title']}  |  Status: {task.get('status', '?')}")
     print(f"# dispatch_attempt_id: {task['dispatch_attempt_id']}")
-    print(f"# Context-File: /tmp/mc-context.env aktualisiert")
+    print(f"# Context-File: {ctx_path} aktualisiert")
     # Der Prompt sagt dir WAS zu tun ist, nicht was schon besprochen wurde.
     # Genau hier — direkt nach einem Restart — braucht der Agent den Zeiger
     # auf den Gespraechsverlauf, sonst kennt er das Verb nie.
@@ -2727,6 +3123,73 @@ def _add_docs_args(p):
     p.add_argument("topic", nargs="?", default=None, help="Topic-Slug (z.B. 'telegram'). Ohne Arg: INDEX/Topic-Liste.")
 
 
+# ── C2: Board Lead queue control (hold / release / reassign) ──────────────
+#
+# Unlike ack/done/blocked/etc., these always target ANOTHER card in the
+# lead's own queue — never "the task I'm currently dispatched on". So the
+# task-id positional is REQUIRED here (see _add_required_task_id), not the
+# `nargs="?"` pattern used for status commands. board_id still comes from
+# the lead's own env context (BOARD_ID / /tmp/mc-context.env) — a lead only
+# controls its own board's queue.
+
+
+def _add_required_task_id(p, help_suffix: str = ""):
+    p.add_argument(
+        "task_id",
+        help=f"Task-UUID der Karte in der eigenen Queue{help_suffix}",
+    )
+
+
+def _cmd_hold(args, client, cfg):
+    board_id, task_id = cfg.require_task_context()
+    resp = client.request(
+        "POST",
+        f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/hold",
+        body={"reason": args.reason},
+    )
+    _emit(resp)
+    return 0
+
+
+def _add_hold_args(p):
+    _add_required_task_id(p, " (noch nicht dispatcht, status=inbox)")
+    p.add_argument("--reason", required=True, help="Warum wird die Karte angehalten?")
+
+
+def _cmd_release(args, client, cfg):
+    board_id, task_id = cfg.require_task_context()
+    resp = client.request(
+        "POST",
+        f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/release",
+    )
+    _emit(resp)
+    return 0
+
+
+def _add_release_args(p):
+    _add_required_task_id(p, " (zuvor mit mc hold angehalten)")
+
+
+def _cmd_reassign(args, client, cfg):
+    board_id, task_id = cfg.require_task_context()
+    resp = client.request(
+        "POST",
+        f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/reassign",
+        body={"to": args.to},
+    )
+    _emit(resp)
+    return 0
+
+
+def _add_reassign_args(p):
+    _add_required_task_id(p)
+    p.add_argument(
+        "--to",
+        required=True,
+        help="Ziel-Agent (Name oder UUID) — z.B. --to Rex",
+    )
+
+
 # ── Registry ──────────────────────────────────────────────────────────────
 
 _STATUS_ENDPOINT = ("PATCH /boards/{board_id}/tasks/{task_id}",)
@@ -2812,6 +3275,17 @@ REGISTRY: dict[str, CommandSpec] = {
         handler=_cmd_reject,
         add_args=_add_reject_args,
     ),
+    "review-note": CommandSpec(
+        name="review-note",
+        help=(
+            "Nachzuegler-Review auf einer bereits geschlossenen Karte festhalten "
+            "(Kommentar + review_decision, KEIN Statuswechsel)."
+        ),
+        endpoints=("POST /boards/{board_id}/tasks/{task_id}/review-note",),
+        scope="tasks:write",
+        handler=_cmd_review_note,
+        add_args=_add_review_note_args,
+    ),
     "finish": CommandSpec(
         name="finish",
         help="Reflexion posten + Status setzen (atomic) — vermeidet 'Pflicht-Reflexion fehlt' 400",
@@ -2822,6 +3296,30 @@ REGISTRY: dict[str, CommandSpec] = {
         scope="tasks:write",
         handler=_cmd_finish,
         add_args=_add_finish_args,
+    ),
+    "hold": CommandSpec(
+        name="hold",
+        help="C2: eigene Queue — noch nicht dispatchte Karte anhalten (Board Lead)",
+        endpoints=("POST /boards/{board_id}/tasks/{task_id}/hold",),
+        scope="tasks:manage",
+        handler=_cmd_hold,
+        add_args=_add_hold_args,
+    ),
+    "release": CommandSpec(
+        name="release",
+        help="C2: eigene Queue — zuvor gehaltene Karte wieder freigeben (Board Lead)",
+        endpoints=("POST /boards/{board_id}/tasks/{task_id}/release",),
+        scope="tasks:manage",
+        handler=_cmd_release,
+        add_args=_add_release_args,
+    ),
+    "reassign": CommandSpec(
+        name="reassign",
+        help="C2: eigene Queue — Karte an anderen Agenten umhaengen (Board Lead)",
+        endpoints=("POST /boards/{board_id}/tasks/{task_id}/reassign",),
+        scope="tasks:manage",
+        handler=_cmd_reassign,
+        add_args=_add_reassign_args,
     ),
     "blocked": CommandSpec(
         name="blocked",

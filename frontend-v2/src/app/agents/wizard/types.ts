@@ -79,12 +79,46 @@ export function canProceed(state: WizardState): boolean {
       return true; // custom
     case 1: // identity — name is the only required field
       return state.name.trim().length > 0;
-    case 2: // runtime & model — host needs an LLM runtime binding
-      if (state.agentRuntime === "host") return !!state.runtimeId;
-      return true;
+    case 2: // runtime & model — the per-runtime rules live in
+      // runtimeStepBlockers() so the footer can name WHAT is missing.
+      return runtimeStepBlockers(state).length === 0;
     case 3: // rights — always has a concrete scope list (never empty = all)
       return state.scopes.length > 0;
     default:
       return false;
   }
+}
+
+// WHY the Runtime & Model step cannot advance, in operator-readable form.
+// Empty array = the step is complete; canProceed() case 2 is exactly this.
+//
+// - cli-bridge: a harness is mandatory. With harness NULL the backend derives
+//   it from the bound runtime's protocol (derive_harness) — but the fallback
+//   ("docker-compose env") has no runtime row, so a harness-less fallback
+//   agent gets effective harness NULL and provisions into nothing (the
+//   "Rocket" incident: created, permanently stuck, deleted). omp additionally
+//   cannot boot without a runtime binding at all
+//   (HARNESSES_REQUIRING_RUNTIME_BINDING, incident 2026-09-05:
+//   OPENAI_BASE_URL/OPENAI_MODEL come only from the bound runtime row →
+//   container restart loop). Other harnesses survive the fallback env, so a
+//   non-omp cli-bridge agent may legitimately run on the fallback.
+// - host: the backend 422s a host agent without runtime_id
+//   (routers/agents.py _host_requires_runtime_id), and host-only harnesses
+//   like grok are NOT derivable (derive_harness returns None for a
+//   grok-cloud runtime), so the wizard must carry the explicit harness too —
+//   both rows are rendered for host, both are required.
+// - manual: no auto-provisioning — legitimately created with neither.
+export function runtimeStepBlockers(state: WizardState): string[] {
+  if (state.agentRuntime === "manual") return [];
+  const blockers: string[] = [];
+  if (!state.harness) {
+    blockers.push("Pick a harness — an agent without one cannot be provisioned afterwards.");
+  }
+  if (state.agentRuntime === "host" && !state.runtimeId) {
+    blockers.push("Pick an LLM runtime — host agents need a runtime binding at creation time.");
+  }
+  if (state.agentRuntime === "cli-bridge" && state.harness === "omp" && !state.runtimeId) {
+    blockers.push("Pick an LLM runtime — the omp harness cannot boot without a runtime binding.");
+  }
+  return blockers;
 }

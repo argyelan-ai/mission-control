@@ -64,7 +64,7 @@ import logging
 import os
 import re
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 import httpx
@@ -171,6 +171,21 @@ class DelegateCreate(BaseModel):
     # einen Parent zu setzen, statt sich auf die implizite current_task_id-Aufloesung
     # zu verlassen. Ueberschreibt current_task_id, wenn gesetzt.
     parent_task_id: uuid.UUID | None = None
+    # Registry-Repo-Bindung (ADR-052) fuer `mc delegate --repo` — ohne
+    # Angabe erbt der Subtask den Projekt-Pfad wie bisher; ein Ad-hoc-Task
+    # ohne Projektbezug landet sonst im gemeinsamen Ad-hoc-Klon. UUID oder
+    # Name-Slug ("owner/name" bzw. nur "name"), Aufloesung server-seitig
+    # (app.services.repo_registry.resolve_repo_ref) — dieselbe Haerte wie
+    # die Operator-Route: unbekannt/inaktiv lehnt ab statt still zu ignorieren.
+    repo_id: str | None = None
+    # Bewusster Ausweg aus dem Repo-Bindungs-Waechter (Vorfall 2026-09: drei
+    # Karten ohne --repo mit konkreten Datei-Fundstellen in der Beschreibung,
+    # Worker landete im Ad-hoc-Klon statt im System-Repo). Ohne dieses Feld
+    # bliebe dem Aufrufer bei einer Recherche-Karte, die zufaellig eine
+    # Fundstelle zitiert, nur ein Dummy-Repo — die Regel wuerde umgangen statt
+    # befolgt. Der Grund wird als TaskComment dokumentiert, damit die
+    # Ausnahme pruefbar bleibt statt spurlos zu verschwinden.
+    no_repo_reason: str | None = None
 
 
 class DelegateResponse(BaseModel):
@@ -178,9 +193,6 @@ class DelegateResponse(BaseModel):
     assigned_to: str
     your_status: str  # "blocked" if callback=True, otherwise "in_progress"
     parent_task_id: uuid.UUID | None = None
-    # Nur gesetzt, wenn die Karte wirklich elternlos ist (kein current_task,
-    # kein --parent) — macht den stillen Fallback laut statt lautlos.
-    warning: str | None = None
 
 
 class ClarificationCreate(BaseModel):
@@ -366,7 +378,7 @@ async def agent_heartbeat(
         )
 
     # Warn at 70%+ context
-    if agent.context_max and agent.context_tokens >= agent.context_max * 0.9:
+    if agent.context_max and agent.context_tokens is not None and agent.context_tokens >= agent.context_max * 0.9:
         await emit_event(
             session,
             "agent.context_warning",
@@ -375,7 +387,7 @@ async def agent_heartbeat(
             agent_id=agent.id,
             board_id=agent.board_id,
         )
-    elif agent.context_max and agent.context_tokens >= agent.context_max * 0.7:
+    elif agent.context_max and agent.context_tokens is not None and agent.context_tokens >= agent.context_max * 0.7:
         await emit_event(
             session,
             "agent.context_warning",
@@ -1147,24 +1159,35 @@ async def agent_delegate_task(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Task gehoert nicht zu diesem Board.",
             )
-    elif not agent.is_board_lead:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
+    else:
+        # No active task AND no explicit --parent. This used to be the "root
+        # delegation" branch for Board Leads (live incident 2026-08-06): a lead
+        # handling a chat order opened a parentless card, and the only signal
+        # was a `warning` string in the RESPONSE — computed AFTER
+        # session.add(subtask), so by the time anyone could read it the orphan
+        # already existed. That is exactly how b7d29be3/70d6b417 (2026-09-11)
+        # and 8d039889 were created.
+        #
+        # Task f8c9cdb9 (2026-09-16): refuse BEFORE anything is created. The
+        # card allowed either "refuse loudly before creating" or "require
+        # --parent"; both collapse to the same shape here, because the
+        # explicit-`--parent` branch above already carries the full W5-F guard
+        # set (missing 404, cross-board 403, closed 409, not-yours 409) — this
+        # branch only has to stop the silent fallback.
+        if agent.is_board_lead:
+            detail = (
+                "Kein aktiver Task und kein --parent gesetzt — Delegation "
+                "blockiert, keine stillschweigende Waisenkarte. Als Board Lead "
+                "mit einer Chat-Bestellung: setze explizit --parent <task-id> "
+                "auf die Karte, unter der die Arbeit haengen soll "
+                "(`mc delegate --parent <task-id> ...`)."
+            )
+        else:
+            detail = (
                 "Kein aktiver Task — Delegation nur aus aktiver Arbeit heraus "
                 "moeglich (oder --parent <task-id> explizit setzen)."
-            ),
-        )
-    else:
-        # Root delegation (live incident 2026-08-06): a Board Lead handling a
-        # chat order has NO active task. The hard 409 here made Boss hand-roll
-        # API calls — and lose the task step. A lead may open a ROOT task:
-        # no parent, no callback (nothing to resume), same guards otherwise.
-        if agent.board_id != board_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Agent gehoert nicht zu diesem Board.",
             )
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
 
     target_agent = await session.get(Agent, payload.assigned_agent_id)
     if not target_agent:
@@ -1194,6 +1217,20 @@ async def agent_delegate_task(
             detail="Selbst-Delegation ist nicht erlaubt. Eigenarbeit direkt am Task machen.",
         )
 
+    # Registry-Repo-Bindung (ADR-052): gleiche Haerte wie die Operator-Route
+    # (routers/tasks.py create_task) — ein unbekanntes oder deaktiviertes
+    # Repo lehnt ab, statt das Feld still zu ignorieren.
+    resolved_repo_id: uuid.UUID | None = None
+    if payload.repo_id:
+        from app.services.repo_registry import resolve_repo_ref
+        chosen_repo = await resolve_repo_ref(session, payload.repo_id)
+        if not chosen_repo or not chosen_repo.is_active:
+            raise HTTPException(
+                status_code=400,
+                detail="repo_id verweist auf kein aktives Registry-Repo",
+            )
+        resolved_repo_id = chosen_repo.id
+
     # Origin link: explicit value must be a conversation the delegating agent
     # takes part in; without one the subtask inherits the parent's origin, so
     # the orchestrator's consolidation report reaches the ordering thread.
@@ -1214,69 +1251,80 @@ async def agent_delegate_task(
     elif explicit_parent is not None:
         origin_thread_id = explicit_parent.origin_thread_id
 
-    # Root mode: no parent to inherit from — board default project and explicit
-    # priority or medium.
+    # Past the guards above exactly one of the two is set: an owned active task,
+    # or an explicit --parent. There is no third case left — task f8c9cdb9
+    # removed the root branch that used to live here.
     #
     # Two things used to be conflated under one flag, and that is what left the
     # circle open for a chat-ordered delegation (#312, live-reproduced): a
     # blocked parent that must be RESUMED, and a requester that must be TOLD.
-    # A root delegation has no parent to resume — but the lead who ordered it
-    # from a chat is precisely the one waiting for the answer, and with
-    # callback_agent_id left null nothing downstream can ever reach them
-    # (agent_task_status's completion hook and _deliver_root_callback both key
-    # off exactly that field). So the resume half stays off for root, the
-    # notify half follows the caller's request.
-    #
-    # explicit_parent (W5-F) gets the same treatment as root for the
-    # block/resume half: we did NOT verify the delegating agent actually owns
-    # or is working on that task, so blocking it and later auto-resuming it
-    # would be reaching into a task this agent has no confirmed claim on.
-    # notify_requester still follows the caller's request either way.
+    # explicit_parent (W5-F) keeps the block/resume half OFF: we did NOT verify
+    # the delegating agent actually owns or is working on that task, so blocking
+    # it and later auto-resuming it would be reaching into a task this agent has
+    # no confirmed claim on. notify_requester still follows the caller's
+    # request either way — callback_agent_id is what the completion hook and
+    # _deliver_root_callback both key off.
     parent_for_subtask = current_task if current_task is not None else explicit_parent
+    assert parent_for_subtask is not None  # guard chain above
     notify_requester = payload.callback
     if current_task is not None:
         project_id = current_task.project_id
         with_callback = payload.callback
-    elif explicit_parent is not None:
-        project_id = explicit_parent.project_id
-        with_callback = False
     else:
-        project_id = None
-        board_row = await session.get(Board, board_id)
-        if board_row is not None:
-            project_id = board_row.default_project_id
+        project_id = parent_for_subtask.project_id
         with_callback = False
+
+    # Repo-Bindungs-Waechter — NACH der Projekt-Vererbung, nicht davor: erst
+    # hier steht fest, ob die Karte ueberhaupt ein Projekt erbt. Vorher
+    # greifen hiesse, auf jeder Board-Karte mit default_project_id falsch
+    # anzuschlagen.
+    #
+    # Vorfall 2026-09: drei Karten ohne --repo, deren Beschreibungen konkrete
+    # Fundstellen nannten; der Worker landete im gemeinsamen Ad-hoc-Klon und
+    # die Arbeit war wertlos. Eine Regel, die den Alltag blockiert, wird
+    # umgangen — deshalb prueft der Waechter nur Fundstellen UND fehlende
+    # Bindung, und bietet mit --no-repo-reason einen bewussten Ausweg.
+    from app.services.repo_binding import enforce_repo_binding, project_binds_repo
+
+    # Eine geerbte `project_id` allein ist KEINE Bindung: es gibt Projekte
+    # ohne GitHub-Repo, und dort landet die Arbeit im gemeinsamen Ad-hoc-Klon.
+    # Deshalb wird das Projekt geladen und auf eine wirksame Bindung geprueft.
+    inherited_project = (
+        await session.get(Project, project_id) if project_id is not None else None
+    )
+    project_bound = project_binds_repo(inherited_project)
+    repo_bound = resolved_repo_id is not None or project_bound
+
+    enforce_repo_binding(
+        title=payload.title,
+        description=payload.description,
+        repo_bound=repo_bound,
+        waiver_reason=payload.no_repo_reason,
+    )
 
     # Construct subtask in-memory (not persisted yet)
     subtask = Task(
         id=uuid.uuid4(),
         board_id=board_id,
         project_id=project_id,
-        parent_task_id=parent_for_subtask.id if parent_for_subtask else None,
+        parent_task_id=parent_for_subtask.id,
         title=payload.title,
         description=payload.description,
         status="inbox",
-        priority=payload.priority
-        or (parent_for_subtask.priority if parent_for_subtask else "medium"),
+        priority=payload.priority or parent_for_subtask.priority,
         task_type="story",
         assigned_agent_id=target_agent.id,
         owner_agent_id=agent.id,
         origin_thread_id=origin_thread_id,
+        repo_id=resolved_repo_id,
         # Callback pattern: subtask points back to the delegating agent — set
         # for a root delegation too, so the completion actually reaches them.
         callback_agent_id=agent.id if notify_requester else None,
         is_auto_created=True,
         auto_reason=(
             f"delegation from {agent.name}"
-            + (
-                ""
-                if current_task
-                else (
-                    " (explicit --parent, no active task)"
-                    if explicit_parent
-                    else " (root, no active task)"
-                )
-            )
+            if current_task
+            else f"delegation from {agent.name} (explicit --parent, no active task)"
         ),
     )
 
@@ -1300,12 +1348,40 @@ async def agent_delegate_task(
     #   fk_tasks_blocked_by_task_id blows up. Reflexive FKs (tasks → tasks)
     #   confuse SQLAlchemy's topological sort.
     #   Live bug Boss 2026-04-25: HTTP 500 on mc delegate --callback.
-    # - root branch (current_task is None): emit_event() below inserts an
-    #   ActivityEvent row with task_id=subtask.id and commits internally
-    #   (activity.py:41) — without a flush first, that FK insert hits the
-    #   same unflushed-subtask problem. Missed the first time round (#312):
-    #   HTTP 500 on `mc delegate` with no active parent task.
+    # - explicit --parent without an active task (current_task is None):
+    #   emit_event() below inserts an ActivityEvent row with
+    #   task_id=subtask.id and commits internally (activity.py:41) — without a
+    #   flush first, that FK insert hits the same unflushed-subtask problem.
+    #   Missed the first time round (#312): HTTP 500 on `mc delegate` with no
+    #   active parent task.
     await session.flush()
+
+    # Die bewusste Ausnahme dokumentieren (s.o.): sichtbar an der Karte,
+    # nicht nur im Request. Beides muss zusammenkommen — Fundstelle UND
+    # fehlende Bindung — sonst ist es keine Ausnahme und braucht keinen
+    # Eintrag.
+    if payload.no_repo_reason and not repo_bound:
+        from app.services.repo_binding import find_file_references
+
+        waived_refs = find_file_references(payload.title, payload.description)
+        waiver_note = (
+            f"Bewusst ohne Repo-Bindung: {payload.no_repo_reason}"
+            + (
+                f"\n\nNennt trotzdem Fundstellen: {', '.join(waived_refs)}"
+                if waived_refs
+                else ""
+            )
+        )
+        session.add(
+            TaskComment(
+                id=uuid.uuid4(),
+                task_id=subtask.id,
+                author_type="agent",
+                author_agent_id=agent.id,
+                content=waiver_note,
+                comment_type="repo_binding_waiver",
+            )
+        )
 
     if with_callback and current_task is not None:
         current_task, _ = await lock_and_set(session, current_task.id, "blocked", actor="agent")
@@ -1319,12 +1395,12 @@ async def agent_delegate_task(
     # a Board Lead using --parent on a card OWNED BY SOMEONE ELSE is allowed
     # to delegate (lead privilege), but writing an audit comment into that
     # foreign card is a side effect nobody asked for — the card doesn't
-    # belong to this agent, confirmed or not. A truly rootless delegation
-    # (or an unconfirmed explicit --parent) logs via the activity event only.
+    # belong to this agent, confirmed or not. An unconfirmed explicit
+    # --parent logs via the activity event only.
     write_parent_comment = current_task is not None or (
         explicit_parent is not None and explicit_parent.assigned_agent_id == agent.id
     )
-    if write_parent_comment and parent_for_subtask is not None:
+    if write_parent_comment:
         comment = TaskComment(
             id=uuid.uuid4(),
             task_id=parent_for_subtask.id,
@@ -1347,14 +1423,13 @@ async def agent_delegate_task(
         title=f"{agent.name} delegiert an {target_agent.name}: {payload.title}",
         severity="info",
         board_id=board_id,
-        task_id=parent_for_subtask.id if parent_for_subtask else subtask.id,
+        task_id=parent_for_subtask.id,
         agent_id=agent.id,
         detail={
             "subtask_id": str(subtask.id),
             "target_agent": target_agent.name,
             "callback": with_callback,
             "notify_requester": notify_requester,
-            "root_delegation": parent_for_subtask is None,
             "explicit_parent": explicit_parent is not None,
         },
     )
@@ -1369,32 +1444,21 @@ async def agent_delegate_task(
     logger.info(
         "Delegate: %s → %s (subtask %s, parent %s %s)",
         agent.name, target_agent.name, subtask.id,
-        parent_for_subtask.id if parent_for_subtask else "-",
-        "blocked" if with_callback else ("root" if parent_for_subtask is None else "in_progress"),
+        parent_for_subtask.id,
+        "blocked" if with_callback else "in_progress",
     )
 
     # Loud instead of silent (W5-F): a truly rootless card — no owned
-    # current_task, no explicit --parent — is still allowed (Board Leads
-    # legitimately open root cards from a chat order), but the response now
-    # says so in plain text instead of the bare, easy-to-miss "no_task"
-    # status that shipped the two orphans b7d29be3/70d6b417 on 2026-09-11.
-    warning = None
-    if parent_for_subtask is None:
-        warning = (
-            "Kein Parent, kein Callback — diese Karte haengt an nichts und "
-            "niemand wird bei Fertigstellung automatisch benachrichtigt. "
-            "Falls das nicht gewollt war: naechstes Mal --parent <task-id> setzen."
-        )
-
+    # current_task, no explicit --parent — used to be allowed here with a
+    # `warning` string computed AFTER the INSERT. Task f8c9cdb9 removed that
+    # branch entirely: the guard above refuses before session.add(), so
+    # parent_for_subtask is never None here and the warning can no longer
+    # exist. `your_status` is "blocked" (callback wait) or "in_progress".
     return DelegateResponse(
         subtask_id=subtask.id,
         assigned_to=target_agent.name,
-        your_status=(
-            "blocked" if with_callback
-            else ("no_task" if parent_for_subtask is None else "in_progress")
-        ),
-        parent_task_id=parent_for_subtask.id if parent_for_subtask else None,
-        warning=warning,
+        your_status="blocked" if with_callback else "in_progress",
+        parent_task_id=parent_for_subtask.id,
     )
 
 
@@ -2346,6 +2410,269 @@ async def agent_read_own_thread(
     }
 
 
+# ── Activity Events (read-only, aggregatable) ───────────────────────────────
+# Board Task bfba0507 (2026-09-14): before this, an agent could only see
+# ActivityEvent rows scoped to ONE task (via the operator-only timeline
+# endpoint in tasks.py). "How often did event X happen in the last 7 days,
+# and what followed?" was unanswerable without a human running psql on the
+# host. These two endpoints give agents a scoped, capped, paginated read
+# path over the same table.
+
+ACTIVITY_EVENTS_DEFAULT_WINDOW_DAYS = 7
+ACTIVITY_EVENTS_MAX_WINDOW_DAYS = 90
+ACTIVITY_EVENTS_DEFAULT_LIMIT = 50
+ACTIVITY_EVENTS_MAX_LIMIT = 200
+ACTIVITY_EVENTS_SUMMARY_CAP = 500
+
+
+def _activity_events_window(since: datetime | None, until: datetime | None) -> tuple[datetime, datetime, bool]:
+    """Resolves the (since, until) filter pair, tz-normalizes both, and clamps
+    the SPAN between them to ACTIVITY_EVENTS_MAX_WINDOW_DAYS. Returns
+    (start, end, clamped).
+
+    Default window (no `since` given): last ACTIVITY_EVENTS_DEFAULT_WINDOW_DAYS
+    days — named per DoD ("Standardfenster ... benannt"). The clamp bounds
+    the SPAN of a single request, protecting against an unbounded row scan;
+    it does NOT bound how far into the past that span may sit — shifting
+    `since` and `until` together equally still returns arbitrarily old
+    events with `clamped=False` (W4, PR #588 review). That's fine here: the
+    endpoint is board-scoped and read-only, so the cap bounds response size,
+    not access — but earlier wording here and in TOOLS.md ("capped at 90
+    days regardless of `since`") overclaimed an age limit this clamp never
+    enforced. It silently narrows the span rather than erroring, mirroring
+    the `truncated` flag pattern used by the task timeline endpoint
+    (tasks.py get_task_timeline).
+
+    Raises 422 if both `since` and `until` are given and `until` is before
+    `since` (N1, PR #588 review) — previously this combination silently
+    produced an empty result instead of signalling the caller's mistake.
+    """
+    now = utcnow()
+    end = until if until is not None else now
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+    start = since if since is not None else end - timedelta(days=ACTIVITY_EVENTS_DEFAULT_WINDOW_DAYS)
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+
+    if since is not None and until is not None and end < start:
+        raise HTTPException(status_code=422, detail="`until` must not be before `since`")
+
+    max_span = timedelta(days=ACTIVITY_EVENTS_MAX_WINDOW_DAYS)
+    clamped = False
+    if end - start > max_span:
+        start = end - max_span
+        clamped = True
+    return start, end, clamped
+
+
+def _activity_events_event_types(event_type: str | None) -> list[str] | None:
+    if not event_type:
+        return None
+    types = [t.strip() for t in event_type.split(",") if t.strip()]
+    return types or None
+
+
+@router.get("/me/activity-events")
+async def agent_list_activity_events(
+    event_type: str | None = Query(None, description="Single type or comma-separated list, e.g. 'task.blocked,task.stuck'"),
+    since: datetime | None = Query(None),
+    until: datetime | None = Query(None),
+    board_id: uuid.UUID | None = Query(None),
+    agent_id: uuid.UUID | None = Query(None),
+    task_id: uuid.UUID | None = Query(None),
+    before: str | None = Query(None, description="Pagination cursor from a previous page's next_cursor"),
+    limit: int = Query(ACTIVITY_EVENTS_DEFAULT_LIMIT, ge=1, le=ACTIVITY_EVENTS_MAX_LIMIT),
+    session: AsyncSession = Depends(get_session),
+    agent: Agent = Depends(require_scope(Scope.TASKS_READ)),
+):
+    """List activity_events, scoped to the calling agent's own board.
+
+    Read-only counterpart to the operator-only task timeline
+    (tasks.py get_task_timeline) — but board-wide and filterable/paginated
+    instead of per-task, so an agent can answer "how often did X happen"
+    without a human pulling it from psql.
+
+    Scope: the tragende Bedingung — results are ALWAYS filtered to
+    `agent.board_id`, matching the single-board-scope pattern used by every
+    other `/boards/{board_id}/...` agent endpoint (e.g. `agent_get_board`).
+    A `board_id` filter may be passed for clarity/audit but MUST equal the
+    agent's own board — anything else is a 403, never a silent narrowing.
+    An agent with no board (`agent.board_id is None`) only ever sees events
+    with `board_id IS NULL` (global/system events), never another board's.
+
+    Pagination: cursor-based (created_at, id) descending, same shape as
+    `/me/thread`'s before_seq — `before` is the opaque `next_cursor` a
+    previous page returned. Default window is the last
+    ACTIVITY_EVENTS_DEFAULT_WINDOW_DAYS days, capped at
+    ACTIVITY_EVENTS_MAX_WINDOW_DAYS; page size defaults to
+    ACTIVITY_EVENTS_DEFAULT_LIMIT, capped at ACTIVITY_EVENTS_MAX_LIMIT.
+    """
+    from app.models.activity import ActivityEvent
+
+    if board_id is not None and board_id != agent.board_id:
+        raise HTTPException(status_code=403, detail="Access to this board is not permitted")
+
+    window_start, window_end, clamped = _activity_events_window(since, until)
+
+    stmt = select(ActivityEvent).where(
+        ActivityEvent.board_id == agent.board_id,
+        ActivityEvent.created_at >= window_start,
+        ActivityEvent.created_at <= window_end,
+    )
+
+    types = _activity_events_event_types(event_type)
+    if types is not None:
+        stmt = stmt.where(ActivityEvent.event_type.in_(types))  # type: ignore[union-attr]
+    if agent_id is not None:
+        stmt = stmt.where(ActivityEvent.agent_id == agent_id)
+    if task_id is not None:
+        stmt = stmt.where(ActivityEvent.task_id == task_id)
+
+    if before:
+        try:
+            before_ts_raw, before_id_raw = before.split("|", 1)
+            before_ts = datetime.fromisoformat(before_ts_raw)
+            if before_ts.tzinfo is None:
+                before_ts = before_ts.replace(tzinfo=timezone.utc)
+            before_id = uuid.UUID(before_id_raw)
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="Invalid cursor")
+        stmt = stmt.where(
+            or_(
+                ActivityEvent.created_at < before_ts,
+                and_(ActivityEvent.created_at == before_ts, ActivityEvent.id < before_id),
+            )
+        )
+
+    stmt = stmt.order_by(ActivityEvent.created_at.desc(), ActivityEvent.id.desc()).limit(limit + 1)
+    result = await session.exec(stmt)
+    rows = list(result.all())
+
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+
+    next_cursor = None
+    if has_more and rows:
+        last = rows[-1]
+        next_cursor = f"{last.created_at.isoformat()}|{last.id}"
+
+    row_agent_ids = {e.agent_id for e in rows if e.agent_id}
+    agent_name_map: dict[uuid.UUID, str] = {}
+    if row_agent_ids:
+        agents_result = await session.exec(select(Agent).where(Agent.id.in_(row_agent_ids)))  # type: ignore[arg-type]
+        agent_name_map = {a.id: a.name for a in agents_result.all()}
+
+    return {
+        "events": [
+            {
+                "id": str(e.id),
+                "event_type": e.event_type,
+                "board_id": str(e.board_id) if e.board_id else None,
+                "task_id": str(e.task_id) if e.task_id else None,
+                "agent_id": str(e.agent_id) if e.agent_id else None,
+                "agent_name": agent_name_map.get(e.agent_id) if e.agent_id else None,
+                "title": e.title,
+                "detail": e.detail,
+                "severity": e.severity,
+                "created_at": e.created_at,
+            }
+            for e in rows
+        ],
+        "has_more": has_more,
+        "next_cursor": next_cursor,
+        "limit": limit,
+        "window": {"since": window_start, "until": window_end, "clamped": clamped},
+    }
+
+
+@router.get("/me/activity-events/summary")
+async def agent_activity_events_summary(
+    event_type: str | None = Query(None, description="Single type or comma-separated list"),
+    since: datetime | None = Query(None),
+    until: datetime | None = Query(None),
+    board_id: uuid.UUID | None = Query(None),
+    agent_id: uuid.UUID | None = Query(None),
+    task_id: uuid.UUID | None = Query(None),
+    session: AsyncSession = Depends(get_session),
+    agent: Agent = Depends(require_scope(Scope.TASKS_READ)),
+):
+    """Aggregating counterpart to /me/activity-events: count per
+    (event_type, day) instead of raw rows — the shape for "how often did
+    event X happen in the last N days" without pulling potentially
+    thousands of rows through an agent's context window.
+
+    Chose count-per-event_type-per-day over a flat per-event_type total
+    because the DoD's own example question ("wie oft ... in den letzten 7
+    Tagen, und was folgte darauf") is inherently about a TREND, not a single
+    number — a flat total can't show "spiked on Tuesday" or feed a
+    week-over-week comparison, and collapsing to per-day here costs nothing
+    (the raw list endpoint above still answers the "then what happened"
+    half, event by event, once a day/type combination looks interesting).
+
+    Uses `func.date(...)` (not `date_trunc`, which is Postgres-only) — same
+    portability fix already applied in routers/system.py:498
+    (costs_timeseries) for SQLite-vs-Postgres test/prod parity.
+
+    Note (N3, PR #588 review): on Postgres, `func.date()` converts the
+    `timestamptz` operand to the *session* timezone before truncating to a
+    date; SQLite just takes the stored value as-is. Moot today (the
+    `postgres:16-alpine` test/prod image runs with no `TZ` set, i.e. UTC),
+    but a later non-UTC session timezone would silently shift bucket day
+    boundaries between the two engines.
+
+    Same board scope, same window default/clamp as the list endpoint.
+    Bucket count is capped at ACTIVITY_EVENTS_SUMMARY_CAP; `truncated`
+    signals the cap was hit (identical convention to the list endpoint's
+    `has_more` / the task timeline's `truncated`).
+    """
+    from sqlalchemy import func
+
+    from app.models.activity import ActivityEvent
+
+    if board_id is not None and board_id != agent.board_id:
+        raise HTTPException(status_code=403, detail="Access to this board is not permitted")
+
+    window_start, window_end, clamped = _activity_events_window(since, until)
+
+    day_expr = func.date(ActivityEvent.created_at)
+
+    stmt = (
+        select(day_expr.label("day"), ActivityEvent.event_type, func.count().label("count"))
+        .where(
+            ActivityEvent.board_id == agent.board_id,
+            ActivityEvent.created_at >= window_start,
+            ActivityEvent.created_at <= window_end,
+        )
+        .group_by(day_expr, ActivityEvent.event_type)
+        .order_by(day_expr.desc(), func.count().desc())
+    )
+
+    types = _activity_events_event_types(event_type)
+    if types is not None:
+        stmt = stmt.where(ActivityEvent.event_type.in_(types))  # type: ignore[union-attr]
+    if agent_id is not None:
+        stmt = stmt.where(ActivityEvent.agent_id == agent_id)
+    if task_id is not None:
+        stmt = stmt.where(ActivityEvent.task_id == task_id)
+
+    stmt = stmt.limit(ACTIVITY_EVENTS_SUMMARY_CAP + 1)
+    result = await session.exec(stmt)
+    rows = list(result.all())
+
+    truncated = len(rows) > ACTIVITY_EVENTS_SUMMARY_CAP
+    rows = rows[:ACTIVITY_EVENTS_SUMMARY_CAP]
+
+    return {
+        "buckets": [
+            {"day": str(row.day), "event_type": row.event_type, "count": row.count}
+            for row in rows
+        ],
+        "truncated": truncated,
+        "window": {"since": window_start, "until": window_end, "clamped": clamped},
+    }
+
+
 # PATCH /boards/{board_id}/tasks/{task_id} (the 600-line state-machine
 # endpoint), `_find_reviewer` / `_find_last_developer` etc. now live in
 # routers/agent_task_status.py + services/work_context.py. The shim
@@ -2949,16 +3276,16 @@ async def agent_patch_plugins(
     try:
         from app.services.plugin_manager import sync_agent_plugins_to_disk
         from app.models.runtime import Runtime
-        from app.services.harness_compat import runtime_protocol
-        # W2.1 turn-signal hooks only for the claude harness; openclaude must
-        # not receive the unknown `hooks` key.
+        from app.services.harness_compat import settings_extras_for
+        # W2.1 turn-signal hooks: capability-matrix decision (ADR-084) —
+        # claude always, openclaude per bound runtime's protocol, others never.
         rt = await session.get(Runtime, target.runtime_id) if target.runtime_id else None
         synced = sync_agent_plugins_to_disk(
             agent_slug=slug,
             system_prompt=target.soul_md or "",
             model=target.model or "",
             cli_plugins=target.cli_plugins,
-            turn_signal_hooks=(runtime_protocol(rt) == "anthropic"),
+            turn_signal_hooks=settings_extras_for(getattr(target, "harness", None), rt),
         )
     except Exception as e:
         logger.warning("Plugin sync to disk failed for %s: %s", target.name, e)

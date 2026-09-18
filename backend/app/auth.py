@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import os
+import re
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -14,14 +15,22 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.config import settings
-from app.database import get_session
+from app.database import get_session, release_session
 from app.utils import utcnow
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
+
 # ── JWT Config ────────────────────────────────────────────────────────────────
 
 JWT_ALGORITHM = "HS256"
+
+# Non-UUID `sub` values that may act as the first admin user via the legacy
+# admin-role JWT fallback (see require_user / require_user_or_agent). The only
+# legitimate issuer is the host-side MCP server, scripts/mc-mcp.py. Keep this
+# list closed: a signed admin-role claim with an arbitrary sub must not
+# resolve to a real admin account.
+LEGACY_ADMIN_NON_UUID_SUBS = frozenset({"mcp-server"})
 
 
 def create_access_token(
@@ -120,11 +129,11 @@ def require_role(minimum_role: Role):
 
 # ── User Auth ────────────────────────────────────────────────────────────────
 
-async def require_user(
+async def _authenticate_user(
     request: Request,
+    session: AsyncSession,
     credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
     token: str | None = Query(None, alias="token"),
-    session: AsyncSession = Depends(get_session),
 ):
     from app.models.user import User
 
@@ -154,8 +163,16 @@ async def require_user(
             try:
                 user = await session.get(User, uuid.UUID(user_id))
             except ValueError:
-                # sub is not a UUID (e.g. "mcp-server") — check for admin role JWT
-                if payload.get("role") == "admin":
+                # sub is not a UUID. Only allow-listed non-UUID service
+                # identities may act as the first admin user here (the
+                # host-side MCP server self-signs such a token, see
+                # scripts/mc-mcp.py). Any other non-UUID sub is rejected —
+                # a signed admin-role claim alone must not be a generic
+                # "become the first admin account" template.
+                if (
+                    user_id in LEGACY_ADMIN_NON_UUID_SUBS
+                    and payload.get("role") == "admin"
+                ):
                     result = await session.exec(select(User).where(User.role == "admin").limit(1))
                     admin = result.first()
                     if admin:
@@ -190,7 +207,6 @@ async def require_user(
             role="admin",
             is_active=True,
         )
-
     # If the caller passed an Agent Token (64-char hex) to a User-only route,
     # give a precise hint instead of a generic 401. Agents repeatedly stumble
     # on this — Davinci self-reflection 2026-05-10 cf319ff1.
@@ -200,15 +216,89 @@ async def require_user(
     if is_agent_token_shape:
         path = request.url.path
         suggestion = path.replace("/api/v1/", "/api/v1/agent/", 1) if path.startswith("/api/v1/") else path
+        match = _agent_route_match(request.app, suggestion)
+        if match == "exact":
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=(
+                    f"Agent-Token darf User-Routes nicht nutzen. "
+                    f"Verwende {suggestion} statt {path} (agent-scoped endpoint)."
+                ),
+            )
+        if match == "prefix":
+            # No route with this exact shape, but agent-scoped endpoints
+            # live under this namespace — point at the family, not at a
+            # made-up concrete path.
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=(
+                    f"Agent-Token darf User-Routes nicht nutzen. "
+                    f"Agent-scoped endpoints für {path} liegen unter "
+                    f"{suggestion}/... (agent-scoped endpoint)."
+                ),
+            )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=(
                 f"Agent-Token darf User-Routes nicht nutzen. "
-                f"Verwende {suggestion} statt {path} (agent-scoped endpoint)."
+                f"Für {path} gibt es keinen agent-scoped Endpoint — "
+                f"das macht der Operator-Login."
             ),
         )
 
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+
+
+async def require_user(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
+    token: str | None = Query(None, alias="token"),
+    # use_cache=False: this session is the auth dep's OWN, not the shared
+    # one — require_user releases (closes) it, and a shared instance would
+    # detach ORM objects the endpoint still re-attaches via session.add().
+    session: AsyncSession = Depends(get_session, use_cache=False),
+):
+    """Authenticate the operator and RELEASE the DB connection before the
+    endpoint runs. FastAPI unwinds ``Depends(get_session)`` only after the
+    response has fully streamed (SSE/WS live for minutes), so without this
+    release the auth lookup's implicit transaction pins a pool connection
+    for the whole stream — on every auth-protected stream endpoint at once
+    (13 pool warnings/hour, holds up to 405 s — finding 2026-09-16)."""
+    user = await _authenticate_user(request, session, credentials, token)
+    await release_session(session, route=request.url.path)
+    return user
+
+
+def _agent_route_match(app: object, path: str) -> str | None:
+    """How the app's registered /api/v1/agent routes relate to `path`.
+
+    The 401 hint for agent tokens must only ever point at routes that
+    actually exist — a suggestion to a 404 route sent agents hunting for
+    alternate ways in (scoping finding 2026-09-15). Returns:
+      "exact"  — a registered route matches the path shape
+                 (concrete segments vs {param} templates)
+      "prefix" — no exact match, but registered agent routes start with
+                 this path + "/" (an endpoint family exists here)
+      None     — nothing agent-scoped anywhere near this path
+    """
+    best: str | None = None
+    for route in getattr(app, "routes", []):
+        candidates = [getattr(route, "path", None)]
+        # Routers are included as _IncludedRouter wrappers; their real
+        # paths live on the wrapped APIRouter.
+        original = getattr(route, "original_router", None)
+        if original is not None:
+            candidates = [getattr(sub, "path", None) for sub in getattr(original, "routes", [])]
+        for route_path in candidates:
+            if not route_path or not route_path.startswith("/api/v1/agent"):
+                continue
+            parts = re.split(r"(\{[^}]+\})", route_path)
+            pattern = "".join("[^/]+" if p.startswith("{") else re.escape(p) for p in parts)
+            if re.fullmatch(pattern, path):
+                return "exact"
+            if best is None and route_path.startswith(path + "/"):
+                best = "prefix"
+    return best
 
 
 async def require_bench_view(
@@ -236,7 +326,11 @@ async def require_bench_view(
                 return payload
         except JWTError:
             pass
-    return await require_user(request, credentials, token, session)
+    user = await require_user(request, credentials, token, session)
+    # require_user already released; this covers the bench-token path where
+    # this dependency is the only DB user (release is idempotent).
+    await release_session(session, route=request.url.path)
+    return user
 
 
 # ── Agent Auth ────────────────────────────────────────────────────────────────
@@ -320,9 +414,9 @@ async def _resolve_agent_from_token(token: str, session: AsyncSession) -> "Agent
     return None
 
 
-async def require_agent(
+async def _authenticate_agent(
+    session: AsyncSession,
     credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
-    session: AsyncSession = Depends(get_session),
 ):
     from app.models.agent import Agent  # noqa: F401 (for type hints)
 
@@ -345,11 +439,23 @@ async def require_agent(
     return agent
 
 
-async def require_user_or_agent(
+async def require_agent(
+    credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
+    session: AsyncSession = Depends(get_session),
+):
+    """Agent-token auth. NOTE: deliberately NO release_session here —
+    no agent-authenticated stream endpoint exists (nothing to heal), and
+    agent endpoints legitimately re-attach the returned Agent row via
+    session.add(agent); closing the shared session would detach it and
+    break them (InvalidRequestError)."""
+    return await _authenticate_agent(session, credentials)
+
+
+async def _authenticate_user_or_agent(
     request: Request,
+    session: AsyncSession,
     credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
     token: str | None = Query(None, alias="token"),
-    session: AsyncSession = Depends(get_session),
 ):
     from app.models.user import User
 
@@ -370,8 +476,13 @@ async def require_user_or_agent(
             try:
                 user = await session.get(User, uuid.UUID(user_id))
             except ValueError:
-                # sub is not a UUID (e.g. "mcp-server") — check for admin role JWT
-                if payload.get("role") == "admin":
+                # sub is not a UUID. Same allowlist as require_user: only
+                # known non-UUID service identities may resolve to the first
+                # admin user (scripts/mc-mcp.py), nothing else.
+                if (
+                    user_id in LEGACY_ADMIN_NON_UUID_SUBS
+                    and payload.get("role") == "admin"
+                ):
                     result = await session.exec(select(User).where(User.role == "admin").limit(1))
                     admin = result.first()
                     if admin:
@@ -406,6 +517,19 @@ async def require_user_or_agent(
         return {"type": "agent", "agent": agent}
 
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+
+
+async def require_user_or_agent(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
+    token: str | None = Query(None, alias="token"),
+    # use_cache=False — see require_user.
+    session: AsyncSession = Depends(get_session, use_cache=False),
+):
+    """Dual auth with early connection release (see require_user)."""
+    result = await _authenticate_user_or_agent(request, session, credentials, token)
+    await release_session(session, route=request.url.path)
+    return result
 
 
 # ── Aliases for semantic clarity ─────────────────────────────────────────

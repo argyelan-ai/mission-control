@@ -28,6 +28,20 @@ ALL_COMMENT_TYPES: Final[frozenset[str]] = frozenset({
     # Genau dieser comment_type darf noch eine BoardMemory(lesson) anlegen —
     # siehe agent_comments.py:_handle_reflection_verdict.
     "reflection_verdict",
+    # Fertige Karte, die nur noch auf eine menschliche Entscheidung wartet
+    # (2026-09-11): `mc finish --needs-decision "<Frage>"` haengt die Frage als
+    # DIESEN Typ an die Karte, bevor sie geschlossen wird. Bewusst KEIN neuer
+    # Status — die Karte schliesst, die Frage bleibt an ihr auffindbar.
+    # Absichtlich NICHT in DELIVERABLE_SYSTEM_TYPES: die Karte ist fertig,
+    # niemand soll von ihr geweckt werden. Der Weg zum Operator laeuft ueber
+    # die offene Thread-Frage (POST /agent/tasks/current/ask, #496).
+    "needs_decision",
+    # Repo-Bindungs-Waechter (2026-09-16): eine Delegation, die konkrete
+    # Datei-Fundstellen nennt, aber bewusst ohne Repo-Bindung laeuft, wird
+    # mit DIESEM Typ am Subtask dokumentiert. Die Ausnahme bleibt damit
+    # auffindbar statt spurlos zu verschwinden — ohne den Kommentar waere
+    # --no-repo-reason ein stiller Bypass.
+    "repo_binding_waiver",
 })
 
 # Comment_types that get delivered as actionable system events to the

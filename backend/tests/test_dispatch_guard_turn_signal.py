@@ -48,6 +48,12 @@ async def _seed(
         agent_runtime=agent_runtime,
         status=status,
         last_seen_at=last_seen_at,
+        # Guard 3 is about the turn-signal check, not git workspace setup —
+        # the probe task below is ad-hoc (no project_id), and a
+        # git-requiring agent would otherwise make dispatch actually try a
+        # real GitHub clone (repo_registry.resolve_adhoc_repo_target, task
+        # af914128), which has nothing to do with what this test verifies.
+        requires_git_workflow=False,
     )
     task = await make_task(
         board_id=board.id,

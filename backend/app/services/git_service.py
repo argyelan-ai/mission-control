@@ -195,14 +195,82 @@ class GitService:
 
     async def setup_git_identity(
         self, project_dir: str, agent_name: str,
+        main_repo: str | None = None,
     ) -> None:
-        """Set Git user.name and user.email in the repo."""
+        """Set Git user.name and user.email in the repo.
+
+        `main_repo`: the main checkout when `project_dir` is a linked
+        worktree — enables healing of a broken/absolute `gitdir:` pointer
+        before the first git command touches the worktree.
+        """
+        self._relativize_worktree_gitdir(project_dir, main_repo)
         await self._run_cmd(
             "git", "config", "user.name", f"{agent_name} (MC Agent)", cwd=project_dir,
         )
         await self._run_cmd(
             "git", "config", "user.email", f"{agent_name.lower()}@mc.local", cwd=project_dir,
         )
+
+    # ── Worktree pointer healing ──────────────────────────────────────
+
+    @staticmethod
+    def _relativize_worktree_gitdir(
+        worktree_path: str, main_repo: str | None = None,
+    ) -> bool:
+        """Rewrite the worktree's `.git` file to a relative `gitdir:` path.
+
+        `git worktree add` writes an ABSOLUTE path — the creator's mount
+        view (incident 2026-09-15: backend writes
+        `/Users/testuser/.mc/workspaces/<slug>/...`, agent containers mount the
+        same workspace at `/workspace`, so every git command in the worktree
+        dies with `fatal: not a git repository`). A relative pointer
+        resolves in both views.
+
+        Idempotent. Heals absolute pointers (even ones that resolve in the
+        current view — they break in the other) and broken ones, using
+        `main_repo` as the anchor when the pointer itself is unresolvable.
+
+        Returns: True if the pointer was rewritten.
+        """
+        gitfile = os.path.join(worktree_path, ".git")
+        try:
+            with open(gitfile, "r", encoding="utf-8") as f:
+                content = f.read()
+        except OSError:
+            return False  # no .git file: not a worktree (or unreadable)
+        if not content.startswith("gitdir:"):
+            return False  # real repo checkout, not a linked worktree
+        raw = content.split(":", 1)[1].strip()
+        if not raw:
+            return False
+
+        candidates: list[str] = []
+        if os.path.isabs(raw):
+            candidates.append(raw)
+        else:
+            candidates.append(os.path.normpath(os.path.join(worktree_path, raw)))
+        if main_repo:
+            # Expected gitdir per git's own naming: <repo>/.git/worktrees/<name>
+            candidates.append(os.path.join(
+                os.path.abspath(main_repo), ".git", "worktrees",
+                os.path.basename(os.path.normpath(worktree_path)),
+            ))
+        target = next((c for c in candidates if os.path.isdir(c)), None)
+        if target is None:
+            logger.warning(
+                "Worktree-Gitdir-Ziel nicht auffindbar, Zeiger unangetastet: "
+                "%s (gitdir: %s)", gitfile, raw,
+            )
+            return False
+
+        new_content = f"gitdir: {os.path.relpath(target, worktree_path)}\n"
+        if content == new_content:
+            return False
+        with open(gitfile, "w", encoding="utf-8") as f:
+            f.write(new_content)
+        logger.info("Worktree-Zeiger relativ geschrieben: %s -> %s", gitfile, new_content.strip())
+        return True
+
 
     async def ensure_adhoc_repo(self) -> str:
         """Create mc-workspace repo if it doesn't exist. Returns: clone URL."""
@@ -420,6 +488,8 @@ _Keine Revisionen._
 
         if os.path.isdir(worktree_path):
             logger.info("Worktree existiert bereits: %s", worktree_path)
+            # Selbstheilung: Zeiger relativ schreiben statt zu scheitern
+            self._relativize_worktree_gitdir(worktree_path, project_dir)
             return worktree_path
 
         os.makedirs(worktrees_dir, exist_ok=True)
@@ -456,6 +526,7 @@ _Keine Revisionen._
             else:
                 raise
 
+        self._relativize_worktree_gitdir(worktree_path, project_dir)
         logger.info("Worktree erstellt: %s → branch %s", worktree_path, branch)
         return worktree_path
 
@@ -679,6 +750,39 @@ _Keine Revisionen._
             cwd=project_dir,
         )
         logger.info("PR #%d gemerged (squash)", pr_number)
+
+    async def prepare_review_checkout(
+        self, workspace_path: str, repo_url: str, project_slug: str, pr_number: int,
+    ) -> tuple[str, str]:
+        """Clone-or-reuse the project dir, then `gh pr checkout` the review target.
+
+        `project_dir` (workspace_path/project_slug) is the SAME shared path
+        `ensure_workspace()` uses for this project in this agent's workspace —
+        a previous review task may have left a different PR checked out there.
+        Hard-reset to origin/main before checkout so no stale state leaks
+        between review tasks (incident 2026-09-12: reviewer got an empty/
+        stale workspace and lost 81 minutes reconstructing the PR by hand).
+
+        Raises on any failure — caller must surface it visibly instead of
+        leaving a stale or empty workspace.
+
+        Returns: (project_dir, head_sha) — head_sha is the checked-out PR's
+        HEAD commit, so the reviewer's card can carry a target SHA to check
+        their review against.
+        """
+        project_dir = os.path.join(workspace_path, project_slug)
+        if os.path.isdir(os.path.join(project_dir, ".git")):
+            await self._run_cmd("git", "fetch", "origin", cwd=project_dir)
+            await self._run_cmd("git", "checkout", "main", cwd=project_dir)
+            await self._run_cmd("git", "reset", "--hard", "origin/main", cwd=project_dir)
+            await self._run_cmd("git", "clean", "-fd", cwd=project_dir)
+        else:
+            os.makedirs(workspace_path, exist_ok=True)
+            await self._run_cmd("git", "clone", repo_url, project_dir)
+        await self._run_cmd("gh", "pr", "checkout", str(pr_number), cwd=project_dir)
+        head_sha = await self._run_cmd("git", "rev-parse", "HEAD", cwd=project_dir)
+        logger.info("Review-Checkout vorbereitet: PR #%d -> %s (%s)", pr_number, project_dir, head_sha)
+        return project_dir, head_sha
 
     async def cleanup_task_worktree(
         self, project_dir: str, task_slug: str,

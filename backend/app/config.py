@@ -9,6 +9,17 @@ class Settings(BaseSettings):
 
     # Database
     database_url: str = "postgresql+asyncpg://mc:password@localhost:5432/mission_control"
+    # Pool exhaustion guard (incident 2026-09-14: 29/30 connections pinned in
+    # open transactions → whole API unresponsive). pool_timeout bounds how
+    # long a request WAITS for a free connection before failing fast (503)
+    # instead of piling up behind a leak. 5s ≫ any healthy checkout wait
+    # (see database.py docstring for the sizing math), ≪ the 8s client
+    # timeout observed during the incident.
+    db_pool_timeout: float = 5.0
+    # Observability: a request whose session holds a pool connection longer
+    # than this is logged with endpoint + duration at return time — the
+    # "old transactions are a leak" signature, visible without psql.
+    db_session_hold_warn_seconds: float = 10.0
 
     # Redis
     redis_url: str = "redis://localhost:6379/0"
@@ -195,18 +206,23 @@ class Settings(BaseSettings):
     # pydantic-settings reads PUBLIC_HOST / EXTRA_CORS_ORIGINS env vars.
     public_host: str = ""
     extra_cors_origins: str = ""  # comma-separated list of additional origins
-    # Agent slugs whose compose service gets OMP_DRIVER=acp (ADR-081). The omp
-    # bridge defaults to the native TUI driver; only slugs listed here are
-    # switched to the ACP protocol path. Comma-separated list from .env —
-    # agent names deliberately live in deployment config, not in code.
-    omp_acp_agent_slugs: str = ""  # comma-separated list of agent slugs
+    # Fleet-wide driver default for the omp harness (ADR-084): "acp" gives
+    # EVERY omp agent the ACP protocol path — harness property, never a name
+    # list (ADR-081's OMP_ACP_AGENT_SLUGS is gone). "native" is the global
+    # escape hatch: one knob, whole fleet, back to the bridge's TUI driver.
+    omp_driver_default: str = "acp"  # acp | native
+    # Recovery Tier 2 (process restart) opt-out for host agents whose bridge
+    # runs a driver the backend cannot observe (deployment config). Docker
+    # omp agents are skipped implicitly via their harness (ADR-084) — a
+    # restart kills the running ACP turn: measured 2026-09-14, PR #574.
+    recovery_tier2_skip_agent_slugs: str = ""
 
     # Which driver the host-side hermes bridge runs (scripts/hermes-bridge.py).
     # "native" (default) = the bridge drives a hermes TUI in tmux and the
     # Sessions page has no chat for it at all; "acp" = the bridge runs the ACP
     # chat daemon and the Sessions chat becomes Hermes' ONLY interface
     # (docs/specs/chat-over-acp.md). Read by acp_chat_transport.headless_chat_kind
-    # — deployment config, same reasoning as OMP_ACP_AGENT_SLUGS above.
+    # — deployment config, the host-side counterpart to OMP_DRIVER_DEFAULT.
     hermes_driver: str = "native"  # native | acp
 
     # Secrets encryption (Fernet key for MC-managed secrets)
@@ -319,6 +335,23 @@ class Settings(BaseSettings):
         Path(os.environ.get("HOME_HOST", str(Path.home())))
         / "Workspace" / "Projects" / "mission-control"
     )
+
+    # ── Plattenplatz ──────────────────────────────────────────────────────
+    # Bau-Preflight: ein Bau startet nur, wenn mindestens so viele GB frei
+    # sind. Am 2026-09-16 lief die Platte voll (75,8 GB Docker-Build-Cache,
+    # den Docker nie von selbst aufraeumt); `docker compose up --build` starb
+    # mitten im Layer-Schreiben mit einem rohen "no space left on device".
+    # Die Shell-Seite liest DIESELBE Variable (docker/shared/disk-preflight.sh)
+    # aus der Umgebung bzw. .env — ein Ort, zwei Sprachen.
+    build_min_free_gb: int = 15
+    # Obergrenze, auf die der Build-Cache NACH einem erfolgreichen Bau
+    # zurueckgestutzt wird (`docker builder prune --keep-storage`). Ohne sie
+    # ist der Cache unbegrenzt — genau das waren die 75,8 GB.
+    build_cache_keep_gb: int = 20
+    # Waechter: ab dieser Belegung wird gemeldet. MELDET NUR — es wird nie
+    # etwas geloescht und nie ein Status geaendert. 95 % ist die Fruehwarnung
+    # VOR dem Notfall, nicht der Notfall selbst.
+    disk_watchdog_percent: int = 95
 
     # Free-Code Agent: base directory for task isolation (worktrees or plain workspaces)
     # In the container: /home/mcuser/free-code-projects (mounted from the host,
@@ -637,15 +670,16 @@ def node_agent_base_urls() -> list[str]:
     return [u.strip() for u in settings.mc_node_agent_base_url.split(",") if u.strip()]
 
 
-def omp_acp_agents(s: Settings | None = None) -> set[str]:
-    """Agent slugs whose compose service renders OMP_DRIVER=acp (ADR-081).
+def recovery_tier2_skip_agents(s: Settings | None = None) -> set[str]:
+    """Agent slugs for which tiered recovery must NOT run Tier 2 (restart).
 
-    Comma-separated OMP_ACP_AGENT_SLUGS from .env; empty (default) → no
-    agent gets the env override and the whole fleet stays on the bridge's
-    native driver default. Deployment config, deliberately not code.
+    EXPLICIT opt-outs only (RECOVERY_TIER2_SKIP_AGENT_SLUGS, e.g. a host
+    agent whose bridge runs a driver the backend cannot see). The implicit
+    omp/ACP skip is harness-derived now (ADR-084): task_runner consults
+    ``omp_driver_for(agent.harness)`` directly instead of this name list.
     """
     s = s or settings
-    return {u.strip() for u in s.omp_acp_agent_slugs.split(",") if u.strip()}
+    return {u.strip() for u in s.recovery_tier2_skip_agent_slugs.split(",") if u.strip()}
 
 
 def effective_host_ssh_user() -> str:

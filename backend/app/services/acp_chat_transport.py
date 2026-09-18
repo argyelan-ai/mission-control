@@ -40,7 +40,8 @@ from typing import Any, Protocol
 
 import httpx
 
-from app.config import omp_acp_agents, settings
+from app.config import settings
+from app.services.harness_compat import omp_driver_for
 
 logger = logging.getLogger(__name__)
 
@@ -93,24 +94,23 @@ def headless_chat_kind(agent) -> str | None:
     """``"acp-docker"`` / ``"acp-http"`` / ``None`` — fuehrt dieser Agent
     seinen Chat ueber ACP?
 
-    Zwei Faelle, beide aus der Spezifikation:
+    Zwei Faelle, beide aus der Spezifikation (ADR-084 hat den Slug-Listen-
+    Check von ADR-081 ersetzt — der Treiber ist eine Eigenschaft des
+    omp-Harness, ``OMP_DRIVER_DEFAULT`` ist der einzige globale Schalter):
 
-    - ``cli-bridge`` + Harness ``omp`` + Slug in ``OMP_ACP_AGENT_SLUGS``: der
-      omp-Bridge im Container faehrt ``OMP_DRIVER=acp`` (ADR-081), im
-      Container laeuft der Chat-Daemon. Der Slug MUSS in der Liste stehen —
-      Runtime und Harness allein wuerden auch jeden omp-Agenten auf dem
-      TUI-Pfad in einen Kanal umlenken, den sein Container nie bedient.
+    - ``cli-bridge`` + Harness ``omp`` + ``omp_driver_for("omp") == "acp"``:
+      der omp-Bridge im Container faehrt ``OMP_DRIVER=acp``, im Container
+      laeuft der Chat-Daemon.
     - ``host`` + Harness ``hermes`` + ``HERMES_DRIVER=acp``: die hermes-bridge
       haelt den Daemon auf dem Host.
 
-    Enten-typisiert auf ``agent.slug`` / ``agent.agent_runtime`` /
-    ``agent.harness`` wie ``agent_chat_input._target_kind``, damit Tests und
-    das Modell selbst (``Agent.headless_chat``) dieselbe Funktion nutzen."""
+    Enten-typisiert auf ``agent.agent_runtime`` / ``agent.harness`` wie
+    ``agent_chat_input._target_kind``, damit Tests und das Modell selbst
+    (``Agent.headless_chat``) dieselbe Funktion nutzen."""
     runtime = getattr(agent, "agent_runtime", None)
     harness = getattr(agent, "harness", None)
-    slug = getattr(agent, "slug", None)
 
-    if runtime == "cli-bridge" and harness == "omp" and slug and slug in omp_acp_agents():
+    if runtime == "cli-bridge" and harness == "omp" and omp_driver_for(harness) == "acp":
         return "acp-docker"
     if runtime == "host" and harness == "hermes" and settings.hermes_driver == "acp":
         return "acp-http"

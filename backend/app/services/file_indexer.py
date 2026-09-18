@@ -18,6 +18,7 @@ import asyncio
 import logging
 import mimetypes
 import os
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
@@ -34,9 +35,33 @@ from app.services.fs_roots import browsable_roots, mc_home
 logger = logging.getLogger("mc.file_indexer")
 
 # Directories never worth indexing (huge / noise). Pruned during the walk.
+# Compared case-insensitively: the deployment FS is case-insensitive (APFS),
+# so "Node_Modules" must prune like "node_modules" (mirrors
+# task_workspace_files.py's case folding). Without this list the walk counts
+# dependency/build/cache dumps and blows max_entries (50 000) every round.
 SKIP_DIRS: frozenset[str] = frozenset(
-    {".git", "node_modules", ".venv", "__pycache__", ".next", ".turbo", "dist", "build", ".trash"}
+    {
+        # VCS / package managers
+        ".git", "node_modules", "bower_components",
+        # Python environments / bytecode / tooling caches
+        ".venv", "venv", "__pycache__", "__pypackages__",
+        ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox", ".nox", ".hypothesis",
+        # JS framework build output
+        ".next", ".nuxt", ".svelte-kit", ".turbo", ".parcel-cache",
+        # Generic build output
+        "dist", "build", "out", "target", ".gradle",
+        # Coverage / misc caches
+        ".cache", "htmlcov", "coverage",
+        # MC soft-delete
+        ".trash",
+    }
 )
+SKIP_DIR_SUFFIXES: tuple[str, ...] = (".egg-info",)
+
+
+def _skip_dir(name: str) -> bool:
+    n = name.lower()
+    return n in SKIP_DIRS or n.endswith(SKIP_DIR_SUFFIXES)
 
 
 def _locate(host_path: str | None, container_path: str | None) -> tuple[str, str] | None:
@@ -152,19 +177,37 @@ async def capture_deliverable(session: AsyncSession, deliverable, agent=None) ->
     return entry
 
 
-async def run_once(session: AsyncSession, *, max_entries: int = 50_000) -> dict:
-    """Walk the browsable roots, upsert entries, prune vanished ones."""
-    seen: set[tuple[str, str]] = set()
-    walked_roots: set[str] = set()
-    count = 0
+async def run_once(
+    *,
+    max_entries: int = 50_000,
+    batch_size: int = 1_000,
+    session_factory: Callable[[], AsyncSession] | None = None,
+) -> dict:
+    """Walk the browsable roots, upsert entries, prune vanished ones.
 
+    The filesystem walk happens OUTSIDE any database transaction — no session
+    is open while os.walk runs (a long walk must never hold a transaction;
+    incident 2026-09-14: one 1789 s open transaction per round). Results are
+    written in short committed batches, one transaction per batch, plus one
+    transaction for the prune pass.
+
+    ``session_factory`` defaults to the app-wide ``async_session_maker``;
+    tests inject a factory bound to their engine.
+    """
+    factory = session_factory or async_session_maker
+
+    # --- Phase 1: scan the filesystem. NO session, NO transaction. ---------
+    scan: list[tuple[str, str, str, bool, int, str | None, float]] = []
+    walked_roots: set[str] = set()
+    truncated_roots: set[str] = set()
     for r in browsable_roots():
         base = r.container_path
         if not base.exists() or not base.is_dir():
             continue
         walked_roots.add(r.key)
+        stop = False
         for dirpath, dirnames, filenames in os.walk(base):
-            dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+            dirnames[:] = [d for d in dirnames if not _skip_dir(d)]
             for nm, is_dir in [(d, True) for d in dirnames] + [(f, False) for f in filenames]:
                 full = Path(dirpath) / nm
                 try:
@@ -173,28 +216,68 @@ async def run_once(session: AsyncSession, *, max_entries: int = 50_000) -> dict:
                 except (OSError, ValueError):
                     continue
                 mime = None if is_dir else mimetypes.guess_type(nm)[0]
-                await _upsert(
-                    session, r.key, rel,
-                    name=nm, is_directory=is_dir,
-                    size=0 if is_dir else st.st_size,
-                    mime=mime, mtime=st.st_mtime,
+                scan.append(
+                    (r.key, rel, nm, is_dir, 0 if is_dir else st.st_size, mime, st.st_mtime)
                 )
-                seen.add((r.key, rel))
-                count += 1
-                if count >= max_entries:
-                    logger.warning("file_indexer hit max_entries=%d — index truncated", max_entries)
+                if len(scan) >= max_entries:
+                    truncated_roots.add(r.key)
+                    stop = True
                     break
+            if stop:
+                break
 
-    # Prune entries for walked roots whose file no longer exists on disk.
+    # --- Phase 2: write in short, committed batches -------------------------
+    seen: set[tuple[str, str]] = {(root, rel) for root, rel, *_ in scan}
+    for start in range(0, len(scan), batch_size):
+        chunk = scan[start : start + batch_size]
+        async with factory() as session:
+            for root_key, rel, nm, is_dir, size, mime, mtime in chunk:
+                await _upsert(
+                    session, root_key, rel,
+                    name=nm, is_directory=is_dir, size=size, mime=mime, mtime=mtime,
+                )
+            await session.commit()
+
+    # --- Phase 3: prune entries whose file vanished — own short transaction -
     pruned = 0
-    rows = (await session.exec(select(FileIndexEntry))).all()
-    for row in rows:
-        if row.root_key in walked_roots and (row.root_key, row.rel_path) not in seen:
-            await session.delete(row)
-            pruned += 1
+    async with factory() as session:
+        rows = (await session.exec(select(FileIndexEntry))).all()
+        for row in rows:
+            if row.root_key in walked_roots and (row.root_key, row.rel_path) not in seen:
+                await session.delete(row)
+                pruned += 1
+        await session.commit()
 
-    await session.commit()
-    return {"indexed": count, "pruned": pruned, "roots": sorted(walked_roots)}
+    _log_truncation(len(scan), max_entries, truncated_roots)
+    return {
+        "indexed": len(scan),
+        "pruned": pruned,
+        "roots": sorted(walked_roots),
+        "truncated": bool(truncated_roots),
+        "truncated_roots": sorted(truncated_roots),
+    }
+
+
+# Once-per-state truncation warning: a run that stays truncated must not
+# re-warn every round (the identical line every 600 s is invisible). Warn on
+# entering the truncated state, log recovery once when it ends.
+_truncated_last_run: bool = False
+
+
+def _log_truncation(count: int, max_entries: int, truncated_roots: set[str]) -> None:
+    global _truncated_last_run
+    truncated = bool(truncated_roots)
+    if truncated and not _truncated_last_run:
+        logger.warning(
+            "file_indexer hit max_entries=%d — index truncated at %d entries "
+            "(roots: %s); extend SKIP_DIRS or raise max_entries",
+            max_entries, count, ", ".join(sorted(truncated_roots)) or "-",
+        )
+    elif not truncated and _truncated_last_run:
+        logger.info(
+            "file_indexer back under max_entries=%d — %d entries indexed", max_entries, count
+        )
+    _truncated_last_run = truncated
 
 
 async def reusable_deliverables(session: AsyncSession, project_id=None) -> list:
@@ -247,8 +330,7 @@ class FileIndexer:
                 got = await redis.set("mc:file-indexer:lock", "1", nx=True, ex=300)
                 if not got:
                     continue
-                async with async_session_maker() as session:
-                    result = await run_once(session)
+                result = await run_once()
                 logger.info("file_indexer walk: %s", result)
             except asyncio.CancelledError:
                 break

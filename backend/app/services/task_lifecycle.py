@@ -63,6 +63,75 @@ async def record_task_event(
     # No separate commit — caller commits together with the status update
 
 
+def task_still_reactivatable(task: Task, *, expected_status: str | None = None) -> bool:
+    """Shared guard for every "reactivate this task" path (auto-resume,
+    auto-ACK, redispatch, ...): may this specific call still flip the
+    task's state, or has something else already changed the ground it
+    was standing on?
+
+    Four instances of the SAME missing check have surfaced in one day
+    (2026-09-13): `_handle_help_request_resume` and `_handle_callback_resume`
+    (agent_task_status.py) resuming a held parent because they only checked
+    their own link field (blocked_by_task_id / status), never run_control;
+    the blocker-answer redispatch (services/dispatch.py) firing after the
+    card had already moved on to review through a normal poll; and the
+    review_stuck watchdog escalating on a status it never re-read (separate
+    card, not fixed here). All four are the same shape: a decision is made
+    at time T1, applied at time T2, and T2 never re-reads the precondition
+    T1 was based on. This predicate is the one thing every T2 call site
+    should run immediately before flipping state, instead of re-deriving
+    its own copy of the check (and the fifth call site forgetting it).
+
+    `run_control is not None` (mc hold / an admin stop) always blocks —
+    reactivating a held or stopped task through a side channel is exactly
+    the deadlock PR #533 closed five other paths for. `expected_status`,
+    when given, additionally requires the task to still be in the specific
+    status the caller's decision was based on (e.g. "blocked" for a
+    resume that only makes sense while the task is still blocked) — a
+    caller with no single expected status (e.g. one that already checks a
+    set of statuses itself) can omit it.
+
+    KNOWN CALL SITES (keep this updated — there is no structural choke
+    point that forces every "set a task back to in_progress/inbox after a
+    decision made earlier" write through this predicate, so this ledger IS
+    the mechanism the tenth site is supposed to find; grep for
+    `task_still_reactivatable` in this repo before enumerating from
+    scratch). Status as of the 9th-path follow-up card (2026-09-13):
+
+      GUARDED — routed through this predicate:
+      1. dispatch.redispatch_after_blocker_answer, wraps auto_dispatch_task
+      2. agent_task_status._handle_help_request_resume (7th path, PR #533)
+      3. agent_task_status._handle_callback_resume (8th path, PR #556)
+      4. routers/approvals.py resolve_approval, blocker_decision/approved
+         (PATCH /approvals/{id}) — calls #1 above
+      5. routers/approvals.py quick_resolve_confirm, blocker_decision/approved
+         (POST .../quick-resolve/confirm, Telegram URL-button path) — calls
+         #1 above
+      9. services/telegram_bot.py TelegramBotService._resolve_approval,
+         blocker_decision/approved (follow-up to PR #556) — previously
+         checked only `task.status == "blocked"`, never run_control.
+         (Earlier PR #556 text excused this one as "resumes in place, no
+         redispatch, untouched" — wrong excuse: the gap this predicate
+         closes is reactivating a task whose ground shifted underneath it,
+         not specifically the redispatch mechanism; "no redispatch"
+         doesn't address it.)
+
+      OPEN — found, not yet guarded (flagged for follow-up cards, PR #556
+      review):
+      6. task_lifecycle.reopen_parent_for_new_subtask — checks
+         `parent.status != "review"`, never run_control
+      7. routers/approvals.py visual_review rejection — sets
+         `original_task.status = "in_progress"` with no check at all
+      8. routers/approvals.py clarification_question approval — checks
+         `task.status == "blocked"`, never run_control
+    """
+    if task.run_control is not None:
+        return False
+    if expected_status is not None and task.status != expected_status:
+        return False
+    return True
+
+
 def apply_ack_handshake(session: AsyncSession, task: Task, agent: Agent) -> bool:
     """Auto-ACK: the first inbound signal from the assigned agent on a
     dispatched task claims it (§3.3 handshake).
@@ -76,11 +145,24 @@ def apply_ack_handshake(session: AsyncSession, task: Task, agent: Agent) -> bool
     Non-committing — mirrors record_task_event: the caller commits together
     with whatever else it writes (the comment / message row). Returns True iff
     this call performed the ACK, so callers can log / emit exactly once.
+
+    C2 (PR #533 Nacharbeit Runde 3, Rex review B2): `run_control is None` is
+    part of the guard for the same reason it was added to the poll/pull-claim
+    candidate queries and the phase-auto-advance selects — a lead-held card
+    (run_control=manual_hold) sits in exactly the dispatched-but-unacked shape
+    this handshake looks for (status stays "inbox", dispatched_at is already
+    set — `mc hold` only checks status, not dispatched_at). Without this
+    guard, the assigned agent's very next comment or message silently claims
+    the card the lead just held: ack_at gets set, status flips to
+    in_progress, and the active-task lock is taken — undoing the hold through
+    a channel that carries no lifecycle intent at all. The comment/message
+    itself still gets written either way; only the implicit ACK is skipped.
     """
     if not (
         task.assigned_agent_id == agent.id
         and task.ack_at is None
         and task.dispatched_at is not None
+        and task.run_control is None
     ):
         return False
 
@@ -490,18 +572,35 @@ async def get_review_worker_agent_ids(session: AsyncSession, task: Task) -> set[
     both must agree on who counts as "the assignee that did the work" so an
     agent can't bypass the guard by using the generic PATCH endpoint instead
     of POST /review.
+
+    PR #527 review, blocker 1: transitions logged through the operator PATCH
+    (routers/tasks.py:update_task, `changed_by="user"`) never carry
+    `agent_id` at all — that endpoint records WHO called it (a human/system
+    caller), not which agent the card belongs to. A card whose entire entry
+    history went through that path — the ordinary shape of a card someone
+    ACKed/handed-off via a route other than the agent-scoped PATCH — used to
+    read back an EMPTY worker set here (the query filtered `agent_id IS NOT
+    NULL` before this fix), so the guard could not fire for it at all. Falling
+    back to `task.assigned_agent_id` for a NULL-`agent_id` event recovers the
+    common case: nobody has been reassigned away from the card since that
+    event, so the current assignee IS who the transition concerns. This is a
+    best-effort reconstruction, not a full fix — a card with a MIXED history
+    (agent-attributed events from before a handoff, NULL-attributed ones
+    after) could still misattribute a stale NULL event to today's assignee.
+    Closing that fully means stamping `agent_id` at write time in every
+    `changed_by="user"`/`"system"` call site instead of reconstructing it
+    here after the fact — out of scope for this fix.
     """
     events_result = await session.exec(
         select(TaskEvent).where(
             TaskEvent.task_id == task.id,
             TaskEvent.to_status.in_(["in_progress", "review"]),  # type: ignore[union-attr]
-            TaskEvent.agent_id.isnot(None),  # type: ignore[union-attr]
         ).order_by(TaskEvent.created_at)  # type: ignore[arg-type]
     )
     worker_agent_ids: set[uuid.UUID] = set()
     review_entrants: set[uuid.UUID] = set()  # entered the task FROM review status
     for event in events_result.all():
-        aid = event.agent_id
+        aid = event.agent_id or task.assigned_agent_id
         if not aid:
             continue
         if event.from_status == "review" and event.to_status == "in_progress":
@@ -519,6 +618,72 @@ async def get_review_worker_agent_ids(session: AsyncSession, task: Task) -> set[
         worker_agent_ids.add(aid)
         review_entrants.discard(aid)
     return worker_agent_ids
+
+
+async def stop_running_reviewer_turn(
+    session: AsyncSession,
+    task: Task,
+    decision: str,
+    actor_name: str,
+) -> bool:
+    """Operator override: hard-stop a reviewer agent's RUNNING turn.
+
+    When the operator decides on a review themselves ("Selbst entscheiden"),
+    the reviewer agent may still be mid-turn on this card. Releasing the
+    lock via update_agent_active_task alone leaves that turn running — it
+    then dies at the end with a bare 409 ("Task ist nicht im Review") and
+    the review work is lost without explanation.
+
+    This runs BEFORE the reviewer is released and only fires when a
+    reviewer agent actually holds the card (never on operator-only cards
+    with assigned_agent_id=None):
+      1. A TaskComment (author_type=system) names the decision and the
+         decider — visible to the reviewer in the transcript.
+      2. run_control="stopped" — the heartbeat control channel
+         (routers/agents.py:_heartbeat_control, Fix 3) translates this into
+         a hard interrupt for the bridge's live turn, which ends the run
+         cleanly instead of letting it crash into the 409.
+
+    The caller clears run_control again on the task's final commit —
+    this is a one-turn interrupt, not a task stop.
+
+    Returns True if a running reviewer turn was stopped.
+    """
+    reviewer_id = task.assigned_agent_id
+    if not reviewer_id:
+        return False
+    reviewer = await session.get(Agent, reviewer_id)
+    # Only a dedicated reviewer agent can be mid-turn on this card.
+    if reviewer is None or reviewer.role != "reviewer":
+        return False
+
+    task.run_control = "stopped"
+    session.add(TaskComment(
+        task_id=task.id,
+        author_type="system",
+        comment_type="system",
+        content=(
+            "**Operator-Override: dein laufender Review-Zug wurde gestoppt.**\n\n"
+            f"Der Operator hat selbst entschieden: `{decision}` "
+            f"(Entscheider: {actor_name}). Der Zug wurde hart beendet, "
+            "damit dein Turn nicht in einen 409 laeuft — dein bisheriger "
+            "Review-Fortschritt ist im Transkript sichtbar."
+        ),
+    ))
+    await emit_event(
+        session, "review.reviewer_turn_stopped",
+        f"Operator-Override ({decision}): laufender Review-Zug von "
+        f"{reviewer.name} gestoppt",
+        board_id=task.board_id, task_id=task.id, agent_id=reviewer.id,
+        severity="warning",
+        detail={"decision": decision, "decider": actor_name},
+    )
+    logger.info(
+        "Reviewer-Turn-Stop: '%s' — laufender Zug von %s gestoppt "
+        "(Operator-Override, decision=%s)",
+        task.title[:40], reviewer.name, decision,
+    )
+    return True
 
 
 async def execute_review_decision(
@@ -548,12 +713,40 @@ async def execute_review_decision(
         if not children_ok:
             raise HTTPException(400, children_detail)
 
-    # Self-review guard: the agent that WORKED on the task may not approve it.
-    # Reviewer ACK (review → in_progress by the reviewer) does NOT count as work.
-    if decision == "approve" and actor_agent:
+    # Ownership guard: the agent that WORKED on the task may not decide it.
+    # Reviewer ACK (review → in_progress by the reviewer) does NOT count as work,
+    # so the everyday case — a reviewer deciding a card handed to it by
+    # handle_review_handoff — passes untouched.
+    #
+    # This used to run for `approve` only. A reviewer that pointed `mc reject`
+    # at its OWN review card therefore sailed straight through: the card left
+    # `review` for `inbox` carrying review_decision=changes_requested, and the
+    # re-dispatch that followed was pure noise. request_changes and hold move a
+    # card just as much as approve does, so they get the same ownership check.
+    #
+    # Deliberately NOT keyed on `task.assigned_agent_id == actor.id`: in the
+    # normal flow handle_review_handoff assigns the AUTHOR's card to the
+    # reviewer, so that comparison would reject exactly the case that must keep
+    # working. get_review_worker_agent_ids answers the question that actually
+    # matters — did *I* do the implementation work on this card?
+    if decision in ("approve", "request_changes", "hold") and actor_agent:
         worker_agent_ids = await get_review_worker_agent_ids(session, task)
 
-        if actor_agent.id in worker_agent_ids:
+        if actor_agent.id in worker_agent_ids and decision != "approve":
+            # Nothing to escalate on a reject/hold — the decision simply is not
+            # the actor's to make. Hard 409 with the fix spelled out.
+            if not actor_agent.is_board_lead:
+                raise HTTPException(
+                    409,
+                    f"Eigene Karte: Agent '{actor_agent.name}' hat auf '{task.title}' "
+                    f"selbst gearbeitet und kann sie nicht reviewen. "
+                    f"Review-Verben entscheiden die Karte des AUTORS — gib deren "
+                    f"Task-ID explizit an: `mc {'reject' if decision == 'request_changes' else 'hold'} <task-id> ...`. "
+                    f"Ist die Autorenkarte schon geschlossen, halte das Urteil mit "
+                    f"`mc review-note <task-id> --decision {decision} --feedback \"...\"` fest.",
+                )
+
+        if actor_agent.id in worker_agent_ids and decision == "approve":
             if not actor_agent.is_board_lead:
                 # Self-review blocked → escalate to Board Lead instead of hard-blocking
                 _bl_result = await session.exec(
@@ -567,6 +760,18 @@ async def execute_review_decision(
                     task.assigned_agent_id = _board_lead.id
                     session.add(task)
                     await session.commit()
+                    # Same class of gap as the reassign endpoints: reassigning
+                    # to the Board Lead here never went through
+                    # auto_dispatch_task, so the Board Lead's workspace was
+                    # never prepared for this task/branch. Run this BEFORE
+                    # logging/emitting the escalation (PR #584 review W2): a
+                    # failure here re-blocks + terminal-unassigns the task via
+                    # task_context_builder's own hard-fail contract, which
+                    # would contradict "eskaliert an Board Lead" if that were
+                    # logged/emitted first regardless of the outcome.
+                    from app.services.task_context_builder import prepare_agent_workspace_for_task
+                    if not await prepare_agent_workspace_for_task(task, _board_lead, session):
+                        return  # Blocked: blocker comment + terminal-unassign already committed
                     logger.info(
                         "Self-review blocked: %s → eskaliert an Board Lead %s",
                         actor_agent.name, _board_lead.name,
@@ -612,6 +817,13 @@ async def execute_review_decision(
 
     old_status = task.status
     actor_name = actor_agent.name if actor_agent else "Operator"
+
+    # ── 0. Operator override: stop the reviewer's RUNNING turn ──
+    # Only when a reviewer agent holds the card and the OPERATOR decides
+    # (actor_agent is None). The agent path (actor_agent set) is the
+    # reviewer itself — its turn is the one POSTing this decision.
+    if actor_agent is None:
+        await stop_running_reviewer_turn(session, task, decision, actor_name)
 
     # ── 1. Comment (always, atomic with the decision) ──────
     comment = TaskComment(
@@ -692,6 +904,19 @@ async def execute_review_decision(
                         "den Report selbst wenn du den Kontext hast."
                     ),
                 )
+
+            # ── ADR-Gate (PRE-MUTATION) ────────────────────────────
+            # Approving the review is the second way a card reaches `done`,
+            # and `done` merges its PR. Must run BEFORE the status assignment
+            # below — `guard_adr_merge` → `enforce_autonomy` COMMITS this
+            # session, so a gate placed after the assignment would flush the
+            # very transition it refuses (409 as a lie, card left in `done`).
+            from app.services.adr_gate import guard_adr_merge
+            await guard_adr_merge(
+                session, task,
+                agent_id=actor_agent.id if actor_agent is not None else None,
+                board_id=board_id,
+            )
 
             task.status = "done"
             task.completed_at = utcnow()
@@ -847,9 +1072,167 @@ async def execute_review_decision(
             detail={"decision": "hold", "actor": actor_name},
         )
 
+    # The one-turn stop flag from stop_running_reviewer_turn PERSISTS past
+    # this request: the reviewer's live turn only ends when its next
+    # heartbeat/poll translates run_control="stopped" into a hard interrupt
+    # (routers/agents.py:_heartbeat_control). Clearing it in the same
+    # request would erase the interrupt before it is ever delivered —
+    # exactly the "reviewer dies with a bare 409" incident this feature
+    # exists to prevent. Downstream paths clean it up on their own:
+    #   - approve/request_changes: handle_review_rejection and the
+    #     requeue/park paths (tasks.py:1476, agent_task_status.py:1922,
+    #     agents.py:3646) reset run_control when the card moves out of
+    #     review, and check_dispatch_allowed blocks a re-dispatch of a
+    #     stopped card in the meantime (operations.py:133).
+    #   - hold: the card stays in review; the operator releases it via the
+    #     existing resume flow (operations.py:resume_task_run) — identical
+    #     to the operator Stop-Button semantics.
     task.updated_at = utcnow()
     session.add(task)
     await session.commit()
+
+    # W1 fix (PR #558 follow-up): this review path sets task.status directly
+    # and never goes through the generic PATCH handlers (routers/tasks.py,
+    # routers/agent_task_status.py) where cleanup_obsolete_approvals is
+    # normally wired to updates["status"] — so a pending review_stuck (or
+    # blocker_decision/clarification_question/spawn_timeout/
+    # dispatch_escalation) approval on this task would sit as a zombie in
+    # the operator's inbox until the next watchdog reconciliation tick
+    # (~30s). task.status here already reflects the final state for every
+    # branch above (done/user_test/blocked-on-E2E for approve, whatever
+    # handle_review_rejection landed on for request_changes, unchanged
+    # "review" for hold), so one call after the commit covers all of them.
+    from app.services.approval_cleanup import cleanup_obsolete_approvals
+    await cleanup_obsolete_approvals(session, task.id, task.status, board_id)
+
+
+async def record_late_review_note(
+    session: AsyncSession,
+    task: Task,
+    board_id: uuid.UUID,
+    decision: Literal["approve", "request_changes", "hold"],
+    comment_text: str,
+    actor_agent: Agent | None = None,
+) -> dict:
+    """Record a LATE review verdict on a card whose review window has closed.
+
+    execute_review_decision requires status == "review" — rightly so, it moves
+    the card. But a reviewer that arrives after the author's card already went
+    `done` then has no formal way to file its verdict at all: the review verbs
+    bounce with 409 and the judgement survives only as prose in some comment.
+    That happened on PR #500 (both author cards were `done`); the verdict was
+    real and well-argued, it just never became a recorded decision.
+
+    This is the narrow completion of that gap. It writes the SAME two artefacts
+    execute_review_decision writes — a `review` comment and
+    review_decision/review_decided_at — and stops there:
+
+      * no status transition, ever. A closed card is not silently reopened on a
+        note, and `request_changes` here does NOT bounce the card back to
+        in_progress. Reopening stays an explicit, separate act.
+      * no re-dispatch, no PR merge, no report-back gate, no agent release.
+      * no new status and no schema change — review_decision already carries
+        approved | changes_requested | hold (models/task.py).
+
+    The ownership guard applies here too: filing a late verdict on your own
+    work is self-review with extra steps.
+
+    PR #527 review, blocker 2: `execute_review_decision`'s ownership guard
+    sends a worker who is blocked from deciding its own in-review card
+    straight to `review-note` as the way to get its verdict recorded anyway
+    — but this endpoint used to refuse EVERY card still in `review`,
+    unconditionally, so that referral was a dead end: the two 409s pointed
+    at each other with no way through. The escape hatch is narrow — it
+    opens ONLY for the exact caller the ownership guard just turned away
+    (a worker on THIS card, not a board lead, not an uninvolved caller who
+    could simply use the normal decision instead), and it still writes
+    nothing but the note: no status change, same as every other call here.
+    """
+    worker_agent_ids: set[uuid.UUID] = set()
+    if actor_agent:
+        worker_agent_ids = await get_review_worker_agent_ids(session, task)
+    is_blocked_worker = (
+        actor_agent is not None
+        and actor_agent.id in worker_agent_ids
+        and not actor_agent.is_board_lead
+    )
+
+    if task.status == "review" and not is_blocked_worker:
+        raise HTTPException(
+            409,
+            f"Karte '{task.title}' steht offen im Review — nutze die normale "
+            f"Entscheidung (`mc approve <task-id>` / `mc reject <task-id> --feedback ...`). "
+            f"`review-note` ist nur fuer Nachzuegler-Reviews auf bereits geschlossenen Karten "
+            f"oder fuer den Ausweg aus dem Besitz-Guard, wenn die normale Entscheidung "
+            f"dir gerade mit 409 verweigert wurde.",
+        )
+
+    comment_text = (comment_text or "").strip()
+    if not comment_text:
+        raise HTTPException(400, "Ein Nachzuegler-Review braucht eine Begruendung (comment).")
+
+    # Self-review guard — skipped for the escape-hatch case above (task
+    # still in `review`, caller is exactly the blocked worker): that IS the
+    # door execute_review_decision's 409 points to, re-closing it here would
+    # undo the fix. For every other case (the ordinary late note on an
+    # already-closed card) a worker filing about its own implementation work
+    # is still refused.
+    if is_blocked_worker and task.status != "review":
+        raise HTTPException(
+            409,
+            f"Eigene Karte: Agent '{actor_agent.name}' hat auf '{task.title}' selbst "
+            f"gearbeitet — ein Nachtrag dazu waere Self-Review. Gib die Task-ID der "
+            f"Karte an, die du tatsaechlich reviewt hast.",
+        )
+
+    decision_map = {
+        "approve": "approved",
+        "request_changes": "changes_requested",
+        "hold": "hold",
+    }
+    actor_name = actor_agent.name if actor_agent else "Operator"
+
+    session.add(TaskComment(
+        task_id=task.id,
+        author_type="agent" if actor_agent else "user",
+        author_agent_id=actor_agent.id if actor_agent else None,
+        comment_type="review",
+        content=(
+            f"**Nachtrag-Review ({decision_map[decision]})** — abgegeben, "
+            f"nachdem die Karte den Status `{task.status}` erreicht hatte. "
+            f"Kein Statuswechsel.\n\n{comment_text}"
+        ),
+    ))
+
+    task.review_decision = decision_map[decision]
+    task.review_decided_at = utcnow()
+    task.updated_at = utcnow()
+    session.add(task)
+    await session.commit()
+
+    await emit_event(
+        session, "review.late_note",
+        f"Nachzuegler-Review ({decision_map[decision]}) von {actor_name} — '{task.title}'",
+        board_id=board_id, task_id=task.id,
+        agent_id=actor_agent.id if actor_agent else None,
+        severity="warning" if decision != "approve" else "info",
+        detail={
+            "decision": decision_map[decision],
+            "actor": actor_name,
+            "task_status": task.status,
+        },
+    )
+
+    logger.info(
+        "Nachzuegler-Review %s von %s auf '%s' (Status bleibt %s)",
+        decision_map[decision], actor_name, task.title[:40], task.status,
+    )
+    return {
+        "status": "ok",
+        "decision": decision_map[decision],
+        "task_status": task.status,
+        "status_changed": False,
+    }
 
 
 async def system_finalize_task_done(
@@ -886,6 +1269,14 @@ async def system_finalize_task_done(
     treat this as "not handled" and fall through to a stale-state fallback
     that fights a task that's already done (Critical fix, 2026-07-15 review).
     """
+    # ── ADR-Gate (PRE-COMMIT) ──────────────────────────────────────
+    # `lock_and_set` below persists status=done on its own. A vertical whose
+    # card produced a PR that changes a decision document must not reach
+    # `done` before the operator approved that ADR text — see
+    # app/services/adr_gate.py.
+    from app.services.adr_gate import guard_adr_merge
+    await guard_adr_merge(session, task, board_id=board_id)
+
     task, _ = await lock_and_set(session, task.id, "done", actor="system")
     task.completed_at = utcnow()
     task.dispatch_intent = "root"
@@ -958,6 +1349,115 @@ async def system_finalize_task_done(
         )
 
 
+async def _notify_no_reviewer_found(
+    session: AsyncSession, task: Task, board_id: uuid.UUID,
+) -> None:
+    """No reviewer agent on the board: leave a visible trail instead of the
+    silent unassigned-in-review state `find_reviewer`'s deliberate None
+    (PR #504) used to produce (W6). All three callers of
+    `handle_review_handoff` — agent_task_status.py, tasks.py, and the
+    watchdog's phase-completion fallback — discarded that None with no
+    signal to anyone, so the fix lives here, in the one function all three
+    share, instead of being patched into each call site separately.
+
+    Shape chosen: a durable TaskComment (comment_type="system_notify" — an
+    internal-only type, not in ALL_COMMENT_TYPES, so no schema/API change
+    needed) plus a best-effort DM to the Board Lead, reusing the same
+    delivery primitive `_notify_lead_on_completion` already uses. A new
+    Task column/flag would need a migration and frontend wiring for one
+    boolean; the comment is visible immediately in the existing task-thread
+    UI and still lands even in the watchdog's fallback branch, which by
+    definition runs when there is no Board Lead to DM.
+    """
+    message = (
+        f"**Kein Reviewer gefunden fuer '{task.title}'.**\n\n"
+        f"Die Karte bleibt in `review`, aber es ist kein Agent mit Rolle "
+        f"`reviewer` (oder Namens-Fallback \"rex\"/\"review\") auf diesem "
+        f"Board verfuegbar. Bitte manuell einen Reviewer zuweisen oder die "
+        f"Entscheidung direkt treffen (POST .../review).\n\n"
+        f"Task-ID: {task.id}"
+    )
+    session.add(TaskComment(
+        task_id=task.id,
+        author_type="system",
+        content=message,
+        comment_type="system_notify",
+    ))
+    await session.commit()
+
+    lead = (await session.exec(
+        select(Agent).where(
+            Agent.board_id == board_id,
+            Agent.is_board_lead == True,  # noqa: E712
+        )
+    )).first()
+    if lead:
+        try:
+            from app.services.messaging import ensure_dm_thread, post_message
+            lead_thread = await ensure_dm_thread(session, lead)
+            await post_message(
+                session, thread_id=lead_thread.id, sender_type="system",
+                message_type="system", body=message,
+            )
+        except Exception as e:
+            logger.warning(
+                "No-reviewer notify: DM an Lead fehlgeschlagen fuer Task %s: %s",
+                task.id, e,
+            )
+
+    await emit_event(
+        session, "task.review_unassigned",
+        f"Kein Reviewer gefunden fuer '{task.title}' — Karte bleibt unassigned in review",
+        board_id=board_id, task_id=task.id, severity="warning",
+    )
+
+
+def review_card_would_self_dispatch(task: Task, agent: Agent | None) -> bool:
+    """True if an in_progress→review transition on `task` right now would
+    hand this ALREADY-assigned review card to a SECOND reviewer instead of
+    recording the current reviewer's decision.
+
+    Reproduction (#6e828ffc, activity_events cards c0fb45c1/fd4ac7c6,
+    14.09.2026): the reviewer of a `dispatch_intent == "review_handoff"`
+    card finishes their review turn via the generic in_progress→review
+    transition (e.g. `mc finish --review`, mirroring the verb a developer
+    uses to submit code) instead of the dedicated decision verbs (`mc
+    review approve|reject`). `handle_review_handoff`'s own dedupe (below,
+    "already assigned to a reviewer") only recognises the current
+    assignee when `existing_reviewer.role == "reviewer"` LITERALLY — but
+    `find_reviewer` (work_context.py) also matches agents via a legacy
+    name-based fallback ("rex"/"review" in the name) for agents whose
+    `role` is freetext, a state this board's own Rex has been in before
+    (see work_context.py's "Vorfall 94fda9f9" comment). For such an
+    agent the dedupe silently fails to recognise them as already
+    assigned, `_find_reviewer(exclude_agent_id=<this reviewer>)` runs a
+    fresh search that explicitly excludes them, and — since the same
+    name-fallback still has candidates — a genuinely DIFFERENT second
+    reviewer gets the card and reviews it a second time.
+
+    Blocking here, at every call site, before either PR-creation or
+    `handle_review_handoff` runs, stops the whole chain at its root
+    instead of narrowing the dedupe's role check (which would still
+    silently swallow the wrong verb rather than tell the reviewer what
+    went wrong). The Board Lead is exempt — manually routing a card to a
+    second reviewer for a deliberate second opinion is a legitimate,
+    tested lead action (#6e828ffc DoD: "kein Fix, der den Lead-Bypass
+    einschraenkt") and goes through this exact transition too.
+    """
+    if task.dispatch_intent != "review_handoff":
+        return False
+    return not (agent is not None and agent.is_board_lead)
+
+
+REVIEW_CARD_SELF_DISPATCH_DETAIL = (
+    "Diese Karte ist bereits eine Review-Zuweisung (dispatch_intent="
+    "review_handoff). `status=review` ist hier keine Abgabe, sondern "
+    "wuerde eine ZWEITE Review-Zuweisung an einen anderen Reviewer "
+    "ausloesen (siehe #6e828ffc). Nutze `mc review approve|reject` fuer "
+    "deine Entscheidung."
+)
+
+
 async def handle_review_handoff(
     session: AsyncSession,
     task: Task,
@@ -980,11 +1480,22 @@ async def handle_review_handoff(
             logger.info("Review-Handoff dedupe: '%s' bereits bei %s", task.title, existing_reviewer.name)
             return existing_reviewer
 
-    reviewer = await _find_reviewer(session, board_id)
+    reviewer = await _find_reviewer(
+        session, board_id,
+        # Autor-Ausschluss: der Developer, der den Review eingereicht hat,
+        # darf nie als eigener Reviewer gewaehlt werden (alle Fallback-Stufen).
+        exclude_agent_id=developer.id if developer else None,
+    )
     if not reviewer:
+        # Sichtbarer None-Pfad: kein lebendiger Reviewer-Kandidat uebrig
+        # (alle offline, belegt oder Autor). Kein stiller Fallback.
+        logger.info(
+            "Review-Handoff: kein Reviewer-Kandidat fuer Board %s "
+            "(offline / Autor / keine Rolle) — Task '%s' bleibt unzugewiesen",
+            board_id, task.title,
+        )
+        await _notify_no_reviewer_found(session, task, board_id)
         return None
-    if developer and reviewer.id == developer.id:
-        return None  # Reviewer must not be the same agent
 
     # Set dispatch_intent + operational controls guard
     task.dispatch_intent = "review_handoff"
@@ -1514,6 +2025,13 @@ async def resolve_unblock_action(
         interrupting the agent.
       - Assigned agent ALIVE and idle (or already on THIS task) → "notify" —
         the existing comment-only path, delivered via poll.
+
+    W1-W3 (Rex' review of #570): all three outcomes above end in the SAME
+    dispatch-handshake reset (`ack_at` + `dispatch_attempt_id`) unless a
+    genuinely live, paused session on THIS task is in the way — see
+    `apply_unblock_notify_reset`'s docstring for the single criterion this
+    now runs on, and `redispatch_unblocked_task` / `requeue_unblocked_task`
+    for why only the "notify" branch needs the extra guard at all.
     """
     if not task.assigned_agent_id:
         return "skip"
@@ -1631,6 +2149,7 @@ async def redispatch_unblocked_task(
     (targets the same agent if it revives, falls back to lead/others per
     dispatch's own logic if it stays dead)."""
     from app.services.dispatch import auto_dispatch_task
+    from app.services.dispatch_attempt_audit import clear_dispatch_attempt_id
     from app.utils import create_tracked_task
 
     task.dispatched_at = None
@@ -1651,6 +2170,24 @@ async def redispatch_unblocked_task(
     await session.commit()
     await session.refresh(task)
 
+    # W3 (Rex' review of #570): this branch fires only when the agent is
+    # confirmed DEAD (stale/absent last_seen_at) — never a live session to
+    # protect, so the reset below is unconditional, unlike the notify
+    # branch's guard in apply_unblock_notify_reset. Without it, the OLD
+    # dispatch_attempt_id survives the whole path: auto_dispatch_task below
+    # only sets a fresh id with only_if_null=True (dispatch.py), which is a
+    # no-op on an already-non-None id. Clearing to None first — mirroring
+    # requeue_unblocked_task's clear_dispatch_attempt_id call above — lets
+    # that only_if_null write actually land. Sonde P-D (PR review): before
+    # this fix, `stale_survived=True` for this branch while the notify
+    # branch (which rotates its own id directly, since nothing downstream
+    # sets one for it) already read `stale_survived=False`.
+    await clear_dispatch_attempt_id(
+        session, task,
+        caller="redispatch_unblocked_task", reason="unblock_redispatch_agent_dead",
+    )
+    await session.refresh(task)
+
     create_tracked_task(
         auto_dispatch_task(task.id, board_id),
         name=f"unblock-redispatch:{task.id}",
@@ -1669,6 +2206,88 @@ async def redispatch_unblocked_task(
         agent_id=task.assigned_agent_id,
         severity="warning",
         detail={"reason": "assigned_agent_stale_on_unblock"},
+    )
+
+
+async def apply_unblock_notify_reset(
+    session: AsyncSession,
+    task: Task,
+    old_status: str,
+    assigned_agent_lock_before_transition: uuid.UUID | None,
+    *,
+    caller: str,
+) -> None:
+    """W1/W2 (Rex' review of PR #570): notify-branch half of the unblock
+    ladder — the third case of `resolve_unblock_action`, where the assigned
+    agent is ALIVE and either idle or already on this exact task. Shared by
+    both call sites (`routers/tasks.py`'s operator PATCH and
+    `routers/agent_task_status.py`'s lead/agent PATCH) so the criterion and
+    its rationale live in exactly one place — the duplicated copy across two
+    router files is what let W1 drift (see below).
+
+    One criterion for all three `resolve_unblock_action` branches: reset the
+    dispatch handshake (`ack_at` + `dispatch_attempt_id`) unless the
+    assigned agent might hold a genuinely live, paused session actively
+    running THIS exact task. `redispatch_unblocked_task` and
+    `requeue_unblocked_task` can never hit that unsafe case by construction
+    — the former only fires when the agent is confirmed dead; the latter
+    fires either when the agent's lock points at a DIFFERENT task, or when
+    the agent holds a second `in_progress` task while its lock still names
+    THIS one (`resolve_unblock_action`'s `other_active` check) — a
+    pre-existing corrupt two-in_progress-tasks state, unrelated to the
+    live-paused-session case this branch guards against — so both reset
+    unconditionally. This is the only branch where the ambiguity is
+    reachable: `resolve_unblock_action` returns "notify" both when the agent
+    is idle with no lock at all AND when the agent's lock points at exactly
+    this task — and the latter is indistinguishable, from here, between "a
+    genuinely live `mc ask --blocking` session that must not be double-
+    dispatched" and "a released lock nobody reset" (W2, Sonde P-B).
+
+    Criterion: reset unless `old_status == "waiting"` AND the agent's lock
+    still points at this task. `old_status == "blocked"` is always safe —
+    `mc blocked` (or a blocker escalation) always closes the turn
+    synchronously first, so there is never a live run behind it. `waiting`
+    (`mc ask --blocking`) is the only origin that CAN hold a live, paused
+    session — but only for as long as the agent's own lock
+    (`current_task_id`) still names this task; once that lock has moved on
+    or cleared, the "session" is gone and the card is just stuck (W2).
+
+    ``assigned_agent_lock_before_transition`` MUST be the agent's
+    `current_task_id` read BEFORE this same PATCH's own active-task
+    bookkeeping ran — never a value re-read at call time. Verified while
+    wiring this in (not just adopted from the review's one-liner, per the
+    card's "pruef den Vorschlag, uebernimm ihn nicht ungeprueft"):
+    `agent_task_status.py`'s `update_agent_active_task` call runs earlier in
+    the SAME request and unconditionally repoints `current_task_id` to
+    `task.id` on every →in_progress transition (see its own docstring and
+    `redispatch_unblocked_task`'s B-3 comment, which has to undo the same
+    repoint for its own branch) — by the time this function would otherwise
+    re-fetch the Agent row, "released the lock" and "still holds the lock"
+    already look identical. `routers/tasks.py`'s operator PATCH has no such
+    earlier mutation, so there the snapshot is just the live value taken at
+    the normal call site. Both callers pass a pre-transition snapshot for
+    this reason — see the capture point in each router.
+
+    W1 correction: an earlier version of this comment (both router copies)
+    claimed this "mirrors the already accepted fix in the parked branch of
+    messaging.resolve_waiting_answer". It does not — that twin discriminates
+    by *liveness* (`parked = agent is None or agent.current_task_id !=
+    task.id`, messaging.py), this discriminates by *old_status*. Same
+    effect in the overlap, different criterion; the W2 fix above closes that
+    gap by folding the twin's liveness check into this criterion too.
+    """
+    if old_status == "waiting" and assigned_agent_lock_before_transition == task.id:
+        return
+    task.ack_at = None
+    session.add(task)
+    await session.commit()
+    await session.refresh(task)
+    from app.services.dispatch_attempt_audit import set_dispatch_attempt_id
+    await set_dispatch_attempt_id(
+        session, task, str(uuid.uuid4()),
+        caller=caller,
+        reason="unblock_notify_stale_attempt",
+        only_if_null=False,
     )
 
 

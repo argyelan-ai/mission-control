@@ -16,14 +16,14 @@ from pathlib import Path, PurePosixPath
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.auth import require_user
-from app.database import get_session
+from app.database import get_session, release_session
 from app.models.agent import Agent
 from app.models.group import AgentGroup, GroupMember
 from app.models.memory import BoardMemory
@@ -426,6 +426,7 @@ async def post_group_message(
 @router.get("/groups/{group_id}/stream")
 async def group_stream(
     group_id: uuid.UUID,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
@@ -447,6 +448,12 @@ async def group_stream(
     # Transkriptpfade JETZT auflösen — die DB-Session lebt nicht so lange
     # wie der Strom.
     sources = await _group_preview_sources(session, group)
+    # Der alte Kommentar oben glaubte, die Session lebe nicht so lange wie
+    # der Strom — falsch: FastAPI löst Depends(get_session) erst NACH dem
+    # vollständigen Stream auf (routing.py request_response). Ohne dieses
+    # explizite Release läuft die Autobegin-Transaktion aus `_get_group_or_404`
+    # minutenlang mit (405-s-Befund 2026-09-16).
+    await release_session(session, route=request.url.path)
     return EventSourceResponse(group_stream_frames(str(group_id), sources))
 
 

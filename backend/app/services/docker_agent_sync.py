@@ -41,6 +41,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.agent import Agent
 from app.models.runtime import Runtime
+from app.services.disk_preflight import build_preflight_error as disk_build_preflight_error
 from app.services.template_renderer import build_agent_context, render_agent_file
 
 logger = logging.getLogger("mc.docker_agent_sync")
@@ -51,6 +52,24 @@ logger = logging.getLogger("mc.docker_agent_sync")
 # and would be wrong.
 _HOME_HOST = os.environ.get("HOME_HOST", os.path.expanduser("~"))
 AGENTS_DIR = Path(_HOME_HOST) / ".mc" / "agents"
+
+# The compose project name EVERY `docker compose` call in this stack must
+# pass explicitly (`-p mission-control`). Without it compose derives the
+# project from the compose files' directory (settings.mc_repo_path — "the
+# checkout may have any folder name") and does not recognise the running
+# mc-agent-* containers as its own; `up -d --force-recreate` then tries to
+# CREATE the service and dies with "Conflict. The container name
+# "/mc-agent-<slug>" is already in use" while the old container keeps
+# running the old image (incident 2026-09-17: harness switch to omp
+# reported success, chat showed a black terminal, failure only a WARNING).
+# The name is not free choice: docker-compose.yml pins the default network
+# to `name: mission-control_default` and the deploy path plus docs
+# (ADR-083, scripts/stt-server/README.md) invoke with the same literal.
+# This constant is the code-side carrier of that convention. It is NOT the
+# only compose build site — backend/tests/test_compose_project_flag.py walks
+# every `docker compose` argv in backend/ and fails when a site skips `-p`,
+# so a second call site cannot silently repeat the incident.
+COMPOSE_PROJECT_NAME = "mission-control"
 
 
 def write_reference_docs(config_dir: Path, context: dict) -> dict[str, str]:
@@ -407,8 +426,22 @@ async def sync_docker_agent_files(
     if agent.runtime_id:
         runtime = await session.get(Runtime, agent.runtime_id)
 
-    from app.services.harness_compat import runtime_protocol
-    is_anthropic = bool(runtime and runtime.enabled and runtime_protocol(runtime) == "anthropic")
+    from app.services.harness_compat import runtime_protocol, settings_extras_for
+    # ADR-084: the hooks/statusLine pair is a capability-matrix decision —
+    # claude always, openclaude per bound runtime's protocol, others never.
+    # `runtime.enabled` stays a separate gate (a disabled runtime renders no
+    # extras regardless of harness). Legacy rows without a harness keep the
+    # old protocol signal. The .env OPENAI-shim gate below stays
+    # protocol-based (`is_anthropic`): it decides auth material, not
+    # settings.json extras, and must not flip with the matrix.
+    is_anthropic = bool(
+        runtime and runtime.enabled and runtime_protocol(runtime) == "anthropic"
+    )
+    render_extras = (
+        settings_extras_for(getattr(agent, "harness", None), runtime)
+        if getattr(agent, "harness", None)
+        else is_anthropic
+    )
 
     # Sync settings.json — Bug 5 permanent fix (2026-05-13).
     #
@@ -456,11 +489,12 @@ async def sync_docker_agent_files(
                 agent.soul_md,
                 runtime.model_identifier,
                 agent.cli_plugins,
-                # W2.1 turn-signal hooks + the statusLine hook are both
-                # claude-only — openclaude must not receive either unknown
-                # settings.json key (is_anthropic above).
-                turn_signal_hooks=is_anthropic,
-                status_line=is_anthropic,
+                # W2.1 turn-signal hooks + the statusLine hook follow the
+                # ADR-084 capability matrix — claude always, openclaude per
+                # bound runtime's protocol, others never (legacy rows: the
+                # old protocol signal, see render_extras above).
+                turn_signal_hooks=render_extras,
+                status_line=render_extras,
             )
             if written.get("settings.json"):
                 results["settings.json"] = (
@@ -803,6 +837,12 @@ async def _wait_for_window_ready(
     `bridge.py --serve` prints once its poll loop is up. The default glyphs
     (`$ `, `> `) can appear in bridge.py log output and would false-positive,
     so omp must match the sentinel ONLY.
+
+    Callers pass `agent_runtime_switch.OMP_READY_SIGNALS` for omp agents —
+    the TUI prompt glyphs plus `OMP_ACP_READY`, the sentinel entrypoint.sh
+    prints into Window 0 under `OMP_DRIVER=acp` (fix omp-acp-no-tui-window,
+    13.09.2026) now that Window 0 no longer runs the native TUI for ACP
+    agents. Additive and safe: the native TUI never prints that string.
     """
     import asyncio
     import subprocess
@@ -924,7 +964,7 @@ def restart_docker_agent_container(
         the existing image. Used after a same-image runtime change.
 
     force_recreate=True (Phase 15):
-        `docker compose -f docker-compose.yml -f docker/docker-compose.agents.yml up -d --force-recreate <service>`
+        `docker compose -p mission-control -f docker-compose.yml -f docker/docker-compose.agents.yml up -d --force-recreate <service>`
         Caller is responsible for running compose_renderer.write_compose_agents()
         BEFORE calling this so the new image override is on disk. 90s timeout.
 
@@ -985,11 +1025,27 @@ def restart_docker_agent_container(
                 "mode": "recreate",
             }
 
+        # Plattenplatz-Preflight. Der Recreate baut nichts (`--force-recreate`,
+        # kein `--build`), belegt aber ein neues beschreibbares Layer je
+        # Container — auf einer vollen Platte scheitert er mit genau dem rohen
+        # "no space left on device", das den Vorfall vom 2026-09-16
+        # undiagnostizierbar machte. Die Pruefung kostet ein `df`.
+        disk_error = disk_build_preflight_error()
+        if disk_error:
+            logger.error(
+                "force_recreate(%s) aborted — %s", container_name, disk_error
+            )
+            return {
+                "status": f"error: {disk_error}",
+                "container": container_name,
+                "mode": "recreate",
+            }
+
         # Compose v2 supports multiple `--env-file` flags. The agents compose
         # file references ${MC_TOKEN_*}, ${OPENAI_API_KEY_*} etc. that live in
         # docker/.env.agents — without it those expand to empty and agents come
         # up with no auth token (mc CLI then dies with 'MC_AGENT_TOKEN missing').
-        cmd = ["docker", "compose"]
+        cmd = ["docker", "compose", "-p", COMPOSE_PROJECT_NAME]
         for env_file in (env_main, env_agents, env_shared):
             if env_file.is_file():
                 cmd.extend(["--env-file", str(env_file)])
@@ -1101,6 +1157,35 @@ def _agent_container_running(container_name: str) -> bool | None:
     if result.returncode != 0:
         return None
     return result.stdout.strip() == "true"
+
+
+def inspect_container_image(container_name: str) -> str | None:
+    """Return the image the container actually runs, None if unreadable.
+
+    Structural post-switch verification (incident 2026-09-17): a recreate can
+    succeed in the database while the CONTAINER still runs the old image —
+    the switch verdict must be provable against the running container, not
+    against what compose was expected to do. Mirrors
+    :func:`_agent_container_running`'s inspect conventions.
+    """
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", "-f", "{{.Config.Image}}", container_name],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except Exception as e:
+        logger.warning(
+            "inspect_container_image(%s): inspect failed: %s", container_name, e
+        )
+        return None
+    if result.returncode != 0:
+        return None
+    image = result.stdout.strip()
+    return image or None
 
 
 def ensure_agent_container_started(agent: Agent) -> dict[str, str]:

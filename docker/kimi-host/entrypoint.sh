@@ -103,6 +103,7 @@ export MSG_QUEUE_DIR="$BASE/.msg-queue"
 export MSG_ACK_DIR="$BASE/.msg-acked"
 export NUDGE_STATE_FILE="$BASE/.msg-nudge-state"
 export POLL_LIB_DIR="$REPO/docker/mc-agent-base/lib"
+export MC_CONTEXT_ENV_PATH="${MC_CONTEXT_ENV_PATH:-$BASE/mc-context.env}"
 export MSG_DELIVERY_MODE="${MSG_DELIVERY_MODE:-nudge}"
 
 # Window 0: kimi-TUI in Restart-Loop

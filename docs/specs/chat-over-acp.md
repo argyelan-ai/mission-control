@@ -17,8 +17,17 @@ For an agent whose driver is ACP, the Sessions chat is the **only** interface an
 
 ## Non-goals
 
-- Removing the native TUI from window 0 in this wave (health gate + recycler anchor on it; Boss asked for the Terminal to stay reachable until the live proof). The toggle is hidden in the UI; `?view=terminal` keeps working as a deep link.
 - Multi-turn concurrency. One turn at a time per agent chat session; a second prompt while busy is rejected with `busy` (the composer already disables send while working).
+
+Done, no longer a non-goal (fix omp-acp-no-tui-window, 13.09.2026): the native
+TUI in window 0 was removed for `OMP_DRIVER=acp` agents — Mark saw the live
+TUI as an idle "ghost" session in the Terminal view and does not want that.
+Window 0 itself still exists (Boss: keep the Terminal reachable until the
+live proof) but shows an `OMP_ACP_READY` banner + a plain shell instead of
+launching omp; the health gate and the recycler were updated to match (see
+`docker/omp-bridge/entrypoint.sh` / `omp-recycler.sh`, and
+`agent_runtime_switch.OMP_READY_SIGNALS` on the backend side). `?view=terminal`
+still works as a deep link.
 
 ## Architecture
 
@@ -83,11 +92,11 @@ Slash commands are sent as prompt text (`/usage`, `/model X`); omp executes them
 
 ### entrypoint (omp image)
 
-When `OMP_DRIVER=acp`, `start_native` additionally opens tmux window 3 `win3`: `exec python3 /opt/omp-bridge/acp_chat.py --serve`. Window 0 stays for now (see non-goals).
+When `OMP_DRIVER=acp`, `start_native` additionally opens tmux window 3 `win3`: `exec python3 /opt/omp-bridge/acp_chat.py --serve`. Window 0 still exists but no longer runs the native TUI (fix omp-acp-no-tui-window, 13.09.2026) — it prints an `OMP_ACP_READY` banner and drops to a plain shell instead.
 
 ### Backend
 
-- `Agent.headless_chat` (computed_field, `models/agent.py`): `True` when (`agent_runtime == "cli-bridge"` and `harness == "omp"` and `slug in settings.omp_acp_agents()`) or (`agent_runtime == "host"` and `harness == "hermes"` and `settings.hermes_driver == "acp"`). Exposed in `AgentRead`.
+- `Agent.headless_chat` (computed_field, `models/agent.py`): `True` when (`agent_runtime == "cli-bridge"` and `harness == "omp"` and `omp_driver_for("omp") == "acp"` — ADR-084, harness property; the ADR-081 slug list is gone) or (`agent_runtime == "host"` and `harness == "hermes"` and `settings.hermes_driver == "acp"`). Exposed in `AgentRead`.
 - `agent_chat_input._target_kind` gains `"acp-docker"` / `"acp-http"`; `send_text`, `send_keys` (`Escape` → `cancel`, everything else → `InputNotSupportedError`), `set_effort` (→ `config thinking=<level>`; `EffortSwitchRejectedError` on `ok:false`), and a new `set_model(agent, name)` (→ `config model=<name>`) route through `acp_chat_transport.py`.
 - `effort_capabilities` → levels from `configOptions[id=thinking].options` in `acp-chat-state.json`; `slash_command_capabilities` → `commands`; `model_options_capabilities` → `configOptions[id=model].options` (label = name, command = `/model <value>`). Empty/missing state file → empty lists with reason `acp_state_missing` (never raises).
 - `omp_chat.resolve_transcript_dir` accepts `host` + `harness == "hermes"` (dir `~/.mc/agents/hermes/omp-sessions`), so the Hermes daemon reuses the omp transcript format and the whole reader/preview stack unchanged.

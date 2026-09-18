@@ -19,6 +19,7 @@ Der Telegram-Client wird injiziert (siehe `ForumTopicClient`), damit Tests ohne
 Netz laufen. `TelegramForumClient` ist die produktive Implementierung.
 """
 import logging
+import uuid
 from datetime import datetime, timedelta
 from typing import Protocol
 
@@ -158,9 +159,18 @@ async def _load_project(session: AsyncSession, project_id) -> Project | None:
     return (await session.exec(select(Project).where(Project.id == project_id))).one_or_none()
 
 
-# Ein Subtask-Baum ist flach (Phase -> Task), aber ein kaputter Datenstand koennte
-# zyklisch sein. Die Kette bricht darum hart ab, statt endlos zu laufen.
-_MAX_PARENT_DEPTH = 10
+# Ein Subtask-Baum ist flach (Phase -> Task). Fuer den Aufstieg durch die
+# Parent-Kette gilt dieselbe Regel wie in der Zykluspruefung von
+# agent_task_status (Task b410d705): die Menge der bereits besuchten Tasks ist
+# die Schranke, nicht eine Tiefenzahl. Jeder Task hat genau einen
+# parent_task_id-Zeiger, also kann ein erneuter Besuch nur bedeuten, dass die
+# Kette schleift — `_seen` beendet den Lauf dann. Ein Depth-Cap hier haette
+# dieselbe Unsoundheit wie dort: er bricht mitten in einer legitimen (nur
+# tiefen) Kette ab und liefert still das falsche Thema, ohne dass es jemand
+# merkt. Der Unterschied zur Pruefstelle ist die Reaktion auf einen Zyklus:
+# dort wird abgelehnt (eine neue Kante in kaputte Daten), hier wird die
+# vorhandene Anzeige nur zugeordnet — also auf das eigene Thread-Thema
+# zurueckfallen und loggen, statt eine Topic-Aufloesung zu verweigern.
 
 
 async def _resolve_topic_owner(session: AsyncSession, thread: Thread):
@@ -186,12 +196,21 @@ async def _resolve_topic_owner(session: AsyncSession, thread: Thread):
     if project is not None:
         return project
 
-    # Subtask: das Thema gehoert dem Elterntask.
-    depth = 0
-    while task is not None and task.parent_task_id is not None and depth < _MAX_PARENT_DEPTH:
+    # Subtask: das Thema gehoert dem Elterntask. `seen` = Schranke (s.o.).
+    seen: set[uuid.UUID] = {task.id} if task is not None else set()
+    while task is not None and task.parent_task_id is not None:
         parent = await _load_task(session, task.parent_task_id)
         if parent is None:
             break
+        if parent.id in seen:
+            logger.warning(
+                "Telegram-Thema: Parent-Kette von Task %s enthaelt einen Zyklus "
+                "(Task %s zum zweiten Mal) — faellt auf das Thread-Thema zurueck. "
+                "Der Datenstand sollte repariert werden (parent_task_id loesen).",
+                thread.task_id, parent.id,
+            )
+            return thread
+        seen.add(parent.id)
         parent_project = await _load_project(session, parent.project_id)
         if parent_project is not None:
             return parent_project
@@ -204,7 +223,6 @@ async def _resolve_topic_owner(session: AsyncSession, thread: Thread):
             return parent_thread if parent_thread is not None else thread
         # Der Elterntask ist selbst Subtask — weiter die Kette hoch.
         task = parent
-        depth += 1
 
     return thread
 

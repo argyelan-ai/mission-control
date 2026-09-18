@@ -471,11 +471,15 @@ async def test_callback_resume_fallback_via_parent_task_id():
 
 async def _setup_delegate_scenario_variant(
     *, parent_status: str = "in_progress", current_task_id_set: bool = True,
-    is_board_lead: bool = True,
+    is_board_lead: bool = True, parent_owned_by_caller: bool = True,
 ):
     """Wie `_setup_delegate_scenario`, aber Parent-Status/Board-Lead-Flag frei
     waehlbar — fuer die Sabotage-Probe (aktive Karte auf `waiting`) und den
     echten Root-Fall (Board Lead ohne current_task_id).
+
+    `parent_owned_by_caller=False` gibt die Parent-Karte dem Researcher statt
+    dem Boss — der Fremdkarten-Fall, an dem die B3-Rollenpruefung (und ihr
+    Lead-Privileg) ueberhaupt erst sichtbar wird.
     """
     from app.models.board import Board
     from app.models.agent import Agent
@@ -520,7 +524,7 @@ async def _setup_delegate_scenario_variant(
             board_id=board_id,
             title="Boss Orchestration Task",
             status=parent_status,
-            assigned_agent_id=boss_id,
+            assigned_agent_id=boss_id if parent_owned_by_caller else researcher_id,
         )
         s.add(parent)
         await s.commit()
@@ -619,7 +623,6 @@ async def test_explicit_parent_flag_attaches_child_to_named_parent(client, fake_
     assert resp.status_code == 201, resp.text
     body = resp.json()
     assert body["parent_task_id"] == str(data["parent_id"])
-    assert body["warning"] is None
 
     from app.models.task import Task
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
@@ -655,12 +658,52 @@ async def test_explicit_parent_must_exist(client, fake_redis):
 
 
 @pytest.mark.asyncio
-async def test_root_delegation_without_active_task_warns_explicitly(client, fake_redis):
-    """DoD #3: Board Lead ohne aktive Karte, ohne --parent -> Anlage klappt,
-    aber die Antwort weist ausdruecklich auf 'kein Parent, kein Callback' hin
-    (statt nur `your_status: no_task` ohne jeden Hinweis, wie im Incident)."""
+async def test_non_lead_cannot_delegate_onto_a_foreign_parent(client, fake_redis):
+    """B3 on the delegate path: `--parent` names the parent explicitly but does
+    NOT override ownership. A non-Lead may only hang new work under a card that
+    is actually assigned to it. Without this case, dropping
+    `not agent.is_board_lead` from the B3 check leaves every other test green —
+    the check is then indistinguishable from a blanket ban."""
     data = await _setup_delegate_scenario_variant(
-        current_task_id_set=False, is_board_lead=True,
+        is_board_lead=False, current_task_id_set=False, parent_owned_by_caller=False,
+    )
+
+    resp = await client.post(
+        f"/api/v1/agent/boards/{data['board_id']}/delegate",
+        json={
+            "title": "Sub",
+            "description": "Non-lead grafting onto a foreign card",
+            "assigned_agent_id": str(data["researcher_id"]),
+            "parent_task_id": str(data["parent_id"]),
+        },
+        headers={"Authorization": f"Bearer {data['boss_token']}"},
+    )
+
+    assert resp.status_code == 409, resp.text
+    detail = resp.json()["detail"]
+    assert str(data["parent_id"]) in detail, "Message muss die Parent-ID nennen"
+    assert "--parent" in detail, "Message muss den Ausweg nennen"
+
+    from app.models.task import Task
+    from sqlmodel import func, select
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        children = (await s.exec(
+            select(func.count()).select_from(Task).where(
+                Task.parent_task_id == data["parent_id"]
+            )
+        )).one()
+    assert children == 0, "409 darf keine Karte unter die fremde Karte haengen"
+
+
+@pytest.mark.asyncio
+async def test_lead_may_delegate_onto_a_foreign_parent(client, fake_redis):
+    """The lead privilege on the delegate path — the half that makes the B3
+    check a role rule instead of a blanket ban. A Board Lead between cards
+    (no current_task_id) must be able to put work under a card it does not own;
+    that is the whole point of `--parent` for a chat-ordered delegation."""
+    data = await _setup_delegate_scenario_variant(
+        is_board_lead=True, current_task_id_set=False, parent_owned_by_caller=False,
     )
 
     with patch("app.routers.agent_scoped.emit_event", new_callable=AsyncMock):
@@ -669,23 +712,81 @@ async def test_root_delegation_without_active_task_warns_explicitly(client, fake
                 f"/api/v1/agent/boards/{data['board_id']}/delegate",
                 json={
                     "title": "Sub",
-                    "description": "Root delegation, no active task, no --parent",
+                    "description": "Lead putting work under a worker's card",
                     "assigned_agent_id": str(data["researcher_id"]),
+                    "parent_task_id": str(data["parent_id"]),
                 },
                 headers={"Authorization": f"Bearer {data['boss_token']}"},
             )
 
     assert resp.status_code == 201, resp.text
     body = resp.json()
-    assert body["your_status"] == "no_task"
-    assert body["parent_task_id"] is None
-    assert body["warning"], "Response MUSS explizit auf fehlenden Parent/Callback hinweisen"
-    assert "Parent" in body["warning"] and "Callback" in body["warning"]
+    assert body["parent_task_id"] == str(data["parent_id"])
 
-    from app.models.task import Task
+    from app.models.task import Task, TaskComment
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         subtask = await s.get(Task, uuid.UUID(body["subtask_id"]))
-        assert subtask.parent_task_id is None
+        assert subtask.parent_task_id == data["parent_id"]
+        # Foreign parent stays untouched: no block/resume on a card this agent
+        # has no confirmed claim on, and no audit comment written into it.
+        parent = await s.get(Task, data["parent_id"])
+        assert parent.status == "in_progress"
+        comments = (await s.exec(
+            select(TaskComment).where(TaskComment.task_id == data["parent_id"])
+        )).all()
+    assert comments == [], (
+        "in eine fremde Karte darf kein Delegations-Auditkommentar geschrieben "
+        "werden — nur der Activity-Event"
+    )
+
+
+@pytest.mark.asyncio
+async def test_lead_without_active_task_and_without_parent_refuses_before_create(client, fake_redis):
+    """Task f8c9cdb9, point 3: a Board Lead with no active task and no --parent
+    must be refused LOUDLY BEFORE anything is created.
+
+    Pre-fix behaviour (the orphan factory): the endpoint answered 201, wrote a
+    parentless card, and only then put a `warning` string in the response — by
+    which time the orphan already existed. That is how b7d29be3/70d6b417
+    (2026-09-11) and 8d039889 were created.
+
+    Asserts the refusal AND the absence of the card, counted in the DB — not
+    just the status code, because "no orphan" is the actual requirement.
+    """
+    from app.models.task import Task
+    from sqlmodel import func, select
+
+    data = await _setup_delegate_scenario_variant(
+        current_task_id_set=False, is_board_lead=True,
+    )
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        tasks_before = (await s.exec(select(func.count()).select_from(Task))).one()
+
+    resp = await client.post(
+        f"/api/v1/agent/boards/{data['board_id']}/delegate",
+        json={
+            "title": "Sub",
+            "description": "Root delegation, no active task, no --parent",
+            "assigned_agent_id": str(data["researcher_id"]),
+        },
+        headers={"Authorization": f"Bearer {data['boss_token']}"},
+    )
+
+    assert resp.status_code == 409, resp.text
+    detail = resp.json()["detail"]
+    assert "keine stillschweigende Waisenkarte" in detail
+    assert "--parent" in detail, (
+        "Die Ablehnung muss den Ausweg nennen, sonst steht der Lead wieder "
+        "ohne Weg da (live incident 2026-08-06)"
+    )
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        tasks_after = (await s.exec(select(func.count()).select_from(Task))).one()
+    assert tasks_after == tasks_before, (
+        "Refusal must happen BEFORE session.add() — a card created and then "
+        "merely complained about is exactly the orphan outcome the card forbids"
+    )
 
 
 @pytest.mark.asyncio

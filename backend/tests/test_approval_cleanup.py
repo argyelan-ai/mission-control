@@ -149,6 +149,76 @@ async def test_watchdog_reconciliation():
 
 
 @pytest.mark.asyncio
+async def test_review_stuck_superseded_when_task_leaves_review():
+    """review_stuck → superseded once the card is no longer 'review'.
+
+    Regression guard for the 2026-09-13 incident: three review_stuck
+    approvals sat in the operator's inbox for cards that were long done —
+    'review_stuck' was simply missing from APPROVAL_VALID_STATES, so neither
+    the immediate cleanup nor the watchdog reconciliation ever touched it.
+    """
+    ids = await _create_task_with_approval("review_stuck", task_status="review")
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        count = await cleanup_obsolete_approvals(s, ids["task_id"], "done")
+        assert count == 1
+
+        from app.models.approval import Approval
+        approval = await s.get(Approval, ids["approval_id"])
+        assert approval.status == "superseded"
+        assert "Superseded" in approval.resolver_note
+
+
+@pytest.mark.asyncio
+async def test_review_stuck_stays_pending_while_still_in_review():
+    """review_stuck stays pending while the card genuinely hangs in review."""
+    ids = await _create_task_with_approval("review_stuck", task_status="review")
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        count = await cleanup_obsolete_approvals(s, ids["task_id"], "review")
+        assert count == 0
+
+        from app.models.approval import Approval
+        approval = await s.get(Approval, ids["approval_id"])
+        assert approval.status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_stale_approvals_supersedes_review_stuck():
+    """reconcile_stale_approvals (the periodic safety net) supersedes a
+    drifted review_stuck approval on its own — the real path for a review
+    approved via `execute_review_decision`, which does not call
+    cleanup_obsolete_approvals directly for this action_type until the next
+    watchdog tick.
+
+    PR #558 follow-up (Rex, W1): the two review_stuck tests above only
+    exercise `cleanup_obsolete_approvals` directly — the reconciliation
+    test (`test_watchdog_reconciliation`) only ever drifted a
+    blocker_decision. Neither covered the actual production path this
+    approval type drifts through. This closes that gap.
+    """
+    ids = await _create_task_with_approval("review_stuck", task_status="review")
+
+    # Card leaves "review" without cleanup_obsolete_approvals having run
+    # (e.g. execute_review_decision approved it) — simulates the drift.
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        from app.models.task import Task
+        task = await s.get(Task, ids["task_id"])
+        task.status = "done"
+        s.add(task)
+        await s.commit()
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        count = await reconcile_stale_approvals(s)
+        assert count >= 1
+
+        from app.models.approval import Approval
+        approval = await s.get(Approval, ids["approval_id"])
+        assert approval.status == "superseded"
+        assert "reconciliation" in approval.resolver_note
+
+
+@pytest.mark.asyncio
 async def test_done_supersedes_all_flow_approvals():
     """Task set to done → all flow-related pending approvals superseded."""
     ids = await _create_task_with_approval("blocker_decision", task_status="blocked")
@@ -160,3 +230,179 @@ async def test_done_supersedes_all_flow_approvals():
         from app.models.approval import Approval
         approval = await s.get(Approval, ids["approval_id"])
         assert approval.status == "superseded"
+
+# ── dependency_zombie (N2, PR-follow-up "Waechter liest veraltet") ────────
+
+
+@pytest.mark.asyncio
+async def test_dependency_zombie_superseded_when_task_leaves_waiting():
+    """dependency_zombie → superseded once the card no longer waits.
+
+    Regression guard: 'dependency_zombie' was missing from
+    APPROVAL_VALID_STATES entirely, so neither the immediate cleanup nor the
+    watchdog reconciliation ever retracted it — a stale approval sat in the
+    operator's inbox for a card that had long moved on (the exact failure
+    class the W3 numbers pinned down for review_stuck).
+    """
+    ids = await _create_task_with_approval("dependency_zombie", task_status="in_progress")
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        count = await cleanup_obsolete_approvals(s, ids["task_id"], "review")
+        assert count == 1
+
+        from app.models.approval import Approval
+        approval = await s.get(Approval, ids["approval_id"])
+        assert approval.status == "superseded"
+        assert "Superseded" in approval.resolver_note
+
+
+@pytest.mark.asyncio
+async def test_dependency_zombie_stays_pending_while_waiting():
+    """dependency_zombie stays pending while the card genuinely waits."""
+    for status in ("inbox", "in_progress"):
+        ids = await _create_task_with_approval("dependency_zombie", task_status=status)
+
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            count = await cleanup_obsolete_approvals(s, ids["task_id"], status)
+            assert count == 0
+
+            from app.models.approval import Approval
+            approval = await s.get(Approval, ids["approval_id"])
+            assert approval.status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_dependency_zombie_reconciliation_supersedes():
+    """The watchdog reconciliation safety-net also retracts dependency_zombie."""
+    ids = await _create_task_with_approval("dependency_zombie", task_status="in_progress")
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        from app.models.task import Task
+        task = await s.get(Task, ids["task_id"])
+        task.status = "done"
+        s.add(task)
+        await s.commit()
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        count = await reconcile_stale_approvals(s)
+        assert count >= 1
+
+        from app.models.approval import Approval
+        approval = await s.get(Approval, ids["approval_id"])
+        assert approval.status == "superseded"
+        assert "reconciliation" in approval.resolver_note
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("closing_status", ["done", "archived"])
+async def test_lead_escalation_superseded_when_card_closes(closing_status):
+    """lead_escalation → superseded when the card closes (done/archived).
+
+    A closed card has no open problem by definition — the pending escalation
+    leaves the operator's inbox with the card, marked closed-by-close so a
+    reader can tell it apart from an operator-answered escalation.
+    """
+    ids = await _create_task_with_approval("lead_escalation", task_status="in_progress")
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        count = await cleanup_obsolete_approvals(s, ids["task_id"], closing_status)
+        assert count == 1
+
+        from app.models.approval import Approval
+        approval = await s.get(Approval, ids["approval_id"])
+        assert approval.status == "superseded"
+        assert approval.resolver_note == f"closed-by-close ({closing_status})"
+
+
+@pytest.mark.asyncio
+async def test_lead_escalation_survives_failed_close():
+    """lead_escalation → NOT superseded when the card closes as failed.
+
+    failed is the opposite of done: the card closed with the problem still
+    standing — exactly where an unanswered lead question must remain visible
+    in the operator's inbox.
+    """
+    ids = await _create_task_with_approval("lead_escalation", task_status="in_progress")
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        count = await cleanup_obsolete_approvals(s, ids["task_id"], "failed")
+        assert count == 0
+
+        from app.models.approval import Approval
+        approval = await s.get(Approval, ids["approval_id"])
+        assert approval.status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_lead_escalation_survives_mere_status_flip():
+    """A status flip to a non-closing status does NOT close the escalation.
+
+    Load-bearing rule from the retract path (#617): a status flip alone is
+    not evidence that the lead reacted. Only a real card close does.
+    """
+    ids = await _create_task_with_approval("lead_escalation", task_status="in_progress")
+
+    for flipped_status in ("review", "blocked", "waiting"):
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            count = await cleanup_obsolete_approvals(s, ids["task_id"], flipped_status)
+            assert count == 0, flipped_status
+
+            from app.models.approval import Approval
+            approval = await s.get(Approval, ids["approval_id"])
+            assert approval.status == "pending", flipped_status
+
+
+@pytest.mark.asyncio
+async def test_lead_escalation_reconciliation_closes_on_done():
+    """The reconciliation safety net closes lead_escalation on a closed card."""
+    ids = await _create_task_with_approval("lead_escalation", task_status="in_progress")
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        from app.models.task import Task
+        task = await s.get(Task, ids["task_id"])
+        task.status = "done"
+        s.add(task)
+        await s.commit()
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        count = await reconcile_stale_approvals(s)
+        assert count >= 1
+
+        from app.models.approval import Approval
+        approval = await s.get(Approval, ids["approval_id"])
+        assert approval.status == "superseded"
+        assert approval.resolver_note == "closed-by-close (done)"
+
+
+@pytest.mark.asyncio
+async def test_lead_escalation_reconciliation_keeps_failed():
+    """The reconciliation safety net does NOT close lead_escalation on failed."""
+    ids = await _create_task_with_approval("lead_escalation", task_status="in_progress")
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        from app.models.task import Task
+        task = await s.get(Task, ids["task_id"])
+        task.status = "failed"
+        s.add(task)
+        await s.commit()
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        await reconcile_stale_approvals(s)
+
+        from app.models.approval import Approval
+        approval = await s.get(Approval, ids["approval_id"])
+        assert approval.status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_lead_escalation_not_routed_through_valid_states():
+    """lead_escalation must stay OUT of APPROVAL_VALID_STATES.
+
+    Its semantics are the inverse of the generic mechanism: the generic
+    valid-states table supersedes when the task leaves the listed states,
+    which would close the escalation on ANY status change (including the
+    mere flips and failed). The close-on-close set + the evidence-based
+    retract path own this action_type exclusively.
+    """
+    from app.services.approval_cleanup import APPROVAL_VALID_STATES
+    assert "lead_escalation" not in APPROVAL_VALID_STATES

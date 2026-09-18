@@ -8,11 +8,15 @@ After ADR-022 + the ADR-024 refactor, this is pure backend-side logic:
 - The dispatch message uses `_container_workspace_path()` from dispatch.py
   to convert the host path into the container view (`/workspace/...`).
 
-Workspace layout (ADR-022):
+Workspace layout (ADR-022, extended by task af914128 2026-09-14):
 - Task WITH GitHub repo: git worktree under
   `<agent_ws>/projects/<proj_slug>/.worktrees/<task_slug>/`
 - Task with project but no repo: plain dir under `<agent_ws>/<task_slug>/`
-- Ad-hoc task (no project): `<agent_ws>/<task_slug>/`
+- Ad-hoc task (no project), git-requiring agent: git worktree, repo resolved
+  via `repo_registry.resolve_adhoc_repo_target` (task.repo_id → board
+  default → shared `mc-workspace` scratch repo) — never a bare directory.
+- Ad-hoc task, non-coder agent (`requires_git_workflow=False`): plain dir
+  under `<agent_ws>/<task_slug>/`.
 """
 
 import logging
@@ -122,11 +126,15 @@ async def dispatch_to_cli_bridge(
 async def _resolve_workspace(task: Task, agent: Agent, session: AsyncSession):
     """Resolves the workspace path for the task (host path under agent.workspace_path).
 
-    Three paths:
+    Four paths (PR #584, task af914128 — see module docstring):
     - Task + project with github_repo_url → git worktree under
       `<agent_ws>/projects/<proj_slug>/.worktrees/<task_slug>/`
     - Task + project without repo → plain dir under `<agent_ws>/<task_slug>/`
-    - Ad-hoc task (no project) → `<agent_ws>/<task_slug>/`
+    - Ad-hoc task (no project), git-requiring agent → git worktree, repo
+      resolved via `repo_registry.resolve_adhoc_repo_target` — never a bare
+      directory.
+    - Ad-hoc task, non-coder agent (`requires_git_workflow=False`) → plain
+      dir under `<agent_ws>/<task_slug>/`.
 
     Returns: (workspace_path, worktree_path, has_repo)
     - worktree_path: str if a git worktree was created, None otherwise
@@ -182,7 +190,7 @@ async def _resolve_workspace(task: Task, agent: Agent, session: AsyncSession):
                     task_slug,
                 )
                 workspace = worktree_path
-                await git_service.setup_git_identity(worktree_path, agent.name)
+                await git_service.setup_git_identity(worktree_path, agent.name, main_repo=main_repo)
                 logger.info(
                     "CLI Bridge worktree for task '%s': %s",
                     task.title, worktree_path,
@@ -202,8 +210,46 @@ async def _resolve_workspace(task: Task, agent: Agent, session: AsyncSession):
         elif project:
             # Project without a GitHub repo → plain dir under the agent workspace.
             workspace = _create_plain_workspace(agent_base, task.title)
+    elif getattr(agent, "requires_git_workflow", True):
+        # Ad-hoc task (no project), git-requiring agent → prepared clone,
+        # never a bare directory (task af914128, "Agent klont ins Archiv").
+        # Previously this branch unconditionally called
+        # _create_plain_workspace regardless of task.repo_id — the agent's
+        # workspace had no .git at all, so on 2026-09-14 an agent self-helped
+        # with `gh repo clone <shortname>`, which resolved against the
+        # logged-in personal account instead of the org and landed in an
+        # archived fork with no shared history with main (2467 files diff,
+        # merge-base impossible). Resolution now goes through the same
+        # repo_id → board-default → shared-scratch precedence
+        # task_context_builder.py already used for other runtimes.
+        from app.services.repo_registry import resolve_adhoc_repo_target
+
+        has_repo = True
+        repo_url, repo_slug = await resolve_adhoc_repo_target(session, task)
+        task_slug = slugify_workspace_slug(task.title)
+        main_repo = await git_service.ensure_workspace(agent_base, repo_url, repo_slug)
+        try:
+            worktree_path = await git_service.create_task_worktree(
+                main_repo, task_slug,
+            )
+            workspace = worktree_path
+            await git_service.setup_git_identity(worktree_path, agent.name, main_repo=main_repo)
+            logger.info(
+                "CLI Bridge ad-hoc worktree for task '%s': %s",
+                task.title, worktree_path,
+            )
+        except Exception as e:
+            logger.warning(
+                "Ad-hoc worktree creation failed for task '%s', falling back to main repo: %s",
+                task.title, e,
+            )
+            worktree_path = None
+            workspace = main_repo
+
+        _write_expected_remote(workspace, repo_url)
     else:
-        # Ad-hoc task (no project) → own dir under the agent workspace.
+        # Ad-hoc task, non-coder agent (requires_git_workflow=False) →
+        # plain dir, unchanged — Research/Writing output isn't a git repo.
         workspace = _create_plain_workspace(agent_base, task.title)
 
     return workspace, worktree_path, has_repo

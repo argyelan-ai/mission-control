@@ -138,6 +138,22 @@ class WatchdogService(HealthChecksMixin, SessionMonitorMixin, TaskMonitorMixin):
             await self._check_dependency_zombies(session)
             await self._check_review_tasks(session)
             await self._check_stuck_orchestrator_close(session)
+            # Report-only: in_progress/waiting cards with no turn and no
+            # (non-system) comment. Must run BEFORE orphan recovery so a
+            # silent card is visible to the Board Lead even if a later
+            # healer resets it. Never changes status.
+            await self._check_silent_cards(session)
+            # Second stage: a stage-1 lead message (watchdog_notify /
+            # blocker_lead_notify) with no lead reaction for 30 minutes is
+            # reported to the operator — once per silent phase, report-only.
+            await self._check_lead_notify_escalations(session)
+            # Retract path for both stages above: a card that demonstrably
+            # moves again (real activity after the alert, not a status
+            # flip) gets a visible resolution note, and a still-pending
+            # stage-2 Approval is closed instead of sitting stale. Runs
+            # after both alert checks so a phase that both fired and
+            # resolved within one tick still ends the tick retracted.
+            await self._check_silent_card_retractions(session)
 
             # Orphan recovery: tasks stuck in in_progress without agent heartbeat
             recovered = await self._recover_orphaned_tasks(session)
@@ -169,7 +185,11 @@ class WatchdogService(HealthChecksMixin, SessionMonitorMixin, TaskMonitorMixin):
                 # gateway-only (TODO Phase 31: cli-bridge task-queue timeouts).
 
             db_latency, redis_latency = await self._check_system_health(session)
-            await self._collect_system_metrics(db_latency, redis_latency)
+            # session durchgereicht: der Plattenplatz-Waechter in
+            # _collect_system_metrics meldet ueber emit_event, und das braucht
+            # eine Session. Die Plattenmessung selbst hat der Snapshot dort
+            # schon gemacht — kein zweiter psutil-Aufruf.
+            await self._collect_system_metrics(db_latency, redis_latency, session)
 
             # Token harvester: Phase 31 — reads JSONL transcripts, inserts
             # model_usage_events. Runs every 5 cycles (~2.5 min at 30s interval).

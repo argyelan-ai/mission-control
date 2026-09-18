@@ -30,12 +30,25 @@ export function RuntimeStep({ state, update }: WizardStepProps) {
   const isHost = state.agentRuntime === "host";
   const needsHarness = state.agentRuntime === "cli-bridge" || isHost;
 
-  const { data: matrix } = useQuery({
+  // isError/refetch surfaced on purpose: a failed matrix or runtimes query used
+  // to render as a silently EMPTY harness row / provider list (the `?? []`
+  // fallbacks below), which looked exactly like "no runtimes configured" and
+  // let the operator create an agent with no harness and no runtime binding —
+  // unfixable afterwards, because provisioning only runs at creation time.
+  const {
+    data: matrix,
+    isError: matrixFailed,
+    refetch: refetchMatrix,
+  } = useQuery({
     queryKey: ["compat-matrix"],
     queryFn: () => api.runtimes.compatMatrix(),
     enabled: needsHarness,
   });
-  const { data: runtimesData } = useQuery({
+  const {
+    data: runtimesData,
+    isError: runtimesFailed,
+    refetch: refetchRuntimes,
+  } = useQuery({
     queryKey: ["runtimes"],
     queryFn: () => api.runtimes.list(),
     enabled: needsHarness,
@@ -143,6 +156,29 @@ export function RuntimeStep({ state, update }: WizardStepProps) {
         <>
           {/* 2. harness — host runtime offers the host-only harnesses (ADR-064/066),
                  cli-bridge offers the server compat-matrix harnesses. */}
+          {matrixFailed && (
+            <div
+              role="alert"
+              className="rounded-lg px-3 py-2 text-[11px]"
+              style={{
+                backgroundColor: `${C.warning}14`,
+                border: `1px solid ${C.warning}33`,
+                color: "var(--color-text-secondary)",
+              }}
+            >
+              <span className="font-medium" style={{ color: C.warning }}>
+                Harness list could not be loaded — no harness can be selected
+                until it loads.
+              </span>{" "}
+              <button
+                onClick={() => refetchMatrix()}
+                className="underline cursor-pointer"
+                style={{ color: "var(--color-text-primary)" }}
+              >
+                Retry
+              </button>
+            </div>
+          )}
           <div>
             <label className={wizardLabelClass}>Harness (CLI)</label>
             <div className="flex gap-2">
@@ -195,6 +231,29 @@ export function RuntimeStep({ state, update }: WizardStepProps) {
             <label className={wizardLabelClass}>
               LLM Runtime / Provider {state.agentRuntime === "host" && "*"}
             </label>
+            {runtimesFailed && (
+              <div
+                role="alert"
+                className="mb-2 rounded-lg px-3 py-2 text-[11px]"
+                style={{
+                  backgroundColor: `${C.warning}14`,
+                  border: `1px solid ${C.warning}33`,
+                  color: "var(--color-text-secondary)",
+                }}
+              >
+                <span className="font-medium" style={{ color: C.warning }}>
+                  Provider list could not be loaded — only the fallback is
+                  selectable until it loads.
+                </span>{" "}
+                <button
+                  onClick={() => refetchRuntimes()}
+                  className="underline cursor-pointer"
+                  style={{ color: "var(--color-text-primary)" }}
+                >
+                  Retry
+                </button>
+              </div>
+            )}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-52 overflow-y-auto">
               {state.agentRuntime === "cli-bridge" && (
                 <button

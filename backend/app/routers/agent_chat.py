@@ -13,7 +13,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlmodel import select
@@ -21,7 +21,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
 from app.auth import require_user
-from app.database import get_session
+from app.database import get_session, release_session
 from app.models.agent import Agent
 from app.models.task import Task
 from app.redis_client import RedisKeys
@@ -355,6 +355,7 @@ async def get_subagent_history(
 @router.get("/agents/{agent_id}/chat/stream")
 async def stream_agent_chat(
     agent_id: uuid.UUID,
+    request: Request,
     current_user=Depends(require_user),
     session: AsyncSession = Depends(get_session),
 ):
@@ -366,6 +367,13 @@ async def stream_agent_chat(
     resolved = await _resolve_transcript_path(agent_id, session)
     if isinstance(resolved, JSONResponse):
         return resolved
+
+    # All DB work of this endpoint happens above. Release the connection
+    # BEFORE the stream starts: FastAPI would otherwise unwind
+    # Depends(get_session) only after the SSE response finishes — pinning
+    # the connection and its implicit transaction for the whole stream
+    # (up to 405 s, pool exhaustion incident 2026-09-14 / finding 2026-09-16).
+    await release_session(session, route=request.url.path)
 
     agent, path, _adapter = resolved
     channel = RedisKeys.agent_chat_channel(str(agent_id))

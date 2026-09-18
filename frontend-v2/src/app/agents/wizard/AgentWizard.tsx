@@ -10,6 +10,7 @@ import {
   WIZARD_STEPS,
   canProceed,
   initialWizardState,
+  runtimeStepBlockers,
   type WizardState,
 } from "./types";
 import {
@@ -152,14 +153,27 @@ export function AgentWizard({
             <ChevronLeft size={15} /> Back
           </button>
           {!isLastStep && (
-            <button
-              onClick={goNext}
-              disabled={!canProceed(state)}
-              className="flex items-center gap-1.5 px-5 py-2 text-sm rounded-xl font-medium text-[var(--color-on-accent)] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-all"
-              style={wizardBtnPrimaryStyle}
-            >
-              Next <ChevronRight size={15} />
-            </button>
+            <>
+              {/* A disabled button alone is the silent-failure pattern: when the
+                  gate refuses, say WHAT is missing (runtimeStepBlockers). */}
+              {!canProceed(state) && runtimeStepBlockers(state).length > 0 && (
+                <span
+                  role="note"
+                  data-testid="step-blockers"
+                  className="mx-3 flex-1 text-right text-[11px] text-[var(--color-text-muted)]"
+                >
+                  {runtimeStepBlockers(state).join(" ")}
+                </span>
+              )}
+              <button
+                onClick={goNext}
+                disabled={!canProceed(state)}
+                className="flex items-center gap-1.5 px-5 py-2 text-sm rounded-xl font-medium text-[var(--color-on-accent)] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-all"
+                style={wizardBtnPrimaryStyle}
+              >
+                Next <ChevronRight size={15} />
+              </button>
+            </>
           )}
         </div>
       </motion.div>

@@ -6,6 +6,48 @@ follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
 
 ## [Unreleased]
 
+### Added
+- **Disk preflight in front of every build, plus a watchdog that reports
+  before the disk hits 95 %.** `docker system df` measured 75.8 GB of build
+  cache — Docker never garbage-collects it on its own — and
+  `docker compose up --build` then died mid-layer-write with a raw
+  "no space left on device", after minutes of work and with nothing pointing
+  at the cause. Every build path (`make up/build/build-dev`, `install.sh`,
+  `scripts/start-all.sh --build`, `scripts/build-agent-images.sh`,
+  `scripts/vault-cleanup-orchestrate.py`, the backend's compose recreate
+  paths) now runs `docker/shared/disk-preflight.sh` first and refuses below
+  the threshold with both numbers, the variable that set it, and the fix in
+  the message; after a SUCCESSFUL build it bounds the build cache with
+  `docker builder prune --keep-storage`. An unreadable `df` never blocks a
+  build (unknown is not zero). Thresholds come from the project's config path
+  (`BUILD_MIN_FREE_GB` / `BUILD_CACHE_KEEP_GB` / `DISK_WATCHDOG_PERCENT`),
+  never hardcoded. The watchdog **reports only** — it never deletes anything
+  and never changes a status; it fires at `DISK_WATCHDOG_PERCENT` (default
+  95) with `severity=critical` (a `warning` would wait up to 30 minutes in
+  the Discord digest) and is deduped per threshold via Redis.
+- **Lead-escalation second stage.** A stage-1 lead message
+  (`watchdog_notify` from the silent-card watchdog, `blocker_lead_notify`
+  from blocker lead-triage) that got no Board-Lead reaction for 30
+  minutes is reported to the operator — exactly once per silent phase.
+  "Reaction" is explicit: a Lead-authored comment on the card or a
+  Lead-authored status change after the message. Report-only: pending
+  `lead_escalation` approval + push, no status change, no new schema.
+- **Silent-card watchdog.** Cards in `in_progress` or `waiting` with no
+  agent turn and no (non-system) comment for 30 minutes are reported once
+  to the Board Lead via `watchdog_notify`. Status is never auto-changed.
+  One message per silent phase (DB-dedup, not a Redis TTL).
+- **ACP is an omp-harness property (ADR-084, supersedes ADR-081).** The
+  driver decision moved from the `OMP_ACP_AGENT_SLUGS` name list to
+  `harness_compat.omp_driver_for(harness)` — every omp agent, including one
+  created minutes ago, runs the ACP path. The single rollback knob is
+  `OMP_DRIVER_DEFAULT=native` (whole fleet); a per-service
+  `OMP_DRIVER=native` entry still survives re-rendering. New
+  `HARNESS_CAPABILITIES` matrix consolidates the scattered per-harness
+  conditions (hooks/statusLine, shared-mcp, host launcher, plugin/skill
+  support), and switching to a pluginless harness now warns visibly in the
+  switch result. Tier-2 recovery skips omp/ACP agents via the harness, the
+  explicit `RECOVERY_TIER2_SKIP_AGENT_SLUGS` opt-out stays for host agents.
+
 ### Changed
 - **Your agent fleet leaves version control.**
   `docker/docker-compose.agents.yml` describes your machine — agent names,
@@ -31,6 +73,18 @@ follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
   them. From then on `./install.sh --update` wraps every pull in
   `scripts/migrate-agents-yml.sh save` / `restore` and you never think about
   it again. Details: [docs/setup/updating.md](docs/setup/updating.md).
+- **The file indexer no longer holds a database transaction while it walks
+  the filesystem.** The periodic walk (every 600 s, all `~/.mc` roots) used
+  to run inside one session — measured on 2026-09-14 as the oldest open
+  transaction in the database (1789 s; a backend restart alone did not clear
+  it, the worker had to die too). The walk now runs with no session open and
+  writes in short committed batches (longest open transaction on the same
+  data set: 33.8 s → 0.7 s). Its 50 000-entry cap comes with a real
+  exclusion list (build/test noise: `target`, `venv`, `.pytest_cache`,
+  `.gradle`, `out`, coverage caches, `*.egg-info`, …, matched
+  case-insensitively) so the cap is not hit every round by counting noise —
+  and if it is hit, the warning fires once per state with the count and the
+  root instead of an identical line every 600 s.
 
 ## [0.2.0] - 2026-08-06
 

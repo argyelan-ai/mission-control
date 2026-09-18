@@ -35,6 +35,16 @@ from app.services.vault_cache import publish_vault_event
 
 logger = logging.getLogger("mc.vault_watcher")
 
+# 30s batch-commit interval for VaultGit. Named constant so tests can pin
+# the wiring without waiting a wall-clock minute (and so the interval is
+# greppable next to the loop that consumes it).
+COMMIT_INTERVAL_SECONDS = 30
+# Grace period when draining in-flight handler coroutines on shutdown.
+# Watchdog handlers do parse/frontmatter/index/embeddings work; a batch
+# commit p95 is ~54ms (measured, PR #614), so a few seconds covers
+# pathological cases without stalling teardown.
+SHUTDOWN_DRAIN_TIMEOUT_SECONDS = 5.0
+
 
 class VaultWatcher:
     def __init__(
@@ -54,6 +64,11 @@ class VaultWatcher:
         self.redis = redis
         self._observer: Observer | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
+        # In-flight handler futures (from _schedule) — drained on shutdown
+        # so a write racing the restart is not lost (Rex finding 2). Maps
+        # future -> vault-relative path, so a drain overrun can name what
+        # it dropped instead of an opaque Future repr.
+        self._inflight: dict = {}
 
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
@@ -63,13 +78,72 @@ class VaultWatcher:
         self._observer = Observer()
         self._observer.schedule(handler, str(self.vault), recursive=True)
         self._observer.start()
-        logger.info("VaultWatcher started on %s", self.vault)
+        # 30s batch timer — the module contract of VaultGit ("real git
+        # add/commit with 30s batching") was never wired: stage() alone
+        # accumulates the index without ever committing. flush_if_pending
+        # holds VaultGit's lock, so overlapping ticks are serialized.
+        self._commit_task = asyncio.create_task(self._commit_loop())
 
     async def stop(self) -> None:
+        task = getattr(self, "_commit_task", None)
+        if task:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        # Drain in-flight handler coroutines before the final flush.
+        # _schedule() hands work to run_coroutine_threadsafe futures; a
+        # shutdown racing an in-flight handler (embeddings/index work can
+        # take hundreds of ms) used to lose that note's git.stage() — the
+        # final flush below would run on an empty index and the write
+        # would never be committed. Await pending futures (bounded) so the
+        # fleet's last write survives a restart.
+        pairs = [(f, tag) for f, tag in self._inflight.items() if not f.done()]
+        if pairs:
+            try:
+                # run_coroutine_threadsafe yields concurrent.futures.Futures —
+                # wrap them so asyncio.wait can await them on this loop.
+                wrapped = [asyncio.wrap_future(f) for f, _tag in pairs]
+                _done, still_pending = await asyncio.wait(
+                    wrapped, timeout=SHUTDOWN_DRAIN_TIMEOUT_SECONDS
+                )
+                if still_pending:
+                    # A bounded drain is a design choice; dropping the
+                    # remainder silently would be the shutdown race again,
+                    # wearing a timeout. Log count + per-note vault path so
+                    # the loss is traceable (which note may be uncommitted).
+                    pending_set = set(still_pending)
+                    lost = [
+                        tag for (_f, tag), w in zip(pairs, wrapped)
+                        if w in pending_set
+                    ]
+                    logger.warning(
+                        "Vault shutdown drain timed out after %ss: %d handler(s) "
+                        "still in flight, their writes may be uncommitted: %s",
+                        SHUTDOWN_DRAIN_TIMEOUT_SECONDS, len(lost),
+                        "; ".join(lost),
+                    )
+            except Exception:  # noqa: BLE001 — shutdown must not raise
+                logger.warning("Vault shutdown drain failed", exc_info=True)
+        self._inflight.clear()
+        # Final flush on shutdown so the last writes don't wait 30s in limbo.
+        try:
+            await self.git.flush_if_pending("shutdown")
+        except Exception:  # noqa: BLE001 — shutdown must not raise
+            logger.warning("Final vault commit on shutdown failed", exc_info=True)
         if self._observer:
             self._observer.stop()
             self._observer.join(timeout=5)
             logger.info("VaultWatcher stopped")
+
+    async def _commit_loop(self) -> None:
+        while True:
+            await asyncio.sleep(COMMIT_INTERVAL_SECONDS)
+            try:
+                await self.git.flush_if_pending("batched")
+            except Exception:  # noqa: BLE001 — keep the loop alive on git hiccups
+                logger.warning("Vault batch commit failed", exc_info=True)
 
     def _is_excluded(self, file_path: Path) -> bool:
         rel = str(file_path.relative_to(self.vault))
@@ -157,7 +231,9 @@ class _Handler(FileSystemEventHandler):
             self.watcher._handle_create_or_modify(path),
             loop,
         )
+        self.watcher._inflight[fut] = str(path)
         fut.add_done_callback(self._log_unhandled)
+        fut.add_done_callback(lambda f, w=self.watcher: w._inflight.pop(f, None))
 
     @staticmethod
     def _log_unhandled(fut) -> None:

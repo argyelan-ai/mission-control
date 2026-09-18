@@ -16,7 +16,9 @@ dispatch.py preserves all import sites and race-test patches (Pattern S1).
 
 from __future__ import annotations
 
+import configparser
 import logging
+import os
 import uuid
 from dataclasses import dataclass
 
@@ -32,6 +34,36 @@ from app.services.runtime_context import workspace_path_for_runtime
 from app.services.task_context_builder import DispatchContext, _load_dispatch_context
 
 logger = logging.getLogger(__name__)
+
+
+def _read_origin_remote_sync(project_dir: str | None) -> str | None:
+    """`origin` URL from `<project_dir>/.git/config`, or None if the path
+    isn't a git checkout / has no origin.
+
+    Sync + no subprocess on purpose: _format_dispatch_message is a plain
+    (non-async) function (kept that way so its ~20 existing call sites in
+    tests stay synchronous, see task af914128 PR discussion) — a plain
+    config-file read is enough here, no need for `git remote get-url`.
+    Used to name the actual repo in the dispatch prompt for ad-hoc
+    git-requiring tasks (task.workspace_path set, no project) — see
+    repo_registry.resolve_adhoc_repo_target — so the agent never has to
+    guess or self-clone via a short name (2026-09-14 incident).
+    """
+    if not project_dir:
+        return None
+    config_path = os.path.join(project_dir, ".git", "config")
+    if not os.path.isfile(config_path):
+        return None
+    parser = configparser.ConfigParser(strict=False)
+    try:
+        parser.read(config_path)
+    except configparser.Error:
+        return None
+    for section in parser.sections():
+        if section.strip().startswith('remote "origin"'):
+            url = parser[section].get("url")
+            return url.strip() if url else None
+    return None
 
 # API base for agent callbacks — as a shell variable, expanded in the agent context
 # Docker agents: MC_API_URL=http://backend:8000 (via docker-compose.agents.yml)
@@ -705,16 +737,25 @@ def _format_dispatch_message(
         f"**Board ID:** {task.board_id}",
     ]))
 
-    # Response language (mandatory). Templates/prompts are English; the
-    # per-agent `language` field steers how the agent talks to the operator.
-    # Injected at dispatch time so it covers every agent kind — template-
-    # created (no Jinja2 pass), specialized, and pre-existing fleets.
-    lang = (getattr(agent, "language", "en") or "en").lower()
-    if lang != "en":
-        _add("language", (
-            f"**Language:** Respond to your operator in `{lang}` "
-            "(comments, reports, questions). Code and commits stay English."
-        ))
+    # Response language (mandatory). Templates/prompts are English; two
+    # per-agent fields steer two DIFFERENT audiences — operator_language
+    # (what the agent writes TO the operator: mc report/msg/ask, chat
+    # replies) and work_language (agent-to-agent: task comments,
+    # reflections, handoffs, checklist items, deliverable text). Kept as
+    # two explicit, labeled lines rather than one combined sentence so an
+    # agent never has to guess which one applies to a given piece of
+    # output. Injected at dispatch time so it covers every agent kind —
+    # template-created (no Jinja2 pass), specialized, and pre-existing
+    # fleets.
+    operator_lang = (getattr(agent, "operator_language", "en") or "en").lower()
+    work_lang = (getattr(agent, "work_language", "en") or "en").lower()
+    if operator_lang != "en" or work_lang != "en":
+        _add("language", "\n".join([
+            "**Language:**",
+            f"- To your operator (`mc report`, `mc msg`, `mc ask`, chat replies): respond in `{operator_lang}`.",
+            f"- Agent-to-agent work (task comments, reflections, handoffs, checklist items, deliverable text): write in `{work_lang}`.",
+            "Code, commits and identifiers stay English regardless of either setting.",
+        ]))
 
     # On re-dispatch: show reviewer feedback prominently (mandatory)
     if ctx.feedback_context:
@@ -1043,13 +1084,28 @@ For large tasks (website, app, feature with multiple steps):
                     f"Start the dev server: `npm run dev -- -p {task.workspace_port}` or `python -m http.server {task.workspace_port}`"
                 )
         elif getattr(task, "workspace_path", None):
-            # Task has its own workspace (worktree, Bundle 4) but no project repo
+            # Task has its own workspace (worktree, Bundle 4) but no project
+            # repo — e.g. the ad-hoc git-requiring path (task af914128:
+            # repo_registry.resolve_adhoc_repo_target). Name the actual
+            # remote instead of a bare "push to GitHub" — the agent must
+            # never have to guess or self-clone via a short name (2026-09-14
+            # incident: `gh repo clone <shortname>` resolved to the wrong
+            # account and produced a checkout with no shared history).
+            from app.services.git_service import slugify_project as _slugify_project_adhoc
             _ws_host = task.workspace_path
             _ws_view = workspace_path_for_runtime(agent, _ws_host) or _ws_host
+            _remote_url = _read_origin_remote_sync(_ws_host)
+            _repo_line = f"- Repository: `{_remote_url}`\n" if _remote_url else ""
+            # N7 (PR #584 review): the worktree already sits on
+            # `task/<slug>` (git_service.create_task_worktree) — name it
+            # instead of the generic "create a feature branch", matching
+            # the project branch above.
+            _adhoc_task_slug = _slugify_project_adhoc(task.title)
             git_section = (
+                f"{_repo_line}"
                 f"**Working directory:** `{_ws_view}/`\n"
                 f"Change into it FIRST: `cd {_ws_view}`\n\n"
-                "**Git:** create a feature branch, never commit directly to main.\n"
+                f"**Git:** you're already on `task/{_adhoc_task_slug}` — never commit directly to main.\n"
                 "Commit after every major step. Push to GitHub."
             )
             if task.workspace_port:

@@ -390,7 +390,31 @@ export function seedSequence(
   history: ChatEvent[],
   buffered: ChatEvent[],
 ): ChatEvent[] {
-  return [...history, ...buffered];
+  /* Vorschau-Zeilen im Puffer sind VOLATIL (replace-me-Slot): die previews/-
+     Datei ueberlebt den Turn, und beim Oeffnen enthielt der Puffer die ganze
+     letzte Antwort nochmal — als Preview UNTER der fertigen Nachricht (die
+     die History schon als message traegt). Genau das war Marks "doppelte
+     Antwort". Was vor/neben der letzten assistant-message liegt, hat das
+     Transkript bestaetigt oder ueberholt: weg. Nur Zeilen, die NACH der
+     letzten Antwort stempeln, koennen noch leben (agent schreibt weiter). */
+  let lastAssistantTs: string | null = null;
+  for (let i = history.length - 1; i >= 0; i--) {
+    const ev = history[i];
+    if (ev.kind === "message" && ev.role === "assistant") {
+      lastAssistantTs = ev.ts ?? null;
+      break;
+    }
+  }
+  const stale = (ev: ChatEvent): boolean => {
+    if (ev.kind !== "preview") return false;
+    if (lastAssistantTs == null) return false;
+    const ts = (ev as { ts?: string | null }).ts ?? null;
+    // Ohne vergleichbaren Zeitstempel nicht als veraltet erkennbar — behalten
+    // (der live slot ersetzt sich selbst; schlimmstenfalls eine Zeile zu viel,
+    // nie eine fehlende laufende Antwort).
+    return ts != null && ts <= lastAssistantTs;
+  };
+  return [...history, ...buffered.filter((ev) => !stale(ev))];
 }
 
 /** Abstand zwischen "die CLI hat den Befehl angenommen" und "sie hat ihn
@@ -481,7 +505,9 @@ export function useChatStream(agentId: string | null, enabled = true): UseChatSt
   const hasSeededRef = useRef(false);
   /* Live-Zeilen, die vor der ersten Historien-Antwort eintreffen — siehe
      `seedSequence`. */
-  const liveBufferRef = useRef<TimelineChatEvent[]>([]);
+  /* Preview-Zeilen warten hier jetzt MIT (ruhiger Erst-Aufbau) — darum
+     breiter als TimelineChatEvent. */
+  const liveBufferRef = useRef<(TimelineChatEvent | PreviewEvent)[]>([]);
   /* Laufende Wiederhol-Timer (agent_starting), damit sie beim Verlassen
      sterben statt an den vorigen Agenten zu senden. */
   const retryTimersRef = useRef<Set<number>>(new Set());
@@ -496,10 +522,44 @@ export function useChatStream(agentId: string | null, enabled = true): UseChatSt
 
   const queryEnabled = enabled && !!agentId;
 
+  /* Diese Abfrage traegt den GANZEN Gespraechsverlauf — sie darf nicht als
+     billiger Listen-Abruf behandelt werden. Ohne eigene Angaben erbte sie die
+     globalen Vorgaben (`providers.tsx`: staleTime 5 s, refetchOnWindowFocus
+     true) und lud damit bei JEDEM Fokuswechsel neu, auch ohne dass irgendetwas
+     passiert war (Messung 18.09.2026: 2 von 5 Abrufen waren reine
+     Fokus-Refetches bei null Bedienung).
+
+     `staleTime: Infinity` ist hier korrekt und nicht bloss sparsam: Jeder
+     Anlass, der wirklich frische Daten braucht, hat seinen EIGENEN Ausloeser —
+     Mount und Agentenwechsel (queryKey), `session_changed` (Rollover),
+     `/model` (Faehigkeiten), und der Wiederaufbau des Live-Stroms
+     (`onReconnect` unten, der einzige Fall, in dem das Backend Ereignisse
+     verschluckt hat: der Tailer steigt am Dateiende ein und spielt nichts nach).
+
+     Merken: Ein pauschales `refetchOnWindowFocus: false` OHNE diesen
+     Reconnect-Refetch war schon einmal der Fehler — das Transkript blieb nach
+     "Handy sperren, entsperren" dauerhaft auf dem alten Stand (`seededAtRef`).
+     Die Fokus-Vorgabe faellt hier nur weg, weil der Reconnect sie praezise
+     ersetzt.
+
+     `refetchOnMount: "always"` schliesst die Luecke, die `staleTime: Infinity`
+     sonst reissen wuerde: Beim Verlassen eines Agenten wird dessen Tailer
+     abgeraeumt (`TailerManager.release` cancelt die Aufgabe), beim Zurueck-
+     kommen frisch am DATEIENDE aufgesetzt (`acquire` setzt den Start auf
+     `path.stat().st_size`) — alles, was in der Zwischenzeit geschrieben wurde,
+     kommt nie ueber den Strom. Die Historie ist die einzige Quelle dafuer.
+     Ohne dieses Neuladen zeigte ein zurueckgeholter Agent seinen Verlauf von
+     vor dem Wechsel dauerhaft, obwohl seither ein ganzes Gespraech lief
+     (Messung 18.09.2026: Schritt 7 der Harness blieb bei 2 Abrufen). Beim
+     ERSTEN Oeffnen kostet das nichts — der Cache ist dann leer, es bleibt bei
+     genau einem Abruf. */
   const historyQuery = useQuery({
     queryKey: ["chat-history", agentId],
     queryFn: () => api.chat.history(agentId as string),
     enabled: queryEnabled,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchOnMount: "always",
   });
 
   useEffect(() => {
@@ -652,7 +712,13 @@ export function useChatStream(agentId: string | null, enabled = true): UseChatSt
         ev.kind === "message" || ev.kind === "tool" ||
         ev.kind === "thinking" || ev.kind === "command" ||
         ev.kind === "notification";
-      if (isTimeline && !hasSeededRef.current) {
+      /* Vorschau-Zeilen warten MIT: vor dem Seed dispatchte previews liessen
+         den Vorschau-Block zusaetzlich zum Zeitachsen-Aufbau (30 Eintraege,
+         dann der Rest) bereits waehrend des ersten Layouts wachsen und
+         springen — das "flackert extrem" beim Oeffnen (Mark, 14.09.2026).
+         Nach dem Seed entscheidet seedSequence, welche davon ueberhaupt noch
+         leben (die letzte Antwort ist dann schon als message da). */
+      if ((isTimeline || ev.kind === "preview") && !hasSeededRef.current) {
         liveBufferRef.current.push(ev);
       } else {
         dispatch(ev);
@@ -707,10 +773,22 @@ export function useChatStream(agentId: string | null, enabled = true): UseChatSt
 
   const onSSEError = useCallback(() => setConnected(false), []);
 
+  /* Der einzige verbliebene Anlass, die Historie neu zu laden, ohne dass der
+     Operator etwas getan hat — und der einzige, der ihn rechtfertigt: Beim
+     Wiederaufbau des Stroms ist das Backend bereits weitergelaufen. Ein
+     frischer Tailer steigt am DATEIENDE ein und spielt nichts nach (siehe
+     `acquire` in transcript_chat.py), ein zweiter Client an derselben Datei
+     bekommt nur den zwischengespeicherten Zustand. Alles, was waehrend des
+     Ausfalls geschah, ist allein ueber die Historie zurueckzuholen. */
+  const onSSEReconnect = useCallback(() => {
+    historyQuery.refetch();
+  }, [historyQuery]);
+
   useSSE(streamUrl, {
     enabled: queryEnabled && !!streamUrl,
     onEvent: onSSEEvent,
     onError: onSSEError,
+    onReconnect: onSSEReconnect,
   });
 
   return {

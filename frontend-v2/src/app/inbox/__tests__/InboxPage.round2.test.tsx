@@ -49,7 +49,17 @@ vi.mock("@/lib/store", () => ({
 
 import InboxPage from "../page";
 
-const argus: Agent = { id: "agent-argus", name: "Argus", role: "reviewer" } as unknown as Agent;
+const argus: Agent = { id: "agent-argus", name: "Argus", role: "reviewer", role_canonical: "reviewer" } as unknown as Agent;
+
+// FALLBACK-PROBE (W1 follow-up): `role_canonical` is resolved server-side
+// (app/scopes.py:normalize_agent_role) and only shipped by a backend that has
+// already deployed that change. Until every environment is on that backend,
+// `GET /api/v1/agents` can still answer without the field — so the fixture
+// must model "field absent", not "field null", to match what actually happens
+// on the wire. Ownership while that gap exists: lib/reviewRouting.ts's
+// documented fail-safe (`!== "reviewer"` on `undefined`) routes the row to the
+// operator, never to this agent bucket — that's the contract this probe pins.
+const argusNoCanonical: Agent = { id: "agent-argus", name: "Argus", role: "reviewer" } as unknown as Agent;
 
 function mkTask(o: Partial<Task> = {}): Task {
   return {
@@ -57,6 +67,8 @@ function mkTask(o: Partial<Task> = {}): Task {
     assigned_agent_id: "agent-argus", human_review_required: false,
     review_decision: null, run_control: null, created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z", priority: "medium",
+    // Real handoff by default — a held review still requires a genuine handoff.
+    dispatch_intent: "review_handoff",
     ...o,
   } as unknown as Task;
 }
@@ -105,5 +117,17 @@ describe("PROBE W3 — held reviews are recognisable in the inbox", () => {
     await waitFor(() => expect(screen.queryByTestId("agent-review-row")).not.toBeInTheDocument());
     expect(await screen.findByText("Ship it")).toBeInTheDocument();
     expect(screen.queryByTestId("agent-review-hold")).not.toBeInTheDocument();
+  });
+
+  it("FALLBACK-PROBE agent has no role_canonical (backend not yet redeployed) → operator's, no agent row", async () => {
+    apiMock.tasksList.mockResolvedValue([mkTask()]);
+    apiMock.agentsList.mockResolvedValue([argusNoCanonical]);
+    renderInbox();
+    // Anchor on the loaded state before asserting absence — a negative
+    // assertion with no prior anchor is satisfied on the first synchronous
+    // render, before the agents query has even resolved (Rex review, PR #520).
+    await waitFor(() => expect(apiMock.agentsList).toHaveBeenCalled());
+    expect(await screen.findByText("Ship it")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByTestId("agent-review-row")).not.toBeInTheDocument());
   });
 });

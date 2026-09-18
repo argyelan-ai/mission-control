@@ -392,8 +392,10 @@ async def reindex(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    result = await file_indexer.run_once(session)
-    return result
+    # run_once walks the filesystem with no transaction open and commits in
+    # short batches. The request-scoped session (overridden by tests) is used
+    # as the batch factory — per-batch commits keep every transaction short.
+    return await file_indexer.run_once(session_factory=lambda: session)
 
 
 # --- soft-delete (move to ~/.mc/.trash, never rm) --------------------------

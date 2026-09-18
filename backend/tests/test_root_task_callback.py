@@ -19,10 +19,16 @@ the review-approve path. Covers:
 - Both of the above fire from the SAME real PATCH request when status goes
   to "done" — a second review round caught that they both sent a DM,
   double-delivering. Covered end-to-end: exactly one DM per completion.
-- `mc delegate` with no active parent task (root delegation) flushes the
-  subtask before it's referenced as a foreign key — the invariant behind
-  the FK-violation-on-activity_events bug, checked directly since this
-  suite's SQLite has FK enforcement off and can't reproduce the 500 itself.
+- `mc delegate` flushes the subtask before it's referenced as a foreign key —
+  the invariant behind the FK-violation-on-activity_events bug, checked
+  directly since this suite's SQLite has FK enforcement off and can't
+  reproduce the 500 itself.
+
+Task f8c9cdb9 removed the parentless delegation these three used to drive
+(`mc delegate` with no active task and no `--parent` now 409s before it
+creates anything). They now go through the explicit-`--parent` path instead,
+which is the only remaining way to delegate without an active card — the
+invariants they guard are unchanged.
 """
 
 import asyncio
@@ -456,7 +462,7 @@ async def test_notify_lead_on_completion_reviewed_false_does_not_claim_approval(
 
 
 @pytest.mark.asyncio
-async def test_root_delegation_flushes_subtask_before_emit_event(client, fake_redis):
+async def test_delegation_flushes_subtask_before_emit_event(client, fake_redis):
     """Fix 3 regression guard, the real one: this suite's SQLite has FK
     enforcement OFF (tests/conftest.py) and can't reject a bad insert order
     itself, so a "does /delegate return 500" test never actually exercises
@@ -478,6 +484,7 @@ async def test_root_delegation_flushes_subtask_before_emit_event(client, fake_re
     board_id = uuid.uuid4()
     lead_id = uuid.uuid4()
     worker_id = uuid.uuid4()
+    parent_id = uuid.uuid4()
 
     raw_token, token_hash = generate_agent_token()
 
@@ -495,18 +502,31 @@ async def test_root_delegation_flushes_subtask_before_emit_event(client, fake_re
             scopes=["tasks:read", "tasks:write"],
             provision_status="provisioned",
         ))
+        # The explicit parent the lead delegates under — no active card on the
+        # lead, so `--parent` is the only legal shape since f8c9cdb9.
+        s.add(TaskModel(
+            id=parent_id, board_id=board_id, title="Parent card",
+            status="in_progress", assigned_agent_id=lead_id,
+        ))
         await s.commit()
 
     captured = {}
 
     async def _spy_emit_event(session, *args, **kwargs):
-        task_id = kwargs.get("task_id")
-        pending_task_ids = {
-            o.id for o in session.new
+        # emit_event() commits internally (activity.py:40). Anything still
+        # pending in session.new at this instant is written by THAT commit —
+        # which is how the subtask INSERT ended up racing the activity_events
+        # FK in Postgres. Since f8c9cdb9 emits with the PARENT's task_id, the
+        # old "is the emitted task_id still pending?" probe would be vacuously
+        # false; the invariant that actually matters is "no Task row at all is
+        # still pending", which is what the flush() above guarantees.
+        pending = [
+            o for o in session.new
             if isinstance(o, TaskModel) and getattr(o, "id", None) is not None
-        }
+        ]
         captured["called"] = True
-        captured["still_pending"] = task_id in pending_task_ids
+        captured["still_pending"] = bool(pending)
+        captured["emitted_task_id"] = kwargs.get("task_id")
         return None
 
     with patch("app.routers.agent_scoped.emit_event", side_effect=_spy_emit_event):
@@ -519,9 +539,10 @@ async def test_root_delegation_flushes_subtask_before_emit_event(client, fake_re
                 resp = await client.post(
                     f"/api/v1/agent/boards/{board_id}/delegate",
                     json={
-                        "title": "Root delegation, flush guard",
+                        "title": "Delegation, flush guard",
                         "description": "Prueft, dass der Subtask VOR emit_event() geflusht ist.",
                         "assigned_agent_id": str(worker_id),
+                        "parent_task_id": str(parent_id),
                     },
                     headers={"Authorization": f"Bearer {raw_token}"},
                 )
@@ -529,22 +550,28 @@ async def test_root_delegation_flushes_subtask_before_emit_event(client, fake_re
     assert resp.status_code == 201, resp.text
     assert captured.get("called") is True, "emit_event wurde nicht aufgerufen — Spy griff nicht"
     assert captured["still_pending"] is False, (
-        "Subtask war beim emit_event()-Aufruf noch nicht geflusht — "
+        "Mindestens eine Task-Zeile war beim emit_event()-Aufruf noch pending "
+        "(session.new) — emit_event() committet intern und zieht sie mit, "
         "genau der FK-Bug aus #312"
+    )
+    assert captured["emitted_task_id"] == parent_id, (
+        "Der Delegations-Event muss auf der Parent-Karte stehen, nicht auf dem "
+        "Subtask — sonst zeigt die Activity-Historie auf die falsche Karte"
     )
 
 
 @pytest.mark.asyncio
-async def test_root_delegation_via_delegate_endpoint_no_500(client, fake_redis):
-    """Basic smoke test: mc delegate with NO active parent task (root
-    delegation) returns 201, not a 500. Doesn't guard fix 3 by itself (see
-    test_root_delegation_flushes_subtask_before_emit_event above for why —
+async def test_delegation_via_delegate_endpoint_no_500(client, fake_redis):
+    """Basic smoke test: mc delegate from a lead with NO active task, naming an
+    explicit --parent, returns 201, not a 500. Doesn't guard fix 3 by itself
+    (see test_delegation_flushes_subtask_before_emit_event above for why —
     this suite's SQLite can't reproduce the FK violation the fix addresses),
     kept as an end-to-end sanity check of the response shape.
     """
     board_id = uuid.uuid4()
     lead_id = uuid.uuid4()
     worker_id = uuid.uuid4()
+    parent_id = uuid.uuid4()
 
     raw_token, token_hash = generate_agent_token()
 
@@ -562,6 +589,10 @@ async def test_root_delegation_via_delegate_endpoint_no_500(client, fake_redis):
             scopes=["tasks:read", "tasks:write"],
             provision_status="provisioned",
         ))
+        s.add(Task(
+            id=parent_id, board_id=board_id, title="Parent card",
+            status="in_progress", assigned_agent_id=lead_id,
+        ))
         await s.commit()
 
     with patch("app.routers.agent_scoped.emit_event", new_callable=AsyncMock):
@@ -574,9 +605,10 @@ async def test_root_delegation_via_delegate_endpoint_no_500(client, fake_redis):
                 resp = await client.post(
                     f"/api/v1/agent/boards/{board_id}/delegate",
                     json={
-                        "title": "Root delegation, no active parent",
+                        "title": "Delegation with explicit parent",
                         "description": "Repro fuer #312 — kein current_task beim delegierenden Lead.",
                         "assigned_agent_id": str(worker_id),
+                        "parent_task_id": str(parent_id),
                     },
                     headers={"Authorization": f"Bearer {raw_token}"},
                 )
@@ -588,7 +620,7 @@ async def test_root_delegation_via_delegate_endpoint_no_500(client, fake_redis):
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         subtask = await s.get(Task, subtask_id)
         assert subtask is not None
-        assert subtask.parent_task_id is None
+        assert subtask.parent_task_id == parent_id
         assert subtask.assigned_agent_id == worker_id
 
 
@@ -727,22 +759,24 @@ async def test_review_done_patch_notifies_lead_as_reviewed(client):
 
 
 @pytest.mark.asyncio
-async def test_root_delegation_sets_callback_agent_id(client, fake_redis):
+async def test_delegation_sets_callback_agent_id(client, fake_redis):
     """Der Kern von #312, live reproduziert: Ein Board Lead delegiert aus einem
-    Chat-Gespraech heraus — ohne aktiven Task. Der Root-Zweig setzte
-    `with_callback = False` ("nothing to resume") und liess damit
+    Chat-Gespraech heraus — ohne aktiven Task, mit explizitem --parent.
+    Der Zweig setzt `with_callback = False` ("kein bestaetigtes
+    Besitzverhaeltnis, also nichts aufzuwecken") — und liess damit frueher
     `callback_agent_id` leer. Die gesamte Zustell-Maschinerie aus #313 haengt
     aber genau an diesem Feld: ohne es feuert weder der Completion-Hook noch
     `_deliver_root_callback`. Der Delegierende erfuhr nie, dass seine Aufgabe
     fertig war — und konnte es dem Operator nicht melden.
 
     Einen Parent aufwecken und den Auftraggeber informieren sind zwei
-    verschiedene Dinge: Ersteres ist bei einem Root-Task sinnlos, Letzteres
-    ist genau der Zweck.
+    verschiedene Dinge: Ersteres verlangt ein bestaetigtes Besitzverhaeltnis,
+    Letzteres ist der Zweck.
     """
     board_id = uuid.uuid4()
     lead_id = uuid.uuid4()
     worker_id = uuid.uuid4()
+    parent_id = uuid.uuid4()
 
     raw_token, token_hash = generate_agent_token()
 
@@ -760,6 +794,10 @@ async def test_root_delegation_sets_callback_agent_id(client, fake_redis):
             scopes=["tasks:read", "tasks:write"],
             provision_status="provisioned",
         ))
+        s.add(Task(
+            id=parent_id, board_id=board_id, title="Parent card",
+            status="in_progress", assigned_agent_id=lead_id,
+        ))
         await s.commit()
 
     with patch("app.routers.agent_scoped.emit_event", new_callable=AsyncMock), \
@@ -774,6 +812,7 @@ async def test_root_delegation_sets_callback_agent_id(client, fake_redis):
                 "title": "Aus dem Chat delegiert",
                 "description": "Board Lead delegiert ohne aktiven Task und will informiert werden.",
                 "assigned_agent_id": str(worker_id),
+                "parent_task_id": str(parent_id),
                 "callback": True,
             },
             headers={"Authorization": f"Bearer {raw_token}"},
@@ -784,11 +823,15 @@ async def test_root_delegation_sets_callback_agent_id(client, fake_redis):
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         subtask = await s.get(Task, subtask_id)
-        assert subtask.parent_task_id is None, "Root-Delegation: kein Parent"
+        assert subtask.parent_task_id == parent_id
         assert subtask.callback_agent_id == lead_id, (
             "Der delegierende Lead MUSS als callback_agent_id gesetzt sein — "
             "sonst erreicht ihn die Fertigmeldung nie (#312)"
         )
-        # Der Lead wird NICHT blockiert — es gibt keinen Parent zum Aufwecken.
+        # W5-F: der explizit benannte Parent wird NICHT blockiert — wir haben
+        # kein bestaetigtes Besitzverhaeltnis, auf dem wir ihn spaeter
+        # aufwecken duerften. Der Lead ist ebenso wenig blockiert.
+        parent = await s.get(Task, parent_id)
+        assert parent.status == "in_progress"
         lead = await s.get(Agent, lead_id)
         assert lead.current_task_id is None

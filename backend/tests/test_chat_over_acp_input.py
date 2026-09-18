@@ -52,10 +52,9 @@ class _FakeTransport:
 
 
 @pytest.fixture
-def acp_agent(monkeypatch):
-    from app import config
-
-    monkeypatch.setattr(config.settings, "omp_acp_agent_slugs", "acp-one")
+def acp_agent():
+    """ACP ist Harness-Eigenschaft (ADR-084) — der Stub ist omp + cli-bridge,
+    mehr braucht es nicht. Einen Namenslisten-Knopf gibt es nicht mehr."""
     return _StubAgent()
 
 
@@ -99,10 +98,14 @@ def test_target_kind_is_acp_http_for_hermes(monkeypatch):
     assert _target_kind(agent) == "acp-http"
 
 
-def test_target_kind_unchanged_for_tui_agent(acp_agent):
-    """Ein nicht gelisteter omp-Agent bleibt auf ``docker`` (tmux)."""
+def test_target_kind_is_docker_under_global_native_rollback(monkeypatch):
+    """Der eine globale Notausstieg (OMP_DRIVER_DEFAULT=native, ADR-084)
+    stellt den ganzen omp-Kader auf ``docker`` (tmux) zurueck — einer fuer
+    alle, keine Namensliste."""
+    from app import config
     from app.services.agent_chat_input import _target_kind
 
+    monkeypatch.setattr(config.settings, "omp_driver_default", "native")
     assert _target_kind(_StubAgent(slug="tui-one")) == "docker"
 
 
@@ -256,9 +259,13 @@ async def test_set_model_sends_config_model(acp_agent, fake_transport, acp_state
     assert fake_transport.calls == [("config", "model", "model-b")]
 
 
-async def test_set_model_not_supported_on_tui_agent(acp_agent):
+async def test_set_model_not_supported_on_tui_agent(monkeypatch):
+    """Der globale native-Rollback (ADR-084) macht den omp-Agenten zur TUI —
+    und eine TUI hat keinen Modell-Picker ueber den Steuerkanal."""
+    from app import config
     from app.services import agent_chat_input
 
+    monkeypatch.setattr(config.settings, "omp_driver_default", "native")
     with pytest.raises(agent_chat_input.InputNotSupportedError):
         await agent_chat_input.set_model(_StubAgent(slug="tui-one"), "model-b")
 
@@ -396,13 +403,11 @@ def test_hermes_uses_the_omp_transcript_adapter(tmp_path, monkeypatch):
     )
 
 
-async def test_agents_endpoints_expose_headless_chat(auth_client, make_agent, monkeypatch):
+async def test_agents_endpoints_expose_headless_chat(auth_client, make_agent):
     """Das Frontend versteckt den Chat/Terminal-Umschalter anhand dieses
-    Feldes — es muss in BEIDEN Antworten stehen, Liste wie Detail."""
-    from app import config
-
+    Feldes — es muss in BEIDEN Antworten stehen, Liste wie Detail. ACP ist
+    Harness-Eigenschaft (ADR-084): omp + cli-bridge genuegt, kein Listen-Knopf."""
     agent = await make_agent(name="Acp One", agent_runtime="cli-bridge", harness="omp")
-    monkeypatch.setattr(config.settings, "omp_acp_agent_slugs", agent.slug)
 
     detail = await auth_client.get(f"/api/v1/agents/{agent.id}")
     assert detail.status_code == 200, detail.text
