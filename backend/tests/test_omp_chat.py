@@ -372,6 +372,26 @@ def test_tool_title_is_truncated():
     assert len(build_tool_title("bash", {"command": "y" * 500})) == 80
 
 
+@pytest.mark.parametrize(
+    "name,args,expected",
+    [
+        # `hermes acp` (docker/omp-bridge/acp_chat_events.py `_tool_seed`)
+        # passes rawInput through unchanged and only ever guarantees "i" —
+        # never "command"/"path"/"pattern". Bug: build_tool_title's
+        # per-kind branches read only the specific key, so a bare "$"/
+        # empty title rendered for every real hermes tool call (task
+        # 663f70fb, screenshot showed rawInput == {"i": "terminal: cd …"}).
+        ("bash", {"i": "terminal: cd /work && ls"}, "$ terminal: cd /work && ls"),
+        ("read", {"i": "src/config.py"}, "Read: src/config.py"),
+        ("write", {"i": "notes.md"}, "Write: notes.md"),
+        ("edit", {"i": "src/config.py"}, "Edit: src/config.py"),
+        ("grep", {"i": "find TODOs"}, "Search: find TODOs"),
+    ],
+)
+def test_tool_title_falls_back_to_intent_when_specific_key_missing(name, args, expected):
+    assert build_tool_title(name, args) == expected
+
+
 # ── Parser: eingespeiste Eingaben ───────────────────────────────────────────
 
 

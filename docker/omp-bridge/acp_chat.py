@@ -481,9 +481,18 @@ class ChatSession:
     def _on_permission(self, params: dict) -> str:
         """Delegate to the bridge's policy helper — ONE decision path for
         tasks and chat. An unimportable bridge falls back to the same rule
-        the helper applies for `yolo`, and rejects otherwise (fail-closed)."""
+        the helper applies for `yolo`, and rejects otherwise (fail-closed).
+
+        `yolo` means nobody is actually being asked — the request/decision
+        pair still gets written to the transcript (`auto_approved=True`
+        marks them `display: False`, see the mapper docstrings) so the
+        chat view stops filling with self-answered permission cards
+        between every tool call (task 663f70fb)."""
+        auto_approved = self._permission_policy == "yolo"
         try:
-            self._emit_transcript(self._mapper.map_permission_request(params))
+            self._emit_transcript(
+                self._mapper.map_permission_request(params, auto_approved=auto_approved)
+            )
         except Exception:  # noqa: BLE001
             pass
         try:
@@ -498,7 +507,9 @@ class ChatSession:
                       if self._permission_policy == "yolo"
                       else acp_client.REJECT_ONCE)
         try:
-            self._emit_transcript(self._mapper.map_permission_outcome(params, choice))
+            self._emit_transcript(
+                self._mapper.map_permission_outcome(params, choice, auto_approved=auto_approved)
+            )
         except Exception:  # noqa: BLE001
             pass
         return choice
