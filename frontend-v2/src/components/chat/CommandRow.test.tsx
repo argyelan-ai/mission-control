@@ -60,14 +60,13 @@ describe("CommandRow", () => {
 });
 
 describe("Horizontale Umbruch-Regel — CommandRow", () => {
-  it("die Befehls-Ausgabe traegt break-words", () => {
-    render(
-      <CommandRow
-        detailLevel="verbose"
-        ev={mkCommand({ result: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa /tmp/pfad/ohne/leerzeichen" })}
-      />,
-    );
-    const el = screen.getByText(/\/tmp\/pfad\/ohne\/leerzeichen/).closest("pre");
-    expect(el?.className).toContain("break-words");
+  it("rendert einen Befehl ohne Ergebnis als eigenen Klartext-Block", () => {
+    // Der Breiten-Vertrag haengt an echtem Layout: `playwright/chat-transcript-width.mjs`.
+    // Hier bleibt, dass der ergebnislose Zweig seinen eigenen Block rendert
+    // (statt in den Ergebnispfad zu fallen) und den Befehl vollstaendig zeigt.
+    render(<CommandRow ev={mkCommand({ command: "/context /tmp/pfad/ohne/leerzeichen" })} />);
+    const el = screen.getByTestId("command-row-plain");
+    expect(el.textContent).toContain("/tmp/pfad/ohne/leerzeichen");
+    expect(screen.queryByTestId("command-row-result")).not.toBeInTheDocument();
   });
 });

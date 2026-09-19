@@ -250,28 +250,6 @@ describe("ChatMessage — Teamkollegen-Nachricht", () => {
     expect(screen.getByText(/128 GB/)).toBeTruthy();
   });
 
-  it("bricht eine lange Nutzlast um, statt den Verlauf breit zu ziehen", () => {
-    // Der Text stand in einem blanken <span>, und globals.css hat keine
-    // globale Umbruch-Regel (nachgesehen: null Treffer). In Chromium bei 390px
-    // nachgemessen:
-    //
-    //   * ein wirklich unbrechbares Wort (122 Zeichen, keine Satzzeichen)
-    //     wird 947,9px breit — die SEITE bekommt einen waagerechten Rollbalken
-    //     (scrollWidth 998 statt 390). Mit `break-words`: 310px, drei Zeilen.
-    //   * mehrzeilige Nutzlasten kollabieren zu EINER Zeile. Mit
-    //     `whitespace-pre-wrap`: zwei Zeilen.
-    //
-    // Nicht betroffen ist ausgerechnet die haeufigste Nutzlast, das
-    // idle_notification-JSON: Chromium bricht sie an den Kommata von selbst um
-    // (262,8px, drei Zeilen). Der Umbruch ist trotzdem noetig — Rueckmeldungen
-    // sind beliebiger Text, und seit die gebuendelten Bloecke einzeln
-    // ankommen, sind mehrzeilige Nutzlasten der Normalfall.
-    render(<ChatMessage ev={mkTeammate("Zeile eins\nZeile zwei")} />);
-    const body = screen.getByTestId("teammate-text");
-    expect(body.className).toContain("break-words");
-    expect(body.className).toContain("whitespace-pre-wrap");
-  });
-
   it("laesst den Anhang-Parser gar nicht erst laufen", () => {
     // `splitAttachments` lief fuer JEDE Nachricht — voller split("\n"),
     // Regex je Zeile, join. Gelesen wird das Ergebnis nur im Operator-Zweig.
@@ -318,21 +296,18 @@ describe("Echo-Blase", () => {
 });
 
 describe("Horizontale Umbruch-Regel (Operator 15.09.: chat ist am Handy horizontal scrollbar)", () => {
-  it("der assistant-Markdown-Body traegt break-words (overflow-wrap vererbt auf p/li)", () => {
-    // Lange Pfade/URLs in Antworttexten liefen ohne Umbruch ueber den Rand —
-    // der Chat-Verlauf wurde damit selbst horizontal scrollbar (390px).
-    // break-words am Body erbt in alle Markdown-Kinder (p, li, headings).
+  it("stellt lange Pfade und inline code im Verlauf dar", () => {
+    // Der Breiten-Vertrag selbst haengt an echtem Layout und ist deshalb in
+    // `playwright/chat-transcript-width.mjs` geprueft (jsdom rechnet kein
+    // Layout, eine `scrollWidth`-Zusicherung waere hier wirkungslos). Hier
+    // bleibt nur, dass der Inhalt ueberhaupt ankommt.
     render(<ChatMessage ev={mkEvent({ role: "assistant", text: "Antwort mit /tmp/sehr/langer/pfad/ohne/leerzeichen/bis/ans/ende.txt" })} />);
-    const body = document.querySelector('[data-testid="chat-timeline"] .break-words')
-      ?? screen.getByText(/Antwort mit/).closest("div.break-words");
-    expect(body).toBeTruthy();
+    expect(screen.getByText(/ohne\/leerzeichen\/bis/)).toBeTruthy();
   });
 
-  it("inline code + links nutzen overflow-wrap:anywhere (MarkdownContent)", () => {
-    // bereits auf main gepinnt — hier als Gegenprobe, dass der Body-Fix sie
-    // nicht ausser Kraft setzt:
+  it("rendert inline code und Links unveraendert", () => {
     render(<ChatMessage ev={mkEvent({ role: "assistant", text: "Siehe `src/komponente/SehrLangerName.tsx` und https://example.com/ein/sehr/langer/pfad" })} />);
-    const inlineCode = screen.getByText(/SehrLangerName/);
-    expect(inlineCode).toBeTruthy();
+    expect(screen.getByText(/SehrLangerName/).tagName).toBe("CODE");
+    expect(screen.getByRole("link")).toBeTruthy();
   });
 });
