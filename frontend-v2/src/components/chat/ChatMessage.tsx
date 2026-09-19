@@ -18,7 +18,15 @@ import type { Harness, HostHarness } from "@/lib/types";
 
 function ClampedUserContent({ text }: { text: string }) {
   return (
-    <ClampedContent text={text} testId="user-message-content" className="[&>*:last-child]:mb-0">
+    // `break-words` ist hier tragend, nicht kosmetisch: die Blase ist ein
+    // Flex-Kind mit `max-w-[85%]`, ihre Breite kommt also aus ihrem Inhalt
+    // (shrink-to-fit). Ohne Umbruch-Regel zaehlt ein unbrechbares Wort mit
+    // seiner vollen Breite zum min-content, die Blase waechst darueber hinaus
+    // und gibt dem Transkript-Rollbalken eine waagerechte Rollstrecke — jede
+    // Zeile des Verlaufs beginnt dann ausserhalb des Bildes.
+    // `min-w-0` am selben Element hilft dagegen nicht: es deckelt die
+    // Mindestbreite, nicht die aus dem Inhalt abgeleitete Maximalbreite.
+    <ClampedContent text={text} testId="user-message-content" className="break-words [&>*:last-child]:mb-0">
       <MarkdownContent content={text} compact />
     </ClampedContent>
   );

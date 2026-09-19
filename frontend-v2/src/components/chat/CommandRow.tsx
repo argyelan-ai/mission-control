@@ -39,7 +39,17 @@ export function CommandRow({
   // timeline always had, rather than growing a chevron that reveals nothing.
   if (!hasResult) {
     return (
-      <div className="w-full px-4 md:px-5 py-1.5 text-xs font-mono" style={{ color: C.textMuted }}>
+      // `break-words` is load-bearing: this line is the only place a command is
+      // rendered WITHOUT `truncate` (the button branch below clips instead), so
+      // the raw text is what the box has to contain. A slash command whose
+      // argument is a long path is normal input; it used to widen the
+      // transcript — and with it the start of every line in the history.
+      // Guarded by playwright/chat-transcript-width.mjs.
+      <div
+        data-testid="command-row-plain"
+        className="w-full px-4 md:px-5 py-1.5 text-xs font-mono break-words"
+        style={{ color: C.textMuted }}
+      >
         {ev.command}
       </div>
     );
