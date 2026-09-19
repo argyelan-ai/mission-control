@@ -2381,6 +2381,42 @@ async def agent_update_task(
                 task.title[:40],
             )
 
+        # ── Registry-Repo PR gate (PRE-COMMIT, Task 27ab2ef9) ──────
+        # A repo_id card transitioning to review WITHOUT pr_number used to
+        # strand: the status was already committed here (developer's turn
+        # over), and only the reviewer DISPATCH later hit
+        # _setup_review_workspace_for_dispatch's _block() — status=blocked,
+        # "Question for @Operator", human repair (3x in 2 days: 6f1afe01,
+        # d9910cf3). Fail HERE with an honest 400 while the developer can
+        # still fix it in the same turn: push + create the PR, then re-PATCH
+        # with pr_number (mc review --pr N / mc patch --status review --pr N).
+        #
+        # Exemptions mirror the dispatch-time block exactly:
+        # - no repo_id → project_id path; handle_review_pr_creation creates
+        #   the PR in this very PATCH (pr_number exists by dispatch time).
+        # - pr_number already on the card or in this PATCH → nothing to gate.
+        # - human_review_required → no agent-reviewer dispatch, no review
+        #   workspace prep, so nothing strands (human reviews via GitHub).
+        if (
+            updates["status"] == "review"
+            and task.repo_id
+            and task.pr_number is None
+            and "pr_number" not in updates
+            and not getattr(task, "human_review_required", None)
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Review-Uebergang ohne PR-Nummer abgelehnt: Auf einer "
+                    "Registry-Repo-Karte (task.repo_id gesetzt) erstellt das "
+                    "Backend keinen PR automatisch. Push + PR selbst erstellen "
+                    "und den Uebergang mit pr_number wiederholen: "
+                    "`mc review --pr <nummer>` oder "
+                    "`mc patch --status review --pr <nummer>` — sonst strandet "
+                    "die Karte beim Reviewer-Dispatch ohne auscheckbaren PR."
+                ),
+            )
+
         await _enforce_board_rules_agent(session, board_id, task, updates["status"], agent)
 
         # ── Blocker-approval guard (PRE-COMMIT) ─────────────────

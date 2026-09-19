@@ -408,12 +408,15 @@ def _cmd_patch(args, client, cfg):
     valid_statuses = ("done", "review", "in_progress", "blocked", "failed", "waiting", "inbox")
     if args.status not in valid_statuses:
         raise UsageError(f"--status muss einer von: {', '.join(valid_statuses)} sein")
-    return _patch_status(client, cfg, args.status)
+    if (args.pr is not None or args.pr_url is not None) and args.status != "review":
+        raise UsageError("--pr/--pr-url nur zusammen mit --status review")
+    return _patch_status(client, cfg, args.status, pr_number=args.pr, pr_url=args.pr_url)
 
 
 def _add_patch_args(p):
     _add_optional_task_id(p)
     p.add_argument("--status", required=True, help="Neuer Status: done | review | in_progress | blocked | failed | waiting | inbox")
+    _add_pr_args(p)
 
 
 def _cmd_task_get(args, client, cfg):
@@ -546,8 +549,21 @@ def _cmd_vault_write(args, client, cfg):
     return 0
 
 
+def _add_review_args(p):
+    _add_optional_task_id(p)
+    _add_pr_args(p)
+
+
+def _add_pr_args(p):
+    # Task 27ab2ef9: Registry-Repo-Karten (task.repo_id) muessen die PR-Nummer
+    # beim Uebergang auf review mitschicken — das Backend erstellt dort keinen
+    # PR automatisch und blockt sonst den Dispatch mit 400.
+    p.add_argument("--pr", dest="pr", type=int, default=None, help="PR-Nummer (nur review) — landet in task.pr_number")
+    p.add_argument("--pr-url", dest="pr_url", default=None, help="PR-URL (optional, nur review)")
+
+
 def _cmd_review(args, client, cfg):
-    return _patch_status(client, cfg, "review")
+    return _patch_status(client, cfg, "review", pr_number=args.pr, pr_url=args.pr_url)
 
 
 # ── Reviewer verdicts (approve / reject) ──────────────────────────────────
@@ -3253,11 +3269,11 @@ REGISTRY: dict[str, CommandSpec] = {
     ),
     "review": CommandSpec(
         name="review",
-        help="Task zu Review übergeben (status → review)",
+        help="Task zu Review übergeben (status → review). Registry-Repo-Karte: --pr N mitschicken",
         endpoints=_STATUS_ENDPOINT,
         scope="tasks:write",
         handler=_cmd_review,
-        add_args=_add_optional_task_id,
+        add_args=_add_review_args,
     ),
     "approve": CommandSpec(
         name="approve",
