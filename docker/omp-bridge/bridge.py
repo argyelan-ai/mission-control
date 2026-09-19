@@ -1441,6 +1441,30 @@ def _read_task_lock_epoch(path: str) -> Optional[float]:
         return None
 
 
+def _tmux_window_epoch(session: str, window: str = "0") -> Optional[float]:
+    """Epoch the tmux Window 0 was created (#{window_created}), or None.
+
+    The missing discriminator of the boot-epoch heuristic: when the WHOLE
+    tmux server dies while the container lives on, entrypoint.sh's PID-1
+    watchdog (entrypoint.sh:301-309) recreates the entire session — Window 0
+    included — while PID 1 (and thus the boot epoch) never changes. The lock
+    was written during this container life, so `lock >= boot` wrongly said
+    "a turn is in flight" and startup recovery was skipped forever, leaving
+    an orphaned lock and a deaf agent. The turn that wrote the lock ran in
+    the OLD window: if the CURRENT Window 0 was created AFTER the lock, that
+    turn cannot be alive, whatever the boot clock says.
+    """
+    try:
+        out = subprocess.run(
+            ["tmux", "display-message", "-p", "-t", f"{session}:{window}",
+             "#{window_created}"],
+            capture_output=True, text=True, timeout=5, check=True,
+        ).stdout.strip()
+        return float(out)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
 def drive_live_run(
     lifecycle: MCLifecycle,
     run_once: Callable[[], RunOutcome],
@@ -2534,6 +2558,7 @@ def serve_loop(
     _task_lock_path: Optional[str] = None,
     _nudge_state_file: Optional[str] = None,
     _nudge_msg_file: Optional[str] = None,
+    _window_epoch_fn: Optional[Callable[[], Optional[float]]] = None,
     _child_alive_fn: Optional[Callable[[], bool]] = None,
     _boot_epoch_fn: Optional[Callable[[], Optional[float]]] = None,
     _acp_prompt: Optional[Callable[[str], bool]] = None,
@@ -2597,10 +2622,6 @@ def serve_loop(
     # process without any task_active gate whenever it's not alive, while
     # Window 0 (the persistent native TUI, and any native turn running in
     # it) is a separate tmux window that survives untouched. In that case
-    # the lock is NOT stale — a turn may genuinely still be running — and
-    # both removing it and (below) firing startup recovery on top of it
-    # would kill live work via controller.relaunch()'s `tmux respawn-window
-    # -k`.
     #
     # Round 1 tried "Window 0's child process alive" as the discriminator —
     # WRONG (review PR #522 B1, round 2): `entrypoint.sh:start_native()`
@@ -2621,14 +2642,35 @@ def serve_loop(
     # (docker/shared/poll.sh:1247-1252) on the other side of the same
     # decision, using a signal poll.sh doesn't need because it never shares
     # a process with a respawn script.
+    #
+    # Round 3 fix (2026-09-18 incident, hole 4): the boot comparison has a
+    # blind spot — a FULL tmux server death while the container lives on.
+    # entrypoint.sh's PID-1 watchdog (entrypoint.sh:301-309) then recreates
+    # the ENTIRE session ("tmux session gone — recreating" → start_native),
+    # PID 1 never changes, and the lock (written before the crash) postdates
+    # the boot → "turn in flight" → recovery skipped forever, agent deaf.
+    # The precise clock is the CURRENT Window 0's creation time
+    # (#{window_created}): the turn that wrote the lock ran in the OLD
+    # window, so window created AFTER the lock ⇒ that turn cannot be alive.
+    # This subsumes the boot check (a fresh container also gets a fresh
+    # window) and preserves the bridge-only-respawn case (Window 0 predates
+    # the lock ⇒ in flight, leave it). Fall back to the boot comparison when
+    # tmux is unreachable, and to the round-1 child-alive signal when neither
+    # clock is readable.
     turn_appears_in_flight = False
     if os.path.exists(task_lock_path):
         lock_epoch = _read_task_lock_epoch(task_lock_path)
         boot_epoch = boot_epoch_fn()
-        if lock_epoch is not None and boot_epoch is not None:
+        window_epoch = (
+            _window_epoch_fn or
+            (lambda: _tmux_window_epoch(session))
+        )()
+        if lock_epoch is not None and window_epoch is not None:
+            stale = lock_epoch < window_epoch
+        elif lock_epoch is not None and boot_epoch is not None:
             stale = lock_epoch < boot_epoch
         else:
-            # Can't read either clock (e.g. non-Linux dev host without
+            # Can't read any clock (e.g. non-Linux dev host without
             # /proc) — fall back to the round-1 signal rather than guess.
             stale = not child_alive_fn()
         if stale:
@@ -2640,9 +2682,10 @@ def serve_loop(
         else:
             turn_appears_in_flight = True
             sys.stderr.write(
-                "[serve] task lock was set during this container's own "
-                "life — treating as a native turn in flight (bridge-only "
-                "respawn), leaving the lock and skipping startup recovery\n"
+                "[serve] task lock postdates the current Window 0 (and this "
+                "container's boot) — treating as a native turn in flight "
+                "(bridge-only respawn), leaving the lock and skipping "
+                "startup recovery\n"
             )
 
     # Comment / thread-message wake-ups: native agents paste into Window 0;
