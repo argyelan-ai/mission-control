@@ -1559,19 +1559,35 @@ class TaskMonitorMixin:
         agent: Agent | None,
         children: list[Task],
     ) -> datetime | None:
-        """Latest real activity on this card (not system comments, not heartbeats).
+        """Latest real activity on this card — server-observed evidence only.
 
         Counts:
         - agent/user comments on this task (system/watchdog_notify ignored —
           counting those as activity is what restacks reminders)
-        - assigned agent's last_task_activity_at, but only if they are
-          actually on THIS card (the column is agent-global)
-        - ack_at / started_at (work started)
+        - the newest harvested ModelUsageEvent.ts for this task — the one
+          liveness signal the agent cannot fabricate by existing (a
+          working-heartbeat is derived from mere lock-file existence, and
+          that file survives a dead turn — 2026-09-18, card b2ea802f: 9h
+          blind because the heartbeat kept stamping
+          agent.last_task_activity_at)
+        - started_at (work began; first-set-wins, immune to recovery
+          re-deliveries — unlike ack_at, which the poll handler re-sets on
+          EVERY prompt re-delivery and tier-3 recovery resets + redelivery
+          re-sets, zeroing this clock without any work happening)
         - last child completed_at/updated_at (so a parent whose children
           just finished is not flagged for 30 min)
-        Deliberately omitted: updated_at (any metadata PATCH resets it),
-        last_seen_at (wrapper heartbeat ≠ a turn).
+        Deliberately omitted:
+        - updated_at (any metadata PATCH resets it)
+        - last_seen_at (wrapper heartbeat ≠ a turn)
+        - agent.last_task_activity_at (self-reported: stamped by every
+          status="working" heartbeat, whose status comes from file
+          existence — the observed party vouching for itself)
+        - task.ack_at (re-delivery latch: re-set by the poll recovery
+          branch, cleared+re-set by tier-3 — a repair attempt must not
+          reset a silence clock)
         """
+        from app.services.task_evidence import latest_model_event_at
+
         last_real_comment = (await session.exec(
             select(TaskComment)
             .where(
@@ -1582,13 +1598,7 @@ class TaskMonitorMixin:
             .limit(1)
         )).first()
 
-        turn_at = None
-        if (
-            agent is not None
-            and agent.current_task_id == task.id
-            and agent.last_task_activity_at is not None
-        ):
-            turn_at = agent.last_task_activity_at
+        model_event_at = await latest_model_event_at(session, task.id)
 
         child_times = [
             (c.completed_at or c.updated_at)
@@ -1597,11 +1607,11 @@ class TaskMonitorMixin:
 
         return _dt_max(
             last_real_comment.created_at if last_real_comment else None,
-            turn_at,
-            task.ack_at,
+            model_event_at,
             task.started_at,
             *child_times,
         )
+
     async def _check_silent_mailbox(self, session: AsyncSession) -> None:
         """Report agents whose mailbox has queued work but nobody pulling it.
 

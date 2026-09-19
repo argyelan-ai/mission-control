@@ -1675,9 +1675,26 @@ class TaskRunnerService:
             if seen_age >= _liveness_floor_seconds(agent):
                 continue  # wrapper dead → do NOT block (orphan → inbox recovery)
 
-            # DEAD TURN: last_task_activity_at stale beyond the runtime-aware,
-            # floored threshold. COALESCE onto last_seen_at only for legacy NULL.
-            activity_ref = agent.last_task_activity_at or agent.last_seen_at
+            # DEAD TURN: stale beyond the runtime-aware, floored threshold.
+            # Evidence order (2026-09-18 incident, card b2ea802f — 9h blind):
+            # 1. newest harvested ModelUsageEvent.ts for THIS task — the one
+            #    liveness signal the agent cannot fabricate by existing.
+            #    agent.last_task_activity_at alone is blind: every heartbeat
+            #    carrying status="working" restamps it, and that status is
+            #    derived from mere lock-file existence (bridge task_active
+            #    lambda) — a dead turn with a surviving lock file looks
+            #    alive forever.
+            # 2. Legacy fallback (last_task_activity_at / last_seen_at) for
+            #    runtimes whose transcripts are NOT harvested — no evidence
+            #    must mean "fall back", never "dead" (prime directive: a
+            #    genuinely-working agent must never be blocked).
+            from app.services.task_evidence import latest_model_event_at
+            model_event_at = await latest_model_event_at(session, task.id)
+            activity_ref = (
+                model_event_at
+                or agent.last_task_activity_at
+                or agent.last_seen_at
+            )
             if activity_ref is None:
                 continue
             mins_silent = (now - ensure_aware(activity_ref)).total_seconds() / 60.0

@@ -356,17 +356,85 @@ async def test_fresh_agent_comment_is_not_silent(
 
 
 @pytest.mark.asyncio
-async def test_fresh_agent_turn_is_not_silent(
+async def test_heartbeat_stamp_alone_no_longer_masks_silence(
     make_board, make_agent, make_task,
 ):
+    """Hole 1 (2026-09-18, card b2ea802f): agent.last_task_activity_at is
+    restamped by every status="working" heartbeat whose status is derived
+    from mere lock-file existence — a dead turn with a surviving lock file
+    looks active forever. The self-reported stamp alone must NOT keep the
+    card quiet; only server-observed evidence (comments, harvested model
+    events, started_at, child completions) counts."""
     _board, _lead, worker, task = await _make_silent_setup(
         make_board, make_agent, make_task,
-        activity_age_minutes=1,
+        activity_age_minutes=1,  # heartbeat keeps restamping "working"
     )
     async with _session() as s:
         await _run_check(s)
 
+    notes = await _comments(task.id, "watchdog_notify")
+    assert len(notes) == 1, (
+        "a freshly restamped heartbeat with NO harvest evidence must not "
+        "mask a 45min-silent card"
+    )
+
+
+@pytest.mark.asyncio
+async def test_fresh_model_usage_event_is_not_silent(
+    make_board, make_agent, make_task,
+):
+    """The harvested transcript is the one liveness signal the agent cannot
+    fabricate by existing — a fresh ModelUsageEvent proves the LLM turn ran
+    and must keep the card quiet even with a stale heartbeat stamp."""
+    _board, _lead, worker, task = await _make_silent_setup(
+        make_board, make_agent, make_task,
+        activity_age_minutes=45,  # stamp stale
+    )
+    async with _session() as s:
+        from app.models.model_usage import ModelUsageEvent
+        s.add(ModelUsageEvent(
+            agent_id=worker.id,
+            task_id=task.id,
+            harness="cli-bridge",
+            model="test-model",
+            session_id="sess-1",
+            message_uuid=f"mu-{uuid.uuid4().hex}",
+            source_file="transcripts/test.jsonl",
+            ts=utcnow() - timedelta(minutes=5),
+        ))
+        await s.commit()
+
+    async with _session() as s:
+        await _run_check(s)
+
     assert await _comments(task.id, "watchdog_notify") == []
+
+
+@pytest.mark.asyncio
+async def test_recovery_redelivered_ack_no_longer_resets_clock(
+    make_board, make_agent, make_task,
+):
+    """Hole 2 (2026-09-18): the poll recovery branch re-sets task.ack_at on
+    EVERY prompt re-delivery (routers/agents.py), and tier-3 clears +
+    redelivery re-sets it — each cycle zeroed the silent-card clock without
+    any work happening. A fresh ack_at with stale real evidence must NOT
+    keep the card quiet; started_at (first-set-wins) is the anchor."""
+    _board, _lead, _worker, task = await _make_silent_setup(
+        make_board, make_agent, make_task,
+    )
+    from app.models.task import Task
+    async with _session() as s:
+        t = await s.get(Task, task.id)
+        t.ack_at = utcnow() - timedelta(minutes=2)  # re-set by redelivery
+        s.add(t)
+        await s.commit()
+    async with _session() as s:
+        await _run_check(s)
+
+    notes = await _comments(task.id, "watchdog_notify")
+    assert len(notes) == 1, (
+        "a redelivery-refreshed ack_at must not reset the silence clock"
+    )
 
 
 @pytest.mark.asyncio
