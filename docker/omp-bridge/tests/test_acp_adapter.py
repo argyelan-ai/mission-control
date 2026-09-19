@@ -485,6 +485,26 @@ def test_acp_permission_ask_failure_rejects_once():
     print("PASS test_acp_permission_ask_failure_rejects_once")
 
 
+def test_acp_permission_raw_input_non_dict_falls_back_to_kind():
+    # Regression: rawInput as a plain string crashed with
+    # AttributeError: 'str' object has no attribute 'get' (bridge.py:4005).
+    params = {"toolCall": {"kind": "execute", "rawInput": "cd /work"}}
+    asked: list = []
+    decision = bridge._acp_permission_decision(
+        params, policy="ask", task_id="T1",
+        ask_fn=lambda t, q: asked.append(q) or "yes")
+    assert decision == acp_client.ALLOW_ALWAYS
+    # Fallback order intact: no title, non-dict rawInput -> ask text shows kind.
+    assert asked and asked[0] == "Freigabe (ask): execute"
+    # Dict rawInput still surfaces the command in the ask text.
+    params2 = {"toolCall": {"kind": "execute", "rawInput": {"command": "echo hi"}}}
+    asked2: list = []
+    bridge._acp_permission_decision(
+        params2, policy="ask", task_id="T1",
+        ask_fn=lambda t, q: asked2.append(q) or "no")
+    assert asked2 and asked2[0] == "Freigabe (ask): echo hi"
+    print("PASS test_acp_permission_raw_input_non_dict_falls_back_to_kind")
+
 # ---------------------------------------------------------------------------
 # Sabotage probe: without OMP_DRIVER the native path is selected
 # ---------------------------------------------------------------------------

@@ -4002,7 +4002,9 @@ def _acp_permission_decision(
     """
     tool = params.get("toolCall") or {}
     kind = str(tool.get("kind") or "")
-    title = str(tool.get("title") or tool.get("rawInput", {}).get("command") or kind)
+    raw_input = tool.get("rawInput")
+    raw_command = raw_input.get("command") if isinstance(raw_input, dict) else None
+    title = str(tool.get("title") or raw_command or kind)
     if policy == "yolo" and kind in ACP_YOLO_KINDS:
         return acp_client.ALLOW_ALWAYS
     if ask_fn is None:
