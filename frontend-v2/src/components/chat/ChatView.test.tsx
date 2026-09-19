@@ -1901,6 +1901,31 @@ describe("ChatView", () => {
       expect(mobileBlock).toMatch(/padding-top:\s*calc\(env\(safe-area-inset-top\)/);
     });
 
+    it("malt die eigene Fläche deckend und mit, nicht neben, dem Notch-Streifen", () => {
+      // Operator-Befund 19.09.2026 („header ist immer noch halbe
+      // transparent"): der Kopf trug gar keine eigene Flaeche, sichtbar war
+      // nur der Grund von `chat-column` — und den Streifen, den `pt-safe-top`
+      // freihaelt, malte der Plattform-Backdrop durch den transparenten Kopf
+      // hindurch.
+      //
+      // Der Test prueft deshalb BEIDES zusammen: die Flaeche sitzt auf
+      // DEMSELBEN Element wie `pt-safe-top` (Polsterung liegt innerhalb der
+      // Hintergrundbox — waere sie auf einem Nachbarelement, bliebe der
+      // Streifen offen), und sie ist ein Theme-Token, kein Farbwert.
+      renderChatView({ onBack: vi.fn() });
+      const header = screen.getByTestId("chat-header");
+      expect(header.className).toContain("pt-safe-top");
+      expect(header.className).toContain("bg-[var(--color-bg-surface)]");
+      // Kein Inline-Stil: der schluege jede Klasse und damit spaetere
+      // md-Varianten (dieselbe Falle wie beim Titel-Block).
+      expect(header.style.backgroundColor).toBe("");
+      // Zweite Haelfte: das Token muss es in globals.css auch geben, sonst
+      // waere die Klasse ein wirkungsloser Name. `.bg-surface` ist die
+      // Kurzform, die Utility oben die im Chat benutzte.
+      expect(GLOBALS_CSS).toMatch(/--color-bg-surface:\s*#/);
+      expect(GLOBALS_CSS).toMatch(/\.bg-surface\s*\{\s*background-color:\s*var\(--color-bg-surface\)/);
+    });
+
     it("gibt Zurück und Optionen eine runde Form", () => {
       renderChatView({ onBack: vi.fn() });
       // Der Kreis ist das SICHTBARE Element im Knopf, nicht der Knopf selbst —
