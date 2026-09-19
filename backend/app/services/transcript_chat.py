@@ -44,6 +44,22 @@ that event's own ``uuid`` — same pattern as ``_tool_result``, just keyed by
 parent chain instead of a tool-call id; never reaches the frontend on its
 own.
 
+Claude Code marks its OWN injected turns — text addressed to the MODEL, not
+to the operator — with ``"isMeta": true`` (operator finding 19.09.2026). The
+caveat wrapper above is one such line, but it is not the only one: scheduled
+prompts (``promptSource: "system"``), skill preambles and autonomous-loop
+nudges carry the same marker with arbitrary wording. ``_parse_user_entry``
+therefore drops any user entry whose ``isMeta`` is exactly ``true`` before
+looking at its content at all — the vendor marks its own meta-lines, so no
+wording-, language- or version-dependent pattern list is needed. Measured
+over 161 real session files (60,689 lines): 156 lines carry the marker, and
+over the 154 project transcripts ``read_history`` renders 25 of them as a
+chat bubble — all 25 are exactly the events this gate removes, with no other
+event kind losing a single entry. None of the 156 carries a ``tool_result``
+block, so the gate cannot orphan a tool row. Only the explicit boolean counts
+— an absent field (485 real text lines) and an explicit ``false`` keep
+flowing.
+
 ``message.content`` has TWO shapes in real transcripts: the API's list-of-
 blocks form, and a plain string — real interactively-typed user turns write
 the latter (fix round 5, live-gate finding: string content silently produced
@@ -439,6 +455,23 @@ def _parse_attachment_entry(d: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _parse_user_entry(d: dict[str, Any]) -> list[dict[str, Any]]:
+    # Harness-Meta-Zeile (Operator-Befund 19.09.2026): Claude Code markiert
+    # seine EIGENEN, an das Modell gerichteten Einschuebe selbst mit
+    # ``isMeta: true`` — die Caveat-Huelle, eingeschleuste Zeitplan-Auftraege,
+    # Skill-Vorspaenne. Sie gehoeren nicht ins Gespraech: der Operator hat sie
+    # nie getippt. Gemessen an 161 echten Sitzungsdateien (60.689 Zeilen):
+    # 156 Zeilen tragen die Markierung, davon wurden 25 vorher als Blase
+    # gezeigt; keine einzige traegt ein ``tool_result``, das Gate kann also
+    # keine Werkzeugkachel verwaisen lassen.
+    #
+    # Bewusst NUR das ausdrueckliche ``True``: ein fehlendes Feld muss
+    # weiterlaufen (485 echte Textzeilen ohne den Schluessel), und ein falsch
+    # gesetztes ``False`` ebenso. Die Verengung auf die Markierung ersetzt
+    # jede Wortlaut-Liste — die verrottet mit jeder Claude-Code-Version und
+    # haengt an Sprache und Formulierung.
+    if d.get("isMeta") is True:
+        return []
+
     msg_uuid = d.get("uuid")
     ts = d.get("timestamp")
     message = d.get("message")
