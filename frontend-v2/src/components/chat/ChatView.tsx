@@ -685,7 +685,17 @@ export function ChatView({
         // (AppShell blendet die App-Leiste auf dem Chat-Schirm aus), also muss
         // sie den Notch selbst freihalten — sonst sitzt der Agentenname unter
         // der Uhrzeit des Telefons.
-        className="relative flex items-center gap-2 pl-1 pr-2 md:px-4 py-1.5 md:py-2.5 pt-safe-top md:pt-2.5 border-b shrink-0"
+        //
+        // Deckende Flaeche (Operator-Befund 19.09.2026): der Kopf hatte gar
+        // keine eigene — sichtbar war bisher nur der Grund der Ahnen
+        // (`chat-column`), und der Notch-Streifen, den `pt-safe-top`
+        // freihaelt, wurde vom Plattform-Backdrop durch den transparenten
+        // Kopf hindurchgemalt. Beim Ueberziehen (iOS-Rubber-Band) liest sich
+        // Inhalt darin durch. `padding-top` liegt INNERHALB der
+        // Hintergrundbox: dieselbe Utility-Klasse deckt den Streifen mit ab.
+        // Token, nicht Farbwert — beide Themes. Kein Inline-Stil: der
+        // schluege jede Klasse und damit spaetere md-Varianten.
+        className="relative flex items-center gap-2 pl-1 pr-2 md:px-4 py-1.5 md:py-2.5 pt-safe-top md:pt-2.5 border-b shrink-0 bg-[var(--color-bg-surface)]"
         style={{ borderColor: C.border }}
       >
         {onBack && (
