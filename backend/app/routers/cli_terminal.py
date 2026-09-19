@@ -870,6 +870,11 @@ def _hermes_ws_send_keys(message: str) -> dict:
     - `tmux has-session -t hermes-worker` is checked first; if absent the WS
       stays open but returns an error dict so the caller can relay it to the
       client — no crash, no silent drop.
+    - `#{pane_mode}` is probed before sending (same probe and refusal shape as
+      docker/host-pty-bridge/server.py, PR #629). A pane in copy-mode swallows
+      send-keys at rc=0: the keystroke never reaches the TUI, so acking
+      {"ok": True} there was a silent loss. Refusals are honest — ok=False plus
+      the probed mode, never a fake success.
     - Session name is hardcoded to "hermes-worker" (T-27-10 mitigation: no
       user-controllable part in the tmux target).
     """
@@ -886,7 +891,37 @@ def _hermes_ws_send_keys(message: str) -> dict:
     if check.returncode != 0:
         return {"ok": False, "error": f"tmux session '{session_name}' not found"}
 
-    # 2. Send keystrokes — trailing "" means "no Enter" (caller decides)
+    # 2. Probe the pane mode first. Empty output = no mode (the normal case);
+    #    anything else (e.g. "copy-mode") means tmux would swallow the keys.
+    #    A failed probe (no server on the socket, timeout, ...) is NOT a
+    #    refusal: it falls through so send-keys' own return code decides,
+    #    exactly like the bridge does.
+    try:
+        probe = subprocess.run(
+            [
+                "tmux", "display-message", "-p",
+                "-t", session_name, "#{pane_mode}",
+            ],
+            capture_output=True,
+        )
+        pane_mode = probe.stdout.decode(errors="replace").strip() if probe.returncode == 0 else ""
+    except Exception:  # noqa: BLE001 — Probe unmoeglich: send-keys entscheidet selbst
+        pane_mode = ""
+    if pane_mode:
+        logger.warning(
+            "hermes ws send_keys refused: pane in %r (session=%s) — keys would be swallowed",
+            pane_mode, session_name,
+        )
+        return {
+            "ok": False,
+            "pane_mode": pane_mode,
+            "error": (
+                f"pane is in {pane_mode!r}; keys would be swallowed — "
+                f"leave copy-mode first"
+            ),
+        }
+
+    # 3. Send keystrokes — trailing "" means "no Enter" (caller decides)
     result = subprocess.run(
         ["tmux", "send-keys", "-t", session_name, message, ""],
         capture_output=True,
