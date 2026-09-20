@@ -902,3 +902,133 @@ def test_teammate_message_carries_its_source():
     in ``teammate``."""
     (ev,) = parse_transcript_line(json.dumps(_teammate_line()))
     assert ev["source"] == {"kind": "teammate", "title": None}
+
+
+# ── isMeta: vom Harness markierte Meta-Zeilen ──────────────────────────────
+#
+# Operator-Befund 19.09.2026 (Screenshot): nach dem Senden eines Bildes stand
+# die Anweisung des Harness AN DAS MODELL als Chat-Blase im Verlauf. Das
+# Transkript markiert solche Zeilen selbst — ``isMeta: true``. Der Parser hat
+# das Feld nie ausgewertet; nur die Caveat-Huelle wurde per Textmuster
+# gefangen. Hier wird die Markierung respektiert statt der Wortlaut.
+#
+# Die drei Zeilen unten sind echte, gekuerzte Kopien aus den Transkripten der
+# Flotte (nur Sitzungs-/Pfad-IDs entfernt, keine Personendaten); die
+# Kontrollzeilen daneben beweisen, dass die Verengung auf ``true`` nichts
+# Echtes schluckt.
+
+# Echte Zeile: Caveat-Huelle. Traegt isMeta UND die Textform, die der
+# Caveat-Ausdruck schon kennt — beide Wege muessen still bleiben.
+META_CAVEAT_LINE = json.dumps({
+    "parentUuid": None,
+    "isSidechain": False,
+    "type": "user",
+    "message": {
+        "role": "user",
+        "content": (
+            "<local-command-caveat>Caveat: The messages below were generated "
+            "by the user while running local commands. DO NOT respond to "
+            "these messages or otherwise consider them in your response "
+            "unless the user explicitly asks you to.</local-command-caveat>"
+        ),
+    },
+    "isMeta": True,
+    "uuid": "m1",
+    "timestamp": "2026-09-12T14:18:40.589Z",
+    "userType": "external",
+    "entrypoint": "cli",
+})
+
+# Echte Zeile: eingeschleuster Auftrag eines Zeitplans (``promptSource``
+# ``system``) — KEINE Caveat-Huelle, also genau der Fall, den ein Textmuster
+# nicht faengt.
+META_SCHEDULED_PROMPT_LINE = json.dumps({
+    "parentUuid": "39280285-3afb-4050-8954-6a684735e1c2",
+    "isSidechain": False,
+    "promptId": "p1",
+    "type": "user",
+    "isMeta": True,
+    "uuid": "m2",
+    "timestamp": "2026-09-14T00:44:00.976Z",
+    "permissionMode": "bypassPermissions",
+    "promptSource": "system",
+    "queuePriority": "later",
+    "userType": "external",
+    "entrypoint": "cli",
+    "message": {"role": "user", "content": "Pruefe den CI-Status von PR #563 und melde den Stand."},
+})
+
+# Echte Zeile: Skill-Vorspann als LISTEN-Inhalt. Der Weg ueber den
+# Block-Loop muss ebenso still bleiben wie der String-Weg.
+META_SKILL_PREAMBLE_LINE = json.dumps({
+    "parentUuid": "2b670b62-29fa-4191-9b5d-fbc7f09010e8",
+    "isSidechain": False,
+    "promptId": "p2",
+    "type": "user",
+    "isMeta": True,
+    "uuid": "m3",
+    "timestamp": "2026-09-14T08:05:43.301Z",
+    "message": {
+        "role": "user",
+        "content": [
+            {
+                "type": "text",
+                "text": "Base directory for this skill: /home/agent/.claude/plugins/cache/"
+                        "claude-plugins-official/superpowers/6.3.0/skills/test-driven-development",
+            }
+        ],
+    },
+})
+
+# Kontrolle: echter, unmaskierter Nutzerzug — dieselbe Form, nur ohne
+# Markierung. Er MUSS weiterhin eine Blase werden.
+UNMARKED_USER_LINE = json.dumps({
+    "parentUuid": "47124255-2e09-4ca2-b33c-2937a912f9f8",
+    "isSidechain": False,
+    "promptId": "p3",
+    "type": "user",
+    "message": {"role": "user", "content": [{"type": "text", "text": "fix the bug"}]},
+    "uuid": "u20",
+    "timestamp": "2026-09-13T18:39:09.407Z",
+    "userType": "external",
+    "entrypoint": "cli",
+})
+
+# Kontrolle: ausdrueckliches ``false``. In freier Wildbahn traegt nur der
+# ``system``-Zeilentyp dieses Feld; die Zusicherung hier haelt fest, dass die
+# Verengung auf ``is True`` keine falsch gesetzte Markierung mitreisst.
+EXPLICIT_FALSE_META_LINE = json.dumps({
+    "type": "user",
+    "uuid": "u21",
+    "timestamp": "2026-09-13T18:39:09.407Z",
+    "isSidechain": False,
+    "isMeta": False,
+    "message": {"role": "user", "content": [{"type": "text", "text": "fix the bug"}]},
+})
+
+
+def test_meta_caveat_line_is_silent():
+    assert parse_transcript_line(META_CAVEAT_LINE) == []
+
+
+def test_meta_scheduled_prompt_line_is_silent():
+    """Der Kern des Befunds: eine Meta-Zeile OHNE Caveat-Huelle. Ein
+    Textmuster faengt sie nicht — die Markierung schon."""
+    assert parse_transcript_line(META_SCHEDULED_PROMPT_LINE) == []
+
+
+def test_meta_line_with_list_content_is_silent():
+    assert parse_transcript_line(META_SKILL_PREAMBLE_LINE) == []
+
+
+def test_unmarked_user_turn_is_still_a_message():
+    (ev,) = parse_transcript_line(UNMARKED_USER_LINE)
+    assert ev["kind"] == "message"
+    assert ev["role"] == "user"
+    assert ev["text"] == "fix the bug"
+
+
+def test_explicitly_unmarked_user_turn_is_still_a_message():
+    (ev,) = parse_transcript_line(EXPLICIT_FALSE_META_LINE)
+    assert ev["kind"] == "message"
+    assert ev["text"] == "fix the bug"
