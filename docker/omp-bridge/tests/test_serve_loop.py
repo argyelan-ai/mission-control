@@ -63,7 +63,7 @@ class RecordingLifecycle(bridge.MCLifecycle):
 
 
 def _run(poll_states, run_factory, *, iterations, lifecycle=None, recovery_fn=None,
-         task_lock_path=None, child_alive=None, boot_epoch=None):
+         task_lock_path=None, child_alive=None, boot_epoch=None, window_epoch=None):
     lc = lifecycle or RecordingLifecycle()
     it = iter(poll_states)
 
@@ -101,6 +101,7 @@ def _run(poll_states, run_factory, *, iterations, lifecycle=None, recovery_fn=No
         _context_env_path=ctx,
         _task_lock_path=task_lock_path,
         _child_alive_fn=child_alive,
+        _window_epoch_fn=(lambda: window_epoch) if window_epoch is not None else None,
         _boot_epoch_fn=boot_epoch_fn,
     )
     return lc
@@ -435,6 +436,89 @@ def test_startup_recovery_falls_back_to_child_alive_when_boot_epoch_unavailable(
     assert lc_holder.calls == []
     assert os.path.exists(lock_path), "fallback treated the turn as in flight, lock kept"
     print("PASS test_startup_recovery_falls_back_to_child_alive_when_boot_epoch_unavailable")
+
+
+def test_startup_recovery_runs_when_window_recreated_despite_fresh_boot():
+    # THE hole-4 regression (2026-09-18 incident): the WHOLE tmux server dies
+    # while the container lives on. entrypoint.sh:301-309 recreates the full
+    # session (Window 0 included) — PID 1 never changes, so the lock (written
+    # before the crash) postdates the boot epoch and round 2 wrongly said "a
+    # turn is in flight": recovery skipped forever, orphaned lock, deaf
+    # agent. The current Window 0 was created AFTER the lock — the turn that
+    # wrote it ran in the OLD window and cannot be alive. Recovery must fire
+    # and the lock must be cleared.
+    import tempfile
+    lock_path = os.path.join(
+        tempfile.mkdtemp(prefix="omp-lock-window-epoch-"), "task.lock"
+    )
+    with open(lock_path, "w", encoding="utf-8") as fh:
+        fh.write("1500000000")  # written mid-life, before the tmux death
+
+    recovery_calls = {"n": 0}
+
+    def recovery():
+        recovery_calls["n"] += 1
+        return {"state": "new_task", "task": TASK}
+
+    runs = {"n": 0}
+
+    def rf(task, cwd):
+        def _once():
+            runs["n"] += 1
+            return _finish_outcome()
+        return _once
+
+    lc = _run(
+        [{"state": "working", "task_id": "task-1"}],
+        rf, iterations=1, recovery_fn=recovery,
+        task_lock_path=lock_path,
+        boot_epoch=1000000000,    # lock POSTDATES boot → round 2 kept it
+        window_epoch=1600000000,  # Window 0 recreated AFTER the lock → stale
+    )
+    assert recovery_calls["n"] == 1, recovery_calls
+    assert runs["n"] == 1, runs
+    assert ("ack", "task-1") in lc.calls
+    assert any(c[0] == "finish" for c in lc.calls)
+    assert not os.path.exists(lock_path), "orphaned lock must be cleared"
+    print("PASS test_startup_recovery_runs_when_window_recreated_despite_fresh_boot")
+
+
+def test_startup_recovery_skipped_when_lock_postdates_window():
+    # Bridge-only respawn (PR #522 case) WITH the window seam live: Window 0
+    # predates the lock → the turn may genuinely still own it → leave the
+    # lock, skip recovery.
+    import tempfile
+    lock_path = os.path.join(
+        tempfile.mkdtemp(prefix="omp-lock-window-fresh-"), "task.lock"
+    )
+    with open(lock_path, "w", encoding="utf-8") as fh:
+        fh.write("2000000000")
+
+    recovery_calls = {"n": 0}
+
+    def recovery():
+        recovery_calls["n"] += 1
+        return {"state": "new_task", "task": TASK}
+
+    runs = {"n": 0}
+
+    def rf(task, cwd):
+        def _once():
+            runs["n"] += 1
+            return _finish_outcome()
+        return _once
+
+    lc = _run(
+        [{"state": "working", "task_id": "task-1"}],
+        rf, iterations=1, recovery_fn=recovery,
+        task_lock_path=lock_path,
+        boot_epoch=1000000000,
+        window_epoch=1500000000,  # window PREDATES the lock → in flight
+    )
+    assert recovery_calls["n"] == 0, recovery_calls
+    assert lc.calls == []
+    assert os.path.exists(lock_path), "lock must survive while a turn appears in flight"
+    print("PASS test_startup_recovery_skipped_when_lock_postdates_window")
 
 
 def test_make_http_recovery_translates_active_and_inactive():
