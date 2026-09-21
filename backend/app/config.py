@@ -81,6 +81,9 @@ class Settings(BaseSettings):
     telegram_approvals_enabled: bool = True
     slack_reports_enabled: bool = True
     slack_approvals_enabled: bool = True
+    # Pilot #386 Punkt 1: Statuswechsel von aussen dem arbeitenden Agenten
+    # als System-Kommentar zustellen. Standard AUS.
+    status_change_delivery_enabled: bool = False
 
     # Slack Team-Chat (ADR-072). Bewusst dasselbe Paar wie bei Telegram:
     # ein Schalter + ein Ziel. Die beiden Slack-TOKEN liegen dagegen NICHT

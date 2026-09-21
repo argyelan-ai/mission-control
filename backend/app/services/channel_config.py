@@ -51,6 +51,8 @@ CHANNEL_SETTING_FIELDS: dict[str, type] = {
     "slack_team_chat_enabled": bool,
     "slack_reports_enabled": bool,
     "slack_approvals_enabled": bool,
+    # Statuswechsel-Zustellung an den arbeitenden Agenten (#386 Punkt 1)
+    "status_change_delivery_enabled": bool,
     # Which chat adapters mirror the team chat (comma list, "" = all enabled)
     "chat_channels": str,
 }
