@@ -119,7 +119,11 @@ async def test_dependency_zombie_creates_approval(fake_redis, make_board, make_a
 
     mixin = TaskMonitorMixin()
 
-    with patch("app.services.watchdog.task_monitor.get_redis", return_value=fake_redis), \
+    from app.config import settings
+
+    # Approval-Pfad = Schalter aus (Lauf 4)
+    with patch.object(settings, "notice_only_escalations_enabled", False), \
+         patch("app.services.watchdog.task_monitor.get_redis", return_value=fake_redis), \
          patch("app.services.activity.broadcast", new_callable=AsyncMock):
         async with AsyncSession(test_engine, expire_on_commit=False) as s:
             await mixin._check_dependency_zombies(s)
@@ -297,7 +301,11 @@ async def test_zombie_still_fires_on_genuinely_dead_dependency(
 
     mixin = TaskMonitorMixin()
 
-    with patch("app.services.watchdog.task_monitor.get_redis", return_value=fake_redis), \
+    from app.config import settings
+
+    # Approval-Pfad = Schalter aus (Lauf 4)
+    with patch.object(settings, "notice_only_escalations_enabled", False), \
+         patch("app.services.watchdog.task_monitor.get_redis", return_value=fake_redis), \
          patch("app.services.activity.broadcast", new_callable=AsyncMock):
         async with AsyncSession(test_engine, expire_on_commit=False) as s1:
             await s1.get(Task, dep.id)

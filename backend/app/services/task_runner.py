@@ -36,6 +36,7 @@ from app.scopes import Scope, get_agent_effective_scopes
 from app.services.activity import emit_event
 from app.services.dispatch import auto_dispatch_task
 from app.services.messaging import last_task_activity, maybe_post_finish_nudge
+from app.services.operator_notices import raise_notice
 from app.services.task_state import lock_and_set
 
 # W-busy (#25efd77c): grace window for a heal claimed while the agent's last
@@ -1003,47 +1004,67 @@ class TaskRunnerService:
         operator only noticed it locally at 12:00 (= 2h 17min reaction time).
         Telegram is the operator's push channel with high action-required value.
         """
-        approval = Approval(
-            board_id=task.board_id,
-            task_id=task.id,
-            agent_id=agent.id,
-            action_type="dispatch_escalation",
-            description=(
-                f"'{task.title}' — {agent.name} hat seit {int(minutes_waiting)} Min. "
-                f"nicht reagiert ({reason}). Bitte Task manuell zuweisen oder re-dispatchen."
-            ),
-            status="pending",
-            expires_at=utcnow() + timedelta(hours=24),
-        )
-        session.add(approval)
-        await session.commit()
-        await session.refresh(approval)
+        from app.config import settings
 
-        # D-2: direct Telegram push (action-required channel)
-        try:
-            from app.services import operator_approvals
-            await operator_approvals.send_approval(
-                approval.id,
-                agent.name,
-                task.title,
-                f"Dispatch-Eskalation nach {int(minutes_waiting)}min ohne ACK ({reason}). "
-                f"Manuell entscheiden: re-dispatchen, anderem Agent zuweisen oder canceln.",
+        if settings.notice_only_escalations_enabled:
+            # Notice-only path: no Approval row, no Telegram yes/no push,
+            # and no 'approval.created' event either (nothing was created)
+            # — raise_notice() below already emits its own board-scoped
+            # 'operator.notice' event (Pruefbericht M2 / Runde-2 Punkt 4).
+            await raise_notice(
+                session,
+                action_type="dispatch_escalation",
+                task=task,
+                title=f"Dispatch-Eskalation: '{task.title}' - {agent.name} reagiert nicht",
+                body=(
+                    f"'{task.title}' - {agent.name} hat seit {int(minutes_waiting)} Min. "
+                    f"nicht reagiert ({reason}). Bitte Task manuell zuweisen oder re-dispatchen."
+                ),
+                agent_id=agent.id,
+                board_id=task.board_id,
             )
-        except Exception as e:
-            logger.warning(
-                "D-2 Telegram-Push fuer dispatch_escalation approval %s failed: %s",
-                approval.id, e,
+        else:
+            approval = Approval(
+                board_id=task.board_id,
+                task_id=task.id,
+                agent_id=agent.id,
+                action_type="dispatch_escalation",
+                description=(
+                    f"'{task.title}' — {agent.name} hat seit {int(minutes_waiting)} Min. "
+                    f"nicht reagiert ({reason}). Bitte Task manuell zuweisen oder re-dispatchen."
+                ),
+                status="pending",
+                expires_at=utcnow() + timedelta(hours=24),
             )
+            session.add(approval)
+            await session.commit()
+            await session.refresh(approval)
 
-        await emit_event(
-            session,
-            "approval.created",
-            f"Dispatch-Eskalation: '{task.title}' — {agent.name} reagiert nicht",
-            severity="warning",
-            board_id=task.board_id,
-            task_id=task.id,
-            agent_id=agent.id,
-        )
+            # D-2: direct Telegram push (action-required channel)
+            try:
+                from app.services import operator_approvals
+                await operator_approvals.send_approval(
+                    approval.id,
+                    agent.name,
+                    task.title,
+                    f"Dispatch-Eskalation nach {int(minutes_waiting)}min ohne ACK ({reason}). "
+                    f"Manuell entscheiden: re-dispatchen, anderem Agent zuweisen oder canceln.",
+                )
+            except Exception as e:
+                logger.warning(
+                    "D-2 Telegram-Push fuer dispatch_escalation approval %s failed: %s",
+                    approval.id, e,
+                )
+
+            await emit_event(
+                session,
+                "approval.created",
+                f"Dispatch-Eskalation: '{task.title}' — {agent.name} reagiert nicht",
+                severity="warning",
+                board_id=task.board_id,
+                task_id=task.id,
+                agent_id=agent.id,
+            )
 
     # ── Tiered Recovery (Phase 6 REC-01/02/03) ───────────────────────
 

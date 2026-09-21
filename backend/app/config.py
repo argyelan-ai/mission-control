@@ -250,6 +250,14 @@ class Settings(BaseSettings):
     # Enabled in Phase E (2026-04-12) after the worker SOUL audit
     enforce_reflection: bool = True
 
+    # Notice-only escalations (2026-09-21): dispatch_escalation, lead_escalation,
+    # review_stuck and dependency_zombie are watchdog STOERUNGSMELDUNGEN, not
+    # operator decisions — 77 of 92 approvals in 30 days went unanswered
+    # because these auto-supersede the moment the card leaves the
+    # triggering state. True = raise a passive operator.notice + report
+    # instead of an Approval yes/no question.
+    notice_only_escalations_enabled: bool = True
+
     # Memory-System / Embeddings (Phase 3, 2026-04-11)
     # Any OpenAI-compatible /v1/embeddings endpoint (LM Studio, llama.cpp,
     # vLLM, ...). Empty = "not configured": memory inserts are saved without a

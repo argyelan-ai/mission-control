@@ -213,7 +213,11 @@ scopes=["tasks:read", "tasks:write", "heartbeat"],
     # Rotation already ran — marked via Redis
     await fake_redis.set(f"mc:task:{task.id}:attempt_rotated", "1")
 
-    with patch("app.services.activity.broadcast", new_callable=AsyncMock):
+    from app.config import settings
+
+    # Approval-Pfad = Schalter aus (Lauf 4)
+    with patch.object(settings, "notice_only_escalations_enabled", False), \
+         patch("app.services.activity.broadcast", new_callable=AsyncMock):
         async with AsyncSession(test_engine, expire_on_commit=False) as s:
             await task_runner._handle_ack_timeout(
                 s, await s.get(Task, task.id), agent, _now(), fake_redis,
