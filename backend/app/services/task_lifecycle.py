@@ -50,6 +50,8 @@ async def record_task_event(
     """Log a task-status event (event sourcing).
 
     Called on EVERY status change — regardless of whether it's User, Agent, Watchdog, or System.
+    Behind the ``status_change_delivery_enabled`` flag it also delivers the
+    change to the assigned agent as a system comment (#386 point 1).
     """
     event = TaskEvent(
         task_id=task_id,
@@ -61,6 +63,79 @@ async def record_task_event(
     )
     session.add(event)
     # No separate commit — caller commits together with the status update
+    await _deliver_status_change(
+        session, task_id, from_status, to_status, changed_by, agent_id, reason
+    )
+
+
+async def _deliver_status_change(
+    session: AsyncSession,
+    task_id: uuid.UUID,
+    from_status: str,
+    to_status: str,
+    changed_by: str,
+    agent_id: uuid.UUID | None,
+    reason: str | None,
+) -> None:
+    """Deliver an externally-triggered status change to the working agent.
+
+    Writes a ``system`` comment (already in DELIVERABLE_SYSTEM_TYPES, so the
+    next ``/agent/me/poll`` hands it to the assigned agent; the heartbeat
+    soft-interrupt only carries blocker/handoff and is NOT involved) when
+    the actor is not the assigned agent itself. Never commits, never raises:
+    a delivery problem must not break the status change it rides on.
+
+    Skipped on purpose:
+    - flag off (default) -> pure no-op, no session access
+    - ``changed_by="system"`` -> lifecycle-internal transitions (review
+      rejection redispatch, requeue, ...) already write their own system
+      comment or redispatch the card; a second one would be noise
+    - the assigned agent changed it itself (``changed_by="agent"`` and
+      ``agent_id == assigned``) -> no echo. A watchdog/user change that
+      passes the affected agent's id as ``agent_id`` IS delivered
+    - no assigned agent, or terminal ``failed``/``aborted``
+
+    Known limit: the poll only serves comments on inbox/in_progress/review/
+    blocked/done/user_test, so a change INTO ``waiting`` reaches the agent
+    only once the card is back in one of those lanes.
+    """
+    from app.config import settings
+
+    try:
+        if not getattr(settings, "status_change_delivery_enabled", False):
+            return
+        if to_status in ("failed", "aborted"):
+            return
+        task = await session.get(Task, task_id)
+        if task is None or task.assigned_agent_id is None:
+            return
+        if changed_by == "system":
+            return
+        if (
+            changed_by == "agent"
+            and agent_id is not None
+            and agent_id == task.assigned_agent_id
+        ):
+            return
+        content = (
+            f"Status von aussen geaendert: {from_status} -> {to_status} "
+            f"(durch {changed_by}"
+            + (f", Grund: {reason}" if reason else "")
+            + "). Bitte beruecksichtigen."
+        )
+        session.add(
+            TaskComment(
+                task_id=task_id,
+                author_type="system",
+                author_agent_id=None,
+                comment_type="system",
+                content=content,
+            )
+        )
+    except Exception:
+        logger.warning(
+            "status-change delivery failed for task %s", task_id, exc_info=True
+        )
 
 
 def task_still_reactivatable(task: Task, *, expected_status: str | None = None) -> bool:
