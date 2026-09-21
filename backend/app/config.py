@@ -81,6 +81,15 @@ class Settings(BaseSettings):
     telegram_approvals_enabled: bool = True
     slack_reports_enabled: bool = True
     slack_approvals_enabled: bool = True
+    # Lauf 3 (Messzahlen-Digest): einmal taeglich vier Messzahlen (stale
+    # cards, Reviews zum Lead, Doppel-Dispatch/Healer-Wiederholungen,
+    # Hand-Statuswechsel) als Report verschicken.
+    daily_metrics_enabled: bool = True
+    # UTC-Stunde, NICHT Marks Ortszeit. Es gibt aktuell keine
+    # Zeitzonen-Einstellung im System; die Container setzen kein TZ und
+    # laufen auf UTC (Pruefbericht N3). Stunde 7 = 09:00 in Zuerich im
+    # Sommer (UTC+2), 08:00 im Winter (UTC+1).
+    daily_metrics_hour: int = 7
     # Pilot #386 Punkt 1: Statuswechsel von aussen dem arbeitenden Agenten
     # als System-Kommentar zustellen. Standard AUS.
     status_change_delivery_enabled: bool = False
