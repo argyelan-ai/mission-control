@@ -314,6 +314,15 @@ class Settings(BaseSettings):
     # True = tasks with dispatch_phase="planning" are NOT auto-dispatched
     enable_dispatch_gating: bool = False
 
+    # Bauplan Lauf 2 Teil 2-4 (21.09.2026): Guard 3's turn-signal check
+    # (agent.status == "working" + fresh heartbeat) applies to ANY
+    # poll-based runtime, not just cli-bridge — 60/80 Hand-Starts traced to
+    # a host agent's turn being invisible to Guard 3. True = new behaviour
+    # (default). False = legacy: only cli-bridge is turn-gated, host/other
+    # runtimes dispatch even mid-turn (pre-Lauf-2 behaviour) — rollback path,
+    # flag + backend restart, no code change needed.
+    host_turn_signal_enabled: bool = True
+
     # Promote Orchestrator (Phase 4A)
     # False = planned tasks stay put until manually promoted
     # True = system makes auto-promote/approval/wait decisions every 30s

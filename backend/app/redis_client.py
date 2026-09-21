@@ -388,6 +388,17 @@ class RedisKeys:
         return f"mc:dispatch:resume_suppress:{task_id}"
 
     @staticmethod
+    def dispatch_turn_wait(task_id: str) -> str:
+        """Bauplan Lauf 2 Teil 4 (21.09.2026): dedup key for the
+        `task.dispatch_queued_behind_active` event that _check_dispatch_ack
+        emits (once) when it pauses the ACK/pending ladder because the
+        assigned agent is genuinely mid-turn (status=="working" + fresh
+        heartbeat). TTL 900s: long enough that a normal turn (Hermes median
+        9 min) produces exactly one notice, short enough that an hours-long
+        hang surfaces again every 15 min."""
+        return f"mc:dispatch:turn_wait:{task_id}"
+
+    @staticmethod
     def task_runner_stale(task_id: str) -> str:
         return f"mc:task_runner:stale:{task_id}"
 

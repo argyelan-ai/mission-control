@@ -4158,6 +4158,12 @@ async def agent_heartbeat(
 
     from app.models.task import Task as _Task
 
+    # Bauplan Lauf 2 Teil 3 (21.09.2026): captured BEFORE any mutation below,
+    # so the working->idle flank check further down compares against the
+    # state as it was when this heartbeat arrived — not against a value this
+    # same call already overwrote.
+    _prev_status = agent.status
+
     agent.last_seen_at = datetime.datetime.now(tz=datetime.timezone.utc)
 
     # The task table is the source of truth. We read it here once and
@@ -4311,6 +4317,29 @@ async def agent_heartbeat(
 
     session.add(agent)
     await session.commit()
+
+    # Bauplan Lauf 2 Teil 3 (21.09.2026): working->idle flank drains the
+    # agent's Redis task queue. Guard 3 (dispatch.py Teil 2) can queue a card
+    # behind an in-turn agent instead of pasting it; Hermes marks its task
+    # done/review BEFORE its ACP turn actually finishes (still writing a
+    # summary/posting comments), so without this trigger the queued card
+    # would sit until the 15-min pending escalation. Fires only on the
+    # transition (not every idle heartbeat) — drain_agent_task_queue is
+    # itself idempotent/self-checking (task_queue.py), and a failing drain
+    # must never break the heartbeat response (create_tracked_task is
+    # fire-and-forget). Read AFTER the commit above so the drain sees the
+    # freshly-persisted status, matching the task_lifecycle.py drain sites.
+    from app.config import settings as _heartbeat_settings
+
+    if (
+        _heartbeat_settings.host_turn_signal_enabled
+        and _prev_status == "working"
+        and agent.status != "working"
+    ):
+        from app.services.task_queue import drain_agent_task_queue
+        from app.utils import create_tracked_task
+
+        create_tracked_task(drain_agent_task_queue(str(agent.id)))
 
     if just_provisioned:
         await emit_event(

@@ -181,11 +181,16 @@ async def test_missing_heartbeat_dispatches(
 
 
 @pytest.mark.asyncio
-async def test_host_runtime_untouched(
+async def test_host_runtime_in_turn_queues(
     make_board, make_agent, make_task, fake_redis
 ):
-    """Guardrail: host agents keep dispatching even when working with a
-    fresh heartbeat."""
+    """Bauplan Lauf 2 Teil 2 (21.09.2026): Guard 3's runtime gate
+    (`agent_runtime == "cli-bridge"`) drops — the turn signal itself
+    (status=="working" + fresh heartbeat) is what decides, for ANY
+    poll-based runtime including host. Was `test_host_runtime_untouched`,
+    which asserted the opposite (host dispatches even in-turn) — that was
+    the gap: 60/80 Hand-Starts (Nachpruefung N.2/N.5) trace back to a host
+    agent's turn being invisible to Guard 3."""
     with patch("app.services.task_queue.get_redis", return_value=fake_redis):
         board, agent, task = await _seed(
             make_board, make_agent, make_task,
@@ -193,10 +198,82 @@ async def test_host_runtime_untouched(
         )
         await _run_dispatch(task.id, board.id)
 
+        from app.services.task_queue import queue_length
+        assert await queue_length(str(agent.id)) == 1, "task must sit in the agent queue"
+
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         from app.models.task import Task
         refreshed = await s.get(Task, task.id)
-        assert refreshed.dispatched_at is not None
+        assert refreshed.dispatched_at is None, "NO paste: dispatched_at must stay unset"
+
+    events = await _activity_events(task.id)
+    queued = [e for e in events if e.event_type == "task.dispatch_queued"]
+    assert queued, "task.dispatch_queued event required"
+    detail = queued[0].detail or {}
+    assert detail.get("reason") == "agent_in_turn", detail
+
+
+@pytest.mark.asyncio
+async def test_host_stale_heartbeat_still_dispatches(
+    make_board, make_agent, make_task, fake_redis
+):
+    """Sabotage probe for Teil 2: a host agent reporting status=working
+    with a STALE heartbeat (dead bridge) must fail-open and dispatch
+    normally — the same fail-open rule cli-bridge already has, now shared
+    since the gate is runtime-free."""
+    with patch("app.services.task_queue.get_redis", return_value=fake_redis):
+        board, agent, task = await _seed(
+            make_board, make_agent, make_task,
+            agent_runtime="host", status="working", last_seen_at=_ago(200),
+        )
+        await _run_dispatch(task.id, board.id)
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        from app.models.task import Task
+        refreshed = await s.get(Task, task.id)
+        assert refreshed.dispatched_at is not None, (
+            "stale heartbeat must not block dispatch (fail-open)"
+        )
 
     from app.services.task_queue import queue_length
     assert await queue_length(str(agent.id)) == 0
+
+
+@pytest.mark.asyncio
+async def test_host_turn_signal_switch_off_keeps_legacy_dispatch(
+    make_board, make_agent, make_task, fake_redis, monkeypatch
+):
+    """Schalter (Bauplan 'Schalter'): `settings.host_turn_signal_enabled`
+    default True gates Teil 2-4 together. Switched OFF, a host agent
+    in-turn must dispatch exactly like today (pre-fix) — the rollback
+    path needs no code change, only this flag + a backend restart.
+
+    Runde 2 (Pruefbericht Punkt 4): monkeypatch.setattr instead of a hard
+    `= True` in `finally` — monkeypatch restores whatever value was there
+    BEFORE this test ran, not a hardcoded assumption about the default."""
+    from app.config import settings
+
+    with patch("app.services.task_queue.get_redis", return_value=fake_redis):
+        board, agent, task = await _seed(
+            make_board, make_agent, make_task,
+            agent_runtime="host", status="working", last_seen_at=_ago(5),
+        )
+        monkeypatch.setattr(settings, "host_turn_signal_enabled", False)
+        await _run_dispatch(task.id, board.id)
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        from app.models.task import Task
+        refreshed = await s.get(Task, task.id)
+        assert refreshed.dispatched_at is not None, (
+            "switch off must restore legacy (host dispatches even in-turn)"
+        )
+
+    from app.services.task_queue import queue_length
+    assert await queue_length(str(agent.id)) == 0
+
+
+def test_host_turn_signal_enabled_defaults_true():
+    """Schalter default is ON — a default-OFF ships nothing (Bauplan)."""
+    from app.config import settings
+
+    assert settings.host_turn_signal_enabled is True
