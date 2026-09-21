@@ -91,6 +91,7 @@ from app.services.cli_update_check import cli_update_checker
 from app.services.model_catalog_check import model_catalog_checker
 from app.services.local_registry import local_registry_checker
 from app.services.intelligence import intelligence
+from app.services.daily_metrics_digest import daily_metrics_digest
 from app.services.file_indexer import file_indexer
 from app.services.obsidian_export import obsidian_export
 from app.services.scheduler import scheduler
@@ -149,6 +150,7 @@ async def start_background_services(app: Any) -> None:
     await loop_runner.start()  # Loops L1 (ADR-051) — Runden-Meta-Controller
     await group_runner.start()  # Gruppenchat (ADR-075) — Runden-Engine
     await intelligence.start()
+    await daily_metrics_digest.start()
     await file_indexer.start()
     # Phase 5 MSY-04: drain mc:embeddings:retry on a 60s tick when the
     # embedding service returns. Singleton mirror of intelligence; tests
@@ -231,6 +233,7 @@ async def stop_background_services(app: Any) -> None:
     await _timed_stop("slack_socket", slack_socket.stop())
     await _timed_stop("telegram_bot", telegram_bot.stop())
     await _timed_stop("intelligence", intelligence.stop())
+    await _timed_stop("daily_metrics_digest", daily_metrics_digest.stop())
     await _timed_stop("file_indexer", file_indexer.stop())
     await _timed_stop("embedding_retry", embedding_retry.stop())
     if getattr(app.state, "obsidian_export_started", False):

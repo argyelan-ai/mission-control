@@ -71,6 +71,7 @@ Browser (Caddy :80) → Frontend (Next.js 15, :3000)
 | `task_runner.py` | Dispatch-ACK-Timeout, Stale Progress, Circuit Breaker, Silent-Abort-Auto-Block (ADR-046, cli-bridge v1) | 60s |
 | `watchdog/` (core + mixins) | Phase-Completion, Session-Recovery, Health-Checks | 30s |
 | `intelligence.py` | Task-Duration-Analyse, Failure Patterns, LLM-Destillation (Ollama) | 300s |
+| `daily_metrics_digest.py` (Lauf 3) | Vier Messzahlen (stale cards >4h, Reviews zum Lead, Doppel-Dispatch/Healer-Wiederholungen, Hand-Statuswechsel nach Grund) als Report, einmal taeglich ab `daily_metrics_hour` (UTC), Redis-Dedup `mc:daily_metrics_digest:<YYYY-MM-DD>` (20h TTL) | 600s Tick |
 | `git_service.py` | GitHub Repo+PR Management für Agents | on-demand |
 | `provisioning.py` | Agent-Create Background-Task (cli-bridge only — `host` excluded seit ADR-063, provisioniert nur explizit via `POST /agents/{id}/provision`), Template-Render | on-demand |
 | `host_provisioning.py` (NEU 2026-07-10, ADR-063) | Generisches Staging (`.plist`+`run.sh`+`agent.env`) für beliebige Host-Runtime-Agenten in `~/.mc/agents/<slug>/`; `launchctl`-Load hinter `host_agent_autoload_enabled` gegated | on-demand |
