@@ -291,9 +291,9 @@ async def test_watchdog_change_with_affected_agent_id_is_delivered(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_system_internal_change_not_delivered(monkeypatch):
-    """Review finding B: changed_by="system" transitions (review rejection
-    redispatch, requeue, ...) already write their own system comment or
-    redispatch the card. No second comment."""
+    """Review finding B: system transitions whose path already writes its
+    own system comment or redispatches (review rejection redispatch,
+    requeue, ...) are on a block list. No second comment."""
     monkeypatch.setattr(settings, "status_change_delivery_enabled", True, raising=False)
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
@@ -317,3 +317,34 @@ async def test_system_internal_change_not_delivered(monkeypatch):
             select(TaskComment).where(TaskComment.task_id == task_id)
         )).all()
         assert comments == []
+
+
+@pytest.mark.asyncio
+async def test_system_parent_reopen_is_delivered(monkeypatch):
+    """Review finding B, second round: system transitions that nothing else
+    announces (parent reopened for a new subtask, phase auto-advance) MUST
+    be delivered — the block list is by reason, not by changed_by."""
+    monkeypatch.setattr(settings, "status_change_delivery_enabled", True, raising=False)
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        board_id, task_id = await _make_assigned_task(
+            s, name_suffix="reopen", assigned_agent_id=None,
+        )
+        worker = await _make_agent(s, board_id, name="WorkerReopen")
+        task = (await s.exec(select(Task).where(Task.id == task_id))).one()
+        task.assigned_agent_id = worker.id
+        s.add(task)
+        await s.commit()
+
+        await record_task_event(
+            s, task_id, "review", "in_progress",
+            changed_by="system", agent_id=None,
+            reason="parent_reopened_for_new_subtask",
+        )
+        await s.commit()
+
+        comments = (await s.exec(
+            select(TaskComment).where(TaskComment.task_id == task_id)
+        )).all()
+        assert len(comments) == 1
+        assert "parent_reopened_for_new_subtask" in comments[0].content

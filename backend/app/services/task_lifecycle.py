@@ -68,6 +68,19 @@ async def record_task_event(
     )
 
 
+# Status transitions whose own code path already tells the agent (system
+# comment written right before, or a redispatch that carries the full
+# prompt). Review finding B on the pilot PR: a second comment here would
+# duplicate them. Everything NOT listed is delivered.
+_SELF_DELIVERING_REASONS: frozenset[str] = frozenset({
+    "review_rejection_redispatch",
+    "review_rejection_no_developer",
+    "review_rejection_queued",
+    "review_rejection_dispatch_blocked",
+    "unblock_requeue_agent_busy",
+})
+
+
 async def _deliver_status_change(
     session: AsyncSession,
     task_id: uuid.UUID,
@@ -87,9 +100,11 @@ async def _deliver_status_change(
 
     Skipped on purpose:
     - flag off (default) -> pure no-op, no session access
-    - ``changed_by="system"`` -> lifecycle-internal transitions (review
-      rejection redispatch, requeue, ...) already write their own system
-      comment or redispatch the card; a second one would be noise
+    - reasons in ``_SELF_DELIVERING_REASONS`` -> those lifecycle paths
+      already write their own system comment or redispatch the card with a
+      full prompt; a second comment would be noise. Other system-authored
+      transitions (phase auto-advance, parent reopened for a new subtask)
+      ARE delivered — nothing else tells the agent about them
     - the assigned agent changed it itself (``changed_by="agent"`` and
       ``agent_id == assigned``) -> no echo. A watchdog/user change that
       passes the affected agent's id as ``agent_id`` IS delivered
@@ -109,7 +124,7 @@ async def _deliver_status_change(
         task = await session.get(Task, task_id)
         if task is None or task.assigned_agent_id is None:
             return
-        if changed_by == "system":
+        if reason in _SELF_DELIVERING_REASONS:
             return
         if (
             changed_by == "agent"
