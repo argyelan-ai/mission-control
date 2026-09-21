@@ -329,6 +329,10 @@ class TaskEvent(SQLModel, table=True):
         default=None, foreign_key="agents.id", nullable=True
     )
     reason: str | None = None  # Optional context (e.g. "aborted_recovery", "review_handoff")
+    actor_user_id: uuid.UUID | None = Field(
+        default=None, foreign_key="users.id", nullable=True
+    )
+    actor_label: str | None = None
     created_at: datetime = Field(
         default_factory=datetime.utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),

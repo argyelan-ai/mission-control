@@ -233,7 +233,7 @@ def test_alembic_chain_0200_0201_single_head():
                         continue
                     parents.update([val] if isinstance(val, str) else val)
     heads = revs - parents
-    assert heads == {"0201_agent_op_work_language"}, heads
+    assert heads == {"0202_task_event_actor"}, heads
 
 
 def test_0201_upgrade_does_not_drop_language():
