@@ -320,6 +320,40 @@ async def test_system_internal_change_not_delivered(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("reason", ["telegram_button_resume", "clarification_answered"])
+async def test_actor_tracking_self_delivering_reasons_no_second_comment(monkeypatch, reason):
+    """Pruefbericht N3/N4 follow-up (R3): the Telegram-button resume and the
+    clarification-answered path both already write their own TaskComment
+    right before calling record_task_event() (the "UNBLOCKED" /
+    "Antwort auf deine Klaerungsfrage" comment). Both reasons are on the
+    self-delivering block list, so record_task_event() must not add a
+    second, generic status-change comment on top."""
+    monkeypatch.setattr(settings, "status_change_delivery_enabled", True, raising=False)
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        board_id, task_id = await _make_assigned_task(
+            s, name_suffix=f"actor-{reason[:6]}", assigned_agent_id=None,
+        )
+        worker = await _make_agent(s, board_id, name=f"Worker-{reason[:6]}")
+        task = (await s.exec(select(Task).where(Task.id == task_id))).one()
+        task.assigned_agent_id = worker.id
+        s.add(task)
+        await s.commit()
+
+        await record_task_event(
+            s, task_id, "blocked", "in_progress",
+            changed_by="user", agent_id=None,
+            reason=reason, actor_label="telegram",
+        )
+        await s.commit()
+
+        comments = (await s.exec(
+            select(TaskComment).where(TaskComment.task_id == task_id)
+        )).all()
+        assert comments == []
+
+
+@pytest.mark.asyncio
 async def test_system_parent_reopen_is_delivered(monkeypatch):
     """Review finding B, second round: system transitions that nothing else
     announces (parent reopened for a new subtask, phase auto-advance) MUST

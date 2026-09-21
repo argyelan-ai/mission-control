@@ -394,6 +394,8 @@ async def resolve_approval(
                 await record_task_event(
                     session, task.id, "blocked", "inbox",
                     changed_by="user", reason="blocker_approval_approved",
+                    actor_user_id=current_user.id,
+                    actor_label=current_user.preferred_name or current_user.name,
                 )
                 await session.commit()
                 logger.info("Task %s unblocked → inbox for re-dispatch (note: %s)", task.id, note[:50])
@@ -423,6 +425,8 @@ async def resolve_approval(
                 await record_task_event(
                     session, task.id, "blocked", "failed",
                     changed_by="user", reason="blocker_approval_rejected",
+                    actor_user_id=current_user.id,
+                    actor_label=current_user.preferred_name or current_user.name,
                 )
                 await session.commit()
 
@@ -486,8 +490,15 @@ async def resolve_approval(
 
         task = await session.get(TaskModel, approval.task_id)
         if task and task.status == "blocked":
-            task, _ = await lock_and_set(session, task.id, "in_progress", actor="operator")
+            task, _from_status = await lock_and_set(session, task.id, "in_progress", actor="operator")
             session.add(task)
+            from app.services.task_lifecycle import record_task_event
+            await record_task_event(
+                session, task.id, _from_status, "in_progress",
+                changed_by="user", reason="clarification_answered",
+                actor_user_id=current_user.id,
+                actor_label=current_user.preferred_name or current_user.name,
+            )
 
             answer_text = payload.resolver_note or "(Keine Antwort — nur bestaetigt)"
             agent = await session.get(Agent, approval.agent_id)
@@ -954,6 +965,7 @@ async def quick_resolve_confirm(
                 await record_task_event(
                     session, task.id, "blocked", "inbox",
                     changed_by="user", reason="quick_resolve_unblock_redispatch",
+                    actor_label="quick-resolve-link",
                 )
                 await session.commit()
                 logger.info("Task %s unblocked via Telegram → inbox for re-dispatch", task.id)
@@ -977,6 +989,7 @@ async def quick_resolve_confirm(
                 await record_task_event(
                     session, task.id, "blocked", "failed",
                     changed_by="user", reason="telegram_blocker_rejected",
+                    actor_label="quick-resolve-link",
                 )
                 await session.commit()
 
