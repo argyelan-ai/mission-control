@@ -46,6 +46,8 @@ async def record_task_event(
     changed_by: str = "system",
     agent_id: uuid.UUID | None = None,
     reason: str | None = None,
+    actor_user_id: uuid.UUID | None = None,
+    actor_label: str | None = None,
 ) -> None:
     """Log a task-status event (event sourcing).
 
@@ -60,6 +62,8 @@ async def record_task_event(
         changed_by=changed_by,
         agent_id=agent_id,
         reason=reason,
+        actor_user_id=actor_user_id,
+        actor_label=actor_label,
     )
     session.add(event)
     # No separate commit — caller commits together with the status update
@@ -78,6 +82,13 @@ _SELF_DELIVERING_REASONS: frozenset[str] = frozenset({
     "review_rejection_queued",
     "review_rejection_dispatch_blocked",
     "unblock_requeue_agent_busy",
+    # Actor-tracking follow-up (Pruefbericht N3/N4, 21.09.2026): both paths
+    # already write their own TaskComment right before this event fires
+    # (telegram_bot.py "UNBLOCKED" comment / approvals.py "Antwort auf
+    # deine Klaerungsfrage" comment) — a second, generic status-change
+    # comment here would duplicate the answer the agent already got.
+    "telegram_button_resume",
+    "clarification_answered",
 })
 
 

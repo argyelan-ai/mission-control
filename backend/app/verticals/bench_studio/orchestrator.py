@@ -1085,7 +1085,8 @@ async def stop_challenge(
     for task_id in stop_task_ids:
         try:
             await stop_task_run(
-                session, task_id, user_id, reason="bench challenge stopped"
+                session, task_id, user_id, reason="bench challenge stopped",
+                actor_user_id=uuid.UUID(user_id),
             )
             await session.commit()
         except HTTPException as exc:

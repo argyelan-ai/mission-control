@@ -3341,7 +3341,23 @@ async def agent_get_task_events(
         .order_by(TaskEvent.created_at.desc())
         .limit(limit)
     )
-    return [e.model_dump() for e in result.all()]
+    # Explicit field list (not model_dump()): actor_user_id/actor_label carry
+    # the operator's real name — must never reach an agent's context, which
+    # for external-model runtimes means the model provider (privacy review,
+    # 21.09.2026).
+    return [
+        {
+            "id": e.id,
+            "task_id": e.task_id,
+            "from_status": e.from_status,
+            "to_status": e.to_status,
+            "changed_by": e.changed_by,
+            "agent_id": e.agent_id,
+            "reason": e.reason,
+            "created_at": e.created_at,
+        }
+        for e in result.all()
+    ]
 
 
 @router.patch("/boards/{board_id}/tasks/{task_id}/report-back")
