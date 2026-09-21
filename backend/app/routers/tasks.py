@@ -643,6 +643,8 @@ async def reorder_tasks(
                 await record_task_event(
                     session, task.id, task.status, item.status,
                     changed_by="user", reason="reorder",
+                    actor_user_id=current_user.id,
+                    actor_label=current_user.preferred_name or current_user.name,
                 )
                 task.status = item.status
             task.updated_at = utcnow()
@@ -765,7 +767,11 @@ async def stop_task_run_endpoint(
 ):
     """Stop an active task run. Only for tasks with an active run (admin only)."""
     from app.services.operations import stop_task_run
-    task = await stop_task_run(session, task_id, str(current_user.id), payload.reason)
+    task = await stop_task_run(
+        session, task_id, str(current_user.id), payload.reason,
+        actor_user_id=current_user.id,
+        actor_label=current_user.preferred_name or current_user.name,
+    )
     return task
 
 
@@ -778,7 +784,11 @@ async def resume_task_run_endpoint(
 ):
     """Release a stopped task again (admin only)."""
     from app.services.operations import resume_task_run
-    task = await resume_task_run(session, task_id, str(current_user.id))
+    task = await resume_task_run(
+        session, task_id, str(current_user.id),
+        actor_user_id=current_user.id,
+        actor_label=current_user.preferred_name or current_user.name,
+    )
     return task
 
 
@@ -1527,6 +1537,8 @@ async def update_task(
         await record_task_event(
             session, task.id, old_status, updates["status"],
             changed_by="user", reason="manual_update",
+            actor_user_id=current_user.id,
+            actor_label=current_user.preferred_name or current_user.name,
         )
         # Clear spawn tracking on terminal/inactive status
         if updates["status"] in ("done", "failed", "blocked", "inbox"):
@@ -2079,6 +2091,7 @@ async def get_task_timeline(
             "ts": e.created_at, "source": "task_event", "kind": "status_change",
             "title": f"{from_label} → {to_label}",
             "detail": e.reason, "actor": actor,
+            "actor_label": e.actor_label,
             "meta": {"from_status": e.from_status, "to_status": e.to_status},
         })
 
@@ -2553,7 +2566,11 @@ async def post_thread_message(
         # explicitly (VALID_TRANSITIONS + event) — open non-blocking questions
         # never gate the resume. Parking via dispatch-death is Task 9's concern.
         from app.services.messaging import resume_task_after_answer
-        await resume_task_after_answer(session, task, thread, changed_by="user")
+        await resume_task_after_answer(
+            session, task, thread, changed_by="user",
+            actor_user_id=current_user.id,
+            actor_label=current_user.preferred_name or current_user.name,
+        )
     return {
         "message_id": str(message.id),
         "thread_id": str(thread.id),

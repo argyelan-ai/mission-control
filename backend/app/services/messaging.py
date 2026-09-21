@@ -391,7 +391,10 @@ async def maybe_post_finish_nudge(session: AsyncSession, task: Task) -> None:
     )
 
 
-async def resume_task_after_answer(session: AsyncSession, task, thread, *, changed_by: str) -> bool:
+async def resume_task_after_answer(
+    session: AsyncSession, task, thread, *, changed_by: str,
+    actor_user_id=None, actor_label: str | None = None,
+) -> bool:
     """A blocking question on `thread` was just answered: if the task is parked
     in `waiting` and no blocking question remains open, move it back to
     in_progress — re-dispatch with a recap when the agent was released,
@@ -441,6 +444,7 @@ async def resume_task_after_answer(session: AsyncSession, task, thread, *, chang
     await record_task_event(
         session, task.id, from_status, TaskStatus.IN_PROGRESS,
         changed_by=changed_by, reason="answer_received",
+        actor_user_id=actor_user_id, actor_label=actor_label,
     )
     parked = agent is None or agent.current_task_id != task.id
     if parked:

@@ -686,9 +686,15 @@ class TelegramBotService:
                             )
                             task_held = True
                         elif status == "approved":
-                            task, _ = await lock_and_set(session, task.id, "in_progress", actor="user")
+                            task, _from_status = await lock_and_set(session, task.id, "in_progress", actor="user")
                             task.updated_at = utcnow()
                             session.add(task)
+                            from app.services.task_lifecycle import record_task_event
+                            await record_task_event(
+                                session, task.id, _from_status, "in_progress",
+                                changed_by="user", reason="telegram_button_resume",
+                                actor_label="telegram",
+                            )
                             await session.commit()
                             # Notify agent via TaskComment (runtime-agnostic delivery
                             # channel — cli-bridge / host poll /agent/me/comments).
@@ -706,14 +712,19 @@ class TelegramBotService:
                                 ))
                                 await session.commit()
                         elif status == "rejected":
-                            task, _ = await lock_and_set(session, task.id, "failed", actor="user")
+                            task, _from_status = await lock_and_set(session, task.id, "failed", actor="user")
                             task.updated_at = utcnow()
                             # Auto-unassign — a failed task in agent_poll would otherwise
                             # trigger a cancel loop. The operator explicitly cancelled
                             # the task via Telegram.
-                            from app.services.task_lifecycle import apply_terminal_unassign
+                            from app.services.task_lifecycle import apply_terminal_unassign, record_task_event
                             await apply_terminal_unassign(session, task, "failed")
                             session.add(task)
+                            await record_task_event(
+                                session, task.id, _from_status, "failed",
+                                changed_by="user", reason="telegram_button_reject",
+                                actor_label="telegram",
+                            )
                             await session.commit()
                     except HTTPException as e:
                         if e.status_code != 409:

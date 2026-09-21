@@ -26,8 +26,8 @@ DROP and the backend bounce, every query against `agents` fails, and
 fourteen agents hang off that table. So `language` stays for now: this
 revision is additive only (add the two columns, backfill
 `operator_language`, leave `language` untouched — the application code
-must not write to it). The drop moves to 0202, its own deploy, once the
-new code has been running.
+must not write to it). The drop moves to a later contract-only migration,
+its own deploy, once the new code has been running.
 
 Checked for down_revision collisions before picking one: `alembic heads`
 showed a single head (0200_task_pr_reference) at branch time — no backlog
@@ -55,7 +55,7 @@ def upgrade() -> None:
         sa.Column("work_language", sa.String(length=16), nullable=False, server_default="en"),
     )
     # `language` stays present after this migration (see module docstring) —
-    # the drop is 0202, a separate deploy.
+    # the drop moves to a later contract-only migration, a separate deploy.
     op.execute("UPDATE agents SET operator_language = language")
 
 
