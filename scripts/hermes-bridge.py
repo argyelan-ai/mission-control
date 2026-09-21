@@ -83,6 +83,22 @@ _last_dispatched_task_id: str | None = None  # Idempotency cache (module-scoped)
 # idle/cancelled/stopped, not on same-task revision.
 _last_dispatched_attempt_id: str | None = None
 
+# Bauplan Lauf 2 Nacharbeit H2 (21.09.2026, Pruefbericht scratchpad/run2/
+# 07-pruefbericht.md): the task_id of the turn CURRENTLY in flight, distinct
+# from _last_dispatched_task_id above. _last_dispatched_task_id is only
+# assigned AFTER deliver_prompt(prompt, wait=True) returns — but that call
+# blocks for the whole turn, so while a turn is running it still names the
+# PREVIOUS task (or None, right after a restart). The heartbeat's task_id
+# field is what agents.py Fix 3b uses to verify a turn is genuinely running
+# for THIS task (sabotage guard); the wrong (previous) task_id there could
+# hold a foreign/stale card's status hostage. Set right before
+# daemon.prompt()/deliver_prompt(wait=True) is called for a task, cleared as
+# soon as that call returns (dispatch_poll_loop) AND self-healed in
+# _heartbeat_body() whenever busy() itself says False — belt and suspenders
+# against the dispatch thread crashing between prompt() returning and its
+# own clear.
+_turn_task_id: str | None = None
+
 # Shutdown coordination (13.09.2026 incident): the dispatcher thread must stop
 # offering NEW dispatches before the process actually exits. Without this, a
 # SIGTERM arriving while dispatch_poll_loop() is asleep (or mid-poll) races
@@ -1041,7 +1057,7 @@ def dispatch_poll_loop() -> None:
     redispatch) used to be silently swallowed because the in-memory cache
     only cleared on idle/cancelled/stopped, never on same-task revision.
     """
-    global _last_dispatched_task_id, _last_dispatched_attempt_id
+    global _last_dispatched_task_id, _last_dispatched_attempt_id, _turn_task_id
     try:
         env = load_env_from_file(ENV_FILE)
         base_url = env.get("MC_BASE_URL")
@@ -1169,7 +1185,20 @@ def dispatch_poll_loop() -> None:
                     prompt = _build_dispatch_prompt(task)
                     # ACP: through the chat session (the operator SEES the work)
                     # and wait for the turn to end before polling again.
-                    if deliver_prompt(prompt, wait=True):
+                    #
+                    # Nacharbeit H2 (21.09.2026): _turn_task_id names the
+                    # in-flight turn's card for the WHOLE duration of the
+                    # (possibly minutes-long, wait=True) deliver_prompt call
+                    # below — cleared in `finally` the instant it returns
+                    # (turn ended, delivery failed, or busy without wait),
+                    # so a concurrent heartbeat_loop tick never sees a stale
+                    # value beyond that window.
+                    _turn_task_id = task["id"]
+                    try:
+                        _delivered = deliver_prompt(prompt, wait=True)
+                    finally:
+                        _turn_task_id = None
+                    if _delivered:
                         save_last_task_id(str(task["id"]))
                         _last_dispatched_task_id = task["id"]
                         _last_dispatched_attempt_id = task_attempt_id
@@ -1252,14 +1281,43 @@ def _heartbeat_body() -> bytes:
     Ein Scrape-Fehler darf den Heartbeat NIE reissen — geschluckt, faellt auf
     den alten leeren Body zurueck. `context_pct` wird WEGGELASSEN (nicht als
     0 gesendet), wenn scrape_context_pct() keinen Wert findet.
+
+    Bauplan Lauf 2 Teil 1 (21.09.2026): unter ACP traegt der Body zusaetzlich
+    `status` ("working"/"idle"), abgeleitet aus chat_daemon().busy() — das
+    Zug-Signal, das Guard 3 (dispatch.py) fuer Host-Agenten erst sichtbar
+    macht. Auf dem nativen Pfad (M3b, Pruefbericht) gibt es keinen Zug-Begriff
+    und keinen ACP-Daemon — `status` bleibt bewusst weg, damit der
+    Server-Default ("idle") greift; das ist unveraendert gegenueber heute,
+    kein Nacharbeit-Punkt fuer diesen Pfad. Ein busy()-Fehler darf den
+    Heartbeat ebenfalls nie reissen — dann wird `status` weggelassen (nicht
+    geraten), `context_pct` kommt trotzdem, wenn scrapebar.
+
+    Nacharbeit H2 (21.09.2026, Pruefbericht): `task_id` kommt aus
+    `_turn_task_id` (der Karte des GERADE laufenden Zugs), nicht mehr aus
+    `_last_dispatched_task_id` (das erst nach Zugende gesetzt wird und
+    waehrend `wait=True` blockiert also die VORHERIGE Karte naeme). Sobald
+    busy() False meldet, wird `_turn_task_id` hier selbst geheilt (geleert) —
+    unabhaengig davon, ob der Dispatch-Thread das schon getan hat.
     """
+    global _turn_task_id
+    body: dict = {}
     try:
         pct = context_detect.scrape_context_pct(capture_pane(), harness="hermes")
         if pct is not None:
-            return json.dumps({"context_pct": float(pct)}).encode()
+            body["context_pct"] = float(pct)
     except Exception:  # noqa: BLE001 — scrape darf heartbeat nie reissen
         pass
-    return b"{}"
+    try:
+        if driver_is_acp():
+            is_busy = chat_daemon().busy()
+            body["status"] = "working" if is_busy else "idle"
+            if is_busy and _turn_task_id is not None:
+                body["task_id"] = _turn_task_id
+            elif not is_busy and _turn_task_id is not None:
+                _turn_task_id = None
+    except Exception:  # noqa: BLE001 — busy() darf heartbeat nie reissen
+        pass
+    return json.dumps(body).encode()
 
 
 def heartbeat_loop() -> None:
