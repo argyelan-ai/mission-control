@@ -34,7 +34,7 @@ from app.utils import utcnow, ensure_aware
 from app.redis_client import RedisKeys, get_redis, try_claim_heal
 from app.scopes import Scope, get_agent_effective_scopes
 from app.services.activity import emit_event
-from app.services.dispatch import auto_dispatch_task
+from app.services.dispatch import auto_dispatch_task, TURN_SIGNAL_HEARTBEAT_MAX_AGE_SECONDS
 from app.services.messaging import last_task_activity, maybe_post_finish_nudge
 from app.services.operator_notices import raise_notice
 from app.services.task_state import lock_and_set
@@ -612,6 +612,74 @@ class TaskRunnerService:
                 continue
 
             redis = await get_redis()
+
+            # Bauplan Lauf 2 Teil 4 (21.09.2026): the ACK clock pauses while
+            # the agent is genuinely mid-turn — same signal Guard 3 (Teil 2)
+            # uses to decide whether to queue in the first place
+            # (agent.status == "working" + heartbeat younger than
+            # TURN_SIGNAL_HEARTBEAT_MAX_AGE_SECONDS). Runtime-free, same as
+            # Guard 3: covers 13/80 Hand-Starts (Nachpruefung N.2, bucket A
+            # "andere Karte in_progress") left uncovered by Teil 1-3. A
+            # stale/dead poll (no heartbeat or older than 90s) is NOT paused
+            # — that is the real hang the ladder exists to catch.
+            from app.config import settings as _ack_settings
+
+            if _ack_settings.host_turn_signal_enabled and agent.status == "working":
+                _hb_fresh = False
+                if agent.last_seen_at is not None:
+                    _hb_age = (now - ensure_aware(agent.last_seen_at)).total_seconds()
+                    _hb_fresh = _hb_age < TURN_SIGNAL_HEARTBEAT_MAX_AGE_SECONDS
+                # H1 (Nacharbeit 21.09.2026, Pruefbericht): the pause has an
+                # upper bound. Without one, a daemon stuck busy()=True
+                # forever (docker/omp-bridge acp_chat.py: prompt_timeout up
+                # to 3600s, and busy only clears at the very end of
+                # _run_turn — an exception in _restart_child() before that
+                # leaves busy permanently True while the bridge keeps
+                # heartbeating fine every 30s) would suppress BOTH ladders
+                # silently forever, with only a once-per-900s info event as
+                # a sign of life. Cap: only pause while dispatched_at is
+                # less than 2x the agent's own ack_timeout old — after that,
+                # the ladder runs exactly as if this Nacharbeit never
+                # happened.
+                #
+                # Runde 2 (21.09.2026, Pruefbericht): the pending case
+                # (dispatched_at NULL, Guard 3 queue scenario) gets the SAME
+                # cap, anchored on task.updated_at — the clock
+                # _handle_dispatch_pending itself uses
+                # (minutes_since_assigned) — instead of staying uncapped.
+                # Without this, a card that Guard 3 queues behind a
+                # permanently-"working" agent (the exact H1 failure mode)
+                # would never reach the pending ladder either.
+                _within_pause_cap = True
+                _cap_minutes = 2 * _get_ack_timeout_minutes(agent)
+                if task.dispatched_at is not None:
+                    _dispatched_minutes = (
+                        now - ensure_aware(task.dispatched_at)
+                    ).total_seconds() / 60
+                    _within_pause_cap = _dispatched_minutes < _cap_minutes
+                elif task.updated_at is not None:
+                    _pending_minutes = (
+                        now - ensure_aware(task.updated_at)
+                    ).total_seconds() / 60
+                    _within_pause_cap = _pending_minutes < _cap_minutes
+                if _hb_fresh and _within_pause_cap:
+                    turn_wait_key = RedisKeys.dispatch_turn_wait(str(task.id))
+                    if not await redis.get(turn_wait_key):
+                        await emit_event(
+                            session,
+                            "task.dispatch_queued_behind_active",
+                            f"'{task.title}' wartet — {agent.name} im Zug",
+                            severity="info",
+                            board_id=task.board_id,
+                            task_id=task.id,
+                            agent_id=agent.id,
+                            detail={
+                                "agent_status": agent.status,
+                                "heartbeat_age_seconds": round(_hb_age),
+                            },
+                        )
+                        await redis.set(turn_wait_key, "1", ex=900)
+                    continue
 
             if task.dispatched_at:
                 # G4 (W2-A): a Tier-3 recovery resume just reset

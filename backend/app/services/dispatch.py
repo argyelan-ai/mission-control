@@ -656,11 +656,14 @@ async def auto_dispatch_task(
                         )
                         return
 
-                    # Guard 3: Live-Turn-Signal (cli-bridge/omp only, 07.09.2026).
-                    # Guards 1+2 are DB-state based and blind to a turn that omp
-                    # is STILL executing after its predecessor task went done
-                    # (incident 07.09.2026: Task D hung 70 min because omp was
-                    # mid-turn and got pasted anyway).
+                    # Guard 3: Live-Turn-Signal (07.09.2026, widened Bauplan
+                    # Lauf 2 Teil 2, 21.09.2026).
+                    # Guards 1+2 are DB-state based and blind to a turn that an
+                    # agent is STILL executing after its predecessor task went
+                    # done (incident 07.09.2026: Task D hung 70 min because omp
+                    # was mid-turn and got pasted anyway; Nachpruefung 21.09.:
+                    # 60/80 Hand-Starts were the SAME gap for host agents,
+                    # because this guard only ever looked at cli-bridge).
                     #
                     # The TURN signal is agent.status == "working": the bridge
                     # heartbeater (bridge.py start_heartbeater → POST
@@ -673,12 +676,24 @@ async def auto_dispatch_task(
                     # a "working" status with a heartbeat older than
                     # TURN_SIGNAL_HEARTBEAT_MAX_AGE_SECONDS (90 s) means the
                     # bridge stopped heartbeating — stale signal, fail-open
-                    # dispatch instead of a deadlock. host / claude-code
-                    # untouched (runtime gate).
-                    if (
-                        getattr(best_agent, "agent_runtime", None) == "cli-bridge"
-                        and best_agent.status == "working"
-                    ):
+                    # dispatch instead of a deadlock.
+                    #
+                    # The condition is runtime-free by design: the signal
+                    # itself (status=="working") is what decides, so ANY
+                    # poll-based runtime (host, cli-bridge, future ones) is
+                    # covered automatically — an agent that never reports
+                    # "working" is simply never touched by this guard. Behind
+                    # settings.host_turn_signal_enabled (default True); OFF
+                    # restores the old cli-bridge-only gate as a rollback path
+                    # that needs no code change.
+                    if settings.host_turn_signal_enabled:
+                        _guard3_applies = best_agent.status == "working"
+                    else:
+                        _guard3_applies = (
+                            getattr(best_agent, "agent_runtime", None) == "cli-bridge"
+                            and best_agent.status == "working"
+                        )
+                    if _guard3_applies:
                         # Fail-open default: no heartbeat at all → dispatch.
                         _heartbeat_fresh = False
                         _seen_age = -1.0

@@ -322,3 +322,58 @@ async def test_purge_removes_entries_of_deleted_tasks(
 
     assert removed == 1
     assert await peek_queue(str(agent.id)) == []
+
+
+@pytest.mark.asyncio
+async def test_enqueue_dedups_same_task_id(
+    make_board, make_agent, make_task, fake_redis,
+):
+    """M3 (Nacharbeit Lauf 2, 21.09.2026): re-enqueuing the SAME task_id
+    while it is already sitting in the queue must not add a second copy —
+    Guard 3 re-fires task.dispatch_queued on every 30s watchdog re-poll
+    while the agent is mid-turn (Pruefbericht M1), which used to RPUSH a
+    fresh entry every time."""
+    board, agent = await _seed_agent_with_queue(
+        make_board, make_agent, make_task, fake_redis, queue_task_ids=[],
+    )
+    queued = await make_task(
+        board_id=board.id, title="Repeated enqueue probe", status="inbox",
+        assigned_agent_id=agent.id,
+    )
+    with patch("app.services.task_queue.get_redis", return_value=fake_redis):
+        from app.services.task_queue import enqueue_task, peek_queue, queue_length
+
+        await enqueue_task(str(agent.id), str(queued.id))
+        await enqueue_task(str(agent.id), str(queued.id))
+        await enqueue_task(str(agent.id), str(queued.id))
+
+        assert await queue_length(str(agent.id)) == 1, (
+            "same task_id enqueued three times must sit in the queue once"
+        )
+        assert await peek_queue(str(agent.id)) == [str(queued.id)]
+
+
+@pytest.mark.asyncio
+async def test_enqueue_different_tasks_both_kept(
+    make_board, make_agent, make_task, fake_redis,
+):
+    """Dedup must be per-task_id, not a blanket 'one entry total' rule —
+    two DIFFERENT tasks for the same agent both stay queued."""
+    board, agent = await _seed_agent_with_queue(
+        make_board, make_agent, make_task, fake_redis, queue_task_ids=[],
+    )
+    first = await make_task(
+        board_id=board.id, title="First", status="inbox",
+        assigned_agent_id=agent.id,
+    )
+    second = await make_task(
+        board_id=board.id, title="Second", status="inbox",
+        assigned_agent_id=agent.id,
+    )
+    with patch("app.services.task_queue.get_redis", return_value=fake_redis):
+        from app.services.task_queue import enqueue_task, peek_queue
+
+        await enqueue_task(str(agent.id), str(first.id))
+        await enqueue_task(str(agent.id), str(second.id))
+
+        assert await peek_queue(str(agent.id)) == [str(first.id), str(second.id)]
