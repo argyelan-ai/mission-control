@@ -180,7 +180,11 @@ async def test_pending_clock_resumes_after_pause_cap(
         s.add(t)
         await s.commit()
 
-    await _run_check(fake_redis)
+    # Approval-Pfad = Schalter aus (Lauf 4): with notice-only escalations on
+    # (default), the pending ladder raises a notice instead of an Approval row.
+    from app.config import settings
+    with patch.object(settings, "notice_only_escalations_enabled", False):
+        await _run_check(fake_redis)
 
     assert await _approval_count(task.id) == 1, (
         "pending pause must have an upper bound too — a permanently "
