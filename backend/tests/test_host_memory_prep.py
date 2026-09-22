@@ -300,6 +300,47 @@ async def test_the_dropper_is_removed_before_it_is_started(box, fake_redis):
     assert rm_index < run_index
 
 
+@pytest.mark.asyncio
+async def test_dropper_command_has_hard_timeout(box, fake_redis):
+    """A third net, independent of MC ever calling `finish` — even if the
+    backend is gone for good (Redis lost, deploy that never comes back),
+    the dropper must not run forever. `timeout 1800` (= ORPHAN_MAX_AGE,
+    30 min) wrapped around the loop itself bounds a fully orphaned dropper
+    with no help from MC at all, and never expires before the orphan sweep
+    would still call the same prep legitimately in flight."""
+    ssh, redis = _patched(box, fake_redis)
+    with ssh, redis:
+        await memprep.prepare_host_memory(SPARK, watermark_kb=None)
+
+    start_cmd = next(c for c in box.commands if "-d --name" in c)
+    assert "timeout 1800 sh -c" in start_cmd
+
+
+@pytest.mark.asyncio
+async def test_finish_stops_dropper_even_if_start_reported_not_started(box, fake_redis):
+    """Fix B: `_start_dropper`'s own `docker run
+    -d` can time out (SSH `_SHORT_TIMEOUT=30s`, e.g. while docker is still
+    pulling the alpine image) even though the container DID start —
+    `dropper_started` then reads False while `mc-cache-dropper` keeps
+    running on the box, invisible to `finish`'s `if handle.dropper_started:`
+    guard. `docker rm -f` on a container that does not exist is silent and
+    already swallowed by `_stop_dropper` (exit code just goes into a debug
+    log), so gating the removal on that flag at all is pure cost with no
+    safety benefit."""
+    ssh, redis = _patched(box, fake_redis)
+    with ssh, redis:
+        handle = await memprep.prepare_host_memory(SPARK, watermark_kb=None)
+        # Simulate the SSH-timeout case: the container really is running on
+        # the box, but prepare_host_memory never learned that.
+        assert memprep.DROPPER_CONTAINER in box.containers
+        handle.dropper_started = False
+
+        result = await memprep.finish(handle, host=SPARK, success=True)
+
+    assert memprep.DROPPER_CONTAINER not in box.containers
+    assert result["dropper_removed"] is True
+
+
 # ── applicability ────────────────────────────────────────────────────────────
 
 

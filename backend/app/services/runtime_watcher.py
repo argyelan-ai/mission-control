@@ -243,8 +243,40 @@ class RuntimeWatcher:
                 Runtime.runtime_type.in_(sorted(_PROBEABLE_RUNTIME_TYPES)),
             )
         )
-        for runtime in result.all():
-            await self._probe_one(session, runtime)
+        runtimes = result.all()
+        for idx, runtime in enumerate(runtimes):
+            try:
+                await self._probe_one(session, runtime)
+            except Exception:  # noqa: BLE001 — one runtime's broken probe
+                # must never take down the orphan sweep or the runtimes
+                # after it in this tick.
+                logger.exception("probe failed for %s", runtime.slug)
+                # A DB error mid-probe leaves the session poisoned
+                # (PendingRollbackError) — without a rollback, every
+                # runtime probed after this one in the same tick would
+                # fail with the same error, and so would sync_pending_agents
+                # right after the loop.
+                try:
+                    await session.rollback()
+                except Exception:  # noqa: BLE001
+                    logger.exception("session rollback failed after probe error")
+                    continue
+                # rollback() expires every object this session was tracking
+                # — not just the one that failed — so a plain attribute
+                # read on a runtime queued after this one (already fetched
+                # by the select above) would hit AsyncSession's version of
+                # the same problem in a different shape: MissingGreenlet
+                # instead of PendingRollbackError, since expired attributes
+                # need an explicit awaited refresh. Refresh them now so the
+                # rest of this tick sees ordinary, usable objects.
+                for later in runtimes[idx + 1:]:
+                    try:
+                        await session.refresh(later)
+                    except Exception:  # noqa: BLE001
+                        logger.exception(
+                            "failed to refresh %s after rollback",
+                            getattr(later, "slug", "?"),
+                        )
         # A prep whose backend died mid-start leaves a lowered watermark and a
         # cache-dropper container on the box, with nobody left holding the
         # original value. This is the only place that ever notices (PR8).
@@ -358,10 +390,16 @@ class RuntimeWatcher:
             # finished. This is the single place a switch window ends, so no
             # caller has to poll for readiness itself.
             await clear_switching(runtime.slug)
-            # …and therefore also the honest end of the memory prep: the KV
-            # cache is allocated, the box may have its page cache and its
-            # watermark back (PR8).
-            await self._finish_memory_prep(session, runtime, success=True)
+        # The honest end of the memory prep: the KV cache is allocated, the
+        # box may have its page cache and its watermark back (PR8). This runs
+        # on EVERY first successful probe, not only ones inside a recorded
+        # switch window — the marker itself can be lost (TTL of 20 min, a
+        # backend restart mid-load, a preempted prep, a failed recipe
+        # switch) while the box still has an outstanding dropper/watermark.
+        # finish_for_host is idempotent (no handle stored: a no-op, see
+        # host_memory_prep.py), so calling it unconditionally costs nothing
+        # extra on the far more common case of "nothing to finish".
+        await self._finish_memory_prep(session, runtime, success=True)
         await redis.delete(RedisKeys.runtime_restart_baseline(runtime.slug))
         await redis.delete(self._fail_key(runtime.slug))
         await redis.delete(RedisKeys.runtime_recovery_failures(runtime.slug))
@@ -856,6 +894,12 @@ class RuntimeWatcher:
         """Close the pre-start memory prep for this runtime's box (PR8)."""
         try:
             host = await resolve_host_for_runtime(session, runtime)
+            if host is None:
+                # host_key(None) resolves to the shared "default" bucket —
+                # calling finish_for_host(None) for a hostless (cloud)
+                # runtime would close out whatever unrelated prep happens
+                # to be sitting there, closing it for the wrong runtime.
+                return
             await host_memory_prep.finish_for_host(host, success=success)
         except Exception:  # noqa: BLE001 — never at the cost of the tick
             logger.exception("memory prep cleanup failed for %s", runtime.slug)
