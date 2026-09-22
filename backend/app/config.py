@@ -555,6 +555,14 @@ class Settings(BaseSettings):
     # faellt NICHT unter diesen Schalter.
     enable_background_services: bool = True
 
+    # Lauf 7 (review-park grace, 30-day incident: 15x reviewer parked ~1900min
+    # total, 8 of those had already commented; 30x developer wrongly parked
+    # on their own unassigned review card). Review-Karte sperrt den Pruefer
+    # nur, solange die Pruefung frisch ist. Kill switch: False = heutiges
+    # unbedingtes Parken (unveraendert).
+    review_park_grace_enabled: bool = True
+    review_park_grace_minutes: int = 30
+
     # Remote runtime host SSH (optional — e.g. a DGX box running vLLM/LM Studio).
     # Empty = feature unused. Set DGX_SSH_HOST/DGX_SSH_USER in .env and mount
     # your SSH key (see docker-compose.override.example.yml).

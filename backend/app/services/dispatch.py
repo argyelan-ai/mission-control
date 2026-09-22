@@ -622,17 +622,30 @@ async def auto_dispatch_task(
                     # Check whether agent is busy → queue
                     # Guard 1: current_task_id (atomic lock)
                     if best_agent.current_task_id and best_agent.current_task_id != task.id:
-                        await enqueue_task(agent_id_str, str(task.id))
-                        logger.info(
-                            "Push-dispatch queued: '%s' -> %s (active_task_lock: %s)",
-                            task.title, best_agent.name, best_agent.current_task_id,
-                        )
-                        await emit_event(
-                            session, "task.dispatch_queued",
-                            f"Task '{task.title}' in Queue fuer {best_agent.name} (active task lock)",
-                            board_id=board_id, task_id=task.id, agent_id=best_agent.id,
-                        )
-                        return
+                        # Review-park grace (Lauf 7): the locked card may be a
+                        # released review card (grace expired / not the real
+                        # reviewer / reviewer already commented) — that must
+                        # not block a NEW task from being queued behind it
+                        # forever. Only reconsider when it's actually status
+                        # review; every other lock (in_progress etc.) keeps
+                        # queuing exactly like before.
+                        _locked_task = await session.get(Task, best_agent.current_task_id)
+                        _still_parks = True
+                        if _locked_task is not None and _locked_task.status == "review":
+                            from app.services.review_park import review_still_parks
+                            _still_parks = await review_still_parks(session, _locked_task, best_agent)
+                        if _still_parks:
+                            await enqueue_task(agent_id_str, str(task.id))
+                            logger.info(
+                                "Push-dispatch queued: '%s' -> %s (active_task_lock: %s)",
+                                task.title, best_agent.name, best_agent.current_task_id,
+                            )
+                            await emit_event(
+                                session, "task.dispatch_queued",
+                                f"Task '{task.title}' in Queue fuer {best_agent.name} (active task lock)",
+                                board_id=board_id, task_id=task.id, agent_id=best_agent.id,
+                            )
+                            return
 
                     # Guard 2: busy = in_progress OR dispatched-but-not-acked (DB-based)
                     from sqlalchemy import or_

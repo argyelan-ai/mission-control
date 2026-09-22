@@ -3259,6 +3259,18 @@ async def agent_poll(
                     # were no active task.
                     active = None
 
+        # Review-park grace (Lauf 7, live incident: reviewer parked ~1900min
+        # total across 30 days, 8x already commented; developer wrongly
+        # parked on their own unassigned review card 30x). Only applies to
+        # an already-delivered review card (ack_at is not None) — an
+        # unacked one falls through unchanged and is still delivered once
+        # (existing claim semantics below, untouched).
+        if active is not None and active.status == "review" and active.ack_at is not None:
+            from app.services.review_park import review_still_parks
+
+            if not await review_still_parks(session, active, agent):
+                active = None
+
         if active is not None:
             # Fix 2 (poll orphan-run): an acked WORKER in_progress task must
             # show a live run signal before poll reports `working`. Blocked /
@@ -3461,6 +3473,42 @@ async def agent_poll(
         session.add(task)
         await session.commit()
         raise HTTPException(status_code=500, detail=f"Prompt generation failed: {str(e)}")
+
+    # Review-park grace (Lauf 7): a released review card doesn't disappear —
+    # the approve/reject decision is still outstanding. Remind the agent in
+    # the delivered prompt so it isn't silently forgotten once poll has
+    # moved on to a new task. English (Nachpruefung N1: all reviewers have
+    # work_language=en). `mc review` is the WRONG verb here — it puts your
+    # OWN card into review; the actual decision commands are `mc approve
+    # <id>` / `mc reject <id> --feedback "..."`, and the id must be spelled
+    # out because TASK_ID in the environment now points at the NEW card.
+    # Excludes held/stopped cards (run_control) and archived boards
+    # (Nachpruefung K2/N1).
+    from app.models.board import Board as _HintBoard
+
+    _open_review_result = await session.exec(
+        select(Task)
+        .join(_HintBoard, _HintBoard.id == Task.board_id)
+        .where(
+            Task.assigned_agent_id == agent.id,
+            Task.status == "review",
+            Task.dispatch_intent == "review_handoff",
+            Task.review_decision.is_(None),  # type: ignore[union-attr]
+            Task.id != task.id,
+            Task.run_control.is_(None),  # type: ignore[union-attr]
+            _HintBoard.is_archived.is_(False),
+        )
+        .order_by(Task.dispatched_at.asc())
+        .limit(3)
+    )
+    _open_reviews = _open_review_result.all()
+    if _open_reviews:
+        _hint = "\n".join(
+            f'Open review decision: {t.title} ({t.id}) - record it with '
+            f'mc approve {t.id} or mc reject {t.id} --feedback "..."'
+            for t in _open_reviews
+        )
+        prompt = f"{prompt}\n\n{_hint}"
 
     return {
         "state": "new_task",
