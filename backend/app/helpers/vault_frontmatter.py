@@ -19,6 +19,9 @@ VALID_TYPES = {
     # Auto-generated wrapper notes for TaskDeliverables (Phase A vault-as-brain).
     # Carry attachment_path pointing into ~/.mc/vault/attachments/.
     "deliverable",
+    # Task Run Record ("Laufakte") export (Lauf 5) — written to runs/<id>
+    # -laufakte.md by POST /api/v1/tasks/{id}/run-record/to-vault.
+    "run-record",
 }
 
 VALID_STATUS = {"draft", "published", "stale", "archived"}
