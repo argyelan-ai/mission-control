@@ -344,7 +344,17 @@ async def _start_dropper(host: ResolvedHost | None) -> bool:
     may have, and every one of those reads refills the cache. The loop is
     crude on purpose — a second of granularity, no state, and removable with a
     single ``docker rm -f`` by MC or by a human.
+
+    A third, independent net: a ``timeout`` wraps the loop itself, set to the
+    same ``ORPHAN_MAX_AGE`` the sweep uses to decide a prep is still
+    legitimately in flight — a shorter value would let the dropper die on a
+    load that the sweep still considers normal, and a load that outlives
+    even that window is exactly the incident this whole mechanism exists
+    for. Even if MC itself is gone for good (Redis lost, a deploy that never
+    comes back) and ``finish``/the orphan sweep never run, the dropper
+    self-terminates and stops holding the page cache down.
     """
+    dropper_timeout_seconds = int(ORPHAN_MAX_AGE.total_seconds())
     await _ssh(
         f"docker rm -f {DROPPER_CONTAINER} 2>/dev/null || true",
         host=host,
@@ -352,7 +362,8 @@ async def _start_dropper(host: ResolvedHost | None) -> bool:
     )
     _, stderr, exit_code = await _ssh(
         f"docker run -d --name {DROPPER_CONTAINER} --privileged {DROPPER_IMAGE} sh -c "
-        f"'while true; do sync; echo 3 > /proc/sys/vm/drop_caches; sleep 1; done'",
+        f"'timeout {dropper_timeout_seconds} sh -c \"while true; do sync; "
+        f"echo 3 > /proc/sys/vm/drop_caches; sleep 1; done\"'",
         host=host,
         timeout=_SHORT_TIMEOUT,
     )
@@ -619,8 +630,16 @@ async def finish(
     result = {"restored": False, "dropper_removed": False, "success": success}
 
     try:
-        if handle.dropper_started:
-            result["dropper_removed"] = await _stop_dropper(target)
+        # Always attempt the removal, regardless of what `dropper_started`
+        # recorded: `_start_dropper`'s own `docker run -d` can time out
+        # (SSH _SHORT_TIMEOUT=30s, e.g. mid-pull of the image) even though
+        # the container DID start, leaving `dropper_started=False` while
+        # `mc-cache-dropper` keeps running on the box. `docker rm -f` on a
+        # container that does not exist is silent and already handled by
+        # `_stop_dropper` (a non-zero exit just goes to a debug log), so
+        # gating the removal on the flag is pure cost with no safety
+        # benefit.
+        result["dropper_removed"] = await _stop_dropper(target)
         if handle.lowered_to_kb is not None and handle.original_watermark_kb is not None:
             result["restored"] = await _write_watermark_kb(
                 target, handle.original_watermark_kb
