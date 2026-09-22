@@ -28,6 +28,17 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+
+@pytest.fixture(autouse=True)
+def _approval_path_flag_off():
+    """Approval-Pfad = Schalter aus (Lauf 4): these tests assert the Approval
+    row the ACK/pending ladders create; with notice-only escalations on
+    (default since #643) those ladders raise a notice instead."""
+    from app.config import settings
+    with patch.object(settings, "notice_only_escalations_enabled", False):
+        yield
+
+
 from app.utils import utcnow
 
 
@@ -180,11 +191,7 @@ async def test_pending_clock_resumes_after_pause_cap(
         s.add(t)
         await s.commit()
 
-    # Approval-Pfad = Schalter aus (Lauf 4): with notice-only escalations on
-    # (default), the pending ladder raises a notice instead of an Approval row.
-    from app.config import settings
-    with patch.object(settings, "notice_only_escalations_enabled", False):
-        await _run_check(fake_redis)
+    await _run_check(fake_redis)
 
     assert await _approval_count(task.id) == 1, (
         "pending pause must have an upper bound too — a permanently "
