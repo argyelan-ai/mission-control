@@ -49,13 +49,13 @@ Browser (Caddy :80) → Frontend (Next.js 15, :3000)
 
 **Pfad:** `backend/app/`
 
-**Routers (21)**, gruppiert nach Domäne:
+**Routers (22)**, gruppiert nach Domäne:
 
 | Gruppe | Router | Zweck |
 |---|---|---|
 | Auth | `auth.py` | User JWT, Agent PBKDF2, Legacy Token |
 | Agents | `agents.py`, `agent_scoped.py`, `agent_templates.py` | Agent CRUD, Provisioning, Agent-seitige Callbacks (Status-Updates). Wizard-Endpoints (ADR-063): `POST /agents/preview-soul` (seiteneffektfreier SOUL.md-Live-Render), `POST /agents/{id}/health-check` (runtime-bewusster Readiness-Check) |
-| Tasks | `tasks.py`, `consensus.py` | Task CRUD, Multi-Agent Konsens |
+| Tasks | `tasks.py`, `consensus.py`, `run_record.py` (Lauf 5) | Task CRUD, Multi-Agent Konsens. `run_record.py`: Laufakte — kuratierte Zusammenfassung der Task-Historie über sechs Quellen (`GET /tasks/{id}/run-record[.md]` viewer+, `POST .../to-vault` operator+) |
 | Boards & Projects | `boards.py`, `projects.py`, `project_git.py` | Board/Project CRUD, GitHub-Sync |
 | Memory & Intelligence | `memory.py`, `system.py` | Knowledge Base, 3-Layer Memory (Qdrant), Insights |
 | Realtime | `activity.py`, `cli_terminal.py` | SSE Streams, PTY WebSocket |
@@ -63,10 +63,11 @@ Browser (Caddy :80) → Frontend (Next.js 15, :3000)
 | Ops | `approvals.py`, `runtimes.py`, `workflows.py`, `scheduler` | Approvals, Runtime-Mgmt, Automation |
 | Admin | `credentials.py`, `secrets.py`, `cli_plugins.py`, `skills.py` | Credentials Vault, Plugins, Tags |
 
-**Services (29)** — Singletons, alle async:
+**Services (30)** — Singletons, alle async:
 
 | Service | Zweck | Interval |
 |---|---|---|
+| `run_record.py` (Lauf 5) | Laufakte: `build_run_record()` zieht acht kuratierte Kästen (Auftrag+Kinder, Zeiten, Plan, Schritte, Beweise, Kosten, Entscheidungen, Reibung) aus TaskEvent/TaskComment/ActivityEvent/TaskDeliverable/Approval/ModelUsageEvent; `render_run_record_markdown()` rendert davon eine ≤120-Zeilen-Markdown-Fassung. Text-Kürzung immer in Python, nie SQL `substr`/`left` (Pruefbericht Runde 3: der urspruenglich behauptete SQL-Crash war nicht reproduzierbar — Python-Kuerzung ist trotzdem die sichere, zeichengenaue Wahl) | on-demand |
 | `dispatch.py` | Task → Agent zuweisen, Structured Message bauen, RPC-Send | on-demand |
 | `task_runner.py` | Dispatch-ACK-Timeout, Stale Progress, Circuit Breaker, Silent-Abort-Auto-Block (ADR-046, cli-bridge v1) | 60s |
 | `watchdog/` (core + mixins) | Phase-Completion, Session-Recovery, Health-Checks | 30s |
