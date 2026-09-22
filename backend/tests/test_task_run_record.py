@@ -847,3 +847,89 @@ async def test_export_writes_vault_file(auth_client, make_board, make_task, tmp_
     content = written_path.read_text()
     assert "Auftrag" in content
     assert "Export Me" in content
+
+
+@pytest.mark.asyncio
+async def test_export_carries_valid_frontmatter_for_vault_watcher(
+    auth_client, make_board, make_task, tmp_path, monkeypatch,
+):
+    """Live-Befund (nach Deploy main 855eab44): the exported file had no
+    YAML frontmatter at all, so the real VaultWatcher immediately
+    quarantined it to `_rejected/` with "missing required field: id" — the
+    tmp-Vault export test above never saw this because it doesn't run the
+    watcher. The exported file must carry REQUIRED_FIELDS (id, type,
+    agent, date) and a valid `type` (app/helpers/vault_frontmatter.py)."""
+    import app.config
+    monkeypatch.setattr(app.config.settings, "vault_path", tmp_path)
+
+    board = await make_board()
+    task = await make_task(board.id, status="done", title="Export Me")
+
+    resp = await auth_client.post(f"/api/v1/tasks/{task.id}/run-record/to-vault")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    from pathlib import Path as _Path
+    written_path = (
+        tmp_path / body["path"]
+        if not str(body["path"]).startswith(str(tmp_path))
+        else _Path(body["path"])
+    )
+
+    from app.helpers.vault_frontmatter import parse_frontmatter, validate_frontmatter
+
+    post = parse_frontmatter(written_path)
+    validate_frontmatter(post.metadata)  # raises FrontmatterError if this would be quarantined
+
+    assert post.metadata["agent"] == "system"  # runs/ has no agents/<slug>/ folder to own it
+    assert "Auftrag" in post.content
+    assert "Export Me" in post.content
+
+
+@pytest.mark.asyncio
+async def test_export_survives_real_vault_watcher(auth_client, make_board, make_task, tmp_path, monkeypatch):
+    """Same live bug as above, reproduced through the actual VaultWatcher
+    handler (pattern from tests/test_vault_watcher.py) rather than just
+    the frontmatter validator — proves the file is not quarantined end to
+    end, index.upsert() is called, and _rejected/ stays empty."""
+    import app.config
+    monkeypatch.setattr(app.config.settings, "vault_path", tmp_path)
+
+    board = await make_board()
+    task = await make_task(board.id, status="done", title="Watcher Survives Me")
+
+    resp = await auth_client.post(f"/api/v1/tasks/{task.id}/run-record/to-vault")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    from pathlib import Path as _Path
+    written_path = (
+        tmp_path / body["path"]
+        if not str(body["path"]).startswith(str(tmp_path))
+        else _Path(body["path"])
+    )
+
+    from unittest.mock import AsyncMock, MagicMock
+    from app.services.vault_watcher import VaultWatcher
+
+    services = {
+        "index": MagicMock(upsert=MagicMock()),
+        "activity": MagicMock(track_view=AsyncMock(), track_write=AsyncMock()),
+        "embeddings": MagicMock(upsert=AsyncMock(return_value={"ok": True})),
+        "git": MagicMock(stage=MagicMock()),
+        "redis": MagicMock(publish=AsyncMock()),
+    }
+    watcher = VaultWatcher(
+        vault_path=tmp_path,
+        index=services["index"],
+        activity=services["activity"],
+        embeddings=services["embeddings"],
+        git=services["git"],
+        redis=services["redis"],
+    )
+
+    await watcher._handle_create_or_modify(written_path)
+
+    services["index"].upsert.assert_called_once()  # NOT quarantined
+    rejected = tmp_path / "_rejected"
+    assert not rejected.exists() or not any(rejected.iterdir())

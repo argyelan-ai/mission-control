@@ -13,7 +13,9 @@ for reads, require_role(Role.OPERATOR) for the export.
 """
 
 import uuid
+from datetime import datetime, timezone
 
+import frontmatter
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import PlainTextResponse
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -68,10 +70,27 @@ async def export_run_record_to_vault(
     record = await build_run_record(session, task_id)
     markdown = render_run_record_markdown(record)
 
+    # Live-Befund (nach Deploy main 855eab44): a bare Markdown file with no
+    # YAML frontmatter was quarantined by the real VaultWatcher on write —
+    # "missing required field: id" (app/helpers/vault_frontmatter.py
+    # REQUIRED_FIELDS). Every field the watcher checks must be present:
+    # id/type/agent/date. `agent="system"` because `runs/` has no
+    # `agents/<slug>/` folder to own it (path-ownership check only applies
+    # under agents/ — vault_watcher.py:_validate_path_ownership).
+    post = frontmatter.Post(
+        markdown,
+        id=f"run-{task.id}",
+        type="run-record",
+        agent="system",
+        date=datetime.now(timezone.utc).isoformat(),
+        title=f"Laufakte: {task.title}",
+        task=str(task.id),
+    )
+
     runs_dir = settings.vault_path / "runs"
     runs_dir.mkdir(parents=True, exist_ok=True)
     filename = f"{task.id}-laufakte.md"
     target = runs_dir / filename
-    target.write_text(markdown, encoding="utf-8")  # overwrites an existing file, nothing else touched
+    target.write_text(frontmatter.dumps(post), encoding="utf-8")  # overwrites, nothing else touched
 
     return {"path": f"runs/{filename}"}
