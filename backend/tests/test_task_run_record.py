@@ -262,7 +262,7 @@ async def test_run_record_costs_flag_unattributed_claude(auth_client, make_board
 
     await _add(
         ModelUsageEvent(
-            task_id=task.id, harness="sparky", model="qwen38-27b",
+            task_id=task.id, harness="workera", model="qwen38-27b",
             provider="local", session_id="s-1", message_uuid=str(uuid.uuid4()),
             input_tokens=1000, output_tokens=500, cost_usd=0.02,
             ts=utcnow(), source_file="/tmp/a.jsonl",
@@ -337,7 +337,7 @@ async def test_run_record_costs_roll_up_from_children(auth_client, make_board, m
 
     await _add(
         ModelUsageEvent(
-            task_id=child.id, harness="sparky", model="qwen38-27b",
+            task_id=child.id, harness="workera", model="qwen38-27b",
             provider="local", session_id="s-child", message_uuid=str(uuid.uuid4()),
             input_tokens=2000, output_tokens=1000, cost_usd=1.23,
             ts=utcnow(), source_file="/tmp/child.jsonl",
