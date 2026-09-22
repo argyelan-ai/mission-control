@@ -147,8 +147,12 @@ async def test_genuinely_stuck_review_still_escalates(
     )
     await _age_task(task.id, 200)
 
-    async with _session() as s:
-        await _run_check(fake_redis, s)
+    from app.config import settings
+
+    # Approval-Pfad = Schalter aus (Lauf 4)
+    with patch.object(settings, "notice_only_escalations_enabled", False):
+        async with _session() as s:
+            await _run_check(fake_redis, s)
 
     approvals = await _review_stuck_approvals(task.id)
     assert len(approvals) == 1, "genuinely stuck review must still create an approval"

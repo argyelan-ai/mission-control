@@ -141,8 +141,12 @@ async def test_unanswered_watchdog_notify_escalates_once(
                            updated_at=now - timedelta(minutes=75))
     await _add_stage1(task.id, "watchdog_notify", age_minutes=45)
 
-    async with _session() as s:
-        _emit, push = await _run_check(s)
+    from app.config import settings
+
+    # Approval-Pfad = Schalter aus (Lauf 4)
+    with patch.object(settings, "notice_only_escalations_enabled", False):
+        async with _session() as s:
+            _emit, push = await _run_check(s)
 
     escalations = await _comments(task.id, "lead_escalated_notify")
     assert len(escalations) == 1, "exactly one escalation, no stack"
@@ -303,10 +307,14 @@ async def test_second_tick_does_not_repeat(make_board, make_agent, make_task):
                            updated_at=now - timedelta(minutes=75))
     await _add_stage1(task.id, age_minutes=45)
 
-    async with _session() as s:
-        await _run_check(s)
-    async with _session() as s:
-        await _run_check(s)
+    from app.config import settings
+
+    # Approval-Pfad = Schalter aus (Lauf 4)
+    with patch.object(settings, "notice_only_escalations_enabled", False):
+        async with _session() as s:
+            await _run_check(s)
+        async with _session() as s:
+            await _run_check(s)
 
     assert len(await _comments(task.id, "lead_escalated_notify")) == 1
     assert len(await _approvals(task.id, "lead_escalation")) == 1
@@ -561,8 +569,12 @@ async def test_escalation_persists_marker_and_approval_together(
     an approval without a marker (which would escalate twice)."""
     _b, _w, task = await _make_escalatable(make_board, make_agent, make_task)
 
-    async with _session() as s:
-        await _run_check(s)
+    from app.config import settings
+
+    # Approval-Pfad = Schalter aus (Lauf 4)
+    with patch.object(settings, "notice_only_escalations_enabled", False):
+        async with _session() as s:
+            await _run_check(s)
 
     markers = await _comments(task.id, "lead_escalated_notify")
     approvals = await _approvals(task.id, "lead_escalation")

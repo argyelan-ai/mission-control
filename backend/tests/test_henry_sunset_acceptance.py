@@ -103,7 +103,11 @@ async def test_dispatch_escalation_calls_telegram_post_henry_removal(
     #  - telegram_bot.send_approval_telegram (outbound HTTP — DON'T hit real API)
     #  - get_redis -> fake_redis (escalation uses Redis 24h cooldown key)
     #  - activity.broadcast -> AsyncMock (fakeredis pub/sub stub)
-    with patch("app.services.telegram_bot.telegram_bot.send_approval_telegram",
+    from app.config import settings
+
+    # Approval-Pfad = Schalter aus (Lauf 4)
+    with patch.object(settings, "notice_only_escalations_enabled", False), \
+         patch("app.services.telegram_bot.telegram_bot.send_approval_telegram",
                new=AsyncMock(side_effect=_fake_send_approval)):
         with patch("app.services.task_runner.get_redis",
                    return_value=fake_redis):
@@ -175,7 +179,11 @@ async def test_telegram_failure_does_not_block_approval_creation_post_henry(
         dispatch_attempt_id=str(uuid.uuid4()),
     )
 
-    with patch("app.services.telegram_bot.telegram_bot.send_approval_telegram",
+    from app.config import settings
+
+    # Approval-Pfad = Schalter aus (Lauf 4)
+    with patch.object(settings, "notice_only_escalations_enabled", False), \
+         patch("app.services.telegram_bot.telegram_bot.send_approval_telegram",
                new=AsyncMock(side_effect=RuntimeError("Telegram API down"))):
         with patch("app.services.task_runner.get_redis",
                    return_value=fake_redis):

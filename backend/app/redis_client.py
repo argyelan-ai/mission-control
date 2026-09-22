@@ -485,6 +485,21 @@ class RedisKeys:
     def task_rejection_count(task_id: str) -> str:
         return f"mc:task:{task_id}:rejection_count"
 
+    # ── Notice-only escalations (Lauf 4) ────────────────────────────────
+    @staticmethod
+    def notice_marker(task_id: str, action_type: str) -> str:
+        """Per action_type marker (SET NX, TTL 6h) — caps send_report() to
+        once per action_type per card per TTL window (anti-spam)."""
+        return f"mc:notice:{task_id}:{action_type}"
+
+    @staticmethod
+    def notice_marker_any(task_id: str) -> str:
+        """Collective marker (same TTL as notice_marker) — any active notice
+        for this card at all. Read by the silent-card watchdog (treats
+        'Approval pending OR notice_active' the same) and the retraction
+        check, without a SCAN over per-type keys."""
+        return f"mc:notice:{task_id}"
+
     # ── Recovery Dedup ─────────────────────────────────────────────────
     @staticmethod
     def recovery_attempt(task_id: str, recovery_type: str) -> str:

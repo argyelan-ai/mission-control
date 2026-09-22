@@ -28,6 +28,17 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+
+@pytest.fixture(autouse=True)
+def _approval_path_flag_off():
+    """Approval-Pfad = Schalter aus (Lauf 4): these tests assert the Approval
+    row the ACK/pending ladders create; with notice-only escalations on
+    (default since #643) those ladders raise a notice instead."""
+    from app.config import settings
+    with patch.object(settings, "notice_only_escalations_enabled", False):
+        yield
+
+
 from app.utils import utcnow
 
 

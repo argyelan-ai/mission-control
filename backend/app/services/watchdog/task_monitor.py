@@ -21,6 +21,7 @@ from app.models.agent import Agent
 from app.models.task import Task, TaskComment, TaskEvent
 from app.redis_client import RedisKeys, get_redis, try_claim_heal
 from app.services.activity import emit_event
+from app.services.operator_notices import notice_active, raise_notice, retract_notice
 from app.services.task_state import lock_and_set
 from app.utils import ensure_aware, utcnow
 
@@ -1010,29 +1011,43 @@ class TaskMonitorMixin:
             if await redis.get(dedup_key):
                 continue
 
-            # Check whether an approval already exists
-            existing = (await session.exec(
-                select(Approval).where(
-                    Approval.task_id == task.id,
-                    Approval.action_type == "dependency_zombie",
-                    Approval.status == "pending",
-                )
-            )).first()
+            from app.config import settings
 
-            if not existing:
-                approval = Approval(
-                    board_id=task.board_id,
-                    task_id=task.id,
-                    agent_id=task.assigned_agent_id,
+            notice_body = (
+                f"Task '{task.title}' wartet auf '{dep_task.title}' "
+                f"die im Status '{dep_status}' steht. "
+                f"Dependency wird nie erfuellt - manuelle Aufloesung noetig."
+            )
+
+            if settings.notice_only_escalations_enabled:
+                await raise_notice(
+                    session,
                     action_type="dependency_zombie",
-                    description=(
-                        f"Task '{task.title}' wartet auf '{dep_task.title}' "
-                        f"die im Status '{dep_status}' steht. "
-                        f"Dependency wird nie erfuellt — manuelle Aufloesung noetig."
-                    ),
+                    task=task,
+                    title=f"Zombie-Dependency: '{task.title}' wartet auf '{dep_task.title}'",
+                    body=notice_body,
+                    agent_id=task.assigned_agent_id,
                 )
-                session.add(approval)
-                await session.commit()
+            else:
+                # Check whether an approval already exists
+                existing = (await session.exec(
+                    select(Approval).where(
+                        Approval.task_id == task.id,
+                        Approval.action_type == "dependency_zombie",
+                        Approval.status == "pending",
+                    )
+                )).first()
+
+                if not existing:
+                    approval = Approval(
+                        board_id=task.board_id,
+                        task_id=task.id,
+                        agent_id=task.assigned_agent_id,
+                        action_type="dependency_zombie",
+                        description=notice_body,
+                    )
+                    session.add(approval)
+                    await session.commit()
 
             await redis.set(dedup_key, "1", ex=14400)  # 4h TTL
 
@@ -1108,7 +1123,14 @@ class TaskMonitorMixin:
             if task.review_decision in ("approved", "changes_requested"):
                 continue
 
-            age_minutes = (now - task.updated_at).total_seconds() / 60
+            # Bugfix (Lauf 4, notice-only escalations): ensure_aware on both
+            # sides. SQLite (tests) hands back naive datetimes regardless of
+            # the column's timezone=True, while Postgres (prod) and some
+            # tests' patched utcnow() are naive/aware inconsistently — see
+            # the identical pattern at line ~2596.
+            age_minutes = (
+                ensure_aware(now) - ensure_aware(task.updated_at)
+            ).total_seconds() / 60
             if age_minutes < 60:
                 continue
 
@@ -1221,33 +1243,49 @@ class TaskMonitorMixin:
                     )
                     continue
 
-                existing = (await session.exec(
-                    select(Approval).where(
-                        Approval.task_id == task.id,
-                        Approval.action_type == "review_stuck",
-                        Approval.status == "pending",
-                    )
-                )).first()
+                from app.config import settings
 
-                if not existing:
-                    approval = Approval(
-                        board_id=task.board_id,
-                        task_id=task.id,
-                        agent_id=task.assigned_agent_id,
+                notice_body = (
+                    f"Review fuer '{task.title}' haengt seit {int(age_minutes)} Min. "
+                    f"Reviewer: {reviewer_name}. Manuelle Pruefung noetig."
+                )
+
+                if settings.notice_only_escalations_enabled:
+                    await raise_notice(
+                        session,
                         action_type="review_stuck",
-                        description=(
-                            f"Review fuer '{task.title}' haengt seit {int(age_minutes)} Min. "
-                            f"Reviewer: {reviewer_name}. Manuelle Pruefung noetig."
-                        ),
-                        expires_at=now + timedelta(hours=24),
+                        task=task,
+                        title=f"Review STUCK: '{task.title}' ({reviewer_name})",
+                        body=notice_body,
+                        agent_id=task.assigned_agent_id,
                     )
-                    session.add(approval)
-                    await session.commit()
+                    outcome_text = "Notiz erzeugt"
+                else:
+                    existing = (await session.exec(
+                        select(Approval).where(
+                            Approval.task_id == task.id,
+                            Approval.action_type == "review_stuck",
+                            Approval.status == "pending",
+                        )
+                    )).first()
+
+                    if not existing:
+                        approval = Approval(
+                            board_id=task.board_id,
+                            task_id=task.id,
+                            agent_id=task.assigned_agent_id,
+                            action_type="review_stuck",
+                            description=notice_body,
+                            expires_at=now + timedelta(hours=24),
+                        )
+                        session.add(approval)
+                        await session.commit()
+                    outcome_text = "Approval erstellt"
 
                 await redis.set(dedup_key, "1", ex=7200)
                 await emit_event(
                     session, "task.review_stuck",
-                    f"Review STUCK: '{task.title}' ({reviewer_name}) — {int(age_minutes)}min — Approval erstellt",
+                    f"Review STUCK: '{task.title}' ({reviewer_name}) — {int(age_minutes)}min — {outcome_text}",
                     board_id=task.board_id, task_id=task.id,
                     severity="warning",
                 )
@@ -1450,13 +1488,18 @@ class TaskMonitorMixin:
 
             # Operator already has a ticket on this card — don't add a
             # second report (existing watchdogs must not get louder).
+            # Notice-only escalations (Lauf 4) leave no Approval row, so a
+            # card silenced today by an open review_stuck/dispatch_escalation
+            # etc. would otherwise get LOUDER (stage-1 notify + stage-2
+            # escalation) once the flag is on — check the notice marker too
+            # (Pruefbericht B1).
             pending_approval = (await session.exec(
                 select(Approval).where(
                     Approval.task_id == task.id,
                     Approval.status == "pending",
                 )
             )).first()
-            if pending_approval is not None:
+            if pending_approval is not None or await notice_active(task.id):
                 continue
 
             last_activity = await self._silent_card_last_activity_at(
@@ -2023,13 +2066,15 @@ class TaskMonitorMixin:
 
             # Operator already has a live decision ticket on this card —
             # a second, parallel channel would be noise, not escalation.
+            # Notice-only escalations (Lauf 4) leave no Approval row — check
+            # the notice marker too (Pruefbericht B1).
             pending_approval = (await session.exec(
                 select(Approval).where(
                     Approval.task_id == task.id,
                     Approval.status == "pending",
                 )
             )).first()
-            if pending_approval is not None:
+            if pending_approval is not None or await notice_active(task.id):
                 continue
 
             # Exactly-once: only escalate if no escalation marker exists
@@ -2068,53 +2113,86 @@ class TaskMonitorMixin:
                 f"Agent: {assigned_name}\n"
                 f"Lead-Meldung vom: {stage1_at.isoformat()}"
             )
-            # Marker and effect commit TOGETHER (review feedback B2, PR #525):
-            # committing the ``lead_escalated_notify`` marker before the
-            # Approval means an approval-write failure leaves a marker that
-            # claims an escalation that never happened — and exactly-once
-            # dedup then suppresses the real escalation forever. One
-            # transaction: either both exist or neither does.
-            approval = Approval(
-                board_id=task.board_id,
-                task_id=task.id,
-                agent_id=task.assigned_agent_id,
-                action_type="lead_escalation",
-                description=(
-                    f"Lead {lead.name} hat seit {minutes_waiting}min nicht auf die "
-                    f"Lead-Meldung bei \"{task.title}\" reagiert"
-                ),
-                payload={
-                    "stage1_comment_type": stage1.comment_type,
-                    "stage1_at": stage1_at.isoformat(),
-                    "minutes_waiting": minutes_waiting,
-                    "lead_id": str(lead.id),
-                    "task_status": task.status,
-                },
-                status="pending",
-                expires_at=now + timedelta(hours=24),
-            )
-            session.add(approval)
-            session.add(TaskComment(
-                task_id=task.id,
-                author_type="system",
-                content=msg,
-                comment_type="lead_escalated_notify",
-            ))
-            await session.commit()
+            from app.config import settings
 
-            try:
-                from app.services import operator_approvals
-                await operator_approvals.send_approval(
-                    approval.id, assigned_name, task.title,
-                    f"Lead-Meldung ohne Reaktion seit {minutes_waiting}min "
-                    f"(Lead: {lead.name}).",
+            # Marker and effect commit TOGETHER (review feedback B2, PR #525)
+            # — true for the else (Approval) branch below: marker + Approval
+            # are added to the SAME session and committed in one
+            # transaction, so an approval-write failure can't leave a marker
+            # with no escalation behind it.
+            #
+            # The if (notice-only) branch does NOT have that guarantee: the
+            # marker commits first, then raise_notice() runs separately —
+            # if its emit_event() call raises (not caught inside
+            # raise_notice, unlike the redis-marker and send_report steps),
+            # the marker exists but the escalation never reached the
+            # operator, and exactly-once dedup then suppresses a retry
+            # (Pruefbericht Punkt 8, documented not fixed this round).
+            if settings.notice_only_escalations_enabled:
+                session.add(TaskComment(
+                    task_id=task.id,
+                    author_type="system",
+                    content=msg,
+                    comment_type="lead_escalated_notify",
+                ))
+                await session.commit()
+
+                await raise_notice(
+                    session,
+                    action_type="lead_escalation",
+                    task=task,
+                    title=(
+                        f"ESKALATION STUFE 2: '{task.title}' - Lead {lead.name} "
+                        f"reagiert nicht"
+                    ),
+                    body=(
+                        f"Lead {lead.name} hat seit {minutes_waiting}min nicht auf die "
+                        f"Lead-Meldung bei \"{task.title}\" reagiert"
+                    ),
+                    agent_id=lead.id,
                 )
-            except Exception as e:  # noqa: BLE001 — Approval+Marker sind persistiert,
-                # der Operator sieht es im Approval-Inbox auch ohne Push
-                logger.warning(
-                    "Lead-escalation operator push failed for '%s': %s",
-                    task.title, e,
+            else:
+                approval = Approval(
+                    board_id=task.board_id,
+                    task_id=task.id,
+                    agent_id=task.assigned_agent_id,
+                    action_type="lead_escalation",
+                    description=(
+                        f"Lead {lead.name} hat seit {minutes_waiting}min nicht auf die "
+                        f"Lead-Meldung bei \"{task.title}\" reagiert"
+                    ),
+                    payload={
+                        "stage1_comment_type": stage1.comment_type,
+                        "stage1_at": stage1_at.isoformat(),
+                        "minutes_waiting": minutes_waiting,
+                        "lead_id": str(lead.id),
+                        "task_status": task.status,
+                    },
+                    status="pending",
+                    expires_at=now + timedelta(hours=24),
                 )
+                session.add(approval)
+                session.add(TaskComment(
+                    task_id=task.id,
+                    author_type="system",
+                    content=msg,
+                    comment_type="lead_escalated_notify",
+                ))
+                await session.commit()
+
+                try:
+                    from app.services import operator_approvals
+                    await operator_approvals.send_approval(
+                        approval.id, assigned_name, task.title,
+                        f"Lead-Meldung ohne Reaktion seit {minutes_waiting}min "
+                        f"(Lead: {lead.name}).",
+                    )
+                except Exception as e:  # noqa: BLE001 — Approval+Marker sind persistiert,
+                    # der Operator sieht es im Approval-Inbox auch ohne Push
+                    logger.warning(
+                        "Lead-escalation operator push failed for '%s': %s",
+                        task.title, e,
+                    )
 
             try:
                 await emit_event(
@@ -2286,6 +2364,18 @@ class TaskMonitorMixin:
                         "Retract operator push failed for '%s': %s",
                         task.title, e,
                     )
+            elif await notice_active(task.id):
+                # Notice-only path (Lauf 4, Pruefbericht B2): no Approval row
+                # to supersede, so the ESKALATION notice would otherwise
+                # never get its Entwarnung. lead_escalation is the only
+                # notice type this watchdog covers a stage-2 for.
+                await retract_notice(
+                    session,
+                    action_type="lead_escalation",
+                    task=task,
+                    title=f"Entwarnung: '{task.title}' bewegt sich wieder",
+                    body=resolver_note,
+                )
 
             logger.info(
                 "Silent-card alert retracted for '%s' (active since %s)",

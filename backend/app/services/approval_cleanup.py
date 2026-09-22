@@ -51,7 +51,23 @@ APPROVAL_VALID_STATES: dict[str, set[str]] = {
     # unknown action_type (`.get(...) is None → continue`), so a stale
     # dependency_zombie approval sits in the operator's inbox forever.
     "dependency_zombie": {"inbox", "in_progress"},
+    # lead_escalation is deliberately NOT a key here — see the module
+    # docstring: it has its own auto-close mechanism
+    # (LEAD_ESCALATION_CLOSE_ON_STATUS / _lead_escalation_close_note) and
+    # must not supersede on a mere status flip.
 }
+
+# Watchdog-generated STOERUNGSMELDUNGEN, not operator decisions: 77 of 92
+# approvals in 30 days went unanswered because three of these four types
+# auto-superseded (see APPROVAL_VALID_STATES above) the moment the card
+# leaves the triggering state — lead_escalation instead auto-closes via
+# LEAD_ESCALATION_CLOSE_ON_STATUS (see module docstring), deliberately NOT
+# a key in APPROVAL_VALID_STATES. Behind
+# settings.notice_only_escalations_enabled all four raise a passive notice
+# instead of an Approval yes/no question.
+NOTICE_ONLY_ACTION_TYPES: frozenset[str] = frozenset(
+    {"dispatch_escalation", "lead_escalation", "review_stuck", "dependency_zombie"}
+)
 
 # lead_escalation (silent-card watchdog, stage 2): a CLOSED card has no open
 # problem by definition, so its pending escalation closes with the card —
