@@ -142,4 +142,12 @@ describe("RuntimeSelectionSection", () => {
     expect(select.value).toBe("slot-a");
     expect(select.selectedOptions[0].textContent).toMatch(/not in the runtime list/);
   });
+
+  it("says the runtime list failed to load instead of 'loading…' forever", async () => {
+    vi.spyOn(api.runtimes, "list").mockRejectedValue(new Error("boom"));
+    renderWithQuery(<RuntimeSelectionSection agent={mkAgent({ harness: "claude" })} agentId="agent-1" />);
+    const select = (await screen.findByRole("combobox")) as HTMLSelectElement;
+    await waitFor(() => expect(select.selectedOptions[0].textContent).toMatch(/could not load runtimes/i));
+    expect(select.value).toBe("slot-a");
+  });
 });

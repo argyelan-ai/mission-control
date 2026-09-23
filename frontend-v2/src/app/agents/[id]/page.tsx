@@ -655,7 +655,7 @@ export function RuntimeSelectionSection({ agent, agentId }: { agent: Agent; agen
   // derived from the backend verdict, not from a harness allowlist.
   const isHostInplace = agent.agent_runtime === "host" && isSwitchable;
 
-  const { data: runtimesData } = useQuery({
+  const { data: runtimesData, isError: runtimesError } = useQuery({
     queryKey: ["runtimes"],
     queryFn: () => api.runtimes.list(),
     enabled: isSwitchable,
@@ -756,7 +756,11 @@ export function RuntimeSelectionSection({ agent, agentId }: { agent: Agent; agen
                   gar nicht anzubieten ist ehrlicher als ein Klick ins Leere. */}
               {showBoundPlaceholder && (
                 <option value={boundId!}>
-                  {runtimesData ? t("currentBindingMissing") : t("currentBindingLoading")}
+                  {runtimesData
+                    ? t("currentBindingMissing")
+                    : runtimesError
+                      ? t("currentBindingLoadFailed")
+                      : t("currentBindingLoading")}
                 </option>
               )}
               {allowsRuntimeFallback(agent.harness) && (

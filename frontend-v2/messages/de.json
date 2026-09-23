@@ -307,6 +307,7 @@
       "runtimeSwitchUnsupported": "Runtime-Switch wird für diesen Agenten nicht unterstützt.",
       "fallbackOption": "— Fallback (docker-compose env) —",
       "currentBindingLoading": "Aktuelle Bindung (Runtimes werden geladen…)",
+      "currentBindingLoadFailed": "Aktuelle Bindung (Runtimes konnten nicht geladen werden — neu laden zum Wiederholen)",
       "currentBindingMissing": "Aktuelle Bindung — nicht in der Runtime-Liste (deaktiviert oder entfernt)",
       "runtimeDisabled": "deaktiviert",
       "runtimeCloudUnavailable": "Cloud, nicht auf dieser Box verfügbar",
