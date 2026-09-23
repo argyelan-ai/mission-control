@@ -1,0 +1,353 @@
+"""A2–A5, A7 — mc-head start/stop/restart/result/watch with a fake harness.
+
+Everything runs against a temporary MC_HOME and a local bare repo as origin
+(registered as a scratch repo). The fake harness gets the exact argv of the
+harness table, so the table itself is under test too.
+"""
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+import time
+import uuid
+from pathlib import Path
+
+import pytest
+
+from tests.heads_host_helpers import (
+    MC_HEAD,
+    fake_harness,
+    make_origin,
+    mark_scratch,
+    read_status,
+    run_head,
+    seed_clone,
+    wait_phase,
+    write_spec,
+)
+
+pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="host script is POSIX-only")
+
+
+@pytest.fixture
+def env(tmp_path: Path):
+    mc_home = tmp_path / "mc"
+    mc_home.mkdir()
+    origin, full_name = make_origin(tmp_path)
+    clone = seed_clone(mc_home, origin, full_name)
+    mark_scratch(mc_home, full_name)
+    return {"mc_home": mc_home, "origin": origin, "full_name": full_name, "clone": clone, "tmp": tmp_path}
+
+
+def _extra(harness: Path, **more) -> dict:
+    d = {"MC_HEAD_BIN_OMP": str(harness), "MC_HEAD_BIN_CLAUDE": str(harness), "SECRET_TOKEN_X": "leak-me"}
+    d.update(more)
+    return d
+
+
+# ── A2: start, worktree, env, guards ────────────────────────────────────
+
+
+def test_start_runs_harness_in_worktree_and_exits(env):
+    mc_home = env["mc_home"]
+    harness = fake_harness(env["tmp"], "echo hello from head; echo 'step 1/7 plan' > \"$MC_HEAD_RUN_DIR/step.txt\"")
+    run_id = write_spec(mc_home)
+    res = run_head(mc_home, "start", run_id, env_extra=_extra(harness))
+    assert res.returncode == 0, res.stdout + res.stderr
+    status = wait_phase(mc_home, run_id, "exited")
+    assert status["exit_code"] == 0
+    assert status["reason"] is None
+    run = mc_home / "heads" / run_id
+    # worktree on the head branch, from origin/main
+    branch = subprocess.run(
+        ["git", "-C", str(run / "wt"), "branch", "--show-current"], capture_output=True, text=True
+    ).stdout.strip()
+    assert branch.startswith("head/")
+    assert "hello from head" in (run / "head.log").read_text()
+    assert (run / "step.txt").read_text().strip() == "step 1/7 plan"
+    # harness table: omp × local
+    argv = (run / "argv.txt").read_text().splitlines()
+    assert argv[:4] == ["--profile", "mc-head", "--model", "mc-openai/GLM-5.3-Flash-EXL3"]
+    assert "-p" in argv and "--auto-approve" in argv and "--no-session" in argv
+    assert argv[argv.index("--append-system-prompt") + 1] == str(run / "procedure.md")
+    assert argv[argv.index("--max-time") + 1] == "600"
+    assert "Say hello." in "\n".join(argv)
+    # env -i: own HOME, shims first on PATH, nothing inherited
+    env_lines = dict(
+        line.split("=", 1) for line in (run / "env.txt").read_text().splitlines() if "=" in line
+    )
+    assert env_lines["HOME"] == str(run / "home")
+    assert env_lines["PATH"].split(":")[0] == str(run / "bin")
+    assert env_lines["GIT_CONFIG_GLOBAL"] == "/dev/null"
+    assert "SECRET_TOKEN_X" not in env_lines
+    assert "MC_HOME" not in env_lines
+    # omp profile rendered into the head's own HOME, never the operator's
+    models = run / "home" / ".omp" / "profiles" / "mc-head" / "agent" / "models.yml"
+    assert "baseUrl: http://127.0.0.1:9/v1" in models.read_text()
+    assert oct(models.stat().st_mode & 0o777) == "0o600"
+
+
+def test_claude_pair_uses_bare_settings_and_own_config_dir(env):
+    mc_home = env["mc_home"]
+    harness = fake_harness(env["tmp"], "true")
+    run_id = write_spec(mc_home, harness="claude")
+    run = mc_home / "heads" / run_id
+    (run / "head.env").write_text(
+        "ANTHROPIC_BASE_URL='http://127.0.0.1:9'\nANTHROPIC_API_KEY='placeholder'\nEVIL=1\nGH_TOKEN=smuggled\n"
+    )
+    assert run_head(mc_home, "start", run_id, env_extra=_extra(harness)).returncode == 0
+    wait_phase(mc_home, run_id, "exited")
+    argv = (run / "argv.txt").read_text().splitlines()
+    assert argv[:3] == ["-p", "--bare", "--settings"]
+    assert argv[argv.index("--append-system-prompt-file") + 1] == str(run / "procedure.md")
+    settings = json.loads((run / "head-settings.json").read_text())
+    assert "Bash(gh pr merge:*)" in settings["permissions"]["deny"]
+    assert "Read(~/.ssh/**)" in settings["permissions"]["deny"]
+    assert not any(a == "Bash" or a == "Bash(*)" for a in settings["permissions"]["allow"])
+    env_lines = dict(l.split("=", 1) for l in (run / "env.txt").read_text().splitlines() if "=" in l)
+    assert env_lines["CLAUDE_CONFIG_DIR"] == str(run / "claude-config")
+    assert env_lines["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:9"
+    assert "EVIL" not in env_lines
+    # head.env cannot smuggle a GitHub token — only the operator file can
+    assert "GH_TOKEN" not in env_lines
+
+
+def test_pre_push_hook_refuses_main_and_force(env):
+    mc_home = env["mc_home"]
+    harness = fake_harness(env["tmp"], "true")
+    run_id = write_spec(mc_home)
+    assert run_head(mc_home, "start", run_id, env_extra=_extra(harness)).returncode == 0
+    wait_phase(mc_home, run_id, "exited")
+    wt = mc_home / "heads" / run_id / "wt"
+    git = ["git", "-C", str(wt), "-c", "user.name=t", "-c", "user.email=t@example.invalid"]
+    (wt / "x.txt").write_text("x\n")
+    subprocess.run([*git, "add", "x.txt"], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "x"], check=True)
+    to_main = subprocess.run([*git, "push", "origin", "HEAD:main"], capture_output=True, text=True)
+    assert to_main.returncode != 0
+    assert "refused" in to_main.stderr
+    ok = subprocess.run([*git, "push", "origin", "HEAD:refs/heads/head/demo-ok"], capture_output=True, text=True)
+    assert ok.returncode == 0, ok.stderr
+    subprocess.run([*git, "commit", "-q", "--amend", "-m", "rewritten"], check=True)
+    force = subprocess.run(
+        [*git, "push", "--force", "origin", "HEAD:refs/heads/head/demo-ok"], capture_output=True, text=True
+    )
+    assert force.returncode != 0 and "non-fast-forward" in force.stderr
+
+
+def test_shims_block_tools_and_gh_merge(env, tmp_path):
+    mc_home = env["mc_home"]
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text("#!/bin/sh\necho REAL-GH \"$@\"\n")
+    fake_gh.chmod(0o755)
+    harness = fake_harness(env["tmp"], "true")
+    run_id = write_spec(mc_home)
+    assert run_head(mc_home, "start", run_id, env_extra=_extra(harness, MC_HEAD_GH=str(fake_gh))).returncode == 0
+    wait_phase(mc_home, run_id, "exited")
+    bindir = mc_home / "heads" / run_id / "bin"
+    for tool in ("docker", "ssh", "sudo", "launchctl"):
+        r = subprocess.run([str(bindir / tool), "ps"], capture_output=True, text=True)
+        assert r.returncode == 126 and "blocked" in r.stderr
+    merge = subprocess.run([str(bindir / "gh"), "pr", "merge", "1", "--admin"], capture_output=True, text=True)
+    assert merge.returncode == 126
+    lst = subprocess.run([str(bindir / "gh"), "pr", "list"], capture_output=True, text=True)
+    assert lst.returncode == 0 and "REAL-GH pr list" in lst.stdout
+
+
+def test_real_repo_needs_identity_and_omp_needs_sandbox(env):
+    mc_home = env["mc_home"]
+    harness = fake_harness(env["tmp"], "true")
+    run_id = write_spec(mc_home, repo_full_name="owner/real-repo")
+    run_head(mc_home, "start", run_id, env_extra=_extra(harness))
+    assert read_status(mc_home, run_id)["reason"] == "gh_identity_missing"
+    (mc_home / "heads" / "gh-token").write_text("github_pat_fake\n")
+    run_id2 = write_spec(mc_home, repo_full_name="owner/real-repo")
+    run_head(mc_home, "start", run_id2, env_extra=_extra(harness))
+    assert read_status(mc_home, run_id2)["reason"] == "sandbox_required"
+
+
+# ── A3: box lock with owner ─────────────────────────────────────────────
+
+SLEEPER = "trap 'exit 0' TERM; while :; do sleep 0.1; done"
+
+
+def test_second_head_on_same_box_is_busy_and_lock_is_released(env):
+    mc_home = env["mc_home"]
+    harness = fake_harness(env["tmp"], SLEEPER)
+    first = write_spec(mc_home)
+    assert run_head(mc_home, "start", first, env_extra=_extra(harness)).returncode == 0
+    wait_phase(mc_home, first, "running")
+    second = write_spec(mc_home)
+    run_head(mc_home, "start", second, env_extra=_extra(harness))
+    status2 = wait_phase(mc_home, second, "exited")
+    assert status2["reason"] == "box_busy"
+    lock = mc_home / "heads" / "locks" / str(uuid.UUID(int=1))
+    assert lock.is_dir()
+    assert run_head(mc_home, "stop", first, env_extra=_extra(harness)).returncode == 0
+    assert read_status(mc_home, first)["reason"] == "stopped"
+    assert not lock.exists()
+
+
+def test_stale_lock_of_dead_owner_is_taken_over(env):
+    mc_home = env["mc_home"]
+    harness = fake_harness(env["tmp"], "true")
+    dead = subprocess.Popen(["true"])
+    dead.wait()
+    lock = mc_home / "heads" / "locks" / str(uuid.UUID(int=1))
+    lock.mkdir(parents=True)
+    (lock / "owner.json").write_text(json.dumps({"pid": dead.pid, "start": "gone", "run_id": "x"}))
+    run_id = write_spec(mc_home)
+    run_head(mc_home, "start", run_id, env_extra=_extra(harness))
+    status = wait_phase(mc_home, run_id, "exited")
+    assert status["reason"] is None, status
+    assert not lock.exists()
+
+
+# ── A4: time limit, stop, restart ───────────────────────────────────────
+
+
+def test_time_limit_kills_a_harness_that_ignores_sigterm(env):
+    mc_home = env["mc_home"]
+    harness = fake_harness(env["tmp"], "trap '' TERM; while :; do sleep 0.1; done")
+    run_id = write_spec(mc_home)
+    t0 = time.time()
+    run_head(mc_home, "start", run_id, env_extra=_extra(harness, MC_HEAD_MAX_TIME_S="1"))
+    status = wait_phase(mc_home, run_id, "exited", timeout=30)
+    assert status["reason"] == "time_limit"
+    assert time.time() - t0 < 20
+    pid = status["pid"]
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+
+
+def test_restart_waits_for_old_run_never_two_heads_in_one_worktree(env, tmp_path):
+    mc_home = env["mc_home"]
+    marker_dir = tmp_path / "markers"
+    marker_dir.mkdir()
+    body = (
+        f"if [ -e {marker_dir}/active ]; then echo OVERLAP >> {marker_dir}/overlap; fi\n"
+        f"touch {marker_dir}/active\n"
+        f"trap 'sleep 1; rm -f {marker_dir}/active; exit 0' TERM\n"
+        "while :; do sleep 0.1; done"
+    )
+    harness = fake_harness(env["tmp"], body)
+    old = write_spec(mc_home)
+    assert run_head(mc_home, "start", old, env_extra=_extra(harness)).returncode == 0
+    wait_phase(mc_home, old, "running")
+    time.sleep(0.5)
+    old_spec = json.loads((mc_home / "heads" / old / "spec.json").read_text())
+    new = write_spec(mc_home, mode="continue", restarted_from=old, branch=old_spec["branch"], harness="claude")
+    res = run_head(mc_home, "restart", old, new, env_extra=_extra(harness))
+    assert res.returncode == 0, res.stdout + res.stderr
+    wait_phase(mc_home, new, "running")
+    time.sleep(0.5)
+    assert not (marker_dir / "overlap").exists()
+    # continue mode: the SAME worktree (moved), same branch
+    wt_new = mc_home / "heads" / new / "wt"
+    assert wt_new.is_dir() and not (mc_home / "heads" / old / "wt").exists()
+    assert read_status(mc_home, old)["reason"] == "stopped"
+    run_head(mc_home, "stop", new, env_extra=_extra(harness))
+
+
+# ── A5: result detection ────────────────────────────────────────────────
+
+
+def test_question_with_exit_zero_is_detected(env):
+    mc_home = env["mc_home"]
+    harness = fake_harness(env["tmp"], 'echo "Remove the endpoint?" > "$MC_HEAD_RUN_DIR/question.md"; exit 0')
+    run_id = write_spec(mc_home)
+    run_head(mc_home, "start", run_id, env_extra=_extra(harness))
+    status = wait_phase(mc_home, run_id, "exited")
+    assert status["exit_code"] == 0
+    assert status["question"] is True
+    assert status["pr_url"] is None
+
+
+def test_run_record_found_by_head_run_and_time_window(env, tmp_path):
+    mc_home = env["mc_home"]
+    jobs = mc_home / "vault" / "jobs"
+    run_id = str(uuid.uuid4())
+    other = str(uuid.uuid4())
+    record = (
+        "---\nid: job-x\ntype: run-record\nagent: head\ndate: 2026-09-23\n"
+        f"head_run: {run_id}\n---\n\nStatus: passed\n"
+    )
+    body = (
+        f"mkdir -p {jobs}/2026-09-23-old {jobs}/2026-09-23-other {jobs}/2026-09-23-mine\n"
+        # an OLD record with the right id (outside the window) …
+        f"printf '%s' '{record}' > {jobs}/2026-09-23-old/run-record.md\n"
+        f"touch -t 202001010000 {jobs}/2026-09-23-old/run-record.md\n"
+        # … a record of another run …
+        f"printf '%s' '{record.replace(run_id, other)}' > {jobs}/2026-09-23-other/run-record.md\n"
+        # … and ours.
+        f"printf '%s' '{record}' > {jobs}/2026-09-23-mine/run-record.md\n"
+    )
+    harness = fake_harness(env["tmp"], body)
+    write_spec(mc_home, run_id=run_id)
+    run_head(mc_home, "start", run_id, env_extra=_extra(harness))
+    status = wait_phase(mc_home, run_id, "exited")
+    assert status["run_record_path"] == str(jobs / "2026-09-23-mine" / "run-record.md")
+
+
+def test_pr_url_is_found_by_the_wrapper(env, tmp_path):
+    mc_home = env["mc_home"]
+    (mc_home / "heads" / "gh-token").write_text("github_pat_fake\n")
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(
+        "#!/bin/sh\ncase \"$*\" in *'pr list'*) echo '[{\"url\":\"https://github.com/owner/demo/pull/7\"}]';; esac\n"
+    )
+    fake_gh.chmod(0o755)
+    harness = fake_harness(env["tmp"], "true")
+    run_id = write_spec(mc_home)
+    run_head(mc_home, "start", run_id, env_extra=_extra(harness, MC_HEAD_GH=str(fake_gh)))
+    status = wait_phase(mc_home, run_id, "exited")
+    assert status["pr_url"] == "https://github.com/owner/demo/pull/7"
+
+
+# ── A7: spool watcher ───────────────────────────────────────────────────
+
+
+def _spool(mc_home: Path, name: str, payload) -> Path:
+    spool = mc_home / "heads" / "spool"
+    spool.mkdir(parents=True, exist_ok=True)
+    p = spool / name
+    p.write_text(payload if isinstance(payload, str) else json.dumps(payload))
+    return p
+
+
+def test_watch_starts_a_spooled_run(env):
+    mc_home = env["mc_home"]
+    harness = fake_harness(env["tmp"], "true")
+    run_id = write_spec(mc_home)
+    _spool(mc_home, f"{run_id}.start.json", {"action": "start", "run_id": run_id, "repo_full_name": "evil/x"})
+    assert run_head(mc_home, "watch", env_extra=_extra(harness)).returncode == 0
+    wait_phase(mc_home, run_id, "exited")
+    assert (mc_home / "heads" / "spool" / "done" / f"{run_id}.start.json").exists()
+
+
+def test_watch_rejects_unknown_action_and_malformed_files(env):
+    mc_home = env["mc_home"]
+    run_id = write_spec(mc_home)
+    _spool(mc_home, "a.json", {"action": "exec", "run_id": run_id, "cmd": "rm -rf ~"})
+    _spool(mc_home, "b.json", "{not json")
+    _spool(mc_home, "c.json", {"action": "start", "run_id": "../../x"})
+    _spool(mc_home, "d.json", {"action": "restart", "run_id": run_id})
+    assert run_head(mc_home, "watch").returncode == 0
+    rejected = {p.name for p in (mc_home / "heads" / "spool" / "rejected").iterdir()}
+    assert rejected == {"a.json", "b.json", "c.json", "d.json"}
+    assert read_status(mc_home, run_id) is None
+    log = (mc_home / "heads" / "spool" / "watch.log").read_text()
+    assert "unknown action" in log and "malformed" in log
+
+
+@pytest.mark.skipif(not Path("/usr/bin/python3").exists(), reason="no system python")
+def test_script_compiles_on_system_python():
+    """launchd runs mc-head with the macOS system python (3.9)."""
+    res = subprocess.run(
+        ["/usr/bin/python3", "-c", f"import ast,sys; ast.parse(open({str(MC_HEAD)!r}).read())"],
+        capture_output=True, text=True,
+    )
+    assert res.returncode == 0, res.stderr
+    assert run_head(Path("/nonexistent-mc"), "validate", "x").returncode == 2

@@ -1,0 +1,43 @@
+;; mc-head sandbox profile (spec §9 layer 3). Used only with MC_HEAD_SANDBOX=1.
+;; Parameters (sandbox-exec -D): RUN, WT, CLONE_GIT, VAULT_JOBS, REAL_HOME, MC_HOME,
+;; USER_TMP (the per-user temp root, /private/var/folders on macOS).
+;; Order matters: later rules win.
+(version 1)
+(allow default)
+
+;; Writes: nothing by default …
+(deny file-write*)
+;; … except the worktree, the clone's git dir (commits of the worktree land
+;; there), the head's own $HOME (harness caches), the vault job folder,
+;; temp folders and devices.
+(allow file-write*
+  (subpath (param "WT"))
+  (subpath (param "CLONE_GIT"))
+  (subpath (string-append (param "RUN") "/home"))
+  (subpath (string-append (param "RUN") "/claude-config"))
+  (literal (string-append (param "RUN") "/step.txt"))
+  (literal (string-append (param "RUN") "/question.md"))
+  (literal (string-append (param "RUN") "/head.log"))
+  (subpath (param "VAULT_JOBS"))
+  (subpath "/private/tmp")
+  (subpath (param "USER_TMP"))
+  (subpath "/dev"))
+
+;; The wrapper's own files (status, heartbeat, lock owner) and the backend's
+;; mirror bookkeeping are never writable by the head.
+(deny file-write*
+  (subpath (string-append (param "RUN") "/.wrapper"))
+  (subpath (string-append (param "RUN") "/.backend")))
+
+;; Secrets are never readable.
+(deny file-read*
+  (subpath (string-append (param "REAL_HOME") "/.ssh"))
+  (subpath (string-append (param "REAL_HOME") "/.claude"))
+  (subpath (string-append (param "REAL_HOME") "/.claude-head"))
+  (subpath (string-append (param "REAL_HOME") "/.config/gh"))
+  (subpath (string-append (param "REAL_HOME") "/.omp"))
+  (subpath (string-append (param "REAL_HOME") "/.aws"))
+  (subpath (string-append (param "REAL_HOME") "/Library/Keychains"))
+  (subpath (string-append (param "MC_HOME") "/secrets"))
+  (literal (string-append (param "MC_HOME") "/heads/gh-token"))
+  (regex #"/\.env(\..*)?$"))
