@@ -28,6 +28,7 @@ import AppShell from "@/components/layout/AppShell";
 import { GlassCard } from "@/components/shared/GlassCard";
 import { KPICard } from "@/components/shared/KPICard";
 import { JobModal } from "@/components/schedule/JobModal";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { api } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
 import { timeAgo, cn } from "@/lib/utils";
@@ -114,6 +115,9 @@ export default function ScheduleJobDetailPage() {
   const activeBoardId = useAppStore((s) => s.activeBoardId);
 
   const [editOpen, setEditOpen] = useState(false);
+  // Switching a recurring job off is silent until the next run is missed —
+  // ask first. Switching it back on is harmless and stays one click.
+  const [confirmDisable, setConfirmDisable] = useState(false);
 
   // Job (lookup via list since no getJob endpoint exists)
   const { data: jobs = [] } = useQuery({
@@ -207,14 +211,39 @@ export default function ScheduleJobDetailPage() {
               {job.name}
             </h1>
             <button
-              onClick={() => updateMutation.mutate({ enabled: !job.enabled })}
-              className="px-2.5 py-1 rounded-sm text-[11px] font-mono transition-colors cursor-pointer shrink-0"
-              style={{
-                color: job.enabled ? C.online : C.textMuted,
-                border: `1px solid ${C.borderActive}`,
-              }}
+              type="button"
+              role="switch"
+              aria-checked={job.enabled}
+              onClick={() =>
+                job.enabled
+                  ? setConfirmDisable(true)
+                  : updateMutation.mutate({ enabled: true })
+              }
+              disabled={updateMutation.isPending}
+              className="flex items-center gap-2 px-2 py-1 min-h-11 sm:min-h-0 rounded-sm text-xs transition-colors cursor-pointer shrink-0 disabled:opacity-50"
+              style={{ color: C.textSecondary }}
             >
-              {job.enabled ? "ON" : "OFF"}
+              <span>{t("enabledSwitch")}</span>
+              <span
+                aria-hidden
+                className="relative shrink-0 rounded-full transition-colors"
+                style={{
+                  width: 32,
+                  height: 18,
+                  backgroundColor: job.enabled ? C.accent : C.bgElevated,
+                  border: `1px solid ${job.enabled ? C.accent : C.border}`,
+                }}
+              >
+                <span
+                  className="absolute top-1/2 -translate-y-1/2 rounded-full transition-all"
+                  style={{
+                    left: job.enabled ? 16 : 2,
+                    width: 12,
+                    height: 12,
+                    backgroundColor: job.enabled ? C.onAccent : C.textMuted,
+                  }}
+                />
+              </span>
             </button>
             <button
               onClick={() => setEditOpen(true)}
@@ -433,6 +462,36 @@ export default function ScheduleJobDetailPage() {
             </GlassCard>
           </div>
         </div>
+
+        <ConfirmDialog
+          open={confirmDisable}
+          kicker={t("disableJobKicker")}
+          title={t("disableJobTitle", { name: job.name })}
+          body={
+            job.next_run_at
+              ? t("disableJobBodyNext", {
+                  name: job.name,
+                  when: new Date(job.next_run_at).toLocaleString(dateLocale, {
+                    weekday: "short",
+                    day: "2-digit",
+                    month: "short",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  }),
+                })
+              : t("disableJobBody", { name: job.name })
+          }
+          confirmLabel={t("disableJobConfirm")}
+          cancelLabel={t("cancel")}
+          loading={updateMutation.isPending}
+          onConfirm={() =>
+            updateMutation.mutate(
+              { enabled: false },
+              { onSettled: () => setConfirmDisable(false) }
+            )
+          }
+          onCancel={() => setConfirmDisable(false)}
+        />
 
         {/* Edit Modal */}
         {editOpen && (
