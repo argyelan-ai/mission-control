@@ -184,9 +184,17 @@ async def system_metrics(
     tasks_active = (
         await session.exec(select(func.count(Task.id)).where(Task.status == "in_progress"))
     ).one()
-    agents_total = (await session.exec(select(func.count(Agent.id)))).one()
+    # Same roster and split as /agents: archived agents are hidden there, and a
+    # paused agent still heartbeats ("idle") — so "online" alone read 14/14
+    # with 12 agents paused. `online` stays for API compatibility, counted over
+    # the same roster so it never exceeds `total`.
+    roster = select(func.count(Agent.id)).where(Agent.archived_at.is_(None))
+    agents_total = (await session.exec(roster)).one()
+    agents_paused = (
+        await session.exec(roster.where(Agent.operational_mode == "paused"))
+    ).one()
     agents_online = (
-        await session.exec(select(func.count(Agent.id)).where(Agent.status.in_(ALIVE_AGENT_STATUSES)))
+        await session.exec(roster.where(Agent.status.in_(ALIVE_AGENT_STATUSES)))
     ).one()
     approvals_pending = (
         await session.exec(
@@ -196,7 +204,12 @@ async def system_metrics(
 
     return {
         "tasks": {"total": tasks_total, "active": tasks_active},
-        "agents": {"total": agents_total, "online": agents_online},
+        "agents": {
+            "total": agents_total,
+            "active": agents_total - agents_paused,
+            "paused": agents_paused,
+            "online": agents_online,
+        },
         "approvals": {"pending": approvals_pending},
     }
 
