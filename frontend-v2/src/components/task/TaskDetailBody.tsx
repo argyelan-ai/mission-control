@@ -1,23 +1,24 @@
 "use client";
 
 /**
- * TaskDetailBody — shared header + content of the task detail (07/2026 redesign).
+ * TaskDetailBody — shared content of the task detail (wave 3a "task detail
+ * lite", 09/2026). One body for three chromes: the /tasks split (~800 px),
+ * the Home modal (~672 px) and the phone (390 px) — the layout follows the
+ * width of the CONTAINER (CSS container queries), not the window.
  *
- * One body for both chromes (side panel + modal) — the previous 1:1
- * duplication is gone. Structure follows one section grammar:
+ *   Header      TASK · id · project   [⋯] [×]   + title (max 2 lines)
+ *   State card  NEEDS YOU (embedded ApprovalCard) / RUNNING / RESULT /
+ *               FAILED — deriveStateCard() decides, none for inbox/review
+ *   Facts       STATUS (dropdown) · AGENT · TIME · PR · PLAN · COST
+ *   Actions     run control + review (TaskActions), only when relevant
+ *   Tabs        Summary · Comments · Deliverables · (Workspace) ·
+ *               (Transcript) · Timeline · History
  *
- *   Header      title · status dropdown · priority · agent · ⋯ menu · close
- *   Description markdown
- *   Briefing    intake fields (only when present)
- *   Properties  2×2 grid: assignee · project · created by · started
- *   Relations   parent / subtasks / depends on / report-back
- *   Checklist   progress + collapsible items
- *   Git         branch / commits / inline diff (GitPanel)
- *   Actions     run control + review (TaskActions)
- *   Tabs        Comments · Deliverables · Transcript · History
- *
- * Status changes live in the header dropdown — the old 7-chip wall is gone.
- * Delete is a two-step confirm inside the ⋯ menu (destructive ≠ prominent).
+ * Summary (run record JSON) is the default tab, Comments while running. The
+ * tab can be controlled from the URL (`tab` / `onTabChange`). The thread is
+ * not a tab any more — it is a channel across cards, opened from the ⋯ menu.
+ * The E2E tab is gone. A status change the backend refuses (409
+ * invalid_transition) is shown as one sentence; Done/Aborted ask first.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -25,12 +26,15 @@ import { createPortal } from "react-dom";
 import { useLocale, useTranslations } from "next-intl";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
-import { Check, ChevronDown, ChevronRight, MoreHorizontal, Square, CheckSquare, AlertCircle, Trash2, X } from "lucide-react";
+import {
+  ArrowLeft, Check, ChevronDown, ClipboardCopy, Link2, MessagesSquare, MoreHorizontal, Save, Trash2, X,
+} from "lucide-react";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import { timeAgo } from "@/lib/utils";
 import { C, LANE, STATUS_TEXT } from "@/lib/colors";
 import { useAppStore } from "@/lib/store";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { TaskDescription } from "./TaskDescription";
 import { TaskActions } from "./TaskActions";
 import { TaskComments } from "./TaskComments";
@@ -38,27 +42,20 @@ import { TaskHistory } from "./TaskHistory";
 import { TaskTimeline } from "./TaskTimeline";
 import { TaskTranscript } from "./TaskTranscript";
 import { DeliverablesTab } from "./DeliverablesTab";
-import { E2ETab } from "./E2ETab";
 import { WorkspaceTab } from "./WorkspaceTab";
 import { ThreadPanel } from "./ThreadPanel";
 import { GitPanel, gitSectionInfo } from "./GitPanel";
 import { TaskReferences } from "./TaskReferences";
+import { TaskStateCard } from "./detail/TaskStateCard";
+import { TaskFactRow } from "./detail/TaskFactRow";
+import { TaskSummaryTab } from "./detail/TaskSummaryTab";
+import { deriveStateCard } from "@/lib/taskDetail/stateCard";
+import { parseInvalidTransition } from "@/lib/taskDetail/errors";
+import { STATUS_LABEL_KEY, statusLabelKey } from "@/lib/taskDetail/statusLabels";
+import { defaultTabFor, resolveTab, type TaskTabKey } from "@/lib/taskDetail/tabs";
 import type { Agent, Task, TaskChecklistItem, TaskEvent, TaskGitInfo, TaskStatus } from "@/lib/types";
 
 // ── Status vocabulary ────────────────────────────────────────────────────────
-
-// Message keys in the tasks.* namespace — t() at the render site.
-const STATUS_LABEL_KEY: Record<TaskStatus, string> = {
-  inbox: "statusInbox",
-  in_progress: "statusInProgress",
-  review: "statusReview",
-  user_test: "statusUserTest",
-  waiting: "statusWaiting",
-  done: "statusDone",
-  blocked: "statusBlocked",
-  failed: "statusFailed",
-  aborted: "statusAborted",
-};
 
 const STATUS_ORDER: TaskStatus[] = [
   "inbox",
@@ -71,6 +68,12 @@ const STATUS_ORDER: TaskStatus[] = [
   "failed",
   "aborted",
 ];
+
+/** End states ask first — the confirm names the consequence. */
+const CONFIRM_STATUS: Partial<Record<TaskStatus, { title: string; body: string; action: string }>> = {
+  done: { title: "detail.confirmDoneTitle", body: "detail.confirmDoneBody", action: "detail.confirmDoneAction" },
+  aborted: { title: "detail.confirmAbortTitle", body: "detail.confirmAbortBody", action: "detail.confirmAbortAction" },
+};
 
 // ── Small shared pieces ──────────────────────────────────────────────────────
 
@@ -263,13 +266,28 @@ function StatusMenu({
   );
 }
 
-// ── ⋯ menu (delete lives here) ───────────────────────────────────────────────
+// ── ⋯ menu ───────────────────────────────────────────────────────────────────
+//
+// Copy link · Copy as Markdown · Save to Vault · Open thread · ──── · Delete.
+// Delete sits last, behind a divider, and asks first (two-step).
+
+type MenuItem = {
+  key: string;
+  label: string;
+  icon: typeof Link2;
+  onSelect: () => void;
+  disabled?: boolean;
+  /** Why it is disabled — shown under the label. */
+  reason?: string;
+};
 
 function OverflowMenu({
+  items,
   isActive,
   onDelete,
   deleteLoading,
 }: {
+  items: MenuItem[];
   isActive: boolean;
   onDelete: () => void;
   deleteLoading: boolean;
@@ -278,11 +296,13 @@ function OverflowMenu({
   const [confirm, setConfirm] = useState(false);
   // Portaled with fixed positioning + viewport clamp (see usePortalMenu);
   // right-aligned to the trigger like the old `right-0` dropdown.
-  const { open, setOpen, toggle, pos, triggerRef, menuRef } = usePortalMenu({ width: 180, align: "right" });
+  const { open, setOpen, toggle, pos, triggerRef, menuRef } = usePortalMenu({ width: 220, align: "right" });
   // Closing the menu always resets the two-step delete confirm.
   useEffect(() => {
     if (!open) setConfirm(false);
   }, [open]);
+
+  const rowClass = "w-full flex items-start gap-2 px-3 py-2 text-left text-xs transition-colors cursor-pointer disabled:cursor-not-allowed";
 
   return (
     <div className="relative" ref={triggerRef}>
@@ -306,7 +326,7 @@ function OverflowMenu({
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -4 }}
             transition={{ duration: 0.12, ease: "easeOut" }}
-            className="min-w-[180px] rounded-md py-1"
+            className="w-[220px] rounded-md py-1"
             style={{
               position: "fixed",
               top: pos.top,
@@ -317,16 +337,42 @@ function OverflowMenu({
               boxShadow: "var(--shadow-elevated)",
             }}
           >
+            {items.map((item) => {
+              const Icon = item.icon;
+              return (
+                <button
+                  key={item.key}
+                  role="menuitem"
+                  disabled={item.disabled}
+                  aria-disabled={item.disabled}
+                  onClick={() => {
+                    setOpen(false);
+                    item.onSelect();
+                  }}
+                  className={`${rowClass} hover:bg-[var(--color-bg-hover)] disabled:hover:bg-transparent`}
+                  style={{ color: item.disabled ? C.textMuted : C.textSecondary }}
+                >
+                  <Icon size={12} className="mt-0.5 shrink-0" />
+                  <span className="min-w-0">
+                    <span className="block">{item.label}</span>
+                    {item.disabled && item.reason && (
+                      <span className="block text-[10px]" style={{ color: C.textMuted }}>
+                        {item.reason}
+                      </span>
+                    )}
+                  </span>
+                </button>
+              );
+            })}
+            <div role="separator" className="my-1 h-px" style={{ background: C.border }} />
             {!confirm ? (
               <button
                 role="menuitem"
                 onClick={() => setConfirm(true)}
-                className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors cursor-pointer"
+                className={`${rowClass} hover:bg-[var(--color-bg-hover)]`}
                 style={{ color: C.textSecondary }}
-                onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = C.bgHover)}
-                onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = "transparent")}
               >
-                <Trash2 size={12} style={{ color: STATUS_TEXT.error }} />
+                <Trash2 size={12} className="mt-0.5 shrink-0" style={{ color: STATUS_TEXT.error }} />
                 {t("deleteTask")}
               </button>
             ) : (
@@ -459,34 +505,82 @@ function PropertyMenuCell({
 
 // ── Body ─────────────────────────────────────────────────────────────────────
 
-const PRIORITY_COLORS: Record<string, string> = {
-  critical: C.error,
-  high: C.warning,
-  medium: C.textSecondary,
-  low: C.textMuted,
-};
-
 export function TaskDetailBody({
   task,
   agents,
   boardId,
   onClose,
+  tab,
+  onTabChange,
+  onOpenTask,
 }: {
   task: Task;
   agents: Agent[];
   boardId: string;
   onClose: () => void;
+  /** Requested tab (e.g. from `?tab=`). Unknown/unavailable → status default. */
+  tab?: string | null;
+  /** Called on every tab switch — the /tasks page writes it into the URL. */
+  onTabChange?: (tab: TaskTabKey) => void;
+  /** Open another task in place (subtask links); without it links navigate. */
+  onOpenTask?: (taskId: string) => void;
 }) {
   const t = useTranslations("tasks");
   const locale = useLocale();
   const qc = useQueryClient();
-  const [activeTab, setActiveTab] = useState<"thread" | "comments" | "timeline" | "history" | "transcript" | "deliverables" | "e2e" | "workspace">("comments");
-  const [checklistOpen, setChecklistOpen] = useState(false);
-  const [subtasksOpen, setSubtasksOpen] = useState(false);
+  const bodyRef = useRef<HTMLDivElement>(null);
+
+  // Uncontrolled fallback: default tab per status, reset when another task
+  // opens in the same body (render-time reset, no flash of the old tab).
+  const [tabState, setTabState] = useState<{ taskId: string; tab: TaskTabKey }>(() => ({
+    taskId: task.id,
+    tab: defaultTabFor(task.status),
+  }));
+  if (tabState.taskId !== task.id) {
+    setTabState({ taskId: task.id, tab: defaultTabFor(task.status) });
+  }
 
   const agent = agents.find((a) => a.id === task.assigned_agent_id);
   const isActive = task.status === "in_progress" || task.status === "review";
   const currentUser = useAppStore((s) => s.currentUser);
+  const [confirmStatus, setConfirmStatus] = useState<TaskStatus | null>(null);
+  const focusCommentRef = useRef(false);
+
+  const statusWord = (s: string) => {
+    const key = statusLabelKey(s);
+    return key ? t(key) : s;
+  };
+
+  // ── Tabs ───────────────────────────────────────────────────────────────────
+
+  const tabs: { key: TaskTabKey; label: string }[] = [
+    { key: "summary", label: t("detail.tabSummary") },
+    { key: "comments", label: t("tabComments") },
+    { key: "deliverables", label: t("tabDeliverables") },
+    ...(task.workspace_path ? [{ key: "workspace" as const, label: t("tabWorkspace") }] : []),
+    ...(task.spawn_session_key || task.dispatched_at ? [{ key: "transcript" as const, label: t("tabTranscript") }] : []),
+    { key: "timeline", label: t("tabTimeline") },
+    { key: "history", label: t("tabHistory") },
+  ];
+  // "thread" is reachable (⋯ menu, ?tab=thread) but not in the strip.
+  const available: TaskTabKey[] = [...tabs.map((x) => x.key), "thread"];
+  const internalTab = tabState.taskId === task.id ? tabState.tab : defaultTabFor(task.status);
+  const activeTab = resolveTab(tab ?? internalTab, available, task.status);
+
+  function selectTab(next: TaskTabKey) {
+    setTabState({ taskId: task.id, tab: next });
+    onTabChange?.(next);
+  }
+
+  // "Reply" on the NEEDS YOU card: jump to the comment field.
+  useEffect(() => {
+    if (activeTab !== "comments" || !focusCommentRef.current) return;
+    focusCommentRef.current = false;
+    const id = window.setTimeout(() => {
+      bodyRef.current?.querySelector<HTMLInputElement>('input[aria-label="Add comment"]')?.focus();
+    }, 0);
+    return () => window.clearTimeout(id);
+  }, [activeTab]);
 
   // ── Mutations ──────────────────────────────────────────────────────────────
 
@@ -496,9 +590,27 @@ export function TaskDetailBody({
       qc.invalidateQueries({ queryKey: ["tasks", boardId] });
       qc.invalidateQueries({ queryKey: ["pipeline", boardId] });
       qc.invalidateQueries({ queryKey: ["task", boardId, task.id] });
+      qc.invalidateQueries({ queryKey: ["run-record", task.id] });
     },
-    onError: (e: Error) => notify.error(t("updateFailed", { msg: e.message })),
+    onError: (e: Error) => {
+      // 409 invalid_transition → one sentence. The allowed transitions stay
+      // the backend's business; we do not model them here.
+      const refused = parseInvalidTransition(e);
+      if (refused) {
+        notify.error(t("detail.transitionNotAllowed", { from: statusWord(refused.current) }));
+        return;
+      }
+      notify.error(t("updateFailed", { msg: e.message }));
+    },
   });
+
+  function requestStatus(s: TaskStatus) {
+    if (CONFIRM_STATUS[s]) {
+      setConfirmStatus(s);
+      return;
+    }
+    updateMutation.mutate({ status: s } as Partial<Task>);
+  }
 
   const deleteMutation = useMutation({
     mutationFn: () => api.tasks.delete(boardId, task.id),
@@ -510,7 +622,30 @@ export function TaskDetailBody({
     onError: (e: Error) => notify.error(t("deleteFailed", { msg: e.message })),
   });
 
+  const vaultMutation = useMutation({
+    mutationFn: () => api.tasks.runRecordToVault(task.id),
+    onSuccess: (res) => notify.success(t("detail.savedToVault", { path: res.path })),
+    onError: (e: Error) => notify.error(t("detail.saveFailed", { msg: e.message })),
+  });
+
   // ── Queries ────────────────────────────────────────────────────────────────
+
+  const runRecordQuery = useQuery({
+    queryKey: ["run-record", task.id],
+    queryFn: () => api.tasks.runRecord(task.id),
+    staleTime: 15_000,
+    refetchInterval: 60_000,
+  });
+  const runRecord = runRecordQuery.data;
+
+  const needsApprovals = task.status === "blocked" || task.status === "waiting" || task.status === "user_test";
+  // Same query key as the inbox — one cache, one source of truth.
+  const { data: approvals = [] } = useQuery({
+    queryKey: ["approvals"],
+    queryFn: api.approvals.list,
+    enabled: needsApprovals,
+    refetchInterval: 15_000,
+  });
 
   const { data: events, isLoading: isEventsLoading } = useQuery({
     queryKey: ["task-events", task.id],
@@ -530,14 +665,12 @@ export function TaskDetailBody({
     enabled: activeTab === "deliverables",
   });
 
-  // Shared query key with TaskComments — cache hit there, only fetched here
-  // to decide whether the E2E tab should show up for tasks that weren't
-  // flagged `e2e_test_required` but still received a test result comment.
-  const { data: comments } = useQuery({
+  // Shared query key with TaskComments — feeds the state card (last step,
+  // blocker reason, resolution) and is a cache hit on the Comments tab.
+  const { data: comments = [] } = useQuery({
     queryKey: ["task-comments", task.id],
     queryFn: () => api.tasks.comments.list(boardId, task.id),
   });
-  const hasE2EResult = (comments ?? []).some((c) => /\*\*Result:\*\*\s*TEST_(PASS|FAIL)/.test(c.content));
 
   const { data: gitInfo } = useQuery<TaskGitInfo>({
     queryKey: ["task-git-info", boardId, task.id],
@@ -581,7 +714,9 @@ export function TaskDetailBody({
       : (usersList?.find((u) => u.id === task.created_by_user_id)?.name ?? t("userFallback"))
     : null;
 
-  // ── Briefing fields ────────────────────────────────────────────────────────
+  // ── Derived ────────────────────────────────────────────────────────────────
+
+  const stateCard = deriveStateCard({ task, approvals, comments, runRecord: runRecord ?? null });
 
   const briefingFields: { label: string; value: string | null | undefined }[] = task.intake_mode
     ? [
@@ -591,7 +726,6 @@ export function TaskDetailBody({
         { label: t("briefRisks"), value: task.risk_notes },
         { label: t("briefCriteria"), value: task.acceptance_criteria },
         { label: t("briefBrowser"), value: task.needs_browser ? t("yes") : null },
-        { label: t("briefE2E"), value: task.e2e_test_required ? t("required") : null },
         { label: t("briefCredentials"), value: task.requires_auth ? t("yes") : null },
         { label: t("briefApproval"), value: task.approval_policy },
         { label: t("briefAutonomy"), value: task.autonomy_level },
@@ -603,28 +737,83 @@ export function TaskDetailBody({
   const checklistDone = checklist.filter((i) => i.status === "done").length;
   const projectName = task.project_id ? (projects.find((p) => p.id === task.project_id)?.name ?? t("projectFallback")) : t("adHoc");
 
-  const tabs: { key: typeof activeTab; label: string }[] = [
-    { key: "thread", label: t("tabThread") },
-    { key: "comments", label: t("tabComments") },
-    { key: "deliverables", label: t("tabDeliverables") },
-    ...(task.workspace_path ? [{ key: "workspace" as const, label: t("tabWorkspace") }] : []),
-    ...(task.e2e_test_required || hasE2EResult ? [{ key: "e2e" as const, label: t("tabE2E") }] : []),
-    ...(task.spawn_session_key || task.dispatched_at ? [{ key: "transcript" as const, label: t("tabTranscript") }] : []),
-    { key: "timeline", label: t("tabTimeline") },
-    { key: "history", label: t("tabHistory") },
+  // TaskActions only renders something in these cases — no empty section.
+  const showActions =
+    (task.dispatch_phase === "planning" && !!task.parent_task_id) ||
+    task.status === "in_progress" ||
+    task.status === "review" ||
+    (task.status === "inbox" && task.dispatched_at != null) ||
+    task.run_control === "stopped" ||
+    task.run_control === "manual_hold";
+
+  // Save to Vault writes — operator role (backend: require_role(OPERATOR)).
+  const canSaveToVault = currentUser?.role === "operator" || currentUser?.role === "admin";
+
+  async function copyText(text: Promise<string> | string, okMessage: string) {
+    try {
+      await navigator.clipboard.writeText(await text);
+      notify.success(okMessage);
+    } catch (e) {
+      notify.error(t("detail.copyFailed", { msg: e instanceof Error ? e.message : String(e) }));
+    }
+  }
+
+  const menuItems: MenuItem[] = [
+    {
+      key: "copy-link",
+      label: t("detail.copyLink"),
+      icon: Link2,
+      onSelect: () =>
+        copyText(`${window.location.origin}/tasks?task=${task.id}&tab=${activeTab}`, t("detail.linkCopied")),
+    },
+    {
+      key: "copy-markdown",
+      label: t("detail.copyMarkdown"),
+      icon: ClipboardCopy,
+      onSelect: () => copyText(api.tasks.runRecordMarkdown(task.id), t("detail.markdownCopied")),
+    },
+    {
+      key: "save-vault",
+      label: t("detail.saveToVault"),
+      icon: Save,
+      disabled: !canSaveToVault || vaultMutation.isPending,
+      reason: !canSaveToVault ? t("detail.saveToVaultNeedsRole") : undefined,
+      onSelect: () => vaultMutation.mutate(),
+    },
+    {
+      key: "thread",
+      label: agent ? t("detail.openAgentThread", { name: agent.name }) : t("detail.openThread"),
+      icon: MessagesSquare,
+      onSelect: () => selectTab("thread"),
+    },
   ];
+
+  const confirm = confirmStatus ? CONFIRM_STATUS[confirmStatus] : undefined;
 
   return (
     <>
       {/* ── Header ── */}
       <div className="px-4 pt-4 pb-3 shrink-0" style={{ borderBottom: `1px solid ${C.border}` }}>
-        <div className="label-sys label-sys--dim mb-1.5">{t("taskLabel")} · {task.id.slice(0, 8)}</div>
         <div className="flex items-start gap-3">
-          <h2 className="flex-1 min-w-0 text-[15px] font-semibold leading-snug" style={{ color: C.textPrimary }}>
-            {task.title}
-          </h2>
+          <div className="flex-1 min-w-0">
+            <div className="label-sys label-sys--dim mb-1.5 truncate">
+              {t("taskLabel")} · {task.id.slice(0, 8)} · {projectName}
+            </div>
+            <h2
+              className="text-[18px] font-semibold leading-snug line-clamp-2"
+              style={{ color: C.textPrimary }}
+              title={task.title}
+            >
+              {task.title}
+            </h2>
+          </div>
           <div className="flex items-center gap-1.5 shrink-0">
-            <OverflowMenu isActive={isActive} onDelete={() => deleteMutation.mutate()} deleteLoading={deleteMutation.isPending} />
+            <OverflowMenu
+              items={menuItems}
+              isActive={isActive}
+              onDelete={() => deleteMutation.mutate()}
+              deleteLoading={deleteMutation.isPending}
+            />
             <button
               onClick={onClose}
               aria-label={t("closeTaskDetails")}
@@ -635,283 +824,73 @@ export function TaskDetailBody({
             </button>
           </div>
         </div>
-        <div className="flex items-center gap-1.5 mt-2.5 flex-wrap">
-          <StatusMenu
-            status={task.status}
-            pending={updateMutation.isPending}
-            onChange={(s) => updateMutation.mutate({ status: s } as Partial<Task>)}
-          />
-          <span
-            className="inline-flex items-center rounded-md px-2 py-1 text-[11px] capitalize"
-            style={{ color: PRIORITY_COLORS[task.priority] ?? C.textMuted, border: `1px solid ${C.border}` }}
-          >
-            {task.priority}
-          </span>
-          {agent && (
-            <span
-              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px]"
-              style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
-            >
-              {agent.emoji} {agent.name}
-            </span>
-          )}
-        </div>
       </div>
 
-      {/* ── Scrollable body ── */}
+      {/* ── Scrollable body — the @container the facts row and tabs measure ── */}
       <div
-        className="flex-1 overflow-y-auto"
+        ref={bodyRef}
+        className="@container flex-1 overflow-y-auto"
         style={{ overscrollBehavior: "contain", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
       >
-        {/* Description */}
-        {task.description && (
+        <div className="px-4 pt-3 pb-3 space-y-3">
+          {stateCard && (
+            <TaskStateCard
+              card={stateCard}
+              task={task}
+              agents={agents}
+              onReply={() => {
+                focusCommentRef.current = true;
+                selectTab("comments");
+              }}
+              onOpenLog={() => selectTab("timeline")}
+            />
+          )}
+          <TaskFactRow
+            task={task}
+            agent={agent}
+            runRecord={runRecord}
+            checklist={{ done: checklistDone, total: checklist.length }}
+            statusControl={
+              <StatusMenu status={task.status} pending={updateMutation.isPending} onChange={requestStatus} />
+            }
+          />
+        </div>
+
+        {showActions && (
           <Section>
-            <SectionLabel>{t("description")}</SectionLabel>
-            <TaskDescription description={task.description} />
+            <TaskActions task={task} boardId={boardId} />
           </Section>
         )}
 
-        {/* Briefing */}
-        {briefingFields.length > 0 && (
-          <Section>
-            <SectionLabel>{t("briefing")} · {task.intake_mode}</SectionLabel>
-            <div className="space-y-1">
-              {briefingFields.map((f) => (
-                <div key={f.label} className="text-xs">
-                  <span style={{ color: C.textMuted }}>{f.label}: </span>
-                  <span style={{ color: C.textPrimary }}>{f.value}</span>
-                </div>
-              ))}
-            </div>
-          </Section>
-        )}
-
-        {/* Properties */}
-        <Section>
-          <SectionLabel>{t("properties")}</SectionLabel>
-          <div
-            className="grid grid-cols-2 gap-px rounded-lg overflow-hidden"
-            style={{ background: C.border, border: `1px solid ${C.border}` }}
+        {/* Tabs — strip from 560 px container width, a select below it */}
+        <div className="px-4 pt-1 @min-[560px]:hidden">
+          <label className="sr-only" htmlFor={`task-tab-select-${task.id}`}>{t("detail.sectionSelect")}</label>
+          <select
+            id={`task-tab-select-${task.id}`}
+            value={activeTab}
+            onChange={(e) => selectTab(e.target.value as TaskTabKey)}
+            className="w-full min-h-[44px] px-3 rounded-md text-base font-mono uppercase tracking-[0.08em]"
+            style={{ background: C.bgDeep, color: C.textPrimary, border: `1px solid ${C.border}` }}
           >
-            <PropertyMenuCell
-              label={t("assignee")}
-              value={agent ? `${agent.emoji ?? ""} ${agent.name}`.trim() : t("unassigned")}
-              options={agents.map((a) => ({
-                id: a.id,
-                label: `${a.emoji ?? ""} ${a.name}`.trim(),
-                active: a.id === task.assigned_agent_id,
-              }))}
-              onSelect={(id) => id && updateMutation.mutate({ assigned_agent_id: id } as Partial<Task>)}
-            />
-            <PropertyMenuCell
-              label={t("projectFallback")}
-              value={projectName}
-              options={[
-                { id: null, label: t("adHocNoProject"), active: !task.project_id },
-                ...projects.map((p) => ({ id: p.id, label: p.name, active: p.id === task.project_id })),
-              ]}
-              onSelect={(id) => updateMutation.mutate({ project_id: id } as Partial<Task>)}
-            />
-            <div className="px-2.5 py-2" style={{ background: C.bgSurface }}>
-              <span className="block text-[9px] font-semibold uppercase tracking-[0.07em] mb-0.5" style={{ color: C.textDim }}>
-                {t("createdBy")}
-              </span>
-              <span className="text-xs" style={{ color: C.textPrimary }}>
-                {creatorName ?? "—"} · {timeAgo(task.created_at, locale)}
-              </span>
-            </div>
-            <div className="px-2.5 py-2" style={{ background: C.bgSurface }}>
-              <span className="block text-[9px] font-semibold uppercase tracking-[0.07em] mb-0.5" style={{ color: C.textDim }}>
-                {t("started")}
-              </span>
-              <span className="text-xs" style={{ color: C.textPrimary }}>
-                {task.started_at ? timeAgo(task.started_at, locale) : "—"}
-              </span>
-            </div>
-          </div>
-        </Section>
-
-        {/* Relations */}
-        {(hierarchy?.parent || (hierarchy?.children?.length ?? 0) > 0 || (dependencies?.length ?? 0) > 0) && (
-          <Section>
-            <SectionLabel>{t("relations")}</SectionLabel>
-            <div className="space-y-2">
-              {hierarchy?.parent && (
-                <div className="flex items-center gap-2 text-xs">
-                  <span className="shrink-0" style={{ color: C.textMuted }}>
-                    {t("parent")}
-                  </span>
-                  <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: LANE[hierarchy.parent.status] ?? C.textMuted }} />
-                  <span className="truncate" style={{ color: C.textSecondary }} title={hierarchy.parent.title}>
-                    {hierarchy.parent.title}
-                  </span>
-                </div>
-              )}
-              {(hierarchy?.children?.length ?? 0) > 0 && (
-                <div>
-                  <button
-                    onClick={() => setSubtasksOpen((o) => !o)}
-                    aria-expanded={subtasksOpen}
-                    className="flex items-center gap-2 w-full text-left cursor-pointer text-xs"
-                    style={{ color: C.textMuted }}
-                  >
-                    <span>{t("subtasks")}</span>
-                    <span className="font-mono text-[10px]" style={{ color: C.textDim }}>
-                      {t("doneOfTotal", { done: hierarchy!.children.filter((c: { status: string }) => c.status === "done").length, total: hierarchy!.children.length })}
-                    </span>
-                    <ChevronRight
-                      size={10}
-                      className="transition-transform ml-auto"
-                      style={{ transform: subtasksOpen ? "rotate(90deg)" : "none", color: C.textDim }}
-                    />
-                  </button>
-                  <AnimatePresence>
-                    {subtasksOpen && (
-                      <motion.div
-                        initial={{ height: 0, opacity: 0 }}
-                        animate={{ height: "auto", opacity: 1 }}
-                        exit={{ height: 0, opacity: 0 }}
-                        transition={{ duration: 0.15 }}
-                        className="overflow-hidden"
-                      >
-                        <div className="mt-1.5 pl-1 space-y-1">
-                          {hierarchy!.children.map((c: { id: string; title: string; status: string }) => (
-                            <div key={c.id} className="flex items-center gap-1.5">
-                              <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: LANE[c.status] ?? C.textMuted }} />
-                              <span className="text-xs truncate" style={{ color: C.textSecondary }} title={c.title}>
-                                {c.title}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </div>
-              )}
-              {(dependencies?.length ?? 0) > 0 && (
-                <div>
-                  <div className="text-xs mb-1" style={{ color: C.textMuted }}>
-                    {t("dependsOn")}
-                  </div>
-                  <div className="flex flex-col gap-1">
-                    {dependencies!.map((dep) => (
-                      <div key={dep.task_id} className="flex items-center gap-2 text-xs">
-                        <span
-                          className="w-2 h-2 rounded-full shrink-0"
-                          style={{ backgroundColor: dep.status === "done" ? C.online : C.textMuted }}
-                        />
-                        <span style={{ color: dep.status === "done" ? C.textMuted : C.textPrimary }}>{dep.title}</span>
-                        <span style={{ color: C.textMuted }}>({dep.status.replace("_", " ")})</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          </Section>
-        )}
-
-        {/* Checklist */}
-        {checklist.length > 0 && (
-          <Section>
-            <button
-              onClick={() => setChecklistOpen((o) => !o)}
-              aria-expanded={checklistOpen}
-              className="w-full flex items-center gap-2 cursor-pointer"
-            >
-              <span className="text-[10px] font-semibold uppercase tracking-[0.07em]" style={{ color: C.textDim }}>
-                {t("checklist")}
-              </span>
-              <span className="flex-1 max-w-[96px] h-[3px] rounded-full overflow-hidden" style={{ backgroundColor: C.bgHover }}>
-                <span
-                  className="block h-full transition-all"
-                  style={{
-                    width: `${checklist.length ? (checklistDone / checklist.length) * 100 : 0}%`,
-                    backgroundColor: C.accent,
-                  }}
-                />
-              </span>
-              <span className="text-[10px] font-mono" style={{ color: C.textDim }}>
-                {checklistDone}/{checklist.length}
-              </span>
-              <ChevronRight
-                size={10}
-                className="transition-transform ml-auto"
-                style={{ transform: checklistOpen ? "rotate(90deg)" : "none", color: C.textDim }}
-              />
-            </button>
-            <AnimatePresence>
-              {checklistOpen && (
-                <motion.div
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: "auto", opacity: 1 }}
-                  exit={{ height: 0, opacity: 0 }}
-                  transition={{ duration: 0.15 }}
-                  className="overflow-hidden"
-                >
-                  <div className="mt-2 space-y-1">
-                    {checklist.map((item) => (
-                      <div key={item.id} className="flex items-center gap-2 text-xs">
-                        {item.status === "done" ? (
-                          <CheckSquare size={12} style={{ color: C.online, flexShrink: 0 }} />
-                        ) : item.status === "blocked" ? (
-                          <AlertCircle size={12} style={{ color: C.error, flexShrink: 0 }} />
-                        ) : (
-                          <Square size={12} style={{ color: C.textMuted, flexShrink: 0 }} />
-                        )}
-                        <span
-                          style={{
-                            color: item.status === "done" ? C.textMuted : C.textPrimary,
-                            textDecoration: item.status === "done" ? "line-through" : "none",
-                          }}
-                        >
-                          {item.title}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </Section>
-        )}
-
-        {/* References (ADR-053) */}
-        <Section>
-          <SectionLabel>{t("references")}</SectionLabel>
-          <TaskReferences taskId={task.id} />
-        </Section>
-
-        {/* Git */}
-        {gitSection && (
-          <Section>
-            <SectionLabel>Git</SectionLabel>
-            <GitPanel
-              gitInfo={gitSection}
-              boardId={boardId}
-              taskId={task.id}
-              taskPrUrl={task.pr_url}
-              taskPrNumber={task.pr_number}
-            />
-          </Section>
-        )}
-
-        {/* Actions (run control, review) */}
-        <Section>
-          <TaskActions task={task} boardId={boardId} />
-        </Section>
-
-        {/* Tabs — v3: Mono-Labels, eckiger Akzent-Unterstrich für den aktiven Tab */}
-        <div className="flex gap-0.5 px-4 tab-strip" style={{ borderBottom: `1px solid ${C.border}` }} role="tablist">
-          {tabs.map((tab) => {
-            const active = activeTab === tab.key;
+            {tabs.map((x) => (
+              <option key={x.key} value={x.key}>{x.label}</option>
+            ))}
+            {activeTab === "thread" && <option value="thread">{t("detail.thread")}</option>}
+          </select>
+        </div>
+        <div
+          className="hidden @min-[560px]:flex gap-0.5 px-4 tab-strip"
+          style={{ borderBottom: `1px solid ${C.border}` }}
+          role="tablist"
+        >
+          {tabs.map((x) => {
+            const active = activeTab === x.key;
             return (
               <button
-                key={tab.key}
+                key={x.key}
                 role="tab"
                 aria-selected={active}
-                onClick={() => setActiveTab(tab.key)}
+                onClick={() => selectTab(x.key)}
                 className="px-2.5 py-2 font-mono text-[10px] uppercase tracking-[0.12em] cursor-pointer transition-colors -mb-px"
                 style={{
                   color: active ? C.accent : C.textMuted,
@@ -919,14 +898,160 @@ export function TaskDetailBody({
                   borderBottom: `2px solid ${active ? C.accent : "transparent"}`,
                 }}
               >
-                {tab.label}
+                {x.label}
               </button>
             );
           })}
         </div>
-        <div className="px-4 py-3 pb-4">
-          {activeTab === "thread" ? (
-            <ThreadPanel taskId={task.id} />
+
+        <div className="px-4 py-3 pb-4" role="tabpanel" data-tab={activeTab}>
+          {activeTab === "summary" ? (
+            <TaskSummaryTab
+              task={task}
+              runRecord={runRecord}
+              isLoading={runRecordQuery.isLoading}
+              isError={runRecordQuery.isError}
+              onRetry={() => runRecordQuery.refetch()}
+              subtasks={hierarchy?.children ?? []}
+              checklist={checklist}
+              onOpenTask={onOpenTask}
+              briefExtra={
+                briefingFields.length > 0 ? (
+                  <div className="mt-2 space-y-1">
+                    <div className="label-sys label-sys--dim">{t("briefing")} · {task.intake_mode}</div>
+                    {briefingFields.map((f) => (
+                      <div key={f.label} className="text-xs">
+                        <span style={{ color: C.textMuted }}>{f.label}: </span>
+                        <span style={{ color: C.textPrimary }}>{f.value}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : undefined
+              }
+            >
+              {/* Properties */}
+              <Section>
+                <SectionLabel>{t("properties")}</SectionLabel>
+                <div
+                  className="grid grid-cols-2 gap-px rounded-lg overflow-hidden"
+                  style={{ background: C.border, border: `1px solid ${C.border}` }}
+                >
+                  <PropertyMenuCell
+                    label={t("assignee")}
+                    value={agent ? agent.name : t("unassigned")}
+                    options={agents.map((a) => ({ id: a.id, label: a.name, active: a.id === task.assigned_agent_id }))}
+                    onSelect={(id) => id && updateMutation.mutate({ assigned_agent_id: id } as Partial<Task>)}
+                  />
+                  <PropertyMenuCell
+                    label={t("projectFallback")}
+                    value={projectName}
+                    options={[
+                      { id: null, label: t("adHocNoProject"), active: !task.project_id },
+                      ...projects.map((p) => ({ id: p.id, label: p.name, active: p.id === task.project_id })),
+                    ]}
+                    onSelect={(id) => updateMutation.mutate({ project_id: id } as Partial<Task>)}
+                  />
+                  <div className="px-2.5 py-2" style={{ background: C.bgSurface }}>
+                    <span className="block text-[9px] font-semibold uppercase tracking-[0.07em] mb-0.5" style={{ color: C.textDim }}>
+                      {t("createdBy")}
+                    </span>
+                    <span className="text-xs" style={{ color: C.textPrimary }}>
+                      {creatorName ?? "—"} · {timeAgo(task.created_at, locale)}
+                    </span>
+                  </div>
+                  <div className="px-2.5 py-2" style={{ background: C.bgSurface }}>
+                    <span className="block text-[9px] font-semibold uppercase tracking-[0.07em] mb-0.5" style={{ color: C.textDim }}>
+                      {t("started")}
+                    </span>
+                    <span className="text-xs" style={{ color: C.textPrimary }}>
+                      {task.started_at ? timeAgo(task.started_at, locale) : "—"}
+                    </span>
+                  </div>
+                </div>
+              </Section>
+
+              {/* Relations — subtasks live in STEPS above */}
+              {(hierarchy?.parent || (dependencies?.length ?? 0) > 0) && (
+                <Section>
+                  <SectionLabel>{t("relations")}</SectionLabel>
+                  <div className="space-y-2">
+                    {hierarchy?.parent && (
+                      <div className="flex items-center gap-2 text-xs">
+                        <span className="shrink-0" style={{ color: C.textMuted }}>
+                          {t("parent")}
+                        </span>
+                        <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: LANE[hierarchy.parent.status] ?? C.textMuted }} />
+                        <a
+                          href={`/tasks?task=${hierarchy.parent.id}`}
+                          onClick={(e) => {
+                            if (!onOpenTask || e.metaKey || e.ctrlKey) return;
+                            e.preventDefault();
+                            onOpenTask(hierarchy.parent!.id);
+                          }}
+                          className="truncate hover:underline"
+                          style={{ color: C.textSecondary }}
+                          title={hierarchy.parent.title}
+                        >
+                          {hierarchy.parent.title}
+                        </a>
+                      </div>
+                    )}
+                    {(dependencies?.length ?? 0) > 0 && (
+                      <div>
+                        <div className="text-xs mb-1" style={{ color: C.textMuted }}>
+                          {t("dependsOn")}
+                        </div>
+                        <div className="flex flex-col gap-1">
+                          {dependencies!.map((dep) => (
+                            <div key={dep.task_id} className="flex items-center gap-2 text-xs">
+                              <span
+                                className="w-2 h-2 rounded-full shrink-0"
+                                style={{ backgroundColor: dep.status === "done" ? C.online : C.textMuted }}
+                              />
+                              <span style={{ color: dep.status === "done" ? C.textMuted : C.textPrimary }}>{dep.title}</span>
+                              <span style={{ color: C.textMuted }}>({statusWord(dep.status)})</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </Section>
+              )}
+
+              {/* References (ADR-053) */}
+              <Section>
+                <SectionLabel>{t("references")}</SectionLabel>
+                <TaskReferences taskId={task.id} />
+              </Section>
+
+              {/* Git */}
+              {gitSection && (
+                <Section last>
+                  <SectionLabel>Git</SectionLabel>
+                  <GitPanel
+                    gitInfo={gitSection}
+                    boardId={boardId}
+                    taskId={task.id}
+                    taskPrUrl={task.pr_url}
+                    taskPrNumber={task.pr_number}
+                  />
+                </Section>
+              )}
+            </TaskSummaryTab>
+          ) : activeTab === "thread" ? (
+            <div>
+              <button
+                type="button"
+                onClick={() => selectTab(defaultTabFor(task.status))}
+                className="inline-flex items-center gap-1.5 mb-3 text-[11px] cursor-pointer hover:underline"
+                style={{ color: C.textSecondary }}
+              >
+                <ArrowLeft size={12} aria-hidden />
+                {t("detail.backToSummary")}
+              </button>
+              <ThreadPanel taskId={task.id} />
+            </div>
           ) : activeTab === "comments" ? (
             <TaskComments task={task} boardId={boardId} agents={agents} />
           ) : activeTab === "transcript" ? (
@@ -935,8 +1060,6 @@ export function TaskDetailBody({
             <DeliverablesTab deliverables={deliverables ?? []} boardId={boardId} taskId={task.id} />
           ) : activeTab === "workspace" ? (
             <WorkspaceTab task={task} boardId={boardId} />
-          ) : activeTab === "e2e" ? (
-            <E2ETab task={task} boardId={boardId} />
           ) : activeTab === "timeline" ? (
             <TaskTimeline
               entries={timeline?.entries ?? []}
@@ -948,6 +1071,22 @@ export function TaskDetailBody({
           )}
         </div>
       </div>
+
+      <ConfirmDialog
+        open={!!confirm}
+        kicker={t("detail.confirmKicker")}
+        title={confirm ? t(confirm.title) : ""}
+        body={confirm ? t(confirm.body) : undefined}
+        confirmLabel={confirm ? t(confirm.action) : undefined}
+        cancelLabel={t("cancel")}
+        danger={confirmStatus === "aborted"}
+        onCancel={() => setConfirmStatus(null)}
+        onConfirm={() => {
+          const s = confirmStatus;
+          setConfirmStatus(null);
+          if (s) updateMutation.mutate({ status: s } as Partial<Task>);
+        }}
+      />
     </>
   );
 }

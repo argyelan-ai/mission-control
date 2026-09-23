@@ -151,8 +151,6 @@ export interface TaskGitInfo {
   workspace_path: string | null;
   commits?: TaskGitCommit[];
   pr_url?: string | null;
-  /** Set by the backend while status == blocked (naive UTC), cleared on leave. */
-  blocked_at?: string | null;
   repo_url?: string | null;
   repo_name?: string | null;
 }
@@ -212,6 +210,8 @@ export interface Task {
   branch_name: string | null;
   /** PR recorded on the task (set by the backend or the agent's review PATCH). */
   pr_url?: string | null;
+  /** Set by the backend while status == blocked (naive UTC), cleared on leave. */
+  blocked_at?: string | null;
   pr_number?: number | null;
   triggered_by_deliverable_id: string | null;
   target_url: string | null;

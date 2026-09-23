@@ -1,0 +1,112 @@
+"use client";
+
+/**
+ * Compact facts row under the state card. The layout follows the width of
+ * the CONTAINER, not the window (the same body runs in the Home modal
+ * ~672 px, the /tasks split ~800 px and on the phone 390 px):
+ *
+ *   < 560 px   3-column grid (3×2 on the phone)
+ *   ≥ 560 px   one wrapping line of [LABEL value] pairs
+ *
+ * The ≥1000 px side rail is wave 3b. The parent must be an `@container`.
+ */
+
+import { useLocale, useTranslations } from "next-intl";
+import { C, STATUS_TEXT } from "@/lib/colors";
+import { formatDuration, formatUsd, secondsBetween } from "@/lib/taskDetail/format";
+import type { Agent, RunRecord, Task } from "@/lib/types";
+import { AgentMonogram } from "./AgentMonogram";
+import { PrChip } from "./PrChip";
+
+const TERMINAL = new Set(["done", "failed", "aborted"]);
+
+function Fact({ label, children, testId }: { label: string; children: React.ReactNode; testId?: string }) {
+  return (
+    <div
+      className="min-w-0 px-2.5 py-2 @min-[560px]:px-0 @min-[560px]:py-0 flex flex-col @min-[560px]:flex-row @min-[560px]:items-center gap-0.5 @min-[560px]:gap-1.5"
+      style={{ background: "var(--fact-bg)" }}
+      data-testid={testId}
+    >
+      <span className="label-sys label-sys--dim shrink-0">{label}</span>
+      <span className="text-xs min-w-0 truncate flex items-center gap-1" style={{ color: C.textPrimary }}>
+        {children}
+      </span>
+    </div>
+  );
+}
+
+export function TaskFactRow({
+  task,
+  agent,
+  statusControl,
+  runRecord,
+  checklist,
+}: {
+  task: Task;
+  agent: Agent | undefined;
+  /** The status dropdown (StatusMenu) — the status menu stays. */
+  statusControl: React.ReactNode;
+  runRecord: RunRecord | null | undefined;
+  checklist: { done: number; total: number };
+}) {
+  const t = useTranslations("tasks");
+  const locale = useLocale();
+
+  const notStarted = task.status === "inbox" && !task.dispatched_at;
+  const timeSeconds = TERMINAL.has(task.status)
+    ? (runRecord?.zeiten.dauer_sekunden ?? secondsBetween(task.created_at, task.completed_at))
+    : secondsBetween(task.created_at, null);
+  const time = notStarted ? t("detail.notStarted") : (formatDuration(timeSeconds, locale) ?? "—");
+
+  const kosten = runRecord?.kosten;
+  const cost = kosten ? (
+    <>
+      <span>{formatUsd(kosten.gesamt_usd)}</span>
+      {kosten.hinweis && (
+        <span className="truncate" style={{ color: C.textMuted }}>
+          · {t("detail.claudeNotTracked")}
+        </span>
+      )}
+    </>
+  ) : (
+    "—"
+  );
+
+  const showPriority = task.priority === "high" || task.priority === "critical";
+
+  return (
+    <div
+      data-testid="task-fact-row"
+      className="grid grid-cols-3 gap-px rounded-lg overflow-hidden @min-[560px]:flex @min-[560px]:flex-wrap @min-[560px]:gap-x-4 @min-[560px]:gap-y-1.5 @min-[560px]:rounded-none @min-[560px]:overflow-visible [--fact-bg:var(--color-bg-surface)] @min-[560px]:[--fact-bg:transparent] bg-[var(--color-border)] @min-[560px]:bg-transparent"
+    >
+      <Fact label={t("detail.factStatus")} testId="fact-status">{statusControl}</Fact>
+      <Fact label={t("detail.factAgent")} testId="fact-agent">
+        {agent ? (
+          <>
+            <AgentMonogram name={agent.name} />
+            <span className="truncate">{agent.name}</span>
+          </>
+        ) : (
+          <span style={{ color: C.textMuted }}>{t("detail.unassigned")}</span>
+        )}
+      </Fact>
+      <Fact label={t("detail.factTime")} testId="fact-time">
+        <span className="font-mono">{time}</span>
+      </Fact>
+      <Fact label={t("detail.factPr")} testId="fact-pr">
+        {task.pr_url ? <PrChip url={task.pr_url} number={task.pr_number} /> : "—"}
+      </Fact>
+      <Fact label={t("detail.factPlan")} testId="fact-plan">
+        <span className="font-mono">{checklist.total > 0 ? `✓ ${checklist.done}/${checklist.total}` : "—"}</span>
+      </Fact>
+      <Fact label={t("detail.factCost")} testId="fact-cost">{cost}</Fact>
+      {showPriority && (
+        <Fact label={t("detail.factPriority")} testId="fact-priority">
+          <span className="capitalize" style={{ color: task.priority === "critical" ? STATUS_TEXT.error : STATUS_TEXT.warning }}>
+            {task.priority}
+          </span>
+        </Fact>
+      )}
+    </div>
+  );
+}
