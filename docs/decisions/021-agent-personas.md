@@ -1,6 +1,6 @@
 # ADR-021 — Agent Personas: Grounded Identities + Shared Reflection Charter
 
-**Status:** Accepted
+**Status:** Accepted · Partially superseded by [ADR-085](085-head-per-job.md) (2026-09-22) — fixed per-agent roles are no longer the working model; personas stay for paused agents
 **Datum:** 2026-04-20
 **Scope:** Agent Protocol · Template System · Backend/DB
 

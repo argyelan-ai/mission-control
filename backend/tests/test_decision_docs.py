@@ -32,10 +32,10 @@ from app.services.decision_docs import (
 
 # ── Gemessene Grundgesamtheit dieses Repos ───────────────────────────────
 
-# Gemessen am 2026-09-16 auf 66efcf47 (origin/main): 85 `.md`-Dateien unter
-# docs/decisions/, davon 83 echte Entscheidungsdokumente; die zwei uebrigen
-# sind README.md und _template.md.
-EXPECTED_DECISION_DOCS = 83
+# Gemessen am 2026-09-23 auf docs/adr-085-head-per-job (origin/main 2b16977e
+# + ADR-085): 86 `.md`-Dateien unter docs/decisions/, davon 84 echte
+# Entscheidungsdokumente; die zwei uebrigen sind README.md und _template.md.
+EXPECTED_DECISION_DOCS = 84
 
 
 def _repo_root() -> Path:
