@@ -228,8 +228,8 @@ export default function ScheduleJobDetailPage() {
                 aria-hidden
                 className="relative shrink-0 rounded-full transition-colors"
                 style={{
-                  width: 32,
-                  height: 18,
+                  width: 36,
+                  height: 20,
                   backgroundColor: job.enabled ? C.accent : C.bgElevated,
                   border: `1px solid ${job.enabled ? C.accent : C.border}`,
                 }}
@@ -237,9 +237,9 @@ export default function ScheduleJobDetailPage() {
                 <span
                   className="absolute top-1/2 -translate-y-1/2 rounded-full transition-all"
                   style={{
-                    left: job.enabled ? 16 : 2,
-                    width: 12,
-                    height: 12,
+                    left: job.enabled ? 18 : 2,
+                    width: 14,
+                    height: 14,
                     backgroundColor: job.enabled ? C.onAccent : C.textMuted,
                   }}
                 />

@@ -1977,7 +1977,7 @@ function UserRow({
               <button
                 onClick={() => updateMutation.mutate({ role })}
                 disabled={updateMutation.isPending}
-                className="px-2 py-1 rounded-sm text-xs font-medium cursor-pointer transition-colors text-[var(--color-on-accent)]"
+                className="px-2 py-1 min-h-11 sm:min-h-0 rounded-sm text-xs font-medium cursor-pointer transition-colors text-[var(--color-on-accent)]"
                 style={{ background: C.accent }}
               >
                 {updateMutation.isPending ? (
@@ -1992,7 +1992,7 @@ function UserRow({
                   setRole(user.role);
                   setError("");
                 }}
-                className="px-2 py-1 rounded-sm text-xs cursor-pointer"
+                className="px-2 py-1 min-h-11 sm:min-h-0 rounded-sm text-xs cursor-pointer"
                 style={{ color: "var(--color-text-muted)" }}
               >
                 {t("cancel")}
@@ -2002,7 +2002,7 @@ function UserRow({
             <>
               <button
                 onClick={() => setEditing(true)}
-                className="px-2 py-1 rounded-sm text-xs cursor-pointer transition-colors"
+                className="px-2 py-1 min-h-11 sm:min-h-0 rounded-sm text-xs cursor-pointer transition-colors"
                 style={{ color: "var(--color-text-secondary)" }}
               >
                 {t("edit")}
@@ -2013,7 +2013,7 @@ function UserRow({
                     ? setConfirmDeactivate(true)
                     : updateMutation.mutate({ is_active: true })
                 }
-                className="px-2 py-1 rounded-sm text-xs cursor-pointer transition-colors"
+                className="px-2 py-1 min-h-11 sm:min-h-0 rounded-sm text-xs cursor-pointer transition-colors"
                 style={{
                   color: user.is_active ? C.error : C.online,
                 }}
