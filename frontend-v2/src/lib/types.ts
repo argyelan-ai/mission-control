@@ -174,6 +174,15 @@ export interface CommitDiffFile {
   hunks: CommitDiffHunk[];
 }
 
+/** Branch vs base (three-dot) — everything the task branch added since it forked. */
+export interface BranchDiff {
+  base: string;
+  merge_base: string;
+  commits: number;
+  stats: { files: number; additions: number; deletions: number };
+  files: CommitDiffFile[];
+}
+
 export interface CommitDiff {
   hash: string;
   message: string;
