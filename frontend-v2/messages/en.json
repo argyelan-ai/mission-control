@@ -1002,7 +1002,9 @@
     "taglineDeployer": "Ships code live — Vercel, Docker, CI/CD.",
     "taglineTester": "Tests, E2E, bug reports — before the operator sees them.",
     "taglineInstaller": "Installs MCP servers, skills, and plugins.",
-    "taglineHermes": "Morning briefings & scheduled routines."
+    "taglineHermes": "Morning briefings & scheduled routines.",
+    "exampleBannerTitle": "Example crew — not your live fleet",
+    "exampleBannerBody": "This chart shows sample roles to illustrate the structure. Names and status are placeholders; your real agents are on the Agents page."
   },
   "vault": {
     "tabList": "List",

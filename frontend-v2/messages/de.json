@@ -1002,7 +1002,9 @@
     "taglineDeployer": "Bringt Code live — Vercel, Docker, CI/CD.",
     "taglineTester": "Tests, E2E, Bug-Reports — bevor der Operator sie sieht.",
     "taglineInstaller": "Installiert MCP-Server, Skills und Plugins.",
-    "taglineHermes": "Morgen-Briefings & geplante Routinen."
+    "taglineHermes": "Morgen-Briefings & geplante Routinen.",
+    "exampleBannerTitle": "Beispiel-Team — nicht deine laufende Flotte",
+    "exampleBannerBody": "Dieses Organigramm zeigt Beispiel-Rollen, um den Aufbau zu erklären. Namen und Status sind Platzhalter; deine echten Agenten stehen auf der Seite Agents."
   },
   "vault": {
     "tabList": "Liste",
