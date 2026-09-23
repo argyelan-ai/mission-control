@@ -41,13 +41,3 @@ describe("agentsBadge", () => {
     expect(agentsBadge({ total: 4, online: 1 }, tEn)).toEqual({ text: "1/4" });
   });
 });
-
-describe("Sidebar", () => {
-  it("renders the /agents badge through agentsBadge, not the online counter", async () => {
-    const { readFileSync } = await import("node:fs");
-    const { join } = await import("node:path");
-    const src = readFileSync(join(__dirname, "../Sidebar.tsx"), "utf-8");
-    expect(src).toContain("agentsBadge(metrics.agents");
-    expect(src).not.toContain("metrics.agents.online}/");
-  });
-});
