@@ -90,8 +90,11 @@ export default function AppShell({
         <Sidebar />
       </div>
 
-      {/* Main content area */}
-      <div className="flex flex-col flex-1 min-w-0 overflow-hidden relative z-10">
+      {/* Main content area — deliberately NO z-index: a z-index here would
+          open a stacking context and trap every page overlay (z-40/z-50)
+          beneath the fixed mobile app bar (z-40). `relative` alone already
+          paints it above the z-0 ambient background (later in tree order). */}
+      <div className="flex flex-col flex-1 min-w-0 overflow-hidden relative">
         {fullHeight ? (
           // Full-height mode: no page scroll, but KEEP main-content-pt,
           // horizontal padding, AND the max-w-[1600px] mx-auto wrap so

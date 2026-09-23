@@ -82,4 +82,16 @@ describe("AppShell — mobileChromeless", () => {
     const main = container.querySelector("main");
     expect(main?.className).toContain("main-content-pt");
   });
+
+  it("lets page overlays stack above the fixed mobile app bar", async () => {
+    // The mobile app bar is `fixed z-40` at the shell's root. A `z-10` on the
+    // main-content wrapper boxed every page overlay (z-40/z-50) into a lower
+    // stacking context, so the app bar stayed lit and tappable on top of
+    // modals — a tap on a dialog's close X hit the voice button instead.
+    const { container } = render(<AppShell fullHeight>inhalt</AppShell>);
+    await screen.findByText("inhalt");
+    const wrapper = container.querySelector("main")?.parentElement;
+    expect(wrapper).toBeTruthy();
+    expect(wrapper!.className).not.toMatch(/(^|\s)z-/);
+  });
 });
