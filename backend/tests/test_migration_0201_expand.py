@@ -192,16 +192,17 @@ async def test_0201_stays_additive(tmp_path):
 
 
 def test_alembic_chain_0200_0201_single_head():
-    """0201 revises 0200 and is the current head — 0202 (the drop of
-    `language`) is deliberately not on this branch (task cab1bfdd); it
+    """0201 revises 0200. The drop of `language` (planned as
+    0202_drop_agent_language) is deliberately not on this branch (task cab1bfdd); it
     lives unchanged on `deferred/0202-drop-agent-language` until its own,
     later PR.
 
     Head-uniqueness across the *whole* chain is already covered by
     ``test_alembic_chain_integrity.py::test_exactly_one_head`` (ast-based,
     handles merge revisions with tuple ``down_revision``). This test only
-    adds the specific claim that mentioning 0202 doesn't belong here: the
-    one head is 0201, not 0202.
+    adds the specific claim that the contract step (dropping `language`)
+    is not part of the chain. The head id itself is not pinned, so later
+    migrations do not have to edit this test.
     """
     mig0201 = _load_revision("0201_agent_op_work_language")
     assert mig0201.revision == "0201_agent_op_work_language"
@@ -233,7 +234,12 @@ def test_alembic_chain_0200_0201_single_head():
                         continue
                     parents.update([val] if isinstance(val, str) else val)
     heads = revs - parents
-    assert heads == {"0202_task_event_actor"}, heads
+    # Do not pin the head to one revision id: every later migration would
+    # have to edit this test. The claim here is only that the contract step
+    # (dropping `language`) is not part of the chain and there is one head.
+    assert len(heads) == 1, heads
+    assert "0202_drop_agent_language" not in revs, revs
+    assert "0201_agent_op_work_language" in parents, parents
 
 
 def test_0201_upgrade_does_not_drop_language():
