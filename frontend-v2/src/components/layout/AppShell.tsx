@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAppStore } from "@/lib/store";
-import { getToken, getStoredUser } from "@/lib/api";
+import { api, getToken, getStoredUser, setStoredUser } from "@/lib/api";
 import { AmbientBackground } from "./AmbientBackground";
 import Sidebar from "./Sidebar";
 import MobileNav, { MobileNavProvider, MobileTabBar } from "./MobileNav";
@@ -11,6 +11,11 @@ import CommandPalette from "@/components/shared/CommandPalette";
 import ToastRenderer from "@/components/shared/ToastRenderer";
 import { VoiceProvider, VoiceOverlay } from "@/components/voice/VoiceWidget";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
+
+// Refresh the signed-in user from the server once per page load. The stored
+// copy only exists after a form login and goes stale when the role or name
+// changes; without it the shell showed "?" / "—" and a guessed role.
+let userRefreshed = false;
 
 export default function AppShell({
   children,
@@ -55,6 +60,22 @@ export default function AppShell({
     }
 
     setAuthorized(true);
+
+    if (!userRefreshed) {
+      userRefreshed = true;
+      Promise.resolve()
+        .then(() => api.auth.me())
+        .then((fresh) => {
+          const next = { id: fresh.id, email: fresh.email, name: fresh.name, role: fresh.role };
+          setStoredUser(next);
+          setCurrentUser(next);
+        })
+        .catch(() => {
+          // Offline / expired token: keep the stored copy; the next request's
+          // 401 handling takes care of a dead session.
+          userRefreshed = false;
+        });
+    }
   }, [router, setCurrentUser]);
 
   if (!authorized) {
