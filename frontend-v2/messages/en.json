@@ -784,6 +784,7 @@
     "readyHint": "Optional: a demo board shows the pipeline with sample tasks before your first agent is provisioned.",
     "demoBoardCreated": "Demo board created",
     "createDemoBoard": "Create demo board (8 sample tasks)",
+    "demoLockedExisting": "This installation already has boards or agents, so demo data is only offered on a fresh install.",
     "firstAgentGuide": "Guide: provision your first agent",
     "goToCommandCenter": "Go to command center",
     "changeableLater": "Everything here can be changed later under Settings.",

@@ -71,6 +71,13 @@ export default function SetupWizardPage() {
   // Demo board (step 4)
   const [seeding, setSeeding] = useState(false);
   const [seeded, setSeeded] = useState(false);
+  // Demo data only on a fresh install. The wizard creates the first board
+  // only in step 4 (seedDemo) and registration creates none, so existing
+  // boards or agents mean this is not a fresh install — /setup stays
+  // reachable there, and one click used to write demo data into live data.
+  // null = still checking; a failed check leaves the button available
+  // (a fresh install must never be blocked from finishing the wizard).
+  const [hasExistingData, setHasExistingData] = useState<boolean | null>(null);
 
   useEffect(() => {
     if (!localStorage.getItem(AUTH_TOKEN_KEY)) {
@@ -81,6 +88,9 @@ export default function SetupWizardPage() {
       .providers()
       .then(setProviders)
       .catch(() => setProviders([]));
+    Promise.all([api.boards.list(), api.agents.list()])
+      .then(([boards, agents]) => setHasExistingData(boards.length > 0 || agents.length > 0))
+      .catch(() => setHasExistingData(false));
   }, [router]);
 
   async function saveKey() {
@@ -123,6 +133,7 @@ export default function SetupWizardPage() {
   }
 
   async function seedDemo() {
+    if (hasExistingData !== false) return;
     setSeeding(true);
     setError("");
     try {
@@ -393,7 +404,7 @@ export default function SetupWizardPage() {
 
               <button
                 onClick={seedDemo}
-                disabled={seeding || seeded}
+                disabled={seeding || seeded || hasExistingData !== false}
                 className="w-full text-sm rounded-lg px-4 py-2.5 flex items-center justify-center gap-2 cursor-pointer transition-all duration-200 disabled:cursor-not-allowed"
                 style={{
                   border: `1px solid ${seeded ? C.online : C.border}`,
@@ -410,6 +421,11 @@ export default function SetupWizardPage() {
                   t("createDemoBoard")
                 )}
               </button>
+              {hasExistingData && !seeded && (
+                <p className="text-xs -mt-2" style={{ color: "var(--color-text-muted)" }}>
+                  {t("demoLockedExisting")}
+                </p>
+              )}
 
               <a
                 href="https://github.com/argyelan-ai/mission-control/blob/main/docs/setup/first-agent.md"
