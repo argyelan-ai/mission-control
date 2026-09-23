@@ -527,12 +527,16 @@ def _grouped_sort_key(rt: dict) -> tuple:
     return (1, "", rt.get("ui_order") or 999, rt.get("display_name") or "")
 
 
-# Upper bound for ONE live state probe in the list view. Above the 5 s HTTP
-# probe timeout inside runtime_manager, so a box that is merely asleep still
-# reports its real answer ("stopped"); below the 10 s SSH connect timeout
-# and far below the 60 s SSH command timeout, which are what a hung box
-# would otherwise cost the whole page.
-_STATE_PROBE_TIMEOUT_S = 6.0
+# Upper bound for ONE live state probe in the list view. Some probes take
+# two steps that each end in an honest answer: SSH + a 5 s HTTP probe
+# (docker/ssh_process/unsloth/lmstudio), or on a power-managed box a 3 s
+# control-port check + the 5 s model probe (8 s for "booted, no model", the
+# state that shows the Start button). The limit clears those, so a slow but
+# answering box still reports its real state ("stopped"/"warming"); it stays
+# below the 10 s SSH connect timeout and far below the 60 s SSH command
+# timeout, which are what a hung box would otherwise cost the whole page.
+# The page normally waits far less: only a hung probe runs into this limit.
+_STATE_PROBE_TIMEOUT_S = 9.0
 PROBE_TIMED_OUT_MESSAGE = "probe timed out"
 
 
