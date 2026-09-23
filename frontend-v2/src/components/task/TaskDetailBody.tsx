@@ -49,6 +49,9 @@ import { TaskStateCard } from "./detail/TaskStateCard";
 import { TaskFactRow } from "./detail/TaskFactRow";
 import { TaskSummaryTab } from "./detail/TaskSummaryTab";
 import { deriveStateCard } from "@/lib/taskDetail/stateCard";
+import { HeadRunsList } from "@/components/heads/HeadRunsList";
+import { useHeadPairsForLabels } from "@/components/heads/HeadStateCard";
+import { HEAD_POLL_MS, headRunsActive, runPairLabel, sortRunsNewestFirst } from "@/lib/heads";
 import { formatAbsolute, formatAge } from "@/lib/taskDetail/format";
 import { parseInvalidTransition } from "@/lib/taskDetail/errors";
 import { STATUS_LABEL_KEY, statusLabelKey } from "@/lib/taskDetail/statusLabels";
@@ -651,6 +654,18 @@ export function TaskDetailBody({
   });
   const runRecord = runRecordQuery.data;
 
+  // Head runs of this task (head launcher §8.2). Polls every 10 s only while
+  // the newest run is active, otherwise not at all. Heads off → 404 → none.
+  const headRunsQuery = useQuery({
+    queryKey: ["heads", "task", task.id],
+    queryFn: () => api.heads.list({ taskId: task.id }),
+    retry: false,
+    refetchInterval: (query) => (headRunsActive(query.state.data) ? HEAD_POLL_MS : false),
+  });
+  const headRuns = Array.isArray(headRunsQuery.data?.runs) ? headRunsQuery.data.runs : [];
+  const latestHeadRun = sortRunsNewestFirst(headRuns)[0] ?? null;
+  const headPairs = useHeadPairsForLabels(headRuns.length > 0);
+
   const needsApprovals = task.status === "blocked" || task.status === "waiting" || task.status === "user_test";
   // Same query key as the inbox — one cache, one source of truth.
   const { data: approvals = [] } = useQuery({
@@ -729,7 +744,7 @@ export function TaskDetailBody({
 
   // ── Derived ────────────────────────────────────────────────────────────────
 
-  const stateCard = deriveStateCard({ task, approvals, comments, runRecord: runRecord ?? null });
+  const stateCard = deriveStateCard({ task, approvals, comments, runRecord: runRecord ?? null, headRun: latestHeadRun });
 
   const briefingFields: { label: string; value: string | null | undefined }[] = task.intake_mode
     ? [
@@ -895,6 +910,7 @@ export function TaskDetailBody({
             task={task}
             agent={agent}
             runRecord={runRecord}
+            headFact={latestHeadRun ? runPairLabel(latestHeadRun, headPairs) : null}
             checklist={{ done: checklistDone, total: checklist.length }}
             statusControl={
               <StatusMenu status={task.status} pending={updateMutation.isPending} onChange={requestStatus} />
@@ -972,6 +988,7 @@ export function TaskDetailBody({
               subtasks={hierarchy?.children ?? []}
               checklist={checklist}
               onOpenTask={onOpenTask}
+              leading={headRuns.length > 0 ? <HeadRunsList runs={headRuns} pairs={headPairs} /> : undefined}
               briefExtra={
                 briefingFields.length > 0 ? (
                   <div className="mt-2 space-y-1">

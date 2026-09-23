@@ -1,4 +1,5 @@
 import type { Approval, RunRecord, Task, TaskComment } from "@/lib/types";
+import { HEAD_SILENT_WARN_S, type HeadRun } from "@/lib/heads";
 import { parseTs, secondsBetween } from "./format";
 
 /**
@@ -11,7 +12,14 @@ import { parseTs, secondsBetween } from "./format";
  *   done                          → RESULT (resolution, PR, evidence, duration)
  *   failed / aborted              → FAILED (error in plain words + Open log)
  *   inbox / review                → no card
+ *
+ * A head run (docs/specs/head-launcher.md §8.2) wins over the task status:
+ * the card then shows the head's own state + ONE main action
+ *   starting/running → Stop · needs_you → Answer · passed → Open PR ·
+ *   failed/stopped → Restart with …
  */
+
+export type HeadMainAction = "stop" | "answer" | "open_pr" | "restart";
 
 export type StateCard =
   | {
@@ -32,7 +40,28 @@ export type StateCard =
       evidenceCount: number | null;
       durationSeconds: number | null;
     }
-  | { kind: "failed"; error: string | null };
+  | { kind: "failed"; error: string | null }
+  | {
+      kind: "head";
+      run: HeadRun;
+      mainAction: HeadMainAction;
+      /** Running but no output for > 15 min — warn tone, still running. */
+      silentWarn: boolean;
+    };
+
+export function headMainAction(run: HeadRun): HeadMainAction {
+  switch (run.state) {
+    case "starting":
+    case "running":
+      return "stop";
+    case "needs_you":
+      return "answer";
+    case "passed":
+      return run.pr_url ? "open_pr" : "restart";
+    default:
+      return "restart";
+  }
+}
 
 const NEEDS_YOU = new Set(["blocked", "waiting", "user_test"]);
 const RESULT_FALLBACK_TYPES = new Set(["message", "progress", "review", "handoff", "checkpoint"]);
@@ -53,12 +82,24 @@ export function deriveStateCard({
   approvals,
   comments,
   runRecord,
+  headRun = null,
 }: {
   task: Task;
   approvals: Approval[];
   comments: TaskComment[];
   runRecord: RunRecord | null;
+  /** Newest head run of this task, if any. */
+  headRun?: HeadRun | null;
 }): StateCard | null {
+  if (headRun) {
+    return {
+      kind: "head",
+      run: headRun,
+      mainAction: headMainAction(headRun),
+      silentWarn: headRun.state === "running" && (headRun.silent_s ?? 0) > HEAD_SILENT_WARN_S,
+    };
+  }
+
   const sorted = newestFirst(comments);
 
   if (NEEDS_YOU.has(task.status)) {

@@ -30,12 +30,14 @@ import { STATUS_LABEL_KEY } from "@/lib/taskDetail/statusLabels";
 import type { StateCard } from "@/lib/taskDetail/stateCard";
 import type { Agent, Task } from "@/lib/types";
 import { PrChip } from "./PrChip";
+import { HeadStateCard } from "@/components/heads/HeadStateCard";
 
 const KIND_COLOR: Record<StateCard["kind"], string> = {
   needs_you: C.error,
   running: LANE.in_progress,
   result: LANE.done,
   failed: C.error,
+  head: LANE.in_progress,
 };
 
 const KIND_TEXT: Record<StateCard["kind"], string> = {
@@ -43,6 +45,7 @@ const KIND_TEXT: Record<StateCard["kind"], string> = {
   running: STATUS_TEXT.info,
   result: STATUS_TEXT.online,
   failed: STATUS_TEXT.error,
+  head: STATUS_TEXT.info,
 };
 
 function Shell({
@@ -134,6 +137,11 @@ export function TaskStateCard({
   });
 
   const statusLabel = t(STATUS_LABEL_KEY[task.status]);
+
+  // A head run owns the card (head-launcher §8.2) — its own state + one action.
+  if (card.kind === "head") {
+    return <HeadStateCard run={card.run} mainAction={card.mainAction} silentWarn={card.silentWarn} />;
+  }
 
   if (card.kind === "needs_you") {
     const since = formatAge(card.since, locale);

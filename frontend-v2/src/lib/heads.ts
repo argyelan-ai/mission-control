@@ -92,6 +92,9 @@ export interface HeadRestartBody {
 
 export const HEAD_ACTIVE_STATES: ReadonlySet<HeadState> = new Set<HeadState>(["starting", "running"]);
 
+/** Task detail polls the runs this often — only while one is active. */
+export const HEAD_POLL_MS = 10_000;
+
 /** Output silence after which the card warns (the head still runs). */
 export const HEAD_SILENT_WARN_S = 15 * 60;
 
@@ -326,4 +329,39 @@ export function sortRunsNewestFirst(runs: HeadRun[]): HeadRun[] {
 export function prNumberFromUrl(url: string | null | undefined): number | null {
   const m = /\/pull\/(\d+)/.exec(url ?? "");
   return m ? Number(m[1]) : null;
+}
+
+// ── Restart ─────────────────────────────────────────────────────────────────
+
+/**
+ * Pairs for "Restart with …". The listing marks the run's OWN box as busy
+ * while it still works; the backend's restart ignores that lock
+ * (`ignore_run_id`), so such a pair counts as startable here. Every other
+ * block stays.
+ */
+export function pairsForRestart(pairs: HeadPair[], runId: string): HeadPair[] {
+  return pairs.map((p) =>
+    p.status === "blocked" && p.reason_code === "box_busy" && p.busy_by?.run_id === runId
+      ? { ...p, reason_code: null, busy_by: null, startable: true }
+      : p,
+  );
+}
+
+/** Pre-selection for a restart: the run's own pair while startable, else
+ *  the usual local default. */
+export function chooseRestartPair(
+  pairs: HeadPair[],
+  defaultPair: HeadPair | null,
+  run: Pick<HeadRun, "harness" | "runtime_slug">,
+): HeadPair | null {
+  const own = pairs.find((p) => pairKey(p) === pairKey(run));
+  if (own && own.startable) return own;
+  return chooseInitialPair({ pairs, default_pair: defaultPair }, null);
+}
+
+/** True while the newest run of a `{runs}` listing is still active —
+ *  drives the task-detail polling (off at a final state). */
+export function headRunsActive(data: { runs?: HeadRun[] } | undefined | null): boolean {
+  const runs = Array.isArray(data?.runs) ? data!.runs : [];
+  return isHeadActive(sortRunsNewestFirst(runs)[0]);
 }

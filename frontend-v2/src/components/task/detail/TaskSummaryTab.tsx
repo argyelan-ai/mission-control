@@ -78,6 +78,7 @@ export function TaskSummaryTab({
   checklist,
   briefExtra,
   onOpenTask,
+  leading,
   children,
 }: {
   task: Task;
@@ -90,6 +91,8 @@ export function TaskSummaryTab({
   /** Intake/briefing fields, shown with the full brief. */
   briefExtra?: React.ReactNode;
   onOpenTask?: (taskId: string) => void;
+  /** Rendered above the run record boxes (head runs list). */
+  leading?: React.ReactNode;
   /** Existing detail sections, rendered below the run record boxes. */
   children?: React.ReactNode;
 }) {
@@ -356,6 +359,7 @@ export function TaskSummaryTab({
 
   return (
     <div className="@container">
+      {leading}
       {boxes}
       {children && (
         <div className="mt-4 -mx-4">
