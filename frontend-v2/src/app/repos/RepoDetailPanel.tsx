@@ -233,6 +233,14 @@ export function RepoDetailPanel({
     }
   }, [repo?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // The panel stays mounted between opens, so sub-layers must be reset when
+  // it closes or switches repo — otherwise a dismissed delete dialog (red
+  // Delete button armed) or link picker pops straight back on the next open.
+  useEffect(() => {
+    setDeleteOpen(false);
+    setPickerOpen(false);
+  }, [open, repoId]);
+
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["repo", repoId] });
     queryClient.invalidateQueries({ queryKey: ["repos"] });
