@@ -112,20 +112,9 @@ export function PluginsShellTab() {
     };
   }, []);
 
-  // Auto-reconnect: check if plugins-shell tmux session already exists on mount
-  const autoConnectDone = useRef(false);
-  useEffect(() => {
-    if (autoConnectDone.current || !termInstance.current) return;
-    autoConnectDone.current = true;
-    // startShell is idempotent — returns ok:true if already running
-    api.plugins.startShell().then((res) => {
-      if (res?.ok) {
-        setTimeout(() => connectWs(), 300);
-      }
-    }).catch(() => {
-      // Bridge not reachable — ignore, user can click "Shell starten"
-    });
-  }, [connectWs]);
+  // No auto-start on mount: merely opening the tab must not start a shell.
+  // "Start installer" is idempotent on the bridge — if a session is already
+  // running it re-attaches to it instead of creating a second one.
 
   // Start shell + connect
   const startShell = useMutation({
