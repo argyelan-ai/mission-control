@@ -208,6 +208,9 @@ export interface Task {
   // Delegation Contract
   delegation_type: "code_change" | "visual_proof" | "credential_bound" | "review" | null;
   branch_name: string | null;
+  /** PR recorded on the task (set by the backend or the agent's review PATCH). */
+  pr_url?: string | null;
+  pr_number?: number | null;
   triggered_by_deliverable_id: string | null;
   target_url: string | null;
   acceptance_criteria: string | null;

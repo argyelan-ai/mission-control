@@ -191,7 +191,9 @@
     "tabTranscript": "Transcript",
     "tabTimeline": "Timeline",
     "tabHistory": "Verlauf",
-    "deliverableImageUnavailable": "Bild nicht verfügbar"
+    "deliverableImageUnavailable": "Bild nicht verfügbar",
+    "prChipNumber": "PR #{number}",
+    "prChipOpen": "PR offen"
   },
   "agents": {
     "title": "Agenten",

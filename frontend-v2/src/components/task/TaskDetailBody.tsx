@@ -886,7 +886,13 @@ export function TaskDetailBody({
         {gitInfo?.branch && (
           <Section>
             <SectionLabel>Git</SectionLabel>
-            <GitPanel gitInfo={gitInfo} boardId={boardId} taskId={task.id} />
+            <GitPanel
+              gitInfo={gitInfo}
+              boardId={boardId}
+              taskId={task.id}
+              taskPrUrl={task.pr_url}
+              taskPrNumber={task.pr_number}
+            />
           </Section>
         )}
 

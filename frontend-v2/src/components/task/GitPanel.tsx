@@ -11,6 +11,7 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
 import { motion, AnimatePresence } from "framer-motion";
 import { ChevronDown, ExternalLink, GitBranch, GitCommit } from "lucide-react";
 import { api } from "@/lib/api";
@@ -22,12 +23,22 @@ export function GitPanel({
   gitInfo,
   boardId,
   taskId,
+  taskPrUrl,
+  taskPrNumber,
 }: {
   gitInfo: TaskGitInfo;
   boardId: string;
   taskId: string;
+  /** PR recorded on the task itself — fallback when the git probe has none. */
+  taskPrUrl?: string | null;
+  taskPrNumber?: number | null;
 }) {
+  const t = useTranslations("tasks");
   const [expanded, setExpanded] = useState(false);
+  const prUrl = gitInfo.pr_url || taskPrUrl || null;
+  const prNumber =
+    (prUrl === taskPrUrl ? taskPrNumber : null) ??
+    (prUrl ? Number(prUrl.match(/\/pull\/(\d+)/)?.[1]) || null : null);
   const [activeHash, setActiveHash] = useState<string | null>(null);
   const hasCommits = (gitInfo.commits?.length ?? 0) > 0;
   const repoUrl = gitInfo.repo_url ?? null;
@@ -95,16 +106,16 @@ export function GitPanel({
               {gitInfo.repo_name}
             </a>
           )}
-          {gitInfo.pr_url && (
+          {prUrl && (
             <a
-              href={gitInfo.pr_url}
+              href={prUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center gap-1 px-2 py-0.5 rounded-sm text-[10px] font-medium cursor-pointer hover:opacity-80 transition-opacity"
               style={{ background: C.accentSubtle, color: C.accent, border: `1px solid ${C.borderAccent}` }}
             >
-              <ExternalLink size={9} />
-              PR open
+              <ExternalLink size={9} aria-hidden />
+              {prNumber ? t("prChipNumber", { number: prNumber }) : t("prChipOpen")}
             </a>
           )}
           {hasCommits && (
