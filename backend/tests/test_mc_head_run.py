@@ -64,7 +64,7 @@ def test_start_runs_harness_in_worktree_and_exits(env):
     branch = subprocess.run(
         ["git", "-C", str(run / "wt"), "branch", "--show-current"], capture_output=True, text=True
     ).stdout.strip()
-    assert branch.startswith("head/")
+    assert branch.startswith("mc-head/")
     assert "hello from head" in (run / "head.log").read_text()
     assert (run / "step.txt").read_text().strip() == "step 1/7 plan"
     # harness table: omp × local
@@ -128,11 +128,11 @@ def test_pre_push_hook_refuses_main_and_force(env):
     to_main = subprocess.run([*git, "push", "origin", "HEAD:main"], capture_output=True, text=True)
     assert to_main.returncode != 0
     assert "refused" in to_main.stderr
-    ok = subprocess.run([*git, "push", "origin", "HEAD:refs/heads/head/demo-ok"], capture_output=True, text=True)
+    ok = subprocess.run([*git, "push", "origin", "HEAD:refs/heads/mc-head/demo-ok"], capture_output=True, text=True)
     assert ok.returncode == 0, ok.stderr
     subprocess.run([*git, "commit", "-q", "--amend", "-m", "rewritten"], check=True)
     force = subprocess.run(
-        [*git, "push", "--force", "origin", "HEAD:refs/heads/head/demo-ok"], capture_output=True, text=True
+        [*git, "push", "--force", "origin", "HEAD:refs/heads/mc-head/demo-ok"], capture_output=True, text=True
     )
     assert force.returncode != 0 and "non-fast-forward" in force.stderr
 
@@ -334,6 +334,25 @@ def test_last_output_follows_step_file_while_log_is_silent(env):
     status = wait_phase(mc_home, run_id, "exited")
     started = status["started_at"]
     assert status["last_output_at"] and status["last_output_at"] > started
+
+
+def test_second_head_after_a_pushed_head_branch_still_fetches(env):
+    """Live finding 2026-09-23: with a 'head/' prefix, the first pushed branch
+    creates refs/remotes/origin/head/… which collides with origin/HEAD on a
+    case-insensitive disk (macOS) — every later fetch failed."""
+    mc_home = env["mc_home"]
+    harness = fake_harness(
+        env["tmp"],
+        'git -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m x'
+        ' && git push -q -u origin "$(git branch --show-current)"',
+    )
+    first = write_spec(mc_home)
+    run_head(mc_home, "start", first, env_extra=_extra(harness))
+    assert wait_phase(mc_home, first, "exited")["exit_code"] == 0
+    second = write_spec(mc_home)
+    run_head(mc_home, "start", second, env_extra=_extra(harness))
+    status = wait_phase(mc_home, second, "exited")
+    assert status["reason"] is None, status
 
 
 def test_pr_url_is_found_by_the_wrapper(env, tmp_path):

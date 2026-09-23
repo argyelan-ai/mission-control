@@ -52,7 +52,7 @@ def make_run(
         "title": "Fix the thing",
         "repo_full_name": "owner/demo",
         "base_branch": "main",
-        "branch": f"head/2026-09-23-fix-{run_id[:4]}",
+        "branch": f"mc-head/2026-09-23-fix-{run_id[:4]}",
         "harness": "omp",
         "runtime_slug": "local-slot",
         "model": "glm",

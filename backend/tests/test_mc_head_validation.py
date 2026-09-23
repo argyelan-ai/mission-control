@@ -34,8 +34,9 @@ def test_valid_spec_passes(mc_home):
         ("repo_full_name", "owner/$(touch /tmp/pwned-mc-head)"),
         ("repo_full_name", "owner"),
         ("branch", "main"),
-        ("branch", "head/../../main"),
-        ("branch", "head/UPPER"),
+        ("branch", "mc-head/../../main"),
+        ("branch", "mc-head/UPPER"),
+        ("branch", "head/2026-09-23-x"),  # collides with origin/HEAD on macOS
         ("harness", "kimi"),
         ("harness", "omp; rm -rf ~"),
         ("base_url", "http://host:8000/v1;touch /tmp/x"),

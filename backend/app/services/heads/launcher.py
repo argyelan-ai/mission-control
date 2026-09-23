@@ -49,7 +49,9 @@ def _slug(text: str, limit: int = 30) -> str:
 
 
 def branch_name(title: str, run_id: str, when: datetime) -> str:
-    return f"head/{when:%Y-%m-%d}-{_slug(title)}-{run_id[:4]}"
+    # "mc-head/" (not "head/"): refs/remotes/origin/head/… would collide with
+    # origin/HEAD on a case-insensitive disk (see scripts/head/mc-head).
+    return f"mc-head/{when:%Y-%m-%d}-{_slug(title)}-{run_id[:4]}"
 
 
 async def head_env(session: AsyncSession, harness: str, runtime: Runtime) -> tuple[dict[str, str], str, str]:

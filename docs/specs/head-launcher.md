@@ -202,7 +202,7 @@ $MC_HOME/heads/<run_id>/
 `spec.json`:
 ```json
 {"run_id": "…", "task_id": "…|null", "repo_full_name": "owner/name",
- "base_branch": "main", "branch": "head/2026-09-23-short-ab12",
+ "base_branch": "main", "branch": "mc-head/2026-09-23-short-ab12",
  "harness": "omp", "runtime_slug": "…", "model": "…", "base_url": "…",
  "box_keys": ["<host-uuid>", "…"], "recipe_slug": "…|null", "time_limit_s": 7200,
  "restarted_from": "…|null", "mode": "fresh|continue",
@@ -216,7 +216,8 @@ placeholder `ANTHROPIC_API_KEY`, the head's `GH_TOKEN`).
 `~/.mc` read-write, so a compromised backend could plant values that become
 shell arguments on the host. Every field is checked against a fixed pattern
 before use — `repo_full_name` `^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`, `branch`
-`^head/[a-z0-9-]+$`, `run_id` uuid, `harness` one of the `case` table,
+`^mc-head/[a-z0-9-]+$` (not `head/`: on a case-insensitive disk the tracking ref
+`refs/remotes/origin/head/…` collides with `origin/HEAD` — build finding), `run_id` uuid, `harness` one of the `case` table,
 `base_url` `^https?://[A-Za-z0-9.-]+:[0-9]+(/[A-Za-z0-9/._-]*)?$`, `model`
 `^[A-Za-z0-9._/:-]+$`, `mode` `fresh|continue` — always quoted, never `eval`.
 Any mismatch → `status.json` `exited`, `reason=spec_invalid`.
@@ -623,7 +624,7 @@ The head runs on the host with the operator's user. Honest weighting:
 |---|---|---|
 | 1 Procedure | "Never" list in `head-launcher-AGENTS.md`: secrets / `.env` / `~/.ssh`, push to `main`, force-push, merge, deploy, docker / ssh / sudo, outbound mail/posts, live-DB writes, deletes outside the worktree | instruction only |
 | 2 Tool guards | `pre-push` hook (main/master, force); shim folder first on `PATH` blocking `docker`, `ssh`, `scp`, `sudo`, `launchctl`, `kubectl`; `gh` shim allows only `pr create/view/list`, `repo view`, `auth status`; `env -i` (no inherited secrets); `GIT_CONFIG_GLOBAL=/dev/null` | guard rail — bypassable (absolute paths, `git push --no-verify`, `git -c core.hooksPath=`) |
-| 2b Claude allow list | `--settings <run>/head-settings.json` (under `--bare` only managed settings and `--settings` apply reliably [cli]): `permissions.allow` is a **positive list** — `Bash(git add/commit/status/diff/log …)`, `Bash(git push origin head/*)`, `Bash(gh pr create/view/list …)`, the repo's test/lint/privacy commands from the repo row; `permissions.deny`: `Read(~/.ssh/**)`, `Read(**/.env*)`, `Bash(docker/ssh/sudo/curl …)`. Everything else is refused in `-p` | the strongest per-command filter of all harnesses — Claude only |
+| 2b Claude allow list | `--settings <run>/head-settings.json` (under `--bare` only managed settings and `--settings` apply reliably [cli]): `permissions.allow` is a **positive list** — `Bash(git add/commit/status/diff/log …)`, `Bash(git push origin mc-head/*)`, `Bash(gh pr create/view/list …)`, the repo's test/lint/privacy commands from the repo row; `permissions.deny`: `Read(~/.ssh/**)`, `Read(**/.env*)`, `Bash(docker/ssh/sudo/curl …)`. Everything else is refused in `-p` | the strongest per-command filter of all harnesses — Claude only |
 | 2c omp | **no per-command filter exists** (`--approval-mode always-ask\|write\|yolo`, `--auto-approve` [cli]); `always-ask` blocks a `-p` run → `--auto-approve` | none — omp relies on layers 2 + 3 |
 | 3 Sandbox | `sandbox-exec` profile (`/usr/bin/sandbox-exec` exists [cli]): deny read of `~/.ssh`, `**/.env*`, `$MC_HOME/secrets`, the login keychain, other harness config dirs; deny write outside `wt/`, `step.txt`, `question.md`, `head.log`, vault `jobs/`, temp, harness caches — **`.wrapper/` (status, heartbeat) is not writable** | process-level [assumption: works on current macOS incl. network; proof with sabotage `cat ~/.ssh/<key>` → denied] |
 | 4 Server identity | heads push and open PRs with their **own weak GitHub identity** (fine-grained token of a non-admin account or a GitHub App: `contents:write` + `pull_requests:write` on the head repos), set as `GH_TOKEN` in `head.env`; the operator's admin token is never reachable (keychain denied by the sandbox, `GIT_CONFIG_GLOBAL=/dev/null`). Plus a ruleset rule "restrict updates" on `main` **without bypass for that identity** | the only layer that holds against push/merge |

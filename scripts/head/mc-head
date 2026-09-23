@@ -94,7 +94,10 @@ GIT_EMAIL = os.environ.get("MC_HEAD_GIT_EMAIL", "head@users.noreply.invalid")
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 PATTERNS = {
     "repo_full_name": re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"),
-    "branch": re.compile(r"^head/[a-z0-9-]+$"),
+    # "mc-head/", not "head/": on a case-insensitive disk (macOS) the
+    # remote-tracking ref refs/remotes/origin/head/… collides with
+    # refs/remotes/origin/HEAD and every later fetch fails (live 2026-09-23).
+    "branch": re.compile(r"^mc-head/[a-z0-9-]+$"),
     "base_branch": re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,100}$"),
     "base_url": re.compile(r"^https?://[A-Za-z0-9.-]+:[0-9]+(/[A-Za-z0-9/._-]*)?$"),
     "model": re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/:-]{0,200}$"),
@@ -151,7 +154,7 @@ def load_spec(run_id: str) -> dict:
         value = spec.get(field)
         if not isinstance(value, str) or not pattern.match(value) or ".." in value:
             raise SpecInvalid(field, "does not match the allowed pattern")
-    if spec["branch"] in ("head/main", "head/master"):
+    if spec["branch"] in ("mc-head/main", "mc-head/master"):
         raise SpecInvalid("branch", "reserved name")
     if spec.get("harness") not in HARNESSES:
         raise SpecInvalid("harness", "not in the harness table")
@@ -387,14 +390,14 @@ def _git(args: list, cwd=None, env=None, check=True) -> subprocess.CompletedProc
 
 
 PRE_PUSH_HOOK = r"""#!/bin/sh
-# mc-head guard (spec §9 layer 2): heads may only push their own head/* branch,
+# mc-head guard (spec §9 layer 2): heads may only push their own mc-head/* branch,
 # never delete, never rewrite history. Guard rail only — the server-side gate
 # is the head's own non-admin GitHub identity.
 zero=0000000000000000000000000000000000000000
 while read local_ref local_sha remote_ref remote_sha; do
   case "$remote_ref" in
-    refs/heads/head/*) ;;
-    *) echo "mc-head: push to $remote_ref refused (heads push only head/* branches)" >&2; exit 1 ;;
+    refs/heads/mc-head/*) ;;
+    *) echo "mc-head: push to $remote_ref refused (heads push only mc-head/* branches)" >&2; exit 1 ;;
   esac
   if [ "$local_sha" = "$zero" ]; then
     echo "mc-head: deleting $remote_ref refused" >&2; exit 1
