@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { groupRuntimes, CLOUD_TYPES, panelCapabilities, pickServing, pickSlot } from "../grouping";
+import { groupRuntimes, CLOUD_TYPES, panelCapabilities, pickServing, pickSlot, hostProbeTimedOut } from "../grouping";
 import type { Runtime, Host, RuntimeLiveStatus } from "@/lib/types";
 
 function makeRuntime(over: Partial<Runtime>): Runtime {
@@ -310,5 +310,28 @@ describe("Slot-Runtime", () => {
     expect(caps.contextSettings).toBe(false);
     expect(caps.modelEditor).toBe(false);
     expect(caps.wake).toBe(false);
+  });
+});
+
+// GET /runtimes cuts a hung state probe off and reports the runtime as
+// unknown with container_status "probe_timeout". A box whose recipes all
+// timed out is NOT free — the stage must not call it "no model · ready".
+describe("hostProbeTimedOut", () => {
+  const host = makeHost({ slug: "alpha" });
+
+  it("is true when a recipe runtime on the box timed out", () => {
+    const rt = makeRuntime({ slug: "r1", state: "unknown", container_status: "probe_timeout" });
+    expect(hostProbeTimedOut({ host, runtimes: [rt] })).toBe(true);
+  });
+
+  it("ignores the slot runtime (it is only the box's address)", () => {
+    const slot = makeRuntime({ slug: "slot", is_slot: true, state: "unknown", container_status: "probe_timeout" });
+    expect(hostProbeTimedOut({ host, runtimes: [slot] })).toBe(false);
+  });
+
+  it("is false for a plain unknown or a stopped runtime", () => {
+    const a = makeRuntime({ slug: "a", state: "unknown", container_status: null });
+    const b = makeRuntime({ slug: "b", state: "stopped", container_status: "exited" });
+    expect(hostProbeTimedOut({ host, runtimes: [a, b] })).toBe(false);
   });
 });

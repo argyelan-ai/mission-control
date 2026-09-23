@@ -2,6 +2,7 @@
 Runtimes API — start/stop/restart/status for local model runtimes.
 """
 
+import asyncio
 import json as _json
 import logging
 import re as _re
@@ -549,6 +550,46 @@ def _grouped_sort_key(rt: dict) -> tuple:
     return (1, "", rt.get("ui_order") or 999, rt.get("display_name") or "")
 
 
+# Upper bound for ONE live state probe in the list view. Some probes take
+# two steps that each end in an honest answer: SSH + a 5 s HTTP probe
+# (docker/ssh_process/unsloth/lmstudio), or on a power-managed box a 3 s
+# control-port check + the 5 s model probe (8 s for "booted, no model", the
+# state that shows the Start button). The limit clears those, so a slow but
+# answering box still reports its real state ("stopped"/"warming"); it stays
+# below the 10 s SSH connect timeout and far below the 60 s SSH command
+# timeout, which are what a hung box would otherwise cost the whole page.
+# The page normally waits far less: only a hung probe runs into this limit.
+_STATE_PROBE_TIMEOUT_S = 9.0
+PROBE_TIMED_OUT_MESSAGE = "probe timed out"
+
+
+async def _probe_state_with_limit(rt_dict: dict, host) -> dict:
+    """Live state of one runtime, cut off after _STATE_PROBE_TIMEOUT_S.
+
+    A probe that does not answer in time says nothing about the runtime —
+    "unknown" is the honest state, not "stopped" (which would invite a start)
+    or "failed" (which would claim an error nobody observed).
+    """
+    try:
+        return await asyncio.wait_for(
+            runtime_manager.get_runtime_state(rt_dict, host=host),
+            timeout=_STATE_PROBE_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Runtime '%s': state probe timed out after %.1fs",
+            rt_dict.get("slug"), _STATE_PROBE_TIMEOUT_S,
+        )
+        return {
+            "state": "unknown",
+            "http_reachable": False,
+            "container_status": "probe_timeout",
+            # Same key the ssh_process "unconfigured" answer uses — a
+            # generic "message" would collide inside the {**rt, **state} merge.
+            "state_message": PROBE_TIMED_OUT_MESSAGE,
+        }
+
+
 @router.get("")
 async def list_runtimes(
     session: AsyncSession = Depends(get_session),
@@ -593,14 +634,27 @@ async def list_runtimes(
                 "node_rank": rh.node_rank,
             })
 
-    result = []
+    # Host lookups share the request's DB session, and one AsyncSession must
+    # never run two queries at once — so they stay sequential (cheap, local
+    # DB). Only the live probes below go out in parallel.
+    probe_targets = []
     for rt in runtimes:
         if not rt.enabled:
             continue
         # Pitfall 1 (RESEARCH.md): get_runtime_state expects a dict.
-        rt_dict = rt.model_dump()
-        host = await resolve_host_for_runtime(session, rt)
-        state_info = await runtime_manager.get_runtime_state(rt_dict, host=host)
+        probe_targets.append((rt, rt.model_dump(), await resolve_host_for_runtime(session, rt)))
+
+    # Each probe is an independent SSH/HTTP round trip to a different box, so
+    # the page waits for the SLOWEST probe instead of their sum (measured
+    # 23.09.2026: 29 runtimes, 14.2 s sequential, two unreachable boxes alone
+    # cost 5 s each). No cache on purpose: the recipe switcher reads this
+    # list and must never act on a stale state.
+    states = await asyncio.gather(
+        *(_probe_state_with_limit(rt_dict, host) for _, rt_dict, host in probe_targets)
+    )
+
+    result = []
+    for (rt, rt_dict, host), state_info in zip(probe_targets, states):
         # ADR-048: `host` in the payload = {id, slug, display_name} | null.
         # Deliberately overwrites the DEPRECATED legacy string field of the
         # same name from model_dump() — frontend type is `host?: HostRef | null`.

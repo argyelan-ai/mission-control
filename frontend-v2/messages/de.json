@@ -2719,6 +2719,8 @@
       "failed": "Fehler",
       "unknown": "Unbekannt"
     },
+    "unknownProbeTimedOut": "Unbekannt — Prüfung ohne Antwort",
+    "probeTimedOutHint": "Keine Antwort innerhalb des Prüf-Zeitlimits. Die Box hängt oder ist überlastet.",
     "nameDrift": "Name",
     "nameDriftTitle": "Der Name behauptet Version {versions}, diese Runtime serviert aber {model}. Der Name sollte die Box beschreiben, nicht das Modell.",
     "hostAutostart": {
@@ -2759,6 +2761,7 @@
       "kpiSpeedSolo": "Tempo solo",
       "kpiEndpointSlot": "Endpunkt · slot",
       "cornerFree": "frei",
+      "cornerUnknown": "unbekannt",
       "freeLine": "kein Modell · bereit",
       "cornerAsleep": "schläft",
       "poweredOff": "ausgeschaltet",
