@@ -316,6 +316,13 @@ const DONE_PAGE = 30;
 // Search + agent filter stay ephemeral on purpose — they're filters, not a view.
 const VIEW_STORAGE_KEY = "mc:tasks:view";
 
+/** Done tasks, most recently completed first (updated_at when completed_at is
+ *  missing). Returns a new array; ties keep the API order. */
+function sortNewestCompletedFirst(list: Task[]): Task[] {
+  const stamp = (t: Task) => Date.parse(t.completed_at ?? t.updated_at ?? "") || 0;
+  return [...list].sort((a, b) => stamp(b) - stamp(a));
+}
+
 type StoredView = { mode?: TaskGroupMode; toggled?: string[] };
 
 export default function TaskListColumn({
@@ -411,11 +418,16 @@ export default function TaskListColumn({
 
   const groups: Group[] = useMemo(() => {
     if (mode === "status") {
-      return STATUS_ORDER.map((s) => ({
-        key: `status:${s}`,
-        label: t(STATUS_LABEL_KEY[s]),
-        tasks: visible.filter((task) => task.status === s),
-      })).filter((g) => g.tasks.length > 0);
+      return STATUS_ORDER.map((s) => {
+        const inGroup = visible.filter((task) => task.status === s);
+        return {
+          key: `status:${s}`,
+          label: t(STATUS_LABEL_KEY[s]),
+          // The API orders by sort_order/created_at — fine for open lanes,
+          // but Done then opens with months-old work. Newest completion first.
+          tasks: s === "done" ? sortNewestCompletedFirst(inGroup) : inGroup,
+        };
+      }).filter((g) => g.tasks.length > 0);
     }
     // project mode: Ad-hoc first, then projects in list order, skip empty
     const adHoc: Group = {
