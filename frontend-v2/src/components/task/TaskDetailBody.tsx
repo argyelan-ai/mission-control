@@ -765,14 +765,21 @@ export function TaskDetailBody({
   const checklistDone = checklist.filter((i) => i.status === "done").length;
   const projectName = task.project_id ? (projects.find((p) => p.id === task.project_id)?.name ?? t("projectFallback")) : t("adHoc");
 
+  // A head owns this task's run (head launcher §8.2): the fleet run controls
+  // (Run held / Requeue / Stop agent) would hand it back to the frozen
+  // dispatch — hidden; the head card carries Stop / Restart instead. The
+  // review actions stay once the head passed (task in review).
+  const headOwnsRun = latestHeadRun != null && task.status !== "review";
+
   // TaskActions only renders something in these cases — no empty section.
   const showActions =
+    !headOwnsRun && (
     (task.dispatch_phase === "planning" && !!task.parent_task_id) ||
     task.status === "in_progress" ||
     task.status === "review" ||
     (task.status === "inbox" && task.dispatched_at != null) ||
     task.run_control === "stopped" ||
-    task.run_control === "manual_hold";
+    task.run_control === "manual_hold");
 
   // Save to Vault writes — operator role (backend: require_role(OPERATOR)).
   const canSaveToVault = currentUser?.role === "operator" || currentUser?.role === "admin";
