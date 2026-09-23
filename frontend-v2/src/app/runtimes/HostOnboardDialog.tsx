@@ -181,7 +181,7 @@ export function HostOnboardDialog({ open, onClose }: { open: boolean; onClose: (
   const formDisabled = running || TERMINAL_STATUSES.has(status);
 
   return (
-    <ResponsiveModal open={open} onClose={onClose} aria-labelledby="host-onboard-title">
+    <ResponsiveModal dismissOnOutside={false} open={open} onClose={onClose} aria-labelledby="host-onboard-title">
       <div
         className="flex items-center justify-between p-5 border-b shrink-0"
         style={{ borderColor: "var(--color-border)" }}

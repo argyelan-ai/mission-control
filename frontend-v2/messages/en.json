@@ -607,7 +607,8 @@
       "paused": "Group paused",
       "stopped": "Group stopped",
       "actionFailed": "Action failed",
-      "memberArchived": "archived"
+      "memberArchived": "archived",
+      "close": "Close"
     },
     "title": "Agent Terminals",
     "terminal": "Terminal",

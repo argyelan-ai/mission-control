@@ -199,4 +199,15 @@ describe("CreateGroupModal", () => {
 
     expect(goalField()).toHaveFocus();
   });
+
+  it("offers a Close button and a Cancel button, both of which close without creating", async () => {
+    const { user, onClose } = setup();
+    await chips();
+
+    await user.click(screen.getByRole("button", { name: "Close" }));
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(onClose).toHaveBeenCalledTimes(2);
+    expect(create).not.toHaveBeenCalled();
+  });
 });

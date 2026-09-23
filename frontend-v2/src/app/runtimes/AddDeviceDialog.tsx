@@ -57,7 +57,7 @@ export function AddDeviceDialog({
   const t = useTranslations("runtimes.hosts");
 
   return (
-    <ResponsiveModal open={open} onClose={onClose} aria-labelledby="add-device-title" className="sm:max-w-md">
+    <ResponsiveModal dismissOnOutside={false} open={open} onClose={onClose} aria-labelledby="add-device-title" className="sm:max-w-md">
       <div
         className="flex items-start justify-between p-5 border-b shrink-0"
         style={{ borderColor: "var(--color-border)" }}
