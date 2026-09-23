@@ -961,7 +961,10 @@
         "name": "Monthly Report",
         "description": "1st of the month at 09:00"
       }
-    }
+    },
+    "jobNotFound": "Job not found",
+    "jobNotFoundHint": "It may have been deleted, or the link is out of date.",
+    "jobLoadFailed": "Could not load the job list."
   },
   "office": {
     "title": "Org Chart",
