@@ -19,6 +19,28 @@ import { C } from "@/lib/colors";
 import { GitDiffView } from "@/components/git/GitDiffView";
 import type { CommitDiff, TaskGitInfo } from "@/lib/types";
 
+/**
+ * What the task detail's Git section should render, or null to hide it.
+ * A live branch shows the full panel; a task with only a recorded PR (no
+ * workspace, so no git probe) still gets the section with just the PR chip.
+ */
+export function gitSectionInfo(
+  gitInfo: TaskGitInfo | undefined,
+  taskPrUrl: string | null | undefined,
+): TaskGitInfo | null {
+  if (gitInfo?.branch) return gitInfo;
+  if (!taskPrUrl) return null;
+  return {
+    branch: null,
+    last_commit: null,
+    uncommitted: false,
+    ahead: 0,
+    workspace_path: null,
+    commits: [],
+    pr_url: null,
+  };
+}
+
 export function GitPanel({
   gitInfo,
   boardId,
@@ -57,7 +79,8 @@ export function GitPanel({
     <div>
       {/* Summary row */}
       <div className="flex items-center gap-2 text-xs flex-wrap" style={{ color: C.textSecondary }}>
-        <span className="flex items-center gap-1.5 shrink-0 min-w-0">
+        {gitInfo.branch && (
+        <span data-testid="git-branch" className="flex items-center gap-1.5 shrink-0 min-w-0">
           <GitBranch size={12} style={{ color: C.accent }} />
           {branchUrl ? (
             <a
@@ -76,6 +99,7 @@ export function GitPanel({
             </span>
           )}
         </span>
+        )}
 
         {gitInfo.ahead > 0 && (
           <span className="flex items-center gap-1 shrink-0" style={{ color: C.textMuted }}>

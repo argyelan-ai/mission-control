@@ -8,7 +8,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { GitPanel } from "../GitPanel";
+import { GitPanel, gitSectionInfo } from "../GitPanel";
 import type { TaskGitInfo } from "@/lib/types";
 
 vi.mock("@/lib/api", () => ({ api: { tasks: { gitDiff: vi.fn() } } }));
@@ -51,5 +51,19 @@ describe("GitPanel PR chip", () => {
   it("shows no PR chip when neither source has one", () => {
     renderPanel();
     expect(screen.queryByRole("link", { name: /PR/ })).toBeNull();
+  });
+
+  it("shows the section with only a PR chip for a task that has a PR but no workspace", () => {
+    const info = gitSectionInfo(undefined, "https://github.com/acme/app/pull/632");
+    expect(info).not.toBeNull();
+    renderPanel({ gitInfo: info!, taskPrUrl: "https://github.com/acme/app/pull/632", taskPrNumber: 632 });
+    expect(screen.getByRole("link", { name: /PR #632/ })).toBeInTheDocument();
+    expect(screen.queryByTestId("git-branch")).toBeNull();
+  });
+
+  it("hides the section when there is neither a branch nor a PR", () => {
+    expect(gitSectionInfo(undefined, null)).toBeNull();
+    expect(gitSectionInfo({ ...gitInfo, branch: null }, undefined)).toBeNull();
+    expect(gitSectionInfo(gitInfo, null)).toBe(gitInfo);
   });
 });
