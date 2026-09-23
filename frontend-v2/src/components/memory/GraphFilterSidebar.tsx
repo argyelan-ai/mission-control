@@ -199,9 +199,10 @@ export interface GraphFilterSidebarProps {
   filter: GraphFilter;
   onFilterChange: (filter: GraphFilter) => void;
   showHeatmap: boolean;
-  showClusters: boolean;
+  /** Cluster overlay — the switch renders only when a caller handles it. */
+  showClusters?: boolean;
   onHeatmapToggle: (enabled: boolean) => void;
-  onClustersToggle: (enabled: boolean) => void;
+  onClustersToggle?: (enabled: boolean) => void;
   /** Available agent slugs derived from graph data. */
   agents: string[];
   /** Optional: controlled search string (lifted to parent for node label filtering). */
@@ -214,7 +215,7 @@ export function GraphFilterSidebar({
   filter,
   onFilterChange,
   showHeatmap,
-  showClusters,
+  showClusters = false,
   onHeatmapToggle,
   onClustersToggle,
   agents,
@@ -279,7 +280,7 @@ export function GraphFilterSidebar({
     onFilterChange({});
     onSearchChange?.("");
     onHeatmapToggle(false);
-    onClustersToggle(false);
+    onClustersToggle?.(false);
   }, [onFilterChange, onSearchChange, onHeatmapToggle, onClustersToggle]);
 
   const hasActiveFilters =
@@ -390,11 +391,13 @@ export function GraphFilterSidebar({
                     enabled={showHeatmap}
                     onToggle={onHeatmapToggle}
                   />
-                  <ToggleRow
-                    label="Clusters"
-                    enabled={showClusters}
-                    onToggle={onClustersToggle}
-                  />
+                  {onClustersToggle && (
+                    <ToggleRow
+                      label="Clusters"
+                      enabled={showClusters}
+                      onToggle={onClustersToggle}
+                    />
+                  )}
                 </div>
               </div>
 

@@ -378,9 +378,7 @@ export function VaultGraphPage({
         filter={filter}
         onFilterChange={setFilter}
         showHeatmap={showHeatmap}
-        showClusters={false}
         onHeatmapToggle={setShowHeatmap}
-        onClustersToggle={() => {}}
         agents={agents}
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
