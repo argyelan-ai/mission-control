@@ -20,10 +20,20 @@ import { PrChip } from "./PrChip";
 
 const TERMINAL = new Set(["done", "failed", "aborted"]);
 
-function Fact({ label, children, testId }: { label: string; children: React.ReactNode; testId?: string }) {
+function Fact({
+  label,
+  children,
+  testId,
+  className = "",
+}: {
+  label: string;
+  children: React.ReactNode;
+  testId?: string;
+  className?: string;
+}) {
   return (
     <div
-      className="min-w-0 px-2.5 py-2 @min-[560px]:px-0 @min-[560px]:py-0 flex flex-col @min-[560px]:flex-row @min-[560px]:items-center gap-0.5 @min-[560px]:gap-1.5"
+      className={`min-w-0 ${className} px-2.5 py-2 @min-[560px]:px-0 @min-[560px]:py-0 flex flex-col @min-[560px]:flex-row @min-[560px]:items-center gap-0.5 @min-[560px]:gap-1.5`}
       style={{ background: "var(--fact-bg)" }}
       data-testid={testId}
     >
@@ -109,7 +119,7 @@ export function TaskFactRow({
       </Fact>
       <Fact label={t("detail.factCost")} testId="fact-cost">{cost}</Fact>
       {showPriority && (
-        <Fact label={t("detail.factPriority")} testId="fact-priority">
+        <Fact label={t("detail.factPriority")} testId="fact-priority" className="col-span-3">
           <span style={{ color: task.priority === "critical" ? STATUS_TEXT.error : STATUS_TEXT.warning }}>
             {task.priority === "critical" ? t("priorityCritical") : t("priorityHigh")}
           </span>
