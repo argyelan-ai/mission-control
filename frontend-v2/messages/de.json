@@ -1801,6 +1801,7 @@
     "shell": {
       "connected": "verbunden",
       "startInstaller": "Installer starten",
+      "startInstallerHint": "Startet den Installer oder verbindet neu, falls er schon läuft.",
       "stop": "Stopp",
       "startFailed": "Shell konnte nicht gestartet werden: {error}",
       "sessionEnded": "[Sitzung beendet]",

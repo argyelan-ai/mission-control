@@ -206,6 +206,8 @@ export function PluginsShellTab() {
             color: "var(--color-text-muted)",
           }}
         >
+          {t("startInstallerHint")}
+          <br />
           {t("helpText")}
           <br />
           <code className="text-[11px] mt-1 inline-block" style={{ color: STATUS_TEXT.info }}>

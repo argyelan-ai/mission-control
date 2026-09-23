@@ -72,4 +72,9 @@ describe("PluginsShellTab — shell starts only on request", () => {
     await userEvent.click(screen.getByRole("button", { name: /Start installer/i }));
     await waitFor(() => expect(apiMock.plugins.startShell).toHaveBeenCalledTimes(1));
   });
+
+  it("says that the button reconnects to an installer that is already running", () => {
+    renderTab();
+    expect(screen.getByText(/reconnects if one is already running/i)).toBeInTheDocument();
+  });
 });

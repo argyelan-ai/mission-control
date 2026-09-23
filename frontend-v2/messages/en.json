@@ -1801,6 +1801,7 @@
     "shell": {
       "connected": "connected",
       "startInstaller": "Start installer",
+      "startInstallerHint": "Starts the installer, or reconnects if one is already running.",
       "stop": "Stop",
       "startFailed": "Failed to start shell: {error}",
       "sessionEnded": "[Session ended]",
