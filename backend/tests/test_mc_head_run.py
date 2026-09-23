@@ -106,7 +106,12 @@ def test_claude_pair_uses_bare_settings_and_own_config_dir(env):
     assert "Say hello." not in "\n".join(argv)
     assert (run / "stdin.txt").read_text() == "# Job\nSay hello.\n"
     settings = json.loads((run / "head-settings.json").read_text())
-    assert "Bash(gh pr merge:*)" in settings["permissions"]["deny"]
+    assert "Bash(gh pr merge*)" in settings["permissions"]["deny"]
+    assert "Bash(git push origin HEAD:main*)" in settings["permissions"]["deny"]
+    # Live probe 2026-09-23: the legacy "prefix:*" form did NOT match the
+    # head-branch push — only the wildcard form does.
+    rules = settings["permissions"]["allow"] + settings["permissions"]["deny"]
+    assert not [r for r in rules if ":*)" in r]
     assert "Read(~/.ssh/**)" in settings["permissions"]["deny"]
     assert not any(a == "Bash" or a == "Bash(*)" for a in settings["permissions"]["allow"])
     env_lines = dict(l.split("=", 1) for l in (run / "env.txt").read_text().splitlines() if "=" in l)
