@@ -87,6 +87,10 @@ class ProviderNaming:
     # Wire protocol(s) (harness_compat.runtime_protocol) these rows must speak.
     # Empty = no constraint (the openai protocol covers several providers).
     protocols: tuple[str, ...] = ()
+    # `secrets.provider` of the API keys that authenticate against this
+    # provider (see routers/secrets.py PROVIDER_TEMPLATES). None = MC stores
+    # no per-agent key for it (the provider signs in via its own CLI/OAuth).
+    secret_provider: str | None = None
 
 
 PROVIDERS: tuple[ProviderNaming, ...] = (
@@ -119,6 +123,7 @@ PROVIDERS: tuple[ProviderNaming, ...] = (
         # Historic slug of the seeded row — kept so seed and bind agree.
         slug_prefix="ollama-cloud",
         hosts=("ollama.com", "api.ollama.com"),
+        secret_provider="ollama",
     ),
 )
 
