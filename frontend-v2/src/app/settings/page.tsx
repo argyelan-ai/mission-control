@@ -2228,9 +2228,11 @@ function SettingsContent() {
   const visibleSections = SECTIONS.filter((s) => !s.adminOnly || isAdmin);
 
   return (
-    // fullHeight shell: only the content column scrolls, the section nav
-    // stays in view on long sections (it used to scroll away with <main>).
-    <div className="flex-1 min-h-0 flex flex-col overflow-hidden md:-m-6">
+    // fullHeight shell. From md up only the content column scrolls, so the
+    // section nav stays in view on long sections. On phones the whole page
+    // scrolls as one: the app bar and bottom tab bar already take height, and
+    // pinning the header plus the section strip would leave little room.
+    <div className="flex-1 min-h-0 flex flex-col overflow-y-auto md:overflow-hidden md:-m-6">
       {/* Header */}
       <motion.div
         initial={{ opacity: 0, y: 12 }}
@@ -2253,7 +2255,7 @@ function SettingsContent() {
         </div>
       </motion.div>
 
-      <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
+      <div className="flex-1 flex flex-col md:flex-row md:min-h-0 md:overflow-hidden">
         {/* Left: Section Nav (glass sidebar) */}
         <motion.nav
           initial={{ opacity: 0, x: -8 }}
@@ -2329,7 +2331,7 @@ function SettingsContent() {
         </motion.nav>
 
         {/* Right: Section Content */}
-        <div className="flex-1 overflow-y-auto p-4 md:p-6 min-w-0">
+        <div className="flex-1 md:overflow-y-auto p-4 md:p-6 min-w-0">
           {/* 3xl, not 2xl: two nav columns already eat ~530 px of a 1440 px
               screen, and the dense sections (autonomy matrix, key lists) were
               being squeezed while 300 px sat empty on the right. */}

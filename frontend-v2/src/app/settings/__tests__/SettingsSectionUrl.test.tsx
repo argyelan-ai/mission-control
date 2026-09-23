@@ -54,4 +54,21 @@ describe("Settings section navigation", () => {
     renderPage();
     expect(shellProps.last.fullHeight).toBe(true);
   });
+
+  // On a phone the app bar and the bottom tab bar already take height; pinning
+  // the page header and the section strip too would leave little room. So on
+  // phones the whole page scrolls as one (bare overflow-y-auto), and only from
+  // md up does it switch to "content column scrolls, nav stays put".
+  it("scrolls header, section strip and content as one on phones; pins the nav from md up", () => {
+    renderPage();
+    const heading = screen.getByRole("heading", { level: 1 });
+    let scroller: HTMLElement | null = heading.parentElement;
+    while (scroller && !scroller.className.split(/\s+/).includes("overflow-y-auto")) {
+      scroller = scroller.parentElement;
+    }
+    expect(scroller).not.toBeNull();
+    expect(scroller!.className.split(/\s+/)).toContain("md:overflow-hidden");
+    expect(scroller!.contains(screen.getByRole("button", { name: "About" }))).toBe(true);
+    expect(document.querySelector(".md\\:overflow-y-auto.p-4")).not.toBeNull();
+  });
 });
