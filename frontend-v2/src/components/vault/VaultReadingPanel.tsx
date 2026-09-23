@@ -21,6 +21,7 @@ import {
 } from "./VaultNoteRow";
 import { colorForAgent } from "./agentColors";
 import { ConfirmDeleteModal } from "./ConfirmDeleteModal";
+import { CappedList } from "@/components/shared/CappedList";
 
 // ── Phase E Task-Klammer: "Verwandt"-Sektion ──────────────────────────────────
 
@@ -39,7 +40,6 @@ function RelatedNotesSection({
   onSelectNote?: (path: string) => void;
 }) {
   const t = useTranslations("vault");
-  const [expanded, setExpanded] = useState(false);
   const { data, isLoading } = useQuery({
     queryKey: ["vault", "related", taskId],
     queryFn: () => api.vault.related(taskId),
@@ -76,9 +76,9 @@ function RelatedNotesSection({
           {t("related")} · {others.length}
         </span>
       </div>
-      <ul className="space-y-1">
-        {(expanded ? others : others.slice(0, RELATED_FOLDED)).map((n) => (
-          <li key={n.path}>
+      <CappedList maxRows={RELATED_FOLDED} role="list" className="gap-1" fadeTo="transparent">
+        {others.map((n) => (
+          <div role="listitem" key={n.path}>
             <button
               type="button"
               onClick={() => onSelectNote?.(n.path)}
@@ -118,24 +118,9 @@ function RelatedNotesSection({
                 </span>
               )}
             </button>
-          </li>
+          </div>
         ))}
-        {others.length > RELATED_FOLDED && (
-          <li>
-            <button
-              type="button"
-              onClick={() => setExpanded((v) => !v)}
-              aria-expanded={expanded}
-              className="font-mono rounded-sm px-1.5 py-0.5 transition-colors hover:bg-white/[0.04] cursor-pointer"
-              style={{ fontSize: "10px", color: C.accent }}
-            >
-              {expanded
-                ? t("relatedShowLess")
-                : t("relatedShowMore", { count: others.length - RELATED_FOLDED })}
-            </button>
-          </li>
-        )}
-      </ul>
+      </CappedList>
     </div>
   );
 }

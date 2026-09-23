@@ -1093,9 +1093,7 @@
     "typeReferenceHint": "link / source",
     "filterLabel": "Filter",
     "scopeLabel": "Scope",
-    "agentLabel": "Agent",
-    "relatedShowMore": "Show {count} more",
-    "relatedShowLess": "Show less"
+    "agentLabel": "Agent"
   },
   "insights": {
     "tabOverview": "Overview",

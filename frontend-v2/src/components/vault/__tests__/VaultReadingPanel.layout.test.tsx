@@ -73,7 +73,11 @@ describe("VaultReadingPanel layout", () => {
     expect(screen.getByText("Related 0")).toBeInTheDocument();
     expect(screen.getByText("Related 2")).toBeInTheDocument();
     expect(screen.queryByText("Related 3")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Show 10 more" }));
+    const toggle = screen.getByRole("button", { name: "Show 10 more" });
+    // Shared CappedList control: 44 px touch target on phones, shared wording.
+    expect(toggle.className).toMatch(/\bmin-h-11\b/);
+    fireEvent.click(toggle);
     expect(screen.getByText("Related 12")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show fewer" })).toBeInTheDocument();
   });
 });
