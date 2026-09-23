@@ -228,6 +228,16 @@ describe("TasksPage — task and tab in the URL (/tasks?task=<uuid>&tab=<tab>)",
     expect(await screen.findByRole("tab", { name: "Timeline" })).toHaveAttribute("aria-selected", "true");
   });
 
+  it("(d2) drops an unknown tab (old tab=e2e links) from the URL and shows the default", async () => {
+    vi.spyOn(api.tasks, "list").mockResolvedValue([mkTask({ id: "task-1", title: "Some task", status: "done" })]);
+    nav.searchParamsString = "task=task-1&tab=e2e";
+
+    renderPage();
+
+    expect(await screen.findByRole("tab", { name: "Summary" })).toHaveAttribute("aria-selected", "true");
+    await waitFor(() => expect(nav.replace).toHaveBeenCalledWith("/tasks?task=task-1", { scroll: false }));
+  });
+
   it("(e) writes task and tab into the URL when the user picks them", async () => {
     vi.spyOn(api.tasks, "list").mockResolvedValue([mkTask({ id: "task-1", title: "Some task", status: "done" })]);
     nav.searchParamsString = "task=task-1";

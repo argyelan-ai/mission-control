@@ -92,7 +92,7 @@ function ActionButton({ onClick, icon: Icon, children }: { onClick: () => void; 
     <button
       type="button"
       onClick={onClick}
-      className="inline-flex items-center gap-1.5 px-3 min-h-[36px] rounded-md text-xs font-medium cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
+      className="inline-flex items-center gap-1.5 px-3 min-h-[36px] pointer-coarse:min-h-[44px] rounded-md text-xs font-medium cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
       style={{ color: C.textSecondary, border: `1px solid ${C.borderActive}` }}
     >
       <Icon size={13} aria-hidden />
@@ -147,21 +147,26 @@ export function TaskStateCard({
         <div className="text-xs" style={{ color: C.textMuted }}>
           {asker ? t("detail.asks", { name: asker }) : t("detail.someoneAsks")}
         </div>
-        {card.reason ? <Quote text={card.reason} /> : (
-          <p className="text-[13px]" style={{ color: C.textSecondary }}>{t("detail.noReason")}</p>
-        )}
         {card.approval ? (
+          // The approval carries the reason itself (clamped, "Show full") —
+          // no own quote above it, or the same sentence shows up three times.
           <div data-testid="state-card-approval">
             <ApprovalCard
+              compact
               approval={card.approval}
               loading={resolveMutation.isPending}
               onResolve={(status, note) => resolveMutation.mutate({ id: card.approval!.id, status, note })}
             />
           </div>
         ) : (
-          <ActionButton onClick={onReply} icon={MessageSquareReply}>
-            {t("detail.reply")}
-          </ActionButton>
+          <>
+            {card.reason ? <Quote text={card.reason} /> : (
+              <p className="text-[13px]" style={{ color: C.textSecondary }}>{t("detail.noReason")}</p>
+            )}
+            <ActionButton onClick={onReply} icon={MessageSquareReply}>
+              {t("detail.reply")}
+            </ActionButton>
+          </>
         )}
       </Shell>
     );
@@ -193,6 +198,9 @@ export function TaskStateCard({
         kind="result"
         kicker={took ? `${t("detail.stateResult")} · ${t("detail.tookDuration", { duration: took })}` : t("detail.stateResult")}
       >
+        {card.resolution && card.resolutionIsFallback && (
+          <div className="text-xs" style={{ color: C.textMuted }}>{t("detail.resultFallback")}</div>
+        )}
         {card.resolution ? <Quote text={card.resolution} /> : (
           <p className="text-[13px]" style={{ color: C.textSecondary }}>{t("detail.noResolution")}</p>
         )}

@@ -25,6 +25,8 @@ export type StateCard =
   | {
       kind: "result";
       resolution: string | null;
+      /** No resolution comment — `resolution` is the latest agent note. */
+      resolutionIsFallback: boolean;
       prUrl: string | null;
       prNumber: number | null;
       evidenceCount: number | null;
@@ -33,6 +35,7 @@ export type StateCard =
   | { kind: "failed"; error: string | null };
 
 const NEEDS_YOU = new Set(["blocked", "waiting", "user_test"]);
+const RESULT_FALLBACK_TYPES = new Set(["message", "progress", "review", "handoff", "checkpoint"]);
 
 function newestFirst<T extends { created_at: string }>(list: T[]): T[] {
   return [...list].sort(
@@ -92,9 +95,15 @@ export function deriveStateCard({
 
   if (task.status === "done") {
     const resolution = sorted.find((c) => c.comment_type === "resolution");
+    // Most older cards have no resolution comment — the latest agent note
+    // (not a reflection) is the next best answer to "what came out".
+    const fallback = resolution
+      ? undefined
+      : sorted.find((c) => c.author_type === "agent" && RESULT_FALLBACK_TYPES.has(c.comment_type ?? "") && c.content?.trim());
     return {
       kind: "result",
-      resolution: resolution?.content?.trim() || null,
+      resolution: (resolution ?? fallback)?.content?.trim() || null,
+      resolutionIsFallback: !resolution && !!fallback,
       prUrl: task.pr_url ?? null,
       prNumber: task.pr_number ?? null,
       evidenceCount: runRecord ? runRecord.beweise.anzahl : null,
@@ -104,9 +113,16 @@ export function deriveStateCard({
   }
 
   if (task.status === "failed" || task.status === "aborted") {
-    const err = sorted.find((c) => c.comment_type === "blocker" || c.author_type === "system");
-    const lastEvent = [...(runRecord?.schritte ?? [])].reverse().find((s) => s.quelle === "ereignis");
-    return { kind: "failed", error: err?.content?.trim() || lastEvent?.text || null };
+    // Order: the agent's blocker → the last warning/error event (schritte
+    // only carry warning+ events) → any system note. A harmless system note
+    // written after the failure must not pose as the error.
+    const blocker = sorted.find((c) => c.comment_type === "blocker" && c.content?.trim());
+    const lastEvent = [...(runRecord?.schritte ?? [])].reverse().find((s) => s.quelle === "ereignis" && s.text);
+    const systemNote = sorted.find((c) => c.author_type === "system" && c.content?.trim());
+    return {
+      kind: "failed",
+      error: blocker?.content?.trim() || lastEvent?.text || systemNote?.content?.trim() || null,
+    };
   }
 
   return null;

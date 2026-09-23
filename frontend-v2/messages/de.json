@@ -303,7 +303,37 @@
         "blocked_reminder": "Blockiert-Erinnerung",
         "review_nudge": "Review-Erinnerung",
         "stale_update_warning": "Warnung: veraltetes Update",
-        "dispatch_pending": "Zustellung ausstehend"
+        "dispatch_pending": "Zustellung ausstehend",
+        "blocker_escalated_to_operator": "An Operator eskaliert",
+        "blocker_lead_notified": "Lead benachrichtigt",
+        "blocker_lead_resolved": "Lead hat Blocker gelöst",
+        "review_self_review_escalated": "Selbst-Review eskaliert",
+        "review_late_note": "Verspätete Review-Notiz",
+        "review_reviewer_turn_stopped": "Review-Durchgang gestoppt",
+        "stale_update_rejected": "Veraltetes Update abgelehnt",
+        "late_update_rejected": "Verspätetes Update abgelehnt",
+        "review_stuck": "Review hängt",
+        "review_escalated": "Review eskaliert",
+        "review_rejected": "Review abgelehnt",
+        "review_handoff": "Übergabe ans Review",
+        "dispatch_escalation": "Zustell-Eskalation",
+        "dispatch_failed": "Zustellung fehlgeschlagen",
+        "auto_dispatched": "Automatisch zugestellt",
+        "cli_bridge_ready": "Bridge bereit",
+        "lead_escalation": "Lead-Eskalation",
+        "dependency_zombie": "Abhängigkeit hängt",
+        "stuck": "Hängt",
+        "auto_closed_stuck": "Automatisch geschlossen (hing)",
+        "silent_card": "Stille Karte",
+        "silent_card_retracted": "Stille Karte zurückgezogen",
+        "recovery_triggered": "Wiederherstellung ausgelöst",
+        "undispatched_recovery": "Nicht zugestellte Karte wiederhergestellt",
+        "reassigned": "Neu zugewiesen",
+        "status_changed": "Status geändert",
+        "blocker_decision": "Blocker-Entscheid",
+        "visual_review": "Visuelle Prüfung",
+        "recovery_failed": "Wiederherstellung fehlgeschlagen",
+        "clarification_question": "Rückfrage"
       },
       "evidenceType": {
         "screenshot": "Screenshots",
@@ -315,7 +345,10 @@
         "video": "Videos",
         "evidence": "Beleg-Notizen",
         "deliverable": "Liefer-Notizen"
-      }
+      },
+      "showLast": "Letzte {count} zeigen",
+      "ago": "vor {age}",
+      "resultFallback": "Keine Ergebnis-Zusammenfassung — letzte Agenten-Notiz:"
     }
   },
   "agents": {
@@ -630,7 +663,9 @@
     "approveUninstall": "Genehmigen & deinstallieren",
     "rejectReasonPlaceholder": "Ablehnungsgrund (optional)",
     "fromAgent": "von {name}",
-    "approvePost": "Genehmigen & posten"
+    "approvePost": "Genehmigen & posten",
+    "showFull": "Ganz anzeigen",
+    "showLess": "Weniger anzeigen"
   },
   "sessions": {
     "groups": {

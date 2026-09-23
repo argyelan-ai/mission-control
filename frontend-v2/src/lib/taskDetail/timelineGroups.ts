@@ -2,11 +2,24 @@ import type { TaskTimelineEntry } from "@/lib/types";
 
 /**
  * Timeline grouping, frontend only. The watchdog writes one activity event per
- * reminder ("Blocked-Reminder … 3556min"), which floods the timeline. Events of
- * the same type that repeat collapse into one row ("Blocked reminder ×27 ·
- * first … · last …"), placed where the latest one happened. Status changes are
- * never grouped — each one is part of the story. The backend is untouched.
+ * reminder ("Blocked-Reminder … 3556min"), which floods the timeline. Repeated
+ * REMINDERS / NUDGES collapse into one row ("Blocked reminder ×27 · first … ·
+ * last …"), placed where the latest one happened. Everything else — status
+ * changes, dispatches, handoffs, escalations — stays a single row even when it
+ * repeats: each one is part of the story. The backend is untouched.
  */
+
+/** Watchdog nudges written again and again while nothing changes. */
+const REMINDER_TYPES = new Set([
+  "task.blocked_reminder",
+  "task.review_nudge",
+  "task.dispatch_pending",
+  "task.stale_update_warning",
+]);
+
+export function isReminderEvent(eventType: string): boolean {
+  return REMINDER_TYPES.has(eventType) || /(_reminder|_nudge)$/.test(eventType);
+}
 
 export type TimelineItem =
   | { type: "entry"; entry: TaskTimelineEntry }
@@ -22,7 +35,7 @@ export type TimelineItem =
 function groupKey(entry: TaskTimelineEntry): string | null {
   if (entry.source !== "activity_event" || entry.kind === "status_change") return null;
   const eventType = entry.meta?.event_type;
-  return typeof eventType === "string" && eventType ? eventType : null;
+  return typeof eventType === "string" && isReminderEvent(eventType) ? eventType : null;
 }
 
 /** Input and output are chronological (oldest first), like the API. */

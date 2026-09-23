@@ -78,12 +78,27 @@ interface ApprovalCardProps {
   approval: Approval;
   onResolve: (status: "approved" | "rejected", note?: string) => void;
   loading?: boolean;
+  /**
+   * Embedded in the task detail's state card: lead with the question (or the
+   * description), clamped to 3 lines, and keep the rest behind "Show full" so
+   * the buttons stay in the first screen. Task/project line is dropped — the
+   * detail header already says which task this is.
+   */
+  compact?: boolean;
 }
 
-export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps) {
+/** What the agent actually asks — the one line that belongs on top. */
+function leadText(approval: Approval): string {
+  const p = (approval.payload ?? {}) as { question?: string; description?: string };
+  return (p.question || p.description || approval.description || "").trim();
+}
+
+export function ApprovalCard({ approval, onResolve, loading, compact = false }: ApprovalCardProps) {
   const t = useTranslations("inbox");
   const locale = useLocale();
   const [note, setNote] = useState("");
+  const [expanded, setExpanded] = useState(false);
+  const collapsed = compact && !expanded;
   // "Cancel task" fails the task and unassigns the agent — ask first.
   const [confirmCancel, setConfirmCancel] = useState(false);
 
@@ -164,6 +179,27 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
               </span>
             </div>
 
+            {collapsed ? (
+              <div className="mt-2.5">
+                <div
+                  data-testid="approval-lead"
+                  data-clamped="true"
+                  className="text-[13px] leading-relaxed prose-comment text-[var(--color-text-primary)] max-h-[4.9em] overflow-hidden"
+                >
+                  <ReactMarkdown remarkPlugins={[remarkBreaks]}>{leadText(approval)}</ReactMarkdown>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setExpanded(true)}
+                  aria-expanded={false}
+                  className="mt-1 text-[11px] cursor-pointer hover:underline pointer-coarse:min-h-[44px]"
+                  style={{ color: "var(--color-text-secondary)" }}
+                >
+                  {t("showFull")}
+                </button>
+              </div>
+            ) : (
+            <>
             <div className="text-sm mt-2.5 prose-comment text-[var(--color-text-primary)]">
               <ReactMarkdown remarkPlugins={[remarkBreaks]}>{approval.description}</ReactMarkdown>
             </div>
@@ -183,7 +219,7 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
 
               return (
                 <div className="mt-3 p-3 rounded-xl space-y-2" style={{ backgroundColor: `${C.error}0F`, border: `1px solid ${C.error}26` }}>
-                  {(p.project_name || p.task_title) && (
+                  {!compact && (p.project_name || p.task_title) && (
                     <p className="text-[10px] text-[var(--color-text-muted)]">
                       {p.project_name && <span>{p.project_name}</span>}
                       {p.project_name && p.task_title && <span> · </span>}
@@ -224,7 +260,7 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
 
               return (
                 <div className="mt-3 p-3 rounded-xl space-y-2" style={{ backgroundColor: `${C.accent}0F`, border: `1px solid ${C.accent}26` }}>
-                  {(p.project_name || p.task_title) && (
+                  {!compact && (p.project_name || p.task_title) && (
                     <p className="text-[10px] text-[var(--color-text-muted)]">
                       {p.project_name && <span>{p.project_name}</span>}
                       {p.project_name && p.task_title && <span> · </span>}
@@ -280,6 +316,19 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
                 </div>
               );
             })()}
+            {compact && (
+              <button
+                type="button"
+                onClick={() => setExpanded(false)}
+                aria-expanded
+                className="mt-2 text-[11px] cursor-pointer hover:underline pointer-coarse:min-h-[44px]"
+                style={{ color: "var(--color-text-secondary)" }}
+              >
+                {t("showLess")}
+              </button>
+            )}
+            </>
+            )}
           </div>
         </div>
 

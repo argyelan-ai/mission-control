@@ -28,6 +28,7 @@ import { C, STATUS_TEXT } from "@/lib/colors";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 import { STATUS_CONFIG, TaskRow, TaskStatusDot } from "./TaskRow";
+import { isTaskTabKey } from "@/lib/taskDetail/tabs";
 
 // ── Tag Chip ───────────────────────────────────────────────────────────────
 
@@ -804,10 +805,13 @@ function TasksPageContent() {
     const legacyId = searchParams.get("taskId");
     const id = searchParams.get("task") ?? legacyId;
     if (!id) return;
-    const tab = searchParams.get("tab");
+    const rawTab = searchParams.get("tab");
+    // An unknown tab (old links with tab=e2e) falls back to the status
+    // default in the body — drop it from the URL too, so it doesn't linger.
+    const tab = isTaskTabKey(rawTab) ? rawTab : null;
     setDeepLinkTaskId(id);
     setTabParam(tab);
-    if (legacyId) writeUrl(id, tab);
+    if (legacyId || tab !== rawTab) writeUrl(id, tab);
   }, [searchParams, writeUrl]);
 
   const { data: allTasks = [], isSuccess: tasksLoaded } = useQuery({

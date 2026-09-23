@@ -24,7 +24,7 @@ import { useLocale, useTranslations } from "next-intl";
 import { ChevronDown, CheckSquare, Square, AlertCircle } from "lucide-react";
 import { C, LANE } from "@/lib/colors";
 import { formatAge } from "@/lib/taskDetail/format";
-import { humanizeEventType } from "@/lib/taskDetail/timelineGroups";
+import { eventLabel } from "@/lib/taskDetail/eventLabel";
 import { statusLabelKey } from "@/lib/taskDetail/statusLabels";
 import type { RunRecord, Task, TaskChecklistItem, TaskSummary } from "@/lib/types";
 import { TaskDescription } from "../TaskDescription";
@@ -274,7 +274,9 @@ export function TaskSummaryTab({
           <span>{t("detail.stepsCount", { count: schritte.length })}</span>
           <div>
             <Toggle open={stepsOpen} onClick={() => setStepsOpen((o) => !o)}>
-              {t("detail.showAll", { count: schritte.length })}
+              {schritte.length > STEP_LINKS
+                ? t("detail.showLast", { count: STEP_LINKS })
+                : t("detail.showAll", { count: schritte.length })}
             </Toggle>
           </div>
           {stepsOpen && (
@@ -323,7 +325,7 @@ export function TaskSummaryTab({
     const decisionParts = [
       open.length
         ? `${t("detail.decisionsOpen", { count: open.length })} (${open
-            .map((e) => t("detail.decisionOpenItem", { type: humanizeEventType(e.typ), age: ago(e.ts) ?? "—" }))
+            .map((e) => t("detail.decisionOpenItem", { type: eventLabel(t, e.typ), age: ago(e.ts) ?? "—" }))
             .join("; ")})`
         : null,
       approved ? t("detail.decisionsApproved", { count: approved }) : null,
@@ -333,7 +335,7 @@ export function TaskSummaryTab({
     // ── FRICTION ──
     const frictionParts = Object.entries(reibung)
       .sort((a, b) => b[1].anzahl - a[1].anzahl)
-      .map(([typ, info]) => t("detail.repeated", { label: humanizeEventType(typ), count: info.anzahl }));
+      .map(([typ, info]) => t("detail.repeated", { label: eventLabel(t, typ), count: info.anzahl }));
 
     boxes = (
       <div data-testid="run-record-summary">

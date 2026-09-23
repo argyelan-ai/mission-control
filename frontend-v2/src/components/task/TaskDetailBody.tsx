@@ -31,7 +31,6 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
-import { timeAgo } from "@/lib/utils";
 import { C, LANE, STATUS_TEXT } from "@/lib/colors";
 import { useAppStore } from "@/lib/store";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
@@ -50,6 +49,7 @@ import { TaskStateCard } from "./detail/TaskStateCard";
 import { TaskFactRow } from "./detail/TaskFactRow";
 import { TaskSummaryTab } from "./detail/TaskSummaryTab";
 import { deriveStateCard } from "@/lib/taskDetail/stateCard";
+import { formatAbsolute, formatAge } from "@/lib/taskDetail/format";
 import { parseInvalidTransition } from "@/lib/taskDetail/errors";
 import { STATUS_LABEL_KEY, statusLabelKey } from "@/lib/taskDetail/statusLabels";
 import { defaultTabFor, resolveTab, type TaskTabKey } from "@/lib/taskDetail/tabs";
@@ -204,7 +204,7 @@ function StatusMenu({
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={t("statusChange", { label: t(STATUS_LABEL_KEY[status]) })}
-        className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-medium cursor-pointer transition-opacity hover:opacity-85"
+        className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 pointer-coarse:min-h-[44px] pointer-coarse:px-3 text-[11px] font-medium cursor-pointer transition-opacity hover:opacity-85"
         style={{ background: `${color}1F`, border: `1px solid ${color}55`, color }}
       >
         <span className="w-1.5 h-1.5 rounded-full" style={{ background: color }} />
@@ -243,7 +243,7 @@ function StatusMenu({
                     setOpen(false);
                     onChange(s);
                   }}
-                  className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors cursor-pointer disabled:cursor-default"
+                  className="w-full flex items-center gap-2 px-3 py-1.5 pointer-coarse:min-h-[44px] text-left text-xs transition-colors cursor-pointer disabled:cursor-default"
                   style={{ color: active ? C.textDim : C.textSecondary, background: active ? C.bgElevated : "transparent" }}
                   onMouseEnter={(e) => {
                     if (!active) (e.currentTarget as HTMLElement).style.background = C.bgHover;
@@ -302,7 +302,7 @@ function OverflowMenu({
     if (!open) setConfirm(false);
   }, [open]);
 
-  const rowClass = "w-full flex items-start gap-2 px-3 py-2 text-left text-xs transition-colors cursor-pointer disabled:cursor-not-allowed";
+  const rowClass = "w-full flex items-start gap-2 px-3 py-2 pointer-coarse:min-h-[44px] pointer-coarse:items-center text-left text-xs transition-colors cursor-pointer disabled:cursor-not-allowed";
 
   return (
     <div className="relative" ref={triggerRef}>
@@ -312,7 +312,7 @@ function OverflowMenu({
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={t("moreActions")}
-        className="w-[30px] h-[30px] rounded-md flex items-center justify-center transition-colors hover:bg-[var(--color-bg-hover)] cursor-pointer"
+        className="w-[30px] h-[30px] pointer-coarse:w-11 pointer-coarse:h-11 rounded-md flex items-center justify-center transition-colors hover:bg-[var(--color-bg-hover)] cursor-pointer"
         style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
       >
         <MoreHorizontal size={14} />
@@ -380,11 +380,11 @@ function OverflowMenu({
                 <div className="text-[11px]" style={{ color: C.textSecondary }}>
                   {isActive ? t("deleteWhileActive") : t("deleteConfirm")}
                 </div>
-                <div className="flex gap-1.5">
+                <div className="flex gap-1.5 pointer-coarse:gap-4">
                   <button
                     onClick={onDelete}
                     disabled={deleteLoading}
-                    className="px-2 py-1 rounded-sm text-[10px] font-semibold cursor-pointer"
+                    className="px-2 py-1 pointer-coarse:min-h-[44px] pointer-coarse:px-3 pointer-coarse:text-xs rounded-sm text-[10px] font-semibold cursor-pointer"
                     style={{ backgroundColor: `${C.error}26`, color: STATUS_TEXT.error }}
                   >
                     {deleteLoading ? "…" : t("deleteTask")}
@@ -394,7 +394,7 @@ function OverflowMenu({
                       setConfirm(false);
                       setOpen(false);
                     }}
-                    className="px-2 py-1 rounded-sm text-[10px] cursor-pointer"
+                    className="px-2 py-1 pointer-coarse:min-h-[44px] pointer-coarse:px-3 pointer-coarse:text-xs rounded-sm text-[10px] cursor-pointer"
                     style={{ color: C.textMuted }}
                   >
                     {t("cancel")}
@@ -547,7 +547,9 @@ export function TaskDetailBody({
   const isActive = task.status === "in_progress" || task.status === "review";
   const currentUser = useAppStore((s) => s.currentUser);
   const [confirmStatus, setConfirmStatus] = useState<TaskStatus | null>(null);
-  const focusCommentRef = useRef(false);
+  // Bumped by "Reply" — TaskComments focuses its input on every change, also
+  // when Comments is already the open tab.
+  const [focusCommentSignal, setFocusCommentSignal] = useState(0);
 
   const statusWord = (s: string) => {
     const key = statusLabelKey(s);
@@ -575,15 +577,23 @@ export function TaskDetailBody({
     onTabChange?.(next);
   }
 
-  // "Reply" on the NEEDS YOU card: jump to the comment field.
-  useEffect(() => {
-    if (activeTab !== "comments" || !focusCommentRef.current) return;
-    focusCommentRef.current = false;
-    const id = window.setTimeout(() => {
-      bodyRef.current?.querySelector<HTMLInputElement>('input[aria-label="Add comment"]')?.focus();
-    }, 0);
-    return () => window.clearTimeout(id);
-  }, [activeTab]);
+  // Roving focus in the tab strip: ←/→ and Home/End move and select.
+  function onTabKeyDown(e: React.KeyboardEvent<HTMLButtonElement>) {
+    const keys = tabs.map((x) => x.key);
+    const i = keys.indexOf(activeTab);
+    let next: number | null = null;
+    if (e.key === "ArrowRight") next = (i + 1) % keys.length;
+    else if (e.key === "ArrowLeft") next = (i - 1 + keys.length) % keys.length;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = keys.length - 1;
+    if (next == null) return;
+    e.preventDefault();
+    selectTab(keys[next]);
+    const strip = e.currentTarget.parentElement;
+    window.setTimeout(() => strip?.querySelector<HTMLButtonElement>(`[data-tab-key="${keys[next!]}"]`)?.focus(), 0);
+  }
+  const tabId = (key: string) => `task-${task.id}-tab-${key}`;
+  const panelId = `task-${task.id}-panel`;
 
   // ── Mutations ──────────────────────────────────────────────────────────────
 
@@ -752,13 +762,46 @@ export function TaskDetailBody({
   // Save to Vault writes — operator role (backend: require_role(OPERATOR)).
   const canSaveToVault = currentUser?.role === "operator" || currentUser?.role === "admin";
 
-  async function copyText(text: Promise<string> | string, okMessage: string) {
+  function copyFailed(e: unknown) {
+    notify.error(t("detail.copyFailed", { msg: e instanceof Error ? e.message : String(e) }));
+  }
+
+  async function copyText(text: string, okMessage: string) {
     try {
-      await navigator.clipboard.writeText(await text);
+      await navigator.clipboard.writeText(text);
       notify.success(okMessage);
     } catch (e) {
-      notify.error(t("detail.copyFailed", { msg: e instanceof Error ? e.message : String(e) }));
+      copyFailed(e);
     }
+  }
+
+  /**
+   * Copy text that still has to be fetched. Safari only allows a clipboard
+   * write right inside the click — not after an await — so the write starts
+   * synchronously with a ClipboardItem that holds the pending text. Browsers
+   * without ClipboardItem fall back to writeText after the fetch.
+   */
+  function copyFetched(fetchText: () => Promise<string>, okMessage: string) {
+    const text = fetchText();
+    const canWriteItem = typeof ClipboardItem !== "undefined" && typeof navigator.clipboard?.write === "function";
+    if (!canWriteItem) {
+      void text.then((s) => copyText(s, okMessage), copyFailed);
+      return;
+    }
+    let written: Promise<void>;
+    try {
+      written = navigator.clipboard.write([
+        new ClipboardItem({ "text/plain": text.then((s) => new Blob([s], { type: "text/plain" })) }),
+      ]);
+    } catch (e) {
+      written = Promise.reject(e);
+    }
+    written.then(
+      () => notify.success(okMessage),
+      // A browser that knows ClipboardItem but refuses a pending item (older
+      // Chromium/Firefox) still gets the text via writeText.
+      () => text.then((s) => copyText(s, okMessage), copyFailed),
+    );
   }
 
   const menuItems: MenuItem[] = [
@@ -773,7 +816,7 @@ export function TaskDetailBody({
       key: "copy-markdown",
       label: t("detail.copyMarkdown"),
       icon: ClipboardCopy,
-      onSelect: () => copyText(api.tasks.runRecordMarkdown(task.id), t("detail.markdownCopied")),
+      onSelect: () => copyFetched(() => api.tasks.runRecordMarkdown(task.id), t("detail.markdownCopied")),
     },
     {
       key: "save-vault",
@@ -820,7 +863,7 @@ export function TaskDetailBody({
             <button
               onClick={onClose}
               aria-label={t("closeTaskDetails")}
-              className={`${hideCloseOnMobile ? "hidden md:flex" : "flex"} w-[30px] h-[30px] rounded-md items-center justify-center transition-colors hover:bg-[var(--color-bg-hover)] cursor-pointer`}
+              className={`${hideCloseOnMobile ? "hidden md:flex" : "flex"} w-[30px] h-[30px] pointer-coarse:w-11 pointer-coarse:h-11 rounded-md items-center justify-center transition-colors hover:bg-[var(--color-bg-hover)] cursor-pointer`}
               style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
             >
               <X size={15} />
@@ -842,8 +885,8 @@ export function TaskDetailBody({
               task={task}
               agents={agents}
               onReply={() => {
-                focusCommentRef.current = true;
                 selectTab("comments");
+                setFocusCommentSignal((n) => n + 1);
               }}
               onOpenLog={() => selectTab("timeline")}
             />
@@ -891,8 +934,13 @@ export function TaskDetailBody({
             return (
               <button
                 key={x.key}
+                id={tabId(x.key)}
+                data-tab-key={x.key}
                 role="tab"
                 aria-selected={active}
+                aria-controls={panelId}
+                tabIndex={active ? 0 : -1}
+                onKeyDown={onTabKeyDown}
                 onClick={() => selectTab(x.key)}
                 className="px-2.5 py-2 font-mono text-[10px] uppercase tracking-[0.12em] cursor-pointer transition-colors -mb-px"
                 style={{
@@ -907,7 +955,13 @@ export function TaskDetailBody({
           })}
         </div>
 
-        <div className="px-4 py-3 pb-4" role="tabpanel" data-tab={activeTab}>
+        <div
+          className="px-4 py-3 pb-4"
+          role="tabpanel"
+          id={panelId}
+          aria-labelledby={tabs.some((x) => x.key === activeTab) ? tabId(activeTab) : undefined}
+          data-tab={activeTab}
+        >
           {activeTab === "summary" ? (
             <TaskSummaryTab
               task={task}
@@ -959,7 +1013,7 @@ export function TaskDetailBody({
                       {t("createdBy")}
                     </span>
                     <span className="text-xs" style={{ color: C.textPrimary }}>
-                      {creatorName ?? "—"} · {timeAgo(task.created_at, locale)}
+                      {creatorName ?? "—"} · <span title={formatAbsolute(task.created_at, locale)}>{t("detail.ago", { age: formatAge(task.created_at, locale) ?? "—" })}</span>
                     </span>
                   </div>
                   <div className="px-2.5 py-2" style={{ background: C.bgSurface }}>
@@ -967,7 +1021,9 @@ export function TaskDetailBody({
                       {t("started")}
                     </span>
                     <span className="text-xs" style={{ color: C.textPrimary }}>
-                      {task.started_at ? timeAgo(task.started_at, locale) : "—"}
+                      {task.started_at ? (
+                        <span title={formatAbsolute(task.started_at, locale)}>{t("detail.ago", { age: formatAge(task.started_at, locale) ?? "—" })}</span>
+                      ) : "—"}
                     </span>
                   </div>
                 </div>
@@ -1046,8 +1102,8 @@ export function TaskDetailBody({
             <div>
               <button
                 type="button"
-                onClick={() => selectTab(defaultTabFor(task.status))}
-                className="inline-flex items-center gap-1.5 mb-3 text-[11px] cursor-pointer hover:underline"
+                onClick={() => selectTab("summary")}
+                className="inline-flex items-center gap-1.5 mb-3 text-[11px] pointer-coarse:min-h-[44px] cursor-pointer hover:underline"
                 style={{ color: C.textSecondary }}
               >
                 <ArrowLeft size={12} aria-hidden />
@@ -1056,7 +1112,7 @@ export function TaskDetailBody({
               <ThreadPanel taskId={task.id} />
             </div>
           ) : activeTab === "comments" ? (
-            <TaskComments task={task} boardId={boardId} agents={agents} />
+            <TaskComments task={task} boardId={boardId} agents={agents} focusSignal={focusCommentSignal} />
           ) : activeTab === "transcript" ? (
             <TaskTranscript taskId={task.id} isLive={task.status === "in_progress" || task.status === "review"} />
           ) : activeTab === "deliverables" ? (

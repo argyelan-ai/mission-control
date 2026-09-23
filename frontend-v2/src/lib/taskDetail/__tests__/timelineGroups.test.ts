@@ -74,6 +74,43 @@ describe("groupTimelineEntries", () => {
   });
 });
 
+describe("groupTimelineEntries — only reminders", () => {
+  function activity(ts: string, eventType: string, kind = "system"): TaskTimelineEntry {
+    return { ts, source: "activity_event", kind, title: eventType, meta: { event_type: eventType, severity: "info" } };
+  }
+
+  it("does not group repeated history events (dispatches, handoffs) — they are part of the story", () => {
+    const items = groupTimelineEntries([
+      activity("2026-09-20T09:00:00Z", "task.auto_dispatched", "dispatch"),
+      comment,
+      activity("2026-09-20T11:00:00Z", "task.auto_dispatched", "dispatch"),
+      activity("2026-09-20T12:00:00Z", "task.review_handoff", "review"),
+      activity("2026-09-20T13:00:00Z", "task.review_handoff", "review"),
+    ]);
+    expect(items.every((i) => i.type === "entry")).toBe(true);
+    expect(items).toHaveLength(5);
+  });
+
+  it("never groups an activity event of kind status_change", () => {
+    const items = groupTimelineEntries([
+      activity("2026-09-20T09:00:00Z", "task.status_changed", "status_change"),
+      activity("2026-09-20T10:00:00Z", "task.status_changed", "status_change"),
+    ]);
+    expect(items.every((i) => i.type === "entry")).toBe(true);
+  });
+
+  it("groups the known nudges (review nudge, dispatch pending, stale update warning)", () => {
+    for (const type of ["task.review_nudge", "task.dispatch_pending", "task.stale_update_warning"]) {
+      const items = groupTimelineEntries([
+        activity("2026-09-20T09:00:00Z", type),
+        activity("2026-09-20T10:00:00Z", type),
+      ]);
+      expect(items).toHaveLength(1);
+      expect(items[0]).toMatchObject({ type: "group", eventType: type });
+    }
+  });
+});
+
 describe("humanizeEventType", () => {
   it("turns a machine key into a readable label", () => {
     expect(humanizeEventType("task.blocked_reminder")).toBe("Blocked reminder");

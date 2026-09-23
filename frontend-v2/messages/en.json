@@ -303,7 +303,37 @@
         "blocked_reminder": "Blocked reminder",
         "review_nudge": "Review reminder",
         "stale_update_warning": "Stale update warning",
-        "dispatch_pending": "Dispatch pending"
+        "dispatch_pending": "Dispatch pending",
+        "blocker_escalated_to_operator": "Escalated to operator",
+        "blocker_lead_notified": "Lead notified",
+        "blocker_lead_resolved": "Lead resolved the blocker",
+        "review_self_review_escalated": "Self-review escalated",
+        "review_late_note": "Late review note",
+        "review_reviewer_turn_stopped": "Reviewer turn stopped",
+        "stale_update_rejected": "Stale update rejected",
+        "late_update_rejected": "Late update rejected",
+        "review_stuck": "Review stuck",
+        "review_escalated": "Review escalated",
+        "review_rejected": "Review rejected",
+        "review_handoff": "Review handoff",
+        "dispatch_escalation": "Dispatch escalation",
+        "dispatch_failed": "Dispatch failed",
+        "auto_dispatched": "Auto dispatched",
+        "cli_bridge_ready": "Bridge ready",
+        "lead_escalation": "Lead escalation",
+        "dependency_zombie": "Dependency stuck",
+        "stuck": "Stuck",
+        "auto_closed_stuck": "Auto-closed while stuck",
+        "silent_card": "Silent card",
+        "silent_card_retracted": "Silent card retracted",
+        "recovery_triggered": "Recovery triggered",
+        "undispatched_recovery": "Recovered undispatched task",
+        "reassigned": "Reassigned",
+        "status_changed": "Status changed",
+        "blocker_decision": "Blocker decision",
+        "visual_review": "Visual review",
+        "recovery_failed": "Recovery failed",
+        "clarification_question": "Clarification question"
       },
       "evidenceType": {
         "screenshot": "Screenshots",
@@ -315,7 +345,10 @@
         "video": "Videos",
         "evidence": "Evidence notes",
         "deliverable": "Deliverable notes"
-      }
+      },
+      "showLast": "Show last {count}",
+      "ago": "{age} ago",
+      "resultFallback": "No result summary — latest agent note:"
     }
   },
   "agents": {
@@ -630,7 +663,9 @@
     "approveUninstall": "Approve & uninstall",
     "rejectReasonPlaceholder": "Rejection reason (optional)",
     "fromAgent": "from {name}",
-    "approvePost": "Approve & post"
+    "approvePost": "Approve & post",
+    "showFull": "Show full",
+    "showLess": "Show less"
   },
   "sessions": {
     "groups": {

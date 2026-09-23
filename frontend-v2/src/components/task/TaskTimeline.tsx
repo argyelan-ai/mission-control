@@ -32,9 +32,9 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
-import { timeAgo } from "@/lib/utils";
 import { formatAbsolute, formatAge } from "@/lib/taskDetail/format";
-import { groupTimelineEntries, humanizeEventType, type TimelineItem } from "@/lib/taskDetail/timelineGroups";
+import { groupTimelineEntries, type TimelineItem } from "@/lib/taskDetail/timelineGroups";
+import { eventLabel } from "@/lib/taskDetail/eventLabel";
 import { C } from "@/lib/colors";
 import type { TaskTimelineEntry } from "@/lib/types";
 
@@ -136,7 +136,7 @@ function TimelineRow({ entry, isLast }: { entry: TaskTimelineEntry; isLast: bool
         <span style={{ color: C.textDim }}>{t(SOURCE_LABEL_KEY[entry.source])}</span>
         <span style={{ color: C.textDim }}>·</span>
         <span title={formatAbsolute(entry.ts, locale)} style={{ color: C.textMuted }}>
-          {timeAgo(entry.ts, locale)}
+          {t("detail.ago", { age: formatAge(entry.ts, locale) ?? "—" })}
         </span>
       </div>
     </div>
@@ -155,9 +155,7 @@ function TimelineGroupRow({
   const locale = useLocale();
   const [open, setOpen] = useState(false);
   const { icon: Icon, color } = getKindMeta(item.entries[item.entries.length - 1].kind);
-  const slug = item.eventType.replace(/^task\./, "");
-  const labelKey = `detail.event.${slug}`;
-  const label = t.has(labelKey) ? t(labelKey) : humanizeEventType(item.eventType);
+  const label = eventLabel(t, item.eventType);
 
   return (
     <div className="relative pl-5" style={{ paddingBottom: isLast ? 0 : 14 }} data-testid="timeline-group">

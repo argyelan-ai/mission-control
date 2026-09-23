@@ -52,22 +52,30 @@ export function TaskFactRow({
   const t = useTranslations("tasks");
   const locale = useLocale();
 
-  const notStarted = task.status === "inbox" && !task.dispatched_at;
+  // inbox = not started for the current run, even if an earlier run was
+  // dispatched (recurring jobs go back to inbox).
+  const notStarted = task.status === "inbox";
   const timeSeconds = TERMINAL.has(task.status)
     ? (runRecord?.zeiten.dauer_sekunden ?? secondsBetween(task.created_at, task.completed_at))
     : secondsBetween(task.created_at, null);
   const time = notStarted ? t("detail.notStarted") : (formatDuration(timeSeconds, locale) ?? "—");
 
+  // Never "$0.00" when nothing is tracked: Claude work has no usage rows at
+  // all, so zero would be a false statement (concept §5.2).
   const kosten = runRecord?.kosten;
+  const billed = kosten && kosten.gesamt_usd > 0 ? formatUsd(kosten.gesamt_usd) : null;
   const cost = kosten ? (
-    <>
-      <span>{formatUsd(kosten.gesamt_usd)}</span>
+    // Grid (phone): amount and hint stacked, nothing cut off. Row: one line.
+    <span className="flex flex-col @min-[560px]:flex-row @min-[560px]:items-center @min-[560px]:gap-1 min-w-0">
+      {billed && <span>{billed}</span>}
       {kosten.hinweis && (
-        <span className="truncate" style={{ color: C.textMuted }}>
-          · {t("detail.claudeNotTracked")}
+        <span className="whitespace-normal @min-[560px]:whitespace-nowrap" style={{ color: C.textMuted }}>
+          {billed && <span className="hidden @min-[560px]:inline">· </span>}
+          {t("detail.claudeNotTracked")}
         </span>
       )}
-    </>
+      {!billed && !kosten.hinweis && <span>{formatUsd(0)}</span>}
+    </span>
   ) : (
     "—"
   );
@@ -102,8 +110,8 @@ export function TaskFactRow({
       <Fact label={t("detail.factCost")} testId="fact-cost">{cost}</Fact>
       {showPriority && (
         <Fact label={t("detail.factPriority")} testId="fact-priority">
-          <span className="capitalize" style={{ color: task.priority === "critical" ? STATUS_TEXT.error : STATUS_TEXT.warning }}>
-            {task.priority}
+          <span style={{ color: task.priority === "critical" ? STATUS_TEXT.error : STATUS_TEXT.warning }}>
+            {task.priority === "critical" ? t("priorityCritical") : t("priorityHigh")}
           </span>
         </Fact>
       )}

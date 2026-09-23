@@ -32,6 +32,7 @@ type Routes = {
   approvals?: Approval[];
   comments?: TaskComment[];
   patch?: { status: number; body: unknown };
+  subtasks?: { id: string; title: string; status: string }[];
 };
 
 function mockApi(routes: Routes = {}) {
@@ -43,7 +44,7 @@ function mockApi(routes: Routes = {}) {
   vi.spyOn(api.tasks.comments, "list").mockResolvedValue(routes.comments ?? []);
   vi.spyOn(api.tasks, "hierarchy").mockResolvedValue({
     parent: null,
-    children: [],
+    children: (routes.subtasks ?? []).map((c) => ({ ...c, assigned_agent_id: null, priority: "medium" })),
     report_back: null,
     has_credentials: false,
   } as unknown as Awaited<ReturnType<typeof api.tasks.hierarchy>>);
@@ -300,5 +301,177 @@ describe("status changes", () => {
     expect(updateSpy).not.toHaveBeenCalled();
     fireEvent.click(within(dialog).getByRole("button", { name: "Mark done" }));
     await waitFor(() => expect(updateSpy).toHaveBeenCalledWith("board-1", "task-1", { status: "done" }));
+  });
+});
+
+// ── Review follow-ups (wave 3a review) ───────────────────────────────────────
+
+const LONG_REPORT = "## What was done\nA very long blocker report that must not push the buttons below the fold.";
+
+describe("NEEDS YOU stays compact with an embedded approval", () => {
+  const approval = approvalFixture({
+    description: "alpha is blocked at Sample task",
+    payload: {
+      blocked_agent_name: "alpha",
+      blocker_type: "technical_problem",
+      description: "",
+      question: "Card needs a flip to review — PATCH 403",
+      blocker_comment: LONG_REPORT,
+    },
+  });
+
+  it("shows the question once, clamped, and hides the long report until Show full", async () => {
+    mockApi({ approvals: [approval] });
+    renderBody(taskFixture({ status: "blocked", assigned_agent_id: "agent-1" }));
+    const card = await screen.findByTestId("task-state-card");
+    const embedded = await within(card).findByTestId("state-card-approval");
+    // One reason, not three: no own quote above the approval, no repeated title line.
+    expect(within(card).getAllByText(/Card needs a flip to review/)).toHaveLength(1);
+    expect(within(card).queryByText(/alpha is blocked at/)).toBeNull();
+    expect(within(embedded).getByTestId("approval-lead")).toHaveAttribute("data-clamped", "true");
+    expect(within(card).queryByText(/very long blocker report/)).toBeNull();
+    // Buttons directly under the reason.
+    expect(within(embedded).getByRole("button", { name: /Unblock/ })).toBeInTheDocument();
+    fireEvent.click(within(embedded).getByRole("button", { name: "Show full" }));
+    expect(await within(card).findByText(/very long blocker report/)).toBeInTheDocument();
+    expect(within(card).getAllByText(/alpha is blocked at/)).toHaveLength(1);
+  });
+});
+
+describe("Reply focuses the comment field", () => {
+  it("jumps to Comments and focuses the input", async () => {
+    mockApi({ comments: [commentFixture({ comment_type: "blocker", content: "Which branch?" })] });
+    renderBody(taskFixture({ status: "waiting" }));
+    const card = await screen.findByTestId("task-state-card");
+    fireEvent.click(await within(card).findByRole("button", { name: "Reply" }));
+    await waitFor(() => expect(document.activeElement).toHaveAttribute("data-comment-input"));
+  });
+
+  it("also focuses when Comments is already the open tab", async () => {
+    mockApi({ comments: [commentFixture({ comment_type: "blocker", content: "Which branch?" })] });
+    renderBody(taskFixture({ status: "waiting" }), { tab: "comments" });
+    const card = await screen.findByTestId("task-state-card");
+    await screen.findByRole("textbox", { name: /comment/i });
+    fireEvent.click(await within(card).findByRole("button", { name: "Reply" }));
+    await waitFor(() => expect(document.activeElement).toHaveAttribute("data-comment-input"));
+  });
+});
+
+describe("Delete asks first", () => {
+  it("needs a second click before anything is deleted", async () => {
+    mockApi();
+    const del = vi.spyOn(api.tasks, "delete").mockResolvedValue(undefined as never);
+    renderBody(taskFixture({ status: "done" }));
+    fireEvent.click(await screen.findByRole("button", { name: "More actions" }));
+    fireEvent.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: /Delete/ }));
+    expect(del).not.toHaveBeenCalled();
+    fireEvent.click(within(screen.getByRole("menu")).getByRole("button", { name: "Delete task" }));
+    await waitFor(() => expect(del).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe("STEPS lists subtasks in pages", () => {
+  it("shows the first 10 links, then all 25 after Show all", async () => {
+    const subtasks = Array.from({ length: 25 }, (_, i) => ({ id: `sub-${i}`, title: `Subtask ${i}`, status: "done" }));
+    mockApi({ subtasks });
+    renderBody(taskFixture({ status: "done" }));
+    const steps = await screen.findByTestId("summary-steps");
+    await within(steps).findByText(/Subtasks: 25/);
+    fireEvent.click(within(steps).getByRole("button", { name: /Show first 10/ }));
+    expect(within(screen.getByTestId("summary-subtasks")).getAllByRole("link")).toHaveLength(10);
+    fireEvent.click(within(steps).getByRole("button", { name: /Show all \(25\)/ }));
+    expect(within(screen.getByTestId("summary-subtasks")).getAllByRole("link")).toHaveLength(25);
+  });
+
+  it("without subtasks the first toggle promises the last 10, not all", async () => {
+    const schritte = Array.from({ length: 12 }, (_, i) => ({
+      ts: `2026-09-18T08:${String(i).padStart(2, "0")}:00`,
+      quelle: "status" as const,
+      actor_label: "alpha",
+      changed_by: "agent",
+      text: `step ${i}`,
+    }));
+    mockApi({ runRecord: runRecordFixture({ schritte }) });
+    renderBody(taskFixture({ status: "done" }));
+    const steps = await screen.findByTestId("summary-steps");
+    fireEvent.click(within(steps).getByRole("button", { name: /Show last 10/ }));
+    expect(within(steps).getAllByText(/^step \d+$/)).toHaveLength(10);
+    fireEvent.click(within(steps).getByRole("button", { name: /Show all \(12\)/ }));
+    expect(within(steps).getAllByText(/^step \d+$/)).toHaveLength(12);
+  });
+});
+
+describe("facts row details", () => {
+  it("shows only 'Claude: not tracked' when nothing was billed (no $0.00)", async () => {
+    const rr = runRecordFixture();
+    mockApi({ runRecord: { ...rr, kosten: { ...rr.kosten, gesamt_usd: 0, je_anbieter: {} } } });
+    renderBody(taskFixture({ status: "done" }));
+    await waitFor(() => expect(screen.getByTestId("fact-cost")).toHaveTextContent("Claude: not tracked"));
+    expect(screen.getByTestId("fact-cost")).not.toHaveTextContent("$");
+  });
+
+  it("an inbox task says Not started even when it was dispatched before", async () => {
+    mockApi();
+    renderBody(taskFixture({ status: "inbox", dispatched_at: "2026-09-22T08:00:00Z" }));
+    expect(await screen.findByTestId("fact-time")).toHaveTextContent("Not started");
+  });
+
+  it("translates the priority label", async () => {
+    mockApi();
+    renderBody(taskFixture({ status: "done", priority: "critical" }));
+    expect(await screen.findByTestId("fact-priority")).toHaveTextContent("Critical");
+  });
+});
+
+describe("thread view", () => {
+  it("Back to summary goes to Summary even for a running task", async () => {
+    mockApi();
+    renderBody(taskFixture({ status: "in_progress" }));
+    fireEvent.click(await screen.findByRole("button", { name: "More actions" }));
+    fireEvent.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: /thread/i }));
+    fireEvent.click(await screen.findByRole("button", { name: "Back to summary" }));
+    expect(screen.getByRole("tab", { name: "Summary" })).toHaveAttribute("aria-selected", "true");
+  });
+});
+
+describe("tab strip keyboard", () => {
+  it("arrow keys move between tabs and only the active tab is in the tab order", async () => {
+    mockApi();
+    const onTabChange = vi.fn();
+    renderBody(taskFixture({ status: "done" }), { onTabChange });
+    const summary = await screen.findByRole("tab", { name: "Summary" });
+    expect(summary).toHaveAttribute("tabindex", "0");
+    expect(screen.getByRole("tab", { name: "Comments" })).toHaveAttribute("tabindex", "-1");
+    fireEvent.keyDown(summary, { key: "ArrowRight" });
+    expect(onTabChange).toHaveBeenLastCalledWith("comments");
+    const panel = screen.getByRole("tabpanel");
+    expect(panel).toHaveAttribute("aria-labelledby", screen.getByRole("tab", { name: "Comments" }).id);
+  });
+});
+
+describe("Copy as Markdown on Safari", () => {
+  it("hands the clipboard a pending item inside the click, before the markdown has arrived", async () => {
+    mockApi();
+    let resolveMd: (s: string) => void = () => {};
+    vi.spyOn(api.tasks, "runRecordMarkdown").mockImplementation(() => new Promise<string>((r) => { resolveMd = r; }));
+    const write = vi.fn().mockResolvedValue(undefined);
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { write, writeText }, configurable: true });
+    class FakeClipboardItem { constructor(public items: Record<string, Promise<Blob>>) {} }
+    vi.stubGlobal("ClipboardItem", FakeClipboardItem);
+    try {
+      renderBody(taskFixture({ status: "done" }));
+      fireEvent.click(await screen.findByRole("button", { name: "More actions" }));
+      fireEvent.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: /Copy as Markdown/ }));
+      // Synchronously inside the click — the fetch has not resolved yet.
+      expect(write).toHaveBeenCalledTimes(1);
+      expect(writeText).not.toHaveBeenCalled();
+      resolveMd("# Run record");
+      const item = write.mock.calls[0][0][0] as FakeClipboardItem;
+      const blob = await item.items["text/plain"];
+      expect(await blob.text()).toBe("# Run record");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

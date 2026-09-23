@@ -78,4 +78,39 @@ describe("deriveStateCard", () => {
   it("inbox → no card (facts row says Not started)", () => {
     expect(deriveStateCard({ task: taskFixture({ status: "inbox" }), approvals: [], comments: [], runRecord: null })).toBeNull();
   });
+
+  it("done without a resolution falls back to the latest agent note and says so", () => {
+    const task = taskFixture({ status: "done" });
+    const note = commentFixture({ comment_type: "message", content: "Merged and verified live.", created_at: "2026-09-21T09:00:00Z" });
+    const reflection = commentFixture({ id: "c2", comment_type: "reflection", content: "lessons", created_at: "2026-09-21T10:00:00Z" });
+    const system = commentFixture({ id: "c3", author_type: "system", comment_type: "reflection", content: "auto", created_at: "2026-09-21T11:00:00Z" });
+    const card = deriveStateCard({ task, approvals: [], comments: [note, reflection, system], runRecord: null });
+    expect(card).toMatchObject({ kind: "result", resolution: "Merged and verified live.", resolutionIsFallback: true });
+  });
+
+  it("done with a resolution uses it and is not a fallback", () => {
+    const task = taskFixture({ status: "done" });
+    const res = commentFixture({ comment_type: "resolution", content: "Fixed.", created_at: "2026-09-20T09:00:00Z" });
+    const later = commentFixture({ id: "c2", comment_type: "message", content: "later note", created_at: "2026-09-21T09:00:00Z" });
+    const card = deriveStateCard({ task, approvals: [], comments: [res, later], runRecord: null });
+    expect(card).toMatchObject({ kind: "result", resolution: "Fixed.", resolutionIsFallback: false });
+  });
+
+  it("failed prefers the blocker over a later harmless system note", () => {
+    const task = taskFixture({ status: "failed" });
+    const blocker = commentFixture({ comment_type: "blocker", content: "Build failed", created_at: "2026-09-21T08:00:00Z" });
+    const sys = commentFixture({ id: "c2", author_type: "system", comment_type: "system_notify", content: "Delivered to lead", created_at: "2026-09-21T09:00:00Z" });
+    const card = deriveStateCard({ task, approvals: [], comments: [blocker, sys], runRecord: null });
+    expect(card).toMatchObject({ kind: "failed", error: "Build failed" });
+  });
+
+  it("failed without a blocker takes the last warning event before any system note", () => {
+    const task = taskFixture({ status: "failed" });
+    const sys = commentFixture({ id: "c2", author_type: "system", comment_type: "system_notify", content: "Delivered to lead" });
+    const rr = runRecordFixture({
+      schritte: [{ ts: "2026-09-21T08:00:00", quelle: "ereignis", actor_label: null, changed_by: null, text: "Dispatch failed: runtime unreachable" }],
+    });
+    const card = deriveStateCard({ task, approvals: [], comments: [sys], runRecord: rr });
+    expect(card).toMatchObject({ kind: "failed", error: "Dispatch failed: runtime unreachable" });
+  });
 });
