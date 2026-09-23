@@ -142,6 +142,7 @@ export function DeliverablesTab({
   boardId: string;
   taskId: string;
 }) {
+  const t = useTranslations("tasks");
   const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null);
 
   if (!deliverables.length) {
@@ -216,7 +217,7 @@ export function DeliverablesTab({
                   src: imageUrl(d),
                   alt: d.title,
                 })}
-                aria-label={`View screenshot: ${d.title}`}
+                aria-label={t("deliverableViewScreenshot", { title: d.title })}
               >
                 <AuthImage
                   src={imageUrl(d)}

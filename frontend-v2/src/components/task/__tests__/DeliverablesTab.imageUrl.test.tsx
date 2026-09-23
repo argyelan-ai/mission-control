@@ -43,4 +43,16 @@ describe("DeliverablesTab screenshot URLs", () => {
     render(<DeliverablesTab deliverables={[mkShot()]} boardId="board-1" taskId="parent-task" />);
     expect(await screen.findByText("Image unavailable")).toBeInTheDocument();
   });
+
+  it("names the screenshot button through an i18n key (EN and DE)", async () => {
+    fetchMock.mockResolvedValue({ ok: true, status: 200, blob: async () => new Blob(["x"]) });
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const load = (lang: string) =>
+      JSON.parse(readFileSync(join(__dirname, "../../../../messages", `${lang}.json`), "utf-8"));
+    expect(load("en").tasks.deliverableViewScreenshot).toContain("{title}");
+    expect(load("de").tasks.deliverableViewScreenshot).toContain("{title}");
+    render(<DeliverablesTab deliverables={[mkShot()]} boardId="board-1" taskId="parent-task" />);
+    expect(screen.getByRole("button", { name: "View screenshot: Landing page" })).toBeInTheDocument();
+  });
 });

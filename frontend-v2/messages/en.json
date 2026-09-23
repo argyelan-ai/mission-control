@@ -192,6 +192,7 @@
     "tabTimeline": "Timeline",
     "tabHistory": "History",
     "deliverableImageUnavailable": "Image unavailable",
+    "deliverableViewScreenshot": "View screenshot: {title}",
     "prChipNumber": "PR #{number}",
     "prChipOpen": "PR open"
   },
