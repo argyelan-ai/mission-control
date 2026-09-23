@@ -22,6 +22,8 @@ import { C } from "@/lib/colors";
 import type { RuntimeStopConflict } from "@/lib/types";
 import { humanApiError } from "@/components/shared/HostRecipeSwitcher";
 import { HostRecipeSwitcher } from "@/components/shared/HostRecipeSwitcher";
+import { HeadOnBoxNotice, useHeadConflictText } from "@/components/heads/HeadOccupancy";
+import { parseHeadOnBox, type HeadBusy } from "@/lib/heads";
 
 /** Exportiert (Cockpit PR 5): dieselbe 409-Konflikt-Erkennung wie hier, damit
  *  der Stop-Knopf im Cockpit dieselbe inline Bestätigung zeigt statt eine
@@ -54,6 +56,7 @@ export function ActionBar({
   multiNode = false,
   variant = "normal",
   onOpenCockpit,
+  headOnBox = null,
 }: {
   hostId: string;
   hostName: string | null;
@@ -67,8 +70,20 @@ export function ActionBar({
    *  Reihe "Other model" + Stop. */
   variant?: "normal" | "trouble";
   onOpenCockpit: () => void;
+  /** Head launcher §8.3: a head works on this box. While the engine serves,
+   *  switch / restart / stop would cut it off → disabled with a notice. A
+   *  dead engine (trouble) stays recoverable — the backend allows that. */
+  headOnBox?: HeadBusy | null;
 }) {
   const t = useTranslations("runtimes.stage");
+  const tHeads = useTranslations("heads.runtimes");
+  const headConflictText = useHeadConflictText();
+  const [refusedBy, setRefusedBy] = useState<{ task_id: string | null; title: string | null } | null>(null);
+  const holder = headOnBox ?? refusedBy;
+  const locked = !!headOnBox && variant === "normal";
+  const lockedReason = locked
+    ? `${headOnBox?.title ? tHeads("onBoxTitle", { title: headOnBox.title }) : tHeads("onBoxTitleNoTitle")} ${tHeads("onBoxBody")}`
+    : null;
   const queryClient = useQueryClient();
   const [conflict, setConflict] = useState<RuntimeStopConflict | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -94,14 +109,26 @@ export function ActionBar({
         setConflict(parsed);
         return;
       }
-      setError(t("stopFailed", { message: humanApiError(err) }));
+      const onBox = parseHeadOnBox(err);
+      if (onBox) {
+        setRefusedBy(onBox);
+        return;
+      }
+      setError(headConflictText(err) ?? t("stopFailed", { message: humanApiError(err) }));
     },
   });
 
   const restartMutation = useMutation({
     mutationFn: () => api.runtimes.restart(runtimeId),
     onSuccess: invalidate,
-    onError: (err: Error) => setError(t("restartFailed", { message: humanApiError(err) })),
+    onError: (err: Error) => {
+      const onBox = parseHeadOnBox(err);
+      if (onBox) {
+        setRefusedBy(onBox);
+        return;
+      }
+      setError(headConflictText(err) ?? t("restartFailed", { message: humanApiError(err) }));
+    },
   });
 
   if (conflict) {
@@ -138,6 +165,7 @@ export function ActionBar({
 
   return (
     <div className="flex flex-col gap-2 px-4 py-3" style={{ borderTop: `1px solid ${C.borderSubtle}` }}>
+      {holder && <HeadOnBoxNotice head={holder} />}
       {error && (
         <div className="text-xs" style={{ color: C.error }}>{error}</div>
       )}
@@ -155,7 +183,7 @@ export function ActionBar({
             {restartMutation.isPending ? t("restarting") : t("restartNow")}
           </button>
         ) : (
-          <HostRecipeSwitcher hostId={hostId} hostName={hostName} servingName={servingName} compact primary label={t("switchModel")} />
+          <HostRecipeSwitcher hostId={hostId} hostName={hostName} servingName={servingName} compact primary label={t("switchModel")} blockedBy={lockedReason} />
         )}
         {/* 44px Touch-Ziel (DESIGN.md) mobil, 36px ab der 600px-Container-Breite —
             gleiche Konvention wie die Icon-Knöpfe auf page.tsx (w-11 h-11 sm:w-7 sm:h-7).
@@ -178,7 +206,8 @@ export function ActionBar({
           <button
             type="button"
             onClick={() => stopMutation.mutate(false)}
-            disabled={stopMutation.isPending}
+            disabled={stopMutation.isPending || locked}
+            title={lockedReason ?? undefined}
             data-testid="stop-runtime"
             className="text-xs px-3.5 py-2.5 rounded-md cursor-pointer disabled:opacity-50"
             style={{ color: C.error, border: `1px solid ${C.borderSubtle}` }}

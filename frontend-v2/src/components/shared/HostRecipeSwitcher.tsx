@@ -29,6 +29,7 @@ import { useTranslations } from "next-intl";
 import { ChevronDown } from "lucide-react";
 import { api } from "@/lib/api";
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
+import { useHeadConflictText } from "@/components/heads/HeadOccupancy";
 import type { HostRecipe } from "@/lib/types";
 
 // Ein Schlüssel für alle Leser — SlotStage, Detail-Panel und der Deploy im
@@ -127,6 +128,7 @@ export function HostRecipeSwitcher({
   hideWhenEmpty = false,
   label = null,
   primary = false,
+  blockedBy = null,
 }: {
   hostId: string;
   /** Name dieser Box — die Erfolgsmeldung eines Duo-Starts nennt beide Boxen. */
@@ -146,8 +148,12 @@ export function HostRecipeSwitcher({
   /** Runtimes-Bühne v2: Akzentfläche + dunkler Text statt der ruhigen
    *  Registerzeile — für die primäre Aktion der Karte (Switch/Start model). */
   primary?: boolean;
+  /** Head launcher §6.7: a head works on this box — switching would cut it
+   *  off. The trigger is disabled and says why (tooltip + aria). */
+  blockedBy?: string | null;
 }) {
   const t = useTranslations("runtimes.recipeSwitcher");
+  const headConflictText = useHeadConflictText();
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [confirm, setConfirm] = useState<HostRecipe | null>(null);
@@ -204,7 +210,7 @@ export function HostRecipeSwitcher({
     },
     onError: (err: Error) => {
       setStarting(null);
-      setError(t("startFailed", { message: humanApiError(err) }));
+      setError(headConflictText(err) ?? t("startFailed", { message: humanApiError(err) }));
     },
   });
 
@@ -296,6 +302,8 @@ export function HostRecipeSwitcher({
           ref={triggerRef}
           type="button"
           onClick={() => setOpen((v) => !v)}
+          disabled={!!blockedBy}
+          title={blockedBy ?? undefined}
           aria-haspopup="listbox"
           aria-expanded={open}
           data-testid="recipe-dropdown-trigger"
@@ -305,7 +313,7 @@ export function HostRecipeSwitcher({
           // sie neben kompakten Aktionsknöpfen steht. `compact` bleibt nur
           // für den ruhigen Registerzeilen-Auslöser (Panel/SlotStage) in
           // Kraft, wenn `primary` nicht gesetzt ist.
-          className={`flex items-center justify-center gap-2 rounded-md cursor-pointer max-w-full ${
+          className={`flex items-center justify-center gap-2 rounded-md cursor-pointer max-w-full disabled:opacity-40 disabled:cursor-not-allowed ${
             primary ? "h-10 px-3.5 text-sm font-semibold" : compact ? "h-7 px-2.5 text-[11px]" : "px-3 py-2 text-xs"
           }`}
           style={{

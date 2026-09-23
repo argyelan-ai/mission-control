@@ -39,6 +39,7 @@ import { ActionBar } from "./ActionBar";
 import { PhaseBar } from "./PhaseBar";
 import { shortModelTitle } from "./modelTitle";
 import { useAppStore } from "@/lib/store";
+import { HeadBusyBadge, headOnBoxes, useHeadOccupancy } from "@/components/heads/HeadOccupancy";
 
 export interface StageMember {
   host: Host;
@@ -86,6 +87,9 @@ export function Stage({
   const currentUser = useAppStore((s) => s.currentUser);
   const reduceMotion = useReducedMotion();
   const headHost = members.find((m) => m.role === "head" || m.role == null) ?? members[0];
+  // Head launcher §8.3: a head working on any member box (a duo holds both).
+  const headOccupancy = useHeadOccupancy();
+  const workingHead = headOnBoxes(headOccupancy, members.map((m) => m.host.id));
 
   const { data: pulse } = useQuery({
     queryKey: ["hosts", headHost?.host.id, "pulse"],
@@ -209,6 +213,11 @@ export function Stage({
                 ? nowLineParts.join(" · ")
                 : `${typeLabel(runtime.runtime_type)}${runtime.model_identifier ? ` · ${runtime.model_identifier}` : ""}`}
         </div>
+        {workingHead && (
+          <div className="-mt-2 pb-3 min-w-0">
+            <HeadBusyBadge head={workingHead} />
+          </div>
+        )}
       </div>
 
       <div className="relative" style={{ zIndex: 2 }}>
@@ -260,6 +269,7 @@ export function Stage({
             multiNode={(runtime.member_hosts ?? []).length > 0}
             variant={status === "failed" ? "trouble" : "normal"}
             onOpenCockpit={() => onOpenCockpit(headHost?.host.id ?? "")}
+            headOnBox={workingHead}
           />
         )}
       </div>

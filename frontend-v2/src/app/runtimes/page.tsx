@@ -42,6 +42,7 @@ import { FleetStage } from "./stage/FleetStage";
 import { CloudUsage } from "./CloudUsage";
 import { RuntimeDetailPanel } from "./RuntimeDetailPanel";
 import { MODELS_TAB_EVENT, openModelsTab, type ModelsTab } from "./modelsTab";
+import { HeadOrphanRuns } from "@/components/heads/HeadOccupancy";
 import { fetchWithCache, loadCached } from "./queryCache";
 
 // ── Active Downloads Panel ────────────────────────────────────────────────────
@@ -952,6 +953,8 @@ export default function RuntimesPage() {
                     onOpen={openPanel}
                   />
                 </div>
+
+                <HeadOrphanRuns />
 
                 {unassignedRuntimes.length > 0 && (
                   <section>
