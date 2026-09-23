@@ -8,7 +8,8 @@
     "start": "next start -p 3001",
     "lint": "next lint",
     "test": "vitest",
-    "test:run": "vitest run"
+    "test:run": "vitest run",
+    "probe": "node scripts/probe/probe.mjs"
   },
   "dependencies": {
     "@livekit/components-react": "^2.9.21",

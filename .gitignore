@@ -119,3 +119,7 @@ docker/docker-compose.agents.yml
 # And its sidecars: the renderer writes .tmp/.bak, the update migration writes
 # .pre-oss-split (scripts/migrate-agents-yml.sh). All carry the same fleet.
 docker/docker-compose.agents.yml.*
+
+# UI probe output (docs/ui-probe.md) — default is outside the repo, this catches runs pointed inside it
+ui-probe-out/
+frontend-v2/ui-probe-out/
