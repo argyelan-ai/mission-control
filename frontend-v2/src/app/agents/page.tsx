@@ -7,7 +7,7 @@ import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import { useLocale, useTranslations } from "next-intl";
 import {
-  Plus, X, Loader2, Bot, Users, RotateCcw, Settings, BarChart3,
+  Plus, X, Loader2, Bot, Users, RotateCcw, Settings,
   Layout, ChevronDown, Archive, MoreVertical, Terminal,
 } from "lucide-react";
 import { api } from "@/lib/api";
@@ -548,9 +548,6 @@ function AgentActionsSheet({
           </Link>
           <Link href={`/agents/${agent.id}?tab=config`} className={itemCls} style={{ color: "var(--color-text-secondary)" }}>
             <Settings size={15} /> {t("config")}
-          </Link>
-          <Link href={`/agents/${agent.id}?tab=analytics`} className={itemCls} style={{ color: "var(--color-text-secondary)" }}>
-            <BarChart3 size={15} /> {t("analytics")}
           </Link>
           <button
             onClick={() => { onClose(); onReset(agent); }}

@@ -227,7 +227,6 @@
     "actionsFor": "Actions: {name}",
     "openDetails": "Open details",
     "config": "Config",
-    "analytics": "Analytics",
     "sessionReset": "Session Reset",
     "archive": "Archive",
     "sessionResetDone": "{name} session reset",

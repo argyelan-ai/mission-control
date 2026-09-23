@@ -3,7 +3,8 @@
 import { useState, useCallback, useMemo, useEffect, Fragment } from "react";
 import { useLocale, useTranslations } from "next-intl";
 import AppShell from "@/components/layout/AppShell";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { agentTabFromParam, agentTabHref, type AgentTab } from "../agentTabParam";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import ReactMarkdown from "react-markdown";
@@ -48,7 +49,7 @@ import {
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type Tab = "overview" | "skills" | "config" | "memory" | "local-memory" | "mcp";
+type Tab = AgentTab;
 
 // labelKey pattern (docs/i18n.md): resolved via t() at the render site.
 const TABS: { key: Tab; labelKey: string; icon: typeof Activity }[] = [
@@ -1798,7 +1799,21 @@ export default function AgentDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const qc = useQueryClient();
-  const [activeTab, setActiveTab] = useState<Tab>("overview");
+  // The tab lives in the URL (?tab=config) so menu deep links, reloads and
+  // shared links open the right tab; unknown values fall back to Overview.
+  const searchParams = useSearchParams();
+  const tabParam = agentTabFromParam(searchParams.get("tab"));
+  const [activeTab, setActiveTabState] = useState<Tab>(tabParam);
+  useEffect(() => {
+    setActiveTabState(tabParam);
+  }, [tabParam]);
+  const setActiveTab = useCallback(
+    (tab: Tab) => {
+      setActiveTabState(tab);
+      router.replace(agentTabHref(id, tab), { scroll: false });
+    },
+    [id, router],
+  );
   const [confirmRecreate, setConfirmRecreate] = useState(false);
   const [confirmRestartProcess, setConfirmRestartProcess] = useState(false);
 
