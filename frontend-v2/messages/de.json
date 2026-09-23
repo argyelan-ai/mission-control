@@ -190,7 +190,8 @@
     "tabE2E": "E2E",
     "tabTranscript": "Transcript",
     "tabTimeline": "Timeline",
-    "tabHistory": "Verlauf"
+    "tabHistory": "Verlauf",
+    "deliverableImageUnavailable": "Bild nicht verfügbar"
   },
   "agents": {
     "title": "Agenten",
