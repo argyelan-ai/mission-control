@@ -882,7 +882,9 @@ export interface SystemStatus {
 
 export interface SystemMetrics {
   tasks: { total: number; active: number };
-  agents: { total: number; online: number };
+  /** total = non-archived roster; active/paused split by operational_mode
+   *  (same as /agents). online counts heartbeat status, paused included. */
+  agents: { total: number; online: number; active?: number; paused?: number };
   approvals: { pending: number };
 }
 
