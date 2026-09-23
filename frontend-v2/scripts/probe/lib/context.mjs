@@ -10,7 +10,7 @@ export const newWriteCounter = () => ({ blocked: 0, passed: 0, websocketsRefused
  *  - service workers are blocked (they could bypass routing),
  *  - an independent listener counts writes that *finished* — must stay 0.
  */
-export async function createLockedContext(browser, width, token, writes) {
+export async function createLockedContext(browser, width, token, writes, base) {
   const mobile = width <= 500;
   const ctx = await browser.newContext({
     viewport: { width, height: mobile ? 844 : 900 },
@@ -46,19 +46,31 @@ export async function createLockedContext(browser, width, token, writes) {
     p.opener().then((o) => (o ? p.close() : null)).catch(() => {});
   });
   if (token) {
-    await ctx.addInitScript((t) => {
-      try {
-        localStorage.setItem("mc_auth_token", t);
-      } catch {}
-    }, token);
+    if (!base) throw new Error("createLockedContext: base URL required when a token is given");
+    await ctx.addInitScript(tokenInitScript, { token, origin: new URL(base).origin });
   }
   return ctx;
 }
 
 /**
+ * Runs in every frame before the page's own scripts. The token goes into
+ * local storage only on the app's own origin — never into a foreign iframe or
+ * popup, whose scripts could read it. `_loc` / `_ls` exist for unit tests.
+ */
+export function tokenInitScript(arg) {
+  try {
+    const loc = arg._loc || location;
+    if (loc.origin !== arg.origin) return;
+    (arg._ls || localStorage).setItem("mc_auth_token", arg.token);
+  } catch {}
+}
+
+/**
  * Self-test run before every probe: a page in a locked context POSTs to a
- * path that does not exist. The lock must block it (blocked = 1, passed = 0).
- * Even if the lock were broken the request would only hit a 404 — no data.
+ * path that does not exist and opens a WebSocket. The lock must block the
+ * POST (blocked = 1, passed = 0) and refuse the socket (refused = 1, close code
+ * 1008 from the probe, never from the server). Even if the lock were broken
+ * both would only hit a path that does not exist — no data.
  */
 export async function lockSelfTest(browser, base) {
   const w = newWriteCounter();
@@ -74,9 +86,30 @@ export async function lockSelfTest(browser, base) {
         return "rejected";
       }
     }, base + "/api/v1/__ui_probe_lock_selftest__");
+    const wsOutcome = await page.evaluate(
+      (u) =>
+        new Promise((done) => {
+          let ws;
+          try {
+            ws = new WebSocket(u);
+          } catch {
+            return done("throw");
+          }
+          const t = setTimeout(() => done("timeout"), 5000);
+          ws.addEventListener("close", (e) => {
+            clearTimeout(t);
+            done(`closed:${e.code}`);
+          });
+        }),
+      base.replace(/^http/, "ws") + "/api/v1/__ui_probe_lock_selftest__/ws",
+    );
     await page.waitForTimeout(300);
-    const ok = w.blocked === 1 && w.passed === 0 && outcome === "rejected";
-    return { ok, passed: w.passed, reason: ok ? "" : `blocked=${w.blocked} passed=${w.passed} fetch=${outcome}` };
+    const ok = w.blocked === 1 && w.passed === 0 && outcome === "rejected" && w.websocketsRefused === 1 && wsOutcome === "closed:1008";
+    return {
+      ok,
+      passed: w.passed,
+      reason: ok ? "" : `blocked=${w.blocked} passed=${w.passed} fetch=${outcome} wsRefused=${w.websocketsRefused} ws=${wsOutcome}`,
+    };
   } finally {
     await ctx.close();
   }

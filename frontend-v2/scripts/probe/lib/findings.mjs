@@ -56,6 +56,18 @@ export function isEmptyPage(mainTextLength, mainInteractive, min = 20) {
 }
 
 /**
+ * A short visible text that says "still loading" (EN/DE), e.g. "Loading
+ * runtimes...", "Timeline wird geladen…", "lädt…". Sentences that merely
+ * mention loading do not count: the text must be short and end in an ellipsis.
+ * The source is shared with the browser side (browser.mjs pageBusy).
+ */
+export const LOADING_TEXT_RE = /^(?:(?:loading|lade|lädt|laden)\b.{0,40}|.{0,40}\b(?:wird geladen|lädt|loading))\s*(?:…|\.\.\.)$/iu;
+export function isLoadingText(s) {
+  const t = String(s || "").trim().replace(/\s+/g, " ");
+  return t.length <= 60 && LOADING_TEXT_RE.test(t);
+}
+
+/**
  * Console noise caused by the probe's own write lock (aborted requests,
  * refused WebSockets) — not a finding about the UI.
  */
@@ -103,6 +115,14 @@ export function evaluateState(state, opts = {}) {
   }
   const ovf = horizontalOverflow(state.scrollWidth, vp.w);
   if (ovf) f.push({ type: "h-scroll", severity: "high", message: `page scrolls sideways by ${ovf}px`, detail: { offenders: state.overflowOffenders || [] } });
+  if (state.stillLoading && state.stillLoading.length) {
+    const what = `"${state.stillLoading.slice(0, 3).join('", "')}"`;
+    f.push(
+      opts.isBase
+        ? { type: "loading", severity: "high", message: `page still loading after the wait (${what}) — its controls were probed incomplete`, detail: {} }
+        : { type: "loading", severity: "medium", message: `opened view still loading after the wait (${what})`, detail: {} },
+    );
+  }
   if (opts.isBase) {
     const small = smallTargets(state.targets || [], vp.w);
     if (small.length) {
@@ -112,7 +132,11 @@ export function evaluateState(state, opts = {}) {
       f.push({ type: "empty", severity: "medium", message: "page shows no content after load", detail: {} });
     }
   }
-  if (state.escClosed === false) {
+  // Phones have no hardware Escape key: only judge Escape on wider views.
+  const escRelevant = vp.w > MOBILE_MAX_WIDTH;
+  if (!escRelevant) {
+    // recorded in probe.json (escClosed), not reported
+  } else if (state.escClosed === false) {
     f.push({ type: "esc", severity: "medium", message: "floating layer does not close on Escape", detail: {} });
   } else if (state.escClosed === "synthetic-only") {
     // Seen live: the Escape handler exists, but a re-render during the real
@@ -133,7 +157,11 @@ export function rankFindings(list) {
     .map(({ x }) => x);
 }
 
-/** Collapse identical findings (same type + message) across states, keep a count. */
+/**
+ * Collapse identical findings (same type + message) across states, keep a
+ * count and every distinct opener that led there (so a repeat is never
+ * attributed to the first opener only).
+ */
 export function dedupeFindings(list) {
   const map = new Map();
   for (const x of list) {
@@ -142,8 +170,9 @@ export function dedupeFindings(list) {
     if (hit) {
       hit.count += 1;
       if (x.shot && hit.shots.length < 5) hit.shots.push(x.shot);
+      if (x.opener && !hit.openers.includes(x.opener)) hit.openers.push(x.opener);
     } else {
-      map.set(k, { ...x, count: 1, shots: x.shot ? [x.shot] : [] });
+      map.set(k, { ...x, count: 1, shots: x.shot ? [x.shot] : [], openers: x.opener ? [x.opener] : [] });
     }
   }
   return [...map.values()];

@@ -38,7 +38,7 @@ export const DANGER_STEMS = [
   "transfer", "handoff", "hand off", "escalate", "close task", "done", "finish",
   "launch", "boost", "bind", "unbind", "attach", "detach", "join", "leave",
   "record", "call", "mic", "microphone", "voice", "copy token", "reveal",
-  "test connection",
+  "test connection", "test", "analyze", "analyse", "re-probe", "reprobe", "refetch",
   "download",
   // German
   "löschen", "loeschen", "entfernen", "stoppen", "anhalten", "abbrechen", "verwerfen",
@@ -49,7 +49,7 @@ export const DANGER_STEMS = [
   "deaktivieren", "aktivieren", "installieren", "ausführen", "ausfuehren",
   "hochladen", "bestätigen", "bestaetigen", "erledigt", "fertig", "pausieren",
   "fortsetzen", "wecken", "leeren", "verschieben", "anheften", "loslösen",
-  "herunterladen", "aufnehmen", "anrufen",
+  "herunterladen", "aufnehmen", "anrufen", "testen", "analysieren",
 ];
 
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -79,7 +79,11 @@ export function dangerousLabel(label) {
 export function clickVerdict(c) {
   if (c.disabled) return { ok: false, reason: "disabled" };
   if ((c.type || "").toLowerCase() === "submit") return { ok: false, reason: "guarded:submit" };
-  if (["switch", "checkbox", "radio", "menuitem", "option"].includes((c.role || "").toLowerCase())) {
+  const role = (c.role || "").toLowerCase();
+  // A menu item that opens a submenu is an opener, not an action — but its
+  // label still goes through the never-click list below.
+  const submenu = role === "menuitem" && c.haspopup && c.haspopup !== "false";
+  if (!submenu && ["switch", "checkbox", "radio", "menuitem", "option"].includes(role)) {
     return { ok: false, reason: `guarded:role=${c.role}` };
   }
   // Tabs only switch the visible view, they cannot act on data. Exempting
@@ -98,4 +102,28 @@ export function redactUrl(url) {
   } catch {
     return String(url).split(/[?#]/)[0];
   }
+}
+
+/**
+ * Scrub credentials out of free text (console messages, page errors) before it
+ * is stored in probe.json / report.md: `token=` query values, bearer headers,
+ * JWT-shaped strings and every literal secret passed in.
+ */
+export function redactSecrets(text, secrets = []) {
+  let out = String(text ?? "");
+  for (const s of secrets) {
+    if (typeof s === "string" && s.length >= 4) out = out.split(s).join("***");
+  }
+  return out
+    .replace(/([?&](?:access_)?token=)[^&\s'"#)]+/gi, "$1***")
+    .replace(/(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, "$1***")
+    .replace(/eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*/g, "***");
+}
+
+/**
+ * Buttons that only close or step back out of what was just opened. Clicking
+ * them on the second level would tear down the parent for nothing.
+ */
+export function isCloser(label) {
+  return /^(close|close dialog|close panel|schliessen|schließen|back|zurück|zurueck|×|✕|x)$/iu.test(String(label || "").trim());
 }

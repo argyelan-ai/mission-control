@@ -70,10 +70,11 @@ describe("evaluateState", () => {
       escClosed: false,
       layers: [layer({ text: "", interactive: 0, clippedBy: "div.card", clippedText: 1, targets: [{ label: "x", w: 20, h: 20 }] })],
     });
-    expect(f.map((x) => x.type).sort()).toEqual(["clipped", "clipped-text", "empty", "esc", "h-scroll", "small-target"]);
+    // esc is not judged at phone width (no hardware key), see review.test.mjs
+    expect(f.map((x) => x.type).sort()).toEqual(["clipped", "clipped-text", "empty", "h-scroll", "small-target"]);
   });
   it("tells a real Escape failure from a synthetic-only close", () => {
-    const base = { viewport: vp, scrollWidth: 390, layers: [] };
+    const base = { viewport: { w: 1440, h: 900 }, scrollWidth: 1440, layers: [] };
     expect(evaluateState({ ...base, escClosed: false })[0]).toMatchObject({ type: "esc", severity: "medium" });
     expect(evaluateState({ ...base, escClosed: "synthetic-only" })[0]).toMatchObject({ type: "esc", severity: "medium" });
     expect(evaluateState({ ...base, escClosed: "synthetic-only" })[0].message).toMatch(/synthetic/);

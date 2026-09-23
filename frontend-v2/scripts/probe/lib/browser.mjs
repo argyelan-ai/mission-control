@@ -2,11 +2,13 @@
 // passed to page.evaluate(), so it must be self-contained (no outer scope).
 
 /**
- * Tag every visible opener candidate with data-probe-c and describe it.
- * `within` (optional CSS selector) limits collection to one subtree.
+ * Tag every visible opener candidate with data-probe-c (or `attr`) and
+ * describe it. `within` (optional CSS selector) limits collection to one
+ * subtree; `onlyNew` keeps only elements that appeared after markSeen() —
+ * the controls a first click revealed (second level).
  */
 export function collectCandidates(args) {
-  const { within, ariaOnly } = args || {};
+  const { within, ariaOnly, onlyNew } = args || {};
   const SEL = ariaOnly
     ? '[role=tab], [aria-expanded="false"], summary'
     : 'button, select, [role=combobox], [aria-haspopup]:not([aria-haspopup="false"]), [aria-expanded="false"], summary, [role=tab]';
@@ -15,15 +17,15 @@ export function collectCandidates(args) {
   const vis = (e) => {
     const r = e.getBoundingClientRect();
     const s = getComputedStyle(e);
-    return r.width > 0 && r.height > 0 && s.visibility !== "hidden" && s.display !== "none" && +s.opacity !== 0;
+    return r.width > 0 && r.height > 0 && s.visibility !== "hidden" && s.display !== "none" && !(s.opacity !== "" && +s.opacity === 0);
   };
   const labelOf = (e) =>
     (e.getAttribute("aria-label") || e.innerText || e.getAttribute("title") || e.getAttribute("placeholder") || e.getAttribute("name") || "")
       .trim()
       .replace(/\s+/g, " ")
       .slice(0, 60);
-  const els = [...new Set(root.querySelectorAll(SEL))].filter(vis);
-  const attr = ariaOnly ? "data-probe-n" : "data-probe-c";
+  const els = [...new Set(root.querySelectorAll(SEL))].filter(vis).filter((e) => !onlyNew || !e.hasAttribute("data-probe-seen"));
+  const attr = (args && args.attr) || (ariaOnly ? "data-probe-n" : "data-probe-c");
   document.querySelectorAll(`[${attr}]`).forEach((e) => e.removeAttribute(attr));
   const seenKeys = {};
   return els.map((e, i) => {
@@ -48,7 +50,10 @@ export function collectCandidates(args) {
       ordinal: seenKeys[key] - 1,
       tag,
       role,
-      type: e.getAttribute("type"),
+      // A <button> without a type attribute inside a form IS a submit button
+      // (the property says so, the attribute does not). Outside a form it
+      // cannot submit anything, whatever its default type.
+      type: tag === "button" ? (e.form ? e.type : e.getAttribute("type") || "button") : e.getAttribute("type"),
       label,
       expanded: e.getAttribute("aria-expanded"),
       haspopup: e.getAttribute("aria-haspopup"),
@@ -60,9 +65,36 @@ export function collectCandidates(args) {
   });
 }
 
-/** Mark every element currently in the DOM as "seen" (baseline for a click). */
-export function markSeen() {
-  document.querySelectorAll("*").forEach((e) => e.setAttribute("data-probe-seen", "1"));
+/**
+ * Is the page still loading? Visible short "Loading…" texts (pattern passed in
+ * from findings.mjs LOADING_TEXT_RE) and visible [aria-busy=true] regions.
+ */
+export function pageBusy(args) {
+  const re = new RegExp(args.pattern, args.flags || "iu");
+  const vis = (e) => {
+    const r = e.getBoundingClientRect();
+    const s = getComputedStyle(e);
+    return r.width > 0 && r.height > 0 && s.visibility !== "hidden" && s.display !== "none";
+  };
+  const hints = [];
+  const walker = document.createTreeWalker(document.querySelector("main") || document.body, NodeFilter.SHOW_TEXT);
+  for (let n = walker.nextNode(); n && hints.length < 5; n = walker.nextNode()) {
+    const t = (n.parentElement && n.parentElement.innerText ? n.parentElement.innerText : n.textContent || "").trim().replace(/\s+/g, " ");
+    if (t.length <= 60 && re.test(t) && n.parentElement && vis(n.parentElement) && !hints.includes(t)) hints.push(t);
+  }
+  const busy = [...document.querySelectorAll('[aria-busy="true"]')].filter(vis).length;
+  if (busy) hints.push(`aria-busy x${busy}`);
+  return hints;
+}
+
+/**
+ * Mark every element currently in the DOM as "seen" (baseline for a click).
+ * The second level uses its own attribute so the first level's baseline —
+ * needed later to check whether Escape closed the parent — stays intact.
+ */
+export function markSeen(attr) {
+  const a = attr || "data-probe-seen";
+  document.querySelectorAll("*").forEach((e) => e.setAttribute(a, "1"));
 }
 
 /** Read option labels of a native <select> (cannot be screenshotted open). */
@@ -78,12 +110,13 @@ export function readSelect(sel) {
  */
 export function measureState(args) {
   const { opener, base } = args || {};
+  const SEEN = (args && args.seenAttr) || "data-probe-seen";
   const vw = window.innerWidth;
   const vh = window.innerHeight;
   const vis = (e) => {
     const r = e.getBoundingClientRect();
     const s = getComputedStyle(e);
-    return r.width > 0 && r.height > 0 && s.visibility !== "hidden" && s.display !== "none" && +s.opacity !== 0 && e.getAttribute("data-state") !== "closed";
+    return r.width > 0 && r.height > 0 && s.visibility !== "hidden" && s.display !== "none" && !(s.opacity !== "" && +s.opacity === 0) && e.getAttribute("data-state") !== "closed";
   };
   const labelOf = (e) =>
     (e.getAttribute("aria-label") || e.innerText || e.getAttribute("title") || e.getAttribute("placeholder") || "")
@@ -110,8 +143,8 @@ export function measureState(args) {
   // New layer roots: unseen, visible, big enough, parent was seen.
   const layers = [];
   if (!base) {
-    const roots = [...document.querySelectorAll("body *:not([data-probe-seen])")].filter((e) => {
-      if (!e.parentElement || !e.parentElement.hasAttribute("data-probe-seen") && e.parentElement !== document.body) return false;
+    const roots = [...document.querySelectorAll(`body *:not([${SEEN}])`)].filter((e) => {
+      if (!e.parentElement || !e.parentElement.hasAttribute(SEEN) && e.parentElement !== document.body) return false;
       if (!vis(e)) return false;
       const r = e.getBoundingClientRect();
       return r.width * r.height >= 400;
@@ -144,7 +177,7 @@ export function measureState(args) {
           if (!inViewport) { samples.push({ inViewport, inside: false }); continue; }
           const t = document.elementFromPoint(x, y);
           // inside = the topmost element is new (part of any new layer), not old page content
-          const inside = !!t && (!t.hasAttribute("data-probe-seen") || e.contains(t));
+          const inside = !!t && (!t.hasAttribute(SEEN) || e.contains(t));
           if (!inside && t) hitBy.push(describe(t));
           samples.push({ inViewport, inside });
         }
@@ -226,20 +259,4 @@ export function measureState(args) {
     openerSelected: op ? op.getAttribute("aria-selected") : null,
     url: location.pathname + location.search,
   };
-}
-
-/** Count still-visible new layer roots (used after Escape to see if it closed). */
-export function countNewLayers() {
-  const vis = (e) => {
-    const r = e.getBoundingClientRect();
-    const s = getComputedStyle(e);
-    return r.width > 0 && r.height > 0 && s.visibility !== "hidden" && s.display !== "none" && +s.opacity !== 0;
-  };
-  return [...document.querySelectorAll("body *:not([data-probe-seen])")].filter((e) => {
-    const p = e.parentElement;
-    if (!p || (!p.hasAttribute("data-probe-seen") && p !== document.body)) return false;
-    if (!vis(e)) return false;
-    const r = e.getBoundingClientRect();
-    return r.width * r.height >= 400;
-  }).length;
 }

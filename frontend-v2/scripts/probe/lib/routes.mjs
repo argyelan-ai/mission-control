@@ -11,7 +11,16 @@ import { join, relative, sep } from "node:path";
 export const DYNAMIC_SOURCES = {
   "/agents/[id]": { endpoint: "/api/v1/agents", idField: "id" },
   "/schedule/[jobId]": { endpoint: "/api/v1/schedule/jobs", idField: "id" },
+  // Task detail is a panel on /tasks, opened by a card without a button role.
+  // Tasks live per board: first board, then its first task.
+  "/tasks?task=[id]": { chain: [{ endpoint: "/api/v1/boards" }, { endpoint: "/api/v1/boards/{id}/tasks" }] },
 };
+
+/**
+ * Views that are not their own page.tsx but a panel reached by a deep link
+ * (the big ones a probe must not miss). Resolved like dynamic routes.
+ */
+export const EXTRA_VIEWS = [{ pattern: "/tasks?task=[id]", dynamic: true }];
 
 /** Convert a page.tsx path (relative to the app dir) into a route pattern. */
 export function pageFileToRoute(relPath) {
@@ -66,7 +75,7 @@ export function filterRoutes(routes, filters) {
     filters.some((f) => {
       if (f.endsWith("/*")) {
         const base = f.slice(0, -2);
-        return r.pattern === base || r.pattern.startsWith(base + "/");
+        return r.pattern === base || r.pattern.startsWith(base + "/") || r.pattern.startsWith(base + "?");
       }
       return r.pattern === f;
     }),
@@ -109,15 +118,26 @@ export async function resolveRoutes(routes, getJson, sources = DYNAMIC_SOURCES) 
       skipped.push({ pattern: r.pattern, reason: "no id source configured (DYNAMIC_SOURCES)" });
       continue;
     }
+    // A source is one GET or a chain of GETs, each step's "{id}" filled with
+    // the previous step's first id (board -> task).
+    const steps = src.chain || [src];
     let id = null;
-    try {
-      id = firstId(await getJson(src.endpoint), src.idField);
-    } catch (e) {
-      skipped.push({ pattern: r.pattern, reason: `GET ${src.endpoint} failed: ${String(e?.message || e).slice(0, 120)}` });
-      continue;
+    let failed = null;
+    for (const step of steps) {
+      const endpoint = step.endpoint.replace("{id}", encodeURIComponent(id ?? ""));
+      try {
+        id = firstId(await getJson(endpoint), step.idField || "id");
+      } catch (e) {
+        failed = `GET ${endpoint} failed: ${String(e?.message || e).slice(0, 120)}`;
+        break;
+      }
+      if (!id) {
+        failed = `GET ${endpoint} returned no items`;
+        break;
+      }
     }
-    if (!id) {
-      skipped.push({ pattern: r.pattern, reason: `GET ${src.endpoint} returned no items` });
+    if (failed) {
+      skipped.push({ pattern: r.pattern, reason: failed });
       continue;
     }
     const path = r.pattern.replace(/\[[^\]]+\]/, encodeURIComponent(id));

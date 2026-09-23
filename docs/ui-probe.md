@@ -19,6 +19,23 @@ export MC_PROBE_TOKEN=...            # an admin token for the target instance
 npm run probe -- --base http://localhost --out ../../ui-probe-runs/before-wave-2
 ```
 
+**Getting a token.** Any valid admin access token works — the one the UI
+keeps in local storage (`mc_auth_token`, browser dev tools) or a short-lived
+one signed inside the backend container:
+
+```bash
+docker compose exec -T backend python -c "
+from datetime import timedelta
+from app.auth import create_access_token
+print(create_access_token('<admin user id>', 'admin', <token_version>, timedelta(hours=3)))"
+```
+
+(`id` and `token_version` come from the `users` table.) Signing a token does
+not write anything. Keep it in the environment variable only.
+
+A full run (all pages, both widths) takes a while — roughly an hour on a
+populated instance. Use `--route` and `--width` for quick checks.
+
 | Argument | Default | Meaning |
 |---|---|---|
 | `--base URL` | `http://localhost` | The running UI (same origin as the API). |
@@ -26,6 +43,9 @@ npm run probe -- --base http://localhost --out ../../ui-probe-runs/before-wave-2
 | `--route /tasks` | all pages | Repeatable or comma-separated. `/agents/*` also takes `/agents/[id]`. |
 | `--width 390` | `1440` and `390` | Repeatable or comma-separated. Widths ≤ 500 run as a touch phone. |
 | `--max-per-page N` | no limit | Cap candidates per page (quick smoke runs). |
+| `--nested-max N` | `20` | Second-level openers per opened state (`0` = first level only). |
+| `--load-timeout MS` | `20000` | How long to wait for "Loading…" texts / `aria-busy` to disappear after a page load (clicks: up to 10 s). |
+| `--all-repeats` | off | Probe every copy of a repeated component instead of the first and the last. |
 | `--headed` | off | Show the browser. |
 
 The token is read from `MC_PROBE_TOKEN` only, placed into the browser's local
@@ -39,16 +59,34 @@ Exit codes: `0` done, `2` a write request got through (must never happen),
 
 1. **Pages** come from `src/app/**/page.tsx`, so a new page is probed without
    editing a list. Dynamic routes are filled with the first real id from a GET
-   endpoint (`DYNAMIC_SOURCES` in `scripts/probe/lib/routes.mjs`); a dynamic
-   route without a source is skipped and listed in the report.
-2. **Candidates** per page and width: `button`, `select`, `[role=combobox]`,
-   `[aria-haspopup]`, `[aria-expanded=false]`, `summary`, `[role=tab]`.
-   Sidebar and header controls are probed on the first page of each width only.
-3. Each candidate is **clicked, measured, screenshotted and closed** again
-   (Escape; then a tap on the scrim; else the page is reloaded). A native
-   `select` is not clicked; its options are read instead. Inside a freshly
-   opened dialog, its tabs and accordions are opened too ("nested").
-4. **Findings** per open state:
+   endpoint (`DYNAMIC_SOURCES` in `scripts/probe/lib/routes.mjs`, one GET or a
+   chain such as board → task); a dynamic route without a source is skipped
+   and listed in the report. Big panels that are reached by a deep link rather
+   than a page of their own are listed in `EXTRA_VIEWS` — today the task
+   detail (`/tasks?task=<id>`).
+2. **Wait until loaded.** After every load and every click the probe waits
+   until no short "Loading…" / "… wird geladen…" text and no `aria-busy`
+   region is visible. A page that is still loading after `--load-timeout` is
+   reported (`loading`, high) because its controls were probed incomplete.
+3. **Candidates** per page and width: `button`, `select`, `[role=combobox]`,
+   `[aria-haspopup]` (including menu items that open a submenu),
+   `[aria-expanded=false]`, `summary`, `[role=tab]`. Sidebar and header
+   controls are probed on the first page of each width only. **Repeated
+   components** (the same menu on every row, "Actions: A", "Actions: B", …)
+   are sampled: the first and the last are probed, the rest is counted as
+   "sampled out" (`--all-repeats` turns this off).
+4. Each candidate is **clicked, measured, screenshotted and closed** again. A
+   floating layer is first checked for Escape (then a tap on the scrim, else
+   a reload); a tab is switched back, a toggle clicked again. A native
+   `select` is not clicked; its options are read and counted as "read", not
+   "opened".
+5. **Second level.** Every opener that the first click revealed — dropdowns
+   and selects inside a settings tab, accordions in a section, tabs and wizard
+   steps in a dialog, rows in a detail panel — is clicked, measured and
+   screenshotted as well (`--nested-max` per state). "Close"/"Back" buttons
+   are skipped there; if a nested click tears the parent down anyway, the
+   parent is re-opened from a fresh load and the pass continues.
+6. **Findings** per open state:
 
 | Type | Severity | Meaning |
 |---|---|---|
@@ -56,25 +94,38 @@ Exit codes: `0` done, `2` a write request got through (must never happen),
 | `covered` | high | `elementFromPoint` probe: 2+ of 5 points on the layer hit old page content — the layer sits behind something. |
 | `clipped` | high | The layer is cut off by an ancestor with `overflow: hidden`. |
 | `h-scroll` | high | The page scrolls sideways. |
-| `esc` | medium / low | Escape does not close a floating layer (low: only a synthetic Escape closes it — check by hand). |
+| `loading` | high / medium | The page (high) or an opened view (medium) still shows "Loading…" after the wait. |
+| `esc` | medium | Escape does not close a floating layer, or only a synthetic Escape event does (the handler exists but misses a real key press — users are affected). Desktop widths only: phones have no Escape key. |
 | `empty` | medium | A layer opened with no text, media or controls, or a page shows nothing. |
 | `clipped-text` | medium | Text cut off without an ellipsis. |
 | `console-error` | medium | Browser console error in that state (errors caused by the probe's own lock are filtered). |
 | `small-target` | low | Controls under 44 px, phone widths only. |
 
-5. **Output** in `--out`: `report.md` (opened X of Y per page, findings with
+7. **Output** in `--out`: `report.md` (opened X of Y per page, findings with
    screenshot paths, guarded controls, blocked writes), `probe.json` (all raw
    data) and `<width>/<page>/NNN-<control>.png`.
 
-"Opened" counts clicks that produced a new visible state. "No change" controls
-did nothing visible (often plain actions). `withoutAriaRole` in the JSON counts
+"Opened" counts clicks that produced a new visible state (a layer, an
+expanded section, a switched tab). "Nested" counts second-level states.
+"No change" controls did nothing visible (often plain actions). A finding
+that repeats lists every opener that led to it.
+
+### What it does not reach (yet)
+
+- Third level and beyond (e.g. wizard step 3 of 5 is only reached if step 2's
+  "Next" was a second-level opener; controls inside that step are not probed).
+- Hover-only tooltips and popovers.
+- Clickable cards and rows without a button role (`div`/`a` with `onClick`)
+  — they are invisible to a role-based probe and to screen readers alike. The
+  task detail is covered through its deep link; other such cards should get a
+  proper role, which then makes them probe-able automatically. `withoutAriaRole` in the JSON counts
 custom openers without `aria-expanded` / `role=tab` — a number that should only
 go down.
 
-## Read-only by construction
+## Write lock
 
 The probe runs against live instances, so it must not be able to change
-anything:
+anything through the UI:
 
 - Every request that is not `GET`, `HEAD` or `OPTIONS` is aborted in the
   browser and counted. WebSockets are refused entirely, service workers are
@@ -91,6 +142,22 @@ anything:
   "New"/"Add"/"Create" buttons are allowed because they open dialogs; the
   dialog's own confirm button is never clicked.
 - Browser `confirm()`/`alert()` dialogs are dismissed; popups are closed.
+- The token is written into local storage on the app's own origin only,
+  never into a foreign iframe or popup. Console messages and page errors are
+  scrubbed (`token=…`, `Bearer …`, JWT-shaped strings, the token itself)
+  before they reach `probe.json` / `report.md`.
+- The self-test also opens a WebSocket and checks that the probe refused it.
+
+**Remaining risk: GET requests with side effects.** The lock works on HTTP
+methods, not on the database. A few read endpoints update derived data as a
+side effect (for example `GET /api/v1/groups/{id}/rounds` refreshes usage
+numbers and commits). The normal UI does exactly the same when someone looks
+at that page, so the probe causes nothing a visitor would not — but "no
+write requests" is not the same as "no database write".
+
+**Privacy of the output.** Screenshots, `probe.json` and `report.md` show the
+instance's real data (agent names, task titles, project names). Keep `--out`
+outside the repository and never attach run output to a PR or an issue.
 
 Note that some pages send harmless read-like POSTs (for example a view
 tracker); they are blocked and counted as well, so a non-zero "blocked" number
