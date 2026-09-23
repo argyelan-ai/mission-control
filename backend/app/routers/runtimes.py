@@ -137,18 +137,24 @@ CLOUD_RUNTIME_TYPES: frozenset[str] = frozenset({"cloud", "grok", "kimi"})
 def _agent_key_fit(runtime: Runtime, provider) -> dict:
     """Which per-agent API key fits this runtime — for the agent config page.
 
-    Mirrors harness_compat.resolve_provider_credentials: an agent's bound
-    secret is only ever used as OPENAI_API_KEY for an openai-protocol runtime.
-    Every other protocol signs in on its own (anthropic OAuth, grok/kimi CLI
-    logins), so an agent key would be ignored there.
+    Mirrors harness_compat.resolve_provider_credentials: every protocol
+    except anthropic gets the agent's bound secret as OPENAI_API_KEY
+    (openai, and unknown/None as the legacy default). Deliberately narrower
+    for grok/kimi/voice: the key is technically set there, but those
+    harnesses sign in through their own CLI login / OAuth files and never
+    read it, so the page says "signs in on its own" instead of offering keys.
     """
     from app.services.harness_compat import runtime_protocol
 
-    used = runtime_protocol(runtime) == "openai"
+    used = runtime_protocol(runtime) not in _OWN_SIGN_IN_PROTOCOLS
     return {
         "agent_key_used": used,
         "agent_key_provider": (provider.secret_provider if (used and provider) else None),
     }
+
+
+#: Protocols whose harness authenticates on its own (never reads an agent key).
+_OWN_SIGN_IN_PROTOCOLS: frozenset[str] = frozenset({"anthropic", "grok", "kimi", "voice"})
 
 
 def _runtime_locality(runtime: Runtime, host: ResolvedHost | None) -> str:
@@ -610,9 +616,9 @@ async def list_runtimes(
             # None = no recognised vendor (local vLLM, LM Studio, unsloth).
             "provider_label": provider.label if provider else None,
             # Which agent API key fits this runtime (agent config page). The
-            # agent's key is only ever sent as OPENAI_API_KEY for an
-            # openai-protocol runtime (harness_compat.resolve_provider_
-            # credentials); anthropic/grok/kimi rows sign in on their own.
+            # agent's key is sent as OPENAI_API_KEY for every protocol but
+            # anthropic (harness_compat.resolve_provider_credentials);
+            # anthropic/grok/kimi/voice rows sign in on their own.
             # agent_key_provider = the secrets.provider whose keys fit, None
             # when no provider key applies (e.g. a local box).
             **_agent_key_fit(rt, provider),

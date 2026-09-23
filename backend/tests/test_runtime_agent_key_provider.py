@@ -2,8 +2,8 @@
 
 The agent config page offered every stored secret (other agents' MC tokens,
 chat/social keys, …) as the agent's provider key. The key an agent binds is
-only ever sent as OPENAI_API_KEY for an openai-protocol runtime
-(harness_compat.resolve_provider_credentials). The server says which secret
+sent as OPENAI_API_KEY for every protocol but anthropic
+(harness_compat.resolve_provider_credentials); grok/kimi harnesses ignore it. The server says which secret
 provider fits, so the page does not re-derive vendor rules client-side:
 
 * ``agent_key_used``: False when the runtime signs in on its own (anthropic
@@ -31,6 +31,14 @@ async def runtimes(async_session):
                 endpoint="https://api.anthropic.com", ui_order=2, enabled=True),
         Runtime(slug="akp-local", display_name="Local box", runtime_type="vllm_docker",
                 endpoint="http://192.0.2.10:8000/v1", ui_order=3, enabled=True),
+        Runtime(slug="akp-grok", display_name="Grok", runtime_type="grok",
+                endpoint="https://api.x.ai/v1", ui_order=4, enabled=True),
+        Runtime(slug="akp-kimi", display_name="Kimi", runtime_type="kimi",
+                endpoint="https://api.moonshot.ai/v1", ui_order=5, enabled=True),
+        # Unknown protocol: resolve_provider_credentials still sends the
+        # agent key as OPENAI_API_KEY (legacy default).
+        Runtime(slug="akp-unknown", display_name="Other", runtime_type="custom_thing",
+                endpoint="http://192.0.2.11:9000", ui_order=6, enabled=True),
     ]
     for r in rows:
         async_session.add(r)
@@ -56,3 +64,11 @@ async def test_runtime_rows_carry_agent_key_fit(runtimes, auth_client):
     local = by_slug["akp-local"]
     assert local["agent_key_used"] is True
     assert local["agent_key_provider"] is None
+
+    for slug in ("akp-grok", "akp-kimi"):
+        assert by_slug[slug]["agent_key_used"] is False, slug
+        assert by_slug[slug]["agent_key_provider"] is None, slug
+
+    unknown = by_slug["akp-unknown"]
+    assert unknown["agent_key_used"] is True
+    assert unknown["agent_key_provider"] is None

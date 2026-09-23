@@ -14,16 +14,31 @@ import type { Agent } from "@/lib/types";
  * Per-agent provider key (PATCH /agents/{id} { secret_id }, applied via
  * sync-config?restart=true).
  *
- * The bound key is only ever sent as OPENAI_API_KEY to an openai-protocol
- * runtime (backend harness_compat.resolve_provider_credentials). Which secret
- * provider fits comes from the server on each runtime row
- * (`agent_key_used` / `agent_key_provider`) — only those keys are offered,
- * never other agents' MC tokens or unrelated service keys.
+ * The bound key is sent as OPENAI_API_KEY for every runtime that does not
+ * sign in on its own (backend harness_compat.resolve_provider_credentials).
+ * Which secret provider fits comes from the server on each runtime row
+ * (`agent_key_used` / `agent_key_provider`); for an unknown vendor any LLM
+ * provider key is offered — never other agents' MC tokens or unrelated
+ * service keys.
  *
  * The select never shows a value that is not saved: the saved key always has
  * its own option (marked when it does not fit the runtime), so the browser
  * cannot fall back to displaying the first entry.
  */
+/** `secrets.provider` values of keys that authenticate an LLM endpoint. */
+const LLM_KEY_PROVIDERS = new Set(["openai", "ollama", "google", "openrouter"]);
+
+/**
+ * A key that can sensibly be sent as OPENAI_API_KEY: a known LLM provider
+ * key, or a custom key the operator stored without a provider (e.g. for a
+ * self-hosted server). Never MC agent tokens, OAuth tokens, chat, social,
+ * git or embeddings keys.
+ */
+function isLlmProviderKey(s: { provider: string | null; key: string }): boolean {
+  if (s.provider) return LLM_KEY_PROVIDERS.has(s.provider);
+  return !s.key.startsWith("mc_agent_token");
+}
+
 export function AgentApiKeySection({ agent, agentId }: { agent: Agent; agentId: string }) {
   const t = useTranslations("agents.detail");
   const qc = useQueryClient();
@@ -32,7 +47,7 @@ export function AgentApiKeySection({ agent, agentId }: { agent: Agent; agentId: 
     queryKey: ["secrets"],
     queryFn: () => api.secrets.list(),
   });
-  const { data: runtimesData } = useQuery({
+  const { data: runtimesData, isError: runtimesError } = useQuery({
     queryKey: ["runtimes"],
     queryFn: () => api.runtimes.list(),
   });
@@ -49,18 +64,31 @@ export function AgentApiKeySection({ agent, agentId }: { agent: Agent; agentId: 
   const runtime = runtimesData?.runtimes.find(
     (r) => r.id === agent.runtime_id || r.slug === agent.runtime_id,
   );
+  // Which keys to offer:
+  // - known vendor → only that vendor's keys;
+  // - runtime signs in on its own → none;
+  // - openai-protocol runtime of an unknown vendor (local vLLM with auth,
+  //   OpenRouter, a custom gateway), no runtime bound, or a runtime missing
+  //   from the list → any LLM provider key. The backend sends the agent key
+  //   in all these cases (it wins over the runtime's own key).
+  const runtimeKnown = !!runtime;
   const keyProvider = runtime?.agent_key_used ? runtime.agent_key_provider ?? null : null;
-  const fitting = keyProvider ? (secrets ?? []).filter((s) => s.provider === keyProvider) : [];
+  const anyLlmKey = runtimeKnown ? runtime.agent_key_used !== false && !keyProvider : !!runtimesData || runtimesError || !agent.runtime_id;
+  const fitting = (secrets ?? []).filter((s) =>
+    keyProvider ? s.provider === keyProvider : anyLlmKey ? isLlmProviderKey(s) : false,
+  );
 
   const hint = !runtimesData
-    ? null
+    ? runtimesError
+      ? t("apiKeyHintNoRuntime")
+      : null
     : !runtime
       ? t("apiKeyHintNoRuntime")
       : runtime.agent_key_used === false
         ? t("apiKeyHintOwnSignIn")
         : keyProvider
           ? t("apiKeyHintProvider", { provider: keyProvider })
-          : t("apiKeyHintNoProviderKey");
+          : t("apiKeyHintAnyLlmKey");
 
   // Options that must exist so the select can never display a value that is
   // not the stored/selected one.

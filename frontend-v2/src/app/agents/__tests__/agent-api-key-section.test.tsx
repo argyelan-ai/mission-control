@@ -27,6 +27,9 @@ const SECRETS = [
   secret("s-ollama", "ollama_api_key", "ollama", "Cloud model key"),
   secret("s-agent", "mc_agent_token_beta", "mc-agent", "Agent Token: beta"),
   secret("s-chat", "slack_bot_token", "slack", "slack_bot_token"),
+  secret("s-openai", "openai_api_key", "openai", "OpenAI key"),
+  secret("s-custom", "gateway_key", null, "Self-hosted gateway key"),
+  secret("s-oauth", "claude_code_oauth_token", "anthropic-claude-code", "Claude OAuth token"),
 ];
 
 const rt = (over: Partial<Runtime>): Runtime =>
@@ -82,5 +85,38 @@ describe("AgentApiKeySection", () => {
     renderWithQuery(<AgentApiKeySection agent={agent({ secret_id: "s-ollama" })} agentId="agent-1" />);
     const select = (await screen.findByRole("combobox", { name: "API key (provider)" })) as HTMLSelectElement;
     expect(select.value).toBe("s-ollama");
+  });
+
+  it("openai-protocol runtime of an unknown vendor: offers every LLM provider key, still no tokens/chat keys", async () => {
+    vi.spyOn(api.runtimes, "list").mockResolvedValue({
+      runtimes: [rt({ runtime_type: "vllm_docker", agent_key_used: true, agent_key_provider: null })],
+    } as never);
+    renderWithQuery(<AgentApiKeySection agent={agent()} agentId="agent-1" />);
+    const select = await screen.findByRole("combobox", { name: "API key (provider)" });
+    await waitFor(() => expect(optionLabels(select).some((l) => l.includes("OpenAI key"))).toBe(true));
+    const labels = optionLabels(select);
+    expect(labels.some((l) => l.includes("Cloud model key"))).toBe(true);
+    expect(labels.some((l) => l.includes("Self-hosted gateway key"))).toBe(true);
+    expect(labels.some((l) => l.includes("Agent Token"))).toBe(false);
+    expect(labels.some((l) => l.includes("slack"))).toBe(false);
+    expect(labels.some((l) => l.includes("Claude OAuth"))).toBe(false);
+    expect(screen.getByText(/takes precedence over the runtime/)).toBeInTheDocument();
+  });
+
+  it("a saved key on such a runtime is shown as a normal choice, not as 'does not fit'", async () => {
+    vi.spyOn(api.runtimes, "list").mockResolvedValue({
+      runtimes: [rt({ runtime_type: "vllm_docker", agent_key_used: true, agent_key_provider: null })],
+    } as never);
+    renderWithQuery(<AgentApiKeySection agent={agent({ secret_id: "s-ollama" })} agentId="agent-1" />);
+    const select = (await screen.findByRole("combobox", { name: "API key (provider)" })) as HTMLSelectElement;
+    await waitFor(() => expect(select.selectedOptions[0]?.textContent).toBe("Cloud model key"));
+  });
+
+  it("no runtime bound: still offers LLM provider keys (the backend sends the agent key then)", async () => {
+    vi.spyOn(api.runtimes, "list").mockResolvedValue({ runtimes: [] } as never);
+    renderWithQuery(<AgentApiKeySection agent={agent({ runtime_id: null } as Partial<Agent>)} agentId="agent-1" />);
+    const select = await screen.findByRole("combobox", { name: "API key (provider)" });
+    await waitFor(() => expect(optionLabels(select).some((l) => l.includes("OpenAI key"))).toBe(true));
+    expect(optionLabels(select).some((l) => l.includes("Agent Token"))).toBe(false);
   });
 });
