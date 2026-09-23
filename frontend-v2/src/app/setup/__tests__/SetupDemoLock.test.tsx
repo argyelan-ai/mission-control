@@ -57,6 +57,8 @@ describe("Setup wizard — demo data only on a fresh install", () => {
     await goToStep4();
     const btn = await screen.findByRole("button", { name: /Create demo board/ });
     expect(btn).toBeDisabled();
+    // Locked must also LOOK locked, not just carry a hint underneath.
+    expect(btn.style.opacity).toBe("0.5");
     expect(screen.getByText(/already has boards or agents/)).toBeInTheDocument();
     await userEvent.click(btn);
     expect(create).not.toHaveBeenCalled();
@@ -75,7 +77,9 @@ describe("Setup wizard — demo data only on a fresh install", () => {
     vi.spyOn(api.boards, "list").mockResolvedValue([] as never);
     vi.spyOn(api.agents, "list").mockResolvedValue([] as never);
     await goToStep4();
-    expect(await screen.findByRole("button", { name: /Create demo board/ })).toBeEnabled();
+    const btn = await screen.findByRole("button", { name: /Create demo board/ });
+    expect(btn).toBeEnabled();
+    expect(btn.style.opacity).not.toBe("0.5");
     expect(screen.queryByText(/already has boards or agents/)).not.toBeInTheDocument();
   });
 });

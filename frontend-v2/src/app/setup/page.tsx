@@ -410,6 +410,8 @@ export default function SetupWizardPage() {
                   border: `1px solid ${seeded ? C.online : C.border}`,
                   color: seeded ? C.online : "var(--color-text-primary)",
                   background: "var(--color-bg-surface)",
+                  // Locked (existing data, or still checking) must look locked.
+                  opacity: !seeded && hasExistingData !== false ? 0.5 : undefined,
                 }}
               >
                 {seeding && <Loader2 className="animate-spin" size={14} />}
