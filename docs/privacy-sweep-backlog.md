@@ -84,7 +84,6 @@ use `scripts/privacy-scan.py --update-baseline`.
 
 <!-- privacy-baseline:begin -->
 ```
-PRODUCT.md: freecode
 backend/alembic/versions/0069_requires_git_workflow.py: davinci, shakespeare
 backend/alembic/versions/0078_link_sparky_runtime.py: sparky
 backend/alembic/versions/0079_link_cloud_agents.py: sparky

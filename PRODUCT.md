@@ -6,15 +6,19 @@ product
 
 ## Users
 
-Der Operator — Admin seiner selbst-gehosteten AI-Agent-Flotte. IT-Profi (Power BI / SQL / KI-Automatisierung), kein Frontend-Entwickler. Nutzt Mission Control abends und am Wochenende, meist in dunkler Umgebung, oft remote via Tailscale vom Notebook. Lange Monitoring-Sessions, unterbrochen von kurzen, schnellen Eingriffen: Task dispatchen, Agent prüfen, Approval erteilen.
+Der Operator — betreibt Mission Control selbst-gehostet für die eigene Arbeit. IT-Profi, kein Frontend-Entwickler. Nutzt MC abends und am Wochenende, oft remote vom Notebook oder Handy. Er führt: Richtung, Freigaben, Prioritäten — er will kein Feuer löschen.
 
-Sekundär: die Agents selbst (Boss, Rex, FreeCode, …) erscheinen als Subjekte im UI — ihre Zustände, Pipelines und Terminals sind der Hauptinhalt fast jeder Seite.
+Sekundär: Agenten und kurzlebige Arbeits-Sessions („Köpfe") erscheinen als Subjekte im UI — ihr Zustand, ihre Ergebnisse und Laufakten. Die dauerhafte Agenten-Flotte ruht seit ADR-085 und bleibt für bestehende Installationen verfügbar.
 
 ## Product Purpose
 
-Self-hosted Command Center für eine Multi-Runtime-AI-Agent-Flotte (Docker cli-bridge + Host launchd) — die „Jarvis"-Vision. Tasks erstellen und dispatchen, Agents und Runtimes überwachen, Schedules, Memory/Knowledge, Workflows und Deployments verwalten.
+Selbst-gehostete Basis für ein autonomes Team, das der Operator führt statt babysittet. Seit [ADR-085](docs/decisions/085-head-per-job.md) heisst „Team": ein geschriebenes Verfahren plus ein kurzlebiger Kopf pro Auftrag (eine Coding-CLI-Session im eigenen Worktree, die plant, prüft, einen PR öffnet, eine Laufakte schreibt und endet) — keine Dauer-Flotte mit festen Rollen.
 
-Erfolg heisst: der Operator erfasst den Systemzustand in Sekunden (Was läuft? Was klemmt? Wer ist blockiert?) und kann ohne Umwege eingreifen. Das UI ist ein Arbeitsinstrument für täglichen Dauereinsatz, kein Showcase.
+MC wird dafür bewusst klein. Es behält, was nur der Operator hat: Regeln und Verfahren (als Dateien), den Vault (Markdown/Git), die Steuerung der eigenen GPU-Boxen, Kennzahlen (Verbrauch, Digest, Laufakten) und den Kern (API, DB, Auth, Scheduler). Aufträge starten, Fragen beantworten und Übersicht kommen von der Coding-CLI; konfigurieren geht vor bauen.
+
+Erfolg heisst: Aufträge laufen ohne den Operator am Tisch durch, und wenn er hinschaut, sieht er in Sekunden, was auf ihn wartet, was herauskam und was es gekostet hat. Das UI ist ein Arbeitsinstrument, kein Showcase.
+
+Regeln: [docs/PRINCIPLES.md](docs/PRINCIPLES.md) · Stand und nächste Schritte: [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Brand Personality
 

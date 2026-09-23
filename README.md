@@ -427,6 +427,8 @@ the last 10. Install a daily 03:00 schedule with `make backup-schedule`
 
 ## Roadmap
 
+Direction and build rules: [docs/PRINCIPLES.md](docs/PRINCIPLES.md) · stage-by-stage status: [docs/ROADMAP.md](docs/ROADMAP.md) ([ADR-085](docs/decisions/085-head-per-job.md)).
+
 The near-term focus is making the fleet as easy to install as the core:
 
 - **Umbrel & CasaOS store listings** — manifests are ready, submissions in
