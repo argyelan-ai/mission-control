@@ -1,6 +1,6 @@
 # ADR-072 — ChatAdapter: ein Kontrakt für den Team-Chat, Absender-Identität als erstklassiges Konzept
 
-**Status:** Accepted
+**Status:** Accepted · Inbound routing partially superseded by [ADR-085](085-head-per-job.md) (2026-09-22) — channels become output-only; the outbound contract stays
 **Datum:** 2026-07-28
 **Scope:** Backend/Services · Backend/Config · Backend/Tests
 

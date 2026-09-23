@@ -1,6 +1,6 @@
 # ADR-005 — Board-Lead-First Dispatch
 
-**Status:** Accepted
+**Status:** Accepted · Partially superseded by [ADR-085](085-head-per-job.md) (2026-09-22) — new work no longer routes through the lead agent to fixed-role workers; routing stays for existing cards
 **Datum:** 2026-02
 **Scope:** Backend/Dispatch
 

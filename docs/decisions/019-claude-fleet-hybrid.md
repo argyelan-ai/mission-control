@@ -1,9 +1,9 @@
 # ADR-019 — Claude Fleet (Hybrid)
 
-**Status:** Accepted
+**Status:** Accepted · Partially superseded by [ADR-085](085-head-per-job.md) (2026-09-22) — the persistent fleet is paused (quiet mode), no longer the default worker pool
 **Datum:** 2026-04-20
 **Scope:** Infra/Runtime · LLM Auth
-**Superseded:** —
+**Superseded:** — (partially: [ADR-085](085-head-per-job.md))
 **Supersedes partially:** ADR-003 (Triple-Runtime-Architektur) — aktualisiert die Runtime-Zuordnung nach Binary und Modell
 
 ## Kontext
