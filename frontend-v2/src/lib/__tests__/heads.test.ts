@@ -156,3 +156,22 @@ describe("small helpers", () => {
     expect(prNumberFromUrl(null)).toBeNull();
   });
 });
+
+
+describe("restart mode (review: continue needs an existing branch)", () => {
+  it("runs that ended before the worktree existed restart fresh", async () => {
+    const { canContinueRun, defaultRestartMode } = await import("../heads");
+    for (const reason of ["not_picked_up", "gh_identity_missing", "gh_identity_unsafe", "sandbox_required", "prepare_failed", "spec_invalid", "box_busy", "previous_run_still_active"]) {
+      expect(canContinueRun({ reason, started_at: "2026-09-23T10:00:00Z" })).toBe(false);
+      expect(defaultRestartMode({ reason, started_at: "2026-09-23T10:00:00Z" })).toBe("fresh");
+    }
+    expect(canContinueRun({ reason: "stopped", started_at: null })).toBe(false);
+  });
+
+  it("runs with work on the branch continue", async () => {
+    const { defaultRestartMode } = await import("../heads");
+    for (const reason of [null, "stopped", "time_limit", "no_pr", "exit_1", "process_vanished"]) {
+      expect(defaultRestartMode({ reason, started_at: "2026-09-23T10:00:00Z" })).toBe("continue");
+    }
+  });
+});

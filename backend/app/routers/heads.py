@@ -155,6 +155,22 @@ class StartBody(BaseModel):
     harness: str = Field(max_length=32)
     runtime_slug: str = Field(max_length=64)
     answer: str | None = Field(default=None, max_length=8000)
+    #: "Run as head" in New task created this inbox card only for a head. If
+    #: the start fails, hold the card so the fleet never picks it up later.
+    hold_on_failure: bool = False
+
+
+HOLD_REASON_START_FAILED = "head start failed"
+
+
+async def _hold_after_failed_start(session: AsyncSession, task_id: uuid.UUID) -> None:
+    task = await session.get(Task, task_id)
+    if task is None or task.status != "inbox" or task.run_control is not None:
+        return
+    task.run_control = "manual_hold"
+    task.hold_reason = HOLD_REASON_START_FAILED
+    session.add(task)
+    await session.commit()
 
 
 class RestartBody(BaseModel):
@@ -179,6 +195,16 @@ async def start_head(
     _enabled()
     now = time.time()
     task, repo = await _task_and_repo(session, body.task_id)
+    try:
+        return await _start(session, body, task, repo, user, now)
+    except HTTPException:
+        if body.hold_on_failure:
+            await session.rollback()
+            await _hold_after_failed_start(session, body.task_id)
+        raise
+
+
+async def _start(session: AsyncSession, body: StartBody, task: Task, repo: Repo, user, now: float) -> dict:
     with _task_lock(str(task.id)):
         if _active_run_for_task(str(task.id), now) is not None:
             raise _err(409, "head_active")

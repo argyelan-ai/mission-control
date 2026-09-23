@@ -12,7 +12,7 @@
  *                                        [Cancel] [Restart]
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
@@ -20,7 +20,9 @@ import { notify } from "@/lib/notify";
 import { C } from "@/lib/colors";
 import { ResponsiveModal } from "@/components/shared/ResponsiveModal";
 import {
+  canContinueRun,
   chooseRestartPair,
+  defaultRestartMode,
   headErrorKey,
   pairKey,
   pairsForRestart,
@@ -44,7 +46,16 @@ export function HeadRestartDialog({
   const t = useTranslations("heads");
   const qc = useQueryClient();
   const [pickedKey, setPickedKey] = useState<string | null>(null);
-  const [mode, setMode] = useState<"continue" | "fresh">("continue");
+  // A run that ended before its branch existed cannot continue (mc-head
+  // would try `git worktree add` on a missing branch) → fresh, continue off.
+  const continueAllowed = canContinueRun(run);
+  const [mode, setMode] = useState<"continue" | "fresh">(() => defaultRestartMode(run));
+  // The dialog stays mounted under the card while the run moves on — pick
+  // the mode from the run as it is when the dialog opens.
+  useEffect(() => {
+    if (open) setMode(defaultRestartMode(run));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, run.run_id, run.reason, run.started_at]);
   const [answer, setAnswer] = useState("");
   const [error, setError] = useState<string | null>(null);
 
@@ -85,9 +96,9 @@ export function HeadRestartDialog({
 
   const canSubmit = !!selected && selected.startable && !restart.isPending;
 
-  const radio = (value: "continue" | "fresh", label: string, hint: string) => (
+  const radio = (value: "continue" | "fresh", label: string, hint: string, disabled = false) => (
     <label
-      className="flex items-start gap-2.5 px-3 py-2 min-h-[44px] rounded-md cursor-pointer"
+      className={`flex items-start gap-2.5 px-3 py-2 min-h-[44px] rounded-md ${disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer"}`}
       style={{ background: mode === value ? C.accentSubtle : "transparent", border: `1px solid ${mode === value ? C.borderAccent : C.border}` }}
     >
       <input
@@ -95,6 +106,7 @@ export function HeadRestartDialog({
         name={`head-restart-mode-${run.run_id}`}
         value={value}
         checked={mode === value}
+        disabled={disabled}
         onChange={() => setMode(value)}
         className="mt-0.5 accent-[var(--color-accent)]"
         data-testid={`head-restart-mode-${value}`}
@@ -128,7 +140,7 @@ export function HeadRestartDialog({
           )}
           <fieldset className="space-y-2">
             <legend className="sr-only">{t("restart.title")}</legend>
-            {radio("continue", t("restart.continue"), t("restart.continueHint"))}
+            {radio("continue", t("restart.continue"), continueAllowed ? t("restart.continueHint") : t("restart.noBranchYet"), !continueAllowed)}
             {radio("fresh", t("restart.fresh"), t("restart.freshHint"))}
           </fieldset>
           {run.state === "needs_you" && (

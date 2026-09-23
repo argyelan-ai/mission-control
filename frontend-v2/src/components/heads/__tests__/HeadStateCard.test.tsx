@@ -45,7 +45,14 @@ describe("HeadStateCard — one main action per state (B5)", () => {
     expect(screen.queryByTestId("head-details")).not.toBeInTheDocument();
     expect(screen.queryByTestId("head-main-restart")).not.toBeInTheDocument();
 
+    // Stop asks first (review: no 30-minute run lost to a mistap)
     await userEvent.click(screen.getByTestId("head-main-stop"));
+    expect(stop).not.toHaveBeenCalled();
+    expect(screen.getByTestId("head-main-stop-confirm")).toHaveTextContent("Stop the head? The branch stays.");
+    await userEvent.click(screen.getByTestId("head-main-stop-confirm-no"));
+    expect(stop).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByTestId("head-main-stop"));
+    await userEvent.click(screen.getByTestId("head-main-stop-confirm-yes"));
     await waitFor(() => expect(stop).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111"));
   });
 
@@ -141,6 +148,30 @@ describe("Restart with … (B6)", () => {
     await waitFor(() => expect(submit).toBeDisabled());
     expect(submit).toHaveTextContent("Restarting…");
     resolve({ run_id: "r2", state: "starting", restarted_from: "r" });
+  });
+
+  it.each(["gh_identity_missing", "sandbox_required", "not_picked_up", "prepare_failed", "box_busy"])(
+    "a run that ended before its branch existed (%s) restarts fresh; continue is off",
+    async (reason) => {
+      const restart = vi.spyOn(api.heads, "restart").mockResolvedValue({ run_id: "r2", state: "starting", restarted_from: "r" });
+      renderCard(mkRun({ state: "failed", reason, exited_at: "2026-09-23T10:00:06Z" }));
+      await userEvent.click(screen.getByTestId("head-main-restart"));
+      const dialog = await screen.findByTestId("head-restart-dialog");
+      await within(dialog).findByTestId("head-pair-trigger");
+      expect(within(dialog).getByTestId("head-restart-mode-fresh")).toBeChecked();
+      expect(within(dialog).getByTestId("head-restart-mode-continue")).toBeDisabled();
+      expect(dialog).toHaveTextContent("No work on this branch yet");
+      await userEvent.click(within(dialog).getByTestId("head-restart-submit"));
+      await waitFor(() => expect(restart).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111", expect.objectContaining({ mode: "fresh" })));
+    },
+  );
+
+  it("a run with work on its branch still defaults to continue", async () => {
+    renderCard(mkRun({ state: "failed", reason: "time_limit", exited_at: "2026-09-23T12:00:00Z" }));
+    await userEvent.click(screen.getByTestId("head-main-restart"));
+    const dialog = await screen.findByTestId("head-restart-dialog");
+    expect(within(dialog).getByTestId("head-restart-mode-continue")).toBeChecked();
+    expect(within(dialog).getByTestId("head-restart-mode-continue")).toBeEnabled();
   });
 
   it("the run's own busy box counts as startable for its restart, other busy boxes not", () => {

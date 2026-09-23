@@ -81,6 +81,8 @@ export interface HeadStartBody {
   harness: string;
   runtime_slug: string;
   answer?: string;
+  /** New task created the card only for this head: hold it if the start fails. */
+  hold_on_failure?: boolean;
 }
 
 export interface HeadRestartBody {
@@ -180,6 +182,7 @@ const REASON_CODES = new Set([
   "engine_not_ready",
   "box_busy",
   "quota_limit",
+  "runtime_not_offered",
 ]);
 
 export function pairReasonKey(code: string | null | undefined): string {
@@ -205,6 +208,7 @@ const FAIL_REASONS = new Set([
   "spec_invalid",
   "wrapper_error",
   "gh_identity_missing",
+  "gh_identity_unsafe",
   "sandbox_required",
 ]);
 
@@ -250,7 +254,36 @@ const ERROR_CODES = new Set([
   "run_record_missing",
   "head_on_box",
   "engine_busy",
+  "head_not_active",
 ]);
+
+// ── Restart mode ─────────────────────────────────────────────────────────────
+
+/** Runs that ended before mc-head created the worktree/branch: a "continue"
+ *  restart would run `git worktree add` on a branch that does not exist. */
+const NO_WORKTREE_REASONS = new Set([
+  "not_picked_up",
+  "gh_identity_missing",
+  "gh_identity_unsafe",
+  "sandbox_required",
+  "prepare_failed",
+  "spec_invalid",
+  "box_busy",
+  "previous_run_still_active",
+]);
+
+/** Whether "Continue on this branch" can work for this run. */
+export function canContinueRun(run: Pick<HeadRun, "reason" | "started_at">): boolean {
+  if (run.reason && NO_WORKTREE_REASONS.has(run.reason)) return false;
+  // stopped before the host picked it up — nothing was ever prepared
+  if (run.reason === "stopped" && !run.started_at) return false;
+  return true;
+}
+
+/** Pre-selected restart mode: continue where there is work, else fresh. */
+export function defaultRestartMode(run: Pick<HeadRun, "reason" | "started_at">): "continue" | "fresh" {
+  return canContinueRun(run) ? "continue" : "fresh";
+}
 
 /** i18n key under `heads.errors` for any error thrown by a heads call. */
 export function headErrorKey(err: unknown): string {

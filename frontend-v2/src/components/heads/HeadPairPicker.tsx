@@ -16,7 +16,7 @@
  * never clips inside the modal's scroll area or the mobile bottom sheet.
  */
 
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { ChevronDown } from "lucide-react";
@@ -57,6 +57,45 @@ export function HeadPairPicker({
   const [showMore, setShowMore] = useState(false);
   const listId = useId();
   const labelId = useId();
+  const triggerId = useId();
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+
+  const close = () => {
+    setOpen(false);
+    triggerRef.current?.focus();
+  };
+
+  // Keyboard: Esc closes only the list (never the surrounding modal),
+  // ↑/↓ move between the startable options, Home/End jump.
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (!open) {
+      if (e.key === "ArrowDown" && e.target === triggerRef.current) {
+        e.preventDefault();
+        setOpen(true);
+      }
+      return;
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      close();
+      return;
+    }
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
+    const options = Array.from(
+      listRef.current?.querySelectorAll<HTMLButtonElement>('[role="option"]:not([disabled])') ?? [],
+    );
+    if (options.length === 0) return;
+    e.preventDefault();
+    const at = options.indexOf(document.activeElement as HTMLButtonElement);
+    const next =
+      e.key === "Home" ? 0
+      : e.key === "End" ? options.length - 1
+      : e.key === "ArrowDown" ? (at + 1) % options.length
+      : at <= 0 ? options.length - 1 : at - 1;
+    options[next].focus();
+  };
 
   const selectedKey = selected ? pairKey(selected) : null;
   const { primary, more } = splitPairs(pairs, selectedKey);
@@ -93,7 +132,7 @@ export function HeadPairPicker({
           onClick={() => {
             if (!p.startable) return;
             onSelect(p);
-            setOpen(false);
+            close();
           }}
           className="w-full flex flex-col sm:flex-row sm:items-center gap-0.5 sm:gap-3 px-3 py-2 min-h-[44px] text-left rounded-md cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)] disabled:cursor-not-allowed disabled:hover:bg-transparent"
           style={{
@@ -122,7 +161,7 @@ export function HeadPairPicker({
     : "";
 
   return (
-    <div className="space-y-1.5" data-testid="head-pair-picker">
+    <div className="space-y-1.5" data-testid="head-pair-picker" onKeyDown={onKeyDown}>
       <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-3">
         <span id={labelId} className="label-sys shrink-0 sm:w-[88px]">{t("pair")}</span>
         <button
@@ -131,8 +170,10 @@ export function HeadPairPicker({
           aria-haspopup="listbox"
           aria-expanded={open}
           aria-controls={listId}
-          aria-labelledby={labelId}
-          aria-label={t("pairPickerAria")}
+          id={triggerId}
+          ref={triggerRef}
+          // name = "Pair" + the current choice (select-button pattern)
+          aria-labelledby={`${labelId} ${triggerId}`}
           data-testid="head-pair-trigger"
           onClick={() => setOpen((o) => !o)}
           className="flex-1 min-w-0 flex items-center gap-2 px-3 min-h-[44px] sm:min-h-[36px] rounded-md text-left cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
@@ -153,7 +194,7 @@ export function HeadPairPicker({
 
       {open && (
         <div className="sm:ml-[100px] rounded-lg p-1" style={{ background: C.bgSurface, border: `1px solid ${C.border}` }}>
-          <ul id={listId} role="listbox" aria-labelledby={labelId}>
+          <ul id={listId} role="listbox" aria-labelledby={labelId} ref={listRef}>
             {primary.map(row)}
             {showMore && more.map(row)}
           </ul>

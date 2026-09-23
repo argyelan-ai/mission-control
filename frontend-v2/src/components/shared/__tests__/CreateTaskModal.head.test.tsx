@@ -84,7 +84,9 @@ describe("CreateTaskModal — Run as head", () => {
 
     await userEvent.click(screen.getByTestId("run-as-head"));
 
-    await waitFor(() => expect(startSpy).toHaveBeenCalledWith({ task_id: "task-9", harness: "omp", runtime_slug: "glm-local" }));
+    await waitFor(() =>
+      expect(startSpy).toHaveBeenCalledWith({ task_id: "task-9", harness: "omp", runtime_slug: "glm-local", hold_on_failure: true }),
+    );
     expect(createSpy.mock.calls[0][1]).toMatchObject({ repo_id: "repo-1", defer_dispatch: true, status: "inbox" });
     expect(dispatchSpy).not.toHaveBeenCalled();
     await waitFor(() => expect(onOpen).toHaveBeenCalledWith("task-9"));
@@ -127,6 +129,26 @@ describe("CreateTaskModal — Run as head", () => {
     expect(within(screen.getByTestId("head-engine-down")).getByRole("link", { name: "Runtimes" })).toHaveAttribute("href", "/runtimes");
   });
 
+  it("Esc closes only the pair list, not the modal; arrows move between startable pairs", async () => {
+    vi.spyOn(api.heads, "pairs").mockResolvedValue({ pairs: [ompLocal, claudeLocal, ompCloud], default_pair: ompLocal });
+    renderModal();
+    await openAndFill();
+    const trigger = await screen.findByTestId("head-pair-trigger");
+    expect(trigger).toHaveAccessibleName(/Pair/);
+    expect(trigger).not.toHaveAttribute("aria-label");
+    await userEvent.click(trigger);
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+    await userEvent.keyboard("{ArrowDown}");
+    expect(screen.getByTestId(`head-pair-option-${pairKey(ompLocal)}`)).toHaveFocus();
+    await userEvent.keyboard("{ArrowDown}");
+    expect(screen.getByTestId(`head-pair-option-${pairKey(claudeLocal)}`)).toHaveFocus();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+    expect(screen.getByTestId("head-section")).toBeInTheDocument(); // modal still open
+    expect(screen.queryByText("Discard draft?")).not.toBeInTheDocument();
+  });
+
   it("ignores a remembered pair that is no longer startable", async () => {
     const claudeBusy = { ...claudeLocal, status: "blocked" as const, reason_code: "box_busy", startable: false, busy_by: null };
     try { window.localStorage.setItem("mc.heads.lastPair", pairKey(claudeLocal)); } catch { /* ignore */ }
@@ -164,6 +186,51 @@ describe("CreateTaskModal — Run as head", () => {
     await waitFor(() => expect(onOpen).toHaveBeenCalledWith("task-9"));
     expect(createSpy).toHaveBeenCalledTimes(1);
     expect(startSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("after a failed start nothing hands the card to the fleet: no 'Retry uploads', no dispatch", async () => {
+    vi.spyOn(api.heads, "pairs").mockResolvedValue({ pairs: [ompLocal], default_pair: ompLocal });
+    vi.spyOn(api.tasks, "create").mockResolvedValue({ id: "task-9" } as Task);
+    const dispatchSpy = vi.spyOn(api.tasks, "dispatchDeferred").mockResolvedValue(undefined as never);
+    vi.spyOn(api.heads, "start").mockRejectedValue(new Error(`API 409: ${JSON.stringify({ detail: { code: "engine_not_ready" } })}`));
+    const onOpen = renderModal();
+    await openAndFill();
+
+    await userEvent.click(await screen.findByTestId("run-as-head"));
+    expect(await screen.findByTestId("head-start-kept")).toHaveTextContent("stays on hold in Inbox");
+    const secondary = screen.getByTestId("create-task-only");
+    expect(secondary).toHaveTextContent("Keep task, close");
+    expect(secondary).not.toHaveTextContent("Retry uploads");
+    expect(screen.getByTestId("run-as-head")).toHaveTextContent("Start head again");
+    // Cmd/Ctrl+Enter (the "create" shortcut) must not dispatch either
+    await userEvent.keyboard("{Meta>}{Enter}{/Meta}");
+    await userEvent.click(secondary);
+    expect(dispatchSpy).not.toHaveBeenCalled();
+    expect(onOpen).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByTestId("head-section")).not.toBeInTheDocument()); // closed
+  });
+
+  it("with a staged file, a failed head start still never calls dispatchDeferred", async () => {
+    vi.spyOn(api.heads, "pairs").mockResolvedValue({ pairs: [ompLocal], default_pair: ompLocal });
+    vi.spyOn(api.tasks, "create").mockResolvedValue({ id: "task-9" } as Task);
+    vi.spyOn(api.references, "upload").mockResolvedValue({} as never);
+    const dispatchSpy = vi.spyOn(api.tasks, "dispatchDeferred").mockResolvedValue(undefined as never);
+    const startSpy = vi.spyOn(api.heads, "start")
+      .mockRejectedValueOnce(new Error(`API 503: ${JSON.stringify({ detail: { code: "spool_unavailable" } })}`))
+      .mockRejectedValueOnce(new Error(`API 503: ${JSON.stringify({ detail: { code: "spool_unavailable" } })}`));
+    renderModal();
+    await openAndFill();
+    const input = document.querySelector<HTMLInputElement>('input[type="file"]');
+    expect(input).not.toBeNull();
+    await userEvent.upload(input!, new File(["x"], "notes.txt", { type: "text/plain" }));
+
+    await userEvent.click(await screen.findByTestId("run-as-head"));
+    await screen.findByTestId("head-start-error");
+    // Cmd/Ctrl+Enter is the plain "create" shortcut — after a head start it
+    // must retry the head start, never dispatch the staged-file card
+    await userEvent.keyboard("{Meta>}{Enter}{/Meta}");
+    await waitFor(() => expect(startSpy).toHaveBeenCalledTimes(2));
+    expect(dispatchSpy).not.toHaveBeenCalled();
   });
 
   it("heads switched off (404 heads_disabled) → no head section, plain 'Create task'", async () => {

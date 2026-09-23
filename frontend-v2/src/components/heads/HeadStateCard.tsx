@@ -23,7 +23,7 @@
 import { useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ExternalLink, RotateCcw, ScrollText, Square, Terminal, FileText, Send } from "lucide-react";
+import { ChevronDown, ExternalLink, RotateCcw, ScrollText, Terminal, FileText, Send } from "lucide-react";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import { C, STATUS_TEXT } from "@/lib/colors";
@@ -41,6 +41,7 @@ import {
 } from "@/lib/heads";
 import type { HeadMainAction } from "@/lib/taskDetail/stateCard";
 import { HeadRestartDialog } from "./HeadRestartDialog";
+import { HeadStopButton } from "./HeadStopButton";
 
 const STATE_TONE: Record<HeadState, string> = {
   starting: C.info,
@@ -170,17 +171,12 @@ export function HeadStateCard({
   let main: React.ReactNode = null;
   if (mainAction === "stop") {
     main = (
-      <button
-        type="button"
-        onClick={() => stop.mutate()}
-        disabled={stop.isPending || stop.isSuccess}
-        data-testid="head-main-stop"
-        className={ghostBtn}
-        style={{ color: STATUS_TEXT.error, border: `1px solid ${C.borderActive}` }}
-      >
-        <Square size={12} aria-hidden />
-        {stop.isPending ? t("card.stopping") : stop.isSuccess ? t("card.stopRequested") : t("card.stop")}
-      </button>
+      <HeadStopButton
+        onStop={() => stop.mutate()}
+        pending={stop.isPending}
+        done={stop.isSuccess}
+        testId="head-main-stop"
+      />
     );
   } else if (mainAction === "open_pr" && run.pr_url) {
     main = (

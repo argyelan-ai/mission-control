@@ -340,3 +340,23 @@ async def test_hidden_duplicate_runtime_row_says_so(auth_client, heads_root, mak
     bad = await auth_client.post("/api/v1/heads", json={"task_id": str(task.id), "harness": "kimi",
                                                         "runtime_slug": "box-slot"})
     assert bad.json()["detail"]["reason_code"] == "harness_not_supported"
+
+
+async def test_failed_start_from_new_task_holds_the_card(auth_client, heads_root, make_board, make_task, _probes):
+    """Run as head in New task creates the card only for a head: when the
+    start fails, the card must not wait in inbox for the fleet."""
+    _probes["served"] = None  # engine down → 409 engine_not_ready
+    _, task = await _world(make_board, make_task)
+    body = {"task_id": str(task.id), "harness": "omp", "runtime_slug": "box-slot"}
+    plain = await auth_client.post("/api/v1/heads", json=body)
+    assert plain.status_code == 409
+    assert (await _task(task.id)).run_control is None  # without the flag: untouched
+    held = await auth_client.post("/api/v1/heads", json={**body, "hold_on_failure": True})
+    assert held.status_code == 409 and held.json()["detail"]["code"] == "engine_not_ready"
+    fresh = await _task(task.id)
+    assert (fresh.status, fresh.run_control, fresh.hold_reason) == ("inbox", "manual_hold", "head start failed")
+    # a later start still works on the held card
+    _probes["served"] = frozenset({"glm"})
+    ok = await auth_client.post("/api/v1/heads", json={**body, "hold_on_failure": True})
+    assert ok.status_code == 201, ok.text
+    assert (await _task(task.id)).status == "in_progress"

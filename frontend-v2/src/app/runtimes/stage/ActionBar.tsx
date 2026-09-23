@@ -13,7 +13,7 @@
  * Jeder andere Fehler zeigt nur den Satz aus humanApiError.
  */
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import { Settings } from "lucide-react";
@@ -88,7 +88,27 @@ export function ActionBar({
   const [conflict, setConflict] = useState<RuntimeStopConflict | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // A 409 head_on_box refusal shows the notice until the occupancy poll has
+  // seen that head AND seen the box free again (or an action succeeds) —
+  // not forever. The refusal also asks for a fresh occupancy right away.
+  const sawHeadAfterRefusal = useRef(false);
+  useEffect(() => {
+    if (!refusedBy) return;
+    if (headOnBox) {
+      sawHeadAfterRefusal.current = true;
+    } else if (sawHeadAfterRefusal.current) {
+      sawHeadAfterRefusal.current = false;
+      setRefusedBy(null);
+    }
+  }, [headOnBox, refusedBy]);
+  const refuse = (onBox: { task_id: string | null; title: string | null }) => {
+    sawHeadAfterRefusal.current = false;
+    setRefusedBy(onBox);
+    queryClient.invalidateQueries({ queryKey: ["heads", "occupancy"] });
+  };
+
   const invalidate = () => {
+    setRefusedBy(null);
     queryClient.invalidateQueries({ queryKey: ["runtimes"] });
     queryClient.invalidateQueries({ queryKey: ["runtimes", "live-status"] });
     queryClient.invalidateQueries({ queryKey: ["hosts"] });
@@ -111,7 +131,7 @@ export function ActionBar({
       }
       const onBox = parseHeadOnBox(err);
       if (onBox) {
-        setRefusedBy(onBox);
+        refuse(onBox);
         return;
       }
       setError(headConflictText(err) ?? t("stopFailed", { message: humanApiError(err) }));
@@ -124,7 +144,7 @@ export function ActionBar({
     onError: (err: Error) => {
       const onBox = parseHeadOnBox(err);
       if (onBox) {
-        setRefusedBy(onBox);
+        refuse(onBox);
         return;
       }
       setError(headConflictText(err) ?? t("restartFailed", { message: humanApiError(err) }));

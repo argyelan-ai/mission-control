@@ -127,6 +127,9 @@ export function CreateTaskModal({ activeBoardId, agents, onOpenTask = openTaskPa
   const [rememberedPair] = useState<string | null>(() => loadRememberedPair());
   const [pickedPairKey, setPickedPairKey] = useState<string | null>(null);
   const [headStartError, setHeadStartError] = useState<string | null>(null);
+  // The card was created by "Run as head": from then on nothing in this
+  // modal may hand it to the fleet (no dispatchDeferred, no "only create").
+  const [launchedAsHead, setLaunchedAsHead] = useState(false);
   const [loadingAs, setLoadingAs] = useState<"task" | "head" | null>(null);
   const selectedPair = pairsResp
     ? ((pickedPairKey ? pairsResp.pairs.find((p) => pairKey(p) === pickedPairKey) : undefined) ??
@@ -202,6 +205,7 @@ export function CreateTaskModal({ activeBoardId, agents, onOpenTask = openTaskPa
     setUploadedFileIds(new Set());
     setPickedPairKey(null);
     setHeadStartError(null);
+    setLaunchedAsHead(false);
     if (descriptionRef.current) descriptionRef.current.style.height = "auto";
     setOpen(false);
   }, []);
@@ -251,6 +255,8 @@ export function CreateTaskModal({ activeBoardId, agents, onOpenTask = openTaskPa
     if (confirmDiscard) return;
     if (loading || !activeBoardId) return;
     if (!isRetry && !payload.title.trim()) return;
+    // Once started as a head, every retry stays a head start.
+    if (launchedAsHead) asHead = true;
     if (asHead && (!canRunHead || !selectedPair)) return;
     setLoading(true);
     setLoadingAs(asHead ? "head" : "task");
@@ -308,6 +314,7 @@ export function CreateTaskModal({ activeBoardId, agents, onOpenTask = openTaskPa
         };
 
         const created = await api.tasks.create(activeBoardId, apiPayload);
+        if (asHead) setLaunchedAsHead(true);
         taskId = created.id;
         setCreatedTaskId(created.id);
         qc.invalidateQueries({ queryKey: ["tasks"] });
@@ -352,6 +359,8 @@ export function CreateTaskModal({ activeBoardId, agents, onOpenTask = openTaskPa
             task_id: taskId,
             harness: selectedPair.harness,
             runtime_slug: selectedPair.runtime_slug,
+            // the card exists only for this head — held if the start fails
+            hold_on_failure: true,
           });
         } catch (err) {
           setHeadStartError(tHeads("startFailed", { message: tHeads(headErrorKey(err)) }));
@@ -368,7 +377,7 @@ export function CreateTaskModal({ activeBoardId, agents, onOpenTask = openTaskPa
         return;
       }
 
-      if (hasStagedFiles) {
+      if (hasStagedFiles && !asHead) {
         try {
           await api.tasks.dispatchDeferred(activeBoardId, taskId);
         } catch (err) {
@@ -387,7 +396,7 @@ export function CreateTaskModal({ activeBoardId, agents, onOpenTask = openTaskPa
       setLoading(false);
       setLoadingAs(null);
     }
-  }, [activeBoardId, payload, loading, isStructured, qc, resetForm, stagedReferenceFiles, referenceNote, createdTaskId, uploadedFileIds, isRetry, confirmDiscard, canRunHead, selectedPair, t, tHeads, onOpenTask]);
+  }, [activeBoardId, payload, loading, isStructured, qc, resetForm, stagedReferenceFiles, referenceNote, createdTaskId, uploadedFileIds, isRetry, confirmDiscard, canRunHead, selectedPair, t, tHeads, onOpenTask, launchedAsHead]);
 
   // iOS-safe scroll lock (M4)
   useBodyScrollLock(open);
@@ -548,7 +557,10 @@ export function CreateTaskModal({ activeBoardId, agents, onOpenTask = openTaskPa
                     {headStartError && (
                       <p role="alert" className="mt-2 sm:ml-[100px] text-[11px] flex items-start gap-1.5" style={{ color: C.error }} data-testid="head-start-error">
                         <AlertTriangle size={12} className="shrink-0 mt-0.5" />
-                        {headStartError}
+                        <span>
+                          {headStartError}{" "}
+                          <span style={{ color: C.textSecondary }} data-testid="head-start-kept">{tHeads("keptHeld")}</span>
+                        </span>
                       </p>
                     )}
                   </section>
@@ -579,13 +591,13 @@ export function CreateTaskModal({ activeBoardId, agents, onOpenTask = openTaskPa
                     <>
                       <button
                         type="button"
-                        onClick={() => handleSubmit(false)}
+                        onClick={() => (launchedAsHead ? resetForm() : handleSubmit(false))}
                         disabled={(!isRetry && !payload.title.trim()) || loading}
                         data-testid="create-task-only"
                         className="inline-flex items-center justify-center min-h-[44px] sm:min-h-0 px-3.5 py-1.5 text-[11px] rounded-md cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)] disabled:opacity-30 disabled:cursor-not-allowed sm:border"
                         style={{ color: C.textSecondary, borderColor: C.border }}
                       >
-                        {loadingAs === "task" ? "..." : isRetry ? t("retryUploads") : tHeads("onlyCreate")}
+                        {launchedAsHead ? tHeads("keepTask") : loadingAs === "task" ? "..." : isRetry ? t("retryUploads") : tHeads("onlyCreate")}
                       </button>
                       <button
                         type="button"
@@ -597,7 +609,7 @@ export function CreateTaskModal({ activeBoardId, agents, onOpenTask = openTaskPa
                         style={{ background: C.accent, color: C.onAccent }}
                       >
                         <Play size={11} aria-hidden />
-                        {loadingAs === "head" ? tHeads("starting") : tHeads("runAsHead")}
+                        {loadingAs === "head" ? tHeads("starting") : launchedAsHead ? tHeads("retryStart") : tHeads("runAsHead")}
                       </button>
                     </>
                   ) : (

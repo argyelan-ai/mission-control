@@ -51,6 +51,7 @@ import { TaskSummaryTab } from "./detail/TaskSummaryTab";
 import { deriveStateCard } from "@/lib/taskDetail/stateCard";
 import { HeadRunsList } from "@/components/heads/HeadRunsList";
 import { useHeadPairsForLabels } from "@/components/heads/HeadStateCard";
+import { useHeadsEnabled } from "@/components/heads/useHeadsEnabled";
 import { HEAD_POLL_MS, headRunsActive, runPairLabel, sortRunsNewestFirst } from "@/lib/heads";
 import { formatAbsolute, formatAge } from "@/lib/taskDetail/format";
 import { parseInvalidTransition } from "@/lib/taskDetail/errors";
@@ -655,10 +656,12 @@ export function TaskDetailBody({
   const runRecord = runRecordQuery.data;
 
   // Head runs of this task (head launcher §8.2). Polls every 10 s only while
-  // the newest run is active, otherwise not at all. Heads off → 404 → none.
+  // the newest run is active, otherwise not at all. Heads off → not asked.
+  const headsEnabled = useHeadsEnabled();
   const headRunsQuery = useQuery({
     queryKey: ["heads", "task", task.id],
     queryFn: () => api.heads.list({ taskId: task.id }),
+    enabled: headsEnabled === true,
     retry: false,
     refetchInterval: (query) => (headRunsActive(query.state.data) ? HEAD_POLL_MS : false),
   });

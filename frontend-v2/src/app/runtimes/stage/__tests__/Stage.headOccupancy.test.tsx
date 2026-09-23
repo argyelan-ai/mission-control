@@ -13,11 +13,16 @@ import { ActionBar } from "../ActionBar";
 import { HeadOrphanRuns } from "@/components/heads/HeadOccupancy";
 import { HostRecipeSwitcher } from "@/components/shared/HostRecipeSwitcher";
 import { api } from "@/lib/api";
-import { mkRun } from "@/lib/__tests__/headFixtures";
+import { mkPair, mkRun } from "@/lib/__tests__/headFixtures";
+import { notify } from "@/lib/notify";
+import userEvent from "@testing-library/user-event";
 import type { HeadBusy } from "@/lib/heads";
 import type { Host, HostRecipe, Runtime } from "@/lib/types";
 
-vi.mock("@/lib/store", () => ({
+// Keep the real store module (notify needs useNotificationStore) and only
+// pin the current user — a partial mock made notify.success throw unseen.
+vi.mock("@/lib/store", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/store")>()),
   useAppStore: (selector: (s: unknown) => unknown) => selector({ currentUser: { id: "u1", email: "a@b.c", name: "A", role: "admin" } }),
 }));
 
@@ -100,6 +105,25 @@ describe("Switch / stop under a working head", () => {
     expect(notice).not.toHaveTextContent("head_on_box");
   });
 
+  it("the refusal notice goes away once the occupancy has seen the head end", async () => {
+    vi.spyOn(api.runtimes, "stop").mockRejectedValue(
+      new Error('API 409: {"detail":{"code":"head_on_box","run_id":"run-1","task_id":"task-7","title":"Fix flaky retry test"}}'),
+    );
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const bar = (h: HeadBusy | null) => (
+      <QueryClientProvider client={qc}>
+        <ActionBar hostId="host-1" hostName="box" servingName="GLM local" runtimeId="rt-1" onOpenCockpit={() => {}} headOnBox={h} variant="trouble" />
+      </QueryClientProvider>
+    );
+    const { rerender } = render(bar(null));
+    await act(async () => { (await screen.findByTestId("stop-runtime")).click(); });
+    expect(await screen.findByTestId("head-on-box-notice")).toBeInTheDocument();
+    rerender(bar(head)); // the poll now sees the head
+    expect(screen.getByTestId("head-on-box-notice")).toBeInTheDocument();
+    rerender(bar(null)); // …and then the box free again
+    await waitFor(() => expect(screen.queryByTestId("head-on-box-notice")).not.toBeInTheDocument());
+  });
+
   it("409 head_on_box from a recipe start is one sentence in the switcher", async () => {
     const recipe = {
       slug: "qwen", display_name: "Qwen", engine: "vllm_docker", topology: { nodes: 1 }, port: 8000,
@@ -125,12 +149,31 @@ describe("Runs without a task", () => {
     vi.spyOn(api.heads, "list").mockResolvedValue({
       runs: [mkRun({ run_id: "orphan", task_deleted: true }), mkRun({ run_id: "normal", task_deleted: false })],
     });
+    vi.spyOn(api.heads, "occupancy").mockResolvedValue({ boxes: {} });
+    vi.spyOn(api.heads, "pairs").mockResolvedValue({ pairs: [mkPair()], default_pair: mkPair() });
     const stop = vi.spyOn(api.heads, "stop").mockResolvedValue({ run_id: "orphan", state: "stopping" });
+    const success = vi.spyOn(notify, "success");
+    const failure = vi.spyOn(notify, "error");
     renderWithQuery(<HeadOrphanRuns />);
     const section = await screen.findByTestId("head-orphan-runs");
     expect(within(section).getAllByRole("listitem")).toHaveLength(1);
-    expect(section).toHaveTextContent("omp · glm-local · task deleted");
-    await act(async () => { within(section).getByRole("button", { name: "Stop" }).click(); });
+    // display name, not the runtime slug
+    await waitFor(() => expect(section).toHaveTextContent("omp · GLM local · task deleted"));
+    await userEvent.click(within(section).getByRole("button", { name: "Stop" }));
+    expect(stop).not.toHaveBeenCalled(); // asks first
+    await userEvent.click(within(section).getByTestId("head-orphan-stop-orphan-confirm-yes"));
     await waitFor(() => expect(stop).toHaveBeenCalledWith("orphan"));
+    // the success path really runs (it used to throw inside the mutation)
+    await waitFor(() => expect(success).toHaveBeenCalledWith("Stop requested"));
+    expect(failure).not.toHaveBeenCalled();
+  });
+
+  it("asks nothing while the launcher is off (404 heads_disabled)", async () => {
+    vi.spyOn(api.heads, "occupancy").mockRejectedValue(new Error('API 404: {"detail":{"code":"heads_disabled"}}'));
+    const list = vi.spyOn(api.heads, "list").mockResolvedValue({ runs: [] });
+    renderWithQuery(<HeadOrphanRuns />);
+    await waitFor(() => expect(api.heads.occupancy).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 20));
+    expect(list).not.toHaveBeenCalled();
   });
 });

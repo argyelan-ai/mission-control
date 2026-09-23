@@ -27,6 +27,9 @@ import {
   type HeadBusy,
   type HeadRun,
 } from "@/lib/heads";
+import { HeadStopButton } from "./HeadStopButton";
+import { useHeadsEnabled } from "./useHeadsEnabled";
+import { useHeadPairsForLabels } from "./HeadStateCard";
 
 export function useHeadOccupancy(): Record<string, HeadBusy> {
   const q = useQuery({
@@ -120,9 +123,11 @@ export function HeadOrphanRuns() {
   const tHeads = useTranslations("heads");
   const locale = useLocale();
   const qc = useQueryClient();
+  const headsEnabled = useHeadsEnabled();
   const q = useQuery({
     queryKey: ["heads", "active"],
     queryFn: () => api.heads.list({ active: true }),
+    enabled: headsEnabled === true,
     retry: false,
     refetchInterval: 15_000,
   });
@@ -135,6 +140,8 @@ export function HeadOrphanRuns() {
     onError: (err) => notify.error(tHeads(headErrorKey(err))),
   });
   const runs: HeadRun[] = Array.isArray(q.data?.runs) ? q.data!.runs.filter((r) => r.task_deleted) : [];
+  // Display names instead of runtime slugs — only fetched when there is a row.
+  const pairs = useHeadPairsForLabels(runs.length > 0);
   if (runs.length === 0) return null;
   return (
     <section data-testid="head-orphan-runs">
@@ -152,17 +159,16 @@ export function HeadOrphanRuns() {
             style={{ background: C.bgSurface, border: `1px solid ${C.borderSubtle}` }}
           >
             <span className="min-w-0 flex-1 truncate" style={{ color: C.textSecondary }}>
-              {t("orphanRow", { pair: runPairLabel(run), duration: formatDuration(runDurationSeconds(run), locale) ?? "—" })}
+              {t("orphanRow", { pair: runPairLabel(run, pairs), duration: formatDuration(runDurationSeconds(run), locale) ?? "—" })}
             </span>
-            <button
-              type="button"
-              onClick={() => stop.mutate(run.run_id)}
-              disabled={stop.isPending && stop.variables === run.run_id}
-              className="shrink-0 px-3 min-h-[36px] pointer-coarse:min-h-[44px] rounded-md cursor-pointer disabled:opacity-50"
-              style={{ color: C.error, border: `1px solid ${C.borderSubtle}` }}
-            >
-              {t("stop")}
-            </button>
+            <span className="shrink-0">
+              <HeadStopButton
+                onStop={() => stop.mutate(run.run_id)}
+                pending={stop.isPending && stop.variables === run.run_id}
+                label={t("stop")}
+                testId={`head-orphan-stop-${run.run_id}`}
+              />
+            </span>
           </li>
         ))}
       </ul>

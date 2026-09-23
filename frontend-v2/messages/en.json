@@ -3235,7 +3235,8 @@
       "engine_not_ready": "The model is not running. Start it on Runtimes.",
       "box_busy": "Busy with “{title}”.",
       "quota_limit": "Claude quota limit reached for heads.",
-      "other": "Not available."
+      "other": "Not available.",
+      "runtime_not_offered": "This runtime is not offered for heads."
     },
     "state": {
       "starting": "Starting",
@@ -3258,9 +3259,10 @@
       "spec_invalid": "The start request was invalid.",
       "wrapper_error": "The head starter hit an internal error.",
       "gh_identity_missing": "Heads have no GitHub identity yet (operator step).",
-      "sandbox_required": "This harness needs the sandbox on a real repo.",
+      "sandbox_required": "A real repo needs the sandbox for every harness (operator step).",
       "exit": "The harness ended with exit code {code}.",
-      "unknown": "Ended without a known reason."
+      "unknown": "Ended without a known reason.",
+      "gh_identity_unsafe": "The heads' GitHub identity has too many rights, or the base branch is not protected (operator step)."
     },
     "card": {
       "kicker": "{state} · {pair}",
@@ -3294,7 +3296,10 @@
       "tmuxCopied": "tmux command copied",
       "noQuestion": "The head asked a question, but it is empty.",
       "took": "{duration}",
-      "loading": "Loading head state…"
+      "loading": "Loading head state…",
+      "stopConfirm": "Stop the head? The branch stays.",
+      "stopConfirmYes": "Stop",
+      "stopCancel": "Cancel"
     },
     "restart": {
       "title": "Restart with …",
@@ -3305,7 +3310,8 @@
       "cancel": "Cancel",
       "submit": "Restart",
       "submitting": "Restarting…",
-      "done": "Head restarted"
+      "done": "Head restarted",
+      "noBranchYet": "No work on this branch yet — the run ended before it started."
     },
     "runs": {
       "title": "Runs",
@@ -3336,7 +3342,11 @@
       "run_record_missing": "No run record yet.",
       "head_on_box": "A head is working on this box. Stop the head first.",
       "engine_busy": "The model is still answering requests. Try again in a moment.",
-      "unknown": "Something went wrong."
-    }
+      "unknown": "Something went wrong.",
+      "head_not_active": "This head has already ended."
+    },
+    "keepTask": "Keep task, close",
+    "retryStart": "Start head again",
+    "keptHeld": "The task stays on hold in Inbox — the fleet will not pick it up."
   }
 }

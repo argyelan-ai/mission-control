@@ -3235,7 +3235,8 @@
       "engine_not_ready": "Das Modell läuft nicht. Starte es unter Runtimes.",
       "box_busy": "Belegt mit „{title}“.",
       "quota_limit": "Claude-Kontingent für Heads erreicht.",
-      "other": "Nicht verfügbar."
+      "other": "Nicht verfügbar.",
+      "runtime_not_offered": "Diese Runtime wird für Heads nicht angeboten."
     },
     "state": {
       "starting": "Startet",
@@ -3258,9 +3259,10 @@
       "spec_invalid": "Der Start-Auftrag war ungültig.",
       "wrapper_error": "Der Head-Starter hatte einen internen Fehler.",
       "gh_identity_missing": "Heads haben noch keine GitHub-Identität (Operator-Schritt).",
-      "sandbox_required": "Dieser Harness braucht auf einem echten Repo die Sandbox.",
+      "sandbox_required": "Ein echtes Repo braucht die Sandbox, für jeden Harness (Schritt für den Operator).",
       "exit": "Der Harness endete mit Exit-Code {code}.",
-      "unknown": "Ohne bekannten Grund beendet."
+      "unknown": "Ohne bekannten Grund beendet.",
+      "gh_identity_unsafe": "Die GitHub-Identität der Heads hat zu viele Rechte, oder der Basis-Branch ist nicht geschützt (Schritt für den Operator)."
     },
     "card": {
       "kicker": "{state} · {pair}",
@@ -3294,7 +3296,10 @@
       "tmuxCopied": "tmux-Befehl kopiert",
       "noQuestion": "Der Head hat eine Frage gestellt, aber sie ist leer.",
       "took": "{duration}",
-      "loading": "Head-Zustand wird geladen…"
+      "loading": "Head-Zustand wird geladen…",
+      "stopConfirm": "Head stoppen? Der Branch bleibt.",
+      "stopConfirmYes": "Stoppen",
+      "stopCancel": "Abbrechen"
     },
     "restart": {
       "title": "Neu starten mit …",
@@ -3305,7 +3310,8 @@
       "cancel": "Abbrechen",
       "submit": "Neu starten",
       "submitting": "Startet neu…",
-      "done": "Head neu gestartet"
+      "done": "Head neu gestartet",
+      "noBranchYet": "Noch keine Arbeit auf diesem Branch — der Lauf endete vor dem Start."
     },
     "runs": {
       "title": "Läufe",
@@ -3336,7 +3342,11 @@
       "run_record_missing": "Noch keine Laufakte.",
       "head_on_box": "Auf dieser Box arbeitet ein Head. Stoppe zuerst den Head.",
       "engine_busy": "Das Modell beantwortet noch Anfragen. Gleich nochmal versuchen.",
-      "unknown": "Etwas ist schiefgelaufen."
-    }
+      "unknown": "Etwas ist schiefgelaufen.",
+      "head_not_active": "Dieser Head ist schon beendet."
+    },
+    "keepTask": "Task behalten, schliessen",
+    "retryStart": "Head erneut starten",
+    "keptHeld": "Der Task bleibt angehalten in der Inbox — die Flotte nimmt ihn nicht."
   }
 }
