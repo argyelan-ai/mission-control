@@ -1863,6 +1863,9 @@ function UserRow({
   const [editing, setEditing] = useState(false);
   const [role, setRole] = useState(user.role);
   const [error, setError] = useState("");
+  // Deactivating locks someone out — ask first. Re-activating restores
+  // access, so it stays a single click.
+  const [confirmDeactivate, setConfirmDeactivate] = useState(false);
 
   const updateMutation = useMutation({
     mutationFn: (data: { role?: string; is_active?: boolean }) =>
@@ -2006,7 +2009,9 @@ function UserRow({
               </button>
               <button
                 onClick={() =>
-                  updateMutation.mutate({ is_active: !user.is_active })
+                  user.is_active
+                    ? setConfirmDeactivate(true)
+                    : updateMutation.mutate({ is_active: true })
                 }
                 className="px-2 py-1 rounded-sm text-xs cursor-pointer transition-colors"
                 style={{
@@ -2026,6 +2031,23 @@ function UserRow({
           {error}
         </div>
       )}
+
+      <ConfirmDialog
+        open={confirmDeactivate}
+        kicker={t("confirmKicker")}
+        title={t("deactivateTitle", { name: user.name })}
+        body={t("deactivateBody", { name: user.name })}
+        confirmLabel={t("deactivateConfirm")}
+        cancelLabel={t("cancel")}
+        loading={updateMutation.isPending}
+        onConfirm={() =>
+          updateMutation.mutate(
+            { is_active: false },
+            { onSettled: () => setConfirmDeactivate(false) }
+          )
+        }
+        onCancel={() => setConfirmDeactivate(false)}
+      />
     </div>
   );
 }

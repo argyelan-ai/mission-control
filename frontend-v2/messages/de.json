@@ -1380,6 +1380,10 @@
       "edit": "Bearbeiten",
       "deactivate": "Deaktivieren",
       "activate": "Aktivieren",
+      "confirmKicker": "Bestätigen",
+      "deactivateTitle": "{name} deaktivieren?",
+      "deactivateBody": "{name} wird abgemeldet und kann sich nicht mehr anmelden, bis ein Admin das Konto wieder aktiviert. Es wird nichts gelöscht.",
+      "deactivateConfirm": "Benutzer deaktivieren",
       "save": "Speichern",
       "cancel": "Abbrechen"
     },

@@ -1380,6 +1380,10 @@
       "edit": "Edit",
       "deactivate": "Deactivate",
       "activate": "Activate",
+      "confirmKicker": "Confirm",
+      "deactivateTitle": "Deactivate {name}?",
+      "deactivateBody": "{name} is signed out and can no longer log in until an admin activates the account again. Nothing is deleted.",
+      "deactivateConfirm": "Deactivate user",
       "save": "Save",
       "cancel": "Cancel"
     },
