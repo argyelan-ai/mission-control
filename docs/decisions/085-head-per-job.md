@@ -2,6 +2,7 @@
 
 **Status:** Accepted (direction; first two-week trial running) · partially supersedes ADR-005, ADR-019, ADR-021, ADR-061 §2, ADR-072 (inbound routing)
 **Datum:** 2026-09-22
+**Amended by:** [ADR-086](086-harness-runtime-cross-switch.md) — §6 rule 2 (operator surface is swappable too), §7 decision 1 and §8 stop 1 (local first instead of GPU boxes as helpers)
 **Scope:** Architecture/Direction · Backend/Dispatch · Infra/Runtime · Agent Protocol · Docs
 
 ## Context
