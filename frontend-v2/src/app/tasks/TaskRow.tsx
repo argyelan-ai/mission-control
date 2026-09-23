@@ -4,10 +4,12 @@ import { useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import Link from "next/link";
-import { AlertTriangle, Brain, Check, Clock, Send, X } from "lucide-react";
+import { Brain, Check, Clock, RotateCcw, Send, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { C, LANE } from "@/lib/colors";
 import { EntityIcon } from "@/components/shared/EntityIcon";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { OverflowMenu } from "@/components/shared/OverflowMenu";
 import type { Agent, Task, TaskStatus } from "@/lib/types";
 
 // ── Status helpers ────────────────────────────────────────────────────────────
@@ -68,13 +70,15 @@ export function TaskRow({
   const t = useTranslations("tasks");
   const agent = agents.find((a) => a.id === task.assigned_agent_id);
   const qc = useQueryClient();
-  const [showDoneWarning, setShowDoneWarning] = useState(false);
+  // Re-dispatching a finished task is rare and restarts an agent: it lives in
+  // the row's ⋯ menu and goes through the shared confirm dialog.
+  const [confirmRedispatch, setConfirmRedispatch] = useState(false);
 
   const dispatchMutation = useMutation({
     mutationFn: () => api.tasks.update(boardId, task.id, { status: "in_progress" }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["tasks", boardId] });
-      setShowDoneWarning(false);
+      setConfirmRedispatch(false);
     },
   });
 
@@ -97,12 +101,6 @@ export function TaskRow({
   };
 
   const handleDispatch = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (isDone) { setShowDoneWarning(true); return; }
-    dispatchMutation.mutate();
-  };
-
-  const handleForceDispatch = (e: React.MouseEvent) => {
     e.stopPropagation();
     dispatchMutation.mutate();
   };
@@ -180,56 +178,46 @@ export function TaskRow({
           >
             <Brain size={12} />
           </Link>
-          {(canDispatch || isDone) && (
+          {canDispatch && (
             <button
               onClick={handleDispatch}
               disabled={dispatchMutation.isPending}
               className="p-1 rounded-sm transition-colors opacity-0 group-hover:opacity-100 hover:bg-[var(--color-bg-hover)] cursor-pointer touch-visible"
-              title={isDone ? t("taskAlreadyDoneDispatch") : t("dispatchTask")}
-              style={{ color: isDone ? C.warning : C.accent }}
+              title={t("dispatchTask")}
+              style={{ color: C.accent }}
             >
               <Send size={12} />
             </button>
           )}
+          {isDone && (
+            <OverflowMenu
+              label={t("moreActions")}
+              actions={[
+                {
+                  id: "dispatch-again",
+                  label: t("dispatchAgainMenu"),
+                  icon: RotateCcw,
+                  onClick: () => setConfirmRedispatch(true),
+                  loading: dispatchMutation.isPending,
+                },
+              ]}
+            />
+          )}
         </div>
       </div>
 
-      {/* Done warning */}
-      {showDoneWarning && (
-        <div
-          className="absolute right-2 top-full mt-1 z-10 p-3 rounded-md text-xs"
-          style={{
-            backgroundColor: C.bgBase,
-            border: `1px solid ${C.warning}40`,
-            boxShadow: "var(--shadow-elevated)",
-          }}
-        >
-          <div className="flex items-center gap-1.5 mb-2 font-medium" style={{ color: C.warning }}>
-            <AlertTriangle size={12} />
-            {t("taskAlreadyDone")}
-          </div>
-          <p className="mb-2" style={{ color: C.textSecondary }}>
-            {t("dispatchAgainConfirm")}
-          </p>
-          <div className="flex gap-2">
-            <button
-              onClick={handleForceDispatch}
-              disabled={dispatchMutation.isPending}
-              className="px-2 py-1 rounded-sm text-[11px] font-medium cursor-pointer"
-              style={{ backgroundColor: `${C.warning}1F`, color: C.warning }}
-            >
-              {t("yesDispatch")}
-            </button>
-            <button
-              onClick={(e) => { e.stopPropagation(); setShowDoneWarning(false); }}
-              className="px-2 py-1 rounded-sm text-[11px] cursor-pointer"
-              style={{ color: C.textMuted }}
-            >
-              {t("cancel")}
-            </button>
-          </div>
-        </div>
-      )}
+      <ConfirmDialog
+        open={confirmRedispatch}
+        kicker={t("taskAlreadyDone")}
+        title={t("dispatchAgainTitle", { title: task.title })}
+        body={t("dispatchAgainBody")}
+        confirmLabel={t("yesDispatch")}
+        cancelLabel={t("cancel")}
+        danger={false}
+        loading={dispatchMutation.isPending}
+        onConfirm={() => dispatchMutation.mutate()}
+        onCancel={() => setConfirmRedispatch(false)}
+      />
     </div>
   );
 }
