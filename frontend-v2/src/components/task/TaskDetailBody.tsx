@@ -770,9 +770,12 @@ export function TaskDetailBody({
 
   // A head owns this task's run (head launcher §8.2): the fleet run controls
   // (Run held / Requeue / Stop agent) would hand it back to the frozen
-  // dispatch — hidden; the head card carries Stop / Restart instead. The
-  // review actions stay once the head passed (task in review).
-  const headOwnsRun = latestHeadRun != null && task.status !== "review";
+  // dispatch — hidden; the head card carries Stop / Restart / Open PR
+  // instead. Also in review after a passed head: the card keeps its hold
+  // (spec §6.6), so TaskActions would only show "Review blocked" next to
+  // Requeue — the merge decision happens on the PR, the status menu moves
+  // the card to done.
+  const headOwnsRun = latestHeadRun != null;
 
   // TaskActions only renders something in these cases — no empty section.
   const showActions =
