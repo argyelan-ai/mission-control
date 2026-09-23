@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import type { Task } from "@/lib/types";
@@ -144,7 +144,7 @@ function mkTask(overrides: Partial<Task> = {}): Task {
   };
 }
 
-describe("TasksPage — /tasks?taskId=<uuid> deep link", () => {
+describe("TasksPage — task and tab in the URL (/tasks?task=<uuid>&tab=<tab>)", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     nav.replace.mockClear();
@@ -197,23 +197,77 @@ describe("TasksPage — /tasks?taskId=<uuid> deep link", () => {
     ).toBeInTheDocument();
   });
 
-  it("(b) ignores an unknown taskId — no crash, no detail pane", async () => {
+  it("(b) shows 'Task not found' for an unknown id instead of silently dropping it", async () => {
     vi.spyOn(api.tasks, "list").mockResolvedValue([mkTask({ id: "task-1", title: "Some task" })]);
-    nav.searchParamsString = "taskId=does-not-exist";
+    nav.searchParamsString = "task=does-not-exist";
 
     renderPage();
 
-    // Empty state stays put; nothing crashed trying to open a missing task.
-    expect(await screen.findByText("Select a task from the list")).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: /./ })).not.toHaveTextContent("does-not-exist");
+    const pane = await screen.findByTestId("task-not-found");
+    expect(pane).toHaveTextContent("Task not found");
+    fireEvent.click(screen.getByRole("button", { name: "Back to tasks" }));
+    await waitFor(() => expect(screen.queryByTestId("task-not-found")).toBeNull());
+    expect(nav.replace).toHaveBeenLastCalledWith("/tasks", { scroll: false });
   });
 
-  it("(c) strips the taskId param from the URL via router.replace", async () => {
+  it("(c) rewrites the legacy ?taskId= to ?task= (kept in the URL now)", async () => {
     vi.spyOn(api.tasks, "list").mockResolvedValue([mkTask({ id: "task-1", title: "Some task" })]);
     nav.searchParamsString = "taskId=task-1";
 
     renderPage();
 
-    await waitFor(() => expect(nav.replace).toHaveBeenCalledWith("/tasks", { scroll: false }));
+    await waitFor(() => expect(nav.replace).toHaveBeenCalledWith("/tasks?task=task-1", { scroll: false }));
+  });
+
+  it("(d) opens the tab named in ?tab=", async () => {
+    vi.spyOn(api.tasks, "list").mockResolvedValue([mkTask({ id: "task-1", title: "Some task", status: "done" })]);
+    nav.searchParamsString = "task=task-1&tab=timeline";
+
+    renderPage();
+
+    expect(await screen.findByRole("tab", { name: "Timeline" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("(d2) drops an unknown tab (old tab=e2e links) from the URL and shows the default", async () => {
+    vi.spyOn(api.tasks, "list").mockResolvedValue([mkTask({ id: "task-1", title: "Some task", status: "done" })]);
+    nav.searchParamsString = "task=task-1&tab=e2e";
+
+    renderPage();
+
+    expect(await screen.findByRole("tab", { name: "Summary" })).toHaveAttribute("aria-selected", "true");
+    await waitFor(() => expect(nav.replace).toHaveBeenCalledWith("/tasks?task=task-1", { scroll: false }));
+  });
+
+  it("(e) writes task and tab into the URL when the user picks them", async () => {
+    vi.spyOn(api.tasks, "list").mockResolvedValue([mkTask({ id: "task-1", title: "Some task", status: "done" })]);
+    nav.searchParamsString = "task=task-1";
+
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("tab", { name: "History" }));
+    await waitFor(() =>
+      expect(nav.replace).toHaveBeenCalledWith("/tasks?task=task-1&tab=history", { scroll: false }),
+    );
+  });
+
+  it("(f) shows the task title once — the phone back bar carries only '‹ Tasks'", async () => {
+    vi.spyOn(api.tasks, "list").mockResolvedValue([mkTask({ id: "task-1", title: "Only once please", status: "done" })]);
+    nav.searchParamsString = "task=task-1";
+
+    renderPage();
+
+    expect(await screen.findByRole("heading", { name: "Only once please" })).toBeInTheDocument();
+    // List row + detail heading; the back bar used to add a third copy.
+    const copies = screen.getAllByText("Only once please").filter((el) => el.tagName !== "BUTTON" && !el.closest("button"));
+    expect(copies).toHaveLength(1);
+  });
+
+  it("(g) the tasks island fills the viewport height like the sidebar (no fixed calc offset)", async () => {
+    vi.spyOn(api.tasks, "list").mockResolvedValue([]);
+    renderPage();
+    const frame = await screen.findByTestId("tasks-frame");
+    expect(frame.className).toContain("md:h-dvh");
+    expect(frame.className).toContain("md:p-2");
+    expect(frame.className).not.toContain("calc(100dvh");
   });
 });

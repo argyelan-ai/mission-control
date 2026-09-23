@@ -11,13 +11,13 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useTranslations } from "next-intl";
 import { motion, AnimatePresence } from "framer-motion";
-import { ChevronDown, ExternalLink, GitBranch, GitCommit } from "lucide-react";
+import { ChevronDown, GitBranch, GitCommit } from "lucide-react";
 import { api } from "@/lib/api";
 import { C } from "@/lib/colors";
 import { GitDiffView } from "@/components/git/GitDiffView";
 import type { CommitDiff, TaskGitInfo } from "@/lib/types";
+import { PrChip } from "./detail/PrChip";
 
 /**
  * What the task detail's Git section should render, or null to hide it.
@@ -55,7 +55,6 @@ export function GitPanel({
   taskPrUrl?: string | null;
   taskPrNumber?: number | null;
 }) {
-  const t = useTranslations("tasks");
   const [expanded, setExpanded] = useState(false);
   const prUrl = gitInfo.pr_url || taskPrUrl || null;
   const prNumber =
@@ -130,18 +129,7 @@ export function GitPanel({
               {gitInfo.repo_name}
             </a>
           )}
-          {prUrl && (
-            <a
-              href={prUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-1 px-2 py-0.5 rounded-sm text-[10px] font-medium cursor-pointer hover:opacity-80 transition-opacity"
-              style={{ background: C.accentSubtle, color: C.accent, border: `1px solid ${C.borderAccent}` }}
-            >
-              <ExternalLink size={9} aria-hidden />
-              {prNumber ? t("prChipNumber", { number: prNumber }) : t("prChipOpen")}
-            </a>
-          )}
+          {prUrl && <PrChip url={prUrl} number={prNumber} />}
           {hasCommits && (
             <button
               onClick={() => setExpanded((x) => !x)}

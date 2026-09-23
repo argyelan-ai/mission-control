@@ -183,6 +183,25 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+/** Like request(), but returns the raw response body as text (Markdown etc.). */
+export async function requestText(path: string, init?: RequestInit): Promise<string> {
+  const res = await fetch(`${BASE_URL}${path}`, {
+    ...init,
+    cache: "no-store",
+    headers: { Authorization: `Bearer ${getToken()}`, ...init?.headers },
+  });
+  if (res.status === 401 && typeof window !== "undefined") {
+    clearToken();
+    window.location.href = "/login";
+    throw new Error("Session abgelaufen");
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText);
+    throw new Error(`API ${res.status}: ${text}`);
+  }
+  return res.text();
+}
+
 // Unauthenticated request (for login/register)
 async function publicRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE_URL}${path}`, {
@@ -797,6 +816,14 @@ export const api = {
         return `${BASE_URL}/api/v1/boards/${boardId}/tasks/${taskId}/workspace/content?${qs.toString()}`;
       },
     },
+    /** Run record ("Laufakte") — task-scoped, NOT board-scoped. JSON for the
+     *  Summary tab, Markdown for "Copy as Markdown", and the Vault export
+     *  (operator role; overwrites only its own runs/<id>-laufakte.md). */
+    runRecord: (taskId: string) =>
+      request<import("./types").RunRecord>(`/api/v1/tasks/${taskId}/run-record`),
+    runRecordMarkdown: (taskId: string) => requestText(`/api/v1/tasks/${taskId}/run-record.md`),
+    runRecordToVault: (taskId: string) =>
+      request<{ path: string }>(`/api/v1/tasks/${taskId}/run-record/to-vault`, { method: "POST" }),
     checklist: {
       list: (boardId: string, taskId: string) =>
         request<TaskChecklistItem[]>(`/api/v1/boards/${boardId}/tasks/${taskId}/checklist`),

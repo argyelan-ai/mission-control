@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { CommentCard } from "@/components/task/CommentCard";
@@ -12,10 +12,13 @@ interface TaskCommentsProps {
   task: Task;
   boardId: string;
   agents: Agent[];
+  /** Every change (> 0) focuses the comment input — "Reply" on the state card. */
+  focusSignal?: number;
 }
 
-export function TaskComments({ task, boardId, agents }: TaskCommentsProps) {
+export function TaskComments({ task, boardId, agents, focusSignal = 0 }: TaskCommentsProps) {
   const qc = useQueryClient();
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const agentMap = Object.fromEntries(
     agents.map((a) => [a.id, { name: a.name, emoji: a.emoji }])
@@ -29,6 +32,10 @@ export function TaskComments({ task, boardId, agents }: TaskCommentsProps) {
   const [newComment, setNewComment] = useState("");
   const [commentFilter, setCommentFilter] = useState<string>("all");
   const [newCommentType, setNewCommentType] = useState<string>("progress");
+
+  useEffect(() => {
+    if (focusSignal > 0) inputRef.current?.focus();
+  }, [focusSignal]);
 
   const addCommentMutation = useMutation({
     mutationFn: ({ content, type }: { content: string; type: string }) =>
@@ -131,6 +138,8 @@ export function TaskComments({ task, boardId, agents }: TaskCommentsProps) {
                   : "Comment on progress... (Enter)"
               }
               aria-label="Add comment"
+              ref={inputRef}
+              data-comment-input
               className="flex-1 px-2.5 py-2 rounded-lg text-xs outline-none"
               style={{
                 backgroundColor: "var(--color-bg-surface)",
