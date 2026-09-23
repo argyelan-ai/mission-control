@@ -249,4 +249,25 @@ describe("TasksPage — task and tab in the URL (/tasks?task=<uuid>&tab=<tab>)",
       expect(nav.replace).toHaveBeenCalledWith("/tasks?task=task-1&tab=history", { scroll: false }),
     );
   });
+
+  it("(f) shows the task title once — the phone back bar carries only '‹ Tasks'", async () => {
+    vi.spyOn(api.tasks, "list").mockResolvedValue([mkTask({ id: "task-1", title: "Only once please", status: "done" })]);
+    nav.searchParamsString = "task=task-1";
+
+    renderPage();
+
+    expect(await screen.findByRole("heading", { name: "Only once please" })).toBeInTheDocument();
+    // List row + detail heading; the back bar used to add a third copy.
+    const copies = screen.getAllByText("Only once please").filter((el) => el.tagName !== "BUTTON" && !el.closest("button"));
+    expect(copies).toHaveLength(1);
+  });
+
+  it("(g) the tasks island fills the viewport height like the sidebar (no fixed calc offset)", async () => {
+    vi.spyOn(api.tasks, "list").mockResolvedValue([]);
+    renderPage();
+    const frame = await screen.findByTestId("tasks-frame");
+    expect(frame.className).toContain("md:h-dvh");
+    expect(frame.className).toContain("md:p-2");
+    expect(frame.className).not.toContain("calc(100dvh");
+  });
 });

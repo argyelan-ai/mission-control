@@ -961,7 +961,7 @@ function TasksPageContent() {
     // Insel ist selbst eine glatte Fläche, der Kopf malt schlicht ihre Farbe,
     // und das Rechteck ist gewollt — mit Rahmen und Radius. Genau so macht es
     // die Sessions-Seite seit jeher.
-    <div className="flex md:-m-6 md:h-[calc(100dvh-theme(spacing.6)*2)] md:p-3">
+    <div className="flex md:-m-6 md:h-dvh md:p-2" data-testid="tasks-frame">
       <div
         className="flex flex-1 min-h-0 min-w-0 md:rounded-xl md:border md:overflow-hidden"
         style={{ background: C.bgSurface, borderColor: C.border }}
@@ -1005,9 +1005,14 @@ function TasksPageContent() {
               <ChevronRight size={14} className="rotate-180" style={{ color: C.textMuted }} />
               {t("title")}
             </button>
-            <span className="text-sm truncate" style={{ color: C.textPrimary }}>
-              {selectedTask?.title ?? projectView?.name ?? (notFoundTaskId ? t("detail.notFoundTitle") : "")}
-            </span>
+            {/* The task title lives in the detail header right below — repeating
+                it here doubled it on phones. Only project/not-found views, which
+                have no header of their own, keep a label in the bar. */}
+            {!selectedTask && (
+              <span className="text-sm truncate" style={{ color: C.textPrimary }}>
+                {projectView?.name ?? (notFoundTaskId ? t("detail.notFoundTitle") : "")}
+              </span>
+            )}
           </div>
         )}
 
