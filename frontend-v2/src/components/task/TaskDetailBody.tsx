@@ -513,6 +513,7 @@ export function TaskDetailBody({
   tab,
   onTabChange,
   onOpenTask,
+  hideCloseOnMobile = false,
 }: {
   task: Task;
   agents: Agent[];
@@ -524,6 +525,8 @@ export function TaskDetailBody({
   onTabChange?: (tab: TaskTabKey) => void;
   /** Open another task in place (subtask links); without it links navigate. */
   onOpenTask?: (taskId: string) => void;
+  /** The /tasks page has its own "‹ Tasks" bar on the phone — no second ×. */
+  hideCloseOnMobile?: boolean;
 }) {
   const t = useTranslations("tasks");
   const locale = useLocale();
@@ -817,7 +820,7 @@ export function TaskDetailBody({
             <button
               onClick={onClose}
               aria-label={t("closeTaskDetails")}
-              className="w-[30px] h-[30px] rounded-md flex items-center justify-center transition-colors hover:bg-[var(--color-bg-hover)] cursor-pointer"
+              className={`${hideCloseOnMobile ? "hidden md:flex" : "flex"} w-[30px] h-[30px] rounded-md items-center justify-center transition-colors hover:bg-[var(--color-bg-hover)] cursor-pointer`}
               style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
             >
               <X size={15} />

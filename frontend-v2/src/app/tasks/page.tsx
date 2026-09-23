@@ -1023,6 +1023,7 @@ function TasksPageContent() {
               tab={tabParam}
               onTabChange={handleTabChange}
               onOpenTask={handleOpenTaskId}
+              hideCloseOnMobile
             />
           </div>
         ) : notFoundTaskId ? (
