@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect, useRef, Suspense } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback, Suspense } from "react";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
@@ -773,25 +773,42 @@ function TasksPageContent() {
   // detail only after a tap (iPhone-Befund Operator).
   const [mobileView, setMobileView] = useState<"list" | "detail">("list");
 
-  // Deep-link consumption: /tasks?taskId=<uuid> (from LoopDetailPanel's "View
-  // task" and VoicePreviewSheet). Read the id once, strip it from the URL
-  // immediately so reload/back stays clean, then keep it around only long
-  // enough for TaskListColumn to expand its (possibly collapsed) group and
-  // scroll the row into view.
+  // Task + tab live in the URL: /tasks?task=<uuid>&tab=<tab>. This reverses
+  // an earlier deliberate choice (the old ?taskId= deep link was stripped on
+  // read "so reload/back stays clean") — wave 3a wants reload and shared
+  // links to land on the same task and tab. The legacy ?taskId= (LoopDetail-
+  // Panel's "View task", VoicePreviewSheet) still works and is rewritten to
+  // ?task=. A link to a task that is not on this board shows "Task not found".
+  const [tabParam, setTabParam] = useState<string | null>(null);
+  const [notFoundTaskId, setNotFoundTaskId] = useState<string | null>(null);
   const deepLinkReadRef = useRef(false);
   const [deepLinkTaskId, setDeepLinkTaskId] = useState<string | null>(null);
+
+  const writeUrl = useCallback(
+    (taskId: string | null, tab: string | null) => {
+      const params = new URLSearchParams(searchParams.toString());
+      params.delete("taskId");
+      if (taskId) params.set("task", taskId);
+      else params.delete("task");
+      if (taskId && tab) params.set("tab", tab);
+      else params.delete("tab");
+      const qs = params.toString();
+      router.replace(qs ? `/tasks?${qs}` : "/tasks", { scroll: false });
+    },
+    [searchParams, router],
+  );
 
   useEffect(() => {
     if (deepLinkReadRef.current) return;
     deepLinkReadRef.current = true;
-    const id = searchParams.get("taskId");
+    const legacyId = searchParams.get("taskId");
+    const id = searchParams.get("task") ?? legacyId;
     if (!id) return;
+    const tab = searchParams.get("tab");
     setDeepLinkTaskId(id);
-    const params = new URLSearchParams(searchParams.toString());
-    params.delete("taskId");
-    const qs = params.toString();
-    router.replace(qs ? `/tasks?${qs}` : "/tasks", { scroll: false });
-  }, [searchParams, router]);
+    setTabParam(tab);
+    if (legacyId) writeUrl(id, tab);
+  }, [searchParams, writeUrl]);
 
   const { data: allTasks = [], isSuccess: tasksLoaded } = useQuery({
     queryKey: ["tasks", activeBoardId],
@@ -801,19 +818,21 @@ function TasksPageContent() {
   });
 
   // Once the tasks query has settled, try to resolve the deep-linked task.
-  // Found → select it (opens TaskDetailBody). Not found → drop it silently,
-  // no toast, no crash. Only fires once tasksLoaded so an empty first render
+  // Found → select it (opens TaskDetailBody). Not found → "Task not found"
+  // in the detail pane. Only fires once tasksLoaded so an empty first render
   // of `allTasks` (query still in flight) doesn't read as "not found".
   useEffect(() => {
     if (!deepLinkTaskId || !tasksLoaded) return;
     const target = allTasks.find((t) => t.id === deepLinkTaskId);
     if (target) {
       setSelectedTaskId(target.id);
-      setProjectViewId(null);
-      setMobileView("detail");
+      setNotFoundTaskId(null);
     } else {
+      setNotFoundTaskId(deepLinkTaskId);
       setDeepLinkTaskId(null);
     }
+    setProjectViewId(null);
+    setMobileView("detail");
   }, [deepLinkTaskId, allTasks, tasksLoaded]);
 
   // TaskListColumn only needs to try expanding a group once real task data is
@@ -866,13 +885,37 @@ function TasksPageContent() {
 
   function handleSelectTask(task: Task) {
     setSelectedTaskId(task.id);
+    setNotFoundTaskId(null);
+    setTabParam(null);
     setProjectViewId(null);
     setMobileView("detail");
+    writeUrl(task.id, null);
+  }
+
+  // Subtask/parent links inside the detail open in place.
+  function handleOpenTaskId(taskId: string) {
+    const target = allTasks.find((t) => t.id === taskId);
+    if (target) {
+      handleSelectTask(target);
+      setDeepLinkTaskId(taskId); // expand its group + scroll the row into view
+    } else {
+      setSelectedTaskId(null);
+      setNotFoundTaskId(taskId);
+      setMobileView("detail");
+      writeUrl(taskId, null);
+    }
+  }
+
+  function handleTabChange(tab: string) {
+    setTabParam(tab);
+    writeUrl(selectedTaskId, tab);
   }
 
   function handleOpenProject(projectId: string) {
     setProjectViewId(projectId);
     setSelectedTaskId(null);
+    setNotFoundTaskId(null);
+    if (selectedTaskId) writeUrl(null, null);
     setConfirmDeleteProject(false);
     setMobileView("detail");
   }
@@ -880,7 +923,10 @@ function TasksPageContent() {
   function handleCloseDetail() {
     setSelectedTaskId(null);
     setProjectViewId(null);
+    setNotFoundTaskId(null);
+    setTabParam(null);
     setMobileView("list");
+    writeUrl(null, null);
   }
 
   if (!activeBoardId) {
@@ -893,7 +939,7 @@ function TasksPageContent() {
     );
   }
 
-  const detailOpen = !!selectedTask || !!projectView;
+  const detailOpen = !!selectedTask || !!projectView || !!notFoundTaskId;
 
   return (
     // Die Liste liegt seit 23.08.2026 auf einer INSEL statt nackt auf dem
@@ -956,7 +1002,7 @@ function TasksPageContent() {
               {t("title")}
             </button>
             <span className="text-sm truncate" style={{ color: C.textPrimary }}>
-              {selectedTask?.title ?? projectView?.name ?? ""}
+              {selectedTask?.title ?? projectView?.name ?? (notFoundTaskId ? t("detail.notFoundTitle") : "")}
             </span>
           </div>
         )}
@@ -974,7 +1020,32 @@ function TasksPageContent() {
               agents={agents}
               boardId={activeBoardId}
               onClose={handleCloseDetail}
+              tab={tabParam}
+              onTabChange={handleTabChange}
+              onOpenTask={handleOpenTaskId}
             />
+          </div>
+        ) : notFoundTaskId ? (
+          <div className="flex-1 flex items-center justify-center" data-testid="task-not-found">
+            <div className="text-center px-10 py-12 max-w-sm">
+              <div className="label-sys label-sys--dim mb-3">
+                {t("taskLabel")} · {notFoundTaskId.slice(0, 8)}
+              </div>
+              <div className="text-sm font-medium mb-1" style={{ color: C.textPrimary }} role="heading" aria-level={2}>
+                {t("detail.notFoundTitle")}
+              </div>
+              <div className="text-xs mb-4" style={{ color: C.textSecondary }}>
+                {t("detail.notFoundBody")}
+              </div>
+              <button
+                type="button"
+                onClick={handleCloseDetail}
+                className="px-3 min-h-[36px] rounded-md text-xs cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
+                style={{ color: C.textSecondary, border: `1px solid ${C.borderActive}` }}
+              >
+                {t("detail.backToList")}
+              </button>
+            </div>
           </div>
         ) : projectView ? (
           <div className="flex-1 flex flex-col min-h-0">
