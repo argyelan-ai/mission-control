@@ -68,4 +68,18 @@ describe("ApprovalCard — Cancel task asks first", () => {
     expect(cancel.className).toMatch(/min-h-\[44px\]/);
     expect(screen.getByRole("button", { name: /Unblock/ }).className).toMatch(/min-h-\[44px\]/);
   });
+
+  it("renders the dialog outside the animated card (a layout transform must not move it)", async () => {
+    const { container } = render(<ApprovalCard approval={blocker} onResolve={vi.fn()} />);
+    const card = container.firstElementChild!;
+    await userEvent.click(screen.getByRole("button", { name: /Cancel task/ }));
+    expect(card.contains(screen.getByRole("dialog"))).toBe(false);
+  });
+
+  it("names the blocked agent in the dialog when the card knows it", async () => {
+    const named = { ...blocker, payload: { blocker_type: "missing_info", blocked_agent_name: "alpha" } } as Approval;
+    render(<ApprovalCard approval={named} onResolve={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: /Cancel task/ }));
+    expect(screen.getByRole("dialog")).toHaveTextContent(/alpha stops/);
+  });
 });

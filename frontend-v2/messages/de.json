@@ -497,6 +497,7 @@
     "cancelTaskKicker": "Aufgabe abbrechen",
     "cancelTaskTitle": "Diese Aufgabe abbrechen?",
     "cancelTaskBody": "Der Agent hört auf und die Aufgabe wird als fehlgeschlagen markiert. Laufende Arbeit geht verloren.",
+    "cancelTaskBodyNamed": "{agent} hört auf und die Aufgabe wird als fehlgeschlagen markiert. Laufende Arbeit geht verloren.",
     "cancelTaskConfirm": "Ja, abbrechen",
     "cancelTaskKeep": "Aufgabe behalten",
     "installVerb": "Installieren",

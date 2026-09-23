@@ -110,7 +110,15 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
   const badgeColor = typeConfig?.color ?? C.textDim;
   const BadgeIcon = typeConfig?.icon ?? AlertTriangle;
 
+  const blockedAgentName = isBlocker
+    ? (approval.payload as { blocked_agent_name?: string } | null)?.blocked_agent_name
+    : undefined;
+
+  // The dialog is a sibling of the card, not a child: the card's `layout`
+  // animation sets a transform on it, and a fixed-position dialog inside a
+  // transformed parent is positioned relative to that parent and jumps.
   return (
+    <>
     <motion.div
       layout
       initial={{ opacity: 0, x: -8 }}
@@ -328,12 +336,17 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
           )}
         </div>
       </GlassCard>
+    </motion.div>
 
       <ConfirmDialog
         open={confirmCancel}
         kicker={t("cancelTaskKicker")}
         title={t("cancelTaskTitle")}
-        body={t("cancelTaskBody")}
+        body={
+          blockedAgentName
+            ? t("cancelTaskBodyNamed", { agent: blockedAgentName })
+            : t("cancelTaskBody")
+        }
         confirmLabel={t("cancelTaskConfirm")}
         cancelLabel={t("cancelTaskKeep")}
         loading={loading}
@@ -343,6 +356,6 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
         }}
         onCancel={() => setConfirmCancel(false)}
       />
-    </motion.div>
+    </>
   );
 }

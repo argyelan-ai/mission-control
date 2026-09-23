@@ -497,6 +497,7 @@
     "cancelTaskKicker": "Cancel task",
     "cancelTaskTitle": "Cancel this task?",
     "cancelTaskBody": "The agent stops and the task is marked failed. Work in progress is lost.",
+    "cancelTaskBodyNamed": "{agent} stops and the task is marked failed. Work in progress is lost.",
     "cancelTaskConfirm": "Yes, cancel task",
     "cancelTaskKeep": "Keep task",
     "installVerb": "Install",
