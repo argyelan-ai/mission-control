@@ -1003,7 +1003,7 @@
     "taglineInstaller": "Installiert MCP-Server, Skills und Plugins.",
     "taglineHermes": "Morgen-Briefings & geplante Routinen.",
     "exampleBannerTitle": "Beispiel-Team — nicht deine laufende Flotte",
-    "exampleBannerBody": "Dieses Organigramm zeigt Beispiel-Rollen, um den Aufbau zu erklären. Namen und Status sind Platzhalter; deine echten Agenten stehen auf der Seite Agents."
+    "exampleBannerBody": "Dieses Organigramm zeigt Beispiel-Rollen, um den Aufbau zu erklären. Namen und Status sind Platzhalter; deine echten Agenten stehen auf der Seite Agenten."
   },
   "vault": {
     "tabList": "Liste",

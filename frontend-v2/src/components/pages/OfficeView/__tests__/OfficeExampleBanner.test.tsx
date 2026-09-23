@@ -27,10 +27,12 @@ describe("Office example crew", () => {
     expect(screen.getByText("Example crew — not your live fleet")).toBeInTheDocument();
   });
 
-  it("draws every status dot in neutral grey", () => {
-    const worker = ORG_CHART.nodes.find((n) => n.status === "working" || n.status === "online");
-    expect(worker).toBeDefined();
-    const { container } = render(<OrgChartNode node={worker!} />);
+  it.each(["online", "working", "offline", "warning", "error"] as const)(
+    "draws the %s status dot (and any pulse ring) in neutral grey",
+    (status) => {
+    const base = ORG_CHART.nodes.find((n) => n.status === "working" || n.status === "online");
+    expect(base).toBeDefined();
+    const { container } = render(<OrgChartNode node={{ ...base!, status }} />);
     const dots = [...container.querySelectorAll<HTMLElement>("span.rounded-full")];
     expect(dots.length).toBeGreaterThan(0);
     // Normalise the palette the same way jsdom normalises inline styles.
@@ -44,5 +46,6 @@ describe("Office example crew", () => {
       expect(dot.style.background).not.toBe("");
       expect(live).not.toContain(dot.style.background);
     }
-  });
+    },
+  );
 });
