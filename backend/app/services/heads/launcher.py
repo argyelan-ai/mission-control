@@ -183,6 +183,7 @@ async def write_run(
         "time_limit_s": int(limit),
         "restarted_from": restarted_from["spec"]["run_id"] if restarted_from else None,
         "mode": mode,
+        "job_folder": None,  # set below
         "created_by": user_id,
         "created_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
@@ -194,6 +195,7 @@ async def write_run(
     folder.mkdir(parents=True, exist_ok=False)
     short = _slug(task.title, 24)
     job_dir = paths.vault_jobs_dir() / f"{now:%Y-%m-%d}-{short}-{run_id[:4]}"
+    spec["job_folder"] = job_dir.name
     previous = None
     if restarted_from:
         prev_spec = restarted_from["spec"]

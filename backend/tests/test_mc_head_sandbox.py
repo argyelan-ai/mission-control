@@ -58,7 +58,7 @@ def test_worktree_and_status_files_are_writable(layout):
     res = _sh(
         layout,
         f"echo ok > {run}/wt/file.txt && echo 'step 1/7' > {run}/step.txt"
-        f" && echo q > {run}/question.md && echo r > {layout['jobs']}/rr.md && echo g > {layout['clone_git']}/x",
+        f" && echo q > {run}/question.md && echo r > {run}/run-record.md && echo g > {layout['clone_git']}/x",
     )
     assert res.returncode == 0, res.stderr
     assert (run / "wt" / "file.txt").read_text() == "ok\n"
@@ -91,3 +91,9 @@ def test_writes_outside_the_allowed_places_are_denied(layout):
     res = _sh(layout, f"echo x > {layout['real_home']}/outside.txt")
     assert res.returncode != 0
     assert not (layout["real_home"] / "outside.txt").exists()
+
+
+def test_vault_is_not_writable_the_wrapper_files_the_run_record(layout):
+    res = _sh(layout, f"echo x > {layout['jobs']}/forged-run-record.md")
+    assert res.returncode != 0
+    assert not (layout["jobs"] / "forged-run-record.md").exists()

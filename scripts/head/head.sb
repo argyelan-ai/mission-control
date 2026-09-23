@@ -8,8 +8,9 @@
 ;; Writes: nothing by default …
 (deny file-write*)
 ;; … except the worktree, the clone's git dir (commits of the worktree land
-;; there), the head's own $HOME (harness caches), the vault job folder,
-;; temp folders and devices.
+;; there), the head's own $HOME (harness caches), its status files in the
+;; run folder, temp folders and devices. The vault is NOT writable: the
+;; wrapper files run-record.md into vault jobs/ after the head has ended.
 (allow file-write*
   (subpath (param "WT"))
   (subpath (param "CLONE_GIT"))
@@ -18,7 +19,7 @@
   (literal (string-append (param "RUN") "/step.txt"))
   (literal (string-append (param "RUN") "/question.md"))
   (literal (string-append (param "RUN") "/head.log"))
-  (subpath (param "VAULT_JOBS"))
+  (literal (string-append (param "RUN") "/run-record.md"))
   (subpath "/private/tmp")
   (subpath (param "USER_TMP"))
   (subpath "/dev"))

@@ -49,6 +49,7 @@ def test_valid_spec_passes(mc_home):
         ("base_branch", "--upload-pack=x"),
         ("restarted_from", "../other"),
         ("runtime_slug", "Bad Slug"),
+        ("job_folder", "../../agents/x"),
     ],
 )
 def test_malicious_or_bad_field_is_refused(mc_home, tmp_path, field, value):

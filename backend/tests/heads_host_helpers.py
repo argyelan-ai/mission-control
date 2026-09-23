@@ -86,6 +86,7 @@ def write_spec(mc_home: Path, **overrides) -> str:
         "time_limit_s": 600,
         "restarted_from": None,
         "mode": "fresh",
+        "job_folder": f"2026-09-23-demo-{run_id[:4]}",
         "created_by": None,
         "created_at": "2026-09-23T10:00:00Z",
     }

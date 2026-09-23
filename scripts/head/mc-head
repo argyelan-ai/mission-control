@@ -99,6 +99,8 @@ PATTERNS = {
     "base_url": re.compile(r"^https?://[A-Za-z0-9.-]+:[0-9]+(/[A-Za-z0-9/._-]*)?$"),
     "model": re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/:-]{0,200}$"),
     "runtime_slug": re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$"),
+    # vault jobs/<job_folder>/run-record.md — where the wrapper files the record
+    "job_folder": re.compile(r"^[a-z0-9][a-z0-9-]{0,99}$"),
 }
 HARNESSES = ("omp", "claude")
 MODES = ("fresh", "continue")
@@ -826,14 +828,19 @@ def cmd_supervise(run_id: str) -> int:
             now = time.time()
             if now - last_beat >= HEARTBEAT_S:
                 (wdir / "heartbeat").touch()
-                try:
-                    mtime = (run / "head.log").stat().st_mtime
+                # Sign of output: head.log OR step.txt — `omp -p` prints only
+                # at the very end, the step file moves while it works.
+                mtimes = []
+                for name in ("head.log", "step.txt"):
+                    try:
+                        mtimes.append((run / name).stat().st_mtime)
+                    except OSError:
+                        pass
+                if mtimes:
                     write_status(
                         run_id,
-                        last_output_at=datetime.fromtimestamp(mtime, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        last_output_at=datetime.fromtimestamp(max(mtimes), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                     )
-                except OSError:
-                    pass
                 last_beat = now
             if (wdir / "stop-requested").exists() and state["reason"] is None:
                 state["reason"] = "stopped"
@@ -922,9 +929,31 @@ def find_pr(spec: dict) -> str | None:
     return None
 
 
+def file_run_record(spec: dict, started: float, ended: float) -> Path | None:
+    """The head writes ``<run>/run-record.md``; the wrapper (trusted) files a
+    copy into ``vault/jobs/<job_folder>/run-record.md`` — only when the
+    frontmatter names this run and the file was written inside the run window."""
+    run_id = spec["run_id"]
+    src = run_dir(run_id) / "run-record.md"
+    try:
+        text = src.read_text()
+        mtime = src.stat().st_mtime
+    except OSError:
+        return None
+    if _frontmatter_value(text, "head_run") != run_id or not (started - 5 <= mtime <= ended + 60):
+        return None
+    dest_dir = vault_jobs() / spec["job_folder"]
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    tmp = dest_dir / ".run-record.md.tmp"
+    tmp.write_text(text)
+    os.replace(tmp, dest_dir / "run-record.md")
+    return dest_dir / "run-record.md"
+
+
 def detect_result(spec: dict, started: float) -> dict:
     run_id = spec["run_id"]
-    record = find_run_record(run_id, started, time.time())
+    ended = time.time()
+    record = file_run_record(spec, started, ended) or find_run_record(run_id, started, ended)
     return {
         "pr_url": find_pr(spec),
         "run_record_path": str(record) if record else None,

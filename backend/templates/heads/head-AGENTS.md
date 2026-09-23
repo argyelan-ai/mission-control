@@ -15,7 +15,8 @@ permanent agent. Nobody can type into your session while you run.
 - Worktree: `{{worktree}}` · branch `{{branch}}` (from `origin/{{base_branch}}`)
 - Pair: {{harness}} × {{runtime}} · time limit {{time_limit}}
 - Run folder (status files): `{{run_dir}}`
-- Run record: `{{vault_job_dir}}/run-record.md`
+- Run record: `{{run_dir}}/run-record.md` (exactly this path — the launcher files it into the vault
+  as `{{vault_job_dir}}/run-record.md` after you end)
 
 ## Status files (your only channel to the operator)
 
@@ -23,7 +24,7 @@ permanent agent. Nobody can type into your session while you run.
 |---|---|---|
 | `{{run_dir}}/step.txt` | on every step change (0–7) | one line: `step 4/7 sabotage probe · waiting for: nothing` |
 | `{{run_dir}}/question.md` | only when you must ask (see "Ask only about") | 1 sentence question + your recommendation + what happens without an answer; then end your run (the launcher sees the file — no exit code needed) |
-| run record | created in step 0, finished in step 7 | see template below |
+| `{{run_dir}}/run-record.md` | created in step 0, finished in step 7 | see template below |
 
 Do not write anywhere else in `{{run_dir}}`. The launcher writes
 `status.json` and the heartbeat itself.

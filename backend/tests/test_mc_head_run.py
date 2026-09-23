@@ -291,6 +291,51 @@ def test_run_record_found_by_head_run_and_time_window(env, tmp_path):
     assert status["run_record_path"] == str(jobs / "2026-09-23-mine" / "run-record.md")
 
 
+def test_run_record_in_run_folder_is_filed_into_the_vault(env):
+    """The head writes <run>/run-record.md (the only place it may write it);
+    the wrapper files a copy into vault jobs/<job_folder>/ — live finding
+    2026-09-23: the model wrote the record into its run folder."""
+    mc_home = env["mc_home"]
+    run_id = str(uuid.uuid4())
+    record = (
+        "---\nid: job-x\ntype: run-record\nagent: head\ndate: 2026-09-23\n"
+        f"head_run: {run_id}\n---\n\nStatus: passed\n"
+    )
+    harness = fake_harness(env["tmp"], f"printf '%s' '{record}' > \"$MC_HEAD_RUN_DIR/run-record.md\"")
+    write_spec(mc_home, run_id=run_id, job_folder="2026-09-23-filed-ab12")
+    run_head(mc_home, "start", run_id, env_extra=_extra(harness))
+    status = wait_phase(mc_home, run_id, "exited")
+    filed = mc_home / "vault" / "jobs" / "2026-09-23-filed-ab12" / "run-record.md"
+    assert status["run_record_path"] == str(filed)
+    assert f"head_run: {run_id}" in filed.read_text()
+
+
+def test_foreign_run_record_in_run_folder_is_not_filed(env):
+    mc_home = env["mc_home"]
+    run_id = str(uuid.uuid4())
+    record = "---\nid: x\ntype: run-record\nagent: head\ndate: d\nhead_run: someone-else\n---\n"
+    harness = fake_harness(env["tmp"], f"printf '%s' '{record}' > \"$MC_HEAD_RUN_DIR/run-record.md\"")
+    write_spec(mc_home, run_id=run_id)
+    run_head(mc_home, "start", run_id, env_extra=_extra(harness))
+    status = wait_phase(mc_home, run_id, "exited")
+    assert status["run_record_path"] is None
+    assert not (mc_home / "vault" / "jobs").exists() or not any((mc_home / "vault" / "jobs").iterdir())
+
+
+def test_last_output_follows_step_file_while_log_is_silent(env):
+    """omp -p prints only at the end; step.txt is the sign of progress."""
+    mc_home = env["mc_home"]
+    harness = fake_harness(
+        env["tmp"],
+        "sleep 1.5; echo 'step 2/7' > \"$MC_HEAD_RUN_DIR/step.txt\"; sleep 2.5",
+    )
+    run_id = write_spec(mc_home)
+    run_head(mc_home, "start", run_id, env_extra=_extra(harness))
+    status = wait_phase(mc_home, run_id, "exited")
+    started = status["started_at"]
+    assert status["last_output_at"] and status["last_output_at"] > started
+
+
 def test_pr_url_is_found_by_the_wrapper(env, tmp_path):
     mc_home = env["mc_home"]
     (mc_home / "heads" / "gh-token").write_text("github_pat_fake\n")
