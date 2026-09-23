@@ -209,7 +209,7 @@ export function CreateLoopDialog({ open, onClose, onCreated }: CreateLoopDialogP
   ];
 
   return (
-    <ResponsiveModal open={open} onClose={onClose} aria-labelledby="create-loop-title">
+    <ResponsiveModal dismissOnOutside={false} open={open} onClose={onClose} aria-labelledby="create-loop-title">
       <div className="px-5 pt-4 pb-3 shrink-0" style={{ borderBottom: `1px solid ${C.borderSubtle}` }}>
         <h2 id="create-loop-title" className="text-base font-semibold" style={{ color: C.textPrimary }}>
           {t("title")}

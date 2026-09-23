@@ -121,7 +121,7 @@ export function FinishGroupDialog({
   ];
 
   return (
-    <ResponsiveModal open={open} onClose={onClose} aria-label={t("finishTitle")}>
+    <ResponsiveModal dismissOnOutside={false} open={open} onClose={onClose} aria-label={t("finishTitle")}>
       <div className="flex flex-col max-h-[85vh]">
         <div className="px-4 pt-4 pb-3 shrink-0">
           <h2 className="text-[16px] font-semibold" style={{ color: C.textPrimary }}>

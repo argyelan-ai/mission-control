@@ -83,7 +83,7 @@ export function ImportRepoDialog({ open, onClose }: ImportRepoDialogProps) {
   );
 
   return (
-    <ResponsiveModal open={open} onClose={handleClose} aria-labelledby="import-repo-title">
+    <ResponsiveModal dismissOnOutside={false} open={open} onClose={handleClose} aria-labelledby="import-repo-title">
       <div className="px-5 pt-4 pb-3 shrink-0" style={{ borderBottom: `1px solid ${C.borderSubtle}` }}>
         <h2 id="import-repo-title" className="text-base font-semibold" style={{ color: C.textPrimary }}>
           {t("title")}

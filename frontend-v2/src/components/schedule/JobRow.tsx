@@ -28,6 +28,15 @@ import cronstrue from "cronstrue/i18n";
 import { C, STATUS_TEXT } from "@/lib/colors";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 
+/**
+ * Column template shared by the table header (JobsTable) and every row. They
+ * are separate grids, so the actions column MUST be a fixed width: `auto`
+ * sized it to the row's ~190 px of hover buttons but to nothing in the
+ * header, and every `fr` column drifted out of line.
+ */
+export const JOB_GRID_COLS =
+  "grid-cols-[24px_24px_minmax(0,2fr)_minmax(0,1.5fr)_1fr_1fr_minmax(0,1fr)_192px]";
+
 interface JobRowProps {
   job: ScheduledJob;
   selected: boolean;
@@ -164,7 +173,7 @@ export function JobRow({
     <motion.div
       initial={{ opacity: 0, y: 4 }}
       animate={{ opacity: 1, y: 0 }}
-      className="group relative grid grid-cols-[24px_24px_minmax(0,2fr)_minmax(0,1.5fr)_1fr_1fr_minmax(0,1fr)_auto] items-center gap-3 rounded-lg px-3 py-2.5 transition"
+      className={`group relative grid ${JOB_GRID_COLS} items-center gap-3 rounded-lg px-3 py-2.5 transition`}
       style={{
         border: `1px solid ${C.border}`,
         background: C.borderSubtle,

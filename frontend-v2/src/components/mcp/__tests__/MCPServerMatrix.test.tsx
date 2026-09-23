@@ -132,4 +132,19 @@ describe("MCPServerMatrix", () => {
     // After rollback, button label is back to "Deactivate" (state restored to enabled)
     expect(screen.getByLabelText(/Deactivate filesystem for Cody/i)).toBeInTheDocument();
   });
+
+  it("keeps the sticky server column opaque and capped so the agent columns stay reachable", () => {
+    const long: MCPServer[] = [
+      { name: "browser", transport: "stdio", description: "x".repeat(400) },
+    ];
+    renderWithQuery(<MCPServerMatrix servers={long} agents={[agentNullMcp]} />);
+    const cell = screen.getByText("browser").closest("td")!;
+    // --bg-elevated does not exist (only --color-bg-elevated): the sticky
+    // cell was transparent and its text slid over the checkboxes.
+    expect(cell.style.backgroundColor).toBe("var(--color-bg-elevated)");
+    // An uncapped description stretched the column to ~1700 px, pushing the
+    // agent checkboxes far off-screen.
+    expect(cell.className).toContain("max-w-[280px]");
+    expect(cell.firstElementChild!.className).toContain("max-w-[280px]");
+  });
 });

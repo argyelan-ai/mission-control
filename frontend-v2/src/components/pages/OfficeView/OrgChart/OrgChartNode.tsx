@@ -8,12 +8,16 @@ import { C, STATUS as STATUS_TOKENS } from "@/lib/colors";
 
 // ── Status palette ────────────────────────────────────────────────────────
 
+// The chart is static EXAMPLE data (see org-chart-data.ts), so no status may
+// look live: every dot is the neutral offline grey and nothing pulses. The
+// labels stay to show which states a crew member can have.
+const EXAMPLE_DOT = STATUS_TOKENS.offline;
 const STATUS: Record<OrgStatus, { color: string; label: string; pulse: boolean }> = {
-  online:  { color: C.online,          label: "online",  pulse: false },
-  working: { color: C.accent,          label: "working", pulse: true  },
-  offline: { color: STATUS_TOKENS.offline, label: "offline", pulse: false },
-  warning: { color: C.warning,         label: "warning", pulse: true  },
-  error:   { color: C.error,           label: "error",   pulse: true  },
+  online:  { color: EXAMPLE_DOT, label: "online",  pulse: false },
+  working: { color: EXAMPLE_DOT, label: "working", pulse: false },
+  offline: { color: EXAMPLE_DOT, label: "offline", pulse: false },
+  warning: { color: EXAMPLE_DOT, label: "warning", pulse: false },
+  error:   { color: EXAMPLE_DOT, label: "error",   pulse: false },
 };
 
 // ── Runtime badge config ──────────────────────────────────────────────────
@@ -119,13 +123,6 @@ export function OrgChartNode({ node }: OrgChartNodeProps) {
             }}
           >
             <Icon size={24} strokeWidth={2.2} />
-            {/* breathing pulse ring — voice is always "listening" */}
-            <motion.div
-              aria-hidden
-              className="absolute inset-0 rounded-xl pointer-events-none"
-              animate={{ boxShadow: [`0 0 0 0 ${C.accent}66`, `0 0 0 12px ${C.accent}00`] }}
-              transition={{ duration: 2.4, repeat: Infinity, ease: "easeOut" }}
-            />
           </div>
 
           <div className="min-w-0 flex-1">

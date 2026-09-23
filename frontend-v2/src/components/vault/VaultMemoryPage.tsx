@@ -437,8 +437,14 @@ export default function VaultMemoryPage() {
           </div>
         )}
 
-        {/* TRASH VIEW — list of soft-deleted notes with restore + purge. */}
-        {isTrashView && <VaultTrashPage />}
+        {/* TRASH VIEW — list of soft-deleted notes with restore + purge.
+            fullHeight AppShell clips the page (overflow hidden), so the list
+            needs its own scroll frame or long trash lists are cut off. */}
+        {isTrashView && (
+          <div className="flex-1 min-h-0 overflow-y-auto">
+            <VaultTrashPage />
+          </div>
+        )}
 
         {/* LIST VIEW — search + filters + two-column */}
         {view === "list" && (<>

@@ -12,6 +12,12 @@ interface ResponsiveModalProps {
   className?: string;
   "aria-label"?: string;
   "aria-labelledby"?: string;
+  /**
+   * Close on a click next to the dialog (default true). Form dialogs pass
+   * false so a stray click cannot discard what the operator typed; Esc and
+   * the dialog's own Close/Cancel still work.
+   */
+  dismissOnOutside?: boolean;
 }
 
 /**
@@ -26,6 +32,7 @@ export function ResponsiveModal({
   className,
   "aria-label": ariaLabel,
   "aria-labelledby": ariaLabelledBy,
+  dismissOnOutside = true,
 }: ResponsiveModalProps) {
   const prefersReducedMotion = useReducedMotion();
 
@@ -52,10 +59,14 @@ export function ResponsiveModal({
           transition={{ duration: prefersReducedMotion ? 0 : 0.15 }}
           className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4"
           style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
-          onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
         >
-          {/* Backdrop */}
+          {/* Backdrop — it covers the wrapper, so it is the click target for
+              "click outside" (a target===currentTarget check on the wrapper
+              never fired). */}
           <div
+            data-testid="responsive-modal-backdrop"
+            aria-hidden
+            onClick={dismissOnOutside ? onClose : undefined}
             className="absolute inset-0"
             style={{ backgroundColor: "rgba(2,4,8,0.7)" }}
           />

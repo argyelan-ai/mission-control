@@ -144,10 +144,10 @@ export function MCPServerMatrix({
                 style={{ borderColor: "var(--color-border-subtle)" }}
               >
                 <td
-                  className="sticky left-0 z-10 p-3"
-                  style={{ backgroundColor: "var(--bg-elevated)" }}
+                  className="sticky left-0 z-10 p-3 max-w-[280px]"
+                  style={{ backgroundColor: "var(--color-bg-elevated)" }}
                 >
-                  <div className="group flex items-center justify-between gap-2">
+                  <div className="group flex items-center justify-between gap-2 max-w-[280px]">
                     <div className="flex items-center gap-2 min-w-0">
                       <Icon size={14} style={{ color: C.accent }} />
                       <div className="min-w-0 flex items-center gap-1.5">

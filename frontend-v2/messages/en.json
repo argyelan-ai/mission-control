@@ -198,12 +198,15 @@
     "tabE2E": "E2E",
     "tabTranscript": "Transcript",
     "tabTimeline": "Timeline",
-    "tabHistory": "History"
+    "tabHistory": "History",
+    "deliverableImageUnavailable": "Image unavailable",
+    "deliverableViewScreenshot": "View screenshot: {title}",
+    "prChipNumber": "PR #{number}",
+    "prChipOpen": "PR open"
   },
   "agents": {
     "title": "Agents",
     "fleetAgents": "Fleet · Agents",
-    "onlineCount": "{online}/{total} online",
     "newAgent": "New agent",
     "templates": "Templates",
     "allAgents": "All Agents",
@@ -233,7 +236,6 @@
     "actionsFor": "Actions: {name}",
     "openDetails": "Open details",
     "config": "Config",
-    "analytics": "Analytics",
     "sessionReset": "Session Reset",
     "archive": "Archive",
     "sessionResetDone": "{name} session reset",
@@ -440,7 +442,9 @@
       "recreateBody": "This pulls the current Docker image (~30-90s). The running worker session will be terminated.",
       "recreateWarn": "Warning: the agent is currently working on a task — the run will be aborted. Confirm to continue anyway (force=true).",
       "runtimeLabel": "Runtime"
-    }
+    },
+    "fleetCountWithPaused": "{active} active · {paused} paused",
+    "fleetCountActive": "{active} active"
   },
   "inbox": {
     "title": "Inbox",
@@ -630,7 +634,8 @@
       "paused": "Group paused",
       "stopped": "Group stopped",
       "actionFailed": "Action failed",
-      "memberArchived": "archived"
+      "memberArchived": "archived",
+      "close": "Close"
     },
     "title": "Agent Terminals",
     "terminal": "Terminal",
@@ -988,7 +993,10 @@
         "name": "Monthly Report",
         "description": "1st of the month at 09:00"
       }
-    }
+    },
+    "jobNotFound": "Job not found",
+    "jobNotFoundHint": "It may have been deleted, or the link is out of date.",
+    "jobLoadFailed": "Could not load the job list."
   },
   "office": {
     "title": "Org Chart",
@@ -1025,7 +1033,9 @@
     "taglineDeployer": "Ships code live — Vercel, Docker, CI/CD.",
     "taglineTester": "Tests, E2E, bug reports — before the operator sees them.",
     "taglineInstaller": "Installs MCP servers, skills, and plugins.",
-    "taglineHermes": "Morning briefings & scheduled routines."
+    "taglineHermes": "Morning briefings & scheduled routines.",
+    "exampleBannerTitle": "Example crew — not your live fleet",
+    "exampleBannerBody": "This chart shows sample roles to illustrate the structure. Names and status are placeholders; your real agents are on the Agents page."
   },
   "vault": {
     "tabList": "List",
@@ -1050,7 +1060,6 @@
     "removeFilter": "Remove filter {label}",
     "untitled": "Untitled",
     "related": "related",
-    "andMore": "… and {count} more",
     "saveFailed": "Save failed",
     "cancelEdit": "Cancel edit",
     "cancelEditTitle": "Cancel (Esc)",
@@ -1360,7 +1369,8 @@
       "deleteBody": "Really delete {label}?",
       "delete": "Delete",
       "telegramManagedHint": "Telegram tokens are managed in the Telegram section, together with the connection test and the function toggles.",
-      "goToTelegram": "Go to Telegram"
+      "goToTelegram": "Go to Telegram",
+      "cancel": "Cancel"
     },
     "github": {
       "title": "GitHub",

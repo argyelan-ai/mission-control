@@ -133,7 +133,7 @@ export function NodePairingDialog({ open, onClose }: { open: boolean; onClose: (
   const rows = result ? installCommandRows(result) : [];
 
   return (
-    <ResponsiveModal open={open} onClose={onClose} aria-labelledby="node-pairing-title">
+    <ResponsiveModal dismissOnOutside={false} open={open} onClose={onClose} aria-labelledby="node-pairing-title">
       <div
         className="flex items-center justify-between p-5 border-b shrink-0"
         style={{ borderColor: "var(--color-border)" }}

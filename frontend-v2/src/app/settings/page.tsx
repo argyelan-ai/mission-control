@@ -2235,6 +2235,12 @@ function SettingsContent() {
       setActiveSection(sectionParam);
     }
   }, [sectionParam]);
+  // Write the choice back so a reload or a shared link lands on it.
+  const router = useRouter();
+  const selectSection = (id: string) => {
+    setActiveSection(id);
+    router.replace(`/settings?section=${id}`, { scroll: false });
+  };
 
   const currentUser = useAppStore((s) => s.currentUser);
   const isAdmin = currentUser?.role === "admin";
@@ -2242,7 +2248,11 @@ function SettingsContent() {
   const visibleSections = SECTIONS.filter((s) => !s.adminOnly || isAdmin);
 
   return (
-    <div className="h-full flex flex-col overflow-hidden md:-m-6">
+    // fullHeight shell. From md up only the content column scrolls, so the
+    // section nav stays in view on long sections. On phones the whole page
+    // scrolls as one: the app bar and bottom tab bar already take height, and
+    // pinning the header plus the section strip would leave little room.
+    <div className="flex-1 min-h-0 flex flex-col overflow-y-auto md:overflow-hidden md:-m-6">
       {/* Header */}
       <motion.div
         initial={{ opacity: 0, y: 12 }}
@@ -2265,7 +2275,7 @@ function SettingsContent() {
         </div>
       </motion.div>
 
-      <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
+      <div className="flex-1 flex flex-col md:flex-row md:min-h-0 md:overflow-hidden">
         {/* Left: Section Nav (glass sidebar) */}
         <motion.nav
           initial={{ opacity: 0, x: -8 }}
@@ -2297,7 +2307,7 @@ function SettingsContent() {
               return (
                 <li key={section.id}>
                   <button
-                    onClick={() => setActiveSection(section.id)}
+                    onClick={() => selectSection(section.id)}
                     className={cn(
                       "relative flex items-center gap-3 w-full px-3 py-2 rounded-lg text-sm transition-all duration-200 cursor-pointer",
                       isActive ? "font-medium" : ""
@@ -2341,7 +2351,7 @@ function SettingsContent() {
         </motion.nav>
 
         {/* Right: Section Content */}
-        <div className="flex-1 overflow-y-auto p-4 md:p-6 min-w-0">
+        <div className="flex-1 md:overflow-y-auto p-4 md:p-6 min-w-0">
           {/* 3xl, not 2xl: two nav columns already eat ~530 px of a 1440 px
               screen, and the dense sections (autonomy matrix, key lists) were
               being squeezed while 300 px sat empty on the right. */}
@@ -2352,14 +2362,14 @@ function SettingsContent() {
               {activeSection === "autonomy" && isAdmin && <AutonomySection />}
               {activeSection === "intelligence" && isAdmin && (
                 <IntelligenceSection
-                  onNavigateToAiProviders={() => setActiveSection("ai-providers")}
+                  onNavigateToAiProviders={() => selectSection("ai-providers")}
                 />
               )}
               {activeSection === "apikeys" && isAdmin && (
                 <ApiKeysSection
-                  onNavigateToGithub={() => setActiveSection("github")}
-                  onNavigateToSlack={() => setActiveSection("slack")}
-                  onNavigateToTelegram={() => setActiveSection("telegram")}
+                  onNavigateToGithub={() => selectSection("github")}
+                  onNavigateToSlack={() => selectSection("slack")}
+                  onNavigateToTelegram={() => selectSection("telegram")}
                 />
               )}
               {activeSection === "github" && isAdmin && <GithubSection />}
@@ -2381,7 +2391,7 @@ function SettingsContent() {
 
 export default function SettingsPage() {
   return (
-    <AppShell>
+    <AppShell fullHeight>
       <Suspense fallback={null}>
         <SettingsContent />
       </Suspense>

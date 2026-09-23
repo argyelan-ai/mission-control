@@ -10,7 +10,7 @@ import { useTranslations } from "next-intl";
 import { Search, X, Pause, Play, Trash2 } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import type { ScheduledJob } from "@/lib/types";
-import { JobRow } from "./JobRow";
+import { JobRow, JOB_GRID_COLS } from "./JobRow";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { C, STATUS_TEXT } from "@/lib/colors";
 
@@ -241,7 +241,7 @@ export function JobsTable({
         <div style={{ minWidth: 640 }}>
           {/* Header */}
           <div
-            className="grid grid-cols-[24px_24px_minmax(0,2fr)_minmax(0,1.5fr)_1fr_1fr_minmax(0,1fr)_auto] items-center gap-3 px-3 py-1.5 text-[10px] uppercase tracking-wide"
+            className={`grid ${JOB_GRID_COLS} items-center gap-3 px-3 py-1.5 text-[10px] uppercase tracking-wide`}
             style={{ color: C.textDim }}
           >
             <input

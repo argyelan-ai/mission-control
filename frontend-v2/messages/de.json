@@ -198,12 +198,15 @@
     "tabE2E": "E2E",
     "tabTranscript": "Transcript",
     "tabTimeline": "Timeline",
-    "tabHistory": "Verlauf"
+    "tabHistory": "Verlauf",
+    "deliverableImageUnavailable": "Bild nicht verfügbar",
+    "deliverableViewScreenshot": "Screenshot ansehen: {title}",
+    "prChipNumber": "PR #{number}",
+    "prChipOpen": "PR offen"
   },
   "agents": {
     "title": "Agenten",
     "fleetAgents": "Fleet · Agenten",
-    "onlineCount": "{online}/{total} online",
     "newAgent": "Neuer Agent",
     "templates": "Templates",
     "allAgents": "Alle Agenten",
@@ -233,7 +236,6 @@
     "actionsFor": "Aktionen: {name}",
     "openDetails": "Details öffnen",
     "config": "Config",
-    "analytics": "Analytics",
     "sessionReset": "Session Reset",
     "archive": "Archivieren",
     "sessionResetDone": "{name}: Session zurückgesetzt",
@@ -440,7 +442,9 @@
       "recreateBody": "Das zieht das aktuelle Docker-Image (~30-90s). Die laufende Worker-Session wird beendet.",
       "recreateWarn": "Achtung: Der Agent arbeitet gerade an einer Aufgabe — der Lauf wird abgebrochen. Bestätige, um trotzdem fortzufahren (force=true).",
       "runtimeLabel": "Runtime"
-    }
+    },
+    "fleetCountWithPaused": "{active} aktiv · {paused} pausiert",
+    "fleetCountActive": "{active} aktiv"
   },
   "inbox": {
     "title": "Eingang",
@@ -630,7 +634,8 @@
       "paused": "Gruppe pausiert",
       "stopped": "Gruppe beendet",
       "actionFailed": "Aktion fehlgeschlagen",
-      "memberArchived": "archiviert"
+      "memberArchived": "archiviert",
+      "close": "Schliessen"
     },
     "title": "Agent-Terminals",
     "terminal": "Terminal",
@@ -988,7 +993,10 @@
         "name": "Monatsbericht",
         "description": "1. des Monats um 09:00"
       }
-    }
+    },
+    "jobNotFound": "Job nicht gefunden",
+    "jobNotFoundHint": "Vielleicht wurde er gelöscht, oder der Link ist veraltet.",
+    "jobLoadFailed": "Die Job-Liste konnte nicht geladen werden."
   },
   "office": {
     "title": "Organigramm",
@@ -1025,7 +1033,9 @@
     "taglineDeployer": "Bringt Code live — Vercel, Docker, CI/CD.",
     "taglineTester": "Tests, E2E, Bug-Reports — bevor der Operator sie sieht.",
     "taglineInstaller": "Installiert MCP-Server, Skills und Plugins.",
-    "taglineHermes": "Morgen-Briefings & geplante Routinen."
+    "taglineHermes": "Morgen-Briefings & geplante Routinen.",
+    "exampleBannerTitle": "Beispiel-Team — nicht deine laufende Flotte",
+    "exampleBannerBody": "Dieses Organigramm zeigt Beispiel-Rollen, um den Aufbau zu erklären. Namen und Status sind Platzhalter; deine echten Agenten stehen auf der Seite Agenten."
   },
   "vault": {
     "tabList": "Liste",
@@ -1050,7 +1060,6 @@
     "removeFilter": "Filter {label} entfernen",
     "untitled": "Ohne Titel",
     "related": "verwandt",
-    "andMore": "… und {count} weitere",
     "saveFailed": "Speichern fehlgeschlagen",
     "cancelEdit": "Bearbeitung abbrechen",
     "cancelEditTitle": "Abbrechen (Esc)",
@@ -1360,7 +1369,8 @@
       "deleteBody": "{label} wirklich löschen?",
       "delete": "Löschen",
       "telegramManagedHint": "Telegram-Tokens werden in der Telegram-Sektion verwaltet, zusammen mit Verbindungstest und Funktions-Schaltern.",
-      "goToTelegram": "Zu Telegram"
+      "goToTelegram": "Zu Telegram",
+      "cancel": "Abbrechen"
     },
     "github": {
       "title": "GitHub",

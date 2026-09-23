@@ -8,7 +8,8 @@
 
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Image as ImageIcon, X, ZoomIn } from "lucide-react";
+import { Image as ImageIcon, ImageOff, X, ZoomIn } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { getToken } from "@/lib/api";
 import { C } from "@/lib/colors";
 import { DeliverableCard } from "./DeliverableCard";
@@ -25,6 +26,7 @@ function AuthImage({
   style?: React.CSSProperties;
   onError?: () => void;
 }) {
+  const t = useTranslations("tasks");
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
 
@@ -54,7 +56,18 @@ function AuthImage({
     };
   }, [src]);
 
-  if (failed) return null;
+  if (failed) {
+    // A 404/500 used to leave an empty black tile behind — say so instead.
+    return (
+      <div
+        className={className}
+        style={{ ...style, background: "var(--color-bg-surface)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 4 }}
+      >
+        <ImageOff size={16} style={{ color: C.textDim }} aria-hidden />
+        <span className="text-[10px]" style={{ color: C.textMuted }}>{t("deliverableImageUnavailable")}</span>
+      </div>
+    );
+  }
   if (!blobUrl) {
     return (
       <div
@@ -129,6 +142,7 @@ export function DeliverablesTab({
   boardId: string;
   taskId: string;
 }) {
+  const t = useTranslations("tasks");
   const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null);
 
   if (!deliverables.length) {
@@ -139,6 +153,11 @@ export function DeliverablesTab({
       </div>
     );
   }
+
+  // Deliverables listed with include_subtasks belong to a child task; the
+  // backend only serves them under their own task id (404 otherwise).
+  const imageUrl = (d: TaskDeliverable) =>
+    `/api/v1/boards/${boardId}/tasks/${d.task_id || taskId}/deliverables/${d.id}/image`;
 
   const screenshots = deliverables.filter((d) => d.deliverable_type === "screenshot" && d.path);
   const others = deliverables.filter((d) => d.deliverable_type !== "screenshot" || !d.path);
@@ -190,18 +209,18 @@ export function DeliverablesTab({
                 }}
                 onClick={() =>
                   setLightbox({
-                    src: `/api/v1/boards/${boardId}/tasks/${taskId}/deliverables/${d.id}/image`,
+                    src: imageUrl(d),
                     alt: d.title,
                   })
                 }
                 onKeyDown={(e) => e.key === "Enter" && setLightbox({
-                  src: `/api/v1/boards/${boardId}/tasks/${taskId}/deliverables/${d.id}/image`,
+                  src: imageUrl(d),
                   alt: d.title,
                 })}
-                aria-label={`View screenshot: ${d.title}`}
+                aria-label={t("deliverableViewScreenshot", { title: d.title })}
               >
                 <AuthImage
-                  src={`/api/v1/boards/${boardId}/tasks/${taskId}/deliverables/${d.id}/image`}
+                  src={imageUrl(d)}
                   alt={d.title}
                   className="w-full h-full object-cover transition-transform duration-200 group-hover:scale-[1.03]"
                   style={{ objectPosition: "top" }}
@@ -234,7 +253,7 @@ export function DeliverablesTab({
               key={d.id}
               deliverable={d}
               boardId={boardId}
-              taskId={taskId}
+              taskId={d.task_id || taskId}
             />
           ))}
         </div>

@@ -7,7 +7,7 @@ import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import { useLocale, useTranslations } from "next-intl";
 import {
-  Plus, X, Loader2, Bot, Users, RotateCcw, Settings, BarChart3,
+  Plus, X, Loader2, Bot, Users, RotateCcw, Settings,
   Layout, ChevronDown, Archive, MoreVertical, Terminal,
 } from "lucide-react";
 import { api } from "@/lib/api";
@@ -29,6 +29,7 @@ import { AgentWizard } from "./wizard/AgentWizard";
 import { AgentActions, extractDetail } from "@/components/agent/AgentActions";
 import type { WizardState } from "./wizard/types";
 import { EntityIcon } from "@/components/shared/EntityIcon";
+import { fleetCount, fleetCountLabel } from "./fleetCount";
 
 // ── Design Tokens (migrated from CINEMA inline map → lib/colors.ts) ────────
 const CINEMA = {
@@ -548,9 +549,6 @@ function AgentActionsSheet({
           <Link href={`/agents/${agent.id}?tab=config`} className={itemCls} style={{ color: "var(--color-text-secondary)" }}>
             <Settings size={15} /> {t("config")}
           </Link>
-          <Link href={`/agents/${agent.id}?tab=analytics`} className={itemCls} style={{ color: "var(--color-text-secondary)" }}>
-            <BarChart3 size={15} /> {t("analytics")}
-          </Link>
           <button
             onClick={() => { onClose(); onReset(agent); }}
             disabled={resettingId === agent.id}
@@ -666,11 +664,9 @@ export default function AgentsPage() {
     onError: (e) => notify.error(extractDetail(e)),
   });
 
-  // "online" = alive (heartbeating): idle/working count too — previously the
-  // list showed 0/14 even though the whole fleet was running (idle was ignored).
-  const ALIVE = new Set(["online", "busy", "idle", "working"]);
-  const onlineCount = agents?.filter((a) => ALIVE.has(a.status)).length ?? 0;
-  const totalCount = agents?.length ?? 0;
+  // Split by operational mode: a paused agent still heartbeats ("idle"), so
+  // counting status as "online" read "14/14 online" with 12 agents paused.
+  const fleet = fleetCount(agents);
 
   return (
     <AppShell>
@@ -683,7 +679,7 @@ export default function AgentsPage() {
               {t("title")}
             </h1>
             <p className="text-[13px] text-[var(--color-text-secondary)] mt-1">
-              {t("onlineCount", { online: onlineCount, total: totalCount })}
+              {fleetCountLabel(fleet, t)}
             </p>
           </div>
 
@@ -719,7 +715,7 @@ export default function AgentsPage() {
           >
             <span className="flex items-center gap-2">
               <Bot size={14} />
-              {t("title")} ({totalCount})
+              {t("title")} ({agents?.length ?? 0})
             </span>
           </button>
           <button

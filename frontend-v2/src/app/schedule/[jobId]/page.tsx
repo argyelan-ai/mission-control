@@ -120,7 +120,7 @@ export default function ScheduleJobDetailPage() {
   const [confirmDisable, setConfirmDisable] = useState(false);
 
   // Job (lookup via list since no getJob endpoint exists)
-  const { data: jobs = [] } = useQuery({
+  const { data: jobs = [], isSuccess: jobsLoaded, isError: jobsFailed } = useQuery({
     queryKey: ["schedule-jobs"],
     queryFn: () => api.schedule.listJobs(),
     refetchInterval: 30_000,
@@ -170,6 +170,33 @@ export default function ScheduleJobDetailPage() {
     for (const a of agents as Agent[]) m.set(a.id, a);
     return m;
   }, [agents]);
+
+  // The list loaded (or failed) and this id is not in it: say so instead of
+  // spinning forever — the job was deleted or the link is stale.
+  if (!job && (jobsLoaded || jobsFailed)) {
+    return (
+      <AppShell>
+        <div className="flex flex-col items-center justify-center h-full gap-3 py-16 text-center">
+          <p className="text-sm font-medium" style={{ color: C.textPrimary }}>
+            {jobsFailed ? t("jobLoadFailed") : t("jobNotFound")}
+          </p>
+          {!jobsFailed && (
+            <p className="text-xs" style={{ color: C.textMuted }}>
+              {t("jobNotFoundHint")}
+            </p>
+          )}
+          <Link
+            href="/schedule"
+            className="flex items-center gap-1.5 text-xs px-3 py-1.5 min-h-11 sm:min-h-0 rounded-md transition-colors"
+            style={{ color: C.accent, border: `1px solid ${C.borderAccent}` }}
+          >
+            <ArrowLeft size={13} aria-hidden />
+            {t("backToSchedule")}
+          </Link>
+        </div>
+      </AppShell>
+    );
+  }
 
   if (!job) {
     return (

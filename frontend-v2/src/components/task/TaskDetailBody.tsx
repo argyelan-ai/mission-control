@@ -41,7 +41,7 @@ import { DeliverablesTab } from "./DeliverablesTab";
 import { E2ETab } from "./E2ETab";
 import { WorkspaceTab } from "./WorkspaceTab";
 import { ThreadPanel } from "./ThreadPanel";
-import { GitPanel } from "./GitPanel";
+import { GitPanel, gitSectionInfo } from "./GitPanel";
 import { TaskReferences } from "./TaskReferences";
 import type { Agent, Task, TaskChecklistItem, TaskEvent, TaskGitInfo, TaskStatus } from "@/lib/types";
 
@@ -545,6 +545,7 @@ export function TaskDetailBody({
     enabled: !!task.workspace_path,
     refetchInterval: 30_000,
   });
+  const gitSection = gitSectionInfo(gitInfo, task.pr_url);
 
   const { data: checklist = [] } = useQuery<TaskChecklistItem[]>({
     queryKey: ["task-checklist", boardId, task.id],
@@ -883,10 +884,16 @@ export function TaskDetailBody({
         </Section>
 
         {/* Git */}
-        {gitInfo?.branch && (
+        {gitSection && (
           <Section>
             <SectionLabel>Git</SectionLabel>
-            <GitPanel gitInfo={gitInfo} boardId={boardId} taskId={task.id} />
+            <GitPanel
+              gitInfo={gitSection}
+              boardId={boardId}
+              taskId={task.id}
+              taskPrUrl={task.pr_url}
+              taskPrNumber={task.pr_number}
+            />
           </Section>
         )}
 
