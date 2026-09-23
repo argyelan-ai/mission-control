@@ -84,6 +84,7 @@ Exit codes: `0` done, `2` a write request got through (must never happen),
    and selects inside a settings tab, accordions in a section, tabs and wizard
    steps in a dialog, rows in a detail panel — is clicked, measured and
    screenshotted as well (`--nested-max` per state). "Close"/"Back" buttons
+   and, inside a dialog, its own "Create …" confirm button
    are skipped there; if a nested click tears the parent down anyway, the
    parent is re-opened from a fresh load and the pass continues.
 6. **Findings** per open state:

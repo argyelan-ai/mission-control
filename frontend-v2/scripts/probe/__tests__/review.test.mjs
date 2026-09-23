@@ -1,7 +1,7 @@
 // Tests for the review round: token hygiene, loading detection, sampling of
 // repeated components, deeper coverage and honest report numbers.
 import { describe, expect, it } from "vitest";
-import { clickVerdict, dangerousLabel, isCloser, redactSecrets } from "../lib/guard.mjs";
+import { clickVerdict, dangerousLabel, isCloser, nestedVerdict, redactSecrets } from "../lib/guard.mjs";
 import { dedupeFindings, evaluateState, isLoadingText } from "../lib/findings.mjs";
 import { familyKey, parseArgs, renderMarkdown, sampleRepeats } from "../lib/report.mjs";
 import { resolveRoutes } from "../lib/routes.mjs";
@@ -187,5 +187,16 @@ describe("views opened by a click that are still loading", () => {
   it("are reported too (medium), not only the page as loaded", () => {
     const f = evaluateState({ viewport: { w: 1440, h: 900 }, scrollWidth: 1440, layers: [], stillLoading: ["Loading catalog..."] });
     expect(f).toEqual([expect.objectContaining({ type: "loading", severity: "medium" })]);
+  });
+});
+
+describe("nestedVerdict: a dialog's own confirm button is never clicked", () => {
+  it("guards create-style labels inside a floating parent only", () => {
+    expect(nestedVerdict({ label: "Create loop" }, true)).toMatchObject({ ok: false, reason: "guarded:confirm-in-dialog" });
+    expect(nestedVerdict({ label: "Erstellen" }, true).ok).toBe(false);
+    expect(nestedVerdict({ label: "Create loop" }, false).ok).toBe(true);
+    expect(nestedVerdict({ label: "New board" }, true).ok).toBe(true);
+    expect(nestedVerdict({ label: "Delete" }, false).ok).toBe(false);
+    expect(nestedVerdict({ label: "Create", role: "tab" }, true).ok).toBe(true);
   });
 });

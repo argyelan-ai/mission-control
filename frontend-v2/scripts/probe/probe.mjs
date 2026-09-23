@@ -12,7 +12,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { clickVerdict, isCloser, redactSecrets } from "./lib/guard.mjs";
+import { clickVerdict, isCloser, nestedVerdict, redactSecrets } from "./lib/guard.mjs";
 import { createLockedContext, lockSelfTest, newWriteCounter } from "./lib/context.mjs";
 import { EXTRA_VIEWS, discoverRoutes, filterRoutes, resolveRoutes } from "./lib/routes.mjs";
 import { LOADING_TEXT_RE, dedupeFindings, evaluateState } from "./lib/findings.mjs";
@@ -187,12 +187,12 @@ async function probePage(ctx, route, width, shellDone) {
     await page.waitForTimeout(AFTER_CLICK_MS);
     return s2;
   };
-  const probeNested = async (c, sel, n, dir, rel) => {
+  const probeNested = async (c, sel, n, dir, rel, parentFloating) => {
     const out = { opened: 0, read: 0, failed: 0, reopened: 0, states: [] };
     if (opts.nestedMax === 0) return out;
     const gather = async () => {
       const all = await page.evaluate(collectCandidates, { onlyNew: true, attr: "data-probe-n" });
-      return all.filter((x) => x.selected !== "true" && clickVerdict(x).ok && !isCloser(x.label));
+      return all.filter((x) => x.selected !== "true" && nestedVerdict(x, parentFloating).ok && !isCloser(x.label));
     };
     let inner = await gather();
     const { keep } = opts.allRepeats ? { keep: inner } : sampleRepeats(inner);
@@ -320,7 +320,7 @@ async function probePage(ctx, route, width, shellDone) {
     const floating = tabbed || toggled ? null : st.layers.find((l) => l.kind !== "inline");
     const floatingLeft = async () => (await page.evaluate(measureState, {})).layers.filter((l) => l.kind !== "inline").length;
     const nestedTargets = async () =>
-      (await page.evaluate(collectCandidates, { onlyNew: true, attr: "data-probe-n" })).filter((x) => x.selected !== "true" && clickVerdict(x).ok && !isCloser(x.label)).length;
+      (await page.evaluate(collectCandidates, { onlyNew: true, attr: "data-probe-n" })).filter((x) => x.selected !== "true" && nestedVerdict(x, !!floating).ok && !isCloser(x.label)).length;
     const hasInner = opts.nestedMax > 0 && (await nestedTargets()) > 0;
 
     // 1) Escape check for floating layers FIRST, on the untouched layer — so a
@@ -383,7 +383,7 @@ async function probePage(ctx, route, width, shellDone) {
           parentOpen = (await floatingLeft()) > 0;
         } else parentOpen = false;
       }
-      if (parentOpen) nestedStats = await probeNested(c, sel, n, dir, rel);
+      if (parentOpen) nestedStats = await probeNested(c, sel, n, dir, rel, !!floating);
       if (floating) {
         await page.keyboard.press("Escape").catch(() => {});
         await page.waitForTimeout(400);

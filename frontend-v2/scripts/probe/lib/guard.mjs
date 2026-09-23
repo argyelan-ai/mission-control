@@ -127,3 +127,15 @@ export function redactSecrets(text, secrets = []) {
 export function isCloser(label) {
   return /^(close|close dialog|close panel|schliessen|schließen|back|zurück|zurueck|×|✕|x)$/iu.test(String(label || "").trim());
 }
+
+/**
+ * Second-level verdict. "New"/"Add"/"Create" are allowed on the first level
+ * because they open creation dialogs; inside an opened dialog or drawer a
+ * "Create …" button is that dialog's confirm action and is never clicked.
+ */
+export function nestedVerdict(c, parentFloating) {
+  const v = clickVerdict(c);
+  if (!v.ok || !parentFloating || (c.role || "").toLowerCase() === "tab") return v;
+  if (/^(create|erstellen|anlegen)(?=$|[^\p{L}\p{N}])/iu.test(String(c.label || "").trim())) return { ok: false, reason: "guarded:confirm-in-dialog" };
+  return v;
+}
