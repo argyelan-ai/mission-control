@@ -451,9 +451,12 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
               className="w-1.5 h-1.5 rounded-full shrink-0"
               style={{ background: dotColor(effectiveState) }}
             />
-            <span className="text-xs" style={{ color: C.textSecondary }}>
-              {t(`states.${effectiveState}`)}
-              {probeTimedOut && ` — ${t("probeTimedOut")}`}
+            <span
+              className="text-xs"
+              style={{ color: C.textSecondary }}
+              title={probeTimedOut ? t("probeTimedOutHint") : undefined}
+            >
+              {probeTimedOut ? t("unknownProbeTimedOut") : t(`states.${effectiveState}`)}
             </span>
             <span style={{ color: C.borderSubtle }}>·</span>
           </>

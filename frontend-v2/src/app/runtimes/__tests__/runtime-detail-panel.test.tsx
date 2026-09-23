@@ -59,6 +59,14 @@ describe("RuntimeDetailPanel", () => {
     expect(screen.getByText("Unknown — probe timed out")).toBeInTheDocument();
   });
 
+  it("probe timed out: a tooltip explains what it means", () => {
+    renderWithQuery(<RuntimeDetailPanel open runtime={makeRuntime({ runtime_type: "vllm_docker", state: "unknown", container_status: "probe_timeout" })} onClose={() => {}} />);
+    expect(screen.getByText("Unknown — probe timed out")).toHaveAttribute(
+      "title",
+      "No answer within the probe time limit. The box may be hung or overloaded.",
+    );
+  });
+
   it("probe timed out on a hosted API: the chip is shown instead of hidden", () => {
     renderWithQuery(<RuntimeDetailPanel open runtime={makeRuntime({ runtime_type: "cloud", state: "unknown", container_status: "probe_timeout" })} onClose={() => {}} />);
     expect(screen.getByText("Unknown — probe timed out")).toBeInTheDocument();

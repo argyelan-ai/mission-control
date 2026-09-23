@@ -2675,7 +2675,8 @@
       "failed": "Error",
       "unknown": "Unknown"
     },
-    "probeTimedOut": "probe timed out",
+    "unknownProbeTimedOut": "Unknown — probe timed out",
+    "probeTimedOutHint": "No answer within the probe time limit. The box may be hung or overloaded.",
     "nameDrift": "Name",
     "nameDriftTitle": "The name claims version {versions}, but this runtime serves {model}. The name should describe the box, not the model.",
     "hostAutostart": {
@@ -2716,6 +2717,7 @@
       "kpiSpeedSolo": "Speed solo",
       "kpiEndpointSlot": "Endpoint · slot",
       "cornerFree": "free",
+      "cornerUnknown": "unknown",
       "freeLine": "no model · ready",
       "cornerAsleep": "asleep",
       "poweredOff": "powered off",
