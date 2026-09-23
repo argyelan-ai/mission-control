@@ -50,6 +50,26 @@ describe("RuntimeDetailPanel", () => {
     await waitFor(() => expect(start).toHaveBeenCalledWith("rt", undefined));
   });
 
+  // /runtimes cuts a state probe off after a time limit and reports the
+  // runtime as unknown with container_status "probe_timeout" — the panel
+  // must say WHY it is unknown, even for hosted APIs whose idle "unknown"
+  // chip is otherwise hidden on purpose.
+  it("probe timed out: says so next to the unknown state", () => {
+    renderWithQuery(<RuntimeDetailPanel open runtime={makeRuntime({ runtime_type: "vllm_docker", state: "unknown", container_status: "probe_timeout" })} onClose={() => {}} />);
+    expect(screen.getByText("Unknown — probe timed out")).toBeInTheDocument();
+  });
+
+  it("probe timed out on a hosted API: the chip is shown instead of hidden", () => {
+    renderWithQuery(<RuntimeDetailPanel open runtime={makeRuntime({ runtime_type: "cloud", state: "unknown", container_status: "probe_timeout" })} onClose={() => {}} />);
+    expect(screen.getByText("Unknown — probe timed out")).toBeInTheDocument();
+  });
+
+  it("plain unknown without a timeout: no timeout wording", () => {
+    renderWithQuery(<RuntimeDetailPanel open runtime={makeRuntime({ runtime_type: "vllm_docker", state: "unknown" })} onClose={() => {}} />);
+    expect(screen.getByText("Unknown")).toBeInTheDocument();
+    expect(screen.queryByText(/probe timed out/)).not.toBeInTheDocument();
+  });
+
   // Rezept-Umschalter (Vertrag 02.09.2026): dieselbe Quelle wie die Kachel.
   it("host-bound runtime: shows the box recipe switcher fed by GET /hosts/{id}/recipes", async () => {
     const recipes = vi.spyOn(api.hosts, "recipes").mockResolvedValue([{

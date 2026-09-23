@@ -2675,6 +2675,7 @@
       "failed": "Fehler",
       "unknown": "Unbekannt"
     },
+    "probeTimedOut": "Prüfung ohne Antwort",
     "nameDrift": "Name",
     "nameDriftTitle": "Der Name behauptet Version {versions}, diese Runtime serviert aber {model}. Der Name sollte die Box beschreiben, nicht das Modell.",
     "hostAutostart": {

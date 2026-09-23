@@ -381,6 +381,9 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
   const effectiveState = runtime.state ?? "unknown";
   const canStart = effectiveState === "stopped";
   const canStop = effectiveState !== "stopped";
+  // GET /runtimes cuts a live probe off after a time limit; the runtime is
+  // then "unknown" for a known reason, which is worth showing everywhere.
+  const probeTimedOut = runtime.container_status === "probe_timeout";
 
   // Power-managed runtime (unsloth_porsche): box sleeps when idle. The backend
   // reports container_status "asleep" (:5555 down), "booted_no_model" (box awake,
@@ -442,7 +445,7 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
           stopped/unknown by design — labeling them "Stopped" reads as an
           outage, so the state chip is shown only where it means something. */}
       <div className="px-4 pt-4 pb-1 flex items-center gap-2">
-        {(caps.lifecycle || !["stopped", "unknown"].includes(effectiveState)) && (
+        {(caps.lifecycle || probeTimedOut || !["stopped", "unknown"].includes(effectiveState)) && (
           <>
             <span
               className="w-1.5 h-1.5 rounded-full shrink-0"
@@ -450,6 +453,7 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
             />
             <span className="text-xs" style={{ color: C.textSecondary }}>
               {t(`states.${effectiveState}`)}
+              {probeTimedOut && ` — ${t("probeTimedOut")}`}
             </span>
             <span style={{ color: C.borderSubtle }}>·</span>
           </>

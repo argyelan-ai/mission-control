@@ -2675,6 +2675,7 @@
       "failed": "Error",
       "unknown": "Unknown"
     },
+    "probeTimedOut": "probe timed out",
     "nameDrift": "Name",
     "nameDriftTitle": "The name claims version {versions}, but this runtime serves {model}. The name should describe the box, not the model.",
     "hostAutostart": {
