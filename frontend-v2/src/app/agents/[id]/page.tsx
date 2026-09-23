@@ -31,6 +31,7 @@ import { SkillBadges } from "@/components/agent/AgentCard";
 import { RuntimePill, RUNTIME_TYPE_COLOR } from "@/components/shared/RuntimePill";
 import { RuntimeSwitchModal } from "@/components/shared/RuntimeSwitchModal";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { AgentApiKeySection } from "./AgentApiKeySection";
 import type {
   Agent, AgentMetrics, ActivityEvent as ActivityEventType,
   OpenClawSkill, AgentSkillsResponse,
@@ -671,6 +672,14 @@ export function RuntimeSelectionSection({ agent, agentId }: { agent: Agent; agen
   );
 
   const selectedRuntime = runtimesData?.runtimes.find((r) => r.id === selected || r.slug === selected);
+  // D-2: the bound runtime must always be a visible, selected option. While
+  // the list loads (or when the bound row is missing from it — disabled,
+  // removed) a <select> without a matching <option> silently shows the first
+  // entry ("Fallback") or nothing, contradicting the header.
+  const boundId = agent.runtime_id ?? null;
+  const boundInList =
+    !!boundId && !!runtimesData?.runtimes.some((r) => r.id === boundId || r.slug === boundId);
+  const showBoundPlaceholder = !!boundId && !boundInList;
   const borderColor = isSwitchable && selectedRuntime
     ? RUNTIME_TYPE_COLOR[selectedRuntime.runtime_type] ?? "var(--color-border)"
     : "var(--color-border)";
@@ -745,6 +754,11 @@ export function RuntimeSelectionSection({ agent, agentId }: { agent: Agent; agen
                   Ohne sie startet der Harness ohne Modell, und das Backend
                   lehnt das Lösen der Bindung ohnehin mit 422 ab — die Option
                   gar nicht anzubieten ist ehrlicher als ein Klick ins Leere. */}
+              {showBoundPlaceholder && (
+                <option value={boundId!}>
+                  {runtimesData ? t("currentBindingMissing") : t("currentBindingLoading")}
+                </option>
+              )}
               {allowsRuntimeFallback(agent.harness) && (
                 <option value="">{t("fallbackOption")}</option>
               )}
@@ -889,49 +903,6 @@ function ConfigTab({
   const [isDirty, setIsDirty] = useState(false);
   const qc = useQueryClient();
 
-  // ── API Key Selector (per-agent override) ────────────────────────────────
-  // Loads all secrets (masked) from the secrets table → dropdown.
-  // Change via PATCH /agents/{id} { secret_id }, apply via sync-config?restart=true.
-  const { data: secrets } = useQuery({
-    queryKey: ["secrets"],
-    queryFn: () => api.secrets.list(),
-  });
-  const [selectedSecretId, setSelectedSecretId] = useState<string | null>(agent.secret_id ?? null);
-  const secretDirty = selectedSecretId !== (agent.secret_id ?? null);
-
-  const updateSecretMutation = useMutation({
-    mutationFn: (secret_id: string | null) =>
-      api.agents.update(agentId, { secret_id } as Partial<Agent>),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["agent", agentId] });
-      notify.success(t("apiKeySaved"));
-    },
-    onError: (e: Error) => notify.error(t("saveFailedMsg", { msg: e.message })),
-  });
-
-  const applyRestartMutation = useMutation({
-    mutationFn: () => api.agents.syncConfig(agentId, { restart: true }),
-    onSuccess: (result) => {
-      const restartStatus = result.restart?.status ?? t("noRestart");
-      notify.success(t("configSyncedPlus", { status: restartStatus }));
-      qc.invalidateQueries({ queryKey: ["agent", agentId] });
-    },
-    onError: (e: Error) => notify.error(t("syncFailedMsg", { msg: e.message })),
-  });
-
-  const handleSecretChange = (newValue: string) => {
-    setSelectedSecretId(newValue === "" ? null : newValue);
-  };
-
-  const handleSaveSecret = async () => {
-    await updateSecretMutation.mutateAsync(selectedSecretId);
-  };
-
-  const handleSaveAndApply = async () => {
-    await updateSecretMutation.mutateAsync(selectedSecretId);
-    await applyRestartMutation.mutateAsync();
-  };
-
   const saveConfigMutation = useMutation({
     mutationFn: ({ fileType, content }: { fileType: string; content: string }) =>
       api.agents.config.update(agentId, fileType, content),
@@ -966,75 +937,7 @@ function ConfigTab({
       <RuntimeSelectionSection agent={agent} agentId={agentId} />
 
       {/* API Key Selector ─────────────────────────────────────────────── */}
-      <div
-        className="rounded-xl p-4"
-        style={{
-          backgroundColor: "var(--color-bg-surface)",
-          border: "1px solid var(--color-border)",
-        }}
-      >
-        <div className="flex items-start justify-between gap-4">
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-2">
-              <span className="text-xs font-mono text-[var(--color-text-muted)]">
-                API KEY (Provider)
-              </span>
-            </div>
-            <select
-              value={selectedSecretId ?? ""}
-              onChange={(e) => handleSecretChange(e.target.value)}
-              className="w-full text-sm rounded-lg px-3 py-2 outline-none cursor-pointer"
-              style={{
-                backgroundColor: "var(--color-bg-elevated)",
-                border: `1px solid ${secretDirty ? C.borderAccent : "var(--color-border)"}`,
-                color: "var(--color-text-primary)",
-              }}
-            >
-              <option value="">— Fallback (docker-compose env) —</option>
-              {secrets?.map((s) => (
-                <option key={s.key} value={s.id}>
-                  {s.label ?? s.key} {s.provider ? `· ${s.provider}` : ""}
-                </option>
-              ))}
-            </select>
-            <div className="text-[10px] text-[var(--color-text-muted)] mt-1.5">
-              {t("apiKeyHint")}
-            </div>
-          </div>
-          <div className="flex flex-col gap-2 pt-[22px]">
-            <button
-              onClick={handleSaveSecret}
-              disabled={!secretDirty || updateSecretMutation.isPending}
-              className={cn(
-                "text-xs px-3 py-2 rounded-lg whitespace-nowrap transition-all",
-                !secretDirty || updateSecretMutation.isPending
-                  ? "cursor-not-allowed opacity-40"
-                  : "cursor-pointer"
-              )}
-              style={{
-                backgroundColor: "var(--color-bg-elevated)",
-                border: "1px solid var(--color-border)",
-                color: "var(--color-text-secondary)",
-              }}
-            >
-              {updateSecretMutation.isPending ? t("savingEllipsis") : t("save")}
-            </button>
-            <button
-              onClick={handleSaveAndApply}
-              disabled={applyRestartMutation.isPending || updateSecretMutation.isPending}
-              className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg whitespace-nowrap cursor-pointer"
-              style={{ backgroundColor: C.accent, color: C.onAccent }}
-            >
-              {applyRestartMutation.isPending ? (
-                <Loader2 size={12} className="animate-spin" />
-              ) : (
-                <RotateCcw size={12} />
-              )}
-              {t("applyRestart")}
-            </button>
-          </div>
-        </div>
-      </div>
+      <AgentApiKeySection agent={agent} agentId={agentId} />
 
       {/* File editor ─────────────────────────────────────────────────── */}
       <div className="flex gap-4 min-h-[400px]">

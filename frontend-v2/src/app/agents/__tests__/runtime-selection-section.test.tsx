@@ -123,4 +123,23 @@ describe("RuntimeSelectionSection", () => {
       ).toBeInTheDocument(),
     );
   });
+
+  // D-2: the header named the bound runtime while the picker showed an empty
+  // select (or "Fallback") — the bound runtime was not among the options yet.
+  it("shows the current binding as the selected option while the list is still loading", async () => {
+    vi.spyOn(api.runtimes, "list").mockReturnValue(new Promise(() => {}) as never);
+    renderWithQuery(<RuntimeSelectionSection agent={mkAgent({ harness: "claude" })} agentId="agent-1" />);
+    const select = (await screen.findByRole("combobox")) as HTMLSelectElement;
+    expect(select.value).toBe("slot-a");
+    expect(select.selectedOptions[0].textContent).toMatch(/Current binding/);
+  });
+
+  it("keeps the current binding selected and explains it when it is not in the list", async () => {
+    vi.spyOn(api.runtimes, "list").mockResolvedValue({ runtimes: [recipeX] });
+    renderWithQuery(<RuntimeSelectionSection agent={mkAgent({ harness: "omp" })} agentId="agent-1" />);
+    const select = (await screen.findByRole("combobox")) as HTMLSelectElement;
+    await waitFor(() => expect(within(select).getByRole("option", { name: /Recipe X/ })).toBeInTheDocument());
+    expect(select.value).toBe("slot-a");
+    expect(select.selectedOptions[0].textContent).toMatch(/not in the runtime list/);
+  });
 });
