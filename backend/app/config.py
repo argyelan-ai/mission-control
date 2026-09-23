@@ -595,6 +595,17 @@ class Settings(BaseSettings):
     # In Docker, HOME_HOST is set to the host's $HOME so the watcher sees Phase 7's writes.
     vault_path: Path = Path(os.environ.get("HOME_HOST", str(Path.home()))) / ".mc" / "vault"
 
+    # Head launcher (docs/specs/head-launcher.md). Off until the operator
+    # accepts the UI PR: off → /api/v1/heads answers 404, the sync job idles
+    # and the box guard does nothing. heads_root is the host folder the
+    # mc-head watcher reads — same absolute path in the container via the
+    # 1:1 ~/.mc mount, derived like vault_path (never Path.home() in-container).
+    heads_enabled: bool = False
+    heads_root: Path = Path(os.environ.get("HOME_HOST", str(Path.home()))) / ".mc" / "heads"
+    heads_sync_interval: int = 60
+    heads_time_limit_local_s: int = 7200
+    heads_time_limit_cloud_s: int = 3600
+
     # Vault Index Rebuild on Boot
     # False (default): only rebuild on first boot when .mc_index.db is missing.
     # True: force rebuild on every backend start (useful after schema migrations
