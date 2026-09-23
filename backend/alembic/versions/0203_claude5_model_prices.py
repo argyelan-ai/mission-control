@@ -41,7 +41,8 @@ multipliers. The cache-write column is the 5-minute write price (the harvester
 has a single cache-write counter).
 
 After this migration the event costs need to be recomputed
-(POST /api/v1/model-prices/recompute or the recompute script).
+(POST /api/v1/model-prices/recompute, or Settings > Cost >
+"Recompute Now").
 
 Revision ID: 0203_claude5_model_prices
 Revises: 0202_task_event_actor
