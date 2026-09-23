@@ -93,7 +93,7 @@ function AddVllmModal({
   };
 
   return (
-    <ResponsiveModal open onClose={onClose} aria-label={t("modalTitle")} className="sm:max-w-md">
+    <ResponsiveModal dismissOnOutside={false} open onClose={onClose} aria-label={t("modalTitle")} className="sm:max-w-md">
       <form
         onSubmit={submit}
         className="w-full p-5 overflow-y-auto"

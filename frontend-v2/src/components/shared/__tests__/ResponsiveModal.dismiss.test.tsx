@@ -7,7 +7,7 @@
  * `dismissOnOutside={false}` so a stray click cannot throw away typed input.
  */
 import { describe, it, expect, vi } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { ResponsiveModal } from "../ResponsiveModal";
@@ -57,5 +57,43 @@ describe("ResponsiveModal click outside", () => {
   ])("form dialog %s opts out of click-outside dismissal", (rel) => {
     const src = readFileSync(join(__dirname, "../../..", rel), "utf-8");
     expect(src).toMatch(/dismissOnOutside=\{false\}/);
+  });
+
+  // Guard: any <ResponsiveModal> whose own JSX holds a text field or a <form>
+  // must opt out, so a new form dialog cannot silently reintroduce the
+  // "stray click throws away what was typed" trap. File pickers upload on
+  // pick and do not count as typed input.
+  it("every ResponsiveModal with typed input opts out of click-outside dismissal", () => {
+    const root = join(__dirname, "../../..");
+    const offenders: string[] = [];
+    const walk = (dir: string) => {
+      for (const name of readdirSync(dir)) {
+        const full = join(dir, name);
+        if (statSync(full).isDirectory()) {
+          if (name !== "__tests__" && name !== "node_modules") walk(full);
+          continue;
+        }
+        if (!full.endsWith(".tsx")) continue;
+        const src = readFileSync(full, "utf-8");
+        let from = 0;
+        for (;;) {
+          const start = src.indexOf("<ResponsiveModal", from);
+          if (start < 0) break;
+          const end = src.indexOf("</ResponsiveModal>", start);
+          if (end < 0) break;
+          const block = src.slice(start, end);
+          const openTag = block.slice(0, block.indexOf(">") + 1);
+          const typed =
+            /<form\b|<textarea\b/.test(block) ||
+            (block.match(/<input\b[^>]*/g) ?? []).some((tag) => !/type="file"/.test(tag));
+          if (typed && !/dismissOnOutside=\{false\}/.test(openTag)) {
+            offenders.push(`${full.slice(root.length + 1)}:${src.slice(0, start).split("\n").length}`);
+          }
+          from = end;
+        }
+      }
+    };
+    walk(root);
+    expect(offenders).toEqual([]);
   });
 });

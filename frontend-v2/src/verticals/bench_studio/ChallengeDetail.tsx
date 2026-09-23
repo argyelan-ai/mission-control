@@ -718,7 +718,7 @@ function EditChallengeDialog({
   }
 
   return (
-    <ResponsiveModal open={open} onClose={onClose} aria-label={t("ariaLabel")}>
+    <ResponsiveModal dismissOnOutside={false} open={open} onClose={onClose} aria-label={t("ariaLabel")}>
       <div
         className="flex flex-col gap-4 p-5 rounded-xl w-full max-h-[85vh] overflow-y-auto"
         style={{ backgroundColor: C.bgElevated, border: `1px solid ${C.border}` }}
