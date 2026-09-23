@@ -157,3 +157,22 @@ def test_default_never_falls_back_to_a_startable_cloud_pair():
     ]
     d = pairs.default_pair(listing)
     assert (d.runtime_slug, d.locality, d.startable) == ("local-slot", "local", False)
+
+
+
+@pytest.mark.parametrize("runtime_type,endpoint", [
+    ("cloud", "https://api.anthropic.com/v1/messages"),
+    ("cloud", "https://ollama.com/v1"),
+    ("openai_compatible", "https://api.example.invalid/v1"),
+])
+def test_no_cloud_pair_is_startable_without_the_quota_gate(runtime_type, endpoint):
+    """Security review: a cloud pair would hand a real API key to the head
+    (head.env / omp models.yml are readable by it) and spend the operator's
+    quota. Before any cloud pair leaves "blocked", a key proxy and the 30 %
+    quota gate (spec §10) must exist — this test must then be changed on
+    purpose, together with that gate."""
+    rt = Runtime(slug="c", display_name="C", runtime_type=runtime_type, endpoint=endpoint, model_identifier="m")
+    for harness in pairs.OFFERED_HARNESSES:
+        for protocols in (set(), {"openai"}, {"anthropic"}, {"openai", "anthropic"}):
+            status, _ = pairs.pair_status(harness, rt, protocols)
+            assert status == "blocked", (harness, runtime_type, protocols)

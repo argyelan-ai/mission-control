@@ -78,7 +78,17 @@ def test_backend_without_pid_view_waits_until_vanished_threshold():
 
 def test_stopped():
     assert _d({"phase": "exited", "reason": "stopped"})["state"] == "stopped"
-    assert _d({"phase": "exited", "reason": None}, stop_requested=True)["state"] == "stopped"
+    # stop before the host picked the run up
+    assert _d(None, stop_requested=True)["state"] == "stopped"
+
+
+def test_late_stop_does_not_turn_a_passed_run_into_stopped():
+    """Review finding: the UI polls every 10 s, so Stop can hit a run that
+    has just passed. Once exited, only the wrapper's reason counts."""
+    ok = {"phase": "exited", "exit_code": 0, "reason": None, "pr_url": "https://github.com/o/r/pull/1"}
+    assert _d(ok, run_record_passed=True, stop_requested=True)["state"] == "passed"
+    failed = {"phase": "exited", "exit_code": 1, "reason": "exit_1"}
+    assert _d(failed, stop_requested=True)["reason"] == "exit_1"
 
 
 @pytest.mark.parametrize("exit_code", [0, 1, 3])

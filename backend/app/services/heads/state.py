@@ -66,7 +66,10 @@ def derive_head_state(
     # phase == "exited" (or anything unknown — treat as exited)
     reason = status.get("reason")
     pr_url = status.get("pr_url")
-    if reason == "stopped" or (stop_requested and reason in (None, "stopped")):
+    # Only the wrapper's own reason counts once the run has exited: a stop
+    # request that arrives after a successful end must not turn "passed"
+    # into "stopped" (stop_requested only matters before pick-up, above).
+    if reason == "stopped":
         out.update(state="stopped", reason="stopped")
     elif question_exists and not pr_url:
         out.update(state="needs_you", reason=None)

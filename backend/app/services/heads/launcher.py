@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -129,6 +131,49 @@ def _format_env(env: dict[str, str]) -> str:
             raise ValueError(f"head.env value for {key} is not single-line")
         lines.append(f"{key}='{value}'")
     return "\n".join(lines) + ("\n" if lines else "")
+
+
+class TaskStartBusy(Exception):
+    """Another start/restart for the same task is in flight."""
+
+
+#: A start lock older than this belongs to a crashed request and is taken over.
+TASK_LOCK_STALE_S = 120
+
+
+def acquire_task_lock(task_id: str) -> Path:
+    """One start/restart per task at a time (two tabs, two API calls).
+
+    O_EXCL marker in heads_root/task-locks/: the check for an active run and
+    writing the new run folder form one critical section. A marker older
+    than TASK_LOCK_STALE_S is left over from a crash and is taken over.
+    Raises TaskStartBusy; release with release_task_lock().
+    """
+    ldir = paths.heads_root() / "task-locks"
+    ldir.mkdir(parents=True, exist_ok=True)
+    marker = ldir / str(uuid.UUID(str(task_id)))
+    for _ in range(2):
+        try:
+            os.close(os.open(str(marker), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+            return marker
+        except FileExistsError:
+            try:
+                age = time.time() - marker.stat().st_mtime
+            except OSError:
+                continue
+            if age < TASK_LOCK_STALE_S:
+                raise TaskStartBusy(task_id)
+            marker.unlink(missing_ok=True)
+    raise TaskStartBusy(task_id)
+
+
+def release_task_lock(marker: Path) -> None:
+    marker.unlink(missing_ok=True)
+
+
+def discard_run(run_id: str) -> None:
+    """Remove a run folder whose spool request never went out."""
+    shutil.rmtree(paths.run_dir(run_id), ignore_errors=True)
 
 
 def spool(action: str, run_id: str, from_run_id: str | None = None) -> Path:

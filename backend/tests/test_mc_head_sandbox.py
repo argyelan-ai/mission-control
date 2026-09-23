@@ -37,7 +37,7 @@ def layout(tmp_path: Path) -> dict:
     return {"real_home": real_home, "mc_home": mc_home, "run": run, "clone_git": clone_git, "jobs": jobs}
 
 
-def _sh(layout: dict, script: str) -> subprocess.CompletedProcess:
+def _sh(layout: dict, script: str, **overrides) -> subprocess.CompletedProcess:
     params = {
         "RUN": layout["run"],
         "WT": layout["run"] / "wt",
@@ -47,6 +47,7 @@ def _sh(layout: dict, script: str) -> subprocess.CompletedProcess:
         "MC_HOME": layout["mc_home"],
         "USER_TMP": layout["real_home"] / "tmp",
     }
+    params.update(overrides)
     argv = [str(SANDBOX), "-f", str(PROFILE)]
     for k, v in params.items():
         argv += ["-D", f"{k}={v}"]
@@ -97,3 +98,51 @@ def test_vault_is_not_writable_the_wrapper_files_the_run_record(layout):
     res = _sh(layout, f"echo x > {layout['jobs']}/forged-run-record.md")
     assert res.returncode != 0
     assert not (layout["jobs"] / "forged-run-record.md").exists()
+
+
+def test_more_credential_files_are_not_readable(layout):
+    home = layout["real_home"]
+    (home / ".netrc").write_text("machine x password NETRC\n")
+    (home / ".git-credentials").write_text("https://u:GITCRED@example.invalid\n")
+    (home / ".docker").mkdir()
+    (home / ".docker" / "config.json").write_text('{"auths":"DOCKERCFG"}\n')
+    res = _sh(layout, f"cat {home}/.netrc {home}/.git-credentials {home}/.docker/config.json")
+    assert res.returncode != 0
+    for secret in ("NETRC", "GITCRED", "DOCKERCFG"):
+        assert secret not in res.stdout
+
+
+def test_docker_socket_is_not_reachable(layout, tmp_path):
+    """A head's own code (pytest, npm test …) must not reach the Docker
+    daemon — python's socket module ignores the docker shim."""
+    import socket
+    import threading
+
+    import shutil
+    import tempfile
+
+    # AF_UNIX paths are limited to ~104 bytes on macOS: a short fake home.
+    home = Path(tempfile.mkdtemp(prefix="mcsb", dir="/private/tmp"))
+    sock_dir = home / ".docker" / "run"
+    sock_dir.mkdir(parents=True)
+    path = sock_dir / "docker.sock"
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(str(path))
+    server.listen(1)
+    threading.Thread(target=lambda: server.accept(), daemon=True).start()
+    probe = (
+        "import socket,sys\n"
+        "s=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)\n"
+        f"s.connect({str(path)!r})\n"
+        "print('CONNECTED')\n"
+    )
+    try:
+        res = _sh(layout, f"/usr/bin/python3 -c \"{probe}\"", REAL_HOME=home)
+        # control: the same probe WITHOUT the sandbox connects — the socket works
+        plain = subprocess.run(["/usr/bin/python3", "-c", probe], capture_output=True, text=True)
+    finally:
+        server.close()
+        shutil.rmtree(home, ignore_errors=True)
+    assert "CONNECTED" in plain.stdout, plain.stderr
+    assert "CONNECTED" not in res.stdout
+    assert res.returncode != 0

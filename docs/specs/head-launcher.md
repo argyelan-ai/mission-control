@@ -645,9 +645,24 @@ GitHub) is recorded. Creating the identity and the ruleset rule is an
 operator action (GitHub settings), not code.
 
 Rules:
-- Before the sandbox is proven, omp (which runs with `--auto-approve`) runs
-  only against a **scratch repo** and only attended. The sandbox proof is
-  the gate for omp on a real repo — also for attended runs.
+- Before the sandbox is proven, heads run only against a **scratch repo**
+  and only attended. The sandbox is the gate for **every** harness on a
+  real repo (review 2026-09-24): omp runs with `--auto-approve`, and
+  Claude's allow list still runs code the head wrote itself (`pytest`,
+  `npm test` …) — outside the sandbox that code could read secrets or
+  reach the Docker socket. `mc-head` refuses with `sandbox_required`.
+- On a real repo `mc-head` also checks the heads' identity once a day (and
+  whenever `heads/gh-token` changes): no admin/maintain right on the repo,
+  and a GitHub rule on the base branch that blocks direct pushes
+  (`pull_request`, `required_status_checks`, `merge_queue` or `update`).
+  Otherwise the run ends with `gh_identity_unsafe`. `GH_TOKEN` sits in the
+  head's environment, so this — not the shims — is what holds.
+- Claude heads run with `HOME=<run>/home`: every `~/` deny rule is rendered
+  a second time with the real home as an absolute rule, and Edit/Write are
+  limited to the worktree and the head's own status files.
+- Files the head can write (`step.txt`, `question.md`, `head.log`,
+  `run-record.md`) are never read or written through a symlink, neither by
+  the wrapper nor by the backend.
 - v1 runs are **attended only** (started from the UI by the operator, no
   scheduled/night runs).
 - `head.env` never contains the MC token or a Claude OAuth token; allowed

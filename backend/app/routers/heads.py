@@ -16,6 +16,7 @@ frontend renders them via i18n. Behind ``settings.heads_enabled``.
 """
 from __future__ import annotations
 
+import contextlib
 import re
 import time
 import uuid
@@ -97,6 +98,18 @@ def _load(run_id: str):
     return run
 
 
+@contextlib.contextmanager
+def _task_lock(task_id: str):
+    try:
+        marker = launcher.acquire_task_lock(task_id)
+    except launcher.TaskStartBusy:
+        raise _err(409, "head_active")
+    try:
+        yield
+    finally:
+        launcher.release_task_lock(marker)
+
+
 def _active_run_for_task(task_id: str, now: float):
     for run in reversed(files.list_runs()):
         if run.task_id == task_id and derive_for_run(run, now)["state"] in ACTIVE_STATES:
@@ -108,7 +121,16 @@ async def _checked_pair(session: AsyncSession, harness: str, runtime_slug: str, 
     occ = box_guard.occupancy()
     pair, runtime = await pairs.resolve_pair(session, harness, runtime_slug, occ, ignore_run_id=ignore_run_id)
     if pair is None or runtime is None:
-        raise _err(422, "pair_blocked", reason_code="harness_not_supported" if runtime else "runtime_not_found")
+        if runtime is None:
+            code = "runtime_not_found"
+        elif harness not in pairs.OFFERED_HARNESSES:
+            code = "harness_not_supported"
+        else:
+            # the runtime row exists but is not offered: a second row for the
+            # same engine + model (the slot row stands for it), or no model /
+            # protocol a head can use
+            code = "runtime_not_offered"
+        raise _err(422, "pair_blocked", reason_code=code)
     if pair.status == "blocked":
         if pair.reason_code == "engine_not_ready":
             raise _err(409, "engine_not_ready")
@@ -157,28 +179,32 @@ async def start_head(
     _enabled()
     now = time.time()
     task, repo = await _task_and_repo(session, body.task_id)
-    if _active_run_for_task(str(task.id), now) is not None:
-        raise _err(409, "head_active")
-    pair, runtime = await _checked_pair(session, body.harness, body.runtime_slug)
-    try:
-        spec = await launcher.write_run(
-            session, task=task, repo=repo, harness=pair.harness, runtime=runtime,
-            box_keys=pair.box_keys, user_id=_current_user_id(user), answer=body.answer,
-        )
-    except OSError as exc:
-        raise _err(503, "spool_unavailable") from exc
-    # inbox → in_progress AND the hold in one transaction: no operator PATCH
-    # from inbox can lift the hold afterwards (routers/tasks.py clears
-    # manual_hold only when the old status is inbox).
-    task.run_control = "manual_hold"
-    await move_task(session, task, "in_progress", reason="head_start")
-    session.add(task)
-    try:
-        launcher.spool("start", spec["run_id"])
-    except launcher.SpoolUnavailable as exc:
-        await session.rollback()
-        raise _err(503, "spool_unavailable") from exc
-    await session.commit()
+    with _task_lock(str(task.id)):
+        if _active_run_for_task(str(task.id), now) is not None:
+            raise _err(409, "head_active")
+        pair, runtime = await _checked_pair(session, body.harness, body.runtime_slug)
+        try:
+            spec = await launcher.write_run(
+                session, task=task, repo=repo, harness=pair.harness, runtime=runtime,
+                box_keys=pair.box_keys, user_id=_current_user_id(user), answer=body.answer,
+            )
+        except OSError as exc:
+            raise _err(503, "spool_unavailable") from exc
+        # inbox → in_progress AND the hold in one transaction: no operator PATCH
+        # from inbox can lift the hold afterwards (routers/tasks.py clears
+        # manual_hold only when the old status is inbox).
+        task.run_control = "manual_hold"
+        await move_task(session, task, "in_progress", reason="head_start")
+        session.add(task)
+        try:
+            launcher.spool("start", spec["run_id"])
+        except launcher.SpoolUnavailable as exc:
+            await session.rollback()
+            # no half run left behind: it would count as "starting" for
+            # 5 minutes and block the next click with head_active
+            launcher.discard_run(spec["run_id"])
+            raise _err(503, "spool_unavailable") from exc
+        await session.commit()
     write_backend_file(spec["run_id"], "mirror.json", {"state": "starting", "at": now})
     return {"run_id": spec["run_id"], "state": "starting", "branch": spec["branch"]}
 
@@ -196,28 +222,36 @@ async def restart_head(
         raise _err(422, "task_not_found")
     task, repo = await _task_and_repo(session, uuid.UUID(old.task_id))
     now = time.time()
-    newest = _active_run_for_task(old.task_id, now)
-    if newest is not None and newest.run_id != old.run_id:
-        raise _err(409, "head_active")
-    pair, runtime = await _checked_pair(session, body.harness, body.runtime_slug, ignore_run_id=old.run_id)
-    derived = derive_for_run(old, now)
-    try:
-        spec = await launcher.write_run(
-            session, task=task, repo=repo, harness=pair.harness, runtime=runtime,
-            box_keys=pair.box_keys, user_id=_current_user_id(user), answer=body.answer,
-            restarted_from={
-                "spec": old.spec, "state": derived["state"], "reason": derived["reason"],
-                "run_record": old.run_record_text, "question": old.question,
-            },
-            mode=body.mode,
-        )
-        launcher.spool("restart", spec["run_id"], from_run_id=old.run_id)
-    except (OSError, launcher.SpoolUnavailable) as exc:
-        raise _err(503, "spool_unavailable") from exc
-    task.run_control = "manual_hold"
-    await move_task(session, task, "in_progress", reason="head_restart")
-    session.add(task)
-    await session.commit()
+    with _task_lock(old.task_id):
+        newest = _active_run_for_task(old.task_id, now)
+        if newest is not None and newest.run_id != old.run_id:
+            raise _err(409, "head_active")
+        pair, runtime = await _checked_pair(session, body.harness, body.runtime_slug, ignore_run_id=old.run_id)
+        derived = derive_for_run(old, now)
+        try:
+            spec = await launcher.write_run(
+                session, task=task, repo=repo, harness=pair.harness, runtime=runtime,
+                box_keys=pair.box_keys, user_id=_current_user_id(user), answer=body.answer,
+                restarted_from={
+                    "spec": old.spec, "state": derived["state"], "reason": derived["reason"],
+                    "run_record": old.run_record_text, "question": old.question,
+                },
+                mode=body.mode,
+            )
+        except OSError as exc:
+            raise _err(503, "spool_unavailable") from exc
+        task.run_control = "manual_hold"
+        await move_task(session, task, "in_progress", reason="head_restart")
+        session.add(task)
+        try:
+            launcher.spool("restart", spec["run_id"], from_run_id=old.run_id)
+        except launcher.SpoolUnavailable as exc:
+            # same order as start: the host only hears of a run whose task
+            # change is about to be committed; a failed spool leaves nothing
+            await session.rollback()
+            launcher.discard_run(spec["run_id"])
+            raise _err(503, "spool_unavailable") from exc
+        await session.commit()
     write_backend_file(spec["run_id"], "mirror.json", {"state": "starting", "at": now})
     return {"run_id": spec["run_id"], "state": "starting", "restarted_from": old.run_id}
 
@@ -270,15 +304,8 @@ def mask_log(text: str) -> str:
 async def get_head_log(run_id: str, tail: int = Query(200, ge=1, le=2000)):
     _enabled()
     run = _load(run_id)
-    path = run.folder / "head.log"
-    try:
-        with path.open("rb") as fh:
-            fh.seek(0, 2)
-            size = fh.tell()
-            fh.seek(max(0, size - 512_000))
-            data = fh.read().decode("utf-8", errors="replace")
-    except OSError:
-        data = ""
+    # the head can write head.log — never follow a symlink (files.read_head_file)
+    data = files.read_head_file(run.folder / "head.log", 512_000, tail=True) or ""
     lines = data.splitlines()[-tail:]
     return PlainTextResponse(mask_log("\n".join(lines)))
 
@@ -296,6 +323,10 @@ async def get_head_run_record(run_id: str):
 async def stop_head(run_id: str):
     _enabled()
     run = _load(run_id)
+    # A finished run keeps its result — a late Stop (stale UI, second tab,
+    # direct API call) must not turn "passed" into "stopped".
+    if derive_for_run(run, time.time())["state"] not in ACTIVE_STATES:
+        raise _err(409, "head_not_active")
     write_backend_file(run.run_id, "stop-requested", {"at": time.time()})
     try:
         launcher.spool("stop", run.run_id)

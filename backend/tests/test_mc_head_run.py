@@ -176,6 +176,102 @@ def test_real_repo_needs_identity_and_omp_needs_sandbox(env):
     assert read_status(mc_home, run_id2)["reason"] == "sandbox_required"
 
 
+def test_claude_on_a_real_repo_also_needs_the_sandbox(env):
+    """Review blocker: Claude's allow list runs code the head wrote itself
+    (pytest, npm test) — without the sandbox that code reads real secrets."""
+    mc_home = env["mc_home"]
+    (mc_home / "heads" / "gh-token").write_text("github_pat_fake\n")
+    harness = fake_harness(env["tmp"], "true")
+    run_id = write_spec(mc_home, repo_full_name="owner/real-repo", harness="claude")
+    run_head(mc_home, "start", run_id, env_extra=_extra(harness))
+    assert read_status(mc_home, run_id)["reason"] == "sandbox_required"
+    assert not (mc_home / "heads" / run_id / "argv.txt").exists()
+
+
+def _fake_gh(tmp: Path, perms: str, rules: str) -> Path:
+    gh = tmp / "fake-gh-api"
+    gh.write_text(
+        "#!/bin/sh\n"
+        "echo \"$@\" >> \"$(dirname \"$0\")/gh-calls.txt\"\n"
+        "case \"$2\" in\n"
+        f"  repos/owner/real-repo) echo '{{\"permissions\": {perms}}}' ;;\n"
+        f"  repos/owner/real-repo/rules/branches/main) echo '{rules}' ;;\n"
+        "  *) exit 1 ;;\n"
+        "esac\n"
+    )
+    gh.chmod(0o755)
+    return gh
+
+
+@pytest.mark.skipif(not Path("/usr/bin/sandbox-exec").exists(), reason="sandbox-exec only on macOS")
+@pytest.mark.parametrize(
+    "perms,rules",
+    [
+        ('{"admin": true, "push": true}', '[{"type": "pull_request"}]'),
+        ('{"admin": false, "maintain": true, "push": true}', '[{"type": "pull_request"}]'),
+        ('{"admin": false, "push": true}', '[{"type": "deletion"}]'),
+        ('{"admin": false, "push": true}', '[]'),
+    ],
+)
+def test_strong_identity_or_unprotected_base_branch_is_refused(env, perms, rules):
+    """GH_TOKEN is in the head's env — only a weak identity + a GitHub rule on
+    the base branch hold against push-to-main or merge via the REST API."""
+    mc_home = env["mc_home"]
+    (mc_home / "heads" / "gh-token").write_text("github_pat_fake\n")
+    gh = _fake_gh(env["tmp"], perms, rules)
+    harness = fake_harness(env["tmp"], "true")
+    run_id = write_spec(mc_home, repo_full_name="owner/real-repo", harness="claude")
+    run_head(mc_home, "start", run_id, env_extra=_extra(harness, MC_HEAD_GH=str(gh), MC_HEAD_SANDBOX="1"))
+    assert read_status(mc_home, run_id)["reason"] == "gh_identity_unsafe"
+    assert not (mc_home / "heads" / "identity-ok").exists()
+
+
+@pytest.mark.skipif(not Path("/usr/bin/sandbox-exec").exists(), reason="sandbox-exec only on macOS")
+def test_weak_identity_on_protected_branch_passes_the_gate_and_is_cached(env):
+    mc_home = env["mc_home"]
+    (mc_home / "heads" / "gh-token").write_text("github_pat_fake\n")
+    gh = _fake_gh(env["tmp"], '{"admin": false, "maintain": false, "push": true}',
+                  '[{"type": "deletion"}, {"type": "required_status_checks"}]')
+    harness = fake_harness(env["tmp"], "true")
+    extra = _extra(harness, MC_HEAD_GH=str(gh), MC_HEAD_SANDBOX="1")
+    run_id = write_spec(mc_home, repo_full_name="owner/real-repo", harness="claude")
+    run_head(mc_home, "start", run_id, env_extra=extra)
+    # past every gate: fails later at the (fake) clone, not at a gate
+    assert read_status(mc_home, run_id)["reason"] == "prepare_failed"
+    calls = (env["tmp"] / "gh-calls.txt").read_text().count("api ")
+    run_id2 = write_spec(mc_home, repo_full_name="owner/real-repo", harness="claude")
+    run_head(mc_home, "start", run_id2, env_extra=extra)
+    assert read_status(mc_home, run_id2)["reason"] == "prepare_failed"
+    assert (env["tmp"] / "gh-calls.txt").read_text().count("api ") == calls  # cached
+    # a new token file invalidates the cache
+    time.sleep(0.05)
+    (mc_home / "heads" / "gh-token").write_text("github_pat_other\n")
+    os.utime(mc_home / "heads" / "gh-token", (time.time() + 5, time.time() + 5))
+    run_id3 = write_spec(mc_home, repo_full_name="owner/real-repo", harness="claude")
+    run_head(mc_home, "start", run_id3, env_extra=extra)
+    assert (env["tmp"] / "gh-calls.txt").read_text().count("api ") > calls
+
+
+def test_claude_settings_deny_the_real_home_and_scope_edits_to_the_worktree(env):
+    """HOME=<run>/home makes every "~/" rule point at the throw-away folder:
+    the rendered settings must repeat them with the REAL home."""
+    mc_home = env["mc_home"]
+    harness = fake_harness(env["tmp"], "true")
+    run_id = write_spec(mc_home, harness="claude")
+    assert run_head(mc_home, "start", run_id, env_extra=_extra(harness)).returncode == 0
+    wait_phase(mc_home, run_id, "exited")
+    run = mc_home / "heads" / run_id
+    real_home = mc_home.parent  # run_head sets HOME to it
+    perms = json.loads((run / "head-settings.json").read_text())["permissions"]
+    assert f"Read(/{real_home}/.ssh/**)" in perms["deny"]
+    assert f"Read(/{real_home}/.mc/secrets/**)" in perms["deny"]
+    assert f"Read(/{real_home}/.netrc)" in perms["deny"]
+    assert "Read(~/.ssh/**)" in perms["deny"]  # the ~ form stays
+    assert "Edit" not in perms["allow"] and "Write" not in perms["allow"]
+    assert f"Edit(/{run}/wt/**)" in perms["allow"]
+    assert f"Write(/{run}/run-record.md)" in perms["allow"]
+
+
 # ── A3: box lock with owner ─────────────────────────────────────────────
 
 SLEEPER = "trap 'exit 0' TERM; while :; do sleep 0.1; done"
@@ -423,3 +519,58 @@ def test_script_compiles_on_system_python():
     )
     assert res.returncode == 0, res.stderr
     assert run_head(Path("/nonexistent-mc"), "validate", "x").returncode == 2
+
+
+# ── review fixes: stop never rewrites a finished run, never starts late ──
+
+
+def test_stop_on_a_finished_run_keeps_its_result(env):
+    mc_home = env["mc_home"]
+    harness = fake_harness(env["tmp"], "true")
+    run_id = write_spec(mc_home)
+    assert run_head(mc_home, "start", run_id, env_extra=_extra(harness)).returncode == 0
+    before = wait_phase(mc_home, run_id, "exited")
+    assert before["reason"] is None
+    run_head(mc_home, "stop", run_id, env_extra=_extra(harness))
+    assert not (mc_home / "heads" / run_id / ".wrapper" / "stop-requested").exists()
+    assert read_status(mc_home, run_id)["reason"] is None
+
+
+def test_supervisor_does_not_start_the_harness_after_an_early_stop(env):
+    """Stop arrives before the detached supervisor wrote its pid: cmd_stop
+    answers "stopped" — the supervisor must then not start the harness."""
+    mc_home = env["mc_home"]
+    harness = fake_harness(env["tmp"], "true")
+    run_id = write_spec(mc_home)
+    wdir = mc_home / "heads" / run_id / ".wrapper"
+    wdir.mkdir(parents=True)
+    (wdir / "stop-requested").write_text("now")
+    run_head(mc_home, "_supervise", run_id, env_extra=_extra(harness))
+    st = read_status(mc_home, run_id)
+    assert st["phase"] == "exited" and st["reason"] == "stopped"
+    assert not (mc_home / "heads" / run_id / "argv.txt").exists()
+
+
+def test_wrapper_never_writes_or_files_through_a_planted_symlink(env):
+    """head.log and run-record.md sit in the run folder, where the head can
+    create files. A symlink there must not make the wrapper write elsewhere
+    or file a foreign file into the vault."""
+    mc_home = env["mc_home"]
+    victim = env["tmp"] / "victim-profile"
+    victim.write_text("original\n")
+    harness = fake_harness(env["tmp"], "echo from-head")
+    run_id = write_spec(mc_home)
+    run = mc_home / "heads" / run_id
+    os.symlink(victim, run / "head.log")
+    run_head(mc_home, "start", run_id, env_extra=_extra(harness))
+    st = wait_phase(mc_home, run_id, "exited")
+    assert victim.read_text() == "original\n"
+    assert st["reason"] == "wrapper_error"
+    # run record: a symlink to a valid-looking record outside is not filed
+    run_id2 = write_spec(mc_home)
+    outside = env["tmp"] / "outside-record.md"
+    outside.write_text(f"---\nhead_run: {run_id2}\n---\nstatus: passed\n")
+    os.symlink(outside, mc_home / "heads" / run_id2 / "run-record.md")
+    run_head(mc_home, "start", run_id2, env_extra=_extra(fake_harness(env["tmp"], "touch ../run-record.md")))
+    st2 = wait_phase(mc_home, run_id2, "exited")
+    assert st2["run_record_path"] is None

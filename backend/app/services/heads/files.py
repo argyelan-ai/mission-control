@@ -11,6 +11,8 @@ Trust rules:
 from __future__ import annotations
 
 import json
+import os
+import stat
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -37,6 +39,46 @@ def _read_text(path: Path, limit: int = MAX_TEXT) -> str | None:
         return path.read_text(errors="replace")[:limit]
     except OSError:
         return None
+
+
+def read_head_file(path: Path, limit: int = MAX_TEXT, tail: bool = False) -> str | None:
+    """Read a file the HEAD can write (step.txt, question.md, head.log).
+
+    Never follows a symlink: a head could otherwise point question.md at any
+    file the backend can see and get it into the API and a task comment.
+    Only regular files count. ``tail`` reads the last ``limit`` bytes.
+    """
+    try:
+        fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0))
+    except OSError:
+        return None
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            return None
+        if tail and info.st_size > limit:
+            os.lseek(fd, info.st_size - limit, os.SEEK_SET)
+        chunks, left = [], limit
+        while left > 0:
+            chunk = os.read(fd, min(65536, left))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            left -= len(chunk)
+        return b"".join(chunks).decode("utf-8", errors="replace")
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+
+
+def _head_mtime(path: Path) -> float | None:
+    """mtime of a head-writable file without following a symlink."""
+    try:
+        info = path.lstat()
+    except OSError:
+        return None
+    return info.st_mtime if stat.S_ISREG(info.st_mode) else None
 
 
 def _mtime(path: Path) -> float | None:
@@ -130,16 +172,16 @@ def load_run(run_id: str) -> HeadRun | None:
     wrapper = folder / ".wrapper"
     status = _read_json(wrapper / "status.json")
     rr_path, rr_text, rr_passed = _run_record(run_id, status)
-    step = _read_text(folder / "step.txt", 500)
+    step = read_head_file(folder / "step.txt", 500)
     return HeadRun(
         run_id=run_id,
         folder=folder,
         spec=spec,
         status=status,
         heartbeat_mtime=_mtime(wrapper / "heartbeat"),
-        log_mtime=_mtime(folder / "head.log"),
+        log_mtime=_head_mtime(folder / "head.log"),
         step=step.strip().splitlines()[0] if step and step.strip() else None,
-        question=_read_text(folder / "question.md", 4000),
+        question=read_head_file(folder / "question.md", 4000),
         stop_requested=(wrapper / "stop-requested").exists() or (folder / ".backend" / "stop-requested").exists(),
         mirror=_read_json(folder / ".backend" / "mirror.json"),
         run_record_path=rr_path,

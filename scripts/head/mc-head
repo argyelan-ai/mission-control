@@ -32,6 +32,7 @@ import re
 import shlex
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import threading
@@ -576,9 +577,42 @@ def render_omp_profile(home: Path, spec: dict, env: dict) -> Path:
     return path
 
 
+def _claude_abs(path: Path) -> str:
+    """Claude Code permission syntax for an absolute path: ``//abs/path``."""
+    return "/" + str(path)
+
+
 def render_claude_settings(run: Path) -> Path:
+    """Render the head's Claude permission list.
+
+    The template's ``~/`` rules alone are not enough: the head runs with
+    HOME=<run>/home, so ``~`` points at the throw-away folder, not at the
+    operator's home. Every ``~/`` deny rule is therefore repeated with the
+    REAL home as an absolute rule. Edit/Write are limited to the worktree
+    and the head's own status files in the run folder — never the shell
+    profile or another run.
+    """
+    data = json.loads(CLAUDE_SETTINGS_TEMPLATE.read_text())
+    perms = data["permissions"]
+    real_home = Path.home()
+    deny = list(perms["deny"])
+    for rule in perms["deny"]:
+        m = re.match(r"^(\w+)\(~/(.*)\)$", rule)
+        if m:
+            deny.append(f"{m.group(1)}({_claude_abs(real_home / m.group(2))})")
+    for rel in (".docker/**", ".netrc", ".git-credentials", ".kube/**", ".gnupg/**", ".aws/**",
+                "Library/Keychains/**", "Library/Application Support/**", "Library/Cookies/**"):
+        deny.append(f"Read({_claude_abs(real_home / rel)})")
+    allow = [r for r in perms["allow"] if r not in ("Edit", "Write")]
+    wt = run / "wt"
+    for tool in ("Edit", "Write"):
+        allow.append(f"{tool}({_claude_abs(wt)}/**)")
+        for name in ("step.txt", "question.md", "run-record.md"):
+            allow.append(f"{tool}({_claude_abs(run / name)})")
+    perms["allow"] = allow
+    perms["deny"] = deny
     target = run / "head-settings.json"
-    shutil.copyfile(CLAUDE_SETTINGS_TEMPLATE, target)
+    target.write_text(json.dumps(data, indent=2))
     return target
 
 
@@ -684,22 +718,76 @@ def sandbox_prefix(spec: dict, run: Path) -> list:
 # ── start (§6.3) ─────────────────────────────────────────────────────────
 
 
+# Branch rules that stop a direct push to the base branch (GitHub rules API).
+PROTECTING_RULES = frozenset({"pull_request", "required_status_checks", "merge_queue", "update"})
+IDENTITY_TTL_S = 24 * 3600
+
+
+def _gh_api(path: str, token: str):
+    res = subprocess.run(
+        [gh_bin(), "api", path],
+        env={**os.environ, "GH_TOKEN": token, "GIT_CONFIG_GLOBAL": "/dev/null"},
+        capture_output=True, text=True, timeout=60,
+    )
+    if res.returncode != 0:
+        raise RuntimeError(res.stderr.strip()[-200:])
+    return json.loads(res.stdout or "null")
+
+
+def identity_gate(spec: dict, token: str) -> str | None:
+    """The heads' GitHub identity must be weak, and the base branch protected.
+
+    GH_TOKEN sits in the head's environment, so the head can call the REST
+    API directly (shims and deny rules are bypassable). What really holds
+    against push-to-main / merge is (a) the token's identity has no admin or
+    maintain right on the repo and (b) a GitHub rule on the base branch
+    blocks direct pushes. Checked once, cached for a day and re-checked
+    whenever the token file changes.
+    """
+    repo, base = spec["repo_full_name"], spec["base_branch"]
+    cache = heads_root() / "identity-ok" / f"{repo.replace('/', '--')}--{base.replace('/', '--')}"
+    try:
+        token_mtime = (heads_root() / "gh-token").stat().st_mtime
+        age = time.time() - cache.stat().st_mtime
+        if age < IDENTITY_TTL_S and cache.stat().st_mtime >= token_mtime:
+            return None
+    except OSError:
+        pass
+    try:
+        info = _gh_api(f"repos/{repo}", token)
+        perms = (info or {}).get("permissions") or {}
+        if not isinstance(perms, dict) or perms.get("admin") or perms.get("maintain"):
+            return "gh_identity_unsafe"
+        rules = _gh_api(f"repos/{repo}/rules/branches/{base}", token)
+        types = {r.get("type") for r in rules if isinstance(r, dict)} if isinstance(rules, list) else set()
+        if not types & PROTECTING_RULES:
+            return "gh_identity_unsafe"
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError, AttributeError):
+        return "gh_identity_unsafe"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(now_iso())
+    return None
+
+
 def start_gate(spec: dict) -> str | None:
     """Hard gates before a head may touch a repo (spec §9 rules).
 
-    - Real repo (not listed in heads/scratch-repos): needs the heads' own
-      GitHub identity (heads/gh-token) — the only layer that holds against
-      push-to-main / admin merge.
-    - omp runs with --auto-approve (no per-command filter exists), so on a
-      real repo it additionally needs the proven sandbox.
+    A real repo (not listed in heads/scratch-repos) needs ALL of:
+    - the heads' own GitHub identity (heads/gh-token);
+    - the proven sandbox — for EVERY harness: Claude's allow list still
+      runs code the head wrote itself (pytest, npm test …), so without the
+      sandbox that code could read secrets or reach the Docker socket;
+    - a weak identity + protected base branch (identity_gate).
+    Scratch repos (local test repos the operator listed) skip the gates.
     """
     if spec["repo_full_name"] in scratch_repos():
         return None
-    if not gh_token():
+    token = gh_token()
+    if not token:
         return "gh_identity_missing"
-    if spec["harness"] == "omp" and not sandbox_enabled():
+    if not sandbox_enabled():
         return "sandbox_required"
-    return None
+    return identity_gate(spec, token)
 
 
 def cmd_validate(run_id: str) -> int:
@@ -789,8 +877,26 @@ def launch_supervisor(run_id: str) -> int:
 # ── supervisor (runs inside tmux) ────────────────────────────────────────
 
 
-def _tee(stream, log_path: Path) -> None:
-    with open(log_path, "ab") as fh:
+def open_head_log(run: Path):
+    """head.log lives in the run folder, where the head can create files: a
+    symlink planted there must never make the (unsandboxed) wrapper append
+    to a file elsewhere. Opened once, before the harness starts."""
+    fd = os.open(str(run / "head.log"), os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    return os.fdopen(fd, "ab")
+
+
+def read_head_file(path: Path) -> tuple:
+    """(text, mtime) of a head-written file, never through a symlink."""
+    fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd, "rb") as fh:
+        info = os.fstat(fh.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise OSError("not a regular file")
+        return fh.read().decode("utf-8", errors="replace"), info.st_mtime
+
+
+def _tee(stream, fh) -> None:
+    with fh:
         for chunk in iter(lambda: stream.read1(4096) if hasattr(stream, "read1") else stream.read(4096), b""):
             fh.write(chunk)
             fh.flush()
@@ -820,6 +926,11 @@ def cmd_supervise(run_id: str) -> int:
     signal.signal(signal.SIGINT, on_signal)
 
     try:
+        # A stop that arrived before this supervisor wrote its pid was
+        # answered with "stopped" by cmd_stop — never start the harness then.
+        if (wdir / "stop-requested").exists():
+            exit_status(run_id, "stopped")
+            return 0
         write_status(run_id, supervisor_pid=os.getpid())
         ok, held, busy = acquire_locks(run_id, spec["box_keys"])
         if not ok:
@@ -828,9 +939,13 @@ def cmd_supervise(run_id: str) -> int:
         home = run / "home"
         env = harness_env(spec, run, home)
         argv = sandbox_prefix(spec, run) + harness_argv(spec, run, home, env)
+        if (wdir / "stop-requested").exists():
+            exit_status(run_id, "stopped")
+            return 0
         shown = [a if a != (run / "job.md").read_text() else "<job.md>" for a in argv]
         (wdir / "argv.json").write_text(json.dumps(shown))
         stdin = harness_stdin(spec, run)
+        log_fh = open_head_log(run)
         started = time.time()
         child = subprocess.Popen(
             argv,
@@ -842,7 +957,7 @@ def cmd_supervise(run_id: str) -> int:
             start_new_session=True,  # own process group → stop kills everything
         )
         write_status(run_id, phase="running", pid=child.pid, pgid=child.pid, started_at=now_iso())
-        tee = threading.Thread(target=_tee, args=(child.stdout, run / "head.log"), daemon=True)
+        tee = threading.Thread(target=_tee, args=(child.stdout, log_fh), daemon=True)
         tee.start()
         limit = min(spec["time_limit_s"], MAX_TIME_S)
         last_beat = 0.0
@@ -958,8 +1073,7 @@ def file_run_record(spec: dict, started: float, ended: float) -> Path | None:
     run_id = spec["run_id"]
     src = run_dir(run_id) / "run-record.md"
     try:
-        text = src.read_text()
-        mtime = src.stat().st_mtime
+        text, mtime = read_head_file(src)
     except OSError:
         return None
     if _frontmatter_value(text, "head_run") != run_id or not (started - 5 <= mtime <= ended + 60):
@@ -1001,13 +1115,15 @@ def cmd_stop(run_id: str, wait: bool = True) -> int:
     if not run_dir(run_id).is_dir():
         print("unknown run")
         return 2
+    st = read_status(run_id)
+    if st.get("phase") == "exited":
+        # A finished run keeps its result: no stop marker, or a passed run
+        # would turn into "stopped".
+        print("already exited")
+        return 0
     wdir = wrapper_dir(run_id)
     wdir.mkdir(parents=True, exist_ok=True)
     (wdir / "stop-requested").write_text(now_iso())
-    st = read_status(run_id)
-    if st.get("phase") == "exited":
-        print("already exited")
-        return 0
     sup = st.get("supervisor_pid")
     if st.get("phase") == "starting" and not pid_alive(sup):
         exit_status(run_id, "stopped")
@@ -1059,7 +1175,16 @@ def cmd_watch() -> int:
         with wlog.open("a") as fh:
             fh.write(f"{now_iso()} {msg}\n")
 
-    for req in sorted(spool.glob("*.json"), key=lambda p: p.stat().st_mtime):
+    def order(p: Path):
+        # Stops first: a start or restart can block for minutes (clone,
+        # waiting on the predecessor) and must not delay another run's stop.
+        try:
+            mtime = p.stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        return (0 if p.name.endswith(".stop.json") else 1, mtime)
+
+    for req in sorted(spool.glob("*.json"), key=order):
         claimed = spool / "processing" / req.name
         try:
             os.replace(req, claimed)  # atomic claim — a parallel watcher skips it

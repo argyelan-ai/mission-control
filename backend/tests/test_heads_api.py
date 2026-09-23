@@ -260,3 +260,83 @@ async def test_viewer_cannot_start(client, heads_root, make_board, make_task):
                                                     "runtime_slug": "box-slot"})
     assert resp.status_code == 403
     assert (await client.get("/api/v1/heads")).status_code == 200
+
+
+# ── review fixes ────────────────────────────────────────────────────────
+
+
+async def test_stop_on_a_finished_run_is_409_and_writes_nothing(auth_client, heads_root, make_board, make_task):
+    _, task = await _world(make_board, make_task)
+    run_id = make_run(heads_root, task_id=str(task.id), status={"phase": "exited", "exit_code": 0, "reason": None})
+    resp = await auth_client.post(f"/api/v1/heads/{run_id}/stop")
+    assert resp.status_code == 409 and resp.json()["detail"]["code"] == "head_not_active"
+    assert not (heads_root / run_id / ".backend" / "stop-requested").exists()
+    assert not (heads_root / "spool" / f"{run_id}.stop.json").exists()
+
+
+async def test_head_written_symlinks_are_never_followed(auth_client, heads_root, make_board, make_task, tmp_path):
+    """question.md / step.txt / head.log are writable by the head: a symlink
+    to a file the backend can see must not leak it into the API."""
+    _, task = await _world(make_board, make_task)
+    secret = tmp_path / "outside-secret.txt"
+    secret.write_text("TOP-SECRET-VALUE\n")
+    run_id = make_run(heads_root, task_id=str(task.id), status={"phase": "exited", "exit_code": 0})
+    folder = heads_root / run_id
+    for name in ("question.md", "step.txt", "head.log"):
+        os.symlink(secret, folder / name)
+    detail = (await auth_client.get(f"/api/v1/heads/{run_id}")).json()
+    assert detail["question"] is None and detail["step"] is None
+    assert detail["state"] != "needs_you"
+    log = (await auth_client.get(f"/api/v1/heads/{run_id}/log")).text
+    assert "TOP-SECRET-VALUE" not in log
+    # control: a regular file is read
+    (folder / "question.md").unlink()
+    (folder / "question.md").write_text("Which endpoint?")
+    assert (await auth_client.get(f"/api/v1/heads/{run_id}")).json()["question"] == "Which endpoint?"
+
+
+async def test_failed_spool_leaves_no_half_run_behind(auth_client, heads_root, make_board, make_task):
+    from app.services.heads import launcher
+
+    _, task = await _world(make_board, make_task)
+    body = {"task_id": str(task.id), "harness": "omp", "runtime_slug": "box-slot"}
+    with patch.object(launcher, "spool", side_effect=launcher.SpoolUnavailable("disk")):
+        resp = await auth_client.post("/api/v1/heads", json=body)
+    assert resp.status_code == 503 and resp.json()["detail"]["code"] == "spool_unavailable"
+    assert not [p for p in heads_root.iterdir() if (p / "spec.json").exists()]
+    fresh = await _task(task.id)
+    assert fresh.status == "inbox"
+    again = await auth_client.post("/api/v1/heads", json=body)
+    assert again.status_code == 201, again.text
+
+
+async def test_a_start_in_flight_for_the_same_task_is_head_active(auth_client, heads_root, make_board, make_task):
+    _, task = await _world(make_board, make_task)
+    body = {"task_id": str(task.id), "harness": "omp", "runtime_slug": "box-slot"}
+    locks = heads_root / "task-locks"
+    locks.mkdir()
+    (locks / str(task.id)).write_text("")
+    busy = await auth_client.post("/api/v1/heads", json=body)
+    assert busy.status_code == 409 and busy.json()["detail"]["code"] == "head_active"
+    assert not [p for p in heads_root.iterdir() if (p / "spec.json").exists()]
+    # a marker left over from a crashed request is taken over
+    old = __import__("time").time() - 600
+    os.utime(locks / str(task.id), (old, old))
+    ok = await auth_client.post("/api/v1/heads", json=body)
+    assert ok.status_code == 201, ok.text
+    assert not (locks / str(task.id)).exists()
+
+
+async def test_hidden_duplicate_runtime_row_says_so(auth_client, heads_root, make_board, make_task):
+    box, task = await _world(make_board, make_task)
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(Runtime(slug="box-recipe", display_name="Recipe row", runtime_type="openai_compatible",
+                      endpoint=EP, model_identifier="glm", host_id=box.id, is_slot=False))
+        await s.commit()
+    resp = await auth_client.post("/api/v1/heads", json={"task_id": str(task.id), "harness": "omp",
+                                                         "runtime_slug": "box-recipe"})
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == {"code": "pair_blocked", "reason_code": "runtime_not_offered"}
+    bad = await auth_client.post("/api/v1/heads", json={"task_id": str(task.id), "harness": "kimi",
+                                                        "runtime_slug": "box-slot"})
+    assert bad.json()["detail"]["reason_code"] == "harness_not_supported"
