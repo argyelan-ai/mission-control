@@ -74,7 +74,7 @@ export function RuntimeSelectionSection({ agent, agentId }: { agent: Agent; agen
     // Locked badge for agents the backend refuses to switch. The text is the
     // backend's own reason (host_harness_adapter.runtime_switch_availability),
     // never a hardcoded sentence — the previous literal named a model
-    // ("Boss = Opus 4.7") that had long since rotted.
+    // for one agent that had long since rotted.
     const reason =
       agent.runtime_switch_blocked_reason ?? t("runtimeSwitchUnsupported");
     return (
