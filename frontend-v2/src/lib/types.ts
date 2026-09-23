@@ -151,6 +151,8 @@ export interface TaskGitInfo {
   workspace_path: string | null;
   commits?: TaskGitCommit[];
   pr_url?: string | null;
+  /** Set by the backend while status == blocked (naive UTC), cleared on leave. */
+  blocked_at?: string | null;
   repo_url?: string | null;
   repo_name?: string | null;
 }
@@ -512,6 +514,69 @@ export interface TaskTimelineEntry {
   detail?: string | null;
   actor?: string | null;
   meta?: Record<string, unknown> | null;
+}
+
+// ── Task run record ("Laufakte", GET /api/v1/tasks/{id}/run-record) ─────────
+// Mirrors backend/app/services/run_record.py build_run_record(). The box and
+// field names are the backend's (German) keys; the UI puts English/German
+// labels on top via i18n. The CONTENT (titles, comment text, step text) stays
+// in the working language and is shown as-is — never translated.
+
+export interface RunRecordChildItem {
+  titel: string | null;
+  status: TaskStatus;
+}
+
+export interface RunRecord {
+  auftrag: {
+    task_id: string;
+    board_id: string;
+    titel: string;
+    beschreibung: string | null;
+    status: TaskStatus;
+    kinder: {
+      total: number;
+      by_status: Partial<Record<TaskStatus, number>>;
+      /** Only present at <= 20 children. */
+      items?: RunRecordChildItem[];
+    };
+  };
+  zeiten: {
+    erstellt: string | null;
+    dispatched: string | null;
+    bestaetigt: string | null;
+    abgeschlossen: string | null;
+    dauer_sekunden: number | null;
+  };
+  plan: { ts: string; typ: string | null; autor: string | null; inhalt: string | null }[];
+  schritte: {
+    ts: string;
+    quelle: "status" | "ereignis";
+    actor_label: string | null;
+    changed_by: string | null;
+    text: string | null;
+  }[];
+  beweise: {
+    anzahl: number;
+    nach_typ: Record<string, number>;
+    items: { ts: string; typ: string; titel: string | null; pfad: string | null }[];
+  };
+  kosten: {
+    gesamt_usd: number;
+    je_anbieter: Record<string, { usd: number; input_tokens: number; output_tokens: number }>;
+    kinder_anteil_usd: number;
+    /** Present while no Anthropic usage is attributed — Claude cost is not tracked. */
+    hinweis?: string;
+  };
+  entscheidungen: {
+    ts: string;
+    typ: string;
+    /** "offen" = still pending. */
+    status: "approved" | "rejected" | "offen";
+    description: string | null;
+    resolver_note: string | null;
+  }[];
+  reibung: Record<string, { anzahl: number; erste: string; letzte: string }>;
 }
 
 export interface TaskTimelineResponse {
