@@ -31,6 +31,7 @@ from app.services.agent_runtime_switch import (
     probe_runtime_model,
 )
 from app.services.endpoint_probe import probe_endpoint_url
+from app.services.heads import box_guard as head_box_guard
 from app.services.host_resolver import (
     ResolvedHost,
     resolve_host_by_slug,
@@ -900,6 +901,10 @@ async def stop_runtime(
     if host_id is not None and not isinstance(host_id, uuid.UUID):
         host_id = uuid.UUID(str(host_id))
 
+    # Head launcher (spec §6.7): a working head is never cut off — not even
+    # with force (stop the head first). Inert while heads_enabled is off.
+    await head_box_guard.guard_runtime_action(session, runtime_uuid, "stop")
+
     busy_agents = await runtime_stop.find_busy_agents(session, runtime_uuid, host_id)
     if busy_agents and not force:
         raise HTTPException(
@@ -941,6 +946,9 @@ async def restart_runtime(
     # runtime_hosts als Sicherheitsnetz — und wird hier als Ereignis
     # festgehalten, samt der Boxen, die mitgehen.
     runtime_uuid = rt["id"] if isinstance(rt["id"], uuid.UUID) else uuid.UUID(str(rt["id"]))
+    # Head launcher (spec §6.7): no restart under a working head while the
+    # engine answers; restarting a dead engine (recovery) stays allowed.
+    await head_box_guard.guard_runtime_action(session, runtime_uuid, "restart")
     rt, is_multi_node = await runtime_multinode.resolve_multi_node(session, rt, runtime_uuid)
     result = await runtime_manager.restart_runtime(rt, host=host)
     if not result["ok"]:

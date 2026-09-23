@@ -1063,6 +1063,20 @@ async def start_recipe_on_host(
         if blocker is not None:
             raise RecipeStartError(409, reason_box_is_worker(blocker.display_name))
 
+    # Head launcher (docs/specs/head-launcher.md §6.7): never pull an engine
+    # from under a working head. Only a DISPLACEMENT is refused — another
+    # recipe on a box whose engine answers. Recovering a dead engine (nothing
+    # running on the boxes, e.g. the watcher's duo autostart) passes.
+    # Inert while settings.heads_enabled is off.
+    from app.services.heads import box_guard
+
+    affected_boxes = [host.id] + ([worker.id] if worker is not None else [])
+    occupants = [rt for hid in affected_boxes for rt in state.occupied.get(hid, [])]
+    displaces = any(instance is None or rt.id != instance.id for rt in occupants)
+    box_guard.check_displacement(affected_boxes, "switch", displaces_engine=displaces)
+    if displaces:
+        await box_guard.check_engine_idle({rt.endpoint for rt in occupants if rt.endpoint})
+
     # P4 „Vorflug": passen die Zahlen? Steht ohne Netzzugriff fest und läuft
     # darum HIER — vor der Instanz, vor der `.env`, vor jeder Verdrängung.
     # Derselbe Satz wie in der Liste, damit niemand zwei Erklärungen für
