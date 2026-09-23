@@ -615,8 +615,17 @@ def harness_argv(spec: dict, run: Path, home: Path, env: dict) -> list:
             if (wt / name).exists():
                 argv += ["--add-dir", str(wt)]
                 break
-        return argv + [job]
+        # No prompt argument: --add-dir is variadic and would swallow it
+        # (live finding). The job goes in on stdin — see harness_stdin().
+        return argv
     raise SpecInvalid("harness", "not in the harness table")
+
+
+def harness_stdin(spec: dict, run: Path):
+    """Claude Code reads the job from stdin; omp gets it as the prompt argument."""
+    if spec["harness"] == "claude":
+        return open(run / "job.md", "rb")
+    return subprocess.DEVNULL
 
 
 def harness_env(spec: dict, run: Path, home: Path) -> dict:
@@ -819,13 +828,15 @@ def cmd_supervise(run_id: str) -> int:
         home = run / "home"
         env = harness_env(spec, run, home)
         argv = sandbox_prefix(spec, run) + harness_argv(spec, run, home, env)
-        (wdir / "argv.json").write_text(json.dumps(argv[:-1] + ["<job.md>"]))
+        shown = [a if a != (run / "job.md").read_text() else "<job.md>" for a in argv]
+        (wdir / "argv.json").write_text(json.dumps(shown))
+        stdin = harness_stdin(spec, run)
         started = time.time()
         child = subprocess.Popen(
             argv,
             cwd=str(run / "wt"),
             env=env,
-            stdin=subprocess.DEVNULL,
+            stdin=stdin,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             start_new_session=True,  # own process group → stop kills everything

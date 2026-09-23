@@ -91,7 +91,7 @@ def test_start_runs_harness_in_worktree_and_exits(env):
 
 def test_claude_pair_uses_bare_settings_and_own_config_dir(env):
     mc_home = env["mc_home"]
-    harness = fake_harness(env["tmp"], "true")
+    harness = fake_harness(env["tmp"], "cat > ../stdin.txt")
     run_id = write_spec(mc_home, harness="claude")
     run = mc_home / "heads" / run_id
     (run / "head.env").write_text(
@@ -102,6 +102,9 @@ def test_claude_pair_uses_bare_settings_and_own_config_dir(env):
     argv = (run / "argv.txt").read_text().splitlines()
     assert argv[:3] == ["-p", "--bare", "--settings"]
     assert argv[argv.index("--append-system-prompt-file") + 1] == str(run / "procedure.md")
+    # the job arrives on stdin, never as an argument a variadic flag could eat
+    assert "Say hello." not in "\n".join(argv)
+    assert (run / "stdin.txt").read_text() == "# Job\nSay hello.\n"
     settings = json.loads((run / "head-settings.json").read_text())
     assert "Bash(gh pr merge:*)" in settings["permissions"]["deny"]
     assert "Read(~/.ssh/**)" in settings["permissions"]["deny"]

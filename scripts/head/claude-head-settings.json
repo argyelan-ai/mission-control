@@ -46,7 +46,7 @@
       "Read(~/.omp/**)",
       "Read(~/.mc/secrets/**)",
       "Edit(**/.wrapper/**)",
-      "Write(**/.wrapper/**)",
+      "Edit(**/.backend/**)",
       "Bash(git push --force:*)",
       "Bash(git push -f:*)",
       "Bash(git push origin main:*)",
