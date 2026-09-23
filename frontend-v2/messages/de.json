@@ -1336,7 +1336,8 @@
       "deleteBody": "{label} wirklich löschen?",
       "delete": "Löschen",
       "telegramManagedHint": "Telegram-Tokens werden in der Telegram-Sektion verwaltet, zusammen mit Verbindungstest und Funktions-Schaltern.",
-      "goToTelegram": "Zu Telegram"
+      "goToTelegram": "Zu Telegram",
+      "cancel": "Abbrechen"
     },
     "github": {
       "title": "GitHub",
