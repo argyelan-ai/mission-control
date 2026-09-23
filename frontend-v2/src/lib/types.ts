@@ -1841,6 +1841,14 @@ export interface Runtime {
    *  the model catalog. null = no recognised vendor (local vLLM, LM Studio,
    *  unsloth). Never re-derive this client-side. */
   provider_label?: string | null;
+  /** Server-derived (routers/runtimes.py::_agent_key_fit): does this runtime
+   *  use a per-agent API key at all? False = it signs in on its own
+   *  (anthropic OAuth, grok/kimi CLI logins). Optional like other enriched
+   *  fields — absent means "unknown", never re-derive it client-side. */
+  agent_key_used?: boolean;
+  /** `secrets.provider` whose keys fit this runtime, null when no provider
+   *  key applies (e.g. a local box). */
+  agent_key_provider?: string | null;
   endpoint: string;
   healthcheck_path: string;
   container_name: string | null;

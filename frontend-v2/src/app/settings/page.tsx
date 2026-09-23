@@ -97,8 +97,6 @@ const SECTIONS: SettingsSection[] = [
 const SHORTCUTS = [
   { keys: ["Cmd", "K"], descKey: "shortcuts.items.commandPalette" },
   { keys: ["Cmd", "B"], descKey: "shortcuts.items.sidebar" },
-  { keys: ["Cmd", "N"], descKey: "shortcuts.items.newTask" },
-  { keys: ["Cmd", "Shift", "A"], descKey: "shortcuts.items.approveAll" },
   { keys: ["Esc"], descKey: "shortcuts.items.closeDialog" },
   { keys: ["?"], descKey: "shortcuts.items.help" },
   { keys: ["g", "h"], descKey: "shortcuts.items.goHome" },
@@ -1865,6 +1863,9 @@ function UserRow({
   const [editing, setEditing] = useState(false);
   const [role, setRole] = useState(user.role);
   const [error, setError] = useState("");
+  // Deactivating locks someone out — ask first. Re-activating restores
+  // access, so it stays a single click.
+  const [confirmDeactivate, setConfirmDeactivate] = useState(false);
 
   const updateMutation = useMutation({
     mutationFn: (data: { role?: string; is_active?: boolean }) =>
@@ -1976,7 +1977,7 @@ function UserRow({
               <button
                 onClick={() => updateMutation.mutate({ role })}
                 disabled={updateMutation.isPending}
-                className="px-2 py-1 rounded-sm text-xs font-medium cursor-pointer transition-colors text-[var(--color-on-accent)]"
+                className="px-2 py-1 min-h-11 sm:min-h-0 rounded-sm text-xs font-medium cursor-pointer transition-colors text-[var(--color-on-accent)]"
                 style={{ background: C.accent }}
               >
                 {updateMutation.isPending ? (
@@ -1991,7 +1992,7 @@ function UserRow({
                   setRole(user.role);
                   setError("");
                 }}
-                className="px-2 py-1 rounded-sm text-xs cursor-pointer"
+                className="px-2 py-1 min-h-11 sm:min-h-0 rounded-sm text-xs cursor-pointer"
                 style={{ color: "var(--color-text-muted)" }}
               >
                 {t("cancel")}
@@ -2001,16 +2002,18 @@ function UserRow({
             <>
               <button
                 onClick={() => setEditing(true)}
-                className="px-2 py-1 rounded-sm text-xs cursor-pointer transition-colors"
+                className="px-2 py-1 min-h-11 sm:min-h-0 rounded-sm text-xs cursor-pointer transition-colors"
                 style={{ color: "var(--color-text-secondary)" }}
               >
                 {t("edit")}
               </button>
               <button
                 onClick={() =>
-                  updateMutation.mutate({ is_active: !user.is_active })
+                  user.is_active
+                    ? setConfirmDeactivate(true)
+                    : updateMutation.mutate({ is_active: true })
                 }
-                className="px-2 py-1 rounded-sm text-xs cursor-pointer transition-colors"
+                className="px-2 py-1 min-h-11 sm:min-h-0 rounded-sm text-xs cursor-pointer transition-colors"
                 style={{
                   color: user.is_active ? C.error : C.online,
                 }}
@@ -2028,6 +2031,23 @@ function UserRow({
           {error}
         </div>
       )}
+
+      <ConfirmDialog
+        open={confirmDeactivate}
+        kicker={t("confirmKicker")}
+        title={t("deactivateTitle", { name: user.name })}
+        body={t("deactivateBody", { name: user.name })}
+        confirmLabel={t("deactivateConfirm")}
+        cancelLabel={t("cancel")}
+        loading={updateMutation.isPending}
+        onConfirm={() =>
+          updateMutation.mutate(
+            { is_active: false },
+            { onSettled: () => setConfirmDeactivate(false) }
+          )
+        }
+        onCancel={() => setConfirmDeactivate(false)}
+      />
     </div>
   );
 }

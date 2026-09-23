@@ -134,6 +134,29 @@ def _host_ref(host: ResolvedHost | None) -> dict | None:
 CLOUD_RUNTIME_TYPES: frozenset[str] = frozenset({"cloud", "grok", "kimi"})
 
 
+def _agent_key_fit(runtime: Runtime, provider) -> dict:
+    """Which per-agent API key fits this runtime — for the agent config page.
+
+    Mirrors harness_compat.resolve_provider_credentials: every protocol
+    except anthropic gets the agent's bound secret as OPENAI_API_KEY
+    (openai, and unknown/None as the legacy default). Deliberately narrower
+    for grok/kimi/voice: the key is technically set there, but those
+    harnesses sign in through their own CLI login / OAuth files and never
+    read it, so the page says "signs in on its own" instead of offering keys.
+    """
+    from app.services.harness_compat import runtime_protocol
+
+    used = runtime_protocol(runtime) not in _OWN_SIGN_IN_PROTOCOLS
+    return {
+        "agent_key_used": used,
+        "agent_key_provider": (provider.secret_provider if (used and provider) else None),
+    }
+
+
+#: Protocols whose harness authenticates on its own (never reads an agent key).
+_OWN_SIGN_IN_PROTOCOLS: frozenset[str] = frozenset({"anthropic", "grok", "kimi", "voice"})
+
+
 def _runtime_locality(runtime: Runtime, host: ResolvedHost | None) -> str:
     """"local" | "cloud" — can a host-inplace agent (which can only ever run
     something physically ON its own box) even reach this runtime?
@@ -592,6 +615,13 @@ async def list_runtimes(
             # frontend and backend disagree about switchability before.
             # None = no recognised vendor (local vLLM, LM Studio, unsloth).
             "provider_label": provider.label if provider else None,
+            # Which agent API key fits this runtime (agent config page). The
+            # agent's key is sent as OPENAI_API_KEY for every protocol but
+            # anthropic (harness_compat.resolve_provider_credentials);
+            # anthropic/grok/kimi/voice rows sign in on their own.
+            # agent_key_provider = the secrets.provider whose keys fit, None
+            # when no provider key applies (e.g. a local box).
+            **_agent_key_fit(rt, provider),
             # Version numbers in the display name that the served model does
             # NOT back — empty list means the name is honest. See
             # _display_name_drift below for why this ships on every row.

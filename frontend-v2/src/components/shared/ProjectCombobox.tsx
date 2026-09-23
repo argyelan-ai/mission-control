@@ -102,7 +102,21 @@ export function ProjectCombobox({
   };
 
   return (
-    <div ref={ref} className="relative">
+    <div
+      ref={ref}
+      className="relative"
+      onKeyDown={(e) => {
+        // Esc closes the open dropdown first — and only the dropdown. Without
+        // stopPropagation the surrounding modal treated the same keystroke as
+        // "close the whole form".
+        if (e.key === "Escape" && (open || showCreate)) {
+          e.preventDefault();
+          e.stopPropagation();
+          setOpen(false);
+          setShowCreate(false);
+        }
+      }}
+    >
       <button
         type="button"
         onClick={() => setOpen(!open)}

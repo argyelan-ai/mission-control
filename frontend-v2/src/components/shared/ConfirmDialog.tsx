@@ -12,7 +12,7 @@
  * PromptDialog adds a single text input (replaces `prompt()`).
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { AlertTriangle, X } from "lucide-react";
 import { C } from "@/lib/colors";
@@ -49,9 +49,23 @@ function DialogShell({
 }: BaseProps & { children?: React.ReactNode; confirmDisabled?: boolean }) {
   useBodyScrollLock(open);
 
+  // A parent may open this dialog from its own keydown handler (Esc on a
+  // filled form = "Discard draft?"). The browser can commit that update and
+  // run the effects below while the same keydown is still on its way to
+  // window, so the Esc listener would see the opening Esc and cancel at
+  // once. Remember the event being dispatched when the dialog opened (only
+  // on the open transition — onCancel is often a new function per render)
+  // and ignore it.
+  const openingEventRef = useRef<Event | undefined>(undefined);
+  useEffect(() => {
+    openingEventRef.current = open ? window.event : undefined;
+  }, [open]);
+
   useEffect(() => {
     if (!open) return;
+    const openingEvent = openingEventRef.current;
     const handler = (e: KeyboardEvent) => {
+      if (e === openingEvent) return;
       if (e.key === "Escape" && !loading) onCancel();
     };
     window.addEventListener("keydown", handler);
