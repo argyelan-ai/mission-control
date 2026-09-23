@@ -1026,7 +1026,6 @@
     "removeFilter": "Remove filter {label}",
     "untitled": "Untitled",
     "related": "related",
-    "andMore": "… and {count} more",
     "saveFailed": "Save failed",
     "cancelEdit": "Cancel edit",
     "cancelEditTitle": "Cancel (Esc)",
@@ -1092,7 +1091,9 @@
     "typeReferenceHint": "link / source",
     "filterLabel": "Filter",
     "scopeLabel": "Scope",
-    "agentLabel": "Agent"
+    "agentLabel": "Agent",
+    "relatedShowMore": "Show {count} more",
+    "relatedShowLess": "Show less"
   },
   "insights": {
     "tabOverview": "Overview",

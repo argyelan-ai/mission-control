@@ -25,6 +25,10 @@ import { ConfirmDeleteModal } from "./ConfirmDeleteModal";
 // ── Phase E Task-Klammer: "Verwandt"-Sektion ──────────────────────────────────
 
 
+/** Related starts folded: a long list (run records collect many) otherwise
+ *  pushes the note body below the fold. */
+const RELATED_FOLDED = 3;
+
 function RelatedNotesSection({
   taskId,
   excludePath,
@@ -35,6 +39,7 @@ function RelatedNotesSection({
   onSelectNote?: (path: string) => void;
 }) {
   const t = useTranslations("vault");
+  const [expanded, setExpanded] = useState(false);
   const { data, isLoading } = useQuery({
     queryKey: ["vault", "related", taskId],
     queryFn: () => api.vault.related(taskId),
@@ -72,7 +77,7 @@ function RelatedNotesSection({
         </span>
       </div>
       <ul className="space-y-1">
-        {others.slice(0, 8).map((n) => (
+        {(expanded ? others : others.slice(0, RELATED_FOLDED)).map((n) => (
           <li key={n.path}>
             <button
               type="button"
@@ -115,16 +120,19 @@ function RelatedNotesSection({
             </button>
           </li>
         ))}
-        {others.length > 8 && (
-          <li
-            className="font-mono italic"
-            style={{
-              fontSize: "10px",
-              color: "var(--color-text-muted)",
-              paddingLeft: "1.5rem",
-            }}
-          >
-            {t("andMore", { count: others.length - 8 })}
+        {others.length > RELATED_FOLDED && (
+          <li>
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              aria-expanded={expanded}
+              className="font-mono rounded-sm px-1.5 py-0.5 transition-colors hover:bg-white/[0.04] cursor-pointer"
+              style={{ fontSize: "10px", color: C.accent }}
+            >
+              {expanded
+                ? t("relatedShowLess")
+                : t("relatedShowMore", { count: others.length - RELATED_FOLDED })}
+            </button>
           </li>
         )}
       </ul>
@@ -280,10 +288,17 @@ function PanelContent({
   }, [isEditing, handleSave, cancelEdit, saveMutation.isPending]);
 
   return (
-    <div className="flex flex-col h-full min-h-0">
+    // One scroll container for masthead, Related and body: with the masthead
+    // pinned above an inner scroller, a note with many related entries left
+    // the body ~89 px at 1440×900.
+    <div
+      ref={scrollRef}
+      className="h-full min-h-0 overflow-y-auto overflow-x-hidden scrollbar-none"
+      style={{ scrollbarWidth: "none", msOverflowStyle: "none" } as React.CSSProperties}
+    >
       {/* Panel header — Editorial Codex masthead */}
       <div
-        className="shrink-0 px-7 py-6"
+        className="px-7 py-6"
         style={{ borderBottom: "1px solid var(--color-border)" }}
       >
         <div className="flex items-start justify-between gap-3">
@@ -557,11 +572,7 @@ function PanelContent({
       </div>
 
       {/* Content area */}
-      <div
-        ref={scrollRef}
-        className="flex-1 overflow-y-auto overflow-x-hidden px-6 py-6 scrollbar-none"
-        style={{ scrollbarWidth: "none", msOverflowStyle: "none" } as React.CSSProperties}
-      >
+      <div className="px-6 py-6">
         {isLoading && !isEditing && (
           <div className="space-y-3 animate-pulse">
             {Array.from({ length: 8 }).map((_, i) => (
