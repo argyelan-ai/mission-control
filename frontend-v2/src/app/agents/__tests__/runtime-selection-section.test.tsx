@@ -11,7 +11,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { RuntimeSelectionSection } from "../[id]/page";
+import { RuntimeSelectionSection } from "../[id]/RuntimeSelectionSection";
 import { api } from "@/lib/api";
 import type { Agent, Runtime } from "@/lib/types";
 
