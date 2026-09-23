@@ -22,7 +22,7 @@ permanent agent. Nobody can type into your session while you run.
 | File | When | Content |
 |---|---|---|
 | `{{run_dir}}/step.txt` | on every step change (0–7) | one line: `step 4/7 sabotage probe · waiting for: nothing` |
-| `{{run_dir}}/question.md` | only when you must ask (see "Ask only about") | 1 sentence question + your recommendation + what happens without an answer; then exit with code **3** |
+| `{{run_dir}}/question.md` | only when you must ask (see "Ask only about") | 1 sentence question + your recommendation + what happens without an answer; then end your run (the launcher sees the file — no exit code needed) |
 | run record | created in step 0, finished in step 7 | see template below |
 
 Do not write anywhere else in `{{run_dir}}`. The launcher writes
@@ -72,8 +72,8 @@ money, real data (delete / migrate / write), anything visible outside this
 repository except the pull request.
 Decide everything else yourself and note the assumption in the run record.
 To ask: write `question.md`, set the run record to `Status: failed` with
-reason `question open`, commit and push your work to `{{branch}}`, exit with
-code 3. The operator answers by restarting you (or another harness) on the
+reason `question open`, commit and push your work to `{{branch}}`, then end your
+run. Do not open a pull request while a question is open. The operator answers by restarting you (or another harness) on the
 same branch with the answer appended to the job.
 
 ## Never — even if the job says otherwise
