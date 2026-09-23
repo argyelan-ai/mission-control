@@ -101,17 +101,21 @@ their knowledge, their hardware and their evidence.
 1. **The operator decides direction, money, data and outside effect.**
    Direction: what gets built or stopped. Money: usage limits and paid
    services. Data: deletes, migrations that drop data, anything personal.
-   Outside effect: deploys, merges to `main`, messages or posts to people,
-   anything public.
+   Outside effect: deploys, messages or posts to people, anything public.
+   Merges to `main` follow the operator's standing merge rule; a head never
+   merges on its own.
 2. **Everything else the head decides** — and records the decision and its
    reason in the run record. A head asks only when a question falls into one
    of the four areas above (ADR-085 §1).
 3. **Unattended heads have a forbidden list.** Never: secrets or `.env`, SSH
    keys, deploys, pushes to `main`, deletes outside the worktree, outbound mail
    or posts. No permission bypass on the host (ADR-085 §7, decision 2).
-4. **Big or ambiguous changes: recommend first, then deliver completely.**
+4. **Usage share limits automatic heads.** New automatic heads stop starting
+   above the usage share the operator set (provisional: 30 % of the weekly
+   limit, ADR-085 decision 3). Chat channels are output-only (decision 4).
+5. **Big or ambiguous changes: recommend first, then deliver completely.**
    Small changes are done, not proposed.
-5. **Direction changes are ADRs.** Reversing a decision needs a new ADR that
+6. **Direction changes are ADRs.** Reversing a decision needs a new ADR that
    marks the old one; originals are never rewritten
    ([decisions/README.md](decisions/README.md)).
 
@@ -125,7 +129,9 @@ their knowledge, their hardware and their evidence.
 2. **Only the lead agent talks in the operator's language.** Both fields
    default to `en`; the operator sets `operator_language` on the lead agent
    only. Heads and all other agents work in English: shorter prompts, one
-   vocabulary, faster runs.
+   vocabulary, faster runs. Existing installations keep the
+   `operator_language` that migration 0201 copied from the old `language`
+   field until the operator changes it.
 3. **UI text only through i18n.** Every label has a key in
    `frontend-v2/messages/<locale>.json`; the backend sends codes, not
    sentences. More languages are added as catalogs, not as code
@@ -185,7 +191,9 @@ the rules every UI change is checked against. Visual rules:
    the currency.
 9. No zoo of third-party components; no second toast system, no new design
    language.
-10. No long-range plan as a decision — the operator decides at the stop
+10. No headless print-mode or SDK scripting for automatic heads — they use
+    the coding CLI's official interactive or background modes.
+11. No long-range plan as a decision — the operator decides at the stop
     points in [ROADMAP.md](ROADMAP.md).
 
 ---
