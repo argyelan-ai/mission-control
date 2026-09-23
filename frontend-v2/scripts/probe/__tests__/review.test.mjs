@@ -18,6 +18,10 @@ describe("redactSecrets", () => {
     expect(out).toContain("token=***&x=1");
     expect(out).toContain("Bearer ***");
   });
+  it("scrubs a token query value even when the value is not a known secret", () => {
+    expect(redactSecrets("WebSocket ws://h/ws/terminal?token=zz9-other&cols=80 failed", [])).toBe("WebSocket ws://h/ws/terminal?token=***&cols=80 failed");
+    expect(redactSecrets("GET /api/x?access_token=q1w2e3", [])).toBe("GET /api/x?access_token=***");
+  });
   it("leaves harmless text alone and tolerates empty secrets", () => {
     expect(redactSecrets("TypeError: x is undefined", ["", null])).toBe("TypeError: x is undefined");
   });
