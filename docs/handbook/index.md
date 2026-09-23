@@ -8,6 +8,8 @@ Claude subscription, your own GPU, or both in one fleet.
 
 This handbook is the map. Installation lives in the
 [README](../../README.md); this is everything after `docker compose up`.
+Where the project is heading and the rules it builds by:
+[Principles](../PRINCIPLES.md) · [Roadmap](../ROADMAP.md).
 
 ## Five-minute tour
 

@@ -3,6 +3,8 @@
 > **Zweck:** Entscheidungshistorie der wichtigsten Architektur- und Design-Entscheidungen in Mission Control. Jedes ADR beantwortet: **Was wurde entschieden? Warum? Welche Alternativen gab es? Was sind die Konsequenzen?**
 >
 > **Lebende Dokumentation.** Bei jeder signifikanten Architektur-Änderung neues ADR anlegen. Bestehende ADRs nicht umschreiben — stattdessen neues ADR das das alte "supersedes".
+>
+> **Überblick:** Die aktuelle Richtung (seit [ADR-085](085-head-per-job.md)) und die daraus folgenden Bau-, Beweis- und Entscheidungsregeln stehen in [`../PRINCIPLES.md`](../PRINCIPLES.md); der Stand der Etappen in [`../ROADMAP.md`](../ROADMAP.md).
 
 ## Format
 
