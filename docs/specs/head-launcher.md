@@ -302,8 +302,11 @@ stoppable) in the runs list on `/runtimes`.
       folder. Lock exists and its owner pid is alive with the same start
       time → `status.json` `exited`, `reason=box_busy`. Owner dead → the lock
       is stale: remove it and take it. Always released on wrapper exit (trap).
-   5. Start inside `tmux new-session -d -s head-<id8>` so the operator can
-      `tmux attach` and take over. Environment: `env -i` with only `HOME`,
+   5. Start as a detached process group (tmux only with `MC_HEAD_TMUX=1`).
+      Build finding: inside tmux, omp (Bun) could not reach the local engine's
+      LAN address while curl in the same session could — macOS Local Network
+      privacy treats the tmux server as the responsible process. v1 pairs run
+      with `-p`, so there is nothing to take over; `head.log` is the view. Environment: `env -i` with only `HOME`,
       `PATH` (shims first), `LANG`, `TERM` and `head.env`. Inside
       `sandbox-exec` (§9) once the sandbox is proven.
 3. Harness table — the only place with harness commands:

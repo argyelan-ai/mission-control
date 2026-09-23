@@ -744,10 +744,18 @@ def cmd_start(run_id: str) -> int:
 def launch_supervisor(run_id: str) -> int:
     me = [sys.executable, str(Path(__file__).resolve()), "_supervise", run_id]
     session = f"head-{run_id[:8]}"
-    if os.environ.get("MC_HEAD_NO_TMUX") != "1" and shutil.which("tmux", path=BASE_PATH):
+    # tmux is opt-in (MC_HEAD_TMUX=1). Live finding 2026-09-23: inside a
+    # tmux session omp (a Bun binary) could not reach the local engine's LAN
+    # address ("Was there a typo in the url or port?") while curl in the same
+    # session and omp started directly both could — macOS Local Network
+    # privacy judges the tmux server as the responsible process. Both v1
+    # pairs run non-interactively (-p), so tmux adds no takeover; the head's
+    # output is in head.log either way.
+    if os.environ.get("MC_HEAD_TMUX") == "1" and os.environ.get("MC_HEAD_NO_TMUX") != "1" \
+            and shutil.which("tmux", path=BASE_PATH):
         tmux = shutil.which("tmux", path=BASE_PATH)
         env_args = []
-        for key in ("MC_HOME", "MC_HEAD_CLONES", "MC_HEAD_VAULT_JOBS", "MC_HEAD_SANDBOX",
+        for key in ("MC_HOME", "MC_HEAD_CLONES", "MC_HEAD_TMUX", "MC_HEAD_VAULT_JOBS", "MC_HEAD_SANDBOX",
                     "MC_HEAD_GH", "MC_HEAD_PATH", "MC_HEAD_HEARTBEAT_S", "MC_HEAD_KILL_GRACE_S",
                     "MC_HEAD_BIN_OMP", "MC_HEAD_BIN_CLAUDE", "MC_HEAD_MAX_TIME_S"):
             if key in os.environ:
