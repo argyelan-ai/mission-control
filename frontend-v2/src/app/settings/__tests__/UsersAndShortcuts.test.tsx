@@ -44,6 +44,10 @@ vi.mock("@/lib/store", () => ({
 
 import SettingsPage from "../page";
 
+// The whole settings page mounts here; under a loaded parallel run it can take
+// a few seconds, so give queries and tests headroom.
+vi.setConfig({ testTimeout: 20_000 });
+
 const OTHER_USER = {
   id: "u2",
   email: "beta@example.com",
@@ -94,10 +98,10 @@ describe("Settings › Users — deactivating asks first", () => {
     const update = vi.spyOn(api.auth.users, "update").mockResolvedValue({} as never);
     renderPage();
 
-    await userEvent.click(await screen.findByRole("button", { name: "Deactivate" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Deactivate" }, { timeout: 5000 }));
     expect(update).not.toHaveBeenCalled();
 
-    const dialog = await screen.findByRole("dialog");
+    const dialog = await screen.findByRole("dialog", {}, { timeout: 5000 });
     expect(dialog).toHaveTextContent("Beta");
   });
 
@@ -105,8 +109,8 @@ describe("Settings › Users — deactivating asks first", () => {
     const update = vi.spyOn(api.auth.users, "update").mockResolvedValue({} as never);
     renderPage();
 
-    await userEvent.click(await screen.findByRole("button", { name: "Deactivate" }));
-    const dialog = await screen.findByRole("dialog");
+    await userEvent.click(await screen.findByRole("button", { name: "Deactivate" }, { timeout: 5000 }));
+    const dialog = await screen.findByRole("dialog", {}, { timeout: 5000 });
     await userEvent.click(within(dialog).getAllByRole("button", { name: "Cancel" }).at(-1)!);
     expect(update).not.toHaveBeenCalled();
   });
@@ -115,8 +119,8 @@ describe("Settings › Users — deactivating asks first", () => {
     const update = vi.spyOn(api.auth.users, "update").mockResolvedValue({} as never);
     renderPage();
 
-    await userEvent.click(await screen.findByRole("button", { name: "Deactivate" }));
-    const dialog = await screen.findByRole("dialog");
+    await userEvent.click(await screen.findByRole("button", { name: "Deactivate" }, { timeout: 5000 }));
+    const dialog = await screen.findByRole("dialog", {}, { timeout: 5000 });
     await userEvent.click(within(dialog).getByRole("button", { name: "Deactivate user" }));
     expect(update).toHaveBeenCalledWith("u2", { is_active: false });
   });
@@ -126,7 +130,7 @@ describe("Settings › Users — deactivating asks first", () => {
     const update = vi.spyOn(api.auth.users, "update").mockResolvedValue({} as never);
     renderPage();
 
-    await userEvent.click(await screen.findByRole("button", { name: "Activate" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Activate" }, { timeout: 5000 }));
     expect(update).toHaveBeenCalledWith("u2", { is_active: true });
   });
 });
@@ -135,7 +139,7 @@ describe("Settings › Shortcuts — only shortcuts that exist", () => {
   it("does not list Cmd+N or Cmd+Shift+A (no handler implements them)", async () => {
     nav.section = "shortcuts";
     renderPage();
-    await screen.findByText("Open command palette");
+    await screen.findByText("Open command palette", {}, { timeout: 5000 });
     expect(screen.queryByText("New task")).not.toBeInTheDocument();
     expect(screen.queryByText("Approve all approvals")).not.toBeInTheDocument();
   });
