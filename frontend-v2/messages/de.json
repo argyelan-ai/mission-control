@@ -425,7 +425,9 @@
       "recreateBody": "Das zieht das aktuelle Docker-Image (~30-90s). Die laufende Worker-Session wird beendet.",
       "recreateWarn": "Achtung: Der Agent arbeitet gerade an einer Aufgabe — der Lauf wird abgebrochen. Bestätige, um trotzdem fortzufahren (force=true).",
       "runtimeLabel": "Runtime"
-    }
+    },
+    "fleetCountWithPaused": "{active} aktiv · {paused} pausiert",
+    "fleetCountActive": "{active} aktiv"
   },
   "inbox": {
     "title": "Eingang",

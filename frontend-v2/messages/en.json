@@ -425,7 +425,9 @@
       "recreateBody": "This pulls the current Docker image (~30-90s). The running worker session will be terminated.",
       "recreateWarn": "Warning: the agent is currently working on a task — the run will be aborted. Confirm to continue anyway (force=true).",
       "runtimeLabel": "Runtime"
-    }
+    },
+    "fleetCountWithPaused": "{active} active · {paused} paused",
+    "fleetCountActive": "{active} active"
   },
   "inbox": {
     "title": "Inbox",
