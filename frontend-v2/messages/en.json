@@ -198,7 +198,6 @@
   "agents": {
     "title": "Agents",
     "fleetAgents": "Fleet · Agents",
-    "onlineCount": "{online}/{total} online",
     "newAgent": "New agent",
     "templates": "Templates",
     "allAgents": "All Agents",
