@@ -36,7 +36,7 @@ export function HeadStopButton({
   if (confirming && !pending && !done) {
     return (
       <span className="inline-flex flex-wrap items-center gap-2" role="group" data-testid={`${testId}-confirm`}>
-        <span className="text-xs" style={{ color: C.textPrimary }}>{t("stopConfirm")}</span>
+        <span className="text-xs basis-full sm:basis-auto" style={{ color: C.textPrimary }}>{t("stopConfirm")}</span>
         <button
           type="button"
           autoFocus
