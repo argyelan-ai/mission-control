@@ -54,7 +54,13 @@ function mockApi(routes: Routes = {}) {
   vi.spyOn(api.tasks, "timeline").mockResolvedValue({ task: {} as never, entries: [], total: 0, truncated: false });
   vi.spyOn(api.tasks, "events").mockResolvedValue([]);
   vi.spyOn(api.tasks.deliverables, "list").mockResolvedValue([]);
-  // References / thread / transcript etc. hit fetch directly — answer empty.
+  // The thread panel reads `messages` off the response — a bare `[]` from the
+  // generic fetch stub made ThreadPanel crash (`undefined.find`) as an
+  // unhandled error on slower CI runs.
+  vi.spyOn(api.tasks.thread, "list").mockResolvedValue({
+    task_id: "task-1", recipient: null, messages: [], has_more_before: false, latest_seq: 0, my_read_seq: 0,
+  });
+  // References / transcript etc. hit fetch directly — answer empty.
   vi.spyOn(globalThis, "fetch").mockResolvedValue(
     new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } }),
   );
@@ -430,7 +436,8 @@ describe("thread view", () => {
     fireEvent.click(await screen.findByRole("button", { name: "More actions" }));
     fireEvent.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: /thread/i }));
     fireEvent.click(await screen.findByRole("button", { name: "Back to summary" }));
-    expect(screen.getByRole("tab", { name: "Summary" })).toHaveAttribute("aria-selected", "true");
+    // Wait for the tab strip to re-render — a synchronous query raced it on CI.
+    expect(await screen.findByRole("tab", { name: "Summary" })).toHaveAttribute("aria-selected", "true");
   });
 });
 
