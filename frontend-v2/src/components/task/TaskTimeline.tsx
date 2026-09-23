@@ -30,8 +30,11 @@ import {
   Users,
   type LucideIcon,
 } from "lucide-react";
-import { useLocale } from "next-intl";
+import { useState } from "react";
+import { useLocale, useTranslations } from "next-intl";
 import { timeAgo } from "@/lib/utils";
+import { formatAbsolute, formatAge } from "@/lib/taskDetail/format";
+import { groupTimelineEntries, humanizeEventType, type TimelineItem } from "@/lib/taskDetail/timelineGroups";
 import { C } from "@/lib/colors";
 import type { TaskTimelineEntry } from "@/lib/types";
 
@@ -75,32 +78,39 @@ function getKindMeta(kind: string): { icon: LucideIcon; color: string; label: st
   return { ...meta, label: meta.label ?? kind.replace(/_/g, " ") };
 }
 
-const SOURCE_LABEL: Record<TaskTimelineEntry["source"], string> = {
-  milestone: "Milestone",
-  task_event: "Status",
-  activity_event: "Activity",
-  comment: "Comment",
+const SOURCE_LABEL_KEY: Record<TaskTimelineEntry["source"], string> = {
+  milestone: "detail.sourceMilestone",
+  task_event: "detail.sourceStatus",
+  activity_event: "detail.sourceActivity",
+  comment: "detail.sourceComment",
 };
 
 // ── Row ──────────────────────────────────────────────────────────────────────
 
+function Connector({ isLast }: { isLast: boolean }) {
+  return !isLast ? (
+    <span className="absolute top-4 bottom-0 left-[5px] w-px" style={{ background: C.border }} />
+  ) : null;
+}
+
+function Node({ color }: { color: string }) {
+  return (
+    <span
+      className="absolute left-0 top-0.5 flex items-center justify-center w-[11px] h-[11px] rounded-full"
+      style={{ background: C.bgBase, border: `1.5px solid ${color}` }}
+    />
+  );
+}
+
 function TimelineRow({ entry, isLast }: { entry: TaskTimelineEntry; isLast: boolean }) {
+  const t = useTranslations("tasks");
   const locale = useLocale();
   const { icon: Icon, color } = getKindMeta(entry.kind);
-  const absolute = new Date(entry.ts).toLocaleString();
 
   return (
     <div className="relative pl-5" style={{ paddingBottom: isLast ? 0 : 14 }}>
-      {!isLast && (
-        <span
-          className="absolute top-4 bottom-0 left-[5px] w-px"
-          style={{ background: C.border }}
-        />
-      )}
-      <span
-        className="absolute left-0 top-0.5 flex items-center justify-center w-[11px] h-[11px] rounded-full"
-        style={{ background: C.bgBase, border: `1.5px solid ${color}` }}
-      />
+      <Connector isLast={isLast} />
+      <Node color={color} />
       <div className="flex items-center gap-1.5">
         <Icon size={11} style={{ color, flexShrink: 0 }} />
         <span className="text-xs font-medium truncate" style={{ color: C.textPrimary }}>
@@ -123,12 +133,67 @@ function TimelineRow({ entry, isLast }: { entry: TaskTimelineEntry; isLast: bool
             {entry.actor}
           </span>
         )}
-        <span style={{ color: C.textDim }}>{SOURCE_LABEL[entry.source]}</span>
+        <span style={{ color: C.textDim }}>{t(SOURCE_LABEL_KEY[entry.source])}</span>
         <span style={{ color: C.textDim }}>·</span>
-        <span title={absolute} style={{ color: C.textMuted }}>
+        <span title={formatAbsolute(entry.ts, locale)} style={{ color: C.textMuted }}>
           {timeAgo(entry.ts, locale)}
         </span>
       </div>
+    </div>
+  );
+}
+
+/** One row for a repeated system event: "Blocked reminder ×27 · first … · last …". */
+function TimelineGroupRow({
+  item,
+  isLast,
+}: {
+  item: Extract<TimelineItem, { type: "group" }>;
+  isLast: boolean;
+}) {
+  const t = useTranslations("tasks");
+  const locale = useLocale();
+  const [open, setOpen] = useState(false);
+  const { icon: Icon, color } = getKindMeta(item.entries[item.entries.length - 1].kind);
+  const slug = item.eventType.replace(/^task\./, "");
+  const labelKey = `detail.event.${slug}`;
+  const label = t.has(labelKey) ? t(labelKey) : humanizeEventType(item.eventType);
+
+  return (
+    <div className="relative pl-5" style={{ paddingBottom: isLast ? 0 : 14 }} data-testid="timeline-group">
+      <Connector isLast={isLast} />
+      <Node color={color} />
+      <div className="flex items-center gap-1.5">
+        <Icon size={11} style={{ color, flexShrink: 0 }} />
+        <span className="text-xs font-medium truncate" style={{ color: C.textPrimary }}>
+          {t("detail.repeated", { label, count: item.entries.length })}
+        </span>
+      </div>
+      <div className="flex items-center gap-1.5 mt-1 text-[10px] flex-wrap" style={{ color: C.textMuted }}>
+        <span>
+          {t("detail.timelineFirstLast", {
+            first: formatAge(item.first, locale) ?? "—",
+            last: formatAge(item.last, locale) ?? "—",
+          })}
+        </span>
+        <span style={{ color: C.textDim }}>·</span>
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          aria-expanded={open}
+          className="cursor-pointer hover:underline"
+          style={{ color: C.textSecondary }}
+        >
+          {open ? t("detail.timelineHideEach") : t("detail.timelineShowEach")}
+        </button>
+      </div>
+      {open && (
+        <div className="mt-2">
+          {[...item.entries].reverse().map((e, i, arr) => (
+            <TimelineRow key={`${e.ts}-${i}`} entry={e} isLast={i === arr.length - 1} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -142,10 +207,12 @@ interface TaskTimelineProps {
 }
 
 export function TaskTimeline({ entries, isLoading, truncated }: TaskTimelineProps) {
+  const t = useTranslations("tasks");
+
   if (isLoading) {
     return (
-      <div className="text-xs" style={{ color: C.textMuted }}>
-        Lade Timeline…
+      <div className="min-h-[200px] text-xs" style={{ color: C.textMuted }} aria-busy="true">
+        {t("detail.timelineLoading")}
       </div>
     );
   }
@@ -153,27 +220,35 @@ export function TaskTimeline({ entries, isLoading, truncated }: TaskTimelineProp
   if (entries.length === 0) {
     return (
       <div className="text-xs" style={{ color: C.textMuted }}>
-        Noch keine Ereignisse.
+        {t("detail.timelineEmpty")}
       </div>
     );
   }
 
-  // Most recent first — matches every other reverse-chronological list in
-  // this panel (Comments, History), but each row's connector line still
-  // reads top→bottom, so it's the newest event that sits at the top.
-  const ordered = [...entries].reverse();
+  // Repeated system events (reminders) collapse into one row, then most
+  // recent first — matches every other reverse-chronological list in this
+  // panel (Comments, History). No inner scroll box: the panel scrolls.
+  const ordered = groupTimelineEntries(entries).reverse();
 
   return (
     <div>
       {truncated && (
         <div className="mb-2 text-[11px]" style={{ color: C.textMuted }}>
-          Zeige die letzten {entries.length} Ereignisse — ältere ausgeblendet.
+          {t("detail.timelineTruncated", { count: entries.length })}
         </div>
       )}
-      <div className="overflow-y-auto pr-1" style={{ maxHeight: 500 }}>
-        {ordered.map((entry, i) => (
-          <TimelineRow key={`${entry.source}-${entry.kind}-${entry.ts}-${i}`} entry={entry} isLast={i === ordered.length - 1} />
-        ))}
+      <div>
+        {ordered.map((item, i) =>
+          item.type === "group" ? (
+            <TimelineGroupRow key={`group-${item.eventType}`} item={item} isLast={i === ordered.length - 1} />
+          ) : (
+            <TimelineRow
+              key={`${item.entry.source}-${item.entry.kind}-${item.entry.ts}-${i}`}
+              entry={item.entry}
+              isLast={i === ordered.length - 1}
+            />
+          ),
+        )}
       </div>
     </div>
   );
