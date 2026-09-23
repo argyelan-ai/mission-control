@@ -72,6 +72,13 @@
     "noActivity": "No activity"
   },
   "tasks": {
+    "createModal": {
+      "discardKicker": "New task",
+      "discardTitle": "Discard draft?",
+      "discardBody": "What you typed in this form is lost.",
+      "discardConfirm": "Discard",
+      "discardKeep": "Keep editing"
+    },
     "title": "Tasks",
     "noBoardSelected": "No board selected",
     "statusInbox": "Inbox",

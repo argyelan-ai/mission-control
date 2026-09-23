@@ -72,6 +72,13 @@
     "noActivity": "Keine Aktivität"
   },
   "tasks": {
+    "createModal": {
+      "discardKicker": "Neue Aufgabe",
+      "discardTitle": "Entwurf verwerfen?",
+      "discardBody": "Was du in diesem Formular eingegeben hast, geht verloren.",
+      "discardConfirm": "Verwerfen",
+      "discardKeep": "Weiter bearbeiten"
+    },
     "title": "Aufgaben",
     "noBoardSelected": "Kein Board ausgewählt",
     "statusInbox": "Inbox",

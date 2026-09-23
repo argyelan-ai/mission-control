@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { X, Send, Plus, Bug, Sparkles, Search as SearchIcon, AlertTriangle } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import type { Agent, Task } from "@/lib/types";
@@ -15,6 +16,7 @@ import {
 } from "./TaskFormFields";
 import { C as MC } from "@/components/homepage/colors";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 // ── Design tokens — sourced from the shared MC palette (single source, no purple)
 const C = {
@@ -57,6 +59,7 @@ interface CreateTaskModalProps {
 
 export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps) {
   const qc = useQueryClient();
+  const t = useTranslations("tasks.createModal");
 
   // Modal state
   const [open, setOpen] = useState(false);
@@ -156,6 +159,29 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
     if (descriptionRef.current) descriptionRef.current.style.height = "auto";
     setOpen(false);
   }, []);
+
+  // Anything the operator typed (or staged) that closing would throw away.
+  // Once the task exists (retry state) there is no draft left to lose.
+  const hasDraft =
+    !isRetry &&
+    (!!payload.title.trim() ||
+      !!payload.description.trim() ||
+      !!payload.acceptanceCriteria.trim() ||
+      !!payload.scopeOut.trim() ||
+      !!payload.riskNotes.trim() ||
+      !!payload.desiredOutput.trim() ||
+      !!payload.referenceNotes.trim() ||
+      payload.referenceUrls.length > 0 ||
+      stagedReferenceFiles.length > 0);
+
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+
+  // Every close path (Esc, backdrop, X, Cancel) goes through here: an empty
+  // form closes at once, a filled one asks "Discard draft?" first.
+  const requestClose = useCallback(() => {
+    if (hasDraft) setConfirmDiscard(true);
+    else resetForm();
+  }, [hasDraft, resetForm]);
 
   const handleSubmit = useCallback(async () => {
     if (loading || !activeBoardId) return;
@@ -300,11 +326,12 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
             transition={{ duration: prefersReducedMotion ? 0 : 0.15 }}
             className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4"
             style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
-            onClick={(e) => { if (e.target === e.currentTarget) resetForm(); }}
+            onClick={(e) => { if (e.target === e.currentTarget) requestClose(); }}
             onKeyDown={(e) => {
               if (e.key === "Escape") {
                 e.preventDefault();
-                resetForm();
+                // The discard dialog handles its own Esc (= keep editing).
+                if (!confirmDiscard) requestClose();
               } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();
                 handleSubmit();
@@ -314,7 +341,7 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
             <div
               className="absolute inset-0"
               style={{ backgroundColor: "rgba(0,0,0,0.6)" }}
-              onClick={resetForm}
+              onClick={requestClose}
             />
 
             {/* Drag indicator — mobile only */}
@@ -361,7 +388,7 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
                     </span>
                   )}
                 </div>
-                <button onClick={resetForm} aria-label="Close" className="cursor-pointer hover:opacity-80 transition-opacity" style={{ color: C.textMuted }}>
+                <button onClick={requestClose} aria-label="Close" className="cursor-pointer hover:opacity-80 transition-opacity" style={{ color: C.textMuted }}>
                   <X size={16} />
                 </button>
               </div>
@@ -398,7 +425,6 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
                   titleRef={titleRef}
                   descriptionRef={descriptionRef}
                   onSubmitShortcut={handleSubmit}
-                  onEscape={resetForm}
                   enableReferenceFiles
                   onStagedReferenceFilesChange={(files, note) => {
                     setStagedReferenceFiles(files);
@@ -415,7 +441,7 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    onClick={resetForm}
+                    onClick={requestClose}
                     className="px-3.5 py-1.5 text-[11px] rounded-lg cursor-pointer transition-colors"
                     style={{ color: C.textMuted, border: `1px solid ${C.border}` }}
                   >
@@ -442,6 +468,20 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
           </motion.div>
         )}
       </AnimatePresence>
+
+      <ConfirmDialog
+        open={confirmDiscard}
+        kicker={t("discardKicker")}
+        title={t("discardTitle")}
+        body={t("discardBody")}
+        confirmLabel={t("discardConfirm")}
+        cancelLabel={t("discardKeep")}
+        onConfirm={() => {
+          setConfirmDiscard(false);
+          resetForm();
+        }}
+        onCancel={() => setConfirmDiscard(false)}
+      />
     </>
   );
 }
