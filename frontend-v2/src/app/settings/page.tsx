@@ -97,8 +97,6 @@ const SECTIONS: SettingsSection[] = [
 const SHORTCUTS = [
   { keys: ["Cmd", "K"], descKey: "shortcuts.items.commandPalette" },
   { keys: ["Cmd", "B"], descKey: "shortcuts.items.sidebar" },
-  { keys: ["Cmd", "N"], descKey: "shortcuts.items.newTask" },
-  { keys: ["Cmd", "Shift", "A"], descKey: "shortcuts.items.approveAll" },
   { keys: ["Esc"], descKey: "shortcuts.items.closeDialog" },
   { keys: ["?"], descKey: "shortcuts.items.help" },
   { keys: ["g", "h"], descKey: "shortcuts.items.goHome" },

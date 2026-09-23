@@ -711,7 +711,7 @@
     "navigation": "Navigation",
     "actions": "Actions",
     "newTask": "New Task",
-    "approveAll": "Approve all approvals",
+    "openInbox": "Open inbox",
     "openCommandPalette": "Open command palette",
     "newBoard": "New board",
     "newBoardHeading": "NEW BOARD",
@@ -1389,8 +1389,6 @@
       "items": {
         "commandPalette": "Open command palette",
         "sidebar": "Collapse/expand sidebar",
-        "newTask": "New task",
-        "approveAll": "Approve all approvals",
         "closeDialog": "Close dialog/palette",
         "help": "Help (command palette)",
         "goHome": "Go to Home",

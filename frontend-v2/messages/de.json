@@ -711,7 +711,7 @@
     "navigation": "Navigation",
     "actions": "Aktionen",
     "newTask": "Neue Aufgabe",
-    "approveAll": "Alle Freigaben genehmigen",
+    "openInbox": "Inbox öffnen",
     "openCommandPalette": "Befehlspalette öffnen",
     "newBoard": "Neues Board",
     "newBoardHeading": "NEUES BOARD",
@@ -1389,8 +1389,6 @@
       "items": {
         "commandPalette": "Command-Palette öffnen",
         "sidebar": "Sidebar ein-/ausklappen",
-        "newTask": "Neue Aufgabe",
-        "approveAll": "Alle Freigaben genehmigen",
         "closeDialog": "Dialog/Palette schliessen",
         "help": "Hilfe (Command-Palette)",
         "goHome": "Zu Home",

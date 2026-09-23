@@ -4,8 +4,8 @@ import { useCallback } from "react";
 import { Command } from "cmdk";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, CheckCheck, Search } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { Plus, Inbox, Search } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { NAV_TREE } from "@/lib/nav";
 import { useAppStore } from "@/lib/store";
@@ -39,7 +39,6 @@ export default function CommandPalette() {
   const t = useTranslations("shell");
   const tNav = useTranslations("nav");
   const router = useRouter();
-  const qc = useQueryClient();
   const { commandPaletteOpen, setCommandPaletteOpen, activeBoardId } =
     useAppStore();
 
@@ -64,15 +63,6 @@ export default function CommandPalette() {
     },
     [router, close]
   );
-
-  const approveAll = useCallback(async () => {
-    const approvals = await api.approvals.list();
-    await Promise.all(
-      approvals.map((a) => api.approvals.resolve(a.id, "approved"))
-    );
-    qc.invalidateQueries({ queryKey: ["approvals"] });
-    close();
-  }, [close, qc]);
 
   return (
     <AnimatePresence>
@@ -180,7 +170,12 @@ export default function CommandPalette() {
                   </Command.Group>
                 ))}
 
-                {/* Quick Actions */}
+                {/* Quick Actions — navigation only. A bulk "approve all"
+                    used to live here: one Enter resolved every open approval
+                    (blockers included) with no confirmation or undo. Deciding
+                    happens in the Inbox, one card at a time. No shortcut hints
+                    either: only the ones useKeyboardShortcuts implements may
+                    be shown, and neither action has one. */}
                 <Command.Group heading={t("actions")} className={groupClass}>
                   <Command.Item
                     value="new task"
@@ -192,29 +187,17 @@ export default function CommandPalette() {
                       style={{ color: "var(--color-info)" }}
                     />
                     {t("newTask")}
-                    <kbd
-                      className={`ml-auto ${kbdClass}`}
-                      style={kbdStyle}
-                    >
-                      Cmd+N
-                    </kbd>
                   </Command.Item>
                   <Command.Item
-                    value="approve all"
-                    onSelect={approveAll}
+                    value="open inbox approvals"
+                    onSelect={() => navigate("/inbox")}
                     className={itemClass}
                   >
-                    <CheckCheck
+                    <Inbox
                       size={15}
-                      style={{ color: "var(--color-online)" }}
+                      style={{ color: "var(--color-text-secondary)" }}
                     />
-                    {t("approveAll")}
-                    <kbd
-                      className={`ml-auto ${kbdClass}`}
-                      style={kbdStyle}
-                    >
-                      Cmd+Shift+A
-                    </kbd>
+                    {t("openInbox")}
                   </Command.Item>
                 </Command.Group>
 
