@@ -233,7 +233,12 @@ def test_alembic_chain_0200_0201_single_head():
                         continue
                     parents.update([val] if isinstance(val, str) else val)
     heads = revs - parents
-    assert heads == {"0202_task_event_actor"}, heads
+    # Do not pin the head to one revision id: every later migration would
+    # have to edit this test. The claim here is only that the contract step
+    # (dropping `language`) is not part of the chain and there is one head.
+    assert len(heads) == 1, heads
+    assert "0202_drop_agent_language" not in revs, revs
+    assert "0201_agent_op_work_language" in parents, parents
 
 
 def test_0201_upgrade_does_not_drop_language():
