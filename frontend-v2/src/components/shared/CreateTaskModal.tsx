@@ -184,6 +184,9 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
   }, [hasDraft, resetForm]);
 
   const handleSubmit = useCallback(async () => {
+    // Focus stays in the form behind "Discard draft?", so a Cmd/Ctrl+Enter
+    // typed there must not create the task.
+    if (confirmDiscard) return;
     if (loading || !activeBoardId) return;
     if (!isRetry && !payload.title.trim()) return;
     setLoading(true);
@@ -292,7 +295,7 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
     } finally {
       setLoading(false);
     }
-  }, [activeBoardId, payload, loading, isStructured, qc, resetForm, stagedReferenceFiles, referenceNote, createdTaskId, uploadedFileIds, isRetry]);
+  }, [activeBoardId, payload, loading, isStructured, qc, resetForm, stagedReferenceFiles, referenceNote, createdTaskId, uploadedFileIds, isRetry, confirmDiscard]);
 
   // iOS-safe scroll lock (M4)
   useBodyScrollLock(open);

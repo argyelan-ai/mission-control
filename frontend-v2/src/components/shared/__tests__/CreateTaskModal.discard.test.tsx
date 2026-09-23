@@ -26,6 +26,9 @@ const discardDialog = () => screen.queryByRole("dialog", { name: "Discard draft?
 async function openAndType(title?: string) {
   await userEvent.click(screen.getByRole("button", { name: "New task" }));
   const input = await screen.findByRole("textbox", { name: /Titel/ });
+  // The modal moves focus to the title field ~80 ms after opening; keys
+  // pressed before that land outside the dialog.
+  await waitFor(() => expect(input).toHaveFocus());
   if (title) await userEvent.type(input, title);
   return input;
 }
@@ -73,6 +76,19 @@ describe("CreateTaskModal — discard draft", () => {
 
     const input = await openAndType();
     expect(input).toHaveValue("");
+  });
+
+  it("Cmd+Enter does not create the task while 'Discard draft?' is open", async () => {
+    const create = vi.spyOn(api.tasks, "create");
+    renderModal();
+    await openAndType("Write the release notes");
+    await userEvent.keyboard("{Escape}");
+    await screen.findByRole("dialog", { name: "Discard draft?" });
+    await userEvent.keyboard("{Meta>}{Enter}{/Meta}");
+    await userEvent.keyboard("{Control>}{Enter}{/Control}");
+    await new Promise((r) => setTimeout(r, 100));
+    expect(create).not.toHaveBeenCalled();
+    expect(discardDialog()).toBeInTheDocument();
   });
 
   it("Esc inside the open project dropdown closes only the dropdown", async () => {
