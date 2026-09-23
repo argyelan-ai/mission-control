@@ -4,6 +4,8 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import type { Task } from "@/lib/types";
+import { notify } from "@/lib/notify";
+import { waitFor } from "@testing-library/react";
 import { TaskRow } from "../TaskRow";
 
 // A done row carried an orange paper-plane ("dispatch again?") as the
@@ -64,5 +66,16 @@ describe("TaskRow — Dispatch again lives in the ⋯ menu", () => {
     expect(screen.queryByRole("button", { name: "More actions" })).not.toBeInTheDocument();
     await userEvent.click(screen.getByTitle("Dispatch task"));
     expect(update).toHaveBeenCalledWith("board-1", "task-1", { status: "in_progress" });
+  });
+
+  it("a failed re-dispatch says so and closes the dialog", async () => {
+    update.mockRejectedValue(new Error("board locked"));
+    const err = vi.spyOn(notify, "error").mockImplementation(() => undefined as never);
+    renderRow(mkTask());
+    await userEvent.click(screen.getByRole("button", { name: "More actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: /Dispatch again/ }));
+    await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Yes, dispatch" }));
+    await waitFor(() => expect(err).toHaveBeenCalledWith(expect.stringContaining("board locked")));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 });

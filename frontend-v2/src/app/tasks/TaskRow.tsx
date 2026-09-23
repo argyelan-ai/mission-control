@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
+import { notify } from "@/lib/notify";
 import Link from "next/link";
 import { Brain, Check, Clock, RotateCcw, Send, X } from "lucide-react";
 import { api } from "@/lib/api";
@@ -78,6 +79,10 @@ export function TaskRow({
     mutationFn: () => api.tasks.update(boardId, task.id, { status: "in_progress" }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["tasks", boardId] });
+      setConfirmRedispatch(false);
+    },
+    onError: (e: Error) => {
+      notify.error(t("updateFailed", { msg: e.message }));
       setConfirmRedispatch(false);
     },
   });
