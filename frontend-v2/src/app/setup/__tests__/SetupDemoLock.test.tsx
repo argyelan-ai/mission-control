@@ -6,8 +6,10 @@ import { api } from "@/lib/api";
 // /setup stays reachable on an installed system, and one click on
 // "Create demo board" wrote a demo board, four agents and eight tasks into
 // live data. The wizard itself creates the first board only in this very
-// step (seedDemo) — registration creates none — so "boards or agents
-// already exist" reliably means "not a fresh install". No redirect: a new
+// step (seedDemo) — registration creates none — so "a board already
+// exists" reliably means "not a fresh install". Agents are NOT a signal:
+// the database migrations seed a built-in agent on every fresh install, so
+// counting agents locked the button for every new user. No redirect: a new
 // install must be able to finish the wizard.
 
 const replace = vi.fn();
@@ -59,18 +61,22 @@ describe("Setup wizard — demo data only on a fresh install", () => {
     expect(btn).toBeDisabled();
     // Locked must also LOOK locked, not just carry a hint underneath.
     expect(btn.style.opacity).toBe("0.5");
-    expect(screen.getByText(/already has boards or agents/)).toBeInTheDocument();
+    expect(screen.getByText(/already has boards/)).toBeInTheDocument();
     await userEvent.click(btn);
     expect(create).not.toHaveBeenCalled();
     // No redirect away from the wizard.
     expect(replace).not.toHaveBeenCalled();
   });
 
-  it("locks it when agents already exist", async () => {
+  it("keeps it available when only migration-seeded agents exist (fresh install)", async () => {
+    // A fresh database already holds a built-in agent from the migrations,
+    // without any board. That must not count as "existing data".
     vi.spyOn(api.boards, "list").mockResolvedValue([] as never);
-    vi.spyOn(api.agents, "list").mockResolvedValue([{ id: "a1" }] as never);
+    vi.spyOn(api.agents, "list").mockResolvedValue([{ id: "a1", name: "Built-in" }] as never);
     await goToStep4();
-    expect(await screen.findByRole("button", { name: /Create demo board/ })).toBeDisabled();
+    const btn = await screen.findByRole("button", { name: /Create demo board/ });
+    expect(btn).toBeEnabled();
+    expect(screen.queryByText(/already has boards/)).not.toBeInTheDocument();
   });
 
   it("keeps it available on a fresh install", async () => {
@@ -80,6 +86,6 @@ describe("Setup wizard — demo data only on a fresh install", () => {
     const btn = await screen.findByRole("button", { name: /Create demo board/ });
     expect(btn).toBeEnabled();
     expect(btn.style.opacity).not.toBe("0.5");
-    expect(screen.queryByText(/already has boards or agents/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/already has boards/)).not.toBeInTheDocument();
   });
 });

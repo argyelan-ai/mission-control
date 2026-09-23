@@ -796,7 +796,7 @@
     "readyHint": "Optional: ein Demo-Board zeigt die Pipeline mit Beispiel-Aufgaben, bevor dein erster Agent provisioniert ist.",
     "demoBoardCreated": "Demo-Board erstellt",
     "createDemoBoard": "Demo-Board erstellen (8 Beispiel-Aufgaben)",
-    "demoLockedExisting": "Diese Installation hat schon Boards oder Agenten. Demo-Daten gibt es darum nur bei einer frischen Installation.",
+    "demoLockedExisting": "Diese Installation hat schon Boards. Demo-Daten gibt es darum nur bei einer frischen Installation.",
     "firstAgentGuide": "Guide: ersten Agent provisionieren",
     "goToCommandCenter": "Zum Command Center",
     "changeableLater": "Alles hier lässt sich später unter Einstellungen ändern.",

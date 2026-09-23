@@ -72,9 +72,10 @@ export default function SetupWizardPage() {
   const [seeding, setSeeding] = useState(false);
   const [seeded, setSeeded] = useState(false);
   // Demo data only on a fresh install. The wizard creates the first board
-  // only in step 4 (seedDemo) and registration creates none, so existing
-  // boards or agents mean this is not a fresh install — /setup stays
-  // reachable there, and one click used to write demo data into live data.
+  // only in step 4 (seedDemo) and registration creates none, so an existing
+  // board means this is not a fresh install — /setup stays reachable there,
+  // and one click used to write demo data into live data. Agents are not
+  // checked: the migrations seed a built-in agent on every fresh install.
   // null = still checking; a failed check leaves the button available
   // (a fresh install must never be blocked from finishing the wizard).
   const [hasExistingData, setHasExistingData] = useState<boolean | null>(null);
@@ -88,8 +89,9 @@ export default function SetupWizardPage() {
       .providers()
       .then(setProviders)
       .catch(() => setProviders([]));
-    Promise.all([api.boards.list(), api.agents.list()])
-      .then(([boards, agents]) => setHasExistingData(boards.length > 0 || agents.length > 0))
+    api.boards
+      .list()
+      .then((boards) => setHasExistingData(boards.length > 0))
       .catch(() => setHasExistingData(false));
   }, [router]);
 
