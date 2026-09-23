@@ -141,7 +141,7 @@ export function CreateGroupModal({ open, onClose, onCreated }: CreateGroupModalP
           type="button"
           onClick={onClose}
           aria-label={t("close")}
-          className="flex items-center justify-center w-8 h-8 -mr-1.5 rounded-md cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
+          className="flex items-center justify-center min-h-11 min-w-11 sm:min-h-0 sm:min-w-0 sm:w-8 sm:h-8 -mr-1.5 rounded-md cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
         >
           <X size={14} style={{ color: C.textMuted }} aria-hidden />
         </button>
@@ -379,7 +379,7 @@ export function CreateGroupModal({ open, onClose, onCreated }: CreateGroupModalP
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md px-3 py-1.5 text-sm cursor-pointer transition"
+            className="rounded-md px-3 py-1.5 min-h-11 sm:min-h-0 text-sm cursor-pointer transition"
             style={{ border: `1px solid ${C.borderActive}`, color: C.textSecondary }}
           >
             {t("cancel")}
@@ -388,7 +388,7 @@ export function CreateGroupModal({ open, onClose, onCreated }: CreateGroupModalP
             type="button"
             onClick={handleSubmit}
             disabled={!canSubmit}
-            className="flex items-center gap-1.5 rounded-md px-3.5 py-1.5 text-sm font-semibold cursor-pointer transition disabled:cursor-not-allowed disabled:opacity-40"
+            className="flex items-center gap-1.5 rounded-md px-3.5 py-1.5 min-h-11 sm:min-h-0 text-sm font-semibold cursor-pointer transition disabled:cursor-not-allowed disabled:opacity-40"
             style={{ background: C.accent, color: C.onAccent }}
           >
             {submitting && <Loader2 size={14} className="animate-spin" aria-hidden />}

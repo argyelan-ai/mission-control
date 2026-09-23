@@ -46,5 +46,7 @@ describe("Job detail — unknown job", () => {
     expect(await screen.findByText("Job not found")).toBeInTheDocument();
     expect(screen.queryByText("Loading job…")).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Back to schedule/i })).toHaveAttribute("href", "/schedule");
+    // Only way out of this dead end on a phone: 44px touch target.
+    expect(screen.getByRole("link", { name: /Back to schedule/i }).className).toMatch(/\bmin-h-11\b/);
   });
 });

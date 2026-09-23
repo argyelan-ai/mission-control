@@ -210,4 +210,14 @@ describe("CreateGroupModal", () => {
     expect(onClose).toHaveBeenCalledTimes(2);
     expect(create).not.toHaveBeenCalled();
   });
+
+  it("gives Close, Cancel and Create a 44px touch target on phones (bottom sheet)", async () => {
+    setup();
+    await chips();
+    for (const name of ["Close", "Cancel", /create/i]) {
+      const btn = screen.getAllByRole("button", { name }).at(-1)!;
+      expect(btn.className).toMatch(/\bmin-h-11\b/);
+    }
+    expect(screen.getByRole("button", { name: "Close" }).className).toMatch(/\bmin-w-11\b/);
+  });
 });

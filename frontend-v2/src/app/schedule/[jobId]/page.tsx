@@ -183,7 +183,7 @@ export default function ScheduleJobDetailPage() {
           )}
           <Link
             href="/schedule"
-            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md transition-colors"
+            className="flex items-center gap-1.5 text-xs px-3 py-1.5 min-h-11 sm:min-h-0 rounded-md transition-colors"
             style={{ color: C.accent, border: `1px solid ${C.borderAccent}` }}
           >
             <ArrowLeft size={13} aria-hidden />
