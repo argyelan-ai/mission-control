@@ -31,7 +31,7 @@ describe("DeliverablesTab screenshot URLs", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("builds the image URL from the deliverable's own task, not the parent task", async () => {
-    fetchMock.mockResolvedValue(new Response(new Blob(["x"]), { status: 200 }));
+    fetchMock.mockResolvedValue({ ok: true, status: 200, blob: async () => new Blob(["x"]) });
     render(<DeliverablesTab deliverables={[mkShot()]} boardId="board-1" taskId="parent-task" />);
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     const url = String(fetchMock.mock.calls[0][0]);
@@ -39,7 +39,7 @@ describe("DeliverablesTab screenshot URLs", () => {
   });
 
   it("shows an 'Image unavailable' placeholder instead of an empty black tile when loading fails", async () => {
-    fetchMock.mockResolvedValue(new Response("nope", { status: 404 }));
+    fetchMock.mockResolvedValue({ ok: false, status: 404, blob: async () => new Blob([]) });
     render(<DeliverablesTab deliverables={[mkShot()]} boardId="board-1" taskId="parent-task" />);
     expect(await screen.findByText("Image unavailable")).toBeInTheDocument();
   });
