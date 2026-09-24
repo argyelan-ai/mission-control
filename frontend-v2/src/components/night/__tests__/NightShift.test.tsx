@@ -25,6 +25,8 @@ const cfg: NightConfig = {
   end: "06:00",
   timezone: "Europe/Berlin",
   cloud_share: 30,
+  send_to_channels: false,
+  channels: [],
   active: false,
   window: { night: "2026-09-24", starts_at: "2026-09-24T20:00:00+00:00", ends_at: "2026-09-25T04:00:00+00:00" },
 };
@@ -117,6 +119,7 @@ describe("Tonight list", () => {
             night: "2026-09-23",
             sent_at: "2026-09-24T04:00:00Z",
             delivered: false,
+            state: "undelivered",
             entries: [
               { task_id: "a", title: "A", started: true, category: "passed" },
               { task_id: "b", title: "B", started: true, category: "failed" },
@@ -178,11 +181,21 @@ describe("Run tonight on the task detail", () => {
   it("the report line says 'not delivered', not 'no report channel'", () => {
     wrap(
       <TonightListView
-        data={{ config: cfg, entries: [], last_report: { night: "2026-09-24", sent_at: "x", delivered: false, entries: [] } }}
+        data={{ config: cfg, entries: [], last_report: { night: "2026-09-24", sent_at: "x", delivered: false, state: "undelivered", entries: [] } }}
       />,
     );
     expect(screen.getByText(/report not delivered/)).toBeInTheDocument();
     expect(screen.queryByText(/no report channel/)).toBeNull();
+  });
+
+  it("a report kept in MC only (channels off) is not 'not delivered'", () => {
+    wrap(
+      <TonightListView
+        data={{ config: cfg, entries: [], last_report: { night: "2026-09-24", sent_at: "x", delivered: false, state: "stored", entries: [] } }}
+      />,
+    );
+    expect(screen.getByTestId("tonight-last-report")).toBeInTheDocument();
+    expect(screen.queryByText(/not delivered/)).toBeNull();
   });
 
   it("a card someone works on offers no switch", async () => {
@@ -221,7 +234,9 @@ describe("Settings → Night shift", () => {
     await userEvent.type(start, "23:00");
     await userEvent.click(screen.getByTestId("night-save"));
     await waitFor(() =>
-      expect(save).toHaveBeenCalledWith({ enabled: true, start: "23:00", end: "06:00", timezone: "Europe/Berlin", cloud_share: 30 }),
+      expect(save).toHaveBeenCalledWith({
+        enabled: true, start: "23:00", end: "06:00", timezone: "Europe/Berlin", cloud_share: 30, send_to_channels: false,
+      }),
     );
   });
 
@@ -248,6 +263,24 @@ describe("Settings → Night shift", () => {
     expect(sw.className).toContain("min-h-[44px]");
     expect(screen.getByTestId("night-start").className).toContain("text-base");
     expect(screen.getByTestId("night-timezone").className).toContain("min-h-[44px]");
+  });
+
+  it("Slack / Telegram copy is off by default and can be switched on", async () => {
+    vi.spyOn(api.nightShift, "config").mockResolvedValue({ ...cfg, channels: ["slack"] });
+    const save = vi.spyOn(api.nightShift, "saveConfig").mockResolvedValue({ ...cfg, send_to_channels: true, channels: ["slack"] });
+    wrap(<NightShiftTab />);
+    const sw = await screen.findByRole("switch", { name: "Also send to Slack / Telegram" });
+    expect(sw).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByTestId("night-channels-state")).toHaveTextContent("Report channel: Slack");
+    await userEvent.click(sw);
+    await userEvent.click(screen.getByTestId("night-save"));
+    await waitFor(() => expect(save).toHaveBeenCalledWith(expect.objectContaining({ send_to_channels: true })));
+  });
+
+  it("without a configured channel it says MC works without one", async () => {
+    vi.spyOn(api.nightShift, "config").mockResolvedValue(cfg);
+    wrap(<NightShiftTab />);
+    expect(await screen.findByTestId("night-channels-state")).toHaveTextContent("MC works without one");
   });
 
   it("says so when heads are switched off", async () => {

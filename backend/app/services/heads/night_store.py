@@ -13,13 +13,17 @@ Data model (why files, not a table):
   (``sent`` / ``undelivered`` + attempts). At most one report per night, and
   at least one: a claim left behind by a crash is taken over after
   ``REPORT_ORPHAN_S``, an undelivered report is sent again (stored text) up to
-  ``REPORT_MAX_ATTEMPTS`` times.
+  ``REPORT_MAX_ATTEMPTS`` times. With the channels switched off (the
+  default, ``send_to_channels``) a report is only ``stored``: MC shows it
+  on Home and nothing is ever sent. A dismissed report gets a marker file
+  ``<heads_root>/night/dismissed/<night>`` (the worker never writes it, so
+  a retry cannot undo a dismiss).
 - **Who writes a mark.** The API (mark, change pair, unmark) and the worker
   (start) hold a per-task lock (``mark_lock``) and re-read the file inside it.
   Every other worker write goes through ``update_mark_fields``: it re-reads
   the file, never re-creates a removed mark and only touches the fields the
   worker owns, so an operator's change during a tick is never overwritten.
-- **Settings** are five ``app_settings`` rows (``night_shift_*``) with env
+- **Settings** are six ``app_settings`` rows (``night_shift_*``) with env
   defaults in ``config.py``. They are read from the DB on every tick: the job
   runs in mc-worker, the Settings page saves through the API process.
 """
@@ -52,6 +56,7 @@ SETTING_FIELDS: dict[str, tuple[str, type]] = {
     "night_shift_end": ("end", str),
     "night_shift_timezone": ("timezone", str),
     "night_shift_cloud_share": ("cloud_share", int),
+    "night_shift_send_to_channels": ("send_to_channels", bool),
 }
 
 
@@ -62,6 +67,7 @@ def env_defaults() -> NightConfig:
         end=settings.night_shift_end,
         timezone=settings.night_shift_timezone,
         cloud_share=int(settings.night_shift_cloud_share),
+        send_to_channels=bool(settings.night_shift_send_to_channels),
     )
 
 
@@ -374,6 +380,20 @@ def load_report(night: str) -> dict | None:
     except (OSError, ValueError):
         return None
     return data if isinstance(data, dict) else None
+
+
+def _dismissed_path(night: str) -> Path:
+    return night_dir() / "dismissed" / night
+
+
+def dismiss_report(night: str) -> None:
+    marker = _dismissed_path(night)
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.touch()
+
+
+def is_dismissed(night: str) -> bool:
+    return _dismissed_path(night).exists()
 
 
 def latest_report() -> dict | None:

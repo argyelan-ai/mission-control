@@ -129,7 +129,7 @@ import type {
   HeadBusy,
   HeadStartBody,
 } from "./heads";
-import type { NightConfig, NightConfigUpdate, NightEntry, NightTonight } from "./nightShift";
+import type { LastNight, NightConfig, NightConfigUpdate, NightEntry, NightTonight } from "./nightShift";
 
 export const BASE_URL = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
 
@@ -2202,6 +2202,10 @@ export const api = {
     saveConfig: (body: NightConfigUpdate): Promise<NightConfig> =>
       request("/api/v1/night-shift/config", { method: "PUT", body: JSON.stringify(body) }),
     tonight: (): Promise<NightTonight> => request("/api/v1/night-shift/tonight"),
+    // Home's "Last night" card: the report of the last ended night + blocked night heads.
+    lastNight: (): Promise<LastNight> => request("/api/v1/night-shift/last-night"),
+    dismissLastNight: (night: string): Promise<{ night: string; dismissed: boolean }> =>
+      request(`/api/v1/night-shift/last-night/${encodeURIComponent(night)}/dismiss`, { method: "POST" }),
     getMark: (taskId: string): Promise<{ mark: NightEntry | null }> =>
       request(`/api/v1/night-shift/tasks/${encodeURIComponent(taskId)}`),
     mark: (

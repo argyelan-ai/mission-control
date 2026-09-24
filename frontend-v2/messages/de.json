@@ -3426,7 +3426,7 @@
     },
     "settings": {
       "title": "Nachtschicht",
-      "description": "Aufgaben mit „Heute Nacht ausführen“ starten in diesem Fenster als Heads, eine nach der anderen und eine pro GPU-Box. Am Morgen kommt ein Bericht (bestanden, fehlgeschlagen, braucht dich, blockiert) über den Bericht-Kanal.",
+      "description": "Aufgaben mit „Heute Nacht ausführen“ starten in diesem Fenster als Heads, eine nach der anderen und eine pro GPU-Box. Am Morgen zeigt MC einen Bericht auf der Startseite: bestanden, fehlgeschlagen, braucht dich, blockiert.",
       "enabled": "Nachtschicht an",
       "enabledHint": "Heads starten, ohne dass du zuschaust. Sie öffnen PRs, mergen nie; ein Head, der hängt, wird gemeldet, nicht neu gestartet. Erst einschalten nach 5 beaufsichtigten Head-Läufen ohne Treffer auf der Verbotsliste und mit nachgewiesener Sandbox.",
       "start": "Fenster-Beginn",
@@ -3445,9 +3445,33 @@
         "end": "Format HH:MM, und nicht dieselbe Zeit wie der Beginn.",
         "timezone": "Unbekannte Zeitzone.",
         "cloud_share": "Eine ganze Zahl von 0 bis 100."
-      }
+      },
+      "sendToChannels": "Auch an Slack / Telegram schicken",
+      "sendToChannelsHint": "Der Morgenbericht und Blockiert-Meldungen stehen immer in MC, auf der Startseite. Schalte das ein, wenn du zusätzlich eine Kopie im Berichtskanal willst.",
+      "noChannel": "Kein Slack- oder Telegram-Berichtskanal eingerichtet, also gibt es kein Ziel für eine Kopie. MC funktioniert auch ohne.",
+      "channelsLine": "Berichtskanal: {channels}"
     },
     "markFailed": "Aufgabe erstellt, aber nicht für heute Nacht vorgemerkt: {message}",
-    "queueing": "Wird vorgemerkt…"
+    "queueing": "Wird vorgemerkt…",
+    "card": {
+      "title": "Letzte Nacht",
+      "titleNow": "Nachtschicht · jetzt",
+      "nowTitle": "Gerade jetzt",
+      "dismiss": "Ausblenden",
+      "dismissAria": "Bericht der letzten Nacht ausblenden",
+      "answer": "Antworten",
+      "answerAria": "„{title}“ beantworten",
+      "cancel": "Abbrechen",
+      "openTaskAria": "Task „{title}“ öffnen",
+      "notStarted": "nicht gestartet",
+      "silentFor": "seit {minutes} min still",
+      "waitsForYou": "wartet auf deine Antwort",
+      "answeredElsewhere": "inzwischen beantwortet oder neu gestartet",
+      "pr": "PR #{number}",
+      "prNoNumber": "PR",
+      "alsoSent": "auch an deinen Berichtskanal geschickt",
+      "count": "{count} {label}",
+      "regionLabel": "Bericht der Nachtschicht"
+    }
   }
 }

@@ -3426,7 +3426,7 @@
     },
     "settings": {
       "title": "Night shift",
-      "description": "Tasks marked “Run tonight” start as heads inside this window, one after another and one per GPU box. In the morning you get one report (passed, failed, needs you, blocked) on the report channel.",
+      "description": "Tasks marked “Run tonight” start as heads inside this window, one after another and one per GPU box. In the morning MC shows one report on Home: passed, failed, needs you, blocked.",
       "enabled": "Night shift on",
       "enabledHint": "Heads start without you watching. They open PRs, never merge; a head that is stuck is reported, not restarted. Only switch on after 5 attended head runs without a forbidden-list hit and with the sandbox proven.",
       "start": "Window start",
@@ -3445,9 +3445,33 @@
         "end": "Use HH:MM, and not the same time as the start.",
         "timezone": "Unknown time zone.",
         "cloud_share": "A whole number from 0 to 100."
-      }
+      },
+      "sendToChannels": "Also send to Slack / Telegram",
+      "sendToChannelsHint": "The morning report and blocked notices always show in MC, on Home. Switch this on to get a copy on your report channel as well.",
+      "noChannel": "No Slack or Telegram report channel is set up, so there is nowhere to send a copy. MC works without one.",
+      "channelsLine": "Report channel: {channels}"
     },
     "markFailed": "Task created, but not queued for tonight: {message}",
-    "queueing": "Queuing…"
+    "queueing": "Queuing…",
+    "card": {
+      "title": "Last night",
+      "titleNow": "Night shift · now",
+      "nowTitle": "Right now",
+      "dismiss": "Dismiss",
+      "dismissAria": "Dismiss last night's report",
+      "answer": "Answer",
+      "answerAria": "Answer “{title}”",
+      "cancel": "Cancel",
+      "openTaskAria": "Open task “{title}”",
+      "notStarted": "not started",
+      "silentFor": "silent for {minutes} min",
+      "waitsForYou": "waits for your answer",
+      "answeredElsewhere": "answered or restarted since",
+      "pr": "PR #{number}",
+      "prNoNumber": "PR",
+      "alsoSent": "also sent to your report channel",
+      "count": "{count} {label}",
+      "regionLabel": "Night shift report"
+    }
   }
 }

@@ -621,6 +621,10 @@ class Settings(BaseSettings):
     # Max share (percent) of tonight's marked tasks that may start on a cloud
     # runtime — only matters when the operator picked a cloud pair.
     night_shift_cloud_share: int = 30
+    # MC is the operator's channel: the morning report and the blocked
+    # notices always land in MC (Home → "Last night"). Slack / Telegram get a
+    # copy only when this is on AND a channel is configured. Off by default.
+    night_shift_send_to_channels: bool = False
     night_shift_interval: int = 60
 
     # Vault Index Rebuild on Boot

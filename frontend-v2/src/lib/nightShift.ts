@@ -13,6 +13,9 @@
  *     pair is never pre-selected.
  *   - Texts never come from the backend: state and reason CODES map to keys
  *     in the `nightShift` i18n namespace.
+ *   - MC is the operator's channel: the morning report and blocked notices
+ *     show on Home ("Last night" card). Slack / Telegram get a copy only
+ *     when `send_to_channels` is on (default off).
  */
 
 import { chooseInitialPair, parseHeadError, type HeadPair, type HeadPairsResponse, type HeadRun } from "./heads";
@@ -29,13 +32,19 @@ export interface NightConfig {
   end: string;
   timezone: string;
   cloud_share: number;
+  /** also send the report / notices to Slack or Telegram (default off) */
+  send_to_channels: boolean;
+  /** report channels configured right now ("telegram", "slack") */
+  channels: string[];
   /** now inside the window */
   active: boolean;
   /** the current window, or the next one */
   window: NightWindow;
 }
 
-export type NightConfigUpdate = Partial<Pick<NightConfig, "enabled" | "start" | "end" | "timezone" | "cloud_share">>;
+export type NightConfigUpdate = Partial<
+  Pick<NightConfig, "enabled" | "start" | "end" | "timezone" | "cloud_share" | "send_to_channels">
+>;
 
 export type NightEntryState = "queued" | "waiting" | "skipped" | "started";
 
@@ -70,6 +79,8 @@ export interface NightReport {
   night: string;
   sent_at: string;
   delivered: boolean;
+  /** sent · undelivered (channels on, sending failed) · stored (channels off: MC only) */
+  state?: "sent" | "undelivered" | "stored" | "sending";
   entries: NightReportEntry[];
 }
 
@@ -77,6 +88,66 @@ export interface NightTonight {
   config: NightConfig;
   entries: NightEntry[];
   last_report: NightReport | null;
+}
+
+// ── Last night (Home card) ───────────────────────────────────────────────────
+
+export interface LastNightEntry extends NightReportEntry {
+  run_id?: string | null;
+  silent_s?: number | null;
+  harness?: string | null;
+  runtime_slug?: string | null;
+  /** the live run — a question may be answered by now */
+  run: HeadRun | null;
+}
+
+export interface LastNightReport {
+  night: string;
+  sent_at: string | null;
+  /** also delivered to Slack / Telegram */
+  delivered: boolean;
+  dismissed: boolean;
+  entries: LastNightEntry[];
+}
+
+/** A night head that is blocked right now (shown during the night). */
+export interface NightNotice {
+  task_id: string;
+  title: string;
+  kind: "needs_you" | "silent";
+  silent_s: number | null;
+  run: HeadRun;
+}
+
+export interface LastNight {
+  report: LastNightReport | null;
+  notices: NightNotice[];
+}
+
+/** Card order: what needs the operator first, what went fine last. */
+const CARD_ORDER: NightCategory[] = ["needs_you", "blocked", "failed", "running", "passed"];
+
+/** Report rows in card order (stable within a category). */
+export function lastNightRows(report: Pick<LastNightReport, "entries"> | null | undefined): LastNightEntry[] {
+  const rank = (c: NightCategory) => {
+    const i = CARD_ORDER.indexOf(c);
+    return i < 0 ? CARD_ORDER.length : i;
+  };
+  return [...(report?.entries ?? [])]
+    .map((e, i) => ({ e, i }))
+    .sort((a, b) => rank(a.e.category) - rank(b.e.category) || a.i - b.i)
+    .map(({ e }) => e);
+}
+
+/** Show the card at all? Only when a night ran or a night head is blocked now. */
+export function hasLastNight(data: LastNight | null | undefined): boolean {
+  if (!data) return false;
+  return (data.report?.entries.length ?? 0) > 0 || data.notices.length > 0;
+}
+
+/** "Answer" is offered while the live run still waits on its question. */
+export function canAnswer(run: HeadRun | null | undefined): run is HeadRun {
+  return !!run && run.state === "needs_you" && !!run.harness && !!run.runtime_slug;
 }
 
 export const NIGHT_CATEGORIES: NightCategory[] = ["passed", "failed", "needs_you", "blocked", "running"];

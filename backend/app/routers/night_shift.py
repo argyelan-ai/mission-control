@@ -3,6 +3,8 @@
   GET    /api/v1/night-shift/config            viewer    window settings + the next window
   PUT    /api/v1/night-shift/config            admin     change window / zone / cloud share / on-off
   GET    /api/v1/night-shift/tonight           viewer    marked tasks + their state, last report
+  GET    /api/v1/night-shift/last-night        viewer    Home card: last night's report + blocked notices
+  POST   /api/v1/night-shift/last-night/{night}/dismiss  operator  hide that report's card
   GET    /api/v1/night-shift/tasks/{task_id}   viewer    the mark of one task (or null)
   PUT    /api/v1/night-shift/tasks/{task_id}   operator  mark / change the pair
   DELETE /api/v1/night-shift/tasks/{task_id}   operator  unmark (before it started)
@@ -23,7 +25,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import asdict
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -36,6 +38,7 @@ from app.database import get_session
 from app.models.task import Task
 from app.routers.heads import _hold_after_failed_start, run_view
 from app.services.heads import box_guard, files, night, night_store, pairs
+from app.services.heads.night_shift import run_facts
 from app.services.heads.night_store import HOLD_REASON, NightMark
 from app.services.heads.start import active_run_for_task
 
@@ -68,7 +71,19 @@ async def _config_view(session: AsyncSession) -> dict:
         **asdict(cfg),
         "active": current is not None,
         "window": night.next_window(now, cfg).to_dict(),
+        # Slack / Telegram backends that are configured right now — the
+        # switch above only matters when this is not empty.
+        "channels": _configured_channels(),
     }
+
+
+def _configured_channels() -> list[str]:
+    try:
+        from app.services.operator_reports import report_backends
+
+        return [b.name for b in report_backends()]
+    except Exception:  # noqa: BLE001 — a broken channel config must not break the settings page
+        return []
 
 
 def mark_view(mark: NightMark, task: Task, runs: dict, now: float) -> dict:
@@ -111,6 +126,7 @@ class ConfigBody(BaseModel):
     end: str | None = Field(default=None, max_length=5)
     timezone: str | None = Field(default=None, max_length=64)
     cloud_share: int | None = None
+    send_to_channels: bool | None = None
 
 
 @router.put("/config", dependencies=[Depends(require_role(Role.ADMIN))])
@@ -141,8 +157,86 @@ async def get_tonight(session: AsyncSession = Depends(get_session)):
     entries = [mark_view(m, tasks[m.task_id], runs, now) for m in marks if m.task_id in tasks]
     report = night_store.latest_report()
     if report:
-        report = {k: report.get(k) for k in ("night", "sent_at", "delivered", "entries")}
+        report = {k: report.get(k) for k in ("night", "sent_at", "delivered", "state", "entries")}
     return {"config": await _config_view(session), "entries": entries, "last_report": report}
+
+
+# ── Last night (Home card) ─────────────────────────────────────────────────
+
+
+def _card_night(now: datetime, cfg: night.NightConfig) -> str | None:
+    """The night whose report the card may show: the last ended window —
+    and none while the next window runs ("until the next night")."""
+    if night.current_window(now, cfg) is not None:
+        return None
+    last = night.last_ended_window(now, cfg)
+    return last.night if last else None
+
+
+def _card_entry(entry: dict, runs: dict, now: float) -> dict:
+    out = {k: entry.get(k) for k in ("task_id", "title", "started", "state", "reason", "blocked",
+                                     "silent_s", "pr_url", "category", "harness", "runtime_slug", "run_id")}
+    run = runs.get(entry.get("run_id")) if entry.get("run_id") else None
+    # The live run: a question may be answered by now, and "Answer" needs it.
+    out["run"] = run_view(run, now) if run is not None else None
+    return out
+
+
+async def last_night_view(session: AsyncSession, now: datetime | None = None) -> dict:
+    """``report``: the last ended night's report (None when nothing ran, it
+    was dismissed, or the next night has begun). ``notices``: night heads
+    that are blocked right now (question or silent) — shown in MC always,
+    sent to Slack / Telegram only with ``send_to_channels``."""
+    now = now or datetime.now(UTC)
+    now_ts = now.timestamp()
+    cfg = await night_store.load_config(session)
+    runs = {r.run_id: r for r in files.list_runs()}
+
+    report = None
+    key = _card_night(now, cfg)
+    stored = night_store.load_report(key) if key else None
+    if stored and stored.get("entries") and not night_store.is_dismissed(key):
+        report = {
+            "night": key,
+            "sent_at": stored.get("sent_at"),
+            "delivered": bool(stored.get("delivered")),
+            "dismissed": False,
+            "entries": [_card_entry(e, runs, now_ts) for e in stored["entries"]],
+        }
+
+    notices = []
+    marks = [m for m in night_store.list_marks() if m.run_id]
+    if marks:
+        ids = [uuid.UUID(m.task_id) for m in marks]
+        tasks = {str(t.id): t for t in (await session.exec(select(Task).where(Task.id.in_(ids)))).all()}
+        for m in marks:
+            run = runs.get(m.run_id)
+            task = tasks.get(m.task_id)
+            if run is None or task is None:
+                continue
+            facts = run_facts(run, now_ts)
+            if facts["blocked"] is None:
+                continue
+            notices.append({"task_id": m.task_id, "title": task.title, "kind": facts["blocked"],
+                            "silent_s": facts["silent_s"], "run": run_view(run, now_ts)})
+    return {"report": report, "notices": notices}
+
+
+@router.get("/last-night", dependencies=[Depends(require_role(Role.VIEWER))])
+async def get_last_night(session: AsyncSession = Depends(get_session)):
+    _enabled()
+    return await last_night_view(session)
+
+
+@router.post("/last-night/{night_key}/dismiss", dependencies=[Depends(require_role(Role.OPERATOR))])
+async def dismiss_last_night(night_key: str):
+    _enabled()
+    try:
+        date.fromisoformat(night_key)
+    except ValueError:
+        raise _err(422, "invalid_night")
+    night_store.dismiss_report(night_key)
+    return {"night": night_key, "dismissed": True}
 
 
 # ── One task ───────────────────────────────────────────────────────────────

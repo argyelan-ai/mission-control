@@ -47,6 +47,13 @@ def _probes(monkeypatch):
     return state
 
 
+@pytest.fixture(autouse=True)
+def _channels_on(monkeypatch):
+    """These tests cover the channel path (Slack / Telegram). It is off by
+    default — MC-only is covered in test_night_card.py."""
+    monkeypatch.setattr(settings, "night_shift_send_to_channels", True)
+
+
 class Sent:
     def __init__(self, fail: bool = False):
         self.texts: list[str] = []

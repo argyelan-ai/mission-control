@@ -5,15 +5,21 @@ Every tick (60 s):
 1. **Tidy** — drop marks whose task is gone; drop unstarted marks whose task
    is already done/aborted.
 2. **Blocked notices** — a night head that waits on a question, or has shown
-   no heartbeat / output for 15 min, is reported once through the operator
-   report channel (recorded only when delivered). Nothing is stopped or
-   restarted.
-3. **Morning report** — after a window has ended, one message for that
+   no heartbeat / output for 15 min. MC shows them live (Home → "Last
+   night", ``GET /night-shift/last-night``). Only with ``send_to_channels``
+   on are they also sent once through the operator report channel
+   (recorded only when delivered). Nothing is stopped or restarted.
+3. **Morning report** — after a window has ended, one report for that
    night: passed / failed / needs you / blocked (+ still running), with task
-   and PR links, through ``operator_reports.send_report`` (the digest path).
-   Started marks are archived into the report file; marks that never started
-   stay queued for the next night. An undelivered report is sent again later
-   (``night_store.claim_report``).
+   and PR links. It is always stored for MC's "Last night" card; with
+   ``send_to_channels`` on it also goes out through
+   ``operator_reports.send_report`` (the digest path: Slack / Telegram, when
+   configured). Started marks are archived into the report file; marks that
+   never started stay queued for the next night. An undelivered report is
+   sent again later (``night_store.claim_report``).
+
+MC is the operator's primary channel: Slack / Telegram are optional copies,
+off by default.
 4. **Start** — inside the window and with the night shift switched on: at
    most ONE head per tick, through ``heads.start.start_head`` (the same path
    as "Run as head"). Box lanes, marking order and the cloud share decide
@@ -82,8 +88,8 @@ async def _operator_language(session: AsyncSession) -> str:
     return (getattr(lead, "operator_language", None) or "en").lower()
 
 
-def _run_facts(run, now: float) -> dict:
-    """State of a night run for the notice and the report."""
+def run_facts(run, now: float) -> dict:
+    """State of a night run for the notice, the report and MC's card."""
     derived = derive_for_run(run, now)
     hb_age = None if run.heartbeat_mtime is None else now - run.heartbeat_mtime
     # While the wrapper still says "running", judge it as running: a missing
@@ -107,7 +113,7 @@ def _report_entry(m: NightMark, task: Task, runs: dict, now_ts: float) -> dict:
              "harness": m.harness, "runtime_slug": m.runtime_slug, "run_id": m.run_id}
     run = runs.get(m.run_id) if m.run_id else None
     if run is not None:
-        entry.update(_run_facts(run, now_ts))
+        entry.update(run_facts(run, now_ts))
     elif m.run_id:
         entry.update(state="failed", reason="run_missing")
     else:
@@ -140,7 +146,8 @@ async def tick(session: AsyncSession, now: datetime | None = None, *, send=None)
     cfg = await night_store.load_config(session)
     marks = night_store.list_marks()
     if not marks:
-        await _retry_reports(set(), now, send, out)
+        if cfg.send_to_channels:
+            await _retry_reports(set(), now, send, out)
         return out
     tasks = await _tasks(session, marks)
     runs = {r.run_id: r for r in files.list_runs()}
@@ -158,12 +165,13 @@ async def tick(session: AsyncSession, now: datetime | None = None, *, send=None)
 
     lang = None
 
-    # 2. Blocked notices (once per kind and run)
-    for m in marks:
+    # 2. Blocked notices (once per kind and run) — MC shows them live; the
+    #    channels only get them when switched on.
+    for m in (marks if cfg.send_to_channels else []):
         run = runs.get(m.run_id) if m.run_id else None
         if run is None:
             continue
-        facts = _run_facts(run, now_ts)
+        facts = run_facts(run, now_ts)
         kind = facts["blocked"]
         if kind is None or kind in m.notified:
             continue
@@ -197,7 +205,9 @@ async def tick(session: AsyncSession, now: datetime | None = None, *, send=None)
                 entries = [_report_entry(m, tasks[m.task_id], runs, now_ts) for m in of_night]
                 claim = {**claim, "entries": entries,
                          "text": night.format_report(night_key, entries, base_url=settings.mc_base_url, lang=lang)}
-            if await _send_report(night_key, claim, now, send):
+            if not cfg.send_to_channels:
+                _store_report(night_key, claim, now)  # MC only: the "Last night" card
+            elif await _send_report(night_key, claim, now, send):
                 out.reported = night_key
         stored = night_store.load_report(night_key)
         if not stored or "entries" not in stored:
@@ -211,7 +221,8 @@ async def tick(session: AsyncSession, now: datetime | None = None, *, send=None)
                 night_store.update_mark_fields(m.task_id, night=None, gave_up=None)
 
     # 3b. Retries of undelivered reports whose marks are archived already
-    await _retry_reports(set(ended), now, send, out)
+    if cfg.send_to_channels:
+        await _retry_reports(set(ended), now, send, out)
 
     # 4. Start (one per tick)
     if not cfg.enabled or current is None:
@@ -238,6 +249,16 @@ async def _retry_reports(skip: set[str], now: datetime, send, out: TickResult) -
             continue
         if await _send_report(night_key, claim, now, send):
             out.reported = night_key
+
+
+def _store_report(night_key: str, claim: dict, now: datetime) -> None:
+    """Channels off: keep the report for MC only. ``stored`` is final —
+    ``claim_report`` never hands it out for sending."""
+    night_store.write_report(night_key, {
+        "night": night_key, "state": "stored", "attempts": int(claim.get("attempts") or 0),
+        "at": now.timestamp(), "sent_at": now.isoformat(), "delivered": False,
+        "entries": claim.get("entries") or [], "text": claim.get("text") or "",
+    })
 
 
 async def _send_report(night_key: str, claim: dict, now: datetime, send) -> bool:

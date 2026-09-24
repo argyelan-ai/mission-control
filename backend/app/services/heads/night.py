@@ -77,6 +77,9 @@ class NightConfig:
     end: str = "06:00"
     timezone: str = "UTC"
     cloud_share: int = 30
+    #: also send the morning report / blocked notices to Slack / Telegram
+    #: (MC shows them either way)
+    send_to_channels: bool = False
 
     @property
     def zone(self) -> ZoneInfo:
@@ -160,6 +163,17 @@ def next_window(now: datetime, cfg: NightConfig) -> Window:
         if w.starts_at > now:
             return w
     return window_of_night((local.date() + timedelta(days=2)).isoformat(), cfg)  # pragma: no cover
+
+
+def last_ended_window(now: datetime, cfg: NightConfig) -> Window | None:
+    """The most recent window that has ended by ``now`` (None: none in the
+    last three days)."""
+    local = now.astimezone(cfg.zone)
+    for offset in (0, 1, 2, 3):
+        w = window_of_night((local.date() - timedelta(days=offset)).isoformat(), cfg)
+        if w.ends_at <= now:
+            return w
+    return None
 
 
 # ── Picking the next start ──────────────────────────────────────────────────

@@ -149,7 +149,7 @@ export function TonightListView({ data, onOpenTask }: { data: NightTonight; onOp
           {NIGHT_CATEGORIES.filter((c) => c !== "running" || counts.running > 0)
             .map((c) => `${counts[c]} ${t(`category.${c}`)}`)
             .join(" · ")}
-          {!report.delivered && <span style={{ color: STATUS_TEXT.warning }}> · {t("reportNotDelivered")}</span>}
+          {report.state === "undelivered" && <span style={{ color: STATUS_TEXT.warning }}> · {t("reportNotDelivered")}</span>}
         </p>
       )}
     </section>

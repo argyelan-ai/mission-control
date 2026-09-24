@@ -2,7 +2,8 @@
 
 /**
  * Settings → Night shift (ROADMAP E2): on/off, the time window, its time
- * zone and the cloud share. Saved in app_settings; mc-worker reads them on
+ * zone, the cloud share and whether Slack / Telegram get a copy of the
+ * report (off by default — MC shows it on Home either way). Saved in app_settings; mc-worker reads them on
  * every tick, so a change counts from the next minute on.
  */
 
@@ -70,8 +71,8 @@ export function NightShiftTab() {
   const [badFields, setBadFields] = useState<string[]>([]);
   useEffect(() => {
     if (q.data && form == null) {
-      const { enabled, start, end, timezone, cloud_share } = q.data;
-      setForm({ enabled, start, end, timezone, cloud_share });
+      const { enabled, start, end, timezone, cloud_share, send_to_channels } = q.data;
+      setForm({ enabled, start, end, timezone, cloud_share, send_to_channels: !!send_to_channels });
     }
   }, [q.data, form]);
   const zones = useMemo(() => allZones(), []);
@@ -125,7 +126,10 @@ export function NightShiftTab() {
     ...(form.cloud_share == null || form.cloud_share < 0 || form.cloud_share > 100 || !Number.isInteger(form.cloud_share) ? ["cloud_share"] : []),
   ];
   const bad = new Set([...badFields, ...localBad]);
-  const dirty = (Object.keys(form) as (keyof NightConfigUpdate)[]).some((k) => form[k] !== q.data[k]);
+  const dirty = (Object.keys(form) as (keyof NightConfigUpdate)[]).some((k) =>
+    k === "send_to_channels" ? !!form[k] !== !!q.data[k] : form[k] !== q.data[k],
+  );
+  const channels = q.data.channels ?? [];
   const fmt = (iso: string) =>
     new Date(iso).toLocaleString(locale, { weekday: "short", hour: "2-digit", minute: "2-digit" });
   const errText = (field: string) =>
@@ -235,6 +239,29 @@ export function NightShiftTab() {
           <p className="text-xs mt-1" style={{ color: "var(--color-text-muted)" }}>{t("cloudShareHint")}</p>
           {errText("cloud_share")}
         </label>
+
+        <div className="flex items-center gap-4 pt-4" style={{ borderTop: `1px solid ${C.border}` }}>
+          <div className="flex-1 min-w-0">
+            <div className="text-sm" style={{ color: "var(--color-text-primary)" }}>{t("sendToChannels")}</div>
+            <p className="text-xs mt-0.5" style={{ color: "var(--color-text-muted)" }} id="night-channels-hint">{t("sendToChannelsHint")}</p>
+            <p
+              className="text-xs mt-1"
+              style={{ color: channels.length === 0 && form.send_to_channels ? STATUS_TEXT.warning : C.textSecondary }}
+              data-testid="night-channels-state"
+            >
+              {channels.length > 0
+                ? t("channelsLine", { channels: channels.map((c) => (c === "slack" ? "Slack" : c === "telegram" ? "Telegram" : c)).join(" + ") })
+                : t("noChannel")}
+            </p>
+          </div>
+          <NightSwitch
+            checked={!!form.send_to_channels}
+            onChange={(v) => set({ send_to_channels: v })}
+            label={t("sendToChannels")}
+            describedBy="night-channels-hint"
+            testId="night-send-to-channels"
+          />
+        </div>
 
         <p className="text-xs" style={{ color: C.textSecondary }} data-testid="night-next-window">
           {q.data.active
