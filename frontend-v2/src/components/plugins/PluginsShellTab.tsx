@@ -11,8 +11,19 @@ import { C, STATUS_TEXT, XTERM_THEME } from "@/lib/colors";
 import { TERM_MIN_CONTRAST, TERM_FONT_FAMILY } from "@/lib/terminalScale";
 import "@xterm/xterm/css/xterm.css";
 import { EntityIcon } from "@/components/shared/EntityIcon";
+import { AdminOnlyNotice } from "@/components/shared/AdminOnlyNotice";
+import { useIsAdmin } from "@/hooks/useIsAdmin";
 
+/** The plugin shell is a shell on the host — admin-only (the backend
+ *  answers 403 / closes the socket with 4003 for everyone else). */
 export function PluginsShellTab() {
+  const t = useTranslations("skills.shell");
+  const isAdmin = useIsAdmin();
+  if (!isAdmin) return <AdminOnlyNotice message={t("adminOnly")} />;
+  return <PluginsShellTabInner />;
+}
+
+function PluginsShellTabInner() {
   const t = useTranslations("skills.shell");
   const termRef = useRef<HTMLDivElement>(null);
   const termInstance = useRef<XTerm | null>(null);

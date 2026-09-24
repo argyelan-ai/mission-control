@@ -811,6 +811,8 @@
     "runtimeSwitchedRebuilt": "Runtime gewechselt — Container neu gebaut",
     "runtimeSwitchedRestarted": "Runtime gewechselt — Container neugestartet",
     "sessionIs": "Session ist",
+    "terminalAdminOnly": "Agenten-Terminals können nur Admins öffnen.",
+    "inputAdminOnly": "Nur lesen: Nur Admins dürfen in eine laufende Session tippen.",
     "connected": "verbunden",
     "disconnected": "getrennt",
     "agentsBack": "Agenten",
@@ -1966,6 +1968,7 @@
       "saveFailed": "Speichern fehlgeschlagen"
     },
     "shell": {
+      "adminOnly": "Die Plugin-Shell können nur Admins öffnen.",
       "connected": "verbunden",
       "startInstaller": "Installer starten",
       "startInstallerHint": "Startet den Installer oder verbindet neu, falls er schon läuft.",

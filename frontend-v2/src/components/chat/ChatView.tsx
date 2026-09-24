@@ -42,6 +42,8 @@ import { CommandRow } from "./CommandRow";
 import { ApprovalCard } from "./ApprovalCard";
 import { StatusLine } from "./StatusLine";
 import { Composer } from "./Composer";
+import { useIsAdmin } from "@/hooks/useIsAdmin";
+import { AdminOnlyNotice } from "@/components/shared/AdminOnlyNotice";
 import { TerminalPanel, type AgentWithState } from "./TerminalPanel";
 import { ChatOptionsSheet } from "./ChatOptionsSheet";
 import { VoiceButton } from "@/components/voice/VoiceWidget";
@@ -310,6 +312,9 @@ export function ChatView({
   onOpenPanel,
 }: ChatViewProps) {
   const t = useTranslations("sessions");
+  /** Typing into a live session (text, keys, approvals, effort) is admin-only
+   *  on the backend — non-admins read the transcript without a composer. */
+  const isAdmin = useIsAdmin();
   const searchParams = useSearchParams();
   const scrollRef = useRef<HTMLDivElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
@@ -1098,7 +1103,7 @@ export function ChatView({
           )}
           </div>
 
-          {prompt && (
+          {prompt && isAdmin && (
             <div className="px-3 pt-2">
               <ApprovalCard
                 prompt={prompt}
@@ -1115,6 +1120,9 @@ export function ChatView({
             aliveness={aliveness}
             sending={stream.awaitingResponse}
           />
+          {!isAdmin ? (
+            <AdminOnlyNotice compact message={t("inputAdminOnly")} />
+          ) : (
           <Composer
             agentId={agent.id}
             usage={stream.usage}
@@ -1129,6 +1137,7 @@ export function ChatView({
             paneObservable={agent.agent_runtime === "cli-bridge"}
             capabilities={stream.capabilities}
           />
+          )}
         </>
       )}
 

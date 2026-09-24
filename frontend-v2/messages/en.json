@@ -811,6 +811,8 @@
     "runtimeSwitchedRebuilt": "Runtime switched — container rebuilt",
     "runtimeSwitchedRestarted": "Runtime switched — container restarted",
     "sessionIs": "Session is",
+    "terminalAdminOnly": "Only admins can open agent terminals.",
+    "inputAdminOnly": "Read-only: only admins can type into a live session.",
     "connected": "connected",
     "disconnected": "disconnected",
     "agentsBack": "Agents",
@@ -1966,6 +1968,7 @@
       "saveFailed": "Failed to save"
     },
     "shell": {
+      "adminOnly": "Only admins can open the plugin shell.",
       "connected": "connected",
       "startInstaller": "Start installer",
       "startInstallerHint": "Starts the installer, or reconnects if one is already running.",
