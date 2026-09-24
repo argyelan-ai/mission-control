@@ -828,10 +828,17 @@ Acceptance criteria v1:
     - With `HEADS_ENABLED=false` the night-shift API answers 404, so a mark
       cannot be removed there; a card held by a mark (`hold_reason = "night
       shift"`) is released with the normal hold release on the task.
-    - Morning report: at most once and at least once per night — a claim left
-      by a crash is taken over after 10 min, an undelivered report is sent
-      again every 5 min up to 3 attempts, then it stays in the Tonight list.
-      Messages are cut below 3 500 characters ("… and N more").
+    - MC is the operator's channel (decided 2026-09-24): the morning report
+      and the blocked notices show on Home ("Last night" card, one line per
+      job, "Answer" for a head that needs you; it stays until dismissed or
+      until the next window starts). Slack / Telegram get a copy only with
+      `night_shift_send_to_channels` on (Settings → Night shift, default
+      off) and a configured report channel.
+    - Morning report with the channels on: at most once and at least once per
+      night — a claim left by a crash is taken over after 10 min, an
+      undelivered report is sent again every 5 min up to 3 attempts, then it
+      stays in MC. Messages are cut below 3 500 characters ("… and N more").
+      With the channels off it is only stored (`state: stored`), never sent.
 
 ## Review notes (2026-09-23)
 
