@@ -657,11 +657,25 @@ operator action (GitHub settings), not code.
 
 Rules:
 - Before the sandbox is proven, heads run only against a **scratch repo**
-  and only attended. The sandbox is the gate for **every** harness on a
-  real repo (review 2026-09-24): omp runs with `--auto-approve`, and
-  Claude's allow list still runs code the head wrote itself (`pytest`,
-  `npm test` …) — outside the sandbox that code could read secrets or
-  reach the Docker socket. `mc-head` refuses with `sandbox_required`.
+  and only attended. The sandbox is the gate for **every** harness and
+  **every** repo, scratch included (reviews 2026-09-24): omp runs with
+  `--auto-approve`, and Claude's allow list still runs code the head wrote
+  itself (`pytest`, `npm test` …) — outside the sandbox that code could read
+  secrets, reach the Docker socket, list a real repo in `heads/scratch-repos`
+  or fake `.wrapper/status.json`. `mc-head` refuses with `sandbox_required`;
+  the launchd template sets `MC_HEAD_SANDBOX=1`.
+- The clone's `.git/` is writable by the head (its commits land there), and
+  the wrapper runs git in that clone **outside** the sandbox. Before every
+  wrapper step `mc-head` therefore rewrites `.git/config` from a fixed key
+  set (validated `origin` URL: GitHub for exactly this repo, or — scratch
+  only — a local path), removes `commondir` / `config.worktree` /
+  `info/attributes`, and passes `-c core.fsmonitor=false`,
+  `-c core.hooksPath=<wrapper hooks>` and `-c protocol.ext.allow=never` with
+  `GIT_CONFIG_NOSYSTEM=1` on every call. The scratch result check never runs
+  git inside the head-writable origin: it fetches from it (upload-pack) into
+  the sanitized clone.
+- A scratch repo's local origin (`heads/scratch-origin/<name>.git`) is fully
+  writable by that scratch run by design (`SCRATCH_ORIGIN`, scratch only).
 - On a real repo `mc-head` also checks the heads' identity once a day (and
   whenever `heads/gh-token` changes): no admin/maintain right on the repo,
   and a GitHub rule on the base branch that blocks direct pushes

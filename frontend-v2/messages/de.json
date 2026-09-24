@@ -3343,6 +3343,7 @@
       "engine_not_ready": "Das Modell läuft nicht — starte es unter Runtimes.",
       "box_busy": "Die Box ist mit einem anderen Head belegt.",
       "head_active": "An diesem Task arbeitet schon ein Head.",
+      "task_move_failed": "Der Task konnte nicht auf In Arbeit gesetzt werden — es wurde kein Head gestartet.",
       "repo_required": "Ein Head braucht ein Repo.",
       "spool_unavailable": "Der Head-Starter ist nicht erreichbar (Spool-Ordner).",
       "heads_disabled": "Der Head-Starter ist ausgeschaltet.",

@@ -7,6 +7,7 @@ The backend never starts a process on the host. It writes
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -292,7 +293,8 @@ async def write_run(
     _atomic(folder / "spec.json", json.dumps(spec, indent=1))
     job = render_job(
         task, answer=answer, previous=previous, branch=branch,
-        scratch_local_origin=scratch.local_origin(repo.full_name) is not None,
+        # git subprocess — off the event loop
+        scratch_local_origin=await asyncio.to_thread(scratch.local_origin, repo.full_name) is not None,
     )
     _atomic(folder / "job.md", job)
     _atomic(folder / "procedure.md", procedure)

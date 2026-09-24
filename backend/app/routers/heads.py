@@ -11,7 +11,8 @@
   POST /api/v1/heads/{run_id}/stop         operator  stop request
 
 Errors carry a ``code`` (pair_blocked, engine_not_ready, box_busy,
-head_active, repo_required, spool_unavailable, heads_disabled); the
+head_active, repo_required, spool_unavailable, heads_disabled,
+task_move_failed); the
 frontend renders them via i18n. Behind ``settings.heads_enabled``.
 """
 from __future__ import annotations
@@ -156,16 +157,20 @@ async def _hold_and_move(session: AsyncSession, task: Task, run_id: str, reason:
     move_task flushes every hop, so a refused transition surfaces here — and
     then the run folder is removed: the host must never start a run whose
     task change did not happen (live: HTTP 500 after the spool, head ran).
+    Any failure becomes 409 ``task_move_failed`` (an HTTPException, so
+    ``hold_on_failure`` still holds the card).
     """
     try:
         task.run_control = "manual_hold"
-        await move_task(session, task, "in_progress", reason=reason)
+        moved = await move_task(session, task, "in_progress", reason=reason)
+        if not moved and str(task.status) != "in_progress":
+            raise RuntimeError(f"no valid path {task.status} → in_progress")
         session.add(task)
         await session.flush()
-    except Exception:
+    except Exception as exc:
         await session.rollback()
         launcher.discard_run(run_id)
-        raise
+        raise _err(409, "task_move_failed") from exc
 
 
 class StartBody(BaseModel):

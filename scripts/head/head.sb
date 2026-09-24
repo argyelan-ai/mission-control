@@ -30,6 +30,8 @@
 ;; repo. mc-head passes its resolved path only in that case; for every real
 ;; repo SCRATCH_ORIGIN is "" and this grant does not exist. A missing
 ;; parameter makes the profile fail to load (fail closed).
+;; By design the whole scratch origin is writable (refs, objects, config,
+;; hooks) — acceptable for scratch only; the wrapper never runs git inside it.
 (if (not (string=? (param "SCRATCH_ORIGIN") ""))
   (allow file-write* (subpath (param "SCRATCH_ORIGIN"))))
 

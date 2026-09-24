@@ -195,14 +195,15 @@ export function HeadStateCard({
       </a>
     );
   } else if (mainAction === "branch_pushed") {
-    // Status, not a button: there is nothing to open on GitHub.
+    // A status badge, not a button: there is nothing to open on GitHub.
+    // Same shape as the PR chip, in the "passed" tone.
     main = (
       <span
         data-testid="head-main-branch-pushed"
-        className={primaryBtn}
-        style={{ color: STATUS_TEXT.online, border: `1px solid ${C.online}66` }}
+        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-sm text-[11px] font-medium"
+        style={{ background: `${C.online}15`, color: STATUS_TEXT.online, border: `1px solid ${C.online}40` }}
       >
-        <GitBranch size={12} aria-hidden />
+        <GitBranch size={10} aria-hidden />
         {t("card.branchPushedScratch")}
       </span>
     );

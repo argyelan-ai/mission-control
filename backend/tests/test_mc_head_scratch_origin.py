@@ -177,16 +177,70 @@ def test_real_repo_push_to_a_local_origin_is_not_a_scratch_result(tmp_path):
     assert status["pr_url"] is None
 
 
-@pytest.mark.skipif(not Path("/usr/bin/sandbox-exec").exists(), reason="sandbox-exec only on macOS")
-def test_push_to_local_origin_works_inside_the_sandbox(scratch):
-    """End to end with MC_HEAD_SANDBOX=1: the profile loads with the new
-    parameter and the head's push lands on the local origin."""
-    mc_home = scratch["mc_home"]
-    harness = fake_harness(scratch["tmp"], PUSH)
-    run_id = write_spec(mc_home, repo_full_name=scratch["full_name"])
-    run_head(mc_home, "start", run_id, env_extra=_extra(harness, MC_HEAD_SANDBOX="1"))
+@pytest.fixture
+def scratch_outside_tmp():
+    """Same layout, but OUTSIDE every temp root the sandbox always allows
+    (/private/tmp, /private/var/folders): only the SCRATCH_ORIGIN rule can
+    make the push work (review finding: under tmp_path the e2e test stayed
+    green without the rule)."""
+    import shutil
+    import uuid
+
+    base = Path.home() / ".cache" / f"mc-head-test-{uuid.uuid4().hex[:12]}"
+    base.mkdir(parents=True)
+    base = base.resolve()
+    try:
+        assert not str(base).startswith(("/private/tmp", "/private/var/folders", "/tmp", "/var/folders"))
+        mc_home = base / "mc"
+        so = mc_home / "heads" / "scratch-origin"
+        so.mkdir(parents=True)
+        origin, _ = make_origin(so, "probe")
+        full_name = "scratch/probe"
+        clone = seed_clone(mc_home, origin, full_name)
+        mark_scratch(mc_home, full_name)
+        yield {"mc_home": mc_home, "origin": origin, "full_name": full_name, "clone": clone, "tmp": base}
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
+REAL_SANDBOX = "/usr/bin/sandbox-exec"
+
+
+@pytest.mark.skipif(not Path(REAL_SANDBOX).exists(), reason="sandbox-exec only on macOS")
+def test_push_to_local_origin_works_inside_the_real_sandbox(scratch_outside_tmp):
+    """End to end with the real profile: the push lands on the local origin."""
+    sc = scratch_outside_tmp
+    mc_home = sc["mc_home"]
+    harness = fake_harness(sc["tmp"], PUSH + " 2> push.err; cp push.err \"$MC_HEAD_RUN_DIR/step.txt\"")
+    run_id = write_spec(mc_home, repo_full_name=sc["full_name"])
+    run_head(mc_home, "start", run_id, env_extra=_extra(harness, MC_HEAD_SANDBOX_EXEC=REAL_SANDBOX))
     status = wait_phase(mc_home, run_id, "exited")
     argv = (mc_home / "heads" / run_id / ".wrapper" / "argv.json").read_text()
-    assert f"SCRATCH_ORIGIN={scratch['origin']}" in argv
-    assert status["exit_code"] == 0, status
+    assert argv.startswith(f'["{REAL_SANDBOX}"')
+    assert f"SCRATCH_ORIGIN={sc['origin']}" in argv
+    err = (mc_home / "heads" / run_id / "step.txt").read_text()
+    assert "unable to create temporary object directory" not in err, err
+    assert status["exit_code"] == 0, (status, err)
     assert status["scratch_branch_pushed"] is True
+
+
+@pytest.mark.skipif(not Path(REAL_SANDBOX).exists(), reason="sandbox-exec only on macOS")
+def test_same_push_fails_in_the_real_sandbox_without_the_grant(scratch_outside_tmp):
+    """Control: the same push with the origin OUTSIDE heads/scratch-origin/
+    gets SCRATCH_ORIGIN="" — refused exactly like in the live run."""
+    import shutil
+
+    sc = scratch_outside_tmp
+    mc_home = sc["mc_home"]
+    elsewhere = sc["tmp"] / "elsewhere" / "probe.git"
+    elsewhere.parent.mkdir()
+    shutil.move(str(sc["origin"]), str(elsewhere))
+    subprocess.run(["git", "-C", str(sc["clone"]), "remote", "set-url", "origin", str(elsewhere)], check=True)
+    harness = fake_harness(sc["tmp"], PUSH + " 2> push.err; cp push.err \"$MC_HEAD_RUN_DIR/step.txt\"")
+    run_id = write_spec(mc_home, repo_full_name=sc["full_name"])
+    run_head(mc_home, "start", run_id, env_extra=_extra(harness, MC_HEAD_SANDBOX_EXEC=REAL_SANDBOX))
+    status = wait_phase(mc_home, run_id, "exited")
+    argv = (mc_home / "heads" / run_id / ".wrapper" / "argv.json").read_text()
+    assert "SCRATCH_ORIGIN=," in argv or 'SCRATCH_ORIGIN="' in argv
+    assert "unable to create temporary object directory" in (mc_home / "heads" / run_id / "step.txt").read_text()
+    assert status["scratch_branch_pushed"] is False

@@ -246,6 +246,7 @@ const ERROR_CODES = new Set([
   "engine_not_ready",
   "box_busy",
   "head_active",
+  "task_move_failed",
   "repo_required",
   "spool_unavailable",
   "heads_disabled",

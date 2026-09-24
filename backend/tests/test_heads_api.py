@@ -486,9 +486,16 @@ async def test_restart_from_a_failed_task_walks_hop_by_hop(auth_client, heads_ro
     assert (fresh.status, fresh.run_control) == ("in_progress", "manual_hold")
 
 
+def _no_new_run(heads_root, old):
+    spool = heads_root / "spool"
+    assert not spool.exists() or not list(spool.glob("*.json"))
+    assert [p.parent.name for p in heads_root.glob("*/spec.json")] == ([old] if old else [])
+
+
 async def test_restart_that_cannot_move_the_task_leaves_no_run_and_no_spool(
         auth_client, heads_root, make_board, make_task, monkeypatch):
-    """If the task write fails, the host must never hear of the run."""
+    """If the task write fails, the host must never hear of the run — and
+    the client gets a coded 409, not a bare 500."""
     from app.routers import heads as heads_router
 
     async def boom(*a, **kw):
@@ -497,8 +504,81 @@ async def test_restart_that_cannot_move_the_task_leaves_no_run_and_no_spool(
     _, task = await _world(make_board, make_task, status="failed")
     old = make_run(heads_root, task_id=str(task.id), status={"phase": "exited", "exit_code": 0, "reason": "exit_1"})
     monkeypatch.setattr(heads_router, "move_task", boom)
-    with pytest.raises(RuntimeError):
-        await auth_client.post(f"/api/v1/heads/{old}/restart", json={
-            "harness": "omp", "runtime_slug": "box-slot", "mode": "fresh"})
-    assert not list((heads_root / "spool").glob("*.json")) if (heads_root / "spool").exists() else True
-    assert [p.parent.name for p in heads_root.glob("*/spec.json")] == [old]
+    resp = await auth_client.post(f"/api/v1/heads/{old}/restart", json={
+        "harness": "omp", "runtime_slug": "box-slot", "mode": "fresh"})
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"]["code"] == "task_move_failed"
+    _no_new_run(heads_root, old)
+
+
+async def test_restart_when_move_task_finds_no_path_is_refused(
+        auth_client, heads_root, make_board, make_task, monkeypatch):
+    """move_task returns False (no valid path) → never spool a run whose task
+    is not in progress."""
+    from app.routers import heads as heads_router
+
+    async def no_path(*a, **kw):
+        return False
+
+    _, task = await _world(make_board, make_task, status="failed")
+    old = make_run(heads_root, task_id=str(task.id), status={"phase": "exited", "exit_code": 0, "reason": "exit_1"})
+    monkeypatch.setattr(heads_router, "move_task", no_path)
+    resp = await auth_client.post(f"/api/v1/heads/{old}/restart", json={
+        "harness": "omp", "runtime_slug": "box-slot", "mode": "fresh"})
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"]["code"] == "task_move_failed"
+    _no_new_run(heads_root, old)
+    assert (await _task(task.id)).status == "failed"
+
+
+async def test_start_with_hold_on_failure_holds_the_card_when_the_task_move_fails(
+        auth_client, heads_root, make_board, make_task, monkeypatch):
+    from app.routers import heads as heads_router
+
+    async def boom(*a, **kw):
+        raise RuntimeError("db said no")
+
+    _, task = await _world(make_board, make_task)
+    monkeypatch.setattr(heads_router, "move_task", boom)
+    resp = await auth_client.post("/api/v1/heads", json={"task_id": str(task.id), "harness": "omp",
+                                                         "runtime_slug": "box-slot", "hold_on_failure": True})
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"]["code"] == "task_move_failed"
+    _no_new_run(heads_root, None)
+    fresh = await _task(task.id)
+    assert (fresh.status, fresh.run_control) == ("inbox", "manual_hold")
+
+
+def test_backend_scratch_check_does_not_follow_includes(heads_root):
+    from app.services.heads import scratch
+
+    origin = _make_scratch_layout(heads_root)
+    assert scratch.local_origin("owner/demo") == origin.resolve()
+    clone = heads_root / "clones" / "owner--demo"
+    import subprocess
+
+    subprocess.run(["git", "-C", str(clone), "remote", "remove", "origin"], check=True)
+    inc = heads_root / "inc.cfg"
+    inc.write_text(f'[remote "origin"]\n\turl = {origin}\n')
+    with (clone / ".git" / "config").open("a") as fh:
+        fh.write(f"[include]\n\tpath = {inc}\n")
+    assert scratch.local_origin("owner/demo") is None
+
+
+async def test_scratch_check_runs_off_the_event_loop(auth_client, heads_root, make_board, make_task, monkeypatch):
+    """The git subprocess of the scratch check must not block the event loop."""
+    from app.services.heads import launcher, scratch
+
+    calls = []
+    real = launcher.asyncio.to_thread
+
+    async def spy(fn, *a, **kw):
+        calls.append(fn)
+        return await real(fn, *a, **kw)
+
+    monkeypatch.setattr(launcher.asyncio, "to_thread", spy)
+    _, task = await _world(make_board, make_task)
+    resp = await auth_client.post("/api/v1/heads", json={"task_id": str(task.id), "harness": "omp",
+                                                         "runtime_slug": "box-slot"})
+    assert resp.status_code == 201, resp.text
+    assert scratch.local_origin in calls

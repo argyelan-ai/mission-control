@@ -33,7 +33,8 @@ def is_scratch(full_name: str | None) -> bool:
 def _origin_url(clone: Path) -> str:
     try:
         res = subprocess.run(
-            ["git", "config", "--file", str(clone / ".git" / "config"), "--get", "remote.origin.url"],
+            ["git", "config", "--file", str(clone / ".git" / "config"), "--no-includes",
+             "--get", "remote.origin.url"],
             capture_output=True, text=True, timeout=10,
         )
     except (OSError, subprocess.SubprocessError):

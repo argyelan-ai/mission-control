@@ -92,7 +92,12 @@ describe("HeadStateCard — one main action per state (B5)", () => {
 
   it("passed on a scratch repo with a local origin → 'Branch pushed · scratch repo (no PR)' instead of Open PR", () => {
     renderCard(mkRun({ state: "passed", reason: "scratch_branch_pushed", pr_url: null, exited_at: "2026-09-23T10:34:05Z" }));
-    expect(screen.getByTestId("head-main-branch-pushed")).toHaveTextContent("Branch pushed · scratch repo (no PR)");
+    const badge = screen.getByTestId("head-main-branch-pushed");
+    expect(badge).toHaveTextContent("Branch pushed · scratch repo (no PR)");
+    // a status badge, not something that looks clickable (review finding)
+    expect(badge.tagName).toBe("SPAN");
+    expect(badge.className).not.toMatch(/cursor-pointer|min-h-\[36px\]|hover:/);
+    expect(badge.className).toContain("rounded-sm");
     expect(screen.getByTestId("head-card-scratch-branch")).toHaveTextContent("mc-head/fix-flaky-1111");
     expect(screen.queryByTestId("head-main-open-pr")).not.toBeInTheDocument();
     expect(screen.queryByTestId("head-main-restart")).not.toBeInTheDocument();
@@ -189,6 +194,13 @@ describe("Restart with … (B6)", () => {
     const [a, b] = pairsForRestart([own, foreign], "run-A");
     expect(a.startable).toBe(true);
     expect(b.startable).toBe(false);
+  });
+});
+
+describe("error codes", () => {
+  it("task_move_failed has its own sentence (EN)", async () => {
+    const { headErrorKey } = await import("@/lib/heads");
+    expect(headErrorKey(new Error('API 409: {"detail":{"code":"task_move_failed"}}'))).toBe("errors.task_move_failed");
   });
 });
 

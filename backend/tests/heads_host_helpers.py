@@ -19,8 +19,37 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 MC_HEAD = REPO_ROOT / "scripts" / "head" / "mc-head"
 
 
+PASSTHROUGH_SANDBOX = """#!/bin/sh
+# Test stand-in for sandbox-exec: drops -f <profile> and -D k=v, runs the rest.
+# mc-head requires a sandbox for EVERY run; tests that are not about the
+# sandbox itself use this (portable, also on Linux CI). The real profile is
+# exercised by test_mc_head_sandbox.py and the scratch-origin e2e test.
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -f|-D) shift 2 ;;
+    *) break ;;
+  esac
+done
+exec "$@"
+"""
+
+
+def passthrough_sandbox(where: Path) -> Path:
+    if not where.is_dir():  # e.g. a deliberately nonexistent MC_HOME
+        return Path("/nonexistent/fake-sandbox-exec")
+    p = where / "fake-sandbox-exec"
+    if not p.exists():
+        p.write_text(PASSTHROUGH_SANDBOX)
+        p.chmod(0o755)
+    return p
+
+
 def run_head(mc_home: Path, *args: str, env_extra: dict | None = None, timeout: float = 60):
+    """Runs mc-head with the sandbox ON (passthrough stand-in unless the test
+    passes MC_HEAD_SANDBOX_EXEC=/usr/bin/sandbox-exec, or MC_HEAD_SANDBOX=0)."""
     env = {
+        "MC_HEAD_SANDBOX": "1",
+        "MC_HEAD_SANDBOX_EXEC": str(passthrough_sandbox(mc_home.parent if mc_home.exists() else mc_home)),
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
         "HOME": str(mc_home.parent),
         "MC_HOME": str(mc_home),

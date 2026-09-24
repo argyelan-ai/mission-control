@@ -3343,6 +3343,7 @@
       "engine_not_ready": "The model is not running — start it on Runtimes.",
       "box_busy": "The box is busy with another head.",
       "head_active": "A head is already working on this task.",
+      "task_move_failed": "The task could not be moved to In progress — no head was started.",
       "repo_required": "A head needs a repo.",
       "spool_unavailable": "The head starter cannot be reached (spool folder).",
       "heads_disabled": "The head launcher is switched off.",

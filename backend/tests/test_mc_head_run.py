@@ -172,7 +172,24 @@ def test_real_repo_needs_identity_and_omp_needs_sandbox(env):
     assert read_status(mc_home, run_id)["reason"] == "gh_identity_missing"
     (mc_home / "heads" / "gh-token").write_text("github_pat_fake\n")
     run_id2 = write_spec(mc_home, repo_full_name="owner/real-repo")
-    run_head(mc_home, "start", run_id2, env_extra=_extra(harness))
+    run_head(mc_home, "start", run_id2, env_extra=_extra(harness, MC_HEAD_SANDBOX="0"))
+    assert read_status(mc_home, run_id2)["reason"] == "sandbox_required"
+
+
+@pytest.mark.parametrize("harness_name", ["omp", "claude"])
+def test_scratch_repo_also_needs_the_sandbox(env, harness_name):
+    """Review finding: without the sandbox a scratch head could write
+    heads/scratch-repos (list a real repo) or .wrapper/status.json (fake a
+    result). Every run needs the sandbox, scratch included."""
+    mc_home = env["mc_home"]
+    harness = fake_harness(env["tmp"], "true")
+    run_id = write_spec(mc_home, harness=harness_name)
+    run_head(mc_home, "start", run_id, env_extra=_extra(harness, MC_HEAD_SANDBOX="0"))
+    assert read_status(mc_home, run_id)["reason"] == "sandbox_required"
+    assert not (mc_home / "heads" / run_id / "argv.txt").exists()
+    # a missing sandbox binary counts as no sandbox
+    run_id2 = write_spec(mc_home, harness=harness_name)
+    run_head(mc_home, "start", run_id2, env_extra=_extra(harness, MC_HEAD_SANDBOX_EXEC="/nonexistent/sandbox-exec"))
     assert read_status(mc_home, run_id2)["reason"] == "sandbox_required"
 
 
@@ -183,7 +200,7 @@ def test_claude_on_a_real_repo_also_needs_the_sandbox(env):
     (mc_home / "heads" / "gh-token").write_text("github_pat_fake\n")
     harness = fake_harness(env["tmp"], "true")
     run_id = write_spec(mc_home, repo_full_name="owner/real-repo", harness="claude")
-    run_head(mc_home, "start", run_id, env_extra=_extra(harness))
+    run_head(mc_home, "start", run_id, env_extra=_extra(harness, MC_HEAD_SANDBOX="0"))
     assert read_status(mc_home, run_id)["reason"] == "sandbox_required"
     assert not (mc_home / "heads" / run_id / "argv.txt").exists()
 
