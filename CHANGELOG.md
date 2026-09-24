@@ -49,6 +49,25 @@ follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
   explicit `RECOVERY_TIER2_SKIP_AGENT_SLUGS` opt-out stays for host agents.
 
 ### Changed
+- **Security: terminals, the plugin shell and typing into a live agent
+  session are admin-only.** Before, any logged-in user of any role (viewer
+  included) could open an agent container or host-agent terminal, the plugin
+  shell, or type text/keys into an agent's tmux pane through the Sessions
+  chat — all of it command execution on the box. The WebSockets
+  (`/agents/{id}/terminal`, `/agents/{id}/terminal/ws`,
+  `/agents/{id}/terminal/{task_id}/ws`, `/host-agents/{id}/terminal`,
+  `/plugins/shell/ws`) now close with **4003** for non-admins (4001 stays
+  "not logged in"); the HTTP endpoints (`POST /agents/{id}/terminal/{task_id}/input`,
+  `DELETE /agents/{id}/terminal/{task_id}`, `POST|DELETE /plugins/shell`,
+  `POST /agents/{id}/chat/input|keys|effort`) answer **403**. Shared helpers
+  `auth.has_role` / `auth.authorize_websocket` sit next to `require_role`.
+  Reading stays open: chat history, session lists and the view-only browser
+  live stream are unchanged. `DELETE /plugins/shell` was shadowed by the
+  catch-all `DELETE /plugins/{plugin_key:path}` (it reached
+  `remove_plugin("shell")`); the shell routes are now registered first. No
+  agent or service token calls any of these endpoints, so no exception was
+  needed. The UI shows a short hint (EN/DE) instead of the terminal, the
+  plugin shell and the chat composer for non-admins.
 - **Your agent fleet leaves version control.**
   `docker/docker-compose.agents.yml` describes your machine — agent names,
   project references, mount paths — and Mission Control rewrites it while it
