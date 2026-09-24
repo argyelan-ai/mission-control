@@ -235,7 +235,11 @@ class VaultIndex:
 
         Returns stats: {scanned, indexed, skipped, errors}.
         Files in _inbox/, _conflicts/, _rejected/, _lint/, .git/, .obsidian/
-        are excluded.
+        are excluded ("skipped"), as are plain .md files without a
+        frontmatter block (README, scratch notes — not notes by design).
+        "errors" counts only files whose frontmatter is present but broken
+        (YAML parse error or validation failure); the cause is logged per
+        file at WARNING level.
         """
         with self._lock:
             stats = {"scanned": 0, "indexed": 0, "skipped": 0, "errors": 0}
@@ -252,10 +256,16 @@ class VaultIndex:
                 stats["scanned"] += 1
                 try:
                     post = parse_frontmatter(md_file)
+                    if not post.metadata:
+                        # No frontmatter block at all — plain markdown
+                        # (README, scratch notes). Not a note, not broken.
+                        stats["skipped"] += 1
+                        continue
                     validate_frontmatter(post.metadata)
                     self._upsert_locked(md_file, post)  # lock already held — no deadlock
                     stats["indexed"] += 1
-                except FrontmatterError:
+                except FrontmatterError as exc:
+                    logger.warning("vault_index: rebuild error in %s: %s", rel, exc)
                     stats["errors"] += 1
                     continue
 
