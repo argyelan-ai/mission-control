@@ -99,54 +99,19 @@
 
 /* ============================================================
    Mission Control — v4 „Signal"
-   Dark mode only. KEIN chromatischer Akzent: der Primär-Akzent ist
+   Dunkel ist Standard und Charakter („Serious. Dark."). Ein heller
+   Modus existiert als Option pro Browser (ADR-087): :root[data-theme="light"]
+   überschreibt dieselben Tokens. KEIN chromatischer Akzent: der Primär-Akzent ist
    ein achromatisches Off-Cream (#EBE8DE) und trägt über Helligkeit
    und Fläche. Farbe bedeutet ausschliesslich Status.
-   Werte spiegeln src/lib/colors.ts (Single Source) — Änderungen
-   IMMER dort zuerst.
+   Die Farbwerte leben NUR hier (:root = dunkel, [data-theme="light"]
+   = hell); src/lib/colors.ts hält nur die var()-Namen.
    ============================================================ */
 
 @theme {
-  /* ---- Backgrounds (Stufung = Tiefe: deep → hover, neutral) ---- */
-  --color-bg-dark: #1c1c1c;
-  --color-bg-deep: #1c1c1c;
-  --color-bg-base: #181818;
-  --color-bg-surface: #262626;
-  --color-bg-elevated: #313131;
-  --color-bg-hover: #3a3a3a;
-
-  /* ---- Text (mirrors colors.ts — alle ≥4.5:1 auf bg-deep–bg-elevated) ---- */
-  --color-text-primary: #f2f2f2;
-  --color-text-secondary: #c9c9c9;
-  --color-text-muted: #a3a3a3;
-  --color-text-body: #f2f2f2;
-
-  /* ---- Borders (neutral, Basisfarbe #a8a8a8, mirrors colors.ts) ---- */
-  --color-border-subtle: rgba(168, 168, 168, 0.05);
-  --color-border: rgba(168, 168, 168, 0.1);
-  --color-border-strong: rgba(168, 168, 168, 0.16);
-
-  /* ---- P2 „SIGNAL" Shell-Set (mirrors P2 in lib/colors.ts) ----
-     Die Shell (Sidebar/TopBar/StatusBar/MobileNav) nutzt ausschliesslich diese
-     Tokens. v4: von warm-phosphor auf die System-A-Werte gezogen — der helle
-     Akzent #ebe8de wäre gegen das alte Creme-Textweiss unsichtbar gewesen. */
-  --color-p2-bg: #1c1c1c;
-  --color-p2-pan: #262626;
-  --color-p2-pan2: #313131;
-  --color-p2-inset: #181818;
-  --color-p2-line: rgba(168, 168, 168, 0.16);
-  --color-p2-line2: rgba(168, 168, 168, 0.08);
-  --color-p2-txt: #f2f2f2;
-  --color-p2-dim: #a3a3a3;
-  --color-p2-faint: #8A8A8A;
-  --color-p2-glass: rgba(38, 38, 38, 0.7);
-  --color-p2-glass-line: rgba(255, 255, 255, 0.1);
-  --color-p2-amb: #ebe8de;
-  --color-p2-amb-d: #c1beb2;
-  --color-p2-inv: #151411;
-  --color-p2-ok: #55a964;
-  --color-p2-wrn: #a67f3e;
-  --color-p2-err: #fa4942;
+  /* Colour tokens do NOT live here: Tailwind v4 drops @theme variables it does
+     not see used in CSS, and they must switch with the theme. They are in the
+     plain :root block below (dark = default) and :root[data-theme="light"]. */
   --font-p2-display: "Space Mono", "JetBrains Mono", monospace;
   --font-p2-mono: "JetBrains Mono", "Symbols Nerd Font Mono", monospace;
 
@@ -261,16 +226,6 @@
      Palette nur einen der beiden verschiebt. Genau diese Falle war der Anlass. */
   --surface-sticky: color-mix(in srgb, var(--color-p2-bg) 55%, transparent);
 
-  /* Accent — achromatisch (System A): trägt über Helligkeit + Fläche, nie Hue */
-  --color-accent: #ebe8de;
-  --color-accent-light: #f9f7ef;
-  --color-accent-deep: #c1beb2;
-  --color-accent-subtle: rgba(235, 232, 222, 0.1);
-  --color-border-accent: rgba(235, 232, 222, 0.3);
-  --color-on-accent: #151411; /* Text auf Akzent-Fläche — 15.0:1 */
-  --color-text: #f2f2f2; /* alias used by a few components */
-  --color-text-dim: #8A8A8A; /* Deko/inaktive Icons — nie für Fliesstext */
-
   /* Gerenderte Höhe der mobilen App-Kopfleiste (MobileNav <header>):
      pt-island (safe + 0.75rem) + Link h-11 (2.75rem) + 0.5rem padding-bottom
      = safe + 4rem. Ihre min-height (safe + 3.5rem) liegt darunter, greift also
@@ -289,26 +244,100 @@
      Gespraech sichtbar, der zu nichts gehoerte. */
   --mobile-chat-topbar-h: calc(env(safe-area-inset-top) + 3.0625rem);
 
-  /* Status-Text — AA-sichere Stufen für Fliesstext (mirrors colors.ts STATUS_TEXT) */
-  --color-status-error-text: #fa4942;
-  --color-status-info-text: #5890ca;
+  /* ==== Colour tokens — DARK (default) ====================================
+     Single source for every UI colour (lib/colors.ts only holds var() names).
+     Aliases point at a base token with var(), so the light block only has to
+     override the base tokens. */
+
+  /* ---- Backgrounds (Stufung = Tiefe: deep → hover, neutral) ---- */
+  --color-bg-deep: #1c1c1c;
+  --color-bg-base: #181818;
+  --color-bg-surface: #262626;
+  --color-bg-elevated: #313131;
+  --color-bg-hover: #3a3a3a;
+  --color-bg-dark: var(--color-bg-deep);
+
+  /* ---- Text (alle ≥4.5:1 auf bg-deep–bg-elevated) ---- */
+  --color-text-primary: #f2f2f2;
+  --color-text-secondary: #c9c9c9;
+  --color-text-muted: #a3a3a3;
+  --color-text-dim: #8a8a8a; /* Deko/inaktive Icons — nie für Fliesstext */
+  --color-text-body: var(--color-text-primary);
+  --color-text: var(--color-text-primary); /* alias used by a few components */
+
+  /* ---- Borders (neutral, Basisfarbe #a8a8a8) ---- */
+  --color-border-subtle: rgba(168, 168, 168, 0.05);
+  --color-border: rgba(168, 168, 168, 0.1);
+  --color-border-strong: rgba(168, 168, 168, 0.16);
+  --color-border-accent: rgba(235, 232, 222, 0.3);
+
+  /* ---- Accent — achromatisch (System A): trägt über Helligkeit + Fläche ---- */
+  --color-accent: #ebe8de;
+  --color-accent-light: #f9f7ef;
+  --color-accent-deep: #c1beb2;
+  --color-accent-subtle: rgba(235, 232, 222, 0.1);
+  --color-on-accent: #151411; /* Text auf Akzent-Fläche — 15.0:1 */
+
+  /* ---- Status — die EINZIGEN bunten Tokens ---- */
+  --color-status-online: #55a964;
+  --color-status-warning: #a67f3e;
+  --color-status-error: #fa4942;
+  --color-status-info: #5890ca;
+  --color-status-offline: #3a3a3a;
+  --color-online: var(--color-status-online);
+  --color-warning: var(--color-status-warning);
+  --color-error: var(--color-status-error);
+  --color-info: var(--color-status-info);
+
+  /* Status-Text — AA-sichere Stufen für Fliesstext (STATUS_TEXT) */
+  --color-status-error-text: var(--color-status-error);
+  --color-status-info-text: var(--color-status-info);
   --color-status-warning-text: #b98f4d; /* gelifteter Ton — Token selbst = 4.34:1 */
 
-  /* Status — die EINZIGEN bunten Tokens (mirrors colors.ts C) */
-  --color-online: #55a964;
-  --color-error: #fa4942;
-  --color-warning: #a67f3e;
-  --color-info: #5890ca;
-  --color-status-online: #55a964;
-  --color-status-error: #fa4942;
-  --color-status-warning: #a67f3e;
-  --color-status-info: #5890ca;
+  /* Status-Flächen/Ränder — folgen dem Status-Ton (12 % / 38 % Deckkraft) */
+  --color-warning-subtle: color-mix(in srgb, var(--color-status-warning) 12%, transparent);
+  --color-error-subtle: color-mix(in srgb, var(--color-status-error) 12%, transparent);
+  --color-border-warning: color-mix(in srgb, var(--color-status-warning) 38%, transparent);
+  --color-border-error: color-mix(in srgb, var(--color-status-error) 38%, transparent);
 
-  /* Status-Flächen/Ränder — abgeleitet aus --color-warning/--color-error (12%/38% Deckkraft) */
-  --color-warning-subtle: rgba(184, 135, 10, 0.12);
-  --color-error-subtle: rgba(194, 56, 56, 0.12);
-  --color-border-warning: rgba(184, 135, 10, 0.38);
-  --color-border-error: rgba(194, 56, 56, 0.38);
+  /* ---- Charts: Ressourcen-Serien tragen über Helligkeit, nicht Farbton ---- */
+  --color-chart-cpu: var(--color-accent);
+  --color-chart-ram: var(--color-text-muted);
+  --color-chart-disk: var(--color-text-dim);
+
+  /* ---- Overlays ----
+     overlay = die „Tinte" für halbtransparente Schleier/Haarlinien (dunkel:
+     Weiss, hell: Tinte) → alpha(C.overlay, 0.06). scrim = Abdunklung hinter
+     Dialogen → alpha(C.scrim, 0.6). */
+  --color-overlay: #ffffff;
+  --color-scrim: #000000;
+  --color-graph-edge: rgba(255, 255, 255, 0.18);
+  --color-graph-edge-hover: rgba(255, 255, 255, 0.55);
+  --color-graph-edge-filtered: rgba(255, 255, 255, 0.025);
+  --color-graph-edge-faded: rgba(255, 255, 255, 0.04);
+
+  /* ---- Terminal + Code — bleiben in BEIDEN Modi dunkel (Inhalt, kein Chrome) ---- */
+  --color-term: #0e0e0e;
+  --color-term-fg: #f2f2f2;
+
+  /* ---- P2 „SIGNAL" Shell-Set — Aliase auf dieselben System-A-Werte ---- */
+  --color-p2-bg: var(--color-bg-deep);
+  --color-p2-pan: var(--color-bg-surface);
+  --color-p2-pan2: var(--color-bg-elevated);
+  --color-p2-inset: var(--color-bg-base);
+  --color-p2-line: var(--color-border-strong);
+  --color-p2-line2: rgba(168, 168, 168, 0.08);
+  --color-p2-txt: var(--color-text-primary);
+  --color-p2-dim: var(--color-text-muted);
+  --color-p2-faint: var(--color-text-dim);
+  --color-p2-glass: rgba(38, 38, 38, 0.7);
+  --color-p2-glass-line: rgba(255, 255, 255, 0.1);
+  --color-p2-amb: var(--color-accent);
+  --color-p2-amb-d: var(--color-accent-deep);
+  --color-p2-inv: var(--color-on-accent);
+  --color-p2-ok: var(--color-status-online);
+  --color-p2-wrn: var(--color-status-warning);
+  --color-p2-err: var(--color-status-error);
 
   /* Mono font alias (JetBrains Mono, bundled) */
   --font-mono: "JetBrains Mono", "Symbols Nerd Font Mono", ui-monospace, SFMono-Regular, monospace;

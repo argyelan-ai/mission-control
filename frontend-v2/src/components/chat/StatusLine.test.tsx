@@ -16,13 +16,8 @@ const WORKING_WORDS = en.sessions.status.workingWords.split("|");
 import type { StateEvent } from "@/lib/chatTypes";
 import { C } from "@/lib/colors";
 
-/** Token value as jsdom reports it — derived from the single source in
- *  lib/colors.ts, so a palette change never breaks this assertion. */
-function rgbOf(hex: string): string {
-  const h = hex.replace("#", "");
-  const n = parseInt(h, 16);
-  return `rgb(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255})`;
-}
+// Tokens are CSS variables (ADR-087): jsdom keeps the specified inline value,
+// so assertions compare against the token from lib/colors.ts directly.
 
 const mkState = (status: StateEvent["status"]): StateEvent => ({
   kind: "state",
@@ -145,7 +140,7 @@ describe("StatusLine", () => {
     const line = container.firstElementChild as HTMLElement;
     // C.textMuted, not STATUS_TEXT.warning — amber stays reserved for
     // "live but unreadable", the one case that needs the operator's attention.
-    expect(line.style.color).toBe(rgbOf(C.textMuted));
+    expect(line.style.color).toBe(C.textMuted);
   });
 
   it("never pulses on an ended session", () => {

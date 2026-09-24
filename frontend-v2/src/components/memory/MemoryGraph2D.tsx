@@ -47,16 +47,12 @@ import { forceX, forceY } from "d3-force";
 
 import type { GraphNode, VaultGraphResponse } from "@/lib/types";
 import {
-  GRAPH_SELECTED,
-  EDGE_COLOR_DEFAULT,
-  EDGE_COLOR_HOVER,
   EDGE_WIDTH,
   NODE_DIMMED_OPACITY,
   RESET_DURATION_MS,
-  TYPE_COLORS,
   ZOOM_FIT_PADDING_PX,
-  colorForCommunity,
   nodeRadiusFromLinkCount,
+  resolveGraphPalette,
 } from "./graphConfig";
 import { computeCommunities } from "@/lib/graphLouvain";
 import { useContainerSize } from "@/hooks/useContainerSize";
@@ -351,6 +347,9 @@ export const MemoryGraph2D = forwardRef<MemoryGraph2DRef, MemoryGraph2DProps>(
 
     const LABEL_ZOOM_THRESHOLD = 2.2;
 
+    // Canvas cannot read CSS variables: resolve the palette once per theme.
+    const palette = useMemo(() => resolveGraphPalette(), []);
+
     const drawNode = useCallback(
       (node: object, ctx: CanvasRenderingContext2D, globalScale: number) => {
         const n = node as GraphNode & { x?: number; y?: number };
@@ -359,14 +358,15 @@ export const MemoryGraph2D = forwardRef<MemoryGraph2DRef, MemoryGraph2DProps>(
         const radius = nodeRadiusFromLinkCount(linkCounts[n.id] ?? 0);
         const isSelected = selectedPath === n.id;
 
-        // Color resolution
+        // Color resolution (canvas → resolved palette, never var())
         let baseColor: string;
         if (isSelected) {
-          baseColor = GRAPH_SELECTED;
+          baseColor = palette.selected;
         } else if (colorMode === "community") {
-          baseColor = colorForCommunity(communities[n.id] ?? 0);
+          const idx = (communities[n.id] ?? 0) % palette.community.length;
+          baseColor = palette.community[idx];
         } else {
-          baseColor = TYPE_COLORS[n.type] ?? TYPE_COLORS.note;
+          baseColor = palette.type[n.type] ?? palette.type.note;
         }
 
         // Alpha resolution — most restrictive wins
@@ -399,7 +399,7 @@ export const MemoryGraph2D = forwardRef<MemoryGraph2DRef, MemoryGraph2DProps>(
         if (isSelected) {
           ctx.beginPath();
           ctx.arc(x, y, radius + 2.5, 0, 2 * Math.PI);
-          ctx.strokeStyle = C.textPrimary;
+          ctx.strokeStyle = palette.label;
           ctx.lineWidth = 1.5 / globalScale;
           ctx.stroke();
         }
@@ -410,13 +410,13 @@ export const MemoryGraph2D = forwardRef<MemoryGraph2DRef, MemoryGraph2DProps>(
           ctx.font = `${fontSize}px 'Geist Mono', monospace`;
           ctx.textAlign = "center";
           ctx.textBaseline = "top";
-          ctx.fillStyle = C.textPrimary;
+          ctx.fillStyle = palette.label;
           ctx.fillText(n.label, x, y + radius + 2 / globalScale);
         }
 
         ctx.restore();
       },
-      [selectedPath, matchingNodeIds, showHeatmap, colorMode, communities, neighbourIds, linkCounts],
+      [selectedPath, matchingNodeIds, showHeatmap, colorMode, communities, neighbourIds, linkCounts, palette],
     );
 
     // Pointer hit-area = the visible disc (matches drawNode sizing).
@@ -448,7 +448,7 @@ export const MemoryGraph2D = forwardRef<MemoryGraph2DRef, MemoryGraph2DProps>(
 
         // Traversal highlight takes priority
         if (traversalEdge && srcId === traversalEdge.source && tgtId === traversalEdge.target) {
-          return GRAPH_SELECTED;
+          return palette.selected;
         }
 
         // Filter dim — when a filter is active, only edges that connect two
@@ -458,7 +458,7 @@ export const MemoryGraph2D = forwardRef<MemoryGraph2DRef, MemoryGraph2DProps>(
           const bothMatch =
             srcId !== undefined && matchingNodeIds.has(srcId) &&
             tgtId !== undefined && matchingNodeIds.has(tgtId);
-          if (!bothMatch) return "rgba(255,255,255,0.025)";
+          if (!bothMatch) return palette.edgeFiltered;
         }
 
         // Hover neighbourhood fade
@@ -466,12 +466,12 @@ export const MemoryGraph2D = forwardRef<MemoryGraph2DRef, MemoryGraph2DProps>(
           const involved =
             (srcId !== undefined && neighbourIds.has(srcId)) &&
             (tgtId !== undefined && neighbourIds.has(tgtId));
-          return involved ? EDGE_COLOR_HOVER : "rgba(255,255,255,0.04)";
+          return involved ? palette.edgeHover : palette.edgeFaded;
         }
 
-        return EDGE_COLOR_DEFAULT;
+        return palette.edge;
       },
-      [traversalEdge, neighbourIds, matchingNodeIds],
+      [traversalEdge, neighbourIds, matchingNodeIds, palette],
     );
 
     const linkWidth = useCallback(
