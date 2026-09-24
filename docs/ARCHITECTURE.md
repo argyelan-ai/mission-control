@@ -139,7 +139,7 @@ Browser (Caddy :80) → Frontend (Next.js 15, :3000)
 **API Client** (`lib/api.ts`): typed, mit `request<T>()` Wrapper, Auto-401 → /login, JWT aus localStorage.
 
 **Design System:**
-- **Dark Mode only**, Tailwind v4 `@theme`-Tokens in `globals.css`
+- **Dunkel = Standard, Hell = Option pro Browser** (ADR-087): Farb-Tokens als CSS-Variablen im einfachen `:root` von `globals.css` (hell: `:root[data-theme="light"]`), `lib/colors.ts` hält die `var()`-Namen, `lib/theme.ts` schaltet
 - **Glasmorphism** (GlassCard): `backdrop-blur-[16px]`, `bg-[rgba(255,255,255,0.03)]`, Top-Edge-Highlight
 - **Geist Sans/Mono** via `next/font`
 - **Farben:** bg-base #0A0A0A → bg-elevated #1A1A1A; online #00CC88, warning #F59E0B, error #EF4444, accent #8B5CF6

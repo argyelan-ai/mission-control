@@ -110,6 +110,8 @@ components:
 
 Mission Control ist der ruhige, dunkle Instrumentenraum, von dem aus der Operator seine AI-Agent-Flotte überwacht und steuert. v4 „Signal" zieht die Konsole radikal achromatisch: Struktur und Interaktion sprechen ausschliesslich über Helligkeit und Fläche, **Farbe ist allein den vier Statustönen vorbehalten**. Der Primär-Akzent ist kein Farbton, sondern ein fast-weisses Off-Cream (#EBE8DE) — es trägt über Leuchtkraft und Position, nie über Buntheit. Off-Blacks sind neutral (nie blaustichig, nie reines #000), die Formensprache ist rund für alles Anfassbare und eckig nur noch für dichte Daten, und eine Mono-Instrumentenstimme (JetBrains Mono) kennzeichnet jede Ansicht als Präzisionsgerät. Referenzen: Bloomberg Terminal (Dichte + Ernsthaftigkeit), Linear.app (Präzision + Reduktion), Stripe Dashboard (Klarheit). Die Doktrin steht wörtlich im Kopf von `colors.ts`: „Serious. Dark. Achromatic. Colour means status — nothing else."
 
+**Dunkel = Standard, Hell = Option (ADR-087).** Dunkel bleibt der Standard und der Charakter. Ein heller Modus existiert als Option pro Browser (Einstellungen → Darstellung, Umschalter im Nutzer-Menü, dunkel · hell · System) und folgt denselben Regeln: Papiergrund statt Off-Black, Tinte als der eine achromatische Akzent, Status-Töne abgedunkelt auf AA. Terminal und syntax-gefärbter Code bleiben in beiden Modi dunkel. Die Farbwerte beider Modi stehen nur in `styles/globals.css` (`:root` = dunkel, `:root[data-theme="light"]` = hell); `colors.ts` hält die `var()`-Namen.
+
 Dieses System lehnt explizit ab: das generische AI-Tool-Lila, Farb-Gradients, Neon-Glow, Glassmorphism/`backdrop-blur` als Deko, farbige Schatten und SaaS-Marketing-Ästhetik.
 
 **v3 ist zurückgezogen.** Bis Juli 2026 war der Akzent ein elektrisches argyelan-Cyan (#00E5FF) auf blau-getönten Off-Blacks (System „argyelan Edition"). Dieser Look ist vollständig abgelöst: **jeder verbleibende Cyan-, Teal- oder Lila-Wert im Code ist eine Regression** (Ausnahmen sind explizit dokumentiert — siehe „Do's and Don'ts"). Einzige Farbquelle ist `frontend-v2/src/lib/colors.ts`; `styles/globals.css` spiegelt dieselben Werte als CSS-Custom-Properties.
@@ -146,6 +148,7 @@ Eine fast monochrome, neutral-dunkle Architektur, in der der helle Akzent über 
 **Die Farbe-heisst-Status-Regel (v4).** Ist etwas bunt, muss es etwas bedeuten. Buntheit ist ausschliesslich den vier Statustönen vorbehalten — keine dekorative Farbe, kein „nur für die Optik".
 **Die Vokabular-Regel.** Farben kommen ausschliesslich aus `colors.ts` (`C`, `STATUS`, `LANE`, `STATUS_TEXT`, `P2`). Lokale Paletten und Inline-Hex in Komponenten sind Regressionen und werden entfernt.
 **Die Lila-Null-Regel.** Kein Purple/Violett in irgendeiner Form — auch nicht „nur für diese eine Karte".
+**Die Alpha-Regel (ADR-087).** Durchscheinende Farbe nur über `alpha(C.x, 0.13)` — nie `${C.x}22` oder `C.x + "22"`: mit CSS-Variablen ergibt das stillschweigend ungültiges CSS. Der Test `no-hex-alpha-concat` wacht darüber, `no-raw-colors` gegen Roh-Hex/rgba/Tailwind-Palettenklassen.
 
 ## Typography
 
@@ -232,7 +235,7 @@ Werkzeuge, keine Schmuckstücke: zurückhaltend im Ruhezustand, eindeutig im akt
 - **Destruktiv:** Fehler-Rot #FA4942 nur für endgültige Aktionen, sonst Ghost mit rotem Text.
 
 ### Chips / Pills
-- **Aktiv-Muster:** `${farbe}22` Hintergrund + `${farbe}55` Rahmen + Farbtext (loopMeta/Task-Maske); die `Pill`-Komponente nutzt `${farbe}1F` / `${farbe}26`. `rounded-sm` (6px) für Badges, `rounded-full` für echte Pills; kein text-shadow.
+- **Aktiv-Muster:** `alpha(farbe, 0.13)` Hintergrund + `alpha(farbe, 0.33)` Rahmen + Farbtext (loopMeta/Task-Maske); die `Pill`-Komponente nutzt `alpha(farbe, 0.12)` / `alpha(farbe, 0.15)`. `rounded-sm` (6px) für Badges, `rounded-full` für echte Pills; kein text-shadow.
 - **State:** Aktiv-Zustand immer über Fläche UND Rahmen, nie nur über Text. Auswahl-Chips ohne Statusbedeutung nutzen den Akzent als Farbe.
 
 ### Cards / Panels

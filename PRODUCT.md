@@ -24,6 +24,8 @@ Regeln: [docs/PRINCIPLES.md](docs/PRINCIPLES.md) · Stand und nächste Schritte:
 
 Ernst. Ruhig. Präzise. — „Serious. Dark. No neon. No purple." (colors.ts-Doktrin)
 
+Dunkel ist der Standard und der Charakter. Ein heller Modus existiert als Option pro Browser (Einstellungen → Darstellung, ADR-087) und folgt denselben Regeln — er ersetzt den dunklen Standard nicht.
+
 Das Gefühl eines Operations-Rooms: konzentriert, vertrauenswürdig, unaufgeregt. Referenzen: Bloomberg Terminal (Dichte + Ernsthaftigkeit), Linear.app (Präzision + Reduktion), Stripe Dashboard (Klarheit). Vertrauen entsteht durch Zurückhaltung — das System wirkt kompetent, weil es nicht um Aufmerksamkeit buhlt.
 
 ## Anti-references
