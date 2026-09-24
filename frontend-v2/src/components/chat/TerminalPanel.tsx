@@ -14,6 +14,8 @@ import { MonitorOff, Wifi, WifiOff } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Agent } from "@/lib/types";
 import { C, XTERM_THEME } from "@/lib/colors";
+import { useIsAdmin } from "@/hooks/useIsAdmin";
+import { AdminOnlyNotice } from "@/components/shared/AdminOnlyNotice";
 import { TERM_MIN_CONTRAST, TERM_FONT_FAMILY, TERM_COLS, TERM_ROWS, useTerminalScale, type TermViewMode } from "@/lib/terminalScale";
 
 // Docker/host session-list responses include fields the shared `Agent` type
@@ -232,6 +234,10 @@ function useAgentTerminal(
 
 export function TerminalPanel({ agent }: { agent: AgentWithState }) {
   const t = useTranslations("sessions");
+  const isAdmin = useIsAdmin();
+  // Admin-only (backend closes the socket with 4003 for everyone else):
+  // show why instead of an xterm that would never connect.
+  if (!isAdmin) return <AdminOnlyNotice message={t("terminalAdminOnly")} />;
   if (!agentIsRunning(agent)) {
     const stateText = agent.agent_runtime === "host"
       ? (agent.session_running ? "running" : "idle")
