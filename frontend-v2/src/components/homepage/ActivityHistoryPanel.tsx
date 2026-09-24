@@ -5,7 +5,6 @@
  * Slide-in side panel for full activity history.
  */
 
-import { useEffect } from "react";
 import { motion } from "framer-motion";
 import { X } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
@@ -16,6 +15,7 @@ import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import type { ActivityEvent } from "@/lib/types";
 import { timeAgo } from "@/lib/utils";
 import { C } from "./colors";
+import { useEscapeKey } from "@/hooks/useEscapeKey";
 
 export function ActivityHistoryPanel({ onClose }: { onClose: () => void }) {
   const t = useTranslations("home");
@@ -29,13 +29,7 @@ export function ActivityHistoryPanel({ onClose }: { onClose: () => void }) {
 
   // M-wave overlay rules: scroll lock + Esc closes.
   useBodyScrollLock(true);
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  useEscapeKey(onClose);
 
   return (
     <motion.div

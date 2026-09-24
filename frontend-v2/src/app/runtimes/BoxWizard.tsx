@@ -62,6 +62,7 @@ import {
   wizardLabelClass,
   wizardOverlayClass,
 } from "@/app/agents/wizard/shared";
+import { useEscapeKey } from "@/hooks/useEscapeKey";
 
 const ease = [0.16, 1, 0.3, 1] as const;
 
@@ -951,13 +952,7 @@ export function BoxWizard({ onClose }: { onClose: () => void }) {
   const t = useTranslations("runtimes.boxWizard");
   const queryClient = useQueryClient();
   useBodyScrollLock(true);
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [onClose]);
+  useEscapeKey(onClose);
 
   const [state, setState] = useState<BoxWizardState>(initialBoxWizardState);
   const [runtimeId, setRuntimeId] = useState<string | null>(null);

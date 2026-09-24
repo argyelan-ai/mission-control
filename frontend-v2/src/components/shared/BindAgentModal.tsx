@@ -9,7 +9,7 @@
  * modal is a thin agent-picker on top.
  */
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
@@ -22,6 +22,7 @@ import { RuntimeSwitchModal } from "@/components/shared/RuntimeSwitchModal";
 import { RuntimePill } from "@/components/shared/RuntimePill";
 import { C } from "@/lib/colors";
 import { EntityIcon } from "@/components/shared/EntityIcon";
+import { useEscapeKey } from "@/hooks/useEscapeKey";
 
 interface Props {
   open: boolean;
@@ -37,14 +38,7 @@ export function BindAgentModal({ open, onClose, runtime }: Props) {
   useBodyScrollLock(open);
 
   // Esc closes the picker (panel register rule 4)
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [open, onClose]);
+  useEscapeKey(onClose, open);
 
   // Which agents may be bound is the same question as "may this agent switch
   // runtime?" — so it is the backend's answer (Agent.runtime_switchable), not

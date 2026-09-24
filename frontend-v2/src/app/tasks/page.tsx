@@ -762,7 +762,7 @@ function ProjectDetail({
 
 function TasksPageContent() {
   const t = useTranslations("tasks");
-  const { activeBoardId } = useAppStore();
+  const activeBoardId = useAppStore((s) => s.activeBoardId);
   const qc = useQueryClient();
   const router = useRouter();
   const searchParams = useSearchParams();

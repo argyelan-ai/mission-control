@@ -6,7 +6,7 @@
  * LiveKit room + WebSocket survive.
  */
 
-import { useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { useQuery } from "@tanstack/react-query";
@@ -16,6 +16,7 @@ import { api } from "@/lib/api";
 import type { DisplayCard } from "./cards/types";
 import { useVoiceContext } from "./VoiceWidget";
 import { C, LANE } from "@/lib/colors";
+import { useEscapeKey } from "@/hooks/useEscapeKey";
 
 const STATUS_COLORS: Record<string, string> = {
   inbox: LANE.inbox,
@@ -33,14 +34,7 @@ export function VoicePreviewSheet({
   card: DisplayCard | null;
   onClose: () => void;
 }) {
-  useEffect(() => {
-    if (!card) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [card, onClose]);
+  useEscapeKey(onClose, card != null);
 
   if (typeof document === "undefined") return null;
 
