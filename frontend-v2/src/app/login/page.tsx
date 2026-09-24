@@ -7,7 +7,7 @@ import { motion } from "framer-motion";
 import { Loader2, Eye, EyeOff } from "lucide-react";
 import { AUTH_TOKEN_KEY, api, setStoredUser } from "@/lib/api";
 import { AmbientBackground } from "@/components/layout/AmbientBackground";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 
 const _BRAND = process.env.NEXT_PUBLIC_BRAND || "Mission.Control";
 const _dot = _BRAND.lastIndexOf(".");
@@ -341,8 +341,8 @@ export default function LoginPage() {
                 className="text-xs rounded-sm px-3 py-2"
                 style={{
                   color: "var(--color-status-error-text)",
-                  backgroundColor: "rgba(194, 56, 56, 0.1)",
-                  border: "1px solid rgba(194, 56, 56, 0.25)",
+                  backgroundColor: alpha(C.error, 0.1),
+                  border: `1px solid ${alpha(C.error, 0.25)}`,
                 }}
               >
                 {error}

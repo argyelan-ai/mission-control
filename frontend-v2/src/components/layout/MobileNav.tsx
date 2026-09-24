@@ -19,7 +19,7 @@ import { useAppStore } from "@/lib/store";
 import { useQuery } from "@tanstack/react-query";
 import type { Approval, Board } from "@/lib/types";
 import { VoiceButton } from "@/components/voice/VoiceWidget";
-import { P2 } from "@/lib/colors";
+import { P2, C, alpha } from "@/lib/colors";
 import { ThemeSegmented } from "@/components/shared/ThemeSwitch";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
@@ -338,7 +338,7 @@ export default function MobileNav() {
               exit={{ opacity: 0 }}
               transition={{ duration: 0.2 }}
               className="fixed inset-0 z-40 md:hidden"
-              style={{ backgroundColor: "rgba(5,4,3,0.75)" }}
+              style={{ backgroundColor: alpha(C.scrim, 0.75) }}
               onClick={() => setOpen(false)}
             />
 
@@ -353,7 +353,7 @@ export default function MobileNav() {
               style={{
                 backgroundColor: "var(--color-p2-pan)",
                 borderLeft: "1px solid var(--color-p2-line)",
-                boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
+                boxShadow: `0 4px 24px ${alpha(C.shadow, 0.5)}, 0 1px 2px ${alpha(C.shadow, 0.3)}`,
               }}
             >
               {/* Drawer-Header: Wordmark + Close-Key */}

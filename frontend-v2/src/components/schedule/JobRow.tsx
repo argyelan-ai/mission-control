@@ -199,7 +199,7 @@ export function JobRow({
         type="button"
         onClick={() => router.push(`/schedule/${job.id}`)}
         className="flex min-w-0 flex-col items-start gap-0.5 text-left sticky z-10"
-        style={{ left: "72px", backgroundColor: C.bgSurface }}
+        style={{ left: "72px", backgroundColor: C.rowOpaque }}
       >
         <span className="flex items-center gap-1.5 text-sm font-medium truncate max-w-full" style={{ color: C.textPrimary }}>
           <span className="truncate">{job.name}</span>

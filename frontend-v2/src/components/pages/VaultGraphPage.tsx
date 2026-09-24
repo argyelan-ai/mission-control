@@ -37,7 +37,7 @@ import { useVaultStream } from "@/hooks/useVaultStream";
 import { useVoiceHighlight } from "@/hooks/useVoiceHighlight";
 
 import type { GraphFilter, GraphNode } from "@/lib/types";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 
 // When the parent (VaultMemoryPage) passes voice-highlight props, we use
 // those instead of the internal hook so the bridge is shared across tabs.
@@ -104,8 +104,8 @@ function ErrorState({ error }: { error: Error | null }) {
       <div
         className="max-w-sm p-6 rounded-xl space-y-2"
         style={{
-          background: "rgba(239, 68, 68, 0.05)",
-          border: "1px solid rgba(239, 68, 68, 0.2)",
+          background: alpha(C.error, 0.05),
+          border: `1px solid ${alpha(C.error, 0.2)}`,
         }}
       >
         <p className="text-sm font-semibold text-[var(--color-error)]">
@@ -135,7 +135,7 @@ function EmptyState() {
           </p>
           <p className="mt-1 text-sm text-[var(--color-text-muted)]">
             Agents write notes to{" "}
-            <code className="font-mono text-xs bg-white/5 px-1 py-0.5 rounded-sm">~/.mc/vault/</code>{" "}
+            <code className="font-mono text-xs bg-[var(--color-overlay)]/5 px-1 py-0.5 rounded-sm">~/.mc/vault/</code>{" "}
             — the graph will populate as they work.
           </p>
         </div>
@@ -344,12 +344,12 @@ export function VaultGraphPage({
   // hurts the eye". Now the AppShell deep tone shows through, the panel reads as
   // a lit surface instead of a black brick.
   const containerStyle: React.CSSProperties = {
-    background: "rgba(12,12,16,0.55)",
+    background: alpha(C.bgDeep, 0.55),
     backdropFilter: "blur(20px) saturate(140%)",
     WebkitBackdropFilter: "blur(20px) saturate(140%)",
     border: "1px solid var(--color-border)",
     boxShadow:
-      "inset 0 1px 0 rgba(255,255,255,0.04), 0 30px 60px -30px rgba(0,0,0,0.5)",
+      `inset 0 1px 0 ${alpha(C.overlay, 0.04)}, 0 30px 60px -30px ${alpha(C.scrim, 0.5)}`,
   };
 
   return (
@@ -395,7 +395,7 @@ export function VaultGraphPage({
           <select
             value={colorMode}
             onChange={(e) => setColorMode(e.target.value as "type" | "community")}
-            className="text-xs font-mono uppercase bg-transparent border border-white/10 px-2 py-1 rounded-sm"
+            className="text-xs font-mono uppercase bg-transparent border border-[var(--color-overlay)]/10 px-2 py-1 rounded-sm"
             style={{
               background: "var(--color-p2-glass)",
               color: "var(--color-text-secondary)",

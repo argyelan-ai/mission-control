@@ -20,7 +20,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Trash2, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
-import { STATUS_TEXT } from "@/lib/colors";
+import { STATUS_TEXT, C, alpha } from "@/lib/colors";
 
 interface ConfirmDeleteModalProps {
   /** Vault-relative path of the note. When null, the modal is closed. */
@@ -88,7 +88,7 @@ export function ConfirmDeleteModal({
           exit={{ opacity: 0 }}
           transition={{ duration: 0.12 }}
           className="fixed inset-0 z-[100] flex items-center justify-center px-4"
-          style={{ background: "rgba(0,0,0,0.62)", backdropFilter: "blur(4px)" }}
+          style={{ background: alpha(C.scrim, 0.62), backdropFilter: "blur(4px)" }}
           onClick={() => !deleteMutation.isPending && onClose()}
         >
           <motion.div
@@ -100,7 +100,7 @@ export function ConfirmDeleteModal({
             style={{
               background: "var(--color-bg-elevated)",
               border: "1px solid var(--color-border)",
-              boxShadow: "0 24px 80px rgba(0,0,0,0.6), 0 1px 0 rgba(255,255,255,0.04) inset",
+              boxShadow: `0 24px 80px ${alpha(C.shadow, 0.6)}, 0 1px 0 ${alpha(C.overlay, 0.04)} inset`,
             }}
             onClick={(e) => e.stopPropagation()}
             role="dialog"
@@ -116,8 +116,8 @@ export function ConfirmDeleteModal({
                 <div
                   className="shrink-0 w-9 h-9 rounded-sm flex items-center justify-center"
                   style={{
-                    background: "rgba(239,68,68,0.10)",
-                    border: "1px solid rgba(239,68,68,0.25)",
+                    background: alpha(C.error, 0.1),
+                    border: `1px solid ${alpha(C.error, 0.25)}`,
                   }}
                 >
                   <Trash2 size={16} style={{ color: STATUS_TEXT.error }} />
@@ -206,8 +206,8 @@ export function ConfirmDeleteModal({
                 <div
                   className="rounded-md px-3 py-2.5 flex gap-2.5 items-start"
                   style={{
-                    background: "rgba(251,191,36,0.06)",
-                    border: "1px solid rgba(251,191,36,0.22)",
+                    background: alpha(C.warning, 0.06),
+                    border: `1px solid ${alpha(C.warning, 0.22)}`,
                   }}
                 >
                   <AlertTriangle
@@ -277,8 +277,8 @@ export function ConfirmDeleteModal({
                 <div
                   className="rounded-md px-3 py-2"
                   style={{
-                    background: "rgba(239,68,68,0.08)",
-                    border: "1px solid rgba(239,68,68,0.25)",
+                    background: alpha(C.error, 0.08),
+                    border: `1px solid ${alpha(C.error, 0.25)}`,
                     fontSize: "12px",
                     color: STATUS_TEXT.error,
                   }}
@@ -320,9 +320,9 @@ export function ConfirmDeleteModal({
                   fontSize: "10.5px",
                   letterSpacing: "0.14em",
                   background: deleteMutation.isPending
-                    ? "rgba(239,68,68,0.18)"
-                    : "rgba(239,68,68,0.14)",
-                  border: "1px solid rgba(239,68,68,0.45)",
+                    ? alpha(C.error, 0.18)
+                    : alpha(C.error, 0.14),
+                  border: `1px solid ${alpha(C.error, 0.45)}`,
                   color: STATUS_TEXT.error,
                   cursor: deleteMutation.isPending ? "default" : "pointer",
                 }}

@@ -43,11 +43,11 @@ const CINEMA = {
 } as const;
 
 const modalOverlayClass = "fixed inset-0 z-50 flex items-end sm:items-center justify-center px-3 sm:px-4";
-const modalBackdropClass = "absolute inset-0 bg-black/70 backdrop-blur-sm";
+const modalBackdropClass = "absolute inset-0 bg-[var(--color-scrim)]/70 backdrop-blur-sm";
 const modalCardStyle = {
   backgroundColor: CINEMA.modalBg,
   border: `1px solid ${CINEMA.border}`,
-  boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
+  boxShadow: `0 4px 24px ${alpha(C.shadow, 0.5)}, 0 1px 2px ${alpha(C.shadow, 0.3)}`,
 };
 const inputStyle = {
   border: `1px solid ${CINEMA.border}`,
@@ -491,7 +491,7 @@ function AgentActionsSheet({
       exit={{ opacity: 0 }}
       transition={{ duration: 0.15 }}
       className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:px-4"
-      style={{ background: "rgba(0,0,0,0.6)" }}
+      style={{ background: alpha(C.scrim, 0.6) }}
       onClick={onClose}
     >
       <motion.div
@@ -506,7 +506,7 @@ function AgentActionsSheet({
         style={{
           backgroundColor: C.bgBase,
           border: `1px solid ${C.border}`,
-          boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
+          boxShadow: `0 4px 24px ${alpha(C.shadow, 0.5)}, 0 1px 2px ${alpha(C.shadow, 0.3)}`,
         }}
         onClick={(e) => e.stopPropagation()}
       >

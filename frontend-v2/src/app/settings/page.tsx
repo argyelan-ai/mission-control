@@ -889,8 +889,9 @@ function IntelligenceSection({
               style={{
                 left: config.enabled ? "calc(100% - 22px)" : "2px",
                 // On the bone accent track a white knob vanishes (~1.1:1) —
-                // dark knob on accent, light knob on the dark off-track.
-                backgroundColor: config.enabled ? C.onAccent : "#fff",
+                // dark knob on accent, light knob on the dark off-track
+                // (textPrimary: near-white in dark, ink in light mode).
+                backgroundColor: config.enabled ? C.onAccent : C.textPrimary,
               }}
             />
           </button>
@@ -2110,7 +2111,7 @@ function ShortcutsSection() {
                         backgroundColor: "var(--color-bg-elevated)",
                         border: "1px solid var(--color-border)",
                         color: "var(--color-text-secondary)",
-                        boxShadow: "0 1px 2px rgba(0, 0, 0, 0.3)",
+                        boxShadow: `0 1px 2px ${alpha(C.shadow, 0.3)}`,
                       }}
                     >
                       {key}

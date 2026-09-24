@@ -235,7 +235,7 @@ export function CredentialsTab() {
             style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
             onClick={(e) => { if (e.target === e.currentTarget) closeModal(); }}
           >
-            <div className="absolute inset-0" style={{ backgroundColor: "rgba(0,0,0,0.6)" }} />
+            <div className="absolute inset-0" style={{ backgroundColor: alpha(C.scrim, 0.6) }} />
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 10 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -244,7 +244,7 @@ export function CredentialsTab() {
               aria-modal="true"
               aria-label={modal.editing ? t("editTitle") : t("newTitle")}
               className="relative w-full sm:max-w-md rounded-t-2xl rounded-b-none sm:rounded-2xl overflow-hidden max-h-[92dvh] sm:max-h-[88vh] flex flex-col"
-              style={{ background: C.bgElevated, border: `1px solid ${C.border}`, boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)" }}
+              style={{ background: C.bgElevated, border: `1px solid ${C.border}`, boxShadow: `0 4px 24px ${alpha(C.shadow, 0.5)}, 0 1px 2px ${alpha(C.shadow, 0.3)}` }}
             >
               <div className="flex items-center justify-between px-5 py-3.5" style={{ borderBottom: `1px solid ${C.borderSubtle}` }}>
                 <span className="text-sm font-semibold" style={{ color: C.textPrimary }}>

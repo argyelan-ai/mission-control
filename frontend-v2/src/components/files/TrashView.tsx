@@ -233,7 +233,7 @@ export function TrashView() {
           style={{
             background: C.bgElevated,
             border: `1px solid ${C.border}`,
-            boxShadow: "0 8px 28px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
+            boxShadow: `0 8px 28px ${alpha(C.shadow, 0.5)}, 0 1px 2px ${alpha(C.shadow, 0.3)}`,
           }}
         >
           <span className="px-2 text-sm tabular-nums whitespace-nowrap" style={{ color: C.textSecondary }}>

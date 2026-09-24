@@ -55,7 +55,7 @@ function VaultViewTabs({
 }) {
   const t = useTranslations("vault");
   return (
-    <div className="flex items-center gap-1 mb-5 border-b border-white/5">
+    <div className="flex items-center gap-1 mb-5 border-b border-[var(--color-overlay)]/5">
       {(["list", "graph", "trash"] as const).map((v) => {
         const active = view === v;
         return (

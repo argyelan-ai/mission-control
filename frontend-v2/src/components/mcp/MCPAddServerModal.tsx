@@ -72,7 +72,7 @@ export function MCPAddServerModal({ onClose, onSuccess }: Props) {
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
         transition={{ duration: 0.15 }}
-        className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4 bg-black/75"
+        className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4 bg-[var(--color-scrim)]/75"
         style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
         onClick={onClose}
       >
@@ -93,7 +93,7 @@ export function MCPAddServerModal({ onClose, onSuccess }: Props) {
             maxWidth: "min(520px, 100%)",
             background: C.bgBase,
             border: "1px solid var(--color-border)",
-            boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
+            boxShadow: `0 4px 24px ${alpha(C.shadow, 0.5)}, 0 1px 2px ${alpha(C.shadow, 0.3)}`,
           }}
           onClick={(e) => e.stopPropagation()}
         >

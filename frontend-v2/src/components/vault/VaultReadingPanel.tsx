@@ -83,7 +83,7 @@ function RelatedNotesSection({
               type="button"
               onClick={() => onSelectNote?.(n.path)}
               disabled={!onSelectNote}
-              className="w-full text-left flex items-center gap-2 rounded-sm px-1.5 py-0.5 transition-colors hover:bg-white/[0.04] disabled:opacity-60 disabled:cursor-default"
+              className="w-full text-left flex items-center gap-2 rounded-sm px-1.5 py-0.5 transition-colors hover:bg-[var(--color-overlay)]/[0.04] disabled:opacity-60 disabled:cursor-default"
               style={{ fontSize: "12px" }}
             >
               <span
@@ -325,8 +325,8 @@ function PanelContent({
                   className="rounded-sm p-1.5 transition-colors flex items-center gap-1.5 max-md:min-h-11 max-md:min-w-11 max-md:justify-center"
                   style={{
                     color: C.online,
-                    background: "rgba(52,211,153,0.08)",
-                    border: "1px solid rgba(52,211,153,0.25)",
+                    background: alpha(C.online, 0.08),
+                    border: `1px solid ${alpha(C.online, 0.25)}`,
                     cursor: saveMutation.isPending ? "default" : "pointer",
                   }}
                 >
@@ -383,7 +383,7 @@ function PanelContent({
                   onMouseEnter={(e) => {
                     (e.currentTarget as HTMLButtonElement).style.color = STATUS_TEXT.error;
                     (e.currentTarget as HTMLButtonElement).style.background =
-                      "rgba(239,68,68,0.08)";
+                      alpha(C.error, 0.08);
                   }}
                   onMouseLeave={(e) => {
                     (e.currentTarget as HTMLButtonElement).style.color =
@@ -544,8 +544,8 @@ function PanelContent({
           <div
             className="mt-3 rounded-md px-3 py-2 flex items-center gap-2"
             style={{
-              background: "rgba(239,68,68,0.08)",
-              border: "1px solid rgba(239,68,68,0.25)",
+              background: alpha(C.error, 0.08),
+              border: `1px solid ${alpha(C.error, 0.25)}`,
               fontSize: "12px",
               color: STATUS_TEXT.error,
             }}

@@ -120,7 +120,7 @@ function SkillContentModal({ skillKey, onClose }: { skillKey: string; onClose: (
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/75" onClick={onClose} />
+      <div className="absolute inset-0 bg-[var(--color-scrim)]/75" onClick={onClose} />
       <motion.div
         initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
         exit={{ scale: 0.95, opacity: 0 }} transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
@@ -129,7 +129,7 @@ function SkillContentModal({ skillKey, onClose }: { skillKey: string; onClose: (
         aria-modal="true"
         aria-label={t("modalAria", { key: skillKey })}
         style={{ background: C.bgBase,
-          border: `1px solid ${C.border}`, boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)" }}
+          border: `1px solid ${C.border}`, boxShadow: `0 4px 24px ${alpha(C.shadow, 0.5)}, 0 1px 2px ${alpha(C.shadow, 0.3)}` }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="absolute inset-x-0 top-0 h-px pointer-events-none"
@@ -423,7 +423,7 @@ export default function SkillsPage() {
               style={{
                 background: activeTab === id ? "var(--color-bg-hover)" : "transparent",
                 color: activeTab === id ? "var(--color-text-primary)" : "var(--color-text-muted)",
-                boxShadow: activeTab === id ? "0 1px 3px rgba(0,0,0,0.3)" : "none",
+                boxShadow: activeTab === id ? `0 1px 3px ${alpha(C.shadow, 0.3)}` : "none",
               }}>
               <Icon size={13} />
               {t(labelKey)}

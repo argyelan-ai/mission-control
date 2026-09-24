@@ -29,6 +29,13 @@ function ratio(a: string, b: string): number {
   return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
 }
 
+function hslHex(h: number, s: number, l: number): string {
+  const k = (n: number) => (n + h / 30) % 12;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+  return "#" + [f(0), f(8), f(4)].map((x) => Math.round(x * 255).toString(16).padStart(2, "0")).join("");
+}
+
 const SURFACES = ["--color-bg-deep", "--color-bg-base", "--color-bg-surface", "--color-bg-elevated", "--color-bg-hover"];
 
 // Tokens used as text: AA (4.5:1) on every surface.
@@ -107,6 +114,28 @@ describe("theme contrast (WCAG) — both modes", () => {
       .map(([k]) => k)
       .filter((k) => !lightOnly.has(k) && !SAME_IN_BOTH.has(k));
     expect(missing).toEqual([]);
+  });
+
+  it("syntax-highlighted code keeps a dark ground in both modes (atomOneDark fg ≥4.5)", () => {
+    for (const vars of [darkVars, lightVars]) {
+      expect(ratio("#abb2bf", resolveVar("var(--color-code-bg)", vars))).toBeGreaterThanOrEqual(4.5);
+      expect(ratio(resolveVar("var(--color-code-dim)", vars), resolveVar("var(--color-code-bg)", vars))).toBeGreaterThanOrEqual(3);
+    }
+  });
+
+  it("light: agent identity colours (hsl, --agent-lightness) clear AA on every surface", () => {
+    const L = parseFloat(resolveVar("var(--agent-lightness)", lightVars)) / 100;
+    const hues: [number, number][] = [12, 38, 60, 145, 175, 200, 215, 300, 320, 340].map((h) => [h, 0.55]);
+    hues.push([260, 0.4]);
+    const fails: string[] = [];
+    for (const [h, sat] of hues) {
+      const c = hslHex(h, sat, L);
+      for (const s of SURFACES) {
+        const r = ratio(c, resolveVar(`var(${s})`, lightVars));
+        if (r < 4.5) fails.push(`hue ${h} on ${s}: ${r.toFixed(2)}`);
+      }
+    }
+    expect(fails).toEqual([]);
   });
 
   it("light mode also sets color-scheme: light (native controls, scrollbars)", () => {

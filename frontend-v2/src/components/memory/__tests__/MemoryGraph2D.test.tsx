@@ -20,10 +20,12 @@ import type { VaultGraphResponse } from "@/lib/types";
 
 // ── Mock react-force-graph-2d — capture the width/height props it receives ──
 const forceGraphProps: { width?: number; height?: number }[] = [];
+const linkColorProps: ((link: object) => string)[] = [];
 
 vi.mock("react-force-graph-2d", () => ({
-  default: (props: { width?: number; height?: number }) => {
+  default: (props: { width?: number; height?: number; linkColor?: (link: object) => string }) => {
     forceGraphProps.push({ width: props.width, height: props.height });
+    if (props.linkColor) linkColorProps.push(props.linkColor);
     return (
       <div data-testid="force-graph-stub">
         {props.width}x{props.height}
@@ -33,6 +35,7 @@ vi.mock("react-force-graph-2d", () => ({
 }));
 
 import { MemoryGraph2D } from "../MemoryGraph2D";
+import { setTheme } from "@/lib/theme";
 
 type ROCallback = (entries: ResizeObserverEntry[], observer: ResizeObserver) => void;
 
@@ -126,5 +129,34 @@ describe("MemoryGraph2D sizing", () => {
 
     expect(screen.getByTestId("force-graph-stub").textContent).toBe("852x375");
     rectSpy.mockRestore();
+  });
+});
+
+describe("MemoryGraph2D theme switch (ADR-087)", () => {
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    document.documentElement.style.removeProperty("--color-graph-edge");
+    act(() => setTheme("dark"));
+  });
+
+  it("redraws with the new theme's colours — the canvas gets resolved values, never var()", () => {
+    const originalRO = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = MockResizeObserver as unknown as typeof ResizeObserver;
+    const rectSpy = mockRect(400, 300);
+    const root = document.documentElement;
+    root.style.setProperty("--color-graph-edge", "rgba(255, 255, 255, 0.18)");
+    act(() => setTheme("dark"));
+    render(<MemoryGraph2D data={emptyData} onNodeClick={() => {}} />);
+    const link = { source: { id: "a" }, target: { id: "b" } };
+    expect(linkColorProps.at(-1)!(link)).toBe("rgba(255, 255, 255, 0.18)");
+
+    // What the light stylesheet block does, then the switch:
+    root.style.setProperty("--color-graph-edge", "rgba(27, 26, 23, 0.18)");
+    act(() => setTheme("light"));
+    expect(linkColorProps.at(-1)!(link)).toBe("rgba(27, 26, 23, 0.18)");
+
+    rectSpy.mockRestore();
+    globalThis.ResizeObserver = originalRO;
   });
 });

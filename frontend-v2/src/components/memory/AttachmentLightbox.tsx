@@ -10,6 +10,7 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
 
+import { C, alpha } from "@/lib/colors";
 interface Props {
   open: boolean;
   src: string | null;
@@ -24,7 +25,7 @@ export function AttachmentLightbox({ open, src, filename, sizeKb, onClose }: Pro
       <Dialog.Portal>
         <Dialog.Overlay
           className="fixed inset-0 z-50"
-          style={{ background: "rgba(0,0,0,0.9)", backdropFilter: "blur(8px)" }}
+          style={{ background: alpha(C.scrim, 0.9), backdropFilter: "blur(8px)" }}
         />
         <Dialog.Content
           className="fixed inset-0 z-50 flex items-center justify-center p-6"

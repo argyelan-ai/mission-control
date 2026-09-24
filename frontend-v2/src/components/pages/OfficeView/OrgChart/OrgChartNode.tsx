@@ -52,7 +52,7 @@ export function OrgChartNode({ node }: OrgChartNodeProps) {
           background:
             `linear-gradient(155deg, ${C.bgElevated} 0%, ${C.bgSurface} 60%)`,
           border: `1px solid ${C.borderActive}`,
-          boxShadow: "0 18px 40px -20px rgba(0,0,0,0.6)",
+          boxShadow: `0 18px 40px -20px ${alpha(C.shadow, 0.6)}`,
         }}
       >
         {/* light streak on top edge — signals "human, source of truth" */}
@@ -71,7 +71,7 @@ export function OrgChartNode({ node }: OrgChartNodeProps) {
             style={{
               width: 56, height: 56,
               background: "radial-gradient(circle at 30% 25%, #fafafa, #d4d4d8 60%, #71717a)",
-              boxShadow: "0 6px 14px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.5)",
+              boxShadow: `0 6px 14px ${alpha(C.shadow, 0.4)}, inset 0 1px 0 ${alpha(C.overlay, 0.5)}`,
               color: "#0a0a0a",
             }}
           >
@@ -108,7 +108,7 @@ export function OrgChartNode({ node }: OrgChartNodeProps) {
           background:
             `linear-gradient(160deg, ${C.accentSubtle} 0%, ${C.bgSurface} 65%)`,
           border: `1px solid ${C.borderAccent}`,
-          boxShadow: "0 14px 32px -22px rgba(0,0,0,0.5)",
+          boxShadow: `0 14px 32px -22px ${alpha(C.shadow, 0.5)}`,
         }}
       >
         <div className="flex items-start gap-4">
@@ -157,7 +157,7 @@ export function OrgChartNode({ node }: OrgChartNodeProps) {
             `linear-gradient(135deg, ${C.accentSubtle} 0%, ${C.bgSurface} 55%, ${C.bgSurface} 100%)`,
           border: `1px solid ${C.borderAccent}`,
           boxShadow:
-            "0 22px 52px -26px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.04)",
+            `0 22px 52px -26px ${alpha(C.scrim, 0.6)}, inset 0 1px 0 ${alpha(C.overlay, 0.04)}`,
         }}
       >
         {/* radial accent — communicates "centre of gravity" */}
@@ -177,7 +177,7 @@ export function OrgChartNode({ node }: OrgChartNodeProps) {
               width: 60, height: 60,
               background:
                 `linear-gradient(140deg, ${C.accent} 0%, ${C.accentHover} 100%)`,
-              boxShadow: "0 8px 22px -6px rgba(0,0,0,0.5)",
+              boxShadow: `0 8px 22px -6px ${alpha(C.shadow, 0.5)}`,
               color: C.onAccent,
             }}
           >
@@ -243,8 +243,8 @@ export function OrgChartNode({ node }: OrgChartNodeProps) {
         <span className="font-mono uppercase tracking-wide">{runtime.label}</span>
         {node.model && (
           <>
-            <span className="text-zinc-700">·</span>
-            <span className="font-mono text-zinc-500 truncate">{node.model}</span>
+            <span className="text-[var(--color-text-dim)]">·</span>
+            <span className="font-mono text-[var(--color-text-muted)] truncate">{node.model}</span>
           </>
         )}
       </div>
@@ -283,7 +283,7 @@ function StatusDot({
         )}
       </span>
       {!compact && (
-        <span className="text-[9px] text-zinc-500 uppercase tracking-[0.1em] font-medium">
+        <span className="text-[9px] text-[var(--color-text-muted)] uppercase tracking-[0.1em] font-medium">
           {status.label}
         </span>
       )}
@@ -301,7 +301,7 @@ function RuntimeRow({
   model?: string;
 }) {
   return (
-    <div className="flex items-center gap-1.5 text-[10.5px] text-zinc-500 mt-1.5">
+    <div className="flex items-center gap-1.5 text-[10.5px] text-[var(--color-text-muted)] mt-1.5">
       <span
         className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-mono uppercase tracking-wider"
         style={{
@@ -315,7 +315,7 @@ function RuntimeRow({
         {runtime.label}
       </span>
       {model && (
-        <span className="font-mono text-zinc-500 truncate">{model}</span>
+        <span className="font-mono text-[var(--color-text-muted)] truncate">{model}</span>
       )}
     </div>
   );

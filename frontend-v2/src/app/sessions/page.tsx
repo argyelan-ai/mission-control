@@ -428,7 +428,7 @@ function SessionsPageContent() {
         }`}
       >
         {isError && (
-          <div className="text-red-400 text-xs p-4">{t("backendConnectionFailed")}</div>
+          <div className="text-[var(--color-status-error)] text-xs p-4">{t("backendConnectionFailed")}</div>
         )}
         {/* No page-title row. The app bar already says SESSIONS and the bottom
             tab bar already says SESS, so an icon + "Agent Terminals" + count

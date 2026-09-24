@@ -155,7 +155,7 @@ export function ProjectCombobox({
             style={{
               backgroundColor: C.bgBase,
               border: `1px solid ${C.borderActive}`,
-              boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
+              boxShadow: `0 4px 24px ${alpha(C.shadow, 0.5)}, 0 1px 2px ${alpha(C.shadow, 0.3)}`,
             }}
           >
             <div className="flex items-center gap-2 px-3 py-2" style={{ borderBottom: `1px solid ${border}` }}>
@@ -182,7 +182,7 @@ export function ProjectCombobox({
                       setOpen(false);
                       setSearch("");
                     }}
-                    className="flex items-center gap-2 w-full px-3 py-2 text-left transition-colors hover:bg-white/5 cursor-pointer"
+                    className="flex items-center gap-2 w-full px-3 py-2 text-left transition-colors hover:bg-[var(--color-overlay)]/5 cursor-pointer"
                   >
                     <span className="flex-1 text-[11px] truncate" style={{ color: textPrimary }}>
                       {p.name}
@@ -209,7 +209,7 @@ export function ProjectCombobox({
                 <button
                   type="button"
                   onClick={() => setShowCreate(true)}
-                  className="flex items-center gap-2 w-full px-3 py-2.5 text-[11px] font-medium transition-colors hover:bg-white/5 cursor-pointer"
+                  className="flex items-center gap-2 w-full px-3 py-2.5 text-[11px] font-medium transition-colors hover:bg-[var(--color-overlay)]/5 cursor-pointer"
                   style={{ color: accent }}
                 >
                   <Plus size={12} />

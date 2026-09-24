@@ -398,9 +398,9 @@ export function GraphFilterSidebar({
                   disabled={!hasActiveFilters}
                   className="flex items-center gap-1.5 w-full rounded-sm px-2 py-1.5 font-mono text-[11px] transition-opacity"
                   style={{
-                    background: hasActiveFilters ? "rgba(239,68,68,0.08)" : "transparent",
+                    background: hasActiveFilters ? alpha(C.error, 0.08) : "transparent",
                     border: hasActiveFilters
-                      ? "1px solid rgba(239,68,68,0.2)"
+                      ? `1px solid ${alpha(C.error, 0.2)}`
                       : "1px solid transparent",
                     color: hasActiveFilters
                       ? C.error
@@ -430,7 +430,7 @@ export function GraphFilterSidebar({
           border: "1px solid var(--color-border)",
           color: "var(--color-text-secondary)",
           cursor: "pointer",
-          boxShadow: "0 2px 8px rgba(0,0,0,0.4)",
+          boxShadow: `0 2px 8px ${alpha(C.shadow, 0.4)}`,
         }}
         aria-label={collapsed ? "Expand filter sidebar" : "Collapse filter sidebar"}
       >

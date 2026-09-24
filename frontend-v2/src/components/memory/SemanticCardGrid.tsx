@@ -81,7 +81,7 @@ export function SemanticCardGrid({
           }}
           className="absolute top-3 right-3 p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer touch-visible max-sm:min-h-11 max-sm:min-w-11 max-sm:flex max-sm:items-center max-sm:justify-center"
           style={{
-            background: item.is_pinned ? "rgba(245,158,11,0.12)" : "var(--color-bg-elevated)",
+            background: item.is_pinned ? alpha(C.warning, 0.12) : "var(--color-bg-elevated)",
             color: item.is_pinned ? C.warning : "var(--color-text-muted)",
           }}
           title={item.is_pinned ? "Unpin" : "Pin"}

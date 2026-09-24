@@ -255,7 +255,7 @@ function UpdateModal({
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
         transition={{ duration: 0.15 }}
-        className="fixed inset-0 z-40 flex items-end sm:items-center justify-center sm:p-4 bg-black/60"
+        className="fixed inset-0 z-40 flex items-end sm:items-center justify-center sm:p-4 bg-[var(--color-scrim)]/60"
         onClick={onClose}
         role="dialog"
         aria-modal="true"
@@ -271,7 +271,7 @@ function UpdateModal({
           style={{
             backgroundColor: C.bgElevated,
             border: `1px solid var(--color-border)`,
-            boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
+            boxShadow: `0 4px 24px ${alpha(C.shadow, 0.5)}, 0 1px 2px ${alpha(C.shadow, 0.3)}`,
           }}
         >
           {/* Header */}

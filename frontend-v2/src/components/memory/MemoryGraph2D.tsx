@@ -57,6 +57,7 @@ import {
 import { computeCommunities } from "@/lib/graphLouvain";
 import { useContainerSize } from "@/hooks/useContainerSize";
 import { C } from "@/lib/colors";
+import { useTheme } from "@/lib/theme";
 
 // ── Public imperative handle ──────────────────────────────────────────────────
 
@@ -347,8 +348,10 @@ export const MemoryGraph2D = forwardRef<MemoryGraph2DRef, MemoryGraph2DProps>(
 
     const LABEL_ZOOM_THRESHOLD = 2.2;
 
-    // Canvas cannot read CSS variables: resolve the palette once per theme.
-    const palette = useMemo(() => resolveGraphPalette(), []);
+    // Canvas cannot read CSS variables: resolve the palette once per theme —
+    // a theme switch yields a new palette, new draw callbacks, a redraw.
+    const { resolved: theme } = useTheme();
+    const palette = useMemo(() => resolveGraphPalette(theme), [theme]);
 
     const drawNode = useCallback(
       (node: object, ctx: CanvasRenderingContext2D, globalScale: number) => {
@@ -566,7 +569,7 @@ export const MemoryGraph2D = forwardRef<MemoryGraph2DRef, MemoryGraph2DProps>(
             height={size.height}
             graphData={graphData}
             // ── Presentation ────────────────────────────────────────────────────
-            backgroundColor="rgba(0,0,0,0)"
+            backgroundColor="transparent"
             nodeRelSize={1} // ignored — we draw our own discs via nodeCanvasObject
             nodeLabel={nodeLabel}
             nodeCanvasObject={drawNode}

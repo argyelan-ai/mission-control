@@ -18,7 +18,7 @@
 
 "use client";
 
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 
 export interface ActivityHeatmapProps {
   /** Whether heatmap halos are currently visible */
@@ -54,7 +54,7 @@ export function ActivityHeatmap({ enabled, onToggle, className }: ActivityHeatma
         // Active state: brand-tinted pill
         background: enabled ? C.accentSubtle : "transparent",
         color: enabled ? C.accent : C.textDim,
-        border: enabled ? `1px solid ${C.borderAccent}` : "1px solid rgba(255,255,255,0.1)",
+        border: enabled ? `1px solid ${C.borderAccent}` : `1px solid ${alpha(C.overlay, 0.1)}`,
       }}
     >
       {/* Dot indicator — filled when active */}

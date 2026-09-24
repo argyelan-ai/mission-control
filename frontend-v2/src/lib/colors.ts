@@ -96,10 +96,14 @@ export const C = {
   // and the scrim behind dialogs. Use with alpha().
   overlay: v("overlay"),
   scrim: v("scrim"),
+  shadow: v("shadow"), // box-shadow ink: alpha(C.shadow, 0.5) — much softer in light
 
   // Terminal + code blocks — stay dark in BOTH modes (content, not chrome).
   term: v("term"),
   termFg: v("term-fg"),
+  rowOpaque: v("row-opaque"), // opaque stand-in for a borderSubtle row (sticky cells)
+  codeBg: v("code-bg"), // syntax-highlighted code (dark in both modes)
+  codeDim: v("code-dim"),
 
   // Charts: Ressourcen-Serien tragen über Helligkeit, nicht über Farbton.
   chart: {

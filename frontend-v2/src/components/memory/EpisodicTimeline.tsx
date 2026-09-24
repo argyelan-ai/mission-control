@@ -86,7 +86,7 @@ export function EpisodicTimeline({
           <div className="relative pl-7">
             <div
               className="absolute left-[9px] top-0 bottom-0 w-0.5 rounded-full"
-              style={{ background: "linear-gradient(to bottom, rgba(0,204,136,0.5), rgba(0,204,136,0.05))" }}
+              style={{ background: `linear-gradient(to bottom, ${alpha(C.online, 0.5)}, ${alpha(C.online, 0.05)})` }}
             />
             {items.map((item, i) => {
               const color = TYPE_COLORS[item.memory_type] ?? C.textSecondary;

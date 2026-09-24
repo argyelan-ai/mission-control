@@ -257,7 +257,7 @@ export function JobsTable({
                 bgSurface matches the row tone (borderSubtle over bgDeep) — bgBase read as a black hole on mobile. */}
             <span
               className="sticky z-10"
-              style={{ left: "72px", backgroundColor: C.bgSurface }}
+              style={{ left: "72px", backgroundColor: C.rowOpaque }}
             >
               {t("colName")}
             </span>
@@ -330,7 +330,7 @@ function BulkBtn({
       onClick={onClick}
       className="flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium transition"
       style={{
-        borderColor: danger ? alpha(C.error, 0.35) : "rgba(255,255,255,0.1)",
+        borderColor: danger ? alpha(C.error, 0.35) : alpha(C.overlay, 0.1),
         background: danger ? alpha(C.error, 0.1) : C.borderSubtle,
         color: danger ? STATUS_TEXT.error : C.textPrimary,
       }}

@@ -471,7 +471,7 @@ function PropertyMenuCell({
               zIndex: 70,
               background: C.bgBase,
               border: `1px solid ${C.borderActive}`,
-              boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
+              boxShadow: `0 4px 24px ${alpha(C.shadow, 0.5)}, 0 1px 2px ${alpha(C.shadow, 0.3)}`,
             }}
           >
             {options.map((o) => (

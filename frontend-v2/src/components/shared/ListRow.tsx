@@ -45,7 +45,7 @@ const DOT: Record<Tone, string> = {
   ok: C.online,
   warn: C.warning,
   error: C.error,
-  idle: "#3A3A3A",
+  idle: "var(--color-status-offline)",
   accent: C.accent,
 };
 

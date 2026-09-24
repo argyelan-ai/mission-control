@@ -6,6 +6,7 @@ import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 
+import { C, alpha } from "@/lib/colors";
 interface SlideOverPanelProps {
   open: boolean;
   onClose: () => void;
@@ -63,7 +64,7 @@ export function SlideOverPanel({
             exit={{ opacity: 0 }}
             transition={{ duration: prefersReducedMotion ? 0 : 0.2 }}
             className="fixed inset-0 z-40 md:hidden"
-            style={{ backgroundColor: "rgba(0,0,0,0.6)" }}
+            style={{ backgroundColor: alpha(C.scrim, 0.6) }}
             onClick={onClose}
           />
 
@@ -88,7 +89,7 @@ export function SlideOverPanel({
               "--panel-w": desktopWidth,
               backgroundColor: "var(--color-bg-elevated)",
               borderLeft: "1px solid var(--color-border)",
-              boxShadow: "-8px 0 40px rgba(0,0,0,0.5)",
+              boxShadow: `-8px 0 40px ${alpha(C.shadow, 0.5)}`,
             } as React.CSSProperties}
           >
             {/* Akzent-Kante oben — Signatur-Markierung */}

@@ -223,7 +223,7 @@ export function RuntimeSwitchModal({
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: 0.15 }}
-          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4 bg-black/60"
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4 bg-[var(--color-scrim)]/60"
           style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
           onClick={() => !submitting && onClose()}
         >
@@ -240,7 +240,7 @@ export function RuntimeSwitchModal({
             style={{
               backgroundColor: "var(--color-bg-elevated)",
               border: "1px solid var(--color-border)",
-              boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
+              boxShadow: `0 4px 24px ${alpha(C.shadow, 0.5)}, 0 1px 2px ${alpha(C.shadow, 0.3)}`,
             }}
           >
               {/* Header */}
@@ -278,8 +278,8 @@ export function RuntimeSwitchModal({
                     <div
                       className="flex items-start gap-2 mt-1 p-2.5 rounded-lg text-[12px] text-left max-w-sm"
                       style={{
-                        backgroundColor: "rgba(255,178,36,0.08)",
-                        border: "1px solid rgba(255,178,36,0.25)",
+                        backgroundColor: alpha(C.warning, 0.08),
+                        border: `1px solid ${alpha(C.warning, 0.25)}`,
                         color: STATUS_TEXT.warning,
                       }}
                       data-testid="restart-failed-note"
@@ -298,8 +298,8 @@ export function RuntimeSwitchModal({
                     <div
                       className="flex items-start gap-2 mt-1 p-2.5 rounded-lg text-[12px] text-left max-w-sm"
                       style={{
-                        backgroundColor: "rgba(255,178,36,0.08)",
-                        border: "1px solid rgba(255,178,36,0.25)",
+                        backgroundColor: alpha(C.warning, 0.08),
+                        border: `1px solid ${alpha(C.warning, 0.25)}`,
                         color: STATUS_TEXT.warning,
                       }}
                       data-testid="restart-skipped-note"
@@ -403,8 +403,8 @@ export function RuntimeSwitchModal({
                   <div
                     className="flex items-start gap-2 p-3 rounded-lg text-[12px]"
                     style={{
-                      backgroundColor: "rgba(239,68,68,0.08)",
-                      border: "1px solid rgba(239,68,68,0.25)",
+                      backgroundColor: alpha(C.error, 0.08),
+                      border: `1px solid ${alpha(C.error, 0.25)}`,
                       color: STATUS_TEXT.error,
                     }}
                   >
@@ -443,8 +443,8 @@ export function RuntimeSwitchModal({
                       <div
                         className="flex items-start gap-2 p-3 rounded-lg text-[12px]"
                         style={{
-                          backgroundColor: "rgba(20,184,166,0.08)",
-                          border: "1px solid rgba(20,184,166,0.28)",
+                          backgroundColor: alpha(C.info, 0.08),
+                          border: `1px solid ${alpha(C.info, 0.28)}`,
                           color: C.accentHover,
                         }}
                         data-testid="single-instance-lock-banner"
@@ -471,8 +471,8 @@ export function RuntimeSwitchModal({
                       <div
                         className="flex items-start gap-2 p-3 rounded-lg text-[12px]"
                         style={{
-                          backgroundColor: "rgba(20,184,166,0.08)",
-                          border: "1px solid rgba(20,184,166,0.28)",
+                          backgroundColor: alpha(C.info, 0.08),
+                          border: `1px solid ${alpha(C.info, 0.28)}`,
                           color: C.accentHover,
                         }}
                         data-testid="host-inplace-hint"
@@ -494,8 +494,8 @@ export function RuntimeSwitchModal({
                       <div
                         className="flex items-start gap-2 p-3 rounded-lg text-[12px]"
                         style={{
-                          backgroundColor: "rgba(249,115,22,0.08)",
-                          border: "1px solid rgba(249,115,22,0.25)",
+                          backgroundColor: alpha(C.warning, 0.08),
+                          border: `1px solid ${alpha(C.warning, 0.25)}`,
                           color: STATUS_TEXT.warning,
                         }}
                       >
@@ -516,8 +516,8 @@ export function RuntimeSwitchModal({
                       <div
                         className="p-3 rounded-lg text-[12px] space-y-1"
                         style={{
-                          backgroundColor: "rgba(255,178,36,0.08)",
-                          border: "1px solid rgba(255,178,36,0.25)",
+                          backgroundColor: alpha(C.warning, 0.08),
+                          border: `1px solid ${alpha(C.warning, 0.25)}`,
                           color: STATUS_TEXT.warning,
                         }}
                       >
@@ -540,8 +540,8 @@ export function RuntimeSwitchModal({
                   <div
                     className="p-3 rounded-lg text-[12px] space-y-2"
                     style={{
-                      backgroundColor: "rgba(239,68,68,0.06)",
-                      border: "1px solid rgba(239,68,68,0.22)",
+                      backgroundColor: alpha(C.error, 0.06),
+                      border: `1px solid ${alpha(C.error, 0.22)}`,
                       color: STATUS_TEXT.error,
                     }}
                   >
@@ -603,8 +603,8 @@ export function RuntimeSwitchModal({
                   <div
                     className="flex items-start gap-2 p-3 rounded-lg text-[12px]"
                     style={{
-                      backgroundColor: "rgba(239,68,68,0.08)",
-                      border: "1px solid rgba(239,68,68,0.25)",
+                      backgroundColor: alpha(C.error, 0.08),
+                      border: `1px solid ${alpha(C.error, 0.25)}`,
                       color: STATUS_TEXT.error,
                     }}
                     data-testid="rolled-back-banner"
@@ -630,8 +630,8 @@ export function RuntimeSwitchModal({
                   <div
                     className="p-3 rounded-lg text-[12px]"
                     style={{
-                      backgroundColor: "rgba(239,68,68,0.08)",
-                      border: "1px solid rgba(239,68,68,0.25)",
+                      backgroundColor: alpha(C.error, 0.08),
+                      border: `1px solid ${alpha(C.error, 0.25)}`,
                       color: STATUS_TEXT.error,
                     }}
                   >

@@ -14,7 +14,7 @@
 import { useEffect } from "react";
 import { motion } from "framer-motion";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import { TaskDetailBody } from "./TaskDetailBody";
 import type { Task, Agent } from "@/lib/types";
 
@@ -76,7 +76,7 @@ export default function TaskDetailPanel({
         transition={{ duration: 0.15 }}
         className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-8"
         style={{
-          backgroundColor: "rgba(2, 4, 8, 0.7)",
+          backgroundColor: alpha(C.scrim, 0.7),
           paddingTop: "calc(env(safe-area-inset-top) + 3.5rem)",
           paddingBottom: "env(safe-area-inset-bottom)",
           paddingLeft: "env(safe-area-inset-left)",

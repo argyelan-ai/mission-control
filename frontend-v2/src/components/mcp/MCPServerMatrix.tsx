@@ -188,7 +188,7 @@ export function MCPServerMatrix({
                                   width: "220px",
                                   background: C.bgElevated,
                                   border: "1px solid var(--color-border)",
-                                  boxShadow: "0 8px 24px rgba(0,0,0,0.6)",
+                                  boxShadow: `0 8px 24px ${alpha(C.shadow, 0.6)}`,
                                   color: "var(--color-text-secondary)",
                                 }}
                               >

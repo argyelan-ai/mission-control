@@ -444,7 +444,7 @@ export function CreateTaskModal({ activeBoardId, agents, onOpenTask = openTaskPa
           >
             <div
               className="absolute inset-0"
-              style={{ backgroundColor: "rgba(0,0,0,0.6)" }}
+              style={{ backgroundColor: alpha(MC.scrim, 0.6) }}
               onClick={requestClose}
             />
 
@@ -468,7 +468,7 @@ export function CreateTaskModal({ activeBoardId, agents, onOpenTask = openTaskPa
                 // 60px-Schein um den Dialog das lauteste Element der Seite,
                 // und Farbe ist hier reserviert für Status. Tiefe kommt allein
                 // aus dem Schlagschatten.
-                boxShadow: `0 25px 80px rgba(0,0,0,0.6)`,
+                boxShadow: `0 25px 80px ${alpha(MC.shadow, 0.6)}`,
               }}
             >
               {/* Top edge — flat hairline (DESIGN.md: no gradients) */}

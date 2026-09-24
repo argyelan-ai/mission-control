@@ -28,7 +28,7 @@ import { motion } from "framer-motion";
 import type { VaultNote } from "@/lib/types";
 import { colorForAgent } from "./agentColors";
 
-import { alpha } from "@/lib/colors";
+import { alpha, C } from "@/lib/colors";
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 const MONTHS_SHORT = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"] as const;
@@ -255,7 +255,7 @@ export function MonthMarker({ label }: { label: string }) {
         className="flex-1 h-px"
         style={{
           background:
-            "linear-gradient(to right, var(--color-bg-hover), rgba(255,255,255,0.02) 50%, transparent)",
+            `linear-gradient(to right, var(--color-bg-hover), ${alpha(C.overlay, 0.02)} 50%, transparent)`,
         }}
       />
     </div>
@@ -355,7 +355,7 @@ export function VaultNoteRow({ note, selected, onSelect }: VaultNoteRowProps) {
           width: selected ? "2px" : "1px",
           background: selected
             ? agentColor
-            : "linear-gradient(to bottom, transparent 0%, rgba(255,255,255,0.10) 18%, rgba(255,255,255,0.10) 82%, transparent 100%)",
+            : `linear-gradient(to bottom, transparent 0%, ${alpha(C.overlay, 0.1)} 18%, ${alpha(C.overlay, 0.1)} 82%, transparent 100%)`,
         }}
       />
 

@@ -48,7 +48,7 @@ export function ActivityHistoryPanel({ onClose }: { onClose: () => void }) {
     >
       <div
         className="absolute inset-0"
-        style={{ backgroundColor: "rgba(0,0,0,0.5)" }}
+        style={{ backgroundColor: alpha(C.scrim, 0.5) }}
         onClick={onClose}
       />
 
@@ -61,7 +61,7 @@ export function ActivityHistoryPanel({ onClose }: { onClose: () => void }) {
         style={{
           background: C.bgElevated,
           border: `1px solid var(--color-border)`,
-          boxShadow: `0 25px 80px rgba(0,0,0,0.6)`,
+          boxShadow: `0 25px 80px ${alpha(C.shadow, 0.6)}`,
         }}
       >
         <div className="absolute top-0 left-0 right-0 h-px" style={{ background: "linear-gradient(90deg, transparent, var(--color-bg-hover), transparent)" }} />

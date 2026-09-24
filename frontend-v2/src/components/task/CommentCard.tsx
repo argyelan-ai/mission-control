@@ -286,7 +286,7 @@ function ChecklistSection({ content }: { content: string }) {
                 flexShrink: 0,
                 border: checked
                   ? `1.5px solid ${C.online}`
-                  : "1.5px solid rgba(255, 255, 255, 0.2)",
+                  : `1.5px solid ${alpha(C.overlay, 0.2)}`,
                 background: checked
                   ? alpha(C.online, 0.15)
                   : "transparent",
@@ -348,7 +348,7 @@ export function CommentCard({ comment, agentMap }: CommentCardProps) {
   const isSystem = author.kind === "system";
 
   // Background tint for special types
-  let bgTint = "rgba(255, 255, 255, 0.03)";
+  let bgTint = alpha(C.overlay, 0.03);
   if (type === "blocker") bgTint = alpha(C.error, 0.03);
   if (type === "resolution") bgTint = alpha(C.online, 0.02);
   if (isReflection) bgTint = alpha(C.info, 0.04);
@@ -381,7 +381,7 @@ export function CommentCard({ comment, agentMap }: CommentCardProps) {
           left: 0,
           right: 0,
           height: 1,
-          background: "linear-gradient(90deg, transparent, var(--color-bg-elevated) 30%, rgba(255, 255, 255, 0.1) 50%, rgba(255, 255, 255, 0.06) 70%, transparent)",
+          background: `linear-gradient(90deg, transparent, var(--color-bg-elevated) 30%, ${alpha(C.overlay, 0.1)} 50%, ${alpha(C.overlay, 0.06)} 70%, transparent)`,
           pointerEvents: "none",
         }}
       />

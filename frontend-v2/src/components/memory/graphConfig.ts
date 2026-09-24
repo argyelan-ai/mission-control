@@ -108,14 +108,20 @@ export const COMMUNITY_PALETTE = [
   "#EF4444",  C.info,    "#22C55E", "#FB923C", "#0EA5E9", "#F472B6",
 ];
 
+/** Same hues, one step deeper, for light paper (≥3:1 against bg-deep). */
+export const COMMUNITY_PALETTE_LIGHT = [
+  C.accent,   "#047857", "#B45309", "#1D4ED8", "#BE185D", "#0E7490",
+  "#B91C1C",  C.info,    "#15803D", "#C2410C", "#0369A1", "#9D174D",
+];
+
 export function colorForCommunity(communityId: number): string {
   return COMMUNITY_PALETTE[communityId % COMMUNITY_PALETTE.length];
 }
 
 // ── Canvas palette ────────────────────────────────────────────────────────────
 // The graph draws on a <canvas>, which cannot read CSS variables. Every colour
-// is resolved once per theme (MemoryGraph2D memoises on the active theme) and
-// the draw callbacks read the resolved values.
+// is resolved once per theme (MemoryGraph2D memoises on the active theme, so a
+// switch redraws the graph) and the draw callbacks read the resolved values.
 export interface GraphPalette {
   selected: string;
   label: string;
@@ -127,7 +133,7 @@ export interface GraphPalette {
   community: string[];
 }
 
-export function resolveGraphPalette(): GraphPalette {
+export function resolveGraphPalette(theme: "dark" | "light" = "dark"): GraphPalette {
   return {
     selected: resolveColor(GRAPH_SELECTED),
     label: resolveColor(C.textPrimary),
@@ -136,6 +142,6 @@ export function resolveGraphPalette(): GraphPalette {
     edgeFiltered: resolveColor(EDGE_COLOR_FILTERED),
     edgeFaded: resolveColor(EDGE_COLOR_FADED),
     type: Object.fromEntries(Object.entries(TYPE_COLORS).map(([k, v]) => [k, resolveColor(v)])),
-    community: COMMUNITY_PALETTE.map((c) => resolveColor(c)),
+    community: (theme === "light" ? COMMUNITY_PALETTE_LIGHT : COMMUNITY_PALETTE).map((c) => resolveColor(c)),
   };
 }

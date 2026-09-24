@@ -4,7 +4,7 @@ import { useState } from "react";
 import { GitBranch, ExternalLink, Pencil, Check, AlertTriangle, Loader2 } from "lucide-react";
 import type { ProjectGitInfo, Repo } from "@/lib/types";
 
-import { alpha } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 function hasRules(repo: Repo): boolean {
   return Boolean(repo.rules_md && repo.rules_md.trim());
 }
@@ -49,14 +49,14 @@ export function GitInfoBox({
   onRepoIdChange,
   onCreateRepo,
   onLinkRepo,
-  accent = "#EBE8DE",
-  textPrimary = "#EEEEEE",
-  textMuted = "#8F8F8F",
-  textSecondary = "#BABABA",
-  border = "var(--color-border)",
-  deep = "#0A0A0A",
-  warning = "#A67F3E",
-  online = "#55A964",
+  accent = C.accent,
+  textPrimary = C.textPrimary,
+  textMuted = C.textMuted,
+  textSecondary = C.textSecondary,
+  border = C.border,
+  deep = C.bgDeep,
+  warning = C.warning,
+  online = C.online,
 }: GitInfoBoxProps) {
   const [editingBranch, setEditingBranch] = useState(false);
 

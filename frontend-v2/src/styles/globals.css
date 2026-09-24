@@ -311,14 +311,27 @@
      Dialogen → alpha(C.scrim, 0.6). */
   --color-overlay: #ffffff;
   --color-scrim: #000000;
+  --color-shadow: #000000; /* Schattenfarbe — hell deutlich weicher */
   --color-graph-edge: rgba(255, 255, 255, 0.18);
   --color-graph-edge-hover: rgba(255, 255, 255, 0.55);
   --color-graph-edge-filtered: rgba(255, 255, 255, 0.025);
   --color-graph-edge-faded: rgba(255, 255, 255, 0.04);
 
+  /* Deckender Ersatz für eine borderSubtle-Zeile über dem Seitengrund —
+     für klebende Zellen, die nichts durchscheinen lassen dürfen (JobRow).
+     Dunkel = bg-surface (wie bisher), hell = Papier mit 5 % Tinte. */
+  --color-row-opaque: var(--color-bg-surface);
+
+  /* Agenten-Identität (vault/agentColors.ts): hsl(Farbton, 55%, L) */
+  --agent-lightness: 55%;
+
   /* ---- Terminal + Code — bleiben in BEIDEN Modi dunkel (Inhalt, kein Chrome) ---- */
   --color-term: #0e0e0e;
   --color-term-fg: #f2f2f2;
+  /* Syntax-gefärbter Code (FilePreview, atomOneDark): dunkel in BEIDEN Modi,
+     weil die Syntax-Palette für dunklen Grund gebaut ist. Dunkel = wie bisher. */
+  --color-code-bg: var(--color-bg-base);
+  --color-code-dim: var(--color-text-dim);
 
   /* ---- P2 „SIGNAL" Shell-Set — Aliase auf dieselben System-A-Werte ---- */
   --color-p2-bg: var(--color-bg-deep);
@@ -396,10 +409,16 @@
   /* ---- Overlays ---- */
   --color-overlay: #1b1a17;
   --color-scrim: #1b1a17;
+  --color-shadow: rgba(27, 26, 23, 0.3);
   --color-graph-edge: rgba(27, 26, 23, 0.18);
   --color-graph-edge-hover: rgba(27, 26, 23, 0.55);
   --color-graph-edge-filtered: rgba(27, 26, 23, 0.03);
   --color-graph-edge-faded: rgba(27, 26, 23, 0.05);
+
+  --color-code-bg: var(--color-term);
+  --color-code-dim: #8a8a8a;
+  --color-row-opaque: color-mix(in srgb, var(--color-bg-deep) 95%, #1b1a17);
+  --agent-lightness: 25%; /* ≥4.5:1 für alle Farbtöne auf allen hellen Flächen */
 
   /* ---- P2-Werte ohne Alias ---- */
   --color-p2-line2: rgba(27, 26, 23, 0.07);
@@ -696,6 +715,12 @@ body {
   animation-iteration-count: infinite, infinite, 1;
   animation-fill-mode: none, none, backwards;
 }
+/* Hell (ADR-087): der helle Lichtlauf verschwände auf Papier — dort läuft er
+   vom dunklen Info-Blau zum Marken-Blau und zurück, lesbar zu jedem Zeitpunkt
+   ausser im kurzen Scheitel. */
+:root[data-theme="light"] .status-letter {
+  background-image: linear-gradient(90deg, var(--color-status-info) 0%, #5890ca 50%, var(--color-status-info) 100%);
+}
 @keyframes status-wave {
   0%, 100% { transform: translateY(0); }
   50% { transform: translateY(-1.5px); }
@@ -716,6 +741,7 @@ body {
   /* Ohne Lichtlauf bleibt der Verlauf stehen — hell genug, dass das Wort
      lesbar ist, statt halb dunkelblau auf dunkelgrau. */
   .status-letter { background: none; color: #8fc1ff; }
+  :root[data-theme="light"] .status-letter { background: none; color: var(--color-status-info); }
   .unfold, .unfold-inner, .chevron-turn { transition: none; }
   .effort-fill[data-pending="true"], .effort-fill[data-settled="true"] { animation: none; }
   .animate-float { animation: none; }

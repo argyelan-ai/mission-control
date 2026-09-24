@@ -53,7 +53,7 @@ function ToastItem({ notification }: { notification: AppNotification }) {
       style={{
         backgroundColor: C.bgSurface,
         border: `1px solid ${alpha(color, 0.3)}`,
-        boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
+        boxShadow: `0 4px 24px ${alpha(C.shadow, 0.5)}, 0 1px 2px ${alpha(C.shadow, 0.3)}`,
       }}
     >
       <Icon size={16} style={{ color }} className="mt-0.5 shrink-0" aria-hidden="true" />

@@ -221,7 +221,7 @@ export function CreateVaultNoteModal({ enabled, onCreated }: CreateVaultNoteModa
             {/* Backdrop */}
             <div
               className="absolute inset-0"
-              style={{ backgroundColor: "rgba(0,0,0,0.6)" }}
+              style={{ backgroundColor: alpha(_C.scrim, 0.6) }}
             />
 
             {/* Drag indicator — mobile bottom-sheet hint */}
@@ -240,7 +240,7 @@ export function CreateVaultNoteModal({ enabled, onCreated }: CreateVaultNoteModa
               style={{
                 background: C.elevated,
                 border: "1px solid var(--color-border)",
-                boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
+                boxShadow: `0 4px 24px ${alpha(_C.shadow, 0.5)}, 0 1px 2px ${alpha(_C.shadow, 0.3)}`,
               }}
             >
               {/* Top edge highlight */}

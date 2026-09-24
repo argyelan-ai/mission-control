@@ -15,7 +15,7 @@
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { AlertTriangle, X } from "lucide-react";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 
 interface BaseProps {
@@ -83,7 +83,7 @@ function DialogShell({
           exit={{ opacity: 0 }}
           transition={{ duration: 0.12 }}
           className="fixed inset-0 z-[100] flex items-center justify-center px-4"
-          style={{ background: "rgba(5,4,3,0.8)" }}
+          style={{ background: alpha(C.scrim, 0.8) }}
           onClick={() => !loading && onCancel()}
         >
           <motion.div
@@ -110,7 +110,7 @@ function DialogShell({
                 {danger && (
                   <span
                     className="shrink-0 w-8 h-8 rounded-sm flex items-center justify-center"
-                    style={{ background: "rgba(239,68,68,0.10)", border: "1px solid rgba(239,68,68,0.25)" }}
+                    style={{ background: alpha(C.error, 0.1), border: `1px solid ${alpha(C.error, 0.25)}` }}
                   >
                     <AlertTriangle size={15} style={{ color: C.error }} />
                   </span>
@@ -169,7 +169,7 @@ function DialogShell({
                 className="font-mono uppercase rounded-sm px-3 py-2 text-[10.5px] tracking-[0.14em] transition-colors cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
                 style={
                   danger
-                    ? { background: "rgba(239,68,68,0.14)", border: "1px solid rgba(239,68,68,0.45)", color: C.error }
+                    ? { background: alpha(C.error, 0.14), border: `1px solid ${alpha(C.error, 0.45)}`, color: C.error }
                     : { background: C.accentSubtle, border: `1px solid ${C.borderAccent}`, color: C.accent }
                 }
               >

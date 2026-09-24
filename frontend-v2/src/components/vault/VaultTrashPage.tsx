@@ -76,7 +76,7 @@ function PurgeConfirmModal({
           exit={{ opacity: 0 }}
           transition={{ duration: 0.12 }}
           className="fixed inset-0 z-[100] flex items-center justify-center px-4"
-          style={{ background: "rgba(0,0,0,0.62)", backdropFilter: "blur(4px)" }}
+          style={{ background: alpha(C.scrim, 0.62), backdropFilter: "blur(4px)" }}
           onClick={() => !isPurging && onClose()}
         >
           <motion.div
@@ -86,9 +86,9 @@ function PurgeConfirmModal({
             transition={{ type: "spring", stiffness: 300, damping: 26 }}
             className="w-full max-w-md rounded-xl flex flex-col"
             style={{
-              background: "rgba(15,15,15,0.98)",
+              background: alpha(C.bgDeep, 0.98),
               border: "1px solid var(--color-border)",
-              boxShadow: "0 24px 80px rgba(0,0,0,0.6)",
+              boxShadow: `0 24px 80px ${alpha(C.shadow, 0.6)}`,
             }}
             onClick={(e) => e.stopPropagation()}
             role="dialog"
@@ -314,7 +314,7 @@ function TrashRow({
         className="shrink-0 w-px self-stretch"
         style={{
           background:
-            "linear-gradient(to bottom, transparent 0%, rgba(255,255,255,0.08) 18%, rgba(255,255,255,0.08) 82%, transparent 100%)",
+            `linear-gradient(to bottom, transparent 0%, ${alpha(C.overlay, 0.08)} 18%, ${alpha(C.overlay, 0.08)} 82%, transparent 100%)`,
         }}
       />
 
@@ -369,7 +369,7 @@ function TrashRow({
             letterSpacing: "-0.005em",
             color: "var(--color-text-secondary)",
             textDecoration: "line-through",
-            textDecorationColor: "rgba(255,255,255,0.18)",
+            textDecorationColor: alpha(C.overlay, 0.18),
             textDecorationThickness: "1px",
           }}
         >
@@ -438,17 +438,17 @@ function TrashRow({
           }
           className="rounded-md p-2 transition-colors"
           style={{
-            color: restorable ? C.online : "rgba(255,255,255,0.18)",
+            color: restorable ? C.online : alpha(C.overlay, 0.18),
             background: "transparent",
             border: "1px solid",
-            borderColor: restorable ? "rgba(52,211,153,0.25)" : "var(--color-border-subtle)",
+            borderColor: restorable ? alpha(C.online, 0.25) : "var(--color-border-subtle)",
             cursor: restorable && !isRestoring ? "pointer" : "default",
             opacity: isRestoring ? 0.5 : 1,
           }}
           onMouseEnter={(e) => {
             if (restorable && !isRestoring) {
               (e.currentTarget as HTMLButtonElement).style.background =
-                "rgba(52,211,153,0.08)";
+                alpha(C.online, 0.08);
             }
           }}
           onMouseLeave={(e) => {
@@ -636,7 +636,7 @@ export function VaultTrashPage() {
               className="flex-1 h-px"
               style={{
                 background:
-                  "linear-gradient(to right, var(--color-bg-hover), rgba(255,255,255,0.02) 50%, transparent)",
+                  `linear-gradient(to right, var(--color-bg-hover), ${alpha(C.overlay, 0.02)} 50%, transparent)`,
               }}
             />
           </div>
