@@ -22,6 +22,7 @@ import {
 import { colorForAgent } from "./agentColors";
 import { ConfirmDeleteModal } from "./ConfirmDeleteModal";
 import { CappedList } from "@/components/shared/CappedList";
+import { useEscapeKey } from "@/hooks/useEscapeKey";
 
 // ── Phase E Task-Klammer: "Verwandt"-Sektion ──────────────────────────────────
 
@@ -689,14 +690,7 @@ function MobileOverlayPanel({
   useBodyScrollLock(true);
 
   // Escape closes the sheet — secondary path next to the visible Back button.
-  useEffect(() => {
-    if (!onClose) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [onClose]);
+  useEscapeKey(() => onClose?.(), Boolean(onClose));
 
   if (!mounted) return null;
 

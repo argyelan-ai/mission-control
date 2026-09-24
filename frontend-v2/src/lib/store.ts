@@ -122,7 +122,13 @@ export const useAppStore = create<AppState>()(
         set((s) => ({ navGroupState: { ...s.navGroupState, [key]: open } })),
 
       commandPaletteOpen: false,
-      setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
+      // No-op when nothing changes: zustand notifies every subscriber on each
+      // set(), and pages that read the store without a selector re-render.
+      // The global Esc shortcut calls this on EVERY Esc press — an idle
+      // re-render of the whole page in the middle of that key press is what
+      // made open dialogs miss a real Esc (see hooks/useEscapeKey.ts).
+      setCommandPaletteOpen: (open) =>
+        set((s) => (s.commandPaletteOpen === open ? s : { commandPaletteOpen: open })),
 
       boards: [],
       setBoards: (boards) => set({ boards }),

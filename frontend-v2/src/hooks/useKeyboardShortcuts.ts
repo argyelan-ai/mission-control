@@ -6,7 +6,8 @@ import { useAppStore } from "@/lib/store";
 
 export function useKeyboardShortcuts() {
   const router = useRouter();
-  const { toggleSidebar, setCommandPaletteOpen } = useAppStore();
+  const toggleSidebar = useAppStore((s) => s.toggleSidebar);
+  const setCommandPaletteOpen = useAppStore((s) => s.setCommandPaletteOpen);
   const chordRef = useRef<string | null>(null);
   const chordTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -68,7 +69,11 @@ export function useKeyboardShortcuts() {
           setCommandPaletteOpen(true);
           break;
         case "Escape":
-          setCommandPaletteOpen(false);
+          // Only when the palette is actually open: this listener sits on
+          // window next to every dialog's own Esc listener, and a state
+          // update here re-renders the app while the same key press is still
+          // being delivered to those listeners.
+          if (useAppStore.getState().commandPaletteOpen) setCommandPaletteOpen(false);
           break;
       }
     };

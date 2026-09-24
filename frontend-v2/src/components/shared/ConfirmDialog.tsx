@@ -17,6 +17,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { AlertTriangle, X } from "lucide-react";
 import { C } from "@/lib/colors";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
+import { useEscapeKey } from "@/hooks/useEscapeKey";
 
 interface BaseProps {
   open: boolean;
@@ -61,16 +62,12 @@ function DialogShell({
     openingEventRef.current = open ? window.event : undefined;
   }, [open]);
 
-  useEffect(() => {
-    if (!open) return;
-    const openingEvent = openingEventRef.current;
-    const handler = (e: KeyboardEvent) => {
-      if (e === openingEvent) return;
-      if (e.key === "Escape" && !loading) onCancel();
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [open, loading, onCancel]);
+  // useEscapeKey binds once per open phase and always calls the latest
+  // handler — a per-render onCancel must not re-bind the listener mid-press.
+  useEscapeKey((e) => {
+    if (e === openingEventRef.current) return;
+    if (!loading) onCancel();
+  }, open);
 
   const accent = danger ? C.error : C.accent;
 

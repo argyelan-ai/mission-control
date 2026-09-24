@@ -22,6 +22,7 @@ import { VoiceButton } from "@/components/voice/VoiceWidget";
 import { P2 } from "@/lib/colors";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
+import { useEscapeKey } from "@/hooks/useEscapeKey";
 
 // Wordmark (gleiche Logik wie Sidebar — env-getrieben)
 const _BRAND = process.env.NEXT_PUBLIC_BRAND || "Mission.Control";
@@ -69,6 +70,9 @@ export function MobileNavProvider({ children }: { children: React.ReactNode }) {
 
   // Prevent body scroll when menu open — iOS-fest via Fixed-Position-Technik (MOBILE-SPEC M4)
   useBodyScrollLock(open);
+
+  // Esc closes the menu like every other overlay (panel register rule 4).
+  useEscapeKey(() => setOpen(false), open);
 
   const value = useMemo(() => ({ open, setOpen }), [open]);
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo } from "react";
 import Link from "next/link";
 import AppShell from "@/components/layout/AppShell";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
@@ -30,6 +30,7 @@ import { AgentActions, extractDetail } from "@/components/agent/AgentActions";
 import type { WizardState } from "./wizard/types";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 import { fleetCount, fleetCountLabel } from "./fleetCount";
+import { useEscapeKey } from "@/hooks/useEscapeKey";
 
 // ── Design Tokens (migrated from CINEMA inline map → lib/colors.ts) ────────
 const CINEMA = {
@@ -83,13 +84,7 @@ function AssignBoardModal({
 
   // Panel register rule 4: scroll-lock + Esc closes (backdrop click below).
   useBodyScrollLock(true);
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [onClose]);
+  useEscapeKey(onClose);
 
   async function handleAssign() {
     try {
@@ -470,13 +465,7 @@ function AgentActionsSheet({
   const locale = useLocale();
   useBodyScrollLock(true);
   // Esc closes (panel register rule 4) — backdrop click is below.
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [onClose]);
+  useEscapeKey(onClose);
   const pct = contextPercent(agent.context_tokens, agent.context_max);
   const displaySkills = agent.skill_filter ?? agent.skills ?? [];
   const dot = DOT_STATUS(agent.status);
@@ -586,7 +575,7 @@ export default function AgentsPage() {
   const t = useTranslations("agents");
   const locale = useLocale();
   const qc = useQueryClient();
-  const { activeBoardId } = useAppStore();
+  const activeBoardId = useAppStore((s) => s.activeBoardId);
 
   const [activeTab, setActiveTab] = useState<"agents" | "templates">("agents");
   const [wizardOpen, setWizardOpen] = useState(false);

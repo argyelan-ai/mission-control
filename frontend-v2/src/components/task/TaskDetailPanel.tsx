@@ -11,9 +11,9 @@
  * ~180-line duplication between the two variants is gone.
  */
 
-import { useEffect } from "react";
 import { motion } from "framer-motion";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
+import { useEscapeKey } from "@/hooks/useEscapeKey";
 import { C } from "@/lib/colors";
 import { TaskDetailBody } from "./TaskDetailBody";
 import type { Task, Agent } from "@/lib/types";
@@ -39,16 +39,10 @@ export default function TaskDetailPanel({
   // Esc closes the modal variant. Portal menus (status/assignee dropdowns,
   // rendered with role=menu/listbox) handle Escape themselves — don't close
   // the panel out from under an open menu.
-  useEffect(() => {
-    if (variant === "panel") return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      if (document.querySelector('[role="menu"], [role="listbox"]')) return;
-      onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [variant, onClose]);
+  useEscapeKey(() => {
+    if (document.querySelector('[role="menu"], [role="listbox"]')) return;
+    onClose();
+  }, variant !== "panel");
 
   if (variant === "panel") {
     return (
