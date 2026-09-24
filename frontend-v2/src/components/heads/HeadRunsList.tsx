@@ -17,6 +17,7 @@ import { formatDuration } from "@/lib/taskDetail/format";
 import {
   failReasonKey,
   headStateKey,
+  isScratchBranchPushed,
   prNumberFromUrl,
   runDurationSeconds,
   runPairLabel,
@@ -44,7 +45,8 @@ export function HeadRunsList({ runs, pairs }: { runs: HeadRun[]; pairs: HeadPair
   const detail = (run: HeadRun): string | null => {
     if (run.state === "passed") {
       const n = prNumberFromUrl(run.pr_url);
-      return n != null ? `PR #${n}` : null;
+      if (n != null) return `PR #${n}`;
+      return isScratchBranchPushed(run) ? t("card.branchPushedScratch") : null;
     }
     if (run.state === "failed" || run.state === "stopped") {
       const f = failReasonKey(run.reason);

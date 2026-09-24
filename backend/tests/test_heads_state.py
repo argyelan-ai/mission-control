@@ -135,3 +135,65 @@ def test_head_written_pr_url_is_ignored(tmp_path, monkeypatch):
     loaded = files.load_run(run_id)
     assert loaded.pr_url is None
     assert derive_for_run(loaded, NOW)["state"] == "failed"
+
+
+# ── scratch repo with a local origin: a pushed branch instead of a PR ──
+
+
+def test_scratch_branch_pushed_with_passed_record_is_passed_without_pr():
+    st = {"phase": "exited", "exit_code": 0, "pr_url": None, "scratch_branch_pushed": True}
+    out = _d(st, run_record_passed=True, scratch_branch_pushed=True)
+    assert (out["state"], out["reason"]) == ("passed", "scratch_branch_pushed")
+
+
+def test_scratch_branch_pushed_still_needs_a_passed_run_record():
+    st = {"phase": "exited", "exit_code": 0, "pr_url": None}
+    out = _d(st, run_record_passed=False, scratch_branch_pushed=True)
+    assert (out["state"], out["reason"]) == ("failed", "run_record_missing")
+
+
+def test_real_repo_without_pr_stays_failed_no_pr():
+    """Default (every real repo): no scratch flag → a PR is still required."""
+    st = {"phase": "exited", "exit_code": 0, "pr_url": None, "scratch_branch_pushed": True}
+    out = _d(st, run_record_passed=True)
+    assert (out["state"], out["reason"]) == ("failed", "no_pr")
+
+
+def test_real_repo_with_pr_passes_without_a_reason():
+    st = {"phase": "exited", "exit_code": 0, "pr_url": "https://github.com/o/r/pull/1"}
+    assert _d(st, run_record_passed=True)["reason"] is None
+
+
+def _scratch_run(tmp_path, monkeypatch, *, listed: bool, flag):
+    import json
+
+    from app.config import settings
+    from app.services.heads import files
+
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(settings, "heads_root", tmp_path)
+    if listed:
+        (tmp_path / "scratch-repos").write_text("# scratch\nscratch/probe\n")
+    run_id = "22222222-2222-4222-8222-222222222222"
+    run = tmp_path / run_id
+    (run / ".wrapper").mkdir(parents=True)
+    (run / "spec.json").write_text(json.dumps({
+        "run_id": run_id, "repo_full_name": "scratch/probe", "created_at": "2026-09-23T10:00:00Z"}))
+    (run / ".wrapper" / "status.json").write_text(json.dumps(
+        {"phase": "exited", "exit_code": 0, "scratch_branch_pushed": flag}))
+    # a head can write into its run folder (outside .wrapper) — ignored
+    (run / "status.json").write_text(json.dumps({"scratch_branch_pushed": True}))
+    return files.load_run(run_id)
+
+
+def test_scratch_flag_counts_only_for_a_listed_scratch_repo(tmp_path, monkeypatch):
+    assert _scratch_run(tmp_path, monkeypatch, listed=True, flag=True).scratch_branch_pushed is True
+
+
+def test_scratch_flag_is_ignored_for_an_unlisted_repo(tmp_path, monkeypatch):
+    assert _scratch_run(tmp_path, monkeypatch, listed=False, flag=True).scratch_branch_pushed is False
+
+
+def test_scratch_flag_must_be_true_not_truthy(tmp_path, monkeypatch):
+    assert _scratch_run(tmp_path, monkeypatch, listed=True, flag="yes").scratch_branch_pushed is False
+    assert _scratch_run(tmp_path / "b", monkeypatch, listed=True, flag=None).scratch_branch_pushed is False

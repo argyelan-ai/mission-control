@@ -11,7 +11,8 @@
   POST /api/v1/heads/{run_id}/stop         operator  stop request
 
 Errors carry a ``code`` (pair_blocked, engine_not_ready, box_busy,
-head_active, repo_required, spool_unavailable, heads_disabled); the
+head_active, repo_required, spool_unavailable, heads_disabled,
+task_move_failed); the
 frontend renders them via i18n. Behind ``settings.heads_enabled``.
 """
 from __future__ import annotations
@@ -150,6 +151,28 @@ async def _task_and_repo(session: AsyncSession, task_id: uuid.UUID) -> tuple[Tas
     return task, repo
 
 
+async def _hold_and_move(session: AsyncSession, task: Task, run_id: str, reason: str) -> None:
+    """Hold the task and walk it to in_progress BEFORE the spool goes out.
+
+    move_task flushes every hop, so a refused transition surfaces here — and
+    then the run folder is removed: the host must never start a run whose
+    task change did not happen (live: HTTP 500 after the spool, head ran).
+    Any failure becomes 409 ``task_move_failed`` (an HTTPException, so
+    ``hold_on_failure`` still holds the card).
+    """
+    try:
+        task.run_control = "manual_hold"
+        moved = await move_task(session, task, "in_progress", reason=reason)
+        if not moved and str(task.status) != "in_progress":
+            raise RuntimeError(f"no valid path {task.status} → in_progress")
+        session.add(task)
+        await session.flush()
+    except Exception as exc:
+        await session.rollback()
+        launcher.discard_run(run_id)
+        raise _err(409, "task_move_failed") from exc
+
+
 class StartBody(BaseModel):
     task_id: uuid.UUID
     harness: str = Field(max_length=32)
@@ -219,9 +242,7 @@ async def _start(session: AsyncSession, body: StartBody, task: Task, repo: Repo,
         # inbox → in_progress AND the hold in one transaction: no operator PATCH
         # from inbox can lift the hold afterwards (routers/tasks.py clears
         # manual_hold only when the old status is inbox).
-        task.run_control = "manual_hold"
-        await move_task(session, task, "in_progress", reason="head_start")
-        session.add(task)
+        await _hold_and_move(session, task, spec["run_id"], reason="head_start")
         try:
             launcher.spool("start", spec["run_id"])
         except launcher.SpoolUnavailable as exc:
@@ -266,9 +287,7 @@ async def restart_head(
             )
         except OSError as exc:
             raise _err(503, "spool_unavailable") from exc
-        task.run_control = "manual_hold"
-        await move_task(session, task, "in_progress", reason="head_restart")
-        session.add(task)
+        await _hold_and_move(session, task, spec["run_id"], reason="head_restart")
         try:
             launcher.spool("restart", spec["run_id"], from_run_id=old.run_id)
         except launcher.SpoolUnavailable as exc:

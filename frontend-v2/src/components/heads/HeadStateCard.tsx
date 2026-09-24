@@ -14,6 +14,8 @@
  *
  *   needs you → question + answer field + [Answer & continue] [Restart with …]
  *   passed    → "PR #712 open — your review decides the merge" [Open PR ↗]
+ *               scratch repo with a local origin (no PR possible):
+ *               "Branch pushed · scratch repo (no PR)" + the branch
  *   failed / stopped → reason in one sentence + branch  [Restart with …]
  *
  * Content (question, step, log) is shown as the head wrote it; only labels
@@ -23,7 +25,7 @@
 import { useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ExternalLink, RotateCcw, ScrollText, Terminal, FileText, Send } from "lucide-react";
+import { ChevronDown, ExternalLink, GitBranch, RotateCcw, ScrollText, Terminal, FileText, Send } from "lucide-react";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import { C, STATUS_TEXT } from "@/lib/colors";
@@ -192,6 +194,19 @@ export function HeadStateCard({
         <ExternalLink size={12} aria-hidden />
       </a>
     );
+  } else if (mainAction === "branch_pushed") {
+    // A status badge, not a button: there is nothing to open on GitHub.
+    // Same shape as the PR chip, in the "passed" tone.
+    main = (
+      <span
+        data-testid="head-main-branch-pushed"
+        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-sm text-[11px] font-medium"
+        style={{ background: `${C.online}15`, color: STATUS_TEXT.online, border: `1px solid ${C.online}40` }}
+      >
+        <GitBranch size={10} aria-hidden />
+        {t("card.branchPushedScratch")}
+      </span>
+    );
   } else if (mainAction === "answer") {
     main = (
       <button
@@ -280,7 +295,17 @@ export function HeadStateCard({
         </>
       )}
 
-      {run.state === "passed" && (
+      {run.state === "passed" && mainAction === "branch_pushed" && (
+        <p className="text-[13px]" style={{ color: C.textPrimary }} data-testid="head-card-scratch-branch">
+          {t("card.scratchBranchResult")}
+          {run.branch && (
+            <span className="block text-[11px] font-mono mt-0.5 truncate" style={{ color: C.textMuted }}>
+              {t("card.branchKept", { branch: run.branch })}
+            </span>
+          )}
+        </p>
+      )}
+      {run.state === "passed" && mainAction !== "branch_pushed" && (
         <p className="text-[13px]" style={{ color: C.textPrimary }}>
           {prNumber != null ? t("card.prOpen", { number: prNumber }) : t("card.prOpenNoNumber")}
         </p>
