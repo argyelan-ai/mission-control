@@ -83,6 +83,12 @@ export function useSSE(url: string, options: SSEOptions = {}) {
     let generation = 0;
 
     function attachHandlers(es: EventSource) {
+      // A stream that opened is healthy again: start the next backoff from
+      // the base delay. Quiet streams only get comment pings (no event), so
+      // resetting on events alone let the delay creep up to the 30 s cap.
+      es.onopen = () => {
+        if (esRef.current === es) retryCountRef.current = 0;
+      };
       es.onmessage = (e: MessageEvent) => {
         lastMessageAtRef.current = Date.now();
         retryCountRef.current = 0;

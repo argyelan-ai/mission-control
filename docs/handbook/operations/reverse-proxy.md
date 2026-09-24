@@ -200,6 +200,7 @@ its default logger. **If you run your own Caddyfile** (for example
 			request>uri query {
 				replace token REDACTED
 				replace ticket REDACTED
+				replace access_token REDACTED
 			}
 		}
 	}

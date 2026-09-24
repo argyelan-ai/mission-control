@@ -263,6 +263,7 @@ _SYNTHETIC_LEGACY_ADMIN_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 @router.post("/stream-ticket")
 async def issue_stream_ticket(
     payload: StreamTicketRequest,
+    request: Request,
     current_user: User = Depends(require_user),
 ):
     """Mint a short-lived, single-use ticket for opening ONE stream.
@@ -275,6 +276,16 @@ async def issue_stream_ticket(
     first connection. See services/stream_tickets.py.
     """
     from app.services.stream_tickets import is_stream_path, issue_ticket
+
+    # Header only: the HttpOnly SSE cookie is sent along with any same-site
+    # request (a preview page on another localhost port included), and the
+    # legacy ?token= is exactly the leak this endpoint replaces. Neither may
+    # be turned into a ticket that opens a terminal or shell.
+    if not request.headers.get("authorization", "").lower().startswith("bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="stream tickets require an Authorization header",
+        )
 
     if not is_stream_path(payload.path):
         raise HTTPException(

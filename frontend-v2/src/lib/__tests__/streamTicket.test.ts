@@ -115,3 +115,84 @@ describe("no stream URL carries the login token", () => {
     expect(/[?&]token=/.test(old)).toBe(true);
   });
 });
+
+describe("openTicketedWebSocket reconnects with a fresh ticket", () => {
+  class MockWebSocket {
+    static instances: MockWebSocket[] = [];
+    url: string;
+    private listeners: Record<string, ((ev: { code?: number }) => void)[]> = {};
+    onclose: ((ev: { code?: number }) => void) | null = null;
+    constructor(url: string) {
+      this.url = url;
+      MockWebSocket.instances.push(this);
+    }
+    addEventListener(type: string, fn: (ev: { code?: number }) => void) {
+      (this.listeners[type] ??= []).push(fn);
+    }
+    emit(type: string, ev: { code?: number } = {}) {
+      (this.listeners[type] ?? []).forEach((fn) => fn(ev));
+      if (type === "close") this.onclose?.(ev);
+    }
+    close() {
+      this.emit("close", { code: 1000 });
+    }
+  }
+
+  let n = 0;
+  beforeEach(() => {
+    MockWebSocket.instances = [];
+    n = 0;
+    vi.stubGlobal("WebSocket", MockWebSocket);
+    fetchMock.mockImplementation(async () => {
+      n += 1;
+      return new Response(JSON.stringify({ ticket: `tk${n}`, expires_in: 60 }), { status: 200 });
+    });
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const ticketOf = (ws: MockWebSocket) => new URL(ws.url).searchParams.get("ticket");
+
+  it("after an unexpected close (backend restart) it opens again with a new ticket", async () => {
+    const { openTicketedWebSocket } = await import("@/lib/streamTicket");
+    const setup = vi.fn();
+    const cleanup = openTicketedWebSocket("/api/v1/vault/stream", setup);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(MockWebSocket.instances).toHaveLength(1);
+
+    MockWebSocket.instances[0].emit("close", { code: 1012 });
+    await vi.advanceTimersByTimeAsync(1_100);
+    expect(MockWebSocket.instances).toHaveLength(2);
+    expect(ticketOf(MockWebSocket.instances[1])).not.toBe(ticketOf(MockWebSocket.instances[0]));
+    expect(setup).toHaveBeenCalledTimes(2);
+
+    cleanup(); // intentional close: no further reconnect
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(MockWebSocket.instances).toHaveLength(2);
+  });
+
+  it("retries when the ticket request itself fails", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    fetchMock.mockImplementationOnce(async () => new Response("down", { status: 503 }));
+    const { openTicketedWebSocket } = await import("@/lib/streamTicket");
+    const cleanup = openTicketedWebSocket("/api/v1/vault/voice-display", () => {});
+    await vi.advanceTimersByTimeAsync(0);
+    expect(MockWebSocket.instances).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1_100);
+    expect(MockWebSocket.instances).toHaveLength(1);
+    cleanup();
+    warn.mockRestore();
+  });
+
+  it("a normal close (code 1000) from the server does not reconnect", async () => {
+    const { openTicketedWebSocket } = await import("@/lib/streamTicket");
+    const cleanup = openTicketedWebSocket("/api/v1/vault/stream", () => {});
+    await vi.advanceTimersByTimeAsync(0);
+    MockWebSocket.instances[0].emit("close", { code: 1000 });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(MockWebSocket.instances).toHaveLength(1);
+    cleanup();
+  });
+});

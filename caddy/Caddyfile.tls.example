@@ -24,6 +24,7 @@
 			request>uri query {
 				replace token REDACTED
 				replace ticket REDACTED
+				replace access_token REDACTED
 			}
 		}
 	}

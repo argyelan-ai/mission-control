@@ -68,6 +68,27 @@ async def test_issue_requires_authentication(client):
 
 
 @pytest.mark.asyncio
+async def test_issue_refuses_cookie_or_query_credentials(auth_client, monkeypatch):
+    """Minting needs the Authorization header. The HttpOnly SSE cookie rides
+    along on any same-site request (e.g. a preview page on another localhost
+    port) — it must not be convertible into a terminal/shell ticket."""
+    token = auth_client.headers.pop("Authorization").split(" ", 1)[1]
+    auth_client.cookies.set("mc_sse_token", token)
+    r = await auth_client.post("/api/v1/auth/stream-ticket", json={"path": STREAM})
+    assert r.status_code == 401
+    monkeypatch.setattr(app.config.settings, "allow_query_token_auth", True)
+    r = await auth_client.post(
+        f"/api/v1/auth/stream-ticket?token={token}", json={"path": STREAM}
+    )
+    assert r.status_code == 401
+    auth_client.cookies.clear()
+    auth_client.headers["Authorization"] = f"Bearer {token}"
+    assert (await auth_client.post(
+        "/api/v1/auth/stream-ticket", json={"path": STREAM}
+    )).status_code == 200
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "path",
     [
@@ -263,6 +284,11 @@ def ws_probe(monkeypatch):
         return fakeredis.aioredis.FakeRedis(server=server, decode_responses=True)
 
     monkeypatch.setattr(stream_tickets, "get_redis", _redis)
+    import app.auth as auth_mod
+
+    monkeypatch.setattr(
+        auth_mod, "_ws_session", lambda: AsyncSession(test_engine, expire_on_commit=False)
+    )
 
     mini = FastAPI()
 
@@ -275,13 +301,30 @@ def ws_probe(monkeypatch):
         await websocket.send_text("ok")
         await websocket.close()
 
-    def issue(path="/api/v1/probe/ws"):
+    def issue(path="/api/v1/probe/ws", user_id=USER_ID, token_version=0):
         return asyncio.run(
-            stream_tickets.issue_ticket(user_id=str(USER_ID), token_version=0, path=path)
+            stream_tickets.issue_ticket(
+                user_id=str(user_id), token_version=token_version, path=path
+            )
         )
 
     with TestClient(mini) as c:
+        c.portal.call(_set_user, True, 0)  # the operator the tickets are for
         yield c, issue
+
+
+async def _set_user(is_active: bool, token_version: int, user_id=USER_ID):
+    """Create or update the probe's operator (runs on the TestClient loop)."""
+    from app.models.user import User
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        user = await s.get(User, user_id)
+        if user is None:
+            user = User(id=user_id, email="ws@mc.local", name="WS", role="admin")
+        user.is_active = is_active
+        user.token_version = token_version
+        s.add(user)
+        await s.commit()
 
 
 def _opens(client, url) -> bool:
@@ -307,6 +350,39 @@ def test_ws_opens_with_ticket_once(ws_probe):
     ticket = issue()
     assert _opens(client, f"/api/v1/probe/ws?ticket={ticket}")
     assert not _opens(client, f"/api/v1/probe/ws?ticket={ticket}")
+
+
+def test_ws_rejects_ticket_after_logout(ws_probe):
+    """Logout bumps token_version: an unused ticket issued before must no
+    longer open a terminal/shell (same rule as the SSE path)."""
+    client, issue = ws_probe
+    ticket = issue()
+    client.portal.call(_set_user, True, 1)  # logout
+    assert not _opens(client, f"/api/v1/probe/ws?ticket={ticket}")
+
+
+def test_ws_rejects_ticket_of_deactivated_user(ws_probe):
+    client, issue = ws_probe
+    ticket = issue()
+    client.portal.call(_set_user, False, 0)
+    assert not _opens(client, f"/api/v1/probe/ws?ticket={ticket}")
+
+
+def test_ws_rejects_ticket_of_unknown_user(ws_probe):
+    client, issue = ws_probe
+    ticket = issue(user_id=uuid.UUID("00000000-0000-0000-0000-0000000000aa"), token_version=7)
+    assert not _opens(client, f"/api/v1/probe/ws?ticket={ticket}")
+
+
+def test_ws_query_jwt_fallback_checks_logout_and_active(ws_probe, monkeypatch):
+    client, _ = ws_probe
+    monkeypatch.setattr(app.config.settings, "allow_query_token_auth", True)
+    token = _jwt()
+    assert _opens(client, f"/api/v1/probe/ws?token={token}")
+    client.portal.call(_set_user, True, 1)  # logout
+    assert not _opens(client, f"/api/v1/probe/ws?token={token}")
+    client.portal.call(_set_user, False, 0)  # deactivated
+    assert not _opens(client, f"/api/v1/probe/ws?token={token}")
 
 
 def test_ws_rejects_ticket_for_other_path(ws_probe):

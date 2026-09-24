@@ -44,6 +44,11 @@ export async function fetchStreamTicket(path: string): Promise<string> {
  * Return `url` with a fresh `ticket` query parameter for its path. Works for
  * relative ("/api/v1/…"), http(s) and ws(s) URLs; keeps any existing query
  * parameters and never adds a `token` parameter.
+ *
+ * The ticket is bound to the path the BROWSER sees, and the backend compares
+ * it with the path it receives. So NEXT_PUBLIC_API_URL must be origin-only
+ * (no path prefix a proxy strips), and stream paths must not need
+ * percent-encoding. Otherwise every stream fails closed with 401.
  */
 export async function withStreamTicket(url: string): Promise<string> {
   const base =
@@ -54,11 +59,18 @@ export async function withStreamTicket(url: string): Promise<string> {
   return `${url}${sep}ticket=${encodeURIComponent(ticket)}`;
 }
 
+const WS_BACKOFF_BASE_MS = 1_000;
+const WS_BACKOFF_MAX_MS = 30_000;
+
 /**
  * Open a same-origin WebSocket to `path` (e.g. "/api/v1/vault/stream") with
- * a fresh stream ticket. `setup` wires the handlers once the socket exists.
- * Returns a cleanup that cancels a pending ticket fetch or closes the socket
- * — use it as a useEffect cleanup.
+ * a fresh stream ticket. `setup` wires the handlers on every new socket.
+ *
+ * Reconnects by itself (1 s doubling up to 30 s, reset once a socket opens)
+ * when the ticket request fails (backend restarting, Redis down) or the
+ * socket closes unexpectedly (any code but 1000) — each attempt with a NEW
+ * ticket, since tickets are single-use. Returns a cleanup that stops all
+ * retries and closes the socket; use it as a useEffect cleanup.
  */
 export function openTicketedWebSocket(
   path: string,
@@ -66,19 +78,48 @@ export function openTicketedWebSocket(
 ): () => void {
   let cancelled = false;
   let ws: WebSocket | null = null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let attempt = 0;
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  withStreamTicket(`${proto}//${window.location.host}${path}`).then(
-    (url) => {
-      if (cancelled) return;
-      ws = new WebSocket(url);
-      setup(ws);
-    },
-    (err) => {
-      if (!cancelled) console.warn(`[stream ticket] ${path}:`, err);
-    },
-  );
+
+  const retry = () => {
+    if (cancelled) return;
+    const delay = Math.min(WS_BACKOFF_BASE_MS * 2 ** attempt, WS_BACKOFF_MAX_MS);
+    attempt += 1;
+    timer = setTimeout(connect, delay);
+  };
+
+  function connect() {
+    timer = null;
+    if (cancelled) return;
+    withStreamTicket(`${proto}//${window.location.host}${path}`).then(
+      (url) => {
+        if (cancelled) return;
+        const sock = new WebSocket(url);
+        ws = sock;
+        // addEventListener, not on*: `setup` owns the on* handlers.
+        sock.addEventListener("open", () => {
+          attempt = 0;
+        });
+        sock.addEventListener("close", (ev: CloseEvent) => {
+          if (cancelled || ws !== sock) return;
+          ws = null;
+          if (ev.code !== 1000) retry();
+        });
+        setup(sock);
+      },
+      (err) => {
+        if (cancelled) return;
+        console.warn(`[stream ticket] ${path}:`, err);
+        retry();
+      },
+    );
+  }
+
+  connect();
   return () => {
     cancelled = true;
+    if (timer) clearTimeout(timer);
     ws?.close();
     ws = null;
   };

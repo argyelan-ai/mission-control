@@ -35,8 +35,6 @@ export function VoiceHighlightBridge({ onHighlight }: VoiceHighlightBridgeProps)
     // SSR guard — window is not available during Next.js static rendering.
     if (typeof window === "undefined") return;
 
-    let closed = false;
-
     const cleanup = openTicketedWebSocket("/api/v1/vault/voice-highlight", (ws) => {
       ws.onmessage = (ev) => {
         try {
@@ -55,24 +53,11 @@ export function VoiceHighlightBridge({ onHighlight }: VoiceHighlightBridgeProps)
         console.warn("[VoiceHighlightBridge] WebSocket error:", err);
       };
 
-      ws.onclose = () => {
-        if (!closed) {
-          // Soft reconnect after 3 s on unexpected close (tab resume, transient failure).
-          setTimeout(() => {
-            if (!closed) {
-              // Re-trigger by clearing and re-setting — handled by the cleanup + re-mount
-              // pattern. The simplest approach: the effect's return fn sets `closed=true`
-              // only on intentional cleanup (unmount), not on remote close.
-            }
-          }, 3_000);
-        }
-      };
+      // Reconnect after an unexpected close is handled by
+      // openTicketedWebSocket (fresh ticket, backoff).
     });
 
-    return () => {
-      closed = true;
-      cleanup();
-    };
+    return cleanup;
   }, []); // stable URL derived inside effect; token changes require remount
 
   return null;

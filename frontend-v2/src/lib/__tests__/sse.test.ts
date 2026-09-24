@@ -39,6 +39,7 @@ class MockEventSource {
   url: string;
   readyState = 0;
   onerror: ((e: Event) => void) | null = null;
+  onopen: ((e: Event) => void) | null = null;
   constructor(url: string) {
     this.url = url;
     MockEventSource.instances.push(this);
@@ -174,6 +175,33 @@ describe("Stream-URLs der Chat-SSE", () => {
       expect(again.url.startsWith(`${CASES[0].path}?ticket=`)).toBe(true);
       expect(newTicket).not.toBe(firstTicket);
       expect(fetchMock).toHaveBeenCalledTimes(CASES.length + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("setzt den Backoff zurück, sobald ein Stream wieder offen ist", async () => {
+    // Quiet streams (approvals, schedule, …) only get comment pings, which
+    // fire no event. Without a reset on open, every drop would double the
+    // delay until it sticks at 30 s.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      await mountStreams(undefined);
+      const { waitFor } = await import("@testing-library/react");
+      const count = () =>
+        MockEventSource.instances.filter((es) => es.url.startsWith(`${CASES[0].path}?`)).length;
+      const latest = () =>
+        MockEventSource.instances.filter((es) => es.url.startsWith(`${CASES[0].path}?`)).at(-1)!;
+
+      for (let round = 1; round <= 3; round++) {
+        const es = latest();
+        es.readyState = MockEventSource.CLOSED;
+        es.onerror?.(new Event("error"));
+        await vi.advanceTimersByTimeAsync(1_100); // base delay only
+        await waitFor(() => expect(count()).toBe(1 + round));
+        latest().readyState = 1;
+        latest().onopen?.(new Event("open"));
+      }
     } finally {
       vi.useRealTimers();
     }

@@ -204,11 +204,51 @@ async def authenticate_websocket(
     full operator auth moments ago). Fallback, only with
     ALLOW_QUERY_TOKEN_AUTH: the login JWT as ``?token=``.
     """
-    if ticket:
-        from app.services.stream_tickets import redeem_ticket
+    return await websocket_user(websocket, token=token, ticket=ticket) is not None
 
-        return await redeem_ticket(ticket, websocket.url.path) is not None
-    return _query_jwt_subject(token) is not None
+
+def _ws_session() -> AsyncSession:
+    """Own short-lived session for WebSocket auth (a WS handler has no
+    request-scoped session; tests swap this for the test engine)."""
+    from app.database import async_session_maker
+
+    return async_session_maker()
+
+
+async def websocket_user(
+    websocket,
+    *,
+    token: str | None = None,
+    ticket: str | None = None,
+):
+    """Resolve the operator behind a browser WebSocket, or ``None``.
+
+    Same checks as the SSE/REST path: the user must still exist, be active
+    and must not have logged out since the credential was issued
+    (token_version). The DB connection is released before the (possibly
+    hour-long) socket runs."""
+    from app.models.user import User
+
+    if not ticket and not (token and settings.allow_query_token_auth):
+        return None
+    async with _ws_session() as session:
+        if ticket:
+            try:
+                return await _user_from_stream_ticket(websocket.url.path, ticket, session)
+            except HTTPException:
+                return None
+        # Legacy ?token= fallback (ALLOW_QUERY_TOKEN_AUTH only).
+        sub = _query_jwt_subject(token)
+        if sub is None:
+            return None
+        try:
+            payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[JWT_ALGORITHM])
+            user = await session.get(User, uuid.UUID(sub))
+        except (JWTError, ValueError):
+            return None
+        if not user or not user.is_active or payload.get("tv", 0) != user.token_version:
+            return None
+        return user
 
 
 async def _authenticate_user(
