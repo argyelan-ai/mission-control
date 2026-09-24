@@ -6,6 +6,7 @@ Reads the shared cache for plugin lists.
 
 import asyncio
 import logging
+import re
 import uuid as uuid_mod
 from typing import Optional
 
@@ -28,6 +29,27 @@ router = APIRouter(prefix="/api/v1", tags=["cli-plugins"])
 
 class PluginInstallRequest(BaseModel):
     plugin_key: str
+
+
+# A plugin key is ``name@marketplace`` (e.g. frontend-design@claude-plugins-official).
+# The key is built into the bridge URL, so anything outside this charset is
+# refused before the bridge is called: a decoded "#" or "?" would cut the URL
+# (``/plugins/shell#/update`` reaches the bridge as ``POST /plugins/shell``,
+# the admin-only shell start), "/" or ".." would reach other bridge routes.
+_PLUGIN_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(@[A-Za-z0-9][A-Za-z0-9._-]*)?$")
+# Bridge route names under /plugins/ that a key must never shadow.
+_RESERVED_PLUGIN_KEYS = {"shell", "install"}
+
+
+def _checked_plugin_key(plugin_key: str) -> str:
+    if (
+        len(plugin_key) > 200
+        or not _PLUGIN_KEY_RE.fullmatch(plugin_key)
+        or ".." in plugin_key
+        or plugin_key.lower() in _RESERVED_PLUGIN_KEYS
+    ):
+        raise HTTPException(400, "Invalid plugin key")
+    return plugin_key
 
 
 @router.get("/plugins")
@@ -63,6 +85,7 @@ async def install_plugin(
     current_user=Depends(require_user),
 ):
     """Install a plugin in the shared cache via the CLI bridge."""
+    _checked_plugin_key(body.plugin_key)
     from app.routers.cli_terminal import _bridge_post
     result = _bridge_post("/plugins/install", {"plugin_key": body.plugin_key}, timeout=130)
     if not result.get("ok"):
@@ -76,6 +99,7 @@ async def update_plugin(
     current_user=Depends(require_user),
 ):
     """Update a plugin in the shared cache via the CLI bridge."""
+    _checked_plugin_key(plugin_key)
     from app.routers.cli_terminal import _bridge_post
     result = _bridge_post(f"/plugins/{plugin_key}/update", {}, timeout=130)
     if not result.get("ok"):
@@ -111,6 +135,7 @@ async def remove_plugin(
     current_user=Depends(require_user),
 ):
     """Uninstall a plugin and remove it from all agents' cli_plugins."""
+    _checked_plugin_key(plugin_key)
     from app.routers.cli_terminal import _bridge_delete
     result = _bridge_delete(f"/plugins/{plugin_key}")
     if not result.get("ok"):

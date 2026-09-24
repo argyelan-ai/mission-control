@@ -67,7 +67,14 @@ follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
   `remove_plugin("shell")`); the shell routes are now registered first. No
   agent or service token calls any of these endpoints, so no exception was
   needed. The UI shows a short hint (EN/DE) instead of the terminal, the
-  plugin shell and the chat composer for non-admins.
+  plugin shell and the chat composer for non-admins. Plugin keys in
+  `POST /plugins/install`, `POST /plugins/{key}/update` and
+  `DELETE /plugins/{key}` must now look like `name@marketplace` (400
+  otherwise): a key like `shell%23` was cut at the `#` on its way to the
+  bridge and started/stopped the plugin shell on the plain login. Scope: this
+  gates terminals, the plugin shell and keystrokes only. Plugin
+  install/update/remove, agent provisioning and container/host-agent
+  start/stop/restart still run on the plain login (follow-up).
 - **Your agent fleet leaves version control.**
   `docker/docker-compose.agents.yml` describes your machine — agent names,
   project references, mount paths — and Mission Control rewrites it while it

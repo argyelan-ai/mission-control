@@ -188,3 +188,73 @@ async def test_read_only_session_views_stay_open_to_viewers(http):
     the plain login (the gate is only on interactive endpoints)."""
     r = await http.get(f"/api/v1/agents/{AGENT}/chat/history", headers=_bearer("viewer"))
     assert r.status_code not in (401, 403), r.text
+
+
+# ── Plugin update/remove must not smuggle a shell start/stop ──────────────
+#
+# ``/plugins/{plugin_key:path}`` decodes %23 to "#". Built into the bridge URL
+# as ``/plugins/shell#/update`` (or ``/plugins/shell#``), urllib drops the
+# fragment and the bridge receives ``POST /plugins/shell`` /
+# ``DELETE /plugins/shell`` — the admin-only shell start/stop, reached on the
+# plain login. Plugin keys are ``name@marketplace``; anything else is refused
+# before the bridge is called.
+
+SMUGGLED = [
+    ("POST", "/api/v1/plugins/shell%23/update"),
+    ("DELETE", "/api/v1/plugins/shell%23"),
+    ("POST", "/api/v1/plugins/shell%3Fx/update"),
+    ("DELETE", "/api/v1/plugins/shell%3Fx"),
+    ("POST", "/api/v1/plugins/shell/update"),
+    ("DELETE", "/api/v1/plugins/..%2Fshell"),
+    ("POST", "/api/v1/plugins/a%20b@x/update"),
+]
+
+
+@pytest.fixture
+def bridge_calls(monkeypatch):
+    """Record the bridge paths without talking to a bridge."""
+    import app.routers.cli_terminal as cli_terminal
+
+    calls: list[tuple[str, str]] = []
+
+    def _post(path, body, timeout=5):  # noqa: ARG001
+        calls.append(("POST", path))
+        return {"ok": True}
+
+    def _delete(path):
+        calls.append(("DELETE", path))
+        return {"ok": True}
+
+    monkeypatch.setattr(cli_terminal, "_bridge_post", _post)
+    monkeypatch.setattr(cli_terminal, "_bridge_delete", _delete)
+    return calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method,path", SMUGGLED)
+@pytest.mark.parametrize("role", ["viewer", "admin"])
+async def test_plugin_key_cannot_reach_other_bridge_paths(http, bridge_calls, method, path, role):
+    r = await http.request(method, path, headers=_bearer(role))
+    assert r.status_code == 400, f"{role} {method} {path} → {r.status_code} {r.text}"
+    assert bridge_calls == [], f"bridge was called: {bridge_calls}"
+
+
+@pytest.mark.asyncio
+async def test_plugin_install_refuses_bad_key(http, bridge_calls):
+    r = await http.post(
+        "/api/v1/plugins/install", json={"plugin_key": "shell#"}, headers=_bearer("admin")
+    )
+    assert r.status_code == 400, r.text
+    assert bridge_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key", ["frontend-design@claude-plugins-official", "superpowers@superpowers-dev", "my_plugin.v2"]
+)
+async def test_real_plugin_keys_still_reach_the_bridge(http, bridge_calls, key):
+    r = await http.post(f"/api/v1/plugins/{key}/update", headers=_bearer("admin"))
+    assert r.status_code == 200, r.text
+    r = await http.delete(f"/api/v1/plugins/{key}", headers=_bearer("admin"))
+    assert r.status_code == 200, r.text
+    assert bridge_calls == [("POST", f"/plugins/{key}/update"), ("DELETE", f"/plugins/{key}")]
