@@ -129,6 +129,7 @@ import type {
   HeadBusy,
   HeadStartBody,
 } from "./heads";
+import type { NightConfig, NightConfigUpdate, NightEntry, NightTonight } from "./nightShift";
 
 export const BASE_URL = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
 
@@ -2193,6 +2194,20 @@ export const api = {
     stop: (runId: string): Promise<{ run_id: string; state: string }> =>
       request(`/api/v1/heads/${encodeURIComponent(runId)}/stop`, { method: "POST" }),
     occupancy: (): Promise<{ boxes: Record<string, HeadBusy> }> => request("/api/v1/heads/occupancy"),
+  },
+  // ── Night shift (ROADMAP E2) — marked tasks start as heads tonight ────────
+  // Behind the same switch as heads (404 `heads_disabled` while off).
+  nightShift: {
+    config: (): Promise<NightConfig> => request("/api/v1/night-shift/config"),
+    saveConfig: (body: NightConfigUpdate): Promise<NightConfig> =>
+      request("/api/v1/night-shift/config", { method: "PUT", body: JSON.stringify(body) }),
+    tonight: (): Promise<NightTonight> => request("/api/v1/night-shift/tonight"),
+    getMark: (taskId: string): Promise<{ mark: NightEntry | null }> =>
+      request(`/api/v1/night-shift/tasks/${encodeURIComponent(taskId)}`),
+    mark: (taskId: string, body: { harness: string; runtime_slug: string }): Promise<{ mark: NightEntry }> =>
+      request(`/api/v1/night-shift/tasks/${encodeURIComponent(taskId)}`, { method: "PUT", body: JSON.stringify(body) }),
+    unmark: (taskId: string): Promise<{ mark: null }> =>
+      request(`/api/v1/night-shift/tasks/${encodeURIComponent(taskId)}`, { method: "DELETE" }),
   },
 
   spark: {

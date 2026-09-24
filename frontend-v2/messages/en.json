@@ -1406,7 +1406,8 @@
       "shortcuts": "Shortcuts",
       "about": "About",
       "telegram": "Telegram",
-      "aiProviders": "AI providers"
+      "aiProviders": "AI providers",
+      "nightShift": "Night shift"
     },
     "security": {
       "title": "Security",
@@ -3355,5 +3356,90 @@
     "keepTask": "Keep task, close",
     "retryStart": "Start head again",
     "keptHeld": "The task stays on hold in Inbox — the fleet will not pick it up."
+  },
+  "nightShift": {
+    "runTonight": "Run tonight",
+    "hint": "Starts as a head in tonight's window ({start}–{end}), one after another, local runtime first.",
+    "hintShort": "Starts as a head in tonight's window, one after another, local runtime first.",
+    "queued": "Queued for tonight",
+    "unqueued": "Removed from tonight",
+    "noPair": "No harness × runtime pair can run tonight.",
+    "startedLine": "Started tonight — the head card above shows how it goes.",
+    "queuedLine": "Queued · {pair}",
+    "queueForTonight": "Queue for tonight",
+    "createHint": "The task waits in the inbox and starts in tonight's window.",
+    "offWarning": "The night shift is off — marked tasks will not start.",
+    "openSettings": "Settings",
+    "tonightTitle": "Tonight",
+    "windowLine": "{start}–{end} · {timezone}",
+    "activeNow": "running now",
+    "empty": "Nothing is marked for tonight.",
+    "remove": "Remove from tonight",
+    "removeAria": "Remove “{title}” from tonight",
+    "lastNight": "Last night ({night}):",
+    "reportNotDelivered": "report not sent — no report channel",
+    "state": {
+      "queued": "Queued",
+      "waiting": "Waiting",
+      "skipped": "Skipped tonight",
+      "started": "Started"
+    },
+    "reason": {
+      "lane_busy": "another head uses the box",
+      "cloud_share": "cloud share for tonight used up",
+      "engine_not_ready": "the model is not running",
+      "box_busy": "the box is busy",
+      "pair_blocked": "this pair cannot run",
+      "pair_gone": "the runtime is gone",
+      "repo_required": "the task has no repo",
+      "head_active": "a head already works on it",
+      "task_not_found": "the task is gone",
+      "spool_unavailable": "the head starter is not reachable",
+      "not_reached": "the window ended before its turn",
+      "run_missing": "the run folder is missing",
+      "other": "not possible right now"
+    },
+    "category": {
+      "passed": "passed",
+      "failed": "failed",
+      "needs_you": "needs you",
+      "blocked": "blocked",
+      "running": "still running"
+    },
+    "errors": {
+      "heads_disabled": "Heads are switched off.",
+      "task_not_found": "The task no longer exists.",
+      "task_finished": "The task is already finished.",
+      "repo_required": "A night run needs a repo on the task.",
+      "night_started": "Already started tonight — stop the head on its card instead.",
+      "head_active": "A head is already working on this task.",
+      "pair_blocked": "This harness × runtime pair cannot run.",
+      "invalid_config": "Some settings are not valid.",
+      "unknown": "That did not work. Try again."
+    },
+    "settings": {
+      "title": "Night shift",
+      "description": "Tasks marked “Run tonight” start as heads inside this window, one after another and one per GPU box. In the morning you get one report (passed, failed, needs you, blocked) on the report channel.",
+      "enabled": "Night shift on",
+      "enabledHint": "Heads start without you watching. They open PRs, never merge; a head that is stuck is reported, not restarted.",
+      "start": "Window start",
+      "end": "Window end",
+      "timezone": "Time zone",
+      "useDeviceZone": "Use this device's zone ({zone})",
+      "cloudShare": "Cloud share (%)",
+      "cloudShareHint": "Only for tasks you mark with a cloud runtime: at most this share of tonight's tasks may run in the cloud. 100 = no limit.",
+      "save": "Save",
+      "saved": "Night shift saved",
+      "headsOff": "Heads are switched off on this installation (HEADS_ENABLED) — the night shift needs them.",
+      "nextWindow": "Next window: {start} – {end}",
+      "openNow": "The window is open now, until {end}.",
+      "invalid": {
+        "start": "Use HH:MM, e.g. 22:00.",
+        "end": "Use HH:MM, and not the same time as the start.",
+        "timezone": "Unknown time zone.",
+        "cloud_share": "A whole number from 0 to 100."
+      }
+    },
+    "markFailed": "Task created, but not queued for tonight: {message}"
   }
 }

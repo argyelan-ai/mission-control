@@ -52,12 +52,16 @@ import { deriveStateCard } from "@/lib/taskDetail/stateCard";
 import { HeadRunsList } from "@/components/heads/HeadRunsList";
 import { useHeadPairsForLabels } from "@/components/heads/HeadStateCard";
 import { useHeadsEnabled } from "@/components/heads/useHeadsEnabled";
-import { HEAD_POLL_MS, headRunsActive, runPairLabel, sortRunsNewestFirst } from "@/lib/heads";
+import { NightShiftToggle } from "@/components/night/NightShiftToggle";
+import { HEAD_POLL_MS, headRunsActive, isHeadActive, runPairLabel, sortRunsNewestFirst } from "@/lib/heads";
 import { formatAbsolute, formatAge } from "@/lib/taskDetail/format";
 import { parseInvalidTransition } from "@/lib/taskDetail/errors";
 import { STATUS_LABEL_KEY, statusLabelKey } from "@/lib/taskDetail/statusLabels";
 import { defaultTabFor, resolveTab, type TaskTabKey } from "@/lib/taskDetail/tabs";
 import type { Agent, Task, TaskChecklistItem, TaskEvent, TaskGitInfo, TaskStatus } from "@/lib/types";
+
+/** A night run makes no sense on a closed card. */
+const FINISHED_STATUSES: ReadonlySet<string> = new Set(["done", "aborted"]);
 
 // ── Status vocabulary ────────────────────────────────────────────────────────
 
@@ -929,6 +933,11 @@ export function TaskDetailBody({
               <StatusMenu status={task.status} pending={updateMutation.isPending} onChange={requestStatus} />
             }
           />
+          {/* Night shift: "Run tonight" — only for cards a head can take (repo,
+              not finished) and while no head is working on it right now. */}
+          {headsEnabled === true && task.repo_id && !FINISHED_STATUSES.has(task.status) && !isHeadActive(latestHeadRun) && (
+            <NightShiftToggle taskId={task.id} />
+          )}
         </div>
 
         {showActions && (
