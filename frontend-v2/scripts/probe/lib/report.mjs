@@ -4,10 +4,11 @@ import { join } from "node:path";
 import { rankFindings } from "./findings.mjs";
 
 export const DEFAULT_WIDTHS = [1440, 390];
+export const THEMES = ["dark", "light", "system"];
 
 /** Parse CLI args: --base URL --out DIR --route /x (repeatable) --width 390 (repeatable or comma list). */
 export function parseArgs(argv, now = new Date()) {
-  const opts = { base: "http://localhost", out: null, routes: [], widths: [], maxPerPage: 0, headed: false, allRepeats: false, nestedMax: 20, loadTimeoutMs: 20000 };
+  const opts = { base: "http://localhost", out: null, routes: [], widths: [], maxPerPage: 0, headed: false, allRepeats: false, nestedMax: 20, loadTimeoutMs: 20000, theme: null, contrast: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => {
@@ -24,6 +25,8 @@ export function parseArgs(argv, now = new Date()) {
     else if (a === "--all-repeats") opts.allRepeats = true;
     else if (a === "--nested-max") opts.nestedMax = Number(next());
     else if (a === "--load-timeout") opts.loadTimeoutMs = Number(next());
+    else if (a === "--theme") opts.theme = next();
+    else if (a === "--contrast") opts.contrast = true;
     else if (a === "--help" || a === "-h") opts.help = true;
     else throw new Error(`unknown argument: ${a}`);
   }
@@ -31,6 +34,7 @@ export function parseArgs(argv, now = new Date()) {
   if (opts.widths.some((w) => !Number.isFinite(w) || w < 200 || w > 4000)) throw new Error("--width must be between 200 and 4000");
   if (!Number.isFinite(opts.nestedMax) || opts.nestedMax < 0) throw new Error("--nested-max must be 0 or more");
   if (!Number.isFinite(opts.loadTimeoutMs) || opts.loadTimeoutMs < 0) throw new Error("--load-timeout must be 0 or more (ms)");
+  if (opts.theme !== null && !THEMES.includes(opts.theme)) throw new Error(`--theme must be one of ${THEMES.join(", ")}`);
   if (!opts.out) {
     const stamp = now.toISOString().replace(/[:.]/g, "-").slice(0, 19);
     opts.out = join(tmpdir(), "mc-ui-probe", stamp);
@@ -92,6 +96,11 @@ export function renderMarkdown(result) {
   L.push(`- Base: ${result.base}`);
   L.push(`- Started: ${result.startedAt} · finished: ${result.finishedAt}`);
   L.push(`- Widths: ${result.widths.join(", ")}`);
+  if (result.theme) L.push(`- Theme: ${result.theme} (forced via local storage before the first paint)`);
+  if (result.contrast) {
+    const sum = (k) => result.pages.reduce((a, p) => a + (p.counts[k] || 0), 0);
+    L.push(`- Contrast (WCAG AA text): ${sum("contrastChecked")} text element(s) checked, ${sum("contrastUncertain")} skipped (background image/gradient)`);
+  }
   L.push(`- **Write lock:** ${result.writes.blocked} write request(s) blocked, **${result.writes.passed} passed**, ${result.writes.websocketsRefused} WebSocket(s) refused`);
   if (result.skippedRoutes.length) {
     L.push(`- Skipped routes: ${result.skippedRoutes.map((s) => `\`${s.pattern}\` (${s.reason})`).join("; ")}`);

@@ -17,7 +17,8 @@ import { createLockedContext, lockSelfTest, newWriteCounter } from "./lib/contex
 import { EXTRA_VIEWS, discoverRoutes, filterRoutes, resolveRoutes } from "./lib/routes.mjs";
 import { LOADING_TEXT_RE, dedupeFindings, evaluateState } from "./lib/findings.mjs";
 import { parseArgs, renderMarkdown, sampleRepeats, slug } from "./lib/report.mjs";
-import { collectCandidates, markSeen, measureState, pageBusy, readSelect } from "./lib/browser.mjs";
+import { collectCandidates, markSeen, measureContrast, measureState, pageBusy, readSelect } from "./lib/browser.mjs";
+import { contrastFindings } from "./lib/contrast.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const APP_DIR = resolve(HERE, "../../src/app");
@@ -27,8 +28,11 @@ const NESTED_SEEN = "data-probe-seen2"; // second-level baseline, see markSeen()
 
 const HELP = `Usage: npm run probe -- [--base URL] [--out DIR] [--route /path]... [--width N]... [--max-per-page N]
                         [--nested-max N] [--load-timeout MS] [--all-repeats] [--headed]
+                        [--theme dark|light|system] [--contrast]
   Token: MC_PROBE_TOKEN (required, never printed). Defaults: --base http://localhost, widths 1440 and 390,
   --out <tmpdir>/mc-ui-probe/<timestamp>, --nested-max 20, --load-timeout 20000.
+  --theme stores the theme choice before the first paint (and emulates the OS scheme); --contrast adds the
+  WCAG AA text-contrast check to every state.
   --route takes an app pattern (/agents/[id], /tasks?task=[id]) or a prefix (/agents/* also takes /agents/[id]).`;
 
 let opts;
@@ -69,9 +73,12 @@ for (const s of skipped) console.log(`skip ${s.pattern}: ${s.reason}`);
 
 // ---- write lock -----------------------------------------------------------
 const writes = newWriteCounter();
-const newContext = (browser, width) => createLockedContext(browser, width, TOKEN, writes, opts.base);
+const newContext = (browser, width) => createLockedContext(browser, width, TOKEN, writes, opts.base, { theme: opts.theme });
 // Console text can carry URLs with ?token=… — scrub before it is stored.
 const clean = (t) => redactSecrets(String(t), [TOKEN]).slice(0, 300);
+
+// A first-level click changed something worth a contrast look.
+const toggledOrTab = (c, st) => (c.expanded === "false" && st.openerExpanded === "true") || (c.role === "tab" && st.openerSelected === "true");
 
 // ---- one page at one width ----------------------------------------------------
 async function probePage(ctx, route, width, shellDone) {
@@ -131,7 +138,12 @@ async function probePage(ctx, route, width, shellDone) {
 
   const result = { path: route.path, pattern: route.pattern, width, states: [], findings: [], counts: {} };
   const push = (state, extra, isBase = false) => {
-    const f = evaluateState(state, { isBase }).map((x) => ({ ...x, page: route.path, width, opener: extra.label || null, shot: extra.shot || null }));
+    if (state.contrast) {
+      const c = contrastFindings(state.contrast);
+      result.counts.contrastChecked = (result.counts.contrastChecked || 0) + c.checked;
+      result.counts.contrastUncertain = (result.counts.contrastUncertain || 0) + c.uncertain;
+    }
+    const f = evaluateState(state, { isBase, expectedTheme: opts.theme }).map((x) => ({ ...x, page: route.path, width, opener: extra.label || null, shot: extra.shot || null }));
     result.findings.push(...f);
     return f.length;
   };
@@ -144,6 +156,7 @@ async function probePage(ctx, route, width, shellDone) {
   const baseShot = join(dir, "00-page.png");
   await page.screenshot({ path: baseShot, fullPage: true }).catch(() => {});
   const base = await page.evaluate(measureState, { base: true });
+  if (opts.contrast) base.contrast = await page.evaluate(measureContrast, { base: true }).catch(() => []);
   if (base.url.split("?")[0] !== route.path.split("?")[0]) {
     result.redirectedTo = base.url;
   }
@@ -245,6 +258,7 @@ async function probePage(ctx, route, width, shellDone) {
         continue;
       }
       const nst = await page.evaluate(measureState, { opener: nsel, seenAttr: NESTED_SEEN });
+      if (opts.contrast) nst.contrast = await page.evaluate(measureContrast, { seenAttr: NESTED_SEEN }).catch(() => []);
       const changed = nst.layers.length || (x.role === "tab" && nst.openerSelected === "true") || nst.openerExpanded === "true";
       if (!changed) {
         out.states.push({ label: x.label, status: "no-change" });
@@ -305,6 +319,7 @@ async function probePage(ctx, route, width, shellDone) {
     }
     const clickLoading = await waitReady("click");
     const st = { ...(await page.evaluate(measureState, { opener: sel })), stillLoading: clickLoading };
+    if (opts.contrast && (st.layers.length || toggledOrTab(c, st))) st.contrast = await page.evaluate(measureContrast, {}).catch(() => []);
     const toggled = c.expanded === "false" && st.openerExpanded === "true";
     const tabbed = c.role === "tab" && st.openerSelected === "true";
     if (!st.layers.length && !toggled && !tabbed && page.url() === before) {
@@ -490,6 +505,8 @@ const result = {
   startedAt,
   finishedAt: new Date().toISOString(),
   widths: opts.widths,
+  theme: opts.theme,
+  contrast: opts.contrast,
   skippedRoutes: skipped,
   lockSelfTest: "ok",
   writes,

@@ -258,5 +258,83 @@ export function measureState(args) {
     openerExpanded: op ? op.getAttribute("aria-expanded") : null,
     openerSelected: op ? op.getAttribute("aria-selected") : null,
     url: location.pathname + location.search,
+    theme: document.documentElement.getAttribute("data-theme"),
   };
+}
+
+/**
+ * Collect text samples for the contrast heuristic (lib/contrast.mjs): every
+ * visible element with its own letters/digits, its text colour and the chain
+ * of background colours + opacities up to <html>. `base` = whole page; else
+ * only elements that appeared since markSeen(seenAttr) (the opened state).
+ * Colours are normalised through a 1×1 canvas, so oklch()/color-mix()/color()
+ * values arrive as sRGB rgba. Disabled controls are exempt (WCAG 1.4.3).
+ */
+export function measureContrast(args) {
+  const { base, max = 600 } = args || {};
+  const SEEN = (args && args.seenAttr) || "data-probe-seen";
+  const cv = document.createElement("canvas");
+  cv.width = cv.height = 1;
+  const cx = cv.getContext("2d", { willReadFrequently: true });
+  const cache = new Map();
+  const rgba = (c) => {
+    if (cache.has(c)) return cache.get(c);
+    let out = null;
+    const m = /^rgba?\(([\d.]+)[, ]+([\d.]+)[, ]+([\d.]+)(?:\s*[,/]\s*([\d.]+%?))?\)$/.exec(c);
+    if (m) {
+      const a = m[4] === undefined ? 1 : m[4].endsWith("%") ? parseFloat(m[4]) / 100 : parseFloat(m[4]);
+      out = [+m[1], +m[2], +m[3], a];
+    } else if (cx) {
+      cx.clearRect(0, 0, 1, 1);
+      cx.fillStyle = "#010203";
+      cx.fillStyle = c;
+      if (cx.fillStyle !== "#010203" || c === "#010203") {
+        cx.fillRect(0, 0, 1, 1);
+        const d = cx.getImageData(0, 0, 1, 1).data;
+        out = [d[0], d[1], d[2], d[3] / 255];
+      }
+    }
+    cache.set(c, out);
+    return out;
+  };
+  const vis = (e) => {
+    const r = e.getBoundingClientRect();
+    const s = getComputedStyle(e);
+    return r.width > 1 && r.height > 1 && s.visibility !== "hidden" && s.display !== "none" && s.clip === "auto";
+  };
+  const own = (e) =>
+    [...e.childNodes]
+      .filter((n) => n.nodeType === 3)
+      .map((n) => n.textContent)
+      .join(" ")
+      .trim()
+      .replace(/\s+/g, " ");
+  const samples = [];
+  const done = new Set();
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  for (let n = walker.nextNode(); n && samples.length < max; n = walker.nextNode()) {
+    const e = n.parentElement;
+    if (!e || done.has(e)) continue;
+    done.add(e);
+    if (!base && e.hasAttribute(SEEN)) continue;
+    if (e.closest("svg, script, style, noscript, template, option, [disabled], [aria-disabled='true']")) continue;
+    const text = own(e);
+    if (!/[\p{L}\p{N}]/u.test(text) || !vis(e)) continue;
+    const cs = getComputedStyle(e);
+    const fill = cs.webkitTextFillColor;
+    const uncertain = cs.backgroundClip === "text" || (fill && fill !== cs.color && rgba(fill) && rgba(fill)[3] === 0);
+    const fg = rgba(cs.color);
+    if (!fg) continue;
+    const chain = [];
+    for (let a = e; a; a = a.parentElement) {
+      const as = a === e ? cs : getComputedStyle(a);
+      const bg = rgba(as.backgroundColor) || [0, 0, 0, 0];
+      const op = parseFloat(as.opacity);
+      const img = as.backgroundImage && as.backgroundImage !== "none";
+      if (bg[3] > 0 || op < 1 || img) chain.push({ bg, op: Number.isFinite(op) ? op : 1, ...(img ? { img: true } : {}) });
+      // no early stop: an ancestor's opacity fades an opaque card as well
+    }
+    samples.push({ text: text.slice(0, 40), fg, chain, fontPx: parseFloat(cs.fontSize) || 0, weight: parseInt(cs.fontWeight, 10) || 400, ...(uncertain ? { uncertain: true } : {}) });
+  }
+  return samples;
 }
