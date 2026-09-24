@@ -741,7 +741,7 @@ class TaskRunnerService:
         await redis.set(ack_check_key, "1", ex=86400)  # 24h Cooldown
 
         logger.warning(
-            "ACK timeout: '%s' — %s hat nicht bestaetigt (%dmin), Approval erstellt",
+            "ACK timeout: '%s' — %s did not ACK after dispatch (%dmin), operator notice raised",
             task.title, agent.name, int(minutes_since_dispatch),
         )
 
