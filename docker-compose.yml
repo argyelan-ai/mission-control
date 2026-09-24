@@ -114,6 +114,8 @@ services:
       # Genau EIN Prozess traegt den Flag true (Worker); config.py-Default
       # bleibt True (Rueckweg fuer compose-freie Installs).
       ENABLE_BACKGROUND_SERVICES: "false"
+      # Head launcher switch (docs/specs/head-launcher.md) — off unless set in .env
+      HEADS_ENABLED: ${HEADS_ENABLED:-false}
       # Konsument ist backend/app/routers/browser_live.py — ein Router, also
       # der API-Prozess. War auf main gesetzt und wurde beim Teil-2-Umbau
       # still ersetzt statt ergaenzt (Rex-Review PR #500, Blocker B4):
@@ -404,6 +406,8 @@ services:
         condition: service_started
     environment:
       ENABLE_BACKGROUND_SERVICES: "true"
+      # Head launcher switch (docs/specs/head-launcher.md) — off unless set in .env
+      HEADS_ENABLED: ${HEADS_ENABLED:-false}
       # W2 (Rex-Review PR #500): Migrationen macht der backend-Container
       # (depends_on: backend: service_healthy stellt die Reihenfolge sicher).
       # Ein zweiter alembic-Lauf hier waere ein Migrations-Wettlauf gegen
