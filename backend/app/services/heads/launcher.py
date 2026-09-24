@@ -7,6 +7,7 @@ The backend never starts a process on the host. It writes
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -23,7 +24,7 @@ from app.models.agent import Agent
 from app.models.repo import Repo
 from app.models.runtime import Runtime
 from app.models.task import Task
-from app.services.heads import paths
+from app.services.heads import paths, scratch
 from app.services.runtime_protocols import engine_root
 
 TEMPLATE = Path(__file__).resolve().parents[3] / "templates" / "heads" / "head-AGENTS.md"
@@ -90,10 +91,26 @@ def render_procedure(values: dict) -> str:
     return text
 
 
-def render_job(task: Task, *, answer: str | None, previous: dict | None) -> str:
+#: Job-text block for a scratch repo whose origin is a local bare repo.
+SCRATCH_LOCAL_ORIGIN_NOTE = (
+    "## Scratch repo — push only\n\n"
+    "This is a scratch repo whose origin is a local bare repo: no pull request is possible here.\n"
+    "In step 6 run `git push -u origin {branch}` and skip `gh pr create`.\n"
+    "The pushed branch plus the run record with `Status: passed` is the result — "
+    "do not mark the run failed because there is no PR. In the run record write "
+    "`PR: none (scratch repo, branch pushed)`."
+)
+
+
+def render_job(
+    task: Task, *, answer: str | None, previous: dict | None,
+    scratch_local_origin: bool = False, branch: str | None = None,
+) -> str:
     parts = [f"# {task.title}", ""]
     if task.description:
         parts += [task.description.strip(), ""]
+    if scratch_local_origin:
+        parts += [SCRATCH_LOCAL_ORIGIN_NOTE.format(branch=branch or "<branch>"), ""]
     if previous:
         parts += [
             "## Previous run",
@@ -274,7 +291,12 @@ async def write_run(
         "repo": repo.full_name,
     })
     _atomic(folder / "spec.json", json.dumps(spec, indent=1))
-    _atomic(folder / "job.md", render_job(task, answer=answer, previous=previous))
+    job = render_job(
+        task, answer=answer, previous=previous, branch=branch,
+        # git subprocess — off the event loop
+        scratch_local_origin=await asyncio.to_thread(scratch.local_origin, repo.full_name) is not None,
+    )
+    _atomic(folder / "job.md", job)
     _atomic(folder / "procedure.md", procedure)
     _atomic(folder / "head.env", _format_env(env), mode=0o600)
     return spec

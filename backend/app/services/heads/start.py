@@ -75,6 +75,28 @@ async def checked_pair(session: AsyncSession, harness: str, runtime_slug: str, i
     return pair, runtime
 
 
+async def hold_and_move(session: AsyncSession, task: Task, run_id: str, reason: str) -> None:
+    """Hold the task and walk it to in_progress BEFORE the spool goes out.
+
+    move_task flushes every hop, so a refused transition surfaces here — and
+    then the run folder is removed: the host must never start a run whose
+    task change did not happen (live: HTTP 500 after the spool, head ran).
+    Any failure becomes 409 ``task_move_failed`` (``hold_on_failure`` in the
+    API still holds the card; the night shift skips the mark for the night).
+    """
+    try:
+        task.run_control = "manual_hold"
+        moved = await move_task(session, task, "in_progress", reason=reason)
+        if not moved and str(task.status) != "in_progress":
+            raise RuntimeError(f"no valid path {task.status} → in_progress")
+        session.add(task)
+        await session.flush()
+    except Exception as exc:
+        await session.rollback()
+        launcher.discard_run(run_id)
+        raise HeadStartError(409, "task_move_failed") from exc
+
+
 async def start_head(
     session: AsyncSession,
     *,
@@ -109,11 +131,9 @@ async def start_head(
         # inbox → in_progress AND the hold in one transaction: no operator PATCH
         # from inbox can lift the hold afterwards (routers/tasks.py clears
         # manual_hold only when the old status is inbox).
-        task.run_control = "manual_hold"
         if clear_hold_reason:
             task.hold_reason = None
-        await move_task(session, task, "in_progress", reason=reason)
-        session.add(task)
+        await hold_and_move(session, task, spec["run_id"], reason=reason)
         try:
             launcher.spool("start", spec["run_id"])
         except launcher.SpoolUnavailable as exc:

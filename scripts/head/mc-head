@@ -228,6 +228,7 @@ def write_status(run_id: str, **fields) -> dict:
         "exit_code": None,
         "last_output_at": None,
         "pr_url": None,
+        "scratch_branch_pushed": False,
         "run_record_path": None,
         "question": False,
         "reason": None,
@@ -376,14 +377,30 @@ def locks_held_by(run_id: str) -> list:
 # ── git: clone, worktree, guards (§6.3 steps 1–3) ────────────────────────
 
 
+def _git_overrides() -> list:
+    """``-c`` flags on every wrapper git call. The wrapper runs git OUTSIDE
+    the sandbox in a clone whose .git/ the head can write: no fsmonitor, the
+    wrapper's own hooks dir only, never the ext:: transport. (The clone's
+    config is also rewritten from scratch before each step, see
+    sanitize_clone(); these flags hold even if that was raced.)"""
+    return [
+        "-c", "core.fsmonitor=false",
+        "-c", f"core.hooksPath={hooks_dir()}",
+        "-c", "protocol.ext.allow=never",
+        "-c", "core.sshCommand=ssh",
+    ]
+
+
 def _git(args: list, cwd=None, env=None, check=True) -> subprocess.CompletedProcess:
     full_env = dict(os.environ)
     full_env["GIT_CONFIG_GLOBAL"] = "/dev/null"
+    full_env["GIT_CONFIG_NOSYSTEM"] = "1"
     full_env["GIT_TERMINAL_PROMPT"] = "0"
     if env:
         full_env.update(env)
     res = subprocess.run(
-        ["git", *args], cwd=cwd, env=full_env, capture_output=True, text=True, timeout=600
+        ["git", *_git_overrides(), *args], cwd=cwd or "/", env=full_env, capture_output=True, text=True,
+        timeout=600,
     )
     if check and res.returncode != 0:
         raise RuntimeError(f"git {' '.join(args[:2])} failed: {res.stderr.strip()[-400:]}")
@@ -423,7 +440,7 @@ def install_hooks(clone: Path) -> None:
     hook = hdir / "pre-push"
     hook.write_text(PRE_PUSH_HOOK)
     hook.chmod(0o755)
-    _git(["-C", str(clone), "config", "core.hooksPath", str(hdir)])
+    # core.hooksPath is written by sanitize_clone().
 
 
 def gh_bin() -> str:
@@ -449,8 +466,155 @@ def scratch_repos() -> set:
         return set()
 
 
+_URL_SAFE_RE = re.compile(r"^[^\s\x00-\x1f\x7f]+$")
+
+
+def origin_url_allowed(full_name: str, url: str) -> bool:
+    """Which ``remote.origin.url`` a clone may have (the head can rewrite it).
+
+    Real repo: only GitHub for exactly this repo (https / git@ / ssh://git@).
+    Scratch repo (listed): the same, or a local absolute path / ``file://``.
+    Anything else (``ext::``, other hosts, other repos, relative paths) is
+    refused before the wrapper runs a single git command against it.
+    """
+    if not url or not _URL_SAFE_RE.match(url) or "/../" in url or url.endswith("/.."):
+        return False
+    name = re.escape(full_name)
+    github = re.compile(
+        rf"^(https://github\.com/|git@github\.com:|ssh://git@github\.com/){name}(\.git)?/?$", re.I
+    )
+    if github.match(url):
+        return True
+    if full_name in scratch_repos():
+        return url.startswith("/") or url.startswith("file:///")
+    return False
+
+
+def _config_file_get(cfg: Path, key: str) -> str:
+    """Read one key from a config FILE: no repo discovery, no includes."""
+    res = _git(["config", "--file", str(cfg), "--no-includes", "--get", key], check=False)
+    return res.stdout.strip() if res.returncode == 0 else ""
+
+
+def sanitize_clone(full_name: str, clone: Path) -> str:
+    """Rewrite the clone's .git/config from scratch; return the origin URL.
+
+    The head can write the clone's .git/ (its commits land there) and so
+    could plant hooks, an fsmonitor, filter drivers, a credential helper,
+    includes or a ``commondir`` redirect that the wrapper's unsandboxed git
+    calls would execute. Before every wrapper step the config is rebuilt
+    from a fixed set of keys, keeping only a validated origin URL.
+    """
+    gitdir = clone / ".git"
+    if gitdir.is_symlink() or not gitdir.is_dir():
+        raise RuntimeError("clone .git is not a plain directory")
+    cfg = gitdir / "config"
+    url = _config_file_get(cfg, "remote.origin.url") if cfg.is_file() and not cfg.is_symlink() else ""
+    if not origin_url_allowed(full_name, url):
+        raise RuntimeError("clone origin URL not allowed")
+    # Files that redirect or extend the repo config — never legitimate here.
+    for name in ("commondir", "config.worktree", "info/attributes"):
+        p = gitdir / name
+        if p.is_symlink() or p.is_file():
+            p.unlink()
+    tmp = gitdir / f".config.mc-head.{os.getpid()}"
+    tmp.unlink(missing_ok=True)
+    values = [
+        ("core.repositoryformatversion", "0"),
+        ("core.filemode", "true"),
+        ("core.bare", "false"),
+        ("core.logallrefupdates", "true"),
+        ("core.hooksPath", str(hooks_dir())),
+        ("remote.origin.url", url),
+        ("remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"),
+        ("user.name", GIT_NAME),
+        ("user.email", GIT_EMAIL),
+    ]
+    if (clone / ".GIT").exists():  # case-insensitive disk (macOS default)
+        values.append(("core.ignorecase", "true"))
+    if sys.platform == "darwin":
+        values.append(("core.precomposeunicode", "true"))
+    for key, value in values:
+        _git(["config", "--file", str(tmp), key, value])
+    # Only gh as credential helper (with the head's GH_TOKEN); the empty
+    # first entry resets any other helper.
+    _git(["config", "--file", str(tmp), "--add", "credential.helper", ""])
+    _git(["config", "--file", str(tmp), "--add", "credential.helper", f"!{gh_bin()} auth git-credential"])
+    os.replace(tmp, cfg)
+    return url
+
+
+def scratch_origin(spec: dict) -> Path | None:
+    """The local bare origin of a scratch repo, or None.
+
+    Only a repo listed in heads/scratch-repos whose clone's ``origin`` is a
+    local path (plain or ``file://``) that resolves INSIDE
+    ``heads/scratch-origin/`` counts. Such an origin has no GitHub PRs; the
+    sandbox gets write access to exactly this path (push) and a pushed branch
+    is the result (``scratch_branch_pushed``). Every real repo → None.
+    """
+    if spec.get("repo_full_name") not in scratch_repos():
+        return None
+    clone = clones_root() / spec["repo_full_name"].replace("/", "--")
+    url = _config_file_get(clone / ".git" / "config", "remote.origin.url")
+    if url.startswith("file://"):
+        from urllib.parse import unquote
+
+        url = unquote(url[len("file://"):])
+    if not url.startswith("/"):
+        return None
+    try:
+        root = (heads_root() / "scratch-origin").resolve()
+        path = Path(url).resolve()
+    except (OSError, RuntimeError):
+        return None
+    if root not in path.parents or not path.is_dir():
+        return None
+    return path
+
+
+CHECK_REFS = ("refs/mc-head-check/base", "refs/mc-head-check/branch")
+
+
+def scratch_branch_pushed(spec: dict) -> bool:
+    """The head branch exists on the local origin with commits beyond base.
+
+    Never runs git INSIDE the origin (the head can write it): the wrapper
+    re-sanitizes its own clone and fetches both refs from the origin — the
+    serving side (upload-pack) is git's path that is safe to run against an
+    untrusted repository — then counts in the clone.
+    """
+    clone = clones_root() / spec["repo_full_name"].replace("/", "--")
+    try:
+        sanitize_clone(spec["repo_full_name"], clone)
+    except (RuntimeError, OSError, subprocess.SubprocessError):
+        return False
+    base_ref, branch_ref = CHECK_REFS
+    try:
+        fetched = _git(
+            ["-C", str(clone), "fetch", "-q", "--no-tags", "--no-write-fetch-head", "origin",
+             f"+refs/heads/{spec['base_branch']}:{base_ref}", f"+refs/heads/{spec['branch']}:{branch_ref}"],
+            check=False,
+        )
+        if fetched.returncode != 0:
+            return False
+        res = _git(["-C", str(clone), "rev-list", "--count", f"{base_ref}..{branch_ref}"], check=False)
+        return res.returncode == 0 and int(res.stdout.strip() or "0") > 0
+    except (ValueError, OSError, subprocess.SubprocessError):
+        return False
+    finally:
+        for ref in CHECK_REFS:
+            _git(["-C", str(clone), "update-ref", "-d", ref], check=False)
+
+
+def sandbox_exec() -> str:
+    """sandbox-exec binary. Overridable ONLY for the test suite (a passthrough
+    stand-in on Linux CI); the host watcher never sets it."""
+    return os.environ.get("MC_HEAD_SANDBOX_EXEC") or "/usr/bin/sandbox-exec"
+
+
 def sandbox_enabled() -> bool:
-    return os.environ.get("MC_HEAD_SANDBOX") == "1" and Path("/usr/bin/sandbox-exec").exists()
+    return os.environ.get("MC_HEAD_SANDBOX") == "1" and Path(sandbox_exec()).exists()
 
 
 def ensure_clone(full_name: str) -> Path:
@@ -469,14 +633,12 @@ def ensure_clone(full_name: str) -> Path:
         )
         if res.returncode != 0:
             raise RuntimeError(f"gh repo clone failed: {res.stderr.strip()[-300:]}")
-    # Dedicated clone → repo-level config is safe. Only gh as credential
-    # helper (with the head's GH_TOKEN); the operator's keychain helper is
-    # never reached because every git call runs with GIT_CONFIG_GLOBAL=/dev/null.
-    _git(["-C", str(clone), "config", "--replace-all", "credential.helper", ""])
-    _git(["-C", str(clone), "config", "--add", "credential.helper", f"!{gh_bin()} auth git-credential"])
-    _git(["-C", str(clone), "config", "user.name", GIT_NAME])
-    _git(["-C", str(clone), "config", "user.email", GIT_EMAIL])
+    # The head can write .git/ of this clone: rebuild its config from a fixed
+    # key set before the wrapper runs anything in it (sanitize_clone). Only gh
+    # as credential helper (with the head's GH_TOKEN); the operator's
+    # keychain helper is never reached (GIT_CONFIG_GLOBAL=/dev/null).
     install_hooks(clone)
+    sanitize_clone(full_name, clone)
     return clone
 
 
@@ -629,8 +791,8 @@ def harness_argv(spec: dict, run: Path, home: Path, env: dict) -> list:
             "--no-session",
             "--no-skills",
             "--max-time", str(spec["time_limit_s"]),
-            # Permission bypass: allowed only inside the sandbox or on a
-            # scratch repo (ADR-086, enforced in start_gate()).
+            # Permission bypass: allowed only inside the sandbox (ADR-086,
+            # enforced in start_gate() for every run).
             "--auto-approve",
             "--append-system-prompt", procedure,
             job,
@@ -708,8 +870,10 @@ def sandbox_prefix(spec: dict, run: Path) -> list:
         "REAL_HOME": str(Path.home()),
         "MC_HOME": str(mc_home()),
         "USER_TMP": "/private/var/folders",
+        # "" for every real repo: the profile grants nothing then.
+        "SCRATCH_ORIGIN": str(scratch_origin(spec) or ""),
     }
-    argv = ["/usr/bin/sandbox-exec", "-f", str(SANDBOX_PROFILE)]
+    argv = [sandbox_exec(), "-f", str(SANDBOX_PROFILE)]
     for k, v in params.items():
         argv += ["-D", f"{k}={v}"]
     return argv
@@ -772,21 +936,22 @@ def identity_gate(spec: dict, token: str) -> str | None:
 def start_gate(spec: dict) -> str | None:
     """Hard gates before a head may touch a repo (spec §9 rules).
 
-    A real repo (not listed in heads/scratch-repos) needs ALL of:
+    EVERY run, scratch repos included, needs the proven sandbox — for every
+    harness: Claude's allow list still runs code the head wrote itself
+    (pytest, npm test …), and without the sandbox a head could also write
+    heads/scratch-repos (list a real repo as scratch) or .wrapper/status.json
+    (fake a result). A real repo (not listed in heads/scratch-repos) also needs:
     - the heads' own GitHub identity (heads/gh-token);
-    - the proven sandbox — for EVERY harness: Claude's allow list still
-      runs code the head wrote itself (pytest, npm test …), so without the
-      sandbox that code could read secrets or reach the Docker socket;
     - a weak identity + protected base branch (identity_gate).
-    Scratch repos (local test repos the operator listed) skip the gates.
+    Scratch repos (local test repos the operator listed) skip only those two.
     """
+    if not sandbox_enabled():
+        return "sandbox_required"
     if spec["repo_full_name"] in scratch_repos():
         return None
     token = gh_token()
     if not token:
         return "gh_identity_missing"
-    if not sandbox_enabled():
-        return "sandbox_required"
     return identity_gate(spec, token)
 
 
@@ -853,7 +1018,7 @@ def launch_supervisor(run_id: str) -> int:
         tmux = shutil.which("tmux", path=BASE_PATH)
         env_args = []
         for key in ("MC_HOME", "MC_HEAD_CLONES", "MC_HEAD_TMUX", "MC_HEAD_VAULT_JOBS", "MC_HEAD_SANDBOX",
-                    "MC_HEAD_GH", "MC_HEAD_PATH", "MC_HEAD_HEARTBEAT_S", "MC_HEAD_KILL_GRACE_S",
+                    "MC_HEAD_SANDBOX_EXEC", "MC_HEAD_GH", "MC_HEAD_PATH", "MC_HEAD_HEARTBEAT_S", "MC_HEAD_KILL_GRACE_S",
                     "MC_HEAD_BIN_OMP", "MC_HEAD_BIN_CLAUDE", "MC_HEAD_MAX_TIME_S"):
             if key in os.environ:
                 env_args += ["-e", f"{key}={os.environ[key]}"]
@@ -1090,8 +1255,12 @@ def detect_result(spec: dict, started: float) -> dict:
     run_id = spec["run_id"]
     ended = time.time()
     record = file_run_record(spec, started, ended) or find_run_record(run_id, started, ended)
+    origin = scratch_origin(spec)
     return {
-        "pr_url": find_pr(spec),
+        # A local origin never has a GitHub PR: there the pushed branch is
+        # the result (the backend still needs a passed run record).
+        "pr_url": None if origin else find_pr(spec),
+        "scratch_branch_pushed": bool(origin) and scratch_branch_pushed(spec),
         "run_record_path": str(record) if record else None,
         "question": (run_dir(run_id) / "question.md").exists(),
     }

@@ -143,3 +143,28 @@ def test_move_task_refuses_an_invalid_hop(monkeypatch):
     import asyncio
 
     assert asyncio.run(mirror.move_task(None, T(), "blocked", "x")) is False
+
+
+async def test_sync_mirrors_scratch_branch_pushed_to_review_without_pr(session, heads_root, make_board, make_task):
+    import json
+
+    (heads_root / "scratch-repos").write_text("scratch/probe\n")
+    task = await _task(session, make_board, make_task)
+    now = time.time()
+    run_id = make_run(
+        heads_root, task_id=str(task.id), repo_full_name="scratch/probe",
+        status={"phase": "exited", "exit_code": 0, "pr_url": None, "scratch_branch_pushed": True,
+                "started_at": iso(now - 600), "exited_at": iso(now - 5)},
+    )
+    rr = write_run_record(heads_root, run_id, mtime=now - 30)
+    sp = heads_root / run_id / ".wrapper" / "status.json"
+    st = json.loads(sp.read_text()); st["run_record_path"] = str(rr); sp.write_text(json.dumps(st))
+
+    assert await sync_once(session) == 1
+    fresh = await session.get(Task, task.id)
+    await session.refresh(fresh)
+    assert fresh.status == "review"
+    assert fresh.pr_url is None
+    comments = (await session.exec(select(TaskComment).where(TaskComment.task_id == task.id))).all()
+    text = "\n".join(c.content for c in comments if c.comment_type == "resolution")
+    assert "branch pushed" in text and "no PR" in text and "None" not in text

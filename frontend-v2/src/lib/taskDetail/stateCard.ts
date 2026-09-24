@@ -1,5 +1,5 @@
 import type { Approval, RunRecord, Task, TaskComment } from "@/lib/types";
-import { HEAD_SILENT_WARN_S, type HeadRun } from "@/lib/heads";
+import { HEAD_SILENT_WARN_S, isScratchBranchPushed, type HeadRun } from "@/lib/heads";
 import { parseTs, secondsBetween } from "./format";
 
 /**
@@ -19,7 +19,9 @@ import { parseTs, secondsBetween } from "./format";
  *   failed/stopped → Restart with …
  */
 
-export type HeadMainAction = "stop" | "answer" | "open_pr" | "restart";
+/** `branch_pushed`: scratch repo with a local origin — no PR is possible, the
+ *  pushed branch is the result (a status label, not a button). */
+export type HeadMainAction = "stop" | "answer" | "open_pr" | "branch_pushed" | "restart";
 
 export type StateCard =
   | {
@@ -57,7 +59,8 @@ export function headMainAction(run: HeadRun): HeadMainAction {
     case "needs_you":
       return "answer";
     case "passed":
-      return run.pr_url ? "open_pr" : "restart";
+      if (run.pr_url) return "open_pr";
+      return isScratchBranchPushed(run) ? "branch_pushed" : "restart";
     default:
       return "restart";
   }

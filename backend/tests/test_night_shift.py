@@ -802,3 +802,25 @@ async def test_undelivered_notice_is_not_recorded(heads_root, make_board, make_t
     assert night_store.load_mark(str(task.id)).notified == []
     sent = Sent()
     assert (await _tick(send=sent)).notices == [f"{task.id}:silent"]
+
+
+async def test_night_start_whose_task_move_fails_leaves_no_run_and_skips_the_mark(heads_root, make_board, make_task,
+                                                                                  monkeypatch):
+    """Same guard as a click (#662): the host never hears of a run whose task
+    change failed; the mark is skipped for the night and reported."""
+    from app.services.heads import start as start_service
+
+    async def boom(*a, **kw):
+        raise RuntimeError("db said no")
+
+    (task,) = await _world(make_board, make_task)
+    now = datetime.now(UTC)
+    await _cfg(**_window_around_now(now))
+    await _held_mark(task, order=1)
+    monkeypatch.setattr(start_service, "move_task", boom)
+    assert (await _tick(now)).started is None
+    mark = night_store.load_mark(str(task.id))
+    assert (mark.run_id, mark.gave_up) == (None, "task_move_failed")
+    assert not list(heads_root.glob("*/spec.json"))
+    spool = heads_root / "spool"
+    assert not spool.exists() or not list(spool.glob("*.json"))

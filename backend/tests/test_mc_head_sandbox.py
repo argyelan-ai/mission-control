@@ -34,7 +34,12 @@ def layout(tmp_path: Path) -> dict:
     clone_git.mkdir(parents=True)
     jobs = mc_home / "vault" / "jobs"
     jobs.mkdir(parents=True)
-    return {"real_home": real_home, "mc_home": mc_home, "run": run, "clone_git": clone_git, "jobs": jobs}
+    scratch_origin = mc_home / "heads" / "scratch-origin" / "r.git"
+    (scratch_origin / "objects").mkdir(parents=True)
+    other = mc_home / "heads" / "scratch-origin" / "other.git"
+    other.mkdir(parents=True)
+    return {"real_home": real_home, "mc_home": mc_home, "run": run, "clone_git": clone_git, "jobs": jobs,
+            "scratch_origin": scratch_origin, "other_origin": other}
 
 
 def _sh(layout: dict, script: str, **overrides) -> subprocess.CompletedProcess:
@@ -46,6 +51,8 @@ def _sh(layout: dict, script: str, **overrides) -> subprocess.CompletedProcess:
         "REAL_HOME": layout["real_home"],
         "MC_HOME": layout["mc_home"],
         "USER_TMP": layout["real_home"] / "tmp",
+        # empty = real repo: no write outside the run's own places
+        "SCRATCH_ORIGIN": "",
     }
     params.update(overrides)
     argv = [str(SANDBOX), "-f", str(PROFILE)]
@@ -146,3 +153,51 @@ def test_docker_socket_is_not_reachable(layout, tmp_path):
     assert "CONNECTED" in plain.stdout, plain.stderr
     assert "CONNECTED" not in res.stdout
     assert res.returncode != 0
+
+
+# ── scratch repo with a local bare origin ───────────────────────────────
+
+
+def test_scratch_origin_is_writable_when_passed(layout):
+    """A scratch repo whose origin is a local bare repo: `git push` writes
+    objects into it (live finding: "remote unpack failed: unable to create
+    temporary object directory")."""
+    origin = layout["scratch_origin"]
+    res = _sh(layout, f"mkdir {origin}/objects/incoming-x && echo o > {origin}/objects/incoming-x/pack",
+              SCRATCH_ORIGIN=origin)
+    assert res.returncode == 0, res.stderr
+    assert (origin / "objects" / "incoming-x" / "pack").read_text() == "o\n"
+
+
+def test_scratch_origin_grant_covers_only_that_origin(layout):
+    heads = layout["mc_home"] / "heads"
+    res = _sh(
+        layout,
+        f"echo x > {layout['other_origin']}/forged; echo y > {heads}/scratch-repos; echo z > {heads}/gh-token",
+        SCRATCH_ORIGIN=layout["scratch_origin"],
+    )
+    assert res.returncode != 0
+    for p in (layout["other_origin"] / "forged", heads / "scratch-repos", heads / "gh-token"):
+        assert not p.exists(), p
+
+
+def test_real_repo_gets_no_origin_write(layout):
+    """SCRATCH_ORIGIN empty (every real repo): the origin stays read-only."""
+    origin = layout["scratch_origin"]
+    res = _sh(layout, f"echo x > {origin}/objects/forged")
+    assert res.returncode != 0
+    assert not (origin / "objects" / "forged").exists()
+    # reads still work (git ls-remote / fetch)
+    assert _sh(layout, f"ls {origin}/objects").returncode == 0
+
+
+def test_missing_scratch_origin_param_fails_closed(layout):
+    """The profile never silently widens: without the parameter it refuses to load."""
+    params = {"RUN": layout["run"], "WT": layout["run"] / "wt", "CLONE_GIT": layout["clone_git"],
+              "VAULT_JOBS": layout["jobs"], "REAL_HOME": layout["real_home"], "MC_HOME": layout["mc_home"],
+              "USER_TMP": layout["real_home"] / "tmp"}
+    argv = [str(SANDBOX), "-f", str(PROFILE)]
+    for k, v in params.items():
+        argv += ["-D", f"{k}={v}"]
+    res = subprocess.run([*argv, "/bin/sh", "-c", "echo ran"], capture_output=True, text=True)
+    assert "ran" not in res.stdout

@@ -11,7 +11,8 @@
   POST /api/v1/heads/{run_id}/stop         operator  stop request
 
 Errors carry a ``code`` (pair_blocked, engine_not_ready, box_busy,
-head_active, repo_required, spool_unavailable, heads_disabled); the
+head_active, repo_required, spool_unavailable, heads_disabled,
+task_move_failed); the
 frontend renders them via i18n. Behind ``settings.heads_enabled``.
 """
 from __future__ import annotations
@@ -35,9 +36,8 @@ from app.models.repo import Repo
 from app.models.task import Task
 from app.services.heads import box_guard, files, launcher, pairs
 from app.services.heads import start as start_service
-from app.services.heads.start import HeadStartError
 from app.services.heads.files import write_backend_file
-from app.services.heads.mirror import move_task
+from app.services.heads.start import HeadStartError
 from app.services.heads.state import ACTIVE_STATES, derive_for_run
 
 router = APIRouter(prefix="/api/v1/heads", tags=["heads"])
@@ -130,6 +130,12 @@ async def _task_and_repo(session: AsyncSession, task_id: uuid.UUID) -> tuple[Tas
     if repo is None:
         raise _err(422, "repo_required")
     return task, repo
+
+
+async def _hold_and_move(session: AsyncSession, task: Task, run_id: str, reason: str) -> None:
+    """``start_service.hold_and_move`` as an HTTPException (409 ``task_move_failed``)."""
+    with _http():
+        await start_service.hold_and_move(session, task, run_id, reason)
 
 
 class StartBody(BaseModel):
@@ -225,9 +231,7 @@ async def restart_head(
             )
         except OSError as exc:
             raise _err(503, "spool_unavailable") from exc
-        task.run_control = "manual_hold"
-        await move_task(session, task, "in_progress", reason="head_restart")
-        session.add(task)
+        await _hold_and_move(session, task, spec["run_id"], reason="head_restart")
         try:
             launcher.spool("restart", spec["run_id"], from_run_id=old.run_id)
         except launcher.SpoolUnavailable as exc:

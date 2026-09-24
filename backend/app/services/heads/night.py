@@ -40,6 +40,7 @@ BLOCKED_SILENT_S = 15 * 60
 #: rest of the night (and reported). Everything else is retried next tick.
 PERMANENT_START_ERRORS = frozenset({
     "pair_blocked", "repo_required", "task_not_found", "head_active", "pair_gone", "task_moved",
+    "task_move_failed",
 })
 
 FINISHED_TASK_STATUSES = frozenset({"done", "aborted"})

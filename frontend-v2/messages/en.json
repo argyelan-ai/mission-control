@@ -3258,7 +3258,7 @@
       "stopped": "Stopped by you. The branch is kept.",
       "time_limit": "Time limit reached. The branch is kept.",
       "no_pr": "Ended without a pull request.",
-      "run_record_missing": "PR found, but the run record is missing or not passed.",
+      "run_record_missing": "PR (or pushed scratch branch) found, but the run record is missing or not passed.",
       "not_picked_up": "The host never picked up the start. Is the head starter installed?",
       "process_vanished": "The head process is gone (no sign of life for 5 min).",
       "box_busy": "The box was busy with another head.",
@@ -3285,6 +3285,8 @@
       "openPr": "Open PR #{number}",
       "openPrNoNumber": "Open PR",
       "branchKept": "Branch {branch}",
+      "branchPushedScratch": "Branch pushed · scratch repo (no PR)",
+      "scratchBranchResult": "The branch is on the scratch repo's local origin — no PR is possible there.",
       "stop": "Stop",
       "stopping": "Stopping…",
       "stopRequested": "Stop requested",
@@ -3342,6 +3344,7 @@
       "engine_not_ready": "The model is not running — start it on Runtimes.",
       "box_busy": "The box is busy with another head.",
       "head_active": "A head is already working on this task.",
+      "task_move_failed": "The task could not be moved to In progress — no head was started.",
       "repo_required": "A head needs a repo.",
       "spool_unavailable": "The head starter cannot be reached (spool folder).",
       "heads_disabled": "The head launcher is switched off.",
@@ -3398,7 +3401,8 @@
       "not_reached": "the window ended before its turn",
       "run_missing": "the run folder is missing",
       "other": "not possible right now",
-      "task_moved": "someone else took the task meanwhile"
+      "task_moved": "someone else took the task meanwhile",
+      "task_move_failed": "the task could not be moved to in progress"
     },
     "category": {
       "passed": "passed",

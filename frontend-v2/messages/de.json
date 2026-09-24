@@ -3258,7 +3258,7 @@
       "stopped": "Von dir gestoppt. Der Branch bleibt.",
       "time_limit": "Zeitlimit erreicht. Der Branch bleibt.",
       "no_pr": "Ohne Pull Request beendet.",
-      "run_record_missing": "PR gefunden, aber die Laufakte fehlt oder ist nicht bestanden.",
+      "run_record_missing": "PR (oder gepushter Scratch-Branch) gefunden, aber die Laufakte fehlt oder ist nicht bestanden.",
       "not_picked_up": "Der Host hat den Start nie abgeholt. Ist der Head-Starter installiert?",
       "process_vanished": "Der Head-Prozess ist weg (5 min kein Lebenszeichen).",
       "box_busy": "Die Box war mit einem anderen Head belegt.",
@@ -3285,6 +3285,8 @@
       "openPr": "PR #{number} öffnen",
       "openPrNoNumber": "PR öffnen",
       "branchKept": "Branch {branch}",
+      "branchPushedScratch": "Branch gepusht · Scratch-Repo (kein PR)",
+      "scratchBranchResult": "Der Branch liegt im lokalen Origin des Scratch-Repos — dort ist kein PR möglich.",
       "stop": "Stoppen",
       "stopping": "Stoppt…",
       "stopRequested": "Stopp angefordert",
@@ -3342,6 +3344,7 @@
       "engine_not_ready": "Das Modell läuft nicht — starte es unter Runtimes.",
       "box_busy": "Die Box ist mit einem anderen Head belegt.",
       "head_active": "An diesem Task arbeitet schon ein Head.",
+      "task_move_failed": "Der Task konnte nicht auf In Arbeit gesetzt werden — es wurde kein Head gestartet.",
       "repo_required": "Ein Head braucht ein Repo.",
       "spool_unavailable": "Der Head-Starter ist nicht erreichbar (Spool-Ordner).",
       "heads_disabled": "Der Head-Starter ist ausgeschaltet.",
@@ -3398,7 +3401,8 @@
       "not_reached": "das Fenster war vorbei, bevor sie dran war",
       "run_missing": "der Lauf-Ordner fehlt",
       "other": "gerade nicht möglich",
-      "task_moved": "jemand anderes hat die Aufgabe inzwischen übernommen"
+      "task_moved": "jemand anderes hat die Aufgabe inzwischen übernommen",
+      "task_move_failed": "die Aufgabe liess sich nicht auf „in Arbeit“ setzen"
     },
     "category": {
       "passed": "bestanden",

@@ -44,7 +44,7 @@ describe("night shift i18n", () => {
 
   it("every reason/error/state key the UI can ask for exists in both catalogs", () => {
     const keys = [
-      ...["lane_busy", "cloud_share", "engine_not_ready", "not_reached", "task_moved", "whatever", null].map(nightReasonKey),
+      ...["lane_busy", "cloud_share", "engine_not_ready", "not_reached", "task_moved", "task_move_failed", "whatever", null].map(nightReasonKey),
       ...["task_busy", "night_busy"].map((c) => `errors.${c}`),
       ...["queued", "waiting", "skipped", "started"].map((s) => `state.${s}`),
       ...["passed", "failed", "needs_you", "blocked", "running"].map((c) => `category.${c}`),
@@ -95,6 +95,7 @@ describe("codes and counts", () => {
 
   it("names task_moved as its own reason", () => {
     expect(nightReasonKey("task_moved")).toBe("reason.task_moved");
+    expect(nightReasonKey("task_move_failed")).toBe("reason.task_move_failed");
   });
 
   it("reads the bad fields of an invalid_config", () => {

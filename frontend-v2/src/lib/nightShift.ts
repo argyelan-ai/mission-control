@@ -125,6 +125,7 @@ export function canMarkTonight(task: { status: string; run_control?: string | nu
 
 const REASONS = new Set([
   "task_moved",
+  "task_move_failed",
   "lane_busy",
   "cloud_share",
   "engine_not_ready",

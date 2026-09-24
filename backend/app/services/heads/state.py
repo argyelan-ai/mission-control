@@ -4,6 +4,8 @@
 States: starting · running · needs_you · passed · failed · stopped.
 "passed" is never claimed by the head alone: the PR URL comes from the
 wrapper-written status.json, and the run record must be valid (files.py).
+A scratch repo with a local origin has no PR: there the wrapper-verified
+pushed branch stands in for it (reason ``scratch_branch_pushed``).
 """
 from __future__ import annotations
 
@@ -32,6 +34,7 @@ def derive_head_state(
     stop_requested: bool,
     now: float,
     pid_alive: bool | None = None,
+    scratch_branch_pushed: bool = False,
 ) -> dict[str, Any]:
     status = status or {}
     phase = status.get("phase")
@@ -75,9 +78,11 @@ def derive_head_state(
         out.update(state="needs_you", reason=None)
     elif pr_url and run_record_passed:
         out.update(state="passed", reason=None)
+    elif scratch_branch_pushed and run_record_passed:
+        out.update(state="passed", reason="scratch_branch_pushed")
     else:
         if not reason:
-            reason = "no_pr" if not pr_url else "run_record_missing"
+            reason = "no_pr" if not (pr_url or scratch_branch_pushed) else "run_record_missing"
         out.update(state="failed", reason=reason)
     return out
 
@@ -96,4 +101,5 @@ def derive_for_run(run, now: float, pid_alive: bool | None = None) -> dict[str, 
         stop_requested=run.stop_requested,
         now=now,
         pid_alive=pid_alive,
+        scratch_branch_pushed=run.scratch_branch_pushed,
     )
