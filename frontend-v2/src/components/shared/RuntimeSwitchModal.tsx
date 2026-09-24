@@ -328,7 +328,7 @@ export function RuntimeSwitchModal({
                       onClose();
                     }}
                     className="mt-3 text-[12px] px-4 py-1.5 rounded-lg cursor-pointer transition-all"
-                    style={{ backgroundColor: C.accent, color: C.textPrimary }}
+                    style={{ backgroundColor: C.accent, color: C.onAccent }}
                   >
                     Close
                   </button>
@@ -697,7 +697,7 @@ export function RuntimeSwitchModal({
                           : undefined
                     }
                     className="flex items-center gap-1.5 text-[12px] px-3 py-1.5 rounded-lg cursor-pointer transition-all disabled:cursor-not-allowed disabled:opacity-40"
-                    style={{ backgroundColor: C.accent, color: C.textPrimary }}
+                    style={{ backgroundColor: C.accent, color: C.onAccent }}
                   >
                     {submitting ? <Loader2 size={12} className="animate-spin" /> : <RotateCcw size={12} />}
                     Switch

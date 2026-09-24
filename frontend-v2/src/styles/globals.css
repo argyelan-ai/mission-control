@@ -97,6 +97,12 @@
 
 @import "tailwindcss";
 
+/* `light:` = only in the light mode (ADR-087). For the few places where the
+   light palette needs a different treatment than dark (e.g. a text dimmed by
+   opacity that stays AA in dark tones but not on paper) — dark stays exactly
+   as it is. Prefer a token; use this when a token cannot express it. */
+@custom-variant light (&:where([data-theme="light"], [data-theme="light"] *));
+
 /* ============================================================
    Mission Control — v4 „Signal"
    Dunkel ist Standard und Charakter („Serious. Dark."). Ein heller
@@ -277,6 +283,7 @@
   --color-accent-deep: #c1beb2;
   --color-accent-subtle: rgba(235, 232, 222, 0.1);
   --color-on-accent: #151411; /* Text auf Akzent-Fläche — 15.0:1 */
+  --color-on-status: var(--color-text-primary); /* Text auf voller Status-Fläche (Gefahr-Knopf) */
 
   /* ---- Status — die EINZIGEN bunten Tokens ---- */
   --color-status-online: #55a964;
@@ -386,8 +393,9 @@
   --color-text-muted: #5f5b53;     /*  5.08 */
   /* text-dim: gedacht für Deko/inaktive Icons, wird im Code aber auch für
      kleine Meta-Texte genutzt (Zähler, Etiketten — axe-Befund). Hell daher
-     als AA-Textton auf den vier Ruheflächen (min. 4.64), nur auf Hover 4.23. */
-  --color-text-dim: #6b675e;
+     als AA-Textton auf allen fünf Flächen inkl. Hover (min. 4.85; UI-Probe
+     fand Zähler auf gehoverten Zeilen). */
+  --color-text-dim: #625e56;
 
   /* ---- Borders: Tinte statt Grau-Weiss ---- */
   --color-border-subtle: rgba(27, 26, 23, 0.05);
@@ -401,6 +409,7 @@
   --color-accent-deep: #4a473f;
   --color-accent-subtle: rgba(27, 26, 23, 0.08);
   --color-on-accent: #ffffff;
+  --color-on-status: #ffffff; /* Tinte auf dunklem Rot wäre 2.2:1 */
 
   /* ---- Status (min. Kontrast über alle 5 Flächen) ---- */
   --color-status-online: #235d2e;  /* ≥4.5 auch auf eigener 12-%-Tönung */

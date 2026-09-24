@@ -125,7 +125,7 @@ function ListRow({
           type="button"
           onClick={onClick}
           aria-label={t("openTask", { title: task.title })}
-          className="flex-1 min-w-0 text-left text-[13px] truncate cursor-pointer after:absolute after:inset-0 after:content-[''] hover:opacity-90"
+          className="flex-1 min-w-0 text-left text-[13px] truncate cursor-pointer after:absolute after:inset-0 after:content-[''] hover:opacity-90 light:hover:opacity-100!"
           style={{ color: isDone ? C.textMuted : C.textPrimary }}
         >
           <span className="truncate">{task.title}</span>

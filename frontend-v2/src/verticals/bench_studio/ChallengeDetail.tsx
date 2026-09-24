@@ -277,7 +277,7 @@ export function ChallengeDetail({
   const CHALLENGE_ACTION_STYLE: Record<ChallengeAction["style"], React.CSSProperties> = {
     default: { color: C.textSecondary, border: `1px solid ${C.border}` },
     primary: { backgroundColor: C.accentSubtle, color: C.accent, border: `1px solid ${C.borderAccent}` },
-    danger: { background: C.error, color: C.textPrimary },
+    danger: { background: C.error, color: C.onStatus },
   };
 
   if (!challenge) return null;
@@ -616,7 +616,7 @@ export function ChallengeDetail({
             onClick={() => deleteMutation.mutate()}
             disabled={deleteMutation.isPending}
             className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-sm font-semibold disabled:opacity-70"
-            style={{ background: C.error, color: C.textPrimary }}
+            style={{ background: C.error, color: C.onStatus }}
           >
             {deleteMutation.isPending ? (
               <Loader2 size={15} className="animate-spin" />

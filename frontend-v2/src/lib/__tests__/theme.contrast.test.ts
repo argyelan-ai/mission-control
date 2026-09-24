@@ -107,8 +107,9 @@ describe("theme contrast (WCAG) — both modes", () => {
     expect(check("light", lightVars)).toEqual([]);
   });
 
-  it("light: text-dim is readable text on the resting surfaces (it is used for small meta text)", () => {
-    const fails = ["--color-bg-deep", "--color-bg-base", "--color-bg-surface", "--color-bg-elevated"]
+  it("light: text-dim is readable text on every surface incl. hover (it is used for small meta text)", () => {
+    // hover included since the UI probe found text-dim counters on hovered rows (4.15:1)
+    const fails = SURFACES
       .map((sf) => [sf, ratio(resolveVar("var(--color-text-dim)", lightVars), resolveVar(`var(${sf})`, lightVars))] as const)
       .filter(([, r]) => r < 4.5)
       .map(([sf, r]) => `text-dim on ${sf}: ${r.toFixed(2)}`);

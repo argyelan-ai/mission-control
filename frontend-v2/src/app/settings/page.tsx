@@ -1894,7 +1894,8 @@ function UserRow({
 
   return (
     <div
-      className="mc-card px-4 py-3 transition-colors"
+      // Light: no half-opacity (text fell to 2.3:1) — the "Deactivated" chip carries the state.
+      className={`mc-card px-4 py-3 transition-colors${user.is_active ? "" : " light:opacity-100!"}`}
       style={{ ...cardStyle, opacity: user.is_active ? 1 : 0.5 }}
     >
       {/* Top row: avatar + info + role */}

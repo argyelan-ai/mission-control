@@ -39,6 +39,10 @@ const CHART_TICK = {
   fontFamily: "var(--font-mono)",
   fill: "var(--color-text-muted)",
 } as const;
+// Recharts paints legend labels in the series colour (a 70 % fill here) —
+// fine on dark, below AA on paper. Light mode uses the muted text tone.
+const legendLabel = (value: string) => <span className="light:text-[var(--color-text-muted)]!">{value}</span>;
+
 const LEGEND_STYLE = {
   fontSize: 10,
   fontFamily: "var(--font-mono)",
@@ -809,7 +813,7 @@ export default function InsightsPage() {
                             contentStyle={tooltipStyle}
                             formatter={(v: number) => [`$${v.toFixed(4)}`, "Cost"]}
                           />
-                          <Legend wrapperStyle={LEGEND_STYLE} />
+                          <Legend wrapperStyle={LEGEND_STYLE} formatter={legendLabel} />
                         </PieChart>
                       </ResponsiveContainer>
                     )}
@@ -830,7 +834,7 @@ export default function InsightsPage() {
                           <XAxis dataKey="name" tick={CHART_TICK} axisLine={false} tickLine={false} />
                           <YAxis tick={CHART_TICK} axisLine={false} tickLine={false} width={30} />
                           <Tooltip contentStyle={tooltipStyle} cursor={{ fill: C.accentSubtle }} />
-                          <Legend wrapperStyle={LEGEND_STYLE} />
+                          <Legend wrapperStyle={LEGEND_STYLE} formatter={legendLabel} />
                           <Bar dataKey="done" name={tr("chartDone")} stackId="a" fill={alpha(C.online, 0.7)} />
                           <Bar dataKey="failed" name={tr("chartFailed")} stackId="a" fill={alpha(C.error, 0.7)} radius={[2, 2, 0, 0]} />
                         </BarChart>
@@ -849,7 +853,7 @@ export default function InsightsPage() {
                             ))}
                           </Pie>
                           <Tooltip contentStyle={tooltipStyle} />
-                          <Legend wrapperStyle={LEGEND_STYLE} />
+                          <Legend wrapperStyle={LEGEND_STYLE} formatter={legendLabel} />
                         </PieChart>
                       </ResponsiveContainer>
                     ) : <EmptyChart message={tr("noFailurePatterns")} />}

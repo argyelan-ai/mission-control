@@ -341,7 +341,7 @@ export function VoiceOverlay() {
           style={{
             top: "calc(env(safe-area-inset-top) + 4rem)",
             backgroundColor: C.error,
-            color: C.textPrimary,
+            color: C.onStatus,
           }}
         >
           <div className="font-medium mb-1">Voice error</div>
@@ -665,7 +665,7 @@ function VoiceDrawer({
                 className="flex items-center justify-center w-10 h-10 rounded-full transition-all cursor-pointer hover:scale-105 active:scale-95"
                 style={{
                   background: C.error,
-                  color: C.textPrimary,
+                  color: C.onStatus,
                   boxShadow: `0 4px 14px ${alpha(C.shadow, 0.4)}`,
                 }}
                 aria-label="End"

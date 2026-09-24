@@ -85,6 +85,7 @@ export const C = {
   accentHover: v("accent-light"),
   accentDeep: v("accent-deep"),
   onAccent: v("on-accent"), // Text auf Akzent-Fläche
+  onStatus: v("on-status"), // Text auf voller Status-Fläche (dark = textPrimary)
 
   // Status — die EINZIGEN bunten Tokens
   online: v("status-online"),

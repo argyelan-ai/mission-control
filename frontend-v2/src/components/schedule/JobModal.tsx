@@ -691,7 +691,7 @@ export function JobModal({
                 className="flex items-center gap-1.5 rounded-md px-3.5 py-1.5 text-sm font-medium transition disabled:opacity-60"
                 style={{
                   background: C.accent,
-                  color: C.textPrimary,
+                  color: C.onAccent,
                 }}
               >
                 {submitting && <Loader2 size={14} className="animate-spin" />}

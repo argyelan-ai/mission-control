@@ -30,7 +30,7 @@ function VisibilityBadge({ visibility }: { visibility: Repo["visibility"] }) {
   const Icon = isPrivate ? Lock : Globe2;
   return (
     <span
-      className="inline-flex items-center gap-1 shrink-0 uppercase"
+      className="inline-flex items-center gap-1 shrink-0 uppercase light:text-[var(--color-text-secondary)]!"
       style={{
         background: C.border,
         color: C.textMuted,

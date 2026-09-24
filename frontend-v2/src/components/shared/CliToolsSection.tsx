@@ -347,7 +347,7 @@ function UpdateModal({
                     onClick={() => updateMutation.mutate()}
                     disabled={updateMutation.isPending}
                     className="text-xs px-3 py-1.5 rounded-lg cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
-                    style={{ color: C.textPrimary, background: C.accent }}
+                    style={{ color: C.onAccent, background: C.accent }}
                   >
                     {updateMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <ArrowUpCircle size={12} />}
                     {t("updateNow")}

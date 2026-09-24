@@ -137,6 +137,28 @@ DESIGN.md.
   only ~2.3:1 as text. Follow-up: lift the dark `--color-status-*-text` and
   `--color-text-dim` tones (a visible dark change — operator decision).
 
+### Light-only adjustments (UI probe, contrast check)
+
+The UI probe (`--theme light --contrast`, see `docs/ui-probe.md`) opens every
+page, panel and dialog in light mode and checks text contrast per state. What
+it found and how it is fixed:
+
+- **Text dimmed with `opacity`** (0.5–0.9 on muted tones, deactivated rows,
+  trash items, hints) stays readable on dark but drops to 2–4:1 on paper.
+  Fixed with the `light:` variant (`@custom-variant light` in `globals.css`):
+  `light:opacity-100!` at those spots. Dark keeps its dimming unchanged; the
+  state stays visible through chips/labels.
+- **Text on solid fills:** `background: C.error` + `color: C.textPrimary` is
+  ink on dark red in light (2.2:1) → new token `--color-on-status` (dark =
+  `var(--color-text-primary)`, identical; light = white). Guarded by
+  `on-status-text.test`.
+- **Text on the accent fill with `C.textPrimary`** was invisible in BOTH
+  modes (off-cream on off-cream in dark, 1.09:1) — five save/confirm buttons.
+  Now `C.onAccent`. This is the one visible dark change of this round, a bug
+  fix; the same test guards it.
+- Light `--color-text-dim` is a step darker (`#625e56`, ≥4.85:1 on all five
+  surfaces incl. hover), since it is used for counters on hovered rows.
+
 ## References
 
 - Files: `frontend-v2/src/styles/globals.css`, `frontend-v2/src/lib/colors.ts`,

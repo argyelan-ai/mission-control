@@ -99,7 +99,7 @@ export function AttachmentPreview({
       }}
     >
       <div
-        className="px-4 py-2 flex items-center justify-between text-xs"
+        className="px-4 py-2 flex items-center justify-between text-xs light:bg-[var(--color-bg-elevated)]!"
         style={{
           background: alpha(C.scrim, 0.25),
           color: "var(--color-text-muted)",
@@ -108,7 +108,7 @@ export function AttachmentPreview({
       >
         <span className="font-mono tabular-nums">{mime}</span>
         {sizeLabel && (
-          <span className="opacity-60 tabular-nums">{sizeLabel}</span>
+          <span className="opacity-60 light:opacity-100! tabular-nums">{sizeLabel}</span>
         )}
       </div>
 
@@ -172,7 +172,7 @@ export function AttachmentPreview({
             <a
               href={objectUrl}
               download
-              className="underline hover:opacity-100 opacity-80"
+              className="underline hover:opacity-100 opacity-80 light:opacity-100!"
             >
               Download {title || "attachment"}
             </a>

@@ -243,7 +243,7 @@ export function PluginMatrix() {
               onClick={() => saveMutation.mutate()}
               disabled={saveMutation.isPending}
               className="text-xs px-3 py-1.5 rounded-lg cursor-pointer flex items-center gap-1"
-              style={{ backgroundColor: C.accent, color: C.textPrimary }}
+              style={{ backgroundColor: C.accent, color: C.onAccent }}
             >
               {saveMutation.isPending ? (
                 <Loader2 size={12} className="animate-spin" />

@@ -214,7 +214,7 @@ export function PluginsShellTab() {
             {t("helpExample")}
           </code>
           <br />
-          <span className="text-[10px] mt-1 inline-block" style={{ color: "var(--color-text-muted)", opacity: 0.7 }}>
+          <span className="text-[10px] mt-1 inline-block light:opacity-100!" style={{ color: "var(--color-text-muted)", opacity: 0.7 }}>
             {t("helpDelegation")} <code>mc delegate --to Installer ...</code>
           </span>
         </div>

@@ -360,6 +360,7 @@ export function CommentCard({ comment, agentMap }: CommentCardProps) {
 
   return (
     <div
+      className={isSystem ? "light:opacity-100!" : undefined}
       style={{
         position: "relative",
         background: bgTint,
