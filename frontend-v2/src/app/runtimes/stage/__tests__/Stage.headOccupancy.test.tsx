@@ -1,7 +1,8 @@
 /**
  * /runtimes occupancy (docs/specs/head-launcher.md §8.3, build plan B8):
- * busy badge on the stage card → links to the task; while the engine serves,
- * switch / stop are disabled with the head's task title; a refusal from the
+ * the model card stays quiet (no badge, no permanent notice); "In use" counts
+ * agents + heads; clicking switch / stop while a head works shows the reason
+ * inline and does nothing else; a refusal from the
  * box guard (409 head_on_box) is one sentence, not JSON; runs whose task was
  * deleted get a Stop.
  */
@@ -18,6 +19,9 @@ import { notify } from "@/lib/notify";
 import userEvent from "@testing-library/user-event";
 import type { HeadBusy } from "@/lib/heads";
 import type { Host, HostRecipe, Runtime } from "@/lib/types";
+import de from "../../../../../messages/de.json";
+import en from "../../../../../messages/en.json";
+import { IntlMessageFormat } from "intl-messageformat";
 
 // Keep the real store module (notify needs useNotificationStore) and only
 // pin the current user — a partial mock made notify.success throw unseen.
@@ -54,37 +58,99 @@ beforeEach(() => {
   vi.spyOn(api.runtimes.db, "agents").mockResolvedValue({ runtime_slug: "glm-local", count: 0, agents: [] });
 });
 
-describe("Stage — head busy badge", () => {
-  it("shows the badge linking to the head's task when a head holds a member box", async () => {
+describe("Stage — model card while a head works", () => {
+  it("no badge and no permanent notice — the card stays quiet", async () => {
     vi.spyOn(api.heads, "occupancy").mockResolvedValue({ boxes: { "host-1": head } });
     renderWithQuery(<Stage runtime={runtime} members={[{ host, role: "head" }]} onOpenCockpit={() => {}} />);
-    const badge = await screen.findByTestId("head-busy-badge");
-    expect(badge).toHaveTextContent("Head working: “Fix flaky retry test”");
-    expect(badge).toHaveAttribute("href", "/tasks?task=task-7");
-    // …and the actions below are locked with the task title.
-    expect(screen.getByTestId("head-on-box-notice")).toHaveTextContent("A head is working on this box (“Fix flaky retry test”).");
-    expect(screen.getByTestId("stop-runtime")).toBeDisabled();
-    expect(within(screen.getByTestId("head-on-box-notice")).getByRole("link", { name: "Open task" })).toHaveAttribute("href", "/tasks?task=task-7");
+    await waitFor(() => expect(screen.getByTestId("kpi-in-use")).toHaveTextContent("1"));
+    expect(screen.queryByTestId("head-busy-badge")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("head-on-box-notice")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("head-in-use-notice")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Stop the head first/)).not.toBeInTheDocument();
+    // the actions stay clickable — the reason comes on click
+    expect(screen.getByTestId("stop-runtime")).toBeEnabled();
   });
 
-  it("no badge and nothing locked when the box is free (or heads are off)", async () => {
+  it("IN USE counts agents + heads and says who in the tooltip", async () => {
+    vi.spyOn(api.heads, "occupancy").mockResolvedValue({ boxes: { "host-1": head } });
+    vi.spyOn(api.runtimes.db, "agents").mockResolvedValue({
+      runtime_slug: "glm-local", count: 2,
+      agents: [{ id: "a1", name: "Rex", agent_runtime: "x" }, { id: "a2", name: "Nova", agent_runtime: "x" }],
+    });
+    renderWithQuery(<Stage runtime={runtime} members={[{ host, role: "head" }]} onOpenCockpit={() => {}} />);
+    const tile = await screen.findByTestId("kpi-in-use");
+    await waitFor(() => expect(tile).toHaveTextContent("3"));
+    expect(tile).toHaveTextContent("In use");
+    expect(screen.queryByText("Agents")).not.toBeInTheDocument();
+    const title = tile.getAttribute("title") ?? "";
+    // (the test mock of next-intl does not render ICU plurals — the counts
+    // sentence itself is checked with the real formatter below)
+    expect(title).toContain("{heads, plural");
+    expect(title).toContain("Fix flaky retry test");
+    expect(title).toContain("Rex, Nova");
+  });
+
+  it("free box: IN USE is only the agents, nothing locked", async () => {
     vi.spyOn(api.heads, "occupancy").mockRejectedValue(new Error('API 404: {"detail":{"code":"heads_disabled"}}'));
     renderWithQuery(<Stage runtime={runtime} members={[{ host, role: "head" }]} onOpenCockpit={() => {}} />);
     await waitFor(() => expect(api.heads.occupancy).toHaveBeenCalled());
-    expect(screen.queryByTestId("head-busy-badge")).not.toBeInTheDocument();
+    const tile = await screen.findByTestId("kpi-in-use");
+    expect(tile).toHaveTextContent("0");
+    expect(tile.getAttribute("title")).not.toContain("Head:");
     expect(await screen.findByTestId("stop-runtime")).toBeEnabled();
   });
 });
 
 describe("Switch / stop under a working head", () => {
-  it("the switch trigger is disabled and names the head's task", async () => {
-    vi.spyOn(api.hosts, "recipes").mockResolvedValue([{ slug: "qwen", display_name: "Qwen", running: false } as unknown as HostRecipe]);
+  it("clicking Switch model shows the reason and does not open the list or switch", async () => {
+    vi.spyOn(api.hosts, "recipes").mockResolvedValue([{
+      slug: "qwen", display_name: "Qwen", engine: "vllm_docker", topology: { nodes: 1 }, port: 8000,
+      instance_runtime_id: null, running: false, startable: true, fit: "solo", reason: null,
+      busy_hosts: [], candidate_workers: [],
+    } as HostRecipe]);
+    const start = vi.spyOn(api.hosts, "startRecipe");
     renderWithQuery(
       <ActionBar hostId="host-1" hostName="box" servingName="GLM local" runtimeId="rt-1" onOpenCockpit={() => {}} headOnBox={head} />,
     );
     const trigger = await screen.findByTestId("recipe-dropdown-trigger");
-    expect(trigger).toBeDisabled();
-    expect(trigger).toHaveAttribute("title", expect.stringContaining("Fix flaky retry test"));
+    expect(trigger).toBeEnabled();
+    expect(screen.queryByTestId("head-in-use-notice")).not.toBeInTheDocument();
+    await userEvent.click(trigger);
+    const notice = await screen.findByTestId("head-in-use-notice");
+    expect(notice).toHaveTextContent("A head is working on this box (“Fix flaky retry test”).");
+    expect(notice).toHaveTextContent("Switching now would cut it off. Stop the head first.");
+    expect(within(notice).getByRole("link", { name: "Open task" })).toHaveAttribute("href", "/tasks?task=task-7");
+    expect(screen.queryByTestId("recipe-option-qwen")).not.toBeInTheDocument();
+    expect(start).not.toHaveBeenCalled();
+    // OK closes it and the bar is back
+    await userEvent.click(within(notice).getByRole("button", { name: "OK" }));
+    expect(screen.queryByTestId("head-in-use-notice")).not.toBeInTheDocument();
+    expect(screen.getByTestId("recipe-dropdown-trigger")).toBeInTheDocument();
+  });
+
+  it("clicking Stop shows the reason and does not stop", async () => {
+    const stop = vi.spyOn(api.runtimes, "stop");
+    renderWithQuery(
+      <ActionBar hostId="host-1" hostName="box" servingName="GLM local" runtimeId="rt-1" onOpenCockpit={() => {}} headOnBox={head} />,
+    );
+    await userEvent.click(await screen.findByTestId("stop-runtime"));
+    const notice = await screen.findByTestId("head-in-use-notice");
+    expect(notice).toHaveTextContent("Stopping now would cut it off. Stop the head first.");
+    expect(stop).not.toHaveBeenCalled();
+  });
+
+  it("the counts sentence reads right in both languages (real ICU formatter)", () => {
+    const fmt = (msg: string, v: Record<string, number>, loc: string) => new IntlMessageFormat(msg, loc).format(v);
+    expect(fmt(en.runtimes.stage.inUseTooltip, { heads: 1, agents: 0 }, "en")).toBe("1 head · 0 agents");
+    expect(fmt(en.runtimes.stage.inUseTooltip, { heads: 2, agents: 1 }, "en")).toBe("2 heads · 1 agent");
+    expect(fmt(de.runtimes.stage.inUseTooltip, { heads: 1, agents: 2 }, "de")).toBe("1 Head · 2 Agenten");
+  });
+
+  it("the German texts are there", () => {
+    expect(de.runtimes.stage.kpiInUse).toBe("In Nutzung");
+    expect(de.heads.runtimes.onBoxBodyStop).toBeTruthy();
+    expect(de.heads.runtimes.ok).toBeTruthy();
+    expect(de.runtimes.stage.inUseTooltip).toContain("{heads");
   });
 
   it("a dead engine stays recoverable: trouble variant keeps Stop enabled", async () => {

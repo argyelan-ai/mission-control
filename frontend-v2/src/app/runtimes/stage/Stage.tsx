@@ -39,7 +39,8 @@ import { ActionBar } from "./ActionBar";
 import { PhaseBar } from "./PhaseBar";
 import { shortModelTitle } from "./modelTitle";
 import { useAppStore } from "@/lib/store";
-import { HeadBusyBadge, headOnBoxes, useHeadOccupancy } from "@/components/heads/HeadOccupancy";
+import { headOnBoxes, useHeadOccupancy } from "@/components/heads/HeadOccupancy";
+import type { HeadBusy } from "@/lib/heads";
 
 export interface StageMember {
   host: Host;
@@ -90,6 +91,16 @@ export function Stage({
   // Head launcher §8.3: a head working on any member box (a duo holds both).
   const headOccupancy = useHeadOccupancy();
   const workingHead = headOnBoxes(headOccupancy, members.map((m) => m.host.id));
+  // "In use" counts every head working on a member box (a duo can hold one
+  // head per box — distinct runs, not boxes).
+  const headsOnCard = useMemo(() => {
+    const byRun = new Map<string, HeadBusy>();
+    for (const m of members) {
+      const h = headOccupancy[m.host.id];
+      if (h) byRun.set(h.run_id, h);
+    }
+    return [...byRun.values()];
+  }, [headOccupancy, members]);
 
   const { data: pulse } = useQuery({
     queryKey: ["hosts", headHost?.host.id, "pulse"],
@@ -152,11 +163,26 @@ export function Stage({
   const dotColor =
     status === "failed" ? STATUS_TEXT.error : status === "switching" ? STATUS_TEXT.warning : STATUS.online;
 
+  // "In use" = agents bound to this box's runtime + heads working on it.
+  // The tooltip says who; heads first (they are the ones that block a switch).
+  const agentCount = agentsData?.count ?? 0;
+  const agentNames = (agentsData?.agents ?? []).map((a) => a.name).filter(Boolean);
+  const inUseTitle = [
+    t("inUseTooltip", { heads: headsOnCard.length, agents: agentCount }),
+    ...headsOnCard.map((h) => (h.title ? t("inUseHead", { title: h.title }) : t("inUseHeadNoTitle"))),
+    ...(agentNames.length > 0 ? [t("inUseAgents", { names: agentNames.join(", ") })] : []),
+  ].join("\n");
+
   const endpointPort = runtime.endpoint?.match(/:(\d+)/)?.[1] ?? null;
   const cells: KpiCell[] = [
     { value: fmtCtx(live?.served_context_len ?? runtime.max_context_len), label: t("kpiContext") },
     { value: "–", label: t("kpiSpeedSolo") },
-    { value: String(agentsData?.count ?? 0), label: t("kpiAgents") },
+    {
+      value: String(agentCount + headsOnCard.length),
+      label: t("kpiInUse"),
+      title: inUseTitle,
+      testId: "kpi-in-use",
+    },
     {
       value: endpointPort != null ? `:${endpointPort}` : "–",
       label: t("kpiEndpointSlot"),
@@ -213,11 +239,6 @@ export function Stage({
                 ? nowLineParts.join(" · ")
                 : `${typeLabel(runtime.runtime_type)}${runtime.model_identifier ? ` · ${runtime.model_identifier}` : ""}`}
         </div>
-        {workingHead && (
-          <div className="-mt-2 pb-3 min-w-0">
-            <HeadBusyBadge head={workingHead} />
-          </div>
-        )}
       </div>
 
       <div className="relative" style={{ zIndex: 2 }}>

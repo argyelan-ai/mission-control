@@ -4,8 +4,10 @@
  * Box occupancy on /runtimes (docs/specs/head-launcher.md §8.3):
  *
  *   useHeadOccupancy()   {host id → working head}; empty while heads are off
- *   HeadBusyBadge        "◐ Head working: “Fix flaky retry…”" → links to the task
  *   HeadOnBoxNotice      "⚠ A head is working on this box … Stop the head first."
+ *                        — only after a refused action (409), never permanent;
+ *                        the model card shows the reason when switch/stop is
+ *                        clicked (ActionBar) and counts heads under "In use".
  *   useHeadConflictText  409 head_on_box / engine_busy → one translated sentence
  *   HeadOrphanRuns       active runs whose task card was deleted, with Stop
  */
@@ -52,27 +54,6 @@ export function headOnBoxes(occupancy: Record<string, HeadBusy>, hostIds: (strin
 
 function taskHref(taskId: string) {
   return `/tasks?task=${encodeURIComponent(taskId)}`;
-}
-
-export function HeadBusyBadge({ head }: { head: HeadBusy }) {
-  const t = useTranslations("heads.runtimes");
-  const label = head.title ? t("busyBadge", { title: head.title }) : t("busyBadgeNoTitle");
-  const cls =
-    "inline-flex items-center gap-1.5 max-w-full px-2.5 min-h-[28px] pointer-coarse:min-h-[44px] rounded-full text-[11px] truncate";
-  const style = { background: `${C.info}1F`, border: `1px solid ${C.info}40`, color: STATUS_TEXT.info };
-  const body = (
-    <>
-      <span aria-hidden>◐</span>
-      <span className="truncate">{label}</span>
-    </>
-  );
-  return head.task_id ? (
-    <Link href={taskHref(head.task_id)} className={`${cls} hover:underline`} style={style} data-testid="head-busy-badge" title={label}>
-      {body}
-    </Link>
-  ) : (
-    <span className={cls} style={style} data-testid="head-busy-badge" title={label}>{body}</span>
-  );
 }
 
 export function HeadOnBoxNotice({ head }: { head: { task_id: string | null; title: string | null } }) {

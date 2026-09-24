@@ -129,6 +129,7 @@ export function HostRecipeSwitcher({
   label = null,
   primary = false,
   blockedBy = null,
+  onBlocked,
 }: {
   hostId: string;
   /** Name dieser Box — die Erfolgsmeldung eines Duo-Starts nennt beide Boxen. */
@@ -149,8 +150,11 @@ export function HostRecipeSwitcher({
    *  Registerzeile — für die primäre Aktion der Karte (Switch/Start model). */
   primary?: boolean;
   /** Head launcher §6.7: a head works on this box — switching would cut it
-   *  off. The trigger is disabled and says why (tooltip + aria). */
+   *  off. The trigger stays clickable, but a click opens nothing: it calls
+   *  `onBlocked` so the caller can show the reason at that moment. The
+   *  backend guard (409 head_on_box) stays the real protection. */
   blockedBy?: string | null;
+  onBlocked?: () => void;
 }) {
   const t = useTranslations("runtimes.recipeSwitcher");
   const headConflictText = useHeadConflictText();
@@ -301,10 +305,8 @@ export function HostRecipeSwitcher({
         <button
           ref={triggerRef}
           type="button"
-          onClick={() => setOpen((v) => !v)}
-          disabled={!!blockedBy}
-          title={blockedBy ?? undefined}
-          aria-haspopup="listbox"
+          onClick={() => (blockedBy ? onBlocked?.() : setOpen((v) => !v))}
+          aria-haspopup={blockedBy ? undefined : "listbox"}
           aria-expanded={open}
           data-testid="recipe-dropdown-trigger"
           // Primär (Runtimes-Bühne v2, Spec §2 Zone 4 — Review #438 zweite

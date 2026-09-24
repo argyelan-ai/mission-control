@@ -14,6 +14,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import { Settings } from "lucide-react";
@@ -71,19 +72,25 @@ export function ActionBar({
   variant?: "normal" | "trouble";
   onOpenCockpit: () => void;
   /** Head launcher §8.3: a head works on this box. While the engine serves,
-   *  switch / restart / stop would cut it off → disabled with a notice. A
-   *  dead engine (trouble) stays recoverable — the backend allows that. */
+   *  switch / stop would cut it off → a click shows the reason inline and
+   *  does nothing else (no permanent notice on the card). A dead engine
+   *  (trouble) stays recoverable — the backend allows that. The backend
+   *  guard (409 head_on_box) stays the real protection. */
   headOnBox?: HeadBusy | null;
 }) {
   const t = useTranslations("runtimes.stage");
   const tHeads = useTranslations("heads.runtimes");
   const headConflictText = useHeadConflictText();
   const [refusedBy, setRefusedBy] = useState<{ task_id: string | null; title: string | null } | null>(null);
-  const holder = headOnBox ?? refusedBy;
   const locked = !!headOnBox && variant === "normal";
   const lockedReason = locked
     ? `${headOnBox?.title ? tHeads("onBoxTitle", { title: headOnBox.title }) : tHeads("onBoxTitleNoTitle")} ${tHeads("onBoxBody")}`
     : null;
+  // Which blocked action the operator just clicked — the reason shows only then.
+  const [blockedClick, setBlockedClick] = useState<"switch" | "stop" | null>(null);
+  useEffect(() => {
+    if (!locked) setBlockedClick(null);
+  }, [locked]);
   const queryClient = useQueryClient();
   const [conflict, setConflict] = useState<RuntimeStopConflict | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -151,6 +158,43 @@ export function ActionBar({
     },
   });
 
+  if (blockedClick && locked && headOnBox) {
+    const title = headOnBox.title
+      ? tHeads("onBoxTitle", { title: headOnBox.title })
+      : tHeads("onBoxTitleNoTitle");
+    const body = blockedClick === "stop" ? tHeads("onBoxBodyStop") : tHeads("onBoxBody");
+    return (
+      <div
+        role="status"
+        className="flex items-center gap-3 px-4 py-3 flex-wrap text-xs"
+        style={{ borderTop: `1px solid ${C.borderSubtle}`, color: C.textSecondary }}
+        data-testid="head-in-use-notice"
+      >
+        <span className="basis-full sm:basis-auto sm:flex-1 min-w-0">{title} {body}</span>
+        <div className="flex items-center gap-2 ml-auto">
+          {headOnBox.task_id && (
+            <Link
+              href={`/tasks?task=${encodeURIComponent(headOnBox.task_id)}`}
+              className="inline-flex items-center px-3 min-h-[44px] rounded-md hover:bg-[var(--color-bg-hover)]"
+              style={{ border: `1px solid ${C.borderActive}`, color: C.textSecondary }}
+            >
+              {tHeads("openTask")}
+            </Link>
+          )}
+          <button
+            type="button"
+            onClick={() => setBlockedClick(null)}
+            autoFocus
+            className="px-3 min-h-[44px] rounded-md cursor-pointer"
+            style={{ border: `1px solid ${C.borderActive}`, color: C.textSecondary }}
+          >
+            {tHeads("ok")}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (conflict) {
     return (
       <div
@@ -185,7 +229,10 @@ export function ActionBar({
 
   return (
     <div className="flex flex-col gap-2 px-4 py-3" style={{ borderTop: `1px solid ${C.borderSubtle}` }}>
-      {holder && <HeadOnBoxNotice head={holder} />}
+      {/* Only a refusal from the box guard (409 head_on_box) — i.e. after a
+          click — shows this; a head seen by the poll never shows a
+          permanent notice (the reason comes on click, see above). */}
+      {refusedBy && <HeadOnBoxNotice head={refusedBy} />}
       {error && (
         <div className="text-xs" style={{ color: C.error }}>{error}</div>
       )}
@@ -203,7 +250,7 @@ export function ActionBar({
             {restartMutation.isPending ? t("restarting") : t("restartNow")}
           </button>
         ) : (
-          <HostRecipeSwitcher hostId={hostId} hostName={hostName} servingName={servingName} compact primary label={t("switchModel")} blockedBy={lockedReason} />
+          <HostRecipeSwitcher hostId={hostId} hostName={hostName} servingName={servingName} compact primary label={t("switchModel")} blockedBy={lockedReason} onBlocked={() => setBlockedClick("switch")} />
         )}
         {/* 44px Touch-Ziel (DESIGN.md) mobil, 36px ab der 600px-Container-Breite —
             gleiche Konvention wie die Icon-Knöpfe auf page.tsx (w-11 h-11 sm:w-7 sm:h-7).
@@ -225,9 +272,8 @@ export function ActionBar({
           )}
           <button
             type="button"
-            onClick={() => stopMutation.mutate(false)}
-            disabled={stopMutation.isPending || locked}
-            title={lockedReason ?? undefined}
+            onClick={() => (locked ? setBlockedClick("stop") : stopMutation.mutate(false))}
+            disabled={stopMutation.isPending}
             data-testid="stop-runtime"
             className="text-xs px-3.5 py-2.5 rounded-md cursor-pointer disabled:opacity-50"
             style={{ color: C.error, border: `1px solid ${C.borderSubtle}` }}
