@@ -1058,6 +1058,8 @@ class TaskRunnerService:
                 task_id=task.id,
                 agent_id=agent.id,
             )
+            await redis.set(pending_key, "1", ex=300)  # 5min cooldown
+
     async def _create_dispatch_approval(
         self, session: AsyncSession, task: Task, agent: Agent,
         minutes_waiting: float, reason: str,
