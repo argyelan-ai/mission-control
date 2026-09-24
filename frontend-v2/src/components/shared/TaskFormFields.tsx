@@ -875,7 +875,7 @@ export function TaskFormFields({
               <div className="flex flex-col gap-1.5">
                 <label htmlFor={`${fieldId}-deadline`} className="text-[10px]" style={{ color: C.textMuted }}><Calendar size={10} className="inline mr-1" />Deadline</label>
                 <input id={`${fieldId}-deadline`} type="date" aria-label="Deadline" value={value.dueAt} onChange={(e) => patch({ dueAt: e.target.value })}
-                  className="w-full text-[11px] px-2.5 py-1.5 rounded-lg outline-none cursor-pointer" style={{ background: C.deep, border: `1px solid ${value.dueAt ? alpha(C.accent, 0.33) : C.border}`, color: value.dueAt ? C.textPrimary : C.textMuted, colorScheme: "dark" }} />
+                  className="w-full text-[11px] px-2.5 py-1.5 rounded-lg outline-none cursor-pointer" style={{ background: C.deep, border: `1px solid ${value.dueAt ? alpha(C.accent, 0.33) : C.border}`, color: value.dueAt ? C.textPrimary : C.textMuted }} />
               </div>
               <PlannerSlider value={value.plannerMode} onChange={(m) => patch({ plannerMode: m })} accent={C.accent} textMuted={C.textMuted} textSecondary={C.textSecondary} border={C.border} />
             </div>
@@ -1461,7 +1461,6 @@ export function TaskFormFields({
                 background: C.deep,
                 border: `1px solid ${value.dueAt ? alpha(C.accent, 0.4) : C.border}`,
                 color: value.dueAt ? C.textPrimary : C.textMuted,
-                colorScheme: "dark",
               }}
             />
           </div>
