@@ -27,7 +27,7 @@ import { useTranslations } from "next-intl";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { api } from "@/lib/api";
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
-import type { Device, Host, Runtime, RuntimeLiveStatus } from "@/lib/types";
+import type { Agent, Device, Host, Runtime, RuntimeLiveStatus } from "@/lib/types";
 import { typeLabel } from "../runtimeTypeLabel";
 import { formatUptimeParts, pad2 } from "./uptimeFormat";
 import { fmtCtx } from "@/lib/utils";
@@ -41,6 +41,7 @@ import { shortModelTitle } from "./modelTitle";
 import { useAppStore } from "@/lib/store";
 import { headOnBoxes, useHeadOccupancy } from "@/components/heads/HeadOccupancy";
 import type { HeadBusy } from "@/lib/heads";
+import { fleetCount } from "@/app/agents/fleetCount";
 
 export interface StageMember {
   host: Host;
@@ -121,6 +122,15 @@ export function Stage({
     retry: false,
   });
 
+  // The runtime-agents answer has no operational mode — the roster (same
+  // query as /agents and the sidebar) says which bound agents are paused.
+  const { data: roster } = useQuery({
+    queryKey: ["agents"],
+    queryFn: () => api.agents.list(),
+    staleTime: 15_000,
+    retry: false,
+  });
+
   const status = useMemo(() => deriveStageStatus(runtime, live), [runtime, live]);
   const idleSeconds = pulse?.available ? pulse?.idle_seconds ?? null : null;
   const flowKind = flowKindFor(status, idleSeconds);
@@ -163,14 +173,25 @@ export function Stage({
   const dotColor =
     status === "failed" ? STATUS_TEXT.error : status === "switching" ? STATUS_TEXT.warning : STATUS.online;
 
-  // "In use" = agents bound to this box's runtime + heads working on it.
+  // "In use" = active (not paused) agents bound to this box's runtime + heads
+  // working on it — a paused agent does not use the box (same split as the
+  // /agents page and the sidebar counter). An agent the roster does not
+  // know yet counts as active: better one too many than a free-looking box.
   // The tooltip says who; heads first (they are the ones that block a switch).
-  const agentCount = agentsData?.count ?? 0;
-  const agentNames = (agentsData?.agents ?? []).map((a) => a.name).filter(Boolean);
+  const boundAgents = (agentsData?.agents ?? []).map(
+    (ref) => roster?.find((a) => a.id === ref.id) ?? ({ ...ref, operational_mode: "active" } as unknown as Agent),
+  );
+  const agentSplit = fleetCount(boundAgents);
+  const activeNames = boundAgents.filter((a) => a.operational_mode !== "paused").map((a) => a.name).filter(Boolean);
+  const pausedNames = boundAgents.filter((a) => a.operational_mode === "paused").map((a) => a.name).filter(Boolean);
+  const agentCount = agentSplit.active;
   const inUseTitle = [
-    t("inUseTooltip", { heads: headsOnCard.length, agents: agentCount }),
+    agentSplit.paused > 0
+      ? t("inUseTooltipWithPaused", { heads: headsOnCard.length, agents: agentSplit.active, paused: agentSplit.paused })
+      : t("inUseTooltip", { heads: headsOnCard.length, agents: agentSplit.active }),
     ...headsOnCard.map((h) => (h.title ? t("inUseHead", { title: h.title }) : t("inUseHeadNoTitle"))),
-    ...(agentNames.length > 0 ? [t("inUseAgents", { names: agentNames.join(", ") })] : []),
+    ...(activeNames.length > 0 ? [t("inUseAgents", { names: activeNames.join(", ") })] : []),
+    ...(pausedNames.length > 0 ? [t("inUsePaused", { names: pausedNames.join(", ") })] : []),
   ].join("\n");
 
   const endpointPort = runtime.endpoint?.match(/:(\d+)/)?.[1] ?? null;

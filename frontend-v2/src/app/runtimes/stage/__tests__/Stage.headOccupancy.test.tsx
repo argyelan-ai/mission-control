@@ -18,7 +18,7 @@ import { mkPair, mkRun } from "@/lib/__tests__/headFixtures";
 import { notify } from "@/lib/notify";
 import userEvent from "@testing-library/user-event";
 import type { HeadBusy } from "@/lib/heads";
-import type { Host, HostRecipe, Runtime } from "@/lib/types";
+import type { Agent, Host, HostRecipe, Runtime } from "@/lib/types";
 import de from "../../../../../messages/de.json";
 import en from "../../../../../messages/en.json";
 import { IntlMessageFormat } from "intl-messageformat";
@@ -56,7 +56,11 @@ beforeEach(() => {
   vi.spyOn(api.hosts, "pulse").mockResolvedValue({ points: [], now_tps: null, idle_seconds: null, available: false });
   vi.spyOn(api.hosts, "recipes").mockResolvedValue([]);
   vi.spyOn(api.runtimes.db, "agents").mockResolvedValue({ runtime_slug: "glm-local", count: 0, agents: [] });
+  vi.spyOn(api.agents, "list").mockResolvedValue([]);
 });
+
+const mkAgent = (id: string, name: string, mode: "active" | "paused") =>
+  ({ id, name, operational_mode: mode, status: "idle" }) as unknown as Agent;
 
 describe("Stage — model card while a head works", () => {
   it("no badge and no permanent notice — the card stays quiet", async () => {
@@ -71,12 +75,13 @@ describe("Stage — model card while a head works", () => {
     expect(screen.getByTestId("stop-runtime")).toBeEnabled();
   });
 
-  it("IN USE counts agents + heads and says who in the tooltip", async () => {
+  it("IN USE counts active agents + heads and says who in the tooltip", async () => {
     vi.spyOn(api.heads, "occupancy").mockResolvedValue({ boxes: { "host-1": head } });
     vi.spyOn(api.runtimes.db, "agents").mockResolvedValue({
       runtime_slug: "glm-local", count: 2,
       agents: [{ id: "a1", name: "Rex", agent_runtime: "x" }, { id: "a2", name: "Nova", agent_runtime: "x" }],
     });
+    vi.spyOn(api.agents, "list").mockResolvedValue([mkAgent("a1", "Rex", "active"), mkAgent("a2", "Nova", "active")]);
     renderWithQuery(<Stage runtime={runtime} members={[{ host, role: "head" }]} onOpenCockpit={() => {}} />);
     const tile = await screen.findByTestId("kpi-in-use");
     await waitFor(() => expect(tile).toHaveTextContent("3"));
@@ -88,6 +93,28 @@ describe("Stage — model card while a head works", () => {
     expect(title).toContain("{heads, plural");
     expect(title).toContain("Fix flaky retry test");
     expect(title).toContain("Rex, Nova");
+  });
+
+  it("paused agents do not count: 1 head + 3 paused agents → 1", async () => {
+    vi.spyOn(api.heads, "occupancy").mockResolvedValue({ boxes: { "host-1": head } });
+    vi.spyOn(api.runtimes.db, "agents").mockResolvedValue({
+      runtime_slug: "glm-local", count: 3,
+      agents: [
+        { id: "a1", name: "Hermes", agent_runtime: "x" },
+        { id: "a2", name: "Rex", agent_runtime: "x" },
+        { id: "a3", name: "Sparky", agent_runtime: "x" },
+      ],
+    });
+    vi.spyOn(api.agents, "list").mockResolvedValue([
+      mkAgent("a1", "Hermes", "paused"), mkAgent("a2", "Rex", "paused"), mkAgent("a3", "Sparky", "paused"),
+    ]);
+    renderWithQuery(<Stage runtime={runtime} members={[{ host, role: "head" }]} onOpenCockpit={() => {}} />);
+    const tile = await screen.findByTestId("kpi-in-use");
+    await waitFor(() => expect(tile.getAttribute("title") ?? "").toContain("Paused: Hermes, Rex, Sparky"));
+    expect(tile).toHaveTextContent(/^1In use$/);
+    const title = tile.getAttribute("title") ?? "";
+    expect(title).toContain("{paused, plural"); // the "with paused" sentence
+    expect(title).not.toContain("Agents:");
   });
 
   it("free box: IN USE is only the agents, nothing locked", async () => {
@@ -141,9 +168,11 @@ describe("Switch / stop under a working head", () => {
 
   it("the counts sentence reads right in both languages (real ICU formatter)", () => {
     const fmt = (msg: string, v: Record<string, number>, loc: string) => new IntlMessageFormat(msg, loc).format(v);
-    expect(fmt(en.runtimes.stage.inUseTooltip, { heads: 1, agents: 0 }, "en")).toBe("1 head · 0 agents");
-    expect(fmt(en.runtimes.stage.inUseTooltip, { heads: 2, agents: 1 }, "en")).toBe("2 heads · 1 agent");
-    expect(fmt(de.runtimes.stage.inUseTooltip, { heads: 1, agents: 2 }, "de")).toBe("1 Head · 2 Agenten");
+    expect(fmt(en.runtimes.stage.inUseTooltip, { heads: 1, agents: 0 }, "en")).toBe("1 head · 0 active agents");
+    expect(fmt(en.runtimes.stage.inUseTooltip, { heads: 2, agents: 1 }, "en")).toBe("2 heads · 1 active agent");
+    expect(fmt(de.runtimes.stage.inUseTooltip, { heads: 1, agents: 2 }, "de")).toBe("1 Head · 2 aktive Agenten");
+    expect(fmt(en.runtimes.stage.inUseTooltipWithPaused, { heads: 1, agents: 0, paused: 3 }, "en")).toBe("1 head · 0 active agents · 3 paused");
+    expect(fmt(de.runtimes.stage.inUseTooltipWithPaused, { heads: 1, agents: 0, paused: 3 }, "de")).toBe("1 Head · 0 aktive Agenten · 3 pausiert");
   });
 
   it("the German texts are there", () => {
