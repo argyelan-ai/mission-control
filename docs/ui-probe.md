@@ -103,6 +103,7 @@ Exit codes: `0` done, `2` a write request got through (must never happen),
 | `clipped-text` | medium | Text cut off without an ellipsis. |
 | `console-error` | medium | Browser console error in that state (errors caused by the probe's own lock are filtered). |
 | `small-target` | low | Controls under 44 px, phone widths only. |
+| `crash` | high | The probe could not finish the page (e.g. the browser tab crashed); the run continues with the next page. |
 | `theme` | high | With `--theme`: the page renders another theme than the forced one. |
 | `contrast` | high | With `--contrast`: text below WCAG AA (4.5:1, large text 3:1) against the background right behind it. One finding per colour pair, with example texts. |
 

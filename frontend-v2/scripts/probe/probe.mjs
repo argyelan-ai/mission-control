@@ -16,7 +16,7 @@ import { clickVerdict, isCloser, nestedVerdict, redactSecrets } from "./lib/guar
 import { createLockedContext, lockSelfTest, newWriteCounter } from "./lib/context.mjs";
 import { EXTRA_VIEWS, discoverRoutes, filterRoutes, resolveRoutes } from "./lib/routes.mjs";
 import { LOADING_TEXT_RE, dedupeFindings, evaluateState } from "./lib/findings.mjs";
-import { parseArgs, renderMarkdown, sampleRepeats, slug } from "./lib/report.mjs";
+import { crashedPage, parseArgs, renderMarkdown, sampleRepeats, slug } from "./lib/report.mjs";
 import { collectCandidates, markSeen, measureContrast, measureState, pageBusy, readSelect, settleAnimations } from "./lib/browser.mjs";
 import { contrastFindings } from "./lib/contrast.mjs";
 
@@ -496,7 +496,12 @@ try {
     const shellDone = new Set();
     for (const route of resolved) {
       const t0 = Date.now();
-      const r = await probePage(ctx, route, width, shellDone);
+      let r;
+      try {
+        r = await probePage(ctx, route, width, shellDone);
+      } catch (e) {
+        r = crashedPage(route, width, e);
+      }
       pages.push(r);
       console.log(`${route.path} @${width}: opened ${r.counts.opened}/${r.counts.candidates}, guarded ${r.counts.guarded}, findings ${r.findings.length} (${Math.round((Date.now() - t0) / 1000)}s)`);
     }

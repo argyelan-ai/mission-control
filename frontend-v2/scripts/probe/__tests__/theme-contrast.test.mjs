@@ -149,6 +149,16 @@ describe("report", () => {
   });
 });
 
+describe("crashedPage", () => {
+  it("turns a crashed browser tab into a high finding instead of ending the run", async () => {
+    const { crashedPage } = await import("../lib/report.mjs");
+    const r = crashedPage({ path: "/bench", pattern: "/bench" }, 1440, new Error("page.evaluate: Target crashed \n  at x"));
+    expect(r).toMatchObject({ path: "/bench", width: 1440, crashed: true, counts: {}, states: [] });
+    expect(r.findings[0]).toMatchObject({ type: "crash", severity: "high", page: "/bench", width: 1440 });
+    expect(r.findings[0].message).toBe("probe could not finish this page: page.evaluate: Target crashed");
+  });
+});
+
 describe("storage key", () => {
   it("is the app's own key", async () => {
     const { THEME_STORAGE_KEY } = await import("../lib/context.mjs");

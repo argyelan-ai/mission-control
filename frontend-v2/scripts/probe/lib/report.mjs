@@ -74,6 +74,23 @@ export function sampleRepeats(cands) {
   return { keep: cands.filter((_, i) => !drop.has(i)), skipped: cands.filter((_, i) => drop.has(i)) };
 }
 
+/**
+ * A page the probe could not finish (e.g. the browser tab crashed under
+ * memory pressure): recorded as a high finding, the run goes on.
+ */
+export function crashedPage(route, width, err) {
+  const msg = String((err && err.message) || err).split("\n")[0].trim().slice(0, 200);
+  return {
+    path: route.path,
+    pattern: route.pattern,
+    width,
+    crashed: true,
+    states: [],
+    counts: {},
+    findings: [{ type: "crash", severity: "high", page: route.path, width, message: `probe could not finish this page: ${msg}`, detail: {}, count: 1, shots: [], openers: [] }],
+  };
+}
+
 /** Filesystem-safe short slug. */
 export function slug(s, max = 40) {
   const x = String(s || "")
