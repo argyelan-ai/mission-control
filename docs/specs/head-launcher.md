@@ -95,7 +95,7 @@ before code (PR 0), otherwise we build against our own decision record.
 | kimi, opencode, codex/acpx | sandbox proven (kimi runs unattended only with `--yolo`); quarterly swap test (ADR-085 §6.6) |
 | Quota in percent | with claude × Claude: the CLI status line writes `rate_limits` to a file (statusline script) |
 | Two local heads per box | a measurement with the bench standard shows acceptable speed with 2 clients |
-| Night / scheduled runs | 5 attended runs without a forbidden-list hit and the sandbox proven |
+| Night / scheduled runs | 5 attended runs without a forbidden-list hit and the sandbox proven. **Built** as the night shift (ROADMAP E2, `services/heads/night_shift.py`) behind `night_shift_enabled` (default off) — the operator switches it on in Settings once this trigger holds; `mc-head` still refuses real repos without the sandbox and the heads' own GitHub identity |
 | Live output stream, ACP driver for heads | never via the frozen sessions-chat code; only if a measured need appears |
 
 ## 4. Harness × runtime matrix
@@ -811,6 +811,34 @@ Acceptance criteria v1:
 13. launchd `WatchPaths` on files written from the container: measure the
     start latency from the UI click to `phase=starting` (the 30 s interval is
     the safety net).
+14. **Night shift — known limits** (ROADMAP E2, decided 2026-09-24):
+    - Only cards nobody else works on can be marked: an inbox card nothing
+      holds (the mark holds it, `hold_reason = "night shift"`) or a card on
+      `manual_hold` (409 `task_busy` otherwise). Right before the start the
+      card must still be on hold; a card the fleet or the operator took
+      meanwhile is skipped as `task_moved` and listed in the morning report.
+    - A lane counts **heads only**. A box whose engine serves fleet agents
+      right now (`pairs.engine_in_use`) still gets a night head — same as a
+      click by day. Counting it as busy would keep night heads off any box a
+      persistent agent is bound to; revisit with a measurement of the slowdown.
+    - A local runtime without a linked host (no box keys) is one lane of its
+      own (`runtime:<slug>`), held while any head runs on it.
+    - Cloud share: floor of the night's marks, but at least one cloud start per
+      night while the share is above 0 (0 = no cloud, 100 = no limit).
+    - With `HEADS_ENABLED=false` the night-shift API answers 404, so a mark
+      cannot be removed there; a card held by a mark (`hold_reason = "night
+      shift"`) is released with the normal hold release on the task.
+    - MC is the operator's channel (decided 2026-09-24): the morning report
+      and the blocked notices show on Home ("Last night" card, one line per
+      job, "Answer" for a head that needs you; it stays until dismissed or
+      until the next window starts). Slack / Telegram get a copy only with
+      `night_shift_send_to_channels` on (Settings → Night shift, default
+      off) and a configured report channel.
+    - Morning report with the channels on: at most once and at least once per
+      night — a claim left by a crash is taken over after 10 min, an
+      undelivered report is sent again every 5 min up to 3 attempts, then it
+      stays in MC. Messages are cut below 3 500 characters ("… and N more").
+      With the channels off it is only stored (`state: stored`), never sent.
 
 ## Review notes (2026-09-23)
 

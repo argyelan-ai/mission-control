@@ -496,14 +496,14 @@ async def test_restart_that_cannot_move_the_task_leaves_no_run_and_no_spool(
         auth_client, heads_root, make_board, make_task, monkeypatch):
     """If the task write fails, the host must never hear of the run — and
     the client gets a coded 409, not a bare 500."""
-    from app.routers import heads as heads_router
+    from app.services.heads import start as start_service
 
     async def boom(*a, **kw):
         raise RuntimeError("db said no")
 
     _, task = await _world(make_board, make_task, status="failed")
     old = make_run(heads_root, task_id=str(task.id), status={"phase": "exited", "exit_code": 0, "reason": "exit_1"})
-    monkeypatch.setattr(heads_router, "move_task", boom)
+    monkeypatch.setattr(start_service, "move_task", boom)
     resp = await auth_client.post(f"/api/v1/heads/{old}/restart", json={
         "harness": "omp", "runtime_slug": "box-slot", "mode": "fresh"})
     assert resp.status_code == 409, resp.text
@@ -515,14 +515,14 @@ async def test_restart_when_move_task_finds_no_path_is_refused(
         auth_client, heads_root, make_board, make_task, monkeypatch):
     """move_task returns False (no valid path) → never spool a run whose task
     is not in progress."""
-    from app.routers import heads as heads_router
+    from app.services.heads import start as start_service
 
     async def no_path(*a, **kw):
         return False
 
     _, task = await _world(make_board, make_task, status="failed")
     old = make_run(heads_root, task_id=str(task.id), status={"phase": "exited", "exit_code": 0, "reason": "exit_1"})
-    monkeypatch.setattr(heads_router, "move_task", no_path)
+    monkeypatch.setattr(start_service, "move_task", no_path)
     resp = await auth_client.post(f"/api/v1/heads/{old}/restart", json={
         "harness": "omp", "runtime_slug": "box-slot", "mode": "fresh"})
     assert resp.status_code == 409, resp.text
@@ -533,13 +533,13 @@ async def test_restart_when_move_task_finds_no_path_is_refused(
 
 async def test_start_with_hold_on_failure_holds_the_card_when_the_task_move_fails(
         auth_client, heads_root, make_board, make_task, monkeypatch):
-    from app.routers import heads as heads_router
+    from app.services.heads import start as start_service
 
     async def boom(*a, **kw):
         raise RuntimeError("db said no")
 
     _, task = await _world(make_board, make_task)
-    monkeypatch.setattr(heads_router, "move_task", boom)
+    monkeypatch.setattr(start_service, "move_task", boom)
     resp = await auth_client.post("/api/v1/heads", json={"task_id": str(task.id), "harness": "omp",
                                                          "runtime_slug": "box-slot", "hold_on_failure": True})
     assert resp.status_code == 409, resp.text
