@@ -68,7 +68,18 @@ DESIGN.md.
    - The terminal and syntax-highlighted code stay dark in both modes: they
      are content, not chrome, and their palettes are built for a dark ground.
    - Measurement is ink, state is colour (unchanged).
-   - Never append a hex suffix to a colour; use `alpha()`.
+   - Never append a hex suffix to a colour; use `alpha()`. `alpha()` works
+     in whole percent (`08` → 3 %, not 3.1 %) and mixes with `color-mix`,
+     so it is not bit-identical to the old `#RRGGBBAA` — not visible in the
+     before/after screenshots.
+   - `data-theme` on `<html>` is the ONLY theme switch. There is no `dark`
+     class on `<html>` and the Tailwind `dark:` variant is not used; a
+     light-only override uses the `light:` variant (`globals.css`).
+   - `status-offline` is deliberately faint in both modes (dark `#3a3a3a`,
+     light `#c9c5bb`, about 1.4–1.7:1 against the surfaces): an offline dot
+     is "nothing happening", and the text next to it carries the state.
+     Lifting it to 3:1 (WCAG 1.4.11, e.g. light `#9d988c`) is an open
+     operator decision, for both modes together.
    - Text tokens clear WCAG AA (4.5:1) on all five surfaces in light mode.
      `text-dim` is meant for decoration but is used for small meta text in
      many places (axe finding), so in light mode it is an AA text tone on
@@ -96,6 +107,8 @@ DESIGN.md.
      tab, meta theme-color.
    - `use-client-first` — a codemod must not put an import above
      `"use client"`.
+   - `no-dark-class` — no `dark` class on `<html>`, no `dark:` utility, no
+     `.dark` selector.
 
 ## Alternatives
 
@@ -167,6 +180,6 @@ it found and how it is fixed:
   `frontend-v2/src/components/shared/ThemeSwitch.tsx`,
   `frontend-v2/src/components/settings/AppearanceSection.tsx`,
   `frontend-v2/src/components/memory/graphConfig.ts`
-- Tests: `frontend-v2/src/lib/__tests__/{no-hex-alpha-concat,no-raw-colors,colors.tokens,colors.alpha,theme,theme.contrast,use-client-first}.test.ts`
+- Tests: `frontend-v2/src/lib/__tests__/{no-hex-alpha-concat,no-dark-class,no-raw-colors,colors.tokens,colors.alpha,theme,theme.contrast,use-client-first}.test.ts`
 - Replaces: PR #537 (not merged)
 - Related: ADR-076 (radii), PRODUCT.md / DESIGN.md (design doctrine)

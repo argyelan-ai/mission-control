@@ -37,7 +37,6 @@ export default async function RootLayout({
   return (
     <html
       lang={locale}
-      className="dark"
       suppressHydrationWarning
     >
       <head>
