@@ -135,6 +135,11 @@ services:
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production}
       # User session lifetime; override in .env (e.g. 43200 = 30 days on a Tailscale-only install)
       JWT_ACCESS_TOKEN_EXPIRE_MINUTES: ${JWT_ACCESS_TOKEN_EXPIRE_MINUTES:-480}
+      # Streams (SSE/WebSocket) open with single-use tickets (?ticket=). The
+      # old login token in the URL (?token=) leaks into proxy logs and is off;
+      # true re-enables it for one transition release only.
+      ALLOW_QUERY_TOKEN_AUTH: ${ALLOW_QUERY_TOKEN_AUTH:-false}
+      STREAM_TICKET_TTL_SECONDS: ${STREAM_TICKET_TTL_SECONDS:-60}
       SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY:-}
       DISCORD_WEBHOOK_OPS: ${DISCORD_WEBHOOK_OPS:-}
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}

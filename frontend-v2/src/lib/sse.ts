@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { getToken, sseUrls } from "./api";
+import { sseUrls } from "./api";
+import { withStreamTicket } from "./streamTicket";
 
 interface SSEOptions {
   onEvent?: (event: string, data: Record<string, unknown>) => void;
@@ -41,6 +42,8 @@ const NAMED_EVENTS = [
   "group.status_changed", "group.member_changed",
   "chat.message", "chat_event", "memory.created", "project.updated", "system.alert",
   "system.rpc_disconnected", "system.rpc_reconnected", "system.slow_response", "system.component_down",
+  // /agents/{id}/terminal-events/stream (useTerminalRemountSignal)
+  "terminal_remount",
 ] as const;
 
 // Backoff constants for reconnect (M14 — iOS kills SSE on app/tab switch)
@@ -58,6 +61,10 @@ export function useSSE(url: string, options: SSEOptions = {}) {
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastMessageAtRef = useRef<number>(Date.now());
   const destroyedRef = useRef(false);
+  // True once a stream was open at least once in this effect — survives the
+  // gap while a reconnect is still fetching its ticket, so onReconnect fires
+  // for that reconnect even though esRef is momentarily null.
+  const hadConnectionRef = useRef(false);
 
   useEffect(() => {
     onEventRef.current = onEvent;
@@ -69,13 +76,19 @@ export function useSSE(url: string, options: SSEOptions = {}) {
     if (!enabled || !url) return;
 
     destroyedRef.current = false;
+    hadConnectionRef.current = false;
 
-    function buildUrl() {
-      const token = getToken();
-      return `${url}${url.includes("?") ? "&" : "?"}token=${token}`;
-    }
+    // Bumped by every connect() and by cleanup: a ticket fetch that resolves
+    // after a newer connect (or after unmount) must not open a stale stream.
+    let generation = 0;
 
     function attachHandlers(es: EventSource) {
+      // A stream that opened is healthy again: start the next backoff from
+      // the base delay. Quiet streams only get comment pings (no event), so
+      // resetting on events alone let the delay creep up to the 30 s cap.
+      es.onopen = () => {
+        if (esRef.current === es) retryCountRef.current = 0;
+      };
       es.onmessage = (e: MessageEvent) => {
         lastMessageAtRef.current = Date.now();
         retryCountRef.current = 0;
@@ -102,11 +115,14 @@ export function useSSE(url: string, options: SSEOptions = {}) {
       });
 
       es.onerror = (e: Event) => {
+        if (esRef.current !== es) return; // a stale, already replaced stream
         onErrorRef.current?.(e);
-        // EventSource natively reconnects for transient errors, but iOS often
-        // hard-kills the connection when the app goes to background — in that
-        // case readyState stays CLOSED and no reconnect fires. Detect and retry
-        // with exponential backoff.
+        // The native EventSource retry would replay the SAME URL — whose
+        // single-use stream ticket is already spent, so it can only 401.
+        // Close it and reconnect ourselves with a fresh ticket (exponential
+        // backoff). This also covers iOS hard-killing the connection in the
+        // background (readyState CLOSED, no native retry).
+        es.close();
         scheduleReconnect();
       };
     }
@@ -136,15 +152,30 @@ export function useSSE(url: string, options: SSEOptions = {}) {
       // restart, silent stall). Everything the backend broadcast in the
       // meantime is gone — the tailer starts a fresh consumer at EOF and never
       // replays — so this is the exact moment consumers must refetch.
-      const hadConnection = esRef.current !== null;
+      const hadConnection = hadConnectionRef.current;
       if (esRef.current) {
         esRef.current.close();
         esRef.current = null;
       }
-      const es = new EventSource(buildUrl(), { withCredentials: true });
-      esRef.current = es;
-      attachHandlers(es);
-      if (hadConnection) onReconnectRef.current?.();
+      const myGeneration = ++generation;
+      // Every connect — first mount and every reconnect — gets its own
+      // single-use ticket. The login token never goes into the URL.
+      withStreamTicket(url).then(
+        (ticketUrl) => {
+          if (destroyedRef.current || myGeneration !== generation) return;
+          const es = new EventSource(ticketUrl, { withCredentials: true });
+          esRef.current = es;
+          hadConnectionRef.current = true;
+          attachHandlers(es);
+          if (hadConnection) onReconnectRef.current?.();
+        },
+        () => {
+          // Ticket fetch failed (network, backend restarting, session gone):
+          // retry with backoff like any other dropped connection.
+          if (destroyedRef.current || myGeneration !== generation) return;
+          scheduleReconnect();
+        },
+      );
     }
 
     // iOS M14: reconnect when tab becomes visible again and the connection is
@@ -164,6 +195,7 @@ export function useSSE(url: string, options: SSEOptions = {}) {
 
     return () => {
       destroyedRef.current = true;
+      generation += 1;
       document.removeEventListener("visibilitychange", onVisibilityChange);
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
       esRef.current?.close();

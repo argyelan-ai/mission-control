@@ -152,7 +152,7 @@ Browser (Caddy :80) → Frontend (Next.js 15, :3000)
 - `components/agent/` — AgentCard, AgentGrid, CliTerminalTab
 - `components/memory/` — MemoryLayerTabs, EpisodicTimeline, SemanticCardGrid, AgentLessonMatrix, MemoryQueryBar
 
-**xterm.js Terminal** (`app/sessions/page.tsx`): WebSocket → `/api/v1/agents/{id}/terminal?token=...` → PTY-Proxy im Backend → `docker exec -itu agent tmux attach`. Scrollback 5000, copy-on-select, Cmd+V paste, Auto-Reconnect nach 3s. Lifecycle-Buttons: Start/Stop/Restart.
+**xterm.js Terminal** (`app/sessions/page.tsx`): WebSocket → `/api/v1/agents/{id}/terminal?ticket=...` (single-use stream ticket, `POST /api/v1/auth/stream-ticket`) → PTY-Proxy im Backend → `docker exec -itu agent tmux attach`. Scrollback 5000, copy-on-select, Cmd+V paste, Auto-Reconnect nach 3s. Lifecycle-Buttons: Start/Stop/Restart.
 
 ### 3. Docker Stack
 

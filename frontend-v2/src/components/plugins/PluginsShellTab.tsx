@@ -21,11 +21,10 @@ export function PluginsShellTab() {
   const [connected, setConnected] = useState(false);
   const [starting, setStarting] = useState(false);
 
-  const connectWs = useCallback(() => {
+  const openWs = useCallback((url: string) => {
     if (!termInstance.current) return;
     const term = termInstance.current;
 
-    const url = api.plugins.shellWsUrl();
     const ws = new WebSocket(url);
     ws.binaryType = "arraybuffer";
     wsRef.current = ws;
@@ -62,12 +61,14 @@ export function PluginsShellTab() {
       if (ws.readyState === WebSocket.OPEN) ws.send(data);
     });
 
-    return () => {
-      dataDisposable.dispose();
-      ws.close(1000);
-      wsRef.current = null;
-    };
+    ws.addEventListener("close", () => dataDisposable.dispose());
   }, []);
+
+  // Fetches a single-use stream ticket first — the login token never goes
+  // into the WebSocket URL (it leaked into proxy logs).
+  const connectWs = useCallback(() => {
+    api.plugins.shellWsUrl().then(openWs, () => setConnected(false));
+  }, [openWs]);
 
   // Initialize xterm.js
   useEffect(() => {

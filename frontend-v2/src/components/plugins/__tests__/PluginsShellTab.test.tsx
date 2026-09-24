@@ -28,7 +28,7 @@ const apiMock = vi.hoisted(() => ({
   plugins: {
     startShell: vi.fn(async () => ({ ok: true, session: "plugins-shell" })),
     stopShell: vi.fn(async () => ({ ok: true, session: "plugins-shell" })),
-    shellWsUrl: () => "ws://localhost/api/v1/plugins/shell/ws?token=x",
+    shellWsUrl: async () => "ws://localhost/api/v1/plugins/shell/ws?ticket=x",
   },
 }));
 vi.mock("@/lib/api", () => ({ api: apiMock }));
@@ -48,6 +48,7 @@ beforeEach(() => {
     binaryType = "";
     send() {}
     close() {}
+    addEventListener() {}
   };
 });
 

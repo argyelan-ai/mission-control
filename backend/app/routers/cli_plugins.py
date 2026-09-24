@@ -171,23 +171,17 @@ async def stop_plugins_shell(current_user=Depends(require_user)):
 async def plugins_shell_websocket(
     websocket: WebSocket,
     token: Optional[str] = None,
+    ticket: Optional[str] = None,
 ):
     """WebSocket proxy for the plugin shell."""
     # No Depends(get_session) here: this handler never touches the DB, and
     # a session dependency would pin a pool connection for the WebSocket's
     # whole lifetime (FastAPI unwinds it only after the WS closes —
     # finding 2026-09-16).
-    # Auth check
-    if not token:
-        await websocket.close(code=4001)
-        return
-    try:
-        from jose import jwt as _jwt
-        payload = _jwt.decode(token, settings.jwt_secret_key, algorithms=["HS256"])
-        if not payload.get("sub"):
-            await websocket.close(code=4001)
-            return
-    except Exception:
+    # Auth check: stream ticket (legacy ?token= only with ALLOW_QUERY_TOKEN_AUTH)
+    from app.auth import authenticate_websocket
+
+    if not await authenticate_websocket(websocket, token=token, ticket=ticket):
         await websocket.close(code=4001)
         return
 

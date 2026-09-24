@@ -130,15 +130,11 @@ import type {
   HeadStartBody,
 } from "./heads";
 
-export const BASE_URL = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
+import { AUTH_TOKEN_KEY, BASE_URL, getToken } from "./authToken";
+import { withStreamTicket } from "./streamTicket";
 
-export const AUTH_TOKEN_KEY = "mc_auth_token";
+export { AUTH_TOKEN_KEY, BASE_URL, getToken };
 export const USER_INFO_KEY = "mc_user";
-
-export function getToken(): string {
-  if (typeof window === "undefined") return "";
-  return localStorage.getItem(AUTH_TOKEN_KEY) ?? "";
-}
 
 export function clearToken() {
   if (typeof window !== "undefined") {
@@ -1293,11 +1289,9 @@ export const api = {
         request<{ ok: boolean }>(`/api/v1/agents/${agentId}/terminal/${taskId}`, {
           method: "DELETE",
         }),
-      wsUrl: (agentId: string, taskId: string): string => {
-        const base = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
-        const ws = base.replace(/^http/, "ws");
-        return `${ws}/api/v1/agents/${agentId}/terminal/${taskId}/ws?token=${getToken()}`;
-      },
+      /** Async: fetches a single-use stream ticket (never the login token). */
+      wsUrl: (agentId: string, taskId: string): Promise<string> =>
+        withStreamTicket(`${wsBase()}/api/v1/agents/${agentId}/terminal/${taskId}/ws`),
     },
   },
 
@@ -1707,11 +1701,9 @@ export const api = {
       request<{ ok: boolean; session: string }>("/api/v1/plugins/shell", { method: "POST" }),
     stopShell: () =>
       request<{ ok: boolean; session: string }>("/api/v1/plugins/shell", { method: "DELETE" }),
-    shellWsUrl: (): string => {
-      const base = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
-      const ws = base.replace(/^http/, "ws");
-      return `${ws}/api/v1/plugins/shell/ws?token=${getToken()}`;
-    },
+    /** Async: fetches a single-use stream ticket (never the login token). */
+    shellWsUrl: (): Promise<string> =>
+      withStreamTicket(`${wsBase()}/api/v1/plugins/shell/ws`),
   },
 
   // Phase 31 / OCS-15: api.clawhub group removed (Marketplace UI deleted in
@@ -2365,16 +2357,11 @@ export const api = {
       request<{ ok: boolean; session: string }>(`/api/v1/agents/${agentId}/shell`, { method: "POST" }),
     stopShell: (agentId: string) =>
       request<{ ok: boolean }>(`/api/v1/agents/${agentId}/shell`, { method: "DELETE" }),
-    ptyWsUrl: (agentId: string): string => {
-      const base = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
-      const ws = base.replace(/^http/, "ws");
-      return `${ws}/api/v1/agents/${agentId}/terminal?token=${getToken()}`;
-    },
-    hostPtyWsUrl: (agentId: string): string => {
-      const base = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
-      const ws = base.replace(/^http/, "ws");
-      return `${ws}/api/v1/host-agents/${agentId}/terminal?token=${getToken()}`;
-    },
+    /** Async: fetches a single-use stream ticket (never the login token). */
+    ptyWsUrl: (agentId: string): Promise<string> =>
+      withStreamTicket(`${wsBase()}/api/v1/agents/${agentId}/terminal`),
+    hostPtyWsUrl: (agentId: string): Promise<string> =>
+      withStreamTicket(`${wsBase()}/api/v1/host-agents/${agentId}/terminal`),
   },
 
   // ── Browser Live View (view-only CDP screencast) ─────────────────────────
@@ -2384,13 +2371,18 @@ export const api = {
   },
 };
 
-// Separate helper (not on `api`, mirrors cliSessions.*WsUrl) so components can
-// build the WS URL without an extra network round-trip.
-export function browserLiveWsUrl(targetId?: string): string {
+/** WebSocket base: the configured API origin with ws(s) scheme, or "" for
+ *  same-origin relative URLs. */
+function wsBase(): string {
   const base = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
-  const ws = base.replace(/^http/, "ws");
-  const targetParam = targetId ? `&target=${encodeURIComponent(targetId)}` : "";
-  return `${ws}/api/v1/browser-live/ws?token=${getToken()}${targetParam}`;
+  return base.replace(/^http/, "ws");
+}
+
+// Separate helper (not on `api`, mirrors cliSessions.*WsUrl). Async: fetches a
+// single-use stream ticket — the login token never goes into the URL.
+export function browserLiveWsUrl(targetId?: string): Promise<string> {
+  const targetParam = targetId ? `?target=${encodeURIComponent(targetId)}` : "";
+  return withStreamTicket(`${wsBase()}/api/v1/browser-live/ws${targetParam}`);
 }
 
 // ── SSE URLs ──────────────────────────────────────────────────────────────────

@@ -1900,14 +1900,11 @@ def _ws_validate_jwt(token: str | None) -> bool:
     Mirrors the auth pattern from cli_plugins.py:plugins_shell_websocket.
     Uses jose (already a project dependency) for decoding.
     """
-    if not token:
-        return False
-    try:
-        from jose import jwt as _jwt
-        payload = _jwt.decode(token, settings.jwt_secret_key, algorithms=["HS256"])
-        return bool(payload.get("sub"))
-    except Exception:
-        return False
+    from app.auth import _query_jwt_subject
+
+    # Legacy ?token= path only — gated by ALLOW_QUERY_TOKEN_AUTH and refuses
+    # scoped tokens. Endpoints authenticate via app.auth.authenticate_websocket.
+    return _query_jwt_subject(token) is not None
 
 
 async def _pubsub_forward(
@@ -1984,19 +1981,22 @@ async def _pubsub_forward(
 async def vault_stream_ws(
     websocket: WebSocket,
     token: Optional[str] = None,
+    ticket: Optional[str] = None,
 ):
     """WebSocket: live vault change events from Redis channel `vault:stream`.
 
     Populated by VaultWatcher (file modified) and VaultCompactor (envelope
     compacted / conflict detected). Powers live-updates in the M.4 3D graph.
 
-    Auth: JWT via `?token=<jwt>` query parameter (same pattern as
-    /plugins/shell/ws in cli_plugins.py).
+    Auth: single-use stream ticket via `?ticket=` (app.auth.authenticate_websocket);
+    the legacy `?token=<jwt>` only with ALLOW_QUERY_TOKEN_AUTH.
 
     Close codes:
     - 4001: missing or invalid JWT
     """
-    if not _ws_validate_jwt(token):
+    from app.auth import authenticate_websocket
+
+    if not await authenticate_websocket(websocket, token=token, ticket=ticket):
         await websocket.close(code=4001, reason="Unauthorized")
         return
 
@@ -2017,6 +2017,7 @@ async def vault_stream_ws(
 async def vault_voice_highlight_ws(
     websocket: WebSocket,
     token: Optional[str] = None,
+    ticket: Optional[str] = None,
 ):
     """WebSocket: voice-driven graph highlight commands from `voice:graph-highlight`.
 
@@ -2024,12 +2025,14 @@ async def vault_voice_highlight_ws(
     during a voice session. The frontend 3D graph subscribes here and highlights
     the matching node.
 
-    Auth: same JWT query-param pattern as /vault/stream.
+    Auth: same as /vault/stream (`?ticket=`).
 
     Close codes:
     - 4001: missing or invalid JWT
     """
-    if not _ws_validate_jwt(token):
+    from app.auth import authenticate_websocket
+
+    if not await authenticate_websocket(websocket, token=token, ticket=ticket):
         await websocket.close(code=4001, reason="Unauthorized")
         return
 
@@ -2050,6 +2053,7 @@ async def vault_voice_highlight_ws(
 async def vault_voice_display_ws(
     websocket: WebSocket,
     token: Optional[str] = None,
+    ticket: Optional[str] = None,
 ):
     """WebSocket: voice-driven display cards from `voice:display`.
 
@@ -2057,12 +2061,14 @@ async def vault_voice_display_ws(
     (memory / url / file / task). The frontend VoiceDrawer appends the card
     to its Stack with a stagger animation.
 
-    Auth: same JWT query-param pattern as /vault/stream.
+    Auth: same as /vault/stream (`?ticket=`).
 
     Close codes:
     - 4001: missing or invalid JWT
     """
-    if not _ws_validate_jwt(token):
+    from app.auth import authenticate_websocket
+
+    if not await authenticate_websocket(websocket, token=token, ticket=ticket):
         await websocket.close(code=4001, reason="Unauthorized")
         return
 

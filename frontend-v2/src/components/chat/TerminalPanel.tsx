@@ -48,6 +48,9 @@ function useAgentTerminal(
 
   useEffect(() => {
     destroyedRef.current = false;
+    // Bumped per connect() and on cleanup: a ticket that arrives after a newer
+    // connect (or after unmount) must not open a stale socket.
+    let generation = 0;
 
     function connect() {
       if (destroyedRef.current || !agent || !term) return;
@@ -57,9 +60,26 @@ function useAgentTerminal(
         wsRef.current = null;
       }
 
-      const url = agent.agent_runtime === "host"
+      // Every (re)connect fetches its own single-use stream ticket — the
+      // login token never goes into the WebSocket URL (it leaked into logs).
+      const myGeneration = ++generation;
+      const urlPromise = agent.agent_runtime === "host"
         ? api.cliSessions.hostPtyWsUrl(agent.id)
         : api.cliSessions.ptyWsUrl(agent.id);
+      urlPromise.then(
+        (url) => {
+          if (destroyedRef.current || myGeneration !== generation) return;
+          openSocket(url);
+        },
+        () => {
+          if (destroyedRef.current || myGeneration !== generation) return;
+          reconnectTimer.current = setTimeout(connect, 3000);
+        },
+      );
+    }
+
+    function openSocket(url: string) {
+      if (!term) return;
       const ws = new WebSocket(url);
       ws.binaryType = "arraybuffer";
       wsRef.current = ws;
@@ -133,6 +153,7 @@ function useAgentTerminal(
 
     return () => {
       destroyedRef.current = true;
+      generation += 1;
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
       wsRef.current?.close(1000);
       wsRef.current = null;
