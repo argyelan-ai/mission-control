@@ -7,6 +7,26 @@
 # /livekit-signal is the WebSocket proxy to LiveKit signaling (RTC media
 # ports 7881/7882 are exposed separately on 0.0.0.0).
 
+# Never log credentials from URLs. Browsers cannot send an Authorization
+# header on EventSource/WebSocket, so stream URLs carry a short-lived,
+# single-use `?ticket=` (older clients: the login JWT as `?token=`). Caddy
+# writes the request URI into its log lines (e.g. reverse_proxy errors when a
+# stream is cut off), so redact both parameters on the default logger — it
+# covers the error log and any access log that is not configured separately.
+# If you add a site `log` directive, give it the same `format filter`.
+{
+	log default {
+		output stderr
+		format filter {
+			wrap json
+			request>uri query {
+				replace token REDACTED
+				replace ticket REDACTED
+			}
+		}
+	}
+}
+
 (common) {
     encode gzip zstd
     header {

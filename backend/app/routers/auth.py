@@ -251,6 +251,51 @@ async def get_me(current_user: User = Depends(require_user)):
     return _user_dict(current_user)
 
 
+class StreamTicketRequest(BaseModel):
+    # The exact path of the SSE/WebSocket endpoint the ticket is for,
+    # e.g. "/api/v1/agents/stream". No query string, no host.
+    path: str = Field(min_length=1, max_length=512)
+
+
+_SYNTHETIC_LEGACY_ADMIN_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+
+
+@router.post("/stream-ticket")
+async def issue_stream_ticket(
+    payload: StreamTicketRequest,
+    current_user: User = Depends(require_user),
+):
+    """Mint a short-lived, single-use ticket for opening ONE stream.
+
+    EventSource/WebSocket cannot send an Authorization header; the ticket
+    goes into the URL as ``?ticket=`` instead of the login JWT, so a URL that
+    ends up in a proxy or access log no longer carries a reusable
+    credential. The ticket is bound to the caller and to ``path``, expires
+    after ``STREAM_TICKET_TTL_SECONDS`` (default 60) and is consumed by the
+    first connection. See services/stream_tickets.py.
+    """
+    from app.services.stream_tickets import is_stream_path, issue_ticket
+
+    if not is_stream_path(payload.path):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="path is not a stream endpoint",
+        )
+    try:
+        ticket = await issue_ticket(
+            user_id=str(current_user.id),
+            token_version=current_user.token_version or 0,
+            path=payload.path,
+            legacy_admin=current_user.id == _SYNTHETIC_LEGACY_ADMIN_ID,
+        )
+    except Exception as exc:  # noqa: BLE001 — Redis down
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="stream tickets unavailable",
+        ) from exc
+    return {"ticket": ticket, "expires_in": settings.stream_ticket_ttl_seconds}
+
+
 @router.patch("/me")
 async def update_me(
     payload: UpdateProfileRequest,

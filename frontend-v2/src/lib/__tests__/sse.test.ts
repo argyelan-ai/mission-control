@@ -14,6 +14,11 @@ import { describe, it, expect, afterEach, vi } from "vitest";
  * EventSource landet.
  *   - ohne NEXT_PUBLIC_API_URL (Deployment-Fall) → same-origin, relativ
  *   - mit NEXT_PUBLIC_API_URL → genau diese Origin
+ *
+ * Security finding 24.09.2026: the URL used to carry the login JWT as
+ * `?token=` and the reverse proxy logged it. The URL now carries a single-use
+ * stream ticket, fetched per (re)connect; the JWT only travels in the
+ * Authorization header of the ticket POST.
  */
 
 type StreamHook = (
@@ -33,6 +38,7 @@ class MockEventSource {
   static instances: MockEventSource[] = [];
   url: string;
   readyState = 0;
+  onerror: ((e: Event) => void) | null = null;
   constructor(url: string) {
     this.url = url;
     MockEventSource.instances.push(this);
@@ -43,6 +49,16 @@ class MockEventSource {
   addEventListener() {}
   removeEventListener() {}
 }
+
+const JWT = "header.payload.signature";
+let ticketCounter = 0;
+const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => {
+  ticketCounter += 1;
+  return new Response(JSON.stringify({ ticket: `tkt-${ticketCounter}`, expires_in: 60 }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+});
 
 const originalApiUrl = process.env.NEXT_PUBLIC_API_URL;
 
@@ -68,6 +84,16 @@ async function mountStreams(apiUrl: string | undefined): Promise<string[]> {
 
   MockEventSource.instances = [];
   vi.stubGlobal("EventSource", MockEventSource);
+  fetchMock.mockClear();
+  vi.stubGlobal("fetch", fetchMock);
+  vi.stubGlobal("localStorage", {
+    getItem: () => JWT,
+    setItem: () => {},
+    removeItem: () => {},
+    clear: () => {},
+    length: 0,
+    key: () => null,
+  });
 
   function Harness() {
     for (const c of CASES) {
@@ -76,6 +102,10 @@ async function mountStreams(apiUrl: string | undefined): Promise<string[]> {
     return null;
   }
   testingLibrary.render(react.createElement(Harness));
+  // Each stream opens only after its ticket fetch resolved.
+  await testingLibrary.waitFor(() =>
+    expect(MockEventSource.instances).toHaveLength(CASES.length),
+  );
   return MockEventSource.instances.map((es) => es.url);
 }
 
@@ -91,7 +121,9 @@ describe("Stream-URLs der Chat-SSE", () => {
 
     expect(urls).toHaveLength(CASES.length);
     CASES.forEach((c, i) => {
-      expect(urls[i].startsWith(`${c.path}?token=`)).toBe(true);
+      expect(urls[i].startsWith(`${c.path}?ticket=tkt-`)).toBe(true);
+      expect(urls[i]).not.toContain("token=");
+      expect(urls[i]).not.toContain(JWT);
       // Der Fehler von 15.09.: absolute URL auf einen fremden Host.
       expect(urls[i]).not.toContain("localhost:8000");
       expect(new URL(urls[i], window.location.href).origin).toBe(
@@ -105,7 +137,45 @@ describe("Stream-URLs der Chat-SSE", () => {
 
     expect(urls).toHaveLength(CASES.length);
     CASES.forEach((c, i) => {
-      expect(urls[i].startsWith(`${ORIGIN}${c.path}?token=`)).toBe(true);
+      expect(urls[i].startsWith(`${ORIGIN}${c.path}?ticket=tkt-`)).toBe(true);
+      expect(urls[i]).not.toContain(JWT);
     });
+  });
+
+  it("holt pro Stream ein Ticket — JWT nur im Authorization-Header", async () => {
+    await mountStreams(ORIGIN);
+
+    expect(fetchMock).toHaveBeenCalledTimes(CASES.length);
+    const paths = fetchMock.mock.calls.map(([url, init]) => {
+      expect(url).toBe(`${ORIGIN}/api/v1/auth/stream-ticket`);
+      expect(init?.method).toBe("POST");
+      expect((init?.headers as Record<string, string>).Authorization).toBe(`Bearer ${JWT}`);
+      return JSON.parse(String(init?.body)).path;
+    });
+    expect(paths.sort()).toEqual(CASES.map((c) => c.path).sort());
+  });
+
+  it("holt beim Reconnect ein NEUES Ticket (Tickets sind einmalig)", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      await mountStreams(undefined);
+      const first = MockEventSource.instances[0];
+      const firstTicket = new URL(first.url, window.location.href).searchParams.get("ticket");
+
+      // Stream drops (server restart, spent ticket on a native retry, iOS).
+      first.readyState = MockEventSource.CLOSED;
+      first.onerror?.(new Event("error"));
+      await vi.advanceTimersByTimeAsync(1_100);
+
+      const { waitFor } = await import("@testing-library/react");
+      await waitFor(() => expect(MockEventSource.instances.length).toBe(CASES.length + 1));
+      const again = MockEventSource.instances.at(-1)!;
+      const newTicket = new URL(again.url, window.location.href).searchParams.get("ticket");
+      expect(again.url.startsWith(`${CASES[0].path}?ticket=`)).toBe(true);
+      expect(newTicket).not.toBe(firstTicket);
+      expect(fetchMock).toHaveBeenCalledTimes(CASES.length + 1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

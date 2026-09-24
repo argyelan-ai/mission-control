@@ -29,7 +29,7 @@ REDACTED = "<REDACTED>"
 # durch die Regex-Kette geschickt. Access-Logs sind hochfrequent — die
 # ueberwaeltigende Mehrheit trifft keinen Marker und kostet dann nur einen
 # Substring-Scan.
-_MARKERS = ("/bot", "token", "Bearer", "key=", "apikey", "secret")
+_MARKERS = ("/bot", "token", "ticket", "Bearer", "key=", "apikey", "secret")
 
 _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     # Telegram-Bot-Token im Pfad: /bot<id>:<secret>/method — ID mitredigieren,
@@ -39,7 +39,7 @@ _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     # Anfuehrungszeichen — andere Parameter bleiben lesbar.
     (
         re.compile(
-            r"\b(token|access_token|refresh_token|api_key|apikey|key|secret|password)"
+            r"\b(token|ticket|access_token|refresh_token|api_key|apikey|key|secret|password)"
             r"=[^&\s\"'<]+",
             re.IGNORECASE,
         ),

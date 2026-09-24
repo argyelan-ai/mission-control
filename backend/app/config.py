@@ -43,6 +43,17 @@ class Settings(BaseSettings):
     jwt_secret_key: str = "change-me-in-production"
     jwt_access_token_expire_minutes: int = 480  # 8 hours
 
+    # Stream auth (services/stream_tickets.py). SSE/WebSocket connections
+    # authenticate with a short-lived single-use ticket (?ticket=…), never with
+    # the login JWT in the URL — URLs end up in proxy/access/error logs.
+    # Env: STREAM_TICKET_TTL_SECONDS.
+    stream_ticket_ttl_seconds: int = 60
+    # Transition switch: accept the login JWT as ?token=… again (the old,
+    # log-leaking way) for clients that predate stream tickets. OFF by
+    # default; only turn it on temporarily for an outdated custom client, and
+    # plan to drop it in a later release. Env: ALLOW_QUERY_TOKEN_AUTH=true.
+    allow_query_token_auth: bool = False
+
     # Discord
     discord_webhook_ops: str = ""
     discord_bot_token: str = ""

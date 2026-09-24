@@ -268,9 +268,18 @@ def test_vault_stream_requires_valid_jwt_expired():
     assert _ws_validate_jwt(_make_expired_token()) is False
 
 
-def test_vault_stream_requires_valid_jwt_valid():
-    """Valid JWT → accepted."""
+def test_vault_stream_query_jwt_off_by_default():
+    """The login JWT in the URL leaks into proxy logs — rejected unless the
+    ALLOW_QUERY_TOKEN_AUTH transition switch is on (stream tickets instead)."""
     from app.routers.vault import _ws_validate_jwt
+    assert app.config.settings.allow_query_token_auth is False
+    assert _ws_validate_jwt(_make_token()) is False
+
+
+def test_vault_stream_requires_valid_jwt_valid(monkeypatch):
+    """Valid JWT → accepted (only with the legacy query-token switch on)."""
+    from app.routers.vault import _ws_validate_jwt
+    monkeypatch.setattr(app.config.settings, "allow_query_token_auth", True)
     assert _ws_validate_jwt(_make_token()) is True
 
 
@@ -379,32 +388,47 @@ def _publish_after(
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-def test_vault_stream_integration_forwards_messages(integration_ws_client):
+def _ticket_for(server, monkeypatch, path: str) -> str:
+    """Mint a single-use stream ticket for ``path`` in a store the WS
+    handler (running on the TestClient's own loop) can read."""
+    from app.services import stream_tickets
+
+    async def _redis():
+        return fakeredis.aioredis.FakeRedis(server=server, decode_responses=True)
+
+    monkeypatch.setattr(stream_tickets, "get_redis", _redis)
+    return asyncio.run(
+        stream_tickets.issue_ticket(user_id="test-user", token_version=0, path=path)
+    )
+
+
+
+def test_vault_stream_integration_forwards_messages(integration_ws_client, monkeypatch):
     """End-to-end: message published on vault:stream is forwarded to
     the connected WS client at /api/v1/vault/stream."""
     client, server = integration_ws_client
-    token = _make_token()
+    ticket = _ticket_for(server, monkeypatch, "/api/v1/vault/stream")
     expected = {"type": "modified", "path": "agents/sparky/notes/test.md"}
 
     t = _publish_after(server, "vault:stream", expected)
 
-    with client.websocket_connect(f"/api/v1/vault/stream?token={token}") as ws:
+    with client.websocket_connect(f"/api/v1/vault/stream?ticket={ticket}") as ws:
         raw = ws.receive_text()
 
     t.join(timeout=3)
     assert json.loads(raw) == expected
 
 
-def test_voice_highlight_integration_forwards_messages(integration_ws_client):
+def test_voice_highlight_integration_forwards_messages(integration_ws_client, monkeypatch):
     """End-to-end: message published on voice:graph-highlight is forwarded to
     the connected WS client at /api/v1/vault/voice-highlight."""
     client, server = integration_ws_client
-    token = _make_token()
+    ticket = _ticket_for(server, monkeypatch, "/api/v1/vault/voice-highlight")
     expected = {"type": "highlight", "node_id": "abc-123", "label": "sparky/lessons/foo.md"}
 
     t = _publish_after(server, "voice:graph-highlight", expected)
 
-    with client.websocket_connect(f"/api/v1/vault/voice-highlight?token={token}") as ws:
+    with client.websocket_connect(f"/api/v1/vault/voice-highlight?ticket={ticket}") as ws:
         raw = ws.receive_text()
 
     t.join(timeout=3)

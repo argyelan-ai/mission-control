@@ -1002,9 +1002,11 @@ async def test_view_entry_serves_html_with_sandbox_csp(
 
 
 @pytest.mark.asyncio
-async def test_view_entry_works_with_query_token_bare_tab(client, session, tmp_path, monkeypatch):
-    """Bare browser tabs can't send an Authorization header — same ?token=
-    fallback the WS/stream URLs already rely on (require_user Query dep)."""
+async def test_view_entry_session_jwt_in_query_only_with_legacy_switch(client, session, tmp_path, monkeypatch):
+    """Bare browser tabs can't send an Authorization header. The LOGIN JWT as
+    ?token= leaks into proxy logs, so it is refused by default — the UI uses
+    the resource-scoped view token (tests below) instead. The old behaviour
+    survives only behind ALLOW_QUERY_TOKEN_AUTH."""
     from app.auth import create_access_token
     from app.models.user import User
     from sqlmodel.ext.asyncio.session import AsyncSession as _AsyncSession
@@ -1029,10 +1031,12 @@ async def test_view_entry_works_with_query_token_bare_tab(client, session, tmp_p
     session.add(entry)
     await session.commit()
 
-    resp = await client.get(
-        f"/api/v1/bench/challenges/{ch.id}/entries/{entry.id}/view?token={token}"
-    )
-    assert resp.status_code == 200
+    url = f"/api/v1/bench/challenges/{ch.id}/entries/{entry.id}/view?token={token}"
+    assert (await client.get(url)).status_code == 401
+
+    import app.config
+    monkeypatch.setattr(app.config.settings, "allow_query_token_auth", True)
+    assert (await client.get(url)).status_code == 200
 
 
 @pytest.mark.asyncio
