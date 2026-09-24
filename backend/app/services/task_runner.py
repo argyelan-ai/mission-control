@@ -735,14 +735,16 @@ class TaskRunnerService:
             return
 
         # Create an approval instead of auto-reassigning
-        await self._create_dispatch_approval(
+        escalation_kind = await self._create_dispatch_approval(
             session, task, agent, minutes_since_dispatch, "kein ACK nach Dispatch"
         )
         await redis.set(ack_check_key, "1", ex=86400)  # 24h Cooldown
 
         logger.warning(
-            "ACK timeout: '%s' — %s did not ACK after dispatch (%dmin), operator notice raised",
+            "ACK timeout: '%s' — %s did not ACK after dispatch (%dmin), %s",
             task.title, agent.name, int(minutes_since_dispatch),
+            "operator notice raised" if escalation_kind == "notice"
+            else "approval created",
         )
 
     async def _maybe_rotate_dispatch_attempt(
@@ -1056,13 +1058,15 @@ class TaskRunnerService:
                 task_id=task.id,
                 agent_id=agent.id,
             )
-            await redis.set(pending_key, "1", ex=300)  # 5min cooldown
-
     async def _create_dispatch_approval(
         self, session: AsyncSession, task: Task, agent: Agent,
         minutes_waiting: float, reason: str,
-    ) -> None:
-        """Create an approval instead of auto-reassigning — the operator decides.
+    ) -> str:
+        """Create an escalation for the operator — they decide what happens next.
+
+        Returns which escalation kind was created: "notice" (notice-only
+        path) or "approval" (classic Approval row) — callers use it for
+        accurate log text.
 
         D-2 fix (2026-05-14): direct Telegram push to the operator with inline
         buttons. Previously only an 'approval.created' activity event with
@@ -1091,6 +1095,7 @@ class TaskRunnerService:
                 agent_id=agent.id,
                 board_id=task.board_id,
             )
+            return "notice"
         else:
             approval = Approval(
                 board_id=task.board_id,
@@ -1133,6 +1138,7 @@ class TaskRunnerService:
                 task_id=task.id,
                 agent_id=agent.id,
             )
+            return "approval"
 
     # ── Tiered Recovery (Phase 6 REC-01/02/03) ───────────────────────
 
