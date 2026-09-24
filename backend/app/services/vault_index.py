@@ -20,6 +20,15 @@ from app.helpers.vault_frontmatter import parse_frontmatter, validate_frontmatte
 logger = logging.getLogger("mc.vault_index")
 
 
+def _has_frontmatter_block(path: Path) -> bool:
+    """True if the file starts with a '---' frontmatter delimiter."""
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            return fh.readline().rstrip("\r\n") == "---"
+    except OSError:
+        return False
+
+
 class VaultIndex:
     def __init__(self, db_path: Path, vault_path: Path):
         self.db_path = db_path
@@ -256,11 +265,14 @@ class VaultIndex:
                 stats["scanned"] += 1
                 try:
                     post = parse_frontmatter(md_file)
-                    if not post.metadata:
-                        # No frontmatter block at all — plain markdown
-                        # (README, scratch notes). Not a note, not broken.
+                    if not post.metadata and not _has_frontmatter_block(md_file):
+                        # No frontmatter at all — plain markdown (README,
+                        # scratch notes). Not a note, not broken.
                         stats["skipped"] += 1
                         continue
+                    # Empty-but-present frontmatter blocks fall through to
+                    # validate_frontmatter and count as errors (note-intent
+                    # that lost its fields, e.g. mid-edit).
                     validate_frontmatter(post.metadata)
                     self._upsert_locked(md_file, post)  # lock already held — no deadlock
                     stats["indexed"] += 1
@@ -273,3 +285,4 @@ class VaultIndex:
 
     def close(self) -> None:
         self._con.close()
+

@@ -205,6 +205,17 @@ def test_rebuild_accepts_date_only_frontmatter(index, tmp_path):
     assert "agents/sparky/d.md" in paths
 
 
+def test_rebuild_counts_empty_frontmatter_block_as_error(index, tmp_path):
+    """A present-but-empty frontmatter block signals note-intent (e.g. a note
+    mid-edit that lost its fields) — it is an error, not a plain skip."""
+    empty = tmp_path / "hollow.md"
+    empty.write_text("---\n---\nbody\n")
+
+    stats = index.rebuild_from_vault()
+    assert stats["errors"] == 1
+    assert stats["skipped"] == 0
+
+
 def test_index_extracts_title_from_frontmatter(index, tmp_path):
     """list_all() must return the frontmatter title so build_graph can label nodes."""
     file = _make_note(
