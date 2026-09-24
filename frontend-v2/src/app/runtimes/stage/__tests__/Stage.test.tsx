@@ -206,7 +206,7 @@ describe("Stage — Agents KPI reads the box's slot runtime (Team-Lead-Fund 06.0
     const agentsSpy = vi.spyOn(api.runtimes.db, "agents").mockResolvedValue({
       // count always equals agents.length in the backend answer; the card
       // counts the listed agents (paused ones are left out).
-      runtime_slug: "qwen38-flash-next", count: 1, agents: [{ id: "a1", name: "Rex", agent_runtime: "x" }],
+      runtime_slug: "qwen38-flash-next", count: 1, agents: [{ id: "a1", name: "Beta", agent_runtime: "x" }],
     });
 
     renderWithQuery(

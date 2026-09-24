@@ -79,9 +79,9 @@ describe("Stage — model card while a head works", () => {
     vi.spyOn(api.heads, "occupancy").mockResolvedValue({ boxes: { "host-1": head } });
     vi.spyOn(api.runtimes.db, "agents").mockResolvedValue({
       runtime_slug: "glm-local", count: 2,
-      agents: [{ id: "a1", name: "Rex", agent_runtime: "x" }, { id: "a2", name: "Nova", agent_runtime: "x" }],
+      agents: [{ id: "a1", name: "Beta", agent_runtime: "x" }, { id: "a2", name: "Nova", agent_runtime: "x" }],
     });
-    vi.spyOn(api.agents, "list").mockResolvedValue([mkAgent("a1", "Rex", "active"), mkAgent("a2", "Nova", "active")]);
+    vi.spyOn(api.agents, "list").mockResolvedValue([mkAgent("a1", "Beta", "active"), mkAgent("a2", "Nova", "active")]);
     renderWithQuery(<Stage runtime={runtime} members={[{ host, role: "head" }]} onOpenCockpit={() => {}} />);
     const tile = await screen.findByTestId("kpi-in-use");
     await waitFor(() => expect(tile).toHaveTextContent("3"));
@@ -92,7 +92,7 @@ describe("Stage — model card while a head works", () => {
     // sentence itself is checked with the real formatter below)
     expect(title).toContain("{heads, plural");
     expect(title).toContain("Fix flaky retry test");
-    expect(title).toContain("Rex, Nova");
+    expect(title).toContain("Beta, Nova");
   });
 
   it("paused agents do not count: 1 head + 3 paused agents → 1", async () => {
@@ -100,17 +100,17 @@ describe("Stage — model card while a head works", () => {
     vi.spyOn(api.runtimes.db, "agents").mockResolvedValue({
       runtime_slug: "glm-local", count: 3,
       agents: [
-        { id: "a1", name: "Hermes", agent_runtime: "x" },
-        { id: "a2", name: "Rex", agent_runtime: "x" },
-        { id: "a3", name: "Sparky", agent_runtime: "x" },
+        { id: "a1", name: "Alpha", agent_runtime: "x" },
+        { id: "a2", name: "Beta", agent_runtime: "x" },
+        { id: "a3", name: "Gamma", agent_runtime: "x" },
       ],
     });
     vi.spyOn(api.agents, "list").mockResolvedValue([
-      mkAgent("a1", "Hermes", "paused"), mkAgent("a2", "Rex", "paused"), mkAgent("a3", "Sparky", "paused"),
+      mkAgent("a1", "Alpha", "paused"), mkAgent("a2", "Beta", "paused"), mkAgent("a3", "Gamma", "paused"),
     ]);
     renderWithQuery(<Stage runtime={runtime} members={[{ host, role: "head" }]} onOpenCockpit={() => {}} />);
     const tile = await screen.findByTestId("kpi-in-use");
-    await waitFor(() => expect(tile.getAttribute("title") ?? "").toContain("Paused: Hermes, Rex, Sparky"));
+    await waitFor(() => expect(tile.getAttribute("title") ?? "").toContain("Paused: Alpha, Beta, Gamma"));
     expect(tile).toHaveTextContent(/^1In use$/);
     const title = tile.getAttribute("title") ?? "";
     expect(title).toContain("{paused, plural"); // the "with paused" sentence
