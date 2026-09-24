@@ -2204,7 +2204,10 @@ export const api = {
     tonight: (): Promise<NightTonight> => request("/api/v1/night-shift/tonight"),
     getMark: (taskId: string): Promise<{ mark: NightEntry | null }> =>
       request(`/api/v1/night-shift/tasks/${encodeURIComponent(taskId)}`),
-    mark: (taskId: string, body: { harness: string; runtime_slug: string }): Promise<{ mark: NightEntry }> =>
+    mark: (
+      taskId: string,
+      body: { harness: string; runtime_slug: string; hold_on_failure?: boolean },
+    ): Promise<{ mark: NightEntry }> =>
       request(`/api/v1/night-shift/tasks/${encodeURIComponent(taskId)}`, { method: "PUT", body: JSON.stringify(body) }),
     unmark: (taskId: string): Promise<{ mark: null }> =>
       request(`/api/v1/night-shift/tasks/${encodeURIComponent(taskId)}`, { method: "DELETE" }),

@@ -112,7 +112,19 @@ export function entryStateKey(entry: Pick<NightEntry, "state">): string {
   return `state.${entry.state}`;
 }
 
+/**
+ * May this card be marked for tonight? Only when nobody else works on it: an
+ * inbox card nothing holds (the mark will hold it), or an open card on
+ * `manual_hold`. Same rule as the backend (`night.markable`, 409 `task_busy`).
+ */
+export function canMarkTonight(task: { status: string; run_control?: string | null }): boolean {
+  if (task.status === "done" || task.status === "aborted") return false;
+  const rc = task.run_control ?? null;
+  return rc === "manual_hold" || (task.status === "inbox" && rc === null);
+}
+
 const REASONS = new Set([
+  "task_moved",
   "lane_busy",
   "cloud_share",
   "engine_not_ready",
@@ -138,6 +150,8 @@ const ERROR_CODES = new Set([
   "task_finished",
   "repo_required",
   "night_started",
+  "night_busy",
+  "task_busy",
   "head_active",
   "pair_blocked",
   "invalid_config",

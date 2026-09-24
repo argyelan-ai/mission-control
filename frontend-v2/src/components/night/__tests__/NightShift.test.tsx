@@ -127,7 +127,7 @@ describe("Tonight list", () => {
       />,
     );
     expect(screen.getByTestId("tonight-last-report")).toHaveTextContent(
-      "Last night (2026-09-23): 1 passed · 1 failed · 1 needs you · 0 blocked · report not sent — no report channel",
+      "Last night (2026-09-23): 1 passed · 1 failed · 1 needs you · 0 blocked · report not delivered",
     );
     expect(screen.getByText("Nothing is marked for tonight.")).toBeInTheDocument();
   });
@@ -173,6 +173,33 @@ describe("Run tonight on the task detail", () => {
     await waitFor(() => expect(screen.getByTestId("night-line")).toHaveTextContent("Started tonight"));
     expect(screen.getByRole("switch", { name: "Run tonight" })).toBeDisabled();
     expect(screen.queryByTestId("head-pair-trigger")).toBeNull();
+  });
+
+  it("the report line says 'not delivered', not 'no report channel'", () => {
+    wrap(
+      <TonightListView
+        data={{ config: cfg, entries: [], last_report: { night: "2026-09-24", sent_at: "x", delivered: false, entries: [] } }}
+      />,
+    );
+    expect(screen.getByText(/report not delivered/)).toBeInTheDocument();
+    expect(screen.queryByText(/no report channel/)).toBeNull();
+  });
+
+  it("a card someone works on offers no switch", async () => {
+    vi.spyOn(api.nightShift, "getMark").mockResolvedValue({ mark: null });
+    const { container } = wrap(<NightShiftToggle taskId="t-1" canMark={false} />);
+    await waitFor(() => expect(api.nightShift.getMark).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 0));
+    expect(container.querySelector("[data-testid='night-toggle']")).toBeNull();
+  });
+
+  it("a mark on a card that was taken meanwhile stays visible, says why and can be removed", async () => {
+    vi.spyOn(api.nightShift, "getMark").mockResolvedValue({ mark: entry({ state: "skipped", reason: "task_moved" }) });
+    const unmark = vi.spyOn(api.nightShift, "unmark").mockResolvedValue({ mark: null });
+    wrap(<NightShiftToggle taskId="t-1" canMark={false} />);
+    await waitFor(() => expect(screen.getByTestId("night-line")).toHaveTextContent("someone else took the task"));
+    await userEvent.click(screen.getByRole("switch", { name: "Run tonight" }));
+    await waitFor(() => expect(unmark).toHaveBeenCalledWith("t-1"));
   });
 
   it("warns on a marked task while the night shift is off", async () => {

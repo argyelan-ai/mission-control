@@ -89,7 +89,9 @@ describe("CreateTaskModal — Run tonight", () => {
     expect(screen.getByTestId("head-pair-trigger")).toHaveTextContent("omp · GLM local");
     await userEvent.click(queue);
 
-    await waitFor(() => expect(markSpy).toHaveBeenCalledWith("task-7", { harness: "omp", runtime_slug: "glm-local" }));
+    await waitFor(() =>
+      expect(markSpy).toHaveBeenCalledWith("task-7", { harness: "omp", runtime_slug: "glm-local", hold_on_failure: true }),
+    );
     expect(createSpy.mock.calls[0][1]).toMatchObject({ repo_id: "repo-1", defer_dispatch: true, status: "inbox" });
     expect(startSpy).not.toHaveBeenCalled();
     await waitFor(() => expect(onOpen).toHaveBeenCalledWith("task-7"));
@@ -103,6 +105,17 @@ describe("CreateTaskModal — Run tonight", () => {
     await openAndFill();
     await userEvent.click(await screen.findByRole("switch", { name: "Run tonight" }));
     expect(screen.getByTestId("head-pair-trigger")).toHaveTextContent("omp · GLM local");
+  });
+
+  it("while marking the button says so in words (i18n), not '...'", async () => {
+    vi.spyOn(api.heads, "pairs").mockResolvedValue({ pairs: [ompLocal], default_pair: ompLocal });
+    vi.spyOn(api.tasks, "create").mockResolvedValue({ id: "task-9" } as Task);
+    vi.spyOn(api.nightShift, "mark").mockReturnValue(new Promise(() => {}));
+    renderModal();
+    await openAndFill();
+    await userEvent.click(await screen.findByRole("switch", { name: "Run tonight" }));
+    await userEvent.click(screen.getByTestId("queue-tonight"));
+    await waitFor(() => expect(screen.getByTestId("queue-tonight")).toHaveTextContent("Queuing…"));
   });
 
   it("a failed mark keeps the modal open with the reason; the card is not re-created on retry", async () => {
@@ -119,7 +132,8 @@ describe("CreateTaskModal — Run tonight", () => {
     expect(await screen.findByTestId("head-start-error")).toHaveTextContent(
       "Task created, but not queued for tonight: A head is already working on this task.",
     );
-    expect(screen.queryByTestId("head-start-kept")).toBeNull();
+    // the backend held the new card (hold_on_failure) — say so, like "Run as head"
+    expect(screen.getByTestId("head-start-kept")).toBeInTheDocument();
     await userEvent.click(screen.getByTestId("queue-tonight"));
     await waitFor(() => expect(markSpy).toHaveBeenCalledTimes(2));
     expect(createSpy).toHaveBeenCalledTimes(1);

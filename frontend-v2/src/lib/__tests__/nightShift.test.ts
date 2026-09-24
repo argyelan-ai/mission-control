@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import en from "../../../messages/en.json";
 import de from "../../../messages/de.json";
 import {
+  canMarkTonight,
   chooseTonightPair,
   invalidConfigFields,
   isHHMM,
@@ -43,7 +44,8 @@ describe("night shift i18n", () => {
 
   it("every reason/error/state key the UI can ask for exists in both catalogs", () => {
     const keys = [
-      ...["lane_busy", "cloud_share", "engine_not_ready", "not_reached", "whatever", null].map(nightReasonKey),
+      ...["lane_busy", "cloud_share", "engine_not_ready", "not_reached", "task_moved", "whatever", null].map(nightReasonKey),
+      ...["task_busy", "night_busy"].map((c) => `errors.${c}`),
       ...["queued", "waiting", "skipped", "started"].map((s) => `state.${s}`),
       ...["passed", "failed", "needs_you", "blocked", "running"].map((c) => `category.${c}`),
       "errors.unknown",
@@ -85,8 +87,14 @@ describe("codes and counts", () => {
   it("maps error codes to i18n keys", () => {
     expect(nightErrorKey(apiError(409, { code: "night_started" }))).toBe("errors.night_started");
     expect(nightErrorKey(apiError(422, { code: "pair_blocked", reason_code: "unproven" }))).toBe("errors.pair_blocked");
+    expect(nightErrorKey(apiError(409, { code: "task_busy" }))).toBe("errors.task_busy");
+    expect(nightErrorKey(apiError(409, { code: "night_busy" }))).toBe("errors.night_busy");
     expect(nightErrorKey(apiError(500, { code: "weird" }))).toBe("errors.unknown");
     expect(nightErrorKey(new Error("network"))).toBe("errors.unknown");
+  });
+
+  it("names task_moved as its own reason", () => {
+    expect(nightReasonKey("task_moved")).toBe("reason.task_moved");
   });
 
   it("reads the bad fields of an invalid_config", () => {
@@ -110,5 +118,18 @@ describe("codes and counts", () => {
   it("HH:MM like the backend", () => {
     expect(["00:00", "22:00", "23:59"].every(isHHMM)).toBe(true);
     expect(["24:00", "6:00", "22:60", ""].some(isHHMM)).toBe(false);
+  });
+});
+
+describe("which cards may be marked", () => {
+  it("only cards nobody works on: inbox without hold, or any open card on manual_hold (same rule as the backend)", () => {
+    expect(canMarkTonight({ status: "inbox", run_control: null })).toBe(true);
+    expect(canMarkTonight({ status: "inbox", run_control: "manual_hold" })).toBe(true);
+    expect(canMarkTonight({ status: "review", run_control: "manual_hold" })).toBe(true);
+    expect(canMarkTonight({ status: "inbox", run_control: "stopped" })).toBe(false);
+    expect(canMarkTonight({ status: "in_progress", run_control: null })).toBe(false);
+    expect(canMarkTonight({ status: "review", run_control: undefined })).toBe(false);
+    expect(canMarkTonight({ status: "done", run_control: "manual_hold" })).toBe(false);
+    expect(canMarkTonight({ status: "aborted", run_control: null })).toBe(false);
   });
 });

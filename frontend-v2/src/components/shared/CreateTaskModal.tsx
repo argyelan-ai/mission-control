@@ -363,7 +363,13 @@ export function CreateTaskModal({ activeBoardId, agents, onOpenTask = openTaskPa
         // "Queue for tonight" = create task (deferred) → mark it → open the
         // detail. mc-worker starts it inside tonight's window.
         try {
-          await api.nightShift.mark(taskId, { harness: selectedPair.harness, runtime_slug: selectedPair.runtime_slug });
+          // hold_on_failure: this card exists only for a night head — if the
+          // mark fails, the backend holds it so the fleet never picks it up.
+          await api.nightShift.mark(taskId, {
+            harness: selectedPair.harness,
+            runtime_slug: selectedPair.runtime_slug,
+            hold_on_failure: true,
+          });
         } catch (err) {
           setHeadStartError(tNight("markFailed", { message: tNight(nightErrorKey(err)) }));
           return;
@@ -607,9 +613,7 @@ export function CreateTaskModal({ activeBoardId, agents, onOpenTask = openTaskPa
                         <AlertTriangle size={12} className="shrink-0 mt-0.5" />
                         <span>
                           {headStartError}{" "}
-                          {!runTonight && (
-                            <span style={{ color: C.textSecondary }} data-testid="head-start-kept">{tHeads("keptHeld")}</span>
-                          )}
+                          <span style={{ color: C.textSecondary }} data-testid="head-start-kept">{tHeads("keptHeld")}</span>
                         </span>
                       </p>
                     )}
@@ -660,7 +664,7 @@ export function CreateTaskModal({ activeBoardId, agents, onOpenTask = openTaskPa
                       >
                         {runTonight ? <Moon size={11} aria-hidden /> : <Play size={11} aria-hidden />}
                         {runTonight
-                          ? loadingAs === "head" ? "..." : tNight("queueForTonight")
+                          ? loadingAs === "head" ? tNight("queueing") : tNight("queueForTonight")
                           : loadingAs === "head" ? tHeads("starting") : launchedAsHead ? tHeads("retryStart") : tHeads("runAsHead")}
                       </button>
                     </>

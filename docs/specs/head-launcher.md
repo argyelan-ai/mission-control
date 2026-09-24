@@ -786,6 +786,27 @@ Acceptance criteria v1:
 13. launchd `WatchPaths` on files written from the container: measure the
     start latency from the UI click to `phase=starting` (the 30 s interval is
     the safety net).
+14. **Night shift — known limits** (ROADMAP E2, decided 2026-09-24):
+    - Only cards nobody else works on can be marked: an inbox card nothing
+      holds (the mark holds it, `hold_reason = "night shift"`) or a card on
+      `manual_hold` (409 `task_busy` otherwise). Right before the start the
+      card must still be on hold; a card the fleet or the operator took
+      meanwhile is skipped as `task_moved` and listed in the morning report.
+    - A lane counts **heads only**. A box whose engine serves fleet agents
+      right now (`pairs.engine_in_use`) still gets a night head — same as a
+      click by day. Counting it as busy would keep night heads off any box a
+      persistent agent is bound to; revisit with a measurement of the slowdown.
+    - A local runtime without a linked host (no box keys) is one lane of its
+      own (`runtime:<slug>`), held while any head runs on it.
+    - Cloud share: floor of the night's marks, but at least one cloud start per
+      night while the share is above 0 (0 = no cloud, 100 = no limit).
+    - With `HEADS_ENABLED=false` the night-shift API answers 404, so a mark
+      cannot be removed there; a card held by a mark (`hold_reason = "night
+      shift"`) is released with the normal hold release on the task.
+    - Morning report: at most once and at least once per night — a claim left
+      by a crash is taken over after 10 min, an undelivered report is sent
+      again every 5 min up to 3 attempts, then it stays in the Tonight list.
+      Messages are cut below 3 500 characters ("… and N more").
 
 ## Review notes (2026-09-23)
 

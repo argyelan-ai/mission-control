@@ -10,6 +10,10 @@
  * On = the task is marked; mc-worker starts it as a head tonight, one after
  * another, local runtime first. Off = unmarked (bookkeeping only, nothing
  * runs). Once started, the head card above takes over and the switch locks.
+ *
+ * `canMark=false` (someone works on the card — `canMarkTonight`): no switch,
+ * unless a mark exists already; then it stays visible with its reason (e.g.
+ * "someone else took the task") so the operator can remove it.
  */
 
 import { useState } from "react";
@@ -26,7 +30,15 @@ import { NightSwitch } from "./NightSwitch";
 
 export const NIGHT_TASK_KEY = (taskId: string) => ["nightShift", "task", taskId] as const;
 
-export function NightShiftToggle({ taskId, disabled = false }: { taskId: string; disabled?: boolean }) {
+export function NightShiftToggle({
+  taskId,
+  disabled = false,
+  canMark = true,
+}: {
+  taskId: string;
+  disabled?: boolean;
+  canMark?: boolean;
+}) {
   const t = useTranslations("nightShift");
   const qc = useQueryClient();
   const markQuery = useQuery({
@@ -76,6 +88,8 @@ export function NightShiftToggle({ taskId, disabled = false }: { taskId: string;
 
   // The query failed (e.g. heads switched off meanwhile) → show nothing.
   if (markQuery.isError) return null;
+  // Nobody may queue a card someone works on; an existing mark stays removable.
+  if (!canMark && !mark) return null;
 
   const started = mark?.state === "started";
   const on = mark != null;
@@ -138,7 +152,7 @@ export function NightShiftToggle({ taskId, disabled = false }: { taskId: string;
           testId="night-switch"
         />
       </div>
-      {on && !started && pairs && (
+      {on && !started && canMark && pairs && (
         <div className="pt-1 pb-1.5">
           <HeadPairPicker
             pairs={pairs}

@@ -3377,7 +3377,7 @@
     "remove": "Aus heute Nacht entfernen",
     "removeAria": "„{title}“ aus heute Nacht entfernen",
     "lastNight": "Letzte Nacht ({night}):",
-    "reportNotDelivered": "Bericht nicht gesendet — kein Bericht-Kanal",
+    "reportNotDelivered": "Bericht nicht zugestellt",
     "state": {
       "queued": "Vorgemerkt",
       "waiting": "Wartet",
@@ -3397,7 +3397,8 @@
       "spool_unavailable": "der Head-Starter ist nicht erreichbar",
       "not_reached": "das Fenster war vorbei, bevor sie dran war",
       "run_missing": "der Lauf-Ordner fehlt",
-      "other": "gerade nicht möglich"
+      "other": "gerade nicht möglich",
+      "task_moved": "jemand anderes hat die Aufgabe inzwischen übernommen"
     },
     "category": {
       "passed": "bestanden",
@@ -3415,19 +3416,21 @@
       "head_active": "An dieser Aufgabe arbeitet schon ein Head.",
       "pair_blocked": "Dieses Harness × Runtime-Paar kann nicht laufen.",
       "invalid_config": "Einige Einstellungen sind ungültig.",
-      "unknown": "Das hat nicht geklappt. Bitte nochmal versuchen."
+      "unknown": "Das hat nicht geklappt. Bitte nochmal versuchen.",
+      "task_busy": "An dieser Aufgabe arbeitet gerade jemand. Nur Inbox-Karten oder gehaltene Karten können auf die Nacht warten.",
+      "night_busy": "Die Nachtschicht startet diese Aufgabe gerade. Versuch es gleich nochmal."
     },
     "settings": {
       "title": "Nachtschicht",
       "description": "Aufgaben mit „Heute Nacht ausführen“ starten in diesem Fenster als Heads, eine nach der anderen und eine pro GPU-Box. Am Morgen kommt ein Bericht (bestanden, fehlgeschlagen, braucht dich, blockiert) über den Bericht-Kanal.",
       "enabled": "Nachtschicht an",
-      "enabledHint": "Heads starten, ohne dass du zuschaust. Sie öffnen PRs, mergen nie; ein Head, der hängt, wird gemeldet, nicht neu gestartet.",
+      "enabledHint": "Heads starten, ohne dass du zuschaust. Sie öffnen PRs, mergen nie; ein Head, der hängt, wird gemeldet, nicht neu gestartet. Erst einschalten nach 5 beaufsichtigten Head-Läufen ohne Treffer auf der Verbotsliste und mit nachgewiesener Sandbox.",
       "start": "Fenster-Beginn",
       "end": "Fenster-Ende",
       "timezone": "Zeitzone",
       "useDeviceZone": "Zeitzone dieses Geräts nehmen ({zone})",
       "cloudShare": "Cloud-Anteil (%)",
-      "cloudShareHint": "Nur für Aufgaben, die du mit einer Cloud-Runtime vormerkst: höchstens dieser Anteil der Nacht-Aufgaben darf in der Cloud laufen. 100 = keine Grenze.",
+      "cloudShareHint": "Nur für Aufgaben, die du mit einer Cloud-Runtime vormerkst: höchstens dieser Anteil der Nacht-Aufgaben darf in der Cloud laufen, aber mindestens eine, solange der Anteil über 0 liegt. 0 = keine Cloud, 100 = keine Grenze.",
       "save": "Speichern",
       "saved": "Nachtschicht gespeichert",
       "headsOff": "Heads sind auf dieser Installation ausgeschaltet (HEADS_ENABLED) — die Nachtschicht braucht sie.",
@@ -3440,6 +3443,7 @@
         "cloud_share": "Eine ganze Zahl von 0 bis 100."
       }
     },
-    "markFailed": "Aufgabe erstellt, aber nicht für heute Nacht vorgemerkt: {message}"
+    "markFailed": "Aufgabe erstellt, aber nicht für heute Nacht vorgemerkt: {message}",
+    "queueing": "Wird vorgemerkt…"
   }
 }

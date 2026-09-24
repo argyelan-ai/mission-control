@@ -3377,7 +3377,7 @@
     "remove": "Remove from tonight",
     "removeAria": "Remove “{title}” from tonight",
     "lastNight": "Last night ({night}):",
-    "reportNotDelivered": "report not sent — no report channel",
+    "reportNotDelivered": "report not delivered",
     "state": {
       "queued": "Queued",
       "waiting": "Waiting",
@@ -3397,7 +3397,8 @@
       "spool_unavailable": "the head starter is not reachable",
       "not_reached": "the window ended before its turn",
       "run_missing": "the run folder is missing",
-      "other": "not possible right now"
+      "other": "not possible right now",
+      "task_moved": "someone else took the task meanwhile"
     },
     "category": {
       "passed": "passed",
@@ -3415,19 +3416,21 @@
       "head_active": "A head is already working on this task.",
       "pair_blocked": "This harness × runtime pair cannot run.",
       "invalid_config": "Some settings are not valid.",
-      "unknown": "That did not work. Try again."
+      "unknown": "That did not work. Try again.",
+      "task_busy": "Someone is working on this task. Only inbox cards or held cards can wait for the night.",
+      "night_busy": "The night shift is starting this task right now. Try again in a moment."
     },
     "settings": {
       "title": "Night shift",
       "description": "Tasks marked “Run tonight” start as heads inside this window, one after another and one per GPU box. In the morning you get one report (passed, failed, needs you, blocked) on the report channel.",
       "enabled": "Night shift on",
-      "enabledHint": "Heads start without you watching. They open PRs, never merge; a head that is stuck is reported, not restarted.",
+      "enabledHint": "Heads start without you watching. They open PRs, never merge; a head that is stuck is reported, not restarted. Only switch on after 5 attended head runs without a forbidden-list hit and with the sandbox proven.",
       "start": "Window start",
       "end": "Window end",
       "timezone": "Time zone",
       "useDeviceZone": "Use this device's zone ({zone})",
       "cloudShare": "Cloud share (%)",
-      "cloudShareHint": "Only for tasks you mark with a cloud runtime: at most this share of tonight's tasks may run in the cloud. 100 = no limit.",
+      "cloudShareHint": "Only for tasks you mark with a cloud runtime: at most this share of tonight's tasks may run in the cloud, but at least one while the share is above 0. 0 = no cloud, 100 = no limit.",
       "save": "Save",
       "saved": "Night shift saved",
       "headsOff": "Heads are switched off on this installation (HEADS_ENABLED) — the night shift needs them.",
@@ -3440,6 +3443,7 @@
         "cloud_share": "A whole number from 0 to 100."
       }
     },
-    "markFailed": "Task created, but not queued for tonight: {message}"
+    "markFailed": "Task created, but not queued for tonight: {message}",
+    "queueing": "Queuing…"
   }
 }
