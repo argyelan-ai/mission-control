@@ -228,6 +228,7 @@ def write_status(run_id: str, **fields) -> dict:
         "exit_code": None,
         "last_output_at": None,
         "pr_url": None,
+        "scratch_branch_pushed": False,
         "run_record_path": None,
         "question": False,
         "reason": None,
@@ -447,6 +448,49 @@ def scratch_repos() -> set:
         return {ln.strip() for ln in path.read_text().splitlines() if ln.strip() and not ln.startswith("#")}
     except OSError:
         return set()
+
+
+def scratch_origin(spec: dict) -> Path | None:
+    """The local bare origin of a scratch repo, or None.
+
+    Only a repo listed in heads/scratch-repos whose clone's ``origin`` is a
+    local path (plain or ``file://``) that resolves INSIDE
+    ``heads/scratch-origin/`` counts. Such an origin has no GitHub PRs; the
+    sandbox gets write access to exactly this path (push) and a pushed branch
+    is the result (``scratch_branch_pushed``). Every real repo → None.
+    """
+    if spec.get("repo_full_name") not in scratch_repos():
+        return None
+    clone = clones_root() / spec["repo_full_name"].replace("/", "--")
+    res = _git(["-C", str(clone), "config", "--get", "remote.origin.url"], check=False)
+    url = res.stdout.strip() if res.returncode == 0 else ""
+    if url.startswith("file://"):
+        from urllib.parse import unquote
+
+        url = unquote(url[len("file://"):])
+    if not url.startswith("/"):
+        return None
+    try:
+        root = (heads_root() / "scratch-origin").resolve()
+        path = Path(url).resolve()
+    except (OSError, RuntimeError):
+        return None
+    if root not in path.parents or not path.is_dir():
+        return None
+    return path
+
+
+def scratch_branch_pushed(spec: dict, origin: Path) -> bool:
+    """The head branch exists on the local origin with commits beyond base."""
+    res = _git(
+        ["--git-dir", str(origin), "rev-list", "--count",
+         f"refs/heads/{spec['base_branch']}..refs/heads/{spec['branch']}"],
+        check=False,
+    )
+    try:
+        return res.returncode == 0 and int(res.stdout.strip() or "0") > 0
+    except ValueError:
+        return False
 
 
 def sandbox_enabled() -> bool:
@@ -708,6 +752,8 @@ def sandbox_prefix(spec: dict, run: Path) -> list:
         "REAL_HOME": str(Path.home()),
         "MC_HOME": str(mc_home()),
         "USER_TMP": "/private/var/folders",
+        # "" for every real repo: the profile grants nothing then.
+        "SCRATCH_ORIGIN": str(scratch_origin(spec) or ""),
     }
     argv = ["/usr/bin/sandbox-exec", "-f", str(SANDBOX_PROFILE)]
     for k, v in params.items():
@@ -1090,8 +1136,12 @@ def detect_result(spec: dict, started: float) -> dict:
     run_id = spec["run_id"]
     ended = time.time()
     record = file_run_record(spec, started, ended) or find_run_record(run_id, started, ended)
+    origin = scratch_origin(spec)
     return {
-        "pr_url": find_pr(spec),
+        # A local origin never has a GitHub PR: there the pushed branch is
+        # the result (the backend still needs a passed run record).
+        "pr_url": None if origin else find_pr(spec),
+        "scratch_branch_pushed": bool(origin) and scratch_branch_pushed(spec, origin),
         "run_record_path": str(record) if record else None,
         "question": (run_dir(run_id) / "question.md").exists(),
     }

@@ -358,6 +358,12 @@ export function sortRunsNewestFirst(runs: HeadRun[]): HeadRun[] {
     .map(({ r }) => r);
 }
 
+/** Passed on a scratch repo whose origin is a local bare repo: no PR is
+ *  possible there, the wrapper-verified pushed branch is the result. */
+export function isScratchBranchPushed(run: Pick<HeadRun, "state" | "reason" | "pr_url">): boolean {
+  return run.state === "passed" && run.reason === "scratch_branch_pushed" && !run.pr_url;
+}
+
 /** PR number from a GitHub PR URL, for "PR #712". */
 export function prNumberFromUrl(url: string | null | undefined): number | null {
   const m = /\/pull\/(\d+)/.exec(url ?? "");

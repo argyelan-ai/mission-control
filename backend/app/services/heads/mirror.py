@@ -94,6 +94,12 @@ async def move_task(session: AsyncSession, task: Task, target: str, reason: str)
             changed_by="head", reason=reason, actor_label="head",
         )
         task.status = hop
+        # One UPDATE per hop: the Postgres trigger validate_task_transition
+        # sees OLD → NEW of each statement. Without the flush a multi-hop walk
+        # (failed → inbox → in_progress) reaches the DB as ONE invalid
+        # failed → in_progress UPDATE at commit (live: restart → HTTP 500).
+        session.add(task)
+        await session.flush()
     if hops:
         task.updated_at = utcnow()
     return bool(hops)
@@ -113,8 +119,14 @@ async def apply_head_state(session: AsyncSession, task: Task, run, derived: dict
     elif state == "passed":
         if run.pr_url:
             task.pr_url = run.pr_url
-        if moved:
+        if moved and run.pr_url:
             _comment(session, task, "resolution", f"Head ({pair}) passed — PR open: {run.pr_url}")
+        elif moved:
+            _comment(
+                session, task, "resolution",
+                f"Head ({pair}) passed — branch pushed: {run.spec.get('branch')} "
+                "(scratch repo with a local origin — no PR possible).",
+            )
     elif state == "failed" and moved:
         _comment(session, task, "message", f"Head ({pair}) failed: {derived.get('reason') or 'unknown'}")
     session.add(task)

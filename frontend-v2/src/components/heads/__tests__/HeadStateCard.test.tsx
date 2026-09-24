@@ -90,6 +90,15 @@ describe("HeadStateCard — one main action per state (B5)", () => {
     expect(screen.queryByTestId("head-main-stop")).not.toBeInTheDocument();
   });
 
+  it("passed on a scratch repo with a local origin → 'Branch pushed · scratch repo (no PR)' instead of Open PR", () => {
+    renderCard(mkRun({ state: "passed", reason: "scratch_branch_pushed", pr_url: null, exited_at: "2026-09-23T10:34:05Z" }));
+    expect(screen.getByTestId("head-main-branch-pushed")).toHaveTextContent("Branch pushed · scratch repo (no PR)");
+    expect(screen.getByTestId("head-card-scratch-branch")).toHaveTextContent("mc-head/fix-flaky-1111");
+    expect(screen.queryByTestId("head-main-open-pr")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("head-main-restart")).not.toBeInTheDocument();
+    expect(screen.queryByText(/your review decides the merge/)).not.toBeInTheDocument();
+  });
+
   it.each([
     ["failed", "time_limit", "Time limit reached. The branch is kept."],
     ["failed", "exit_2", "The harness ended with exit code 2."],
@@ -196,6 +205,13 @@ describe("Runs list + polling (B7)", () => {
     expect(rows[0]).toHaveTextContent("Failed · Time limit reached.");
     expect(rows[1]).toHaveTextContent("Claude Code · GLM local");
     expect(rows[1]).toHaveTextContent("Passed · PR #712");
+  });
+
+  it("a scratch run that pushed its branch shows that instead of a PR number", () => {
+    const qc = new QueryClient();
+    const runs = [mkRun({ state: "passed", reason: "scratch_branch_pushed", pr_url: null, exited_at: "2026-09-23T10:34:05Z" })];
+    render(<QueryClientProvider client={qc}><HeadRunsList runs={runs} pairs={[ompLocal]} /></QueryClientProvider>);
+    expect(screen.getByTestId("head-run-row")).toHaveTextContent("Passed · Branch pushed · scratch repo (no PR)");
   });
 
   it("polling runs only while the newest run is active and stops at a final state", () => {

@@ -1,6 +1,7 @@
 ;; mc-head sandbox profile (spec §9 layer 3). Used only with MC_HEAD_SANDBOX=1.
 ;; Parameters (sandbox-exec -D): RUN, WT, CLONE_GIT, VAULT_JOBS, REAL_HOME, MC_HOME,
-;; USER_TMP (the per-user temp root, /private/var/folders on macOS).
+;; USER_TMP (the per-user temp root, /private/var/folders on macOS),
+;; SCRATCH_ORIGIN (required; empty for every real repo — see below).
 ;; Order matters: later rules win.
 (version 1)
 (allow default)
@@ -23,6 +24,14 @@
   (subpath "/private/tmp")
   (subpath (param "USER_TMP"))
   (subpath "/dev"))
+
+;; A scratch repo whose origin is a local bare repo under heads/scratch-origin/
+;; (no GitHub): `git push` has to write objects and refs into that one bare
+;; repo. mc-head passes its resolved path only in that case; for every real
+;; repo SCRATCH_ORIGIN is "" and this grant does not exist. A missing
+;; parameter makes the profile fail to load (fail closed).
+(if (not (string=? (param "SCRATCH_ORIGIN") ""))
+  (allow file-write* (subpath (param "SCRATCH_ORIGIN"))))
 
 ;; The wrapper's own files (status, heartbeat, lock owner) and the backend's
 ;; mirror bookkeeping are never writable by the head.

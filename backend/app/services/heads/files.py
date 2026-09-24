@@ -127,6 +127,14 @@ class HeadRun:
         return parse_ts(self.spec.get("created_at")) or 0.0
 
     @property
+    def scratch_branch_pushed(self) -> bool:
+        """Wrapper-written (``.wrapper/status.json``) and only for a listed
+        scratch repo — a real repo always needs a PR."""
+        from app.services.heads.scratch import is_scratch
+
+        return self.status.get("scratch_branch_pushed") is True and is_scratch(self.spec.get("repo_full_name"))
+
+    @property
     def pr_url(self) -> str | None:
         url = self.status.get("pr_url")
         return url if isinstance(url, str) and url.startswith("https://github.com/") else None

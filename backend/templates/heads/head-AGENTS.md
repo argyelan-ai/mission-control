@@ -52,6 +52,8 @@ Do not write anywhere else in `{{run_dir}}`. The launcher writes
 6. **Pull request.** `git push -u origin {{branch}}` (never `main`), then
    `gh pr create` with the run-record summary in the body.
    **Never merge, never enable auto-merge, never deploy.**
+   Exception: when the job says the repo is a scratch repo with a local
+   origin, no PR is possible — push only; the pushed branch is the result.
 7. **Finish the run record** (`Status: passed` or `failed`), print it with
    `cat`, then end. Nothing on the side.
 

@@ -133,6 +133,15 @@ describe("deriveStateCard — head run (B5)", () => {
     expect(card).toMatchObject({ kind: "head", mainAction: action });
   });
 
+  it("passed on a scratch repo (no PR possible) → branch_pushed, never a dead Open PR", () => {
+    const task = taskFixture({ status: "in_progress" });
+    const scratch = mkRun({ state: "passed", reason: "scratch_branch_pushed", pr_url: null });
+    expect(deriveStateCard({ ...base, task, headRun: scratch })).toMatchObject({ kind: "head", mainAction: "branch_pushed" });
+    // a PR still wins when there is one
+    const withPr = mkRun({ state: "passed", reason: "scratch_branch_pushed", pr_url: "https://github.com/o/r/pull/7" });
+    expect(deriveStateCard({ ...base, task, headRun: withPr })).toMatchObject({ mainAction: "open_pr" });
+  });
+
   it("a head run wins over the task status card", () => {
     const task = taskFixture({ status: "blocked" });
     const card = deriveStateCard({ ...base, task, headRun: mkRun({ state: "failed", reason: "time_limit" }) });

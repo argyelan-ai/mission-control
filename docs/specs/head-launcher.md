@@ -359,6 +359,7 @@ stoppable) in the runs list on `/runtimes`.
 | stop requested and exited | `stopped` |
 | exited, `question.md` present, no PR | `needs_you` — **any** exit code: the model cannot set the harness exit code (`exit 3` in a Bash tool call only ends that subshell; `omp -p` / `claude -p` still exit 0) |
 | exited, `pr_url` present (found by the wrapper), valid run record `Status: passed` | `passed` |
+| scratch repo with a local origin (below): exited, `scratch_branch_pushed` true (checked by the wrapper), valid run record `Status: passed` | `passed`, reason `scratch_branch_pushed`, `pr_url` null |
 | exited otherwise | `failed` with reason (`exit_<n>`, `time_limit`, `no_pr`, `run_record_missing`, `engine_not_ready`, `box_busy`, `spec_invalid`) |
 
   `passed` is never claimed by the head alone. The PR URL is found by the
@@ -366,6 +367,16 @@ stoppable) in the runs list on `/runtimes`.
   `.wrapper/` which the head cannot write, and a run record counts only when
   its frontmatter `head_run` equals the run id **and** its mtime lies inside
   the run window (vault `jobs/` is writable by other containers today).
+- **Scratch repo with a local origin.** A repo listed in
+  `heads/scratch-repos` whose clone's `origin` is a local bare repo that
+  resolves inside `heads/scratch-origin/` (plain path or `file://`) can never
+  have a GitHub PR. For such a run only: the sandbox gets write access to
+  exactly that bare repo (profile parameter `SCRATCH_ORIGIN`, empty for every
+  real repo), the job text tells the head to push without `gh pr create`,
+  and the wrapper sets `scratch_branch_pushed` when the head branch exists
+  on that origin with commits beyond the base branch. The backend honours
+  the flag only for a repo still listed in `heads/scratch-repos`. Real repos
+  are unchanged: they still need a PR.
 - **Sync job** `heads_sync` (scheduler, 60 s): for active runs only, derive the
   state and mirror the task (§6.2, via `mirror_path`). Task missing → no
   write, flag `task_deleted`. No restart, no kill, no approvals. The
