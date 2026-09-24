@@ -7,7 +7,7 @@ import { notify } from "@/lib/notify";
 import Link from "next/link";
 import { Brain, Check, Clock, RotateCcw, Send, X } from "lucide-react";
 import { api } from "@/lib/api";
-import { C, LANE } from "@/lib/colors";
+import { C, LANE, alpha } from "@/lib/colors";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { OverflowMenu } from "@/components/shared/OverflowMenu";
@@ -131,7 +131,7 @@ export function TaskRow({
               style={{
                 background:
                   task.checklist_done === task.checklist_total
-                    ? `${C.online}26`
+                    ? alpha(C.online, 0.15)
                     : C.accentSubtle,
                 color:
                   task.checklist_done === task.checklist_total
@@ -163,7 +163,7 @@ export function TaskRow({
               title={t("noActivityFor", { mins: staleMins })}
               style={{
                 color: isCritical ? C.error : C.warning,
-                backgroundColor: isCritical ? `${C.error}1A` : `${C.warning}1A`,
+                backgroundColor: isCritical ? alpha(C.error, 0.1) : alpha(C.warning, 0.1),
               }}
             >
               <Clock size={10} />

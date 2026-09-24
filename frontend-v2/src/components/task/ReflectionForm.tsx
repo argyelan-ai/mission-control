@@ -3,7 +3,7 @@
 import { useState, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Sparkles, Send, AlertCircle } from "lucide-react";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 
 /**
  * 4-field form for reflection comments (Phase G, 2026-04-12).
@@ -107,7 +107,7 @@ export function ReflectionForm({ onSubmit, isSubmitting }: ReflectionFormProps) 
               color: C.textPrimary,
               border: `1px solid ${
                 field.key === "lesson"
-                  ? `${C.info}33`
+                  ? alpha(C.info, 0.2)
                   : C.border
               }`,
             }}
@@ -136,9 +136,9 @@ export function ReflectionForm({ onSubmit, isSubmitting }: ReflectionFormProps) 
           disabled={!isValid || isSubmitting}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
           style={{
-            background: isValid ? `${C.info}26` : "rgba(255, 255, 255, 0.03)",
+            background: isValid ? alpha(C.info, 0.15) : "rgba(255, 255, 255, 0.03)",
             color: isValid ? STATUS_TEXT.info : C.textMuted,
-            border: `1px solid ${isValid ? `${C.info}4D` : C.border}`,
+            border: `1px solid ${isValid ? alpha(C.info, 0.3) : C.border}`,
           }}
         >
           <Send size={11} />

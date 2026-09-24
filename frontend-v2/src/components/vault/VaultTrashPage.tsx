@@ -25,7 +25,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { RotateCcw, Trash2, X, AlertTriangle, ArchiveX } from "lucide-react";
 import { api } from "@/lib/api";
 import { colorForAgent } from "./agentColors";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -98,8 +98,8 @@ function PurgeConfirmModal({
               <div
                 className="shrink-0 w-9 h-9 rounded-full flex items-center justify-center"
                 style={{
-                  background: `${C.error}1A`,
-                  border: `1px solid ${C.error}40`,
+                  background: alpha(C.error, 0.1),
+                  border: `1px solid ${alpha(C.error, 0.25)}`,
                 }}
               >
                 <ArchiveX size={16} style={{ color: STATUS_TEXT.error }} />
@@ -134,8 +134,8 @@ function PurgeConfirmModal({
               <div
                 className="rounded-md px-3 py-2.5 flex gap-2.5 items-start"
                 style={{
-                  background: `${C.error}0F`,
-                  border: `1px solid ${C.error}38`,
+                  background: alpha(C.error, 0.06),
+                  border: `1px solid ${alpha(C.error, 0.22)}`,
                 }}
               >
                 <AlertTriangle
@@ -150,8 +150,8 @@ function PurgeConfirmModal({
                 <div
                   className="rounded-md px-3 py-2 mt-2"
                   style={{
-                    background: `${C.error}14`,
-                    border: `1px solid ${C.error}40`,
+                    background: alpha(C.error, 0.08),
+                    border: `1px solid ${alpha(C.error, 0.25)}`,
                     fontSize: "12px",
                     color: STATUS_TEXT.error,
                   }}
@@ -188,8 +188,8 @@ function PurgeConfirmModal({
                 style={{
                   fontSize: "10.5px",
                   letterSpacing: "0.14em",
-                  background: `${C.error}24`,
-                  border: `1px solid ${C.error}73`,
+                  background: alpha(C.error, 0.14),
+                  border: `1px solid ${alpha(C.error, 0.45)}`,
                   color: STATUS_TEXT.error,
                   cursor: isPurging ? "default" : "pointer",
                 }}
@@ -328,9 +328,9 @@ function TrashRow({
                 fontSize: "9.5px",
                 letterSpacing: "0.14em",
                 padding: "3px 7px",
-                background: `${agentColor}1A`,
+                background: alpha(agentColor, 0.1),
                 color: agentColor,
-                border: `1px solid ${agentColor}38`,
+                border: `1px solid ${alpha(agentColor, 0.22)}`,
                 lineHeight: 1,
                 opacity: 0.7,
               }}
@@ -412,8 +412,8 @@ function TrashRow({
           <div
             className="mt-3 rounded-md px-2.5 py-1.5 inline-flex items-center gap-2"
             style={{
-              background: `${C.error}0F`,
-              border: `1px solid ${C.error}33`,
+              background: alpha(C.error, 0.06),
+              border: `1px solid ${alpha(C.error, 0.2)}`,
               fontSize: "11.5px",
               color: STATUS_TEXT.error,
             }}
@@ -479,9 +479,9 @@ function TrashRow({
           onMouseEnter={(e) => {
             (e.currentTarget as HTMLButtonElement).style.color = STATUS_TEXT.error;
             (e.currentTarget as HTMLButtonElement).style.background =
-              `${C.error}14`;
+              alpha(C.error, 0.08);
             (e.currentTarget as HTMLButtonElement).style.borderColor =
-              `${C.error}38`;
+              alpha(C.error, 0.22);
           }}
           onMouseLeave={(e) => {
             (e.currentTarget as HTMLButtonElement).style.color =

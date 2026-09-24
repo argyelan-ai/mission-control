@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, CheckCircle, RotateCcw, Pause, StopCircle, Play } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Task, TaskStatus, ReviewDecision } from "@/lib/types";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import { isOperatorReview, isSelfReviewStall } from "@/lib/reviewRouting";
 import { useTranslations } from "next-intl";
 
@@ -45,9 +45,9 @@ function ReviewOwnerGate({ task, boardId }: { task: Task; boardId: string }) {
             className="px-3 py-2 rounded-lg text-xs"
             data-testid="self-review-stall-note"
             style={{
-              backgroundColor: `${C.warning}0F`,
+              backgroundColor: alpha(C.warning, 0.06),
               color: C.textSecondary ?? C.warning,
-              border: `1px solid ${C.warning}26`,
+              border: `1px solid ${alpha(C.warning, 0.15)}`,
             }}
           >
             {t("selfReviewStall", { agent: agent?.name ?? "—" })}
@@ -62,9 +62,9 @@ function ReviewOwnerGate({ task, boardId }: { task: Task; boardId: string }) {
       className="px-3 py-2 rounded-lg text-xs flex items-center justify-between gap-2"
       data-testid="agent-review-note"
       style={{
-        backgroundColor: `${C.info}0F`,
+        backgroundColor: alpha(C.info, 0.06),
         color: C.textSecondary ?? C.info,
-        border: `1px solid ${C.info}26`,
+        border: `1px solid ${alpha(C.info, 0.15)}`,
       }}
     >
       <span>{t("agentReviewing", { agent: agent?.name ?? "—" })}</span>
@@ -110,9 +110,9 @@ function ReviewDecisionSection({
       <div
         className="px-3 py-2 rounded-lg text-xs"
         style={{
-          backgroundColor: `${C.error}0F`,
+          backgroundColor: alpha(C.error, 0.06),
           color: C.error,
-          border: `1px solid ${C.error}26`,
+          border: `1px solid ${alpha(C.error, 0.15)}`,
         }}
       >
         Review blockiert -- Task ist {task.run_control === "stopped" ? "gestoppt" : "gehalten"}
@@ -146,7 +146,7 @@ function ReviewDecisionSection({
             className="text-[10px] font-medium px-1.5 py-0.5 rounded-sm"
             style={{
               color: decisionLabels[task.review_decision].color,
-              backgroundColor: `${decisionLabels[task.review_decision].color}26`,
+              backgroundColor: alpha(decisionLabels[task.review_decision].color, 0.15),
             }}
           >
             {decisionLabels[task.review_decision].label}
@@ -193,9 +193,9 @@ function ReviewDecisionSection({
           disabled={reviewMutation.isPending || !reviewComment.trim()}
           className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           style={{
-            backgroundColor: `${C.online}1A`,
+            backgroundColor: alpha(C.online, 0.1),
             color: C.online,
-            border: `1px solid ${C.online}33`,
+            border: `1px solid ${alpha(C.online, 0.2)}`,
           }}
         >
           <CheckCircle size={12} /> Approve
@@ -205,9 +205,9 @@ function ReviewDecisionSection({
           disabled={reviewMutation.isPending || !reviewComment.trim()}
           className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           style={{
-            backgroundColor: `${C.error}1A`,
+            backgroundColor: alpha(C.error, 0.1),
             color: C.error,
-            border: `1px solid ${C.error}33`,
+            border: `1px solid ${alpha(C.error, 0.2)}`,
           }}
         >
           <RotateCcw size={12} /> Changes
@@ -217,9 +217,9 @@ function ReviewDecisionSection({
           disabled={reviewMutation.isPending || !reviewComment.trim()}
           className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           style={{
-            backgroundColor: `${C.warning}1A`,
+            backgroundColor: alpha(C.warning, 0.1),
             color: C.warning,
-            border: `1px solid ${C.warning}33`,
+            border: `1px solid ${alpha(C.warning, 0.2)}`,
           }}
         >
           <Pause size={12} /> Hold
@@ -334,11 +334,11 @@ export function TaskActions({ task, boardId }: TaskActionsProps) {
           className="flex items-center gap-1.5 w-full px-3 py-2 rounded-lg text-xs font-medium transition-colors cursor-pointer"
           style={{
             backgroundColor: confirmingStop
-              ? `${C.error}2E`
-              : `${C.error}0F`,
+              ? alpha(C.error, 0.18)
+              : alpha(C.error, 0.06),
             color: confirmingStop ? C.textPrimary : C.error,
             border: `1px solid ${
-              confirmingStop ? `${C.error}80` : `${C.error}26`
+              confirmingStop ? alpha(C.error, 0.5) : alpha(C.error, 0.15)
             }`,
           }}
         >
@@ -356,9 +356,9 @@ export function TaskActions({ task, boardId }: TaskActionsProps) {
           <div
             className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs"
             style={{
-              backgroundColor: `${C.error}0F`,
+              backgroundColor: alpha(C.error, 0.06),
               color: C.error,
-              border: `1px solid ${C.error}26`,
+              border: `1px solid ${alpha(C.error, 0.15)}`,
             }}
           >
             <StopCircle size={12} />
@@ -371,9 +371,9 @@ export function TaskActions({ task, boardId }: TaskActionsProps) {
             disabled={resumeRunMutation.isPending}
             className="flex items-center gap-1.5 w-full px-3 py-2 rounded-lg text-xs font-medium transition-colors cursor-pointer"
             style={{
-              backgroundColor: `${C.online}0F`,
+              backgroundColor: alpha(C.online, 0.06),
               color: C.online,
-              border: `1px solid ${C.online}26`,
+              border: `1px solid ${alpha(C.online, 0.15)}`,
             }}
           >
             <Play size={12} />

@@ -7,7 +7,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Server, X, Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 
 interface Props {
@@ -139,7 +139,7 @@ export function MCPAddServerModal({ onClose, onSuccess }: Props) {
               placeholder={t("namePlaceholder")}
               className="mt-1 w-full px-3 py-2 rounded-lg text-sm bg-transparent"
               style={{
-                border: `1px solid ${nameInvalid ? `${C.error}66` : "var(--color-border)"}`,
+                border: `1px solid ${nameInvalid ? alpha(C.error, 0.4) : "var(--color-border)"}`,
                 color: "var(--color-text-primary)",
               }}
               aria-label={t("name")}
@@ -209,7 +209,7 @@ export function MCPAddServerModal({ onClose, onSuccess }: Props) {
                 placeholder={t("urlPlaceholder")}
                 className="mt-1 w-full px-3 py-2 rounded-lg text-sm font-mono bg-transparent"
                 style={{
-                  border: `1px solid ${urlInvalid ? `${C.error}66` : "var(--color-border)"}`,
+                  border: `1px solid ${urlInvalid ? alpha(C.error, 0.4) : "var(--color-border)"}`,
                   color: "var(--color-text-primary)",
                 }}
                 aria-label={t("url")}

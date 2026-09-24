@@ -4,7 +4,7 @@ import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Search, Plus, ChevronDown, X } from "lucide-react";
 import type { Project } from "@/lib/types";
-import { C, LANE } from "@/lib/colors";
+import { C, LANE, alpha } from "@/lib/colors";
 
 interface ProjectComboboxProps {
   projects: Project[];
@@ -123,7 +123,7 @@ export function ProjectCombobox({
         className="flex items-center gap-2 w-full text-left px-3 py-2 rounded-xl text-[12px] transition-all cursor-pointer"
         style={{
           backgroundColor: deep,
-          border: `1px solid ${value ? `${accent}66` : border}`,
+          border: `1px solid ${value ? alpha(accent, 0.4) : border}`,
           color: value ? textPrimary : textMuted,
         }}
       >
@@ -253,7 +253,7 @@ export function ProjectCombobox({
                       onClick={handleCreate}
                       disabled={!newName.trim() || creating}
                       className="flex-1 text-[10px] py-1 rounded-lg font-medium cursor-pointer disabled:opacity-30"
-                      style={{ backgroundColor: `${accent}22`, color: accent, border: `1px solid ${accent}66` }}
+                      style={{ backgroundColor: alpha(accent, 0.13), color: accent, border: `1px solid ${alpha(accent, 0.4)}` }}
                     >
                       {creating ? "..." : "Create"}
                     </button>

@@ -25,7 +25,7 @@ import { api } from "@/lib/api";
 import type { Host, HostCreate, HostKind, HostRole } from "@/lib/types";
 import { useAppStore } from "@/lib/store";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import { BoxWizard } from "./BoxWizard";
 import { HostOnboardDialog } from "./HostOnboardDialog";
 import { NodePairingDialog } from "./NodePairingDialog";
@@ -433,8 +433,8 @@ function HostFormModal({
               <div
                 className="text-xs px-3 py-2 rounded-lg"
                 style={{
-                  background: `${C.error}14`,
-                  border: `1px solid ${C.error}33`,
+                  background: alpha(C.error, 0.08),
+                  border: `1px solid ${alpha(C.error, 0.2)}`,
                   color: STATUS_TEXT.error,
                 }}
               >
@@ -681,8 +681,8 @@ export function HostsSection({ embedded = false }: { embedded?: boolean } = {}) 
           className="flex items-center justify-between gap-3 text-xs px-4 py-3 mb-3 rounded-xl"
           style={{
             color: STATUS_TEXT.error,
-            background: `${C.error}0F`,
-            border: `1px solid ${C.error}26`,
+            background: alpha(C.error, 0.06),
+            border: `1px solid ${alpha(C.error, 0.15)}`,
           }}
         >
           <span>{feedback}</span>

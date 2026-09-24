@@ -53,7 +53,7 @@ import { TelegramTab } from "@/components/settings/TelegramTab";
 import { AiProvidersTab } from "@/components/settings/AiProvidersTab";
 import { StatusDot } from "@/components/shared/StatusDot";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 
 // ── Section Registry ──────────────────────────────────────────────────────────
 
@@ -297,8 +297,8 @@ function ErrorBanner({ message }: { message: string }) {
     <div
       className="flex items-center gap-2 text-xs rounded-lg px-3 py-2 mb-4"
       style={{
-        backgroundColor: `${C.error}12`,
-        border: `1px solid ${C.error}33`,
+        backgroundColor: alpha(C.error, 0.07),
+        border: `1px solid ${alpha(C.error, 0.2)}`,
         color: C.error,
       }}
     >
@@ -1273,7 +1273,7 @@ function ApiKeysSection({
                         className="text-[10px] px-1.5 py-0.5 rounded-sm uppercase"
                         style={{
                           backgroundColor: isSet
-                            ? `${C.online}1A`
+                            ? alpha(C.online, 0.1)
                             : "var(--color-bg-elevated)",
                           color: isSet ? C.online : "var(--color-text-muted)",
                         }}
@@ -1664,12 +1664,12 @@ function GithubSection() {
             </div>
 
             {saveError && (
-              <p className="text-xs rounded-lg px-3 py-2" style={{ color: STATUS_TEXT.error, backgroundColor: `${C.error}14`, border: `1px solid ${C.error}26` }}>
+              <p className="text-xs rounded-lg px-3 py-2" style={{ color: STATUS_TEXT.error, backgroundColor: alpha(C.error, 0.08), border: `1px solid ${alpha(C.error, 0.15)}` }}>
                 {saveError}
               </p>
             )}
             {saveMessage && (
-              <p className="text-xs rounded-lg px-3 py-2 flex items-center gap-1.5" style={{ color: C.online, backgroundColor: `${C.online}1A` }}>
+              <p className="text-xs rounded-lg px-3 py-2 flex items-center gap-1.5" style={{ color: C.online, backgroundColor: alpha(C.online, 0.1) }}>
                 <Check size={12} /> {saveMessage}
               </p>
             )}
@@ -1882,7 +1882,7 @@ function UserRow({
 
   const roleColors: Record<string, { bg: string; text: string }> = {
     admin: { bg: C.accentSubtle, text: C.accent },
-    operator: { bg: `${C.warning}1F`, text: C.warning },
+    operator: { bg: alpha(C.warning, 0.12), text: C.warning },
     viewer: { bg: "var(--color-bg-elevated)", text: "var(--color-text-muted)" },
   };
 
@@ -1930,7 +1930,7 @@ function UserRow({
               <span
                 className="text-[10px] px-1.5 py-0.5 rounded-sm"
                 style={{
-                  backgroundColor: `${C.error}1F`,
+                  backgroundColor: alpha(C.error, 0.12),
                   color: C.error,
                 }}
               >

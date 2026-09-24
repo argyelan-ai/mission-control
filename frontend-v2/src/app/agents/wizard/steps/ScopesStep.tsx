@@ -4,7 +4,7 @@ import { useEffect, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { RotateCcw } from "lucide-react";
 import { api } from "@/lib/api";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import type { WizardStepProps } from "../types";
 import { wizardLabelClass } from "../shared";
 import { ALL_SCOPES, defaultScopesForRole } from "../scopeDefaults";
@@ -64,7 +64,7 @@ export function ScopesStep({ state, update }: WizardStepProps) {
                 className="flex items-center gap-2 rounded-lg px-2.5 py-2 cursor-pointer transition-colors"
                 style={{
                   backgroundColor: checked ? C.accentSubtle : "var(--color-bg-surface)",
-                  border: `1px solid ${deviates ? C.warning + "66" : checked ? C.borderAccent : C.borderSubtle}`,
+                  border: `1px solid ${deviates ? alpha(C.warning, 0.4) : checked ? C.borderAccent : C.borderSubtle}`,
                 }}
                 title={deviates ? "Deviates from the role default" : undefined}
               >

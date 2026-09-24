@@ -32,7 +32,7 @@ import { CliToolsSection } from "@/components/shared/CliToolsSection";
 import { ModelCatalogSection } from "@/components/shared/ModelCatalogSection";
 import { LocalModelBrowser } from "@/components/shared/LocalModelBrowser";
 import { LmStudioLocalModels } from "./LmStudioLocalModels";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 import { Section } from "@/components/shared/Section";
 import { ListRow, MetaChip, MetaText, RowAction } from "@/components/shared/ListRow";
@@ -76,7 +76,7 @@ function ActiveDownloads() {
         <span className="text-xs font-medium tracking-wider uppercase" style={{ color: C.warning, letterSpacing: "0.07em", fontSize: "10px" }}>
           {t("downloads")}
         </span>
-        <div className="flex-1 h-px" style={{ background: `${C.warning}33` }} />
+        <div className="flex-1 h-px" style={{ background: alpha(C.warning, 0.2) }} />
         <Loader2 size={10} className="animate-spin" style={{ color: C.warning }} />
       </div>
       <div className="flex flex-col gap-2">
@@ -84,8 +84,8 @@ function ActiveDownloads() {
           <div
             key={dl.id}
             style={{
-              background: `${C.warning}0A`,
-              border: `1px solid ${C.warning}26`,
+              background: alpha(C.warning, 0.04),
+              border: `1px solid ${alpha(C.warning, 0.15)}`,
               borderLeft: `1px solid ${C.warning}`,
               borderRadius: "10px",
               padding: "10px 12px",
@@ -119,9 +119,9 @@ function ActiveDownloads() {
                     className="action-btn flex items-center justify-center w-7 h-7 rounded-md transition-colors"
                     style={{
                       background: "transparent",
-                      border: `1px solid ${C.error}33`,
+                      border: `1px solid ${alpha(C.error, 0.2)}`,
                       color: STATUS_TEXT.error,
-                      ["--action-hover" as string]: `${C.error}1A`,
+                      ["--action-hover" as string]: alpha(C.error, 0.1),
                     }}
                   >
                   {cancelMutation.isPending && cancelMutation.variables === dl.name
@@ -364,8 +364,8 @@ function ModelCatalog() {
         <div
           className="text-xs mb-4 px-3 py-2 rounded-lg"
           style={{
-            background: isError ? `${C.error}14` : C.accentSubtle,
-            border: `1px solid ${isError ? `${C.error}33` : C.borderAccent}`,
+            background: isError ? alpha(C.error, 0.08) : C.accentSubtle,
+            border: `1px solid ${isError ? alpha(C.error, 0.2) : C.borderAccent}`,
             color: C.textSecondary,
           }}
         >
@@ -449,8 +449,8 @@ function ModelCatalog() {
           <div
             className="text-xs px-3 py-2 rounded-lg"
             style={{
-              background: `${C.error}14`,
-              border: `1px solid ${C.error}26`,
+              background: alpha(C.error, 0.08),
+              border: `1px solid ${alpha(C.error, 0.15)}`,
               color: STATUS_TEXT.error,
             }}
           >
@@ -622,8 +622,8 @@ function KvResetScheduleToggle() {
         onClick={() => setOpen((o) => !o)}
         className="flex items-center gap-1.5 text-xs px-2.5 py-2 sm:py-1.5 min-h-11 sm:min-h-0 rounded-md transition-all cursor-pointer"
         style={{
-          background: open ? `${C.warning}1A` : C.borderSubtle,
-          border: open ? `1px solid ${C.warning}4D` : `1px solid ${C.borderSubtle}`,
+          background: open ? alpha(C.warning, 0.1) : C.borderSubtle,
+          border: open ? `1px solid ${alpha(C.warning, 0.3)}` : `1px solid ${C.borderSubtle}`,
           color: open ? C.warning : C.textMuted,
         }}
         title={t("scheduleTitle")}
@@ -644,13 +644,13 @@ function KvResetScheduleToggle() {
           transition={{ duration: 0.15 }}
           className="mt-2 rounded-xl overflow-hidden"
           style={{
-            border: `1px solid ${C.warning}33`,
-            background: `${C.warning}08`,
+            border: `1px solid ${alpha(C.warning, 0.2)}`,
+            background: alpha(C.warning, 0.03),
           }}
         >
           <div
             className="flex items-center justify-between gap-3 px-4 py-2.5"
-            style={{ borderBottom: `1px solid ${C.warning}26` }}
+            style={{ borderBottom: `1px solid ${alpha(C.warning, 0.15)}` }}
           >
             <div className="flex items-center gap-2 min-w-0">
               <span className="text-xs font-medium" style={{ color: C.warning }}>{t("scheduleTitle")}</span>
@@ -663,8 +663,8 @@ function KvResetScheduleToggle() {
               disabled={kvResetMutation.isPending}
               className="shrink-0 flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed transition-opacity"
               style={{
-                background: `${C.warning}1A`,
-                border: `1px solid ${C.warning}40`,
+                background: alpha(C.warning, 0.1),
+                border: `1px solid ${alpha(C.warning, 0.25)}`,
                 color: C.warning,
               }}
             >
@@ -678,8 +678,8 @@ function KvResetScheduleToggle() {
             <div
               className="mx-4 mt-3 text-xs px-3 py-2 rounded-lg"
               style={{
-                background: kvResetMutation.isError ? `${C.error}14` : `${C.online}14`,
-                border: `1px solid ${kvResetMutation.isError ? `${C.error}33` : `${C.online}33`}`,
+                background: kvResetMutation.isError ? alpha(C.error, 0.08) : alpha(C.online, 0.08),
+                border: `1px solid ${kvResetMutation.isError ? alpha(C.error, 0.2) : alpha(C.online, 0.2)}`,
                 color: C.textSecondary,
               }}
             >
@@ -878,7 +878,7 @@ export default function RuntimesPage() {
         {error && (
           <div
             className="flex items-center gap-2 text-xs px-2.5 py-2 rounded-md mb-6"
-            style={{ color: STATUS_TEXT.error, background: "transparent", border: `1px solid ${C.error}40` }}
+            style={{ color: STATUS_TEXT.error, background: "transparent", border: `1px solid ${alpha(C.error, 0.25)}` }}
           >
             <AlertCircle size={13} />
             {t("loadError")}

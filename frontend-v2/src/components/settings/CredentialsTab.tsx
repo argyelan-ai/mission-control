@@ -9,7 +9,7 @@ import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import type { Credential } from "@/lib/types";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 
 // labelKey pattern: resolved via t() at the render site (docs/i18n.md)
 const TYPE_CONFIG = {
@@ -187,7 +187,7 @@ export function CredentialsTab() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="text-[12px] font-medium truncate" style={{ color: C.textPrimary }}>{c.name}</span>
-                    <span className="text-[9px] font-mono px-1.5 py-0.5 rounded-sm" style={{ color: cfg.color, border: `1px solid ${cfg.color}33`, backgroundColor: `${cfg.color}11` }}>
+                    <span className="text-[9px] font-mono px-1.5 py-0.5 rounded-sm" style={{ color: cfg.color, border: `1px solid ${alpha(cfg.color, 0.2)}`, backgroundColor: alpha(cfg.color, 0.07) }}>
                       {t(cfg.labelKey)}
                     </span>
                   </div>
@@ -209,7 +209,7 @@ export function CredentialsTab() {
                     </button>
                   )}
                   {deleteConfirm === c.id ? (
-                    <button onClick={() => deleteMut.mutate(c.id)} className="px-2 py-1 rounded-lg text-[10px] font-medium cursor-pointer" style={{ color: C.error, backgroundColor: `${C.error}22` }}>
+                    <button onClick={() => deleteMut.mutate(c.id)} className="px-2 py-1 rounded-lg text-[10px] font-medium cursor-pointer" style={{ color: C.error, backgroundColor: alpha(C.error, 0.13) }}>
                       {t("reallyDelete")}
                     </button>
                   ) : (
@@ -279,9 +279,9 @@ export function CredentialsTab() {
                         onClick={() => setCredType(ct)}
                         className="px-2.5 py-1 text-[11px] font-mono font-medium rounded-sm cursor-pointer transition-all"
                         style={{
-                          backgroundColor: credType === ct ? `${cfg.color}22` : "transparent",
+                          backgroundColor: credType === ct ? alpha(cfg.color, 0.13) : "transparent",
                           color: credType === ct ? cfg.color : C.textMuted,
-                          border: `1px solid ${credType === ct ? `${cfg.color}66` : C.border}`,
+                          border: `1px solid ${credType === ct ? alpha(cfg.color, 0.4) : C.border}`,
                         }}
                       >
                         {t(cfg.labelKey)}

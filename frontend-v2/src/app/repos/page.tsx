@@ -17,7 +17,7 @@ import { FolderGit2, GitBranch, Github, Loader2, Lock, Globe2, Plus } from "luci
 import AppShell from "@/components/layout/AppShell";
 import { api } from "@/lib/api";
 import type { GithubStatus, Repo } from "@/lib/types";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import { timeAgo } from "@/lib/utils";
 import { RepoDetailPanel } from "./RepoDetailPanel";
 import { ImportRepoDialog } from "./ImportRepoDialog";
@@ -83,7 +83,7 @@ function RepoCard({ repo, onClick }: { repo: Repo; onClick: () => void }) {
               <span
                 className="shrink-0 uppercase"
                 style={{
-                  background: `${C.warning}1A`,
+                  background: alpha(C.warning, 0.1),
                   color: C.warning,
                   fontSize: "9px",
                   padding: "1px 5px",

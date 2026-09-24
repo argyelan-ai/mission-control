@@ -26,7 +26,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ExternalLink, RotateCcw, ScrollText, Terminal, FileText, Send } from "lucide-react";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import { formatDuration } from "@/lib/taskDetail/format";
 import {
   failReasonKey,
@@ -229,7 +229,7 @@ export function HeadStateCard({
       data-tone={silentWarn ? "warn" : run.state}
       aria-label={t(headStateKey(run.state))}
       className="rounded-lg px-3.5 py-3 space-y-2"
-      style={{ background: `${tone}0F`, border: `1px solid ${tone}40` }}
+      style={{ background: alpha(tone, 0.06), border: `1px solid ${alpha(tone, 0.25)}` }}
     >
       <div className="flex items-start gap-2">
         <div className="label-sys min-w-0 flex-1 truncate" style={{ color: textTone }} data-testid="head-card-kicker">

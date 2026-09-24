@@ -20,7 +20,7 @@ import { AlertTriangle, ChevronRight, Loader2, X } from "lucide-react";
 import { ResponsiveModal } from "@/components/shared/ResponsiveModal";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 import { api } from "@/lib/api";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import type {
   EligibleMember,
   GroupCreatePayload,
@@ -353,8 +353,8 @@ export function CreateGroupModal({ open, onClose, onCreated }: CreateGroupModalP
             role="alert"
             className="flex items-start gap-2 rounded-md px-3 py-2 text-xs"
             style={{
-              border: `1px solid ${C.error}66`,
-              background: `${C.error}14`,
+              border: `1px solid ${alpha(C.error, 0.4)}`,
+              background: alpha(C.error, 0.08),
               color: STATUS_TEXT.error,
             }}
           >
@@ -428,7 +428,7 @@ const inputStyle: React.CSSProperties = {
 };
 
 function focusOn(e: React.FocusEvent<HTMLElement>) {
-  e.currentTarget.style.borderColor = `${C.accent}66`;
+  e.currentTarget.style.borderColor = alpha(C.accent, 0.4);
 }
 
 function focusOff(e: React.FocusEvent<HTMLElement>) {

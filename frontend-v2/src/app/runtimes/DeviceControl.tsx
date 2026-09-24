@@ -54,7 +54,7 @@ import {
   type DeviceStatusReason,
   type GpuMode,
 } from "@/lib/types";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import type { Tone } from "@/components/shared/ListRow";
 
 // ── Gemessene Werte ───────────────────────────────────────────────────────────
@@ -336,7 +336,7 @@ function ModeScale({
               data-testid="mode-target-outline"
               aria-hidden
               className="absolute top-0 bottom-0 rounded-lg pointer-events-none"
-              style={{ width: "25%", left: 0, border: `1px dashed ${C.info}`, background: `${C.info}0F` }}
+              style={{ width: "25%", left: 0, border: `1px dashed ${C.info}`, background: alpha(C.info, 0.06) }}
               initial={false}
               animate={
                 flat
@@ -513,7 +513,7 @@ function CompactModeSwitch({
           data-testid="compact-target-outline"
           aria-hidden
           className="absolute top-0 bottom-0 rounded-md pointer-events-none"
-          style={{ width: "25%", left: 0, border: `1px dashed ${C.info}`, background: `${C.info}0F` }}
+          style={{ width: "25%", left: 0, border: `1px dashed ${C.info}`, background: alpha(C.info, 0.06) }}
           initial={false}
           animate={
             flat
@@ -853,7 +853,7 @@ export function DeviceModeStrip({
               data-testid="device-status-chip"
               data-kind="lock"
               className="inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-[10px] font-medium"
-              style={{ color: STATUS_TEXT.warning, border: `1px solid ${C.warning}55` }}
+              style={{ color: STATUS_TEXT.warning, border: `1px solid ${alpha(C.warning, 0.33)}` }}
             >
               <Lock size={10} aria-hidden />
               {t("chipLocked")}
@@ -864,7 +864,7 @@ export function DeviceModeStrip({
               data-testid="device-status-chip"
               data-kind="pending"
               className="inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-[10px] font-medium tabular-nums"
-              style={{ color: C.info, border: `1px solid ${C.info}55` }}
+              style={{ color: C.info, border: `1px solid ${alpha(C.info, 0.33)}` }}
             >
               {mutation.isPending && <Loader2 size={10} className="animate-spin" aria-hidden />}
               {t("pendingTo", { mode: t(MODE_LABEL_KEY[targetMode as GpuMode]) })}
@@ -876,7 +876,7 @@ export function DeviceModeStrip({
               data-testid="device-status-chip"
               data-kind="error"
               className="inline-flex items-center rounded-sm px-1.5 py-0.5 text-[10px] font-medium"
-              style={{ color: STATUS_TEXT.error, border: `1px solid ${C.error}55` }}
+              style={{ color: STATUS_TEXT.error, border: `1px solid ${alpha(C.error, 0.33)}` }}
             >
               {t("chipError")}
             </span>
@@ -886,7 +886,7 @@ export function DeviceModeStrip({
               data-testid="device-status-chip"
               data-kind="boost"
               className="inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-[10px] font-medium"
-              style={{ color: STATUS_TEXT.warning, border: `1px solid ${C.warning}55` }}
+              style={{ color: STATUS_TEXT.warning, border: `1px solid ${alpha(C.warning, 0.33)}` }}
             >
               <AlertTriangle size={10} aria-hidden />
               {t("chipBoost")}
@@ -914,7 +914,7 @@ export function DeviceModeStrip({
           data-testid="device-lock-hint"
           data-lock={lock}
           className="flex items-start gap-2 rounded-lg px-2.5 py-1.5"
-          style={{ background: `${C.warning}0F`, border: `1px solid ${C.warning}33` }}
+          style={{ background: alpha(C.warning, 0.06), border: `1px solid ${alpha(C.warning, 0.2)}` }}
         >
           <Lock size={11} aria-hidden style={{ color: STATUS_TEXT.warning, marginTop: 2 }} />
           <span className="text-[11px]" style={{ color: STATUS_TEXT.warning, lineHeight: 1.45 }}>
@@ -939,7 +939,7 @@ export function DeviceModeStrip({
         <div
           data-testid="device-pending"
           className="rounded-lg px-2.5 py-1.5"
-          style={{ background: `${C.info}0F`, border: `1px solid ${C.info}33` }}
+          style={{ background: alpha(C.info, 0.06), border: `1px solid ${alpha(C.info, 0.2)}` }}
         >
           <div className="flex items-center gap-2 text-[11px]" style={{ color: C.info }}>
             {mutation.isPending && <Loader2 size={11} className="animate-spin" aria-hidden />}
@@ -952,7 +952,7 @@ export function DeviceModeStrip({
               Soll von woanders, wäre jede Füllung geraten — ein voller Balken
               sähe aus wie "fertig". */}
           {pickedAt !== null && (
-            <div className="mt-1 rounded-full overflow-hidden" style={{ height: "2px", background: `${C.info}26` }}>
+            <div className="mt-1 rounded-full overflow-hidden" style={{ height: "2px", background: alpha(C.info, 0.15) }}>
               {/* scaleX statt width: 15 Sekunden lang jedes Bild neu layouten
                   würde man sehen. */}
               <div
@@ -979,7 +979,7 @@ export function DeviceModeStrip({
         <div
           data-testid="device-boost-warning"
           className="flex items-start gap-2 rounded-lg px-2.5 py-1.5"
-          style={{ background: `${C.warning}0F`, border: `1px solid ${C.warning}33` }}
+          style={{ background: alpha(C.warning, 0.06), border: `1px solid ${alpha(C.warning, 0.2)}` }}
         >
           <AlertTriangle size={11} aria-hidden style={{ color: STATUS_TEXT.warning, marginTop: 2 }} />
           <span className="text-[11px]" style={{ color: STATUS_TEXT.warning, lineHeight: 1.45 }}>
@@ -992,7 +992,7 @@ export function DeviceModeStrip({
         <div
           data-testid="device-last-error"
           className="rounded-lg px-2.5 py-1.5 text-[11px]"
-          style={{ background: `${C.error}0F`, border: `1px solid ${C.error}26`, color: STATUS_TEXT.error }}
+          style={{ background: alpha(C.error, 0.06), border: `1px solid ${alpha(C.error, 0.15)}`, color: STATUS_TEXT.error }}
         >
           {t("deviceError", { error: device.last_error })}
         </div>
@@ -1002,7 +1002,7 @@ export function DeviceModeStrip({
         <div
           data-testid="device-apply-failed"
           className="rounded-lg px-2.5 py-1.5 text-[11px]"
-          style={{ background: `${C.error}0F`, border: `1px solid ${C.error}26`, color: STATUS_TEXT.error }}
+          style={{ background: alpha(C.error, 0.06), border: `1px solid ${alpha(C.error, 0.15)}`, color: STATUS_TEXT.error }}
         >
           {t("applyFailed")}
         </div>

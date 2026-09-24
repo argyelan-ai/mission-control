@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 
 type PlannerMode = "direct" | "auto" | "with_planner";
 
@@ -47,7 +47,7 @@ export function PlannerSlider({
           <motion.div
             className="absolute h-0.5 rounded-full"
             style={{
-              backgroundColor: `${accent}66`,
+              backgroundColor: alpha(accent, 0.4),
               left: "12px",
               width: `calc(${(activeIndex / (STOPS.length - 1)) * 100}% - 0px)`,
             }}
@@ -70,8 +70,8 @@ export function PlannerSlider({
                     className="w-2.5 h-2.5 rounded-full border transition-colors"
                     style={{
                       backgroundColor: isActive ? accent : "transparent",
-                      borderColor: isActive ? accent : `${textMuted}44`,
-                      boxShadow: isActive ? `0 0 8px ${accent}40` : "none",
+                      borderColor: isActive ? accent : alpha(textMuted, 0.27),
+                      boxShadow: isActive ? `0 0 8px ${alpha(accent, 0.25)}` : "none",
                     }}
                     layout
                     transition={{ type: "spring", stiffness: 500, damping: 35 }}

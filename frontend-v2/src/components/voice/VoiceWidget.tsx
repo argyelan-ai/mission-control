@@ -27,7 +27,7 @@ import {
 import { ConnectionState, DisconnectReason, Room, RoomEvent } from "livekit-client";
 import "@livekit/components-styles";
 import { request } from "@/lib/api";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import { useVoiceDisplay } from "./useVoiceDisplay";
 import type { DisplayCard } from "./cards/types";
 import { MemoryCard } from "./cards/MemoryCard";
@@ -580,7 +580,7 @@ function VoiceDrawer({
                   options={{ minHeight: 6 }}
                   style={
                     {
-                      "--lk-fg": isSpeaking ? C.accentHover : `${C.accent}99`,
+                      "--lk-fg": isSpeaking ? C.accentHover : alpha(C.accent, 0.6),
                       "--lk-bg": "transparent",
                     } as React.CSSProperties
                   }
@@ -650,8 +650,8 @@ function VoiceDrawer({
                 onClick={toggleMute}
                 className="flex items-center justify-center w-10 h-10 rounded-full transition-all cursor-pointer hover:scale-105 active:scale-95"
                 style={{
-                  background: muted ? `${C.error}1F` : "var(--color-bg-hover)",
-                  border: `1px solid ${muted ? `${C.error}4D` : "rgba(255,255,255,0.06)"}`,
+                  background: muted ? alpha(C.error, 0.12) : "var(--color-bg-hover)",
+                  border: `1px solid ${muted ? alpha(C.error, 0.3) : "rgba(255,255,255,0.06)"}`,
                   color: muted ? C.error : "var(--color-text-primary)",
                 }}
                 aria-label={muted ? "Enable microphone" : "Mute"}
@@ -690,7 +690,7 @@ function StatusPulse({ connected, speaking }: { connected: boolean; speaking: bo
     <div className="relative flex items-center justify-center w-2.5 h-2.5">
       <div
         className="absolute inset-0 rounded-full"
-        style={{ background: color, boxShadow: `0 0 8px ${color}aa` }}
+        style={{ background: color, boxShadow: `0 0 8px ${alpha(color, 0.67)}` }}
       />
       {speaking && (
         <motion.div

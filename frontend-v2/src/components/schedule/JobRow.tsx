@@ -25,7 +25,7 @@ import { motion } from "framer-motion";
 import type { ScheduledJob } from "@/lib/types";
 // i18n build ships all cronstrue locales — needed for the German trigger text.
 import cronstrue from "cronstrue/i18n";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 
 /**
@@ -207,9 +207,9 @@ export function JobRow({
             <span
               className="flex shrink-0 items-center gap-0.5 rounded-sm px-1.5 py-0.5 text-[9px] font-semibold"
               style={{
-                background: `${C.error}1F`,
+                background: alpha(C.error, 0.12),
                 color: STATUS_TEXT.error,
-                border: `1px solid ${C.error}4D`,
+                border: `1px solid ${alpha(C.error, 0.3)}`,
               }}
               title={t("consecutiveFails", { count: failures })}
             >
@@ -221,9 +221,9 @@ export function JobRow({
             <span
               className="shrink-0 rounded-sm px-1.5 py-0.5 text-[9px] font-mono font-medium"
               style={{
-                background: `${C.warning}1F`,
+                background: alpha(C.warning, 0.12),
                 color: C.warning,
-                border: `1px solid ${C.warning}4D`,
+                border: `1px solid ${alpha(C.warning, 0.3)}`,
               }}
               title={t("snoozedUntil", { until: new Date(snoozedUntil).toLocaleString(locale === "de" ? "de-CH" : "en-GB") })}
             >
@@ -240,9 +240,9 @@ export function JobRow({
                   key={t}
                   className="rounded-sm px-1.5 py-0.5 text-[9px] font-mono font-medium"
                   style={{
-                    background: `${c}1F`,
+                    background: alpha(c, 0.12),
                     color: c,
-                    border: `1px solid ${c}33`,
+                    border: `1px solid ${alpha(c, 0.2)}`,
                   }}
                 >
                   {t}

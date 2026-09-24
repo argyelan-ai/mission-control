@@ -8,12 +8,12 @@ import { api } from "@/lib/api";
 import { timeAgo } from "@/lib/utils";
 import type { BoardMemory, MemoryType } from "@/lib/types";
 import { MergeCandidateBadge } from "./MergeCandidateBadge";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 
 const TYPE_STYLE: Record<string, { color: string; bg: string; label: string }> = {
-  knowledge:  { color: C.textSecondary, bg: `${C.textSecondary}1F`, label: "Knowledge" },
-  reference:  { color: C.warning,       bg: `${C.warning}1F`,       label: "Reference" },
-  research:   { color: C.info,          bg: `${C.info}1F`,          label: "Research" },
+  knowledge:  { color: C.textSecondary, bg: alpha(C.textSecondary, 0.12), label: "Knowledge" },
+  reference:  { color: C.warning,       bg: alpha(C.warning, 0.12),       label: "Reference" },
+  research:   { color: C.info,          bg: alpha(C.info, 0.12),          label: "Research" },
 };
 
 export function SemanticCardGrid({

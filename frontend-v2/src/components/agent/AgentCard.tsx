@@ -7,7 +7,7 @@ import { useQuery } from "@tanstack/react-query";
 import { BookOpen } from "lucide-react";
 import { cn, contextPercent, contextColor, timeAgo } from "@/lib/utils";
 import { api } from "@/lib/api";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import { SpotlightCard } from "@/components/shared/SpotlightCard";
 import { GlassCard } from "@/components/shared/GlassCard";
 import { StatusDot } from "@/components/shared/StatusDot";
@@ -75,9 +75,9 @@ export function SkillBadges({ skills }: { skills: string[] }) {
             key={skillKey}
             className="text-[10px] px-1.5 py-0.5 rounded-sm leading-tight"
             style={{
-              backgroundColor: `${color}22`,
+              backgroundColor: alpha(color, 0.13),
               color,
-              border: `1px solid ${color}33`,
+              border: `1px solid ${alpha(color, 0.2)}`,
             }}
           >
             {skill?.emoji && <EntityIcon value={skill.emoji} size={10} className="mr-0.5" />}
@@ -113,7 +113,7 @@ function LearningBadge({ agentId }: { agentId: string }) {
   return (
     <span
       className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-sm"
-      style={{ color: C.warning, backgroundColor: `${C.warning}1A` }}
+      style={{ color: C.warning, backgroundColor: alpha(C.warning, 0.1) }}
     >
       <BookOpen size={10} />
       {t("lessons", { count: lessonCount })}

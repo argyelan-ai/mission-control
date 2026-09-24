@@ -6,7 +6,7 @@ import { Save, Undo2, Loader2, Check, Github, ChevronDown, ChevronRight } from "
 import { api } from "@/lib/api";
 import type { Agent, CliPlugin, GithubSkillRepo } from "@/lib/types";
 import { notify } from "@/lib/notify";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 
 interface PluginAssignment {
@@ -65,7 +65,7 @@ function GithubSkillsSection() {
                   {repo.source} · {repo.version}
                 </span>
               </div>
-              <span className="text-[10px] px-1.5 py-0.5 rounded-sm" style={{ backgroundColor: `${C.accent}1F`, color: C.accentHover }}>
+              <span className="text-[10px] px-1.5 py-0.5 rounded-sm" style={{ backgroundColor: alpha(C.accent, 0.12), color: C.accentHover }}>
                 {t("skillCount", { count: repo.skills.length })}
               </span>
               {isOpen ? <ChevronDown size={12} style={{ color: "var(--color-text-muted)" }} /> : <ChevronRight size={12} style={{ color: "var(--color-text-muted)" }} />}
@@ -219,8 +219,8 @@ export function PluginMatrix() {
         <div
           className="flex items-center justify-between p-3 rounded-xl"
           style={{
-            backgroundColor: `${C.accent}14`,
-            border: `1px solid ${C.accent}33`,
+            backgroundColor: alpha(C.accent, 0.08),
+            border: `1px solid ${alpha(C.accent, 0.2)}`,
           }}
         >
           <span className="text-xs" style={{ color: C.accent }}>
@@ -325,11 +325,11 @@ export function PluginMatrix() {
                         className="w-5 h-5 rounded-sm cursor-pointer flex items-center justify-center mx-auto transition-colors"
                         style={{
                           backgroundColor: isActive
-                            ? `${C.accent}33`
+                            ? alpha(C.accent, 0.2)
                             : "var(--color-bg-hover)",
                           border: `1px solid ${
                             isActive
-                              ? `${C.accent}66`
+                              ? alpha(C.accent, 0.4)
                               : "var(--color-border)"
                           }`,
                         }}

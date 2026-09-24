@@ -26,7 +26,7 @@ import {
 import { useLocale, useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import type { CliToolStatus, CliUpdatePhase, CliUpdateProgress } from "@/lib/types";
-import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS, STATUS_TEXT, alpha } from "@/lib/colors";
 import { useNotificationStore } from "@/lib/store";
 import { timeAgo } from "@/lib/utils";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
@@ -324,7 +324,7 @@ function UpdateModal({
                 {/* Manifest-commit hint */}
                 <div
                   className="text-xs px-3 py-2 rounded-lg"
-                  style={{ background: `${STATUS.warning}14`, border: `1px solid ${STATUS.warning}33`, color: C.textSecondary }}
+                  style={{ background: alpha(STATUS.warning, 0.08), border: `1px solid ${alpha(STATUS.warning, 0.2)}`, color: C.textSecondary }}
                 >
                   {tool.host ? (
                     <>
@@ -380,7 +380,7 @@ function UpdateModal({
                   <div
                     data-testid="cli-update-error"
                     className="text-xs px-3 py-2 rounded-lg"
-                    style={{ background: `${C.error}14`, border: `1px solid ${C.error}33`, color: STATUS_TEXT.error }}
+                    style={{ background: alpha(C.error, 0.08), border: `1px solid ${alpha(C.error, 0.2)}`, color: STATUS_TEXT.error }}
                   >
                     {progress.error}
                   </div>
@@ -509,7 +509,7 @@ export function CliToolsSection({ embedded = false }: { embedded?: boolean } = {
       {error && (
         <div
           className="flex items-center gap-2 text-xs px-4 py-3 rounded-xl"
-          style={{ color: STATUS_TEXT.error, background: `${C.error}0F`, border: `1px solid ${C.error}26` }}
+          style={{ color: STATUS_TEXT.error, background: alpha(C.error, 0.06), border: `1px solid ${alpha(C.error, 0.15)}` }}
         >
           <AlertCircle size={13} />
           {t("loadError")}

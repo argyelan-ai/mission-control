@@ -18,7 +18,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle } from "lucide-react";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import { formatDuration } from "@/lib/taskDetail/format";
 import {
   headErrorKey,
@@ -63,7 +63,7 @@ export function HeadOnBoxNotice({ head }: { head: { task_id: string | null; titl
       role="status"
       data-testid="head-on-box-notice"
       className="flex flex-col sm:flex-row sm:items-center gap-2 rounded-md px-3 py-2.5 text-xs"
-      style={{ background: `${C.warning}12`, border: `1px solid ${C.warning}40`, color: STATUS_TEXT.warning }}
+      style={{ background: alpha(C.warning, 0.07), border: `1px solid ${alpha(C.warning, 0.25)}`, color: STATUS_TEXT.warning }}
     >
       <div className="flex items-start gap-2 min-w-0 flex-1">
         <AlertTriangle size={13} className="shrink-0 mt-0.5" aria-hidden />

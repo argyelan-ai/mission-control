@@ -13,7 +13,7 @@ import { X, Loader2, AlertCircle, CheckCircle2 } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { api } from "@/lib/api";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import type { ProbeEndpointResult } from "@/lib/types";
 
 type KeyMode = "none" | "existing" | "new";
@@ -257,7 +257,7 @@ export function AddRuntimeModal({ open, onClose }: Props) {
               {probe && !probe.reachable && (
                 <div
                   className="flex items-center gap-2 text-xs px-3 py-2.5 rounded-lg"
-                  style={{ color: STATUS_TEXT.error, background: `${C.error}0F`, border: `1px solid ${C.error}26` }}
+                  style={{ color: STATUS_TEXT.error, background: alpha(C.error, 0.06), border: `1px solid ${alpha(C.error, 0.15)}` }}
                 >
                   <AlertCircle size={13} className="shrink-0" />
                   {probe.error ?? t("endpointUnreachable")}
@@ -267,7 +267,7 @@ export function AddRuntimeModal({ open, onClose }: Props) {
               {/* Probe result — reachable */}
               {probe && probe.reachable && (
                 <>
-                  <div className="flex items-center gap-2 text-xs px-3 py-2.5 rounded-lg" style={{ color: STATUS_TEXT.info, background: `${C.info}0F`, border: `1px solid ${C.info}26` }}>
+                  <div className="flex items-center gap-2 text-xs px-3 py-2.5 rounded-lg" style={{ color: STATUS_TEXT.info, background: alpha(C.info, 0.06), border: `1px solid ${alpha(C.info, 0.15)}` }}>
                     <CheckCircle2 size={13} className="shrink-0" style={{ color: C.online }} />
                     <span>
                       {t("detectedPrefix")}{" "}
@@ -322,7 +322,7 @@ export function AddRuntimeModal({ open, onClose }: Props) {
                   {requiresApiKeyHint && (
                     <div
                       className="flex items-center gap-2 text-xs px-3 py-2.5 rounded-lg"
-                      style={{ color: STATUS_TEXT.warning, background: `${C.warning}0F`, border: `1px solid ${C.warning}26` }}
+                      style={{ color: STATUS_TEXT.warning, background: alpha(C.warning, 0.06), border: `1px solid ${alpha(C.warning, 0.15)}` }}
                     >
                       <AlertCircle size={13} className="shrink-0" />
                       {t("requiresApiKey")}
@@ -419,7 +419,7 @@ export function AddRuntimeModal({ open, onClose }: Props) {
                   {createMutation.isError && (
                     <div
                       className="flex items-center gap-2 text-xs px-3 py-2.5 rounded-lg"
-                      style={{ color: STATUS_TEXT.error, background: `${C.error}0F`, border: `1px solid ${C.error}26` }}
+                      style={{ color: STATUS_TEXT.error, background: alpha(C.error, 0.06), border: `1px solid ${alpha(C.error, 0.15)}` }}
                     >
                       <AlertCircle size={13} className="shrink-0" />
                       {createMutation.error instanceof Error ? createMutation.error.message : t("createFailed")}

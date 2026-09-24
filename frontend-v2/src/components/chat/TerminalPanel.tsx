@@ -13,7 +13,7 @@ import "@xterm/xterm/css/xterm.css";
 import { MonitorOff, Wifi, WifiOff } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Agent } from "@/lib/types";
-import { C, XTERM_THEME } from "@/lib/colors";
+import { C, XTERM_THEME, alpha } from "@/lib/colors";
 import { TERM_MIN_CONTRAST, TERM_FONT_FAMILY, TERM_COLS, TERM_ROWS, useTerminalScale, type TermViewMode } from "@/lib/terminalScale";
 
 // Docker/host session-list responses include fields the shared `Agent` type
@@ -279,9 +279,9 @@ function TerminalPanelRunning({ agent }: { agent: Agent }) {
           <span
             className="text-[9px] px-1.5 py-0.5 rounded-sm font-mono shrink-0"
             style={{
-              background: connected ? `${C.online}1A` : `${C.error}1A`,
+              background: connected ? alpha(C.online, 0.1) : alpha(C.error, 0.1),
               color: connected ? C.online : C.error,
-              border: `1px solid ${connected ? `${C.online}33` : `${C.error}33`}`,
+              border: `1px solid ${connected ? alpha(C.online, 0.2) : alpha(C.error, 0.2)}`,
             }}
           >
             {connected ? t("connected") : t("disconnected")}
