@@ -31,8 +31,10 @@ REQUIRED_FIELDS = ("id", "type", "agent", "date")
 
 
 def parse_frontmatter(path: Path) -> frontmatter.Post:
+    # utf-8-sig strips a leading BOM (Windows editors). With plain utf-8 the
+    # BOM hides the '---' delimiter and the whole frontmatter block is lost.
     try:
-        return frontmatter.load(str(path))
+        return frontmatter.load(str(path), encoding="utf-8-sig")
     except yaml.YAMLError as e:
         raise FrontmatterError(f"YAML parse error in {path}: {e}") from e
     except Exception as e:
