@@ -39,7 +39,7 @@ export const DANGER_STEMS = [
   "launch", "boost", "bind", "unbind", "attach", "detach", "join", "leave",
   "record", "call", "mic", "microphone", "voice", "copy token", "reveal",
   "test connection", "test", "analyze", "analyse", "re-probe", "reprobe", "refetch",
-  "download",
+  "download", "re-render", "rerender", "recreate", "recompose",
   // German
   "löschen", "loeschen", "entfernen", "stoppen", "anhalten", "abbrechen", "verwerfen",
   "senden", "absenden", "speichern", "freigeben", "genehmigen", "ablehnen",
@@ -50,6 +50,7 @@ export const DANGER_STEMS = [
   "hochladen", "bestätigen", "bestaetigen", "erledigt", "fertig", "pausieren",
   "fortsetzen", "wecken", "leeren", "verschieben", "anheften", "loslösen",
   "herunterladen", "aufnehmen", "anrufen", "testen", "analysieren",
+  "veröffentlichen", "veroeffentlichen", "aktualisieren",
 ];
 
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
