@@ -14,6 +14,7 @@ identisch mit models/loop.py — Gruppen absorbieren Loops langfristig
 
 import uuid
 from datetime import datetime
+from app.utils import utcnow
 
 from sqlalchemy import (
     JSON,
@@ -119,13 +120,13 @@ class AgentGroup(SQLModel, table=True):
         sa_column=Column(DateTime(timezone=True), nullable=True, index=True),
     )
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),
     )
     updated_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(
-            DateTime(timezone=True), server_default=text("NOW()"), onupdate=datetime.utcnow
+            DateTime(timezone=True), server_default=text("NOW()"), onupdate=utcnow
         ),
     )
 
@@ -149,7 +150,7 @@ class GroupMember(SQLModel, table=True):
     )
     role: str = "member"  # lead | critic | member — nur Prompt-Baustein, kein Rechte-Modell
     added_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),
     )
 
@@ -206,6 +207,6 @@ class GroupRound(SQLModel, table=True):
         default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
     )
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),
     )

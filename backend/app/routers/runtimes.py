@@ -7,7 +7,7 @@ import json as _json
 import logging
 import re as _re
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
@@ -1040,7 +1040,7 @@ async def probe_model_endpoint(
 
     if changed:
         rt.model_identifier = probed
-        rt.updated_at = datetime.utcnow()
+        rt.updated_at = datetime.now(timezone.utc)
         session.add(rt)
         await session.commit()
         await session.refresh(rt)
@@ -1172,7 +1172,7 @@ async def update_runtime_db(
         rt.api_key_secret_id = body.api_key_secret_id
     if body.model_fields_set & _LAUNCH_COMMAND_RULE_FIELDS:
         _require_launch_command(rt)
-    rt.updated_at = datetime.utcnow()
+    rt.updated_at = datetime.now(timezone.utc)
     session.add(rt)
     await session.commit()
     await session.refresh(rt)

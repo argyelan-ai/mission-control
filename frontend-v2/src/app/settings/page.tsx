@@ -32,6 +32,7 @@ import {
   MessageSquare,
   Send,
   BrainCircuit,
+  Moon,
   type LucideIcon,
   Palette,
 } from "lucide-react";
@@ -53,6 +54,7 @@ import { SlackTab } from "@/components/settings/SlackTab";
 import { TelegramTab } from "@/components/settings/TelegramTab";
 import { AiProvidersTab } from "@/components/settings/AiProvidersTab";
 import { AppearanceSection } from "@/components/settings/AppearanceSection";
+import { NightShiftTab } from "@/components/settings/NightShiftTab";
 import { StatusDot } from "@/components/shared/StatusDot";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { C, STATUS_TEXT, alpha } from "@/lib/colors";
@@ -85,6 +87,7 @@ const SECTIONS: SettingsSection[] = [
   { id: "autonomy", labelKey: "sections.autonomy", icon: SlidersHorizontal, group: "fleet", adminOnly: true },
   { id: "intelligence", labelKey: "sections.intelligence", icon: Zap, group: "fleet", adminOnly: true },
   { id: "costs", labelKey: "sections.costs", icon: DollarSign, group: "fleet", adminOnly: true },
+  { id: "night-shift", labelKey: "sections.nightShift", icon: Moon, group: "fleet", adminOnly: true },
   { id: "github", labelKey: "sections.github", icon: Github, group: "connections", adminOnly: true },
   { id: "slack", labelKey: "sections.slack", icon: MessageSquare, group: "connections", adminOnly: true },
   { id: "telegram", labelKey: "sections.telegram", icon: Send, group: "connections", adminOnly: true },
@@ -2383,6 +2386,7 @@ function SettingsContent() {
               {activeSection === "ai-providers" && isAdmin && <AiProvidersTab />}
               {activeSection === "credentials" && isAdmin && <CredentialsTab />}
               {activeSection === "costs" && isAdmin && <CostPricesTab />}
+              {activeSection === "night-shift" && isAdmin && <NightShiftTab />}
               {activeSection === "users" && isAdmin && <UsersSection />}
               {activeSection === "appearance" && (
                 <SectionMotion sectionKey="appearance">

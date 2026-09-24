@@ -14,6 +14,12 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useChatStream } from "../useChatStream";
 import type { ChatEvent } from "@/lib/chatTypes";
 
+// Stream auth: each (re)connect fetches a single-use ticket (lib/streamTicket.ts).
+// Stubbed here — this test is about the stream, not the ticket round-trip.
+vi.mock("@/lib/streamTicket", () => ({
+  withStreamTicket: async (url: string) => `${url}${url.includes("?") ? "&" : "?"}ticket=test-ticket`,
+}));
+
 const { promise: historyPromise, resolve: resolveHistory } =
   Promise.withResolvers<unknown>();
 

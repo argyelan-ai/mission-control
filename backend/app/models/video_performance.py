@@ -7,6 +7,7 @@ Shakespeare's learning loop.
 """
 import uuid
 from datetime import datetime
+from app.utils import utcnow
 
 from sqlalchemy import DateTime, text
 from sqlmodel import Column, Field, SQLModel
@@ -34,7 +35,7 @@ class VideoPerformance(SQLModel, table=True):
     watch_time_pct: float | None = None
 
     polled_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(
             DateTime(timezone=True), nullable=False, server_default=text("NOW()")
         ),

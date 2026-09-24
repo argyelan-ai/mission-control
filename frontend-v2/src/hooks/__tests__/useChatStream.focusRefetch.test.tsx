@@ -24,6 +24,12 @@ import { renderHook, waitFor, act } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useChatStream } from "../useChatStream";
 
+// Stream auth: each (re)connect fetches a single-use ticket (lib/streamTicket.ts).
+// Stubbed here — this test is about the stream, not the ticket round-trip.
+vi.mock("@/lib/streamTicket", () => ({
+  withStreamTicket: async (url: string) => `${url}${url.includes("?") ? "&" : "?"}ticket=test-ticket`,
+}));
+
 const mocks = vi.hoisted(() => ({
   history: vi.fn(async (agentId: string) => ({
     events: [],
@@ -130,7 +136,8 @@ describe("useChatStream — Historien-Abruf nur bei echtem Anlass", () => {
     renderHook(() => useChatStream("a1"), { wrapper });
 
     await waitFor(() => expect(mocks.history).toHaveBeenCalledTimes(1));
-    expect(MockEventSource.instances.length).toBe(1);
+    // The stream opens after its ticket fetch resolved (async).
+    await waitFor(() => expect(MockEventSource.instances.length).toBe(1));
 
     refocus();
     refocus();
@@ -145,6 +152,7 @@ describe("useChatStream — Historien-Abruf nur bei echtem Anlass", () => {
     renderHook(() => useChatStream("a1"), { wrapper });
 
     await waitFor(() => expect(mocks.history).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(MockEventSource.instances.length).toBe(1));
     const first = MockEventSource.instances.at(-1)!;
     expect(first).toBeTruthy();
 

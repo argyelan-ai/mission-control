@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
+import { useEscapeKey } from "@/hooks/useEscapeKey";
 
 import { C, alpha } from "@/lib/colors";
 interface ResponsiveModalProps {
@@ -41,14 +41,7 @@ export function ResponsiveModal({
   useBodyScrollLock(open);
 
   // Esc closes (panel register rule 4) — same pattern as ConfirmDialog.
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [open, onClose]);
+  useEscapeKey(onClose, open);
 
   return (
     <AnimatePresence>

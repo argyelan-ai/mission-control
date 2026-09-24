@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
-import { X, Send, Plus, Bug, Sparkles, Search as SearchIcon, AlertTriangle, Play } from "lucide-react";
+import { X, Send, Plus, Bug, Sparkles, Search as SearchIcon, AlertTriangle, Play, Moon } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
@@ -26,6 +26,8 @@ import {
   saveRememberedPair,
   type HeadPairsResponse,
 } from "@/lib/heads";
+import { chooseTonightPair, nightErrorKey, pairsForTonight } from "@/lib/nightShift";
+import { NightSwitch } from "@/components/night/NightSwitch";
 
 /** The pairs endpoint answers 404 `heads_disabled` while the launcher is off
  *  (and tests stub fetch with arrays) — only a real listing shows the section. */
@@ -83,6 +85,7 @@ export function CreateTaskModal({ activeBoardId, agents, onOpenTask = openTaskPa
   const qc = useQueryClient();
   const t = useTranslations("tasks.createModal");
   const tHeads = useTranslations("heads");
+  const tNight = useTranslations("nightShift");
   const pairReason = usePairReason();
 
   // Modal state
@@ -131,9 +134,14 @@ export function CreateTaskModal({ activeBoardId, agents, onOpenTask = openTaskPa
   // modal may hand it to the fleet (no dispatchDeferred, no "only create").
   const [launchedAsHead, setLaunchedAsHead] = useState(false);
   const [loadingAs, setLoadingAs] = useState<"task" | "head" | null>(null);
+  // Night shift: "Run tonight" marks the new card instead of starting it now.
+  // The picker then also offers pairs that are only held back for today
+  // (model not running, box busy) — by tonight they can run.
+  const [runTonight, setRunTonight] = useState(false);
+  const pickerPairs = pairsResp ? (runTonight ? pairsForTonight(pairsResp.pairs) : pairsResp.pairs) : [];
   const selectedPair = pairsResp
-    ? ((pickedPairKey ? pairsResp.pairs.find((p) => pairKey(p) === pickedPairKey) : undefined) ??
-      chooseInitialPair(pairsResp, rememberedPair))
+    ? ((pickedPairKey ? pickerPairs.find((p) => pairKey(p) === pickedPairKey) : undefined) ??
+      (runTonight ? chooseTonightPair(pairsResp, rememberedPair) : chooseInitialPair(pairsResp, rememberedPair)))
     : null;
 
   // Auto-resize description textarea on open (matches old behavior).
@@ -206,6 +214,7 @@ export function CreateTaskModal({ activeBoardId, agents, onOpenTask = openTaskPa
     setPickedPairKey(null);
     setHeadStartError(null);
     setLaunchedAsHead(false);
+    setRunTonight(false);
     if (descriptionRef.current) descriptionRef.current.style.height = "auto";
     setOpen(false);
   }, []);
@@ -350,6 +359,30 @@ export function CreateTaskModal({ activeBoardId, agents, onOpenTask = openTaskPa
         }
       }
 
+      if (asHead && runTonight && selectedPair) {
+        // "Queue for tonight" = create task (deferred) → mark it → open the
+        // detail. mc-worker starts it inside tonight's window.
+        try {
+          // hold_on_failure: this card exists only for a night head — if the
+          // mark fails, the backend holds it so the fleet never picks it up.
+          await api.nightShift.mark(taskId, {
+            harness: selectedPair.harness,
+            runtime_slug: selectedPair.runtime_slug,
+            hold_on_failure: true,
+          });
+        } catch (err) {
+          setHeadStartError(tNight("markFailed", { message: tNight(nightErrorKey(err)) }));
+          return;
+        }
+        saveRememberedPair(pairKey(selectedPair));
+        qc.invalidateQueries({ queryKey: ["nightShift"] });
+        qc.invalidateQueries({ queryKey: ["tasks"] });
+        notify.success(tNight("queued"));
+        resetForm();
+        onOpenTask(taskId);
+        return;
+      }
+
       if (asHead && selectedPair) {
         // "Run as head" = create task (deferred) → POST /heads → open the
         // detail. A failed start keeps the modal open in the retry state:
@@ -396,7 +429,7 @@ export function CreateTaskModal({ activeBoardId, agents, onOpenTask = openTaskPa
       setLoading(false);
       setLoadingAs(null);
     }
-  }, [activeBoardId, payload, loading, isStructured, qc, resetForm, stagedReferenceFiles, referenceNote, createdTaskId, uploadedFileIds, isRetry, confirmDiscard, canRunHead, selectedPair, t, tHeads, onOpenTask, launchedAsHead]);
+  }, [activeBoardId, payload, loading, isStructured, qc, resetForm, stagedReferenceFiles, referenceNote, createdTaskId, uploadedFileIds, isRetry, confirmDiscard, canRunHead, selectedPair, t, tHeads, tNight, onOpenTask, launchedAsHead, runTonight]);
 
   // iOS-safe scroll lock (M4)
   useBodyScrollLock(open);
@@ -543,12 +576,33 @@ export function CreateTaskModal({ activeBoardId, agents, onOpenTask = openTaskPa
                       <div className="flex-1 h-px" style={{ background: C.borderSubtle }} />
                     </div>
                     <HeadPairPicker
-                      pairs={pairsResp.pairs}
+                      pairs={pickerPairs}
                       selected={selectedPair}
                       defaultKey={pairsResp.default_pair ? pairKey(pairsResp.default_pair) : null}
                       onSelect={(p) => setPickedPairKey(pairKey(p))}
                       disabled={loading}
                     />
+                    {headRepoId && (
+                      <div className="mt-1 sm:ml-[100px] flex items-center gap-2" data-testid="create-run-tonight-row">
+                        <NightSwitch
+                          checked={runTonight}
+                          onChange={(v) => {
+                            setRunTonight(v);
+                            setPickedPairKey(null);
+                          }}
+                          label={tNight("runTonight")}
+                          describedBy="create-run-tonight-hint"
+                          disabled={loading || launchedAsHead}
+                          testId="create-run-tonight"
+                        />
+                        <div className="min-w-0">
+                          <div className="text-xs" style={{ color: C.textPrimary }}>{tNight("runTonight")}</div>
+                          <p id="create-run-tonight-hint" className="text-[11px] leading-snug" style={{ color: C.textMuted }}>
+                            {tNight("createHint")}
+                          </p>
+                        </div>
+                      </div>
+                    )}
                     {!headRepoId && (
                       <p className="mt-1.5 sm:ml-[100px] text-[11px]" style={{ color: C.textMuted }} data-testid="head-needs-repo">
                         {runBlockedReason}
@@ -604,12 +658,14 @@ export function CreateTaskModal({ activeBoardId, agents, onOpenTask = openTaskPa
                         onClick={() => handleSubmit(true)}
                         disabled={(!isRetry && !payload.title.trim()) || loading || !canRunHead}
                         title={runBlockedReason ?? undefined}
-                        data-testid="run-as-head"
+                        data-testid={runTonight ? "queue-tonight" : "run-as-head"}
                         className="inline-flex items-center justify-center gap-1.5 w-full sm:w-auto min-h-[44px] sm:min-h-0 px-3.5 py-1.5 text-[11px] font-semibold rounded-md cursor-pointer transition-colors hover:bg-[var(--color-accent-light)] disabled:opacity-30 disabled:cursor-not-allowed"
                         style={{ background: C.accent, color: C.onAccent }}
                       >
-                        <Play size={11} aria-hidden />
-                        {loadingAs === "head" ? tHeads("starting") : launchedAsHead ? tHeads("retryStart") : tHeads("runAsHead")}
+                        {runTonight ? <Moon size={11} aria-hidden /> : <Play size={11} aria-hidden />}
+                        {runTonight
+                          ? loadingAs === "head" ? tNight("queueing") : tNight("queueForTonight")
+                          : loadingAs === "head" ? tHeads("starting") : launchedAsHead ? tHeads("retryStart") : tHeads("runAsHead")}
                       </button>
                     </>
                   ) : (

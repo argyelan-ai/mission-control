@@ -246,6 +246,7 @@ const ERROR_CODES = new Set([
   "engine_not_ready",
   "box_busy",
   "head_active",
+  "task_move_failed",
   "repo_required",
   "spool_unavailable",
   "heads_disabled",
@@ -356,6 +357,12 @@ export function sortRunsNewestFirst(runs: HeadRun[]): HeadRun[] {
     .map((r, i) => ({ r, i }))
     .sort((a, b) => (ts(b.r.created_at) ?? 0) - (ts(a.r.created_at) ?? 0) || b.i - a.i)
     .map(({ r }) => r);
+}
+
+/** Passed on a scratch repo whose origin is a local bare repo: no PR is
+ *  possible there, the wrapper-verified pushed branch is the result. */
+export function isScratchBranchPushed(run: Pick<HeadRun, "state" | "reason" | "pr_url">): boolean {
+  return run.state === "passed" && run.reason === "scratch_branch_pushed" && !run.pr_url;
 }
 
 /** PR number from a GitHub PR URL, for "PR #712". */

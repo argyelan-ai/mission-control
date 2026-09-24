@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
+import { useEscapeKey } from "@/hooks/useEscapeKey";
 
 import { C, alpha } from "@/lib/colors";
 interface SlideOverPanelProps {
@@ -45,13 +45,7 @@ export function SlideOverPanel({
   // für alle fünf auf einen Schlag.
   useBodyScrollLock(open);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    if (open) window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  useEscapeKey(onClose, open);
 
   return (
     <AnimatePresence>

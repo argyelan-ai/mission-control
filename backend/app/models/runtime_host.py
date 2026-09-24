@@ -18,6 +18,7 @@ host orchestration off of without another migration.
 """
 import uuid
 from datetime import datetime
+from app.utils import utcnow
 
 from sqlalchemy import DateTime, ForeignKey, UniqueConstraint, text
 from sqlmodel import Column, Field, SQLModel
@@ -63,6 +64,6 @@ class RuntimeHost(SQLModel, table=True):
     # none at all — nullable covers that, the common case).
     endpoint_override: str | None = Field(default=None, max_length=512)
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()"), nullable=False),
     )

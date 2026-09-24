@@ -948,6 +948,22 @@ body {
 .min-h-touch { min-height: 44px; }
 .min-w-touch { min-width: 44px; }
 
+/* Touch hit area for a small icon button (close ✕ in a dialog header):
+   44×44 on touch devices, while the visible icon stays small and the layout
+   does not move — the negative margin gives back exactly what the extra size
+   takes (16px icon → (16 − 44) / 2 = −14px per side). Desktop is unchanged.
+   Set --touch-hit-icon when the icon is not 16px. */
+@media (pointer: coarse) {
+  .touch-hit {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+    margin: calc((var(--touch-hit-icon, 16px) - 44px) / 2);
+  }
+}
+
 /* Horizontal scroll snap — for card strips on mobile.
    overscroll-x contain: verhindert versehentlichen Safari-Back-Swipe (M17).
    (-webkit-overflow-scrolling ist seit iOS 13 obsolet — entfernt, M16) */

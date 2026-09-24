@@ -6,8 +6,14 @@
  *   2. unmount closes the EventSource
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render } from "@testing-library/react";
+import { render, waitFor } from "@testing-library/react";
 import { useTerminalRemountSignal } from "../useTerminalRemountSignal";
+
+// Stream auth: each (re)connect fetches a single-use ticket (lib/streamTicket.ts).
+// Stubbed here — this test is about the stream, not the ticket round-trip.
+vi.mock("@/lib/streamTicket", () => ({
+  withStreamTicket: async (url: string) => `${url}${url.includes("?") ? "&" : "?"}ticket=test-ticket`,
+}));
 
 class MockEventSource {
   static instances: MockEventSource[] = [];
@@ -73,11 +79,15 @@ describe("useTerminalRemountSignal", () => {
     (globalThis as unknown as { EventSource: typeof EventSource }).EventSource = originalES;
   });
 
-  it("invokes the callback with parsed payload on terminal_remount event", () => {
+  it("invokes the callback with parsed payload on terminal_remount event", async () => {
     const onSignal = vi.fn();
     render(<Probe agentId="agent-x" onSignal={onSignal} />);
 
-    expect(MockEventSource.instances).toHaveLength(1);
+    await waitFor(() => expect(MockEventSource.instances).toHaveLength(1));
+    // Ticket in the URL, never the login token.
+    expect(MockEventSource.instances[0].url).toBe(
+      "/api/v1/agents/agent-x/terminal-events/stream?ticket=test-ticket",
+    );
     MockEventSource.instances[0].fire("terminal_remount", {
       reason: "runtime_switched",
       image_changed: true,
@@ -90,8 +100,9 @@ describe("useTerminalRemountSignal", () => {
     });
   });
 
-  it("closes the EventSource on unmount", () => {
+  it("closes the EventSource on unmount", async () => {
     const { unmount } = render(<Probe agentId="agent-x" onSignal={() => {}} />);
+    await waitFor(() => expect(MockEventSource.instances).toHaveLength(1));
     const inst = MockEventSource.instances[0];
     unmount();
     expect(inst.closed).toBe(true);

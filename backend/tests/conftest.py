@@ -116,6 +116,7 @@ app.config.settings = app.config.Settings(
     vault_path=_TEST_VAULT_ROOT,
     heads_root=_TEST_HEADS_ROOT,
     heads_sync_interval=99999,
+    night_shift_interval=99999,  # night shift loop never auto-fires in tests
     lifecycle_watchdog_enabled=True,  # ADR-046: on by default; the check is only ever
                                       # invoked when a test calls _check_stuck_in_progress directly.
     grok_harvest_path=str(_TEST_HARVEST_ROOT / "unified.jsonl"),

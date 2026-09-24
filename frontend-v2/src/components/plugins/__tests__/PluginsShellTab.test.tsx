@@ -28,14 +28,23 @@ const apiMock = vi.hoisted(() => ({
   plugins: {
     startShell: vi.fn(async () => ({ ok: true, session: "plugins-shell" })),
     stopShell: vi.fn(async () => ({ ok: true, session: "plugins-shell" })),
-    shellWsUrl: () => "ws://localhost/api/v1/plugins/shell/ws?token=x",
+    shellWsUrl: async () => "ws://localhost/api/v1/plugins/shell/ws?ticket=x",
   },
 }));
 vi.mock("@/lib/api", () => ({ api: apiMock }));
 
+// The admin gate reads the role through useIsAdmin (the persisted store
+// needs a real localStorage, which this jsdom lacks) — stub the hook.
+const roleMock = vi.hoisted(() => ({ role: "admin" }));
+vi.mock("@/hooks/useIsAdmin", () => ({ useIsAdmin: () => roleMock.role === "admin" }));
+function setRole(role: string) {
+  roleMock.role = role;
+}
 import { PluginsShellTab } from "../PluginsShellTab";
 
+
 beforeEach(() => {
+  setRole("admin");
   apiMock.plugins.startShell.mockClear();
   (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = class {
     observe() {}
@@ -48,6 +57,7 @@ beforeEach(() => {
     binaryType = "";
     send() {}
     close() {}
+    addEventListener() {}
   };
 });
 
@@ -76,5 +86,16 @@ describe("PluginsShellTab — shell starts only on request", () => {
   it("says that the button reconnects to an installer that is already running", () => {
     renderTab();
     expect(screen.getByText(/reconnects if one is already running/i)).toBeInTheDocument();
+  });
+});
+
+describe("PluginsShellTab — admin-only", () => {
+  it.each(["viewer", "operator"])("%s sees a hint, no start button, no shell", async (role) => {
+    setRole(role);
+    renderTab();
+    expect(screen.getByText(/Only admins can open the plugin shell/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Start installer/i })).not.toBeInTheDocument();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(apiMock.plugins.startShell).not.toHaveBeenCalled();
   });
 });

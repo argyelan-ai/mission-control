@@ -11,7 +11,8 @@
   POST /api/v1/heads/{run_id}/stop         operator  stop request
 
 Errors carry a ``code`` (pair_blocked, engine_not_ready, box_busy,
-head_active, repo_required, spool_unavailable, heads_disabled); the
+head_active, repo_required, spool_unavailable, heads_disabled,
+task_move_failed); the
 frontend renders them via i18n. Behind ``settings.heads_enabled``.
 """
 from __future__ import annotations
@@ -34,8 +35,9 @@ from app.log_redaction import redact_secrets
 from app.models.repo import Repo
 from app.models.task import Task
 from app.services.heads import box_guard, files, launcher, pairs
+from app.services.heads import start as start_service
 from app.services.heads.files import write_backend_file
-from app.services.heads.mirror import move_task
+from app.services.heads.start import HeadStartError
 from app.services.heads.state import ACTIVE_STATES, derive_for_run
 
 router = APIRouter(prefix="/api/v1/heads", tags=["heads"])
@@ -99,45 +101,25 @@ def _load(run_id: str):
 
 
 @contextlib.contextmanager
-def _task_lock(task_id: str):
-    try:
-        marker = launcher.acquire_task_lock(task_id)
-    except launcher.TaskStartBusy:
-        raise _err(409, "head_active")
+def _http():
+    """HeadStartError (services/heads/start.py) → HTTPException with its code."""
     try:
         yield
-    finally:
-        launcher.release_task_lock(marker)
+    except HeadStartError as exc:
+        raise _err(exc.status, exc.code, **exc.extra) from exc
+
+
+def _task_lock(task_id: str):
+    return start_service.task_lock(task_id)
 
 
 def _active_run_for_task(task_id: str, now: float):
-    for run in reversed(files.list_runs()):
-        if run.task_id == task_id and derive_for_run(run, now)["state"] in ACTIVE_STATES:
-            return run
-    return None
+    return start_service.active_run_for_task(task_id, now)
 
 
 async def _checked_pair(session: AsyncSession, harness: str, runtime_slug: str, ignore_run_id: str | None = None):
-    occ = box_guard.occupancy()
-    pair, runtime = await pairs.resolve_pair(session, harness, runtime_slug, occ, ignore_run_id=ignore_run_id)
-    if pair is None or runtime is None:
-        if runtime is None:
-            code = "runtime_not_found"
-        elif harness not in pairs.OFFERED_HARNESSES:
-            code = "harness_not_supported"
-        else:
-            # the runtime row exists but is not offered: a second row for the
-            # same engine + model (the slot row stands for it), or no model /
-            # protocol a head can use
-            code = "runtime_not_offered"
-        raise _err(422, "pair_blocked", reason_code=code)
-    if pair.status == "blocked":
-        if pair.reason_code == "engine_not_ready":
-            raise _err(409, "engine_not_ready")
-        if pair.reason_code == "box_busy":
-            raise _err(409, "box_busy", busy_by=pair.busy_by)
-        raise _err(422, "pair_blocked", reason_code=pair.reason_code)
-    return pair, runtime
+    with _http():
+        return await start_service.checked_pair(session, harness, runtime_slug, ignore_run_id=ignore_run_id)
 
 
 async def _task_and_repo(session: AsyncSession, task_id: uuid.UUID) -> tuple[Task, Repo]:
@@ -148,6 +130,12 @@ async def _task_and_repo(session: AsyncSession, task_id: uuid.UUID) -> tuple[Tas
     if repo is None:
         raise _err(422, "repo_required")
     return task, repo
+
+
+async def _hold_and_move(session: AsyncSession, task: Task, run_id: str, reason: str) -> None:
+    """``start_service.hold_and_move`` as an HTTPException (409 ``task_move_failed``)."""
+    with _http():
+        await start_service.hold_and_move(session, task, run_id, reason)
 
 
 class StartBody(BaseModel):
@@ -205,34 +193,11 @@ async def start_head(
 
 
 async def _start(session: AsyncSession, body: StartBody, task: Task, repo: Repo, user, now: float) -> dict:
-    with _task_lock(str(task.id)):
-        if _active_run_for_task(str(task.id), now) is not None:
-            raise _err(409, "head_active")
-        pair, runtime = await _checked_pair(session, body.harness, body.runtime_slug)
-        try:
-            spec = await launcher.write_run(
-                session, task=task, repo=repo, harness=pair.harness, runtime=runtime,
-                box_keys=pair.box_keys, user_id=_current_user_id(user), answer=body.answer,
-            )
-        except OSError as exc:
-            raise _err(503, "spool_unavailable") from exc
-        # inbox → in_progress AND the hold in one transaction: no operator PATCH
-        # from inbox can lift the hold afterwards (routers/tasks.py clears
-        # manual_hold only when the old status is inbox).
-        task.run_control = "manual_hold"
-        await move_task(session, task, "in_progress", reason="head_start")
-        session.add(task)
-        try:
-            launcher.spool("start", spec["run_id"])
-        except launcher.SpoolUnavailable as exc:
-            await session.rollback()
-            # no half run left behind: it would count as "starting" for
-            # 5 minutes and block the next click with head_active
-            launcher.discard_run(spec["run_id"])
-            raise _err(503, "spool_unavailable") from exc
-        await session.commit()
-    write_backend_file(spec["run_id"], "mirror.json", {"state": "starting", "at": now})
-    return {"run_id": spec["run_id"], "state": "starting", "branch": spec["branch"]}
+    with _http():
+        return await start_service.start_head(
+            session, task=task, repo=repo, harness=body.harness, runtime_slug=body.runtime_slug,
+            user_id=_current_user_id(user), answer=body.answer, now=now,
+        )
 
 
 @router.post("/{run_id}/restart", status_code=202)
@@ -248,7 +213,7 @@ async def restart_head(
         raise _err(422, "task_not_found")
     task, repo = await _task_and_repo(session, uuid.UUID(old.task_id))
     now = time.time()
-    with _task_lock(old.task_id):
+    with _http(), _task_lock(old.task_id):
         newest = _active_run_for_task(old.task_id, now)
         if newest is not None and newest.run_id != old.run_id:
             raise _err(409, "head_active")
@@ -266,9 +231,7 @@ async def restart_head(
             )
         except OSError as exc:
             raise _err(503, "spool_unavailable") from exc
-        task.run_control = "manual_hold"
-        await move_task(session, task, "in_progress", reason="head_restart")
-        session.add(task)
+        await _hold_and_move(session, task, spec["run_id"], reason="head_restart")
         try:
             launcher.spool("restart", spec["run_id"], from_run_id=old.run_id)
         except launcher.SpoolUnavailable as exc:

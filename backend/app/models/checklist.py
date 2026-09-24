@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from app.utils import utcnow
 
 from sqlalchemy import DateTime, text
 from sqlmodel import Column, Field, SQLModel
@@ -20,6 +21,6 @@ class TaskChecklistItem(SQLModel, table=True):
         default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
     )
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),
     )

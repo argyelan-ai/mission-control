@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from app.utils import utcnow
 from typing import Any
 
 import sqlalchemy as sa
@@ -22,12 +23,12 @@ class SkillPack(SQLModel, table=True):
     guidance: Any | None = Field(default=None, sa_column=Column(JSON, nullable=True))
     created_by: str = "system"
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),
     )
     updated_at: datetime = Field(
-        default_factory=datetime.utcnow,
-        sa_column=Column(DateTime(timezone=True), server_default=text("NOW()"), onupdate=datetime.utcnow),
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), server_default=text("NOW()"), onupdate=utcnow),
     )
 
 
@@ -59,12 +60,12 @@ class Playbook(SQLModel, table=True):
         default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
     )
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),
     )
     updated_at: datetime = Field(
-        default_factory=datetime.utcnow,
-        sa_column=Column(DateTime(timezone=True), server_default=text("NOW()"), onupdate=datetime.utcnow),
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), server_default=text("NOW()"), onupdate=utcnow),
     )
 
 
@@ -81,7 +82,7 @@ class PlaybookVersion(SQLModel, table=True):
     change_reason: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
     created_by: str
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),
     )
 
@@ -109,12 +110,12 @@ class Automation(SQLModel, table=True):
     )
     created_by: str
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),
     )
     updated_at: datetime = Field(
-        default_factory=datetime.utcnow,
-        sa_column=Column(DateTime(timezone=True), server_default=text("NOW()"), onupdate=datetime.utcnow),
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), server_default=text("NOW()"), onupdate=utcnow),
     )
 
 
@@ -140,10 +141,10 @@ class SkillCandidate(SQLModel, table=True):
         default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
     )
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),
     )
     updated_at: datetime = Field(
-        default_factory=datetime.utcnow,
-        sa_column=Column(DateTime(timezone=True), server_default=text("NOW()"), onupdate=datetime.utcnow),
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), server_default=text("NOW()"), onupdate=utcnow),
     )

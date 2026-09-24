@@ -6,6 +6,7 @@ Reads the shared cache for plugin lists.
 
 import asyncio
 import logging
+import re
 import uuid as uuid_mod
 from typing import Optional
 
@@ -14,7 +15,7 @@ from pydantic import BaseModel
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.auth import require_user
+from app.auth import Role, require_role, require_user
 from app.config import settings
 from app.database import get_session
 from app.models.agent import Agent
@@ -28,6 +29,27 @@ router = APIRouter(prefix="/api/v1", tags=["cli-plugins"])
 
 class PluginInstallRequest(BaseModel):
     plugin_key: str
+
+
+# A plugin key is ``name@marketplace`` (e.g. frontend-design@claude-plugins-official).
+# The key is built into the bridge URL, so anything outside this charset is
+# refused before the bridge is called: a decoded "#" or "?" would cut the URL
+# (``/plugins/shell#/update`` reaches the bridge as ``POST /plugins/shell``,
+# the admin-only shell start), "/" or ".." would reach other bridge routes.
+_PLUGIN_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(@[A-Za-z0-9][A-Za-z0-9._-]*)?$")
+# Bridge route names under /plugins/ that a key must never shadow.
+_RESERVED_PLUGIN_KEYS = {"shell", "install"}
+
+
+def _checked_plugin_key(plugin_key: str) -> str:
+    if (
+        len(plugin_key) > 200
+        or not _PLUGIN_KEY_RE.fullmatch(plugin_key)
+        or ".." in plugin_key
+        or plugin_key.lower() in _RESERVED_PLUGIN_KEYS
+    ):
+        raise HTTPException(400, "Invalid plugin key")
+    return plugin_key
 
 
 @router.get("/plugins")
@@ -63,6 +85,7 @@ async def install_plugin(
     current_user=Depends(require_user),
 ):
     """Install a plugin in the shared cache via the CLI bridge."""
+    _checked_plugin_key(body.plugin_key)
     from app.routers.cli_terminal import _bridge_post
     result = _bridge_post("/plugins/install", {"plugin_key": body.plugin_key}, timeout=130)
     if not result.get("ok"):
@@ -76,11 +99,33 @@ async def update_plugin(
     current_user=Depends(require_user),
 ):
     """Update a plugin in the shared cache via the CLI bridge."""
+    _checked_plugin_key(plugin_key)
     from app.routers.cli_terminal import _bridge_post
     result = _bridge_post(f"/plugins/{plugin_key}/update", {}, timeout=130)
     if not result.get("ok"):
         raise HTTPException(400, result.get("error", "Update fehlgeschlagen"))
     return {"success": True, "plugin_key": plugin_key, "result": result}
+
+
+# The plugin shell's POST/DELETE are registered BEFORE the catch-all
+# ``DELETE /plugins/{plugin_key:path}`` below: declared after it, a
+# ``DELETE /plugins/shell`` was swallowed by remove_plugin("shell") — which
+# still stopped the shell via the bridge, but on the plain login instead of
+# the admin gate.
+@router.post("/plugins/shell")
+async def start_plugins_shell(current_user=Depends(require_role(Role.ADMIN))):
+    """Start the plugin shell (tmux session in ~/.mc/plugins/)."""
+    from app.routers.cli_terminal import _bridge_post
+    result = _bridge_post("/plugins/shell", {})
+    return result
+
+
+@router.delete("/plugins/shell")
+async def stop_plugins_shell(current_user=Depends(require_role(Role.ADMIN))):
+    """Stop the plugin shell."""
+    from app.routers.cli_terminal import _bridge_delete
+    result = _bridge_delete("/plugins/shell")
+    return result
 
 
 @router.delete("/plugins/{plugin_key:path}")
@@ -90,6 +135,7 @@ async def remove_plugin(
     current_user=Depends(require_user),
 ):
     """Uninstall a plugin and remove it from all agents' cli_plugins."""
+    _checked_plugin_key(plugin_key)
     from app.routers.cli_terminal import _bridge_delete
     result = _bridge_delete(f"/plugins/{plugin_key}")
     if not result.get("ok"):
@@ -151,44 +197,24 @@ async def get_plugins_audit(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/plugins/shell")
-async def start_plugins_shell(current_user=Depends(require_user)):
-    """Start the plugin shell (tmux session in ~/.mc/plugins/)."""
-    from app.routers.cli_terminal import _bridge_post
-    result = _bridge_post("/plugins/shell", {})
-    return result
-
-
-@router.delete("/plugins/shell")
-async def stop_plugins_shell(current_user=Depends(require_user)):
-    """Stop the plugin shell."""
-    from app.routers.cli_terminal import _bridge_delete
-    result = _bridge_delete("/plugins/shell")
-    return result
-
-
 @router.websocket("/plugins/shell/ws")
 async def plugins_shell_websocket(
     websocket: WebSocket,
     token: Optional[str] = None,
+    ticket: Optional[str] = None,
 ):
     """WebSocket proxy for the plugin shell."""
     # No Depends(get_session) here: this handler never touches the DB, and
     # a session dependency would pin a pool connection for the WebSocket's
     # whole lifetime (FastAPI unwinds it only after the WS closes —
     # finding 2026-09-16).
-    # Auth check
-    if not token:
-        await websocket.close(code=4001)
-        return
-    try:
-        from jose import jwt as _jwt
-        payload = _jwt.decode(token, settings.jwt_secret_key, algorithms=["HS256"])
-        if not payload.get("sub"):
-            await websocket.close(code=4001)
-            return
-    except Exception:
-        await websocket.close(code=4001)
+    # Auth: stream ticket (legacy ?token= only with ALLOW_QUERY_TOKEN_AUTH),
+    # and the admin role — the plugin shell is a shell on the host.
+    from app.auth import authorize_websocket
+
+    denied = await authorize_websocket(websocket, Role.ADMIN, token=token, ticket=ticket)
+    if denied:
+        await websocket.close(code=denied)
         return
 
     await websocket.accept()

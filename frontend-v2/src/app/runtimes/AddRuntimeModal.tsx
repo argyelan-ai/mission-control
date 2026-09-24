@@ -6,7 +6,7 @@
  * created. No model identifiers typed by hand.
  */
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { X, Loader2, AlertCircle, CheckCircle2 } from "lucide-react";
@@ -15,6 +15,7 @@ import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { api } from "@/lib/api";
 import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import type { ProbeEndpointResult } from "@/lib/types";
+import { useEscapeKey } from "@/hooks/useEscapeKey";
 
 type KeyMode = "none" | "existing" | "new";
 
@@ -72,15 +73,7 @@ export function AddRuntimeModal({ open, onClose }: Props) {
   useBodyScrollLock(open);
 
   // Esc closes (panel register rule 4)
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") handleClose();
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  useEscapeKey(() => handleClose(), open);
 
   const secretsQuery = useQuery({
     queryKey: ["secrets"],

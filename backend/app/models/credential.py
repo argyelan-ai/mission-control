@@ -1,6 +1,7 @@
 """Credentials Vault — encrypted access data for agent tasks."""
 import uuid
 from datetime import datetime
+from app.utils import utcnow
 
 from sqlalchemy import DateTime, Text, text
 from sqlmodel import Column, Field, SQLModel
@@ -25,14 +26,14 @@ class Credential(SQLModel, table=True):
     notes: str | None = None
 
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),
     )
     updated_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(
             DateTime(timezone=True),
             server_default=text("NOW()"),
-            onupdate=datetime.utcnow,
+            onupdate=utcnow,
         ),
     )

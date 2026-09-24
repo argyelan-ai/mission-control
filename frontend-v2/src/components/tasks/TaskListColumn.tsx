@@ -22,6 +22,7 @@ import { C, LANE, alpha } from "@/lib/colors";
 import type { Agent, Project, Task, TaskStatus } from "@/lib/types";
 import { ProjectReferencesDialog } from "./ProjectReferencesDialog";
 import { EntityIcon } from "@/components/shared/EntityIcon";
+import { TonightList } from "@/components/night/TonightList";
 
 // ── Status vocabulary ────────────────────────────────────────────────────────
 
@@ -588,6 +589,14 @@ export default function TaskListColumn({
 
       {/* Grouped list */}
       <div className="flex-1 overflow-y-auto pb-4 px-1 min-h-0">
+        {/* Night shift: what starts tonight (nothing while heads are off) */}
+        <TonightList
+          onOpenTask={(id) => {
+            const hit = tasks.find((x) => x.id === id);
+            if (hit) onSelectTask(hit);
+            return !!hit;
+          }}
+        />
         {groups.length === 0 && (
           <div className="px-4 py-10 text-center label-sys">
             {query || agentFilter ? t("noTasksMatch") : t("noTasksYet")}

@@ -113,12 +113,15 @@ class Role(StrEnum):
 ROLE_HIERARCHY = {Role.ADMIN: 3, Role.OPERATOR: 2, Role.VIEWER: 1}
 
 
+def has_role(user, minimum_role: Role) -> bool:
+    """True when ``user`` holds at least ``minimum_role`` (unknown role → no)."""
+    return ROLE_HIERARCHY.get(getattr(user, "role", None), 0) >= ROLE_HIERARCHY[minimum_role]
+
+
 def require_role(minimum_role: Role):
     """FastAPI dependency factory — checks that the user has at least the given role."""
     async def _check(current_user=Depends(require_user)):
-        user_level = ROLE_HIERARCHY.get(current_user.role, 0)
-        required_level = ROLE_HIERARCHY[minimum_role]
-        if user_level < required_level:
+        if not has_role(current_user, minimum_role):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Requires {minimum_role} role or higher",
@@ -129,19 +132,176 @@ def require_role(minimum_role: Role):
 
 # ── User Auth ────────────────────────────────────────────────────────────────
 
+async def _legacy_admin_user(session: AsyncSession):
+    """The user a valid LOCAL_AUTH_TOKEN acts as: the first admin, or a
+    synthetic admin while no user exists yet (transition period)."""
+    from app.models.user import User
+
+    result = await session.exec(select(User).where(User.role == "admin").limit(1))
+    admin = result.first()
+    if admin:
+        return admin
+    return User(
+        id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
+        email="admin@local",
+        name="Local Admin",
+        role="admin",
+        is_active=True,
+    )
+
+
+async def _user_from_stream_ticket(path: str, ticket: str, session: AsyncSession):
+    """Resolve a single-use stream ticket (services/stream_tickets.py) to its
+    user. The ticket must have been minted for exactly ``path``; the user
+    must still be active and must not have logged out since (token_version)."""
+    from app.models.user import User
+    from app.services.stream_tickets import redeem_ticket
+
+    claims = await redeem_ticket(ticket, path)
+    if claims is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired stream ticket",
+        )
+    if claims.legacy_admin:
+        return await _legacy_admin_user(session)
+    try:
+        user = await session.get(User, uuid.UUID(claims.user_id))
+    except ValueError:
+        user = None
+    if not user or not user.is_active or user.token_version != claims.token_version:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired stream ticket",
+        )
+    return user
+
+
+def _query_jwt_subject(token: str | None) -> str | None:
+    """Legacy WebSocket auth: the login JWT as ``?token=``. Only honoured
+    with ALLOW_QUERY_TOKEN_AUTH (default off). Narrow-purpose tokens (a
+    ``scope`` claim, e.g. a bench view link) are never accepted — they must
+    not open a terminal or shell."""
+    if not token or not settings.allow_query_token_auth:
+        return None
+    try:
+        payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[JWT_ALGORITHM])
+    except JWTError:
+        return None
+    if payload.get("scope"):
+        return None
+    sub = payload.get("sub")
+    return str(sub) if sub else None
+
+
+async def authenticate_websocket(
+    websocket,
+    *,
+    token: str | None = None,
+    ticket: str | None = None,
+) -> bool:
+    """Auth for browser WebSockets (they cannot send headers).
+
+    Preferred: ``?ticket=`` — a single-use stream ticket minted for exactly
+    this WebSocket path by ``POST /api/v1/auth/stream-ticket`` (which ran the
+    full operator auth moments ago). Fallback, only with
+    ALLOW_QUERY_TOKEN_AUTH: the login JWT as ``?token=``.
+    """
+    return await websocket_user(websocket, token=token, ticket=ticket) is not None
+
+
+# WebSocket close codes for a refused browser socket (before accept):
+# 4001 = no valid credential, 4003 = valid login but the role is too low.
+WS_CLOSE_UNAUTHENTICATED = 4001
+WS_CLOSE_FORBIDDEN = 4003
+
+
+async def authorize_websocket(
+    websocket,
+    minimum_role: Role,
+    *,
+    token: str | None = None,
+    ticket: str | None = None,
+) -> int | None:
+    """Role gate for browser WebSockets — the WS counterpart of
+    :func:`require_role`. Returns ``None`` when the caller may proceed,
+    otherwise the close code to refuse the socket with
+    (:data:`WS_CLOSE_UNAUTHENTICATED` / :data:`WS_CLOSE_FORBIDDEN`).
+
+    Used by every interactive socket (agent/host terminals, plugin shell):
+    those are command execution on the box and are admin-only
+    (operator decision 24.09.2026)."""
+    user = await websocket_user(websocket, token=token, ticket=ticket)
+    if user is None:
+        return WS_CLOSE_UNAUTHENTICATED
+    if not has_role(user, minimum_role):
+        return WS_CLOSE_FORBIDDEN
+    return None
+
+
+def _ws_session() -> AsyncSession:
+    """Own short-lived session for WebSocket auth (a WS handler has no
+    request-scoped session; tests swap this for the test engine)."""
+    from app.database import async_session_maker
+
+    return async_session_maker()
+
+
+async def websocket_user(
+    websocket,
+    *,
+    token: str | None = None,
+    ticket: str | None = None,
+):
+    """Resolve the operator behind a browser WebSocket, or ``None``.
+
+    Same checks as the SSE/REST path: the user must still exist, be active
+    and must not have logged out since the credential was issued
+    (token_version). The DB connection is released before the (possibly
+    hour-long) socket runs."""
+    from app.models.user import User
+
+    if not ticket and not (token and settings.allow_query_token_auth):
+        return None
+    async with _ws_session() as session:
+        if ticket:
+            try:
+                return await _user_from_stream_ticket(websocket.url.path, ticket, session)
+            except HTTPException:
+                return None
+        # Legacy ?token= fallback (ALLOW_QUERY_TOKEN_AUTH only).
+        sub = _query_jwt_subject(token)
+        if sub is None:
+            return None
+        try:
+            payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[JWT_ALGORITHM])
+            user = await session.get(User, uuid.UUID(sub))
+        except (JWTError, ValueError):
+            return None
+        if not user or not user.is_active or payload.get("tv", 0) != user.token_version:
+            return None
+        return user
+
+
 async def _authenticate_user(
     request: Request,
     session: AsyncSession,
     credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
     token: str | None = Query(None, alias="token"),
+    ticket: str | None = None,
 ):
     from app.models.user import User
 
-    # Get token from header, query param, or HttpOnly cookie (SSE fallback)
+    # Credential sources, in order: Authorization header, single-use stream
+    # ticket (?ticket=, SSE/WS only), the legacy ?token= query JWT (only with
+    # ALLOW_QUERY_TOKEN_AUTH — it leaks into every log that records URLs),
+    # and finally the HttpOnly SSE cookie.
     raw_token: str | None = None
     if credentials:
         raw_token = credentials.credentials
-    elif token:
+    elif ticket:
+        return await _user_from_stream_ticket(request.url.path, ticket, session)
+    elif token and settings.allow_query_token_auth:
         raw_token = token
     else:
         raw_token = request.cookies.get("mc_sse_token")
@@ -194,19 +354,8 @@ async def _authenticate_user(
         and settings.local_auth_token not in ("", "dev-token", "change-me")
         and secrets.compare_digest(raw_token, settings.local_auth_token)
     ):
-        # Return first admin user, or synthetic admin if none exist
-        result = await session.exec(select(User).where(User.role == "admin").limit(1))
-        admin = result.first()
-        if admin:
-            return admin
-        # Synthetic admin for transition period (no users created yet)
-        return User(
-            id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
-            email="admin@local",
-            name="Local Admin",
-            role="admin",
-            is_active=True,
-        )
+        # First admin user, or a synthetic admin while none exists yet.
+        return await _legacy_admin_user(session)
     # If the caller passed an Agent Token (64-char hex) to a User-only route,
     # give a precise hint instead of a generic 401. Agents repeatedly stumble
     # on this — Davinci self-reflection 2026-05-10 cf319ff1.
@@ -257,6 +406,7 @@ async def require_user(
     # one — require_user releases (closes) it, and a shared instance would
     # detach ORM objects the endpoint still re-attaches via session.add().
     session: AsyncSession = Depends(get_session, use_cache=False),
+    ticket: str | None = Query(None, alias="ticket"),
 ):
     """Authenticate the operator and RELEASE the DB connection before the
     endpoint runs. FastAPI unwinds ``Depends(get_session)`` only after the
@@ -264,7 +414,7 @@ async def require_user(
     release the auth lookup's implicit transaction pins a pool connection
     for the whole stream — on every auth-protected stream endpoint at once
     (13 pool warnings/hour, holds up to 405 s — finding 2026-09-16)."""
-    user = await _authenticate_user(request, session, credentials, token)
+    user = await _authenticate_user(request, session, credentials, token, ticket)
     await release_session(session, route=request.url.path)
     return user
 
@@ -326,7 +476,7 @@ async def require_bench_view(
                 return payload
         except JWTError:
             pass
-    user = await require_user(request, credentials, token, session)
+    user = await require_user(request, credentials, token, session, None)
     # require_user already released; this covers the bench-token path where
     # this dependency is the only DB user (release is idempotent).
     await release_session(session, route=request.url.path)
@@ -456,13 +606,17 @@ async def _authenticate_user_or_agent(
     session: AsyncSession,
     credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
     token: str | None = Query(None, alias="token"),
+    ticket: str | None = None,
 ):
     from app.models.user import User
 
     raw_token: str | None = None
     if credentials:
         raw_token = credentials.credentials
-    elif token:
+    elif ticket:
+        user = await _user_from_stream_ticket(request.url.path, ticket, session)
+        return {"type": "user", "user": user}
+    elif token and settings.allow_query_token_auth:
         raw_token = token
 
     if not raw_token:
@@ -525,9 +679,10 @@ async def require_user_or_agent(
     token: str | None = Query(None, alias="token"),
     # use_cache=False — see require_user.
     session: AsyncSession = Depends(get_session, use_cache=False),
+    ticket: str | None = Query(None, alias="ticket"),
 ):
     """Dual auth with early connection release (see require_user)."""
-    result = await _authenticate_user_or_agent(request, session, credentials, token)
+    result = await _authenticate_user_or_agent(request, session, credentials, token, ticket)
     await release_session(session, route=request.url.path)
     return result
 

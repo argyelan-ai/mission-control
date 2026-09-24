@@ -64,6 +64,13 @@ vi.mock("@/lib/api", () => ({
     },
   },
 }));
+// The admin gate reads the role through useIsAdmin (the persisted store
+// needs a real localStorage, which this jsdom lacks) — stub the hook.
+const roleMock = vi.hoisted(() => ({ role: "admin" }));
+vi.mock("@/hooks/useIsAdmin", () => ({ useIsAdmin: () => roleMock.role === "admin" }));
+function setRole(role: string) {
+  roleMock.role = role;
+}
 // ChatView liest den `?view=`-Parameter selbst: bei einem Agenten ohne
 // Umschalter (headless_chat) ist der Tiefenlink die EINZIGE Tuer zum Terminal,
 // und die muss offen bleiben (Spec docs/specs/chat-over-acp.md, Nicht-Ziele).
@@ -122,6 +129,10 @@ beforeAll(() => {
 });
 
 const mockUseChatStream = vi.mocked(useChatStream);
+
+// Typing into a live session is admin-only (backend 403). Every test below
+// runs as an admin unless it says otherwise — see "ChatView — non-admin".
+beforeEach(() => setRole("admin"));
 
 function mkAgent(overrides: Partial<AgentWithState> = {}): AgentWithState {
   return {
@@ -2117,5 +2128,45 @@ describe("Naht: Preview-Tick baut die Zeitachse nicht neu (echtes Modul, echte K
     rerender(chatElement());
 
     expect(timelineCalls.build).toBeGreaterThan(before);
+  });
+});
+
+describe("ChatView — non-admin (session input is admin-only)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    navMock.params = new URLSearchParams();
+  });
+
+  it("a viewer sees the transcript but no composer — a hint instead", () => {
+    setRole("viewer");
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+    renderChatView();
+    expect(screen.getByText("Hallo!")).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Message the agent…")).not.toBeInTheDocument();
+    expect(screen.getByText(/only admins can type into a live session/i)).toBeInTheDocument();
+  });
+
+  it("an operator gets no approval buttons either (answering sends keys)", () => {
+    setRole("operator");
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        state: {
+          kind: "state",
+          status: "permission_prompt",
+          prompt: { question: "Datei löschen?", options: [{ key: "y", label: "Ja" }] },
+        },
+      })
+    );
+    renderChatView();
+    expect(screen.queryByText("Datei löschen?")).not.toBeInTheDocument();
+    expect(api.chat.sendKeys).not.toHaveBeenCalled();
+  });
+
+  it("an admin still gets the composer", () => {
+    setRole("admin");
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+    renderChatView();
+    expect(screen.getByPlaceholderText("Message the agent…")).toBeInTheDocument();
+    expect(screen.queryByTestId("admin-only-notice")).not.toBeInTheDocument();
   });
 });

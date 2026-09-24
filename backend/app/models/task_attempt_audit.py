@@ -13,6 +13,7 @@ Row is kept for the lifetime of the parent task (CASCADE on delete).
 """
 import uuid
 from datetime import datetime
+from app.utils import utcnow
 
 from sqlalchemy import Column, DateTime, ForeignKey, Index, text
 from sqlmodel import Field, SQLModel
@@ -47,7 +48,7 @@ class TaskAttemptAudit(SQLModel, table=True):
     reason: str | None = Field(default=None, max_length=256)
 
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(
             DateTime(timezone=True),
             server_default=text("NOW()"),

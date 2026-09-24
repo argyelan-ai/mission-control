@@ -43,6 +43,10 @@
         <string>__HOME__</string>
         <key>MC_HOME</key>
         <string>__MC_HOME__</string>
+        <!-- Every head runs inside head.sb (spec §9); without it mc-head
+             refuses each start with sandbox_required. -->
+        <key>MC_HEAD_SANDBOX</key>
+        <string>1</string>
         <key>PATH</key>
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     </dict>

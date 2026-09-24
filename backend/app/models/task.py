@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from app.utils import utcnow
 
 from sqlalchemy import DateTime, ForeignKey, event, text, JSON, Uuid
 from sqlmodel import Column, Field, SQLModel
@@ -262,12 +263,12 @@ class Task(SQLModel, table=True):
     )
 
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),
     )
     updated_at: datetime = Field(
-        default_factory=datetime.utcnow,
-        sa_column=Column(DateTime(timezone=True), server_default=text("NOW()"), onupdate=datetime.utcnow),
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), server_default=text("NOW()"), onupdate=utcnow),
     )
 
 
@@ -280,7 +281,7 @@ def _track_blocked_at(target: "Task", value, oldvalue, initiator):
     listener is the single point of truth covering ALL of them:
 
       →blocked    : stamp blocked_at (naive UTC, matching updated_at's
-                    onupdate=datetime.utcnow convention)
+                    onupdate=utcnow convention)
       blocked→ *  : clear blocked_at
 
     `oldvalue` may be a NO_VALUE symbol (unloaded attribute) — those never
@@ -294,7 +295,7 @@ def _track_blocked_at(target: "Task", value, oldvalue, initiator):
     if value == oldvalue:
         return
     if value == "blocked":
-        target.blocked_at = datetime.utcnow()
+        target.blocked_at = utcnow()
     elif oldvalue == "blocked":
         target.blocked_at = None
 
@@ -309,7 +310,7 @@ def _stamp_blocked_at_on_insert(mapper, connection, target: "Task"):
     it) gets its blocked_at stamped at flush time here.
     """
     if target.status == "blocked" and target.blocked_at is None:
-        target.blocked_at = datetime.utcnow()
+        target.blocked_at = utcnow()
 
 
 class TaskEvent(SQLModel, table=True):
@@ -334,7 +335,7 @@ class TaskEvent(SQLModel, table=True):
     )
     actor_label: str | None = None
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),
     )
 
@@ -346,7 +347,7 @@ class TaskDependency(SQLModel, table=True):
     task_id: uuid.UUID = Field(foreign_key="tasks.id", index=True)
     depends_on_task_id: uuid.UUID = Field(foreign_key="tasks.id")
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),
     )
 
@@ -364,6 +365,6 @@ class TaskComment(SQLModel, table=True):
     # message | handoff | blocker | progress | resolution | feedback
     content: str
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),
     )

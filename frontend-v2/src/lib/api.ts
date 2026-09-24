@@ -129,16 +129,13 @@ import type {
   HeadBusy,
   HeadStartBody,
 } from "./heads";
+import type { LastNight, NightConfig, NightConfigUpdate, NightEntry, NightTonight } from "./nightShift";
 
-export const BASE_URL = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
+import { AUTH_TOKEN_KEY, BASE_URL, getToken } from "./authToken";
+import { withStreamTicket } from "./streamTicket";
 
-export const AUTH_TOKEN_KEY = "mc_auth_token";
+export { AUTH_TOKEN_KEY, BASE_URL, getToken };
 export const USER_INFO_KEY = "mc_user";
-
-export function getToken(): string {
-  if (typeof window === "undefined") return "";
-  return localStorage.getItem(AUTH_TOKEN_KEY) ?? "";
-}
 
 export function clearToken() {
   if (typeof window !== "undefined") {
@@ -1293,11 +1290,9 @@ export const api = {
         request<{ ok: boolean }>(`/api/v1/agents/${agentId}/terminal/${taskId}`, {
           method: "DELETE",
         }),
-      wsUrl: (agentId: string, taskId: string): string => {
-        const base = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
-        const ws = base.replace(/^http/, "ws");
-        return `${ws}/api/v1/agents/${agentId}/terminal/${taskId}/ws?token=${getToken()}`;
-      },
+      /** Async: fetches a single-use stream ticket (never the login token). */
+      wsUrl: (agentId: string, taskId: string): Promise<string> =>
+        withStreamTicket(`${wsBase()}/api/v1/agents/${agentId}/terminal/${taskId}/ws`),
     },
   },
 
@@ -1707,11 +1702,9 @@ export const api = {
       request<{ ok: boolean; session: string }>("/api/v1/plugins/shell", { method: "POST" }),
     stopShell: () =>
       request<{ ok: boolean; session: string }>("/api/v1/plugins/shell", { method: "DELETE" }),
-    shellWsUrl: (): string => {
-      const base = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
-      const ws = base.replace(/^http/, "ws");
-      return `${ws}/api/v1/plugins/shell/ws?token=${getToken()}`;
-    },
+    /** Async: fetches a single-use stream ticket (never the login token). */
+    shellWsUrl: (): Promise<string> =>
+      withStreamTicket(`${wsBase()}/api/v1/plugins/shell/ws`),
   },
 
   // Phase 31 / OCS-15: api.clawhub group removed (Marketplace UI deleted in
@@ -2194,6 +2187,27 @@ export const api = {
       request(`/api/v1/heads/${encodeURIComponent(runId)}/stop`, { method: "POST" }),
     occupancy: (): Promise<{ boxes: Record<string, HeadBusy> }> => request("/api/v1/heads/occupancy"),
   },
+  // ── Night shift (ROADMAP E2) — marked tasks start as heads tonight ────────
+  // Behind the same switch as heads (404 `heads_disabled` while off).
+  nightShift: {
+    config: (): Promise<NightConfig> => request("/api/v1/night-shift/config"),
+    saveConfig: (body: NightConfigUpdate): Promise<NightConfig> =>
+      request("/api/v1/night-shift/config", { method: "PUT", body: JSON.stringify(body) }),
+    tonight: (): Promise<NightTonight> => request("/api/v1/night-shift/tonight"),
+    // Home's "Last night" card: the report of the last ended night + blocked night heads.
+    lastNight: (): Promise<LastNight> => request("/api/v1/night-shift/last-night"),
+    dismissLastNight: (night: string): Promise<{ night: string; dismissed: boolean }> =>
+      request(`/api/v1/night-shift/last-night/${encodeURIComponent(night)}/dismiss`, { method: "POST" }),
+    getMark: (taskId: string): Promise<{ mark: NightEntry | null }> =>
+      request(`/api/v1/night-shift/tasks/${encodeURIComponent(taskId)}`),
+    mark: (
+      taskId: string,
+      body: { harness: string; runtime_slug: string; hold_on_failure?: boolean },
+    ): Promise<{ mark: NightEntry }> =>
+      request(`/api/v1/night-shift/tasks/${encodeURIComponent(taskId)}`, { method: "PUT", body: JSON.stringify(body) }),
+    unmark: (taskId: string): Promise<{ mark: null }> =>
+      request(`/api/v1/night-shift/tasks/${encodeURIComponent(taskId)}`, { method: "DELETE" }),
+  },
 
   spark: {
     // Back-compat alias — delegates to the host with slug `dgx-spark` (ADR-048).
@@ -2365,16 +2379,11 @@ export const api = {
       request<{ ok: boolean; session: string }>(`/api/v1/agents/${agentId}/shell`, { method: "POST" }),
     stopShell: (agentId: string) =>
       request<{ ok: boolean }>(`/api/v1/agents/${agentId}/shell`, { method: "DELETE" }),
-    ptyWsUrl: (agentId: string): string => {
-      const base = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
-      const ws = base.replace(/^http/, "ws");
-      return `${ws}/api/v1/agents/${agentId}/terminal?token=${getToken()}`;
-    },
-    hostPtyWsUrl: (agentId: string): string => {
-      const base = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
-      const ws = base.replace(/^http/, "ws");
-      return `${ws}/api/v1/host-agents/${agentId}/terminal?token=${getToken()}`;
-    },
+    /** Async: fetches a single-use stream ticket (never the login token). */
+    ptyWsUrl: (agentId: string): Promise<string> =>
+      withStreamTicket(`${wsBase()}/api/v1/agents/${agentId}/terminal`),
+    hostPtyWsUrl: (agentId: string): Promise<string> =>
+      withStreamTicket(`${wsBase()}/api/v1/host-agents/${agentId}/terminal`),
   },
 
   // ── Browser Live View (view-only CDP screencast) ─────────────────────────
@@ -2384,13 +2393,18 @@ export const api = {
   },
 };
 
-// Separate helper (not on `api`, mirrors cliSessions.*WsUrl) so components can
-// build the WS URL without an extra network round-trip.
-export function browserLiveWsUrl(targetId?: string): string {
+/** WebSocket base: the configured API origin with ws(s) scheme, or "" for
+ *  same-origin relative URLs. */
+function wsBase(): string {
   const base = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
-  const ws = base.replace(/^http/, "ws");
-  const targetParam = targetId ? `&target=${encodeURIComponent(targetId)}` : "";
-  return `${ws}/api/v1/browser-live/ws?token=${getToken()}${targetParam}`;
+  return base.replace(/^http/, "ws");
+}
+
+// Separate helper (not on `api`, mirrors cliSessions.*WsUrl). Async: fetches a
+// single-use stream ticket — the login token never goes into the URL.
+export function browserLiveWsUrl(targetId?: string): Promise<string> {
+  const targetParam = targetId ? `?target=${encodeURIComponent(targetId)}` : "";
+  return withStreamTicket(`${wsBase()}/api/v1/browser-live/ws${targetParam}`);
 }
 
 // ── SSE URLs ──────────────────────────────────────────────────────────────────

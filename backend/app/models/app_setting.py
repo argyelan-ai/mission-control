@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from app.utils import utcnow
 
 from sqlalchemy import Column, DateTime, text
 from sqlmodel import Field, SQLModel
@@ -27,7 +28,7 @@ class AppSetting(SQLModel, table=True):
     # coerces on read ("true"/"false" for bools). Keeps the table trivial.
     value: str
     updated_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(
             DateTime(timezone=True), server_default=text("NOW()"), nullable=False
         ),

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Plus, Pencil, Trash2, Eye, EyeOff, KeyRound, FileText, X } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -10,6 +10,7 @@ import { notify } from "@/lib/notify";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import type { Credential } from "@/lib/types";
 import { C, alpha } from "@/lib/colors";
+import { useEscapeKey } from "@/hooks/useEscapeKey";
 
 // labelKey pattern: resolved via t() at the render site (docs/i18n.md)
 const TYPE_CONFIG = {
@@ -33,14 +34,7 @@ export function CredentialsTab() {
 
   // iOS-safe scroll lock + Esc close while the modal is open (panel register rule 4)
   useBodyScrollLock(modal.open);
-  useEffect(() => {
-    if (!modal.open) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setModal({ open: false, editing: null });
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [modal.open]);
+  useEscapeKey(() => setModal({ open: false, editing: null }), modal.open);
 
   // Form state
   const [name, setName] = useState("");

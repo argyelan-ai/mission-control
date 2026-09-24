@@ -73,6 +73,7 @@ Browser (Caddy :80) → Frontend (Next.js 15, :3000)
 | `watchdog/` (core + mixins) | Phase-Completion, Session-Recovery, Health-Checks | 30s |
 | `intelligence.py` | Task-Duration-Analyse, Failure Patterns, LLM-Destillation (Ollama) | 300s |
 | `daily_metrics_digest.py` (Lauf 3) | Vier Messzahlen (stale cards >4h, Reviews zum Lead, Doppel-Dispatch/Healer-Wiederholungen, Hand-Statuswechsel nach Grund) als Report, einmal taeglich ab `daily_metrics_hour` (UTC), Redis-Dedup `mc:daily_metrics_digest:<YYYY-MM-DD>` (20h TTL) | 600s Tick |
+| `heads/night_shift.py` (ROADMAP E2) | Nachtschicht: startet als „run tonight“ markierte Aufgaben im Zeitfenster (`night_shift_*` in app_settings, Standard 22:00–06:00, aus) nacheinander über den Head-Starter (`heads/start.py`), ein Head pro GPU-Box, Cloud-Anteil nur bei Cloud-Paaren; blockierte Heads (Frage oder 15 min ohne Lebenszeichen) und der Morgenbericht erscheinen in MC (Startseite, Karte „Letzte Nacht“, `GET /api/v1/night-shift/last-night`); an Slack/Telegram (`operator_reports.send_report`) nur mit `night_shift_send_to_channels` (Standard aus). Marken als Dateien unter `heads_root/night/` (keine Migration, kein FK) | 60s |
 | `git_service.py` | GitHub Repo+PR Management für Agents | on-demand |
 | `provisioning.py` | Agent-Create Background-Task (cli-bridge only — `host` excluded seit ADR-063, provisioniert nur explizit via `POST /agents/{id}/provision`), Template-Render | on-demand |
 | `host_provisioning.py` (NEU 2026-07-10, ADR-063) | Generisches Staging (`.plist`+`run.sh`+`agent.env`) für beliebige Host-Runtime-Agenten in `~/.mc/agents/<slug>/`; `launchctl`-Load hinter `host_agent_autoload_enabled` gegated | on-demand |
@@ -152,7 +153,7 @@ Browser (Caddy :80) → Frontend (Next.js 15, :3000)
 - `components/agent/` — AgentCard, AgentGrid, CliTerminalTab
 - `components/memory/` — MemoryLayerTabs, EpisodicTimeline, SemanticCardGrid, AgentLessonMatrix, MemoryQueryBar
 
-**xterm.js Terminal** (`app/sessions/page.tsx`): WebSocket → `/api/v1/agents/{id}/terminal?token=...` → PTY-Proxy im Backend → `docker exec -itu agent tmux attach`. Scrollback 5000, copy-on-select, Cmd+V paste, Auto-Reconnect nach 3s. Lifecycle-Buttons: Start/Stop/Restart.
+**xterm.js Terminal** (`app/sessions/page.tsx`): WebSocket → `/api/v1/agents/{id}/terminal?ticket=...` (single-use stream ticket, `POST /api/v1/auth/stream-ticket`) → PTY-Proxy im Backend → `docker exec -itu agent tmux attach`. Scrollback 5000, copy-on-select, Cmd+V paste, Auto-Reconnect nach 3s. Lifecycle-Buttons: Start/Stop/Restart.
 
 ### 3. Docker Stack
 

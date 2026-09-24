@@ -32,6 +32,7 @@ import { timeAgo } from "@/lib/utils";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { Section, SectionOrFragment } from "@/components/shared/Section";
 import { ListRow, MetaChip, MetaText, RowAction } from "@/components/shared/ListRow";
+import { useEscapeKey } from "@/hooks/useEscapeKey";
 
 // ── Phase model ───────────────────────────────────────────────────────────────
 // The build pipeline moves manifest → build → recreate → done|failed. "idle"
@@ -218,13 +219,7 @@ function UpdateModal({
   useBodyScrollLock(true);
 
   // Esc closes (same as the X button — a running build keeps going in the background)
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [onClose]);
+  useEscapeKey(onClose);
 
   const updateMutation = useMutation({
     mutationFn: () => api.cliTools.update(tool.tool),

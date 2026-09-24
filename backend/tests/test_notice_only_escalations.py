@@ -424,6 +424,96 @@ async def test_dispatch_escalation_notice_path_still_sets_ack_dedup_marker(
 
 
 @pytest.mark.asyncio
+async def test_dispatch_escalation_notice_path_log_says_notice_not_approval(
+    fake_redis, make_board, make_agent, make_task, caplog,
+):
+    """The ACK-timeout notice path must log that a NOTICE was raised —
+    not the stale pre-#643 German 'Approval erstellt' (PR #643 replaced
+    approvals with notices for dispatch escalations)."""
+    import logging
+
+    from app.config import settings
+    from app.models.task import Task
+    from app.services.task_runner import task_runner
+    from sqlmodel.ext.asyncio.session import AsyncSession
+    from tests.conftest import test_engine
+
+    board = await make_board(name="LogA", slug=f"log-a-{uuid.uuid4().hex[:8]}")
+    agent = await make_agent(
+        name="WorkerF", board_id=board.id, agent_runtime="cli-bridge",
+        scopes=["tasks:read", "tasks:write", "heartbeat"],
+    )
+    task = await make_task(
+        board_id=board.id, status="inbox",
+        assigned_agent_id=agent.id, dispatched_at=utcnow() - timedelta(minutes=20),
+        dispatch_attempt_id=str(uuid.uuid4()),
+    )
+
+    with patch.object(settings, "notice_only_escalations_enabled", True), \
+         patch("app.services.task_runner.raise_notice", new_callable=AsyncMock), \
+         patch("app.services.activity.broadcast", new_callable=AsyncMock), \
+         caplog.at_level(logging.WARNING, logger="mc.task_runner"):
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            await task_runner._handle_ack_timeout(
+                s, await s.get(Task, task.id), agent, utcnow(), fake_redis,
+            )
+
+    warning_text = " ".join(r.getMessage() for r in caplog.records)
+    assert "notice" in warning_text.lower(), (
+        f"ACK-timeout notice branch must log that a notice was raised, "
+        f"got: {warning_text!r}"
+    )
+    assert "Approval" not in warning_text, (
+        f"stale pre-#643 'Approval' log text in notice branch: {warning_text!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_dispatch_escalation_approval_path_log_says_approval_not_notice(
+    fake_redis, make_board, make_agent, make_task, caplog,
+):
+    """With notice_only_escalations_enabled OFF the escalation creates a real
+    Approval — the ACK-timeout log must say so, not claim a notice was raised."""
+    import logging
+
+    from app.config import settings
+    from app.models.task import Task
+    from app.services.task_runner import task_runner
+    from sqlmodel.ext.asyncio.session import AsyncSession
+    from tests.conftest import test_engine
+
+    board = await make_board(name="LogB", slug=f"log-b-{uuid.uuid4().hex[:8]}")
+    agent = await make_agent(
+        name="WorkerG", board_id=board.id, agent_runtime="cli-bridge",
+        scopes=["tasks:read", "tasks:write", "heartbeat"],
+    )
+    task = await make_task(
+        board_id=board.id, status="inbox",
+        assigned_agent_id=agent.id, dispatched_at=utcnow() - timedelta(minutes=20),
+        dispatch_attempt_id=str(uuid.uuid4()),
+    )
+
+    with patch.object(settings, "notice_only_escalations_enabled", False), \
+         patch("app.services.operator_approvals.send_approval",
+               new_callable=AsyncMock), \
+         patch("app.services.activity.broadcast", new_callable=AsyncMock), \
+         caplog.at_level(logging.WARNING, logger="mc.task_runner"):
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            await task_runner._handle_ack_timeout(
+                s, await s.get(Task, task.id), agent, utcnow(), fake_redis,
+            )
+
+    warning_text = " ".join(r.getMessage() for r in caplog.records)
+    assert "approval created" in warning_text.lower(), (
+        f"ACK-timeout approval branch must log that an approval was created, "
+        f"got: {warning_text!r}"
+    )
+    assert "notice" not in warning_text.lower(), (
+        f"approval branch must not claim a notice was raised: {warning_text!r}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_dependency_zombie_notice_path_still_sets_dedup_marker(
     fake_redis, make_board, make_agent, make_task,
 ):
@@ -832,3 +922,39 @@ async def test_dependency_zombie_notice_only_when_flag_on(fake_redis, make_board
     notice.assert_awaited_once()
     _, kwargs = notice.call_args
     assert kwargs.get("action_type") == "dependency_zombie"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_pending_warning_sets_five_minute_cooldown(
+    fake_redis, make_board, make_agent, make_task,
+):
+    """The 'dispatch pending' warning (between the warn and the timeout
+    threshold) must set its 5-minute cooldown key — otherwise the watchdog
+    re-emits the warning on every tick. Guards against the cooldown line
+    being dropped while editing the neighbouring escalation code."""
+    from app.models.task import Task
+    from app.redis_client import RedisKeys
+    from app.services.task_runner import (
+        DISPATCH_PENDING_TIMEOUT_MINUTES, DISPATCH_PENDING_WARN_MINUTES, task_runner,
+    )
+    from sqlmodel.ext.asyncio.session import AsyncSession
+    from tests.conftest import test_engine
+
+    board = await make_board(name="PendW", slug=f"pend-w-{uuid.uuid4().hex[:8]}")
+    agent = await make_agent(
+        name="WorkerP", board_id=board.id, agent_runtime="cli-bridge",
+        scopes=["tasks:read", "tasks:write", "heartbeat"],
+    )
+    minutes = (DISPATCH_PENDING_WARN_MINUTES + DISPATCH_PENDING_TIMEOUT_MINUTES) / 2
+    task = await make_task(board_id=board.id, status="inbox", assigned_agent_id=agent.id)
+
+    with patch("app.services.activity.broadcast", new_callable=AsyncMock):
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            t = await s.get(Task, task.id)
+            t.updated_at = utcnow() - timedelta(minutes=minutes)
+            await task_runner._handle_dispatch_pending(s, t, agent, utcnow(), fake_redis)
+
+    key = RedisKeys.dispatch_pending_warn(str(task.id))
+    assert await fake_redis.get(key), "dispatch-pending warning must set its cooldown key"
+    ttl = await fake_redis.ttl(key)
+    assert 0 < ttl <= 300, f"cooldown must be ~5 min, got ttl={ttl}"

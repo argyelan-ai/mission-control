@@ -52,3 +52,21 @@ def test_parse_malformed_yaml_raises(tmp_path):
     file.write_text("---\nthis is: : broken: yaml: ::\n---\nbody")
     with pytest.raises(FrontmatterError, match="YAML parse error"):
         parse_frontmatter(file)
+
+
+def test_validate_accepts_date_only_for_date_and_updated():
+    """Unquoted YAML dates parse to datetime.date; both fields accept them."""
+    import datetime as dt
+    validate_frontmatter({
+        "id": "x", "type": "note", "agent": "a",
+        "date": dt.date(2026, 5, 16), "updated": dt.date(2026, 5, 17),
+    })
+
+
+def test_validate_still_rejects_non_date_objects():
+    """Accepting datetime.date must not open the door to arbitrary types."""
+    with pytest.raises(FrontmatterError):
+        validate_frontmatter({"id": "x", "type": "note", "agent": "a", "date": 20260516})
+    with pytest.raises(FrontmatterError):
+        validate_frontmatter({"id": "x", "type": "note", "agent": "a",
+                              "date": "2026-05-16", "updated": ["2026-05-17"]})

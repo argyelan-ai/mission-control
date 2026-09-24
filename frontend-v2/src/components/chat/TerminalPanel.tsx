@@ -14,6 +14,8 @@ import { MonitorOff, Wifi, WifiOff } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Agent } from "@/lib/types";
 import { C, XTERM_THEME, alpha } from "@/lib/colors";
+import { useIsAdmin } from "@/hooks/useIsAdmin";
+import { AdminOnlyNotice } from "@/components/shared/AdminOnlyNotice";
 import { TERM_MIN_CONTRAST, TERM_FONT_FAMILY, TERM_COLS, TERM_ROWS, useTerminalScale, type TermViewMode } from "@/lib/terminalScale";
 
 // Docker/host session-list responses include fields the shared `Agent` type
@@ -48,6 +50,9 @@ function useAgentTerminal(
 
   useEffect(() => {
     destroyedRef.current = false;
+    // Bumped per connect() and on cleanup: a ticket that arrives after a newer
+    // connect (or after unmount) must not open a stale socket.
+    let generation = 0;
 
     function connect() {
       if (destroyedRef.current || !agent || !term) return;
@@ -57,9 +62,26 @@ function useAgentTerminal(
         wsRef.current = null;
       }
 
-      const url = agent.agent_runtime === "host"
+      // Every (re)connect fetches its own single-use stream ticket — the
+      // login token never goes into the WebSocket URL (it leaked into logs).
+      const myGeneration = ++generation;
+      const urlPromise = agent.agent_runtime === "host"
         ? api.cliSessions.hostPtyWsUrl(agent.id)
         : api.cliSessions.ptyWsUrl(agent.id);
+      urlPromise.then(
+        (url) => {
+          if (destroyedRef.current || myGeneration !== generation) return;
+          openSocket(url);
+        },
+        () => {
+          if (destroyedRef.current || myGeneration !== generation) return;
+          reconnectTimer.current = setTimeout(connect, 3000);
+        },
+      );
+    }
+
+    function openSocket(url: string) {
+      if (!term) return;
       const ws = new WebSocket(url);
       ws.binaryType = "arraybuffer";
       wsRef.current = ws;
@@ -133,6 +155,7 @@ function useAgentTerminal(
 
     return () => {
       destroyedRef.current = true;
+      generation += 1;
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
       wsRef.current?.close(1000);
       wsRef.current = null;
@@ -211,6 +234,10 @@ function useAgentTerminal(
 
 export function TerminalPanel({ agent }: { agent: AgentWithState }) {
   const t = useTranslations("sessions");
+  const isAdmin = useIsAdmin();
+  // Admin-only (backend closes the socket with 4003 for everyone else):
+  // show why instead of an xterm that would never connect.
+  if (!isAdmin) return <AdminOnlyNotice message={t("terminalAdminOnly")} />;
   if (!agentIsRunning(agent)) {
     const stateText = agent.agent_runtime === "host"
       ? (agent.session_running ? "running" : "idle")

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { motion } from "framer-motion";
 import { X, ChevronLeft, ChevronRight, Check } from "lucide-react";
 import { C } from "@/lib/colors";
@@ -24,6 +24,7 @@ import { IdentityStep } from "./steps/IdentityStep";
 import { RuntimeStep } from "./steps/RuntimeStep";
 import { ScopesStep } from "./steps/ScopesStep";
 import { ReviewStep } from "./steps/ReviewStep";
+import { useEscapeKey } from "@/hooks/useEscapeKey";
 
 const ease = [0.16, 1, 0.3, 1] as const;
 
@@ -42,13 +43,7 @@ export function AgentWizard({
 }) {
   useBodyScrollLock(true);
   // Esc closes (panel register rule 4) — backdrop click is on the overlay below.
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [onClose]);
+  useEscapeKey(onClose);
   const [state, setState] = useState<WizardState>(() => ({
     ...initialWizardState(defaultBoardId),
     ...initialState,
@@ -86,7 +81,7 @@ export function AgentWizard({
             <button
               onClick={onClose}
               aria-label="Close wizard"
-              className="cursor-pointer text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition-colors"
+              className="cursor-pointer text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition-colors touch-hit"
             >
               <X size={16} />
             </button>

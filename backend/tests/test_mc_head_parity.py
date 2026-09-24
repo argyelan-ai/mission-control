@@ -40,6 +40,10 @@ def test_launchd_template_watches_spool_and_runs_installed_copy():
     assert plist["WatchPaths"] == ["/x/.mc/heads/spool"]
     assert plist["StartInterval"] == 30
     assert plist["ProgramArguments"] == ["/usr/bin/python3", "/x/.mc/bin/mc-head", "watch"]
+    # every head needs the sandbox (scratch included): the watcher must turn
+    # it on, or a reinstall would make every start end in sandbox_required
+    assert plist["EnvironmentVariables"]["MC_HEAD_SANDBOX"] == "1"
+    assert "MC_HEAD_SANDBOX_EXEC" not in plist["EnvironmentVariables"]
 
 
 def test_procedure_template_in_backend_is_the_docs_source():

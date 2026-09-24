@@ -16,7 +16,7 @@
  * -runtimes-slot-stage-design.md.
  */
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Pencil, Plus, Server, Trash2, X } from "lucide-react";
@@ -34,6 +34,7 @@ import { RoleField, suggestRole } from "./RoleField";
 import { Section, SectionOrFragment } from "@/components/shared/Section";
 import { ListRow, MetaChip, MetaText } from "@/components/shared/ListRow";
 import { OverflowMenu } from "@/components/shared/OverflowMenu";
+import { useEscapeKey } from "@/hooks/useEscapeKey";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -204,13 +205,7 @@ function HostFormModal({
 
   // iOS-safe scroll lock + Esc close (panel register rule 4)
   useBodyScrollLock(true);
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [onClose]);
+  useEscapeKey(onClose);
 
   const set = <K extends keyof HostCreate>(key: K, value: HostCreate[K]) =>
     setForm((f) => ({ ...f, [key]: value }));

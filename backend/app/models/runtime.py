@@ -6,6 +6,7 @@ table so the UI can CRUD runtimes without a code deploy.
 """
 import uuid
 from datetime import datetime
+from app.utils import utcnow
 from typing import Any
 
 from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Text, text
@@ -249,15 +250,15 @@ class Runtime(SQLModel, table=True):
     topology: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON, nullable=True))
 
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()"), nullable=False),
     )
     updated_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(
             DateTime(timezone=True),
             server_default=text("NOW()"),
-            onupdate=datetime.utcnow,
+            onupdate=utcnow,
             nullable=False,
         ),
     )

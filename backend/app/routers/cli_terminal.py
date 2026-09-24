@@ -20,7 +20,7 @@ from sqlmodel import select
 
 from pydantic import BaseModel
 
-from app.auth import require_user, generate_agent_token
+from app.auth import Role, generate_agent_token, require_role, require_user
 from app.config import effective_host_ssh_user, settings
 from app.database import get_session, release_session
 from app.models.agent import Agent
@@ -254,7 +254,7 @@ async def list_all_cli_sessions(
     return enriched
 
 
-@router.post("/agents/{agent_id}/terminal/{task_id}/input")
+@router.post("/agents/{agent_id}/terminal/{task_id}/input", dependencies=[Depends(require_role(Role.ADMIN))])
 async def send_terminal_input(
     agent_id: uuid.UUID,
     task_id: str,
@@ -269,7 +269,7 @@ async def send_terminal_input(
     return result
 
 
-@router.delete("/agents/{agent_id}/terminal/{task_id}")
+@router.delete("/agents/{agent_id}/terminal/{task_id}", dependencies=[Depends(require_role(Role.ADMIN))])
 async def kill_terminal_session(
     agent_id: uuid.UUID,
     task_id: str,
@@ -288,23 +288,19 @@ async def _proxy_terminal_websocket(
     session_key: str,
     token: Optional[str],
     session: AsyncSession,
+    ticket: Optional[str] = None,
 ):
     """Shared logic for the terminal WebSocket proxy.
 
     session_key: either agent_slug (permanent session) or task_id (per-task)
     """
-    # Auth check
-    if not token:
-        await websocket.close(code=4001)
-        return
-    try:
-        from jose import jwt as _jwt
-        payload = _jwt.decode(token, settings.jwt_secret_key, algorithms=["HS256"])
-        if not payload.get("sub"):
-            await websocket.close(code=4001)
-            return
-    except Exception:
-        await websocket.close(code=4001)
+    # Auth: stream ticket (legacy ?token= only with ALLOW_QUERY_TOKEN_AUTH),
+    # and the admin role — a terminal is command execution on the box.
+    from app.auth import Role, authorize_websocket
+
+    denied = await authorize_websocket(websocket, Role.ADMIN, token=token, ticket=ticket)
+    if denied:
+        await websocket.close(code=denied)
         return
 
     # Agent check
@@ -552,17 +548,18 @@ async def terminal_websocket_permanent(
     token: Optional[str] = None,
     shell: Optional[bool] = False,
     session: AsyncSession = Depends(get_session),
+    ticket: Optional[str] = None,
 ):
     """WebSocket: connects to the permanent worker session or a shell session.
 
-    Auth via ?token=<jwt> query param.
+    Auth via ?ticket=<stream ticket> (legacy ?token= only with ALLOW_QUERY_TOKEN_AUTH).
     Shell session via ?shell=1.
     Proxies bidirectionally: browser ↔ backend ↔ bridge WS (PTY ↔ tmux attach).
     """
     agent = await session.get(Agent, agent_id)
     agent_slug = agent.name.lower().replace(" ", "-") if agent else str(agent_id)
     session_key = f"{agent_slug}-shell" if shell else agent_slug
-    await _proxy_terminal_websocket(websocket, agent_id, session_key, token, session)
+    await _proxy_terminal_websocket(websocket, agent_id, session_key, token, session, ticket)
 
 
 @router.websocket("/agents/{agent_id}/terminal/{task_id}/ws")
@@ -572,13 +569,14 @@ async def terminal_websocket(
     task_id: str,
     token: Optional[str] = None,
     session: AsyncSession = Depends(get_session),
+    ticket: Optional[str] = None,
 ):
     """WebSocket: proxied PTY terminal via the bridge WebSocket server (per-task, legacy).
 
-    Auth via ?token=<jwt> query param.
+    Auth via ?ticket=<stream ticket> (legacy ?token= only with ALLOW_QUERY_TOKEN_AUTH).
     Proxies bidirectionally: browser ↔ backend ↔ bridge WS (PTY ↔ tmux attach).
     """
-    await _proxy_terminal_websocket(websocket, agent_id, task_id, token, session)
+    await _proxy_terminal_websocket(websocket, agent_id, task_id, token, session, ticket)
 
 
 # ── Direct PTY Terminal (docker exec → tmux) ─────────────────────────────────
@@ -596,26 +594,26 @@ async def agent_terminal_ws(
     agent_id: str,
     token: Optional[str] = None,
     session: AsyncSession = Depends(get_session),
+    ticket: Optional[str] = None,
 ):
     """WebSocket PTY bridge: browser xterm.js <-> backend <-> docker exec <-> container tmux.
 
     Direct connection via PTY (no bridge). Uses 'docker exec -it mc-agent-{name} tmux attach'.
-    Auth: JWT via ?token=<jwt> query param (WebSocket can't send auth headers).
+    Auth: ?ticket=<stream ticket> (WebSocket can't send auth headers).
     Resize: JSON {type: "resize", cols: N, rows: N} as a text message.
     Input:  raw bytes, or JSON {type: "input", data: "..."} as a text message.
     """
-    # 1. Auth: verify JWT from the query param
-    if not token:
-        await websocket.close(code=4001, reason="Missing token")
-        return
-    try:
-        from jose import jwt as _jwt
-        payload = _jwt.decode(token, settings.jwt_secret_key, algorithms=["HS256"])
-        if not payload.get("sub"):
-            await websocket.close(code=4001, reason="Invalid token")
-            return
-    except Exception:
-        await websocket.close(code=4001, reason="Invalid token")
+    # 1. Auth: single-use stream ticket (?ticket=); legacy ?token= only
+    #    with ALLOW_QUERY_TOKEN_AUTH. Admin only: a terminal is command
+    #    execution on the box (operator decision 24.09.2026).
+    from app.auth import Role, WS_CLOSE_FORBIDDEN, authorize_websocket
+
+    denied = await authorize_websocket(websocket, Role.ADMIN, token=token, ticket=ticket)
+    if denied:
+        await websocket.close(
+            code=denied,
+            reason="Admin role required" if denied == WS_CLOSE_FORBIDDEN else "Invalid token",
+        )
         return
 
     # 2. Load agent from DB
@@ -960,6 +958,7 @@ async def host_agent_terminal_ws(
     agent_id: str,
     token: Optional[str] = None,
     session: AsyncSession = Depends(get_session),
+    ticket: Optional[str] = None,
 ):
     """WebSocket bridge: browser xterm.js <-> backend <-> host-pty-bridge <-> tmux boss-host.
 
@@ -971,18 +970,17 @@ async def host_agent_terminal_ws(
 
     Requirement: the host-pty-bridge launchd job is running (com.openclaw.host-pty-bridge).
     """
-    # 1. Auth: JWT via ?token=
-    if not token:
-        await websocket.close(code=4001, reason="Missing token")
-        return
-    try:
-        from jose import jwt as _jwt
-        payload = _jwt.decode(token, settings.jwt_secret_key, algorithms=["HS256"])
-        if not payload.get("sub"):
-            await websocket.close(code=4001, reason="Invalid token")
-            return
-    except Exception:
-        await websocket.close(code=4001, reason="Invalid token")
+    # 1. Auth: single-use stream ticket (?ticket=); legacy ?token= only
+    #    with ALLOW_QUERY_TOKEN_AUTH. Admin only: a terminal is command
+    #    execution on the box (operator decision 24.09.2026).
+    from app.auth import Role, WS_CLOSE_FORBIDDEN, authorize_websocket
+
+    denied = await authorize_websocket(websocket, Role.ADMIN, token=token, ticket=ticket)
+    if denied:
+        await websocket.close(
+            code=denied,
+            reason="Admin role required" if denied == WS_CLOSE_FORBIDDEN else "Invalid token",
+        )
         return
 
     # 2. Agent + host-runtime ACL
