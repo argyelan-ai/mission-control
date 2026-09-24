@@ -263,6 +263,25 @@ export function measureState(args) {
 }
 
 /**
+ * Wait (up to `maxMs`) until no finite animation or transition is running —
+ * a fade-in measured half-way shows text at half contrast. Endless animations
+ * are ignored here (measureContrast marks their text as uncertain).
+ */
+export async function settleAnimations(args) {
+  const maxMs = (args && args.maxMs) || 2000;
+  const until = Date.now() + maxMs;
+  const busy = () => {
+    try {
+      return document.getAnimations().some((a) => a.playState === "running" && a.effect && a.effect.getTiming().iterations !== Infinity);
+    } catch {
+      return false;
+    }
+  };
+  while (busy() && Date.now() < until) await new Promise((r) => setTimeout(r, 100));
+  return !busy();
+}
+
+/**
  * Collect text samples for the contrast heuristic (lib/contrast.mjs): every
  * visible element with its own letters/digits, its text colour and the chain
  * of background colours + opacities up to <html>. `base` = whole page; else
@@ -309,6 +328,15 @@ export function measureContrast(args) {
       .join(" ")
       .trim()
       .replace(/\s+/g, " ");
+  // Elements under an endless animation (pulsing "Loading…", shimmer): their
+  // colour changes all the time, a snapshot says nothing → "uncertain".
+  const looping = new Set();
+  try {
+    for (const a of document.getAnimations()) {
+      const t = a.effect && a.effect.target;
+      if (t && a.playState === "running" && a.effect.getTiming().iterations === Infinity) looping.add(t);
+    }
+  } catch {}
   const samples = [];
   const done = new Set();
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
@@ -322,7 +350,9 @@ export function measureContrast(args) {
     if (!/[\p{L}\p{N}]/u.test(text) || !vis(e)) continue;
     const cs = getComputedStyle(e);
     const fill = cs.webkitTextFillColor;
-    const uncertain = cs.backgroundClip === "text" || (fill && fill !== cs.color && rgba(fill) && rgba(fill)[3] === 0);
+    let loops = false;
+    for (let a = e; a && !loops; a = a.parentElement) loops = looping.has(a);
+    const uncertain = loops || cs.backgroundClip === "text" || (fill && fill !== cs.color && rgba(fill) && rgba(fill)[3] === 0);
     const fg = rgba(cs.color);
     if (!fg) continue;
     const chain = [];

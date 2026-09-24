@@ -14,6 +14,8 @@
 
 export const AA_NORMAL = 4.5;
 export const AA_LARGE = 3;
+/** Below this combined opacity text is hidden (or fading in/out), not "dim". */
+export const HIDDEN_OPACITY = 0.15;
 
 const lin = (c) => {
   const s = c / 255;
@@ -84,9 +86,14 @@ export const isLargeText = (px, weight) => px >= 24 || (px >= 18.66 && weight >=
 export function contrastFindings(samples) {
   let checked = 0;
   let uncertain = 0;
+  let hidden = 0;
   const groups = new Map();
   for (const s of samples || []) {
     if (!s || !s.fg || !(s.fg[3] > 0)) continue;
+    if ((s.chain || []).reduce((a, c) => a * (c.op ?? 1), 1) < HIDDEN_OPACITY) {
+      hidden += 1;
+      continue;
+    }
     if (imageBehind(s.chain || []) || s.uncertain) {
       uncertain += 1;
       continue;
@@ -109,5 +116,5 @@ export function contrastFindings(samples) {
     message: `${g.large ? "large text" : "text"} ${g.fg} on ${g.bg} = ${Math.floor(g.ratio * 100) / 100}:1 (AA needs ${g.need}:1)`,
     detail: { examples: g.examples, count: g.count, ratio: g.ratio },
   }));
-  return { findings, checked, uncertain };
+  return { findings, checked, uncertain, hidden };
 }

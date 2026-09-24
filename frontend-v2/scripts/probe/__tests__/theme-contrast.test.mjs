@@ -116,6 +116,12 @@ describe("contrastFindings", () => {
     expect(r.uncertain).toBe(0);
     expect(r.checked).toBe(1);
   });
+  it("skips text that is (nearly) faded out — hidden or mid-transition, not a readable colour", () => {
+    const r = contrastFindings([sample({ fg: [150, 150, 150, 1], chain: [{ bg: [0, 0, 0, 0], op: 0.05 }, { bg: W, op: 1 }] })]);
+    expect(r).toMatchObject({ checked: 0, findings: [], hidden: 1 });
+    // a real dim (opacity 0.6) is still judged
+    expect(contrastFindings([sample({ fg: [150, 150, 150, 1], chain: [{ bg: [0, 0, 0, 0], op: 0.6 }, { bg: W, op: 1 }] })]).findings).toHaveLength(1);
+  });
   it("skips invisible text (fully transparent)", () => {
     expect(contrastFindings([sample({ fg: [0, 0, 0, 0] })]).checked).toBe(0);
   });
