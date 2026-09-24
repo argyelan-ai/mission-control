@@ -95,7 +95,7 @@ before code (PR 0), otherwise we build against our own decision record.
 | kimi, opencode, codex/acpx | sandbox proven (kimi runs unattended only with `--yolo`); quarterly swap test (ADR-085 §6.6) |
 | Quota in percent | with claude × Claude: the CLI status line writes `rate_limits` to a file (statusline script) |
 | Two local heads per box | a measurement with the bench standard shows acceptable speed with 2 clients |
-| Night / scheduled runs | 5 attended runs without a forbidden-list hit and the sandbox proven |
+| Night / scheduled runs | 5 attended runs without a forbidden-list hit and the sandbox proven. **Built** as the night shift (ROADMAP E2, `services/heads/night_shift.py`) behind `night_shift_enabled` (default off) — the operator switches it on in Settings once this trigger holds; `mc-head` still refuses real repos without the sandbox and the heads' own GitHub identity |
 | Live output stream, ACP driver for heads | never via the frozen sessions-chat code; only if a measured need appears |
 
 ## 4. Harness × runtime matrix
