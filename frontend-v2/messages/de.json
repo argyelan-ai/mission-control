@@ -2922,7 +2922,7 @@
       "kpiEndpointIdle": "Endpunkt · frei",
       "kpiEndpointOff": "Endpunkt · aus",
       "kpiContext": "Kontext",
-      "kpiSpeedSolo": "Tempo solo",
+      "kpiSpeedMode": "Tempo · {mode}",
       "kpiEndpointSlot": "Endpunkt · slot",
       "cornerFree": "frei",
       "cornerUnknown": "unbekannt",

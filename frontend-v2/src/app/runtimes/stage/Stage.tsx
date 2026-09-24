@@ -164,9 +164,12 @@ export function Stage({
 
   const tps = pulse?.available ? pulse?.now_tps ?? null : null;
   const latencyMs = live?.latency_ms ?? null;
+  const modeLabel = isDuo ? t("topologyDuo") : t("topologySolo");
+  // Live speed sits in the SPEED tile (label carries the mode); the line
+  // under the bar keeps only mode + latency — no duplicate speed. There is
+  // no benchmark solo value in the card's data, so nothing else to show.
   const nowLineParts = [
-    tps != null ? t("tpsValue", { tps: Math.round(tps) }) : null,
-    isDuo ? t("topologyDuo") : t("topologySolo"),
+    modeLabel,
     latencyMs != null ? t("latencyValue", { ms: latencyMs }) : null,
   ].filter(Boolean);
 
@@ -197,7 +200,11 @@ export function Stage({
   const endpointPort = runtime.endpoint?.match(/:(\d+)/)?.[1] ?? null;
   const cells: KpiCell[] = [
     { value: fmtCtx(live?.served_context_len ?? runtime.max_context_len), label: t("kpiContext") },
-    { value: "–", label: t("kpiSpeedSolo") },
+    {
+      value: tps != null ? t("tpsValue", { tps: Math.round(tps) }) : "–",
+      label: t("kpiSpeedMode", { mode: modeLabel }),
+      testId: "kpi-speed",
+    },
     {
       value: String(agentCount + headsOnCard.length),
       label: t("kpiInUse"),
@@ -251,7 +258,7 @@ export function Stage({
           </span>
         </div>
         <HeatStrip pulse={pulse} dead={status === "failed"} />
-        <div className="text-xs mt-2 pb-4 font-mono truncate" style={{ color: status === "failed" ? STATUS_TEXT.error : C.textMuted }}>
+        <div className="text-xs mt-2 pb-4 font-mono truncate" style={{ color: status === "failed" ? STATUS_TEXT.error : C.textMuted }} data-testid="stage-now-line">
           {status === "switching"
             ? t("switchingTo", { model: shortModelTitle(runtime.display_name) })
             : status === "failed"

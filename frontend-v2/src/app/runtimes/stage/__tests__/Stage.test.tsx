@@ -221,3 +221,43 @@ describe("Stage — Agents KPI reads the box's slot runtime (Team-Lead-Fund 06.0
     expect(agentsSpy).toHaveBeenCalledWith("qwen38-flash-next");
   });
 });
+
+describe("Stage — live speed lives in the SPEED tile", () => {
+  const live = { reachable: true, served_model: "m", latency_ms: 6, last_probe_at: "", consecutive_failures: 0, drift: false };
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.spyOn(api.hosts, "pulse").mockResolvedValue({ points: [{ t: 1, tps: 42.4 }], now_tps: 42.4, idle_seconds: 0, available: true });
+    vi.spyOn(api.hosts, "metrics").mockResolvedValue({ reachable: true, gpu_util_pct: 10, vram_used_mb: 1024, vram_total_mb: 8192, gpu_temp_c: 40 });
+    vi.spyOn(api.hosts, "recipes").mockResolvedValue([]);
+    vi.spyOn(api.runtimes.db, "agents").mockResolvedValue({ runtime_slug: "rt", count: 0, agents: [] });
+  });
+
+  it("duo: tile shows the live tok/s with 'Speed · duo'; the line under the bar has only mode + latency", async () => {
+    renderWithQuery(
+      <Stage
+        runtime={makeRuntime({ slug: "rt" })}
+        members={[{ host: makeHost({ id: "alpha", slug: "alpha" }), role: "head" }, { host: makeHost({ id: "beta", slug: "beta" }), role: "worker" }]}
+        live={live}
+        onOpenCockpit={() => {}}
+      />,
+    );
+    const tile = await screen.findByTestId("kpi-speed");
+    await vi.waitFor(() => expect(tile).toHaveTextContent("42 tok/s"));
+    expect(tile).toHaveTextContent("Speed · duo");
+    const line = screen.getByTestId("stage-now-line");
+    expect(line).toHaveTextContent(/^duo · 6 ms$/);
+    expect(screen.getAllByText(/tok\/s/)).toHaveLength(1);
+    expect(screen.queryByText("Speed solo")).not.toBeInTheDocument();
+  });
+
+  it("solo without a metric: tile shows – with 'Speed · solo'", async () => {
+    vi.spyOn(api.hosts, "pulse").mockResolvedValue({ points: [], now_tps: null, idle_seconds: null, available: false });
+    renderWithQuery(
+      <Stage runtime={makeRuntime({ slug: "rt" })} members={[{ host: makeHost({ id: "alpha", slug: "alpha" }), role: "head" }]} live={live} onOpenCockpit={() => {}} />,
+    );
+    const tile = await screen.findByTestId("kpi-speed");
+    expect(tile).toHaveTextContent("–");
+    expect(tile).toHaveTextContent("Speed · solo");
+    expect(screen.getByTestId("stage-now-line")).toHaveTextContent(/^solo · 6 ms$/);
+  });
+});
