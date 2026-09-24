@@ -168,6 +168,54 @@ def test_rebuild_handles_invalid_frontmatter(index, tmp_path, capsys):
     assert stats["indexed"] == 0
 
 
+def test_rebuild_counts_frontmatterless_md_as_skipped_not_error(index, tmp_path):
+    """Plain .md files without a frontmatter block (README, scratch notes) are
+    not notes and not broken — the rebuild must report them as skipped, not
+    inflate the error counter."""
+    _make_note(tmp_path, "agents/sparky/a.md", id="1", type="lesson",
+               agent="sparky", date="2026-05-14T15:00:00Z")
+    readme = tmp_path / "README.md"
+    readme.write_text("# Vault\n\nPlain markdown, no frontmatter.\n")
+
+    stats = index.rebuild_from_vault()
+    assert stats["indexed"] == 1
+    assert stats["skipped"] == 1  # README.md — no frontmatter, not a note
+    assert stats["errors"] == 0
+
+
+def test_rebuild_accepts_date_only_frontmatter(index, tmp_path):
+    """Unquoted YAML date `date: 2026-05-16` parses to datetime.date and is a
+    valid ISO-8601 date — it must index, not count as an error."""
+    note = tmp_path / "agents" / "sparky" / "d.md"
+    note.parent.mkdir(parents=True, exist_ok=True)
+    note.write_text(
+        "---\n"
+        "id: d\n"
+        "type: note\n"
+        "agent: sparky\n"
+        "date: 2026-05-16\n"
+        "---\n"
+        "body\n"
+    )
+
+    stats = index.rebuild_from_vault()
+    assert stats["indexed"] == 1
+    assert stats["errors"] == 0
+    paths = {row["path"] for row in index.list_all()}
+    assert "agents/sparky/d.md" in paths
+
+
+def test_rebuild_counts_empty_frontmatter_block_as_error(index, tmp_path):
+    """A present-but-empty frontmatter block signals note-intent (e.g. a note
+    mid-edit that lost its fields) — it is an error, not a plain skip."""
+    empty = tmp_path / "hollow.md"
+    empty.write_text("---\n---\nbody\n")
+
+    stats = index.rebuild_from_vault()
+    assert stats["errors"] == 1
+    assert stats["skipped"] == 0
+
+
 def test_index_extracts_title_from_frontmatter(index, tmp_path):
     """list_all() must return the frontmatter title so build_graph can label nodes."""
     file = _make_note(
@@ -227,3 +275,106 @@ def test_concurrent_upserts_are_serialized(index, tmp_path):
 
     rows = list(index.list_all())
     assert len(rows) == 1  # No duplicate rows even with concurrent writes
+
+
+# ── Review follow-ups (rebuild error count, date-only consumers, BOM) ────────
+
+
+def test_rebuild_uses_shared_excluded_prefixes_for_attachments(index, tmp_path):
+    """attachments/ holds deliverable copies (the occasional .md is content, not
+    a wrapper note). The watcher and the linter skip it via the shared
+    vault_constants.EXCLUDED_PREFIXES; the rebuild must do the same instead of
+    keeping its own drifted list (real vault: 197 of the 200 'errors')."""
+    from app.helpers.vault_constants import EXCLUDED_PREFIXES
+
+    attachment = tmp_path / "attachments" / "files" / "deliverable.md"
+    attachment.parent.mkdir(parents=True)
+    attachment.write_text("# Report\n\nDeliverable body, no frontmatter.\n")
+
+    stats = index.rebuild_from_vault()
+    assert stats == {"scanned": 0, "indexed": 0, "skipped": 1, "errors": 0}
+    assert VaultIndex.EXCLUDED_PREFIXES == EXCLUDED_PREFIXES
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b"\xef\xbb\xbf---\n---\nbody\n",          # BOM before an empty block
+        b"\n\n---\n---\nbody\n",                  # blank lines before the block
+        b"\xef\xbb\xbf\r\n---\r\n---\r\nbody\r\n",  # BOM + CRLF + blank line
+        b"--- \n---\nbody\n",                     # trailing space on delimiter
+    ],
+)
+def test_rebuild_reports_block_behind_bom_or_blank_lines_as_error(index, tmp_path, raw):
+    """A frontmatter block hidden behind a BOM, CRLF or leading blank lines is
+    still note-intent. It must count as an error, never as a silent skip."""
+    (tmp_path / "odd.md").write_bytes(raw)
+
+    stats = index.rebuild_from_vault()
+    assert stats["errors"] == 1
+    assert stats["skipped"] == 0
+
+
+def test_rebuild_indexes_note_with_utf8_bom(index, tmp_path):
+    """Editors on Windows prepend a UTF-8 BOM. The note is valid and must be
+    indexed (before: the BOM hid the whole frontmatter block)."""
+    (tmp_path / "bom.md").write_bytes(
+        b"\xef\xbb\xbf---\r\nid: b\r\ntype: note\r\nagent: sparky\r\n"
+        b"date: 2026-05-16\r\n---\r\nbody\r\n"
+    )
+
+    stats = index.rebuild_from_vault()
+    assert stats["indexed"] == 1
+    assert stats["errors"] == 0
+    [row] = list(index.list_all())
+    assert row["id"] == "b"
+    assert row["date"] == "2026-05-16"
+
+
+def test_date_only_mixes_with_timestamps_in_index_and_briefing(index, tmp_path):
+    """Consumers of a date-only note: the index stores it as the plain
+    'YYYY-MM-DD' text, list_all() sorts it together with timestamp dates
+    (string column, no date-vs-datetime comparison), and the briefing's date
+    resolver reads it."""
+    from app.routers.vault import _note_date
+
+    for name, date_line in [
+        ("a", "date: 2026-05-16"),                  # YAML -> datetime.date
+        ("b", "date: 2026-05-17T08:00:00Z"),        # YAML -> datetime
+        ("c", "date: '2026-05-15T08:00:00+02:00'"),  # quoted -> str
+    ]:
+        (tmp_path / f"{name}.md").write_text(
+            f"---\nid: {name}\ntype: note\nagent: sparky\n{date_line}\n---\nbody\n"
+        )
+
+    stats = index.rebuild_from_vault()
+    assert stats["indexed"] == 3 and stats["errors"] == 0
+    rows = list(index.list_all())
+    assert [r["id"] for r in rows] == ["b", "a", "c"]
+    by_id = {r["id"]: r for r in rows}
+    assert by_id["a"]["date"] == "2026-05-16"
+    assert [_note_date(by_id[i]) for i in ("a", "b", "c")] == [
+        "2026-05-16", "2026-05-17", "2026-05-15",
+    ]
+
+
+def test_date_only_survives_api_encoding_and_rewrite(tmp_path):
+    """The note API returns post.metadata through FastAPI's encoder, and
+    several services rewrite notes with frontmatter.dumps (promoter, lint,
+    backfills). A date-only value must encode to 'YYYY-MM-DD' and must not be
+    rewritten into a timestamp on disk."""
+    import datetime as dt
+    from fastapi.encoders import jsonable_encoder
+    from app.helpers.vault_frontmatter import parse_frontmatter
+
+    note = tmp_path / "d.md"
+    note.write_text("---\nid: d\ntype: note\nagent: x\ndate: 2026-05-16\n"
+                    "updated: 2026-05-17\n---\nbody\n")
+    post = parse_frontmatter(note)
+    assert type(post.metadata["date"]) is dt.date
+
+    assert jsonable_encoder(post.metadata)["date"] == "2026-05-16"
+    post.metadata["status"] = "published"          # what the promoter does
+    rewritten = frontmatter.dumps(post)
+    assert "date: 2026-05-16\n" in rewritten
+    assert "updated: 2026-05-17\n" in rewritten

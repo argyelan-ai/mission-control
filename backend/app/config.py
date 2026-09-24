@@ -617,6 +617,27 @@ class Settings(BaseSettings):
     heads_time_limit_local_s: int = 7200
     heads_time_limit_cloud_s: int = 3600
 
+    # Night shift (ROADMAP E2): tasks marked "run tonight" start one after
+    # another as heads inside a time window. These are the env DEFAULTS; the
+    # operator's choice lives in app_settings (Settings → Night shift) and is
+    # read fresh on every tick, because the job runs in mc-worker, not in the
+    # API process that saves it. Off by default: unattended starts are an
+    # operator decision (ADR-085 decision 2). Needs heads_enabled too.
+    night_shift_enabled: bool = False
+    night_shift_start: str = "22:00"
+    night_shift_end: str = "06:00"
+    # IANA zone the window is read in. No system-wide zone exists (containers
+    # run on UTC), so the operator picks it once in Settings.
+    night_shift_timezone: str = "UTC"
+    # Max share (percent) of tonight's marked tasks that may start on a cloud
+    # runtime — only matters when the operator picked a cloud pair.
+    night_shift_cloud_share: int = 30
+    # MC is the operator's channel: the morning report and the blocked
+    # notices always land in MC (Home → "Last night"). Slack / Telegram get a
+    # copy only when this is on AND a channel is configured. Off by default.
+    night_shift_send_to_channels: bool = False
+    night_shift_interval: int = 60
+
     # Vault Index Rebuild on Boot
     # False (default): only rebuild on first boot when .mc_index.db is missing.
     # True: force rebuild on every backend start (useful after schema migrations

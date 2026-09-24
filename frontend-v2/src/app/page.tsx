@@ -17,6 +17,7 @@ import PipelineView from "@/components/pipeline/PipelineView";
 import AppShell from "@/components/layout/AppShell";
 import { SystemHealthSection } from "@/components/homepage/SystemHealthSection";
 import { ActivityHistoryPanel } from "@/components/homepage/ActivityHistoryPanel";
+import { LastNightCard } from "@/components/night/LastNightCard";
 import { C, sectionVariants, getGreetingKey, bentoMediaStyles } from "@/components/homepage/colors";
 
 export default function Page() {
@@ -125,6 +126,12 @@ function HomePage() {
             style={{ backgroundColor: C.accent }}
           />
         </div>
+      </motion.div>
+
+      {/* Night shift: last night's report + blocked night heads (MC is the
+          operator's channel; renders nothing when nothing ran). */}
+      <motion.div custom={1} variants={sectionVariants} initial="hidden" animate="visible" className="empty:hidden">
+        <LastNightCard />
       </motion.div>
 
       {/* Context warnings */}

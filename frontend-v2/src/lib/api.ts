@@ -129,6 +129,7 @@ import type {
   HeadBusy,
   HeadStartBody,
 } from "./heads";
+import type { LastNight, NightConfig, NightConfigUpdate, NightEntry, NightTonight } from "./nightShift";
 
 import { AUTH_TOKEN_KEY, BASE_URL, getToken } from "./authToken";
 import { withStreamTicket } from "./streamTicket";
@@ -2185,6 +2186,27 @@ export const api = {
     stop: (runId: string): Promise<{ run_id: string; state: string }> =>
       request(`/api/v1/heads/${encodeURIComponent(runId)}/stop`, { method: "POST" }),
     occupancy: (): Promise<{ boxes: Record<string, HeadBusy> }> => request("/api/v1/heads/occupancy"),
+  },
+  // ── Night shift (ROADMAP E2) — marked tasks start as heads tonight ────────
+  // Behind the same switch as heads (404 `heads_disabled` while off).
+  nightShift: {
+    config: (): Promise<NightConfig> => request("/api/v1/night-shift/config"),
+    saveConfig: (body: NightConfigUpdate): Promise<NightConfig> =>
+      request("/api/v1/night-shift/config", { method: "PUT", body: JSON.stringify(body) }),
+    tonight: (): Promise<NightTonight> => request("/api/v1/night-shift/tonight"),
+    // Home's "Last night" card: the report of the last ended night + blocked night heads.
+    lastNight: (): Promise<LastNight> => request("/api/v1/night-shift/last-night"),
+    dismissLastNight: (night: string): Promise<{ night: string; dismissed: boolean }> =>
+      request(`/api/v1/night-shift/last-night/${encodeURIComponent(night)}/dismiss`, { method: "POST" }),
+    getMark: (taskId: string): Promise<{ mark: NightEntry | null }> =>
+      request(`/api/v1/night-shift/tasks/${encodeURIComponent(taskId)}`),
+    mark: (
+      taskId: string,
+      body: { harness: string; runtime_slug: string; hold_on_failure?: boolean },
+    ): Promise<{ mark: NightEntry }> =>
+      request(`/api/v1/night-shift/tasks/${encodeURIComponent(taskId)}`, { method: "PUT", body: JSON.stringify(body) }),
+    unmark: (taskId: string): Promise<{ mark: null }> =>
+      request(`/api/v1/night-shift/tasks/${encodeURIComponent(taskId)}`, { method: "DELETE" }),
   },
 
   spark: {
