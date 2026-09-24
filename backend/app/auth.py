@@ -113,12 +113,15 @@ class Role(StrEnum):
 ROLE_HIERARCHY = {Role.ADMIN: 3, Role.OPERATOR: 2, Role.VIEWER: 1}
 
 
+def has_role(user, minimum_role: Role) -> bool:
+    """True when ``user`` holds at least ``minimum_role`` (unknown role → no)."""
+    return ROLE_HIERARCHY.get(getattr(user, "role", None), 0) >= ROLE_HIERARCHY[minimum_role]
+
+
 def require_role(minimum_role: Role):
     """FastAPI dependency factory — checks that the user has at least the given role."""
     async def _check(current_user=Depends(require_user)):
-        user_level = ROLE_HIERARCHY.get(current_user.role, 0)
-        required_level = ROLE_HIERARCHY[minimum_role]
-        if user_level < required_level:
+        if not has_role(current_user, minimum_role):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Requires {minimum_role} role or higher",
@@ -205,6 +208,35 @@ async def authenticate_websocket(
     ALLOW_QUERY_TOKEN_AUTH: the login JWT as ``?token=``.
     """
     return await websocket_user(websocket, token=token, ticket=ticket) is not None
+
+
+# WebSocket close codes for a refused browser socket (before accept):
+# 4001 = no valid credential, 4003 = valid login but the role is too low.
+WS_CLOSE_UNAUTHENTICATED = 4001
+WS_CLOSE_FORBIDDEN = 4003
+
+
+async def authorize_websocket(
+    websocket,
+    minimum_role: Role,
+    *,
+    token: str | None = None,
+    ticket: str | None = None,
+) -> int | None:
+    """Role gate for browser WebSockets — the WS counterpart of
+    :func:`require_role`. Returns ``None`` when the caller may proceed,
+    otherwise the close code to refuse the socket with
+    (:data:`WS_CLOSE_UNAUTHENTICATED` / :data:`WS_CLOSE_FORBIDDEN`).
+
+    Used by every interactive socket (agent/host terminals, plugin shell):
+    those are command execution on the box and are admin-only
+    (operator decision 24.09.2026)."""
+    user = await websocket_user(websocket, token=token, ticket=ticket)
+    if user is None:
+        return WS_CLOSE_UNAUTHENTICATED
+    if not has_role(user, minimum_role):
+        return WS_CLOSE_FORBIDDEN
+    return None
 
 
 def _ws_session() -> AsyncSession:

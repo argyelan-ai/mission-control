@@ -20,7 +20,7 @@ from sqlmodel import select
 
 from pydantic import BaseModel
 
-from app.auth import require_user, generate_agent_token
+from app.auth import Role, generate_agent_token, require_role, require_user
 from app.config import effective_host_ssh_user, settings
 from app.database import get_session, release_session
 from app.models.agent import Agent
@@ -254,7 +254,7 @@ async def list_all_cli_sessions(
     return enriched
 
 
-@router.post("/agents/{agent_id}/terminal/{task_id}/input")
+@router.post("/agents/{agent_id}/terminal/{task_id}/input", dependencies=[Depends(require_role(Role.ADMIN))])
 async def send_terminal_input(
     agent_id: uuid.UUID,
     task_id: str,
@@ -269,7 +269,7 @@ async def send_terminal_input(
     return result
 
 
-@router.delete("/agents/{agent_id}/terminal/{task_id}")
+@router.delete("/agents/{agent_id}/terminal/{task_id}", dependencies=[Depends(require_role(Role.ADMIN))])
 async def kill_terminal_session(
     agent_id: uuid.UUID,
     task_id: str,
@@ -294,11 +294,13 @@ async def _proxy_terminal_websocket(
 
     session_key: either agent_slug (permanent session) or task_id (per-task)
     """
-    # Auth check: stream ticket (legacy ?token= only with ALLOW_QUERY_TOKEN_AUTH)
-    from app.auth import authenticate_websocket
+    # Auth: stream ticket (legacy ?token= only with ALLOW_QUERY_TOKEN_AUTH),
+    # and the admin role — a terminal is command execution on the box.
+    from app.auth import Role, authorize_websocket
 
-    if not await authenticate_websocket(websocket, token=token, ticket=ticket):
-        await websocket.close(code=4001)
+    denied = await authorize_websocket(websocket, Role.ADMIN, token=token, ticket=ticket)
+    if denied:
+        await websocket.close(code=denied)
         return
 
     # Agent check
@@ -602,11 +604,16 @@ async def agent_terminal_ws(
     Input:  raw bytes, or JSON {type: "input", data: "..."} as a text message.
     """
     # 1. Auth: single-use stream ticket (?ticket=); legacy ?token= only
-    #    with ALLOW_QUERY_TOKEN_AUTH.
-    from app.auth import authenticate_websocket
+    #    with ALLOW_QUERY_TOKEN_AUTH. Admin only: a terminal is command
+    #    execution on the box (operator decision 24.09.2026).
+    from app.auth import Role, WS_CLOSE_FORBIDDEN, authorize_websocket
 
-    if not await authenticate_websocket(websocket, token=token, ticket=ticket):
-        await websocket.close(code=4001, reason="Invalid token")
+    denied = await authorize_websocket(websocket, Role.ADMIN, token=token, ticket=ticket)
+    if denied:
+        await websocket.close(
+            code=denied,
+            reason="Admin role required" if denied == WS_CLOSE_FORBIDDEN else "Invalid token",
+        )
         return
 
     # 2. Load agent from DB
@@ -964,11 +971,16 @@ async def host_agent_terminal_ws(
     Requirement: the host-pty-bridge launchd job is running (com.openclaw.host-pty-bridge).
     """
     # 1. Auth: single-use stream ticket (?ticket=); legacy ?token= only
-    #    with ALLOW_QUERY_TOKEN_AUTH.
-    from app.auth import authenticate_websocket
+    #    with ALLOW_QUERY_TOKEN_AUTH. Admin only: a terminal is command
+    #    execution on the box (operator decision 24.09.2026).
+    from app.auth import Role, WS_CLOSE_FORBIDDEN, authorize_websocket
 
-    if not await authenticate_websocket(websocket, token=token, ticket=ticket):
-        await websocket.close(code=4001, reason="Invalid token")
+    denied = await authorize_websocket(websocket, Role.ADMIN, token=token, ticket=ticket)
+    if denied:
+        await websocket.close(
+            code=denied,
+            reason="Admin role required" if denied == WS_CLOSE_FORBIDDEN else "Invalid token",
+        )
         return
 
     # 2. Agent + host-runtime ACL

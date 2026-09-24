@@ -20,7 +20,7 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
-from app.auth import require_user
+from app.auth import Role, require_role, require_user
 from app.database import get_session, release_session
 from app.models.agent import Agent
 from app.models.task import Task
@@ -454,7 +454,7 @@ async def get_chat_diff(
 async def post_chat_input(
     agent_id: uuid.UUID,
     body: ChatInputBody,
-    current_user=Depends(require_user),
+    current_user=Depends(require_role(Role.ADMIN)),
     session: AsyncSession = Depends(get_session),
 ):
     """Types ``body.text`` into the agent's live session (tmux send-keys for
@@ -575,7 +575,7 @@ async def post_chat_attachment(
 async def post_chat_keys(
     agent_id: uuid.UUID,
     body: ChatKeysBody,
-    current_user=Depends(require_user),
+    current_user=Depends(require_role(Role.ADMIN)),
     session: AsyncSession = Depends(get_session),
 ):
     """Sends a sequence of allowlisted control keys (Escape/Enter/Up/Down/
@@ -606,7 +606,7 @@ async def post_chat_keys(
 async def post_chat_effort(
     agent_id: uuid.UUID,
     body: ChatEffortBody,
-    current_user=Depends(require_user),
+    current_user=Depends(require_role(Role.ADMIN)),
     session: AsyncSession = Depends(get_session),
 ):
     """Switches the agent's effort level via ``/effort <level>`` (v1:
