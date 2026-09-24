@@ -20,6 +20,35 @@
  * blau-getönte Off-Blacks → neutrale Off-Blacks.
  */
 
+// ── Colour helpers (ADR-087) ─────────────────────────────────────────────────
+// Never build a translucent colour by appending a hex alpha suffix to a token
+// (`${C.error}33`): once tokens are CSS variables that is silently invalid CSS.
+// Use alpha(C.error, 0.2). Guarded by lib/__tests__/no-hex-alpha-concat.test.ts.
+
+/** Translucent version of a token or any CSS colour: alpha(C.error, 0.15). */
+export function alpha(color: string, a: number): string {
+  const pct = Math.round(Math.min(1, Math.max(0, a)) * 100);
+  return `color-mix(in srgb, ${color} ${pct}%, transparent)`;
+}
+
+/**
+ * Resolve every `var(--x)` inside a colour to its current computed value.
+ * For consumers that cannot read CSS variables (canvas, some libraries).
+ * Plain values pass through untouched; an unset variable yields `fallback`.
+ */
+export function resolveColor(color: string, fallback = "#000000"): string {
+  if (!color.includes("var(")) return color;
+  if (typeof document === "undefined") return fallback;
+  const cs = getComputedStyle(document.documentElement);
+  let missing = false;
+  const out = color.replace(/var\((--[a-zA-Z0-9-]+)\)/g, (_m, name: string) => {
+    const val = cs.getPropertyValue(name).trim();
+    if (!val) missing = true;
+    return val;
+  });
+  return missing ? fallback : out;
+}
+
 export const C = {
   // Backgrounds — neutrale Off-Blacks (Stufung = Tiefe)
   bgDeep: "#1C1C1C",
