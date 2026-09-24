@@ -5,6 +5,7 @@
  *
  *  - ThemeSegmented: the full three-way radio group (Settings → Appearance,
  *    mobile menu). Arrow keys move the choice, like any radio group.
+ *    size="touch" (phone menu) makes every option a 44px target.
  *  - ThemeCycleButton: one compact icon button for the desktop user menu
  *    (sidebar footer), cycling Dark → Light → System. Its label always says
  *    what is active and what a click does.
@@ -19,11 +20,13 @@ import { THEME_CHOICES, useTheme, type ThemeChoice } from "@/lib/theme";
 
 const ICON: Record<ThemeChoice, LucideIcon> = { dark: Moon, light: Sun, system: Monitor };
 
-export function ThemeSegmented({ size = "md", className }: { size?: "sm" | "md"; className?: string }) {
+export function ThemeSegmented({ size = "md", className }: { size?: "sm" | "md" | "touch"; className?: string }) {
   const t = useTranslations("theme");
   const { choice, setTheme } = useTheme();
   const refs = useRef<Record<ThemeChoice, HTMLButtonElement | null>>({ dark: null, light: null, system: null });
-  const h = size === "sm" ? 32 : 36;
+  // Option height: the group adds 4px padding on each side.
+  const optionHeight = size === "touch" ? 44 : size === "sm" ? 22 : 26;
+  const small = size === "sm";
 
   function onKey(e: KeyboardEvent<HTMLButtonElement>, current: ThemeChoice) {
     const step = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 0;
@@ -50,10 +53,10 @@ export function ThemeSegmented({ size = "md", className }: { size?: "sm" | "md";
         const Icon = ICON[c];
         const active = c === choice;
         const style: CSSProperties = {
-          height: h - 10,
-          padding: size === "sm" ? "0 10px" : "0 14px",
+          height: optionHeight,
+          padding: small ? "0 10px" : "0 14px",
           borderRadius: "var(--radius-full)",
-          fontSize: size === "sm" ? 12 : 13,
+          fontSize: small ? 12 : 13,
           fontWeight: active ? 600 : 500,
           background: active ? "var(--color-bg-elevated)" : "transparent",
           color: active ? "var(--color-text-primary)" : "var(--color-text-muted)",
@@ -72,7 +75,7 @@ export function ThemeSegmented({ size = "md", className }: { size?: "sm" | "md";
             className="inline-flex items-center gap-1.5 cursor-pointer transition-colors"
             style={style}
           >
-            <Icon size={size === "sm" ? 13 : 14} strokeWidth={1.75} aria-hidden />
+            <Icon size={small ? 13 : 14} strokeWidth={1.75} aria-hidden />
             {t(c)}
           </button>
         );

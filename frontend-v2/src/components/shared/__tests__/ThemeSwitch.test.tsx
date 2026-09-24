@@ -23,6 +23,13 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("ThemeSegmented", () => {
+  it("size touch gives every option a 44px target (phone menu, WCAG 2.5.5)", () => {
+    render(<ThemeSegmented size="touch" />);
+    for (const r of screen.getAllByRole("radio")) {
+      expect((r as HTMLElement).style.height).toBe("44px");
+    }
+  });
+
   it("offers Dark (default) · Light · System as a radio group, Dark checked", () => {
     render(<ThemeSegmented />);
     const group = screen.getByRole("radiogroup", { name: "Theme" });

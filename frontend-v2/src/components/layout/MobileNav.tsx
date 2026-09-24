@@ -587,7 +587,7 @@ export default function MobileNav() {
                   )}
                   {/* Theme switch (ADR-087) — same control as Settings → Appearance */}
                   <div className="px-2 pb-2">
-                    <ThemeSegmented size="sm" />
+                    <ThemeSegmented size="touch" />
                   </div>
                   {/* Settings sits with the account, not in a nav group — the
                       desktop column puts the same gear in its footer. */}
