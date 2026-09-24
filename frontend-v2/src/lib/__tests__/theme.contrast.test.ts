@@ -107,6 +107,14 @@ describe("theme contrast (WCAG) — both modes", () => {
     expect(check("light", lightVars)).toEqual([]);
   });
 
+  it("light: text-dim is readable text on the resting surfaces (it is used for small meta text)", () => {
+    const fails = ["--color-bg-deep", "--color-bg-base", "--color-bg-surface", "--color-bg-elevated"]
+      .map((sf) => [sf, ratio(resolveVar("var(--color-text-dim)", lightVars), resolveVar(`var(${sf})`, lightVars))] as const)
+      .filter(([, r]) => r < 4.5)
+      .map(([sf, r]) => `text-dim on ${sf}: ${r.toFixed(2)}`);
+    expect(fails).toEqual([]);
+  });
+
   it("every literal dark colour token has a light counterpart (or is dark on purpose)", () => {
     const SAME_IN_BOTH = new Set(["--color-term", "--color-term-fg"]);
     const missing = [...darkVars]

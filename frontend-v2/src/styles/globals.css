@@ -383,7 +383,10 @@
   --color-text-primary: #1b1a17;   /* 13.08 */
   --color-text-secondary: #4e4b44; /*  6.54 */
   --color-text-muted: #5f5b53;     /*  5.08 */
-  --color-text-dim: #8f8b80;       /*  2.56 — Deko/Icons, nie Text */
+  /* text-dim: gedacht für Deko/inaktive Icons, wird im Code aber auch für
+     kleine Meta-Texte genutzt (Zähler, Etiketten — axe-Befund). Hell daher
+     als AA-Textton auf den vier Ruheflächen (min. 4.64), nur auf Hover 4.23. */
+  --color-text-dim: #6b675e;
 
   /* ---- Borders: Tinte statt Grau-Weiss ---- */
   --color-border-subtle: rgba(27, 26, 23, 0.05);
