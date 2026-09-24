@@ -581,6 +581,145 @@ async def test_finish_for_host_without_a_runtime_id_keeps_the_old_behaviour(box,
     assert box.watermark == CONFIGURED_WATERMARK
 
 
+# ── migration window, restarts, shared-box watermark (review follow-up) ─────
+
+DEEPER_WATERMARK = 1048576  # 1 GiB — a second runtime that lowers further
+
+
+def _old_scheme_json(handle: memprep.PrepHandle) -> str:
+    """Exactly what the OLD code wrote: no ``runtime_id`` field at all."""
+    import json
+
+    data = json.loads(handle.to_json())
+    data.pop("runtime_id", None)
+    return json.dumps(data)
+
+
+@pytest.mark.asyncio
+async def test_a_prep_written_by_the_old_code_is_finished_after_a_deploy(box, fake_redis):
+    """The migration window: the OLD code prepared (bare box key, no
+    runtime_id in the JSON), then the backend was redeployed mid-load. The
+    NEW watcher probe that sees the engine serving must find and finish it."""
+    from datetime import datetime, timezone
+
+    ssh, redis = _patched(box, fake_redis)
+    with ssh, redis:
+        old = memprep.PrepHandle(
+            host_key="192.0.2.10", slug="ds4-sparkinfer",
+            original_watermark_kb=CONFIGURED_WATERMARK,
+            lowered_to_kb=LOWERED_WATERMARK, dropper_started=True,
+            started_at=datetime.now(timezone.utc).isoformat(),
+            ssh_host=SPARK.ssh_host, ssh_user=SPARK.ssh_user,
+        )
+        box.watermark = LOWERED_WATERMARK
+        box.containers.add(memprep.DROPPER_CONTAINER)
+        await fake_redis.set(RedisKeys.host_mem_prep("192.0.2.10"), _old_scheme_json(old))
+
+        # The guard sees it as a mid-flight prep of that runtime …
+        seen = await memprep.load_host_handles(SPARK)
+        assert [h.slug for h in seen] == ["ds4-sparkinfer"]
+        # … and the runtime's own probe finishes it.
+        assert await memprep.finish_for_host(
+            SPARK, success=True, runtime_id="ds4-sparkinfer"
+        ) is True
+
+    assert box.watermark == CONFIGURED_WATERMARK
+    assert memprep.DROPPER_CONTAINER not in box.containers
+    assert [k async for k in fake_redis.scan_iter(match="mc:host-memprep:*")] == []
+
+
+@pytest.mark.asyncio
+async def test_the_orphan_sweep_repairs_old_and_new_markers_alike(box, fake_redis):
+    """Backend dies with one prep from the OLD code (bare key) and one from
+    the NEW code (per-runtime key) outstanding. The sweep must find both and
+    remove both keys — a key left behind would be swept forever, a key
+    missed would pin the lowered watermark."""
+    ssh, redis = _patched(box, fake_redis)
+    with ssh, redis:
+        old = memprep.PrepHandle(
+            host_key="192.0.2.10", slug="old-runtime",
+            original_watermark_kb=CONFIGURED_WATERMARK,
+            lowered_to_kb=LOWERED_WATERMARK, dropper_started=True,
+            started_at="2020-01-01T00:00:00+00:00",
+            ssh_host=SPARK.ssh_host, ssh_user=SPARK.ssh_user,
+        )
+        await fake_redis.set(RedisKeys.host_mem_prep("192.0.2.10"), _old_scheme_json(old))
+
+        new = await memprep.prepare_host_memory(
+            SPARK, watermark_kb=LOWERED_WATERMARK, slug="new-runtime"
+        )
+        new.started_at = "2020-01-01T00:00:00+00:00"
+        await fake_redis.set(RedisKeys.host_mem_prep(new.prep_key), new.to_json())
+        box.watermark = LOWERED_WATERMARK
+
+        repaired = await memprep.recover_orphaned_preps(fake_redis)
+
+    assert repaired == ["192.0.2.10", "192.0.2.10"]
+    assert box.watermark == CONFIGURED_WATERMARK
+    assert memprep.DROPPER_CONTAINER not in box.containers
+    assert [k async for k in fake_redis.scan_iter(match="mc:host-memprep:*")] == []
+
+
+@pytest.mark.asyncio
+async def test_one_runtime_started_twice_still_restores_the_true_original(box, fake_redis):
+    """Restart before the engine ever served: the second prep overwrites the
+    first under the same key. It reads the ALREADY LOWERED watermark — if it
+    took that as "original", the true value would be gone and the box would
+    keep the lowered watermark forever."""
+    ssh, redis = _patched(box, fake_redis)
+    with ssh, redis:
+        await memprep.prepare_for_runtime(SPARKINFER, host=SPARK)
+        await memprep.prepare_for_runtime(SPARKINFER, host=SPARK)
+        assert box.watermark == LOWERED_WATERMARK
+
+        assert await memprep.finish_for_host(
+            SPARK, success=True, runtime_id="ds4-sparkinfer"
+        ) is True
+
+    assert box.watermark == CONFIGURED_WATERMARK
+    assert memprep.DROPPER_CONTAINER not in box.containers
+    assert [k async for k in fake_redis.scan_iter(match="mc:host-memprep:*")] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("a_finishes_first", [True, False])
+async def test_two_runtimes_on_one_box_end_on_the_true_original(
+    box, fake_redis, a_finishes_first
+):
+    """B prepares while A is still loading and lowers further. B must record
+    the box's TRUE original (the one A read), not A's lowered value — else
+    whichever finishes last writes a lowered watermark back for good."""
+    ssh, redis = _patched(box, fake_redis)
+    with ssh, redis:
+        a = await memprep.prepare_host_memory(
+            SPARK, watermark_kb=LOWERED_WATERMARK, slug="runtime-a"
+        )
+        b = await memprep.prepare_host_memory(
+            SPARK, watermark_kb=DEEPER_WATERMARK, slug="runtime-b"
+        )
+        assert box.watermark == DEEPER_WATERMARK
+        assert b.original_watermark_kb == CONFIGURED_WATERMARK
+
+        first, second = (a, b) if a_finishes_first else (b, a)
+        await memprep.finish(first, host=SPARK, success=True)
+        await memprep.finish(second, host=SPARK, success=True)
+
+    assert box.watermark == CONFIGURED_WATERMARK
+    assert [k async for k in fake_redis.scan_iter(match="mc:host-memprep:*")] == []
+
+
+@pytest.mark.asyncio
+async def test_load_host_handles_never_raises_on_a_redis_failure(box, fake_redis):
+    """The watcher's sibling guard calls this outside any try: a Redis hiccup
+    must read as "nothing outstanding", like load_handle does, not crash the
+    auto-recovery pass."""
+    ssh, redis = _patched(box, fake_redis)
+    with ssh, redis:
+        await memprep.prepare_host_memory(SPARK, watermark_kb=LOWERED_WATERMARK, slug="x")
+        with patch.object(fake_redis, "get", new=AsyncMock(side_effect=ConnectionError)):
+            assert await memprep.load_host_handles(SPARK) == []
+
+
 # ── Wiring into the start path ───────────────────────────────────────────────
 
 SPARKINFER = {

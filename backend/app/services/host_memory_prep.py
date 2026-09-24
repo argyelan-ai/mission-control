@@ -586,6 +586,23 @@ async def prepare_host_memory(
     )
 
     handle.original_watermark_kb = await read_watermark_kb(host)
+    # The box may already be mid-prep — this runtime restarted before its
+    # engine ever served, or another runtime on the same box is still
+    # loading. Then the value just read is THEIR lowered watermark, not the
+    # box's own. Recording it as "original" is how a lowered watermark gets
+    # written back as the final state and stays forever (whoever finishes
+    # last restores it). So the box's true original is carried over from the
+    # outstanding handle, and the current value counts as already lowered.
+    # Read BEFORE this handle is stored: on a restart the outstanding handle
+    # lives under the very key this one is about to overwrite.
+    inherited = await _outstanding_original_watermark(host)
+    if (
+        inherited is not None
+        and handle.original_watermark_kb is not None
+        and handle.original_watermark_kb < inherited
+    ):
+        handle.lowered_to_kb = handle.original_watermark_kb
+        handle.original_watermark_kb = inherited
     handle.mem_free_before_kb = await read_mem_free_kb(host)
     await _store_handle(handle)
 
@@ -872,19 +889,36 @@ async def load_host_handles(host: ResolvedHost | None) -> list[PrepHandle]:
     prefix of another one (``192.0.2.1`` vs ``192.0.2.10``) cannot bleed in.
     """
     box = host_key(host)
+    handles: list[PrepHandle] = []
     try:
         redis = await get_redis()
-        keys = [k async for k in redis.scan_iter(match="mc:host-memprep:*")]
-    except Exception as exc:  # noqa: BLE001
+        keys = [k async for k in redis.scan_iter(match=RedisKeys.host_mem_prep("*"))]
+        for key in keys:
+            raw = await redis.get(key)
+            handle = PrepHandle.from_json(raw) if raw else None
+            if handle is not None and handle.host_key == box:
+                handles.append(handle)
+    except Exception as exc:  # noqa: BLE001 — same contract as load_handle
         logger.debug("memprep: handle scan failed: %s", exc)
         return []
-    handles: list[PrepHandle] = []
-    for key in keys:
-        raw = await redis.get(key)
-        handle = PrepHandle.from_json(raw) if raw else None
-        if handle is not None and handle.host_key == box:
-            handles.append(handle)
     return handles
+
+
+async def _outstanding_original_watermark(host: ResolvedHost | None) -> int | None:
+    """The box's true pre-prep watermark, if a prep that LOWERED it is still
+    outstanding — ``None`` otherwise.
+
+    Only handles that actually lowered the value are trusted: their
+    ``original_watermark_kb`` was read before any change. With several, the
+    highest wins — lowering only ever moves the value down, so the highest
+    recorded original is the one read before the first prep touched it.
+    """
+    originals = [
+        h.original_watermark_kb
+        for h in await load_host_handles(host)
+        if h.lowered_to_kb is not None and h.original_watermark_kb is not None
+    ]
+    return max(originals) if originals else None
 
 
 # ── Orphan repair ────────────────────────────────────────────────────────────
