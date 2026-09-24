@@ -215,11 +215,11 @@ async def test_started_mark_cannot_be_removed(auth_client, heads_root, make_boar
 async def test_config_roundtrip_and_validation(auth_client, heads_root):
     resp = await auth_client.put("/api/v1/night-shift/config",
                                  json={"enabled": True, "start": "23:30", "end": "05:00",
-                                       "timezone": "Europe/Zurich", "cloud_share": 50})
+                                       "timezone": "Europe/Berlin", "cloud_share": 50})
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert (body["enabled"], body["start"], body["end"], body["timezone"], body["cloud_share"]) == (
-        True, "23:30", "05:00", "Europe/Zurich", 50)
+        True, "23:30", "05:00", "Europe/Berlin", 50)
     assert set(body["window"]) == {"night", "starts_at", "ends_at"}
 
     bad = await auth_client.put("/api/v1/night-shift/config", json={"start": "25:00", "timezone": "Nowhere/City"})

@@ -45,10 +45,10 @@ def test_window_same_day():
 
 
 def test_window_is_read_in_the_operator_zone():
-    cfg = NightConfig(start="22:00", end="06:00", timezone="Europe/Zurich")
-    # 20:30 UTC = 22:30 in Zurich (summer time, UTC+2) → inside
+    cfg = NightConfig(start="22:00", end="06:00", timezone="Europe/Berlin")
+    # 20:30 UTC = 22:30 in Berlin (summer time, UTC+2) → inside
     assert night.current_window(at("2026-09-24T20:30:00"), cfg).night == "2026-09-24"
-    # 21:30 UTC in winter = 22:30 Zurich (UTC+1) → inside; 20:30 UTC → outside
+    # 21:30 UTC in winter = 22:30 Berlin (UTC+1) → inside; 20:30 UTC → outside
     assert night.current_window(at("2026-12-01T21:30:00"), cfg).night == "2026-12-01"
     assert night.current_window(at("2026-12-01T20:30:00"), cfg) is None
     w = night.window_of_night("2026-09-24", cfg)
@@ -73,7 +73,7 @@ def test_next_window():
     ],
 )
 def test_validate_config(over, bad):
-    base = {"enabled": True, "start": "22:00", "end": "06:00", "timezone": "Europe/Zurich", "cloud_share": 30}
+    base = {"enabled": True, "start": "22:00", "end": "06:00", "timezone": "Europe/Berlin", "cloud_share": 30}
     assert night.validate_config(NightConfig(**{**base, **over})) == bad
 
 
