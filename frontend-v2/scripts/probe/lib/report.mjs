@@ -99,7 +99,7 @@ export function renderMarkdown(result) {
   if (result.theme) L.push(`- Theme: ${result.theme} (forced via local storage before the first paint)`);
   if (result.contrast) {
     const sum = (k) => result.pages.reduce((a, p) => a + (p.counts[k] || 0), 0);
-    L.push(`- Contrast (WCAG AA text): ${sum("contrastChecked")} text element(s) checked, ${sum("contrastUncertain")} skipped (background image/gradient)`);
+    L.push(`- Contrast (WCAG AA text): ${sum("contrastChecked")} text element(s) checked, ${sum("contrastUncertain")} skipped (background image/gradient, endless animation)`);
   }
   L.push(`- **Write lock:** ${result.writes.blocked} write request(s) blocked, **${result.writes.passed} passed**, ${result.writes.websocketsRefused} WebSocket(s) refused`);
   if (result.skippedRoutes.length) {

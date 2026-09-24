@@ -115,8 +115,11 @@ composites them like the browser does (an ancestor's opacity fades its
 background and the text together; a white canvas at the bottom) and computes
 the WCAG ratio. Disabled controls are exempt, as in WCAG. Its limits: what
 really sits behind a positioned element is not always its DOM ancestor, text
-on a background image or gradient is skipped and counted ("skipped" in the
-report header), and canvas drawings (the memory graph) are not text.
+on a background image or gradient and text under an endless animation (a
+pulsing "Loading…") are skipped and counted ("skipped" in the report header),
+text faded below 15 % opacity counts as hidden, not dim, and canvas drawings
+(the memory graph) are not text. Before measuring, the probe waits up to 2 s
+for running fades/transitions to finish.
 
 7. **Output** in `--out`: `report.md` (opened X of Y per page, findings with
    screenshot paths, guarded controls, blocked writes), `probe.json` (all raw
