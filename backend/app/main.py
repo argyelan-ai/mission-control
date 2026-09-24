@@ -97,6 +97,7 @@ from app.routers import (
     repos,
     run_record,
     heads,
+    night_shift,
     runtimes,
     runtime_schedules,
     playbooks,
@@ -408,6 +409,7 @@ app.include_router(boards.router)
 app.include_router(tasks.router)
 app.include_router(run_record.router)  # /api/v1/tasks/{id}/run-record — Laufakte (Lauf 5, kein Board im Pfad)
 app.include_router(heads.router)  # /api/v1/heads — Head launcher (docs/specs/head-launcher.md), behind heads_enabled
+app.include_router(night_shift.router)  # /api/v1/night-shift — run marked tasks as heads tonight (ROADMAP E2), behind heads_enabled
 app.include_router(files.router)  # /api/v1/files — global Files browser (portable, sandboxed)
 app.include_router(agents.router)
 app.include_router(agent_templates.router)
