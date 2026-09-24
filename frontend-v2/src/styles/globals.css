@@ -346,6 +346,72 @@
 }
 
 /* ============================================================
+   Light mode — OPTION, not default (ADR-087)
+   Dunkel bleibt Standard und Charakter. Hell = Papiergrund, weisse
+   Flächen, Tinte als der eine (achromatische) Akzent; Status-Töne
+   abgedunkelt, damit sie auf JEDER Fläche AA (≥4.5:1) schaffen
+   (theme.contrast.test rechnet das aus diesen Werten nach).
+   Nur Basis-Tokens stehen hier — Aliase (P2, Status-Kurznamen,
+   Charts, subtle/border-Mischungen) folgen über var() von selbst.
+   Terminal + Code (--color-term*) bleiben bewusst dunkel.
+   ============================================================ */
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  /* ---- Backgrounds: Papier → Weiss (gehoben) → getönt (Hover) ---- */
+  --color-bg-deep: #f3f1eb;
+  --color-bg-base: #f7f5f0;
+  --color-bg-surface: #ffffff;
+  --color-bg-elevated: #ece9e1;
+  --color-bg-hover: #e3dfd5;
+
+  /* ---- Text (min. Kontrast über alle 5 Flächen) ---- */
+  --color-text-primary: #1b1a17;   /* 13.08 */
+  --color-text-secondary: #4e4b44; /*  6.54 */
+  --color-text-muted: #5f5b53;     /*  5.08 */
+  --color-text-dim: #8f8b80;       /*  2.56 — Deko/Icons, nie Text */
+
+  /* ---- Borders: Tinte statt Grau-Weiss ---- */
+  --color-border-subtle: rgba(27, 26, 23, 0.05);
+  --color-border: rgba(27, 26, 23, 0.1);
+  --color-border-strong: rgba(27, 26, 23, 0.16);
+  --color-border-accent: rgba(27, 26, 23, 0.3);
+
+  /* ---- Accent: Tinte (achromatisch), Text darauf weiss ---- */
+  --color-accent: #1b1a17;
+  --color-accent-light: #000000; /* Hover = noch dunkler */
+  --color-accent-deep: #4a473f;
+  --color-accent-subtle: rgba(27, 26, 23, 0.08);
+  --color-on-accent: #ffffff;
+
+  /* ---- Status (min. Kontrast über alle 5 Flächen) ---- */
+  --color-status-online: #2a6e37;  /* 4.66 */
+  --color-status-warning: #7a5a1f; /* 4.77 */
+  --color-status-error: #a8332e;   /* 4.97 */
+  --color-status-info: #2a5a92;    /* 5.30 */
+  --color-status-offline: #c9c5bb;
+  --color-status-warning-text: #7a5a1f;
+
+  /* ---- Overlays ---- */
+  --color-overlay: #1b1a17;
+  --color-scrim: #1b1a17;
+  --color-graph-edge: rgba(27, 26, 23, 0.18);
+  --color-graph-edge-hover: rgba(27, 26, 23, 0.55);
+  --color-graph-edge-filtered: rgba(27, 26, 23, 0.03);
+  --color-graph-edge-faded: rgba(27, 26, 23, 0.05);
+
+  /* ---- P2-Werte ohne Alias ---- */
+  --color-p2-line2: rgba(27, 26, 23, 0.07);
+  --color-p2-glass: rgba(255, 255, 255, 0.72);
+  --color-p2-glass-line: rgba(27, 26, 23, 0.1);
+
+  /* ---- Schatten: weich und warm statt tiefschwarz ---- */
+  --shadow-card: 0 1px 2px rgba(27, 26, 23, 0.04), 0 8px 24px rgba(27, 26, 23, 0.06);
+  --shadow-elevated: 0 2px 6px rgba(27, 26, 23, 0.06), 0 16px 40px rgba(27, 26, 23, 0.1);
+}
+
+/* ============================================================
    Base Styles
    ============================================================ */
 
@@ -389,7 +455,7 @@ body {
    blue, the one chromatic colour this palette does not contain. Accent tint
    with the normal text colour kept on top, so selected code stays readable. */
 ::selection {
-  background-color: rgba(235, 232, 222, 0.22);
+  background-color: color-mix(in srgb, var(--color-accent) 22%, transparent);
   color: var(--color-text-primary);
 }
 
