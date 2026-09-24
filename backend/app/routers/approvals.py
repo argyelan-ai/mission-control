@@ -1,6 +1,6 @@
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Form, HTTPException
 from fastapi.responses import HTMLResponse
@@ -237,7 +237,7 @@ async def _handle_x_post_resolution(
         if pipeline is not None:
             pipeline.published_url = result["url"]
             pipeline.published_platform = "twitter"
-            pipeline.published_at = datetime.utcnow()
+            pipeline.published_at = datetime.now(timezone.utc)
             pipeline.status = "published"
             session.add(pipeline)
             await session.commit()

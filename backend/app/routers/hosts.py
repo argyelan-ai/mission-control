@@ -21,7 +21,7 @@ implementation in this codebase.
 import json
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -564,7 +564,7 @@ async def update_host(
             raise HTTPException(status_code=409, detail=f"Host slug '{new_slug}' already exists")
     for k, v in changes.items():
         setattr(host, k, v)
-    host.updated_at = datetime.utcnow()
+    host.updated_at = datetime.now(timezone.utc)
     session.add(host)
     await session.commit()
     await session.refresh(host)

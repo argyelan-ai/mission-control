@@ -13,6 +13,7 @@ Each storyboard has a 1:1 relationship with a content_pipeline row.
 """
 import uuid
 from datetime import datetime
+from app.utils import utcnow
 from typing import Any
 
 from sqlalchemy import JSON, DateTime, text
@@ -117,13 +118,13 @@ class Storyboard(SQLModel, table=True):
     )
 
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False, server_default=text("NOW()")),
     )
     updated_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(
             DateTime(timezone=True), nullable=False,
-            server_default=text("NOW()"), onupdate=datetime.utcnow,
+            server_default=text("NOW()"), onupdate=utcnow,
         ),
     )

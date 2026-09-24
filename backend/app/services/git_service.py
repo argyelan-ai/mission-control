@@ -6,6 +6,7 @@ and Review-Handoff.
 """
 
 import asyncio
+from datetime import datetime, timezone
 import hashlib
 import logging
 import os
@@ -347,7 +348,7 @@ class GitService:
         briefing_content = f"""# {project_slug} — Project Briefing
 
 **Status:** active
-**Created:** {__import__('datetime').datetime.utcnow().strftime('%Y-%m-%d')}
+**Created:** {__import__('datetime').datetime.now(timezone.utc).strftime('%Y-%m-%d')}
 
 ## Overview
 

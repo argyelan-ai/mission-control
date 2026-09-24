@@ -16,6 +16,7 @@ agent, silently swallowing delivery. Two readers, two meanings, two columns.
 """
 import uuid
 from datetime import datetime
+from app.utils import utcnow
 
 from sqlalchemy import DateTime, text
 from sqlmodel import Column, Field, SQLModel
@@ -29,10 +30,10 @@ class AgentTaskCommentCursor(SQLModel, table=True):
     last_seen_comment_id: uuid.UUID | None = None
     last_signalled_comment_id: uuid.UUID | None = None
     updated_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(
             DateTime(timezone=True),
             server_default=text("CURRENT_TIMESTAMP"),
-            onupdate=datetime.utcnow,
+            onupdate=utcnow,
         ),
     )

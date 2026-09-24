@@ -20,7 +20,7 @@ Netz laufen. `TelegramForumClient` ist die produktive Implementierung.
 """
 import logging
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
 import httpx
@@ -396,7 +396,7 @@ async def handle_task_done(
         await mark_topic_done(session, thread, client)
 
         if thread.closed_at is None:
-            thread.closed_at = datetime.utcnow()
+            thread.closed_at = datetime.now(timezone.utc)
             session.add(thread)
             await session.commit()
     except Exception as e:  # noqa: BLE001 — nie den Task-Abschluss kippen
@@ -418,7 +418,7 @@ async def purge_old_topics(
 
     Das Allgemein-Thema (Sentinel 0) wird nie geloescht. Ein Loesch-Fehler laesst
     die ID stehen, damit ein spaeterer Lauf es erneut versucht."""
-    cutoff = datetime.utcnow() - timedelta(days=older_than_days)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
     threads = (
         await session.exec(
             select(Thread).where(

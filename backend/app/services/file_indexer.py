@@ -19,7 +19,7 @@ import logging
 import mimetypes
 import os
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlmodel import select
@@ -126,7 +126,7 @@ async def _upsert(
         existing.task_id = task_id
     if deliverable_id is not None:
         existing.deliverable_id = deliverable_id
-    existing.indexed_at = datetime.utcnow()
+    existing.indexed_at = datetime.now(timezone.utc)
     return existing
 
 

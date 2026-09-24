@@ -1,5 +1,6 @@
 """News system models for Mission Control."""
 from datetime import datetime
+from app.utils import utcnow
 from typing import Optional, List
 from sqlmodel import SQLModel, Field, Relationship
 import uuid as uuid_module
@@ -25,8 +26,8 @@ class NewsSource(SQLModel, table=True):
         default=None, foreign_key="boards.id", nullable=True, index=True
     )
 
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
 
     # Relationships
     articles: List["NewsArticle"] = Relationship(back_populates="source")
@@ -45,7 +46,7 @@ class NewsArticle(SQLModel, table=True):
     category: str = Field(default="general")  # llm, agent, multimodal, research, business, tools
     tags: List[str] = Field(default_factory=list, sa_column=Column(JSON))
     published_at: Optional[datetime] = None
-    scraped_at: datetime = Field(default_factory=datetime.utcnow)
+    scraped_at: datetime = Field(default_factory=utcnow)
     image_url: Optional[str] = None
     is_featured: bool = Field(default=False)
     is_posted: bool = Field(default=False)
@@ -105,7 +106,7 @@ class NewsPostSchedule(SQLModel, table=True):
     posted_at: Optional[datetime] = None
     error_log: Optional[str] = None
     external_post_id: Optional[str] = None  # Tweet ID, LinkedIn post ID
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utcnow)
 
     # Relationships
     article: Optional[NewsArticle] = Relationship(back_populates="schedules")
