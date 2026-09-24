@@ -110,7 +110,7 @@ HOLD_REASON = "night shift"
 
 
 @dataclass
-class Mark:
+class NightMark:
     task_id: str
     harness: str
     runtime_slug: str
@@ -131,7 +131,7 @@ class Mark:
     notified: list[str] = field(default_factory=list)
 
     @classmethod
-    def from_dict(cls, data: dict) -> Mark:
+    def from_dict(cls, data: dict) -> NightMark:
         names = {f.name for f in fields(cls)}
         return cls(**{k: v for k, v in data.items() if k in names})
 
@@ -159,7 +159,7 @@ def _atomic_write(path: Path, data: dict) -> None:
     tmp.replace(path)
 
 
-def load_mark(task_id: str) -> Mark | None:
+def load_mark(task_id: str) -> NightMark | None:
     try:
         data = json.loads(_mark_path(task_id).read_text())
     except (OSError, ValueError):
@@ -167,12 +167,12 @@ def load_mark(task_id: str) -> Mark | None:
     if not isinstance(data, dict) or data.get("task_id") != str(uuid.UUID(str(task_id))):
         return None
     try:
-        return Mark.from_dict(data)
+        return NightMark.from_dict(data)
     except TypeError:
         return None
 
 
-def list_marks() -> list[Mark]:
+def list_marks() -> list[NightMark]:
     folder = marks_dir()
     if not folder.is_dir():
         return []
@@ -185,7 +185,7 @@ def list_marks() -> list[Mark]:
     return out
 
 
-def save_mark(mark: Mark) -> None:
+def save_mark(mark: NightMark) -> None:
     _atomic_write(_mark_path(mark.task_id), asdict(mark))
 
 

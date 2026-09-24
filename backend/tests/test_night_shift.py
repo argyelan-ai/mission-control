@@ -19,7 +19,7 @@ from app.models.task import Task, TaskEvent
 from app.services import runtime_protocols as rp
 from app.services.heads import engine, night, night_store
 from app.services.heads.night_shift import tick
-from app.services.heads.night_store import HOLD_REASON, Mark
+from app.services.heads.night_store import HOLD_REASON, NightMark
 from tests.conftest import test_engine
 from tests.heads_backend_helpers import BOX, heads_root, make_run  # noqa: F401
 
@@ -93,8 +93,8 @@ def _window_around_now(now: datetime) -> dict:
     return {"start": _hhmm(now - timedelta(hours=1)), "end": _hhmm(now + timedelta(hours=2))}
 
 
-def _mark(task: Task, *, order: float, harness="omp", runtime="box-slot", locality="local", **over) -> Mark:
-    m = Mark(task_id=str(task.id), harness=harness, runtime_slug=runtime, locality=locality, marked_at=order, **over)
+def _mark(task: Task, *, order: float, harness="omp", runtime="box-slot", locality="local", **over) -> NightMark:
+    m = NightMark(task_id=str(task.id), harness=harness, runtime_slug=runtime, locality=locality, marked_at=order, **over)
     night_store.save_mark(m)
     return m
 

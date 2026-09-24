@@ -36,7 +36,7 @@ from app.models.repo import Repo
 from app.models.task import Task
 from app.services.heads import box_guard, files, night, night_store, pairs
 from app.services.heads.night import CLOUD_LANE, Candidate, NightConfig
-from app.services.heads.night_store import Mark
+from app.services.heads.night_store import NightMark
 from app.services.heads.start import HeadStartError, start_head
 from app.services.heads.state import ACTIVE_STATES, derive_for_run
 
@@ -88,7 +88,7 @@ def _run_facts(run, now: float) -> dict:
     }
 
 
-def _report_entry(m: Mark, task: Task, runs: dict, now_ts: float) -> dict:
+def _report_entry(m: NightMark, task: Task, runs: dict, now_ts: float) -> dict:
     entry = {"task_id": m.task_id, "title": task.title, "started": m.run_id is not None,
              "harness": m.harness, "runtime_slug": m.runtime_slug, "run_id": m.run_id}
     run = runs.get(m.run_id) if m.run_id else None
@@ -102,7 +102,7 @@ def _report_entry(m: Mark, task: Task, runs: dict, now_ts: float) -> dict:
     return entry
 
 
-async def _tasks(session: AsyncSession, marks: list[Mark]) -> dict[str, Task]:
+async def _tasks(session: AsyncSession, marks: list[NightMark]) -> dict[str, Task]:
     ids = []
     for m in marks:
         try:
@@ -131,7 +131,7 @@ async def tick(session: AsyncSession, now: datetime | None = None, *, send=None)
     runs = {r.run_id: r for r in files.list_runs()}
 
     # 1. Tidy
-    kept: list[Mark] = []
+    kept: list[NightMark] = []
     for m in marks:
         task = tasks.get(m.task_id)
         if task is None or (m.run_id is None and task.status in FINISHED_TASK_STATUSES):
@@ -204,7 +204,7 @@ async def tick(session: AsyncSession, now: datetime | None = None, *, send=None)
     return out
 
 
-async def _start_next(session: AsyncSession, cfg: NightConfig, window: night.Window, marks: list[Mark],
+async def _start_next(session: AsyncSession, cfg: NightConfig, window: night.Window, marks: list[NightMark],
                       tasks: dict[str, Task], runs: dict, now_ts: float) -> str | None:
     queued = [m for m in marks if m.run_id is None]
     for m in queued:
@@ -224,7 +224,7 @@ async def _start_next(session: AsyncSession, cfg: NightConfig, window: night.Win
     listing = await pairs.list_pairs(session, occupancy)
     by_key = {(p["harness"], p["runtime_slug"]): p for p in listing["pairs"]}
     candidates: list[Candidate] = []
-    by_task: dict[str, Mark] = {}
+    by_task: dict[str, NightMark] = {}
     for m in queued:
         if m.gave_up:
             continue
@@ -262,7 +262,7 @@ async def _start_next(session: AsyncSession, cfg: NightConfig, window: night.Win
     return None
 
 
-def _note(mark: Mark, code: str, *, permanent: bool = False) -> None:
+def _note(mark: NightMark, code: str, *, permanent: bool = False) -> None:
     changed = mark.last_error != code or (permanent and mark.gave_up != code)
     mark.last_error = code
     if permanent:

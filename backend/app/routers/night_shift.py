@@ -29,7 +29,7 @@ from app.database import get_session
 from app.models.task import Task
 from app.routers.heads import run_view
 from app.services.heads import box_guard, files, night, night_store, pairs
-from app.services.heads.night_store import HOLD_REASON, Mark
+from app.services.heads.night_store import HOLD_REASON, NightMark
 from app.services.heads.start import active_run_for_task
 
 router = APIRouter(prefix="/api/v1/night-shift", tags=["night-shift"])
@@ -64,7 +64,7 @@ async def _config_view(session: AsyncSession) -> dict:
     }
 
 
-def mark_view(mark: Mark, task: Task, runs: dict, now: float) -> dict:
+def mark_view(mark: NightMark, task: Task, runs: dict, now: float) -> dict:
     run = runs.get(mark.run_id) if mark.run_id else None
     if mark.run_id:
         state = "started"
@@ -197,7 +197,7 @@ async def put_task_mark(
         mark.last_error, mark.gave_up = None, None
     else:
         uid = getattr(user, "id", None)
-        mark = Mark(task_id=str(task_id), harness=body.harness, runtime_slug=body.runtime_slug,
+        mark = NightMark(task_id=str(task_id), harness=body.harness, runtime_slug=body.runtime_slug,
                     locality=pair["locality"], marked_at=time.time(), marked_by=str(uid) if uid else None)
     # An inbox card waits for the night: hold it so nothing else picks it up.
     if task.status == "inbox" and task.run_control is None:
