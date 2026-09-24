@@ -168,6 +168,43 @@ def test_rebuild_handles_invalid_frontmatter(index, tmp_path, capsys):
     assert stats["indexed"] == 0
 
 
+def test_rebuild_counts_frontmatterless_md_as_skipped_not_error(index, tmp_path):
+    """Plain .md files without a frontmatter block (README, scratch notes) are
+    not notes and not broken — the rebuild must report them as skipped, not
+    inflate the error counter."""
+    _make_note(tmp_path, "agents/sparky/a.md", id="1", type="lesson",
+               agent="sparky", date="2026-05-14T15:00:00Z")
+    readme = tmp_path / "README.md"
+    readme.write_text("# Vault\n\nPlain markdown, no frontmatter.\n")
+
+    stats = index.rebuild_from_vault()
+    assert stats["indexed"] == 1
+    assert stats["skipped"] == 1  # README.md — no frontmatter, not a note
+    assert stats["errors"] == 0
+
+
+def test_rebuild_accepts_date_only_frontmatter(index, tmp_path):
+    """Unquoted YAML date `date: 2026-05-16` parses to datetime.date and is a
+    valid ISO-8601 date — it must index, not count as an error."""
+    note = tmp_path / "agents" / "sparky" / "d.md"
+    note.parent.mkdir(parents=True, exist_ok=True)
+    note.write_text(
+        "---\n"
+        "id: d\n"
+        "type: note\n"
+        "agent: sparky\n"
+        "date: 2026-05-16\n"
+        "---\n"
+        "body\n"
+    )
+
+    stats = index.rebuild_from_vault()
+    assert stats["indexed"] == 1
+    assert stats["errors"] == 0
+    paths = {row["path"] for row in index.list_all()}
+    assert "agents/sparky/d.md" in paths
+
+
 def test_index_extracts_title_from_frontmatter(index, tmp_path):
     """list_all() must return the frontmatter title so build_graph can label nodes."""
     file = _make_note(
