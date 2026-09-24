@@ -175,8 +175,12 @@ def parse_trash_id(trash_id: str) -> tuple[str, str, str]:
 
 
 def deleted_at_iso(ts: str) -> str:
-    """ISO-8601 of the ``<ts>`` segment (``20260618-120000`` → ``2026-06-18T12:00:00``)."""
-    return datetime.strptime(ts, "%Y%m%d-%H%M%S").isoformat()
+    """ISO-8601 of the ``<ts>`` segment (``20260618-120000`` → ``2026-06-18T12:00:00+00:00``).
+
+    Stamps are UTC since the tz-aware sweep (timestamp() uses
+    datetime.now(timezone.utc)); the offset is added explicitly so the
+    string is unambiguous."""
+    return datetime.strptime(ts, "%Y%m%d-%H%M%S").replace(tzinfo=timezone.utc).isoformat()
 
 
 def _resolve_in_trash(trash_id: str) -> Path:
