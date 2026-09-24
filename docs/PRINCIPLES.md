@@ -5,8 +5,9 @@ lives in the linked decision records. When a rule and the code disagree, the
 code is the bug — or the rule needs a new ADR, not a quiet exception.
 
 Where the project stands on these rules: [ROADMAP.md](ROADMAP.md).
-The decision behind the current direction:
-[ADR-085 — Head per job](decisions/085-head-per-job.md).
+The decisions behind the current direction:
+[ADR-085 — Head per job](decisions/085-head-per-job.md), amended by
+[ADR-086 — Harness and runtime freely switchable, local first](decisions/086-harness-runtime-cross-switch.md).
 
 ---
 
@@ -30,8 +31,9 @@ their knowledge, their hardware and their evidence.
    (ADR-085 §1).
 2. **MC becomes small.** MC keeps rules and procedures (as files), the vault,
    the GPU box manager, metrics and the cross-cutting core (API, DB, auth,
-   scheduler). Job start, questions and overview come from the coding CLI
-   (ADR-085 §2).
+   scheduler). Questions and overview may come from the coding CLI, but a
+   neutral start and status path for every harness lives in MC
+   (ADR-085 §2, ADR-086 decision 5).
 3. **Configure before building.** Before any new MC code: at most three
    evenings of trying what already exists, with zero MC code. Only a measured
    gap gets built (ADR-085 §3).
@@ -41,6 +43,13 @@ their knowledge, their hardware and their evidence.
 5. **Reversible first.** Persistent agents are paused, not deleted. Code is
    deleted only after two weeks of measured non-use, in themed PRs
    (ADR-085 §5).
+6. **Harness × runtime, freely and cross-wise.** Every head is a pair of
+   harness and runtime, chosen per job and changeable at any time, within the
+   pairs `harness_compat.py` allows — the one source of truth for what works
+   (ADR-086 decisions 1–2).
+7. **Local first.** Local runtimes are pre-selected wherever they are good
+   enough; the cloud is the fallback, and the run record says which pair ran
+   and why (ADR-086 decision 3).
 
 ## 3 · Build rules for a fast-moving AI market
 
@@ -54,12 +63,16 @@ their knowledge, their hardware and their evidence.
    OpenAI-compatible API to local engines, CLI calls to harnesses. No private
    protocol where a standard exists.
 3. **Swap test.** Before adopting a vendor feature, answer: what happens if
-   it changes or disappears tomorrow? Procedure and data must stay portable;
-   the operator surface may not be, so every vendor-only feature needs a
-   neutral fallback (heartbeat and status in the run record, notices via chat
-   output) (ADR-085 §6 rule 2).
+   it changes or disappears tomorrow? Procedure, data **and** the operator
+   surface must stay portable: every vendor-only feature needs a neutral path
+   in MC that works for all harnesses (start, status, heartbeat, stop,
+   restart with another pair). The procedure core lives in `AGENTS.md` and
+   the prompt, not only in a vendor skill (ADR-086 decisions 4–5, amends
+   ADR-085 §6 rule 2).
 4. **The backend knows no harness details** — only job, run record and box
-   status (ADR-085 §6 rule 3).
+   status. The one exception is the existing harness layer
+   (`harness_compat.py`, `harness_catalog.py`); start commands live there,
+   nowhere else (ADR-085 §6 rule 3, ADR-086).
 5. **At most one new third-party component per quarter, and only if it
    replaces something.** Versions pinned (ADR-085 §6 rule 4).
 6. **Crutches carry an expiry.** Every workaround names the metric that ends
@@ -177,12 +190,16 @@ the rules every UI change is checked against. Visual rules:
 ## 8 · What MC deliberately does NOT do
 
 1. No own control-room UI, job page or coordinator before stop 2 — the
-   coding-CLI vendor is shipping one (ADR-085 §7, decision 5).
+   coding-CLI vendor is shipping one (ADR-085 §7, decision 5). The head
+   launcher on the existing task form and task detail (start, status, stop,
+   restart with another pair) is not a control room (ADR-086 decision 5).
 2. No persistent "heads" and no new long-running lead ("lead agent 2.0").
 3. No own harness driver, agent loop or MCP server for heads — a CLI script is
    enough; an admin token is never handed to a head.
 4. No new task columns, statuses or "head" run type; the task core is frozen.
-5. No model gateway or proxy in front of the coding CLI.
+5. No model gateway or proxy in front of the coding CLI — so Claude Code on
+   a local model stays unavailable until an own ADR decides otherwise; the
+   local route is OpenClaude or omp (ADR-086 decision 6).
 6. No box-manager features beyond the switch lock (refuse a model switch
    while the engine reports running requests).
 7. No deletes without two weeks of measured non-use; agents are paused,
@@ -191,8 +208,10 @@ the rules every UI change is checked against. Visual rules:
    the currency.
 9. No zoo of third-party components; no second toast system, no new design
    language.
-10. No headless print-mode or SDK scripting for automatic heads — they use
-    the coding CLI's official interactive or background modes.
+10. No headless print-mode or SDK scripting for automatic Claude heads —
+    they use the coding CLI's official interactive or background modes. Other
+    harnesses use their own official non-interactive mode, which may be a
+    print mode (ADR-086).
 11. No long-range plan as a decision — the operator decides at the stop
     points in [ROADMAP.md](ROADMAP.md).
 
