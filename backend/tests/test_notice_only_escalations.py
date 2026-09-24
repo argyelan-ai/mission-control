@@ -469,6 +469,51 @@ async def test_dispatch_escalation_notice_path_log_says_notice_not_approval(
 
 
 @pytest.mark.asyncio
+async def test_dispatch_escalation_approval_path_log_says_approval_not_notice(
+    fake_redis, make_board, make_agent, make_task, caplog,
+):
+    """With notice_only_escalations_enabled OFF the escalation creates a real
+    Approval — the ACK-timeout log must say so, not claim a notice was raised."""
+    import logging
+
+    from app.config import settings
+    from app.models.task import Task
+    from app.services.task_runner import task_runner
+    from sqlmodel.ext.asyncio.session import AsyncSession
+    from tests.conftest import test_engine
+
+    board = await make_board(name="LogB", slug=f"log-b-{uuid.uuid4().hex[:8]}")
+    agent = await make_agent(
+        name="WorkerG", board_id=board.id, agent_runtime="cli-bridge",
+        scopes=["tasks:read", "tasks:write", "heartbeat"],
+    )
+    task = await make_task(
+        board_id=board.id, status="inbox",
+        assigned_agent_id=agent.id, dispatched_at=utcnow() - timedelta(minutes=20),
+        dispatch_attempt_id=str(uuid.uuid4()),
+    )
+
+    with patch.object(settings, "notice_only_escalations_enabled", False), \
+         patch("app.services.operator_approvals.send_approval",
+               new_callable=AsyncMock), \
+         patch("app.services.activity.broadcast", new_callable=AsyncMock), \
+         caplog.at_level(logging.WARNING, logger="mc.task_runner"):
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            await task_runner._handle_ack_timeout(
+                s, await s.get(Task, task.id), agent, utcnow(), fake_redis,
+            )
+
+    warning_text = " ".join(r.getMessage() for r in caplog.records)
+    assert "approval created" in warning_text.lower(), (
+        f"ACK-timeout approval branch must log that an approval was created, "
+        f"got: {warning_text!r}"
+    )
+    assert "notice" not in warning_text.lower(), (
+        f"approval branch must not claim a notice was raised: {warning_text!r}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_dependency_zombie_notice_path_still_sets_dedup_marker(
     fake_redis, make_board, make_agent, make_task,
 ):
