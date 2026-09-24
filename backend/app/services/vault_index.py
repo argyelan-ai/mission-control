@@ -15,9 +15,29 @@ from typing import Any, Iterator
 
 import frontmatter
 
+from app.helpers.vault_constants import EXCLUDED_PREFIXES as _SHARED_EXCLUDED_PREFIXES
 from app.helpers.vault_frontmatter import parse_frontmatter, validate_frontmatter, FrontmatterError
 
 logger = logging.getLogger("mc.vault_index")
+
+
+def _has_frontmatter_block(path: Path) -> bool:
+    """True if the first non-blank line is a '---' frontmatter delimiter.
+
+    Tolerant on purpose: a UTF-8 BOM, CRLF line endings, leading blank lines
+    or trailing spaces on the delimiter still mean "the author wrote a
+    frontmatter block". Such a file must be reported as an error when it does
+    not parse into valid metadata, never silently skipped.
+    """
+    try:
+        with path.open("r", encoding="utf-8-sig", errors="replace") as fh:
+            for line in fh:
+                stripped = line.strip()
+                if stripped:
+                    return stripped == "---"
+    except OSError:
+        return False
+    return False
 
 
 class VaultIndex:
@@ -228,14 +248,22 @@ class VaultIndex:
                 refs.append(d)
         return refs
 
-    EXCLUDED_PREFIXES = ("_inbox/", "_conflicts/", "_rejected/", "_lint/", "_trash/", ".git/", ".obsidian/")
+    # Same list as the watcher and the linter (vault_constants) so the
+    # rebuild never reports files the rest of the vault stack ignores by
+    # design (e.g. deliverable copies under attachments/).
+    EXCLUDED_PREFIXES = _SHARED_EXCLUDED_PREFIXES
 
     def rebuild_from_vault(self) -> dict[str, int]:
         """Walk vault, re-index all .md files. Idempotent.
 
         Returns stats: {scanned, indexed, skipped, errors}.
-        Files in _inbox/, _conflicts/, _rejected/, _lint/, .git/, .obsidian/
-        are excluded.
+        Files under the shared vault_constants.EXCLUDED_PREFIXES (_inbox/,
+        _conflicts/, _rejected/, _lint/, _trash/, attachments/, .git/,
+        .obsidian/) are excluded ("skipped"), as are plain .md files without a
+        frontmatter block (README, scratch notes — not notes by design).
+        "errors" counts only files whose frontmatter is present but broken
+        (YAML parse error or validation failure); the cause is logged per
+        file at WARNING level.
         """
         with self._lock:
             stats = {"scanned": 0, "indexed": 0, "skipped": 0, "errors": 0}
@@ -252,10 +280,19 @@ class VaultIndex:
                 stats["scanned"] += 1
                 try:
                     post = parse_frontmatter(md_file)
+                    if not post.metadata and not _has_frontmatter_block(md_file):
+                        # No frontmatter at all — plain markdown (README,
+                        # scratch notes). Not a note, not broken.
+                        stats["skipped"] += 1
+                        continue
+                    # Empty-but-present frontmatter blocks fall through to
+                    # validate_frontmatter and count as errors (note-intent
+                    # that lost its fields, e.g. mid-edit).
                     validate_frontmatter(post.metadata)
                     self._upsert_locked(md_file, post)  # lock already held — no deadlock
                     stats["indexed"] += 1
-                except FrontmatterError:
+                except FrontmatterError as exc:
+                    logger.warning("vault_index: rebuild error in %s: %s", rel, exc)
                     stats["errors"] += 1
                     continue
 

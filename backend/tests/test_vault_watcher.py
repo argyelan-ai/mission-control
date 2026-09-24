@@ -214,3 +214,32 @@ class TestCommitTimerWiring:
 
         services["git"].stage.assert_called_with(note)  # handler finished
         assert flush_done == ["shutdown"]  # flush ran AFTER the drain
+
+
+@pytest.mark.asyncio
+async def test_date_only_note_is_accepted_not_quarantined(watcher, tmp_path, services):
+    """Behaviour change (documented): an unquoted YAML date `date: 2026-05-16`
+    is valid ISO-8601 and is now indexed instead of moved to _rejected/."""
+    file = tmp_path / "agents" / "sparky" / "d.md"
+    file.parent.mkdir(parents=True)
+    file.write_text("---\nid: d\ntype: note\nagent: sparky\ndate: 2026-05-16\n---\nbody\n")
+
+    await watcher._handle_create_or_modify(file)
+
+    services["index"].upsert.assert_called_once()
+    assert not (tmp_path / "_rejected").exists()
+
+
+@pytest.mark.asyncio
+async def test_watcher_still_quarantines_note_without_frontmatter(watcher, tmp_path, services):
+    """The watcher stays strict: a new .md outside the excluded folders
+    without frontmatter is still quarantined. Only the rebuild report counts
+    such legacy files as skipped."""
+    file = tmp_path / "agents" / "sparky" / "plain.md"
+    file.parent.mkdir(parents=True)
+    file.write_text("# Just markdown\n")
+
+    await watcher._handle_create_or_modify(file)
+
+    services["index"].upsert.assert_not_called()
+    assert any((tmp_path / "_rejected").iterdir())
