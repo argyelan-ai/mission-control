@@ -13,7 +13,8 @@
  * Jeder andere Fehler zeigt nur den Satz aus humanApiError.
  */
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import { Settings } from "lucide-react";
@@ -22,6 +23,8 @@ import { C } from "@/lib/colors";
 import type { RuntimeStopConflict } from "@/lib/types";
 import { humanApiError } from "@/components/shared/HostRecipeSwitcher";
 import { HostRecipeSwitcher } from "@/components/shared/HostRecipeSwitcher";
+import { HeadOnBoxNotice, useHeadConflictText } from "@/components/heads/HeadOccupancy";
+import { parseHeadOnBox, type HeadBusy } from "@/lib/heads";
 
 /** Exportiert (Cockpit PR 5): dieselbe 409-Konflikt-Erkennung wie hier, damit
  *  der Stop-Knopf im Cockpit dieselbe inline Bestätigung zeigt statt eine
@@ -54,6 +57,7 @@ export function ActionBar({
   multiNode = false,
   variant = "normal",
   onOpenCockpit,
+  headOnBox = null,
 }: {
   hostId: string;
   hostName: string | null;
@@ -67,13 +71,51 @@ export function ActionBar({
    *  Reihe "Other model" + Stop. */
   variant?: "normal" | "trouble";
   onOpenCockpit: () => void;
+  /** Head launcher §8.3: a head works on this box. While the engine serves,
+   *  switch / stop would cut it off → a click shows the reason inline and
+   *  does nothing else (no permanent notice on the card). A dead engine
+   *  (trouble) stays recoverable — the backend allows that. The backend
+   *  guard (409 head_on_box) stays the real protection. */
+  headOnBox?: HeadBusy | null;
 }) {
   const t = useTranslations("runtimes.stage");
+  const tHeads = useTranslations("heads.runtimes");
+  const headConflictText = useHeadConflictText();
+  const [refusedBy, setRefusedBy] = useState<{ task_id: string | null; title: string | null } | null>(null);
+  const locked = !!headOnBox && variant === "normal";
+  const lockedReason = locked
+    ? `${headOnBox?.title ? tHeads("onBoxTitle", { title: headOnBox.title }) : tHeads("onBoxTitleNoTitle")} ${tHeads("onBoxBody")}`
+    : null;
+  // Which blocked action the operator just clicked — the reason shows only then.
+  const [blockedClick, setBlockedClick] = useState<"switch" | "stop" | null>(null);
+  useEffect(() => {
+    if (!locked) setBlockedClick(null);
+  }, [locked]);
   const queryClient = useQueryClient();
   const [conflict, setConflict] = useState<RuntimeStopConflict | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // A 409 head_on_box refusal shows the notice until the occupancy poll has
+  // seen that head AND seen the box free again (or an action succeeds) —
+  // not forever. The refusal also asks for a fresh occupancy right away.
+  const sawHeadAfterRefusal = useRef(false);
+  useEffect(() => {
+    if (!refusedBy) return;
+    if (headOnBox) {
+      sawHeadAfterRefusal.current = true;
+    } else if (sawHeadAfterRefusal.current) {
+      sawHeadAfterRefusal.current = false;
+      setRefusedBy(null);
+    }
+  }, [headOnBox, refusedBy]);
+  const refuse = (onBox: { task_id: string | null; title: string | null }) => {
+    sawHeadAfterRefusal.current = false;
+    setRefusedBy(onBox);
+    queryClient.invalidateQueries({ queryKey: ["heads", "occupancy"] });
+  };
+
   const invalidate = () => {
+    setRefusedBy(null);
     queryClient.invalidateQueries({ queryKey: ["runtimes"] });
     queryClient.invalidateQueries({ queryKey: ["runtimes", "live-status"] });
     queryClient.invalidateQueries({ queryKey: ["hosts"] });
@@ -94,15 +136,64 @@ export function ActionBar({
         setConflict(parsed);
         return;
       }
-      setError(t("stopFailed", { message: humanApiError(err) }));
+      const onBox = parseHeadOnBox(err);
+      if (onBox) {
+        refuse(onBox);
+        return;
+      }
+      setError(headConflictText(err) ?? t("stopFailed", { message: humanApiError(err) }));
     },
   });
 
   const restartMutation = useMutation({
     mutationFn: () => api.runtimes.restart(runtimeId),
     onSuccess: invalidate,
-    onError: (err: Error) => setError(t("restartFailed", { message: humanApiError(err) })),
+    onError: (err: Error) => {
+      const onBox = parseHeadOnBox(err);
+      if (onBox) {
+        refuse(onBox);
+        return;
+      }
+      setError(headConflictText(err) ?? t("restartFailed", { message: humanApiError(err) }));
+    },
   });
+
+  if (blockedClick && locked && headOnBox) {
+    const title = headOnBox.title
+      ? tHeads("onBoxTitle", { title: headOnBox.title })
+      : tHeads("onBoxTitleNoTitle");
+    const body = blockedClick === "stop" ? tHeads("onBoxBodyStop") : tHeads("onBoxBody");
+    return (
+      <div
+        role="status"
+        className="flex items-center gap-3 px-4 py-3 flex-wrap text-xs"
+        style={{ borderTop: `1px solid ${C.borderSubtle}`, color: C.textSecondary }}
+        data-testid="head-in-use-notice"
+      >
+        <span className="basis-full sm:basis-auto sm:flex-1 min-w-0">{title} {body}</span>
+        <div className="flex items-center gap-2 ml-auto">
+          {headOnBox.task_id && (
+            <Link
+              href={`/tasks?task=${encodeURIComponent(headOnBox.task_id)}`}
+              className="inline-flex items-center px-3 min-h-[44px] rounded-md hover:bg-[var(--color-bg-hover)]"
+              style={{ border: `1px solid ${C.borderActive}`, color: C.textSecondary }}
+            >
+              {tHeads("openTask")}
+            </Link>
+          )}
+          <button
+            type="button"
+            onClick={() => setBlockedClick(null)}
+            autoFocus
+            className="px-3 min-h-[44px] rounded-md cursor-pointer"
+            style={{ border: `1px solid ${C.borderActive}`, color: C.textSecondary }}
+          >
+            {tHeads("ok")}
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (conflict) {
     return (
@@ -138,6 +229,10 @@ export function ActionBar({
 
   return (
     <div className="flex flex-col gap-2 px-4 py-3" style={{ borderTop: `1px solid ${C.borderSubtle}` }}>
+      {/* Only a refusal from the box guard (409 head_on_box) — i.e. after a
+          click — shows this; a head seen by the poll never shows a
+          permanent notice (the reason comes on click, see above). */}
+      {refusedBy && <HeadOnBoxNotice head={refusedBy} />}
       {error && (
         <div className="text-xs" style={{ color: C.error }}>{error}</div>
       )}
@@ -155,7 +250,7 @@ export function ActionBar({
             {restartMutation.isPending ? t("restarting") : t("restartNow")}
           </button>
         ) : (
-          <HostRecipeSwitcher hostId={hostId} hostName={hostName} servingName={servingName} compact primary label={t("switchModel")} />
+          <HostRecipeSwitcher hostId={hostId} hostName={hostName} servingName={servingName} compact primary label={t("switchModel")} blockedBy={lockedReason} onBlocked={() => setBlockedClick("switch")} />
         )}
         {/* 44px Touch-Ziel (DESIGN.md) mobil, 36px ab der 600px-Container-Breite —
             gleiche Konvention wie die Icon-Knöpfe auf page.tsx (w-11 h-11 sm:w-7 sm:h-7).
@@ -177,7 +272,7 @@ export function ActionBar({
           )}
           <button
             type="button"
-            onClick={() => stopMutation.mutate(false)}
+            onClick={() => (locked ? setBlockedClick("stop") : stopMutation.mutate(false))}
             disabled={stopMutation.isPending}
             data-testid="stop-runtime"
             className="text-xs px-3.5 py-2.5 rounded-md cursor-pointer disabled:opacity-50"

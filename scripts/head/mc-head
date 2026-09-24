@@ -1,0 +1,1261 @@
+#!/usr/bin/env python3
+"""mc-head — run ONE short-lived head (one process, one job) on this host.
+
+Spec: docs/specs/head-launcher.md (§5, §6.1, §6.3, §6.5, §9).
+
+The Mission Control backend never gets a shell on the host. It only writes a
+run folder ($MC_HOME/heads/<run_id>/{spec.json, job.md, procedure.md,
+head.env}) and drops a spool request ($MC_HOME/heads/spool/<run_id>.<action>.json).
+A launchd job runs ``mc-head watch``; everything with harness knowledge lives
+in THIS file (one table, ``harness_argv``).
+
+Usable without MC from a terminal:
+
+    mc-head validate <run_id>        check spec.json, print "ok" or the reason
+    mc-head start <run_id>           prepare worktree + guards, start the head
+    mc-head stop <run_id>            stop a running head (TERM, grace, KILL)
+    mc-head restart <old> <new>      stop <old>, wait until it has exited and
+                                     released its box lock, then start <new>
+    mc-head status <run_id>          print .wrapper/status.json
+    mc-head watch                    process the spool once (launchd entry)
+
+Python 3.9 stdlib only, so the macOS system python can run it from launchd.
+Nothing in here trusts spec.json: the backend container mounts $MC_HOME
+read-write, so every value is checked against a fixed pattern before it
+reaches git, tmux or the harness — and nothing is ever passed through a shell.
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import shlex
+import shutil
+import signal
+import stat
+import subprocess
+import sys
+import threading
+import time
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+
+# ── paths ────────────────────────────────────────────────────────────────
+
+
+def mc_home() -> Path:
+    return Path(os.environ.get("MC_HOME") or (Path.home() / ".mc"))
+
+
+def heads_root() -> Path:
+    return mc_home() / "heads"
+
+
+def clones_root() -> Path:
+    return Path(os.environ.get("MC_HEAD_CLONES") or (heads_root() / "clones"))
+
+
+def vault_jobs() -> Path:
+    return Path(os.environ.get("MC_HEAD_VAULT_JOBS") or (mc_home() / "vault" / "jobs"))
+
+
+def locks_root() -> Path:
+    return heads_root() / "locks"
+
+
+def spool_root() -> Path:
+    return heads_root() / "spool"
+
+
+def run_dir(run_id: str) -> Path:
+    return heads_root() / run_id
+
+
+def wrapper_dir(run_id: str) -> Path:
+    return run_dir(run_id) / ".wrapper"
+
+
+HERE = Path(__file__).resolve().parent
+SANDBOX_PROFILE = HERE / "head.sb"
+CLAUDE_SETTINGS_TEMPLATE = HERE / "claude-head-settings.json"
+
+HEARTBEAT_S = float(os.environ.get("MC_HEAD_HEARTBEAT_S", "30"))
+KILL_GRACE_S = float(os.environ.get("MC_HEAD_KILL_GRACE_S", "10"))
+# Operator cap on every head's time limit (seconds); also used by tests.
+MAX_TIME_S = int(os.environ.get("MC_HEAD_MAX_TIME_S", "86400"))
+BASE_PATH = os.environ.get(
+    "MC_HEAD_PATH", "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+)
+GIT_NAME = os.environ.get("MC_HEAD_GIT_NAME", "MC head")
+GIT_EMAIL = os.environ.get("MC_HEAD_GIT_EMAIL", "head@users.noreply.invalid")
+
+# ── validation (§6.1) ────────────────────────────────────────────────────
+
+UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+PATTERNS = {
+    "repo_full_name": re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"),
+    # "mc-head/", not "head/": on a case-insensitive disk (macOS) the
+    # remote-tracking ref refs/remotes/origin/head/… collides with
+    # refs/remotes/origin/HEAD and every later fetch fails (live 2026-09-23).
+    "branch": re.compile(r"^mc-head/[a-z0-9-]+$"),
+    "base_branch": re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,100}$"),
+    "base_url": re.compile(r"^https?://[A-Za-z0-9.-]+:[0-9]+(/[A-Za-z0-9/._-]*)?$"),
+    "model": re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/:-]{0,200}$"),
+    "runtime_slug": re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$"),
+    # vault jobs/<job_folder>/run-record.md — where the wrapper files the record
+    "job_folder": re.compile(r"^[a-z0-9][a-z0-9-]{0,99}$"),
+}
+HARNESSES = ("omp", "claude")
+MODES = ("fresh", "continue")
+
+# Keys mc-head accepts from head.env (written by the backend). Anything else
+# is dropped: the head's environment is built from nothing (env -i).
+HEAD_ENV_KEYS = frozenset(
+    {
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_MODEL",
+        "ANTHROPIC_SMALL_FAST_MODEL",
+        "ANTHROPIC_API_KEY",
+        "OPENAI_BASE_URL",
+        "OPENAI_MODEL",
+        "OPENAI_API_KEY",
+    }
+)
+
+
+class SpecInvalid(Exception):
+    def __init__(self, field: str, why: str) -> None:
+        super().__init__(f"{field}: {why}")
+        self.field = field
+
+
+def _is_uuid(value) -> bool:
+    return isinstance(value, str) and bool(UUID_RE.match(value))
+
+
+def check_run_id(run_id: str) -> None:
+    if not _is_uuid(run_id):
+        raise SpecInvalid("run_id", "not a lowercase uuid")
+
+
+def load_spec(run_id: str) -> dict:
+    """Read + validate spec.json. Raises SpecInvalid on any mismatch."""
+    check_run_id(run_id)
+    path = run_dir(run_id) / "spec.json"
+    try:
+        spec = json.loads(path.read_text())
+    except (OSError, ValueError) as exc:
+        raise SpecInvalid("spec.json", f"unreadable ({exc.__class__.__name__})")
+    if not isinstance(spec, dict):
+        raise SpecInvalid("spec.json", "not an object")
+    if spec.get("run_id") != run_id:
+        raise SpecInvalid("run_id", "does not match the run folder")
+    for field, pattern in PATTERNS.items():
+        value = spec.get(field)
+        if not isinstance(value, str) or not pattern.match(value) or ".." in value:
+            raise SpecInvalid(field, "does not match the allowed pattern")
+    if spec["branch"] in ("mc-head/main", "mc-head/master"):
+        raise SpecInvalid("branch", "reserved name")
+    if spec.get("harness") not in HARNESSES:
+        raise SpecInvalid("harness", "not in the harness table")
+    if spec.get("mode") not in MODES:
+        raise SpecInvalid("mode", "must be fresh or continue")
+    limit = spec.get("time_limit_s")
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 60 <= limit <= 86400:
+        raise SpecInvalid("time_limit_s", "integer between 60 and 86400")
+    boxes = spec.get("box_keys")
+    if not isinstance(boxes, list) or not all(_is_uuid(b) for b in boxes):
+        raise SpecInvalid("box_keys", "list of host uuids")
+    rf = spec.get("restarted_from")
+    if rf is not None and not _is_uuid(rf):
+        raise SpecInvalid("restarted_from", "uuid or null")
+    if spec["mode"] == "continue" and rf is None:
+        raise SpecInvalid("restarted_from", "continue mode needs the previous run")
+    task_id = spec.get("task_id")
+    if task_id is not None and not _is_uuid(task_id):
+        raise SpecInvalid("task_id", "uuid or null")
+    return spec
+
+
+def read_head_env(run_id: str) -> dict:
+    """head.env → only the allow-listed keys, single-line values."""
+    out: dict = {}
+    path = run_dir(run_id) / "head.env"
+    if not path.exists():
+        return out
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+            value = value[1:-1]
+        if key in HEAD_ENV_KEYS and "\n" not in value and "\x00" not in value:
+            out[key] = value
+    return out
+
+
+# ── status (host → MC contract, §6.1) ────────────────────────────────────
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def read_status(run_id: str) -> dict:
+    try:
+        return json.loads((wrapper_dir(run_id) / "status.json").read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def write_status(run_id: str, **fields) -> dict:
+    wdir = wrapper_dir(run_id)
+    wdir.mkdir(parents=True, exist_ok=True)
+    status = {
+        "run_id": run_id,
+        "phase": "starting",
+        "pid": None,
+        "pgid": None,
+        "supervisor_pid": None,
+        "external_ref": None,
+        "tmux": None,
+        "started_at": None,
+        "exited_at": None,
+        "exit_code": None,
+        "last_output_at": None,
+        "pr_url": None,
+        "run_record_path": None,
+        "question": False,
+        "reason": None,
+    }
+    status.update(read_status(run_id))
+    status.update(fields)
+    tmp = wdir / f".status.{os.getpid()}.tmp"
+    tmp.write_text(json.dumps(status, indent=1))
+    os.replace(tmp, wdir / "status.json")
+    return status
+
+
+def exit_status(run_id: str, reason: str, **extra) -> None:
+    write_status(run_id, phase="exited", exited_at=now_iso(), reason=reason, **extra)
+
+
+def log(msg: str) -> None:
+    sys.stderr.write(f"[mc-head {now_iso()}] {msg}\n")
+    sys.stderr.flush()
+
+
+# ── process helpers ──────────────────────────────────────────────────────
+
+
+def pid_alive(pid) -> bool:
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    # A zombie child of ours still answers kill(0); reap check via ps state.
+    try:
+        out = subprocess.run(
+            ["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True, timeout=5
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return True
+    return bool(out) and not out.startswith("Z")
+
+
+def pid_start(pid: int) -> str:
+    try:
+        return subprocess.run(
+            ["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True, timeout=5
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def kill_group(pgid, grace: float, proc=None) -> None:
+    """SIGTERM to the process group, wait ``grace``, then SIGKILL."""
+    if not isinstance(pgid, int) or pgid <= 1:
+        return
+    # EPERM from killpg on macOS = only zombies are left in the group
+    # (exited, not yet reaped) — that counts as gone.
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        return
+    deadline = time.time() + grace
+    while time.time() < deadline:
+        if proc is not None and proc.poll() is not None:
+            break  # leader gone; still KILL whatever else is left in the group
+        try:
+            os.killpg(pgid, 0)
+        except (ProcessLookupError, PermissionError):
+            return
+        time.sleep(0.2)
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+# ── box lock with owner (§6.3 step 4) ────────────────────────────────────
+
+
+def _lock_owner_alive(lock: Path) -> bool:
+    try:
+        owner = json.loads((lock / "owner.json").read_text())
+    except (OSError, ValueError):
+        # Folder exists but no owner yet: another wrapper is between mkdir
+        # and writing the owner. Treat as alive for a short window.
+        try:
+            return time.time() - lock.stat().st_mtime < 10
+        except OSError:
+            return False
+    pid = owner.get("pid")
+    return pid_alive(pid) and pid_start(pid) == owner.get("start")
+
+
+def acquire_locks(run_id: str, box_keys: list) -> tuple:
+    """mkdir-based lock per box. Returns (ok, taken, busy_key)."""
+    locks_root().mkdir(parents=True, exist_ok=True)
+    owner = {"pid": os.getpid(), "start": pid_start(os.getpid()), "run_id": run_id, "since": now_iso()}
+    taken: list = []
+    for key in box_keys:
+        lock = locks_root() / key
+        for _attempt in range(2):
+            try:
+                lock.mkdir()
+            except FileExistsError:
+                if _lock_owner_alive(lock):
+                    release_locks(run_id, taken)
+                    return False, [], key
+                log(f"stale lock on box {key} (owner gone) — taking it over")
+                shutil.rmtree(lock, ignore_errors=True)
+                continue
+            (lock / "owner.json").write_text(json.dumps(owner))
+            taken.append(key)
+            break
+        else:
+            release_locks(run_id, taken)
+            return False, [], key
+    (wrapper_dir(run_id) / "lock-owner").write_text(json.dumps({**owner, "box_keys": taken}))
+    return True, taken, None
+
+
+def release_locks(run_id: str, keys: list) -> None:
+    for key in keys:
+        lock = locks_root() / key
+        try:
+            owner = json.loads((lock / "owner.json").read_text())
+        except (OSError, ValueError):
+            owner = {}
+        if owner.get("run_id") in (run_id, None):
+            shutil.rmtree(lock, ignore_errors=True)
+
+
+def locks_held_by(run_id: str) -> list:
+    held = []
+    if not locks_root().is_dir():
+        return held
+    for lock in locks_root().iterdir():
+        try:
+            if json.loads((lock / "owner.json").read_text()).get("run_id") == run_id:
+                held.append(lock.name)
+        except (OSError, ValueError):
+            continue
+    return held
+
+
+# ── git: clone, worktree, guards (§6.3 steps 1–3) ────────────────────────
+
+
+def _git(args: list, cwd=None, env=None, check=True) -> subprocess.CompletedProcess:
+    full_env = dict(os.environ)
+    full_env["GIT_CONFIG_GLOBAL"] = "/dev/null"
+    full_env["GIT_TERMINAL_PROMPT"] = "0"
+    if env:
+        full_env.update(env)
+    res = subprocess.run(
+        ["git", *args], cwd=cwd, env=full_env, capture_output=True, text=True, timeout=600
+    )
+    if check and res.returncode != 0:
+        raise RuntimeError(f"git {' '.join(args[:2])} failed: {res.stderr.strip()[-400:]}")
+    return res
+
+
+PRE_PUSH_HOOK = r"""#!/bin/sh
+# mc-head guard (spec §9 layer 2): heads may only push their own mc-head/* branch,
+# never delete, never rewrite history. Guard rail only — the server-side gate
+# is the head's own non-admin GitHub identity.
+zero=0000000000000000000000000000000000000000
+while read local_ref local_sha remote_ref remote_sha; do
+  case "$remote_ref" in
+    refs/heads/mc-head/*) ;;
+    *) echo "mc-head: push to $remote_ref refused (heads push only mc-head/* branches)" >&2; exit 1 ;;
+  esac
+  if [ "$local_sha" = "$zero" ]; then
+    echo "mc-head: deleting $remote_ref refused" >&2; exit 1
+  fi
+  if [ "$remote_sha" != "$zero" ]; then
+    if ! git merge-base --is-ancestor "$remote_sha" "$local_sha" 2>/dev/null; then
+      echo "mc-head: non-fast-forward push to $remote_ref refused" >&2; exit 1
+    fi
+  fi
+done
+exit 0
+"""
+
+
+def hooks_dir() -> Path:
+    return clones_root() / ".mc-head-hooks"
+
+
+def install_hooks(clone: Path) -> None:
+    hdir = hooks_dir()
+    hdir.mkdir(parents=True, exist_ok=True)
+    hook = hdir / "pre-push"
+    hook.write_text(PRE_PUSH_HOOK)
+    hook.chmod(0o755)
+    _git(["-C", str(clone), "config", "core.hooksPath", str(hdir)])
+
+
+def gh_bin() -> str:
+    return os.environ.get("MC_HEAD_GH") or shutil.which("gh") or "/opt/homebrew/bin/gh"
+
+
+def gh_token() -> str | None:
+    """The heads' own weak GitHub identity (§9 layer 4). Operator-provided
+    file, never passed through the backend or the spool."""
+    path = heads_root() / "gh-token"
+    try:
+        token = path.read_text().strip()
+    except OSError:
+        return None
+    return token or None
+
+
+def scratch_repos() -> set:
+    path = heads_root() / "scratch-repos"
+    try:
+        return {ln.strip() for ln in path.read_text().splitlines() if ln.strip() and not ln.startswith("#")}
+    except OSError:
+        return set()
+
+
+def sandbox_enabled() -> bool:
+    return os.environ.get("MC_HEAD_SANDBOX") == "1" and Path("/usr/bin/sandbox-exec").exists()
+
+
+def ensure_clone(full_name: str) -> Path:
+    clone = clones_root() / full_name.replace("/", "--")
+    if not (clone / ".git").exists():
+        clones_root().mkdir(parents=True, exist_ok=True)
+        token = gh_token()
+        if not token:
+            raise RuntimeError("no clone and no heads GitHub identity to create one")
+        res = subprocess.run(
+            [gh_bin(), "repo", "clone", full_name, str(clone), "--", "-q"],
+            env={**os.environ, "GH_TOKEN": token, "GIT_CONFIG_GLOBAL": "/dev/null"},
+            capture_output=True,
+            text=True,
+            timeout=900,
+        )
+        if res.returncode != 0:
+            raise RuntimeError(f"gh repo clone failed: {res.stderr.strip()[-300:]}")
+    # Dedicated clone → repo-level config is safe. Only gh as credential
+    # helper (with the head's GH_TOKEN); the operator's keychain helper is
+    # never reached because every git call runs with GIT_CONFIG_GLOBAL=/dev/null.
+    _git(["-C", str(clone), "config", "--replace-all", "credential.helper", ""])
+    _git(["-C", str(clone), "config", "--add", "credential.helper", f"!{gh_bin()} auth git-credential"])
+    _git(["-C", str(clone), "config", "user.name", GIT_NAME])
+    _git(["-C", str(clone), "config", "user.email", GIT_EMAIL])
+    install_hooks(clone)
+    return clone
+
+
+def prepare_worktree(spec: dict, clone: Path) -> Path:
+    run = run_dir(spec["run_id"])
+    wt = run / "wt"
+    base = spec["base_branch"]
+    branch = spec["branch"]
+    token = gh_token()
+    env = {"GH_TOKEN": token} if token else None
+    _git(["-C", str(clone), "fetch", "-q", "origin"], env=env)
+    if spec["mode"] == "continue":
+        prev_wt = run_dir(spec["restarted_from"]) / "wt"
+        if prev_wt.exists():
+            # Keep uncommitted work: move the worktree, never recreate it.
+            _git(["-C", str(clone), "worktree", "move", str(prev_wt), str(wt)])
+        else:
+            _git(["-C", str(clone), "worktree", "prune"])
+            _git(["-C", str(clone), "worktree", "add", str(wt), branch])
+    else:
+        _git(["-C", str(clone), "worktree", "add", "-q", "-b", branch, str(wt), f"origin/{base}"])
+    return wt
+
+
+# ── guard shims (§9 layer 2) ─────────────────────────────────────────────
+
+BLOCKED_TOOLS = ("docker", "ssh", "scp", "sftp", "sudo", "launchctl", "kubectl", "rsync")
+
+BLOCK_SHIM = """#!/bin/sh
+echo "mc-head: '{name}' is blocked for heads (see the Never list)." >&2
+exit 126
+"""
+
+GH_SHIM = """#!/bin/sh
+# mc-head gh guard: only pr create/view/list, repo view, auth status.
+case "$1 $2" in
+  "pr create"|"pr view"|"pr list"|"repo view"|"auth status"|"auth git-credential") exec {real} "$@" ;;
+esac
+echo "mc-head: 'gh $1 $2' is blocked for heads (never merge, never admin)." >&2
+exit 126
+"""
+
+
+def write_shims(run: Path) -> Path:
+    bdir = run / "bin"
+    bdir.mkdir(parents=True, exist_ok=True)
+    for name in BLOCKED_TOOLS:
+        p = bdir / name
+        p.write_text(BLOCK_SHIM.format(name=name))
+        p.chmod(0o755)
+    p = bdir / "gh"
+    p.write_text(GH_SHIM.format(real=shlex.quote(gh_bin())))
+    p.chmod(0o755)
+    return bdir
+
+
+# ── harness table (§6.3 step 3) — the ONLY place with harness commands ───
+
+
+def harness_bin(name: str) -> str:
+    override = os.environ.get(f"MC_HEAD_BIN_{name.upper()}")
+    if override:
+        return override
+    found = shutil.which(name, path=BASE_PATH + ":" + str(Path.home() / ".local" / "bin"))
+    return found or name
+
+
+OMP_PROFILE = "mc-head"
+
+
+def render_omp_profile(home: Path, spec: dict, env: dict) -> Path:
+    """Same shape as backend host_provisioning.render_omp_host_models_yml.
+
+    Rendered into the head's OWN $HOME, never the operator's omp config.
+    """
+    models_dir = home / ".omp" / "profiles" / OMP_PROFILE / "agent"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    api_key = env.get("OPENAI_API_KEY")
+    auth_line = f"    apiKey: {api_key}" if api_key else "    auth: none"
+    text = (
+        "providers:\n"
+        "  mc-openai:\n"
+        "    name: MC OpenAI-compatible endpoint\n"
+        f"    baseUrl: {spec['base_url']}\n"
+        "    api: openai-completions\n"
+        f"{auth_line}\n"
+        "    models:\n"
+        f"      - id: {spec['model']}\n"
+        "        name: MC model\n"
+        "        reasoning: true\n"
+        "        contextWindow: 262144\n"
+        "        maxTokens: 32768\n"
+    )
+    path = models_dir / "models.yml"
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(text)
+    return path
+
+
+def _claude_abs(path: Path) -> str:
+    """Claude Code permission syntax for an absolute path: ``//abs/path``."""
+    return "/" + str(path)
+
+
+def render_claude_settings(run: Path) -> Path:
+    """Render the head's Claude permission list.
+
+    The template's ``~/`` rules alone are not enough: the head runs with
+    HOME=<run>/home, so ``~`` points at the throw-away folder, not at the
+    operator's home. Every ``~/`` deny rule is therefore repeated with the
+    REAL home as an absolute rule. Edit/Write are limited to the worktree
+    and the head's own status files in the run folder — never the shell
+    profile or another run.
+    """
+    data = json.loads(CLAUDE_SETTINGS_TEMPLATE.read_text())
+    perms = data["permissions"]
+    real_home = Path.home()
+    deny = list(perms["deny"])
+    for rule in perms["deny"]:
+        m = re.match(r"^(\w+)\(~/(.*)\)$", rule)
+        if m:
+            deny.append(f"{m.group(1)}({_claude_abs(real_home / m.group(2))})")
+    for rel in (".docker/**", ".netrc", ".git-credentials", ".kube/**", ".gnupg/**", ".aws/**",
+                "Library/Keychains/**", "Library/Application Support/**", "Library/Cookies/**"):
+        deny.append(f"Read({_claude_abs(real_home / rel)})")
+    allow = [r for r in perms["allow"] if r not in ("Edit", "Write")]
+    wt = run / "wt"
+    for tool in ("Edit", "Write"):
+        allow.append(f"{tool}({_claude_abs(wt)}/**)")
+        for name in ("step.txt", "question.md", "run-record.md"):
+            allow.append(f"{tool}({_claude_abs(run / name)})")
+    perms["allow"] = allow
+    perms["deny"] = deny
+    target = run / "head-settings.json"
+    target.write_text(json.dumps(data, indent=2))
+    return target
+
+
+def harness_argv(spec: dict, run: Path, home: Path, env: dict) -> list:
+    job = (run / "job.md").read_text()
+    procedure = str(run / "procedure.md")
+    if spec["harness"] == "omp":
+        render_omp_profile(home, spec, env)
+        return [
+            harness_bin("omp"),
+            "--profile", OMP_PROFILE,
+            "--model", f"mc-openai/{spec['model']}",
+            "-p",
+            "--no-session",
+            "--no-skills",
+            "--max-time", str(spec["time_limit_s"]),
+            # Permission bypass: allowed only inside the sandbox or on a
+            # scratch repo (ADR-086, enforced in start_gate()).
+            "--auto-approve",
+            "--append-system-prompt", procedure,
+            job,
+        ]
+    if spec["harness"] == "claude":
+        settings = render_claude_settings(run)
+        argv = [
+            harness_bin("claude"),
+            "-p",
+            "--bare",
+            "--settings", str(settings),
+            "--append-system-prompt-file", procedure,
+        ]
+        wt = run / "wt"
+        for name in ("AGENTS.md", "CLAUDE.md"):
+            if (wt / name).exists():
+                argv += ["--add-dir", str(wt)]
+                break
+        # No prompt argument: --add-dir is variadic and would swallow it
+        # (live finding). The job goes in on stdin — see harness_stdin().
+        return argv
+    raise SpecInvalid("harness", "not in the harness table")
+
+
+def harness_stdin(spec: dict, run: Path):
+    """Claude Code reads the job from stdin; omp gets it as the prompt argument."""
+    if spec["harness"] == "claude":
+        return open(run / "job.md", "rb")
+    return subprocess.DEVNULL
+
+
+def harness_env(spec: dict, run: Path, home: Path) -> dict:
+    """env -i: only HOME, PATH (shims first), LANG, TERM + head.env + GH_TOKEN."""
+    head_env = read_head_env(spec["run_id"])
+    bindir = run / "bin"
+    extra_dirs = []
+    for name in ("omp", "claude"):
+        b = harness_bin(name)
+        if os.path.isabs(b):
+            extra_dirs.append(str(Path(b).parent))
+    path = ":".join([str(bindir), *extra_dirs, BASE_PATH])
+    env = {
+        "HOME": str(home),
+        "PATH": path,
+        "LANG": os.environ.get("LANG", "en_US.UTF-8"),
+        "TERM": os.environ.get("TERM", "xterm-256color"),
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_AUTHOR_NAME": GIT_NAME,
+        "GIT_AUTHOR_EMAIL": GIT_EMAIL,
+        "GIT_COMMITTER_NAME": GIT_NAME,
+        "GIT_COMMITTER_EMAIL": GIT_EMAIL,
+        "MC_HEAD_RUN_DIR": str(run),
+        "MC_HEAD_RUN_ID": spec["run_id"],
+    }
+    env.update(head_env)
+    token = gh_token()
+    if token:
+        env["GH_TOKEN"] = token
+    if spec["harness"] == "claude":
+        env["CLAUDE_CONFIG_DIR"] = str(run / "claude-config")
+        (run / "claude-config").mkdir(exist_ok=True)
+    return env
+
+
+def sandbox_prefix(spec: dict, run: Path) -> list:
+    if not sandbox_enabled():
+        return []
+    clone = clones_root() / spec["repo_full_name"].replace("/", "--")
+    params = {
+        "RUN": str(run),
+        "WT": str(run / "wt"),
+        "CLONE_GIT": str(clone / ".git"),
+        "VAULT_JOBS": str(vault_jobs()),
+        "REAL_HOME": str(Path.home()),
+        "MC_HOME": str(mc_home()),
+        "USER_TMP": "/private/var/folders",
+    }
+    argv = ["/usr/bin/sandbox-exec", "-f", str(SANDBOX_PROFILE)]
+    for k, v in params.items():
+        argv += ["-D", f"{k}={v}"]
+    return argv
+
+
+# ── start (§6.3) ─────────────────────────────────────────────────────────
+
+
+# Branch rules that stop a direct push to the base branch (GitHub rules API).
+PROTECTING_RULES = frozenset({"pull_request", "required_status_checks", "merge_queue", "update"})
+IDENTITY_TTL_S = 24 * 3600
+
+
+def _gh_api(path: str, token: str):
+    res = subprocess.run(
+        [gh_bin(), "api", path],
+        env={**os.environ, "GH_TOKEN": token, "GIT_CONFIG_GLOBAL": "/dev/null"},
+        capture_output=True, text=True, timeout=60,
+    )
+    if res.returncode != 0:
+        raise RuntimeError(res.stderr.strip()[-200:])
+    return json.loads(res.stdout or "null")
+
+
+def identity_gate(spec: dict, token: str) -> str | None:
+    """The heads' GitHub identity must be weak, and the base branch protected.
+
+    GH_TOKEN sits in the head's environment, so the head can call the REST
+    API directly (shims and deny rules are bypassable). What really holds
+    against push-to-main / merge is (a) the token's identity has no admin or
+    maintain right on the repo and (b) a GitHub rule on the base branch
+    blocks direct pushes. Checked once, cached for a day and re-checked
+    whenever the token file changes.
+    """
+    repo, base = spec["repo_full_name"], spec["base_branch"]
+    cache = heads_root() / "identity-ok" / f"{repo.replace('/', '--')}--{base.replace('/', '--')}"
+    try:
+        token_mtime = (heads_root() / "gh-token").stat().st_mtime
+        age = time.time() - cache.stat().st_mtime
+        if age < IDENTITY_TTL_S and cache.stat().st_mtime >= token_mtime:
+            return None
+    except OSError:
+        pass
+    try:
+        info = _gh_api(f"repos/{repo}", token)
+        perms = (info or {}).get("permissions") or {}
+        if not isinstance(perms, dict) or perms.get("admin") or perms.get("maintain"):
+            return "gh_identity_unsafe"
+        rules = _gh_api(f"repos/{repo}/rules/branches/{base}", token)
+        types = {r.get("type") for r in rules if isinstance(r, dict)} if isinstance(rules, list) else set()
+        if not types & PROTECTING_RULES:
+            return "gh_identity_unsafe"
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError, AttributeError):
+        return "gh_identity_unsafe"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(now_iso())
+    return None
+
+
+def start_gate(spec: dict) -> str | None:
+    """Hard gates before a head may touch a repo (spec §9 rules).
+
+    A real repo (not listed in heads/scratch-repos) needs ALL of:
+    - the heads' own GitHub identity (heads/gh-token);
+    - the proven sandbox — for EVERY harness: Claude's allow list still
+      runs code the head wrote itself (pytest, npm test …), so without the
+      sandbox that code could read secrets or reach the Docker socket;
+    - a weak identity + protected base branch (identity_gate).
+    Scratch repos (local test repos the operator listed) skip the gates.
+    """
+    if spec["repo_full_name"] in scratch_repos():
+        return None
+    token = gh_token()
+    if not token:
+        return "gh_identity_missing"
+    if not sandbox_enabled():
+        return "sandbox_required"
+    return identity_gate(spec, token)
+
+
+def cmd_validate(run_id: str) -> int:
+    try:
+        load_spec(run_id)
+    except SpecInvalid as exc:
+        print(f"spec_invalid {exc}")
+        return 2
+    print("ok")
+    return 0
+
+
+def cmd_start(run_id: str) -> int:
+    try:
+        check_run_id(run_id)
+    except SpecInvalid as exc:
+        print(f"spec_invalid {exc}")
+        return 2
+    if not run_dir(run_id).is_dir():
+        print("spec_invalid run folder missing")
+        return 2
+    try:
+        spec = load_spec(run_id)
+    except SpecInvalid as exc:
+        exit_status(run_id, "spec_invalid", detail=str(exc))
+        print(f"spec_invalid {exc}")
+        return 2
+    current = read_status(run_id)
+    if current.get("phase") in ("starting", "running") and pid_alive(current.get("supervisor_pid")):
+        print("already running")
+        return 0
+    write_status(run_id, phase="starting", started_at=now_iso(), reason=None)
+    gate = start_gate(spec)
+    if gate:
+        exit_status(run_id, gate)
+        print(gate)
+        return 3
+    run = run_dir(run_id)
+    try:
+        clone = ensure_clone(spec["repo_full_name"])
+        prepare_worktree(spec, clone)
+        write_shims(run)
+        (run / "home").mkdir(exist_ok=True)
+    except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
+        exit_status(run_id, "prepare_failed", detail=str(exc)[-500:])
+        print(f"prepare_failed {exc}")
+        return 4
+    return launch_supervisor(run_id)
+
+
+def launch_supervisor(run_id: str) -> int:
+    me = [sys.executable, str(Path(__file__).resolve()), "_supervise", run_id]
+    session = f"head-{run_id[:8]}"
+    # tmux is opt-in (MC_HEAD_TMUX=1). Live finding 2026-09-23: inside a
+    # tmux session omp (a Bun binary) could not reach the local engine's LAN
+    # address ("Was there a typo in the url or port?") while curl in the same
+    # session and omp started directly both could — macOS Local Network
+    # privacy judges the tmux server as the responsible process. Both v1
+    # pairs run non-interactively (-p), so tmux adds no takeover; the head's
+    # output is in head.log either way.
+    if os.environ.get("MC_HEAD_TMUX") == "1" and os.environ.get("MC_HEAD_NO_TMUX") != "1" \
+            and shutil.which("tmux", path=BASE_PATH):
+        tmux = shutil.which("tmux", path=BASE_PATH)
+        env_args = []
+        for key in ("MC_HOME", "MC_HEAD_CLONES", "MC_HEAD_TMUX", "MC_HEAD_VAULT_JOBS", "MC_HEAD_SANDBOX",
+                    "MC_HEAD_GH", "MC_HEAD_PATH", "MC_HEAD_HEARTBEAT_S", "MC_HEAD_KILL_GRACE_S",
+                    "MC_HEAD_BIN_OMP", "MC_HEAD_BIN_CLAUDE", "MC_HEAD_MAX_TIME_S"):
+            if key in os.environ:
+                env_args += ["-e", f"{key}={os.environ[key]}"]
+        res = subprocess.run(
+            [tmux, "new-session", "-d", "-s", session, *env_args, shlex.join(me)],
+            capture_output=True, text=True, timeout=30,
+        )
+        if res.returncode != 0:
+            exit_status(run_id, "prepare_failed", detail=f"tmux: {res.stderr.strip()[-300:]}")
+            return 4
+        write_status(run_id, tmux=session)
+        print(f"started in tmux session {session}")
+        return 0
+    log_path = run_dir(run_id) / ".wrapper" / "supervisor.log"
+    with open(log_path, "ab") as fh:
+        subprocess.Popen(me, stdout=fh, stderr=fh, stdin=subprocess.DEVNULL, start_new_session=True)
+    print("started")
+    return 0
+
+
+# ── supervisor (runs inside tmux) ────────────────────────────────────────
+
+
+def open_head_log(run: Path):
+    """head.log lives in the run folder, where the head can create files: a
+    symlink planted there must never make the (unsandboxed) wrapper append
+    to a file elsewhere. Opened once, before the harness starts."""
+    fd = os.open(str(run / "head.log"), os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    return os.fdopen(fd, "ab")
+
+
+def read_head_file(path: Path) -> tuple:
+    """(text, mtime) of a head-written file, never through a symlink."""
+    fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd, "rb") as fh:
+        info = os.fstat(fh.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise OSError("not a regular file")
+        return fh.read().decode("utf-8", errors="replace"), info.st_mtime
+
+
+def _tee(stream, fh) -> None:
+    with fh:
+        for chunk in iter(lambda: stream.read1(4096) if hasattr(stream, "read1") else stream.read(4096), b""):
+            fh.write(chunk)
+            fh.flush()
+            try:
+                sys.stdout.buffer.write(chunk)
+                sys.stdout.flush()
+            except (OSError, ValueError):
+                pass
+
+
+def cmd_supervise(run_id: str) -> int:
+    check_run_id(run_id)
+    spec = load_spec(run_id)
+    run = run_dir(run_id)
+    wdir = wrapper_dir(run_id)
+    held: list = []
+    child = None
+    state = {"reason": None}
+
+    def on_signal(signum, _frame):
+        state["reason"] = state["reason"] or "stopped"
+        if child is not None:
+            kill_group(child.pid, KILL_GRACE_S, child)
+
+    signal.signal(signal.SIGTERM, on_signal)
+    signal.signal(signal.SIGHUP, on_signal)
+    signal.signal(signal.SIGINT, on_signal)
+
+    try:
+        # A stop that arrived before this supervisor wrote its pid was
+        # answered with "stopped" by cmd_stop — never start the harness then.
+        if (wdir / "stop-requested").exists():
+            exit_status(run_id, "stopped")
+            return 0
+        write_status(run_id, supervisor_pid=os.getpid())
+        ok, held, busy = acquire_locks(run_id, spec["box_keys"])
+        if not ok:
+            exit_status(run_id, "box_busy", detail=busy)
+            return 5
+        home = run / "home"
+        env = harness_env(spec, run, home)
+        argv = sandbox_prefix(spec, run) + harness_argv(spec, run, home, env)
+        if (wdir / "stop-requested").exists():
+            exit_status(run_id, "stopped")
+            return 0
+        shown = [a if a != (run / "job.md").read_text() else "<job.md>" for a in argv]
+        (wdir / "argv.json").write_text(json.dumps(shown))
+        stdin = harness_stdin(spec, run)
+        log_fh = open_head_log(run)
+        started = time.time()
+        child = subprocess.Popen(
+            argv,
+            cwd=str(run / "wt"),
+            env=env,
+            stdin=stdin,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,  # own process group → stop kills everything
+        )
+        write_status(run_id, phase="running", pid=child.pid, pgid=child.pid, started_at=now_iso())
+        tee = threading.Thread(target=_tee, args=(child.stdout, log_fh), daemon=True)
+        tee.start()
+        limit = min(spec["time_limit_s"], MAX_TIME_S)
+        last_beat = 0.0
+        while child.poll() is None:
+            now = time.time()
+            if now - last_beat >= HEARTBEAT_S:
+                (wdir / "heartbeat").touch()
+                # Sign of output: head.log OR step.txt — `omp -p` prints only
+                # at the very end, the step file moves while it works.
+                mtimes = []
+                for name in ("head.log", "step.txt"):
+                    try:
+                        mtimes.append((run / name).stat().st_mtime)
+                    except OSError:
+                        pass
+                if mtimes:
+                    write_status(
+                        run_id,
+                        last_output_at=datetime.fromtimestamp(max(mtimes), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    )
+                last_beat = now
+            if (wdir / "stop-requested").exists() and state["reason"] is None:
+                state["reason"] = "stopped"
+                kill_group(child.pid, KILL_GRACE_S, child)
+            elif now - started > limit and state["reason"] is None:
+                state["reason"] = "time_limit"
+                kill_group(child.pid, KILL_GRACE_S, child)
+            time.sleep(0.2)
+        tee.join(timeout=5)
+        code = child.returncode
+        result = detect_result(spec, started)
+        reason = state["reason"] or (f"exit_{code}" if code else None)
+        write_status(
+            run_id,
+            phase="exited",
+            exited_at=now_iso(),
+            exit_code=code,
+            reason=reason,
+            **result,
+        )
+        return 0
+    except SpecInvalid as exc:
+        exit_status(run_id, "spec_invalid", detail=str(exc))
+        return 2
+    except Exception as exc:  # noqa: BLE001 — never leave a run "running"
+        if child is not None and child.poll() is None:
+            kill_group(child.pid, KILL_GRACE_S, child)
+        exit_status(run_id, "wrapper_error", detail=f"{exc.__class__.__name__}: {exc}"[-500:])
+        return 6
+    finally:
+        release_locks(run_id, held)
+
+
+# ── result detection (§6.5) ──────────────────────────────────────────────
+
+_FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n", re.S)
+
+
+def _frontmatter_value(text: str, key: str) -> str | None:
+    m = _FRONTMATTER_RE.match(text)
+    if not m:
+        return None
+    for line in m.group(1).splitlines():
+        if line.startswith(f"{key}:"):
+            return line.split(":", 1)[1].strip().strip("'\"")
+    return None
+
+
+def find_run_record(run_id: str, started: float, ended: float) -> Path | None:
+    root = vault_jobs()
+    if not root.is_dir():
+        return None
+    for candidate in sorted(root.glob("*/run-record.md")):
+        try:
+            text = candidate.read_text()
+            mtime = candidate.stat().st_mtime
+        except OSError:
+            continue
+        if _frontmatter_value(text, "head_run") != run_id:
+            continue
+        # vault jobs/ is writable by other containers: only a file written
+        # inside this run's window counts.
+        if started - 5 <= mtime <= ended + 60:
+            return candidate
+    return None
+
+
+def find_pr(spec: dict) -> str | None:
+    token = gh_token()
+    if not token:
+        return None
+    try:
+        res = subprocess.run(
+            [gh_bin(), "pr", "list", "--repo", spec["repo_full_name"], "--head", spec["branch"],
+             "--state", "all", "--json", "url", "--limit", "1"],
+            env={**os.environ, "GH_TOKEN": token, "GIT_CONFIG_GLOBAL": "/dev/null"},
+            capture_output=True, text=True, timeout=60,
+        )
+        items = json.loads(res.stdout or "[]") if res.returncode == 0 else []
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    if items and isinstance(items[0], dict) and isinstance(items[0].get("url"), str):
+        url = items[0]["url"]
+        if re.match(r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/\d+$", url):
+            return url
+    return None
+
+
+def file_run_record(spec: dict, started: float, ended: float) -> Path | None:
+    """The head writes ``<run>/run-record.md``; the wrapper (trusted) files a
+    copy into ``vault/jobs/<job_folder>/run-record.md`` — only when the
+    frontmatter names this run and the file was written inside the run window."""
+    run_id = spec["run_id"]
+    src = run_dir(run_id) / "run-record.md"
+    try:
+        text, mtime = read_head_file(src)
+    except OSError:
+        return None
+    if _frontmatter_value(text, "head_run") != run_id or not (started - 5 <= mtime <= ended + 60):
+        return None
+    dest_dir = vault_jobs() / spec["job_folder"]
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    tmp = dest_dir / ".run-record.md.tmp"
+    tmp.write_text(text)
+    os.replace(tmp, dest_dir / "run-record.md")
+    return dest_dir / "run-record.md"
+
+
+def detect_result(spec: dict, started: float) -> dict:
+    run_id = spec["run_id"]
+    ended = time.time()
+    record = file_run_record(spec, started, ended) or find_run_record(run_id, started, ended)
+    return {
+        "pr_url": find_pr(spec),
+        "run_record_path": str(record) if record else None,
+        "question": (run_dir(run_id) / "question.md").exists(),
+    }
+
+
+# ── stop / restart ───────────────────────────────────────────────────────
+
+
+def wait_exited(run_id: str, timeout: float) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        st = read_status(run_id)
+        if st.get("phase") == "exited" and not locks_held_by(run_id):
+            return True
+        time.sleep(0.2)
+    return False
+
+
+def cmd_stop(run_id: str, wait: bool = True) -> int:
+    check_run_id(run_id)
+    if not run_dir(run_id).is_dir():
+        print("unknown run")
+        return 2
+    st = read_status(run_id)
+    if st.get("phase") == "exited":
+        # A finished run keeps its result: no stop marker, or a passed run
+        # would turn into "stopped".
+        print("already exited")
+        return 0
+    wdir = wrapper_dir(run_id)
+    wdir.mkdir(parents=True, exist_ok=True)
+    (wdir / "stop-requested").write_text(now_iso())
+    sup = st.get("supervisor_pid")
+    if st.get("phase") == "starting" and not pid_alive(sup):
+        exit_status(run_id, "stopped")
+        print("stopped before start")
+        return 0
+    if not pid_alive(sup):
+        # Supervisor gone: kill the harness group ourselves.
+        kill_group(st.get("pgid"), KILL_GRACE_S)
+        release_locks(run_id, locks_held_by(run_id))
+        exit_status(run_id, "stopped")
+        print("stopped (no supervisor)")
+        return 0
+    if not wait:
+        print("stop requested")
+        return 0
+    if wait_exited(run_id, KILL_GRACE_S + 20):
+        print("stopped")
+        return 0
+    print("stop requested, still exiting")
+    return 1
+
+
+def cmd_restart(old_id: str, new_id: str) -> int:
+    check_run_id(old_id)
+    check_run_id(new_id)
+    if read_status(old_id).get("phase") != "exited":
+        cmd_stop(old_id, wait=False)
+    # Never two harness processes in the same worktree, never a false
+    # box_busy against our own predecessor.
+    if not wait_exited(old_id, KILL_GRACE_S + 60):
+        exit_status(new_id, "previous_run_still_active")
+        print("previous_run_still_active")
+        return 7
+    return cmd_start(new_id)
+
+
+# ── spool watcher (launchd, §5) ──────────────────────────────────────────
+
+
+def cmd_watch() -> int:
+    spool = spool_root()
+    if not spool.is_dir():
+        return 0
+    for sub in ("processing", "done", "rejected"):
+        (spool / sub).mkdir(exist_ok=True)
+    wlog = spool / "watch.log"
+
+    def note(msg: str) -> None:
+        with wlog.open("a") as fh:
+            fh.write(f"{now_iso()} {msg}\n")
+
+    def order(p: Path):
+        # Stops first: a start or restart can block for minutes (clone,
+        # waiting on the predecessor) and must not delay another run's stop.
+        try:
+            mtime = p.stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        return (0 if p.name.endswith(".stop.json") else 1, mtime)
+
+    for req in sorted(spool.glob("*.json"), key=order):
+        claimed = spool / "processing" / req.name
+        try:
+            os.replace(req, claimed)  # atomic claim — a parallel watcher skips it
+        except OSError:
+            continue
+        try:
+            data = json.loads(claimed.read_text())
+            if not isinstance(data, dict):
+                raise ValueError("not an object")
+        except (OSError, ValueError) as exc:
+            note(f"rejected {req.name}: malformed ({exc.__class__.__name__})")
+            os.replace(claimed, spool / "rejected" / req.name)
+            continue
+        # Only action + run ids are read from the request; everything else
+        # comes from the validated spec.json.
+        action = data.get("action")
+        run_id = data.get("run_id")
+        if action not in ("start", "stop", "restart") or not _is_uuid(run_id):
+            note(f"rejected {req.name}: unknown action or bad run_id")
+            os.replace(claimed, spool / "rejected" / req.name)
+            continue
+        try:
+            if action == "start":
+                rc = cmd_start(run_id)
+            elif action == "stop":
+                rc = cmd_stop(run_id)
+            else:
+                from_id = data.get("from_run_id")
+                if not _is_uuid(from_id):
+                    note(f"rejected {req.name}: restart without from_run_id")
+                    os.replace(claimed, spool / "rejected" / req.name)
+                    continue
+                rc = cmd_restart(from_id, run_id)
+            note(f"{action} {run_id} → rc={rc}")
+        except Exception as exc:  # noqa: BLE001
+            note(f"{action} {run_id} failed: {exc.__class__.__name__}: {exc}")
+        os.replace(claimed, spool / "done" / req.name)
+    return 0
+
+
+# ── main ─────────────────────────────────────────────────────────────────
+
+
+def main(argv: list) -> int:
+    if not argv:
+        print(__doc__)
+        return 2
+    cmd, args = argv[0], argv[1:]
+    try:
+        if cmd == "validate" and len(args) == 1:
+            return cmd_validate(args[0])
+        if cmd == "start" and len(args) == 1:
+            return cmd_start(args[0])
+        if cmd == "_supervise" and len(args) == 1:
+            return cmd_supervise(args[0])
+        if cmd == "stop" and len(args) == 1:
+            return cmd_stop(args[0])
+        if cmd == "restart" and len(args) == 2:
+            return cmd_restart(args[0], args[1])
+        if cmd == "status" and len(args) == 1:
+            check_run_id(args[0])
+            print(json.dumps(read_status(args[0]), indent=1))
+            return 0
+        if cmd == "watch" and not args:
+            return cmd_watch()
+    except SpecInvalid as exc:
+        print(f"spec_invalid {exc}")
+        return 2
+    print(__doc__)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

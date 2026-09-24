@@ -96,6 +96,7 @@ from app.routers import (
     prompt_templates,
     repos,
     run_record,
+    heads,
     runtimes,
     runtime_schedules,
     playbooks,
@@ -406,6 +407,7 @@ app.include_router(system.router)
 app.include_router(boards.router)
 app.include_router(tasks.router)
 app.include_router(run_record.router)  # /api/v1/tasks/{id}/run-record — Laufakte (Lauf 5, kein Board im Pfad)
+app.include_router(heads.router)  # /api/v1/heads — Head launcher (docs/specs/head-launcher.md), behind heads_enabled
 app.include_router(files.router)  # /api/v1/files — global Files browser (portable, sandboxed)
 app.include_router(agents.router)
 app.include_router(agent_templates.router)

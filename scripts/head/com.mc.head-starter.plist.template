@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Head launcher spool watcher (docs/specs/head-launcher.md §5).
+  Rendered by scripts/head/install-head-starter.sh — placeholders:
+  __MC_HOME__ (e.g. $HOME/.mc) and __HOME__. Runs the INSTALLED copy in
+  $MC_HOME/bin, never a file inside a git checkout (a removed worktree would
+  silently kill the watcher).
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mc.head-starter</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>__MC_HOME__/bin/mc-head</string>
+        <string>watch</string>
+    </array>
+
+    <!-- Fire whenever the backend drops a request into the spool … -->
+    <key>WatchPaths</key>
+    <array>
+        <string>__MC_HOME__/heads/spool</string>
+    </array>
+
+    <!-- … and scan every 30 s as a safety net for a missed event. -->
+    <key>StartInterval</key>
+    <integer>30</integer>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>__MC_HOME__/logs/head-starter.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>__MC_HOME__/logs/head-starter.err.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>__HOME__</string>
+        <key>MC_HOME</key>
+        <string>__MC_HOME__</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>

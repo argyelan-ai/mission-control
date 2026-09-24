@@ -45,6 +45,11 @@ _TEST_VAULT_ROOT = Path(tempfile.mkdtemp(prefix="mc-test-vault-"))
 # explicit grok_log_path=/grok_sessions_path=/hermes_state_db_path= paths.
 _TEST_HARVEST_ROOT = Path(tempfile.mkdtemp(prefix="mc-test-harvest-"))
 
+# Same class once more (head launcher): heads_root defaults to the host's
+# ~/.mc/heads, which the real mc-head watcher reads. A test that forgot its
+# monkeypatch must never drop a spool request there.
+_TEST_HEADS_ROOT = Path(tempfile.mkdtemp(prefix="mc-test-heads-"))
+
 # Third incident of the same class (2026-09-07, omp agent): tests that spawn
 # real subprocesses (render-omp-config.sh & Co.) inherited the agent
 # container's OMP_ENV_FILE=/home/agent/.omp/omp.env. The script honours that
@@ -109,6 +114,8 @@ app.config.settings = app.config.Settings(
     use_subagent_dispatch=False,  # Tests run in legacy mode; new tests enable the flag explicitly
     secrets_encryption_key="bkMM-h80JH3_PRkNc6_-T0YrLMOShvZeoDkKnGrI7JM=",
     vault_path=_TEST_VAULT_ROOT,
+    heads_root=_TEST_HEADS_ROOT,
+    heads_sync_interval=99999,
     lifecycle_watchdog_enabled=True,  # ADR-046: on by default; the check is only ever
                                       # invoked when a test calls _check_stuck_in_progress directly.
     grok_harvest_path=str(_TEST_HARVEST_ROOT / "unified.jsonl"),

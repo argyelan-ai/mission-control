@@ -2,6 +2,7 @@
 
 import { useState, useMemo, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { motion, AnimatePresence } from "framer-motion";
 import { format } from "date-fns";
@@ -29,6 +30,7 @@ export default function Page() {
 
 function HomePage() {
   const qc = useQueryClient();
+  const router = useRouter();
   const t = useTranslations("home");
   const locale = useLocale();
   const dateLocale = locale === "de" ? de : undefined;
@@ -109,7 +111,11 @@ function HomePage() {
           </h1>
           <div className="flex items-center gap-3 shrink-0">
             <span className="label-sys hidden sm:block">{format(new Date(), "EEE, d. MMM yyyy", { locale: dateLocale })}</span>
-            <CreateTaskModal activeBoardId={activeBoardId} agents={agents} />
+            <CreateTaskModal
+              activeBoardId={activeBoardId}
+              agents={agents}
+              onOpenTask={(id) => router.push(`/tasks?task=${encodeURIComponent(id)}`)}
+            />
           </div>
         </div>
         {/* Messmarke: 1px-Linie mit Akzent-Segment — Desktop; Mobile nur feine Linie */}

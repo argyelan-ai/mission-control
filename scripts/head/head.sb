@@ -1,0 +1,62 @@
+;; mc-head sandbox profile (spec §9 layer 3). Used only with MC_HEAD_SANDBOX=1.
+;; Parameters (sandbox-exec -D): RUN, WT, CLONE_GIT, VAULT_JOBS, REAL_HOME, MC_HOME,
+;; USER_TMP (the per-user temp root, /private/var/folders on macOS).
+;; Order matters: later rules win.
+(version 1)
+(allow default)
+
+;; Writes: nothing by default …
+(deny file-write*)
+;; … except the worktree, the clone's git dir (commits of the worktree land
+;; there), the head's own $HOME (harness caches), its status files in the
+;; run folder, temp folders and devices. The vault is NOT writable: the
+;; wrapper files run-record.md into vault jobs/ after the head has ended.
+(allow file-write*
+  (subpath (param "WT"))
+  (subpath (param "CLONE_GIT"))
+  (subpath (string-append (param "RUN") "/home"))
+  (subpath (string-append (param "RUN") "/claude-config"))
+  (literal (string-append (param "RUN") "/step.txt"))
+  (literal (string-append (param "RUN") "/question.md"))
+  (literal (string-append (param "RUN") "/head.log"))
+  (literal (string-append (param "RUN") "/run-record.md"))
+  (subpath "/private/tmp")
+  (subpath (param "USER_TMP"))
+  (subpath "/dev"))
+
+;; The wrapper's own files (status, heartbeat, lock owner) and the backend's
+;; mirror bookkeeping are never writable by the head.
+(deny file-write*
+  (subpath (string-append (param "RUN") "/.wrapper"))
+  (subpath (string-append (param "RUN") "/.backend")))
+
+;; Secrets are never readable.
+(deny file-read*
+  (subpath (string-append (param "REAL_HOME") "/.ssh"))
+  (subpath (string-append (param "REAL_HOME") "/.claude"))
+  (subpath (string-append (param "REAL_HOME") "/.claude-head"))
+  (subpath (string-append (param "REAL_HOME") "/.config/gh"))
+  (subpath (string-append (param "REAL_HOME") "/.omp"))
+  (subpath (string-append (param "REAL_HOME") "/.aws"))
+  (subpath (string-append (param "REAL_HOME") "/.docker"))
+  (subpath (string-append (param "REAL_HOME") "/.kube"))
+  (subpath (string-append (param "REAL_HOME") "/.gnupg"))
+  (literal (string-append (param "REAL_HOME") "/.netrc"))
+  (literal (string-append (param "REAL_HOME") "/.git-credentials"))
+  (subpath (string-append (param "REAL_HOME") "/Library/Keychains"))
+  (subpath (string-append (param "REAL_HOME") "/Library/Cookies"))
+  (subpath (string-append (param "REAL_HOME") "/Library/Application Support/Google"))
+  (subpath (string-append (param "REAL_HOME") "/Library/Application Support/Firefox"))
+  (subpath (string-append (param "REAL_HOME") "/Library/Application Support/BraveSoftware"))
+  (subpath (string-append (param "REAL_HOME") "/Library/Application Support/Arc"))
+  (subpath (string-append (param "REAL_HOME") "/Library/Safari"))
+  (subpath (string-append (param "MC_HOME") "/secrets"))
+  (literal (string-append (param "MC_HOME") "/heads/gh-token"))
+  (regex #"/\.env(\..*)?$"))
+
+;; The Docker daemon is root on the host: its sockets are never reachable,
+;; whatever binary the head runs (the docker shim is only a PATH trick).
+(deny network-outbound
+  (remote unix-socket (path-literal "/var/run/docker.sock"))
+  (remote unix-socket (path-literal "/private/var/run/docker.sock"))
+  (remote unix-socket (path-literal (string-append (param "REAL_HOME") "/.docker/run/docker.sock"))))

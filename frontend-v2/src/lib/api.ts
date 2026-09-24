@@ -122,6 +122,13 @@ import type {
   FsSearchResult,
   TrashEntry,
 } from "./types";
+import type {
+  HeadPairsResponse,
+  HeadRestartBody,
+  HeadRun,
+  HeadBusy,
+  HeadStartBody,
+} from "./heads";
 
 export const BASE_URL = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
 
@@ -2160,6 +2167,34 @@ export const api = {
         body: JSON.stringify({ repo, filename }),
       }),
   },
+  // ── Heads (head launcher, docs/specs/head-launcher.md §7) ─────────────────
+  // One short-lived head per job. Every endpoint answers 404 `heads_disabled`
+  // while the feature flag is off — callers treat that as "no launcher".
+  heads: {
+    pairs: (repoId?: string | null): Promise<HeadPairsResponse> =>
+      request(`/api/v1/heads/pairs${repoId ? `?repo_id=${encodeURIComponent(repoId)}` : ""}`),
+    start: (body: HeadStartBody): Promise<{ run_id: string; state: string; branch?: string }> =>
+      request("/api/v1/heads", { method: "POST", body: JSON.stringify(body) }),
+    restart: (runId: string, body: HeadRestartBody): Promise<{ run_id: string; state: string; restarted_from: string }> =>
+      request(`/api/v1/heads/${encodeURIComponent(runId)}/restart`, { method: "POST", body: JSON.stringify(body) }),
+    list: (params: { taskId?: string; active?: boolean; box?: string } = {}): Promise<{ runs: HeadRun[] }> => {
+      const q = new URLSearchParams();
+      if (params.taskId) q.set("task_id", params.taskId);
+      if (params.active != null) q.set("active", String(params.active));
+      if (params.box) q.set("box", params.box);
+      const qs = q.toString();
+      return request(`/api/v1/heads${qs ? `?${qs}` : ""}`);
+    },
+    get: (runId: string): Promise<HeadRun> => request(`/api/v1/heads/${encodeURIComponent(runId)}`),
+    log: (runId: string, tail = 200): Promise<string> =>
+      requestText(`/api/v1/heads/${encodeURIComponent(runId)}/log?tail=${tail}`),
+    runRecord: (runId: string): Promise<string> =>
+      requestText(`/api/v1/heads/${encodeURIComponent(runId)}/run-record`),
+    stop: (runId: string): Promise<{ run_id: string; state: string }> =>
+      request(`/api/v1/heads/${encodeURIComponent(runId)}/stop`, { method: "POST" }),
+    occupancy: (): Promise<{ boxes: Record<string, HeadBusy> }> => request("/api/v1/heads/occupancy"),
+  },
+
   spark: {
     // Back-compat alias — delegates to the host with slug `dgx-spark` (ADR-048).
     metrics: (): Promise<SparkMetrics> =>

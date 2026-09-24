@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { deriveStateCard } from "../stateCard";
 import { approvalFixture, commentFixture, runRecordFixture, taskFixture } from "./fixtures";
+import { mkRun } from "@/lib/__tests__/headFixtures";
+import type { HeadState } from "@/lib/heads";
 
 describe("deriveStateCard", () => {
   it("blocked with an open approval → NEEDS YOU carrying that approval", () => {
@@ -112,5 +114,41 @@ describe("deriveStateCard", () => {
     });
     const card = deriveStateCard({ task, approvals: [], comments: [sys], runRecord: rr });
     expect(card).toMatchObject({ kind: "failed", error: "Dispatch failed: runtime unreachable" });
+  });
+});
+
+describe("deriveStateCard — head run (B5)", () => {
+  const base = { approvals: [], comments: [], runRecord: null };
+
+  it.each<[HeadState, string | null, string]>([
+    ["starting", null, "stop"],
+    ["running", null, "stop"],
+    ["needs_you", null, "answer"],
+    ["passed", "https://github.com/o/r/pull/712", "open_pr"],
+    ["failed", null, "restart"],
+    ["stopped", null, "restart"],
+  ])("%s → one main action", (state, prUrl, action) => {
+    const task = taskFixture({ status: "in_progress" });
+    const card = deriveStateCard({ ...base, task, headRun: mkRun({ state, pr_url: prUrl }) });
+    expect(card).toMatchObject({ kind: "head", mainAction: action });
+  });
+
+  it("a head run wins over the task status card", () => {
+    const task = taskFixture({ status: "blocked" });
+    const card = deriveStateCard({ ...base, task, headRun: mkRun({ state: "failed", reason: "time_limit" }) });
+    expect(card?.kind).toBe("head");
+  });
+
+  it("silent > 15 min → warn tone but still running", () => {
+    const task = taskFixture({ status: "in_progress" });
+    const silent = deriveStateCard({ ...base, task, headRun: mkRun({ state: "running", silent_s: 22 * 60 }) });
+    expect(silent).toMatchObject({ kind: "head", silentWarn: true, mainAction: "stop", run: { state: "running" } });
+    const fresh = deriveStateCard({ ...base, task, headRun: mkRun({ state: "running", silent_s: 14 * 60 }) });
+    expect(fresh).toMatchObject({ kind: "head", silentWarn: false });
+  });
+
+  it("no head run → the old task cards stay unchanged", () => {
+    const task = taskFixture({ status: "in_progress" });
+    expect(deriveStateCard({ ...base, task, headRun: null })?.kind).toBe("running");
   });
 });

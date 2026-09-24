@@ -27,7 +27,7 @@ import { useTranslations } from "next-intl";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { api } from "@/lib/api";
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
-import type { Device, Host, Runtime, RuntimeLiveStatus } from "@/lib/types";
+import type { Agent, Device, Host, Runtime, RuntimeLiveStatus } from "@/lib/types";
 import { typeLabel } from "../runtimeTypeLabel";
 import { formatUptimeParts, pad2 } from "./uptimeFormat";
 import { fmtCtx } from "@/lib/utils";
@@ -39,6 +39,9 @@ import { ActionBar } from "./ActionBar";
 import { PhaseBar } from "./PhaseBar";
 import { shortModelTitle } from "./modelTitle";
 import { useAppStore } from "@/lib/store";
+import { headOnBoxes, useHeadOccupancy } from "@/components/heads/HeadOccupancy";
+import type { HeadBusy } from "@/lib/heads";
+import { fleetCount } from "@/app/agents/fleetCount";
 
 export interface StageMember {
   host: Host;
@@ -86,6 +89,19 @@ export function Stage({
   const currentUser = useAppStore((s) => s.currentUser);
   const reduceMotion = useReducedMotion();
   const headHost = members.find((m) => m.role === "head" || m.role == null) ?? members[0];
+  // Head launcher §8.3: a head working on any member box (a duo holds both).
+  const headOccupancy = useHeadOccupancy();
+  const workingHead = headOnBoxes(headOccupancy, members.map((m) => m.host.id));
+  // "In use" counts every head working on a member box (a duo can hold one
+  // head per box — distinct runs, not boxes).
+  const headsOnCard = useMemo(() => {
+    const byRun = new Map<string, HeadBusy>();
+    for (const m of members) {
+      const h = headOccupancy[m.host.id];
+      if (h) byRun.set(h.run_id, h);
+    }
+    return [...byRun.values()];
+  }, [headOccupancy, members]);
 
   const { data: pulse } = useQuery({
     queryKey: ["hosts", headHost?.host.id, "pulse"],
@@ -102,6 +118,15 @@ export function Stage({
     queryKey: ["runtime-agents", agentsSlug],
     queryFn: () => api.runtimes.db.agents(agentsSlug),
     enabled: !!agentsSlug,
+    staleTime: 15_000,
+    retry: false,
+  });
+
+  // The runtime-agents answer has no operational mode — the roster (same
+  // query as /agents and the sidebar) says which bound agents are paused.
+  const { data: roster } = useQuery({
+    queryKey: ["agents"],
+    queryFn: () => api.agents.list(),
     staleTime: 15_000,
     retry: false,
   });
@@ -139,20 +164,53 @@ export function Stage({
 
   const tps = pulse?.available ? pulse?.now_tps ?? null : null;
   const latencyMs = live?.latency_ms ?? null;
+  const modeLabel = isDuo ? t("topologyDuo") : t("topologySolo");
+  // Live speed sits in the SPEED tile (label carries the mode); the line
+  // under the bar keeps only mode + latency — no duplicate speed. There is
+  // no benchmark solo value in the card's data, so nothing else to show.
   const nowLineParts = [
-    tps != null ? t("tpsValue", { tps: Math.round(tps) }) : null,
-    isDuo ? t("topologyDuo") : t("topologySolo"),
+    modeLabel,
     latencyMs != null ? t("latencyValue", { ms: latencyMs }) : null,
   ].filter(Boolean);
 
   const dotColor =
     status === "failed" ? STATUS_TEXT.error : status === "switching" ? STATUS_TEXT.warning : STATUS.online;
 
+  // "In use" = active (not paused) agents bound to this box's runtime + heads
+  // working on it — a paused agent does not use the box (same split as the
+  // /agents page and the sidebar counter). An agent the roster does not
+  // know yet counts as active: better one too many than a free-looking box.
+  // The tooltip says who; heads first (they are the ones that block a switch).
+  const boundAgents = (agentsData?.agents ?? []).map(
+    (ref) => roster?.find((a) => a.id === ref.id) ?? ({ ...ref, operational_mode: "active" } as unknown as Agent),
+  );
+  const agentSplit = fleetCount(boundAgents);
+  const activeNames = boundAgents.filter((a) => a.operational_mode !== "paused").map((a) => a.name).filter(Boolean);
+  const pausedNames = boundAgents.filter((a) => a.operational_mode === "paused").map((a) => a.name).filter(Boolean);
+  const agentCount = agentSplit.active;
+  const inUseTitle = [
+    agentSplit.paused > 0
+      ? t("inUseTooltipWithPaused", { heads: headsOnCard.length, agents: agentSplit.active, paused: agentSplit.paused })
+      : t("inUseTooltip", { heads: headsOnCard.length, agents: agentSplit.active }),
+    ...headsOnCard.map((h) => (h.title ? t("inUseHead", { title: h.title }) : t("inUseHeadNoTitle"))),
+    ...(activeNames.length > 0 ? [t("inUseAgents", { names: activeNames.join(", ") })] : []),
+    ...(pausedNames.length > 0 ? [t("inUsePaused", { names: pausedNames.join(", ") })] : []),
+  ].join("\n");
+
   const endpointPort = runtime.endpoint?.match(/:(\d+)/)?.[1] ?? null;
   const cells: KpiCell[] = [
     { value: fmtCtx(live?.served_context_len ?? runtime.max_context_len), label: t("kpiContext") },
-    { value: "–", label: t("kpiSpeedSolo") },
-    { value: String(agentsData?.count ?? 0), label: t("kpiAgents") },
+    {
+      value: tps != null ? t("tpsValue", { tps: Math.round(tps) }) : "–",
+      label: t("kpiSpeedMode", { mode: modeLabel }),
+      testId: "kpi-speed",
+    },
+    {
+      value: String(agentCount + headsOnCard.length),
+      label: t("kpiInUse"),
+      title: inUseTitle,
+      testId: "kpi-in-use",
+    },
     {
       value: endpointPort != null ? `:${endpointPort}` : "–",
       label: t("kpiEndpointSlot"),
@@ -200,7 +258,7 @@ export function Stage({
           </span>
         </div>
         <HeatStrip pulse={pulse} dead={status === "failed"} />
-        <div className="text-xs mt-2 pb-4 font-mono truncate" style={{ color: status === "failed" ? STATUS_TEXT.error : C.textMuted }}>
+        <div className="text-xs mt-2 pb-4 font-mono truncate" style={{ color: status === "failed" ? STATUS_TEXT.error : C.textMuted }} data-testid="stage-now-line">
           {status === "switching"
             ? t("switchingTo", { model: shortModelTitle(runtime.display_name) })
             : status === "failed"
@@ -260,6 +318,7 @@ export function Stage({
             multiNode={(runtime.member_hosts ?? []).length > 0}
             variant={status === "failed" ? "trouble" : "normal"}
             onOpenCockpit={() => onOpenCockpit(headHost?.host.id ?? "")}
+            headOnBox={workingHead}
           />
         )}
       </div>

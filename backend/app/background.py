@@ -98,6 +98,7 @@ from app.services.scheduler import scheduler
 from app.services.runtime_schedule_service import runtime_schedule_service
 from app.services.runtime_watcher import runtime_watcher
 from app.services.runtime_pulse import runtime_pulse
+from app.services.heads.sync import heads_sync
 from app.services.task_runner import task_runner
 from app.services.group_runner import group_runner
 from app.services.loop_runner import loop_runner
@@ -173,6 +174,9 @@ async def start_background_services(app: Any) -> None:
     await runtime_schedule_service.start()
     await runtime_watcher.start()  # Runtime & Model Management v1 (ADR-054)
     await runtime_pulse.start()  # Runtimes-Buehne v2 PR 1 — tok/s heat strip poller
+    # Head launcher: mirror head states onto task cards (idles while
+    # heads_enabled is off; only reads files + writes task status).
+    await heads_sync.start()
     await cli_update_checker.start()  # CLI Tool Updates — periodic version check
     # Provider Model Catalog — hourly probe + "model.new_available" notification
     # so a newly shipped provider model no longer waits for someone to open the
@@ -240,6 +244,7 @@ async def stop_background_services(app: Any) -> None:
         await _timed_stop("obsidian_export", obsidian_export.stop())
     await _timed_stop("runtime_watcher", runtime_watcher.stop())
     await _timed_stop("runtime_pulse", runtime_pulse.stop())
+    await _timed_stop("heads_sync", heads_sync.stop())
     await _timed_stop("cli_update_checker", cli_update_checker.stop())
     await _timed_stop("model_catalog_checker", model_catalog_checker.stop())
     await _timed_stop("local_registry_checker", local_registry_checker.stop())

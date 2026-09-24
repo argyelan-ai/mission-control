@@ -51,6 +51,7 @@ export function TaskFactRow({
   statusControl,
   runRecord,
   checklist,
+  headFact = null,
 }: {
   task: Task;
   agent: Agent | undefined;
@@ -58,8 +59,11 @@ export function TaskFactRow({
   statusControl: React.ReactNode;
   runRecord: RunRecord | null | undefined;
   checklist: { done: number; total: number };
+  /** "omp · GLM local" when the task has a head run (head launcher §8.2). */
+  headFact?: string | null;
 }) {
   const t = useTranslations("tasks");
+  const tHeads = useTranslations("heads");
   const locale = useLocale();
 
   // inbox = not started for the current run, even if an earlier run was
@@ -118,6 +122,11 @@ export function TaskFactRow({
         <span className="font-mono">{checklist.total > 0 ? `✓ ${checklist.done}/${checklist.total}` : "—"}</span>
       </Fact>
       <Fact label={t("detail.factCost")} testId="fact-cost">{cost}</Fact>
+      {headFact && (
+        <Fact label={tHeads("runs.fact")} testId="fact-head" className="col-span-3">
+          <span className="truncate">{headFact}</span>
+        </Fact>
+      )}
       {showPriority && (
         <Fact label={t("detail.factPriority")} testId="fact-priority" className="col-span-3">
           <span style={{ color: task.priority === "critical" ? STATUS_TEXT.error : STATUS_TEXT.warning }}>

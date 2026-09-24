@@ -482,3 +482,37 @@ describe("Copy as Markdown on Safari", () => {
     }
   });
 });
+
+describe("head-owned task (head launcher §8.2)", () => {
+  it("a head run owns the card; the fleet run controls (Requeue) are hidden", async () => {
+    mockApi();
+    const { mkRun } = await import("@/lib/__tests__/headFixtures");
+    vi.spyOn(api.heads, "list").mockResolvedValue({ runs: [mkRun({ state: "running" })] });
+    vi.spyOn(api.heads, "pairs").mockRejectedValue(new Error("API 404: {}"));
+    renderBody(taskFixture({ status: "in_progress", run_control: "manual_hold" }));
+    await waitFor(() => expect(screen.getByTestId("task-state-card")).toHaveAttribute("data-kind", "head"));
+    expect(screen.getByTestId("fact-head")).toHaveTextContent("omp · glm-local");
+    expect(screen.queryByText("Requeue")).not.toBeInTheDocument();
+  });
+
+  it("a passed head (card in review, still held) shows no Requeue and no 'review blocked'", async () => {
+    mockApi();
+    const { mkRun } = await import("@/lib/__tests__/headFixtures");
+    vi.spyOn(api.heads, "list").mockResolvedValue({
+      runs: [mkRun({ state: "passed", pr_url: "https://github.com/o/r/pull/712", exited_at: "2026-09-23T12:00:00Z" })],
+    });
+    vi.spyOn(api.heads, "pairs").mockRejectedValue(new Error("API 404: {}"));
+    renderBody(taskFixture({ status: "review", run_control: "manual_hold" }));
+    await waitFor(() => expect(screen.getByTestId("task-state-card")).toHaveAttribute("data-head-state", "passed"));
+    expect(screen.queryByText("Requeue")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Review blockiert/)).not.toBeInTheDocument();
+  });
+
+  it("without a head run the fleet controls stay", async () => {
+    mockApi();
+    vi.spyOn(api.heads, "list").mockRejectedValue(new Error('API 404: {"detail":{"code":"heads_disabled"}}'));
+    renderBody(taskFixture({ status: "in_progress", run_control: "manual_hold" }));
+    expect(await screen.findByText("Requeue")).toBeInTheDocument();
+    expect(screen.queryByTestId("fact-head")).not.toBeInTheDocument();
+  });
+});
