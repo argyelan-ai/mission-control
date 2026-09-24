@@ -213,7 +213,9 @@ async def test_prepare_then_finish_restores_the_exact_original_watermark(box, fa
     assert box.watermark == CONFIGURED_WATERMARK
     assert result["restored"] is True
     assert memprep.DROPPER_CONTAINER not in box.containers
-    assert await fake_redis.get(RedisKeys.host_mem_prep("192.0.2.10")) is None
+    assert await fake_redis.get(
+        RedisKeys.host_mem_prep(memprep.prep_key("192.0.2.10", "ds4-sparkinfer"))
+    ) is None
 
 
 @pytest.mark.asyncio
@@ -625,7 +627,9 @@ async def test_a_successful_start_leaves_the_prep_for_the_watcher(box, fake_redi
     assert result["ok"] is True
     assert box.watermark == LOWERED_WATERMARK           # still prepared
     assert memprep.DROPPER_CONTAINER in box.containers  # still dropping
-    assert await fake_redis.get(RedisKeys.host_mem_prep("192.0.2.10")) is not None
+    assert await fake_redis.get(
+        RedisKeys.host_mem_prep(memprep.prep_key("192.0.2.10", "ds4-sparkinfer"))
+    ) is not None
 
 
 @pytest.mark.asyncio
@@ -641,7 +645,9 @@ async def test_a_failed_start_undoes_the_prep_immediately(box, fake_redis):
     assert result["ok"] is False
     assert box.watermark == CONFIGURED_WATERMARK
     assert memprep.DROPPER_CONTAINER not in box.containers
-    assert await fake_redis.get(RedisKeys.host_mem_prep("192.0.2.10")) is None
+    assert await fake_redis.get(
+        RedisKeys.host_mem_prep(memprep.prep_key("192.0.2.10", "ds4-sparkinfer"))
+    ) is None
 
 
 @pytest.mark.asyncio

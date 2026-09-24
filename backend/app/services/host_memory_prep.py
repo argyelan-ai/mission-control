@@ -56,7 +56,9 @@ The dangerous state is not the drop — that is instantaneous and harmless. It i
 the lowered watermark and the running dropper: if the backend restarts between
 prepare and finish, the box keeps a 2 GiB watermark and a container spinning
 ``sync`` every second, forever, with nobody left who knows the original value.
-So the handle is written to ``mc:host-memprep:{host}`` BEFORE anything is
+So the handle is written to ``mc:host-memprep:{host}:{runtime}`` (bare
+``{host}`` for preps without a runtime identity and for markers written by the
+old per-box scheme) BEFORE anything is
 changed, and :func:`recover_orphaned_preps` (called from the runtime watcher)
 repairs any handle older than 30 minutes.
 
@@ -154,6 +156,13 @@ class PrepHandle:
     dropper_started: bool = False
     started_at: str = ""
     slug: str | None = None
+    #: The runtime this prep belongs to — the same identity the sibling check
+    #: and the watcher use (the slug, or the id when there is no slug). It is
+    #: what makes the Redis key per-RUNTIME instead of per-box: two services on
+    #: one box (different ports) must not finish each other's prep. ``None``
+    #: on handles written before the key carried the runtime — those live under
+    #: the bare box key and :func:`prep_key` keeps resolving them there.
+    runtime_id: str | None = None
     mem_free_before_kb: int | None = None
     ssh_host: str | None = None
     ssh_user: str | None = None
@@ -182,6 +191,13 @@ class PrepHandle:
     @property
     def changed_anything(self) -> bool:
         return self.dropper_started or self.lowered_to_kb is not None
+
+    @property
+    def prep_key(self) -> str:
+        """The Redis key this handle lives under: per runtime when the handle
+        knows its runtime, the bare box key otherwise (compat with markers
+        written by the old per-box scheme)."""
+        return prep_key(self.host_key, self.runtime_id)
 
     def to_json(self) -> str:
         return json.dumps(asdict(self))
@@ -229,6 +245,23 @@ def host_key(host: ResolvedHost | None) -> str:
     if host is None or not host.ssh_host:
         return "default"
     return str(host.ssh_host)
+
+
+def prep_key(box_key: str, runtime_id: str | None) -> str:
+    """Redis-key identity for a memory-prep handle: ``{box}:{runtime}`` when
+    the runtime is known, the bare box key otherwise.
+
+    The bare form is not a legacy shunt that can be removed — it is what
+    :func:`prepare_host_memory` produces when it is called without a runtime
+    identity, and what every handle written before the key carried the runtime
+    still resolves to (a handle from the old scheme has no ``runtime_id``, so
+    ``PrepHandle.prep_key`` falls back to exactly the key it was written
+    under). No code ever parses this string apart — lookups are exact, and
+    host-wide searches go through :func:`load_host_handles`, which filters on
+    the handle's own ``host_key`` — so hosts whose address contains a colon
+    (IPv6, or a port suffix) are unambiguous.
+    """
+    return f"{box_key}:{runtime_id}" if runtime_id else box_key
 
 
 async def _ssh(command: str, *, host: ResolvedHost | None, timeout: float) -> tuple[str, str, int]:
@@ -549,6 +582,7 @@ async def prepare_host_memory(
         ssh_user=host.ssh_user if host else None,
         ssh_key_path=host.ssh_key_path if host else None,
         ssh_credential_id=str(host.ssh_credential_id) if host and host.ssh_credential_id else None,
+        runtime_id=str(slug) if slug else None,
     )
 
     handle.original_watermark_kb = await read_watermark_kb(host)
@@ -656,8 +690,7 @@ async def finish(
     except Exception:  # noqa: BLE001
         logger.exception("memprep: cleanup failed on %s", handle.host_key)
         return result
-
-    await _clear_handle(handle.host_key)
+    await _clear_handle(handle.prep_key)
     return result
 
 
@@ -782,7 +815,8 @@ async def finish_for_runtime(
 
 
 async def load_handle(key: str) -> PrepHandle | None:
-    """The outstanding prep for a host key, or ``None``."""
+    """The outstanding prep under *key* — a :func:`prep_key`, box or
+    ``box:runtime`` — or ``None``."""
     try:
         redis = await get_redis()
         raw = await redis.get(RedisKeys.host_mem_prep(key))
@@ -792,20 +826,65 @@ async def load_handle(key: str) -> PrepHandle | None:
     return PrepHandle.from_json(raw) if raw else None
 
 
-async def finish_for_host(host: ResolvedHost | None, *, success: bool) -> bool:
-    """End whatever prep is outstanding for *host*. Returns True if one was.
+async def finish_for_host(
+    host: ResolvedHost | None, *, success: bool, runtime_id: str | None = None
+) -> bool:
+    """End the prep outstanding for *host* — scoped to *runtime_id* when given.
+    Returns True if one was.
 
     This is the call the runtime watcher makes when a probe finally sees the
     engine serving: that moment — not the return of ``docker compose up`` — is
     when the load window closed and the box may have its watermark and its page
-    cache back. Idempotent: no handle means nothing to do.
+    cache back.
+
+    With ``runtime_id`` the lookup hits that runtime's own key first, so a
+    second service loading on the same box is never finished by its neighbour.
+    A marker under the bare box key (written before the key carried the
+    runtime, or by a prep without a runtime identity) is still honoured when
+    its slug is unset or matches; a slug belonging to a DIFFERENT runtime is
+    left for the orphan sweep. Without ``runtime_id`` the old behaviour
+    applies verbatim: whatever is outstanding for the box gets finished.
+    Idempotent: no handle means nothing to do.
     """
-    key = host_key(host)
-    handle = await load_handle(key)
+    box = host_key(host)
+    handle = None
+    if runtime_id:
+        handle = await load_handle(prep_key(box, runtime_id))
+    if handle is None:
+        legacy = await load_handle(box)
+        if legacy is not None and (
+            runtime_id is None or legacy.slug in (None, runtime_id)
+        ):
+            handle = legacy
     if handle is None:
         return False
     await finish_for_runtime(handle, host=host, success=success)
     return True
+
+
+async def load_host_handles(host: ResolvedHost | None) -> list[PrepHandle]:
+    """Every outstanding prep on *host*, whatever runtime it belongs to.
+
+    The host-wide view for callers that ask "is SOMEONE still mid-prep on
+    this box" (the watcher's exclusive-sibling guard) rather than "is THIS
+    runtime's prep outstanding". Filters on the handle's recorded
+    ``host_key``, not on the Redis key string, so a box address that is a
+    prefix of another one (``192.0.2.1`` vs ``192.0.2.10``) cannot bleed in.
+    """
+    box = host_key(host)
+    try:
+        redis = await get_redis()
+        keys = [k async for k in redis.scan_iter(match="mc:host-memprep:*")]
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("memprep: handle scan failed: %s", exc)
+        return []
+    handles: list[PrepHandle] = []
+    for key in keys:
+        raw = await redis.get(key)
+        handle = PrepHandle.from_json(raw) if raw else None
+        if handle is not None and handle.host_key == box:
+            handles.append(handle)
+    return handles
 
 
 # ── Orphan repair ────────────────────────────────────────────────────────────
@@ -897,7 +976,7 @@ async def _store_handle(handle: PrepHandle) -> None:
         redis = await get_redis()
         # No TTL: expiry would silently discard the only record of the original
         # watermark. The orphan sweep is what ends a handle's life.
-        await redis.set(RedisKeys.host_mem_prep(handle.host_key), handle.to_json())
+        await redis.set(RedisKeys.host_mem_prep(handle.prep_key), handle.to_json())
     except Exception as exc:  # noqa: BLE001
         logger.warning("memprep: handle could not be persisted (%s)", exc)
 

@@ -900,7 +900,9 @@ class RuntimeWatcher:
                 # runtime would close out whatever unrelated prep happens
                 # to be sitting there, closing it for the wrong runtime.
                 return
-            await host_memory_prep.finish_for_host(host, success=success)
+            await host_memory_prep.finish_for_host(
+                host, success=success, runtime_id=runtime.slug
+            )
         except Exception:  # noqa: BLE001 — never at the cost of the tick
             logger.exception("memory prep cleanup failed for %s", runtime.slug)
 
@@ -1331,9 +1333,9 @@ class RuntimeWatcher:
                          runtime.slug, exc)
             return None
         if host is not None:
-            handle = await host_memory_prep.load_handle(host_memory_prep.host_key(host))
-            if handle is not None and handle.slug and handle.slug != runtime.slug:
-                return handle.slug
+            for handle in await host_memory_prep.load_host_handles(host):
+                if handle.slug and handle.slug != runtime.slug:
+                    return handle.slug
         return None
 
     async def _read_live_reachable(self, redis, slug: str) -> bool:
