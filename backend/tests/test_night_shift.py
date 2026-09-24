@@ -726,11 +726,12 @@ async def test_unmark_while_the_worker_holds_the_lock_too_long_is_409(auth_clien
 
 
 def test_active_run_without_box_keys_holds_its_runtime_lane(heads_root):
+    from app.services.heads import files
     from app.services.heads.night_shift import busy_lanes
 
     make_run(heads_root, task_id=str(uuid.uuid4()), status={"phase": "running", "started_at": "x"},
              heartbeat_age=5, box_keys=[], runtime_slug="lan-engine")
-    runs = {r.run_id: r for r in __import__("app.services.heads.files", fromlist=["x"]).list_runs()}
+    runs = {r.run_id: r for r in files.list_runs()}
     busy = busy_lanes({}, runs, [], datetime.now(UTC).timestamp())
     assert night.runtime_lane("lan-engine") in busy
 

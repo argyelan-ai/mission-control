@@ -46,7 +46,12 @@ from app.models.agent import Agent
 from app.models.repo import Repo
 from app.models.task import Task
 from app.services.heads import box_guard, files, night, night_store, pairs
-from app.services.heads.night import CLOUD_LANE, FINISHED_TASK_STATUSES, Candidate, NightConfig
+from app.services.heads.night import (
+    CLOUD_LANE,
+    FINISHED_TASK_STATUSES,
+    Candidate,
+    NightConfig,
+)
 from app.services.heads.night_store import NightMark
 from app.services.heads.start import HeadStartError, start_head
 from app.services.heads.state import ACTIVE_STATES, derive_for_run
