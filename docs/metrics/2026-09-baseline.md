@@ -28,6 +28,9 @@ on 2026-09-24; nothing here is carried over from notes.
 
 - Source: `model_usage_events`, `ts >= 2026-08-17 00:00 UTC`, grouped by
   week (Monday 00:00 UTC), source, harness and model. Read-only `SELECT`.
+- Snapshot filter: `harvested_at <= 2026-09-24 18:02:12 UTC`. Rows harvested
+  later are excluded; without this filter the same query already returns more
+  events, so use it to reproduce the numbers below.
 - The last week (starting 2026-09-21) is partial: Monday to Thursday
   18:02 UTC (latest `harvested_at` 2026-09-24 18:02 UTC).
 - **USD** = recompute with the current `model_prices` table and the same
@@ -147,7 +150,7 @@ $72.56 (notional) · Opus 4.8 $40.76 · Haiku 4.5 $0.96 · grok-4.5 $0.20.
 
 | Log | Content | Retention | Usable for pages? |
 |---|---|---|---|
-| Proxy (Caddy) | No `log` directive in the `Caddyfile` → **no access log**. Only warnings/errors: "aborting with incomplete response" (4,455) and upstream "connection refused" / DNS errors (~11,500), each with full request headers incl. `Referer` | since 2026-08-21 20:06 UTC (json-file, 3 × 10 MB) | Only indirectly (§2.2) |
+| Proxy (Caddy) | No `log` directive in the `Caddyfile` → **no access log**. Only warnings/errors: "aborting with incomplete response" (4,455) and upstream "connection refused" / DNS errors (~11,500), each with the `Referer` of the calling page | since 2026-08-21 20:06 UTC (json-file, 3 × 10 MB) | Only indirectly (§2.2) |
 | Backend (uvicorn) | Access lines `METHOD /api/v1/... status`, no timestamp, no referrer; mixed with agent and worker callers | only since the last container start, 2026-09-24 15:12 UTC (~3 h, 24,889 requests) | No — API path ≠ page |
 | Frontend (Next.js) | Start-up lines only | — | No |
 
@@ -200,9 +203,8 @@ Preferred: **route beacon** (about 30 lines, no new table).
 Zero-code fallback: enable a Caddy access log for the frontend site only, with
 a `filter` encoder that deletes request headers and the query string, and count
 requests with `Sec-Fetch-Dest: document`. This counts full page loads only
-(reloads, new tabs, links from chat), not client-side navigation. The filter is
-required, not optional: stream endpoints carry their credential in the query
-string, and today's error lines already log it in full.
+(reloads, new tabs, links from chat), not client-side navigation. The filter must
+drop request headers and the query string.
 
 ## 3. Head numbers (for stop 1)
 
