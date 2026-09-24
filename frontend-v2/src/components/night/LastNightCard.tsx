@@ -196,6 +196,7 @@ function JobLine({
   detail,
   question,
   run,
+  action,
 }: {
   testId: string;
   taskId: string;
@@ -204,6 +205,7 @@ function JobLine({
   detail: React.ReactNode;
   question?: string | null;
   run?: HeadRun | null;
+  action?: React.ReactNode;
 }) {
   const t = useTranslations("nightShift");
   const [answering, setAnswering] = useState(false);
@@ -237,6 +239,7 @@ function JobLine({
             </p>
           )}
         </div>
+        {action}
         {answerable && !answering && (
           <button
             type="button"
@@ -317,18 +320,20 @@ function ReportRow({ entry: e }: { entry: LastNightEntry }) {
   const tHeads = useTranslations("heads");
   let detail: React.ReactNode = null;
   let question: string | null = null;
+  let action: React.ReactNode = null;
   if (e.category === "passed" && e.pr_url) {
     const n = prNumberFromUrl(e.pr_url);
-    detail = (
+    // The row's second action sits where "Answer" sits: a 44 px target on phones.
+    action = (
       <a
         href={e.pr_url}
         target="_blank"
         rel="noopener noreferrer"
-        className="inline-flex items-center gap-0.5 underline underline-offset-2"
-        style={{ color: C.textPrimary }}
+        className={`${ghostBtn} shrink-0 font-mono`}
+        style={{ color: C.textPrimary, border: `1px solid ${C.borderActive}` }}
       >
         {n != null ? t("card.pr", { number: n }) : t("card.prNoNumber")}
-        <ExternalLink size={10} aria-hidden />
+        <ExternalLink size={11} aria-hidden />
       </a>
     );
   } else if (e.category === "failed") {
@@ -352,6 +357,7 @@ function ReportRow({ entry: e }: { entry: LastNightEntry }) {
       detail={detail}
       question={question}
       run={e.run}
+      action={action}
     />
   );
 }
