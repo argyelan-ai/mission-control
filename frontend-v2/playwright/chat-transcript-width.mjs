@@ -66,6 +66,51 @@ function fixture() {
       title: `Read ${UNBREAKABLE}`, detail: { file_path: LONG_PATH }, result: UNBREAKABLE },
     { kind: "message", uuid: "w8", ts: iso(864000), role: "teammate", sidechain: false, model: null, teammate: "rex", text: `Recherche fertig.\n${UNBREAKABLE}` },
     { kind: "notification", uuid: "w9", ts: iso(862000), taskId: LONG_PATH, toolUseId: null, status: "completed", summary: `Fertig: ${LONG_PATH}` },
+    // ── REAL operator transcript (card 630bdd4b, iPhone screenshots) ──
+    // What the operator actually had on screen after #634 — none of it is an
+    // unbreakable token, it is text WITH spaces. A fenced block WITHOUT a
+    // language tag renders through MarkdownContent's INLINE code branch (no
+    // `language-` className), so it has no overflow-x-auto of its own and the
+    // surrounding <pre> keeps `white-space: pre` — spaces do not wrap there.
+    { kind: "message", uuid: "r1", ts: iso(858000), role: "assistant", sidechain: false, model: "glm-5.3",
+      text: [
+        "Build läuft:",
+        "",
+        "```",
+        "docker compose --profile n-control build --no-cache frontend",
+        "ss | Rex | letzte echte Aeusserung vor 1 min | Rueckmeldung an Boss fehlt noch",
+        "```",
+      ].join("\n") },
+    // Inline code carrying a shell command WITH spaces: this must wrap at the
+    // word boundaries inside the sentence, not push the paragraph wide.
+    { kind: "message", uuid: "r2", ts: iso(856000), role: "assistant", sidechain: false, model: "glm-5.3",
+      text: "Danach `n-control build --no-cache frontend` ausfuehren und das Ergebnis in `deploy/frontend-container.log` pruefen." },
+    // A real GFM table with prose cells — must scroll in its own box.
+    { kind: "message", uuid: "r3", ts: iso(854000), role: "assistant", sidechain: false, model: "glm-5.3",
+      text: [
+        "| Agent | Letzte Aeusserung | Status |",
+        "| --- | --- | --- |",
+        "| Rex | letzte echte Aeusserung vor 1 min | wartet auf Rueckmeldung des Boss-Hosts |",
+        "| Hermes | heartbeat ok, keine Tickets offen | idle |",
+      ].join("\n") },
+    // Hypothesis-1 probe: the SAME shapes inside the user bubble — a flex
+    // child sized by shrink-to-fit (max-w-[85%]), where an `overflow-x-auto`
+    // wrapper without `min-w-0` could still grow the bubble via its
+    // intrinsic min-content.
+    { kind: "message", uuid: "r4", ts: iso(852000), role: "user", sidechain: false, model: null,
+      text: [
+        "Kontext:",
+        "",
+        "```",
+        "docker compose --profile n-control build --no-cache frontend",
+        "```",
+        "",
+        "| Agent | Letzte Aeusserung | Status |",
+        "| --- | --- | --- |",
+        "| Rex | letzte echte Aeusserung vor 1 min | wartet auf Rueckmeldung |",
+      ].join("\n") },
+    { kind: "message", uuid: "r5", ts: iso(850000), role: "user", sidechain: false, model: null,
+      text: "Bitte `n-control build --no-cache frontend` anwerfen und `deploy/frontend-container.log` pruefen." },
     // Allowed to be wide: a fenced code block and a markdown table each carry
     // their own horizontal scroller, so their content never reaches the
     // transcript box.
