@@ -291,6 +291,7 @@
 
   /* Status-Text — AA-sichere Stufen für Fliesstext (STATUS_TEXT) */
   --color-status-error-text: var(--color-status-error);
+  --color-status-online-text: var(--color-status-online);
   --color-status-info-text: var(--color-status-info);
   --color-status-warning-text: #b98f4d; /* gelifteter Ton — Token selbst = 4.34:1 */
 
@@ -402,12 +403,15 @@
   --color-on-accent: #ffffff;
 
   /* ---- Status (min. Kontrast über alle 5 Flächen) ---- */
-  --color-status-online: #2a6e37;  /* 4.66 */
-  --color-status-warning: #7a5a1f; /* 4.77 */
-  --color-status-error: #a8332e;   /* 4.97 */
+  --color-status-online: #235d2e;  /* ≥4.5 auch auf eigener 12-%-Tönung */
+  --color-status-warning: #6f5119; /* ≥4.5 auch auf eigener 12-%-Tönung */
+  --color-status-error: #962c27;   /* ≥4.5 auch auf eigener 12-%-Tönung */
   --color-status-info: #2a5a92;    /* 5.30 */
   --color-status-offline: #c9c5bb;
-  --color-status-warning-text: #7a5a1f;
+  /* Text-Stufen: auch auf der 12-%-Status-Tönung (Chips) ≥4.5:1 */
+  --color-status-warning-text: #6f5119;
+  --color-status-error-text: #962c27;
+  --color-status-online-text: #235d2e;
 
   /* ---- Overlays ---- */
   --color-overlay: #1b1a17;

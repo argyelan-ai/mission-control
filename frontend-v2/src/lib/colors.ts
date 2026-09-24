@@ -146,9 +146,9 @@ export const LANE: Record<string, string> = {
 // warning ochre lands at 4.34:1, so body text gets a lifted tone.
 
 export const STATUS_TEXT = {
-  online: C.online,   // 5.49:1 on #313131 — usable unchanged
+  online: v("status-online-text"), // dark = C.online; light a step deeper for text on status tints
   warning: v("status-warning-text"), // lifted tone (dark #B98F4D = 5.38:1; token itself 4.34:1)
-  error: C.error,     // 4.62:1 — usable unchanged
+  error: v("status-error-text"), // dark = C.error; light a step deeper for text on status tints
   info: C.info,       // 4.74:1 — usable unchanged
 } as const;
 

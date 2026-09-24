@@ -73,6 +73,11 @@ DESIGN.md.
      `text-dim` is meant for decoration but is used for small meta text in
      many places (axe finding), so in light mode it is an AA text tone on
      the four resting surfaces too.
+   - Status hues are used as text on their own 12 % tint (chips, pills), so
+     in light mode they clear 4.5:1 there too; `STATUS_TEXT` online/error
+     became tokens (`--color-status-{online,error}-text`, dark = the hue).
+   - Browser proof: axe colour-contrast on 10 pages in light mode — 0
+     violations. Dark: identical findings before/after (all pre-existing).
    - The memory graph resolves its canvas palette per theme and redraws on a
      switch; community colours have a deeper light set (≥3:1 on paper).
    - Agent identity hues keep their hue; the lightness is a CSS variable

@@ -146,6 +146,22 @@ describe("theme contrast (WCAG) — both modes", () => {
     expect(fails).toEqual([]);
   });
 
+  it("light: status text and status hues stay AA on their own 12 % tint (chips) over elevated/hover", () => {
+    const mix = (fg: string, bg: string, a: number) =>
+      "#" + [1, 3, 5].map((i) => Math.round(parseInt(fg.slice(i, i + 2), 16) * a + parseInt(bg.slice(i, i + 2), 16) * (1 - a)).toString(16).padStart(2, "0")).join("");
+    const col = (t: string) => resolveVar(`var(${t})`, lightVars);
+    const fails: string[] = [];
+    for (const [text, hue] of [["--color-status-warning-text", "--color-status-warning"], ["--color-status-error-text", "--color-status-error"], ["--color-status-online-text", "--color-status-online"], ["--color-status-info", "--color-status-info"],
+      // chips paint the status HUE as text on its own tint (Pill, tag chips)
+      ["--color-status-warning", "--color-status-warning"], ["--color-status-error", "--color-status-error"], ["--color-status-online", "--color-status-online"]]) {
+      for (const s of ["--color-bg-elevated", "--color-bg-hover"]) {
+        const r = ratio(col(text), mix(col(hue), col(s), 0.12));
+        if (r < 4.5) fails.push(`${text} on 12% ${hue} over ${s}: ${r.toFixed(2)}`);
+      }
+    }
+    expect(fails).toEqual([]);
+  });
+
   it("light mode also sets color-scheme: light (native controls, scrollbars)", () => {
     expect(css).toMatch(/:root\[data-theme="light"\]\s*\{[^}]*color-scheme:\s*light/);
   });
