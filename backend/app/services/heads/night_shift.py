@@ -6,16 +6,27 @@ Every tick (60 s):
    is already done/aborted.
 2. **Blocked notices** — a night head that waits on a question, or has shown
    no heartbeat / output for 15 min, is reported once through the operator
-   report channel. Nothing is stopped or restarted.
+   report channel (recorded only when delivered). Nothing is stopped or
+   restarted.
 3. **Morning report** — after a window has ended, one message for that
    night: passed / failed / needs you / blocked (+ still running), with task
    and PR links, through ``operator_reports.send_report`` (the digest path).
    Started marks are archived into the report file; marks that never started
-   stay queued for the next night.
+   stay queued for the next night. An undelivered report is sent again later
+   (``night_store.claim_report``).
 4. **Start** — inside the window and with the night shift switched on: at
    most ONE head per tick, through ``heads.start.start_head`` (the same path
    as "Run as head"). Box lanes, marking order and the cloud share decide
-   which mark (``night.pick_next``).
+   which mark (``night.pick_next``). Right before the start, under the mark
+   lock, the mark is read again and the card must still be held
+   (``night.still_ours``) — otherwise ``task_moved``.
+
+Known limits (spec §14): a lane counts heads only — a box whose engine serves
+fleet agents right now (``pairs.engine_in_use``) still gets a night head.
+
+The worker never writes a whole mark it read earlier: every write re-reads
+the file (``night_store.update_mark_fields``), so an unmark or a pair change
+by the operator during a tick stays as the operator left it.
 
 No new persistent agent, no restart logic, no approvals.
 """
@@ -35,14 +46,12 @@ from app.models.agent import Agent
 from app.models.repo import Repo
 from app.models.task import Task
 from app.services.heads import box_guard, files, night, night_store, pairs
-from app.services.heads.night import CLOUD_LANE, Candidate, NightConfig
+from app.services.heads.night import CLOUD_LANE, FINISHED_TASK_STATUSES, Candidate, NightConfig
 from app.services.heads.night_store import NightMark
 from app.services.heads.start import HeadStartError, start_head
 from app.services.heads.state import ACTIVE_STATES, derive_for_run
 
 logger = logging.getLogger("mc.night_shift")
-
-FINISHED_TASK_STATUSES = frozenset({"done", "aborted"})
 
 
 @dataclass
@@ -126,6 +135,7 @@ async def tick(session: AsyncSession, now: datetime | None = None, *, send=None)
     cfg = await night_store.load_config(session)
     marks = night_store.list_marks()
     if not marks:
+        await _retry_reports(set(), now, send, out)
         return out
     tasks = await _tasks(session, marks)
     runs = {r.run_id: r for r in files.list_runs()}
@@ -156,12 +166,14 @@ async def tick(session: AsyncSession, now: datetime | None = None, *, send=None)
         text = night.format_notice(kind, title=tasks[m.task_id].title, task_id=m.task_id,
                                    base_url=settings.mc_base_url, silent_s=facts["silent_s"], lang=lang)
         try:
-            await send(text)
+            delivered = await send(text)
         except Exception:
             logger.exception("night shift: blocked notice failed")
             continue
+        if not delivered:
+            continue  # not recorded: tried again next tick
         m.notified.append(kind)
-        night_store.save_mark(m)
+        night_store.update_mark_fields(m.task_id, notified=list(m.notified))
         out.notices.append(f"{m.task_id}:{kind}")
 
     # 3. Morning report for every night whose window has ended
@@ -173,28 +185,28 @@ async def tick(session: AsyncSession, now: datetime | None = None, *, send=None)
     })
     for night_key in ended:
         of_night = [m for m in marks if m.night == night_key]
-        if night_store.reserve_report(night_key):
-            lang = lang or await _operator_language(session)
-            entries = [_report_entry(m, tasks[m.task_id], runs, now_ts) for m in of_night]
-            text = night.format_report(night_key, entries, base_url=settings.mc_base_url, lang=lang)
-            try:
-                delivered = await send(text)
-            except Exception:
-                logger.exception("night shift: morning report failed")
-                night_store.release_report(night_key)
-                continue
-            night_store.write_report(night_key, {
-                "night": night_key, "sent_at": now.isoformat(), "delivered": bool(delivered),
-                "entries": entries, "text": text,
-            })
-            out.reported = night_key
-        # Sent now, or already sent before a crash: archive / re-queue.
+        claim = night_store.claim_report(night_key, now_ts)
+        if claim is not None:
+            if not claim.get("text"):
+                lang = lang or await _operator_language(session)
+                entries = [_report_entry(m, tasks[m.task_id], runs, now_ts) for m in of_night]
+                claim = {**claim, "entries": entries,
+                         "text": night.format_report(night_key, entries, base_url=settings.mc_base_url, lang=lang)}
+            if await _send_report(night_key, claim, now, send):
+                out.reported = night_key
+        stored = night_store.load_report(night_key)
+        if not stored or "entries" not in stored:
+            continue  # another pass claimed it moments ago: keep the marks for it
+        # Sent (or stored for a retry): archive / re-queue.
         for m in of_night:
             if m.run_id:
                 night_store.delete_mark(m.task_id)  # its outcome lives in the report
             else:
-                m.night, m.gave_up = None, None  # never started: queued for the next night
-                night_store.save_mark(m)
+                # never started: queued for the next night
+                night_store.update_mark_fields(m.task_id, night=None, gave_up=None)
+
+    # 3b. Retries of undelivered reports whose marks are archived already
+    await _retry_reports(set(ended), now, send, out)
 
     # 4. Start (one per tick)
     if not cfg.enabled or current is None:
@@ -204,22 +216,73 @@ async def tick(session: AsyncSession, now: datetime | None = None, *, send=None)
     return out
 
 
+async def _retry_reports(skip: set[str], now: datetime, send, out: TickResult) -> None:
+    """Send stored, undelivered reports again (``night_store.claim_report``
+    decides when, and when to give up)."""
+    now_ts = now.timestamp()
+    for night_key in night_store.report_nights():
+        if night_key in skip:
+            continue
+        claim = night_store.claim_report(night_key, now_ts)
+        if claim is None:
+            continue
+        if not claim.get("text"):
+            # a claim without text whose marks are gone: nothing to rebuild from
+            night_store.write_report(night_key, {**claim, "state": "undelivered", "entries": [],
+                                                 "attempts": night_store.REPORT_MAX_ATTEMPTS})
+            continue
+        if await _send_report(night_key, claim, now, send):
+            out.reported = night_key
+
+
+async def _send_report(night_key: str, claim: dict, now: datetime, send) -> bool:
+    """One send attempt of a claimed report; stores the outcome. True = delivered."""
+    delivered = False
+    try:
+        delivered = bool(await send(claim["text"]))
+    except Exception:
+        logger.exception("night shift: morning report failed")
+    attempts = int(claim.get("attempts") or 0) + 1
+    night_store.write_report(night_key, {
+        "night": night_key, "state": "sent" if delivered else "undelivered", "attempts": attempts,
+        "at": now.timestamp(), "sent_at": now.isoformat(), "delivered": delivered,
+        "entries": claim.get("entries") or [], "text": claim["text"],
+    })
+    if not delivered:
+        logger.warning("night shift: morning report %s not delivered (attempt %s)", night_key, attempts)
+    return delivered
+
+
+def busy_lanes(occupancy: dict, runs: dict, night_marks: list[NightMark], now_ts: float) -> set[str]:
+    """Lanes held right now: GPU boxes (``box_guard.occupancy``), the lane of a
+    local runtime without box keys while a head runs on it, and the cloud lane
+    while a night cloud head runs."""
+    busy = set(occupancy)
+    for run in runs.values():
+        if run.spec.get("box_keys"):
+            continue
+        slug = run.spec.get("runtime_slug")
+        if slug and derive_for_run(run, now_ts)["state"] in ACTIVE_STATES:
+            busy.add(night.runtime_lane(str(slug)))
+    for m in night_marks:
+        run = runs.get(m.run_id) if m.run_id else None
+        if run is not None and m.locality == "cloud" and derive_for_run(run, now_ts)["state"] in ACTIVE_STATES:
+            busy.add(CLOUD_LANE)
+    return busy
+
+
 async def _start_next(session: AsyncSession, cfg: NightConfig, window: night.Window, marks: list[NightMark],
                       tasks: dict[str, Task], runs: dict, now_ts: float) -> str | None:
     queued = [m for m in marks if m.run_id is None]
     for m in queued:
         if m.night != window.night:
             m.night, m.gave_up = window.night, None
-            night_store.save_mark(m)
+            night_store.update_mark_fields(m.task_id, night=m.night, gave_up=None)
     night_marks = [m for m in marks if m.night == window.night]
     cloud_started = sum(1 for m in night_marks if m.run_id and m.locality == "cloud")
 
     occupancy = box_guard.occupancy(now_ts)
-    busy = set(occupancy)
-    for m in night_marks:
-        run = runs.get(m.run_id) if m.run_id else None
-        if run is not None and m.locality == "cloud" and derive_for_run(run, now_ts)["state"] in ACTIVE_STATES:
-            busy.add(CLOUD_LANE)
+    busy = busy_lanes(occupancy, runs, night_marks, now_ts)
 
     listing = await pairs.list_pairs(session, occupancy)
     by_key = {(p["harness"], p["runtime_slug"]): p for p in listing["pairs"]}
@@ -228,12 +291,16 @@ async def _start_next(session: AsyncSession, cfg: NightConfig, window: night.Win
     for m in queued:
         if m.gave_up:
             continue
+        task = tasks[m.task_id]
+        if not night.still_ours(task.status, task.run_control):
+            _note(m, "task_moved", permanent=True)
+            continue
         pair = by_key.get((m.harness, m.runtime_slug))
         if pair is None:
             _note(m, "pair_gone", permanent=True)
             continue
         cloud = pair["locality"] == "cloud"
-        lanes = [CLOUD_LANE] if cloud else (list(pair["box_keys"]) or [f"runtime:{m.runtime_slug}"])
+        lanes = [CLOUD_LANE] if cloud else (list(pair["box_keys"]) or [night.runtime_lane(m.runtime_slug)])
         candidates.append(Candidate(task_id=m.task_id, locality="cloud" if cloud else "local",
                                     lanes=lanes, order=m.marked_at))
         by_task[m.task_id] = m
@@ -244,22 +311,48 @@ async def _start_next(session: AsyncSession, cfg: NightConfig, window: night.Win
         _note(by_task[task_id], why)
     for task_id in pick.ready:
         m, task = by_task[task_id], tasks[task_id]
-        repo = await session.get(Repo, task.repo_id) if task.repo_id else None
-        if repo is None:
-            _note(m, "repo_required", permanent=True)
-            continue
         try:
-            result = await start_head(session, task=task, repo=repo, harness=m.harness,
-                                      runtime_slug=m.runtime_slug, user_id=m.marked_by,
-                                      reason="night_shift_start", now=now_ts)
-        except HeadStartError as exc:
-            _note(m, exc.code, permanent=exc.code in night.PERMANENT_START_ERRORS)
-            continue
-        m.run_id, m.started_at, m.last_error = result["run_id"], now_ts, None
-        night_store.save_mark(m)
-        logger.info("night shift: started head %s for task %s", result["run_id"], task_id)
-        return task_id
+            async with night_store.mark_lock(task_id, timeout=2.0):
+                started = await _start_one(session, m, task, now_ts)
+        except night_store.MarkBusy:
+            continue  # the operator changes this mark right now: next tick
+        if started:
+            return task_id
     return None
+
+
+async def _start_one(session: AsyncSession, snapshot: NightMark, task: Task, now_ts: float) -> bool:
+    """Start one mark as a head. The caller holds the mark lock."""
+    task_id = snapshot.task_id
+    fresh = night_store.load_mark(task_id)
+    if (
+        fresh is None or fresh.run_id is not None or fresh.gave_up
+        or (fresh.harness, fresh.runtime_slug) != (snapshot.harness, snapshot.runtime_slug)
+    ):
+        return False  # removed, started or changed meanwhile: the next tick sees it as it is now
+    await session.refresh(task)
+    if not night.still_ours(task.status, task.run_control):
+        night_store.update_mark_fields(task_id, locked=True, last_error="task_moved", gave_up="task_moved")
+        return False
+    repo = await session.get(Repo, task.repo_id) if task.repo_id else None
+    if repo is None:
+        night_store.update_mark_fields(task_id, locked=True, last_error="repo_required", gave_up="repo_required")
+        return False
+    try:
+        result = await start_head(session, task=task, repo=repo, harness=fresh.harness,
+                                  runtime_slug=fresh.runtime_slug, user_id=fresh.marked_by,
+                                  reason="night_shift_start", now=now_ts, clear_hold_reason=True)
+    except HeadStartError as exc:
+        permanent = exc.code in night.PERMANENT_START_ERRORS
+        changes = {"last_error": exc.code}
+        if permanent:
+            changes["gave_up"] = exc.code
+        night_store.update_mark_fields(task_id, locked=True, **changes)
+        return False
+    night_store.update_mark_fields(task_id, locked=True, run_id=result["run_id"], started_at=now_ts,
+                                   last_error=None)
+    logger.info("night shift: started head %s for task %s", result["run_id"], task_id)
+    return True
 
 
 def _note(mark: NightMark, code: str, *, permanent: bool = False) -> None:
@@ -268,7 +361,8 @@ def _note(mark: NightMark, code: str, *, permanent: bool = False) -> None:
     if permanent:
         mark.gave_up = code
     if changed:
-        night_store.save_mark(mark)
+        changes = {"last_error": code, **({"gave_up": code} if permanent else {})}
+        night_store.update_mark_fields(mark.task_id, **changes)
 
 
 class NightShift:

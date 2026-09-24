@@ -86,9 +86,14 @@ async def start_head(
     answer: str | None = None,
     reason: str = "head_start",
     now: float | None = None,
+    clear_hold_reason: bool = False,
 ) -> dict:
     """Write the run, hold + move the task, spool the start. Returns the spec
-    summary ``{run_id, state, branch}``. Raises ``HeadStartError``."""
+    summary ``{run_id, state, branch}``. Raises ``HeadStartError``.
+
+    ``clear_hold_reason``: the night shift's start — the card was held only
+    to wait for the night ("night shift"); once the head runs, the head's own
+    hold stands and the old reason would only mislead."""
     now = time.time() if now is None else now
     with task_lock(str(task.id)):
         if active_run_for_task(str(task.id), now) is not None:
@@ -105,6 +110,8 @@ async def start_head(
         # from inbox can lift the hold afterwards (routers/tasks.py clears
         # manual_hold only when the old status is inbox).
         task.run_control = "manual_hold"
+        if clear_hold_reason:
+            task.hold_reason = None
         await move_task(session, task, "in_progress", reason=reason)
         session.add(task)
         try:

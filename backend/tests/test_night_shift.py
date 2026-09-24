@@ -99,6 +99,16 @@ def _mark(task: Task, *, order: float, harness="omp", runtime="box-slot", locali
     return m
 
 
+async def _held_mark(task: Task, **kw) -> NightMark:
+    """A mark as the API leaves it on an inbox card: the card is held."""
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        t = await s.get(Task, task.id)
+        t.run_control, t.hold_reason = "manual_hold", HOLD_REASON
+        s.add(t)
+        await s.commit()
+    return _mark(task, held=True, **kw)
+
+
 async def _tick(now: datetime | None = None, send=None):
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         return await tick(s, now or datetime.now(UTC), send=send or Sent())
@@ -267,8 +277,8 @@ async def test_inside_the_window_starts_the_first_mark_through_the_head_launcher
     first, second = await _world(make_board, make_task, titles=("First job", "Second job"))
     now = datetime.now(UTC)
     await _cfg(**_window_around_now(now))
-    _mark(second, order=2)
-    _mark(first, order=1)
+    await _held_mark(second, order=2)
+    await _held_mark(first, order=1)
 
     result = await _tick(now)
     assert result.started == str(first.id)
@@ -328,7 +338,7 @@ async def test_box_busy_with_a_day_head_waits(heads_root, make_board, make_task)
     await _cfg(**_window_around_now(now))
     make_run(heads_root, task_id=str(uuid.uuid4()), status={"phase": "running", "started_at": "x"},
              heartbeat_age=5)
-    _mark(task, order=1)
+    await _held_mark(task, order=1)
     assert (await _tick(now)).started is None
     mark = night_store.load_mark(str(task.id))
     assert mark.last_error == "lane_busy" and mark.run_id is None
@@ -338,7 +348,7 @@ async def test_engine_down_at_night_retries_next_tick(heads_root, make_board, ma
     (task,) = await _world(make_board, make_task)
     now = datetime.now(UTC)
     await _cfg(**_window_around_now(now))
-    _mark(task, order=1)
+    await _held_mark(task, order=1)
     _probes["served"] = None
     assert (await _tick(now)).started is None
     mark = night_store.load_mark(str(task.id))
@@ -348,14 +358,25 @@ async def test_engine_down_at_night_retries_next_tick(heads_root, make_board, ma
     assert (await _tick(now + timedelta(seconds=60))).started == str(task.id)
 
 
-async def test_cloud_share_blocks_a_lone_cloud_mark(heads_root, make_board, make_task):
+async def test_cloud_share_zero_blocks_a_cloud_mark(heads_root, make_board, make_task):
+    (task,) = await _world(make_board, make_task)
+    now = datetime.now(UTC)
+    await _cfg(cloud_share=0, **_window_around_now(now))
+    # A cloud mark (e.g. a pair that becomes startable later): 0 % = no cloud
+    await _held_mark(task, order=1, runtime="ollama-cloud", locality="cloud")
+    assert (await _tick(now)).started is None
+    assert night_store.load_mark(str(task.id)).last_error == "cloud_share"
+
+
+async def test_a_lone_cloud_mark_is_not_held_back_by_the_share(heads_root, make_board, make_task):
+    """floor(1 × 30 %) = 0 would block the operator's one cloud pick forever."""
     (task,) = await _world(make_board, make_task)
     now = datetime.now(UTC)
     await _cfg(cloud_share=30, **_window_around_now(now))
-    # A cloud mark (e.g. a pair that becomes startable later): floor(1 × 30 %) = 0
-    _mark(task, order=1, runtime="ollama-cloud", locality="cloud")
-    assert (await _tick(now)).started is None
-    assert night_store.load_mark(str(task.id)).last_error == "cloud_share"
+    await _held_mark(task, order=1, runtime="ollama-cloud", locality="cloud")
+    await _tick(now)
+    # it gets to the start (and the launcher refuses the unproven cloud pair)
+    assert night_store.load_mark(str(task.id)).last_error != "cloud_share"
 
 
 async def test_deleted_task_drops_its_mark(heads_root, make_board, make_task):
@@ -477,11 +498,12 @@ async def test_report_failure_is_retried(heads_root, make_board, make_task):
     key = await _ended_night(now)
     _mark(task, order=1, night=key)
     assert (await _tick(now, send=Sent(fail=True))).reported is None
-    assert not (heads_root / "night" / "reports" / f"{key}.json").exists()
-    assert night_store.load_mark(str(task.id)).night == key
+    assert night_store.load_report(key)["state"] == "undelivered"
     sent = Sent()
-    assert (await _tick(now, send=sent)).reported == key
-    assert len(sent.texts) == 1
+    assert (await _tick(now, send=sent)).reported is None  # not right away
+    later = now + timedelta(seconds=night_store.REPORT_RETRY_S)
+    assert (await _tick(later, send=sent)).reported == key
+    assert len(sent.texts) == 1 and sent.texts[0].startswith(f"Night shift {key}")
 
 
 async def test_report_language_follows_the_lead_agent(heads_root, make_board, make_task, make_agent):
@@ -495,17 +517,18 @@ async def test_report_language_follows_the_lead_agent(heads_root, make_board, ma
     assert sent.texts[0].startswith(f"Nachtschicht {key}:")
 
 
-async def test_report_file_survives_restart_without_second_message(heads_root, make_board, make_task):
-    """Crash after sending but before tidying: the next tick tidies, sends nothing."""
+async def test_a_fresh_claim_is_not_sent_twice(heads_root, make_board, make_task):
+    """Another pass claimed the report moments ago: no second message, and the
+    marks stay until that pass stored the report (or its claim turns stale)."""
     (task,) = await _world(make_board, make_task)
     now = datetime.now(UTC)
     key = await _ended_night(now)
     _mark(task, order=1, night=key, run_id=str(uuid.uuid4()))
-    assert night_store.reserve_report(key)
+    assert night_store.reserve_report(key, now=now.timestamp())
     sent = Sent()
     await _tick(now, send=sent)
     assert sent.texts == []
-    assert night_store.load_mark(str(task.id)) is None
+    assert night_store.load_mark(str(task.id)) is not None
 
 
 def test_no_home_lookup_in_night_modules():
@@ -517,3 +540,264 @@ def test_no_home_lookup_in_night_modules():
         with open(mod.__file__) as fh:
             assert "Path.home" not in fh.read()
     assert night_store.night_dir() == settings.heads_root / "night"
+
+
+# ── Review fixes: nobody else works on a marked card ───────────────────────
+
+
+async def _set_task(task_id, **values) -> None:
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        t = await s.get(Task, task_id)
+        for k, v in values.items():
+            setattr(t, k, v)
+        s.add(t)
+        await s.commit()
+
+
+@pytest.mark.parametrize("status", ["in_progress", "review", "blocked"])
+async def test_mark_refuses_a_card_someone_works_on(auth_client, heads_root, make_board, make_task, status):
+    (task,) = await _world(make_board, make_task)
+    await _set_task(task.id, status=status)
+    resp = await auth_client.put(f"/api/v1/night-shift/tasks/{task.id}",
+                                 json={"harness": "omp", "runtime_slug": "box-slot"})
+    assert (resp.status_code, resp.json()["detail"]["code"]) == (409, "task_busy")
+    assert night_store.load_mark(str(task.id)) is None
+
+
+async def test_mark_allows_a_held_card_outside_the_inbox(auth_client, heads_root, make_board, make_task):
+    """manual_hold = nothing picks the card up — it may wait for the night."""
+    (task,) = await _world(make_board, make_task)
+    await _set_task(task.id, status="review", run_control="manual_hold", hold_reason="look later")
+    resp = await auth_client.put(f"/api/v1/night-shift/tasks/{task.id}",
+                                 json={"harness": "omp", "runtime_slug": "box-slot"})
+    assert resp.status_code == 200, resp.text
+    assert night_store.load_mark(str(task.id)).held is False
+
+
+async def test_card_taken_by_day_is_not_started_at_night(heads_root, make_board, make_task):
+    (task,) = await _world(make_board, make_task)
+    now = datetime.now(UTC)
+    await _cfg(**_window_around_now(now))
+    _mark(task, order=1, held=True)
+    # the hold was lifted by day and the fleet took the card
+    await _set_task(task.id, status="in_progress", run_control=None, hold_reason=None)
+    result = await _tick(now)
+    assert result.started is None
+    mark = night_store.load_mark(str(task.id))
+    assert (mark.gave_up, mark.run_id) == ("task_moved", None)
+    fresh = await _task(task.id)
+    assert (fresh.status, fresh.run_control) == ("in_progress", None)
+    assert not (heads_root / "spool").exists()
+
+
+async def test_inbox_card_whose_hold_was_lifted_is_not_started(heads_root, make_board, make_task):
+    (task,) = await _world(make_board, make_task)
+    now = datetime.now(UTC)
+    await _cfg(**_window_around_now(now))
+    _mark(task, order=1, held=True)
+    await _set_task(task.id, run_control=None, hold_reason=None)
+    assert (await _tick(now)).started is None
+    assert night_store.load_mark(str(task.id)).gave_up == "task_moved"
+
+
+async def test_night_start_replaces_the_night_hold_reason(heads_root, make_board, make_task):
+    (task,) = await _world(make_board, make_task)
+    now = datetime.now(UTC)
+    await _cfg(**_window_around_now(now))
+    await _set_task(task.id, run_control="manual_hold", hold_reason=HOLD_REASON)
+    _mark(task, order=1, held=True)
+    assert (await _tick(now)).started == str(task.id)
+    fresh = await _task(task.id)
+    assert (fresh.status, fresh.run_control, fresh.hold_reason) == ("in_progress", "manual_hold", None)
+
+
+# ── Review fixes: "Queue for tonight" in New task holds on failure ─────────
+
+
+async def test_failed_mark_with_hold_on_failure_holds_the_new_card(auth_client, heads_root, make_board, make_task):
+    from app.routers.heads import HOLD_REASON_START_FAILED
+
+    (task,) = await _world(make_board, make_task)
+    resp = await auth_client.put(f"/api/v1/night-shift/tasks/{task.id}",
+                                 json={"harness": "omp", "runtime_slug": "nope", "hold_on_failure": True})
+    assert resp.status_code == 422
+    fresh = await _task(task.id)
+    assert (fresh.status, fresh.run_control, fresh.hold_reason) == ("inbox", "manual_hold", HOLD_REASON_START_FAILED)
+
+
+async def test_failed_mark_without_hold_on_failure_leaves_the_card(auth_client, heads_root, make_board, make_task):
+    (task,) = await _world(make_board, make_task)
+    resp = await auth_client.put(f"/api/v1/night-shift/tasks/{task.id}",
+                                 json={"harness": "omp", "runtime_slug": "nope"})
+    assert resp.status_code == 422
+    assert (await _task(task.id)).run_control is None
+
+
+# ── Review fixes: the worker never brings a removed mark back ──────────────
+
+
+async def test_mark_removed_during_a_tick_stays_removed(heads_root, make_board, make_task, monkeypatch, _probes):
+    from app.services.heads import night_shift as ns
+
+    (task,) = await _world(make_board, make_task)
+    now = datetime.now(UTC)
+    await _cfg(**_window_around_now(now))
+    _mark(task, order=1, held=True)
+    _probes["served"] = None  # the start fails → the worker notes engine_not_ready
+    real = ns.box_guard.occupancy
+
+    def occupancy_and_unmark(*a, **kw):
+        night_store.delete_mark(str(task.id))  # the operator's DELETE lands mid-tick
+        return real(*a, **kw)
+
+    monkeypatch.setattr(ns.box_guard, "occupancy", occupancy_and_unmark)
+    await _tick(now)
+    assert night_store.load_mark(str(task.id)) is None
+
+
+async def test_mark_removed_during_a_tick_is_not_started(heads_root, make_board, make_task, monkeypatch):
+    from app.services.heads import night_shift as ns
+
+    (task,) = await _world(make_board, make_task)
+    now = datetime.now(UTC)
+    await _cfg(**_window_around_now(now))
+    await _set_task(task.id, run_control="manual_hold", hold_reason=HOLD_REASON)
+    _mark(task, order=1, held=True)
+    real = ns.box_guard.occupancy
+
+    def occupancy_and_unmark(*a, **kw):
+        night_store.delete_mark(str(task.id))
+        return real(*a, **kw)
+
+    monkeypatch.setattr(ns.box_guard, "occupancy", occupancy_and_unmark)
+    assert (await _tick(now)).started is None
+    assert night_store.load_mark(str(task.id)) is None
+    assert not (heads_root / "spool").exists()
+
+
+def test_worker_update_changes_only_its_own_fields(heads_root):
+    task_id = str(uuid.uuid4())
+    night_store.save_mark(NightMark(task_id=task_id, harness="omp", runtime_slug="a", locality="local", marked_at=1))
+    # the operator switched the pair meanwhile
+    night_store.save_mark(NightMark(task_id=task_id, harness="claude", runtime_slug="b", locality="local", marked_at=1))
+    night_store.update_mark_fields(task_id, last_error="lane_busy")
+    m = night_store.load_mark(task_id)
+    assert (m.harness, m.runtime_slug, m.last_error) == ("claude", "b", "lane_busy")
+    night_store.delete_mark(task_id)
+    assert night_store.update_mark_fields(task_id, last_error="x") is None
+    assert night_store.load_mark(task_id) is None
+
+
+async def test_pair_change_waits_for_a_start_and_never_drops_its_run_id(auth_client, heads_root, make_board,
+                                                                        make_task):
+    """The worker holds the mark lock while it starts; a PUT at that moment
+    waits, then sees the started mark and refuses."""
+    import asyncio
+
+    (task,) = await _world(make_board, make_task)
+    await auth_client.put(f"/api/v1/night-shift/tasks/{task.id}", json={"harness": "omp", "runtime_slug": "box-slot"})
+    marker = night_store.try_lock(str(task.id))  # the worker's start begins
+    assert marker is not None
+    put = asyncio.create_task(auth_client.put(f"/api/v1/night-shift/tasks/{task.id}",
+                                              json={"harness": "omp", "runtime_slug": "box-slot"}))
+    await asyncio.sleep(0.2)
+    assert not put.done()
+    night_store.update_mark_fields(str(task.id), locked=True, run_id="run-1", started_at=1.0)
+    night_store.release_lock(marker)
+    resp = await put
+    assert (resp.status_code, resp.json()["detail"]["code"]) == (409, "night_started")
+    assert night_store.load_mark(str(task.id)).run_id == "run-1"
+
+
+async def test_unmark_while_the_worker_holds_the_lock_too_long_is_409(auth_client, heads_root, make_board,
+                                                                      make_task, monkeypatch):
+    (task,) = await _world(make_board, make_task)
+    await auth_client.put(f"/api/v1/night-shift/tasks/{task.id}", json={"harness": "omp", "runtime_slug": "box-slot"})
+    real = night_store.mark_lock
+    monkeypatch.setattr(night_store, "mark_lock", lambda tid, timeout=5.0: real(tid, timeout=0.1))
+    marker = night_store.try_lock(str(task.id))
+    resp = await auth_client.delete(f"/api/v1/night-shift/tasks/{task.id}")
+    night_store.release_lock(marker)
+    assert (resp.status_code, resp.json()["detail"]["code"]) == (409, "night_busy")
+    assert night_store.load_mark(str(task.id)) is not None
+
+
+# ── Review fixes: local runtime without box keys is one lane ───────────────
+
+
+def test_active_run_without_box_keys_holds_its_runtime_lane(heads_root):
+    from app.services.heads.night_shift import busy_lanes
+
+    make_run(heads_root, task_id=str(uuid.uuid4()), status={"phase": "running", "started_at": "x"},
+             heartbeat_age=5, box_keys=[], runtime_slug="lan-engine")
+    runs = {r.run_id: r for r in __import__("app.services.heads.files", fromlist=["x"]).list_runs()}
+    busy = busy_lanes({}, runs, [], datetime.now(UTC).timestamp())
+    assert night.runtime_lane("lan-engine") in busy
+
+
+# ── Review fixes: morning report at least once, and not too long ───────────
+
+
+class Undelivered(Sent):
+    async def __call__(self, text: str) -> bool:
+        self.texts.append(text)
+        return False
+
+
+async def test_orphaned_reservation_is_sent_after_a_crash(heads_root, make_board, make_task):
+    """Crash between reserving and sending: the report still goes out once."""
+    (task,) = await _world(make_board, make_task)
+    now = datetime.now(UTC)
+    key = await _ended_night(now)
+    _mark(task, order=1, night=key, run_id=str(uuid.uuid4()))
+    assert night_store.reserve_report(key, now=now.timestamp() - 3600)  # an hour ago, then the worker died
+    sent = Sent()
+    assert (await _tick(now, send=sent)).reported == key
+    assert len(sent.texts) == 1
+    assert night_store.load_mark(str(task.id)) is None
+    again = Sent()
+    await _tick(now + timedelta(minutes=10), send=again)
+    assert again.texts == []
+
+
+async def test_undelivered_report_is_retried_then_given_up(heads_root, make_board, make_task):
+    (task,) = await _world(make_board, make_task)
+    now = datetime.now(UTC)
+    key = await _ended_night(now)
+    _mark(task, order=1, night=key, run_id=str(uuid.uuid4()))
+    down = Undelivered()
+    await _tick(now, send=down)
+    stored = night_store.load_report(key)
+    assert stored["delivered"] is False and stored["attempts"] == 1
+    # too early for the next try
+    await _tick(now + timedelta(minutes=1), send=down)
+    assert len(down.texts) == 1
+    for i in range(1, night_store.REPORT_MAX_ATTEMPTS + 2):
+        await _tick(now + timedelta(minutes=10 * i), send=down)
+    assert len(down.texts) == night_store.REPORT_MAX_ATTEMPTS
+    up = Sent()
+    await _tick(now + timedelta(hours=5), send=up)
+    assert up.texts == []
+
+
+async def test_undelivered_report_is_delivered_on_retry(heads_root, make_board, make_task):
+    (task,) = await _world(make_board, make_task)
+    now = datetime.now(UTC)
+    key = await _ended_night(now)
+    _mark(task, order=1, night=key, run_id=str(uuid.uuid4()))
+    await _tick(now, send=Undelivered())
+    up = Sent()
+    await _tick(now + timedelta(minutes=10), send=up)
+    assert len(up.texts) == 1 and up.texts[0].startswith(f"Night shift {key}")
+    assert night_store.load_report(key)["delivered"] is True
+
+
+async def test_undelivered_notice_is_not_recorded(heads_root, make_board, make_task):
+    (task,) = await _world(make_board, make_task)
+    run_id = make_run(heads_root, task_id=str(task.id), status={"phase": "running", "started_at": "x"},
+                      heartbeat_age=16 * 60)
+    _mark(task, order=1, run_id=run_id, night="2099-01-01")
+    await _tick(send=Undelivered())
+    assert night_store.load_mark(str(task.id)).notified == []
+    sent = Sent()
+    assert (await _tick(send=sent)).notices == [f"{task.id}:silent"]

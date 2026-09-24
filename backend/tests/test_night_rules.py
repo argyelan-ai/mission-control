@@ -103,10 +103,14 @@ def test_duo_recipe_needs_every_box_free():
     assert night.pick_next(q, {"box-b"}, night_total=1, cloud_started=0, cloud_share=30).task_id is None
 
 
-def test_cloud_share_is_floor_of_the_night():
+def test_cloud_share_is_floor_of_the_night_but_at_least_one():
     cloud = cand("c", 1, lanes=(CLOUD_LANE,), locality="cloud")
-    # 3 marks at 30 % → floor(0.9) = 0 cloud starts
-    assert night.pick_next([cloud], set(), night_total=3, cloud_started=0, cloud_share=30).waiting == {"c": "cloud_share"}
+    # 1 or 3 marks at 30 % → floor = 0, but one cloud start per night is allowed
+    assert night.pick_next([cloud], set(), night_total=1, cloud_started=0, cloud_share=30).task_id == "c"
+    assert night.pick_next([cloud], set(), night_total=3, cloud_started=0, cloud_share=30).task_id == "c"
+    assert night.pick_next([cloud], set(), night_total=3, cloud_started=1, cloud_share=30).waiting == {"c": "cloud_share"}
+    # 0 % = no cloud at all
+    assert night.pick_next([cloud], set(), night_total=10, cloud_started=0, cloud_share=0).waiting == {"c": "cloud_share"}
     # 10 marks at 30 % → 3; two started → one more allowed, three started → none
     assert night.pick_next([cloud], set(), night_total=10, cloud_started=2, cloud_share=30).task_id == "c"
     assert night.pick_next([cloud], set(), night_total=10, cloud_started=3, cloud_share=30).task_id is None
@@ -179,3 +183,58 @@ def test_notice_text():
     assert text == "Night shift: head silent for 17 min — Docs\nhttps://mc.example/tasks?task=t4"
     assert night.format_notice("needs_you", title="X", task_id="t", base_url=BASE, silent_s=None,
                                lang="de").startswith("Nachtschicht: Head braucht dich — X")
+
+
+# ── Who may be marked / started ────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "status,run_control,ok",
+    [
+        ("inbox", None, True),
+        ("inbox", "manual_hold", True),
+        ("review", "manual_hold", True),
+        ("inbox", "stopped", False),
+        ("in_progress", None, False),
+        ("review", None, False),
+        ("blocked", None, False),
+        ("done", "manual_hold", False),
+        ("aborted", None, False),
+    ],
+)
+def test_markable_only_when_nobody_works_on_it(status, run_control, ok):
+    assert night.markable(status, run_control) is ok
+
+
+@pytest.mark.parametrize(
+    "status,run_control,ok",
+    [
+        ("inbox", "manual_hold", True),
+        ("review", "manual_hold", True),
+        ("inbox", None, False),  # hold lifted by day: the fleet may take it any moment
+        ("in_progress", None, False),
+        ("done", "manual_hold", False),
+    ],
+)
+def test_still_ours_needs_the_hold(status, run_control, ok):
+    assert night.still_ours(status, run_control) is ok
+
+
+# ── Report length ──────────────────────────────────────────────────────────
+
+
+def test_long_report_stays_below_the_chat_limit_and_says_how_many_are_left_out():
+    entries = [{"task_id": f"00000000-0000-0000-0000-{i:012d}", "title": f"Job number {i} " + "x" * 60,
+                "started": False, "reason": "lane_busy"} for i in range(60)]
+    text = night.format_report("2026-09-24", entries, base_url="https://mc.example")
+    assert len(text) <= night.REPORT_MAX_CHARS
+    assert text.splitlines()[0].endswith("60 blocked")
+    shown = sum(1 for line in text.splitlines() if line.startswith("- "))
+    assert 0 < shown < 60
+    assert text.splitlines()[-1] == f"… and {60 - shown} more: https://mc.example/tasks"
+
+
+def test_short_report_is_not_cut():
+    entries = [{"task_id": "00000000-0000-0000-0000-000000000001", "title": "Job", "started": False}]
+    text = night.format_report("2026-09-24", entries, base_url="https://mc.example")
+    assert "more:" not in text

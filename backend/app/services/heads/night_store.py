@@ -8,18 +8,30 @@ Data model (why files, not a table):
   measured gap. A file per task needs no migration and no foreign key, so
   ``delete_task`` stays untouched: a mark whose task is gone is dropped by the
   next tick (and hidden from the list before that).
-- **Reports** are ``<heads_root>/night/reports/<night>.json``: created with
-  O_EXCL before sending (the dedup — one morning report per night, also
-  across worker restarts), then filled with what was sent.
+- **Reports** are ``<heads_root>/night/reports/<night>.json``: claimed with
+  O_EXCL before sending (``state: sending``), then filled with what was sent
+  (``sent`` / ``undelivered`` + attempts). At most one report per night, and
+  at least one: a claim left behind by a crash is taken over after
+  ``REPORT_ORPHAN_S``, an undelivered report is sent again (stored text) up to
+  ``REPORT_MAX_ATTEMPTS`` times.
+- **Who writes a mark.** The API (mark, change pair, unmark) and the worker
+  (start) hold a per-task lock (``mark_lock``) and re-read the file inside it.
+  Every other worker write goes through ``update_mark_fields``: it re-reads
+  the file, never re-creates a removed mark and only touches the fields the
+  worker owns, so an operator's change during a tick is never overwritten.
 - **Settings** are five ``app_settings`` rows (``night_shift_*``) with env
   defaults in ``config.py``. They are read from the DB on every tick: the job
   runs in mc-worker, the Settings page saves through the API process.
 """
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import os
+import time
 import uuid
+from collections.abc import AsyncIterator
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
@@ -189,6 +201,87 @@ def save_mark(mark: NightMark) -> None:
     _atomic_write(_mark_path(mark.task_id), asdict(mark))
 
 
+#: Fields the worker owns — everything else belongs to the operator (API).
+WORKER_FIELDS = frozenset({"night", "run_id", "started_at", "last_error", "gave_up", "notified"})
+
+#: A mark lock older than this belongs to a crashed process and is taken over.
+MARK_LOCK_STALE_S = 60
+
+
+class MarkBusy(Exception):
+    """Another process changes this mark right now."""
+
+
+def _lock_path(task_id: str) -> Path:
+    return night_dir() / "locks" / str(uuid.UUID(str(task_id)))
+
+
+def try_lock(task_id: str) -> Path | None:
+    """Take the mark lock of ``task_id`` (O_EXCL marker) or return None."""
+    marker = _lock_path(task_id)
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    for _ in range(2):
+        try:
+            os.close(os.open(str(marker), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+            return marker
+        except FileExistsError:
+            try:
+                age = time.time() - marker.stat().st_mtime
+            except OSError:
+                continue
+            if age < MARK_LOCK_STALE_S:
+                return None
+            marker.unlink(missing_ok=True)
+    return None
+
+
+def release_lock(marker: Path) -> None:
+    marker.unlink(missing_ok=True)
+
+
+@contextlib.asynccontextmanager
+async def mark_lock(task_id: str, timeout: float = 5.0) -> AsyncIterator[None]:
+    """Hold the mark lock of ``task_id``; waits up to ``timeout`` s, then MarkBusy."""
+    deadline = time.monotonic() + timeout
+    while True:
+        marker = try_lock(task_id)
+        if marker is not None:
+            break
+        if time.monotonic() >= deadline:
+            raise MarkBusy(task_id)
+        await asyncio.sleep(0.05)
+    try:
+        yield
+    finally:
+        release_lock(marker)
+
+
+def update_mark_fields(task_id: str, *, locked: bool = False, **changes) -> NightMark | None:
+    """The worker's write: re-read the mark, change only ``changes`` (worker
+    fields), save. Returns None — and writes nothing — when the mark is gone
+    (removed by the operator) or the operator holds its lock right now (the
+    worker notes it again next tick). ``locked=True``: the caller holds it."""
+    bad = set(changes) - WORKER_FIELDS
+    if bad:
+        raise ValueError(sorted(bad))
+    marker = None
+    if not locked:
+        marker = try_lock(task_id)
+        if marker is None:
+            return None
+    try:
+        mark = load_mark(task_id)
+        if mark is None:
+            return None
+        for name, value in changes.items():
+            setattr(mark, name, value)
+        save_mark(mark)
+        return mark
+    finally:
+        if marker is not None:
+            release_lock(marker)
+
+
 def delete_mark(task_id: str) -> None:
     _mark_path(task_id).unlink(missing_ok=True)
 
@@ -204,24 +297,75 @@ def _is_uuid(value: str) -> bool:
 # ── Reports ─────────────────────────────────────────────────────────────────
 
 
-def reserve_report(night: str) -> bool:
-    """Claim the morning report of ``night`` (O_EXCL). False = already claimed."""
+#: A claim ("sending") older than this was left by a crash: send again.
+REPORT_ORPHAN_S = 10 * 60
+#: Wait this long before sending an undelivered report again …
+REPORT_RETRY_S = 5 * 60
+#: … and give up after this many attempts (the report stays in the UI).
+REPORT_MAX_ATTEMPTS = 3
+
+
+def _report_path(night: str) -> Path:
+    return reports_dir() / f"{night}.json"
+
+
+def claim_report(night: str, now: float | None = None) -> dict | None:
+    """Claim the morning report of ``night`` for one send attempt.
+
+    Returns the stored record (``attempts`` so far, ``text``/``entries`` of an
+    earlier attempt, if any) or None when it must not be sent now: already
+    sent, a fresh claim of another pass, too early for a retry, or given up.
+    """
+    now = time.time() if now is None else now
     folder = reports_dir()
     folder.mkdir(parents=True, exist_ok=True)
+    path = _report_path(night)
+    record: dict = {"night": night, "state": "sending", "attempts": 0, "at": now}
     try:
-        fd = os.open(str(folder / f"{night}.json"), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
     except FileExistsError:
-        return False
-    os.close(fd)
-    return True
+        data = load_report(night)
+        if data is None:  # empty: a crash right after the O_EXCL create
+            try:
+                at = path.stat().st_mtime
+            except OSError:
+                return None
+            data = {"night": night, "state": "sending", "attempts": 0, "at": at}
+        state = data.get("state")
+        age = now - float(data.get("at") or 0)
+        attempts = int(data.get("attempts") or 0)
+        if state == "sending" and age >= REPORT_ORPHAN_S:
+            pass  # orphaned claim
+        elif state == "undelivered" and attempts < REPORT_MAX_ATTEMPTS and age >= REPORT_RETRY_S:
+            pass  # retry
+        else:
+            return None
+        record = {**data, "state": "sending", "at": now}
+        _atomic_write(path, record)
+        return record
+    with os.fdopen(fd, "w") as fh:
+        fh.write(json.dumps(record))
+    return record
+
+
+def reserve_report(night: str, now: float | None = None) -> bool:
+    """Claim the morning report of ``night``. False = not to be sent now."""
+    return claim_report(night, now) is not None
 
 
 def release_report(night: str) -> None:
-    (reports_dir() / f"{night}.json").unlink(missing_ok=True)
+    _report_path(night).unlink(missing_ok=True)
 
 
 def write_report(night: str, data: dict) -> None:
-    _atomic_write(reports_dir() / f"{night}.json", data)
+    _atomic_write(_report_path(night), data)
+
+
+def report_nights() -> list[str]:
+    folder = reports_dir()
+    if not folder.is_dir():
+        return []
+    return sorted(p.stem for p in folder.glob("*.json"))
 
 
 def load_report(night: str) -> dict | None:
@@ -239,6 +383,6 @@ def latest_report() -> dict | None:
     names = sorted(p.stem for p in folder.glob("*.json"))
     for name in reversed(names):
         data = load_report(name)
-        if data:
+        if data and "entries" in data:  # a bare claim is not a report yet
             return data
     return None

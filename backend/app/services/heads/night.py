@@ -13,8 +13,13 @@ Rules:
   one extra lane. A lane is busy while any head — day or night — holds it.
 - **Local first.** A cloud pair starts only when the operator picked one, and
   only while the cloud starts of this night stay within ``cloud_share`` percent
-  of the night's marked tasks (floor — one cloud task among three at 30 % does
-  not start; 100 % switches the rule off).
+  of the night's marked tasks (floor, but at least one cloud start per night
+  while the share is above 0 — a single cloud task the operator picked on
+  purpose is not held back forever; 0 % = no cloud, 100 % = no limit).
+- **Only cards nobody else works on.** A card may be marked while it is in
+  the inbox (the mark holds it) or already on ``manual_hold``. Right before
+  the start the card must still be on hold; a card the fleet or the operator
+  took meanwhile is skipped as ``task_moved`` and shows up in the report.
 - **Blocked is reported, never repaired.** A head waiting on a question, or
   without a sign of life for 15 minutes, is reported once. Nothing restarts it.
 """
@@ -34,8 +39,29 @@ BLOCKED_SILENT_S = 15 * 60
 #: Start errors that will not heal by waiting — the mark is skipped for the
 #: rest of the night (and reported). Everything else is retried next tick.
 PERMANENT_START_ERRORS = frozenset({
-    "pair_blocked", "repo_required", "task_not_found", "head_active", "pair_gone",
+    "pair_blocked", "repo_required", "task_not_found", "head_active", "pair_gone", "task_moved",
 })
+
+FINISHED_TASK_STATUSES = frozenset({"done", "aborted"})
+
+
+def markable(status: str, run_control: str | None) -> bool:
+    """May this card be marked for tonight? Only when nobody else works on it:
+    an inbox card nothing holds (the mark will hold it), or a held card."""
+    if status in FINISHED_TASK_STATUSES:
+        return False
+    return run_control == "manual_hold" or (status == "inbox" and run_control is None)
+
+
+def still_ours(status: str, run_control: str | None) -> bool:
+    """Right before a night start: the card is still held (by the mark or the
+    operator) and open. Anything else means someone took it meanwhile."""
+    return status not in FINISHED_TASK_STATUSES and run_control == "manual_hold"
+
+
+def runtime_lane(runtime_slug: str) -> str:
+    """The lane of a local runtime without box keys (no host linked)."""
+    return f"runtime:{runtime_slug}"
 
 _HHMM = re.compile(r"^([01][0-9]|2[0-3]):([0-5][0-9])$")
 
@@ -161,10 +187,13 @@ class Pick:
 
 
 def cloud_allowed(night_total: int, cloud_started: int, share: int) -> bool:
-    """May one more cloud start happen tonight? floor(total × share %)."""
+    """May one more cloud start happen tonight? floor(total × share %), but at
+    least one while the share is above 0; 0 = none, 100 = no limit."""
+    if share <= 0:
+        return False
     if share >= 100:
         return True
-    return cloud_started + 1 <= math.floor(night_total * share / 100)
+    return cloud_started + 1 <= max(1, math.floor(night_total * share / 100))
 
 
 def pick_next(
@@ -238,6 +267,7 @@ _TEXT = {
         "blocked": "Blocked",
         "running": "Still running",
         "not_started": "not started",
+        "more": "… and {count} more: {link}",
         "pr": "PR",
         "notice_needs_you": "Night shift: head needs you — {title}",
         "notice_silent": "Night shift: head silent for {minutes} min — {title}",
@@ -251,6 +281,7 @@ _TEXT = {
         "blocked": "Blockiert",
         "running": "Läuft noch",
         "not_started": "nicht gestartet",
+        "more": "… und {count} weitere: {link}",
         "pr": "PR",
         "notice_needs_you": "Nachtschicht: Head braucht dich — {title}",
         "notice_silent": "Nachtschicht: Head seit {minutes} min still — {title}",
@@ -266,11 +297,19 @@ def task_link(base_url: str, task_id: str) -> str:
     return f"{base_url.rstrip('/')}/tasks?task={task_id}"
 
 
-def format_report(night: str, entries: list[dict], *, base_url: str, lang: str | None = "en") -> str:
+#: Chat channels cut long messages (Telegram: 4096 characters). The report
+#: stays below this; the rest is one "… and N more" line with the task list.
+REPORT_MAX_CHARS = 3500
+
+
+def format_report(night: str, entries: list[dict], *, base_url: str, lang: str | None = "en",
+                  max_chars: int = REPORT_MAX_CHARS) -> str:
     """One message: counts per category, then one line per task with links.
 
     ``entries``: ``{task_id, title, started, state, reason, blocked, pr_url}``.
     Reason codes stay codes (``engine_not_ready``) — short, and searchable.
+    Longer than ``max_chars``: the last task lines give way to one
+    "… and N more" line (the counts stay complete).
     """
     tx = texts(lang)
     if not entries:
@@ -300,7 +339,18 @@ def format_report(night: str, entries: list[dict], *, base_url: str, lang: str |
             if e.get("pr_url"):
                 parts.append(f"{tx['pr']}: {e['pr_url']}")
             lines.append(" ".join(parts))
-    return "\n".join(lines)
+    text = "\n".join(lines)
+    if len(text) <= max_chars:
+        return text
+    task_lines = [i for i, line in enumerate(lines) if line.startswith("- ")]
+    more_link = f"{base_url.rstrip('/')}/tasks"
+    while task_lines:
+        lines.pop(task_lines.pop())
+        hidden = len(entries) - len(task_lines)
+        text = "\n".join([*lines, "", tx["more"].format(count=hidden, link=more_link)])
+        if len(text) <= max_chars:
+            return text
+    return text
 
 
 def format_notice(kind: str, *, title: str, task_id: str, base_url: str, silent_s: int | None,

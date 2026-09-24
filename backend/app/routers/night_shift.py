@@ -7,14 +7,21 @@
   PUT    /api/v1/night-shift/tasks/{task_id}   operator  mark / change the pair
   DELETE /api/v1/night-shift/tasks/{task_id}   operator  unmark (before it started)
 
+Only a card nobody else works on can be marked: an inbox card nothing holds
+(the mark holds it), or a card on ``manual_hold`` (``night.markable``).
+Mark and unmark hold the per-task mark lock the worker's start holds too, so
+a start and an operator change never cross (``night_store.mark_lock``).
+
 The start itself happens in mc-worker (``services/heads/night_shift.py``)
 through the head launcher's start path. Errors carry a ``code`` for i18n.
 Behind ``settings.heads_enabled`` like the head launcher.
 """
 from __future__ import annotations
 
+import contextlib
 import time
 import uuid
+from collections.abc import AsyncIterator
 from dataclasses import asdict
 from datetime import UTC, datetime
 
@@ -27,7 +34,7 @@ from app.auth import Role, require_role
 from app.config import settings
 from app.database import get_session
 from app.models.task import Task
-from app.routers.heads import run_view
+from app.routers.heads import _hold_after_failed_start, run_view
 from app.services.heads import box_guard, files, night, night_store, pairs
 from app.services.heads.night_store import HOLD_REASON, NightMark
 from app.services.heads.start import active_run_for_task
@@ -37,7 +44,7 @@ router = APIRouter(prefix="/api/v1/night-shift", tags=["night-shift"])
 #: A pair that cannot start right now for these reasons may still be marked —
 #: the engine can be up and the box free by tonight.
 MARKABLE_BLOCKS = frozenset({"engine_not_ready", "box_busy"})
-FINISHED = frozenset({"done", "aborted"})
+FINISHED = night.FINISHED_TASK_STATUSES
 
 
 def _enabled() -> None:
@@ -162,6 +169,10 @@ async def get_task_mark(task_id: uuid.UUID, session: AsyncSession = Depends(get_
 class MarkBody(BaseModel):
     harness: str = Field(max_length=32)
     runtime_slug: str = Field(max_length=64)
+    #: "Queue for tonight" in New task created this inbox card only for a
+    #: night head. If marking fails, hold the card so the fleet never picks
+    #: it up later (the same rule as "Run as head", ``hold_on_failure``).
+    hold_on_failure: bool = False
 
 
 @router.put("/tasks/{task_id}")
@@ -172,6 +183,27 @@ async def put_task_mark(
     user=Depends(require_role(Role.OPERATOR)),
 ):
     _enabled()
+    try:
+        async with _locked(task_id):
+            return await _mark(session, task_id, body, user)
+    except HTTPException:
+        if body.hold_on_failure:
+            await session.rollback()
+            await _hold_after_failed_start(session, task_id)
+        raise
+
+
+@contextlib.asynccontextmanager
+async def _locked(task_id: uuid.UUID) -> AsyncIterator[None]:
+    """The mark lock, as a 409 ``night_busy`` when the worker holds it too long."""
+    try:
+        async with night_store.mark_lock(str(task_id)):
+            yield
+    except night_store.MarkBusy:
+        raise _err(409, "night_busy")
+
+
+async def _mark(session: AsyncSession, task_id: uuid.UUID, body: MarkBody, user) -> dict:
     task = await _task(session, task_id)
     if task.status in FINISHED:
         raise _err(409, "task_finished")
@@ -182,6 +214,9 @@ async def put_task_mark(
         raise _err(409, "night_started")
     if active_run_for_task(str(task_id), time.time()) is not None:
         raise _err(409, "head_active")
+    if not night.markable(task.status, task.run_control):
+        # someone works on it (fleet agent, operator) — a night head would be a second worker
+        raise _err(409, "task_busy")
 
     listing = await pairs.list_pairs(session, box_guard.occupancy())
     pair = next((p for p in listing["pairs"]
@@ -191,6 +226,11 @@ async def put_task_mark(
     if pair["status"] == "blocked" and pair["reason_code"] not in MARKABLE_BLOCKS:
         raise _err(422, "pair_blocked", reason_code=pair["reason_code"])
 
+    # Read again right before writing: the worker may have started it while
+    # the pairs were probed (it holds the same lock for the start itself).
+    existing = night_store.load_mark(str(task_id))
+    if existing is not None and existing.run_id:
+        raise _err(409, "night_started")
     if existing is not None:
         mark = existing
         mark.harness, mark.runtime_slug, mark.locality = body.harness, body.runtime_slug, pair["locality"]
@@ -198,7 +238,7 @@ async def put_task_mark(
     else:
         uid = getattr(user, "id", None)
         mark = NightMark(task_id=str(task_id), harness=body.harness, runtime_slug=body.runtime_slug,
-                    locality=pair["locality"], marked_at=time.time(), marked_by=str(uid) if uid else None)
+                         locality=pair["locality"], marked_at=time.time(), marked_by=str(uid) if uid else None)
     # An inbox card waits for the night: hold it so nothing else picks it up.
     if task.status == "inbox" and task.run_control is None:
         task.run_control = "manual_hold"
@@ -213,21 +253,22 @@ async def put_task_mark(
 @router.delete("/tasks/{task_id}", dependencies=[Depends(require_role(Role.OPERATOR))])
 async def delete_task_mark(task_id: uuid.UUID, session: AsyncSession = Depends(get_session)):
     _enabled()
-    mark = night_store.load_mark(str(task_id))
-    if mark is None:
-        return {"mark": None}
-    if mark.run_id:
-        # The head is working (or done): stop it on the task; its outcome
-        # still belongs into the morning report.
-        raise _err(409, "night_started")
-    task = await session.get(Task, task_id)
-    if (
-        task is not None and mark.held and task.status == "inbox"
-        and task.run_control == "manual_hold" and task.hold_reason == HOLD_REASON
-    ):
-        task.run_control = None
-        task.hold_reason = None
-        session.add(task)
-        await session.commit()
-    night_store.delete_mark(str(task_id))
+    async with _locked(task_id):
+        mark = night_store.load_mark(str(task_id))
+        if mark is None:
+            return {"mark": None}
+        if mark.run_id:
+            # The head is working (or done): stop it on the task; its outcome
+            # still belongs into the morning report.
+            raise _err(409, "night_started")
+        task = await session.get(Task, task_id)
+        if (
+            task is not None and mark.held and task.status == "inbox"
+            and task.run_control == "manual_hold" and task.hold_reason == HOLD_REASON
+        ):
+            task.run_control = None
+            task.hold_reason = None
+            session.add(task)
+            await session.commit()
+        night_store.delete_mark(str(task_id))
     return {"mark": None}
