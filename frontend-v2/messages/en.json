@@ -1406,7 +1406,8 @@
       "shortcuts": "Shortcuts",
       "about": "About",
       "telegram": "Telegram",
-      "aiProviders": "AI providers"
+      "aiProviders": "AI providers",
+      "appearance": "Appearance"
     },
     "security": {
       "title": "Security",
@@ -3355,5 +3356,15 @@
     "keepTask": "Keep task, close",
     "retryStart": "Start head again",
     "keptHeld": "The task stays on hold in Inbox — the fleet will not pick it up."
+  },
+  "theme": {
+    "label": "Theme",
+    "dark": "Dark",
+    "light": "Light",
+    "system": "System",
+    "cycleLabel": "Theme: {current} — switch to {next}",
+    "sectionTitle": "Appearance",
+    "sectionDescription": "How Mission Control looks in this browser.",
+    "hint": "Dark is the default. Your choice is saved in this browser only — other browsers and devices keep their own."
   }
 }

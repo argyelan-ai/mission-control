@@ -1406,7 +1406,8 @@
       "shortcuts": "Tastenkürzel",
       "about": "Über",
       "telegram": "Telegram",
-      "aiProviders": "KI-Provider"
+      "aiProviders": "KI-Provider",
+      "appearance": "Darstellung"
     },
     "security": {
       "title": "Sicherheit",
@@ -3355,5 +3356,15 @@
     "keepTask": "Task behalten, schliessen",
     "retryStart": "Head erneut starten",
     "keptHeld": "Der Task bleibt angehalten in der Inbox — die Flotte nimmt ihn nicht."
+  },
+  "theme": {
+    "label": "Farbschema",
+    "dark": "Dunkel",
+    "light": "Hell",
+    "system": "System",
+    "cycleLabel": "Farbschema: {current} — wechseln zu {next}",
+    "sectionTitle": "Darstellung",
+    "sectionDescription": "Wie Mission Control in diesem Browser aussieht.",
+    "hint": "Dunkel ist Standard. Die Wahl wird nur in diesem Browser gespeichert — andere Browser und Geräte behalten ihre eigene."
   }
 }

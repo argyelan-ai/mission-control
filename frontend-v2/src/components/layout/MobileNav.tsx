@@ -20,6 +20,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { Approval, Board } from "@/lib/types";
 import { VoiceButton } from "@/components/voice/VoiceWidget";
 import { P2 } from "@/lib/colors";
+import { ThemeSegmented } from "@/components/shared/ThemeSwitch";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 
@@ -580,6 +581,10 @@ export default function MobileNav() {
                       </div>
                     </div>
                   )}
+                  {/* Theme switch (ADR-087) — same control as Settings → Appearance */}
+                  <div className="px-2 pb-2">
+                    <ThemeSegmented size="sm" />
+                  </div>
                   {/* Settings sits with the account, not in a nav group — the
                       desktop column puts the same gear in its footer. */}
                   {CHROME_ITEMS.map((href) => {

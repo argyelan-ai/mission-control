@@ -33,6 +33,7 @@ import {
   Send,
   BrainCircuit,
   type LucideIcon,
+  Palette,
 } from "lucide-react";
 import { api, setStoredUser } from "@/lib/api";
 import { useAppStore, type AuthUser } from "@/lib/store";
@@ -51,6 +52,7 @@ import { CostPricesTab } from "@/components/settings/CostPricesTab";
 import { SlackTab } from "@/components/settings/SlackTab";
 import { TelegramTab } from "@/components/settings/TelegramTab";
 import { AiProvidersTab } from "@/components/settings/AiProvidersTab";
+import { AppearanceSection } from "@/components/settings/AppearanceSection";
 import { StatusDot } from "@/components/shared/StatusDot";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { C, STATUS_TEXT, alpha } from "@/lib/colors";
@@ -78,6 +80,7 @@ interface SettingsSection {
 const SECTIONS: SettingsSection[] = [
   { id: "profile", labelKey: "sections.profile", icon: User, group: "account" },
   { id: "security", labelKey: "sections.security", icon: Shield, group: "account" },
+  { id: "appearance", labelKey: "sections.appearance", icon: Palette, group: "account" },
   { id: "shortcuts", labelKey: "sections.shortcuts", icon: Keyboard, group: "account" },
   { id: "autonomy", labelKey: "sections.autonomy", icon: SlidersHorizontal, group: "fleet", adminOnly: true },
   { id: "intelligence", labelKey: "sections.intelligence", icon: Zap, group: "fleet", adminOnly: true },
@@ -2379,6 +2382,11 @@ function SettingsContent() {
               {activeSection === "credentials" && isAdmin && <CredentialsTab />}
               {activeSection === "costs" && isAdmin && <CostPricesTab />}
               {activeSection === "users" && isAdmin && <UsersSection />}
+              {activeSection === "appearance" && (
+                <SectionMotion sectionKey="appearance">
+                  <AppearanceSection />
+                </SectionMotion>
+              )}
               {activeSection === "shortcuts" && <ShortcutsSection />}
               {activeSection === "about" && <AboutSection />}
             </AnimatePresence>
