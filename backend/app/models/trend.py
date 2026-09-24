@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from app.utils import utcnow
 from typing import Any
 
 from sqlalchemy import JSON, DateTime, text
@@ -49,7 +50,7 @@ class TrendSignal(SQLModel, table=True):
     image_url: str | None = None
 
     captured_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),
     )
     expires_at: datetime | None = Field(
@@ -90,6 +91,6 @@ class ViralShortsSettings(SQLModel, table=True):
         sa_column=Column(JSON, nullable=False, server_default='["de"]'),
     )
     updated_at: datetime = Field(
-        default_factory=datetime.utcnow,
-        sa_column=Column(DateTime(timezone=True), server_default=text("NOW()"), onupdate=datetime.utcnow),
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), server_default=text("NOW()"), onupdate=utcnow),
     )

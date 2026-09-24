@@ -38,7 +38,7 @@ import os
 import re
 import shutil
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from app.services import fs_service
@@ -59,7 +59,7 @@ def trash_root() -> Path:
 
 def timestamp() -> str:
     """A second-resolution batch stamp (``YYYYMMDD-HHMMSS``)."""
-    return datetime.now().strftime("%Y%m%d-%H%M%S")
+    return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
 
 
 def canonical_rel(root: FsRoot, src: Path) -> str:

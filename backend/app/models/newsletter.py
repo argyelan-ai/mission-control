@@ -6,6 +6,7 @@ Sent via Resend to viral_shorts_settings.newsletter_subscribers.
 """
 import uuid
 from datetime import date, datetime
+from app.utils import utcnow
 from typing import Any
 
 from sqlalchemy import JSON, DateTime, text
@@ -36,7 +37,7 @@ class NewsletterIssue(SQLModel, table=True):
     error_message: str | None = None
 
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(
             DateTime(timezone=True), nullable=False, server_default=text("NOW()")
         ),
