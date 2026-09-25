@@ -41,9 +41,9 @@ describe("design ratchet — compare", () => {
 
 describe("design ratchet — this repository", () => {
   it("src/ holds exactly the baseline (no new free values, improvements locked in)", () => {
-    const { totals, perFile } = scan(SRC_DIR);
+    const { totals } = scan(SRC_DIR);
     const problems = compare(totals, JSON.parse(readFileSync(BASELINE, "utf8")));
     // On red: `npm run design:ratchet -- --files` lists the files per rule.
-    expect(problems, JSON.stringify({ problems, files: Object.keys(perFile) })).toEqual([]);
+    expect(problems).toEqual([]);
   });
 });
