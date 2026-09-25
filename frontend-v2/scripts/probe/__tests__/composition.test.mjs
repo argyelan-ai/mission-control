@@ -33,7 +33,7 @@ const busy = [
   n("AUFGABE · 630BDD4B · AD-HOC", { fontSize: 10, textTransform: "uppercase" }),
   n("Chat scrollt weiter seitwaerts — #634 hat den echten Fall des…", { fontSize: 18 }),
   n("BRAUCHT DICH · BLOCKED 42 MIN", { fontSize: 10, color: "rgb(250, 73, 66)", left: 30 }),
-  n("Rex fragt:", { fontSize: 14, left: 30 }),
+  n("Ada fragt:", { fontSize: 14, left: 30 }),
   n("STATUS", { fontSize: 10, left: 20, textTransform: "uppercase" }),
   n("AGENT", { fontSize: 10, left: 150, lineStart: false, textTransform: "uppercase" }),
   n("ZEIT", { fontSize: 10, left: 260, lineStart: false, textTransform: "uppercase" }),
@@ -63,7 +63,7 @@ describe("composition budget", () => {
   });
 
   it("does not count short repeats like names or separators", () => {
-    const r = compositionBudget([n("Rex"), n("Rex"), n("·"), n("·")]);
+    const r = compositionBudget([n("Ada"), n("Ada"), n("·"), n("·")]);
     expect(r.metrics.repeats).toEqual([]);
   });
 
