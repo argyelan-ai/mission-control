@@ -9,7 +9,9 @@
     "lint": "next lint",
     "test": "vitest",
     "test:run": "vitest run",
-    "probe": "node scripts/probe/probe.mjs"
+    "probe": "node scripts/probe/probe.mjs",
+    "design:budget": "node scripts/probe/budget.mjs",
+    "design:ratchet": "node scripts/design/ratchet.mjs"
   },
   "dependencies": {
     "@livekit/components-react": "^2.9.21",
