@@ -16,7 +16,7 @@ import { chromium } from "playwright";
 import { createLockedContext, newWriteCounter } from "./lib/context.mjs";
 import { collectRegion, compositionBudget, measuredBuild, parseBudgetArgs } from "./lib/composition.mjs";
 
-const HELP = `Usage: npm run design:budget -- --url URL --region CSS [--width 390,1440] [--out DIR] [--light] [--wait CSS] [--strict]
+const HELP = `Usage: npm run design:budget -- --url URL --region CSS [--width 390,1440] [--out DIR] [--light] [--wait CSS] [--first-screen] [--strict]
   Token (only for the MC UI): MC_PROBE_TOKEN, never printed. Measure a branch on its own dev server (:3001).`;
 
 let opts;
@@ -56,7 +56,7 @@ try {
     await page.goto(opts.url, { waitUntil: "networkidle", timeout: 30000 }).catch(() => {});
     if (opts.wait) await page.waitForSelector(opts.wait, { timeout: 20000 }).catch(() => {});
     await page.waitForTimeout(800);
-    const raw = await page.evaluate(collectRegion, opts.region);
+    const raw = await page.evaluate(collectRegion, { selector: opts.region, firstScreen: opts.firstScreen });
     const tag = `${width}-${opts.light ? "light" : "dark"}`;
     if (raw.error) {
       results.push({ width, error: raw.error });
@@ -81,7 +81,7 @@ if (writes.passed > 0) {
   console.error("A write request got through — stop and report this.");
   process.exit(2);
 }
-const report = { url: opts.url.replace(/\?.*$/, "?…"), region: opts.region, build: build.kind, head, measuredAt: new Date().toISOString(), results };
+const report = { url: opts.url.replace(/\?.*$/, "?…"), region: opts.region, firstScreen: opts.firstScreen, build: build.kind, head, measuredAt: new Date().toISOString(), results };
 writeFileSync(join(OUT, "budget.json"), JSON.stringify(report, null, 2));
 console.log(`budget: ${join(OUT, "budget.json")}`);
 const failed = results.some((r) => r.error || r.passed === false);

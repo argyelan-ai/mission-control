@@ -108,9 +108,10 @@ export function compositionBudget(nodes, extra = {}, limits = HEAD_LIMITS) {
  * Runs in the browser. Collects the text pieces of one region plus the
  * deepest nesting of visible surfaces (background or border) inside it.
  * Elements marked `data-fact` count as one fact each (K4) when present.
+ * `firstScreen` keeps only what is visible without scrolling.
  * Self-contained on purpose — Playwright serialises it.
  */
-export function collectRegion(selector) {
+export function collectRegion({ selector, firstScreen = false }) {
   const root = document.querySelector(selector);
   if (!root) return { error: `region not found: ${selector}` };
   const rootRect = root.getBoundingClientRect();
@@ -128,6 +129,7 @@ export function collectRegion(selector) {
     const r = range.getBoundingClientRect();
     if (r.width === 0 || r.height === 0) continue;
     if (r.bottom < rootRect.top || r.top > rootRect.bottom) continue;
+    if (firstScreen && (r.top >= window.innerHeight || r.bottom <= 0)) continue;
     // A piece starts a line when nothing before it sits on the same line.
     const lineStart = lastLeftTop === null || Math.abs(r.top - lastLeftTop) > r.height / 2;
     if (lineStart) lastLeftTop = r.top;
@@ -163,10 +165,10 @@ export function collectRegion(selector) {
 
 /**
  * CLI arguments of budget.mjs:
- *   --url URL --region CSS [--width 390,1440] [--out DIR] [--light] [--strict] [--wait CSS]
+ *   --url URL --region CSS [--width 390,1440] [--out DIR] [--light] [--strict] [--wait CSS] [--first-screen]
  */
 export function parseBudgetArgs(argv) {
-  const opts = { url: "", region: "", widths: [], out: "", light: false, strict: false, wait: "", help: false };
+  const opts = { url: "", region: "", widths: [], out: "", light: false, strict: false, wait: "", firstScreen: false, help: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => {
@@ -181,6 +183,7 @@ export function parseBudgetArgs(argv) {
     else if (a === "--wait") opts.wait = next();
     else if (a === "--light") opts.light = true;
     else if (a === "--strict") opts.strict = true;
+    else if (a === "--first-screen") opts.firstScreen = true;
     else if (a === "--help" || a === "-h") opts.help = true;
     else throw new Error(`unknown argument ${a}`);
   }
