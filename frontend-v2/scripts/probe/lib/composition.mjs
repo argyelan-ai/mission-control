@@ -53,18 +53,25 @@ export function colorKey(css) {
 /**
  * Count what a region shows and compare it with the limits.
  * @param {Array<{text:string, fontSize:number, fontWeight:number, color:string,
- *   left:number, lineStart?:boolean, textTransform?:string, truncated?:boolean}>} nodes
+ *   left:number, lineStart?:boolean, textTransform?:string, truncated?:boolean,
+ *   control?:boolean}>} nodes  control = label inside a button/link/field: it counts for
+ *   sizes and weights, but not as a text colour or a left edge (the control's box is the edge)
  * @param {{boxDepth?:number, items?:number}} extra  measured outside the text nodes
  */
 export function compositionBudget(nodes, extra = {}, limits = HEAD_LIMITS) {
   const visible = nodes.filter((n) => (n.text || "").trim().length > 0);
   const sizes = distinct(visible.map((n) => Math.round(n.fontSize)));
   const weights = distinct(visible.map((n) => Number(n.fontWeight)));
-  const colors = distinct(visible.map((n) => colorKey(n.color)));
+  const text = visible.filter((n) => !n.control);
+  const colors = distinct(text.map((n) => colorKey(n.color)));
   const uppercase = visible.filter(isUppercaseLabel).map((n) => n.text.trim());
-  const edges = clusterEdges(visible.filter((n) => n.lineStart !== false).map((n) => Math.round(n.left)));
+  const edges = clusterEdges(text.filter((n) => n.lineStart !== false).map((n) => Math.round(n.left)));
   const tiny = visible.filter((n) => n.fontSize < limits.minFontPx).map((n) => n.text.trim());
-  const truncated = visible.filter((n) => n.truncated || /…$|\.\.\.$/.test(n.text.trim())).map((n) => n.text.trim());
+  // The title (largest text) may be cut after its line clamp; nothing else may (K3).
+  const maxSize = Math.max(0, ...visible.map((n) => n.fontSize));
+  const truncated = visible
+    .filter((n) => n.fontSize < maxSize && (n.truncated || /…$|\.\.\.$/.test(n.text.trim())))
+    .map((n) => n.text.trim());
 
   const seen = new Map();
   for (const n of visible) {
@@ -97,7 +104,7 @@ export function compositionBudget(nodes, extra = {}, limits = HEAD_LIMITS) {
   if (uppercase.length > limits.maxUppercase) over("K7", "uppercase labels", uppercase.length, limits.maxUppercase);
   if (edges.length > limits.maxLeftEdges) over("K9", "left edges", edges.length, limits.maxLeftEdges);
   if (repeats.length) over("K3", "same text shown twice", repeats.length, 0);
-  if (truncated.length > 1) over("K3", "cut-off texts besides the title", truncated.length - 1, 0);
+  if (truncated.length) over("K3", "cut-off texts besides the title", truncated.length, 0);
   if (metrics.boxDepth != null && metrics.boxDepth > limits.maxBoxDepth) over("K8", "nested surfaces", metrics.boxDepth, limits.maxBoxDepth);
   if (metrics.items != null && metrics.items > limits.maxItems) over("K4", "facts in the header", metrics.items, limits.maxItems);
 
@@ -142,9 +149,11 @@ export function collectRegion({ selector, firstScreen = false }) {
       lineStart,
       textTransform: cs.textTransform,
       truncated: el.scrollWidth > el.clientWidth + 1 && cs.textOverflow === "ellipsis",
+      control: !!el.closest("button,a,input,select,textarea,[role=button],[role=tab],[role=switch]"),
     });
   }
   const boxed = (el) => {
+    if (el.matches("button,a,input,select,textarea,[role=button],[role=switch]")) return false; // controls are not surfaces
     const cs = getComputedStyle(el);
     const bg = cs.backgroundColor;
     const hasBg = bg && bg !== "transparent" && !/rgba\([^)]*,\s*0\)$/.test(bg);

@@ -79,6 +79,17 @@ describe("composition budget", () => {
     expect(r.metrics.boxDepth).toBeNull();
   });
 
+  it("labels inside controls count for sizes, not as text colour or left edge", () => {
+    const r = compositionBudget([
+      ...calm,
+      n("Neu starten", { fontSize: 15, color: "rgb(21, 20, 17)", left: 34, control: true }),
+      n("Protokoll", { fontSize: 15, color: "rgb(201, 201, 201)", left: 180, control: true }),
+    ]);
+    expect(r.metrics.leftEdges).toEqual([16]);
+    expect(r.metrics.textColors).not.toContain("#151411");
+    expect(r.findings).toEqual([]);
+  });
+
   it("limits can be loosened for other regions", () => {
     const loose = { ...HEAD_LIMITS, maxUppercase: 1 };
     expect(compositionBudget([n("LÄUFE")], {}, loose).findings).toEqual([]);
