@@ -162,7 +162,7 @@ _process_task_queues(session):
 
 | Consumer | Endpoint | Daten |
 |----------|----------|-------|
-| Frontend Dashboard | `GET /api/v1/system/status` | Watchdog running, last_check, checks_total |
+| Frontend Dashboard | `GET /api/v1/system/status` | Watchdog `running` (source `local`/`worker`) / `stale` / `stopped`, last_check, checks_total — read from the Redis heartbeat `mc:service:heartbeat:watchdog` the loop writes every tick (the loop runs in the worker container, not the API) |
 | Frontend Metrics | `GET /api/v1/system/metrics` | Task/Agent/Approval Counts |
 | Frontend Sparklines | `GET /api/v1/system/metrics/history` | 60 Metriken-Snapshots |
 | Agent Cards | Agent.context_tokens, session_message_count | via Token-Sync |
