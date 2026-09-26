@@ -1,0 +1,76 @@
+# Rule register (Roter Faden). Written by hand, read by `kz`. See README.md here.
+# Every active rule names an existing guard test (`path::test_name`); a rule
+# without one is a `wish`. Code anchors: `# rule: R-... - why`.
+rules:
+  - id: R-one-migration-head
+    says: "Alembic has exactly one head; a new migration checks for a colliding revision first."
+    source: "AGENTS.md (rules that bite)"
+    owner: backend/alembic/versions/
+    applies_to: ["backend/alembic/**"]
+    enforced_by:
+      - {test: "backend/tests/test_alembic_chain_integrity.py::test_exactly_one_head"}
+      - {test: "backend/tests/test_alembic_chain_integrity.py::test_every_parent_exists"}
+    status: active
+    checked: 2026-09-26
+
+  - id: R-privacy-scan
+    says: "No new private names in the public tree; the scan runs green against its baseline."
+    source: "AGENTS.md (public repository); CI leak gate"
+    owner: scripts/privacy-scan.py
+    applies_to: ["**"]
+    enforced_by:
+      - {test: "backend/tests/test_privacy_scan.py::test_this_repository_is_green_right_now"}
+      - {test: "backend/tests/test_privacy_scan.py::test_a_new_occurrence_turns_it_red"}
+    status: active
+    checked: 2026-09-26
+
+  - id: R-paused-no-dispatch
+    says: "A paused agent receives no dispatch."
+    source: "ADR-085 section 5 (quiet mode)"
+    owner: backend/app/services/operations.py
+    applies_to: ["backend/app/services/operations.py", "backend/app/services/task_runner.py"]
+    enforced_by:
+      - {test: "backend/tests/test_operations.py::test_check_dispatch_agent_paused"}
+    status: active
+    checked: 2026-09-26
+
+  - id: R-local-first-default
+    says: "The head launcher pre-selects a local pair and never falls back to a cloud pair on its own."
+    source: "ADR-086 decision 3"
+    owner: backend/app/services/heads/
+    applies_to: ["backend/app/services/heads/**"]
+    enforced_by:
+      - {test: "backend/tests/test_heads_pairs.py::test_default_is_local_omp"}
+      - {test: "backend/tests/test_heads_pairs.py::test_no_live_engine_keeps_local_default_never_cloud"}
+      - {test: "backend/tests/test_heads_pairs.py::test_default_never_falls_back_to_a_startable_cloud_pair"}
+    status: active
+    checked: 2026-09-26
+
+  - id: R-design-ratchet
+    says: "No new free pixel values, off-scale spacing or inline colours in frontend-v2/src; improvements are locked in."
+    source: "AGENTS.md (anything visible in frontend-v2); DESIGN.md"
+    owner: frontend-v2/scripts/design/ratchet.mjs
+    applies_to: ["frontend-v2/src/**"]
+    enforced_by:
+      - {test: "frontend-v2/scripts/design/__tests__/ratchet.test.mjs::design ratchet — this repository"}
+    status: active
+    checked: 2026-09-26
+
+rejected:
+  - id: X-own-control-room
+    idea: "An own control-room UI, job page or coordinator for heads"
+    why: "The coding-CLI vendor ships one; decided at stop 2. The launcher on the task form is not a control room."
+    source: "PRINCIPLES 8.1; ADR-085 decision 5; ADR-086 decision 5"
+    keywords: [control room, job page, coordinator, dashboard for heads]
+  - id: X-head-run-type
+    idea: "New task columns, statuses or a 'head' run type"
+    why: "The task core is frozen."
+    source: "PRINCIPLES 8.4; ADR-085 section 4"
+    keywords: [task column, new status, run type, head run]
+  - id: X-model-proxy
+    idea: "A model gateway or protocol proxy in front of the coding CLI"
+    why: "Excluded until an own ADR decides otherwise; the local route is OpenClaude or omp."
+    source: "PRINCIPLES 8.5; ADR-086 decision 6"
+    keywords: [proxy, gateway, litellm, protocol proxy]
+
+dead: []

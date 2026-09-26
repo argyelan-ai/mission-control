@@ -1,0 +1,123 @@
+# Product map (Roter Faden). Written by hand, read by `kz`. See README.md here.
+# Stage E3a: journeys + one feature per page. Endpoints and tables are not
+# mapped yet - they sit in luecken-basis.json as the E3b work list.
+# `source` says which doc a status comes from; `note: unconfirmed` means no
+# doc states the page's status yet (default `active`, to be confirmed in E3b).
+version: 1
+
+journeys:
+  - id: J-job-to-merge
+    job: "When I have a coding job, I want to hand it to a short-lived head and later merge a checked PR."
+    source: "ADR-085 decision 1; ROADMAP E1b"
+    steps:
+      - {feature: F-tasks}   # new task -> "Run as head" -> status, stop, result (PR + run record) on the task detail
+    end_state: "PR open with a run record; the operator merges through the merge queue"
+    test: e2e/journeys/J-job-to-merge.spec.ts
+
+  - id: J-phone-needs-you
+    job: "When something waits for me, I want to see and answer it from my phone in a few taps."
+    source: "PRINCIPLES 7.1 (needs you = open approvals + blocked/user_test tasks), 7.10 (phone)"
+    steps:
+      - {feature: F-home}    # what waits, last night's report
+      - {feature: F-inbox}   # open approvals
+      - {feature: F-tasks}   # tasks and heads that need an answer
+    end_state: "Nothing waits for the operator"
+    test: e2e/journeys/J-phone-needs-you.spec.ts
+
+  - id: J-runtime-switch
+    job: "When a model or harness is busy, weak or down, I want to run the job on another harness x runtime pair."
+    source: "ADR-086 decisions 1-3; ROADMAP E1b"
+    steps:
+      - {feature: F-runtimes}  # which runtime is busy
+      - {feature: F-tasks}     # pick a pair from the matrix, "restart with ..." another pair
+    end_state: "The same job continues on the new pair"
+    test: e2e/journeys/J-runtime-switch.spec.ts
+
+features:
+  - id: F-home
+    name: "Home: what needs me, last night's report"
+    ui: {route: /}
+    status: active
+    source: "PRINCIPLES 7.1; ROADMAP E2 (morning report on the Home card)"
+  - id: F-tasks
+    name: "Tasks: create, run as head, follow and finish work"
+    ui: {route: /tasks}
+    status: active
+    source: "ROADMAP E1b, UI waves 2 and 3a"
+  - id: F-inbox
+    name: "Inbox: open approvals"
+    ui: {route: /inbox}
+    status: active
+    source: "ROADMAP UI wave 2 (pages that stay)"
+  - id: F-runtimes
+    name: "Runtimes: engines, which one is busy"
+    ui: {route: /runtimes}
+    status: active
+    source: "ADR-086; ROADMAP UI waves 0c and 2"
+  - id: F-settings
+    name: "Settings"
+    ui: {route: /settings}
+    status: active
+    source: "ROADMAP UI wave 2; E2 (night-shift window)"
+  - id: F-memory
+    name: "Memory: the vault"
+    ui: {route: [/memory, /memory/graph]}
+    status: active
+    source: "ADR-085 section 2 (vault stays); ROADMAP UI wave 2"
+  - id: F-schedule
+    name: "Schedule: planned jobs"
+    ui: {route: [/schedule, "/schedule/[jobId]"]}
+    status: active
+    source: "ROADMAP UI wave 2"
+  - id: F-insights
+    name: "Insights: usage and metrics"
+    ui: {route: /insights}
+    status: active
+    source: "ADR-085 section 2 (metrics stay); ROADMAP UI wave 4"
+  - id: F-sessions
+    name: "Sessions chat"
+    ui: {route: /sessions}
+    status: frozen
+    source: "ADR-085 section 4 (build stop); ROADMAP: candidate for removal"
+  - id: F-loops
+    name: "Loops"
+    ui: {route: /loops}
+    status: frozen
+    source: "ADR-085 (ADR-051 frozen); ROADMAP: candidate for removal"
+  - id: F-office
+    name: "Office"
+    ui: {route: /office}
+    status: frozen
+    source: "ROADMAP UI waves: candidate for removal; PRINCIPLES 7.12 (no polish)"
+  - id: F-agents
+    name: "Agents"
+    ui: {route: [/agents, "/agents/[id]"]}
+    note: unconfirmed
+  - id: F-bench
+    name: "Benchmark studio"
+    ui: {route: /bench}
+    note: unconfirmed
+  - id: F-files
+    name: "Files browser"
+    ui: {route: /files}
+    note: unconfirmed
+  - id: F-repos
+    name: "Repos registry"
+    ui: {route: /repos}
+    note: unconfirmed
+  - id: F-skills
+    name: "Skills"
+    ui: {route: /skills}
+    note: unconfirmed
+  - id: F-login
+    name: "Login"
+    ui: {route: /login}
+    status: internal
+    source: "ADR-085 section 2 (auth is cross-cutting core)"
+  - id: F-setup
+    name: "First-run wizard"
+    ui: {route: /setup}
+    status: internal
+    source: "shown once after the first registration"
+
+internal: []

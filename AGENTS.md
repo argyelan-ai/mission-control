@@ -12,6 +12,7 @@ Read this first; it points to the rest. Human contributors: see
 | Decisions and their reasons (ADRs, index + template) | [docs/decisions/README.md](docs/decisions/README.md) — direction since [ADR-085](docs/decisions/085-head-per-job.md) + [ADR-086](docs/decisions/086-harness-runtime-cross-switch.md) |
 | Architecture, "where do I change what" | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
 | Product and design | [PRODUCT.md](PRODUCT.md) · [DESIGN.md](DESIGN.md) + [docs/design/ui-craft.md](docs/design/ui-craft.md) |
+| Product map, rule register, known gaps (checked by `kz check`) | [docs/produkt/README.md](docs/produkt/README.md) |
 
 - **Where decisions live:** a decision that changes direction or replaces an
   older one is a new ADR in `docs/decisions/` (the old one gets marked, never
