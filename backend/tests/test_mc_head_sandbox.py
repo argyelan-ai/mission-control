@@ -72,6 +72,14 @@ def test_worktree_and_status_files_are_writable(layout):
     assert (run / "wt" / "file.txt").read_text() == "ok\n"
 
 
+def test_omp_session_folder_is_writable(layout):
+    """omp keeps its session (with token usage) in <run>/omp-sessions."""
+    run = layout["run"]
+    res = _sh(layout, f"mkdir -p {run}/omp-sessions && echo s > {run}/omp-sessions/s.jsonl")
+    assert res.returncode == 0, res.stderr
+    assert (run / "omp-sessions" / "s.jsonl").read_text() == "s\n"
+
+
 def test_wrapper_status_is_not_writable(layout):
     res = _sh(layout, f"echo '{{\"phase\":\"exited\"}}' > {layout['run']}/.wrapper/status.json")
     assert res.returncode != 0

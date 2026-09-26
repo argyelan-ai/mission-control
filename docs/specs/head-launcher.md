@@ -195,6 +195,8 @@ $MC_HOME/heads/<run_id>/
   step.txt         written by the head on every step change ("4/7 sabotage probe")
   question.md      written by the head when it needs the operator (then it ends)
   head.log         stdout/stderr of the harness
+  omp-sessions/    omp only: the harness session (--session-dir) — the token harvester reads usage from it
+  claude-config/   claude only: CLAUDE_CONFIG_DIR — the token harvester reads usage from projects/**/*.jsonl
   wt/              the git worktree
   bin/             guard shims (§9)
 ```
@@ -313,7 +315,7 @@ stoppable) in the runs list on `/runtimes`.
 
 | Pair | Command in `wt/` |
 |---|---|
-| omp × local (v1) | `omp --profile mc-head-<id8> --model <provider>/<model> -p --no-session --max-time <s> --auto-approve --append-system-prompt <run>/procedure.md "$(cat <run>/job.md)"` — profile rendered by `render_omp_host_models_yml`, never the operator's own profile. `--auto-approve` is a permission bypass → allowed **only inside the sandbox** or on the scratch repo (ADR-086) |
+| omp × local (v1) | `omp --profile mc-head-<id8> --model <provider>/<model> -p --session-dir <run>/omp-sessions --max-time <s> --auto-approve --append-system-prompt <run>/procedure.md "$(cat <run>/job.md)"` — profile rendered by `render_omp_host_models_yml`, never the operator's own profile. `--auto-approve` is a permission bypass → allowed **only inside the sandbox** or on the scratch repo (ADR-086) |
 | claude × local (v1, exp.) | `CLAUDE_CONFIG_DIR=<run>/claude-config claude -p --bare --settings <run>/head-settings.json --append-system-prompt-file procedure.md "$(cat job.md)"` + `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL`, placeholder `ANTHROPIC_API_KEY` (not `ANTHROPIC_AUTH_TOKEN`: under `--bare` only `ANTHROPIC_API_KEY` or `apiKeyHelper` count [cli]). `-p` is fine here: no subscription is involved. Tool permissions come only from the allow/deny list in `head-settings.json` (§9) — `acceptEdits` alone would refuse every Bash call (tests, git, `gh pr create`) in `-p` |
 | openclaude × local (later) | `openclaude -p --bare --settings <run>/head-settings.json --append-system-prompt "$(cat procedure.md)" "$(cat job.md)"` + `OPENAI_BASE_URL/OPENAI_MODEL` |
 | claude × Claude (later) | interactive `claude` (no `-p`) in the tmux session with `CLAUDE_CONFIG_DIR=<head config dir>`, `--settings`, `--append-system-prompt-file`; end = process exit + run record. `--bg` + `/goal` only as an extra after its end-detection proof |

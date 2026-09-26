@@ -17,6 +17,7 @@
   (subpath (param "CLONE_GIT"))
   (subpath (string-append (param "RUN") "/home"))
   (subpath (string-append (param "RUN") "/claude-config"))
+  (subpath (string-append (param "RUN") "/omp-sessions"))
   (literal (string-append (param "RUN") "/step.txt"))
   (literal (string-append (param "RUN") "/question.md"))
   (literal (string-append (param "RUN") "/head.log"))
