@@ -188,7 +188,7 @@ export function HeadStateCard({
   const acts = run.state === "needs_you" || run.state === "failed" || run.state === "stopped";
 
   const branchLine = run.branch ? (
-    <span className="mt-2 flex items-start gap-1 min-w-0 font-mono text-xs" style={{ color: C.textMuted }}>
+    <span className="mt-2 flex items-start gap-1 min-w-0 font-mono text-sm" style={{ color: C.textMuted }}>
       <span className="break-all pt-1">{t("card.branchKept", { branch: run.branch })}</span>
       <button
         type="button"
@@ -290,7 +290,8 @@ export function HeadStateCard({
           onClick={() => setDetailsOpen((o) => !o)}
           aria-expanded={detailsOpen}
           data-testid="head-details-toggle"
-          className={`ml-auto ${QUIET_BTN}`}
+          // Alone (no main action) it lines up with the text instead of floating right.
+          className={`${main ? "ml-auto" : "-ml-3"} ${QUIET_BTN}`}
           style={{ color: C.textSecondary }}
         >
           {t("card.details")}
