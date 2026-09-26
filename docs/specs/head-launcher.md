@@ -331,7 +331,14 @@ stoppable) in the runs list on `/runtimes`.
    SIGKILL to the process group; macOS has no `timeout`):
    - **No progress** (`no_progress_s`, setting `HEADS_NO_PROGRESS_MIN`,
      default 20 min): stopped with reason `no_progress` when neither
-     `head.log`, `step.txt` nor any file in `wt/` changed for that long.
+     `head.log`, `step.txt`, `work.log` nor any file in `wt/` changed for
+     that long. `work.log` exists for one long blocking command (test suite,
+     build, download): `claude -p` / `omp -p` print only at the end and the
+     head cannot touch `step.txt` during a tool call, so the procedure tells
+     it to run such commands with `2>&1 | tee -a <run>/work.log` (the sandbox
+     lets it write exactly that file; a symlink there is not a sign). A head
+     that ignores this and runs one silent command longer than the window
+     is stopped — a known limit, not a bug.
      The worktree walk never follows a symlink, skips heavy tool folders
      (`.git`, `node_modules`, `.venv`, build output — their own mtime still
      counts), stops after 50 000 entries and ignores future mtimes. The
@@ -340,7 +347,9 @@ stoppable) in the runs list on `/runtimes`.
    - **Hard limit** (`time_limit_s`, the name older wrappers know; settings
      `HEADS_HARD_LIMIT_LOCAL_S` default 8 h, `HEADS_HARD_LIMIT_CLOUD_S`
      default 2 h because of cost): emergency brake, reason `hard_limit`.
-     omp also gets it as `--max-time` [cli].
+     omp also gets it as `--max-time` [cli], 30 s above the wrapper's
+     effective limit (operator cap included), so the wrapper stops first and
+     the reason is `hard_limit`, not `exit_<n>`.
    - A spec without `no_progress_s` (older backend) runs with the wrapper
      default (1200 s). Runs from before this change still show `time_limit`.
 
@@ -360,13 +369,15 @@ stoppable) in the runs list on `/runtimes`.
 ### 6.5 Status, heartbeat, stop, restart, result
 
 - **Heartbeat** = `heartbeat` mtime (process alive) + `last_output_at`
-  (mtime of `head.log` / `step.txt`) + `last_progress_at` (output **or** any
+  (mtime of `head.log` / `step.txt` / `work.log`) + `last_progress_at` (output **or** any
   worktree change — the watchdog's signal, §6.3 step 4) + `step.txt` (where
   the head is). `silent_s` is measured from `last_progress_at` (fallback
   `last_output_at`, then the log mtime), so the UI's "Silent for > 15 min"
   warning, the night-shift "blocked" notice (15 min) and the wrapper's
   no-progress stop (default 20 min) all read the same signal: warn first,
-  stop later.
+  stop later. The warn thresholds are fixed at 15 min, so this order holds
+  only for `HEADS_NO_PROGRESS_MIN` ≥ 16; lower values stop a head without a
+  prior warning (documented in `.env.example`).
 - **Derived state** — one pure function
   `derive_head_state(spec, status, heartbeat_mtime, run_record_text, question_exists, now)`:
 

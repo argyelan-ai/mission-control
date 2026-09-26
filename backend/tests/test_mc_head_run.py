@@ -72,7 +72,7 @@ def test_start_runs_harness_in_worktree_and_exits(env):
     assert argv[:4] == ["--profile", "mc-head", "--model", "mc-openai/GLM-5.3-Flash-EXL3"]
     assert "-p" in argv and "--auto-approve" in argv and "--no-session" in argv
     assert argv[argv.index("--append-system-prompt") + 1] == str(run / "procedure.md")
-    assert argv[argv.index("--max-time") + 1] == "600"
+    assert argv[argv.index("--max-time") + 1] == "630"
     assert "Say hello." in "\n".join(argv)
     # env -i: own HOME, shims first on PATH, nothing inherited
     env_lines = dict(
@@ -396,6 +396,105 @@ def test_output_counts_as_progress(env):
     run_head(mc_home, "start", run_id, env_extra=_extra(harness, MC_HEAD_MAX_NO_PROGRESS_S="2"))
     status = wait_phase(mc_home, run_id, "exited", timeout=40)
     assert status["reason"] is None, status
+
+
+def test_work_log_counts_as_progress(env):
+    """A single long command (test suite, build, download) prints nothing
+    until it ends under ``claude -p`` / ``omp -p``, and the head cannot touch
+    step.txt while its tool call runs. The procedure tells it to pipe such
+    commands through ``tee -a <run>/work.log`` — that file is a sign too."""
+    mc_home = env["mc_home"]
+    harness = fake_harness(env["tmp"], _long_quiet_worker('echo "test $i" >> "$MC_HEAD_RUN_DIR/work.log"'))
+    run_id = write_spec(mc_home, no_progress_s=1200)
+    run_head(mc_home, "start", run_id, env_extra=_extra(harness, MC_HEAD_MAX_NO_PROGRESS_S="2"))
+    status = wait_phase(mc_home, run_id, "exited", timeout=40)
+    assert status["reason"] is None, status
+    assert status["last_output_at"] and status["last_output_at"] > status["started_at"]
+
+
+def test_a_work_log_symlink_is_not_a_sign(env, tmp_path):
+    """work.log is head-writable like step.txt: a symlink to a file that
+    changes elsewhere must not keep the head alive."""
+    mc_home = env["mc_home"]
+    outside = tmp_path / "outside-tick"
+    ticker = subprocess.Popen(["sh", "-c", f"while :; do date > {outside}; sleep 0.2; done"])
+    try:
+        harness = fake_harness(
+            env["tmp"], f'ln -sf {outside} "$MC_HEAD_RUN_DIR/work.log"; trap \'\' TERM; while :; do sleep 0.1; done'
+        )
+        run_id = write_spec(mc_home, no_progress_s=1200)
+        run_head(mc_home, "start", run_id, env_extra=_extra(harness, MC_HEAD_MAX_NO_PROGRESS_S="2"))
+        status = wait_phase(mc_home, run_id, "exited", timeout=30)
+        assert status["reason"] == "no_progress", status
+    finally:
+        ticker.kill()
+        ticker.wait()
+
+
+def test_a_future_mtime_in_the_worktree_is_not_progress(env):
+    """One file stamped in the future (unpacked archive, clock skew) must not
+    count as progress forever — the head is still stopped when quiet."""
+    mc_home = env["mc_home"]
+    harness = fake_harness(env["tmp"], "touch -t 209901010000 future.txt; trap '' TERM; while :; do sleep 0.1; done")
+    run_id = write_spec(mc_home, time_limit_s=3600, no_progress_s=1200)
+    run_head(mc_home, "start", run_id, env_extra=_extra(harness, MC_HEAD_MAX_NO_PROGRESS_S="2"))
+    status = wait_phase(mc_home, run_id, "exited", timeout=30)
+    assert status["reason"] == "no_progress", status
+
+
+def test_changes_deep_in_a_skipped_tool_folder_do_not_count(env):
+    """node_modules & co. are not walked: rewriting a file deep inside is no
+    progress (only the folder's own mtime counts)."""
+    mc_home = env["mc_home"]
+    harness = fake_harness(
+        env["tmp"],
+        "mkdir -p node_modules/pkg/lib; date > node_modules/pkg/lib/x.js; "
+        "trap '' TERM; while :; do date > node_modules/pkg/lib/x.js; sleep 0.2; done",
+    )
+    run_id = write_spec(mc_home, time_limit_s=3600, no_progress_s=1200)
+    run_head(mc_home, "start", run_id, env_extra=_extra(harness, MC_HEAD_MAX_NO_PROGRESS_S="2"))
+    status = wait_phase(mc_home, run_id, "exited", timeout=30)
+    assert status["reason"] == "no_progress", status
+
+
+def test_new_entries_directly_in_a_skipped_folder_count(env):
+    """Installing into node_modules adds entries there — its own mtime moves."""
+    mc_home = env["mc_home"]
+    harness = fake_harness(env["tmp"], "mkdir -p node_modules; " + _long_quiet_worker("touch node_modules/pkg$i"))
+    run_id = write_spec(mc_home, no_progress_s=1200)
+    run_head(mc_home, "start", run_id, env_extra=_extra(harness, MC_HEAD_MAX_NO_PROGRESS_S="2"))
+    status = wait_phase(mc_home, run_id, "exited", timeout=40)
+    assert status["reason"] is None, status
+
+
+def test_scan_cap_bounds_the_walk_without_crashing(env):
+    """With the scan cap at 1 entry the walk stops early: a change deep in
+    the tree is not seen, the watchdog still works (no crash, no_progress)."""
+    mc_home = env["mc_home"]
+    harness = fake_harness(
+        env["tmp"],
+        "mkdir -p src/deep/er; date > src/deep/er/work.py; "
+        "trap '' TERM; while :; do date > src/deep/er/work.py; sleep 0.2; done",
+    )
+    run_id = write_spec(mc_home, time_limit_s=3600, no_progress_s=1200)
+    run_head(
+        mc_home, "start", run_id,
+        env_extra=_extra(harness, MC_HEAD_MAX_NO_PROGRESS_S="2", MC_HEAD_PROGRESS_SCAN_MAX="1"),
+    )
+    status = wait_phase(mc_home, run_id, "exited", timeout=30)
+    assert status["reason"] == "no_progress", status
+
+
+def test_omp_max_time_leaves_the_hard_limit_to_the_wrapper(env):
+    """omp gets --max-time a little above the wrapper's effective hard limit
+    (operator cap included), so the wrapper stops first with "hard_limit"."""
+    mc_home = env["mc_home"]
+    harness = fake_harness(env["tmp"], "echo ok")
+    run_id = write_spec(mc_home, time_limit_s=3600)
+    run_head(mc_home, "start", run_id, env_extra=_extra(harness, MC_HEAD_MAX_TIME_S="120"))
+    wait_phase(mc_home, run_id, "exited")
+    argv = (mc_home / "heads" / run_id / "argv.txt").read_text().splitlines()
+    assert argv[argv.index("--max-time") + 1] == "150"
 
 
 def test_a_symlink_out_of_the_worktree_is_not_followed(env, tmp_path):

@@ -85,7 +85,7 @@ KILL_GRACE_S = float(os.environ.get("MC_HEAD_KILL_GRACE_S", "10"))
 # Operator cap on every head's hard limit (seconds); also used by tests.
 MAX_TIME_S = int(os.environ.get("MC_HEAD_MAX_TIME_S", "86400"))
 # Progress watchdog (§6.5): a head is stopped with reason "no_progress" when
-# neither head.log, step.txt nor any file in its worktree changed for this
+# neither head.log, step.txt, work.log nor any file in its worktree changed for this
 # long. The default applies to specs from a backend that does not write
 # ``no_progress_s`` yet; it equals the backend default (heads_no_progress_min).
 DEFAULT_NO_PROGRESS_S = 1200
@@ -810,7 +810,9 @@ def harness_argv(spec: dict, run: Path, home: Path, env: dict) -> list:
             "-p",
             "--no-session",
             "--no-skills",
-            "--max-time", str(spec["time_limit_s"]),
+            # A little above the wrapper's effective hard limit (operator cap
+            # included), so the wrapper stops first with reason "hard_limit".
+            "--max-time", str(min(spec["time_limit_s"], MAX_TIME_S) + 30),
             # Permission bypass: allowed only inside the sandbox (ADR-086,
             # enforced in start_gate() for every run).
             "--auto-approve",
@@ -1191,10 +1193,11 @@ def cmd_supervise(run_id: str) -> int:
             now = time.time()
             if now - last_beat >= beat_every:
                 (wdir / "heartbeat").touch()
-                # Sign of output: head.log OR step.txt — `omp -p` prints only
-                # at the very end, the step file moves while it works.
+                # Sign of output: head.log, step.txt OR work.log — `omp -p`
+                # prints only at the very end, the step file moves between
+                # steps, work.log gets the tee'd output of long commands.
                 mtimes = []
-                for name in ("head.log", "step.txt"):
+                for name in ("head.log", "step.txt", "work.log"):
                     try:
                         info = os.lstat(run / name)
                     except OSError:

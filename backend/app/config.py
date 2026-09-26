@@ -621,7 +621,8 @@ class Settings(BaseSettings):
     # they move. The hard limit is only an emergency brake (reason
     # "hard_limit"): generous locally, tighter on cloud runtimes (cost).
     # The night-shift "blocked" notice (15 min quiet, night.BLOCKED_SILENT_S)
-    # reads the same signal, so with the default it warns before the stop.
+    # reads the same signal, so with the default it warns before the stop;
+    # values below 16 stop a head before that warning (see .env.example).
     heads_no_progress_min: int = Field(default=20, ge=1, le=1440)
     heads_hard_limit_local_s: int = Field(default=8 * 3600, ge=60, le=86400)
     heads_hard_limit_cloud_s: int = Field(default=2 * 3600, ge=60, le=86400)

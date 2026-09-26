@@ -15,7 +15,7 @@ permanent agent. Nobody can type into your session while you run.
 - Worktree: `{{worktree}}` · branch `{{branch}}` (from `origin/{{base_branch}}`)
 - Pair: {{harness}} × {{runtime}}
 - Watchdog: the launcher stops you after **{{no_progress}} without progress** (no change to
-  `step.txt`, your output or any file in the worktree) · hard limit {{time_limit}}
+  `step.txt`, `work.log`, your output or any file in the worktree) · hard limit {{time_limit}}
 - Run folder (status files): `{{run_dir}}`
 - Run record: `{{run_dir}}/run-record.md` (exactly this path — the launcher files it into the vault
   as `{{vault_job_dir}}/run-record.md` after you end)
@@ -24,7 +24,8 @@ permanent agent. Nobody can type into your session while you run.
 
 | File | When | Content |
 |---|---|---|
-| `{{run_dir}}/step.txt` | on every step change (0–7), and at least every 10 min during long work (long test runs, big reads) | one line: `step 4/7 sabotage probe · waiting for: nothing` |
+| `{{run_dir}}/step.txt` | on every step change (0–7), and at least every 10 min between long pieces of work | one line: `step 4/7 sabotage probe · waiting for: nothing` |
+| `{{run_dir}}/work.log` | while one command runs long | run every command that can take more than 10 min (full test suite, big build, download, install) as `<command> 2>&1 \| tee -a {{run_dir}}/work.log` — you cannot touch `step.txt` while a tool call runs, and your own output only appears at the end, so this file is your sign of life |
 | `{{run_dir}}/question.md` | only when you must ask (see "Ask only about") | 1 sentence question + your recommendation + what happens without an answer; then end your run (the launcher sees the file — no exit code needed) |
 | `{{run_dir}}/run-record.md` | created in step 0, finished in step 7 | see template below |
 

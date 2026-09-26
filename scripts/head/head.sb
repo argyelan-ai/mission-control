@@ -20,6 +20,7 @@
   (literal (string-append (param "RUN") "/step.txt"))
   (literal (string-append (param "RUN") "/question.md"))
   (literal (string-append (param "RUN") "/head.log"))
+  (literal (string-append (param "RUN") "/work.log"))
   (literal (string-append (param "RUN") "/run-record.md"))
   (subpath "/private/tmp")
   (subpath (param "USER_TMP"))
