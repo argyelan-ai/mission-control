@@ -342,6 +342,15 @@ class Settings(BaseSettings):
     # True = tasks with dispatch_phase="planning" are NOT auto-dispatched
     enable_dispatch_gating: bool = False
 
+    # ADR-085 §4/§5 (head per job, quiet mode): a task created from the UI/API
+    # WITHOUT an agent is no longer auto-assigned to the board lead (which
+    # prepared its repo workspace and queued the card for it — the old fleet
+    # path). False (default) = the card stays unassigned in the inbox until the
+    # operator assigns it or a head picks the job up. True = legacy lead-first
+    # auto-assign. Explicit assignments, agent-created tasks (lead delegation,
+    # voice agent), scheduler and loop tasks are not affected by this switch.
+    lead_auto_assign_new_tasks: bool = False
+
     # Bauplan Lauf 2 Teil 2-4 (21.09.2026): Guard 3's turn-signal check
     # (agent.status == "working" + fresh heartbeat) applies to ANY
     # poll-based runtime, not just cli-bridge — 60/80 Hand-Starts traced to

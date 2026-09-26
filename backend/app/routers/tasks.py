@@ -619,9 +619,35 @@ async def create_task(
         skip_dispatch = True
     board_obj = await session.get(Board, board_id)
     if board_obj and board_obj.auto_dispatch_enabled and not skip_dispatch:
+        if await _leave_unassigned_for_operator(session, task):
+            return task
         create_tracked_task(auto_dispatch_task(task.id, board_id))
 
     return task
+
+
+async def _leave_unassigned_for_operator(session: AsyncSession, task: Task) -> bool:
+    """ADR-085 §4/§5: True = do NOT auto-dispatch this UI/API task.
+
+    auto_dispatch_task() hands an unassigned card to find_dispatch_target(),
+    i.e. the board lead (repo workspace prepared, card queued for it). In
+    quiet mode new work goes to a short-lived head instead, so a card created
+    without an agent stays unassigned in the inbox. Explicitly assigned cards
+    are never held back; settings.lead_auto_assign_new_tasks=True restores the
+    old lead-first path. The dispatch core itself is unchanged.
+    """
+    from app.config import settings as _settings
+    if task.assigned_agent_id is not None or _settings.lead_auto_assign_new_tasks:
+        return False
+    await emit_event(
+        session,
+        "task.left_unassigned",
+        f"Task '{task.title}' bleibt ohne Agent — keine automatische Zuweisung an den Board Lead",
+        board_id=task.board_id,
+        task_id=task.id,
+        detail={"reason": "lead_auto_assign_disabled", "adr": "ADR-085"},
+    )
+    return True
 
 
 # ── Reorder (must come BEFORE {task_id} routes) ─────────────────────────────
@@ -717,6 +743,8 @@ async def dispatch_deferred_task(
             status_code=409,
             detail=f"Task ist nicht mehr dispatchbar (Status '{task.status}')",
         )
+    if await _leave_unassigned_for_operator(session, task):
+        return {"status": "left_unassigned", "task_id": str(task.id)}
     create_tracked_task(auto_dispatch_task(task.id, task.board_id))
     return {"status": "dispatch_triggered", "task_id": str(task.id)}
 
