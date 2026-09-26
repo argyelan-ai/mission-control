@@ -1,0 +1,53 @@
+name: kohaerenz
+
+# Roter Faden: product map + rule register + code stay coherent (docs/produkt/README.md).
+#
+# DISABLED until the kz tool repository is public: CI cannot install a private
+# package. The job only runs once the repository variable KZ_REPO is set
+# ("<owner>/<repo>" of the kz repository) - until then it is skipped, never red.
+# Warning-only for now (continue-on-error); making it a required check is a
+# separate step (Roter Faden E4).
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  kz-check:
+    name: kz check (warning only)
+    if: ${{ vars.KZ_REPO != '' && !contains(github.event.pull_request.labels.*.name, 'kz-skip') }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      # Full history: the diff checks (anchors, drift, pr) need origin/main.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install kz at the version pinned in .kohaerenz.yaml
+        env:
+          KZ_REPO: ${{ vars.KZ_REPO }}
+        run: |
+          KZ_VERSION=$(sed -n 's/^tool_version:[[:space:]]*//p' .kohaerenz.yaml)
+          pip install "git+https://github.com/${KZ_REPO}@v${KZ_VERSION}"
+          kz --version
+
+      - name: kz check
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            printf '%s\n' "$PR_BODY" > "$RUNNER_TEMP/pr-body.md"
+            kz check --require-all --pr-body-file "$RUNNER_TEMP/pr-body.md"
+          else
+            kz check
+          fi
