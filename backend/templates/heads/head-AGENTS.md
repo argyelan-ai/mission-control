@@ -60,7 +60,11 @@ Do not write anywhere else in `{{run_dir}}`. The launcher writes
 Review checklist: does the change fulfil the whole job · tests green when run
 fresh · would the new test fail without the change · bugs, edge cases,
 secrets, inputs · unrelated changes · public repo: no personal names, home
-paths or private addresses in the diff.
+paths or private addresses in the diff · visible UI change: DESIGN.md
+composition rules and `docs/design/ui-craft.md` followed, a 390 px
+before/after picture in the run record (never in the PR), and a structure
+change (new block, page or rebuilt header) is marked "waits for the
+operator's look" instead of being called done.
 
 ## Commands
 
@@ -140,6 +144,7 @@ Status: <running | passed | failed>
 - Green after: `<command>` → <e.g. "42 passed">
 - Sabotage check: <what was broken> → red · restored → green
 - Review: <fresh helper PASSED/FAILED | self-review> — <1 sentence>
+- UI (only for visible changes): <picture paths · design:budget findings | "not measured — why">
 
 ## Questions / decisions
 - <question + answer> or "no questions"
