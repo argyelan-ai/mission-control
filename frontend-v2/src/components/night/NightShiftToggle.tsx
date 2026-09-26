@@ -34,10 +34,13 @@ export function NightShiftToggle({
   taskId,
   disabled = false,
   canMark = true,
+  variant = "card",
 }: {
   taskId: string;
   disabled?: boolean;
   canMark?: boolean;
+  /** "row": one row of the task properties list — no frame, no moon. */
+  variant?: "card" | "row";
 }) {
   const t = useTranslations("nightShift");
   const qc = useQueryClient();
@@ -126,19 +129,24 @@ export function NightShiftToggle({
     tone = STATUS_TEXT.warning;
   }
 
+  const row = variant === "row";
   return (
-    <section className="rounded-lg px-3 py-1.5" style={{ border: `1px solid ${C.border}` }} data-testid="night-toggle">
-      <div className="flex items-center gap-2.5">
-        <Moon size={14} aria-hidden style={{ color: on ? C.accent : C.textMuted }} className="shrink-0" />
+    <section
+      className={row ? "py-2" : "rounded-lg px-3 py-1.5"}
+      style={row ? { borderBottom: `1px solid ${C.borderSubtle}` } : { border: `1px solid ${C.border}` }}
+      data-testid="night-toggle"
+    >
+      <div className={row ? "flex items-center gap-3" : "flex items-center gap-2.5"}>
+        {!row && <Moon size={14} aria-hidden style={{ color: on ? C.accent : C.textMuted }} className="shrink-0" />}
         <div className="flex-1 min-w-0">
-          <div className="text-xs font-medium" style={{ color: C.textPrimary }} id={`night-label-${taskId}`}>
+          <div className={row ? "text-sm" : "text-xs font-medium"} style={{ color: C.textPrimary }} id={`night-label-${taskId}`}>
             {t("runTonight")}
           </div>
-          <p className="text-[11px] leading-snug" style={{ color: tone }} id={`night-line-${taskId}`} data-testid="night-line">
+          <p className={row ? "text-xs leading-snug" : "text-[11px] leading-snug"} style={{ color: tone }} id={`night-line-${taskId}`} data-testid="night-line">
             {line}
           </p>
           {cfg && !cfg.enabled && on && (
-            <p className="text-[11px] leading-snug" style={{ color: STATUS_TEXT.warning }} data-testid="night-off-warning">
+            <p className={row ? "text-xs leading-snug" : "text-[11px] leading-snug"} style={{ color: STATUS_TEXT.warning }} data-testid="night-off-warning">
               {t("offWarning")}
             </p>
           )}

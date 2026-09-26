@@ -1,22 +1,22 @@
 "use client";
 
 /**
- * Head state card (docs/specs/head-launcher.md §8.2). Sits on top of the task
- * detail while the task has a head run and wins over the task-status card.
- * Layout rule: state + ONE main action on top, everything else under
+ * Head next step (docs/specs/head-launcher.md §8.2, DESIGN.md K12). Sits under
+ * the task title while the task has a head run and wins over the task-status
+ * card. The state word and its one time ("Running · for 12 min") are in the
+ * state sentence above; the pair (harness · runtime) is in the properties.
+ * Here: the head's next step + ONE main action, everything else under
  * "Details" (collapsed):
  *
- *   ● Running · omp · GLM local                      12 min
- *     Step: 4/7 sabotage probe
- *     Last output 40 s ago           (> 15 min: "Silent for 22 min", warn tone)
- *     [Stop]                                         Details ▾
- *       Restart with … · Open log · Run record · Copy tmux attach (desktop)
+ *   Step: 4/7 sabotage probe
+ *   [Stop]                                         Details ▾
+ *     Last output 40 s ago · Restart with … · Open log · Run record · tmux (desktop)
  *
- *   needs you → question + answer field + [Answer & continue] [Restart with …]
- *   passed    → "PR #712 open — your review decides the merge" [Open PR ↗]
- *               scratch repo with a local origin (no PR possible):
- *               "Branch pushed · scratch repo (no PR)" + the branch
- *   failed / stopped → reason in one sentence + branch  [Restart with …]
+ *   needs you → surface: question + answer field + [Answer & continue] [Restart with …]
+ *   passed    → "The pull request is open — your review decides" [Open PR #712 ↗]
+ *               scratch repo with a local origin (no PR possible): the
+ *               sentence + the branch with a copy button, no button
+ *   failed / stopped → surface: reason in one sentence + branch  [Restart with …]
  *
  * Content (question, step, log) is shown as the head wrote it; only labels
  * are translated.
@@ -25,53 +25,23 @@
 import { useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ExternalLink, GitBranch, RotateCcw, ScrollText, Terminal, FileText, Send } from "lucide-react";
+import { ChevronDown, Copy, ExternalLink, RotateCcw, ScrollText, Terminal, FileText, Send } from "lucide-react";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
-import { C, STATUS_TEXT, alpha } from "@/lib/colors";
+import { C, STATUS_TEXT } from "@/lib/colors";
 import { formatDuration } from "@/lib/taskDetail/format";
 import {
   failReasonKey,
   headErrorKey,
   headStateKey,
   prNumberFromUrl,
-  runDurationSeconds,
-  runPairLabel,
   type HeadPairsResponse,
   type HeadRun,
-  type HeadState,
 } from "@/lib/heads";
 import type { HeadMainAction } from "@/lib/taskDetail/stateCard";
 import { HeadRestartDialog } from "./HeadRestartDialog";
 import { HeadStopButton } from "./HeadStopButton";
-
-const STATE_TONE: Record<HeadState, string> = {
-  starting: C.info,
-  running: C.info,
-  // Waiting on the operator = the brightest tone, not a hue (DESIGN.md).
-  needs_you: C.accent,
-  passed: C.online,
-  failed: C.error,
-  stopped: C.textMuted,
-};
-
-const STATE_TEXT: Record<HeadState, string> = {
-  starting: STATUS_TEXT.info,
-  running: STATUS_TEXT.info,
-  needs_you: C.accent,
-  passed: STATUS_TEXT.online,
-  failed: STATUS_TEXT.error,
-  stopped: C.textSecondary,
-};
-
-const STATE_GLYPH: Record<HeadState, string> = {
-  starting: "●",
-  running: "●",
-  needs_you: "?",
-  passed: "✓",
-  failed: "✕",
-  stopped: "■",
-};
+import { NEXT_TEXT, PRIMARY_BTN, PRIMARY_STYLE, QUIET_BTN, RAISED } from "@/components/task/detail/nextStepStyle";
 
 /** Pairs for nicer runtime names — shared cache with the pickers. */
 export function useHeadPairsForLabels(enabled = true) {
@@ -91,11 +61,6 @@ function secondsLabel(seconds: number | null | undefined, locale: string): strin
   return formatDuration(seconds, locale);
 }
 
-const primaryBtn =
-  "inline-flex items-center justify-center gap-1.5 px-3.5 min-h-[36px] pointer-coarse:min-h-[44px] rounded-md text-xs font-semibold cursor-pointer transition-colors hover:bg-[var(--color-accent-light)] disabled:opacity-40 disabled:cursor-not-allowed";
-const ghostBtn =
-  "inline-flex items-center justify-center gap-1.5 px-3 min-h-[36px] pointer-coarse:min-h-[44px] rounded-md text-xs font-medium cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)] disabled:opacity-40 disabled:cursor-not-allowed";
-
 export function HeadStateCard({
   run,
   mainAction,
@@ -108,17 +73,11 @@ export function HeadStateCard({
   const t = useTranslations("heads");
   const locale = useLocale();
   const qc = useQueryClient();
-  const pairs = useHeadPairsForLabels();
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [restartOpen, setRestartOpen] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
   const [recordOpen, setRecordOpen] = useState(false);
   const [answer, setAnswer] = useState("");
-
-  const pair = runPairLabel(run, pairs);
-  const tone = silentWarn ? C.warning : STATE_TONE[run.state];
-  const textTone = silentWarn ? STATUS_TEXT.warning : STATE_TEXT[run.state];
-  const duration = formatDuration(runDurationSeconds(run), locale);
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["heads"] });
@@ -187,25 +146,12 @@ export function HeadStateCard({
         target="_blank"
         rel="noopener noreferrer"
         data-testid="head-main-open-pr"
-        className={primaryBtn}
-        style={{ background: C.accent, color: C.onAccent }}
+        className={PRIMARY_BTN}
+        style={PRIMARY_STYLE}
       >
         {prNumber != null ? t("card.openPr", { number: prNumber }) : t("card.openPrNoNumber")}
-        <ExternalLink size={12} aria-hidden />
+        <ExternalLink size={16} aria-hidden />
       </a>
-    );
-  } else if (mainAction === "branch_pushed") {
-    // A status badge, not a button: there is nothing to open on GitHub.
-    // Same shape as the PR chip, in the "passed" tone.
-    main = (
-      <span
-        data-testid="head-main-branch-pushed"
-        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-sm text-[11px] font-medium"
-        style={{ background: alpha(C.online, 0.08), color: STATUS_TEXT.online, border: `1px solid ${alpha(C.online, 0.25)}` }}
-      >
-        <GitBranch size={10} aria-hidden />
-        {t("card.branchPushedScratch")}
-      </span>
     );
   } else if (mainAction === "answer") {
     main = (
@@ -214,27 +160,57 @@ export function HeadStateCard({
         onClick={() => answerMutation.mutate()}
         disabled={!answer.trim() || answerMutation.isPending}
         data-testid="head-main-answer"
-        className={primaryBtn}
-        style={{ background: C.accent, color: C.onAccent }}
+        className={PRIMARY_BTN}
+        style={PRIMARY_STYLE}
       >
-        <Send size={12} aria-hidden />
+        <Send size={16} aria-hidden />
         {t("card.answerContinue")}
       </button>
     );
-  } else {
+  } else if (mainAction === "restart") {
     main = (
       <button
         type="button"
         onClick={() => setRestartOpen(true)}
         data-testid="head-main-restart"
-        className={primaryBtn}
-        style={{ background: C.accent, color: C.onAccent }}
+        className={PRIMARY_BTN}
+        style={PRIMARY_STYLE}
       >
-        <RotateCcw size={12} aria-hidden />
+        <RotateCcw size={16} aria-hidden />
         {t("card.restartWith")}
       </button>
     );
   }
+  // branch_pushed: no button — there is nothing to open on GitHub; the
+  // sentence below says where the result is.
+
+  // A surface only when the operator has to act (DESIGN.md K8).
+  const acts = run.state === "needs_you" || run.state === "failed" || run.state === "stopped";
+
+  const branchLine = run.branch ? (
+    <span className="mt-2 flex items-start gap-1 min-w-0 font-mono text-sm" style={{ color: C.textMuted }}>
+      <span className="break-all pt-1">{t("card.branchKept", { branch: run.branch })}</span>
+      <button
+        type="button"
+        aria-label={t("card.copyBranch")}
+        data-testid="head-copy-branch"
+        onClick={async () => {
+          try {
+            await navigator.clipboard.writeText(run.branch ?? "");
+            notify.success(t("card.branchCopied"));
+          } catch {
+            notify.error(t("errors.unknown"));
+          }
+        }}
+        className="shrink-0 -my-2 w-11 h-11 rounded-md flex items-center justify-center cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
+        style={{ color: C.textSecondary }}
+      >
+        <Copy size={16} aria-hidden />
+      </button>
+    </span>
+  ) : null;
+
+  const signTone = silentWarn || run.heartbeat_stale ? STATUS_TEXT.warning : C.textMuted;
 
   return (
     <section
@@ -243,43 +219,30 @@ export function HeadStateCard({
       data-head-state={run.state}
       data-tone={silentWarn ? "warn" : run.state}
       aria-label={t(headStateKey(run.state))}
-      className="rounded-lg px-3.5 py-3 space-y-2"
-      style={{ background: alpha(tone, 0.06), border: `1px solid ${alpha(tone, 0.25)}` }}
+      className={`mt-4 space-y-4 ${acts ? "rounded-lg p-4" : ""}`}
+      style={acts ? { background: RAISED } : undefined}
     >
-      <div className="flex items-start gap-2">
-        <div className="label-sys min-w-0 flex-1 truncate" style={{ color: textTone }} data-testid="head-card-kicker">
-          <span aria-hidden>{STATE_GLYPH[run.state]} </span>
-          {t("card.kicker", { state: t(headStateKey(run.state)), pair })}
-        </div>
-        {duration && (
-          <span className="font-mono text-[11px] shrink-0" style={{ color: C.textMuted }}>{duration}</span>
-        )}
-      </div>
-
       {(run.state === "running" || run.state === "starting") && (
-        <>
-          <p className="text-[13px] leading-relaxed line-clamp-2" style={{ color: run.step ? C.textPrimary : C.textSecondary }}>
+        <div>
+          <p className={`${NEXT_TEXT} line-clamp-2`} style={{ color: C.textSecondary }}>
             {run.step ? t("card.step", { step: run.step }) : t("card.noStep")}
           </p>
-          <div className="text-[11px] font-mono" style={{ color: silentWarn || run.heartbeat_stale ? STATUS_TEXT.warning : C.textMuted }} data-testid="head-card-sign">
-            {silentWarn
-              ? t("card.silentWarn", { age: secondsLabel(run.silent_s, locale) ?? "—" })
-              : run.silent_s != null
-                ? t("card.lastSign", { age: secondsLabel(run.silent_s, locale) ?? "—" })
-                : t("card.noSign")}
-            {run.heartbeat_stale && ` · ${t("card.heartbeatStale")}`}
-          </div>
-        </>
+          {/* Overdue sign of life is a warning, so it stays in view; the
+              normal "last output" age lives under Details (one time per header). */}
+          {run.heartbeat_stale && (
+            <p className="mt-1 text-sm" style={{ color: STATUS_TEXT.warning }}>{t("card.heartbeatStale")}</p>
+          )}
+        </div>
       )}
 
       {run.state === "needs_you" && (
-        <>
+        <div className="space-y-4">
           {run.question?.trim() ? (
-            <p className="text-[13px] leading-relaxed whitespace-pre-line line-clamp-6" style={{ color: C.textPrimary }} data-testid="head-card-question">
+            <p className={`${NEXT_TEXT} whitespace-pre-line line-clamp-6`} style={{ color: C.textPrimary }} data-testid="head-card-question">
               {run.question.trim()}
             </p>
           ) : (
-            <p className="text-[13px]" style={{ color: C.textSecondary }}>{t("card.noQuestion")}</p>
+            <p className={NEXT_TEXT} style={{ color: C.textSecondary }}>{t("card.noQuestion")}</p>
           )}
           <label htmlFor={`head-answer-${run.run_id}`} className="sr-only">{t("card.answerLabel")}</label>
           <textarea
@@ -289,44 +252,36 @@ export function HeadStateCard({
             rows={2}
             maxLength={8000}
             placeholder={t("card.answerPlaceholder")}
-            className="w-full px-3 py-2 rounded-md text-base sm:text-xs resize-y"
-            style={{ background: C.bgDeep, color: C.textPrimary, border: `1px solid ${C.border}` }}
+            className="w-full px-3 py-2 rounded-md text-base @min-[560px]:text-sm resize-y"
+            style={{ background: "var(--detail-bg, var(--color-bg-deep))", color: C.textPrimary, border: `1px solid ${C.border}` }}
           />
-        </>
+        </div>
       )}
 
       {run.state === "passed" && mainAction === "branch_pushed" && (
-        <p className="text-[13px]" style={{ color: C.textPrimary }} data-testid="head-card-scratch-branch">
-          {t("card.scratchBranchResult")}
-          {run.branch && (
-            <span className="block text-[11px] font-mono mt-0.5 truncate" style={{ color: C.textMuted }}>
-              {t("card.branchKept", { branch: run.branch })}
-            </span>
-          )}
-        </p>
+        <div data-testid="head-card-scratch-branch">
+          <p className={NEXT_TEXT} style={{ color: C.textSecondary }}>{t("card.scratchBranchResult")}</p>
+          {branchLine}
+        </div>
       )}
       {run.state === "passed" && mainAction !== "branch_pushed" && (
-        <p className="text-[13px]" style={{ color: C.textPrimary }}>
-          {prNumber != null ? t("card.prOpen", { number: prNumber }) : t("card.prOpenNoNumber")}
+        <p className={NEXT_TEXT} style={{ color: C.textSecondary }}>
+          {run.pr_url ? t("card.reviewDecides") : t("card.prOpenNoNumber")}
         </p>
       )}
 
       {(run.state === "failed" || run.state === "stopped") && (
-        <p className="text-[13px]" style={{ color: C.textPrimary }} data-testid="head-card-reason">
-          {t(fail.key, fail.values)}
-          {run.branch && (
-            <span className="block text-[11px] font-mono mt-0.5 truncate" style={{ color: C.textMuted }}>
-              {t("card.branchKept", { branch: run.branch })}
-            </span>
-          )}
-        </p>
+        <div data-testid="head-card-reason">
+          <p className={NEXT_TEXT} style={{ color: C.textPrimary }}>{t(fail.key, fail.values)}</p>
+          {branchLine}
+        </div>
       )}
 
       <div className="flex items-center gap-2 flex-wrap">
         {main}
         {mainAction === "answer" && (
-          <button type="button" onClick={() => setRestartOpen(true)} className={ghostBtn} style={{ color: C.textSecondary, border: `1px solid ${C.borderActive}` }}>
-            <RotateCcw size={12} aria-hidden />
+          <button type="button" onClick={() => setRestartOpen(true)} className={QUIET_BTN} style={{ color: C.textSecondary }}>
+            <RotateCcw size={16} aria-hidden />
             {t("card.restartWith")}
           </button>
         )}
@@ -335,30 +290,40 @@ export function HeadStateCard({
           onClick={() => setDetailsOpen((o) => !o)}
           aria-expanded={detailsOpen}
           data-testid="head-details-toggle"
-          className="ml-auto inline-flex items-center gap-1 px-2 min-h-[36px] pointer-coarse:min-h-[44px] text-[11px] cursor-pointer hover:underline"
+          // Alone (no main action) it lines up with the text instead of floating right.
+          className={`${main ? "ml-auto" : "-ml-3"} ${QUIET_BTN}`}
           style={{ color: C.textSecondary }}
         >
           {t("card.details")}
-          <ChevronDown size={11} aria-hidden style={{ transform: detailsOpen ? "rotate(180deg)" : "none", transition: "transform 0.15s" }} />
+          <ChevronDown size={16} aria-hidden style={{ transform: detailsOpen ? "rotate(180deg)" : "none", transition: "transform 0.15s" }} />
         </button>
       </div>
 
       {detailsOpen && (
-        <div className="space-y-2 pt-1" data-testid="head-details">
-          <div className="flex items-center gap-2 flex-wrap">
+        <div className="space-y-2" data-testid="head-details">
+          {(run.state === "running" || run.state === "starting") && (
+            <p className="text-sm" style={{ color: signTone }} data-testid="head-card-sign">
+              {silentWarn
+                ? t("card.silentWarn", { age: secondsLabel(run.silent_s, locale) ?? "—" })
+                : run.silent_s != null
+                  ? t("card.lastSign", { age: secondsLabel(run.silent_s, locale) ?? "—" })
+                  : t("card.noSign")}
+            </p>
+          )}
+          <div className="flex items-center gap-1 flex-wrap -ml-3">
             {mainAction === "stop" && (
-              <button type="button" onClick={() => setRestartOpen(true)} className={ghostBtn} style={{ color: C.textSecondary, border: `1px solid ${C.borderActive}` }} data-testid="head-details-restart">
-                <RotateCcw size={12} aria-hidden />
+              <button type="button" onClick={() => setRestartOpen(true)} className={QUIET_BTN} style={{ color: C.textSecondary }} data-testid="head-details-restart">
+                <RotateCcw size={16} aria-hidden />
                 {t("card.restartWith")}
               </button>
             )}
-            <button type="button" onClick={() => setLogOpen((o) => !o)} aria-expanded={logOpen} className={ghostBtn} style={{ color: C.textSecondary, border: `1px solid ${C.borderActive}` }}>
-              <ScrollText size={12} aria-hidden />
+            <button type="button" onClick={() => setLogOpen((o) => !o)} aria-expanded={logOpen} className={QUIET_BTN} style={{ color: C.textSecondary }}>
+              <ScrollText size={16} aria-hidden />
               {logOpen ? t("card.hideLog") : t("card.openLog")}
             </button>
             {run.run_record && (
-              <button type="button" onClick={() => setRecordOpen((o) => !o)} aria-expanded={recordOpen} className={ghostBtn} style={{ color: C.textSecondary, border: `1px solid ${C.borderActive}` }}>
-                <FileText size={12} aria-hidden />
+              <button type="button" onClick={() => setRecordOpen((o) => !o)} aria-expanded={recordOpen} className={QUIET_BTN} style={{ color: C.textSecondary }}>
+                <FileText size={16} aria-hidden />
                 {recordOpen ? t("card.hideRunRecord") : t("card.runRecord")}
               </button>
             )}
@@ -375,17 +340,17 @@ export function HeadStateCard({
                     notify.error(t("errors.unknown"));
                   }
                 }}
-                className={`hidden md:inline-flex ${ghostBtn}`}
-                style={{ color: C.textSecondary, border: `1px solid ${C.borderActive}` }}
+                className={`hidden md:inline-flex ${QUIET_BTN}`}
+                style={{ color: C.textSecondary }}
               >
-                <Terminal size={12} aria-hidden />
+                <Terminal size={16} aria-hidden />
                 {t("card.copyTmux")}
               </button>
             )}
           </div>
           {logOpen && (
             <pre
-              className="rounded-dense p-2.5 text-[11px] leading-snug font-mono overflow-auto max-h-[320px] whitespace-pre-wrap break-words"
+              className="rounded-dense p-3 text-xs leading-snug font-mono overflow-auto max-h-[320px] whitespace-pre-wrap break-words"
               style={{ background: C.bgDeep, color: C.textSecondary, border: `1px solid ${C.border}` }}
               data-testid="head-log"
             >
@@ -394,7 +359,7 @@ export function HeadStateCard({
           )}
           {recordOpen && (
             <pre
-              className="rounded-dense p-2.5 text-[11px] leading-snug font-mono overflow-auto max-h-[420px] whitespace-pre-wrap break-words"
+              className="rounded-dense p-3 text-xs leading-snug font-mono overflow-auto max-h-[420px] whitespace-pre-wrap break-words"
               style={{ background: C.bgDeep, color: C.textSecondary, border: `1px solid ${C.border}` }}
               data-testid="head-run-record"
             >

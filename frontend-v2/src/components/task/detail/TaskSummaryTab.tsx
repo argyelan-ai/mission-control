@@ -15,11 +15,13 @@
  *   DECISIONS  open (type, age) · approved · rejected
  *   FRICTION   disturbance types ×count (never the info-level reminders)
  *
- * Below the boxes: the existing detail sections (properties, relations,
- * references, git) — unchanged in 3a, regrouped in 3b.
+ * PROPERTIES (the task's editable facts, built by TaskDetailBody) follow the
+ * brief on the phone and stand as a right column from 720 px container width.
+ * Below the boxes: the existing detail sections (relations, references, git).
  */
 
 import { useState } from "react";
+import ReactMarkdown from "react-markdown";
 import { useLocale, useTranslations } from "next-intl";
 import { ChevronDown, CheckSquare, Square, AlertCircle } from "lucide-react";
 import { C, LANE } from "@/lib/colors";
@@ -79,6 +81,7 @@ export function TaskSummaryTab({
   briefExtra,
   onOpenTask,
   leading,
+  properties,
   children,
 }: {
   task: Task;
@@ -93,6 +96,8 @@ export function TaskSummaryTab({
   onOpenTask?: (taskId: string) => void;
   /** Rendered above the run record boxes (head runs list). */
   leading?: React.ReactNode;
+  /** The properties list — after the brief, or the right column when wide. */
+  properties?: React.ReactNode;
   /** Existing detail sections, rendered below the run record boxes. */
   children?: React.ReactNode;
 }) {
@@ -109,6 +114,7 @@ export function TaskSummaryTab({
   };
   const ago = (ts: string | null | undefined) => formatAge(ts, locale);
 
+  let briefBox: React.ReactNode = null;
   let boxes: React.ReactNode;
   if (isLoading) {
     // Fixed height while loading — the tabs below must not jump.
@@ -143,9 +149,15 @@ export function TaskSummaryTab({
             <TaskDescription description={brief} />
           </div>
         ) : (
-          <p className="line-clamp-6 whitespace-pre-line" style={{ color: C.textSecondary }}>
-            {brief}
-          </p>
+          // Collapsed: the same markdown renderer as the full brief, cut at
+          // ~6 lines; headings use the calm prose scale (no page-size type).
+          <div
+            data-testid="summary-brief-preview"
+            className="prose-description max-h-[9.9em] overflow-hidden [mask-image:linear-gradient(to_bottom,black_70%,transparent)]"
+            style={{ color: C.textSecondary }}
+          >
+            <ReactMarkdown>{brief}</ReactMarkdown>
+          </div>
         )}
         {briefOpen && briefExtra}
         <div>
@@ -340,9 +352,13 @@ export function TaskSummaryTab({
       .sort((a, b) => b[1].anzahl - a[1].anzahl)
       .map(([typ, info]) => t("detail.repeated", { label: eventLabel(t, typ), count: info.anzahl }));
 
-    boxes = (
+    briefBox = (
       <div data-testid="run-record-summary">
         <Row label={t("detail.boxBrief")} testId="summary-brief">{briefNode}</Row>
+      </div>
+    );
+    boxes = (
+      <div data-testid="run-record-summary-rest">
         <Row label={t("detail.boxTimes")} testId="summary-times">{times.join(" · ")}</Row>
         <Row label={t("detail.boxPlan")} testId="summary-plan">{planNode}</Row>
         <Row label={t("detail.boxSteps")} testId="summary-steps">{stepsNode}</Row>
@@ -357,16 +373,31 @@ export function TaskSummaryTab({
     );
   }
 
+  // One DOM order for both layouts: narrow = brief, properties, rest (auto
+  // flow); wide = brief + rest in the left column, properties on the right.
+  // (Class names spelled out — Tailwind only sees literal strings.)
   return (
     <div className="@container">
-      {leading}
-      {boxes}
-      {children && (
-        <div className="mt-4 -mx-4">
-          <div className="px-4 pb-1 label-sys label-sys--dim">{t("detail.details")}</div>
-          {children}
+      <div className="grid grid-cols-1 gap-y-6 @min-[720px]:grid-cols-[minmax(0,1fr)_16rem] @min-[720px]:gap-x-8 @min-[720px]:gap-y-0">
+        <div className="min-w-0 @min-[720px]:col-start-1 @min-[720px]:row-start-1">
+          {leading}
+          {briefBox}
         </div>
-      )}
+        {properties && (
+          <div className="min-w-0 @min-[720px]:col-start-2 @min-[720px]:row-start-1 @min-[720px]:row-span-2 @min-[720px]:self-start">
+            {properties}
+          </div>
+        )}
+        <div className="min-w-0 @min-[720px]:col-start-1 @min-[720px]:row-start-2">
+          {boxes}
+          {children && (
+            <div className="mt-4 -mx-4">
+              <div className="px-4 pb-1 label-sys label-sys--dim">{t("detail.details")}</div>
+              {children}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

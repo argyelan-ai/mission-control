@@ -1,6 +1,6 @@
 /**
- * TaskDetailBody — wave 3a "task detail lite": state card per status, facts
- * row, Summary from the run record, default tab per status, URL-controlled
+ * TaskDetailBody — wave 3a "task detail lite" + header variant A: state line
+ * and next step per status, properties list, Summary from the run record, default tab per status, URL-controlled
  * tab, ⋯ menu (thread moved there, delete last), 409 as a sentence, confirm
  * on end states. Fixtures: lib/taskDetail/__tests__/fixtures.ts.
  */
@@ -71,7 +71,10 @@ function mockApi(routes: Routes = {}) {
   });
 }
 
-function renderBody(task: Task, opts: { agents?: Agent[]; tab?: string | null; onTabChange?: (t: string) => void } = {}) {
+function renderBody(
+  task: Task,
+  opts: { agents?: Agent[]; tab?: string | null; onTabChange?: (t: string) => void; onBack?: () => void } = {},
+) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
@@ -82,6 +85,8 @@ function renderBody(task: Task, opts: { agents?: Agent[]; tab?: string | null; o
         onClose={() => {}}
         tab={opts.tab}
         onTabChange={opts.onTabChange}
+        onBack={opts.onBack}
+        backLabel={opts.onBack ? "Tasks" : undefined}
       />
     </QueryClientProvider>,
   );
@@ -140,8 +145,8 @@ describe("state card", () => {
     renderBody(task);
     const card = await screen.findByTestId("task-state-card");
     expect(card).toHaveAttribute("data-kind", "needs_you");
-    expect(card).toHaveTextContent("Needs you");
-    expect(card).toHaveTextContent("alpha asks:");
+    // Who asks and since when is the state sentence, once (K3/K10).
+    await waitFor(() => expect(screen.getByTestId("task-state-line")).toHaveTextContent(/Blocked · alpha asked .+ ago/));
     const embedded = await within(card).findByTestId("state-card-approval");
     expect(within(embedded).getByRole("button", { name: /Unblock/ })).toBeInTheDocument();
     expect(within(embedded).getByRole("button", { name: /Cancel task/ })).toBeInTheDocument();
@@ -173,7 +178,11 @@ describe("state card", () => {
     expect(card).toHaveAttribute("data-kind", "result");
     await within(card).findByText("Fixed the sideways scroll.");
     expect(within(card).getByRole("link", { name: /PR #638/ })).toHaveAttribute("href", "https://example.test/pr/638");
-    await within(card).findByText("Evidence: 3");
+    // Evidence counts live in the Summary (EVIDENCE row), not in the header.
+    expect(within(card).queryByText(/Evidence/)).toBeNull();
+    // The PR shows once: in the header, not again as a property.
+    await screen.findByTestId("task-properties");
+    expect(screen.queryByTestId("fact-pr")).toBeNull();
   });
 
   it("FAILED shows the error and Open log switches to the Timeline", async () => {
@@ -186,24 +195,40 @@ describe("state card", () => {
     expect(screen.getByRole("tab", { name: "Timeline" })).toHaveAttribute("aria-selected", "true");
   });
 
-  it("inbox has no card and the facts row says Not started", async () => {
+  it("inbox has no next step and the state line says not started", async () => {
     mockApi();
     renderBody(taskFixture({ status: "inbox" }));
-    await screen.findByTestId("task-fact-row");
+    await screen.findByTestId("task-properties");
     expect(screen.queryByTestId("task-state-card")).toBeNull();
-    expect(screen.getByTestId("fact-time")).toHaveTextContent("Not started");
+    expect(screen.getByTestId("task-state-line")).toHaveTextContent("Inbox · not started");
   });
 });
 
-describe("facts row", () => {
-  it("shows agent monogram + name, plan, cost and 'Claude: not tracked'", async () => {
+describe("properties", () => {
+  it("lists status, agent, project and the billed cost — without the 'not tracked' filler", async () => {
     mockApi();
     renderBody(taskFixture({ status: "blocked", assigned_agent_id: "agent-1" }));
-    const agent = await screen.findByTestId("fact-agent");
-    expect(agent).toHaveTextContent("AL");
-    expect(agent).toHaveTextContent("alpha");
+    const props = await screen.findByTestId("task-properties");
+    expect(within(props).getByRole("button", { name: /Status: Blocked/ })).toBeInTheDocument();
+    expect(screen.getByTestId("fact-agent")).toHaveTextContent("alpha");
     await waitFor(() => expect(screen.getByTestId("fact-cost")).toHaveTextContent("$0.05"));
-    expect(screen.getByTestId("fact-cost")).toHaveTextContent("Claude: not tracked");
+    expect(props).not.toHaveTextContent("not tracked");
+    expect(screen.getByTestId("fact-id")).toHaveTextContent("task-1".slice(0, 8));
+  });
+
+  it("shows a PR as a property when the header is not about it", async () => {
+    mockApi();
+    renderBody(taskFixture({ status: "blocked", pr_url: "https://example.test/pr/9", pr_number: 9 }));
+    const pr = await screen.findByTestId("fact-pr");
+    expect(within(pr).getByRole("link", { name: /PR #9/ })).toHaveAttribute("href", "https://example.test/pr/9");
+  });
+
+  it("a card in review shows its PR once, right under the state line", async () => {
+    mockApi();
+    renderBody(taskFixture({ status: "review", pr_url: "https://example.test/pr/10", pr_number: 10 }));
+    expect(await screen.findByTestId("task-review-pr")).toHaveTextContent("PR #10");
+    await screen.findByTestId("task-properties");
+    expect(screen.queryByTestId("fact-pr")).toBeNull();
   });
 });
 
@@ -211,7 +236,8 @@ describe("Summary tab (run record)", () => {
   it("renders the boxes with English labels and the content untranslated", async () => {
     mockApi({ runRecord: runRecordFixture() });
     renderBody(taskFixture({ status: "done", description: "Fix the sideways scroll in chat." }));
-    const summary = await screen.findByTestId("run-record-summary");
+    await screen.findByTestId("run-record-summary");
+    const summary = screen.getByRole("tabpanel");
     for (const label of ["Brief", "Times", "Plan", "Steps", "Evidence", "Decisions", "Friction"]) {
       expect(within(summary).getByText(label)).toBeInTheDocument();
     }
@@ -231,16 +257,17 @@ describe("Summary tab (run record)", () => {
 });
 
 describe("⋯ menu", () => {
-  it("lists Copy link, Copy as Markdown, Save to Vault, the thread — and Delete last after a divider", async () => {
+  it("lists Change status, Copy link, Copy as Markdown, Save to Vault, the thread — and Delete last after a divider", async () => {
     mockApi();
     renderBody(taskFixture({ status: "done", assigned_agent_id: "agent-1" }));
     fireEvent.click(await screen.findByRole("button", { name: "More actions" }));
     const menu = await screen.findByRole("menu");
     const items = within(menu).getAllByRole("menuitem").map((el) => el.textContent);
-    expect(items[0]).toContain("Copy link");
-    expect(items[1]).toContain("Copy as Markdown");
-    expect(items[2]).toContain("Save to Vault");
-    expect(items[3]).toContain("Open alpha thread");
+    expect(items[0]).toContain("Change status");
+    expect(items[1]).toContain("Copy link");
+    expect(items[2]).toContain("Copy as Markdown");
+    expect(items[3]).toContain("Save to Vault");
+    expect(items[4]).toContain("Open alpha thread");
     expect(items[items.length - 1]).toContain("Delete");
     expect(within(menu).getByRole("separator")).toBeInTheDocument();
   });
@@ -407,19 +434,20 @@ describe("STEPS lists subtasks in pages", () => {
   });
 });
 
-describe("facts row details", () => {
-  it("shows only 'Claude: not tracked' when nothing was billed (no $0.00)", async () => {
+describe("properties details", () => {
+  it("leaves the cost out when nothing was billed (no $0.00, no 'not tracked')", async () => {
     const rr = runRecordFixture();
     mockApi({ runRecord: { ...rr, kosten: { ...rr.kosten, gesamt_usd: 0, je_anbieter: {} } } });
     renderBody(taskFixture({ status: "done" }));
-    await waitFor(() => expect(screen.getByTestId("fact-cost")).toHaveTextContent("Claude: not tracked"));
-    expect(screen.getByTestId("fact-cost")).not.toHaveTextContent("$");
+    await screen.findByTestId("run-record-summary");
+    expect(screen.queryByTestId("fact-cost")).toBeNull();
+    expect(screen.getByTestId("task-properties")).not.toHaveTextContent("$");
   });
 
-  it("an inbox task says Not started even when it was dispatched before", async () => {
+  it("an inbox task says not started even when it was dispatched before", async () => {
     mockApi();
     renderBody(taskFixture({ status: "inbox", dispatched_at: "2026-09-22T08:00:00Z" }));
-    expect(await screen.findByTestId("fact-time")).toHaveTextContent("Not started");
+    expect(await screen.findByTestId("task-state-line")).toHaveTextContent("not started");
   });
 
   it("translates the priority label", async () => {
@@ -491,7 +519,9 @@ describe("head-owned task (head launcher §8.2)", () => {
     vi.spyOn(api.heads, "pairs").mockRejectedValue(new Error("API 404: {}"));
     renderBody(taskFixture({ status: "in_progress", run_control: "manual_hold" }));
     await waitFor(() => expect(screen.getByTestId("task-state-card")).toHaveAttribute("data-kind", "head"));
-    expect(screen.getByTestId("fact-head")).toHaveTextContent("omp · glm-local");
+    // The pair is a property (Summary tab — a running task opens on Comments).
+    fireEvent.click(screen.getByRole("tab", { name: "Summary" }));
+    expect(await screen.findByTestId("fact-head")).toHaveTextContent("omp · glm-local");
     expect(screen.queryByText("Requeue")).not.toBeInTheDocument();
   });
 
@@ -514,5 +544,69 @@ describe("head-owned task (head launcher §8.2)", () => {
     renderBody(taskFixture({ status: "in_progress", run_control: "manual_hold" }));
     expect(await screen.findByText("Requeue")).toBeInTheDocument();
     expect(screen.queryByTestId("fact-head")).not.toBeInTheDocument();
+  });
+});
+
+describe("header variant A (DESIGN.md K12)", () => {
+  it("the context bar carries '‹ Tasks' and ⋯; the compact title only appears after scrolling", async () => {
+    mockApi();
+    const onBack = vi.fn();
+    renderBody(taskFixture({ status: "done", title: "Only once please" }), { onBack });
+    fireEvent.click(await screen.findByRole("button", { name: "Tasks" }));
+    expect(onBack).toHaveBeenCalledTimes(1);
+    // One copy of the title until it scrolls away — the bar does not repeat it.
+    expect(screen.getAllByText("Only once please")).toHaveLength(1);
+    expect(screen.getByRole("heading", { name: "Only once please" })).toBeInTheDocument();
+  });
+
+  it("⋯ Change status opens the Summary tab with the status menu open", async () => {
+    mockApi();
+    const onTabChange = vi.fn();
+    renderBody(taskFixture({ status: "in_progress" }), { onTabChange });
+    // A running task opens on Comments — the status row is not in view.
+    expect(await screen.findByRole("tab", { name: "Comments" })).toHaveAttribute("aria-selected", "true");
+    fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+    fireEvent.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: /Change status/ }));
+    expect(onTabChange).toHaveBeenCalledWith("summary");
+    const menu = await screen.findByRole("menu");
+    expect(within(menu).getByRole("menuitem", { name: "Done" })).toBeInTheDocument();
+  });
+
+  it("the Comments tab shows how many comments there are", async () => {
+    mockApi({ comments: [commentFixture({ id: "c1" }), commentFixture({ id: "c2" })] });
+    renderBody(taskFixture({ status: "done" }));
+    const tab = await screen.findByRole("tab", { name: "Comments" });
+    await waitFor(() => expect(tab).toHaveTextContent("Comments2"));
+  });
+
+  it("no tab select any more — one tab strip at every width", async () => {
+    mockApi();
+    renderBody(taskFixture({ status: "done" }));
+    await screen.findByRole("tab", { name: "Summary" });
+    expect(screen.queryByRole("combobox")).toBeNull();
+  });
+});
+
+describe("markdown in the brief and the header", () => {
+  it("the collapsed brief renders markdown — a heading element, no literal '##'", async () => {
+    mockApi();
+    renderBody(taskFixture({ status: "done", description: "## Goal\n\nFix the **sideways** scroll.\n\n- first step" }));
+    const preview = await screen.findByTestId("summary-brief-preview");
+    expect(within(preview).getByRole("heading", { name: "Goal" })).toBeInTheDocument();
+    expect(within(preview).getByText("sideways").tagName).toBe("STRONG");
+    expect(within(preview).getByRole("listitem")).toHaveTextContent("first step");
+    expect(preview).not.toHaveTextContent("##");
+    expect(preview).not.toHaveTextContent("**");
+    // Still collapsed with the toggle to the full brief.
+    expect(screen.getByRole("button", { name: /Show full brief/ })).toBeInTheDocument();
+  });
+
+  it("the result preview in the header shows no markdown syntax", async () => {
+    mockApi({ comments: [commentFixture({ comment_type: "resolution", content: "## Result\n\n- [x] **Fixed** the scroll" })] });
+    renderBody(taskFixture({ status: "done" }));
+    const card = await screen.findByTestId("task-state-card");
+    await within(card).findByText("Result Fixed the scroll");
+    expect(card).not.toHaveTextContent("##");
+    expect(card).not.toHaveTextContent("**");
   });
 });

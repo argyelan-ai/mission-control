@@ -18,6 +18,9 @@ import { C, alpha } from "@/lib/colors";
 import { TaskDetailBody } from "./TaskDetailBody";
 import type { Task, Agent } from "@/lib/types";
 
+/** The body's sticky tabs paint the panel ground; "act" surfaces sit one step above it. */
+const DETAIL_VARS = { "--detail-bg": C.bgBase, "--detail-raised": C.bgSurface } as React.CSSProperties;
+
 interface TaskDetailPanelProps {
   task: Task;
   agents: Agent[];
@@ -53,7 +56,7 @@ export default function TaskDetailPanel({
         exit={{ opacity: 0, x: 24 }}
         transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
         className="w-[420px] max-w-[calc(100vw-2rem)] shrink-0 border-l flex flex-col overflow-hidden"
-        style={{ borderColor: C.border, backgroundColor: C.bgBase }}
+        style={{ borderColor: C.border, backgroundColor: C.bgBase, ...DETAIL_VARS }}
       >
         <TaskDetailBody task={task} agents={agents} boardId={boardId} onClose={onClose} />
       </motion.div>
@@ -96,6 +99,7 @@ export default function TaskDetailPanel({
             backgroundColor: C.bgBase,
             border: `1px solid ${C.border}`,
             boxShadow: "var(--shadow-elevated)",
+            ...DETAIL_VARS,
           }}
           onClick={(e) => e.stopPropagation()}
         >
