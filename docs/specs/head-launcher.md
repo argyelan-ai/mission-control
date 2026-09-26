@@ -316,6 +316,15 @@ stoppable) in the runs list on `/runtimes`.
       `refs/heads/main|master` and non-fast-forward; shim folder first on PATH (§9).
       Both are guard rails only — the server-side gate is the head's own
       non-admin identity (§9).
+      Roter Faden (E2): in a repo with `.kohaerenz.yaml` the `pre-push` hook
+      also runs `kz check --fast` (exit 1/2 refuses the push, no `kz` only
+      warns). After the worktree exists, `kz brief` runs in it (sandboxed,
+      `env -i`, max. 20 s via `MC_HEAD_KZ_TIMEOUT_S`) and its output (max. 60
+      lines) is appended to `job.md` as "Context brief (kz)"; kz missing or
+      failing leaves one line "kz brief unavailable: …" there and in
+      `status.json` (`kz_brief`) — it never stops the head. `kz` is
+      `MC_HEAD_KZ_BIN`, else `~/.local/bin/kz`, else `PATH`; the head reaches
+      it through a `kz` shim in its shim folder.
    4. Box lock (local runtimes), one per host id in `box_keys`:
       `mkdir $MC_HOME/heads/locks/<host-id>` — atomic; the wrapper writes
       pid + start time into `.wrapper/lock-owner` and a copy into the lock
