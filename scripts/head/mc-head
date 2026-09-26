@@ -446,6 +446,23 @@ while read local_ref local_sha remote_ref remote_sha; do
     fi
   fi
 done
+# Roter Faden: a repo with .kohaerenz.yaml must pass `kz check --fast` (new red
+# findings or a broken config block the push; no kz on this host only warns).
+top=$(git rev-parse --show-toplevel 2>/dev/null)
+if [ -n "$top" ] && [ -f "$top/.kohaerenz.yaml" ]; then
+  kz=__KZ_BIN__
+  if [ -n "$kz" ] && [ -x "$kz" ]; then
+    "$kz" -C "$top" check --fast </dev/null >&2
+    rc=$?
+    if [ "$rc" = 1 ] || [ "$rc" = 2 ]; then
+      echo "mc-head: push refused - kz check --fast is red (exit $rc, see above). Fix it, or explain it in the PR under 'Known limits' and ask the operator." >&2
+      exit 1
+    fi
+    [ "$rc" = 0 ] || echo "mc-head: warning - kz check --fast ended with exit $rc; push without kz check" >&2
+  else
+    echo "mc-head: warning - kz not found on this host; push without kz check" >&2
+  fi
+fi
 exit 0
 """
 
@@ -458,7 +475,8 @@ def install_hooks(clone: Path) -> None:
     hdir = hooks_dir()
     hdir.mkdir(parents=True, exist_ok=True)
     hook = hdir / "pre-push"
-    hook.write_text(PRE_PUSH_HOOK)
+    # The head's PATH has no kz: the hook gets the absolute path baked in.
+    hook.write_text(PRE_PUSH_HOOK.replace("__KZ_BIN__", shlex.quote(kz_bin() or "")))
     hook.chmod(0o755)
     # core.hooksPath is written by sanitize_clone().
 
@@ -906,6 +924,110 @@ def sandbox_prefix(spec: dict, run: Path) -> list:
     return argv
 
 
+# ── kz brief (Roter Faden) ──────────────────────────────────────────────
+
+KZ_TIMEOUT_S = float(os.environ.get("MC_HEAD_KZ_TIMEOUT_S", "20"))
+KZ_BRIEF_MAX_LINES = 60
+KZ_TEXT_MAX = 8000
+KZ_MARK = "<!-- mc-head: kz brief -->"
+KZ_HEADING = "## Context brief (kz)"
+# Backticked, repo-relative paths in the job text: the brief's scope paths.
+JOB_PATH_RE = re.compile(r"`([A-Za-z0-9_.][A-Za-z0-9_./-]{0,200})`")
+
+
+def kz_bin() -> str | None:
+    """The coherence tool kz: MC_HEAD_KZ_BIN (only that, when set), else
+    ~/.local/bin/kz, else PATH. None when nothing executable is found."""
+    override = os.environ.get("MC_HEAD_KZ_BIN")
+    candidates = [override] if override else [str(Path.home() / ".local" / "bin" / "kz"), shutil.which("kz")]
+    for c in candidates:
+        if c and os.path.isfile(c) and os.access(c, os.X_OK):
+            return c
+    return None
+
+
+def kz_scope_paths(job: str, wt: Path) -> list:
+    """Backticked paths from the job that exist in the worktree (max. 20)."""
+    out = []
+    for tok in JOB_PATH_RE.findall(job):
+        tok = tok.rstrip("/")
+        if tok and ".." not in tok.split("/") and tok not in out and (wt / tok).exists():
+            out.append(tok)
+    return out[:20]
+
+
+def run_kz_brief(spec: dict, run: Path, wt: Path) -> tuple:
+    """(lines, None) or (None, reason). Runs like the head: sandboxed, env -i,
+    with the wrapper's git hardening (the worktree may hold head-written files
+    in continue mode)."""
+    kz = kz_bin()
+    if not kz:
+        return None, "kz not found (set MC_HEAD_KZ_BIN or install kz to ~/.local/bin/kz)"
+    job = (run / "job.md").read_text(errors="replace")
+    job = job.split(KZ_MARK, 1)[0][:KZ_TEXT_MAX]
+    overrides = _git_overrides()[1::2]
+    env = {
+        "HOME": str(run / "home"),
+        "PATH": BASE_PATH,
+        "LANG": os.environ.get("LANG", "en_US.UTF-8"),
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_CONFIG_COUNT": str(len(overrides)),
+    }
+    for i, kv in enumerate(overrides):
+        key, value = kv.split("=", 1)
+        env[f"GIT_CONFIG_KEY_{i}"], env[f"GIT_CONFIG_VALUE_{i}"] = key, value
+    argv = [*sandbox_prefix(spec, run), kz, "-C", str(wt), "brief", "--paths", *kz_scope_paths(job, wt),
+            f"--text={job}"]
+    try:
+        res = subprocess.run(argv, cwd=str(wt), env=env, capture_output=True, text=True, timeout=KZ_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        return None, f"timed out after {KZ_TIMEOUT_S:g} s"
+    except OSError as exc:
+        return None, f"could not run ({exc.__class__.__name__})"
+    if res.returncode != 0:
+        err = (res.stderr.strip().splitlines() or [""])[-1][:200]
+        return None, f"exit {res.returncode}" + (f": {err}" if err else "")
+    lines = res.stdout.rstrip().splitlines()
+    return (lines[:KZ_BRIEF_MAX_LINES] or ["(empty)"]), None
+
+
+def write_kz_brief(run: Path, lines, reason) -> None:
+    """Append the brief section to job.md; a retry replaces it. Written next
+    to it and renamed over it, so a planted symlink is replaced, not followed."""
+    job = run / "job.md"
+    text = job.read_text(errors="replace").split("\n" + KZ_MARK, 1)[0].rstrip("\n") + "\n"
+    section = [KZ_MARK, KZ_HEADING, ""]
+    if lines is not None:
+        section += ["Written by `kz brief` in this worktree before you started (max. 60 lines).",
+                    "Step 0 builds on it.", "", "```text", *lines, "```"]
+    else:
+        section += [f"kz brief unavailable: {reason}"]
+    tmp = run / ".job.md.kz.tmp"
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o644)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(text + "\n" + "\n".join(section) + "\n")
+    os.replace(tmp, job)
+
+
+def add_kz_brief(spec: dict, run: Path) -> None:
+    """Never fails the start: any problem ends up as one line in job.md and
+    in status.json (kz_brief)."""
+    try:
+        lines, reason = run_kz_brief(spec, run, run / "wt")
+    except Exception as exc:  # noqa: BLE001 — kz must never stop a head
+        lines, reason = None, f"error ({exc.__class__.__name__})"
+    try:
+        write_kz_brief(run, lines, reason)
+    except OSError as exc:
+        reason = reason or f"job.md not written ({exc.__class__.__name__})"
+        lines = None
+    write_status(spec["run_id"], kz_brief="ok" if lines is not None else f"unavailable: {reason}")
+    if lines is None:
+        log(f"kz brief unavailable: {reason}")
+
+
 # ── start (§6.3) ─────────────────────────────────────────────────────────
 
 
@@ -1027,6 +1149,7 @@ def cmd_start(run_id: str) -> int:
         exit_status(run_id, "prepare_failed", detail=str(exc)[-500:])
         print(f"prepare_failed {exc}")
         return 4
+    add_kz_brief(spec, run)
     return launch_supervisor(run_id)
 
 
