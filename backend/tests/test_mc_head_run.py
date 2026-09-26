@@ -108,7 +108,9 @@ def test_claude_pair_uses_bare_settings_and_own_config_dir(env):
     assert argv[argv.index("--append-system-prompt-file") + 1] == str(run / "procedure.md")
     # the job arrives on stdin, never as an argument a variadic flag could eat
     assert "Say hello." not in "\n".join(argv)
-    assert (run / "stdin.txt").read_text() == "# Job\nSay hello.\n"
+    # job.md = the backend's job + the launcher's kz brief section (unavailable here)
+    assert (run / "stdin.txt").read_text() == (run / "job.md").read_text()
+    assert (run / "stdin.txt").read_text().startswith("# Job\nSay hello.\n")
     settings = json.loads((run / "head-settings.json").read_text())
     assert "Bash(gh pr merge*)" in settings["permissions"]["deny"]
     assert "Bash(git push origin HEAD:main*)" in settings["permissions"]["deny"]

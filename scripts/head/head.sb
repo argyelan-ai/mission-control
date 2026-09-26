@@ -3,6 +3,9 @@
 ;; USER_TMP (the per-user temp root, /private/var/folders on macOS),
 ;; SCRATCH_ORIGIN (required; empty for every real repo — see below).
 ;; Order matters: later rules win.
+;; kz (the coherence tool; pre-push hook + `kz brief` at start) needs no grant
+;; of its own: it only reads the worktree and its install and runs git, which
+;; the default rules allow. Its install is not writable (test_mc_head_sandbox).
 (version 1)
 (allow default)
 

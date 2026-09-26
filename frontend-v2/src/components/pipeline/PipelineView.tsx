@@ -2,6 +2,7 @@
 
 import { useState, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
 import { AnimatePresence } from "framer-motion";
 import {
   Inbox,
@@ -19,20 +20,21 @@ import { api } from "@/lib/api";
 import { PipelineCard } from "./PipelineCard";
 import TaskDetailPanel from "@/components/task/TaskDetailPanel";
 import type { Agent, PipelineTask, Task } from "@/lib/types";
+import { STATUS_LABEL_KEY } from "@/lib/taskDetail/statusLabels";
 import { C, LANE, alpha } from "@/components/homepage/colors";
 
 // ── Lane Config (colors sourced from the single LANE vocabulary in colors.ts) ──
 
 const LANES = [
-  { key: "inbox",       label: "Inbox",       icon: Inbox               },
-  { key: "in_progress", label: "In Progress", icon: Play                },
-  { key: "waiting",     label: "Waiting",     icon: MessageCircleQuestion },
-  { key: "review",      label: "Review",      icon: ClipboardCheck      },
-  { key: "user_test",   label: "User Test",   icon: Smartphone          },
-  { key: "blocked",     label: "Blocked",     icon: AlertTriangle       },
-  { key: "failed",      label: "Failed",      icon: XCircle             },
-  { key: "aborted",     label: "Aborted",     icon: Ban                 },
-  { key: "done",        label: "Done",        icon: CheckCircle2        },
+  { key: "inbox",       icon: Inbox               },
+  { key: "in_progress", icon: Play                },
+  { key: "waiting",     icon: MessageCircleQuestion },
+  { key: "review",      icon: ClipboardCheck      },
+  { key: "user_test",   icon: Smartphone          },
+  { key: "blocked",     icon: AlertTriangle       },
+  { key: "failed",      icon: XCircle             },
+  { key: "aborted",     icon: Ban                 },
+  { key: "done",        icon: CheckCircle2        },
 ] as const;
 
 type LaneKey = (typeof LANES)[number]["key"];
@@ -45,6 +47,7 @@ interface PipelineViewProps {
 }
 
 export default function PipelineView({ boardId, agents }: PipelineViewProps) {
+  const t = useTranslations("tasks");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
 
   // Pipeline query
@@ -194,7 +197,7 @@ export default function PipelineView({ boardId, agents }: PipelineViewProps) {
                       className="text-[11px] font-mono uppercase tracking-[0.06em] font-medium"
                       style={{ color: laneColor }}
                     >
-                      {lane.label}
+                      {t(STATUS_LABEL_KEY[lane.key])}
                     </span>
                     <span
                       className="text-[10px] font-mono px-1.5 py-0.5 rounded-sm"

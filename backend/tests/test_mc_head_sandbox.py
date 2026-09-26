@@ -210,3 +210,43 @@ def test_missing_scratch_origin_param_fails_closed(layout):
         argv += ["-D", f"{k}={v}"]
     res = subprocess.run([*argv, "/bin/sh", "-c", "echo ran"], capture_output=True, text=True)
     assert "ran" not in res.stdout
+
+
+# ── kz (Roter Faden): the pre-push hook and the brief run it sandboxed ──
+
+
+def _installed_kz() -> Path | None:
+    import os
+    import shutil
+
+    for c in (os.environ.get("MC_HEAD_KZ_BIN"), str(Path.home() / ".local" / "bin" / "kz"), shutil.which("kz")):
+        if c and Path(c).is_file() and os.access(c, os.X_OK):
+            return Path(c)
+    return None
+
+
+@pytest.mark.skipif(_installed_kz() is None, reason="kz not installed on this host")
+def test_kz_runs_inside_the_profile_and_writes_nothing(layout):
+    """kz is reached through the profile's default read/exec rules (no grant
+    of its own): `kz check --fast` and `kz brief` work in the worktree, and
+    the kz install stays read-only for the head."""
+    kz = _installed_kz()
+    wt = layout["run"] / "wt"
+    git = ["git", "-C", str(wt), "-c", "user.name=t", "-c", "user.email=t@example.invalid"]
+    subprocess.run(["git", "init", "-q", "-b", "main", str(wt)], check=True)
+    (wt / ".kohaerenz.yaml").write_text("version: 1\nstufe: 0\n")
+    (wt / "AGENTS.md").write_text("# Agents\nSee `README.md`.\n")
+    (wt / "README.md").write_text("demo\n")
+    subprocess.run([*git, "add", "AGENTS.md", "README.md", ".kohaerenz.yaml"], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "init"], check=True)
+    subprocess.run([*git, "update-ref", "refs/remotes/origin/main", "HEAD"], check=True)
+    check = _sh(layout, f"'{kz}' -C '{wt}' check --fast")
+    assert check.returncode == 0, check.stdout + check.stderr
+    assert "OK" in check.stdout
+    brief = _sh(layout, f"'{kz}' -C '{wt}' brief --paths README.md --text 'change the readme'")
+    assert brief.returncode == 0, brief.stdout + brief.stderr
+    assert brief.stdout.startswith("fresh:")
+    tool_dir = kz.resolve().parent
+    res = _sh(layout, f"echo x > '{tool_dir}/forged'")
+    assert res.returncode != 0
+    assert not (tool_dir / "forged").exists()
