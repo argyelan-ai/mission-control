@@ -362,6 +362,14 @@ class RedisKeys:
         worker to wait out the full lock TTL."""
         return "mc:scheduler:lock:heartbeat"
 
+    # ── Background-loop liveness (cross-process) ─────────────────────────
+    @staticmethod
+    def service_heartbeat(service: str) -> str:
+        """Heartbeat a background loop writes every tick, so the API process
+        can tell whether the loop in the worker container is alive — see
+        app/services/service_heartbeat.py."""
+        return f"mc:service:heartbeat:{service}"
+
     # ── Task Runner ──────────────────────────────────────────────────────
     @staticmethod
     def task_runner_lock() -> str:
