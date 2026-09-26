@@ -80,11 +80,13 @@ async def test_omp_head_run_is_recorded_with_task_run_and_locality(session, tmp_
     assert [e.cache_read_tokens for e in events] == [0, 1000]
 
 
-async def test_claude_head_run_incl_subagents_is_recorded_as_cloud(session, tmp_path, make_board, make_task):
+async def test_claude_head_run_incl_subagents_is_recorded(session, tmp_path, make_board, make_task):
+    # v1 starts claude only on local runtimes (pairs.pair_status), so a real
+    # claude head row is "local" today.
     board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
     task = await make_task(board.id, title="Claude head job")
     root = tmp_path / "heads"
-    run_id = make_run(root, task_id=str(task.id), harness="claude", model="claude-opus-5", locality="cloud")
+    run_id = make_run(root, task_id=str(task.id), harness="claude", model="claude-opus-5", locality="local")
     _claude_transcript(root / run_id, [_make_line(uuid_=f"h-{run_id}-1", model="claude-opus-5")])
     _claude_transcript(root / run_id, [_make_line(uuid_=f"h-{run_id}-2", model="claude-opus-5")],
                        rel="projects/-wt/s1/subagents/agent-x.jsonl")
@@ -94,8 +96,22 @@ async def test_claude_head_run_incl_subagents_is_recorded_as_cloud(session, tmp_
     events = await _events(session)
     assert {e.message_uuid for e in events} == {f"h-{run_id}-1", f"h-{run_id}-2"}
     assert {(e.harness, e.locality, e.head_run_id, e.task_id) for e in events} == {
-        ("head-claude", "cloud", run_id, task.id)
+        ("head-claude", "local", run_id, task.id)
     }
+
+
+async def test_cloud_locality_from_the_spec_is_passed_through(session, tmp_path, make_board, make_task):
+    # Cloud pairs come later (ADR-086); the harvester stores what spec.json says.
+    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
+    task = await make_task(board.id, title="Cloud pair")
+    root = tmp_path / "heads"
+    run_id = make_run(root, task_id=str(task.id), harness="claude", model="claude-opus-5", locality="cloud")
+    _claude_transcript(root / run_id, [_make_line(uuid_=f"c-{run_id}", model="claude-opus-5")])
+
+    await _harvest(session, root)
+
+    (event,) = await _events(session)
+    assert event.locality == "cloud"
 
 
 async def test_second_harvest_adds_nothing(session, tmp_path, make_board, make_task):
@@ -176,3 +192,52 @@ async def test_heads_source_failure_does_not_block_other_sources(session, tmp_pa
 
     assert stats["source_errors"] == 1
     assert stats["new_events"] == 1
+
+
+async def test_head_rows_are_liveness_evidence_for_their_task(session, tmp_path, make_board, make_task):
+    """Deliberate: a card a head is working on counts as active for the
+    stuck-block and the silent-card watchdog (task_evidence)."""
+    from app.services.task_evidence import latest_model_event_at
+    from app.utils import ensure_aware
+
+    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
+    task = await make_task(board.id, title="Held by a head")
+    root = tmp_path / "heads"
+    run_id = make_run(root, task_id=str(task.id), locality="local")
+    _omp_session(root / run_id, [_make_omp_line(short_id="l1", response_id=f"chatcmpl-l-{run_id}")])
+    assert await latest_model_event_at(session, task.id) is None
+
+    await _harvest(session, root)
+
+    (event,) = await _events(session)
+    assert await latest_model_event_at(session, task.id) == ensure_aware(event.ts)
+
+
+def _usage(harness: str, cost: float, agent_id=None, locality=None, head_run_id=None) -> ModelUsageEvent:
+    from datetime import datetime, timezone
+
+    return ModelUsageEvent(
+        id=uuid.uuid4(), harness=harness, agent_id=agent_id, model="m", session_id="s",
+        message_uuid=f"cost-{uuid.uuid4()}", input_tokens=100, output_tokens=10,
+        cache_read_tokens=0, cache_write_tokens=0, cost_usd=cost,
+        ts=datetime.now(timezone.utc), source_file="/f.jsonl",
+        locality=locality, head_run_id=head_run_id,
+    )
+
+
+async def test_insights_costs_show_heads_apart_from_unattributed(auth_client, session):
+    session.add(_usage("host", 1.0))  # boss line without cwd match
+    session.add(_usage("head-omp", 0.25, locality="local", head_run_id=str(uuid.uuid4())))
+    session.add(_usage("head-claude", 0.5, locality="local", head_run_id=str(uuid.uuid4())))
+    await session.commit()
+
+    resp = await auth_client.get("/api/v1/intelligence/costs?days=30&include_sessions=true")
+
+    assert resp.status_code == 200
+    rows = {r["agent_name"]: r for r in resp.json()["agents"]}
+    assert rows["Heads"]["event_count"] == 2
+    assert abs(rows["Heads"]["cost_usd"] - 0.75) < 1e-6
+    assert rows["Unattributed"]["event_count"] == 1
+    # distinct ids: the Insights table keys its rows by agent_id
+    assert rows["Heads"]["agent_id"] != rows["Unattributed"]["agent_id"]
+    assert {s["agent_name"] for s in resp.json()["sessions"]} >= {"Heads", "Unattributed"}

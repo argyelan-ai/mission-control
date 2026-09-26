@@ -346,24 +346,38 @@ async def intelligence_costs(
     With include_sessions=true also includes session-level breakdown (top 100).
     """
     import datetime
-    from sqlalchemy import func
+    from sqlalchemy import and_, case, func
     from sqlmodel import select
     from app.models.model_usage import ModelUsageEvent
     from app.models.agent import Agent as AgentModel
 
     cutoff = utcnow() - datetime.timedelta(days=days)
 
+    # Head runs carry no agent (docs/specs/head-launcher.md) — they get their
+    # own "Heads" bucket instead of disappearing into "Unattributed".
+    is_head = case(
+        (and_(ModelUsageEvent.agent_id.is_(None), ModelUsageEvent.harness.like("head-%")), True),
+        else_=False,
+    ).label("is_head")
+
+    def _bucket(agent_id, head: bool) -> tuple[str, str]:
+        if agent_id:
+            return str(agent_id), agent_name_cache.get(str(agent_id), "?")
+        # The UI keys rows by agent_id → distinct non-UUID ids for the two buckets.
+        return ("heads", "Heads") if head else ("", "Unattributed")
+
     # Aggregate per agent (agent_id NULL = Boss without attribution / unknown)
     agent_result = await session.exec(
         select(
             ModelUsageEvent.agent_id,
+            is_head,
             func.sum(ModelUsageEvent.input_tokens).label("total_in"),
             func.sum(ModelUsageEvent.output_tokens).label("total_out"),
             func.sum(ModelUsageEvent.cost_usd).label("total_cost"),
             func.count(ModelUsageEvent.id).label("event_count"),
         )
         .where(ModelUsageEvent.ts >= cutoff)
-        .group_by(ModelUsageEvent.agent_id)
+        .group_by(ModelUsageEvent.agent_id, is_head)
     )
 
     # Load agent names once (batch)
@@ -385,10 +399,9 @@ async def intelligence_costs(
         total_out += a_out
         total_cost += a_cost
 
-        # agent_id NULL → "Unattributed" (Boss rows without cwd match, etc.)
-        # The UI schema needs agent_id as a string → empty string for NULL.
-        aid_str = str(row.agent_id) if row.agent_id else ""
-        aname = agent_name_cache.get(aid_str, "Unattributed") if aid_str else "Unattributed"
+        # agent_id NULL → "Heads" (head runs) or "Unattributed" (Boss rows
+        # without cwd match, etc.). The UI schema needs agent_id as a string.
+        aid_str, aname = _bucket(row.agent_id, row.is_head)
 
         agent_costs.append({
             "agent_id": aid_str,
@@ -412,6 +425,7 @@ async def intelligence_costs(
         session_result = await session.exec(
             select(
                 ModelUsageEvent.agent_id,
+                is_head,
                 ModelUsageEvent.session_id,
                 func.sum(ModelUsageEvent.input_tokens).label("total_in"),
                 func.sum(ModelUsageEvent.output_tokens).label("total_out"),
@@ -420,14 +434,13 @@ async def intelligence_costs(
                 func.max(ModelUsageEvent.ts).label("last_event_at"),
             )
             .where(ModelUsageEvent.ts >= cutoff)
-            .group_by(ModelUsageEvent.agent_id, ModelUsageEvent.session_id)
+            .group_by(ModelUsageEvent.agent_id, is_head, ModelUsageEvent.session_id)
             .order_by(func.sum(ModelUsageEvent.cost_usd).desc())
             .limit(100)
         )
         sessions = []
         for row in session_result.all():
-            aid_str = str(row.agent_id) if row.agent_id else ""
-            aname = agent_name_cache.get(aid_str, "Unattributed") if aid_str else "Unattributed"
+            aid_str, aname = _bucket(row.agent_id, row.is_head)
             sessions.append({
                 "agent_id": aid_str,
                 "agent_name": aname,
