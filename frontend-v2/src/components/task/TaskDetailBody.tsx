@@ -1060,7 +1060,8 @@ export function TaskDetailBody({
           <button
             type="button"
             onClick={onBack}
-            aria-label={backLabel}
+            // Named also while scrolled, when the label text is hidden.
+            aria-label={backLabel ?? t("detail.backToList")}
             className="md:hidden shrink-0 flex items-center gap-1 h-11 pl-1 pr-3 rounded-md text-base cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
             style={{ color: C.textSecondary }}
           >
