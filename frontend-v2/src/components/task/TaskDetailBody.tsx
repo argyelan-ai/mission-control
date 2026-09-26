@@ -31,7 +31,7 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
-import { C, LANE, STATUS_TEXT } from "@/lib/colors";
+import { C, LANE, STATUS_TEXT, alpha } from "@/lib/colors";
 import { useAppStore } from "@/lib/store";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { TaskDescription } from "./TaskDescription";
@@ -214,7 +214,7 @@ function StatusMenu({
         aria-expanded={open}
         aria-label={t("statusChange", { label: t(STATUS_LABEL_KEY[status]) })}
         className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 pointer-coarse:min-h-[44px] pointer-coarse:px-3 text-[11px] font-medium cursor-pointer transition-opacity hover:opacity-85"
-        style={{ background: `${color}1F`, border: `1px solid ${color}55`, color }}
+        style={{ background: alpha(color, 0.12), border: `1px solid ${alpha(color, 0.33)}`, color }}
       >
         <span className="w-1.5 h-1.5 rounded-full" style={{ background: color }} />
         {t(STATUS_LABEL_KEY[status])}
@@ -394,7 +394,7 @@ function OverflowMenu({
                     onClick={onDelete}
                     disabled={deleteLoading}
                     className="px-2 py-1 pointer-coarse:min-h-[44px] pointer-coarse:px-3 pointer-coarse:text-xs rounded-sm text-[10px] font-semibold cursor-pointer"
-                    style={{ backgroundColor: `${C.error}26`, color: STATUS_TEXT.error }}
+                    style={{ backgroundColor: alpha(C.error, 0.15), color: STATUS_TEXT.error }}
                   >
                     {deleteLoading ? "…" : t("deleteTask")}
                   </button>
@@ -476,7 +476,7 @@ function PropertyMenuCell({
               zIndex: 70,
               background: C.bgBase,
               border: `1px solid ${C.borderActive}`,
-              boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
+              boxShadow: `0 4px 24px ${alpha(C.shadow, 0.5)}, 0 1px 2px ${alpha(C.shadow, 0.3)}`,
             }}
           >
             {options.map((o) => (

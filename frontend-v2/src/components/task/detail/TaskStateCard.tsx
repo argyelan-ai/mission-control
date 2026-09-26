@@ -23,7 +23,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { MessageSquareReply, ScrollText } from "lucide-react";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
-import { C, LANE, STATUS_TEXT } from "@/lib/colors";
+import { C, LANE, STATUS_TEXT, alpha } from "@/lib/colors";
 import { ApprovalCard } from "@/components/inbox/ApprovalCard";
 import { formatAge, formatDuration, secondsBetween } from "@/lib/taskDetail/format";
 import { STATUS_LABEL_KEY } from "@/lib/taskDetail/statusLabels";
@@ -68,7 +68,7 @@ function Shell({
       data-kind={kind}
       aria-label={typeof kicker === "string" ? kicker : undefined}
       className="rounded-lg px-3.5 py-3 space-y-2"
-      style={{ background: `${color}0F`, border: `1px solid ${color}40` }}
+      style={{ background: alpha(color, 0.06), border: `1px solid ${alpha(color, 0.25)}` }}
     >
       <div className="label-sys" style={{ color: textColor }}>
         {kicker}

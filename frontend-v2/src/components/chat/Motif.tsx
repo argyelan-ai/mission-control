@@ -17,6 +17,7 @@
  * Fassung die einzige.
  */
 import { useEffect, useRef } from "react";
+import { useTheme } from "@/lib/theme";
 
 import type { MessageSourceKind } from "@/lib/chatTypes";
 
@@ -39,6 +40,8 @@ export function motifForSource(kind: MessageSourceKind): MotifKind {
   }
 }
 
+// Brand figure: the same blue in both modes (ADR-087) — only the glow is
+// toned down on light paper, where a full halo reads as a smudge.
 const BLUE = "#5890CA";
 const LIGHT = "#8FC1FF";
 const DEEP = "#2E5C8F";
@@ -46,8 +49,11 @@ const WHITE = "#E6F1FF";
 
 type Ctx = CanvasRenderingContext2D;
 
+// Set per paint from the active theme (1 = dark, 0.4 = light).
+let glowScale = 1;
+
 function glow(ctx: Ctx, w: number, on: boolean) {
-  ctx.shadowColor = `rgba(88,144,202,${on ? 0.9 : 0.35})`;
+  ctx.shadowColor = `rgba(88,144,202,${(on ? 0.9 : 0.35) * glowScale})`;
   ctx.shadowBlur = w * 0.1;
 }
 
@@ -245,6 +251,7 @@ export function Motif({ kind, live, size, className }: MotifProps) {
   const reduced = useRef<boolean | null>(null);
   if (reduced.current === null) reduced.current = prefersReducedMotion();
   const on = live && !reduced.current;
+  const { resolved: theme } = useTheme();
 
   useEffect(() => {
     const cvs = ref.current;
@@ -259,6 +266,7 @@ export function Motif({ kind, live, size, className }: MotifProps) {
     cvs.height = w;
 
     const paint = (t: number) => {
+      glowScale = theme === "light" ? 0.4 : 1;
       ctx.clearRect(0, 0, w, w);
       ctx.globalAlpha = on ? 1 : 0.7;
       DRAW[kind](ctx, w, t, on);
@@ -276,7 +284,7 @@ export function Motif({ kind, live, size, className }: MotifProps) {
     };
     frame = window.requestAnimationFrame(loop);
     return () => window.cancelAnimationFrame(frame);
-  }, [kind, on, size]);
+  }, [kind, on, size, theme]);
 
   return (
     <canvas

@@ -6,7 +6,7 @@ import { api } from "@/lib/api";
 import { CommentCard } from "@/components/task/CommentCard";
 import { ReflectionForm } from "@/components/task/ReflectionForm";
 import type { Agent, Task } from "@/lib/types";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 
 interface TaskCommentsProps {
   task: Task;
@@ -98,7 +98,7 @@ export function TaskComments({ task, boardId, agents, focusSignal = 0 }: TaskCom
                 onClick={() => setNewCommentType(t)}
                 className="text-[10px] px-2 py-0.5 rounded-sm font-mono capitalize transition-colors cursor-pointer"
                 style={{
-                  backgroundColor: isActive ? `${color}33` : "var(--color-bg-surface)",
+                  backgroundColor: isActive ? alpha(color, 0.2) : "var(--color-bg-surface)",
                   color: isActive ? color : C.textMuted,
                   border: `1px solid ${isActive ? color : C.border}`,
                 }}

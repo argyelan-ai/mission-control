@@ -27,7 +27,7 @@ import { useState } from "react";
 import { useTranslations } from "next-intl";
 import { Archive, Check, MessageSquareOff, Trash2 } from "lucide-react";
 import { api } from "@/lib/api";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import { notify } from "@/lib/notify";
 import { ResponsiveModal } from "@/components/shared/ResponsiveModal";
 import type { GroupDetail } from "@/lib/groupTypes";
@@ -280,7 +280,7 @@ export function FinishGroupDialog({
             data-testid="finish-confirm"
             className="flex-1 min-h-11 rounded-lg text-[14px] font-medium cursor-pointer disabled:opacity-40"
             style={{
-              background: action === "delete_all" ? "rgba(250,73,66,0.10)" : C.accentSubtle,
+              background: action === "delete_all" ? alpha(C.error, 0.1) : C.accentSubtle,
               border: `1px solid ${action === "delete_all" ? C.error : C.borderAccent}`,
               color: action === "delete_all" ? C.error : C.accent,
             }}

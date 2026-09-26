@@ -18,7 +18,7 @@ import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { Brain, Check, ChevronRight, Clock, Paperclip, Search, Send, X, Zap } from "lucide-react";
 import { api } from "@/lib/api";
-import { C, LANE } from "@/lib/colors";
+import { C, LANE, alpha } from "@/lib/colors";
 import type { Agent, Project, Task, TaskStatus } from "@/lib/types";
 import { ProjectReferencesDialog } from "./ProjectReferencesDialog";
 import { EntityIcon } from "@/components/shared/EntityIcon";
@@ -126,7 +126,7 @@ function ListRow({
           type="button"
           onClick={onClick}
           aria-label={t("openTask", { title: task.title })}
-          className="flex-1 min-w-0 text-left text-[13px] truncate cursor-pointer after:absolute after:inset-0 after:content-[''] hover:opacity-90"
+          className="flex-1 min-w-0 text-left text-[13px] truncate cursor-pointer after:absolute after:inset-0 after:content-[''] hover:opacity-90 light:hover:opacity-100!"
           style={{ color: isDone ? C.textMuted : C.textPrimary }}
         >
           <span className="truncate">{task.title}</span>
@@ -146,7 +146,7 @@ function ListRow({
               title={t("noActivityFor", { mins: staleMins })}
               style={{
                 color: isCritical ? C.error : C.warning,
-                backgroundColor: isCritical ? `${C.error}1A` : `${C.warning}1A`,
+                backgroundColor: isCritical ? alpha(C.error, 0.1) : alpha(C.warning, 0.1),
               }}
             >
               <Clock size={9} />

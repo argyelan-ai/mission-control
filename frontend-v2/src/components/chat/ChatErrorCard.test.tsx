@@ -45,7 +45,7 @@ describe("Chat-Fehlerkarte", () => {
     // jsdom expandiert die Kurzform `border` nicht zurueck — geprueft wird
     // die Farbe, und die muss aus der Signal-Palette kommen, nicht aus einem
     // handgemalten Rot.
-    expect(screen.getByTestId("chat-error-card")).toHaveStyle({ borderColor: C.error });
+    expect(screen.getByTestId("chat-error-card").style.border).toContain(C.error);
   });
 
   it("shows the translated code chip and the detail below it", () => {

@@ -1,5 +1,6 @@
 // Finding heuristics for the UI probe — pure functions over measurements the
 // browser side collected. Kept free of Playwright so they can be unit-tested.
+import { contrastFindings } from "./contrast.mjs";
 
 export const MIN_TARGET_PX = 44; // WCAG 2.5.5 / Apple HIG touch target
 export const MOBILE_MAX_WIDTH = 500; // widths at or below count as "phone"
@@ -80,7 +81,9 @@ const SEV = { high: 3, medium: 2, low: 1 };
 /**
  * Turn one measured state into findings.
  * @param {object} state  see browser.mjs measureState()
- * @param {{isBase?: boolean}} opts  base state = page just loaded (page-level checks)
+ * @param {{isBase?: boolean, expectedTheme?: string|null}} opts  base state =
+ *   page just loaded (page-level checks); expectedTheme = the theme forced by
+ *   --theme ("system" is not checked: it depends on the emulated OS).
  */
 export function evaluateState(state, opts = {}) {
   const vp = state.viewport;
@@ -122,6 +125,10 @@ export function evaluateState(state, opts = {}) {
         ? { type: "loading", severity: "high", message: `page still loading after the wait (${what}) — its controls were probed incomplete`, detail: {} }
         : { type: "loading", severity: "medium", message: `opened view still loading after the wait (${what})`, detail: {} },
     );
+  }
+  if (state.contrast) f.push(...contrastFindings(state.contrast).findings);
+  if (opts.isBase && (opts.expectedTheme === "light" || opts.expectedTheme === "dark") && state.theme !== opts.expectedTheme) {
+    f.push({ type: "theme", severity: "high", message: `page renders theme "${state.theme ?? "none"}" instead of the forced "${opts.expectedTheme}"`, detail: {} });
   }
   if (opts.isBase) {
     const small = smallTargets(state.targets || [], vp.w);

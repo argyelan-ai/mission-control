@@ -8,7 +8,7 @@ import { CheckCircle2, Github, Loader2, Lock, Search, Globe2 } from "lucide-reac
 import { ResponsiveModal } from "@/components/shared/ResponsiveModal";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import { timeAgo } from "@/lib/utils";
 import type { GithubStatus, RepoImportCandidate } from "@/lib/types";
 
@@ -137,7 +137,7 @@ export function ImportRepoDialog({ open, onClose }: ImportRepoDialogProps) {
         ) : error ? (
           <div
             className="text-xs px-3 py-2 rounded-lg"
-            style={{ background: `${C.error}14`, border: `1px solid ${C.error}33`, color: STATUS_TEXT.error }}
+            style={{ background: alpha(C.error, 0.08), border: `1px solid ${alpha(C.error, 0.2)}`, color: STATUS_TEXT.error }}
           >
             <p>{t("loadError")}</p>
             {extractErrorDetail(error) && (
@@ -208,7 +208,7 @@ export function ImportRepoDialog({ open, onClose }: ImportRepoDialogProps) {
         {errorMsg && (
           <div
             className="mt-3 text-xs px-3 py-2 rounded-lg"
-            style={{ background: `${C.error}14`, border: `1px solid ${C.error}33`, color: STATUS_TEXT.error }}
+            style={{ background: alpha(C.error, 0.08), border: `1px solid ${alpha(C.error, 0.2)}`, color: STATUS_TEXT.error }}
           >
             {errorMsg}
           </div>

@@ -25,7 +25,7 @@ import {
 } from "lucide-react";
 import { ResponsiveModal } from "@/components/shared/ResponsiveModal";
 import { api } from "@/lib/api";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import { useAppStore } from "@/lib/store";
 import type { Board, Loop, LoopBacklogSource, LoopCreate } from "@/lib/types";
 
@@ -438,8 +438,8 @@ export function CreateLoopDialog({ open, onClose, onCreated }: CreateLoopDialogP
             className="flex items-start gap-2 rounded-md border px-3 py-2 text-xs"
             role="alert"
             style={{
-              borderColor: `${C.error}66`,
-              background: `${C.error}14`,
+              borderColor: alpha(C.error, 0.4),
+              background: alpha(C.error, 0.08),
               color: STATUS_TEXT.error,
             }}
           >
@@ -495,18 +495,18 @@ export function CreateLoopDialog({ open, onClose, onCreated }: CreateLoopDialogP
 function inputStyle(invalid: boolean): React.CSSProperties {
   return {
     background: C.bgDeep,
-    border: `1px solid ${invalid ? `${C.error}88` : C.border}`,
+    border: `1px solid ${invalid ? alpha(C.error, 0.53) : C.border}`,
     color: C.textPrimary,
   };
 }
 
 function focusOn(e: React.FocusEvent<HTMLElement>) {
-  e.currentTarget.style.borderColor = `${C.accent}66`;
+  e.currentTarget.style.borderColor = alpha(C.accent, 0.4);
 }
 
 function focusOff(invalid: boolean) {
   return (e: React.FocusEvent<HTMLElement>) => {
-    e.currentTarget.style.borderColor = invalid ? `${C.error}88` : C.border;
+    e.currentTarget.style.borderColor = invalid ? alpha(C.error, 0.53) : C.border;
   };
 }
 
@@ -659,7 +659,7 @@ function NumberInput({
         className="w-full min-w-0 bg-transparent px-3 py-2 text-sm outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
         style={{ color: C.textPrimary }}
         onFocus={(e) => {
-          (e.currentTarget.parentElement as HTMLElement).style.borderColor = `${C.accent}66`;
+          (e.currentTarget.parentElement as HTMLElement).style.borderColor = alpha(C.accent, 0.4);
         }}
         onBlur={(e) => {
           (e.currentTarget.parentElement as HTMLElement).style.borderColor = C.border;

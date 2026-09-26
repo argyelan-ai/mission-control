@@ -7,7 +7,7 @@ import { Server, Globe, Zap, Trash2, Check, Info } from "lucide-react";
 import type { Agent, MCPServer } from "@/lib/types";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 
 interface Props {
@@ -188,7 +188,7 @@ export function MCPServerMatrix({
                                   width: "220px",
                                   background: C.bgElevated,
                                   border: "1px solid var(--color-border)",
-                                  boxShadow: "0 8px 24px rgba(0,0,0,0.6)",
+                                  boxShadow: `0 8px 24px ${alpha(C.shadow, 0.6)}`,
                                   color: "var(--color-text-secondary)",
                                 }}
                               >
@@ -229,11 +229,11 @@ export function MCPServerMatrix({
                         className="w-5 h-5 rounded-sm flex items-center justify-center mx-auto cursor-pointer transition-colors"
                         style={{
                           backgroundColor: enabled
-                            ? `${C.accent}33`
+                            ? alpha(C.accent, 0.2)
                             : "var(--color-bg-hover)",
                           border: `1px solid ${
                             enabled
-                              ? `${C.accent}66`
+                              ? alpha(C.accent, 0.4)
                               : "var(--color-border)"
                           }`,
                         }}

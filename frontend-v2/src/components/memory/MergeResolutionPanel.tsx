@@ -29,7 +29,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { api } from "@/lib/api";
 import type { BoardMemory } from "@/lib/types";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 
 interface Props {
@@ -154,7 +154,7 @@ export function MergeResolutionPanel({ entry, onResolved }: Props) {
           <button
             onClick={() => setConfirmMerge(true)}
             disabled={busy}
-            className="px-4 py-2 rounded-lg text-sm font-semibold disabled:opacity-50 cursor-pointer focus-visible:ring-2 focus-visible:ring-teal-500/50"
+            className="px-4 py-2 rounded-lg text-sm font-semibold disabled:opacity-50 cursor-pointer focus-visible:ring-2 focus-visible:ring-[var(--color-status-online)]/50"
             style={{
               background: `linear-gradient(135deg, ${C.accent}, ${C.accentHover})`,
               color: C.bgDeep,
@@ -165,7 +165,7 @@ export function MergeResolutionPanel({ entry, onResolved }: Props) {
           <button
             onClick={onKeepBoth}
             disabled={busy}
-            className="px-4 py-2 rounded-lg text-sm border disabled:opacity-50 cursor-pointer focus-visible:ring-2 focus-visible:ring-teal-500/50"
+            className="px-4 py-2 rounded-lg text-sm border disabled:opacity-50 cursor-pointer focus-visible:ring-2 focus-visible:ring-[var(--color-status-online)]/50"
             style={{ borderColor: C.border }}
           >
             Keep both
@@ -173,9 +173,9 @@ export function MergeResolutionPanel({ entry, onResolved }: Props) {
           <button
             onClick={onUnrelated}
             disabled={busy}
-            className="px-4 py-2 rounded-lg text-sm border disabled:opacity-50 cursor-pointer focus-visible:ring-2 focus-visible:ring-red-500/50"
+            className="px-4 py-2 rounded-lg text-sm border disabled:opacity-50 cursor-pointer focus-visible:ring-2 focus-visible:ring-[var(--color-status-error)]/50"
             style={{
-              borderColor: `${C.error}66`,
+              borderColor: alpha(C.error, 0.4),
               color: C.error,
             }}
           >

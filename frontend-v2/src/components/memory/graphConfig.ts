@@ -6,7 +6,7 @@
  */
 
 import type { VaultNoteType } from "@/lib/types";
-import { C } from "@/lib/colors";
+import { C, resolveColor } from "@/lib/colors";
 
 // ── Accent alias — single source for selected/hover/highlight states ──────────
 // (Was purple #7C3AED, then cyan; now the achromatic System-A accent.)
@@ -80,10 +80,14 @@ export const NODE_DIMMED_OPACITY = 0.12;
 // ── Edge styling ──────────────────────────────────────────────────────────────
 
 /** Default link colour — Obsidian-style subtle hairlines */
-export const EDGE_COLOR_DEFAULT = "rgba(255,255,255,0.18)";
+export const EDGE_COLOR_DEFAULT = "var(--color-graph-edge)";
 
 /** Brighter link colour when source or target is hovered */
-export const EDGE_COLOR_HOVER   = "rgba(255,255,255,0.55)";
+export const EDGE_COLOR_HOVER   = "var(--color-graph-edge-hover)";
+
+/** Edges faded out by a filter / by the hover neighbourhood */
+export const EDGE_COLOR_FILTERED = "var(--color-graph-edge-filtered)";
+export const EDGE_COLOR_FADED    = "var(--color-graph-edge-faded)";
 
 /** Link line width in world units */
 export const EDGE_WIDTH = 0.5;
@@ -96,14 +100,48 @@ export const ZOOM_TARGET_LEVEL   = 3;      // zoom level when flying to a node c
 export const ZOOM_FIT_PADDING_PX = 60;     // padding around all nodes on reset
 
 // ── Community color palette (12 distinct hues) ───────────────────────────────
-// NOTE (System A): currently UNUSED — no consumer imports it. If graph
-// communities ever get wired up, this rainbow has to be revisited: it is pure
-// categorical chroma and would contradict „Farbe bedeutet nur Status".
+// Used by MemoryGraph2D colorMode="community". Categorical chroma on purpose
+// (communities have no status meaning); the raw hues are the same in both
+// modes and clear 3:1 against both grounds (see theme.contrast.test).
 export const COMMUNITY_PALETTE = [
   C.accent,   "#10B981", "#F59E0B", "#3B82F6", "#EC4899", "#06B6D4",
   "#EF4444",  C.info,    "#22C55E", "#FB923C", "#0EA5E9", "#F472B6",
 ];
 
+/** Same hues, one step deeper, for light paper (≥3:1 against bg-deep). */
+export const COMMUNITY_PALETTE_LIGHT = [
+  C.accent,   "#047857", "#B45309", "#1D4ED8", "#BE185D", "#0E7490",
+  "#B91C1C",  C.info,    "#15803D", "#C2410C", "#0369A1", "#9D174D",
+];
+
 export function colorForCommunity(communityId: number): string {
   return COMMUNITY_PALETTE[communityId % COMMUNITY_PALETTE.length];
+}
+
+// ── Canvas palette ────────────────────────────────────────────────────────────
+// The graph draws on a <canvas>, which cannot read CSS variables. Every colour
+// is resolved once per theme (MemoryGraph2D memoises on the active theme, so a
+// switch redraws the graph) and the draw callbacks read the resolved values.
+export interface GraphPalette {
+  selected: string;
+  label: string;
+  edge: string;
+  edgeHover: string;
+  edgeFiltered: string;
+  edgeFaded: string;
+  type: Record<string, string>;
+  community: string[];
+}
+
+export function resolveGraphPalette(theme: "dark" | "light" = "dark"): GraphPalette {
+  return {
+    selected: resolveColor(GRAPH_SELECTED),
+    label: resolveColor(C.textPrimary),
+    edge: resolveColor(EDGE_COLOR_DEFAULT),
+    edgeHover: resolveColor(EDGE_COLOR_HOVER),
+    edgeFiltered: resolveColor(EDGE_COLOR_FILTERED),
+    edgeFaded: resolveColor(EDGE_COLOR_FADED),
+    type: Object.fromEntries(Object.entries(TYPE_COLORS).map(([k, v]) => [k, resolveColor(v)])),
+    community: (theme === "light" ? COMMUNITY_PALETTE_LIGHT : COMMUNITY_PALETTE).map((c) => resolveColor(c)),
+  };
 }

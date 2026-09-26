@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { api } from "@/lib/api";
-import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS, STATUS_TEXT, alpha } from "@/lib/colors";
 import type { Runtime, RuntimeLiveStatus } from "@/lib/types";
 import { SlideOverPanel } from "@/components/shared/SlideOverPanel";
 import { BindAgentModal } from "@/components/shared/BindAgentModal";
@@ -75,8 +75,8 @@ function ActionButton({
   variant: "success" | "danger" | "default";
 }) {
   const colors = {
-    success: { bg: `${C.online}14`, border: `${C.online}33`, text: C.online },
-    danger: { bg: `${C.error}14`, border: `${C.error}33`, text: C.error },
+    success: { bg: alpha(C.online, 0.08), border: alpha(C.online, 0.2), text: C.online },
+    danger: { bg: alpha(C.error, 0.08), border: alpha(C.error, 0.2), text: C.error },
     default: { bg: C.borderSubtle, border: C.borderSubtle, text: C.textMuted },
   };
   const c = colors[variant];

@@ -13,7 +13,7 @@ import "@xterm/xterm/css/xterm.css";
 import { MonitorOff, Wifi, WifiOff } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Agent } from "@/lib/types";
-import { C, XTERM_THEME } from "@/lib/colors";
+import { C, XTERM_THEME, alpha } from "@/lib/colors";
 import { useIsAdmin } from "@/hooks/useIsAdmin";
 import { AdminOnlyNotice } from "@/components/shared/AdminOnlyNotice";
 import { TERM_MIN_CONTRAST, TERM_FONT_FAMILY, TERM_COLS, TERM_ROWS, useTerminalScale, type TermViewMode } from "@/lib/terminalScale";
@@ -295,7 +295,7 @@ function TerminalPanelRunning({ agent }: { agent: Agent }) {
           getting crushed next to the status badge + agent name */}
       <div
         className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5 border-b shrink-0"
-        style={{ borderColor: "rgba(255,255,255,0.06)" }}
+        style={{ borderColor: alpha(C.overlay, 0.06) }}
       >
         <div className="flex items-center gap-3 min-w-0 flex-1">
           {connected ? (
@@ -306,9 +306,9 @@ function TerminalPanelRunning({ agent }: { agent: Agent }) {
           <span
             className="text-[9px] px-1.5 py-0.5 rounded-sm font-mono shrink-0"
             style={{
-              background: connected ? `${C.online}1A` : `${C.error}1A`,
+              background: connected ? alpha(C.online, 0.1) : alpha(C.error, 0.1),
               color: connected ? C.online : C.error,
-              border: `1px solid ${connected ? `${C.online}33` : `${C.error}33`}`,
+              border: `1px solid ${connected ? alpha(C.online, 0.2) : alpha(C.error, 0.2)}`,
             }}
           >
             {connected ? t("connected") : t("disconnected")}
@@ -322,7 +322,7 @@ function TerminalPanelRunning({ agent }: { agent: Agent }) {
         <div className="flex items-center gap-2 shrink-0 w-full md:w-auto md:ml-auto">
         <div
           className="flex items-center rounded-md overflow-hidden shrink-0"
-          style={{ border: "1px solid rgba(255,255,255,0.08)" }}
+          style={{ border: `1px solid ${alpha(C.overlay, 0.08)}` }}
         >
           {(["fit", "native"] as const).map((m) => (
             <button
@@ -332,7 +332,7 @@ function TerminalPanelRunning({ agent }: { agent: Agent }) {
               style={{
                 background: termView === m ? C.accentSubtle : "transparent",
                 color: termView === m ? C.accent : C.textMuted,
-                borderRight: m === "fit" ? "1px solid rgba(255,255,255,0.06)" : undefined,
+                borderRight: m === "fit" ? `1px solid ${alpha(C.overlay, 0.06)}` : undefined,
               }}
             >
               {m === "fit" ? "Fit" : "1:1"}

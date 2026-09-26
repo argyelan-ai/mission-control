@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { MonitorOff, RefreshCw, RotateCcw, Loader2 } from "lucide-react";
 import { api, browserLiveWsUrl } from "@/lib/api";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import { StatusDot } from "@/components/shared/StatusDot";
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -299,7 +299,7 @@ export function BrowserLiveView() {
         {connect && statusMessage && !streamEnded && (
           <div
             className="absolute bottom-2 left-2 right-2 text-[10px] px-2.5 py-1.5 rounded-md"
-            style={{ background: "rgba(0,0,0,0.6)", color: C.textSecondary, border: `1px solid ${C.border}` }}
+            style={{ background: alpha(C.scrim, 0.6), color: C.textSecondary, border: `1px solid ${C.border}` }}
           >
             {statusMessage}
           </div>

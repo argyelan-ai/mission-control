@@ -19,7 +19,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { api, getToken, request } from "@/lib/api";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import { notify } from "@/lib/notify";
 import { Pill } from "@/components/shared/Pill";
 import { ResponsiveModal } from "@/components/shared/ResponsiveModal";
@@ -277,7 +277,7 @@ export function ChallengeDetail({
   const CHALLENGE_ACTION_STYLE: Record<ChallengeAction["style"], React.CSSProperties> = {
     default: { color: C.textSecondary, border: `1px solid ${C.border}` },
     primary: { backgroundColor: C.accentSubtle, color: C.accent, border: `1px solid ${C.borderAccent}` },
-    danger: { background: C.error, color: C.textPrimary },
+    danger: { background: C.error, color: C.onStatus },
   };
 
   if (!challenge) return null;
@@ -323,7 +323,7 @@ export function ChallengeDetail({
               onClick={() => stopMutation.mutate()}
               disabled={stopMutation.isPending}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm disabled:opacity-40"
-              style={{ color: C.error, border: `1px solid ${C.error}55` }}
+              style={{ color: C.error, border: `1px solid ${alpha(C.error, 0.33)}` }}
             >
               <Square size={13} /> {t("stop")}
             </button>
@@ -425,7 +425,7 @@ export function ChallengeDetail({
       {challenge.error && (
         <div
           className="rounded-lg px-3 py-2 text-sm"
-          style={{ color: C.error, border: `1px solid ${C.error}40`, backgroundColor: `${C.error}10` }}
+          style={{ color: C.error, border: `1px solid ${alpha(C.error, 0.25)}`, backgroundColor: alpha(C.error, 0.06) }}
         >
           {challenge.error}
         </div>
@@ -616,7 +616,7 @@ export function ChallengeDetail({
             onClick={() => deleteMutation.mutate()}
             disabled={deleteMutation.isPending}
             className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-sm font-semibold disabled:opacity-70"
-            style={{ background: C.error, color: C.textPrimary }}
+            style={{ background: C.error, color: C.onStatus }}
           >
             {deleteMutation.isPending ? (
               <Loader2 size={15} className="animate-spin" />

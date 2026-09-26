@@ -18,6 +18,7 @@ import { api, getToken } from "@/lib/api";
 import type { BoardMemoryAttachment } from "@/lib/types";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 
+import { C, alpha } from "@/lib/colors";
 interface Props {
   attachment: BoardMemoryAttachment;
   entryId: string;
@@ -116,7 +117,7 @@ export function AttachmentThumb({
       )}
       <div
         className="absolute bottom-0 left-0 right-0 px-2 py-1 text-[10px] tabular-nums opacity-70 truncate"
-        style={{ background: "rgba(10,10,15,0.6)", color: "var(--color-bg-hover)" }}
+        style={{ background: alpha(C.scrim, 0.6), color: "var(--color-bg-hover)" }}
       >
         {Math.round(attachment.size_bytes / 1024)} KB
       </div>
@@ -125,7 +126,7 @@ export function AttachmentThumb({
           type="button"
           onClick={() => setConfirmDelete(true)}
           className="absolute top-1 right-1 p-1 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity touch-visible"
-          style={{ background: "rgba(250,73,66,0.9)" }}
+          style={{ background: alpha(C.error, 0.9) }}
           aria-label={`Delete attachment ${attachment.original_name}`}
         >
           <X size={12} className="text-[var(--color-on-accent)]" />

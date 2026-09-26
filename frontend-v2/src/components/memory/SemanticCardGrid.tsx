@@ -8,12 +8,12 @@ import { api } from "@/lib/api";
 import { timeAgo } from "@/lib/utils";
 import type { BoardMemory, MemoryType } from "@/lib/types";
 import { MergeCandidateBadge } from "./MergeCandidateBadge";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 
 const TYPE_STYLE: Record<string, { color: string; bg: string; label: string }> = {
-  knowledge:  { color: C.textSecondary, bg: `${C.textSecondary}1F`, label: "Knowledge" },
-  reference:  { color: C.warning,       bg: `${C.warning}1F`,       label: "Reference" },
-  research:   { color: C.info,          bg: `${C.info}1F`,          label: "Research" },
+  knowledge:  { color: C.textSecondary, bg: alpha(C.textSecondary, 0.12), label: "Knowledge" },
+  reference:  { color: C.warning,       bg: alpha(C.warning, 0.12),       label: "Reference" },
+  research:   { color: C.info,          bg: alpha(C.info, 0.12),          label: "Research" },
 };
 
 export function SemanticCardGrid({
@@ -81,7 +81,7 @@ export function SemanticCardGrid({
           }}
           className="absolute top-3 right-3 p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer touch-visible max-sm:min-h-11 max-sm:min-w-11 max-sm:flex max-sm:items-center max-sm:justify-center"
           style={{
-            background: item.is_pinned ? "rgba(245,158,11,0.12)" : "var(--color-bg-elevated)",
+            background: item.is_pinned ? alpha(C.warning, 0.12) : "var(--color-bg-elevated)",
             color: item.is_pinned ? C.warning : "var(--color-text-muted)",
           }}
           title={item.is_pinned ? "Unpin" : "Pin"}

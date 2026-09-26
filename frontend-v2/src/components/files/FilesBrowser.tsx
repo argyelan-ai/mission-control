@@ -7,7 +7,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ChevronRight, ChevronUp, ChevronDown, Loader2, AlertCircle, FolderOpen } from "lucide-react";
 import { api } from "@/lib/api";
 import type { FsEntry, FsRoot } from "@/lib/types";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import { timeAgo } from "@/lib/utils";
 import { colorForAgent } from "@/components/vault/agentColors";
 import { fileIcon, fileIconColor, humanSize, isImageFile, mtimeToIso } from "./fileUtils";
@@ -207,7 +207,7 @@ function AgentBadge({ slug }: { slug: string }) {
   return (
     <span
       className="inline-flex items-center shrink-0 font-mono text-[10px] px-1.5 py-0.5 rounded-sm"
-      style={{ background: `${color}1A`, color }}
+      style={{ background: alpha(color, 0.1), color }}
       title={`Agent: ${slug}`}
     >
       {slug}

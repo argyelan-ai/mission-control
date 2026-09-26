@@ -18,7 +18,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import type { VaultNoteType } from "@/lib/types";
-import { C as _C } from "@/lib/colors";
+import { C as _C, alpha } from "@/lib/colors";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 
 // Convenience aliases mapping the local modal token names to lib/colors.
@@ -190,8 +190,8 @@ export function CreateVaultNoteModal({ enabled, onCreated }: CreateVaultNoteModa
         className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
         style={{
           color: C.accent,
-          border: `1px solid ${C.accent}44`,
-          backgroundColor: `${C.accent}0A`,
+          border: `1px solid ${alpha(C.accent, 0.27)}`,
+          backgroundColor: alpha(C.accent, 0.04),
         }}
       >
         <Plus size={12} />
@@ -221,7 +221,7 @@ export function CreateVaultNoteModal({ enabled, onCreated }: CreateVaultNoteModa
             {/* Backdrop */}
             <div
               className="absolute inset-0"
-              style={{ backgroundColor: "rgba(0,0,0,0.6)" }}
+              style={{ backgroundColor: alpha(_C.scrim, 0.6) }}
             />
 
             {/* Drag indicator — mobile bottom-sheet hint */}
@@ -240,7 +240,7 @@ export function CreateVaultNoteModal({ enabled, onCreated }: CreateVaultNoteModa
               style={{
                 background: C.elevated,
                 border: "1px solid var(--color-border)",
-                boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
+                boxShadow: `0 4px 24px ${alpha(_C.shadow, 0.5)}, 0 1px 2px ${alpha(_C.shadow, 0.3)}`,
               }}
             >
               {/* Top edge highlight */}
@@ -275,8 +275,8 @@ export function CreateVaultNoteModal({ enabled, onCreated }: CreateVaultNoteModa
                           className="px-2.5 py-1 rounded-md text-[11px] font-mono transition-all cursor-pointer"
                           style={{
                             color: active ? C.accent : C.textMuted,
-                            background: active ? `${C.accent}15` : "transparent",
-                            border: `1px solid ${active ? `${C.accent}55` : C.border}`,
+                            background: active ? alpha(C.accent, 0.08) : "transparent",
+                            border: `1px solid ${active ? alpha(C.accent, 0.33) : C.border}`,
                           }}
                           title={tr(t.hintKey)}
                         >
@@ -358,7 +358,7 @@ export function CreateVaultNoteModal({ enabled, onCreated }: CreateVaultNoteModa
                 {/* Tags */}
                 <div>
                   <label className="text-[10px] uppercase tracking-wider font-mono mb-2 flex items-center gap-1.5" style={{ color: C.textMuted }}>
-                    <Hash size={10} /> {tr("tagsLabel")} <span className="opacity-60">{tr("tagsOptionalHint")}</span>
+                    <Hash size={10} /> {tr("tagsLabel")} <span className="opacity-60 light:opacity-100!">{tr("tagsOptionalHint")}</span>
                   </label>
                   <input
                     type="text"
@@ -381,8 +381,8 @@ export function CreateVaultNoteModal({ enabled, onCreated }: CreateVaultNoteModa
                           className="px-1.5 py-0.5 rounded-sm text-[10px] font-mono"
                           style={{
                             color: C.accent,
-                            background: `${C.accent}12`,
-                            border: `1px solid ${C.accent}33`,
+                            background: alpha(C.accent, 0.07),
+                            border: `1px solid ${alpha(C.accent, 0.2)}`,
                           }}
                         >
                           {t}

@@ -34,6 +34,7 @@ import {
   BrainCircuit,
   Moon,
   type LucideIcon,
+  Palette,
 } from "lucide-react";
 import { api, setStoredUser } from "@/lib/api";
 import { useAppStore, type AuthUser } from "@/lib/store";
@@ -52,10 +53,11 @@ import { CostPricesTab } from "@/components/settings/CostPricesTab";
 import { SlackTab } from "@/components/settings/SlackTab";
 import { TelegramTab } from "@/components/settings/TelegramTab";
 import { AiProvidersTab } from "@/components/settings/AiProvidersTab";
+import { AppearanceSection } from "@/components/settings/AppearanceSection";
 import { NightShiftTab } from "@/components/settings/NightShiftTab";
 import { StatusDot } from "@/components/shared/StatusDot";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 
 // ── Section Registry ──────────────────────────────────────────────────────────
 
@@ -80,6 +82,7 @@ interface SettingsSection {
 const SECTIONS: SettingsSection[] = [
   { id: "profile", labelKey: "sections.profile", icon: User, group: "account" },
   { id: "security", labelKey: "sections.security", icon: Shield, group: "account" },
+  { id: "appearance", labelKey: "sections.appearance", icon: Palette, group: "account" },
   { id: "shortcuts", labelKey: "sections.shortcuts", icon: Keyboard, group: "account" },
   { id: "autonomy", labelKey: "sections.autonomy", icon: SlidersHorizontal, group: "fleet", adminOnly: true },
   { id: "intelligence", labelKey: "sections.intelligence", icon: Zap, group: "fleet", adminOnly: true },
@@ -300,8 +303,8 @@ function ErrorBanner({ message }: { message: string }) {
     <div
       className="flex items-center gap-2 text-xs rounded-lg px-3 py-2 mb-4"
       style={{
-        backgroundColor: `${C.error}12`,
-        border: `1px solid ${C.error}33`,
+        backgroundColor: alpha(C.error, 0.07),
+        border: `1px solid ${alpha(C.error, 0.2)}`,
         color: C.error,
       }}
     >
@@ -889,8 +892,9 @@ function IntelligenceSection({
               style={{
                 left: config.enabled ? "calc(100% - 22px)" : "2px",
                 // On the bone accent track a white knob vanishes (~1.1:1) —
-                // dark knob on accent, light knob on the dark off-track.
-                backgroundColor: config.enabled ? C.onAccent : "#fff",
+                // dark knob on accent, light knob on the dark off-track
+                // (textPrimary: near-white in dark, ink in light mode).
+                backgroundColor: config.enabled ? C.onAccent : C.textPrimary,
               }}
             />
           </button>
@@ -1276,7 +1280,7 @@ function ApiKeysSection({
                         className="text-[10px] px-1.5 py-0.5 rounded-sm uppercase"
                         style={{
                           backgroundColor: isSet
-                            ? `${C.online}1A`
+                            ? alpha(C.online, 0.1)
                             : "var(--color-bg-elevated)",
                           color: isSet ? C.online : "var(--color-text-muted)",
                         }}
@@ -1667,12 +1671,12 @@ function GithubSection() {
             </div>
 
             {saveError && (
-              <p className="text-xs rounded-lg px-3 py-2" style={{ color: STATUS_TEXT.error, backgroundColor: `${C.error}14`, border: `1px solid ${C.error}26` }}>
+              <p className="text-xs rounded-lg px-3 py-2" style={{ color: STATUS_TEXT.error, backgroundColor: alpha(C.error, 0.08), border: `1px solid ${alpha(C.error, 0.15)}` }}>
                 {saveError}
               </p>
             )}
             {saveMessage && (
-              <p className="text-xs rounded-lg px-3 py-2 flex items-center gap-1.5" style={{ color: C.online, backgroundColor: `${C.online}1A` }}>
+              <p className="text-xs rounded-lg px-3 py-2 flex items-center gap-1.5" style={{ color: C.online, backgroundColor: alpha(C.online, 0.1) }}>
                 <Check size={12} /> {saveMessage}
               </p>
             )}
@@ -1885,7 +1889,7 @@ function UserRow({
 
   const roleColors: Record<string, { bg: string; text: string }> = {
     admin: { bg: C.accentSubtle, text: C.accent },
-    operator: { bg: `${C.warning}1F`, text: C.warning },
+    operator: { bg: alpha(C.warning, 0.12), text: C.warning },
     viewer: { bg: "var(--color-bg-elevated)", text: "var(--color-text-muted)" },
   };
 
@@ -1893,7 +1897,8 @@ function UserRow({
 
   return (
     <div
-      className="mc-card px-4 py-3 transition-colors"
+      // Light: no half-opacity (text fell to 2.3:1) — the "Deactivated" chip carries the state.
+      className={`mc-card px-4 py-3 transition-colors${user.is_active ? "" : " light:opacity-100!"}`}
       style={{ ...cardStyle, opacity: user.is_active ? 1 : 0.5 }}
     >
       {/* Top row: avatar + info + role */}
@@ -1933,7 +1938,7 @@ function UserRow({
               <span
                 className="text-[10px] px-1.5 py-0.5 rounded-sm"
                 style={{
-                  backgroundColor: `${C.error}1F`,
+                  backgroundColor: alpha(C.error, 0.12),
                   color: C.error,
                 }}
               >
@@ -2110,7 +2115,7 @@ function ShortcutsSection() {
                         backgroundColor: "var(--color-bg-elevated)",
                         border: "1px solid var(--color-border)",
                         color: "var(--color-text-secondary)",
-                        boxShadow: "0 1px 2px rgba(0, 0, 0, 0.3)",
+                        boxShadow: `0 1px 2px ${alpha(C.shadow, 0.3)}`,
                       }}
                     >
                       {key}
@@ -2383,6 +2388,11 @@ function SettingsContent() {
               {activeSection === "costs" && isAdmin && <CostPricesTab />}
               {activeSection === "night-shift" && isAdmin && <NightShiftTab />}
               {activeSection === "users" && isAdmin && <UsersSection />}
+              {activeSection === "appearance" && (
+                <SectionMotion sectionKey="appearance">
+                  <AppearanceSection />
+                </SectionMotion>
+              )}
               {activeSection === "shortcuts" && <ShortcutsSection />}
               {activeSection === "about" && <AboutSection />}
             </AnimatePresence>

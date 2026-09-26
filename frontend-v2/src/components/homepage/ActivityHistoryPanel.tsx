@@ -14,7 +14,7 @@ import { useAppStore } from "@/lib/store";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import type { ActivityEvent } from "@/lib/types";
 import { timeAgo } from "@/lib/utils";
-import { C } from "./colors";
+import { C, alpha } from "./colors";
 import { useEscapeKey } from "@/hooks/useEscapeKey";
 
 export function ActivityHistoryPanel({ onClose }: { onClose: () => void }) {
@@ -42,7 +42,7 @@ export function ActivityHistoryPanel({ onClose }: { onClose: () => void }) {
     >
       <div
         className="absolute inset-0"
-        style={{ backgroundColor: "rgba(0,0,0,0.5)" }}
+        style={{ backgroundColor: alpha(C.scrim, 0.5) }}
         onClick={onClose}
       />
 
@@ -55,7 +55,7 @@ export function ActivityHistoryPanel({ onClose }: { onClose: () => void }) {
         style={{
           background: C.bgElevated,
           border: `1px solid var(--color-border)`,
-          boxShadow: `0 25px 80px rgba(0,0,0,0.6)`,
+          boxShadow: `0 25px 80px ${alpha(C.shadow, 0.6)}`,
         }}
       >
         <div className="absolute top-0 left-0 right-0 h-px" style={{ background: "linear-gradient(90deg, transparent, var(--color-bg-hover), transparent)" }} />
@@ -89,7 +89,7 @@ export function ActivityHistoryPanel({ onClose }: { onClose: () => void }) {
                   >
                     <span
                       className="w-2 h-2 rounded-full shrink-0 mt-1.5"
-                      style={{ backgroundColor: dotColor, boxShadow: isSuccess || isError ? `0 0 6px ${dotColor}44` : "none" }}
+                      style={{ backgroundColor: dotColor, boxShadow: isSuccess || isError ? `0 0 6px ${alpha(dotColor, 0.27)}` : "none" }}
                     />
                     <div className="flex-1 min-w-0">
                       <div className="text-[12px] leading-relaxed" style={{ color: C.textPrimary }}>{event.title}</div>
@@ -100,7 +100,7 @@ export function ActivityHistoryPanel({ onClose }: { onClose: () => void }) {
                             className="text-[10px] font-mono font-medium px-1.5 py-0.5 rounded-sm uppercase"
                             style={{
                               color: event.severity === "error" ? C.error : event.severity === "warning" ? C.warning : C.textMuted,
-                              backgroundColor: event.severity === "error" ? `${C.error}15` : event.severity === "warning" ? `${C.warning}15` : "transparent",
+                              backgroundColor: event.severity === "error" ? alpha(C.error, 0.08) : event.severity === "warning" ? alpha(C.warning, 0.08) : "transparent",
                             }}
                           >
                             {event.severity}

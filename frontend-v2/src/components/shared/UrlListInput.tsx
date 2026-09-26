@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Plus, X } from "lucide-react";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 
 interface UrlListInputProps {
   value: string[];
@@ -45,7 +45,7 @@ export function UrlListInput({
         <div
           key={i}
           className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-[11px]"
-          style={{ backgroundColor: `${deep}88`, border: `1px solid ${border}` }}
+          style={{ backgroundColor: alpha(deep, 0.53), border: `1px solid ${border}` }}
         >
           <span className="flex-1 truncate" style={{ color: textPrimary }}>{url}</span>
           <button
@@ -74,7 +74,7 @@ export function UrlListInput({
           aria-label="Add URL"
           disabled={!input.trim()}
           className="px-2 py-1.5 rounded-lg cursor-pointer transition-opacity disabled:opacity-30"
-          style={{ backgroundColor: `${accent}11`, border: `1px solid ${border}` }}
+          style={{ backgroundColor: alpha(accent, 0.07), border: `1px solid ${border}` }}
         >
           <Plus size={12} style={{ color: accent }} />
         </button>

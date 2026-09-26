@@ -7,7 +7,7 @@ import { Loader2, Trash2, AlertTriangle } from "lucide-react";
 import { ResponsiveModal } from "@/components/shared/ResponsiveModal";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import { fileIcon, fileIconColor } from "./fileUtils";
 
 interface PurgeTrashDialogProps {
@@ -69,8 +69,8 @@ export function PurgeTrashDialog({
         <div
           className="flex items-start gap-2.5 rounded-xl px-3 py-2.5 text-xs"
           style={{
-            background: `${C.error}1F`,
-            border: `1px solid ${C.error}4D`,
+            background: alpha(C.error, 0.12),
+            border: `1px solid ${alpha(C.error, 0.3)}`,
             color: STATUS_TEXT.error,
           }}
         >
@@ -117,7 +117,7 @@ export function PurgeTrashDialog({
           onClick={() => mutation.mutate()}
           disabled={mutation.isPending || count === 0}
           className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-sm font-semibold transition-opacity cursor-pointer disabled:opacity-70 disabled:cursor-not-allowed"
-          style={{ background: C.error, color: C.textPrimary }}
+          style={{ background: C.error, color: C.onStatus }}
         >
           {mutation.isPending
             ? <Loader2 size={15} className="animate-spin" />

@@ -25,7 +25,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { RotateCcw, Trash2, X, AlertTriangle, ArchiveX } from "lucide-react";
 import { api } from "@/lib/api";
 import { colorForAgent } from "./agentColors";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -76,7 +76,7 @@ function PurgeConfirmModal({
           exit={{ opacity: 0 }}
           transition={{ duration: 0.12 }}
           className="fixed inset-0 z-[100] flex items-center justify-center px-4"
-          style={{ background: "rgba(0,0,0,0.62)", backdropFilter: "blur(4px)" }}
+          style={{ background: alpha(C.scrim, 0.62), backdropFilter: "blur(4px)" }}
           onClick={() => !isPurging && onClose()}
         >
           <motion.div
@@ -86,9 +86,9 @@ function PurgeConfirmModal({
             transition={{ type: "spring", stiffness: 300, damping: 26 }}
             className="w-full max-w-md rounded-xl flex flex-col"
             style={{
-              background: "rgba(15,15,15,0.98)",
+              background: alpha(C.bgDeep, 0.98),
               border: "1px solid var(--color-border)",
-              boxShadow: "0 24px 80px rgba(0,0,0,0.6)",
+              boxShadow: `0 24px 80px ${alpha(C.shadow, 0.6)}`,
             }}
             onClick={(e) => e.stopPropagation()}
             role="dialog"
@@ -98,8 +98,8 @@ function PurgeConfirmModal({
               <div
                 className="shrink-0 w-9 h-9 rounded-full flex items-center justify-center"
                 style={{
-                  background: `${C.error}1A`,
-                  border: `1px solid ${C.error}40`,
+                  background: alpha(C.error, 0.1),
+                  border: `1px solid ${alpha(C.error, 0.25)}`,
                 }}
               >
                 <ArchiveX size={16} style={{ color: STATUS_TEXT.error }} />
@@ -134,8 +134,8 @@ function PurgeConfirmModal({
               <div
                 className="rounded-md px-3 py-2.5 flex gap-2.5 items-start"
                 style={{
-                  background: `${C.error}0F`,
-                  border: `1px solid ${C.error}38`,
+                  background: alpha(C.error, 0.06),
+                  border: `1px solid ${alpha(C.error, 0.22)}`,
                 }}
               >
                 <AlertTriangle
@@ -150,8 +150,8 @@ function PurgeConfirmModal({
                 <div
                   className="rounded-md px-3 py-2 mt-2"
                   style={{
-                    background: `${C.error}14`,
-                    border: `1px solid ${C.error}40`,
+                    background: alpha(C.error, 0.08),
+                    border: `1px solid ${alpha(C.error, 0.25)}`,
                     fontSize: "12px",
                     color: STATUS_TEXT.error,
                   }}
@@ -188,8 +188,8 @@ function PurgeConfirmModal({
                 style={{
                   fontSize: "10.5px",
                   letterSpacing: "0.14em",
-                  background: `${C.error}24`,
-                  border: `1px solid ${C.error}73`,
+                  background: alpha(C.error, 0.14),
+                  border: `1px solid ${alpha(C.error, 0.45)}`,
                   color: STATUS_TEXT.error,
                   cursor: isPurging ? "default" : "pointer",
                 }}
@@ -265,7 +265,7 @@ function TrashRow({
         {trashedAt ? (
           <>
             <div
-              className="text-[28px] font-bold leading-none tracking-tighter tabular-nums"
+              className="text-[28px] font-bold leading-none tracking-tighter tabular-nums light:opacity-100!"
               style={{ color: "var(--color-text-secondary)", opacity: 0.65 }}
             >
               {trashedAt.day}
@@ -314,7 +314,7 @@ function TrashRow({
         className="shrink-0 w-px self-stretch"
         style={{
           background:
-            "linear-gradient(to bottom, transparent 0%, rgba(255,255,255,0.08) 18%, rgba(255,255,255,0.08) 82%, transparent 100%)",
+            `linear-gradient(to bottom, transparent 0%, ${alpha(C.overlay, 0.08)} 18%, ${alpha(C.overlay, 0.08)} 82%, transparent 100%)`,
         }}
       />
 
@@ -323,14 +323,14 @@ function TrashRow({
         <div className="flex items-center gap-2.5 mb-2">
           {item.type && (
             <span
-              className="font-mono uppercase font-semibold rounded-sm"
+              className="font-mono uppercase font-semibold rounded-sm light:opacity-100!"
               style={{
                 fontSize: "9.5px",
                 letterSpacing: "0.14em",
                 padding: "3px 7px",
-                background: `${agentColor}1A`,
+                background: alpha(agentColor, 0.1),
                 color: agentColor,
-                border: `1px solid ${agentColor}38`,
+                border: `1px solid ${alpha(agentColor, 0.22)}`,
                 lineHeight: 1,
                 opacity: 0.7,
               }}
@@ -369,7 +369,7 @@ function TrashRow({
             letterSpacing: "-0.005em",
             color: "var(--color-text-secondary)",
             textDecoration: "line-through",
-            textDecorationColor: "rgba(255,255,255,0.18)",
+            textDecorationColor: alpha(C.overlay, 0.18),
             textDecorationThickness: "1px",
           }}
         >
@@ -378,7 +378,7 @@ function TrashRow({
 
         {item.original_path && (
           <div
-            className="font-mono truncate"
+            className="font-mono truncate light:opacity-100!"
             style={{
               fontSize: "10.5px",
               color: "var(--color-text-muted)",
@@ -395,7 +395,7 @@ function TrashRow({
             {item.tags.slice(0, 5).map((tag) => (
               <span
                 key={tag}
-                className="font-mono"
+                className="font-mono light:opacity-100!"
                 style={{
                   fontSize: "10.5px",
                   color: "var(--color-text-muted)",
@@ -412,8 +412,8 @@ function TrashRow({
           <div
             className="mt-3 rounded-md px-2.5 py-1.5 inline-flex items-center gap-2"
             style={{
-              background: `${C.error}0F`,
-              border: `1px solid ${C.error}33`,
+              background: alpha(C.error, 0.06),
+              border: `1px solid ${alpha(C.error, 0.2)}`,
               fontSize: "11.5px",
               color: STATUS_TEXT.error,
             }}
@@ -438,17 +438,17 @@ function TrashRow({
           }
           className="rounded-md p-2 transition-colors"
           style={{
-            color: restorable ? C.online : "rgba(255,255,255,0.18)",
+            color: restorable ? C.online : alpha(C.overlay, 0.18),
             background: "transparent",
             border: "1px solid",
-            borderColor: restorable ? "rgba(52,211,153,0.25)" : "var(--color-border-subtle)",
+            borderColor: restorable ? alpha(C.online, 0.25) : "var(--color-border-subtle)",
             cursor: restorable && !isRestoring ? "pointer" : "default",
             opacity: isRestoring ? 0.5 : 1,
           }}
           onMouseEnter={(e) => {
             if (restorable && !isRestoring) {
               (e.currentTarget as HTMLButtonElement).style.background =
-                "rgba(52,211,153,0.08)";
+                alpha(C.online, 0.08);
             }
           }}
           onMouseLeave={(e) => {
@@ -479,9 +479,9 @@ function TrashRow({
           onMouseEnter={(e) => {
             (e.currentTarget as HTMLButtonElement).style.color = STATUS_TEXT.error;
             (e.currentTarget as HTMLButtonElement).style.background =
-              `${C.error}14`;
+              alpha(C.error, 0.08);
             (e.currentTarget as HTMLButtonElement).style.borderColor =
-              `${C.error}38`;
+              alpha(C.error, 0.22);
           }}
           onMouseLeave={(e) => {
             (e.currentTarget as HTMLButtonElement).style.color =
@@ -636,7 +636,7 @@ export function VaultTrashPage() {
               className="flex-1 h-px"
               style={{
                 background:
-                  "linear-gradient(to right, var(--color-bg-hover), rgba(255,255,255,0.02) 50%, transparent)",
+                  `linear-gradient(to right, var(--color-bg-hover), ${alpha(C.overlay, 0.02)} 50%, transparent)`,
               }}
             />
           </div>

@@ -10,9 +10,12 @@ export const newWriteCounter = () => ({ blocked: 0, passed: 0, websocketsRefused
  *  - service workers are blocked (they could bypass routing),
  *  - an independent listener counts writes that *finished* — must stay 0.
  */
-export async function createLockedContext(browser, width, token, writes, base) {
+export async function createLockedContext(browser, width, token, writes, base, extra = {}) {
   const mobile = width <= 500;
+  const theme = extra.theme || null;
   const ctx = await browser.newContext({
+    // the emulated OS preference matches a forced theme ("system" follows it)
+    ...(theme === "light" || theme === "dark" ? { colorScheme: theme } : {}),
     viewport: { width, height: mobile ? 844 : 900 },
     isMobile: mobile,
     hasTouch: mobile,
@@ -31,6 +34,7 @@ export async function createLockedContext(browser, width, token, writes, base) {
   });
   await ctx.routeWebSocket(/.*/, (ws) => {
     writes.websocketsRefused += 1;
+    if (writes.refusedSelfTest !== undefined && /__ui_probe_lock_selftest__/.test(ws.url())) writes.refusedSelfTest += 1;
     ws.close({ code: 1008, reason: "ui-probe: read-only" });
   });
   // Deliberately NOT isWriteMethod(): the second counter must not share code
@@ -49,6 +53,12 @@ export async function createLockedContext(browser, width, token, writes, base) {
     if (!base) throw new Error("createLockedContext: base URL required when a token is given");
     await ctx.addInitScript(tokenInitScript, { token, origin: new URL(base).origin });
   }
+  if (theme) {
+    if (!base) throw new Error("createLockedContext: base URL required when a theme is given");
+    // Runs before the app's own <head> script (THEME_INIT_SCRIPT), which then
+    // applies the stored choice before the first paint — the real code path.
+    await ctx.addInitScript(themeInitScript, { key: THEME_STORAGE_KEY, theme, origin: new URL(base).origin });
+  }
   return ctx;
 }
 
@@ -65,6 +75,21 @@ export function tokenInitScript(arg) {
   } catch {}
 }
 
+/** Must equal THEME_STORAGE_KEY in src/lib/themeScript.ts (a test checks it). */
+export const THEME_STORAGE_KEY = "mc_theme";
+
+/**
+ * Init script for --theme: stores the theme choice in local storage on the
+ * app's own origin before any page script runs. `_loc` / `_ls` for tests.
+ */
+export function themeInitScript(arg) {
+  try {
+    const loc = arg._loc || location;
+    if (loc.origin !== arg.origin) return;
+    (arg._ls || localStorage).setItem(arg.key, arg.theme);
+  } catch {}
+}
+
 /**
  * Self-test run before every probe: a page in a locked context POSTs to a
  * path that does not exist and opens a WebSocket. The lock must block the
@@ -73,7 +98,9 @@ export function tokenInitScript(arg) {
  * both would only hit a path that does not exist — no data.
  */
 export async function lockSelfTest(browser, base) {
-  const w = newWriteCounter();
+  // Own counter for the self-test socket: a dev server's hot-reload socket
+  // (next dev) is refused as well and must not fail the self-test.
+  const w = { ...newWriteCounter(), refusedSelfTest: 0 };
   const ctx = await createLockedContext(browser, 1024, null, w);
   try {
     const page = await ctx.newPage();
@@ -104,11 +131,11 @@ export async function lockSelfTest(browser, base) {
       base.replace(/^http/, "ws") + "/api/v1/__ui_probe_lock_selftest__/ws",
     );
     await page.waitForTimeout(300);
-    const ok = w.blocked === 1 && w.passed === 0 && outcome === "rejected" && w.websocketsRefused === 1 && wsOutcome === "closed:1008";
+    const ok = w.blocked === 1 && w.passed === 0 && outcome === "rejected" && w.refusedSelfTest === 1 && wsOutcome === "closed:1008";
     return {
       ok,
       passed: w.passed,
-      reason: ok ? "" : `blocked=${w.blocked} passed=${w.passed} fetch=${outcome} wsRefused=${w.websocketsRefused} ws=${wsOutcome}`,
+      reason: ok ? "" : `blocked=${w.blocked} passed=${w.passed} fetch=${outcome} wsRefused=${w.refusedSelfTest}/${w.websocketsRefused} ws=${wsOutcome}`,
     };
   } finally {
     await ctx.close();

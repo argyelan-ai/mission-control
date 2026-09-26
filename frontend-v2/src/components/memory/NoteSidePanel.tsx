@@ -34,7 +34,7 @@ import { useVaultNote } from "@/hooks/useVaultNote";
 import { VaultMarkdown } from "@/components/vault/VaultMarkdown";
 import { colorForAgent } from "@/components/vault/agentColors";
 import { ConfirmDeleteModal } from "@/components/vault/ConfirmDeleteModal";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 
 // ── Phase E "Verwandt"-Sektion ────────────────────────────────────────────────
 
@@ -85,7 +85,7 @@ function RelatedNotesMini({
             <button
               type="button"
               onClick={() => onSelect(n.path)}
-              className="w-full text-left flex items-center gap-1.5 rounded-sm px-1 py-0.5 transition-colors hover:bg-white/[0.05]"
+              className="w-full text-left flex items-center gap-1.5 rounded-sm px-1 py-0.5 transition-colors hover:bg-[var(--color-overlay)]/[0.05]"
               style={{ fontSize: "11px" }}
             >
               <span
@@ -370,8 +370,8 @@ export function NoteSidePanel({
                       className="rounded-sm p-1 transition-colors max-sm:min-h-11 max-sm:min-w-11 max-sm:flex max-sm:items-center max-sm:justify-center"
                       style={{
                         color: C.online,
-                        background: "rgba(52,211,153,0.10)",
-                        border: "1px solid rgba(52,211,153,0.30)",
+                        background: alpha(C.online, 0.1),
+                        border: `1px solid ${alpha(C.online, 0.3)}`,
                         cursor: saveMutation.isPending ? "default" : "pointer",
                       }}
                       aria-label="Save edit"
@@ -434,7 +434,7 @@ export function NoteSidePanel({
                       onMouseEnter={(e) => {
                         (e.currentTarget as HTMLButtonElement).style.color = STATUS_TEXT.error;
                         (e.currentTarget as HTMLButtonElement).style.background =
-                          "rgba(239,68,68,0.08)";
+                          alpha(C.error, 0.08);
                       }}
                       onMouseLeave={(e) => {
                         (e.currentTarget as HTMLButtonElement).style.color =
@@ -595,8 +595,8 @@ export function NoteSidePanel({
               <div
                 className="mt-2 rounded-md px-2 py-1.5 flex items-center gap-1.5"
                 style={{
-                  background: "rgba(239,68,68,0.08)",
-                  border: "1px solid rgba(239,68,68,0.25)",
+                  background: alpha(C.error, 0.08),
+                  border: `1px solid ${alpha(C.error, 0.25)}`,
                   fontSize: "11px",
                   color: STATUS_TEXT.error,
                 }}
