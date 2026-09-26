@@ -5,9 +5,10 @@ import { cssText, blockVars } from "./cssTokens";
 
 /**
  * Guard (ADR-087): text on a SOLID status fill (danger buttons, "end call")
- * must use `C.onStatus`, never `C.textPrimary`. In dark both are the same
- * light tone; in light text-primary is ink — ink on a dark red is 2.2:1
- * (found by the UI probe's contrast check on the bench "remove" button).
+ * must use `C.onStatus`, never `C.textPrimary`. The status hues are light in
+ * dark (AA as text) and deep in light, so text on them is dark in dark and
+ * white in light — text-primary would be light-on-light in dark (2.1:1) and
+ * ink on a dark red in light (2.2:1, the UI probe's bench "remove" button).
  */
 
 const SRC = path.resolve(__dirname, "../..");
@@ -59,11 +60,11 @@ describe("text on solid status fills", () => {
     expect(RE_ACCENT.test("style={{ background: C.accentSubtle, color: C.textPrimary }}")).toBe(false);
   });
 
-  it("on-status equals text-primary in dark and is white in light", () => {
+  it("on-status is a dark tone in dark and white in light (ratios: theme.contrast.test)", () => {
     const css = cssText();
     const dark = blockVars(":root", css);
     const light = blockVars(':root[data-theme="light"]', css);
-    expect(dark.get("--color-on-status")).toBe("var(--color-text-primary)");
+    expect(dark.get("--color-on-status")?.toLowerCase()).toBe("#161616");
     expect(light.get("--color-on-status")?.toLowerCase()).toBe("#ffffff");
   });
 });
