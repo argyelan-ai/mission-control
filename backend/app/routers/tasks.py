@@ -633,12 +633,24 @@ async def _leave_unassigned_for_operator(session: AsyncSession, task: Task) -> b
     i.e. the board lead (repo workspace prepared, card queued for it). In
     quiet mode new work goes to a short-lived head instead, so a card created
     without an agent stays unassigned in the inbox. Explicitly assigned cards
-    are never held back; settings.lead_auto_assign_new_tasks=True restores the
-    old lead-first path. The dispatch core itself is unchanged.
+    are never held back. settings.lead_auto_assign_effective() decides: an
+    explicit LEAD_AUTO_ASSIGN_NEW_TASKS wins, unset follows heads_enabled (no
+    heads → nothing would pick the card up → old lead-first path). The
+    dispatch core itself is unchanged. The feed event is written once per card
+    (the UI retries POST .../dispatch on upload errors).
     """
     from app.config import settings as _settings
-    if task.assigned_agent_id is not None or _settings.lead_auto_assign_new_tasks:
+    from app.models.activity import ActivityEvent
+    if task.assigned_agent_id is not None or _settings.lead_auto_assign_effective():
         return False
+    already = (await session.exec(
+        select(ActivityEvent.id).where(
+            ActivityEvent.task_id == task.id,
+            ActivityEvent.event_type == "task.left_unassigned",
+        ).limit(1)
+    )).first()
+    if already is not None:
+        return True
     await emit_event(
         session,
         "task.left_unassigned",
