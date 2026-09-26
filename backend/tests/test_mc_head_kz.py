@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
+import os
 import subprocess
 import sys
 import time
@@ -147,11 +148,17 @@ def test_kz_config_error_never_stops_the_head(env):
     assert "unknown key" in (run / "job.md").read_text()
 
 
-def test_hanging_kz_is_cut_off(env):
-    kz = fake_kz(env["tmp"], "sleep 30")
+def test_hanging_kz_is_cut_off_with_its_children(env):
+    pidfile = env["tmp"] / "kz-child.pid"
+    kz = fake_kz(env["tmp"], f"sleep 30 & echo $! > '{pidfile}'; wait")
     run_id, run = _start(env, str(kz), MC_HEAD_KZ_TIMEOUT_S="1")
     _assert_unavailable(env, run_id, run, "timed out")
     assert float((run / ".elapsed").read_text()) < 20
+    # what kz started (git grep …) goes too, not only kz itself
+    child = int(pidfile.read_text())
+    time.sleep(0.5)
+    with pytest.raises(ProcessLookupError):
+        os.kill(child, 0)
 
 
 # ── pre-push: kz check --fast ────────────────────────────────────────────

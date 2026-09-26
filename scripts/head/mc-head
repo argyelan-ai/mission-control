@@ -995,15 +995,24 @@ def run_kz_brief(spec: dict, run: Path, wt: Path) -> tuple:
     argv = [*sandbox_prefix(spec, run), kz, "-C", str(wt), "brief", "--paths", *kz_scope_paths(job, wt),
             f"--text={job}"]
     try:
-        res = subprocess.run(argv, cwd=str(wt), env=env, capture_output=True, text=True, timeout=KZ_TIMEOUT_S)
-    except subprocess.TimeoutExpired:
-        return None, f"timed out after {KZ_TIMEOUT_S:g} s"
+        proc = subprocess.Popen(argv, cwd=str(wt), env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True, start_new_session=True)
     except OSError as exc:
         return None, f"could not run ({exc.__class__.__name__})"
-    if res.returncode != 0:
-        err = (res.stderr.strip().splitlines() or [""])[-1][:200]
-        return None, f"exit {res.returncode}" + (f": {err}" if err else "")
-    lines = res.stdout.rstrip().splitlines()
+    try:
+        out, err = proc.communicate(timeout=KZ_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        # kz and whatever it started (git grep …): the whole group goes.
+        kill_group(proc.pid, 0, proc)
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        return None, f"timed out after {KZ_TIMEOUT_S:g} s"
+    if proc.returncode != 0:
+        last = (err.strip().splitlines() or [""])[-1][:200]
+        return None, f"exit {proc.returncode}" + (f": {last}" if last else "")
+    lines = out.rstrip().splitlines()
     return (lines[:KZ_BRIEF_MAX_LINES] or ["(empty)"]), None
 
 
