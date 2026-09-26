@@ -57,6 +57,8 @@ def run_head(mc_home: Path, *args: str, env_extra: dict | None = None, timeout: 
         "MC_HEAD_HEARTBEAT_S": "1",
         "MC_HEAD_KILL_GRACE_S": "2",
         "MC_HEAD_GH": "/nonexistent/gh",
+        # hermetic: never the host's real kz (test_mc_head_kz.py passes a fake one)
+        "MC_HEAD_KZ_BIN": "/nonexistent/kz",
     }
     if env_extra:
         env.update(env_extra)
