@@ -2,23 +2,31 @@
 
 /**
  * TaskDetailBody — shared content of the task detail (wave 3a "task detail
- * lite", 09/2026). One body for three chromes: the /tasks split (~800 px),
- * the Home modal (~672 px) and the phone (390 px) — the layout follows the
- * width of the CONTAINER (CSS container queries), not the window.
+ * lite", 09/2026; header rebuilt as variant A, DESIGN.md K12). One body for
+ * three chromes: the /tasks split (~800 px), the Home modal (~672 px) and the
+ * phone (390 px) — the layout follows the width of the CONTAINER (CSS
+ * container queries), not the window.
  *
- *   Header      TASK · id · project   [⋯] [×]   + title (max 2 lines)
- *   State card  NEEDS YOU (embedded ApprovalCard) / RUNNING / RESULT /
- *               FAILED — deriveStateCard() decides, none for inbox/review
- *   Facts       STATUS (dropdown) · AGENT · TIME · PR · PLAN · COST
- *   Actions     run control + review (TaskActions), only when relevant
- *   Tabs        Summary · Comments · Deliverables · (Workspace) ·
- *               (Transcript) · Timeline · History
+ *   Context bar  ‹ Tasks (phone)  [● title once the title scrolled away]  ⋯  ×
+ *   Title        max 3 lines
+ *   State line   ● Blocked · Rex asked 42 min ago — deriveStateLine()
+ *   Next step    only when there is one: NEEDS YOU (embedded ApprovalCard or
+ *                blocker + Reply) / RUNNING (last step) / RESULT (resolution +
+ *                PR) / FAILED (error + Open log) / head — deriveStateCard()
+ *   Actions      run control + review (TaskActions), only when relevant
+ *   Tabs         Summary · Comments · Deliverables · (Workspace) ·
+ *                (Transcript) · Timeline · History — sticky, sentence case
  *
- * Summary (run record JSON) is the default tab, Comments while running. The
- * tab can be controlled from the URL (`tab` / `onTabChange`). The thread is
- * not a tab any more — it is a channel across cards, opened from the ⋯ menu.
- * The E2E tab is gone. A status change the backend refuses (409
+ * Properties (status menu, assignee, project, priority, cost, run tonight,
+ * id …) are a calm list in the Summary tab, a right column from 720 px
+ * container width. Summary (run record JSON) is the default tab, Comments
+ * while running. The tab can be controlled from the URL (`tab` /
+ * `onTabChange`). The thread is not a tab — it is a channel across cards,
+ * opened from the ⋯ menu. A status change the backend refuses (409
  * invalid_transition) is shown as one sentence; Done/Aborted ask first.
+ *
+ * The chrome sets `--detail-bg` (its own background, for the sticky tabs) and
+ * `--detail-raised` (the "you have to act" surface one step above it).
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -27,7 +35,7 @@ import { useLocale, useTranslations } from "next-intl";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import {
-  ArrowLeft, Check, ChevronDown, ClipboardCopy, Link2, MessagesSquare, MoreHorizontal, Save, Trash2, X,
+  ArrowLeft, Check, ChevronDown, ChevronLeft, CircleDot, ClipboardCopy, Copy, ExternalLink, Link2, MessagesSquare, MoreHorizontal, Save, Trash2, X,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
@@ -45,17 +53,18 @@ import { WorkspaceTab } from "./WorkspaceTab";
 import { ThreadPanel } from "./ThreadPanel";
 import { GitPanel, gitSectionInfo } from "./GitPanel";
 import { TaskReferences } from "./TaskReferences";
-import { TaskStateCard } from "./detail/TaskStateCard";
-import { TaskFactRow } from "./detail/TaskFactRow";
+import { TaskStateCard, TaskStateLine, stateDotColor } from "./detail/TaskStateCard";
+import { PropRow, TaskProperties } from "./detail/TaskProperties";
 import { TaskSummaryTab } from "./detail/TaskSummaryTab";
 import { deriveStateCard } from "@/lib/taskDetail/stateCard";
+import { deriveStateLine } from "@/lib/taskDetail/stateLine";
 import { HeadRunsList } from "@/components/heads/HeadRunsList";
 import { useHeadPairsForLabels } from "@/components/heads/HeadStateCard";
 import { useHeadsEnabled } from "@/components/heads/useHeadsEnabled";
 import { NightShiftToggle } from "@/components/night/NightShiftToggle";
 import { canMarkTonight } from "@/lib/nightShift";
 import { HEAD_POLL_MS, headRunsActive, isHeadActive, runPairLabel, sortRunsNewestFirst } from "@/lib/heads";
-import { formatAbsolute, formatAge } from "@/lib/taskDetail/format";
+import { formatAbsolute, formatAge, formatDuration, formatUsd, secondsBetween } from "@/lib/taskDetail/format";
 import { parseInvalidTransition } from "@/lib/taskDetail/errors";
 import { STATUS_LABEL_KEY, statusLabelKey } from "@/lib/taskDetail/statusLabels";
 import { defaultTabFor, resolveTab, type TaskTabKey } from "@/lib/taskDetail/tabs";
@@ -193,16 +202,34 @@ function StatusMenu({
   status,
   onChange,
   pending,
+  openRequest = 0,
+  onOpenHandled,
 }: {
   status: TaskStatus;
   onChange: (s: TaskStatus) => void;
   pending: boolean;
+  /** Bumped by ⋯ "Change status": scroll the row into view and open the menu. */
+  openRequest?: number;
+  onOpenHandled?: () => void;
 }) {
   const t = useTranslations("tasks");
   const color = LANE[status] ?? C.textMuted;
   // Portaled with fixed positioning + viewport clamp (see usePortalMenu) so
   // the menu can never run off the right edge on narrow (393px) viewports.
   const { open, setOpen, toggle, pos, triggerRef, menuRef } = usePortalMenu({ width: 150 });
+
+  useEffect(() => {
+    if (!openRequest) return;
+    triggerRef.current?.scrollIntoView?.({ block: "center" });
+    // Measure after the scroll has landed; the menu is fixed-positioned.
+    const id = window.requestAnimationFrame(() => {
+      if (!open) toggle();
+      triggerRef.current?.querySelector("button")?.focus();
+      onOpenHandled?.();
+    });
+    return () => window.cancelAnimationFrame(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only on a new request
+  }, [openRequest]);
 
   return (
     <div className="relative" ref={triggerRef}>
@@ -213,12 +240,12 @@ function StatusMenu({
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={t("statusChange", { label: t(STATUS_LABEL_KEY[status]) })}
-        className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 pointer-coarse:min-h-[44px] pointer-coarse:px-3 text-[11px] font-medium cursor-pointer transition-opacity hover:opacity-85"
-        style={{ background: alpha(color, 0.12), border: `1px solid ${alpha(color, 0.33)}`, color }}
+        className="inline-flex items-center gap-2 h-11 -ml-2 px-2 rounded-md text-sm cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
+        style={{ color: C.textPrimary }}
       >
-        <span className="w-1.5 h-1.5 rounded-full" style={{ background: color }} />
+        <span aria-hidden className="w-2 h-2 rounded-full" style={{ background: color }} />
         {t(STATUS_LABEL_KEY[status])}
-        <ChevronDown size={10} style={{ color: C.textDim }} />
+        <ChevronDown size={16} aria-hidden style={{ color: C.textMuted }} />
       </button>
       {open && pos && createPortal(
         <AnimatePresence>
@@ -277,7 +304,8 @@ function StatusMenu({
 
 // ── ⋯ menu ───────────────────────────────────────────────────────────────────
 //
-// Copy link · Copy as Markdown · Save to Vault · Open thread · ──── · Delete.
+// Change status · Copy link · Copy as Markdown · Save to Vault · Open thread ·
+// ──── · Delete.
 // Delete sits last, behind a divider, and asks first (two-step).
 
 type MenuItem = {
@@ -321,10 +349,10 @@ function OverflowMenu({
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={t("moreActions")}
-        className="w-[30px] h-[30px] pointer-coarse:w-11 pointer-coarse:h-11 rounded-md flex items-center justify-center transition-colors hover:bg-[var(--color-bg-hover)] cursor-pointer"
-        style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
+        className="w-11 h-11 rounded-md flex items-center justify-center transition-colors hover:bg-[var(--color-bg-hover)] cursor-pointer"
+        style={{ color: C.textSecondary }}
       >
-        <MoreHorizontal size={14} />
+        <MoreHorizontal size={20} />
       </button>
       {open && pos && createPortal(
         <AnimatePresence>
@@ -419,43 +447,39 @@ function OverflowMenu({
   );
 }
 
-// ── Property cell dropdowns (assignee / project) ─────────────────────────────
+// ── Property dropdowns (assignee / project) ──────────────────────────────────
 
-function PropertyMenuCell({
+function PropertyMenu({
   label,
   value,
   options,
   onSelect,
 }: {
+  /** The row's label — names the control for screen readers. */
   label: string;
   value: string;
   options: { id: string | null; label: string; active: boolean }[];
   onSelect: (id: string | null) => void;
 }) {
-  // The properties grid clips its children (overflow-hidden for the rounded
-  // corners) and sits inside a scroll container — an absolute dropdown gets
-  // cut off after ~2 entries. Render the menu through a portal with fixed
-  // positioning measured off the trigger instead; usePortalMenu also clamps
-  // the horizontal position so the menu stays inside the viewport.
+  // Rendered through a portal with fixed positioning measured off the
+  // trigger: the list sits inside a scroll container that would cut an
+  // absolute dropdown off; usePortalMenu also clamps it into the viewport.
   const MENU_MAX = 240;
-  const { open, setOpen, toggle, pos, triggerRef, menuRef } = usePortalMenu({ width: "trigger", flipMax: MENU_MAX });
+  const { open, setOpen, toggle, pos, triggerRef, menuRef } = usePortalMenu({ width: 220, flipMax: MENU_MAX });
 
   return (
-    <div className="relative" style={{ background: C.bgSurface }} ref={triggerRef}>
+    <div className="relative flex-1 min-w-0" ref={triggerRef}>
       <button
         type="button"
         onClick={toggle}
         aria-haspopup="listbox"
         aria-expanded={open}
-        className="w-full text-left px-2.5 py-2 cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
+        aria-label={`${label}: ${value}`}
+        className="inline-flex max-w-full items-center gap-2 h-11 -ml-2 px-2 rounded-md text-sm text-left cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
+        style={{ color: C.textPrimary }}
       >
-        <span className="block text-[9px] font-semibold uppercase tracking-[0.07em] mb-0.5" style={{ color: C.textDim }}>
-          {label}
-        </span>
-        <span className="flex items-center gap-1 text-xs truncate" style={{ color: C.textPrimary }}>
-          <span className="truncate">{value}</span>
-          <ChevronDown size={9} className="ml-auto shrink-0" style={{ color: C.textDim }} />
-        </span>
+        <span className="truncate">{value}</span>
+        <ChevronDown size={16} aria-hidden className="shrink-0" style={{ color: C.textMuted }} />
       </button>
       {open && pos && createPortal(
         <AnimatePresence>
@@ -471,7 +495,7 @@ function PropertyMenuCell({
               position: "fixed",
               ...(pos.up ? { bottom: pos.bottom } : { top: pos.top }),
               left: pos.left,
-              width: pos.width,
+              width: 220,
               maxHeight: MENU_MAX,
               zIndex: 70,
               background: C.bgBase,
@@ -488,7 +512,7 @@ function PropertyMenuCell({
                   setOpen(false);
                   if (!o.active) onSelect(o.id);
                 }}
-                className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left text-xs transition-colors cursor-pointer"
+                className="w-full flex items-center gap-2 px-3 py-2 pointer-coarse:min-h-[44px] text-left text-sm transition-colors cursor-pointer"
                 style={{
                   color: o.active ? C.accent : C.textSecondary,
                   background: o.active ? C.accentSubtle : "transparent",
@@ -523,6 +547,8 @@ export function TaskDetailBody({
   onTabChange,
   onOpenTask,
   hideCloseOnMobile = false,
+  onBack,
+  backLabel,
 }: {
   task: Task;
   agents: Agent[];
@@ -534,13 +560,30 @@ export function TaskDetailBody({
   onTabChange?: (tab: TaskTabKey) => void;
   /** Open another task in place (subtask links); without it links navigate. */
   onOpenTask?: (taskId: string) => void;
-  /** The /tasks page has its own "‹ Tasks" bar on the phone — no second ×. */
+  /** Phone: the /tasks page shows "‹ Tasks" in the context bar instead of ×. */
   hideCloseOnMobile?: boolean;
+  /** Phone back link in the context bar ("‹ Tasks"), shown below md. */
+  onBack?: () => void;
+  backLabel?: string;
 }) {
   const t = useTranslations("tasks");
+  const tHeads = useTranslations("heads");
   const locale = useLocale();
   const qc = useQueryClient();
   const bodyRef = useRef<HTMLDivElement>(null);
+  const titleRef = useRef<HTMLHeadingElement>(null);
+
+  // The context bar shows "● title" once the real title has scrolled out of
+  // view (DESIGN.md K12: the bar replaces, it never adds a third bar).
+  const [scrolled, setScrolled] = useState(false);
+  useEffect(() => {
+    const el = titleRef.current;
+    const root = bodyRef.current;
+    if (!el || !root || typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver(([e]) => setScrolled(!e.isIntersecting), { root, threshold: 0 });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [task.id]);
 
   // Uncontrolled fallback: default tab per status, reset when another task
   // opens in the same body (render-time reset, no flash of the old tab).
@@ -559,6 +602,8 @@ export function TaskDetailBody({
   // Bumped by "Reply" — TaskComments focuses its input on every change, also
   // when Comments is already the open tab.
   const [focusCommentSignal, setFocusCommentSignal] = useState(0);
+  // Bumped by ⋯ "Change status" — the status row lives in the Summary tab.
+  const [statusMenuRequest, setStatusMenuRequest] = useState(0);
 
   const statusWord = (s: string) => {
     const key = statusLabelKey(s);
@@ -753,6 +798,7 @@ export function TaskDetailBody({
   // ── Derived ────────────────────────────────────────────────────────────────
 
   const stateCard = deriveStateCard({ task, approvals, comments, runRecord: runRecord ?? null, headRun: latestHeadRun });
+  const stateLine = deriveStateLine({ task, card: stateCard, agents, locale });
 
   const briefingFields: { label: string; value: string | null | undefined }[] = task.intake_mode
     ? [
@@ -839,6 +885,15 @@ export function TaskDetailBody({
 
   const menuItems: MenuItem[] = [
     {
+      key: "status",
+      label: t("detail.changeStatus"),
+      icon: CircleDot,
+      onSelect: () => {
+        selectTab("summary");
+        setStatusMenuRequest((n) => n + 1);
+      },
+    },
+    {
       key: "copy-link",
       label: t("detail.copyLink"),
       icon: Link2,
@@ -869,54 +924,200 @@ export function TaskDetailBody({
 
   const confirm = confirmStatus ? CONFIRM_STATUS[confirmStatus] : undefined;
 
+  // ── Properties (Summary tab) ───────────────────────────────────────────────
+  // Every fact once (K3): what the state line or the next step already says
+  // (agent + time, PR, duration of a result) is not repeated here, and empty
+  // values ("—", "not tracked") are left out.
+
+  // The PR shows in the header when the header is about it: a result, a card
+  // in review, or a head that opened one. Otherwise it is a property.
+  const reviewPr = !headOwnsRun && task.status === "review" && !!task.pr_url;
+  const prInHeader =
+    reviewPr ||
+    (stateCard?.kind === "result" && !!stateCard.prUrl) ||
+    (stateCard?.kind === "head" && stateCard.mainAction === "open_pr");
+  const kosten = runRecord?.kosten;
+  const billed = kosten && kosten.gesamt_usd > 0 ? formatUsd(kosten.gesamt_usd) : null;
+  const showPriority = task.priority === "high" || task.priority === "critical";
+  const failedDuration =
+    stateCard?.kind === "failed"
+      ? formatDuration(runRecord?.zeiten.dauer_sekunden ?? secondsBetween(task.created_at, task.completed_at), locale)
+      : null;
+  const heartbeat = stateCard?.kind === "running" ? formatAge(stateCard.heartbeatAt, locale) : null;
+  const showNight =
+    headsEnabled === true && !!task.repo_id && !FINISHED_STATUSES.has(task.status) && !isHeadActive(latestHeadRun);
+
+  const properties = (
+    <TaskProperties title={t("properties")}>
+      <PropRow label={t("detail.factStatus")} testId="fact-status">
+        <StatusMenu
+          status={task.status}
+          pending={updateMutation.isPending}
+          onChange={requestStatus}
+          openRequest={statusMenuRequest}
+          onOpenHandled={() => setStatusMenuRequest(0)}
+        />
+      </PropRow>
+      <PropRow label={t("detail.factAgent")} testId="fact-agent">
+        <PropertyMenu
+          label={t("detail.factAgent")}
+          value={agent ? agent.name : t("unassigned")}
+          options={agents.map((a) => ({ id: a.id, label: a.name, active: a.id === task.assigned_agent_id }))}
+          onSelect={(id) => id && updateMutation.mutate({ assigned_agent_id: id } as Partial<Task>)}
+        />
+      </PropRow>
+      <PropRow label={t("projectFallback")} testId="fact-project">
+        <PropertyMenu
+          label={t("projectFallback")}
+          value={projectName}
+          options={[
+            { id: null, label: t("adHocNoProject"), active: !task.project_id },
+            ...projects.map((p) => ({ id: p.id, label: p.name, active: p.id === task.project_id })),
+          ]}
+          onSelect={(id) => updateMutation.mutate({ project_id: id } as Partial<Task>)}
+        />
+      </PropRow>
+      {showPriority && (
+        <PropRow label={t("detail.factPriority")} testId="fact-priority">
+          {task.priority === "critical" ? t("priorityCritical") : t("priorityHigh")}
+        </PropRow>
+      )}
+      {task.pr_url && !prInHeader && (
+        <PropRow label={t("detail.factPr")} testId="fact-pr">
+          <a
+            href={task.pr_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 underline underline-offset-4"
+            style={{ textDecorationColor: C.borderActive }}
+          >
+            {task.pr_number ? t("prChipNumber", { number: task.pr_number }) : t("prChipOpen")}
+            <ExternalLink size={14} aria-hidden />
+          </a>
+        </PropRow>
+      )}
+      {latestHeadRun && (
+        <PropRow label={tHeads("runs.fact")} testId="fact-head">
+          <span className="truncate">{runPairLabel(latestHeadRun, headPairs)}</span>
+        </PropRow>
+      )}
+      {stateCard?.kind === "running" && (
+        <PropRow label={t("detail.factHeartbeat")} testId="fact-heartbeat">
+          {heartbeat ? t("detail.ago", { age: heartbeat }) : t("detail.noHeartbeat")}
+        </PropRow>
+      )}
+      {failedDuration && (
+        <PropRow label={t("detail.factDuration")} testId="fact-time">
+          <span className="tabular-nums">{failedDuration}</span>
+        </PropRow>
+      )}
+      {billed && (
+        <PropRow label={t("detail.factCost")} testId="fact-cost">
+          <span className="tabular-nums">{billed}</span>
+        </PropRow>
+      )}
+      {creatorName && (
+        <PropRow label={t("createdBy")} testId="fact-creator">
+          <span className="truncate">{creatorName}</span>
+        </PropRow>
+      )}
+      {task.started_at && (
+        <PropRow label={t("started")} testId="fact-started">
+          <span title={formatAbsolute(task.started_at, locale)}>{t("detail.ago", { age: formatAge(task.started_at, locale) ?? "—" })}</span>
+        </PropRow>
+      )}
+      {/* Night shift: "Run tonight" — only for cards a head can take (repo,
+          not finished), while no head is working on it right now, and only
+          markable while nobody else works on the card. */}
+      {showNight && <NightShiftToggle taskId={task.id} canMark={canMarkTonight(task)} variant="row" />}
+      <PropRow label={t("detail.factId")} testId="fact-id">
+        <span className="font-mono text-sm tabular-nums" title={task.id}>{task.id.slice(0, 8)}</span>
+        <button
+          type="button"
+          aria-label={t("detail.copyId")}
+          onClick={() => copyText(task.id, t("detail.idCopied"))}
+          className="ml-auto w-11 h-11 rounded-md flex items-center justify-center cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
+          style={{ color: C.textSecondary }}
+        >
+          <Copy size={16} aria-hidden />
+        </button>
+      </PropRow>
+    </TaskProperties>
+  );
+
+  const commentCount = comments.length;
+
   return (
     <>
-      {/* ── Header ── */}
-      <div className="px-4 pt-4 pb-3 shrink-0" style={{ borderBottom: `1px solid ${C.border}` }}>
-        <div className="flex items-start gap-3">
-          <div className="flex-1 min-w-0">
-            <div className="label-sys label-sys--dim mb-1.5 truncate">
-              {t("taskLabel")} · {task.id.slice(0, 8)} · {projectName}
-            </div>
-            <h2
-              className="text-[18px] font-semibold leading-snug line-clamp-2"
-              style={{ color: C.textPrimary }}
-              title={task.title}
-            >
-              {task.title}
-            </h2>
-          </div>
-          <div className="flex items-center gap-1.5 shrink-0">
-            <OverflowMenu
-              items={menuItems}
-              isActive={isActive}
-              onDelete={() => deleteMutation.mutate()}
-              deleteLoading={deleteMutation.isPending}
-            />
-            <button
-              onClick={onClose}
-              aria-label={t("closeTaskDetails")}
-              className={`${hideCloseOnMobile ? "hidden md:flex" : "flex"} w-[30px] h-[30px] pointer-coarse:w-11 pointer-coarse:h-11 rounded-md items-center justify-center transition-colors hover:bg-[var(--color-bg-hover)] cursor-pointer`}
-              style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
-            >
-              <X size={15} />
-            </button>
-          </div>
+      {/* ── Context bar — stays put while the body scrolls ── */}
+      <div
+        data-region="task-context"
+        data-scrolled={scrolled || undefined}
+        className="shrink-0 h-14 flex items-center gap-1 px-2 transition-colors motion-reduce:transition-none"
+        style={{ borderBottom: `1px solid ${scrolled ? C.border : "transparent"}` }}
+      >
+        {onBack && (
+          <button
+            type="button"
+            onClick={onBack}
+            aria-label={backLabel}
+            className="md:hidden shrink-0 flex items-center gap-1 h-11 pl-1 pr-3 rounded-md text-base cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
+            style={{ color: C.textSecondary }}
+          >
+            <ChevronLeft size={22} aria-hidden />
+            {!scrolled && <span>{backLabel}</span>}
+          </button>
+        )}
+        <div
+          aria-hidden={!scrolled}
+          data-testid="task-compact-title"
+          className="flex-1 min-w-0 flex items-center gap-2 px-2 transition-[opacity,transform] duration-200 motion-reduce:transition-none"
+          style={{ opacity: scrolled ? 1 : 0, transform: scrolled ? "none" : "translateY(4px)", pointerEvents: "none" }}
+        >
+          {/* Mounted only while shown: the real title is the one copy otherwise. */}
+          {scrolled && (
+            <>
+              <span className="w-2 h-2 rounded-full shrink-0" style={{ background: stateDotColor(stateLine.tone) }} />
+              <span className="truncate text-sm" style={{ color: C.textPrimary, fontWeight: 500 }}>{task.title}</span>
+            </>
+          )}
         </div>
+        <OverflowMenu
+          items={menuItems}
+          isActive={isActive}
+          onDelete={() => deleteMutation.mutate()}
+          deleteLoading={deleteMutation.isPending}
+        />
+        <button
+          onClick={onClose}
+          aria-label={t("closeTaskDetails")}
+          className={`${hideCloseOnMobile ? "hidden md:flex" : "flex"} w-11 h-11 rounded-md items-center justify-center transition-colors hover:bg-[var(--color-bg-hover)] cursor-pointer`}
+          style={{ color: C.textSecondary }}
+        >
+          <X size={20} />
+        </button>
       </div>
 
-      {/* ── Scrollable body — the @container the facts row and tabs measure ── */}
+      {/* ── Scrollable body — the @container the header, tabs and summary measure ── */}
       <div
         ref={bodyRef}
         className="@container flex-1 overflow-y-auto"
         style={{ overscrollBehavior: "contain", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
       >
-        <div className="px-4 pt-3 pb-3 space-y-3">
+        <div data-region="task-head" className="px-4 @min-[560px]:px-6 pt-2 pb-6">
+          <h2
+            ref={titleRef}
+            className="text-xl leading-snug line-clamp-3"
+            style={{ color: C.textPrimary, fontWeight: 600 }}
+            title={task.title}
+          >
+            {task.title}
+          </h2>
+          <TaskStateLine line={stateLine} />
           {stateCard && (
             <TaskStateCard
               card={stateCard}
               task={task}
-              agents={agents}
               onReply={() => {
                 selectTab("comments");
                 setFocusCommentSignal((n) => n + 1);
@@ -924,53 +1125,36 @@ export function TaskDetailBody({
               onOpenLog={() => selectTab("timeline")}
             />
           )}
-          <TaskFactRow
-            task={task}
-            agent={agent}
-            runRecord={runRecord}
-            headFact={latestHeadRun ? runPairLabel(latestHeadRun, headPairs) : null}
-            checklist={{ done: checklistDone, total: checklist.length }}
-            statusControl={
-              <StatusMenu status={task.status} pending={updateMutation.isPending} onChange={requestStatus} />
-            }
-          />
-          {/* Night shift: "Run tonight" — only for cards a head can take (repo,
-              not finished), while no head is working on it right now, and
-              only markable while nobody else works on the card. */}
-          {headsEnabled === true && task.repo_id && !FINISHED_STATUSES.has(task.status) && !isHeadActive(latestHeadRun) && (
-            <NightShiftToggle taskId={task.id} canMark={canMarkTonight(task)} />
+          {reviewPr && (
+            <a
+              href={task.pr_url!}
+              target="_blank"
+              rel="noopener noreferrer"
+              data-testid="task-review-pr"
+              className="mt-2 inline-flex items-center gap-1 min-h-11 text-sm underline underline-offset-4 cursor-pointer"
+              style={{ color: C.textPrimary, textDecorationColor: C.borderActive }}
+            >
+              {task.pr_number ? t("prChipNumber", { number: task.pr_number }) : t("prChipOpen")}
+              <ExternalLink size={14} aria-hidden />
+            </a>
+          )}
+          {showActions && (
+            <div className="mt-4">
+              <TaskActions task={task} boardId={boardId} />
+            </div>
           )}
         </div>
 
-        {showActions && (
-          <Section>
-            <TaskActions task={task} boardId={boardId} />
-          </Section>
-        )}
-
-        {/* Tabs — strip from 560 px container width, a select below it */}
-        <div className="px-4 pt-1 @min-[560px]:hidden">
-          <label className="sr-only" htmlFor={`task-tab-select-${task.id}`}>{t("detail.sectionSelect")}</label>
-          <select
-            id={`task-tab-select-${task.id}`}
-            value={activeTab}
-            onChange={(e) => selectTab(e.target.value as TaskTabKey)}
-            className="w-full min-h-[44px] px-3 rounded-md text-base font-mono uppercase tracking-[0.08em]"
-            style={{ background: C.bgDeep, color: C.textPrimary, border: `1px solid ${C.border}` }}
-          >
-            {tabs.map((x) => (
-              <option key={x.key} value={x.key}>{x.label}</option>
-            ))}
-            {activeTab === "thread" && <option value="thread">{t("detail.thread")}</option>}
-          </select>
-        </div>
+        {/* Tabs — one strip at every width, sticky under the context bar */}
         <div
-          className="hidden @min-[560px]:flex gap-0.5 px-4 tab-strip"
-          style={{ borderBottom: `1px solid ${C.border}` }}
+          className="sticky top-0 z-10 flex gap-1 px-2 scroll-px-2 @min-[560px]:px-4 @min-[560px]:scroll-px-4 tab-strip"
+          style={{ background: "var(--detail-bg, var(--color-bg-surface))", borderBottom: `1px solid ${C.border}` }}
           role="tablist"
+          aria-label={t("detail.sectionSelect")}
         >
           {tabs.map((x) => {
             const active = activeTab === x.key;
+            const count = x.key === "comments" && commentCount > 0 ? commentCount : null;
             return (
               <button
                 key={x.key}
@@ -982,21 +1166,24 @@ export function TaskDetailBody({
                 tabIndex={active ? 0 : -1}
                 onKeyDown={onTabKeyDown}
                 onClick={() => selectTab(x.key)}
-                className="px-2.5 py-2 font-mono text-[10px] uppercase tracking-[0.12em] cursor-pointer transition-colors -mb-px"
+                className="shrink-0 h-11 px-2 text-sm whitespace-nowrap cursor-pointer transition-colors -mb-px"
                 style={{
-                  color: active ? C.accent : C.textMuted,
-                  fontWeight: active ? 500 : 400,
+                  color: active ? C.textPrimary : C.textMuted,
+                  fontWeight: 500,
                   borderBottom: `2px solid ${active ? C.accent : "transparent"}`,
                 }}
               >
                 {x.label}
+                {count != null && (
+                  <span aria-hidden className="ml-1 tabular-nums" style={{ color: C.textMuted }}>{count}</span>
+                )}
               </button>
             );
           })}
         </div>
 
         <div
-          className="px-4 py-3 pb-4"
+          className="px-4 @min-[560px]:px-6 py-4 pb-6"
           role="tabpanel"
           id={panelId}
           aria-labelledby={tabs.some((x) => x.key === activeTab) ? tabId(activeTab) : undefined}
@@ -1012,6 +1199,7 @@ export function TaskDetailBody({
               subtasks={hierarchy?.children ?? []}
               checklist={checklist}
               onOpenTask={onOpenTask}
+              properties={properties}
               leading={headRuns.length > 0 ? <HeadRunsList runs={headRuns} pairs={headPairs} /> : undefined}
               briefExtra={
                 briefingFields.length > 0 ? (
@@ -1027,49 +1215,6 @@ export function TaskDetailBody({
                 ) : undefined
               }
             >
-              {/* Properties */}
-              <Section>
-                <SectionLabel>{t("properties")}</SectionLabel>
-                <div
-                  className="grid grid-cols-2 gap-px rounded-lg overflow-hidden"
-                  style={{ background: C.border, border: `1px solid ${C.border}` }}
-                >
-                  <PropertyMenuCell
-                    label={t("assignee")}
-                    value={agent ? agent.name : t("unassigned")}
-                    options={agents.map((a) => ({ id: a.id, label: a.name, active: a.id === task.assigned_agent_id }))}
-                    onSelect={(id) => id && updateMutation.mutate({ assigned_agent_id: id } as Partial<Task>)}
-                  />
-                  <PropertyMenuCell
-                    label={t("projectFallback")}
-                    value={projectName}
-                    options={[
-                      { id: null, label: t("adHocNoProject"), active: !task.project_id },
-                      ...projects.map((p) => ({ id: p.id, label: p.name, active: p.id === task.project_id })),
-                    ]}
-                    onSelect={(id) => updateMutation.mutate({ project_id: id } as Partial<Task>)}
-                  />
-                  <div className="px-2.5 py-2" style={{ background: C.bgSurface }}>
-                    <span className="block text-[9px] font-semibold uppercase tracking-[0.07em] mb-0.5" style={{ color: C.textDim }}>
-                      {t("createdBy")}
-                    </span>
-                    <span className="text-xs" style={{ color: C.textPrimary }}>
-                      {creatorName ?? "—"} · <span title={formatAbsolute(task.created_at, locale)}>{t("detail.ago", { age: formatAge(task.created_at, locale) ?? "—" })}</span>
-                    </span>
-                  </div>
-                  <div className="px-2.5 py-2" style={{ background: C.bgSurface }}>
-                    <span className="block text-[9px] font-semibold uppercase tracking-[0.07em] mb-0.5" style={{ color: C.textDim }}>
-                      {t("started")}
-                    </span>
-                    <span className="text-xs" style={{ color: C.textPrimary }}>
-                      {task.started_at ? (
-                        <span title={formatAbsolute(task.started_at, locale)}>{t("detail.ago", { age: formatAge(task.started_at, locale) ?? "—" })}</span>
-                      ) : "—"}
-                    </span>
-                  </div>
-                </div>
-              </Section>
-
               {/* Relations — subtasks live in STEPS above */}
               {(hierarchy?.parent || (dependencies?.length ?? 0) > 0) && (
                 <Section>
