@@ -3,7 +3,7 @@
 /**
  * The top of the task detail below the title (DESIGN.md K12, variant A):
  *
- *   TaskStateLine   ● Blocked · Rex asked 42 min ago   — one line, one "·"
+ *   TaskStateLine   ● Blocked · alpha asked 42 min ago   — one line, one "·"
  *   TaskStateCard   the next step, only when there is one:
  *
  *   NEEDS YOU  blocked/waiting/user_test. With an open approval the SAME

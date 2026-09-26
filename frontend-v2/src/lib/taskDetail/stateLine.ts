@@ -8,9 +8,9 @@ import { STATUS_LABEL_KEY } from "./statusLabels";
 /**
  * The one-line state sentence under the task title (DESIGN.md K10/K12):
  *
- *   ● Blocked · Rex asked 42 min ago
- *   ● In progress · Hermes for 42 min
- *   ● Done · Hermes took 2 h 17 min
+ *   ● Blocked · alpha asked 42 min ago
+ *   ● In progress · alpha for 42 min
+ *   ● Done · alpha took 2 h 17 min
  *   ● Failed · ended 18 min ago
  *   ● Passed · finished 9 min ago          (head run)
  *

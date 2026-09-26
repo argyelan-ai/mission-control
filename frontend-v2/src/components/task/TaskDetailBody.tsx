@@ -9,7 +9,7 @@
  *
  *   Context bar  ‹ Tasks (phone)  [● title once the title scrolled away]  ⋯  ×
  *   Title        max 3 lines
- *   State line   ● Blocked · Rex asked 42 min ago — deriveStateLine()
+ *   State line   ● Blocked · alpha asked 42 min ago — deriveStateLine()
  *   Next step    only when there is one: NEEDS YOU (embedded ApprovalCard or
  *                blocker + Reply) / RUNNING (last step) / RESULT (resolution +
  *                PR) / FAILED (error + Open log) / head — deriveStateCard()
