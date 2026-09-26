@@ -3260,6 +3260,8 @@
     "failReason": {
       "stopped": "Von dir gestoppt. Der Branch bleibt.",
       "time_limit": "Zeitlimit erreicht. Der Branch bleibt.",
+      "no_progress": "Zu lange kein Fortschritt (keine Ausgabe, kein Schritt, keine Dateiänderung) — gestoppt. Der Branch bleibt.",
+      "hard_limit": "Notbremse: die harte Zeit-Obergrenze ist erreicht. Der Branch bleibt.",
       "no_pr": "Ohne Pull Request beendet.",
       "run_record_missing": "PR (oder gepushter Scratch-Branch) gefunden, aber die Laufakte fehlt oder ist nicht bestanden.",
       "not_picked_up": "Der Host hat den Start nie abgeholt. Ist der Head-Starter installiert?",

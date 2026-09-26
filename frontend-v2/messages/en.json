@@ -3260,6 +3260,8 @@
     "failReason": {
       "stopped": "Stopped by you. The branch is kept.",
       "time_limit": "Time limit reached. The branch is kept.",
+      "no_progress": "No progress for too long (no output, no step, no file change) — stopped. The branch is kept.",
+      "hard_limit": "Emergency brake: the hard time limit was reached. The branch is kept.",
       "no_pr": "Ended without a pull request.",
       "run_record_missing": "PR (or pushed scratch branch) found, but the run record is missing or not passed.",
       "not_picked_up": "The host never picked up the start. Is the head starter installed?",
