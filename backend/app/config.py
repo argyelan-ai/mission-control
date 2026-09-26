@@ -616,7 +616,7 @@ class Settings(BaseSettings):
     heads_root: Path = Path(os.environ.get("HOME_HOST", str(Path.home()))) / ".mc" / "heads"
     heads_sync_interval: int = 60
     # Progress watchdog (spec §6.5): mc-head stops a head (reason
-    # "no_progress") when neither head.log, step.txt nor any worktree file
+    # "no_progress") when neither head.log, step.txt, work.log nor any worktree file
     # changed for this many minutes — long coding jobs may run as long as
     # they move. The hard limit is only an emergency brake (reason
     # "hard_limit"): generous locally, tighter on cloud runtimes (cost).
