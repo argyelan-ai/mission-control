@@ -75,6 +75,8 @@ caddy/Caddyfile.local
 # Maintainer-private verticals & config live in a separate private repo and
 # are synced into these paths locally. Never committed here.
 backend/scripts/test_news_bridge.py
+backend/tests/test_news_*.py
+backend/tests/test_catalog_publisher.py
 backend/app/verticals/*
 !backend/app/verticals/__init__.py
 !backend/app/verticals/hooks.py

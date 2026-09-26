@@ -78,6 +78,21 @@ async def system_version(current_user = Depends(require_user)):
     }
 
 
+@router.get("/api/v1/system/alerts")
+async def system_alerts(
+    session: AsyncSession = Depends(get_session),
+    current_user = Depends(require_user),
+):
+    """Alerts contributed by verticals for the Home page (hooks.home_alert_providers).
+
+    Computed live on every call — an alert vanishes as soon as its cause is
+    fixed. Empty list in a stripped installation (no providers registered).
+    """
+    from app.verticals.hooks import collect_home_alerts
+
+    return {"alerts": await collect_home_alerts(session)}
+
+
 @router.get("/api/v1/system/status")
 async def system_status(
     request: Request,
