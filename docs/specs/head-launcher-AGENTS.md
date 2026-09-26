@@ -31,11 +31,21 @@ Do not write anywhere else in `{{run_dir}}`. The launcher writes
 
 ## Workflow (always in this order)
 
-0. **Check the start.** `git rev-parse --show-toplevel` is the worktree,
-   `git branch --show-current` is not `main`. `git fetch origin` and note
-   `origin/{{base_branch}}` sha. Read the job and the repo rules (`AGENTS.md`,
-   `CLAUDE.md`, contributor docs if present). Create the run record now with
-   `Status: running`.
+0. **Check the start, then write the context brief.** `git rev-parse --show-toplevel`
+   is the worktree, `git branch --show-current` is not `main`. `git fetch origin`
+   and note `origin/{{base_branch}}` sha. Read the job and the repo rules
+   (`AGENTS.md`, `CLAUDE.md`, contributor docs if present). Create the run
+   record now with `Status: running`. Then fill its **Context brief** section
+   (max. 60 lines, before any code change; the repo on `origin/{{base_branch}}`
+   is the source, never memory or chat):
+   - **Does it already exist?** `git grep` for the endpoint, command, table,
+     setting or component the job asks for — name what you found.
+   - **Which decision applies?** Matching ADRs / principles / rejected or
+     retired ideas (for MC: `docs/decisions/`, `docs/PRINCIPLES.md`,
+     `docs/ROADMAP.md`). Building against a decision is a question, not a workaround.
+   - **Before and after in the user's flow:** what the user does right before
+     and after this change; is a button missing, or would something be useless?
+   Empty answers are allowed, missing ones are not. Pass the brief on to every helper.
 1. **Plan** — 3 to 8 points into the run record.
 2. **Failing test first** — write the test that proves the goal, run it,
    show it failing. A test that is green before the change proves nothing.
@@ -44,20 +54,28 @@ Do not write anywhere else in `{{run_dir}}`. The launcher writes
    must fail (show it). Restore only that file (`git checkout -- <file>`) →
    green again (show it). `git status` clean afterwards.
 5. **Independent review.** If your harness can start a fresh helper that did
-   not write the code, give it only the job, `git diff origin/{{base_branch}}...HEAD`
-   and the test command, and ask for `VERDICT: PASSED` or `VERDICT: FAILED — …`.
+   not write the code, give it only the job, your context brief,
+   `git diff origin/{{base_branch}}...HEAD` and the test command; it answers the
+   review checklist below and ends with `VERDICT: PASSED` or `VERDICT: FAILED — …`.
    On FAILED fix and use a *new* reviewer; after 2 failed rounds abort.
    If your harness has no helpers: do a written self-review against the
    checklist below and say so in the run record ("review: self, no helper available").
 6. **Pull request.** `git push -u origin {{branch}}` (never `main`), then
    `gh pr create` with the run-record summary in the body.
-   **Never merge, never enable auto-merge, never deploy.**
+   **Never merge, never enable auto-merge, never deploy.** Never use
+   `gh pr merge --admin` or any other way around required checks or the merge
+   queue; if a bypass happened anyway, write `bypass: <n> — <why>` in the run
+   record (an unreported bypass is a failed run).
    Exception: when the job says the repo is a scratch repo with a local
    origin, no PR is possible — push only; the pushed branch is the result.
 7. **Finish the run record** (`Status: passed` or `failed`), print it with
    `cat`, then end. Nothing on the side.
 
-Review checklist: does the change fulfil the whole job · tests green when run
+Review checklist — first the three reviewer questions: (1) does it already
+exist, is something built twice or existing behaviour lost · (2) which decision
+applies, does the change contradict an ADR, principle or rejected idea · (3) what
+comes before and after in the user's flow, does every affected flow reach its
+end, is a button missing or something useless. Then: does the change fulfil the whole job · tests green when run
 fresh · would the new test fail without the change · bugs, edge cases,
 secrets, inputs · unrelated changes · public repo: no personal names, home
 paths or private addresses in the diff · visible UI change: DESIGN.md
@@ -87,6 +105,7 @@ same branch with the answer appended to the job.
 
 - Read, print or change `.env` files, secrets, tokens, `~/.ssh`, or other tools' config/credential folders.
 - Push to `main`/`master`, force-push, merge, enable auto-merge, deploy, restart live services.
+- Use `--admin` or any other bypass of branch rules, required checks or the merge queue.
 - Run `docker`, `ssh`, `scp`, `sudo`, `launchctl`, `kubectl`.
 - Delete or change files outside your worktree, the run folder and the vault job folder.
 - Touch other worktrees or branches; never `git stash` someone else's work.
@@ -135,6 +154,12 @@ Status: <running | passed | failed>
 - Base: origin/{{base_branch}} <sha>
 - Pair: {{harness}} × {{runtime}} · start <time> · end <time>
 
+## Context brief (max. 60 lines, written in step 0)
+- Already exists: <paths found by git grep | nothing found — searched for …>
+- Decisions that apply: <ADR / principle / rejected idea | none found — searched …>
+- User flow: before <…> → this change → after <…> · missing button / useless part: <none | …>
+- Scope: <paths this job may touch>
+
 ## Result
 - <what is different now, in plain sentences>
 - PR: <link> (open, not merged) · needs deploy: <yes/no>
@@ -143,7 +168,8 @@ Status: <running | passed | failed>
 - Failing test before: `<command>` → <key line>
 - Green after: `<command>` → <e.g. "42 passed">
 - Sabotage check: <what was broken> → red · restored → green
-- Review: <fresh helper PASSED/FAILED | self-review> — <1 sentence>
+- Review: <fresh helper PASSED/FAILED | self-review> — <1 sentence, incl. the three reviewer questions>
+- Bypass: <0 | n — why> (admin merge, skipped check, push around the queue)
 - UI (only for visible changes): <picture paths · design:budget findings | "not measured — why">
 
 ## Questions / decisions
