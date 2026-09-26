@@ -978,8 +978,7 @@ def run_kz_brief(spec: dict, run: Path, wt: Path) -> tuple:
     kz = kz_bin()
     if not kz:
         return None, "kz not found (set MC_HEAD_KZ_BIN or install kz to ~/.local/bin/kz)"
-    job = (run / "job.md").read_text(errors="replace")
-    job = job.split(KZ_MARK, 1)[0][:KZ_TEXT_MAX]
+    job = read_head_file(run / "job.md")[0].split(KZ_MARK, 1)[0][:KZ_TEXT_MAX]
     overrides = _git_overrides()[1::2]
     env = {
         "HOME": str(run / "home"),
@@ -1009,10 +1008,10 @@ def run_kz_brief(spec: dict, run: Path, wt: Path) -> tuple:
 
 
 def write_kz_brief(run: Path, lines, reason) -> None:
-    """Append the brief section to job.md; a retry replaces it. Written next
-    to it and renamed over it, so a planted symlink is replaced, not followed."""
+    """Append the brief section to job.md; a retry replaces it. Never read
+    through a symlink; written next to it and renamed over it."""
     job = run / "job.md"
-    text = job.read_text(errors="replace").split("\n" + KZ_MARK, 1)[0].rstrip("\n") + "\n"
+    text = read_head_file(job)[0].split("\n" + KZ_MARK, 1)[0].rstrip("\n") + "\n"
     section = [KZ_MARK, KZ_HEADING, ""]
     if lines is not None:
         section += ["Written by `kz brief` in this worktree before you started (max. 60 lines).",
