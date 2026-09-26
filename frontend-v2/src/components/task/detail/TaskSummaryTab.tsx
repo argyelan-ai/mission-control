@@ -153,7 +153,7 @@ export function TaskSummaryTab({
           // ~6 lines; headings use the calm prose scale (no page-size type).
           <div
             data-testid="summary-brief-preview"
-            className="prose-description max-h-[9.9em] overflow-hidden"
+            className="prose-description max-h-[9.9em] overflow-hidden [mask-image:linear-gradient(to_bottom,black_70%,transparent)]"
             style={{ color: C.textSecondary }}
           >
             <ReactMarkdown>{brief}</ReactMarkdown>
