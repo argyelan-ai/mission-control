@@ -17,7 +17,7 @@ import { useSSE } from "@/lib/sse";
 import { useAppStore } from "@/lib/store";
 import type { Agent, Board, ScheduledJob } from "@/lib/types";
 import { cn, timeAgo } from "@/lib/utils";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 
 type Tab = "overview" | "day" | "week" | "health";
 
@@ -38,13 +38,13 @@ function chipColors(job: ScheduledJob, runningJobs: Set<string>) {
     };
   if (job.last_run_status === "failed")
     return {
-      bg: `${C.error}14`,
-      border: `${C.error}59`,
+      bg: alpha(C.error, 0.08),
+      border: alpha(C.error, 0.35),
       text: C.error,
     };
   return {
-    bg: `${C.online}0F`,
-    border: `${C.online}4D`,
+    bg: alpha(C.online, 0.06),
+    border: alpha(C.online, 0.3),
     text: C.online,
   };
 }
@@ -157,7 +157,7 @@ function DayTimeline({
                     {job.schedule_time}
                   </span>
                   <span
-                    className="text-[10px] truncate"
+                    className="text-[10px] truncate light:opacity-100!"
                     style={{ color: c.text, opacity: 0.8 }}
                   >
                     {job.name}
@@ -292,7 +292,7 @@ function WeekCalendar({
                           {job.schedule_time ?? "—"}
                         </div>
                         <div
-                          className="truncate leading-tight"
+                          className="truncate leading-tight light:opacity-100!"
                           style={{ opacity: 0.8 }}
                         >
                           {job.name}
@@ -368,8 +368,8 @@ function HealthTab({ jobs }: { jobs: ScheduledJob[] }) {
                 key={j.id}
                 className="flex items-start gap-3 p-3 rounded-lg border"
                 style={{
-                  borderColor: `${C.error}33`,
-                  background: `${C.error}0A`,
+                  borderColor: alpha(C.error, 0.2),
+                  background: alpha(C.error, 0.04),
                 }}
               >
                 <div className="flex-1 min-w-0">
@@ -399,7 +399,7 @@ function HealthTab({ jobs }: { jobs: ScheduledJob[] }) {
                 <div
                   className="text-xs font-mono px-2 py-1 rounded-sm flex-shrink-0"
                   style={{
-                    background: `${C.error}1F`,
+                    background: alpha(C.error, 0.12),
                     color: C.error,
                   }}
                 >

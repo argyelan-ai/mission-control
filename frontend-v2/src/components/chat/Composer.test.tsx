@@ -10,13 +10,8 @@ import { C, STATUS } from "@/lib/colors";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 
-/** Token value as jsdom reports it — derived from the single source in
- *  lib/colors.ts, so a palette change never breaks this assertion. */
-function rgbOf(hex: string): string {
-  const h = hex.replace("#", "");
-  const n = parseInt(h, 16);
-  return `rgb(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255})`;
-}
+// Tokens are CSS variables (ADR-087): jsdom keeps the specified inline value,
+// so assertions compare against the token from lib/colors.ts directly.
 
 // The effort chip talks to the backend directly (it is the only control in the
 // composer that does), so both the client and the toast helper are stubbed.
@@ -501,16 +496,16 @@ describe("Composer", () => {
     const textarea = screen.getByPlaceholderText(/Message the agent/);
     const pill = textarea.parentElement as HTMLElement;
 
-    expect(pill.style.border).toContain("rgba(168, 168, 168, 0.1)");
+    expect(pill.style.border).toContain(C.border);
 
     await user.click(textarea);
     // Neutral grey frame (text-muted, 4.6:1 against the pill) — perceivable,
     // but not the near-white 2px offset halo the global :focus-visible rule
     // drew before. No accent tint anywhere, and no ring at all.
-    // jsdom normalises hex to rgb(), so compare in that form — a hex literal
-    // here would make the negative assertion vacuously true.
-    expect(pill.style.border).toContain(rgbOf(C.textMuted));
-    expect(pill.style.border).not.toContain(rgbOf(C.accent));
+    // Compare against the token itself (a var() name) — a hex literal here
+    // would make the negative assertion vacuously true.
+    expect(pill.style.border).toContain(C.textMuted);
+    expect(pill.style.border).not.toContain(C.accent);
     expect(pill.style.boxShadow).toBe("");
     // The app-wide accent outline is suppressed here on purpose: on a textarea
     // it fires for plain mouse clicks too, which is what produced the frame.
@@ -529,7 +524,7 @@ describe("Composer", () => {
     render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
     const pill = screen.getByPlaceholderText(/Message the agent/).parentElement as HTMLElement;
     // Panels are bg-surface now, so a bg-surface pill would disappear into them.
-    expect(pill.style.backgroundColor).toBe(rgbOf(C.bgElevated));
+    expect(pill.style.backgroundColor).toBe(C.bgElevated);
   });
 
   // Regression: the mobile stack keeps the off-screen pane mounted with

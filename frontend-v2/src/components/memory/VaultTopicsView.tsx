@@ -13,7 +13,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Layers, FileText, Users } from "lucide-react";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 
 interface TopicCluster {
   cluster_id: number;
@@ -151,7 +151,7 @@ export function VaultTopicsView() {
                   key={agent}
                   className="px-1.5 py-0.5 rounded-sm text-[9px] font-mono"
                   style={{
-                    background: `${agentColor(agent)}18`,
+                    background: alpha(agentColor(agent), 0.09),
                     color: agentColor(agent),
                   }}
                 >

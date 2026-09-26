@@ -17,6 +17,11 @@ describe("dangerousLabel", () => {
     ["Dispatch", "dispatch"],
     ["Approve", "approve"],
     ["Deploy now", "deploy"],
+    // seen live on the bench page (the lock blocked the POSTs, the UI showed error toasts)
+    ["Re-render", "re-render"],
+    ["Recreate video", "recreate"],
+    ["Als Episode veröffentlichen", "veröffentlichen"],
+    ["Episode aktualisieren", "aktualisieren"],
     ["Switch model", "switch"],
     ["Save changes", "save"],
     ["Send", "send"],

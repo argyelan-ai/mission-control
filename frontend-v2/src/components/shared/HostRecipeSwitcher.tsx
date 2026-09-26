@@ -28,7 +28,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import { ChevronDown } from "lucide-react";
 import { api } from "@/lib/api";
-import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS, STATUS_TEXT, alpha } from "@/lib/colors";
 import { useHeadConflictText } from "@/components/heads/HeadOccupancy";
 import type { HostRecipe } from "@/lib/types";
 
@@ -494,7 +494,7 @@ export function HostRecipeSwitcher({
               maxHeight: pos.maxHeight,
               background: C.bgElevated,
               border: `1px solid ${C.borderActive}`,
-              boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
+              boxShadow: `0 8px 24px ${alpha(C.shadow, 0.5)}`,
             }}
           >
             {recipesQuery.isLoading && (

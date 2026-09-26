@@ -63,6 +63,10 @@
     "contextAlert": "{name}: Context {pct}%",
     "systemHealth": "System Health",
     "checks": "{count} checks",
+    "watchdogRunningWorker": "{count} checks · worker",
+    "watchdogStale": "no heartbeat {ago}",
+    "watchdogStopped": "not running",
+    "watchdogUnknown": "unknown",
     "events": "Events",
     "all": "All",
     "showAllActivity": "Show all activity",
@@ -1409,7 +1413,8 @@
       "about": "About",
       "telegram": "Telegram",
       "aiProviders": "AI providers",
-      "nightShift": "Night shift"
+      "nightShift": "Night shift",
+      "appearance": "Appearance"
     },
     "security": {
       "title": "Security",
@@ -3260,6 +3265,8 @@
     "failReason": {
       "stopped": "Stopped by you. The branch is kept.",
       "time_limit": "Time limit reached. The branch is kept.",
+      "no_progress": "No progress for too long (no output, no step, no file change) — stopped. The branch is kept.",
+      "hard_limit": "Emergency brake: the hard time limit was reached. The branch is kept.",
       "no_pr": "Ended without a pull request.",
       "run_record_missing": "PR (or pushed scratch branch) found, but the run record is missing or not passed.",
       "not_picked_up": "The host never picked up the start. Is the head starter installed?",
@@ -3476,5 +3483,15 @@
       "count": "{count} {label}",
       "regionLabel": "Night shift report"
     }
+  },
+  "theme": {
+    "label": "Theme",
+    "dark": "Dark",
+    "light": "Light",
+    "system": "System",
+    "cycleLabel": "Theme: {current} — switch to {next}",
+    "sectionTitle": "Appearance",
+    "sectionDescription": "How Mission Control looks in this browser.",
+    "hint": "Dark is the default. Your choice is saved in this browser only — other browsers and devices keep their own."
   }
 }

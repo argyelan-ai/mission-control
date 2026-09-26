@@ -13,7 +13,9 @@ permanent agent. Nobody can type into your session while you run.
 
 - Job: `{{run_dir}}/job.md`
 - Worktree: `{{worktree}}` · branch `{{branch}}` (from `origin/{{base_branch}}`)
-- Pair: {{harness}} × {{runtime}} · time limit {{time_limit}}
+- Pair: {{harness}} × {{runtime}}
+- Watchdog: the launcher stops you after **{{no_progress}} without progress** (no change to
+  `step.txt`, `work.log`, your output or any file in the worktree) · hard limit {{time_limit}}
 - Run folder (status files): `{{run_dir}}`
 - Run record: `{{run_dir}}/run-record.md` (exactly this path — the launcher files it into the vault
   as `{{vault_job_dir}}/run-record.md` after you end)
@@ -22,7 +24,8 @@ permanent agent. Nobody can type into your session while you run.
 
 | File | When | Content |
 |---|---|---|
-| `{{run_dir}}/step.txt` | on every step change (0–7) | one line: `step 4/7 sabotage probe · waiting for: nothing` |
+| `{{run_dir}}/step.txt` | on every step change (0–7), and at least every 10 min between long pieces of work | one line: `step 4/7 sabotage probe · waiting for: nothing` |
+| `{{run_dir}}/work.log` | while one command runs long | run every command that can take more than 10 min (full test suite, big build, download, install) as `<command> 2>&1 \| tee -a {{run_dir}}/work.log` — you cannot touch `step.txt` while a tool call runs, and your own output only appears at the end, so this file is your sign of life |
 | `{{run_dir}}/question.md` | only when you must ask (see "Ask only about") | 1 sentence question + your recommendation + what happens without an answer; then end your run (the launcher sees the file — no exit code needed) |
 | `{{run_dir}}/run-record.md` | created in step 0, finished in step 7 | see template below |
 
@@ -119,7 +122,7 @@ rephrased. Note "blocked: …" in the run record and continue without it, or abo
 
 ## Abort — clean, never silent
 
-Abort when: time is almost up · 2 review rounds failed · the same attempt
+Abort when: the hard limit is almost reached · 2 review rounds failed · the same attempt
 failed twice · a question is needed. Then: commit and push the work to
 `{{branch}}`, open a draft PR if useful, run record `Status: failed` with
 reason, what is done, what is missing, the next step. Print the word **ABORT**.

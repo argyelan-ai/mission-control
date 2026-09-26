@@ -76,7 +76,7 @@ def test_start_runs_harness_in_worktree_and_exits(env):
     assert argv[argv.index("--session-dir") + 1] == str(run / "omp-sessions")
     assert (run / "omp-sessions").is_dir()
     assert argv[argv.index("--append-system-prompt") + 1] == str(run / "procedure.md")
-    assert argv[argv.index("--max-time") + 1] == "600"
+    assert argv[argv.index("--max-time") + 1] == "630"
     assert "Say hello." in "\n".join(argv)
     # env -i: own HOME, shims first on PATH, nothing inherited
     env_lines = dict(
@@ -330,21 +330,205 @@ def test_stale_lock_of_dead_owner_is_taken_over(env):
     assert not lock.exists()
 
 
-# ── A4: time limit, stop, restart ───────────────────────────────────────
+# ── A4: progress watchdog, hard limit, stop, restart ────────────────────
+#
+# A head is stopped when nothing moved for ``no_progress_s`` (head.log,
+# step.txt or any file in the worktree) — "no_progress". The wall-clock
+# ``time_limit_s`` stays as a generous emergency brake — "hard_limit".
+# MC_HEAD_MAX_NO_PROGRESS_S / MC_HEAD_MAX_TIME_S are the operator caps the
+# tests use to get second-scale limits past the 60 s spec minimum.
 
 
-def test_time_limit_kills_a_harness_that_ignores_sigterm(env):
+def test_quiet_head_is_stopped_for_no_progress(env):
     mc_home = env["mc_home"]
     harness = fake_harness(env["tmp"], "trap '' TERM; while :; do sleep 0.1; done")
-    run_id = write_spec(mc_home)
+    run_id = write_spec(mc_home, time_limit_s=3600, no_progress_s=1200)
     t0 = time.time()
-    run_head(mc_home, "start", run_id, env_extra=_extra(harness, MC_HEAD_MAX_TIME_S="1"))
+    run_head(mc_home, "start", run_id, env_extra=_extra(harness, MC_HEAD_MAX_NO_PROGRESS_S="2"))
     status = wait_phase(mc_home, run_id, "exited", timeout=30)
-    assert status["reason"] == "time_limit"
+    assert status["reason"] == "no_progress", status
     assert time.time() - t0 < 20
-    pid = status["pid"]
+    assert status["last_progress_at"]
     with pytest.raises(ProcessLookupError):
-        os.kill(pid, 0)
+        os.kill(status["pid"], 0)
+
+
+def test_busy_head_is_stopped_by_the_hard_limit(env):
+    mc_home = env["mc_home"]
+    # Rewrites a file in the worktree all the time — never "no progress".
+    harness = fake_harness(env["tmp"], "trap '' TERM; while :; do date > busy.txt; sleep 0.2; done")
+    run_id = write_spec(mc_home, time_limit_s=3600, no_progress_s=1200)
+    t0 = time.time()
+    run_head(mc_home, "start", run_id, env_extra=_extra(harness, MC_HEAD_MAX_TIME_S="3"))
+    status = wait_phase(mc_home, run_id, "exited", timeout=30)
+    assert status["reason"] == "hard_limit", status
+    assert time.time() - t0 < 20
+    with pytest.raises(ProcessLookupError):
+        os.kill(status["pid"], 0)
+
+
+def _long_quiet_worker(body: str, rounds: int = 12) -> str:
+    """Silent on stdout for ~6 s, doing ``body`` every 0.5 s, then exit 0."""
+    return f"i=0; while [ $i -lt {rounds} ]; do {body}; sleep 0.5; i=$((i+1)); done; exit 0"
+
+
+def test_file_changes_deep_in_the_worktree_count_as_progress(env):
+    mc_home = env["mc_home"]
+    # Overwriting an existing nested file changes only that file's mtime —
+    # the watchdog has to walk the tree, a top-level check would miss it.
+    harness = fake_harness(env["tmp"], "mkdir -p src/deep/er; " + _long_quiet_worker("date > src/deep/er/work.py"))
+    run_id = write_spec(mc_home, no_progress_s=1200)
+    run_head(mc_home, "start", run_id, env_extra=_extra(harness, MC_HEAD_MAX_NO_PROGRESS_S="2"))
+    status = wait_phase(mc_home, run_id, "exited", timeout=40)
+    assert status["reason"] is None, status
+    assert status["exit_code"] == 0
+
+
+def test_step_file_counts_as_progress(env):
+    mc_home = env["mc_home"]
+    harness = fake_harness(env["tmp"], _long_quiet_worker('echo "step $i" > "$MC_HEAD_RUN_DIR/step.txt"'))
+    run_id = write_spec(mc_home, no_progress_s=1200)
+    run_head(mc_home, "start", run_id, env_extra=_extra(harness, MC_HEAD_MAX_NO_PROGRESS_S="2"))
+    status = wait_phase(mc_home, run_id, "exited", timeout=40)
+    assert status["reason"] is None, status
+
+
+def test_output_counts_as_progress(env):
+    mc_home = env["mc_home"]
+    harness = fake_harness(env["tmp"], _long_quiet_worker('echo "working $i"'))
+    run_id = write_spec(mc_home, no_progress_s=1200)
+    run_head(mc_home, "start", run_id, env_extra=_extra(harness, MC_HEAD_MAX_NO_PROGRESS_S="2"))
+    status = wait_phase(mc_home, run_id, "exited", timeout=40)
+    assert status["reason"] is None, status
+
+
+def test_work_log_counts_as_progress(env):
+    """A single long command (test suite, build, download) prints nothing
+    until it ends under ``claude -p`` / ``omp -p``, and the head cannot touch
+    step.txt while its tool call runs. The procedure tells it to pipe such
+    commands through ``tee -a <run>/work.log`` — that file is a sign too."""
+    mc_home = env["mc_home"]
+    harness = fake_harness(env["tmp"], _long_quiet_worker('echo "test $i" >> "$MC_HEAD_RUN_DIR/work.log"'))
+    run_id = write_spec(mc_home, no_progress_s=1200)
+    run_head(mc_home, "start", run_id, env_extra=_extra(harness, MC_HEAD_MAX_NO_PROGRESS_S="2"))
+    status = wait_phase(mc_home, run_id, "exited", timeout=40)
+    assert status["reason"] is None, status
+    assert status["last_output_at"] and status["last_output_at"] > status["started_at"]
+
+
+def test_a_work_log_symlink_is_not_a_sign(env, tmp_path):
+    """work.log is head-writable like step.txt: a symlink to a file that
+    changes elsewhere must not keep the head alive."""
+    mc_home = env["mc_home"]
+    outside = tmp_path / "outside-tick"
+    ticker = subprocess.Popen(["sh", "-c", f"while :; do date > {outside}; sleep 0.2; done"])
+    try:
+        harness = fake_harness(
+            env["tmp"], f'ln -sf {outside} "$MC_HEAD_RUN_DIR/work.log"; trap \'\' TERM; while :; do sleep 0.1; done'
+        )
+        run_id = write_spec(mc_home, no_progress_s=1200)
+        run_head(mc_home, "start", run_id, env_extra=_extra(harness, MC_HEAD_MAX_NO_PROGRESS_S="2"))
+        status = wait_phase(mc_home, run_id, "exited", timeout=30)
+        assert status["reason"] == "no_progress", status
+    finally:
+        ticker.kill()
+        ticker.wait()
+
+
+def test_a_future_mtime_in_the_worktree_is_not_progress(env):
+    """One file stamped in the future (unpacked archive, clock skew) must not
+    count as progress forever — the head is still stopped when quiet."""
+    mc_home = env["mc_home"]
+    harness = fake_harness(env["tmp"], "touch -t 209901010000 future.txt; trap '' TERM; while :; do sleep 0.1; done")
+    run_id = write_spec(mc_home, time_limit_s=3600, no_progress_s=1200)
+    run_head(mc_home, "start", run_id, env_extra=_extra(harness, MC_HEAD_MAX_NO_PROGRESS_S="2"))
+    status = wait_phase(mc_home, run_id, "exited", timeout=30)
+    assert status["reason"] == "no_progress", status
+
+
+def test_changes_deep_in_a_skipped_tool_folder_do_not_count(env):
+    """node_modules & co. are not walked: rewriting a file deep inside is no
+    progress (only the folder's own mtime counts)."""
+    mc_home = env["mc_home"]
+    harness = fake_harness(
+        env["tmp"],
+        "mkdir -p node_modules/pkg/lib; date > node_modules/pkg/lib/x.js; "
+        "trap '' TERM; while :; do date > node_modules/pkg/lib/x.js; sleep 0.2; done",
+    )
+    run_id = write_spec(mc_home, time_limit_s=3600, no_progress_s=1200)
+    run_head(mc_home, "start", run_id, env_extra=_extra(harness, MC_HEAD_MAX_NO_PROGRESS_S="2"))
+    status = wait_phase(mc_home, run_id, "exited", timeout=30)
+    assert status["reason"] == "no_progress", status
+
+
+def test_new_entries_directly_in_a_skipped_folder_count(env):
+    """Installing into node_modules adds entries there — its own mtime moves."""
+    mc_home = env["mc_home"]
+    harness = fake_harness(env["tmp"], "mkdir -p node_modules; " + _long_quiet_worker("touch node_modules/pkg$i"))
+    run_id = write_spec(mc_home, no_progress_s=1200)
+    run_head(mc_home, "start", run_id, env_extra=_extra(harness, MC_HEAD_MAX_NO_PROGRESS_S="2"))
+    status = wait_phase(mc_home, run_id, "exited", timeout=40)
+    assert status["reason"] is None, status
+
+
+def test_scan_cap_bounds_the_walk_without_crashing(env):
+    """With the scan cap at 1 entry the walk stops early: a change deep in
+    the tree is not seen, the watchdog still works (no crash, no_progress)."""
+    mc_home = env["mc_home"]
+    harness = fake_harness(
+        env["tmp"],
+        "mkdir -p src/deep/er; date > src/deep/er/work.py; "
+        "trap '' TERM; while :; do date > src/deep/er/work.py; sleep 0.2; done",
+    )
+    run_id = write_spec(mc_home, time_limit_s=3600, no_progress_s=1200)
+    run_head(
+        mc_home, "start", run_id,
+        env_extra=_extra(harness, MC_HEAD_MAX_NO_PROGRESS_S="2", MC_HEAD_PROGRESS_SCAN_MAX="1"),
+    )
+    status = wait_phase(mc_home, run_id, "exited", timeout=30)
+    assert status["reason"] == "no_progress", status
+
+
+def test_omp_max_time_leaves_the_hard_limit_to_the_wrapper(env):
+    """omp gets --max-time a little above the wrapper's effective hard limit
+    (operator cap included), so the wrapper stops first with "hard_limit"."""
+    mc_home = env["mc_home"]
+    harness = fake_harness(env["tmp"], "echo ok")
+    run_id = write_spec(mc_home, time_limit_s=3600)
+    run_head(mc_home, "start", run_id, env_extra=_extra(harness, MC_HEAD_MAX_TIME_S="120"))
+    wait_phase(mc_home, run_id, "exited")
+    argv = (mc_home / "heads" / run_id / "argv.txt").read_text().splitlines()
+    assert argv[argv.index("--max-time") + 1] == "150"
+
+
+def test_a_symlink_out_of_the_worktree_is_not_followed(env, tmp_path):
+    """A head must not keep itself alive through a file outside its worktree
+    (the wrapper runs unsandboxed: it never walks through a symlink)."""
+    mc_home = env["mc_home"]
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    ticker = subprocess.Popen(["sh", "-c", f"while :; do date > {outside}/tick; sleep 0.2; done"])
+    try:
+        harness = fake_harness(env["tmp"], f"ln -s {outside} escape; trap '' TERM; while :; do sleep 0.1; done")
+        run_id = write_spec(mc_home, no_progress_s=1200)
+        run_head(mc_home, "start", run_id, env_extra=_extra(harness, MC_HEAD_MAX_NO_PROGRESS_S="2"))
+        status = wait_phase(mc_home, run_id, "exited", timeout=30)
+        assert status["reason"] == "no_progress", status
+    finally:
+        ticker.kill()
+        ticker.wait()
+
+
+def test_spec_without_no_progress_field_still_runs(env):
+    """Specs written by an older backend have no ``no_progress_s``: the
+    wrapper falls back to its default instead of refusing the run."""
+    mc_home = env["mc_home"]
+    harness = fake_harness(env["tmp"], "echo ok")
+    run_id = write_spec(mc_home)
+    assert "no_progress_s" not in json.loads((mc_home / "heads" / run_id / "spec.json").read_text())
+    run_head(mc_home, "start", run_id, env_extra=_extra(harness))
+    status = wait_phase(mc_home, run_id, "exited")
+    assert status["reason"] is None, status
 
 
 def test_restart_waits_for_old_run_never_two_heads_in_one_worktree(env, tmp_path):

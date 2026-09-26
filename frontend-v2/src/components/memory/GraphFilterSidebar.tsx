@@ -29,7 +29,7 @@ import { ChevronLeft, ChevronRight, RotateCcw, Search } from "lucide-react";
 import type { GraphFilter, VaultNoteType } from "@/lib/types";
 import { TYPE_COLORS, TYPE_LABELS_DE } from "./graphConfig";
 import { colorForAgent } from "@/components/vault/agentColors";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -41,16 +41,6 @@ const VAULT_TYPES: VaultNoteType[] = [
   "weekly_review",
   "note",
 ];
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function hexToRgb(hex: string): string {
-  const h = hex.replace("#", "");
-  const r = parseInt(h.slice(0, 2), 16);
-  const g = parseInt(h.slice(2, 4), 16);
-  const b = parseInt(h.slice(4, 6), 16);
-  return `${r},${g},${b}`;
-}
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
@@ -73,7 +63,6 @@ interface TypeChipProps {
 
 function TypeChip({ type, selected, onToggle }: TypeChipProps) {
   const color = TYPE_COLORS[type] ?? TYPE_COLORS.note;
-  const rgb = hexToRgb(color);
   const label = TYPE_LABELS_DE[type];
 
   return (
@@ -83,10 +72,10 @@ function TypeChip({ type, selected, onToggle }: TypeChipProps) {
       className="flex items-center gap-1.5 w-full rounded-sm px-2 py-1 text-left transition-colors"
       style={{
         background: selected
-          ? `rgba(${rgb},0.15)`
+          ? alpha(color, 0.15)
           : "var(--color-bg-surface)",
         border: selected
-          ? `1px solid rgba(${rgb},0.4)`
+          ? `1px solid ${alpha(color, 0.4)}`
           : "1px solid transparent",
         color: selected
           ? "var(--color-text-primary)"
@@ -95,7 +84,7 @@ function TypeChip({ type, selected, onToggle }: TypeChipProps) {
       }}
       onMouseEnter={(e) => {
         if (!selected) {
-          (e.currentTarget as HTMLButtonElement).style.background = `rgba(${rgb},0.07)`;
+          (e.currentTarget as HTMLButtonElement).style.background = alpha(color, 0.07);
         }
       }}
       onMouseLeave={(e) => {
@@ -409,9 +398,9 @@ export function GraphFilterSidebar({
                   disabled={!hasActiveFilters}
                   className="flex items-center gap-1.5 w-full rounded-sm px-2 py-1.5 font-mono text-[11px] transition-opacity"
                   style={{
-                    background: hasActiveFilters ? "rgba(239,68,68,0.08)" : "transparent",
+                    background: hasActiveFilters ? alpha(C.error, 0.08) : "transparent",
                     border: hasActiveFilters
-                      ? "1px solid rgba(239,68,68,0.2)"
+                      ? `1px solid ${alpha(C.error, 0.2)}`
                       : "1px solid transparent",
                     color: hasActiveFilters
                       ? C.error
@@ -441,7 +430,7 @@ export function GraphFilterSidebar({
           border: "1px solid var(--color-border)",
           color: "var(--color-text-secondary)",
           cursor: "pointer",
-          boxShadow: "0 2px 8px rgba(0,0,0,0.4)",
+          boxShadow: `0 2px 8px ${alpha(C.shadow, 0.4)}`,
         }}
         aria-label={collapsed ? "Expand filter sidebar" : "Collapse filter sidebar"}
       >

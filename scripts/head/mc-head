@@ -82,8 +82,23 @@ CLAUDE_SETTINGS_TEMPLATE = HERE / "claude-head-settings.json"
 
 HEARTBEAT_S = float(os.environ.get("MC_HEAD_HEARTBEAT_S", "30"))
 KILL_GRACE_S = float(os.environ.get("MC_HEAD_KILL_GRACE_S", "10"))
-# Operator cap on every head's time limit (seconds); also used by tests.
+# Operator cap on every head's hard limit (seconds); also used by tests.
 MAX_TIME_S = int(os.environ.get("MC_HEAD_MAX_TIME_S", "86400"))
+# Progress watchdog (§6.5): a head is stopped with reason "no_progress" when
+# neither head.log, step.txt, work.log nor any file in its worktree changed for this
+# long. The default applies to specs from a backend that does not write
+# ``no_progress_s`` yet; it equals the backend default (heads_no_progress_min).
+DEFAULT_NO_PROGRESS_S = 1200
+# Operator cap on the watchdog (seconds); also used by tests.
+MAX_NO_PROGRESS_S = int(os.environ.get("MC_HEAD_MAX_NO_PROGRESS_S", "86400"))
+# Worktree scan: heavy tool folders are not walked (their own mtime still
+# counts, so installing into them is seen), and one scan stops after this
+# many entries so a huge tree cannot stall the supervisor.
+PROGRESS_SKIP_DIRS = frozenset({
+    ".git", "node_modules", ".venv", "venv", "__pycache__", ".next", ".turbo",
+    ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox", "dist", "build", "target",
+})
+PROGRESS_SCAN_MAX = int(os.environ.get("MC_HEAD_PROGRESS_SCAN_MAX", "50000"))
 BASE_PATH = os.environ.get(
     "MC_HEAD_PATH", "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 )
@@ -164,6 +179,10 @@ def load_spec(run_id: str) -> dict:
     limit = spec.get("time_limit_s")
     if not isinstance(limit, int) or isinstance(limit, bool) or not 60 <= limit <= 86400:
         raise SpecInvalid("time_limit_s", "integer between 60 and 86400")
+    quiet = spec.get("no_progress_s", DEFAULT_NO_PROGRESS_S)
+    if not isinstance(quiet, int) or isinstance(quiet, bool) or not 60 <= quiet <= 86400:
+        raise SpecInvalid("no_progress_s", "integer between 60 and 86400")
+    spec["no_progress_s"] = quiet
     boxes = spec.get("box_keys")
     if not isinstance(boxes, list) or not all(_is_uuid(b) for b in boxes):
         raise SpecInvalid("box_keys", "list of host uuids")
@@ -227,6 +246,7 @@ def write_status(run_id: str, **fields) -> dict:
         "exited_at": None,
         "exit_code": None,
         "last_output_at": None,
+        "last_progress_at": None,
         "pr_url": None,
         "scratch_branch_pushed": False,
         "run_record_path": None,
@@ -793,7 +813,9 @@ def harness_argv(spec: dict, run: Path, home: Path, env: dict) -> list:
             # token harvester reads <run>/omp-sessions/*.jsonl.
             "--session-dir", str(run / "omp-sessions"),
             "--no-skills",
-            "--max-time", str(spec["time_limit_s"]),
+            # A little above the wrapper's effective hard limit (operator cap
+            # included), so the wrapper stops first with reason "hard_limit".
+            "--max-time", str(min(spec["time_limit_s"], MAX_TIME_S) + 30),
             # Permission bypass: allowed only inside the sandbox (ADR-086,
             # enforced in start_gate() for every run).
             "--auto-approve",
@@ -1077,6 +1099,42 @@ def _tee(stream, fh) -> None:
                 pass
 
 
+def newest_worktree_mtime(root: Path, now: float) -> float | None:
+    """Newest mtime of anything in the worktree — a sign the head works even
+    when it prints nothing (``omp -p`` writes its output only at the end).
+
+    Never follows a symlink (the wrapper runs unsandboxed; a head must not
+    keep itself alive through a file elsewhere). Timestamps in the future
+    (unpacked archives, clock skew) are ignored, or one such file would
+    count as progress forever."""
+    newest = None
+    seen = 0
+    stack = [str(root)]
+    while stack:
+        try:
+            it = os.scandir(stack.pop())
+        except OSError:
+            continue
+        with it:
+            for entry in it:
+                seen += 1
+                if seen > PROGRESS_SCAN_MAX:
+                    return newest
+                try:
+                    info = entry.stat(follow_symlinks=False)
+                except OSError:
+                    continue
+                if info.st_mtime <= now + 60 and (newest is None or info.st_mtime > newest):
+                    newest = info.st_mtime
+                if stat.S_ISDIR(info.st_mode) and entry.name not in PROGRESS_SKIP_DIRS:
+                    stack.append(entry.path)
+    return newest
+
+
+def _utc(ts: float) -> str:
+    return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def cmd_supervise(run_id: str) -> int:
     check_run_id(run_id)
     spec = load_spec(run_id)
@@ -1129,31 +1187,45 @@ def cmd_supervise(run_id: str) -> int:
         write_status(run_id, phase="running", pid=child.pid, pgid=child.pid, started_at=now_iso())
         tee = threading.Thread(target=_tee, args=(child.stdout, log_fh), daemon=True)
         tee.start()
-        limit = min(spec["time_limit_s"], MAX_TIME_S)
+        hard_limit = min(spec["time_limit_s"], MAX_TIME_S)
+        quiet_limit = min(spec["no_progress_s"], MAX_NO_PROGRESS_S)
+        # The start itself is the first sign of progress: a head is never
+        # stopped before it had quiet_limit seconds to show something.
+        last_progress = started
         last_beat = 0.0
+        beat_every = min(HEARTBEAT_S, max(1.0, quiet_limit / 4))
         while child.poll() is None:
             now = time.time()
-            if now - last_beat >= HEARTBEAT_S:
+            if now - last_beat >= beat_every:
                 (wdir / "heartbeat").touch()
-                # Sign of output: head.log OR step.txt — `omp -p` prints only
-                # at the very end, the step file moves while it works.
+                # Sign of output: head.log, step.txt OR work.log — `omp -p`
+                # prints only at the very end, the step file moves between
+                # steps, work.log gets the tee'd output of long commands.
                 mtimes = []
-                for name in ("head.log", "step.txt"):
+                for name in ("head.log", "step.txt", "work.log"):
                     try:
-                        mtimes.append((run / name).stat().st_mtime)
+                        info = os.lstat(run / name)
                     except OSError:
-                        pass
+                        continue
+                    if stat.S_ISREG(info.st_mode) and info.st_mtime <= now + 60:
+                        mtimes.append(info.st_mtime)
+                fields = {}
                 if mtimes:
-                    write_status(
-                        run_id,
-                        last_output_at=datetime.fromtimestamp(max(mtimes), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                    )
+                    fields["last_output_at"] = _utc(max(mtimes))
+                # Sign of progress: output OR any file in the worktree.
+                wt_mtime = newest_worktree_mtime(run / "wt", now)
+                last_progress = max([last_progress, *mtimes] + ([wt_mtime] if wt_mtime else []))
+                fields["last_progress_at"] = _utc(last_progress)
+                write_status(run_id, **fields)
                 last_beat = now
+                if now - last_progress > quiet_limit and state["reason"] is None:
+                    state["reason"] = "no_progress"
+                    kill_group(child.pid, KILL_GRACE_S, child)
             if (wdir / "stop-requested").exists() and state["reason"] is None:
                 state["reason"] = "stopped"
                 kill_group(child.pid, KILL_GRACE_S, child)
-            elif now - started > limit and state["reason"] is None:
-                state["reason"] = "time_limit"
+            elif now - started > hard_limit and state["reason"] is None:
+                state["reason"] = "hard_limit"
                 kill_group(child.pid, KILL_GRACE_S, child)
             time.sleep(0.2)
         tee.join(timeout=5)

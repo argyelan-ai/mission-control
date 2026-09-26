@@ -20,7 +20,7 @@ import { api } from "@/lib/api";
 import type { Agent, Runtime } from "@/lib/types";
 import { RuntimeSwitchModal } from "@/components/shared/RuntimeSwitchModal";
 import { RuntimePill } from "@/components/shared/RuntimePill";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 import { useEscapeKey } from "@/hooks/useEscapeKey";
 
@@ -61,7 +61,7 @@ export function BindAgentModal({ open, onClose, runtime }: Props) {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.15 }}
-            className="fixed inset-0 z-40 flex items-end sm:items-center justify-center sm:p-4 bg-black/60"
+            className="fixed inset-0 z-40 flex items-end sm:items-center justify-center sm:p-4 bg-[var(--color-scrim)]/60"
             style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
             onClick={onClose}
           >
@@ -78,7 +78,7 @@ export function BindAgentModal({ open, onClose, runtime }: Props) {
               style={{
                 backgroundColor: "var(--color-bg-elevated)",
                 border: "1px solid var(--color-border)",
-                boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
+                boxShadow: `0 4px 24px ${alpha(C.shadow, 0.5)}, 0 1px 2px ${alpha(C.shadow, 0.3)}`,
               }}
             >
                 <div

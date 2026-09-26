@@ -11,7 +11,7 @@
 import { useState } from "react";
 import { useTranslations } from "next-intl";
 import { Square } from "lucide-react";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 
 const btn =
   "inline-flex items-center justify-center gap-1.5 px-3 min-h-[36px] pointer-coarse:min-h-[44px] rounded-md text-xs font-medium cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)] disabled:opacity-40 disabled:cursor-not-allowed";
@@ -46,7 +46,7 @@ export function HeadStopButton({
           }}
           data-testid={`${testId}-confirm-yes`}
           className={btn}
-          style={{ color: STATUS_TEXT.error, border: `1px solid ${C.error}66` }}
+          style={{ color: STATUS_TEXT.error, border: `1px solid ${alpha(C.error, 0.4)}` }}
         >
           <Square size={12} aria-hidden />
           {t("stopConfirmYes")}

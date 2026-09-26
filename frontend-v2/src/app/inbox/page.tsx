@@ -9,7 +9,7 @@ import { api } from "@/lib/api";
 import { useApprovalStream } from "@/lib/sse";
 import { useAppStore } from "@/lib/store";
 import { notify } from "@/lib/notify";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import { ApprovalCard } from "@/components/inbox/ApprovalCard";
 import { ReviewTaskRow } from "@/components/inbox/ReviewTaskRow";
 import { GlassCard } from "@/components/shared/GlassCard";
@@ -275,8 +275,8 @@ export default function InboxPage() {
             <div
               className="w-16 h-16 rounded-2xl flex items-center justify-center"
               style={{
-                backgroundColor: `${C.online}14`,
-                border: `1px solid ${C.online}26`,
+                backgroundColor: alpha(C.online, 0.08),
+                border: `1px solid ${alpha(C.online, 0.15)}`,
               }}
             >
               <CheckCircle

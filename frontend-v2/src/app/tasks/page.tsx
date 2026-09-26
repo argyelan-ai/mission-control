@@ -24,7 +24,7 @@ import AppShell from "@/components/layout/AppShell";
 import TaskListColumn from "@/components/tasks/TaskListColumn";
 import { TaskDetailBody } from "@/components/task/TaskDetailBody";
 import type { Task, TaskStatus, Agent, Project, Tag, ProjectPhase } from "@/lib/types";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 import { STATUS_CONFIG, TaskRow, TaskStatusDot } from "./TaskRow";
@@ -41,9 +41,9 @@ function TagChip({ tag, size = "sm" }: { tag: Tag; size?: "xs" | "sm" }) {
         size === "xs" ? "text-[9px] px-1.5 py-0" : "text-[10px] px-2 py-0.5"
       )}
       style={{
-        backgroundColor: `${color}18`,
+        backgroundColor: alpha(color, 0.09),
         color: color,
-        border: `1px solid ${color}30`,
+        border: `1px solid ${alpha(color, 0.19)}`,
       }}
     >
       {tag.name}
@@ -1084,7 +1084,7 @@ function TasksPageContent() {
                       onClick={() => deleteProjectMutation.mutate(projectView.id)}
                       disabled={deleteProjectMutation.isPending}
                       className="px-2 py-1 rounded-sm text-[11px] font-semibold cursor-pointer"
-                      style={{ backgroundColor: `${C.error}26`, color: STATUS_TEXT.error }}
+                      style={{ backgroundColor: alpha(C.error, 0.15), color: STATUS_TEXT.error }}
                     >
                       {deleteProjectMutation.isPending ? "…" : t("deleteProject")}
                     </button>

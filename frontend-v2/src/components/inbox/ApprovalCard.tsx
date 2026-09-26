@@ -15,7 +15,7 @@ import { Pill } from "@/components/shared/Pill";
 import { InstallRequestCard } from "./InstallRequestCard";
 import { XPostApprovalCard } from "./XPostApprovalCard";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import type { Approval, AutonomyLevel } from "@/lib/types";
 
 // ── Install Action Types ──────────────────────────────────────────────────────
@@ -142,7 +142,7 @@ export function ApprovalCard({ approval, onResolve, loading, compact = false }: 
     >
       <GlassCard
         className="p-4"
-        glow={`${badgeColor}12`}
+        glow={alpha(badgeColor, 0.07)}
       >
         {/* Header */}
         <div className="flex items-start justify-between gap-4">
@@ -151,9 +151,9 @@ export function ApprovalCard({ approval, onResolve, loading, compact = false }: 
               <span
                 className="text-[11px] px-2 py-0.5 rounded-lg font-medium flex items-center gap-1.5"
                 style={{
-                  backgroundColor: `${badgeColor}18`,
+                  backgroundColor: alpha(badgeColor, 0.09),
                   color: badgeColor,
-                  border: `1px solid ${badgeColor}30`,
+                  border: `1px solid ${alpha(badgeColor, 0.19)}`,
                 }}
               >
                 <BadgeIcon size={12} /> {label}
@@ -218,7 +218,7 @@ export function ApprovalCard({ approval, onResolve, loading, compact = false }: 
               const blockerType = BLOCKER_TYPE_LABELS[p.blocker_type ?? "other"] ?? BLOCKER_TYPE_LABELS.other;
 
               return (
-                <div className="mt-3 p-3 rounded-xl space-y-2" style={{ backgroundColor: `${C.error}0F`, border: `1px solid ${C.error}26` }}>
+                <div className="mt-3 p-3 rounded-xl space-y-2" style={{ backgroundColor: alpha(C.error, 0.06), border: `1px solid ${alpha(C.error, 0.15)}` }}>
                   {!compact && (p.project_name || p.task_title) && (
                     <p className="text-[10px] text-[var(--color-text-muted)]">
                       {p.project_name && <span>{p.project_name}</span>}
@@ -226,7 +226,7 @@ export function ApprovalCard({ approval, onResolve, loading, compact = false }: 
                       {p.task_title && <span>{p.task_title}</span>}
                     </p>
                   )}
-                  <span className="inline-block text-[10px] px-2 py-0.5 rounded-sm font-medium" style={{ backgroundColor: `${blockerType.color}18`, color: blockerType.color, border: `1px solid ${blockerType.color}30` }}>
+                  <span className="inline-block text-[10px] px-2 py-0.5 rounded-sm font-medium" style={{ backgroundColor: alpha(blockerType.color, 0.09), color: blockerType.color, border: `1px solid ${alpha(blockerType.color, 0.19)}` }}>
                     {t(blockerType.labelKey)}
                   </span>
                   {p.description && (
@@ -259,7 +259,7 @@ export function ApprovalCard({ approval, onResolve, loading, compact = false }: 
               };
 
               return (
-                <div className="mt-3 p-3 rounded-xl space-y-2" style={{ backgroundColor: `${C.accent}0F`, border: `1px solid ${C.accent}26` }}>
+                <div className="mt-3 p-3 rounded-xl space-y-2" style={{ backgroundColor: alpha(C.accent, 0.06), border: `1px solid ${alpha(C.accent, 0.15)}` }}>
                   {!compact && (p.project_name || p.task_title) && (
                     <p className="text-[10px] text-[var(--color-text-muted)]">
                       {p.project_name && <span>{p.project_name}</span>}
@@ -273,7 +273,7 @@ export function ApprovalCard({ approval, onResolve, loading, compact = false }: 
                   {p.options && p.options.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 mt-1">
                       {p.options.map((opt, i) => (
-                        <button key={i} onClick={() => setNote(opt)} className="text-[11px] px-2.5 py-1 rounded-lg cursor-pointer transition-all" style={{ backgroundColor: note === opt ? `${C.accent}33` : "var(--color-bg-elevated)", color: note === opt ? C.accent : "var(--color-text-secondary)", border: `1px solid ${note === opt ? `${C.accent}66` : "var(--color-border)"}` }}>
+                        <button key={i} onClick={() => setNote(opt)} className="text-[11px] px-2.5 py-1 rounded-lg cursor-pointer transition-all" style={{ backgroundColor: note === opt ? alpha(C.accent, 0.2) : "var(--color-bg-elevated)", color: note === opt ? C.accent : "var(--color-text-secondary)", border: `1px solid ${note === opt ? alpha(C.accent, 0.4) : "var(--color-border)"}` }}>
                           {opt}
                         </button>
                       ))}
@@ -360,9 +360,9 @@ export function ApprovalCard({ approval, onResolve, loading, compact = false }: 
             disabled={loading}
             className="flex items-center gap-1.5 text-[12px] px-3.5 py-2 min-h-[44px] sm:min-h-0 rounded-xl cursor-pointer transition-all disabled:opacity-50"
             style={{
-              backgroundColor: `${C.online}1F`,
+              backgroundColor: alpha(C.online, 0.12),
               color: C.online,
-              border: `1px solid ${C.online}40`,
+              border: `1px solid ${alpha(C.online, 0.25)}`,
             }}
           >
             <CheckCircle size={13} /> {approval.action_type === "clarification_question" ? t("reply") : isBlocker ? t("unblock") : t("approve")}
@@ -375,9 +375,9 @@ export function ApprovalCard({ approval, onResolve, loading, compact = false }: 
               disabled={loading}
               className="flex items-center gap-1.5 text-[12px] px-3.5 py-2 min-h-[44px] sm:min-h-0 rounded-xl cursor-pointer transition-all disabled:opacity-50"
               style={{
-                backgroundColor: `${C.error}1F`,
+                backgroundColor: alpha(C.error, 0.12),
                 color: C.error,
-                border: `1px solid ${C.error}40`,
+                border: `1px solid ${alpha(C.error, 0.25)}`,
               }}
             >
               <XCircle size={13} /> {isBlocker ? t("cancelTask") : t("reject")}

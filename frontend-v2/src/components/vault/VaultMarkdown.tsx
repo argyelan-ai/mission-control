@@ -4,7 +4,7 @@ import { useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { motion, AnimatePresence } from "framer-motion";
 import { useVaultNotePreview } from "@/hooks/useVaultNote";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 
 // ── Wikilink chip ─────────────────────────────────────────────────────────────
 
@@ -76,7 +76,7 @@ function WikilinkChip({
                 background: C.bgHover,
                 border: `1px solid ${C.borderAccent}`,
                 color: "var(--color-text-secondary)",
-                boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
+                boxShadow: `0 8px 24px ${alpha(C.shadow, 0.5)}`,
               }}
             >
               <div

@@ -7,7 +7,7 @@ import { Clock } from "lucide-react";
 import { timeAgo } from "@/lib/utils";
 import type { BoardMemory, MemoryType } from "@/lib/types";
 import { MergeCandidateBadge } from "./MergeCandidateBadge";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 
 const TYPE_COLORS: Record<string, string> = {
   journal:       C.online,         // #55A964
@@ -86,7 +86,7 @@ export function EpisodicTimeline({
           <div className="relative pl-7">
             <div
               className="absolute left-[9px] top-0 bottom-0 w-0.5 rounded-full"
-              style={{ background: "linear-gradient(to bottom, rgba(0,204,136,0.5), rgba(0,204,136,0.05))" }}
+              style={{ background: `linear-gradient(to bottom, ${alpha(C.online, 0.5)}, ${alpha(C.online, 0.05)})` }}
             />
             {items.map((item, i) => {
               const color = TYPE_COLORS[item.memory_type] ?? C.textSecondary;
@@ -118,7 +118,7 @@ export function EpisodicTimeline({
                     <div className="flex items-center gap-2 mb-1.5">
                       <span
                         className="inline-flex items-center px-2 py-0.5 rounded-sm font-mono text-[10px] font-semibold"
-                        style={{ background: `${color}18`, color }}
+                        style={{ background: alpha(color, 0.09), color }}
                       >
                         {TYPE_LABELS[item.memory_type] ?? item.memory_type}
                       </span>

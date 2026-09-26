@@ -2,6 +2,7 @@
 
 import { cn } from "@/lib/utils";
 
+import { alpha } from "@/lib/colors";
 interface PillProps {
   children: React.ReactNode;
   color: string;
@@ -29,8 +30,8 @@ export function Pill({
       )}
       style={{
         color,
-        backgroundColor: isSolid ? `${color}1F` : "transparent",
-        border: `1px solid ${color}26`,
+        backgroundColor: isSolid ? alpha(color, 0.12) : "transparent",
+        border: `1px solid ${alpha(color, 0.15)}`,
       }}
     >
       {children}

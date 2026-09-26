@@ -46,6 +46,14 @@ class SpoolUnavailable(Exception):
     pass
 
 
+def _duration(seconds: int) -> str:
+    """7200 → "2 h", 1200 → "20 min" (procedure text for the head)."""
+    seconds = int(seconds)
+    if seconds >= 3600 and seconds % 3600 == 0:
+        return f"{seconds // 3600} h"
+    return f"{max(1, seconds // 60)} min"
+
+
 def _slug(text: str, limit: int = 30) -> str:
     s = re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")
     return (s[:limit].strip("-") or "job")
@@ -226,7 +234,8 @@ async def write_run(
     now = datetime.now(timezone.utc)
     env, base_url, model = await head_env(session, harness, runtime)
     local = runtime.host_id is not None
-    limit = settings.heads_time_limit_local_s if local else settings.heads_time_limit_cloud_s
+    limit = settings.heads_hard_limit_local_s if local else settings.heads_hard_limit_cloud_s
+    no_progress_s = settings.heads_no_progress_min * 60
     if restarted_from and mode == "continue":
         branch = restarted_from["spec"]["branch"]
     else:
@@ -246,7 +255,9 @@ async def write_run(
         # Token harvester: local vs. cloud share of head usage (same rule as the pair table)
         "locality": "local" if pairs.is_local(runtime) else "cloud",
         "recipe_slug": None,
+        # Emergency brake (wall clock). Name kept for older mc-head copies.
         "time_limit_s": int(limit),
+        "no_progress_s": int(no_progress_s),
         "restarted_from": restarted_from["spec"]["run_id"] if restarted_from else None,
         "mode": mode,
         "job_folder": None,  # set below
@@ -281,7 +292,8 @@ async def write_run(
         "base_branch": spec["base_branch"],
         "harness": harness,
         "runtime": f"{runtime.display_name} ({model})",
-        "time_limit": f"{limit // 60} min",
+        "time_limit": _duration(limit),
+        "no_progress": _duration(no_progress_s),
         "vault_job_dir": job_dir,
         "test_command": "see the repo's AGENTS.md / CLAUDE.md / CONTRIBUTING (use the documented test command)",
         "lint_command": "see the repo's contributor docs (skip if none)",

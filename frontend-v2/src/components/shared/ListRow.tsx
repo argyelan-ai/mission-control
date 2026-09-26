@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useTranslations } from "next-intl";
 import { ChevronDown } from "lucide-react";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import { cn } from "@/lib/utils";
 
 /**
@@ -45,14 +45,14 @@ const DOT: Record<Tone, string> = {
   ok: C.online,
   warn: C.warning,
   error: C.error,
-  idle: "#3A3A3A",
+  idle: "var(--color-status-offline)",
   accent: C.accent,
 };
 
 const CHIP: Record<Tone, { color: string; border: string; background: string }> = {
-  ok: { color: STATUS_TEXT.online, border: `${C.online}40`, background: "transparent" },
-  warn: { color: STATUS_TEXT.warning, border: `${C.warning}40`, background: "transparent" },
-  error: { color: STATUS_TEXT.error, border: `${C.error}40`, background: "transparent" },
+  ok: { color: STATUS_TEXT.online, border: alpha(C.online, 0.25), background: "transparent" },
+  warn: { color: STATUS_TEXT.warning, border: alpha(C.warning, 0.25), background: "transparent" },
+  error: { color: STATUS_TEXT.error, border: alpha(C.error, 0.25), background: "transparent" },
   idle: { color: C.textMuted, border: C.borderActive, background: "transparent" },
   accent: { color: C.accent, border: C.borderAccent, background: C.accentSubtle },
 };
@@ -88,6 +88,7 @@ export function MetaChip({
       data-testid={testId}
       className={cn(
         "shrink-0 inline-flex items-center gap-1 label-sys rounded-sm px-1.5 py-0.5 leading-none",
+        dimmed && "light:opacity-100!",
         className,
       )}
       style={{
@@ -269,7 +270,7 @@ export function ListRow({
 
   const classes = cn(
     "rounded-md border px-2.5 py-1.5 w-full text-left transition-colors",
-    muted && "opacity-60",
+    muted && "opacity-60 light:opacity-100!",
     onClick && "cursor-pointer hover:bg-[var(--color-bg-hover)]",
     className,
   );

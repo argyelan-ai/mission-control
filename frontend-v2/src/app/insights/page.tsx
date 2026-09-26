@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { timeAgo } from "@/lib/utils";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import type {
   CostAgentSummary,
   CostSessionSummary,
@@ -39,6 +39,10 @@ const CHART_TICK = {
   fontFamily: "var(--font-mono)",
   fill: "var(--color-text-muted)",
 } as const;
+// Recharts paints legend labels in the series colour (a 70 % fill here) —
+// fine on dark, below AA on paper. Light mode uses the muted text tone.
+const legendLabel = (value: string) => <span className="light:text-[var(--color-text-muted)]!">{value}</span>;
+
 const LEGEND_STYLE = {
   fontSize: 10,
   fontFamily: "var(--font-mono)",
@@ -351,8 +355,8 @@ export default function InsightsPage() {
                           <XAxis type="number" tick={CHART_TICK} axisLine={false} tickLine={false} allowDecimals={false} />
                           <YAxis type="category" dataKey="name" tick={CHART_TICK} axisLine={false} tickLine={false} width={80} />
                           <Tooltip contentStyle={tooltipStyle} cursor={{ fill: C.accentSubtle }} />
-                          <Bar dataKey="done" name={tr("chartDone")} stackId="a" fill={`${C.online}B3`} radius={[0, 0, 0, 0]} />
-                          <Bar dataKey="failed" name={tr("chartFailed")} stackId="a" fill={`${C.error}B3`} radius={[0, 2, 2, 0]} />
+                          <Bar dataKey="done" name={tr("chartDone")} stackId="a" fill={alpha(C.online, 0.7)} radius={[0, 0, 0, 0]} />
+                          <Bar dataKey="failed" name={tr("chartFailed")} stackId="a" fill={alpha(C.error, 0.7)} radius={[0, 2, 2, 0]} />
                         </BarChart>
                       </ResponsiveContainer>
                     ) : (
@@ -376,7 +380,7 @@ export default function InsightsPage() {
                           <XAxis type="number" tick={CHART_TICK} axisLine={false} tickLine={false} tickFormatter={(v) => `$${v}`} />
                           <YAxis type="category" dataKey="name" tick={CHART_TICK} axisLine={false} tickLine={false} width={80} />
                           <Tooltip contentStyle={tooltipStyle} formatter={(v) => [`$${Number(v).toFixed(4)}`, "Cost"]} />
-                          <Bar dataKey="cost" fill={`${C.accent}B3`} radius={[0, 2, 2, 0]} />
+                          <Bar dataKey="cost" fill={alpha(C.accent, 0.7)} radius={[0, 2, 2, 0]} />
                         </BarChart>
                       </ResponsiveContainer>
                     ) : (
@@ -395,8 +399,8 @@ export default function InsightsPage() {
                           key={i}
                           className="flex items-start gap-3 p-3 rounded-md"
                           style={{
-                            background: a.severity === "warning" ? `${C.warning}0F` : `${C.info}0F`,
-                            border: `1px solid ${a.severity === "warning" ? `${C.warning}33` : `${C.info}26`}`,
+                            background: a.severity === "warning" ? alpha(C.warning, 0.06) : alpha(C.info, 0.06),
+                            border: `1px solid ${a.severity === "warning" ? alpha(C.warning, 0.2) : alpha(C.info, 0.15)}`,
                           }}
                         >
                           {/* Eckiges Status-Quadrat (8px) statt Icon-Kreis */}
@@ -603,7 +607,7 @@ export default function InsightsPage() {
                                       key={h}
                                       className="font-mono text-[10px] px-1.5 py-0.5 rounded-sm"
                                       style={{
-                                        backgroundColor: `${harnessColor(h, idx)}1F`,
+                                        backgroundColor: alpha(harnessColor(h, idx), 0.12),
                                         color: harnessColor(h, idx),
                                       }}
                                     >
@@ -809,7 +813,7 @@ export default function InsightsPage() {
                             contentStyle={tooltipStyle}
                             formatter={(v: number) => [`$${v.toFixed(4)}`, "Cost"]}
                           />
-                          <Legend wrapperStyle={LEGEND_STYLE} />
+                          <Legend wrapperStyle={LEGEND_STYLE} formatter={legendLabel} />
                         </PieChart>
                       </ResponsiveContainer>
                     )}
@@ -830,9 +834,9 @@ export default function InsightsPage() {
                           <XAxis dataKey="name" tick={CHART_TICK} axisLine={false} tickLine={false} />
                           <YAxis tick={CHART_TICK} axisLine={false} tickLine={false} width={30} />
                           <Tooltip contentStyle={tooltipStyle} cursor={{ fill: C.accentSubtle }} />
-                          <Legend wrapperStyle={LEGEND_STYLE} />
-                          <Bar dataKey="done" name={tr("chartDone")} stackId="a" fill={`${C.online}B3`} />
-                          <Bar dataKey="failed" name={tr("chartFailed")} stackId="a" fill={`${C.error}B3`} radius={[2, 2, 0, 0]} />
+                          <Legend wrapperStyle={LEGEND_STYLE} formatter={legendLabel} />
+                          <Bar dataKey="done" name={tr("chartDone")} stackId="a" fill={alpha(C.online, 0.7)} />
+                          <Bar dataKey="failed" name={tr("chartFailed")} stackId="a" fill={alpha(C.error, 0.7)} radius={[2, 2, 0, 0]} />
                         </BarChart>
                       </ResponsiveContainer>
                     ) : <EmptyChart message={tr("noData")} />}
@@ -849,7 +853,7 @@ export default function InsightsPage() {
                             ))}
                           </Pie>
                           <Tooltip contentStyle={tooltipStyle} />
-                          <Legend wrapperStyle={LEGEND_STYLE} />
+                          <Legend wrapperStyle={LEGEND_STYLE} formatter={legendLabel} />
                         </PieChart>
                       </ResponsiveContainer>
                     ) : <EmptyChart message={tr("noFailurePatterns")} />}
@@ -870,7 +874,7 @@ export default function InsightsPage() {
                         <XAxis type="number" tick={CHART_TICK} axisLine={false} tickLine={false} unit="min" />
                         <YAxis type="category" dataKey="name" tick={CHART_TICK} axisLine={false} tickLine={false} width={80} />
                         <Tooltip contentStyle={tooltipStyle} formatter={(v) => [`${v} min`, tr("avgDuration")]} />
-                        <Bar dataKey="mins" fill={`${C.chart.ram}B3`} radius={[0, 2, 2, 0]} />
+                        <Bar dataKey="mins" fill={alpha(C.chart.ram, 0.7)} radius={[0, 2, 2, 0]} />
                       </BarChart>
                     </ResponsiveContainer>
                   </div>

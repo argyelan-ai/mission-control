@@ -28,6 +28,7 @@ import { motion } from "framer-motion";
 import type { VaultNote } from "@/lib/types";
 import { colorForAgent } from "./agentColors";
 
+import { alpha, C } from "@/lib/colors";
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 const MONTHS_SHORT = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"] as const;
@@ -254,7 +255,7 @@ export function MonthMarker({ label }: { label: string }) {
         className="flex-1 h-px"
         style={{
           background:
-            "linear-gradient(to right, var(--color-bg-hover), rgba(255,255,255,0.02) 50%, transparent)",
+            `linear-gradient(to right, var(--color-bg-hover), ${alpha(C.overlay, 0.02)} 50%, transparent)`,
         }}
       />
     </div>
@@ -287,7 +288,7 @@ export function VaultNoteRow({ note, selected, onSelect }: VaultNoteRowProps) {
   // We expose --agent-color so the hover Tailwind utility picks it up.
   const rowStyle = {
     "--agent-color": agentColor,
-    background: selected ? `${agentColor}0E` : "transparent",
+    background: selected ? alpha(agentColor, 0.05) : "transparent",
     transition: "background 0.2s ease",
   } as React.CSSProperties;
 
@@ -354,7 +355,7 @@ export function VaultNoteRow({ note, selected, onSelect }: VaultNoteRowProps) {
           width: selected ? "2px" : "1px",
           background: selected
             ? agentColor
-            : "linear-gradient(to bottom, transparent 0%, rgba(255,255,255,0.10) 18%, rgba(255,255,255,0.10) 82%, transparent 100%)",
+            : `linear-gradient(to bottom, transparent 0%, ${alpha(C.overlay, 0.1)} 18%, ${alpha(C.overlay, 0.1)} 82%, transparent 100%)`,
         }}
       />
 
@@ -368,9 +369,9 @@ export function VaultNoteRow({ note, selected, onSelect }: VaultNoteRowProps) {
               fontSize: "9.5px",
               letterSpacing: "0.14em",
               padding: "3px 7px 3px 7px",
-              background: `${agentColor}1A`,
+              background: alpha(agentColor, 0.1),
               color: agentColor,
-              border: `1px solid ${agentColor}38`,
+              border: `1px solid ${alpha(agentColor, 0.22)}`,
               lineHeight: 1,
             }}
           >
@@ -397,7 +398,7 @@ export function VaultNoteRow({ note, selected, onSelect }: VaultNoteRowProps) {
                 ·
               </span>
               <span
-                className="font-mono"
+                className="font-mono light:opacity-100!"
                 style={{
                   fontSize: "10px",
                   color: "var(--color-text-muted)",

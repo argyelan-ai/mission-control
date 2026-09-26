@@ -7,7 +7,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal, Power, Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
-import { C, STATUS_TEXT, XTERM_THEME } from "@/lib/colors";
+import { C, STATUS_TEXT, XTERM_THEME, alpha } from "@/lib/colors";
 import { TERM_MIN_CONTRAST, TERM_FONT_FAMILY } from "@/lib/terminalScale";
 import "@xterm/xterm/css/xterm.css";
 import { EntityIcon } from "@/components/shared/EntityIcon";
@@ -174,7 +174,7 @@ function PluginsShellTabInner() {
           {connected && (
             <span
               className="text-[10px] px-1.5 py-0.5 rounded-sm"
-              style={{ background: `${C.online}1A`, color: C.online }}
+              style={{ background: alpha(C.online, 0.1), color: C.online }}
             >
               {t("connected")}
             </span>
@@ -196,9 +196,9 @@ function PluginsShellTabInner() {
               onClick={handleStop}
               className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg cursor-pointer transition-colors"
               style={{
-                backgroundColor: `${C.error}1A`,
+                backgroundColor: alpha(C.error, 0.1),
                 color: C.error,
-                border: `1px solid ${C.error}33`,
+                border: `1px solid ${alpha(C.error, 0.2)}`,
               }}
             >
               <Power size={12} />
@@ -226,7 +226,7 @@ function PluginsShellTabInner() {
             {t("helpExample")}
           </code>
           <br />
-          <span className="text-[10px] mt-1 inline-block" style={{ color: "var(--color-text-muted)", opacity: 0.7 }}>
+          <span className="text-[10px] mt-1 inline-block light:opacity-100!" style={{ color: "var(--color-text-muted)", opacity: 0.7 }}>
             {t("helpDelegation")} <code>mc delegate --to Installer ...</code>
           </span>
         </div>

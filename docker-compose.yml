@@ -116,6 +116,10 @@ services:
       ENABLE_BACKGROUND_SERVICES: "false"
       # Head launcher switch (docs/specs/head-launcher.md) — off unless set in .env
       HEADS_ENABLED: ${HEADS_ENABLED:-false}
+      # Head watchdog: stop after N min without progress; hard limit = emergency brake
+      HEADS_NO_PROGRESS_MIN: ${HEADS_NO_PROGRESS_MIN:-20}
+      HEADS_HARD_LIMIT_LOCAL_S: ${HEADS_HARD_LIMIT_LOCAL_S:-28800}
+      HEADS_HARD_LIMIT_CLOUD_S: ${HEADS_HARD_LIMIT_CLOUD_S:-7200}
       # Konsument ist backend/app/routers/browser_live.py — ein Router, also
       # der API-Prozess. War auf main gesetzt und wurde beim Teil-2-Umbau
       # still ersetzt statt ergaenzt (Rex-Review PR #500, Blocker B4):
@@ -279,6 +283,7 @@ services:
       DGX_SSH_USER: ${DGX_SSH_USER:-}
       DGX_SSH_KEY_PATH: ${DGX_SSH_KEY_PATH:-/home/mcuser/.ssh/id_rsa}
       ENABLE_DISPATCH_GATING: ${ENABLE_DISPATCH_GATING:-false}
+      LEAD_AUTO_ASSIGN_NEW_TASKS: ${LEAD_AUTO_ASSIGN_NEW_TASKS:-}
       STRUCTURED_INTAKE_ENABLED: ${STRUCTURED_INTAKE_ENABLED:-false}
       ENABLE_PROMOTE_ORCHESTRATOR: ${ENABLE_PROMOTE_ORCHESTRATOR:-false}
       ENVIRONMENT: production
@@ -413,6 +418,10 @@ services:
       ENABLE_BACKGROUND_SERVICES: "true"
       # Head launcher switch (docs/specs/head-launcher.md) — off unless set in .env
       HEADS_ENABLED: ${HEADS_ENABLED:-false}
+      # Head watchdog: stop after N min without progress; hard limit = emergency brake
+      HEADS_NO_PROGRESS_MIN: ${HEADS_NO_PROGRESS_MIN:-20}
+      HEADS_HARD_LIMIT_LOCAL_S: ${HEADS_HARD_LIMIT_LOCAL_S:-28800}
+      HEADS_HARD_LIMIT_CLOUD_S: ${HEADS_HARD_LIMIT_CLOUD_S:-7200}
       # W2 (Rex-Review PR #500): Migrationen macht der backend-Container
       # (depends_on: backend: service_healthy stellt die Reihenfolge sicher).
       # Ein zweiter alembic-Lauf hier waere ein Migrations-Wettlauf gegen
@@ -506,6 +515,7 @@ services:
       DGX_SSH_USER: ${DGX_SSH_USER:-}
       DGX_SSH_KEY_PATH: ${DGX_SSH_KEY_PATH:-/home/mcuser/.ssh/id_rsa}
       ENABLE_DISPATCH_GATING: ${ENABLE_DISPATCH_GATING:-false}
+      LEAD_AUTO_ASSIGN_NEW_TASKS: ${LEAD_AUTO_ASSIGN_NEW_TASKS:-}
       STRUCTURED_INTAKE_ENABLED: ${STRUCTURED_INTAKE_ENABLED:-false}
       ENABLE_PROMOTE_ORCHESTRATOR: ${ENABLE_PROMOTE_ORCHESTRATOR:-false}
       ENVIRONMENT: production

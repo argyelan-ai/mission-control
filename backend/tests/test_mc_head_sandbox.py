@@ -66,7 +66,8 @@ def test_worktree_and_status_files_are_writable(layout):
     res = _sh(
         layout,
         f"echo ok > {run}/wt/file.txt && echo 'step 1/7' > {run}/step.txt"
-        f" && echo q > {run}/question.md && echo r > {run}/run-record.md && echo g > {layout['clone_git']}/x",
+        f" && echo q > {run}/question.md && echo r > {run}/run-record.md && echo g > {layout['clone_git']}/x"
+        f" && echo w | tee -a {run}/work.log",
     )
     assert res.returncode == 0, res.stderr
     assert (run / "wt" / "file.txt").read_text() == "ok\n"

@@ -63,6 +63,10 @@
     "contextAlert": "{name}: Kontext {pct}%",
     "systemHealth": "Systemstatus",
     "checks": "{count} Checks",
+    "watchdogRunningWorker": "{count} Checks · Worker",
+    "watchdogStale": "kein Lebenszeichen {ago}",
+    "watchdogStopped": "läuft nicht",
+    "watchdogUnknown": "unbekannt",
     "events": "Events",
     "all": "Alle",
     "showAllActivity": "Alle Aktivitäten anzeigen",
@@ -1409,7 +1413,8 @@
       "about": "Über",
       "telegram": "Telegram",
       "aiProviders": "KI-Provider",
-      "nightShift": "Nachtschicht"
+      "nightShift": "Nachtschicht",
+      "appearance": "Darstellung"
     },
     "security": {
       "title": "Sicherheit",
@@ -3260,6 +3265,8 @@
     "failReason": {
       "stopped": "Von dir gestoppt. Der Branch bleibt.",
       "time_limit": "Zeitlimit erreicht. Der Branch bleibt.",
+      "no_progress": "Zu lange kein Fortschritt (keine Ausgabe, kein Schritt, keine Dateiänderung) — gestoppt. Der Branch bleibt.",
+      "hard_limit": "Notbremse: die harte Zeit-Obergrenze ist erreicht. Der Branch bleibt.",
       "no_pr": "Ohne Pull Request beendet.",
       "run_record_missing": "PR (oder gepushter Scratch-Branch) gefunden, aber die Laufakte fehlt oder ist nicht bestanden.",
       "not_picked_up": "Der Host hat den Start nie abgeholt. Ist der Head-Starter installiert?",
@@ -3476,5 +3483,15 @@
       "count": "{count} {label}",
       "regionLabel": "Bericht der Nachtschicht"
     }
+  },
+  "theme": {
+    "label": "Farbschema",
+    "dark": "Dunkel",
+    "light": "Hell",
+    "system": "System",
+    "cycleLabel": "Farbschema: {current} — wechseln zu {next}",
+    "sectionTitle": "Darstellung",
+    "sectionDescription": "Wie Mission Control in diesem Browser aussieht.",
+    "hint": "Dunkel ist Standard. Die Wahl wird nur in diesem Browser gespeichert — andere Browser und Geräte behalten ihre eigene."
   }
 }

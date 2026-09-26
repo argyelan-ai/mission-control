@@ -383,7 +383,6 @@ function TimeInput({
         background: C.bgSurface,
         border: `1px solid ${C.border}`,
         color: C.textPrimary,
-        colorScheme: "dark",
       }}
       aria-label={t("timeLabel")}
     />
@@ -408,7 +407,6 @@ function DateInput({
         background: C.bgSurface,
         border: `1px solid ${C.border}`,
         color: C.textPrimary,
-        colorScheme: "dark",
       }}
       aria-label={t("dateLabel")}
     />

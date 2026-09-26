@@ -15,7 +15,7 @@ import ReactMarkdown from "react-markdown";
 import { api } from "@/lib/api";
 import type { DisplayCard } from "./cards/types";
 import { useVoiceContext } from "./VoiceWidget";
-import { C, LANE } from "@/lib/colors";
+import { C, LANE, alpha } from "@/lib/colors";
 import { useEscapeKey } from "@/hooks/useEscapeKey";
 
 const STATUS_COLORS: Record<string, string> = {
@@ -50,7 +50,7 @@ export function VoicePreviewSheet({
             exit={{ opacity: 0 }}
             transition={{ duration: 0.15 }}
             onClick={onClose}
-            style={{ background: "rgba(0,0,0,0.55)", backdropFilter: "blur(6px)" }}
+            style={{ background: alpha(C.scrim, 0.55), backdropFilter: "blur(6px)" }}
           />
 
           {/* Sheet */}
@@ -67,7 +67,7 @@ export function VoicePreviewSheet({
               maxHeight: "min(80vh, 720px)",
               background: C.bgBase,
               border: `1px solid ${C.borderActive}`,
-              boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
+              boxShadow: `0 4px 24px ${alpha(C.shadow, 0.5)}, 0 1px 2px ${alpha(C.shadow, 0.3)}`,
             }}
           >
             {/* Top rim */}
@@ -75,7 +75,7 @@ export function VoicePreviewSheet({
               className="absolute inset-x-0 top-0 h-px pointer-events-none"
               style={{
                 background:
-                  "linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.10) 50%, transparent 100%)",
+                  `linear-gradient(90deg, transparent 0%, ${alpha(C.overlay, 0.1)} 50%, transparent 100%)`,
               }}
             />
 
@@ -105,9 +105,9 @@ function HangupChip() {
       onClick={() => endSession()}
       className="flex items-center gap-1 px-2 py-1 rounded-sm text-[10px] hover:opacity-90 cursor-pointer transition-opacity"
       style={{
-        background: `linear-gradient(135deg, ${C.error}CC 0%, ${C.error} 100%)`,
+        background: `linear-gradient(135deg, ${alpha(C.error, 0.8)} 0%, ${C.error} 100%)`,
         color: C.textPrimary,
-        boxShadow: `0 2px 8px ${C.error}40`,
+        boxShadow: `0 2px 8px ${alpha(C.error, 0.25)}`,
       }}
       title="End call (saves tokens) — this preview stays open"
     >
@@ -143,7 +143,7 @@ function NoteSheet({
   return (
     <>
       {/* Header */}
-      <div className="relative flex items-center justify-between px-5 py-3 border-b border-white/[0.06]">
+      <div className="relative flex items-center justify-between px-5 py-3 border-b border-[var(--color-overlay)]/[0.06]">
         <div className="flex items-center gap-2.5 min-w-0">
           <Icon size={14} style={{ color: C.accent }} className="shrink-0" />
           <div className="min-w-0">
@@ -168,7 +168,7 @@ function NoteSheet({
               href={openInVaultHref}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center gap-1 px-2 py-1 rounded-sm text-[10px] hover:bg-white/5 cursor-pointer"
+              className="flex items-center gap-1 px-2 py-1 rounded-sm text-[10px] hover:bg-[var(--color-overlay)]/5 cursor-pointer"
               style={{ color: "var(--color-text-secondary)" }}
               title="Open in Vault (new tab)"
             >
@@ -178,7 +178,7 @@ function NoteSheet({
           <button
             type="button"
             onClick={onClose}
-            className="p-1.5 rounded-sm hover:bg-white/5 cursor-pointer"
+            className="p-1.5 rounded-sm hover:bg-[var(--color-overlay)]/5 cursor-pointer"
             aria-label="Close"
           >
             <X size={14} style={{ color: "var(--color-text-secondary)" }} />
@@ -233,7 +233,7 @@ function TaskSheet({
 
   return (
     <>
-      <div className="relative flex items-center justify-between px-5 py-3 border-b border-white/[0.06]">
+      <div className="relative flex items-center justify-between px-5 py-3 border-b border-[var(--color-overlay)]/[0.06]">
         <div className="flex items-center gap-2.5 min-w-0">
           <CircleDot
             size={14}
@@ -261,7 +261,7 @@ function TaskSheet({
             href={openHref}
             target="_blank"
             rel="noopener noreferrer"
-            className="flex items-center gap-1 px-2 py-1 rounded-sm text-[10px] hover:bg-white/5 cursor-pointer"
+            className="flex items-center gap-1 px-2 py-1 rounded-sm text-[10px] hover:bg-[var(--color-overlay)]/5 cursor-pointer"
             style={{ color: "var(--color-text-secondary)" }}
             title="Open in tasks board (new tab)"
           >
@@ -270,7 +270,7 @@ function TaskSheet({
           <button
             type="button"
             onClick={onClose}
-            className="p-1.5 rounded-sm hover:bg-white/5 cursor-pointer"
+            className="p-1.5 rounded-sm hover:bg-[var(--color-overlay)]/5 cursor-pointer"
             aria-label="Close"
           >
             <X size={14} style={{ color: "var(--color-text-secondary)" }} />

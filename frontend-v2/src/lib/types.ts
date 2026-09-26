@@ -937,7 +937,15 @@ export interface SystemStatus {
     database: { status: string; latency_ms?: number; error?: string };
     redis: { status: string; latency_ms?: number; error?: string };
     gateway: { status: string; url?: string; error?: string };
-    watchdog: { status: string; last_check?: string | null; checks_total?: number };
+    watchdog: {
+      status: string;
+      /** "local" = API process, "worker" = worker container, null when stopped */
+      source?: "local" | "worker" | null;
+      last_seen?: string | null;
+      last_check?: string | null;
+      checks_total?: number;
+    };
+    task_runner?: { status: string; source?: "local" | "worker" | null; last_seen?: string | null };
   };
   resources: MetricsSnapshot | null;
   agents: { total: number; online: number; offline: number };

@@ -19,7 +19,7 @@ import { SlideOverPanel } from "@/components/shared/SlideOverPanel";
 import { ResponsiveModal } from "@/components/shared/ResponsiveModal";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import { timeAgo } from "@/lib/utils";
 import type { Board, Project, Repo } from "@/lib/types";
 
@@ -81,7 +81,7 @@ function DeleteRepoDialog({
         {errorMsg && (
           <div
             className="mt-3 text-xs px-3 py-2 rounded-lg"
-            style={{ background: `${C.error}14`, border: `1px solid ${C.error}33`, color: STATUS_TEXT.error }}
+            style={{ background: alpha(C.error, 0.08), border: `1px solid ${alpha(C.error, 0.2)}`, color: STATUS_TEXT.error }}
           >
             {errorMsg}
           </div>
@@ -104,7 +104,7 @@ function DeleteRepoDialog({
           onClick={() => { setErrorMsg(null); deleteMutation.mutate(); }}
           disabled={deleteMutation.isPending}
           className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-sm font-semibold transition-opacity cursor-pointer disabled:opacity-70 disabled:cursor-not-allowed"
-          style={{ background: C.error, color: C.textPrimary }}
+          style={{ background: C.error, color: C.onStatus }}
         >
           {deleteMutation.isPending ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />}
           {t("delete")}
@@ -442,7 +442,7 @@ export function RepoDetailPanel({
               <button
                 onClick={() => setDeleteOpen(true)}
                 className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg cursor-pointer transition-all ml-auto"
-                style={{ background: `${C.error}14`, border: `1px solid ${C.error}33`, color: STATUS_TEXT.error }}
+                style={{ background: alpha(C.error, 0.08), border: `1px solid ${alpha(C.error, 0.2)}`, color: STATUS_TEXT.error }}
               >
                 <Trash2 size={11} />
                 {t("delete")}

@@ -9,7 +9,7 @@
 
 import { useTranslations } from "next-intl";
 import type { ScheduleHeatmapCell } from "@/lib/types";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 
 interface ScheduleHeatmapProps {
   data: ScheduleHeatmapCell[];
@@ -19,8 +19,6 @@ interface ScheduleHeatmapProps {
 // Message keys in the schedule.* namespace — t() at the render site.
 const WEEKDAY_KEYS = ["dayMon", "dayTue", "dayWed", "dayThu", "dayFri", "daySat", "daySun"];
 const HOUR_LABELS = [0, 6, 12, 18];
-// C.accent = "#EBE8DE" → RGB for use in rgba()
-const ACCENT = "235,232,222";
 
 export function ScheduleHeatmap({ data, title }: ScheduleHeatmapProps) {
   const t = useTranslations("schedule");
@@ -104,10 +102,10 @@ export function ScheduleHeatmap({ data, title }: ScheduleHeatmapProps) {
                       background:
                         a === 0
                           ? C.borderSubtle
-                          : `rgba(${ACCENT}, ${a.toFixed(2)})`,
+                          : alpha(C.accent, a),
                       border:
                         a > 0
-                          ? `1px solid rgba(${ACCENT}, ${Math.min(1, a + 0.1).toFixed(2)})`
+                          ? `1px solid ${alpha(C.accent, a + 0.1)}`
                           : `1px solid ${C.borderSubtle}`,
                     }}
                   />
@@ -126,7 +124,7 @@ export function ScheduleHeatmap({ data, title }: ScheduleHeatmapProps) {
             <span
               key={a}
               className="block h-3 w-4 rounded-sm"
-              style={{ background: `rgba(${ACCENT}, ${a})` }}
+              style={{ background: alpha(C.accent, a) }}
             />
           ))}
         </div>

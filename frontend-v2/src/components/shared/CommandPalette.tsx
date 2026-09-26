@@ -13,6 +13,7 @@ import { api } from "@/lib/api";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 
+import { C, alpha } from "@/lib/colors";
 // ── v3 styles (Tokens only) ─────────────────────────────────────────────────
 // Items: 13px General Sans, ausgewählt = accent-subtle Fläche + 2px Akzent-Balken
 // links (inset shadow, eckig) + accent-light Text.
@@ -75,7 +76,7 @@ export default function CommandPalette() {
             exit={{ opacity: 0 }}
             transition={{ duration: 0.15 }}
             className="fixed inset-0 z-50"
-            style={{ backgroundColor: "rgba(2, 4, 8, 0.7)" }}
+            style={{ backgroundColor: alpha(C.scrim, 0.7) }}
             onClick={close}
           />
 

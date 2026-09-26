@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { useEscapeKey } from "@/hooks/useEscapeKey";
 
+import { C, alpha } from "@/lib/colors";
 interface ResponsiveModalProps {
   open: boolean;
   onClose: () => void;
@@ -61,7 +62,7 @@ export function ResponsiveModal({
             aria-hidden
             onClick={dismissOnOutside ? onClose : undefined}
             className="absolute inset-0"
-            style={{ backgroundColor: "rgba(2,4,8,0.7)" }}
+            style={{ backgroundColor: alpha(C.scrim, 0.7) }}
           />
 
           {/* Panel */}
@@ -85,7 +86,7 @@ export function ResponsiveModal({
             style={{
               backgroundColor: "var(--color-bg-elevated)",
               border: "1px solid var(--color-border)",
-              boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
+              boxShadow: `0 4px 24px ${alpha(C.shadow, 0.5)}, 0 1px 2px ${alpha(C.shadow, 0.3)}`,
             }}
           >
             {/* Akzent-Kante oben — Signatur-Markierung */}

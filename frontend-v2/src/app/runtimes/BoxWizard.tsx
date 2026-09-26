@@ -42,7 +42,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { api } from "@/lib/api";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import type {
   Host,
@@ -393,7 +393,7 @@ function ConnectionStep({
         <div
           data-testid="box-wizard-probe-error"
           className="text-xs px-3 py-2 rounded-lg"
-          style={{ background: `${C.error}14`, border: `1px solid ${C.error}33`, color: C.error }}
+          style={{ background: alpha(C.error, 0.08), border: `1px solid ${alpha(C.error, 0.2)}`, color: C.error }}
         >
           {error}
         </div>
@@ -403,7 +403,7 @@ function ConnectionStep({
         <div
           data-testid="box-wizard-unreachable"
           className="text-xs px-3 py-2 rounded-lg flex items-start gap-2"
-          style={{ background: `${C.error}14`, border: `1px solid ${C.error}33`, color: C.error }}
+          style={{ background: alpha(C.error, 0.08), border: `1px solid ${alpha(C.error, 0.2)}`, color: C.error }}
         >
           <XCircle size={13} className="shrink-0" style={{ marginTop: 1 }} />
           <div>
@@ -599,8 +599,8 @@ function BaseStep({
           data-testid="box-wizard-needs-sudo"
           className="text-[11px] px-3 py-2.5 rounded-lg whitespace-pre-wrap font-mono"
           style={{
-            background: `${C.warning}14`,
-            border: `1px solid ${C.warning}33`,
+            background: alpha(C.warning, 0.08),
+            border: `1px solid ${alpha(C.warning, 0.2)}`,
             color: C.textSecondary,
           }}
         >
@@ -611,7 +611,7 @@ function BaseStep({
       {error && (
         <div
           className="text-xs px-3 py-2 rounded-lg"
-          style={{ background: `${C.error}14`, border: `1px solid ${C.error}33`, color: C.error }}
+          style={{ background: alpha(C.error, 0.08), border: `1px solid ${alpha(C.error, 0.2)}`, color: C.error }}
         >
           {error}
         </div>
@@ -730,8 +730,8 @@ function ModelStep({
                     data-testid="box-wizard-fit-warning"
                     className="inline-flex items-center gap-1 text-[10px] px-1.5 py-px rounded-sm"
                     style={{
-                      background: `${C.warning}14`,
-                      border: `1px solid ${C.warning}33`,
+                      background: alpha(C.warning, 0.08),
+                      border: `1px solid ${alpha(C.warning, 0.2)}`,
                       color: C.warning,
                     }}
                   >
@@ -886,7 +886,7 @@ function ReviewStep({
         <div
           data-testid="box-wizard-create-error"
           className="text-xs px-3 py-2 rounded-lg"
-          style={{ background: `${C.error}14`, border: `1px solid ${C.error}33`, color: C.error }}
+          style={{ background: alpha(C.error, 0.08), border: `1px solid ${alpha(C.error, 0.2)}`, color: C.error }}
         >
           {error}
         </div>

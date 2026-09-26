@@ -47,6 +47,8 @@ populated instance. Use `--route` and `--width` for quick checks.
 | `--load-timeout MS` | `20000` | How long to wait for "Loading…" texts / `aria-busy` to disappear after a page load (clicks: up to 10 s). |
 | `--all-repeats` | off | Probe every copy of a repeated component instead of the first and the last. |
 | `--headed` | off | Show the browser. |
+| `--theme light` | the app's own default | `dark`, `light` or `system`: stores the theme choice in local storage before any page script runs (the app's `<head>` script then applies it before the first paint, the real code path) and emulates the same OS colour scheme. The report names the theme; a page that renders another theme is a `theme` finding. |
+| `--contrast` | off | Adds the text-contrast check (WCAG AA) to every state, see `contrast` below. |
 
 The token is read from `MC_PROBE_TOKEN` only, placed into the browser's local
 storage and used for the GET requests that resolve dynamic routes. It is never
@@ -101,6 +103,24 @@ Exit codes: `0` done, `2` a write request got through (must never happen),
 | `clipped-text` | medium | Text cut off without an ellipsis. |
 | `console-error` | medium | Browser console error in that state (errors caused by the probe's own lock are filtered). |
 | `small-target` | low | Controls under 44 px, phone widths only. |
+| `crash` | high | The probe could not finish the page (e.g. the browser tab crashed); the run continues with the next page. |
+| `theme` | high | With `--theme`: the page renders another theme than the forced one. |
+| `contrast` | high | With `--contrast`: text below WCAG AA (4.5:1, large text 3:1) against the background right behind it. One finding per colour pair, with example texts. |
+
+**How `contrast` measures (a heuristic, not axe).** For every visible element
+with its own letters or digits (the whole page on load, only the new elements
+of an opened state) the probe reads the text colour and the background colour
+and opacity of every ancestor up to `<html>`, normalised to sRGB through a
+canvas (so `color-mix()`/`oklch()` work). `scripts/probe/lib/contrast.mjs`
+composites them like the browser does (an ancestor's opacity fades its
+background and the text together; a white canvas at the bottom) and computes
+the WCAG ratio. Disabled controls are exempt, as in WCAG. Its limits: what
+really sits behind a positioned element is not always its DOM ancestor, text
+on a background image or gradient and text under an endless animation (a
+pulsing "Loading…") are skipped and counted ("skipped" in the report header),
+text faded below 15 % opacity counts as hidden, not dim, and canvas drawings
+(the memory graph) are not text. Before measuring, the probe waits up to 2 s
+for running fades/transitions to finish.
 
 7. **Output** in `--out`: `report.md` (opened X of Y per page, findings with
    screenshot paths, guarded controls, blocked writes), `probe.json` (all raw
@@ -147,7 +167,9 @@ anything through the UI:
   never into a foreign iframe or popup. Console messages and page errors are
   scrubbed (`token=…`, `Bearer …`, JWT-shaped strings, the token itself)
   before they reach `probe.json` / `report.md`.
-- The self-test also opens a WebSocket and checks that the probe refused it.
+- The self-test also opens a WebSocket and checks that the probe refused it
+  (it counts its own socket only: a dev server's hot-reload socket is refused
+  as well, which `next dev` survives).
 
 **Remaining risk: GET requests with side effects.** The lock works on HTTP
 methods, not on the database. A few read endpoints update derived data as a

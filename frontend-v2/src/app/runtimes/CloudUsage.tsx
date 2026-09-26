@@ -18,7 +18,7 @@ import { useTranslations } from "next-intl";
 import { ChevronDown } from "lucide-react";
 import Link from "next/link";
 import { api } from "@/lib/api";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import type { Runtime, RuntimeAgentRef } from "@/lib/types";
 
 // ── Agent-bound row ────────────────────────────────────────────────────────
@@ -78,7 +78,7 @@ function UsageRow({
         {anyPending && (
           <span
             className="text-[11px] leading-none rounded-sm px-2 py-1 shrink-0"
-            style={{ color: STATUS_TEXT.warning, border: `1px solid ${C.warning}66` }}
+            style={{ color: STATUS_TEXT.warning, border: `1px solid ${alpha(C.warning, 0.4)}` }}
             title={pendingTitle}
           >
             {pendingLabel}
@@ -100,7 +100,7 @@ function UnboundRow({ runtime, onOpen, bindCta }: { runtime: Runtime; onOpen: (r
       type="button"
       data-testid={`cloud-usage-row-${runtime.slug ?? runtime.id}`}
       onClick={() => onOpen(runtime)}
-      className="flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-lg text-left cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
+      className="flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-lg text-left cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)] light:opacity-100!"
       style={{ background: C.bgSurface, border: `1px solid ${C.borderSubtle}`, opacity: 0.6 }}
     >
       <span className="text-xs truncate" style={{ color: C.textMuted }}>

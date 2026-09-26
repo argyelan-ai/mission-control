@@ -5,7 +5,7 @@ import { motion, useReducedMotion } from "framer-motion";
 import { OrgChartNode } from "./OrgChartNode";
 import { ORG_CHART, getChildren, getRoot } from "./org-chart-data";
 import type { OrgNode } from "./types";
-import { C, STATUS } from "@/lib/colors";
+import { C, STATUS, alpha } from "@/lib/colors";
 
 /**
  * Connector descriptor — computed from card DOM rects relative to the
@@ -187,12 +187,12 @@ export function OrgChart({ zoom = 1 }: OrgChartProps = {}) {
               opacity from 0.16→0.45 and thickness from 1.2→1.8 so they
               read on the glass panel against AppShell deep tone. */}
           <linearGradient id="org-line-solid" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%"   stopColor="rgba(146,170,206,0.45)" />
-            <stop offset="100%" stopColor="rgba(146,170,206,0.18)" />
+            <stop offset="0%"   stopColor={alpha(C.info, 0.45)} />
+            <stop offset="100%" stopColor={alpha(C.info, 0.18)} />
           </linearGradient>
           <linearGradient id="org-line-voice" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%"   stopColor={`${C.accent}D9`} />
-            <stop offset="100%" stopColor={`${C.accent}59`} />
+            <stop offset="0%"   stopColor={alpha(C.accent, 0.85)} />
+            <stop offset="100%" stopColor={alpha(C.accent, 0.35)} />
           </linearGradient>
         </defs>
         {connectors.map((c, i) => (
@@ -312,12 +312,12 @@ function NodeWrapper({
 function Legend() {
   return (
     <div
-      className="mt-12 mx-auto flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-[10px] text-zinc-500"
+      className="mt-12 mx-auto flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-[10px] text-[var(--color-text-muted)]"
       aria-label="Legend"
     >
       <LegendItem swatch={<LineSwatch variant="solid" />} label="Dispatch-Linie" />
       <LegendItem swatch={<LineSwatch variant="voice"  />} label="Voice-Branch" />
-      <span className="hidden sm:inline-block h-3 w-px bg-zinc-800" />
+      <span className="hidden sm:inline-block h-3 w-px bg-[var(--color-bg-elevated)]" />
       <LegendItem swatch={<Dot color={C.online} />} label="online" />
       <LegendItem swatch={<Dot color={C.accent} />} label="working" />
       <LegendItem swatch={<Dot color={STATUS.offline} />} label="offline" />
@@ -350,7 +350,7 @@ function LineSwatch({ variant }: { variant: "solid" | "voice" }) {
   }
   return (
     <svg width="22" height="6" aria-hidden>
-      <line x1="0" y1="3" x2="22" y2="3" stroke="rgba(255,255,255,0.3)" strokeWidth="1.2" />
+      <line x1="0" y1="3" x2="22" y2="3" stroke={alpha(C.overlay, 0.3)} strokeWidth="1.2" />
     </svg>
   );
 }
