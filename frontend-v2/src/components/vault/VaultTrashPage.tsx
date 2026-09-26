@@ -265,8 +265,8 @@ function TrashRow({
         {trashedAt ? (
           <>
             <div
-              className="text-[28px] font-bold leading-none tracking-tighter tabular-nums light:opacity-100!"
-              style={{ color: "var(--color-text-secondary)", opacity: 0.65 }}
+              className="text-[28px] font-bold leading-none tracking-tighter tabular-nums"
+              style={{ color: "var(--color-text-muted)" }}
             >
               {trashedAt.day}
             </div>
@@ -323,7 +323,7 @@ function TrashRow({
         <div className="flex items-center gap-2.5 mb-2">
           {item.type && (
             <span
-              className="font-mono uppercase font-semibold rounded-sm light:opacity-100!"
+              className="font-mono uppercase font-semibold rounded-sm"
               style={{
                 fontSize: "9.5px",
                 letterSpacing: "0.14em",
@@ -332,7 +332,6 @@ function TrashRow({
                 color: agentColor,
                 border: `1px solid ${alpha(agentColor, 0.22)}`,
                 lineHeight: 1,
-                opacity: 0.7,
               }}
             >
               {item.type}
@@ -378,11 +377,10 @@ function TrashRow({
 
         {item.original_path && (
           <div
-            className="font-mono truncate light:opacity-100!"
+            className="font-mono truncate"
             style={{
               fontSize: "10.5px",
               color: "var(--color-text-muted)",
-              opacity: 0.6,
             }}
             title={item.original_path}
           >
@@ -395,11 +393,10 @@ function TrashRow({
             {item.tags.slice(0, 5).map((tag) => (
               <span
                 key={tag}
-                className="font-mono light:opacity-100!"
+                className="font-mono"
                 style={{
                   fontSize: "10.5px",
                   color: "var(--color-text-muted)",
-                  opacity: 0.55,
                 }}
               >
                 #{tag}

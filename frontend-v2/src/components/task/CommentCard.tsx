@@ -192,7 +192,7 @@ function TypeBadge({ type, color }: { type: CommentType; color: string }) {
         textTransform: "uppercase",
         letterSpacing: "0.06em",
         color: color,
-        background: alpha(color, 0.1),
+        background: alpha(color, 0.08), // ≤8 %: the badge text stays AA on a tinted card
         border: `1px solid ${alpha(color, 0.2)}`,
       }}
     >
@@ -360,7 +360,6 @@ export function CommentCard({ comment, agentMap }: CommentCardProps) {
 
   return (
     <div
-      className={isSystem ? "light:opacity-100!" : undefined}
       style={{
         position: "relative",
         background: bgTint,
@@ -371,7 +370,6 @@ export function CommentCard({ comment, agentMap }: CommentCardProps) {
             ? `3px ${leftBorderStyle} ${leftBorderColor}`
             : `1px solid ${C.border}`,
         overflow: "hidden",
-        opacity: isSystem ? 0.92 : 1,
       }}
     >
       {/* Top highlight line */}

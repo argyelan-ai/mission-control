@@ -203,7 +203,7 @@ export function CredentialsTab() {
                     </button>
                   )}
                   {deleteConfirm === c.id ? (
-                    <button onClick={() => deleteMut.mutate(c.id)} className="px-2 py-1 rounded-lg text-[10px] font-medium cursor-pointer" style={{ color: C.error, backgroundColor: alpha(C.error, 0.13) }}>
+                    <button onClick={() => deleteMut.mutate(c.id)} className="px-2 py-1 rounded-lg text-[10px] font-medium cursor-pointer" style={{ color: C.error, backgroundColor: alpha(C.error, 0.1) }}>
                       {t("reallyDelete")}
                     </button>
                   ) : (
@@ -273,7 +273,7 @@ export function CredentialsTab() {
                         onClick={() => setCredType(ct)}
                         className="px-2.5 py-1 text-[11px] font-mono font-medium rounded-sm cursor-pointer transition-all"
                         style={{
-                          backgroundColor: credType === ct ? alpha(cfg.color, 0.13) : "transparent",
+                          backgroundColor: credType === ct ? alpha(cfg.color, 0.1) : "transparent",
                           color: credType === ct ? cfg.color : C.textMuted,
                           border: `1px solid ${credType === ct ? alpha(cfg.color, 0.4) : C.border}`,
                         }}

@@ -745,8 +745,8 @@ function UnassignedRow({ runtime, onOpen }: { runtime: Runtime; onOpen: (rt: Run
       type="button"
       data-testid={`unassigned-row-${runtime.slug ?? runtime.id}`}
       onClick={() => onOpen(runtime)}
-      className="flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-lg text-left cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)] light:opacity-100!"
-      style={{ background: C.bgSurface, border: `1px solid ${C.borderSubtle}`, opacity: 0.7 }}
+      className="flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-lg text-left cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
+      style={{ background: C.bgSurface, border: `1px solid ${C.borderSubtle}` }}
     >
       <span className="text-xs truncate" style={{ color: C.textMuted }}>{runtime.display_name}</span>
       <span className="text-xs shrink-0" style={{ color: C.textDim }}>{tSlot("unassignedHint")}</span>

@@ -398,11 +398,10 @@ export function VaultNoteRow({ note, selected, onSelect }: VaultNoteRowProps) {
                 ·
               </span>
               <span
-                className="font-mono light:opacity-100!"
+                className="font-mono"
                 style={{
                   fontSize: "10px",
                   color: "var(--color-text-muted)",
-                  opacity: 0.75,
                 }}
               >
                 {note.project}
