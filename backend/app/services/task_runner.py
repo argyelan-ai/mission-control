@@ -37,6 +37,7 @@ from app.services.activity import emit_event
 from app.services.dispatch import auto_dispatch_task, TURN_SIGNAL_HEARTBEAT_MAX_AGE_SECONDS
 from app.services.messaging import last_task_activity, maybe_post_finish_nudge
 from app.services.operator_notices import raise_notice
+from app.services.service_heartbeat import clear_beat, record_beat
 from app.services.task_state import lock_and_set
 
 # W-busy (#25efd77c): grace window for a heal claimed while the agent's last
@@ -363,6 +364,10 @@ class TaskRunnerService:
     def running(self) -> bool:
         return self._running
 
+    @property
+    def interval(self) -> int:
+        return self._interval
+
     async def start(self) -> None:
         if self._running:
             return
@@ -371,6 +376,7 @@ class TaskRunnerService:
         logger.info("Task Runner started (interval=%ds)", self._interval)
 
     async def stop(self) -> None:
+        was_running = self._running
         self._running = False
         if self._task:
             self._task.cancel()
@@ -379,6 +385,11 @@ class TaskRunnerService:
             except asyncio.CancelledError:
                 pass
             self._task = None
+        # A deliberate stop reads as "stopped" at once. Only the instance that
+        # ran the loop clears it: an idle singleton in the API process must not
+        # erase the heartbeat of the loop running in the worker.
+        if was_running:
+            await clear_beat("task_runner")
         logger.info("Task Runner stopped")
 
     async def _run_loop(self) -> None:
@@ -394,6 +405,8 @@ class TaskRunnerService:
                 return
             except Exception as e:
                 logger.error("Task Runner check error: %s", e)
+            # Liveness for the API process (see app/services/service_heartbeat.py).
+            await record_beat("task_runner", interval=self._interval)
             await asyncio.sleep(self._interval)
 
     async def _acquire_lock(self) -> bool:

@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -342,6 +342,32 @@ class Settings(BaseSettings):
     # False = legacy: dispatch_phase ignored, tasks dispatch immediately
     # True = tasks with dispatch_phase="planning" are NOT auto-dispatched
     enable_dispatch_gating: bool = False
+
+    # ADR-085 §4/§5 (head per job, quiet mode): a task created from the UI/API
+    # WITHOUT an agent is no longer auto-assigned to the board lead (which
+    # prepared its repo workspace and queued the card for it — the old fleet
+    # path). None (default, also an empty env value) = follow the head
+    # launcher: held back only while heads_enabled is on, so an installation
+    # without heads keeps the lead path (ADR-085 "Open source / existing
+    # installations"). False = always leave the card unassigned in the inbox
+    # until the operator assigns it or a head picks the job up. True = always
+    # legacy lead-first auto-assign. Explicit assignments, agent-created tasks
+    # (lead delegation, voice agent), scheduler and loop tasks are not
+    # affected. Read it through lead_auto_assign_effective().
+    lead_auto_assign_new_tasks: bool | None = None
+
+    @field_validator("lead_auto_assign_new_tasks", mode="before")
+    @classmethod
+    def _empty_means_unset(cls, v):
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
+    def lead_auto_assign_effective(self) -> bool:
+        """ADR-085: an explicit value wins; unset follows heads_enabled."""
+        if self.lead_auto_assign_new_tasks is not None:
+            return self.lead_auto_assign_new_tasks
+        return not self.heads_enabled
 
     # Bauplan Lauf 2 Teil 2-4 (21.09.2026): Guard 3's turn-signal check
     # (agent.status == "working" + fresh heartbeat) applies to ANY

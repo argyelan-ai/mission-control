@@ -10,6 +10,7 @@ from app.auth import Role, require_role, require_user
 from app.config import settings
 from app.database import get_session
 from app.redis_client import RedisKeys, get_redis
+from app.services.service_heartbeat import service_status
 from app.services.task_runner import task_runner
 from app.services.watchdog import watchdog
 from app.utils import ensure_aware, utcnow
@@ -22,6 +23,12 @@ router = APIRouter()
 # the A2 bug from 2026-07-02; fixed at the source instead of per frontend component).
 ALIVE_AGENT_STATUSES = ("online", "busy", "idle", "working")
 _start_time = utcnow()
+
+
+def _stale_after(interval: int) -> int:
+    """A loop beats once per tick (check duration + interval sleep). Four
+    missed intervals, at least two minutes, before we call it stale."""
+    return max(4 * interval, 120)
 
 
 @router.get("/health")
@@ -117,17 +124,33 @@ async def system_status(
     # sunset; the /api/v1/system/status response no longer includes
     # `components["gateway"]`. Frontend (Phase 31) will adapt.
 
-    # Watchdog status
+    # Background loops. Since the worker container split they run in the
+    # worker process, not here — asking only this process's singletons said
+    # "stopped" while the watchdog was running. Each loop writes a Redis
+    # heartbeat per tick; a loop running in this process still counts.
+    wd_status, wd_beat = await service_status(
+        "watchdog",
+        local_running=watchdog.running,
+        stale_after_seconds=_stale_after(watchdog.interval),
+    )
+    if wd_status["source"] == "local":
+        last_check = watchdog.last_check_at.isoformat() if watchdog.last_check_at else None
+        checks_total = watchdog.checks_total
+    else:
+        last_check = (wd_beat or {}).get("last_check_at")
+        checks_total = (wd_beat or {}).get("checks_total", 0)
     components["watchdog"] = {
-        "status": "running" if watchdog.running else "stopped",
-        "last_check": watchdog.last_check_at.isoformat() if watchdog.last_check_at else None,
-        "checks_total": watchdog.checks_total,
+        **wd_status,
+        "last_check": last_check,
+        "checks_total": checks_total,
     }
 
-    # Task Runner status
-    components["task_runner"] = {
-        "status": "running" if task_runner.running else "stopped",
-    }
+    tr_status, _ = await service_status(
+        "task_runner",
+        local_running=task_runner.running,
+        stale_after_seconds=_stale_after(task_runner.interval),
+    )
+    components["task_runner"] = tr_status
 
     overall = "healthy" if all(
         c.get("status") in ("ok", "running") for c in components.values()

@@ -12,6 +12,7 @@ import type { ActivityEvent, MetricsSnapshot, MetricsHistoryResponse, SystemStat
 import { timeAgo } from "@/lib/utils";
 import { C, latencyColor } from "./colors";
 import { SectionHeading, ServiceDot, SparklineChart } from "./primitives";
+import { watchdogView } from "./watchdogStatus";
 
 function SystemActivityFeed() {
   const t = useTranslations("home");
@@ -65,6 +66,7 @@ interface SystemHealthSectionProps {
 
 export function SystemHealthSection({ status, loading, onOpenActivity }: SystemHealthSectionProps) {
   const t = useTranslations("home");
+  const locale = useLocale();
   const { data: historyData } = useQuery({
     queryKey: ["system", "metrics-history"],
     queryFn: () => api.system.metricsHistory(),
@@ -99,10 +101,12 @@ export function SystemHealthSection({ status, loading, onOpenActivity }: SystemH
 
   const dbDetail = database.latency_ms !== undefined ? `${database.latency_ms.toFixed(1)}ms` : database.error ?? database.status;
   const redisDetail = redis.latency_ms !== undefined ? `${redis.latency_ms.toFixed(1)}ms` : redis.error ?? redis.status;
-  const watchdogDetail = wd ? (wd.status === "running" ? t("checks", { count: wd.checks_total ?? 0 }) : wd.status) : "unknown";
+  const wdView = watchdogView(wd);
+  const watchdogDetail = wdView.key === "watchdogStale"
+    ? t("watchdogStale", { ago: timeAgo(wdView.lastSeen ?? null, locale) })
+    : t(wdView.key, wdView.values ?? {});
 
-  const wdStatus = wd?.status === "running" ? "ok" : wd?.status ?? "unknown";
-  const hasError = database.status === "error" || redis.status === "error" || wdStatus === "error";
+  const hasError = database.status === "error" || redis.status === "error" || wdView.isError;
 
   const cpuHistory = (historyData as MetricsHistoryResponse | undefined)?.snapshots?.map((s: MetricsSnapshot) => s.cpu_pct ?? 0) ?? [];
   const memHistory = (historyData as MetricsHistoryResponse | undefined)?.snapshots?.map((s: MetricsSnapshot) => s.memory_pct ?? 0) ?? [];
@@ -117,7 +121,7 @@ export function SystemHealthSection({ status, loading, onOpenActivity }: SystemH
         </div>
         <ServiceDot label="DB" status={database.status} detail={dbDetail} detailColor={database.latency_ms !== undefined ? latencyColor(database.latency_ms) : undefined} />
         <ServiceDot label="Redis" status={redis.status} detail={redisDetail} detailColor={redis.latency_ms !== undefined ? latencyColor(redis.latency_ms) : undefined} />
-        <ServiceDot label="Watchdog" status={wdStatus} detail={watchdogDetail} />
+        <ServiceDot label="Watchdog" status={wdView.dot} detail={watchdogDetail} />
         <div className="flex items-center gap-2 ml-auto">
           <span className="label-sys">{t("events")}</span>
           <button
