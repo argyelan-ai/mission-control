@@ -21,6 +21,7 @@
  */
 
 import { useState } from "react";
+import ReactMarkdown from "react-markdown";
 import { useLocale, useTranslations } from "next-intl";
 import { ChevronDown, CheckSquare, Square, AlertCircle } from "lucide-react";
 import { C, LANE } from "@/lib/colors";
@@ -148,9 +149,15 @@ export function TaskSummaryTab({
             <TaskDescription description={brief} />
           </div>
         ) : (
-          <p className="line-clamp-6 whitespace-pre-line" style={{ color: C.textSecondary }}>
-            {brief}
-          </p>
+          // Collapsed: the same markdown renderer as the full brief, cut at
+          // ~6 lines; headings use the calm prose scale (no page-size type).
+          <div
+            data-testid="summary-brief-preview"
+            className="prose-description max-h-[9.9em] overflow-hidden"
+            style={{ color: C.textSecondary }}
+          >
+            <ReactMarkdown>{brief}</ReactMarkdown>
+          </div>
         )}
         {briefOpen && briefExtra}
         <div>

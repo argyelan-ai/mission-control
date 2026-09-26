@@ -31,6 +31,7 @@ import { ApprovalCard } from "@/components/inbox/ApprovalCard";
 import type { StateCard } from "@/lib/taskDetail/stateCard";
 import type { StateLine, StateTone } from "@/lib/taskDetail/stateLine";
 import type { Task } from "@/lib/types";
+import { plainPreview } from "@/lib/taskDetail/preview";
 import { HeadStateCard } from "@/components/heads/HeadStateCard";
 import { NEXT_TEXT, PRIMARY_BTN, PRIMARY_STYLE, RAISED } from "./nextStepStyle";
 
@@ -71,9 +72,9 @@ export function TaskStateLine({ line }: { line: StateLine }) {
   );
 }
 
-/** The header shows a clamped preview — blank lines and markdown line breaks
- *  would eat the few lines it has; the full text is in the tooltip and tabs. */
-const preview = (text: string) => text.replace(/\s+/g, " ").trim();
+/** The header shows a clamped preview without markdown syntax; the full,
+ *  rendered text is in the tabs (lib/taskDetail/preview.ts). */
+const preview = plainPreview;
 
 /** The next-step block. One element for every kind, so a card that switches
  *  (e.g. once the approval has loaded) keeps its node. `raised` = the one

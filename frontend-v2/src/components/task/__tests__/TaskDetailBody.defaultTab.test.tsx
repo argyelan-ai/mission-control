@@ -586,3 +586,27 @@ describe("header variant A (DESIGN.md K12)", () => {
     expect(screen.queryByRole("combobox")).toBeNull();
   });
 });
+
+describe("markdown in the brief and the header", () => {
+  it("the collapsed brief renders markdown — a heading element, no literal '##'", async () => {
+    mockApi();
+    renderBody(taskFixture({ status: "done", description: "## Goal\n\nFix the **sideways** scroll.\n\n- first step" }));
+    const preview = await screen.findByTestId("summary-brief-preview");
+    expect(within(preview).getByRole("heading", { name: "Goal" })).toBeInTheDocument();
+    expect(within(preview).getByText("sideways").tagName).toBe("STRONG");
+    expect(within(preview).getByRole("listitem")).toHaveTextContent("first step");
+    expect(preview).not.toHaveTextContent("##");
+    expect(preview).not.toHaveTextContent("**");
+    // Still collapsed with the toggle to the full brief.
+    expect(screen.getByRole("button", { name: /Show full brief/ })).toBeInTheDocument();
+  });
+
+  it("the result preview in the header shows no markdown syntax", async () => {
+    mockApi({ comments: [commentFixture({ comment_type: "resolution", content: "## Result\n\n- [x] **Fixed** the scroll" })] });
+    renderBody(taskFixture({ status: "done" }));
+    const card = await screen.findByTestId("task-state-card");
+    await within(card).findByText("Result Fixed the scroll");
+    expect(card).not.toHaveTextContent("##");
+    expect(card).not.toHaveTextContent("**");
+  });
+});
