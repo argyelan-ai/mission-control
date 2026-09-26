@@ -95,7 +95,11 @@ def derive_for_run(run, now: float, pid_alive: bool | None = None) -> dict[str, 
         status=run.status,
         created_ts=run.created_ts,
         heartbeat_mtime=run.heartbeat_mtime,
-        last_output_ts=parse_ts(run.status.get("last_output_at")) or run.log_mtime,
+        # last_progress_at = output OR worktree change (wrapper-written, the
+        # watchdog's own signal); older wrappers only write last_output_at.
+        last_output_ts=parse_ts(run.status.get("last_progress_at"))
+        or parse_ts(run.status.get("last_output_at"))
+        or run.log_mtime,
         run_record_passed=run.run_record_passed,
         question_exists=bool(run.status.get("question")) or run.question is not None,
         stop_requested=run.stop_requested,

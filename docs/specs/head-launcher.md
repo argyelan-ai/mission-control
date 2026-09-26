@@ -204,7 +204,8 @@ $MC_HOME/heads/<run_id>/
 {"run_id": "…", "task_id": "…|null", "repo_full_name": "owner/name",
  "base_branch": "main", "branch": "mc-head/2026-09-23-short-ab12",
  "harness": "omp", "runtime_slug": "…", "model": "…", "base_url": "…",
- "box_keys": ["<host-uuid>", "…"], "recipe_slug": "…|null", "time_limit_s": 7200,
+ "box_keys": ["<host-uuid>", "…"], "recipe_slug": "…|null", "time_limit_s": 28800,
+ "no_progress_s": 1200,
  "restarted_from": "…|null", "mode": "fresh|continue",
  "created_by": "user-uuid", "created_at": "…"}
 ```
@@ -227,7 +228,7 @@ Any mismatch → `status.json` `exited`, `reason=spec_invalid`.
 {"run_id": "…", "phase": "starting|running|exited", "pid": 123,
  "external_ref": null, "tmux": "head-ab12cd34",
  "started_at": "…", "exited_at": null, "exit_code": null,
- "last_output_at": "…", "pr_url": null, "run_record_path": null,
+ "last_output_at": "…", "last_progress_at": "…", "pr_url": null, "run_record_path": null,
  "question": false, "reason": null}
 ```
 
@@ -326,9 +327,31 @@ stoppable) in the runs list on `/runtimes`.
    `--bare` + `--add-dir` loads it]. For omp, whether it reads rule/context
    files from parent folders is **open** (§14); `--no-rules` / `--no-skills`
    exist [cli] and are used unless the repo's own `AGENTS.md` would be lost.
-4. Time limit: macOS has no `timeout`; omp has `--max-time` [cli], the
-   wrapper enforces the limit for the others (SIGTERM, 10 s, SIGKILL to the
-   process group). Defaults 2 h local, 1 h cloud.
+4. Progress watchdog + hard limit (enforced by the wrapper: SIGTERM, 10 s,
+   SIGKILL to the process group; macOS has no `timeout`):
+   - **No progress** (`no_progress_s`, setting `HEADS_NO_PROGRESS_MIN`,
+     default 20 min): stopped with reason `no_progress` when neither
+     `head.log`, `step.txt`, `work.log` nor any file in `wt/` changed for
+     that long. `work.log` exists for one long blocking command (test suite,
+     build, download): `claude -p` / `omp -p` print only at the end and the
+     head cannot touch `step.txt` during a tool call, so the procedure tells
+     it to run such commands with `2>&1 | tee -a <run>/work.log` (the sandbox
+     lets it write exactly that file; a symlink there is not a sign). A head
+     that ignores this and runs one silent command longer than the window
+     is stopped — a known limit, not a bug.
+     The worktree walk never follows a symlink, skips heavy tool folders
+     (`.git`, `node_modules`, `.venv`, build output — their own mtime still
+     counts), stops after 50 000 entries and ignores future mtimes. The
+     start counts as the first sign, so no head is stopped before it had the
+     full window. Long coding jobs may run as long as they move.
+   - **Hard limit** (`time_limit_s`, the name older wrappers know; settings
+     `HEADS_HARD_LIMIT_LOCAL_S` default 8 h, `HEADS_HARD_LIMIT_CLOUD_S`
+     default 2 h because of cost): emergency brake, reason `hard_limit`.
+     omp also gets it as `--max-time` [cli], 30 s above the wrapper's
+     effective limit (operator cap included), so the wrapper stops first and
+     the reason is `hard_limit`, not `exit_<n>`.
+   - A spec without `no_progress_s` (older backend) runs with the wrapper
+     default (1200 s). Runs from before this change still show `time_limit`.
 
 ### 6.4 Procedure / AGENTS.md
 
@@ -346,8 +369,15 @@ stoppable) in the runs list on `/runtimes`.
 ### 6.5 Status, heartbeat, stop, restart, result
 
 - **Heartbeat** = `heartbeat` mtime (process alive) + `last_output_at`
-  (mtime of `head.log`) + `step.txt` (where the head is). No watcher acts on
-  it. "Silent for > 15 min" is a *display* state, not an error.
+  (mtime of `head.log` / `step.txt` / `work.log`) + `last_progress_at` (output **or** any
+  worktree change — the watchdog's signal, §6.3 step 4) + `step.txt` (where
+  the head is). `silent_s` is measured from `last_progress_at` (fallback
+  `last_output_at`, then the log mtime), so the UI's "Silent for > 15 min"
+  warning, the night-shift "blocked" notice (15 min) and the wrapper's
+  no-progress stop (default 20 min) all read the same signal: warn first,
+  stop later. The warn thresholds are fixed at 15 min, so this order holds
+  only for `HEADS_NO_PROGRESS_MIN` ≥ 16; lower values stop a head without a
+  prior warning (documented in `.env.example`).
 - **Derived state** — one pure function
   `derive_head_state(spec, status, heartbeat_mtime, run_record_text, question_exists, now)`:
 
@@ -360,7 +390,7 @@ stoppable) in the runs list on `/runtimes`.
 | exited, `question.md` present, no PR | `needs_you` — **any** exit code: the model cannot set the harness exit code (`exit 3` in a Bash tool call only ends that subshell; `omp -p` / `claude -p` still exit 0) |
 | exited, `pr_url` present (found by the wrapper), valid run record `Status: passed` | `passed` |
 | scratch repo with a local origin (below): exited, `scratch_branch_pushed` true (checked by the wrapper), valid run record `Status: passed` | `passed`, reason `scratch_branch_pushed`, `pr_url` null |
-| exited otherwise | `failed` with reason (`exit_<n>`, `time_limit`, `no_pr`, `run_record_missing`, `engine_not_ready`, `box_busy`, `spec_invalid`) |
+| exited otherwise | `failed` with reason (`exit_<n>`, `no_progress`, `hard_limit`, `time_limit` (runs before the watchdog), `no_pr`, `run_record_missing`, `engine_not_ready`, `box_busy`, `spec_invalid`) |
 
   `passed` is never claimed by the head alone. The PR URL is found by the
   wrapper itself (`gh pr list --head <branch>`), `status.json` lives in
@@ -548,7 +578,8 @@ running
 │   [Stop]                                          Details ▾       │
 │     Restart with … · Open log · Copy tmux attach (desktop)       │
 └──────────────────────────────────────────────────────────────────┘
-   (> 15 min without output: "Silent for 22 min" in the warn tone — still running)
+   (> 15 min without progress: "Silent for 22 min" in the warn tone — still running;
+    the wrapper stops it at 20 min without progress)
 
 needs you
 ┌──────────────────────────────────────────────────────────────────┐
@@ -570,7 +601,7 @@ passed  (task card moves to "review", not "done")
 failed / stopped
 ┌──────────────────────────────────────────────────────────────────┐
 │ ✕ Failed · Claude Code · GLM local                               │
-│   Time limit reached after 2 h. Branch kept (3 commits).         │
+│   No progress for 20 min — stopped. Branch kept (3 commits).     │
 │   [Restart with …]                                Details ▾       │
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -589,7 +620,7 @@ Restart with … (popover / bottom sheet on mobile, same picker component):
 - Summary tab: **Runs** list — the crosswise switch becomes visible:
 ```
  RUNS
- 1  omp · GLM local            failed  · time limit      2 h 00
+ 1  omp · GLM local            failed  · no progress     2 h 00
  2  Claude Code · GLM local    needs you → answered       18 min
  3  Claude Code · GLM local    passed  · PR #712          16 min
 ```
@@ -920,8 +951,11 @@ A2 `mc-head start`: clone under `$MC_HOME/heads/clones`, worktree from
 A3 Box lock with owner. Test: second start → `box_busy`; lock of a dead pid
    → taken over; trap releases on SIGTERM. Sabotage: skip the pid check →
    stale-lock test red.
-A4 Time limit + stop + restart. Test: fake harness that ignores SIGTERM →
-   SIGKILL after 10 s; `restart` starts the new run only after old
+A4 Progress watchdog + hard limit + stop + restart. Test: silent fake harness
+   that ignores SIGTERM → `no_progress`, SIGKILL after the grace; a harness
+   that keeps changing worktree files → `hard_limit`; nested file changes,
+   `step.txt` and output count as progress, a symlink out of `wt/` does not.
+   Sabotage: drop the worktree walk → nested-change test red; `restart` starts the new run only after old
    `phase=exited` and lock free (never two pids in `wt/`). Sabotage: drop the
    wait → overlap test red.
 A5 Result detection: `gh pr list --head`, run record by `head_run` + time
