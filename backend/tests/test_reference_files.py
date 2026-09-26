@@ -171,10 +171,17 @@ async def test_html_and_svg_uploads_rejected(auth_client: AsyncClient, refs_root
 
 
 @pytest.mark.asyncio
-async def test_defer_dispatch_skips_auto_dispatch_then_manual(auth_client: AsyncClient, refs_root):
+async def test_defer_dispatch_skips_auto_dispatch_then_manual(auth_client: AsyncClient, refs_root, monkeypatch):
     """Review C2: defer_dispatch verhindert das Rennen Dispatch vs. Upload;
     POST /dispatch holt den Dispatch danach explizit nach."""
     from unittest.mock import AsyncMock, patch as _patch
+    from app.config import settings
+
+    # The card below has no agent; since ADR-085 such cards are only
+    # auto-dispatched on the legacy lead-first path (covered separately in
+    # test_new_task_no_lead_auto_assign.py). This test is about the
+    # defer/upload race, so pin the legacy path.
+    monkeypatch.setattr(settings, "lead_auto_assign_new_tasks", True)
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         board = Board(id=uuid.uuid4(), name="B", slug=f"b-{uuid.uuid4().hex[:6]}",
