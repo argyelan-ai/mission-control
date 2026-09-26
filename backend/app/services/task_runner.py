@@ -37,6 +37,7 @@ from app.services.activity import emit_event
 from app.services.dispatch import auto_dispatch_task, TURN_SIGNAL_HEARTBEAT_MAX_AGE_SECONDS
 from app.services.messaging import last_task_activity, maybe_post_finish_nudge
 from app.services.operator_notices import raise_notice
+from app.services.service_heartbeat import record_beat
 from app.services.task_state import lock_and_set
 
 # W-busy (#25efd77c): grace window for a heal claimed while the agent's last
@@ -394,6 +395,8 @@ class TaskRunnerService:
                 return
             except Exception as e:
                 logger.error("Task Runner check error: %s", e)
+            # Liveness for the API process (see app/services/service_heartbeat.py).
+            await record_beat("task_runner", interval=self._interval)
             await asyncio.sleep(self._interval)
 
     async def _acquire_lock(self) -> bool:
