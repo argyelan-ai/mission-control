@@ -72,7 +72,7 @@ export function ThemeSegmented({ size = "md", className }: { size?: "sm" | "md" 
             tabIndex={active ? 0 : -1}
             onClick={() => setTheme(c)}
             onKeyDown={(e) => onKey(e, c)}
-            className="inline-flex items-center gap-1.5 cursor-pointer transition-colors"
+            className="inline-flex items-center gap-2 cursor-pointer transition-colors"
             style={style}
           >
             <Icon size={small ? 13 : 14} strokeWidth={1.75} aria-hidden />
