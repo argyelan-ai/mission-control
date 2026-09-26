@@ -161,12 +161,12 @@ Eine fast monochrome, neutral-dunkle Architektur, in der der helle Akzent über 
 ### Hierarchy
 - **Display** (Clash Display, 500–600, -0.02em): Seitentitel (eine pro Seite), grosse KPI-Werte (30px, `.display`), Wordmark.
 - **Title** (General Sans, 600, 16px): Sektions- und Modal-/Kartentitel (`h2`).
-- **Body** (General Sans, 400, 14px, lh 1.6): Inhalte, Beschreibungen, Kommentare. UI-Detailtext oft 11–13px.
-- **Label-sys** (JetBrains Mono, 500, 10px, uppercase, +0.14em, text-muted): Sektions-Marken, Formular-Labels, Meta-Zeilen. Utility `.label-sys` (+ Varianten `--accent`, `--dim`).
+- **Body** (General Sans, 400, 14px, lh 1.6): Inhalte, Beschreibungen, Kommentare. UI-Detailtext oft 11–13px (neue Schrift nie unter 11 px, siehe K5).
+- **Label-sys** (JetBrains Mono, 500, 10px, uppercase, +0.14em, text-muted): Sektions-Marken, Formular-Labels, Meta-Zeilen. Utility `.label-sys` (+ Varianten `--accent`, `--dim`). *Nie im Kopfbereich (K7), höchstens eine pro Bereich (K13); Zurückstufung ausserhalb des Kopfes ist offen.*
 - **Mono** (JetBrains Mono, 400, 12px): Task-IDs, Branch-Namen, Terminal-Inhalte, Einheiten-Suffixe an Zahlenfeldern, Metriken.
 
 ### Named Rules
-**Die Dichte-Regel.** Leitstand-Dichte ist gewollt: 11–14px UI-Text ist Standard, aber jede Stufe unter 13px braucht hohen Kontrast und 500er-Gewicht oder besser.
+**Die Dichte-Regel.** Leitstand-Dichte ist gewollt: 11–14px UI-Text ist Standard, aber jede Stufe unter 13px braucht hohen Kontrast und 500er-Gewicht oder besser. *Dichte heisst viel Inhalt pro Bildschirm, nicht viele Stile: sie gilt für Tabellen und Listen, nicht für Kopfbereiche (K4–K7).*
 **Die Verbotene-Fonts-Regel.** Kein Inter/Roboto/Arial/system-ui als UI-Font; die drei self-hosted Familien sind gesetzt. `system-ui` steht nur als Fallback in der Font-Stack.
 
 ## Layout
@@ -177,6 +177,33 @@ Eine fast monochrome, neutral-dunkle Architektur, in der der helle Akzent über 
 - **Spacing-Rhythmus:** 4 / 8 / 12 / 16 / 24 / 32 / 64px (`--space-*`). Formularfelder-Abstand 16–20px, Rail-Abstand 20px.
 - **Breakpoints:** md 768px (Mobile→Desktop-Wechsel: Bottom-Nav→Sidebar, Modal-slide-up→zentriert), lg 1024px (zweispaltige Layouts wie die Task-Maske hero+rail).
 - **Mobile-Disziplin:** Touch-Targets ≥44px, Safe-Areas (`pt-safe`/`pb-safe`, Dynamic Island), Pinch-Zoom nie blockiert, iOS-Input-Font ≥16px gegen Auto-Zoom.
+
+## Komposition (verbindlich)
+
+Farbe und Form regelt der Rest dieser Datei. Dieser Abschnitt regelt, **wie viel** auf einer Fläche steht, **was zuerst** kommt und **woran es sich ausrichtet** — dort entsteht Unruhe. Er gilt für jede sichtbare Änderung in `frontend-v2/`. Wo er älteren Zeilen dieser Datei widerspricht, gilt dieser Abschnitt; die älteren Zeilen sind markiert.
+
+„Bereich" = ein zusammenhängender Block (Kopfbereich, Karte, Tab-Inhalt); im Code künftig `data-region="…"`. „Kopfbereich" = alles vom Seitenkontext bis zur Reiterleiste. Die Messung (`npm run design:budget`) zählt K3–K9 für einen Bereich; K1, K2 und K10–K14 prüft der Blick.
+
+| ID | Regel |
+|---|---|
+| **K1** | **Eine laute Sache pro Bereich.** Der Titel ist die grösste Schrift der Ansicht und wird am Handy frühestens nach 3 Zeilen gekürzt. Kein Steuerelement ist lauter als der Titel. Probe: im 10-px-Unschärfe-Bild bleibt pro Bereich genau ein Schwerpunkt. |
+| **K2** | **Wegnehmen vor Hinzufügen.** Wer einem Kopfbereich etwas hinzufügt, nimmt etwas weg oder zeigt, dass K4 trotzdem hält. Wer etwas lauter macht, sagt, was dafür leiser wurde. |
+| **K3** | **Jede Angabe genau einmal, nichts Leeres, nichts Abgeschnittenes.** Werte ohne Inhalt („PR —", „nicht erfasst") werden weggelassen, nicht angezeigt. `…` nur beim Titel. |
+| **K4** | **Informations-Budget.** Kopfbereich ≤ 5 Angaben. Erster Handybildschirm (390 × 844) ≤ 7 Angaben und genau 1 hervorgehobene Aktion. In der Titelzeile am Handy höchstens 1 Aktion neben ⋯; alles Weitere (auch Schalter mit Erklärtext) gehört ins ⋯-Menü. |
+| **K5** | **Wenige Schriftgrössen und -stärken.** Kopfbereich ≤ 3 Grössen, Ansicht ≤ 4; ≤ 2 Stärken pro Bereich. Nur Werte aus der Schriftskala (`@theme`), keine neuen `text-[Npx]`, `fontSize` inline oder `tracking-[…]` (die Ratsche `design:ratchet` zählt sie). Keine neue Schrift unter 11 px. Buchstabensperrung nur für Grossbuchstaben-Marken, nie für Zahlen oder Dauern. Fliesstext am Desktop höchstens ~72 Zeichen breit. |
+| **K6** | **Farbe sparsam.** Pro Bereich ≤ 3 Texttöne (primary/secondary/muted) plus ≤ 1 Statusfarbe. Dasselbe Signal nie doppelt (rote Fläche **und** roter Knopf **und** rotes Wort). `textDim` nie für lesbaren Text. |
+| **K7** | **Grossbuchstaben und Mono selten.** Im Kopfbereich steht keine Grossbuchstaben-Marke, auch keine Kennzeile über dem Titel (`AUFGABE · ID · PROJEKT`). Mono nur für Maschinenwerte (ID, Branch, Pfad, Befehl, Zahlen in Spalten), nie für Feldnamen, Dauern oder Fliesstext. |
+| **K8** | **Abstand statt Kasten.** Höchstens 2 Ebenen verschachtelter Flächen; im Kopfbereich höchstens 1 Fläche, und nur wenn der Operator handeln muss („braucht dich", „fehlgeschlagen"). Am Handy liegt eine Detailseite nicht in einer Seitenkarte: der Inhalt läuft mit 16 px Rand bis zum Bildschirmrand. Zwischen Gruppen mindestens doppelt so viel Abstand wie innerhalb. |
+| **K9** | **Eine linke Kante.** Pro Bereich höchstens 2 Kanten: die Hauptkante und eine Einrückung. Keine Kanten, die nur 3–6 px auseinanderliegen. |
+| **K10** | **Ein Begriff pro Sache.** Ein Zustand hat in einer Sprache genau ein Wort, und es kommt aus i18n (kein „Blocked" neben „Blockiert"). Pro Ansicht eine Sprache. Zeiten in festen Formen: „vor 42 min", „seit 5 Tagen". Pro Kopfbereich genau eine Zeitangabe — die, die zum Zustand gehört; das Alter des Objekts steht in den Eigenschaften. Kein interner Fachjargon im Zustandssatz. |
+| **K11** | **Rangordnung der Knöpfe.** Drei Stufen: *Haupt* = Akzent-Fläche, höchstens 1× pro Bildschirm · *Neben* = Text ohne Rahmen · *Link*. Zurück und ⋯ sind Symbol-Knöpfe ohne Kasten. Fingerziele ≥ 44 px. Ein Statuspunkt zeigt nur an; ändern geht über ⋯ oder die Eigenschaften. |
+| **K12** | **Feste Reihenfolge auf Detailseiten.** Kontext → Titel → Zustandssatz → nächster Schritt → Inhalt → Eigenschaften → Aktivität. Die Kontextleiste (‹ Liste · ⋯) ersetzt auf Detailseiten die Wortmarke der App-Leiste; eine mitlaufende Leiste beim Scrollen *ersetzt* sie, sie kommt nie als dritte Leiste dazu (ohne Springen, `prefers-reduced-motion` beachtet). Der Zustandssatz ist 1 Zeile mit höchstens 1 Trenner `·`. Eigenschaften: am Handy ruhige Liste (Feldname links in `meta`, Wert rechts), ab 1024 px rechte Spalte. Reiter sind eine Reiterleiste in Satzschreibung, kein Select in Grossbuchstaben. |
+| **K13** | **Signatur bleibt.** Ruhe heisst nicht beliebig: Off-Cream ist der einzige Akzent; Mono steht nur bei Maschinenwerten, dort aber sorgfältig (Tabellenziffern, Kopier-Symbol); Clash Display nur für Seitentitel; unterhalb des Kopfes darf pro Bereich eine Abschnittsmarke (`label-sys`) stehen. Ein Entwurf, der wie eine beliebige SaaS-Seite aussieht, ist durchgefallen. |
+| **K14** | **Zahlen sind ein Boden, kein Ziel — Aufbau braucht den Blick des Operators.** Grüne Messwerte heissen nur „nicht durchgefallen". Wer alles auf eine Grösse setzt, um K5 zu erfüllen, hat die Regel verletzt. Änderungen am **Aufbau** (neuer Block, neue Seite, Umbau eines Kopfbereichs) werden erst gemergt, wenn der Operator das Handy-Bild (390 px, vorher/nachher) gesehen hat. Kein Agent ändert diesen Abschnitt still; neue Regeln werden mit ID vorgeschlagen. |
+
+Ablauf, Rubrik und Anti-Slop-Liste: [`docs/design/ui-craft.md`](docs/design/ui-craft.md).
+
+**Noch offen (Operator entscheidet, bis dahin gilt der alte Stand):** Schriftstärken-Fix #326 · `label-sys` ausserhalb des Kopfbereichs zurückstufen · Schriftskala und ob 2/6/20 px zur Abstandsskala gehören · die Variante für den Kopf der Task-Detailseite.
 
 ## Elevation & Depth
 
@@ -259,7 +286,7 @@ Werkzeuge, keine Schmuckstücke: zurückhaltend im Ruhezustand, eindeutig im akt
 
 ### Navigation
 - **Sidebar (Desktop):** P2-bg, Einträge ~13px, Gruppen-Marken via `.label-sys`; aktiv = accent-subtle Fläche + heller Akzent-Text/Balken; inaktiv text-secondary, Hover bg-hover. Wordmark in Clash Display.
-- **Mobile:** Bottom-Tab-Bar in der Daumen-Zone, safe-area-aware; voller Nav-Tree als Drawer. Top-Bar trägt nur Wordmark + Voice.
+- **Mobile:** Bottom-Tab-Bar in der Daumen-Zone, safe-area-aware; voller Nav-Tree als Drawer. Top-Bar trägt nur Wordmark + Voice — auf Detailseiten wird sie zur Kontextleiste (K12).
 
 ## Do's and Don'ts
 

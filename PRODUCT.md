@@ -37,7 +37,7 @@ Das Gefühl eines Operations-Rooms: konzentriert, vertrauenswürdig, unaufgeregt
 
 ## Design Principles
 
-1. **Eine Stimme.** Ein Akzent (Teal), Grau für Struktur. Farbe bedeutet Zustand oder Aktion — nie Dekoration.
+1. **Eine Stimme.** Ein Akzent (Off-Cream #EBE8DE, achromatisch — Stand v4 „Signal", siehe DESIGN.md), Grau für Struktur. Farbe bedeutet Zustand oder Aktion — nie Dekoration.
 2. **Status ist Information.** STATUS/LANE-Vokabular ist app-weit identisch: dieselbe Farbe heisst auf jeder Seite dasselbe.
 3. **Ruhe vor Reiz.** Kein Glow, kein Blur, kein Effekt ohne Funktion. Die Aufmerksamkeit gehört den Daten und den Agents.
 4. **Single Source.** `colors.ts` ist das einzige Farb-Vokabular. Lokale Paletten und Inline-Hex sind Regressions, keine Gestaltungsfreiheit.
