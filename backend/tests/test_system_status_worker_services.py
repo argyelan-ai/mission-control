@@ -179,3 +179,43 @@ async def test_task_runner_loop_writes_heartbeat(monkeypatch):
     await tr._run_loop()
 
     assert await service_heartbeat.read_beat("task_runner") is not None
+
+
+# ── Deliberate stop clears the heartbeat (review follow-up) ─────────────────
+# A clean stop() must not leave the display on "running (worker)" for two
+# minutes and then "stale" for an hour. A crash never reaches stop(), so it
+# still shows as "stale".
+
+
+@pytest.mark.parametrize("which", ["watchdog", "task_runner"])
+async def test_stop_of_a_running_loop_clears_its_heartbeat(which):
+    from app.services.task_runner import TaskRunnerService
+    from app.services.watchdog.core import WatchdogService
+
+    svc = WatchdogService(interval=30) if which == "watchdog" else TaskRunnerService(interval=60)
+    await service_heartbeat.record_beat(which, interval=30)
+    svc._running = True  # this instance owns the loop
+
+    await svc.stop()
+
+    assert await service_heartbeat.read_beat(which) is None
+
+
+@pytest.mark.parametrize("which", ["watchdog", "task_runner"])
+async def test_stop_of_a_never_started_loop_keeps_the_worker_heartbeat(which):
+    # The API process holds idle singletons; stopping them must not erase
+    # the heartbeat the worker's loop wrote.
+    from app.services.task_runner import TaskRunnerService
+    from app.services.watchdog.core import WatchdogService
+
+    svc = WatchdogService(interval=30) if which == "watchdog" else TaskRunnerService(interval=60)
+    await service_heartbeat.record_beat(which, interval=30)
+
+    await svc.stop()
+
+    assert await service_heartbeat.read_beat(which) is not None
+
+
+def test_interval_is_public_on_both_loops():
+    assert watchdog.interval == watchdog._interval
+    assert task_runner.interval == task_runner._interval

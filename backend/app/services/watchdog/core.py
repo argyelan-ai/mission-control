@@ -8,7 +8,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.database import engine
 from app.redis_client import RedisKeys, get_redis
-from app.services.service_heartbeat import record_beat
+from app.services.service_heartbeat import clear_beat, record_beat
 from app.utils import utcnow
 
 from app.services.watchdog.health_checks import HealthChecksMixin
@@ -50,6 +50,10 @@ class WatchdogService(HealthChecksMixin, SessionMonitorMixin, TaskMonitorMixin):
         return self._running
 
     @property
+    def interval(self) -> int:
+        return self._interval
+
+    @property
     def last_check_at(self) -> datetime | None:
         return self._last_check_at
 
@@ -66,6 +70,7 @@ class WatchdogService(HealthChecksMixin, SessionMonitorMixin, TaskMonitorMixin):
         logger.info("Watchdog started (interval=%ds)", self._interval)
 
     async def stop(self) -> None:
+        was_running = self._running
         self._running = False
         if self._task:
             self._task.cancel()
@@ -74,6 +79,11 @@ class WatchdogService(HealthChecksMixin, SessionMonitorMixin, TaskMonitorMixin):
             except asyncio.CancelledError:
                 pass
             self._task = None
+        # A deliberate stop reads as "stopped" at once. Only the instance that
+        # ran the loop clears it: an idle singleton in the API process must not
+        # erase the heartbeat of the loop running in the worker.
+        if was_running:
+            await clear_beat("watchdog")
         logger.info("Watchdog stopped")
 
     async def _run_loop(self) -> None:

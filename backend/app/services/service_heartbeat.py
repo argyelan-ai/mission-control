@@ -43,6 +43,16 @@ async def record_beat(service: str, **extra: Any) -> None:
         logger.debug("heartbeat write for %s failed: %s", service, e)
 
 
+async def clear_beat(service: str) -> None:
+    """Remove the heartbeat of ``service`` after a deliberate stop, so the
+    status flips to "stopped" at once instead of "stale". Never raises."""
+    try:
+        redis = await get_redis()
+        await redis.delete(RedisKeys.service_heartbeat(service))
+    except Exception as e:  # noqa: BLE001 — best-effort, like record_beat
+        logger.debug("heartbeat clear for %s failed: %s", service, e)
+
+
 async def read_beat(service: str) -> dict | None:
     """Return the parsed heartbeat or ``None`` (missing, unreadable, Redis down)."""
     try:

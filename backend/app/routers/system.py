@@ -116,7 +116,7 @@ async def system_status(
     wd_status, wd_beat = await service_status(
         "watchdog",
         local_running=watchdog.running,
-        stale_after_seconds=_stale_after(watchdog._interval),
+        stale_after_seconds=_stale_after(watchdog.interval),
     )
     if wd_status["source"] == "local":
         last_check = watchdog.last_check_at.isoformat() if watchdog.last_check_at else None
@@ -133,7 +133,7 @@ async def system_status(
     tr_status, _ = await service_status(
         "task_runner",
         local_running=task_runner.running,
-        stale_after_seconds=_stale_after(task_runner._interval),
+        stale_after_seconds=_stale_after(task_runner.interval),
     )
     components["task_runner"] = tr_status
 
