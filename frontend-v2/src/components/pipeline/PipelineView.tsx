@@ -165,12 +165,12 @@ export default function PipelineView({ boardId, agents }: PipelineViewProps) {
       <div className="flex flex-col gap-4">
         {/* Header */}
         <div className="flex items-center justify-between">
-          <h2 className="label-sys">Pipeline</h2>
+          <h2 className="label-sys">{t("pipelineTitle")}</h2>
           <div className="flex items-center gap-3 text-xs" style={{ color: C.textMuted }}>
             {failed_count > 0 && (
               <span className="flex items-center gap-1">
                 <XCircle size={11} style={{ color: C.error }} />
-                {failed_count} failed
+                {t("pipelineFailedCount", { count: failed_count })}
               </span>
             )}
           </div>
@@ -179,7 +179,7 @@ export default function PipelineView({ boardId, agents }: PipelineViewProps) {
         {/* Swim Lanes */}
         {visibleLanes.length === 0 ? (
           <div className="text-sm text-center py-6" style={{ color: C.textMuted }}>
-            No active tasks.
+            {t("pipelineEmpty")}
           </div>
         ) : (
           <div className="flex flex-col gap-5">

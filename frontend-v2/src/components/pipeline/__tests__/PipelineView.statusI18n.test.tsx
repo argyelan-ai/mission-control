@@ -25,15 +25,18 @@ const EXPECTED = {
 
 const card = (id: string): PipelineTask => ({ id, title: `Task ${id}`, priority: "medium", parent_task_id: null, agent: null, has_blocked_deps: false });
 
-function renderPipeline(locale: "en" | "de") {
-  vi.spyOn(api.tasks, "pipeline").mockResolvedValue({
-    pipeline: {
-      inbox: [card("a")], in_progress: [card("b")], review: [card("c")], user_test: [card("d")],
-      waiting: [card("e")], blocked: [card("f")], failed: [card("g")], aborted: [card("h")],
-    },
-    done_count: 0,
-    failed_count: 0,
-  } as Awaited<ReturnType<typeof api.tasks.pipeline>>);
+type PipelineData = Awaited<ReturnType<typeof api.tasks.pipeline>>;
+const FULL: PipelineData = {
+  pipeline: {
+    inbox: [card("a")], in_progress: [card("b")], review: [card("c")], user_test: [card("d")],
+    waiting: [card("e")], blocked: [card("f")], failed: [card("g")], aborted: [card("h")],
+  },
+  done_count: 0,
+  failed_count: 0,
+} as PipelineData;
+
+function renderPipeline(locale: "en" | "de", data: PipelineData = FULL) {
+  vi.spyOn(api.tasks, "pipeline").mockResolvedValue(data);
   vi.spyOn(api.tasks, "list").mockResolvedValue([]);
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -70,5 +73,25 @@ describe("status words follow the UI language", () => {
       expect(await screen.findByText(word)).toBeInTheDocument();
     }
     expect(screen.queryByText("Blockiert")).toBeNull();
+  });
+});
+
+describe("pipeline header and empty state follow the UI language", () => {
+  it.each([
+    ["de", "3 fehlgeschlagen"],
+    ["en", "3 failed"],
+  ] as const)("failed count (%s)", async (locale, text) => {
+    renderPipeline(locale, { ...FULL, failed_count: 3 });
+    expect(await screen.findByText(text)).toBeInTheDocument();
+  });
+
+  it.each([
+    ["de", "Keine aktiven Aufgaben."],
+    ["en", "No active tasks."],
+  ] as const)("no visible lane (%s)", async (locale, text) => {
+    // Active work only in a column the board does not show as a lane.
+    const empty = { inbox: [], in_progress: [], review: [], user_test: [], waiting: [], blocked: [], failed: [], aborted: [] };
+    renderPipeline(locale, { ...FULL, pipeline: { ...empty, planning: [card("x")] } as unknown as PipelineData["pipeline"] });
+    expect(await screen.findByText(text)).toBeInTheDocument();
   });
 });
