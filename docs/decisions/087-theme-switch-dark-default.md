@@ -92,7 +92,7 @@ DESIGN.md.
    - The memory graph resolves its canvas palette per theme and redraws on a
      switch; community colours have a deeper light set (≥3:1 on paper).
    - Agent identity hues keep their hue; the lightness is a CSS variable
-     (55 % dark, 25 % light).
+     (75 % dark since the dark-contrast pass — was 55 % —, 25 % light).
 7. **Guards (vitest, run in CI).**
    - `no-hex-alpha-concat` — any `${…}NN`, `x + "NN"`, `hexToRgb(` or
      `rgba(${…})` in source fails, with file:line.
@@ -149,6 +149,14 @@ DESIGN.md.
   text is 4.38:1 on `bg-surface`; agent identity hues on dark surfaces reach
   only ~2.3:1 as text. Follow-up: lift the dark `--color-status-*-text` and
   `--color-text-dim` tones (a visible dark change — operator decision).
+  **Closed by the dark-contrast pass (operator-approved follow-up):** the dark
+  status hues are lifted in OKLCH (same hue and chroma) to ≥4.5:1 on all five
+  surfaces and on their own 12 % tint over surface/elevated; `text-muted`
+  `#b3b3b3`, `text-dim` `#a3a3a3` (AA on every surface); `on-status` dark is
+  `#161616`; agent lightness 75 %. `theme.contrast.test` has no dark
+  exceptions any more. Text dimmed with `opacity` was removed in both modes
+  (the light-only `light:opacity-100!` overrides are gone). UI probe dark
+  contrast findings: 248 → see the PR.
 
 ### Light-only adjustments (UI probe, contrast check)
 
