@@ -195,6 +195,8 @@ $MC_HOME/heads/<run_id>/
   step.txt         written by the head on every step change ("4/7 sabotage probe")
   question.md      written by the head when it needs the operator (then it ends)
   head.log         stdout/stderr of the harness
+  omp-sessions/    omp only: the harness session (--session-dir) — the token harvester reads usage from it
+  claude-config/   claude only: CLAUDE_CONFIG_DIR — the token harvester reads usage from projects/**/*.jsonl
   wt/              the git worktree
   bin/             guard shims (§9)
 ```
@@ -204,7 +206,8 @@ $MC_HOME/heads/<run_id>/
 {"run_id": "…", "task_id": "…|null", "repo_full_name": "owner/name",
  "base_branch": "main", "branch": "mc-head/2026-09-23-short-ab12",
  "harness": "omp", "runtime_slug": "…", "model": "…", "base_url": "…",
- "box_keys": ["<host-uuid>", "…"], "recipe_slug": "…|null", "time_limit_s": 28800,
+ "box_keys": ["<host-uuid>", "…"], "locality": "local|cloud",
+ "recipe_slug": "…|null", "time_limit_s": 28800,
  "no_progress_s": 1200,
  "restarted_from": "…|null", "mode": "fresh|continue",
  "created_by": "user-uuid", "created_at": "…"}
@@ -212,6 +215,22 @@ $MC_HOME/heads/<run_id>/
 A test asserts `spec.json` carries no key matching `KEY|TOKEN|SECRET|PASSWORD`
 and `head.env` only the allowed ones (§9: provider key for cloud runtimes,
 placeholder `ANTHROPIC_API_KEY`, the head's `GH_TOKEN`).
+
+**Token usage of heads.** The token harvester reads `omp-sessions/` and
+`claude-config/projects/` of every run folder and writes `model_usage_events`
+rows with `harness = head-<harness>`, `head_run_id = <run_id>`, `locality`
+from `spec.json` and `task_id` (only while the task exists). No agent is set;
+Insights shows these rows as their own "Heads" bucket. Because the rows carry
+`task_id`, they are **deliberately liveness evidence** for the task
+(`task_evidence.latest_model_event_at`, used by the stuck-block and the
+silent-card watchdog): a card a head is working on counts as active. The head
+lock keeps a second worker off the same card, so head rows cannot hide a dead
+agent turn on it.
+
+**Retention.** `omp-sessions/` and `claude-config/` hold the full conversation,
+tool output included — anything the head read stays on the host until the run
+folder is deleted (see "Data" in the rollback section). Treat run folders like
+the transcripts of persistent agents.
 
 **`mc-head` never trusts `spec.json`**: the backend container mounts
 `~/.mc` read-write, so a compromised backend could plant values that become
@@ -314,7 +333,7 @@ stoppable) in the runs list on `/runtimes`.
 
 | Pair | Command in `wt/` |
 |---|---|
-| omp × local (v1) | `omp --profile mc-head-<id8> --model <provider>/<model> -p --no-session --max-time <s> --auto-approve --append-system-prompt <run>/procedure.md "$(cat <run>/job.md)"` — profile rendered by `render_omp_host_models_yml`, never the operator's own profile. `--auto-approve` is a permission bypass → allowed **only inside the sandbox** or on the scratch repo (ADR-086) |
+| omp × local (v1) | `omp --profile mc-head-<id8> --model <provider>/<model> -p --session-dir <run>/omp-sessions --max-time <s> --auto-approve --append-system-prompt <run>/procedure.md "$(cat <run>/job.md)"` — profile rendered by `render_omp_host_models_yml`, never the operator's own profile. `--auto-approve` is a permission bypass → allowed **only inside the sandbox** or on the scratch repo (ADR-086) |
 | claude × local (v1, exp.) | `CLAUDE_CONFIG_DIR=<run>/claude-config claude -p --bare --settings <run>/head-settings.json --append-system-prompt-file procedure.md "$(cat job.md)"` + `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL`, placeholder `ANTHROPIC_API_KEY` (not `ANTHROPIC_AUTH_TOKEN`: under `--bare` only `ANTHROPIC_API_KEY` or `apiKeyHelper` count [cli]). `-p` is fine here: no subscription is involved. Tool permissions come only from the allow/deny list in `head-settings.json` (§9) — `acceptEdits` alone would refuse every Bash call (tests, git, `gh pr create`) in `-p` |
 | openclaude × local (later) | `openclaude -p --bare --settings <run>/head-settings.json --append-system-prompt "$(cat procedure.md)" "$(cat job.md)"` + `OPENAI_BASE_URL/OPENAI_MODEL` |
 | claude × Claude (later) | interactive `claude` (no `-p`) in the tmux session with `CLAUDE_CONFIG_DIR=<head config dir>`, `--settings`, `--append-system-prompt-file`; end = process exit + run record. `--bg` + `/goal` only as an extra after its end-detection proof |
@@ -806,7 +825,11 @@ Acceptance criteria v1:
   `git worktree remove` + folder removal by the operator — never automatic.
 - Tasks: head cards are ordinary tasks with `manual_hold`; clearing
   `run_control` returns them to normal behaviour.
-- No migration → no downgrade needed.
+- The launcher itself has no migration. Head token usage adds migration 0205
+  (two nullable columns on `model_usage_events`, additive); its downgrade drops
+  them. Host side: reinstall with `scripts/head/install-head-starter.sh` —
+  `mc-head` and `head.sb` always together (the new `mc-head` writes to
+  `omp-sessions/`, which only the new `head.sb` allows).
 
 ## 14. Open points (prove during the build)
 

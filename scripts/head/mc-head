@@ -808,7 +808,10 @@ def harness_argv(spec: dict, run: Path, home: Path, env: dict) -> list:
             "--profile", OMP_PROFILE,
             "--model", f"mc-openai/{spec['model']}",
             "-p",
-            "--no-session",
+            # Keep the session in the run folder (not --no-session): it is
+            # the only place omp records token usage, and the backend's
+            # token harvester reads <run>/omp-sessions/*.jsonl.
+            "--session-dir", str(run / "omp-sessions"),
             "--no-skills",
             # A little above the wrapper's effective hard limit (operator cap
             # included), so the wrapper stops first with reason "hard_limit".
@@ -877,6 +880,8 @@ def harness_env(spec: dict, run: Path, home: Path) -> dict:
     if spec["harness"] == "claude":
         env["CLAUDE_CONFIG_DIR"] = str(run / "claude-config")
         (run / "claude-config").mkdir(exist_ok=True)
+    if spec["harness"] == "omp":
+        (run / "omp-sessions").mkdir(exist_ok=True)
     return env
 
 

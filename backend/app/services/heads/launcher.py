@@ -24,7 +24,7 @@ from app.models.agent import Agent
 from app.models.repo import Repo
 from app.models.runtime import Runtime
 from app.models.task import Task
-from app.services.heads import paths, scratch
+from app.services.heads import pairs, paths, scratch
 from app.services.runtime_protocols import engine_root
 
 TEMPLATE = Path(__file__).resolve().parents[3] / "templates" / "heads" / "head-AGENTS.md"
@@ -252,6 +252,8 @@ async def write_run(
         "model": model,
         "base_url": base_url,
         "box_keys": box_keys,
+        # Token harvester: local vs. cloud share of head usage (same rule as the pair table)
+        "locality": "local" if pairs.is_local(runtime) else "cloud",
         "recipe_slug": None,
         # Emergency brake (wall clock). Name kept for older mc-head copies.
         "time_limit_s": int(limit),

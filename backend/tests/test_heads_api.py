@@ -88,6 +88,7 @@ async def test_start_writes_run_folder_spool_and_holds_the_task(auth_client, hea
     spec = json.loads((folder / "spec.json").read_text())
     assert spec["base_url"] == EP and spec["model"] == "glm"
     assert spec["box_keys"] == [str(box.id)]
+    assert spec["locality"] == "local"  # token harvester: local vs. cloud share of head usage
     assert spec["repo_full_name"] == "owner/demo" and spec["branch"].startswith("mc-head/")
     from app.services.heads.launcher import SECRETISH
 

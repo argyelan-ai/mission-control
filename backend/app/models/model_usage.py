@@ -39,7 +39,13 @@ class ModelUsageEvent(SQLModel, table=True):
         index=True,
     )
     harness: str = Field(index=True)
-    # "cli-bridge" | "host" | "sparky" | "backend-ollama"
+    # "cli-bridge" | "host" | "sparky" | "backend-ollama" | "head-omp" | "head-claude"
+
+    # Head runs (docs/specs/head-launcher.md): the run folder id, and whether
+    # the run's runtime was local or cloud — both taken from the run's
+    # spec.json at harvest time. NULL for every non-head row.
+    head_run_id: str | None = Field(default=None, nullable=True, index=True)
+    locality: str | None = Field(default=None, nullable=True)  # "local" | "cloud"
 
     # Model
     model: str = Field(index=True)

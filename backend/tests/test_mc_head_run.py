@@ -70,7 +70,11 @@ def test_start_runs_harness_in_worktree_and_exits(env):
     # harness table: omp × local
     argv = (run / "argv.txt").read_text().splitlines()
     assert argv[:4] == ["--profile", "mc-head", "--model", "mc-openai/GLM-5.3-Flash-EXL3"]
-    assert "-p" in argv and "--auto-approve" in argv and "--no-session" in argv
+    assert "-p" in argv and "--auto-approve" in argv
+    # the session is kept in the run folder: the token harvester reads usage from it
+    assert "--no-session" not in argv
+    assert argv[argv.index("--session-dir") + 1] == str(run / "omp-sessions")
+    assert (run / "omp-sessions").is_dir()
     assert argv[argv.index("--append-system-prompt") + 1] == str(run / "procedure.md")
     assert argv[argv.index("--max-time") + 1] == "630"
     assert "Say hello." in "\n".join(argv)
