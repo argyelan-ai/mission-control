@@ -8,6 +8,7 @@ import Link from "next/link";
 import { Brain, Check, Clock, RotateCcw, Send, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { C, LANE, alpha } from "@/lib/colors";
+import { STATUS_LABEL_KEY } from "@/lib/taskDetail/statusLabels";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { OverflowMenu } from "@/components/shared/OverflowMenu";
@@ -16,17 +17,19 @@ import type { Agent, Task, TaskStatus } from "@/lib/types";
 // ── Status helpers ────────────────────────────────────────────────────────────
 
 // labelKey resolves via t() at the render site (tasks.* namespace) — never
-// store translated strings in module constants.
+// store translated strings in module constants. The keys come from the one
+// status vocabulary (lib/taskDetail/statusLabels.ts).
+const statusEntry = (status: TaskStatus) => ({ color: LANE[status], labelKey: STATUS_LABEL_KEY[status] });
 export const STATUS_CONFIG: Record<TaskStatus, { color: string; labelKey: string }> = {
-  inbox: { color: LANE.inbox, labelKey: "statusInbox" },
-  in_progress: { color: LANE.in_progress, labelKey: "statusActive" },
-  review: { color: LANE.review, labelKey: "statusReview" },
-  user_test: { color: LANE.user_test, labelKey: "statusUserTest" },
-  waiting: { color: LANE.waiting, labelKey: "statusWaiting" },
-  done: { color: LANE.done, labelKey: "statusDone" },
-  blocked: { color: LANE.blocked, labelKey: "statusBlocked" },
-  failed: { color: LANE.failed, labelKey: "statusFailed" },
-  aborted: { color: LANE.aborted, labelKey: "statusAborted" },
+  inbox: statusEntry("inbox"),
+  in_progress: statusEntry("in_progress"),
+  review: statusEntry("review"),
+  user_test: statusEntry("user_test"),
+  waiting: statusEntry("waiting"),
+  done: statusEntry("done"),
+  blocked: statusEntry("blocked"),
+  failed: statusEntry("failed"),
+  aborted: statusEntry("aborted"),
 };
 
 export function TaskStatusDot({ status }: { status: TaskStatus }) {

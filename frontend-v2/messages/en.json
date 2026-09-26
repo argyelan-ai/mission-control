@@ -94,7 +94,6 @@
     "title": "Tasks",
     "noBoardSelected": "No board selected",
     "statusInbox": "Inbox",
-    "statusActive": "Active",
     "statusReview": "Review",
     "statusUserTest": "User Test",
     "statusWaiting": "Waiting",
