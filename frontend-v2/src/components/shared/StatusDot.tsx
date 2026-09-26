@@ -14,11 +14,11 @@ interface StatusDotProps {
 }
 
 const statusColors: Record<Status, string> = {
-  online: C.online,    // #55A964
-  warning: C.warning,  // #A67F3E
-  error: C.error,      // #FA4942
-  busy: STATUS.busy,   // #5890CA — busy is an info state, not the accent
-  idle: C.textDim,     // #8A8A8A
+  online: C.online,    // status-online
+  warning: C.warning,  // status-warning
+  error: C.error,      // status-error
+  busy: STATUS.busy,   // status-info — busy is an info state, not the accent
+  idle: C.textDim,     // text-dim
   offline: STATUS.offline, // #3A3A3A
 };
 

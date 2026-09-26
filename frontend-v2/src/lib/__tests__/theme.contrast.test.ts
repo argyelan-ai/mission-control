@@ -36,11 +36,17 @@ function hslHex(h: number, s: number, l: number): string {
   return "#" + [f(0), f(8), f(4)].map((x) => Math.round(x * 255).toString(16).padStart(2, "0")).join("");
 }
 
+/** `fg` at alpha `a` over an opaque `bg` (what color-mix(... a%, transparent) paints). */
+function mixHex(fg: string, bg: string, a: number): string {
+  const [f, b] = [hex(fg), hex(bg)];
+  return "#" + [1, 3, 5].map((i) => Math.round(parseInt(f.slice(i, i + 2), 16) * a + parseInt(b.slice(i, i + 2), 16) * (1 - a)).toString(16).padStart(2, "0")).join("");
+}
+
 const SURFACES = ["--color-bg-deep", "--color-bg-base", "--color-bg-surface", "--color-bg-elevated", "--color-bg-hover"];
 
 // Tokens used as text: AA (4.5:1) on every surface.
 const TEXT = [
-  "--color-text-primary", "--color-text-secondary", "--color-text-muted",
+  "--color-text-primary", "--color-text-secondary", "--color-text-muted", "--color-text-dim",
   "--color-status-online", "--color-status-error", "--color-status-info",
   "--color-status-warning-text", "--color-accent",
   "--color-p2-txt", "--color-p2-dim", "--color-p2-amb", "--color-p2-ok", "--color-p2-err",
@@ -48,37 +54,13 @@ const TEXT = [
 // Status hue used for dots/borders/icons (text uses status-warning-text): 3:1.
 const GRAPHIC = ["--color-status-warning", "--color-p2-wrn"];
 
-/**
- * Known dark-mode gaps — PRE-EXISTING on main (the surfaces were lifted for
- * daylight legibility, the status hues were not re-tuned). Recorded with the
- * measured value so they can only get better; ADR-087 lists them as follow-up.
- * Dark values are deliberately not changed by the light-mode work.
- */
-const DARK_KNOWN: Record<string, number> = {
-  "--color-status-online|--color-bg-elevated": 4.49,
-  "--color-status-online|--color-bg-hover": 3.92,
-  "--color-status-error|--color-bg-surface": 4.39,
-  "--color-status-error|--color-bg-elevated": 3.78,
-  "--color-status-error|--color-bg-hover": 3.3,
-  "--color-status-info|--color-bg-elevated": 3.88,
-  "--color-status-info|--color-bg-hover": 3.39,
-  "--color-status-warning-text|--color-bg-elevated": 4.4,
-  "--color-status-warning-text|--color-bg-hover": 3.85,
-  "--color-p2-ok|--color-bg-elevated": 4.49,
-  "--color-p2-ok|--color-bg-hover": 3.92,
-  "--color-p2-err|--color-bg-surface": 4.39,
-  "--color-p2-err|--color-bg-elevated": 3.78,
-  "--color-p2-err|--color-bg-hover": 3.3,
-};
-
 function check(mode: "dark" | "light", vars: Map<string, string>) {
   const fails: string[] = [];
   const col = (t: string) => resolveVar(`var(${t})`, vars);
   for (const s of SURFACES) {
     for (const t of TEXT) {
       const r = ratio(col(t), col(s));
-      const known = mode === "dark" ? DARK_KNOWN[`${t}|${s}`] : undefined;
-      if (r < 4.5 && !(known !== undefined && r >= known - 0.01)) fails.push(`${t} on ${s}: ${r.toFixed(2)}`);
+      if (r < 4.5) fails.push(`${t} on ${s}: ${r.toFixed(2)}`);
     }
     for (const t of GRAPHIC) {
       const r = ratio(col(t), col(s));
@@ -89,7 +71,8 @@ function check(mode: "dark" | "light", vars: Map<string, string>) {
   if (onAccent < 4.5) fails.push(`on-accent on accent: ${onAccent.toFixed(2)}`);
   const term = ratio(col("--color-term-fg"), col("--color-term"));
   if (term < 7) fails.push(`term-fg on term: ${term.toFixed(2)} (<7)`);
-  // text-dim is decoration only (documented) — but must stay perceivable.
+  // text-dim is in TEXT above (it carries small meta text); this floor is the
+  // last line of defence should it ever be taken out of TEXT again.
   for (const s of SURFACES) {
     const r = ratio(col("--color-text-dim"), col(s));
     if (r < 2.5) fails.push(`text-dim on ${s}: ${r.toFixed(2)} (<2.5)`);
@@ -98,7 +81,7 @@ function check(mode: "dark" | "light", vars: Map<string, string>) {
 }
 
 describe("theme contrast (WCAG) — both modes", () => {
-  it("dark: text tokens clear AA on every surface (except recorded pre-existing gaps)", () => {
+  it("dark: text tokens clear AA on every surface, no exceptions (the pre-existing gaps are closed)", () => {
     expect(check("dark", darkVars)).toEqual([]);
   });
 
@@ -132,31 +115,58 @@ describe("theme contrast (WCAG) — both modes", () => {
     }
   });
 
-  it("light: agent identity colours (hsl, --agent-lightness) clear AA on every surface", () => {
-    const L = parseFloat(resolveVar("var(--agent-lightness)", lightVars)) / 100;
+  it("dark: status hues and agent colours on solid status fills keep dark text readable (on-status)", () => {
+    const col = (t: string) => resolveVar(`var(${t})`, darkVars);
+    const fails = ["--color-status-online", "--color-status-warning", "--color-status-error", "--color-status-info"]
+      .map((t) => [t, ratio(col("--color-on-status"), col(t))] as const)
+      .filter(([, r]) => r < 4.5)
+      .map(([t, r]) => `on-status on ${t}: ${r.toFixed(2)}`);
+    expect(fails).toEqual([]);
+  });
+
+  it("dark: status hues stay AA as text on their own 12 % tint (chips) over surface/elevated", () => {
+    const col = (t: string) => resolveVar(`var(${t})`, darkVars);
+    const fails: string[] = [];
+    for (const hue of ["--color-status-warning", "--color-status-error", "--color-status-online", "--color-status-info"]) {
+      for (const s of ["--color-bg-surface", "--color-bg-elevated"]) {
+        const r = ratio(col(hue), mixHex(col(hue), col(s), 0.12));
+        if (r < 4.5) fails.push(`${hue} on 12% tint over ${s}: ${r.toFixed(2)}`);
+      }
+    }
+    expect(fails).toEqual([]);
+  });
+
+  // dark: on the card surfaces AND on the colour's own 12 % tint (vault chips);
+  // light: on every surface (its chips are covered by the darker lightness)
+  it.each([["dark", darkVars, ["--color-bg-surface", "--color-bg-elevated"], true], ["light", lightVars, SURFACES, false]] as const)(
+    "%s: agent identity colours (hsl, --agent-lightness) clear AA",
+    (_mode, vars, surfaces, withTint) => {
+    const L = parseFloat(resolveVar("var(--agent-lightness)", vars)) / 100;
     const hues: [number, number][] = [12, 38, 60, 145, 175, 200, 215, 300, 320, 340].map((h) => [h, 0.55]);
     hues.push([260, 0.4]);
     const fails: string[] = [];
     for (const [h, sat] of hues) {
       const c = hslHex(h, sat, L);
-      for (const s of SURFACES) {
-        const r = ratio(c, resolveVar(`var(${s})`, lightVars));
-        if (r < 4.5) fails.push(`hue ${h} on ${s}: ${r.toFixed(2)}`);
+      for (const s of surfaces) {
+        const bg = resolveVar(`var(${s})`, vars);
+        const grounds = withTint ? [[s, bg], [`12% tint over ${s}`, mixHex(c, bg, 0.12)]] : [[s, bg]];
+        for (const [name, ground] of grounds) {
+          const r = ratio(c, ground);
+          if (r < 4.5) fails.push(`hue ${h} on ${name}: ${r.toFixed(2)}`);
+        }
       }
     }
     expect(fails).toEqual([]);
   });
 
   it("light: status text and status hues stay AA on their own 12 % tint (chips) over elevated/hover", () => {
-    const mix = (fg: string, bg: string, a: number) =>
-      "#" + [1, 3, 5].map((i) => Math.round(parseInt(fg.slice(i, i + 2), 16) * a + parseInt(bg.slice(i, i + 2), 16) * (1 - a)).toString(16).padStart(2, "0")).join("");
     const col = (t: string) => resolveVar(`var(${t})`, lightVars);
     const fails: string[] = [];
     for (const [text, hue] of [["--color-status-warning-text", "--color-status-warning"], ["--color-status-error-text", "--color-status-error"], ["--color-status-online-text", "--color-status-online"], ["--color-status-info", "--color-status-info"],
       // chips paint the status HUE as text on its own tint (Pill, tag chips)
       ["--color-status-warning", "--color-status-warning"], ["--color-status-error", "--color-status-error"], ["--color-status-online", "--color-status-online"]]) {
       for (const s of ["--color-bg-elevated", "--color-bg-hover"]) {
-        const r = ratio(col(text), mix(col(hue), col(s), 0.12));
+        const r = ratio(col(text), mixHex(col(hue), col(s), 0.12));
         if (r < 4.5) fails.push(`${text} on 12% ${hue} over ${s}: ${r.toFixed(2)}`);
       }
     }

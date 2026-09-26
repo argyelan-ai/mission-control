@@ -26,11 +26,11 @@ import { C, alpha } from "@/lib/colors";
 import { fmtCtx } from "@/lib/utils";
 
 export const RUNTIME_TYPE_COLOR: Record<string, string> = {
-  lmstudio: C.info,          // #5890CA — local API, info-blue
-  vllm_docker: C.online,     // #55A964 — running container, online-green
-  unsloth: C.warning,        // #A67F3E — fine-tune, warm-amber
+  lmstudio: C.info,          // status-info — local API, info-blue
+  vllm_docker: C.online,     // status-online — running container, online-green
+  unsloth: C.warning,        // status-warning — fine-tune, warm-amber
   openai_compatible: C.accent, // #EBE8DE — achromatic accent
-  cloud: C.textDim,          // #8A8A8A — external, neutral
+  cloud: C.textDim,          // text-dim — external, neutral
   // Phase 24 (Hermes) — separated from openai_compatible by BRIGHTNESS, not hue
   // (System A): accentDeep is the dimmed accent step, still clearly not accent.
   hermes: C.accentDeep, // #C1BEB2 — gedimmte Akzentstufe

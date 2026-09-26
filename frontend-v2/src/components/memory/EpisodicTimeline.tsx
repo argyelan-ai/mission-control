@@ -10,10 +10,10 @@ import { MergeCandidateBadge } from "./MergeCandidateBadge";
 import { C, alpha } from "@/lib/colors";
 
 const TYPE_COLORS: Record<string, string> = {
-  journal:       C.online,         // #55A964
+  journal:       C.online,         // status-online
   weekly_review: C.textSecondary,  // #A1A1A1
   insight:       C.online,         // #2B9A4A
-  task_log:      C.info,           // #5890CA
+  task_log:      C.info,           // status-info
 };
 
 const TYPE_LABELS: Record<string, string> = {

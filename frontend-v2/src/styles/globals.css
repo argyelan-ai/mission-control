@@ -263,11 +263,14 @@
   --color-bg-hover: #3a3a3a;
   --color-bg-dark: var(--color-bg-deep);
 
-  /* ---- Text (alle ≥4.5:1 auf bg-deep–bg-elevated) ---- */
+  /* ---- Text (alle ≥4.5:1 auf ALLEN fünf Flächen inkl. bg-hover) ----
+     text-dim war als Deko gedacht, trägt im Code aber viele kleine Meta-Texte
+     (Zähler, Etiketten, IDs — UI-Probe: häufigster Kontrast-Befund). Darum
+     ist auch text-dim ein AA-Textton; die Stufung primary → dim bleibt. */
   --color-text-primary: #f2f2f2;
   --color-text-secondary: #c9c9c9;
-  --color-text-muted: #a3a3a3;
-  --color-text-dim: #8a8a8a; /* Deko/inaktive Icons — nie für Fliesstext */
+  --color-text-muted: #b3b3b3; /* vorher #a3a3a3 */
+  --color-text-dim: #a3a3a3;   /* vorher #8a8a8a (4.38 auf surface, 3.29 auf hover) */
   --color-text-body: var(--color-text-primary);
   --color-text: var(--color-text-primary); /* alias used by a few components */
 
@@ -283,13 +286,16 @@
   --color-accent-deep: #c1beb2;
   --color-accent-subtle: rgba(235, 232, 222, 0.1);
   --color-on-accent: #151411; /* Text auf Akzent-Fläche — 15.0:1 */
-  --color-on-status: var(--color-text-primary); /* Text auf voller Status-Fläche (Gefahr-Knopf) */
+  --color-on-status: #161616; /* Text auf voller Status-Fläche (Gefahr-Knopf) — ≥7:1 auf jedem Status-Ton; Hell auf dem gelifteten Rot wäre 2.1:1 */
 
-  /* ---- Status — die EINZIGEN bunten Tokens ---- */
-  --color-status-online: #55a964;
-  --color-status-warning: #a67f3e;
-  --color-status-error: #fa4942;
-  --color-status-info: #5890ca;
+  /* ---- Status — die EINZIGEN bunten Tokens ----
+     Gleicher Farbton wie vorher, nur in OKLCH aufgehellt (Chroma bleibt):
+     ≥4.5:1 als Text auf allen fünf Flächen UND auf der eigenen 12-%-Tönung
+     über surface/elevated (Chips). Vorher 3.1–4.5 (UI-Probe). */
+  --color-status-online: #68bc76;  /* vorher #55a964 */
+  --color-status-warning: #cca463; /* vorher #a67f3e */
+  --color-status-error: #ff867a;   /* vorher #fa4942 */
+  --color-status-info: #75aeea;    /* vorher #5890ca */
   --color-status-offline: #3a3a3a;
   --color-online: var(--color-status-online);
   --color-warning: var(--color-status-warning);
@@ -300,7 +306,7 @@
   --color-status-error-text: var(--color-status-error);
   --color-status-online-text: var(--color-status-online);
   --color-status-info-text: var(--color-status-info);
-  --color-status-warning-text: #b98f4d; /* gelifteter Ton — Token selbst = 4.34:1 */
+  --color-status-warning-text: var(--color-status-warning); /* der Ton selbst ist jetzt AA */
 
   /* Status-Flächen/Ränder — folgen dem Status-Ton (12 % / 38 % Deckkraft) */
   --color-warning-subtle: color-mix(in srgb, var(--color-status-warning) 12%, transparent);
@@ -331,7 +337,7 @@
   --color-row-opaque: var(--color-bg-surface);
 
   /* Agenten-Identität (vault/agentColors.ts): hsl(Farbton, 55%, L) */
-  --agent-lightness: 55%;
+  --agent-lightness: 75%; /* vorher 55 % — ≥4.5:1 für alle Farbtöne auf surface/elevated + 12-%-Tönung */
 
   /* ---- Terminal + Code — bleiben in BEIDEN Modi dunkel (Inhalt, kein Chrome) ---- */
   --color-term: #0e0e0e;
@@ -720,7 +726,7 @@ body {
 .status-letter {
   display: inline-block;
   white-space: pre; /* ein Leerzeichen-Span behaelt seine Breite */
-  background: linear-gradient(90deg, #5890ca 0%, #e6f1ff 50%, #5890ca 100%);
+  background: linear-gradient(90deg, var(--color-status-info) 0%, #e6f1ff 50%, var(--color-status-info) 100%);
   background-size: 200% 100%;
   -webkit-background-clip: text;
   background-clip: text;

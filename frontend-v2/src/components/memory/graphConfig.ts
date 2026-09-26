@@ -17,20 +17,20 @@ export const GRAPH_SELECTED = C.accent; // #EBE8DE — achromatic accent
 // Consumers (MemoryLayerTabs, MemoryQueryBar, etc.) import from here.
 
 export const LAYER_COLORS = {
-  semantic:   C.info,      // #5890CA — knowledge/reference layer
-  episodic:   C.online,    // #55A964 — journal/timeline layer
-  agent:      C.error,     // #FA4942 — agent lessons/actions layer
-  topics:     C.warning,   // #A67F3E — topic clusters layer
+  semantic:   C.info,      // status-info — knowledge/reference layer
+  episodic:   C.online,    // status-online — journal/timeline layer
+  agent:      C.error,     // status-error — agent lessons/actions layer
+  topics:     C.warning,   // status-warning — topic clusters layer
 } as const;
 
 // ── Node type colors ──────────────────────────────────────────────────────────
 
 export const TYPE_COLORS: Record<VaultNoteType, string> = {
-  lesson:       C.online,    // #55A964 — green
-  knowledge:    C.info,      // #5890CA — blue
+  lesson:       C.online,    // status-online — green
+  knowledge:    C.info,      // status-info — blue
   reference:    C.accent,    // #EBE8DE — brightest neutral (was violet, then cyan)
-  journal:      C.warning,   // #A67F3E — warm ochre
-  weekly_review:C.error,     // #FA4942 — red
+  journal:      C.warning,   // status-warning — warm ochre
+  weekly_review:C.error,     // status-error — red
   note:         C.textMuted, // #8F8F8F — grey (default / untyped)
   deliverable:  C.accentDeep, // #C1BEB2 — dimmed accent, separated from `reference`
                              //           by brightness instead of hue
