@@ -1,0 +1,5267 @@
+{
+  "info": {
+    "description": "AI Agent Command Center API",
+    "title": "Mission Control v2",
+    "version": "0.1.1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/v1/activity": {
+      "get": {
+        "operationId": "list_activity_api_v1_activity_get",
+        "summary": "List Activity",
+        "tags": [
+          "activity"
+        ]
+      }
+    },
+    "/api/v1/activity/stream": {
+      "get": {
+        "operationId": "stream_activity_api_v1_activity_stream_get",
+        "summary": "Stream Activity",
+        "tags": [
+          "activity"
+        ]
+      }
+    },
+    "/api/v1/admin/usage/backfill-attribution": {
+      "post": {
+        "operationId": "backfill_usage_attribution_api_v1_admin_usage_backfill_attribution_post",
+        "summary": "Backfill Usage Attribution"
+      }
+    },
+    "/api/v1/agent-templates": {
+      "get": {
+        "operationId": "list_templates_api_v1_agent_templates_get",
+        "summary": "List Templates",
+        "tags": [
+          "agent-templates"
+        ]
+      },
+      "post": {
+        "operationId": "create_template_api_v1_agent_templates_post",
+        "summary": "Create Template",
+        "tags": [
+          "agent-templates"
+        ]
+      }
+    },
+    "/api/v1/agent-templates/{template_id}": {
+      "delete": {
+        "operationId": "delete_template_api_v1_agent_templates__template_id__delete",
+        "summary": "Delete Template",
+        "tags": [
+          "agent-templates"
+        ]
+      },
+      "patch": {
+        "operationId": "update_template_api_v1_agent_templates__template_id__patch",
+        "summary": "Update Template",
+        "tags": [
+          "agent-templates"
+        ]
+      }
+    },
+    "/api/v1/agent-templates/{template_id}/instantiate": {
+      "post": {
+        "operationId": "instantiate_template_api_v1_agent_templates__template_id__instantiate_post",
+        "summary": "Instantiate Template",
+        "tags": [
+          "agent-templates"
+        ]
+      }
+    },
+    "/api/v1/agent/agents": {
+      "post": {
+        "operationId": "agent_create_custom_api_v1_agent_agents_post",
+        "summary": "Agent Create Custom",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/agents/list": {
+      "get": {
+        "operationId": "agent_list_all_agents_api_v1_agent_agents_list_get",
+        "summary": "Agent List All Agents",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/agents/request-spawn": {
+      "post": {
+        "operationId": "agent_request_spawn_api_v1_agent_agents_request_spawn_post",
+        "summary": "Agent Request Spawn",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/agents/{agent_id}/detail": {
+      "get": {
+        "operationId": "agent_get_agent_detail_api_v1_agent_agents__agent_id__detail_get",
+        "summary": "Agent Get Agent Detail",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/agents/{target_agent_id}/plugins": {
+      "get": {
+        "operationId": "agent_get_plugins_api_v1_agent_agents__target_agent_id__plugins_get",
+        "summary": "Agent Get Plugins",
+        "tags": [
+          "agent-scoped"
+        ]
+      },
+      "patch": {
+        "operationId": "agent_patch_plugins_api_v1_agent_agents__target_agent_id__plugins_patch",
+        "summary": "Agent Patch Plugins",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/agents/{target_agent_id}/worker/restart": {
+      "post": {
+        "operationId": "agent_restart_worker_api_v1_agent_agents__target_agent_id__worker_restart_post",
+        "summary": "Agent Restart Worker",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/agents/{target_agent_id}/workflow-flags": {
+      "patch": {
+        "operationId": "agent_patch_workflow_flags_api_v1_agent_agents__target_agent_id__workflow_flags_patch",
+        "summary": "Agent Patch Workflow Flags",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/boards/{board_id}": {
+      "get": {
+        "operationId": "agent_get_board_api_v1_agent_boards__board_id__get",
+        "summary": "Agent Get Board",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/boards/{board_id}/agents": {
+      "get": {
+        "operationId": "agent_list_board_agents_api_v1_agent_boards__board_id__agents_get",
+        "summary": "Agent List Board Agents",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/boards/{board_id}/approvals": {
+      "post": {
+        "operationId": "agent_request_approval_api_v1_agent_boards__board_id__approvals_post",
+        "summary": "Agent Request Approval",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/boards/{board_id}/chat": {
+      "post": {
+        "operationId": "agent_post_chat_api_v1_agent_boards__board_id__chat_post",
+        "summary": "Agent Post Chat",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/boards/{board_id}/clarification": {
+      "post": {
+        "operationId": "agent_clarification_api_v1_agent_boards__board_id__clarification_post",
+        "summary": "Agent Clarification",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/boards/{board_id}/credentials": {
+      "get": {
+        "operationId": "agent_list_credentials_api_v1_agent_boards__board_id__credentials_get",
+        "summary": "Agent List Credentials",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/boards/{board_id}/credentials/{credential_id}": {
+      "get": {
+        "operationId": "agent_get_credential_api_v1_agent_boards__board_id__credentials__credential_id__get",
+        "summary": "Agent Get Credential",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/boards/{board_id}/delegate": {
+      "post": {
+        "operationId": "agent_delegate_task_api_v1_agent_boards__board_id__delegate_post",
+        "summary": "Agent Delegate Task",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/boards/{board_id}/help-request": {
+      "post": {
+        "operationId": "agent_help_request_api_v1_agent_boards__board_id__help_request_post",
+        "summary": "Agent Help Request",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/boards/{board_id}/memory": {
+      "post": {
+        "operationId": "agent_create_memory_api_v1_agent_boards__board_id__memory_post",
+        "summary": "Agent Create Memory",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/boards/{board_id}/projects": {
+      "get": {
+        "operationId": "agent_list_projects_api_v1_agent_boards__board_id__projects_get",
+        "summary": "Agent List Projects",
+        "tags": [
+          "agent-scoped"
+        ]
+      },
+      "post": {
+        "operationId": "agent_create_project_api_v1_agent_boards__board_id__projects_post",
+        "summary": "Agent Create Project",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/boards/{board_id}/tasks": {
+      "get": {
+        "operationId": "agent_list_tasks_api_v1_agent_boards__board_id__tasks_get",
+        "summary": "Agent List Tasks",
+        "tags": [
+          "agent-status"
+        ]
+      },
+      "post": {
+        "operationId": "agent_create_task_api_v1_agent_boards__board_id__tasks_post",
+        "summary": "Agent Create Task",
+        "tags": [
+          "agent-status"
+        ]
+      }
+    },
+    "/api/v1/agent/boards/{board_id}/tasks/next": {
+      "get": {
+        "operationId": "get_next_task_api_v1_agent_boards__board_id__tasks_next_get",
+        "summary": "Get Next Task",
+        "tags": [
+          "agent-status"
+        ]
+      }
+    },
+    "/api/v1/agent/boards/{board_id}/tasks/pipeline": {
+      "get": {
+        "operationId": "agent_get_pipeline_api_v1_agent_boards__board_id__tasks_pipeline_get",
+        "summary": "Agent Get Pipeline",
+        "tags": [
+          "agent-status"
+        ]
+      }
+    },
+    "/api/v1/agent/boards/{board_id}/tasks/{task_id}": {
+      "delete": {
+        "operationId": "agent_delete_task_api_v1_agent_boards__board_id__tasks__task_id__delete",
+        "summary": "Agent Delete Task",
+        "tags": [
+          "agent-status"
+        ]
+      },
+      "get": {
+        "operationId": "agent_get_task_api_v1_agent_boards__board_id__tasks__task_id__get",
+        "summary": "Agent Get Task",
+        "tags": [
+          "agent-status"
+        ]
+      },
+      "patch": {
+        "operationId": "agent_update_task_api_v1_agent_boards__board_id__tasks__task_id__patch",
+        "summary": "Agent Update Task",
+        "tags": [
+          "agent-status"
+        ]
+      }
+    },
+    "/api/v1/agent/boards/{board_id}/tasks/{task_id}/checklist": {
+      "get": {
+        "operationId": "agent_get_checklist_api_v1_agent_boards__board_id__tasks__task_id__checklist_get",
+        "summary": "Agent Get Checklist",
+        "tags": [
+          "agent-scoped"
+        ]
+      },
+      "post": {
+        "operationId": "agent_create_checklist_api_v1_agent_boards__board_id__tasks__task_id__checklist_post",
+        "summary": "Agent Create Checklist",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/boards/{board_id}/tasks/{task_id}/checklist/{item_id}": {
+      "delete": {
+        "operationId": "agent_delete_checklist_item_api_v1_agent_boards__board_id__tasks__task_id__checklist__item_id__delete",
+        "summary": "Agent Delete Checklist Item",
+        "tags": [
+          "agent-scoped"
+        ]
+      },
+      "patch": {
+        "operationId": "agent_update_checklist_item_api_v1_agent_boards__board_id__tasks__task_id__checklist__item_id__patch",
+        "summary": "Agent Update Checklist Item",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/boards/{board_id}/tasks/{task_id}/checkpoint": {
+      "get": {
+        "operationId": "agent_get_latest_checkpoint_api_v1_agent_boards__board_id__tasks__task_id__checkpoint_get",
+        "summary": "Agent Get Latest Checkpoint",
+        "tags": [
+          "agent-status"
+        ]
+      },
+      "post": {
+        "operationId": "agent_save_checkpoint_api_v1_agent_boards__board_id__tasks__task_id__checkpoint_post",
+        "summary": "Agent Save Checkpoint",
+        "tags": [
+          "agent-status"
+        ]
+      }
+    },
+    "/api/v1/agent/boards/{board_id}/tasks/{task_id}/comments": {
+      "get": {
+        "operationId": "agent_list_comments_api_v1_agent_boards__board_id__tasks__task_id__comments_get",
+        "summary": "Agent List Comments",
+        "tags": [
+          "agent-comments"
+        ]
+      },
+      "post": {
+        "operationId": "agent_add_comment_api_v1_agent_boards__board_id__tasks__task_id__comments_post",
+        "summary": "Agent Add Comment",
+        "tags": [
+          "agent-comments"
+        ]
+      }
+    },
+    "/api/v1/agent/boards/{board_id}/tasks/{task_id}/deliverables": {
+      "get": {
+        "operationId": "agent_list_deliverables_api_v1_agent_boards__board_id__tasks__task_id__deliverables_get",
+        "summary": "Agent List Deliverables",
+        "tags": [
+          "agent-scoped"
+        ]
+      },
+      "post": {
+        "operationId": "agent_create_deliverable_api_v1_agent_boards__board_id__tasks__task_id__deliverables_post",
+        "summary": "Agent Create Deliverable",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/boards/{board_id}/tasks/{task_id}/deliverables/{deliverable_id}": {
+      "get": {
+        "operationId": "agent_get_deliverable_api_v1_agent_boards__board_id__tasks__task_id__deliverables__deliverable_id__get",
+        "summary": "Agent Get Deliverable",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/boards/{board_id}/tasks/{task_id}/detail": {
+      "get": {
+        "operationId": "agent_get_task_detail_api_v1_agent_boards__board_id__tasks__task_id__detail_get",
+        "summary": "Agent Get Task Detail",
+        "tags": [
+          "agent-status"
+        ]
+      }
+    },
+    "/api/v1/agent/boards/{board_id}/tasks/{task_id}/events": {
+      "get": {
+        "operationId": "agent_get_task_events_api_v1_agent_boards__board_id__tasks__task_id__events_get",
+        "summary": "Agent Get Task Events",
+        "tags": [
+          "agent-status"
+        ]
+      }
+    },
+    "/api/v1/agent/boards/{board_id}/tasks/{task_id}/hold": {
+      "post": {
+        "operationId": "agent_hold_task_api_v1_agent_boards__board_id__tasks__task_id__hold_post",
+        "summary": "Agent Hold Task",
+        "tags": [
+          "agent-status"
+        ]
+      }
+    },
+    "/api/v1/agent/boards/{board_id}/tasks/{task_id}/pdf": {
+      "post": {
+        "operationId": "agent_generate_pdf_api_v1_agent_boards__board_id__tasks__task_id__pdf_post",
+        "summary": "Agent Generate Pdf",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/boards/{board_id}/tasks/{task_id}/reassign": {
+      "post": {
+        "operationId": "agent_reassign_task_api_v1_agent_boards__board_id__tasks__task_id__reassign_post",
+        "summary": "Agent Reassign Task",
+        "tags": [
+          "agent-status"
+        ]
+      }
+    },
+    "/api/v1/agent/boards/{board_id}/tasks/{task_id}/release": {
+      "post": {
+        "operationId": "agent_release_task_api_v1_agent_boards__board_id__tasks__task_id__release_post",
+        "summary": "Agent Release Task",
+        "tags": [
+          "agent-status"
+        ]
+      }
+    },
+    "/api/v1/agent/boards/{board_id}/tasks/{task_id}/report-back": {
+      "patch": {
+        "operationId": "agent_report_back_api_v1_agent_boards__board_id__tasks__task_id__report_back_patch",
+        "summary": "Agent Report Back",
+        "tags": [
+          "agent-status"
+        ]
+      }
+    },
+    "/api/v1/agent/boards/{board_id}/tasks/{task_id}/review": {
+      "post": {
+        "operationId": "agent_review_decision_api_v1_agent_boards__board_id__tasks__task_id__review_post",
+        "summary": "Agent Review Decision",
+        "tags": [
+          "agent-status"
+        ]
+      }
+    },
+    "/api/v1/agent/boards/{board_id}/tasks/{task_id}/review-note": {
+      "post": {
+        "operationId": "agent_late_review_note_api_v1_agent_boards__board_id__tasks__task_id__review_note_post",
+        "summary": "Agent Late Review Note",
+        "tags": [
+          "agent-status"
+        ]
+      }
+    },
+    "/api/v1/agent/config/soul_md": {
+      "get": {
+        "operationId": "agent_get_own_soul_api_v1_agent_config_soul_md_get",
+        "summary": "Agent Get Own Soul",
+        "tags": [
+          "agent-scoped"
+        ]
+      },
+      "put": {
+        "operationId": "agent_update_own_soul_api_v1_agent_config_soul_md_put",
+        "summary": "Agent Update Own Soul",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/consensus": {
+      "post": {
+        "operationId": "create_consensus_api_v1_agent_consensus_post",
+        "summary": "Create Consensus",
+        "tags": [
+          "consensus"
+        ]
+      }
+    },
+    "/api/v1/agent/consensus/{consensus_id}": {
+      "get": {
+        "operationId": "get_consensus_status_api_v1_agent_consensus__consensus_id__get",
+        "summary": "Get Consensus Status",
+        "tags": [
+          "consensus"
+        ]
+      }
+    },
+    "/api/v1/agent/deploy/credentials": {
+      "get": {
+        "operationId": "agent_get_credentials_api_v1_agent_deploy_credentials_get",
+        "summary": "Agent Get Credentials",
+        "tags": [
+          "deploy"
+        ]
+      }
+    },
+    "/api/v1/agent/deploy/history": {
+      "get": {
+        "operationId": "agent_deploy_history_api_v1_agent_deploy_history_get",
+        "summary": "Agent Deploy History",
+        "tags": [
+          "deploy"
+        ]
+      }
+    },
+    "/api/v1/agent/deploy/record": {
+      "post": {
+        "operationId": "agent_record_deploy_api_v1_agent_deploy_record_post",
+        "summary": "Agent Record Deploy",
+        "tags": [
+          "deploy"
+        ]
+      }
+    },
+    "/api/v1/agent/deploy/services": {
+      "get": {
+        "operationId": "agent_list_services_api_v1_agent_deploy_services_get",
+        "summary": "Agent List Services",
+        "tags": [
+          "deploy"
+        ]
+      }
+    },
+    "/api/v1/agent/deploy/services/{name}/health": {
+      "get": {
+        "operationId": "agent_service_health_api_v1_agent_deploy_services__name__health_get",
+        "summary": "Agent Service Health",
+        "tags": [
+          "deploy"
+        ]
+      }
+    },
+    "/api/v1/agent/discord/send": {
+      "post": {
+        "operationId": "agent_send_discord_api_v1_agent_discord_send_post",
+        "summary": "Agent Send Discord",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/groups/{group_id}/document": {
+      "put": {
+        "operationId": "agent_write_group_document_api_v1_agent_groups__group_id__document_put",
+        "summary": "Agent Write Group Document",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/heartbeat": {
+      "post": {
+        "operationId": "agent_heartbeat_api_v1_agent_heartbeat_post",
+        "summary": "Agent Heartbeat",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/install-requests": {
+      "post": {
+        "operationId": "create_install_request_api_v1_agent_install_requests_post",
+        "summary": "Create Install Request",
+        "tags": [
+          "install-requests"
+        ]
+      }
+    },
+    "/api/v1/agent/knowledge": {
+      "get": {
+        "operationId": "agent_list_knowledge_api_v1_agent_knowledge_get",
+        "summary": "Agent List Knowledge",
+        "tags": [
+          "agent-scoped"
+        ]
+      },
+      "post": {
+        "operationId": "agent_create_knowledge_api_v1_agent_knowledge_post",
+        "summary": "Agent Create Knowledge",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/me": {
+      "get": {
+        "operationId": "agent_get_me_api_v1_agent_me_get",
+        "summary": "Agent Get Me",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/me/active-task-recovery": {
+      "get": {
+        "operationId": "agent_active_task_recovery_api_v1_agent_me_active_task_recovery_get",
+        "summary": "Agent Active Task Recovery",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/api/v1/agent/me/activity-events": {
+      "get": {
+        "operationId": "agent_list_activity_events_api_v1_agent_me_activity_events_get",
+        "summary": "Agent List Activity Events",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/me/activity-events/summary": {
+      "get": {
+        "operationId": "agent_activity_events_summary_api_v1_agent_me_activity_events_summary_get",
+        "summary": "Agent Activity Events Summary",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/me/deliverable": {
+      "post": {
+        "operationId": "agent_me_create_deliverable_api_v1_agent_me_deliverable_post",
+        "summary": "Agent Me Create Deliverable",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/me/heartbeat": {
+      "post": {
+        "operationId": "agent_heartbeat_api_v1_agent_me_heartbeat_post",
+        "summary": "Agent Heartbeat",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/api/v1/agent/me/inbox": {
+      "get": {
+        "operationId": "agent_inbox_api_v1_agent_me_inbox_get",
+        "summary": "Agent Inbox",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/api/v1/agent/me/inbox/ack": {
+      "post": {
+        "operationId": "agent_inbox_ack_api_v1_agent_me_inbox_ack_post",
+        "summary": "Agent Inbox Ack",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/api/v1/agent/me/memory": {
+      "get": {
+        "operationId": "agent_get_memory_api_v1_agent_me_memory_get",
+        "summary": "Agent Get Memory",
+        "tags": [
+          "agent-scoped"
+        ]
+      },
+      "patch": {
+        "operationId": "agent_update_memory_api_v1_agent_me_memory_patch",
+        "summary": "Agent Update Memory",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/me/memory/search": {
+      "get": {
+        "operationId": "agent_memory_search_api_v1_agent_me_memory_search_get",
+        "summary": "Agent Memory Search",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/me/pdf": {
+      "post": {
+        "operationId": "agent_me_generate_pdf_api_v1_agent_me_pdf_post",
+        "summary": "Agent Me Generate Pdf",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/me/poll": {
+      "get": {
+        "operationId": "agent_poll_api_v1_agent_me_poll_get",
+        "summary": "Agent Poll",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/api/v1/agent/me/recover-task": {
+      "post": {
+        "operationId": "agent_recover_task_api_v1_agent_me_recover_task_post",
+        "summary": "Agent Recover Task",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/api/v1/agent/me/report": {
+      "post": {
+        "operationId": "agent_me_send_report_api_v1_agent_me_report_post",
+        "summary": "Agent Me Send Report",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/me/telegram": {
+      "post": {
+        "operationId": "agent_me_send_telegram_report_api_v1_agent_me_telegram_post",
+        "summary": "Agent Me Send Telegram Report",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/me/thread": {
+      "get": {
+        "operationId": "agent_read_own_thread_api_v1_agent_me_thread_get",
+        "summary": "Agent Read Own Thread",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/memory/query": {
+      "post": {
+        "operationId": "agent_memory_query_api_v1_agent_memory_query_post",
+        "summary": "Agent Memory Query",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/operator": {
+      "get": {
+        "operationId": "agent_get_operator_api_v1_agent_operator_get",
+        "summary": "Agent Get Operator",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/plugins": {
+      "get": {
+        "operationId": "agent_list_plugins_api_v1_agent_plugins_get",
+        "summary": "Agent List Plugins",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/tasks/current/ask": {
+      "post": {
+        "operationId": "agent_ask_api_v1_agent_tasks_current_ask_post",
+        "summary": "Agent Ask",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/tasks/current/messages": {
+      "post": {
+        "operationId": "agent_post_message_api_v1_agent_tasks_current_messages_post",
+        "summary": "Agent Post Message",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/tasks/{task_id}/comments": {
+      "post": {
+        "operationId": "agent_add_comment_by_task_id_api_v1_agent_tasks__task_id__comments_post",
+        "summary": "Agent Add Comment By Task Id",
+        "tags": [
+          "agent-comments"
+        ]
+      }
+    },
+    "/api/v1/agent/tasks/{task_id}/visual-verify": {
+      "post": {
+        "operationId": "agent_visual_verify_api_v1_agent_tasks__task_id__visual_verify_post",
+        "summary": "Agent Visual Verify",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/telegram/send": {
+      "post": {
+        "operationId": "agent_send_operator_report_api_v1_agent_telegram_send_post",
+        "summary": "Agent Send Operator Report",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/templates": {
+      "get": {
+        "operationId": "agent_list_templates_api_v1_agent_templates_get",
+        "summary": "Agent List Templates",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/templates/{template_id}/instantiate": {
+      "post": {
+        "operationId": "agent_instantiate_template_api_v1_agent_templates__template_id__instantiate_post",
+        "summary": "Agent Instantiate Template",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/threads/{thread_id}/attachment": {
+      "post": {
+        "operationId": "agent_post_thread_attachment_api_v1_agent_threads__thread_id__attachment_post",
+        "summary": "Agent Post Thread Attachment",
+        "tags": [
+          "agent-thread-attachments"
+        ]
+      }
+    },
+    "/api/v1/agent/threads/{thread_id}/messages": {
+      "post": {
+        "operationId": "agent_post_thread_message_api_v1_agent_threads__thread_id__messages_post",
+        "summary": "Agent Post Thread Message",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/vault/attachment/{deliverable_id}": {
+      "get": {
+        "operationId": "serve_vault_attachment_agent_api_v1_agent_vault_attachment__deliverable_id__get",
+        "summary": "Serve Vault Attachment Agent",
+        "tags": [
+          "vault-agent"
+        ]
+      }
+    },
+    "/api/v1/agent/vault/briefing": {
+      "get": {
+        "operationId": "agent_vault_briefing_api_v1_agent_vault_briefing_get",
+        "summary": "Agent Vault Briefing",
+        "tags": [
+          "vault-agent"
+        ]
+      }
+    },
+    "/api/v1/agent/vault/file-answer": {
+      "post": {
+        "operationId": "agent_file_answer_api_v1_agent_vault_file_answer_post",
+        "summary": "Agent File Answer",
+        "tags": [
+          "vault-agent"
+        ]
+      }
+    },
+    "/api/v1/agent/vault/note": {
+      "post": {
+        "operationId": "agent_write_note_api_v1_agent_vault_note_post",
+        "summary": "Agent Write Note",
+        "tags": [
+          "vault-agent"
+        ]
+      }
+    },
+    "/api/v1/agent/vault/note/{path}": {
+      "get": {
+        "operationId": "agent_get_note_api_v1_agent_vault_note__path__get",
+        "summary": "Agent Get Note",
+        "tags": [
+          "vault-agent"
+        ]
+      }
+    },
+    "/api/v1/agent/vault/related/{task_id}": {
+      "get": {
+        "operationId": "agent_list_task_related_api_v1_agent_vault_related__task_id__get",
+        "summary": "Agent List Task Related",
+        "tags": [
+          "vault-agent"
+        ]
+      }
+    },
+    "/api/v1/agent/vault/search": {
+      "get": {
+        "operationId": "agent_search_notes_api_v1_agent_vault_search_get",
+        "summary": "Agent Search Notes",
+        "tags": [
+          "vault-agent"
+        ]
+      }
+    },
+    "/api/v1/agent/voice/config": {
+      "get": {
+        "operationId": "agent_get_voice_config_api_v1_agent_voice_config_get",
+        "summary": "Agent Get Voice Config",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/voice/unsupported-model": {
+      "post": {
+        "operationId": "agent_report_voice_unsupported_model_api_v1_agent_voice_unsupported_model_post",
+        "summary": "Agent Report Voice Unsupported Model",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
+    "/api/v1/agent/x-posts": {
+      "post": {
+        "operationId": "create_x_post_draft_api_v1_agent_x_posts_post",
+        "summary": "Create X Post Draft",
+        "tags": [
+          "x-posts"
+        ]
+      }
+    },
+    "/api/v1/agents": {
+      "get": {
+        "operationId": "list_agents_api_v1_agents_get",
+        "summary": "List Agents",
+        "tags": [
+          "agents"
+        ]
+      },
+      "post": {
+        "operationId": "create_agent_api_v1_agents_post",
+        "summary": "Create Agent",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/api/v1/agents/metrics/comparison": {
+      "get": {
+        "operationId": "agents_metrics_comparison_api_v1_agents_metrics_comparison_get",
+        "summary": "Agents Metrics Comparison",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/api/v1/agents/preview-soul": {
+      "post": {
+        "operationId": "preview_soul_api_v1_agents_preview_soul_post",
+        "summary": "Preview Soul",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/api/v1/agents/runtime-status": {
+      "get": {
+        "operationId": "agents_runtime_status_api_v1_agents_runtime_status_get",
+        "summary": "Agents Runtime Status",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/api/v1/agents/setup-coordination": {
+      "post": {
+        "operationId": "setup_agent_coordination_api_v1_agents_setup_coordination_post",
+        "summary": "Setup Agent Coordination",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/api/v1/agents/setup-specialized": {
+      "post": {
+        "operationId": "setup_specialized_agents_api_v1_agents_setup_specialized_post",
+        "summary": "Setup Specialized Agents",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/api/v1/agents/stream": {
+      "get": {
+        "operationId": "stream_agents_api_v1_agents_stream_get",
+        "summary": "Stream Agents",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}": {
+      "delete": {
+        "operationId": "delete_agent_api_v1_agents__agent_id__delete",
+        "summary": "Delete Agent",
+        "tags": [
+          "agents"
+        ]
+      },
+      "get": {
+        "operationId": "get_agent_api_v1_agents__agent_id__get",
+        "summary": "Get Agent",
+        "tags": [
+          "agents"
+        ]
+      },
+      "patch": {
+        "operationId": "update_agent_api_v1_agents__agent_id__patch",
+        "summary": "Update Agent",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/archive": {
+      "post": {
+        "operationId": "archive_agent_endpoint_api_v1_agents__agent_id__archive_post",
+        "summary": "Archive Agent Endpoint",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/assign-board": {
+      "patch": {
+        "operationId": "assign_agent_board_api_v1_agents__agent_id__assign_board_patch",
+        "summary": "Assign Agent Board",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/chat/attachment": {
+      "post": {
+        "operationId": "post_chat_attachment_api_v1_agents__agent_id__chat_attachment_post",
+        "summary": "Post Chat Attachment",
+        "tags": [
+          "agent-chat"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/chat/diff": {
+      "get": {
+        "operationId": "get_chat_diff_api_v1_agents__agent_id__chat_diff_get",
+        "summary": "Get Chat Diff",
+        "tags": [
+          "agent-chat"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/chat/effort": {
+      "post": {
+        "operationId": "post_chat_effort_api_v1_agents__agent_id__chat_effort_post",
+        "summary": "Post Chat Effort",
+        "tags": [
+          "agent-chat"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/chat/history": {
+      "get": {
+        "operationId": "get_chat_history_api_v1_agents__agent_id__chat_history_get",
+        "summary": "Get Chat History",
+        "tags": [
+          "agent-chat"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/chat/input": {
+      "post": {
+        "operationId": "post_chat_input_api_v1_agents__agent_id__chat_input_post",
+        "summary": "Post Chat Input",
+        "tags": [
+          "agent-chat"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/chat/keys": {
+      "post": {
+        "operationId": "post_chat_keys_api_v1_agents__agent_id__chat_keys_post",
+        "summary": "Post Chat Keys",
+        "tags": [
+          "agent-chat"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/chat/stream": {
+      "get": {
+        "operationId": "stream_agent_chat_api_v1_agents__agent_id__chat_stream_get",
+        "summary": "Stream Agent Chat",
+        "tags": [
+          "agent-chat"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/chat/subagent/{run_id}": {
+      "get": {
+        "operationId": "get_subagent_history_api_v1_agents__agent_id__chat_subagent__run_id__get",
+        "summary": "Get Subagent History",
+        "tags": [
+          "agent-chat"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/cli-sessions": {
+      "get": {
+        "operationId": "list_cli_sessions_api_v1_agents__agent_id__cli_sessions_get",
+        "summary": "List Cli Sessions",
+        "tags": [
+          "cli-terminal"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/config": {
+      "get": {
+        "operationId": "get_agent_config_api_v1_agents__agent_id__config_get",
+        "summary": "Get Agent Config",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/config/{file_type}": {
+      "get": {
+        "operationId": "get_agent_config_file_api_v1_agents__agent_id__config__file_type__get",
+        "summary": "Get Agent Config File",
+        "tags": [
+          "agents"
+        ]
+      },
+      "put": {
+        "operationId": "update_agent_config_file_api_v1_agents__agent_id__config__file_type__put",
+        "summary": "Update Agent Config File",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/force-recreate": {
+      "post": {
+        "operationId": "force_recreate_agent_container_api_v1_agents__agent_id__force_recreate_post",
+        "summary": "Force Recreate Agent Container",
+        "tags": [
+          "cli-terminal"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/health-check": {
+      "post": {
+        "operationId": "agent_health_check_api_v1_agents__agent_id__health_check_post",
+        "summary": "Agent Health Check",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/heartbeat": {
+      "post": {
+        "operationId": "trigger_heartbeat_api_v1_agents__agent_id__heartbeat_post",
+        "summary": "Trigger Heartbeat",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/local-memory": {
+      "get": {
+        "operationId": "list_local_memory_api_v1_agents__agent_id__local_memory_get",
+        "summary": "List Local Memory",
+        "tags": [
+          "cli-terminal"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/local-memory/{filename}": {
+      "delete": {
+        "operationId": "delete_local_memory_api_v1_agents__agent_id__local_memory__filename__delete",
+        "summary": "Delete Local Memory",
+        "tags": [
+          "cli-terminal"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/mcp-servers": {
+      "patch": {
+        "operationId": "update_agent_mcp_servers_api_v1_agents__agent_id__mcp_servers_patch",
+        "summary": "Update Agent Mcp Servers",
+        "tags": [
+          "mcp-servers"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/metrics": {
+      "get": {
+        "operationId": "get_agent_metrics_api_v1_agents__agent_id__metrics_get",
+        "summary": "Get Agent Metrics",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/metrics/summary": {
+      "get": {
+        "operationId": "get_agent_metrics_summary_api_v1_agents__agent_id__metrics_summary_get",
+        "summary": "Get Agent Metrics Summary",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/preview-runtime-switch": {
+      "post": {
+        "operationId": "preview_runtime_switch_api_v1_agents__agent_id__preview_runtime_switch_post",
+        "summary": "Preview Runtime Switch",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/provision": {
+      "get": {
+        "operationId": "get_cli_agent_provision_status_api_v1_agents__agent_id__provision_get",
+        "summary": "Get Cli Agent Provision Status",
+        "tags": [
+          "cli-terminal"
+        ]
+      },
+      "post": {
+        "operationId": "provision_cli_agent_api_v1_agents__agent_id__provision_post",
+        "summary": "Provision Cli Agent",
+        "tags": [
+          "cli-terminal"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/reset": {
+      "post": {
+        "operationId": "reset_agent_api_v1_agents__agent_id__reset_post",
+        "summary": "Reset Agent",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/reset-token": {
+      "post": {
+        "operationId": "reset_agent_token_api_v1_agents__agent_id__reset_token_post",
+        "summary": "Reset Agent Token",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/restart": {
+      "post": {
+        "operationId": "restart_agent_container_api_v1_agents__agent_id__restart_post",
+        "summary": "Restart Agent Container",
+        "tags": [
+          "cli-terminal"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/restart-worker": {
+      "post": {
+        "operationId": "restart_worker_session_api_v1_agents__agent_id__restart_worker_post",
+        "summary": "Restart Worker Session",
+        "tags": [
+          "cli-terminal"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/restore": {
+      "post": {
+        "operationId": "restore_agent_endpoint_api_v1_agents__agent_id__restore_post",
+        "summary": "Restore Agent Endpoint",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/runtime-switch-progress": {
+      "get": {
+        "operationId": "runtime_switch_progress_api_v1_agents__agent_id__runtime_switch_progress_get",
+        "summary": "Runtime Switch Progress",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/skills": {
+      "get": {
+        "operationId": "get_agent_skills_api_v1_agents__agent_id__skills_get",
+        "summary": "Get Agent Skills",
+        "tags": [
+          "skills"
+        ]
+      },
+      "patch": {
+        "operationId": "update_agent_skills_api_v1_agents__agent_id__skills_patch",
+        "summary": "Update Agent Skills",
+        "tags": [
+          "skills"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/start": {
+      "post": {
+        "operationId": "start_agent_container_api_v1_agents__agent_id__start_post",
+        "summary": "Start Agent Container",
+        "tags": [
+          "cli-terminal"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/stop": {
+      "post": {
+        "operationId": "stop_agent_container_api_v1_agents__agent_id__stop_post",
+        "summary": "Stop Agent Container",
+        "tags": [
+          "cli-terminal"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/sync-config": {
+      "post": {
+        "operationId": "sync_agent_config_to_gateway_api_v1_agents__agent_id__sync_config_post",
+        "summary": "Sync Agent Config To Gateway",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/task-sessions": {
+      "get": {
+        "operationId": "get_agent_task_sessions_api_v1_agents__agent_id__task_sessions_get",
+        "summary": "Get Agent Task Sessions",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/terminal-events/stream": {
+      "get": {
+        "operationId": "stream_terminal_events_api_v1_agents__agent_id__terminal_events_stream_get",
+        "summary": "Stream Terminal Events",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/terminal/{task_id}": {
+      "delete": {
+        "operationId": "kill_terminal_session_api_v1_agents__agent_id__terminal__task_id__delete",
+        "summary": "Kill Terminal Session",
+        "tags": [
+          "cli-terminal"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/terminal/{task_id}/input": {
+      "post": {
+        "operationId": "send_terminal_input_api_v1_agents__agent_id__terminal__task_id__input_post",
+        "summary": "Send Terminal Input",
+        "tags": [
+          "cli-terminal"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/trigger": {
+      "post": {
+        "operationId": "trigger_agent_api_v1_agents__agent_id__trigger_post",
+        "summary": "Trigger Agent",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/api/v1/ai-providers/embeddings/test-connection": {
+      "post": {
+        "operationId": "embeddings_test_connection_api_v1_ai_providers_embeddings_test_connection_post",
+        "summary": "Embeddings Test Connection",
+        "tags": [
+          "ai-providers"
+        ]
+      }
+    },
+    "/api/v1/ai-providers/huggingface/test-connection": {
+      "post": {
+        "operationId": "huggingface_test_connection_api_v1_ai_providers_huggingface_test_connection_post",
+        "summary": "Huggingface Test Connection",
+        "tags": [
+          "ai-providers"
+        ]
+      }
+    },
+    "/api/v1/ai-providers/settings": {
+      "get": {
+        "operationId": "get_ai_provider_settings_api_v1_ai_providers_settings_get",
+        "summary": "Get Ai Provider Settings",
+        "tags": [
+          "ai-providers"
+        ]
+      },
+      "put": {
+        "operationId": "put_ai_provider_settings_api_v1_ai_providers_settings_put",
+        "summary": "Put Ai Provider Settings",
+        "tags": [
+          "ai-providers"
+        ]
+      }
+    },
+    "/api/v1/analytics/usage": {
+      "get": {
+        "operationId": "get_usage_analytics_api_v1_analytics_usage_get",
+        "summary": "Get Usage Analytics"
+      }
+    },
+    "/api/v1/approvals": {
+      "get": {
+        "operationId": "list_approvals_api_v1_approvals_get",
+        "summary": "List Approvals",
+        "tags": [
+          "approvals"
+        ]
+      }
+    },
+    "/api/v1/approvals/stream": {
+      "get": {
+        "operationId": "stream_approvals_api_v1_approvals_stream_get",
+        "summary": "Stream Approvals",
+        "tags": [
+          "approvals"
+        ]
+      }
+    },
+    "/api/v1/approvals/{approval_id}": {
+      "patch": {
+        "operationId": "resolve_approval_api_v1_approvals__approval_id__patch",
+        "summary": "Resolve Approval",
+        "tags": [
+          "approvals"
+        ]
+      }
+    },
+    "/api/v1/approvals/{approval_id}/quick-resolve": {
+      "get": {
+        "operationId": "quick_resolve_page_api_v1_approvals__approval_id__quick_resolve_get",
+        "summary": "Quick Resolve Page",
+        "tags": [
+          "approvals"
+        ]
+      }
+    },
+    "/api/v1/approvals/{approval_id}/quick-resolve/confirm": {
+      "post": {
+        "operationId": "quick_resolve_confirm_api_v1_approvals__approval_id__quick_resolve_confirm_post",
+        "summary": "Quick Resolve Confirm",
+        "tags": [
+          "approvals"
+        ]
+      }
+    },
+    "/api/v1/auth/login": {
+      "post": {
+        "operationId": "login_api_v1_auth_login_post",
+        "summary": "Login",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "operationId": "logout_api_v1_auth_logout_post",
+        "summary": "Logout",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/me": {
+      "get": {
+        "operationId": "get_me_api_v1_auth_me_get",
+        "summary": "Get Me",
+        "tags": [
+          "auth"
+        ]
+      },
+      "patch": {
+        "operationId": "update_me_api_v1_auth_me_patch",
+        "summary": "Update Me",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/register": {
+      "post": {
+        "operationId": "register_api_v1_auth_register_post",
+        "summary": "Register",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/setup-required": {
+      "get": {
+        "operationId": "check_setup_required_api_v1_auth_setup_required_get",
+        "summary": "Check Setup Required",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/stream-ticket": {
+      "post": {
+        "operationId": "issue_stream_ticket_api_v1_auth_stream_ticket_post",
+        "summary": "Issue Stream Ticket",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/users": {
+      "get": {
+        "operationId": "list_users_api_v1_auth_users_get",
+        "summary": "List Users",
+        "tags": [
+          "auth"
+        ]
+      },
+      "post": {
+        "operationId": "create_user_api_v1_auth_users_post",
+        "summary": "Create User",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/users/{user_id}": {
+      "patch": {
+        "operationId": "update_user_api_v1_auth_users__user_id__patch",
+        "summary": "Update User",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/automations": {
+      "get": {
+        "operationId": "list_automations_api_v1_automations_get",
+        "summary": "List Automations",
+        "tags": [
+          "automations"
+        ]
+      }
+    },
+    "/api/v1/automations/{automation_id}": {
+      "get": {
+        "operationId": "get_automation_api_v1_automations__automation_id__get",
+        "summary": "Get Automation",
+        "tags": [
+          "automations"
+        ]
+      },
+      "patch": {
+        "operationId": "update_automation_api_v1_automations__automation_id__patch",
+        "summary": "Update Automation",
+        "tags": [
+          "automations"
+        ]
+      }
+    },
+    "/api/v1/automations/{automation_id}/activate": {
+      "post": {
+        "operationId": "activate_automation_api_v1_automations__automation_id__activate_post",
+        "summary": "Activate Automation",
+        "tags": [
+          "automations"
+        ]
+      }
+    },
+    "/api/v1/automations/{automation_id}/pause": {
+      "post": {
+        "operationId": "pause_automation_api_v1_automations__automation_id__pause_post",
+        "summary": "Pause Automation",
+        "tags": [
+          "automations"
+        ]
+      }
+    },
+    "/api/v1/automations/{automation_id}/run": {
+      "post": {
+        "operationId": "run_automation_api_v1_automations__automation_id__run_post",
+        "summary": "Run Automation",
+        "tags": [
+          "automations"
+        ]
+      }
+    },
+    "/api/v1/bench/challenges": {
+      "get": {
+        "operationId": "list_challenges_api_v1_bench_challenges_get",
+        "summary": "List Challenges",
+        "tags": [
+          "bench-studio"
+        ]
+      },
+      "post": {
+        "operationId": "create_challenge_api_v1_bench_challenges_post",
+        "summary": "Create Challenge",
+        "tags": [
+          "bench-studio"
+        ]
+      }
+    },
+    "/api/v1/bench/challenges/{challenge_id}": {
+      "delete": {
+        "operationId": "delete_challenge_api_v1_bench_challenges__challenge_id__delete",
+        "summary": "Delete Challenge",
+        "tags": [
+          "bench-studio"
+        ]
+      },
+      "get": {
+        "operationId": "get_challenge_api_v1_bench_challenges__challenge_id__get",
+        "summary": "Get Challenge",
+        "tags": [
+          "bench-studio"
+        ]
+      },
+      "patch": {
+        "operationId": "update_challenge_api_v1_bench_challenges__challenge_id__patch",
+        "summary": "Update Challenge",
+        "tags": [
+          "bench-studio"
+        ]
+      }
+    },
+    "/api/v1/bench/challenges/{challenge_id}/archive": {
+      "post": {
+        "operationId": "archive_challenge_api_v1_bench_challenges__challenge_id__archive_post",
+        "summary": "Archive Challenge",
+        "tags": [
+          "bench-studio"
+        ]
+      }
+    },
+    "/api/v1/bench/challenges/{challenge_id}/draft": {
+      "post": {
+        "operationId": "create_challenge_draft_api_v1_bench_challenges__challenge_id__draft_post",
+        "summary": "Create Challenge Draft",
+        "tags": [
+          "bench-studio"
+        ]
+      }
+    },
+    "/api/v1/bench/challenges/{challenge_id}/entries/{entry_id}/view": {
+      "get": {
+        "operationId": "view_bench_entry_api_v1_bench_challenges__challenge_id__entries__entry_id__view_get",
+        "summary": "View Bench Entry",
+        "tags": [
+          "bench-studio"
+        ]
+      }
+    },
+    "/api/v1/bench/challenges/{challenge_id}/entries/{entry_id}/view-token": {
+      "post": {
+        "operationId": "mint_bench_entry_view_token_api_v1_bench_challenges__challenge_id__entries__entry_id__view_token_post",
+        "summary": "Mint Bench Entry View Token",
+        "tags": [
+          "bench-studio"
+        ]
+      }
+    },
+    "/api/v1/bench/challenges/{challenge_id}/recompose": {
+      "post": {
+        "operationId": "recompose_challenge_api_v1_bench_challenges__challenge_id__recompose_post",
+        "summary": "Recompose Challenge",
+        "tags": [
+          "bench-studio"
+        ]
+      }
+    },
+    "/api/v1/bench/challenges/{challenge_id}/rerender": {
+      "post": {
+        "operationId": "rerender_challenge_api_v1_bench_challenges__challenge_id__rerender_post",
+        "summary": "Rerender Challenge",
+        "tags": [
+          "bench-studio"
+        ]
+      }
+    },
+    "/api/v1/bench/challenges/{challenge_id}/stop": {
+      "post": {
+        "operationId": "stop_challenge_api_v1_bench_challenges__challenge_id__stop_post",
+        "summary": "Stop Challenge",
+        "tags": [
+          "bench-studio"
+        ]
+      }
+    },
+    "/api/v1/bench/challenges/{challenge_id}/unarchive": {
+      "post": {
+        "operationId": "unarchive_challenge_api_v1_bench_challenges__challenge_id__unarchive_post",
+        "summary": "Unarchive Challenge",
+        "tags": [
+          "bench-studio"
+        ]
+      }
+    },
+    "/api/v1/bench/entries/{entry_id}": {
+      "patch": {
+        "operationId": "update_entry_api_v1_bench_entries__entry_id__patch",
+        "summary": "Update Entry",
+        "tags": [
+          "bench-studio"
+        ]
+      }
+    },
+    "/api/v1/bench/entries/{entry_id}/rerender": {
+      "post": {
+        "operationId": "rerender_entry_api_v1_bench_entries__entry_id__rerender_post",
+        "summary": "Rerender Entry",
+        "tags": [
+          "bench-studio"
+        ]
+      }
+    },
+    "/api/v1/bench/entries/{entry_id}/retry": {
+      "post": {
+        "operationId": "retry_entry_api_v1_bench_entries__entry_id__retry_post",
+        "summary": "Retry Entry",
+        "tags": [
+          "bench-studio"
+        ]
+      }
+    },
+    "/api/v1/bench/spark-models": {
+      "get": {
+        "operationId": "list_spark_models_api_v1_bench_spark_models_get",
+        "summary": "List Spark Models",
+        "tags": [
+          "bench-studio"
+        ]
+      }
+    },
+    "/api/v1/board-groups": {
+      "get": {
+        "operationId": "list_board_groups_api_v1_board_groups_get",
+        "summary": "List Board Groups",
+        "tags": [
+          "boards"
+        ]
+      },
+      "post": {
+        "operationId": "create_board_group_api_v1_board_groups_post",
+        "summary": "Create Board Group",
+        "tags": [
+          "boards"
+        ]
+      }
+    },
+    "/api/v1/board-groups/{group_id}": {
+      "delete": {
+        "operationId": "delete_board_group_api_v1_board_groups__group_id__delete",
+        "summary": "Delete Board Group",
+        "tags": [
+          "boards"
+        ]
+      },
+      "patch": {
+        "operationId": "update_board_group_api_v1_board_groups__group_id__patch",
+        "summary": "Update Board Group",
+        "tags": [
+          "boards"
+        ]
+      }
+    },
+    "/api/v1/boards": {
+      "get": {
+        "operationId": "list_boards_api_v1_boards_get",
+        "summary": "List Boards",
+        "tags": [
+          "boards"
+        ]
+      },
+      "post": {
+        "operationId": "create_board_api_v1_boards_post",
+        "summary": "Create Board",
+        "tags": [
+          "boards"
+        ]
+      }
+    },
+    "/api/v1/boards/{board_id}": {
+      "delete": {
+        "operationId": "delete_board_api_v1_boards__board_id__delete",
+        "summary": "Delete Board",
+        "tags": [
+          "boards"
+        ]
+      },
+      "get": {
+        "operationId": "get_board_api_v1_boards__board_id__get",
+        "summary": "Get Board",
+        "tags": [
+          "boards"
+        ]
+      },
+      "patch": {
+        "operationId": "update_board_api_v1_boards__board_id__patch",
+        "summary": "Update Board",
+        "tags": [
+          "boards"
+        ]
+      }
+    },
+    "/api/v1/boards/{board_id}/approvals": {
+      "get": {
+        "operationId": "list_board_approvals_api_v1_boards__board_id__approvals_get",
+        "summary": "List Board Approvals",
+        "tags": [
+          "approvals"
+        ]
+      }
+    },
+    "/api/v1/boards/{board_id}/memory": {
+      "get": {
+        "operationId": "list_memory_api_v1_boards__board_id__memory_get",
+        "summary": "List Memory",
+        "tags": [
+          "memory"
+        ]
+      },
+      "post": {
+        "operationId": "create_memory_api_v1_boards__board_id__memory_post",
+        "summary": "Create Memory",
+        "tags": [
+          "memory"
+        ]
+      }
+    },
+    "/api/v1/boards/{board_id}/memory/stream": {
+      "get": {
+        "operationId": "stream_memory_api_v1_boards__board_id__memory_stream_get",
+        "summary": "Stream Memory",
+        "tags": [
+          "memory"
+        ]
+      }
+    },
+    "/api/v1/boards/{board_id}/memory/{memory_id}": {
+      "delete": {
+        "operationId": "delete_memory_api_v1_boards__board_id__memory__memory_id__delete",
+        "summary": "Delete Memory",
+        "tags": [
+          "memory"
+        ]
+      },
+      "patch": {
+        "operationId": "update_memory_api_v1_boards__board_id__memory__memory_id__patch",
+        "summary": "Update Memory",
+        "tags": [
+          "memory"
+        ]
+      }
+    },
+    "/api/v1/boards/{board_id}/projects": {
+      "get": {
+        "operationId": "list_projects_api_v1_boards__board_id__projects_get",
+        "summary": "List Projects",
+        "tags": [
+          "boards"
+        ]
+      },
+      "post": {
+        "operationId": "create_project_api_v1_boards__board_id__projects_post",
+        "summary": "Create Project",
+        "tags": [
+          "boards"
+        ]
+      }
+    },
+    "/api/v1/boards/{board_id}/projects/{project_id}": {
+      "delete": {
+        "operationId": "delete_project_api_v1_boards__board_id__projects__project_id__delete",
+        "summary": "Delete Project",
+        "tags": [
+          "boards"
+        ]
+      },
+      "get": {
+        "operationId": "get_project_api_v1_boards__board_id__projects__project_id__get",
+        "summary": "Get Project",
+        "tags": [
+          "boards"
+        ]
+      },
+      "patch": {
+        "operationId": "update_project_api_v1_boards__board_id__projects__project_id__patch",
+        "summary": "Update Project",
+        "tags": [
+          "boards"
+        ]
+      }
+    },
+    "/api/v1/boards/{board_id}/projects/{project_id}/deliverables": {
+      "get": {
+        "operationId": "get_project_deliverables_api_v1_boards__board_id__projects__project_id__deliverables_get",
+        "summary": "Get Project Deliverables",
+        "tags": [
+          "project-git"
+        ]
+      }
+    },
+    "/api/v1/boards/{board_id}/projects/{project_id}/git-info": {
+      "get": {
+        "operationId": "get_project_git_info_api_v1_boards__board_id__projects__project_id__git_info_get",
+        "summary": "Get Project Git Info",
+        "tags": [
+          "project-git"
+        ]
+      }
+    },
+    "/api/v1/boards/{board_id}/projects/{project_id}/init-repo": {
+      "post": {
+        "operationId": "init_project_repo_api_v1_boards__board_id__projects__project_id__init_repo_post",
+        "summary": "Init Project Repo",
+        "tags": [
+          "boards"
+        ]
+      }
+    },
+    "/api/v1/boards/{board_id}/snapshot": {
+      "get": {
+        "operationId": "board_snapshot_api_v1_boards__board_id__snapshot_get",
+        "summary": "Board Snapshot",
+        "tags": [
+          "boards"
+        ]
+      }
+    },
+    "/api/v1/boards/{board_id}/tasks": {
+      "get": {
+        "operationId": "list_tasks_api_v1_boards__board_id__tasks_get",
+        "summary": "List Tasks",
+        "tags": [
+          "tasks"
+        ]
+      },
+      "post": {
+        "operationId": "create_task_api_v1_boards__board_id__tasks_post",
+        "summary": "Create Task",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/v1/boards/{board_id}/tasks/pipeline": {
+      "get": {
+        "operationId": "get_pipeline_api_v1_boards__board_id__tasks_pipeline_get",
+        "summary": "Get Pipeline",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/v1/boards/{board_id}/tasks/reorder": {
+      "patch": {
+        "operationId": "reorder_tasks_api_v1_boards__board_id__tasks_reorder_patch",
+        "summary": "Reorder Tasks",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/v1/boards/{board_id}/tasks/stream": {
+      "get": {
+        "operationId": "stream_tasks_api_v1_boards__board_id__tasks_stream_get",
+        "summary": "Stream Tasks",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/v1/boards/{board_id}/tasks/{task_id}": {
+      "delete": {
+        "operationId": "delete_task_api_v1_boards__board_id__tasks__task_id__delete",
+        "summary": "Delete Task",
+        "tags": [
+          "tasks"
+        ]
+      },
+      "get": {
+        "operationId": "get_task_api_v1_boards__board_id__tasks__task_id__get",
+        "summary": "Get Task",
+        "tags": [
+          "tasks"
+        ]
+      },
+      "patch": {
+        "operationId": "update_task_api_v1_boards__board_id__tasks__task_id__patch",
+        "summary": "Update Task",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/v1/boards/{board_id}/tasks/{task_id}/checklist": {
+      "get": {
+        "operationId": "get_task_checklist_api_v1_boards__board_id__tasks__task_id__checklist_get",
+        "summary": "Get Task Checklist",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/v1/boards/{board_id}/tasks/{task_id}/checklist/{item_id}": {
+      "delete": {
+        "operationId": "delete_checklist_item_api_v1_boards__board_id__tasks__task_id__checklist__item_id__delete",
+        "summary": "Delete Checklist Item",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/v1/boards/{board_id}/tasks/{task_id}/comments": {
+      "get": {
+        "operationId": "list_comments_api_v1_boards__board_id__tasks__task_id__comments_get",
+        "summary": "List Comments",
+        "tags": [
+          "tasks"
+        ]
+      },
+      "post": {
+        "operationId": "add_comment_api_v1_boards__board_id__tasks__task_id__comments_post",
+        "summary": "Add Comment",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/v1/boards/{board_id}/tasks/{task_id}/deliverables": {
+      "get": {
+        "operationId": "list_task_deliverables_api_v1_boards__board_id__tasks__task_id__deliverables_get",
+        "summary": "List Task Deliverables",
+        "tags": [
+          "tasks"
+        ]
+      },
+      "post": {
+        "operationId": "admin_create_task_deliverable_api_v1_boards__board_id__tasks__task_id__deliverables_post",
+        "summary": "Admin Create Task Deliverable",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/v1/boards/{board_id}/tasks/{task_id}/deliverables/{deliverable_id}/directory": {
+      "get": {
+        "operationId": "list_deliverable_directory_api_v1_boards__board_id__tasks__task_id__deliverables__deliverable_id__directory_get",
+        "summary": "List Deliverable Directory",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/v1/boards/{board_id}/tasks/{task_id}/deliverables/{deliverable_id}/file": {
+      "get": {
+        "operationId": "get_deliverable_file_api_v1_boards__board_id__tasks__task_id__deliverables__deliverable_id__file_get",
+        "summary": "Get Deliverable File",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/v1/boards/{board_id}/tasks/{task_id}/deliverables/{deliverable_id}/image": {
+      "get": {
+        "operationId": "get_deliverable_image_api_v1_boards__board_id__tasks__task_id__deliverables__deliverable_id__image_get",
+        "summary": "Get Deliverable Image",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/v1/boards/{board_id}/tasks/{task_id}/deliverables/{deliverable_id}/open": {
+      "post": {
+        "operationId": "open_deliverable_api_v1_boards__board_id__tasks__task_id__deliverables__deliverable_id__open_post",
+        "summary": "Open Deliverable",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/v1/boards/{board_id}/tasks/{task_id}/dependencies": {
+      "get": {
+        "operationId": "get_task_dependencies_api_v1_boards__board_id__tasks__task_id__dependencies_get",
+        "summary": "Get Task Dependencies",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/v1/boards/{board_id}/tasks/{task_id}/dispatch": {
+      "post": {
+        "operationId": "dispatch_deferred_task_api_v1_boards__board_id__tasks__task_id__dispatch_post",
+        "summary": "Dispatch Deferred Task",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/v1/boards/{board_id}/tasks/{task_id}/events": {
+      "get": {
+        "operationId": "get_task_events_api_v1_boards__board_id__tasks__task_id__events_get",
+        "summary": "Get Task Events",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/v1/boards/{board_id}/tasks/{task_id}/git-diff": {
+      "get": {
+        "operationId": "get_task_git_diff_endpoint_api_v1_boards__board_id__tasks__task_id__git_diff_get",
+        "summary": "Get Task Git Diff Endpoint",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/v1/boards/{board_id}/tasks/{task_id}/git-info": {
+      "get": {
+        "operationId": "get_task_git_info_endpoint_api_v1_boards__board_id__tasks__task_id__git_info_get",
+        "summary": "Get Task Git Info Endpoint",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/v1/boards/{board_id}/tasks/{task_id}/hierarchy": {
+      "get": {
+        "operationId": "get_task_hierarchy_api_v1_boards__board_id__tasks__task_id__hierarchy_get",
+        "summary": "Get Task Hierarchy",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/v1/boards/{board_id}/tasks/{task_id}/promote": {
+      "post": {
+        "operationId": "promote_task_api_v1_boards__board_id__tasks__task_id__promote_post",
+        "summary": "Promote Task",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/v1/boards/{board_id}/tasks/{task_id}/resume": {
+      "post": {
+        "operationId": "resume_task_run_endpoint_api_v1_boards__board_id__tasks__task_id__resume_post",
+        "summary": "Resume Task Run Endpoint",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/v1/boards/{board_id}/tasks/{task_id}/review": {
+      "post": {
+        "operationId": "user_review_decision_api_v1_boards__board_id__tasks__task_id__review_post",
+        "summary": "User Review Decision",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/v1/boards/{board_id}/tasks/{task_id}/stop": {
+      "post": {
+        "operationId": "stop_task_run_endpoint_api_v1_boards__board_id__tasks__task_id__stop_post",
+        "summary": "Stop Task Run Endpoint",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/v1/boards/{board_id}/tasks/{task_id}/timeline": {
+      "get": {
+        "operationId": "get_task_timeline_api_v1_boards__board_id__tasks__task_id__timeline_get",
+        "summary": "Get Task Timeline",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/v1/boards/{board_id}/tasks/{task_id}/workspace/content": {
+      "get": {
+        "operationId": "get_task_workspace_content_api_v1_boards__board_id__tasks__task_id__workspace_content_get",
+        "summary": "Get Task Workspace Content",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/v1/boards/{board_id}/tasks/{task_id}/workspace/list": {
+      "get": {
+        "operationId": "list_task_workspace_api_v1_boards__board_id__tasks__task_id__workspace_list_get",
+        "summary": "List Task Workspace",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/v1/browser-live/targets": {
+      "get": {
+        "operationId": "list_targets_api_v1_browser_live_targets_get",
+        "summary": "List Targets",
+        "tags": [
+          "browser-live"
+        ]
+      }
+    },
+    "/api/v1/channels/settings": {
+      "get": {
+        "operationId": "get_channel_settings_api_v1_channels_settings_get",
+        "summary": "Get Channel Settings",
+        "tags": [
+          "channels"
+        ]
+      },
+      "put": {
+        "operationId": "put_channel_settings_api_v1_channels_settings_put",
+        "summary": "Put Channel Settings",
+        "tags": [
+          "channels"
+        ]
+      }
+    },
+    "/api/v1/channels/telegram/test-connection": {
+      "post": {
+        "operationId": "telegram_test_connection_api_v1_channels_telegram_test_connection_post",
+        "summary": "Telegram Test Connection",
+        "tags": [
+          "channels"
+        ]
+      }
+    },
+    "/api/v1/clawhub/install": {
+      "post": {
+        "operationId": "install_skill_api_v1_clawhub_install_post",
+        "summary": "Install Skill",
+        "tags": [
+          "clawhub"
+        ]
+      }
+    },
+    "/api/v1/clawhub/skills": {
+      "get": {
+        "operationId": "list_skills_api_v1_clawhub_skills_get",
+        "summary": "List Skills",
+        "tags": [
+          "clawhub"
+        ]
+      }
+    },
+    "/api/v1/clawhub/skills/{slug}": {
+      "get": {
+        "operationId": "get_skill_api_v1_clawhub_skills__slug__get",
+        "summary": "Get Skill",
+        "tags": [
+          "clawhub"
+        ]
+      }
+    },
+    "/api/v1/clawhub/skills/{slug}/readme": {
+      "get": {
+        "operationId": "get_skill_readme_api_v1_clawhub_skills__slug__readme_get",
+        "summary": "Get Skill Readme",
+        "tags": [
+          "clawhub"
+        ]
+      }
+    },
+    "/api/v1/cli-bridge/health": {
+      "get": {
+        "operationId": "cli_bridge_health_api_v1_cli_bridge_health_get",
+        "summary": "Cli Bridge Health",
+        "tags": [
+          "cli-terminal"
+        ]
+      }
+    },
+    "/api/v1/cli-sessions": {
+      "get": {
+        "operationId": "list_all_cli_sessions_api_v1_cli_sessions_get",
+        "summary": "List All Cli Sessions",
+        "tags": [
+          "cli-terminal"
+        ]
+      }
+    },
+    "/api/v1/cli-sessions/restart": {
+      "post": {
+        "operationId": "restart_bridge_api_v1_cli_sessions_restart_post",
+        "summary": "Restart Bridge",
+        "tags": [
+          "cli-terminal"
+        ]
+      }
+    },
+    "/api/v1/cli-tools": {
+      "get": {
+        "operationId": "list_cli_tools_api_v1_cli_tools_get",
+        "summary": "List Cli Tools",
+        "tags": [
+          "cli-tools"
+        ]
+      }
+    },
+    "/api/v1/cli-tools/check": {
+      "post": {
+        "operationId": "check_cli_tools_api_v1_cli_tools_check_post",
+        "summary": "Check Cli Tools",
+        "tags": [
+          "cli-tools"
+        ]
+      }
+    },
+    "/api/v1/cli-tools/update-status": {
+      "get": {
+        "operationId": "cli_update_status_api_v1_cli_tools_update_status_get",
+        "summary": "Cli Update Status",
+        "tags": [
+          "cli-tools"
+        ]
+      }
+    },
+    "/api/v1/cli-tools/{tool}/update": {
+      "post": {
+        "operationId": "update_cli_tool_api_v1_cli_tools__tool__update_post",
+        "summary": "Update Cli Tool",
+        "tags": [
+          "cli-tools"
+        ]
+      }
+    },
+    "/api/v1/credentials": {
+      "get": {
+        "operationId": "list_credentials_api_v1_credentials_get",
+        "summary": "List Credentials",
+        "tags": [
+          "credentials"
+        ]
+      },
+      "post": {
+        "operationId": "create_credential_api_v1_credentials_post",
+        "summary": "Create Credential",
+        "tags": [
+          "credentials"
+        ]
+      }
+    },
+    "/api/v1/credentials/{credential_id}": {
+      "delete": {
+        "operationId": "delete_credential_api_v1_credentials__credential_id__delete",
+        "summary": "Delete Credential",
+        "tags": [
+          "credentials"
+        ]
+      },
+      "get": {
+        "operationId": "get_credential_api_v1_credentials__credential_id__get",
+        "summary": "Get Credential",
+        "tags": [
+          "credentials"
+        ]
+      },
+      "patch": {
+        "operationId": "update_credential_api_v1_credentials__credential_id__patch",
+        "summary": "Update Credential",
+        "tags": [
+          "credentials"
+        ]
+      }
+    },
+    "/api/v1/deploy/history": {
+      "get": {
+        "operationId": "user_deploy_history_api_v1_deploy_history_get",
+        "summary": "User Deploy History",
+        "tags": [
+          "deploy"
+        ]
+      }
+    },
+    "/api/v1/deploy/services": {
+      "get": {
+        "operationId": "user_list_services_api_v1_deploy_services_get",
+        "summary": "User List Services",
+        "tags": [
+          "deploy"
+        ]
+      }
+    },
+    "/api/v1/discord/agents/{agent_id}/channel": {
+      "delete": {
+        "operationId": "remove_agent_channel_api_v1_discord_agents__agent_id__channel_delete",
+        "summary": "Remove Agent Channel",
+        "tags": [
+          "discord"
+        ]
+      },
+      "patch": {
+        "operationId": "rename_agent_channel_api_v1_discord_agents__agent_id__channel_patch",
+        "summary": "Rename Agent Channel",
+        "tags": [
+          "discord"
+        ]
+      },
+      "post": {
+        "operationId": "create_agent_channel_api_v1_discord_agents__agent_id__channel_post",
+        "summary": "Create Agent Channel",
+        "tags": [
+          "discord"
+        ]
+      }
+    },
+    "/api/v1/discord/channels": {
+      "get": {
+        "operationId": "list_channels_api_v1_discord_channels_get",
+        "summary": "List Channels",
+        "tags": [
+          "discord"
+        ]
+      }
+    },
+    "/api/v1/discord/config": {
+      "get": {
+        "operationId": "get_config_api_v1_discord_config_get",
+        "summary": "Get Config",
+        "tags": [
+          "discord"
+        ]
+      },
+      "patch": {
+        "operationId": "update_config_api_v1_discord_config_patch",
+        "summary": "Update Config",
+        "tags": [
+          "discord"
+        ]
+      }
+    },
+    "/api/v1/docker-sessions/agents": {
+      "get": {
+        "operationId": "list_docker_session_agents_api_v1_docker_sessions_agents_get",
+        "summary": "List Docker Session Agents",
+        "tags": [
+          "cli-terminal"
+        ]
+      }
+    },
+    "/api/v1/docker-sessions/{agent_id}/state": {
+      "get": {
+        "operationId": "get_container_state_api_v1_docker_sessions__agent_id__state_get",
+        "summary": "Get Container State",
+        "tags": [
+          "cli-terminal"
+        ]
+      }
+    },
+    "/api/v1/files/content": {
+      "get": {
+        "operationId": "get_content_api_v1_files_content_get",
+        "summary": "Get Content",
+        "tags": [
+          "files"
+        ]
+      }
+    },
+    "/api/v1/files/delete": {
+      "post": {
+        "operationId": "delete_files_api_v1_files_delete_post",
+        "summary": "Delete Files",
+        "tags": [
+          "files"
+        ]
+      }
+    },
+    "/api/v1/files/list": {
+      "get": {
+        "operationId": "list_files_api_v1_files_list_get",
+        "summary": "List Files",
+        "tags": [
+          "files"
+        ]
+      }
+    },
+    "/api/v1/files/meta": {
+      "get": {
+        "operationId": "get_meta_api_v1_files_meta_get",
+        "summary": "Get Meta",
+        "tags": [
+          "files"
+        ]
+      }
+    },
+    "/api/v1/files/open": {
+      "post": {
+        "operationId": "open_native_api_v1_files_open_post",
+        "summary": "Open Native",
+        "tags": [
+          "files"
+        ]
+      }
+    },
+    "/api/v1/files/reindex": {
+      "post": {
+        "operationId": "reindex_api_v1_files_reindex_post",
+        "summary": "Reindex",
+        "tags": [
+          "files"
+        ]
+      }
+    },
+    "/api/v1/files/roots": {
+      "get": {
+        "operationId": "list_roots_api_v1_files_roots_get",
+        "summary": "List Roots",
+        "tags": [
+          "files"
+        ]
+      }
+    },
+    "/api/v1/files/search": {
+      "get": {
+        "operationId": "search_files_api_v1_files_search_get",
+        "summary": "Search Files",
+        "tags": [
+          "files"
+        ]
+      }
+    },
+    "/api/v1/files/trash": {
+      "get": {
+        "operationId": "list_trash_api_v1_files_trash_get",
+        "summary": "List Trash",
+        "tags": [
+          "files"
+        ]
+      }
+    },
+    "/api/v1/files/trash/purge": {
+      "post": {
+        "operationId": "purge_trash_api_v1_files_trash_purge_post",
+        "summary": "Purge Trash",
+        "tags": [
+          "files"
+        ]
+      }
+    },
+    "/api/v1/files/trash/restore": {
+      "post": {
+        "operationId": "restore_trash_api_v1_files_trash_restore_post",
+        "summary": "Restore Trash",
+        "tags": [
+          "files"
+        ]
+      }
+    },
+    "/api/v1/groups": {
+      "get": {
+        "operationId": "list_groups_api_v1_groups_get",
+        "summary": "List Groups",
+        "tags": [
+          "groups"
+        ]
+      },
+      "post": {
+        "operationId": "create_group_api_v1_groups_post",
+        "summary": "Create Group",
+        "tags": [
+          "groups"
+        ]
+      }
+    },
+    "/api/v1/groups/eligible-members": {
+      "get": {
+        "operationId": "eligible_members_api_v1_groups_eligible_members_get",
+        "summary": "Eligible Members",
+        "tags": [
+          "groups"
+        ]
+      }
+    },
+    "/api/v1/groups/{group_id}": {
+      "delete": {
+        "operationId": "delete_group_api_v1_groups__group_id__delete",
+        "summary": "Delete Group",
+        "tags": [
+          "groups"
+        ]
+      },
+      "get": {
+        "operationId": "group_detail_api_v1_groups__group_id__get",
+        "summary": "Group Detail",
+        "tags": [
+          "groups"
+        ]
+      },
+      "patch": {
+        "operationId": "update_group_api_v1_groups__group_id__patch",
+        "summary": "Update Group",
+        "tags": [
+          "groups"
+        ]
+      }
+    },
+    "/api/v1/groups/{group_id}/archive": {
+      "post": {
+        "operationId": "archive_group_api_v1_groups__group_id__archive_post",
+        "summary": "Archive Group",
+        "tags": [
+          "groups"
+        ]
+      }
+    },
+    "/api/v1/groups/{group_id}/document": {
+      "get": {
+        "operationId": "group_document_api_v1_groups__group_id__document_get",
+        "summary": "Group Document",
+        "tags": [
+          "groups"
+        ]
+      }
+    },
+    "/api/v1/groups/{group_id}/members": {
+      "post": {
+        "operationId": "add_group_member_api_v1_groups__group_id__members_post",
+        "summary": "Add Group Member",
+        "tags": [
+          "groups"
+        ]
+      }
+    },
+    "/api/v1/groups/{group_id}/members/{agent_id}": {
+      "delete": {
+        "operationId": "remove_group_member_api_v1_groups__group_id__members__agent_id__delete",
+        "summary": "Remove Group Member",
+        "tags": [
+          "groups"
+        ]
+      }
+    },
+    "/api/v1/groups/{group_id}/memorize": {
+      "post": {
+        "operationId": "memorize_group_result_api_v1_groups__group_id__memorize_post",
+        "summary": "Memorize Group Result",
+        "tags": [
+          "groups"
+        ]
+      }
+    },
+    "/api/v1/groups/{group_id}/messages": {
+      "get": {
+        "operationId": "group_messages_api_v1_groups__group_id__messages_get",
+        "summary": "Group Messages",
+        "tags": [
+          "groups"
+        ]
+      },
+      "post": {
+        "operationId": "post_group_message_api_v1_groups__group_id__messages_post",
+        "summary": "Post Group Message",
+        "tags": [
+          "groups"
+        ]
+      }
+    },
+    "/api/v1/groups/{group_id}/pause": {
+      "post": {
+        "operationId": "pause_group_endpoint_api_v1_groups__group_id__pause_post",
+        "summary": "Pause Group Endpoint",
+        "tags": [
+          "groups"
+        ]
+      }
+    },
+    "/api/v1/groups/{group_id}/rounds": {
+      "get": {
+        "operationId": "group_rounds_api_v1_groups__group_id__rounds_get",
+        "summary": "Group Rounds",
+        "tags": [
+          "groups"
+        ]
+      }
+    },
+    "/api/v1/groups/{group_id}/start": {
+      "post": {
+        "operationId": "start_group_endpoint_api_v1_groups__group_id__start_post",
+        "summary": "Start Group Endpoint",
+        "tags": [
+          "groups"
+        ]
+      }
+    },
+    "/api/v1/groups/{group_id}/stop": {
+      "post": {
+        "operationId": "stop_group_endpoint_api_v1_groups__group_id__stop_post",
+        "summary": "Stop Group Endpoint",
+        "tags": [
+          "groups"
+        ]
+      }
+    },
+    "/api/v1/groups/{group_id}/stream": {
+      "get": {
+        "operationId": "group_stream_api_v1_groups__group_id__stream_get",
+        "summary": "Group Stream",
+        "tags": [
+          "groups"
+        ]
+      }
+    },
+    "/api/v1/groups/{group_id}/unarchive": {
+      "post": {
+        "operationId": "unarchive_group_api_v1_groups__group_id__unarchive_post",
+        "summary": "Unarchive Group",
+        "tags": [
+          "groups"
+        ]
+      }
+    },
+    "/api/v1/heads": {
+      "get": {
+        "operationId": "list_heads_api_v1_heads_get",
+        "summary": "List Heads",
+        "tags": [
+          "heads"
+        ]
+      },
+      "post": {
+        "operationId": "start_head_api_v1_heads_post",
+        "summary": "Start Head",
+        "tags": [
+          "heads"
+        ]
+      }
+    },
+    "/api/v1/heads/occupancy": {
+      "get": {
+        "operationId": "get_occupancy_api_v1_heads_occupancy_get",
+        "summary": "Get Occupancy",
+        "tags": [
+          "heads"
+        ]
+      }
+    },
+    "/api/v1/heads/pairs": {
+      "get": {
+        "operationId": "get_pairs_api_v1_heads_pairs_get",
+        "summary": "Get Pairs",
+        "tags": [
+          "heads"
+        ]
+      }
+    },
+    "/api/v1/heads/{run_id}": {
+      "get": {
+        "operationId": "get_head_api_v1_heads__run_id__get",
+        "summary": "Get Head",
+        "tags": [
+          "heads"
+        ]
+      }
+    },
+    "/api/v1/heads/{run_id}/log": {
+      "get": {
+        "operationId": "get_head_log_api_v1_heads__run_id__log_get",
+        "summary": "Get Head Log",
+        "tags": [
+          "heads"
+        ]
+      }
+    },
+    "/api/v1/heads/{run_id}/restart": {
+      "post": {
+        "operationId": "restart_head_api_v1_heads__run_id__restart_post",
+        "summary": "Restart Head",
+        "tags": [
+          "heads"
+        ]
+      }
+    },
+    "/api/v1/heads/{run_id}/run-record": {
+      "get": {
+        "operationId": "get_head_run_record_api_v1_heads__run_id__run_record_get",
+        "summary": "Get Head Run Record",
+        "tags": [
+          "heads"
+        ]
+      }
+    },
+    "/api/v1/heads/{run_id}/stop": {
+      "post": {
+        "operationId": "stop_head_api_v1_heads__run_id__stop_post",
+        "summary": "Stop Head",
+        "tags": [
+          "heads"
+        ]
+      }
+    },
+    "/api/v1/host-agents/{agent_id}/restart": {
+      "post": {
+        "operationId": "restart_host_agent_api_v1_host_agents__agent_id__restart_post",
+        "summary": "Restart Host Agent",
+        "tags": [
+          "cli-terminal"
+        ]
+      }
+    },
+    "/api/v1/host-agents/{agent_id}/restart-process": {
+      "post": {
+        "operationId": "restart_host_agent_process_api_v1_host_agents__agent_id__restart_process_post",
+        "summary": "Restart Host Agent Process",
+        "tags": [
+          "cli-terminal"
+        ]
+      }
+    },
+    "/api/v1/host-agents/{agent_id}/start": {
+      "post": {
+        "operationId": "start_host_agent_api_v1_host_agents__agent_id__start_post",
+        "summary": "Start Host Agent",
+        "tags": [
+          "cli-terminal"
+        ]
+      }
+    },
+    "/api/v1/host-agents/{agent_id}/stop": {
+      "post": {
+        "operationId": "stop_host_agent_api_v1_host_agents__agent_id__stop_post",
+        "summary": "Stop Host Agent",
+        "tags": [
+          "cli-terminal"
+        ]
+      }
+    },
+    "/api/v1/host-sessions/agents": {
+      "get": {
+        "operationId": "list_host_session_agents_api_v1_host_sessions_agents_get",
+        "summary": "List Host Session Agents",
+        "tags": [
+          "cli-terminal"
+        ]
+      }
+    },
+    "/api/v1/hosts": {
+      "get": {
+        "operationId": "list_hosts_api_v1_hosts_get",
+        "summary": "List Hosts",
+        "tags": [
+          "hosts"
+        ]
+      },
+      "post": {
+        "operationId": "create_host_api_v1_hosts_post",
+        "summary": "Create Host",
+        "tags": [
+          "hosts"
+        ]
+      }
+    },
+    "/api/v1/hosts/launch-command": {
+      "post": {
+        "operationId": "preview_launch_command_api_v1_hosts_launch_command_post",
+        "summary": "Preview Launch Command",
+        "tags": [
+          "hosts"
+        ]
+      }
+    },
+    "/api/v1/hosts/onboard": {
+      "post": {
+        "operationId": "onboard_host_api_v1_hosts_onboard_post",
+        "summary": "Onboard Host",
+        "tags": [
+          "hosts"
+        ]
+      }
+    },
+    "/api/v1/hosts/onboard/{job_id}/log": {
+      "get": {
+        "operationId": "onboard_log_api_v1_hosts_onboard__job_id__log_get",
+        "summary": "Onboard Log",
+        "tags": [
+          "hosts"
+        ]
+      }
+    },
+    "/api/v1/hosts/probe": {
+      "post": {
+        "operationId": "probe_host_api_v1_hosts_probe_post",
+        "summary": "Probe Host",
+        "tags": [
+          "hosts"
+        ]
+      }
+    },
+    "/api/v1/hosts/{host_id}": {
+      "delete": {
+        "operationId": "delete_host_api_v1_hosts__host_id__delete",
+        "summary": "Delete Host",
+        "tags": [
+          "hosts"
+        ]
+      },
+      "patch": {
+        "operationId": "update_host_api_v1_hosts__host_id__patch",
+        "summary": "Update Host",
+        "tags": [
+          "hosts"
+        ]
+      }
+    },
+    "/api/v1/hosts/{host_id}/autostart": {
+      "get": {
+        "operationId": "get_host_autostart_api_v1_hosts__host_id__autostart_get",
+        "summary": "Get Host Autostart",
+        "tags": [
+          "hosts"
+        ]
+      },
+      "put": {
+        "operationId": "set_host_autostart_api_v1_hosts__host_id__autostart_put",
+        "summary": "Set Host Autostart",
+        "tags": [
+          "hosts"
+        ]
+      }
+    },
+    "/api/v1/hosts/{host_id}/bootstrap": {
+      "post": {
+        "operationId": "bootstrap_host_api_v1_hosts__host_id__bootstrap_post",
+        "summary": "Bootstrap Host",
+        "tags": [
+          "hosts"
+        ]
+      }
+    },
+    "/api/v1/hosts/{host_id}/bootstrap/log": {
+      "get": {
+        "operationId": "bootstrap_log_api_v1_hosts__host_id__bootstrap_log_get",
+        "summary": "Bootstrap Log",
+        "tags": [
+          "hosts"
+        ]
+      }
+    },
+    "/api/v1/hosts/{host_id}/metrics": {
+      "get": {
+        "operationId": "host_metrics_api_v1_hosts__host_id__metrics_get",
+        "summary": "Host Metrics",
+        "tags": [
+          "hosts"
+        ]
+      }
+    },
+    "/api/v1/hosts/{host_id}/metrics/history": {
+      "get": {
+        "operationId": "host_metrics_history_endpoint_api_v1_hosts__host_id__metrics_history_get",
+        "summary": "Host Metrics History Endpoint",
+        "tags": [
+          "hosts"
+        ]
+      }
+    },
+    "/api/v1/hosts/{host_id}/pulse": {
+      "get": {
+        "operationId": "host_pulse_api_v1_hosts__host_id__pulse_get",
+        "summary": "Host Pulse",
+        "tags": [
+          "hosts"
+        ]
+      }
+    },
+    "/api/v1/hosts/{host_id}/recipes": {
+      "get": {
+        "operationId": "list_recipes_for_host_api_v1_hosts__host_id__recipes_get",
+        "summary": "List Recipes For Host",
+        "tags": [
+          "hosts"
+        ]
+      }
+    },
+    "/api/v1/hosts/{host_id}/recipes/{slug}/start": {
+      "post": {
+        "operationId": "start_recipe_for_host_api_v1_hosts__host_id__recipes__slug__start_post",
+        "summary": "Start Recipe For Host",
+        "tags": [
+          "hosts"
+        ]
+      }
+    },
+    "/api/v1/intelligence/config": {
+      "get": {
+        "operationId": "get_intelligence_config_api_v1_intelligence_config_get",
+        "summary": "Get Intelligence Config"
+      },
+      "put": {
+        "operationId": "update_intelligence_config_api_v1_intelligence_config_put",
+        "summary": "Update Intelligence Config"
+      }
+    },
+    "/api/v1/intelligence/costs": {
+      "get": {
+        "operationId": "intelligence_costs_api_v1_intelligence_costs_get",
+        "summary": "Intelligence Costs"
+      }
+    },
+    "/api/v1/intelligence/costs/by-model": {
+      "get": {
+        "operationId": "costs_by_model_api_v1_intelligence_costs_by_model_get",
+        "summary": "Costs By Model"
+      }
+    },
+    "/api/v1/intelligence/costs/by-task": {
+      "get": {
+        "operationId": "costs_by_task_api_v1_intelligence_costs_by_task_get",
+        "summary": "Costs By Task"
+      }
+    },
+    "/api/v1/intelligence/costs/timeseries": {
+      "get": {
+        "operationId": "costs_timeseries_api_v1_intelligence_costs_timeseries_get",
+        "summary": "Costs Timeseries"
+      }
+    },
+    "/api/v1/intelligence/insights": {
+      "get": {
+        "operationId": "intelligence_insights_api_v1_intelligence_insights_get",
+        "summary": "Intelligence Insights"
+      }
+    },
+    "/api/v1/intelligence/reports": {
+      "get": {
+        "operationId": "intelligence_reports_api_v1_intelligence_reports_get",
+        "summary": "Intelligence Reports"
+      }
+    },
+    "/api/v1/intelligence/trigger": {
+      "post": {
+        "operationId": "trigger_intelligence_api_v1_intelligence_trigger_post",
+        "summary": "Trigger Intelligence"
+      }
+    },
+    "/api/v1/internal/bootstrap": {
+      "get": {
+        "operationId": "agent_bootstrap_api_v1_internal_bootstrap_get",
+        "summary": "Agent Bootstrap",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/api/v1/knowledge": {
+      "get": {
+        "operationId": "list_knowledge_api_v1_knowledge_get",
+        "summary": "List Knowledge",
+        "tags": [
+          "memory"
+        ]
+      },
+      "post": {
+        "operationId": "create_knowledge_api_v1_knowledge_post",
+        "summary": "Create Knowledge",
+        "tags": [
+          "memory"
+        ]
+      }
+    },
+    "/api/v1/knowledge/stats": {
+      "get": {
+        "operationId": "knowledge_stats_api_v1_knowledge_stats_get",
+        "summary": "Knowledge Stats",
+        "tags": [
+          "memory"
+        ]
+      }
+    },
+    "/api/v1/knowledge/timeline": {
+      "get": {
+        "operationId": "knowledge_timeline_api_v1_knowledge_timeline_get",
+        "summary": "Knowledge Timeline",
+        "tags": [
+          "memory"
+        ]
+      }
+    },
+    "/api/v1/knowledge/{entry_id}": {
+      "delete": {
+        "operationId": "delete_knowledge_api_v1_knowledge__entry_id__delete",
+        "summary": "Delete Knowledge",
+        "tags": [
+          "memory"
+        ]
+      },
+      "get": {
+        "operationId": "get_knowledge_entry_api_v1_knowledge__entry_id__get",
+        "summary": "Get Knowledge Entry",
+        "tags": [
+          "memory"
+        ]
+      },
+      "patch": {
+        "operationId": "update_knowledge_api_v1_knowledge__entry_id__patch",
+        "summary": "Update Knowledge",
+        "tags": [
+          "memory"
+        ]
+      }
+    },
+    "/api/v1/knowledge/{entry_id}/attachments": {
+      "post": {
+        "operationId": "upload_attachment_api_v1_knowledge__entry_id__attachments_post",
+        "summary": "Upload Attachment",
+        "tags": [
+          "memory"
+        ]
+      }
+    },
+    "/api/v1/knowledge/{entry_id}/attachments/{filename}": {
+      "delete": {
+        "operationId": "delete_attachment_api_v1_knowledge__entry_id__attachments__filename__delete",
+        "summary": "Delete Attachment",
+        "tags": [
+          "memory"
+        ]
+      },
+      "get": {
+        "operationId": "get_attachment_api_v1_knowledge__entry_id__attachments__filename__get",
+        "summary": "Get Attachment",
+        "tags": [
+          "memory"
+        ]
+      }
+    },
+    "/api/v1/knowledge/{entry_id}/keep_both": {
+      "post": {
+        "operationId": "keep_both_api_v1_knowledge__entry_id__keep_both_post",
+        "summary": "Keep Both",
+        "tags": [
+          "memory"
+        ]
+      }
+    },
+    "/api/v1/knowledge/{entry_id}/merge_into/{target_id}": {
+      "post": {
+        "operationId": "merge_into_api_v1_knowledge__entry_id__merge_into__target_id__post",
+        "summary": "Merge Into",
+        "tags": [
+          "memory"
+        ]
+      }
+    },
+    "/api/v1/knowledge/{entry_id}/unrelated": {
+      "post": {
+        "operationId": "mark_unrelated_api_v1_knowledge__entry_id__unrelated_post",
+        "summary": "Mark Unrelated",
+        "tags": [
+          "memory"
+        ]
+      }
+    },
+    "/api/v1/local-registry": {
+      "get": {
+        "operationId": "list_local_recipes_api_v1_local_registry_get",
+        "summary": "List Local Recipes",
+        "tags": [
+          "local-registry"
+        ]
+      }
+    },
+    "/api/v1/local-registry/refresh": {
+      "post": {
+        "operationId": "refresh_local_registry_api_v1_local_registry_refresh_post",
+        "summary": "Refresh Local Registry",
+        "tags": [
+          "local-registry"
+        ]
+      }
+    },
+    "/api/v1/local-registry/{slug}": {
+      "patch": {
+        "operationId": "patch_local_recipe_api_v1_local_registry__slug__patch",
+        "summary": "Patch Local Recipe",
+        "tags": [
+          "local-registry"
+        ]
+      }
+    },
+    "/api/v1/local-registry/{slug}/install": {
+      "post": {
+        "operationId": "install_recipe_api_v1_local_registry__slug__install_post",
+        "summary": "Install Recipe",
+        "tags": [
+          "local-registry"
+        ]
+      }
+    },
+    "/api/v1/local-registry/{slug}/install/log": {
+      "get": {
+        "operationId": "install_log_api_v1_local_registry__slug__install_log_get",
+        "summary": "Install Log",
+        "tags": [
+          "local-registry"
+        ]
+      }
+    },
+    "/api/v1/loops": {
+      "get": {
+        "operationId": "list_loops_api_v1_loops_get",
+        "summary": "List Loops",
+        "tags": [
+          "loops"
+        ]
+      },
+      "post": {
+        "operationId": "create_loop_api_v1_loops_post",
+        "summary": "Create Loop",
+        "tags": [
+          "loops"
+        ]
+      }
+    },
+    "/api/v1/loops/{loop_id}": {
+      "delete": {
+        "operationId": "delete_loop_api_v1_loops__loop_id__delete",
+        "summary": "Delete Loop",
+        "tags": [
+          "loops"
+        ]
+      },
+      "get": {
+        "operationId": "get_loop_api_v1_loops__loop_id__get",
+        "summary": "Get Loop",
+        "tags": [
+          "loops"
+        ]
+      },
+      "patch": {
+        "operationId": "update_loop_api_v1_loops__loop_id__patch",
+        "summary": "Update Loop",
+        "tags": [
+          "loops"
+        ]
+      }
+    },
+    "/api/v1/loops/{loop_id}/pause": {
+      "post": {
+        "operationId": "pause_loop_api_v1_loops__loop_id__pause_post",
+        "summary": "Pause Loop",
+        "tags": [
+          "loops"
+        ]
+      }
+    },
+    "/api/v1/loops/{loop_id}/start": {
+      "post": {
+        "operationId": "start_loop_api_v1_loops__loop_id__start_post",
+        "summary": "Start Loop",
+        "tags": [
+          "loops"
+        ]
+      }
+    },
+    "/api/v1/loops/{loop_id}/stop": {
+      "post": {
+        "operationId": "stop_loop_api_v1_loops__loop_id__stop_post",
+        "summary": "Stop Loop",
+        "tags": [
+          "loops"
+        ]
+      }
+    },
+    "/api/v1/mcp-servers": {
+      "get": {
+        "operationId": "list_mcp_servers_api_v1_mcp_servers_get",
+        "summary": "List Mcp Servers",
+        "tags": [
+          "mcp-servers"
+        ]
+      },
+      "post": {
+        "operationId": "create_mcp_server_api_v1_mcp_servers_post",
+        "summary": "Create Mcp Server",
+        "tags": [
+          "mcp-servers"
+        ]
+      }
+    },
+    "/api/v1/mcp-servers/{name}": {
+      "delete": {
+        "operationId": "delete_mcp_server_api_v1_mcp_servers__name__delete",
+        "summary": "Delete Mcp Server",
+        "tags": [
+          "mcp-servers"
+        ]
+      },
+      "get": {
+        "operationId": "get_mcp_server_api_v1_mcp_servers__name__get",
+        "summary": "Get Mcp Server",
+        "tags": [
+          "mcp-servers"
+        ]
+      }
+    },
+    "/api/v1/meetings": {
+      "get": {
+        "operationId": "list_meetings_api_v1_meetings_get",
+        "summary": "List Meetings",
+        "tags": [
+          "meetings"
+        ]
+      },
+      "post": {
+        "operationId": "create_meeting_api_v1_meetings_post",
+        "summary": "Create Meeting",
+        "tags": [
+          "meetings"
+        ]
+      }
+    },
+    "/api/v1/meetings/agent-messages": {
+      "get": {
+        "operationId": "list_agent_messages_api_v1_meetings_agent_messages_get",
+        "summary": "List Agent Messages",
+        "tags": [
+          "meetings"
+        ]
+      }
+    },
+    "/api/v1/meetings/stream": {
+      "get": {
+        "operationId": "meeting_stream_api_v1_meetings_stream_get",
+        "summary": "Meeting Stream",
+        "tags": [
+          "meetings"
+        ]
+      }
+    },
+    "/api/v1/meetings/{meeting_id}": {
+      "get": {
+        "operationId": "get_meeting_api_v1_meetings__meeting_id__get",
+        "summary": "Get Meeting",
+        "tags": [
+          "meetings"
+        ]
+      }
+    },
+    "/api/v1/meetings/{meeting_id}/cancel": {
+      "post": {
+        "operationId": "cancel_meeting_endpoint_api_v1_meetings__meeting_id__cancel_post",
+        "summary": "Cancel Meeting Endpoint",
+        "tags": [
+          "meetings"
+        ]
+      }
+    },
+    "/api/v1/meetings/{meeting_id}/messages": {
+      "get": {
+        "operationId": "get_meeting_messages_api_v1_meetings__meeting_id__messages_get",
+        "summary": "Get Meeting Messages",
+        "tags": [
+          "meetings"
+        ]
+      }
+    },
+    "/api/v1/memory/query": {
+      "post": {
+        "operationId": "user_memory_query_api_v1_memory_query_post",
+        "summary": "User Memory Query",
+        "tags": [
+          "memory"
+        ]
+      }
+    },
+    "/api/v1/model-prices": {
+      "get": {
+        "operationId": "list_prices_api_v1_model_prices_get",
+        "summary": "List Prices",
+        "tags": [
+          "model-prices"
+        ]
+      },
+      "post": {
+        "operationId": "create_price_api_v1_model_prices_post",
+        "summary": "Create Price",
+        "tags": [
+          "model-prices"
+        ]
+      }
+    },
+    "/api/v1/model-prices/recompute": {
+      "post": {
+        "operationId": "recompute_costs_api_v1_model_prices_recompute_post",
+        "summary": "Recompute Costs",
+        "tags": [
+          "model-prices"
+        ]
+      }
+    },
+    "/api/v1/model-prices/unmatched": {
+      "get": {
+        "operationId": "get_unmatched_models_api_v1_model_prices_unmatched_get",
+        "summary": "Get Unmatched Models",
+        "tags": [
+          "model-prices"
+        ]
+      }
+    },
+    "/api/v1/model-prices/{price_id}": {
+      "delete": {
+        "operationId": "delete_price_api_v1_model_prices__price_id__delete",
+        "summary": "Delete Price",
+        "tags": [
+          "model-prices"
+        ]
+      },
+      "patch": {
+        "operationId": "update_price_api_v1_model_prices__price_id__patch",
+        "summary": "Update Price",
+        "tags": [
+          "model-prices"
+        ]
+      }
+    },
+    "/api/v1/models": {
+      "get": {
+        "operationId": "list_models_api_v1_models_get",
+        "summary": "List Models",
+        "tags": [
+          "models"
+        ]
+      }
+    },
+    "/api/v1/models/catalog": {
+      "get": {
+        "operationId": "get_model_catalog_api_v1_models_catalog_get",
+        "summary": "Get Model Catalog",
+        "tags": [
+          "models"
+        ]
+      }
+    },
+    "/api/v1/models/catalog/bind": {
+      "post": {
+        "operationId": "bind_catalog_model_api_v1_models_catalog_bind_post",
+        "summary": "Bind Catalog Model",
+        "tags": [
+          "models"
+        ]
+      }
+    },
+    "/api/v1/models/catalog/refresh": {
+      "post": {
+        "operationId": "refresh_model_catalog_api_v1_models_catalog_refresh_post",
+        "summary": "Refresh Model Catalog",
+        "tags": [
+          "models"
+        ]
+      }
+    },
+    "/api/v1/models/{model_id}": {
+      "get": {
+        "operationId": "get_model_api_v1_models__model_id__get",
+        "summary": "Get Model",
+        "tags": [
+          "models"
+        ]
+      }
+    },
+    "/api/v1/night-shift/config": {
+      "get": {
+        "operationId": "get_config_api_v1_night_shift_config_get",
+        "summary": "Get Config",
+        "tags": [
+          "night-shift"
+        ]
+      },
+      "put": {
+        "operationId": "put_config_api_v1_night_shift_config_put",
+        "summary": "Put Config",
+        "tags": [
+          "night-shift"
+        ]
+      }
+    },
+    "/api/v1/night-shift/last-night": {
+      "get": {
+        "operationId": "get_last_night_api_v1_night_shift_last_night_get",
+        "summary": "Get Last Night",
+        "tags": [
+          "night-shift"
+        ]
+      }
+    },
+    "/api/v1/night-shift/last-night/{night_key}/dismiss": {
+      "post": {
+        "operationId": "dismiss_last_night_api_v1_night_shift_last_night__night_key__dismiss_post",
+        "summary": "Dismiss Last Night",
+        "tags": [
+          "night-shift"
+        ]
+      }
+    },
+    "/api/v1/night-shift/tasks/{task_id}": {
+      "delete": {
+        "operationId": "delete_task_mark_api_v1_night_shift_tasks__task_id__delete",
+        "summary": "Delete Task Mark",
+        "tags": [
+          "night-shift"
+        ]
+      },
+      "get": {
+        "operationId": "get_task_mark_api_v1_night_shift_tasks__task_id__get",
+        "summary": "Get Task Mark",
+        "tags": [
+          "night-shift"
+        ]
+      },
+      "put": {
+        "operationId": "put_task_mark_api_v1_night_shift_tasks__task_id__put",
+        "summary": "Put Task Mark",
+        "tags": [
+          "night-shift"
+        ]
+      }
+    },
+    "/api/v1/night-shift/tonight": {
+      "get": {
+        "operationId": "get_tonight_api_v1_night_shift_tonight_get",
+        "summary": "Get Tonight",
+        "tags": [
+          "night-shift"
+        ]
+      }
+    },
+    "/api/v1/nodes/agent-script": {
+      "get": {
+        "operationId": "get_agent_script_api_v1_nodes_agent_script_get",
+        "summary": "Get Agent Script",
+        "tags": [
+          "nodes"
+        ]
+      }
+    },
+    "/api/v1/nodes/devices": {
+      "get": {
+        "operationId": "list_devices_api_v1_nodes_devices_get",
+        "summary": "List Devices",
+        "tags": [
+          "nodes"
+        ]
+      }
+    },
+    "/api/v1/nodes/heartbeat": {
+      "post": {
+        "operationId": "heartbeat_api_v1_nodes_heartbeat_post",
+        "summary": "Heartbeat",
+        "tags": [
+          "nodes"
+        ]
+      }
+    },
+    "/api/v1/nodes/pair": {
+      "post": {
+        "operationId": "pair_api_v1_nodes_pair_post",
+        "summary": "Pair",
+        "tags": [
+          "nodes"
+        ]
+      }
+    },
+    "/api/v1/nodes/pairing-codes": {
+      "post": {
+        "operationId": "create_pairing_code_api_v1_nodes_pairing_codes_post",
+        "summary": "Create Pairing Code",
+        "tags": [
+          "nodes"
+        ]
+      }
+    },
+    "/api/v1/nodes/{host_id}/device-state": {
+      "get": {
+        "operationId": "get_device_state_api_v1_nodes__host_id__device_state_get",
+        "summary": "Get Device State",
+        "tags": [
+          "nodes"
+        ]
+      },
+      "put": {
+        "operationId": "set_desired_state_api_v1_nodes__host_id__device_state_put",
+        "summary": "Set Desired State",
+        "tags": [
+          "nodes"
+        ]
+      }
+    },
+    "/api/v1/nodes/{host_id}/inventory": {
+      "get": {
+        "operationId": "get_inventory_api_v1_nodes__host_id__inventory_get",
+        "summary": "Get Inventory",
+        "tags": [
+          "nodes"
+        ]
+      }
+    },
+    "/api/v1/playbooks": {
+      "get": {
+        "operationId": "list_playbooks_api_v1_playbooks_get",
+        "summary": "List Playbooks",
+        "tags": [
+          "playbooks"
+        ]
+      },
+      "post": {
+        "operationId": "create_playbook_api_v1_playbooks_post",
+        "summary": "Create Playbook",
+        "tags": [
+          "playbooks"
+        ]
+      }
+    },
+    "/api/v1/playbooks/catalog": {
+      "get": {
+        "operationId": "get_playbook_catalog_api_v1_playbooks_catalog_get",
+        "summary": "Get Playbook Catalog",
+        "tags": [
+          "playbooks"
+        ]
+      }
+    },
+    "/api/v1/playbooks/henry/current": {
+      "get": {
+        "operationId": "get_current_henry_session_api_v1_playbooks_henry_current_get",
+        "summary": "Get Current Henry Session",
+        "tags": [
+          "playbooks"
+        ]
+      }
+    },
+    "/api/v1/playbooks/henry/sessions/start": {
+      "post": {
+        "operationId": "start_henry_session_api_v1_playbooks_henry_sessions_start_post",
+        "summary": "Start Henry Session",
+        "tags": [
+          "playbooks"
+        ]
+      }
+    },
+    "/api/v1/playbooks/henry/sessions/{session_id}/message": {
+      "post": {
+        "operationId": "send_henry_message_api_v1_playbooks_henry_sessions__session_id__message_post",
+        "summary": "Send Henry Message",
+        "tags": [
+          "playbooks"
+        ]
+      }
+    },
+    "/api/v1/playbooks/runs/recent": {
+      "get": {
+        "operationId": "get_recent_playbook_runs_api_v1_playbooks_runs_recent_get",
+        "summary": "Get Recent Playbook Runs",
+        "tags": [
+          "playbooks"
+        ]
+      }
+    },
+    "/api/v1/playbooks/skill-packs": {
+      "get": {
+        "operationId": "get_skill_packs_api_v1_playbooks_skill_packs_get",
+        "summary": "Get Skill Packs",
+        "tags": [
+          "playbooks"
+        ]
+      }
+    },
+    "/api/v1/playbooks/{playbook_id}": {
+      "get": {
+        "operationId": "get_playbook_api_v1_playbooks__playbook_id__get",
+        "summary": "Get Playbook",
+        "tags": [
+          "playbooks"
+        ]
+      },
+      "patch": {
+        "operationId": "update_playbook_api_v1_playbooks__playbook_id__patch",
+        "summary": "Update Playbook",
+        "tags": [
+          "playbooks"
+        ]
+      }
+    },
+    "/api/v1/playbooks/{playbook_id}/approve": {
+      "post": {
+        "operationId": "approve_playbook_api_v1_playbooks__playbook_id__approve_post",
+        "summary": "Approve Playbook",
+        "tags": [
+          "playbooks"
+        ]
+      }
+    },
+    "/api/v1/playbooks/{playbook_id}/automations": {
+      "get": {
+        "operationId": "get_playbook_automations_api_v1_playbooks__playbook_id__automations_get",
+        "summary": "Get Playbook Automations",
+        "tags": [
+          "playbooks"
+        ]
+      },
+      "post": {
+        "operationId": "create_playbook_automation_api_v1_playbooks__playbook_id__automations_post",
+        "summary": "Create Playbook Automation",
+        "tags": [
+          "playbooks"
+        ]
+      }
+    },
+    "/api/v1/playbooks/{playbook_id}/versions": {
+      "get": {
+        "operationId": "get_playbook_versions_api_v1_playbooks__playbook_id__versions_get",
+        "summary": "Get Playbook Versions",
+        "tags": [
+          "playbooks"
+        ]
+      },
+      "post": {
+        "operationId": "create_playbook_version_api_v1_playbooks__playbook_id__versions_post",
+        "summary": "Create Playbook Version",
+        "tags": [
+          "playbooks"
+        ]
+      }
+    },
+    "/api/v1/plugins": {
+      "get": {
+        "operationId": "get_plugins_api_v1_plugins_get",
+        "summary": "Get Plugins",
+        "tags": [
+          "cli-plugins"
+        ]
+      }
+    },
+    "/api/v1/plugins/audit": {
+      "get": {
+        "operationId": "get_plugins_audit_api_v1_plugins_audit_get",
+        "summary": "Get Plugins Audit",
+        "tags": [
+          "cli-plugins"
+        ]
+      }
+    },
+    "/api/v1/plugins/custom-skills": {
+      "get": {
+        "operationId": "get_custom_skills_api_v1_plugins_custom_skills_get",
+        "summary": "Get Custom Skills",
+        "tags": [
+          "cli-plugins"
+        ]
+      }
+    },
+    "/api/v1/plugins/github-skills": {
+      "get": {
+        "operationId": "get_github_skills_api_v1_plugins_github_skills_get",
+        "summary": "Get Github Skills",
+        "tags": [
+          "cli-plugins"
+        ]
+      }
+    },
+    "/api/v1/plugins/install": {
+      "post": {
+        "operationId": "install_plugin_api_v1_plugins_install_post",
+        "summary": "Install Plugin",
+        "tags": [
+          "cli-plugins"
+        ]
+      }
+    },
+    "/api/v1/plugins/shell": {
+      "delete": {
+        "operationId": "stop_plugins_shell_api_v1_plugins_shell_delete",
+        "summary": "Stop Plugins Shell",
+        "tags": [
+          "cli-plugins"
+        ]
+      },
+      "post": {
+        "operationId": "start_plugins_shell_api_v1_plugins_shell_post",
+        "summary": "Start Plugins Shell",
+        "tags": [
+          "cli-plugins"
+        ]
+      }
+    },
+    "/api/v1/plugins/{plugin_key}": {
+      "delete": {
+        "operationId": "remove_plugin_api_v1_plugins__plugin_key__delete",
+        "summary": "Remove Plugin",
+        "tags": [
+          "cli-plugins"
+        ]
+      }
+    },
+    "/api/v1/plugins/{plugin_key}/update": {
+      "post": {
+        "operationId": "update_plugin_api_v1_plugins__plugin_key__update_post",
+        "summary": "Update Plugin",
+        "tags": [
+          "cli-plugins"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}": {
+      "get": {
+        "operationId": "get_project_with_phases_api_v1_projects__project_id__get",
+        "summary": "Get Project With Phases",
+        "tags": [
+          "projects"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/phases": {
+      "get": {
+        "operationId": "list_phases_api_v1_projects__project_id__phases_get",
+        "summary": "List Phases",
+        "tags": [
+          "projects"
+        ]
+      },
+      "post": {
+        "operationId": "create_phase_api_v1_projects__project_id__phases_post",
+        "summary": "Create Phase",
+        "tags": [
+          "projects"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/phases/{phase_id}": {
+      "delete": {
+        "operationId": "delete_phase_api_v1_projects__project_id__phases__phase_id__delete",
+        "summary": "Delete Phase",
+        "tags": [
+          "projects"
+        ]
+      },
+      "patch": {
+        "operationId": "update_phase_api_v1_projects__project_id__phases__phase_id__patch",
+        "summary": "Update Phase",
+        "tags": [
+          "projects"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/phases/{phase_id}/complete": {
+      "post": {
+        "operationId": "complete_phase_api_v1_projects__project_id__phases__phase_id__complete_post",
+        "summary": "Complete Phase",
+        "tags": [
+          "projects"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/tags": {
+      "get": {
+        "operationId": "list_project_tags_api_v1_projects__project_id__tags_get",
+        "summary": "List Project Tags",
+        "tags": [
+          "tags"
+        ]
+      },
+      "post": {
+        "operationId": "assign_project_tag_api_v1_projects__project_id__tags_post",
+        "summary": "Assign Project Tag",
+        "tags": [
+          "tags"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/tags/{tag_id}": {
+      "delete": {
+        "operationId": "remove_project_tag_api_v1_projects__project_id__tags__tag_id__delete",
+        "summary": "Remove Project Tag",
+        "tags": [
+          "tags"
+        ]
+      }
+    },
+    "/api/v1/prompt-templates": {
+      "get": {
+        "operationId": "list_prompt_templates_api_v1_prompt_templates_get",
+        "summary": "List Prompt Templates",
+        "tags": [
+          "prompt-templates"
+        ]
+      },
+      "post": {
+        "operationId": "create_prompt_template_api_v1_prompt_templates_post",
+        "summary": "Create Prompt Template",
+        "tags": [
+          "prompt-templates"
+        ]
+      }
+    },
+    "/api/v1/prompt-templates/{template_id}": {
+      "delete": {
+        "operationId": "delete_prompt_template_api_v1_prompt_templates__template_id__delete",
+        "summary": "Delete Prompt Template",
+        "tags": [
+          "prompt-templates"
+        ]
+      },
+      "get": {
+        "operationId": "get_prompt_template_api_v1_prompt_templates__template_id__get",
+        "summary": "Get Prompt Template",
+        "tags": [
+          "prompt-templates"
+        ]
+      },
+      "patch": {
+        "operationId": "update_prompt_template_api_v1_prompt_templates__template_id__patch",
+        "summary": "Update Prompt Template",
+        "tags": [
+          "prompt-templates"
+        ]
+      }
+    },
+    "/api/v1/references": {
+      "get": {
+        "operationId": "list_references_api_v1_references_get",
+        "summary": "List References",
+        "tags": [
+          "references"
+        ]
+      }
+    },
+    "/api/v1/references/upload": {
+      "post": {
+        "operationId": "upload_reference_api_v1_references_upload_post",
+        "summary": "Upload Reference",
+        "tags": [
+          "references"
+        ]
+      }
+    },
+    "/api/v1/references/{reference_id}": {
+      "delete": {
+        "operationId": "delete_reference_api_v1_references__reference_id__delete",
+        "summary": "Delete Reference",
+        "tags": [
+          "references"
+        ]
+      }
+    },
+    "/api/v1/references/{reference_id}/download": {
+      "get": {
+        "operationId": "download_reference_api_v1_references__reference_id__download_get",
+        "summary": "Download Reference",
+        "tags": [
+          "references"
+        ]
+      }
+    },
+    "/api/v1/repos": {
+      "get": {
+        "operationId": "list_repos_api_v1_repos_get",
+        "summary": "List Repos",
+        "tags": [
+          "repos"
+        ]
+      },
+      "post": {
+        "operationId": "import_repo_api_v1_repos_post",
+        "summary": "Import Repo",
+        "tags": [
+          "repos"
+        ]
+      }
+    },
+    "/api/v1/repos/github-config": {
+      "put": {
+        "operationId": "update_github_config_api_v1_repos_github_config_put",
+        "summary": "Update Github Config",
+        "tags": [
+          "repos"
+        ]
+      }
+    },
+    "/api/v1/repos/github-status": {
+      "get": {
+        "operationId": "github_status_api_v1_repos_github_status_get",
+        "summary": "Github Status",
+        "tags": [
+          "repos"
+        ]
+      }
+    },
+    "/api/v1/repos/import-candidates": {
+      "get": {
+        "operationId": "list_import_candidates_api_v1_repos_import_candidates_get",
+        "summary": "List Import Candidates",
+        "tags": [
+          "repos"
+        ]
+      }
+    },
+    "/api/v1/repos/new": {
+      "post": {
+        "operationId": "create_new_repo_api_v1_repos_new_post",
+        "summary": "Create New Repo",
+        "tags": [
+          "repos"
+        ]
+      }
+    },
+    "/api/v1/repos/{repo_id}": {
+      "delete": {
+        "operationId": "delete_repo_api_v1_repos__repo_id__delete",
+        "summary": "Delete Repo",
+        "tags": [
+          "repos"
+        ]
+      },
+      "get": {
+        "operationId": "get_repo_api_v1_repos__repo_id__get",
+        "summary": "Get Repo",
+        "tags": [
+          "repos"
+        ]
+      },
+      "patch": {
+        "operationId": "update_repo_api_v1_repos__repo_id__patch",
+        "summary": "Update Repo",
+        "tags": [
+          "repos"
+        ]
+      }
+    },
+    "/api/v1/repos/{repo_id}/link-project": {
+      "post": {
+        "operationId": "link_project_api_v1_repos__repo_id__link_project_post",
+        "summary": "Link Project",
+        "tags": [
+          "repos"
+        ]
+      }
+    },
+    "/api/v1/repos/{repo_id}/link-project/{project_id}": {
+      "delete": {
+        "operationId": "unlink_project_api_v1_repos__repo_id__link_project__project_id__delete",
+        "summary": "Unlink Project",
+        "tags": [
+          "repos"
+        ]
+      }
+    },
+    "/api/v1/repos/{repo_id}/sync": {
+      "post": {
+        "operationId": "sync_repo_api_v1_repos__repo_id__sync_post",
+        "summary": "Sync Repo",
+        "tags": [
+          "repos"
+        ]
+      }
+    },
+    "/api/v1/research": {
+      "get": {
+        "operationId": "list_research_api_v1_research_get",
+        "summary": "List Research",
+        "tags": [
+          "research"
+        ]
+      }
+    },
+    "/api/v1/research/start": {
+      "post": {
+        "operationId": "start_research_api_v1_research_start_post",
+        "summary": "Start Research",
+        "tags": [
+          "research"
+        ]
+      }
+    },
+    "/api/v1/research/{project_id}": {
+      "delete": {
+        "operationId": "delete_research_api_v1_research__project_id__delete",
+        "summary": "Delete Research",
+        "tags": [
+          "research"
+        ]
+      }
+    },
+    "/api/v1/research/{project_id}/chat": {
+      "get": {
+        "operationId": "get_research_chat_api_v1_research__project_id__chat_get",
+        "summary": "Get Research Chat",
+        "tags": [
+          "research"
+        ]
+      }
+    },
+    "/api/v1/research/{project_id}/message": {
+      "post": {
+        "operationId": "send_research_message_api_v1_research__project_id__message_post",
+        "summary": "Send Research Message",
+        "tags": [
+          "research"
+        ]
+      }
+    },
+    "/api/v1/research/{project_id}/save": {
+      "post": {
+        "operationId": "save_research_api_v1_research__project_id__save_post",
+        "summary": "Save Research",
+        "tags": [
+          "research"
+        ]
+      }
+    },
+    "/api/v1/runtimes": {
+      "get": {
+        "operationId": "list_runtimes_api_v1_runtimes_get",
+        "summary": "List Runtimes",
+        "tags": [
+          "runtimes"
+        ]
+      },
+      "post": {
+        "operationId": "create_lmstudio_runtime_api_v1_runtimes_post",
+        "summary": "Create Lmstudio Runtime",
+        "tags": [
+          "runtimes"
+        ]
+      }
+    },
+    "/api/v1/runtimes/compat-matrix": {
+      "get": {
+        "operationId": "get_compat_matrix_api_v1_runtimes_compat_matrix_get",
+        "summary": "Get Compat Matrix",
+        "tags": [
+          "runtimes"
+        ]
+      }
+    },
+    "/api/v1/runtimes/db": {
+      "post": {
+        "operationId": "create_runtime_db_api_v1_runtimes_db_post",
+        "summary": "Create Runtime Db",
+        "tags": [
+          "runtimes"
+        ]
+      }
+    },
+    "/api/v1/runtimes/db/{slug}": {
+      "delete": {
+        "operationId": "delete_runtime_db_api_v1_runtimes_db__slug__delete",
+        "summary": "Delete Runtime Db",
+        "tags": [
+          "runtimes"
+        ]
+      },
+      "patch": {
+        "operationId": "update_runtime_db_api_v1_runtimes_db__slug__patch",
+        "summary": "Update Runtime Db",
+        "tags": [
+          "runtimes"
+        ]
+      }
+    },
+    "/api/v1/runtimes/db/{slug}/agents": {
+      "get": {
+        "operationId": "runtime_db_agents_api_v1_runtimes_db__slug__agents_get",
+        "summary": "Runtime Db Agents",
+        "tags": [
+          "runtimes"
+        ]
+      }
+    },
+    "/api/v1/runtimes/db/{slug}/autostart": {
+      "get": {
+        "operationId": "get_runtime_autostart_api_v1_runtimes_db__slug__autostart_get",
+        "summary": "Get Runtime Autostart",
+        "tags": [
+          "runtimes"
+        ]
+      },
+      "post": {
+        "operationId": "post_runtime_autostart_api_v1_runtimes_db__slug__autostart_post",
+        "summary": "Post Runtime Autostart",
+        "tags": [
+          "runtimes"
+        ]
+      }
+    },
+    "/api/v1/runtimes/db/{slug}/sync-agents": {
+      "post": {
+        "operationId": "force_sync_runtime_agents_api_v1_runtimes_db__slug__sync_agents_post",
+        "summary": "Force Sync Runtime Agents",
+        "tags": [
+          "runtimes"
+        ]
+      }
+    },
+    "/api/v1/runtimes/live-status": {
+      "get": {
+        "operationId": "runtimes_live_status_api_v1_runtimes_live_status_get",
+        "summary": "Runtimes Live Status",
+        "tags": [
+          "runtimes"
+        ]
+      }
+    },
+    "/api/v1/runtimes/lmstudio/catalog/search": {
+      "get": {
+        "operationId": "search_lmstudio_catalog_api_v1_runtimes_lmstudio_catalog_search_get",
+        "summary": "Search Lmstudio Catalog",
+        "tags": [
+          "runtimes"
+        ]
+      }
+    },
+    "/api/v1/runtimes/lmstudio/delete": {
+      "post": {
+        "operationId": "delete_lmstudio_model_api_v1_runtimes_lmstudio_delete_post",
+        "summary": "Delete Lmstudio Model",
+        "tags": [
+          "runtimes"
+        ]
+      }
+    },
+    "/api/v1/runtimes/lmstudio/download": {
+      "post": {
+        "operationId": "download_lmstudio_model_api_v1_runtimes_lmstudio_download_post",
+        "summary": "Download Lmstudio Model",
+        "tags": [
+          "runtimes"
+        ]
+      }
+    },
+    "/api/v1/runtimes/lmstudio/download-hf": {
+      "post": {
+        "operationId": "download_hf_file_api_v1_runtimes_lmstudio_download_hf_post",
+        "summary": "Download Hf File",
+        "tags": [
+          "runtimes"
+        ]
+      }
+    },
+    "/api/v1/runtimes/lmstudio/downloads": {
+      "get": {
+        "operationId": "list_active_downloads_api_v1_runtimes_lmstudio_downloads_get",
+        "summary": "List Active Downloads",
+        "tags": [
+          "runtimes"
+        ]
+      }
+    },
+    "/api/v1/runtimes/lmstudio/downloads/cancel": {
+      "post": {
+        "operationId": "cancel_download_api_v1_runtimes_lmstudio_downloads_cancel_post",
+        "summary": "Cancel Download",
+        "tags": [
+          "runtimes"
+        ]
+      }
+    },
+    "/api/v1/runtimes/lmstudio/hf/files": {
+      "get": {
+        "operationId": "get_hf_repo_files_api_v1_runtimes_lmstudio_hf_files_get",
+        "summary": "Get Hf Repo Files",
+        "tags": [
+          "runtimes"
+        ]
+      }
+    },
+    "/api/v1/runtimes/lmstudio/kv-reset": {
+      "post": {
+        "operationId": "trigger_kv_reset_api_v1_runtimes_lmstudio_kv_reset_post",
+        "summary": "Trigger Kv Reset",
+        "tags": [
+          "runtimes"
+        ]
+      }
+    },
+    "/api/v1/runtimes/lmstudio/load": {
+      "post": {
+        "operationId": "load_lmstudio_model_api_v1_runtimes_lmstudio_load_post",
+        "summary": "Load Lmstudio Model",
+        "tags": [
+          "runtimes"
+        ]
+      }
+    },
+    "/api/v1/runtimes/lmstudio/models": {
+      "get": {
+        "operationId": "list_lmstudio_models_api_v1_runtimes_lmstudio_models_get",
+        "summary": "List Lmstudio Models",
+        "tags": [
+          "runtimes"
+        ]
+      }
+    },
+    "/api/v1/runtimes/lmstudio/unload": {
+      "post": {
+        "operationId": "unload_lmstudio_model_api_v1_runtimes_lmstudio_unload_post",
+        "summary": "Unload Lmstudio Model",
+        "tags": [
+          "runtimes"
+        ]
+      }
+    },
+    "/api/v1/runtimes/probe-endpoint": {
+      "post": {
+        "operationId": "probe_endpoint_api_v1_runtimes_probe_endpoint_post",
+        "summary": "Probe Endpoint",
+        "tags": [
+          "runtimes"
+        ]
+      }
+    },
+    "/api/v1/runtimes/spark/metrics": {
+      "get": {
+        "operationId": "spark_metrics_api_v1_runtimes_spark_metrics_get",
+        "summary": "Spark Metrics",
+        "tags": [
+          "runtimes"
+        ]
+      }
+    },
+    "/api/v1/runtimes/vllm": {
+      "post": {
+        "operationId": "create_vllm_runtime_api_v1_runtimes_vllm_post",
+        "summary": "Create Vllm Runtime",
+        "tags": [
+          "runtimes"
+        ]
+      }
+    },
+    "/api/v1/runtimes/vllm/discover": {
+      "get": {
+        "operationId": "discover_vllm_containers_api_v1_runtimes_vllm_discover_get",
+        "summary": "Discover Vllm Containers",
+        "tags": [
+          "runtimes"
+        ]
+      }
+    },
+    "/api/v1/runtimes/{runtime_id}": {
+      "get": {
+        "operationId": "get_runtime_api_v1_runtimes__runtime_id__get",
+        "summary": "Get Runtime",
+        "tags": [
+          "runtimes"
+        ]
+      }
+    },
+    "/api/v1/runtimes/{runtime_id}/health": {
+      "get": {
+        "operationId": "runtime_health_api_v1_runtimes__runtime_id__health_get",
+        "summary": "Runtime Health",
+        "tags": [
+          "runtimes"
+        ]
+      }
+    },
+    "/api/v1/runtimes/{runtime_id}/probe-model": {
+      "post": {
+        "operationId": "probe_model_endpoint_api_v1_runtimes__runtime_id__probe_model_post",
+        "summary": "Probe Model Endpoint",
+        "tags": [
+          "runtimes"
+        ]
+      }
+    },
+    "/api/v1/runtimes/{runtime_id}/restart": {
+      "post": {
+        "operationId": "restart_runtime_api_v1_runtimes__runtime_id__restart_post",
+        "summary": "Restart Runtime",
+        "tags": [
+          "runtimes"
+        ]
+      }
+    },
+    "/api/v1/runtimes/{runtime_id}/schedules": {
+      "get": {
+        "operationId": "list_schedules_api_v1_runtimes__runtime_id__schedules_get",
+        "summary": "List Schedules",
+        "tags": [
+          "runtime-schedules"
+        ]
+      },
+      "post": {
+        "operationId": "create_schedule_endpoint_api_v1_runtimes__runtime_id__schedules_post",
+        "summary": "Create Schedule Endpoint",
+        "tags": [
+          "runtime-schedules"
+        ]
+      }
+    },
+    "/api/v1/runtimes/{runtime_id}/schedules/{schedule_id}": {
+      "delete": {
+        "operationId": "delete_schedule_endpoint_api_v1_runtimes__runtime_id__schedules__schedule_id__delete",
+        "summary": "Delete Schedule Endpoint",
+        "tags": [
+          "runtime-schedules"
+        ]
+      },
+      "patch": {
+        "operationId": "patch_schedule_api_v1_runtimes__runtime_id__schedules__schedule_id__patch",
+        "summary": "Patch Schedule",
+        "tags": [
+          "runtime-schedules"
+        ]
+      }
+    },
+    "/api/v1/runtimes/{runtime_id}/schedules/{schedule_id}/runs": {
+      "get": {
+        "operationId": "get_schedule_runs_api_v1_runtimes__runtime_id__schedules__schedule_id__runs_get",
+        "summary": "Get Schedule Runs",
+        "tags": [
+          "runtime-schedules"
+        ]
+      }
+    },
+    "/api/v1/runtimes/{runtime_id}/start": {
+      "post": {
+        "operationId": "start_runtime_api_v1_runtimes__runtime_id__start_post",
+        "summary": "Start Runtime",
+        "tags": [
+          "runtimes"
+        ]
+      }
+    },
+    "/api/v1/runtimes/{runtime_id}/stop": {
+      "post": {
+        "operationId": "stop_runtime_api_v1_runtimes__runtime_id__stop_post",
+        "summary": "Stop Runtime",
+        "tags": [
+          "runtimes"
+        ]
+      }
+    },
+    "/api/v1/runtimes/{runtime_id}/wake": {
+      "post": {
+        "operationId": "wake_runtime_api_v1_runtimes__runtime_id__wake_post",
+        "summary": "Wake Runtime",
+        "tags": [
+          "runtimes"
+        ]
+      }
+    },
+    "/api/v1/schedule/jobs": {
+      "get": {
+        "operationId": "list_jobs_api_v1_schedule_jobs_get",
+        "summary": "List Jobs",
+        "tags": [
+          "schedule"
+        ]
+      },
+      "post": {
+        "operationId": "create_job_api_v1_schedule_jobs_post",
+        "summary": "Create Job",
+        "tags": [
+          "schedule"
+        ]
+      }
+    },
+    "/api/v1/schedule/jobs/{job_id}": {
+      "delete": {
+        "operationId": "delete_job_api_v1_schedule_jobs__job_id__delete",
+        "summary": "Delete Job",
+        "tags": [
+          "schedule"
+        ]
+      },
+      "get": {
+        "operationId": "get_job_api_v1_schedule_jobs__job_id__get",
+        "summary": "Get Job",
+        "tags": [
+          "schedule"
+        ]
+      },
+      "patch": {
+        "operationId": "update_job_api_v1_schedule_jobs__job_id__patch",
+        "summary": "Update Job",
+        "tags": [
+          "schedule"
+        ]
+      }
+    },
+    "/api/v1/schedule/jobs/{job_id}/duplicate": {
+      "post": {
+        "operationId": "duplicate_job_api_v1_schedule_jobs__job_id__duplicate_post",
+        "summary": "Duplicate Job",
+        "tags": [
+          "schedule"
+        ]
+      }
+    },
+    "/api/v1/schedule/jobs/{job_id}/heatmap": {
+      "get": {
+        "operationId": "get_job_heatmap_api_v1_schedule_jobs__job_id__heatmap_get",
+        "summary": "Get Job Heatmap",
+        "tags": [
+          "schedule"
+        ]
+      }
+    },
+    "/api/v1/schedule/jobs/{job_id}/runs": {
+      "get": {
+        "operationId": "get_job_runs_api_v1_schedule_jobs__job_id__runs_get",
+        "summary": "Get Job Runs",
+        "tags": [
+          "schedule"
+        ]
+      }
+    },
+    "/api/v1/schedule/jobs/{job_id}/snooze": {
+      "patch": {
+        "operationId": "snooze_job_api_v1_schedule_jobs__job_id__snooze_patch",
+        "summary": "Snooze Job",
+        "tags": [
+          "schedule"
+        ]
+      }
+    },
+    "/api/v1/schedule/jobs/{job_id}/stats": {
+      "get": {
+        "operationId": "get_job_stats_api_v1_schedule_jobs__job_id__stats_get",
+        "summary": "Get Job Stats",
+        "tags": [
+          "schedule"
+        ]
+      }
+    },
+    "/api/v1/schedule/jobs/{job_id}/tasks": {
+      "get": {
+        "operationId": "get_job_tasks_api_v1_schedule_jobs__job_id__tasks_get",
+        "summary": "Get Job Tasks",
+        "tags": [
+          "schedule"
+        ]
+      }
+    },
+    "/api/v1/schedule/jobs/{job_id}/trigger": {
+      "post": {
+        "operationId": "trigger_job_api_v1_schedule_jobs__job_id__trigger_post",
+        "summary": "Trigger Job",
+        "tags": [
+          "schedule"
+        ]
+      }
+    },
+    "/api/v1/schedule/preview-firings": {
+      "post": {
+        "operationId": "preview_firings_api_v1_schedule_preview_firings_post",
+        "summary": "Preview Firings",
+        "tags": [
+          "schedule"
+        ]
+      }
+    },
+    "/api/v1/schedule/stream": {
+      "get": {
+        "operationId": "schedule_stream_api_v1_schedule_stream_get",
+        "summary": "Schedule Stream",
+        "tags": [
+          "schedule"
+        ]
+      }
+    },
+    "/api/v1/schedule/upcoming": {
+      "get": {
+        "operationId": "get_upcoming_firings_api_v1_schedule_upcoming_get",
+        "summary": "Get Upcoming Firings",
+        "tags": [
+          "schedule"
+        ]
+      }
+    },
+    "/api/v1/secrets": {
+      "get": {
+        "operationId": "list_secrets_api_v1_secrets_get",
+        "summary": "List Secrets",
+        "tags": [
+          "secrets"
+        ]
+      },
+      "post": {
+        "operationId": "create_secret_api_v1_secrets_post",
+        "summary": "Create Secret",
+        "tags": [
+          "secrets"
+        ]
+      }
+    },
+    "/api/v1/secrets/providers": {
+      "get": {
+        "operationId": "list_provider_templates_api_v1_secrets_providers_get",
+        "summary": "List Provider Templates",
+        "tags": [
+          "secrets"
+        ]
+      }
+    },
+    "/api/v1/secrets/{key}": {
+      "delete": {
+        "operationId": "delete_secret_api_v1_secrets__key__delete",
+        "summary": "Delete Secret",
+        "tags": [
+          "secrets"
+        ]
+      },
+      "patch": {
+        "operationId": "update_secret_api_v1_secrets__key__patch",
+        "summary": "Update Secret",
+        "tags": [
+          "secrets"
+        ]
+      }
+    },
+    "/api/v1/settings": {
+      "get": {
+        "operationId": "list_settings_api_v1_settings_get",
+        "summary": "List Settings",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/api/v1/settings/autonomy": {
+      "get": {
+        "operationId": "get_autonomy_settings_api_v1_settings_autonomy_get",
+        "summary": "Get Autonomy Settings"
+      },
+      "patch": {
+        "operationId": "update_autonomy_settings_api_v1_settings_autonomy_patch",
+        "summary": "Update Autonomy Settings"
+      }
+    },
+    "/api/v1/settings/{key}": {
+      "get": {
+        "operationId": "get_setting_api_v1_settings__key__get",
+        "summary": "Get Setting",
+        "tags": [
+          "settings"
+        ]
+      },
+      "put": {
+        "operationId": "upsert_setting_api_v1_settings__key__put",
+        "summary": "Upsert Setting",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/api/v1/skill-lab/candidates": {
+      "get": {
+        "operationId": "list_skill_candidates_api_v1_skill_lab_candidates_get",
+        "summary": "List Skill Candidates",
+        "tags": [
+          "skill-lab"
+        ]
+      }
+    },
+    "/api/v1/skill-lab/candidates/{candidate_id}": {
+      "patch": {
+        "operationId": "update_skill_candidate_api_v1_skill_lab_candidates__candidate_id__patch",
+        "summary": "Update Skill Candidate",
+        "tags": [
+          "skill-lab"
+        ]
+      }
+    },
+    "/api/v1/skills": {
+      "get": {
+        "operationId": "list_skills_api_v1_skills_get",
+        "summary": "List Skills",
+        "tags": [
+          "skills"
+        ]
+      }
+    },
+    "/api/v1/skills/{skill_name}": {
+      "get": {
+        "operationId": "get_skill_api_v1_skills__skill_name__get",
+        "summary": "Get Skill",
+        "tags": [
+          "skills"
+        ]
+      },
+      "patch": {
+        "operationId": "update_skill_api_v1_skills__skill_name__patch",
+        "summary": "Update Skill",
+        "tags": [
+          "skills"
+        ]
+      }
+    },
+    "/api/v1/skills/{skill_name}/content": {
+      "get": {
+        "operationId": "get_skill_content_api_v1_skills__skill_name__content_get",
+        "summary": "Get Skill Content",
+        "tags": [
+          "skills"
+        ]
+      },
+      "put": {
+        "operationId": "update_skill_content_api_v1_skills__skill_name__content_put",
+        "summary": "Update Skill Content",
+        "tags": [
+          "skills"
+        ]
+      }
+    },
+    "/api/v1/skills/{skill_name}/install": {
+      "post": {
+        "operationId": "install_skill_api_v1_skills__skill_name__install_post",
+        "summary": "Install Skill",
+        "tags": [
+          "skills"
+        ]
+      }
+    },
+    "/api/v1/slack/test-connection": {
+      "post": {
+        "operationId": "slack_test_connection_api_v1_slack_test_connection_post",
+        "summary": "Slack Test Connection",
+        "tags": [
+          "slack"
+        ]
+      }
+    },
+    "/api/v1/system/alerts": {
+      "get": {
+        "operationId": "system_alerts_api_v1_system_alerts_get",
+        "summary": "System Alerts"
+      }
+    },
+    "/api/v1/system/metrics": {
+      "get": {
+        "operationId": "system_metrics_api_v1_system_metrics_get",
+        "summary": "System Metrics"
+      }
+    },
+    "/api/v1/system/metrics/history": {
+      "get": {
+        "operationId": "system_metrics_history_api_v1_system_metrics_history_get",
+        "summary": "System Metrics History"
+      }
+    },
+    "/api/v1/system/mode": {
+      "get": {
+        "operationId": "get_system_mode_endpoint_api_v1_system_mode_get",
+        "summary": "Get System Mode Endpoint"
+      },
+      "put": {
+        "operationId": "set_system_mode_endpoint_api_v1_system_mode_put",
+        "summary": "Set System Mode Endpoint"
+      }
+    },
+    "/api/v1/system/status": {
+      "get": {
+        "operationId": "system_status_api_v1_system_status_get",
+        "summary": "System Status"
+      }
+    },
+    "/api/v1/system/version": {
+      "get": {
+        "operationId": "system_version_api_v1_system_version_get",
+        "summary": "System Version"
+      }
+    },
+    "/api/v1/tags": {
+      "get": {
+        "operationId": "list_tags_api_v1_tags_get",
+        "summary": "List Tags",
+        "tags": [
+          "tags"
+        ]
+      },
+      "post": {
+        "operationId": "create_tag_api_v1_tags_post",
+        "summary": "Create Tag",
+        "tags": [
+          "tags"
+        ]
+      }
+    },
+    "/api/v1/tags/{tag_id}": {
+      "delete": {
+        "operationId": "delete_tag_api_v1_tags__tag_id__delete",
+        "summary": "Delete Tag",
+        "tags": [
+          "tags"
+        ]
+      },
+      "patch": {
+        "operationId": "update_tag_api_v1_tags__tag_id__patch",
+        "summary": "Update Tag",
+        "tags": [
+          "tags"
+        ]
+      }
+    },
+    "/api/v1/tasks/{task_id}/run-record": {
+      "get": {
+        "operationId": "get_run_record_api_v1_tasks__task_id__run_record_get",
+        "summary": "Get Run Record",
+        "tags": [
+          "run-record"
+        ]
+      }
+    },
+    "/api/v1/tasks/{task_id}/run-record.md": {
+      "get": {
+        "operationId": "get_run_record_markdown_api_v1_tasks__task_id__run_record_md_get",
+        "summary": "Get Run Record Markdown",
+        "tags": [
+          "run-record"
+        ]
+      }
+    },
+    "/api/v1/tasks/{task_id}/run-record/to-vault": {
+      "post": {
+        "operationId": "export_run_record_to_vault_api_v1_tasks__task_id__run_record_to_vault_post",
+        "summary": "Export Run Record To Vault",
+        "tags": [
+          "run-record"
+        ]
+      }
+    },
+    "/api/v1/tasks/{task_id}/thread": {
+      "get": {
+        "operationId": "get_task_thread_api_v1_tasks__task_id__thread_get",
+        "summary": "Get Task Thread",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/v1/tasks/{task_id}/thread/messages": {
+      "post": {
+        "operationId": "post_thread_message_api_v1_tasks__task_id__thread_messages_post",
+        "summary": "Post Thread Message",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/v1/tasks/{task_id}/thread/read": {
+      "post": {
+        "operationId": "mark_thread_read_api_v1_tasks__task_id__thread_read_post",
+        "summary": "Mark Thread Read",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/v1/tasks/{task_id}/transcript": {
+      "get": {
+        "operationId": "get_task_transcript_api_v1_tasks__task_id__transcript_get",
+        "summary": "Get Task Transcript",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/v1/tasks/{task_id}/usage": {
+      "get": {
+        "operationId": "get_task_usage_api_v1_tasks__task_id__usage_get",
+        "summary": "Get Task Usage",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
+    "/api/v1/vault/_admin/rebuild": {
+      "post": {
+        "operationId": "admin_rebuild_index_api_v1_vault__admin_rebuild_post",
+        "summary": "Admin Rebuild Index",
+        "tags": [
+          "vault"
+        ]
+      }
+    },
+    "/api/v1/vault/_trash": {
+      "get": {
+        "operationId": "list_trash_api_v1_vault__trash_get",
+        "summary": "List Trash",
+        "tags": [
+          "vault"
+        ]
+      }
+    },
+    "/api/v1/vault/_trash/{filename}": {
+      "delete": {
+        "operationId": "purge_trash_item_api_v1_vault__trash__filename__delete",
+        "summary": "Purge Trash Item",
+        "tags": [
+          "vault"
+        ]
+      }
+    },
+    "/api/v1/vault/_trash/{filename}/restore": {
+      "post": {
+        "operationId": "restore_trash_api_v1_vault__trash__filename__restore_post",
+        "summary": "Restore Trash",
+        "tags": [
+          "vault"
+        ]
+      }
+    },
+    "/api/v1/vault/attachment/{deliverable_id}": {
+      "get": {
+        "operationId": "serve_vault_attachment_admin_api_v1_vault_attachment__deliverable_id__get",
+        "summary": "Serve Vault Attachment Admin",
+        "tags": [
+          "vault"
+        ]
+      }
+    },
+    "/api/v1/vault/graph": {
+      "get": {
+        "operationId": "get_graph_api_v1_vault_graph_get",
+        "summary": "Get Graph",
+        "tags": [
+          "vault"
+        ]
+      }
+    },
+    "/api/v1/vault/note": {
+      "post": {
+        "operationId": "create_note_api_v1_vault_note_post",
+        "summary": "Create Note",
+        "tags": [
+          "vault"
+        ]
+      }
+    },
+    "/api/v1/vault/note/{path}": {
+      "delete": {
+        "operationId": "delete_note_api_v1_vault_note__path__delete",
+        "summary": "Delete Note",
+        "tags": [
+          "vault"
+        ]
+      },
+      "get": {
+        "operationId": "get_note_api_v1_vault_note__path__get",
+        "summary": "Get Note",
+        "tags": [
+          "vault"
+        ]
+      },
+      "patch": {
+        "operationId": "update_note_api_v1_vault_note__path__patch",
+        "summary": "Update Note",
+        "tags": [
+          "vault"
+        ]
+      }
+    },
+    "/api/v1/vault/note/{path}/backrefs": {
+      "get": {
+        "operationId": "get_note_backrefs_api_v1_vault_note__path__backrefs_get",
+        "summary": "Get Note Backrefs",
+        "tags": [
+          "vault"
+        ]
+      }
+    },
+    "/api/v1/vault/note/{path}/promote": {
+      "patch": {
+        "operationId": "promote_note_api_v1_vault_note__path__promote_patch",
+        "summary": "Promote Note",
+        "tags": [
+          "vault"
+        ]
+      }
+    },
+    "/api/v1/vault/note/{path}/reject": {
+      "patch": {
+        "operationId": "reject_note_api_v1_vault_note__path__reject_patch",
+        "summary": "Reject Note",
+        "tags": [
+          "vault"
+        ]
+      }
+    },
+    "/api/v1/vault/notes": {
+      "get": {
+        "operationId": "list_notes_api_v1_vault_notes_get",
+        "summary": "List Notes",
+        "tags": [
+          "vault"
+        ]
+      }
+    },
+    "/api/v1/vault/related/{task_id}": {
+      "get": {
+        "operationId": "list_task_related_api_v1_vault_related__task_id__get",
+        "summary": "List Task Related",
+        "tags": [
+          "vault"
+        ]
+      }
+    },
+    "/api/v1/vault/search": {
+      "get": {
+        "operationId": "search_notes_api_v1_vault_search_get",
+        "summary": "Search Notes",
+        "tags": [
+          "vault"
+        ]
+      }
+    },
+    "/api/v1/vault/topics": {
+      "get": {
+        "operationId": "get_topics_api_v1_vault_topics_get",
+        "summary": "Get Topics",
+        "tags": [
+          "vault"
+        ]
+      }
+    },
+    "/api/v1/vault/track-view": {
+      "post": {
+        "operationId": "track_view_api_v1_vault_track_view_post",
+        "summary": "Track View",
+        "tags": [
+          "vault"
+        ]
+      }
+    },
+    "/api/v1/voice/display": {
+      "post": {
+        "operationId": "voice_display_api_v1_voice_display_post",
+        "summary": "Voice Display",
+        "tags": [
+          "voice"
+        ]
+      }
+    },
+    "/api/v1/voice/graph-highlight": {
+      "post": {
+        "operationId": "voice_graph_highlight_api_v1_voice_graph_highlight_post",
+        "summary": "Voice Graph Highlight",
+        "tags": [
+          "voice"
+        ]
+      }
+    },
+    "/api/v1/voice/token": {
+      "post": {
+        "operationId": "issue_voice_token_api_v1_voice_token_post",
+        "summary": "Issue Voice Token",
+        "tags": [
+          "voice"
+        ]
+      }
+    },
+    "/api/v1/webhooks/github/{webhook_id}": {
+      "post": {
+        "operationId": "receive_github_webhook_api_v1_webhooks_github__webhook_id__post",
+        "summary": "Receive Github Webhook",
+        "tags": [
+          "webhooks"
+        ]
+      }
+    },
+    "/api/v1/webhooks/local/push": {
+      "post": {
+        "operationId": "receive_local_push_api_v1_webhooks_local_push_post",
+        "summary": "Receive Local Push",
+        "tags": [
+          "webhooks"
+        ]
+      }
+    },
+    "/api/v1/workflows": {
+      "get": {
+        "operationId": "list_workflows_api_v1_workflows_get",
+        "summary": "List Workflows",
+        "tags": [
+          "workflows"
+        ]
+      },
+      "post": {
+        "operationId": "create_workflow_api_v1_workflows_post",
+        "summary": "Create Workflow",
+        "tags": [
+          "workflows"
+        ]
+      }
+    },
+    "/api/v1/workflows/runs/{run_id}": {
+      "get": {
+        "operationId": "get_workflow_run_detail_api_v1_workflows_runs__run_id__get",
+        "summary": "Get Workflow Run Detail",
+        "tags": [
+          "workflows"
+        ]
+      }
+    },
+    "/api/v1/workflows/runs/{run_id}/pause": {
+      "post": {
+        "operationId": "pause_workflow_run_api_v1_workflows_runs__run_id__pause_post",
+        "summary": "Pause Workflow Run",
+        "tags": [
+          "workflows"
+        ]
+      }
+    },
+    "/api/v1/workflows/runs/{run_id}/resume": {
+      "post": {
+        "operationId": "resume_workflow_run_api_v1_workflows_runs__run_id__resume_post",
+        "summary": "Resume Workflow Run",
+        "tags": [
+          "workflows"
+        ]
+      }
+    },
+    "/api/v1/workflows/runs/{run_id}/stop": {
+      "post": {
+        "operationId": "stop_workflow_run_api_v1_workflows_runs__run_id__stop_post",
+        "summary": "Stop Workflow Run",
+        "tags": [
+          "workflows"
+        ]
+      }
+    },
+    "/api/v1/workflows/stream": {
+      "get": {
+        "operationId": "workflows_stream_api_v1_workflows_stream_get",
+        "summary": "Workflows Stream",
+        "tags": [
+          "workflows"
+        ]
+      }
+    },
+    "/api/v1/workflows/{workflow_id}": {
+      "delete": {
+        "operationId": "archive_workflow_api_v1_workflows__workflow_id__delete",
+        "summary": "Archive Workflow",
+        "tags": [
+          "workflows"
+        ]
+      },
+      "get": {
+        "operationId": "get_workflow_api_v1_workflows__workflow_id__get",
+        "summary": "Get Workflow",
+        "tags": [
+          "workflows"
+        ]
+      },
+      "patch": {
+        "operationId": "update_workflow_api_v1_workflows__workflow_id__patch",
+        "summary": "Update Workflow",
+        "tags": [
+          "workflows"
+        ]
+      }
+    },
+    "/api/v1/workflows/{workflow_id}/rollback/{version_number}": {
+      "post": {
+        "operationId": "rollback_workflow_api_v1_workflows__workflow_id__rollback__version_number__post",
+        "summary": "Rollback Workflow",
+        "tags": [
+          "workflows"
+        ]
+      }
+    },
+    "/api/v1/workflows/{workflow_id}/run": {
+      "post": {
+        "operationId": "start_workflow_run_api_v1_workflows__workflow_id__run_post",
+        "summary": "Start Workflow Run",
+        "tags": [
+          "workflows"
+        ]
+      }
+    },
+    "/api/v1/workflows/{workflow_id}/runs": {
+      "get": {
+        "operationId": "get_workflow_runs_api_v1_workflows__workflow_id__runs_get",
+        "summary": "Get Workflow Runs",
+        "tags": [
+          "workflows"
+        ]
+      }
+    },
+    "/api/v1/workflows/{workflow_id}/versions": {
+      "get": {
+        "operationId": "get_workflow_versions_api_v1_workflows__workflow_id__versions_get",
+        "summary": "Get Workflow Versions",
+        "tags": [
+          "workflows"
+        ]
+      },
+      "post": {
+        "operationId": "create_workflow_version_api_v1_workflows__workflow_id__versions_post",
+        "summary": "Create Workflow Version",
+        "tags": [
+          "workflows"
+        ]
+      }
+    },
+    "/api/v1/workflows/{workflow_id}/versions/{version_number}": {
+      "delete": {
+        "operationId": "delete_workflow_version_api_v1_workflows__workflow_id__versions__version_number__delete",
+        "summary": "Delete Workflow Version",
+        "tags": [
+          "workflows"
+        ]
+      }
+    },
+    "/health": {
+      "get": {
+        "operationId": "health_health_get",
+        "summary": "Health"
+      }
+    }
+  }
+}
