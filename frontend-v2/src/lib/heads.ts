@@ -197,7 +197,9 @@ export function headStateKey(state: HeadState): string {
 /** One sentence for why a run ended as failed/stopped — `heads.failReason.<code>`. */
 const FAIL_REASONS = new Set([
   "stopped",
-  "time_limit",
+  "time_limit", // runs from before the progress watchdog
+  "no_progress",
+  "hard_limit",
   "no_pr",
   "run_record_missing",
   "not_picked_up",

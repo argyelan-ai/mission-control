@@ -88,6 +88,7 @@ async def test_start_writes_run_folder_spool_and_holds_the_task(auth_client, hea
     spec = json.loads((folder / "spec.json").read_text())
     assert spec["base_url"] == EP and spec["model"] == "glm"
     assert spec["box_keys"] == [str(box.id)]
+    assert spec["locality"] == "local"  # token harvester: local vs. cloud share of head usage
     assert spec["repo_full_name"] == "owner/demo" and spec["branch"].startswith("mc-head/")
     from app.services.heads.launcher import SECRETISH
 
@@ -100,6 +101,10 @@ async def test_start_writes_run_folder_spool_and_holds_the_task(auth_client, hea
     assert "Make it deterministic." in (folder / "job.md").read_text()
     proc = (folder / "procedure.md").read_text()
     assert "{{" not in proc and run_id in proc and str(folder / "wt") in proc
+    # Progress watchdog (local pair): stopped after 20 min without progress,
+    # 8 h emergency brake — both stated in the procedure the head reads.
+    assert spec["no_progress_s"] == 20 * 60 and spec["time_limit_s"] == 8 * 3600
+    assert "20 min" in proc and "8 h" in proc
     spool = json.loads((heads_root / "spool" / f"{run_id}.start.json").read_text())
     assert spool == {"action": "start", "run_id": run_id}
     fresh = await _task(task.id)

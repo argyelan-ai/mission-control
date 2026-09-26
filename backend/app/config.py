@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -641,8 +641,17 @@ class Settings(BaseSettings):
     heads_enabled: bool = False
     heads_root: Path = Path(os.environ.get("HOME_HOST", str(Path.home()))) / ".mc" / "heads"
     heads_sync_interval: int = 60
-    heads_time_limit_local_s: int = 7200
-    heads_time_limit_cloud_s: int = 3600
+    # Progress watchdog (spec §6.5): mc-head stops a head (reason
+    # "no_progress") when neither head.log, step.txt, work.log nor any worktree file
+    # changed for this many minutes — long coding jobs may run as long as
+    # they move. The hard limit is only an emergency brake (reason
+    # "hard_limit"): generous locally, tighter on cloud runtimes (cost).
+    # The night-shift "blocked" notice (15 min quiet, night.BLOCKED_SILENT_S)
+    # reads the same signal, so with the default it warns before the stop;
+    # values below 16 stop a head before that warning (see .env.example).
+    heads_no_progress_min: int = Field(default=20, ge=1, le=1440)
+    heads_hard_limit_local_s: int = Field(default=8 * 3600, ge=60, le=86400)
+    heads_hard_limit_cloud_s: int = Field(default=2 * 3600, ge=60, le=86400)
 
     # Night shift (ROADMAP E2): tasks marked "run tonight" start one after
     # another as heads inside a time window. These are the env DEFAULTS; the

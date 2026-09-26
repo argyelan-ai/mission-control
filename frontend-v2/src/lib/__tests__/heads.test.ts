@@ -8,6 +8,7 @@ import en from "../../../messages/en.json";
 import de from "../../../messages/de.json";
 import {
   chooseInitialPair,
+  defaultRestartMode,
   failReasonKey,
   headErrorKey,
   pairKey,
@@ -53,6 +54,24 @@ describe("heads i18n (B1)", () => {
     for (const c of codes) expect(typeof resolve(en, `heads.${pairReasonKey(c)}`)).toBe("string");
     for (const r of ["stopped", "time_limit", "no_pr", "exit_3", "weird", null, "gh_identity_missing"]) {
       expect(typeof resolve(en, `heads.${failReasonKey(r).key}`)).toBe("string");
+    }
+  });
+});
+
+describe("watchdog stop reasons", () => {
+  it("no_progress and hard_limit have their own sentence in EN and DE", () => {
+    for (const r of ["no_progress", "hard_limit", "time_limit"]) {
+      const { key } = failReasonKey(r);
+      expect(key).toBe(`failReason.${r}`);
+      expect(typeof resolve(en, `heads.${key}`)).toBe("string");
+      expect(typeof resolve(de, `heads.${key}`)).toBe("string");
+    }
+    expect(resolve(de, "heads.failReason.no_progress")).not.toBe(resolve(en, "heads.failReason.no_progress"));
+  });
+
+  it("a watchdog stop keeps the branch — restart continues by default", () => {
+    for (const reason of ["no_progress", "hard_limit"]) {
+      expect(defaultRestartMode({ reason, started_at: "2026-09-23T10:00:00Z" })).toBe("continue");
     }
   });
 });

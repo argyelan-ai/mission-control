@@ -197,3 +197,46 @@ def test_scratch_flag_is_ignored_for_an_unlisted_repo(tmp_path, monkeypatch):
 def test_scratch_flag_must_be_true_not_truthy(tmp_path, monkeypatch):
     assert _scratch_run(tmp_path, monkeypatch, listed=True, flag="yes").scratch_branch_pushed is False
     assert _scratch_run(tmp_path / "b", monkeypatch, listed=True, flag=None).scratch_branch_pushed is False
+
+
+def test_config_defaults_for_the_progress_watchdog():
+    """Operator defaults (spec §6.5): 20 min without progress stops a head;
+    the hard limit is an emergency brake — 8 h local, 2 h cloud (cost)."""
+    from app.config import Settings
+
+    fields = Settings.model_fields
+    assert fields["heads_no_progress_min"].default == 20
+    assert fields["heads_hard_limit_local_s"].default == 8 * 3600
+    assert fields["heads_hard_limit_cloud_s"].default == 2 * 3600
+
+
+def test_backend_and_host_watchdog_defaults_agree():
+    from app.config import Settings
+    from tests.test_mc_head_parity import _load_mc_head
+
+    assert _load_mc_head().DEFAULT_NO_PROGRESS_S == Settings.model_fields["heads_no_progress_min"].default * 60
+
+
+def test_silence_is_measured_from_the_last_progress_not_only_output(tmp_path, monkeypatch):
+    """derive_for_run: last_progress_at (output OR worktree change, written by
+    the wrapper) wins over last_output_at — the same signal the watchdog uses."""
+    import json as _json
+
+    from app.config import settings
+    from app.services.heads import files
+    from app.services.heads.state import derive_for_run
+
+    monkeypatch.setattr(settings, "heads_root", tmp_path)
+    run_id = "11111111-1111-4111-8111-111111111111"
+    wdir = tmp_path / run_id / ".wrapper"
+    wdir.mkdir(parents=True)
+    now = __import__("time").time()
+    iso = lambda ts: __import__("datetime").datetime.fromtimestamp(ts, __import__("datetime").timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")  # noqa: E731
+    (tmp_path / run_id / "spec.json").write_text(_json.dumps({"run_id": run_id, "created_at": iso(now - 3600)}))
+    (wdir / "status.json").write_text(_json.dumps({"phase": "running", "last_output_at": iso(now - 1800),
+                                                   "last_progress_at": iso(now - 120)}))
+    (wdir / "heartbeat").touch()
+    run = files.load_run(run_id)
+    out = derive_for_run(run, now)
+    assert out["state"] == "running"
+    assert 100 <= out["silent_s"] <= 140

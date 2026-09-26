@@ -3,6 +3,7 @@ share), blocked notices and the morning report."""
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -21,7 +22,7 @@ from app.services.heads import engine, night, night_store
 from app.services.heads.night_shift import tick
 from app.services.heads.night_store import HOLD_REASON, NightMark
 from tests.conftest import test_engine
-from tests.heads_backend_helpers import BOX, heads_root, make_run  # noqa: F401
+from tests.heads_backend_helpers import BOX, heads_root, iso, make_run  # noqa: F401
 
 EP = "http://192.0.2.10:8000/v1"
 
@@ -424,6 +425,30 @@ async def test_head_without_heartbeat_for_15_min_is_reported(heads_root, make_bo
     sent = Sent()
     assert (await _tick(send=sent)).notices == [f"{task.id}:silent"]
     assert sent.texts[0].startswith("Night shift: head silent for 16 min — First job")
+
+
+async def test_worktree_progress_keeps_a_quiet_head_from_being_blocked(heads_root, make_board, make_task):
+    """Same signal as the host watchdog: a head that prints nothing but keeps
+    changing files (last_progress_at) is working, not blocked."""
+    (task,) = await _world(make_board, make_task)
+    now = time.time()
+    run_id = make_run(heads_root, task_id=str(task.id), heartbeat_age=10,
+                      status={"phase": "running", "started_at": "x",
+                              "last_output_at": iso(now - 40 * 60), "last_progress_at": iso(now - 60)})
+    _mark(task, order=1, run_id=run_id, night="2099-01-01")
+    assert (await _tick()).notices == []
+
+
+async def test_no_progress_for_15_min_is_reported_even_with_a_heartbeat(heads_root, make_board, make_task):
+    (task,) = await _world(make_board, make_task)
+    now = time.time()
+    run_id = make_run(heads_root, task_id=str(task.id), heartbeat_age=10,
+                      status={"phase": "running", "started_at": "x",
+                              "last_output_at": iso(now - 40 * 60), "last_progress_at": iso(now - 17 * 60)})
+    _mark(task, order=1, run_id=run_id, night="2099-01-01")
+    sent = Sent()
+    assert (await _tick(send=sent)).notices == [f"{task.id}:silent"]
+    assert sent.texts[0].startswith("Night shift: head silent for 17 min — First job")
 
 
 async def test_healthy_head_is_not_reported(heads_root, make_board, make_task):

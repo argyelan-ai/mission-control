@@ -106,6 +106,8 @@ describe("HeadStateCard — one main action per state (B5)", () => {
 
   it.each([
     ["failed", "time_limit", "Time limit reached. The branch is kept."],
+    ["failed", "no_progress", "No progress for too long (no output, no step, no file change) — stopped. The branch is kept."],
+    ["failed", "hard_limit", "Emergency brake: the hard time limit was reached. The branch is kept."],
     ["failed", "exit_2", "The harness ended with exit code 2."],
     ["stopped", "stopped", "Stopped by you. The branch is kept."],
   ] as const)("%s (%s) → reason sentence + Restart with …", (state, reason, sentence) => {

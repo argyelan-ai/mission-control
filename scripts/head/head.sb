@@ -3,6 +3,9 @@
 ;; USER_TMP (the per-user temp root, /private/var/folders on macOS),
 ;; SCRATCH_ORIGIN (required; empty for every real repo — see below).
 ;; Order matters: later rules win.
+;; kz (the coherence tool; pre-push hook + `kz brief` at start) needs no grant
+;; of its own: it only reads the worktree and its install and runs git, which
+;; the default rules allow. Its install is not writable (test_mc_head_sandbox).
 (version 1)
 (allow default)
 
@@ -17,9 +20,11 @@
   (subpath (param "CLONE_GIT"))
   (subpath (string-append (param "RUN") "/home"))
   (subpath (string-append (param "RUN") "/claude-config"))
+  (subpath (string-append (param "RUN") "/omp-sessions"))
   (literal (string-append (param "RUN") "/step.txt"))
   (literal (string-append (param "RUN") "/question.md"))
   (literal (string-append (param "RUN") "/head.log"))
+  (literal (string-append (param "RUN") "/work.log"))
   (literal (string-append (param "RUN") "/run-record.md"))
   (subpath "/private/tmp")
   (subpath (param "USER_TMP"))

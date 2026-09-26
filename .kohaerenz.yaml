@@ -1,0 +1,12 @@
+# Roter Faden: config for the coherence tool `kz` (kohaerenz).
+# Stage 0: link check only. Inventory adapters (fastapi, nextjs-app), the
+# product map and the rule register follow in stage E3.
+version: 1
+stufe: 0
+tool_version: 0.1.0
+typ: fastapi
+main_branch: origin/main
+adapters: []
+entry_docs: [AGENTS.md, CLAUDE.md]
+# Private overlay, gitignored on purpose (AGENTS.md says "if it exists").
+links_ignore: [CLAUDE.local.md]

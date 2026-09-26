@@ -13,7 +13,9 @@ permanent agent. Nobody can type into your session while you run.
 
 - Job: `{{run_dir}}/job.md`
 - Worktree: `{{worktree}}` · branch `{{branch}}` (from `origin/{{base_branch}}`)
-- Pair: {{harness}} × {{runtime}} · time limit {{time_limit}}
+- Pair: {{harness}} × {{runtime}}
+- Watchdog: the launcher stops you after **{{no_progress}} without progress** (no change to
+  `step.txt`, `work.log`, your output or any file in the worktree) · hard limit {{time_limit}}
 - Run folder (status files): `{{run_dir}}`
 - Run record: `{{run_dir}}/run-record.md` (exactly this path — the launcher files it into the vault
   as `{{vault_job_dir}}/run-record.md` after you end)
@@ -22,7 +24,8 @@ permanent agent. Nobody can type into your session while you run.
 
 | File | When | Content |
 |---|---|---|
-| `{{run_dir}}/step.txt` | on every step change (0–7) | one line: `step 4/7 sabotage probe · waiting for: nothing` |
+| `{{run_dir}}/step.txt` | on every step change (0–7), and at least every 10 min between long pieces of work | one line: `step 4/7 sabotage probe · waiting for: nothing` |
+| `{{run_dir}}/work.log` | while one command runs long | run every command that can take more than 10 min (full test suite, big build, download, install) as `<command> 2>&1 \| tee -a {{run_dir}}/work.log` — you cannot touch `step.txt` while a tool call runs, and your own output only appears at the end, so this file is your sign of life |
 | `{{run_dir}}/question.md` | only when you must ask (see "Ask only about") | 1 sentence question + your recommendation + what happens without an answer; then end your run (the launcher sees the file — no exit code needed) |
 | `{{run_dir}}/run-record.md` | created in step 0, finished in step 7 | see template below |
 
@@ -34,10 +37,14 @@ Do not write anywhere else in `{{run_dir}}`. The launcher writes
 0. **Check the start, then write the context brief.** `git rev-parse --show-toplevel`
    is the worktree, `git branch --show-current` is not `main`. `git fetch origin`
    and note `origin/{{base_branch}}` sha. Read the job and the repo rules
-   (`AGENTS.md`, `CLAUDE.md`, contributor docs if present). Create the run
-   record now with `Status: running`. Then fill its **Context brief** section
-   (max. 60 lines, before any code change; the repo on `origin/{{base_branch}}`
-   is the source, never memory or chat):
+   (`AGENTS.md`, `CLAUDE.md`, contributor docs if present). The job ends with
+   a section **Context brief (kz)**, written by the launcher with `kz brief`
+   (the coherence tool) before you started: read it first — rules, rejected
+   ideas and existing code it names are facts to check, not optional reading
+   (or it says "kz brief unavailable: …"; copy that line into the run record).
+   Create the run record now with `Status: running`. Then fill its **Context
+   brief** section (max. 60 lines, before any code change; build on the kz
+   brief; the repo on `origin/{{base_branch}}` is the source, never memory or chat):
    - **Does it already exist?** `git grep` for the endpoint, command, table,
      setting or component the job asks for — name what you found.
    - **Which decision applies?** Matching ADRs / principles / rejected or
@@ -60,8 +67,12 @@ Do not write anywhere else in `{{run_dir}}`. The launcher writes
    On FAILED fix and use a *new* reviewer; after 2 failed rounds abort.
    If your harness has no helpers: do a written self-review against the
    checklist below and say so in the run record ("review: self, no helper available").
-6. **Pull request.** `git push -u origin {{branch}}` (never `main`), then
-   `gh pr create` with the run-record summary in the body.
+6. **Pull request.** If the repo has a `.kohaerenz.yaml`, run `kz check` first
+   and paste its output into the run record. Red (exit 1) means: fix it, or
+   explain every red line in the PR under **Known limits**. The push hook runs
+   `kz check --fast` too and refuses a red push. No `kz` on the host → write
+   "kz check unavailable: <reason>". Then `git push -u origin {{branch}}`
+   (never `main`) and `gh pr create` with the run-record summary in the body.
    **Never merge, never enable auto-merge, never deploy.** Never use
    `gh pr merge --admin` or any other way around required checks or the merge
    queue; if a bypass happened anyway, write `bypass: <n> — <why>` in the run
@@ -119,7 +130,7 @@ rephrased. Note "blocked: …" in the run record and continue without it, or abo
 
 ## Abort — clean, never silent
 
-Abort when: time is almost up · 2 review rounds failed · the same attempt
+Abort when: the hard limit is almost reached · 2 review rounds failed · the same attempt
 failed twice · a question is needed. Then: commit and push the work to
 `{{branch}}`, open a draft PR if useful, run record `Status: failed` with
 reason, what is done, what is missing, the next step. Print the word **ABORT**.
@@ -155,6 +166,7 @@ Status: <running | passed | failed>
 - Pair: {{harness}} × {{runtime}} · start <time> · end <time>
 
 ## Context brief (max. 60 lines, written in step 0)
+- kz brief: <used — what it named | "kz brief unavailable: …">
 - Already exists: <paths found by git grep | nothing found — searched for …>
 - Decisions that apply: <ADR / principle / rejected idea | none found — searched …>
 - User flow: before <…> → this change → after <…> · missing button / useless part: <none | …>
@@ -168,6 +180,7 @@ Status: <running | passed | failed>
 - Failing test before: `<command>` → <key line>
 - Green after: `<command>` → <e.g. "42 passed">
 - Sabotage check: <what was broken> → red · restored → green
+- kz check: <pasted output, last line e.g. "OK (4 skipped)" | red lines + "Known limits" in the PR | no .kohaerenz.yaml | unavailable: …>
 - Review: <fresh helper PASSED/FAILED | self-review> — <1 sentence, incl. the three reviewer questions>
 - Bypass: <0 | n — why> (admin merge, skipped check, push around the queue)
 - UI (only for visible changes): <picture paths · design:budget findings | "not measured — why">

@@ -19,6 +19,7 @@ import Link from "next/link";
 import { Brain, Check, ChevronRight, Clock, Paperclip, Search, Send, X, Zap } from "lucide-react";
 import { api } from "@/lib/api";
 import { C, LANE, alpha } from "@/lib/colors";
+import { STATUS_LABEL_KEY } from "@/lib/taskDetail/statusLabels";
 import type { Agent, Project, Task, TaskStatus } from "@/lib/types";
 import { ProjectReferencesDialog } from "./ProjectReferencesDialog";
 import { EntityIcon } from "@/components/shared/EntityIcon";
@@ -38,18 +39,6 @@ const STATUS_ORDER: TaskStatus[] = [
   "done",
 ];
 
-// Message keys in the tasks.* namespace — t() at the render site.
-const STATUS_LABEL_KEY: Record<TaskStatus, string> = {
-  inbox: "statusInbox",
-  in_progress: "statusInProgress",
-  review: "statusReview",
-  user_test: "statusUserTest",
-  waiting: "statusWaiting",
-  blocked: "statusBlocked",
-  failed: "statusFailed",
-  aborted: "statusAborted",
-  done: "statusDone",
-};
 
 function StatusDot({ status }: { status: TaskStatus }) {
   const icons: Partial<Record<TaskStatus, React.ReactNode>> = {

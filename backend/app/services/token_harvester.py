@@ -13,6 +13,10 @@ Data sources:
     .../prompt_history.jsonl for task_id, see _harvest_grok)
   - ~/.hermes/state.db (Hermes host harness — sqlite session ledger, never
     opened live; copied to a temp dir first, see _harvest_hermes)
+  - <heads_root>/<run_id>/omp-sessions/*.jsonl and
+    <heads_root>/<run_id>/claude-config/projects/**/*.jsonl (head runs,
+    docs/specs/head-launcher.md — attributed from the run's spec.json, see
+    _harvest_heads)
 
 Dedup key: top-level `uuid` (UNIQUE) for Claude Code lines. message.id has
 1042+ collisions — NEVER dedupe on that! omp lines carry no top-level uuid at
@@ -737,6 +741,7 @@ async def run_harvest(
     grok_log_path: str | None = None,
     grok_sessions_path: str | None = None,
     hermes_state_db_path: str | None = None,
+    heads_root: str | None = None,
 ) -> dict[str, int]:
     """Scans all JSONL files, parses assistant lines, and inserts events.
 
@@ -752,6 +757,7 @@ async def run_harvest(
       settings.grok_harvest_path / settings.grok_sessions_path, expanduser)
     - hermes_state_db_path: Hermes sqlite ledger (default:
       settings.hermes_state_db_path, expanduser)
+    - heads_root: head run folders (default: settings.heads_root)
 
     Returns:
         {"files_scanned": N, "new_events": M, "skipped_private": K,
@@ -782,6 +788,9 @@ async def run_harvest(
         hermes_state_db_path = _expand_harvest_path(
             getattr(app_settings, "hermes_state_db_path", "~/.hermes/state.db")
         )
+
+    if heads_root is None:
+        heads_root = str(getattr(app_settings, "heads_root", _host_home() / ".mc" / "heads"))
 
     if agent_slug_map is None:
         # Default: attribution from the agents table (slug = name-based)
@@ -922,6 +931,22 @@ async def run_harvest(
         await session.rollback()
         stats["source_errors"] += 1
 
+    # ── Head runs: <heads_root>/<run_id>/{omp-sessions,claude-config} ──────
+    try:
+        if Path(heads_root).is_dir():
+            await _harvest_heads(
+                session=session,
+                heads_root=Path(heads_root),
+                all_prices=all_prices,
+                state_map=state_map,
+                stats=stats,
+            )
+        await session.commit()
+    except Exception as e:
+        logger.error("run_harvest: heads source failed: %s", e)
+        await session.rollback()
+        stats["source_errors"] += 1
+
     logger.info(
         "run_harvest: files=%d new=%d skipped_private=%d backfilled_task_id=%d "
         "grok_skipped_no_summary=%d hermes_sessions_scanned=%d source_errors=%d",
@@ -947,12 +972,15 @@ async def _process_jsonl_file(
     stats: dict[str, int],
     task_workspace_map: dict[str, list[dict[str, Any]]] | None = None,
     cwd_translate_slug: str | None = None,
+    head: dict[str, Any] | None = None,
 ) -> None:
     """Processes a single JSONL file (offset resume, batch insert).
 
     cwd_translate_slug: agent slug for container→host cwd rewrite (agent
     paths only — is_boss_path lines already carry a host-native cwd and
     never get translated).
+    head: attribution of a head run ({task_id, head_run_id, locality}) —
+    taken as given; no cwd matching, no backfill.
     """
     stats["files_scanned"] += 1
 
@@ -1000,6 +1028,8 @@ async def _process_jsonl_file(
     task_workspace_map = task_workspace_map or {}
 
     def _resolve_task_for_rec(rec: dict[str, Any], ts: datetime) -> Any | None:
+        if head is not None:
+            return head["task_id"]
         norm_cwd = _normalize_workspace_path(rec.get("cwd", ""))
         candidates = task_workspace_map.get(norm_cwd)
         if not candidates:
@@ -1056,6 +1086,8 @@ async def _process_jsonl_file(
             cost_usd=cost_usd,
             ts=ts,
             source_file=path,
+            head_run_id=head["head_run_id"] if head else None,
+            locality=head["locality"] if head else None,
         )
 
         # Idempotent insert: UNIQUE constraint as backstop (race condition
@@ -1095,6 +1127,105 @@ async def _process_jsonl_file(
     # Update harvest state
     total_lines = _count_lines(path)
     await _update_harvest_state(session, state_map, path, current_mtime, total_lines)
+
+
+_RUN_ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+_HEAD_TRANSCRIPT_GLOBS = {
+    # mc-head passes --session-dir <run>/omp-sessions (scripts/head/mc-head)
+    "omp": "omp-sessions/**/*.jsonl",
+    # mc-head sets CLAUDE_CONFIG_DIR=<run>/claude-config; subagents included
+    "claude": "claude-config/projects/**/*.jsonl",
+}
+
+
+def _read_head_spec(run_dir: Path) -> dict[str, Any] | None:
+    """spec.json of a head run, or None when it is missing or unreadable."""
+    try:
+        spec = json.loads((run_dir / "spec.json").read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(spec, dict) or spec.get("run_id") != run_dir.name:
+        return None
+    return spec
+
+
+async def _harvest_heads(
+    session: AsyncSession,
+    heads_root: Path,
+    all_prices: list[ModelPrice],
+    state_map: dict[str, ModelUsageHarvestState],
+    stats: dict[str, int],
+) -> None:
+    """Head runs (docs/specs/head-launcher.md) — one folder per run.
+
+    Attribution comes from spec.json, written by the backend before the
+    head starts: task_id (only if the task still exists — never a dangling
+    FK), head_run_id = the folder name, harness ``head-<harness>``, locality
+    from ``spec.locality`` or, for runs started before that field existed,
+    from the runtime row (same rule as the pair table). No agent: heads are
+    not persistent agents. Only the two transcript folders mc-head gives a
+    head are read — they sit under ``<heads_root>``, which no other source
+    scans, and message_uuid stays the dedup backstop.
+    """
+    from app.models.runtime import Runtime
+    from app.models.task import Task
+    from app.services.heads.pairs import is_local
+
+    runs: list[tuple[Path, dict[str, Any]]] = []
+    for run_dir in sorted(heads_root.iterdir()):
+        if not _RUN_ID_RE.match(run_dir.name) or not run_dir.is_dir():
+            continue
+        spec = _read_head_spec(run_dir)
+        if spec is None or spec.get("harness") not in _HEAD_TRANSCRIPT_GLOBS:
+            continue
+        runs.append((run_dir, spec))
+    if not runs:
+        return
+
+    task_ids: set[uuid.UUID] = set()
+    for _, spec in runs:
+        try:
+            task_ids.add(uuid.UUID(str(spec.get("task_id"))))
+        except ValueError:
+            pass
+    existing_tasks: set[uuid.UUID] = set()
+    if task_ids:
+        result = await session.exec(select(Task.id).where(Task.id.in_(task_ids)))
+        existing_tasks = set(result.all())
+
+    runtime_locality: dict[str, str] = {}
+    slugs = {s.get("runtime_slug") for _, s in runs if s.get("locality") not in ("local", "cloud")}
+    slugs.discard(None)
+    if slugs:
+        result = await session.exec(select(Runtime).where(Runtime.slug.in_(slugs)))
+        runtime_locality = {rt.slug: ("local" if is_local(rt) else "cloud") for rt in result.all()}
+
+    for run_dir, spec in runs:
+        try:
+            task_id = uuid.UUID(str(spec.get("task_id")))
+        except ValueError:
+            task_id = None
+        locality = spec.get("locality")
+        if locality not in ("local", "cloud"):
+            locality = runtime_locality.get(spec.get("runtime_slug"))
+        head = {
+            "task_id": task_id if task_id in existing_tasks else None,
+            "head_run_id": run_dir.name,
+            "locality": locality,
+        }
+        harness = f"head-{spec['harness']}"
+        for jsonl_path in sorted(run_dir.glob(_HEAD_TRANSCRIPT_GLOBS[spec["harness"]])):
+            await _process_jsonl_file(
+                session=session,
+                path=str(jsonl_path),
+                agent_id=None,
+                harness=harness,
+                is_boss_path=False,
+                all_prices=all_prices,
+                state_map=state_map,
+                stats=stats,
+                head=head,
+            )
 
 
 async def _update_harvest_state(

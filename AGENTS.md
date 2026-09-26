@@ -78,8 +78,8 @@ Every review (self-review, fresh reviewer, PR review) answers these, with eviden
   `backend/tests/test_alembic_chain_integrity.py`); check for a colliding revision first.
 - **Templates are the source** for agent files (ADR-006): edit `backend/templates/`,
   never patch rendered output or DB copies.
-- **Runtime switches** go through `services/agent_runtime_switch.py`; never set
-  `agent.runtime_id` directly. Hosts resolve via `services/host_resolver.py`.
+- **Runtime switches** go through `backend/app/services/agent_runtime_switch.py`; never set
+  `agent.runtime_id` directly. Hosts resolve via `backend/app/services/host_resolver.py`.
 - **Secrets vs credentials** (ADR-033): system tokens in `secrets`, task logins in
   `credentials` — referenced by id, never inline.
 - **FastAPI routes:** static segments (`/tasks/reorder`) before parameterised ones (`/tasks/{id}`).
