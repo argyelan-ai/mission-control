@@ -205,3 +205,28 @@ def test_pre_push_only_warns_when_kz_is_missing(env):
     res = _commit_and_push(wt, with_config=True)
     assert res.returncode == 0, res.stderr
     assert "kz not found" in res.stderr
+
+
+# ── kz for the head itself (step 6: kz check before the PR) ─────────────
+
+
+def test_head_reaches_kz_through_its_bin_shim(env):
+    """The head's PATH has no ~/.local/bin: a kz shim in <run>/bin forwards."""
+    kz = fake_kz(env["tmp"], 'echo "fake kz $*"')
+    _, run = _start(env, str(kz))
+    res = subprocess.run([str(run / "bin" / "kz"), "check"], capture_output=True, text=True)
+    assert res.returncode == 0 and "fake kz check" in res.stdout
+
+
+def test_kz_shim_says_unavailable_when_kz_is_missing(env):
+    _, run = _start(env, "/nonexistent/kz")
+    res = subprocess.run([str(run / "bin" / "kz"), "check"], capture_output=True, text=True)
+    assert res.returncode == 127 and "kz check unavailable" in res.stderr
+
+
+def test_claude_head_may_run_kz_check():
+    """Claude heads run with -p: a Bash command outside the allow list is denied."""
+    import json
+
+    settings = json.loads((MC_HEAD.parent / "claude-head-settings.json").read_text())
+    assert "Bash(kz check*)" in settings["permissions"]["allow"]

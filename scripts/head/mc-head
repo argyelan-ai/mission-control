@@ -720,6 +720,17 @@ exit 126
 """
 
 
+KZ_SHIM = """#!/bin/sh
+# mc-head: the coherence tool kz for the head (its PATH has no ~/.local/bin).
+exec {real} "$@"
+"""
+
+KZ_MISSING_SHIM = """#!/bin/sh
+echo "mc-head: kz check unavailable: kz is not installed on this host." >&2
+exit 127
+"""
+
+
 def write_shims(run: Path) -> Path:
     bdir = run / "bin"
     bdir.mkdir(parents=True, exist_ok=True)
@@ -729,6 +740,10 @@ def write_shims(run: Path) -> Path:
         p.chmod(0o755)
     p = bdir / "gh"
     p.write_text(GH_SHIM.format(real=shlex.quote(gh_bin())))
+    p.chmod(0o755)
+    kz = kz_bin()
+    p = bdir / "kz"
+    p.write_text(KZ_SHIM.format(real=shlex.quote(kz)) if kz else KZ_MISSING_SHIM)
     p.chmod(0o755)
     return bdir
 
