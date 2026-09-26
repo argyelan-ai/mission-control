@@ -360,7 +360,10 @@
       "showLast": "Show last {count}",
       "ago": "{age} ago",
       "resultFallback": "No result summary — latest agent note:"
-    }
+    },
+    "pipelineTitle": "Pipeline",
+    "pipelineFailedCount": "{count} failed",
+    "pipelineEmpty": "No active tasks."
   },
   "agents": {
     "title": "Agents",
