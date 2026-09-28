@@ -3,6 +3,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useKeyboardInset } from "@/hooks/useKeyboardInset";
+import { usePageBeacon } from "@/hooks/usePageBeacon";
 import { startThemeSync } from "@/lib/theme";
 
 export function Providers({ children }: { children: React.ReactNode }) {
@@ -10,6 +11,8 @@ export function Providers({ children }: { children: React.ReactNode }) {
   useKeyboardInset();
   // Theme (ADR-087): follow OS switches ("system") and other tabs.
   useEffect(() => startThemeSync(), []);
+  // E0 page usage: one counter per route pattern and day, no user data.
+  usePageBeacon();
   const [queryClient] = useState(
     () =>
       new QueryClient({
