@@ -178,6 +178,11 @@ features:
       # (CostPricesTab).
       - "* /api/v1/model-prices"
       - "* /api/v1/model-prices/*"
+      # Channel runtime settings + connection tests (SlackTab per-function
+      # toggles, TelegramTab connection check and per-key saves, Slack
+      # connection test).
+      - "* /api/v1/channels/*"
+      - "* /api/v1/slack/*"
   - id: F-memory
     name: "Memory: the vault"
     ui: {route: [/memory, /memory/graph]}
@@ -209,8 +214,31 @@ features:
       # /api/v1/agents/* is claimed by F-agents below.
       - "* /api/v1/agents/*/chat/*"
       - "* /api/v1/agents/*/terminal-events/stream"
+      # Group chat (ADR-075) on the sessions page: list/create/config,
+      # members, messages + SSE stream, rounds, result document, memorize,
+      # start/pause/stop, archive (GroupChatView, CreateGroupModal,
+      # FinishGroupDialog, ResultDocPanel, useGroupStream).
+      - "* /api/v1/groups"
+      - "* /api/v1/groups/*"
+      # Session pickers of the sidebar: docker agents (container liveness)
+      # and host agents (heartbeat liveness).
+      - "* /api/v1/docker-sessions/agents"
+      - "* /api/v1/host-sessions/agents"
+      # Browser live panel (BrowserLiveView: target list + CDP screencast WS).
+      - "* /api/v1/browser-live/*"
     status: frozen
-    source: "ADR-085 section 4 (build stop); ROADMAP: candidate for removal"
+    source: "ADR-085 section 4 (build stop); ROADMAP E5 (group chat deleted together with the sessions chat); ROADMAP: candidate for removal"
+  - id: F-voice
+    name: "Voice overlay (Jarvis)"
+    # Global overlay (sidebar mic button, VoiceWidget/VoiceDrawer) — no route
+    # of its own. Token mint for the LiveKit room. The FileCard telegram
+    # action reuses the agent-scoped telegram endpoint (listed in internal,
+    # an endpoint may live in several features).
+    status: pending   # built and live (ADR-082/060), but ROADMAP E4 stop 3 still owes the keep/rebuild/retire decision
+    source: "ROADMAP E4 stop 3 (voice keep/rebuild/retire decision pending); ADR-082 (Jarvis voice runtime binding); ADR-060 (voice provider realtime)"
+    api:
+      - "POST /api/v1/voice/token"
+      - "POST /api/v1/agent/me/telegram"
   - id: F-loops
     name: "Loops"
     ui: {route: /loops}
@@ -238,6 +266,9 @@ features:
       # Wizard: template list/create, edit, instantiate.
       - "* /api/v1/agent-templates"
       - "* /api/v1/agent-templates/*"
+      # CLI-bridge host-helper health pill (agent detail page and wizard
+      # RuntimeStep poll it every 30 s next to the Provision button).
+      - "GET /api/v1/cli-bridge/health"
       # Host agent start/stop/restart buttons on the agent detail page.
       - "* /api/v1/host-agents/*"
       # Agent wizard model list (wizard/shared.tsx). The single-model read
@@ -283,9 +314,9 @@ internal:
   # Agents poll tasks, heartbeat, report, comment, delegate and read
   # vault/knowledge here — callers: mc CLI (scripts/mc-cli), bridges
   # (scripts/*-bridge.py), agent templates (backend/templates), host poll
-  # scripts. The global voice overlay reuses the agent-scoped
-  # /api/v1/agent/me/telegram endpoint (no page of its own; voice decision
-  # pending, ROADMAP stop 3). No bare /api/v1/agent endpoint exists.
+  # scripts. The global voice overlay (F-voice) reuses the agent-scoped
+  # /api/v1/agent/me/telegram endpoint (FileCard telegram action). No bare
+  # /api/v1/agent endpoint exists.
   - "endpoint:* /api/v1/agent/*"
   # Deprecated guided playbook setup (no UI caller since Workstream C1).
   - "endpoint:GET /api/v1/playbooks/guided/current"
@@ -328,3 +359,24 @@ internal:
   # endpoints live under /api/v1/agent/* (covered above, ADR-009).
   - "endpoint:GET /api/v1/deploy/services"
   - "endpoint:GET /api/v1/deploy/history"
+  # Meetings legacy (Phase-31 torso, ADR-075): agent_meetings had 0 rows, no
+  # delivery path and no UI; the group chat on the sessions page (F-sessions)
+  # superseded it. No page or script calls these endpoints (the frontend
+  # helpers api.meetings.* are unused).
+  - "endpoint:* /api/v1/meetings*"
+  # Discord channel + guild config API (Phase 30 router): no page calls it
+  # today — client helpers (api.discord) exist unused; the operator script
+  # backend/scripts/setup_discord_channels.py points at PATCH /discord/config and
+  # docs/handbook/howto/integrations.md documents the endpoints.
+  - "endpoint:* /api/v1/discord*"
+  # Global CLI session list + bridge restart: client helpers exist
+  # (api.cliSessions.list/restart) but no component calls them today.
+  - "endpoint:* /api/v1/cli-sessions*"
+  # Single-agent container state GET: no caller (the sessions sidebar reads
+  # container_state from GET /docker-sessions/agents, mapped in F-sessions).
+  - "endpoint:GET /api/v1/docker-sessions/{agent_id}/state"
+  # Voice-worker machine bridges (jarvis_core mc_client, VAULT_READ agent
+  # scope, ADR-038/061): publish to Redis; the frontend reads the cards via
+  # WS /vault/voice-display and highlights via WS /vault/voice-highlight.
+  - "endpoint:POST /api/v1/voice/display"
+  - "endpoint:POST /api/v1/voice/graph-highlight"
