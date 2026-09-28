@@ -105,6 +105,10 @@ features:
       - "* /api/v1/tasks/{task_id}/thread*"
       - "GET /api/v1/tasks/{task_id}/transcript"
       - "* /api/v1/tasks/{task_id}/run-record*"
+      # Task and project reference files (TaskReferences on the task detail,
+      # ProjectReferencesDialog, upload in CreateTaskModal).
+      - "* /api/v1/references"
+      - "* /api/v1/references/*"
     status: active
     source: "ROADMAP E1b, UI waves 2 and 3a"
   - id: F-inbox
@@ -193,6 +197,20 @@ features:
       # task detail context.
       - "* /api/v1/boards/*/memory"
       - "* /api/v1/boards/*/memory/{memory_id}"
+      # Vault (ADR-034: vault as source of truth): the /memory page and
+      # /memory/graph read notes, search, graph and topics; trash
+      # list/restore/purge, note edit/promote/reject and the admin index
+      # rebuild hang off the same pages. The voice overlay (F-voice) also
+      # reads single notes (VoicePreviewSheet).
+      - "* /api/v1/vault/*"
+      # Knowledge base (ADR-004: one unified knowledge table): list/detail/
+      # create/edit/delete, timeline, stats, attachments and merge review —
+      # used by the LegacyMemoryPage layers, AgentCard stats and the task
+      # detail context. Agent templates also POST here (SOUL.md.j2).
+      - "* /api/v1/knowledge"
+      - "* /api/v1/knowledge/*"
+      # Semantic memory query (MemoryQueryBar on the memory page).
+      - "POST /api/v1/memory/query"
   - id: F-schedule
     name: "Schedule: planned jobs"
     ui: {route: [/schedule, "/schedule/[jobId]"]}
@@ -289,6 +307,13 @@ features:
     name: "Files browser"
     ui: {route: /files}
     note: unconfirmed
+    api:
+      # Files page: named-root browsing, search, meta and preview, native
+      # open, reindex, delete-to-trash and trash list/restore/purge. The
+      # content endpoint is also used outside the page (inbox approval
+      # preview, chat attachment tiles) — image/iframe elements fetch it as
+      # a blob because they cannot carry the Bearer header.
+      - "* /api/v1/files/*"
   - id: F-repos
     name: "Repos registry"
     ui: {route: /repos}
@@ -363,6 +388,13 @@ internal:
   # endpoints live under /api/v1/agent/* (covered above, ADR-009).
   - "endpoint:GET /api/v1/deploy/services"
   - "endpoint:GET /api/v1/deploy/history"
+  # Research router (Phase 29 task-based research, backend/app/routers/
+  # research.py): the planner flow it served was disabled 2026-04-11 (comment
+  # on api.research in frontend-v2/src/lib/api.ts) and no page or script
+  # calls these endpoints today; the router docstring defers the frontend
+  # update to Phase 31.
+  - "endpoint:* /api/v1/research"
+  - "endpoint:* /api/v1/research/*"
   # Meetings legacy (Phase-31 torso, ADR-075): no delivery path and no UI;
   # the group chat on the sessions page (F-sessions) superseded it. No page
   # or script calls these endpoints (the helpers api.meetings.* are unused).
