@@ -72,20 +72,30 @@ describe("deriveStateLine — one word, at most one '·', exactly one time", () 
     expect(line(taskFixture({ status: "review" })).detail).toBeNull();
   });
 
-  it("a head run wins: its own state word and time", () => {
-    const task = taskFixture({ status: "review" });
-    const passed = line(task, { headRun: mkRun({ state: "passed", exited_at: minutesAgo(9) }) });
+  it("a head run wins: its own state word and time when head and card agree", () => {
+    const passed = line(taskFixture({ status: "done" }), { headRun: mkRun({ state: "passed", exited_at: minutesAgo(9) }) });
     expect(passed.word).toEqual({ ns: "heads", key: "state.passed" });
     expect(passed.tone).toBe("online");
     expect(passed.detail).toEqual({ key: "finishedAgo", values: { span: "9 min" } });
 
-    const failed = line(task, { headRun: mkRun({ state: "failed", exited_at: minutesAgo(18) }) });
+    const failed = line(taskFixture({ status: "failed" }), { headRun: mkRun({ state: "failed", exited_at: minutesAgo(18) }) });
     expect(failed.tone).toBe("error");
     expect(failed.detail).toEqual({ key: "endedAgo", values: { span: "18 min" } });
 
-    const silent = line(task, { headRun: mkRun({ state: "running", silent_s: 22 * 60 }) });
+    const silent = line(taskFixture({ status: "in_progress" }), { headRun: mkRun({ state: "running", silent_s: 22 * 60 }) });
     expect(silent.tone).toBe("warning");
     expect(silent.detail).toEqual({ key: "silentFor", values: { span: "22 min" } });
+  });
+
+  it("head and card disagree → the line names both, e.g. 'Head failed · task awaits review'", () => {
+    const failed = line(taskFixture({ status: "review" }), { headRun: mkRun({ state: "failed", exited_at: minutesAgo(18) }) });
+    expect(failed.tone).toBe("error");
+    expect(failed.word).toEqual({ ns: "tasks", key: "detail.headState.failed" });
+    expect(failed.detail).toEqual({ key: "task.review", values: {} });
+
+    const passed = line(taskFixture({ status: "review" }), { headRun: mkRun({ state: "passed", exited_at: minutesAgo(9) }) });
+    expect(passed.word).toEqual({ ns: "tasks", key: "detail.headState.passed" });
+    expect(passed.detail).toEqual({ key: "task.review", values: {} });
   });
 
   it("German days read as dative after seit/vor", () => {

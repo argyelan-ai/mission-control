@@ -350,7 +350,18 @@
         "endedAgo": "ended {span} ago",
         "finishedAgo": "finished {span} ago",
         "notStarted": "not started",
-        "with": "with {name}"
+        "with": "with {name}",
+        "task": {
+          "inbox": "task not started",
+          "in_progress": "task in progress",
+          "review": "task awaits review",
+          "user_test": "task waits for you",
+          "waiting": "task waits for you",
+          "blocked": "task waits for you",
+          "done": "task done",
+          "failed": "task failed",
+          "aborted": "task aborted"
+        }
       },
       "resultFallbackShort": "Latest agent note:",
       "factHeartbeat": "Sign of life",
@@ -358,7 +369,44 @@
       "factId": "ID",
       "copyId": "Copy ID",
       "idCopied": "ID copied",
-      "changeStatus": "Change status"
+      "changeStatus": "Change status",
+      "headState": {
+        "starting": "Head starting",
+        "running": "Head running",
+        "needs_you": "Head needs you",
+        "passed": "Head passed",
+        "failed": "Head failed",
+        "stopped": "Head stopped"
+      }
+    },
+    "pipelineTitle": "Pipeline",
+    "pipelineFailedCount": "{count} failed",
+    "pipelineEmpty": "No active tasks.",
+    "actions": {
+      "stopRun": "Stop run",
+      "stopping": "Stopping…",
+      "stopConfirm": "Stop the run?",
+      "stopConfirmYes": "Stop",
+      "runStopped": "The run is stopped.",
+      "runHeld": "The run is on hold.",
+      "requeue": "Requeue",
+      "requeueHint": "Requeue puts the task back in the queue; the next dispatch cycle assigns it again.",
+      "promote": "Release",
+      "promoting": "Releasing…",
+      "reviewBlockedStopped": "Review is locked — the run is stopped.",
+      "reviewBlockedHeld": "Review is locked — the run is on hold.",
+      "reviewReasonLabel": "Reason for your review decision",
+      "reviewPlaceholder": "Reason (required) …",
+      "reasonLooksGood": "Looks good",
+      "reasonTestsPassed": "Tests passed",
+      "reasonEvidence": "Evidence checked",
+      "approve": "Approve",
+      "requestChanges": "Request changes",
+      "hold": "Hold",
+      "lastDecision": "Your last decision: {decision}.",
+      "decisionApproved": "approved",
+      "decisionChanges": "changes requested",
+      "decisionHold": "on hold"
     }
   },
   "agents": {
