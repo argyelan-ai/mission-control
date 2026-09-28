@@ -116,4 +116,4 @@ Anders gesagt: `secrets` = "wie MC selbst mit der Welt redet". `credentials` = "
   - [ADR-006](006-jinja2-template-source-of-truth.md) — Templates als SoT, betrifft die SOUL.md / TOOLS.md Doku-Updates
   - [ADR-009](009-agent-scoped-router-separat.md) — Agent-Scoped Router separat
   - [ADR-027](027-universal-agent-runtime-binding.md) — `agent.secret_id` Runtime-Bindung
-- Inzident-Memory: `~/.claude/projects/-Users-Henry/memory/project_open_bugs_mc_agent_observability.md` (Bug 8)
+- Inzident-Memory: `~/.claude/projects/-Users-<user>/memory/project_open_bugs_mc_agent_observability.md` (Bug 8)
