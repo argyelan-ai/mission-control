@@ -3050,6 +3050,12 @@
         "summary": "Intelligence Costs"
       }
     },
+    "/api/v1/intelligence/costs/by-day": {
+      "get": {
+        "operationId": "costs_by_day_api_v1_intelligence_costs_by_day_get",
+        "summary": "Costs By Day"
+      }
+    },
     "/api/v1/intelligence/costs/by-model": {
       "get": {
         "operationId": "costs_by_model_api_v1_intelligence_costs_by_model_get",

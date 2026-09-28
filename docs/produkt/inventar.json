@@ -200,6 +200,7 @@
     "GET /api/v1/hosts/{host_id}/recipes",
     "GET /api/v1/intelligence/config",
     "GET /api/v1/intelligence/costs",
+    "GET /api/v1/intelligence/costs/by-day",
     "GET /api/v1/intelligence/costs/by-model",
     "GET /api/v1/intelligence/costs/by-task",
     "GET /api/v1/intelligence/costs/by-week",
