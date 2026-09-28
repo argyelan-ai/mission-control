@@ -643,6 +643,25 @@ async def costs_by_task(
     ]
 
 
+@router.get("/api/v1/intelligence/costs/by-week")
+async def costs_by_week(
+    weeks: int = 6,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """E0 token baseline — tokens, list-price cost and local share per ISO
+    week × source (operator, lead, agents:<harness>, heads:<locality>,
+    unattributed). Rules: app/services/usage_baseline.py.
+
+    Response: {generated_at, start, weeks: [{week, week_start, partial,
+    totals, sources: [{source, ...totals}]}]}. weeks is clamped to 1..26;
+    the current week is partial.
+    """
+    from app.services.usage_baseline import compute_weekly_baseline
+
+    return await compute_weekly_baseline(session, weeks=weeks)
+
+
 @router.post("/api/v1/admin/usage/backfill-attribution")
 async def backfill_usage_attribution(
     session: AsyncSession = Depends(get_session),

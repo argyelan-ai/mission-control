@@ -450,3 +450,71 @@ def test_background_starts_digest():
 
     stop_src = inspect.getsource(bg_mod.stop_background_services)
     assert "daily_metrics_digest" in stop_src
+
+
+# ── M5: token week (E0 baseline) ───────────────────────────────────────
+
+def test_format_digest_shows_token_week():
+    from app.services.daily_metrics_digest import format_digest
+
+    metrics = {
+        "usage_week": {
+            "week": "2026-W39",
+            "total_tokens": 1_863_200_000,
+            "output_tokens": 4_700_000,
+            "local_share": 0.0623,
+            "local_output_share": 0.0817,
+            "cost_usd": 851.81,
+        },
+    }
+
+    lines = format_digest(metrics).splitlines()
+
+    assert "M5: Tokens 2026-W39 bisher 1863.2 M (Output 4.7 M), lokal 6.2 % (Output 8.2 %), Listenpreis 852 USD" in lines
+
+
+def test_format_digest_token_week_without_data():
+    from app.services.daily_metrics_digest import format_digest
+
+    assert "M5: Tokens diese Woche: keine Daten" in format_digest({"usage_week": None}).splitlines()
+
+
+@pytest.mark.asyncio
+async def test_compute_daily_metrics_includes_token_week(session, monkeypatch):
+    from datetime import datetime, timezone
+    import uuid as _uuid
+
+    from app.models.model_usage import ModelUsageEvent
+    from app.services.daily_metrics_digest import compute_daily_metrics
+
+    now = datetime(2026, 9, 24, 12, 0, tzinfo=timezone.utc)
+    session.add(ModelUsageEvent(
+        id=_uuid.uuid4(), harness="host", model="claude-opus-5", session_id="s",
+        message_uuid=f"d-{_uuid.uuid4()}", input_tokens=7, output_tokens=3,
+        cache_read_tokens=0, cache_write_tokens=0, cost_usd=0.5,
+        ts=datetime(2026, 9, 22, tzinfo=timezone.utc), source_file="/x.jsonl",
+    ))
+    await session.commit()
+
+    metrics = await compute_daily_metrics(session, now=now)
+
+    assert metrics["usage_week"]["week"] == "2026-W39"
+    assert metrics["usage_week"]["total_tokens"] == 10
+    assert metrics["usage_week"]["output_tokens"] == 3
+    assert metrics["usage_week"]["cost_usd"] == pytest.approx(0.5)
+
+
+@pytest.mark.asyncio
+async def test_token_week_failure_keeps_the_other_metrics(session, monkeypatch):
+    from app.services import daily_metrics_digest as dmd
+
+    async def boom(*_a, **_k):
+        raise RuntimeError("usage query broken")
+
+    monkeypatch.setattr(dmd, "_usage_week", boom)
+
+    metrics = await dmd.compute_daily_metrics(session)
+
+    assert metrics["usage_week"] == {"error": True}
+    assert "stale_cards" in metrics
+    assert "M5: Tokens diese Woche: nicht verfuegbar" in dmd.format_digest(metrics).splitlines()
