@@ -10,7 +10,7 @@ import { UsageHeatmap } from "../UsageHeatmap";
 import { SourceSplit } from "../SourceSplit";
 import { LocalShareTrend } from "../LocalShareTrend";
 import { DoneSummary, headsInWindow } from "../DoneSummary";
-import { InsightsDetails, cacheHitRate, harnessCosts } from "../InsightsDetails";
+import { InsightsDetails, cacheHitRate } from "../InsightsDetails";
 import { mkByModel, mkByTask, mkCosts, mkHeadRun, mkInsights } from "./insightsFixtures";
 
 function wrap(ui: ReactNode) {
@@ -154,8 +154,8 @@ describe("DoneSummary", () => {
   it("counts tasks and lists only agents that did something", () => {
     wrap(<DoneSummary insights={mkInsights()} windowDays={7} heads={null} />);
     expect(screen.getByTestId("done-totals")).toHaveTextContent("14tasks done2failed");
-    expect(screen.getByTestId("done-agent-Coder")).toHaveTextContent("6 done · 1 failed");
-    expect(screen.getByTestId("done-agent-Reviewer")).toHaveTextContent("5 done");
+    expect(screen.getByTestId("done-agent-Coder")).toHaveTextContent("6 done · 1 failed · Ø 9 min");
+    expect(screen.getByTestId("done-agent-Reviewer")).toHaveTextContent("5 done · Ø 4 min");
     expect(screen.queryByTestId("done-agent-Idle")).toBeNull();
     expect(screen.queryByTestId("done-heads")).toBeNull();
   });
@@ -200,10 +200,9 @@ describe("InsightsDetails", () => {
     });
   });
 
-  it("computes the cache hit rate and the cost per harness", () => {
+  it("computes the cache hit rate", () => {
     expect(cacheHitRate(mkByModel())).toBeCloseTo(38_400_000 / (38_400_000 + 3_010_000));
     expect(cacheHitRate([])).toBeNull();
-    expect(harnessCosts(mkByModel())[0]).toEqual(["host", 1204.5]);
   });
 
   it("keeps every old block reachable, folded, with a summary", async () => {

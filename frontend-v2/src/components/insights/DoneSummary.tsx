@@ -10,7 +10,7 @@
  *   14 tasks done   2 failed
  *   Heads        9 runs · 7 passed · 2 failed
  *   Hermes       4 done
- *   Rex          3 done · 1 failed
+ *   Rex          3 done · 1 failed · Ø 9 min
  *   ● 1 task took far longer than usual.
  */
 
@@ -46,6 +46,11 @@ export function DoneSummary({
   const failed = agents.reduce((s, a) => s + a.failed, 0);
   const headStats = heads ? headsInWindow(heads, windowDays) : null;
   const patterns = Object.entries(insights?.failure_patterns?.patterns ?? {}).sort((a, b) => b[1] - a[1]);
+  // Average minutes per task of this window (analysis service), rounded.
+  const minutes = (name: string) => {
+    const m = insights?.task_durations?.per_agent?.[name];
+    return typeof m === "number" && m > 0 ? Math.round(m) : null;
+  };
   const pct = (rate: number) => new Intl.NumberFormat(locale, { style: "percent", maximumFractionDigits: 0 }).format(rate / 100);
 
   const notes = (insights?.anomalies ?? []).map((a) => {
@@ -97,7 +102,10 @@ export function DoneSummary({
               <Row
                 key={a.agent_id}
                 name={a.name}
-                value={a.failed > 0 ? t("agentDoneFailed", { done: a.done, failed: a.failed }) : t("agentDone", { done: a.done })}
+                value={[
+                  a.failed > 0 ? t("agentDoneFailed", { done: a.done, failed: a.failed }) : t("agentDone", { done: a.done }),
+                  ...(minutes(a.name) !== null ? [t("avg", { minutes: minutes(a.name) ?? 0 })] : []),
+                ].join(" · ")}
                 testId={`done-agent-${a.name}`}
               />
             ))}

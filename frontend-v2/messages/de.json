@@ -1413,7 +1413,8 @@
       "lowSuccess": "{agent} hat nur {rate} seiner Aufgaben abgeschlossen.",
       "highFailure": "{count} Aufgaben fehlgeschlagen — am häufigsten: {pattern}.",
       "patterns": "Warum Aufgaben scheiterten",
-      "pattern": "{pattern}: {count}"
+      "pattern": "{pattern}: {count}",
+      "avg": "Ø {minutes} min"
     },
     "details": {
       "title": "Details",
@@ -1424,14 +1425,12 @@
       "modelsSummary": "{count, plural, one {# Modell} other {# Modelle}} · Cache-Treffer {rate}",
       "modelsSummaryNoCache": "{count, plural, one {# Modell} other {# Modelle}}",
       "modelTokens": "{input} rein · {output} raus · {cacheRead} aus dem Cache",
-      "harnesses": "Nach Harness",
       "tasks": "Teuerste Aufgaben",
       "tasksSummary": "Top {count}",
       "taskMeta": "{events} Ereignisse · {tokens} Input-Tokens",
       "agents": "Nach Agent",
       "agentsSummary": "{count, plural, one {# Agent} other {# Agenten}}",
       "agentMeta": "{input} rein · {output} raus · {events} Ereignisse",
-      "agentAvg": "Ø {minutes} min pro Aufgabe",
       "sessions": "Alle Sitzungen",
       "sessionsSummary": "Top {count} nach Kosten",
       "sessionMeta": "{agent} · {input} rein · {output} raus",

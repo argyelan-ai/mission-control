@@ -39,13 +39,6 @@ export function cacheHitRate(models: CostByModel[]): number | null {
   return read + input > 0 ? read / (read + input) : null;
 }
 
-/** Cost per harness, biggest first (a model can run under several harnesses). */
-export function harnessCosts(models: CostByModel[]): [string, number][] {
-  const map: Record<string, number> = {};
-  for (const m of models) for (const h of m.harness_list) map[h] = (map[h] ?? 0) + m.cost_usd;
-  return Object.entries(map).sort((a, b) => b[1] - a[1]);
-}
-
 export function InsightsDetails() {
   const t = useTranslations("insights.details");
   const locale = useLocale();
@@ -104,28 +97,20 @@ export function InsightsDetails() {
           onToggle={toggle}
         >
           {models.length === 0 ? <Empty text={t("empty")} /> : (
-            <>
-              <ul>
-                {models.map((m) => (
-                  <Line
-                    key={m.model}
-                    main={<span className="font-mono text-sm break-all" style={{ color: C.textPrimary }}>{m.model}</span>}
-                    meta={`${m.harness_list.join(", ")} · ${t("modelTokens", {
-                      input: formatTokens(m.input_tokens, locale),
-                      output: formatTokens(m.output_tokens, locale),
-                      cacheRead: formatTokens(m.cache_read_tokens, locale),
-                    })}`}
-                    value={formatUsd(m.cost_usd, locale)}
-                  />
-                ))}
-              </ul>
-              <h3 className="mt-4 text-sm font-medium" style={{ color: C.textPrimary }}>{t("harnesses")}</h3>
-              <ul>
-                {harnessCosts(models).map(([h, cost]) => (
-                  <Line key={h} main={<span className="font-mono text-sm" style={{ color: C.textSecondary }}>{h}</span>} value={formatUsd(cost, locale)} />
-                ))}
-              </ul>
-            </>
+            <ul>
+              {models.map((m) => (
+                <Line
+                  key={m.model}
+                  main={<span className="font-mono text-sm break-all" style={{ color: C.textPrimary }}>{m.model}</span>}
+                  meta={`${m.harness_list.join(", ")} · ${t("modelTokens", {
+                    input: formatTokens(m.input_tokens, locale),
+                    output: formatTokens(m.output_tokens, locale),
+                    cacheRead: formatTokens(m.cache_read_tokens, locale),
+                  })}`}
+                  value={formatUsd(m.cost_usd, locale)}
+                />
+              ))}
+            </ul>
           )}
         </Panel>
 

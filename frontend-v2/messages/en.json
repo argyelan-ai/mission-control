@@ -1413,7 +1413,8 @@
       "lowSuccess": "{agent} finished only {rate} of its tasks.",
       "highFailure": "{count} tasks failed — most often: {pattern}.",
       "patterns": "Why tasks failed",
-      "pattern": "{pattern}: {count}"
+      "pattern": "{pattern}: {count}",
+      "avg": "Ø {minutes} min"
     },
     "details": {
       "title": "Details",
@@ -1424,14 +1425,12 @@
       "modelsSummary": "{count, plural, one {# model} other {# models}} · cache hits {rate}",
       "modelsSummaryNoCache": "{count, plural, one {# model} other {# models}}",
       "modelTokens": "{input} in · {output} out · {cacheRead} cache read",
-      "harnesses": "By harness",
       "tasks": "Most expensive tasks",
       "tasksSummary": "top {count}",
       "taskMeta": "{events} events · {tokens} input tokens",
       "agents": "By agent",
       "agentsSummary": "{count, plural, one {# agent} other {# agents}}",
       "agentMeta": "{input} in · {output} out · {events} events",
-      "agentAvg": "Ø {minutes} min per task",
       "sessions": "All sessions",
       "sessionsSummary": "top {count} by cost",
       "sessionMeta": "{agent} · {input} in · {output} out",
