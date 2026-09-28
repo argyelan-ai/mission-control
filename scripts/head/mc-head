@@ -446,19 +446,21 @@ while read local_ref local_sha remote_ref remote_sha; do
     fi
   fi
 done
-# Roter Faden: a repo with .kohaerenz.yaml must pass `kz check --fast` (new red
-# findings or a broken config block the push; no kz on this host only warns).
+# Roter Faden: a repo with .kohaerenz.yaml must pass the push-time kz checks.
+# Not drift/pr: they need the PR body, which does not exist yet (the head runs
+# the full `kz check --pr-body-file` before `gh pr create`). New red findings
+# (exit 1) block the push; a broken config (exit 2) or no kz only warns.
 top=$(git rev-parse --show-toplevel 2>/dev/null)
 if [ -n "$top" ] && [ -f "$top/.kohaerenz.yaml" ]; then
   kz=__KZ_BIN__
   if [ -n "$kz" ] && [ -x "$kz" ]; then
-    "$kz" -C "$top" check --fast </dev/null >&2
+    "$kz" -C "$top" check --only orphans,states,rules,anchors,adr,timebomb,links </dev/null >&2
     rc=$?
-    if [ "$rc" = 1 ] || [ "$rc" = 2 ]; then
-      echo "mc-head: push refused - kz check --fast is red (exit $rc, see above). Fix it, or explain it in the PR under 'Known limits' and ask the operator." >&2
+    if [ "$rc" = 1 ]; then
+      echo "mc-head: push refused - kz check is red (see above). Fix it, or explain it in the PR under 'Known limits' and ask the operator." >&2
       exit 1
     fi
-    [ "$rc" = 0 ] || echo "mc-head: warning - kz check --fast ended with exit $rc; push without kz check" >&2
+    [ "$rc" = 0 ] || echo "mc-head: warning - kz check ended with exit $rc; push without kz check" >&2
   else
     echo "mc-head: warning - kz not found on this host; push without kz check" >&2
   fi

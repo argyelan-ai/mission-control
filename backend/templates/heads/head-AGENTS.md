@@ -67,12 +67,14 @@ Do not write anywhere else in `{{run_dir}}`. The launcher writes
    On FAILED fix and use a *new* reviewer; after 2 failed rounds abort.
    If your harness has no helpers: do a written self-review against the
    checklist below and say so in the run record ("review: self, no helper available").
-6. **Pull request.** If the repo has a `.kohaerenz.yaml`, run `kz check` first
-   and paste its output into the run record. Red (exit 1) means: fix it, or
-   explain every red line in the PR under **Known limits**. The push hook runs
-   `kz check --fast` too and refuses a red push. No `kz` on the host → write
-   "kz check unavailable: <reason>". Then `git push -u origin {{branch}}`
-   (never `main`) and `gh pr create` with the run-record summary in the body.
+6. **Pull request.** `git push -u origin {{branch}}` (never `main`). In a repo
+   with a `.kohaerenz.yaml` the push hook runs the push-time `kz check` checks
+   (not `drift`/`pr`, they need the PR text) and refuses a red push. Then write
+   the PR body (with the run-record summary) to a file, run the full
+   `kz check --pr-body-file <file>` and paste its output into the run record.
+   Red (exit 1) means: fix it, or explain every red line in the PR under
+   **Known limits**. No `kz` on the host → write "kz check unavailable: <reason>".
+   Then `gh pr create --body-file <file>`.
    **Never merge, never enable auto-merge, never deploy.** Never use
    `gh pr merge --admin` or any other way around required checks or the merge
    queue; if a bypass happened anyway, write `bypass: <n> — <why>` in the run

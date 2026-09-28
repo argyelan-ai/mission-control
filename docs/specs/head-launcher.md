@@ -317,8 +317,11 @@ stoppable) in the runs list on `/runtimes`.
       Both are guard rails only — the server-side gate is the head's own
       non-admin identity (§9).
       Roter Faden (E2): in a repo with `.kohaerenz.yaml` the `pre-push` hook
-      also runs `kz check --fast` (exit 1/2 refuses the push, no `kz` only
-      warns). After the worktree exists, `kz brief` runs in it (sandboxed,
+      also runs the push-time checks `kz check --only
+      orphans,states,rules,anchors,adr,timebomb,links` — not `drift`/`pr`,
+      which need the PR text; the head runs the full `kz check
+      --pr-body-file` before `gh pr create` (exit 1 refuses the push; exit 2
+      or no `kz` only warns). After the worktree exists, `kz brief` runs in it (sandboxed,
       `env -i`, max. 20 s via `MC_HEAD_KZ_TIMEOUT_S`) and its output (max. 60
       lines) is appended to `job.md` as "Context brief (kz)"; kz missing or
       failing leaves one line "kz brief unavailable: …" there and in
