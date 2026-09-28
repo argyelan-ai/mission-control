@@ -94,7 +94,7 @@ export function DailyMetricsCardView({ data }: { data: DailyMetrics }) {
             key={s.key}
             data-testid={`daily-metric-${s.key}`}
             // the week value closes the grid: full width on the phone instead of an orphan cell
-            className={`min-w-0 flex flex-col-reverse${s.key === "week" ? " col-span-2 sm:col-span-1" : ""}`}
+            className={`min-w-0 flex flex-col-reverse justify-end${s.key === "week" ? " col-span-2 sm:col-span-1" : ""}`}
           >
             <dt className="text-xs leading-snug" style={{ color: C.textMuted }}>
               {s.label}
