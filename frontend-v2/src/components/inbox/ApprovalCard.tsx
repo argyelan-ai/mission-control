@@ -20,7 +20,7 @@ import type { Approval, AutonomyLevel } from "@/lib/types";
 
 // ── Install Action Types ──────────────────────────────────────────────────────
 
-const INSTALL_ACTION_TYPES = new Set([
+export const INSTALL_ACTION_TYPES = new Set([
   "install_skill", "uninstall_skill",
   "install_plugin", "uninstall_plugin",
   "install_mcp", "uninstall_mcp",
@@ -63,7 +63,7 @@ const AUTONOMY_COLORS: Record<string, string> = {
   L3: C.error,
 };
 
-const BLOCKER_TYPE_LABELS: Record<string, { labelKey: string; color: string }> = {
+export const BLOCKER_TYPE_LABELS: Record<string, { labelKey: string; color: string }> = {
   missing_info: { labelKey: "blockerMissingInfo", color: C.warning },
   technical_problem: { labelKey: "blockerTechnical", color: C.error },
   decision_needed: { labelKey: "blockerDecision", color: C.accent },
@@ -78,27 +78,18 @@ interface ApprovalCardProps {
   approval: Approval;
   onResolve: (status: "approved" | "rejected", note?: string) => void;
   loading?: boolean;
-  /**
-   * Embedded in the task detail's state card: lead with the question (or the
-   * description), clamped to 3 lines, and keep the rest behind "Show full" so
-   * the buttons stay in the first screen. Task/project line is dropped — the
-   * detail header already says which task this is.
-   */
-  compact?: boolean;
 }
 
 /** What the agent actually asks — the one line that belongs on top. */
-function leadText(approval: Approval): string {
+export function leadText(approval: Approval): string {
   const p = (approval.payload ?? {}) as { question?: string; description?: string };
   return (p.question || p.description || approval.description || "").trim();
 }
 
-export function ApprovalCard({ approval, onResolve, loading, compact = false }: ApprovalCardProps) {
+export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps) {
   const t = useTranslations("inbox");
   const locale = useLocale();
   const [note, setNote] = useState("");
-  const [expanded, setExpanded] = useState(false);
-  const collapsed = compact && !expanded;
   // "Cancel task" fails the task and unassigns the agent — ask first.
   const [confirmCancel, setConfirmCancel] = useState(false);
 
@@ -179,27 +170,6 @@ export function ApprovalCard({ approval, onResolve, loading, compact = false }: 
               </span>
             </div>
 
-            {collapsed ? (
-              <div className="mt-2.5">
-                <div
-                  data-testid="approval-lead"
-                  data-clamped="true"
-                  className="text-[13px] leading-relaxed prose-comment text-[var(--color-text-primary)] max-h-[4.9em] overflow-hidden"
-                >
-                  <ReactMarkdown remarkPlugins={[remarkBreaks]}>{leadText(approval)}</ReactMarkdown>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setExpanded(true)}
-                  aria-expanded={false}
-                  className="mt-1 text-[11px] cursor-pointer hover:underline pointer-coarse:min-h-[44px]"
-                  style={{ color: "var(--color-text-secondary)" }}
-                >
-                  {t("showFull")}
-                </button>
-              </div>
-            ) : (
-            <>
             <div className="text-sm mt-2.5 prose-comment text-[var(--color-text-primary)]">
               <ReactMarkdown remarkPlugins={[remarkBreaks]}>{approval.description}</ReactMarkdown>
             </div>
@@ -219,7 +189,7 @@ export function ApprovalCard({ approval, onResolve, loading, compact = false }: 
 
               return (
                 <div className="mt-3 p-3 rounded-xl space-y-2" style={{ backgroundColor: alpha(C.error, 0.06), border: `1px solid ${alpha(C.error, 0.15)}` }}>
-                  {!compact && (p.project_name || p.task_title) && (
+                  {(p.project_name || p.task_title) && (
                     <p className="text-[10px] text-[var(--color-text-muted)]">
                       {p.project_name && <span>{p.project_name}</span>}
                       {p.project_name && p.task_title && <span> · </span>}
@@ -260,7 +230,7 @@ export function ApprovalCard({ approval, onResolve, loading, compact = false }: 
 
               return (
                 <div className="mt-3 p-3 rounded-xl space-y-2" style={{ backgroundColor: alpha(C.accent, 0.06), border: `1px solid ${alpha(C.accent, 0.15)}` }}>
-                  {!compact && (p.project_name || p.task_title) && (
+                  {(p.project_name || p.task_title) && (
                     <p className="text-[10px] text-[var(--color-text-muted)]">
                       {p.project_name && <span>{p.project_name}</span>}
                       {p.project_name && p.task_title && <span> · </span>}
@@ -316,19 +286,6 @@ export function ApprovalCard({ approval, onResolve, loading, compact = false }: 
                 </div>
               );
             })()}
-            {compact && (
-              <button
-                type="button"
-                onClick={() => setExpanded(false)}
-                aria-expanded
-                className="mt-2 text-[11px] cursor-pointer hover:underline pointer-coarse:min-h-[44px]"
-                style={{ color: "var(--color-text-secondary)" }}
-              >
-                {t("showLess")}
-              </button>
-            )}
-            </>
-            )}
           </div>
         </div>
 
