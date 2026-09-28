@@ -266,3 +266,42 @@ def test_claude_head_may_run_kz_check():
 
     settings = json.loads((MC_HEAD.parent / "claude-head-settings.json").read_text())
     assert "Bash(kz check*)" in settings["permissions"]["allow"]
+
+
+# ── hook bypass (git push --no-verify) is detected by the wrapper ───────
+
+PUSH_BODY = (
+    'echo change > change.txt && git add change.txt'
+    ' && git -c user.name=t -c user.email=t@example.invalid commit -q -m "fix: change"'
+    ' && git push -q {flags} -u origin "$(git branch --show-current)"'
+)
+
+
+def _run_pushing_head(env, flags: str) -> tuple[dict, Path]:
+    mc_home = env["mc_home"]
+    harness = fake_harness(env["tmp"], PUSH_BODY.format(flags=flags))
+    run_id = write_spec(mc_home)
+    res = run_head(mc_home, "start", run_id, env_extra={"MC_HEAD_BIN_OMP": str(harness)})
+    assert res.returncode == 0, res.stdout + res.stderr
+    return wait_phase(mc_home, run_id, "exited"), mc_home / "heads" / run_id
+
+
+def test_push_through_the_hook_is_not_flagged(env):
+    status, run = _run_pushing_head(env, "")
+    tip = subprocess.run(["git", "-C", str(run / "wt"), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    assert tip in (run / "hook-passed.txt").read_text().split()
+    assert status["hook_bypassed"] is False
+    assert status["reason"] is None
+
+
+def test_no_verify_push_is_flagged_as_hook_bypassed(env):
+    status, run = _run_pushing_head(env, "--no-verify")
+    assert not (run / "hook-passed.txt").exists()
+    assert status["hook_bypassed"] is True
+    assert status["reason"] == "hook_bypassed"
+
+
+def test_run_without_push_is_not_flagged(env):
+    _, run = _start(env, "/nonexistent/kz")
+    status = read_status(env["mc_home"], run.name)
+    assert status["hook_bypassed"] is False and status["reason"] is None
