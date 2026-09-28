@@ -237,6 +237,39 @@ describe("Switch / stop under a working head", () => {
     expect(err).toHaveTextContent("A head is working on this box (“Fix flaky retry test”). Switching now would cut it off.");
     expect(err).not.toHaveTextContent("head_on_box");
   });
+
+  it("409 engine_busy (switch lock) names the engine and the request count", async () => {
+    const recipe = {
+      slug: "qwen", display_name: "Qwen", engine: "vllm_docker", topology: { nodes: 1 }, port: 8000,
+      instance_runtime_id: null, running: false, startable: true, fit: "solo", reason: null,
+      busy_hosts: [], candidate_workers: [],
+    } as HostRecipe;
+    vi.spyOn(api.hosts, "recipes").mockResolvedValue([recipe]);
+    vi.spyOn(api.hosts, "startRecipe").mockRejectedValue(
+      new Error('API 409: {"detail":{"code":"engine_busy","engine":"GLM 5.3","running_requests":2,"message":"m"}}'),
+    );
+    renderWithQuery(<HostRecipeSwitcher hostId="host-1" hostName="box" compact />);
+    await act(async () => { (await screen.findByTestId("recipe-dropdown-trigger")).click(); });
+    await act(async () => { (await screen.findByTestId("recipe-option-qwen")).click(); });
+    await act(async () => { screen.getByTestId("recipe-confirm-start").click(); });
+    const err = await screen.findByTestId("recipe-start-error");
+    // The test translator does not run ICU plurals — the sentence itself is checked below.
+    expect(err).toHaveTextContent("GLM 5.3 is still working on");
+    expect(err).not.toHaveTextContent("engine_busy");
+  });
+
+  it("the switch-lock sentence reads right in both languages (real ICU formatter)", () => {
+    const fmt = (msg: string, v: Record<string, string | number>, loc: string) => new IntlMessageFormat(msg, loc).format(v);
+    expect(fmt(en.heads.errors.engine_busy_named, { engine: "GLM", count: 1 }, "en")).toBe(
+      "GLM is still working on 1 request. Switching now would break it off — try again in a moment.",
+    );
+    expect(fmt(en.heads.errors.engine_busy_named, { engine: "GLM", count: 2 }, "en")).toBe(
+      "GLM is still working on 2 requests. Switching now would break them off — try again in a moment.",
+    );
+    expect(fmt(de.heads.errors.engine_busy_named, { engine: "GLM", count: 2 }, "de")).toBe(
+      "GLM arbeitet noch an 2 Anfragen. Ein Wechsel würde sie jetzt abbrechen — gleich nochmal versuchen.",
+    );
+  });
 });
 
 describe("Runs without a task", () => {

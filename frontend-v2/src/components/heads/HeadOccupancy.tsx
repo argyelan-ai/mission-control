@@ -92,8 +92,15 @@ export function useHeadConflictText() {
     if (onBox) {
       return `${onBox.title ? t("runtimes.onBoxTitle", { title: onBox.title }) : t("runtimes.onBoxTitleNoTitle")} ${t("runtimes.onBoxBody")}`;
     }
-    const { status, code } = parseHeadError(err);
-    if (status === 409 && code === "engine_busy") return t("errors.engine_busy");
+    const { status, code, detail } = parseHeadError(err);
+    if (status === 409 && code === "engine_busy") {
+      // Switch lock (E1): the backend names the engine and how many requests it is still on.
+      const count = Number(detail.running_requests);
+      if (typeof detail.engine === "string" && detail.engine && count > 0) {
+        return t("errors.engine_busy_named", { engine: detail.engine, count });
+      }
+      return t("errors.engine_busy");
+    }
     return null;
   };
 }

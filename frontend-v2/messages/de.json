@@ -3362,6 +3362,7 @@
       "run_record_missing": "Noch keine Laufakte.",
       "head_on_box": "Auf dieser Box arbeitet ein Head. Stoppe zuerst den Head.",
       "engine_busy": "Das Modell beantwortet noch Anfragen. Gleich nochmal versuchen.",
+      "engine_busy_named": "{engine} arbeitet noch an {count, plural, one {# Anfrage} other {# Anfragen}}. Ein Wechsel würde sie jetzt abbrechen — gleich nochmal versuchen.",
       "unknown": "Etwas ist schiefgelaufen.",
       "head_not_active": "Dieser Head ist schon beendet."
     },
