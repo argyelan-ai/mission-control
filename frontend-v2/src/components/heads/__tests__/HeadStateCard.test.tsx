@@ -34,16 +34,21 @@ beforeEach(() => {
 });
 
 describe("HeadStateCard — one main action per state (B5)", () => {
-  it("running → Stop on top, pair + step + sign of life, details collapsed", async () => {
+  it("running → Stop on top + step; state word and pair are not repeated here; sign of life under Details", async () => {
     const stop = vi.spyOn(api.heads, "stop").mockResolvedValue({ run_id: "r", state: "stopping" });
     renderCard(mkRun({ state: "running", silent_s: 40, step: "4/7 sabotage probe" }));
 
-    expect(screen.getByTestId("head-card-kicker")).toHaveTextContent("Running · omp · glm-local");
-    await waitFor(() => expect(screen.getByTestId("head-card-kicker")).toHaveTextContent("Running · omp · GLM local"));
+    // The state sentence above the card carries "Running · for …" and the
+    // properties carry the pair (DESIGN.md K3/K10) — no kicker here.
+    expect(screen.queryByTestId("head-card-kicker")).not.toBeInTheDocument();
+    expect(screen.getByTestId("task-state-card")).not.toHaveTextContent("omp");
     expect(screen.getByText("Step: 4/7 sabotage probe")).toBeInTheDocument();
-    expect(screen.getByTestId("head-card-sign")).toHaveTextContent("Last output 40 s ago");
+    expect(screen.queryByTestId("head-card-sign")).not.toBeInTheDocument();
     expect(screen.queryByTestId("head-details")).not.toBeInTheDocument();
     expect(screen.queryByTestId("head-main-restart")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("head-details-toggle"));
+    expect(screen.getByTestId("head-card-sign")).toHaveTextContent("Last output 40 s ago");
+    await userEvent.click(screen.getByTestId("head-details-toggle"));
 
     // Stop asks first (review: no 30-minute run lost to a mistap)
     await userEvent.click(screen.getByTestId("head-main-stop"));
@@ -56,11 +61,12 @@ describe("HeadStateCard — one main action per state (B5)", () => {
     await waitFor(() => expect(stop).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111"));
   });
 
-  it("silent > 15 min → warn tone, 'Silent for …', still running with Stop", () => {
+  it("silent > 15 min → warn tone, 'Silent for …', still running with Stop", async () => {
     renderCard(mkRun({ state: "running", silent_s: 22 * 60 }));
     const card = screen.getByTestId("task-state-card");
     expect(card).toHaveAttribute("data-tone", "warn");
     expect(card).toHaveAttribute("data-head-state", "running");
+    await userEvent.click(screen.getByTestId("head-details-toggle"));
     expect(screen.getByTestId("head-card-sign")).toHaveTextContent("Silent for 22 min — still running");
     expect(screen.getByTestId("head-main-stop")).toBeInTheDocument();
   });
@@ -86,19 +92,23 @@ describe("HeadStateCard — one main action per state (B5)", () => {
     const link = screen.getByTestId("head-main-open-pr");
     expect(link).toHaveAttribute("href", "https://github.com/acme/tool/pull/712");
     expect(link).toHaveTextContent("Open PR #712");
-    expect(screen.getByText("PR #712 open — your review decides the merge")).toBeInTheDocument();
+    // The PR number shows once — on the button (DESIGN.md K3).
+    expect(screen.getByText("The pull request is open — your review decides the merge.")).toBeInTheDocument();
+    expect(screen.getAllByText(/#712/)).toHaveLength(1);
     expect(screen.queryByTestId("head-main-stop")).not.toBeInTheDocument();
   });
 
-  it("passed on a scratch repo with a local origin → 'Branch pushed · scratch repo (no PR)' instead of Open PR", () => {
+  it("passed on a scratch repo with a local origin → the sentence + the branch (copyable) instead of Open PR", async () => {
     renderCard(mkRun({ state: "passed", reason: "scratch_branch_pushed", pr_url: null, exited_at: "2026-09-23T10:34:05Z" }));
-    const badge = screen.getByTestId("head-main-branch-pushed");
-    expect(badge).toHaveTextContent("Branch pushed · scratch repo (no PR)");
-    // a status badge, not something that looks clickable (review finding)
-    expect(badge.tagName).toBe("SPAN");
-    expect(badge.className).not.toMatch(/cursor-pointer|min-h-\[36px\]|hover:/);
-    expect(badge.className).toContain("rounded-sm");
-    expect(screen.getByTestId("head-card-scratch-branch")).toHaveTextContent("mc-head/fix-flaky-1111");
+    // No badge next to the sentence any more — it said the same thing twice.
+    expect(screen.queryByTestId("head-main-branch-pushed")).not.toBeInTheDocument();
+    const result = screen.getByTestId("head-card-scratch-branch");
+    expect(result).toHaveTextContent("no PR is possible there");
+    expect(result).toHaveTextContent("mc-head/fix-flaky-1111");
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    await userEvent.click(screen.getByRole("button", { name: "Copy branch name" }));
+    expect(writeText).toHaveBeenCalledWith("mc-head/fix-flaky-1111");
     expect(screen.queryByTestId("head-main-open-pr")).not.toBeInTheDocument();
     expect(screen.queryByTestId("head-main-restart")).not.toBeInTheDocument();
     expect(screen.queryByText(/your review decides the merge/)).not.toBeInTheDocument();

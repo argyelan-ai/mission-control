@@ -255,7 +255,11 @@ function MobileNavRow({
   );
 }
 
-export default function MobileNav() {
+export default function MobileNav({ showBar = true }: {
+  /** false = only the drawer: a screen with its own top bar (task detail on
+   *  the phone) hides the wordmark bar but keeps the "Index" menu working. */
+  showBar?: boolean;
+} = {}) {
   const { open, setOpen } = useMobileNav();
   const t = useTranslations("nav");
   const pathname = usePathname();
@@ -301,6 +305,7 @@ export default function MobileNav() {
     <>
       {/* Top bar — Wordmark links (Home-Link), Voice rechts. pt-island hält
           Inhalt unter der Dynamic Island; opak statt backdrop-blur (kein iOS Jank). */}
+      {showBar && (
       <header
         className="fixed top-0 left-0 right-0 z-40 flex items-end justify-between px-4 md:hidden pt-island"
         style={{
@@ -330,6 +335,7 @@ export default function MobileNav() {
           <VoiceButton size={40} variant="header" />
         </div>
       </header>
+      )}
 
       {/* Overlay + slide-out index drawer */}
       <AnimatePresence>
