@@ -1,5 +1,9 @@
 """Box occupancy + the switch lock (docs/specs/head-launcher.md §6.7).
 
+Two rules: (a) no displacement under a working head (``check_displacement``,
+only while ``heads_enabled``), (b) no model switch while the engine reports
+running requests (``switch_lock`` — always on, E1 switch lock stage 1).
+
 Box keys are HOST IDS (not host:port): a duo recipe holds both member boxes,
 and an exclusive recipe on another port still displaces the engine.
 
@@ -17,6 +21,7 @@ Recovering a dead engine (same recipe) stays allowed.
 from __future__ import annotations
 
 import json
+import logging
 import time
 import uuid
 from typing import Iterable
@@ -26,6 +31,8 @@ from fastapi import HTTPException
 from app.config import settings
 from app.services.heads import files, paths
 from app.services.heads.state import ACTIVE_STATES, HEARTBEAT_FRESH_S, derive_for_run
+
+logger = logging.getLogger(__name__)
 
 
 def occupancy(now: float | None = None) -> dict[str, dict]:
@@ -112,18 +119,51 @@ def check_displacement(
         raise refuse(entries[0])
 
 
-async def check_engine_idle(endpoints: Iterable[str]) -> None:
-    """ADR-085 box manager rule (b): refuse a model switch while the engine
-    reports running requests. vLLM-family engines only (``/metrics``); where
-    the metric is missing only rule (a) — the head lock — applies."""
-    if not settings.heads_enabled:
-        return
-    from app.services.heads.engine import running_requests
+async def switch_lock(engines: Iterable) -> tuple[dict | None, list[dict]]:
+    """Switch lock stage 1 — ADR-085's one addition to the box manager:
+    no model switch while the engine reports running requests.
 
-    for endpoint in endpoints:
-        n = await running_requests(endpoint)
-        if n:
-            raise HTTPException(status_code=409, detail={"code": "engine_busy", "running_requests": n})
+    ``engines``: the runtime rows a switch would end. Returns
+    ``(refusal, unknown)``: ``refusal`` is the 409 detail for the first engine
+    that reports running requests (None when none does); ``unknown`` lists the
+    engines whose load cannot be read — those do NOT block (fail-open), the
+    lock only says so. Independent of ``heads_enabled``: it protects whoever
+    sent the request, not only heads.
+    """
+    from app.services.heads.engine import probe_running_requests
+
+    unknown: list[dict] = []
+    seen: set[str] = set()
+    for rt in engines:
+        endpoint = getattr(rt, "endpoint", None)
+        if not endpoint or endpoint in seen:
+            continue
+        seen.add(endpoint)
+        name = getattr(rt, "display_name", None) or getattr(rt, "slug", None) or endpoint
+        running, reason = await probe_running_requests(endpoint)
+        if running:
+            return {
+                "code": "engine_busy",
+                "engine": name,
+                "running_requests": running,
+                "message": (
+                    f"{name} is still answering {running} request(s). "
+                    "Switch refused — wait until they finish, or stop the runtime first."
+                ),
+            }, unknown
+        if running is None:
+            logger.warning("switch lock unknown for %s (%s): %s — switch not blocked", name, endpoint, reason)
+            unknown.append({"engine": name, "reason": reason})
+    return None, unknown
+
+
+async def check_engine_idle(engines: Iterable) -> list[dict]:
+    """:func:`switch_lock` for request paths: 409 ``engine_busy`` when an
+    engine is working; otherwise the list of engines whose load is unknown."""
+    refusal, unknown = await switch_lock(engines)
+    if refusal is not None:
+        raise HTTPException(status_code=409, detail=refusal)
+    return unknown
 
 
 async def guard_runtime_action(session, runtime_id: uuid.UUID, action: str) -> None:

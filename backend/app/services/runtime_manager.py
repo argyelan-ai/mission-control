@@ -1947,7 +1947,9 @@ async def _ensure_exclusive_host(
                 rt for rt in member_runtimes if rt.slug != slug and rt.id not in known
             )
 
-    stopped: list[str] = []
+    # First look, then stop: which of them still runs? Those are the engines
+    # this start would end — the switch lock (E1, ADR-085) asks them first.
+    live: list[tuple[Runtime, dict, ResolvedHost | None]] = []
     for other in others:
         other_dict = other.to_registry_dict()
         try:
@@ -1963,7 +1965,16 @@ async def _ensure_exclusive_host(
         if state.get("state") == "stopped":
             logger.info("exclusive: %s already stopped", other.slug)
             continue
+        live.append((other, other_dict, other_host))
 
+    from app.services.heads import box_guard
+
+    refusal, lock_unknown = await box_guard.switch_lock(other for other, _, _ in live)
+    if refusal is not None:
+        return {"ok": False, "message": refusal["message"], "stopped": [], "switch_lock": refusal}
+
+    stopped: list[str] = []
+    for other, other_dict, other_host in live:
         logger.info("exclusive: stopping %s to free the box for %s", other.slug, slug)
         if _is_multi_box_instance(other) and (other.stop_command or "").strip():
             # Ein Verbund lebt auf mehreren Boxen; nur sein eigener Stopp-Befehl
@@ -2003,6 +2014,7 @@ async def _ensure_exclusive_host(
             else "Box war bereits frei."
         ),
         "stopped": stopped,
+        "switch_lock_unknown": lock_unknown,
     }
 
 
@@ -2019,7 +2031,13 @@ async def _emit_exclusive_event(slug: str | None, result: dict) -> None:
                 "runtime.exclusive_evicted" if result.get("ok") else "runtime.exclusive_blocked",
                 f"{slug}: {result.get('message')}",
                 severity="info" if result.get("ok") else "warning",
-                detail={"slug": slug, "stopped": result.get("stopped") or []},
+                detail={
+                    "slug": slug,
+                    "stopped": result.get("stopped") or [],
+                    # E1 switch lock: the refusal, or the engines whose load was unknown.
+                    "switch_lock": result.get("switch_lock"),
+                    "switch_lock_unknown": result.get("switch_lock_unknown") or [],
+                },
             )
     except Exception as exc:  # noqa: BLE001
         logger.debug("exclusive: event emit failed for %s: %s", slug, exc)
@@ -2077,6 +2095,8 @@ async def start_runtime(
         exclusive = await ensure_exclusive_host(runtime, host=host)
         await _emit_exclusive_event(slug, exclusive)
         if not exclusive.get("ok"):
+            if exclusive.get("switch_lock"):
+                return {"ok": False, "message": exclusive["message"], "switch_lock": exclusive["switch_lock"]}
             return {"ok": False, "message": exclusive["message"]}
 
     if is_docker or is_ssh_process:

@@ -495,10 +495,20 @@ stoppable) in the runs list on `/runtimes`.
   and `POST /runtimes/{id}/restart` (`:929`) [code]. It refuses (new reason
   `head_on_box`) only a **displacement**: switching to another recipe, or
   stopping/restarting an engine that currently answers, while a live head
-  lock (owner pid alive) holds one of the host ids. Rule (b): also refuse
-  when the engine reports running requests (`vllm:num_requests_running` from
-  `/metrics`) — vLLM only; for EXL3 and engines without the metric
-  **rule (a) only**.
+  lock (owner pid alive) holds one of the host ids. Rule (b), the **switch
+  lock** (ROADMAP E1): refuse a switch with 409 `engine_busy` while the engine
+  it would end reports running requests (`/metrics`:
+  `vllm:num_requests_running`, `sglang:num_running_reqs`,
+  `llamacpp:requests_processing`) — **always on**, independent of
+  `heads_enabled`, for requests of any client. Checked in
+  `start_recipe_on_host` and in `runtime_manager._ensure_exclusive_host` (every
+  start that frees an exclusive box). An engine whose load cannot be read
+  (unreachable, no known metric) does not block — the lock logs and returns
+  "unknown" (fail-open).
+- The switch lock guards **switches and exclusive starts only**, not
+  `POST /runtimes/{id}/stop`. A stuck `engine_busy` (the counter never drops)
+  is resolved by stopping the runtime first (Runtimes page → Stop), then
+  switching.
 - Auto-recovery stays allowed: when the engine is dead, starting the **same**
   recipe again is not a displacement. Evidence: the runtime watcher's
   autostart goes through `recipe_switcher.start_recipe_on_host` for duo
@@ -506,9 +516,10 @@ stoppable) in the runs list on `/runtimes`.
   for single boxes (`runtime_watcher.py:1228`) [code]; the guard lets both
   through for a dead engine. `runtime_watcher.py` is runtime code, not a
   frozen healer.
-- Other users of the same engine (a persistent agent on the same model) are
-  not counted by the lock; the picker shows a hint when
-  `num_requests_running > 0` where the metric exists.
+- Other users of the same engine (a persistent agent on the same model) do
+  not hold the head lock (rule (a)), but their running requests count for the
+  switch lock (rule (b)); the picker shows a hint when requests are running
+  where the metric exists.
 - Note: the first ~15 minutes after an engine start are slow (caches empty);
   the run record notes the engine start time so a slow head is not
   misread as broken.

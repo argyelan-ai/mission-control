@@ -53,7 +53,7 @@ features:
     name: "Runtimes: engines, which one is busy"
     ui: {route: /runtimes}
     status: active
-    source: "ADR-086; ROADMAP UI waves 0c and 2"
+    source: "ADR-086; ROADMAP UI waves 0c and 2; E1 switch lock (a switch is refused while the engine works)"
   - id: F-settings
     name: "Settings"
     ui: {route: /settings}
