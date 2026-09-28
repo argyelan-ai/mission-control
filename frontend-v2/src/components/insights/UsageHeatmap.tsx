@@ -11,7 +11,7 @@
  *        Apr      May      Jun      Jul      Aug      Sep
  *   Mon  ▢▣▣▢▣■▣▢▣▣■■▢▣▣▣■■▣▢▣■■▣▣▢
  *   …
- *                                         less ▢▢▣▣■ more
+ *        less ▢▢▣▣■ more
  *   ‹  Wednesday, 23 September                                          ›
  *      1.2M tokens · $214 · 18 % local · Mostly You, interactive
  *
@@ -99,12 +99,16 @@ export function UsageHeatmap({ data }: { data: UsageByDay }) {
         <Grid data={data} weeks={52} metric={metric} selected={selected} onSelect={setSelected} />
       </div>
 
-      <div className="mt-2 flex items-center justify-end gap-1 text-xs" style={{ color: C.textMuted }} aria-hidden>
-        <span className="mr-1">{t("less")}</span>
-        {([0, 1, 2, 3, 4] as const).map((l) => (
-          <span key={l} className="inline-block size-3 rounded-dense" style={{ background: HEAT_FILL[l] }} />
-        ))}
-        <span className="ml-1">{t("more")}</span>
+      {/* The legend sits on the grid's own edge, not flush right (K9). */}
+      <div className="mt-2 grid grid-cols-[2.75rem_1fr] text-xs" style={{ color: C.textMuted }} aria-hidden>
+        <span />
+        <span className="flex items-center gap-1">
+          <span className="mr-1">{t("less")}</span>
+          {([0, 1, 2, 3, 4] as const).map((l) => (
+            <span key={l} className="inline-block size-3 rounded-dense" style={{ background: HEAT_FILL[l] }} />
+          ))}
+          <span className="ml-1">{t("more")}</span>
+        </span>
       </div>
 
       <div
