@@ -4786,6 +4786,12 @@
         "summary": "System Alerts"
       }
     },
+    "/api/v1/system/daily-metrics": {
+      "get": {
+        "operationId": "system_daily_metrics_api_v1_system_daily_metrics_get",
+        "summary": "System Daily Metrics"
+      }
+    },
     "/api/v1/system/metrics": {
       "get": {
         "operationId": "system_metrics_api_v1_system_metrics_get",
