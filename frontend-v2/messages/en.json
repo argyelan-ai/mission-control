@@ -359,7 +359,10 @@
       "copyId": "Copy ID",
       "idCopied": "ID copied",
       "changeStatus": "Change status"
-    }
+    },
+    "pipelineTitle": "Pipeline",
+    "pipelineFailedCount": "{count} failed",
+    "pipelineEmpty": "No active tasks."
   },
   "agents": {
     "title": "Agents",
