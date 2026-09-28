@@ -198,10 +198,12 @@ features:
       - "* /api/v1/boards/*/memory"
       - "* /api/v1/boards/*/memory/{memory_id}"
       # Vault (ADR-034: vault as source of truth): the /memory page and
-      # /memory/graph read notes, search, graph and topics; trash
-      # list/restore/purge, note edit/promote/reject and the admin index
-      # rebuild hang off the same pages. The voice overlay (F-voice) also
-      # reads single notes (VoicePreviewSheet).
+      # /memory/graph read notes, search, graph and topics (VaultTopicsView);
+      # trash list/restore/purge and note edit hang off the same pages.
+      # Review note: PATCH note/{path}/promote, PATCH note/{path}/reject and
+      # POST _admin/rebuild have no page or script caller (admin-only, manual
+      # use; tests call rebuild). The voice overlay (F-voice) also reads
+      # single notes (VoicePreviewSheet).
       - "* /api/v1/vault/*"
       # Knowledge base (ADR-004: one unified knowledge table): list/detail/
       # create/edit/delete, timeline, stats, attachments and merge review —
