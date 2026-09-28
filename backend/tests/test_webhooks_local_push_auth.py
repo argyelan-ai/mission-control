@@ -65,7 +65,7 @@ def _client_from(client: AsyncClient, host: str) -> AsyncClient:
     "host",
     [
         "100.100.200.50",  # tailnet peer (invented test address, see .gitleaks.toml)
-        "192.168.1.50",  # LAN peer
+        "10.20.30.40",  # LAN peer (private, but not one of our subnets)
         "203.0.113.9",  # public
     ],
 )
