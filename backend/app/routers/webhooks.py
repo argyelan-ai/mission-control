@@ -1,7 +1,8 @@
 """
 Webhook endpoints for external events (GitHub push, etc.).
 
-No user auth needed — the webhook secret is checked instead.
+No user auth: the GitHub route checks the webhook secret, the local route
+only accepts callers on this machine (app/local_only.py).
 Creates activity events for the dashboard + optional RPC to the agent.
 """
 
@@ -18,6 +19,7 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.database import get_session
+from app.local_only import require_local_caller
 from app.models.webhook import Webhook, WebhookPayload
 from app.services.activity import emit_event
 
@@ -167,7 +169,7 @@ async def receive_github_webhook(
     return {"status": "received", "payload_id": str(wh_payload.id)}
 
 
-@router.post("/webhooks/local/push")
+@router.post("/webhooks/local/push", dependencies=[Depends(require_local_caller)])
 async def receive_local_push(
     request: Request,
     session: AsyncSession = Depends(get_session),
@@ -178,7 +180,10 @@ async def receive_local_push(
     Needs no webhook setup — accepts directly:
     { "repo", "branch", "commit_sha", "commit_message", "author" }
 
-    No auth needed since it's local-only (Docker network + loopback).
+    No user auth — enforced local-only instead: require_local_caller rejects
+    proxied requests and peers outside loopback + the Docker network, and the
+    Caddyfiles answer /api/v1/webhooks/local/* with 403. Callers must use the
+    backend port directly (http://127.0.0.1:8000), never Caddy.
     """
     try:
         data = await request.json()
