@@ -760,7 +760,7 @@ internal:
   - "table:install_log"
   # Token-harvester bookkeeping (per-file processed state).
   - "table:model_usage_harvest_state"
-  # News / newsletter models with no router or service usage today.
+  # News / newsletter models: used by an optional vertical outside this repository - not dead; keep.
   - "table:news_sources"
   - "table:news_articles"
   - "table:news_post_schedules"
@@ -771,7 +771,7 @@ internal:
   # Planner messages: written by the disabled research / guided-playbook
   # flow, deleted alongside projects (routers/boards.py).
   - "table:planner_messages"
-  # Content-vertical models with no router or service usage today.
+  # Content models: used by an optional vertical outside this repository - not dead; keep.
   - "table:storyboards"
   - "table:trend_signals"
   - "table:video_performance"
