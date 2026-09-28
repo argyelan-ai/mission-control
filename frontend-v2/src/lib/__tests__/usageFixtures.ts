@@ -1,5 +1,6 @@
 // Made-up numbers for tests and screenshots — never real usage.
 import type { DailyMetrics, PageViews, UsageByWeek, UsageSource, UsageTotals, UsageWeek } from "../usage";
+import type { UsageByDay, UsageDay } from "../insights";
 
 export function mkTotals(cost: number, tokens: number, localOutputShare: number | null = 0.1): UsageTotals {
   const out = Math.round(tokens / 50);
@@ -66,4 +67,28 @@ export function mkDaily(over: Partial<DailyMetrics> = {}): DailyMetrics {
     computed_at: "2026-10-01T09:00:00Z",
     ...over,
   };
+}
+
+export function mkDay(date: string, generated: number, localGenerated: number, cost = 0): UsageDay {
+  const totals = mkTotals(cost, generated * 30, generated ? localGenerated / generated : null);
+  return {
+    date,
+    ...totals,
+    generated_tokens: generated,
+    local_generated_tokens: localGenerated,
+    top_source: generated ? "operator" : null,
+  };
+}
+
+/** 40 made-up days ending Wednesday 2026-09-30, quieter on weekends. */
+export function mkUsageByDay(): UsageByDay {
+  const end = Date.UTC(2026, 8, 30);
+  const days: UsageDay[] = [];
+  for (let i = 39; i >= 0; i--) {
+    const d = new Date(end - i * 86_400_000);
+    const weekend = d.getUTCDay() === 0 || d.getUTCDay() === 6;
+    const generated = ((i * 7919) % 97) * (weekend ? 20_000 : 90_000);
+    days.push(mkDay(d.toISOString().slice(0, 10), generated, Math.round(generated * 0.12), generated / 4000));
+  }
+  return { generated_at: "2026-09-30T09:00:00Z", start: days[0].date, tz: "Europe/Zurich", days };
 }
