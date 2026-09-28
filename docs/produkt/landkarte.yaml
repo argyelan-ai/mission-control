@@ -801,8 +801,9 @@ internal:
 #     job runs — the task git endpoints resolve the repo row (the repos
 #     table is listed under F-tasks). ADR-050 built the registry for this.
 #   F-schedule -> step in J-job-to-merge: a scheduled job is a second way to
-#     create the task the journey follows — job runs create tasks
-#     (ROADMAP E2: scheduled background sessions without remote control).
+#     create the task the journey follows — job runs create tasks.
+#     Review note: no doc ties the schedule page to a journey; ROADMAP E2
+#     "scheduled background sessions" means CLI sessions, not this page.
 #   F-files -> step in J-job-to-merge: after a job ends, check the files it
 #     produced (deliverable_references links deliverables to files); the
 #     file content endpoint also feeds the inbox approval preview, part of
