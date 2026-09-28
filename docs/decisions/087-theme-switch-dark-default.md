@@ -156,7 +156,7 @@ DESIGN.md.
   `#161616`; agent lightness 75 %. `theme.contrast.test` has no dark
   exceptions any more. Text dimmed with `opacity` was removed in both modes
   (the light-only `light:opacity-100!` overrides are gone). UI probe dark
-  contrast findings: 248 → see the PR.
+  contrast findings: 252 → 1 (light stays 0).
 
 ### Light-only adjustments (UI probe, contrast check)
 
