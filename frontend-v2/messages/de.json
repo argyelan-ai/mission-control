@@ -73,7 +73,17 @@
     "activityHistory": "Aktivitätsverlauf",
     "activityHistoryTitle": "Aktivitätsverlauf",
     "close": "Schliessen",
-    "noActivity": "Keine Aktivität"
+    "noActivity": "Keine Aktivität",
+    "metrics": {
+      "title": "Messzahlen · 24 h",
+      "more": "Alle Zahlen in Insights",
+      "stale": "Karten über 4 h still",
+      "reviews": "Reviews beim Lead",
+      "dispatch": "Doppel-Dispatch / Heiler",
+      "hand": "Hand-Statuswechsel",
+      "week": "KW {week} · Listenpreis",
+      "local": "{share} lokal"
+    }
   },
   "tasks": {
     "createModal": {
@@ -1386,7 +1396,26 @@
     "chartDone": "Erledigt",
     "chartFailed": "Fehlgeschlagen",
     "chartCost": "Kosten",
-    "noAiReports": "Noch keine KI-Analysen. Der Intelligence-Service läuft täglich."
+    "noAiReports": "Noch keine KI-Analysen. Der Intelligence-Service läuft täglich.",
+    "usage": {
+      "title": "Nutzung pro Woche",
+      "hint": "Listenpreis-Gegenwert und Anteil lokal an den Output-Tokens",
+      "week": "KW {week}",
+      "weekNow": "KW {week} · bisher",
+      "sourcesTitle": "Diese Woche nach Quelle",
+      "pagesTitle": "Seitenaufrufe diese Woche",
+      "pagesEmpty": "Noch keine Seitenaufrufe gezählt.",
+      "empty": "Noch keine Nutzung erfasst.",
+      "source": {
+        "operator": "Du, interaktiv",
+        "lead": "Lead-Agent",
+        "agents": "Agenten · {harness}",
+        "headsLocal": "Heads lokal",
+        "headsCloud": "Heads Cloud",
+        "headsUnknown": "Heads",
+        "unattributed": "Ohne Zuordnung"
+      }
+    }
   },
   "files": {
     "title": "Dateien",

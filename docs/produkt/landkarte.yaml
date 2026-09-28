@@ -45,6 +45,7 @@ features:
       - "GET /api/v1/activity/stream"
       - "* /api/v1/night-shift/last-night"
       - "* /api/v1/night-shift/last-night/*"
+      - "GET /api/v1/system/daily-metrics"   # daily metrics digest M1-M5 on Home (E0, MC first)
     status: active
     source: "PRINCIPLES 7.1; ROADMAP E2 (morning report on the Home card)"
   - id: F-tasks

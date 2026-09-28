@@ -18,6 +18,7 @@ import AppShell from "@/components/layout/AppShell";
 import { SystemHealthSection } from "@/components/homepage/SystemHealthSection";
 import { ActivityHistoryPanel } from "@/components/homepage/ActivityHistoryPanel";
 import { LastNightCard } from "@/components/night/LastNightCard";
+import { DailyMetricsCard } from "@/components/home/DailyMetricsCard";
 import { homeAlertsToBanner } from "@/lib/homeAlerts";
 import { C, sectionVariants, getGreetingKey, bentoMediaStyles } from "@/components/homepage/colors";
 
@@ -160,6 +161,11 @@ function HomePage() {
           </div>
         </motion.div>
       )}
+
+      {/* The daily metrics digest (M1–M5) — MC first, Slack / Telegram optional */}
+      <motion.div custom={2} variants={sectionVariants} initial="hidden" animate="visible" className="empty:hidden">
+        <DailyMetricsCard />
+      </motion.div>
 
       {/* System Health */}
       <motion.div custom={2} variants={sectionVariants} initial="hidden" animate="visible">

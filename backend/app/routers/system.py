@@ -93,6 +93,21 @@ async def system_alerts(
     return {"alerts": await collect_home_alerts(session)}
 
 
+@router.get("/api/v1/system/daily-metrics")
+async def system_daily_metrics(
+    session: AsyncSession = Depends(get_session),
+    current_user = Depends(require_user),
+):
+    """The daily metrics digest (M1–M5) for the Home page — MC first, the
+    Slack/Telegram copy stays optional. Computed live on every call with the
+    same code as the digest (app/services/daily_metrics_digest.py)."""
+    from app.services.daily_metrics_digest import compute_daily_metrics
+
+    now = utcnow()
+    metrics = await compute_daily_metrics(session, now=now)
+    return {**metrics, "computed_at": now.isoformat()}
+
+
 @router.get("/api/v1/system/status")
 async def system_status(
     request: Request,

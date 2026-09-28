@@ -518,3 +518,36 @@ async def test_token_week_failure_keeps_the_other_metrics(session, monkeypatch):
     assert metrics["usage_week"] == {"error": True}
     assert "stale_cards" in metrics
     assert "M5: Tokens diese Woche: nicht verfuegbar" in dmd.format_digest(metrics).splitlines()
+
+
+# ── MC first: the same numbers on Home ────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_daily_metrics_endpoint_serves_the_digest_numbers(auth_client, session):
+    from datetime import datetime, timezone
+    import uuid as _uuid
+
+    from app.models.model_usage import ModelUsageEvent
+
+    session.add(ModelUsageEvent(
+        id=_uuid.uuid4(), harness="host", model="claude-opus-5", session_id="s",
+        message_uuid=f"e-{_uuid.uuid4()}", input_tokens=5, output_tokens=4,
+        cache_read_tokens=0, cache_write_tokens=0, cost_usd=0.25,
+        ts=datetime.now(timezone.utc), source_file="/x.jsonl",
+    ))
+    await session.commit()
+
+    resp = await auth_client.get("/api/v1/system/daily-metrics")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["stale_cards"] == []
+    assert body["reviews_total_24h"] == 0
+    assert body["usage_week"]["total_tokens"] == 9
+    assert body["usage_week"]["cost_usd"] == pytest.approx(0.25)
+    assert "computed_at" in body
+
+
+@pytest.mark.asyncio
+async def test_daily_metrics_endpoint_requires_login(client):
+    assert (await client.get("/api/v1/system/daily-metrics")).status_code in (401, 403)
