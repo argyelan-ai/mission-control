@@ -350,7 +350,18 @@
         "endedAgo": "endete vor {span}",
         "finishedAgo": "fertig vor {span}",
         "notStarted": "nicht gestartet",
-        "with": "bei {name}"
+        "with": "bei {name}",
+        "task": {
+          "inbox": "Aufgabe nicht gestartet",
+          "in_progress": "Aufgabe in Arbeit",
+          "review": "Aufgabe wartet auf Prüfung",
+          "user_test": "Aufgabe wartet auf dich",
+          "waiting": "Aufgabe wartet auf dich",
+          "blocked": "Aufgabe wartet auf dich",
+          "done": "Aufgabe erledigt",
+          "failed": "Aufgabe fehlgeschlagen",
+          "aborted": "Aufgabe abgebrochen"
+        }
       },
       "resultFallbackShort": "Letzte Agenten-Notiz:",
       "factHeartbeat": "Lebenszeichen",
@@ -358,7 +369,15 @@
       "factId": "ID",
       "copyId": "ID kopieren",
       "idCopied": "ID kopiert",
-      "changeStatus": "Status ändern"
+      "changeStatus": "Status ändern",
+      "headState": {
+        "starting": "Head startet",
+        "running": "Head läuft",
+        "needs_you": "Head braucht dich",
+        "passed": "Head bestanden",
+        "failed": "Head fehlgeschlagen",
+        "stopped": "Head gestoppt"
+      }
     },
     "pipelineTitle": "Pipeline",
     "pipelineFailedCount": "{count} fehlgeschlagen",
