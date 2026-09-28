@@ -121,7 +121,7 @@ describe("PROBE D — 'Decide yourself' override", () => {
     renderGate(mkTask());
     fireEvent.click(await screen.findByText("Decide yourself"));
     expect(await screen.findByText("Approve")).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Review-Begruendung"), { target: { value: "passt" } });
+    fireEvent.change(screen.getByLabelText("Reason for your review decision"), { target: { value: "passt" } });
     fireEvent.click(screen.getByText("Approve"));
     await waitFor(() => expect(apiMock.tasksReview).toHaveBeenCalled());
     // eslint-disable-next-line no-console

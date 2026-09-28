@@ -6,9 +6,9 @@
  *   TaskStateLine   ● Blocked · alpha asked 42 min ago   — one line, one "·"
  *   TaskStateCard   the next step, only when there is one:
  *
- *   NEEDS YOU  blocked/waiting/user_test. With an open approval the SAME
- *              ApprovalCard as in the inbox is embedded and is the only way
- *              to act — no extra status buttons here, otherwise the approval
+ *   NEEDS YOU  blocked/waiting/user_test. With an open approval it is shown
+ *              (TaskApprovalCard: same approval, resolve path and words as
+ *              the inbox card) and is the only way to act — no extra status buttons here, otherwise the approval
  *              would stay open in the inbox. Without one: a surface with the
  *              latest blocker comment + Reply (jumps to the comment field).
  *   RUNNING    the last step in plain words, no surface.
@@ -27,7 +27,7 @@ import { ExternalLink, MessageSquareReply, ScrollText } from "lucide-react";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import { C, STATUS_TEXT } from "@/lib/colors";
-import { ApprovalCard } from "@/components/inbox/ApprovalCard";
+import { TaskApprovalCard } from "./TaskApprovalCard";
 import type { StateCard } from "@/lib/taskDetail/stateCard";
 import type { StateLine, StateTone } from "@/lib/taskDetail/stateLine";
 import type { Task } from "@/lib/types";
@@ -131,8 +131,7 @@ export function TaskStateCard({
       return (
         <Block kind="needs_you">
           <div data-testid="state-card-approval">
-            <ApprovalCard
-              compact
+            <TaskApprovalCard
               approval={card.approval}
               loading={resolveMutation.isPending}
               onResolve={(status, note) => resolveMutation.mutate({ id: card.approval!.id, status, note })}
