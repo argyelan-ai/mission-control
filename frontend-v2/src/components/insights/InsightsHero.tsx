@@ -63,7 +63,7 @@ export function InsightsHero({ days, weeks }: { days: UsageByDay; weeks: UsageBy
         </div>
         <p className="mt-2 text-xs" style={{ color: C.textMuted }}>{t("costHint")}</p>
         {changeText && (
-          <p className="mt-1 text-sm" style={{ color: C.textSecondary }} data-testid="hero-change">
+          <p className="mt-1 text-xs" style={{ color: C.textSecondary }} data-testid="hero-change">
             {changeText}
           </p>
         )}
@@ -75,7 +75,7 @@ export function InsightsHero({ days, weeks }: { days: UsageByDay; weeks: UsageBy
             <span className="display text-xl font-medium tabular-nums" style={{ color: C.textPrimary }}>
               {formatShare(share, locale)}
             </span>
-            <span className="text-sm" style={{ color: C.textSecondary }}>{t("local")}</span>
+            <span className="text-xs" style={{ color: C.textSecondary }}>{t("local")}</span>
           </p>
           <div
             className="mt-2 h-2 rounded-full overflow-hidden"

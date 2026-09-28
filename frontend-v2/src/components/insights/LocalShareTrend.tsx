@@ -27,7 +27,7 @@ export function LocalShareTrend({ weeks }: { weeks: UsageWeek[] }) {
         <h2 id="trend-heading" className="text-base font-semibold" style={{ color: C.textPrimary }}>
           {t("title")}
         </h2>
-        <span className="text-xs shrink-0" style={{ color: C.textMuted }}>{t("period", { count: weeks.length })}</span>
+        <span className="text-sm shrink-0" style={{ color: C.textMuted }}>{t("period", { count: weeks.length })}</span>
       </div>
 
       <ol

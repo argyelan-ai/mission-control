@@ -69,7 +69,7 @@ export function DoneSummary({
         <h2 id="done-heading" className="text-base font-semibold" style={{ color: C.textPrimary }}>
           {t("title")}
         </h2>
-        <span className="text-xs shrink-0" style={{ color: C.textMuted }}>{t("period", { days: windowDays })}</span>
+        <span className="text-sm shrink-0" style={{ color: C.textMuted }}>{t("period", { days: windowDays })}</span>
       </div>
 
       {!insights?.analyzed_at ? (

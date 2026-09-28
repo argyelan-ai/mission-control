@@ -37,7 +37,7 @@ export function SourceSplit({ week }: { week: UsageWeek | undefined }) {
         <h2 id="sources-heading" className="text-base font-semibold" style={{ color: C.textPrimary }}>
           {t("title")}
         </h2>
-        <span className="text-xs shrink-0" style={{ color: C.textMuted }}>{t("period")}</span>
+        <span className="text-sm shrink-0" style={{ color: C.textMuted }}>{t("period")}</span>
       </div>
 
       {all.length === 0 ? (

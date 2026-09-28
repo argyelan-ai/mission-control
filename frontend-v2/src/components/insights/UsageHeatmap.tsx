@@ -12,10 +12,12 @@
  *   Mon  ▢▣▣▢▣■▣▢▣▣■■▢▣▣▣■■▣▢▣■■▣▣▢
  *   …
  *                                         less ▢▢▣▣■ more
- *   ‹      Wednesday, 23 September · 1.2M tokens · $214 · 18 % local      ›
+ *   ‹  Wednesday, 23 September                                          ›
+ *      1.2M tokens · $214 · 18 % local · Mostly You, interactive
  *
  * A cell is ~12 px — too small to aim at on a phone — so the day row below
- * has 44 px arrows; tapping a cell selects it too.
+ * has 44 px arrows; tapping a cell selects it too. The day text starts on the
+ * grid's edge (K9: two left edges).
  */
 
 import { useMemo, useState } from "react";
@@ -120,7 +122,7 @@ export function UsageHeatmap({ data }: { data: UsageByDay }) {
         >
           <ChevronLeft size={18} aria-hidden />
         </button>
-        <div className="py-3 text-center min-w-0" aria-live="polite">
+        <div className="py-3 min-w-0" aria-live="polite">
           <p className="text-sm font-medium" style={{ color: C.textPrimary }}>{selected && dayLabel(selected)}</p>
           <p className="mt-1 text-xs" style={{ color: C.textSecondary }}>
             {!day || day.generated_tokens === 0 ? (
@@ -195,7 +197,7 @@ function Grid({
     selectedCol < 0 ? null : { col: selectedCol, row: grid.columns[selectedCol].findIndex((c) => c?.date === selected) };
 
   return (
-    <div className="grid grid-cols-[2rem_1fr] gap-x-1">
+    <div className="grid grid-cols-[2.75rem_1fr]">
       <div />
       <div className="relative h-4 text-xs" style={{ color: C.textMuted }} aria-hidden>
         {grid.months.map((m) => (
