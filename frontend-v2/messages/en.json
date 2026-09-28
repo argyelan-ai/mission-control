@@ -73,7 +73,17 @@
     "activityHistory": "Activity history",
     "activityHistoryTitle": "Activity History",
     "close": "Close",
-    "noActivity": "No activity"
+    "noActivity": "No activity",
+    "metrics": {
+      "title": "Measured today",
+      "more": "All numbers in Insights",
+      "stale": "Cards idle over 4 h",
+      "reviews": "Reviews at the lead · 24 h",
+      "dispatch": "Double dispatch / healer · 24 h",
+      "hand": "Manual status changes · 24 h",
+      "week": "Week {week} · list price",
+      "local": "{share} local"
+    }
   },
   "tasks": {
     "createModal": {
@@ -1386,7 +1396,28 @@
     "chartDone": "Done",
     "chartFailed": "Failed",
     "chartCost": "Cost",
-    "noAiReports": "No AI analyses yet. The intelligence service runs daily."
+    "noAiReports": "No AI analyses yet. The intelligence service runs daily.",
+    "usage": {
+      "title": "Usage by week",
+      "hint": "List-price equivalent · local share of output tokens",
+      "week": "Week {week}",
+      "weekNow": "Week {week} · so far",
+      "local": "{share} local",
+      "sourcesTitle": "This week by source",
+      "pagesTitle": "Pages this week",
+      "pagesEmpty": "No page views counted yet.",
+      "empty": "No usage recorded yet.",
+      "views": "{count} views",
+      "source": {
+        "operator": "You, interactive",
+        "lead": "Lead agent",
+        "agents": "Agents · {harness}",
+        "headsLocal": "Heads local",
+        "headsCloud": "Heads cloud",
+        "headsUnknown": "Heads",
+        "unattributed": "Unattributed"
+      }
+    }
   },
   "files": {
     "title": "Files",

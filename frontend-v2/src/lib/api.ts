@@ -252,6 +252,7 @@ export const api = {
       ),
     status: () => request<SystemStatus>("/api/v1/system/status"),
     alerts: () => request<import("./homeAlerts").HomeAlertsResponse>("/api/v1/system/alerts"),
+    dailyMetrics: () => request<import("./usage").DailyMetrics>("/api/v1/system/daily-metrics"),
     metrics: () => request<SystemMetrics>("/api/v1/system/metrics"),
     metricsHistory: () => request<MetricsHistoryResponse>("/api/v1/system/metrics/history"),
     mode: () => request<import("./types").SystemModeMeta>("/api/v1/system/mode"),
@@ -278,6 +279,13 @@ export const api = {
       request<CostTimeseries[]>(`/api/v1/intelligence/costs/timeseries?days=${days}`),
     byTask: (days = 30, limit = 10) =>
       request<CostByTask[]>(`/api/v1/intelligence/costs/by-task?days=${days}&limit=${limit}`),
+    byWeek: (weeks = 6) =>
+      request<import("./usage").UsageByWeek>(`/api/v1/intelligence/costs/by-week?weeks=${weeks}`),
+  },
+
+  // ── Page usage (E0 beacon; the POST lives in lib/pageBeacon.ts) ─────────────
+  usage: {
+    pages: (weeks = 1) => request<import("./usage").PageViews>(`/api/v1/usage/pages?weeks=${weeks}`),
   },
 
   // ── Files (global filesystem browser, /api/v1/files/*) ──────────────────────

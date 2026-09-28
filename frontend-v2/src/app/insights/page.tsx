@@ -5,6 +5,7 @@ import { useLocale, useTranslations } from "next-intl";
 import { useState } from "react";
 import AppShell from "@/components/layout/AppShell";
 import { useQuery } from "@tanstack/react-query";
+import { UsageByWeek } from "@/components/insights/UsageByWeek";
 import { motion } from "framer-motion";
 import {
   TrendingUp, DollarSign, Zap, AlertTriangle, BarChart3,
@@ -341,6 +342,9 @@ export default function InsightsPage() {
                     color={insights?.anomalies?.length ? C.warning : C.online}
                   />
                 </div>
+
+                {/* E0 baseline in MC: cost + local share per week, top sources, pages */}
+                <UsageByWeek />
 
                 {/* Agent performance + cost side by side */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
