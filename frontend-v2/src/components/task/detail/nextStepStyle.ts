@@ -19,3 +19,6 @@ export const QUIET_BTN =
 
 /** Body text of the next step: 16 px on the phone, 14 px in a wide pane. */
 export const NEXT_TEXT = "text-base @min-[560px]:text-sm leading-relaxed";
+
+/** Fade for a clamped preview that continues — only while it overflows. */
+export const FADE = "[mask-image:linear-gradient(to_bottom,black_70%,transparent)]";

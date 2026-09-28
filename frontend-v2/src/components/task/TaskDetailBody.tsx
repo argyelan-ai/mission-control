@@ -1046,6 +1046,11 @@ export function TaskDetailBody({
   );
 
   const commentCount = comments.length;
+  // The next step above already carries the one primary button (K11).
+  const headerHasPrimary =
+    stateCard?.kind === "needs_you" ||
+    stateCard?.kind === "failed" ||
+    (stateCard?.kind === "head" && ["open_pr", "answer", "restart"].includes(stateCard.mainAction));
 
   return (
     <>
@@ -1141,7 +1146,7 @@ export function TaskDetailBody({
           )}
           {showActions && (
             <div className="mt-4">
-              <TaskActions task={task} boardId={boardId} />
+              <TaskActions task={task} boardId={boardId} primaryTaken={headerHasPrimary} />
             </div>
           )}
         </div>
