@@ -12,6 +12,9 @@ Report verschicken:
                                   sonst -> healer_repeat
   M4 hand_status_changes       — task_events mit changed_by='user' letzte
                                   24h, gruppiert nach reason
+  M5 usage_week                — Tokens der laufenden ISO-Woche, lokaler
+                                  Anteil, Listenpreis (E0-Baseline,
+                                  app/services/usage_baseline.py)
 
 Muster: app/services/intelligence.py (Singleton, asyncio-Loop, Redis-Dedup
 fuer "einmal pro Tag").
@@ -69,6 +72,12 @@ async def _compute(session: AsyncSession, now) -> dict:
     reviews_to_lead, reviews_total = await _reviews_to_lead(session, now)
     double_dispatch, healer_repeats = await _dispatch_pairs(session, now)
     hand_total, hand_by_reason = await _hand_status_changes(session, now)
+    try:
+        usage_week = await _usage_week(session, now)
+    except Exception as e:
+        # M5 is additive — a broken usage query must not swallow M1–M4.
+        logger.warning("DailyMetricsDigest: usage week failed (non-critical): %s", e)
+        usage_week = {"error": True}
     return {
         "stale_cards": stale_cards,
         "reviews_to_lead_24h": reviews_to_lead,
@@ -77,6 +86,7 @@ async def _compute(session: AsyncSession, now) -> dict:
         "healer_repeats_24h": healer_repeats,
         "hand_status_changes_24h": hand_total,
         "hand_status_changes_by_reason": hand_by_reason,
+        "usage_week": usage_week,
     }
 
 
@@ -203,6 +213,25 @@ async def _hand_status_changes(session: AsyncSession, now) -> tuple[int, dict[st
     return len(events), by_reason
 
 
+async def _usage_week(session: AsyncSession, now) -> dict | None:
+    """M5: Summen der laufenden ISO-Woche aus der E0-Baseline (bis jetzt).
+    None, wenn diese Woche noch keine Nutzung geerntet wurde."""
+    from app.services.usage_baseline import compute_weekly_baseline
+
+    week = (await compute_weekly_baseline(session, weeks=1, now=now))["weeks"][-1]
+    totals = week["totals"]
+    if not totals["events"]:
+        return None
+    return {
+        "week": week["week"],
+        "total_tokens": totals["total_tokens"],
+        "output_tokens": totals["output_tokens"],
+        "local_share": totals["local_share"],
+        "local_output_share": totals["local_output_share"],
+        "cost_usd": totals["cost_usd"],
+    }
+
+
 _UMLAUT_MAP = str.maketrans(
     {
         "ä": "ae", "ö": "oe", "ü": "ue",
@@ -262,6 +291,22 @@ def format_digest(metrics: dict, *, now=None) -> str:
         f"M4: {metrics.get('hand_status_changes_24h', 0)} Hand-Statuswechsel "
         f"({reasons_str})"
     )
+
+    usage = metrics.get("usage_week")
+    if usage and usage.get("error"):
+        lines.append("M5: Tokens diese Woche: nicht verfuegbar")
+    elif usage:
+        def _pct(share):
+            return "-" if share is None else f"{share * 100:.1f} %"
+
+        lines.append(
+            f"M5: Tokens {usage['week']} bisher {usage['total_tokens'] / 1e6:.1f} M "
+            f"(Output {usage['output_tokens'] / 1e6:.1f} M), lokal {_pct(usage['local_share'])} "
+            f"(Output {_pct(usage['local_output_share'])}), "
+            f"Listenpreis {usage['cost_usd']:.0f} USD"
+        )
+    elif "usage_week" in metrics:
+        lines.append("M5: Tokens diese Woche: keine Daten")
 
     # Belt-and-braces: alles, was noch nicht durch _to_ascii lief (z.B. ein
     # kuenftiges Feld), faellt hier still auf ASCII zurueck statt den
