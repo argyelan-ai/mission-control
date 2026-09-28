@@ -74,6 +74,9 @@ def derive_head_state(
     # into "stopped" (stop_requested only matters before pick-up, above).
     if reason == "stopped":
         out.update(state="stopped", reason="stopped")
+    elif reason == "hook_bypassed":
+        # pushed around the pre-push hook (--no-verify): never passed, never "needs you"
+        out.update(state="failed", reason="hook_bypassed")
     elif question_exists and not pr_url:
         out.update(state="needs_you", reason=None)
     elif pr_url and run_record_passed:

@@ -240,3 +240,12 @@ def test_silence_is_measured_from_the_last_progress_not_only_output(tmp_path, mo
     out = derive_for_run(run, now)
     assert out["state"] == "running"
     assert 100 <= out["silent_s"] <= 140
+
+
+def test_hook_bypass_fails_even_with_pr_and_passed_record():
+    """The wrapper saw a pushed branch tip the pre-push hook never passed
+    (``git push --no-verify``): a PR and a green run record do not count."""
+    status = {"phase": "exited", "exit_code": 0, "pr_url": "https://github.com/o/r/pull/1", "reason": "hook_bypassed"}
+    out = _d(status, run_record_passed=True)
+    assert (out["state"], out["reason"]) == ("failed", "hook_bypassed")
+    assert _d(status, run_record_passed=True, question_exists=True)["state"] == "failed"

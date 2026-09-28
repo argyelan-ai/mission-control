@@ -67,7 +67,7 @@ def test_worktree_and_status_files_are_writable(layout):
         layout,
         f"echo ok > {run}/wt/file.txt && echo 'step 1/7' > {run}/step.txt"
         f" && echo q > {run}/question.md && echo r > {run}/run-record.md && echo g > {layout['clone_git']}/x"
-        f" && echo w | tee -a {run}/work.log",
+        f" && echo w | tee -a {run}/work.log && echo sha >> {run}/hook-passed.txt",
     )
     assert res.returncode == 0, res.stderr
     assert (run / "wt" / "file.txt").read_text() == "ok\n"
@@ -228,7 +228,7 @@ def _installed_kz() -> Path | None:
 @pytest.mark.skipif(_installed_kz() is None, reason="kz not installed on this host")
 def test_kz_runs_inside_the_profile_and_writes_nothing(layout):
     """kz is reached through the profile's default read/exec rules (no grant
-    of its own): `kz check --fast` and `kz brief` work in the worktree, and
+    of its own): the push-time `kz check` and `kz brief` work in the worktree, and
     the kz install stays read-only for the head."""
     kz = _installed_kz()
     wt = layout["run"] / "wt"
@@ -240,7 +240,7 @@ def test_kz_runs_inside_the_profile_and_writes_nothing(layout):
     subprocess.run([*git, "add", "AGENTS.md", "README.md", ".kohaerenz.yaml"], check=True)
     subprocess.run([*git, "commit", "-q", "-m", "init"], check=True)
     subprocess.run([*git, "update-ref", "refs/remotes/origin/main", "HEAD"], check=True)
-    check = _sh(layout, f"'{kz}' -C '{wt}' check --fast")
+    check = _sh(layout, f"'{kz}' -C '{wt}' check --only orphans,states,rules,anchors,adr,timebomb,links")
     assert check.returncode == 0, check.stdout + check.stderr
     assert "OK" in check.stdout
     brief = _sh(layout, f"'{kz}' -C '{wt}' brief --paths README.md --text 'change the readme'")

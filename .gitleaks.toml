@@ -74,6 +74,20 @@ tags = ["mission-control", "host-layout"]
   ]
   paths = ['''backend/tests/test_oss_scrub_hygiene\.py''']  # deliberate samples: this file TESTS the rules
 
+[[rules]]
+id = "mc-dash-encoded-home-path"
+description = "Home path in dash form (Claude Code project folders: /Users/<login> -> -Users-<login>) — carries the operator's login name"
+regex = '''-Users-[A-Za-z0-9_]+'''
+tags = ["mission-control", "host-layout"]
+
+  [rules.allowlist]
+  description = "Same placeholder home directories as the slash form; write -Users-<user> in docs"
+  regexTarget = "match"
+  regexes = [
+    '''^-Users-(testuser|otheruser|operator|op|x|mark|fakehost|YOUR_USER)$''',
+  ]
+  paths = ['''backend/tests/test_oss_scrub_hygiene\.py''']  # deliberate samples: this file TESTS the rules
+
 [allowlist]
 description = "Verified false positives"
 regexes = [
