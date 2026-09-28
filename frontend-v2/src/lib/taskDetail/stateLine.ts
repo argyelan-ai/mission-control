@@ -13,6 +13,7 @@ import { STATUS_LABEL_KEY } from "./statusLabels";
  *   ● Done · alpha took 2 h 17 min
  *   ● Failed · ended 18 min ago
  *   ● Passed · finished 9 min ago          (head run)
+ *   ● Head failed · task awaits review     (head and card disagree)
  *
  * One word for the state (the status label from i18n, or the head state),
  * at most one "·", exactly one time — the one that belongs to the state.
@@ -50,6 +51,16 @@ const HEAD_TONE: Record<HeadState, StateTone> = {
   passed: "online",
   failed: "error",
   stopped: "muted",
+};
+
+/** Card statuses that tell the same story as the head state. */
+const HEAD_MATCHING_STATUS: Record<HeadState, ReadonlySet<string>> = {
+  starting: new Set(["in_progress"]),
+  running: new Set(["in_progress"]),
+  needs_you: new Set(["blocked", "waiting", "user_test"]),
+  passed: new Set(["done"]),
+  failed: new Set(["failed", "aborted"]),
+  stopped: new Set(["aborted", "failed"]),
 };
 
 /**
@@ -95,6 +106,16 @@ export function deriveStateLine({
 
   if (card?.kind === "head") {
     const run = card.run;
+    // Head and card can tell different stories (a failed head leaves the card
+    // in review). Then the line names both instead of one time:
+    // "Head failed · task awaits review".
+    if (!HEAD_MATCHING_STATUS[run.state].has(task.status)) {
+      return {
+        tone: HEAD_TONE[run.state],
+        word: { ns: "tasks", key: `detail.headState.${run.state}` },
+        detail: { key: `task.${task.status}`, values: {} },
+      };
+    }
     const word = { ns: "heads" as const, key: `state.${run.state}` };
     const ended = run.exited_at ?? run.started_at ?? run.created_at;
     if (run.state === "starting") return { tone: "info", word, detail: null };

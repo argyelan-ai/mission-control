@@ -610,3 +610,16 @@ describe("markdown in the brief and the header", () => {
     expect(card).not.toHaveTextContent("**");
   });
 });
+
+describe("head and card disagree (state line)", () => {
+  it("a failed head on a card in review says both: 'Head failed · task awaits review'", async () => {
+    mockApi();
+    const { mkRun } = await import("@/lib/__tests__/headFixtures");
+    vi.spyOn(api.heads, "list").mockResolvedValue({
+      runs: [mkRun({ state: "failed", reason: "no_pr", exited_at: "2026-09-23T12:00:00Z" })],
+    });
+    vi.spyOn(api.heads, "pairs").mockRejectedValue(new Error("API 404: {}"));
+    renderBody(taskFixture({ status: "review" }));
+    await waitFor(() => expect(screen.getByTestId("task-state-line")).toHaveTextContent("Head failed · task awaits review"));
+  });
+});
