@@ -73,8 +73,8 @@ const weekday = (ms: number) => (new Date(ms).getUTCDay() + 6) % 7;
 /**
  * `weeks` Monday-first columns of 7 cells, the last column holding today (the
  * last day in `days`). Days after today are null; days before the window are
- * empty cells. `months` names the column that holds the 1st of a month
- * (month 0 = January).
+ * empty cells. `months` names the column that holds the 1st of a month that
+ * has begun (month 0 = January).
  */
 export function heatmapGrid(days: UsageDay[], weeks: number, metric: HeatMetric) {
   const byDate = new Map(days.map((d) => [d.date, d]));
@@ -89,11 +89,11 @@ export function heatmapGrid(days: UsageDay[], weeks: number, metric: HeatMetric)
     for (let row = 0; row < 7; row++) {
       const ms = firstMonday + (col * 7 + row) * DAY_MS;
       const date = iso(ms);
-      if (new Date(ms).getUTCDate() === 1) months.push({ col, month: new Date(ms).getUTCMonth() });
       if (ms > today) {
         cells.push(null);
         continue;
       }
+      if (new Date(ms).getUTCDate() === 1) months.push({ col, month: new Date(ms).getUTCMonth() });
       const day = byDate.get(date);
       const value = day ? dayValue(day, metric) : 0;
       cells.push({ date, value, level: day ? level(value) : 0, inWindow: !!day });

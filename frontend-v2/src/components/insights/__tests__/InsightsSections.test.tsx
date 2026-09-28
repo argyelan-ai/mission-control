@@ -65,8 +65,8 @@ describe("InsightsHero", () => {
 describe("UsageHeatmap", () => {
   it("draws 26 weeks for the phone and 52 for the desktop", () => {
     wrap(<UsageHeatmap data={mkUsageByDay()} />);
-    expect(screen.getByTestId("heatmap-grid-26").querySelectorAll("rect")).toHaveLength(25 * 7 + 3);
-    expect(screen.getByTestId("heatmap-grid-52").querySelectorAll("rect")).toHaveLength(51 * 7 + 3);
+    expect(screen.getByTestId("heatmap-grid-26").querySelectorAll("rect[data-date]")).toHaveLength(25 * 7 + 3);
+    expect(screen.getByTestId("heatmap-grid-52").querySelectorAll("rect[data-date]")).toHaveLength(51 * 7 + 3);
   });
 
   it("starts on today and steps through the days with 44 px arrows", () => {
@@ -84,6 +84,11 @@ describe("UsageHeatmap", () => {
     wrap(<UsageHeatmap data={data} />);
     const cell = screen.getByTestId("heatmap-grid-26").querySelector('rect[data-date="2026-09-29"]')!;
     fireEvent.click(cell);
+    const ring = within(screen.getByTestId("heatmap-grid-26") as unknown as HTMLElement).getByTestId("heatmap-selected");
+    expect([ring.getAttribute("x"), ring.getAttribute("y")]).toEqual([
+      String(Number(cell.getAttribute("x")) - 2),
+      String(Number(cell.getAttribute("y")) - 2),
+    ]);
     const row = screen.getByTestId("heatmap-day");
     expect(row).toHaveTextContent("1.2M tokens");
     expect(row).toHaveTextContent("$214");

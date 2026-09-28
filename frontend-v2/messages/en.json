@@ -1438,7 +1438,7 @@
       "pages": "Page views",
       "pagesSummary": "this week",
       "reports": "AI reports",
-      "reportsSummary": "last {ago}",
+      "reportsSummary": "newest {ago}",
       "empty": "Nothing in this time range.",
       "noReports": "No AI reports yet. The analysis runs once a day."
     }

@@ -59,7 +59,7 @@ describe("heatmapGrid", () => {
 
   it("labels the column that holds the first of a month", () => {
     const grid = heatmapGrid(data.days, 6, "all");
-    expect(grid.months).toEqual([{ col: 1, month: 8 }, { col: 5, month: 9 }]); // the columns holding 1 Sep and 1 Oct
+    expect(grid.months).toEqual([{ col: 1, month: 8 }]); // 1 Sep; 1 Oct is still to come
   });
 });
 

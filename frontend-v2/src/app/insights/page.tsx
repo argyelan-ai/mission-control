@@ -78,23 +78,22 @@ export default function InsightsPage() {
         ) : (
           <>
             <InsightsHero days={byDay.data} weeks={byWeek.data} />
-            <div className="mt-12 grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-12">
+            <div className="mt-12">
               <UsageHeatmap data={byDay.data} />
+            </div>
+            <div className="mt-12 grid grid-cols-1 lg:grid-cols-2 gap-12">
               <SourceSplit week={weeks[weeks.length - 1]} />
+              <LocalShareTrend weeks={weeks} />
             </div>
           </>
         )}
 
-        <div className="mt-12 grid grid-cols-1 lg:grid-cols-2 gap-12">
-          {ready && <LocalShareTrend weeks={weeks} />}
+        <div className="mt-12 grid grid-cols-1 lg:grid-cols-2 gap-12 lg:items-start">
           <DoneSummary
             insights={insights.data}
             windowDays={config.data?.analysis_window_days ?? 7}
             heads={heads.data?.runs ?? null}
           />
-        </div>
-
-        <div className="mt-12">
           <InsightsDetails />
         </div>
       </div>

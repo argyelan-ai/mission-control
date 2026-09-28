@@ -190,6 +190,9 @@ function Grid({
   const rowLabel = (row: number) => weekday.format(new Date(Date.UTC(2026, 8, 28 + row)));
   const width = weeks * PITCH - GAP;
   const height = 7 * PITCH - GAP;
+  const selectedCol = grid.columns.findIndex((cells) => cells.some((c) => c?.date === selected));
+  const selectedAt =
+    selectedCol < 0 ? null : { col: selectedCol, row: grid.columns[selectedCol].findIndex((c) => c?.date === selected) };
 
   return (
     <div className="grid grid-cols-[2rem_1fr] gap-x-1">
@@ -207,7 +210,7 @@ function Grid({
         ))}
       </div>
       <svg
-        viewBox={`0 0 ${width} ${height}`}
+        viewBox={`-2 -2 ${width + 4} ${height + 4}`}
         className="w-full h-auto block"
         role="img"
         aria-label={t("gridAria", { weeks })}
@@ -224,8 +227,6 @@ function Grid({
                 height={CELL}
                 rx={2}
                 fill={HEAT_FILL[cell.level]}
-                stroke={cell.date === selected ? C.textPrimary : "none"}
-                strokeWidth={cell.date === selected ? 1.5 : 0}
                 data-date={cell.date}
                 data-level={cell.level}
                 onClick={cell.inWindow ? () => onSelect(cell.date) : undefined}
@@ -235,6 +236,21 @@ function Grid({
               </rect>
             ) : null,
           ),
+        )}
+        {selectedAt && (
+          // A ring around the cell, not a stroke on it: a stroke vanishes on the brightest level.
+          <rect
+            x={selectedAt.col * PITCH - 2}
+            y={selectedAt.row * PITCH - 2}
+            width={CELL + 4}
+            height={CELL + 4}
+            rx={3}
+            fill="none"
+            stroke={C.textPrimary}
+            strokeWidth={1.5}
+            pointerEvents="none"
+            data-testid="heatmap-selected"
+          />
         )}
       </svg>
     </div>
