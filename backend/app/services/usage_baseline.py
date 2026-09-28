@@ -11,7 +11,7 @@ columns the harvester already writes; nothing is guessed:
   lead            every other row of the lead agent (slug ``boss*``, same rule
                   as the harvester): its checkout dir and its own config dir.
   agents:<h>      other persistent agents, by the harness recorded on the row
-                  (cli-bridge, sparky, grok, hermes, host, ...).
+                  (cli-bridge, grok, hermes, host, ...).
   heads:<l>       head runs (harness ``head-*``), by the run's recorded
                   locality — ``unknown`` when the spec had none.
   unattributed    no agent and not a head.

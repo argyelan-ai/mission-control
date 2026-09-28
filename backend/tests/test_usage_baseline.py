@@ -18,7 +18,7 @@ from app.services.usage_baseline import compute_weekly_baseline
 NOW = datetime(2026, 9, 24, 12, 0, tzinfo=timezone.utc)
 W39 = datetime(2026, 9, 22, 10, 0, tzinfo=timezone.utc)
 W38 = datetime(2026, 9, 15, 10, 0, tzinfo=timezone.utc)
-HOME = "/Users/op"
+HOME = "/home/op"
 LEAD_DIR = encode_cwd(f"{HOME}/.mc/checkouts/mission-control")
 
 
@@ -124,7 +124,7 @@ async def test_local_share_uses_row_locality_then_local_runtime_models(session):
                 model_identifier="deepseek-v4-flash"),
     ])
     session.add_all([
-        _row("sparky", model="glm-5.3-flash-exl3", inp=100, out=100, cr=0, cw=0),  # case-insensitive match
+        _row("hermes", model="glm-5.3-flash-exl3", inp=100, out=100, cr=0, cw=0),  # case-insensitive match
         _row("cli-bridge", model="deepseek-v4-flash", inp=100, out=100, cr=0, cw=0),
         _row("host", model="claude-opus-5", inp=100, out=100, cr=0, cw=0),
         _row("head-omp", model="whatever", locality="local", inp=100, out=100, cr=0, cw=0),
