@@ -157,8 +157,8 @@ function DayTimeline({
                     {job.schedule_time}
                   </span>
                   <span
-                    className="text-[10px] truncate light:opacity-100!"
-                    style={{ color: c.text, opacity: 0.8 }}
+                    className="text-[10px] truncate"
+                    style={{ color: c.text }}
                   >
                     {job.name}
                   </span>
@@ -292,8 +292,7 @@ function WeekCalendar({
                           {job.schedule_time ?? "—"}
                         </div>
                         <div
-                          className="truncate leading-tight light:opacity-100!"
-                          style={{ opacity: 0.8 }}
+                          className="truncate leading-tight"
                         >
                           {job.name}
                         </div>

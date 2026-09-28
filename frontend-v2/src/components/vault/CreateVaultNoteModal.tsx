@@ -358,7 +358,7 @@ export function CreateVaultNoteModal({ enabled, onCreated }: CreateVaultNoteModa
                 {/* Tags */}
                 <div>
                   <label className="text-[10px] uppercase tracking-wider font-mono mb-2 flex items-center gap-1.5" style={{ color: C.textMuted }}>
-                    <Hash size={10} /> {tr("tagsLabel")} <span className="opacity-60 light:opacity-100!">{tr("tagsOptionalHint")}</span>
+                    <Hash size={10} /> {tr("tagsLabel")} <span style={{ color: "var(--color-text-dim)" }}>{tr("tagsOptionalHint")}</span>
                   </label>
                   <input
                     type="text"

@@ -166,7 +166,7 @@ function DialogShell({
                 className="font-mono uppercase rounded-sm px-3 py-2 text-[10.5px] tracking-[0.14em] transition-colors cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
                 style={
                   danger
-                    ? { background: alpha(C.error, 0.14), border: `1px solid ${alpha(C.error, 0.45)}`, color: C.error }
+                    ? { background: alpha(C.error, 0.1), border: `1px solid ${alpha(C.error, 0.45)}`, color: C.error }
                     : { background: C.accentSubtle, border: `1px solid ${C.borderAccent}`, color: C.accent }
                 }
               >

@@ -118,23 +118,23 @@ export const C = {
 // Replaces the ad-hoc inline hex that AgentStrip + PipelineView used to carry.
 
 export const STATUS: Record<string, string> = {
-  online: C.online,        // #55A964
-  busy: C.info,            // #5890CA — active work is an info state, not an accent
-  idle: C.textDim,         // #8A8A8A
+  online: C.online,        // status-online
+  busy: C.info,            // status-info — active work is an info state, not an accent
+  idle: C.textDim,         // text-dim
   offline: v("status-offline"),
-  error: C.error,          // #FA4942
-  warning: C.warning,      // #A67F3E
+  error: C.error,          // status-error
+  warning: C.warning,      // status-warning
   provisioning: C.warning,
   restarting: C.warning,
 };
 
 export const LANE: Record<string, string> = {
   inbox: C.textMuted,      // neutral
-  in_progress: C.info,     // #5890CA
-  review: C.warning,       // #A67F3E
+  in_progress: C.info,     // status-info
+  review: C.warning,       // status-warning
   // user_test = wartet auf den Operator → hellster Ton, nicht bunt (System A)
   user_test: C.accent,     // #EBE8DE
-  waiting: C.info,         // #5890CA — answer-wait, same info family as in_progress
+  waiting: C.info,         // status-info — answer-wait, same info family as in_progress
   blocked: C.error,
   failed: C.error,
   aborted: C.warning,
@@ -148,9 +148,9 @@ export const LANE: Record<string, string> = {
 
 export const STATUS_TEXT = {
   online: v("status-online-text"), // dark = C.online; light a step deeper for text on status tints
-  warning: v("status-warning-text"), // lifted tone (dark #B98F4D = 5.38:1; token itself 4.34:1)
+  warning: v("status-warning-text"), // dark = C.warning (AA on its own since the dark-contrast pass); light a step deeper
   error: v("status-error-text"), // dark = C.error; light a step deeper for text on status tints
-  info: C.info,       // 4.74:1 — usable unchanged
+  info: C.info,       // AA on every surface — usable unchanged
 } as const;
 
 // ── External brand colors — the only allowed non-token colors ──────────────

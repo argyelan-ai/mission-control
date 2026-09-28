@@ -169,7 +169,7 @@ export function JobsTable({
                   }}
                 >
                   {tag}
-                  <span className="ml-1 opacity-60 light:opacity-100!">{count}</span>
+                  <span className="ml-1" style={{ color: "var(--color-text-dim)" }}>{count}</span>
                 </button>
               );
             })}
