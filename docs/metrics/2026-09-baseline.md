@@ -10,6 +10,11 @@ from existing logs, and the head numbers that feed stop 1
 Every number below carries its source. "Measured" means a query or file read
 on 2026-09-24; nothing here is carried over from notes.
 
+**Follow-up (E0):** §1 is now a query — `GET /api/v1/intelligence/costs/by-week`
+(rules in `backend/app/services/usage_baseline.py`, weekly line M5 in the daily
+digest). The §2.4 route beacon is built (`POST /api/v1/usage/page`, read back
+with `GET /api/v1/usage/pages`). Live numbers stay out of this public file.
+
 ## Summary
 
 | Question | Answer |

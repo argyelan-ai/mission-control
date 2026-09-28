@@ -72,8 +72,10 @@ features:
   - id: F-insights
     name: "Insights: usage and metrics"
     ui: {route: /insights}
+    # E0 measuring layer: token baseline per week x source, page-usage beacon
+    api: ["GET /api/v1/intelligence/costs/by-week", "POST /api/v1/usage/page", "GET /api/v1/usage/pages"]
     status: active
-    source: "ADR-085 section 2 (metrics stay); ROADMAP UI wave 4"
+    source: "ADR-085 section 2 (metrics stay); ROADMAP UI wave 4; ROADMAP E0 (baseline table)"
   - id: F-sessions
     name: "Sessions chat"
     ui: {route: /sessions}
