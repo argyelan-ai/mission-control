@@ -40,6 +40,7 @@ describe("usage helpers", () => {
     });
     expect(topSources(week, 3).map((s) => s.source)).toEqual(["operator", "lead", "heads:local"]);
     expect(topSources(week, 1).map((s) => s.source)).toEqual(["operator"]);
+    expect(topSources(week, 10).map((s) => s.source)).not.toContain("unattributed");
     expect(topSources(undefined)).toEqual([]);
   });
 
