@@ -51,7 +51,7 @@ async def test_sources_come_from_existing_columns(session, make_agent):
     coder = await make_agent("Coder")
     session.add_all([
         # interactive operator session: host CLI project dir that is not the lead checkout
-        _row(agent_id=boss.id, source_file=f"{HOME}/.claude/projects/-Users-op-Workspace/a.jsonl", cost=2.0),
+        _row(agent_id=boss.id, source_file=f"{HOME}/.claude/projects/-home-op-work/a.jsonl", cost=2.0),
         # lead: the host CLI project dir of the lead checkout ...
         _row(agent_id=boss.id, source_file=f"{HOME}/.claude/projects/{LEAD_DIR}/b.jsonl", cost=3.0),
         # ... and the lead's own config dir
