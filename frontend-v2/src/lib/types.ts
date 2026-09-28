@@ -1487,7 +1487,7 @@ export interface LoopCreate {
 
 export type LoopUpdate = Partial<Omit<LoopCreate, "board_id">>;
 
-// ── Henry / Playbooks ───────────────────────────────────────────────────────
+// ── Guided setup / Playbooks ───────────────────────────────────────────────────────
 
 export interface PlaybookCatalogOption {
   value: string;
@@ -1618,7 +1618,7 @@ export interface PlaybookRunProjection {
   automation: Automation | null;
 }
 
-export interface HenrySessionState {
+export interface GuidedSessionState {
   session: Project;
   messages: PlannerMessage[];
   playbook: Playbook | null;
