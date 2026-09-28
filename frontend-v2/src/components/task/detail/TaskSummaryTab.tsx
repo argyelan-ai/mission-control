@@ -22,6 +22,8 @@
 
 import { useState } from "react";
 import ReactMarkdown from "react-markdown";
+import { useOverflows } from "@/hooks/useOverflows";
+import { FADE } from "./nextStepStyle";
 import { useLocale, useTranslations } from "next-intl";
 import { ChevronDown, CheckSquare, Square, AlertCircle } from "lucide-react";
 import { C, LANE } from "@/lib/colors";
@@ -104,6 +106,7 @@ export function TaskSummaryTab({
   const t = useTranslations("tasks");
   const locale = useLocale();
   const [briefOpen, setBriefOpen] = useState(false);
+  const { ref: briefRef, overflows: briefOverflows } = useOverflows<HTMLDivElement>(`${briefOpen}:${task.description ?? ""}`);
   const [planOpen, setPlanOpen] = useState(false);
   const [stepsOpen, setStepsOpen] = useState(false);
   const [allSteps, setAllSteps] = useState(false);
@@ -153,7 +156,8 @@ export function TaskSummaryTab({
           // ~6 lines; headings use the calm prose scale (no page-size type).
           <div
             data-testid="summary-brief-preview"
-            className="prose-description max-h-[9.9em] overflow-hidden [mask-image:linear-gradient(to_bottom,black_70%,transparent)]"
+            ref={briefRef}
+            className={`prose-description max-h-[9.9em] overflow-hidden ${briefOverflows ? FADE : ""}`}
             style={{ color: C.textSecondary }}
           >
             <ReactMarkdown>{brief}</ReactMarkdown>
