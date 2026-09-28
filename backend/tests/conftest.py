@@ -372,8 +372,30 @@ def reset_github_config_cache():
     invalidate_github_config_cache()
 
 
+@pytest.fixture(autouse=True)
+def block_real_engine_metrics():
+    """No test may ask a real engine's ``/metrics`` (E1 switch lock).
+
+    Every switch now probes the engine it would end; the test fixtures use
+    documentation addresses (192.0.2.x) that only time out. The default fake
+    engine is unreachable — the lock then fails open, as it does live. Tests
+    of the lock put their own ``httpx.MockTransport`` here.
+    """
+    import httpx
+
+    from app.services.heads import engine
+
+    def unreachable(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("no real engine in tests", request=request)
+
+    original = engine._transport
+    engine._transport = httpx.MockTransport(unreachable)
+    yield
+    engine._transport = original
+
+
 @pytest.fixture
-async def session() -> AsyncGenerator[AsyncSession, None]:
+async def session()-> AsyncGenerator[AsyncSession, None]:
     """DB session for tests that access the DB directly."""
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         yield s

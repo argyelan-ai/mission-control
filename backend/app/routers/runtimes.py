@@ -861,6 +861,9 @@ async def start_runtime(
         rt = {**rt, "context_length": body.context_length}
     result = await runtime_manager.start_runtime(rt, host=host)
     if not result["ok"]:
+        if result.get("switch_lock"):
+            # E1 switch lock: the engine this start would end is still working.
+            raise HTTPException(status_code=409, detail=result["switch_lock"])
         raise HTTPException(status_code=400, detail=result["message"])
     await runtime_readiness.invalidate_readiness(rt.get("slug") or runtime_id)
     return result

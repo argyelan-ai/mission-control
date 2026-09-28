@@ -12,7 +12,15 @@ from app.services.runtime_protocols import engine_root
 SERVED_TTL_S = 20.0
 _served_cache: dict[str, tuple[float, frozenset[str] | None]] = {}
 
-_RUNNING_RE = re.compile(r"^vllm:num_requests_running(?:\{[^}]*\})?\s+([0-9.eE+-]+)\s*$", re.M)
+# Requests in flight, per engine family: vLLM (and the EXL3 fork, which runs
+# on vLLM), SGLang, llama.cpp server (started with --metrics).
+_RUNNING_RE = re.compile(
+    r"^(?:vllm:num_requests_running|sglang:num_running_reqs|llamacpp:requests_processing)"
+    r"(?:\{[^}]*\})?\s+([0-9.eE+-]+)\s*$",
+    re.M,
+)
+# Tests put an ``httpx.MockTransport`` here (conftest keeps them off the network).
+_transport: httpx.AsyncBaseTransport | None = None
 
 
 async def served_models(endpoint: str, *, now: float | None = None) -> frozenset[str] | None:
@@ -27,21 +35,28 @@ async def served_models(endpoint: str, *, now: float | None = None) -> frozenset
     return models
 
 
-async def running_requests(endpoint: str) -> int | None:
-    """``vllm:num_requests_running`` from /metrics — vLLM-family engines only.
-    None when the metric is not there (other engines): then only the lock rule
-    applies (spec §6.7 rule (a))."""
+async def probe_running_requests(endpoint: str) -> tuple[int | None, str | None]:
+    """Requests the engine is working on right now, from its ``/metrics``.
+
+    ``(count, None)`` when the engine reports it; ``(None, reason)`` when the
+    load is unknown — engine unreachable, an error status, or no known metric
+    (e.g. an engine without Prometheus metrics)."""
     try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
+        async with httpx.AsyncClient(timeout=3.0, transport=_transport) as client:
             resp = await client.get(f"{engine_root(endpoint)}/metrics")
     except httpx.HTTPError:
-        return None
+        return None, "unreachable"
     if resp.status_code != 200:
-        return None
+        return None, f"HTTP {resp.status_code}"
     values = [float(v) for v in _RUNNING_RE.findall(resp.text)]
     if not values:
-        return None
-    return int(sum(values))
+        return None, "no running-requests metric"
+    return int(sum(values)), None
+
+
+async def running_requests(endpoint: str) -> int | None:
+    """Only the count of :func:`probe_running_requests` — None when unknown."""
+    return (await probe_running_requests(endpoint))[0]
 
 
 def clear_cache() -> None:
