@@ -89,7 +89,7 @@ of gating them.
 | **E1** — repo signal | `.kohaerenz.yaml` + `kz check` / `kz links` as a local, fast gate | done | `kz` in this repo (`kz check`, `kz links`), used by this PR |
 | **E2** — heads | Every head gets the product map in its `job.md`, and `kz check` runs in its pre-push step | done | #681 |
 | **E3a** — product map foundation | `docs/produkt/landkarte.yaml`: journeys and one feature per page, `inventar.json`, `regeln.yaml`; endpoints and tables not mapped yet (parked in `luecken-basis.json` as the E3b work list) | done (foundation only) | #684, `docs/produkt/README.md` |
-| **E3b** — endpoints and tables | Map endpoints/tables onto the product map; resolve `luecken-basis.json` | next | — |
+| **E3b** — endpoints and tables | Map endpoints/tables onto the product map; resolve `luecken-basis.json` | in progress (local heads, one area per round) | — |
 
 ---
 
