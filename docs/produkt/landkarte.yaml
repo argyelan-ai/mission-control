@@ -55,6 +55,11 @@ features:
       - "GET /api/v1/system/metrics/history"
     status: active
     source: "PRINCIPLES 7.1; ROADMAP E2 (morning report on the Home card)"
+    tables:
+      # Activity feed rows (routers/activity.py); written by the tasks
+      # router and many services, also rendered in the task timeline
+      # (listed in F-tasks as well).
+      - activity_events
   - id: F-tasks
     name: "Tasks: create, run as head, follow and finish work"
     ui: {route: /tasks}
@@ -118,6 +123,33 @@ features:
       - "* /api/v1/references/*"
     status: active
     source: "ROADMAP E1b, UI waves 2 and 3a"
+    tables:
+      # Task workspace: boards, projects and phases, tags, tasks plus
+      # events, comments, checklist, checkpoints, dependencies and
+      # deliverables; reference files; the task thread (threads, messages,
+      # user read cursor); git endpoints resolve the repo; approvals are
+      # resolved from the task detail too; the timeline also reads
+      # activity_events (feed rows, listed in F-home).
+      - boards
+      - projects
+      - project_phases
+      - tags
+      - tag_assignments
+      - tasks
+      - task_events
+      - task_comments
+      - task_checklist_items
+      - task_checkpoints
+      - task_dependencies
+      - task_deliverables
+      - reference_files
+      - threads
+      - messages
+      - user_thread_cursor
+      - agents
+      - approvals
+      - repos
+      - activity_events
   - id: F-inbox
     name: "Inbox: open approvals"
     ui: {route: /inbox}
@@ -129,6 +161,9 @@ features:
       - "GET /api/v1/approvals/stream"
     status: active
     source: "ROADMAP UI wave 2 (pages that stay)"
+    tables:
+      # Approvals listed and resolved (routers/approvals.py).
+      - approvals
   - id: F-runtimes
     name: "Runtimes: engines, which one is busy"
     ui: {route: /runtimes}
@@ -179,6 +214,17 @@ features:
       # poller and the update run (manifest -> build -> recreate).
       - "* /api/v1/cli-tools"
       - "* /api/v1/cli-tools/*"
+    tables:
+      # Runtime and host registry: runtimes, hosts (with node pairing
+      # codes for the wizard), runtime_hosts (multi-node), the local
+      # recipe registry and runtime schedules with their runs.
+      - runtimes
+      - runtime_hosts
+      - hosts
+      - host_pairing_codes
+      - local_recipes
+      - runtime_schedules
+      - runtime_schedule_runs
   - id: F-settings
     name: "Settings"
     ui: {route: /settings}
@@ -231,6 +277,17 @@ features:
       # connection test).
       - "* /api/v1/channels/*"
       - "* /api/v1/slack/*"
+    tables:
+      # Settings storage: app_settings rows back the AI-provider, channel
+      # and night-shift window config (services/*_config.py,
+      # heads/night_store.py); users = auth profile + users admin;
+      # secrets = system token wallet (ADR-033); credentials = task-time
+      # vault (ADR-033); model_prices = cost price CRUD.
+      - app_settings
+      - users
+      - secrets
+      - credentials
+      - model_prices
   - id: F-memory
     name: "Memory: the vault"
     ui: {route: [/memory, /memory/graph]}
@@ -257,6 +314,10 @@ features:
       - "* /api/v1/knowledge/*"
       # Semantic memory query (MemoryQueryBar on the memory page).
       - "POST /api/v1/memory/query"
+    tables:
+      # Board memory rows (routers/memory.py); indexing, query, decay and
+      # cleanup services operate on them.
+      - board_memory
   - id: F-schedule
     name: "Schedule: planned jobs"
     ui: {route: [/schedule, "/schedule/[jobId]"]}
@@ -277,6 +338,12 @@ features:
       - "* /api/v1/schedule/jobs/{job_id}/snooze"
       - "POST /api/v1/schedule/preview-firings"
       - "GET /api/v1/schedule/stream"
+    tables:
+      # Scheduled jobs and their run history; job runs create tasks
+      # (jobs/{id}/tasks lists them).
+      - scheduled_jobs
+      - scheduled_job_runs
+      - tasks
   - id: F-insights
     name: "Insights: usage and metrics"
     ui: {route: /insights}
@@ -298,6 +365,11 @@ features:
       - "GET /api/v1/intelligence/config"
     status: active
     source: "ADR-085 section 2 (metrics stay); ROADMAP UI wave 4; ROADMAP E0 (baseline table)"
+    tables:
+      # Cost rollups read model_usage_events (written by the token
+      # harvester; the old cost_events table is only a historical archive,
+      # listed under internal).
+      - model_usage_events
   - id: F-sessions
     name: "Sessions chat"
     ui: {route: /sessions}
@@ -319,6 +391,15 @@ features:
       - "* /api/v1/host-sessions/agents"
       # Browser live panel (BrowserLiveView: target list + CDP screencast WS).
       - "* /api/v1/browser-live/*"
+    tables:
+      # Agents in the session sidebar pickers; group chat rows (ADR-075):
+      # groups, members, rounds plus thread and message rows.
+      - agents
+      - agent_groups
+      - group_members
+      - group_rounds
+      - threads
+      - messages
     status: frozen
     source: "ADR-085 section 4 (build stop); ROADMAP E5 (group chat to be deleted together with the sessions chat); ROADMAP: candidate for removal"
   - id: F-voice
@@ -349,6 +430,12 @@ features:
       - "* /api/v1/loops/{loop_id}/start"
       - "* /api/v1/loops/{loop_id}/pause"
       - "* /api/v1/loops/{loop_id}/stop"
+    tables:
+      # Loops and their rounds; round tasks are task rows (listed in
+      # F-tasks).
+      - loops
+      - loop_rounds
+      - tasks
   - id: F-office
     name: "Office"
     ui: {route: /office}
@@ -382,6 +469,11 @@ features:
       - "GET /api/v1/models"
       - "GET /api/v1/models/{model_id}"
     note: unconfirmed
+    tables:
+      # Agent rows, wizard templates and per-agent metrics.
+      - agents
+      - agent_templates
+      - agent_metrics
   - id: F-bench
     name: "Benchmark studio"
     ui: {route: /bench}
@@ -403,6 +495,13 @@ features:
       # the bench studio vertical's api client; no other page calls it).
       - "* /api/v1/prompt-templates"
       - "* /api/v1/prompt-templates/*"
+    tables:
+      # Bench studio vertical (ADR-070): challenges, entries, content
+      # pipelines (draft flow) and the prompt library.
+      - bench_challenges
+      - bench_entries
+      - content_pipelines
+      - prompt_templates
   - id: F-files
     name: "Files browser"
     ui: {route: /files}
@@ -414,6 +513,10 @@ features:
       # preview, chat attachment tiles) — image/iframe elements fetch it as
       # a blob because they cannot carry the Bearer header.
       - "* /api/v1/files/*"
+    tables:
+      # Search index rows and deliverable-to-file links (file_indexer).
+      - file_index
+      - deliverable_references
   - id: F-repos
     name: "Repos registry"
     ui: {route: /repos}
@@ -423,6 +526,9 @@ features:
       # GitHub status and config (settings page reuses github-status/config).
       - "* /api/v1/repos"
       - "* /api/v1/repos/*"
+    tables:
+      # Repos registry rows (routers/repos.py).
+      - repos
   - id: F-skills
     name: "Skills"
     ui: {route: /skills}
@@ -461,6 +567,9 @@ features:
       - "POST /api/v1/auth/register"
       - "POST /api/v1/auth/login"
       - "POST /api/v1/auth/stream-ticket"
+    tables:
+      # First admin registration and login (routers/auth.py).
+      - users
   - id: F-setup
     name: "First-run wizard"
     ui: {route: /setup}
@@ -611,3 +720,66 @@ internal:
   # and runtime env from the Vault at boot (ADR-019 bootstrap endpoint,
   # ADR-028 build_runtime_env; routers/internal.py).
   - "endpoint:GET /api/v1/internal/bootstrap"
+
+  # Database tables only machines use (E3b R9). Feature-owned tables are
+  # listed on the features above; everything here has no feature surface.
+  # Meetings legacy (Phase-31 torso, ADR-075): rows behind the internal
+  # /meetings endpoints and the meeting service.
+  - "table:agent_meetings"
+  - "table:agent_meeting_messages"
+  - "table:agent_messages"
+  # Agent machine-API delivery watermarks (agent poll / comment signalling
+  # in routers/agent_scoped.py and the agent-scoped endpoints).
+  - "table:agent_task_comment_cursor"
+  - "table:agent_thread_cursor"
+  # Playbook / automation / workflow machine layer (internal endpoints,
+  # E3b R6): services execute runs in process.
+  - "table:playbooks"
+  - "table:playbook_versions"
+  - "table:automations"
+  - "table:skill_packs"
+  - "table:skill_candidates"
+  - "table:workflow_templates"
+  - "table:workflow_template_versions"
+  - "table:workflow_runs"
+  - "table:workflow_step_runs"
+  # Board groups: API without a page caller (endpoint entries above).
+  - "table:board_groups"
+  # Agent-scoped board chat writes (routers/agent_scoped.py,
+  # Scope.CHAT_WRITE).
+  - "table:chat_messages"
+  # Historical archive only — model docstring: last write 04/2026, readers
+  # moved to model_usage_events; task delete still removes a task's rows.
+  - "table:cost_events"
+  # Deploy history: written by the agent-scoped deploy/record, read by
+  # GET /deploy/history and the agent-scoped history (all internal).
+  - "table:deploy_history"
+  # Discord channel/guild config (internal /discord endpoints).
+  - "table:discord_config"
+  # Install executor log; no router reads it.
+  - "table:install_log"
+  # Token-harvester bookkeeping (per-file processed state).
+  - "table:model_usage_harvest_state"
+  # News / newsletter models: used by an optional vertical outside this repository - not dead; keep.
+  - "table:news_sources"
+  - "table:news_articles"
+  - "table:news_post_schedules"
+  - "table:newsletter_issues"
+  # Machine-written notification rows; no router reads them (surfaces go
+  # through activity events and system alerts).
+  - "table:notifications"
+  # Planner messages: written by the disabled research / guided-playbook
+  # flow, deleted alongside projects (routers/boards.py).
+  - "table:planner_messages"
+  # Content models: used by an optional vertical outside this repository - not dead; keep.
+  - "table:storyboards"
+  - "table:trend_signals"
+  - "table:video_performance"
+  - "table:viral_shorts_settings"
+  # Dispatch attempt audit log (services/dispatch_attempt_audit.py).
+  - "table:task_attempt_audit"
+  # Per-user key/value rows behind the internal generic /settings endpoints.
+  - "table:user_settings"
+  # Machine webhooks (GitHub + local git hooks) and their payloads.
+  - "table:webhooks"
+  - "table:webhook_payloads"
