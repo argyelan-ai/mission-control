@@ -1,6 +1,6 @@
 # Product map (Roter Faden). Written by hand, read by `kz`. See README.md here.
-# Stage E3a: journeys + one feature per page. Endpoints and tables are not
-# mapped yet - they sit in luecken-basis.json as the E3b work list.
+# Stage E3b: endpoints (later tables) are mapped round by round; whatever is
+# not mapped yet still sits in luecken-basis.json as the E3b work list.
 # `source` says which doc a status comes from; `note: unconfirmed` means no
 # doc states the page's status yet (default `active`, to be confirmed in E3b).
 version: 1
@@ -37,16 +37,84 @@ features:
   - id: F-home
     name: "Home: what needs me, last night's report"
     ui: {route: /}
+    api:
+      # Activity feed and live stream on Home (ActivityHistoryPanel,
+      # SystemHealthSection, useActivityStream); the agent detail page also
+      # reads the activity list. Last night's night-shift report card.
+      - "GET /api/v1/activity"
+      - "GET /api/v1/activity/stream"
+      - "* /api/v1/night-shift/last-night"
+      - "* /api/v1/night-shift/last-night/*"
     status: active
     source: "PRINCIPLES 7.1; ROADMAP E2 (morning report on the Home card)"
   - id: F-tasks
     name: "Tasks: create, run as head, follow and finish work"
     ui: {route: /tasks}
+    api:
+      # Boards are the task workspace: the shell board picker (BoardPicker)
+      # switches boards, the tasks page and task detail use everything under
+      # /boards/{board}/tasks (list, detail, reorder, checklist, comments,
+      # deliverables, dependencies, events, git, hierarchy, timeline,
+      # workspace, dispatch/promote/resume/review/stop). scripts/mc-mcp.py
+      # and scripts/demo-seed.py use the same task endpoints.
+      - "* /api/v1/boards"
+      - "* /api/v1/boards/{board_id}"
+      - "* /api/v1/boards/*/snapshot"
+      - "* /api/v1/boards/*/tasks"
+      - "* /api/v1/boards/*/tasks/reorder"
+      - "* /api/v1/boards/*/tasks/pipeline"
+      - "* /api/v1/boards/*/tasks/{task_id}"
+      - "* /api/v1/boards/*/tasks/{task_id}/checklist"
+      - "* /api/v1/boards/*/tasks/{task_id}/comments"
+      - "* /api/v1/boards/*/tasks/{task_id}/dependencies"
+      - "* /api/v1/boards/*/tasks/{task_id}/deliverables"
+      - "* /api/v1/boards/*/tasks/{task_id}/deliverables/{deliverable_id}/*"
+      - "* /api/v1/boards/*/tasks/{task_id}/dispatch"
+      - "* /api/v1/boards/*/tasks/{task_id}/events"
+      - "* /api/v1/boards/*/tasks/{task_id}/git-diff"
+      - "* /api/v1/boards/*/tasks/{task_id}/git-info"
+      - "* /api/v1/boards/*/tasks/{task_id}/hierarchy"
+      - "* /api/v1/boards/*/tasks/{task_id}/promote"
+      - "* /api/v1/boards/*/tasks/{task_id}/resume"
+      - "* /api/v1/boards/*/tasks/{task_id}/review"
+      - "* /api/v1/boards/*/tasks/{task_id}/stop"
+      - "* /api/v1/boards/*/tasks/{task_id}/timeline"
+      - "* /api/v1/boards/*/tasks/{task_id}/workspace/*"
+      # Projects and phases on a board (tasks page project grouping,
+      # TaskFormFields, task detail); tags on tasks/projects.
+      - "* /api/v1/boards/*/projects*"
+      - "GET /api/v1/projects/{project_id}/phases"
+      - "* /api/v1/tags"
+      - "* /api/v1/tags/{tag_id}"
+      - "* /api/v1/projects/*/tags"
+      - "* /api/v1/projects/*/tags/*"
+      # Heads (ADR-085): "run as head" from the task form (pairs, start),
+      # live head state, log, run record, restart and stop on the task
+      # detail. The runtimes cockpit also reads the head list (orphan runs).
+      - "* /api/v1/heads"
+      - "* /api/v1/heads/pairs"
+      - "* /api/v1/heads/{run_id}"
+      - "* /api/v1/heads/{run_id}/*"
+      # Night shift (ROADMAP E2): mark/unmark a task for tonight
+      # (CreateTaskModal, task list "tonight" column).
+      - "* /api/v1/night-shift/tonight"
+      - "* /api/v1/night-shift/tasks/{task_id}"
+      # User-side chat thread, transcript and run record on the task detail
+      # (ThreadPanel, TaskTranscript, TaskSummaryTab).
+      - "* /api/v1/tasks/{task_id}/thread*"
+      - "GET /api/v1/tasks/{task_id}/transcript"
+      - "* /api/v1/tasks/{task_id}/run-record*"
     status: active
     source: "ROADMAP E1b, UI waves 2 and 3a"
   - id: F-inbox
     name: "Inbox: open approvals"
     ui: {route: /inbox}
+    api:
+      # Open approvals list and resolve (inbox page, MobileNav badge,
+      # useApprovalStream live reload; the task detail resolves too).
+      - "* /api/v1/approvals"
+      - "* /api/v1/approvals/{approval_id}"
+      - "GET /api/v1/approvals/stream"
     status: active
     source: "ROADMAP UI wave 2 (pages that stay)"
   - id: F-runtimes
@@ -54,16 +122,28 @@ features:
     ui: {route: /runtimes}
     status: active
     source: "ADR-086; ROADMAP UI waves 0c and 2; E1 switch lock (a switch is refused while the engine works)"
+    api:
+      # Head occupancy / orphan runs in the stage cockpit and runtimes page
+      # (ADR-086: which pair is busy).
+      - "GET /api/v1/heads/occupancy"
   - id: F-settings
     name: "Settings"
     ui: {route: /settings}
     status: active
     source: "ROADMAP UI wave 2; E2 (night-shift window)"
+    api:
+      # Night-shift window config (NightShiftTab, ROADMAP E2).
+      - "* /api/v1/night-shift/config"
   - id: F-memory
     name: "Memory: the vault"
     ui: {route: [/memory, /memory/graph]}
     status: active
     source: "ADR-085 section 2 (vault stays); ROADMAP UI wave 2"
+    api:
+      # Board memory CRUD (LegacyMemoryPage); memory list also feeds the
+      # task detail context.
+      - "* /api/v1/boards/*/memory"
+      - "* /api/v1/boards/*/memory/{memory_id}"
   - id: F-schedule
     name: "Schedule: planned jobs"
     ui: {route: [/schedule, "/schedule/[jobId]"]}
@@ -128,6 +208,11 @@ features:
     name: "Repos registry"
     ui: {route: /repos}
     note: unconfirmed
+    api:
+      # Repos registry: list/import/register/create, sync, link to project,
+      # GitHub status and config (settings page reuses github-status/config).
+      - "* /api/v1/repos"
+      - "* /api/v1/repos/*"
   - id: F-skills
     name: "Skills"
     ui: {route: /skills}
@@ -156,3 +241,28 @@ internal:
   - "endpoint:GET /api/v1/playbooks/guided/current"
   - "endpoint:POST /api/v1/playbooks/guided/sessions/start"
   - "endpoint:POST /api/v1/playbooks/guided/sessions/{session_id}/message"
+  # Approval quick-resolve links: the backend embeds these URLs in Telegram
+  # and approval messages; the phone browser opens them directly (no page in
+  # frontend-v2 calls them).
+  - "endpoint:GET /api/v1/approvals/{approval_id}/quick-resolve"
+  - "endpoint:POST /api/v1/approvals/{approval_id}/quick-resolve/confirm"
+  # Board-scoped approval list: client helper exists (api.approvals.boardList)
+  # but no page calls it; the inbox reads the unscoped list.
+  - "endpoint:* /api/v1/boards/*/approvals"
+  # SSE streams without a page caller today (helpers exist in the frontend
+  # sseUrls map; docs/handbook/operations/reverse-proxy.md proxies them).
+  - "endpoint:GET /api/v1/boards/{board_id}/tasks/stream"
+  - "endpoint:GET /api/v1/boards/{board_id}/memory/stream"
+  # Board groups: client helpers and a store field exist, but no page or
+  # script calls the API (the board picker reads boards directly).
+  - "endpoint:* /api/v1/board-groups*"
+  # Project/phase machine API: mc-mcp reads a project and completes phases
+  # (scripts/mc-mcp.py); phase create/edit/remove have no caller yet.
+  - "endpoint:GET /api/v1/projects/{project_id}"
+  - "endpoint:POST /api/v1/projects/{project_id}/phases"
+  - "endpoint:* /api/v1/projects/{project_id}/phases/{phase_id}"
+  - "endpoint:POST /api/v1/projects/{project_id}/phases/{phase_id}/complete"
+  # Task usage rollup and single checklist item delete: no caller found (the
+  # CLI uses the agent-scoped /agent/... checklist route).
+  - "endpoint:GET /api/v1/tasks/{task_id}/usage"
+  - "endpoint:DELETE /api/v1/boards/{board_id}/tasks/{task_id}/checklist/{item_id}"
