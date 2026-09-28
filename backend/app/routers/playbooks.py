@@ -9,7 +9,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.auth import require_role, require_user
 from app.database import get_session
 from app.models.playbook import Automation, Playbook
-from app.services.henry_service import henry_service
+from app.services.guided_playbook_service import guided_playbook_service
 from app.services.playbook_service import playbook_service
 from app.services.workflow_validator import WorkflowValidationError
 
@@ -66,13 +66,13 @@ class AutomationCreate(BaseModel):
     runtime_overrides: dict[str, Any] | None = None
 
 
-class HenrySessionStart(BaseModel):
+class GuidedSessionStart(BaseModel):
     board_id: uuid.UUID
     kind: str | None = None
     playbook_id: uuid.UUID | None = None
 
 
-class HenrySessionMessage(BaseModel):
+class GuidedSessionMessage(BaseModel):
     content: str
 
 
@@ -249,22 +249,22 @@ async def get_recent_playbook_runs(
     return await playbook_service.list_recent_runs(session, board_id=board_id, limit=limit)
 
 
-@router.get("/henry/current", dependencies=[Depends(require_role("viewer"))])
-async def get_current_henry_session(
+@router.get("/guided/current", dependencies=[Depends(require_role("viewer"))])
+async def get_current_guided_session(
     board_id: uuid.UUID = Query(...),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any] | None:
-    return await henry_service.get_current_session_state(session, board_id=board_id)
+    return await guided_playbook_service.get_current_session_state(session, board_id=board_id)
 
 
-@router.post("/henry/sessions/start", dependencies=[Depends(require_role("operator"))])
-async def start_henry_session(
-    payload: HenrySessionStart,
+@router.post("/guided/sessions/start", dependencies=[Depends(require_role("operator"))])
+async def start_guided_session(
+    payload: GuidedSessionStart,
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ) -> dict[str, Any]:
     try:
-        return await henry_service.start_session(
+        return await guided_playbook_service.start_session(
             session,
             board_id=payload.board_id,
             created_by=str(current_user.id),
@@ -275,15 +275,15 @@ async def start_henry_session(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/henry/sessions/{session_id}/message", dependencies=[Depends(require_role("operator"))])
-async def send_henry_message(
+@router.post("/guided/sessions/{session_id}/message", dependencies=[Depends(require_role("operator"))])
+async def send_guided_message(
     session_id: uuid.UUID,
-    payload: HenrySessionMessage,
+    payload: GuidedSessionMessage,
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ) -> dict[str, Any]:
     try:
-        return await henry_service.send_message(
+        return await guided_playbook_service.send_message(
             session,
             project_id=session_id,
             content=payload.content,
