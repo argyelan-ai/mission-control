@@ -64,7 +64,7 @@ def _client_from(client: AsyncClient, host: str) -> AsyncClient:
 @pytest.mark.parametrize(
     "host",
     [
-        "100.101.102.103",  # tailnet peer (CGNAT range)
+        "100.100.200.50",  # tailnet peer (invented test address, see .gitleaks.toml)
         "192.168.1.50",  # LAN peer
         "203.0.113.9",  # public
     ],
