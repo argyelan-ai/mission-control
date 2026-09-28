@@ -432,6 +432,7 @@ PRE_PUSH_HOOK = r"""#!/bin/sh
 # never delete, never rewrite history. Guard rail only — the server-side gate
 # is the head's own non-admin GitHub identity.
 zero=0000000000000000000000000000000000000000
+passed=""
 while read local_ref local_sha remote_ref remote_sha; do
   case "$remote_ref" in
     refs/heads/mc-head/*) ;;
@@ -445,6 +446,7 @@ while read local_ref local_sha remote_ref remote_sha; do
       echo "mc-head: non-fast-forward push to $remote_ref refused" >&2; exit 1
     fi
   fi
+  passed="$passed $local_sha"
 done
 # Roter Faden: a repo with .kohaerenz.yaml must pass the push-time kz checks.
 # Not drift/pr: they need the PR body, which does not exist yet (the head runs
@@ -464,6 +466,11 @@ if [ -n "$top" ] && [ -f "$top/.kohaerenz.yaml" ]; then
   else
     echo "mc-head: warning - kz not found on this host; push without kz check" >&2
   fi
+fi
+# Proof for the wrapper: these shas went through this hook. A pushed branch tip
+# missing here was pushed around the hook (--no-verify) -> run "hook_bypassed".
+if [ -n "$MC_HEAD_RUN_DIR" ]; then
+  for sha in $passed; do echo "$sha"; done >> "$MC_HEAD_RUN_DIR/hook-passed.txt"
 fi
 exit 0
 """
@@ -645,6 +652,41 @@ def scratch_branch_pushed(spec: dict) -> bool:
     finally:
         for ref in CHECK_REFS:
             _git(["-C", str(clone), "update-ref", "-d", ref], check=False)
+
+
+def pushed_branch_tip(spec: dict) -> str | None:
+    """sha of the head branch on origin, or None (not pushed / unreachable).
+    Same safety as scratch_branch_pushed: fetch into the sanitized clone."""
+    clone = clones_root() / spec["repo_full_name"].replace("/", "--")
+    ref = CHECK_REFS[1]
+    token = gh_token()
+    try:
+        sanitize_clone(spec["repo_full_name"], clone)
+        fetched = _git(["-C", str(clone), "fetch", "-q", "--no-tags", "--no-write-fetch-head", "origin",
+                        f"+refs/heads/{spec['branch']}:{ref}"], env={"GH_TOKEN": token} if token else None, check=False)
+        if fetched.returncode != 0:
+            return None
+        res = _git(["-C", str(clone), "rev-parse", "--verify", "--quiet", ref], check=False)
+        tip = res.stdout.strip() if res.returncode == 0 else ""
+        return tip or None
+    except (RuntimeError, OSError, subprocess.SubprocessError):
+        return None
+    finally:
+        _git(["-C", str(clone), "update-ref", "-d", ref], check=False)
+
+
+def hook_bypassed(spec: dict, tip_at_start: str | None) -> bool:
+    """A branch tip pushed during this run that the pre-push hook never
+    passed. Catches `git push --no-verify` / `-c core.hooksPath=`; a head
+    that forges hook-passed.txt is lying on purpose — CI stays the gate."""
+    tip = pushed_branch_tip(spec)
+    if not tip or tip == tip_at_start:
+        return False
+    try:
+        passed = read_head_file(run_dir(spec["run_id"]) / "hook-passed.txt")[0].split()
+    except OSError:
+        passed = []
+    return tip not in passed
 
 
 def sandbox_exec() -> str:
@@ -1168,6 +1210,8 @@ def cmd_start(run_id: str) -> int:
     try:
         clone = ensure_clone(spec["repo_full_name"])
         prepare_worktree(spec, clone)
+        # continue mode: a tip pushed by the previous run is not this run's push
+        write_status(run_id, branch_tip_at_start=pushed_branch_tip(spec) if spec["mode"] == "continue" else None)
         write_shims(run)
         (run / "home").mkdir(exist_ok=True)
     except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
@@ -1379,7 +1423,8 @@ def cmd_supervise(run_id: str) -> int:
         tee.join(timeout=5)
         code = child.returncode
         result = detect_result(spec, started)
-        reason = state["reason"] or (f"exit_{code}" if code else None)
+        reason = state["reason"] or ("hook_bypassed" if result["hook_bypassed"] else None) \
+            or (f"exit_{code}" if code else None)
         write_status(
             run_id,
             phase="exited",
@@ -1488,6 +1533,7 @@ def detect_result(spec: dict, started: float) -> dict:
         "scratch_branch_pushed": bool(origin) and scratch_branch_pushed(spec),
         "run_record_path": str(record) if record else None,
         "question": (run_dir(run_id) / "question.md").exists(),
+        "hook_bypassed": hook_bypassed(spec, read_status(run_id).get("branch_tip_at_start")),
     }
 
 

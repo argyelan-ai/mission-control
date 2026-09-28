@@ -3279,6 +3279,7 @@
       "wrapper_error": "Der Head-Starter hatte einen internen Fehler.",
       "gh_identity_missing": "Heads haben noch keine GitHub-Identität (Operator-Schritt).",
       "sandbox_required": "Ein echtes Repo braucht die Sandbox, für jeden Harness (Schritt für den Operator).",
+      "hook_bypassed": "Der Head hat am Push-Hook vorbei gepusht (z. B. --no-verify). Der Lauf zählt nicht, auch mit PR.",
       "exit": "Der Harness endete mit Exit-Code {code}.",
       "unknown": "Ohne bekannten Grund beendet.",
       "gh_identity_unsafe": "Die GitHub-Identität der Heads hat zu viele Rechte, oder der Basis-Branch ist nicht geschützt (Schritt für den Operator)."

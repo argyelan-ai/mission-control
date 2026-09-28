@@ -321,7 +321,11 @@ stoppable) in the runs list on `/runtimes`.
       orphans,states,rules,anchors,adr,timebomb,links` — not `drift`/`pr`,
       which need the PR text; the head runs the full `kz check
       --pr-body-file` before `gh pr create` (exit 1 refuses the push; exit 2
-      or no `kz` only warns). After the worktree exists, `kz brief` runs in it (sandboxed,
+      or no `kz` only warns). Every pushed sha that passed the hook is
+      appended to `<run>/hook-passed.txt`; after the run the wrapper fetches
+      the head branch tip, and a tip pushed during this run that is not in that
+      file (`git push --no-verify`) ends the run as `failed`, reason
+      `hook_bypassed` — even with a PR and a passed run record. After the worktree exists, `kz brief` runs in it (sandboxed,
       `env -i`, max. 20 s via `MC_HEAD_KZ_TIMEOUT_S`) and its output (max. 60
       lines) is appended to `job.md` as "Context brief (kz)"; kz missing or
       failing leaves one line "kz brief unavailable: …" there and in

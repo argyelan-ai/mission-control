@@ -152,7 +152,8 @@ def test_kz_config_error_never_stops_the_head(env):
 def test_hanging_kz_is_cut_off_with_its_children(env):
     pidfile = env["tmp"] / "kz-child.pid"
     kz = fake_kz(env["tmp"], f"sleep 30 & echo $! > '{pidfile}'; wait")
-    run_id, run = _start(env, str(kz), MC_HEAD_KZ_TIMEOUT_S="1")
+    # 3 s: under a loaded parallel run the fake needs time to write its pid file
+    run_id, run = _start(env, str(kz), MC_HEAD_KZ_TIMEOUT_S="3")
     _assert_unavailable(env, run_id, run, "timed out")
     assert float((run / ".elapsed").read_text()) < 20
     # what kz started (git grep …) goes too, not only kz itself

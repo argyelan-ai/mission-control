@@ -69,7 +69,13 @@ Do not write anywhere else in `{{run_dir}}`. The launcher writes
    checklist below and say so in the run record ("review: self, no helper available").
 6. **Pull request.** `git push -u origin {{branch}}` (never `main`). In a repo
    with a `.kohaerenz.yaml` the push hook runs the push-time `kz check` checks
-   (not `drift`/`pr`, they need the PR text) and refuses a red push. Then write
+   (not `drift`/`pr`, they need the PR text) and refuses a red push. **Never
+   push with `--no-verify`, `-c core.hooksPath=…` or any other way around a hook
+   or check.** If a hook fails for a tool or environment reason (crash,
+   permission error, missing tool — not your change): stop, write `question.md`
+   with the exact error and end the run as "needs you". That is a correct
+   result, not a failed head. The launcher checks that your pushed branch tip
+   went through the hook; a bypass fails the run (`hook_bypassed`). Then write
    the PR body (with the run-record summary) to a file, run the full
    `kz check --pr-body-file <file>` and paste its output into the run record.
    Red (exit 1) means: fix it, or explain every red line in the PR under
@@ -119,6 +125,7 @@ same branch with the answer appended to the job.
 - Read, print or change `.env` files, secrets, tokens, `~/.ssh`, or other tools' config/credential folders.
 - Push to `main`/`master`, force-push, merge, enable auto-merge, deploy, restart live services.
 - Use `--admin` or any other bypass of branch rules, required checks or the merge queue.
+- Push with `--no-verify` or disable/skip git hooks or CI checks in any way.
 - Run `docker`, `ssh`, `scp`, `sudo`, `launchctl`, `kubectl`.
 - Delete or change files outside your worktree, the run folder and the vault job folder.
 - Touch other worktrees or branches; never `git stash` someone else's work.

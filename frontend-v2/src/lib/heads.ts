@@ -212,6 +212,7 @@ const FAIL_REASONS = new Set([
   "gh_identity_missing",
   "gh_identity_unsafe",
   "sandbox_required",
+  "hook_bypassed",
 ]);
 
 export function failReasonKey(reason: string | null | undefined): { key: string; values?: Record<string, string> } {
