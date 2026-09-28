@@ -84,7 +84,9 @@ async def receive_github_webhook(
     Receives GitHub webhook events (push, PR, etc.).
 
     URL format: POST /api/v1/webhooks/github/{webhook_id}
-    GitHub is configured with this URL as the webhook URL.
+    GitHub is configured with this URL as the webhook URL and with the same
+    secret as the webhook row. Events must carry a valid X-Hub-Signature-256;
+    a webhook without a secret rejects every event.
     """
     # Load webhook from DB
     webhook = await session.get(Webhook, webhook_id)
@@ -96,12 +98,21 @@ async def receive_github_webhook(
     headers = dict(request.headers)
     source_ip = request.client.host if request.client else None
 
-    # Check HMAC signature (if secret configured)
-    if webhook.secret:
-        signature = headers.get("x-hub-signature-256")
-        if not _verify_github_signature(body, signature, webhook.secret):
-            logger.warning("Invalid webhook signature from %s for webhook %s", source_ip, webhook_id)
-            raise HTTPException(status_code=403, detail="Invalid signature")
+    # The HMAC signature is this endpoint's only authentication, so a webhook
+    # without a secret is unusable (fail closed) — it used to mean "no check",
+    # which let anyone who knew the UUID inject events.
+    if not webhook.secret:
+        logger.warning(
+            "Rejected event for webhook %s: no secret configured — set one on the "
+            "webhook and the same value in GitHub's webhook settings",
+            webhook_id,
+        )
+        raise HTTPException(status_code=403, detail="Webhook has no secret configured")
+
+    signature = headers.get("x-hub-signature-256")
+    if not _verify_github_signature(body, signature, webhook.secret):
+        logger.warning("Invalid webhook signature from %s for webhook %s", source_ip, webhook_id)
+        raise HTTPException(status_code=403, detail="Invalid signature")
 
     # Parse payload
     try:
