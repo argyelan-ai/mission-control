@@ -3062,6 +3062,12 @@
         "summary": "Costs By Task"
       }
     },
+    "/api/v1/intelligence/costs/by-week": {
+      "get": {
+        "operationId": "costs_by_week_api_v1_intelligence_costs_by_week_get",
+        "summary": "Costs By Week"
+      }
+    },
     "/api/v1/intelligence/costs/timeseries": {
       "get": {
         "operationId": "costs_timeseries_api_v1_intelligence_costs_timeseries_get",
@@ -4915,6 +4921,24 @@
         "summary": "Get Task Usage",
         "tags": [
           "tasks"
+        ]
+      }
+    },
+    "/api/v1/usage/page": {
+      "post": {
+        "operationId": "post_page_view_api_v1_usage_page_post",
+        "summary": "Post Page View",
+        "tags": [
+          "usage"
+        ]
+      }
+    },
+    "/api/v1/usage/pages": {
+      "get": {
+        "operationId": "get_page_views_api_v1_usage_pages_get",
+        "summary": "Get Page Views",
+        "tags": [
+          "usage"
         ]
       }
     },

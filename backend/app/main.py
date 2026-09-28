@@ -111,6 +111,7 @@ from app.routers import (
     system,
     tags,
     tasks,
+    usage,
     voice,
     workflows,
     webhooks,
@@ -468,6 +469,7 @@ app.include_router(agent_chat.router)  # /api/v1/agents/{id}/chat/history|stream
 app.include_router(consensus.router)
 app.include_router(schedule.router)
 app.include_router(voice.router)
+app.include_router(usage.router)  # /api/v1/usage/page|pages — E0 page-usage beacon
 
 # ── Verticals (optional, strippable feature bundles — ADR-044) ──────────────
 # Discovery loads every subpackage of app/verticals/ with register(app).
