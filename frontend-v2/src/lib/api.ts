@@ -12,7 +12,7 @@ import type {
   Credential,
   CostOverview,
   DiscordChannel,
-  HenrySessionState,
+  GuidedSessionState,
   IntelligenceConfig,
   IntelligenceInsights,
   Loop,
@@ -603,7 +603,7 @@ export const api = {
   // Planner disabled 2026-04-11 (Boss autonomy overhaul). Backend router returns 404.
   // PlannerMessage type stays — still used by research:.
 
-  // ── Playbooks / Henry ───────────────────────────────────────────────────────
+  // ── Playbooks / Guided setup ───────────────────────────────────────────────────────
   playbooks: {
     catalog: () => request<{ playbooks: PlaybookCatalogItem[] }>("/api/v1/playbooks/catalog"),
     skillPacks: () => request<SkillPack[]>("/api/v1/playbooks/skill-packs"),
@@ -658,15 +658,15 @@ export const api = {
       const qs = params.toString();
       return request<PlaybookRunProjection[]>(`/api/v1/playbooks/runs/recent${qs ? `?${qs}` : ""}`);
     },
-    henryCurrent: (boardId: string) =>
-      request<HenrySessionState | null>(`/api/v1/playbooks/henry/current?board_id=${boardId}`),
-    henryStart: (data: { board_id: string; kind?: string; playbook_id?: string }) =>
-      request<HenrySessionState>("/api/v1/playbooks/henry/sessions/start", {
+    guidedCurrent: (boardId: string) =>
+      request<GuidedSessionState | null>(`/api/v1/playbooks/guided/current?board_id=${boardId}`),
+    guidedStart: (data: { board_id: string; kind?: string; playbook_id?: string }) =>
+      request<GuidedSessionState>("/api/v1/playbooks/guided/sessions/start", {
         method: "POST",
         body: JSON.stringify(data),
       }),
-    henryMessage: (sessionId: string, content: string) =>
-      request<HenrySessionState>(`/api/v1/playbooks/henry/sessions/${sessionId}/message`, {
+    guidedMessage: (sessionId: string, content: string) =>
+      request<GuidedSessionState>(`/api/v1/playbooks/guided/sessions/${sessionId}/message`, {
         method: "POST",
         body: JSON.stringify({ content }),
       }),

@@ -14,12 +14,12 @@ async def _create_board_and_agent():
     async with AsyncSession(test_engine, expire_on_commit=False) as session:
         board = Board(
             id=uuid.UUID("10000000-0000-0000-0000-000000000001"),
-            name="Henry Board",
-            slug="henry-board",
+            name="Lead Board",
+            slug="lead-board",
         )
         agent = Agent(
             id=uuid.UUID("20000000-0000-0000-0000-000000000001"),
-            name="Henry",
+            name="Lead",
             board_id=board.id,
         )
         session.add(board)
@@ -37,7 +37,7 @@ def _playbook_payload(**overrides):
         "board_id": "10000000-0000-0000-0000-000000000001",
         "default_agent_id": "20000000-0000-0000-0000-000000000001",
         "current_config": {
-            "source_text": "Build a playbook layer for Henry on top of the workflow runtime.",
+            "source_text": "Build a playbook layer for the lead on top of the workflow runtime.",
             "target_outcome": "A product-ready implementation blueprint.",
             "scope_mode": "phased",
             "constraints": "Keep OpenClaw as runtime.",
@@ -131,11 +131,11 @@ async def test_list_and_update_skill_candidate(auth_client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_henry_session_start_creates_seed_playbook(auth_client: AsyncClient):
+async def test_guided_session_start_creates_seed_playbook(auth_client: AsyncClient):
     await _create_board_and_agent()
 
     resp = await auth_client.post(
-        "/api/v1/playbooks/henry/sessions/start",
+        "/api/v1/playbooks/guided/sessions/start",
         json={
             "board_id": "10000000-0000-0000-0000-000000000001",
             "kind": "spec_to_delivery_plan",
@@ -150,11 +150,11 @@ async def test_henry_session_start_creates_seed_playbook(auth_client: AsyncClien
 
 
 @pytest.mark.asyncio
-async def test_henry_session_message_advances_required_fields(auth_client: AsyncClient):
+async def test_guided_session_message_advances_required_fields(auth_client: AsyncClient):
     await _create_board_and_agent()
 
     start_resp = await auth_client.post(
-        "/api/v1/playbooks/henry/sessions/start",
+        "/api/v1/playbooks/guided/sessions/start",
         json={
             "board_id": "10000000-0000-0000-0000-000000000001",
             "kind": "spec_to_delivery_plan",
@@ -164,7 +164,7 @@ async def test_henry_session_message_advances_required_fields(auth_client: Async
     session_id = start_resp.json()["session"]["id"]
 
     goal_resp = await auth_client.post(
-        f"/api/v1/playbooks/henry/sessions/{session_id}/message",
+        f"/api/v1/playbooks/guided/sessions/{session_id}/message",
         json={"content": "Turn rough product notes into a build-ready delivery plan."},
     )
     assert goal_resp.status_code == 200, goal_resp.text
@@ -173,10 +173,54 @@ async def test_henry_session_message_advances_required_fields(auth_client: Async
     assert goal_body["pending_field_key"] == "source_text"
 
     source_resp = await auth_client.post(
-        f"/api/v1/playbooks/henry/sessions/{session_id}/message",
-        json={"content": "We need Henry to turn conversations into reusable playbooks with approval-first activation."},
+        f"/api/v1/playbooks/guided/sessions/{session_id}/message",
+        json={"content": "We need the lead to turn conversations into reusable playbooks with approval-first activation."},
     )
     assert source_resp.status_code == 200, source_resp.text
     source_body = source_resp.json()
-    assert source_body["playbook"]["current_config"]["source_text"].startswith("We need Henry")
+    assert source_body["playbook"]["current_config"]["source_text"].startswith("We need the lead")
     assert source_body["pending_field_key"] == "target_outcome"
+
+
+@pytest.mark.asyncio
+async def test_guided_current_returns_latest_session(auth_client: AsyncClient):
+    await _create_board_and_agent()
+    board_id = "10000000-0000-0000-0000-000000000001"
+
+    empty = await auth_client.get(f"/api/v1/playbooks/guided/current?board_id={board_id}")
+    assert empty.status_code == 200, empty.text
+    assert empty.json() is None
+
+    start = await auth_client.post(
+        "/api/v1/playbooks/guided/sessions/start",
+        json={"board_id": board_id, "kind": "spec_to_delivery_plan"},
+    )
+    assert start.status_code == 200, start.text
+
+    current = await auth_client.get(f"/api/v1/playbooks/guided/current?board_id={board_id}")
+    assert current.status_code == 200, current.text
+    assert current.json()["session"]["id"] == start.json()["session"]["id"]
+
+
+def test_playbook_routes_use_only_product_segments():
+    """Every static segment under /api/v1/playbooks is a product word.
+
+    The guided-setup routes once carried a person's name as a path segment and
+    shipped in the public OpenAPI spec. An explicit allowlist catches the next
+    one without this file having to spell out any name.
+    """
+    from app.main import app
+
+    allowed = {
+        "api", "v1", "playbooks", "catalog", "skill-packs", "approve", "versions",
+        "automations", "runs", "recent", "guided", "current", "sessions", "start",
+        "message",
+    }
+    segments = {
+        seg
+        for route in app.routes
+        if getattr(route, "path", "").startswith("/api/v1/playbooks")
+        for seg in route.path.strip("/").split("/")
+        if seg and not seg.startswith("{")
+    }
+    assert segments <= allowed, f"unexpected route segments: {sorted(segments - allowed)}"

@@ -120,4 +120,8 @@ features:
     status: internal
     source: "shown once after the first registration"
 
-internal: []
+internal:
+  # Deprecated guided playbook setup (no UI caller since Workstream C1).
+  - "endpoint:GET /api/v1/playbooks/guided/current"
+  - "endpoint:POST /api/v1/playbooks/guided/sessions/start"
+  - "endpoint:POST /api/v1/playbooks/guided/sessions/{session_id}/message"
