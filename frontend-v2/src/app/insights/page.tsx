@@ -40,8 +40,9 @@ const CHART_TICK = {
   fill: "var(--color-text-muted)",
 } as const;
 // Recharts paints legend labels in the series colour (a 70 % fill here) —
-// fine on dark, below AA on paper. Light mode uses the muted text tone.
-const legendLabel = (value: string) => <span className="light:text-[var(--color-text-muted)]!">{value}</span>;
+// below AA in both themes (UI probe). The swatch keeps the colour; the label
+// uses the muted text tone.
+const legendLabel = (value: string) => <span style={{ color: "var(--color-text-muted)" }}>{value}</span>;
 
 const LEGEND_STYLE = {
   fontSize: 10,

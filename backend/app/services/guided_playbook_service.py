@@ -1,9 +1,9 @@
-"""Henry playbook orchestration service.
+"""Guided playbook setup service.
 
 Deprecated as of Workstream C1 (2026-04-20): the field-validation-driven
-playbook chat is on its way out. Henry's long-term role is a messenger —
-paraphrase the operator's intent, forward a structured ask to Boss via chat_send,
-wait for Boss's reply, paraphrase back. See plan doc
+playbook chat is on its way out. The lead agent's long-term role is a
+messenger — paraphrase the operator's intent, forward a structured ask to Boss
+via chat_send, wait for Boss's reply, paraphrase back. See plan doc
 `docs/superpowers/plans/2026-04-20-harness-personas-session-handoff.md`.
 
 For now the service keeps working so legacy playbook UIs don't break, but
@@ -27,11 +27,12 @@ from app.services.playbook_service import playbook_service
 from app.services.workflow_validator import WorkflowValidationError
 from app.utils import utcnow
 
-HENRY_MODE = "henry_playbook"
+GUIDED_MODE = "guided_playbook"
+GUIDED_CREATED_BY = "guided_setup"
 LETTER_CHOICES = ["A", "B", "C", "D"]
 
 
-class HenryService:
+class GuidedPlaybookService:
     async def get_current_session_state(
         self,
         session: AsyncSession,
@@ -41,13 +42,13 @@ class HenryService:
         result = await session.exec(
             select(Project)
             .where(Project.board_id == board_id)
-            .where(Project.created_by == "henry")
+            .where(Project.created_by == GUIDED_CREATED_BY)
             .order_by(Project.updated_at.desc())
         )
         projects = result.all()
         for project in projects:
             config = project.project_config or {}
-            if config.get("mode") == HENRY_MODE:
+            if config.get("mode") == GUIDED_MODE:
                 return await self._build_state(session, project)
         return None
 
@@ -67,14 +68,14 @@ class HenryService:
                 raise WorkflowValidationError("Playbook not found")
             kind = playbook.kind
         if not kind:
-            raise WorkflowValidationError("Henry needs a playbook kind to start")
+            raise WorkflowValidationError("The guided setup needs a playbook kind to start")
 
         definition = get_playbook_definition(kind)
 
         if not playbook:
             default_agent = await self._resolve_default_agent(session, board_id)
             if not default_agent:
-                raise WorkflowValidationError("Henry needs at least one board agent before drafting a playbook")
+                raise WorkflowValidationError("The guided setup needs at least one board agent before drafting a playbook")
             playbook = await playbook_service.create_playbook(
                 session,
                 {
@@ -93,13 +94,13 @@ class HenryService:
         pending_field_key = self._next_pending_field(playbook.kind, answered_fields)
         project = Project(
             board_id=board_id,
-            name=f"Henry · {playbook.name}",
+            name=f"Guided setup · {playbook.name}",
             description=playbook.summary or definition["summary"],
             project_type="automation",
             status="planning",
-            created_by="henry",
+            created_by=GUIDED_CREATED_BY,
             project_config={
-                "mode": HENRY_MODE,
+                "mode": GUIDED_MODE,
                 "selected_kind": playbook.kind,
                 "playbook_id": str(playbook.id),
                 "pending_field_key": pending_field_key,
@@ -130,13 +131,13 @@ class HenryService:
         updated_by: str,
     ) -> dict[str, Any]:
         project = await session.get(Project, project_id)
-        if not project or (project.project_config or {}).get("mode") != HENRY_MODE:
-            raise WorkflowValidationError("Henry session not found")
+        if not project or (project.project_config or {}).get("mode") != GUIDED_MODE:
+            raise WorkflowValidationError("Guided setup session not found")
 
         config = dict(project.project_config or {})
         playbook_id_raw = config.get("playbook_id")
         if not playbook_id_raw:
-            raise WorkflowValidationError("Henry session lost its playbook link")
+            raise WorkflowValidationError("Guided setup session lost its playbook link")
         playbook = await session.get(Playbook, uuid.UUID(str(playbook_id_raw)))
         if not playbook:
             raise WorkflowValidationError("Linked playbook not found")
@@ -273,7 +274,7 @@ class HenryService:
         definition = get_playbook_definition(playbook.kind)
         field = next((item for item in definition["fields"] if item["key"] == pending_field_key), None)
         if not field:
-            return False, "Henry lost track of the next field. Please restart this guided setup."
+            return False, "The guided setup lost track of the next field. Please restart this guided setup."
 
         parsed_value = self._parse_field_answer(field, cleaned)
         if parsed_value is None:
@@ -389,4 +390,4 @@ class HenryService:
         )
 
 
-henry_service = HenryService()
+guided_playbook_service = GuidedPlaybookService()

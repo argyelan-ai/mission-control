@@ -26,9 +26,9 @@ def _served(value):
 
 def _idle():
     async def fake(endpoint):
-        return None
+        return 0, None
 
-    return patch.object(engine, "running_requests", fake)
+    return patch.object(engine, "probe_running_requests", fake)
 
 
 # ── unit ────────────────────────────────────────────────────────────────
@@ -124,13 +124,14 @@ async def test_switch_refused_while_engine_reports_running_requests(auth_client,
     await _recipe(session, "recipe-new")
 
     async def busy(endpoint):
-        return 3
+        return 3, None
 
-    with _probe({"running-old"}), patch.object(engine, "running_requests", busy), \
+    with _probe({"running-old"}), patch.object(engine, "probe_running_requests", busy), \
             patch("app.services.runtime_manager.start_runtime", AsyncMock()):
         resp = await auth_client.post(f"/api/v1/hosts/{box_a.id}/recipes/recipe-new/start")
     assert resp.status_code == 409
-    assert resp.json()["detail"] == {"code": "engine_busy", "running_requests": 3}
+    detail = resp.json()["detail"]
+    assert (detail["code"], detail["engine"], detail["running_requests"]) == ("engine_busy", "running-old", 3)
 
 
 # ── runtime stop / restart ───────────────────────────────────────────────

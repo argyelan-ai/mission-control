@@ -3409,7 +3409,8 @@
       "run_not_found": "This run no longer exists.",
       "run_record_missing": "No run record yet.",
       "head_on_box": "A head is working on this box. Stop the head first.",
-      "engine_busy": "The model is still answering requests. Try again in a moment.",
+      "engine_busy": "The model is still answering requests. Wait until they finish, or stop the runtime first.",
+      "engine_busy_named": "{engine} is still working on {count, plural, one {# request} other {# requests}}. Switching now would break {count, plural, one {it} other {them}} off — wait until {count, plural, one {it finishes} other {they finish}}, or stop the runtime first.",
       "unknown": "Something went wrong.",
       "head_not_active": "This head has already ended."
     },

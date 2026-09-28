@@ -29,6 +29,7 @@ import { MetaChip } from "@/components/shared/ListRow";
 import { panelCapabilities } from "./grouping";
 import { ContextSettingsPanel, loadStoredCtx } from "./ContextSettings";
 import { AutostartToggle } from "./AutostartToggle";
+import { useHeadConflictText } from "@/components/heads/HeadOccupancy";
 import { fmtCtx } from "@/lib/utils";
 
 // typeLabel inlined from RuntimeListCard.tsx (that component doesn't exist on
@@ -398,10 +399,11 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
   // Mutations match the pre-Task-5 page.tsx's runtime card exactly:
   // same api calls, onSuccess/onError messages (via useTranslations("runtimes"),
   // same keys), invalidations.
+  const headConflictText = useHeadConflictText();
   const startMutation = useMutation({
     mutationFn: () => api.runtimes.start(runtime.id, storedCtx ?? undefined),
     onSuccess: (data) => { setActionMsg(data.message); invalidate(); },
-    onError: () => setActionMsg(t("startFailed")),
+    onError: (err: Error) => setActionMsg(headConflictText(err) ?? t("startFailed")),
   });
 
   const stopMutation = useMutation({

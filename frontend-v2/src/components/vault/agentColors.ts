@@ -2,7 +2,7 @@
  * Stable hue-from-slug hash for agent identity dots.
  * Returns a CSS hsl() color string. One color per agent slug, consistent
  * across renders and sessions. The lightness is a CSS variable
- * (--agent-lightness: 55% dark, 25% light — globals.css), so the same hue
+ * (--agent-lightness: 75% dark, 25% light — globals.css), so the same hue
  * stays readable as text on both grounds (ADR-087).
  */
 export function colorForAgent(slug: string): string {

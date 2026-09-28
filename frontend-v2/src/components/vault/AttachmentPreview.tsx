@@ -108,7 +108,7 @@ export function AttachmentPreview({
       >
         <span className="font-mono tabular-nums">{mime}</span>
         {sizeLabel && (
-          <span className="opacity-60 light:opacity-100! tabular-nums">{sizeLabel}</span>
+          <span className="tabular-nums" style={{ color: "var(--color-text-muted)" }}>{sizeLabel}</span>
         )}
       </div>
 
@@ -172,7 +172,7 @@ export function AttachmentPreview({
             <a
               href={objectUrl}
               download
-              className="underline hover:opacity-100 opacity-80 light:opacity-100!"
+              className="underline"
             >
               Download {title || "attachment"}
             </a>

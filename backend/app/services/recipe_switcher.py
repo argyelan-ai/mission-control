@@ -161,9 +161,10 @@ SSH_PROCESS_ENGINE = "ssh_process"
 
 class RecipeStartError(Exception):
     """Ein Start, der ehrlich abgelehnt wird. ``status`` ist der HTTP-Code,
-    ``detail`` der Satz für die Oberfläche."""
+    ``detail`` der Satz für die Oberfläche (beim Switch-Lock das 409-Detail
+    ``engine_busy`` als dict)."""
 
-    def __init__(self, status: int, detail: str) -> None:
+    def __init__(self, status: int, detail: str | dict) -> None:
         super().__init__(detail)
         self.status = status
         self.detail = detail
@@ -1067,15 +1068,16 @@ async def start_recipe_on_host(
     # from under a working head. Only a DISPLACEMENT is refused — another
     # recipe on a box whose engine answers. Recovering a dead engine (nothing
     # running on the boxes, e.g. the watcher's duo autostart) passes.
-    # Inert while settings.heads_enabled is off.
+    # The head rule is inert while settings.heads_enabled is off; the switch
+    # lock (no switch while the old engine reports running requests, E1) is
+    # always on — here, before anything on a box is touched.
     from app.services.heads import box_guard
 
     affected_boxes = [host.id] + ([worker.id] if worker is not None else [])
     occupants = [rt for hid in affected_boxes for rt in state.occupied.get(hid, [])]
     displaces = any(instance is None or rt.id != instance.id for rt in occupants)
     box_guard.check_displacement(affected_boxes, "switch", displaces_engine=displaces)
-    if displaces:
-        await box_guard.check_engine_idle({rt.endpoint for rt in occupants if rt.endpoint})
+    lock_unknown = await box_guard.check_engine_idle(occupants) if displaces else []
 
     # P4 „Vorflug": passen die Zahlen? Steht ohne Netzzugriff fest und läuft
     # darum HIER — vor der Instanz, vor der `.env`, vor jeder Verdrängung.
@@ -1169,6 +1171,9 @@ async def start_recipe_on_host(
         # Oberfläche 20 Minuten lang ein „wechselt gerade", das nie endet.
         if slot is not None:
             await runtime_grace.clear_switching(slot.slug)
+        if result.get("switch_lock"):
+            # The old engine got a request between our check and the eviction.
+            raise RecipeStartError(409, result["switch_lock"])
         raise RecipeStartError(400, str(result.get("message") or "Start fehlgeschlagen"))
 
     # Ziel-Modell SOFORT in die Slot-Zeile, nicht erst nach zwei Wächter-Proben
@@ -1220,6 +1225,10 @@ async def start_recipe_on_host(
         "worker_host_id": str(worker.id) if worker is not None else None,
         "worker_slug": worker.slug if worker is not None else None,
         "env_written": env_written,
+        "switch_lock": {
+            "state": ("unknown" if lock_unknown else "idle") if displaces else "no_switch",
+            "unknown": lock_unknown,
+        },
     }
 
 

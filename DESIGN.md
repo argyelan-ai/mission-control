@@ -8,27 +8,27 @@ colors:
   accent-subtle: "rgba(235,232,222,0.10)"
   border-accent: "rgba(235,232,222,0.30)"
   on-accent: "#151411"
-  bg-deep: "#0A0A0A"
-  bg-base: "#101010"
-  bg-surface: "#171717"
-  bg-elevated: "#222222"
-  bg-hover: "#2C2C2C"
-  text-primary: "#EEEEEE"
-  text-secondary: "#BABABA"
-  text-muted: "#8F8F8F"
-  text-dim: "#666666"
+  bg-deep: "#1C1C1C"
+  bg-base: "#181818"
+  bg-surface: "#262626"
+  bg-elevated: "#313131"
+  bg-hover: "#3A3A3A"
+  text-primary: "#F2F2F2"
+  text-secondary: "#C9C9C9"
+  text-muted: "#B3B3B3"
+  text-dim: "#A3A3A3"
   border-subtle: "rgba(168,168,168,0.05)"
   border: "rgba(168,168,168,0.10)"
   border-active: "rgba(168,168,168,0.16)"
-  status-online: "#55A964"
-  status-warning: "#A67F3E"
-  status-warning-text: "#B98F4D"
-  status-error: "#FA4942"
-  status-info: "#5890CA"
+  status-online: "#68BC76"
+  status-warning: "#CCA463"
+  status-warning-text: "#CCA463"
+  status-error: "#FF867A"
+  status-info: "#75AEEA"
   status-offline: "#3A3A3A"
   chart-cpu: "#EBE8DE"
-  chart-ram: "#8F8F8F"
-  chart-disk: "#666666"
+  chart-ram: "#B3B3B3"
+  chart-disk: "#A3A3A3"
 typography:
   display:
     fontFamily: "Clash Display, General Sans, sans-serif"
@@ -133,15 +133,16 @@ Eine fast monochrome, neutral-dunkle Architektur, in der der helle Akzent über 
 - **On-Accent** (#151411): Text/Icons auf Akzent-Flächen — 15:1 Kontrast, „Reverse Video". Niemals Weiss auf dem hellen Akzent.
 
 ### Neutral
-- **Off-Black-Schichtung** (#0A0A0A / #101010 / #171717 / #222222 / #2C2C2C): bg-deep → bg-hover. Tiefe entsteht durch Aufhellen der Fläche. Nie reines #000, nie blaustichig.
-- **Text-Treppe** (#EEEEEE / #BABABA / #8F8F8F): primary für Inhalte, secondary für Beschreibungen, muted für Meta/Platzhalter — alle ≥4.5:1 auf bg-deep–bg-elevated. **#666666 (text-dim) ist nur für Deko und inaktive Icons zugelassen, nie für Fliesstext.**
+- **Off-Black-Schichtung** (#1C1C1C / #181818 / #262626 / #313131 / #3A3A3A): bg-deep → bg-hover. Tiefe entsteht durch Aufhellen der Fläche. Nie reines #000, nie blaustichig.
+- **Text-Treppe** (#F2F2F2 / #C9C9C9 / #B3B3B3 / #A3A3A3): primary für Inhalte, secondary für Beschreibungen, muted für Meta/Platzhalter, dim für Deko und inaktive Icons — **alle ≥4.5:1 auf allen fünf Flächen inkl. bg-hover** (`theme.contrast.test`). text-dim ist trotzdem kein Fliesstext-Ton (K6); er ist nur AA, weil er in der Praxis kleine Meta-Texte trägt. **Kein Text über `opacity` dimmen** — dafür gibt es muted/dim (halbe Deckkraft fiel in beiden Modi unter AA).
 - **Neutrale Rahmen** (Basisfarbe #A8A8A8 mit Alpha 0.05 / 0.10 / 0.16): subtle → active. Rahmen strukturieren, sie schmücken nicht.
 
 ### Status & Lanes (die einzige Buntheit)
-- **Online-Grün** (#55A964), **Warn-Ocker** (#A67F3E), **Fehler-Rot** (#FA4942), **Info-Blau** (#5890CA), **Offline-Grau** (#3A3A3A): entsättigt, kein Glow. „busy"/„in Arbeit" ist ein Info-Zustand (Blau), kein Akzent. Der wartende-auf-Operator-Zustand (`user_test`) trägt den hellsten Ton (accent #EBE8DE), nicht Buntheit. Lane-Zuordnung ausschliesslich über die `LANE`-Map in `colors.ts`.
+- **Online-Grün** (#68BC76), **Warn-Ocker** (#CCA463), **Fehler-Rot** (#FF867A), **Info-Blau** (#75AEEA), **Offline-Grau** (#3A3A3A): kein Glow. In OKLCH so weit aufgehellt (Farbton + Chroma unverändert), dass jeder Ton als Text ≥4.5:1 auf allen fünf Flächen und auf der eigenen 12-%-Tönung über surface/elevated (Chips) schafft. Status-Tönungen hinter Status-Text höchstens ~10–12 %. „busy"/„in Arbeit" ist ein Info-Zustand (Blau), kein Akzent. Der wartende-auf-Operator-Zustand (`user_test`) trägt den hellsten Ton (accent #EBE8DE), nicht Buntheit. Lane-Zuordnung ausschliesslich über die `LANE`-Map in `colors.ts`.
 - **Fehler vor Warnung über Chroma:** Rot (Chroma .215) schlägt Ocker (.095) durch Sättigung, nicht durch Helligkeit — beide bleiben gleich hell.
-- **Status-Text-Stufe** (#B98F4D): für Fliesstext auf Karten gilt die `STATUS_TEXT`-Map; nur das Ocker wird auf #B98F4D geliftet (Token selbst = 4.34:1 auf #222222). Grün/Rot/Blau bleiben unverändert AA-sicher.
-- **Chart-Töne**: CPU = accent #EBE8DE, RAM #8F8F8F, Disk #666666 — Ressourcen-Serien tragen über Helligkeit, nicht über Farbton.
+- **Status-Text-Stufe:** für Fliesstext auf Karten gilt die `STATUS_TEXT`-Map. Im Dunkeln sind alle vier Töne selbst AA (`status-warning-text` = `status-warning`); hell liegen die Text-Stufen eine Spur tiefer.
+- **On-Status** (#161616 dunkel, #FFFFFF hell): Text auf voller Status-Fläche (Gefahr-Knopf) — ≥7:1 auf jedem dunklen Status-Ton.
+- **Chart-Töne**: CPU = accent #EBE8DE, RAM #B3B3B3, Disk #A3A3A3 — Ressourcen-Serien tragen über Helligkeit, nicht über Farbton.
 
 ### Named Rules
 **Die Eine-Stimme-Regel.** Es gibt genau einen Akzent, und er ist achromatisch: Helligkeit ist das Signal. Er belegt ≤10% jeder Fläche. Einen zweiten (bunten) Akzent einzuführen ist verboten.
@@ -259,7 +260,7 @@ Werkzeuge, keine Schmuckstücke: zurückhaltend im Ruhezustand, eindeutig im akt
 - **Primary:** Akzent-Fläche (#EBE8DE) mit dunklem Text (#151411, `on-accent`); Hover = brightness/`accent-hover`. Kein Gradient.
 - **Ghost / Sekundär:** Transparent, 1px Rahmen (`border-active`), Text secondary; Hover → bg-hover + Text primary.
 - **Focus:** global 2px Akzent-Ring mit 2px Offset (`:focus-visible`).
-- **Destruktiv:** Fehler-Rot #FA4942 nur für endgültige Aktionen, sonst Ghost mit rotem Text.
+- **Destruktiv:** Fehler-Rot (status-error) nur für endgültige Aktionen, sonst Ghost mit rotem Text.
 
 ### Chips / Pills
 - **Aktiv-Muster:** `alpha(farbe, 0.13)` Hintergrund + `alpha(farbe, 0.33)` Rahmen + Farbtext (loopMeta/Task-Maske); die `Pill`-Komponente nutzt `alpha(farbe, 0.12)` / `alpha(farbe, 0.15)`. `rounded-sm` (6px) für Badges, `rounded-full` für echte Pills; kein text-shadow.
@@ -273,7 +274,7 @@ Werkzeuge, keine Schmuckstücke: zurückhaltend im Ruhezustand, eindeutig im akt
 - **Padding:** 16px (kompakt 12px)
 
 ### Inputs / Fields
-- **Style:** bg-deep (#0A0A0A) Fläche, 1px `border`, md/xl-Radius, Text primary, Platzhalter text-muted
+- **Style:** bg-deep (#1C1C1C) Fläche, 1px `border`, md/xl-Radius, Text primary, Platzhalter text-muted
 - **Focus:** Rahmen → `${accent}66` + weicher Ring `box-shadow: 0 0 0 3px rgba(235,232,222,0.10)` (Akzent-Alpha, kein bunter Glow). Einfache Felder setzen den Rahmen auf `border-accent`.
 - **Label:** `.label-sys` (mono uppercase) oder text-muted, oberhalb des Felds, immer mit `htmlFor`/`id` oder `aria-label`. Zahlenfelder tragen Mono-Einheiten-Suffixe.
 
@@ -294,7 +295,7 @@ Werkzeuge, keine Schmuckstücke: zurückhaltend im Ruhezustand, eindeutig im akt
 - **Do** jede Farbe aus `colors.ts` beziehen (`C`, `STATUS`, `LANE`, `STATUS_TEXT`, `P2`) — neue Bedeutung ⇒ neues Token, erst dann verwenden.
 - **Do** Buntheit ausschliesslich für Status einsetzen; Struktur/Interaktion tragen über Helligkeit (Akzent) und Fläche.
 - **Do** Tiefe über Flächenton lösen (eine Stufe heller = eine Ebene höher).
-- **Do** Kontraste prüfen: Body/Labels ≥4.5:1; auf Akzent-Flächen immer #151411-Text; text-dim (#666666) nur für Deko.
+- **Do** Kontraste prüfen: Body/Labels ≥4.5:1; auf Akzent-Flächen immer #151411-Text, auf vollen Status-Flächen `on-status`; text-dim nur für Deko/Meta.
 - **Do** jeden interaktiven Zustand über Fläche+Rahmen sichtbar machen: Hover, Fokus-Ring, aktive Chips — nie über einen Glow.
 - **Do** `prefers-reduced-motion` respektieren; Motion = kurzes Fade/Slide mit ease-out (`cubic-bezier(0.16,1,0.3,1)`, 100–300ms), nur transform+opacity.
 - **Do** Touch-Targets ≥44px und Safe-Areas auf iPhone einhalten.

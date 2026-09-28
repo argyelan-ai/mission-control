@@ -88,14 +88,14 @@ export function MetaChip({
       data-testid={testId}
       className={cn(
         "shrink-0 inline-flex items-center gap-1 label-sys rounded-sm px-1.5 py-0.5 leading-none",
-        dimmed && "light:opacity-100!",
         className,
       )}
       style={{
-        color: c.color,
-        border: `1px solid ${c.border}`,
-        background: c.background,
-        ...(dimmed ? { opacity: 0.45 } : {}),
+        // dimmed = neutral ink instead of half opacity (text at 45 % fell
+        // below AA in both themes)
+        color: dimmed ? C.textDim : c.color,
+        border: `1px solid ${dimmed ? C.border : c.border}`,
+        background: dimmed ? "transparent" : c.background,
       }}
     >
       {icon}
@@ -270,7 +270,6 @@ export function ListRow({
 
   const classes = cn(
     "rounded-md border px-2.5 py-1.5 w-full text-left transition-colors",
-    muted && "opacity-60 light:opacity-100!",
     onClick && "cursor-pointer hover:bg-[var(--color-bg-hover)]",
     className,
   );

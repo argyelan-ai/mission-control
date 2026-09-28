@@ -3673,28 +3673,28 @@
         ]
       }
     },
-    "/api/v1/playbooks/henry/current": {
+    "/api/v1/playbooks/guided/current": {
       "get": {
-        "operationId": "get_current_henry_session_api_v1_playbooks_henry_current_get",
-        "summary": "Get Current Henry Session",
+        "operationId": "get_current_guided_session_api_v1_playbooks_guided_current_get",
+        "summary": "Get Current Guided Session",
         "tags": [
           "playbooks"
         ]
       }
     },
-    "/api/v1/playbooks/henry/sessions/start": {
+    "/api/v1/playbooks/guided/sessions/start": {
       "post": {
-        "operationId": "start_henry_session_api_v1_playbooks_henry_sessions_start_post",
-        "summary": "Start Henry Session",
+        "operationId": "start_guided_session_api_v1_playbooks_guided_sessions_start_post",
+        "summary": "Start Guided Session",
         "tags": [
           "playbooks"
         ]
       }
     },
-    "/api/v1/playbooks/henry/sessions/{session_id}/message": {
+    "/api/v1/playbooks/guided/sessions/{session_id}/message": {
       "post": {
-        "operationId": "send_henry_message_api_v1_playbooks_henry_sessions__session_id__message_post",
-        "summary": "Send Henry Message",
+        "operationId": "send_guided_message_api_v1_playbooks_guided_sessions__session_id__message_post",
+        "summary": "Send Guided Message",
         "tags": [
           "playbooks"
         ]
