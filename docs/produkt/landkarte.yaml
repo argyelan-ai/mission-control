@@ -374,8 +374,8 @@ internal:
   # /api/v1/agent endpoint exists.
   - "endpoint:* /api/v1/agent/*"
   # Orchestration routers (E3b R6): none of these has a page or script
-  # caller today — the services run runs in process (scheduler, workflow
-  # service), not over HTTP.
+  # caller today — the scheduler and the workflow service execute runs in
+  # process, not over HTTP. Dead-code candidates for E5 (operator decides).
   # Playbooks router: CRUD, catalog, skill packs, versions, approve,
   # per-playbook automations and recent runs; client helpers exist in
   # api.ts (api.playbooks.*) but no component calls them. The guided
