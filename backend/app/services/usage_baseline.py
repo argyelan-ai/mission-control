@@ -90,7 +90,15 @@ def _finish(bucket: dict) -> dict:
     return bucket
 
 
-async def compute_weekly_baseline(session: AsyncSession, *, weeks: int = 6, now: datetime | None = None) -> dict:
+async def compute_weekly_baseline(
+    session: AsyncSession,
+    *,
+    weeks: int = 6,
+    now: datetime | None = None,
+    harvested_before: datetime | None = None,
+) -> dict:
+    """``harvested_before`` freezes a snapshot: rows harvested later are left
+    out, so a published table (e.g. the 2026-09 baseline) can be reproduced."""
     now = ensure_aware(now) if now is not None else utcnow()
     mondays = week_starts(weeks, now)
     start = datetime.combine(mondays[0], datetime.min.time(), tzinfo=timezone.utc)
@@ -122,7 +130,14 @@ async def compute_weekly_baseline(session: AsyncSession, *, weeks: int = 6, now:
                 func.sum(ModelUsageEvent.cost_usd).label("cost"),
                 unpriced,
             )
-            .where(ModelUsageEvent.ts >= start)
+            .where(
+                ModelUsageEvent.ts >= start,
+                *(
+                    [ModelUsageEvent.harvested_at <= harvested_before]
+                    if harvested_before is not None
+                    else []
+                ),
+            )
             .group_by(
                 day,
                 ModelUsageEvent.harness,

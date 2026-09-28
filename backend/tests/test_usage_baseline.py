@@ -161,3 +161,17 @@ async def test_endpoint_returns_week_table(auth_client, session):
 async def test_endpoint_requires_login(client):
     resp = await client.get("/api/v1/intelligence/costs/by-week")
     assert resp.status_code in (401, 403)
+
+
+async def test_harvested_before_freezes_a_snapshot(session):
+    early, late = _row(cost=1.0), _row(cost=2.0)
+    early.harvested_at = datetime(2026, 9, 23, tzinfo=timezone.utc)
+    late.harvested_at = datetime(2026, 9, 24, 11, tzinfo=timezone.utc)
+    session.add_all([early, late])
+    await session.commit()
+
+    cut = datetime(2026, 9, 23, 12, tzinfo=timezone.utc)
+    result = await compute_weekly_baseline(session, weeks=1, now=NOW, harvested_before=cut)
+
+    assert result["weeks"][0]["totals"]["events"] == 1
+    assert result["weeks"][0]["totals"]["cost_usd"] == pytest.approx(1.0)
