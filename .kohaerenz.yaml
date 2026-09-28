@@ -3,7 +3,7 @@
 # docs/produkt/luecken-basis.json. See docs/produkt/README.md.
 version: 1
 stufe: 1
-tool_version: 0.1.2
+tool_version: 0.1.4
 typ: fastapi
 main_branch: origin/main
 adapters:

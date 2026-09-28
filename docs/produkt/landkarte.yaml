@@ -1,8 +1,6 @@
 # Product map (Roter Faden). Written by hand, read by `kz`. See README.md here.
-# Stage E3b (r2): endpoints mapped to features for the work-item APIs
-# (boards, tasks, approvals, tags, activity, projects, repos, heads,
-# night-shift); the rest of the API and the tables still sit in
-# luecken-basis.json as the remaining E3b work list.
+# Stage E3b: endpoints (later tables) are mapped round by round; whatever is
+# not mapped yet still sits in luecken-basis.json as the E3b work list.
 # `source` says which doc a status comes from; `note: unconfirmed` means no
 # doc states the page's status yet (default `active`, to be confirmed in E3b).
 version: 1
