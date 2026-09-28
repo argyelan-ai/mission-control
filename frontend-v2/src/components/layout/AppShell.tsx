@@ -21,6 +21,7 @@ export default function AppShell({
   children,
   fullHeight = false,
   mobileChromeless = false,
+  mobileHideAppBar = false,
 }: {
   children: React.ReactNode;
   fullHeight?: boolean;
@@ -39,6 +40,12 @@ export default function AppShell({
    *  Auf dem Desktop ändert sich nichts: dort trägt keine der beiden Leisten
    *  überhaupt etwas bei (`md:hidden`). */
   mobileChromeless?: boolean;
+  /** Auf dem Handy NUR die obere App-Leiste zurücktreten lassen, die
+   *  Tab-Leiste bleibt (Task-Detail): die Kontextleiste des Bildschirms
+   *  (‹ Aufgaben · ⋯) ersetzt dort die Wortmarke — DESIGN.md K12, eine
+   *  mitlaufende Leiste kommt nie als dritte Leiste dazu. Nur mit `fullHeight`
+   *  sinnvoll. Der Menü-Drawer bleibt erreichbar (Tab „Index"). */
+  mobileHideAppBar?: boolean;
 }) {
   const router = useRouter();
   const { setCurrentUser } = useAppStore();
@@ -102,7 +109,7 @@ export default function AppShell({
       <AmbientBackground />
 
       {/* Mobile navigation */}
-      {!mobileChromeless && <MobileNav />}
+      {!mobileChromeless && <MobileNav showBar={!mobileHideAppBar} />}
 
       {/* Desktop: one column carries board, search, navigation and status
           (Shell v4). The former WorkspaceSwitcher rail, TopBar and StatusBar
@@ -130,7 +137,7 @@ export default function AppShell({
               // `md:pt-6` hält den Desktop-Abstand, den main-content-pt dort
               // beisteuert (1.5rem), unverändert. Ein "pt-0" davor braucht es
               // nicht — Tailwinds Preflight setzt padding ohnehin auf 0.
-              mobileChromeless ? "md:pt-6" : "main-content-pt"
+              mobileChromeless || mobileHideAppBar ? "md:pt-6" : "main-content-pt"
             }`}
           >
             <div className="mx-auto w-full max-w-[1600px] flex flex-col flex-1 min-h-0">

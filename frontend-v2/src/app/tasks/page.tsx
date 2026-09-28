@@ -760,7 +760,7 @@ function ProjectDetail({
 // project/phase view (ProjectDetail via the group header link) and an
 // empty state. Mobile keeps the stack navigation (list → detail).
 
-function TasksPageContent() {
+function TasksPageContent({ onPhoneTaskChange }: { onPhoneTaskChange?: (open: boolean) => void } = {}) {
   const t = useTranslations("tasks");
   const activeBoardId = useAppStore((s) => s.activeBoardId);
   const qc = useQueryClient();
@@ -881,6 +881,14 @@ function TasksPageContent() {
     [allTasks, selectedTaskId],
   );
 
+  // Tell the shell when the phone shows a task: its context bar replaces the
+  // app bar then. (A no-op above md — the app bar is phone-only anyway.)
+  const phoneTaskOpen = mobileView === "detail" && !!selectedTask;
+  useEffect(() => {
+    onPhoneTaskChange?.(phoneTaskOpen);
+  }, [phoneTaskOpen, onPhoneTaskChange]);
+  useEffect(() => () => onPhoneTaskChange?.(false), [onPhoneTaskChange]);
+
   const projectView = projectViewId ? (projects.find((p) => p.id === projectViewId) ?? null) : null;
   const projectViewTasks = useMemo(
     () => (projectViewId ? allTasks.filter((t) => t.project_id === projectViewId) : []),
@@ -961,7 +969,12 @@ function TasksPageContent() {
     // Insel ist selbst eine glatte Fläche, der Kopf malt schlicht ihre Farbe,
     // und das Rechteck ist gewollt — mit Rahmen und Radius. Genau so macht es
     // die Sessions-Seite seit jeher.
-    <div className="flex md:-m-6 md:h-dvh md:p-2" data-testid="tasks-frame">
+    // fullHeight shell: the frame fills the column; the list and the detail
+    // scroll inside. An open task on the phone runs edge to edge (K8).
+    <div
+      className={`flex flex-1 min-h-0 md:-m-6 md:h-dvh md:p-2 ${phoneTaskOpen ? "-mx-4 -mb-4" : ""}`}
+      data-testid="tasks-frame"
+    >
       <div
         className="flex flex-1 min-h-0 min-w-0 md:rounded-xl md:border md:overflow-hidden"
         style={{ background: C.bgSurface, borderColor: C.border }}
@@ -987,8 +1000,9 @@ function TasksPageContent() {
 
       {/* ── Right pane: task detail / project view / empty state ── */}
       <div className={`${mobileView === "detail" ? "flex" : "hidden"} md:flex flex-1 flex-col min-h-0 min-w-0`}>
-        {/* Mobile: back to the list */}
-        {detailOpen && (
+        {/* Mobile: back to the list — an open task carries "‹ Tasks" in its
+            own context bar; the project and not-found views keep this bar. */}
+        {detailOpen && !selectedTask && (
           <div
             className="flex items-center gap-3 px-4 py-3 border-b shrink-0 md:hidden"
             style={{ borderColor: C.border }}
@@ -1023,7 +1037,10 @@ function TasksPageContent() {
           // Schwester-Zustände darunter (Projekt-Ansicht, Leerzustand) stehen
           // ebenfalls direkt auf dem Grund — geklebt wird hier nichts, also
           // braucht es auch keine Maskierung.
-          <div className="flex-1 flex flex-col min-h-0">
+          <div
+            className="flex-1 flex flex-col min-h-0 pt-safe-top"
+            style={{ "--detail-bg": C.bgSurface, "--detail-raised": C.bgElevated } as React.CSSProperties}
+          >
             <TaskDetailBody
               task={selectedTask}
               agents={agents}
@@ -1033,6 +1050,8 @@ function TasksPageContent() {
               onTabChange={handleTabChange}
               onOpenTask={handleOpenTaskId}
               hideCloseOnMobile
+              onBack={handleCloseDetail}
+              backLabel={t("title")}
             />
           </div>
         ) : notFoundTaskId ? (
@@ -1138,10 +1157,14 @@ function TasksPageContent() {
 }
 
 export default function TasksPage() {
+  // Phone + an open task: the detail's own context bar (‹ Tasks · ⋯) takes
+  // the place of the app bar (DESIGN.md K12). Full height so the detail
+  // scrolls in its own body and that bar stays put.
+  const [taskOnPhone, setTaskOnPhone] = useState(false);
   return (
-    <AppShell>
+    <AppShell fullHeight mobileHideAppBar={taskOnPhone}>
       <Suspense fallback={null}>
-        <TasksPageContent />
+        <TasksPageContent onPhoneTaskChange={setTaskOnPhone} />
       </Suspense>
     </AppShell>
   );
