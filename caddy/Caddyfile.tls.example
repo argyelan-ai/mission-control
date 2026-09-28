@@ -63,6 +63,14 @@
         respond 403
     }
 
+    # Local-only webhooks (git post-commit hook on the host) carry no user
+    # auth. The backend rejects proxied and non-local callers itself
+    # (app/local_only.py); this block keeps them off the proxy entirely.
+    # Callers use the backend port directly.
+    handle /api/v1/webhooks/local/* {
+        respond 403
+    }
+
     # API + health → backend
     handle /api/* {
         reverse_proxy backend:8000
