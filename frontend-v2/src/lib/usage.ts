@@ -12,6 +12,7 @@ export interface UsageTotals {
   cache_read_tokens: number;
   cache_write_tokens: number;
   total_tokens: number;
+  generated_tokens?: number; // input + output, no cache
   cost_usd: number;
   unpriced_events: number;
   local_tokens: number;
@@ -35,6 +36,7 @@ export interface UsageWeek {
 export interface UsageByWeek {
   generated_at: string;
   start: string;
+  tz?: string; // IANA zone the weeks were counted in
   weeks: UsageWeek[];
 }
 

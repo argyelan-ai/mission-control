@@ -279,8 +279,15 @@ export const api = {
       request<CostTimeseries[]>(`/api/v1/intelligence/costs/timeseries?days=${days}`),
     byTask: (days = 30, limit = 10) =>
       request<CostByTask[]>(`/api/v1/intelligence/costs/by-task?days=${days}&limit=${limit}`),
-    byWeek: (weeks = 6) =>
-      request<import("./usage").UsageByWeek>(`/api/v1/intelligence/costs/by-week?weeks=${weeks}`),
+    // tz: the browser's IANA zone, so days and weeks end at the operator's midnight.
+    byWeek: (weeks = 6, tz?: string) =>
+      request<import("./usage").UsageByWeek>(
+        `/api/v1/intelligence/costs/by-week?weeks=${weeks}${tz ? `&tz=${encodeURIComponent(tz)}` : ""}`,
+      ),
+    byDay: (days = 182, tz?: string) =>
+      request<import("./insights").UsageByDay>(
+        `/api/v1/intelligence/costs/by-day?days=${days}${tz ? `&tz=${encodeURIComponent(tz)}` : ""}`,
+      ),
   },
 
   // ── Page usage (E0 beacon; the POST lives in lib/pageBeacon.ts) ─────────────

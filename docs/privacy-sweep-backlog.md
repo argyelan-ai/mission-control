@@ -303,7 +303,6 @@ docs/decisions/README.md: sparky
 docs/lifecycle-safety-watchdog-REPORT.md: sparky
 docs/omp-runtime-REPORT.md: sparky
 docs/setup/slack.md: freecode
-frontend-v2/src/app/insights/page.tsx: sparky
 frontend-v2/src/app/runtimes/__tests__/cloud-usage.test.tsx: davinci, freecode, shakespeare, sparky
 frontend-v2/src/components/chat/SessionSidebar.test.tsx: sparky
 frontend-v2/src/components/files/__tests__/FilesSearchFilters.test.tsx: sparky
