@@ -126,6 +126,42 @@ features:
       # Head occupancy / orphan runs in the stage cockpit and runtimes page
       # (ADR-086: which pair is busy).
       - "GET /api/v1/heads/occupancy"
+      # Runtimes page (beyond head occupancy): engine register, fleet stage
+      # and box cockpit, box/onboarding wizard, LM Studio models and
+      # downloads, runtime schedules, vLLM discovery, model catalog
+      # (ModelCatalogSection) and the local recipe registry
+      # (LocalModelBrowser). ADR-056: the harness x runtime compat matrix
+      # also feeds the switch modal on the task detail and the agent wizard;
+      # GET /runtimes/spark/metrics is a back-compat alias (ADR-048) with no
+      # component caller; db/{slug}/agents feeds the cockpit agent list.
+      - "* /api/v1/runtimes"
+      - "* /api/v1/runtimes/*"
+      # Host registry and device control: HostsSection, BoxWizard,
+      # HostOnboardDialog, NodePairingDialog, stage telemetry (metrics,
+      # pulse, metrics/history), recipe switcher and autostart — all
+      # mounted on the runtimes page.
+      - "* /api/v1/hosts"
+      - "* /api/v1/hosts/*"
+      # Curated local-recipe registry: list/refresh/enable in
+      # LocalModelBrowser and the box wizard; install + install log in
+      # SshProcessDeployDialog. Starts go through POST /hosts/{id}/recipes/…,
+      # not through this router.
+      - "* /api/v1/local-registry"
+      - "* /api/v1/local-registry/*"
+      # Node devices (Fleet & Rezepte v2): pairing-code mint
+      # (NodePairingDialog), device tiles with desired-state control
+      # (DeviceControl). The node agent itself polls pair/heartbeat/
+      # agent-script (see internal); inventory and single device-state GET
+      # have no page caller today (onboarding reads the DB directly).
+      - "POST /api/v1/nodes/pairing-codes"
+      - "GET /api/v1/nodes/devices"
+      - "GET /api/v1/nodes/{host_id}/device-state"
+      - "GET /api/v1/nodes/{host_id}/inventory"
+      - "PUT /api/v1/nodes/{host_id}/device-state"
+      # Provider model catalog (ModelCatalogSection on the runtimes page;
+      # bind() creates a runtime row, the switch modal itself is unchanged).
+      - "* /api/v1/models/catalog"
+      - "* /api/v1/models/catalog/*"
   - id: F-settings
     name: "Settings"
     ui: {route: /settings}
@@ -134,6 +170,13 @@ features:
     api:
       # Night-shift window config (NightShiftTab, ROADMAP E2).
       - "* /api/v1/night-shift/config"
+      # AI provider settings + HuggingFace/embeddings connection tests
+      # (AiProvidersTab).
+      - "* /api/v1/ai-providers/*"
+      # Model cost prices CRUD, unmatched list and cost recompute
+      # (CostPricesTab).
+      - "* /api/v1/model-prices"
+      - "* /api/v1/model-prices/*"
   - id: F-memory
     name: "Memory: the vault"
     ui: {route: [/memory, /memory/graph]}
@@ -186,8 +229,9 @@ features:
       # skills, plugins, MCP, metrics, provision, local memory, SSE stream.
       # The chat and terminal slices are also used by F-sessions (listed there).
       # Review note: GET /agents/runtime-status and POST /agents/{id}/reset-token
-      # have no page caller (tests / manual operator use only); GET
-      # /agents/{id}/metrics is also read by the runtimes cockpit.
+      # have no page caller (tests / manual operator use only). GET
+      # /agents/{id}/metrics(/summary) has a client helper but no caller
+      # (the runtimes cockpit reads /hosts/{id}/metrics instead).
       - "* /api/v1/agents"
       - "* /api/v1/agents/*"
       # Wizard: template list/create, edit, instantiate.
@@ -195,6 +239,11 @@ features:
       - "* /api/v1/agent-templates/*"
       # Host agent start/stop/restart buttons on the agent detail page.
       - "* /api/v1/host-agents/*"
+      # Agent wizard model list (wizard/shared.tsx). The single-model read
+      # has a client helper (api.models.get) but no caller today; the model
+      # CATALOG endpoints belong to the runtimes page (listed there).
+      - "GET /api/v1/models"
+      - "GET /api/v1/models/{model_id}"
     note: unconfirmed
   - id: F-bench
     name: "Benchmark studio"
@@ -266,3 +315,15 @@ internal:
   # CLI uses the agent-scoped /agent/... checklist route).
   - "endpoint:GET /api/v1/tasks/{task_id}/usage"
   - "endpoint:DELETE /api/v1/boards/{board_id}/tasks/{task_id}/checklist/{item_id}"
+  # Node-agent machine API (scripts/node-agent/mc-node-agent.py, "Fleet &
+  # Rezepte v2" phase 1): the box trades a one-shot pairing code for a node
+  # token, then pushes telemetry heartbeats; the install one-liner curls the
+  # agent script (unauthenticated on purpose — no secrets in the file).
+  - "endpoint:POST /api/v1/nodes/pair"
+  - "endpoint:POST /api/v1/nodes/heartbeat"
+  - "endpoint:GET /api/v1/nodes/agent-script"
+  # Deploy router user endpoints (backend/app/routers/deploy.py, "for
+  # Dashboard"): no page or script calls them today. The agent-scoped deploy
+  # endpoints live under /api/v1/agent/* (covered above, ADR-009).
+  - "endpoint:GET /api/v1/deploy/services"
+  - "endpoint:GET /api/v1/deploy/history"
