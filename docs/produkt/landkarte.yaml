@@ -218,6 +218,21 @@ features:
     ui: {route: [/schedule, "/schedule/[jobId]"]}
     status: active
     source: "ROADMAP UI wave 2"
+    api:
+      # Scheduled jobs (schedule page, job detail page, JobModal, and the
+      # agent detail page's scheduled-jobs card): list/create, edit/delete,
+      # run now, duplicate, snooze, run history, stats and created tasks;
+      # the job form previews firings; the SSE stream reloads the page.
+      - "* /api/v1/schedule/jobs"
+      - "* /api/v1/schedule/jobs/{job_id}"
+      - "* /api/v1/schedule/jobs/{job_id}/runs"
+      - "* /api/v1/schedule/jobs/{job_id}/stats"
+      - "* /api/v1/schedule/jobs/{job_id}/tasks"
+      - "* /api/v1/schedule/jobs/{job_id}/duplicate"
+      - "* /api/v1/schedule/jobs/{job_id}/trigger"
+      - "* /api/v1/schedule/jobs/{job_id}/snooze"
+      - "POST /api/v1/schedule/preview-firings"
+      - "GET /api/v1/schedule/stream"
   - id: F-insights
     name: "Insights: usage and metrics"
     ui: {route: /insights}
@@ -268,6 +283,15 @@ features:
     ui: {route: /loops}
     status: frozen
     source: "ADR-085 (ADR-051 frozen); ROADMAP: candidate for removal"
+    api:
+      # Loops CRUD and lifecycle (ADR-051 L1): the /loops page lists loops
+      # and deletes them, CreateLoopDialog creates, LoopDetailPanel reads
+      # one, and the start/pause/stop buttons mutate. No script callers.
+      - "* /api/v1/loops"
+      - "* /api/v1/loops/{loop_id}"
+      - "* /api/v1/loops/{loop_id}/start"
+      - "* /api/v1/loops/{loop_id}/pause"
+      - "* /api/v1/loops/{loop_id}/stop"
   - id: F-office
     name: "Office"
     ui: {route: /office}
@@ -349,10 +373,29 @@ internal:
   # /api/v1/agent/me/telegram endpoint (FileCard telegram action). No bare
   # /api/v1/agent endpoint exists.
   - "endpoint:* /api/v1/agent/*"
-  # Deprecated guided playbook setup (no UI caller since Workstream C1).
-  - "endpoint:GET /api/v1/playbooks/guided/current"
-  - "endpoint:POST /api/v1/playbooks/guided/sessions/start"
-  - "endpoint:POST /api/v1/playbooks/guided/sessions/{session_id}/message"
+  # Orchestration routers (E3b R6): none of these has a page or script
+  # caller today — the scheduler and the workflow service execute runs in
+  # process, not over HTTP. Dead-code candidates for E5 (operator decides).
+  # Playbooks router: CRUD, catalog, skill packs, versions, approve,
+  # per-playbook automations and recent runs; client helpers exist in
+  # api.ts (api.playbooks.*) but no component calls them. The guided
+  # setup flow (guided/current, guided/sessions/*) is deprecated since
+  # Workstream C1 — no UI caller either.
+  - "endpoint:* /api/v1/playbooks*"
+  # Automations router: CRUD plus activate/pause/run. Helpers
+  # api.automations.* exist unused in api.ts; scheduled automations are
+  # triggered by the scheduler in process.
+  - "endpoint:* /api/v1/automations*"
+  # Workflows router: workflow templates, versions, rollback, run control
+  # and SSE stream. workflow_service executes workflow runs in process
+  # (scheduler; playbook/automation runs); no HTTP caller.
+  - "endpoint:* /api/v1/workflows*"
+  # Schedule heatmap and upcoming firings: client helpers exist
+  # (api.schedule.getHeatmap/getUpcoming) but no component calls them —
+  # the schedule page renders ScheduleHeatmap with empty data and the job
+  # detail reads stats/runs/tasks instead.
+  - "endpoint:GET /api/v1/schedule/jobs/{job_id}/heatmap"
+  - "endpoint:GET /api/v1/schedule/upcoming"
   # Approval quick-resolve links: the backend embeds these URLs in Telegram
   # and approval messages; the phone browser opens them directly (no page in
   # frontend-v2 calls them).
