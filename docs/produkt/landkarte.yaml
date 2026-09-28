@@ -335,6 +335,10 @@ features:
     ui: {route: /bench}
     status: active
     source: "ADR-070 (benchmark studio as a vertical, accepted)"
+    # Review: ADR-070 (2026-07) predates the ADR-085 direction, which does
+    # not name the bench studio. Its status under the new direction is not
+    # confirmed yet, so the note stays until the operator confirms it.
+    note: unconfirmed
     api:
       # Benchmark studio vertical (ADR-070, backend/app/verticals/bench_studio/):
       # challenge gallery/detail CRUD, draft via approval, rerender/recompose/
