@@ -77,6 +77,12 @@ features:
   - id: F-sessions
     name: "Sessions chat"
     ui: {route: /sessions}
+    api:
+      # Slices of the /api/v1/agents API the Sessions UI calls (ChatView,
+      # Composer, DiffPanel, AgentCard; terminal remount signal). The rest of
+      # /api/v1/agents/* is claimed by F-agents below.
+      - "* /api/v1/agents/*/chat/*"
+      - "* /api/v1/agents/*/terminal-events/stream"
     status: frozen
     source: "ADR-085 section 4 (build stop); ROADMAP: candidate for removal"
   - id: F-loops
@@ -92,6 +98,18 @@ features:
   - id: F-agents
     name: "Agents"
     ui: {route: [/agents, "/agents/[id]"]}
+    api:
+      # Fleet management API of the agents pages and wizard: list/create,
+      # detail, lifecycle (start/stop/restart/archive/restore/reset), config,
+      # skills, plugins, MCP, metrics, provision, local memory, SSE stream.
+      # The chat and terminal slices are also used by F-sessions (listed there).
+      - "* /api/v1/agents"
+      - "* /api/v1/agents/*"
+      # Wizard: template list/create, edit, instantiate.
+      - "* /api/v1/agent-templates"
+      - "* /api/v1/agent-templates/*"
+      # Host agent start/stop/restart buttons on the agent detail page.
+      - "* /api/v1/host-agents/*"
     note: unconfirmed
   - id: F-bench
     name: "Benchmark studio"
@@ -120,4 +138,12 @@ features:
     status: internal
     source: "shown once after the first registration"
 
-internal: []
+internal:
+  # Agent-scoped machine API (ADR-009: separate from the user router).
+  # Agents poll tasks, heartbeat, report, comment, delegate and read
+  # vault/knowledge here — callers: mc CLI (scripts/mc-cli), bridges
+  # (scripts/*-bridge.py), agent templates (backend/templates), host poll
+  # scripts. The global voice overlay reuses the agent-scoped
+  # /api/v1/agent/me/telegram endpoint (no page of its own; voice decision
+  # pending, ROADMAP stop 3). No bare /api/v1/agent endpoint exists.
+  - "endpoint:* /api/v1/agent/*"
