@@ -602,8 +602,9 @@ internal:
   # poll the bare /health endpoint (no auth, router docstring).
   - "endpoint:GET /health"
   # Machine webhooks: GitHub posts repository events to the per-webhook URL
-  # configured in GitHub; local git hooks push commit events (no auth on
-  # purpose — loopback/docker network only, router docstring).
+  # configured in GitHub (webhook secret checked instead of user auth); local
+  # git hooks push commit events (no auth, loopback/docker network only -
+  # router docstrings).
   - "endpoint:POST /api/v1/webhooks/github/{webhook_id}"
   - "endpoint:POST /api/v1/webhooks/local/push"
   # Agent container bootstrap: container entrypoints fetch the agent token
