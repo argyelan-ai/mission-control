@@ -24,7 +24,8 @@ import { C } from "@/lib/colors";
 import { ApprovalCard, BLOCKER_TYPE_LABELS, INSTALL_ACTION_TYPES, leadText } from "@/components/inbox/ApprovalCard";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import type { Approval } from "@/lib/types";
-import { NEXT_TEXT, PRIMARY_BTN, PRIMARY_STYLE, QUIET_BTN, RAISED } from "./nextStepStyle";
+import { useOverflows } from "@/hooks/useOverflows";
+import { FADE, NEXT_TEXT, PRIMARY_BTN, PRIMARY_STYLE, QUIET_BTN, RAISED } from "./nextStepStyle";
 
 type BlockerPayload = {
   blocked_agent_name?: string;
@@ -49,6 +50,7 @@ export function TaskApprovalCard({
   const [note, setNote] = useState("");
   const [expanded, setExpanded] = useState(false);
   const [confirmCancel, setConfirmCancel] = useState(false);
+  const { ref: leadRef, overflows } = useOverflows<HTMLDivElement>(expanded);
 
   // Special kinds keep the inbox card — they carry their own previews.
   if (INSTALL_ACTION_TYPES.has(approval.action_type) || approval.action_type === "x_post") {
@@ -77,9 +79,10 @@ export function TaskApprovalCard({
     <div className="rounded-lg p-4 space-y-4" style={{ background: RAISED }} data-testid="task-approval">
       <div>
         <div
+          ref={leadRef}
           data-testid="approval-lead"
           data-clamped={!expanded}
-          className={`${NEXT_TEXT} prose-comment ${expanded ? "" : "max-h-[6.6em] overflow-hidden [mask-image:linear-gradient(to_bottom,black_70%,transparent)]"}`}
+          className={`${NEXT_TEXT} prose-comment ${expanded ? "" : "max-h-[8.2em] overflow-hidden"} ${!expanded && overflows ? FADE : ""}`}
           style={{ color: C.textPrimary }}
         >
           <ReactMarkdown remarkPlugins={[remarkBreaks]}>{lead || approval.description}</ReactMarkdown>
@@ -111,7 +114,7 @@ export function TaskApprovalCard({
           </div>
         )}
 
-        {(hasMore || lead.length > 180) && (
+        {(hasMore || overflows || expanded) && (
           <button
             type="button"
             onClick={() => setExpanded((o) => !o)}
