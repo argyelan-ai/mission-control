@@ -3,8 +3,9 @@
 - ``mc-head start`` runs ``kz brief`` in the fresh worktree and appends the
   output (max. 60 lines) to job.md; kz missing / failing / hanging never
   stops the head, it leaves one "kz brief unavailable: …" line instead.
-- The pre-push hook of the head clones runs ``kz check --fast`` when the repo
-  has a ``.kohaerenz.yaml``; red findings block the push, a missing kz only warns.
+- The pre-push hook of the head clones runs the push-time kz checks (not the
+  PR-level ``drift``/``pr``, which need a PR body) when the repo has a
+  ``.kohaerenz.yaml``; red (exit 1) blocks the push, exit 2 or a missing kz only warns.
 
 A fake kz (shell script, set via MC_HEAD_KZ_BIN) logs its argv, so the exact
 call is under test too.
@@ -161,7 +162,7 @@ def test_hanging_kz_is_cut_off_with_its_children(env):
         os.kill(child, 0)
 
 
-# ── pre-push: kz check --fast ────────────────────────────────────────────
+# ── pre-push: kz check --only <push-time checks> ───────────────────────────────────────────
 
 
 def _commit_and_push(wt: Path, with_config: bool) -> subprocess.CompletedProcess:
@@ -179,15 +180,43 @@ def _prepared_wt(env, kz: str) -> Path:
     return run / "wt"
 
 
-@pytest.mark.parametrize("rc", [1, 2])
-def test_pre_push_blocks_on_red_kz_check(env, rc):
-    kz = fake_kz(env["tmp"], f'case "$*" in *check*) echo "NEW links:AGENTS.md:x"; exit {rc} ;; esac')
+PUSH_CHECKS = "orphans,states,rules,anchors,adr,timebomb,links"
+
+
+def _check_calls(env) -> list:
+    calls = (env["tmp"] / "kz-argv.txt").read_text().split("---\n")
+    return [c.splitlines() for c in calls if "check" in c.splitlines()]
+
+
+def test_pre_push_blocks_on_red_kz_check(env):
+    kz = fake_kz(env["tmp"], 'case "$*" in *check*) echo "NEW links:AGENTS.md:x"; exit 1 ;; esac')
     wt = _prepared_wt(env, str(kz))
     res = _commit_and_push(wt, with_config=True)
     assert res.returncode != 0
     assert "kz check" in res.stderr and "refused" in res.stderr
-    calls = (env["tmp"] / "kz-argv.txt").read_text().split("---\n")
-    assert any(c.splitlines()[-2:] == ["check", "--fast"] for c in calls if c.strip())
+    assert _check_calls(env)[-1][-3:] == ["check", "--only", PUSH_CHECKS]
+
+
+def test_pre_push_ignores_pr_level_checks(env):
+    """drift/pr need the PR body, which does not exist at push time: a head
+    that changes UI/API paths without the product map must still push. The
+    fake kz is red whenever drift or pr would run."""
+    kz = fake_kz(env["tmp"], 'case "$*" in *check*--only*drift*|*check*--only*pr*) echo "NEW drift:map"; exit 1 ;;'
+                             ' *check*--only*) echo "kz check: OK"; exit 0 ;;'
+                             ' *check*) echo "NEW drift:map"; exit 1 ;; esac')
+    wt = _prepared_wt(env, str(kz))
+    res = _commit_and_push(wt, with_config=True)
+    assert res.returncode == 0, res.stderr
+    only = _check_calls(env)[-1][-1].split(",")
+    assert "drift" not in only and "pr" not in only
+
+
+def test_pre_push_only_warns_on_kz_config_error(env):
+    kz = fake_kz(env["tmp"], 'case "$*" in *check*) echo "kz: config: unknown key(s) x" >&2; exit 2 ;; esac')
+    wt = _prepared_wt(env, str(kz))
+    res = _commit_and_push(wt, with_config=True)
+    assert res.returncode == 0, res.stderr
+    assert "warning" in res.stderr and "exit 2" in res.stderr
 
 
 def test_pre_push_passes_on_green_kz_check(env):
@@ -195,7 +224,7 @@ def test_pre_push_passes_on_green_kz_check(env):
     wt = _prepared_wt(env, str(kz))
     res = _commit_and_push(wt, with_config=True)
     assert res.returncode == 0, res.stderr
-    assert "check\n--fast" in (env["tmp"] / "kz-argv.txt").read_text()
+    assert _check_calls(env)[-1][-3:] == ["check", "--only", PUSH_CHECKS]
 
 
 def test_pre_push_skips_kz_without_kohaerenz_yaml(env):
