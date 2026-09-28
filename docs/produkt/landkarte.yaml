@@ -783,3 +783,59 @@ internal:
   # Machine webhooks (GitHub + local git hooks) and their payloads.
   - "table:webhooks"
   - "table:webhook_payloads"
+
+# PROPOSAL E3b R10 (for operator review, not active)
+# Proposals only: which operator journey each unmapped active feature could
+# serve. Nothing below changes the map above — no steps, no status, no
+# deletions. The operator decides; a decision lands later as a real map edit
+# in the PR that changes the feature (docs/produkt/README.md).
+# Forms used here:
+#   -> step in J-<id>        feature fits an existing journey
+#   -> new journey J-<id>    no existing journey fits; sketch, not active
+#   -> unclear               no doc states a journey; operator decides
+# Findings answered (docs/produkt/luecken-basis.json):
+#   orphans:F-agents F-bench F-files F-insights F-memory F-repos F-schedule
+#   F-settings F-skills
+#
+#   F-repos -> step in J-job-to-merge: register and link the repo before a
+#     job runs — the task git endpoints resolve the repo row (the repos
+#     table is listed under F-tasks). ADR-050 built the registry for this.
+#   F-schedule -> step in J-job-to-merge: a scheduled job is a second way to
+#     create the task the journey follows — job runs create tasks
+#     (ROADMAP E2: scheduled background sessions without remote control).
+#   F-files -> step in J-job-to-merge: after a job ends, check the files it
+#     produced (deliverable_references links deliverables to files); the
+#     file content endpoint also feeds the inbox approval preview, part of
+#     J-phone-needs-you.
+#   F-settings -> new journey J-setup: job "When I prepare or reconfigure
+#     MC, I want one page for AI providers, secrets and credentials
+#     (ADR-033), users, autonomy, model prices, channels and the
+#     night-shift window (ROADMAP E2)." Steps: F-settings. Secrets and
+#     credentials also feed the runtime pairs of J-runtime-switch and the
+#     agent wizard.
+#   F-memory -> new journey J-vault: job "When I stored a rule, note or run
+#     record, I want to find and reread it." Steps: F-memory.
+#     Source: ADR-085 section 2 (the vault stays); ADR-034 (vault as
+#     source of truth).
+#   F-insights -> new journey J-usage: job "When I want to know what the
+#     work cost and how much ran locally, I want tokens and cost per week,
+#     source and task." Steps: F-insights. Source: ROADMAP E0 (baseline
+#     per week x source); PRINCIPLES section 5 rule 4 (the usage share
+#     limits automatic heads — the operator steers it with these numbers).
+#   F-agents -> unclear. Persistent agents are paused and the fleet layer
+#     is under a build stop (ADR-085 sections 4-5), but ROADMAP does not
+#     list the agents pages among the removal candidates and no doc states
+#     which journey they serve now (map note: unconfirmed).
+#   F-skills -> unclear. The new direction keeps procedures as files
+#     (SKILL.md / AGENTS.md, PRINCIPLES section 3 rule 2); no doc maps the
+#     skills/plugins/MCP registry page onto a journey (map note:
+#     unconfirmed).
+#   F-bench -> unclear. ADR-070 accepted the benchmark studio as a
+#     vertical, but it predates ADR-085 and no doc under the current
+#     direction states its journey (map note: unconfirmed; the route is a
+#     strippable vertical, ADR-044 section 4).
+#
+# Journey findings (orphans:J-...:test) — what is missing, not created here:
+#   J-job-to-merge, J-phone-needs-you and J-runtime-switch name test files
+#   e2e/journeys/J-<id>.spec.ts; the e2e/journeys directory does not exist
+#   in this repository yet — the three test files are missing.
