@@ -229,8 +229,9 @@ features:
       # skills, plugins, MCP, metrics, provision, local memory, SSE stream.
       # The chat and terminal slices are also used by F-sessions (listed there).
       # Review note: GET /agents/runtime-status and POST /agents/{id}/reset-token
-      # have no page caller (tests / manual operator use only); GET
-      # /agents/{id}/metrics is also read by the runtimes cockpit.
+      # have no page caller (tests / manual operator use only). GET
+      # /agents/{id}/metrics(/summary) has a client helper but no caller
+      # (the runtimes cockpit reads /hosts/{id}/metrics instead).
       - "* /api/v1/agents"
       - "* /api/v1/agents/*"
       # Wizard: template list/create, edit, instantiate.
