@@ -749,9 +749,10 @@ internal:
   # Scope.CHAT_WRITE).
   - "table:chat_messages"
   # Historical archive only — model docstring: last write 04/2026, readers
-  # moved to model_usage_events.
+  # moved to model_usage_events; task delete still removes a task's rows.
   - "table:cost_events"
-  # Deploy service history; no endpoint reads it.
+  # Deploy history: written by the agent-scoped deploy/record, read by
+  # GET /deploy/history and the agent-scoped history (all internal).
   - "table:deploy_history"
   # Discord channel/guild config (internal /discord endpoints).
   - "table:discord_config"
