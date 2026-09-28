@@ -86,6 +86,7 @@ async def test_lock_refuses_while_engine_reports_running_requests(session):
     assert detail["engine"] == "GLM old"
     assert detail["running_requests"] == 2
     assert "GLM old" in detail["message"] and "2" in detail["message"]
+    assert "stop the runtime first" in detail["message"]  # the way out of a stuck counter
 
 
 @pytest.mark.asyncio

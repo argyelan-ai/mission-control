@@ -148,7 +148,7 @@ async def switch_lock(engines: Iterable) -> tuple[dict | None, list[dict]]:
                 "running_requests": running,
                 "message": (
                     f"{name} is still answering {running} request(s). "
-                    "Switch refused — try again when they are done."
+                    "Switch refused — wait until they finish, or stop the runtime first."
                 ),
             }, unknown
         if running is None:

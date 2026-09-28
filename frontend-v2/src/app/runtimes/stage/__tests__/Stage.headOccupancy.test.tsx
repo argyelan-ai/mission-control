@@ -261,13 +261,16 @@ describe("Switch / stop under a working head", () => {
   it("the switch-lock sentence reads right in both languages (real ICU formatter)", () => {
     const fmt = (msg: string, v: Record<string, string | number>, loc: string) => new IntlMessageFormat(msg, loc).format(v);
     expect(fmt(en.heads.errors.engine_busy_named, { engine: "GLM", count: 1 }, "en")).toBe(
-      "GLM is still working on 1 request. Switching now would break it off — try again in a moment.",
+      "GLM is still working on 1 request. Switching now would break it off — wait until it finishes, or stop the runtime first.",
     );
     expect(fmt(en.heads.errors.engine_busy_named, { engine: "GLM", count: 2 }, "en")).toBe(
-      "GLM is still working on 2 requests. Switching now would break them off — try again in a moment.",
+      "GLM is still working on 2 requests. Switching now would break them off — wait until they finish, or stop the runtime first.",
     );
     expect(fmt(de.heads.errors.engine_busy_named, { engine: "GLM", count: 2 }, "de")).toBe(
-      "GLM arbeitet noch an 2 Anfragen. Ein Wechsel würde sie jetzt abbrechen — gleich nochmal versuchen.",
+      "GLM arbeitet noch an 2 Anfragen. Ein Wechsel würde sie jetzt abbrechen — warte, bis sie fertig sind, oder stoppe die Runtime zuerst.",
+    );
+    expect(fmt(de.heads.errors.engine_busy_named, { engine: "GLM", count: 1 }, "de")).toBe(
+      "GLM arbeitet noch an 1 Anfrage. Ein Wechsel würde sie jetzt abbrechen — warte, bis sie fertig ist, oder stoppe die Runtime zuerst.",
     );
   });
 });

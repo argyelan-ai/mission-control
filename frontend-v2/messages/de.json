@@ -3361,8 +3361,8 @@
       "run_not_found": "Diesen Lauf gibt es nicht mehr.",
       "run_record_missing": "Noch keine Laufakte.",
       "head_on_box": "Auf dieser Box arbeitet ein Head. Stoppe zuerst den Head.",
-      "engine_busy": "Das Modell beantwortet noch Anfragen. Gleich nochmal versuchen.",
-      "engine_busy_named": "{engine} arbeitet noch an {count, plural, one {# Anfrage} other {# Anfragen}}. Ein Wechsel würde sie jetzt abbrechen — gleich nochmal versuchen.",
+      "engine_busy": "Das Modell beantwortet noch Anfragen. Warte, bis sie fertig sind, oder stoppe die Runtime zuerst.",
+      "engine_busy_named": "{engine} arbeitet noch an {count, plural, one {# Anfrage} other {# Anfragen}}. Ein Wechsel würde sie jetzt abbrechen — warte, bis sie fertig {count, plural, one {ist} other {sind}}, oder stoppe die Runtime zuerst.",
       "unknown": "Etwas ist schiefgelaufen.",
       "head_not_active": "Dieser Head ist schon beendet."
     },
