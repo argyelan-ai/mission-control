@@ -75,12 +75,12 @@
     "close": "Schliessen",
     "noActivity": "Keine Aktivität",
     "metrics": {
-      "title": "Heute gemessen",
+      "title": "Messzahlen · 24 h",
       "more": "Alle Zahlen in Insights",
       "stale": "Karten über 4 h still",
-      "reviews": "Reviews beim Lead · 24 h",
-      "dispatch": "Doppel-Dispatch / Heiler · 24 h",
-      "hand": "Hand-Statuswechsel · 24 h",
+      "reviews": "Reviews beim Lead",
+      "dispatch": "Doppel-Dispatch / Heiler",
+      "hand": "Hand-Statuswechsel",
       "week": "KW {week} · Listenpreis",
       "local": "{share} lokal"
     }
@@ -1399,15 +1399,13 @@
     "noAiReports": "Noch keine KI-Analysen. Der Intelligence-Service läuft täglich.",
     "usage": {
       "title": "Nutzung pro Woche",
-      "hint": "Listenpreis-Gegenwert · Anteil lokal an den Output-Tokens",
+      "hint": "Listenpreis-Gegenwert und Anteil lokal an den Output-Tokens",
       "week": "KW {week}",
       "weekNow": "KW {week} · bisher",
-      "local": "{share} lokal",
       "sourcesTitle": "Diese Woche nach Quelle",
-      "pagesTitle": "Seiten diese Woche",
+      "pagesTitle": "Seitenaufrufe diese Woche",
       "pagesEmpty": "Noch keine Seitenaufrufe gezählt.",
       "empty": "Noch keine Nutzung erfasst.",
-      "views": "{count} Aufrufe",
       "source": {
         "operator": "Du, interaktiv",
         "lead": "Lead-Agent",

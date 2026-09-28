@@ -5,10 +5,10 @@
  * used to reach the operator only through Slack / Telegram; MC is the main
  * channel, so the same numbers — computed live by the same code — sit here.
  *
- *   ◔ MEASURED TODAY                                              Insights ›
- *   3              2 / 5             0 / 1            4          $1,339
+ *   ◔ METRICS · 24 H                                                      ›
+ *   3              2/5               0/1              4          $1,339
  *   cards idle     reviews at the    double dispatch  manual     week 39 · list price
- *   over 4 h       lead · 24 h       / healer · 24 h  changes    4.9 % local
+ *   over 4 h       lead              / healer         changes    4.9 % local
  *
  * One status colour only: idle cards turn warning when there are any.
  * Renders nothing while the numbers are loading or unavailable.
@@ -51,8 +51,8 @@ export function DailyMetricsCardView({ data }: { data: DailyMetrics }) {
 
   const stats: Stat[] = [
     { key: "stale", value: String(stale), label: t("stale"), tone: stale > 0 ? STATUS_TEXT.warning : undefined },
-    { key: "reviews", value: `${data.reviews_to_lead_24h} / ${data.reviews_total_24h}`, label: t("reviews") },
-    { key: "dispatch", value: `${data.double_dispatch_24h} / ${data.healer_repeats_24h}`, label: t("dispatch") },
+    { key: "reviews", value: `${data.reviews_to_lead_24h}/${data.reviews_total_24h}`, label: t("reviews") },
+    { key: "dispatch", value: `${data.double_dispatch_24h}/${data.healer_repeats_24h}`, label: t("dispatch") },
     { key: "hand", value: String(data.hand_status_changes_24h), label: t("hand") },
   ];
   if (usage) {
@@ -90,7 +90,12 @@ export function DailyMetricsCardView({ data }: { data: DailyMetrics }) {
 
       <dl className="mt-2 grid grid-cols-2 sm:grid-cols-5 gap-x-4 gap-y-3">
         {stats.map((s) => (
-          <div key={s.key} data-testid={`daily-metric-${s.key}`} className="min-w-0 flex flex-col-reverse">
+          <div
+            key={s.key}
+            data-testid={`daily-metric-${s.key}`}
+            // the week value closes the grid: full width on the phone instead of an orphan cell
+            className={`min-w-0 flex flex-col-reverse${s.key === "week" ? " col-span-2 sm:col-span-1" : ""}`}
+          >
             <dt className="text-xs leading-snug" style={{ color: C.textMuted }}>
               {s.label}
               {s.sub && <span className="block">{s.sub}</span>}

@@ -75,12 +75,12 @@
     "close": "Close",
     "noActivity": "No activity",
     "metrics": {
-      "title": "Measured today",
+      "title": "Metrics · 24 h",
       "more": "All numbers in Insights",
       "stale": "Cards idle over 4 h",
-      "reviews": "Reviews at the lead · 24 h",
-      "dispatch": "Double dispatch / healer · 24 h",
-      "hand": "Manual status changes · 24 h",
+      "reviews": "Reviews at the lead",
+      "dispatch": "Double dispatch / healer",
+      "hand": "Manual status changes",
       "week": "Week {week} · list price",
       "local": "{share} local"
     }
@@ -1399,15 +1399,13 @@
     "noAiReports": "No AI analyses yet. The intelligence service runs daily.",
     "usage": {
       "title": "Usage by week",
-      "hint": "List-price equivalent · local share of output tokens",
+      "hint": "List-price equivalent and local share of output tokens",
       "week": "Week {week}",
       "weekNow": "Week {week} · so far",
-      "local": "{share} local",
       "sourcesTitle": "This week by source",
-      "pagesTitle": "Pages this week",
+      "pagesTitle": "Page views this week",
       "pagesEmpty": "No page views counted yet.",
       "empty": "No usage recorded yet.",
-      "views": "{count} views",
       "source": {
         "operator": "You, interactive",
         "lead": "Lead agent",

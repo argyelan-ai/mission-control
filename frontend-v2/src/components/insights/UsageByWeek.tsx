@@ -7,13 +7,14 @@
  *
  *   USAGE BY WEEK
  *   List-price equivalent · local share of output tokens
- *   Week 40 · so far  ▇▇             $68      21 % local
- *   Week 39           ▇▇▇▇▇▇▇        $1,339   4.9 % local
+ *   Week 40 · so far  ▇▇             $68      21 %
+ *   Week 39           ▇▇▇▇▇▇▇        $1,339   4.9 %
  *   …
- *   THIS WEEK BY SOURCE              PAGES THIS WEEK
- *   You, interactive       $1,281    /sessions        42 views
- *   Lead agent               $44     /                18 views
+ *   THIS WEEK BY SOURCE              PAGE VIEWS THIS WEEK
+ *   You, interactive       $1,281    /sessions        42
+ *   Lead agent               $44     /                18
  *
+ * Mono only for the numbers (K7); the words sit once in the hint and headings.
  * The bar is plain CSS (share of the busiest week), no chart library needed.
  */
 
@@ -94,7 +95,7 @@ export function UsageByWeekView({ data, pages }: { data: UsageByWeekData; pages?
                       className="col-start-3 sm:col-start-auto font-mono tabular-nums text-xs text-right"
                       style={{ color: C.textMuted }}
                     >
-                      {t("local", { share })}
+                      {share}
                     </span>
                   )}
                 </li>
@@ -132,9 +133,7 @@ export function UsageByWeekView({ data, pages }: { data: UsageByWeekData; pages?
                   {routes.map(([route, count]) => (
                     <li key={route} className="flex items-baseline justify-between gap-3 py-1.5 text-sm">
                       <span className="font-mono truncate" style={{ color: C.textSecondary }}>{route}</span>
-                      <span className="font-mono tabular-nums text-xs" style={{ color: C.textMuted }}>
-                        {t("views", { count })}
-                      </span>
+                      <span className="font-mono tabular-nums" style={{ color: C.textMuted }}>{count}</span>
                     </li>
                   ))}
                 </ul>

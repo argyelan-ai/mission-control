@@ -20,8 +20,8 @@ describe("DailyMetricsCardView", () => {
     wrap(<DailyMetricsCardView data={mkDaily()} />);
     expect(within(metric("stale")).getByText("2")).toBeInTheDocument();
     expect(within(metric("stale")).getByText("Cards idle over 4 h")).toBeInTheDocument();
-    expect(within(metric("reviews")).getByText("2 / 5")).toBeInTheDocument();
-    expect(within(metric("dispatch")).getByText("0 / 1")).toBeInTheDocument();
+    expect(within(metric("reviews")).getByText("2/5")).toBeInTheDocument();
+    expect(within(metric("dispatch")).getByText("0/1")).toBeInTheDocument();
     expect(within(metric("hand")).getByText("4")).toBeInTheDocument();
     expect(within(metric("week")).getByText("$120")).toBeInTheDocument();
     expect(within(metric("week")).getByText("Week 40 · list price")).toBeInTheDocument();

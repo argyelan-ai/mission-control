@@ -22,7 +22,7 @@ describe("UsageByWeekView", () => {
     ]);
     expect(within(rows[0]).getByText("Week 40 · so far")).toBeInTheDocument();
     expect(within(rows[0]).getByText("$120")).toBeInTheDocument();
-    expect(within(rows[0]).getByText("20% local")).toBeInTheDocument();
+    expect(within(rows[0]).getByText("20%")).toBeInTheDocument();
     expect(within(rows[1]).getByText("Week 39")).toBeInTheDocument();
     expect(within(rows[1]).getByText("$355")).toBeInTheDocument();
   });
@@ -38,7 +38,7 @@ describe("UsageByWeekView", () => {
     const data = mkUsageByWeek();
     data.weeks[0].totals = mkTotals(0, 0);
     wrap(<UsageByWeekView data={data} />);
-    expect(within(screen.getByTestId("usage-week-2026-W35")).queryByText(/local/)).toBeNull();
+    expect(within(screen.getByTestId("usage-week-2026-W35")).queryByText(/%/)).toBeNull();
   });
 
   it("shows this week's top three sources", () => {
@@ -54,7 +54,7 @@ describe("UsageByWeekView", () => {
     const pages = within(screen.getByTestId("usage-pages")).getAllByRole("listitem");
     expect(pages).toHaveLength(5);
     expect(pages[0]).toHaveTextContent("/tasks");
-    expect(pages[0]).toHaveTextContent("19 views");
+    expect(pages[0]).toHaveTextContent("19");
   });
 
   it("says so when no pages were counted yet", () => {
