@@ -24,9 +24,17 @@ overstated.
 Cost is the stored ``cost_usd`` — the list-price equivalent from
 ``model_prices`` at harvest time (subscriptions are not invoices). Rows
 without a price are counted in ``unpriced_events``.
+
+Days and weeks are counted in a zone (``tz``, IANA name). The query groups by
+UTC hour and each hour is moved into the zone here, so one code path serves
+SQLite and Postgres and survives the DST switch. Zones with a 30/45-minute
+offset get their day boundary to the hour. ``compute_daily_usage`` (the
+Insights heatmap) and ``compute_weekly_baseline`` share this query, so a day
+and its week never disagree.
 """
 
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import case, func, literal
 from sqlmodel import select
@@ -40,6 +48,7 @@ from app.services.transcript_chat import encode_cwd
 from app.utils import ensure_aware, utcnow
 
 MAX_WEEKS = 26
+MAX_DAYS = 371  # 53 weeks: a full year grid plus the current week
 _TOKEN_FIELDS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens")
 
 
@@ -48,10 +57,20 @@ def iso_week_label(day: date) -> str:
     return f"{year}-W{week:02d}"
 
 
-def week_starts(weeks: int, now: datetime) -> list[date]:
+def zone(tz: str | None):
+    """IANA zone for ``tz``; None means UTC. Unknown names raise ValueError."""
+    if not tz or tz == "UTC":
+        return timezone.utc
+    try:
+        return ZoneInfo(tz)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise ValueError(f"unknown time zone: {tz}") from exc
+
+
+def week_starts(weeks: int, now: datetime, tzinfo=timezone.utc) -> list[date]:
     """Mondays of the last ``weeks`` ISO weeks, oldest first, current week last."""
     weeks = max(1, min(int(weeks), MAX_WEEKS))
-    today = ensure_aware(now).astimezone(timezone.utc).date()
+    today = ensure_aware(now).astimezone(tzinfo).date()
     monday = today - timedelta(days=today.weekday())
     return [monday - timedelta(weeks=i) for i in range(weeks - 1, -1, -1)]
 
@@ -78,8 +97,9 @@ async def _lead_ids(session: AsyncSession) -> set:
 
 
 def _empty() -> dict:
-    return {"events": 0, **{f: 0 for f in _TOKEN_FIELDS}, "total_tokens": 0, "cost_usd": 0.0,
-            "unpriced_events": 0, "local_tokens": 0, "local_output_tokens": 0}
+    return {"events": 0, **{f: 0 for f in _TOKEN_FIELDS}, "total_tokens": 0,
+            "generated_tokens": 0, "cost_usd": 0.0, "unpriced_events": 0,
+            "local_tokens": 0, "local_output_tokens": 0, "local_generated_tokens": 0}
 
 
 def _finish(bucket: dict) -> dict:
@@ -90,19 +110,28 @@ def _finish(bucket: dict) -> dict:
     return bucket
 
 
-async def compute_weekly_baseline(
-    session: AsyncSession,
-    *,
-    weeks: int = 6,
-    now: datetime | None = None,
-    harvested_before: datetime | None = None,
-) -> dict:
-    """``harvested_before`` freezes a snapshot: rows harvested later are left
-    out, so a published table (e.g. the 2026-09 baseline) can be reproduced."""
-    now = ensure_aware(now) if now is not None else utcnow()
-    mondays = week_starts(weeks, now)
-    start = datetime.combine(mondays[0], datetime.min.time(), tzinfo=timezone.utc)
+def _hour_bucket(session: AsyncSession):
+    # The UTC hour of the row: date_trunc on Postgres (aware datetime back),
+    # a "YYYY-MM-DD HH:00:00" string on SQLite.
+    if session.bind.dialect.name == "postgresql":
+        return func.date_trunc("hour", ModelUsageEvent.ts).label("hour")
+    return func.strftime("%Y-%m-%d %H:00:00", ModelUsageEvent.ts).label("hour")
 
+
+def _hour_to_day(hour, tzinfo) -> date:
+    if isinstance(hour, datetime):
+        at = ensure_aware(hour)
+    else:
+        at = datetime.fromisoformat(str(hour)[:19]).replace(tzinfo=timezone.utc)
+    return at.astimezone(tzinfo).date()
+
+
+async def _classified(session: AsyncSession, start: datetime, tzinfo,
+                      harvested_before: datetime | None):
+    """Usage since ``start`` as (local day, source, is_local, tokens, row).
+
+    One entry per UTC hour × harness × agent × locality × model; the caller
+    adds them into days or weeks with ``_add``."""
     lead_dir = _lead_checkout_dir()
     is_operator = case(
         (
@@ -113,13 +142,13 @@ async def compute_weekly_baseline(
         ),
         else_=literal(False),
     ).label("is_operator")
-    day = func.date(ModelUsageEvent.ts).label("day")
+    hour = _hour_bucket(session)
     unpriced = func.sum(case((ModelUsageEvent.cost_usd.is_(None), 1), else_=0)).label("unpriced")
 
     rows = (
         await session.exec(
             select(
-                day,
+                hour,
                 ModelUsageEvent.harness,
                 ModelUsageEvent.agent_id,
                 ModelUsageEvent.locality,
@@ -139,7 +168,7 @@ async def compute_weekly_baseline(
                 ),
             )
             .group_by(
-                day,
+                hour,
                 ModelUsageEvent.harness,
                 ModelUsageEvent.agent_id,
                 ModelUsageEvent.locality,
@@ -152,18 +181,8 @@ async def compute_weekly_baseline(
     local_models = await _model_locality(session)
     lead_ids = await _lead_ids(session)
 
-    weeks_out: dict[str, dict] = {
-        iso_week_label(m): {"week": iso_week_label(m), "week_start": m.isoformat(),
-                            "partial": m == mondays[-1], "totals": _empty(), "sources": {}}
-        for m in mondays
-    }
+    out = []
     for r in rows:
-        # func.date(): "YYYY-MM-DD" string on SQLite, date on Postgres.
-        d = r.day if isinstance(r.day, date) else date.fromisoformat(str(r.day)[:10])
-        week = weeks_out.get(iso_week_label(d))
-        if week is None:
-            continue
-
         if r.harness.startswith("head-"):
             source = f"heads:{r.locality or 'unknown'}"
         elif r.is_operator:
@@ -179,17 +198,57 @@ async def compute_weekly_baseline(
             local = r.model.lower() in local_models
 
         tokens = {f: int(getattr(r, f) or 0) for f in _TOKEN_FIELDS}
-        total = sum(tokens.values())
+        out.append((_hour_to_day(r.hour, tzinfo), source, local, tokens, r))
+    return out
+
+
+def _add(bucket: dict, local: bool, tokens: dict, r) -> None:
+    total = sum(tokens.values())
+    generated = tokens["input_tokens"] + tokens["output_tokens"]
+    bucket["events"] += r.events
+    for f, v in tokens.items():
+        bucket[f] += v
+    bucket["total_tokens"] += total
+    bucket["generated_tokens"] += generated
+    bucket["cost_usd"] += float(r.cost or 0.0)
+    bucket["unpriced_events"] += int(r.unpriced or 0)
+    if local:
+        bucket["local_tokens"] += total
+        bucket["local_output_tokens"] += tokens["output_tokens"]
+        bucket["local_generated_tokens"] += generated
+
+
+def _local_midnight(day: date, tzinfo) -> datetime:
+    return datetime.combine(day, datetime.min.time(), tzinfo=tzinfo).astimezone(timezone.utc)
+
+
+async def compute_weekly_baseline(
+    session: AsyncSession,
+    *,
+    weeks: int = 6,
+    now: datetime | None = None,
+    harvested_before: datetime | None = None,
+    tz: str | None = None,
+) -> dict:
+    """``harvested_before`` freezes a snapshot: rows harvested later are left
+    out, so a published table (e.g. the 2026-09 baseline) can be reproduced.
+    ``tz`` counts the weeks in that zone (default UTC)."""
+    tzinfo = zone(tz)
+    now = ensure_aware(now) if now is not None else utcnow()
+    mondays = week_starts(weeks, now, tzinfo)
+    start = _local_midnight(mondays[0], tzinfo)
+
+    weeks_out: dict[str, dict] = {
+        iso_week_label(m): {"week": iso_week_label(m), "week_start": m.isoformat(),
+                            "partial": m == mondays[-1], "totals": _empty(), "sources": {}}
+        for m in mondays
+    }
+    for day, source, local, tokens, r in await _classified(session, start, tzinfo, harvested_before):
+        week = weeks_out.get(iso_week_label(day))
+        if week is None:
+            continue
         for bucket in (week["totals"], week["sources"].setdefault(source, _empty())):
-            bucket["events"] += r.events
-            for f, v in tokens.items():
-                bucket[f] += v
-            bucket["total_tokens"] += total
-            bucket["cost_usd"] += float(r.cost or 0.0)
-            bucket["unpriced_events"] += int(r.unpriced or 0)
-            if local:
-                bucket["local_tokens"] += total
-                bucket["local_output_tokens"] += tokens["output_tokens"]
+            _add(bucket, local, tokens, r)
 
     result_weeks = []
     for week in weeks_out.values():
@@ -197,4 +256,43 @@ async def compute_weekly_baseline(
         sources.sort(key=lambda s: (s["cost_usd"], s["total_tokens"]), reverse=True)
         result_weeks.append({**week, "totals": _finish(week["totals"]), "sources": sources})
 
-    return {"generated_at": now.isoformat(), "start": start.isoformat(), "weeks": result_weeks}
+    return {"generated_at": now.isoformat(), "start": start.isoformat(), "tz": tz or "UTC",
+            "weeks": result_weeks}
+
+
+async def compute_daily_usage(
+    session: AsyncSession,
+    *,
+    days: int = 182,
+    now: datetime | None = None,
+    tz: str | None = None,
+) -> dict:
+    """Tokens and list-price cost per calendar day in ``tz`` for the Insights
+    heatmap: every day of the window, oldest first, today last (partial).
+    ``generated_tokens`` = input + output (no cache); ``top_source`` is the
+    source bucket with the most generated tokens that day."""
+    tzinfo = zone(tz)
+    now = ensure_aware(now) if now is not None else utcnow()
+    days = max(1, min(int(days), MAX_DAYS))
+    today = now.astimezone(tzinfo).date()
+    first = today - timedelta(days=days - 1)
+
+    buckets = {first + timedelta(days=i): _empty() for i in range(days)}
+    per_source: dict[date, dict[str, int]] = {}
+    for day, source, local, tokens, r in await _classified(
+        session, _local_midnight(first, tzinfo), tzinfo, None
+    ):
+        bucket = buckets.get(day)
+        if bucket is None:
+            continue
+        _add(bucket, local, tokens, r)
+        by_source = per_source.setdefault(day, {})
+        by_source[source] = by_source.get(source, 0) + tokens["input_tokens"] + tokens["output_tokens"]
+
+    out = []
+    for day, bucket in buckets.items():
+        sources = per_source.get(day)
+        top = max(sources.items(), key=lambda kv: kv[1])[0] if sources else None
+        out.append({"date": day.isoformat(), **_finish(bucket), "top_source": top})
+    return {"generated_at": now.isoformat(), "start": first.isoformat(), "tz": tz or "UTC",
+            "days": out}

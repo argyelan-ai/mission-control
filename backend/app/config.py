@@ -102,6 +102,10 @@ class Settings(BaseSettings):
     # laufen auf UTC (Pruefbericht N3). Stunde 7 = 09:00 in Zuerich im
     # Sommer (UTC+2), 08:00 im Winter (UTC+1).
     daily_metrics_hour: int = 7
+    # IANA zone the Insights days and weeks are counted in when the browser
+    # sends none (it normally sends its own). Containers run on UTC; a deployer
+    # may set TZ or USAGE_TIMEZONE.
+    usage_timezone: str = Field(default_factory=lambda: os.environ.get("TZ") or "UTC")
     # Pilot #386 Punkt 1: Statuswechsel von aussen dem arbeitenden Agenten
     # als System-Kommentar zustellen. Standard AUS.
     status_change_delivery_enabled: bool = False

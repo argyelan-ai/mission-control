@@ -1,7 +1,7 @@
 import json
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlalchemy import text
@@ -658,9 +658,23 @@ async def costs_by_task(
     ]
 
 
+def _usage_zone(tz: str | None) -> str:
+    """The zone Insights counts days in: the caller's, else the configured one."""
+    from app.config import settings
+    from app.services.usage_baseline import zone
+
+    tz = tz or settings.usage_timezone
+    try:
+        zone(tz)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return tz
+
+
 @router.get("/api/v1/intelligence/costs/by-week")
 async def costs_by_week(
     weeks: int = 6,
+    tz: str | None = None,
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
@@ -668,13 +682,33 @@ async def costs_by_week(
     week × source (operator, lead, agents:<harness>, heads:<locality>,
     unattributed). Rules: app/services/usage_baseline.py.
 
-    Response: {generated_at, start, weeks: [{week, week_start, partial,
+    Response: {generated_at, start, tz, weeks: [{week, week_start, partial,
     totals, sources: [{source, ...totals}]}]}. weeks is clamped to 1..26;
-    the current week is partial.
+    the current week is partial. tz (IANA) defaults to settings.usage_timezone.
     """
     from app.services.usage_baseline import compute_weekly_baseline
 
-    return await compute_weekly_baseline(session, weeks=weeks)
+    return await compute_weekly_baseline(session, weeks=weeks, tz=_usage_zone(tz))
+
+
+@router.get("/api/v1/intelligence/costs/by-day")
+async def costs_by_day(
+    days: int = 182,
+    tz: str | None = None,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Insights heatmap — tokens, list-price cost and local share per calendar
+    day in tz (IANA, default settings.usage_timezone). Same query and source
+    rules as by-week, so a day and its week agree.
+
+    Response: {generated_at, start, tz, days: [{date, ...totals,
+    generated_tokens, local_generated_tokens, top_source}]}, every day of the
+    window oldest first, today last. days is clamped to 1..371.
+    """
+    from app.services.usage_baseline import compute_daily_usage
+
+    return await compute_daily_usage(session, days=days, tz=_usage_zone(tz))
 
 
 @router.post("/api/v1/admin/usage/backfill-attribution")
