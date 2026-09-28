@@ -46,6 +46,13 @@ features:
       - "* /api/v1/night-shift/last-night"
       - "* /api/v1/night-shift/last-night/*"
       - "GET /api/v1/system/daily-metrics"   # daily metrics digest M1-M5 on Home (E0, MC first)
+      # System health surfaces: status strip on Home and the sidebar footer
+      # (status), vertical alert strip (alerts), live engine metrics in the
+      # sidebar and the metrics history chart (SystemHealthSection).
+      - "GET /api/v1/system/status"
+      - "GET /api/v1/system/alerts"
+      - "GET /api/v1/system/metrics"
+      - "GET /api/v1/system/metrics/history"
     status: active
     source: "PRINCIPLES 7.1; ROADMAP E2 (morning report on the Home card)"
   - id: F-tasks
@@ -183,6 +190,38 @@ features:
       # AI provider settings + HuggingFace/embeddings connection tests
       # (AiProvidersTab).
       - "* /api/v1/ai-providers/*"
+      # Auth: profile tab (GET/PATCH me) and the users admin section
+      # (list/create/update). The shell also refreshes the session user via
+      # GET /auth/me (AppShell); the login page itself uses the endpoints
+      # listed under F-login.
+      - "GET /api/v1/auth/me"
+      - "PATCH /api/v1/auth/me"
+      - "GET /api/v1/auth/users"
+      - "POST /api/v1/auth/users"
+      - "PATCH /api/v1/auth/users/{user_id}"
+      # Secrets = system token wallet (ADR-033): API-keys tab CRUD plus
+      # provider templates. The same endpoints feed the agent detail API-key
+      # select, the runtime add modal, the setup wizard and the
+      # AI-providers/Slack/Telegram tabs.
+      - "* /api/v1/secrets"
+      - "* /api/v1/secrets/*"
+      # Credentials = task-time vault (ADR-033): credentials tab CRUD
+      # (CredentialsTab); the runtimes host onboarding lists them too. The
+      # single-credential GET has no caller (internal).
+      - "GET /api/v1/credentials"
+      - "POST /api/v1/credentials"
+      - "PATCH /api/v1/credentials/{credential_id}"
+      - "DELETE /api/v1/credentials/{credential_id}"
+      # Autonomy levels (autonomy tab). The generic key/value settings
+      # endpoints have no caller (internal).
+      - "GET /api/v1/settings/autonomy"
+      - "PATCH /api/v1/settings/autonomy"
+      # Version + update hint in the settings footer.
+      - "GET /api/v1/system/version"
+      # Intelligence analysis-window config + manual trigger (intelligence
+      # tab); the insights page also reads the config (listed in F-insights).
+      - "PUT /api/v1/intelligence/config"
+      - "POST /api/v1/intelligence/trigger"
       # Model cost prices CRUD, unmatched list and cost recompute
       # (CostPricesTab).
       - "* /api/v1/model-prices"
@@ -242,8 +281,21 @@ features:
     name: "Insights: usage and metrics"
     ui: {route: /insights}
     # E0 measuring layer: token baseline per week x source, page-usage beacon;
-    # per-day tokens for the heatmap (same query as by-week, in the browser's zone)
-    api: ["GET /api/v1/intelligence/costs/by-week", "GET /api/v1/intelligence/costs/by-day", "POST /api/v1/usage/page", "GET /api/v1/usage/pages"]
+    # per-day tokens for the heatmap (same query as by-week, in the browser's
+    # zone). The details sheet reads the cost rollups (total, by model, by
+    # task, sessions split), the insights cards and the board-memory reports;
+    # the analysis window comes from the config (edited in F-settings).
+    api:
+      - "GET /api/v1/intelligence/costs/by-week"
+      - "GET /api/v1/intelligence/costs/by-day"
+      - "POST /api/v1/usage/page"
+      - "GET /api/v1/usage/pages"
+      - "GET /api/v1/intelligence/costs"
+      - "GET /api/v1/intelligence/costs/by-model"
+      - "GET /api/v1/intelligence/costs/by-task"
+      - "GET /api/v1/intelligence/insights"
+      - "GET /api/v1/intelligence/reports"
+      - "GET /api/v1/intelligence/config"
     status: active
     source: "ADR-085 section 2 (metrics stay); ROADMAP UI wave 4; ROADMAP E0 (baseline table)"
   - id: F-sessions
@@ -398,6 +450,17 @@ features:
     ui: {route: /login}
     status: internal
     source: "ADR-085 section 2 (auth is cross-cutting core)"
+    api:
+      # Login page: setup check decides first-run registration vs login,
+      # register creates the first admin, login issues the JWT.
+      # scripts/demo-seed.py reads setup-required too. The stream ticket
+      # mints a short-lived token so EventSource streams can carry auth in
+      # the URL (frontend streamTicket helper — the login JWT goes only into
+      # this POST's header).
+      - "GET /api/v1/auth/setup-required"
+      - "POST /api/v1/auth/register"
+      - "POST /api/v1/auth/login"
+      - "POST /api/v1/auth/stream-ticket"
   - id: F-setup
     name: "First-run wizard"
     ui: {route: /setup}
@@ -519,3 +582,31 @@ internal:
   - "endpoint:POST /api/v1/plugins/install"
   - "endpoint:POST /api/v1/plugins/{plugin_key}/update"
   - "endpoint:DELETE /api/v1/plugins/{plugin_key}"
+  # Platform leftovers without a page caller (E3b R8): client helpers exist
+  # in api.ts but no component calls them (settings list/get/set, analytics
+  # usage, intelligence timeseries, system mode read/write); the single-
+  # credential GET, POST /auth/logout (the frontend logs out by dropping the
+  # token locally) and the admin usage-backfill (manual maintenance) have no
+  # caller at all.
+  - "endpoint:POST /api/v1/auth/logout"
+  - "endpoint:GET /api/v1/settings"
+  - "endpoint:GET /api/v1/settings/{key}"
+  - "endpoint:PUT /api/v1/settings/{key}"
+  - "endpoint:GET /api/v1/analytics/usage"
+  - "endpoint:GET /api/v1/intelligence/costs/timeseries"
+  - "endpoint:GET /api/v1/credentials/{credential_id}"
+  - "endpoint:GET /api/v1/system/mode"
+  - "endpoint:PUT /api/v1/system/mode"
+  - "endpoint:POST /api/v1/admin/usage/backfill-attribution"
+  # Liveness probe: container healthchecks, e2e preflight and status scripts
+  # poll the bare /health endpoint (no auth, router docstring).
+  - "endpoint:GET /health"
+  # Machine webhooks: GitHub posts repository events to the per-webhook URL
+  # configured in GitHub; local git hooks push commit events (no auth on
+  # purpose — loopback/docker network only, router docstring).
+  - "endpoint:POST /api/v1/webhooks/github/{webhook_id}"
+  - "endpoint:POST /api/v1/webhooks/local/push"
+  # Agent container bootstrap: container entrypoints fetch the agent token
+  # and runtime env from the Vault at boot (ADR-019 bootstrap endpoint,
+  # ADR-028 build_runtime_env; routers/internal.py).
+  - "endpoint:GET /api/v1/internal/bootstrap"
