@@ -97,7 +97,6 @@ from app.routers import (
     night_shift,
     runtimes,
     runtime_schedules,
-    research,
     schedule,
     secrets,
     settings as settings_router,
@@ -443,7 +442,6 @@ app.include_router(skills.router)
 app.include_router(clawhub.router)
 # planner.router removed 2026-04-11 (Phase 6) — Boss now plans itself via
 # openclaude subagents, delegation guards are gone, the router file was deleted.
-app.include_router(research.router)
 app.include_router(skill_lab.router)
 app.include_router(settings_router.router)
 app.include_router(deploy.router)

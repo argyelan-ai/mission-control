@@ -207,53 +207,6 @@ async def list_cli_sessions(
     return sessions or []
 
 
-@router.get("/cli-sessions")
-async def list_all_cli_sessions(
-    session: AsyncSession = Depends(get_session),
-    current_user=Depends(require_user),
-):
-    """All active CLI tmux sessions across all agents (global)."""
-    # Query bridge
-    sessions_raw = _bridge_get("/sessions") or []
-    if not sessions_raw:
-        return []
-
-    # Load all cli-bridge agents (also free-code-bridge for transition)
-    result = await session.exec(
-        select(Agent).where(
-            Agent.agent_runtime.in_(["cli-bridge", "free-code-bridge"])
-        )
-    )
-    agents = result.all()
-    # Build slug → agent mapping
-    slug_map = {a.name.lower().replace(" ", "-"): a for a in agents}
-
-    enriched = []
-    for s in sessions_raw:
-        sname = s.get("session", "")
-        is_permanent = s.get("permanent", False)
-        is_shell = s.get("shell", False)
-        if is_shell:
-            # Shell session: {agent_slug}-shell
-            agent_slug = sname[:-6]  # strip "-shell"
-        elif is_permanent:
-            # Permanent session: session name == agent_slug (e.g. "freecode")
-            agent_slug = sname
-        else:
-            # Per-task session: {agent_slug}-{8chars}
-            segments = sname.rsplit("-", 1)
-            agent_slug = segments[0] if len(segments) == 2 else sname
-        agent = slug_map.get(agent_slug)
-        enriched.append({
-            **s,
-            "agent_slug": agent_slug,
-            "agent_id": str(agent.id) if agent else None,
-            "agent_name": agent.name if agent else agent_slug,
-            "shell": is_shell,
-        })
-    return enriched
-
-
 @router.post("/agents/{agent_id}/terminal/{task_id}/input", dependencies=[Depends(require_role(Role.ADMIN))])
 async def send_terminal_input(
     agent_id: uuid.UUID,
@@ -529,15 +482,6 @@ async def restart_worker_session(
     result = _bridge_post(f"/worker/{agent_slug}/restart", {})
     if result is None:
         raise HTTPException(status_code=503, detail="Bridge nicht erreichbar")
-    return result
-
-
-@router.post("/cli-sessions/restart")
-async def restart_bridge(
-    current_user=Depends(require_user),
-):
-    """Restart the CLI bridge (e.g. after config changes)."""
-    result = _bridge_post("/restart", {})
     return result
 
 
@@ -1749,19 +1693,6 @@ async def _get_container_state(container_name: str) -> str:
     if proc.returncode != 0:
         return "not-found"
     return stdout.decode().strip() or "unknown"
-
-
-@router.get("/docker-sessions/{agent_id}/state")
-async def get_container_state(
-    agent_id: uuid.UUID,
-    session: AsyncSession = Depends(get_session),
-    current_user=Depends(require_user),
-):
-    agent = await session.get(Agent, agent_id)
-    if agent is None:
-        raise HTTPException(status_code=404, detail="Agent not found")
-    state = await _get_container_state(_container_name_for(agent))
-    return {"state": state, "container": _container_name_for(agent)}
 
 
 @router.post("/agents/{agent_id}/restart")

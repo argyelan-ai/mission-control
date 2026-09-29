@@ -74,60 +74,6 @@ async def test_agent_create_knowledge_triggers_index_memory(client):
 
 
 @pytest.mark.asyncio
-async def test_save_research_triggers_index_memory(auth_client):
-    """POST /research/{id}/save must call index_memory() (semantic layer).
-
-    The research UI saves results via user auth → save_research() in
-    routers/research.py. Lands as BoardMemory(memory_type="research") and
-    must be indexed in the memory_semantic Qdrant layer.
-    """
-    from app.models.board import PlannerMessage, Project
-
-    bid = uuid.uuid4()
-    pid = uuid.uuid4()
-    async with AsyncSession(test_engine, expire_on_commit=False) as s:
-        board = Board(
-            id=bid,
-            name="ResearchBoard",
-            slug=f"research-board-{bid.hex[:8]}",
-            require_review_before_done=False,
-        )
-        s.add(board)
-        project = Project(
-            id=pid,
-            board_id=bid,
-            name="Scroll-Anim Recherche",
-            project_type="research",
-            status="planning",
-            created_by="research",
-        )
-        s.add(project)
-        reply = PlannerMessage(
-            project_id=pid,
-            role="assistant",
-            content="## Zusammenfassung\nScroll-Animationen sind top.",
-        )
-        s.add(reply)
-        await s.commit()
-
-    with patch(
-        "app.services.memory_indexing.index_memory",
-        new=AsyncMock(return_value="semantic"),
-    ) as mock_index:
-        resp = await auth_client.post(
-            f"/api/v1/research/{pid}/save",
-            json={"title": "Scroll-Anim Research", "tags": ["ui"]},
-        )
-
-    assert resp.status_code == 200, resp.text
-    mock_index.assert_awaited_once()
-    indexed = mock_index.await_args.args[0]
-    assert isinstance(indexed, BoardMemory)
-    assert indexed.memory_type == "research"
-    assert indexed.source == "research"
-
-
-@pytest.mark.asyncio
 async def test_auto_memory_task_completion_writes_task_comment(fake_redis):
     """W4.2: record_task_completion writes a TaskComment instead of BoardMemory.
 

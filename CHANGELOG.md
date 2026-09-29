@@ -113,6 +113,14 @@ follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
   root instead of an identical line every 600 s.
 
 ### Removed
+- **Small API leftovers without a caller.** `GET /api/v1/cli-sessions`,
+  `POST /api/v1/cli-sessions/restart` and `GET
+  /api/v1/docker-sessions/{agent_id}/state` (old CLI-session tracking; the
+  sessions sidebar reads container state from `/docker-sessions/agents`),
+  the research router `/api/v1/research*` (its planner flow was disabled in
+  April) and `GET /api/v1/agents/runtime-status`. The matching unused client
+  helpers (`api.research`, `api.cliSessions.list/restart`) went too. No
+  tables change.
 - **GitHub webhooks, agent meetings and the Discord channel API are gone —
   migration `0208_drop_webhooks_meetings` DROPS their tables.** None of the
   three had a caller left: the webhook receiver (`/api/v1/webhooks/github/*`,

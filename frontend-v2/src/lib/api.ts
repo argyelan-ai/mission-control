@@ -21,7 +21,6 @@ import type {
   ModelCatalog,
   ModelInfo,
   OpenClawSkill,
-  PlannerMessage,
   PromptTemplate,
   PromptTemplateCreate,
   PromptTemplateUpdate,
@@ -29,8 +28,6 @@ import type {
   Project,
   ProjectPhase,
   ProjectGitInfo,
-  ResearchSaveResponse,
-  ResearchStartResponse,
   SkillCandidate,
   ScheduledJob,
   ScheduledJobCreate,
@@ -87,7 +84,6 @@ import type {
   Device,
   DesiredState,
   SparkMetrics,
-  CliGlobalSession,
   CliPlugin,
   GithubSkillRepo,
   InstallRequestBody,
@@ -606,31 +602,13 @@ export const api = {
   },
 
   // Planner disabled 2026-04-11 (Boss autonomy overhaul). Backend router returns 404.
-  // PlannerMessage type stays — still used by research:.
+  // The research router that reused PlannerMessage was removed in E5.
 
   skillLab: {
     candidates: (boardId?: string) =>
       request<SkillCandidate[]>(`/api/v1/skill-lab/candidates${boardId ? `?board_id=${boardId}` : ""}`),
     updateCandidate: (id: string, data: Partial<SkillCandidate>) =>
       request<SkillCandidate>(`/api/v1/skill-lab/candidates/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
-  },
-
-  // ── Research ────────────────────────────────────────────────────────────────
-  research: {
-    list: (boardId?: string) =>
-      request<Project[]>(`/api/v1/research${boardId ? `?board_id=${boardId}` : ""}`),
-    start: (data: { title: string; description?: string; board_id: string; initial_message?: string }) =>
-      request<ResearchStartResponse>(`/api/v1/research/start`, { method: "POST", body: JSON.stringify(data) }),
-    chat: (projectId: string) => request<PlannerMessage[]>(`/api/v1/research/${projectId}/chat`),
-    message: (projectId: string, content: string) =>
-      request<PlannerMessage>(`/api/v1/research/${projectId}/message`, { method: "POST", body: JSON.stringify({ content }) }),
-    save: (projectId: string, data?: { title?: string; content?: string; tags?: string[]; agent_id?: string }) =>
-      request<ResearchSaveResponse>(`/api/v1/research/${projectId}/save`, {
-        method: "POST",
-        body: JSON.stringify(data ?? {}),
-      }),
-    delete: (projectId: string) =>
-      request<void>(`/api/v1/research/${projectId}`, { method: "DELETE" }),
   },
 
   // ── Tasks ───────────────────────────────────────────────────────────────────
@@ -2246,8 +2224,6 @@ export const api = {
 
   // ── CLI Sessions (global) ────────────────────────────────────────────────
   cliSessions: {
-    list: () => request<CliGlobalSession[]>("/api/v1/cli-sessions"),
-    restart: () => request<{ ok: boolean; message: string }>("/api/v1/cli-sessions/restart", { method: "POST" }),
     startShell: (agentId: string) =>
       request<{ ok: boolean; session: string }>(`/api/v1/agents/${agentId}/shell`, { method: "POST" }),
     stopShell: (agentId: string) =>
