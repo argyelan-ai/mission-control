@@ -34,13 +34,44 @@ def _template_names() -> set[str]:
     return names
 
 
-def _route_words() -> dict[str, set[str]]:
-    """{word: {route path, ...}} for every static path segment, split on - _ ."""
+def _walk(routes, seen: set[int], prefix: str = ""):
+    """Yield every route path, descending into nested routers.
+
+    FastAPI 0.141+ wraps each included router in an ``_IncludedRouter``
+    (``original_router`` + ``include_context.prefix``), so a flat walk over
+    ``app.routes`` sees only a handful of entries — a guard built on that
+    passes on an empty table. Best effort: the OpenAPI schema below is the
+    version-stable baseline, this walk adds websockets and hidden routes.
+    """
+    for route in routes:
+        if id(route) in seen:
+            continue
+        seen.add(id(route))
+        path = getattr(route, "path", None)
+        if isinstance(path, str):
+            yield prefix + path
+        inner = getattr(route, "original_router", None)
+        if inner is not None:
+            ctx = getattr(route, "include_context", None)
+            yield from _walk(inner.routes, seen, prefix + (getattr(ctx, "prefix", "") or ""))
+
+
+def _route_paths() -> set[str]:
+    """Documented paths from the OpenAPI schema (stable across versions) plus
+    whatever the route walk finds (websockets and ``include_in_schema=False``
+    routes are not in the schema)."""
     from app.main import app
 
+    paths = set(app.openapi()["paths"])
+    assert len(paths) > 200, f"route table looks empty: {len(paths)} paths"
+    paths |= set(_walk(app.routes, set()))
+    return paths
+
+
+def _route_words() -> dict[str, set[str]]:
+    """{word: {route path, ...}} for every static path segment, split on - _ ."""
     words: dict[str, set[str]] = {}
-    for route in app.routes:
-        path = getattr(route, "path", "")
+    for path in _route_paths():
         for seg in path.strip("/").split("/"):
             if not seg or seg.startswith("{"):
                 continue
@@ -54,6 +85,14 @@ def test_name_sources_are_not_empty():
     # A guard with an empty name list passes forever — make sure it has teeth.
     assert _fleet_names()
     assert _template_names()
+
+
+def test_route_table_is_not_empty():
+    # Same for the other side: the words must come from the real route table,
+    # including the websocket routes the schema does not list.
+    words = _route_words()
+    assert "tasks" in words and "boards" in words
+    assert any("/terminal/ws" in p for ps in words.values() for p in ps)
 
 
 def test_no_route_segment_is_an_agent_name():

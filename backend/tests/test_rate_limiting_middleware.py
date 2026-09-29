@@ -80,8 +80,8 @@ async def test_still_counts_when_slowapi_cannot_resolve_the_handler(
     routers in objects that have no `.endpoint`, the lookup returns None, and
     slowapi treats "handler unknown" as "exempt" — measured: EVERY route was
     exempt and nothing was limited at all, on an app that looks fully
-    protected. requirements.lock still pins 0.133, so this would have stayed
-    invisible until the next dependency bump.
+    protected. requirements.lock pins 0.136.x, where the lookup still works, so
+    this would have stayed invisible until the next dependency bump.
 
     Here we force the lookup to fail on the pinned version too, so the
     fallback in PathExemptSlowAPIMiddleware stays covered either way.

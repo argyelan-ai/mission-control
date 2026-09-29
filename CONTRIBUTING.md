@@ -7,8 +7,12 @@ Thanks for your interest! A few ground rules keep this codebase healthy.
 1. Fork + clone, then follow the Quickstart in [README.md](README.md).
 2. `make help` lists the common entry points — `make test`, `make up`,
    `make build-dev` (hot-reload dev images) etc.
-3. Backend tests: `cd backend && source .venv/bin/activate && pytest -v`
-   (or `make test-backend`)
+3. Backend tests: `make backend-venv` once (builds `backend/.venv` from
+   `backend/requirements.lock` — the same pins the image and CI use), then
+   `make test-backend`.
+   Dependencies: add them to `backend/pyproject.toml`, then `make lock`; to
+   bump one package, `make lock UPGRADE=<package>`. Commit the changed
+   `requirements.lock` in the same PR — image and CI install only from it.
 4. Frontend tests: `cd frontend-v2 && npm run test:run` (or `make test-frontend`)
 4. Building an optional feature bundle? Start with
    [Build a vertical](docs/setup/build-a-vertical.md).

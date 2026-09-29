@@ -477,8 +477,9 @@ features:
       # The chat and terminal slices are also used by F-sessions (listed there).
       # Review note: GET /agents/{id}/metrics(/summary) has a client helper
       # but no caller (the runtimes cockpit reads /hosts/{id}/metrics
-      # instead). POST /agents/{id}/reset-token has no page caller either; it
-      # is the documented token-rotation path (SECURITY.md), kept on purpose.
+      # instead). POST /agents/{id}/reset-token: security maintenance,
+      # deliberately without UI; documented in SECURITY.md (the only rotation
+      # route for singleton host bridges). Not a dead-code candidate.
       # GET /agents/runtime-status was removed in E5.
       - "* /api/v1/agents"
       - "* /api/v1/agents/*"

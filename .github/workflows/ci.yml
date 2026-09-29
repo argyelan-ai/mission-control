@@ -57,9 +57,12 @@ jobs:
         with:
           python-version: "3.12"
 
+      # Same pinned versions as the backend image (backend/Dockerfile):
+      # the lock first, then the app itself without re-resolving anything.
       - name: Install dependencies
         run: |
-          pip install -e ".[test]"
+          pip install -r requirements.lock
+          pip install --no-deps -e .
 
       - name: Run tests
         run: pytest -x --tb=short -q -n auto
@@ -93,9 +96,12 @@ jobs:
         with:
           python-version: "3.12"
 
+      # Same pinned versions as the backend image (backend/Dockerfile):
+      # the lock first, then the app itself without re-resolving anything.
       - name: Install dependencies
         run: |
-          pip install -e ".[test]"
+          pip install -r requirements.lock
+          pip install --no-deps -e .
 
       # The real schema — migrations, plpgsql trigger validate_task_transition,
       # indexes. The SQLite lane never runs any of this (W0.2, 10.09.2026).
@@ -123,7 +129,7 @@ jobs:
       # test_acp_through_tests.py never ran in CI at all).
       - name: Install backend dependencies (tests import app.services.omp_chat)
         working-directory: backend
-        run: pip install -e ".[test]"
+        run: pip install -r requirements.lock && pip install --no-deps -e .
 
       - name: Run omp-bridge tests
         working-directory: docker/omp-bridge
