@@ -343,7 +343,12 @@ async def test_worker_run_shuts_down_gracefully_on_signal(monkeypatch, sig):
 
 
 @pytest.mark.asyncio
-async def test_vault_reindex_does_not_block_sigterm_handling(monkeypatch):
+@pytest.mark.parametrize(
+    "slow_call",
+    [1, 2],
+    ids=["ctor_auto_rebuild", "explicit_boot_rebuild"],
+)
+async def test_vault_reindex_does_not_block_sigterm_handling(monkeypatch, tmp_path, slow_call):
     """W4 (11.09.2026, Karte 70d6b417 — Restposten aus #506, Punkt 2):
     live gemessen haengte ein `docker stop` direkt nach einem
     Worker-Recreate die vollen 30s, waehrend der Worker noch im
@@ -380,11 +385,25 @@ async def test_vault_reindex_does_not_block_sigterm_handling(monkeypatch):
     # unabhaengig davon.
     monkeypatch.setattr(bg.settings, "vault_index_rebuild_on_boot", True)
     monkeypatch.setattr(bg.VaultWatcher, "start", AsyncMock())
+    # Frischer Vault -> first boot ist deterministisch: rebuild_from_vault()
+    # laeuft ZWEIMAL, einmal im VaultIndex-Konstruktor (auto-rebuild nach
+    # Schema-Migration) und einmal explizit in start_vault_services(). Beide
+    # Aufrufstellen muessen off-loop laufen; parametrisiert wird, welcher
+    # der beiden Aufrufe langsam ist und waehrend welchem das Signal kommt.
+    # (Die erste Fassung machte beide langsam und schickte das Signal nach
+    # 0.3s -- das traf immer den Konstruktor, ein inline zurueckgedrehter
+    # expliziter Rebuild blieb gruen.)
+    monkeypatch.setattr(bg.settings, "vault_path", tmp_path / "vault")
 
     REINDEX_SECONDS = 2.0
+    calls = {"n": 0}
+    slow_started = threading.Event()
 
     def _slow_rebuild(self):
-        time.sleep(REINDEX_SECONDS)  # Stellvertreter fuer einen echten Vault-Scan
+        calls["n"] += 1
+        if calls["n"] == slow_call:
+            slow_started.set()
+            time.sleep(REINDEX_SECONDS)  # Stellvertreter fuer einen echten Vault-Scan
         return {"scanned": 0, "indexed": 0, "skipped": 0, "errors": 0}
 
     monkeypatch.setattr(bg.VaultIndex, "rebuild_from_vault", _slow_rebuild)
@@ -397,22 +416,30 @@ async def test_vault_reindex_does_not_block_sigterm_handling(monkeypatch):
 
     loop.add_signal_handler(signal.SIGTERM, _on_term)
     try:
-        sent_at = time.monotonic()
+        sent: dict[str, float] = {}
 
         def _sender():
+            if not slow_started.wait(timeout=10):
+                return
             time.sleep(0.3)
+            sent["t"] = time.monotonic()
             os.kill(os.getpid(), signal.SIGTERM)
 
         threading.Thread(target=_sender, daemon=True).start()
 
-        await bg.start_vault_services(SimpleNamespace(state=SimpleNamespace()))
+        runtime = await bg.start_vault_services(SimpleNamespace(state=SimpleNamespace()))
 
         # Dem Loop einen Moment geben, den bereits gequeuten Callback
         # auszuliefern, falls er nicht schon gefeuert hat.
         await asyncio.sleep(0.1)
 
+        assert calls["n"] == 2, (
+            f"rebuild_from_vault() lief {calls['n']}x statt 2x (Konstruktor + "
+            "expliziter Boot-Rebuild) -- Testannahme stimmt nicht mehr"
+        )
+        assert "t" in sent, "Signal wurde nie gesendet (langsamer Aufruf nie erreicht)"
         assert "t" in signal_received_at, "SIGTERM-Handler ist nie gefeuert"
-        delay = signal_received_at["t"] - sent_at
+        delay = signal_received_at["t"] - sent["t"]
         assert delay < 1.0, (
             f"SIGTERM wurde erst nach {delay:.2f}s verarbeitet -- der "
             f"Vault-Reindex ({REINDEX_SECONDS}s) hat den Event-Loop "
@@ -420,6 +447,8 @@ async def test_vault_reindex_does_not_block_sigterm_handling(monkeypatch):
         )
     finally:
         loop.remove_signal_handler(signal.SIGTERM)
+        if "runtime" in locals():
+            await bg.stop_vault_services(runtime)
 
 
 def test_worker_run_registers_signal_handlers_before_boot_steps():
