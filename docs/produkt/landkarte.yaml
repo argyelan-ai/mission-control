@@ -581,6 +581,34 @@ features:
       - "* /api/v1/plugins/shell"
       - "* /api/v1/mcp-servers"
       - "* /api/v1/mcp-servers/*"
+  - id: F-skill-lab
+    name: "Skill lab, ClawHub and plugin management"
+    status: frozen
+    source: "operator decision 2026-09-29"
+    # Frozen, not removed (E5 clean-up list row 6): no page or script calls
+    # these endpoints today, but the plugin system may be needed again, so
+    # the code stays as it is and is not built further. No page of its own.
+    api:
+      # Skill-lab candidates (E3b R7, backend/app/routers/skill_lab.py):
+      # client helpers api.skillLab.candidates/updateCandidate exist in
+      # api.ts but no component calls them.
+      - "* /api/v1/skill-lab/*"
+      # ClawHub marketplace router (backend/app/routers/clawhub.py): the
+      # marketplace UI was deleted (Plan 31-01 / OCS-15) and the api.clawhub
+      # group was removed from api.ts; the listing/install endpoints remain.
+      - "* /api/v1/clawhub/*"
+      # Plugin install/update/remove and the audit feed: helpers in api.ts
+      # (api.plugins.install/update/remove/audit) but no component calls
+      # them; the skills page (F-skills) only lists plugins and runs the
+      # plugins shell. Plugin install happens via the CLI bridge and the
+      # install-skill script today.
+      - "GET /api/v1/plugins/audit"
+      - "POST /api/v1/plugins/install"
+      - "POST /api/v1/plugins/{plugin_key}/update"
+      - "DELETE /api/v1/plugins/{plugin_key}"
+    tables:
+      # Skill candidates behind the skill-lab endpoints.
+      - skill_candidates
   - id: F-login
     name: "Login"
     ui: {route: /login}
@@ -615,23 +643,6 @@ internal:
   # /api/v1/agent/me/telegram endpoint (FileCard telegram action). No bare
   # /api/v1/agent endpoint exists.
   - "endpoint:* /api/v1/agent/*"
-  # Orchestration routers (E3b R6): none of these has a page or script
-  # caller today — the scheduler and the workflow service execute runs in
-  # process, not over HTTP. Dead-code candidates for E5 (operator decides).
-  # Playbooks router: CRUD, catalog, skill packs, versions, approve,
-  # per-playbook automations and recent runs; client helpers exist in
-  # api.ts (api.playbooks.*) but no component calls them. The guided
-  # setup flow (guided/current, guided/sessions/*) is deprecated since
-  # Workstream C1 — no UI caller either.
-  - "endpoint:* /api/v1/playbooks*"
-  # Automations router: CRUD plus activate/pause/run. Helpers
-  # api.automations.* exist unused in api.ts; scheduled automations are
-  # triggered by the scheduler in process.
-  - "endpoint:* /api/v1/automations*"
-  # Workflows router: workflow templates, versions, rollback, run control
-  # and SSE stream. workflow_service executes workflow runs in process
-  # (scheduler; playbook/automation runs); no HTTP caller.
-  - "endpoint:* /api/v1/workflows*"
   # Schedule heatmap and upcoming firings: client helpers exist
   # (api.schedule.getHeatmap/getUpcoming) but no component calls them —
   # the schedule page renders ScheduleHeatmap with empty data and the job
@@ -682,15 +693,6 @@ internal:
   # update to Phase 31.
   - "endpoint:* /api/v1/research"
   - "endpoint:* /api/v1/research/*"
-  # Meetings legacy (Phase-31 torso, ADR-075): no delivery path and no UI;
-  # the group chat on the sessions page (F-sessions) superseded it. No page
-  # or script calls these endpoints (the helpers api.meetings.* are unused).
-  - "endpoint:* /api/v1/meetings*"
-  # Discord channel + guild config API (Phase 30 router): no page calls it
-  # today — client helpers (api.discord) exist unused; the operator script
-  # backend/scripts/setup_discord_channels.py points at PATCH /discord/config and
-  # docs/handbook/howto/integrations.md documents the endpoints.
-  - "endpoint:* /api/v1/discord*"
   # Global CLI session list + bridge restart: client helpers exist
   # (api.cliSessions.list/restart) but no component calls them today.
   - "endpoint:* /api/v1/cli-sessions*"
@@ -702,25 +704,6 @@ internal:
   # WS /vault/voice-display and highlights via WS /vault/voice-highlight.
   - "endpoint:POST /api/v1/voice/display"
   - "endpoint:POST /api/v1/voice/graph-highlight"
-  # Skill-lab candidates (E3b R7, backend/app/routers/skill_lab.py): the
-  # playbook service writes skill candidates in process; client helpers
-  # api.skillLab.candidates/updateCandidate exist in api.ts but no
-  # component calls them.
-  - "endpoint:* /api/v1/skill-lab/*"
-  # ClawHub marketplace router (backend/app/routers/clawhub.py): the
-  # marketplace UI was deleted (Plan 31-01 / OCS-15) and the api.clawhub
-  # group was removed from api.ts; no page or script calls the remaining
-  # listing/install endpoints today.
-  - "endpoint:* /api/v1/clawhub/*"
-  # Plugins endpoints without a caller (E3b R7): install/update/remove and
-  # the audit feed have helpers in api.ts (api.plugins.install/update/
-  # remove/audit) but no component calls them; the skills page only lists
-  # plugins and runs the plugins shell. Plugin install happens via the CLI
-  # bridge and the install-skill script, not through this router.
-  - "endpoint:GET /api/v1/plugins/audit"
-  - "endpoint:POST /api/v1/plugins/install"
-  - "endpoint:POST /api/v1/plugins/{plugin_key}/update"
-  - "endpoint:DELETE /api/v1/plugins/{plugin_key}"
   # Platform leftovers without a page caller (E3b R8): client helpers exist
   # in api.ts but no component calls them (settings list/get/set, analytics
   # usage, intelligence timeseries, system mode read/write); the single-
@@ -740,12 +723,6 @@ internal:
   # Liveness probe: container healthchecks, e2e preflight and status scripts
   # poll the bare /health endpoint (no auth, router docstring).
   - "endpoint:GET /health"
-  # Machine webhooks: GitHub posts repository events to the per-webhook URL
-  # configured in GitHub (webhook secret checked instead of user auth); local
-  # git hooks push commit events (no auth, loopback/docker network only -
-  # router docstrings).
-  - "endpoint:POST /api/v1/webhooks/github/{webhook_id}"
-  - "endpoint:POST /api/v1/webhooks/local/push"
   # Agent container bootstrap: container entrypoints fetch the agent token
   # and runtime env from the Vault at boot (ADR-019 bootstrap endpoint,
   # ADR-028 build_runtime_env; routers/internal.py).
@@ -753,26 +730,17 @@ internal:
 
   # Database tables only machines use (E3b R9). Feature-owned tables are
   # listed on the features above; everything here has no feature surface.
-  # Meetings legacy (Phase-31 torso, ADR-075): rows behind the internal
-  # /meetings endpoints and the meeting service.
-  - "table:agent_meetings"
-  - "table:agent_meeting_messages"
+  # Direct agent-to-agent messages: no reader or writer left since the
+  # meetings API that listed them was removed in E5 (migration 0208); the
+  # table stays.
   - "table:agent_messages"
   # Agent machine-API delivery watermarks (agent poll / comment signalling
   # in routers/agent_scoped.py and the agent-scoped endpoints).
   - "table:agent_task_comment_cursor"
   - "table:agent_thread_cursor"
-  # Playbook / automation / workflow machine layer (internal endpoints,
-  # E3b R6): services execute runs in process.
-  - "table:playbooks"
-  - "table:playbook_versions"
-  - "table:automations"
+  # Skill packs: seeded for the playbook layer, which was removed in E5
+  # (migration 0207); the rows stay, nothing reads them any more.
   - "table:skill_packs"
-  - "table:skill_candidates"
-  - "table:workflow_templates"
-  - "table:workflow_template_versions"
-  - "table:workflow_runs"
-  - "table:workflow_step_runs"
   # Board groups: API without a page caller (endpoint entries above).
   - "table:board_groups"
   # Agent-scoped board chat writes (routers/agent_scoped.py,
@@ -784,8 +752,6 @@ internal:
   # Deploy history: written by the agent-scoped deploy/record, read by
   # GET /deploy/history and the agent-scoped history (all internal).
   - "table:deploy_history"
-  # Discord channel/guild config (internal /discord endpoints).
-  - "table:discord_config"
   # Install executor log; no router reads it.
   - "table:install_log"
   # Token-harvester bookkeeping (per-file processed state).
@@ -793,13 +759,10 @@ internal:
   # Machine-written notification rows; no router reads them (surfaces go
   # through activity events and system alerts).
   - "table:notifications"
-  # Planner messages: written by the disabled research / guided-playbook
-  # flow, deleted alongside projects (routers/boards.py).
+  # Planner messages: written by the disabled research flow, deleted
+  # alongside projects (routers/boards.py).
   - "table:planner_messages"
   # Dispatch attempt audit log (services/dispatch_attempt_audit.py).
   - "table:task_attempt_audit"
   # Per-user key/value rows behind the internal generic /settings endpoints.
   - "table:user_settings"
-  # Machine webhooks (GitHub + local git hooks) and their payloads.
-  - "table:webhooks"
-  - "table:webhook_payloads"

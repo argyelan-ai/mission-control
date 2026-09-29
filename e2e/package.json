@@ -1,0 +1,15 @@
+{
+  "name": "mc-journeys",
+  "private": true,
+  "description": "Journey tests (E6): click tests for the operator's core journeys against a throw-away MC stack. See docs/journeys.md.",
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.59.1",
+    "@types/node": "22.20.4",
+    "typescript": "5.9.3"
+  }
+}

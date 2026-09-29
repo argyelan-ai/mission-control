@@ -1281,10 +1281,10 @@ async def delete_agent(
       task_deliverables.agent_id
 
     Nullable FK tables (SET NULL):
-      activity_events, agent_meeting_messages, board_memory,
+      activity_events, board_memory,
       chat_messages.{sender_agent_id, agent_id},
       content_pipelines.{writing, review, research}_agent_id,
-      deploy_history, playbooks.default_agent_id,
+      deploy_history,
       project_phases.default_agent_id, scheduled_jobs, skill_runs,
       task_checklist_items, task_comments.author_agent_id, task_events,
       tasks.{callback, owner, help_request_from, assigned}_agent_id
@@ -2189,41 +2189,6 @@ async def sync_agent_config_to_gateway(
             "Gateway-based sync-config removed in Phase 29 (Gateway sunset). "
             "Set agent_runtime to 'cli-bridge' or 'host' and re-provision."
         ),
-    )
-
-
-# ── Agent Council: Discord Channel Management — Phase 29 Redirect ────────────
-#
-# The Discord-channel endpoints moved to `routers/discord.py` (D-04, Plan 29-01).
-# Frontend still calls the OLD paths (`/api/v1/agents/{id}/discord-channel`)
-# until the Phase 31 rebuild. To avoid 404 spam, we redirect with HTTP 307
-# (preserves the HTTP method + body, unlike 308 which is permanent).
-#
-# Phase 31 frontend rebuild removes the redirects.
-from fastapi.responses import RedirectResponse
-
-
-@router.post("/agents/{agent_id}/discord-channel", include_in_schema=False)
-async def _redirect_create_discord_channel(agent_id: uuid.UUID):
-    return RedirectResponse(
-        url=f"/api/v1/discord/agents/{agent_id}/channel",
-        status_code=307,
-    )
-
-
-@router.patch("/agents/{agent_id}/discord-channel", include_in_schema=False)
-async def _redirect_rename_discord_channel(agent_id: uuid.UUID):
-    return RedirectResponse(
-        url=f"/api/v1/discord/agents/{agent_id}/channel",
-        status_code=307,
-    )
-
-
-@router.delete("/agents/{agent_id}/discord-channel", include_in_schema=False)
-async def _redirect_delete_discord_channel(agent_id: uuid.UUID):
-    return RedirectResponse(
-        url=f"/api/v1/discord/agents/{agent_id}/channel",
-        status_code=307,
     )
 
 

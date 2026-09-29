@@ -90,6 +90,7 @@ of gating them.
 | **E2** — heads | Every head gets the product map in its `job.md`, and `kz check` runs in its pre-push step | done | #681 |
 | **E3a** — product map foundation | `docs/produkt/landkarte.yaml`: journeys and one feature per page, `inventar.json`, `regeln.yaml`; endpoints and tables not mapped yet (parked in `luecken-basis.json` as the E3b work list) | done (foundation only) | #684, `docs/produkt/README.md` |
 | **E3b** — endpoints and tables | Map endpoints/tables onto the product map; resolve `luecken-basis.json` | in progress (local heads, one area per round) | — |
+| **E6** — journey tests | Click tests per journey (`e2e/journeys/`) against a throw-away stack with a fake harness, nightly on the operator's machine, never in GitHub CI; a gap a journey finds is pinned as `known gap` until fixed | in progress (2 of 6 journeys; nightly job not loaded yet) | `docs/journeys.md` |
 
 ---
 

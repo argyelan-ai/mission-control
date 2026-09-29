@@ -23,11 +23,8 @@ Design (Plan 29-02, D-13):
   execution. They flip to XPASS once Plan 29-09 deletes each file. Plan 29-09
   is responsible for removing the xfail markers at the end of the phase.
 
-* **File-creation test** (`test_discord_router_file_exists`) is NOT xfail —
-  it passes once Plan 29-01 (parallel sibling of this plan) lands the new
-  discord router. Before that landing, this test will FAIL on the feature
-  branch. That is expected during Wave 1; it goes green as soon as 29-01
-  merges.
+* The former file-creation test for `routers/discord.py` was removed with
+  that router in E5.
 
 The legacy alembic migrations under backend/alembic/versions/ are explicitly
 allowed to reference gateway concepts (historical records).
@@ -210,17 +207,4 @@ def test_telegram_file_deleted():
     """Legacy `services/telegram.py` is replaced by `telegram_bot.py` callers."""
     assert not (APP_ROOT / "services" / "telegram.py").exists(), (
         "services/telegram.py must be deleted in Phase 29 (D-10 + Plan 29-08)"
-    )
-
-
-# ─────────────────────────────────────────────────────────────────────────
-# File-creation test — NOT xfail. Plan 29-01 (parallel sibling) creates
-# routers/discord.py. This test passes immediately after 29-01 merges.
-# Before that, it FAILS on the feature branch — that is the design.
-# ─────────────────────────────────────────────────────────────────────────
-
-def test_discord_router_file_exists():
-    """Plan 29-01 (D-04) creates the new Discord router."""
-    assert (APP_ROOT / "routers" / "discord.py").exists(), (
-        "routers/discord.py must be created in Phase 29 (D-04, Plan 29-01)"
     )

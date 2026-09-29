@@ -11,24 +11,16 @@ import type {
   BrowserLiveTarget,
   Credential,
   CostOverview,
-  DiscordChannel,
-  GuidedSessionState,
   IntelligenceConfig,
   IntelligenceInsights,
   Loop,
   LoopCreate,
   LoopDetail,
   LoopUpdate,
-  Meeting,
-  MeetingMessage,
   MetricsHistoryResponse,
   ModelCatalog,
   ModelInfo,
   OpenClawSkill,
-  Playbook,
-  PlaybookCatalogItem,
-  PlaybookRunProjection,
-  PlaybookVersion,
   PlannerMessage,
   PromptTemplate,
   PromptTemplateCreate,
@@ -40,7 +32,6 @@ import type {
   ResearchSaveResponse,
   ResearchStartResponse,
   SkillCandidate,
-  SkillPack,
   ScheduledJob,
   ScheduledJobCreate,
   ScheduledJobRun,
@@ -58,7 +49,6 @@ import type {
   EmbeddingsConnectionResult,
   SystemMetrics,
   SystemStatus,
-  Automation,
   Tag,
   Task,
   TaskChecklistItem,
@@ -617,86 +607,6 @@ export const api = {
 
   // Planner disabled 2026-04-11 (Boss autonomy overhaul). Backend router returns 404.
   // PlannerMessage type stays — still used by research:.
-
-  // ── Playbooks / Guided setup ───────────────────────────────────────────────────────
-  playbooks: {
-    catalog: () => request<{ playbooks: PlaybookCatalogItem[] }>("/api/v1/playbooks/catalog"),
-    skillPacks: () => request<SkillPack[]>("/api/v1/playbooks/skill-packs"),
-    list: (boardId?: string, includeArchived?: boolean) => {
-      const params = new URLSearchParams();
-      if (boardId) params.set("board_id", boardId);
-      if (includeArchived) params.set("include_archived", "true");
-      const qs = params.toString();
-      return request<Playbook[]>(`/api/v1/playbooks${qs ? `?${qs}` : ""}`);
-    },
-    create: (data: {
-      kind: string;
-      name: string;
-      summary?: string;
-      goal?: string;
-      board_id?: string | null;
-      project_id?: string | null;
-      skill_pack_id?: string | null;
-      default_agent_id?: string | null;
-      scope?: "global" | "board" | "project";
-      status?: "draft" | "review" | "active" | "archived";
-      current_config?: Record<string, unknown>;
-      metadata?: Record<string, unknown> | null;
-      review_notes?: string | null;
-    }) => request<Playbook>("/api/v1/playbooks", { method: "POST", body: JSON.stringify(data) }),
-    get: (id: string) => request<Playbook>(`/api/v1/playbooks/${id}`),
-    update: (id: string, data: Partial<Playbook> & { metadata?: Record<string, unknown> | null }) =>
-      request<Playbook>(`/api/v1/playbooks/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
-    approve: (id: string) => request<Playbook>(`/api/v1/playbooks/${id}/approve`, { method: "POST" }),
-    versions: (id: string) => request<PlaybookVersion[]>(`/api/v1/playbooks/${id}/versions`),
-    createVersion: (id: string, changeReason?: string) =>
-      request<PlaybookVersion>(`/api/v1/playbooks/${id}/versions`, {
-        method: "POST",
-        body: JSON.stringify({ change_reason: changeReason }),
-      }),
-    automations: (id: string) => request<Automation[]>(`/api/v1/playbooks/${id}/automations`),
-    createAutomation: (id: string, data: {
-      name: string;
-      summary?: string;
-      board_id?: string | null;
-      project_id?: string | null;
-      trigger_type?: "manual" | "scheduled";
-      trigger_config?: Record<string, unknown> | null;
-      delivery_config?: Record<string, unknown> | null;
-      status?: "draft" | "active" | "paused" | "archived";
-      runtime_overrides?: Record<string, unknown> | null;
-    }) => request<Automation>(`/api/v1/playbooks/${id}/automations`, { method: "POST", body: JSON.stringify(data) }),
-    recentRuns: (boardId?: string, limit?: number) => {
-      const params = new URLSearchParams();
-      if (boardId) params.set("board_id", boardId);
-      if (limit) params.set("limit", String(limit));
-      const qs = params.toString();
-      return request<PlaybookRunProjection[]>(`/api/v1/playbooks/runs/recent${qs ? `?${qs}` : ""}`);
-    },
-    guidedCurrent: (boardId: string) =>
-      request<GuidedSessionState | null>(`/api/v1/playbooks/guided/current?board_id=${boardId}`),
-    guidedStart: (data: { board_id: string; kind?: string; playbook_id?: string }) =>
-      request<GuidedSessionState>("/api/v1/playbooks/guided/sessions/start", {
-        method: "POST",
-        body: JSON.stringify(data),
-      }),
-    guidedMessage: (sessionId: string, content: string) =>
-      request<GuidedSessionState>(`/api/v1/playbooks/guided/sessions/${sessionId}/message`, {
-        method: "POST",
-        body: JSON.stringify({ content }),
-      }),
-  },
-
-  automations: {
-    list: (boardId?: string) =>
-      request<Automation[]>(`/api/v1/automations${boardId ? `?board_id=${boardId}` : ""}`),
-    get: (id: string) => request<Automation>(`/api/v1/automations/${id}`),
-    update: (id: string, data: Partial<Automation>) =>
-      request<Automation>(`/api/v1/automations/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
-    activate: (id: string) => request<Automation>(`/api/v1/automations/${id}/activate`, { method: "POST" }),
-    pause: (id: string) => request<Automation>(`/api/v1/automations/${id}/pause`, { method: "POST" }),
-    run: (id: string) => request<unknown>(`/api/v1/automations/${id}/run`, { method: "POST" }),
-  },
 
   skillLab: {
     candidates: (boardId?: string) =>
@@ -1277,21 +1187,6 @@ export const api = {
       request<import("./types").TaskSessionInfo[]>(
         `/api/v1/agents/${id}/task-sessions${limit ? `?limit=${limit}` : ""}`
       ),
-    // Agent Council: Discord
-    discord: {
-      create: (id: string, data: { name: string; context: string }) =>
-        request<{ channel_id: string; name: string; agent: Agent }>(`/api/v1/agents/${id}/discord-channel`, {
-          method: "POST",
-          body: JSON.stringify(data),
-        }),
-      rename: (id: string, newName: string) =>
-        request<{ old_name: string; new_name: string }>(`/api/v1/agents/${id}/discord-channel`, {
-          method: "PATCH",
-          body: JSON.stringify({ new_name: newName }),
-        }),
-      remove: (id: string) =>
-        request<{ unbound: boolean }>(`/api/v1/agents/${id}/discord-channel`, { method: "DELETE" }),
-    },
     cli: {
       sessions: (agentId: string) =>
         request<{ task_id: string; session: string; elapsed_seconds: number }[]>(
@@ -1555,8 +1450,8 @@ export const api = {
 
   // Phase 31 / OCS-15: api.gateways group removed entirely. Backend routes
   // /api/v1/gateways/* were deleted in Phase 29; the gateways table was
-  // dropped in Phase 30. Discord channel management now lives under
-  // api.discord (see below) — channels come from settings.discord_guild_id.
+  // dropped in Phase 30. The Discord channel API that replaced it was
+  // removed in E5.
 
 
   // Loops (ADR-051) — outcome-driven task loops.
@@ -1807,27 +1702,6 @@ export const api = {
       ),
   },
 
-  // ── Discord (Phase 29-01 router; singleton guild) ───────────────────────────
-  discord: {
-    channels: () =>
-      request<DiscordChannel[]>("/api/v1/discord/channels"),
-    createChannel: (agentId: string, data: { name: string; context?: string; category_id?: string }) =>
-      request<{ channel_id: string; name: string }>(
-        `/api/v1/discord/agents/${agentId}/channel`,
-        { method: "POST", body: JSON.stringify(data) },
-      ),
-    renameChannel: (agentId: string, data: { new_name: string }) =>
-      request<{ ok: true }>(
-        `/api/v1/discord/agents/${agentId}/channel`,
-        { method: "PATCH", body: JSON.stringify(data) },
-      ),
-    deleteChannel: (agentId: string) =>
-      request<{ ok: true }>(
-        `/api/v1/discord/agents/${agentId}/channel`,
-        { method: "DELETE" },
-      ),
-  },
-
   // ── Credentials ──────────────────────────────────────────────────────────────
   credentials: {
     list: () => request<Credential[]>("/api/v1/credentials"),
@@ -1869,23 +1743,6 @@ export const api = {
   },
 
   // ── Schedule ─────────────────────────────────────────────────────────────────
-  // ── Meetings ───────────────────────────────────────────────────────────────
-  meetings: {
-    list: (params?: { board_id?: string; status?: string; limit?: number }) => {
-      const qs = new URLSearchParams(
-        Object.fromEntries(Object.entries(params ?? {}).filter(([, v]) => v != null)) as Record<string, string>,
-      ).toString();
-      return request<Meeting[]>(`/api/v1/meetings${qs ? `?${qs}` : ""}`);
-    },
-    get: (id: string) => request<Meeting>(`/api/v1/meetings/${id}`),
-    create: (data: { board_id: string; title: string; agenda: string[]; meeting_type?: string; participant_ids?: string[] }) =>
-      request<Meeting>("/api/v1/meetings", { method: "POST", body: JSON.stringify(data) }),
-    cancel: (id: string) =>
-      request<Meeting>(`/api/v1/meetings/${id}/cancel`, { method: "POST" }),
-    messages: (id: string, limit = 100) =>
-      request<MeetingMessage[]>(`/api/v1/meetings/${id}/messages?limit=${limit}`),
-  },
-
   schedule: {
     listJobs: () =>
       request<ScheduledJob[]>("/api/v1/schedule/jobs"),
@@ -2431,6 +2288,5 @@ export const sseUrls = {
   activity: () => `${BASE_URL}/api/v1/activity/stream`,
   memory: (boardId: string) => `${BASE_URL}/api/v1/boards/${boardId}/memory/stream`,
   schedule: () => `${BASE_URL}/api/v1/schedule/stream`,
-  meetings: () => `${BASE_URL}/api/v1/meetings/stream`,
   chat: (agentId: string) => `${BASE_URL}/api/v1/agents/${agentId}/chat/stream`,
 };

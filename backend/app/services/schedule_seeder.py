@@ -13,7 +13,7 @@ existed in running setups. The operator creates their real jobs (e.g. the active
 "Morning Briefing" with action_type=create_task) via the UI / API.
 
 If new built-in jobs are needed: action_type must be "create_task" or
-"run_meeting", agent_name must not point to retired agents.
+"start_loop", agent_name must not point to retired agents.
 """
 import logging
 import uuid

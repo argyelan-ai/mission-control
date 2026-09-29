@@ -33,7 +33,7 @@ class ScheduledJob(SQLModel, table=True):
     end_date: Optional[date] = Field(default=None)
 
     # Action
-    action_type: str  # "chat_send" | "api_call" | "create_task" | "run_meeting" | "start_loop"
+    action_type: str  # "create_task" | "start_loop" (legacy rows may hold "chat_send" | "api_call" | "run_meeting")
     agent_id: Optional[uuid.UUID] = Field(default=None, foreign_key="agents.id", nullable=True)
     agent_name: Optional[str] = None   # Fallback for lookup when agent_id is null
     message: Optional[str] = Field(default=None, sa_column=Column(Text, nullable=True))

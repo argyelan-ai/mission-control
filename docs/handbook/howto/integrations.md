@@ -56,7 +56,7 @@ silence). Full walkthrough and troubleshooting table:
 ## Discord — notifications and per-agent channels
 
 Discord has no dedicated setup page and no Settings section yet; configure it
-in `.env` and manage channels through the API or the agent UI.
+in `.env`.
 
 ```bash
 DISCORD_BOT_TOKEN=          # bot token, required for anything channel-related
@@ -68,12 +68,11 @@ DISCORD_WEBHOOK_OPS=        # webhook for ops/error notifications only
 The webhook path (`DISCORD_WEBHOOK_OPS`) is independent of the bot: it only
 pushes ops and error alerts and needs no bot token.
 
-With a bot token, each agent can get its **own text channel**. The endpoints
-are `POST` / `PATCH` / `DELETE /api/v1/discord/agents/{agent_id}/channel`, and
-`GET /api/v1/discord/channels` lists the guild's text channels. Guild and
-category are also editable at runtime through
-`GET` / `PATCH /api/v1/discord/config`, which is the authoritative source once
-set — the `.env` values are the bootstrap.
+With a bot token, agents and scheduled jobs that have a Discord channel id
+post into that channel. The channel-management API (`/api/v1/discord/*`, incl.
+the runtime `discord_config`) was **removed in E5 (#714)** — it had no caller.
+Guild and category come only from `.env`; `backend/scripts/setup_discord_channels.py`
+creates the standard channel set in that guild.
 
 Agents with the `chat:write` scope can post into a channel themselves via
 `POST /api/v1/agent/discord/send`.

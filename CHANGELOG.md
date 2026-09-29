@@ -113,6 +113,42 @@ follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
   root instead of an identical line every 600 s.
 
 ### Removed
+- **GitHub webhooks, agent meetings and the Discord channel API are gone —
+  migration `0208_drop_webhooks_meetings` DROPS their tables.** None of the
+  three had a caller left: the webhook receiver (`/api/v1/webhooks/github/*`,
+  `/api/v1/webhooks/local/push`) was never wired to a registration UI, the
+  meetings (`/api/v1/meetings*`) were superseded by the group chat
+  (ADR-075), and the Discord channel/guild config API (`/api/v1/discord/*`)
+  had no page. Also removed: the scheduler's `run_meeting` action (the
+  schedule API could no longer create it), the unused meeting summaries in
+  the task context, the `/agents/{id}/discord-channel` redirects, the Caddy
+  403 block for the local webhook path and the unused `api.meetings` /
+  `api.discord` client helpers. Dropped: `webhook_payloads`, `webhooks`,
+  `agent_meeting_messages`, `agent_meetings`, `discord_config`.
+  **Discord notifications keep working**: set `DISCORD_GUILD_ID` (and
+  optionally `DISCORD_CATEGORY_ID`) in `.env` — the runtime `discord_config`
+  row is no longer read. If a local git `post-commit` hook posts to
+  `/api/v1/webhooks/local/push`, it now gets a 404; remove that call. **If
+  your installation still holds data in these tables, dump them before
+  upgrading** (`pg_dump -t <table>`); the downgrade recreates the schema
+  empty.
+- **Workflows, automations and playbooks are gone — migration
+  `0207_drop_workflow_tables` DROPS their tables.** The old execution path
+  next to the task pipeline (ADR-051: functionally dead since the gateway
+  sunset) had no page, script or scheduled caller left. Removed: the
+  `/api/v1/playbooks*` (incl. the guided setup), `/api/v1/automations*` and
+  `/api/v1/workflows*` routers with their services (workflow engine,
+  renderer, validator, delivery, playbook catalog and skill-pack seeder),
+  the scheduler's workflow triggers and the unused `api.playbooks` /
+  `api.automations` client helpers. Dropped: `automations`,
+  `playbook_versions`, `playbooks`, `workflow_step_runs`, `workflow_runs`,
+  `workflow_template_versions`, `workflow_templates`; the FK constraints
+  `skill_candidates.playbook_id/automation_id` (and on older installs
+  `skill_runs.source_workflow_run_id/playbook_id/automation_id`) go with them,
+  the columns stay. **If your installation still holds data in these tables,
+  dump them before upgrading** (`pg_dump -t <table>`); the downgrade recreates
+  the schema empty. The skill lab (`/api/v1/skill-lab/*`, `skill_candidates`,
+  `skill_packs`) is frozen, not removed.
 - **The news/content vertical is gone — migration `0206_drop_news_tables`
   DROPS its tables.** The optional news vertical (news crawler, shorts and
   storyboards, trend feed, newsletter, video performance) was retired; its

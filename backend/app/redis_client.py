@@ -307,14 +307,6 @@ class RedisKeys:
         """
         return f"mc:jarvis:briefing:{date_iso}"
 
-    @staticmethod
-    def workflow_events() -> str:
-        return "mc:events:workflows"
-
-    @staticmethod
-    def workflow_run_signal(run_id: str) -> str:
-        return f"mc:workflow:run:{run_id}:signal"
-
     # ── Watchdog ─────────────────────────────────────────────────────────
     @staticmethod
     def watchdog_lock() -> str:
@@ -583,15 +575,6 @@ class RedisKeys:
     @staticmethod
     def system_mode_meta() -> str:
         return "mc:system:mode:meta"
-
-    # ── Meetings ────────────────────────────────────────────────────────
-    @staticmethod
-    def meeting_lock(board_id: str) -> str:
-        return f"mc:meeting:{board_id}:lock"
-
-    @staticmethod
-    def meeting_events() -> str:
-        return "mc:events:meetings"
 
     # ── Obsidian Export (Phase 7 OBS-02) ─────────────────────────────────
     @staticmethod

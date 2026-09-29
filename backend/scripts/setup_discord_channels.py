@@ -3,8 +3,7 @@ Discord server setup — creates categories + channels and stores IDs in Redis.
 
 Usage: docker compose exec backend python3 scripts/setup_discord_channels.py
 
-Prerequisite: DISCORD_BOT_TOKEN in .env + discord_config row with guild_id in DB
-(Phase 30 — the gateway table was replaced by discord_config).
+Prerequisite: DISCORD_BOT_TOKEN and DISCORD_GUILD_ID in .env.
 """
 
 import asyncio
@@ -94,24 +93,12 @@ async def main():
         print("DISCORD_BOT_TOKEN nicht gesetzt. Bitte in .env eintragen.")
         sys.exit(1)
 
-    # Read guild ID from DB or environment
-    guild_id = os.environ.get("DISCORD_GUILD_ID")
+    # Guild ID comes from the environment (the discord_config table was
+    # dropped in E5, migration 0208).
+    guild_id = settings.discord_guild_id or os.environ.get("DISCORD_GUILD_ID")
 
     if not guild_id:
-        # Read from DB (Phase 30: discord_config instead of gateways)
-        from app.database import engine
-        from sqlmodel.ext.asyncio.session import AsyncSession
-        from sqlmodel import select
-        from app.models.discord_config import DiscordConfig
-
-        async with AsyncSession(engine) as session:
-            result = await session.exec(select(DiscordConfig).limit(1))
-            cfg = result.first()
-            if cfg and cfg.guild_id:
-                guild_id = cfg.guild_id
-
-    if not guild_id:
-        print("Keine Guild ID gefunden. Setze DISCORD_GUILD_ID oder PATCH /api/v1/discord/config mit guild_id.")
+        print("Keine Guild ID gefunden. Bitte DISCORD_GUILD_ID in .env eintragen.")
         sys.exit(1)
 
     print(f"Guild ID: {guild_id}")

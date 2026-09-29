@@ -7,7 +7,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.auth import require_role, require_user
 from app.database import get_session
-from app.services.playbook_service import playbook_service
+from app.services import skill_candidates
 
 router = APIRouter(prefix="/api/v1/skill-lab", tags=["skill-lab"])
 
@@ -27,7 +27,7 @@ async def list_skill_candidates(
     board_id: uuid.UUID | None = Query(default=None),
     session: AsyncSession = Depends(get_session),
 ) -> list[dict[str, Any]]:
-    candidates = await playbook_service.list_skill_candidates(session, board_id=board_id)
+    candidates = await skill_candidates.list_skill_candidates(session, board_id=board_id)
     return [candidate.model_dump() for candidate in candidates]
 
 
@@ -38,10 +38,10 @@ async def update_skill_candidate(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ) -> dict[str, Any]:
-    candidate = await playbook_service.get_skill_candidate(session, candidate_id)
+    candidate = await skill_candidates.get_skill_candidate(session, candidate_id)
     if not candidate:
         raise HTTPException(status_code=404, detail="Skill candidate not found")
-    updated = await playbook_service.update_skill_candidate(
+    updated = await skill_candidates.update_skill_candidate(
         session,
         candidate,
         payload.model_dump(exclude_unset=True),

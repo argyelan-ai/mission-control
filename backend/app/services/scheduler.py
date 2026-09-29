@@ -20,7 +20,6 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.config import settings
 from app.database import engine
 from app.models.scheduled_job import ScheduledJob
-from app.models.workflow import WorkflowTemplate
 from app.services.activity import emit_event
 
 logger = logging.getLogger("mc.scheduler")
@@ -333,20 +332,9 @@ class SchedulerService:
             )
             jobs = result.all()
 
-            workflow_result = await session.exec(
-                select(WorkflowTemplate).where(
-                    WorkflowTemplate.status == "active",
-                    WorkflowTemplate.trigger_type == "scheduled",
-                )
-            )
-            workflows = workflow_result.all()
-
         for job in jobs:
             self._register_job(job)
             logger.info("Loaded scheduled job: %s", job.name)
-        for workflow in workflows:
-            self.register_workflow(workflow)
-            logger.info("Loaded scheduled workflow: %s", workflow.name)
 
     def _build_trigger(self, job: ScheduledJob) -> tuple[str, dict]:
         """Build an APScheduler trigger from the job config."""
@@ -436,71 +424,6 @@ class SchedulerService:
         except Exception:
             pass
 
-    def _build_workflow_trigger(self, workflow: WorkflowTemplate) -> tuple[str, dict]:
-        trigger_config = workflow.trigger_config or {}
-        schedule_type = trigger_config.get("schedule_type")
-        if schedule_type == "daily" and trigger_config.get("schedule_time"):
-            hour, minute = map(int, str(trigger_config["schedule_time"]).split(":"))
-            return ("cron", {"hour": hour, "minute": minute})
-        if schedule_type == "weekdays" and trigger_config.get("schedule_time"):
-            hour, minute = map(int, str(trigger_config["schedule_time"]).split(":"))
-            return ("cron", {"hour": hour, "minute": minute, "day_of_week": "mon-fri"})
-        if schedule_type == "weekly" and trigger_config.get("schedule_time"):
-            hour, minute = map(int, str(trigger_config["schedule_time"]).split(":"))
-            schedule_day = str(trigger_config.get("schedule_day") or "mon").lower()
-            return ("cron", {"hour": hour, "minute": minute, "day_of_week": schedule_day})
-        if schedule_type == "interval" and trigger_config.get("schedule_interval_hours"):
-            return ("interval", {"hours": int(trigger_config["schedule_interval_hours"])})
-        raise ValueError(f"Invalid workflow schedule for {workflow.id}")
-
-    def register_workflow(self, workflow: WorkflowTemplate):
-        try:
-            trigger_type, trigger_kwargs = self._build_workflow_trigger(workflow)
-            workflow_job_id = f"workflow:{workflow.id}"
-            self._scheduler.add_job(
-                self._execute_workflow,
-                trigger=trigger_type,
-                id=workflow_job_id,
-                args=[str(workflow.id)],
-                replace_existing=True,
-                **trigger_kwargs,
-            )
-            create_tracked_task(self._update_workflow_next_run(str(workflow.id)))
-        except Exception as e:
-            logger.error("Failed to register workflow %s: %s", workflow.name, e)
-
-    def unregister_workflow(self, workflow_id: str):
-        self._unregister_job(f"workflow:{workflow_id}")
-
-    async def _update_workflow_next_run(self, workflow_id: str):
-        await asyncio.sleep(0.1)
-        ap_job = self._scheduler.get_job(f"workflow:{workflow_id}")
-        next_run_time = ap_job.next_run_time if ap_job else None
-        async with AsyncSession(engine, expire_on_commit=False) as session:
-            workflow = await session.get(WorkflowTemplate, uuid.UUID(workflow_id))
-            if workflow:
-                workflow.next_run_at = next_run_time
-                session.add(workflow)
-                await session.commit()
-
-    async def _execute_workflow(self, workflow_id: str):
-        from app.services.workflow_service import workflow_service
-
-        async with AsyncSession(engine, expire_on_commit=False) as session:
-            workflow = await session.get(WorkflowTemplate, uuid.UUID(workflow_id))
-            if not workflow or workflow.status != "active":
-                return
-            try:
-                await workflow_service.start_run(
-                    session,
-                    workflow,
-                    triggered_by="scheduler",
-                    trigger_payload={"job_id": f"workflow:{workflow_id}"},
-                )
-            except Exception as e:
-                logger.error("Scheduled workflow %s failed to start: %s", workflow.name, e)
-        await self._update_workflow_next_run(workflow_id)
-
     async def _update_next_run(self, job_id: str):
         """Read next_run_at from APScheduler + write it to the DB."""
         await asyncio.sleep(0.1)
@@ -566,15 +489,11 @@ class SchedulerService:
                 if job.action_type == "create_task":
                     success, error, detail = await self._do_create_task(session, job)
 
-                elif job.action_type == "run_meeting":
-                    async with AsyncSession(engine, expire_on_commit=False) as meet_session:
-                        success, error, detail = await self._do_run_meeting(meet_session, job)
-
                 elif job.action_type == "start_loop":
                     success, error, detail = await self._do_start_loop(session, job)
 
                 else:
-                    # Legacy action_type (chat_send, session_reset, api_call) — no longer supported
+                    # Legacy action_type (chat_send, session_reset, api_call, run_meeting) — no longer supported
                     logger.warning(
                         "Job %s has legacy action_type '%s', skipping. Disable this job.",
                         job.id,
@@ -822,48 +741,6 @@ class SchedulerService:
                 dispatch=True,
             )
             return True, None, {"task_id": str(task.id), "task_title": task.title}
-        except Exception as e:
-            return False, str(e), {}
-
-    async def _do_run_meeting(
-        self, session: AsyncSession, job: ScheduledJob
-    ) -> tuple[bool, str | None, dict]:
-        """Start a meeting via MeetingService."""
-        from app.services.meeting_service import MeetingError, start_meeting
-
-        board_id = job.task_board_id  # Board ID from the job
-        if not board_id:
-            return False, "task_board_id (= Meeting Board) fehlt", {}
-
-        title = job.task_title or f"Weekly Meeting — {job.name}"
-        # Agenda from the message field (JSON list) or default
-        agenda = []
-        if job.message:
-            import json as _json
-            try:
-                parsed = _json.loads(job.message)
-                if isinstance(parsed, list):
-                    agenda = parsed
-            except (ValueError, TypeError):
-                pass
-        if not agenda:
-            agenda = [
-                "Was lief gut diese Woche?",
-                "Was lief schlecht?",
-                "Was nehmen wir uns fuer naechste Woche vor?",
-            ]
-
-        try:
-            meeting = await start_meeting(
-                session,
-                board_id=board_id,
-                title=title,
-                agenda=agenda,
-                meeting_type="weekly",
-            )
-            return True, None, {"meeting_id": str(meeting.id)}
-        except MeetingError as e:
-            return False, str(e), {}
         except Exception as e:
             return False, str(e), {}
 
