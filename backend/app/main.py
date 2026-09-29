@@ -62,7 +62,6 @@ from app.routers import (
     agent_templates,
     agents,
     ai_providers,
-    automations,
     approvals,
     auth,
     files,
@@ -100,7 +99,6 @@ from app.routers import (
     night_shift,
     runtimes,
     runtime_schedules,
-    playbooks,
     research,
     schedule,
     secrets,
@@ -113,7 +111,6 @@ from app.routers import (
     tasks,
     usage,
     voice,
-    workflows,
     webhooks,
     x_posts,
 )
@@ -130,13 +127,12 @@ from app.background import (
     TELEGRAM_TOPIC_RETENTION_DAYS,
 )
 from app.routers import vault as vault_router_module
-# Architektur E Teil 2 (Rex-Review PR #500, B1): die acht Seed-Helfer leben
+# Architektur E Teil 2 (Rex-Review PR #500, B1): die Seed-Helfer leben
 # in app.seeds (geteilt mit app.background.prepare_process) — app.main
 # importiert sie von dort, damit der Worker app.main nicht mehr anziehen muss.
 from app.seeds import (
     _seed_templates,
     _seed_scheduled_jobs,
-    _seed_playbook_assets,
     _seed_runtimes,
     _seed_local_recipes,
     _seed_hosts,
@@ -454,10 +450,7 @@ app.include_router(clawhub.router)
 # planner.router removed 2026-04-11 (Phase 6) — Boss now plans itself via
 # openclaude subagents, delegation guards are gone, the router file was deleted.
 app.include_router(research.router)
-app.include_router(playbooks.router)
-app.include_router(automations.router)
 app.include_router(skill_lab.router)
-app.include_router(workflows.router)
 app.include_router(settings_router.router)
 app.include_router(webhooks.router)
 app.include_router(deploy.router)

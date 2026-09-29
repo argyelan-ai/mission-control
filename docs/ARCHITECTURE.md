@@ -60,7 +60,7 @@ Browser (Caddy :80) → Frontend (Next.js 15, :3000)
 | Memory & Intelligence | `memory.py`, `system.py` | Knowledge Base, 3-Layer Memory (Qdrant), Insights |
 | Realtime | `activity.py`, `cli_terminal.py` | SSE Streams, PTY WebSocket |
 | Discord | `discord.py` | Per-agent Channel CRUD, Bot-Config (post-Gateway-Sunset, v0.9) |
-| Ops | `approvals.py`, `runtimes.py`, `workflows.py`, `scheduler` | Approvals, Runtime-Mgmt, Automation |
+| Ops | `approvals.py`, `runtimes.py`, `scheduler` | Approvals, Runtime-Mgmt, Cron |
 | Admin | `credentials.py`, `secrets.py`, `cli_plugins.py`, `skills.py` | Credentials Vault, Plugins, Tags |
 
 **Services (30)** — Singletons, alle async:
@@ -127,7 +127,6 @@ Browser (Caddy :80) → Frontend (Next.js 15, :3000)
 | `/insights` | Intelligence Dashboard: KPIs, Agent-Performance, Failure Patterns, LLM Reports |
 | `/runtimes` | Fleet-Tab „Die Bühne" (v2, ADR-079, Standard seit 06.09.2026): ein laufendes Modell = eine Karte (`FleetStage`/`Stage`), Boxen als Mitglieder statt eine Kachel je Box; freie Boxen als `FreeBox`, schlafende als `AsleepBox`, Box-Details im Zahnrad-Cockpit (`BoxCockpit`). Tabs Cloud/Models/Infrastructure unverändert |
 | `/schedule` | Cron Jobs + Runs |
-| `/workflows` | Workflow-Builder (YAML) + Execution Logs |
 | `/settings` | Profile, Autonomy, Intelligence, Secrets, Admin Users, CLI Plugins (7 Tabs) |
 | `/skills` | Skill-Marketplace, Team-Zuweisungen (Matrix), Plugin Audit Trail |
 | `/content` | Content-Pipeline (Research → Review → Publish) |

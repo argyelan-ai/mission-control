@@ -1284,7 +1284,7 @@ async def delete_agent(
       activity_events, agent_meeting_messages, board_memory,
       chat_messages.{sender_agent_id, agent_id},
       content_pipelines.{writing, review, research}_agent_id,
-      deploy_history, playbooks.default_agent_id,
+      deploy_history,
       project_phases.default_agent_id, scheduled_jobs, skill_runs,
       task_checklist_items, task_comments.author_agent_id, task_events,
       tasks.{callback, owner, help_request_from, assigned}_agent_id

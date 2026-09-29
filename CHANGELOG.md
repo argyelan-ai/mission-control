@@ -113,6 +113,23 @@ follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
   root instead of an identical line every 600 s.
 
 ### Removed
+- **Workflows, automations and playbooks are gone — migration
+  `0207_drop_workflow_tables` DROPS their tables.** The old execution path
+  next to the task pipeline (ADR-051: functionally dead since the gateway
+  sunset) had no page, script or scheduled caller left. Removed: the
+  `/api/v1/playbooks*` (incl. the guided setup), `/api/v1/automations*` and
+  `/api/v1/workflows*` routers with their services (workflow engine,
+  renderer, validator, delivery, playbook catalog and skill-pack seeder),
+  the scheduler's workflow triggers and the unused `api.playbooks` /
+  `api.automations` client helpers. Dropped: `automations`,
+  `playbook_versions`, `playbooks`, `workflow_step_runs`, `workflow_runs`,
+  `workflow_template_versions`, `workflow_templates`; the FK constraints
+  `skill_candidates.playbook_id/automation_id` (and on older installs
+  `skill_runs.source_workflow_run_id/playbook_id/automation_id`) go with them,
+  the columns stay. **If your installation still holds data in these tables,
+  dump them before upgrading** (`pg_dump -t <table>`); the downgrade recreates
+  the schema empty. The skill lab (`/api/v1/skill-lab/*`, `skill_candidates`,
+  `skill_packs`) is frozen, not removed.
 - **The news/content vertical is gone — migration `0206_drop_news_tables`
   DROPS its tables.** The optional news vertical (news crawler, shorts and
   storyboards, trend feed, newsletter, video performance) was retired; its
