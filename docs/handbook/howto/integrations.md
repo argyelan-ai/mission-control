@@ -70,7 +70,7 @@ pushes ops and error alerts and needs no bot token.
 
 With a bot token, agents and scheduled jobs that have a Discord channel id
 post into that channel. The channel-management API (`/api/v1/discord/*`, incl.
-the runtime `discord_config`) was **removed in E5 (#PR2)** — it had no caller.
+the runtime `discord_config`) was **removed in E5 (#714)** — it had no caller.
 Guild and category come only from `.env`; `backend/scripts/setup_discord_channels.py`
 creates the standard channel set in that guild.
 

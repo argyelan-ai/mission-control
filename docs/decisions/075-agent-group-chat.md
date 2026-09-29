@@ -38,6 +38,10 @@ Agenda/Runden/Facilitator wandern auf Threads); die Loop-Konzepte
 identischen Feldnamen in `agent_groups` weiter — Gruppen absorbieren Loops
 langfristig (V3), die Loops-Seite bleibt vorerst unangetastet.
 
+> **Removed in E5 (#714):** the meetings legacy (router, service,
+> `agent_meetings` / `agent_meeting_messages`) is gone (migration
+> `0208_drop_webhooks_meetings`).
+
 Weitere Festlegungen (Mark, 2026-08-20): kein Modus-Schalter (Verhalten folgt
 aus `status`: idle = Live, running = Runden), Runden laufen **parallel**
 (alle Sprecher gleichzeitig, Lead urteilt zuletzt), das lebende
