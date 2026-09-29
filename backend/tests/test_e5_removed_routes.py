@@ -59,9 +59,24 @@ async def test_removed_route_returns_404(auth_client: AsyncClient, method: str, 
     assert resp.status_code == 404, f"{method} {path} -> {resp.status_code}"
 
 
-def test_removed_prefixes_are_not_in_the_router_table():
+def _served() -> set[tuple[str, str]]:
+    """(METHOD, path) of every documented route, read from the OpenAPI schema.
+
+    Walking ``app.routes`` is not stable across FastAPI/Starlette versions
+    (newer ones nest included routers), so the schema is the reliable view of
+    what the API serves. The size guard keeps the checks below from passing
+    on an empty table.
+    """
     from app.main import app
 
+    paths = app.openapi()["paths"]
+    served = {(m.upper(), p) for p, ops in paths.items() for m in ops}
+    assert len(served) > 200, f"route table looks empty: {len(served)} routes"
+    return served
+
+
+def test_removed_prefixes_are_not_in_the_router_table():
+    served = _served()
     prefixes = (
         "/api/v1/playbooks",
         "/api/v1/automations",
@@ -73,36 +88,19 @@ def test_removed_prefixes_are_not_in_the_router_table():
         "/api/v1/research",
         "/api/v1/board-groups",
     )
-    left = sorted(
-        getattr(r, "path", "") for r in app.routes if getattr(r, "path", "").startswith(prefixes)
-    )
-    left += sorted(
-        getattr(r, "path", "") for r in app.routes if getattr(r, "path", "").endswith("/discord-channel")
-    )
+    left = sorted(f"{m} {p}" for m, p in served if p.startswith(prefixes))
     removed_exact = {
-        "/api/v1/agents/runtime-status",
-        "/api/v1/docker-sessions/{agent_id}/state",
-        "/api/v1/boards/{board_id}/tasks/stream",
-        "/api/v1/boards/{board_id}/memory/stream",
-        "/api/v1/boards/{board_id}/approvals",
+        ("GET", "/api/v1/agents/runtime-status"),
+        ("GET", "/api/v1/docker-sessions/{agent_id}/state"),
+        ("GET", "/api/v1/boards/{board_id}/tasks/stream"),
+        ("GET", "/api/v1/boards/{board_id}/memory/stream"),
+        ("GET", "/api/v1/boards/{board_id}/approvals"),
+        # Phase create/update/delete are gone; list and complete stay.
+        ("POST", "/api/v1/projects/{project_id}/phases"),
+        ("PATCH", "/api/v1/projects/{project_id}/phases/{phase_id}"),
+        ("DELETE", "/api/v1/projects/{project_id}/phases/{phase_id}"),
     }
-    left += sorted(p for p in (getattr(r, "path", "") for r in app.routes) if p in removed_exact)
-    # Phase create/update/delete are gone; list and complete stay (tasks page,
-    # mc-mcp).
-    phase_methods = {
-        (m, getattr(r, "path", ""))
-        for r in app.routes
-        for m in getattr(r, "methods", set()) or set()
-        if "/phases" in getattr(r, "path", "")
-    }
-    left += sorted(
-        f"{m} {p}" for m, p in phase_methods
-        if (m, p) in {
-            ("POST", "/api/v1/projects/{project_id}/phases"),
-            ("PATCH", "/api/v1/projects/{project_id}/phases/{phase_id}"),
-            ("DELETE", "/api/v1/projects/{project_id}/phases/{phase_id}"),
-        }
-    )
+    left += sorted(f"{m} {p}" for m, p in served & removed_exact)
     assert not left, f"removed routes still registered: {left}"
 
 
@@ -131,9 +129,7 @@ async def test_shadowed_removed_route_is_not_served(auth_client: AsyncClient, me
 
 def test_the_live_streams_stay_registered():
     """The two removed board streams must not take the live ones with them."""
-    from app.main import app
-
-    paths = {getattr(r, "path", "") for r in app.routes}
+    served = _served()
     for live in (
         "/api/v1/activity/stream",
         "/api/v1/agents/stream",
@@ -142,17 +138,11 @@ def test_the_live_streams_stay_registered():
         "/api/v1/agents/{agent_id}/chat/stream",
         "/api/v1/groups/{group_id}/stream",
     ):
-        assert live in paths, f"live stream missing: {live}"
+        assert ("GET", live) in served, f"live stream missing: {live}"
 
 
 def test_phase_list_and_complete_stay():
-    from app.main import app
-
-    routes = {
-        (m, getattr(r, "path", ""))
-        for r in app.routes
-        for m in getattr(r, "methods", set()) or set()
-    }
-    assert ("GET", "/api/v1/projects/{project_id}/phases") in routes
-    assert ("POST", "/api/v1/projects/{project_id}/phases/{phase_id}/complete") in routes
-    assert ("GET", "/api/v1/projects/{project_id}") in routes
+    served = _served()
+    assert ("GET", "/api/v1/projects/{project_id}/phases") in served
+    assert ("POST", "/api/v1/projects/{project_id}/phases/{phase_id}/complete") in served
+    assert ("GET", "/api/v1/projects/{project_id}") in served
