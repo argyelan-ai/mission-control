@@ -581,6 +581,34 @@ features:
       - "* /api/v1/plugins/shell"
       - "* /api/v1/mcp-servers"
       - "* /api/v1/mcp-servers/*"
+  - id: F-skill-lab
+    name: "Skill lab, ClawHub and plugin management"
+    status: frozen
+    source: "operator decision 2026-09-29"
+    # Frozen, not removed (E5 clean-up list row 6): no page or script calls
+    # these endpoints today, but the plugin system may be needed again, so
+    # the code stays as it is and is not built further. No page of its own.
+    api:
+      # Skill-lab candidates (E3b R7, backend/app/routers/skill_lab.py):
+      # client helpers api.skillLab.candidates/updateCandidate exist in
+      # api.ts but no component calls them.
+      - "* /api/v1/skill-lab/*"
+      # ClawHub marketplace router (backend/app/routers/clawhub.py): the
+      # marketplace UI was deleted (Plan 31-01 / OCS-15) and the api.clawhub
+      # group was removed from api.ts; the listing/install endpoints remain.
+      - "* /api/v1/clawhub/*"
+      # Plugin install/update/remove and the audit feed: helpers in api.ts
+      # (api.plugins.install/update/remove/audit) but no component calls
+      # them; the skills page (F-skills) only lists plugins and runs the
+      # plugins shell. Plugin install happens via the CLI bridge and the
+      # install-skill script today.
+      - "GET /api/v1/plugins/audit"
+      - "POST /api/v1/plugins/install"
+      - "POST /api/v1/plugins/{plugin_key}/update"
+      - "DELETE /api/v1/plugins/{plugin_key}"
+    tables:
+      # Skill candidates behind the skill-lab endpoints.
+      - skill_candidates
   - id: F-login
     name: "Login"
     ui: {route: /login}
@@ -702,25 +730,6 @@ internal:
   # WS /vault/voice-display and highlights via WS /vault/voice-highlight.
   - "endpoint:POST /api/v1/voice/display"
   - "endpoint:POST /api/v1/voice/graph-highlight"
-  # Skill-lab candidates (E3b R7, backend/app/routers/skill_lab.py): the
-  # playbook service writes skill candidates in process; client helpers
-  # api.skillLab.candidates/updateCandidate exist in api.ts but no
-  # component calls them.
-  - "endpoint:* /api/v1/skill-lab/*"
-  # ClawHub marketplace router (backend/app/routers/clawhub.py): the
-  # marketplace UI was deleted (Plan 31-01 / OCS-15) and the api.clawhub
-  # group was removed from api.ts; no page or script calls the remaining
-  # listing/install endpoints today.
-  - "endpoint:* /api/v1/clawhub/*"
-  # Plugins endpoints without a caller (E3b R7): install/update/remove and
-  # the audit feed have helpers in api.ts (api.plugins.install/update/
-  # remove/audit) but no component calls them; the skills page only lists
-  # plugins and runs the plugins shell. Plugin install happens via the CLI
-  # bridge and the install-skill script, not through this router.
-  - "endpoint:GET /api/v1/plugins/audit"
-  - "endpoint:POST /api/v1/plugins/install"
-  - "endpoint:POST /api/v1/plugins/{plugin_key}/update"
-  - "endpoint:DELETE /api/v1/plugins/{plugin_key}"
   # Platform leftovers without a page caller (E3b R8): client helpers exist
   # in api.ts but no component calls them (settings list/get/set, analytics
   # usage, intelligence timeseries, system mode read/write); the single-
@@ -768,7 +777,6 @@ internal:
   - "table:playbook_versions"
   - "table:automations"
   - "table:skill_packs"
-  - "table:skill_candidates"
   - "table:workflow_templates"
   - "table:workflow_template_versions"
   - "table:workflow_runs"
