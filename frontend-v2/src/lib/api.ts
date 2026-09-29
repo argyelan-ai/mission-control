@@ -6,7 +6,6 @@ import type {
   AgentTemplate,
   Approval,
   Board,
-  BoardGroup,
   BoardMemory,
   BrowserLiveTarget,
   Credential,
@@ -552,17 +551,6 @@ export const api = {
         `/api/v1/vault/topics${qs}`,
       );
     },
-  },
-
-  // ── Board Groups ────────────────────────────────────────────────────────────
-  boardGroups: {
-    list: () => request<BoardGroup[]>("/api/v1/board-groups"),
-    create: (data: Partial<BoardGroup>) =>
-      request<BoardGroup>("/api/v1/board-groups", { method: "POST", body: JSON.stringify(data) }),
-    update: (id: string, data: Partial<BoardGroup>) =>
-      request<BoardGroup>(`/api/v1/board-groups/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
-    delete: (id: string) =>
-      request<void>(`/api/v1/board-groups/${id}`, { method: "DELETE" }),
   },
 
   // ── Boards ──────────────────────────────────────────────────────────────────
@@ -1204,7 +1192,6 @@ export const api = {
   // ── Approvals ───────────────────────────────────────────────────────────────
   approvals: {
     list: () => request<Approval[]>("/api/v1/approvals"),
-    boardList: (boardId: string) => request<Approval[]>(`/api/v1/boards/${boardId}/approvals`),
     resolve: (id: string, status: "approved" | "rejected", note?: string) =>
       request<Approval>(`/api/v1/approvals/${id}`, {
         method: "PATCH",
@@ -2258,11 +2245,9 @@ export function browserLiveWsUrl(targetId?: string): Promise<string> {
 
 // ── SSE URLs ──────────────────────────────────────────────────────────────────
 export const sseUrls = {
-  tasks: (boardId: string) => `${BASE_URL}/api/v1/boards/${boardId}/tasks/stream`,
   agents: () => `${BASE_URL}/api/v1/agents/stream`,
   approvals: () => `${BASE_URL}/api/v1/approvals/stream`,
   activity: () => `${BASE_URL}/api/v1/activity/stream`,
-  memory: (boardId: string) => `${BASE_URL}/api/v1/boards/${boardId}/memory/stream`,
   schedule: () => `${BASE_URL}/api/v1/schedule/stream`,
   chat: (agentId: string) => `${BASE_URL}/api/v1/agents/${agentId}/chat/stream`,
 };

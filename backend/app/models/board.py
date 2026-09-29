@@ -7,33 +7,10 @@ from sqlalchemy import JSON, BigInteger, DateTime, ForeignKey, UniqueConstraint,
 from sqlmodel import Column, Field, SQLModel
 
 
-class BoardGroup(SQLModel, table=True):
-    __tablename__ = "board_groups"
-
-    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
-    name: str
-    slug: str = Field(unique=True, index=True)
-    description: str | None = None
-    icon: str | None = None
-    color: str | None = None
-    sort_order: int = 0
-    created_at: datetime = Field(
-        default_factory=utcnow,
-        sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),
-    )
-    updated_at: datetime = Field(
-        default_factory=utcnow,
-        sa_column=Column(DateTime(timezone=True), server_default=text("NOW()"), onupdate=utcnow),
-    )
-
-
 class Board(SQLModel, table=True):
     __tablename__ = "boards"
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
-    board_group_id: uuid.UUID | None = Field(
-        default=None, foreign_key="board_groups.id", nullable=True
-    )
     name: str
     slug: str = Field(unique=True, index=True)
     description: str | None = None

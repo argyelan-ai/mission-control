@@ -10,84 +10,11 @@ from sqlalchemy import delete, update
 
 from app.auth import require_user
 from app.database import get_session
-from app.models.board import Board, BoardGroup, Project, PlannerMessage
+from app.models.board import Board, Project, PlannerMessage
 from app.models.task import Task, TaskComment, TaskDependency
 from app.utils import utcnow
 
 router = APIRouter(prefix="/api/v1", tags=["boards"])
-
-
-# ── Board Groups ─────────────────────────────────────────────────────────────
-
-class BoardGroupCreate(BaseModel):
-    name: str
-    slug: str
-    description: str | None = None
-    icon: str | None = None
-    color: str | None = None
-    sort_order: int = 0
-
-
-class BoardGroupUpdate(BaseModel):
-    name: str | None = None
-    description: str | None = None
-    icon: str | None = None
-    color: str | None = None
-    sort_order: int | None = None
-
-
-@router.get("/board-groups")
-async def list_board_groups(
-    session: AsyncSession = Depends(get_session),
-    current_user = Depends(require_user),
-):
-    result = await session.exec(select(BoardGroup).order_by(BoardGroup.sort_order))
-    return result.all()
-
-
-@router.post("/board-groups", status_code=status.HTTP_201_CREATED)
-async def create_board_group(
-    payload: BoardGroupCreate,
-    session: AsyncSession = Depends(get_session),
-    current_user = Depends(require_user),
-):
-    group = BoardGroup(**payload.model_dump())
-    session.add(group)
-    await session.commit()
-    await session.refresh(group)
-    return group
-
-
-@router.patch("/board-groups/{group_id}")
-async def update_board_group(
-    group_id: uuid.UUID,
-    payload: BoardGroupUpdate,
-    session: AsyncSession = Depends(get_session),
-    current_user = Depends(require_user),
-):
-    group = await session.get(BoardGroup, group_id)
-    if not group:
-        raise HTTPException(status_code=404, detail="Board group not found")
-    for k, v in payload.model_dump(exclude_none=True).items():
-        setattr(group, k, v)
-    group.updated_at = utcnow()
-    session.add(group)
-    await session.commit()
-    await session.refresh(group)
-    return group
-
-
-@router.delete("/board-groups/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_board_group(
-    group_id: uuid.UUID,
-    session: AsyncSession = Depends(get_session),
-    current_user = Depends(require_user),
-):
-    group = await session.get(BoardGroup, group_id)
-    if not group:
-        raise HTTPException(status_code=404, detail="Board group not found")
-    await session.delete(group)
-    await session.commit()
 
 
 # ── Boards ───────────────────────────────────────────────────────────────────
@@ -96,7 +23,6 @@ class BoardCreate(BaseModel):
     # Phase 30: `gateway_id` removed — Gateway model is dropped in Plan 30-02.
     name: str
     slug: str
-    board_group_id: uuid.UUID | None = None
     description: str | None = None
     icon: str | None = None
     color: str | None = None

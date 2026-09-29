@@ -2,7 +2,7 @@
 
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { Board, BoardGroup } from "./types";
+import type { Board } from "./types";
 import { DEFAULT_PINS } from "./nav";
 
 // ── Notification Store ─────────────────────────────────────────────────────────
@@ -91,9 +91,6 @@ interface AppState {
   boards: Board[];
   setBoards: (boards: Board[]) => void;
 
-  boardGroups: BoardGroup[];
-  setBoardGroups: (groups: BoardGroup[]) => void;
-
   // Auth
   currentUser: AuthUser | null;
   setCurrentUser: (user: AuthUser | null) => void;
@@ -133,8 +130,6 @@ export const useAppStore = create<AppState>()(
       boards: [],
       setBoards: (boards) => set({ boards }),
 
-      boardGroups: [],
-      setBoardGroups: (boardGroups) => set({ boardGroups }),
 
       currentUser: null,
       setCurrentUser: (currentUser) => set({ currentUser }),

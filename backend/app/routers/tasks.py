@@ -20,10 +20,9 @@ from app.models.task import Task, TaskComment, TaskDependency, TaskEvent
 from app.models.tag import Tag, TagAssignment
 
 logger = logging.getLogger(__name__)
-from app.redis_client import RedisKeys
 from app.services.activity import emit_event
 from app.services.dispatch import auto_dispatch_task
-from app.services.sse import broadcast, make_sse_response
+from app.services.sse import broadcast
 from app.services.task_state import lock_and_set
 
 
@@ -489,11 +488,6 @@ async def list_tasks(
         enriched.append(data)
 
     return enriched
-
-
-@router.get("/boards/{board_id}/tasks/stream")
-async def stream_tasks(board_id: uuid.UUID, current_user = Depends(require_user)):
-    return make_sse_response([RedisKeys.board_events(str(board_id))])
 
 
 @router.post("/boards/{board_id}/tasks", status_code=status.HTTP_201_CREATED)

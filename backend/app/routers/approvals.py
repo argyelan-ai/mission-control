@@ -308,20 +308,6 @@ async def stream_approvals(current_user = Depends(require_user)):
     return make_sse_response([RedisKeys.approvals_events()])
 
 
-@router.get("/boards/{board_id}/approvals")
-async def list_board_approvals(
-    board_id: uuid.UUID,
-    session: AsyncSession = Depends(get_session),
-    current_user = Depends(require_user),
-):
-    result = await session.exec(
-        select(Approval)
-        .where(Approval.board_id == board_id, Approval.status == "pending")
-        .order_by(Approval.created_at.desc())  # type: ignore[attr-defined]
-    )
-    return result.all()
-
-
 @router.patch("/approvals/{approval_id}")
 async def resolve_approval(
     approval_id: uuid.UUID,

@@ -33,6 +33,22 @@ REMOVED = [
     ("GET", "/api/v1/research"),
     ("POST", "/api/v1/research/start"),
     ("GET", "/api/v1/research/00000000-0000-0000-0000-000000000001/chat"),
+    # Board groups, phase create/edit/delete, board-scoped approvals (0209).
+    ("GET", "/api/v1/board-groups"),
+    ("POST", "/api/v1/board-groups"),
+    ("PATCH", "/api/v1/board-groups/00000000-0000-0000-0000-000000000001"),
+    ("GET", "/api/v1/boards/00000000-0000-0000-0000-000000000001/approvals"),
+]
+
+# Paths that now fall through to a parameterised sibling route (e.g.
+# /boards/{id}/tasks/{task_id}) answer 405/422 instead of 404 — what matters
+# is that no handler serves them any more.
+SHADOWED = [
+    ("POST", "/api/v1/projects/00000000-0000-0000-0000-000000000001/phases"),
+    ("GET", "/api/v1/boards/00000000-0000-0000-0000-000000000001/tasks/stream"),
+    ("GET", "/api/v1/boards/00000000-0000-0000-0000-000000000001/memory/stream"),
+    ("PATCH", "/api/v1/projects/00000000-0000-0000-0000-000000000001/phases/00000000-0000-0000-0000-000000000002"),
+    ("DELETE", "/api/v1/projects/00000000-0000-0000-0000-000000000001/phases/00000000-0000-0000-0000-000000000002"),
 ]
 
 
@@ -43,9 +59,24 @@ async def test_removed_route_returns_404(auth_client: AsyncClient, method: str, 
     assert resp.status_code == 404, f"{method} {path} -> {resp.status_code}"
 
 
-def test_removed_prefixes_are_not_in_the_router_table():
+def _served() -> set[tuple[str, str]]:
+    """(METHOD, path) of every documented route, read from the OpenAPI schema.
+
+    Walking ``app.routes`` is not stable across FastAPI/Starlette versions
+    (newer ones nest included routers), so the schema is the reliable view of
+    what the API serves. The size guard keeps the checks below from passing
+    on an empty table.
+    """
     from app.main import app
 
+    paths = app.openapi()["paths"]
+    served = {(m.upper(), p) for p, ops in paths.items() for m in ops}
+    assert len(served) > 200, f"route table looks empty: {len(served)} routes"
+    return served
+
+
+def test_removed_prefixes_are_not_in_the_router_table():
+    served = _served()
     prefixes = (
         "/api/v1/playbooks",
         "/api/v1/automations",
@@ -55,18 +86,21 @@ def test_removed_prefixes_are_not_in_the_router_table():
         "/api/v1/discord",
         "/api/v1/cli-sessions",
         "/api/v1/research",
+        "/api/v1/board-groups",
     )
-    left = sorted(
-        getattr(r, "path", "") for r in app.routes if getattr(r, "path", "").startswith(prefixes)
-    )
-    left += sorted(
-        getattr(r, "path", "") for r in app.routes if getattr(r, "path", "").endswith("/discord-channel")
-    )
+    left = sorted(f"{m} {p}" for m, p in served if p.startswith(prefixes))
     removed_exact = {
-        "/api/v1/agents/runtime-status",
-        "/api/v1/docker-sessions/{agent_id}/state",
+        ("GET", "/api/v1/agents/runtime-status"),
+        ("GET", "/api/v1/docker-sessions/{agent_id}/state"),
+        ("GET", "/api/v1/boards/{board_id}/tasks/stream"),
+        ("GET", "/api/v1/boards/{board_id}/memory/stream"),
+        ("GET", "/api/v1/boards/{board_id}/approvals"),
+        # Phase create/update/delete are gone; list and complete stay.
+        ("POST", "/api/v1/projects/{project_id}/phases"),
+        ("PATCH", "/api/v1/projects/{project_id}/phases/{phase_id}"),
+        ("DELETE", "/api/v1/projects/{project_id}/phases/{phase_id}"),
     }
-    left += sorted(p for p in (getattr(r, "path", "") for r in app.routes) if p in removed_exact)
+    left += sorted(f"{m} {p}" for m, p in served & removed_exact)
     assert not left, f"removed routes still registered: {left}"
 
 
@@ -83,3 +117,32 @@ async def test_skill_lab_survives_the_playbook_removal(auth_client: AsyncClient)
     # Frozen, not removed (landkarte F-skill-lab): it must keep answering.
     resp = await auth_client.get("/api/v1/skill-lab/candidates")
     assert resp.status_code == 200, resp.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method,path", SHADOWED)
+async def test_shadowed_removed_route_is_not_served(auth_client: AsyncClient, method: str, path: str):
+    resp = await auth_client.request(method, path)
+    assert resp.status_code in (404, 405, 422), f"{method} {path} -> {resp.status_code}"
+    assert "text/event-stream" not in resp.headers.get("content-type", "")
+
+
+def test_the_live_streams_stay_registered():
+    """The two removed board streams must not take the live ones with them."""
+    served = _served()
+    for live in (
+        "/api/v1/activity/stream",
+        "/api/v1/agents/stream",
+        "/api/v1/approvals/stream",
+        "/api/v1/schedule/stream",
+        "/api/v1/agents/{agent_id}/chat/stream",
+        "/api/v1/groups/{group_id}/stream",
+    ):
+        assert ("GET", live) in served, f"live stream missing: {live}"
+
+
+def test_phase_list_and_complete_stay():
+    served = _served()
+    assert ("GET", "/api/v1/projects/{project_id}/phases") in served
+    assert ("POST", "/api/v1/projects/{project_id}/phases/{phase_id}/complete") in served
+    assert ("GET", "/api/v1/projects/{project_id}") in served

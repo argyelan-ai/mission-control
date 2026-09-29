@@ -4,7 +4,7 @@ Everything an agent does in Mission Control starts as a **task on a board**. A b
 
 ## Boards
 
-A board (`boards` table) groups tasks, agents and rules. Boards can be organised into **board groups** for the sidebar, and each board can point at a **default project** that new tasks inherit.
+A board (`boards` table) groups tasks, agents and rules. Each board can point at a **default project** that new tasks inherit. (Board groups were removed in E5, #717.)
 
 Four workflow flags decide how much the board does on its own:
 

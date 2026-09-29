@@ -1,18 +1,16 @@
-"""Projects router — ProjectPhase CRUD and project context.
+"""Projects router — project context, phase list and phase completion.
+
+Phase create/update/delete had no caller and was removed in E5.
 
 Endpoints:
   GET  /projects/{project_id}                           — Project + phases
   GET  /projects/{project_id}/phases                    — List phases
-  POST /projects/{project_id}/phases                    — Create phase
-  PATCH /projects/{project_id}/phases/{phase_id}        — Update phase
-  DELETE /projects/{project_id}/phases/{phase_id}       — Delete phase
   POST /projects/{project_id}/phases/{phase_id}/complete — Complete phase
 """
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -24,27 +22,6 @@ from app.models.project_phase import ProjectPhase
 router = APIRouter(prefix="/api/v1", tags=["projects"])
 
 logger = logging.getLogger("mc.projects")
-
-
-class PhaseCreate(BaseModel):
-    title: str
-    order: int = 0
-    depends_on_phases: list[str] | None = None
-    gate_required: bool = False
-    failure_policy: str = "retry"
-    default_agent_id: uuid.UUID | None = None
-    git_branch: str | None = None
-
-
-class PhaseUpdate(BaseModel):
-    title: str | None = None
-    order: int | None = None
-    status: str | None = None
-    depends_on_phases: list[str] | None = None
-    gate_required: bool | None = None
-    failure_policy: str | None = None
-    default_agent_id: uuid.UUID | None = None
-    git_branch: str | None = None
 
 
 @router.get("/projects/{project_id}")
@@ -84,67 +61,6 @@ async def list_phases(
         .order_by(ProjectPhase.order)
     )
     return result.all()
-
-
-@router.post("/projects/{project_id}/phases", status_code=status.HTTP_201_CREATED)
-async def create_phase(
-    project_id: uuid.UUID,
-    payload: PhaseCreate,
-    session: AsyncSession = Depends(get_session),
-    current_user=Depends(require_user),
-):
-    project = await session.get(Project, project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-
-    phase = ProjectPhase(
-        project_id=project_id,
-        title=payload.title,
-        order=payload.order,
-        depends_on_phases=payload.depends_on_phases,
-        gate_required=payload.gate_required,
-        failure_policy=payload.failure_policy,
-        default_agent_id=payload.default_agent_id,
-        git_branch=payload.git_branch or f"phase/{payload.title.lower().replace(' ', '-')}",
-    )
-    session.add(phase)
-    await session.commit()
-    await session.refresh(phase)
-    return phase
-
-
-@router.patch("/projects/{project_id}/phases/{phase_id}")
-async def update_phase(
-    project_id: uuid.UUID,
-    phase_id: uuid.UUID,
-    payload: PhaseUpdate,
-    session: AsyncSession = Depends(get_session),
-    current_user=Depends(require_user),
-):
-    phase = await session.get(ProjectPhase, phase_id)
-    if not phase or phase.project_id != project_id:
-        raise HTTPException(status_code=404, detail="Phase not found")
-
-    for k, v in payload.model_dump(exclude_none=True).items():
-        setattr(phase, k, v)
-    session.add(phase)
-    await session.commit()
-    await session.refresh(phase)
-    return phase
-
-
-@router.delete("/projects/{project_id}/phases/{phase_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_phase(
-    project_id: uuid.UUID,
-    phase_id: uuid.UUID,
-    session: AsyncSession = Depends(get_session),
-    current_user=Depends(require_user),
-):
-    phase = await session.get(ProjectPhase, phase_id)
-    if not phase or phase.project_id != project_id:
-        raise HTTPException(status_code=404, detail="Phase not found")
-    await session.delete(phase)
-    await session.commit()
 
 
 @router.post("/projects/{project_id}/phases/{phase_id}/complete")

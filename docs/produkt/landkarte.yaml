@@ -655,21 +655,10 @@ internal:
   # frontend-v2 calls them).
   - "endpoint:GET /api/v1/approvals/{approval_id}/quick-resolve"
   - "endpoint:POST /api/v1/approvals/{approval_id}/quick-resolve/confirm"
-  # Board-scoped approval list: client helper exists (api.approvals.boardList)
-  # but no page calls it; the inbox reads the unscoped list.
-  - "endpoint:* /api/v1/boards/*/approvals"
-  # SSE streams without a page caller today (helpers exist in the frontend
-  # sseUrls map; docs/handbook/operations/reverse-proxy.md proxies them).
-  - "endpoint:GET /api/v1/boards/{board_id}/tasks/stream"
-  - "endpoint:GET /api/v1/boards/{board_id}/memory/stream"
-  # Board groups: client helpers and a store field exist, but no page or
-  # script calls the API (the board picker reads boards directly).
-  - "endpoint:* /api/v1/board-groups*"
   # Project/phase machine API: mc-mcp reads a project and completes phases
-  # (scripts/mc-mcp.py); phase create/edit/remove have no caller yet.
+  # (scripts/mc-mcp.py). Phase create/edit/remove had no caller and were
+  # removed in E5.
   - "endpoint:GET /api/v1/projects/{project_id}"
-  - "endpoint:POST /api/v1/projects/{project_id}/phases"
-  - "endpoint:* /api/v1/projects/{project_id}/phases/{phase_id}"
   - "endpoint:POST /api/v1/projects/{project_id}/phases/{phase_id}/complete"
   # Task usage rollup and single checklist item delete: no caller found (the
   # CLI uses the agent-scoped /agent/... checklist route).
@@ -729,8 +718,6 @@ internal:
   # Skill packs: seeded for the playbook layer, which was removed in E5
   # (migration 0207); the rows stay, nothing reads them any more.
   - "table:skill_packs"
-  # Board groups: API without a page caller (endpoint entries above).
-  - "table:board_groups"
   # Agent-scoped board chat writes (routers/agent_scoped.py,
   # Scope.CHAT_WRITE).
   - "table:chat_messages"

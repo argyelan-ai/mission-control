@@ -113,6 +113,20 @@ follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
   root instead of an identical line every 600 s.
 
 ### Removed
+- **Board groups are gone — migration `0209_drop_board_groups` DROPS the
+  `board_groups` table and the column `boards.board_group_id`.** Board groups
+  had an API (`/api/v1/board-groups*`) but no page, script or row. Removed in
+  the same change, all without a caller: phase create/edit/delete
+  (`POST /api/v1/projects/{id}/phases`, `PATCH`/`DELETE
+  /api/v1/projects/{id}/phases/{phase_id}` — listing and completing phases
+  stay), the board-scoped approval list `GET /api/v1/boards/{id}/approvals`
+  (the inbox reads `/api/v1/approvals`), and the two board SSE streams
+  `/api/v1/boards/{id}/tasks/stream` and `/api/v1/boards/{id}/memory/stream`
+  (no page subscribed; the other live streams are unchanged). Frontend: the
+  unused `api.boardGroups`, `api.approvals.boardList`, `sseUrls.tasks/memory`
+  helpers and the `boardGroups` store field. **If your installation uses
+  board groups, dump `board_groups` before upgrading**; the downgrade
+  recreates the table and column empty.
 - **Small API leftovers without a caller.** `GET /api/v1/cli-sessions`,
   `POST /api/v1/cli-sessions/restart` and `GET
   /api/v1/docker-sessions/{agent_id}/state` (old CLI-session tracking; the
