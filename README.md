@@ -143,7 +143,7 @@ then engine + model + a registered runtime.
 Boards, projects and phase-based planning; a dispatch-ACK handshake so no
 task silently disappears; review gates and human approval queues;
 autonomous loops that grind through a backlog round by round — each round
-passing the same gates (ADR-051); cron automations with run history;
+passing the same gates (ADR-051); cron jobs with run history;
 21 fine-grained API scopes per agent.
 
 **Resilient by design**
@@ -196,7 +196,7 @@ filtering socket-proxy, secrets are Fernet-encrypted.
 - **Git workflow** — repo per project, branch per task, PR on review, squash-merge on approval
 - **Repos registry** — one repo shared across projects, GitHub import, per-repo work rules injected into every dispatch (ADR-050)
 - **Approvals & inbox** — human sign-off gates for risky actions, with a review queue
-- **Workflows, automations & scheduler** — reusable action sequences and cron jobs with run history
+- **Scheduler** — cron jobs with run history
 - **Autonomous loops** — agents work down a backlog in rounds, every round passing the full gates (ADR-051)
 - **Multi-agent consensus** — ask several agents the same question, aggregate the answers
 - **Watchdogs** — ACK timeouts, stuck-review escalation, silent-abort auto-block (ADR-046)

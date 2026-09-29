@@ -175,15 +175,3 @@ async def _seed_github_token() -> None:
         await resolve_github_config(fresh=True)
     except Exception as e:
         logger.warning("_seed_github_token failed (non-critical): %s", e)
-
-
-async def _seed_playbook_assets() -> None:
-    """Seed core skill packs for the legacy lead agent / Playbooks (idempotent)."""
-    try:
-        from sqlmodel.ext.asyncio.session import AsyncSession
-        from app.services.playbook_seeder import seed_skill_packs
-
-        async with AsyncSession(engine, expire_on_commit=False) as session:
-            await seed_skill_packs(session)
-    except Exception as e:
-        logger.warning("Playbook asset seeding failed (non-critical): %s", e)

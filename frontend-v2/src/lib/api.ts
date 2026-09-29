@@ -12,7 +12,6 @@ import type {
   Credential,
   CostOverview,
   DiscordChannel,
-  GuidedSessionState,
   IntelligenceConfig,
   IntelligenceInsights,
   Loop,
@@ -25,10 +24,6 @@ import type {
   ModelCatalog,
   ModelInfo,
   OpenClawSkill,
-  Playbook,
-  PlaybookCatalogItem,
-  PlaybookRunProjection,
-  PlaybookVersion,
   PlannerMessage,
   PromptTemplate,
   PromptTemplateCreate,
@@ -40,7 +35,6 @@ import type {
   ResearchSaveResponse,
   ResearchStartResponse,
   SkillCandidate,
-  SkillPack,
   ScheduledJob,
   ScheduledJobCreate,
   ScheduledJobRun,
@@ -58,7 +52,6 @@ import type {
   EmbeddingsConnectionResult,
   SystemMetrics,
   SystemStatus,
-  Automation,
   Tag,
   Task,
   TaskChecklistItem,
@@ -617,86 +610,6 @@ export const api = {
 
   // Planner disabled 2026-04-11 (Boss autonomy overhaul). Backend router returns 404.
   // PlannerMessage type stays — still used by research:.
-
-  // ── Playbooks / Guided setup ───────────────────────────────────────────────────────
-  playbooks: {
-    catalog: () => request<{ playbooks: PlaybookCatalogItem[] }>("/api/v1/playbooks/catalog"),
-    skillPacks: () => request<SkillPack[]>("/api/v1/playbooks/skill-packs"),
-    list: (boardId?: string, includeArchived?: boolean) => {
-      const params = new URLSearchParams();
-      if (boardId) params.set("board_id", boardId);
-      if (includeArchived) params.set("include_archived", "true");
-      const qs = params.toString();
-      return request<Playbook[]>(`/api/v1/playbooks${qs ? `?${qs}` : ""}`);
-    },
-    create: (data: {
-      kind: string;
-      name: string;
-      summary?: string;
-      goal?: string;
-      board_id?: string | null;
-      project_id?: string | null;
-      skill_pack_id?: string | null;
-      default_agent_id?: string | null;
-      scope?: "global" | "board" | "project";
-      status?: "draft" | "review" | "active" | "archived";
-      current_config?: Record<string, unknown>;
-      metadata?: Record<string, unknown> | null;
-      review_notes?: string | null;
-    }) => request<Playbook>("/api/v1/playbooks", { method: "POST", body: JSON.stringify(data) }),
-    get: (id: string) => request<Playbook>(`/api/v1/playbooks/${id}`),
-    update: (id: string, data: Partial<Playbook> & { metadata?: Record<string, unknown> | null }) =>
-      request<Playbook>(`/api/v1/playbooks/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
-    approve: (id: string) => request<Playbook>(`/api/v1/playbooks/${id}/approve`, { method: "POST" }),
-    versions: (id: string) => request<PlaybookVersion[]>(`/api/v1/playbooks/${id}/versions`),
-    createVersion: (id: string, changeReason?: string) =>
-      request<PlaybookVersion>(`/api/v1/playbooks/${id}/versions`, {
-        method: "POST",
-        body: JSON.stringify({ change_reason: changeReason }),
-      }),
-    automations: (id: string) => request<Automation[]>(`/api/v1/playbooks/${id}/automations`),
-    createAutomation: (id: string, data: {
-      name: string;
-      summary?: string;
-      board_id?: string | null;
-      project_id?: string | null;
-      trigger_type?: "manual" | "scheduled";
-      trigger_config?: Record<string, unknown> | null;
-      delivery_config?: Record<string, unknown> | null;
-      status?: "draft" | "active" | "paused" | "archived";
-      runtime_overrides?: Record<string, unknown> | null;
-    }) => request<Automation>(`/api/v1/playbooks/${id}/automations`, { method: "POST", body: JSON.stringify(data) }),
-    recentRuns: (boardId?: string, limit?: number) => {
-      const params = new URLSearchParams();
-      if (boardId) params.set("board_id", boardId);
-      if (limit) params.set("limit", String(limit));
-      const qs = params.toString();
-      return request<PlaybookRunProjection[]>(`/api/v1/playbooks/runs/recent${qs ? `?${qs}` : ""}`);
-    },
-    guidedCurrent: (boardId: string) =>
-      request<GuidedSessionState | null>(`/api/v1/playbooks/guided/current?board_id=${boardId}`),
-    guidedStart: (data: { board_id: string; kind?: string; playbook_id?: string }) =>
-      request<GuidedSessionState>("/api/v1/playbooks/guided/sessions/start", {
-        method: "POST",
-        body: JSON.stringify(data),
-      }),
-    guidedMessage: (sessionId: string, content: string) =>
-      request<GuidedSessionState>(`/api/v1/playbooks/guided/sessions/${sessionId}/message`, {
-        method: "POST",
-        body: JSON.stringify({ content }),
-      }),
-  },
-
-  automations: {
-    list: (boardId?: string) =>
-      request<Automation[]>(`/api/v1/automations${boardId ? `?board_id=${boardId}` : ""}`),
-    get: (id: string) => request<Automation>(`/api/v1/automations/${id}`),
-    update: (id: string, data: Partial<Automation>) =>
-      request<Automation>(`/api/v1/automations/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
-    activate: (id: string) => request<Automation>(`/api/v1/automations/${id}/activate`, { method: "POST" }),
-    pause: (id: string) => request<Automation>(`/api/v1/automations/${id}/pause`, { method: "POST" }),
-    run: (id: string) => request<unknown>(`/api/v1/automations/${id}/run`, { method: "POST" }),
-  },
 
   skillLab: {
     candidates: (boardId?: string) =>

@@ -22,14 +22,7 @@ from app.models.task import Task, TaskComment, TaskDependency
 from app.models.user import User, UserSettings
 from app.models.scheduled_job import ScheduledJob  # noqa: F401
 from app.models.scheduled_job_run import ScheduledJobRun  # noqa: F401
-from app.models.playbook import (
-    Automation,
-    Playbook,
-    PlaybookVersion,
-    SkillCandidate,
-    SkillPack,
-)
-from app.models.workflow import WorkflowRun, WorkflowStepRun, WorkflowTemplate, WorkflowTemplateVersion
+from app.models.skill_lab import SkillCandidate, SkillPack
 from app.models.webhook import Webhook, WebhookPayload
 from app.models.checklist import TaskChecklistItem
 from app.models.host import Host  # noqa: F401
@@ -57,14 +50,7 @@ __all__ = [
     "ScheduledJob",
     "ScheduledJobRun",
     "SkillPack",
-    "Playbook",
-    "PlaybookVersion",
-    "Automation",
     "SkillCandidate",
-    "WorkflowTemplate",
-    "WorkflowTemplateVersion",
-    "WorkflowRun",
-    "WorkflowStepRun",
     "User",
     "UserSettings",
     "BoardGroup",

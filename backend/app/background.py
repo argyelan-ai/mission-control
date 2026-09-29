@@ -312,7 +312,6 @@ async def prepare_process() -> None:
     from app.seeds import (
         _seed_templates,
         _seed_scheduled_jobs,
-        _seed_playbook_assets,
         _seed_runtimes,
         _seed_local_recipes,
         _seed_hosts,
@@ -321,7 +320,6 @@ async def prepare_process() -> None:
     )
     await _seed_templates()
     await _seed_scheduled_jobs()
-    await _seed_playbook_assets()
     await _seed_runtimes()
     await _seed_local_recipes()
     await _seed_hosts()

@@ -643,23 +643,6 @@ internal:
   # /api/v1/agent/me/telegram endpoint (FileCard telegram action). No bare
   # /api/v1/agent endpoint exists.
   - "endpoint:* /api/v1/agent/*"
-  # Orchestration routers (E3b R6): none of these has a page or script
-  # caller today — the scheduler and the workflow service execute runs in
-  # process, not over HTTP. Dead-code candidates for E5 (operator decides).
-  # Playbooks router: CRUD, catalog, skill packs, versions, approve,
-  # per-playbook automations and recent runs; client helpers exist in
-  # api.ts (api.playbooks.*) but no component calls them. The guided
-  # setup flow (guided/current, guided/sessions/*) is deprecated since
-  # Workstream C1 — no UI caller either.
-  - "endpoint:* /api/v1/playbooks*"
-  # Automations router: CRUD plus activate/pause/run. Helpers
-  # api.automations.* exist unused in api.ts; scheduled automations are
-  # triggered by the scheduler in process.
-  - "endpoint:* /api/v1/automations*"
-  # Workflows router: workflow templates, versions, rollback, run control
-  # and SSE stream. workflow_service executes workflow runs in process
-  # (scheduler; playbook/automation runs); no HTTP caller.
-  - "endpoint:* /api/v1/workflows*"
   # Schedule heatmap and upcoming firings: client helpers exist
   # (api.schedule.getHeatmap/getUpcoming) but no component calls them —
   # the schedule page renders ScheduleHeatmap with empty data and the job
@@ -771,16 +754,9 @@ internal:
   # in routers/agent_scoped.py and the agent-scoped endpoints).
   - "table:agent_task_comment_cursor"
   - "table:agent_thread_cursor"
-  # Playbook / automation / workflow machine layer (internal endpoints,
-  # E3b R6): services execute runs in process.
-  - "table:playbooks"
-  - "table:playbook_versions"
-  - "table:automations"
+  # Skill packs: seeded for the playbook layer, which was removed in E5
+  # (migration 0207); the rows stay, nothing reads them any more.
   - "table:skill_packs"
-  - "table:workflow_templates"
-  - "table:workflow_template_versions"
-  - "table:workflow_runs"
-  - "table:workflow_step_runs"
   # Board groups: API without a page caller (endpoint entries above).
   - "table:board_groups"
   # Agent-scoped board chat writes (routers/agent_scoped.py,
@@ -801,8 +777,8 @@ internal:
   # Machine-written notification rows; no router reads them (surfaces go
   # through activity events and system alerts).
   - "table:notifications"
-  # Planner messages: written by the disabled research / guided-playbook
-  # flow, deleted alongside projects (routers/boards.py).
+  # Planner messages: written by the disabled research flow, deleted
+  # alongside projects (routers/boards.py).
   - "table:planner_messages"
   # Dispatch attempt audit log (services/dispatch_attempt_audit.py).
   - "table:task_attempt_audit"

@@ -1487,108 +1487,7 @@ export interface LoopCreate {
 
 export type LoopUpdate = Partial<Omit<LoopCreate, "board_id">>;
 
-// ── Guided setup / Playbooks ───────────────────────────────────────────────────────
-
-export interface PlaybookCatalogOption {
-  value: string;
-  label: string;
-}
-
-export interface PlaybookCatalogField {
-  key: string;
-  label: string;
-  type: "short_text" | "long_text" | "select" | "boolean" | "number";
-  required?: boolean;
-  default?: string | number | boolean;
-  placeholder?: string;
-  options?: PlaybookCatalogOption[];
-}
-
-export interface PlaybookCatalogItem {
-  key: string;
-  name: string;
-  summary: string;
-  icon: string;
-  default_skill_pack_key: string;
-  suggested_mode: "manual" | "scheduled";
-  fields: PlaybookCatalogField[];
-  output_contract?: {
-    sections?: string[];
-  };
-}
-
-export interface SkillPack {
-  id: string;
-  key: string;
-  name: string;
-  description: string | null;
-  category: string;
-  status: string;
-  icon: string | null;
-  color: string | null;
-  skill_keys: string[];
-  guidance: Record<string, unknown> | null;
-  created_by: string;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface Playbook {
-  id: string;
-  workflow_id: string | null;
-  board_id: string | null;
-  project_id: string | null;
-  skill_pack_id: string | null;
-  default_agent_id: string | null;
-  kind: string;
-  name: string;
-  summary: string | null;
-  goal: string | null;
-  scope: "global" | "board" | "project";
-  status: "draft" | "review" | "active" | "archived";
-  current_version: number;
-  input_contract: Record<string, unknown> | null;
-  output_contract: Record<string, unknown> | null;
-  current_config: Record<string, unknown>;
-  preview_markdown: string | null;
-  extra_metadata: Record<string, unknown> | null;
-  review_notes: string | null;
-  created_by: string;
-  approved_by: string | null;
-  approved_at: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface PlaybookVersion {
-  id: string;
-  playbook_id: string;
-  version: number;
-  snapshot: Record<string, unknown>;
-  change_reason: string | null;
-  created_by: string;
-  created_at: string;
-}
-
-export interface Automation {
-  id: string;
-  playbook_id: string;
-  workflow_id: string | null;
-  board_id: string | null;
-  project_id: string | null;
-  name: string;
-  summary: string | null;
-  status: "draft" | "active" | "paused" | "archived";
-  trigger_type: "manual" | "scheduled";
-  trigger_config: Record<string, unknown> | null;
-  delivery_config: Record<string, unknown> | null;
-  runtime_overrides: Record<string, unknown> | null;
-  last_run_at: string | null;
-  next_run_at: string | null;
-  created_by: string;
-  created_at: string;
-  updated_at: string;
-}
+// ── Skill lab (frozen, see docs/produkt/landkarte.yaml F-skill-lab) ─────────────
 
 export interface SkillCandidate {
   id: string;
@@ -1609,22 +1508,6 @@ export interface SkillCandidate {
   reviewed_at: string | null;
   created_at: string;
   updated_at: string;
-}
-
-export interface PlaybookRunProjection {
-  run: Record<string, unknown>; // raw workflow-engine run — no typed client since the UI was removed
-
-  playbook: Playbook | null;
-  automation: Automation | null;
-}
-
-export interface GuidedSessionState {
-  session: Project;
-  messages: PlannerMessage[];
-  playbook: Playbook | null;
-  selected_kind: string | null;
-  pending_field_key: string | null;
-  stage: "intake" | "review";
 }
 
 // ── Meetings ──────────────────────────────────────────────────────────────────

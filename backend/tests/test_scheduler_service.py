@@ -51,33 +51,6 @@ class TestSchedulerService:
         assert trigger_type == "interval"
         assert trigger_kwargs["hours"] == 6
 
-    async def test_build_workflow_trigger_weekly(self):
-        """Weekly workflow trigger uses weekday + time."""
-        from app.services.scheduler import SchedulerService
-        from app.models.workflow import WorkflowTemplate
-
-        svc = SchedulerService.__new__(SchedulerService)
-        svc._scheduler = MagicMock()
-        workflow = WorkflowTemplate(
-            id=uuid.uuid4(),
-            name="Digest",
-            trigger_type="scheduled",
-            trigger_config={
-                "schedule_type": "weekly",
-                "schedule_day": "mon",
-                "schedule_time": "08:30",
-            },
-            status="active",
-            current_definition={"steps": []},
-            created_by="tester",
-        )
-
-        trigger_type, trigger_kwargs = svc._build_workflow_trigger(workflow)
-        assert trigger_type == "cron"
-        assert trigger_kwargs["day_of_week"] == "mon"
-        assert trigger_kwargs["hour"] == 8
-        assert trigger_kwargs["minute"] == 30
-
     async def test_build_trigger_invalid_raises(self):
         """Invalid schedule config → ValueError."""
         from app.services.scheduler import SchedulerService
