@@ -92,6 +92,11 @@ services:
     image: ghcr.io/argyelan-ai/mc-backend:${MC_IMAGE_TAG:-latest}
     build: ./backend
     restart: unless-stopped
+    # tini as PID 1 instead of docker-entrypoint.sh/uvicorn: the kernel drops
+    # any signal PID 1 has no handler for, so a stop during migrations or the
+    # import phase used to wait the full stop_grace_period and end in SIGKILL.
+    # tini forwards SIGTERM to a normal child (see the mc-worker comment).
+    init: true
     # Same Docker-Desktop default gap as db/caddy (1s without this line) —
     # 20s gives in-flight requests and the FastAPI shutdown hooks room to
     # finish instead of a hard SIGKILL mid-request.
@@ -391,6 +396,16 @@ services:
     entrypoint: ["/docker-entrypoint.sh"]
     command: ["python", "-m", "app.worker"]
     restart: unless-stopped
+    # tini (docker-init) as PID 1. Without it the entrypoint and then
+    # `python -m app.worker` ARE PID 1, and the kernel drops every signal
+    # PID 1 has no handler for (man 7 pid_namespaces). The worker only
+    # installs its SIGTERM handler after its imports (app/worker.py, #509),
+    # so `docker stop` during alembic or the import phase waited the full
+    # 30s below and ended in SIGKILL (exit 137), measured live after #509.
+    # With tini the worker is a normal child: SIGTERM before the handler
+    # exists ends it at once (default action), afterwards the graceful path
+    # runs. Nothing in the image relies on being PID 1.
+    init: true
     # W4 (11.09.2026, Incident Deploy #504): Docker default is 10s. The
     # worker's SIGTERM handler awaits stop_vault_services() + 17
     # sequential service .stop() calls (app/worker.py, app/background.py)
