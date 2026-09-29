@@ -189,7 +189,8 @@ export default function PipelineView({ boardId, agents }: PipelineViewProps) {
               const laneColor = LANE[lane.key];
 
               return (
-                <div key={lane.key}>
+                // data-lane: stable hook for the journey tests (e2e/journeys)
+                <div key={lane.key} data-lane={lane.key}>
                   {/* Lane header */}
                   <div className="flex items-center gap-2 mb-2.5 px-0.5">
                     <Icon size={13} style={{ color: laneColor }} />

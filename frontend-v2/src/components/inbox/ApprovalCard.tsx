@@ -134,6 +134,7 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
       <GlassCard
         className="p-4"
         glow={alpha(badgeColor, 0.07)}
+        data-testid="approval-card"
       >
         {/* Header */}
         <div className="flex items-start justify-between gap-4">

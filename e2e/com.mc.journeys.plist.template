@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Nightly journey tests (docs/journeys.md). Rendered by
+  e2e/install-journeys.sh — placeholders __MC_HOME__, __HOME__, __REPO__.
+  Runs the INSTALLED copy in $MC_HOME/bin, never a file inside a git
+  checkout (a removed worktree would silently kill the job). The runner keeps
+  its own clone of the repository in $MC_HOME/journeys/src.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mc.journeys</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/sh</string>
+        <string>__MC_HOME__/bin/mc-journeys</string>
+    </array>
+
+    <!-- 05:15 local time, after the night-shift window. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>5</integer>
+        <key>Minute</key>
+        <integer>15</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>__MC_HOME__/logs/journeys.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>__MC_HOME__/logs/journeys.err.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>__HOME__</string>
+        <key>MC_HOME</key>
+        <string>__MC_HOME__</string>
+        <key>MC_JOURNEYS_REPO</key>
+        <string>__REPO__</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>
