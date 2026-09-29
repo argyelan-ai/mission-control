@@ -17,11 +17,14 @@ export const PROJECT = "mc-journeys";
   }
 }
 
-const OPERATOR = {
-  email: "operator@journeys.test",
-  password: "journeys-operator-pass-1",
-  name: "Operator",
-};
+// The operator account exists only in the throw-away stack; run-journeys.sh
+// generates its password per run (also written to the stack env file, so a
+// stack kept up with --keep can be reused: `set -a; . <stack.env>; set +a`).
+function operator() {
+  const password = process.env.MC_JOURNEYS_OPERATOR_PASSWORD;
+  if (!password) throw new Error("MC_JOURNEYS_OPERATOR_PASSWORD is not set — run through e2e/run-journeys.sh");
+  return { email: "operator@journeys.test", password, name: "Operator" };
+}
 
 export class ApiError extends Error {
   constructor(
@@ -58,8 +61,9 @@ export async function operatorToken(): Promise<string> {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-  let res = await post("/auth/register", OPERATOR);
-  if (!res.ok) res = await post("/auth/login", { email: OPERATOR.email, password: OPERATOR.password });
+  const account = operator();
+  let res = await post("/auth/register", account);
+  if (!res.ok) res = await post("/auth/login", { email: account.email, password: account.password });
   if (!res.ok) throw new ApiError(res.status, await res.text(), "operator login");
   return ((await res.json()) as { access_token: string }).access_token;
 }

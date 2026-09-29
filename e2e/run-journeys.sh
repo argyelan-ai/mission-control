@@ -167,6 +167,7 @@ JWT_SECRET_KEY=$(openssl rand -hex 32)
 LOCAL_AUTH_TOKEN=$(openssl rand -hex 32)
 SECRETS_ENCRYPTION_KEY=$fernet
 INTERNAL_BOOTSTRAP_SECRET=$(openssl rand -hex 32)
+MC_JOURNEYS_OPERATOR_PASSWORD=$(openssl rand -hex 16)
 MC_JOURNEYS_HOME=$STACK_HOME
 MC_JOURNEYS_PORT=$PORT
 EOF
@@ -185,6 +186,8 @@ EOF
   npx playwright install chromium >>"$LOG" 2>&1
   npx tsc --noEmit >>"$LOG" 2>&1 || { log "journey specs do not type-check"; result error "journey specs do not type-check"; return 2; }
   report="$RUN_DIR/report.json"
+  MC_JOURNEYS_OPERATOR_PASSWORD=$(sed -n 's/^MC_JOURNEYS_OPERATOR_PASSWORD=//p' "$ENV_FILE")
+  export MC_JOURNEYS_OPERATOR_PASSWORD
   set +e
   MC_JOURNEYS_BASE="http://localhost:$PORT" MC_JOURNEYS_REPORT="$report" MC_JOURNEYS_HTML="$RUN_DIR/html" \
     npx playwright test --output "$RUN_DIR/test-results" ${GREP:+--grep "$GREP"} >>"$LOG" 2>&1

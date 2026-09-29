@@ -67,8 +67,10 @@ e2e/run-journeys.sh --src . --keep        # leave the stack up for debugging
 e2e/run-journeys.sh --src . --grep usage  # one journey
 ```
 
-With a stack left up by `--keep`, the specs also run directly:
-`cd e2e && npx playwright test` (base `http://localhost:18080`).
+With a stack left up by `--keep`, the specs also run directly (the env file
+holds that run's operator password):
+`cd e2e && set -a && . ~/.mc/journeys/stack.env && set +a && npx playwright test`
+(base `http://localhost:18080`).
 
 Result: `~/.mc/journeys/last.json` (`status` green / red / skipped / error,
 one entry per test, `known_gaps`) and `~/.mc/journeys/runs/<stamp>/` with the
