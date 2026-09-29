@@ -489,15 +489,11 @@ class SchedulerService:
                 if job.action_type == "create_task":
                     success, error, detail = await self._do_create_task(session, job)
 
-                elif job.action_type == "run_meeting":
-                    async with AsyncSession(engine, expire_on_commit=False) as meet_session:
-                        success, error, detail = await self._do_run_meeting(meet_session, job)
-
                 elif job.action_type == "start_loop":
                     success, error, detail = await self._do_start_loop(session, job)
 
                 else:
-                    # Legacy action_type (chat_send, session_reset, api_call) — no longer supported
+                    # Legacy action_type (chat_send, session_reset, api_call, run_meeting) — no longer supported
                     logger.warning(
                         "Job %s has legacy action_type '%s', skipping. Disable this job.",
                         job.id,
@@ -745,48 +741,6 @@ class SchedulerService:
                 dispatch=True,
             )
             return True, None, {"task_id": str(task.id), "task_title": task.title}
-        except Exception as e:
-            return False, str(e), {}
-
-    async def _do_run_meeting(
-        self, session: AsyncSession, job: ScheduledJob
-    ) -> tuple[bool, str | None, dict]:
-        """Start a meeting via MeetingService."""
-        from app.services.meeting_service import MeetingError, start_meeting
-
-        board_id = job.task_board_id  # Board ID from the job
-        if not board_id:
-            return False, "task_board_id (= Meeting Board) fehlt", {}
-
-        title = job.task_title or f"Weekly Meeting — {job.name}"
-        # Agenda from the message field (JSON list) or default
-        agenda = []
-        if job.message:
-            import json as _json
-            try:
-                parsed = _json.loads(job.message)
-                if isinstance(parsed, list):
-                    agenda = parsed
-            except (ValueError, TypeError):
-                pass
-        if not agenda:
-            agenda = [
-                "Was lief gut diese Woche?",
-                "Was lief schlecht?",
-                "Was nehmen wir uns fuer naechste Woche vor?",
-            ]
-
-        try:
-            meeting = await start_meeting(
-                session,
-                board_id=board_id,
-                title=title,
-                agenda=agenda,
-                meeting_type="weekly",
-            )
-            return True, None, {"meeting_id": str(meeting.id)}
-        except MeetingError as e:
-            return False, str(e), {}
         except Exception as e:
             return False, str(e), {}
 

@@ -113,6 +113,25 @@ follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
   root instead of an identical line every 600 s.
 
 ### Removed
+- **GitHub webhooks, agent meetings and the Discord channel API are gone —
+  migration `0208_drop_webhooks_meetings` DROPS their tables.** None of the
+  three had a caller left: the webhook receiver (`/api/v1/webhooks/github/*`,
+  `/api/v1/webhooks/local/push`) was never wired to a registration UI, the
+  meetings (`/api/v1/meetings*`) were superseded by the group chat
+  (ADR-075), and the Discord channel/guild config API (`/api/v1/discord/*`)
+  had no page. Also removed: the scheduler's `run_meeting` action (the
+  schedule API could no longer create it), the unused meeting summaries in
+  the task context, the `/agents/{id}/discord-channel` redirects, the Caddy
+  403 block for the local webhook path and the unused `api.meetings` /
+  `api.discord` client helpers. Dropped: `webhook_payloads`, `webhooks`,
+  `agent_meeting_messages`, `agent_meetings`, `discord_config`.
+  **Discord notifications keep working**: set `DISCORD_GUILD_ID` (and
+  optionally `DISCORD_CATEGORY_ID`) in `.env` — the runtime `discord_config`
+  row is no longer read. If a local git `post-commit` hook posts to
+  `/api/v1/webhooks/local/push`, it now gets a 404; remove that call. **If
+  your installation still holds data in these tables, dump them before
+  upgrading** (`pg_dump -t <table>`); the downgrade recreates the schema
+  empty.
 - **Workflows, automations and playbooks are gone — migration
   `0207_drop_workflow_tables` DROPS their tables.** The old execution path
   next to the task pipeline (ADR-051: functionally dead since the gateway

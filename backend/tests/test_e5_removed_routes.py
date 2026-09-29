@@ -16,6 +16,16 @@ REMOVED = [
     ("POST", "/api/v1/automations/00000000-0000-0000-0000-000000000001/run"),
     ("GET", "/api/v1/workflows"),
     ("GET", "/api/v1/workflows/stream"),
+    # GitHub/local webhooks, meetings, Discord channel API (migration 0208).
+    ("POST", "/api/v1/webhooks/github/00000000-0000-0000-0000-000000000001"),
+    ("POST", "/api/v1/webhooks/local/push"),
+    ("GET", "/api/v1/meetings"),
+    ("GET", "/api/v1/meetings/stream"),
+    ("GET", "/api/v1/meetings/agent-messages"),
+    ("GET", "/api/v1/discord/channels"),
+    ("GET", "/api/v1/discord/config"),
+    ("POST", "/api/v1/discord/agents/00000000-0000-0000-0000-000000000001/channel"),
+    ("POST", "/api/v1/agents/00000000-0000-0000-0000-000000000001/discord-channel"),
 ]
 
 
@@ -29,9 +39,19 @@ async def test_removed_route_returns_404(auth_client: AsyncClient, method: str, 
 def test_removed_prefixes_are_not_in_the_router_table():
     from app.main import app
 
-    prefixes = ("/api/v1/playbooks", "/api/v1/automations", "/api/v1/workflows")
+    prefixes = (
+        "/api/v1/playbooks",
+        "/api/v1/automations",
+        "/api/v1/workflows",
+        "/api/v1/webhooks",
+        "/api/v1/meetings",
+        "/api/v1/discord",
+    )
     left = sorted(
         getattr(r, "path", "") for r in app.routes if getattr(r, "path", "").startswith(prefixes)
+    )
+    left += sorted(
+        getattr(r, "path", "") for r in app.routes if getattr(r, "path", "").endswith("/discord-channel")
     )
     assert not left, f"removed routes still registered: {left}"
 

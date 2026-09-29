@@ -11,15 +11,12 @@ import type {
   BrowserLiveTarget,
   Credential,
   CostOverview,
-  DiscordChannel,
   IntelligenceConfig,
   IntelligenceInsights,
   Loop,
   LoopCreate,
   LoopDetail,
   LoopUpdate,
-  Meeting,
-  MeetingMessage,
   MetricsHistoryResponse,
   ModelCatalog,
   ModelInfo,
@@ -1190,21 +1187,6 @@ export const api = {
       request<import("./types").TaskSessionInfo[]>(
         `/api/v1/agents/${id}/task-sessions${limit ? `?limit=${limit}` : ""}`
       ),
-    // Agent Council: Discord
-    discord: {
-      create: (id: string, data: { name: string; context: string }) =>
-        request<{ channel_id: string; name: string; agent: Agent }>(`/api/v1/agents/${id}/discord-channel`, {
-          method: "POST",
-          body: JSON.stringify(data),
-        }),
-      rename: (id: string, newName: string) =>
-        request<{ old_name: string; new_name: string }>(`/api/v1/agents/${id}/discord-channel`, {
-          method: "PATCH",
-          body: JSON.stringify({ new_name: newName }),
-        }),
-      remove: (id: string) =>
-        request<{ unbound: boolean }>(`/api/v1/agents/${id}/discord-channel`, { method: "DELETE" }),
-    },
     cli: {
       sessions: (agentId: string) =>
         request<{ task_id: string; session: string; elapsed_seconds: number }[]>(
@@ -1468,8 +1450,8 @@ export const api = {
 
   // Phase 31 / OCS-15: api.gateways group removed entirely. Backend routes
   // /api/v1/gateways/* were deleted in Phase 29; the gateways table was
-  // dropped in Phase 30. Discord channel management now lives under
-  // api.discord (see below) — channels come from settings.discord_guild_id.
+  // dropped in Phase 30. The Discord channel API that replaced it was
+  // removed in E5.
 
 
   // Loops (ADR-051) — outcome-driven task loops.
@@ -1720,27 +1702,6 @@ export const api = {
       ),
   },
 
-  // ── Discord (Phase 29-01 router; singleton guild) ───────────────────────────
-  discord: {
-    channels: () =>
-      request<DiscordChannel[]>("/api/v1/discord/channels"),
-    createChannel: (agentId: string, data: { name: string; context?: string; category_id?: string }) =>
-      request<{ channel_id: string; name: string }>(
-        `/api/v1/discord/agents/${agentId}/channel`,
-        { method: "POST", body: JSON.stringify(data) },
-      ),
-    renameChannel: (agentId: string, data: { new_name: string }) =>
-      request<{ ok: true }>(
-        `/api/v1/discord/agents/${agentId}/channel`,
-        { method: "PATCH", body: JSON.stringify(data) },
-      ),
-    deleteChannel: (agentId: string) =>
-      request<{ ok: true }>(
-        `/api/v1/discord/agents/${agentId}/channel`,
-        { method: "DELETE" },
-      ),
-  },
-
   // ── Credentials ──────────────────────────────────────────────────────────────
   credentials: {
     list: () => request<Credential[]>("/api/v1/credentials"),
@@ -1782,23 +1743,6 @@ export const api = {
   },
 
   // ── Schedule ─────────────────────────────────────────────────────────────────
-  // ── Meetings ───────────────────────────────────────────────────────────────
-  meetings: {
-    list: (params?: { board_id?: string; status?: string; limit?: number }) => {
-      const qs = new URLSearchParams(
-        Object.fromEntries(Object.entries(params ?? {}).filter(([, v]) => v != null)) as Record<string, string>,
-      ).toString();
-      return request<Meeting[]>(`/api/v1/meetings${qs ? `?${qs}` : ""}`);
-    },
-    get: (id: string) => request<Meeting>(`/api/v1/meetings/${id}`),
-    create: (data: { board_id: string; title: string; agenda: string[]; meeting_type?: string; participant_ids?: string[] }) =>
-      request<Meeting>("/api/v1/meetings", { method: "POST", body: JSON.stringify(data) }),
-    cancel: (id: string) =>
-      request<Meeting>(`/api/v1/meetings/${id}/cancel`, { method: "POST" }),
-    messages: (id: string, limit = 100) =>
-      request<MeetingMessage[]>(`/api/v1/meetings/${id}/messages?limit=${limit}`),
-  },
-
   schedule: {
     listJobs: () =>
       request<ScheduledJob[]>("/api/v1/schedule/jobs"),
@@ -2344,6 +2288,5 @@ export const sseUrls = {
   activity: () => `${BASE_URL}/api/v1/activity/stream`,
   memory: (boardId: string) => `${BASE_URL}/api/v1/boards/${boardId}/memory/stream`,
   schedule: () => `${BASE_URL}/api/v1/schedule/stream`,
-  meetings: () => `${BASE_URL}/api/v1/meetings/stream`,
   chat: (agentId: string) => `${BASE_URL}/api/v1/agents/${agentId}/chat/stream`,
 };

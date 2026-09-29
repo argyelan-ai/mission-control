@@ -22,7 +22,6 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.agent import Agent
 from app.models.board import Project
-from app.models.meeting import AgentMeeting
 from app.models.memory import BoardMemory
 from app.models.deliverable import TaskDeliverable
 from app.models.tag import Tag, TagAssignment
@@ -644,7 +643,6 @@ class DispatchContext:
     intelligence_context: str = ""
     feedback_context: str = ""
     review_comment_context: str = ""  # Bug A (2026-07-12): operator's request_changes comment
-    meeting_context: str = ""
     credentials_text: str = ""
     dependency_context: str = ""
     repo_rules_context: str = ""  # per-repo Arbeitsregeln (ADR-050)
@@ -908,37 +906,6 @@ async def _load_dispatch_context(
         except Exception:
             return []
 
-    async def _load_meeting_insights() -> str:
-        """Loads the last 2 meeting summaries as context."""
-        try:
-            result = await session.exec(
-                select(AgentMeeting)
-                .where(
-                    AgentMeeting.board_id == task.board_id,
-                    AgentMeeting.status == "completed",
-                )
-                .order_by(AgentMeeting.completed_at.desc())
-                .limit(2)
-            )
-            meetings = result.all()
-            if not meetings:
-                return ""
-            parts = []
-            for m in meetings:
-                date_str = m.completed_at.strftime("%d.%m.%Y") if m.completed_at else "?"
-                parts.append(f"**{m.title}** ({date_str})")
-                if m.summary:
-                    # Max 300 chars per meeting summary
-                    parts.append(m.summary[:300])
-                if m.decisions:
-                    for d in m.decisions[:3]:
-                        text = d.get("text", str(d)) if isinstance(d, dict) else str(d)
-                        parts.append(f"  - {text}")
-                parts.append("")
-            return "\n".join(parts).strip()
-        except Exception:
-            return ""
-
     async def _load_dependencies() -> str:
         """Loads workspace paths and outputs of predecessor tasks."""
         try:
@@ -996,7 +963,6 @@ async def _load_dispatch_context(
         _load_review_comment(),
         _load_project(),
         _load_team(),
-        _load_meeting_insights(),
         _load_child_tasks(),
         _load_dependencies(),
         return_exceptions=True,
@@ -1014,10 +980,9 @@ async def _load_dispatch_context(
         ctx.project, ctx.project_tags = results[7]
     if isinstance(results[8], list):
         ctx.team_agents = results[8]
-    ctx.meeting_context = results[9] if isinstance(results[9], str) else ""
-    if isinstance(results[10], list):
-        ctx.child_tasks = results[10]
-    ctx.dependency_context = results[11] if isinstance(results[11], str) else ""
+    if isinstance(results[9], list):
+        ctx.child_tasks = results[9]
+    ctx.dependency_context = results[10] if isinstance(results[10], str) else ""
 
     # Pool hygiene (incident 2026-09-14): the DB phase opened a read
     # transaction on the request session. The semantic-memory phase below

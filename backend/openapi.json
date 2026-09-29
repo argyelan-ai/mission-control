@@ -2383,54 +2383,6 @@
         ]
       }
     },
-    "/api/v1/discord/agents/{agent_id}/channel": {
-      "delete": {
-        "operationId": "remove_agent_channel_api_v1_discord_agents__agent_id__channel_delete",
-        "summary": "Remove Agent Channel",
-        "tags": [
-          "discord"
-        ]
-      },
-      "patch": {
-        "operationId": "rename_agent_channel_api_v1_discord_agents__agent_id__channel_patch",
-        "summary": "Rename Agent Channel",
-        "tags": [
-          "discord"
-        ]
-      },
-      "post": {
-        "operationId": "create_agent_channel_api_v1_discord_agents__agent_id__channel_post",
-        "summary": "Create Agent Channel",
-        "tags": [
-          "discord"
-        ]
-      }
-    },
-    "/api/v1/discord/channels": {
-      "get": {
-        "operationId": "list_channels_api_v1_discord_channels_get",
-        "summary": "List Channels",
-        "tags": [
-          "discord"
-        ]
-      }
-    },
-    "/api/v1/discord/config": {
-      "get": {
-        "operationId": "get_config_api_v1_discord_config_get",
-        "summary": "Get Config",
-        "tags": [
-          "discord"
-        ]
-      },
-      "patch": {
-        "operationId": "update_config_api_v1_discord_config_patch",
-        "summary": "Update Config",
-        "tags": [
-          "discord"
-        ]
-      }
-    },
     "/api/v1/docker-sessions/agents": {
       "get": {
         "operationId": "list_docker_session_agents_api_v1_docker_sessions_agents_get",
@@ -3304,67 +3256,6 @@
         "summary": "Get Mcp Server",
         "tags": [
           "mcp-servers"
-        ]
-      }
-    },
-    "/api/v1/meetings": {
-      "get": {
-        "operationId": "list_meetings_api_v1_meetings_get",
-        "summary": "List Meetings",
-        "tags": [
-          "meetings"
-        ]
-      },
-      "post": {
-        "operationId": "create_meeting_api_v1_meetings_post",
-        "summary": "Create Meeting",
-        "tags": [
-          "meetings"
-        ]
-      }
-    },
-    "/api/v1/meetings/agent-messages": {
-      "get": {
-        "operationId": "list_agent_messages_api_v1_meetings_agent_messages_get",
-        "summary": "List Agent Messages",
-        "tags": [
-          "meetings"
-        ]
-      }
-    },
-    "/api/v1/meetings/stream": {
-      "get": {
-        "operationId": "meeting_stream_api_v1_meetings_stream_get",
-        "summary": "Meeting Stream",
-        "tags": [
-          "meetings"
-        ]
-      }
-    },
-    "/api/v1/meetings/{meeting_id}": {
-      "get": {
-        "operationId": "get_meeting_api_v1_meetings__meeting_id__get",
-        "summary": "Get Meeting",
-        "tags": [
-          "meetings"
-        ]
-      }
-    },
-    "/api/v1/meetings/{meeting_id}/cancel": {
-      "post": {
-        "operationId": "cancel_meeting_endpoint_api_v1_meetings__meeting_id__cancel_post",
-        "summary": "Cancel Meeting Endpoint",
-        "tags": [
-          "meetings"
-        ]
-      }
-    },
-    "/api/v1/meetings/{meeting_id}/messages": {
-      "get": {
-        "operationId": "get_meeting_messages_api_v1_meetings__meeting_id__messages_get",
-        "summary": "Get Meeting Messages",
-        "tags": [
-          "meetings"
         ]
       }
     },
@@ -4957,24 +4848,6 @@
         "summary": "Issue Voice Token",
         "tags": [
           "voice"
-        ]
-      }
-    },
-    "/api/v1/webhooks/github/{webhook_id}": {
-      "post": {
-        "operationId": "receive_github_webhook_api_v1_webhooks_github__webhook_id__post",
-        "summary": "Receive Github Webhook",
-        "tags": [
-          "webhooks"
-        ]
-      }
-    },
-    "/api/v1/webhooks/local/push": {
-      "post": {
-        "operationId": "receive_local_push_api_v1_webhooks_local_push_post",
-        "summary": "Receive Local Push",
-        "tags": [
-          "webhooks"
         ]
       }
     },

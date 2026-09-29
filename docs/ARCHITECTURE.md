@@ -59,7 +59,6 @@ Browser (Caddy :80) → Frontend (Next.js 15, :3000)
 | Boards & Projects | `boards.py`, `projects.py`, `project_git.py` | Board/Project CRUD, GitHub-Sync |
 | Memory & Intelligence | `memory.py`, `system.py` | Knowledge Base, 3-Layer Memory (Qdrant), Insights |
 | Realtime | `activity.py`, `cli_terminal.py` | SSE Streams, PTY WebSocket |
-| Discord | `discord.py` | Per-agent Channel CRUD, Bot-Config (post-Gateway-Sunset, v0.9) |
 | Ops | `approvals.py`, `runtimes.py`, `scheduler` | Approvals, Runtime-Mgmt, Cron |
 | Admin | `credentials.py`, `secrets.py`, `cli_plugins.py`, `skills.py` | Credentials Vault, Plugins, Tags |
 

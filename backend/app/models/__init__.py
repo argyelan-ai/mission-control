@@ -8,9 +8,8 @@ from app.models.chat import ChatMessage
 from app.models.content import ContentPipeline
 from app.models.credential import Credential
 from app.models.deploy_history import DeployHistory
-from app.models.discord_config import DiscordConfig
 from app.models.group import AgentGroup, GroupMember, GroupRound
-from app.models.meeting import AgentMeeting, AgentMeetingMessage, AgentMessage
+from app.models.agent_message import AgentMessage
 from app.models.memory import BoardMemory
 from app.models.app_setting import AppSetting  # noqa: F401
 from app.models.secret import Secret
@@ -23,7 +22,6 @@ from app.models.user import User, UserSettings
 from app.models.scheduled_job import ScheduledJob  # noqa: F401
 from app.models.scheduled_job_run import ScheduledJobRun  # noqa: F401
 from app.models.skill_lab import SkillCandidate, SkillPack
-from app.models.webhook import Webhook, WebhookPayload
 from app.models.checklist import TaskChecklistItem
 from app.models.host import Host  # noqa: F401
 from app.models.host_pairing_code import HostPairingCode  # noqa: F401
@@ -44,8 +42,6 @@ from app.models.bench import BenchChallenge, BenchEntry  # noqa: F401
 from app.models.thread import Thread, Message, AgentThreadCursor, UserThreadCursor  # noqa: F401
 
 __all__ = [
-    "AgentMeeting",
-    "AgentMeetingMessage",
     "AgentMessage",
     "ScheduledJob",
     "ScheduledJobRun",
@@ -71,7 +67,6 @@ __all__ = [
     "ContentPipeline",
     "Credential",
     "DeployHistory",
-    "DiscordConfig",
     "Secret",
     "Approval",
     "InstallLog",
@@ -79,8 +74,6 @@ __all__ = [
     "Notification",
     "Tag",
     "TagAssignment",
-    "Webhook",
-    "WebhookPayload",
     "TaskChecklistItem",
     "Host",
     "HostPairingCode",
