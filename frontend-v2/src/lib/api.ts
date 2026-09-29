@@ -784,11 +784,12 @@ export const api = {
         return request<import("./types").TaskThreadResponse>(`/api/v1/tasks/${taskId}/thread${suffix}`);
       },
       /** POST returns only ids (no seq/full message) — callers refetch a
-       *  `sinceSeq` delta to append the new message. */
-      post: (taskId: string, body: string) =>
+       *  `sinceSeq` delta to append the new message. `replyTo` = an open
+       *  question's id: answers it and resumes a task waiting on it. */
+      post: (taskId: string, body: string, opts?: { replyTo?: string }) =>
         request<{ message_id: string; thread_id: string; task_status: string }>(
           `/api/v1/tasks/${taskId}/thread/messages`,
-          { method: "POST", body: JSON.stringify({ body }) },
+          { method: "POST", body: JSON.stringify({ body, ...(opts?.replyTo ? { reply_to: opts.replyTo } : {}) }) },
         ),
       markRead: (taskId: string, lastReadSeq: number) =>
         request<void>(`/api/v1/tasks/${taskId}/thread/read`, {

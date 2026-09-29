@@ -495,6 +495,18 @@ export interface ThreadRecipient {
   reason: "assignee" | "reviewer" | "watcher" | string;
 }
 
+/** The question the task waits on — newest open blocking one, else newest
+ *  open one. "Reply" answers it with a thread reply (`reply_to` = `id`). */
+export interface TaskOpenQuestion {
+  id: string;
+  body: string;
+  blocking: boolean;
+  options: string[];
+  author: ThreadAuthor;
+  asker_agent_id: string | null;
+  created_at: string;
+}
+
 export interface TaskThreadResponse {
   task_id: string;
   recipient: ThreadRecipient | null;
@@ -502,6 +514,7 @@ export interface TaskThreadResponse {
   has_more_before: boolean;
   latest_seq: number;
   my_read_seq: number;
+  open_question?: TaskOpenQuestion | null;
 }
 
 // ── Task Flight Recorder (Timeline) ─────────────────────────────────────────

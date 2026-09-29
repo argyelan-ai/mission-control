@@ -9,7 +9,10 @@
  *   NEEDS YOU  blocked/waiting/user_test. With an open approval it is shown
  *              (TaskApprovalCard: same approval, resolve path and words as
  *              the inbox card) and is the only way to act — no extra status buttons here, otherwise the approval
- *              would stay open in the inbox. Without one: a surface with the
+ *              would stay open in the inbox. With an open thread question
+ *              (`mc ask`): the question, its options, an answer field +
+ *              Reply — a thread reply to that question, which resumes a
+ *              task parked in `waiting`. Otherwise: a surface with the
  *              latest blocker comment + Reply (jumps to the comment field).
  *   RUNNING    the last step in plain words, no surface.
  *   RESULT     the resolution (2–3 lines) + the PR link — the PR shows here once.
@@ -21,6 +24,7 @@
  * errors) is shown in its working language, only the labels are translated.
  */
 
+import { useState } from "react";
 import { useTranslations } from "next-intl";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ExternalLink, MessageSquareReply, ScrollText } from "lucide-react";
@@ -118,6 +122,24 @@ export function TaskStateCard({
     onError: () => notify.error(tInbox("resolveFailed")),
   });
 
+  // Answer to the open thread question: a reply addressed to it (reply_to)
+  // clears it and resumes a task parked in `waiting`.
+  const [answer, setAnswer] = useState("");
+  const answerMutation = useMutation({
+    mutationFn: ({ body, replyTo }: { body: string; replyTo: string }) =>
+      api.tasks.thread.post(task.id, body, { replyTo }),
+    onSuccess: () => {
+      setAnswer("");
+      qc.invalidateQueries({ queryKey: ["task-open-question", task.id] });
+      qc.invalidateQueries({ queryKey: ["tasks", task.board_id] });
+      qc.invalidateQueries({ queryKey: ["pipeline", task.board_id] });
+      qc.invalidateQueries({ queryKey: ["task", task.board_id, task.id] });
+      qc.invalidateQueries({ queryKey: ["run-record", task.id] });
+      notify.success(t("detail.answerSent"));
+    },
+    onError: (e: Error) => notify.error(t("detail.answerFailed", { msg: e.message })),
+  });
+
   // A head run owns the card (head-launcher §8.2) — its own next step + one action.
   if (card.kind === "head") {
     return <HeadStateCard run={card.run} mainAction={card.mainAction} silentWarn={card.silentWarn} />;
@@ -137,6 +159,59 @@ export function TaskStateCard({
               onResolve={(status, note) => resolveMutation.mutate({ id: card.approval!.id, status, note })}
             />
           </div>
+        </Block>
+      );
+    }
+    if (card.question) {
+      const question = card.question;
+      const body = answer.trim();
+      const send = () => {
+        if (body && !answerMutation.isPending) answerMutation.mutate({ body, replyTo: question.id });
+      };
+      return (
+        <Block kind="needs_you" raised>
+          <p data-testid="state-card-question" className={`${NEXT_TEXT} line-clamp-4`} style={{ color: C.textPrimary }} title={question.body}>
+            {preview(question.body)}
+          </p>
+          {question.options.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {question.options.map((opt) => (
+                <button
+                  key={opt}
+                  type="button"
+                  aria-pressed={answer === opt}
+                  onClick={() => setAnswer(opt)}
+                  className="h-11 px-4 rounded-full text-sm cursor-pointer transition-colors"
+                  style={{
+                    background: answer === opt ? C.accentSubtle : "var(--detail-bg, var(--color-bg-surface))",
+                    color: C.textPrimary,
+                    border: `1px solid ${answer === opt ? C.borderAccent : C.border}`,
+                  }}
+                >
+                  {opt}
+                </button>
+              ))}
+            </div>
+          )}
+          <textarea
+            value={answer}
+            onChange={(e) => setAnswer(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                send();
+              }
+            }}
+            placeholder={t("detail.answerLabel")}
+            aria-label={t("detail.answerLabel")}
+            rows={2}
+            className="w-full px-3 py-2 rounded-md text-base @min-[560px]:text-sm resize-y"
+            style={{ background: "var(--detail-bg, var(--color-bg-deep))", color: C.textPrimary, border: `1px solid ${C.border}` }}
+          />
+          <button type="button" onClick={send} disabled={!body || answerMutation.isPending} className={PRIMARY_BTN} style={PRIMARY_STYLE}>
+            <MessageSquareReply size={16} aria-hidden />
+            {t("detail.reply")}
+          </button>
         </Block>
       );
     }
