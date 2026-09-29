@@ -1,6 +1,9 @@
 # ADR-044 — Vertical-Module: strippbare Feature-Bundles
 
 **Status:** Accepted
+**Update 2026-09-29:** Das erste Vertical `news_studio` wurde eingestellt und
+entfernt; Migration `0206_drop_news_tables` löscht seine Tabellen. Referenz-Vertical
+ist jetzt `bench_studio` (ADR-070). Der Mechanismus selbst bleibt unverändert.
 **Datum:** 2026-07-02
 **Scope:** Backend/Architektur | Frontend/Struktur | Release
 

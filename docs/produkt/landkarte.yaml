@@ -790,22 +790,12 @@ internal:
   - "table:install_log"
   # Token-harvester bookkeeping (per-file processed state).
   - "table:model_usage_harvest_state"
-  # News / newsletter models: used by an optional vertical outside this repository - not dead; keep.
-  - "table:news_sources"
-  - "table:news_articles"
-  - "table:news_post_schedules"
-  - "table:newsletter_issues"
   # Machine-written notification rows; no router reads them (surfaces go
   # through activity events and system alerts).
   - "table:notifications"
   # Planner messages: written by the disabled research / guided-playbook
   # flow, deleted alongside projects (routers/boards.py).
   - "table:planner_messages"
-  # Content models: used by an optional vertical outside this repository - not dead; keep.
-  - "table:storyboards"
-  - "table:trend_signals"
-  - "table:video_performance"
-  - "table:viral_shorts_settings"
   # Dispatch attempt audit log (services/dispatch_attempt_audit.py).
   - "table:task_attempt_audit"
   # Per-user key/value rows behind the internal generic /settings endpoints.

@@ -28,11 +28,9 @@ const ROUTES: { path: string; label: string; waitMs?: number }[] = [
   { path: "/office",    label: "office",    waitMs: 1500 },
   { path: "/runtimes",  label: "runtimes",  waitMs: 800  },
   { path: "/workflows", label: "workflows", waitMs: 800  },
-  { path: "/content",   label: "content",   waitMs: 800  },
   { path: "/sessions",  label: "sessions",  waitMs: 800  },
   { path: "/skills",    label: "skills",    waitMs: 800  },
   { path: "/settings",  label: "settings",  waitMs: 800  },
-  { path: "/news",      label: "news",      waitMs: 800  },
 ];
 
 const MOBILE_VIEWPORT  = { width: 390,  height: 844  };

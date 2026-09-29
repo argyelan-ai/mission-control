@@ -3711,10 +3711,6 @@ async def agent_create_knowledge(
     return entry
 
 
-# ── Content Pipeline Agent-Callback: now lives in the News-Studio vertical ──
-# (app/verticals/news_studio/routers/content_agent.py — same prefix)
-
-
 # ── Agent Creation (Board Lead only) ─────────────────────────────────────────
 
 

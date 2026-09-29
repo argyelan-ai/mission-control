@@ -1,6 +1,7 @@
 # ADR-032 — Content Page Refactor: Von 4 Tabs zu 2 Top-Level Pages
 
-**Status:** Accepted
+**Status:** Superseded (2026-09-29) — `/content` und `/news` wurden mit dem
+News-Vertical entfernt (Migration `0206_drop_news_tables`).
 **Datum:** 2026-05-10
 **Scope:** Frontend/Pages · UX/Navigation
 

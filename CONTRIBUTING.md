@@ -64,7 +64,7 @@ pre-launch history remains private because it contained credentials.)
   in the English default UI is a bug, not a style preference.
 - CI runs a **leak gate** (gitleaks + forbidden-file check) on every push and
   PR in addition to tests.
-- Maintainer-private modules (e.g. a personal news pipeline) live in private
+- Maintainer-private modules (e.g. a personal publishing pipeline) live in private
   overlay repositories synced via `scripts/dev-overlay.sh` — their paths are
   gitignored here. You can use the same mechanism for your own private
   verticals.

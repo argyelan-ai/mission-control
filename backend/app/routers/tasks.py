@@ -1609,7 +1609,7 @@ async def update_task(
     await session.commit()
     await session.refresh(task)
 
-    # Vertical hooks (e.g. News-Studio pipeline-stage auto-advance, bench_studio
+    # Vertical hooks (e.g. bench_studio
     # artifact collection) — no-op if no vertical is registered (stripped public
     # release). Hooks self-filter (run_task_done_hooks swallows hook errors);
     # the old `and task.pipeline_id` gate starved non-pipeline verticals.

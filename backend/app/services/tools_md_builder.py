@@ -620,7 +620,7 @@ curl -s -X PUT "$MC_API_URL/api/v1/agent/config/soul_md" \\
 - The change syncs to the gateway/disk automatically
 """
 
-    # ── Vertical sections (e.g. News Studio content pipeline) ────────────
+    # ── Vertical sections (registered by verticals) ───────────────────────
     # Verticals register (scope, builder) in app.verticals.hooks —
     # stripped public release: empty list, no section.
     from app.verticals import hooks as vertical_hooks

@@ -106,9 +106,6 @@ backend/app/auth.py: davinci
 backend/app/config.py: freecode
 backend/app/models/agent.py: sparky
 backend/app/models/model_usage.py: sparky
-backend/app/models/storyboard.py: davinci
-backend/app/models/trend.py: shakespeare
-backend/app/models/video_performance.py: shakespeare
 backend/app/routers/agent_chat.py: davinci
 backend/app/routers/agent_comments.py: sparky
 backend/app/routers/agent_scoped.py: freecode
