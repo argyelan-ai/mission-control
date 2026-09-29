@@ -33,6 +33,22 @@ REMOVED = [
     ("GET", "/api/v1/research"),
     ("POST", "/api/v1/research/start"),
     ("GET", "/api/v1/research/00000000-0000-0000-0000-000000000001/chat"),
+    # Board groups, phase create/edit/delete, board-scoped approvals (0209).
+    ("GET", "/api/v1/board-groups"),
+    ("POST", "/api/v1/board-groups"),
+    ("PATCH", "/api/v1/board-groups/00000000-0000-0000-0000-000000000001"),
+    ("GET", "/api/v1/boards/00000000-0000-0000-0000-000000000001/approvals"),
+]
+
+# Paths that now fall through to a parameterised sibling route (e.g.
+# /boards/{id}/tasks/{task_id}) answer 405/422 instead of 404 — what matters
+# is that no handler serves them any more.
+SHADOWED = [
+    ("POST", "/api/v1/projects/00000000-0000-0000-0000-000000000001/phases"),
+    ("GET", "/api/v1/boards/00000000-0000-0000-0000-000000000001/tasks/stream"),
+    ("GET", "/api/v1/boards/00000000-0000-0000-0000-000000000001/memory/stream"),
+    ("PATCH", "/api/v1/projects/00000000-0000-0000-0000-000000000001/phases/00000000-0000-0000-0000-000000000002"),
+    ("DELETE", "/api/v1/projects/00000000-0000-0000-0000-000000000001/phases/00000000-0000-0000-0000-000000000002"),
 ]
 
 
@@ -55,6 +71,7 @@ def test_removed_prefixes_are_not_in_the_router_table():
         "/api/v1/discord",
         "/api/v1/cli-sessions",
         "/api/v1/research",
+        "/api/v1/board-groups",
     )
     left = sorted(
         getattr(r, "path", "") for r in app.routes if getattr(r, "path", "").startswith(prefixes)
@@ -65,8 +82,27 @@ def test_removed_prefixes_are_not_in_the_router_table():
     removed_exact = {
         "/api/v1/agents/runtime-status",
         "/api/v1/docker-sessions/{agent_id}/state",
+        "/api/v1/boards/{board_id}/tasks/stream",
+        "/api/v1/boards/{board_id}/memory/stream",
+        "/api/v1/boards/{board_id}/approvals",
     }
     left += sorted(p for p in (getattr(r, "path", "") for r in app.routes) if p in removed_exact)
+    # Phase create/update/delete are gone; list and complete stay (tasks page,
+    # mc-mcp).
+    phase_methods = {
+        (m, getattr(r, "path", ""))
+        for r in app.routes
+        for m in getattr(r, "methods", set()) or set()
+        if "/phases" in getattr(r, "path", "")
+    }
+    left += sorted(
+        f"{m} {p}" for m, p in phase_methods
+        if (m, p) in {
+            ("POST", "/api/v1/projects/{project_id}/phases"),
+            ("PATCH", "/api/v1/projects/{project_id}/phases/{phase_id}"),
+            ("DELETE", "/api/v1/projects/{project_id}/phases/{phase_id}"),
+        }
+    )
     assert not left, f"removed routes still registered: {left}"
 
 
@@ -83,3 +119,40 @@ async def test_skill_lab_survives_the_playbook_removal(auth_client: AsyncClient)
     # Frozen, not removed (landkarte F-skill-lab): it must keep answering.
     resp = await auth_client.get("/api/v1/skill-lab/candidates")
     assert resp.status_code == 200, resp.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method,path", SHADOWED)
+async def test_shadowed_removed_route_is_not_served(auth_client: AsyncClient, method: str, path: str):
+    resp = await auth_client.request(method, path)
+    assert resp.status_code in (404, 405, 422), f"{method} {path} -> {resp.status_code}"
+    assert "text/event-stream" not in resp.headers.get("content-type", "")
+
+
+def test_the_live_streams_stay_registered():
+    """The two removed board streams must not take the live ones with them."""
+    from app.main import app
+
+    paths = {getattr(r, "path", "") for r in app.routes}
+    for live in (
+        "/api/v1/activity/stream",
+        "/api/v1/agents/stream",
+        "/api/v1/approvals/stream",
+        "/api/v1/schedule/stream",
+        "/api/v1/agents/{agent_id}/chat/stream",
+        "/api/v1/groups/{group_id}/stream",
+    ):
+        assert live in paths, f"live stream missing: {live}"
+
+
+def test_phase_list_and_complete_stay():
+    from app.main import app
+
+    routes = {
+        (m, getattr(r, "path", ""))
+        for r in app.routes
+        for m in getattr(r, "methods", set()) or set()
+    }
+    assert ("GET", "/api/v1/projects/{project_id}/phases") in routes
+    assert ("POST", "/api/v1/projects/{project_id}/phases/{phase_id}/complete") in routes
+    assert ("GET", "/api/v1/projects/{project_id}") in routes

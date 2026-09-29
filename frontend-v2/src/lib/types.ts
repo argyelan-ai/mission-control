@@ -8,21 +8,8 @@ export type ApprovalStatus = "pending" | "approved" | "rejected" | "expired";
 export type MemoryType = "knowledge" | "lesson" | "reference" | "journal" | "weekly_review" | "research" | "insight";
 export type ReviewDecision = "approved" | "changes_requested" | "hold";
 
-export interface BoardGroup {
-  id: string;
-  name: string;
-  slug: string;
-  description: string | null;
-  icon: string | null;
-  color: string | null;
-  sort_order: number;
-  created_at: string;
-  updated_at: string;
-}
-
 export interface Board {
   id: string;
-  board_group_id: string | null;
   name: string;
   slug: string;
   description: string | null;

@@ -17,7 +17,6 @@ import type { Board, ScheduledJob } from "@/lib/types";
 function mkBoard(overrides: Partial<Board> = {}): Board {
   return {
     id: "board-1",
-    board_group_id: null,
     name: "Test Board",
     slug: "test-board",
     description: null,

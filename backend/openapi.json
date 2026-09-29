@@ -1719,38 +1719,6 @@
         ]
       }
     },
-    "/api/v1/board-groups": {
-      "get": {
-        "operationId": "list_board_groups_api_v1_board_groups_get",
-        "summary": "List Board Groups",
-        "tags": [
-          "boards"
-        ]
-      },
-      "post": {
-        "operationId": "create_board_group_api_v1_board_groups_post",
-        "summary": "Create Board Group",
-        "tags": [
-          "boards"
-        ]
-      }
-    },
-    "/api/v1/board-groups/{group_id}": {
-      "delete": {
-        "operationId": "delete_board_group_api_v1_board_groups__group_id__delete",
-        "summary": "Delete Board Group",
-        "tags": [
-          "boards"
-        ]
-      },
-      "patch": {
-        "operationId": "update_board_group_api_v1_board_groups__group_id__patch",
-        "summary": "Update Board Group",
-        "tags": [
-          "boards"
-        ]
-      }
-    },
     "/api/v1/boards": {
       "get": {
         "operationId": "list_boards_api_v1_boards_get",
@@ -1790,15 +1758,6 @@
         ]
       }
     },
-    "/api/v1/boards/{board_id}/approvals": {
-      "get": {
-        "operationId": "list_board_approvals_api_v1_boards__board_id__approvals_get",
-        "summary": "List Board Approvals",
-        "tags": [
-          "approvals"
-        ]
-      }
-    },
     "/api/v1/boards/{board_id}/memory": {
       "get": {
         "operationId": "list_memory_api_v1_boards__board_id__memory_get",
@@ -1810,15 +1769,6 @@
       "post": {
         "operationId": "create_memory_api_v1_boards__board_id__memory_post",
         "summary": "Create Memory",
-        "tags": [
-          "memory"
-        ]
-      }
-    },
-    "/api/v1/boards/{board_id}/memory/stream": {
-      "get": {
-        "operationId": "stream_memory_api_v1_boards__board_id__memory_stream_get",
-        "summary": "Stream Memory",
         "tags": [
           "memory"
         ]
@@ -1944,15 +1894,6 @@
       "patch": {
         "operationId": "reorder_tasks_api_v1_boards__board_id__tasks_reorder_patch",
         "summary": "Reorder Tasks",
-        "tags": [
-          "tasks"
-        ]
-      }
-    },
-    "/api/v1/boards/{board_id}/tasks/stream": {
-      "get": {
-        "operationId": "stream_tasks_api_v1_boards__board_id__tasks_stream_get",
-        "summary": "Stream Tasks",
         "tags": [
           "tasks"
         ]
@@ -3555,29 +3496,6 @@
       "get": {
         "operationId": "list_phases_api_v1_projects__project_id__phases_get",
         "summary": "List Phases",
-        "tags": [
-          "projects"
-        ]
-      },
-      "post": {
-        "operationId": "create_phase_api_v1_projects__project_id__phases_post",
-        "summary": "Create Phase",
-        "tags": [
-          "projects"
-        ]
-      }
-    },
-    "/api/v1/projects/{project_id}/phases/{phase_id}": {
-      "delete": {
-        "operationId": "delete_phase_api_v1_projects__project_id__phases__phase_id__delete",
-        "summary": "Delete Phase",
-        "tags": [
-          "projects"
-        ]
-      },
-      "patch": {
-        "operationId": "update_phase_api_v1_projects__project_id__phases__phase_id__patch",
-        "summary": "Update Phase",
         "tags": [
           "projects"
         ]

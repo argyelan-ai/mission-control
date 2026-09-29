@@ -19,7 +19,6 @@ const mockAppState = vi.hoisted(() => ({
     sidebarCollapsed: false,
     commandPaletteOpen: false,
     boards: [] as unknown[],
-    boardGroups: [] as unknown[],
     currentUser: { id: "u1", email: "a@b.com", name: "Admin", role: "admin" } as {
       id: string; email: string; name: string; role: string;
     } | null,
@@ -27,7 +26,6 @@ const mockAppState = vi.hoisted(() => ({
     toggleSidebar: () => {},
     setCommandPaletteOpen: (open: boolean) => { mockAppState.state.commandPaletteOpen = open; },
     setBoards: (boards: unknown[]) => { mockAppState.state.boards = boards; },
-    setBoardGroups: (boardGroups: unknown[]) => { mockAppState.state.boardGroups = boardGroups; },
     setCurrentUser: (user: typeof mockAppState.state.currentUser) => { mockAppState.state.currentUser = user; },
   },
 }));

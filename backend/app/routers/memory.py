@@ -15,8 +15,6 @@ from sqlmodel import select, func
 from app.auth import require_user
 from app.database import get_session
 from app.models.memory import BoardMemory
-from app.redis_client import RedisKeys
-from app.services.sse import make_sse_response
 from app.utils import utcnow
 
 logger = logging.getLogger(__name__)
@@ -141,11 +139,6 @@ async def list_memory(
     query = query.order_by(BoardMemory.is_pinned.desc(), BoardMemory.created_at.desc()).offset(offset).limit(limit)  # type: ignore[attr-defined]
     result = await session.exec(query)
     return result.all()
-
-
-@router.get("/boards/{board_id}/memory/stream")
-async def stream_memory(board_id: uuid.UUID, current_user=Depends(require_user)):
-    return make_sse_response([RedisKeys.board_events(str(board_id))])
 
 
 @router.post("/boards/{board_id}/memory", status_code=status.HTTP_201_CREATED)

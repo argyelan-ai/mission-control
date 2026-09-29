@@ -2,7 +2,7 @@ from app.models.activity import ActivityEvent, Notification
 from app.models.agent import Agent, AgentMetrics
 from app.models.agent_template import AgentTemplate
 from app.models.approval import Approval
-from app.models.board import Board, BoardGroup, PlannerMessage, Project
+from app.models.board import Board, PlannerMessage, Project
 from app.models.install_log import InstallLog
 from app.models.chat import ChatMessage
 from app.models.content import ContentPipeline
@@ -49,7 +49,6 @@ __all__ = [
     "SkillCandidate",
     "User",
     "UserSettings",
-    "BoardGroup",
     "Board",
     "Project",
     "PlannerMessage",
