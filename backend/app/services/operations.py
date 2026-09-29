@@ -143,6 +143,7 @@ async def check_dispatch_allowed(
         if intent not in _REVIEW_INTENTS:
             return False, "Task in planning phase — dispatch blocked"
 
+    # rule: R-paused-no-dispatch - paused agents receive no dispatch
     # 3. Agent PAUSED
     if agent and agent.operational_mode == "paused":
         return False, f"Agent {agent.name} PAUSED"

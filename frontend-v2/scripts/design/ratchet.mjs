@@ -82,6 +82,7 @@ export function scan(srcDir) {
   return { totals, perFile };
 }
 
+// rule: R-design-ratchet - no new free pixel values or inline colours
 /** Compare totals with the baseline. Returns human-readable problems (empty = green). */
 export function compare(totals, baseline) {
   const problems = [];
