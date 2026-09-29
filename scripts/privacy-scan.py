@@ -133,6 +133,7 @@ def write_baseline(root: Path, found: dict[str, set[str]]) -> None:
     )
 
 
+# rule: R-privacy-scan - no new private names in the public tree
 def check(root: Path) -> int:
     found = scan(root)
     baseline = read_baseline(root)

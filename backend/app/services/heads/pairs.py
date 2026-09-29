@@ -171,6 +171,7 @@ async def list_pairs(session: AsyncSession, occupancy: dict | None = None) -> di
     return {"pairs": [p.to_dict() for p in pairs], "default_pair": default.to_dict() if default else None}
 
 
+# rule: R-local-first-default - default pair is always local, never cloud
 def default_pair(pairs: list[Pair]) -> Pair | None:
     """Always omp × the best local runtime — live first, then catalogue order.
     Never a cloud pair, not even when no local engine is running: then the
