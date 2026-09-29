@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { api } from "@/lib/api";
-import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS, STATUS_TEXT, alpha } from "@/lib/colors";
 import type { Runtime, RuntimeLiveStatus } from "@/lib/types";
 import { SlideOverPanel } from "@/components/shared/SlideOverPanel";
 import { BindAgentModal } from "@/components/shared/BindAgentModal";
@@ -29,6 +29,7 @@ import { MetaChip } from "@/components/shared/ListRow";
 import { panelCapabilities } from "./grouping";
 import { ContextSettingsPanel, loadStoredCtx } from "./ContextSettings";
 import { AutostartToggle } from "./AutostartToggle";
+import { useHeadConflictText } from "@/components/heads/HeadOccupancy";
 import { fmtCtx } from "@/lib/utils";
 
 // typeLabel inlined from RuntimeListCard.tsx (that component doesn't exist on
@@ -75,8 +76,8 @@ function ActionButton({
   variant: "success" | "danger" | "default";
 }) {
   const colors = {
-    success: { bg: `${C.online}14`, border: `${C.online}33`, text: C.online },
-    danger: { bg: `${C.error}14`, border: `${C.error}33`, text: C.error },
+    success: { bg: alpha(C.online, 0.08), border: alpha(C.online, 0.2), text: C.online },
+    danger: { bg: alpha(C.error, 0.08), border: alpha(C.error, 0.2), text: C.error },
     default: { bg: C.borderSubtle, border: C.borderSubtle, text: C.textMuted },
   };
   const c = colors[variant];
@@ -381,6 +382,9 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
   const effectiveState = runtime.state ?? "unknown";
   const canStart = effectiveState === "stopped";
   const canStop = effectiveState !== "stopped";
+  // GET /runtimes cuts a live probe off after a time limit; the runtime is
+  // then "unknown" for a known reason, which is worth showing everywhere.
+  const probeTimedOut = runtime.container_status === "probe_timeout";
 
   // Power-managed runtime (unsloth_porsche): box sleeps when idle. The backend
   // reports container_status "asleep" (:5555 down), "booted_no_model" (box awake,
@@ -395,10 +399,11 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
   // Mutations match the pre-Task-5 page.tsx's runtime card exactly:
   // same api calls, onSuccess/onError messages (via useTranslations("runtimes"),
   // same keys), invalidations.
+  const headConflictText = useHeadConflictText();
   const startMutation = useMutation({
     mutationFn: () => api.runtimes.start(runtime.id, storedCtx ?? undefined),
     onSuccess: (data) => { setActionMsg(data.message); invalidate(); },
-    onError: () => setActionMsg(t("startFailed")),
+    onError: (err: Error) => setActionMsg(headConflictText(err) ?? t("startFailed")),
   });
 
   const stopMutation = useMutation({
@@ -442,14 +447,18 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
           stopped/unknown by design — labeling them "Stopped" reads as an
           outage, so the state chip is shown only where it means something. */}
       <div className="px-4 pt-4 pb-1 flex items-center gap-2">
-        {(caps.lifecycle || !["stopped", "unknown"].includes(effectiveState)) && (
+        {(caps.lifecycle || probeTimedOut || !["stopped", "unknown"].includes(effectiveState)) && (
           <>
             <span
               className="w-1.5 h-1.5 rounded-full shrink-0"
               style={{ background: dotColor(effectiveState) }}
             />
-            <span className="text-xs" style={{ color: C.textSecondary }}>
-              {t(`states.${effectiveState}`)}
+            <span
+              className="text-xs"
+              style={{ color: C.textSecondary }}
+              title={probeTimedOut ? t("probeTimedOutHint") : undefined}
+            >
+              {probeTimedOut ? t("unknownProbeTimedOut") : t(`states.${effectiveState}`)}
             </span>
             <span style={{ color: C.borderSubtle }}>·</span>
           </>

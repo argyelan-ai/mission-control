@@ -171,6 +171,46 @@ block with buffering off and upgrade headers set covers everything.
 Voice is the exception that cannot be proxied over HTTP alone: LiveKit's RTC
 media uses ports 7881/tcp and 7882/udp directly on the host.
 
+## Stream authentication and logs
+
+Browsers cannot send an `Authorization` header on `EventSource` or
+`WebSocket`. Mission Control therefore opens every SSE stream and WebSocket
+with a **stream ticket**: right before each (re)connect the UI calls
+`POST /api/v1/auth/stream-ticket` (login token in the header) and puts only
+the returned ticket into the URL as `?ticket=…`. A ticket is random, bound to
+the user and to that one stream path, valid for 60 seconds
+(`STREAM_TICKET_TTL_SECONDS`) and consumed by the first connection.
+
+The login token itself is **not** accepted in a URL anymore. For one
+transition release, `ALLOW_QUERY_TOKEN_AUTH=true` in `.env` re-enables the old
+`?token=<login token>` form for an outdated custom client — leave it off
+otherwise: every proxy that logs request URIs would record a reusable
+credential.
+
+The shipped Caddyfile redacts both `token` and `ticket` query parameters on
+its default logger. **If you run your own Caddyfile** (for example
+`caddy/Caddyfile.local` for TLS), add the same global block at the very top:
+
+```caddyfile
+{
+	log default {
+		output stderr
+		format filter {
+			wrap json
+			request>uri query {
+				replace token REDACTED
+				replace ticket REDACTED
+				replace access_token REDACTED
+			}
+		}
+	}
+}
+```
+
+Any other proxy in front of MC (nginx, Traefik, a load balancer) should strip
+or mask these two query parameters in its access log as well. The backend
+already redacts them from its own logs (`app/log_redaction.py`).
+
 ## Security reminder
 
 Do not expose Mission Control to the public internet. The backend can control

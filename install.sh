@@ -90,7 +90,15 @@ if [ "$UPDATE" = 1 ]; then
     docker compose up -d
   else
     say "→ rebuilding locally ..."
+    # Plattenplatz-Preflight vor dem Bau (docker/shared/disk-preflight.sh).
+    # Ohne ihn stirbt der Bau mitten im Layer-Schreiben mit einem rohen
+    # "no space left on device" — nach Minuten, und ohne zu sagen, was zu tun
+    # ist. Fehlt die Bibliothek, bricht das Skript hier ab (set -e): ein
+    # stillschweigend uebersprungener Preflight waere schlimmer als gar keiner.
+    . ./docker/shared/disk-preflight.sh
+    mc_disk_preflight
     docker compose up --build -d
+    mc_build_cache_cleanup
   fi
   say "✅ Update complete (migrations ran inside the backend on start)."
   exit 0
@@ -175,7 +183,11 @@ if [ "$HERE" = 0 ] && docker compose pull backend frontend >/dev/null 2>&1; then
   docker compose up -d
 else
   say "→ building images locally (first build takes a few minutes) ..."
+  # Plattenplatz-Preflight, siehe Begruendung im Update-Zweig oben.
+  . ./docker/shared/disk-preflight.sh
+  mc_disk_preflight
   docker compose up --build -d
+  mc_build_cache_cleanup
 fi
 
 say "→ waiting for the API (migrations run inside the backend on start) ..."

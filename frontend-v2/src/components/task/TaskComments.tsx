@@ -1,21 +1,24 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { CommentCard } from "@/components/task/CommentCard";
 import { ReflectionForm } from "@/components/task/ReflectionForm";
 import type { Agent, Task } from "@/lib/types";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 
 interface TaskCommentsProps {
   task: Task;
   boardId: string;
   agents: Agent[];
+  /** Every change (> 0) focuses the comment input — "Reply" on the state card. */
+  focusSignal?: number;
 }
 
-export function TaskComments({ task, boardId, agents }: TaskCommentsProps) {
+export function TaskComments({ task, boardId, agents, focusSignal = 0 }: TaskCommentsProps) {
   const qc = useQueryClient();
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const agentMap = Object.fromEntries(
     agents.map((a) => [a.id, { name: a.name, emoji: a.emoji }])
@@ -29,6 +32,10 @@ export function TaskComments({ task, boardId, agents }: TaskCommentsProps) {
   const [newComment, setNewComment] = useState("");
   const [commentFilter, setCommentFilter] = useState<string>("all");
   const [newCommentType, setNewCommentType] = useState<string>("progress");
+
+  useEffect(() => {
+    if (focusSignal > 0) inputRef.current?.focus();
+  }, [focusSignal]);
 
   const addCommentMutation = useMutation({
     mutationFn: ({ content, type }: { content: string; type: string }) =>
@@ -91,7 +98,7 @@ export function TaskComments({ task, boardId, agents }: TaskCommentsProps) {
                 onClick={() => setNewCommentType(t)}
                 className="text-[10px] px-2 py-0.5 rounded-sm font-mono capitalize transition-colors cursor-pointer"
                 style={{
-                  backgroundColor: isActive ? `${color}33` : "var(--color-bg-surface)",
+                  backgroundColor: isActive ? alpha(color, 0.2) : "var(--color-bg-surface)",
                   color: isActive ? color : C.textMuted,
                   border: `1px solid ${isActive ? color : C.border}`,
                 }}
@@ -131,6 +138,8 @@ export function TaskComments({ task, boardId, agents }: TaskCommentsProps) {
                   : "Comment on progress... (Enter)"
               }
               aria-label="Add comment"
+              ref={inputRef}
+              data-comment-input
               className="flex-1 px-2.5 py-2 rounded-lg text-xs outline-none"
               style={{
                 backgroundColor: "var(--color-bg-surface)",

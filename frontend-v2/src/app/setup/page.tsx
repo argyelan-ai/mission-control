@@ -12,7 +12,7 @@ import { motion } from "framer-motion";
 import { Check, ExternalLink, Loader2, Rocket } from "lucide-react";
 import { AUTH_TOKEN_KEY, api } from "@/lib/api";
 import { AmbientBackground } from "@/components/layout/AmbientBackground";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 
 import type { GithubConfigUpdate, Priority, TaskStatus } from "@/lib/types";
 
@@ -71,6 +71,14 @@ export default function SetupWizardPage() {
   // Demo board (step 4)
   const [seeding, setSeeding] = useState(false);
   const [seeded, setSeeded] = useState(false);
+  // Demo data only on a fresh install. The wizard creates the first board
+  // only in step 4 (seedDemo) and registration creates none, so an existing
+  // board means this is not a fresh install — /setup stays reachable there,
+  // and one click used to write demo data into live data. Agents are not
+  // checked: the migrations seed a built-in agent on every fresh install.
+  // null = still checking; a failed check leaves the button available
+  // (a fresh install must never be blocked from finishing the wizard).
+  const [hasExistingData, setHasExistingData] = useState<boolean | null>(null);
 
   useEffect(() => {
     if (!localStorage.getItem(AUTH_TOKEN_KEY)) {
@@ -81,6 +89,10 @@ export default function SetupWizardPage() {
       .providers()
       .then(setProviders)
       .catch(() => setProviders([]));
+    api.boards
+      .list()
+      .then((boards) => setHasExistingData(boards.length > 0))
+      .catch(() => setHasExistingData(false));
   }, [router]);
 
   async function saveKey() {
@@ -123,6 +135,7 @@ export default function SetupWizardPage() {
   }
 
   async function seedDemo() {
+    if (hasExistingData !== false) return;
     setSeeding(true);
     setError("");
     try {
@@ -274,8 +287,8 @@ export default function SetupWizardPage() {
                   className="text-xs rounded-lg px-3 py-2"
                   style={{
                     color: "var(--color-error)",
-                    backgroundColor: `${C.error}14`,
-                    border: `1px solid ${C.error}26`,
+                    backgroundColor: alpha(C.error, 0.08),
+                    border: `1px solid ${alpha(C.error, 0.15)}`,
                   }}
                 >
                   {error}
@@ -348,8 +361,8 @@ export default function SetupWizardPage() {
                   className="text-xs rounded-lg px-3 py-2"
                   style={{
                     color: "var(--color-error)",
-                    backgroundColor: `${C.error}14`,
-                    border: `1px solid ${C.error}26`,
+                    backgroundColor: alpha(C.error, 0.08),
+                    border: `1px solid ${alpha(C.error, 0.15)}`,
                   }}
                 >
                   {githubError}
@@ -393,12 +406,14 @@ export default function SetupWizardPage() {
 
               <button
                 onClick={seedDemo}
-                disabled={seeding || seeded}
+                disabled={seeding || seeded || hasExistingData !== false}
                 className="w-full text-sm rounded-lg px-4 py-2.5 flex items-center justify-center gap-2 cursor-pointer transition-all duration-200 disabled:cursor-not-allowed"
                 style={{
                   border: `1px solid ${seeded ? C.online : C.border}`,
                   color: seeded ? C.online : "var(--color-text-primary)",
                   background: "var(--color-bg-surface)",
+                  // Locked (existing data, or still checking) must look locked.
+                  opacity: !seeded && hasExistingData !== false ? 0.5 : undefined,
                 }}
               >
                 {seeding && <Loader2 className="animate-spin" size={14} />}
@@ -410,6 +425,11 @@ export default function SetupWizardPage() {
                   t("createDemoBoard")
                 )}
               </button>
+              {hasExistingData && !seeded && (
+                <p className="text-xs -mt-2" style={{ color: "var(--color-text-muted)" }}>
+                  {t("demoLockedExisting")}
+                </p>
+              )}
 
               <a
                 href="https://github.com/argyelan-ai/mission-control/blob/main/docs/setup/first-agent.md"
@@ -430,8 +450,8 @@ export default function SetupWizardPage() {
                   className="text-xs rounded-lg px-3 py-2"
                   style={{
                     color: "var(--color-error)",
-                    backgroundColor: `${C.error}14`,
-                    border: `1px solid ${C.error}26`,
+                    backgroundColor: alpha(C.error, 0.08),
+                    border: `1px solid ${alpha(C.error, 0.15)}`,
                   }}
                 >
                   {error}

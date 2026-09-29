@@ -5,6 +5,7 @@ Loose linking — no cascade delete.
 """
 import uuid
 from datetime import datetime
+from app.utils import utcnow
 
 from sqlalchemy import DateTime, text
 from sqlmodel import Column, Field, SQLModel
@@ -21,6 +22,6 @@ class DeliverableReference(SQLModel, table=True):
         default=None, foreign_key="projects.id", index=True, nullable=True
     )
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),
     )

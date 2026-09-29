@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { ZoomIn, ZoomOut, Maximize2 } from "lucide-react";
+import { Info, ZoomIn, ZoomOut, Maximize2 } from "lucide-react";
 import AppShell from "@/components/layout/AppShell";
 import { OrgChart } from "./OrgChart";
 import { C } from "@/lib/colors";
@@ -89,6 +89,24 @@ export default function OfficeView() {
           </div>
           <ZoomCluster zoom={zoom} onIn={zoomIn} onOut={zoomOut} onReset={zoomReset} />
         </header>
+
+        {/* Static example data (org-chart-data.ts) — say so, so nobody reads
+            it as the live fleet. */}
+        <div
+          role="note"
+          className="shrink-0 mx-5 lg:mx-7 mb-3 flex items-start gap-2.5 rounded-md px-3 py-2"
+          style={{ background: C.bgSurface, border: `1px solid ${C.border}` }}
+        >
+          <Info size={14} className="mt-0.5 shrink-0" style={{ color: C.textMuted }} aria-hidden />
+          <div className="min-w-0">
+            <p className="text-xs font-medium" style={{ color: C.textPrimary }}>
+              {t("exampleBannerTitle")}
+            </p>
+            <p className="text-[11px] leading-snug" style={{ color: C.textMuted }}>
+              {t("exampleBannerBody")}
+            </p>
+          </div>
+        </div>
 
         {/* Outer scroll container — overflow-auto handles content taller
             than viewport at zoom > 1. The glass-surface lives on the INNER

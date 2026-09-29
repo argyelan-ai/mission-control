@@ -119,7 +119,11 @@ async def test_zombie_safety_net_for_dead_blocked_upstream(fake_redis):
         upstream_status="blocked", upstream_age_minutes=120,
         with_pending_approval=False,
     )
-    await _run_zombie_check(fake_redis)
+    from app.config import settings
+
+    # Approval-Pfad = Schalter aus (Lauf 4)
+    with patch.object(settings, "notice_only_escalations_enabled", False):
+        await _run_zombie_check(fake_redis)
     assert len(await _zombie_approvals(dependent.id)) == 1
 
 
@@ -130,7 +134,11 @@ async def test_zombie_for_failed_upstream_unchanged(fake_redis):
         upstream_status="failed", upstream_age_minutes=5,
         with_pending_approval=False,
     )
-    await _run_zombie_check(fake_redis)
+    from app.config import settings
+
+    # Approval-Pfad = Schalter aus (Lauf 4)
+    with patch.object(settings, "notice_only_escalations_enabled", False):
+        await _run_zombie_check(fake_redis)
     assert len(await _zombie_approvals(dependent.id)) == 1
 
 

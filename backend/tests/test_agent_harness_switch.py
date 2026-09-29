@@ -167,6 +167,49 @@ async def test_harness_change_forces_image_change(async_session):
     assert result.to_dict()["old_harness"] == "omp"
 
 
+@pytest.mark.asyncio
+async def test_switch_to_pluginless_harness_warns_about_plugins(async_session):
+    """ADR-084: der Wechsel muss seine Folgen melden — ein Agent mit
+    zugewiesenen CLI-Plugins bekommt beim Wechsel auf einen Harness ohne
+    Plugin-Unterstuetzung eine SICHTBARE Warnung im SwitchResult."""
+    rt_omp = await _mk_runtime(async_session, slug="omp-warn", runtime_type="omp")
+    agent = await _mk_agent(async_session, runtime_id=rt_omp.id, cli_plugins=["plug@src"])
+    agent.harness = "claude"
+    async_session.add(agent)
+    await async_session.commit()
+    await async_session.refresh(agent)
+
+    p = _side_effect_patches()
+    with p[0], p[1], p[2], p[3]:
+        result = await switch_agent_runtime(
+            async_session, agent, rt_omp.id, new_harness="omp"
+        )
+
+    warnings = result.to_dict()["warnings"]
+    assert any("CLI-Plugins" in w for w in warnings), warnings
+
+
+@pytest.mark.asyncio
+async def test_switch_between_plugin_harnesses_warns_nothing(async_session):
+    """Gegenrichtung: claude -> openclaude unterstuetzt Plugins weiter —
+    keine Capability-Warnung darf erscheinen."""
+    rt = await _mk_runtime(async_session, slug="cloud-warn", runtime_type="cloud")
+    agent = await _mk_agent(async_session, runtime_id=rt.id, cli_plugins=["plug@src"])
+    agent.harness = "claude"
+    async_session.add(agent)
+    await async_session.commit()
+    await async_session.refresh(agent)
+
+    p = _side_effect_patches()
+    with p[0], p[1], p[2], p[3]:
+        result = await switch_agent_runtime(
+            async_session, agent, rt.id, new_harness="openclaude"
+        )
+
+    warnings = result.to_dict()["warnings"]
+    assert not any("CLI-Plugins" in w for w in warnings), warnings
+
+
 # ── 4. Rollback restores harness + runtime on health failure ───────────────
 
 

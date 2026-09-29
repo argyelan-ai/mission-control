@@ -11,11 +11,14 @@
  */
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { createContext, useContext } from "react";
 import { C } from "@/lib/colors";
 
-// ── Markdown renderer — mirrors LegacyMemoryPage's `MarkdownContent` exactly
-// (same component config incl. code-block styling), so knowledge docs and
-// chat transcripts render identically.
+// ── Markdown renderer — grew out of LegacyMemoryPage's `MarkdownContent`
+// (same look for headings, tables, code). One deliberate divergence: the chat
+// fence carries its own horizontal scroller on the <pre> (below), because the
+// chat is the surface where a wide block can push the whole transcript
+// sideways on a phone; the memory page renders inside desktop scrollers.
 //
 // `compact` is the user-bubble register. Dispatch briefs are full documents
 // with h1/h2 sections, and rendering them at document scale inside a chat
@@ -23,6 +26,13 @@ import { C } from "@/lib/colors";
 // louder than the agent's answer, which is what the reader came for. Compact
 // flattens every heading to one weighted body step and drops the display
 // rhythm; the content is unchanged, only its volume. ────────────────────────
+
+// Ein gefencer Block (<pre><code>) ist CODE, egal ob er einen Language-Tag
+// traegt — "```" ohne Tag ist im Agenten-Alltag der Normalfall. Ueber den
+// Context bekommt das <code> das mit und rendert ohne Inline-Pill-Styling;
+// das <pre> selbst ist der Block-Kasten und der horizontale Scroller.
+const InCodeBlock = createContext(false);
+
 export function MarkdownContent({ content, compact = false }: { content: string; compact?: boolean }) {
   const headingClass = compact ? "text-[14px] font-semibold mb-1 mt-2.5" : null;
   return (
@@ -73,11 +83,26 @@ export function MarkdownContent({ content, compact = false }: { content: string;
             {children}
           </li>
         ),
+        pre: ({ children }) => (
+          // Der Scroller sitzt hier, nicht auf dem <code>: ein gefencer Block
+          // ohne Language-Tag erreicht den Inline-Zweig nie als "isBlock" —
+          // und ein <pre> ohne eigenen Scroller zieht mit `white-space: pre`
+          // das ganze Transkript seitwaerts, obwohl seine Zeilen nur
+          // Leerzeichen enthalten (Operator-Befund 19.09.2026, iPhone:
+          // scrollWidth 568 vs clientWidth 390). overflow-wrap hilft in einem
+          // <pre> nicht — kein Wrap-Point, kein Umbruch.
+          <InCodeBlock.Provider value={true}>
+            <pre
+              className="block px-4 py-3 rounded-dense text-xs font-mono mb-3 overflow-x-auto"
+              style={{ background: "var(--color-bg-elevated)", color: C.accent, border: "1px solid var(--color-border)" }}
+            >
+              {children}
+            </pre>
+          </InCodeBlock.Provider>
+        ),
         code: ({ children, className }) => {
-          const isBlock = className?.includes("language-");
-          return isBlock ? (
-            <code className="block px-4 py-3 rounded-dense text-xs font-mono mb-3 overflow-x-auto"
-              style={{ background: "var(--color-bg-elevated)", color: C.accent, border: "1px solid var(--color-border)" }}>
+          return useContext(InCodeBlock) ? (
+            <code className="block text-xs font-mono" style={{ color: C.accent }}>
               {children}
             </code>
           ) : (

@@ -1,6 +1,6 @@
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Form, HTTPException
 from fastapi.responses import HTMLResponse
@@ -237,7 +237,7 @@ async def _handle_x_post_resolution(
         if pipeline is not None:
             pipeline.published_url = result["url"]
             pipeline.published_platform = "twitter"
-            pipeline.published_at = datetime.utcnow()
+            pipeline.published_at = datetime.now(timezone.utc)
             pipeline.status = "published"
             session.add(pipeline)
             await session.commit()
@@ -394,15 +394,24 @@ async def resolve_approval(
                 await record_task_event(
                     session, task.id, "blocked", "inbox",
                     changed_by="user", reason="blocker_approval_approved",
+                    actor_user_id=current_user.id,
+                    actor_label=current_user.preferred_name or current_user.name,
                 )
                 await session.commit()
                 logger.info("Task %s unblocked → inbox for re-dispatch (note: %s)", task.id, note[:50])
 
-                # Trigger re-dispatch immediately (same as the initial dispatch)
-                from app.services.dispatch import auto_dispatch_task
+                # Trigger re-dispatch immediately (same as the initial dispatch).
+                # Guarded (not a bare auto_dispatch_task call): this fires as a
+                # decoupled background task, so by the time it actually runs the
+                # card may already have been picked up and moved on through the
+                # normal poll path (incident 2026-09-13, card 4c9bb492/G5) —
+                # redispatch_after_blocker_answer re-checks status/run_control
+                # immediately before dispatching instead of trusting this stale
+                # snapshot.
+                from app.services.dispatch import redispatch_after_blocker_answer
                 from app.utils import create_tracked_task
                 create_tracked_task(
-                    auto_dispatch_task(str(task.id), str(task.board_id))
+                    redispatch_after_blocker_answer(task.id, task.board_id)
                 )
             elif payload.status == "rejected":
                 # The operator wants to cancel the task
@@ -416,6 +425,8 @@ async def resolve_approval(
                 await record_task_event(
                     session, task.id, "blocked", "failed",
                     changed_by="user", reason="blocker_approval_rejected",
+                    actor_user_id=current_user.id,
+                    actor_label=current_user.preferred_name or current_user.name,
                 )
                 await session.commit()
 
@@ -479,8 +490,15 @@ async def resolve_approval(
 
         task = await session.get(TaskModel, approval.task_id)
         if task and task.status == "blocked":
-            task, _ = await lock_and_set(session, task.id, "in_progress", actor="operator")
+            task, _from_status = await lock_and_set(session, task.id, "in_progress", actor="operator")
             session.add(task)
+            from app.services.task_lifecycle import record_task_event
+            await record_task_event(
+                session, task.id, _from_status, "in_progress",
+                changed_by="user", reason="clarification_answered",
+                actor_user_id=current_user.id,
+                actor_label=current_user.preferred_name or current_user.name,
+            )
 
             answer_text = payload.resolver_note or "(Keine Antwort — nur bestaetigt)"
             agent = await session.get(Agent, approval.agent_id)
@@ -947,14 +965,19 @@ async def quick_resolve_confirm(
                 await record_task_event(
                     session, task.id, "blocked", "inbox",
                     changed_by="user", reason="quick_resolve_unblock_redispatch",
+                    actor_label="quick-resolve-link",
                 )
                 await session.commit()
                 logger.info("Task %s unblocked via Telegram → inbox for re-dispatch", task.id)
 
-                from app.services.dispatch import auto_dispatch_task
+                # Guarded — see redispatch_after_blocker_answer's docstring
+                # (same race as the PATCH-based resolve above: the actual
+                # dispatch fires as a decoupled background task and must not
+                # trust this now-stale snapshot).
+                from app.services.dispatch import redispatch_after_blocker_answer
                 from app.utils import create_tracked_task
                 create_tracked_task(
-                    auto_dispatch_task(str(task.id), str(task.board_id))
+                    redispatch_after_blocker_answer(task.id, task.board_id)
                 )
             elif status == "rejected":
                 task, _ = await lock_and_set(session, task.id, "failed", actor="operator")
@@ -966,6 +989,7 @@ async def quick_resolve_confirm(
                 await record_task_event(
                     session, task.id, "blocked", "failed",
                     changed_by="user", reason="telegram_blocker_rejected",
+                    actor_label="quick-resolve-link",
                 )
                 await session.commit()
 

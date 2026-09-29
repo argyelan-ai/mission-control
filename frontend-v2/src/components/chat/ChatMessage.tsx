@@ -1,11 +1,12 @@
 "use client";
 
 import { AlertTriangle, Clock, Pencil, Users, X } from "lucide-react";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import { MarkdownContent } from "@/components/chat/MarkdownContent";
 import { splitAttachments } from "./attachments";
 import { ChatAttachmentTile } from "./ChatAttachmentTile";
 import { ClampedContent, USER_CLAMP_MAX_PX } from "./ClampedContent";
+import { ChatErrorCard } from "./ChatErrorCard";
 import { EventCard } from "./EventCard";
 import type { MessageEvent } from "@/lib/chatTypes";
 
@@ -17,7 +18,15 @@ import type { Harness, HostHarness } from "@/lib/types";
 
 function ClampedUserContent({ text }: { text: string }) {
   return (
-    <ClampedContent text={text} testId="user-message-content" className="[&>*:last-child]:mb-0">
+    // `break-words` ist hier tragend, nicht kosmetisch: die Blase ist ein
+    // Flex-Kind mit `max-w-[85%]`, ihre Breite kommt also aus ihrem Inhalt
+    // (shrink-to-fit). Ohne Umbruch-Regel zaehlt ein unbrechbares Wort mit
+    // seiner vollen Breite zum min-content, die Blase waechst darueber hinaus
+    // und gibt dem Transkript-Rollbalken eine waagerechte Rollstrecke — jede
+    // Zeile des Verlaufs beginnt dann ausserhalb des Bildes.
+    // `min-w-0` am selben Element hilft dagegen nicht: es deckelt die
+    // Mindestbreite, nicht die aus dem Inhalt abgeleitete Maximalbreite.
+    <ClampedContent text={text} testId="user-message-content" className="break-words [&>*:last-child]:mb-0">
       <MarkdownContent content={text} compact />
     </ClampedContent>
   );
@@ -83,6 +92,12 @@ export function ChatMessage({
   // hat (Operator-Befund 19.08.2026: "ganz komische sachen"). Sie bekommt
   // darum eine eigene, ruhige Zeile: erkennbar fremd, ohne den Verlauf zu
   // dominieren.
+  // Eine Stoerung des Chat-Daemons ist keine Rueckmeldung, sondern ein
+  // Zustand — sie bekommt die eigene, rote Karte statt des neutralen
+  // Streifens (Spec docs/specs/chat-over-acp.md).
+  if (ev.role === "teammate" && ev.source?.kind === "error") {
+    return <ChatErrorCard ev={ev} />;
+  }
   if (ev.role === "teammate" && ev.source) {
     return <EventCard ev={ev} source={ev.source} live={live} />;
   }
@@ -161,7 +176,7 @@ export function ChatMessage({
               color: C.textSecondary,
               borderRight: `2px solid ${C.borderSubtle}`,
               borderRadius: "var(--radius-sm)",
-              background: `${C.bgElevated}80`,
+              background: alpha(C.bgElevated, 0.5),
             }}
           >
             <span className="sr-only">Du</span>
@@ -225,7 +240,7 @@ export function ChatMessage({
           className="max-w-[85%] min-w-0 px-3.5 py-2.5 text-[14px] leading-[1.6] transition-opacity"
           style={{
             background: C.bgElevated,
-            border: `1px solid ${unconfirmed ? `${C.warning}55` : C.border}`,
+            border: `1px solid ${unconfirmed ? alpha(C.warning, 0.33) : C.border}`,
             borderRadius: "var(--radius-xl)",
             // Volle Deckkraft, auch waehrend "pending": Der Server hat die
             // Zustellung mit 204 quittiert, die Nachricht IST unterwegs. Bis
@@ -292,7 +307,7 @@ export function ChatMessage({
           `ch` so it stays a measure and not a magic pixel number; below md the
           viewport is narrower than the cap anyway, so this is desktop-only in
           effect. */}
-      <div className="text-[14px] leading-[1.7] max-w-[76ch] min-w-0 [&>*:last-child]:mb-0">
+      <div className="text-[14px] leading-[1.7] max-w-[76ch] min-w-0 break-words [&>*:last-child]:mb-0">
         <MarkdownContent content={ev.text} />
       </div>
     </div>

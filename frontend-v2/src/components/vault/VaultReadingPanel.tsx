@@ -8,7 +8,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, Check, Link2, Pencil, Trash2, X } from "lucide-react";
 import { api } from "@/lib/api";
 import type { VaultNote } from "@/lib/types";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import { useVaultNote } from "@/hooks/useVaultNote";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { VaultMarkdown } from "./VaultMarkdown";
@@ -21,9 +21,15 @@ import {
 } from "./VaultNoteRow";
 import { colorForAgent } from "./agentColors";
 import { ConfirmDeleteModal } from "./ConfirmDeleteModal";
+import { CappedList } from "@/components/shared/CappedList";
+import { useEscapeKey } from "@/hooks/useEscapeKey";
 
 // ── Phase E Task-Klammer: "Verwandt"-Sektion ──────────────────────────────────
 
+
+/** Related starts folded: a long list (run records collect many) otherwise
+ *  pushes the note body below the fold. */
+const RELATED_FOLDED = 3;
 
 function RelatedNotesSection({
   taskId,
@@ -71,14 +77,14 @@ function RelatedNotesSection({
           {t("related")} · {others.length}
         </span>
       </div>
-      <ul className="space-y-1">
-        {others.slice(0, 8).map((n) => (
-          <li key={n.path}>
+      <CappedList maxRows={RELATED_FOLDED} role="list" className="gap-1" fadeTo="transparent">
+        {others.map((n) => (
+          <div role="listitem" key={n.path}>
             <button
               type="button"
               onClick={() => onSelectNote?.(n.path)}
               disabled={!onSelectNote}
-              className="w-full text-left flex items-center gap-2 rounded-sm px-1.5 py-0.5 transition-colors hover:bg-white/[0.04] disabled:opacity-60 disabled:cursor-default"
+              className="w-full text-left flex items-center gap-2 rounded-sm px-1.5 py-0.5 transition-colors hover:bg-[var(--color-overlay)]/[0.04] disabled:opacity-60 disabled:cursor-default"
               style={{ fontSize: "12px" }}
             >
               <span
@@ -113,21 +119,9 @@ function RelatedNotesSection({
                 </span>
               )}
             </button>
-          </li>
+          </div>
         ))}
-        {others.length > 8 && (
-          <li
-            className="font-mono italic"
-            style={{
-              fontSize: "10px",
-              color: "var(--color-text-muted)",
-              paddingLeft: "1.5rem",
-            }}
-          >
-            {t("andMore", { count: others.length - 8 })}
-          </li>
-        )}
-      </ul>
+      </CappedList>
     </div>
   );
 }
@@ -280,10 +274,17 @@ function PanelContent({
   }, [isEditing, handleSave, cancelEdit, saveMutation.isPending]);
 
   return (
-    <div className="flex flex-col h-full min-h-0">
+    // One scroll container for masthead, Related and body: with the masthead
+    // pinned above an inner scroller, a note with many related entries left
+    // the body ~89 px at 1440×900.
+    <div
+      ref={scrollRef}
+      className="h-full min-h-0 overflow-y-auto overflow-x-hidden scrollbar-none"
+      style={{ scrollbarWidth: "none", msOverflowStyle: "none" } as React.CSSProperties}
+    >
       {/* Panel header — Editorial Codex masthead */}
       <div
-        className="shrink-0 px-7 py-6"
+        className="px-7 py-6"
         style={{ borderBottom: "1px solid var(--color-border)" }}
       >
         <div className="flex items-start justify-between gap-3">
@@ -325,8 +326,8 @@ function PanelContent({
                   className="rounded-sm p-1.5 transition-colors flex items-center gap-1.5 max-md:min-h-11 max-md:min-w-11 max-md:justify-center"
                   style={{
                     color: C.online,
-                    background: "rgba(52,211,153,0.08)",
-                    border: "1px solid rgba(52,211,153,0.25)",
+                    background: alpha(C.online, 0.08),
+                    border: `1px solid ${alpha(C.online, 0.25)}`,
                     cursor: saveMutation.isPending ? "default" : "pointer",
                   }}
                 >
@@ -383,7 +384,7 @@ function PanelContent({
                   onMouseEnter={(e) => {
                     (e.currentTarget as HTMLButtonElement).style.color = STATUS_TEXT.error;
                     (e.currentTarget as HTMLButtonElement).style.background =
-                      "rgba(239,68,68,0.08)";
+                      alpha(C.error, 0.08);
                   }}
                   onMouseLeave={(e) => {
                     (e.currentTarget as HTMLButtonElement).style.color =
@@ -408,9 +409,9 @@ function PanelContent({
               fontSize: "9.5px",
               letterSpacing: "0.14em",
               padding: "3px 7px",
-              background: `${agentColor}1A`,
+              background: alpha(agentColor, 0.1),
               color: agentColor,
-              border: `1px solid ${agentColor}38`,
+              border: `1px solid ${alpha(agentColor, 0.22)}`,
               lineHeight: 1,
             }}
           >
@@ -544,8 +545,8 @@ function PanelContent({
           <div
             className="mt-3 rounded-md px-3 py-2 flex items-center gap-2"
             style={{
-              background: "rgba(239,68,68,0.08)",
-              border: "1px solid rgba(239,68,68,0.25)",
+              background: alpha(C.error, 0.08),
+              border: `1px solid ${alpha(C.error, 0.25)}`,
               fontSize: "12px",
               color: STATUS_TEXT.error,
             }}
@@ -557,11 +558,7 @@ function PanelContent({
       </div>
 
       {/* Content area */}
-      <div
-        ref={scrollRef}
-        className="flex-1 overflow-y-auto overflow-x-hidden px-6 py-6 scrollbar-none"
-        style={{ scrollbarWidth: "none", msOverflowStyle: "none" } as React.CSSProperties}
-      >
+      <div className="px-6 py-6">
         {isLoading && !isEditing && (
           <div className="space-y-3 animate-pulse">
             {Array.from({ length: 8 }).map((_, i) => (
@@ -693,14 +690,7 @@ function MobileOverlayPanel({
   useBodyScrollLock(true);
 
   // Escape closes the sheet — secondary path next to the visible Back button.
-  useEffect(() => {
-    if (!onClose) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [onClose]);
+  useEscapeKey(() => onClose?.(), Boolean(onClose));
 
   if (!mounted) return null;
 

@@ -29,6 +29,14 @@
     <string>/Users/YOUR_USER/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
     <key>HOME</key>
     <string>/Users/YOUR_USER</string>
+    <!-- OPTIONAL — chat over ACP (docs/specs/chat-over-acp.md): with this set
+         to "acp" the bridge drives one long-lived `hermes acp` session and
+         starts NO tmux TUI; the Sessions chat becomes Hermes' only interface.
+         Omit the key (or set "native") for the classic tmux path. -->
+    <!--
+    <key>HERMES_DRIVER</key>
+    <string>acp</string>
+    -->
   </dict>
 </dict>
 </plist>

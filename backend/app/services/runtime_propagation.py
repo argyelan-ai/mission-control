@@ -41,6 +41,7 @@ from app.redis_client import RedisKeys, get_redis
 from app.services.activity import emit_event
 from app.services.agent_runtime_switch import (
     HEALTH_TIMEOUT_RESTART_OMP,
+    OMP_READY_SIGNALS,
     _acquire_lock,
     _lock_key,
     _release_lock,
@@ -67,7 +68,7 @@ _FAIL_TTL = 3600  # failure counter window (seconds)
 _GIVEUP_COOLDOWN = 900
 #: Health-Frist des Rueckfall-Neustarts fuer alle Nicht-omp-Harnesses.
 _SYNC_HEALTH_TIMEOUT = 60
-_OMP_READY_SIGNALS = ("╭─", "❯")  # omp TUI prompt glyphs (ADR-049)
+_OMP_READY_SIGNALS = OMP_READY_SIGNALS  # omp TUI glyphs + ACP sentinel (ADR-049, fix omp-acp-no-tui-window)
 
 #: Das Skript im omp-Image, das ``models.yml`` + ``omp.env`` schreibt
 #: (docker/omp-bridge/render-omp-config.sh, ADR-078). Liegt als Symlink in

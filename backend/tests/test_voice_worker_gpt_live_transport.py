@@ -25,8 +25,9 @@ network/key needed. Same skip-if-deps-missing pattern as
 test_voice_worker_realtime_provider.py: the backend pytest venv has no
 livekit installed, so the _build_live_transport tests skip there. Run them
 for real inside an image built from the regular voice_worker/Dockerfile (see
-docs/decisions/083), which has both livekit-agents core and the vorab
-GPTLiveModel plugin installed — that is the authoritative run for those.
+docs/decisions/083), which has both livekit-agents core and the GPTLiveModel
+plugin (livekit-plugins-openai >= 1.8.1) installed — that is the
+authoritative run for those.
 """
 from __future__ import annotations
 
@@ -62,7 +63,8 @@ def _require_gpt_live(voice):
     if not voice._GPT_LIVE_AVAILABLE:
         pytest.skip(
             "GPTLiveModel not installed on this interpreter — run inside "
-            "the regular voice_worker/Dockerfile image (LiveKit PR #7212)."
+            "the regular voice_worker/Dockerfile image "
+            "(livekit-plugins-openai >= 1.8.1)."
         )
 
 

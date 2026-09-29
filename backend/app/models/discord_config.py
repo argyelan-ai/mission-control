@@ -12,6 +12,7 @@ guild_id + category_id + bot_configured triplet.
 """
 import uuid
 from datetime import datetime
+from app.utils import utcnow
 
 from sqlalchemy import DateTime, text
 from sqlmodel import Column, Field, SQLModel
@@ -25,14 +26,14 @@ class DiscordConfig(SQLModel, table=True):
     category_id: str | None = None
     bot_configured: bool = False
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),
     )
     updated_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(
             DateTime(timezone=True),
             server_default=text("NOW()"),
-            onupdate=datetime.utcnow,
+            onupdate=utcnow,
         ),
     )

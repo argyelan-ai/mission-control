@@ -387,6 +387,86 @@ async def test_a_serving_engine_ends_the_memory_prep(async_session, fake_redis):
 
 
 @pytest.mark.asyncio
+async def test_a_broken_runtime_probe_does_not_skip_the_orphan_sweep(async_session, fake_redis):
+    """Fix C: `_tick_inner`'s probe loop has no
+    per-runtime try/except (runtime_watcher.py:243-244) — if `_probe_one`
+    raises for one runtime, the exception propagates straight out of
+    `_tick_inner`, and `host_memory_prep.recover_orphaned_preps()` (the
+    30-minute orphan sweep, called right after the loop) never runs THAT
+    tick at all. A single flaky SSH probe on one box then costs every OTHER
+    box's orphaned dropper another 90s+ wait. Two runtimes, one whose probe
+    blows up: the sweep must still fire, and the healthy runtime must still
+    get its live state written, regardless of iteration order."""
+    healthy = await _mk_runtime(async_session, slug="healthy", container="mc-healthy")
+    broken = await _mk_runtime(async_session, slug="broken", container="mc-broken")
+    docker = FakeDocker()
+    watcher = RuntimeWatcher(interval=90)
+
+    async def _probe(runtime):
+        if runtime.slug == broken.slug:
+            raise RuntimeError("boom — SSH hiccup mid-probe")
+        return _probed("deepseek-v4-flash")
+
+    sweep = AsyncMock(return_value=[])
+    with _watcher_stack(
+        docker, fake_redis,
+        extra=[
+            patch("app.services.runtime_watcher.probe_runtime_model_info",
+                  new=AsyncMock(side_effect=_probe)),
+            patch("app.services.runtime_watcher.host_memory_prep.recover_orphaned_preps",
+                  new=sweep),
+        ],
+    ):
+        await watcher.tick(session=async_session)
+
+    sweep.assert_awaited_once()
+    live = await fake_redis.get(RedisKeys.runtime_live("healthy"))
+    assert live is not None
+
+
+@pytest.mark.asyncio
+async def test_a_db_error_mid_probe_does_not_poison_the_session_for_later_runtimes(
+    async_session, fake_redis
+):
+    """Fix C's except catches DB errors too, not just SSH/transport ones.
+    Left unhandled, a DB error mid-probe leaves the AsyncSession in a failed
+    state (PendingRollbackError on every later statement in the same
+    transaction) — so without a rollback right there in the except, catching
+    the exception buys nothing: every runtime probed afterwards in the same
+    tick would still fail, just with a different error message. `broken` is
+    created first so it is probed before `healthy` in slug order."""
+    from sqlalchemy.exc import SQLAlchemyError
+
+    await _mk_runtime(async_session, slug="broken", container="mc-broken")
+    await _mk_runtime(async_session, slug="healthy", container="mc-healthy")
+    docker = FakeDocker()
+    watcher = RuntimeWatcher(interval=90)
+
+    async def _probe(runtime):
+        # Compared against the literal, not a live attribute read on a
+        # runtime object the loop's own rollback (after the first call
+        # raises) will have expired by the second call.
+        if runtime.slug == "broken":
+            raise SQLAlchemyError("db hiccup mid-probe")
+        return _probed("deepseek-v4-flash")
+
+    rollback_spy = AsyncMock(wraps=async_session.rollback)
+    with _watcher_stack(
+        docker, fake_redis,
+        extra=[
+            patch("app.services.runtime_watcher.probe_runtime_model_info",
+                  new=AsyncMock(side_effect=_probe)),
+            patch.object(async_session, "rollback", rollback_spy),
+        ],
+    ):
+        await watcher.tick(session=async_session)
+
+    rollback_spy.assert_awaited()
+    live = await fake_redis.get(RedisKeys.runtime_live("healthy"))
+    assert live is not None
+
+
+@pytest.mark.asyncio
 async def test_the_tick_sweeps_orphaned_memory_preps(async_session, fake_redis):
     await _mk_runtime(async_session, slug="sweeper", container="mc-sweeper")
     docker = FakeDocker()

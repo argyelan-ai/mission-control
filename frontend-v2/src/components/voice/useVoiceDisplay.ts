@@ -13,7 +13,8 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getToken } from "@/lib/api";
+import { getToken } from "@/lib/authToken";
+import { openTicketedWebSocket } from "@/lib/streamTicket";
 import type { DisplayCard, DisplayCardMessage } from "./cards/types";
 
 const MAX_CARDS = 8;
@@ -30,42 +31,39 @@ export function useVoiceDisplay(enabled: boolean) {
     const token = getToken();
     if (!token) return;
 
-    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsUrl = `${proto}//${window.location.host}/api/v1/vault/voice-display?token=${token}`;
-
     closingRef.current = false;
-    let ws: WebSocket | null = new WebSocket(wsUrl);
+    // Single-use stream ticket instead of the login token in the URL.
+    const cleanup = openTicketedWebSocket("/api/v1/vault/voice-display", (ws) => {
+      ws.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(ev.data as string) as Partial<DisplayCardMessage> & {
+            type?: string;
+          };
+          if (msg.type === "ping") return;
+          if (!msg.kind || !msg.data) return;
+          const card: DisplayCard = {
+            ...(msg as DisplayCardMessage),
+            // Stable id for AnimatePresence keying — backend doesn't provide
+            // one, the timestamp + kind + a short random suffix is unique enough.
+            id: `${msg.kind}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          };
+          setCards((prev) => {
+            const next = [card, ...prev];
+            return next.length > MAX_CARDS ? next.slice(0, MAX_CARDS) : next;
+          });
+        } catch (err) {
+          console.error("[useVoiceDisplay] parse error:", err);
+        }
+      };
 
-    ws.onmessage = (ev) => {
-      try {
-        const msg = JSON.parse(ev.data as string) as Partial<DisplayCardMessage> & {
-          type?: string;
-        };
-        if (msg.type === "ping") return;
-        if (!msg.kind || !msg.data) return;
-        const card: DisplayCard = {
-          ...(msg as DisplayCardMessage),
-          // Stable id for AnimatePresence keying — backend doesn't provide
-          // one, the timestamp + kind + a short random suffix is unique enough.
-          id: `${msg.kind}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        };
-        setCards((prev) => {
-          const next = [card, ...prev];
-          return next.length > MAX_CARDS ? next.slice(0, MAX_CARDS) : next;
-        });
-      } catch (err) {
-        console.error("[useVoiceDisplay] parse error:", err);
-      }
-    };
-
-    ws.onerror = (err) => {
-      console.warn("[useVoiceDisplay] WS error:", err);
-    };
+      ws.onerror = (err) => {
+        console.warn("[useVoiceDisplay] WS error:", err);
+      };
+    });
 
     return () => {
       closingRef.current = true;
-      ws?.close();
-      ws = null;
+      cleanup();
     };
   }, [enabled]);
 

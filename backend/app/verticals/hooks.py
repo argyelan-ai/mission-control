@@ -177,3 +177,74 @@ async def run_approval_resolved_hooks(session: Any, approval: Any, resolution_st
             logger.exception(
                 "approval_resolved hook %s failed", getattr(hook, "__name__", hook)
             )
+
+
+# Async providers for the Home page alert strip ("something needs a look").
+# Signature: async (session) -> list[dict]. Each dict is one alert:
+#   {
+#     "id": str,                          # stable key (React list key)
+#     "severity": "info" | "warning" | "critical",
+#     "title": str | {"de": str, "en": str},   # one line, operator language
+#     "detail": str | {"de": str, "en": str} | None,  # optional hover text
+#     "href": str | None,                 # optional in-app link, e.g. "/x"
+#   }
+# Pull-based on purpose: the alert is computed from live state on every
+# Home load, so it disappears by itself once the cause is fixed — no
+# "resolved" bookkeeping, no stale banner. Registered by verticals whose
+# background feeds can go quiet without anyone noticing (e.g. a crawler
+# that was switched off). A raising provider is logged and skipped, and a
+# malformed alert is dropped — one broken vertical must never break Home.
+home_alert_providers: list[Callable[..., Awaitable[list[dict]]]] = []
+
+_HOME_ALERT_SEVERITIES = ("info", "warning", "critical")
+
+
+def _normalize_home_alert(raw: Any) -> dict | None:
+    """Return a clean alert dict, or None if the provider sent garbage."""
+    if not isinstance(raw, dict):
+        return None
+    alert_id = raw.get("id")
+    title = raw.get("title")
+    if not isinstance(alert_id, str) or not alert_id:
+        return None
+    if not (isinstance(title, str) and title) and not (
+        isinstance(title, dict) and any(isinstance(v, str) and v for v in title.values())
+    ):
+        return None
+    severity = raw.get("severity")
+    if severity not in _HOME_ALERT_SEVERITIES:
+        severity = "warning"
+    href = raw.get("href")
+    # In-app links only: an alert must not become an off-site redirect.
+    if not (isinstance(href, str) and href.startswith("/") and not href.startswith("//")):
+        href = None
+    detail = raw.get("detail")
+    if not isinstance(detail, (str, dict)):
+        detail = None
+    return {"id": alert_id, "severity": severity, "title": title, "detail": detail, "href": href}
+
+
+async def collect_home_alerts(session: Any) -> list[dict]:
+    """Run all home_alert_providers; skip raising ones, drop malformed alerts."""
+    import logging
+
+    logger = logging.getLogger("mc.verticals.hooks")
+    alerts: list[dict] = []
+    for provider in home_alert_providers:
+        try:
+            raw_alerts = await provider(session)
+        except Exception:
+            logger.exception(
+                "home_alert provider %s failed", getattr(provider, "__name__", provider)
+            )
+            continue
+        for raw in raw_alerts or []:
+            alert = _normalize_home_alert(raw)
+            if alert is None:
+                logger.warning(
+                    "home_alert provider %s sent a malformed alert — dropped",
+                    getattr(provider, "__name__", provider),
+                )
+                continue
+            alerts.append(alert)
+    return alerts

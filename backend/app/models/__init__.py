@@ -6,9 +6,6 @@ from app.models.board import Board, BoardGroup, PlannerMessage, Project
 from app.models.install_log import InstallLog
 from app.models.chat import ChatMessage
 from app.models.content import ContentPipeline
-from app.models.storyboard import Storyboard
-from app.models.video_performance import VideoPerformance
-from app.models.newsletter import NewsletterIssue
 from app.models.credential import Credential
 from app.models.deploy_history import DeployHistory
 from app.models.discord_config import DiscordConfig
@@ -43,8 +40,6 @@ from app.models.local_recipe import LocalRecipe  # noqa: F401
 from app.models.runtime_schedule import RuntimeSchedule, RuntimeScheduleRun  # noqa: F401
 from app.models.project_phase import ProjectPhase  # noqa: F401
 from app.models.deliverable_reference import DeliverableReference  # noqa: F401
-from app.models.news import NewsSource, NewsArticle, NewsPostSchedule  # noqa: F401
-from app.models.trend import TrendSignal, ViralShortsSettings  # noqa: F401
 from app.models.task_attempt_audit import TaskAttemptAudit  # noqa: F401
 from app.models.model_usage import ModelUsageEvent, ModelPrice, ModelUsageHarvestState  # noqa: F401
 from app.models.file_index import FileIndexEntry  # noqa: F401
@@ -88,9 +83,6 @@ __all__ = [
     "BoardMemory",
     "ChatMessage",
     "ContentPipeline",
-    "Storyboard",
-    "VideoPerformance",
-    "NewsletterIssue",
     "Credential",
     "DeployHistory",
     "DiscordConfig",
@@ -111,11 +103,6 @@ __all__ = [
     "RuntimeScheduleRun",
     "ProjectPhase",
     "DeliverableReference",
-    "NewsSource",
-    "NewsArticle",
-    "NewsPostSchedule",
-    "TrendSignal",
-    "ViralShortsSettings",
     "TaskAttemptAudit",
     "ModelUsageEvent",
     "ModelPrice",

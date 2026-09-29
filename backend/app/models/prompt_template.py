@@ -8,6 +8,7 @@ editable without falsifying history.
 
 import uuid
 from datetime import datetime
+from app.utils import utcnow
 
 from sqlalchemy import JSON, DateTime, Text, text
 from sqlmodel import Column, Field, SQLModel
@@ -24,14 +25,14 @@ class PromptTemplate(SQLModel, table=True):
         sa_column=Column(JSON, nullable=False, server_default=text("'[]'")),
     )
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),
     )
     updated_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(
             DateTime(timezone=True),
             server_default=text("NOW()"),
-            onupdate=datetime.utcnow,
+            onupdate=utcnow,
         ),
     )

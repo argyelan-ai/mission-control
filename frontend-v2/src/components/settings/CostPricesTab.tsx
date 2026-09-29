@@ -15,7 +15,7 @@ import {
 import { api } from "@/lib/api";
 import type { ModelPrice, ModelPriceCreate, UnmatchedModel } from "@/lib/types";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import { cn } from "@/lib/utils";
 
 // Shared styles (1:1 from settings/page.tsx)
@@ -567,7 +567,7 @@ export function CostPricesTab() {
               </span>
               <span
                 className="text-[10px] px-1.5 py-0.5 rounded-sm tabular-nums"
-                style={{ backgroundColor: `${C.warning}1F`, color: C.warning }}
+                style={{ backgroundColor: alpha(C.warning, 0.12), color: C.warning }}
               >
                 {unmatched!.length}
               </span>

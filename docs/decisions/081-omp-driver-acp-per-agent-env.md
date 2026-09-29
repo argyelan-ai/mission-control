@@ -1,6 +1,6 @@
 # ADR-081 — Live auf ACP: OMP_DRIVER per Agent-Env im Renderer statt Pane
 
-**Status:** Accepted
+**Status:** Superseded by [ADR-084](084-omp-acp-harness-property.md) — die Namensliste ist durch die Harness-Eigenschaft ersetzt
 **Datum:** 2026-09-09
 **Scope:** Infra/Runtime (compose_renderer + omp-bridge)
 

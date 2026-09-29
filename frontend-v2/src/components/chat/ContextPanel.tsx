@@ -21,7 +21,7 @@
  * here on purpose.)
  */
 import { useEffect, useRef } from "react";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import { formatCompactTokens } from "@/lib/claudeCommands";
 import type { UsageComponents, UsageEvent } from "@/lib/chatTypes";
 
@@ -112,7 +112,7 @@ export function ContextPanel({ usage, pct, pctSource, onClose }: ContextPanelPro
           reason as the other sheets (see --mobile-chat-topbar-h). */}
       <div
         className="fixed inset-x-0 bottom-0 top-[var(--mobile-chat-topbar-h)] z-40 md:hidden"
-        style={{ background: "rgba(10,10,10,0.75)" }}
+        style={{ background: alpha(C.scrim, 0.75) }}
         aria-hidden="true"
       />
       <div

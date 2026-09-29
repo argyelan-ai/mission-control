@@ -11,8 +11,7 @@
  * doesn't see a frozen WebSocket pointing at the old container.
  */
 
-import { useEffect, useRef } from "react";
-import { getToken } from "@/lib/api";
+import { useSSE } from "@/lib/sse";
 
 export interface TerminalRemountPayload {
   reason?: string;
@@ -22,41 +21,21 @@ export interface TerminalRemountPayload {
 
 const BASE_URL = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
 
+/** Built on useSSE: every (re)connect fetches its own single-use stream
+ *  ticket (lib/streamTicket.ts) — the login token never goes into the URL,
+ *  and a dropped stream reconnects with backoff instead of dying on a spent
+ *  ticket. */
 export function useTerminalRemountSignal(
   agentId: string | null | undefined,
   onSignal: (payload: TerminalRemountPayload) => void,
 ) {
-  const callbackRef = useRef(onSignal);
-
-  useEffect(() => {
-    callbackRef.current = onSignal;
-  });
-
-  useEffect(() => {
-    if (!agentId) return;
-
-    const token = getToken();
-    const url = `${BASE_URL}/api/v1/agents/${agentId}/terminal-events/stream?token=${token}`;
-    const es = new EventSource(url, { withCredentials: true });
-
-    const handler = (e: Event) => {
-      const msg = e as MessageEvent;
-      try {
-        const data = JSON.parse(msg.data) as TerminalRemountPayload;
-        callbackRef.current(data ?? {});
-      } catch {
-        callbackRef.current({});
+  useSSE(agentId ? `${BASE_URL}/api/v1/agents/${agentId}/terminal-events/stream` : "", {
+    onEvent: (event, data) => {
+      // Backend emits a named event "terminal_remount". Default `message`
+      // catches the bare-message fallback if the dispatcher ever shifts shape.
+      if (event === "terminal_remount" || event === "message") {
+        onSignal((data ?? {}) as TerminalRemountPayload);
       }
-    };
-
-    // Backend emits a named event "terminal_remount". Default `message`
-    // catches the bare-message fallback if the dispatcher ever shifts shape.
-    es.addEventListener("terminal_remount", handler);
-    es.onmessage = handler;
-
-    return () => {
-      es.removeEventListener("terminal_remount", handler);
-      es.close();
-    };
-  }, [agentId]);
+    },
+  });
 }

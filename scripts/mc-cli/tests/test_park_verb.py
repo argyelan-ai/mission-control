@@ -40,6 +40,11 @@ class _Client:
 
 
 class _Args:
+    # Parser-Defaults: _add_patch_args haengt --pr/--pr-url an, argparse setzt
+    # sie daher immer (None ohne Flag) — der Stub modelliert das mit.
+    pr = None
+    pr_url = None
+
     def __init__(self, **kw):
         self.__dict__.update(kw)
 

@@ -29,7 +29,7 @@ import {
 import { useChatStream, type UseChatStreamResult } from "@/hooks/useChatStream";
 import { api } from "@/lib/api";
 import type { AgentWithState } from "./TerminalPanel";
-import type { MessageEvent, SubagentRun, ThinkingEvent, TimelineChatEvent, ToolEvent } from "@/lib/chatTypes";
+import type { MessageEvent, PreviewEvent, SubagentRun, ThinkingEvent, TimelineChatEvent, ToolEvent } from "@/lib/chatTypes";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -64,6 +64,20 @@ vi.mock("@/lib/api", () => ({
     },
   },
 }));
+// The admin gate reads the role through useIsAdmin (the persisted store
+// needs a real localStorage, which this jsdom lacks) — stub the hook.
+const roleMock = vi.hoisted(() => ({ role: "admin" }));
+vi.mock("@/hooks/useIsAdmin", () => ({ useIsAdmin: () => roleMock.role === "admin" }));
+function setRole(role: string) {
+  roleMock.role = role;
+}
+// ChatView liest den `?view=`-Parameter selbst: bei einem Agenten ohne
+// Umschalter (headless_chat) ist der Tiefenlink die EINZIGE Tuer zum Terminal,
+// und die muss offen bleiben (Spec docs/specs/chat-over-acp.md, Nicht-Ziele).
+const navMock = vi.hoisted(() => ({ params: new URLSearchParams() }));
+vi.mock("next/navigation", () => ({
+  useSearchParams: () => navMock.params,
+}));
 // Die echte VoiceButton haengt an <VoiceProvider>, und der baut beim Mounten
 // einen LiveKit-Room auf — fuer einen Kopfzeilen-Test viel zu schwer. Der Stub
 // haelt genau das fest, was ChatView zu verantworten hat: dass auf dem Handy
@@ -85,6 +99,23 @@ vi.mock("./TerminalPanel", async () => {
   };
 });
 
+/* Naht-Spy (PR #595 Nacharbeit): ChatView bezieht `buildTimelineItems` aus
+   seinem eigenen Modul. Der Wrapper zaehlt Aufrufe, ruft aber die echte
+   Funktion auf — alle Tests unten laufen gegen echtes Gruppierungsverhalten,
+   und der Naht-Test kann zaehlen, ob ChatView bei Preview-Ticks neu
+   gruppiert. */
+const timelineCalls = vi.hoisted(() => ({ build: 0 }));
+vi.mock("./buildTimelineItems", async (importOriginal) => {
+  const actual = await vi.importActual<typeof import("./buildTimelineItems")>("./buildTimelineItems");
+  return {
+    ...actual,
+    buildTimelineItems: (events: TimelineChatEvent[]) => {
+      timelineCalls.build += 1;
+      return actual.buildTimelineItems(events);
+    },
+  };
+});
+
 // cmdk's <Command.List> (inside Composer) reaches for ResizeObserver and
 // scrollIntoView — neither exists in jsdom (same stub as Composer.test.tsx).
 beforeAll(() => {
@@ -99,12 +130,17 @@ beforeAll(() => {
 
 const mockUseChatStream = vi.mocked(useChatStream);
 
+// Typing into a live session is admin-only (backend 403). Every test below
+// runs as an admin unless it says otherwise — see "ChatView — non-admin".
+beforeEach(() => setRole("admin"));
+
 function mkAgent(overrides: Partial<AgentWithState> = {}): AgentWithState {
   return {
     id: "agent-1",
     board_id: null,
     name: "Cody",
     role: null,
+    role_canonical: null,
     emoji: null,
     status: "idle",
     model: null,
@@ -1563,6 +1599,22 @@ describe("ChatView", () => {
     expect(screen.queryByText("beendet")).not.toBeInTheDocument();
   });
 
+  it("follows the LIVE state frame over a stale history session (badge must not freeze)", () => {
+    // Die Historien-Abfrage laedt bei Fokuswechsel nicht mehr neu (siehe
+    // useChatStream), die Sonde im Backend laeuft aber weiter und schickt
+    // jeden Wechsel als `state`-Frame — auch auf einem versteckten Tab. Ohne
+    // diesen Vorrang stuende der Badge dort fuer immer auf dem letzten Stand.
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        session: { sessionId: "s1", live: true, startedAt: null, aliveness: "active" },
+        state: { kind: "state", status: "idle", prompt: null, aliveness: "ended" },
+      })
+    );
+    renderChatView();
+    expect(screen.getByTestId("session-badge")).toHaveAttribute("data-aliveness", "ended");
+    expect(screen.getByTestId("session-badge")).toHaveTextContent("beendet");
+  });
+
   it("offers a Send (not a Stop) on an idle session — the morph follows the agent, not the session", () => {
     mockUseChatStream.mockReturnValue(
       mkStream({ session: { sessionId: "s1", live: false, startedAt: null, aliveness: "idle" } })
@@ -1860,6 +1912,31 @@ describe("ChatView", () => {
       expect(mobileBlock).toMatch(/padding-top:\s*calc\(env\(safe-area-inset-top\)/);
     });
 
+    it("malt die eigene Fläche deckend und mit, nicht neben, dem Notch-Streifen", () => {
+      // Operator-Befund 19.09.2026 („header ist immer noch halbe
+      // transparent"): der Kopf trug gar keine eigene Flaeche, sichtbar war
+      // nur der Grund von `chat-column` — und den Streifen, den `pt-safe-top`
+      // freihaelt, malte der Plattform-Backdrop durch den transparenten Kopf
+      // hindurch.
+      //
+      // Der Test prueft deshalb BEIDES zusammen: die Flaeche sitzt auf
+      // DEMSELBEN Element wie `pt-safe-top` (Polsterung liegt innerhalb der
+      // Hintergrundbox — waere sie auf einem Nachbarelement, bliebe der
+      // Streifen offen), und sie ist ein Theme-Token, kein Farbwert.
+      renderChatView({ onBack: vi.fn() });
+      const header = screen.getByTestId("chat-header");
+      expect(header.className).toContain("pt-safe-top");
+      expect(header.className).toContain("bg-[var(--color-bg-surface)]");
+      // Kein Inline-Stil: der schluege jede Klasse und damit spaetere
+      // md-Varianten (dieselbe Falle wie beim Titel-Block).
+      expect(header.style.backgroundColor).toBe("");
+      // Zweite Haelfte: das Token muss es in globals.css auch geben, sonst
+      // waere die Klasse ein wirkungsloser Name. `.bg-surface` ist die
+      // Kurzform, die Utility oben die im Chat benutzte.
+      expect(GLOBALS_CSS).toMatch(/--color-bg-surface:\s*#/);
+      expect(GLOBALS_CSS).toMatch(/\.bg-surface\s*\{\s*background-color:\s*var\(--color-bg-surface\)/);
+    });
+
     it("gibt Zurück und Optionen eine runde Form", () => {
       renderChatView({ onBack: vi.fn() });
       // Der Kreis ist das SICHTBARE Element im Knopf, nicht der Knopf selbst —
@@ -1943,4 +2020,153 @@ describe("ChatView", () => {
     });
   });
 
+});
+
+/**
+ * Headless-Chat (ACP-Agenten, Spec docs/specs/chat-over-acp.md).
+ *
+ * Bei `headless_chat` ist der Chat die einzige Oberflaeche: der zweite
+ * Konsolen-Tab zeigt eine TUI, die den Auftrag gar nicht faehrt. Der Umschalter
+ * verschwindet darum — der Tiefenlink `?view=terminal` bleibt.
+ */
+describe("ChatView — headless chat", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    navMock.params = new URLSearchParams();
+  });
+
+  it("renders no Chat/Terminal toggle for a headless agent", () => {
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+    renderChatView({ agent: mkAgent({ headless_chat: true }) });
+
+    expect(screen.queryByRole("button", { name: "Terminal" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Chat" })).not.toBeInTheDocument();
+    expect(screen.getByText("Hallo!")).toBeInTheDocument();
+  });
+
+  // Sabotage-Probe: ohne das Merkmal muss der Umschalter unveraendert dastehen.
+  it("still renders the toggle for a non-headless agent", () => {
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+    renderChatView({ agent: mkAgent({ headless_chat: false }) });
+
+    expect(screen.getByRole("button", { name: "Terminal" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Chat" })).toBeInTheDocument();
+  });
+
+  it("forces the chat view for a headless agent even when the stored view says terminal", () => {
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+    renderChatView({ agent: mkAgent({ headless_chat: true }), centerView: "terminal" });
+
+    expect(screen.queryByTestId("terminal-panel-stub")).not.toBeInTheDocument();
+    expect(screen.getByText("Hallo!")).toBeInTheDocument();
+  });
+
+  it("?view=terminal still opens the terminal for a headless agent", () => {
+    navMock.params = new URLSearchParams("view=terminal");
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+    renderChatView({ agent: mkAgent({ headless_chat: true }), centerView: "chat" });
+
+    expect(screen.getByTestId("terminal-panel-stub")).toBeInTheDocument();
+    expect(screen.queryByText("Hallo!")).not.toBeInTheDocument();
+  });
+
+  it("a headless agent without a transcript still falls back to the terminal", () => {
+    mockUseChatStream.mockReturnValue(mkStream());
+    renderChatView({ agent: mkAgent({ headless_chat: true }), hasTranscript: false });
+
+    expect(screen.getByTestId("terminal-panel-stub")).toBeInTheDocument();
+  });
+});
+
+describe("Naht: Preview-Tick baut die Zeitachse nicht neu (echtes Modul, echte Komponente)", () => {
+  /* PR #595 Nacharbeit. Der Vorschau-Tick (alle 0.3 s ein replace-me-Event)
+     erzeugt ein neues stream-Objekt, veraendert `events` aber nicht. Der
+     Springen-Fix memoisiert filter + buildTimelineItems in ChatView; dieser
+     Test prueft ueber die Modul-Naht die echte Folge: ChatView rendert neu,
+     aber buildTimelineItems wird NICHT erneut aufgerufen. Faellt der
+     useMemo-Fix aus, laeuft die Gruppierung bei jedem Tick — der Test wird
+     rot. Der erste Aufruf beim Mount zaehlt alsBaseline. */
+  const chatElement = () => (
+    <ChatView
+      agent={mkAgent()}
+      hasTranscript
+      detailLevel="normal"
+      onDetailLevelChange={noop}
+      centerView="chat"
+      onCenterViewChange={noop}
+    />
+  );
+
+  it("ruft buildTimelineItems bei 5 Preview-Ticks NICHT erneut auf", () => {
+    const events: TimelineChatEvent[] = [MSG, TOOL, THINKING];
+    const preview = (text: string): PreviewEvent =>
+      ({ kind: "preview", uuid: null, ts: "2026-09-10T00:00:00Z", text, source: "acp" });
+    mockUseChatStream.mockReturnValue(mkStream({ events, preview: preview("Zeile 1") }));
+    const { rerender } = renderChatView();
+    expect(timelineCalls.build).toBeGreaterThan(0);
+
+    const before = timelineCalls.build;
+    for (let tick = 2; tick <= 6; tick++) {
+      mockUseChatStream.mockReturnValue(
+        mkStream({ events, preview: preview(`Zeile 1\nZeile ${tick}`) })
+      );
+      rerender(chatElement());
+    }
+
+    expect(timelineCalls.build).toBe(before);
+  });
+
+  /* Korrektheits-Kontrolle: aendert sich `events` wirklich (neues Ereignis),
+     MUSS neu gruppiert werden — der Test darf nicht trivial-gruen stehen. */
+  it("gruppiert neu, wenn sich events wirklich aendern", () => {
+    const events: TimelineChatEvent[] = [MSG];
+    mockUseChatStream.mockReturnValue(mkStream({ events }));
+    const { rerender } = renderChatView();
+
+    const before = timelineCalls.build;
+    mockUseChatStream.mockReturnValue(mkStream({ events: [...events, TOOL] }));
+    rerender(chatElement());
+
+    expect(timelineCalls.build).toBeGreaterThan(before);
+  });
+});
+
+describe("ChatView — non-admin (session input is admin-only)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    navMock.params = new URLSearchParams();
+  });
+
+  it("a viewer sees the transcript but no composer — a hint instead", () => {
+    setRole("viewer");
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+    renderChatView();
+    expect(screen.getByText("Hallo!")).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Message the agent…")).not.toBeInTheDocument();
+    expect(screen.getByText(/only admins can type into a live session/i)).toBeInTheDocument();
+  });
+
+  it("an operator gets no approval buttons either (answering sends keys)", () => {
+    setRole("operator");
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        state: {
+          kind: "state",
+          status: "permission_prompt",
+          prompt: { question: "Datei löschen?", options: [{ key: "y", label: "Ja" }] },
+        },
+      })
+    );
+    renderChatView();
+    expect(screen.queryByText("Datei löschen?")).not.toBeInTheDocument();
+    expect(api.chat.sendKeys).not.toHaveBeenCalled();
+  });
+
+  it("an admin still gets the composer", () => {
+    setRole("admin");
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+    renderChatView();
+    expect(screen.getByPlaceholderText("Message the agent…")).toBeInTheDocument();
+    expect(screen.queryByTestId("admin-only-notice")).not.toBeInTheDocument();
+  });
 });

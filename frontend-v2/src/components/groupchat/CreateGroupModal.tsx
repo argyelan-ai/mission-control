@@ -16,11 +16,11 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { AlertTriangle, ChevronRight, Loader2 } from "lucide-react";
+import { AlertTriangle, ChevronRight, Loader2, X } from "lucide-react";
 import { ResponsiveModal } from "@/components/shared/ResponsiveModal";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 import { api } from "@/lib/api";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import type {
   EligibleMember,
   GroupCreatePayload,
@@ -129,11 +129,22 @@ export function CreateGroupModal({ open, onClose, onCreated }: CreateGroupModalP
   const selectedMembers = eligible.filter((m) => selected.includes(m.id));
 
   return (
-    <ResponsiveModal open={open} onClose={onClose} aria-labelledby="create-group-title">
-      <div className="px-5 pt-4 pb-3 shrink-0" style={{ borderBottom: `1px solid ${C.borderSubtle}` }}>
+    <ResponsiveModal dismissOnOutside={false} open={open} onClose={onClose} aria-labelledby="create-group-title">
+      <div
+        className="flex items-center justify-between gap-3 px-5 pt-4 pb-3 shrink-0"
+        style={{ borderBottom: `1px solid ${C.borderSubtle}` }}
+      >
         <h2 id="create-group-title" className="text-base font-semibold" style={{ color: C.textPrimary }}>
           {t("createTitle")}
         </h2>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label={t("close")}
+          className="flex items-center justify-center min-h-11 min-w-11 sm:min-h-0 sm:min-w-0 sm:w-8 sm:h-8 -mr-1.5 rounded-md cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
+        >
+          <X size={14} style={{ color: C.textMuted }} aria-hidden />
+        </button>
       </div>
 
       <div className="flex flex-col gap-5 px-5 py-4 overflow-y-auto">
@@ -342,8 +353,8 @@ export function CreateGroupModal({ open, onClose, onCreated }: CreateGroupModalP
             role="alert"
             className="flex items-start gap-2 rounded-md px-3 py-2 text-xs"
             style={{
-              border: `1px solid ${C.error}66`,
-              background: `${C.error}14`,
+              border: `1px solid ${alpha(C.error, 0.4)}`,
+              background: alpha(C.error, 0.08),
               color: STATUS_TEXT.error,
             }}
           >
@@ -364,16 +375,26 @@ export function CreateGroupModal({ open, onClose, onCreated }: CreateGroupModalP
         <span className="text-[11px] leading-snug" style={{ color: C.textMuted }}>
           {t("createNothingStarts")}
         </span>
-        <button
-          type="button"
-          onClick={handleSubmit}
-          disabled={!canSubmit}
-          className="flex items-center gap-1.5 rounded-md px-3.5 py-1.5 text-sm font-semibold cursor-pointer transition disabled:cursor-not-allowed disabled:opacity-40"
-          style={{ background: C.accent, color: C.onAccent }}
-        >
-          {submitting && <Loader2 size={14} className="animate-spin" aria-hidden />}
-          {t("createSubmit")}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md px-3 py-1.5 min-h-11 sm:min-h-0 text-sm cursor-pointer transition"
+            style={{ border: `1px solid ${C.borderActive}`, color: C.textSecondary }}
+          >
+            {t("cancel")}
+          </button>
+          <button
+            type="button"
+            onClick={handleSubmit}
+            disabled={!canSubmit}
+            className="flex items-center gap-1.5 rounded-md px-3.5 py-1.5 min-h-11 sm:min-h-0 text-sm font-semibold cursor-pointer transition disabled:cursor-not-allowed disabled:opacity-40"
+            style={{ background: C.accent, color: C.onAccent }}
+          >
+            {submitting && <Loader2 size={14} className="animate-spin" aria-hidden />}
+            {t("createSubmit")}
+          </button>
+        </div>
       </div>
     </ResponsiveModal>
   );
@@ -407,7 +428,7 @@ const inputStyle: React.CSSProperties = {
 };
 
 function focusOn(e: React.FocusEvent<HTMLElement>) {
-  e.currentTarget.style.borderColor = `${C.accent}66`;
+  e.currentTarget.style.borderColor = alpha(C.accent, 0.4);
 }
 
 function focusOff(e: React.FocusEvent<HTMLElement>) {

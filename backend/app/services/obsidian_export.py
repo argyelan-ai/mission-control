@@ -41,7 +41,7 @@ import logging
 import os
 import shutil
 import tempfile
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 import yaml
@@ -199,7 +199,7 @@ def _render_frontmatter(
     if entry.updated_at is not None:
         date_str = entry.updated_at.isoformat(timespec="seconds")
     else:
-        date_str = datetime.utcnow().isoformat(timespec="seconds")
+        date_str = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
     # Insertion order = literal order = YAML output order (Python 3.7+).
     meta: dict[str, Any] = {

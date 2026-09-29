@@ -57,6 +57,13 @@ def researcher_subtask_ctx():
     agent.requires_git_workflow = False
     agent.rules_md = None
     agent.workspace_path = "/home/agent/workspace"
+    # Explicit, not left to MagicMock auto-vivification: an unset attribute
+    # on a MagicMock is truthy and != "en", which used to make the "language"
+    # section fire with a stringified Mock repr baked into the dispatch
+    # message (pre-split `language` field had the same bug, just invisible
+    # because nothing asserted on it). Real agents default both to "en".
+    agent.operator_language = "en"
+    agent.work_language = "en"
 
     ctx = DispatchContext(
         project=None,
@@ -170,3 +177,49 @@ def test_host_agent_gets_reflection_contract_block(researcher_subtask_ctx):
     for field in REFLECTION_REQUIRED_FIELDS:
         assert f"## {field}" in msg
     assert str(REFLECTION_MIN_CHARS) in msg
+
+
+# ── operator_language / work_language split (Migration 0201, Task 8d039889) ─
+# The two fields steer DIFFERENT audiences. This test fails if they ever get
+# crossed — e.g. work_language accidentally landing in the operator-facing
+# line, or vice versa.
+
+
+def test_operator_and_work_language_land_in_the_right_place(researcher_subtask_ctx):
+    task, agent, ctx = researcher_subtask_ctx
+    agent.operator_language = "de"
+    agent.work_language = "en"
+    msg = _format_dispatch_message(task, agent, ctx)
+
+    lines = msg.splitlines()
+    operator_line = next(l for l in lines if "To your operator" in l)
+    work_line = next(l for l in lines if "Agent-to-agent work" in l)
+
+    assert "`de`" in operator_line, f"operator_language=de must be on the operator line: {operator_line!r}"
+    assert "`en`" not in operator_line.split("respond in")[-1], (
+        f"work_language leaked onto the operator line: {operator_line!r}"
+    )
+    assert "`en`" in work_line, f"work_language=en must be on the work line: {work_line!r}"
+    assert "`de`" not in work_line, f"operator_language leaked onto the work line: {work_line!r}"
+
+
+def test_operator_language_mutation_is_caught(researcher_subtask_ctx):
+    """Mutation check: if operator_language and work_language get swapped in
+    the builder, this test must go red — proving the assertions above are
+    actually load-bearing, not just matching the current wording by luck."""
+    task, agent, ctx = researcher_subtask_ctx
+    agent.operator_language = "de"
+    agent.work_language = "en"
+    msg = _format_dispatch_message(task, agent, ctx)
+
+    operator_line = next(l for l in msg.splitlines() if "To your operator" in l)
+    # If the fields were crossed, the operator line would say `en`, not `de`.
+    assert "`de`" in operator_line
+
+
+def test_both_languages_en_emits_no_language_section(researcher_subtask_ctx):
+    task, agent, ctx = researcher_subtask_ctx
+    agent.operator_language = "en"
+    agent.work_language = "en"
+    msg = _format_dispatch_message(task, agent, ctx)
+    assert "**Language:**" not in msg

@@ -28,8 +28,29 @@ def _queue_key(agent_id: str) -> str:
 
 
 async def enqueue_task(agent_id: str, task_id: str) -> None:
-    """Append a task to the end of the agent's queue."""
+    """Append a task to the end of the agent's queue.
+
+    M3 (Nacharbeit Lauf 2, 21.09.2026, Pruefbericht scratchpad/run2/
+    07-pruefbericht.md): dedup — the watchdog re-polls a host agent every
+    30s (task_monitor.py) while it is still mid-turn, and Guard 3
+    (dispatch.py) re-queues the SAME task on every one of those polls (no
+    RPUSH dedup existed before this fix). A 9-minute turn produced roughly
+    six duplicate entries and six `task.dispatch_queued` events for one
+    card. The drain itself was never unsafe (LREM 0 already removes every
+    copy before dispatching), but the duplicates inflated queue_length and
+    the activity feed. Smallest fix: check membership via LRANGE before the
+    RPUSH — the queue stays small (one agent's in-flight backlog, not a
+    high-throughput structure), so an O(n) scan here is cheap.
+    """
     redis = await get_redis()
+    existing = await redis.lrange(_queue_key(agent_id), 0, -1)
+    existing = [e.decode() if isinstance(e, bytes) else e for e in existing]
+    if task_id in existing:
+        logger.info(
+            "Enqueue skipped (already queued): task %s for agent %s",
+            task_id, agent_id,
+        )
+        return
     await redis.rpush(_queue_key(agent_id), task_id)
     logger.info("Enqueued task %s for agent %s", task_id, agent_id)
 

@@ -479,6 +479,75 @@ async def test_blocks_zombie_despite_run_state_running(fake_redis, make_board, m
 
 
 @pytest.mark.asyncio
+async def test_blocks_zombie_whose_heartbeat_restamps_activity(
+    fake_redis, make_board, make_agent, make_task,
+):
+    """Hole 1 (2026-09-18, card b2ea802f — 9h blind): a dead turn with a
+    surviving lock file keeps the bridge heartbeating status="working",
+    which restamps agent.last_task_activity_at forever. When harvest
+    evidence for the task exists but is STALE, the zombie must be blocked
+    even though the self-reported stamp looks fresh."""
+    _b, agent, task = await _make_stuck_setup(
+        make_board, make_agent, make_task,
+        run_state="running", activity_age_minutes=1,  # heartbeat looks alive
+    )
+    async with _session() as s:
+        from app.models.model_usage import ModelUsageEvent
+        s.add(ModelUsageEvent(
+            agent_id=agent.id,
+            task_id=task.id,
+            harness="cli-bridge",
+            model="test-model",
+            session_id="sess-1",
+            message_uuid=f"mu-{uuid.uuid4().hex}",
+            ts=utcnow() - timedelta(minutes=40),  # last real LLM turn: stale
+            source_file="transcripts/test.jsonl",
+        ))
+        await s.commit()
+
+    for _ in range(3):
+        async with _session() as s:
+            await _run_check(fake_redis, s)
+    t = await _reload_task(task.id)
+    assert t.status == "blocked", (
+        "stale harvest evidence must outweigh a self-restamped heartbeat"
+    )
+
+
+@pytest.mark.asyncio
+async def test_fresh_model_event_protects_long_turn(
+    fake_redis, make_board, make_agent, make_task,
+):
+    """PRIME DIRECTIVE, evidence side: a FRESH harvested ModelUsageEvent
+    proves the LLM turn ran recently — the agent must never be blocked,
+    even when the heartbeat stamp is stale."""
+    _b, agent, task = await _make_stuck_setup(
+        make_board, make_agent, make_task,
+        activity_age_minutes=40,  # heartbeat stamp stale
+    )
+    async with _session() as s:
+        from app.models.model_usage import ModelUsageEvent
+        s.add(ModelUsageEvent(
+            agent_id=agent.id,
+            task_id=task.id,
+            harness="cli-bridge",
+            model="test-model",
+            session_id="sess-1",
+            message_uuid=f"mu-{uuid.uuid4().hex}",
+            ts=utcnow() - timedelta(minutes=5),  # real turn: fresh
+            source_file="transcripts/test.jsonl",
+        ))
+        await s.commit()
+
+    for _ in range(3):
+        async with _session() as s:
+            await _run_check(fake_redis, s)
+    t = await _reload_task(task.id)
+    assert t.status == "in_progress"
+    assert not await _pending_blocker_approvals(task.id)
+
+
+@pytest.mark.asyncio
 async def test_never_blocks_dead_process(fake_redis, make_board, make_agent, make_task):
     """last_seen_at ALSO stale → process/container dead → orphan path owns it,
     NOT this check (guard 12 bails)."""

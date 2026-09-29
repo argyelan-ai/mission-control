@@ -197,7 +197,7 @@ async def test_fallback_restart_waits_as_long_as_the_switch(async_session):
         await rp._sync_one(async_session, agent)
 
     assert health_mock.await_args.kwargs["timeout"] == HEALTH_TIMEOUT_RESTART_OMP
-    assert HEALTH_TIMEOUT_RESTART_OMP == 90
+    assert HEALTH_TIMEOUT_RESTART_OMP == 180
 
 
 @pytest.mark.asyncio

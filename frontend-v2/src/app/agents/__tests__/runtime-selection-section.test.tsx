@@ -11,7 +11,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { RuntimeSelectionSection } from "../[id]/page";
+import { RuntimeSelectionSection } from "../[id]/RuntimeSelectionSection";
 import { api } from "@/lib/api";
 import type { Agent, Runtime } from "@/lib/types";
 
@@ -122,5 +122,32 @@ describe("RuntimeSelectionSection", () => {
         within(select).getByRole("option", { name: "— Fallback (docker-compose env) —" }),
       ).toBeInTheDocument(),
     );
+  });
+
+  // D-2: the header named the bound runtime while the picker showed an empty
+  // select (or "Fallback") — the bound runtime was not among the options yet.
+  it("shows the current binding as the selected option while the list is still loading", async () => {
+    vi.spyOn(api.runtimes, "list").mockReturnValue(new Promise(() => {}) as never);
+    renderWithQuery(<RuntimeSelectionSection agent={mkAgent({ harness: "claude" })} agentId="agent-1" />);
+    const select = (await screen.findByRole("combobox")) as HTMLSelectElement;
+    expect(select.value).toBe("slot-a");
+    expect(select.selectedOptions[0].textContent).toMatch(/Current binding/);
+  });
+
+  it("keeps the current binding selected and explains it when it is not in the list", async () => {
+    vi.spyOn(api.runtimes, "list").mockResolvedValue({ runtimes: [recipeX] });
+    renderWithQuery(<RuntimeSelectionSection agent={mkAgent({ harness: "omp" })} agentId="agent-1" />);
+    const select = (await screen.findByRole("combobox")) as HTMLSelectElement;
+    await waitFor(() => expect(within(select).getByRole("option", { name: /Recipe X/ })).toBeInTheDocument());
+    expect(select.value).toBe("slot-a");
+    expect(select.selectedOptions[0].textContent).toMatch(/not in the runtime list/);
+  });
+
+  it("says the runtime list failed to load instead of 'loading…' forever", async () => {
+    vi.spyOn(api.runtimes, "list").mockRejectedValue(new Error("boom"));
+    renderWithQuery(<RuntimeSelectionSection agent={mkAgent({ harness: "claude" })} agentId="agent-1" />);
+    const select = (await screen.findByRole("combobox")) as HTMLSelectElement;
+    await waitFor(() => expect(select.selectedOptions[0].textContent).toMatch(/could not load runtimes/i));
+    expect(select.value).toBe("slot-a");
   });
 });

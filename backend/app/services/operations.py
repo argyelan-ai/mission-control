@@ -191,6 +191,8 @@ async def stop_task_run(
     task_id: uuid.UUID,
     user_id: str,
     reason: str = "",
+    actor_user_id: uuid.UUID | None = None,
+    actor_label: str | None = None,
 ) -> Task:
     """Stop an active task run. Only for tasks with an active run."""
     task = await session.get(Task, task_id)
@@ -257,6 +259,7 @@ async def stop_task_run(
     await record_task_event(
         session, task.id, old_status, "blocked",
         changed_by="user", reason="manual_stop",
+        actor_user_id=actor_user_id, actor_label=actor_label,
     )
 
     # No more fake user comment (ADR-024 / Ultrareview PS). Stop is a
@@ -282,6 +285,8 @@ async def resume_task_run(
     session: AsyncSession,
     task_id: uuid.UUID,
     user_id: str,
+    actor_user_id: uuid.UUID | None = None,
+    actor_label: str | None = None,
 ) -> Task:
     """Release a stopped/held task again. Status → inbox for normal dispatch flow."""
     task = await session.get(Task, task_id)
@@ -320,6 +325,7 @@ async def resume_task_run(
     await record_task_event(
         session, task.id, old_status, "inbox",
         changed_by="user", reason="manual_resume",
+        actor_user_id=actor_user_id, actor_label=actor_label,
     )
 
     # No more fake user comment. Resume = fresh prompt delivery via the

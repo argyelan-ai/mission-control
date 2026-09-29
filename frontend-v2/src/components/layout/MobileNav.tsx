@@ -19,9 +19,11 @@ import { useAppStore } from "@/lib/store";
 import { useQuery } from "@tanstack/react-query";
 import type { Approval, Board } from "@/lib/types";
 import { VoiceButton } from "@/components/voice/VoiceWidget";
-import { P2 } from "@/lib/colors";
+import { P2, C, alpha } from "@/lib/colors";
+import { ThemeSegmented } from "@/components/shared/ThemeSwitch";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
+import { useEscapeKey } from "@/hooks/useEscapeKey";
 
 // Wordmark (gleiche Logik wie Sidebar — env-getrieben)
 const _BRAND = process.env.NEXT_PUBLIC_BRAND || "Mission.Control";
@@ -69,6 +71,9 @@ export function MobileNavProvider({ children }: { children: React.ReactNode }) {
 
   // Prevent body scroll when menu open — iOS-fest via Fixed-Position-Technik (MOBILE-SPEC M4)
   useBodyScrollLock(open);
+
+  // Esc closes the menu like every other overlay (panel register rule 4).
+  useEscapeKey(() => setOpen(false), open);
 
   const value = useMemo(() => ({ open, setOpen }), [open]);
 
@@ -250,7 +255,11 @@ function MobileNavRow({
   );
 }
 
-export default function MobileNav() {
+export default function MobileNav({ showBar = true }: {
+  /** false = only the drawer: a screen with its own top bar (task detail on
+   *  the phone) hides the wordmark bar but keeps the "Index" menu working. */
+  showBar?: boolean;
+} = {}) {
   const { open, setOpen } = useMobileNav();
   const t = useTranslations("nav");
   const pathname = usePathname();
@@ -296,6 +305,7 @@ export default function MobileNav() {
     <>
       {/* Top bar — Wordmark links (Home-Link), Voice rechts. pt-island hält
           Inhalt unter der Dynamic Island; opak statt backdrop-blur (kein iOS Jank). */}
+      {showBar && (
       <header
         className="fixed top-0 left-0 right-0 z-40 flex items-end justify-between px-4 md:hidden pt-island"
         style={{
@@ -325,6 +335,7 @@ export default function MobileNav() {
           <VoiceButton size={40} variant="header" />
         </div>
       </header>
+      )}
 
       {/* Overlay + slide-out index drawer */}
       <AnimatePresence>
@@ -337,7 +348,7 @@ export default function MobileNav() {
               exit={{ opacity: 0 }}
               transition={{ duration: 0.2 }}
               className="fixed inset-0 z-40 md:hidden"
-              style={{ backgroundColor: "rgba(5,4,3,0.75)" }}
+              style={{ backgroundColor: alpha(C.scrim, 0.75) }}
               onClick={() => setOpen(false)}
             />
 
@@ -352,7 +363,7 @@ export default function MobileNav() {
               style={{
                 backgroundColor: "var(--color-p2-pan)",
                 borderLeft: "1px solid var(--color-p2-line)",
-                boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
+                boxShadow: `0 4px 24px ${alpha(C.shadow, 0.5)}, 0 1px 2px ${alpha(C.shadow, 0.3)}`,
               }}
             >
               {/* Drawer-Header: Wordmark + Close-Key */}
@@ -580,6 +591,10 @@ export default function MobileNav() {
                       </div>
                     </div>
                   )}
+                  {/* Theme switch (ADR-087) — same control as Settings → Appearance */}
+                  <div className="px-2 pb-2">
+                    <ThemeSegmented size="touch" />
+                  </div>
                   {/* Settings sits with the account, not in a nav group — the
                       desktop column puts the same gear in its footer. */}
                   {CHROME_ITEMS.map((href) => {

@@ -7,7 +7,7 @@ import { Server, Globe, Zap, Trash2, Check, Info } from "lucide-react";
 import type { Agent, MCPServer } from "@/lib/types";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 
 interface Props {
@@ -144,10 +144,10 @@ export function MCPServerMatrix({
                 style={{ borderColor: "var(--color-border-subtle)" }}
               >
                 <td
-                  className="sticky left-0 z-10 p-3"
-                  style={{ backgroundColor: "var(--bg-elevated)" }}
+                  className="sticky left-0 z-10 p-3 max-w-[280px]"
+                  style={{ backgroundColor: "var(--color-bg-elevated)" }}
                 >
-                  <div className="group flex items-center justify-between gap-2">
+                  <div className="group flex items-center justify-between gap-2 max-w-[280px]">
                     <div className="flex items-center gap-2 min-w-0">
                       <Icon size={14} style={{ color: C.accent }} />
                       <div className="min-w-0 flex items-center gap-1.5">
@@ -188,7 +188,7 @@ export function MCPServerMatrix({
                                   width: "220px",
                                   background: C.bgElevated,
                                   border: "1px solid var(--color-border)",
-                                  boxShadow: "0 8px 24px rgba(0,0,0,0.6)",
+                                  boxShadow: `0 8px 24px ${alpha(C.shadow, 0.6)}`,
                                   color: "var(--color-text-secondary)",
                                 }}
                               >
@@ -229,11 +229,11 @@ export function MCPServerMatrix({
                         className="w-5 h-5 rounded-sm flex items-center justify-center mx-auto cursor-pointer transition-colors"
                         style={{
                           backgroundColor: enabled
-                            ? `${C.accent}33`
+                            ? alpha(C.accent, 0.2)
                             : "var(--color-bg-hover)",
                           border: `1px solid ${
                             enabled
-                              ? `${C.accent}66`
+                              ? alpha(C.accent, 0.4)
                               : "var(--color-border)"
                           }`,
                         }}

@@ -391,7 +391,10 @@ async def maybe_post_finish_nudge(session: AsyncSession, task: Task) -> None:
     )
 
 
-async def resume_task_after_answer(session: AsyncSession, task, thread, *, changed_by: str) -> bool:
+async def resume_task_after_answer(
+    session: AsyncSession, task, thread, *, changed_by: str,
+    actor_user_id=None, actor_label: str | None = None,
+) -> bool:
     """A blocking question on `thread` was just answered: if the task is parked
     in `waiting` and no blocking question remains open, move it back to
     in_progress — re-dispatch with a recap when the agent was released,
@@ -441,10 +444,12 @@ async def resume_task_after_answer(session: AsyncSession, task, thread, *, chang
     await record_task_event(
         session, task.id, from_status, TaskStatus.IN_PROGRESS,
         changed_by=changed_by, reason="answer_received",
+        actor_user_id=actor_user_id, actor_label=actor_label,
     )
     parked = agent is None or agent.current_task_id != task.id
     if parked:
         from app.services.dispatch import auto_dispatch_task
+        from app.services.dispatch_attempt_audit import set_dispatch_attempt_id
         from app.services.task_context_builder import build_waiting_resume_recap
         from app.utils import create_tracked_task
         task.dispatched_at = None
@@ -452,6 +457,25 @@ async def resume_task_after_answer(session: AsyncSession, task, thread, *, chang
         session.add(task)
         await session.commit()
         await session.refresh(task)
+        # ACP-Pfad card f5cc4cee point (d): `waiting` is deliberately NOT a
+        # dispatch_attempt_id-clearing transition (task_lifecycle.py module
+        # doc — the session is meant to stay alive, paused). That is exactly
+        # right for the NOT-parked branch below (the live session just gets a
+        # nudge). But a PARKED resume re-delivers the prompt as a genuine new
+        # dispatch — with the old attempt_id still on the row, poll.sh's and
+        # the bridge's own dispatch-dedup (both keyed on dispatch_attempt_id,
+        # not task_id) see the redelivery as the SAME attempt already handled
+        # and never start a turn: the card sits `in_progress` with a fresh
+        # ack, and nobody works it. Rotate unconditionally here, mirroring
+        # the poll-orphan-redispatch pattern (agents.py
+        # _maybe_redispatch_orphaned_run, only_if_null=False) — the same
+        # "this IS a fresh delivery" signal, just reached from the
+        # answer-received path instead of the orphan-liveness path.
+        await set_dispatch_attempt_id(
+            session, task, str(uuid.uuid4()),
+            caller="messaging_resume", reason="waiting_resume_parked",
+            only_if_null=False,
+        )
         recap = await build_waiting_resume_recap(session, task)
         session.add(TaskComment(
             task_id=task.id, author_type="system",

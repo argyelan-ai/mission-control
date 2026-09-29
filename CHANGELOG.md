@@ -6,7 +6,75 @@ follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
 
 ## [Unreleased]
 
+### Added
+- **Disk preflight in front of every build, plus a watchdog that reports
+  before the disk hits 95 %.** `docker system df` measured 75.8 GB of build
+  cache — Docker never garbage-collects it on its own — and
+  `docker compose up --build` then died mid-layer-write with a raw
+  "no space left on device", after minutes of work and with nothing pointing
+  at the cause. Every build path (`make up/build/build-dev`, `install.sh`,
+  `scripts/start-all.sh --build`, `scripts/build-agent-images.sh`,
+  `scripts/vault-cleanup-orchestrate.py`, the backend's compose recreate
+  paths) now runs `docker/shared/disk-preflight.sh` first and refuses below
+  the threshold with both numbers, the variable that set it, and the fix in
+  the message; after a SUCCESSFUL build it bounds the build cache with
+  `docker builder prune --keep-storage`. An unreadable `df` never blocks a
+  build (unknown is not zero). Thresholds come from the project's config path
+  (`BUILD_MIN_FREE_GB` / `BUILD_CACHE_KEEP_GB` / `DISK_WATCHDOG_PERCENT`),
+  never hardcoded. The watchdog **reports only** — it never deletes anything
+  and never changes a status; it fires at `DISK_WATCHDOG_PERCENT` (default
+  95) with `severity=critical` (a `warning` would wait up to 30 minutes in
+  the Discord digest) and is deduped per threshold via Redis.
+- **Lead-escalation second stage.** A stage-1 lead message
+  (`watchdog_notify` from the silent-card watchdog, `blocker_lead_notify`
+  from blocker lead-triage) that got no Board-Lead reaction for 30
+  minutes is reported to the operator — exactly once per silent phase.
+  "Reaction" is explicit: a Lead-authored comment on the card or a
+  Lead-authored status change after the message. Report-only: pending
+  `lead_escalation` approval + push, no status change, no new schema.
+- **Silent-card watchdog.** Cards in `in_progress` or `waiting` with no
+  agent turn and no (non-system) comment for 30 minutes are reported once
+  to the Board Lead via `watchdog_notify`. Status is never auto-changed.
+  One message per silent phase (DB-dedup, not a Redis TTL).
+- **ACP is an omp-harness property (ADR-084, supersedes ADR-081).** The
+  driver decision moved from the `OMP_ACP_AGENT_SLUGS` name list to
+  `harness_compat.omp_driver_for(harness)` — every omp agent, including one
+  created minutes ago, runs the ACP path. The single rollback knob is
+  `OMP_DRIVER_DEFAULT=native` (whole fleet); a per-service
+  `OMP_DRIVER=native` entry still survives re-rendering. New
+  `HARNESS_CAPABILITIES` matrix consolidates the scattered per-harness
+  conditions (hooks/statusLine, shared-mcp, host launcher, plugin/skill
+  support), and switching to a pluginless harness now warns visibly in the
+  switch result. Tier-2 recovery skips omp/ACP agents via the harness, the
+  explicit `RECOVERY_TIER2_SKIP_AGENT_SLUGS` opt-out stays for host agents.
+
 ### Changed
+- **Security: terminals, the plugin shell and typing into a live agent
+  session are admin-only.** Before, any logged-in user of any role (viewer
+  included) could open an agent container or host-agent terminal, the plugin
+  shell, or type text/keys into an agent's tmux pane through the Sessions
+  chat — all of it command execution on the box. The WebSockets
+  (`/agents/{id}/terminal`, `/agents/{id}/terminal/ws`,
+  `/agents/{id}/terminal/{task_id}/ws`, `/host-agents/{id}/terminal`,
+  `/plugins/shell/ws`) now close with **4003** for non-admins (4001 stays
+  "not logged in"); the HTTP endpoints (`POST /agents/{id}/terminal/{task_id}/input`,
+  `DELETE /agents/{id}/terminal/{task_id}`, `POST|DELETE /plugins/shell`,
+  `POST /agents/{id}/chat/input|keys|effort`) answer **403**. Shared helpers
+  `auth.has_role` / `auth.authorize_websocket` sit next to `require_role`.
+  Reading stays open: chat history, session lists and the view-only browser
+  live stream are unchanged. `DELETE /plugins/shell` was shadowed by the
+  catch-all `DELETE /plugins/{plugin_key:path}` (it reached
+  `remove_plugin("shell")`); the shell routes are now registered first. No
+  agent or service token calls any of these endpoints, so no exception was
+  needed. The UI shows a short hint (EN/DE) instead of the terminal, the
+  plugin shell and the chat composer for non-admins. Plugin keys in
+  `POST /plugins/install`, `POST /plugins/{key}/update` and
+  `DELETE /plugins/{key}` must now look like `name@marketplace` (400
+  otherwise): a key like `shell%23` was cut at the `#` on its way to the
+  bridge and started/stopped the plugin shell on the plain login. Scope: this
+  gates terminals, the plugin shell and keystrokes only. Plugin
+  install/update/remove, agent provisioning and container/host-agent
+  start/stop/restart still run on the plain login (follow-up).
 - **Your agent fleet leaves version control.**
   `docker/docker-compose.agents.yml` describes your machine — agent names,
   project references, mount paths — and Mission Control rewrites it while it
@@ -31,6 +99,36 @@ follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
   them. From then on `./install.sh --update` wraps every pull in
   `scripts/migrate-agents-yml.sh save` / `restore` and you never think about
   it again. Details: [docs/setup/updating.md](docs/setup/updating.md).
+- **The file indexer no longer holds a database transaction while it walks
+  the filesystem.** The periodic walk (every 600 s, all `~/.mc` roots) used
+  to run inside one session — measured on 2026-09-14 as the oldest open
+  transaction in the database (1789 s; a backend restart alone did not clear
+  it, the worker had to die too). The walk now runs with no session open and
+  writes in short committed batches (longest open transaction on the same
+  data set: 33.8 s → 0.7 s). Its 50 000-entry cap comes with a real
+  exclusion list (build/test noise: `target`, `venv`, `.pytest_cache`,
+  `.gradle`, `out`, coverage caches, `*.egg-info`, …, matched
+  case-insensitively) so the cap is not hit every round by counting noise —
+  and if it is hit, the warning fires once per state with the count and the
+  root instead of an identical line every 600 s.
+
+### Removed
+- **The news/content vertical is gone — migration `0206_drop_news_tables`
+  DROPS its tables.** The optional news vertical (news crawler, shorts and
+  storyboards, trend feed, newsletter, video performance) was retired; its
+  models only stayed in core to keep the Alembic chain identical. Dropped:
+  `news_sources`, `news_articles`, `news_post_schedules`, `newsletter_issues`,
+  `storyboards`, `trend_signals`, `viral_shorts_settings`,
+  `video_performance`, plus a raw `news_config` table if present, and the
+  column `content_pipelines.rss_source_id` (its FK pointed into
+  `news_sources`; `content_pipelines` itself stays — bench drafts and X-post
+  approvals use it). **If your installation still holds data in these
+  tables, dump them before upgrading** (`pg_dump -t <table>`); the downgrade
+  recreates the schema empty. Also removed: the `/content` and `/news` nav
+  entries (their pages were never part of this repository — dead links),
+  the `storyboard-images` Files root, `NEWSLETTER_BRAND` / `NEWS_REPO_PATH`
+  settings and compose passthroughs (safe to delete from `.env`; unknown
+  keys are ignored), and `scripts/backfill_images.py`.
 
 ## [0.2.0] - 2026-08-06
 

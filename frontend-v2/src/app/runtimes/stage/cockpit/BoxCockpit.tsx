@@ -35,6 +35,7 @@ import { TelemetryChart } from "./TelemetryChart";
 import { ModeList } from "./ModeList";
 import { AutostartGroup } from "./AutostartGroup";
 import { ConnectionGroup } from "./ConnectionGroup";
+import { useHeadConflictText } from "@/components/heads/HeadOccupancy";
 import { RecipeGroup } from "./RecipeGroup";
 
 export interface BoxCockpitMember {
@@ -92,6 +93,7 @@ export function BoxCockpit({
   runtime: Runtime | null;
 }) {
   const t = useTranslations("runtimes.cockpit");
+  const headConflictText = useHeadConflictText();
   const tHosts = useTranslations("runtimes.hosts");
   const currentUser = useAppStore((s) => s.currentUser);
   const isAdmin = currentUser?.role === "admin";
@@ -148,7 +150,7 @@ export function BoxCockpit({
   const restartMutation = useMutation({
     mutationFn: () => api.runtimes.restart(runtime!.id),
     onSuccess: invalidate,
-    onError: (err: Error) => setError(t("restartFailed", { message: humanApiError(err) })),
+    onError: (err: Error) => setError(headConflictText(err) ?? t("restartFailed", { message: humanApiError(err) })),
   });
   const stopMutation = useMutation({
     mutationFn: (force: boolean) => api.runtimes.stop(runtime!.id, { force }),
@@ -164,7 +166,7 @@ export function BoxCockpit({
         setConflict(parsed);
         return;
       }
-      setError(t("stopFailed", { message: humanApiError(err) }));
+      setError(headConflictText(err) ?? t("stopFailed", { message: humanApiError(err) }));
     },
   });
 
@@ -315,6 +317,11 @@ export function BoxCockpit({
             onClick={() => restartMutation.mutate()}
             disabled={!runtime || restartMutation.isPending}
             data-testid="cockpit-restart"
+            title={
+              (runtime?.member_hosts ?? []).length > 0
+                ? t("restartMultiNodeHint")
+                : t("restartHint")
+            }
             className="inline-flex items-center justify-center gap-1.5 text-xs px-3 rounded-md cursor-pointer disabled:opacity-40 min-h-touch sm:min-h-9"
             style={{ border: `1px solid ${C.borderActive}`, color: C.textSecondary }}
           >

@@ -1,8 +1,11 @@
 """Tests for /agent/tasks/{id}/visual-verify endpoint + TelegramReports media group.
 
 Tests the integration layer between the MC backend and the mc-playwright service.
-The real Playwright call is mocked — the mc-playwright container is covered
-by a separate live test.
+The real Playwright call is mocked — the mc-playwright container's
+pure-function layer (login spec, storage state, request models, ffmpeg
+command builders) is covered by docker/mc-playwright/tests/{test_login,
+test_media}.py; the browser-driven form-login itself has no automated
+coverage and is only exercised by hand against the live stack.
 """
 
 import uuid
@@ -620,6 +623,98 @@ async def test_visual_verify_login_failed_returns_422(client, fake_redis):
     assert "Login-URL" in detail["message"]
     # NO Telegram send if login failed
     mock_send_report.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_visual_verify_login_failed_response_has_no_credentials(client, fake_redis):
+    """Guardrail (cf052361): a failed-login 422 must never echo the
+    username/password back — an operator/agent reading the error (task
+    comment, PR description, log line) must never see the secret just
+    because the login it was trying didn't work. Inline-login variant."""
+    data = await _setup_agent_with_task()
+    fake = _fake_verify_result()
+    fake["login"] = {
+        "succeeded": False,
+        "final_url": "http://caddy/login",
+        "reason": "Page blieb nach Submit auf der Login-URL",
+    }
+
+    secret_password = "sUpEr-s3cr3t-dO-NoT-LeAk"
+    with patch("app.services.visual_verifier.verify_url", new_callable=AsyncMock, return_value=fake), \
+         patch("app.services.operator_reports.send_report", new_callable=AsyncMock):
+        r = await client.post(
+            f"/api/v1/agent/tasks/{data['task_id']}/visual-verify",
+            json={
+                "url": "http://caddy/tasks",
+                "login": {
+                    "url": "http://caddy/login",
+                    "username": "tester@argyelan.ai",
+                    "password": secret_password,
+                },
+            },
+            headers={"Authorization": f"Bearer {data['token']}"},
+        )
+
+    assert r.status_code == 422, r.text
+    body_text = r.text
+    assert secret_password not in body_text
+    assert "tester@argyelan.ai" not in body_text
+
+
+@pytest.mark.asyncio
+async def test_visual_verify_credential_id_login_failed_response_has_no_credentials(client, fake_redis):
+    """Same guardrail, but through the realistic incident path: a Vault
+    credential (credential_id), not an inline login dict. The decrypted
+    password flows through `resolved_login` — this pins that it never
+    reaches the 422 response even though it's held in memory right next to
+    the code that raises it."""
+    import json as _json
+    from app.models.agent import Agent
+    from app.models.credential import Credential
+    from app.services.encryption import encrypt
+
+    data = await _setup_agent_with_task()
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        a = await s.get(Agent, data["agent_id"])
+        a.scopes = list(a.scopes or []) + ["credentials:read"]
+        await s.commit()
+
+    secret_password = "vAuLt-sEcReT-dO-NoT-LeAk"
+    cred_id = uuid.uuid4()
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(Credential(
+            id=cred_id, name="MC Login for Tests",
+            credential_type="login",
+            encrypted_data=encrypt(_json.dumps({
+                "username": "tester@argyelan.ai", "password": secret_password,
+            })),
+            url="http://caddy/login",
+        ))
+        await s.commit()
+
+    fake = _fake_verify_result()
+    fake["login"] = {
+        "succeeded": False,
+        "final_url": "http://caddy/login",
+        "reason": "Page blieb nach Submit auf der Login-URL",
+    }
+
+    with patch("app.services.visual_verifier.verify_url", new_callable=AsyncMock, return_value=fake), \
+         patch("app.services.operator_reports.send_report", new_callable=AsyncMock):
+        r = await client.post(
+            f"/api/v1/agent/tasks/{data['task_id']}/visual-verify",
+            json={
+                "url": "http://caddy/agents",
+                "credential_id": str(cred_id),
+                "send_to_telegram": False,
+            },
+            headers={"Authorization": f"Bearer {data['token']}"},
+        )
+
+    assert r.status_code == 422, r.text
+    body_text = r.text
+    assert secret_password not in body_text
+    assert "tester@argyelan.ai" not in body_text
 
 
 @pytest.mark.asyncio

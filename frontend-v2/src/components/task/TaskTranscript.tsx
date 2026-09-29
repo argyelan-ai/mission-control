@@ -7,7 +7,7 @@ import { Radio, Info } from "lucide-react";
 import { api } from "@/lib/api";
 import { timeAgo } from "@/lib/utils";
 import type { TranscriptMessage as TranscriptMessageType } from "@/lib/types";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 
 const COMMENT_TYPE_LABELS: Record<string, string> = {
   handoff: "Handoff",
@@ -35,7 +35,7 @@ function TranscriptMessage({ message }: { message: TranscriptMessageType }) {
       style={{
         backgroundColor: isAgent
           ? C.accentSubtle
-          : "rgba(255, 255, 255, 0.02)",
+          : alpha(C.overlay, 0.02),
         border: `1px solid ${isAgent ? C.borderAccent : C.border}`,
       }}
     >

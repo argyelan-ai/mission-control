@@ -12,11 +12,12 @@
  * PromptDialog adds a single text input (replaces `prompt()`).
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { AlertTriangle, X } from "lucide-react";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
+import { useEscapeKey } from "@/hooks/useEscapeKey";
 
 interface BaseProps {
   open: boolean;
@@ -49,14 +50,24 @@ function DialogShell({
 }: BaseProps & { children?: React.ReactNode; confirmDisabled?: boolean }) {
   useBodyScrollLock(open);
 
+  // A parent may open this dialog from its own keydown handler (Esc on a
+  // filled form = "Discard draft?"). The browser can commit that update and
+  // run the effects below while the same keydown is still on its way to
+  // window, so the Esc listener would see the opening Esc and cancel at
+  // once. Remember the event being dispatched when the dialog opened (only
+  // on the open transition — onCancel is often a new function per render)
+  // and ignore it.
+  const openingEventRef = useRef<Event | undefined>(undefined);
   useEffect(() => {
-    if (!open) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !loading) onCancel();
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [open, loading, onCancel]);
+    openingEventRef.current = open ? window.event : undefined;
+  }, [open]);
+
+  // useEscapeKey binds once per open phase and always calls the latest
+  // handler — a per-render onCancel must not re-bind the listener mid-press.
+  useEscapeKey((e) => {
+    if (e === openingEventRef.current) return;
+    if (!loading) onCancel();
+  }, open);
 
   const accent = danger ? C.error : C.accent;
 
@@ -69,7 +80,7 @@ function DialogShell({
           exit={{ opacity: 0 }}
           transition={{ duration: 0.12 }}
           className="fixed inset-0 z-[100] flex items-center justify-center px-4"
-          style={{ background: "rgba(5,4,3,0.8)" }}
+          style={{ background: alpha(C.scrim, 0.8) }}
           onClick={() => !loading && onCancel()}
         >
           <motion.div
@@ -96,7 +107,7 @@ function DialogShell({
                 {danger && (
                   <span
                     className="shrink-0 w-8 h-8 rounded-sm flex items-center justify-center"
-                    style={{ background: "rgba(239,68,68,0.10)", border: "1px solid rgba(239,68,68,0.25)" }}
+                    style={{ background: alpha(C.error, 0.1), border: `1px solid ${alpha(C.error, 0.25)}` }}
                   >
                     <AlertTriangle size={15} style={{ color: C.error }} />
                   </span>
@@ -155,7 +166,7 @@ function DialogShell({
                 className="font-mono uppercase rounded-sm px-3 py-2 text-[10.5px] tracking-[0.14em] transition-colors cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
                 style={
                   danger
-                    ? { background: "rgba(239,68,68,0.14)", border: "1px solid rgba(239,68,68,0.45)", color: C.error }
+                    ? { background: alpha(C.error, 0.1), border: `1px solid ${alpha(C.error, 0.45)}`, color: C.error }
                     : { background: C.accentSubtle, border: `1px solid ${C.borderAccent}`, color: C.accent }
                 }
               >

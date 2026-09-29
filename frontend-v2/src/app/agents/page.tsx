@@ -1,13 +1,13 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo } from "react";
 import Link from "next/link";
 import AppShell from "@/components/layout/AppShell";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import { useLocale, useTranslations } from "next-intl";
 import {
-  Plus, X, Loader2, Bot, Users, RotateCcw, Settings, BarChart3,
+  Plus, X, Loader2, Bot, Users, RotateCcw, Settings,
   Layout, ChevronDown, Archive, MoreVertical, Terminal,
 } from "lucide-react";
 import { api } from "@/lib/api";
@@ -20,7 +20,7 @@ import { GlassCard } from "@/components/shared/GlassCard";
 import { Pill } from "@/components/shared/Pill";
 import { StatusDot } from "@/components/shared/StatusDot";
 import { SkillBadges } from "@/components/agent/AgentCard";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import type { Agent, Board } from "@/lib/types";
 import { HARNESS_LABELS, type Harness } from "@/lib/types";
@@ -29,6 +29,8 @@ import { AgentWizard } from "./wizard/AgentWizard";
 import { AgentActions, extractDetail } from "@/components/agent/AgentActions";
 import type { WizardState } from "./wizard/types";
 import { EntityIcon } from "@/components/shared/EntityIcon";
+import { fleetCount, fleetCountLabel } from "./fleetCount";
+import { useEscapeKey } from "@/hooks/useEscapeKey";
 
 // ── Design Tokens (migrated from CINEMA inline map → lib/colors.ts) ────────
 const CINEMA = {
@@ -36,17 +38,17 @@ const CINEMA = {
   border: C.border,
   borderSubtle: C.borderSubtle,
   surfaceBg: "var(--color-border-subtle)",
-  errorBg: `${C.error}1F`,
-  warningBg: `${C.warning}14`,
-  warningBorder: `${C.warning}33`,
+  errorBg: alpha(C.error, 0.12),
+  warningBg: alpha(C.warning, 0.08),
+  warningBorder: alpha(C.warning, 0.2),
 } as const;
 
 const modalOverlayClass = "fixed inset-0 z-50 flex items-end sm:items-center justify-center px-3 sm:px-4";
-const modalBackdropClass = "absolute inset-0 bg-black/70 backdrop-blur-sm";
+const modalBackdropClass = "absolute inset-0 bg-[var(--color-scrim)]/70 backdrop-blur-sm";
 const modalCardStyle = {
   backgroundColor: CINEMA.modalBg,
   border: `1px solid ${CINEMA.border}`,
-  boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
+  boxShadow: `0 4px 24px ${alpha(C.shadow, 0.5)}, 0 1px 2px ${alpha(C.shadow, 0.3)}`,
 };
 const inputStyle = {
   border: `1px solid ${CINEMA.border}`,
@@ -82,13 +84,7 @@ function AssignBoardModal({
 
   // Panel register rule 4: scroll-lock + Esc closes (backdrop click below).
   useBodyScrollLock(true);
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [onClose]);
+  useEscapeKey(onClose);
 
   async function handleAssign() {
     try {
@@ -296,7 +292,10 @@ const PROVISION_MAP: Record<string, { labelKey: string; color: string }> = {
   error: { labelKey: "provError", color: C.error },
 };
 
-function ContextBar({ pct }: { pct: number }) {
+function ContextBar({ pct: pctIn }: { pct: number | null }) {
+  // null = unbekannt: leerer Balken, "—" statt einer alten Zahl
+  const pct = pctIn ?? 0;
+  const known = pctIn !== null;
   const t = useTranslations("agents");
   const color = pct >= 90 ? C.error : pct >= 70 ? C.warning : C.info;
   return (
@@ -314,7 +313,7 @@ function ContextBar({ pct }: { pct: number }) {
         className="text-[10px] tabular-nums w-8 text-right"
         style={{ color: pct >= 70 ? color : C.textMuted }}
       >
-        {pct}%
+        {known ? `${pct}%` : "—"}
       </span>
     </span>
   );
@@ -369,8 +368,8 @@ function AgentRosterRow({
               className="max-sm:hidden inline-flex items-center justify-center w-6 h-6 rounded-sm shrink-0"
               style={{
                 color: C.textMuted,
-                backgroundColor: `${C.textMuted}14`,
-                border: `1px solid ${C.textMuted}26`,
+                backgroundColor: alpha(C.textMuted, 0.08),
+                border: `1px solid ${alpha(C.textMuted, 0.15)}`,
               }}
               title={harnessLabel(agent.harness)}
               aria-label={harnessLabel(agent.harness)}
@@ -383,7 +382,7 @@ function AgentRosterRow({
               className="text-[9px] px-1.5 py-0.5 rounded-sm font-mono shrink-0 max-sm:hidden"
               style={{
                 color: boardName ? C.textMuted : C.warning,
-                border: `1px solid ${boardName ? CINEMA.borderSubtle : `${C.warning}4D`}`,
+                border: `1px solid ${boardName ? CINEMA.borderSubtle : alpha(C.warning, 0.3)}`,
               }}
             >
               {boardName ?? t("noBoard")}
@@ -466,13 +465,7 @@ function AgentActionsSheet({
   const locale = useLocale();
   useBodyScrollLock(true);
   // Esc closes (panel register rule 4) — backdrop click is below.
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [onClose]);
+  useEscapeKey(onClose);
   const pct = contextPercent(agent.context_tokens, agent.context_max);
   const displaySkills = agent.skill_filter ?? agent.skills ?? [];
   const dot = DOT_STATUS(agent.status);
@@ -487,7 +480,7 @@ function AgentActionsSheet({
       exit={{ opacity: 0 }}
       transition={{ duration: 0.15 }}
       className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:px-4"
-      style={{ background: "rgba(0,0,0,0.6)" }}
+      style={{ background: alpha(C.scrim, 0.6) }}
       onClick={onClose}
     >
       <motion.div
@@ -502,7 +495,7 @@ function AgentActionsSheet({
         style={{
           backgroundColor: C.bgBase,
           border: `1px solid ${C.border}`,
-          boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
+          boxShadow: `0 4px 24px ${alpha(C.shadow, 0.5)}, 0 1px 2px ${alpha(C.shadow, 0.3)}`,
         }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -522,7 +515,7 @@ function AgentActionsSheet({
               <div className="flex items-center gap-2 text-[10px]" style={{ color: C.textMuted }}>
                 <StatusDot status={dot} />
                 <span className="capitalize">{agent.status}</span>
-                <span>· {t("contextPct", { pct })}</span>
+                <span>· {pct === null ? "—" : t("contextPct", { pct })}</span>
                 {agent.last_seen_at && <span>· {timeAgo(agent.last_seen_at, locale)}</span>}
               </div>
             </div>
@@ -544,9 +537,6 @@ function AgentActionsSheet({
           </Link>
           <Link href={`/agents/${agent.id}?tab=config`} className={itemCls} style={{ color: "var(--color-text-secondary)" }}>
             <Settings size={15} /> {t("config")}
-          </Link>
-          <Link href={`/agents/${agent.id}?tab=analytics`} className={itemCls} style={{ color: "var(--color-text-secondary)" }}>
-            <BarChart3 size={15} /> {t("analytics")}
           </Link>
           <button
             onClick={() => { onClose(); onReset(agent); }}
@@ -585,7 +575,7 @@ export default function AgentsPage() {
   const t = useTranslations("agents");
   const locale = useLocale();
   const qc = useQueryClient();
-  const { activeBoardId } = useAppStore();
+  const activeBoardId = useAppStore((s) => s.activeBoardId);
 
   const [activeTab, setActiveTab] = useState<"agents" | "templates">("agents");
   const [wizardOpen, setWizardOpen] = useState(false);
@@ -663,11 +653,9 @@ export default function AgentsPage() {
     onError: (e) => notify.error(extractDetail(e)),
   });
 
-  // "online" = alive (heartbeating): idle/working count too — previously the
-  // list showed 0/14 even though the whole fleet was running (idle was ignored).
-  const ALIVE = new Set(["online", "busy", "idle", "working"]);
-  const onlineCount = agents?.filter((a) => ALIVE.has(a.status)).length ?? 0;
-  const totalCount = agents?.length ?? 0;
+  // Split by operational mode: a paused agent still heartbeats ("idle"), so
+  // counting status as "online" read "14/14 online" with 12 agents paused.
+  const fleet = fleetCount(agents);
 
   return (
     <AppShell>
@@ -680,7 +668,7 @@ export default function AgentsPage() {
               {t("title")}
             </h1>
             <p className="text-[13px] text-[var(--color-text-secondary)] mt-1">
-              {t("onlineCount", { online: onlineCount, total: totalCount })}
+              {fleetCountLabel(fleet, t)}
             </p>
           </div>
 
@@ -716,7 +704,7 @@ export default function AgentsPage() {
           >
             <span className="flex items-center gap-2">
               <Bot size={14} />
-              {t("title")} ({totalCount})
+              {t("title")} ({agents?.length ?? 0})
             </span>
           </button>
           <button

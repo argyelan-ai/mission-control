@@ -17,7 +17,7 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { useTranslations } from "next-intl";
 import { Check, GitCompare, Globe, MonitorPlay, MessagesSquare, X } from "lucide-react";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import { CENTER_VIEWS, DETAIL_LEVELS, type CenterView, type DetailLevel } from "./chatOptions";
 import type { PanelKind } from "./PanelRail";
 
@@ -81,7 +81,7 @@ export function ChatOptionsSheet({
             // Scrim derived from the palette's deepest neutral (bg-deep at
             // 75%), not the warm near-black the older MobileNav drawer uses —
             // v4 off-blacks are neutral by doctrine.
-            style={{ background: "rgba(10,10,10,0.75)" }}
+            style={{ background: alpha(C.scrim, 0.75) }}
             onClick={onClose}
             aria-hidden="true"
           />

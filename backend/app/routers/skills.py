@@ -314,7 +314,7 @@ async def update_agent_skills(
         # must not receive the unknown `hooks` key. (Loaded up here because
         # the runtime binding also decides the model, see below.)
         from app.models.runtime import Runtime
-        from app.services.harness_compat import runtime_protocol
+        from app.services.harness_compat import settings_extras_for
         _rt = await session.get(Runtime, agent.runtime_id) if agent.runtime_id else None
 
         # soul_md from DB is the source of truth for systemPrompt
@@ -354,7 +354,7 @@ async def update_agent_skills(
         if is_cli_bridge:
             written = sync_agent_plugins_to_disk(
                 agent_slug, current_prompt, current_model, body.cli_plugins,
-                turn_signal_hooks=(runtime_protocol(_rt) == "anthropic"),
+                turn_signal_hooks=settings_extras_for(getattr(agent, "harness", None), _rt),
             )
             cli_synced = all(written.values())
 

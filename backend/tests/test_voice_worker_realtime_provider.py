@@ -190,7 +190,7 @@ def test_realtime_api_dispatches_through_the_registry():
 def test_live_api_dispatches_through_the_registry_and_builds_gpt_live(monkeypatch):
     """Flipped from the pre-ADR-083 "live api has no transport and raises
     defensively" test: GPT-Live now has a real builder. Skips cleanly on an
-    image without the vorab LiveKit PR #7212 plugin block."""
+    image whose livekit-plugins-openai is older than the 1.8.1 pin."""
     voice = _import_main()
     if not voice._GPT_LIVE_AVAILABLE:
         pytest.skip("GPTLiveModel not installed on this interpreter")

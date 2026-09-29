@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAppStore } from "@/lib/store";
-import { getToken, getStoredUser } from "@/lib/api";
+import { api, getToken, getStoredUser, setStoredUser } from "@/lib/api";
 import { AmbientBackground } from "./AmbientBackground";
 import Sidebar from "./Sidebar";
 import MobileNav, { MobileNavProvider, MobileTabBar } from "./MobileNav";
@@ -12,10 +12,16 @@ import ToastRenderer from "@/components/shared/ToastRenderer";
 import { VoiceProvider, VoiceOverlay } from "@/components/voice/VoiceWidget";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 
+// Refresh the signed-in user from the server once per page load. The stored
+// copy only exists after a form login and goes stale when the role or name
+// changes; without it the shell showed "?" / "—" and a guessed role.
+let userRefreshed = false;
+
 export default function AppShell({
   children,
   fullHeight = false,
   mobileChromeless = false,
+  mobileHideAppBar = false,
 }: {
   children: React.ReactNode;
   fullHeight?: boolean;
@@ -34,6 +40,12 @@ export default function AppShell({
    *  Auf dem Desktop ändert sich nichts: dort trägt keine der beiden Leisten
    *  überhaupt etwas bei (`md:hidden`). */
   mobileChromeless?: boolean;
+  /** Auf dem Handy NUR die obere App-Leiste zurücktreten lassen, die
+   *  Tab-Leiste bleibt (Task-Detail): die Kontextleiste des Bildschirms
+   *  (‹ Aufgaben · ⋯) ersetzt dort die Wortmarke — DESIGN.md K12, eine
+   *  mitlaufende Leiste kommt nie als dritte Leiste dazu. Nur mit `fullHeight`
+   *  sinnvoll. Der Menü-Drawer bleibt erreichbar (Tab „Index"). */
+  mobileHideAppBar?: boolean;
 }) {
   const router = useRouter();
   const { setCurrentUser } = useAppStore();
@@ -55,6 +67,22 @@ export default function AppShell({
     }
 
     setAuthorized(true);
+
+    if (!userRefreshed) {
+      userRefreshed = true;
+      Promise.resolve()
+        .then(() => api.auth.me())
+        .then((fresh) => {
+          const next = { id: fresh.id, email: fresh.email, name: fresh.name, role: fresh.role };
+          setStoredUser(next);
+          setCurrentUser(next);
+        })
+        .catch(() => {
+          // Offline / expired token: keep the stored copy; the next request's
+          // 401 handling takes care of a dead session.
+          userRefreshed = false;
+        });
+    }
   }, [router, setCurrentUser]);
 
   if (!authorized) {
@@ -81,7 +109,7 @@ export default function AppShell({
       <AmbientBackground />
 
       {/* Mobile navigation */}
-      {!mobileChromeless && <MobileNav />}
+      {!mobileChromeless && <MobileNav showBar={!mobileHideAppBar} />}
 
       {/* Desktop: one column carries board, search, navigation and status
           (Shell v4). The former WorkspaceSwitcher rail, TopBar and StatusBar
@@ -90,8 +118,11 @@ export default function AppShell({
         <Sidebar />
       </div>
 
-      {/* Main content area */}
-      <div className="flex flex-col flex-1 min-w-0 overflow-hidden relative z-10">
+      {/* Main content area — deliberately NO z-index: a z-index here would
+          open a stacking context and trap every page overlay (z-40/z-50)
+          beneath the fixed mobile app bar (z-40). `relative` alone already
+          paints it above the z-0 ambient background (later in tree order). */}
+      <div className="flex flex-col flex-1 min-w-0 overflow-hidden relative">
         {fullHeight ? (
           // Full-height mode: no page scroll, but KEEP main-content-pt,
           // horizontal padding, AND the max-w-[1600px] mx-auto wrap so
@@ -106,7 +137,7 @@ export default function AppShell({
               // `md:pt-6` hält den Desktop-Abstand, den main-content-pt dort
               // beisteuert (1.5rem), unverändert. Ein "pt-0" davor braucht es
               // nicht — Tailwinds Preflight setzt padding ohnehin auf 0.
-              mobileChromeless ? "md:pt-6" : "main-content-pt"
+              mobileChromeless || mobileHideAppBar ? "md:pt-6" : "main-content-pt"
             }`}
           >
             <div className="mx-auto w-full max-w-[1600px] flex flex-col flex-1 min-h-0">

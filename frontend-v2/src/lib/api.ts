@@ -12,7 +12,7 @@ import type {
   Credential,
   CostOverview,
   DiscordChannel,
-  HenrySessionState,
+  GuidedSessionState,
   IntelligenceConfig,
   IntelligenceInsights,
   Loop,
@@ -122,16 +122,20 @@ import type {
   FsSearchResult,
   TrashEntry,
 } from "./types";
+import type {
+  HeadPairsResponse,
+  HeadRestartBody,
+  HeadRun,
+  HeadBusy,
+  HeadStartBody,
+} from "./heads";
+import type { LastNight, NightConfig, NightConfigUpdate, NightEntry, NightTonight } from "./nightShift";
 
-export const BASE_URL = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
+import { AUTH_TOKEN_KEY, BASE_URL, getToken } from "./authToken";
+import { withStreamTicket } from "./streamTicket";
 
-export const AUTH_TOKEN_KEY = "mc_auth_token";
+export { AUTH_TOKEN_KEY, BASE_URL, getToken };
 export const USER_INFO_KEY = "mc_user";
-
-export function getToken(): string {
-  if (typeof window === "undefined") return "";
-  return localStorage.getItem(AUTH_TOKEN_KEY) ?? "";
-}
 
 export function clearToken() {
   if (typeof window !== "undefined") {
@@ -183,6 +187,25 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+/** Like request(), but returns the raw response body as text (Markdown etc.). */
+export async function requestText(path: string, init?: RequestInit): Promise<string> {
+  const res = await fetch(`${BASE_URL}${path}`, {
+    ...init,
+    cache: "no-store",
+    headers: { Authorization: `Bearer ${getToken()}`, ...init?.headers },
+  });
+  if (res.status === 401 && typeof window !== "undefined") {
+    clearToken();
+    window.location.href = "/login";
+    throw new Error("Session abgelaufen");
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText);
+    throw new Error(`API ${res.status}: ${text}`);
+  }
+  return res.text();
+}
+
 // Unauthenticated request (for login/register)
 async function publicRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE_URL}${path}`, {
@@ -228,6 +251,8 @@ export const api = {
         "/api/v1/system/version",
       ),
     status: () => request<SystemStatus>("/api/v1/system/status"),
+    alerts: () => request<import("./homeAlerts").HomeAlertsResponse>("/api/v1/system/alerts"),
+    dailyMetrics: () => request<import("./usage").DailyMetrics>("/api/v1/system/daily-metrics"),
     metrics: () => request<SystemMetrics>("/api/v1/system/metrics"),
     metricsHistory: () => request<MetricsHistoryResponse>("/api/v1/system/metrics/history"),
     mode: () => request<import("./types").SystemModeMeta>("/api/v1/system/mode"),
@@ -254,6 +279,20 @@ export const api = {
       request<CostTimeseries[]>(`/api/v1/intelligence/costs/timeseries?days=${days}`),
     byTask: (days = 30, limit = 10) =>
       request<CostByTask[]>(`/api/v1/intelligence/costs/by-task?days=${days}&limit=${limit}`),
+    // tz: the browser's IANA zone, so days and weeks end at the operator's midnight.
+    byWeek: (weeks = 6, tz?: string) =>
+      request<import("./usage").UsageByWeek>(
+        `/api/v1/intelligence/costs/by-week?weeks=${weeks}${tz ? `&tz=${encodeURIComponent(tz)}` : ""}`,
+      ),
+    byDay: (days = 182, tz?: string) =>
+      request<import("./insights").UsageByDay>(
+        `/api/v1/intelligence/costs/by-day?days=${days}${tz ? `&tz=${encodeURIComponent(tz)}` : ""}`,
+      ),
+  },
+
+  // ── Page usage (E0 beacon; the POST lives in lib/pageBeacon.ts) ─────────────
+  usage: {
+    pages: (weeks = 1) => request<import("./usage").PageViews>(`/api/v1/usage/pages?weeks=${weeks}`),
   },
 
   // ── Files (global filesystem browser, /api/v1/files/*) ──────────────────────
@@ -579,7 +618,7 @@ export const api = {
   // Planner disabled 2026-04-11 (Boss autonomy overhaul). Backend router returns 404.
   // PlannerMessage type stays — still used by research:.
 
-  // ── Playbooks / Henry ───────────────────────────────────────────────────────
+  // ── Playbooks / Guided setup ───────────────────────────────────────────────────────
   playbooks: {
     catalog: () => request<{ playbooks: PlaybookCatalogItem[] }>("/api/v1/playbooks/catalog"),
     skillPacks: () => request<SkillPack[]>("/api/v1/playbooks/skill-packs"),
@@ -634,15 +673,15 @@ export const api = {
       const qs = params.toString();
       return request<PlaybookRunProjection[]>(`/api/v1/playbooks/runs/recent${qs ? `?${qs}` : ""}`);
     },
-    henryCurrent: (boardId: string) =>
-      request<HenrySessionState | null>(`/api/v1/playbooks/henry/current?board_id=${boardId}`),
-    henryStart: (data: { board_id: string; kind?: string; playbook_id?: string }) =>
-      request<HenrySessionState>("/api/v1/playbooks/henry/sessions/start", {
+    guidedCurrent: (boardId: string) =>
+      request<GuidedSessionState | null>(`/api/v1/playbooks/guided/current?board_id=${boardId}`),
+    guidedStart: (data: { board_id: string; kind?: string; playbook_id?: string }) =>
+      request<GuidedSessionState>("/api/v1/playbooks/guided/sessions/start", {
         method: "POST",
         body: JSON.stringify(data),
       }),
-    henryMessage: (sessionId: string, content: string) =>
-      request<HenrySessionState>(`/api/v1/playbooks/henry/sessions/${sessionId}/message`, {
+    guidedMessage: (sessionId: string, content: string) =>
+      request<GuidedSessionState>(`/api/v1/playbooks/guided/sessions/${sessionId}/message`, {
         method: "POST",
         body: JSON.stringify({ content }),
       }),
@@ -797,6 +836,14 @@ export const api = {
         return `${BASE_URL}/api/v1/boards/${boardId}/tasks/${taskId}/workspace/content?${qs.toString()}`;
       },
     },
+    /** Run record ("Laufakte") — task-scoped, NOT board-scoped. JSON for the
+     *  Summary tab, Markdown for "Copy as Markdown", and the Vault export
+     *  (operator role; overwrites only its own runs/<id>-laufakte.md). */
+    runRecord: (taskId: string) =>
+      request<import("./types").RunRecord>(`/api/v1/tasks/${taskId}/run-record`),
+    runRecordMarkdown: (taskId: string) => requestText(`/api/v1/tasks/${taskId}/run-record.md`),
+    runRecordToVault: (taskId: string) =>
+      request<{ path: string }>(`/api/v1/tasks/${taskId}/run-record/to-vault`, { method: "POST" }),
     checklist: {
       list: (boardId: string, taskId: string) =>
         request<TaskChecklistItem[]>(`/api/v1/boards/${boardId}/tasks/${taskId}/checklist`),
@@ -1259,11 +1306,9 @@ export const api = {
         request<{ ok: boolean }>(`/api/v1/agents/${agentId}/terminal/${taskId}`, {
           method: "DELETE",
         }),
-      wsUrl: (agentId: string, taskId: string): string => {
-        const base = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
-        const ws = base.replace(/^http/, "ws");
-        return `${ws}/api/v1/agents/${agentId}/terminal/${taskId}/ws?token=${getToken()}`;
-      },
+      /** Async: fetches a single-use stream ticket (never the login token). */
+      wsUrl: (agentId: string, taskId: string): Promise<string> =>
+        withStreamTicket(`${wsBase()}/api/v1/agents/${agentId}/terminal/${taskId}/ws`),
     },
   },
 
@@ -1673,11 +1718,9 @@ export const api = {
       request<{ ok: boolean; session: string }>("/api/v1/plugins/shell", { method: "POST" }),
     stopShell: () =>
       request<{ ok: boolean; session: string }>("/api/v1/plugins/shell", { method: "DELETE" }),
-    shellWsUrl: (): string => {
-      const base = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
-      const ws = base.replace(/^http/, "ws");
-      return `${ws}/api/v1/plugins/shell/ws?token=${getToken()}`;
-    },
+    /** Async: fetches a single-use stream ticket (never the login token). */
+    shellWsUrl: (): Promise<string> =>
+      withStreamTicket(`${wsBase()}/api/v1/plugins/shell/ws`),
   },
 
   // Phase 31 / OCS-15: api.clawhub group removed (Marketplace UI deleted in
@@ -2133,6 +2176,55 @@ export const api = {
         body: JSON.stringify({ repo, filename }),
       }),
   },
+  // ── Heads (head launcher, docs/specs/head-launcher.md §7) ─────────────────
+  // One short-lived head per job. Every endpoint answers 404 `heads_disabled`
+  // while the feature flag is off — callers treat that as "no launcher".
+  heads: {
+    pairs: (repoId?: string | null): Promise<HeadPairsResponse> =>
+      request(`/api/v1/heads/pairs${repoId ? `?repo_id=${encodeURIComponent(repoId)}` : ""}`),
+    start: (body: HeadStartBody): Promise<{ run_id: string; state: string; branch?: string }> =>
+      request("/api/v1/heads", { method: "POST", body: JSON.stringify(body) }),
+    restart: (runId: string, body: HeadRestartBody): Promise<{ run_id: string; state: string; restarted_from: string }> =>
+      request(`/api/v1/heads/${encodeURIComponent(runId)}/restart`, { method: "POST", body: JSON.stringify(body) }),
+    list: (params: { taskId?: string; active?: boolean; box?: string } = {}): Promise<{ runs: HeadRun[] }> => {
+      const q = new URLSearchParams();
+      if (params.taskId) q.set("task_id", params.taskId);
+      if (params.active != null) q.set("active", String(params.active));
+      if (params.box) q.set("box", params.box);
+      const qs = q.toString();
+      return request(`/api/v1/heads${qs ? `?${qs}` : ""}`);
+    },
+    get: (runId: string): Promise<HeadRun> => request(`/api/v1/heads/${encodeURIComponent(runId)}`),
+    log: (runId: string, tail = 200): Promise<string> =>
+      requestText(`/api/v1/heads/${encodeURIComponent(runId)}/log?tail=${tail}`),
+    runRecord: (runId: string): Promise<string> =>
+      requestText(`/api/v1/heads/${encodeURIComponent(runId)}/run-record`),
+    stop: (runId: string): Promise<{ run_id: string; state: string }> =>
+      request(`/api/v1/heads/${encodeURIComponent(runId)}/stop`, { method: "POST" }),
+    occupancy: (): Promise<{ boxes: Record<string, HeadBusy> }> => request("/api/v1/heads/occupancy"),
+  },
+  // ── Night shift (ROADMAP E2) — marked tasks start as heads tonight ────────
+  // Behind the same switch as heads (404 `heads_disabled` while off).
+  nightShift: {
+    config: (): Promise<NightConfig> => request("/api/v1/night-shift/config"),
+    saveConfig: (body: NightConfigUpdate): Promise<NightConfig> =>
+      request("/api/v1/night-shift/config", { method: "PUT", body: JSON.stringify(body) }),
+    tonight: (): Promise<NightTonight> => request("/api/v1/night-shift/tonight"),
+    // Home's "Last night" card: the report of the last ended night + blocked night heads.
+    lastNight: (): Promise<LastNight> => request("/api/v1/night-shift/last-night"),
+    dismissLastNight: (night: string): Promise<{ night: string; dismissed: boolean }> =>
+      request(`/api/v1/night-shift/last-night/${encodeURIComponent(night)}/dismiss`, { method: "POST" }),
+    getMark: (taskId: string): Promise<{ mark: NightEntry | null }> =>
+      request(`/api/v1/night-shift/tasks/${encodeURIComponent(taskId)}`),
+    mark: (
+      taskId: string,
+      body: { harness: string; runtime_slug: string; hold_on_failure?: boolean },
+    ): Promise<{ mark: NightEntry }> =>
+      request(`/api/v1/night-shift/tasks/${encodeURIComponent(taskId)}`, { method: "PUT", body: JSON.stringify(body) }),
+    unmark: (taskId: string): Promise<{ mark: null }> =>
+      request(`/api/v1/night-shift/tasks/${encodeURIComponent(taskId)}`, { method: "DELETE" }),
+  },
+
   spark: {
     // Back-compat alias — delegates to the host with slug `dgx-spark` (ADR-048).
     metrics: (): Promise<SparkMetrics> =>
@@ -2303,16 +2395,11 @@ export const api = {
       request<{ ok: boolean; session: string }>(`/api/v1/agents/${agentId}/shell`, { method: "POST" }),
     stopShell: (agentId: string) =>
       request<{ ok: boolean }>(`/api/v1/agents/${agentId}/shell`, { method: "DELETE" }),
-    ptyWsUrl: (agentId: string): string => {
-      const base = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
-      const ws = base.replace(/^http/, "ws");
-      return `${ws}/api/v1/agents/${agentId}/terminal?token=${getToken()}`;
-    },
-    hostPtyWsUrl: (agentId: string): string => {
-      const base = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
-      const ws = base.replace(/^http/, "ws");
-      return `${ws}/api/v1/host-agents/${agentId}/terminal?token=${getToken()}`;
-    },
+    /** Async: fetches a single-use stream ticket (never the login token). */
+    ptyWsUrl: (agentId: string): Promise<string> =>
+      withStreamTicket(`${wsBase()}/api/v1/agents/${agentId}/terminal`),
+    hostPtyWsUrl: (agentId: string): Promise<string> =>
+      withStreamTicket(`${wsBase()}/api/v1/host-agents/${agentId}/terminal`),
   },
 
   // ── Browser Live View (view-only CDP screencast) ─────────────────────────
@@ -2322,13 +2409,18 @@ export const api = {
   },
 };
 
-// Separate helper (not on `api`, mirrors cliSessions.*WsUrl) so components can
-// build the WS URL without an extra network round-trip.
-export function browserLiveWsUrl(targetId?: string): string {
+/** WebSocket base: the configured API origin with ws(s) scheme, or "" for
+ *  same-origin relative URLs. */
+function wsBase(): string {
   const base = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
-  const ws = base.replace(/^http/, "ws");
-  const targetParam = targetId ? `&target=${encodeURIComponent(targetId)}` : "";
-  return `${ws}/api/v1/browser-live/ws?token=${getToken()}${targetParam}`;
+  return base.replace(/^http/, "ws");
+}
+
+// Separate helper (not on `api`, mirrors cliSessions.*WsUrl). Async: fetches a
+// single-use stream ticket — the login token never goes into the URL.
+export function browserLiveWsUrl(targetId?: string): Promise<string> {
+  const targetParam = targetId ? `?target=${encodeURIComponent(targetId)}` : "";
+  return withStreamTicket(`${wsBase()}/api/v1/browser-live/ws${targetParam}`);
 }
 
 // ── SSE URLs ──────────────────────────────────────────────────────────────────

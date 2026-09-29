@@ -213,9 +213,14 @@ async def test_switch_to_omp_is_cross_image_and_passes_ready_signals(
     assert result.image_switched is True  # openclaude -> omp = cross-image
     assert result.new_runtime["slug"] == "omp-qwen"
     # The health check for an omp target MUST anchor on the native-TUI prompt
-    # glyphs (ADR-049: Window 0 is now the omp TUI, not the headless bridge).
+    # glyphs (ADR-049: Window 0 is now the omp TUI, not the headless bridge)
+    # plus the OMP_ACP_READY sentinel (fix omp-acp-no-tui-window, 13.09.2026:
+    # Window 0 shows no TUI at all under OMP_DRIVER=acp) — additive, so a
+    # native-TUI switch like this one is unaffected either way.
+    from app.services.agent_runtime_switch import OMP_READY_SIGNALS
+
     _, kwargs = health_mock.await_args
-    assert kwargs.get("ready_signals") == ("╭─", "❯")
+    assert kwargs.get("ready_signals") == OMP_READY_SIGNALS
     assert kwargs.get("respawn_mode") is False  # cross-image path
 
 

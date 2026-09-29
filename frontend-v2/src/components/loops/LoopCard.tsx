@@ -3,7 +3,7 @@
 import { motion } from "framer-motion";
 import { useTranslations } from "next-intl";
 import { AlertTriangle, Loader2, Pause, Play, Square, Trash2 } from "lucide-react";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import type { Loop } from "@/lib/types";
 import { canPauseLoop, canStartLoop, canStopLoop, isLoopInactive, LOOP_STATUS_META } from "./loopMeta";
 
@@ -43,7 +43,7 @@ export function LoopCard({ loop, onOpen, onStart, onPause, onStop, onDelete, act
           </span>
           <span
             className="inline-flex shrink-0 items-center gap-1.5 rounded-md px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide"
-            style={{ background: `${meta.color}22`, border: `1px solid ${meta.color}55`, color: meta.textColor }}
+            style={{ background: alpha(meta.color, 0.13), border: `1px solid ${alpha(meta.color, 0.33)}`, color: meta.textColor }}
           >
             {loop.status === "running" && (
               <span
@@ -156,7 +156,7 @@ function ActionButton({
       onClick={onClick}
       disabled={disabled}
       className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-      style={{ background: `${tone}1A`, border: `1px solid ${tone}4D`, color: tone }}
+      style={{ background: alpha(tone, 0.1), border: `1px solid ${alpha(tone, 0.3)}`, color: tone }}
     >
       {icon}
       {label}

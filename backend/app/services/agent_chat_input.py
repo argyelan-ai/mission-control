@@ -29,8 +29,16 @@ live terminal (``routers/cli_terminal.py``):
   bytes arriving in the attach handshake or just before the client was
   terminated were lost, and the bridge still logged "wrote N bytes".
 
-Every other host-runtime agent (Hermes, Jarvis, ...) has no input channel at
-all — ``InputNotSupportedError`` for the router to turn into 409
+- **Kopflose Agenten (ACP)**: ein Agent mit ACP-Treiber hat gar keine
+  bedienbare TUI mehr — der Sessions-Chat ist seine einzige Oberflaeche
+  (docs/specs/chat-over-acp.md). Statt Tastendruecken geht ALLES (Prompt,
+  Stop, Denk-Stufe, Modell) ueber den Steuerkanal in
+  ``acp_chat_transport.py``: ``acp-docker`` = CLI-Shim im Container,
+  ``acp-http`` = hermes-bridge auf dem Host. Und alles, was der Composer
+  ANZEIGT, kommt dort aus ``acp-chat-state.json`` statt aus einer Pane-Sonde.
+
+Every other host-runtime agent (Hermes ohne ACP-Treiber, Jarvis, ...) has
+no input channel at all — ``InputNotSupportedError`` for the router to turn into 409
 ``{"reason": "input_not_supported"}``, mirroring A2's hard privacy/capability
 rule that only cli-bridge agents and Boss get a live session surface.
 
@@ -141,6 +149,11 @@ import websockets as ws_client
 
 from app.config import settings
 from app.redis_client import RedisKeys, get_redis
+from app.services.acp_chat_transport import (
+    headless_chat_kind,
+    read_acp_chat_state,
+    transport_for,
+)
 from app.services.harness_catalog import (
     discover_effort_support,
     discover_model_catalog,
@@ -186,6 +199,20 @@ _BOSS_SLUGS = ("boss", "boss-host")
 # nie an; per tmux send-keys von Hand getippt antwortete Boss sofort.
 _BOSS_WS_URL = "ws://host.docker.internal:7682/?mode=keys"
 _BOSS_ACK_TIMEOUT_SECONDS = 10
+
+# Bounded retry for a transient delivery failure (bridge unreachable, or the
+# bridge answering "no server running on .tmux.sock" because boss-host's
+# tmux server is between `kill-server` and the fresh `new-session` a restart
+# does — live incident 16.09.2026: a message landed in exactly that window,
+# was rejected once, and never tried again). Bounded in BOTH count and total
+# time per the task guardrail — an unbounded queue would just move the
+# problem, not fix it. 4 attempts * 3s = worst case ~12s of extra wait on
+# top of the per-attempt ack timeout above; long enough to ride out the
+# trailing edge of a restart once cli_terminal._wait_for_host_window_ready
+# (see that module) already withholds "restart done" until the CLI is
+# actually ready, short enough that a message never appears to hang.
+_BOSS_KEY_DELIVERY_ATTEMPTS = 4
+_BOSS_KEY_DELIVERY_RETRY_DELAY_SECONDS = 3.0
 
 _BRACKETED_PASTE_START = "\x1b[200~"
 _BRACKETED_PASTE_END = "\x1b[201~"
@@ -393,11 +420,9 @@ async def _touch_recycler_marker(slug: str) -> None:
     )
 
 
-async def _send_boss_keys(keys: list[dict]) -> None:
-    """Delivers one ``send_keys`` batch to the host-pty-bridge (``?mode=keys``)
-    and waits for its ack. ``keys`` items are ``{"literal": text}`` (typed
-    via ``tmux send-keys -l``) or ``{"named": "Enter"}`` (a named tmux key
-    from ``_TMUX_NAMED_KEYS``). Raises ``BossDeliveryError`` unless the
+async def _send_boss_keys_once(keys: list[dict]) -> None:
+    """Single delivery attempt — see ``_send_boss_keys`` for the retry
+    wrapper callers actually use. Raises ``BossDeliveryError`` unless the
     bridge answered ``ok=true`` — unlike the old raw-pty write this never
     reports success it cannot vouch for."""
     frame = json.dumps({"type": "send_keys", "keys": keys})
@@ -420,6 +445,39 @@ async def _send_boss_keys(keys: list[dict]) -> None:
         raise BossDeliveryError(str(error))
 
 
+async def _send_boss_keys(keys: list[dict]) -> None:
+    """Delivers one ``send_keys`` batch to the host-pty-bridge (``?mode=keys``),
+    retrying a bounded number of times on failure before giving up.
+
+    Every failure of ``_send_boss_keys_once`` — bridge unreachable, no ack,
+    or an explicit rejection such as "no server running on .tmux.sock" — is
+    treated as retry-worthy here: all three are observed symptoms of the same
+    narrow restart window (see the module comment on
+    ``_BOSS_KEY_DELIVERY_ATTEMPTS``), and retrying a handful of times costs
+    nothing when the bridge is simply down for good, since the final attempt
+    still raises. Only the LAST attempt's ``BossDeliveryError`` propagates —
+    callers see one honest failure, not a confusing chain. Never fails
+    silently: a message either gets an ``ok`` ack within the bounded retry
+    window, or the caller gets a 502 with the real reason attached
+    (``routers/agent_chat.py::_boss_delivery_failed``).
+    """
+    last_error: BossDeliveryError | None = None
+    for attempt in range(1, _BOSS_KEY_DELIVERY_ATTEMPTS + 1):
+        try:
+            await _send_boss_keys_once(keys)
+            return
+        except BossDeliveryError as e:
+            last_error = e
+            if attempt < _BOSS_KEY_DELIVERY_ATTEMPTS:
+                logger.info(
+                    "chat input: boss key delivery attempt %d/%d failed (%s), retrying",
+                    attempt, _BOSS_KEY_DELIVERY_ATTEMPTS, e,
+                )
+                await asyncio.sleep(_BOSS_KEY_DELIVERY_RETRY_DELAY_SECONDS)
+    assert last_error is not None  # loop always raises or returns before falling through
+    raise last_error
+
+
 def _boss_key_item(key: str) -> dict:
     """``ALLOWED_KEYS`` name -> send_keys item: named tmux key or literal
     character (digits / y / n)."""
@@ -432,7 +490,18 @@ def _target_kind(agent) -> str:
     """Classifies the agent into a delivery channel, or raises
     ``InputNotSupportedError`` if it has none. Duck-typed on ``agent.slug`` /
     ``agent.agent_runtime`` like ``transcript_chat.resolve_transcript_dir``,
-    so tests can pass a plain stub."""
+    so tests can pass a plain stub.
+
+    ``acp-docker`` / ``acp-http`` stehen VOR den TUI-Kanaelen: ein Agent mit
+    ACP-Treiber hat keine bedienbare TUI mehr, und ein Tastendruck in sein
+    Fenster 0 liefe ins Leere (docs/specs/chat-over-acp.md). Die Regel selbst
+    steht in ``acp_chat_transport.headless_chat_kind`` — dieselbe Funktion,
+    aus der ``Agent.headless_chat`` faellt, damit UI und Sendepfad nie
+    auseinanderlaufen koennen."""
+    acp_kind = headless_chat_kind(agent)
+    if acp_kind is not None:
+        return acp_kind
+
     runtime = getattr(agent, "agent_runtime", None)
     slug = getattr(agent, "slug", None)
 
@@ -441,6 +510,28 @@ def _target_kind(agent) -> str:
     if runtime == "host" and slug in _BOSS_SLUGS:
         return "boss"
     raise InputNotSupportedError()
+
+
+#: Die beiden kopflosen Kanaele (ACP). Zusammengefasst, weil sie sich in
+#: JEDER Sendefunktion gleich verhalten — der Unterschied steckt allein im
+#: Transport, nicht in der Bedienlogik.
+_ACP_KINDS = ("acp-docker", "acp-http")
+
+
+def _acp_config_option(state: dict | None, option_id: str) -> tuple[list[dict], str | None]:
+    """``(Optionen, aktueller Wert)`` einer ``configOptions``-Zeile aus der
+    Zustandsdatei des Chat-Daemons. Leer/``None``, wenn der Daemon diese
+    Einstellung (noch) nicht gemeldet hat — dann gibt es dafuer nichts
+    anzubieten und nichts zu schalten."""
+    for option in (state or {}).get("configOptions") or []:
+        if not isinstance(option, dict) or option.get("id") != option_id:
+            continue
+        values = [
+            o for o in option.get("options") or []
+            if isinstance(o, dict) and o.get("value")
+        ]
+        return values, option.get("currentValue")
+    return [], None
 
 
 def can_receive_input(agent) -> bool:
@@ -527,6 +618,25 @@ async def send_text(agent, text: str) -> None:
     kind = _target_kind(agent)
     slug = agent.slug
 
+    if kind in _ACP_KINDS:
+        # Kopflos: kein Fenster, kein Bereitschafts-Tor, kein Recycler-Marker
+        # (der Chat-Daemon IST die Sitzung — er wird nicht weggeraeumt). Der
+        # Zug laeuft im Daemon asynchron weiter; ``ok:true`` heisst nur
+        # "angenommen", genau wie beim TUI-Pfad das abgesetzte Enter.
+        answer = await transport_for(agent).prompt(text)
+        if not answer.get("ok"):
+            if answer.get("error") == "busy":
+                raise AgentBusyError()
+            # Jede andere Absage hat der Daemon bereits als ``chat_error``
+            # ins Transkript geschrieben — sie erscheint im Chat als rote
+            # Karte. Hier noch eine Ausnahme zu werfen wuerde dieselbe
+            # Nachricht ein zweites Mal erzaehlen, nur ohne Code.
+            logger.warning(
+                "acp chat: prompt abgelehnt (slug=%s): %s", slug, answer.get("error")
+            )
+        note_sent(str(getattr(agent, "id", "") or slug), text)
+        return
+
     if kind == "docker":
         from app.services.transcript_adapters import PANE_PROBED_HARNESSES
 
@@ -602,6 +712,16 @@ async def send_keys(agent, keys: list[str]) -> None:
     kind = _target_kind(agent)
     slug = agent.slug
 
+    if kind in _ACP_KINDS:
+        # Der Stop-Knopf des Composers schickt genau ``["Escape"]`` — das ist
+        # ueber ACP ein ``cancel``. Jede andere Taste (Enter, Ziffern, y/n)
+        # gehoert zu einer TUI, die es hier nicht gibt: ehrliche 409 statt
+        # eines Tastendrucks ins Leere.
+        if keys == ["Escape"]:
+            await transport_for(agent).cancel()
+            return
+        raise InputNotSupportedError()
+
     if kind == "docker":
         for key in keys:
             if key in _TMUX_NAMED_KEYS:
@@ -659,6 +779,13 @@ async def set_effort(agent, level: str) -> None:
       there's no live process left to interrupt, matching
       ``_run_docker_exec``'s own fail-silent contract for a target that no
       longer exists."""
+    if headless_chat_kind(agent) is not None:
+        # Kopflos: die Stufenleiter kommt aus dem Zustand DIESES Agenten
+        # (``configOptions[id=thinking]``), nicht aus einer Harness-Tabelle —
+        # dieselbe Quelle, aus der der Chip im Composer gebaut wird.
+        await _set_effort_acp(agent, level)
+        return
+
     harness = getattr(agent, "harness", None)
     # Gegen die Leiter DIESES Harness, nicht pauschal gegen die von Claude
     # Code: ``ultracode`` gibt es bei openclaude nicht, und die CLI wuerde es
@@ -715,6 +842,67 @@ async def set_effort(agent, level: str) -> None:
         if not await _pane_is_busy(agent):
             await _run_docker_exec(_docker_argv(slug, "Escape"))
         raise EffortSwitchFailedError()
+
+
+async def _set_effort_acp(agent, level: str) -> None:
+    """Denk-Stufe eines kopflosen Agenten: ``config id=thinking``.
+
+    Kein Tippen, kein Nachlesen im Pane, kein Aufraeum-Escape — der Daemon
+    ANTWORTET, ob die Einstellung angekommen ist (``ok:true`` mit den neuen
+    ``configOptions``). Damit faellt die ganze Verifikationsmechanik der
+    TUI-Pfade weg, und mit ihr ``EffortSwitchFailedError``: hier gibt es nur
+    angenommen oder abgelehnt.
+
+    Zwei Tore davor, beide Spiegel der Capabilities:
+    - keine Zustandsdatei / keine ``thinking``-Optionen -> der Chip ist gar
+      nicht da, also darf auch ein direkter POST nichts schalten
+      (``InputNotSupportedError`` -> 409).
+    - eine Stufe, die dieser Agent nicht anbietet -> ``ValueError`` (422),
+      gleiche Konvention wie die Allowlist der TUI-Pfade."""
+    state = await asyncio.to_thread(read_acp_chat_state, agent)
+    options, _current = _acp_config_option(state, "thinking")
+    levels = [o["value"] for o in options]
+    if not levels:
+        raise InputNotSupportedError()
+    if level not in levels:
+        raise ValueError(f"effort level not allowlisted: {level!r}")
+
+    answer = await transport_for(agent).config("thinking", level)
+    if not answer.get("ok"):
+        raise EffortSwitchRejectedError(
+            str(answer.get("detail") or answer.get("error") or "rejected")
+        )
+
+
+async def set_model(agent, name: str) -> None:
+    """Modellwechsel eines kopflosen Agenten: ``config id=model``.
+
+    Der Composer schickt einen Modellwechsel heute als Text (``/model X``) —
+    das funktioniert ueber ACP unveraendert, omp fuehrt Slash-Kommandos im
+    ``session/prompt`` aus. Diese Funktion ist der SAUBERE Weg daneben: sie
+    setzt die Option direkt, ohne den Umweg ueber einen Zug, und ist der
+    Andockpunkt fuer einen spaeteren ``/chat/model``-Endpunkt (heute gibt es
+    keinen — der Composer bleibt beim Text).
+
+    Ein abgelehnter Wechsel (``ok:false``, z.B. unbekanntes Modell) wirft
+    hier NICHT: der Daemon schreibt dafuer eine ``chat_error``-Zeile, die im
+    Chat als rote Karte mit Code erscheint (Spezifikation, Probe 5). Eine
+    zweite Fehlermeldung ohne Code waere nur Laerm."""
+    if headless_chat_kind(agent) is None:
+        raise InputNotSupportedError()
+
+    state = await asyncio.to_thread(read_acp_chat_state, agent)
+    options, _current = _acp_config_option(state, "model")
+    values = [o["value"] for o in options]
+    if values and name not in values:
+        raise ValueError(f"model not offered by this agent: {name!r}")
+
+    answer = await transport_for(agent).config("model", name)
+    if not answer.get("ok"):
+        logger.warning(
+            "acp chat: Modellwechsel abgelehnt (slug=%s, model=%s): %s",
+            getattr(agent, "slug", None), name, answer.get("error"),
+        )
 
 
 async def _set_effort_omp(agent, level: str) -> None:
@@ -1099,6 +1287,11 @@ async def effort_capabilities(agent) -> dict[str, object]:
     (Codes siehe ``_no_effort``): das UI erklaert es am Chip, statt das
     Bedienelement wortlos verschwinden zu lassen.
 
+    Kopflose Agenten (``acp-docker``/``acp-http``) beantworten beide Fragen
+    aus EINER Quelle: ``configOptions[id=thinking]`` in der Zustandsdatei des
+    Chat-Daemons. Fehlt sie, ist die Antwort leer mit Grund
+    ``acp_state_missing`` — nie eine Ausnahme.
+
     Never raises: an unsupported runtime is a normal, expected answer here
     (unlike ``set_effort``, where it's a request the caller made in error),
     so it's handled as data, not an exception."""
@@ -1106,6 +1299,29 @@ async def effort_capabilities(agent) -> dict[str, object]:
         kind = _target_kind(agent)
     except InputNotSupportedError:
         kind = None
+
+    if kind in _ACP_KINDS:
+        # Quelle ist die Zustandsdatei des Chat-Daemons, nicht der Pane: einen
+        # Pane gibt es hier nicht. Fehlt die Datei (Daemon startet noch, hat
+        # nie geschrieben), ist die ehrliche Antwort "noch nichts bekannt" —
+        # mit Grund, damit das UI es erklaeren kann statt den Chip wortlos
+        # verschwinden zu lassen.
+        state = await asyncio.to_thread(read_acp_chat_state, agent)
+        options, current = _acp_config_option(state, "thinking")
+        if not options:
+            return _no_effort("acp_state_missing")
+        levels = [o["value"] for o in options]
+        return {
+            "effortLevels": levels,
+            "canSwitchEffort": True,
+            "effort": current if current in levels else None,
+            "effortShared": False,
+            "effortReason": None,
+            # Der Daemon schreibt die Datei nach JEDER Aenderung neu — sie ist
+            # damit juenger als jedes usage-Ereignis, gleiche Begruendung wie
+            # bei der omp-Statuszeile.
+            "effortLive": True,
+        }
 
     harness = getattr(agent, "harness", None)
     levels = effort_levels_for(harness)
@@ -1534,6 +1750,19 @@ async def slash_command_capabilities(agent) -> dict[str, object]:
     — builtins merged with this agent's installed skills. Docker/cli-bridge
     only: every other runtime gets builtins alone (no ``claude-config``
     mount to scan for skills)."""
+    if headless_chat_kind(agent) is not None:
+        # Kopflos: die Liste kommt vom Agenten selbst
+        # (``available_commands_update`` ueber ACP, vom Daemon in die
+        # Zustandsdatei gespiegelt). Keine gepflegte Builtin-Tabelle mehr —
+        # und keine Skill-Suche im Container: was der Agent kann, sagt er.
+        state = await asyncio.to_thread(read_acp_chat_state, agent)
+        commands = [
+            {"name": c["name"], "description": c.get("description") or None}
+            for c in (state or {}).get("commands") or []
+            if isinstance(c, dict) and c.get("name")
+        ]
+        return {"slashCommands": commands}
+
     # Die Builtins sind CLI-Vokabular und pro Harness verschieden. Fuer eine
     # fremde CLI ohne aufgenommene Liste (kimi) waeren sie falsche
     # Versprechen — dort bleibt die Liste leer, bis deren Picker einmal
@@ -1587,6 +1816,26 @@ async def model_options_capabilities(agent) -> dict[str, object]:
     ``model_aliases`` fallback every agent gets when its catalog is
     unavailable. Never raises — catalog discovery is fully fail-silent on
     its own (see ``harness_catalog``)."""
+    if headless_chat_kind(agent) is not None:
+        # ``configOptions[id=model]`` des Daemons. ``command`` ist der NACKTE
+        # Wert: der Composer schickt die Auswahl als ``/model <command>`` —
+        # ein vorangestelltes "/model " ergaebe ``/model /model x``.
+        # ``label`` ist der Anzeigename, den der Agent selbst liefert.
+        state = await asyncio.to_thread(read_acp_chat_state, agent)
+        options, current = _acp_config_option(state, "model")
+        observed = await get_observed_model_windows()
+        return {
+            "modelOptions": [
+                {
+                    "command": o["value"],
+                    "label": o.get("name") or o["value"],
+                    "contextWindow": resolve_context_window(o["value"], observed),
+                }
+                for o in options
+            ],
+            "model": current,
+        }
+
     harness = getattr(agent, "harness", None)
     if harness not in _EFFORT_LEVELS_BY_HARNESS:
         # Claude-Aliasse ("/model sonnet") in einer fremden CLI sind

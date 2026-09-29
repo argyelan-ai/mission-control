@@ -29,6 +29,14 @@ def test_valid_comment_types():
         "install_completed", "install_failed",
         # Lead-first Blocker-Triage (2026-07-04, Fix A)
         "escalate_to_operator",
+        # Reflexions-Triage (2026-09-11): Lead-Urteil ueber eine Reflexion
+        "reflection_verdict",
+        # Fertige Karte, offene Menschen-Entscheidung (2026-09-11):
+        # `mc finish --needs-decision "<Frage>"`
+        "needs_decision",
+        # Bewusste Ausnahme von der Repo-Bindung (2026-09-16):
+        # `mc delegate --no-repo-reason "<Grund>"`
+        "repo_binding_waiver",
     }
 
 

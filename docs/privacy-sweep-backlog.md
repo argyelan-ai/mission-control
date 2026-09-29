@@ -84,7 +84,6 @@ use `scripts/privacy-scan.py --update-baseline`.
 
 <!-- privacy-baseline:begin -->
 ```
-PRODUCT.md: freecode
 backend/alembic/versions/0069_requires_git_workflow.py: davinci, shakespeare
 backend/alembic/versions/0078_link_sparky_runtime.py: sparky
 backend/alembic/versions/0079_link_cloud_agents.py: sparky
@@ -107,9 +106,6 @@ backend/app/auth.py: davinci
 backend/app/config.py: freecode
 backend/app/models/agent.py: sparky
 backend/app/models/model_usage.py: sparky
-backend/app/models/storyboard.py: davinci
-backend/app/models/trend.py: shakespeare
-backend/app/models/video_performance.py: shakespeare
 backend/app/routers/agent_chat.py: davinci
 backend/app/routers/agent_comments.py: sparky
 backend/app/routers/agent_scoped.py: freecode
@@ -299,11 +295,11 @@ docs/decisions/047-docker-socket-proxy.md: sparky
 docs/decisions/049-omp-native-tui-session.md: sparky
 docs/decisions/056-harness-provider-decoupling.md: sparky
 docs/decisions/073-sessions-chat-transcript-tailing.md: sparky
+docs/decisions/084-omp-acp-harness-property.md: freecode, sparky
 docs/decisions/README.md: sparky
 docs/lifecycle-safety-watchdog-REPORT.md: sparky
 docs/omp-runtime-REPORT.md: sparky
 docs/setup/slack.md: freecode
-frontend-v2/src/app/insights/page.tsx: sparky
 frontend-v2/src/app/runtimes/__tests__/cloud-usage.test.tsx: davinci, freecode, shakespeare, sparky
 frontend-v2/src/components/chat/SessionSidebar.test.tsx: sparky
 frontend-v2/src/components/files/__tests__/FilesSearchFilters.test.tsx: sparky

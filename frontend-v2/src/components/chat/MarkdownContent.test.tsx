@@ -43,4 +43,23 @@ describe("MarkdownContent", () => {
     expect(new Set(colors).size).toBe(3);
     expect(colors.every((c) => c.length > 0)).toBe(true);
   });
+
+  // Operator-Befund 19.09.2026 (iPhone, nach #634): ein gefencer Block OHNE
+  // Language-Tag lief bisher in den Inline-Zweig — kein eigener Scroller, und
+  // `white-space: pre` im <pre> verhindert jeden Umbruch, selbst bei Zeilen
+  // nur mit Leerzeichen. Das <pre> wurde 194px breiter als das Transkript und
+  // schob den ganzen Chat seitwaerts (playwright/chat-transcript-width.mjs
+  // misst das Layout; dieser Test pinnt den Contract an der Komponente).
+  it("gibt gefencen Bloecken ohne Language-Tag einen eigenen Scroller aufs pre", () => {
+    const { container } = render(
+      <MarkdownContent content={"```\ndocker compose --profile n-control build --no-cache frontend\n```"} />,
+    );
+    const pre = container.querySelector("pre");
+    expect(pre).not.toBeNull();
+    expect(pre?.className).toContain("overflow-x-auto");
+    // Das <code> im Block rendert ohne Inline-Pill-Hintergrund — der Kasten
+    // ist das <pre>, nicht die Zeile.
+    const code = pre?.querySelector("code");
+    expect(code?.className).not.toContain("rounded-sm");
+  });
 });

@@ -99,7 +99,7 @@ async def test_list_trash_parses_entries(operator_client, tmp_path, monkeypatch)
     assert e["original_root"] == "deliverables"
     assert e["original_subpath"] == "a/b.txt"
     assert e["name"] == "b.txt"
-    assert e["deleted_at"] == "2026-06-18T12:00:00"
+    assert e["deleted_at"] == "2026-06-18T12:00:00+00:00"
 
 
 async def test_list_trash_empty(operator_client, tmp_path, monkeypatch):

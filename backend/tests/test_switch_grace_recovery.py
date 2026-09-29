@@ -610,6 +610,35 @@ async def test_recovery_is_skipped_while_an_exclusive_sibling_has_an_outstanding
 
 
 @pytest.mark.asyncio
+async def test_recovery_is_skipped_while_an_exclusive_sibling_has_a_per_runtime_memprep(
+    async_session: AsyncSession, fake_redis, grace_redis, memprep_redis
+):
+    """Same guard, but the sibling's prep was written by the per-runtime
+    keying (``mc:host-memprep:{box}:{runtime}``). A single lookup of the bare
+    box key would no longer see it — the guard must scan the box's handles."""
+    subject, sibling = await _mk_exclusive_pair(async_session, sibling_runtime_type="lmstudio")
+    from datetime import datetime, timezone
+
+    handle = host_memory_prep.PrepHandle(
+        host_key=host_memory_prep.host_key(SSH_HOST),
+        slug=sibling.slug,
+        runtime_id=sibling.slug,
+        dropper_started=True,
+        started_at=datetime.now(timezone.utc).isoformat(),
+    )
+    assert handle.prep_key != handle.host_key
+    await memprep_redis.set(RedisKeys.host_mem_prep(handle.prep_key), handle.to_json())
+
+    start_mock = await _run_until_recovery(
+        async_session, fake_redis,
+        start_result={"ok": True, "message": "starting"},
+        ticks=UNREACHABLE_EVENT_THRESHOLD + 1,
+    )
+
+    start_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_recovery_proceeds_when_the_sibling_is_on_a_different_host(
     async_session: AsyncSession, fake_redis, grace_redis
 ):
@@ -669,3 +698,214 @@ async def test_recovery_proceeds_with_no_exclusive_siblings_at_all(
     )
 
     start_mock.assert_awaited_once()
+
+
+# ── memprep finish decoupled from the switch marker ─────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_first_ok_probe_finishes_memprep_after_the_switch_marker_is_gone(
+    async_session: AsyncSession, fake_redis, grace_redis, memprep_redis
+):
+    """Fix A: a plain
+    start sets the switch marker itself (runtime_manager.py:2082-2085), so
+    'start → OK probe → finish' is already green today — that is NOT the red
+    case. The red case is the marker being GONE by the time the first OK
+    probe runs, while the memory prep it belongs to is still outstanding:
+    the marker's 20-minute TTL expired, or something else cleared it first
+    (stop, eviction, a failed restart, the recipe switcher's own slug — six
+    other call sites clear it). Measured live load windows are 13-15
+    minutes, close enough to the 20-minute TTL that this is not a corner
+    case. Today `_finish_memory_prep` only runs INSIDE
+    `if switching is not None:` (runtime_watcher.py:356-364), so this handle
+    — dropper started, watermark lowered — is never closed and the dropper
+    keeps running on the box indefinitely."""
+    from datetime import datetime, timezone
+
+    from tests.test_host_memory_prep import FakeBox
+
+    rt = await _mk_runtime(async_session, slug="marker-lost-rt", model_identifier="some-model")
+
+    # A normal start: marks the runtime in-flight AND leaves a memory-prep
+    # handle behind — exactly what prepare_host_memory + start_runtime do
+    # together on a real exclusive_memory box.
+    await runtime_grace.mark_switching(rt.slug, "loading", "manual_start")
+    handle = host_memory_prep.PrepHandle(
+        host_key=host_memory_prep.host_key(SSH_HOST),
+        slug=rt.slug,
+        dropper_started=True,
+        started_at=datetime.now(timezone.utc).isoformat(),
+    )
+    box = FakeBox()
+    box.containers.add(host_memory_prep.DROPPER_CONTAINER)
+    await memprep_redis.set(RedisKeys.host_mem_prep(handle.host_key), handle.to_json())
+
+    # …and now the marker is gone before the engine ever answers — TTL, or a
+    # sibling call site clearing it first. The memory prep is still live.
+    await runtime_grace.clear_switching(rt.slug)
+
+    watcher = RuntimeWatcher(interval=90)
+    with (
+        patch("app.services.runtime_watcher.probe_runtime_model_info",
+              new=AsyncMock(return_value=ProbedModel("some-model", None))),
+        patch("app.services.runtime_watcher.get_redis", _fake_get_redis(fake_redis)),
+        patch("app.services.runtime_watcher.resolve_host_for_runtime",
+              new=AsyncMock(return_value=SSH_HOST)),
+        patch("app.services.runtime_manager._ssh_run", new=box.run),
+    ):
+        await watcher.tick(session=async_session)
+
+    assert await memprep_redis.get(RedisKeys.host_mem_prep(handle.host_key)) is None
+    assert host_memory_prep.DROPPER_CONTAINER not in box.containers
+    assert any(
+        c.startswith(f"docker rm -f {host_memory_prep.DROPPER_CONTAINER}")
+        for c in box.commands
+    )
+
+
+@pytest.mark.asyncio
+async def test_first_ok_probe_finishes_this_runtimes_per_runtime_memprep(
+    async_session: AsyncSession, fake_redis, grace_redis, memprep_redis
+):
+    """The same close-out for a prep written under the per-runtime key
+    (``mc:host-memprep:{box}:{runtime}``) — the only key new starts write.
+    The watcher must look it up BY THIS RUNTIME; a box-only lookup would
+    miss it and leave the dropper and the lowered watermark for the 30-min
+    orphan sweep. A second runtime's prep on the same box stays untouched."""
+    from datetime import datetime, timezone
+
+    from tests.test_host_memory_prep import FakeBox
+
+    rt = await _mk_runtime(async_session, slug="per-runtime-rt", model_identifier="some-model")
+    now = datetime.now(timezone.utc).isoformat()
+    box_key = host_memory_prep.host_key(SSH_HOST)
+    mine = host_memory_prep.PrepHandle(
+        host_key=box_key, slug=rt.slug, runtime_id=rt.slug,
+        dropper_started=True, started_at=now,
+    )
+    neighbour = host_memory_prep.PrepHandle(
+        host_key=box_key, slug="neighbour-rt", runtime_id="neighbour-rt",
+        dropper_started=True, started_at=now,
+    )
+    for h in (mine, neighbour):
+        await memprep_redis.set(RedisKeys.host_mem_prep(h.prep_key), h.to_json())
+    box = FakeBox()
+    box.containers.add(host_memory_prep.DROPPER_CONTAINER)
+
+    watcher = RuntimeWatcher(interval=90)
+    with (
+        patch("app.services.runtime_watcher.probe_runtime_model_info",
+              new=AsyncMock(return_value=ProbedModel("some-model", None))),
+        patch("app.services.runtime_watcher.get_redis", _fake_get_redis(fake_redis)),
+        patch("app.services.runtime_watcher.resolve_host_for_runtime",
+              new=AsyncMock(return_value=SSH_HOST)),
+        patch("app.services.runtime_manager._ssh_run", new=box.run),
+    ):
+        await watcher.tick(session=async_session)
+
+    assert await memprep_redis.get(RedisKeys.host_mem_prep(mine.prep_key)) is None
+    assert await memprep_redis.get(RedisKeys.host_mem_prep(neighbour.prep_key)) is not None
+    assert any(
+        c.startswith(f"docker rm -f {host_memory_prep.DROPPER_CONTAINER}")
+        for c in box.commands
+    )
+
+
+@pytest.mark.asyncio
+async def test_first_ok_probe_without_a_handle_makes_no_ssh_call(
+    async_session: AsyncSession, fake_redis, grace_redis, memprep_redis
+):
+    """Idempotency guard for Fix A: once every successful probe with no
+    switch marker calls `finish_for_host` (not just the ones that end a real
+    load window), a runtime that never had a memory prep at all must still
+    cost zero SSH calls — `finish_for_host` is documented as a no-op without
+    a handle (host_memory_prep.py:782 'Idempotent: no handle means nothing
+    to do'). No handle is stored here (`memprep_redis` fixture, nothing
+    written to it), so this must hold both before and after Fix A lands."""
+    rt = await _mk_runtime(async_session, slug="no-handle-rt", model_identifier="some-model")
+    watcher = RuntimeWatcher(interval=90)
+    ssh = AsyncMock(return_value=("", "", 0))
+
+    with (
+        patch("app.services.runtime_watcher.probe_runtime_model_info",
+              new=AsyncMock(return_value=ProbedModel("some-model", None))),
+        patch("app.services.runtime_watcher.get_redis", _fake_get_redis(fake_redis)),
+        patch("app.services.runtime_watcher.resolve_host_for_runtime",
+              new=AsyncMock(return_value=SSH_HOST)),
+        patch("app.services.runtime_manager._ssh_run", ssh),
+    ):
+        await watcher.tick(session=async_session)
+
+    ssh.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_memprep_finished_event_emitted_once_per_start(
+    async_session: AsyncSession, fake_redis, grace_redis, memprep_redis
+):
+    """End-to-end idempotency for Fix A: the first OK probe closes the prep
+    and clears its Redis handle (finish_for_host → _clear_handle); a SECOND
+    OK probe on the same, still-serving runtime must not remove the dropper
+    a second time — there is nothing left to remove. Checked at the
+    SSH-command level rather than the event feed (host_memory_prep._emit
+    uses its own session_scope() the fake test session does not share)."""
+    from datetime import datetime, timezone
+
+    from tests.test_host_memory_prep import FakeBox
+
+    rt = await _mk_runtime(async_session, slug="twice-served-rt", model_identifier="some-model")
+    box = FakeBox()
+    handle = host_memory_prep.PrepHandle(
+        host_key=host_memory_prep.host_key(SSH_HOST),
+        slug=rt.slug,
+        dropper_started=True,
+        started_at=datetime.now(timezone.utc).isoformat(),
+    )
+    box.containers.add(host_memory_prep.DROPPER_CONTAINER)
+    await memprep_redis.set(RedisKeys.host_mem_prep(handle.host_key), handle.to_json())
+
+    watcher = RuntimeWatcher(interval=90)
+    with (
+        patch("app.services.runtime_watcher.probe_runtime_model_info",
+              new=AsyncMock(return_value=ProbedModel("some-model", None))),
+        patch("app.services.runtime_watcher.get_redis", _fake_get_redis(fake_redis)),
+        patch("app.services.runtime_watcher.resolve_host_for_runtime",
+              new=AsyncMock(return_value=SSH_HOST)),
+        patch("app.services.runtime_manager._ssh_run", new=box.run),
+    ):
+        await watcher.tick(session=async_session)
+        await watcher.tick(session=async_session)
+
+    rm_calls = [
+        c for c in box.commands
+        if c.startswith(f"docker rm -f {host_memory_prep.DROPPER_CONTAINER}")
+    ]
+    assert len(rm_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_first_ok_probe_skips_finish_for_a_hostless_runtime(
+    async_session: AsyncSession, fake_redis, grace_redis, memprep_redis
+):
+    """Fix N4: `host_key(None)` resolves to the shared "default" bucket, so
+    calling `finish_for_host(None)` for a runtime with no resolvable host
+    (a cloud runtime — Anthropic, an Ollama-cloud endpoint) would close out
+    whatever unrelated memory prep happens to be sitting in that bucket for
+    a completely different, SSH-reachable box. `_finish_memory_prep` must
+    skip the call entirely when host resolution comes back empty."""
+    rt = await _mk_runtime(async_session, slug="cloud-rt", model_identifier="some-model")
+
+    finish_mock = AsyncMock(return_value=False)
+    watcher = RuntimeWatcher(interval=90)
+    with (
+        patch("app.services.runtime_watcher.probe_runtime_model_info",
+              new=AsyncMock(return_value=ProbedModel("some-model", None))),
+        patch("app.services.runtime_watcher.get_redis", _fake_get_redis(fake_redis)),
+        patch("app.services.runtime_watcher.resolve_host_for_runtime",
+              new=AsyncMock(return_value=None)),
+        patch("app.services.runtime_watcher.host_memory_prep.finish_for_host",
+              new=finish_mock),
+    ):
+        await watcher.tick(session=async_session)
+
+    finish_mock.assert_not_awaited()

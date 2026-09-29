@@ -27,7 +27,7 @@ import {
 import { ConnectionState, DisconnectReason, Room, RoomEvent } from "livekit-client";
 import "@livekit/components-styles";
 import { request } from "@/lib/api";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import { useVoiceDisplay } from "./useVoiceDisplay";
 import type { DisplayCard } from "./cards/types";
 import { MemoryCard } from "./cards/MemoryCard";
@@ -266,16 +266,16 @@ export function VoiceButton({
         minWidth: enforceTouchTarget ? 44 : size,
         minHeight: enforceTouchTarget ? 44 : size,
         backgroundColor: active
-          ? "var(--color-accent-subtle, rgba(235,232,222,0.10))"
+          ? `var(--color-accent-subtle, ${alpha(C.accent, 0.1)})`
           : variant === "sidebar"
-            ? "rgba(255, 255, 255, 0.04)"
+            ? alpha(C.overlay, 0.04)
             : "transparent",
         border: active
-          ? "1px solid var(--color-accent, #EBE8DE)"
+          ? `1px solid ${C.accent}`
           : variant === "sidebar"
             ? "1px solid var(--color-border-subtle, var(--color-border))"
             : "1px solid transparent",
-        color: active ? "var(--color-accent-light, #F9F7EF)" : "var(--color-text-secondary)",
+        color: active ? C.accentHover : "var(--color-text-secondary)",
       }}
       aria-label={active ? "Manage voice session" : "Start voice assistant"}
       title={active ? "Voice active — click for options" : "Start voice"}
@@ -341,7 +341,7 @@ export function VoiceOverlay() {
           style={{
             top: "calc(env(safe-area-inset-top) + 4rem)",
             backgroundColor: C.error,
-            color: C.textPrimary,
+            color: C.onStatus,
           }}
         >
           <div className="font-medium mb-1">Voice error</div>
@@ -499,7 +499,7 @@ function VoiceDrawer({
             exit={{ opacity: 0 }}
             transition={{ duration: 0.15 }}
             onClick={onClose}
-            style={{ background: "rgba(0,0,0,0.18)", backdropFilter: "blur(3px)" }}
+            style={{ background: alpha(C.scrim, 0.18), backdropFilter: "blur(3px)" }}
           />
 
           {/* Glass Panel */}
@@ -516,7 +516,7 @@ function VoiceDrawer({
               WebkitBackdropFilter: "blur(28px) saturate(150%)",
               border: "1px solid var(--color-p2-glass-line)",
               boxShadow:
-                "0 24px 60px -16px rgba(0,0,0,0.55), inset 0 1px 0 0 rgba(255,255,255,0.08)",
+                `0 24px 60px -16px ${alpha(C.scrim, 0.55)}, inset 0 1px 0 0 ${alpha(C.overlay, 0.08)}`,
             }}
           >
             {/* Edge highlight — subtler "rim" at the top edge */}
@@ -524,7 +524,7 @@ function VoiceDrawer({
               className="absolute inset-x-0 top-0 h-px pointer-events-none"
               style={{
                 background:
-                  "linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.16) 50%, transparent 100%)",
+                  `linear-gradient(90deg, transparent 0%, ${alpha(C.overlay, 0.16)} 50%, transparent 100%)`,
               }}
             />
             {/* Subtler radial glow — changes color with state */}
@@ -539,7 +539,7 @@ function VoiceDrawer({
             />
 
             {/* Header */}
-            <div className="relative shrink-0 flex items-center justify-between px-4 py-3 border-b border-white/[0.06]">
+            <div className="relative shrink-0 flex items-center justify-between px-4 py-3 border-b border-[var(--color-overlay)]/[0.06]">
               <div className="flex items-center gap-2.5 min-w-0">
                 <StatusPulse connected={isConnected} speaking={isSpeaking} />
                 <div className="flex flex-col leading-none min-w-0">
@@ -560,7 +560,7 @@ function VoiceDrawer({
               <button
                 type="button"
                 onClick={onClose}
-                className="p-1.5 rounded-md hover:bg-white/5 transition-colors cursor-pointer"
+                className="p-1.5 rounded-md hover:bg-[var(--color-overlay)]/5 transition-colors cursor-pointer"
                 aria-label="Close"
               >
                 <X size={14} style={{ color: "var(--color-text-muted)" }} />
@@ -580,7 +580,7 @@ function VoiceDrawer({
                   options={{ minHeight: 6 }}
                   style={
                     {
-                      "--lk-fg": isSpeaking ? C.accentHover : `${C.accent}99`,
+                      "--lk-fg": isSpeaking ? C.accentHover : alpha(C.accent, 0.6),
                       "--lk-bg": "transparent",
                     } as React.CSSProperties
                   }
@@ -650,8 +650,8 @@ function VoiceDrawer({
                 onClick={toggleMute}
                 className="flex items-center justify-center w-10 h-10 rounded-full transition-all cursor-pointer hover:scale-105 active:scale-95"
                 style={{
-                  background: muted ? `${C.error}1F` : "var(--color-bg-hover)",
-                  border: `1px solid ${muted ? `${C.error}4D` : "rgba(255,255,255,0.06)"}`,
+                  background: muted ? alpha(C.error, 0.12) : "var(--color-bg-hover)",
+                  border: `1px solid ${muted ? alpha(C.error, 0.3) : "${alpha(C.overlay, 0.06)}"}`,
                   color: muted ? C.error : "var(--color-text-primary)",
                 }}
                 aria-label={muted ? "Enable microphone" : "Mute"}
@@ -665,8 +665,8 @@ function VoiceDrawer({
                 className="flex items-center justify-center w-10 h-10 rounded-full transition-all cursor-pointer hover:scale-105 active:scale-95"
                 style={{
                   background: C.error,
-                  color: C.textPrimary,
-                  boxShadow: "0 4px 14px rgba(0,0,0,0.4)",
+                  color: C.onStatus,
+                  boxShadow: `0 4px 14px ${alpha(C.shadow, 0.4)}`,
                 }}
                 aria-label="End"
                 title="End call"
@@ -690,7 +690,7 @@ function StatusPulse({ connected, speaking }: { connected: boolean; speaking: bo
     <div className="relative flex items-center justify-center w-2.5 h-2.5">
       <div
         className="absolute inset-0 rounded-full"
-        style={{ background: color, boxShadow: `0 0 8px ${color}aa` }}
+        style={{ background: color, boxShadow: `0 0 8px ${alpha(color, 0.67)}` }}
       />
       {speaking && (
         <motion.div

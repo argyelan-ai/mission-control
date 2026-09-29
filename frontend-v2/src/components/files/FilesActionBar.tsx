@@ -7,7 +7,7 @@ import { motion } from "framer-motion";
 import { Download, Trash2, X, Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import type { FsRoot } from "@/lib/types";
 import { DeleteFilesDialog } from "./DeleteFilesDialog";
 
@@ -71,7 +71,7 @@ export function FilesActionBar({ root, selected, onClear }: FilesActionBarProps)
         style={{
           background: C.bgElevated,
           border: `1px solid ${C.border}`,
-          boxShadow: "0 8px 28px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
+          boxShadow: `0 8px 28px ${alpha(C.shadow, 0.5)}, 0 1px 2px ${alpha(C.shadow, 0.3)}`,
         }}
       >
         <span

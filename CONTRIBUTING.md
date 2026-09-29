@@ -32,8 +32,9 @@ Thanks for your interest! A few ground rules keep this codebase healthy.
 - Backend: Python 3.12, SQLModel `AsyncSession` everywhere, routers stay
   thin — logic lives in `backend/app/services/`.
 - Frontend: TypeScript strict; colors ONLY via the token maps in
-  `frontend-v2/src/lib/colors.ts` (see `DESIGN.md` — one teal accent,
-  dark-mode only, no purple).
+  `frontend-v2/src/lib/colors.ts` (see `DESIGN.md` — one achromatic
+  off-cream accent, colour means status, no purple). UI changes follow
+  [`docs/design/ui-craft.md`](docs/design/ui-craft.md).
 - FastAPI route ordering: static path segments before parameterized routes.
 - No secrets, tokens, personal data, or machine-specific absolute paths in
   code, configs, or fixtures — parameterize via env vars with portable
@@ -63,7 +64,7 @@ pre-launch history remains private because it contained credentials.)
   in the English default UI is a bug, not a style preference.
 - CI runs a **leak gate** (gitleaks + forbidden-file check) on every push and
   PR in addition to tests.
-- Maintainer-private modules (e.g. a personal news pipeline) live in private
+- Maintainer-private modules (e.g. a personal publishing pipeline) live in private
   overlay repositories synced via `scripts/dev-overlay.sh` — their paths are
   gitignored here. You can use the same mechanism for your own private
   verticals.

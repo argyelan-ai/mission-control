@@ -29,8 +29,6 @@ Legende Status: ☐ offen · ☑ fotografiert
 | ☐ | `/files` | Dateien | |
 | ☐ | `/loops` | Loops | |
 | ☐ | `/skills` | Skills | SkillMatrix |
-| ☐ | `/content` | Content | |
-| ☐ | `/news` | News | |
 | ☐ | `/bench` | Bench | |
 | ☐ | `/runtimes` | Runtimes | |
 | ☐ | `/settings` | Settings | SettingsNav, CliToolsSection |

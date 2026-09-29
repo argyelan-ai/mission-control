@@ -8,6 +8,23 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+# W5 (2026-09-13): Kontextdatei pro Host-Agent statt geteilter /tmp-Datei.
+# MC_CONTEXT_ENV_PATH nennt den Pfad; ohne die Variable gilt der Legacy-Pfad,
+# damit laufende Zuege (Container, nicht-umgestellte Bridges) weiterarbeiten.
+DEFAULT_CONTEXT_ENV_PATH = "/tmp/mc-context.env"
+
+
+def context_env_path() -> str:
+    """Resolve the task-context env file: MC_CONTEXT_ENV_PATH wins, the legacy
+    /tmp path is the fallback. Single source of truth for readers
+    (Config.from_env) AND writers (commands._write_context_file, recover).
+
+    Also the test-isolation seam (2026-09-14 incident, #579): tests/conftest.py
+    redirects MC_CONTEXT_ENV_PATH to a per-test tmp_path so a suite run never
+    touches the real, host-shared /tmp/mc-context.env other agents rely on.
+    """
+    return os.environ.get("MC_CONTEXT_ENV_PATH") or DEFAULT_CONTEXT_ENV_PATH
+
 
 @dataclass(frozen=True)
 class Config:
@@ -16,16 +33,24 @@ class Config:
     task_id: str | None
     board_id: str | None
     dispatch_attempt_id: str | None
+    context_task_id: str | None = None
+
+    def __post_init__(self) -> None:
+        # Attempt-Header und Task-Kontext gehoeren zusammen: der Header in
+        # dispatch_attempt_id wurde vom Dispatch der Karte context_task_id
+        # ausgestellt. Ohne explizite Angabe ist das die aktuelle task_id.
+        if self.context_task_id is None:
+            object.__setattr__(self, "context_task_id", self.task_id)
 
     @classmethod
     def from_env(cls) -> "Config":
-        # Fallback: read /tmp/mc-context.env when the task context env vars
-        # are missing from the process environment. This covers the case
-        # where claude's Bash tool spawns a fresh shell whose env was set
-        # by tmux set-environment but hasn't propagated yet. poll.sh writes
-        # the file on every dispatch; see docker/mc-claude-agent/poll.sh.
+        # Fallback: read the task-context env file (MC_CONTEXT_ENV_PATH, legacy
+        # /tmp/mc-context.env) when the task context env vars are missing from
+        # the process environment. This covers the case where claude's Bash
+        # tool spawns a fresh shell whose env was set by tmux set-environment
+        # but hasn't propagated yet. poll.sh writes the file on every dispatch.
         file_ctx: dict[str, str] = {}
-        ctx_path = "/tmp/mc-context.env"
+        ctx_path = context_env_path()
         if os.path.isfile(ctx_path):
             try:
                 with open(ctx_path, encoding="utf-8") as f:
@@ -72,6 +97,12 @@ class Config:
         accept the task-id as a positional argument (Boss live-bug 2026-04-25:
         `mc ack <task-id>` warf 'unrecognized arguments' weil das CLI nur
         env-vars unterstuetzte). Immutable dataclass → replace pattern.
+
+        context_task_id bleibt unangetastet: es bezeichnet die Karte, zu der
+        der aktuell GEHALTENE dispatch_attempt_id-Header gehoert. Erst ein
+        erfolgreicher Kontextwechsel (ack/recover) schreibt beides zusammen
+        fort — genau die Kopplung, mit der _cmd_ack/_cmd_recover zwischen
+        "fremde Karte heilen" und "eigene Karte neu dispatcht" trennen.
         """
         from dataclasses import replace
         return replace(self, task_id=task_id)

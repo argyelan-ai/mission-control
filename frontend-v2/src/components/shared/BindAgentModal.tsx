@@ -9,7 +9,7 @@
  * modal is a thin agent-picker on top.
  */
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
@@ -20,8 +20,9 @@ import { api } from "@/lib/api";
 import type { Agent, Runtime } from "@/lib/types";
 import { RuntimeSwitchModal } from "@/components/shared/RuntimeSwitchModal";
 import { RuntimePill } from "@/components/shared/RuntimePill";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import { EntityIcon } from "@/components/shared/EntityIcon";
+import { useEscapeKey } from "@/hooks/useEscapeKey";
 
 interface Props {
   open: boolean;
@@ -37,14 +38,7 @@ export function BindAgentModal({ open, onClose, runtime }: Props) {
   useBodyScrollLock(open);
 
   // Esc closes the picker (panel register rule 4)
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [open, onClose]);
+  useEscapeKey(onClose, open);
 
   // Which agents may be bound is the same question as "may this agent switch
   // runtime?" — so it is the backend's answer (Agent.runtime_switchable), not
@@ -67,7 +61,7 @@ export function BindAgentModal({ open, onClose, runtime }: Props) {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.15 }}
-            className="fixed inset-0 z-40 flex items-end sm:items-center justify-center sm:p-4 bg-black/60"
+            className="fixed inset-0 z-40 flex items-end sm:items-center justify-center sm:p-4 bg-[var(--color-scrim)]/60"
             style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
             onClick={onClose}
           >
@@ -84,7 +78,7 @@ export function BindAgentModal({ open, onClose, runtime }: Props) {
               style={{
                 backgroundColor: "var(--color-bg-elevated)",
                 border: "1px solid var(--color-border)",
-                boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
+                boxShadow: `0 4px 24px ${alpha(C.shadow, 0.5)}, 0 1px 2px ${alpha(C.shadow, 0.3)}`,
               }}
             >
                 <div

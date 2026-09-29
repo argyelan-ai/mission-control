@@ -12,22 +12,54 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
-import { ChevronDown, ExternalLink, GitBranch, GitCommit } from "lucide-react";
+import { ChevronDown, GitBranch, GitCommit } from "lucide-react";
 import { api } from "@/lib/api";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import { GitDiffView } from "@/components/git/GitDiffView";
 import type { CommitDiff, TaskGitInfo } from "@/lib/types";
+import { PrChip } from "./detail/PrChip";
+
+/**
+ * What the task detail's Git section should render, or null to hide it.
+ * A live branch shows the full panel; a task with only a recorded PR (no
+ * workspace, so no git probe) still gets the section with just the PR chip.
+ */
+export function gitSectionInfo(
+  gitInfo: TaskGitInfo | undefined,
+  taskPrUrl: string | null | undefined,
+): TaskGitInfo | null {
+  if (gitInfo?.branch) return gitInfo;
+  if (!taskPrUrl) return null;
+  return {
+    branch: null,
+    last_commit: null,
+    uncommitted: false,
+    ahead: 0,
+    workspace_path: null,
+    commits: [],
+    pr_url: null,
+  };
+}
 
 export function GitPanel({
   gitInfo,
   boardId,
   taskId,
+  taskPrUrl,
+  taskPrNumber,
 }: {
   gitInfo: TaskGitInfo;
   boardId: string;
   taskId: string;
+  /** PR recorded on the task itself — fallback when the git probe has none. */
+  taskPrUrl?: string | null;
+  taskPrNumber?: number | null;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const prUrl = gitInfo.pr_url || taskPrUrl || null;
+  const prNumber =
+    (prUrl === taskPrUrl ? taskPrNumber : null) ??
+    (prUrl ? Number(prUrl.match(/\/pull\/(\d+)/)?.[1]) || null : null);
   const [activeHash, setActiveHash] = useState<string | null>(null);
   const hasCommits = (gitInfo.commits?.length ?? 0) > 0;
   const repoUrl = gitInfo.repo_url ?? null;
@@ -46,7 +78,8 @@ export function GitPanel({
     <div>
       {/* Summary row */}
       <div className="flex items-center gap-2 text-xs flex-wrap" style={{ color: C.textSecondary }}>
-        <span className="flex items-center gap-1.5 shrink-0 min-w-0">
+        {gitInfo.branch && (
+        <span data-testid="git-branch" className="flex items-center gap-1.5 shrink-0 min-w-0">
           <GitBranch size={12} style={{ color: C.accent }} />
           {branchUrl ? (
             <a
@@ -65,6 +98,7 @@ export function GitPanel({
             </span>
           )}
         </span>
+        )}
 
         {gitInfo.ahead > 0 && (
           <span className="flex items-center gap-1 shrink-0" style={{ color: C.textMuted }}>
@@ -76,7 +110,7 @@ export function GitPanel({
         {gitInfo.uncommitted && (
           <span
             className="px-1.5 py-0.5 rounded-sm text-[10px] font-medium shrink-0"
-            style={{ background: `${C.warning}1A`, color: C.warning, border: `1px solid ${C.warning}33` }}
+            style={{ background: alpha(C.warning, 0.1), color: C.warning, border: `1px solid ${alpha(C.warning, 0.2)}` }}
           >
             uncommitted
           </span>
@@ -95,18 +129,7 @@ export function GitPanel({
               {gitInfo.repo_name}
             </a>
           )}
-          {gitInfo.pr_url && (
-            <a
-              href={gitInfo.pr_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-1 px-2 py-0.5 rounded-sm text-[10px] font-medium cursor-pointer hover:opacity-80 transition-opacity"
-              style={{ background: C.accentSubtle, color: C.accent, border: `1px solid ${C.borderAccent}` }}
-            >
-              <ExternalLink size={9} />
-              PR open
-            </a>
-          )}
+          {prUrl && <PrChip url={prUrl} number={prNumber} />}
           {hasCommits && (
             <button
               onClick={() => setExpanded((x) => !x)}

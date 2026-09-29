@@ -243,6 +243,27 @@ def test_permission_request_and_decision_visible():
     assert "allow_once" in messages[1]["text"]
 
 
+def test_auto_approved_permission_is_written_but_not_displayed():
+    """`yolo`: nobody is actually being asked, so the request/decision pair
+    must not crowd the chat between every tool call (task 663f70fb) — but it
+    still has to reach the transcript file (`auto_approved=True` -> `display:
+    False`, the same gate `omp_chat._parse_custom_message` already honours
+    for `acp-preview`/silent notices, not a dropped entry)."""
+    mapper = acp_chat_events.ACPEventMapper()
+    params = {
+        "toolCall": {"toolCallId": "t9", "title": "rm -rf /tmp/x", "kind": "execute"},
+        "options": [{"optionId": "allow_once", "name": "Allow once"}],
+    }
+    lines = mapper.dump(mapper.map_permission_request(params, auto_approved=True))
+    lines += mapper.dump(mapper.map_permission_outcome(params, "allow_always", auto_approved=True))
+    joined = "\n".join(lines)
+    # written to the transcript file...
+    assert "acp-permission" in joined
+    assert "rm -rf /tmp/x" in joined
+    # ...but the reader the chat view uses renders nothing for it.
+    assert parse_all(lines) == []
+
+
 def test_bridge_run_transcribes_permission_roundtrip(tmp_path):
     """Integration: run_acp_once with a sink must write request + decision
     lines when a permission request crosses the wire, plus the streamed
@@ -360,6 +381,39 @@ def test_sink_degrades_to_noop_on_unwritable_dir(tmp_path):
     sink = acp_chat_events.ChatEventSink(None, "s")
     assert sink.path is None
     sink.write(["{}"])  # must not raise
+
+
+def test_session_dir_follows_omp_profile_not_pi_dir(tmp_path, monkeypatch):
+    # Live finding 14.09.2026: with OMP_PROFILE set, omp itself keeps its agent
+    # dir under $OMP_HOME/profiles/<profile>/agent — the path the compose bind
+    # mount exposes to the backend. PI_CODING_AGENT_DIR still points at the
+    # profile-less $OMP_HOME/agent, and a sessions tree written there is
+    # invisible on the host (no acp-chat-state.json ever reached the backend,
+    # effort switch answered 409 input_not_supported).
+    monkeypatch.setenv("OMP_HOME", str(tmp_path / "omp"))
+    monkeypatch.setenv("OMP_PROFILE", "mc-agent")
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(tmp_path / "omp" / "agent"))
+    directory = acp_chat_events.session_dir(cwd="/workspace")
+    assert directory is not None
+    assert directory == tmp_path / "omp" / "profiles" / "mc-agent" / "agent" / "sessions" / "--workspace--"
+    assert not (tmp_path / "omp" / "agent").exists()
+
+
+def test_session_dir_without_profile_keeps_pi_dir(tmp_path, monkeypatch):
+    monkeypatch.setenv("OMP_HOME", str(tmp_path / "omp"))
+    monkeypatch.delenv("OMP_PROFILE", raising=False)
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(tmp_path / "pi"))
+    directory = acp_chat_events.session_dir(cwd="/workspace")
+    assert directory == tmp_path / "pi" / "sessions" / "--workspace--"
+
+
+def test_session_dir_explicit_agent_dir_beats_profile(tmp_path, monkeypatch):
+    # The keyword argument is the caller's explicit choice (tests, replay
+    # tooling) and must not be overridden by whatever profile the env names.
+    monkeypatch.setenv("OMP_HOME", str(tmp_path / "omp"))
+    monkeypatch.setenv("OMP_PROFILE", "mc-agent")
+    directory = acp_chat_events.session_dir(agent_dir_env=str(tmp_path / "explicit"), cwd="/w")
+    assert directory == tmp_path / "explicit" / "sessions" / "--w--"
 
 
 def test_history_roundtrip_through_read_history(tmp_path):

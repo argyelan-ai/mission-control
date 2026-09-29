@@ -11,6 +11,12 @@ services:
   db:
     image: postgres:16-alpine
     restart: unless-stopped
+    # Docker Desktop defaults StopTimeout to 1s when a service doesn't set
+    # this explicitly (measured, not assumed — see architecture session
+    # 2026-09-14). Postgres under SIGKILL never runs a clean checkpoint, it
+    # just crash-recovers on the next start. 60s gives it real headroom to
+    # shut down cleanly on every `docker stop`/recreate.
+    stop_grace_period: 60s
     logging: *default-logging
     volumes:
       - mc_postgres_data:/var/lib/postgresql/data
@@ -31,6 +37,13 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    # Same Docker-Desktop default gap as db (1s without this line). AOF is on
+    # (--appendonly yes --appendfsync everysec): on SIGTERM redis-server finishes
+    # writing to the AOF file and closes it cleanly; on SIGKILL that in-flight
+    # write — and the clean close — is lost. 30s is generous headroom for that
+    # flush, not a full minute like db: there's no checkpoint/WAL replay to wait
+    # out, just a bounded fsync.
+    stop_grace_period: 30s
     logging: *default-logging
     command: redis-server --requirepass ${REDIS_PASSWORD} --appendonly yes --appendfsync everysec
     volumes:
@@ -79,6 +92,10 @@ services:
     image: ghcr.io/argyelan-ai/mc-backend:${MC_IMAGE_TAG:-latest}
     build: ./backend
     restart: unless-stopped
+    # Same Docker-Desktop default gap as db/caddy (1s without this line) —
+    # 20s gives in-flight requests and the FastAPI shutdown hooks room to
+    # finish instead of a hard SIGKILL mid-request.
+    stop_grace_period: 20s
     logging: *default-logging
     networks:
       - default
@@ -97,11 +114,24 @@ services:
       # Genau EIN Prozess traegt den Flag true (Worker); config.py-Default
       # bleibt True (Rueckweg fuer compose-freie Installs).
       ENABLE_BACKGROUND_SERVICES: "false"
+      # Head launcher switch (docs/specs/head-launcher.md) — off unless set in .env
+      HEADS_ENABLED: ${HEADS_ENABLED:-false}
+      # Head watchdog: stop after N min without progress; hard limit = emergency brake
+      HEADS_NO_PROGRESS_MIN: ${HEADS_NO_PROGRESS_MIN:-20}
+      HEADS_HARD_LIMIT_LOCAL_S: ${HEADS_HARD_LIMIT_LOCAL_S:-28800}
+      HEADS_HARD_LIMIT_CLOUD_S: ${HEADS_HARD_LIMIT_CLOUD_S:-7200}
       # Konsument ist backend/app/routers/browser_live.py — ein Router, also
       # der API-Prozess. War auf main gesetzt und wurde beim Teil-2-Umbau
       # still ersetzt statt ergaenzt (Rex-Review PR #500, Blocker B4):
       # wiederhergestellt, Flag-Zeile darueber ergaenzt, nicht ersetzt.
       CDP_BROWSER_URL: http://172.30.99.10:9223
+      # Plattenplatz: Bau-Preflight und Waechter. Wie bei Telegram muss JEDE
+      # Variable hier einzeln stehen — es gibt keine env_file-Direktive, die
+      # .env allein erreicht den Container nicht. Der Waechter laeuft im
+      # Worker, die Preflight-Pfade im API-Prozess: beide brauchen die Werte.
+      BUILD_MIN_FREE_GB: ${BUILD_MIN_FREE_GB:-15}
+      BUILD_CACHE_KEEP_GB: ${BUILD_CACHE_KEEP_GB:-20}
+      DISK_WATCHDOG_PERCENT: ${DISK_WATCHDOG_PERCENT:-95}
       DATABASE_URL: postgresql+asyncpg://mc:${DB_PASSWORD}@db:5432/mission_control
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       AUTH_MODE: local
@@ -109,6 +139,11 @@ services:
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production}
       # User session lifetime; override in .env (e.g. 43200 = 30 days on a Tailscale-only install)
       JWT_ACCESS_TOKEN_EXPIRE_MINUTES: ${JWT_ACCESS_TOKEN_EXPIRE_MINUTES:-480}
+      # Streams (SSE/WebSocket) open with single-use tickets (?ticket=). The
+      # old login token in the URL (?token=) leaks into proxy logs and is off;
+      # true re-enables it for one transition release only.
+      ALLOW_QUERY_TOKEN_AUTH: ${ALLOW_QUERY_TOKEN_AUTH:-false}
+      STREAM_TICKET_TTL_SECONDS: ${STREAM_TICKET_TTL_SECONDS:-60}
       SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY:-}
       DISCORD_WEBHOOK_OPS: ${DISCORD_WEBHOOK_OPS:-}
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
@@ -194,18 +229,24 @@ services:
       # hinzufuegen"); kommagetrennt = eine Zeile je Netz (Tailscale + LAN).
       # Ohne Passthrough las das Backend die Variable nie (Live-Fund 03.09.2026).
       MC_NODE_AGENT_BASE_URL: ${MC_NODE_AGENT_BASE_URL:-}
-      # Operator identity + newsletter branding (see .env.example)
+      # Operator identity (see .env.example)
       OPERATOR_NAME: ${OPERATOR_NAME:-Operator}
-      NEWSLETTER_BRAND: ${NEWSLETTER_BRAND:-AI Weekly}
       HOST_SSH_USER: ${HOST_SSH_USER:-}
       # Externally reachable host (Tailscale IP / LAN / DNS) — CORS allowlist +
       # phone-test deep links (ADR-040, replaces hardcoded IPs in product code).
       PUBLIC_HOST: ${PUBLIC_HOST:-}
       EXTRA_CORS_ORIGINS: ${EXTRA_CORS_ORIGINS:-}
-      # ADR-081: agent slugs whose compose service renders OMP_DRIVER=acp
-      # (comma-separated). Without this passthrough the .env key never
-      # reaches the backend container (same trap as STT_BASE_URL above).
-      OMP_ACP_AGENT_SLUGS: ${OMP_ACP_AGENT_SLUGS:-}
+      # ADR-084: fleet-wide omp driver default (acp | native). ACP is a
+      # harness property — this one knob rolls the WHOLE fleet back to the
+      # native TUI driver, no agent name lists. Without this passthrough the
+      # .env key never reaches the backend container (same trap as
+      # STT_BASE_URL above).
+      OMP_DRIVER_DEFAULT: ${OMP_DRIVER_DEFAULT:-acp}
+      RECOVERY_TIER2_SKIP_AGENT_SLUGS: ${RECOVERY_TIER2_SKIP_AGENT_SLUGS:-}
+      # Treiber der hermes-bridge auf dem Host (native | acp). Gleiche Falle:
+      # ohne Passthrough kaeme der .env-Schluessel nie im Container an, und
+      # Hermes' Chat bliebe stumm (docs/specs/chat-over-acp.md).
+      HERMES_DRIVER: ${HERMES_DRIVER:-native}
       GH_TOKEN: ${GH_TOKEN:-}
       # Kill-switch: false = legacy single-session dispatch (see ADR-002).
       # NOTE: still live in 7 call sites — CLAUDE.md's "obsolete" note is stale.
@@ -214,8 +255,6 @@ services:
       GITHUB_OWNER: ${GITHUB_OWNER:-}
       # Repo-name prefixes the visibility monitor keeps private.
       MC_OWNED_REPO_PREFIXES: ${MC_OWNED_REPO_PREFIXES:-mc-,mc-task-,t2-}
-      # Optional: news-site export repo (news deploy endpoint).
-      NEWS_REPO_PATH: ${NEWS_REPO_PATH:-}
       # Voice-Agent: LiveKit-Token-Signing braucht api_key + secret separat.
       # PUBLIC_URL = was der Browser-Client erreicht (vs internal ws://livekit:7880).
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
@@ -241,6 +280,7 @@ services:
       DGX_SSH_USER: ${DGX_SSH_USER:-}
       DGX_SSH_KEY_PATH: ${DGX_SSH_KEY_PATH:-/home/mcuser/.ssh/id_rsa}
       ENABLE_DISPATCH_GATING: ${ENABLE_DISPATCH_GATING:-false}
+      LEAD_AUTO_ASSIGN_NEW_TASKS: ${LEAD_AUTO_ASSIGN_NEW_TASKS:-}
       STRUCTURED_INTAKE_ENABLED: ${STRUCTURED_INTAKE_ENABLED:-false}
       ENABLE_PROMOTE_ORCHESTRATOR: ${ENABLE_PROMOTE_ORCHESTRATOR:-false}
       ENVIRONMENT: production
@@ -373,6 +413,12 @@ services:
         condition: service_started
     environment:
       ENABLE_BACKGROUND_SERVICES: "true"
+      # Head launcher switch (docs/specs/head-launcher.md) — off unless set in .env
+      HEADS_ENABLED: ${HEADS_ENABLED:-false}
+      # Head watchdog: stop after N min without progress; hard limit = emergency brake
+      HEADS_NO_PROGRESS_MIN: ${HEADS_NO_PROGRESS_MIN:-20}
+      HEADS_HARD_LIMIT_LOCAL_S: ${HEADS_HARD_LIMIT_LOCAL_S:-28800}
+      HEADS_HARD_LIMIT_CLOUD_S: ${HEADS_HARD_LIMIT_CLOUD_S:-7200}
       # W2 (Rex-Review PR #500): Migrationen macht der backend-Container
       # (depends_on: backend: service_healthy stellt die Reihenfolge sicher).
       # Ein zweiter alembic-Lauf hier waere ein Migrations-Wettlauf gegen
@@ -392,6 +438,14 @@ services:
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production}
       JWT_ACCESS_TOKEN_EXPIRE_MINUTES: ${JWT_ACCESS_TOKEN_EXPIRE_MINUTES:-480}
       SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY:-}
+      # Plattenplatz: der Waechter laeuft hier (ENABLE_BACKGROUND_SERVICES),
+      # also muss mindestens DISK_WATCHDOG_PERCENT hier stehen — sonst laeuft
+      # er mit dem falschen Wert. Die beiden Bau-Schwellen stehen mit, weil
+      # der Regelkommentar oben "identische Env" verlangt und der
+      # Cache-Cleanup auch aus Worker-Kontext erreichbar ist.
+      BUILD_MIN_FREE_GB: ${BUILD_MIN_FREE_GB:-15}
+      BUILD_CACHE_KEEP_GB: ${BUILD_CACHE_KEEP_GB:-20}
+      DISK_WATCHDOG_PERCENT: ${DISK_WATCHDOG_PERCENT:-95}
       DISCORD_WEBHOOK_OPS: ${DISCORD_WEBHOOK_OPS:-}
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
       DISCORD_GUILD_ID: ${DISCORD_GUILD_ID:-}
@@ -426,16 +480,19 @@ services:
       MC_BASE_URL: ${MC_BASE_URL:-http://localhost}
       MC_NODE_AGENT_BASE_URL: ${MC_NODE_AGENT_BASE_URL:-}
       OPERATOR_NAME: ${OPERATOR_NAME:-Operator}
-      NEWSLETTER_BRAND: ${NEWSLETTER_BRAND:-AI Weekly}
       HOST_SSH_USER: ${HOST_SSH_USER:-}
       PUBLIC_HOST: ${PUBLIC_HOST:-}
       EXTRA_CORS_ORIGINS: ${EXTRA_CORS_ORIGINS:-}
-      OMP_ACP_AGENT_SLUGS: ${OMP_ACP_AGENT_SLUGS:-}
+      OMP_DRIVER_DEFAULT: ${OMP_DRIVER_DEFAULT:-acp}
+      RECOVERY_TIER2_SKIP_AGENT_SLUGS: ${RECOVERY_TIER2_SKIP_AGENT_SLUGS:-}
+      # Treiber der hermes-bridge auf dem Host (native | acp). Gleiche Falle:
+      # ohne Passthrough kaeme der .env-Schluessel nie im Container an, und
+      # Hermes' Chat bliebe stumm (docs/specs/chat-over-acp.md).
+      HERMES_DRIVER: ${HERMES_DRIVER:-native}
       GH_TOKEN: ${GH_TOKEN:-}
       USE_SUBAGENT_DISPATCH: ${USE_SUBAGENT_DISPATCH:-true}
       GITHUB_OWNER: ${GITHUB_OWNER:-}
       MC_OWNED_REPO_PREFIXES: ${MC_OWNED_REPO_PREFIXES:-mc-,mc-task-,t2-}
-      NEWS_REPO_PATH: ${NEWS_REPO_PATH:-}
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
       LIVEKIT_PUBLIC_URL: ${LIVEKIT_PUBLIC_URL:-}
@@ -453,6 +510,7 @@ services:
       DGX_SSH_USER: ${DGX_SSH_USER:-}
       DGX_SSH_KEY_PATH: ${DGX_SSH_KEY_PATH:-/home/mcuser/.ssh/id_rsa}
       ENABLE_DISPATCH_GATING: ${ENABLE_DISPATCH_GATING:-false}
+      LEAD_AUTO_ASSIGN_NEW_TASKS: ${LEAD_AUTO_ASSIGN_NEW_TASKS:-}
       STRUCTURED_INTAKE_ENABLED: ${STRUCTURED_INTAKE_ENABLED:-false}
       ENABLE_PROMOTE_ORCHESTRATOR: ${ENABLE_PROMOTE_ORCHESTRATOR:-false}
       ENVIRONMENT: production
@@ -519,6 +577,13 @@ services:
   qdrant:
     image: qdrant/qdrant:latest
     restart: unless-stopped
+    # Same Docker-Desktop default gap as db (1s without this line). qdrant is
+    # the vector store behind Vault and Memory (mc_qdrant_data holds the
+    # storage segments). On SIGKILL it can't close those segments cleanly,
+    # forcing crash-recovery on the next start. 60s, same as db: aligned by
+    # role (persistent storage engine, not a cache), not by measurement —
+    # nobody has isolated-tested qdrant's own shutdown path yet.
+    stop_grace_period: 60s
     logging: *default-logging
     ports:
       - "127.0.0.1:6333:6333"
@@ -536,6 +601,9 @@ services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    # Same Docker-Desktop default gap as db/backend (1s without this line) —
+    # 10s lets Caddy drain in-flight connections gracefully on stop/reload.
+    stop_grace_period: 10s
     logging: *default-logging
     depends_on:
       - frontend
@@ -648,8 +716,8 @@ services:
       VOICE_PROVIDER: ${VOICE_PROVIDER:-openai}
       VOICE_MODEL: ${VOICE_MODEL:-gpt-realtime-2.1}
       # ADR-083: which wire api a (provider, model) pair speaks — "realtime"
-      # or "live" (OpenAI gpt-live-1 full-duplex, needs the vorab-installed
-      # LiveKit PR #7212 plugin) — is NOT a separate env var. It is derived
+      # or "live" (OpenAI gpt-live-1 full-duplex, needs the GPT-Live plugin
+      # from livekit-plugins-openai >= 1.8.1) — is NOT a separate env var. It is derived
       # from the model name by jarvis_core.voice_provider.classify_voice_api
       # (one rule, shared with the backend's GET /api/v1/agent/voice/config
       # response), whether the model comes from the MC runtime binding
@@ -710,12 +778,20 @@ services:
       - --remote-allow-origins=*
       - about:blank
     healthcheck:
-      # Probe :9223 (the socat forward consumers actually use), not :9222 —
-      # a dead forward with a live browser was exactly the failure that slipped
-      # through before. wget has no socat/curl dep and ships in alpine-chrome.
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9223/json/version >/dev/null 2>&1 || exit 1"]
+      # Real CDP roundtrip (HTTP /json/version + a WS Target.getTargets call),
+      # not just HTTP — see docker/cdp-browser/healthcheck.sh for why. Incident
+      # 2026-09-13: HTTP-only stayed "healthy" for 5 days while the WebSocket
+      # path was wedged and every Playwright call hung at its 30s timeout.
+      # timeout: 10s covers the script's own worst case (3s HTTP + 5s WS = 8s)
+      # with margin, so Docker's own kill never fires before the script's.
+      # start_period: 30s — the check now does two real round-trips instead
+      # of one HTTP GET, so it's more likely to catch Chromium still coming
+      # up right after container start. Cheap insurance against that being
+      # mistaken for the wedge this check exists to find.
+      test: ["CMD-SHELL", "/usr/local/bin/cdp-healthcheck.sh"]
       interval: 30s
       timeout: 10s
+      start_period: 30s
       retries: 3
 
   playwright-mcp:

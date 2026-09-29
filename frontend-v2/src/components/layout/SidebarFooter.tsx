@@ -7,6 +7,7 @@ import { useTranslations } from "next-intl";
 import { Settings, LogOut, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { useAppStore } from "@/lib/store";
 import { api, clearToken } from "@/lib/api";
+import { ThemeCycleButton } from "@/components/shared/ThemeSwitch";
 
 const MONO = { fontFamily: "var(--font-p2-mono)" };
 
@@ -89,6 +90,7 @@ export default function SidebarFooter({ collapsed = false }: { collapsed?: boole
         >
           <Settings size={14} />
         </Link>
+        <ThemeCycleButton size={30} style={{ color: "var(--color-p2-dim)" }} />
         <div
           title={currentUser?.name ?? ""}
           className="grid place-items-center"
@@ -174,6 +176,7 @@ export default function SidebarFooter({ collapsed = false }: { collapsed?: boole
       >
         {sidebarCollapsed ? <PanelLeftOpen size={14} /> : <PanelLeftClose size={14} />}
       </button>
+      <ThemeCycleButton />
       <Link
         href="/settings"
         aria-label={t("settings")}

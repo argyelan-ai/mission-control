@@ -139,7 +139,12 @@ def test_registry_entry_is_read_only():
 # the thread is re-readable is the moment it recovers, so the pointer lives in
 # the recovery output rather than only in SOUL.md.
 
-def test_recover_points_at_thread(capsys, tmp_path, monkeypatch):
+def test_recover_points_at_thread(capsys, tmp_path, monkeypatch, _isolate_mc_context_file):
+    """`_cmd_recover` writes the dispatch context file as a side effect —
+    this test isolates that write via the tests/conftest.py autouse fixture
+    (MC_CONTEXT_ENV_PATH) instead of the real, host-shared /tmp/mc-context.env
+    (2026-09-14 incident: this exact test left placeholder aaaaaaaa/
+    bbbbbbbb/cccccccc IDs behind in the real file with no cleanup)."""
     monkeypatch.chdir(tmp_path)
     payload = {
         "active": True,
@@ -160,6 +165,10 @@ def test_recover_points_at_thread(capsys, tmp_path, monkeypatch):
     assert "mc thread" in out
     # The prompt itself must still be the payload — the pointer is a header line.
     assert "der eigentliche prompt" in out
+    # Proof the write landed in the isolated tmp path, not the real file:
+    # _cmd_recover prints the path it just wrote.
+    assert _isolate_mc_context_file in out
+    assert os.path.exists(_isolate_mc_context_file)
 
 
 def test_budget_truncation_is_visible(capsys):

@@ -10,8 +10,8 @@ route, registers one task-done hook, and adds one optional frontend flag. The
 example is intentionally small enough to finish in about 10 minutes, so you can
 compare every step against the vertical contract in
 [ADR-044](../decisions/044-vertical-modules.md).
-Internal checkouts can also compare against `news_studio`, the full reference
-vertical; public checkouts intentionally strip that package.
+For a full-size example, compare against `bench_studio`
+(`backend/app/verticals/bench_studio/`).
 
 ## Before You Start
 
@@ -123,7 +123,7 @@ Frontend verticals are gated from `frontend-v2/src/lib/verticals.ts`:
 
 ```ts
 export const VERTICALS = {
-  newsStudio: false,
+  benchStudio: true,
   rssDigest: true,
 } as const;
 ```

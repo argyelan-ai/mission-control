@@ -33,7 +33,7 @@ import { Loader2, Power } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { humanApiError } from "@/components/shared/HostRecipeSwitcher";
 import { api } from "@/lib/api";
-import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS, STATUS_TEXT, alpha } from "@/lib/colors";
 import { hostAutostartKey } from "../../hostAutostartKey";
 
 /** Mono, locale-unabhängig — "09/05 07:47" statt eines lokalisierten Satzes
@@ -122,7 +122,7 @@ export function AutostartGroup({ hostId, isAdmin }: { hostId: string; isAdmin: b
           onClick={() => mutation.mutate(!enabled)}
           className="inline-flex items-center gap-1.5 rounded-sm px-2 py-1 min-h-11 sm:min-h-7 text-[11px] font-medium leading-none"
           style={{
-            border: `1px solid ${!unknown && enabled ? `${STATUS.online}40` : C.borderActive}`,
+            border: `1px solid ${!unknown && enabled ? alpha(STATUS.online, 0.25) : C.borderActive}`,
             color: unknown ? C.textDim : enabled ? STATUS_TEXT.online : C.textMuted,
             cursor: unknown || busy || !isAdmin ? "not-allowed" : "pointer",
             opacity: busy ? 0.6 : 1,

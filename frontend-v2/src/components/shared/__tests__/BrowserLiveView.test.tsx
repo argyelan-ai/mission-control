@@ -6,6 +6,11 @@ import { BrowserLiveView } from "../BrowserLiveView";
 import { api } from "@/lib/api";
 import type { BrowserLiveTarget } from "@/lib/types";
 
+// Stream auth: the WS URL carries a single-use ticket (lib/streamTicket.ts).
+vi.mock("@/lib/streamTicket", () => ({
+  withStreamTicket: async (url: string) => `${url}${url.includes("?") ? "&" : "?"}ticket=test-ticket`,
+}));
+
 function renderWithQuery(ui: React.ReactElement) {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -99,6 +104,8 @@ describe("BrowserLiveView", () => {
     const ws = FakeWebSocket.instances[0];
     expect(ws.url).toContain("/api/v1/browser-live/ws");
     expect(ws.url).toContain("target=target-1");
+    expect(ws.url).toContain("ticket=test-ticket");
+    expect(ws.url).not.toContain("token=");
 
     ws.onopen?.(new Event("open"));
     ws.onmessage?.(

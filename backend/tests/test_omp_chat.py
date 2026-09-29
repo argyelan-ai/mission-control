@@ -67,6 +67,8 @@ CUSTOM_TOOL_START_LINE = '{"type":"custom","customType":"tool_execution_start","
 
 CUSTOM_SESSION_EXIT_LINE = '{"type":"custom","customType":"session_exit","data":{"reason":"exit","kind":"process_exit","recordedAt":"2026-07-23T17:30:02.570Z"},"id":"a382260c","parentId":"167ff326","timestamp":"2026-07-23T17:30:02.570Z"}'
 
+CHAT_ERROR_LINE = '{"type":"custom_message","customType":"chat_error","content":"Das Modell wurde abgelehnt.","display":true,"data":{"code":"rpc_error","detail":"unknown model"},"id":"e1e1e1e1","timestamp":"2026-09-13T08:49:44.991Z"}'
+CHAT_ERROR_NO_DATA_LINE = '{"type":"custom_message","customType":"chat_error","content":"Etwas ging schief.","display":true,"id":"e2e2e2e2","timestamp":"2026-09-13T08:50:44.991Z"}'
 CUSTOM_MESSAGE_LINE = '{"type":"custom_message","customType":"async-result","content":"<system-notice>\\nHintergrund-Job bg_1 ist fertig.\\n</system-notice>","display":true,"details":{"jobs":[{"jobId":"bg_1","type":"bash"}]},"attribution":"agent","id":"b0e6c25b","parentId":"97948230","timestamp":"2026-07-23T08:49:44.991Z"}'
 
 CUSTOM_MESSAGE_HIDDEN_LINE = CUSTOM_MESSAGE_LINE.replace('"display":true', '"display":false')
@@ -116,6 +118,11 @@ TWO_FILE_MENTION_LINE = json.dumps(
 # Ein Typ, den es heute nicht gibt — Transkript-Formate aendern sich ohne
 # Ankuendigung, der Parser muss ihn still ueberspringen statt zu sterben.
 UNKNOWN_TYPE_LINE = '{"type":"telepathy_change","id":"zz","timestamp":"2026-08-19T12:00:00.000Z","vibes":"gut"}'
+
+# Live 14.09.2026 (PR-492-Session, 500k-Fenster): neuere omp-Builds schreiben
+# neben dem SITZUNGSKUMULATIVEN ``input`` (11.795.309!) den echten Fuellstand
+# als ``usedTokens``/``contextWindow``. Zahlen echt, Text neutralisiert.
+FILL_TRUTH_LINE = '{"type":"message","id":"01a0a0fa","parentId":"01a0a0f9","timestamp":"2026-09-14T18:59:20.963Z","message":{"role":"assistant","content":[{"type":"text","text":"Fertig."}],"api":"openai-completions","provider":"mc-openai","model":"GLM-5.3-Flash-EXL3","usage":{"input":11795309,"cacheRead":0,"cacheWrite":0,"output":30289,"contextWindow":500000,"usedTokens":92799},"stopReason":"stop"}}'
 
 BROKEN_LINE = '{"type":"message","id":"kaputt",'
 
@@ -259,6 +266,45 @@ def test_unknown_model_gets_no_invented_context_window():
     assert parse(ASSISTANT_LINE)[-1]["contextWindow"] is None
 
 
+# ── Parser: omp-eigener Fuellstand (usedTokens/contextWindow) ───────────────
+
+
+def test_fill_truth_stamps_used_pct_instead_of_the_cumulative_lie():
+    """``input`` ist sitzungskumulativ (11.8M gegen ein 500k-Fenster!) — der
+    alte Weg inputTokens/window lies den Kontextring fuer immer bei 100%
+    klemmen (Task 156f57c7). omp's eigener usedTokens/contextWindow ist der
+    Fuellstand und gewinnt: 92799/500000 = 18.6%, Quelle CLI."""
+    usage = parse(FILL_TRUTH_LINE)[-1]
+    assert usage["usedPct"] == 18.6
+    assert usage["source"] == "cli"
+    # Der Fuellstand selbst, nicht die kumulative Summe — Ring und Panel
+    # koennen nicht auseinanderlaufen.
+    assert usage["inputTokens"] == 92_799
+    assert usage["contextWindow"] == 500_000
+    # Aus kumulativen Buckets ist keine Breakdown ableitbar — ehrlich keine
+    # statt einer falschen (Panel zeigt dann eine einzige Belegt-Zeile).
+    assert usage["components"] is None
+
+
+def test_fill_window_outranks_the_model_name_guess():
+    """Auch wenn die observed-Map das Modell kennt: das Fenster aus omp's
+    eigener Buchhaltung ist ground truth und gewinnt."""
+    usage = parse(FILL_TRUTH_LINE, observed={"GLM-5.3-Flash-EXL3": 1_000_000})[-1]
+    assert usage["contextWindow"] == 500_000
+    assert usage["usedPct"] == 18.6
+
+
+def test_old_build_without_fill_fields_keeps_the_estimate_path():
+    """Aeltere omp-Builds schreiben kein usedTokens/contextWindow — das
+    Event bleibt wie bisher (Schaetzungsweg des Frontends), nur ohne
+    gebrauchte usedPct/source-Schluessel."""
+    usage = parse(ASSISTANT_LINE)[-1]
+    assert "usedPct" not in usage
+    assert "source" not in usage
+    assert usage["inputTokens"] == 23_918
+    assert usage["components"] is not None
+
+
 # ── Parser: Werkzeuge ───────────────────────────────────────────────────────
 
 
@@ -326,6 +372,26 @@ def test_tool_title_is_truncated():
     assert len(build_tool_title("bash", {"command": "y" * 500})) == 80
 
 
+@pytest.mark.parametrize(
+    "name,args,expected",
+    [
+        # `hermes acp` (docker/omp-bridge/acp_chat_events.py `_tool_seed`)
+        # passes rawInput through unchanged and only ever guarantees "i" —
+        # never "command"/"path"/"pattern". Bug: build_tool_title's
+        # per-kind branches read only the specific key, so a bare "$"/
+        # empty title rendered for every real hermes tool call (task
+        # 663f70fb, screenshot showed rawInput == {"i": "terminal: cd …"}).
+        ("bash", {"i": "terminal: cd /work && ls"}, "$ terminal: cd /work && ls"),
+        ("read", {"i": "src/config.py"}, "Read: src/config.py"),
+        ("write", {"i": "notes.md"}, "Write: notes.md"),
+        ("edit", {"i": "src/config.py"}, "Edit: src/config.py"),
+        ("grep", {"i": "find TODOs"}, "Search: find TODOs"),
+    ],
+)
+def test_tool_title_falls_back_to_intent_when_specific_key_missing(name, args, expected):
+    assert build_tool_title(name, args) == expected
+
+
 # ── Parser: eingespeiste Eingaben ───────────────────────────────────────────
 
 
@@ -381,6 +447,27 @@ def test_custom_message_shown_by_omp_is_not_a_message_of_the_operator():
     assert "Hintergrund-Job bg_1" in ev["text"]
 
 
+def test_custom_message_chat_error_becomes_an_error_event():
+    """Chat over ACP: der Chat-Daemon schreibt seine Fehler als
+    ``customType: "chat_error"`` ins Transkript — sie muessen als EIGENE
+    Ereignissorte ankommen (rote Karte mit Code), nicht als weiterer
+    Systemhinweis unter vielen."""
+    (ev,) = parse(CHAT_ERROR_LINE)
+    assert ev["kind"] == "message"
+    assert ev["role"] == "teammate"
+    assert ev["source"] == {"kind": "error", "title": "chat_error"}
+    assert ev["error"] == {"code": "rpc_error", "detail": "unknown model"}
+    assert "Modell" in ev["text"]
+
+
+def test_custom_message_chat_error_without_data_still_carries_a_code():
+    """Fehlende ``data``: lieber ein leerer Code als eine verschluckte
+    Fehlermeldung — die Karte muss trotzdem erscheinen."""
+    (ev,) = parse(CHAT_ERROR_NO_DATA_LINE)
+    assert ev["source"]["kind"] == "error"
+    assert ev["error"] == {"code": None, "detail": None}
+
+
 def test_custom_message_without_a_display_field_is_still_shown():
     """``display`` FEHLT ist nicht ``display: false``. Das Format ist
     versioniert und aendert sich ohne Ankuendigung — ein weggeworfener
@@ -432,6 +519,26 @@ def omp_home(tmp_path, monkeypatch):
 
 def test_resolve_transcript_dir(omp_home):
     assert resolve_transcript_dir(_Agent()) == omp_home / ".mc/agents/omp-agent/omp-sessions"
+
+
+def test_resolve_transcript_dir_for_hermes_host_agent(omp_home):
+    """Chat over ACP: der Hermes-Daemon auf dem Host schreibt dasselbe
+    omp-Transkriptformat — damit liest die ganze Leser-/Vorschau-Kette
+    unveraendert weiter, statt ein zweites Format zu lernen."""
+    agent = _Agent(slug="hermes", agent_runtime="host", harness="hermes")
+    assert resolve_transcript_dir(agent) == omp_home / ".mc/agents/hermes/omp-sessions"
+
+
+@pytest.mark.parametrize(
+    "agent",
+    [
+        _Agent(slug="hermes", agent_runtime="cli-bridge", harness="hermes"),
+        _Agent(slug="hermes", agent_runtime="host", harness="claude"),
+    ],
+)
+def test_resolve_transcript_dir_hermes_stays_fail_closed(agent, omp_home):
+    """Der Hermes-Zweig gilt fuer host+hermes — und nur dafuer."""
+    assert resolve_transcript_dir(agent) is None
 
 
 @pytest.mark.parametrize(
@@ -952,6 +1059,53 @@ def test_preview_channel_resolves_the_newest_preview_file(tmp_path):
     os.utime(old, (1_000_000, 1_000_000))
     os.utime(new, (2_000_000, 2_000_000))
     assert preview_channel(session) == new
+
+
+def test_preview_channel_binds_to_the_sessions_own_file(tmp_path):
+    """Juengste Datei GEWINNT nur unter den eigenen: der Preview-Dateiname
+    traegt die Session-ID (``<ts>_<sessionId>_<uniq>.jsonl``,
+    ``acp_chat_events.PreviewEventSink``) — dieselbe ID, die auch den
+    Transkript-Dateinamen traegt (``ChatEventSink``). Eine fremde, juengere
+    Datei einer ANDEREN Session darf nie zum Kanal werden."""
+    import os
+    import time
+
+    session = tmp_path / "--workspace--" / "s1.jsonl"
+    session.parent.mkdir()
+    session.write_text("{}\n")
+    pdir = session.parent / "previews"
+    pdir.mkdir()
+    own = pdir / "t1_s1_a1b2c9.jsonl"
+    newer_foreign = pdir / "t2_s2_ffffff.jsonl"
+    own.write_text("{}\n")
+    newer_foreign.write_text("{}\n")
+    now = time.time()
+    os.utime(own, (now - 60, now - 60))
+    os.utime(newer_foreign, (now, now))
+    assert preview_channel(session) == own
+
+
+def test_preview_channel_never_resolves_a_foreign_sessions_file(tmp_path):
+    """Der Widerspruch im Sessions-Chat (Operator-Befund, 16.09.2026): der
+    Container-Neustart legte eine NEUE, leere Session an — der Verlauf zeigte
+    „No messages yet", waehrend LIVE PREVIEW den letzten Zug VOR dem
+    Neustart nachspielte. ``preview_channel`` waehlte die juengste Datei in
+    ``previews/``, ohne sie an die Session zu binden. Ohne Treffer fuer die
+    eigene Session gibt es keinen Kanal — fail-closed, eine Waise ohne
+    zugehoerige Antwort ist eine Luege."""
+    import os
+    import time
+
+    session = tmp_path / "--workspace--" / "s-new.jsonl"
+    session.parent.mkdir()
+    session.write_text("{}\n")
+    pdir = session.parent / "previews"
+    pdir.mkdir()
+    foreign = pdir / "t1_s-old_a1b2c9.jsonl"
+    foreign.write_text("{}\n")
+    now = time.time()
+    os.utime(foreign, (now, now))
+    assert preview_channel(session) is None
 
 
 def test_preview_channel_is_fail_closed_without_a_previews_dir(tmp_path):

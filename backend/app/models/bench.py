@@ -17,6 +17,7 @@ FK policy:
 """
 import uuid
 from datetime import datetime
+from app.utils import utcnow
 from typing import Any
 
 from sqlalchemy import JSON, DateTime, ForeignKey, Text, Uuid, text
@@ -58,15 +59,15 @@ class BenchChallenge(SQLModel, table=True):
         default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
     )
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),
     )
     updated_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(
             DateTime(timezone=True),
             server_default=text("NOW()"),
-            onupdate=datetime.utcnow,
+            onupdate=utcnow,
         ),
     )
 

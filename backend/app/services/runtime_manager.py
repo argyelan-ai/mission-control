@@ -1777,6 +1777,26 @@ def _is_multi_box_instance(runtime: "Runtime") -> bool:
         return False
 
 
+def is_multi_node(runtime: dict) -> bool:
+    """Öffentliche Variante von :func:`_is_multi_box_dict` für Router/Services.
+
+    Ein Verbund ist eine Runtime, deren ``topology.nodes`` >= 2 ist — der Head
+    steht in ``runtimes.host_id``, die Worker in ``runtime_hosts``.
+    """
+    return _is_multi_box_dict(runtime)
+
+
+#: Antwort, wenn ein Verbund neu gestartet werden soll, MC den Verbund aber
+#: nicht vollständig kennt (kein eigener Stop-/Startbefehl). Ein halber
+#: Restart (nur der Head) ist genau der Vorfall vom 12.09.2026 — lieber ein
+#: klarer Fehler als ein Head, der im NCCL-Rendezvous verhungert.
+MULTI_NODE_RESTART_UNSUPPORTED = (
+    "Multi-Node-Runtime: bitte Stop + Start. Für diesen Verbund fehlt ein "
+    "eigener stop_command/launch_command — ein Neustart nur am Head liesse "
+    "den Worker in der alten NCCL-Gruppe zurück."
+)
+
+
 async def stop_multi_box_instance(runtime: dict, *, host: ResolvedHost | None = None) -> dict:
     """Verbund über seinen eigenen ``stop_command`` beenden und am Head prüfen.
 
@@ -1927,7 +1947,9 @@ async def _ensure_exclusive_host(
                 rt for rt in member_runtimes if rt.slug != slug and rt.id not in known
             )
 
-    stopped: list[str] = []
+    # First look, then stop: which of them still runs? Those are the engines
+    # this start would end — the switch lock (E1, ADR-085) asks them first.
+    live: list[tuple[Runtime, dict, ResolvedHost | None]] = []
     for other in others:
         other_dict = other.to_registry_dict()
         try:
@@ -1943,7 +1965,16 @@ async def _ensure_exclusive_host(
         if state.get("state") == "stopped":
             logger.info("exclusive: %s already stopped", other.slug)
             continue
+        live.append((other, other_dict, other_host))
 
+    from app.services.heads import box_guard
+
+    refusal, lock_unknown = await box_guard.switch_lock(other for other, _, _ in live)
+    if refusal is not None:
+        return {"ok": False, "message": refusal["message"], "stopped": [], "switch_lock": refusal}
+
+    stopped: list[str] = []
+    for other, other_dict, other_host in live:
         logger.info("exclusive: stopping %s to free the box for %s", other.slug, slug)
         if _is_multi_box_instance(other) and (other.stop_command or "").strip():
             # Ein Verbund lebt auf mehreren Boxen; nur sein eigener Stopp-Befehl
@@ -1983,6 +2014,7 @@ async def _ensure_exclusive_host(
             else "Box war bereits frei."
         ),
         "stopped": stopped,
+        "switch_lock_unknown": lock_unknown,
     }
 
 
@@ -1999,7 +2031,13 @@ async def _emit_exclusive_event(slug: str | None, result: dict) -> None:
                 "runtime.exclusive_evicted" if result.get("ok") else "runtime.exclusive_blocked",
                 f"{slug}: {result.get('message')}",
                 severity="info" if result.get("ok") else "warning",
-                detail={"slug": slug, "stopped": result.get("stopped") or []},
+                detail={
+                    "slug": slug,
+                    "stopped": result.get("stopped") or [],
+                    # E1 switch lock: the refusal, or the engines whose load was unknown.
+                    "switch_lock": result.get("switch_lock"),
+                    "switch_lock_unknown": result.get("switch_lock_unknown") or [],
+                },
             )
     except Exception as exc:  # noqa: BLE001
         logger.debug("exclusive: event emit failed for %s: %s", slug, exc)
@@ -2057,6 +2095,8 @@ async def start_runtime(
         exclusive = await ensure_exclusive_host(runtime, host=host)
         await _emit_exclusive_event(slug, exclusive)
         if not exclusive.get("ok"):
+            if exclusive.get("switch_lock"):
+                return {"ok": False, "message": exclusive["message"], "switch_lock": exclusive["switch_lock"]}
             return {"ok": False, "message": exclusive["message"]}
 
     if is_docker or is_ssh_process:
@@ -2591,16 +2631,23 @@ async def restart_runtime(
         await runtime_grace.mark_switching(
             slug, runtime_grace.PHASE_LAUNCHING, grace_source
         )
-    result = await _restart_runtime_impl(runtime, host=host)
+    result = await _restart_runtime_impl(runtime, host=host, grace_source=grace_source)
     if is_docker and not result.get("ok"):
         await runtime_grace.clear_switching(slug)
     return result
 
 
-async def _restart_runtime_impl(runtime: dict, *, host: ResolvedHost | None = None) -> dict:
+async def _restart_runtime_impl(
+    runtime: dict,
+    *,
+    host: ResolvedHost | None = None,
+    grace_source: str = runtime_grace.SOURCE_MANUAL,
+) -> dict:
     """Restarts a runtime.
 
-    vllm_docker / llamacpp_docker: docker restart via SSH
+    vllm_docker / llamacpp_docker (solo): docker restart via SSH
+    vllm_docker / llamacpp_docker (Verbund, topology.nodes >= 2): stop_command
+    + launch_command — derselbe Weg, den der Autostart-Wächter geht
     lmstudio: lms unload + lms load via SSH
     host: resolved host of the runtime (ADR-048); None → legacy chain.
     Returns: {"ok": bool, "message": str}
@@ -2629,6 +2676,23 @@ async def _restart_runtime_impl(runtime: dict, *, host: ResolvedHost | None = No
             return {"ok": False, "message": f"SSH-Fehler: {e}"}
 
     if runtime_type in DOCKER_ENGINE_TYPES:
+        if _is_multi_box_dict(runtime):
+            # Verbund (topology.nodes >= 2): `docker restart` am Head tauscht
+            # NUR den Head-Container aus. Der Worker behält seine alte
+            # NCCL-Gruppe, der neue Head hängt im Rendezvous und stirbt nach
+            # dem NCCL-Timeout (live 12.09.2026, 22:37 → 22:49). Der einzige
+            # ehrliche Neustart ist derselbe Weg, den der Autostart-Wächter
+            # geht: sauberer Stop über den eigenen stop_command (nimmt den
+            # Worker mit) und Start über launch_command (erzeugt BEIDE
+            # Container neu).
+            stop_command = (runtime.get("stop_command") or "").strip()
+            launch_command = (runtime.get("launch_command") or "").strip()
+            if not (stop_command and launch_command):
+                return {"ok": False, "message": MULTI_NODE_RESTART_UNSUPPORTED}
+            stop_result = await stop_runtime(runtime, host=host)
+            if not stop_result["ok"]:
+                return stop_result
+            return await start_runtime(runtime, host=host, grace_source=grace_source)
         container_name = runtime.get("container_name") or None
         # container_name is None after every recipe-switch (the DB field is cleared
         # and only re-populated once the new container appears). Running

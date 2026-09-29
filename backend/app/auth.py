@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import os
+import re
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -14,14 +15,22 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.config import settings
-from app.database import get_session
+from app.database import get_session, release_session
 from app.utils import utcnow
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
+
 # ── JWT Config ────────────────────────────────────────────────────────────────
 
 JWT_ALGORITHM = "HS256"
+
+# Non-UUID `sub` values that may act as the first admin user via the legacy
+# admin-role JWT fallback (see require_user / require_user_or_agent). The only
+# legitimate issuer is the host-side MCP server, scripts/mc-mcp.py. Keep this
+# list closed: a signed admin-role claim with an arbitrary sub must not
+# resolve to a real admin account.
+LEGACY_ADMIN_NON_UUID_SUBS = frozenset({"mcp-server"})
 
 
 def create_access_token(
@@ -104,12 +113,15 @@ class Role(StrEnum):
 ROLE_HIERARCHY = {Role.ADMIN: 3, Role.OPERATOR: 2, Role.VIEWER: 1}
 
 
+def has_role(user, minimum_role: Role) -> bool:
+    """True when ``user`` holds at least ``minimum_role`` (unknown role → no)."""
+    return ROLE_HIERARCHY.get(getattr(user, "role", None), 0) >= ROLE_HIERARCHY[minimum_role]
+
+
 def require_role(minimum_role: Role):
     """FastAPI dependency factory — checks that the user has at least the given role."""
     async def _check(current_user=Depends(require_user)):
-        user_level = ROLE_HIERARCHY.get(current_user.role, 0)
-        required_level = ROLE_HIERARCHY[minimum_role]
-        if user_level < required_level:
+        if not has_role(current_user, minimum_role):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Requires {minimum_role} role or higher",
@@ -120,19 +132,176 @@ def require_role(minimum_role: Role):
 
 # ── User Auth ────────────────────────────────────────────────────────────────
 
-async def require_user(
+async def _legacy_admin_user(session: AsyncSession):
+    """The user a valid LOCAL_AUTH_TOKEN acts as: the first admin, or a
+    synthetic admin while no user exists yet (transition period)."""
+    from app.models.user import User
+
+    result = await session.exec(select(User).where(User.role == "admin").limit(1))
+    admin = result.first()
+    if admin:
+        return admin
+    return User(
+        id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
+        email="admin@local",
+        name="Local Admin",
+        role="admin",
+        is_active=True,
+    )
+
+
+async def _user_from_stream_ticket(path: str, ticket: str, session: AsyncSession):
+    """Resolve a single-use stream ticket (services/stream_tickets.py) to its
+    user. The ticket must have been minted for exactly ``path``; the user
+    must still be active and must not have logged out since (token_version)."""
+    from app.models.user import User
+    from app.services.stream_tickets import redeem_ticket
+
+    claims = await redeem_ticket(ticket, path)
+    if claims is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired stream ticket",
+        )
+    if claims.legacy_admin:
+        return await _legacy_admin_user(session)
+    try:
+        user = await session.get(User, uuid.UUID(claims.user_id))
+    except ValueError:
+        user = None
+    if not user or not user.is_active or user.token_version != claims.token_version:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired stream ticket",
+        )
+    return user
+
+
+def _query_jwt_subject(token: str | None) -> str | None:
+    """Legacy WebSocket auth: the login JWT as ``?token=``. Only honoured
+    with ALLOW_QUERY_TOKEN_AUTH (default off). Narrow-purpose tokens (a
+    ``scope`` claim, e.g. a bench view link) are never accepted — they must
+    not open a terminal or shell."""
+    if not token or not settings.allow_query_token_auth:
+        return None
+    try:
+        payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[JWT_ALGORITHM])
+    except JWTError:
+        return None
+    if payload.get("scope"):
+        return None
+    sub = payload.get("sub")
+    return str(sub) if sub else None
+
+
+async def authenticate_websocket(
+    websocket,
+    *,
+    token: str | None = None,
+    ticket: str | None = None,
+) -> bool:
+    """Auth for browser WebSockets (they cannot send headers).
+
+    Preferred: ``?ticket=`` — a single-use stream ticket minted for exactly
+    this WebSocket path by ``POST /api/v1/auth/stream-ticket`` (which ran the
+    full operator auth moments ago). Fallback, only with
+    ALLOW_QUERY_TOKEN_AUTH: the login JWT as ``?token=``.
+    """
+    return await websocket_user(websocket, token=token, ticket=ticket) is not None
+
+
+# WebSocket close codes for a refused browser socket (before accept):
+# 4001 = no valid credential, 4003 = valid login but the role is too low.
+WS_CLOSE_UNAUTHENTICATED = 4001
+WS_CLOSE_FORBIDDEN = 4003
+
+
+async def authorize_websocket(
+    websocket,
+    minimum_role: Role,
+    *,
+    token: str | None = None,
+    ticket: str | None = None,
+) -> int | None:
+    """Role gate for browser WebSockets — the WS counterpart of
+    :func:`require_role`. Returns ``None`` when the caller may proceed,
+    otherwise the close code to refuse the socket with
+    (:data:`WS_CLOSE_UNAUTHENTICATED` / :data:`WS_CLOSE_FORBIDDEN`).
+
+    Used by every interactive socket (agent/host terminals, plugin shell):
+    those are command execution on the box and are admin-only
+    (operator decision 24.09.2026)."""
+    user = await websocket_user(websocket, token=token, ticket=ticket)
+    if user is None:
+        return WS_CLOSE_UNAUTHENTICATED
+    if not has_role(user, minimum_role):
+        return WS_CLOSE_FORBIDDEN
+    return None
+
+
+def _ws_session() -> AsyncSession:
+    """Own short-lived session for WebSocket auth (a WS handler has no
+    request-scoped session; tests swap this for the test engine)."""
+    from app.database import async_session_maker
+
+    return async_session_maker()
+
+
+async def websocket_user(
+    websocket,
+    *,
+    token: str | None = None,
+    ticket: str | None = None,
+):
+    """Resolve the operator behind a browser WebSocket, or ``None``.
+
+    Same checks as the SSE/REST path: the user must still exist, be active
+    and must not have logged out since the credential was issued
+    (token_version). The DB connection is released before the (possibly
+    hour-long) socket runs."""
+    from app.models.user import User
+
+    if not ticket and not (token and settings.allow_query_token_auth):
+        return None
+    async with _ws_session() as session:
+        if ticket:
+            try:
+                return await _user_from_stream_ticket(websocket.url.path, ticket, session)
+            except HTTPException:
+                return None
+        # Legacy ?token= fallback (ALLOW_QUERY_TOKEN_AUTH only).
+        sub = _query_jwt_subject(token)
+        if sub is None:
+            return None
+        try:
+            payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[JWT_ALGORITHM])
+            user = await session.get(User, uuid.UUID(sub))
+        except (JWTError, ValueError):
+            return None
+        if not user or not user.is_active or payload.get("tv", 0) != user.token_version:
+            return None
+        return user
+
+
+async def _authenticate_user(
     request: Request,
+    session: AsyncSession,
     credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
     token: str | None = Query(None, alias="token"),
-    session: AsyncSession = Depends(get_session),
+    ticket: str | None = None,
 ):
     from app.models.user import User
 
-    # Get token from header, query param, or HttpOnly cookie (SSE fallback)
+    # Credential sources, in order: Authorization header, single-use stream
+    # ticket (?ticket=, SSE/WS only), the legacy ?token= query JWT (only with
+    # ALLOW_QUERY_TOKEN_AUTH — it leaks into every log that records URLs),
+    # and finally the HttpOnly SSE cookie.
     raw_token: str | None = None
     if credentials:
         raw_token = credentials.credentials
-    elif token:
+    elif ticket:
+        return await _user_from_stream_ticket(request.url.path, ticket, session)
+    elif token and settings.allow_query_token_auth:
         raw_token = token
     else:
         raw_token = request.cookies.get("mc_sse_token")
@@ -154,8 +323,16 @@ async def require_user(
             try:
                 user = await session.get(User, uuid.UUID(user_id))
             except ValueError:
-                # sub is not a UUID (e.g. "mcp-server") — check for admin role JWT
-                if payload.get("role") == "admin":
+                # sub is not a UUID. Only allow-listed non-UUID service
+                # identities may act as the first admin user here (the
+                # host-side MCP server self-signs such a token, see
+                # scripts/mc-mcp.py). Any other non-UUID sub is rejected —
+                # a signed admin-role claim alone must not be a generic
+                # "become the first admin account" template.
+                if (
+                    user_id in LEGACY_ADMIN_NON_UUID_SUBS
+                    and payload.get("role") == "admin"
+                ):
                     result = await session.exec(select(User).where(User.role == "admin").limit(1))
                     admin = result.first()
                     if admin:
@@ -177,20 +354,8 @@ async def require_user(
         and settings.local_auth_token not in ("", "dev-token", "change-me")
         and secrets.compare_digest(raw_token, settings.local_auth_token)
     ):
-        # Return first admin user, or synthetic admin if none exist
-        result = await session.exec(select(User).where(User.role == "admin").limit(1))
-        admin = result.first()
-        if admin:
-            return admin
-        # Synthetic admin for transition period (no users created yet)
-        return User(
-            id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
-            email="admin@local",
-            name="Local Admin",
-            role="admin",
-            is_active=True,
-        )
-
+        # First admin user, or a synthetic admin while none exists yet.
+        return await _legacy_admin_user(session)
     # If the caller passed an Agent Token (64-char hex) to a User-only route,
     # give a precise hint instead of a generic 401. Agents repeatedly stumble
     # on this — Davinci self-reflection 2026-05-10 cf319ff1.
@@ -200,15 +365,90 @@ async def require_user(
     if is_agent_token_shape:
         path = request.url.path
         suggestion = path.replace("/api/v1/", "/api/v1/agent/", 1) if path.startswith("/api/v1/") else path
+        match = _agent_route_match(request.app, suggestion)
+        if match == "exact":
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=(
+                    f"Agent-Token darf User-Routes nicht nutzen. "
+                    f"Verwende {suggestion} statt {path} (agent-scoped endpoint)."
+                ),
+            )
+        if match == "prefix":
+            # No route with this exact shape, but agent-scoped endpoints
+            # live under this namespace — point at the family, not at a
+            # made-up concrete path.
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=(
+                    f"Agent-Token darf User-Routes nicht nutzen. "
+                    f"Agent-scoped endpoints für {path} liegen unter "
+                    f"{suggestion}/... (agent-scoped endpoint)."
+                ),
+            )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=(
                 f"Agent-Token darf User-Routes nicht nutzen. "
-                f"Verwende {suggestion} statt {path} (agent-scoped endpoint)."
+                f"Für {path} gibt es keinen agent-scoped Endpoint — "
+                f"das macht der Operator-Login."
             ),
         )
 
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+
+
+async def require_user(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
+    token: str | None = Query(None, alias="token"),
+    # use_cache=False: this session is the auth dep's OWN, not the shared
+    # one — require_user releases (closes) it, and a shared instance would
+    # detach ORM objects the endpoint still re-attaches via session.add().
+    session: AsyncSession = Depends(get_session, use_cache=False),
+    ticket: str | None = Query(None, alias="ticket"),
+):
+    """Authenticate the operator and RELEASE the DB connection before the
+    endpoint runs. FastAPI unwinds ``Depends(get_session)`` only after the
+    response has fully streamed (SSE/WS live for minutes), so without this
+    release the auth lookup's implicit transaction pins a pool connection
+    for the whole stream — on every auth-protected stream endpoint at once
+    (13 pool warnings/hour, holds up to 405 s — finding 2026-09-16)."""
+    user = await _authenticate_user(request, session, credentials, token, ticket)
+    await release_session(session, route=request.url.path)
+    return user
+
+
+def _agent_route_match(app: object, path: str) -> str | None:
+    """How the app's registered /api/v1/agent routes relate to `path`.
+
+    The 401 hint for agent tokens must only ever point at routes that
+    actually exist — a suggestion to a 404 route sent agents hunting for
+    alternate ways in (scoping finding 2026-09-15). Returns:
+      "exact"  — a registered route matches the path shape
+                 (concrete segments vs {param} templates)
+      "prefix" — no exact match, but registered agent routes start with
+                 this path + "/" (an endpoint family exists here)
+      None     — nothing agent-scoped anywhere near this path
+    """
+    best: str | None = None
+    for route in getattr(app, "routes", []):
+        candidates = [getattr(route, "path", None)]
+        # Routers are included as _IncludedRouter wrappers; their real
+        # paths live on the wrapped APIRouter.
+        original = getattr(route, "original_router", None)
+        if original is not None:
+            candidates = [getattr(sub, "path", None) for sub in getattr(original, "routes", [])]
+        for route_path in candidates:
+            if not route_path or not route_path.startswith("/api/v1/agent"):
+                continue
+            parts = re.split(r"(\{[^}]+\})", route_path)
+            pattern = "".join("[^/]+" if p.startswith("{") else re.escape(p) for p in parts)
+            if re.fullmatch(pattern, path):
+                return "exact"
+            if best is None and route_path.startswith(path + "/"):
+                best = "prefix"
+    return best
 
 
 async def require_bench_view(
@@ -236,7 +476,11 @@ async def require_bench_view(
                 return payload
         except JWTError:
             pass
-    return await require_user(request, credentials, token, session)
+    user = await require_user(request, credentials, token, session, None)
+    # require_user already released; this covers the bench-token path where
+    # this dependency is the only DB user (release is idempotent).
+    await release_session(session, route=request.url.path)
+    return user
 
 
 # ── Agent Auth ────────────────────────────────────────────────────────────────
@@ -320,9 +564,9 @@ async def _resolve_agent_from_token(token: str, session: AsyncSession) -> "Agent
     return None
 
 
-async def require_agent(
+async def _authenticate_agent(
+    session: AsyncSession,
     credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
-    session: AsyncSession = Depends(get_session),
 ):
     from app.models.agent import Agent  # noqa: F401 (for type hints)
 
@@ -345,18 +589,34 @@ async def require_agent(
     return agent
 
 
-async def require_user_or_agent(
+async def require_agent(
+    credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
+    session: AsyncSession = Depends(get_session),
+):
+    """Agent-token auth. NOTE: deliberately NO release_session here —
+    no agent-authenticated stream endpoint exists (nothing to heal), and
+    agent endpoints legitimately re-attach the returned Agent row via
+    session.add(agent); closing the shared session would detach it and
+    break them (InvalidRequestError)."""
+    return await _authenticate_agent(session, credentials)
+
+
+async def _authenticate_user_or_agent(
     request: Request,
+    session: AsyncSession,
     credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
     token: str | None = Query(None, alias="token"),
-    session: AsyncSession = Depends(get_session),
+    ticket: str | None = None,
 ):
     from app.models.user import User
 
     raw_token: str | None = None
     if credentials:
         raw_token = credentials.credentials
-    elif token:
+    elif ticket:
+        user = await _user_from_stream_ticket(request.url.path, ticket, session)
+        return {"type": "user", "user": user}
+    elif token and settings.allow_query_token_auth:
         raw_token = token
 
     if not raw_token:
@@ -370,8 +630,13 @@ async def require_user_or_agent(
             try:
                 user = await session.get(User, uuid.UUID(user_id))
             except ValueError:
-                # sub is not a UUID (e.g. "mcp-server") — check for admin role JWT
-                if payload.get("role") == "admin":
+                # sub is not a UUID. Same allowlist as require_user: only
+                # known non-UUID service identities may resolve to the first
+                # admin user (scripts/mc-mcp.py), nothing else.
+                if (
+                    user_id in LEGACY_ADMIN_NON_UUID_SUBS
+                    and payload.get("role") == "admin"
+                ):
                     result = await session.exec(select(User).where(User.role == "admin").limit(1))
                     admin = result.first()
                     if admin:
@@ -406,6 +671,20 @@ async def require_user_or_agent(
         return {"type": "agent", "agent": agent}
 
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+
+
+async def require_user_or_agent(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
+    token: str | None = Query(None, alias="token"),
+    # use_cache=False — see require_user.
+    session: AsyncSession = Depends(get_session, use_cache=False),
+    ticket: str | None = Query(None, alias="ticket"),
+):
+    """Dual auth with early connection release (see require_user)."""
+    result = await _authenticate_user_or_agent(request, session, credentials, token, ticket)
+    await release_session(session, route=request.url.path)
+    return result
 
 
 # ── Aliases for semantic clarity ─────────────────────────────────────────

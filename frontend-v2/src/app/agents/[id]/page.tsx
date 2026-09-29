@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useCallback, useMemo, useEffect, Fragment } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
 import { useLocale, useTranslations } from "next-intl";
 import AppShell from "@/components/layout/AppShell";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { agentTabFromParam, agentTabHref, type AgentTab } from "../agentTabParam";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import ReactMarkdown from "react-markdown";
@@ -18,7 +19,7 @@ import {
   HardDrive, FolderArchive, RefreshCw, Package, Box,
 } from "lucide-react";
 import { cn, contextPercent, contextColor, timeAgo } from "@/lib/utils";
-import { C, STATUS } from "@/lib/colors";
+import { C, STATUS, alpha } from "@/lib/colors";
 import { api } from "@/lib/api";
 import { useAgentStream } from "@/lib/sse";
 import { notify } from "@/lib/notify";
@@ -28,9 +29,10 @@ import { StatusDot } from "@/components/shared/StatusDot";
 import { Pill } from "@/components/shared/Pill";
 import { ActivityFeed } from "@/components/shared/ActivityFeed";
 import { SkillBadges } from "@/components/agent/AgentCard";
-import { RuntimePill, RUNTIME_TYPE_COLOR } from "@/components/shared/RuntimePill";
-import { RuntimeSwitchModal } from "@/components/shared/RuntimeSwitchModal";
+import { RuntimePill } from "@/components/shared/RuntimePill";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { AgentApiKeySection } from "./AgentApiKeySection";
+import { RuntimeSelectionSection } from "./RuntimeSelectionSection";
 import type {
   Agent, AgentMetrics, ActivityEvent as ActivityEventType,
   OpenClawSkill, AgentSkillsResponse,
@@ -39,16 +41,10 @@ import type {
 import { MCPServerMatrix } from "@/components/mcp/MCPServerMatrix";
 import { AgentActions } from "@/components/agent/AgentActions";
 import { EntityIcon } from "@/components/shared/EntityIcon";
-import {
-  groupRuntimesByProvider,
-  isRuntimeBlockedByLocality,
-  splitSlotRuntimes,
-  allowsRuntimeFallback,
-} from "@/lib/groupRuntimes";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type Tab = "overview" | "skills" | "config" | "memory" | "local-memory" | "mcp";
+type Tab = AgentTab;
 
 // labelKey pattern (docs/i18n.md): resolved via t() at the render site.
 const TABS: { key: Tab; labelKey: string; icon: typeof Activity }[] = [
@@ -72,6 +68,13 @@ const HEARTBEAT_INTERVALS = [
   { value: "2m", label: "2m" },
   { value: "5m", label: "5m" },
   { value: "10m", label: "10m" },
+];
+
+// operator_language / work_language (Migration 0201) — the fleet only runs
+// these two codes today; extend here if a third is ever configured.
+const LANGUAGE_OPTIONS = [
+  { value: "en", label: "EN" },
+  { value: "de", label: "DE" },
 ];
 
 // ── Status Mapping ─────────────────────────────────────────────────────────────
@@ -149,17 +152,17 @@ function SkillRow({
   });
 
   const borderColor = pendingChange === "add"
-    ? `${C.online}66`
+    ? alpha(C.online, 0.4)
     : pendingChange === "remove"
-    ? `${C.error}66`
+    ? alpha(C.error, 0.4)
     : skill.status === "ready"
     ? "var(--color-border)"
-    : `${cfg.color}33`;
+    : alpha(cfg.color, 0.2);
 
   const bgTint = pendingChange === "add"
-    ? `${C.online}08`
+    ? alpha(C.online, 0.03)
     : pendingChange === "remove"
-    ? `${C.error}08`
+    ? alpha(C.error, 0.03)
     : undefined;
 
   return (
@@ -187,7 +190,7 @@ function SkillRow({
               {skill.emoji && <EntityIcon value={skill.emoji} size={12} className="mr-1" />}
               {skill.name}
             </span>
-            <span className="text-[10px] px-1.5 py-0.5 rounded-sm font-mono shrink-0" style={{ color: cfg.color, backgroundColor: `${cfg.color}18` }}>
+            <span className="text-[10px] px-1.5 py-0.5 rounded-sm font-mono shrink-0" style={{ color: cfg.color, backgroundColor: alpha(cfg.color, 0.09) }}>
               {t(cfg.labelKey)}
             </span>
             {pendingChange && (
@@ -195,7 +198,7 @@ function SkillRow({
                 className="text-[10px] px-1.5 py-0.5 rounded-sm font-mono shrink-0 font-medium"
                 style={{
                   color: pendingChange === "add" ? C.online : C.error,
-                  backgroundColor: pendingChange === "add" ? `${C.online}18` : `${C.error}18`,
+                  backgroundColor: pendingChange === "add" ? alpha(C.online, 0.09) : alpha(C.error, 0.09),
                 }}
               >
                 {pendingChange === "add" ? t("detail.pendingNew") : t("detail.pendingRemoved")}
@@ -252,7 +255,7 @@ function SkillRow({
             onClick={() => toggleMutation.mutate(true)}
             disabled={toggleMutation.isPending}
             className="flex items-center gap-1 text-[11px] px-2 py-1 rounded-lg cursor-pointer transition-colors"
-            style={{ color: C.online, backgroundColor: `${C.online}1F` }}
+            style={{ color: C.online, backgroundColor: alpha(C.online, 0.12) }}
             title={t("detail.enableSkill")}
           >
             {toggleMutation.isPending ? <Loader2 size={11} className="animate-spin" /> : <Power size={11} />}
@@ -279,8 +282,8 @@ function SkillRow({
             className="flex items-center gap-1 text-[11px] px-2 py-1 rounded-lg cursor-pointer transition-colors"
             style={{
               backgroundColor: isActive
-                ? pendingChange === "remove" ? `${C.error}18` : `${C.accent}26`
-                : pendingChange === "add" ? `${C.online}18` : "var(--color-bg-elevated)",
+                ? pendingChange === "remove" ? alpha(C.error, 0.09) : alpha(C.accent, 0.15)
+                : pendingChange === "add" ? alpha(C.online, 0.09) : "var(--color-bg-elevated)",
               color: isActive
                 ? pendingChange === "remove" ? C.error : C.accent
                 : pendingChange === "add" ? C.online : "var(--color-text-muted)",
@@ -329,7 +332,7 @@ function HostSkillRow({ name, meta, badge, badgeColor }: {
       {badge && (
         <span
           className="text-[10px] px-1.5 py-0.5 rounded-sm font-mono shrink-0"
-          style={{ color: badgeColor ?? C.online, backgroundColor: `${badgeColor ?? C.online}18` }}
+          style={{ color: badgeColor ?? C.online, backgroundColor: alpha(badgeColor ?? C.online, 0.09) }}
         >
           {badge}
         </span>
@@ -623,245 +626,6 @@ function SkillsTab({ agentId }: { agentId: string }) {
   return null;
 }
 
-// ── Runtime Selection Section ─────────────────────────────────────────────
-// cli-bridge agents switch runtimes the "normal" way (container restart).
-// Host agents with a HostHarnessAdapter (ADR-060/ADR-064) switch in place —
-// same PATCH /agents/{id} endpoint, backend routes it to the in-place path.
-// Host agents WITHOUT an adapter still show a locked badge — managed via
-// launchd on the host, no MC-side runtime concept.
-// Phase 30 dropped the `openclaw` runtime entirely (CHECK constraint on
-// agents.agent_runtime). Color map reused from RuntimePill (defined above).
-
-// Exportiert allein für den Test: der Runtime-Picker ist der Ort, an dem
-// Bindungsregeln sichtbar werden (Slot-Zeilen oben, kein Fallback für omp) —
-// die ganze 2000-Zeilen-Seite dafür zu mounten würde nichts zusätzlich prüfen.
-export function RuntimeSelectionSection({ agent, agentId }: { agent: Agent; agentId: string }) {
-  const t = useTranslations("agents.detail");
-  const tSlot = useTranslations("runtimes.slot");
-  const qc = useQueryClient();
-  // Backend-derived (Agent.runtime_switchable). Never re-derive from harness:
-  // the old `harness === "hermes"` compare locked grok/kimi/claude host agents
-  // out of the picker for weeks after the backend learned to switch them.
-  const isSwitchable = agent.runtime_switchable;
-  // Host-inplace only steers UI details (no harness selector, in-place copy) —
-  // derived from the backend verdict, not from a harness allowlist.
-  const isHostInplace = agent.agent_runtime === "host" && isSwitchable;
-
-  const { data: runtimesData } = useQuery({
-    queryKey: ["runtimes"],
-    queryFn: () => api.runtimes.list(),
-    enabled: isSwitchable,
-  });
-
-  const [selected, setSelected] = useState<string | null>(agent.runtime_id ?? null);
-  const [modalOpen, setModalOpen] = useState(false);
-  const dirty = selected !== (agent.runtime_id ?? null);
-
-  // Slot-Runtime (ADR-078): die festen Box-Adressen stehen oben in einer
-  // eigenen Gruppe, alles andere behält die Reihenfolge des Servers.
-  const { slots: slotRuntimes, rest: otherRuntimes } = splitSlotRuntimes(
-    runtimesData?.runtimes ?? []
-  );
-
-  const selectedRuntime = runtimesData?.runtimes.find((r) => r.id === selected || r.slug === selected);
-  const borderColor = isSwitchable && selectedRuntime
-    ? RUNTIME_TYPE_COLOR[selectedRuntime.runtime_type] ?? "var(--color-border)"
-    : "var(--color-border)";
-
-  if (!isSwitchable) {
-    // Locked badge for agents the backend refuses to switch. The text is the
-    // backend's own reason (host_harness_adapter.runtime_switch_availability),
-    // never a hardcoded sentence — the previous literal named a model
-    // ("Boss = Opus 4.7") that had long since rotted.
-    const reason =
-      agent.runtime_switch_blocked_reason ?? t("runtimeSwitchUnsupported");
-    return (
-      <div
-        className="rounded-xl p-4"
-        style={{
-          backgroundColor: "var(--color-bg-surface)",
-          border: "1px solid var(--color-border)",
-        }}
-      >
-        <div className="flex items-center gap-2 mb-2">
-          <span className="text-xs font-mono text-[var(--color-text-muted)]">{t("runtimeLabel")}</span>
-          <span
-            className="text-[9px] px-1.5 py-0.5 rounded-sm font-mono uppercase tracking-wide"
-            style={{
-              backgroundColor: "var(--color-bg-elevated)",
-              color: C.textSecondary,
-              border: "1px solid var(--color-border)",
-            }}
-          >
-            locked · {agent.agent_runtime}
-          </span>
-        </div>
-        <div className="text-[11px] text-[var(--color-text-muted)]">{reason}</div>
-      </div>
-    );
-  }
-
-  return (
-    <>
-      <div
-        className="rounded-xl p-4"
-        style={{
-          backgroundColor: "var(--color-bg-surface)",
-          border: `1px solid ${borderColor}`,
-          borderLeft: `3px solid ${borderColor}`,
-        }}
-      >
-        <div className="flex items-start justify-between gap-4">
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-2">
-              <span className="text-xs font-mono text-[var(--color-text-muted)]">{t("runtimeLabel")}</span>
-              {selectedRuntime?.state === "ready" && (
-                <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: C.online }} />
-              )}
-              {selectedRuntime?.state && selectedRuntime.state !== "ready" && (
-                <span className="text-[9px] font-mono uppercase text-[var(--color-text-muted)]">
-                  {selectedRuntime.state}
-                </span>
-              )}
-            </div>
-            <select
-              value={selected ?? ""}
-              onChange={(e) => setSelected(e.target.value === "" ? null : e.target.value)}
-              className="w-full text-sm rounded-lg px-3 py-2 outline-none cursor-pointer"
-              style={{
-                backgroundColor: "var(--color-bg-deep)",
-                border: `1px solid ${dirty ? C.borderAccent : "var(--color-border)"}`,
-                color: "var(--color-text-primary)",
-              }}
-            >
-              {/* Slot-Runtime (ADR-078): omp braucht eine gebundene Runtime.
-                  Ohne sie startet der Harness ohne Modell, und das Backend
-                  lehnt das Lösen der Bindung ohnehin mit 422 ab — die Option
-                  gar nicht anzubieten ist ehrlicher als ein Klick ins Leere. */}
-              {allowsRuntimeFallback(agent.harness) && (
-                <option value="">{t("fallbackOption")}</option>
-              )}
-              {/* Die festen Box-Adressen zuerst: an ihnen hängen die Agenten,
-                  sie folgen dem Modell, das gerade auf der Box läuft. Der Name
-                  kommt FERTIG vom Server („BOX-A :8000 (aktuell: <Modell>)") —
-                  hier wird nichts angehängt, sonst stünde das Modell zweimal. */}
-              {slotRuntimes.length > 0 && (
-                <optgroup label={tSlot("pickerGroup")}>
-                  {slotRuntimes.map((r) => (
-                    <option key={r.id} value={r.id} disabled={!r.enabled}>
-                      {r.display_name}
-                      {!r.enabled ? ` · ${t("runtimeDisabled")}` : ""}
-                    </option>
-                  ))}
-                </optgroup>
-              )}
-              {/* Grouped by vendor via <optgroup>: the API already returns the
-                  rows in provider order, this only makes that visible. The
-                  label comes from the server (`provider_label`) — deriving it
-                  here would be a second copy of a backend rule. Rows without a
-                  recognised vendor (local vLLM, LM Studio) keep their flat
-                  position after the grouped ones.
-
-                  Phase 0 (Verbund-UI, 30.08.2026): a host-inplace agent can
-                  only ever run something physically on ITS OWN box — a cloud
-                  runtime (Anthropic subscription, Ollama Cloud, …) is never a
-                  real candidate there. Disabled-with-reason, not filtered out
-                  entirely, matching the existing !r.enabled pattern below —
-                  the row stays visible so the "why not" is explained instead
-                  of the option just silently disappearing. */}
-              {groupRuntimesByProvider(otherRuntimes).map(
-                ({ label, runtimes }) => {
-                  const options = runtimes.map((r) => {
-                    const cloudBlocked = isRuntimeBlockedByLocality(r, isHostInplace);
-                    const disabled = !r.enabled || cloudBlocked;
-                    return (
-                      <option key={r.id} value={r.id} disabled={disabled}>
-                        {r.display_name} · {r.runtime_type}
-                        {r.model_identifier ? ` · ${r.model_identifier}` : ""}
-                        {!r.enabled
-                          ? ` · ${t("runtimeDisabled")}`
-                          : cloudBlocked
-                            ? ` · ${t("runtimeCloudUnavailable")}`
-                            : ""}
-                      </option>
-                    );
-                  });
-                  return label ? (
-                    <optgroup key={label} label={label}>
-                      {options}
-                    </optgroup>
-                  ) : (
-                    <Fragment key="__ungrouped">{options}</Fragment>
-                  );
-                },
-              )}
-            </select>
-            <div className="text-[10px] text-[var(--color-text-muted)] mt-1.5">
-              {isHostInplace ? (
-                <>{t("inplaceHint")}</>
-              ) : (
-                <>
-                  {t("dockerHintBefore")} <code className="font-mono">docker restart</code>{" "}
-                  {t("dockerHintAfter")}
-                </>
-              )}
-            </div>
-          </div>
-          <div className="pt-[22px]">
-            <button
-              onClick={() => {
-                if (!dirty) return;
-                setModalOpen(true);
-              }}
-              disabled={!dirty}
-              className={cn(
-                "flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg whitespace-nowrap transition-all",
-                !dirty ? "cursor-not-allowed opacity-40" : "cursor-pointer",
-              )}
-              style={{ backgroundColor: C.accent, color: C.onAccent }}
-            >
-              <RotateCcw size={12} />
-              {t("switchButton")}
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Phase 15 T3.1 — confirm modal with dry-run preview + force toggle */}
-      <RuntimeSwitchModal
-        open={modalOpen}
-        onClose={() => setModalOpen(false)}
-        agent={agent}
-        targetRuntimeId={selected}
-        onConfirm={async ({ force_when_in_progress, harness }) => {
-          const res = await api.agents.switchRuntime(agentId, selected, {
-            force_when_in_progress,
-            harness,
-          });
-          qc.invalidateQueries({ queryKey: ["agent", agentId] });
-          qc.invalidateQueries({ queryKey: ["agents"] });
-          qc.invalidateQueries({ queryKey: ["runtimes"] });
-          qc.invalidateQueries({ queryKey: ["runtime-switch-preview", agentId] });
-          // Task #26 — the switch now auto-triggers the agent restart; make
-          // sure "switched" is never mistaken for "already running the new
-          // model" when that restart was skipped or failed.
-          if (res._switch?.restart_failed) {
-            notify.error(t("switchedRestartFailed"));
-          } else if (res._switch?.restart_skipped) {
-            notify.success(t("switchedRestartPending"));
-          } else {
-            notify.success(
-              res._switch?.image_switched
-                ? t("switchedRebuilt", { s: Math.round((res._switch?.duration_ms ?? 0) / 1000) })
-                : t("switched"),
-            );
-          }
-          return res._switch ?? null;
-        }}
-      />
-    </>
-  );
-}
 
 // ── Config Tab ───────────────────────────────────────────────────────────────
 
@@ -881,49 +645,6 @@ function ConfigTab({
   const [editedContent, setEditedContent] = useState("");
   const [isDirty, setIsDirty] = useState(false);
   const qc = useQueryClient();
-
-  // ── API Key Selector (per-agent override) ────────────────────────────────
-  // Loads all secrets (masked) from the secrets table → dropdown.
-  // Change via PATCH /agents/{id} { secret_id }, apply via sync-config?restart=true.
-  const { data: secrets } = useQuery({
-    queryKey: ["secrets"],
-    queryFn: () => api.secrets.list(),
-  });
-  const [selectedSecretId, setSelectedSecretId] = useState<string | null>(agent.secret_id ?? null);
-  const secretDirty = selectedSecretId !== (agent.secret_id ?? null);
-
-  const updateSecretMutation = useMutation({
-    mutationFn: (secret_id: string | null) =>
-      api.agents.update(agentId, { secret_id } as Partial<Agent>),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["agent", agentId] });
-      notify.success(t("apiKeySaved"));
-    },
-    onError: (e: Error) => notify.error(t("saveFailedMsg", { msg: e.message })),
-  });
-
-  const applyRestartMutation = useMutation({
-    mutationFn: () => api.agents.syncConfig(agentId, { restart: true }),
-    onSuccess: (result) => {
-      const restartStatus = result.restart?.status ?? t("noRestart");
-      notify.success(t("configSyncedPlus", { status: restartStatus }));
-      qc.invalidateQueries({ queryKey: ["agent", agentId] });
-    },
-    onError: (e: Error) => notify.error(t("syncFailedMsg", { msg: e.message })),
-  });
-
-  const handleSecretChange = (newValue: string) => {
-    setSelectedSecretId(newValue === "" ? null : newValue);
-  };
-
-  const handleSaveSecret = async () => {
-    await updateSecretMutation.mutateAsync(selectedSecretId);
-  };
-
-  const handleSaveAndApply = async () => {
-    await updateSecretMutation.mutateAsync(selectedSecretId);
-    await applyRestartMutation.mutateAsync();
-  };
 
   const saveConfigMutation = useMutation({
     mutationFn: ({ fileType, content }: { fileType: string; content: string }) =>
@@ -959,75 +680,7 @@ function ConfigTab({
       <RuntimeSelectionSection agent={agent} agentId={agentId} />
 
       {/* API Key Selector ─────────────────────────────────────────────── */}
-      <div
-        className="rounded-xl p-4"
-        style={{
-          backgroundColor: "var(--color-bg-surface)",
-          border: "1px solid var(--color-border)",
-        }}
-      >
-        <div className="flex items-start justify-between gap-4">
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-2">
-              <span className="text-xs font-mono text-[var(--color-text-muted)]">
-                API KEY (Provider)
-              </span>
-            </div>
-            <select
-              value={selectedSecretId ?? ""}
-              onChange={(e) => handleSecretChange(e.target.value)}
-              className="w-full text-sm rounded-lg px-3 py-2 outline-none cursor-pointer"
-              style={{
-                backgroundColor: "var(--color-bg-elevated)",
-                border: `1px solid ${secretDirty ? C.borderAccent : "var(--color-border)"}`,
-                color: "var(--color-text-primary)",
-              }}
-            >
-              <option value="">— Fallback (docker-compose env) —</option>
-              {secrets?.map((s) => (
-                <option key={s.key} value={s.id}>
-                  {s.label ?? s.key} {s.provider ? `· ${s.provider}` : ""}
-                </option>
-              ))}
-            </select>
-            <div className="text-[10px] text-[var(--color-text-muted)] mt-1.5">
-              {t("apiKeyHint")}
-            </div>
-          </div>
-          <div className="flex flex-col gap-2 pt-[22px]">
-            <button
-              onClick={handleSaveSecret}
-              disabled={!secretDirty || updateSecretMutation.isPending}
-              className={cn(
-                "text-xs px-3 py-2 rounded-lg whitespace-nowrap transition-all",
-                !secretDirty || updateSecretMutation.isPending
-                  ? "cursor-not-allowed opacity-40"
-                  : "cursor-pointer"
-              )}
-              style={{
-                backgroundColor: "var(--color-bg-elevated)",
-                border: "1px solid var(--color-border)",
-                color: "var(--color-text-secondary)",
-              }}
-            >
-              {updateSecretMutation.isPending ? t("savingEllipsis") : t("save")}
-            </button>
-            <button
-              onClick={handleSaveAndApply}
-              disabled={applyRestartMutation.isPending || updateSecretMutation.isPending}
-              className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg whitespace-nowrap cursor-pointer"
-              style={{ backgroundColor: C.accent, color: C.onAccent }}
-            >
-              {applyRestartMutation.isPending ? (
-                <Loader2 size={12} className="animate-spin" />
-              ) : (
-                <RotateCcw size={12} />
-              )}
-              {t("applyRestart")}
-            </button>
-          </div>
-        </div>
-      </div>
+      <AgentApiKeySection agent={agent} agentId={agentId} />
 
       {/* File editor ─────────────────────────────────────────────────── */}
       <div className="flex gap-4 min-h-[400px]">
@@ -1080,7 +733,7 @@ function ConfigTab({
           <div
             key={i}
             className="flex items-start gap-2 text-xs p-2 rounded-lg"
-            style={{ backgroundColor: `${C.warning}1A`, color: C.warning, border: `1px solid ${C.warning}40` }}
+            style={{ backgroundColor: alpha(C.warning, 0.1), color: C.warning, border: `1px solid ${alpha(C.warning, 0.25)}` }}
           >
             <AlertTriangle size={12} className="shrink-0 mt-0.5" />
             {w}
@@ -1219,7 +872,7 @@ function MemoryTab({ agentId, agentName }: { agentId: string; agentName: string 
             <button
               onClick={() => setConfirmClear(true)}
               className="px-3 py-1.5 rounded-lg text-xs cursor-pointer"
-              style={{ color: C.error, backgroundColor: `${C.error}14` }}
+              style={{ color: C.error, backgroundColor: alpha(C.error, 0.08) }}
             >
               {t("delete")}
             </button>
@@ -1429,8 +1082,8 @@ function LocalMemoryTab({ agentId, agentName }: { agentId: string; agentName: st
                 disabled={deleteMutation.isPending}
                 className="p-1.5 rounded-lg cursor-pointer transition-colors disabled:opacity-50"
                 style={{
-                  background: `${C.error}14`,
-                  border: `1px solid ${C.error}33`,
+                  background: alpha(C.error, 0.08),
+                  border: `1px solid ${alpha(C.error, 0.2)}`,
                   color: C.error,
                 }}
                 title={t("deleteFile")}
@@ -1546,7 +1199,7 @@ function OverviewTab({
           <div className="mt-2">
             <span
               className="text-xs font-medium px-2 py-0.5 rounded-sm font-mono"
-              style={{ color: rsColor, backgroundColor: `${rsColor}18` }}
+              style={{ color: rsColor, backgroundColor: alpha(rsColor, 0.09) }}
             >
               {agent.run_state}
             </span>
@@ -1772,9 +1425,9 @@ function ActionButton({
       title={title}
       className="flex items-center justify-center gap-1.5 text-[11px] px-3 py-1.5 max-sm:w-full max-sm:py-3 max-sm:min-h-touch rounded-lg cursor-pointer transition-all disabled:opacity-50"
       style={{
-        backgroundColor: `${color}18`,
+        backgroundColor: alpha(color, 0.09),
         color,
-        border: `1px solid ${color}30`,
+        border: `1px solid ${alpha(color, 0.19)}`,
       }}
     >
       {loading ? <Loader2 size={12} className="animate-spin" /> : <Icon size={12} />}
@@ -1791,7 +1444,21 @@ export default function AgentDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const qc = useQueryClient();
-  const [activeTab, setActiveTab] = useState<Tab>("overview");
+  // The tab lives in the URL (?tab=config) so menu deep links, reloads and
+  // shared links open the right tab; unknown values fall back to Overview.
+  const searchParams = useSearchParams();
+  const tabParam = agentTabFromParam(searchParams.get("tab"));
+  const [activeTab, setActiveTabState] = useState<Tab>(tabParam);
+  useEffect(() => {
+    setActiveTabState(tabParam);
+  }, [tabParam]);
+  const setActiveTab = useCallback(
+    (tab: Tab) => {
+      setActiveTabState(tab);
+      router.replace(agentTabHref(id, tab), { scroll: false });
+    },
+    [id, router],
+  );
   const [confirmRecreate, setConfirmRecreate] = useState(false);
   const [confirmRestartProcess, setConfirmRestartProcess] = useState(false);
 
@@ -1819,7 +1486,7 @@ export default function AgentDetailPage() {
   });
 
   const updateAgentMutation = useMutation({
-    mutationFn: (data: Partial<Pick<Agent, "name" | "role" | "heartbeat_config" | "operational_mode">>) =>
+    mutationFn: (data: Partial<Pick<Agent, "name" | "role" | "heartbeat_config" | "operational_mode" | "operator_language" | "work_language">>) =>
       api.agents.update(id, data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["agent", id] });
@@ -1956,9 +1623,9 @@ export default function AgentDetailPage() {
             className="p-6"
             glow={
               agent.status === "online"
-                ? `${C.online}14`
+                ? alpha(C.online, 0.08)
                 : agent.status === "error"
-                ? `${C.error}14`
+                ? alpha(C.error, 0.08)
                 : undefined
             }
           >
@@ -2014,6 +1681,34 @@ export default function AgentDetailPage() {
                       ))}
                     </select>
                   </span>
+                  <span className="flex items-center gap-1" title={t("detail.operatorLanguageTitle")}>
+                    {t("detail.operatorLanguageLabel")}:{" "}
+                    <select
+                      value={agent.operator_language ?? "en"}
+                      onChange={(e) =>
+                        updateAgentMutation.mutate({ operator_language: e.target.value })
+                      }
+                      className="bg-transparent border-none text-sm cursor-pointer outline-none text-[var(--color-text-muted)]"
+                    >
+                      {LANGUAGE_OPTIONS.map((lo) => (
+                        <option key={lo.value} value={lo.value}>{lo.label}</option>
+                      ))}
+                    </select>
+                  </span>
+                  <span className="flex items-center gap-1" title={t("detail.workLanguageTitle")}>
+                    {t("detail.workLanguageLabel")}:{" "}
+                    <select
+                      value={agent.work_language ?? "en"}
+                      onChange={(e) =>
+                        updateAgentMutation.mutate({ work_language: e.target.value })
+                      }
+                      className="bg-transparent border-none text-sm cursor-pointer outline-none text-[var(--color-text-muted)]"
+                    >
+                      {LANGUAGE_OPTIONS.map((lo) => (
+                        <option key={lo.value} value={lo.value}>{lo.label}</option>
+                      ))}
+                    </select>
+                  </span>
                   <span>{t("detail.lastSeenAgo", { ago: timeAgo(agent.last_seen_at, locale) })}</span>
                 </div>
 
@@ -2021,14 +1716,14 @@ export default function AgentDetailPage() {
                 <div className="mt-4 max-w-sm">
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-[10px] text-[var(--color-text-muted)]">{t("contextLabel")}</span>
-                    <span className="text-[10px] text-[var(--color-text-muted)]">{pct}%</span>
+                    <span className="text-[10px] text-[var(--color-text-muted)]">{pct === null ? "—" : `${pct}%`}</span>
                   </div>
                   <div className="h-1.5 rounded-full bg-[var(--color-bg-elevated)] overflow-hidden">
                     <motion.div
                       className="h-full rounded-full"
                       style={{ backgroundColor: barColor }}
                       initial={{ width: 0 }}
-                      animate={{ width: `${Math.min(pct, 100)}%` }}
+                      animate={{ width: `${Math.min(pct ?? 0, 100)}%` }}
                       transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
                     />
                   </div>
@@ -2041,8 +1736,8 @@ export default function AgentDetailPage() {
               <div
                 className="mt-4 rounded-lg px-3 py-2.5 text-[11px] leading-relaxed"
                 style={{
-                  backgroundColor: `${C.warning}14`,
-                  border: `1px solid ${C.warning}33`,
+                  backgroundColor: alpha(C.warning, 0.08),
+                  border: `1px solid ${alpha(C.warning, 0.2)}`,
                   color: "var(--color-text-secondary)",
                 }}
               >
@@ -2131,8 +1826,8 @@ export default function AgentDetailPage() {
                     <span
                       className="flex items-center gap-1.5 text-[11px] px-3 py-1.5 rounded-lg max-sm:w-full"
                       style={{
-                        backgroundColor: `${C.warning}14`,
-                        border: `1px solid ${C.warning}33`,
+                        backgroundColor: alpha(C.warning, 0.08),
+                        border: `1px solid ${alpha(C.warning, 0.2)}`,
                         color: C.warning,
                       }}
                       title={t("detail.bridgeOfflineTitle")}

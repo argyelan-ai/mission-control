@@ -2,11 +2,12 @@
 Runtimes API — start/stop/restart/status for local model runtimes.
 """
 
+import asyncio
 import json as _json
 import logging
 import re as _re
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
@@ -22,14 +23,15 @@ from app.models.runtime import Runtime
 from app.models.runtime_host import RuntimeHost, RUNTIME_HOST_ROLES
 from app.redis_client import RedisKeys, get_redis
 from app.services import (
-    recipe_switcher, runtime_manager, runtime_readiness, runtime_naming,
-    runtime_stop, slot_runtimes,
+    recipe_switcher, runtime_manager, runtime_multinode, runtime_readiness,
+    runtime_naming, runtime_stop, slot_runtimes,
 )
 from app.services.agent_runtime_switch import (
     _PROBEABLE_RUNTIME_TYPES,
     probe_runtime_model,
 )
 from app.services.endpoint_probe import probe_endpoint_url
+from app.services.heads import box_guard as head_box_guard
 from app.services.host_resolver import (
     ResolvedHost,
     resolve_host_by_slug,
@@ -132,6 +134,29 @@ def _host_ref(host: ResolvedHost | None) -> dict | None:
 # signal. "anthropic*" runtime_types (e.g. "anthropic_oauth") are matched by
 # prefix, same rule harness_compat.runtime_protocol() already uses.
 CLOUD_RUNTIME_TYPES: frozenset[str] = frozenset({"cloud", "grok", "kimi"})
+
+
+def _agent_key_fit(runtime: Runtime, provider) -> dict:
+    """Which per-agent API key fits this runtime — for the agent config page.
+
+    Mirrors harness_compat.resolve_provider_credentials: every protocol
+    except anthropic gets the agent's bound secret as OPENAI_API_KEY
+    (openai, and unknown/None as the legacy default). Deliberately narrower
+    for grok/kimi/voice: the key is technically set there, but those
+    harnesses sign in through their own CLI login / OAuth files and never
+    read it, so the page says "signs in on its own" instead of offering keys.
+    """
+    from app.services.harness_compat import runtime_protocol
+
+    used = runtime_protocol(runtime) not in _OWN_SIGN_IN_PROTOCOLS
+    return {
+        "agent_key_used": used,
+        "agent_key_provider": (provider.secret_provider if (used and provider) else None),
+    }
+
+
+#: Protocols whose harness authenticates on its own (never reads an agent key).
+_OWN_SIGN_IN_PROTOCOLS: frozenset[str] = frozenset({"anthropic", "grok", "kimi", "voice"})
 
 
 def _runtime_locality(runtime: Runtime, host: ResolvedHost | None) -> str:
@@ -526,6 +551,46 @@ def _grouped_sort_key(rt: dict) -> tuple:
     return (1, "", rt.get("ui_order") or 999, rt.get("display_name") or "")
 
 
+# Upper bound for ONE live state probe in the list view. Some probes take
+# two steps that each end in an honest answer: SSH + a 5 s HTTP probe
+# (docker/ssh_process/unsloth/lmstudio), or on a power-managed box a 3 s
+# control-port check + the 5 s model probe (8 s for "booted, no model", the
+# state that shows the Start button). The limit clears those, so a slow but
+# answering box still reports its real state ("stopped"/"warming"); it stays
+# below the 10 s SSH connect timeout and far below the 60 s SSH command
+# timeout, which are what a hung box would otherwise cost the whole page.
+# The page normally waits far less: only a hung probe runs into this limit.
+_STATE_PROBE_TIMEOUT_S = 9.0
+PROBE_TIMED_OUT_MESSAGE = "probe timed out"
+
+
+async def _probe_state_with_limit(rt_dict: dict, host) -> dict:
+    """Live state of one runtime, cut off after _STATE_PROBE_TIMEOUT_S.
+
+    A probe that does not answer in time says nothing about the runtime —
+    "unknown" is the honest state, not "stopped" (which would invite a start)
+    or "failed" (which would claim an error nobody observed).
+    """
+    try:
+        return await asyncio.wait_for(
+            runtime_manager.get_runtime_state(rt_dict, host=host),
+            timeout=_STATE_PROBE_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Runtime '%s': state probe timed out after %.1fs",
+            rt_dict.get("slug"), _STATE_PROBE_TIMEOUT_S,
+        )
+        return {
+            "state": "unknown",
+            "http_reachable": False,
+            "container_status": "probe_timeout",
+            # Same key the ssh_process "unconfigured" answer uses — a
+            # generic "message" would collide inside the {**rt, **state} merge.
+            "state_message": PROBE_TIMED_OUT_MESSAGE,
+        }
+
+
 @router.get("")
 async def list_runtimes(
     session: AsyncSession = Depends(get_session),
@@ -570,14 +635,27 @@ async def list_runtimes(
                 "node_rank": rh.node_rank,
             })
 
-    result = []
+    # Host lookups share the request's DB session, and one AsyncSession must
+    # never run two queries at once — so they stay sequential (cheap, local
+    # DB). Only the live probes below go out in parallel.
+    probe_targets = []
     for rt in runtimes:
         if not rt.enabled:
             continue
         # Pitfall 1 (RESEARCH.md): get_runtime_state expects a dict.
-        rt_dict = rt.model_dump()
-        host = await resolve_host_for_runtime(session, rt)
-        state_info = await runtime_manager.get_runtime_state(rt_dict, host=host)
+        probe_targets.append((rt, rt.model_dump(), await resolve_host_for_runtime(session, rt)))
+
+    # Each probe is an independent SSH/HTTP round trip to a different box, so
+    # the page waits for the SLOWEST probe instead of their sum (measured
+    # 23.09.2026: 29 runtimes, 14.2 s sequential, two unreachable boxes alone
+    # cost 5 s each). No cache on purpose: the recipe switcher reads this
+    # list and must never act on a stale state.
+    states = await asyncio.gather(
+        *(_probe_state_with_limit(rt_dict, host) for _, rt_dict, host in probe_targets)
+    )
+
+    result = []
+    for (rt, rt_dict, host), state_info in zip(probe_targets, states):
         # ADR-048: `host` in the payload = {id, slug, display_name} | null.
         # Deliberately overwrites the DEPRECATED legacy string field of the
         # same name from model_dump() — frontend type is `host?: HostRef | null`.
@@ -592,6 +670,13 @@ async def list_runtimes(
             # frontend and backend disagree about switchability before.
             # None = no recognised vendor (local vLLM, LM Studio, unsloth).
             "provider_label": provider.label if provider else None,
+            # Which agent API key fits this runtime (agent config page). The
+            # agent's key is sent as OPENAI_API_KEY for every protocol but
+            # anthropic (harness_compat.resolve_provider_credentials);
+            # anthropic/grok/kimi/voice rows sign in on their own.
+            # agent_key_provider = the secrets.provider whose keys fit, None
+            # when no provider key applies (e.g. a local box).
+            **_agent_key_fit(rt, provider),
             # Version numbers in the display name that the served model does
             # NOT back — empty list means the name is honest. See
             # _display_name_drift below for why this ships on every row.
@@ -776,6 +861,9 @@ async def start_runtime(
         rt = {**rt, "context_length": body.context_length}
     result = await runtime_manager.start_runtime(rt, host=host)
     if not result["ok"]:
+        if result.get("switch_lock"):
+            # E1 switch lock: the engine this start would end is still working.
+            raise HTTPException(status_code=409, detail=result["switch_lock"])
         raise HTTPException(status_code=400, detail=result["message"])
     await runtime_readiness.invalidate_readiness(rt.get("slug") or runtime_id)
     return result
@@ -816,6 +904,10 @@ async def stop_runtime(
     if host_id is not None and not isinstance(host_id, uuid.UUID):
         host_id = uuid.UUID(str(host_id))
 
+    # Head launcher (spec §6.7): a working head is never cut off — not even
+    # with force (stop the head first). Inert while heads_enabled is off.
+    await head_box_guard.guard_runtime_action(session, runtime_uuid, "stop")
+
     busy_agents = await runtime_stop.find_busy_agents(session, runtime_uuid, host_id)
     if busy_agents and not force:
         raise HTTPException(
@@ -852,6 +944,15 @@ async def restart_runtime(
     rt, host = await _resolve_runtime_and_host(session, runtime_id)
     if not rt:
         raise HTTPException(status_code=404, detail=f"Runtime '{runtime_id}' nicht gefunden")
+    # Verbund: der Neustart laeuft im runtime_manager ueber Stop+Launch statt
+    # `docker restart` am Head. Die Entscheidung faellt an topology.nodes, mit
+    # runtime_hosts als Sicherheitsnetz — und wird hier als Ereignis
+    # festgehalten, samt der Boxen, die mitgehen.
+    runtime_uuid = rt["id"] if isinstance(rt["id"], uuid.UUID) else uuid.UUID(str(rt["id"]))
+    # Head launcher (spec §6.7): no restart under a working head while the
+    # engine answers; restarting a dead engine (recovery) stays allowed.
+    await head_box_guard.guard_runtime_action(session, runtime_uuid, "restart")
+    rt, is_multi_node = await runtime_multinode.resolve_multi_node(session, rt, runtime_uuid)
     result = await runtime_manager.restart_runtime(rt, host=host)
     if not result["ok"]:
         raise HTTPException(status_code=400, detail=result["message"])
@@ -859,8 +960,15 @@ async def restart_runtime(
     # kein Ausfall im Sinne des Waechters (Schalt-Gnadenfrist unterdrueckt die
     # Fehlerzaehlung) — also setzen wir serving_since hier von Hand zurueck,
     # auf der Zeile selbst UND ihrer Slot-Zeile (falls vorhanden).
-    runtime_uuid = rt["id"] if isinstance(rt["id"], uuid.UUID) else uuid.UUID(str(rt["id"]))
     runtime_row = await session.get(Runtime, runtime_uuid)
+    if runtime_row is not None and is_multi_node:
+        try:
+            nodes = await runtime_multinode.describe_nodes(session, runtime_row)
+            await runtime_multinode.emit_restart_multinode(session, runtime_row, nodes)
+        except Exception:  # noqa: BLE001 — ein erfolgreicher Restart bleibt erfolgreich
+            logger.exception(
+                "runtime.restart_multinode-Ereignis fehlgeschlagen für %s", runtime_row.slug
+            )
     if runtime_row is not None:
         try:
             await slot_runtimes.reset_serving_since_for_restart(session, runtime_row)
@@ -935,7 +1043,7 @@ async def probe_model_endpoint(
 
     if changed:
         rt.model_identifier = probed
-        rt.updated_at = datetime.utcnow()
+        rt.updated_at = datetime.now(timezone.utc)
         session.add(rt)
         await session.commit()
         await session.refresh(rt)
@@ -1067,7 +1175,7 @@ async def update_runtime_db(
         rt.api_key_secret_id = body.api_key_secret_id
     if body.model_fields_set & _LAUNCH_COMMAND_RULE_FIELDS:
         _require_launch_command(rt)
-    rt.updated_at = datetime.utcnow()
+    rt.updated_at = datetime.now(timezone.utc)
     session.add(rt)
     await session.commit()
     await session.refresh(rt)

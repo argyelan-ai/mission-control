@@ -13,6 +13,7 @@ import type { SystemMetrics } from "@/lib/types";
 import { VoiceButton } from "@/components/voice/VoiceWidget";
 import BoardPicker from "./BoardPicker";
 import SidebarFooter from "./SidebarFooter";
+import { agentsBadge } from "./agentsBadge";
 import {
   DEFAULT_PINS,
   NAV_ITEMS,
@@ -36,6 +37,7 @@ type Ctx = { href: string; x: number; y: number; pinned: boolean } | null;
 export default function Sidebar() {
   const t = useTranslations("nav");
   const tShell = useTranslations("shell");
+  const tAgents = useTranslations("agents");
   const pathname = usePathname();
   const store = useAppStore();
   const { sidebarCollapsed, setCommandPaletteOpen } = store;
@@ -80,10 +82,10 @@ export default function Sidebar() {
   }, [ctx]);
 
   /** Badge for a route — only real state, never decoration. */
-  function badgeFor(href: string): { text?: string; alert?: boolean } {
+  function badgeFor(href: string): { text?: string; title?: string; alert?: boolean } {
     if (!metrics) return {};
     if (href === "/tasks" && metrics.tasks.active > 0) return { text: String(metrics.tasks.active) };
-    if (href === "/agents") return { text: `${metrics.agents.online}/${metrics.agents.total}` };
+    if (href === "/agents") return agentsBadge(metrics.agents, tAgents);
     if (href === "/inbox" && metrics.approvals.pending > 0) return { alert: true };
     return {};
   }
@@ -102,7 +104,7 @@ export default function Sidebar() {
   // ── one nav row, used for pins and for group children ─────────────────────
   function Row({ item, nested = false }: { item: NavItem; nested?: boolean }) {
     const active = isActiveRoute(item.href, pathname);
-    const { text, alert } = badgeFor(item.href);
+    const { text, title: badgeTitle, alert } = badgeFor(item.href);
     const Icon = item.icon;
     const isPinned = pinnedNav.includes(item.href);
     const label = t(item.labelKey) || item.label;
@@ -200,6 +202,7 @@ export default function Sidebar() {
         ) : text ? (
           <span
             className="ml-auto shrink-0 tabular-nums"
+            title={badgeTitle}
             style={{ fontSize: "10px", color: active ? "var(--color-p2-dim)" : "var(--color-p2-faint)" }}
           >
             {text}

@@ -38,6 +38,34 @@ curl -sS http://127.0.0.1:18794/health
 tmux attach -t hermes-worker
 ```
 
+## `HERMES_DRIVER=acp` — chat over ACP (optional)
+
+With `HERMES_DRIVER=acp` the bridge does **not** start the tmux TUI. Instead it
+holds one long-lived `hermes acp --accept-hooks` session through the shared
+chat daemon (`docker/omp-bridge/acp_chat.py`) and serves it over HTTP:
+
+| | native (default) | `HERMES_DRIVER=acp` |
+|---|---|---|
+| Interface | tmux `hermes-worker` TUI | Sessions chat only (`headless_chat`) |
+| Dispatch | `tmux send-keys` | the same ACP session, one task per turn |
+| Backend control | — | `POST /chat/{prompt,cancel,config,state}` |
+
+- Transcript + `acp-chat-state.json`: `~/.mc/agents/hermes/omp-sessions/<encoded-cwd>/`
+  — exactly where the backend's omp chat reader looks.
+- ACP working directory: `~/.mc/workspaces/hermes` (override `HERMES_ACP_CWD`).
+- `POST /start` · `/restart` · `/stop` act on the daemon; the ACP session
+  itself survives a restart (`session/load`), so the chat history does too.
+- `GET /health` reports `driver` and `chat_daemon_running`.
+
+Set the variable in the plist's `EnvironmentVariables` (see below) and reload
+the job. Leave it out and every path stays byte-identical to the native one.
+
+```bash
+launchctl kickstart -k gui/$(id -u)/com.mc.hermes-bridge
+curl -sS http://127.0.0.1:18794/health          # driver, chat_daemon_running
+curl -sS -X POST http://127.0.0.1:18794/chat/state
+```
+
 ## Architecture
 
 ```

@@ -13,7 +13,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Layers, FileText, Users } from "lucide-react";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 
 interface TopicCluster {
   cluster_id: number;
@@ -31,10 +31,10 @@ interface TopicsResponse {
 // Agent color map — consistent with the rest of the memory UI (no purple)
 const AGENT_COLORS: Record<string, string> = {
   boss:       C.accent,          // teal (was purple)
-  researcher: C.online,          // #55A964
-  sparky:     C.warning,         // #A67F3E
-  deployer:   C.info,            // #5890CA
-  tester:     C.error,           // #FA4942
+  researcher: C.online,          // status-online
+  sparky:     C.warning,         // status-warning
+  deployer:   C.info,            // status-info
+  tester:     C.error,           // status-error
   davinci:    "#EC4899",         // pink — external brand identity
   freecode:   C.accent,          // teal (was indigo #6366F1 — non-brand, mapped to accent)
   jarvis:     C.accentHover,     // #F9F7EF
@@ -151,7 +151,7 @@ export function VaultTopicsView() {
                   key={agent}
                   className="px-1.5 py-0.5 rounded-sm text-[9px] font-mono"
                   style={{
-                    background: `${agentColor(agent)}18`,
+                    background: alpha(agentColor(agent), 0.09),
                     color: agentColor(agent),
                   }}
                 >

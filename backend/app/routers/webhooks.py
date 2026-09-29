@@ -1,7 +1,8 @@
 """
 Webhook endpoints for external events (GitHub push, etc.).
 
-No user auth needed — the webhook secret is checked instead.
+No user auth: the GitHub route checks the webhook secret, the local route
+only accepts callers on this machine (app/local_only.py).
 Creates activity events for the dashboard + optional RPC to the agent.
 """
 
@@ -18,6 +19,7 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.database import get_session
+from app.local_only import require_local_caller
 from app.models.webhook import Webhook, WebhookPayload
 from app.services.activity import emit_event
 
@@ -84,7 +86,9 @@ async def receive_github_webhook(
     Receives GitHub webhook events (push, PR, etc.).
 
     URL format: POST /api/v1/webhooks/github/{webhook_id}
-    GitHub is configured with this URL as the webhook URL.
+    GitHub is configured with this URL as the webhook URL and with the same
+    secret as the webhook row. Events must carry a valid X-Hub-Signature-256;
+    a webhook without a secret rejects every event.
     """
     # Load webhook from DB
     webhook = await session.get(Webhook, webhook_id)
@@ -96,12 +100,21 @@ async def receive_github_webhook(
     headers = dict(request.headers)
     source_ip = request.client.host if request.client else None
 
-    # Check HMAC signature (if secret configured)
-    if webhook.secret:
-        signature = headers.get("x-hub-signature-256")
-        if not _verify_github_signature(body, signature, webhook.secret):
-            logger.warning("Invalid webhook signature from %s for webhook %s", source_ip, webhook_id)
-            raise HTTPException(status_code=403, detail="Invalid signature")
+    # The HMAC signature is this endpoint's only authentication, so a webhook
+    # without a secret is unusable (fail closed) — it used to mean "no check",
+    # which let anyone who knew the UUID inject events.
+    if not webhook.secret:
+        logger.warning(
+            "Rejected event for webhook %s: no secret configured — set one on the "
+            "webhook and the same value in GitHub's webhook settings",
+            webhook_id,
+        )
+        raise HTTPException(status_code=403, detail="Webhook has no secret configured")
+
+    signature = headers.get("x-hub-signature-256")
+    if not _verify_github_signature(body, signature, webhook.secret):
+        logger.warning("Invalid webhook signature from %s for webhook %s", source_ip, webhook_id)
+        raise HTTPException(status_code=403, detail="Invalid signature")
 
     # Parse payload
     try:
@@ -167,7 +180,7 @@ async def receive_github_webhook(
     return {"status": "received", "payload_id": str(wh_payload.id)}
 
 
-@router.post("/webhooks/local/push")
+@router.post("/webhooks/local/push", dependencies=[Depends(require_local_caller)])
 async def receive_local_push(
     request: Request,
     session: AsyncSession = Depends(get_session),
@@ -178,7 +191,10 @@ async def receive_local_push(
     Needs no webhook setup — accepts directly:
     { "repo", "branch", "commit_sha", "commit_message", "author" }
 
-    No auth needed since it's local-only (Docker network + loopback).
+    No user auth — enforced local-only instead: require_local_caller rejects
+    proxied requests and peers outside loopback + the Docker network, and the
+    Caddyfiles answer /api/v1/webhooks/local/* with 403. Callers must use the
+    backend port directly (http://127.0.0.1:8000), never Caddy.
     """
     try:
         data = await request.json()

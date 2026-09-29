@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
-import { getToken } from "@/lib/api";
+import { getToken } from "@/lib/authToken";
+import { openTicketedWebSocket } from "@/lib/streamTicket";
 
 /**
  * useVaultStream — WebSocket hook for live vault note updates.
@@ -10,8 +11,8 @@ import { getToken } from "@/lib/api";
  *
  * Reconnect strategy: the effect re-runs whenever `enabled` changes.
  * The WebSocket is closed on unmount or when `enabled` becomes false.
- * Auth token is read once at connection time; token rotation requires
- * the caller to toggle `enabled` or remount the component.
+ * Auth: a single-use stream ticket per connection (lib/streamTicket.ts) —
+ * the login token never goes into the URL.
  *
  * Used by VaultGraphPage (T10).
  */
@@ -38,27 +39,20 @@ export function useVaultStream({ enabled = true, onMessage }: UseVaultStreamOpti
     const token = getToken();
     if (!token) return; // not authenticated; skip silently
 
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(
-      `${protocol}//${window.location.host}/api/v1/vault/stream?token=${token}`
-    );
+    return openTicketedWebSocket("/api/v1/vault/stream", (ws) => {
+      ws.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(ev.data) as VaultStreamMessage;
+          if (msg.type === "ping") return; // heartbeat — ignore
+          onMessageRef.current?.(msg);
+        } catch (err) {
+          console.error("[useVaultStream] parse error:", err);
+        }
+      };
 
-    ws.onmessage = (ev) => {
-      try {
-        const msg = JSON.parse(ev.data) as VaultStreamMessage;
-        if (msg.type === "ping") return; // heartbeat — ignore
-        onMessageRef.current?.(msg);
-      } catch (err) {
-        console.error("[useVaultStream] parse error:", err);
-      }
-    };
-
-    ws.onerror = (err) => {
-      console.warn("[useVaultStream] WebSocket error:", err);
-    };
-
-    return () => {
-      ws.close();
-    };
+      ws.onerror = (err) => {
+        console.warn("[useVaultStream] WebSocket error:", err);
+      };
+    });
   }, [enabled]);
 }

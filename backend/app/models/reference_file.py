@@ -15,6 +15,7 @@ Board angehören muss.
 
 import uuid
 from datetime import datetime
+from app.utils import utcnow
 
 from sqlalchemy import DateTime, ForeignKey, Uuid, text
 from sqlmodel import Column, Field, SQLModel
@@ -52,6 +53,6 @@ class ReferenceFile(SQLModel, table=True):
     note: str | None = None  # optional: wofür ist die Datei gedacht
     uploaded_by: str = "user"
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),
     )

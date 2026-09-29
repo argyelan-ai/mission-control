@@ -14,6 +14,7 @@ POST /pair create the host on the fly from the reporting hostname.
 """
 import uuid
 from datetime import datetime
+from app.utils import utcnow
 
 from sqlalchemy import DateTime, Text, text
 from sqlmodel import Column, Field, SQLModel
@@ -37,6 +38,6 @@ class HostPairingCode(SQLModel, table=True):
     expires_at: datetime = Field(sa_column=Column(DateTime(timezone=True), nullable=False))
     used_at: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()"), nullable=False),
     )

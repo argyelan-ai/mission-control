@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from app.utils import utcnow
 from typing import Any
 
 import sqlalchemy as sa
@@ -33,12 +34,12 @@ class WorkflowTemplate(SQLModel, table=True):
     )
     created_by: str
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),
     )
     updated_at: datetime = Field(
-        default_factory=datetime.utcnow,
-        sa_column=Column(DateTime(timezone=True), server_default=text("NOW()"), onupdate=datetime.utcnow),
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), server_default=text("NOW()"), onupdate=utcnow),
     )
 
 
@@ -58,7 +59,7 @@ class WorkflowTemplateVersion(SQLModel, table=True):
     change_reason: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
     created_by: str
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),
     )
 
@@ -76,7 +77,7 @@ class WorkflowRun(SQLModel, table=True):
     triggered_by: str  # user | scheduler | event | resume
     trigger_payload: Any | None = Field(default=None, sa_column=Column(JSON, nullable=True))
     started_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), nullable=False, server_default=text("NOW()")),
     )
     completed_at: datetime | None = Field(
@@ -92,7 +93,7 @@ class WorkflowRun(SQLModel, table=True):
         default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
     )
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),
     )
 

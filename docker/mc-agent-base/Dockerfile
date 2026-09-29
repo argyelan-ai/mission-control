@@ -102,9 +102,10 @@ RUN mkdir -p /home/agent/.ssh \
 ENV PANE_UI_OVERRIDE=openclaude
 ENV CLAUDE_CODE_USE_OPENAI=1
 
-# poll.sh + entrypoint.sh + start-claude.sh + recycler.sh + recycler-lib.sh + lib/ kopieren
+# poll.sh + entrypoint.sh + sigforward.sh + start-claude.sh + recycler.sh + recycler-lib.sh + lib/ kopieren
 COPY --chown=agent:agent poll.sh /home/agent/poll.sh
 COPY --chown=agent:agent entrypoint.sh /home/agent/entrypoint.sh
+COPY --chown=agent:agent sigforward.sh /home/agent/sigforward.sh
 COPY --chown=agent:agent start-claude.sh /home/agent/start-claude.sh
 COPY --chown=agent:agent recycler-lib.sh /home/agent/recycler-lib.sh
 COPY --chown=agent:agent recycler.sh /home/agent/recycler.sh

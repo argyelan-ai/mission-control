@@ -39,7 +39,7 @@ import {
 } from "@/components/shared/TaskFormFields";
 import { TriggerEditor, type TriggerEditorValue } from "./TriggerEditor";
 import { JOB_TEMPLATES, type JobTemplate } from "./jobTemplates";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 
 interface JobModalProps {
@@ -374,7 +374,7 @@ export function JobModal({
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: 0.15 }}
-          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4 bg-black/70"
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4 bg-[var(--color-scrim)]/70"
           style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
           onClick={(e) => {
             if (e.target === overlayRef.current && !submitting) onClose();
@@ -396,7 +396,7 @@ export function JobModal({
             style={{
               border: `1px solid ${C.border}`,
               background: C.bgBase,
-              boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
+              boxShadow: `0 4px 24px ${alpha(C.shadow, 0.5)}, 0 1px 2px ${alpha(C.shadow, 0.3)}`,
             }}
           >
             {/* Header */}
@@ -659,8 +659,8 @@ export function JobModal({
                 <div
                   className="flex items-start gap-2 rounded-md border px-3 py-2 text-xs"
                   style={{
-                    borderColor: `${C.error}66`,
-                    background: `${C.error}14`,
+                    borderColor: alpha(C.error, 0.4),
+                    background: alpha(C.error, 0.08),
                     color: STATUS_TEXT.error,
                   }}
                 >
@@ -691,7 +691,7 @@ export function JobModal({
                 className="flex items-center gap-1.5 rounded-md px-3.5 py-1.5 text-sm font-medium transition disabled:opacity-60"
                 style={{
                   background: C.accent,
-                  color: C.textPrimary,
+                  color: C.onAccent,
                 }}
               >
                 {submitting && <Loader2 size={14} className="animate-spin" />}

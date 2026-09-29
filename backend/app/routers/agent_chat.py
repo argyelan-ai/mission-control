@@ -13,18 +13,19 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
-from app.auth import require_user
-from app.database import get_session
+from app.auth import Role, require_role, require_user
+from app.database import get_session, release_session
 from app.models.agent import Agent
 from app.models.task import Task
 from app.redis_client import RedisKeys
+from app.services.acp_chat_transport import AcpChatUnreachableError
 from app.services.agent_chat_input import (
     AgentBusyError,
     AgentStartingError,
@@ -81,6 +82,20 @@ def _boss_delivery_failed(e: BossDeliveryError) -> JSONResponse:
     return JSONResponse(
         status_code=502,
         content={"reason": _BOSS_DELIVERY_FAILED, "detail": str(e)[:300]},
+    )
+
+
+# 502: der ACP-Chat-Daemon eines kopflosen Agenten hat nicht geantwortet
+# (Container weg, Socket tot, hermes-bridge aus). Bewusst NICHT dieselbe 409
+# wie eine inhaltliche Absage: "der Agent lehnt ab" und "da ist gerade
+# niemand" sind fuer den Operator zwei verschiedene Lagen.
+_ACP_UNREACHABLE = "acp_unreachable"
+
+
+def _acp_unreachable(e: AcpChatUnreachableError) -> JSONResponse:
+    return JSONResponse(
+        status_code=502,
+        content={"reason": _ACP_UNREACHABLE, "detail": str(e)[:300]},
     )
 _MAX_TEXT_LEN = 20000
 _MAX_KEYS_LEN = 16
@@ -340,6 +355,7 @@ async def get_subagent_history(
 @router.get("/agents/{agent_id}/chat/stream")
 async def stream_agent_chat(
     agent_id: uuid.UUID,
+    request: Request,
     current_user=Depends(require_user),
     session: AsyncSession = Depends(get_session),
 ):
@@ -351,6 +367,13 @@ async def stream_agent_chat(
     resolved = await _resolve_transcript_path(agent_id, session)
     if isinstance(resolved, JSONResponse):
         return resolved
+
+    # All DB work of this endpoint happens above. Release the connection
+    # BEFORE the stream starts: FastAPI would otherwise unwind
+    # Depends(get_session) only after the SSE response finishes — pinning
+    # the connection and its implicit transaction for the whole stream
+    # (up to 405 s, pool exhaustion incident 2026-09-14 / finding 2026-09-16).
+    await release_session(session, route=request.url.path)
 
     agent, path, _adapter = resolved
     channel = RedisKeys.agent_chat_channel(str(agent_id))
@@ -431,7 +454,7 @@ async def get_chat_diff(
 async def post_chat_input(
     agent_id: uuid.UUID,
     body: ChatInputBody,
-    current_user=Depends(require_user),
+    current_user=Depends(require_role(Role.ADMIN)),
     session: AsyncSession = Depends(get_session),
 ):
     """Types ``body.text`` into the agent's live session (tmux send-keys for
@@ -462,6 +485,12 @@ async def post_chat_input(
         return JSONResponse(status_code=409, content=_INPUT_NOT_SUPPORTED)
     except AgentStartingError:
         return JSONResponse(status_code=409, content=_AGENT_STARTING)
+    except AgentBusyError:
+        # Kopflose Agenten (ACP): ein zweiter Prompt waehrend eines laufenden
+        # Zugs wird abgelehnt statt eingereiht — eine Absage, keine 500.
+        return JSONResponse(status_code=409, content=_AGENT_BUSY)
+    except AcpChatUnreachableError as e:
+        return _acp_unreachable(e)
     except BossDeliveryError as e:
         return _boss_delivery_failed(e)
 
@@ -546,7 +575,7 @@ async def post_chat_attachment(
 async def post_chat_keys(
     agent_id: uuid.UUID,
     body: ChatKeysBody,
-    current_user=Depends(require_user),
+    current_user=Depends(require_role(Role.ADMIN)),
     session: AsyncSession = Depends(get_session),
 ):
     """Sends a sequence of allowlisted control keys (Escape/Enter/Up/Down/
@@ -567,6 +596,8 @@ async def post_chat_keys(
         raise HTTPException(status_code=422, detail=str(e)) from e
     except InputNotSupportedError:
         return JSONResponse(status_code=409, content=_INPUT_NOT_SUPPORTED)
+    except AcpChatUnreachableError as e:
+        return _acp_unreachable(e)
     except BossDeliveryError as e:
         return _boss_delivery_failed(e)
 
@@ -575,7 +606,7 @@ async def post_chat_keys(
 async def post_chat_effort(
     agent_id: uuid.UUID,
     body: ChatEffortBody,
-    current_user=Depends(require_user),
+    current_user=Depends(require_role(Role.ADMIN)),
     session: AsyncSession = Depends(get_session),
 ):
     """Switches the agent's effort level via ``/effort <level>`` (v1:
@@ -618,5 +649,7 @@ async def post_chat_effort(
         )
     except EffortSwitchFailedError:
         return JSONResponse(status_code=409, content=_EFFORT_SWITCH_FAILED)
+    except AcpChatUnreachableError as e:
+        return _acp_unreachable(e)
     except BossDeliveryError as e:
         return _boss_delivery_failed(e)

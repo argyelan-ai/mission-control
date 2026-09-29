@@ -33,7 +33,7 @@ from app.config import settings
 from app.database import engine
 from app.models.agent import Agent
 from app.scopes import AgentRole
-from app.models.board import Board, Project
+from app.models.board import Board
 from app.utils import utcnow
 from app.models.task import Task, TaskDependency
 from app.services.activity import emit_event
@@ -187,14 +187,32 @@ async def find_agent_by_role(
 ) -> "Agent | None":
     """Find an agent with a given role on the board (least-busy strategy).
 
-    With multiple candidates: prefer the agent with the fewest active tasks.
-    Fallback: Board Lead — unless `fallback_to_lead=False`. Callers that
-    search for a SPECIFIC role (e.g. find_reviewer) must pass False: the
-    Board Lead is not a stand-in for that role, and silently returning them
-    routes the card into the operator's approval inbox instead of a visible
-    "no such agent" path (Vorfall 94fda9f9: review cards landed on Boss,
-    not Rex, because this fallback fired before find_reviewer's own
-    name-based fallback ever ran).
+    Kandidaten-Filter, in dieser Reihenfolge:
+      1. Rolle + dispatchfaehige Runtime (NON_GATEWAY_RUNTIMES).
+      2. Liveness: ``last_seen_at`` innerhalb des Wrapper-alive Fensters
+         (``_liveness_floor_seconds`` = 2x Heartbeat-Interval, min 120s —
+         dieselbe Quelle, die task_runner fuer Wrapper-Liveness benutzt).
+         Agents OHNE last_seen_at (nie gesehen, keine Daten) passieren den
+         Filter — konsistent mit watchdog/session_monitor, das last_seen_at
+         ebenfalls nur bei vorhandenem Wert auswertet.
+      3. ``exclude_agent_id`` (z.B. Autor der Karte) — gilt auch fuer den
+         Board-Lead-Fallback.
+
+    Least-Busy-Last = ``in_progress`` + dispatchte ``inbox`` + gehaltene
+    ``review``-Karten (ein Reviewer mit wartenden Reviews ist NICHT frei).
+
+    Bleibt kein Kandidat, wird explizit ``None`` geliefert — kein stiller
+    Fallback auf einen offline/belegten Agent. Der Aufrufer muss den
+    ``None``-Pfad sichtbar behandeln (Log/Return).
+
+    Fallback auf den Board Lead nur, wenn GAR KEIN Role-Kandidat existiert.
+    ``fallback_to_lead=False`` schaltet ihn ganz ab — Caller, die eine
+    SPEZIFische Rolle suchen (z.B. find_reviewer), muessen False uebergeben:
+    der Board Lead ist kein Stellvertreter fuer die Rolle, und sein stiller
+    Einsatz routet die Karte in den Approval-Inbox des Operators statt in
+    einen sichtbaren "kein solcher Agent"-Pfad (Vorfall 94fda9f9: Review-
+    Karten landeten auf Boss statt Rex, weil dieser Fallback feuerte, bevor
+    find_reviewer's eigener Name-Fallback ueberhaupt lief).
     """
     from app.scopes import AgentRole
     from sqlalchemy import func as sa_func, or_
@@ -214,38 +232,78 @@ async def find_agent_by_role(
     result = await session.exec(query)
     candidates = list(result.all())
 
-    if not candidates:
-        if not fallback_to_lead:
+    if candidates:
+        # Liveness: nur Agent mit frischem Heartbeat (Wrapper lebt).
+        alive = [a for a in candidates if _agent_is_live(a)]
+        if not alive:
+            logger.info(
+                "find_agent_by_role: %d %s-Kandidaten auf Board %s, aber keiner "
+                "lebendig (last_seen_at stale) → explizit None",
+                len(candidates), role.value, board_id,
+            )
             return None
-        # Fallback: Board Lead
-        lead_result = await session.exec(
-            select(Agent).where(
-                Agent.board_id == board_id,
-                Agent.is_board_lead == True,  # noqa: E712
-                Agent.agent_runtime.in_(NON_GATEWAY_RUNTIMES),  # type: ignore[union-attr]
+
+        if len(alive) == 1:
+            return alive[0]
+
+        # Least-Busy: in_progress + dispatched inbox + gehaltene review-Karten
+        busy_counts: dict[uuid.UUID, int] = {}
+        for agent in alive:
+            active_result = await session.exec(
+                select(sa_func.count()).select_from(Task).where(
+                    Task.assigned_agent_id == agent.id,
+                    or_(
+                        Task.status == "in_progress",
+                        (Task.status == "inbox") & (Task.dispatched_at.isnot(None)),  # type: ignore[arg-type]
+                        Task.status == "review",
+                    ),
+                )
             )
-        )
-        return lead_result.first()
+            busy_counts[agent.id] = active_result.one()
 
-    if len(candidates) == 1:
-        return candidates[0]
+        alive.sort(key=lambda a: busy_counts.get(a.id, 0))
+        return alive[0]
 
-    # Least-busy: agent with the fewest active tasks (in_progress + dispatched inbox)
-    busy_counts: dict[uuid.UUID, int] = {}
-    for agent in candidates:
-        active_result = await session.exec(
-            select(sa_func.count()).select_from(Task).where(
-                Task.assigned_agent_id == agent.id,
-                or_(
-                    Task.status == "in_progress",
-                    (Task.status == "inbox") & (Task.dispatched_at.isnot(None)),  # type: ignore[arg-type]
-                ),
-            )
-        )
-        busy_counts[agent.id] = active_result.one()
+    # Kein Role-Kandidat → Fallback: Board Lead (gleiche Filter: Runtime,
+    # Liveness, exclude). Auch hier: keiner uebrig → explizit None.
+    if not fallback_to_lead:
+        return None
+    lead_query = select(Agent).where(
+        Agent.board_id == board_id,
+        Agent.is_board_lead == True,  # noqa: E712
+        Agent.agent_runtime.in_(NON_GATEWAY_RUNTIMES),  # type: ignore[union-attr]
+    )
+    if exclude_agent_id:
+        lead_query = lead_query.where(Agent.id != exclude_agent_id)
+    lead_result = await session.exec(lead_query)
+    for lead in lead_result.all():
+        if _agent_is_live(lead):
+            return lead
+    logger.info(
+        "find_agent_by_role: kein %s-Kandidat und kein lebendiger Board Lead "
+        "auf Board %s → explizit None",
+        role.value, board_id,
+    )
+    return None
 
-    candidates.sort(key=lambda a: busy_counts.get(a.id, 0))
-    return candidates[0]
+
+def _agent_is_live(agent: "Agent") -> bool:
+    """Liveness-Check via Heartbeat (``agents.last_seen_at``).
+
+    Quelle ist dieselbe wie in task_runner._liveness_floor_seconds: ein
+    frisches ``last_seen_at`` beweist, dass der poll.sh-Wrapper (und damit
+    Container/Host) lebt. Fenster = 2x Heartbeat-Interval, min 120s.
+    ``last_seen_at is None`` → keine Daten → nicht als tot gewertet
+    (konsistent mit watchdog/session_monitor).
+    """
+    from app.services.task_runner import _liveness_floor_seconds
+    from app.utils import ensure_aware, utcnow
+
+    last_seen = getattr(agent, "last_seen_at", None)
+    if last_seen is None:
+        return True
+    seen_age = (utcnow() - ensure_aware(last_seen)).total_seconds()
+    return seen_age < _liveness_floor_seconds(agent)
 
 
 async def find_dispatch_target(
@@ -324,6 +382,78 @@ async def _allocate_port(session: AsyncSession) -> int | None:
         if port not in used_ports:
             return port
     return None  # All 100 ports taken
+
+
+async def redispatch_after_blocker_answer(
+    task_id: uuid.UUID,
+    board_id: uuid.UUID,
+    *,
+    expected_status: str = "inbox",
+) -> None:
+    """Guarded wrapper around auto_dispatch_task for the blocker-answer path.
+
+    Incident 2026-09-13 (card 4c9bb492 / G5): an operator resolved a
+    blocker_decision approval, which synchronously checked task.status ==
+    "blocked", set the task to "inbox" and scheduled this redispatch as a
+    decoupled background task (create_tracked_task). By the time that
+    background task actually ran, a different agent had already picked the
+    now-"inbox" card up via the normal poll path, worked it, and moved it to
+    "review" (PR #554) — auto_dispatch_task itself never re-checks the
+    task's current status/run_control before dispatching, so the stale
+    redispatch fired anyway and shoved the card back to "inbox", reassigned
+    to yet another agent, discarding the in-flight review.
+
+    The synchronous check at approval-resolution time only proves the task
+    was dispatchable AT THAT INSTANT — it says nothing about the state by
+    the time this deferred call actually executes. This wrapper re-reads
+    the task immediately before calling auto_dispatch_task and only
+    proceeds if it is still exactly where the blocker resolution left it
+    (status == expected_status, normally "inbox", and run_control is None
+    — a `mc hold` placed in the gap must also stop the redispatch, same as
+    any other hold). Any other status (review, done, waiting, in_progress,
+    blocked again, ...) or a run_control set in the meantime means someone
+    already acted on the card through a different, more current channel —
+    dispatching now would silently overwrite that. Skips visibly (log +
+    event) instead of silently doing nothing, so the discarded redispatch
+    is not invisible to whoever wonders why the operator's answer had no
+    effect.
+
+    The precondition check itself is task_lifecycle.task_still_reactivatable
+    — shared with _handle_help_request_resume and _handle_callback_resume
+    (agent_task_status.py), the two other reactivation paths carrying the
+    same "run_control never checked" gap found the same day.
+    """
+    from app.services.task_lifecycle import task_still_reactivatable
+
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        task = await session.get(Task, task_id)
+        if not task:
+            return
+        if not task_still_reactivatable(task, expected_status=expected_status):
+            logger.warning(
+                "Blocker-Redispatch uebersprungen: Task %s ist jetzt "
+                "status=%s run_control=%s (erwartet: status=%s, "
+                "run_control=None) — Karte wurde inzwischen anderweitig "
+                "bearbeitet.",
+                task_id, task.status, task.run_control, expected_status,
+            )
+            await emit_event(
+                session,
+                "task.blocker_redispatch_skipped",
+                f"Blocker-Redispatch uebersprungen: Task ist jetzt "
+                f"'{task.status}' (run_control={task.run_control})",
+                board_id=board_id,
+                task_id=task_id,
+                severity="warning",
+                detail={
+                    "current_status": task.status,
+                    "current_run_control": task.run_control,
+                    "expected_status": expected_status,
+                },
+            )
+            return
+
+    await auto_dispatch_task(task_id, board_id)
 
 
 async def auto_dispatch_task(
@@ -431,27 +561,28 @@ async def auto_dispatch_task(
                 session.add(task)
                 await session.commit()
 
-            # ── Git Workspace Setup + Worktree Isolation (Bundle 4) ──
-            # Extracted to task_context_builder.setup_git_workspace_for_dispatch
-            # (REF-01 Step 3). Returns False if the task was blocked
+            # ── Git Workspace Setup + Non-Code Phase-C (Bundle 4 / PR #568 B2) ──
+            # Both steps live in task_context_builder.prepare_agent_workspace_for_task
+            # now — this used to be an inline copy of the same two steps, which is
+            # exactly why the reassign/handoff callers of that shared function (the
+            # dedicated reassign endpoint, the assigned_agent_id PATCH branch, the
+            # self-review escalation) drifted from this one the moment either half
+            # got a fix without a matching edit here (PR #568 review, B2). Calling
+            # the shared function instead of duplicating it means every fix to it
+            # — including B1 (stale/foreign task.workspace_path after a reassign) —
+            # automatically applies to every first dispatch too, not just to the
+            # non-dispatch handoff paths. Returns False if the task was blocked
             # (TaskComment + terminal-unassign already committed) — caller MUST
             # return; on success/no-op returns True.
-            from app.services.task_context_builder import setup_git_workspace_for_dispatch
-            if not await setup_git_workspace_for_dispatch(task, best_agent, session):
+            from app.services.task_context_builder import prepare_agent_workspace_for_task
+            if not await prepare_agent_workspace_for_task(task, best_agent, session):
                 return
 
-            # Phase C (T-1): also create workspace for non-code tasks
-            if not task.workspace_path:
-                _proj = await session.get(Project, task.project_id) if task.project_id else None
-                _agent_ws = best_agent.workspace_path if best_agent else None
-                _task_ws = await _ensure_task_workspace(task.id, _proj, _agent_ws)
-                if _task_ws:
-                    task.workspace_path = _task_ws
-                    session.add(task)
-                    await session.commit()
-                    logger.info("Task %s: Non-Code-Workspace erstellt: %s", task.id, _task_ws)
-
             # ── Port Allocation ──────────────────────────────────────
+            # Agent-independent and idempotent (guarded by `if not task.workspace_port`)
+            # — deliberately NOT part of prepare_agent_workspace_for_task's shared
+            # sequence, so the reassign/handoff callers above don't reallocate a
+            # port a running task already has (PR #568 review N2).
             if not task.workspace_port:
                 task.workspace_port = await _allocate_port(session)
                 if task.workspace_port:
@@ -491,17 +622,30 @@ async def auto_dispatch_task(
                     # Check whether agent is busy → queue
                     # Guard 1: current_task_id (atomic lock)
                     if best_agent.current_task_id and best_agent.current_task_id != task.id:
-                        await enqueue_task(agent_id_str, str(task.id))
-                        logger.info(
-                            "Push-dispatch queued: '%s' -> %s (active_task_lock: %s)",
-                            task.title, best_agent.name, best_agent.current_task_id,
-                        )
-                        await emit_event(
-                            session, "task.dispatch_queued",
-                            f"Task '{task.title}' in Queue fuer {best_agent.name} (active task lock)",
-                            board_id=board_id, task_id=task.id, agent_id=best_agent.id,
-                        )
-                        return
+                        # Review-park grace (Lauf 7): the locked card may be a
+                        # released review card (grace expired / not the real
+                        # reviewer / reviewer already commented) — that must
+                        # not block a NEW task from being queued behind it
+                        # forever. Only reconsider when it's actually status
+                        # review; every other lock (in_progress etc.) keeps
+                        # queuing exactly like before.
+                        _locked_task = await session.get(Task, best_agent.current_task_id)
+                        _still_parks = True
+                        if _locked_task is not None and _locked_task.status == "review":
+                            from app.services.review_park import review_still_parks
+                            _still_parks = await review_still_parks(session, _locked_task, best_agent)
+                        if _still_parks:
+                            await enqueue_task(agent_id_str, str(task.id))
+                            logger.info(
+                                "Push-dispatch queued: '%s' -> %s (active_task_lock: %s)",
+                                task.title, best_agent.name, best_agent.current_task_id,
+                            )
+                            await emit_event(
+                                session, "task.dispatch_queued",
+                                f"Task '{task.title}' in Queue fuer {best_agent.name} (active task lock)",
+                                board_id=board_id, task_id=task.id, agent_id=best_agent.id,
+                            )
+                            return
 
                     # Guard 2: busy = in_progress OR dispatched-but-not-acked (DB-based)
                     from sqlalchemy import or_
@@ -525,11 +669,14 @@ async def auto_dispatch_task(
                         )
                         return
 
-                    # Guard 3: Live-Turn-Signal (cli-bridge/omp only, 07.09.2026).
-                    # Guards 1+2 are DB-state based and blind to a turn that omp
-                    # is STILL executing after its predecessor task went done
-                    # (incident 07.09.2026: Task D hung 70 min because omp was
-                    # mid-turn and got pasted anyway).
+                    # Guard 3: Live-Turn-Signal (07.09.2026, widened Bauplan
+                    # Lauf 2 Teil 2, 21.09.2026).
+                    # Guards 1+2 are DB-state based and blind to a turn that an
+                    # agent is STILL executing after its predecessor task went
+                    # done (incident 07.09.2026: Task D hung 70 min because omp
+                    # was mid-turn and got pasted anyway; Nachpruefung 21.09.:
+                    # 60/80 Hand-Starts were the SAME gap for host agents,
+                    # because this guard only ever looked at cli-bridge).
                     #
                     # The TURN signal is agent.status == "working": the bridge
                     # heartbeater (bridge.py start_heartbeater → POST
@@ -542,12 +689,24 @@ async def auto_dispatch_task(
                     # a "working" status with a heartbeat older than
                     # TURN_SIGNAL_HEARTBEAT_MAX_AGE_SECONDS (90 s) means the
                     # bridge stopped heartbeating — stale signal, fail-open
-                    # dispatch instead of a deadlock. host / claude-code
-                    # untouched (runtime gate).
-                    if (
-                        getattr(best_agent, "agent_runtime", None) == "cli-bridge"
-                        and best_agent.status == "working"
-                    ):
+                    # dispatch instead of a deadlock.
+                    #
+                    # The condition is runtime-free by design: the signal
+                    # itself (status=="working") is what decides, so ANY
+                    # poll-based runtime (host, cli-bridge, future ones) is
+                    # covered automatically — an agent that never reports
+                    # "working" is simply never touched by this guard. Behind
+                    # settings.host_turn_signal_enabled (default True); OFF
+                    # restores the old cli-bridge-only gate as a rollback path
+                    # that needs no code change.
+                    if settings.host_turn_signal_enabled:
+                        _guard3_applies = best_agent.status == "working"
+                    else:
+                        _guard3_applies = (
+                            getattr(best_agent, "agent_runtime", None) == "cli-bridge"
+                            and best_agent.status == "working"
+                        )
+                    if _guard3_applies:
                         # Fail-open default: no heartbeat at all → dispatch.
                         _heartbeat_fresh = False
                         _seen_age = -1.0

@@ -8,27 +8,27 @@ colors:
   accent-subtle: "rgba(235,232,222,0.10)"
   border-accent: "rgba(235,232,222,0.30)"
   on-accent: "#151411"
-  bg-deep: "#0A0A0A"
-  bg-base: "#101010"
-  bg-surface: "#171717"
-  bg-elevated: "#222222"
-  bg-hover: "#2C2C2C"
-  text-primary: "#EEEEEE"
-  text-secondary: "#BABABA"
-  text-muted: "#8F8F8F"
-  text-dim: "#666666"
+  bg-deep: "#1C1C1C"
+  bg-base: "#181818"
+  bg-surface: "#262626"
+  bg-elevated: "#313131"
+  bg-hover: "#3A3A3A"
+  text-primary: "#F2F2F2"
+  text-secondary: "#C9C9C9"
+  text-muted: "#B3B3B3"
+  text-dim: "#A3A3A3"
   border-subtle: "rgba(168,168,168,0.05)"
   border: "rgba(168,168,168,0.10)"
   border-active: "rgba(168,168,168,0.16)"
-  status-online: "#55A964"
-  status-warning: "#A67F3E"
-  status-warning-text: "#B98F4D"
-  status-error: "#FA4942"
-  status-info: "#5890CA"
+  status-online: "#68BC76"
+  status-warning: "#CCA463"
+  status-warning-text: "#CCA463"
+  status-error: "#FF867A"
+  status-info: "#75AEEA"
   status-offline: "#3A3A3A"
   chart-cpu: "#EBE8DE"
-  chart-ram: "#8F8F8F"
-  chart-disk: "#666666"
+  chart-ram: "#B3B3B3"
+  chart-disk: "#A3A3A3"
 typography:
   display:
     fontFamily: "Clash Display, General Sans, sans-serif"
@@ -110,6 +110,8 @@ components:
 
 Mission Control ist der ruhige, dunkle Instrumentenraum, von dem aus der Operator seine AI-Agent-Flotte überwacht und steuert. v4 „Signal" zieht die Konsole radikal achromatisch: Struktur und Interaktion sprechen ausschliesslich über Helligkeit und Fläche, **Farbe ist allein den vier Statustönen vorbehalten**. Der Primär-Akzent ist kein Farbton, sondern ein fast-weisses Off-Cream (#EBE8DE) — es trägt über Leuchtkraft und Position, nie über Buntheit. Off-Blacks sind neutral (nie blaustichig, nie reines #000), die Formensprache ist rund für alles Anfassbare und eckig nur noch für dichte Daten, und eine Mono-Instrumentenstimme (JetBrains Mono) kennzeichnet jede Ansicht als Präzisionsgerät. Referenzen: Bloomberg Terminal (Dichte + Ernsthaftigkeit), Linear.app (Präzision + Reduktion), Stripe Dashboard (Klarheit). Die Doktrin steht wörtlich im Kopf von `colors.ts`: „Serious. Dark. Achromatic. Colour means status — nothing else."
 
+**Dunkel = Standard, Hell = Option (ADR-087).** Dunkel bleibt der Standard und der Charakter. Ein heller Modus existiert als Option pro Browser (Einstellungen → Darstellung, Umschalter im Nutzer-Menü, dunkel · hell · System) und folgt denselben Regeln: Papiergrund statt Off-Black, Tinte als der eine achromatische Akzent, Status-Töne abgedunkelt auf AA. Terminal und syntax-gefärbter Code bleiben in beiden Modi dunkel. Die Farbwerte beider Modi stehen nur in `styles/globals.css` (`:root` = dunkel, `:root[data-theme="light"]` = hell); `colors.ts` hält die `var()`-Namen.
+
 Dieses System lehnt explizit ab: das generische AI-Tool-Lila, Farb-Gradients, Neon-Glow, Glassmorphism/`backdrop-blur` als Deko, farbige Schatten und SaaS-Marketing-Ästhetik.
 
 **v3 ist zurückgezogen.** Bis Juli 2026 war der Akzent ein elektrisches argyelan-Cyan (#00E5FF) auf blau-getönten Off-Blacks (System „argyelan Edition"). Dieser Look ist vollständig abgelöst: **jeder verbleibende Cyan-, Teal- oder Lila-Wert im Code ist eine Regression** (Ausnahmen sind explizit dokumentiert — siehe „Do's and Don'ts"). Einzige Farbquelle ist `frontend-v2/src/lib/colors.ts`; `styles/globals.css` spiegelt dieselben Werte als CSS-Custom-Properties.
@@ -131,21 +133,23 @@ Eine fast monochrome, neutral-dunkle Architektur, in der der helle Akzent über 
 - **On-Accent** (#151411): Text/Icons auf Akzent-Flächen — 15:1 Kontrast, „Reverse Video". Niemals Weiss auf dem hellen Akzent.
 
 ### Neutral
-- **Off-Black-Schichtung** (#0A0A0A / #101010 / #171717 / #222222 / #2C2C2C): bg-deep → bg-hover. Tiefe entsteht durch Aufhellen der Fläche. Nie reines #000, nie blaustichig.
-- **Text-Treppe** (#EEEEEE / #BABABA / #8F8F8F): primary für Inhalte, secondary für Beschreibungen, muted für Meta/Platzhalter — alle ≥4.5:1 auf bg-deep–bg-elevated. **#666666 (text-dim) ist nur für Deko und inaktive Icons zugelassen, nie für Fliesstext.**
+- **Off-Black-Schichtung** (#1C1C1C / #181818 / #262626 / #313131 / #3A3A3A): bg-deep → bg-hover. Tiefe entsteht durch Aufhellen der Fläche. Nie reines #000, nie blaustichig.
+- **Text-Treppe** (#F2F2F2 / #C9C9C9 / #B3B3B3 / #A3A3A3): primary für Inhalte, secondary für Beschreibungen, muted für Meta/Platzhalter, dim für Deko und inaktive Icons — **alle ≥4.5:1 auf allen fünf Flächen inkl. bg-hover** (`theme.contrast.test`). text-dim ist trotzdem kein Fliesstext-Ton (K6); er ist nur AA, weil er in der Praxis kleine Meta-Texte trägt. **Kein Text über `opacity` dimmen** — dafür gibt es muted/dim (halbe Deckkraft fiel in beiden Modi unter AA).
 - **Neutrale Rahmen** (Basisfarbe #A8A8A8 mit Alpha 0.05 / 0.10 / 0.16): subtle → active. Rahmen strukturieren, sie schmücken nicht.
 
 ### Status & Lanes (die einzige Buntheit)
-- **Online-Grün** (#55A964), **Warn-Ocker** (#A67F3E), **Fehler-Rot** (#FA4942), **Info-Blau** (#5890CA), **Offline-Grau** (#3A3A3A): entsättigt, kein Glow. „busy"/„in Arbeit" ist ein Info-Zustand (Blau), kein Akzent. Der wartende-auf-Operator-Zustand (`user_test`) trägt den hellsten Ton (accent #EBE8DE), nicht Buntheit. Lane-Zuordnung ausschliesslich über die `LANE`-Map in `colors.ts`.
+- **Online-Grün** (#68BC76), **Warn-Ocker** (#CCA463), **Fehler-Rot** (#FF867A), **Info-Blau** (#75AEEA), **Offline-Grau** (#3A3A3A): kein Glow. In OKLCH so weit aufgehellt (Farbton + Chroma unverändert), dass jeder Ton als Text ≥4.5:1 auf allen fünf Flächen und auf der eigenen 12-%-Tönung über surface/elevated (Chips) schafft. Status-Tönungen hinter Status-Text höchstens ~10–12 %. „busy"/„in Arbeit" ist ein Info-Zustand (Blau), kein Akzent. Der wartende-auf-Operator-Zustand (`user_test`) trägt den hellsten Ton (accent #EBE8DE), nicht Buntheit. Lane-Zuordnung ausschliesslich über die `LANE`-Map in `colors.ts`.
 - **Fehler vor Warnung über Chroma:** Rot (Chroma .215) schlägt Ocker (.095) durch Sättigung, nicht durch Helligkeit — beide bleiben gleich hell.
-- **Status-Text-Stufe** (#B98F4D): für Fliesstext auf Karten gilt die `STATUS_TEXT`-Map; nur das Ocker wird auf #B98F4D geliftet (Token selbst = 4.34:1 auf #222222). Grün/Rot/Blau bleiben unverändert AA-sicher.
-- **Chart-Töne**: CPU = accent #EBE8DE, RAM #8F8F8F, Disk #666666 — Ressourcen-Serien tragen über Helligkeit, nicht über Farbton.
+- **Status-Text-Stufe:** für Fliesstext auf Karten gilt die `STATUS_TEXT`-Map. Im Dunkeln sind alle vier Töne selbst AA (`status-warning-text` = `status-warning`); hell liegen die Text-Stufen eine Spur tiefer.
+- **On-Status** (#161616 dunkel, #FFFFFF hell): Text auf voller Status-Fläche (Gefahr-Knopf) — ≥7:1 auf jedem dunklen Status-Ton.
+- **Chart-Töne**: CPU = accent #EBE8DE, RAM #B3B3B3, Disk #A3A3A3 — Ressourcen-Serien tragen über Helligkeit, nicht über Farbton.
 
 ### Named Rules
 **Die Eine-Stimme-Regel.** Es gibt genau einen Akzent, und er ist achromatisch: Helligkeit ist das Signal. Er belegt ≤10% jeder Fläche. Einen zweiten (bunten) Akzent einzuführen ist verboten.
 **Die Farbe-heisst-Status-Regel (v4).** Ist etwas bunt, muss es etwas bedeuten. Buntheit ist ausschliesslich den vier Statustönen vorbehalten — keine dekorative Farbe, kein „nur für die Optik".
 **Die Vokabular-Regel.** Farben kommen ausschliesslich aus `colors.ts` (`C`, `STATUS`, `LANE`, `STATUS_TEXT`, `P2`). Lokale Paletten und Inline-Hex in Komponenten sind Regressionen und werden entfernt.
 **Die Lila-Null-Regel.** Kein Purple/Violett in irgendeiner Form — auch nicht „nur für diese eine Karte".
+**Die Alpha-Regel (ADR-087).** Durchscheinende Farbe nur über `alpha(C.x, 0.13)` — nie `${C.x}22` oder `C.x + "22"`: mit CSS-Variablen ergibt das stillschweigend ungültiges CSS. Der Test `no-hex-alpha-concat` wacht darüber, `no-raw-colors` gegen Roh-Hex/rgba/Tailwind-Palettenklassen.
 
 ## Typography
 
@@ -158,12 +162,12 @@ Eine fast monochrome, neutral-dunkle Architektur, in der der helle Akzent über 
 ### Hierarchy
 - **Display** (Clash Display, 500–600, -0.02em): Seitentitel (eine pro Seite), grosse KPI-Werte (30px, `.display`), Wordmark.
 - **Title** (General Sans, 600, 16px): Sektions- und Modal-/Kartentitel (`h2`).
-- **Body** (General Sans, 400, 14px, lh 1.6): Inhalte, Beschreibungen, Kommentare. UI-Detailtext oft 11–13px.
-- **Label-sys** (JetBrains Mono, 500, 10px, uppercase, +0.14em, text-muted): Sektions-Marken, Formular-Labels, Meta-Zeilen. Utility `.label-sys` (+ Varianten `--accent`, `--dim`).
+- **Body** (General Sans, 400, 14px, lh 1.6): Inhalte, Beschreibungen, Kommentare. UI-Detailtext oft 11–13px (neue Schrift nie unter 11 px, siehe K5).
+- **Label-sys** (JetBrains Mono, 500, 10px, uppercase, +0.14em, text-muted): Sektions-Marken, Formular-Labels, Meta-Zeilen. Utility `.label-sys` (+ Varianten `--accent`, `--dim`). *Nie im Kopfbereich (K7), höchstens eine pro Bereich (K13); Zurückstufung ausserhalb des Kopfes ist offen.*
 - **Mono** (JetBrains Mono, 400, 12px): Task-IDs, Branch-Namen, Terminal-Inhalte, Einheiten-Suffixe an Zahlenfeldern, Metriken.
 
 ### Named Rules
-**Die Dichte-Regel.** Leitstand-Dichte ist gewollt: 11–14px UI-Text ist Standard, aber jede Stufe unter 13px braucht hohen Kontrast und 500er-Gewicht oder besser.
+**Die Dichte-Regel.** Leitstand-Dichte ist gewollt: 11–14px UI-Text ist Standard, aber jede Stufe unter 13px braucht hohen Kontrast und 500er-Gewicht oder besser. *Dichte heisst viel Inhalt pro Bildschirm, nicht viele Stile: sie gilt für Tabellen und Listen, nicht für Kopfbereiche (K4–K7).*
 **Die Verbotene-Fonts-Regel.** Kein Inter/Roboto/Arial/system-ui als UI-Font; die drei self-hosted Familien sind gesetzt. `system-ui` steht nur als Fallback in der Font-Stack.
 
 ## Layout
@@ -174,6 +178,33 @@ Eine fast monochrome, neutral-dunkle Architektur, in der der helle Akzent über 
 - **Spacing-Rhythmus:** 4 / 8 / 12 / 16 / 24 / 32 / 64px (`--space-*`). Formularfelder-Abstand 16–20px, Rail-Abstand 20px.
 - **Breakpoints:** md 768px (Mobile→Desktop-Wechsel: Bottom-Nav→Sidebar, Modal-slide-up→zentriert), lg 1024px (zweispaltige Layouts wie die Task-Maske hero+rail).
 - **Mobile-Disziplin:** Touch-Targets ≥44px, Safe-Areas (`pt-safe`/`pb-safe`, Dynamic Island), Pinch-Zoom nie blockiert, iOS-Input-Font ≥16px gegen Auto-Zoom.
+
+## Komposition (verbindlich)
+
+Farbe und Form regelt der Rest dieser Datei. Dieser Abschnitt regelt, **wie viel** auf einer Fläche steht, **was zuerst** kommt und **woran es sich ausrichtet** — dort entsteht Unruhe. Er gilt für jede sichtbare Änderung in `frontend-v2/`. Wo er älteren Zeilen dieser Datei widerspricht, gilt dieser Abschnitt; die älteren Zeilen sind markiert.
+
+„Bereich" = ein zusammenhängender Block (Kopfbereich, Karte, Tab-Inhalt); im Code künftig `data-region="…"`. „Kopfbereich" = alles vom Seitenkontext bis zur Reiterleiste. Die Messung (`npm run design:budget`) zählt K3–K9 für einen Bereich; K1, K2 und K10–K14 prüft der Blick.
+
+| ID | Regel |
+|---|---|
+| **K1** | **Eine laute Sache pro Bereich.** Der Titel ist die grösste Schrift der Ansicht und wird am Handy frühestens nach 3 Zeilen gekürzt. Kein Steuerelement ist lauter als der Titel. Probe: im 10-px-Unschärfe-Bild bleibt pro Bereich genau ein Schwerpunkt. |
+| **K2** | **Wegnehmen vor Hinzufügen.** Wer einem Kopfbereich etwas hinzufügt, nimmt etwas weg oder zeigt, dass K4 trotzdem hält. Wer etwas lauter macht, sagt, was dafür leiser wurde. |
+| **K3** | **Jede Angabe genau einmal, nichts Leeres, nichts Abgeschnittenes.** Werte ohne Inhalt („PR —", „nicht erfasst") werden weggelassen, nicht angezeigt. `…` nur beim Titel. |
+| **K4** | **Informations-Budget.** Kopfbereich ≤ 5 Angaben. Erster Handybildschirm (390 × 844) ≤ 7 Angaben und genau 1 hervorgehobene Aktion. In der Titelzeile am Handy höchstens 1 Aktion neben ⋯; alles Weitere (auch Schalter mit Erklärtext) gehört ins ⋯-Menü. |
+| **K5** | **Wenige Schriftgrössen und -stärken.** Kopfbereich ≤ 3 Grössen, Ansicht ≤ 4; ≤ 2 Stärken pro Bereich. Nur Werte aus der Schriftskala (`@theme`), keine neuen `text-[Npx]`, `fontSize` inline oder `tracking-[…]` (die Ratsche `design:ratchet` zählt sie). Keine neue Schrift unter 11 px. Buchstabensperrung nur für Grossbuchstaben-Marken, nie für Zahlen oder Dauern. Fliesstext am Desktop höchstens ~72 Zeichen breit. |
+| **K6** | **Farbe sparsam.** Pro Bereich ≤ 3 Texttöne (primary/secondary/muted) plus ≤ 1 Statusfarbe. Dasselbe Signal nie doppelt (rote Fläche **und** roter Knopf **und** rotes Wort). `textDim` nie für lesbaren Text. |
+| **K7** | **Grossbuchstaben und Mono selten.** Im Kopfbereich steht keine Grossbuchstaben-Marke, auch keine Kennzeile über dem Titel (`AUFGABE · ID · PROJEKT`). Mono nur für Maschinenwerte (ID, Branch, Pfad, Befehl, Zahlen in Spalten), nie für Feldnamen, Dauern oder Fliesstext. |
+| **K8** | **Abstand statt Kasten.** Höchstens 2 Ebenen verschachtelter Flächen; im Kopfbereich höchstens 1 Fläche, und nur wenn der Operator handeln muss („braucht dich", „fehlgeschlagen"). Am Handy liegt eine Detailseite nicht in einer Seitenkarte: der Inhalt läuft mit 16 px Rand bis zum Bildschirmrand. Zwischen Gruppen mindestens doppelt so viel Abstand wie innerhalb. |
+| **K9** | **Eine linke Kante.** Pro Bereich höchstens 2 Kanten: die Hauptkante und eine Einrückung. Keine Kanten, die nur 3–6 px auseinanderliegen. |
+| **K10** | **Ein Begriff pro Sache.** Ein Zustand hat in einer Sprache genau ein Wort, und es kommt aus i18n (kein „Blocked" neben „Blockiert"). Pro Ansicht eine Sprache. Zeiten in festen Formen: „vor 42 min", „seit 5 Tagen". Pro Kopfbereich genau eine Zeitangabe — die, die zum Zustand gehört; das Alter des Objekts steht in den Eigenschaften. Kein interner Fachjargon im Zustandssatz. |
+| **K11** | **Rangordnung der Knöpfe.** Drei Stufen: *Haupt* = Akzent-Fläche, höchstens 1× pro Bildschirm · *Neben* = Text ohne Rahmen · *Link*. Zurück und ⋯ sind Symbol-Knöpfe ohne Kasten. Fingerziele ≥ 44 px. Ein Statuspunkt zeigt nur an; ändern geht über ⋯ oder die Eigenschaften. |
+| **K12** | **Feste Reihenfolge auf Detailseiten.** Kontext → Titel → Zustandssatz → nächster Schritt → Inhalt → Eigenschaften → Aktivität. Die Kontextleiste (‹ Liste · ⋯) ersetzt auf Detailseiten die Wortmarke der App-Leiste; eine mitlaufende Leiste beim Scrollen *ersetzt* sie, sie kommt nie als dritte Leiste dazu (ohne Springen, `prefers-reduced-motion` beachtet). Der Zustandssatz ist 1 Zeile mit höchstens 1 Trenner `·`. Eigenschaften: am Handy ruhige Liste (Feldname links in `meta`, Wert rechts), ab 1024 px rechte Spalte. Reiter sind eine Reiterleiste in Satzschreibung, kein Select in Grossbuchstaben. |
+| **K13** | **Signatur bleibt.** Ruhe heisst nicht beliebig: Off-Cream ist der einzige Akzent; Mono steht nur bei Maschinenwerten, dort aber sorgfältig (Tabellenziffern, Kopier-Symbol); Clash Display nur für Seitentitel; unterhalb des Kopfes darf pro Bereich eine Abschnittsmarke (`label-sys`) stehen. Ein Entwurf, der wie eine beliebige SaaS-Seite aussieht, ist durchgefallen. |
+| **K14** | **Zahlen sind ein Boden, kein Ziel — Aufbau braucht den Blick des Operators.** Grüne Messwerte heissen nur „nicht durchgefallen". Wer alles auf eine Grösse setzt, um K5 zu erfüllen, hat die Regel verletzt. Änderungen am **Aufbau** (neuer Block, neue Seite, Umbau eines Kopfbereichs) werden erst gemergt, wenn der Operator das Handy-Bild (390 px, vorher/nachher) gesehen hat. Kein Agent ändert diesen Abschnitt still; neue Regeln werden mit ID vorgeschlagen. |
+
+Ablauf, Rubrik und Anti-Slop-Liste: [`docs/design/ui-craft.md`](docs/design/ui-craft.md).
+
+**Noch offen (Operator entscheidet, bis dahin gilt der alte Stand):** Schriftstärken-Fix #326 · `label-sys` ausserhalb des Kopfbereichs zurückstufen · Schriftskala und ob 2/6/20 px zur Abstandsskala gehören · die Variante für den Kopf der Task-Detailseite.
 
 ## Elevation & Depth
 
@@ -229,10 +260,10 @@ Werkzeuge, keine Schmuckstücke: zurückhaltend im Ruhezustand, eindeutig im akt
 - **Primary:** Akzent-Fläche (#EBE8DE) mit dunklem Text (#151411, `on-accent`); Hover = brightness/`accent-hover`. Kein Gradient.
 - **Ghost / Sekundär:** Transparent, 1px Rahmen (`border-active`), Text secondary; Hover → bg-hover + Text primary.
 - **Focus:** global 2px Akzent-Ring mit 2px Offset (`:focus-visible`).
-- **Destruktiv:** Fehler-Rot #FA4942 nur für endgültige Aktionen, sonst Ghost mit rotem Text.
+- **Destruktiv:** Fehler-Rot (status-error) nur für endgültige Aktionen, sonst Ghost mit rotem Text.
 
 ### Chips / Pills
-- **Aktiv-Muster:** `${farbe}22` Hintergrund + `${farbe}55` Rahmen + Farbtext (loopMeta/Task-Maske); die `Pill`-Komponente nutzt `${farbe}1F` / `${farbe}26`. `rounded-sm` (6px) für Badges, `rounded-full` für echte Pills; kein text-shadow.
+- **Aktiv-Muster:** `alpha(farbe, 0.13)` Hintergrund + `alpha(farbe, 0.33)` Rahmen + Farbtext (loopMeta/Task-Maske); die `Pill`-Komponente nutzt `alpha(farbe, 0.12)` / `alpha(farbe, 0.15)`. `rounded-sm` (6px) für Badges, `rounded-full` für echte Pills; kein text-shadow.
 - **State:** Aktiv-Zustand immer über Fläche UND Rahmen, nie nur über Text. Auswahl-Chips ohne Statusbedeutung nutzen den Akzent als Farbe.
 
 ### Cards / Panels
@@ -243,7 +274,7 @@ Werkzeuge, keine Schmuckstücke: zurückhaltend im Ruhezustand, eindeutig im akt
 - **Padding:** 16px (kompakt 12px)
 
 ### Inputs / Fields
-- **Style:** bg-deep (#0A0A0A) Fläche, 1px `border`, md/xl-Radius, Text primary, Platzhalter text-muted
+- **Style:** bg-deep (#1C1C1C) Fläche, 1px `border`, md/xl-Radius, Text primary, Platzhalter text-muted
 - **Focus:** Rahmen → `${accent}66` + weicher Ring `box-shadow: 0 0 0 3px rgba(235,232,222,0.10)` (Akzent-Alpha, kein bunter Glow). Einfache Felder setzen den Rahmen auf `border-accent`.
 - **Label:** `.label-sys` (mono uppercase) oder text-muted, oberhalb des Felds, immer mit `htmlFor`/`id` oder `aria-label`. Zahlenfelder tragen Mono-Einheiten-Suffixe.
 
@@ -256,7 +287,7 @@ Werkzeuge, keine Schmuckstücke: zurückhaltend im Ruhezustand, eindeutig im akt
 
 ### Navigation
 - **Sidebar (Desktop):** P2-bg, Einträge ~13px, Gruppen-Marken via `.label-sys`; aktiv = accent-subtle Fläche + heller Akzent-Text/Balken; inaktiv text-secondary, Hover bg-hover. Wordmark in Clash Display.
-- **Mobile:** Bottom-Tab-Bar in der Daumen-Zone, safe-area-aware; voller Nav-Tree als Drawer. Top-Bar trägt nur Wordmark + Voice.
+- **Mobile:** Bottom-Tab-Bar in der Daumen-Zone, safe-area-aware; voller Nav-Tree als Drawer. Top-Bar trägt nur Wordmark + Voice — auf Detailseiten wird sie zur Kontextleiste (K12).
 
 ## Do's and Don'ts
 
@@ -264,7 +295,7 @@ Werkzeuge, keine Schmuckstücke: zurückhaltend im Ruhezustand, eindeutig im akt
 - **Do** jede Farbe aus `colors.ts` beziehen (`C`, `STATUS`, `LANE`, `STATUS_TEXT`, `P2`) — neue Bedeutung ⇒ neues Token, erst dann verwenden.
 - **Do** Buntheit ausschliesslich für Status einsetzen; Struktur/Interaktion tragen über Helligkeit (Akzent) und Fläche.
 - **Do** Tiefe über Flächenton lösen (eine Stufe heller = eine Ebene höher).
-- **Do** Kontraste prüfen: Body/Labels ≥4.5:1; auf Akzent-Flächen immer #151411-Text; text-dim (#666666) nur für Deko.
+- **Do** Kontraste prüfen: Body/Labels ≥4.5:1; auf Akzent-Flächen immer #151411-Text, auf vollen Status-Flächen `on-status`; text-dim nur für Deko/Meta.
 - **Do** jeden interaktiven Zustand über Fläche+Rahmen sichtbar machen: Hover, Fokus-Ring, aktive Chips — nie über einen Glow.
 - **Do** `prefers-reduced-motion` respektieren; Motion = kurzes Fade/Slide mit ease-out (`cubic-bezier(0.16,1,0.3,1)`, 100–300ms), nur transform+opacity.
 - **Do** Touch-Targets ≥44px und Safe-Areas auf iPhone einhalten.

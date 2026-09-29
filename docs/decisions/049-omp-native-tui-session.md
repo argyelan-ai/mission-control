@@ -123,3 +123,31 @@ from a separate window — replacing the headless one-shot. Concretely:
 - Live Qwen reflection-format reliability (the `TASK_COMPLETE` + 4-field block)
   remains the same gate as ADR-045; a `stop` without it is correctly caught as a
   silent-abort blocker.
+
+## Nachtrag: keine TUI mehr unter OMP_DRIVER=acp (13.09.2026)
+
+Verifizierter Befund (live, 13.09.2026, Mark hat es gesehen): ein Agent mit
+`OMP_DRIVER=acp` (ADR-081) fuehrt Tasks UND Chat bereits vollstaendig ueber
+ACP (`bridge.py run_acp_once` bzw. `acp_chat.py` in Fenster 3). Fenster 0
+startete trotzdem weiterhin die native TUI aus dieser ADR — eine leere
+"Geist"-Session, die nie Arbeit bekam und in der Terminal-Ansicht als
+zweite, scheinbar haengende Session auftauchte. Mark will keine
+Ghost-Sessions.
+
+Fix (Branch `fix/omp-acp-no-tui-window`): `entrypoint.sh:start_native()`
+startet die native TUI in Fenster 0 nur noch, wenn `OMP_DRIVER` NICHT
+`acp` ist. Unter `acp` druckt Fenster 0 stattdessen den Sentinel
+`OMP_ACP_READY` und faellt in eine ruhige Shell (`exec bash`) — das
+Fenster bleibt erreichbar (Boss-Vorgabe: Terminal-Ansicht bis zum
+Live-Beweis), zeigt aber keinen Launcher mehr. `omp-recycler.sh` schaltet
+seine Punkt-2-Verantwortung (TUI tot+idle -> relaunch) unter `acp` ab,
+sonst haette er den Banner alle `IDLE_CHECK_INTERVAL` mit dem nativen
+Launcher ueberschrieben. Der Health-Gate-Sentinel aus §7 dieser ADR
+(`OMP_BRIDGE_READY` fuer den alten Headless-Bridge-Pfad, dann die
+TUI-Glyphen `╭─`/`❯`) bekommt additiv `OMP_ACP_READY` dazu
+(`agent_runtime_switch.OMP_READY_SIGNALS`) — die native TUI druckt diesen
+String nie, also kein False-Positive-Risiko fuer Agenten, die weiterhin
+nativ laufen.
+
+Siehe ADR-081 (OMP_DRIVER-Rollout) und docs/specs/chat-over-acp.md (dort
+stand die TUI-Entfernung bis dahin als Non-Goal).

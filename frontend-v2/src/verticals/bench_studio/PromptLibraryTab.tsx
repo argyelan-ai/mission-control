@@ -258,7 +258,7 @@ function TemplateEditor({
   } as const;
 
   return (
-    <ResponsiveModal open={open} onClose={onClose} aria-label={editing ? t("editorTitleEdit") : t("editorTitleNew")}>
+    <ResponsiveModal dismissOnOutside={false} open={open} onClose={onClose} aria-label={editing ? t("editorTitleEdit") : t("editorTitleNew")}>
       <div
         className="flex flex-col gap-3 p-5 rounded-xl w-full"
         style={{ backgroundColor: C.bgElevated, border: `1px solid ${C.border}` }}

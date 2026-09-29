@@ -19,12 +19,10 @@ import {
   Settings,
   TrendingUp,
   Brain,
-  PenLine,
   Puzzle,
   FolderGit2,
   Server,
   Building2,
-  Newspaper,
   FolderOpen,
   Repeat,
   MessageSquareCode,
@@ -66,13 +64,6 @@ export const NAV_ITEMS: NavItem[] = [
   { href: "/insights", icon: TrendingUp, label: "Insights", labelKey: "insights" },
   { href: "/memory", icon: Brain, label: "Memory", labelKey: "memory" },
   { href: "/files", icon: FolderOpen, label: "Files", labelKey: "files" },
-  // News-Studio vertical — stripped from the public-release build
-  ...(VERTICALS.newsStudio
-    ? [
-        { href: "/content", icon: PenLine, label: "Content", labelKey: "content" },
-        { href: "/news", icon: Newspaper, label: "News", labelKey: "news" },
-      ]
-    : []),
   // Benchmark-Studio vertical — strippable (flag flipped by release script)
   ...(VERTICALS.benchStudio
     ? [{ href: "/bench", icon: FlaskConical, label: "Benchmark", labelKey: "bench" }]
@@ -133,7 +124,7 @@ export const NAV_TREE: NavGroup[] = [
     label: "STUDIO",
     labelKey: "groupStudio",
     rowLabelKey: "navGroupStudio",
-    children: pick(["/content", "/news", "/bench"]),
+    children: pick(["/bench"]),
   },
   {
     key: "system",

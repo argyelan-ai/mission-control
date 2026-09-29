@@ -22,7 +22,7 @@ import { MCPServerMatrix } from "@/components/mcp/MCPServerMatrix";
 import { MCPAddServerModal } from "@/components/mcp/MCPAddServerModal";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { notify } from "@/lib/notify";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 
 const SK = {
   bg: "var(--color-bg-surface)",
@@ -120,7 +120,7 @@ function SkillContentModal({ skillKey, onClose }: { skillKey: string; onClose: (
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/75" onClick={onClose} />
+      <div className="absolute inset-0 bg-[var(--color-scrim)]/75" onClick={onClose} />
       <motion.div
         initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
         exit={{ scale: 0.95, opacity: 0 }} transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
@@ -129,7 +129,7 @@ function SkillContentModal({ skillKey, onClose }: { skillKey: string; onClose: (
         aria-modal="true"
         aria-label={t("modalAria", { key: skillKey })}
         style={{ background: C.bgBase,
-          border: `1px solid ${C.border}`, boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)" }}
+          border: `1px solid ${C.border}`, boxShadow: `0 4px 24px ${alpha(C.shadow, 0.5)}, 0 1px 2px ${alpha(C.shadow, 0.3)}` }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="absolute inset-x-0 top-0 h-px pointer-events-none"
@@ -197,7 +197,7 @@ function SkillContentModal({ skillKey, onClose }: { skillKey: string; onClose: (
                   </button>
                 ))}
                 {dirty && <span className="ml-auto text-[10px] font-mono px-2 py-0.5 rounded-sm"
-                  style={{ background: `${C.warning}1A`, color: C.warning, border: `1px solid ${C.warning}33` }}>{t("unsaved")}</span>}
+                  style={{ background: alpha(C.warning, 0.1), color: C.warning, border: `1px solid ${alpha(C.warning, 0.2)}` }}>{t("unsaved")}</span>}
               </div>
               <div className="flex-1 overflow-hidden">
                 {writeTab === "write" ? (
@@ -220,7 +220,7 @@ function SkillContentModal({ skillKey, onClose }: { skillKey: string; onClose: (
           {savedToast && (
             <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
               className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 px-4 py-2 rounded-sm font-mono text-xs font-medium pointer-events-none"
-              style={{ background: `${C.online}26`, border: `1px solid ${C.online}4D`, color: C.online }}>
+              style={{ background: alpha(C.online, 0.15), border: `1px solid ${alpha(C.online, 0.3)}`, color: C.online }}>
               <Check size={12} /> {t("saved")}
             </motion.div>
           )}
@@ -298,7 +298,7 @@ function CategoryGroup({ category, skills, index }: { category: string; skills: 
         style={{ borderBottom: collapsed ? "none" : `1px solid ${C.borderSubtle}` }}
         onMouseEnter={(e) => (e.currentTarget.style.background = SK.bgHover)}
         onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
-        <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0" style={{ background: `${meta.color}15` }}>
+        <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0" style={{ background: alpha(meta.color, 0.08) }}>
           <CatIcon size={14} style={{ color: meta.color }} />
         </div>
         <span className="text-sm font-semibold flex-1" style={{ color: "var(--color-text-primary)" }}>{category}</span>
@@ -423,7 +423,7 @@ export default function SkillsPage() {
               style={{
                 background: activeTab === id ? "var(--color-bg-hover)" : "transparent",
                 color: activeTab === id ? "var(--color-text-primary)" : "var(--color-text-muted)",
-                boxShadow: activeTab === id ? "0 1px 3px rgba(0,0,0,0.3)" : "none",
+                boxShadow: activeTab === id ? `0 1px 3px ${alpha(C.shadow, 0.3)}` : "none",
               }}>
               <Icon size={13} />
               {t(labelKey)}

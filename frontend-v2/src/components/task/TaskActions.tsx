@@ -1,13 +1,75 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, CheckCircle, RotateCcw, Pause, StopCircle, Play } from "lucide-react";
+import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { CheckCircle, RotateCcw, Pause, StopCircle, Play } from "lucide-react";
 import { api } from "@/lib/api";
-import type { Task, TaskStatus, ReviewDecision } from "@/lib/types";
-import { C } from "@/lib/colors";
+import type { Task, ReviewDecision } from "@/lib/types";
+import { C, STATUS_TEXT } from "@/lib/colors";
+import { PRIMARY_BTN, PRIMARY_STYLE, QUIET_BTN, RAISED } from "./detail/nextStepStyle";
+import { isOperatorReview, isSelfReviewStall } from "@/lib/reviewRouting";
+import { useTranslations } from "next-intl";
+
+// ── Review owner gate ────────────────────────────────────────────────────────
+// Incident 11.09.2026: the operator saw Approve/Reject on every task in
+// `review`, including those already with the reviewer agent, and approved
+// mid-review. Decision buttons appear only when the review is the operator's
+// (see lib/reviewRouting.ts); otherwise an explicit "agent is reviewing" note
+// with an opt-in override.
+
+function ReviewOwnerGate({ task, boardId }: { task: Task; boardId: string }) {
+  const t = useTranslations("inbox");
+  const [override, setOverride] = useState(false);
+  const { data: agents, isError } = useQuery({
+    queryKey: ["agents", boardId],
+    queryFn: () => api.agents.list(boardId),
+    staleTime: 60_000,
+  });
+  // Explicit operator request: never gated behind the agents lookup, so a
+  // broken/hanging /agents call can't hide the decision UI (Incident PR #514 B1).
+  if (task.human_review_required) return <ReviewDecisionSection task={task} boardId={boardId} />;
+  const agent = task.assigned_agent_id ? agents?.find((a) => a.id === task.assigned_agent_id) : null;
+  // While agents are still loading, an assigned reviewer must not flash the buttons.
+  // A failed lookup (isError) must not loop forever — fall through to isOperatorReview instead.
+  const loading = !!task.assigned_agent_id && agents === undefined && !isError;
+  if (loading) return null;
+  // W2 (PR #514 Rex review): reviewer === developer of this card → backend
+  // skipped the handoff, nobody is independently reviewing it. isOperatorReview
+  // already routes this to the decision section below; this only decides the
+  // wording above it ("wartet auf Lead" instead of pretending nothing changed).
+  const selfReviewStall = !!agent && agent.role_canonical === "reviewer" && isSelfReviewStall(task);
+  if (override || isOperatorReview(task, agent)) {
+    return (
+      <div className="space-y-2">
+        {selfReviewStall && !override && (
+          <p className="text-sm" data-testid="self-review-stall-note" style={{ color: STATUS_TEXT.warning }}>
+            {t("selfReviewStall", { agent: agent?.name ?? "—" })}
+          </p>
+        )}
+        <ReviewDecisionSection task={task} boardId={boardId} />
+      </div>
+    );
+  }
+  return (
+    <div className="flex items-center gap-2 flex-wrap text-sm" data-testid="agent-review-note" style={{ color: C.textSecondary }}>
+      <span>{t("agentReviewing", { agent: agent?.name ?? "—" })}</span>
+      <button type="button" onClick={() => setOverride(true)} className={QUIET_BTN} style={{ color: C.textPrimary }}>
+        {t("decideYourself")}
+      </button>
+    </div>
+  );
+}
 
 // ── Review Decision Section ──────────────────────────────────────────────────
+// The operator's own review: one surface (they have to act), quick reasons,
+// the reason field and ONE primary action (DESIGN.md K8/K11).
+
+const DECISION_KEY: Record<ReviewDecision, string> = {
+  approved: "actions.decisionApproved",
+  changes_requested: "actions.decisionChanges",
+  hold: "actions.decisionHold",
+};
+const QUICK_REASONS = ["actions.reasonLooksGood", "actions.reasonTestsPassed", "actions.reasonEvidence"] as const;
 
 function ReviewDecisionSection({
   task,
@@ -16,6 +78,7 @@ function ReviewDecisionSection({
   task: Task;
   boardId: string;
 }) {
+  const t = useTranslations("tasks");
   const qc = useQueryClient();
   const [reviewComment, setReviewComment] = useState("");
 
@@ -34,125 +97,69 @@ function ReviewDecisionSection({
 
   if (!canReview) {
     return (
-      <div
-        className="px-3 py-2 rounded-lg text-xs"
-        style={{
-          backgroundColor: `${C.error}0F`,
-          color: C.error,
-          border: `1px solid ${C.error}26`,
-        }}
-      >
-        Review blockiert -- Task ist {task.run_control === "stopped" ? "gestoppt" : "gehalten"}
-      </div>
+      <p className="text-sm" style={{ color: C.textSecondary }}>
+        {task.run_control === "stopped" ? t("actions.reviewBlockedStopped") : t("actions.reviewBlockedHeld")}
+      </p>
     );
   }
 
-  const decisionLabels: Record<ReviewDecision, { label: string; color: string }> = {
-    approved: { label: "Approved", color: C.online },
-    changes_requested: { label: "Changes Requested", color: C.warning },
-    hold: { label: "On Hold", color: C.warning },
-  };
+  const reason = reviewComment.trim();
+  const decide = (decision: "approve" | "request_changes" | "hold") => reason && reviewMutation.mutate({ decision, comment: reason });
+  const off = reviewMutation.isPending || !reason;
 
   return (
-    <div
-      className="rounded-lg p-3 space-y-2.5"
-      style={{
-        backgroundColor: "var(--color-bg-surface)",
-        border: `1px solid ${C.border}`,
-      }}
-    >
-      <div className="flex items-center justify-between">
-        <span
-          className="text-[10px] font-semibold uppercase tracking-[0.06em]"
-          style={{ color: C.textMuted }}
-        >
-          Review
-        </span>
-        {task.review_decision && (
-          <span
-            className="text-[10px] font-medium px-1.5 py-0.5 rounded-sm"
-            style={{
-              color: decisionLabels[task.review_decision].color,
-              backgroundColor: `${decisionLabels[task.review_decision].color}26`,
-            }}
-          >
-            {decisionLabels[task.review_decision].label}
-          </span>
-        )}
+    <section className="rounded-lg p-4 space-y-4" style={{ background: RAISED }} data-testid="review-decision">
+      {task.review_decision && (
+        <p className="text-sm" style={{ color: C.textMuted }}>
+          {t("actions.lastDecision", { decision: t(DECISION_KEY[task.review_decision]) })}
+        </p>
+      )}
+      <div className="flex gap-2 flex-wrap">
+        {QUICK_REASONS.map((key) => {
+          const text = t(key);
+          const on = reviewComment === text;
+          return (
+            <button
+              key={key}
+              type="button"
+              aria-pressed={on}
+              onClick={() => setReviewComment(text)}
+              className="h-11 px-4 rounded-full text-sm cursor-pointer transition-colors"
+              style={{
+                background: on ? C.accentSubtle : "var(--detail-bg, var(--color-bg-surface))",
+                color: C.textPrimary,
+                border: `1px solid ${on ? C.borderAccent : C.border}`,
+              }}
+            >
+              {text}
+            </button>
+          );
+        })}
       </div>
-
-      {/* Quick-Reasons */}
-      <div className="flex gap-1.5 mb-2">
-        {["Sieht gut aus", "Tests bestanden", "Evidence geprueft"].map((reason) => (
-          <button
-            key={reason}
-            type="button"
-            onClick={() => setReviewComment(reason)}
-            className="px-2 py-1 rounded-sm text-[10px] font-medium transition-colors cursor-pointer"
-            style={{
-              backgroundColor: C.bgElevated,
-              color: C.textSecondary,
-              border: `1px solid ${C.border}`,
-            }}
-          >
-            {reason}
-          </button>
-        ))}
-      </div>
-
       <textarea
         value={reviewComment}
         onChange={(e) => setReviewComment(e.target.value)}
-        placeholder="Begruendung (Pflicht)..."
+        placeholder={t("actions.reviewPlaceholder")}
         rows={2}
-        aria-label="Review-Begruendung"
-        className="w-full px-2.5 py-2 rounded-lg text-xs outline-none resize-none"
-        style={{
-          backgroundColor: "var(--color-bg-surface)",
-          color: C.textPrimary,
-          border: `1px solid ${C.border}`,
-        }}
+        aria-label={t("actions.reviewReasonLabel")}
+        className="w-full px-3 py-2 rounded-md text-base @min-[560px]:text-sm resize-y"
+        style={{ background: "var(--detail-bg, var(--color-bg-deep))", color: C.textPrimary, border: `1px solid ${C.border}` }}
       />
-
-      <div className="flex items-center gap-1.5">
-        <button
-          onClick={() => reviewComment.trim() && reviewMutation.mutate({ decision: "approve", comment: reviewComment.trim() })}
-          disabled={reviewMutation.isPending || !reviewComment.trim()}
-          className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          style={{
-            backgroundColor: `${C.online}1A`,
-            color: C.online,
-            border: `1px solid ${C.online}33`,
-          }}
-        >
-          <CheckCircle size={12} /> Approve
+      <div className="flex items-center gap-2 flex-wrap">
+        <button type="button" onClick={() => decide("approve")} disabled={off} className={PRIMARY_BTN} style={PRIMARY_STYLE}>
+          <CheckCircle size={16} aria-hidden />
+          {t("actions.approve")}
         </button>
-        <button
-          onClick={() => reviewComment.trim() && reviewMutation.mutate({ decision: "request_changes", comment: reviewComment.trim() })}
-          disabled={reviewMutation.isPending || !reviewComment.trim()}
-          className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          style={{
-            backgroundColor: `${C.error}1A`,
-            color: C.error,
-            border: `1px solid ${C.error}33`,
-          }}
-        >
-          <RotateCcw size={12} /> Changes
+        <button type="button" onClick={() => decide("request_changes")} disabled={off} className={QUIET_BTN} style={{ color: C.textSecondary }}>
+          <RotateCcw size={16} aria-hidden />
+          {t("actions.requestChanges")}
         </button>
-        <button
-          onClick={() => reviewComment.trim() && reviewMutation.mutate({ decision: "hold", comment: reviewComment.trim() })}
-          disabled={reviewMutation.isPending || !reviewComment.trim()}
-          className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          style={{
-            backgroundColor: `${C.warning}1A`,
-            color: C.warning,
-            border: `1px solid ${C.warning}33`,
-          }}
-        >
-          <Pause size={12} /> Hold
+        <button type="button" onClick={() => decide("hold")} disabled={off} className={QUIET_BTN} style={{ color: C.textSecondary }}>
+          <Pause size={16} aria-hidden />
+          {t("actions.hold")}
         </button>
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -161,19 +168,14 @@ function ReviewDecisionSection({
 interface TaskActionsProps {
   task: Task;
   boardId: string;
+  /** The header already shows a primary button (Reply, Open log, an
+   *  approval) — then Requeue / Release step down to quiet (K11: one primary). */
+  primaryTaken?: boolean;
 }
 
-export function TaskActions({ task, boardId }: TaskActionsProps) {
+export function TaskActions({ task, boardId, primaryTaken = false }: TaskActionsProps) {
+  const t = useTranslations("tasks");
   const qc = useQueryClient();
-
-  const updateMutation = useMutation({
-    mutationFn: (data: Partial<Task>) => api.tasks.update(boardId, task.id, data),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["tasks", boardId] });
-      qc.invalidateQueries({ queryKey: ["pipeline", boardId] });
-      qc.invalidateQueries({ queryKey: ["task", boardId, task.id] });
-    },
-  });
 
   const promoteMutation = useMutation({
     mutationFn: () => api.tasks.promote(boardId, task.id),
@@ -183,14 +185,8 @@ export function TaskActions({ task, boardId }: TaskActionsProps) {
     },
   });
 
+  // Stop asks first, inline — a mistap must not end a long run.
   const [confirmingStop, setConfirmingStop] = useState(false);
-  const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current);
-    };
-  }, []);
 
   const stopRunMutation = useMutation({
     mutationFn: () => api.tasks.stop(boardId, task.id, "Manual stop"),
@@ -198,27 +194,8 @@ export function TaskActions({ task, boardId }: TaskActionsProps) {
       qc.invalidateQueries({ queryKey: ["tasks", boardId] });
       qc.invalidateQueries({ queryKey: ["pipeline", boardId] });
     },
-    onSettled: () => {
-      setConfirmingStop(false);
-      if (confirmTimerRef.current) {
-        clearTimeout(confirmTimerRef.current);
-        confirmTimerRef.current = null;
-      }
-    },
+    onSettled: () => setConfirmingStop(false),
   });
-
-  const handleStopClick = () => {
-    if (confirmingStop) {
-      stopRunMutation.mutate();
-      return;
-    }
-    setConfirmingStop(true);
-    if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current);
-    confirmTimerRef.current = setTimeout(() => {
-      setConfirmingStop(false);
-      confirmTimerRef.current = null;
-    }, 4000);
-  };
 
   const resumeRunMutation = useMutation({
     mutationFn: () => api.tasks.resume(boardId, task.id),
@@ -233,92 +210,67 @@ export function TaskActions({ task, boardId }: TaskActionsProps) {
     (task.status === "inbox" && task.dispatched_at != null) ||
     task.status === "review";
   const isStopped = task.run_control === "stopped" || task.run_control === "manual_hold";
+  const mainBtn = primaryTaken ? QUIET_BTN : PRIMARY_BTN;
+  const mainStyle = primaryTaken ? { color: C.textPrimary } : PRIMARY_STYLE;
 
   return (
-    <div className="space-y-3">
-      {/* Pre-Dispatch Gating: Promote */}
+    <div className="space-y-4">
+      {/* Pre-dispatch gating: release a planned subtask */}
       {task.dispatch_phase === "planning" && task.parent_task_id && (
-        <button
-          onClick={() => promoteMutation.mutate()}
-          disabled={promoteMutation.isPending}
-          className="flex items-center gap-1.5 w-full px-3 py-2 rounded-lg text-xs font-medium transition-colors cursor-pointer"
-          style={{
-            backgroundColor: C.accentSubtle,
-            color: C.accent,
-            border: `1px solid ${C.borderAccent}`,
-          }}
-        >
-          {promoteMutation.isPending ? "Freigeben..." : "Freigeben"}
+        <button type="button" onClick={() => promoteMutation.mutate()} disabled={promoteMutation.isPending} className={mainBtn} style={mainStyle}>
+          {promoteMutation.isPending ? t("actions.promoting") : t("actions.promote")}
         </button>
       )}
 
-      {/* Run Control — 2-Stufen-Confirm gegen versehentliches Stoppen */}
+      {/* Run control — quiet, asks first */}
       {hasActiveRun && !isStopped && (
-        <button
-          onClick={handleStopClick}
-          disabled={stopRunMutation.isPending}
-          aria-pressed={confirmingStop}
-          className="flex items-center gap-1.5 w-full px-3 py-2 rounded-lg text-xs font-medium transition-colors cursor-pointer"
-          style={{
-            backgroundColor: confirmingStop
-              ? `${C.error}2E`
-              : `${C.error}0F`,
-            color: confirmingStop ? C.textPrimary : C.error,
-            border: `1px solid ${
-              confirmingStop ? `${C.error}80` : `${C.error}26`
-            }`,
-          }}
-        >
-          {confirmingStop ? <AlertTriangle size={12} /> : <StopCircle size={12} />}
-          {stopRunMutation.isPending
-            ? "Stopping..."
-            : confirmingStop
-              ? "Really stop? Click again"
-              : "Stop Run"}
-        </button>
+        confirmingStop ? (
+          <div className="flex items-center gap-2 flex-wrap" role="group" data-testid="stop-confirm">
+            <span className="text-sm" style={{ color: C.textPrimary }}>{t("actions.stopConfirm")}</span>
+            <button
+              type="button"
+              onClick={() => stopRunMutation.mutate()}
+              disabled={stopRunMutation.isPending}
+              className={QUIET_BTN}
+              style={{ color: STATUS_TEXT.error }}
+            >
+              {stopRunMutation.isPending ? t("actions.stopping") : t("actions.stopConfirmYes")}
+            </button>
+            <button type="button" onClick={() => setConfirmingStop(false)} className={QUIET_BTN} style={{ color: C.textSecondary }}>
+              {t("cancel")}
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setConfirmingStop(true)}
+            className={`-ml-3 ${QUIET_BTN}`}
+            style={{ color: C.textSecondary }}
+            data-testid="stop-run"
+          >
+            <StopCircle size={16} aria-hidden />
+            {t("actions.stopRun")}
+          </button>
+        )
       )}
 
       {isStopped && (
-        <div className="space-y-1.5">
-          <div
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs"
-            style={{
-              backgroundColor: `${C.error}0F`,
-              color: C.error,
-              border: `1px solid ${C.error}26`,
-            }}
-          >
-            <StopCircle size={12} />
-            <span className="font-medium">
-              Run {task.run_control === "stopped" ? "stopped" : "held"}
-            </span>
-          </div>
-          <button
-            onClick={() => resumeRunMutation.mutate()}
-            disabled={resumeRunMutation.isPending}
-            className="flex items-center gap-1.5 w-full px-3 py-2 rounded-lg text-xs font-medium transition-colors cursor-pointer"
-            style={{
-              backgroundColor: `${C.online}0F`,
-              color: C.online,
-              border: `1px solid ${C.online}26`,
-            }}
-          >
-            <Play size={12} />
-            {resumeRunMutation.isPending ? "..." : "Requeue"}
+        <div className="space-y-2" data-testid="run-held">
+          <p className="text-sm" style={{ color: C.textSecondary }}>
+            {task.run_control === "stopped" ? t("actions.runStopped") : t("actions.runHeld")} {t("actions.requeueHint")}
+          </p>
+          <button type="button" onClick={() => resumeRunMutation.mutate()} disabled={resumeRunMutation.isPending} className={mainBtn} style={mainStyle}>
+            <Play size={16} aria-hidden />
+            {resumeRunMutation.isPending ? "…" : t("actions.requeue")}
           </button>
-          <div className="text-[10px]" style={{ color: C.textMuted }}>
-            The task goes back to the queue and gets reassigned in the next dispatch cycle.
-          </div>
         </div>
       )}
 
-      {/* Review Section */}
+      {/* Review — only the operator's own reviews get decision buttons; a
+          review held by a reviewer agent is shown as such. */}
       {task.status === "review" && (
-        <ReviewDecisionSection task={task} boardId={boardId} />
+        <ReviewOwnerGate task={task} boardId={boardId} />
       )}
-
-      {/* Status changes moved to the header dropdown (TaskDetailBody) —
-          the old 7-chip "Change Status" wall is gone. */}
     </div>
   );
 }

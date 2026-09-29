@@ -2,3 +2,4 @@
 # Edit the original instead:
 #   scripts/mc-cli/   → mc-cli/
 mc-cli/
+sigforward.sh

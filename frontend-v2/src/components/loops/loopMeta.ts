@@ -2,7 +2,7 @@ import { C, STATUS_TEXT } from "@/lib/colors";
 import type { LoopStatus } from "@/lib/types";
 
 // ── Status vocabulary — single source for the Loops UI (ADR-051) ───────────
-// Chip pattern per DESIGN.md: `${color}22` bg, `${color}55` border, color text.
+// Chip pattern per DESIGN.md: alpha(color, 0.13) bg, alpha(color, 0.33) border, color text.
 // `labelKey` resolves against the "loops.status" namespace at the render site
 // (i18n — module-level constants can't call useTranslations() themselves).
 

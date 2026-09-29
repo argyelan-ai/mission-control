@@ -22,15 +22,15 @@ import { useQuery } from "@tanstack/react-query";
 import { Lock } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Agent } from "@/lib/types";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import { fmtCtx } from "@/lib/utils";
 
 export const RUNTIME_TYPE_COLOR: Record<string, string> = {
-  lmstudio: C.info,          // #5890CA — local API, info-blue
-  vllm_docker: C.online,     // #55A964 — running container, online-green
-  unsloth: C.warning,        // #A67F3E — fine-tune, warm-amber
+  lmstudio: C.info,          // status-info — local API, info-blue
+  vllm_docker: C.online,     // status-online — running container, online-green
+  unsloth: C.warning,        // status-warning — fine-tune, warm-amber
   openai_compatible: C.accent, // #EBE8DE — achromatic accent
-  cloud: C.textDim,          // #8A8A8A — external, neutral
+  cloud: C.textDim,          // text-dim — external, neutral
   // Phase 24 (Hermes) — separated from openai_compatible by BRIGHTNESS, not hue
   // (System A): accentDeep is the dimmed accent step, still clearly not accent.
   hermes: C.accentDeep, // #C1BEB2 — gedimmte Akzentstufe
@@ -69,9 +69,9 @@ export function RuntimePill({ agent, variant = "default" }: Props) {
         <span
           className="inline-flex items-center gap-1.5 font-mono text-[10px] px-1.5 py-0.5 rounded-md"
           style={{
-            backgroundColor: `${color}14`,
+            backgroundColor: alpha(color, 0.08),
             color: "var(--color-text-secondary)",
-            border: `1px solid ${color}33`,
+            border: `1px solid ${alpha(color, 0.2)}`,
           }}
           title={`${rt.display_name} · ${rt.endpoint}${rt.model_identifier ? ` · ${rt.model_identifier}` : ""}${ctxLabel ? ` · ${ctxLabel} ctx` : ""}${lockTitle}`}
         >
@@ -92,9 +92,9 @@ export function RuntimePill({ agent, variant = "default" }: Props) {
       <span
         className="inline-flex items-center gap-1.5 font-mono text-[12px] px-2 py-0.5 rounded-md max-sm:flex-wrap max-sm:text-[11px]"
         style={{
-          backgroundColor: `${color}14`,
+          backgroundColor: alpha(color, 0.08),
           color: "var(--color-text-secondary)",
-          border: `1px solid ${color}33`,
+          border: `1px solid ${alpha(color, 0.2)}`,
         }}
         title={`Runtime: ${rt.display_name} · Endpoint: ${rt.endpoint}${lockTitle}`}
       >
@@ -139,9 +139,9 @@ export function RuntimePill({ agent, variant = "default" }: Props) {
       <span
         className={`inline-flex items-center gap-1.5 font-mono px-${isCompact ? "1.5" : "2"} py-0.5 rounded-md ${isCompact ? "text-[10px]" : "text-[12px]"}`}
         style={{
-          backgroundColor: `${C.textDim}1F`,
+          backgroundColor: alpha(C.textDim, 0.12),
           color: "var(--color-text-muted)",
-          border: `1px solid ${C.textDim}47`,
+          border: `1px solid ${alpha(C.textDim, 0.28)}`,
         }}
         title={`No runtime bound — managed outside Mission Control (${scope})`}
       >

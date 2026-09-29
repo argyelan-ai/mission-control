@@ -190,7 +190,7 @@ def soft_archive_note(
 
     try:
         post = frontmatter.load(src)
-        post.metadata["archived_at"] = dt.datetime.utcnow().isoformat()
+        post.metadata["archived_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
         post.metadata["archive_bucket"] = bucket
         post.metadata["archive_reason"] = _BUCKET_REASONS.get(bucket, "unknown")
         dst.parent.mkdir(parents=True, exist_ok=True)
@@ -230,7 +230,7 @@ async def archive_batch(
     moved = 0
     failed = 0
     errors: list[tuple[str, str]] = []
-    archived_at = dt.datetime.utcnow()
+    archived_at = dt.datetime.now(dt.timezone.utc)
 
     for rel, bm_id, bucket in plan:
         result = soft_archive_note(vault_root, archive_root, rel, bucket)
@@ -276,7 +276,7 @@ async def finalize_cleanup(
     state.log("INFO", "finalize_cleanup start")
 
     backups_root.mkdir(parents=True, exist_ok=True)
-    timestamp = dt.datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+    timestamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d-%H%M%S")
     tarball: Path | None = backups_root / f"vault-pre-cleanup-{state.run_id}-{timestamp}.tar.gz"
 
     if vault_root.exists():

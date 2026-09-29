@@ -369,6 +369,48 @@ async def test_resolve_context_window_observed_does_not_match_unrelated_model():
     assert resolve_context_window("totally-unknown-model", observed={"claude-opus-5": 1}) is None
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# Kontextanzeige-Transkript-Pfad round (16.09.2026): the static seed is a
+# FLOOR for a curated model — an observed window may RAISE it (genuinely
+# larger capability, e.g. a different account's 1M-context beta) but must
+# never SHRINK it. The observed map is shared fleet-wide, keyed only by
+# model name; a session on an account without the beta honestly reporting
+# 200_000 for "claude-opus-5" must not silently drag every OTHER agent on
+# that model name down from the curated 1,000,000 (live incident 16.09.2026:
+# usage event inputTokens=282282/contextWindow=200000 = 141%, clamped to
+# 100%, while the agent's own window was actually 1,000,000 = 28%).
+#
+# This pins the AXIS (a curated floor may only be raised, never lowered by
+# a fleet-wide observation) across the whole observed-value range below the
+# static seed — not one branch — so any regression that re-opens the
+# shrink path in a DIFFERENT way (e.g. averaging, always-observed-wins,
+# last-write-wins with no floor check) fails this test too.
+# ══════════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.parametrize("observed_value", [1, 100, 199_999, 500_000, 999_999])
+async def test_resolve_context_window_static_floor_never_shrinks(observed_value):
+    # claude-opus-5 is curated at 1_000_000 (backend/app/config.py). No
+    # fleet-wide observation smaller than that curated floor may win —
+    # otherwise a lesser-entitled account's honest report silently degrades
+    # every other agent's correct number for the same model name.
+    assert (
+        resolve_context_window("claude-opus-5", observed={"claude-opus-5": observed_value})
+        == 1_000_000
+    )
+
+
+async def test_resolve_context_window_static_floor_may_be_raised_by_observed():
+    # The inverse direction stays intentional: an observation LARGER than
+    # the curated floor (a genuinely bigger capability) still wins — this
+    # is the pre-existing, still-desired behavior for models without a
+    # static seed, and for a static seed that undershoots live reality.
+    assert (
+        resolve_context_window("claude-haiku-4-5", observed={"claude-haiku-4-5": 5_000_000})
+        == 5_000_000
+    )
+
+
 async def test_catalog_cache_is_per_agent_not_fleet_wide(redis_env, monkeypatch):
     """Operator-Befund 19.08.2026: FreeCodes lokal erkanntes Qwen stand bei
     JEDEM Claude-Agenten im Modell-Dropdown. Ursache: der Katalog-Cache war

@@ -56,8 +56,8 @@ def _cache_key(slug: str) -> str:
 async def session_scope() -> AsyncIterator[AsyncSession]:
     """Create a self-contained session for callers without one (background tasks).
 
-    Public on purpose — used by ``spark_client`` and ``news_ai_worker`` for
-    their 404-retry paths so they can call :func:`invalidate_and_reprobe`
+    Public on purpose — used by ``spark_client`` for
+    its 404-retry path so they can call :func:`invalidate_and_reprobe`
     without dragging a request-bound session through their public APIs.
     """
     async with AsyncSession(engine, expire_on_commit=False) as session:
@@ -254,7 +254,7 @@ async def get_active_spark_model(*, force_probe: bool = False) -> str | None:
     """Standalone shortcut: returns active model for the Spark vLLM runtime.
 
     Self-contained — creates its own DB session. Use this from background
-    tasks (news worker, vault backfill) that don't have a request-bound
+    tasks (e.g. vault backfill) that don't have a request-bound
     session in scope.
     """
     async with session_scope() as session:

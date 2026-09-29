@@ -11,7 +11,7 @@ import logging
 import re
 import uuid
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -253,7 +253,7 @@ def lint_vault(vault_path: Path) -> dict[str, Any]:
         "broken_wikilinks": broken_wikilinks,
         "missing_confidence_count": len(missing_confidence),
         "missing_confidence": missing_confidence,
-        "linted_at": datetime.utcnow().isoformat() + "Z",
+        "linted_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     logger.info(
         "Vault lint complete: %d files, %d orphans, %d invalid fm, %d dup IDs, "
@@ -281,7 +281,7 @@ def _empty_stats() -> dict[str, Any]:
         "broken_wikilinks": [],
         "missing_confidence_count": 0,
         "missing_confidence": [],
-        "linted_at": datetime.utcnow().isoformat() + "Z",
+        "linted_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
 
 
@@ -297,7 +297,7 @@ async def write_lint_report(vault_path: Path, stats: dict[str, Any]) -> Path:
     # Derive today's datestamp from the stats timestamp so the filename and
     # report body always agree — avoids a midnight drift if lint ran at 23:59
     # but write_lint_report is called after 00:00 UTC.
-    linted_at = stats.get("linted_at") or (datetime.utcnow().isoformat() + "Z")
+    linted_at = stats.get("linted_at") or (datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
     today = linted_at[:10]  # "YYYY-MM-DD"
     report_path = lint_dir / f"{today}.md"
 
@@ -390,7 +390,7 @@ async def write_lint_report(vault_path: Path, stats: dict[str, Any]) -> Path:
         "id": str(uuid.uuid4()),
         "type": "reference",
         "agent": "system",
-        "date": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "date": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "lint_orphans": orphan_count,
         "lint_fm_invalid": fm_count,
         "lint_dup_ids": dup_count,

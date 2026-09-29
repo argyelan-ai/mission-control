@@ -286,6 +286,97 @@ async def test_mark_done_skips_threads_without_own_topic(async_session: AsyncSes
     assert client.edited == []
 
 
+# ── Parent-Kette: Tiefe vs. Zyklus (Task b410d705) ────────────────────────
+#
+# Dieselbe Regel wie in agent_task_status' Zykluspruefung: die Schranke ist die
+# Menge der besuchten Tasks, nicht eine Tiefenzahl. Diese beiden Faelle sind die
+# Gegenprobe zur alten `_MAX_PARENT_DEPTH = 10`.
+
+@pytest.mark.asyncio
+async def test_topic_owner_walks_a_chain_deeper_than_the_old_cap(async_session: AsyncSession):
+    """Der Besitzer liegt 14 Schritte hoch — jenseits des alten Caps von 10.
+
+    Der alte Deckel brach nach 10 Schritten ab und lieferte still das eigene
+    Thread-Thema; mit dem Set laeuft der Aufstieg bis zum Projekt durch. Der
+    Rueckgabewert unterscheidet die beiden: Projekt statt Thread. Genau dieser
+    Unterschied ist der Zweck der Aenderung — ohne ihn waere das falsche Thema
+    jahrelang unbemerkt geblieben.
+    """
+    from app.models.board import Project
+    from app.models.task import Task
+    from app.services.telegram_topics import _resolve_topic_owner
+
+    project = Project(board_id=uuid.uuid4(), name="Tiefes Projekt")
+    async_session.add(project)
+    await async_session.commit()
+    await async_session.refresh(project)
+
+    parent = None
+    for level in range(15):
+        task = Task(
+            board_id=uuid.uuid4(),
+            title=f"L{level}",
+            parent_task_id=parent,
+            project_id=project.id if level == 0 else None,
+        )
+        async_session.add(task)
+        await async_session.commit()
+        await async_session.refresh(task)
+        parent = task.id
+
+    thread = Thread(kind="task", task_id=parent)
+    async_session.add(thread)
+    await async_session.commit()
+    await async_session.refresh(thread)
+
+    owner = await _resolve_topic_owner(async_session, thread)
+
+    assert owner is not thread, (
+        "der Aufstieg muss 14 Schritte weit bis zum Projekt laufen — "
+        "ein Depth-Cap liefert hier das eigene Thread-Thema"
+    )
+    assert owner.id == project.id
+
+
+@pytest.mark.asyncio
+async def test_topic_owner_terminates_on_a_preexisting_cycle(async_session: AsyncSession):
+    """Eine bereits schleifende Kette darf nicht endlos laufen und nicht werfen.
+
+    `_seen` ist hier die einzige Schranke — ohne sie liefe der while-Lauf
+    zwischen den beiden Knoten ewig. Der Aufstieg ordnet nur eine Anzeige zu
+    (er schreibt keine Kante), darum ist die richtige Reaktion der Rueckfall auf
+    das Thread-Thema statt einer Ablehnung.
+    """
+    import asyncio
+
+    from app.models.task import Task
+    from app.services.telegram_topics import _resolve_topic_owner
+
+    a = Task(board_id=uuid.uuid4(), title="A")
+    async_session.add(a)
+    await async_session.commit()
+    await async_session.refresh(a)
+    b = Task(board_id=uuid.uuid4(), title="B", parent_task_id=a.id)
+    async_session.add(b)
+    await async_session.commit()
+    await async_session.refresh(b)
+    # Geschaedigter Stand, den kein Endpunkt erzeugt: A -> B -> A.
+    a.parent_task_id = b.id
+    async_session.add(a)
+    await async_session.commit()
+
+    thread = Thread(kind="task", task_id=b.id)
+    async_session.add(thread)
+    await async_session.commit()
+    await async_session.refresh(thread)
+
+    owner = await asyncio.wait_for(
+        _resolve_topic_owner(async_session, thread), timeout=10
+    )
+
+    assert owner is thread
+
+
 # ── purge_old_topics ──────────────────────────────────────────────────────
 
 @pytest.mark.asyncio

@@ -2,6 +2,7 @@
 
 import { useState, useMemo, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { motion, AnimatePresence } from "framer-motion";
 import { format } from "date-fns";
@@ -16,6 +17,9 @@ import PipelineView from "@/components/pipeline/PipelineView";
 import AppShell from "@/components/layout/AppShell";
 import { SystemHealthSection } from "@/components/homepage/SystemHealthSection";
 import { ActivityHistoryPanel } from "@/components/homepage/ActivityHistoryPanel";
+import { LastNightCard } from "@/components/night/LastNightCard";
+import { DailyMetricsCard } from "@/components/home/DailyMetricsCard";
+import { homeAlertsToBanner } from "@/lib/homeAlerts";
 import { C, sectionVariants, getGreetingKey, bentoMediaStyles } from "@/components/homepage/colors";
 
 export default function Page() {
@@ -29,6 +33,7 @@ export default function Page() {
 
 function HomePage() {
   const qc = useQueryClient();
+  const router = useRouter();
   const t = useTranslations("home");
   const locale = useLocale();
   const dateLocale = locale === "de" ? de : undefined;
@@ -47,6 +52,14 @@ function HomePage() {
     queryKey: ["agents", activeBoardId],
     queryFn: () => api.agents.list(activeBoardId ?? undefined),
     enabled: !!activeBoardId,
+  });
+
+  // Alerts from verticals (e.g. a feed that went quiet) — computed live by
+  // the backend, so they vanish once the cause is fixed.
+  const { data: homeAlerts } = useQuery({
+    queryKey: ["system-alerts"],
+    queryFn: api.system.alerts,
+    refetchInterval: 60_000,
   });
 
   // ── SSE Streams ────────────────────────────────────────────────────────────
@@ -72,13 +85,17 @@ function HomePage() {
   // ── Derived ───────────────────────────────────────────────────────────────
   const displayName = currentUser?.name?.split(" ")[0] || "Operator";
 
-  const alerts = (agents ?? [])
-    .filter((a) => a.context_max && a.context_tokens / a.context_max >= 0.9)
-    .map((a) => ({
-      label: t("contextAlert", { name: a.name, pct: Math.round((a.context_tokens / a.context_max) * 100) }),
-      color: C.error,
-      href: `/agents/${a.id}`,
-    }));
+  const alerts: { key: string; label: string; color: string; href?: string; title?: string }[] = [
+    ...homeAlertsToBanner(homeAlerts?.alerts, locale, { warning: C.warning, error: C.error }),
+    ...(agents ?? [])
+      .filter((a) => a.context_max && a.context_tokens !== null && a.context_tokens / a.context_max >= 0.9)
+      .map((a) => ({
+        key: `context-${a.id}`,
+        label: t("contextAlert", { name: a.name, pct: Math.round(((a.context_tokens ?? 0) / a.context_max) * 100) }),
+        color: C.error,
+        href: `/agents/${a.id}`,
+      })),
+  ];
 
   if (!activeBoardId) {
     return (
@@ -109,7 +126,11 @@ function HomePage() {
           </h1>
           <div className="flex items-center gap-3 shrink-0">
             <span className="label-sys hidden sm:block">{format(new Date(), "EEE, d. MMM yyyy", { locale: dateLocale })}</span>
-            <CreateTaskModal activeBoardId={activeBoardId} agents={agents} />
+            <CreateTaskModal
+              activeBoardId={activeBoardId}
+              agents={agents}
+              onOpenTask={(id) => router.push(`/tasks?task=${encodeURIComponent(id)}`)}
+            />
           </div>
         </div>
         {/* Messmarke: 1px-Linie mit Akzent-Segment — Desktop; Mobile nur feine Linie */}
@@ -121,19 +142,30 @@ function HomePage() {
         </div>
       </motion.div>
 
-      {/* Context warnings */}
+      {/* Night shift: last night's report + blocked night heads (MC is the
+          operator's channel; renders nothing when nothing ran). */}
+      <motion.div custom={1} variants={sectionVariants} initial="hidden" animate="visible" className="empty:hidden">
+        <LastNightCard />
+      </motion.div>
+
+      {/* Warnings: vertical alerts (feed went quiet …) + agent context */}
       {alerts.length > 0 && (
         <motion.div custom={1} variants={sectionVariants} initial="hidden" animate="visible">
           <div className="px-4 py-2.5 rounded-md corner-ticks" style={{ background: C.bgSurface, border: `1px solid ${C.border}` }}>
             <div className="flex items-center gap-4 text-sm flex-wrap">
               <AlertTriangle size={14} style={{ color: C.warning }} className="shrink-0" />
-              {alerts.map((alert, i) => (
-                <a key={i} href={alert.href} className="text-xs font-medium transition-opacity hover:opacity-80" style={{ color: alert.color }}>{alert.label}</a>
+              {alerts.map((alert) => (
+                <a key={alert.key} href={alert.href} title={alert.title} className="text-xs font-medium transition-opacity hover:opacity-80" style={{ color: alert.color }}>{alert.label}</a>
               ))}
             </div>
           </div>
         </motion.div>
       )}
+
+      {/* The daily metrics digest (M1–M5) — MC first, Slack / Telegram optional */}
+      <motion.div custom={2} variants={sectionVariants} initial="hidden" animate="visible" className="empty:hidden">
+        <DailyMetricsCard />
+      </motion.div>
 
       {/* System Health */}
       <motion.div custom={2} variants={sectionVariants} initial="hidden" animate="visible">

@@ -11,8 +11,10 @@ Two structural fixes, pinned here:
      with a 409 (hard, not a hint — the hint pattern of Bug 9 would not have
      been read).
   B. `mc delegate` without an active task no longer dead-ends for Board
-     Leads: it creates a ROOT task (no parent, no callback) — the reason
-     Boss hand-rolled API calls in the first place.
+     Leads — since task f8c9cdb9 it takes an explicit `--parent` and refuses
+     with 409 BEFORE creating anything when there is neither an active card
+     nor a `--parent`. The root task this section used to pin was itself the
+     orphan leak (b7d29be3/70d6b417/8d039889).
 """
 from __future__ import annotations
 
@@ -65,6 +67,25 @@ async def _fixture(lead_has_task=True, lead=True):
         )
         await s.commit()
     return board_id, lead_id, worker_id, task_id, lead_raw
+
+
+async def _open_lead_card(board_id, lead_id, title="Karte des Leads"):
+    """An open card the delegating lead can name as --parent.
+
+    The fixture's only card is `done`, and a closed parent is refused by the
+    delegation guards — so tests that delegate without an active card create
+    their own open parent here.
+    """
+    from app.models.task import Task
+
+    parent_id = uuid.uuid4()
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(Task(
+            id=parent_id, board_id=board_id, title=title,
+            status="in_progress", assigned_agent_id=lead_id,
+        ))
+        await s.commit()
+    return parent_id
 
 
 async def _set_task_status(task_id, status_):
@@ -147,10 +168,19 @@ def _dispatch_patches():
 
 
 @pytest.mark.asyncio
-async def test_board_lead_without_task_delegates_a_root_task(client: AsyncClient):
+async def test_board_lead_without_task_delegates_under_named_parent(client: AsyncClient):
+    """The follow-up order from the chat: a lead with no active card hangs the
+    new work under a card it names explicitly.
+
+    Superseded behaviour (f8c9cdb9): this test used to assert that a root card
+    with `parent_task_id is None` was created. That root card IS the orphan —
+    the live incident created 8d039889 exactly this way. The delegation still
+    works, it just needs the parent.
+    """
     from app.models.task import Task
 
     board_id, lead_id, worker_id, _, token = await _fixture(lead_has_task=False)
+    parent_id = await _open_lead_card(board_id, lead_id)
     p1, p2 = _dispatch_patches()
     with p1, p2:
         resp = await client.post(
@@ -159,6 +189,7 @@ async def test_board_lead_without_task_delegates_a_root_task(client: AsyncClient
                 "title": "Folgeauftrag Film X",
                 "description": "Bitte Film X in Deutsch besorgen und verifizieren.",
                 "assigned_agent_id": str(worker_id),
+                "parent_task_id": str(parent_id),
             },
             headers={"Authorization": f"Bearer {token}"},
         )
@@ -168,12 +199,15 @@ async def test_board_lead_without_task_delegates_a_root_task(client: AsyncClient
         created = (
             await s.exec(select(Task).where(Task.title == "Folgeauftrag Film X"))
         ).one()
-        assert created.parent_task_id is None
+        assert created.parent_task_id == parent_id, (
+            "Der Folgeauftrag muss unter der genannten Karte haengen — eine "
+            "Karte ohne Parent ist die Waise, die der Task verbietet"
+        )
         # Superseded by #312: this used to assert `callback_agent_id is None`.
         # #284 read "no parent to resume" as "no callback at all" — and that is
         # what left the chat-ordered delegation mute. Resuming a blocked parent
-        # and telling the requester are different jobs: the first is genuinely
-        # meaningless without a parent, the second is the whole point of a
+        # and telling the requester are different jobs: the first needs a
+        # confirmed ownership claim, the second is the whole point of a
         # follow-up order placed from a conversation. The lead is still NOT
         # blocked (asserted below) — only reachable.
         assert created.callback_agent_id == lead_id
@@ -184,9 +218,39 @@ async def test_board_lead_without_task_delegates_a_root_task(client: AsyncClient
         from app.models.agent import Agent
         lead = await s.get(Agent, lead_id)
         assert lead.current_task_id is None, (
-            "Root-Delegation darf den Lead nicht blockieren — es gibt keinen "
-            "Parent-Task, auf den er warten koennte (#284-Garantie bleibt)"
+            "Der explizit benannte Parent darf den Lead nicht blockieren — wir "
+            "haben kein bestaetigtes Besitzverhaeltnis, auf dem ein spaeteres "
+            "Auto-Resume sicher waere (#284-Garantie bleibt)"
         )
+
+
+@pytest.mark.asyncio
+async def test_board_lead_without_task_and_without_parent_gets_409(client: AsyncClient):
+    """The other half of the rule: no parent named, no card created."""
+    from app.models.task import Task
+
+    board_id, _, worker_id, _, token = await _fixture(lead_has_task=False)
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        before = (await s.exec(select(Task))).all()
+
+    p1, p2 = _dispatch_patches()
+    with p1, p2:
+        resp = await client.post(
+            f"/api/v1/agent/boards/{board_id}/delegate",
+            json={
+                "title": "Waise ohne Parent",
+                "description": "Darf gar nicht erst entstehen.",
+                "assigned_agent_id": str(worker_id),
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert resp.status_code == 409, resp.text
+    assert "keine stillschweigende Waisenkarte" in resp.json()["detail"]
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        after = (await s.exec(select(Task))).all()
+    assert len(after) == len(before), "409 darf keine Karte angelegt haben"
 
 
 @pytest.mark.asyncio
@@ -221,15 +285,16 @@ async def test_worker_without_task_still_gets_409(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_root_delegation_carries_an_explicit_origin_thread(
+async def test_delegation_carries_an_explicit_origin_thread(
     client: AsyncClient,
 ):
-    """The chat-order case (#270): no parent to inherit from, so the explicit
-    flag must land on the root task."""
+    """The chat-order case (#270): the explicit flag must win over inheritance
+    from the parent — that is the whole point of passing it."""
     from app.models.task import Task
     from app.models.thread import Thread
 
     board_id, lead_id, worker_id, _, token = await _fixture(lead_has_task=False)
+    parent_id = await _open_lead_card(board_id, lead_id)
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         origin = Thread(kind="chat", agent_id=lead_id, title="Chat")
         s.add(origin)
@@ -241,9 +306,10 @@ async def test_root_delegation_carries_an_explicit_origin_thread(
         resp = await client.post(
             f"/api/v1/agent/boards/{board_id}/delegate",
             json={
-                "title": "Root mit Herkunft",
+                "title": "Auftrag mit Herkunft",
                 "description": "Auftrag aus dem Chat, Herkunft verlinkt.",
                 "assigned_agent_id": str(worker_id),
+                "parent_task_id": str(parent_id),
                 "origin_thread_id": str(origin_id),
             },
             headers={"Authorization": f"Bearer {token}"},
@@ -252,7 +318,7 @@ async def test_root_delegation_carries_an_explicit_origin_thread(
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         created = (
-            await s.exec(select(Task).where(Task.title == "Root mit Herkunft"))
+            await s.exec(select(Task).where(Task.title == "Auftrag mit Herkunft"))
         ).one()
         assert created.origin_thread_id == origin_id
 

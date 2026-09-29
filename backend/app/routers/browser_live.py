@@ -84,14 +84,10 @@ async def list_targets(current_user=Depends(require_user)):
 
 
 def _validate_ws_token(token: Optional[str]) -> bool:
-    if not token:
-        return False
-    try:
-        from jose import jwt as _jwt
-        payload = _jwt.decode(token, settings.jwt_secret_key, algorithms=["HS256"])
-        return bool(payload.get("sub"))
-    except Exception:
-        return False
+    from app.auth import _query_jwt_subject
+
+    # Legacy ?token= path only (ALLOW_QUERY_TOKEN_AUTH, no scoped tokens).
+    return _query_jwt_subject(token) is not None
 
 
 @router.websocket("/ws")
@@ -99,16 +95,20 @@ async def browser_live_ws(
     websocket: WebSocket,
     token: Optional[str] = None,
     target: Optional[str] = None,
+    ticket: Optional[str] = None,
 ):
     """Stream JPEG screencast frames of one agent-browser page to the client.
 
-    Auth: JWT via ?token=<jwt> (WebSocket can't send headers). Optional
+    Auth: single-use stream ticket via ?ticket= (WebSocket can't send
+    headers); legacy ?token=<jwt> only with ALLOW_QUERY_TOKEN_AUTH. Optional
     ?target=<cdp target id>; default = newest page. Messages to the client:
       {"type": "frame", "data": "<base64 jpeg>", "metadata": {...}}
       {"type": "status", "message": "..."}   (info/errors before close)
     Client messages are ignored (view-only).
     """
-    if not _validate_ws_token(token):
+    from app.auth import authenticate_websocket
+
+    if not await authenticate_websocket(websocket, token=token, ticket=ticket):
         await websocket.close(code=4001, reason="Invalid token")
         return
 

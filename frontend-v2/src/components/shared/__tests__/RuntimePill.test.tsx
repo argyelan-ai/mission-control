@@ -11,6 +11,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RuntimePill } from "../RuntimePill";
 import { api } from "@/lib/api";
 import type { Agent } from "@/lib/types";
+import { C } from "@/lib/colors";
 
 function renderWithQuery(ui: React.ReactElement) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -85,8 +86,7 @@ describe("RuntimePill", () => {
     // hermes is separated from openai_compatible by brightness, not by hue)
     const dot = Array.from(container.querySelectorAll("span")).find(
       (el) =>
-        el.getAttribute("style")?.includes("193, 190, 178") ||
-        el.getAttribute("style")?.toLowerCase().includes("#c1beb2"),
+        el.getAttribute("style")?.includes(C.accentDeep),
     );
     expect(dot, "expected a span with the hermes accent-deep color #C1BEB2").toBeDefined();
     expect(dot).toBeTruthy();

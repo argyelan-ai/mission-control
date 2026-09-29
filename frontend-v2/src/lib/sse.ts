@@ -1,11 +1,19 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { getToken } from "./api";
+import { sseUrls } from "./api";
+import { withStreamTicket } from "./streamTicket";
 
 interface SSEOptions {
   onEvent?: (event: string, data: Record<string, unknown>) => void;
   onError?: (error: Event) => void;
+  /** Fired every time `connect()` runs with a connection ALREADY in flight —
+   *  i.e. after a drop, a mobile resume, or a stale-stream reconnect, never on
+   *  the first mount. This is the only honest "the stream may have skipped
+   *  events" signal: the backend seeds a fresh tailer at EOF and never replays
+   *  what happened while we were away, so consumers must refetch. Do NOT turn
+   *  this into "every focus event": see the note on the chat-history query. */
+  onReconnect?: () => void;
   enabled?: boolean;
 }
 
@@ -34,6 +42,8 @@ const NAMED_EVENTS = [
   "group.status_changed", "group.member_changed",
   "chat.message", "chat_event", "memory.created", "project.updated", "system.alert",
   "system.rpc_disconnected", "system.rpc_reconnected", "system.slow_response", "system.component_down",
+  // /agents/{id}/terminal-events/stream (useTerminalRemountSignal)
+  "terminal_remount",
 ] as const;
 
 // Backoff constants for reconnect (M14 — iOS kills SSE on app/tab switch)
@@ -42,31 +52,43 @@ const BACKOFF_MAX_MS = 30_000;
 const STALE_THRESHOLD_MS = 10_000; // reconnect if no message within this window after becoming visible
 
 export function useSSE(url: string, options: SSEOptions = {}) {
-  const { onEvent, onError, enabled = true } = options;
+  const { onEvent, onError, onReconnect, enabled = true } = options;
   const esRef = useRef<EventSource | null>(null);
   const onEventRef = useRef(onEvent);
   const onErrorRef = useRef(onError);
+  const onReconnectRef = useRef(onReconnect);
   const retryCountRef = useRef(0);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastMessageAtRef = useRef<number>(Date.now());
   const destroyedRef = useRef(false);
+  // True once a stream was open at least once in this effect — survives the
+  // gap while a reconnect is still fetching its ticket, so onReconnect fires
+  // for that reconnect even though esRef is momentarily null.
+  const hadConnectionRef = useRef(false);
 
   useEffect(() => {
     onEventRef.current = onEvent;
     onErrorRef.current = onError;
+    onReconnectRef.current = onReconnect;
   });
 
   useEffect(() => {
     if (!enabled || !url) return;
 
     destroyedRef.current = false;
+    hadConnectionRef.current = false;
 
-    function buildUrl() {
-      const token = getToken();
-      return `${url}${url.includes("?") ? "&" : "?"}token=${token}`;
-    }
+    // Bumped by every connect() and by cleanup: a ticket fetch that resolves
+    // after a newer connect (or after unmount) must not open a stale stream.
+    let generation = 0;
 
     function attachHandlers(es: EventSource) {
+      // A stream that opened is healthy again: start the next backoff from
+      // the base delay. Quiet streams only get comment pings (no event), so
+      // resetting on events alone let the delay creep up to the 30 s cap.
+      es.onopen = () => {
+        if (esRef.current === es) retryCountRef.current = 0;
+      };
       es.onmessage = (e: MessageEvent) => {
         lastMessageAtRef.current = Date.now();
         retryCountRef.current = 0;
@@ -93,11 +115,14 @@ export function useSSE(url: string, options: SSEOptions = {}) {
       });
 
       es.onerror = (e: Event) => {
+        if (esRef.current !== es) return; // a stale, already replaced stream
         onErrorRef.current?.(e);
-        // EventSource natively reconnects for transient errors, but iOS often
-        // hard-kills the connection when the app goes to background — in that
-        // case readyState stays CLOSED and no reconnect fires. Detect and retry
-        // with exponential backoff.
+        // The native EventSource retry would replay the SAME URL — whose
+        // single-use stream ticket is already spent, so it can only 401.
+        // Close it and reconnect ourselves with a fresh ticket (exponential
+        // backoff). This also covers iOS hard-killing the connection in the
+        // background (readyState CLOSED, no native retry).
+        es.close();
         scheduleReconnect();
       };
     }
@@ -122,13 +147,35 @@ export function useSSE(url: string, options: SSEOptions = {}) {
 
     function connect() {
       if (destroyedRef.current) return;
+      // A connection already in flight at entry means this is NOT the first
+      // mount: something dropped or was killed (iOS background, container
+      // restart, silent stall). Everything the backend broadcast in the
+      // meantime is gone — the tailer starts a fresh consumer at EOF and never
+      // replays — so this is the exact moment consumers must refetch.
+      const hadConnection = hadConnectionRef.current;
       if (esRef.current) {
         esRef.current.close();
         esRef.current = null;
       }
-      const es = new EventSource(buildUrl(), { withCredentials: true });
-      esRef.current = es;
-      attachHandlers(es);
+      const myGeneration = ++generation;
+      // Every connect — first mount and every reconnect — gets its own
+      // single-use ticket. The login token never goes into the URL.
+      withStreamTicket(url).then(
+        (ticketUrl) => {
+          if (destroyedRef.current || myGeneration !== generation) return;
+          const es = new EventSource(ticketUrl, { withCredentials: true });
+          esRef.current = es;
+          hadConnectionRef.current = true;
+          attachHandlers(es);
+          if (hadConnection) onReconnectRef.current?.();
+        },
+        () => {
+          // Ticket fetch failed (network, backend restarting, session gone):
+          // retry with backoff like any other dropped connection.
+          if (destroyedRef.current || myGeneration !== generation) return;
+          scheduleReconnect();
+        },
+      );
     }
 
     // iOS M14: reconnect when tab becomes visible again and the connection is
@@ -148,6 +195,7 @@ export function useSSE(url: string, options: SSEOptions = {}) {
 
     return () => {
       destroyedRef.current = true;
+      generation += 1;
       document.removeEventListener("visibilitychange", onVisibilityChange);
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
       esRef.current?.close();
@@ -157,16 +205,13 @@ export function useSSE(url: string, options: SSEOptions = {}) {
 }
 
 export function useAgentStream(onEvent: SSEOptions["onEvent"]) {
-  const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-  useSSE(`${BASE_URL}/api/v1/agents/stream`, { onEvent });
+  useSSE(sseUrls.agents(), { onEvent });
 }
 
 export function useActivityStream(onEvent: SSEOptions["onEvent"]) {
-  const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-  useSSE(`${BASE_URL}/api/v1/activity/stream`, { onEvent });
+  useSSE(sseUrls.activity(), { onEvent });
 }
 
 export function useApprovalStream(onEvent: SSEOptions["onEvent"]) {
-  const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-  useSSE(`${BASE_URL}/api/v1/approvals/stream`, { onEvent });
+  useSSE(sseUrls.approvals(), { onEvent });
 }

@@ -102,7 +102,13 @@ LAST_TASK_FILE = LOG_DIR / "last-task-id"
 # file wins over stale process env). poll.sh writes it for the claude fleet; this
 # bridge MUST re-provide it BEFORE each paste or the agent's own `mc ack|finish`
 # fail. Same 3-key contract as docker/shared/poll.sh.
-MC_CONTEXT_ENV_PATH = os.environ.get("MC_CONTEXT_ENV_PATH", "/tmp/mc-context.env")
+# W5 (2026-09-13): per-agent file instead of the shared /tmp/mc-context.env —
+# host bridges all writing one file meant "last writer wins" set TASK_ID and
+# X_DISPATCH_ATTEMPT_ID for EVERY agent (2026-09-13 incident: Hermes' card id
+# leaked into other agents' context, progress landed on the wrong card).
+# Default = this agent's config dir; MC_CONTEXT_ENV_PATH still wins, and the
+# mc CLI falls back to the legacy /tmp path when the variable is unset.
+MC_CONTEXT_ENV_PATH = os.environ.get("MC_CONTEXT_ENV_PATH") or str(CONFIG_DIR / "mc-context.env")
 
 # Poll / heartbeat cadence (env-overridable).
 DISPATCH_POLL_INTERVAL = int(os.environ.get("GROK_DISPATCH_POLL_INTERVAL", "5"))
@@ -231,9 +237,15 @@ def load_env_from_file(env_path: Path) -> dict[str, str]:
 
     Returns os.environ.copy() merged with file contents and HOME forced to
     HOME_DIR (so the grok TUI resolves ~/.grok/auth.json on the host).
+
+    W5 (2026-09-13): MC_CONTEXT_ENV_PATH defaults to this agent's own context
+    file, set BEFORE agent.env is merged — an explicit value from the bridge
+    env or an agent.env assignment below wins over the default. Without it the
+    pane's `mc` falls back to the legacy shared /tmp/mc-context.env.
     """
     env = os.environ.copy()
     env["HOME"] = str(HOME_DIR)
+    env.setdefault("MC_CONTEXT_ENV_PATH", MC_CONTEXT_ENV_PATH)
     if not env_path.exists():
         return env
     with env_path.open() as f:
@@ -264,6 +276,8 @@ def write_task_context_env(task: dict, path: str = MC_CONTEXT_ENV_PATH) -> bool:
             f.write(f"TASK_ID={task.get('id') or ''}\n")
             f.write(f"BOARD_ID={task.get('board_id') or ''}\n")
             f.write(f"X_DISPATCH_ATTEMPT_ID={task.get('dispatch_attempt_id') or ''}\n")
+        # W5: per-agent file carries attempt ids — keep it owner-only.
+        os.chmod(path, 0o600)
         return True
     except OSError as e:  # noqa: BLE001 — context file is best-effort
         log.warning("mc-context.env write failed: %s", e)
@@ -325,10 +339,17 @@ def _grok_launch_shell_cmd() -> str:
     # would silently fall back to its localhost default — correct on this host,
     # but only by accident. Export it explicitly (agent.env wins if it ever
     # carries the key) so the agent's own `mc inbox` calls are deterministic.
+    # MC_CONTEXT_ENV_PATH: same belt — deliver_task_context's set-environment
+    # (session env) does NOT survive a session restart (a new tmux session
+    # inherits the SERVER env, not the old session's), so the window shell must
+    # default-export the per-agent path itself (hermes entrypoint pattern).
+    # agent.env wins if it ever carries the key.
     grok = " ".join(shlex.quote(c) for c in _grok_launch_cmd())
     return (
         f"set -a; . {shlex.quote(str(ENV_FILE))}; set +a; "
         f': "${{MC_API_URL:=http://localhost:8000}}"; export MC_API_URL; '
+        f': "${{MC_CONTEXT_ENV_PATH:={MC_CONTEXT_ENV_PATH}}}"; '
+        f"export MC_CONTEXT_ENV_PATH; "
         f"exec {grok}"
     )
 
@@ -1061,12 +1082,16 @@ def reset_tui_session() -> None:
 def deliver_task_context(task: dict) -> None:
     """Publish the task's MC context so the agent's own `mc` calls resolve it.
 
-    Writes /tmp/mc-context.env (the `mc` CLI reads it first) AND sets the same
-    3 keys in the tmux session env (belt-and-suspenders: new shells grok spawns
-    for bash tools inherit them). Called BEFORE paste_and_submit so `mc ack` in
-    the very first line of the agent's turn already has its context.
+    Writes this agent's MC_CONTEXT_ENV_PATH file (the `mc` CLI reads it first)
+    AND sets the same 3 keys in the tmux session env (belt-and-suspenders: new
+    shells grok spawns for bash tools inherit them). W5: the session env ALSO
+    carries MC_CONTEXT_ENV_PATH itself — without it the agent's `mc` falls back
+    to the legacy /tmp path and would read a DIFFERENT file than the bridge
+    wrote. Called BEFORE paste_and_submit so `mc ack` in the very first line of
+    the agent's turn already has its context.
     """
     write_task_context_env(task)
+    _tmux(["set-environment", "-t", SESSION, "MC_CONTEXT_ENV_PATH", MC_CONTEXT_ENV_PATH])
     ctx = {
         "TASK_ID": str(task.get("id") or ""),
         "BOARD_ID": str(task.get("board_id") or ""),
