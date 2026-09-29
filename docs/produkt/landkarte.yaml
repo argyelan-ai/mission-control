@@ -475,10 +475,11 @@ features:
       # detail, lifecycle (start/stop/restart/archive/restore/reset), config,
       # skills, plugins, MCP, metrics, provision, local memory, SSE stream.
       # The chat and terminal slices are also used by F-sessions (listed there).
-      # Review note: GET /agents/runtime-status and POST /agents/{id}/reset-token
-      # have no page caller (tests / manual operator use only). GET
-      # /agents/{id}/metrics(/summary) has a client helper but no caller
-      # (the runtimes cockpit reads /hosts/{id}/metrics instead).
+      # Review note: GET /agents/{id}/metrics(/summary) has a client helper
+      # but no caller (the runtimes cockpit reads /hosts/{id}/metrics
+      # instead). POST /agents/{id}/reset-token has no page caller either; it
+      # is the documented token-rotation path (SECURITY.md), kept on purpose.
+      # GET /agents/runtime-status was removed in E5.
       - "* /api/v1/agents"
       - "* /api/v1/agents/*"
       # Wizard: template list/create, edit, instantiate.
@@ -686,19 +687,6 @@ internal:
   # endpoints live under /api/v1/agent/* (covered above, ADR-009).
   - "endpoint:GET /api/v1/deploy/services"
   - "endpoint:GET /api/v1/deploy/history"
-  # Research router (Phase 29 task-based research, backend/app/routers/
-  # research.py): the planner flow it served was disabled 2026-04-11 (comment
-  # on api.research in frontend-v2/src/lib/api.ts) and no page or script
-  # calls these endpoints today; the router docstring defers the frontend
-  # update to Phase 31.
-  - "endpoint:* /api/v1/research"
-  - "endpoint:* /api/v1/research/*"
-  # Global CLI session list + bridge restart: client helpers exist
-  # (api.cliSessions.list/restart) but no component calls them today.
-  - "endpoint:* /api/v1/cli-sessions*"
-  # Single-agent container state GET: no caller (the sessions sidebar reads
-  # container_state from GET /docker-sessions/agents, mapped in F-sessions).
-  - "endpoint:GET /api/v1/docker-sessions/{agent_id}/state"
   # Voice-worker machine bridges (jarvis_core mc_client, VAULT_READ agent
   # scope, ADR-038/061): publish to Redis; the frontend reads the cards via
   # WS /vault/voice-display and highlights via WS /vault/voice-highlight.
@@ -759,8 +747,8 @@ internal:
   # Machine-written notification rows; no router reads them (surfaces go
   # through activity events and system alerts).
   - "table:notifications"
-  # Planner messages: written by the disabled research flow, deleted
-  # alongside projects (routers/boards.py).
+  # Planner messages: written by the planner/research flows (both removed),
+  # deleted alongside projects (routers/boards.py).
   - "table:planner_messages"
   # Dispatch attempt audit log (services/dispatch_attempt_audit.py).
   - "table:task_attempt_audit"

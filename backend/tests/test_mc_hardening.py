@@ -173,24 +173,6 @@ async def test_agent_has_runtime_fields(make_board, make_agent):
     assert agent.last_dispatch_error is None
 
 
-@pytest.mark.anyio
-async def test_runtime_status_endpoint(auth_client, make_board, make_agent):
-    """GET /agents/runtime-status returns compact runtime info."""
-    board = await make_board()
-    agent = await make_agent(name="TestBot", board_id=board.id)
-
-    resp = await auth_client.get("/api/v1/agents/runtime-status")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert len(data) >= 1
-    entry = data[0]
-    assert "run_state" in entry
-    assert "last_trigger_at" in entry
-    assert "last_dispatch_error" in entry
-    assert "provision_status" in entry
-    assert entry["run_state"] == "idle"
-
-
 # ── Readiness Gate Tests ─────────────────────────────────────────────────
 
 @pytest.mark.anyio

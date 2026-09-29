@@ -1,4 +1,4 @@
-"""Tests for /api/v1/agents/{id}/cli-sessions, /api/v1/cli-sessions and terminal endpoints."""
+"""Tests for /api/v1/agents/{id}/cli-sessions and terminal endpoints."""
 import uuid
 from unittest.mock import patch
 
@@ -129,72 +129,6 @@ async def test_cli_input_requires_text(auth_client: AsyncClient):
         fastapi_app.dependency_overrides.pop(cli_mod._get_cli_agent, None)
 
     assert resp.status_code == 400
-
-
-# ── Tests for GET /api/v1/cli-sessions (global endpoint) ─────────────────────
-
-
-@pytest.mark.anyio
-async def test_global_cli_sessions_happy_path(auth_client: AsyncClient):
-    """GET /cli-sessions: bridge returns sessions, agent in DB → enriched response with agent_id and agent_name."""
-    # Create agent in DB — name resolves to slug "freecode-agent"
-    agent_id = uuid.uuid4()
-    async with AsyncSession(test_engine, expire_on_commit=False) as s:
-        agent = Agent(id=agent_id, name="Freecode Agent", agent_runtime="cli-bridge")
-        s.add(agent)
-        await s.commit()
-
-    bridge_sessions = [
-        {"task_id": "abc12345", "session": "freecode-agent-abc12345", "elapsed_seconds": 42}
-    ]
-
-    with patch("app.routers.cli_terminal._bridge_get") as mock_get:
-        mock_get.return_value = bridge_sessions
-        resp = await auth_client.get("/api/v1/cli-sessions")
-
-    assert resp.status_code == 200
-    data = resp.json()
-    assert isinstance(data, list)
-    assert len(data) == 1
-    assert data[0]["agent_id"] == str(agent_id)
-    assert data[0]["agent_name"] == "Freecode Agent"
-    assert data[0]["task_id"] == "abc12345"
-
-
-@pytest.mark.anyio
-async def test_global_cli_sessions_null_agent(auth_client: AsyncClient):
-    """GET /cli-sessions: slug doesn't match any agent → agent_id=null, agent_name=slug."""
-    bridge_sessions = [
-        {"task_id": "xyz99999", "session": "unknown-agent-xyz99999", "elapsed_seconds": 10}
-    ]
-
-    with patch("app.routers.cli_terminal._bridge_get") as mock_get:
-        mock_get.return_value = bridge_sessions
-        resp = await auth_client.get("/api/v1/cli-sessions")
-
-    assert resp.status_code == 200
-    data = resp.json()
-    assert len(data) == 1
-    assert data[0]["agent_id"] is None
-    assert data[0]["agent_name"] == "unknown-agent"
-
-
-@pytest.mark.anyio
-async def test_global_cli_sessions_requires_auth(client: AsyncClient):
-    """GET /cli-sessions without token -> 401."""
-    resp = await client.get("/api/v1/cli-sessions")
-    assert resp.status_code == 401
-
-
-@pytest.mark.anyio
-async def test_global_cli_sessions_bridge_down(auth_client: AsyncClient):
-    """GET /cli-sessions: bridge returns None → empty list."""
-    with patch("app.routers.cli_terminal._bridge_get") as mock_get:
-        mock_get.return_value = None
-        resp = await auth_client.get("/api/v1/cli-sessions")
-
-    assert resp.status_code == 200
-    assert resp.json() == []
 
 
 # ── Tests for GET /api/v1/agents/{id}/cli-sessions (agent-scoped) ────────────

@@ -450,31 +450,6 @@ async def agents_metrics_comparison(
     ]
 
 
-@router.get("/agents/runtime-status")
-async def agents_runtime_status(
-    session: AsyncSession = Depends(get_session),
-    current_user=Depends(require_user),
-):
-    """Compact runtime status of all agents for board observability."""
-    result = await session.exec(select(Agent).where(Agent.board_id.isnot(None)).order_by(Agent.name))  # type: ignore[arg-type]
-    agents = result.all()
-    return [
-        {
-            "agent_id": str(a.id),
-            "name": a.name,
-            "emoji": a.emoji,
-            "status": a.status,
-            "run_state": a.run_state,
-            "current_task_id": str(a.current_task_id) if a.current_task_id else None,
-            "last_seen_at": a.last_seen_at.isoformat() if a.last_seen_at else None,
-            "last_trigger_at": a.last_trigger_at.isoformat() if a.last_trigger_at else None,
-            "last_dispatch_error": a.last_dispatch_error,
-            "provision_status": a.provision_status,
-        }
-        for a in agents
-    ]
-
-
 # ── Specialized Agents Setup (MUST come before {agent_id} routes) ─────────────
 
 SPECIALIZED_AGENTS_SPECS = [

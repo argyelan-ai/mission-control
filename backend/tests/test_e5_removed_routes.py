@@ -26,6 +26,13 @@ REMOVED = [
     ("GET", "/api/v1/discord/config"),
     ("POST", "/api/v1/discord/agents/00000000-0000-0000-0000-000000000001/channel"),
     ("POST", "/api/v1/agents/00000000-0000-0000-0000-000000000001/discord-channel"),
+    # CLI-session leftovers, research router (row 4, row 7).
+    ("GET", "/api/v1/cli-sessions"),
+    ("POST", "/api/v1/cli-sessions/restart"),
+    ("GET", "/api/v1/docker-sessions/00000000-0000-0000-0000-000000000001/state"),
+    ("GET", "/api/v1/research"),
+    ("POST", "/api/v1/research/start"),
+    ("GET", "/api/v1/research/00000000-0000-0000-0000-000000000001/chat"),
 ]
 
 
@@ -46,6 +53,8 @@ def test_removed_prefixes_are_not_in_the_router_table():
         "/api/v1/webhooks",
         "/api/v1/meetings",
         "/api/v1/discord",
+        "/api/v1/cli-sessions",
+        "/api/v1/research",
     )
     left = sorted(
         getattr(r, "path", "") for r in app.routes if getattr(r, "path", "").startswith(prefixes)
@@ -53,7 +62,20 @@ def test_removed_prefixes_are_not_in_the_router_table():
     left += sorted(
         getattr(r, "path", "") for r in app.routes if getattr(r, "path", "").endswith("/discord-channel")
     )
+    removed_exact = {
+        "/api/v1/agents/runtime-status",
+        "/api/v1/docker-sessions/{agent_id}/state",
+    }
+    left += sorted(p for p in (getattr(r, "path", "") for r in app.routes) if p in removed_exact)
     assert not left, f"removed routes still registered: {left}"
+
+
+@pytest.mark.asyncio
+async def test_runtime_status_is_gone(auth_client: AsyncClient):
+    # The path now falls through to GET /agents/{agent_id}, which rejects the
+    # non-UUID id — the removed handler must not answer any more.
+    resp = await auth_client.get("/api/v1/agents/runtime-status")
+    assert resp.status_code in (404, 422), resp.status_code
 
 
 @pytest.mark.asyncio

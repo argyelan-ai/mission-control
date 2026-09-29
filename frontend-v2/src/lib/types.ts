@@ -1275,18 +1275,6 @@ export interface PlannerFinalizeResponse {
   tasks: Task[];
 }
 
-// ── Research ──────────────────────────────────────────────────────────────────
-
-export interface ResearchStartResponse {
-  project: Project;
-  research_agent: { id: string; name: string; emoji: string | null } | null;
-}
-
-export interface ResearchSaveResponse {
-  project: Project;
-  knowledge_entry: BoardMemory;
-}
-
 // ── Cron Scheduler ───────────────────────────────────────────────────────────
 
 export interface ScheduledJob {
@@ -2799,18 +2787,6 @@ export interface NodePairingCodeResponse {
   install_command: string;
   /** P2 — fehlt bei altem Backend → UI fällt auf install_command zurück. */
   install_commands?: NodeInstallCommand[];
-}
-
-// ── CLI Sessions ─────────────────────────────────────────────────────────────
-export interface CliGlobalSession {
-  task_id: string;
-  session: string;
-  elapsed_seconds: number;
-  permanent?: boolean;
-  shell?: boolean;
-  agent_slug: string;
-  agent_id: string | null;
-  agent_name: string;
 }
 
 // ── SSE Event ──────────────────────────────────────────────────────────────────

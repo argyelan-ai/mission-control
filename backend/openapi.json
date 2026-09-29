@@ -988,15 +988,6 @@
         ]
       }
     },
-    "/api/v1/agents/runtime-status": {
-      "get": {
-        "operationId": "agents_runtime_status_api_v1_agents_runtime_status_get",
-        "summary": "Agents Runtime Status",
-        "tags": [
-          "agents"
-        ]
-      }
-    },
     "/api/v1/agents/setup-coordination": {
       "post": {
         "operationId": "setup_agent_coordination_api_v1_agents_setup_coordination_post",
@@ -2272,24 +2263,6 @@
         ]
       }
     },
-    "/api/v1/cli-sessions": {
-      "get": {
-        "operationId": "list_all_cli_sessions_api_v1_cli_sessions_get",
-        "summary": "List All Cli Sessions",
-        "tags": [
-          "cli-terminal"
-        ]
-      }
-    },
-    "/api/v1/cli-sessions/restart": {
-      "post": {
-        "operationId": "restart_bridge_api_v1_cli_sessions_restart_post",
-        "summary": "Restart Bridge",
-        "tags": [
-          "cli-terminal"
-        ]
-      }
-    },
     "/api/v1/cli-tools": {
       "get": {
         "operationId": "list_cli_tools_api_v1_cli_tools_get",
@@ -2387,15 +2360,6 @@
       "get": {
         "operationId": "list_docker_session_agents_api_v1_docker_sessions_agents_get",
         "summary": "List Docker Session Agents",
-        "tags": [
-          "cli-terminal"
-        ]
-      }
-    },
-    "/api/v1/docker-sessions/{agent_id}/state": {
-      "get": {
-        "operationId": "get_container_state_api_v1_docker_sessions__agent_id__state_get",
-        "summary": "Get Container State",
         "tags": [
           "cli-terminal"
         ]
@@ -3827,60 +3791,6 @@
         "summary": "Sync Repo",
         "tags": [
           "repos"
-        ]
-      }
-    },
-    "/api/v1/research": {
-      "get": {
-        "operationId": "list_research_api_v1_research_get",
-        "summary": "List Research",
-        "tags": [
-          "research"
-        ]
-      }
-    },
-    "/api/v1/research/start": {
-      "post": {
-        "operationId": "start_research_api_v1_research_start_post",
-        "summary": "Start Research",
-        "tags": [
-          "research"
-        ]
-      }
-    },
-    "/api/v1/research/{project_id}": {
-      "delete": {
-        "operationId": "delete_research_api_v1_research__project_id__delete",
-        "summary": "Delete Research",
-        "tags": [
-          "research"
-        ]
-      }
-    },
-    "/api/v1/research/{project_id}/chat": {
-      "get": {
-        "operationId": "get_research_chat_api_v1_research__project_id__chat_get",
-        "summary": "Get Research Chat",
-        "tags": [
-          "research"
-        ]
-      }
-    },
-    "/api/v1/research/{project_id}/message": {
-      "post": {
-        "operationId": "send_research_message_api_v1_research__project_id__message_post",
-        "summary": "Send Research Message",
-        "tags": [
-          "research"
-        ]
-      }
-    },
-    "/api/v1/research/{project_id}/save": {
-      "post": {
-        "operationId": "save_research_api_v1_research__project_id__save_post",
-        "summary": "Save Research",
-        "tags": [
-          "research"
         ]
       }
     },
