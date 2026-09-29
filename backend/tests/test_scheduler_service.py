@@ -425,6 +425,102 @@ class TestSchedulerLockLifecycle:
         assert await fake_redis.get(RedisKeys.scheduler_lock()) == "alive-owner"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "heartbeat_remaining_life,expected_total_delay",
+        [
+            (1.0, 3),    # crash right before a heartbeat refresh — caught on attempt 2
+            (2.9, 3),
+            (3.1, 6),    # Rex-Review B2: v1 of this fix (only attempt 1 fast) missed
+            (5.0, 6),    # exactly this range — attempt 2 still saw a live heartbeat
+            (12.0, 12),  # and fell back to the full 15s wait, landing at 18s again
+            (14.9, 15),  # worst realistic case: crash right after a refresh
+        ],
+    )
+    async def test_acquire_lock_crash_takeover_scales_with_heartbeat_remaining_life(
+        self, fake_redis, heartbeat_remaining_life, expected_total_delay,
+    ):
+        """Reproduces the live-measured Absturzfall from 11.09.2026 (Karte
+        70d6b417, Restposten aus #506) AND Rex-Review B2 on PR #509: the v1
+        fix (only the first retry got the 3s treatment) deleted the
+        heartbeat on the FIRST fake_sleep call unconditionally — meaning
+        the old test passed no matter how long the heartbeat actually had
+        left, which is exactly why it missed that attempt 2 (at t=3s)
+        still sees a LIVE heartbeat in the common case (Redis TTL 10-15s
+        remaining at crash time, since the heartbeat refreshes every
+        LOCK_HEARTBEAT_INTERVAL_SECONDS=5s with a
+        LOCK_HEARTBEAT_TTL_SECONDS=15s TTL) and falls back to the slow 15s
+        retry — reproducing the exact 18s cliff the card wanted gone.
+
+        This version models the heartbeat's remaining life explicitly: the
+        heartbeat key is deleted only once the SUM of elapsed retry delay
+        reaches ``heartbeat_remaining_life`` — i.e. it expires on its own
+        Redis TTL, not on the first sleep call regardless of duration.
+
+        DoD b7d29be3 / Karte 70d6b417 want a takeover "under 10s ab
+        Absturz". As documented in scheduler.py and raised with the card
+        author via `mc ask`: with the heartbeat TTL left untouched (scope:
+        OUT), that is structurally unreachable whenever the heartbeat's
+        remaining life at crash time exceeds ~7s — which, given the 15s
+        TTL / 5s refresh interval, is most crashes (10-15s remaining is
+        the norm, not the exception). What IS achieved and asserted here:
+        takeover within LOCK_ACQUIRE_RETRY_DELAY_FIRST_SECONDS (3s) of the
+        heartbeat's actual expiry, worst case ~15s total (was: a flat 18s
+        regardless of remaining life).
+        """
+        from app.redis_client import RedisKeys
+        from app.services.scheduler import SchedulerService
+
+        await fake_redis.set(RedisKeys.scheduler_lock(), "dead-owner", ex=120)
+        await fake_redis.set(RedisKeys.scheduler_lock_heartbeat(), "dead-owner", ex=15)
+
+        svc = SchedulerService.__new__(SchedulerService)
+        svc._owner_id = "new-owner"
+
+        total_delay = 0.0
+        heartbeat_deleted = False
+
+        async def fake_sleep(seconds):
+            nonlocal total_delay, heartbeat_deleted
+            total_delay += seconds
+            if not heartbeat_deleted and total_delay >= heartbeat_remaining_life:
+                await fake_redis.delete(RedisKeys.scheduler_lock_heartbeat())
+                heartbeat_deleted = True
+
+        with patch("app.redis_client.get_redis", new=AsyncMock(return_value=fake_redis)), \
+             patch("app.services.scheduler.asyncio.sleep", new=fake_sleep):
+            result = await svc._acquire_lock()
+
+        assert result is True
+        assert total_delay == expected_total_delay, (
+            f"heartbeat remaining life {heartbeat_remaining_life}s -> expected "
+            f"takeover after {expected_total_delay}s of retry delay, got {total_delay}s"
+        )
+        assert await fake_redis.get(RedisKeys.scheduler_lock()) == "new-owner"
+
+    @pytest.mark.asyncio
+    async def test_acquire_lock_clean_case_unchanged_by_backoff(self, fake_redis):
+        """Regression guard for the backoff change above: the clean-stop
+        case (old owner's stop() ran, lock+heartbeat both gone immediately)
+        must still take over on the very first attempt with zero retry
+        delay — the new first-retry constant must never apply when there's
+        nothing to retry."""
+        from app.redis_client import RedisKeys
+        from app.services.scheduler import SchedulerService
+
+        # Nothing in Redis at all — mirrors a clean stop() that already
+        # deleted both keys before the new worker's first attempt.
+        svc = SchedulerService.__new__(SchedulerService)
+        svc._owner_id = "new-owner"
+
+        with patch("app.redis_client.get_redis", new=AsyncMock(return_value=fake_redis)), \
+             patch("app.services.scheduler.asyncio.sleep", new=AsyncMock()) as mock_sleep:
+            result = await svc._acquire_lock()
+
+        assert result is True
+        assert mock_sleep.call_count == 0
+        assert await fake_redis.get(RedisKeys.scheduler_lock()) == "new-owner"
+
+    @pytest.mark.asyncio
     async def test_start_skips_when_lock_unavailable(self):
         """If _acquire_lock is False → start() returns without starting APScheduler."""
         from app.services.scheduler import SchedulerService
