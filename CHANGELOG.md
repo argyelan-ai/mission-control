@@ -112,6 +112,24 @@ follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
   and if it is hit, the warning fires once per state with the count and the
   root instead of an identical line every 600 s.
 
+### Removed
+- **The news/content vertical is gone — migration `0206_drop_news_tables`
+  DROPS its tables.** The optional news vertical (news crawler, shorts and
+  storyboards, trend feed, newsletter, video performance) was retired; its
+  models only stayed in core to keep the Alembic chain identical. Dropped:
+  `news_sources`, `news_articles`, `news_post_schedules`, `newsletter_issues`,
+  `storyboards`, `trend_signals`, `viral_shorts_settings`,
+  `video_performance`, plus a raw `news_config` table if present, and the
+  column `content_pipelines.rss_source_id` (its FK pointed into
+  `news_sources`; `content_pipelines` itself stays — bench drafts and X-post
+  approvals use it). **If your installation still holds data in these
+  tables, dump them before upgrading** (`pg_dump -t <table>`); the downgrade
+  recreates the schema empty. Also removed: the `/content` and `/news` nav
+  entries (their pages were never part of this repository — dead links),
+  the `storyboard-images` Files root, `NEWSLETTER_BRAND` / `NEWS_REPO_PATH`
+  settings and compose passthroughs (safe to delete from `.env`; unknown
+  keys are ignored), and `scripts/backfill_images.py`.
+
 ## [0.2.0] - 2026-08-06
 
 **Release highlights:** problem-first README + 18-page user handbook ·

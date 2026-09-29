@@ -21,8 +21,8 @@ import { FilesSearchFilters, type FilesSearchFilterState } from "@/components/fi
 import { fileIcon, fileIconColor, humanSize, mtimeToIso } from "@/components/files/fileUtils";
 
 // Roots where a filename tells you almost nothing (screenshots, generated
-// storyboard frames, misc media) — thumbnails beat a UUID-ish name list.
-const GRID_DEFAULT_ROOTS = new Set(["media", "mcp-screenshots", "storyboard-images"]);
+// misc media) — thumbnails beat a UUID-ish name list.
+const GRID_DEFAULT_ROOTS = new Set(["media", "mcp-screenshots"]);
 
 function viewStorageKey(rootKey: string) {
   return `mc:files:view:${rootKey}`;

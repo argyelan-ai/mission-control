@@ -1035,7 +1035,7 @@ async def execute_review_decision(
         if task.status == "done":
             await _merge_pr_if_exists(session, task, actor_agent)
 
-            # Vertical hooks (news_studio pipeline advance, bench_studio artifact
+            # Vertical hooks (e.g. bench_studio artifact
             # collection). The PATCH routers (tasks.py, agent_task_status.py) fire
             # these on status=done — this review-approve path is the third way a
             # task reaches done and skipped them (2026-07-12 incident: bench entry

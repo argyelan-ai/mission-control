@@ -97,7 +97,6 @@ _ROOTS: tuple[FsRoot, ...] = (
     FsRoot("mcp-screenshots", "Screenshots", "Camera", "mcp-screenshots", True, False, deletable=True),
     FsRoot("media", "Media", "Image", "media", True, False, deletable=True),
     FsRoot("shared-artifacts", "Shared Artifacts", "Boxes", "shared-artifacts", True, False, deletable=True),
-    FsRoot("storyboard-images", "Storyboards", "Clapperboard", "storyboard-images", True, False, deletable=True),
     # Docker named volume (mc-playwright sidecar) — browse/download only, no Finder.
     FsRoot(
         "shared-deliverables", "Sidecar Output", "HardDrive", "",
@@ -122,7 +121,7 @@ DELETABLE_KEYS: frozenset[str] = frozenset(r.key for r in _ROOTS if r.deletable)
 # Import-time invariants (policy-by-assertion, not policy-by-omission):
 # a fat-fingered deletable=True on vault/attachments must fail at import (CI).
 assert DELETABLE_KEYS == {
-    "deliverables", "media", "shared-artifacts", "mcp-screenshots", "storyboard-images",
+    "deliverables", "media", "shared-artifacts", "mcp-screenshots",
 }, f"DELETABLE_KEYS drifted from policy: {sorted(DELETABLE_KEYS)}"
 assert not (SENSITIVE_KEYS & DELETABLE_KEYS), "a sensitive root must never be deletable"
 assert DELETABLE_KEYS.isdisjoint(

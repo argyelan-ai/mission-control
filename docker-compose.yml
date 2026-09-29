@@ -229,9 +229,8 @@ services:
       # hinzufuegen"); kommagetrennt = eine Zeile je Netz (Tailscale + LAN).
       # Ohne Passthrough las das Backend die Variable nie (Live-Fund 03.09.2026).
       MC_NODE_AGENT_BASE_URL: ${MC_NODE_AGENT_BASE_URL:-}
-      # Operator identity + newsletter branding (see .env.example)
+      # Operator identity (see .env.example)
       OPERATOR_NAME: ${OPERATOR_NAME:-Operator}
-      NEWSLETTER_BRAND: ${NEWSLETTER_BRAND:-AI Weekly}
       HOST_SSH_USER: ${HOST_SSH_USER:-}
       # Externally reachable host (Tailscale IP / LAN / DNS) — CORS allowlist +
       # phone-test deep links (ADR-040, replaces hardcoded IPs in product code).
@@ -256,8 +255,6 @@ services:
       GITHUB_OWNER: ${GITHUB_OWNER:-}
       # Repo-name prefixes the visibility monitor keeps private.
       MC_OWNED_REPO_PREFIXES: ${MC_OWNED_REPO_PREFIXES:-mc-,mc-task-,t2-}
-      # Optional: news-site export repo (news deploy endpoint).
-      NEWS_REPO_PATH: ${NEWS_REPO_PATH:-}
       # Voice-Agent: LiveKit-Token-Signing braucht api_key + secret separat.
       # PUBLIC_URL = was der Browser-Client erreicht (vs internal ws://livekit:7880).
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
@@ -483,7 +480,6 @@ services:
       MC_BASE_URL: ${MC_BASE_URL:-http://localhost}
       MC_NODE_AGENT_BASE_URL: ${MC_NODE_AGENT_BASE_URL:-}
       OPERATOR_NAME: ${OPERATOR_NAME:-Operator}
-      NEWSLETTER_BRAND: ${NEWSLETTER_BRAND:-AI Weekly}
       HOST_SSH_USER: ${HOST_SSH_USER:-}
       PUBLIC_HOST: ${PUBLIC_HOST:-}
       EXTRA_CORS_ORIGINS: ${EXTRA_CORS_ORIGINS:-}
@@ -497,7 +493,6 @@ services:
       USE_SUBAGENT_DISPATCH: ${USE_SUBAGENT_DISPATCH:-true}
       GITHUB_OWNER: ${GITHUB_OWNER:-}
       MC_OWNED_REPO_PREFIXES: ${MC_OWNED_REPO_PREFIXES:-mc-,mc-task-,t2-}
-      NEWS_REPO_PATH: ${NEWS_REPO_PATH:-}
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
       LIVEKIT_PUBLIC_URL: ${LIVEKIT_PUBLIC_URL:-}

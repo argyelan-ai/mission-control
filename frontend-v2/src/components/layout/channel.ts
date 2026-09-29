@@ -19,8 +19,6 @@ const PAGE_NAMES: [prefix: string, page: string][] = [
   ["/loops", "LOOPS"],
   ["/schedule", "SCHEDULE"],
   ["/settings", "SETTINGS"],
-  ["/content", "CONTENT"],
-  ["/news", "NEWS"],
   ["/bench", "BENCHMARK"],
   ["/setup", "SETUP"],
 ];

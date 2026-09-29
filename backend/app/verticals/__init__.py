@@ -5,7 +5,7 @@ A vertical is a subpackage of ``app.verticals`` with a
 loads every subpackage that exists; if a directory is missing (e.g. because
 the public release stripped it), the app boots unchanged without that feature.
 
-Contract per vertical (see news_studio as reference):
+Contract per vertical (see bench_studio as reference):
   - ``register(app: FastAPI) -> None`` — include_router / app.mount / hook
     registration. Called once during app bootstrap.
   - Coupling INTO the core exclusively via ``app.verticals.hooks`` —

@@ -473,7 +473,7 @@ app.include_router(usage.router)  # /api/v1/usage/page|pages — E0 page-usage b
 
 # ── Verticals (optional, strippable feature bundles — ADR-044) ──────────────
 # Discovery loads every subpackage of app/verticals/ with register(app).
-# Public release without e.g. news_studio/: app boots unchanged without those routes.
+# A missing vertical directory: app boots unchanged without those routes.
 from app.verticals import register_all as _register_verticals
 _loaded_verticals = _register_verticals(app)
 app.include_router(meetings.router)

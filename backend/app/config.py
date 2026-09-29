@@ -211,10 +211,6 @@ class Settings(BaseSettings):
     # Rendered into SOUL.md/USER.md templates. Set OPERATOR_NAME in .env.
     operator_name: str = "Operator"
 
-    # Public brand/site name used in generated newsletter copy
-    # (header, subject, footer). Set NEWSLETTER_BRAND in .env.
-    newsletter_brand: str = "AI Weekly"
-
     # MC home root — the host's $HOME. The backend container sets HOME_HOST to
     # the host $HOME and bind-mounts ${HOME}/.mc:${HOME}/.mc 1:1, so
     # MC_HOME = home_host/.mc resolves identically in container and on the host.
@@ -298,7 +294,7 @@ class Settings(BaseSettings):
     # NOTE: spark_llm_model is a fallback only. The authoritative model
     # identifier is the ``model_identifier`` column on the matching ``runtimes``
     # row, resolved at call time via ``services.runtime_model_resolver``.
-    # Callers (spark_client, news_ai_worker) auto-detect recipe swaps via
+    # Callers (spark_client) auto-detect recipe swaps via
     # the resolver and fall back to this value only if the resolver fails.
     spark_llm_model: str = "Qwen/Qwen3.6-35B-A3B-FP8"
     # ── MC's own AI functions: which provider serves them ────────────────
@@ -440,10 +436,6 @@ class Settings(BaseSettings):
         "/home/mcuser/free-code-projects:"
         + str(Path(os.environ.get("HOME_HOST", str(Path.home()))) / "FreeCode" / "projects")
     )
-
-    # News-Site Export (optional): absolute host path of the news repo that
-    # /api/v1/news/deploy exports to + pushes. Empty = deploy endpoint disabled.
-    news_repo_path: str = ""
 
     # SSE keepalive interval (seconds)
     sse_ping_interval: int = 15

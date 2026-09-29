@@ -29,7 +29,6 @@ const FILES_ROOT_KEYS = new Set([
   "mcp-screenshots",
   "media",
   "shared-artifacts",
-  "storyboard-images",
 ]);
 
 export interface FilesLocation {

@@ -46,7 +46,7 @@ async def test_roots_expose_deletable_flag(auth_client: AsyncClient):
     assert resp.status_code == 200
     roots = {r["key"]: r for r in resp.json()["roots"]}
     assert all("deletable" in r for r in roots.values()), "every root must carry deletable"
-    for k in ("deliverables", "media", "shared-artifacts", "mcp-screenshots", "storyboard-images"):
+    for k in ("deliverables", "media", "shared-artifacts", "mcp-screenshots"):
         assert roots[k]["deletable"] is True, f"{k} must be deletable"
     for k in ("vault", "workspaces", "attachments", "shared-deliverables"):
         assert roots[k]["deletable"] is False, f"{k} must NOT be deletable"

@@ -897,7 +897,6 @@ Verzeichnis bootet unveraendert. Kopplung nur ueber die **Hook-Registry** in
 
 | Vertical | Pfad | Flag in `verticals.ts` | Zweck |
 |---|---|---|---|
-| `news_studio` | `backend/app/verticals/news_studio/` | `newsStudio` | Newsletter/News-Produktion (privat, gitignored im OSS-Release) |
 | `bench_studio` | `backend/app/verticals/bench_studio/` | `benchStudio` (Default an) | LLM-Capability-Demos als Video auf X |
 
 **Hook-Registries (`verticals/hooks.py`):**

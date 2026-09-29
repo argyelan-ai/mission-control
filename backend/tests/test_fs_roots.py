@@ -20,7 +20,6 @@ def test_browsable_roots_include_expected_subtrees():
         "mcp-screenshots",
         "media",
         "shared-artifacts",
-        "storyboard-images",
     }.issubset(keys)
 
 
@@ -67,7 +66,6 @@ def test_deletable_keys_exact_golden():
         "media",
         "shared-artifacts",
         "mcp-screenshots",
-        "storyboard-images",
     }
 
 
