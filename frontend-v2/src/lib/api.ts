@@ -243,6 +243,7 @@ export const api = {
     status: () => request<SystemStatus>("/api/v1/system/status"),
     alerts: () => request<import("./homeAlerts").HomeAlertsResponse>("/api/v1/system/alerts"),
     dailyMetrics: () => request<import("./usage").DailyMetrics>("/api/v1/system/daily-metrics"),
+    journeys: () => request<import("./journeys").JourneysResponse>("/api/v1/system/journeys"),
     metrics: () => request<SystemMetrics>("/api/v1/system/metrics"),
     metricsHistory: () => request<MetricsHistoryResponse>("/api/v1/system/metrics/history"),
     mode: () => request<import("./types").SystemModeMeta>("/api/v1/system/mode"),

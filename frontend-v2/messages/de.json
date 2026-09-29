@@ -81,6 +81,24 @@
       "hand": "Hand-Statuswechsel",
       "week": "KW {week} · Listenpreis",
       "local": "{share} lokal"
+    },
+    "journeys": {
+      "green": "Ablauf-Tests: {passed} von {total} bestanden",
+      "gaps": "{count, plural, one {# bekannte Lücke} other {# bekannte Lücken}}",
+      "red": "Ablauf-Tests: {names} fehlgeschlagen",
+      "redUnnamed": "Ablauf-Tests: {failed} von {total} fehlgeschlagen",
+      "skipped": "Ablauf-Tests übersprungen",
+      "skippedBecause": "Ablauf-Tests übersprungen: {reason}",
+      "error": "Ablauf-Tests nicht fertig geworden",
+      "errorBecause": "Ablauf-Tests nicht fertig geworden: {reason}",
+      "reason": {
+        "head": "ein Head hat gearbeitet",
+        "deploy": "ein Deploy lief",
+        "disk": "zu wenig Speicherplatz",
+        "port": "der Test-Port war belegt",
+        "timeout": "Zeitlimit erreicht"
+      },
+      "ago": "vor {age}"
     }
   },
   "tasks": {

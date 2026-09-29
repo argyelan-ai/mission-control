@@ -102,8 +102,11 @@ The job runs at 05:15, after the night-shift window, and tests `origin/main`
 from the runner's own clone. Uninstall: `launchctl bootout
 gui/$(id -u)/com.mc.journeys`, then remove the runner and the plist.
 
-Next steps: a Home line that reads `last.json` ("journeys last night: 3/3
-green"), then on-demand runs for a PR head with the result as a GitHub
+**On Home** one quiet line under the metrics card shows the last result
+(`GET /api/v1/system/journeys`, read from `last.json` through the `~/.mc`
+mount): "Journey tests: 3 of 3 passed, 1 known gap · 5 h ago", or which
+journeys failed, or why the run was skipped. Nothing shows before the first
+run. Next step: on-demand runs for a PR head with the result as a GitHub
 commit status.
 
 ## Known gaps pinned by a test
