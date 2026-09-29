@@ -85,6 +85,7 @@ for path in (os.path.join(run_dir, "result.json"), tmp):
 os.replace(tmp, os.path.join(j_home, "last.json"))
 print(f"journeys: {status} — {summary}")
 PY
+  RESULT_WRITTEN=1
 }
 
 compose() {
@@ -200,7 +201,9 @@ EOF
 
 # ── time box: the whole run (build included) gets TIME_LIMIT_S ─────────────
 if [ "${MC_JOURNEYS_CHILD:-}" = 1 ]; then
-  trap teardown EXIT
+  # A step that dies under set -e (clone, fetch, npm) still leaves a result,
+  # so last.json never keeps showing an older run.
+  trap 'rc=$?; teardown; if [ -z "${RESULT_WRITTEN:-}" ]; then result error "aborted (exit $rc) — see run.log"; exit 2; fi' EXIT
   main
   exit $?
 fi
@@ -208,9 +211,11 @@ fi
 # one run at a time (a stale lock from a killed run is taken over)
 LOCK="$J_HOME/.run.lock"
 if ! mkdir "$LOCK" 2>/dev/null; then
-  if kill -0 "$(cat "$LOCK/pid" 2>/dev/null || echo 0)" 2>/dev/null; then
-    echo "another journey run is active" >&2; exit 2
+  holder=$(cat "$LOCK/pid" 2>/dev/null || true)
+  if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then
+    echo "another journey run is active (pid $holder)" >&2; exit 2
   fi
+  # no pid or a dead one: a killed run left the lock behind — take it over
 fi
 echo $$ >"$LOCK/pid"
 trap 'rm -rf "$LOCK"' EXIT

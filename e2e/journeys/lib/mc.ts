@@ -64,13 +64,22 @@ export async function operatorToken(): Promise<string> {
   return ((await res.json()) as { access_token: string }).access_token;
 }
 
-/** Runs SQL inside the test stack's database container (fixtures only). */
+/** Runs SQL inside the test stack's database container (fixtures only).
+ *  The container is found by its compose labels, so no compose file is
+ *  parsed (the product docker-compose.yml is never read). */
 export function sql(statement: string): string {
-  return execFileSync(
+  const ids = execFileSync(
     "docker",
-    ["compose", "-p", PROJECT, "exec", "-T", "db", "psql", "-U", "mc", "mission_control", "-Atqc", statement],
+    ["ps", "-q", "--filter", `label=com.docker.compose.project=${PROJECT}`, "--filter", "label=com.docker.compose.service=db"],
     { encoding: "utf8" },
-  ).trim();
+  )
+    .trim()
+    .split("\n")
+    .filter(Boolean);
+  if (ids.length !== 1) throw new Error(`expected one ${PROJECT} db container, found ${ids.length}`);
+  return execFileSync("docker", ["exec", ids[0], "psql", "-U", "mc", "mission_control", "-Atqc", statement], {
+    encoding: "utf8",
+  }).trim();
 }
 
 /** Opens the UI already signed in (same token hand-off the UI probe uses)

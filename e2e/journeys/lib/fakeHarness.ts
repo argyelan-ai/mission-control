@@ -86,8 +86,8 @@ export class FakeAgent {
   }
 
   /** Blocking question: MC parks the task in `waiting` until the operator answers. */
-  async askBlocking(question: string): Promise<void> {
-    await this.call("POST", "/tasks/current/ask", {
+  async askBlocking(question: string): Promise<{ message_id: string; thread_id: string }> {
+    return this.call("POST", "/tasks/current/ask", {
       question,
       blocking: true,
       to: "mark", // the operator target (comm_constants.QUESTION_TARGETS)

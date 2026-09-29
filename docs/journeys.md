@@ -24,7 +24,7 @@ fork code must never run on that machine).
 
 | Journey | Covers | Proves |
 |---|---|---|
-| `J-phone-needs-you` | Home → Inbox → task, at 390 px | A blocked task is unblocked from the phone and the agent receives the instruction and the task again; afterwards nothing is blocked. A second test pins a **known gap** (below). |
+| `J-phone-needs-you` | Home → Inbox → task, at 390 px | A blocked task is unblocked from the phone and the agent receives the instruction and the task again; afterwards nothing is blocked. A second test pins a **known gap** (below) and checks, as a control, that the resuming answer path reaches the agent. |
 | `J-usage` | Insights, at 390 px | Recorded usage rows show up as exactly that cost, local share (this week, last week), day and source. |
 | `J-vault`, `J-setup`, `J-runtime-switch`, `J-job-to-merge` | — | Not written yet; listed in `docs/produkt/luecken-basis.json`. One per round, cheapest first. |
 
@@ -77,11 +77,13 @@ last 14 runs are kept. Exit code 0 green or skipped, 1 red, 2 error.
 
 **Preflight — the run skips (status `skipped`, exit 0) when:** a head is
 working (a request in `heads/spool/processing`, or a head heartbeat in the
-last 3 minutes), a deploy is going on (`~/.mc/locks/deploy.lock`, or a
-`docker compose build/up` of the live project), less than 20 GB of disk are
-free, or port 18080 is taken. The whole run, build included, is limited to
-30 minutes; the stack is always torn down with `down -v`, also on failure or
-timeout. Afterwards only dangling images labelled `mc-journeys=1` are
+last 3 minutes), a deploy is going on (a running `docker compose build/up`
+of the live project; a deploy script can also drop `~/.mc/locks/deploy.lock`
+— nothing creates that file yet), less than 20 GB of disk are free, or port
+18080 is taken. A step that dies (clone, fetch, npm) is reported as
+`error`, so `last.json` never keeps showing an older run. The whole run,
+build included, is limited to 30 minutes; the stack is always torn down with
+`down -v`, also on failure or timeout. Afterwards only dangling images labelled `mc-journeys=1` are
 pruned — never a global prune, the build cache is shared with the live
 install.
 
