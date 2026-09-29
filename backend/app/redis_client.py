@@ -576,15 +576,6 @@ class RedisKeys:
     def system_mode_meta() -> str:
         return "mc:system:mode:meta"
 
-    # ── Meetings ────────────────────────────────────────────────────────
-    @staticmethod
-    def meeting_lock(board_id: str) -> str:
-        return f"mc:meeting:{board_id}:lock"
-
-    @staticmethod
-    def meeting_events() -> str:
-        return "mc:events:meetings"
-
     # ── Obsidian Export (Phase 7 OBS-02) ─────────────────────────────────
     @staticmethod
     def obsidian_export_lock() -> str:

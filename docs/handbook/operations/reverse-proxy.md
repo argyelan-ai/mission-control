@@ -136,8 +136,7 @@ Two things break under a naively configured proxy:
 **Server-Sent Events.** The UI holds long-lived `text/event-stream`
 connections open — `/api/v1/activity/stream`, `/api/v1/agents/stream`,
 `/api/v1/approvals/stream`, `/api/v1/boards/{id}/tasks/stream`,
-`/api/v1/boards/{id}/memory/stream`, `/api/v1/schedule/stream`,
-`/api/v1/meetings/stream`. Response buffering must
+`/api/v1/boards/{id}/memory/stream`, `/api/v1/schedule/stream`. Response buffering must
 be off and read timeouts long, or the live board simply stops updating.
 
 nginx:

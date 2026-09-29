@@ -16,83 +16,11 @@ SEVERITY_COLORS = {
     "critical": 0x7C1FFF,
 }
 
-TEXT_CHANNEL_TYPES = {0, 5}
-
-
 def _bot_headers() -> dict[str, str]:
     bot_token = settings.discord_bot_token
     if not bot_token:
         raise RuntimeError("Discord bot token is not configured")
     return {"Authorization": f"Bot {bot_token}"}
-
-
-async def list_guild_channels(guild_id: str) -> list[dict]:
-    """List text-like channels for a Discord guild via Bot API."""
-    async with httpx.AsyncClient(timeout=15.0, headers=_bot_headers(), base_url="https://discord.com/api/v10") as client:
-        resp = await client.get(f"/guilds/{guild_id}/channels")
-        resp.raise_for_status()
-        channels = resp.json()
-
-    categories = {
-        str(channel["id"]): str(channel.get("name") or "")
-        for channel in channels
-        if int(channel.get("type", -1)) == 4
-    }
-
-    result: list[dict] = []
-    for channel in channels:
-        channel_type = int(channel.get("type", -1))
-        if channel_type not in TEXT_CHANNEL_TYPES:
-            continue
-
-        parent_name = categories.get(str(channel.get("parent_id") or ""), "")
-        topic = str(channel.get("topic") or "").strip()
-        context = topic or parent_name or "Discord channel"
-        result.append(
-            {
-                "id": str(channel["id"]),
-                "name": str(channel.get("name") or ""),
-                "context": context,
-                "bound_agent_id": None,
-                "parent_name": parent_name or None,
-                "channel_type": channel_type,
-                "position": int(channel.get("position") or 0),
-            }
-        )
-
-    result.sort(key=lambda item: ((item.get("parent_name") or "").lower(), item["position"], item["name"].lower()))
-    return result
-
-
-async def create_guild_text_channel(
-    guild_id: str,
-    *,
-    name: str,
-    context: str,
-    category_id: str | None = None,
-) -> dict:
-    """Create a text channel in a Discord guild via Bot API."""
-    payload: dict[str, object] = {
-        "name": name,
-        "type": 0,
-    }
-    if category_id:
-        payload["parent_id"] = category_id
-    topic = context.strip()
-    if topic:
-        payload["topic"] = topic[:1024]
-
-    async with httpx.AsyncClient(timeout=15.0, headers=_bot_headers(), base_url="https://discord.com/api/v10") as client:
-        resp = await client.post(f"/guilds/{guild_id}/channels", json=payload)
-        resp.raise_for_status()
-        channel = resp.json()
-
-    return {
-        "id": str(channel["id"]),
-        "name": str(channel.get("name") or name),
-        "context": topic or "Discord channel",
-        "bound_agent_id": None,
-    }
 
 
 async def send_discord_notification(
@@ -154,23 +82,3 @@ async def send_to_discord_channel(
                 logger.warning("Discord Bot API error %d: %s", resp.status_code, resp.text[:200])
     except Exception as e:
         logger.debug("Discord channel message failed: %s", e)
-
-
-# ---------------------------------------------------------------------------
-# Phase 30 — discord_config (single-row) read helper
-# ---------------------------------------------------------------------------
-
-from app.models.discord_config import DiscordConfig  # noqa: E402
-from sqlmodel import select  # noqa: E402
-from sqlmodel.ext.asyncio.session import AsyncSession  # noqa: E402
-
-
-async def get_discord_config(session: AsyncSession) -> DiscordConfig | None:
-    """Read the single discord_config row. Application-enforced single-row.
-
-    Returns None if no row exists yet (Plan 30-03 migration seeds it; before
-    that, defensive fallback that lets the router serve an empty config
-    response without 500-ing).
-    """
-    result = await session.exec(select(DiscordConfig).limit(1))
-    return result.first()

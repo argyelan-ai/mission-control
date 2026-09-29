@@ -895,15 +895,8 @@ export interface ActivityEvent {
 
 // Phase 31 / OCS-15: Gateway, OpenClawHealth, OpenClawModel,
 // OpenClawSyncResult, GatewaySession interfaces removed (Phase 29+30
-// deleted the backing tables and routes). DiscordChannel kept — used by
-// the new /api/v1/discord/* router (Plan 29-01).
-
-export interface DiscordChannel {
-  id: string;
-  name: string;
-  context: string;
-  bound_agent_id?: string;
-}
+// deleted the backing tables and routes). DiscordChannel went with the
+// /api/v1/discord/* router in E5.
 
 export interface Tag {
   id: string;
@@ -1508,41 +1501,6 @@ export interface SkillCandidate {
   reviewed_at: string | null;
   created_at: string;
   updated_at: string;
-}
-
-// ── Meetings ──────────────────────────────────────────────────────────────────
-
-export type MeetingType = "weekly" | "ad_hoc" | "retrospective";
-export type MeetingStatus = "scheduled" | "running" | "completed" | "failed" | "cancelled";
-
-export interface Meeting {
-  id: string;
-  board_id: string;
-  title: string;
-  meeting_type: MeetingType;
-  status: MeetingStatus;
-  agenda: string[] | null;
-  participant_ids: string[] | null;
-  summary: string | null;
-  decisions: Record<string, unknown>[] | null;
-  action_items: Record<string, unknown>[] | null;
-  memory_id: string | null;
-  scheduled_at: string | null;
-  started_at: string | null;
-  completed_at: string | null;
-  created_at: string;
-}
-
-export interface MeetingMessage {
-  id: string;
-  meeting_id: string;
-  agent_id: string | null;
-  agent_name: string | null;
-  role: "facilitator_question" | "agent_response" | "system_note" | "summary";
-  content: string;
-  round: number;
-  topic_index: number;
-  created_at: string;
 }
 
 // ── Task Transcript ──────────────────────────────────────────────────────────

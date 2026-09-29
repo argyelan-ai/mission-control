@@ -76,12 +76,10 @@ from app.routers import (
     credentials,
     groups,
     deploy,
-    discord as discord_router,
     hosts,
     host_recipes,
     install_requests,
     internal,
-    meetings,
     memory,
     mcp_servers,
     model_prices,
@@ -111,7 +109,6 @@ from app.routers import (
     tasks,
     usage,
     voice,
-    webhooks,
     x_posts,
 )
 from app.background import (
@@ -422,9 +419,6 @@ app.include_router(projects.router)
 app.include_router(project_git.router)
 app.include_router(memory.router)
 app.include_router(activity.router)
-# Phase 29-09 (ADR-039): gateway.router deleted. Discord channel CRUD now
-# lives exclusively on routers/discord.py (Plan 29-01, D-04).
-app.include_router(discord_router.router)
 app.include_router(internal.router)  # /api/v1/internal/bootstrap — agent containers fetch tokens from Vault
 app.include_router(model_prices.router)
 app.include_router(models.router)
@@ -452,7 +446,6 @@ app.include_router(clawhub.router)
 app.include_router(research.router)
 app.include_router(skill_lab.router)
 app.include_router(settings_router.router)
-app.include_router(webhooks.router)
 app.include_router(deploy.router)
 app.include_router(cli_plugins.router)
 app.include_router(cli_tools.router)  # /api/v1/cli-tools — CLI update cockpit (Task 7)
@@ -469,7 +462,6 @@ app.include_router(usage.router)  # /api/v1/usage/page|pages — E0 page-usage b
 # A missing vertical directory: app boots unchanged without those routes.
 from app.verticals import register_all as _register_verticals
 _loaded_verticals = _register_verticals(app)
-app.include_router(meetings.router)
 
 # Vault Memory (M.1 Read Foundation) — both routers already bake their
 # /api/v1/... prefix into APIRouter(prefix=...). Do NOT add another prefix
