@@ -45,6 +45,11 @@ _TEST_VAULT_ROOT = Path(tempfile.mkdtemp(prefix="mc-test-vault-"))
 # explicit grok_log_path=/grok_sessions_path=/hermes_state_db_path= paths.
 _TEST_HARVEST_ROOT = Path(tempfile.mkdtemp(prefix="mc-test-harvest-"))
 
+# Same class once more (head launcher): heads_root defaults to the host's
+# ~/.mc/heads, which the real mc-head watcher reads. A test that forgot its
+# monkeypatch must never drop a spool request there.
+_TEST_HEADS_ROOT = Path(tempfile.mkdtemp(prefix="mc-test-heads-"))
+
 # Third incident of the same class (2026-09-07, omp agent): tests that spawn
 # real subprocesses (render-omp-config.sh & Co.) inherited the agent
 # container's OMP_ENV_FILE=/home/agent/.omp/omp.env. The script honours that
@@ -109,6 +114,9 @@ app.config.settings = app.config.Settings(
     use_subagent_dispatch=False,  # Tests run in legacy mode; new tests enable the flag explicitly
     secrets_encryption_key="bkMM-h80JH3_PRkNc6_-T0YrLMOShvZeoDkKnGrI7JM=",
     vault_path=_TEST_VAULT_ROOT,
+    heads_root=_TEST_HEADS_ROOT,
+    heads_sync_interval=99999,
+    night_shift_interval=99999,  # night shift loop never auto-fires in tests
     lifecycle_watchdog_enabled=True,  # ADR-046: on by default; the check is only ever
                                       # invoked when a test calls _check_stuck_in_progress directly.
     grok_harvest_path=str(_TEST_HARVEST_ROOT / "unified.jsonl"),
@@ -364,8 +372,30 @@ def reset_github_config_cache():
     invalidate_github_config_cache()
 
 
+@pytest.fixture(autouse=True)
+def block_real_engine_metrics():
+    """No test may ask a real engine's ``/metrics`` (E1 switch lock).
+
+    Every switch now probes the engine it would end; the test fixtures use
+    documentation addresses (192.0.2.x) that only time out. The default fake
+    engine is unreachable — the lock then fails open, as it does live. Tests
+    of the lock put their own ``httpx.MockTransport`` here.
+    """
+    import httpx
+
+    from app.services.heads import engine
+
+    def unreachable(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("no real engine in tests", request=request)
+
+    original = engine._transport
+    engine._transport = httpx.MockTransport(unreachable)
+    yield
+    engine._transport = original
+
+
 @pytest.fixture
-async def session() -> AsyncGenerator[AsyncSession, None]:
+async def session()-> AsyncGenerator[AsyncSession, None]:
     """DB session for tests that access the DB directly."""
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         yield s
@@ -430,9 +460,17 @@ async def client(fake_redis) -> AsyncGenerator[AsyncClient, None]:
     from app.main import app as fastapi_app
     import app.redis_client
 
-    async def override_get_session():
-        async with AsyncSession(test_engine, expire_on_commit=False) as s:
-            yield s
+    from fastapi import Request as _Request
+
+    from app.database import managed_session
+
+    async def override_get_session(request: _Request):
+        # Same lifecycle as production get_session (managed_session): the
+        # release/observability behavior under test is the real one, not a
+        # lookalike. SQLite/StaticPool ignores pool_timeout — irrelevant here.
+        session = AsyncSession(test_engine, expire_on_commit=False)
+        async with managed_session(session, route=request.url.path):
+            yield session
 
     async def override_get_redis():
         return fake_redis

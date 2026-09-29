@@ -201,6 +201,9 @@ async def test_restart_process_endpoint_success(auth_client: AsyncClient, make_a
             return "EXIT:0"
         if "curl" in command:
             curl_calls.append(command)
+        if "capture-pane" in command:
+            # boss-host's claude CLI showing its idle prompt.
+            return "some earlier output\n❯ "
         return ""
 
     with patch.object(cli_mod, "_ssh_host", AsyncMock(side_effect=fake_ssh)):
@@ -214,10 +217,130 @@ async def test_restart_process_endpoint_success(auth_client: AsyncClient, make_a
     assert body["label"] == "com.openclaw.boss"
     assert body["process_running"] is True
     assert body["fallback_used"] is False
+    assert body["cli_ready"] is True
     # Non-Hermes agents have no separate worker-session layer — the extra
     # bridge /restart call (and the resulting response key) must not appear.
     assert "worker_restart_output" not in body
     assert curl_calls == []
+
+
+# ── CLI readiness wait (16.09.2026 restart-window fix) ──────────────────────
+
+@pytest.mark.anyio
+async def test_wait_for_host_window_ready_returns_healthy_on_prompt_glyph():
+    async def fake_ssh(command, timeout=30):
+        assert "boss-host/.tmux.sock" in command
+        assert "capture-pane" in command
+        return "╭─ some banner ─╮\n❯ "
+
+    with patch.object(cli_mod, "_ssh_host", AsyncMock(side_effect=fake_ssh)):
+        result = await cli_mod._wait_for_host_window_ready("boss", timeout=5, poll_interval=0.01)
+
+    assert result["healthy"] is True
+
+
+@pytest.mark.anyio
+async def test_wait_for_host_window_ready_keeps_polling_through_missing_tmux_server():
+    """Sabotage probe target for cli_terminal.py:1405 (fixed sleep(1.0) + bare
+    pgrep): the tmux server can legitimately not exist yet right after
+    `kill-server` in boss-host/entrypoint.sh — exactly the state that made
+    Mark's message land on "no server running on .tmux.sock" live 16.09.2026.
+    That must read as "not ready yet", not crash the wait."""
+    responses = iter([
+        "no server running on /home/agent/.mc/agents/boss-host/.tmux.sock\n",
+        "no server running on /home/agent/.mc/agents/boss-host/.tmux.sock\n",
+        "╭─ ready ─╮\n❯ ",
+    ])
+    calls = {"n": 0}
+
+    async def fake_ssh(command, timeout=30):
+        calls["n"] += 1
+        return next(responses)
+
+    with patch.object(cli_mod, "_ssh_host", AsyncMock(side_effect=fake_ssh)):
+        result = await cli_mod._wait_for_host_window_ready("boss", timeout=5, poll_interval=0.01)
+
+    assert result["healthy"] is True
+    assert calls["n"] == 3
+
+
+@pytest.mark.anyio
+async def test_wait_for_host_window_ready_times_out_bounded_when_never_ready():
+    """Gegenrichtung (Beweispunkt 4): an agent whose CLI never comes up must
+    still fail — not wait forever. `timeout` bounds the real wall-clock spent
+    here (kept tiny so the test itself stays fast)."""
+    async def fake_ssh(command, timeout=30):
+        return "no server running on socket\n"
+
+    with patch.object(cli_mod, "_ssh_host", AsyncMock(side_effect=fake_ssh)):
+        result = await cli_mod._wait_for_host_window_ready("boss", timeout=0.05, poll_interval=0.01)
+
+    assert result["healthy"] is False
+    assert "timeout" in result["reason"]
+
+
+@pytest.mark.anyio
+async def test_restart_process_endpoint_502_when_process_runs_but_cli_never_ready(
+    auth_client: AsyncClient, make_agent,
+):
+    """Sabotage-probe companion at the HTTP layer: pgrep proves the launcher
+    script is alive, but the tmux pane never shows a ready glyph (CLI still
+    booting/crash-looping) — the endpoint must not report success on the
+    launcher alone."""
+    agent = await make_agent(name="Boss", slug="boss", agent_runtime="host", harness="claude")
+
+    pgrep_outputs = iter(["", "4242"])
+
+    async def fake_ssh(command, timeout=30):
+        if command.startswith("pgrep"):
+            return next(pgrep_outputs)
+        if command.startswith("launchctl kickstart"):
+            return "EXIT:0"
+        if "capture-pane" in command:
+            return "Bootstrapping...\n"  # never shows a ready glyph
+        return ""
+
+    with patch.object(cli_mod, "_ssh_host", AsyncMock(side_effect=fake_ssh)):
+        with patch.object(cli_mod.asyncio, "sleep", AsyncMock()):
+            with patch.object(
+                cli_mod, "_wait_for_host_window_ready",
+                AsyncMock(return_value={"healthy": False, "reason": "timeout after 45s — window not ready"}),
+            ):
+                resp = await auth_client.post(f"/api/v1/host-agents/{agent.id}/restart-process")
+
+    assert resp.status_code == 502, resp.text
+    assert "never became ready" in resp.text
+
+
+@pytest.mark.anyio
+async def test_restart_process_endpoint_skips_cli_wait_for_headless_bridge_agents(
+    auth_client: AsyncClient, make_agent,
+):
+    """hermes/grok have no interactive tmux CLI to wait on (headless bridge/
+    poll processes) — the new readiness wait must not run for them, or every
+    hermes-only test in this file would start hitting capture-pane too."""
+    agent = await make_agent(name="Grok", slug="grok", agent_runtime="host", harness="grok")
+
+    pgrep_outputs = iter(["", "111"])
+    capture_pane_calls = []
+
+    async def fake_ssh(command, timeout=30):
+        if command.startswith("pgrep"):
+            return next(pgrep_outputs)
+        if command.startswith("launchctl kickstart"):
+            return "EXIT:0"
+        if "capture-pane" in command:
+            capture_pane_calls.append(command)
+        return ""
+
+    with patch.object(cli_mod, "_ssh_host", AsyncMock(side_effect=fake_ssh)):
+        with patch.object(cli_mod.asyncio, "sleep", AsyncMock()):
+            resp = await auth_client.post(f"/api/v1/host-agents/{agent.id}/restart-process")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["process_running"] is True
+    assert "cli_ready" not in resp.json()
+    assert capture_pane_calls == []
 
 
 # ── Hermes worker-session restart (Task #25 fix) ─────────────────────────────
@@ -417,3 +540,161 @@ async def test_restart_process_endpoint_404_for_non_host_agent(
     agent = await make_agent(name="Dev", slug="dev", agent_runtime="cli-bridge")
     resp = await auth_client.post(f"/api/v1/host-agents/{agent.id}/restart-process")
     assert resp.status_code == 404
+
+
+# ── Plain /restart endpoint (PR #604 review, Befund 3, 2026-09-16) ──────────
+#
+# _host_agent_lifecycle("restart") is the plain-kickstart path behind
+# POST /host-agents/{id}/restart (and 2 internal callers: task_runner Tier 2,
+# routers/agents.py). Unlike _host_agent_process_restart above it did NOT
+# verify the CLI became ready before this PR — same false "restart done in
+# the middle of the 53s boot window" mechanism as the process-restart bug,
+# just unfixed on this second path. These tests are the sabotage-probe
+# companions for that fix.
+
+def _pane_response_ssh(capture_pane_pane: str):
+    async def fake_ssh(command, timeout=30):
+        if "capture-pane" in command:
+            return capture_pane_pane
+        return "EXIT:0"
+    return fake_ssh
+
+
+@pytest.mark.anyio
+async def test_restart_endpoint_waits_for_cli_ready_then_reports_success(
+    auth_client: AsyncClient, make_agent,
+):
+    agent = await make_agent(name="Boss", slug="boss", agent_runtime="host", harness="claude")
+
+    with patch.object(cli_mod, "_ssh_host", AsyncMock(side_effect=_pane_response_ssh("╭─ header ─╮\n❯ "))):
+        with patch.object(cli_mod.asyncio, "sleep", AsyncMock()):
+            resp = await auth_client.post(f"/api/v1/host-agents/{agent.id}/restart")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["cli_ready"] is True
+
+
+@pytest.mark.anyio
+async def test_restart_endpoint_sabotage_probe_502_when_cli_never_becomes_ready(
+    auth_client: AsyncClient, make_agent,
+):
+    """Sabotage probe: revert this fix (skip the wait, return right after
+    kickstart) and this test goes red as a 200 with no cli_ready key instead
+    of the 502 asserted here — proving the wait is load-bearing on THIS
+    endpoint, not just on /restart-process."""
+    agent = await make_agent(name="Boss", slug="boss", agent_runtime="host", harness="claude")
+
+    with patch.object(cli_mod, "_ssh_host", AsyncMock(side_effect=_pane_response_ssh("Bootstrapping...\n"))):
+        with patch.object(cli_mod.asyncio, "sleep", AsyncMock()):
+            with patch.object(
+                cli_mod, "_wait_for_host_window_ready",
+                AsyncMock(return_value={"healthy": False, "reason": "timeout after 75s — window not ready"}),
+            ):
+                resp = await auth_client.post(f"/api/v1/host-agents/{agent.id}/restart")
+
+    assert resp.status_code == 502, resp.text
+    assert "never became ready" in resp.text
+
+
+@pytest.mark.anyio
+async def test_restart_endpoint_skips_cli_wait_for_headless_bridge_agent(
+    auth_client: AsyncClient, make_agent,
+):
+    """grok has no interactive tmux CLI — the wait must not run (and must
+    not call capture-pane) for it, same exclusion as /restart-process."""
+    agent = await make_agent(name="Grok", slug="grok", agent_runtime="host", harness="grok")
+    capture_pane_calls = []
+
+    async def fake_ssh(command, timeout=30):
+        if "capture-pane" in command:
+            capture_pane_calls.append(command)
+        return "EXIT:0"
+
+    with patch.object(cli_mod, "_ssh_host", AsyncMock(side_effect=fake_ssh)):
+        with patch.object(cli_mod.asyncio, "sleep", AsyncMock()):
+            resp = await auth_client.post(f"/api/v1/host-agents/{agent.id}/restart")
+
+    assert resp.status_code == 200, resp.text
+    assert "cli_ready" not in resp.json()
+    assert capture_pane_calls == []
+
+
+# ── Timeout vs. the real 53s measurement (PR #604 review, Befund 2) ─────────
+#
+# 16.09.2026 live: entrypoint 08:05:11, CLI ready 08:06:04 = 53s. Simulates
+# a monotonic clock advancing by exactly `poll_interval` per capture-pane
+# poll (asyncio.sleep itself is mocked, so the test runs instantly but the
+# deadline math still runs against realistic elapsed seconds) and a pane
+# that only turns ready once the simulated clock passes 53s — the exact
+# repeat case the incident describes.
+
+def _make_53s_boot_ssh(clock: dict, poll_interval: float):
+    async def fake_ssh(command, timeout=30):
+        elapsed = clock["t"] - clock["start"]
+        pane = "╭─ ready ─╮\n❯ " if elapsed >= 53.0 else "Bootstrapping...\n"
+        clock["t"] += poll_interval
+        return pane
+    return fake_ssh
+
+
+@pytest.mark.anyio
+async def test_wait_for_host_window_ready_old_45s_bound_would_misreport_the_own_incident():
+    """Sabotage probe for Befund 2: with the bound the PR originally shipped
+    (45s, passed explicitly here since the default no longer is 45s), the
+    exact 53s repeat case times out — a false 502 five-ish seconds before
+    the CLI would actually have been ready. This is not asserting current
+    behavior; it documents why 45s was rejected."""
+    poll_interval = 3.0
+    clock = {"start": 1000.0, "t": 1000.0}
+
+    with patch.object(cli_mod, "_ssh_host", AsyncMock(side_effect=_make_53s_boot_ssh(clock, poll_interval))):
+        with patch.object(cli_mod.time, "monotonic", side_effect=lambda: clock["t"]):
+            with patch.object(cli_mod.asyncio, "sleep", AsyncMock()):
+                result = await cli_mod._wait_for_host_window_ready(
+                    "boss", timeout=45.0, poll_interval=poll_interval,
+                )
+
+    assert result["healthy"] is False
+    assert "timeout" in result["reason"]
+
+
+@pytest.mark.anyio
+async def test_wait_for_host_window_ready_current_default_covers_the_53s_measurement():
+    """Companion positive case: the function's own default timeout (no
+    explicit `timeout=` — this is what production actually calls) covers
+    the identical 53s boot with margin to spare."""
+    poll_interval = 3.0
+    clock = {"start": 2000.0, "t": 2000.0}
+
+    with patch.object(cli_mod, "_ssh_host", AsyncMock(side_effect=_make_53s_boot_ssh(clock, poll_interval))):
+        with patch.object(cli_mod.time, "monotonic", side_effect=lambda: clock["t"]):
+            with patch.object(cli_mod.asyncio, "sleep", AsyncMock()):
+                result = await cli_mod._wait_for_host_window_ready("boss", poll_interval=poll_interval)
+
+    assert result["healthy"] is True
+    assert cli_mod._HOST_CLI_READY_TIMEOUT_SECONDS >= 60.0
+
+
+# ── Ready-glyph criterion (PR #604 review, Befund 1, 2026-09-16) ────────────
+#
+# Rex's review proved two of the original four glyphs false-positive with
+# synthetic pane content. These are the sabotage-probe companions: revert
+# _host_pane_looks_ready to a bare `any(sig in pane for sig in (..., "> ",
+# "$ "))` substring-anywhere check and both tests below go red (True instead
+# of False) — proving the trailing-edge/no-bash-fallback logic is
+# load-bearing, not decorative.
+
+@pytest.mark.parametrize(
+    "pane,expected,label",
+    [
+        ("╭─ header ─╮\n❯ ", True, "openclaude idle prompt"),
+        ("some earlier output\n> ", True, "bare claude prompt, trailing edge"),
+        ("progress: 40 > 30 items/s\n", False, "boot text containing '> ' mid-line — Rex false-positive #1"),
+        ("agent exited\n$ ", False, "bash prompt after CLI crash — Rex false-positive #2"),
+        ("⋯ Booting CLI…\n", False, "spinner, still booting"),
+    ],
+)
+def test_host_pane_looks_ready_criterion(pane, expected, label):
+    assert cli_mod._host_pane_looks_ready(pane) is expected, label

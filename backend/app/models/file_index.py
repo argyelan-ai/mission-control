@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from app.utils import utcnow
 
 from sqlalchemy import DateTime, Index, text
 from sqlmodel import Column, Field, SQLModel
@@ -41,7 +42,7 @@ class FileIndexEntry(SQLModel, table=True):
     )
 
     indexed_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),
     )
 

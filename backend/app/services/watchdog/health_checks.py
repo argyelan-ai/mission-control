@@ -8,6 +8,7 @@ from sqlalchemy import text
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from app.config import settings
 from app.models.agent import Agent
 from app.redis_client import RedisKeys, get_redis
 from app.services.activity import emit_event
@@ -206,7 +207,12 @@ class HealthChecksMixin:
 
         return db_latency_ms, redis_latency_ms
 
-    async def _collect_system_metrics(self, db_latency_ms: float | None, redis_latency_ms: float | None) -> None:
+    async def _collect_system_metrics(
+        self,
+        db_latency_ms: float | None,
+        redis_latency_ms: float | None,
+        session: AsyncSession | None = None,
+    ) -> None:
         """Collect system metrics (CPU/RAM/disk) and store them in Redis."""
         try:
             cpu_pct = psutil.cpu_percent(interval=None)
@@ -240,8 +246,78 @@ class HealthChecksMixin:
                 "System metrics: CPU=%.1f%% RAM=%.1f%% Disk=%.1f%%",
                 cpu_pct, mem.percent, disk.percent,
             )
+
+            # Die Plattenpruefung sitzt hier, weil dieser Snapshot `disk` schon
+            # gemessen hat — ein zweiter psutil-Aufruf waere eine zweite
+            # Messung derselben Sache, mit der Chance, dass beide
+            # auseinanderlaufen. session ist optional, weil der Aufrufer sie
+            # hat (core._check_all) und emit_event sie braucht.
+            if session is not None:
+                await self._check_disk_watchdog(session, disk.percent, disk.free)
         except Exception as e:
             logger.error("Failed to collect system metrics: %s", e)
+
+    async def _check_disk_watchdog(
+        self, session: AsyncSession, disk_pct: float, free_bytes: int
+    ) -> None:
+        """Meldet eine volllaufende Platte — MELDET NUR.
+
+        Loescht nichts, raeumt nichts auf, aendert keinen Task-Status. Der
+        Betreiber entscheidet; ein Watchdog, der selbst Prune laufen laesst,
+        koennte den laufenden Bau zerstoeren, den er schuetzen soll.
+
+        Warum die Schwelle VOR 100 % liegt: am 2026-09-16 lief die Platte voll
+        (75,8 GB Build-Cache) und `docker compose up --build` starb mitten im
+        Layer-Schreiben. Eine Meldung bei 100 % waere eine Beschreibung des
+        Zustands nach dem Schaden; 95 % ist die Warnung davor.
+
+        ``critical`` statt ``warning``: `warning` landet in
+        ``discord_notify.DIGEST_KEY`` und wartet dort bis zu
+        ``DIGEST_WINDOW_SECONDS`` (1800) auf den Sammelversand — eine halbe
+        Stunde, in der jeder Bau weiter stirbt. `critical` geht sofort raus.
+        Genau deshalb steht die Dedup-Marke hier selbst: `critical` umgeht in
+        ``notify_event`` ALLE Sperren (und wird nie dedupliziert), also ist
+        dieser Redis-Schluessel der einzige Schutz vor einer Meldung im
+        Watchdog-Takt.
+        """
+        threshold = settings.disk_watchdog_percent
+        if disk_pct < threshold:
+            return
+
+        redis = await get_redis()
+        dedup_key = RedisKeys.disk_watchdog_notified(threshold)
+        if await redis.exists(dedup_key):
+            return
+
+        # Erst melden, dann den Schluessel setzen: bricht emit_event ab, bleibt
+        # der Schluessel ungesetzt und der naechste Takt versucht es erneut.
+        # Andersherum verschluckte ein einzelner Fehler die Warnung fuer die
+        # ganze TTL.
+        await emit_event(
+            session,
+            "system.disk_high",
+            f"Platte zu {disk_pct:.1f} % belegt — Schwelle {threshold} % erreicht",
+            severity="critical",
+            detail={
+                "component": "disk",
+                "disk_pct": round(disk_pct, 1),
+                "threshold_percent": threshold,
+                "free_gb": round(free_bytes / (1024 ** 3), 1),
+                # Der Hinweis nennt die KONFIGURIERTE Grenze, nicht eine Zahl
+                # aus dem Kopf: eine fest eingetippte 20g waere genau die
+                # Art Drift, wegen der diese Karte existiert — wer
+                # BUILD_CACHE_KEEP_GB verstellt, bekaeme hier sonst eine
+                # Anweisung, die nicht zu seiner Einstellung passt.
+                "note": "Meldung nur — es wird nichts geloescht. "
+                        f"Aufraeumen: docker builder prune --keep-storage "
+                        f"{settings.build_cache_keep_gb}g",
+            },
+        )
+        await redis.set(dedup_key, 1, ex=settings.discord_dedup_ttl_seconds)
+        logger.warning(
+            "Platte zu %.1f %% belegt (Schwelle %d %%) — gemeldet, nichts geloescht",
+            disk_pct, threshold,
+        )
 
     async def _check_weekly_digest(self) -> None:
         """Generate a weekly digest on Sundays."""

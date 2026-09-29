@@ -1,0 +1,79 @@
+;; mc-head sandbox profile (spec §9 layer 3). Used only with MC_HEAD_SANDBOX=1.
+;; Parameters (sandbox-exec -D): RUN, WT, CLONE_GIT, VAULT_JOBS, REAL_HOME, MC_HOME,
+;; USER_TMP (the per-user temp root, /private/var/folders on macOS),
+;; SCRATCH_ORIGIN (required; empty for every real repo — see below).
+;; Order matters: later rules win.
+;; kz (the coherence tool; pre-push hook + `kz brief` at start) needs no grant
+;; of its own: it only reads the worktree and its install and runs git, which
+;; the default rules allow. Its install is not writable (test_mc_head_sandbox).
+(version 1)
+(allow default)
+
+;; Writes: nothing by default …
+(deny file-write*)
+;; … except the worktree, the clone's git dir (commits of the worktree land
+;; there), the head's own $HOME (harness caches), its status files in the
+;; run folder, temp folders and devices. The vault is NOT writable: the
+;; wrapper files run-record.md into vault jobs/ after the head has ended.
+(allow file-write*
+  (subpath (param "WT"))
+  (subpath (param "CLONE_GIT"))
+  (subpath (string-append (param "RUN") "/home"))
+  (subpath (string-append (param "RUN") "/claude-config"))
+  (subpath (string-append (param "RUN") "/omp-sessions"))
+  (literal (string-append (param "RUN") "/step.txt"))
+  (literal (string-append (param "RUN") "/question.md"))
+  (literal (string-append (param "RUN") "/head.log"))
+  (literal (string-append (param "RUN") "/work.log"))
+  (literal (string-append (param "RUN") "/run-record.md"))
+  (literal (string-append (param "RUN") "/hook-passed.txt"))
+  (subpath "/private/tmp")
+  (subpath (param "USER_TMP"))
+  (subpath "/dev"))
+
+;; A scratch repo whose origin is a local bare repo under heads/scratch-origin/
+;; (no GitHub): `git push` has to write objects and refs into that one bare
+;; repo. mc-head passes its resolved path only in that case; for every real
+;; repo SCRATCH_ORIGIN is "" and this grant does not exist. A missing
+;; parameter makes the profile fail to load (fail closed).
+;; By design the whole scratch origin is writable (refs, objects, config,
+;; hooks) — acceptable for scratch only; the wrapper never runs git inside it.
+(if (not (string=? (param "SCRATCH_ORIGIN") ""))
+  (allow file-write* (subpath (param "SCRATCH_ORIGIN"))))
+
+;; The wrapper's own files (status, heartbeat, lock owner) and the backend's
+;; mirror bookkeeping are never writable by the head.
+(deny file-write*
+  (subpath (string-append (param "RUN") "/.wrapper"))
+  (subpath (string-append (param "RUN") "/.backend")))
+
+;; Secrets are never readable.
+(deny file-read*
+  (subpath (string-append (param "REAL_HOME") "/.ssh"))
+  (subpath (string-append (param "REAL_HOME") "/.claude"))
+  (subpath (string-append (param "REAL_HOME") "/.claude-head"))
+  (subpath (string-append (param "REAL_HOME") "/.config/gh"))
+  (subpath (string-append (param "REAL_HOME") "/.omp"))
+  (subpath (string-append (param "REAL_HOME") "/.aws"))
+  (subpath (string-append (param "REAL_HOME") "/.docker"))
+  (subpath (string-append (param "REAL_HOME") "/.kube"))
+  (subpath (string-append (param "REAL_HOME") "/.gnupg"))
+  (literal (string-append (param "REAL_HOME") "/.netrc"))
+  (literal (string-append (param "REAL_HOME") "/.git-credentials"))
+  (subpath (string-append (param "REAL_HOME") "/Library/Keychains"))
+  (subpath (string-append (param "REAL_HOME") "/Library/Cookies"))
+  (subpath (string-append (param "REAL_HOME") "/Library/Application Support/Google"))
+  (subpath (string-append (param "REAL_HOME") "/Library/Application Support/Firefox"))
+  (subpath (string-append (param "REAL_HOME") "/Library/Application Support/BraveSoftware"))
+  (subpath (string-append (param "REAL_HOME") "/Library/Application Support/Arc"))
+  (subpath (string-append (param "REAL_HOME") "/Library/Safari"))
+  (subpath (string-append (param "MC_HOME") "/secrets"))
+  (literal (string-append (param "MC_HOME") "/heads/gh-token"))
+  (regex #"/\.env(\..*)?$"))
+
+;; The Docker daemon is root on the host: its sockets are never reachable,
+;; whatever binary the head runs (the docker shim is only a PATH trick).
+(deny network-outbound
+  (remote unix-socket (path-literal "/var/run/docker.sock"))
+  (remote unix-socket (path-literal "/private/var/run/docker.sock"))
+  (remote unix-socket (path-literal (string-append (param "REAL_HOME") "/.docker/run/docker.sock"))))

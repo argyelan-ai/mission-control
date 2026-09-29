@@ -10,10 +10,32 @@ ensure_git() initializes the vault as a git repo if needed.
 
 import logging
 import subprocess
+import time
 import threading
 from pathlib import Path
 
 logger = logging.getLogger("mc.vault_git")
+
+# git's index.lock is repo-global; VaultGit's threading.Lock only serializes
+# one instance. Multiple instances (watcher + API routes + scripts) and other
+# processes write the same repo, so add/commit retry on a held index.lock.
+_GIT_LOCK_RETRIES = 5
+
+
+def _is_index_lock_error(stderr: str) -> bool:
+    return "index.lock" in (stderr or "")
+
+
+def _run_git_retry(args: list[str]) -> subprocess.CompletedProcess:
+    """git run with index.lock backoff. Raises CalledProcessError on final fail."""
+    last: subprocess.CompletedProcess | None = None
+    for attempt in range(_GIT_LOCK_RETRIES):
+        result = subprocess.run(args, capture_output=True, text=True)
+        if result.returncode == 0 or not _is_index_lock_error(result.stderr):
+            return result
+        last = result
+        time.sleep(0.05 * (attempt + 1))
+    return last  # type: ignore[return-value]
 
 _VAULT_GITIGNORE = """\
 _inbox/
@@ -22,12 +44,17 @@ _conflicts/
 _trash/
 _lint/
 .mc_index.db
+.mc_index.db-journal
 .obsidian/
+attachments/
 """
 
 
 class VaultGit:
-    def __init__(self, vault_path: Path, stub_mode: bool = True):
+    def __init__(self, vault_path: Path, stub_mode: bool = False):
+        """Versioning ON by default: an unversioned fleet memory was the M.1
+        stub era; keeping True as default would silently re-arm the stub for
+        every future construction site that forgets the flag."""
         self.vault_path = vault_path
         self.stub_mode = stub_mode
         self._staged: list[Path] = []
@@ -95,15 +122,12 @@ class VaultGit:
             return
 
         rel = file_path.relative_to(self.vault_path) if file_path.is_absolute() else file_path
-        try:
-            subprocess.run(
-                ["git", "-C", str(self.vault_path), "add", str(rel)],
-                check=True,
-                capture_output=True,
-            )
-        except subprocess.CalledProcessError as e:
-            logger.error("git add failed for %s: %s", rel, e.stderr.decode() if e.stderr else e)
-            raise
+        result = _run_git_retry(
+            ["git", "-C", str(self.vault_path), "add", str(rel)],
+        )
+        if result.returncode != 0:
+            logger.error("git add failed for %s: %s", rel, result.stderr)
+            raise subprocess.CalledProcessError(result.returncode, result.args, stderr=result.stderr)
 
         with self._lock:
             self._staged.append(file_path)
@@ -135,26 +159,20 @@ class VaultGit:
             count = len(self._staged)
             message = f"vault: {message_hint} by {author_slug} ({count} file{'s' if count != 1 else ''})"
 
-            try:
-                result = subprocess.run(
-                    [
-                        "git", "-C", str(self.vault_path),
-                        "commit",
-                        "--author", "MC Vault <vault@mc.local>",
-                        "-m", message,
-                    ],
-                    capture_output=True,
-                    text=True,
-                )
-                if result.returncode != 0:
-                    if "nothing to commit" in (result.stdout + result.stderr):
-                        logger.debug("commit_batched: nothing to commit (already committed)")
-                        self._staged.clear()
-                        return False
-                    logger.error("git commit failed: %s", result.stderr)
+            result = _run_git_retry(
+                [
+                    "git", "-C", str(self.vault_path),
+                    "commit",
+                    "--author", "MC Vault <vault@mc.local>",
+                    "-m", message,
+                ],
+            )
+            if result.returncode != 0:
+                if "nothing to commit" in (result.stdout + result.stderr):
+                    logger.debug("commit_batched: nothing to commit (already committed)")
+                    self._staged.clear()
                     return False
-            except subprocess.CalledProcessError as e:
-                logger.error("git commit failed: %s", e.stderr if e.stderr else e)
+                logger.error("git commit failed: %s", result.stderr)
                 return False
 
             self._staged.clear()

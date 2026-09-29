@@ -95,6 +95,9 @@ from app.routers import (
     projects,
     prompt_templates,
     repos,
+    run_record,
+    heads,
+    night_shift,
     runtimes,
     runtime_schedules,
     playbooks,
@@ -108,6 +111,7 @@ from app.routers import (
     system,
     tags,
     tasks,
+    usage,
     voice,
     workflows,
     webhooks,
@@ -404,6 +408,9 @@ app.include_router(auth.router)
 app.include_router(system.router)
 app.include_router(boards.router)
 app.include_router(tasks.router)
+app.include_router(run_record.router)  # /api/v1/tasks/{id}/run-record — Laufakte (Lauf 5, kein Board im Pfad)
+app.include_router(heads.router)  # /api/v1/heads — Head launcher (docs/specs/head-launcher.md), behind heads_enabled
+app.include_router(night_shift.router)  # /api/v1/night-shift — run marked tasks as heads tonight (ROADMAP E2), behind heads_enabled
 app.include_router(files.router)  # /api/v1/files — global Files browser (portable, sandboxed)
 app.include_router(agents.router)
 app.include_router(agent_templates.router)
@@ -462,10 +469,11 @@ app.include_router(agent_chat.router)  # /api/v1/agents/{id}/chat/history|stream
 app.include_router(consensus.router)
 app.include_router(schedule.router)
 app.include_router(voice.router)
+app.include_router(usage.router)  # /api/v1/usage/page|pages — E0 page-usage beacon
 
 # ── Verticals (optional, strippable feature bundles — ADR-044) ──────────────
 # Discovery loads every subpackage of app/verticals/ with register(app).
-# Public release without e.g. news_studio/: app boots unchanged without those routes.
+# A missing vertical directory: app boots unchanged without those routes.
 from app.verticals import register_all as _register_verticals
 _loaded_verticals = _register_verticals(app)
 app.include_router(meetings.router)

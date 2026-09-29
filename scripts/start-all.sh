@@ -17,6 +17,11 @@ cd "$(dirname "$0")/.."
 BUILD_FLAG=""
 if [ "${1:-}" = "--build" ]; then
     BUILD_FLAG="--build"
+    # Preflight NUR wenn wirklich gebaut wird. Ohne --build ist das ein reiner
+    # `up -d`: es entstehen keine neuen Images, und eine Verweigerung waere
+    # eine erfundene Blockade eines Null-Baus.
+    . ./docker/shared/disk-preflight.sh
+    mc_disk_preflight
 fi
 
 echo "=== MC Start ==="
@@ -24,6 +29,14 @@ echo "=== MC Start ==="
 # 1. Core: DB, Redis, Backend, Qdrant, Caddy
 echo "  [1/2] Core-Services..."
 docker compose up -d $BUILD_FLAG 2>&1 | grep -E "Started|Healthy|Error" | sed 's/^/    /'
+
+# Cache-Aufraeumen nur, wenn oben wirklich gebaut wurde — und nur nach einem
+# erfolgreichen `up` (set -e bricht vorher ab, ein Fehlschlag erreicht diese
+# Zeile also nicht). Der Layer-Cache eines fehlgeschlagenen Baus bleibt damit
+# fuer den Wiederholungsversuch erhalten.
+if [ -n "$BUILD_FLAG" ]; then
+    mc_build_cache_cleanup
+fi
 
 # Warten bis Backend healthy ist (abhaengig von DB + Redis)
 # `timeout` existiert nicht standardmaessig auf macOS — native bash-loop:

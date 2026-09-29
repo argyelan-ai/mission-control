@@ -96,6 +96,21 @@ describe("ContextPanel", () => {
     expect(screen.queryByTestId("context-row-cacheRead")).not.toBeInTheDocument();
   });
 
+  it("shows the omp fill figure (usedTokens) as Belegt, never the cumulative input — live 14.09.2026: fill 92,799 of 500k while cumulative input was 11.8M (task 156f57c7)", () => {
+    renderPanel({
+      usage: mkUsage({
+        inputTokens: 92_799,
+        contextWindow: 500_000,
+        usedPct: 18.6,
+        components: null,
+      }),
+      pct: 18.6,
+    });
+    expect(screen.getByTestId("context-row-used")).toHaveTextContent("93k");
+    expect(screen.getByTestId("context-row-free")).toHaveTextContent("407k");
+    expect(screen.getByTestId("context-panel-pct")).toHaveTextContent("19%");
+  });
+
   it("omits Frei and the shares when the window is unknown", () => {
     renderPanel({ usage: mkUsage({ contextWindow: null }) });
     expect(screen.queryByTestId("context-row-free")).not.toBeInTheDocument();

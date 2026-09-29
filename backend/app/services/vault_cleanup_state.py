@@ -45,7 +45,7 @@ class VaultCleanupState:
                 self._run_id = id_file.read_text().strip()
             else:
                 self._run_id = (
-                    dt.datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+                    dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d-%H%M%S")
                     + "-"
                     + uuid.uuid4().hex[:6]
                 )
@@ -82,7 +82,7 @@ class VaultCleanupState:
 
     def log(self, level: str, message: str) -> None:
         """Append a timestamped line to run.log."""
-        ts = dt.datetime.utcnow().isoformat(timespec="seconds")
+        ts = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
         with (self.root / "run.log").open("a") as f:
             f.write(f"{ts}  {level:5s} {message}\n")
 

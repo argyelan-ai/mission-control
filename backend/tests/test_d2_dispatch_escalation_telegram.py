@@ -51,13 +51,17 @@ scopes=["tasks:read", "tasks:write", "heartbeat"],
             "blocker_comment": blocker_comment,
         })
 
-    with patch("app.services.telegram_bot.telegram_bot.send_approval_telegram",
-               new=AsyncMock(side_effect=_fake_send_approval)):
-        with patch("app.services.activity.broadcast", new_callable=AsyncMock):
-            async with AsyncSession(test_engine, expire_on_commit=False) as s:
-                await task_runner._create_dispatch_approval(
-                    s, await s.get(Task, task.id), agent, 20.0, "kein ACK nach Dispatch",
-                )
+    from app.config import settings
+
+    # Approval-Pfad = Schalter aus (Lauf 4)
+    with patch.object(settings, "notice_only_escalations_enabled", False):
+        with patch("app.services.telegram_bot.telegram_bot.send_approval_telegram",
+                   new=AsyncMock(side_effect=_fake_send_approval)):
+            with patch("app.services.activity.broadcast", new_callable=AsyncMock):
+                async with AsyncSession(test_engine, expire_on_commit=False) as s:
+                    await task_runner._create_dispatch_approval(
+                        s, await s.get(Task, task.id), agent, 20.0, "kein ACK nach Dispatch",
+                    )
 
     # Approval was created
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
@@ -99,14 +103,18 @@ scopes=["tasks:read", "tasks:write"],
         dispatch_attempt_id=str(uuid.uuid4()),
     )
 
-    with patch("app.services.telegram_bot.telegram_bot.send_approval_telegram",
-               new=AsyncMock(side_effect=RuntimeError("Telegram API down"))):
-        with patch("app.services.activity.broadcast", new_callable=AsyncMock):
-            async with AsyncSession(test_engine, expire_on_commit=False) as s:
-                # MUST NOT raise
-                await task_runner._create_dispatch_approval(
-                    s, await s.get(Task, task.id), agent, 20.0, "kein ACK",
-                )
+    from app.config import settings
+
+    # Approval-Pfad = Schalter aus (Lauf 4)
+    with patch.object(settings, "notice_only_escalations_enabled", False):
+        with patch("app.services.telegram_bot.telegram_bot.send_approval_telegram",
+                   new=AsyncMock(side_effect=RuntimeError("Telegram API down"))):
+            with patch("app.services.activity.broadcast", new_callable=AsyncMock):
+                async with AsyncSession(test_engine, expire_on_commit=False) as s:
+                    # MUST NOT raise
+                    await task_runner._create_dispatch_approval(
+                        s, await s.get(Task, task.id), agent, 20.0, "kein ACK",
+                    )
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         approvals = (await s.exec(

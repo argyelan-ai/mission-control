@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from app.utils import utcnow
 from typing import Any
 
 from pydantic import computed_field, field_validator
@@ -229,24 +230,40 @@ class Agent(SQLModel, table=True):
     )
 
     requires_git_workflow: bool = Field(default=True)
-    # Response language towards the operator (short code, e.g. "en", "de").
-    # Templates are English; this only steers how the agent replies.
-    language: str = Field(default="en", max_length=16)
+    # Split from the former single `language` field (Migration 0201): one
+    # field can't steer both audiences without ambiguity — agent-to-agent
+    # traffic (task comments, reflections, handoffs) was riding piggyback on
+    # whatever the operator's language was, even though prompts/templates are
+    # English throughout. Two fields, two audiences:
+    # Short code, e.g. "en", "de". What the agent writes TO the operator:
+    # `mc report`, `mc msg`, `mc ask`, chat replies. Default "en" for new
+    # agents; the migration carried each existing agent's old `language`
+    # value here so nobody's operator-facing language changed on cutover.
+    operator_language: str = Field(default="en", max_length=16)
+    # Short code, e.g. "en", "de". Agent-to-agent work: task comments,
+    # reflections, handoffs, checklist items, deliverable text. Default "en"
+    # fleet-wide (migration set every existing agent to "en" here regardless
+    # of its old `language` value — the old German-everywhere behavior for
+    # this half was the thing being cut over, not preserved).
+    work_language: str = Field(default="en", max_length=16)
 
     # Analytics snapshots
-    context_tokens: int = 0
+    # None = unbekannt: der Agent hat seit >= 3 Herzschlaegen keinen Kontextwert
+    # gemeldet (Scrape fehlgeschlagen). Ein stehengebliebener alter Wert luegt
+    # ueberzeugender als ein fehlender (Vorfall 10.09.2026: 100 % fuer Stunden).
+    context_tokens: int | None = 0
     context_max: int = 150_000
     session_message_count: int = 0
     total_tasks_completed: int = 0
     total_compactions: int = 0
 
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),
     )
     updated_at: datetime = Field(
-        default_factory=datetime.utcnow,
-        sa_column=Column(DateTime(timezone=True), server_default=text("NOW()"), onupdate=datetime.utcnow),
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), server_default=text("NOW()"), onupdate=utcnow),
     )
 
     # ── Derived (NOT a column, no migration) ──────────────────────────────
@@ -278,6 +295,20 @@ class Agent(SQLModel, table=True):
         from app.services.host_harness_adapter import runtime_switch_availability
 
         return runtime_switch_availability(self)[1]
+
+    # Chat over ACP (docs/specs/chat-over-acp.md): dieser Agent hat KEINE
+    # bedienbare TUI — der Sessions-Chat ist seine einzige Oberflaeche, und
+    # das Frontend rendert den Chat/Terminal-Umschalter gar nicht erst.
+    # Gleiche Bauart und gleicher Grund wie ``runtime_switchable`` oben: die
+    # Regel steht EINMAL in der Funktion, die auch der Sendepfad
+    # (``agent_chat_input._target_kind``) benutzt — das UI liest sie, es
+    # leitet sie nicht neu her.
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def headless_chat(self) -> bool:
+        from app.services.acp_chat_transport import headless_chat_kind
+
+        return headless_chat_kind(self) is not None
 
 
 @event.listens_for(Agent, "before_insert")
@@ -321,6 +352,6 @@ class AgentMetrics(SQLModel, table=True):
     )
 
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),
     )

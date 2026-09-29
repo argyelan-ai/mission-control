@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from app.utils import utcnow
 from typing import Any
 
 from sqlalchemy import JSON, DateTime, text
@@ -33,7 +34,7 @@ class ActivityEvent(SQLModel, table=True):
     severity: str = "info"  # info | warning | error | critical
 
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),
     )
 
@@ -54,6 +55,6 @@ class Notification(SQLModel, table=True):
     error_message: str | None = None
 
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),
     )

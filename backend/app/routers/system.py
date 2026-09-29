@@ -1,7 +1,7 @@
 import json
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlalchemy import text
@@ -10,6 +10,7 @@ from app.auth import Role, require_role, require_user
 from app.config import settings
 from app.database import get_session
 from app.redis_client import RedisKeys, get_redis
+from app.services.service_heartbeat import service_status
 from app.services.task_runner import task_runner
 from app.services.watchdog import watchdog
 from app.utils import ensure_aware, utcnow
@@ -22,6 +23,12 @@ router = APIRouter()
 # the A2 bug from 2026-07-02; fixed at the source instead of per frontend component).
 ALIVE_AGENT_STATUSES = ("online", "busy", "idle", "working")
 _start_time = utcnow()
+
+
+def _stale_after(interval: int) -> int:
+    """A loop beats once per tick (check duration + interval sleep). Four
+    missed intervals, at least two minutes, before we call it stale."""
+    return max(4 * interval, 120)
 
 
 @router.get("/health")
@@ -71,6 +78,36 @@ async def system_version(current_user = Depends(require_user)):
     }
 
 
+@router.get("/api/v1/system/alerts")
+async def system_alerts(
+    session: AsyncSession = Depends(get_session),
+    current_user = Depends(require_user),
+):
+    """Alerts contributed by verticals for the Home page (hooks.home_alert_providers).
+
+    Computed live on every call — an alert vanishes as soon as its cause is
+    fixed. Empty list in a stripped installation (no providers registered).
+    """
+    from app.verticals.hooks import collect_home_alerts
+
+    return {"alerts": await collect_home_alerts(session)}
+
+
+@router.get("/api/v1/system/daily-metrics")
+async def system_daily_metrics(
+    session: AsyncSession = Depends(get_session),
+    current_user = Depends(require_user),
+):
+    """The daily metrics digest (M1–M5) for the Home page — MC first, the
+    Slack/Telegram copy stays optional. Computed live on every call with the
+    same code as the digest (app/services/daily_metrics_digest.py)."""
+    from app.services.daily_metrics_digest import compute_daily_metrics
+
+    now = utcnow()
+    metrics = await compute_daily_metrics(session, now=now)
+    return {**metrics, "computed_at": now.isoformat()}
+
+
 @router.get("/api/v1/system/status")
 async def system_status(
     request: Request,
@@ -102,17 +139,33 @@ async def system_status(
     # sunset; the /api/v1/system/status response no longer includes
     # `components["gateway"]`. Frontend (Phase 31) will adapt.
 
-    # Watchdog status
+    # Background loops. Since the worker container split they run in the
+    # worker process, not here — asking only this process's singletons said
+    # "stopped" while the watchdog was running. Each loop writes a Redis
+    # heartbeat per tick; a loop running in this process still counts.
+    wd_status, wd_beat = await service_status(
+        "watchdog",
+        local_running=watchdog.running,
+        stale_after_seconds=_stale_after(watchdog.interval),
+    )
+    if wd_status["source"] == "local":
+        last_check = watchdog.last_check_at.isoformat() if watchdog.last_check_at else None
+        checks_total = watchdog.checks_total
+    else:
+        last_check = (wd_beat or {}).get("last_check_at")
+        checks_total = (wd_beat or {}).get("checks_total", 0)
     components["watchdog"] = {
-        "status": "running" if watchdog.running else "stopped",
-        "last_check": watchdog.last_check_at.isoformat() if watchdog.last_check_at else None,
-        "checks_total": watchdog.checks_total,
+        **wd_status,
+        "last_check": last_check,
+        "checks_total": checks_total,
     }
 
-    # Task Runner status
-    components["task_runner"] = {
-        "status": "running" if task_runner.running else "stopped",
-    }
+    tr_status, _ = await service_status(
+        "task_runner",
+        local_running=task_runner.running,
+        stale_after_seconds=_stale_after(task_runner.interval),
+    )
+    components["task_runner"] = tr_status
 
     overall = "healthy" if all(
         c.get("status") in ("ok", "running") for c in components.values()
@@ -184,9 +237,17 @@ async def system_metrics(
     tasks_active = (
         await session.exec(select(func.count(Task.id)).where(Task.status == "in_progress"))
     ).one()
-    agents_total = (await session.exec(select(func.count(Agent.id)))).one()
+    # Same roster and split as /agents: archived agents are hidden there, and a
+    # paused agent still heartbeats ("idle") — so "online" alone read 14/14
+    # with 12 agents paused. `online` stays for API compatibility, counted over
+    # the same roster so it never exceeds `total`.
+    roster = select(func.count(Agent.id)).where(Agent.archived_at.is_(None))
+    agents_total = (await session.exec(roster)).one()
+    agents_paused = (
+        await session.exec(roster.where(Agent.operational_mode == "paused"))
+    ).one()
     agents_online = (
-        await session.exec(select(func.count(Agent.id)).where(Agent.status.in_(ALIVE_AGENT_STATUSES)))
+        await session.exec(roster.where(Agent.status.in_(ALIVE_AGENT_STATUSES)))
     ).one()
     approvals_pending = (
         await session.exec(
@@ -196,7 +257,12 @@ async def system_metrics(
 
     return {
         "tasks": {"total": tasks_total, "active": tasks_active},
-        "agents": {"total": agents_total, "online": agents_online},
+        "agents": {
+            "total": agents_total,
+            "active": agents_total - agents_paused,
+            "paused": agents_paused,
+            "online": agents_online,
+        },
         "approvals": {"pending": approvals_pending},
     }
 
@@ -318,24 +384,38 @@ async def intelligence_costs(
     With include_sessions=true also includes session-level breakdown (top 100).
     """
     import datetime
-    from sqlalchemy import func
+    from sqlalchemy import and_, case, func
     from sqlmodel import select
     from app.models.model_usage import ModelUsageEvent
     from app.models.agent import Agent as AgentModel
 
     cutoff = utcnow() - datetime.timedelta(days=days)
 
+    # Head runs carry no agent (docs/specs/head-launcher.md) — they get their
+    # own "Heads" bucket instead of disappearing into "Unattributed".
+    is_head = case(
+        (and_(ModelUsageEvent.agent_id.is_(None), ModelUsageEvent.harness.like("head-%")), True),
+        else_=False,
+    ).label("is_head")
+
+    def _bucket(agent_id, head: bool) -> tuple[str, str]:
+        if agent_id:
+            return str(agent_id), agent_name_cache.get(str(agent_id), "?")
+        # The UI keys rows by agent_id → distinct non-UUID ids for the two buckets.
+        return ("heads", "Heads") if head else ("", "Unattributed")
+
     # Aggregate per agent (agent_id NULL = Boss without attribution / unknown)
     agent_result = await session.exec(
         select(
             ModelUsageEvent.agent_id,
+            is_head,
             func.sum(ModelUsageEvent.input_tokens).label("total_in"),
             func.sum(ModelUsageEvent.output_tokens).label("total_out"),
             func.sum(ModelUsageEvent.cost_usd).label("total_cost"),
             func.count(ModelUsageEvent.id).label("event_count"),
         )
         .where(ModelUsageEvent.ts >= cutoff)
-        .group_by(ModelUsageEvent.agent_id)
+        .group_by(ModelUsageEvent.agent_id, is_head)
     )
 
     # Load agent names once (batch)
@@ -357,10 +437,9 @@ async def intelligence_costs(
         total_out += a_out
         total_cost += a_cost
 
-        # agent_id NULL → "Unattributed" (Boss rows without cwd match, etc.)
-        # The UI schema needs agent_id as a string → empty string for NULL.
-        aid_str = str(row.agent_id) if row.agent_id else ""
-        aname = agent_name_cache.get(aid_str, "Unattributed") if aid_str else "Unattributed"
+        # agent_id NULL → "Heads" (head runs) or "Unattributed" (Boss rows
+        # without cwd match, etc.). The UI schema needs agent_id as a string.
+        aid_str, aname = _bucket(row.agent_id, row.is_head)
 
         agent_costs.append({
             "agent_id": aid_str,
@@ -384,6 +463,7 @@ async def intelligence_costs(
         session_result = await session.exec(
             select(
                 ModelUsageEvent.agent_id,
+                is_head,
                 ModelUsageEvent.session_id,
                 func.sum(ModelUsageEvent.input_tokens).label("total_in"),
                 func.sum(ModelUsageEvent.output_tokens).label("total_out"),
@@ -392,14 +472,13 @@ async def intelligence_costs(
                 func.max(ModelUsageEvent.ts).label("last_event_at"),
             )
             .where(ModelUsageEvent.ts >= cutoff)
-            .group_by(ModelUsageEvent.agent_id, ModelUsageEvent.session_id)
+            .group_by(ModelUsageEvent.agent_id, is_head, ModelUsageEvent.session_id)
             .order_by(func.sum(ModelUsageEvent.cost_usd).desc())
             .limit(100)
         )
         sessions = []
         for row in session_result.all():
-            aid_str = str(row.agent_id) if row.agent_id else ""
-            aname = agent_name_cache.get(aid_str, "Unattributed") if aid_str else "Unattributed"
+            aid_str, aname = _bucket(row.agent_id, row.is_head)
             sessions.append({
                 "agent_id": aid_str,
                 "agent_name": aname,
@@ -579,6 +658,59 @@ async def costs_by_task(
     ]
 
 
+def _usage_zone(tz: str | None) -> str:
+    """The zone Insights counts days in: the caller's, else the configured one."""
+    from app.config import settings
+    from app.services.usage_baseline import zone
+
+    tz = tz or settings.usage_timezone
+    try:
+        zone(tz)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return tz
+
+
+@router.get("/api/v1/intelligence/costs/by-week")
+async def costs_by_week(
+    weeks: int = 6,
+    tz: str | None = None,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """E0 token baseline — tokens, list-price cost and local share per ISO
+    week × source (operator, lead, agents:<harness>, heads:<locality>,
+    unattributed). Rules: app/services/usage_baseline.py.
+
+    Response: {generated_at, start, tz, weeks: [{week, week_start, partial,
+    totals, sources: [{source, ...totals}]}]}. weeks is clamped to 1..26;
+    the current week is partial. tz (IANA) defaults to settings.usage_timezone.
+    """
+    from app.services.usage_baseline import compute_weekly_baseline
+
+    return await compute_weekly_baseline(session, weeks=weeks, tz=_usage_zone(tz))
+
+
+@router.get("/api/v1/intelligence/costs/by-day")
+async def costs_by_day(
+    days: int = 182,
+    tz: str | None = None,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Insights heatmap — tokens, list-price cost and local share per calendar
+    day in tz (IANA, default settings.usage_timezone). Same query and source
+    rules as by-week, so a day and its week agree.
+
+    Response: {generated_at, start, tz, days: [{date, ...totals,
+    generated_tokens, local_generated_tokens, top_source}]}, every day of the
+    window oldest first, today last. days is clamped to 1..371.
+    """
+    from app.services.usage_baseline import compute_daily_usage
+
+    return await compute_daily_usage(session, days=days, tz=_usage_zone(tz))
+
+
 @router.post("/api/v1/admin/usage/backfill-attribution")
 async def backfill_usage_attribution(
     session: AsyncSession = Depends(get_session),
@@ -755,7 +887,7 @@ async def get_usage_analytics(
             "run_state": agent.run_state,
             "context_tokens": agent.context_tokens,
             "context_max": agent.context_max,
-            "context_pct": round(agent.context_tokens / agent.context_max * 100) if agent.context_max > 0 else 0,
+            "context_pct": (round(agent.context_tokens / agent.context_max * 100) if (agent.context_max > 0 and agent.context_tokens is not None) else None),
             "tasks_completed": agent.total_tasks_completed,
             "total_compactions": agent.total_compactions,
             "last_seen_at": agent.last_seen_at.isoformat() if agent.last_seen_at else None,

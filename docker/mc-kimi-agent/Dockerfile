@@ -87,15 +87,16 @@ RUN mkdir -p /home/agent/.ssh \
     && chmod 700 /home/agent/.ssh \
     && chmod 600 /home/agent/.ssh/config /home/agent/.ssh/known_hosts
 
-# Poll-Loop + Entrypoint + Kimi-Launcher + lib/
+# Poll-Loop + Entrypoint + sigforward + Kimi-Launcher + lib/
 # (kein recycler.sh — der Claude-Process-Recycler ist claude-mem-spezifisch;
 # kimi bekommt Session-Hygiene über poll.sh Session-Resets)
 COPY --chown=agent:agent poll.sh /home/agent/poll.sh
 COPY --chown=agent:agent entrypoint.sh /home/agent/entrypoint.sh
+COPY --chown=agent:agent sigforward.sh /home/agent/sigforward.sh
 COPY --chown=agent:agent start-kimi.sh /home/agent/start-kimi.sh
 COPY --chown=agent:agent lib /home/agent/lib
 RUN chmod +x /home/agent/poll.sh /home/agent/entrypoint.sh \
-      /home/agent/start-kimi.sh /home/agent/lib/*.sh
+      /home/agent/sigforward.sh /home/agent/start-kimi.sh /home/agent/lib/*.sh
 
 # `mc` CLI — thin Python client for the agent-scoped API. Populated by
 # scripts/build-agent-images.sh before `docker build`.

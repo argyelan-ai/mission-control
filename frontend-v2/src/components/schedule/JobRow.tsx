@@ -25,8 +25,17 @@ import { motion } from "framer-motion";
 import type { ScheduledJob } from "@/lib/types";
 // i18n build ships all cronstrue locales — needed for the German trigger text.
 import cronstrue from "cronstrue/i18n";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import { EntityIcon } from "@/components/shared/EntityIcon";
+
+/**
+ * Column template shared by the table header (JobsTable) and every row. They
+ * are separate grids, so the actions column MUST be a fixed width: `auto`
+ * sized it to the row's ~190 px of hover buttons but to nothing in the
+ * header, and every `fr` column drifted out of line.
+ */
+export const JOB_GRID_COLS =
+  "grid-cols-[24px_24px_minmax(0,2fr)_minmax(0,1.5fr)_1fr_1fr_minmax(0,1fr)_192px]";
 
 interface JobRowProps {
   job: ScheduledJob;
@@ -164,7 +173,7 @@ export function JobRow({
     <motion.div
       initial={{ opacity: 0, y: 4 }}
       animate={{ opacity: 1, y: 0 }}
-      className="group relative grid grid-cols-[24px_24px_minmax(0,2fr)_minmax(0,1.5fr)_1fr_1fr_minmax(0,1fr)_auto] items-center gap-3 rounded-lg px-3 py-2.5 transition"
+      className={`group relative grid ${JOB_GRID_COLS} items-center gap-3 rounded-lg px-3 py-2.5 transition`}
       style={{
         border: `1px solid ${C.border}`,
         background: C.borderSubtle,
@@ -190,7 +199,7 @@ export function JobRow({
         type="button"
         onClick={() => router.push(`/schedule/${job.id}`)}
         className="flex min-w-0 flex-col items-start gap-0.5 text-left sticky z-10"
-        style={{ left: "72px", backgroundColor: C.bgSurface }}
+        style={{ left: "72px", backgroundColor: C.rowOpaque }}
       >
         <span className="flex items-center gap-1.5 text-sm font-medium truncate max-w-full" style={{ color: C.textPrimary }}>
           <span className="truncate">{job.name}</span>
@@ -198,9 +207,9 @@ export function JobRow({
             <span
               className="flex shrink-0 items-center gap-0.5 rounded-sm px-1.5 py-0.5 text-[9px] font-semibold"
               style={{
-                background: `${C.error}1F`,
+                background: alpha(C.error, 0.12),
                 color: STATUS_TEXT.error,
-                border: `1px solid ${C.error}4D`,
+                border: `1px solid ${alpha(C.error, 0.3)}`,
               }}
               title={t("consecutiveFails", { count: failures })}
             >
@@ -212,9 +221,9 @@ export function JobRow({
             <span
               className="shrink-0 rounded-sm px-1.5 py-0.5 text-[9px] font-mono font-medium"
               style={{
-                background: `${C.warning}1F`,
+                background: alpha(C.warning, 0.12),
                 color: C.warning,
-                border: `1px solid ${C.warning}4D`,
+                border: `1px solid ${alpha(C.warning, 0.3)}`,
               }}
               title={t("snoozedUntil", { until: new Date(snoozedUntil).toLocaleString(locale === "de" ? "de-CH" : "en-GB") })}
             >
@@ -231,9 +240,9 @@ export function JobRow({
                   key={t}
                   className="rounded-sm px-1.5 py-0.5 text-[9px] font-mono font-medium"
                   style={{
-                    background: `${c}1F`,
+                    background: alpha(c, 0.12),
                     color: c,
-                    border: `1px solid ${c}33`,
+                    border: `1px solid ${alpha(c, 0.2)}`,
                   }}
                 >
                   {t}

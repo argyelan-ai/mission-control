@@ -32,7 +32,9 @@ import {
   MessageSquare,
   Send,
   BrainCircuit,
+  Moon,
   type LucideIcon,
+  Palette,
 } from "lucide-react";
 import { api, setStoredUser } from "@/lib/api";
 import { useAppStore, type AuthUser } from "@/lib/store";
@@ -51,9 +53,11 @@ import { CostPricesTab } from "@/components/settings/CostPricesTab";
 import { SlackTab } from "@/components/settings/SlackTab";
 import { TelegramTab } from "@/components/settings/TelegramTab";
 import { AiProvidersTab } from "@/components/settings/AiProvidersTab";
+import { AppearanceSection } from "@/components/settings/AppearanceSection";
+import { NightShiftTab } from "@/components/settings/NightShiftTab";
 import { StatusDot } from "@/components/shared/StatusDot";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 
 // ── Section Registry ──────────────────────────────────────────────────────────
 
@@ -78,10 +82,12 @@ interface SettingsSection {
 const SECTIONS: SettingsSection[] = [
   { id: "profile", labelKey: "sections.profile", icon: User, group: "account" },
   { id: "security", labelKey: "sections.security", icon: Shield, group: "account" },
+  { id: "appearance", labelKey: "sections.appearance", icon: Palette, group: "account" },
   { id: "shortcuts", labelKey: "sections.shortcuts", icon: Keyboard, group: "account" },
   { id: "autonomy", labelKey: "sections.autonomy", icon: SlidersHorizontal, group: "fleet", adminOnly: true },
   { id: "intelligence", labelKey: "sections.intelligence", icon: Zap, group: "fleet", adminOnly: true },
   { id: "costs", labelKey: "sections.costs", icon: DollarSign, group: "fleet", adminOnly: true },
+  { id: "night-shift", labelKey: "sections.nightShift", icon: Moon, group: "fleet", adminOnly: true },
   { id: "github", labelKey: "sections.github", icon: Github, group: "connections", adminOnly: true },
   { id: "slack", labelKey: "sections.slack", icon: MessageSquare, group: "connections", adminOnly: true },
   { id: "telegram", labelKey: "sections.telegram", icon: Send, group: "connections", adminOnly: true },
@@ -97,8 +103,6 @@ const SECTIONS: SettingsSection[] = [
 const SHORTCUTS = [
   { keys: ["Cmd", "K"], descKey: "shortcuts.items.commandPalette" },
   { keys: ["Cmd", "B"], descKey: "shortcuts.items.sidebar" },
-  { keys: ["Cmd", "N"], descKey: "shortcuts.items.newTask" },
-  { keys: ["Cmd", "Shift", "A"], descKey: "shortcuts.items.approveAll" },
   { keys: ["Esc"], descKey: "shortcuts.items.closeDialog" },
   { keys: ["?"], descKey: "shortcuts.items.help" },
   { keys: ["g", "h"], descKey: "shortcuts.items.goHome" },
@@ -299,8 +303,8 @@ function ErrorBanner({ message }: { message: string }) {
     <div
       className="flex items-center gap-2 text-xs rounded-lg px-3 py-2 mb-4"
       style={{
-        backgroundColor: `${C.error}12`,
-        border: `1px solid ${C.error}33`,
+        backgroundColor: alpha(C.error, 0.07),
+        border: `1px solid ${alpha(C.error, 0.2)}`,
         color: C.error,
       }}
     >
@@ -888,8 +892,9 @@ function IntelligenceSection({
               style={{
                 left: config.enabled ? "calc(100% - 22px)" : "2px",
                 // On the bone accent track a white knob vanishes (~1.1:1) —
-                // dark knob on accent, light knob on the dark off-track.
-                backgroundColor: config.enabled ? C.onAccent : "#fff",
+                // dark knob on accent, light knob on the dark off-track
+                // (textPrimary: near-white in dark, ink in light mode).
+                backgroundColor: config.enabled ? C.onAccent : C.textPrimary,
               }}
             />
           </button>
@@ -1275,7 +1280,7 @@ function ApiKeysSection({
                         className="text-[10px] px-1.5 py-0.5 rounded-sm uppercase"
                         style={{
                           backgroundColor: isSet
-                            ? `${C.online}1A`
+                            ? alpha(C.online, 0.1)
                             : "var(--color-bg-elevated)",
                           color: isSet ? C.online : "var(--color-text-muted)",
                         }}
@@ -1666,12 +1671,12 @@ function GithubSection() {
             </div>
 
             {saveError && (
-              <p className="text-xs rounded-lg px-3 py-2" style={{ color: STATUS_TEXT.error, backgroundColor: `${C.error}14`, border: `1px solid ${C.error}26` }}>
+              <p className="text-xs rounded-lg px-3 py-2" style={{ color: STATUS_TEXT.error, backgroundColor: alpha(C.error, 0.08), border: `1px solid ${alpha(C.error, 0.15)}` }}>
                 {saveError}
               </p>
             )}
             {saveMessage && (
-              <p className="text-xs rounded-lg px-3 py-2 flex items-center gap-1.5" style={{ color: C.online, backgroundColor: `${C.online}1A` }}>
+              <p className="text-xs rounded-lg px-3 py-2 flex items-center gap-1.5" style={{ color: C.online, backgroundColor: alpha(C.online, 0.1) }}>
                 <Check size={12} /> {saveMessage}
               </p>
             )}
@@ -1865,6 +1870,9 @@ function UserRow({
   const [editing, setEditing] = useState(false);
   const [role, setRole] = useState(user.role);
   const [error, setError] = useState("");
+  // Deactivating locks someone out — ask first. Re-activating restores
+  // access, so it stays a single click.
+  const [confirmDeactivate, setConfirmDeactivate] = useState(false);
 
   const updateMutation = useMutation({
     mutationFn: (data: { role?: string; is_active?: boolean }) =>
@@ -1881,7 +1889,7 @@ function UserRow({
 
   const roleColors: Record<string, { bg: string; text: string }> = {
     admin: { bg: C.accentSubtle, text: C.accent },
-    operator: { bg: `${C.warning}1F`, text: C.warning },
+    operator: { bg: alpha(C.warning, 0.12), text: C.warning },
     viewer: { bg: "var(--color-bg-elevated)", text: "var(--color-text-muted)" },
   };
 
@@ -1889,8 +1897,10 @@ function UserRow({
 
   return (
     <div
+      // No half-opacity for inactive users (text fell to 2.3–2.9:1 in both
+      // themes, UI probe) — the "Deactivated" chip carries the state.
       className="mc-card px-4 py-3 transition-colors"
-      style={{ ...cardStyle, opacity: user.is_active ? 1 : 0.5 }}
+      style={cardStyle}
     >
       {/* Top row: avatar + info + role */}
       <div className="flex items-center gap-3">
@@ -1929,7 +1939,7 @@ function UserRow({
               <span
                 className="text-[10px] px-1.5 py-0.5 rounded-sm"
                 style={{
-                  backgroundColor: `${C.error}1F`,
+                  backgroundColor: alpha(C.error, 0.12),
                   color: C.error,
                 }}
               >
@@ -1976,7 +1986,7 @@ function UserRow({
               <button
                 onClick={() => updateMutation.mutate({ role })}
                 disabled={updateMutation.isPending}
-                className="px-2 py-1 rounded-sm text-xs font-medium cursor-pointer transition-colors text-[var(--color-on-accent)]"
+                className="px-2 py-1 min-h-11 sm:min-h-0 rounded-sm text-xs font-medium cursor-pointer transition-colors text-[var(--color-on-accent)]"
                 style={{ background: C.accent }}
               >
                 {updateMutation.isPending ? (
@@ -1991,7 +2001,7 @@ function UserRow({
                   setRole(user.role);
                   setError("");
                 }}
-                className="px-2 py-1 rounded-sm text-xs cursor-pointer"
+                className="px-2 py-1 min-h-11 sm:min-h-0 rounded-sm text-xs cursor-pointer"
                 style={{ color: "var(--color-text-muted)" }}
               >
                 {t("cancel")}
@@ -2001,16 +2011,18 @@ function UserRow({
             <>
               <button
                 onClick={() => setEditing(true)}
-                className="px-2 py-1 rounded-sm text-xs cursor-pointer transition-colors"
+                className="px-2 py-1 min-h-11 sm:min-h-0 rounded-sm text-xs cursor-pointer transition-colors"
                 style={{ color: "var(--color-text-secondary)" }}
               >
                 {t("edit")}
               </button>
               <button
                 onClick={() =>
-                  updateMutation.mutate({ is_active: !user.is_active })
+                  user.is_active
+                    ? setConfirmDeactivate(true)
+                    : updateMutation.mutate({ is_active: true })
                 }
-                className="px-2 py-1 rounded-sm text-xs cursor-pointer transition-colors"
+                className="px-2 py-1 min-h-11 sm:min-h-0 rounded-sm text-xs cursor-pointer transition-colors"
                 style={{
                   color: user.is_active ? C.error : C.online,
                 }}
@@ -2028,6 +2040,23 @@ function UserRow({
           {error}
         </div>
       )}
+
+      <ConfirmDialog
+        open={confirmDeactivate}
+        kicker={t("confirmKicker")}
+        title={t("deactivateTitle", { name: user.name })}
+        body={t("deactivateBody", { name: user.name })}
+        confirmLabel={t("deactivateConfirm")}
+        cancelLabel={t("cancel")}
+        loading={updateMutation.isPending}
+        onConfirm={() =>
+          updateMutation.mutate(
+            { is_active: false },
+            { onSettled: () => setConfirmDeactivate(false) }
+          )
+        }
+        onCancel={() => setConfirmDeactivate(false)}
+      />
     </div>
   );
 }
@@ -2087,7 +2116,7 @@ function ShortcutsSection() {
                         backgroundColor: "var(--color-bg-elevated)",
                         border: "1px solid var(--color-border)",
                         color: "var(--color-text-secondary)",
-                        boxShadow: "0 1px 2px rgba(0, 0, 0, 0.3)",
+                        boxShadow: `0 1px 2px ${alpha(C.shadow, 0.3)}`,
                       }}
                     >
                       {key}
@@ -2215,6 +2244,12 @@ function SettingsContent() {
       setActiveSection(sectionParam);
     }
   }, [sectionParam]);
+  // Write the choice back so a reload or a shared link lands on it.
+  const router = useRouter();
+  const selectSection = (id: string) => {
+    setActiveSection(id);
+    router.replace(`/settings?section=${id}`, { scroll: false });
+  };
 
   const currentUser = useAppStore((s) => s.currentUser);
   const isAdmin = currentUser?.role === "admin";
@@ -2222,7 +2257,11 @@ function SettingsContent() {
   const visibleSections = SECTIONS.filter((s) => !s.adminOnly || isAdmin);
 
   return (
-    <div className="h-full flex flex-col overflow-hidden md:-m-6">
+    // fullHeight shell. From md up only the content column scrolls, so the
+    // section nav stays in view on long sections. On phones the whole page
+    // scrolls as one: the app bar and bottom tab bar already take height, and
+    // pinning the header plus the section strip would leave little room.
+    <div className="flex-1 min-h-0 flex flex-col overflow-y-auto md:overflow-hidden md:-m-6">
       {/* Header */}
       <motion.div
         initial={{ opacity: 0, y: 12 }}
@@ -2245,7 +2284,7 @@ function SettingsContent() {
         </div>
       </motion.div>
 
-      <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
+      <div className="flex-1 flex flex-col md:flex-row md:min-h-0 md:overflow-hidden">
         {/* Left: Section Nav (glass sidebar) */}
         <motion.nav
           initial={{ opacity: 0, x: -8 }}
@@ -2277,7 +2316,7 @@ function SettingsContent() {
               return (
                 <li key={section.id}>
                   <button
-                    onClick={() => setActiveSection(section.id)}
+                    onClick={() => selectSection(section.id)}
                     className={cn(
                       "relative flex items-center gap-3 w-full px-3 py-2 rounded-lg text-sm transition-all duration-200 cursor-pointer",
                       isActive ? "font-medium" : ""
@@ -2321,7 +2360,7 @@ function SettingsContent() {
         </motion.nav>
 
         {/* Right: Section Content */}
-        <div className="flex-1 overflow-y-auto p-4 md:p-6 min-w-0">
+        <div className="flex-1 md:overflow-y-auto p-4 md:p-6 min-w-0">
           {/* 3xl, not 2xl: two nav columns already eat ~530 px of a 1440 px
               screen, and the dense sections (autonomy matrix, key lists) were
               being squeezed while 300 px sat empty on the right. */}
@@ -2332,14 +2371,14 @@ function SettingsContent() {
               {activeSection === "autonomy" && isAdmin && <AutonomySection />}
               {activeSection === "intelligence" && isAdmin && (
                 <IntelligenceSection
-                  onNavigateToAiProviders={() => setActiveSection("ai-providers")}
+                  onNavigateToAiProviders={() => selectSection("ai-providers")}
                 />
               )}
               {activeSection === "apikeys" && isAdmin && (
                 <ApiKeysSection
-                  onNavigateToGithub={() => setActiveSection("github")}
-                  onNavigateToSlack={() => setActiveSection("slack")}
-                  onNavigateToTelegram={() => setActiveSection("telegram")}
+                  onNavigateToGithub={() => selectSection("github")}
+                  onNavigateToSlack={() => selectSection("slack")}
+                  onNavigateToTelegram={() => selectSection("telegram")}
                 />
               )}
               {activeSection === "github" && isAdmin && <GithubSection />}
@@ -2348,7 +2387,13 @@ function SettingsContent() {
               {activeSection === "ai-providers" && isAdmin && <AiProvidersTab />}
               {activeSection === "credentials" && isAdmin && <CredentialsTab />}
               {activeSection === "costs" && isAdmin && <CostPricesTab />}
+              {activeSection === "night-shift" && isAdmin && <NightShiftTab />}
               {activeSection === "users" && isAdmin && <UsersSection />}
+              {activeSection === "appearance" && (
+                <SectionMotion sectionKey="appearance">
+                  <AppearanceSection />
+                </SectionMotion>
+              )}
               {activeSection === "shortcuts" && <ShortcutsSection />}
               {activeSection === "about" && <AboutSection />}
             </AnimatePresence>
@@ -2361,7 +2406,7 @@ function SettingsContent() {
 
 export default function SettingsPage() {
   return (
-    <AppShell>
+    <AppShell fullHeight>
       <Suspense fallback={null}>
         <SettingsContent />
       </Suspense>

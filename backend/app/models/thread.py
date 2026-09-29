@@ -14,6 +14,7 @@ vocab — validated at the service layer (Task 3), not enforced here.
 
 import uuid
 from datetime import datetime
+from app.utils import utcnow
 
 from sqlalchemy import (
     JSON,
@@ -104,7 +105,7 @@ class Thread(SQLModel, table=True):
     summary: str | None = None
     summary_through_seq: int | None = None
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),
     )
     closed_at: datetime | None = Field(
@@ -134,7 +135,7 @@ class Message(SQLModel, table=True):
     #  "default": str|None, "deadline": iso|None}
     question_meta: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),
     )
 
@@ -147,11 +148,11 @@ class AgentThreadCursor(SQLModel, table=True):
     last_delivered_seq: int = Field(default=0)
     last_acked_seq: int = Field(default=0)
     updated_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(
             DateTime(timezone=True),
             server_default=text("CURRENT_TIMESTAMP"),
-            onupdate=datetime.utcnow,
+            onupdate=utcnow,
         ),
     )
 
@@ -163,10 +164,10 @@ class UserThreadCursor(SQLModel, table=True):
     thread_id: uuid.UUID = Field(foreign_key="threads.id", primary_key=True)
     last_read_seq: int = Field(default=0)
     updated_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(
             DateTime(timezone=True),
             server_default=text("CURRENT_TIMESTAMP"),
-            onupdate=datetime.utcnow,
+            onupdate=utcnow,
         ),
     )

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useTranslations } from "next-intl";
 import { ChevronDown } from "lucide-react";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import { cn } from "@/lib/utils";
 
 /**
@@ -45,14 +45,14 @@ const DOT: Record<Tone, string> = {
   ok: C.online,
   warn: C.warning,
   error: C.error,
-  idle: "#3A3A3A",
+  idle: "var(--color-status-offline)",
   accent: C.accent,
 };
 
 const CHIP: Record<Tone, { color: string; border: string; background: string }> = {
-  ok: { color: STATUS_TEXT.online, border: `${C.online}40`, background: "transparent" },
-  warn: { color: STATUS_TEXT.warning, border: `${C.warning}40`, background: "transparent" },
-  error: { color: STATUS_TEXT.error, border: `${C.error}40`, background: "transparent" },
+  ok: { color: STATUS_TEXT.online, border: alpha(C.online, 0.25), background: "transparent" },
+  warn: { color: STATUS_TEXT.warning, border: alpha(C.warning, 0.25), background: "transparent" },
+  error: { color: STATUS_TEXT.error, border: alpha(C.error, 0.25), background: "transparent" },
   idle: { color: C.textMuted, border: C.borderActive, background: "transparent" },
   accent: { color: C.accent, border: C.borderAccent, background: C.accentSubtle },
 };
@@ -91,10 +91,11 @@ export function MetaChip({
         className,
       )}
       style={{
-        color: c.color,
-        border: `1px solid ${c.border}`,
-        background: c.background,
-        ...(dimmed ? { opacity: 0.45 } : {}),
+        // dimmed = neutral ink instead of half opacity (text at 45 % fell
+        // below AA in both themes)
+        color: dimmed ? C.textDim : c.color,
+        border: `1px solid ${dimmed ? C.border : c.border}`,
+        background: dimmed ? "transparent" : c.background,
       }}
     >
       {icon}
@@ -269,7 +270,6 @@ export function ListRow({
 
   const classes = cn(
     "rounded-md border px-2.5 py-1.5 w-full text-left transition-colors",
-    muted && "opacity-60",
     onClick && "cursor-pointer hover:bg-[var(--color-bg-hover)]",
     className,
   );

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Plus, Pencil, Trash2, Eye, EyeOff, KeyRound, FileText, X } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -9,7 +9,8 @@ import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import type { Credential } from "@/lib/types";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
+import { useEscapeKey } from "@/hooks/useEscapeKey";
 
 // labelKey pattern: resolved via t() at the render site (docs/i18n.md)
 const TYPE_CONFIG = {
@@ -33,14 +34,7 @@ export function CredentialsTab() {
 
   // iOS-safe scroll lock + Esc close while the modal is open (panel register rule 4)
   useBodyScrollLock(modal.open);
-  useEffect(() => {
-    if (!modal.open) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setModal({ open: false, editing: null });
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [modal.open]);
+  useEscapeKey(() => setModal({ open: false, editing: null }), modal.open);
 
   // Form state
   const [name, setName] = useState("");
@@ -187,7 +181,7 @@ export function CredentialsTab() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="text-[12px] font-medium truncate" style={{ color: C.textPrimary }}>{c.name}</span>
-                    <span className="text-[9px] font-mono px-1.5 py-0.5 rounded-sm" style={{ color: cfg.color, border: `1px solid ${cfg.color}33`, backgroundColor: `${cfg.color}11` }}>
+                    <span className="text-[9px] font-mono px-1.5 py-0.5 rounded-sm" style={{ color: cfg.color, border: `1px solid ${alpha(cfg.color, 0.2)}`, backgroundColor: alpha(cfg.color, 0.07) }}>
                       {t(cfg.labelKey)}
                     </span>
                   </div>
@@ -209,7 +203,7 @@ export function CredentialsTab() {
                     </button>
                   )}
                   {deleteConfirm === c.id ? (
-                    <button onClick={() => deleteMut.mutate(c.id)} className="px-2 py-1 rounded-lg text-[10px] font-medium cursor-pointer" style={{ color: C.error, backgroundColor: `${C.error}22` }}>
+                    <button onClick={() => deleteMut.mutate(c.id)} className="px-2 py-1 rounded-lg text-[10px] font-medium cursor-pointer" style={{ color: C.error, backgroundColor: alpha(C.error, 0.1) }}>
                       {t("reallyDelete")}
                     </button>
                   ) : (
@@ -235,7 +229,7 @@ export function CredentialsTab() {
             style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
             onClick={(e) => { if (e.target === e.currentTarget) closeModal(); }}
           >
-            <div className="absolute inset-0" style={{ backgroundColor: "rgba(0,0,0,0.6)" }} />
+            <div className="absolute inset-0" style={{ backgroundColor: alpha(C.scrim, 0.6) }} />
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 10 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -244,7 +238,7 @@ export function CredentialsTab() {
               aria-modal="true"
               aria-label={modal.editing ? t("editTitle") : t("newTitle")}
               className="relative w-full sm:max-w-md rounded-t-2xl rounded-b-none sm:rounded-2xl overflow-hidden max-h-[92dvh] sm:max-h-[88vh] flex flex-col"
-              style={{ background: C.bgElevated, border: `1px solid ${C.border}`, boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)" }}
+              style={{ background: C.bgElevated, border: `1px solid ${C.border}`, boxShadow: `0 4px 24px ${alpha(C.shadow, 0.5)}, 0 1px 2px ${alpha(C.shadow, 0.3)}` }}
             >
               <div className="flex items-center justify-between px-5 py-3.5" style={{ borderBottom: `1px solid ${C.borderSubtle}` }}>
                 <span className="text-sm font-semibold" style={{ color: C.textPrimary }}>
@@ -279,9 +273,9 @@ export function CredentialsTab() {
                         onClick={() => setCredType(ct)}
                         className="px-2.5 py-1 text-[11px] font-mono font-medium rounded-sm cursor-pointer transition-all"
                         style={{
-                          backgroundColor: credType === ct ? `${cfg.color}22` : "transparent",
+                          backgroundColor: credType === ct ? alpha(cfg.color, 0.1) : "transparent",
                           color: credType === ct ? cfg.color : C.textMuted,
-                          border: `1px solid ${credType === ct ? `${cfg.color}66` : C.border}`,
+                          border: `1px solid ${credType === ct ? alpha(cfg.color, 0.4) : C.border}`,
                         }}
                       >
                         {t(cfg.labelKey)}

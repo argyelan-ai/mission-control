@@ -44,6 +44,22 @@ that event's own ``uuid`` — same pattern as ``_tool_result``, just keyed by
 parent chain instead of a tool-call id; never reaches the frontend on its
 own.
 
+Claude Code marks its OWN injected turns — text addressed to the MODEL, not
+to the operator — with ``"isMeta": true`` (operator finding 19.09.2026). The
+caveat wrapper above is one such line, but it is not the only one: scheduled
+prompts (``promptSource: "system"``), skill preambles and autonomous-loop
+nudges carry the same marker with arbitrary wording. ``_parse_user_entry``
+therefore drops any user entry whose ``isMeta`` is exactly ``true`` before
+looking at its content at all — the vendor marks its own meta-lines, so no
+wording-, language- or version-dependent pattern list is needed. Measured
+over 161 real session files (60,689 lines): 156 lines carry the marker, and
+over the 154 project transcripts ``read_history`` renders 25 of them as a
+chat bubble — all 25 are exactly the events this gate removes, with no other
+event kind losing a single entry. None of the 156 carries a ``tool_result``
+block, so the gate cannot orphan a tool row. Only the explicit boolean counts
+— an absent field (485 real text lines) and an explicit ``false`` keep
+flowing.
+
 ``message.content`` has TWO shapes in real transcripts: the API's list-of-
 blocks form, and a plain string — real interactively-typed user turns write
 the latter (fix round 5, live-gate finding: string content silently produced
@@ -315,7 +331,10 @@ def resolve_context_window(
        hash; ``None``/``{}`` here just skips this tier, keeping this
        function itself Redis-free and pure/synchronous — see
        ``harness_catalog``'s module docstring for why the dependency runs
-       this direction and not the reverse).
+       this direction and not the reverse) — but ONLY when it does not
+       SHRINK a value we already curated in step 2 (see the floor note
+       below). An observation that is merely absent from the static map,
+       or genuinely larger than it, always wins outright.
     2. Exact match against a configured key in ``settings.context_windows``
        (the static, config-seeded fallback — demoted from primary to
        tertiary this round, not deleted: still what answers before any
@@ -327,20 +346,41 @@ def resolve_context_window(
        context beta suffix) -> 1,000,000.
     5. Otherwise ``None`` — an unknown model gets no number rather than a
        guessed one.
+
+    STATIC-SEED-AS-FLOOR (Kontextanzeige-Transkript-Pfad round, 16.09.2026):
+    a context window is not a pure function of the model NAME — it also
+    depends on the reporting session's own account/beta entitlement (the
+    1M-context beta is opt-in per API key, not universal). ``observed`` is
+    shared FLEET-WIDE, keyed only by model name — one session on an account
+    without the beta honestly reports 200,000 for "claude-opus-5", and
+    without this floor that single observation would silently override the
+    curated 1,000,000 for every OTHER agent on the same model name,
+    including ones that genuinely have the full window. That is precisely
+    how a correct static seed turns into a displayed 200,000/141%-clamped-
+    to-100% for an agent whose own window is actually 1,000,000/28% full.
+    So: a static entry is a FLOOR once curated — observed may raise it
+    (larger, equally honest capability) but never lower it. Models with NO
+    static entry are unaffected: any observed value is accepted as-is,
+    same as before this round.
     """
     if not model:
         return None
 
-    if observed and model in observed:
-        return observed[model]
-
     windows = settings.context_windows
-    if model in windows:
-        return windows[model]
+    static_value = windows.get(model)
+    if static_value is None:
+        prefix_matches = [key for key in windows if model.startswith(key)]
+        if prefix_matches:
+            static_value = windows[max(prefix_matches, key=len)]
 
-    prefix_matches = [key for key in windows if model.startswith(key)]
-    if prefix_matches:
-        return windows[max(prefix_matches, key=len)]
+    if observed and model in observed:
+        observed_value = observed[model]
+        if static_value is None or observed_value > static_value:
+            return observed_value
+        return static_value
+
+    if static_value is not None:
+        return static_value
 
     if "[1m]" in model:
         return 1_000_000
@@ -415,6 +455,23 @@ def _parse_attachment_entry(d: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _parse_user_entry(d: dict[str, Any]) -> list[dict[str, Any]]:
+    # Harness-Meta-Zeile (Operator-Befund 19.09.2026): Claude Code markiert
+    # seine EIGENEN, an das Modell gerichteten Einschuebe selbst mit
+    # ``isMeta: true`` — die Caveat-Huelle, eingeschleuste Zeitplan-Auftraege,
+    # Skill-Vorspaenne. Sie gehoeren nicht ins Gespraech: der Operator hat sie
+    # nie getippt. Gemessen an 161 echten Sitzungsdateien (60.689 Zeilen):
+    # 156 Zeilen tragen die Markierung, davon wurden 25 vorher als Blase
+    # gezeigt; keine einzige traegt ein ``tool_result``, das Gate kann also
+    # keine Werkzeugkachel verwaisen lassen.
+    #
+    # Bewusst NUR das ausdrueckliche ``True``: ein fehlendes Feld muss
+    # weiterlaufen (485 echte Textzeilen ohne den Schluessel), und ein falsch
+    # gesetztes ``False`` ebenso. Die Verengung auf die Markierung ersetzt
+    # jede Wortlaut-Liste — die verrottet mit jeder Claude-Code-Version und
+    # haengt an Sprache und Formulierung.
+    if d.get("isMeta") is True:
+        return []
+
     msg_uuid = d.get("uuid")
     ts = d.get("timestamp")
     message = d.get("message")
@@ -1925,11 +1982,27 @@ class ChatTailerManager:
                     )
                     if resolved != preview_file_path:
                         preview_file_path = resolved
-                        preview_file_state = (
-                            {"path": resolved, "offset": 0, "buffer": b""}
-                            if resolved is not None
-                            else None
-                        )
+                        if resolved is None:
+                            preview_file_state = None
+                        else:
+                            # Am Dateiende einsteigen, nicht bei Offset 0:
+                            # der frische Tailer (erster Client nach einer
+                            # Pause) darf die Snapshots der LETZten Antwort
+                            # nicht nachspielen — sie sind Nachlauf einer
+                            # beendeten Antwort, und beim Oeffnen rauschte
+                            # der komplette Puffer durch (Operator-Befund
+                            # 16.09.2026). Dieselbe Regel wie der Transkript-
+                            # Tail (``initial_offset`` in ``acquire``). Die
+                            # naechste Snapshot-Zeile eines laufenden Zugs
+                            # ist ein VOLLES Bild (replace-me-Slot) und
+                            # stellt den Stand ohne Verzoegerung wieder her.
+                            try:
+                                size = (await asyncio.to_thread(resolved.stat)).st_size
+                            except OSError:
+                                size = 0
+                            preview_file_state = {
+                                "path": resolved, "offset": size, "buffer": b"",
+                            }
                     if preview_file_state is not None:
                         p_events = await asyncio.to_thread(
                             _read_preview_channel, preview_file_state

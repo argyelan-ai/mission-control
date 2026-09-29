@@ -28,6 +28,7 @@ import AppShell from "@/components/layout/AppShell";
 import { GlassCard } from "@/components/shared/GlassCard";
 import { KPICard } from "@/components/shared/KPICard";
 import { JobModal } from "@/components/schedule/JobModal";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { api } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
 import { timeAgo, cn } from "@/lib/utils";
@@ -40,7 +41,7 @@ import type {
   Task,
   TaskStatus,
 } from "@/lib/types";
-import { C, LANE, STATUS_TEXT } from "@/lib/colors";
+import { C, LANE, STATUS_TEXT, alpha } from "@/lib/colors";
 
 // Helpers
 function formatMs(ms: number): string {
@@ -72,12 +73,12 @@ function scheduleLabel(job: ScheduledJob, t: Translate): string {
 
 // Task status chips via LANE map
 const TASK_STATUS_COLOR: Record<string, string> = {
-  inbox:       `${LANE.inbox}26`,
-  in_progress: `${LANE.in_progress}2E`,
-  review:      `${LANE.review}2E`,
-  blocked:     `${LANE.blocked}2E`,
-  done:        `${LANE.done}29`,
-  failed:      `${LANE.failed}2E`,
+  inbox:       alpha(LANE.inbox, 0.15),
+  in_progress: alpha(LANE.in_progress, 0.18),
+  review:      alpha(LANE.review, 0.18),
+  blocked:     alpha(LANE.blocked, 0.18),
+  done:        alpha(LANE.done, 0.16),
+  failed:      alpha(LANE.failed, 0.18),
 };
 const TASK_STATUS_TEXT: Record<string, string> = {
   inbox:       C.textMuted,
@@ -114,9 +115,12 @@ export default function ScheduleJobDetailPage() {
   const activeBoardId = useAppStore((s) => s.activeBoardId);
 
   const [editOpen, setEditOpen] = useState(false);
+  // Switching a recurring job off is silent until the next run is missed —
+  // ask first. Switching it back on is harmless and stays one click.
+  const [confirmDisable, setConfirmDisable] = useState(false);
 
   // Job (lookup via list since no getJob endpoint exists)
-  const { data: jobs = [] } = useQuery({
+  const { data: jobs = [], isSuccess: jobsLoaded, isError: jobsFailed } = useQuery({
     queryKey: ["schedule-jobs"],
     queryFn: () => api.schedule.listJobs(),
     refetchInterval: 30_000,
@@ -167,6 +171,33 @@ export default function ScheduleJobDetailPage() {
     return m;
   }, [agents]);
 
+  // The list loaded (or failed) and this id is not in it: say so instead of
+  // spinning forever — the job was deleted or the link is stale.
+  if (!job && (jobsLoaded || jobsFailed)) {
+    return (
+      <AppShell>
+        <div className="flex flex-col items-center justify-center h-full gap-3 py-16 text-center">
+          <p className="text-sm font-medium" style={{ color: C.textPrimary }}>
+            {jobsFailed ? t("jobLoadFailed") : t("jobNotFound")}
+          </p>
+          {!jobsFailed && (
+            <p className="text-xs" style={{ color: C.textMuted }}>
+              {t("jobNotFoundHint")}
+            </p>
+          )}
+          <Link
+            href="/schedule"
+            className="flex items-center gap-1.5 text-xs px-3 py-1.5 min-h-11 sm:min-h-0 rounded-md transition-colors"
+            style={{ color: C.accent, border: `1px solid ${C.borderAccent}` }}
+          >
+            <ArrowLeft size={13} aria-hidden />
+            {t("backToSchedule")}
+          </Link>
+        </div>
+      </AppShell>
+    );
+  }
+
   if (!job) {
     return (
       <AppShell>
@@ -207,14 +238,39 @@ export default function ScheduleJobDetailPage() {
               {job.name}
             </h1>
             <button
-              onClick={() => updateMutation.mutate({ enabled: !job.enabled })}
-              className="px-2.5 py-1 rounded-sm text-[11px] font-mono transition-colors cursor-pointer shrink-0"
-              style={{
-                color: job.enabled ? C.online : C.textMuted,
-                border: `1px solid ${C.borderActive}`,
-              }}
+              type="button"
+              role="switch"
+              aria-checked={job.enabled}
+              onClick={() =>
+                job.enabled
+                  ? setConfirmDisable(true)
+                  : updateMutation.mutate({ enabled: true })
+              }
+              disabled={updateMutation.isPending}
+              className="flex items-center gap-2 px-2 py-1 min-h-11 sm:min-h-0 rounded-sm text-xs transition-colors cursor-pointer shrink-0 disabled:opacity-50"
+              style={{ color: C.textSecondary }}
             >
-              {job.enabled ? "ON" : "OFF"}
+              <span>{t("enabledSwitch")}</span>
+              <span
+                aria-hidden
+                className="relative shrink-0 rounded-full transition-colors"
+                style={{
+                  width: 36,
+                  height: 20,
+                  backgroundColor: job.enabled ? C.accent : C.bgElevated,
+                  border: `1px solid ${job.enabled ? C.accent : C.border}`,
+                }}
+              >
+                <span
+                  className="absolute top-1/2 -translate-y-1/2 rounded-full transition-all"
+                  style={{
+                    left: job.enabled ? 18 : 2,
+                    width: 14,
+                    height: 14,
+                    backgroundColor: job.enabled ? C.onAccent : C.textMuted,
+                  }}
+                />
+              </span>
             </button>
             <button
               onClick={() => setEditOpen(true)}
@@ -296,14 +352,14 @@ export default function ScheduleJobDetailPage() {
                       dataKey="success"
                       stackId="1"
                       stroke={C.online}
-                      fill={`${C.online}4D`}
+                      fill={alpha(C.online, 0.3)}
                     />
                     <Area
                       type="monotone"
                       dataKey="failed"
                       stackId="1"
                       stroke={C.error}
-                      fill={`${C.error}4D`}
+                      fill={alpha(C.error, 0.3)}
                     />
                   </AreaChart>
                 </ResponsiveContainer>
@@ -433,6 +489,36 @@ export default function ScheduleJobDetailPage() {
             </GlassCard>
           </div>
         </div>
+
+        <ConfirmDialog
+          open={confirmDisable}
+          kicker={t("disableJobKicker")}
+          title={t("disableJobTitle", { name: job.name })}
+          body={
+            job.next_run_at
+              ? t("disableJobBodyNext", {
+                  name: job.name,
+                  when: new Date(job.next_run_at).toLocaleString(dateLocale, {
+                    weekday: "short",
+                    day: "2-digit",
+                    month: "short",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  }),
+                })
+              : t("disableJobBody", { name: job.name })
+          }
+          confirmLabel={t("disableJobConfirm")}
+          cancelLabel={t("cancel")}
+          loading={updateMutation.isPending}
+          onConfirm={() =>
+            updateMutation.mutate(
+              { enabled: false },
+              { onSettled: () => setConfirmDisable(false) }
+            )
+          }
+          onCancel={() => setConfirmDisable(false)}
+        />
 
         {/* Edit Modal */}
         {editOpen && (

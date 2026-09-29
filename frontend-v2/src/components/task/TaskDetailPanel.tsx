@@ -11,12 +11,15 @@
  * ~180-line duplication between the two variants is gone.
  */
 
-import { useEffect } from "react";
 import { motion } from "framer-motion";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
-import { C } from "@/lib/colors";
+import { useEscapeKey } from "@/hooks/useEscapeKey";
+import { C, alpha } from "@/lib/colors";
 import { TaskDetailBody } from "./TaskDetailBody";
 import type { Task, Agent } from "@/lib/types";
+
+/** The body's sticky tabs paint the panel ground; "act" surfaces sit one step above it. */
+const DETAIL_VARS = { "--detail-bg": C.bgBase, "--detail-raised": C.bgSurface } as React.CSSProperties;
 
 interface TaskDetailPanelProps {
   task: Task;
@@ -39,16 +42,10 @@ export default function TaskDetailPanel({
   // Esc closes the modal variant. Portal menus (status/assignee dropdowns,
   // rendered with role=menu/listbox) handle Escape themselves — don't close
   // the panel out from under an open menu.
-  useEffect(() => {
-    if (variant === "panel") return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      if (document.querySelector('[role="menu"], [role="listbox"]')) return;
-      onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [variant, onClose]);
+  useEscapeKey(() => {
+    if (document.querySelector('[role="menu"], [role="listbox"]')) return;
+    onClose();
+  }, variant !== "panel");
 
   if (variant === "panel") {
     return (
@@ -59,7 +56,7 @@ export default function TaskDetailPanel({
         exit={{ opacity: 0, x: 24 }}
         transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
         className="w-[420px] max-w-[calc(100vw-2rem)] shrink-0 border-l flex flex-col overflow-hidden"
-        style={{ borderColor: C.border, backgroundColor: C.bgBase }}
+        style={{ borderColor: C.border, backgroundColor: C.bgBase, ...DETAIL_VARS }}
       >
         <TaskDetailBody task={task} agents={agents} boardId={boardId} onClose={onClose} />
       </motion.div>
@@ -76,7 +73,7 @@ export default function TaskDetailPanel({
         transition={{ duration: 0.15 }}
         className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-8"
         style={{
-          backgroundColor: "rgba(2, 4, 8, 0.7)",
+          backgroundColor: alpha(C.scrim, 0.7),
           paddingTop: "calc(env(safe-area-inset-top) + 3.5rem)",
           paddingBottom: "env(safe-area-inset-bottom)",
           paddingLeft: "env(safe-area-inset-left)",
@@ -102,6 +99,7 @@ export default function TaskDetailPanel({
             backgroundColor: C.bgBase,
             border: `1px solid ${C.border}`,
             boxShadow: "var(--shadow-elevated)",
+            ...DETAIL_VARS,
           }}
           onClick={(e) => e.stopPropagation()}
         >

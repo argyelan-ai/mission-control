@@ -4,16 +4,16 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Copy, Check } from "lucide-react";
 import { api } from "@/lib/api";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import type { ModelCatalog } from "@/lib/types";
 
 export const wizardOverlayClass =
   "fixed inset-0 z-50 flex items-end sm:items-center justify-center px-3 sm:px-4";
-export const wizardBackdropClass = "absolute inset-0 bg-black/70 backdrop-blur-sm";
+export const wizardBackdropClass = "absolute inset-0 bg-[var(--color-scrim)]/70 backdrop-blur-sm";
 export const wizardCardStyle = {
   backgroundColor: C.bgBase,
   border: `1px solid ${C.border}`,
-  boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
+  boxShadow: `0 4px 24px ${alpha(C.shadow, 0.5)}, 0 1px 2px ${alpha(C.shadow, 0.3)}`,
 } as const;
 export const wizardLabelClass =
   "text-[11px] mb-1.5 block text-[var(--color-text-muted)] uppercase tracking-wider";

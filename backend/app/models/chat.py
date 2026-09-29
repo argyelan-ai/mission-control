@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from app.utils import utcnow
 
 from sqlalchemy import DateTime, text
 from sqlmodel import Column, Field, SQLModel
@@ -29,6 +30,6 @@ class ChatMessage(SQLModel, table=True):
     is_system_message: bool = False
 
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),
     )

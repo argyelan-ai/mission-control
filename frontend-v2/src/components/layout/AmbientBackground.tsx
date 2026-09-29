@@ -1,5 +1,7 @@
 "use client";
 
+import { C, alpha } from "@/lib/colors";
+
 /**
  * AmbientBackground — v3.1
  *
@@ -22,7 +24,7 @@ export function AmbientBackground() {
         className="absolute inset-0"
         style={{
           background:
-            "radial-gradient(ellipse 60% 45% at 18% -5%, rgba(255,255,255,0.035) 0%, rgba(255,255,255,0) 70%)",
+            `radial-gradient(ellipse 60% 45% at 18% -5%, ${alpha(C.overlay, 0.035)} 0%, ${alpha(C.overlay, 0)} 70%)`,
         }}
       />
 

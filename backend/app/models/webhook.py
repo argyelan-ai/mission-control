@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from app.utils import utcnow
 from typing import Any
 
 from sqlalchemy import JSON, DateTime, text
@@ -15,12 +16,12 @@ class Webhook(SQLModel, table=True):
     secret: str | None = None
     is_enabled: bool = True
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),
     )
     updated_at: datetime = Field(
-        default_factory=datetime.utcnow,
-        sa_column=Column(DateTime(timezone=True), server_default=text("NOW()"), onupdate=datetime.utcnow),
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), server_default=text("NOW()"), onupdate=utcnow),
     )
 
 
@@ -36,6 +37,6 @@ class WebhookPayload(SQLModel, table=True):
     source_ip: str | None = None
     processed: bool = False
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),
     )

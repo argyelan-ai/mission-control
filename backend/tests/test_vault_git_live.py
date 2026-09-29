@@ -148,3 +148,45 @@ class TestVaultGitBatchTimer:
         vg.commit_batched("system", "test")
 
         assert len(vg._staged) == 0
+
+
+class TestVersioningDefaultOn:
+    """Versioning must be ON by default — the stub was a silent no-op for
+    four months while ADR-034 M.2 reported it as implemented. If anyone
+    re-arms stub_mode (hardcoded True at a construction site, or the class
+    default flipped back), these tests go red."""
+
+    def test_class_default_is_real_versioning(self, tmp_path):
+        vg = VaultGit(vault_path=tmp_path)  # no stub_mode argument
+        assert vg.stub_mode is False, (
+            "VaultGit default drifted back to stub_mode=True — vault writes "
+            "would silently stop being versioned again"
+        )
+
+    def test_background_wiring_does_not_force_stub(self):
+        from pathlib import Path
+
+        source = (Path(__file__).resolve().parent.parent / "app" / "background.py").read_text(
+            encoding="utf-8"
+        )
+        assert "stub_mode=True" not in source, (
+            "background.py re-arms the stub: VaultGit must be constructed "
+            "with real versioning (stub_mode=False or default)"
+        )
+        assert "VaultGit(vault_path=" in source, "wiring vanished?"
+
+    def test_stub_mode_actually_skips_writes(self, git_vault):
+        """Pin the stub's contract so the red/green pair is meaningful: in
+        stub mode commit_batched writes NOTHING (this is the bug class)."""
+        import subprocess as sp
+
+        note = git_vault / "stub-check.md"
+        note.write_text("content\n")
+        vg = VaultGit(vault_path=git_vault, stub_mode=True)
+        vg.stage(note)
+        assert vg.commit_batched("tester", "stub probe") is False
+        log = sp.run(
+            ["git", "-C", str(git_vault), "log", "--oneline"],
+            capture_output=True, text=True, check=True,
+        ).stdout
+        assert "stub probe" not in log

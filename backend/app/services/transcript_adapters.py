@@ -42,6 +42,10 @@ from typing import Any, Callable
 CLAUDE = "claude"
 OPENCLAUDE = "openclaude"
 OMP = "omp"
+#: Host-Harness, dessen ACP-Chat-Daemon dasselbe omp-Transkriptformat
+#: schreibt (docs/specs/chat-over-acp.md) — er teilt sich daher den
+#: omp-Adapter, statt ein zweites Format zu lernen.
+HERMES = "hermes"
 
 
 def _no_subagent_runs(_session_path: Path) -> list[dict[str, Any]]:
@@ -202,6 +206,12 @@ _BUILDERS: dict[str, Callable[[], TranscriptAdapter]] = {
     CLAUDE: _claude_adapter,
     OPENCLAUDE: lambda: _claude_adapter(OPENCLAUDE, process_name=OPENCLAUDE),
     OMP: _omp_adapter,
+    # Hermes liest mit dem omp-Adapter: sein Chat-Daemon schreibt dieselben
+    # Transkripte in dieselbe Ordnerform (``omp_chat.resolve_transcript_dir``
+    # laesst host+hermes ausdruecklich zu). Ohne diesen Eintrag waere jener
+    # Zweig toter Code — der History-Endpunkt fragt immer ueber
+    # ``adapter_for``, und ein unbekannter Harness bekommt den Claude-Adapter.
+    HERMES: _omp_adapter,
 }
 
 #: Harnesses mit eigener Pane-Sonde — und damit die, bei denen ein

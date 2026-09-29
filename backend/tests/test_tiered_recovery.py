@@ -267,6 +267,16 @@ async def test_tier3_dispatch_hang_times_out_and_fires_tier4(
     ]
     assert tier4_events, "Tier 4 operator-notify must fire after dispatch timeout"
 
+    # Nit (incident 2026-09-14): a TIMEOUT is not a confirmed failure — the
+    # background auto_dispatch_task may still complete (and that night, it
+    # did). The event text must say so instead of claiming "fehlgeschlagen"
+    # outright, which sent the operator looking in the wrong direction for
+    # an hour despite the redispatch having actually worked.
+    msg = tier4_events[0].args[2]
+    assert "Zeitueberschreitung" in msg
+    assert "fehlgeschlagen" not in msg
+    assert tier4_events[0].kwargs["detail"]["tier3_timed_out"] is True
+
 
 # ── Test 5: Tier 4 emits agent.recovery_failed severity=error (Discord auto) ──
 

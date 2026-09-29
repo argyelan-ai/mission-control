@@ -75,7 +75,7 @@ export function ProjectReferencesDialog({
         <button
           onClick={onClose}
           aria-label="Close"
-          className="shrink-0 cursor-pointer hover:opacity-80 transition-opacity"
+          className="shrink-0 cursor-pointer hover:opacity-80 transition-opacity touch-hit"
           style={{ color: C.textMuted }}
         >
           <X size={16} />

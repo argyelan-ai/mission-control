@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, CheckCheck, Clock3, SendHorizonal, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { C } from "@/lib/colors";
+import { MarkdownContent } from "@/components/chat/MarkdownContent";
 import type { TaskThreadResponse, ThreadMessage } from "@/lib/types";
 
 /**
@@ -56,6 +57,49 @@ function fmtTime(iso: string): string {
   });
 }
 
+// Marker, mit dem `dispatch_delivery.py` das Briefing im gespeicherten Body
+// kennzeichnet (`<!-- mc:briefing:attempt=<id> -->`). Er dient der Idempotenz
+// der Zustellung, nicht dem Leser.
+const BRIEFING_MARKER_RE = /^<!--\s*mc:briefing:attempt=[^>]*-->\s*/;
+
+/**
+ * System-Nachrichten des Threads. Der Dispatch-Briefing-Body ist ein ganzes
+ * Dokument (`# New Task:`/`## Approach`/`**Working directory:**` plus dem
+ * internen Marker) und lief bis 15.09.2026 durch dieselbe einzeilige Notiz-
+ * Optik wie „Migration: bisheriger Verlauf liegt in den Kommentaren…" —
+ * sichtbarer Marker, keine Gliederung, Pfad und Portnummer als Fliesstext.
+ *
+ * Das Briefing wird deshalb als Markdown gerendert (derselbe Renderer wie
+ * ueberall im Chat, ADR-075 — kein zweiter). Die `compact`-Stufe ist genau
+ * fuer Dispatch-Briefs gedacht: sie flacht die Ueberschriften ab, damit das
+ * Briefing nicht lauter ist als die Antwort, auf die es wartet.
+ *
+ * Der Rest bleibt, was er ist: eine kurze Notiz in einer Zeile.
+ */
+function SystemMessage({ body }: { body: string }) {
+  const marker = BRIEFING_MARKER_RE.exec(body);
+  if (!marker) {
+    return (
+      <div className="text-center font-mono text-[10px] py-0.5" style={{ color: C.textDim }}>
+        {body}
+      </div>
+    );
+  }
+  // Die Zeile nach dem Marker bleibt stehen: bei einer leeren ersten Zeile
+  // ist der Body leer — dann ueberschreiben `\s*` und `trim` sie zusammen.
+  const content = body.slice(marker[0].length).trim();
+  if (!content) return null;
+  return (
+    <div
+      data-testid="thread-briefing"
+      className="rounded-md px-3 py-2"
+      style={{ backgroundColor: "var(--color-bg-surface)", border: `1px solid ${C.border}` }}
+    >
+      <MarkdownContent content={content} compact />
+    </div>
+  );
+}
+
 export function ThreadPanel({ taskId }: { taskId: string }) {
   const [messages, setMessages] = useState<ThreadMessage[]>([]);
   const [recipient, setRecipient] = useState<TaskThreadResponse["recipient"]>(null);
@@ -67,6 +111,7 @@ export function ThreadPanel({ taskId }: { taskId: string }) {
   const [sending, setSending] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLDivElement>(null);
   const stateRef = useRef({ latestSeq: 0, myReadSeq: 0 });
   const readTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -139,6 +184,33 @@ export function ThreadPanel({ taskId }: { taskId: string }) {
     }, POLL_MS);
     return () => clearInterval(id);
   }, [taskId, unavailable, applyResponse, scrollToBottom]);
+
+  // Tastatur: `useKeyboardInset` schrumpft die Shell (globals.css), aber der
+  // Scroll-Container zieht seinen Inhalt nicht nach — die Eingabezeile blieb
+  // in Chromium bei 390x844 mit 300px Tastatur 222px unterhalb der sichtbaren
+  // Kante stehen (bei 430x932 waren es 134px). Ein `position: sticky` loest das
+  // nicht: der Composer sitzt in einem Block, der komplett unterhalb des
+  // Scrollports liegt, und sticky kann seinen Containing Block nicht
+  // verlassen. Deshalb wird der fokussierte Composer hier aktiv in den
+  // sichtbaren Bereich gezogen — nur wenn die Tastatur wirklich offen ist.
+  useEffect(() => {
+    const root = document.documentElement;
+    const reveal = () => {
+      const input = composerRef.current?.querySelector("input");
+      if (!input || document.activeElement !== input) return;
+      const inset = parseFloat(
+        getComputedStyle(root).getPropertyValue("--keyboard-inset"),
+      );
+      if (!(inset > 80)) return;
+      input.scrollIntoView({ block: "nearest" });
+    };
+    reveal();
+    // Die Variable setzt `useKeyboardInset` in einem eigenen resize-Handler;
+    // ohne den Microtask liefe diese Reaktion auf dem alten Wert.
+    const observer = new MutationObserver(() => queueMicrotask(reveal));
+    observer.observe(root, { attributes: true, attributeFilter: ["style"] });
+    return () => observer.disconnect();
+  }, []);
 
   const loadOlder = useCallback(() => {
     const first = stateRefFirst(messages);
@@ -234,9 +306,7 @@ export function ThreadPanel({ taskId }: { taskId: string }) {
                 </div>
               )}
               {system ? (
-                <div className="text-center font-mono text-[10px] py-0.5" style={{ color: C.textDim }}>
-                  {m.body}
-                </div>
+                <SystemMessage body={m.body} />
               ) : (
                 <div
                   className="rounded-sm px-2.5 py-1.5 max-w-[92%] sm:max-w-[80%]"
@@ -266,7 +336,7 @@ export function ThreadPanel({ taskId }: { taskId: string }) {
       </div>
 
       {/* Composer — always visible, on every status incl. done */}
-      <div className="flex gap-2">
+      <div ref={composerRef} className="flex gap-2">
         <input
           value={draft}
           onChange={(e) => setDraft(e.target.value)}

@@ -7,6 +7,27 @@
 # /livekit-signal is the WebSocket proxy to LiveKit signaling (RTC media
 # ports 7881/7882 are exposed separately on 0.0.0.0).
 
+# Never log credentials from URLs. Browsers cannot send an Authorization
+# header on EventSource/WebSocket, so stream URLs carry a short-lived,
+# single-use `?ticket=` (older clients: the login JWT as `?token=`). Caddy
+# writes the request URI into its log lines (e.g. reverse_proxy errors when a
+# stream is cut off), so redact both parameters on the default logger — it
+# covers the error log and any access log that is not configured separately.
+# If you add a site `log` directive, give it the same `format filter`.
+{
+	log default {
+		output stderr
+		format filter {
+			wrap json
+			request>uri query {
+				replace token REDACTED
+				replace ticket REDACTED
+				replace access_token REDACTED
+			}
+		}
+	}
+}
+
 (common) {
     encode gzip zstd
     header {
@@ -43,6 +64,14 @@
     # `caddy adapt` on the generated JSON routes. It is written first anyway
     # because that is how it reads to a human.
     handle /api/v1/internal/* {
+        respond 403
+    }
+
+    # Local-only webhooks (git post-commit hook on the host) carry no user
+    # auth. The backend rejects proxied and non-local callers itself
+    # (app/local_only.py); this block keeps them off the proxy entirely.
+    # Callers use the backend port directly.
+    handle /api/v1/webhooks/local/* {
         respond 403
     }
 

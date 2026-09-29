@@ -119,7 +119,8 @@ async def handle_review_pr_creation(
                     title=task.title,
                     body=f"Task: {task.title}\n\nBoard: {task.board_id}\nAgent: {agent.name}",
                 )
-                # Store PR URL as a comment
+                # Store PR URL as a comment (Pitfall H contract, unchanged —
+                # DO NOT change wording, see module docstring).
                 pr_comment = TaskComment(
                     task_id=task.id,
                     author_type="system",
@@ -127,6 +128,14 @@ async def handle_review_pr_creation(
                     content=f"**PR erstellt:** {pr_url}",
                 )
                 session.add(pr_comment)
+                # Reliable field alongside the comment marker (Task dd4bf92c,
+                # 2026-09-13) — review-dispatch workspace prep reads this
+                # instead of scraping the comment above.
+                pr_match = re.search(r"/pull/(\d+)", pr_url)
+                if pr_match:
+                    task.pr_number = int(pr_match.group(1))
+                task.pr_url = pr_url
+                session.add(task)
                 await session.commit()
         except Exception as e:
             logger.warning("PR-Erstellung fehlgeschlagen: %s", e)

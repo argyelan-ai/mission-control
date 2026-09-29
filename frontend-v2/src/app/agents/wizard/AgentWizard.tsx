@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { motion } from "framer-motion";
 import { X, ChevronLeft, ChevronRight, Check } from "lucide-react";
 import { C } from "@/lib/colors";
@@ -10,6 +10,7 @@ import {
   WIZARD_STEPS,
   canProceed,
   initialWizardState,
+  runtimeStepBlockers,
   type WizardState,
 } from "./types";
 import {
@@ -23,6 +24,7 @@ import { IdentityStep } from "./steps/IdentityStep";
 import { RuntimeStep } from "./steps/RuntimeStep";
 import { ScopesStep } from "./steps/ScopesStep";
 import { ReviewStep } from "./steps/ReviewStep";
+import { useEscapeKey } from "@/hooks/useEscapeKey";
 
 const ease = [0.16, 1, 0.3, 1] as const;
 
@@ -41,13 +43,7 @@ export function AgentWizard({
 }) {
   useBodyScrollLock(true);
   // Esc closes (panel register rule 4) — backdrop click is on the overlay below.
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [onClose]);
+  useEscapeKey(onClose);
   const [state, setState] = useState<WizardState>(() => ({
     ...initialWizardState(defaultBoardId),
     ...initialState,
@@ -85,7 +81,7 @@ export function AgentWizard({
             <button
               onClick={onClose}
               aria-label="Close wizard"
-              className="cursor-pointer text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition-colors"
+              className="cursor-pointer text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition-colors touch-hit"
             >
               <X size={16} />
             </button>
@@ -152,14 +148,27 @@ export function AgentWizard({
             <ChevronLeft size={15} /> Back
           </button>
           {!isLastStep && (
-            <button
-              onClick={goNext}
-              disabled={!canProceed(state)}
-              className="flex items-center gap-1.5 px-5 py-2 text-sm rounded-xl font-medium text-[var(--color-on-accent)] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-all"
-              style={wizardBtnPrimaryStyle}
-            >
-              Next <ChevronRight size={15} />
-            </button>
+            <>
+              {/* A disabled button alone is the silent-failure pattern: when the
+                  gate refuses, say WHAT is missing (runtimeStepBlockers). */}
+              {!canProceed(state) && runtimeStepBlockers(state).length > 0 && (
+                <span
+                  role="note"
+                  data-testid="step-blockers"
+                  className="mx-3 flex-1 text-right text-[11px] text-[var(--color-text-muted)]"
+                >
+                  {runtimeStepBlockers(state).join(" ")}
+                </span>
+              )}
+              <button
+                onClick={goNext}
+                disabled={!canProceed(state)}
+                className="flex items-center gap-1.5 px-5 py-2 text-sm rounded-xl font-medium text-[var(--color-on-accent)] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-all"
+                style={wizardBtnPrimaryStyle}
+              >
+                Next <ChevronRight size={15} />
+              </button>
+            </>
           )}
         </div>
       </motion.div>

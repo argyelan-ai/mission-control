@@ -107,6 +107,8 @@ describe("CliToolsSection", () => {
 
     const pill = await screen.findByTitle(/after the task ends/);
     expect(pill).toHaveTextContent("Sparky");
-    expect(pill).toHaveStyle({ opacity: "0.45" });
+    // dimmed = neutral ink, not half opacity (half-opacity text fell below AA)
+    expect(pill.style.color).toBe("var(--color-text-dim)");
+    expect(pill.style.opacity).toBe("");
   });
 });

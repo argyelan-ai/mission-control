@@ -51,6 +51,8 @@ CHANNEL_SETTING_FIELDS: dict[str, type] = {
     "slack_team_chat_enabled": bool,
     "slack_reports_enabled": bool,
     "slack_approvals_enabled": bool,
+    # Statuswechsel-Zustellung an den arbeitenden Agenten (#386 Punkt 1)
+    "status_change_delivery_enabled": bool,
     # Which chat adapters mirror the team chat (comma list, "" = all enabled)
     "chat_channels": str,
 }
@@ -82,6 +84,7 @@ async def stored_overrides(session: AsyncSession) -> dict[str, object]:
     """The operator's saved decisions, typed. Unknown keys are skipped with a
     warning (an old row must never break startup)."""
     from app.services.ai_provider_config import AI_PROVIDER_SETTING_FIELDS
+    from app.services.heads.night_store import SETTING_FIELDS as NIGHT_SHIFT_SETTING_FIELDS
 
     rows = (await session.exec(select(AppSetting))).all()
     out: dict[str, object] = {}
@@ -90,7 +93,7 @@ async def stored_overrides(session: AsyncSession) -> dict[str, object]:
             # app_settings is one KV table shared by several settings pages.
             # A key another page owns is not "unknown" — only warn for rows no
             # allowlist claims, otherwise every AI-provider row logs a warning.
-            if row.key not in AI_PROVIDER_SETTING_FIELDS:
+            if row.key not in AI_PROVIDER_SETTING_FIELDS and row.key not in NIGHT_SHIFT_SETTING_FIELDS:
                 logger.warning("app_settings: unbekannter Key %r ignoriert", row.key)
             continue
         out[row.key] = _coerce(row.key, row.value)

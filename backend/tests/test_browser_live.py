@@ -67,7 +67,17 @@ async def test_ws_rejects_missing_token():
 
 
 @pytest.mark.asyncio
-async def test_ws_accepts_valid_jwt():
+async def test_ws_query_jwt_rejected_by_default():
+    """Login JWT in the URL is off by default (stream tickets instead)."""
     from app.auth import create_access_token
     from app.routers.browser_live import _validate_ws_token
+    assert _validate_ws_token(create_access_token("user-1", "admin")) is False
+
+
+@pytest.mark.asyncio
+async def test_ws_accepts_valid_jwt_with_legacy_switch(monkeypatch):
+    import app.config
+    from app.auth import create_access_token
+    from app.routers.browser_live import _validate_ws_token
+    monkeypatch.setattr(app.config.settings, "allow_query_token_auth", True)
     assert _validate_ws_token(create_access_token("user-1", "admin")) is True

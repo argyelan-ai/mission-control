@@ -16,7 +16,7 @@
  * -runtimes-slot-stage-design.md.
  */
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Pencil, Plus, Server, Trash2, X } from "lucide-react";
@@ -25,7 +25,7 @@ import { api } from "@/lib/api";
 import type { Host, HostCreate, HostKind, HostRole } from "@/lib/types";
 import { useAppStore } from "@/lib/store";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import { BoxWizard } from "./BoxWizard";
 import { HostOnboardDialog } from "./HostOnboardDialog";
 import { NodePairingDialog } from "./NodePairingDialog";
@@ -34,6 +34,7 @@ import { RoleField, suggestRole } from "./RoleField";
 import { Section, SectionOrFragment } from "@/components/shared/Section";
 import { ListRow, MetaChip, MetaText } from "@/components/shared/ListRow";
 import { OverflowMenu } from "@/components/shared/OverflowMenu";
+import { useEscapeKey } from "@/hooks/useEscapeKey";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -204,13 +205,7 @@ function HostFormModal({
 
   // iOS-safe scroll lock + Esc close (panel register rule 4)
   useBodyScrollLock(true);
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [onClose]);
+  useEscapeKey(onClose);
 
   const set = <K extends keyof HostCreate>(key: K, value: HostCreate[K]) =>
     setForm((f) => ({ ...f, [key]: value }));
@@ -241,7 +236,7 @@ function HostFormModal({
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
         transition={{ duration: 0.15 }}
-        className="fixed inset-0 z-40 flex items-end sm:items-center justify-center sm:p-4 bg-black/60"
+        className="fixed inset-0 z-40 flex items-end sm:items-center justify-center sm:p-4 bg-[var(--color-scrim)]/60"
         style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
         onClick={onClose}
       >
@@ -255,7 +250,7 @@ function HostFormModal({
           style={{
             backgroundColor: "var(--color-bg-elevated)",
             border: "1px solid var(--color-border)",
-            boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
+            boxShadow: `0 4px 24px ${alpha(C.shadow, 0.5)}, 0 1px 2px ${alpha(C.shadow, 0.3)}`,
           }}
         >
           {/* Header */}
@@ -433,8 +428,8 @@ function HostFormModal({
               <div
                 className="text-xs px-3 py-2 rounded-lg"
                 style={{
-                  background: `${C.error}14`,
-                  border: `1px solid ${C.error}33`,
+                  background: alpha(C.error, 0.08),
+                  border: `1px solid ${alpha(C.error, 0.2)}`,
                   color: STATUS_TEXT.error,
                 }}
               >
@@ -681,8 +676,8 @@ export function HostsSection({ embedded = false }: { embedded?: boolean } = {}) 
           className="flex items-center justify-between gap-3 text-xs px-4 py-3 mb-3 rounded-xl"
           style={{
             color: STATUS_TEXT.error,
-            background: `${C.error}0F`,
-            border: `1px solid ${C.error}26`,
+            background: alpha(C.error, 0.06),
+            border: `1px solid ${alpha(C.error, 0.15)}`,
           }}
         >
           <span>{feedback}</span>

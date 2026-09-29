@@ -8,9 +8,10 @@
 
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Image as ImageIcon, X, ZoomIn } from "lucide-react";
+import { Image as ImageIcon, ImageOff, X, ZoomIn } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { getToken } from "@/lib/api";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import { DeliverableCard } from "./DeliverableCard";
 import type { TaskDeliverable } from "@/lib/types";
 
@@ -25,6 +26,7 @@ function AuthImage({
   style?: React.CSSProperties;
   onError?: () => void;
 }) {
+  const t = useTranslations("tasks");
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
 
@@ -54,14 +56,25 @@ function AuthImage({
     };
   }, [src]);
 
-  if (failed) return null;
+  if (failed) {
+    // A 404/500 used to leave an empty black tile behind — say so instead.
+    return (
+      <div
+        className={className}
+        style={{ ...style, background: "var(--color-bg-surface)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 4 }}
+      >
+        <ImageOff size={16} style={{ color: C.textDim }} aria-hidden />
+        <span className="text-[10px]" style={{ color: C.textMuted }}>{t("deliverableImageUnavailable")}</span>
+      </div>
+    );
+  }
   if (!blobUrl) {
     return (
       <div
         className={className}
         style={{ ...style, background: "var(--color-bg-surface)", display: "flex", alignItems: "center", justifyContent: "center" }}
       >
-        <div className="w-4 h-4 rounded-full border-2 border-t-transparent animate-spin" style={{ borderColor: `${C.accent}40`, borderTopColor: "transparent" }} />
+        <div className="w-4 h-4 rounded-full border-2 border-t-transparent animate-spin" style={{ borderColor: alpha(C.accent, 0.25), borderTopColor: "transparent" }} />
       </div>
     );
   }
@@ -83,7 +96,7 @@ function ImageLightbox({
         exit={{ opacity: 0 }}
         transition={{ duration: 0.15 }}
         className="fixed inset-0 z-[200] flex items-center justify-center p-4"
-        style={{ background: "rgba(0,0,0,0.88)", backdropFilter: "blur(12px)" }}
+        style={{ background: alpha(C.scrim, 0.88), backdropFilter: "blur(12px)" }}
         onClick={onClose}
       >
         <motion.div
@@ -99,14 +112,14 @@ function ImageLightbox({
               instead of squeezing everything into 85vh. */}
           <div
             className="overflow-y-auto overflow-x-hidden rounded-xl"
-            style={{ maxWidth: "90vw", maxHeight: "82vh", boxShadow: "0 0 60px rgba(0,0,0,0.8)" }}
+            style={{ maxWidth: "90vw", maxHeight: "82vh", boxShadow: `0 0 60px ${alpha(C.shadow, 0.8)}` }}
           >
             <AuthImage src={src} alt={alt} className="block w-full h-auto" />
           </div>
           <button
             onClick={onClose}
             className="absolute top-2 right-2 flex items-center justify-center w-8 h-8 rounded-full cursor-pointer"
-            style={{ background: "rgba(0,0,0,0.6)", color: C.textPrimary, border: `1px solid ${C.borderActive}` }}
+            style={{ background: alpha(C.scrim, 0.6), color: C.textPrimary, border: `1px solid ${C.borderActive}` }}
             aria-label="Close"
           >
             <X size={14} />
@@ -129,6 +142,7 @@ export function DeliverablesTab({
   boardId: string;
   taskId: string;
 }) {
+  const t = useTranslations("tasks");
   const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null);
 
   if (!deliverables.length) {
@@ -139,6 +153,11 @@ export function DeliverablesTab({
       </div>
     );
   }
+
+  // Deliverables listed with include_subtasks belong to a child task; the
+  // backend only serves them under their own task id (404 otherwise).
+  const imageUrl = (d: TaskDeliverable) =>
+    `/api/v1/boards/${boardId}/tasks/${d.task_id || taskId}/deliverables/${d.id}/image`;
 
   const screenshots = deliverables.filter((d) => d.deliverable_type === "screenshot" && d.path);
   const others = deliverables.filter((d) => d.deliverable_type !== "screenshot" || !d.path);
@@ -190,18 +209,18 @@ export function DeliverablesTab({
                 }}
                 onClick={() =>
                   setLightbox({
-                    src: `/api/v1/boards/${boardId}/tasks/${taskId}/deliverables/${d.id}/image`,
+                    src: imageUrl(d),
                     alt: d.title,
                   })
                 }
                 onKeyDown={(e) => e.key === "Enter" && setLightbox({
-                  src: `/api/v1/boards/${boardId}/tasks/${taskId}/deliverables/${d.id}/image`,
+                  src: imageUrl(d),
                   alt: d.title,
                 })}
-                aria-label={`View screenshot: ${d.title}`}
+                aria-label={t("deliverableViewScreenshot", { title: d.title })}
               >
                 <AuthImage
-                  src={`/api/v1/boards/${boardId}/tasks/${taskId}/deliverables/${d.id}/image`}
+                  src={imageUrl(d)}
                   alt={d.title}
                   className="w-full h-full object-cover transition-transform duration-200 group-hover:scale-[1.03]"
                   style={{ objectPosition: "top" }}
@@ -209,14 +228,14 @@ export function DeliverablesTab({
                 {/* Hover overlay */}
                 <div
                   className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-150 touch-visible"
-                  style={{ background: "rgba(0,0,0,0.55)" }}
+                  style={{ background: alpha(C.scrim, 0.55) }}
                 >
                   <ZoomIn size={18} style={{ color: "white" }} />
                 </div>
                 {/* Title tooltip */}
                 <div
                   className="absolute bottom-0 left-0 right-0 px-2 py-1 text-[10px] truncate opacity-0 group-hover:opacity-100 transition-opacity duration-150 touch-visible"
-                  style={{ background: "linear-gradient(to top, rgba(0,0,0,0.8), transparent)", color: C.textPrimary }}
+                  style={{ background: `linear-gradient(to top, ${alpha(C.scrim, 0.8)}, transparent)`, color: C.textPrimary }}
                 >
                   {d.title}
                 </div>
@@ -234,7 +253,7 @@ export function DeliverablesTab({
               key={d.id}
               deliverable={d}
               boardId={boardId}
-              taskId={taskId}
+              taskId={d.task_id || taskId}
             />
           ))}
         </div>

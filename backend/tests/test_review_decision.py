@@ -130,6 +130,117 @@ async def test_review_hold(make_board, make_agent, make_task):
             assert t.review_decided_at is not None
 
 
+# ── W1 (PR #558 follow-up): approve immediately supersedes review_stuck ──
+
+
+@pytest.mark.asyncio
+async def test_review_approve_immediately_supersedes_pending_review_stuck_approval(
+    make_board, make_agent, make_task,
+):
+    """decision=approve must supersede a pending review_stuck approval on
+    the SAME call, not leave it for the next watchdog reconciliation tick.
+
+    Rex's PR #558 review, W1: `execute_review_decision` sets task.status
+    directly and never went through the generic PATCH handlers where
+    cleanup_obsolete_approvals is normally wired up — so an approve here
+    used to leave a zombie review_stuck approval pending in the operator's
+    inbox for up to one watchdog tick (~30s).
+    """
+    from app.models.approval import Approval
+
+    board = await make_board(name="W1 Board", slug=f"w1-board-{uuid.uuid4().hex[:8]}")
+    reviewer = await make_agent(name="Rex", board_id=board.id, role="reviewer")
+    task = await make_task(
+        board_id=board.id, title="Approve With Zombie Approval",
+        status="review", assigned_agent_id=reviewer.id,
+    )
+
+    from tests.conftest import test_engine
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        approval = Approval(
+            board_id=board.id, task_id=task.id, agent_id=reviewer.id,
+            action_type="review_stuck", description="Watchdog escalation",
+            status="pending",
+        )
+        s.add(approval)
+        await s.commit()
+        await s.refresh(approval)
+        approval_id = approval.id
+
+    with (
+        patch("app.services.activity.broadcast", new_callable=AsyncMock),
+        patch("app.services.operations.get_system_mode", new_callable=AsyncMock, return_value="active"),
+    ):
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            t = await s.get(type(task), task.id)
+            from app.services.task_lifecycle import execute_review_decision
+            await execute_review_decision(
+                s, t, board.id, "approve", "LGTM — alles gut",
+                actor_agent=reviewer,
+            )
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        t = await s.get(type(task), task.id)
+        assert t.status == "done"
+
+        approval = await s.get(Approval, approval_id)
+        assert approval.status == "superseded", (
+            "review_stuck approval must be superseded in the SAME call as "
+            "the approve — not left pending for the watchdog tick"
+        )
+
+
+@pytest.mark.asyncio
+async def test_review_hold_does_not_supersede_pending_review_stuck_approval(
+    make_board, make_agent, make_task,
+):
+    """Gegenprobe: decision=hold does NOT change task.status (stays
+    'review') — a pending review_stuck approval must stay pending too. The
+    W1 cleanup call must be scoped to the final status, not fire blindly on
+    every decision."""
+    from app.models.approval import Approval
+
+    board = await make_board(name="W1 Hold Board", slug=f"w1-hold-{uuid.uuid4().hex[:8]}")
+    reviewer = await make_agent(name="Rex", board_id=board.id, role="reviewer")
+    task = await make_task(
+        board_id=board.id, title="Hold With Pending Approval",
+        status="review", assigned_agent_id=reviewer.id,
+    )
+
+    from tests.conftest import test_engine
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        approval = Approval(
+            board_id=board.id, task_id=task.id, agent_id=reviewer.id,
+            action_type="review_stuck", description="Watchdog escalation",
+            status="pending",
+        )
+        s.add(approval)
+        await s.commit()
+        await s.refresh(approval)
+        approval_id = approval.id
+
+    with (
+        patch("app.services.activity.broadcast", new_callable=AsyncMock),
+        patch("app.services.operations.get_system_mode", new_callable=AsyncMock, return_value="active"),
+    ):
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            t = await s.get(type(task), task.id)
+            from app.services.task_lifecycle import execute_review_decision
+            await execute_review_decision(
+                s, t, board.id, "hold", "Warte auf Klarstellung",
+                actor_agent=reviewer,
+            )
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        t = await s.get(type(task), task.id)
+        assert t.status == "review"
+
+        approval = await s.get(Approval, approval_id)
+        assert approval.status == "pending"
+
+
 # ── Test 4: Requires review status ────────────────────────────────────
 
 

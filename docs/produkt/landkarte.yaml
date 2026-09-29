@@ -1,0 +1,805 @@
+# Product map (Roter Faden). Written by hand, read by `kz`. See README.md here.
+# Stage E3b: endpoints (later tables) are mapped round by round; whatever is
+# not mapped yet still sits in luecken-basis.json as the E3b work list.
+# `source` says which doc a status comes from; `note: unconfirmed` means no
+# doc states the page's status yet (default `active`, to be confirmed in E3b).
+version: 1
+
+journeys:
+  - id: J-job-to-merge
+    job: "When I have a coding job, I want to hand it to a short-lived head and later merge a checked PR."
+    source: "ADR-085 decision 1; ROADMAP E1b"
+    steps:
+      - {feature: F-repos}    # register/link the repo before a job runs (ADR-050 registry)
+      - {feature: F-schedule} # a scheduled job is a second way to create the task
+      - {feature: F-tasks}    # new task -> "Run as head" -> status, stop, result (PR + run record) on the task detail
+      - {feature: F-files}    # after the head ends, check the files it produced
+    end_state: "PR open with a run record; the operator merges through the merge queue"
+    test: e2e/journeys/J-job-to-merge.spec.ts
+
+  - id: J-phone-needs-you
+    job: "When something waits for me, I want to see and answer it from my phone in a few taps."
+    source: "PRINCIPLES 7.1 (needs you = open approvals + blocked/user_test tasks), 7.10 (phone)"
+    steps:
+      - {feature: F-home}    # what waits, last night's report
+      - {feature: F-inbox}   # open approvals
+      - {feature: F-tasks}   # tasks and heads that need an answer
+    end_state: "Nothing waits for the operator"
+    test: e2e/journeys/J-phone-needs-you.spec.ts
+
+  - id: J-runtime-switch
+    job: "When a model or harness is busy, weak or down, I want to run the job on another harness x runtime pair."
+    source: "ADR-086 decisions 1-3; ROADMAP E1b"
+    steps:
+      - {feature: F-runtimes}  # which runtime is busy
+      - {feature: F-tasks}     # pick a pair from the matrix, "restart with ..." another pair
+    end_state: "The same job continues on the new pair"
+    test: e2e/journeys/J-runtime-switch.spec.ts
+
+  - id: J-setup
+    job: "When I prepare or reconfigure MC, I want one page for AI providers, secrets and credentials, users, autonomy, model prices, channels and the night-shift window."
+    source: "operator decision 2026-09-29; ADR-033 (secrets/credentials); ROADMAP E2 (night-shift window)"
+    steps:
+      - {feature: F-settings}  # AI providers, secrets, credentials, users, autonomy, model prices, channels, night-shift window
+    end_state: "MC is configured for the way the operator wants to run it"
+    test: e2e/journeys/J-setup.spec.ts
+
+  - id: J-vault
+    job: "When I stored a rule, note or run record, I want to find and reread it."
+    source: "operator decision 2026-09-29; ADR-085 section 2 (vault stays); ADR-034 (vault as source of truth)"
+    steps:
+      - {feature: F-memory}  # /memory and /memory/graph: notes, search, graph, topics
+    end_state: "The operator has the rule, note or run record back in front of them"
+    test: e2e/journeys/J-vault.spec.ts
+
+  - id: J-usage
+    job: "When I want to know what the work cost and how much ran locally, I want tokens and cost per week, source and task."
+    source: "operator decision 2026-09-29; ROADMAP E0 (baseline per week x source); PRINCIPLES section 5 rule 4"
+    steps:
+      - {feature: F-insights}  # cost/token rollups by week, day, model, task, source
+    end_state: "The operator can see cost and local share and steer accordingly"
+    test: e2e/journeys/J-usage.spec.ts
+
+features:
+  - id: F-home
+    name: "Home: what needs me, last night's report"
+    ui: {route: /}
+    api:
+      # Activity feed and live stream on Home (ActivityHistoryPanel,
+      # SystemHealthSection, useActivityStream); the agent detail page also
+      # reads the activity list. Last night's night-shift report card.
+      - "GET /api/v1/activity"
+      - "GET /api/v1/activity/stream"
+      - "* /api/v1/night-shift/last-night"
+      - "* /api/v1/night-shift/last-night/*"
+      - "GET /api/v1/system/daily-metrics"   # daily metrics digest M1-M5 on Home (E0, MC first)
+      # System health surfaces: status strip on Home and the sidebar footer
+      # (status), vertical alert strip (alerts), live engine metrics in the
+      # sidebar and the metrics history chart (SystemHealthSection).
+      - "GET /api/v1/system/status"
+      - "GET /api/v1/system/alerts"
+      - "GET /api/v1/system/metrics"
+      - "GET /api/v1/system/metrics/history"
+    status: active
+    source: "PRINCIPLES 7.1; ROADMAP E2 (morning report on the Home card)"
+    tables:
+      # Activity feed rows (routers/activity.py); written by the tasks
+      # router and many services, also rendered in the task timeline
+      # (listed in F-tasks as well).
+      - activity_events
+  - id: F-tasks
+    name: "Tasks: create, run as head, follow and finish work"
+    ui: {route: /tasks}
+    api:
+      # Boards are the task workspace: the shell board picker (BoardPicker)
+      # switches boards, the tasks page and task detail use everything under
+      # /boards/{board}/tasks (list, detail, reorder, checklist, comments,
+      # deliverables, dependencies, events, git, hierarchy, timeline,
+      # workspace, dispatch/promote/resume/review/stop). scripts/mc-mcp.py
+      # and scripts/demo-seed.py use the same task endpoints.
+      - "* /api/v1/boards"
+      - "* /api/v1/boards/{board_id}"
+      - "* /api/v1/boards/*/snapshot"
+      - "* /api/v1/boards/*/tasks"
+      - "* /api/v1/boards/*/tasks/reorder"
+      - "* /api/v1/boards/*/tasks/pipeline"
+      - "* /api/v1/boards/*/tasks/{task_id}"
+      - "* /api/v1/boards/*/tasks/{task_id}/checklist"
+      - "* /api/v1/boards/*/tasks/{task_id}/comments"
+      - "* /api/v1/boards/*/tasks/{task_id}/dependencies"
+      - "* /api/v1/boards/*/tasks/{task_id}/deliverables"
+      - "* /api/v1/boards/*/tasks/{task_id}/deliverables/{deliverable_id}/*"
+      - "* /api/v1/boards/*/tasks/{task_id}/dispatch"
+      - "* /api/v1/boards/*/tasks/{task_id}/events"
+      - "* /api/v1/boards/*/tasks/{task_id}/git-diff"
+      - "* /api/v1/boards/*/tasks/{task_id}/git-info"
+      - "* /api/v1/boards/*/tasks/{task_id}/hierarchy"
+      - "* /api/v1/boards/*/tasks/{task_id}/promote"
+      - "* /api/v1/boards/*/tasks/{task_id}/resume"
+      - "* /api/v1/boards/*/tasks/{task_id}/review"
+      - "* /api/v1/boards/*/tasks/{task_id}/stop"
+      - "* /api/v1/boards/*/tasks/{task_id}/timeline"
+      - "* /api/v1/boards/*/tasks/{task_id}/workspace/*"
+      # Projects and phases on a board (tasks page project grouping,
+      # TaskFormFields, task detail); tags on tasks/projects.
+      - "* /api/v1/boards/*/projects*"
+      - "GET /api/v1/projects/{project_id}/phases"
+      - "* /api/v1/tags"
+      - "* /api/v1/tags/{tag_id}"
+      - "* /api/v1/projects/*/tags"
+      - "* /api/v1/projects/*/tags/*"
+      # Heads (ADR-085): "run as head" from the task form (pairs, start),
+      # live head state, log, run record, restart and stop on the task
+      # detail. The runtimes cockpit also reads the head list (orphan runs).
+      - "* /api/v1/heads"
+      - "* /api/v1/heads/pairs"
+      - "* /api/v1/heads/{run_id}"
+      - "* /api/v1/heads/{run_id}/*"
+      # Night shift (ROADMAP E2): mark/unmark a task for tonight
+      # (CreateTaskModal, task list "tonight" column).
+      - "* /api/v1/night-shift/tonight"
+      - "* /api/v1/night-shift/tasks/{task_id}"
+      # User-side chat thread, transcript and run record on the task detail
+      # (ThreadPanel, TaskTranscript, TaskSummaryTab).
+      - "* /api/v1/tasks/{task_id}/thread*"
+      - "GET /api/v1/tasks/{task_id}/transcript"
+      - "* /api/v1/tasks/{task_id}/run-record*"
+      # Task and project reference files (TaskReferences on the task detail,
+      # ProjectReferencesDialog, upload in CreateTaskModal).
+      - "* /api/v1/references"
+      - "* /api/v1/references/*"
+    status: active
+    source: "ROADMAP E1b, UI waves 2 and 3a"
+    tables:
+      # Task workspace: boards, projects and phases, tags, tasks plus
+      # events, comments, checklist, checkpoints, dependencies and
+      # deliverables; reference files; the task thread (threads, messages,
+      # user read cursor); git endpoints resolve the repo; approvals are
+      # resolved from the task detail too; the timeline also reads
+      # activity_events (feed rows, listed in F-home).
+      - boards
+      - projects
+      - project_phases
+      - tags
+      - tag_assignments
+      - tasks
+      - task_events
+      - task_comments
+      - task_checklist_items
+      - task_checkpoints
+      - task_dependencies
+      - task_deliverables
+      - reference_files
+      - threads
+      - messages
+      - user_thread_cursor
+      - agents
+      - approvals
+      - repos
+      - activity_events
+  - id: F-inbox
+    name: "Inbox: open approvals"
+    ui: {route: /inbox}
+    api:
+      # Open approvals list and resolve (inbox page, MobileNav badge,
+      # useApprovalStream live reload; the task detail resolves too).
+      - "* /api/v1/approvals"
+      - "* /api/v1/approvals/{approval_id}"
+      - "GET /api/v1/approvals/stream"
+    status: active
+    source: "ROADMAP UI wave 2 (pages that stay)"
+    tables:
+      # Approvals listed and resolved (routers/approvals.py).
+      - approvals
+  - id: F-runtimes
+    name: "Runtimes: engines, which one is busy"
+    ui: {route: /runtimes}
+    status: active
+    source: "ADR-086; ROADMAP UI waves 0c and 2; E1 switch lock (a switch is refused while the engine works)"
+    api:
+      # Head occupancy / orphan runs in the stage cockpit and runtimes page
+      # (ADR-086: which pair is busy).
+      - "GET /api/v1/heads/occupancy"
+      # Runtimes page (beyond head occupancy): engine register, fleet stage
+      # and box cockpit, box/onboarding wizard, LM Studio models and
+      # downloads, runtime schedules, vLLM discovery, model catalog
+      # (ModelCatalogSection) and the local recipe registry
+      # (LocalModelBrowser). ADR-056: the harness x runtime compat matrix
+      # also feeds the switch modal on the task detail and the agent wizard;
+      # GET /runtimes/spark/metrics is a back-compat alias (ADR-048) with no
+      # component caller; db/{slug}/agents feeds the cockpit agent list.
+      - "* /api/v1/runtimes"
+      - "* /api/v1/runtimes/*"
+      # Host registry and device control: HostsSection, BoxWizard,
+      # HostOnboardDialog, NodePairingDialog, stage telemetry (metrics,
+      # pulse, metrics/history), recipe switcher and autostart — all
+      # mounted on the runtimes page.
+      - "* /api/v1/hosts"
+      - "* /api/v1/hosts/*"
+      # Curated local-recipe registry: list/refresh/enable in
+      # LocalModelBrowser and the box wizard; install + install log in
+      # SshProcessDeployDialog. Starts go through POST /hosts/{id}/recipes/…,
+      # not through this router.
+      - "* /api/v1/local-registry"
+      - "* /api/v1/local-registry/*"
+      # Node devices (Fleet & Rezepte v2): pairing-code mint
+      # (NodePairingDialog), device tiles with desired-state control
+      # (DeviceControl). The node agent itself polls pair/heartbeat/
+      # agent-script (see internal); inventory and single device-state GET
+      # have no page caller today (onboarding reads the DB directly).
+      - "POST /api/v1/nodes/pairing-codes"
+      - "GET /api/v1/nodes/devices"
+      - "GET /api/v1/nodes/{host_id}/device-state"
+      - "GET /api/v1/nodes/{host_id}/inventory"
+      - "PUT /api/v1/nodes/{host_id}/device-state"
+      # Provider model catalog (ModelCatalogSection on the runtimes page;
+      # bind() creates a runtime row, the switch modal itself is unchanged).
+      - "* /api/v1/models/catalog"
+      - "* /api/v1/models/catalog/*"
+      # CLI-tools cockpit (CliToolsSection on the runtimes page): per-tool
+      # version status + affected agents, forced re-check, update progress
+      # poller and the update run (manifest -> build -> recreate).
+      - "* /api/v1/cli-tools"
+      - "* /api/v1/cli-tools/*"
+    tables:
+      # Runtime and host registry: runtimes, hosts (with node pairing
+      # codes for the wizard), runtime_hosts (multi-node), the local
+      # recipe registry and runtime schedules with their runs.
+      - runtimes
+      - runtime_hosts
+      - hosts
+      - host_pairing_codes
+      - local_recipes
+      - runtime_schedules
+      - runtime_schedule_runs
+  - id: F-settings
+    name: "Settings"
+    ui: {route: /settings}
+    status: active
+    source: "ROADMAP UI wave 2; E2 (night-shift window)"
+    api:
+      # Night-shift window config (NightShiftTab, ROADMAP E2).
+      - "* /api/v1/night-shift/config"
+      # AI provider settings + HuggingFace/embeddings connection tests
+      # (AiProvidersTab).
+      - "* /api/v1/ai-providers/*"
+      # Auth: profile tab (GET/PATCH me) and the users admin section
+      # (list/create/update). The shell also refreshes the session user via
+      # GET /auth/me (AppShell); the login page itself uses the endpoints
+      # listed under F-login.
+      - "GET /api/v1/auth/me"
+      - "PATCH /api/v1/auth/me"
+      - "GET /api/v1/auth/users"
+      - "POST /api/v1/auth/users"
+      - "PATCH /api/v1/auth/users/{user_id}"
+      # Secrets = system token wallet (ADR-033): API-keys tab CRUD plus
+      # provider templates. The same endpoints feed the agent detail API-key
+      # select, the runtime add modal, the setup wizard and the
+      # AI-providers/Slack/Telegram tabs.
+      - "* /api/v1/secrets"
+      - "* /api/v1/secrets/*"
+      # Credentials = task-time vault (ADR-033): credentials tab CRUD
+      # (CredentialsTab); the runtimes host onboarding lists them too. The
+      # single-credential GET has no caller (internal).
+      - "GET /api/v1/credentials"
+      - "POST /api/v1/credentials"
+      - "PATCH /api/v1/credentials/{credential_id}"
+      - "DELETE /api/v1/credentials/{credential_id}"
+      # Autonomy levels (autonomy tab). The generic key/value settings
+      # endpoints have no caller (internal).
+      - "GET /api/v1/settings/autonomy"
+      - "PATCH /api/v1/settings/autonomy"
+      # Version + update hint in the settings footer.
+      - "GET /api/v1/system/version"
+      # Intelligence analysis-window config + manual trigger (intelligence
+      # tab); the insights page also reads the config (listed in F-insights).
+      - "PUT /api/v1/intelligence/config"
+      - "POST /api/v1/intelligence/trigger"
+      # Model cost prices CRUD, unmatched list and cost recompute
+      # (CostPricesTab).
+      - "* /api/v1/model-prices"
+      - "* /api/v1/model-prices/*"
+      # Channel runtime settings + connection tests (SlackTab per-function
+      # toggles, TelegramTab connection check and per-key saves, Slack
+      # connection test).
+      - "* /api/v1/channels/*"
+      - "* /api/v1/slack/*"
+    tables:
+      # Settings storage: app_settings rows back the AI-provider, channel
+      # and night-shift window config (services/*_config.py,
+      # heads/night_store.py); users = auth profile + users admin;
+      # secrets = system token wallet (ADR-033); credentials = task-time
+      # vault (ADR-033); model_prices = cost price CRUD.
+      - app_settings
+      - users
+      - secrets
+      - credentials
+      - model_prices
+  - id: F-memory
+    name: "Memory: the vault"
+    ui: {route: [/memory, /memory/graph]}
+    status: active
+    source: "ADR-085 section 2 (vault stays); ROADMAP UI wave 2"
+    api:
+      # Board memory CRUD (LegacyMemoryPage); memory list also feeds the
+      # task detail context.
+      - "* /api/v1/boards/*/memory"
+      - "* /api/v1/boards/*/memory/{memory_id}"
+      # Vault (ADR-034: vault as source of truth): the /memory page and
+      # /memory/graph read notes, search, graph and topics (VaultTopicsView);
+      # trash list/restore/purge and note edit hang off the same pages.
+      # Review note: PATCH note/{path}/promote, PATCH note/{path}/reject and
+      # POST _admin/rebuild have no page or script caller (admin-only, manual
+      # use; tests call rebuild). The voice overlay (F-voice) also reads
+      # single notes (VoicePreviewSheet).
+      - "* /api/v1/vault/*"
+      # Knowledge base (ADR-004: one unified knowledge table): list/detail/
+      # create/edit/delete, timeline, stats, attachments and merge review —
+      # used by the LegacyMemoryPage layers, AgentCard stats and the task
+      # detail context. Agent templates also POST here (SOUL.md.j2).
+      - "* /api/v1/knowledge"
+      - "* /api/v1/knowledge/*"
+      # Semantic memory query (MemoryQueryBar on the memory page).
+      - "POST /api/v1/memory/query"
+    tables:
+      # Board memory rows (routers/memory.py); indexing, query, decay and
+      # cleanup services operate on them.
+      - board_memory
+  - id: F-schedule
+    name: "Schedule: planned jobs"
+    ui: {route: [/schedule, "/schedule/[jobId]"]}
+    status: active
+    source: "ROADMAP UI wave 2"
+    api:
+      # Scheduled jobs (schedule page, job detail page, JobModal, and the
+      # agent detail page's scheduled-jobs card): list/create, edit/delete,
+      # run now, duplicate, snooze, run history, stats and created tasks;
+      # the job form previews firings; the SSE stream reloads the page.
+      - "* /api/v1/schedule/jobs"
+      - "* /api/v1/schedule/jobs/{job_id}"
+      - "* /api/v1/schedule/jobs/{job_id}/runs"
+      - "* /api/v1/schedule/jobs/{job_id}/stats"
+      - "* /api/v1/schedule/jobs/{job_id}/tasks"
+      - "* /api/v1/schedule/jobs/{job_id}/duplicate"
+      - "* /api/v1/schedule/jobs/{job_id}/trigger"
+      - "* /api/v1/schedule/jobs/{job_id}/snooze"
+      - "POST /api/v1/schedule/preview-firings"
+      - "GET /api/v1/schedule/stream"
+    tables:
+      # Scheduled jobs and their run history; job runs create tasks
+      # (jobs/{id}/tasks lists them).
+      - scheduled_jobs
+      - scheduled_job_runs
+      - tasks
+  - id: F-insights
+    name: "Insights: usage and metrics"
+    ui: {route: /insights}
+    # E0 measuring layer: token baseline per week x source, page-usage beacon;
+    # per-day tokens for the heatmap (same query as by-week, in the browser's
+    # zone). The details sheet reads the cost rollups (total, by model, by
+    # task, sessions split), the insights cards and the board-memory reports;
+    # the analysis window comes from the config (edited in F-settings).
+    api:
+      - "GET /api/v1/intelligence/costs/by-week"
+      - "GET /api/v1/intelligence/costs/by-day"
+      - "POST /api/v1/usage/page"
+      - "GET /api/v1/usage/pages"
+      - "GET /api/v1/intelligence/costs"
+      - "GET /api/v1/intelligence/costs/by-model"
+      - "GET /api/v1/intelligence/costs/by-task"
+      - "GET /api/v1/intelligence/insights"
+      - "GET /api/v1/intelligence/reports"
+      - "GET /api/v1/intelligence/config"
+    status: active
+    source: "ADR-085 section 2 (metrics stay); ROADMAP UI wave 4; ROADMAP E0 (baseline table)"
+    tables:
+      # Cost rollups read model_usage_events (written by the token
+      # harvester; the old cost_events table is only a historical archive,
+      # listed under internal).
+      - model_usage_events
+  - id: F-sessions
+    name: "Sessions chat"
+    ui: {route: /sessions}
+    api:
+      # Slices of the /api/v1/agents API the Sessions UI calls (ChatView,
+      # Composer, DiffPanel, AgentCard; terminal remount signal). The rest of
+      # /api/v1/agents/* is claimed by F-agents below.
+      - "* /api/v1/agents/*/chat/*"
+      - "* /api/v1/agents/*/terminal-events/stream"
+      # Group chat (ADR-075) on the sessions page: list/create/config,
+      # members, messages + SSE stream, rounds, result document, memorize,
+      # start/pause/stop, archive (GroupChatView, CreateGroupModal,
+      # FinishGroupDialog, ResultDocPanel, useGroupStream).
+      - "* /api/v1/groups"
+      - "* /api/v1/groups/*"
+      # Session pickers of the sidebar: docker agents (container liveness)
+      # and host agents (heartbeat liveness).
+      - "* /api/v1/docker-sessions/agents"
+      - "* /api/v1/host-sessions/agents"
+      # Browser live panel (BrowserLiveView: target list + CDP screencast WS).
+      - "* /api/v1/browser-live/*"
+    tables:
+      # Agents in the session sidebar pickers; group chat rows (ADR-075):
+      # groups, members, rounds plus thread and message rows.
+      - agents
+      - agent_groups
+      - group_members
+      - group_rounds
+      - threads
+      - messages
+    status: frozen
+    source: "ADR-085 section 4 (build stop); ROADMAP E5 (group chat to be deleted together with the sessions chat); ROADMAP: candidate for removal"
+  - id: F-voice
+    name: "Voice overlay (Jarvis)"
+    # Global overlay (sidebar mic button, VoiceWidget/VoiceDrawer) — no route
+    # of its own. Token mint for the LiveKit room. The FileCard telegram
+    # action reuses the agent-scoped telegram endpoint (listed in internal,
+    # an endpoint may live in several features).
+    # `trial` = built and live (ADR-082/060). Operator confirmed 2026-09-29:
+    # stays `trial` until ROADMAP stop 3 makes the keep/rebuild/retire call.
+    status: trial
+    source: "operator decision 2026-09-29; ROADMAP E4 stop 3 (voice keep/rebuild/retire decision pending); ADR-082 (Jarvis voice runtime binding); ADR-060 (voice provider realtime)"
+    api:
+      - "POST /api/v1/voice/token"
+      - "POST /api/v1/agent/me/telegram"
+  - id: F-loops
+    name: "Loops"
+    ui: {route: /loops}
+    status: frozen
+    source: "ADR-085 (ADR-051 frozen); ROADMAP: candidate for removal"
+    api:
+      # Loops CRUD and lifecycle (ADR-051 L1): the /loops page lists loops
+      # and deletes them, CreateLoopDialog creates, LoopDetailPanel reads
+      # one, and the start/pause/stop buttons mutate. No script callers.
+      - "* /api/v1/loops"
+      - "* /api/v1/loops/{loop_id}"
+      - "* /api/v1/loops/{loop_id}/start"
+      - "* /api/v1/loops/{loop_id}/pause"
+      - "* /api/v1/loops/{loop_id}/stop"
+    tables:
+      # Loops and their rounds; round tasks are task rows (listed in
+      # F-tasks).
+      - loops
+      - loop_rounds
+      - tasks
+  - id: F-office
+    name: "Office"
+    ui: {route: /office}
+    status: frozen
+    source: "ROADMAP UI waves: candidate for removal; PRINCIPLES 7.12 (no polish)"
+  - id: F-agents
+    name: "Agents"
+    ui: {route: [/agents, "/agents/[id]"]}
+    api:
+      # Fleet management API of the agents pages and wizard: list/create,
+      # detail, lifecycle (start/stop/restart/archive/restore/reset), config,
+      # skills, plugins, MCP, metrics, provision, local memory, SSE stream.
+      # The chat and terminal slices are also used by F-sessions (listed there).
+      # Review note: GET /agents/runtime-status and POST /agents/{id}/reset-token
+      # have no page caller (tests / manual operator use only). GET
+      # /agents/{id}/metrics(/summary) has a client helper but no caller
+      # (the runtimes cockpit reads /hosts/{id}/metrics instead).
+      - "* /api/v1/agents"
+      - "* /api/v1/agents/*"
+      # Wizard: template list/create, edit, instantiate.
+      - "* /api/v1/agent-templates"
+      - "* /api/v1/agent-templates/*"
+      # CLI-bridge host-helper health pill (agent detail page and wizard
+      # RuntimeStep poll it every 30 s next to the Provision button).
+      - "GET /api/v1/cli-bridge/health"
+      # Host agent start/stop/restart buttons on the agent detail page.
+      - "* /api/v1/host-agents/*"
+      # Agent wizard model list (wizard/shared.tsx). The single-model read
+      # has a client helper (api.models.get) but no caller today; the model
+      # CATALOG endpoints belong to the runtimes page (listed there).
+      - "GET /api/v1/models"
+      - "GET /api/v1/models/{model_id}"
+    status: frozen
+    source: "operator decision 2026-09-29; ADR-085 sections 4-5 (fleet under build stop)"
+    # Frozen, not a removal candidate: the fleet layer stays usable, just not
+    # built further while the build stop holds.
+    tables:
+      # Agent rows, wizard templates and per-agent metrics.
+      - agents
+      - agent_templates
+      - agent_metrics
+  - id: F-bench
+    name: "Benchmark studio"
+    ui: {route: /bench}
+    status: frozen
+    source: "operator decision 2026-09-29; ADR-070 (benchmark studio as a vertical); ADR-044 (strippable vertical)"
+    # Frozen, not removed: the operator has not used it lately and it stays
+    # reversible as a strippable vertical (ADR-044).
+    api:
+      # Benchmark studio vertical (ADR-070, backend/app/verticals/bench_studio/):
+      # challenge gallery/detail CRUD, draft via approval, rerender/recompose/
+      # stop lifecycle, entry retry/rerender/edit, spark model list for the
+      # new-challenge dialog. The entry view URL carries a short-lived
+      # resource-scoped view-token so it can be opened on a phone without a
+      # Bearer header (router docstring).
+      - "* /api/v1/bench/*"
+      # Prompt library CRUD (PromptTemplate tab of the studio page, owned by
+      # the bench studio vertical's api client; no other page calls it).
+      - "* /api/v1/prompt-templates"
+      - "* /api/v1/prompt-templates/*"
+    tables:
+      # Bench studio vertical (ADR-070): challenges, entries, content
+      # pipelines (draft flow) and the prompt library.
+      - bench_challenges
+      - bench_entries
+      - content_pipelines
+      - prompt_templates
+  - id: F-files
+    name: "Files browser"
+    ui: {route: /files}
+    note: unconfirmed
+    api:
+      # Files page: named-root browsing, search, meta and preview, native
+      # open, reindex, delete-to-trash and trash list/restore/purge. The
+      # content endpoint is also used outside the page (inbox approval
+      # preview, chat attachment tiles) — image/iframe elements fetch it as
+      # a blob because they cannot carry the Bearer header.
+      - "* /api/v1/files/*"
+    tables:
+      # Search index rows and deliverable-to-file links (file_indexer).
+      - file_index
+      - deliverable_references
+  - id: F-repos
+    name: "Repos registry"
+    ui: {route: /repos}
+    note: unconfirmed
+    api:
+      # Repos registry: list/import/register/create, sync, link to project,
+      # GitHub status and config (settings page reuses github-status/config).
+      - "* /api/v1/repos"
+      - "* /api/v1/repos/*"
+    tables:
+      # Repos registry rows (routers/repos.py).
+      - repos
+  - id: F-skills
+    name: "Skills"
+    ui: {route: /skills}
+    status: frozen
+    source: "operator decision 2026-09-29; PRINCIPLES section 3 rule 2 (procedures are files now, SKILL.md / AGENTS.md)"
+    # Frozen, not removed: the installer/registry page stays usable, but
+    # procedures now live as files, not as page-managed state.
+    api:
+      # Skills page tabs: installer (skill list, per-agent matrix), skill
+      # content editor (GET/PUT content). The agent detail page also installs
+      # and toggles skills, and the agent card reads the list (an endpoint may
+      # live in several features).
+      - "* /api/v1/skills"
+      - "* /api/v1/skills/*"
+      # Plugins tab: central plugin store list, GitHub skill repos and
+      # custom skills lists, admin plugins shell (start/stop; the xterm
+      # connects over the /plugins/shell/ws ticket socket). MCP tab: the
+      # global MCP server registry CRUD (ADR-016 registry; the per-agent
+      # allowlist goes through the agent-scoped API, listed in internal).
+      - "* /api/v1/plugins"
+      - "* /api/v1/plugins/github-skills"
+      - "* /api/v1/plugins/custom-skills"
+      - "* /api/v1/plugins/shell"
+      - "* /api/v1/mcp-servers"
+      - "* /api/v1/mcp-servers/*"
+  - id: F-login
+    name: "Login"
+    ui: {route: /login}
+    status: internal
+    source: "ADR-085 section 2 (auth is cross-cutting core)"
+    api:
+      # Login page: setup check decides first-run registration vs login,
+      # register creates the first admin, login issues the JWT.
+      # scripts/demo-seed.py reads setup-required too. The stream ticket
+      # mints a short-lived token so EventSource streams can carry auth in
+      # the URL (frontend streamTicket helper — the login JWT goes only into
+      # this POST's header).
+      - "GET /api/v1/auth/setup-required"
+      - "POST /api/v1/auth/register"
+      - "POST /api/v1/auth/login"
+      - "POST /api/v1/auth/stream-ticket"
+    tables:
+      # First admin registration and login (routers/auth.py).
+      - users
+  - id: F-setup
+    name: "First-run wizard"
+    ui: {route: /setup}
+    status: internal
+    source: "shown once after the first registration"
+
+internal:
+  # Agent-scoped machine API (ADR-009: separate from the user router).
+  # Agents poll tasks, heartbeat, report, comment, delegate and read
+  # vault/knowledge here — callers: mc CLI (scripts/mc-cli), bridges
+  # (scripts/*-bridge.py), agent templates (backend/templates), host poll
+  # scripts. The global voice overlay (F-voice) reuses the agent-scoped
+  # /api/v1/agent/me/telegram endpoint (FileCard telegram action). No bare
+  # /api/v1/agent endpoint exists.
+  - "endpoint:* /api/v1/agent/*"
+  # Orchestration routers (E3b R6): none of these has a page or script
+  # caller today — the scheduler and the workflow service execute runs in
+  # process, not over HTTP. Dead-code candidates for E5 (operator decides).
+  # Playbooks router: CRUD, catalog, skill packs, versions, approve,
+  # per-playbook automations and recent runs; client helpers exist in
+  # api.ts (api.playbooks.*) but no component calls them. The guided
+  # setup flow (guided/current, guided/sessions/*) is deprecated since
+  # Workstream C1 — no UI caller either.
+  - "endpoint:* /api/v1/playbooks*"
+  # Automations router: CRUD plus activate/pause/run. Helpers
+  # api.automations.* exist unused in api.ts; scheduled automations are
+  # triggered by the scheduler in process.
+  - "endpoint:* /api/v1/automations*"
+  # Workflows router: workflow templates, versions, rollback, run control
+  # and SSE stream. workflow_service executes workflow runs in process
+  # (scheduler; playbook/automation runs); no HTTP caller.
+  - "endpoint:* /api/v1/workflows*"
+  # Schedule heatmap and upcoming firings: client helpers exist
+  # (api.schedule.getHeatmap/getUpcoming) but no component calls them —
+  # the schedule page renders ScheduleHeatmap with empty data and the job
+  # detail reads stats/runs/tasks instead.
+  - "endpoint:GET /api/v1/schedule/jobs/{job_id}/heatmap"
+  - "endpoint:GET /api/v1/schedule/upcoming"
+  # Approval quick-resolve links: the backend embeds these URLs in Telegram
+  # and approval messages; the phone browser opens them directly (no page in
+  # frontend-v2 calls them).
+  - "endpoint:GET /api/v1/approvals/{approval_id}/quick-resolve"
+  - "endpoint:POST /api/v1/approvals/{approval_id}/quick-resolve/confirm"
+  # Board-scoped approval list: client helper exists (api.approvals.boardList)
+  # but no page calls it; the inbox reads the unscoped list.
+  - "endpoint:* /api/v1/boards/*/approvals"
+  # SSE streams without a page caller today (helpers exist in the frontend
+  # sseUrls map; docs/handbook/operations/reverse-proxy.md proxies them).
+  - "endpoint:GET /api/v1/boards/{board_id}/tasks/stream"
+  - "endpoint:GET /api/v1/boards/{board_id}/memory/stream"
+  # Board groups: client helpers and a store field exist, but no page or
+  # script calls the API (the board picker reads boards directly).
+  - "endpoint:* /api/v1/board-groups*"
+  # Project/phase machine API: mc-mcp reads a project and completes phases
+  # (scripts/mc-mcp.py); phase create/edit/remove have no caller yet.
+  - "endpoint:GET /api/v1/projects/{project_id}"
+  - "endpoint:POST /api/v1/projects/{project_id}/phases"
+  - "endpoint:* /api/v1/projects/{project_id}/phases/{phase_id}"
+  - "endpoint:POST /api/v1/projects/{project_id}/phases/{phase_id}/complete"
+  # Task usage rollup and single checklist item delete: no caller found (the
+  # CLI uses the agent-scoped /agent/... checklist route).
+  - "endpoint:GET /api/v1/tasks/{task_id}/usage"
+  - "endpoint:DELETE /api/v1/boards/{board_id}/tasks/{task_id}/checklist/{item_id}"
+  # Node-agent machine API (scripts/node-agent/mc-node-agent.py, "Fleet &
+  # Rezepte v2" phase 1): the box trades a one-shot pairing code for a node
+  # token, then pushes telemetry heartbeats; the install one-liner curls the
+  # agent script (unauthenticated on purpose — no secrets in the file).
+  - "endpoint:POST /api/v1/nodes/pair"
+  - "endpoint:POST /api/v1/nodes/heartbeat"
+  - "endpoint:GET /api/v1/nodes/agent-script"
+  # Deploy router user endpoints (backend/app/routers/deploy.py, "for
+  # Dashboard"): no page or script calls them today. The agent-scoped deploy
+  # endpoints live under /api/v1/agent/* (covered above, ADR-009).
+  - "endpoint:GET /api/v1/deploy/services"
+  - "endpoint:GET /api/v1/deploy/history"
+  # Research router (Phase 29 task-based research, backend/app/routers/
+  # research.py): the planner flow it served was disabled 2026-04-11 (comment
+  # on api.research in frontend-v2/src/lib/api.ts) and no page or script
+  # calls these endpoints today; the router docstring defers the frontend
+  # update to Phase 31.
+  - "endpoint:* /api/v1/research"
+  - "endpoint:* /api/v1/research/*"
+  # Meetings legacy (Phase-31 torso, ADR-075): no delivery path and no UI;
+  # the group chat on the sessions page (F-sessions) superseded it. No page
+  # or script calls these endpoints (the helpers api.meetings.* are unused).
+  - "endpoint:* /api/v1/meetings*"
+  # Discord channel + guild config API (Phase 30 router): no page calls it
+  # today — client helpers (api.discord) exist unused; the operator script
+  # backend/scripts/setup_discord_channels.py points at PATCH /discord/config and
+  # docs/handbook/howto/integrations.md documents the endpoints.
+  - "endpoint:* /api/v1/discord*"
+  # Global CLI session list + bridge restart: client helpers exist
+  # (api.cliSessions.list/restart) but no component calls them today.
+  - "endpoint:* /api/v1/cli-sessions*"
+  # Single-agent container state GET: no caller (the sessions sidebar reads
+  # container_state from GET /docker-sessions/agents, mapped in F-sessions).
+  - "endpoint:GET /api/v1/docker-sessions/{agent_id}/state"
+  # Voice-worker machine bridges (jarvis_core mc_client, VAULT_READ agent
+  # scope, ADR-038/061): publish to Redis; the frontend reads the cards via
+  # WS /vault/voice-display and highlights via WS /vault/voice-highlight.
+  - "endpoint:POST /api/v1/voice/display"
+  - "endpoint:POST /api/v1/voice/graph-highlight"
+  # Skill-lab candidates (E3b R7, backend/app/routers/skill_lab.py): the
+  # playbook service writes skill candidates in process; client helpers
+  # api.skillLab.candidates/updateCandidate exist in api.ts but no
+  # component calls them.
+  - "endpoint:* /api/v1/skill-lab/*"
+  # ClawHub marketplace router (backend/app/routers/clawhub.py): the
+  # marketplace UI was deleted (Plan 31-01 / OCS-15) and the api.clawhub
+  # group was removed from api.ts; no page or script calls the remaining
+  # listing/install endpoints today.
+  - "endpoint:* /api/v1/clawhub/*"
+  # Plugins endpoints without a caller (E3b R7): install/update/remove and
+  # the audit feed have helpers in api.ts (api.plugins.install/update/
+  # remove/audit) but no component calls them; the skills page only lists
+  # plugins and runs the plugins shell. Plugin install happens via the CLI
+  # bridge and the install-skill script, not through this router.
+  - "endpoint:GET /api/v1/plugins/audit"
+  - "endpoint:POST /api/v1/plugins/install"
+  - "endpoint:POST /api/v1/plugins/{plugin_key}/update"
+  - "endpoint:DELETE /api/v1/plugins/{plugin_key}"
+  # Platform leftovers without a page caller (E3b R8): client helpers exist
+  # in api.ts but no component calls them (settings list/get/set, analytics
+  # usage, intelligence timeseries, system mode read/write); the single-
+  # credential GET, POST /auth/logout (the frontend logs out by dropping the
+  # token locally) and the admin usage-backfill (manual maintenance) have no
+  # caller at all.
+  - "endpoint:POST /api/v1/auth/logout"
+  - "endpoint:GET /api/v1/settings"
+  - "endpoint:GET /api/v1/settings/{key}"
+  - "endpoint:PUT /api/v1/settings/{key}"
+  - "endpoint:GET /api/v1/analytics/usage"
+  - "endpoint:GET /api/v1/intelligence/costs/timeseries"
+  - "endpoint:GET /api/v1/credentials/{credential_id}"
+  - "endpoint:GET /api/v1/system/mode"
+  - "endpoint:PUT /api/v1/system/mode"
+  - "endpoint:POST /api/v1/admin/usage/backfill-attribution"
+  # Liveness probe: container healthchecks, e2e preflight and status scripts
+  # poll the bare /health endpoint (no auth, router docstring).
+  - "endpoint:GET /health"
+  # Machine webhooks: GitHub posts repository events to the per-webhook URL
+  # configured in GitHub (webhook secret checked instead of user auth); local
+  # git hooks push commit events (no auth, loopback/docker network only -
+  # router docstrings).
+  - "endpoint:POST /api/v1/webhooks/github/{webhook_id}"
+  - "endpoint:POST /api/v1/webhooks/local/push"
+  # Agent container bootstrap: container entrypoints fetch the agent token
+  # and runtime env from the Vault at boot (ADR-019 bootstrap endpoint,
+  # ADR-028 build_runtime_env; routers/internal.py).
+  - "endpoint:GET /api/v1/internal/bootstrap"
+
+  # Database tables only machines use (E3b R9). Feature-owned tables are
+  # listed on the features above; everything here has no feature surface.
+  # Meetings legacy (Phase-31 torso, ADR-075): rows behind the internal
+  # /meetings endpoints and the meeting service.
+  - "table:agent_meetings"
+  - "table:agent_meeting_messages"
+  - "table:agent_messages"
+  # Agent machine-API delivery watermarks (agent poll / comment signalling
+  # in routers/agent_scoped.py and the agent-scoped endpoints).
+  - "table:agent_task_comment_cursor"
+  - "table:agent_thread_cursor"
+  # Playbook / automation / workflow machine layer (internal endpoints,
+  # E3b R6): services execute runs in process.
+  - "table:playbooks"
+  - "table:playbook_versions"
+  - "table:automations"
+  - "table:skill_packs"
+  - "table:skill_candidates"
+  - "table:workflow_templates"
+  - "table:workflow_template_versions"
+  - "table:workflow_runs"
+  - "table:workflow_step_runs"
+  # Board groups: API without a page caller (endpoint entries above).
+  - "table:board_groups"
+  # Agent-scoped board chat writes (routers/agent_scoped.py,
+  # Scope.CHAT_WRITE).
+  - "table:chat_messages"
+  # Historical archive only — model docstring: last write 04/2026, readers
+  # moved to model_usage_events; task delete still removes a task's rows.
+  - "table:cost_events"
+  # Deploy history: written by the agent-scoped deploy/record, read by
+  # GET /deploy/history and the agent-scoped history (all internal).
+  - "table:deploy_history"
+  # Discord channel/guild config (internal /discord endpoints).
+  - "table:discord_config"
+  # Install executor log; no router reads it.
+  - "table:install_log"
+  # Token-harvester bookkeeping (per-file processed state).
+  - "table:model_usage_harvest_state"
+  # Machine-written notification rows; no router reads them (surfaces go
+  # through activity events and system alerts).
+  - "table:notifications"
+  # Planner messages: written by the disabled research / guided-playbook
+  # flow, deleted alongside projects (routers/boards.py).
+  - "table:planner_messages"
+  # Dispatch attempt audit log (services/dispatch_attempt_audit.py).
+  - "table:task_attempt_audit"
+  # Per-user key/value rows behind the internal generic /settings endpoints.
+  - "table:user_settings"
+  # Machine webhooks (GitHub + local git hooks) and their payloads.
+  - "table:webhooks"
+  - "table:webhook_payloads"

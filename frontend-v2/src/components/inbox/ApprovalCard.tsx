@@ -14,12 +14,13 @@ import { GlassCard } from "@/components/shared/GlassCard";
 import { Pill } from "@/components/shared/Pill";
 import { InstallRequestCard } from "./InstallRequestCard";
 import { XPostApprovalCard } from "./XPostApprovalCard";
-import { C } from "@/lib/colors";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { C, alpha } from "@/lib/colors";
 import type { Approval, AutonomyLevel } from "@/lib/types";
 
 // ── Install Action Types ──────────────────────────────────────────────────────
 
-const INSTALL_ACTION_TYPES = new Set([
+export const INSTALL_ACTION_TYPES = new Set([
   "install_skill", "uninstall_skill",
   "install_plugin", "uninstall_plugin",
   "install_mcp", "uninstall_mcp",
@@ -62,7 +63,7 @@ const AUTONOMY_COLORS: Record<string, string> = {
   L3: C.error,
 };
 
-const BLOCKER_TYPE_LABELS: Record<string, { labelKey: string; color: string }> = {
+export const BLOCKER_TYPE_LABELS: Record<string, { labelKey: string; color: string }> = {
   missing_info: { labelKey: "blockerMissingInfo", color: C.warning },
   technical_problem: { labelKey: "blockerTechnical", color: C.error },
   decision_needed: { labelKey: "blockerDecision", color: C.accent },
@@ -79,10 +80,18 @@ interface ApprovalCardProps {
   loading?: boolean;
 }
 
+/** What the agent actually asks — the one line that belongs on top. */
+export function leadText(approval: Approval): string {
+  const p = (approval.payload ?? {}) as { question?: string; description?: string };
+  return (p.question || p.description || approval.description || "").trim();
+}
+
 export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps) {
   const t = useTranslations("inbox");
   const locale = useLocale();
   const [note, setNote] = useState("");
+  // "Cancel task" fails the task and unassigns the agent — ask first.
+  const [confirmCancel, setConfirmCancel] = useState(false);
 
   // Dispatch install/uninstall variants to dedicated card
   if (INSTALL_ACTION_TYPES.has(approval.action_type)) {
@@ -107,7 +116,15 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
   const badgeColor = typeConfig?.color ?? C.textDim;
   const BadgeIcon = typeConfig?.icon ?? AlertTriangle;
 
+  const blockedAgentName = isBlocker
+    ? (approval.payload as { blocked_agent_name?: string } | null)?.blocked_agent_name
+    : undefined;
+
+  // The dialog is a sibling of the card, not a child: the card's `layout`
+  // animation sets a transform on it, and a fixed-position dialog inside a
+  // transformed parent is positioned relative to that parent and jumps.
   return (
+    <>
     <motion.div
       layout
       initial={{ opacity: 0, x: -8 }}
@@ -116,7 +133,7 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
     >
       <GlassCard
         className="p-4"
-        glow={`${badgeColor}12`}
+        glow={alpha(badgeColor, 0.07)}
       >
         {/* Header */}
         <div className="flex items-start justify-between gap-4">
@@ -125,9 +142,9 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
               <span
                 className="text-[11px] px-2 py-0.5 rounded-lg font-medium flex items-center gap-1.5"
                 style={{
-                  backgroundColor: `${badgeColor}18`,
+                  backgroundColor: alpha(badgeColor, 0.09),
                   color: badgeColor,
-                  border: `1px solid ${badgeColor}30`,
+                  border: `1px solid ${alpha(badgeColor, 0.19)}`,
                 }}
               >
                 <BadgeIcon size={12} /> {label}
@@ -171,7 +188,7 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
               const blockerType = BLOCKER_TYPE_LABELS[p.blocker_type ?? "other"] ?? BLOCKER_TYPE_LABELS.other;
 
               return (
-                <div className="mt-3 p-3 rounded-xl space-y-2" style={{ backgroundColor: `${C.error}0F`, border: `1px solid ${C.error}26` }}>
+                <div className="mt-3 p-3 rounded-xl space-y-2" style={{ backgroundColor: alpha(C.error, 0.06), border: `1px solid ${alpha(C.error, 0.15)}` }}>
                   {(p.project_name || p.task_title) && (
                     <p className="text-[10px] text-[var(--color-text-muted)]">
                       {p.project_name && <span>{p.project_name}</span>}
@@ -179,7 +196,7 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
                       {p.task_title && <span>{p.task_title}</span>}
                     </p>
                   )}
-                  <span className="inline-block text-[10px] px-2 py-0.5 rounded-sm font-medium" style={{ backgroundColor: `${blockerType.color}18`, color: blockerType.color, border: `1px solid ${blockerType.color}30` }}>
+                  <span className="inline-block text-[10px] px-2 py-0.5 rounded-sm font-medium" style={{ backgroundColor: alpha(blockerType.color, 0.09), color: blockerType.color, border: `1px solid ${alpha(blockerType.color, 0.19)}` }}>
                     {t(blockerType.labelKey)}
                   </span>
                   {p.description && (
@@ -212,7 +229,7 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
               };
 
               return (
-                <div className="mt-3 p-3 rounded-xl space-y-2" style={{ backgroundColor: `${C.accent}0F`, border: `1px solid ${C.accent}26` }}>
+                <div className="mt-3 p-3 rounded-xl space-y-2" style={{ backgroundColor: alpha(C.accent, 0.06), border: `1px solid ${alpha(C.accent, 0.15)}` }}>
                   {(p.project_name || p.task_title) && (
                     <p className="text-[10px] text-[var(--color-text-muted)]">
                       {p.project_name && <span>{p.project_name}</span>}
@@ -226,7 +243,7 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
                   {p.options && p.options.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 mt-1">
                       {p.options.map((opt, i) => (
-                        <button key={i} onClick={() => setNote(opt)} className="text-[11px] px-2.5 py-1 rounded-lg cursor-pointer transition-all" style={{ backgroundColor: note === opt ? `${C.accent}33` : "var(--color-bg-elevated)", color: note === opt ? C.accent : "var(--color-text-secondary)", border: `1px solid ${note === opt ? `${C.accent}66` : "var(--color-border)"}` }}>
+                        <button key={i} onClick={() => setNote(opt)} className="text-[11px] px-2.5 py-1 rounded-lg cursor-pointer transition-all" style={{ backgroundColor: note === opt ? alpha(C.accent, 0.2) : "var(--color-bg-elevated)", color: note === opt ? C.accent : "var(--color-text-secondary)", border: `1px solid ${note === opt ? alpha(C.accent, 0.4) : "var(--color-border)"}` }}>
                           {opt}
                         </button>
                       ))}
@@ -292,30 +309,32 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
 
         {/* Actions */}
         <div
-          className="flex items-center gap-2 mt-3 pt-3 border-t"
+          className="flex items-center gap-4 mt-3 pt-3 border-t"
           style={{ borderColor: "var(--color-border)" }}
         >
           <button
             onClick={() => onResolve("approved", note || undefined)}
             disabled={loading}
-            className="flex items-center gap-1.5 text-[12px] px-3.5 py-2 rounded-xl cursor-pointer transition-all disabled:opacity-50"
+            className="flex items-center gap-1.5 text-[12px] px-3.5 py-2 min-h-[44px] sm:min-h-0 rounded-xl cursor-pointer transition-all disabled:opacity-50"
             style={{
-              backgroundColor: `${C.online}1F`,
+              backgroundColor: alpha(C.online, 0.12),
               color: C.online,
-              border: `1px solid ${C.online}40`,
+              border: `1px solid ${alpha(C.online, 0.25)}`,
             }}
           >
             <CheckCircle size={13} /> {approval.action_type === "clarification_question" ? t("reply") : isBlocker ? t("unblock") : t("approve")}
           </button>
           {approval.action_type !== "clarification_question" && (
             <button
-              onClick={() => onResolve("rejected", note || undefined)}
+              onClick={() =>
+                isBlocker ? setConfirmCancel(true) : onResolve("rejected", note || undefined)
+              }
               disabled={loading}
-              className="flex items-center gap-1.5 text-[12px] px-3.5 py-2 rounded-xl cursor-pointer transition-all disabled:opacity-50"
+              className="flex items-center gap-1.5 text-[12px] px-3.5 py-2 min-h-[44px] sm:min-h-0 rounded-xl cursor-pointer transition-all disabled:opacity-50"
               style={{
-                backgroundColor: `${C.error}1F`,
+                backgroundColor: alpha(C.error, 0.12),
                 color: C.error,
-                border: `1px solid ${C.error}40`,
+                border: `1px solid ${alpha(C.error, 0.25)}`,
               }}
             >
               <XCircle size={13} /> {isBlocker ? t("cancelTask") : t("reject")}
@@ -324,5 +343,25 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
         </div>
       </GlassCard>
     </motion.div>
+
+      <ConfirmDialog
+        open={confirmCancel}
+        kicker={t("cancelTaskKicker")}
+        title={t("cancelTaskTitle")}
+        body={
+          blockedAgentName
+            ? t("cancelTaskBodyNamed", { agent: blockedAgentName })
+            : t("cancelTaskBody")
+        }
+        confirmLabel={t("cancelTaskConfirm")}
+        cancelLabel={t("cancelTaskKeep")}
+        loading={loading}
+        onConfirm={() => {
+          setConfirmCancel(false);
+          onResolve("rejected", note || undefined);
+        }}
+        onCancel={() => setConfirmCancel(false)}
+      />
+    </>
   );
 }

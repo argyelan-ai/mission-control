@@ -103,7 +103,6 @@ cd frontend-v2 && npm run test:run
   code path; debugging it requires knowing that `register()` runs during app
   startup and that hook errors are logged and swallowed rather than raised.
 
-The reference vertical is `news_studio` — a full-size example with seven
-routers, ten services and its own frontend area. Internal checkouts can read
-it; public checkouts strip that package, which is exactly the mechanism this
-page describes.
+The reference vertical is `bench_studio` (`backend/app/verticals/bench_studio/`,
+`frontend-v2/src/verticals/bench_studio/`) — routers, task-done hooks, approval
+hooks and its own frontend area behind `VERTICALS.benchStudio`.

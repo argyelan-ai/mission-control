@@ -21,7 +21,7 @@ import { SemanticCardGrid } from "@/components/memory/SemanticCardGrid";
 import { AgentLessonMatrix } from "@/components/memory/AgentLessonMatrix";
 import { AttachmentPanel } from "@/components/memory/AttachmentPanel";
 import { MergeResolutionPanel } from "@/components/memory/MergeResolutionPanel";
-import { C as _C, STATUS_TEXT } from "@/lib/colors";
+import { C as _C, STATUS_TEXT, alpha } from "@/lib/colors";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 
@@ -40,13 +40,13 @@ const C = {
 } as const;
 
 const TYPE_CONFIG: Record<MemoryType, { color: string; label: string; pill: string }> = {
-  lesson:        { color: C.err,    label: "Lesson",        pill: "rgba(239,68,68,0.12)" },
-  reference:     { color: C.warn,   label: "Reference",     pill: "rgba(245,158,11,0.12)" },
-  journal:       { color: C.online, label: "Journal",       pill: "rgba(0,204,136,0.10)" },
-  knowledge:     { color: _C.textSecondary, label: "Knowledge",    pill: `${_C.textSecondary}1F` },
-  weekly_review: { color: _C.textSecondary, label: "Weekly",       pill: `${_C.textSecondary}1F` },
-  research:      { color: STATUS_TEXT.info, label: "Research",     pill: "rgba(46,111,216,0.12)" },
-  insight:       { color: C.online, label: "Insight",       pill: "rgba(0,204,136,0.10)" },
+  lesson:        { color: C.err,    label: "Lesson",        pill: alpha(_C.error, 0.12) },
+  reference:     { color: C.warn,   label: "Reference",     pill: alpha(_C.warning, 0.12) },
+  journal:       { color: C.online, label: "Journal",       pill: alpha(_C.online, 0.1) },
+  knowledge:     { color: _C.textSecondary, label: "Knowledge",    pill: alpha(_C.textSecondary, 0.12) },
+  weekly_review: { color: _C.textSecondary, label: "Weekly",       pill: alpha(_C.textSecondary, 0.12) },
+  research:      { color: STATUS_TEXT.info, label: "Research",     pill: alpha(_C.info, 0.12) },
+  insight:       { color: C.online, label: "Insight",       pill: alpha(_C.online, 0.1) },
 };
 
 // Date range options
@@ -300,7 +300,7 @@ function MemoryModal({
   return (
     <>
     <div className="fixed inset-0 z-50 flex items-center justify-center" onClick={(e) => { if (e.target === backdropRef.current) tryClose(); }}>
-      <div ref={backdropRef} className="absolute inset-0 bg-black/70" style={{ backdropFilter: "blur(8px)" }} onClick={tryClose} />
+      <div ref={backdropRef} className="absolute inset-0 bg-[var(--color-scrim)]/70" style={{ backdropFilter: "blur(8px)" }} onClick={tryClose} />
 
       <motion.div
         initial={{ scale: 0.94, opacity: 0 }}
@@ -313,7 +313,7 @@ function MemoryModal({
           maxHeight: "88vh",
           background: _C.bgBase,
           border: `1px solid ${C.border}`,
-          boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
+          boxShadow: `0 4px 24px ${alpha(_C.shadow, 0.5)}, 0 1px 2px ${alpha(_C.shadow, 0.3)}`,
         }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -352,7 +352,7 @@ function MemoryModal({
                   <button
                     onClick={() => setConfirmDelete(true)}
                     className="p-1.5 rounded-lg cursor-pointer transition-colors"
-                    style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", color: C.err }}
+                    style={{ background: alpha(_C.error, 0.08), border: `1px solid ${alpha(_C.error, 0.2)}`, color: C.err }}
                   >
                     <Trash2 size={13} />
                   </button>
@@ -529,7 +529,7 @@ function MemoryModal({
                 <motion.div
                   initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 4 }}
                   className="flex items-center gap-3 px-4 py-3 rounded-xl text-xs"
-                  style={{ background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.25)", color: C.warn }}
+                  style={{ background: alpha(_C.warning, 0.08), border: `1px solid ${alpha(_C.warning, 0.25)}`, color: C.warn }}
                 >
                   ⚠ Unsaved changes — close anyway?
                   <button onClick={onClose} className="ml-auto underline cursor-pointer">Close</button>
@@ -546,7 +546,7 @@ function MemoryModal({
             <motion.div
               initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
               className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 px-4 py-2 rounded-full text-xs font-medium pointer-events-none"
-              style={{ background: "rgba(0,204,136,0.15)", border: "1px solid rgba(0,204,136,0.3)", color: C.online }}
+              style={{ background: alpha(_C.online, 0.15), border: `1px solid ${alpha(_C.online, 0.3)}`, color: C.online }}
             >
               <Check size={12} /> Saved
             </motion.div>

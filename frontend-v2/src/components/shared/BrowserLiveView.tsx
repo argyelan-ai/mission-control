@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { MonitorOff, RefreshCw, RotateCcw, Loader2 } from "lucide-react";
 import { api, browserLiveWsUrl } from "@/lib/api";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import { StatusDot } from "@/components/shared/StatusDot";
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -35,37 +35,56 @@ function useBrowserLiveSocket(enabled: boolean, targetId: string | null, connect
     setStatusMessage(null);
     setConnState("connecting");
 
-    const url = browserLiveWsUrl(targetId ?? undefined);
-    const ws = new WebSocket(url);
-    wsRef.current = ws;
+    let cancelled = false;
+    let ws: WebSocket | null = null;
 
-    ws.onopen = () => setConnState("open");
+    // Single-use stream ticket instead of the login token in the URL.
+    browserLiveWsUrl(targetId ?? undefined).then(
+      (url) => {
+        if (cancelled) return;
+        ws = openSocket(url);
+      },
+      () => {
+        if (cancelled) return;
+        setStatusMessage((prev) => prev ?? "Connection error");
+        setConnState("closed");
+      },
+    );
 
-    ws.onmessage = (evt) => {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(evt.data as string);
-      } catch {
-        return;
-      }
-      if (!isServerMessage(parsed)) return;
-      if (parsed.type === "frame") {
-        setFrameSrc(`data:image/jpeg;base64,${parsed.data}`);
-      } else if (parsed.type === "status") {
-        setStatusMessage(parsed.message);
-      }
-    };
+    function openSocket(url: string): WebSocket {
+      const ws = new WebSocket(url);
+      wsRef.current = ws;
 
-    ws.onerror = () => {
-      setStatusMessage((prev) => prev ?? "Connection error");
-    };
+      ws.onopen = () => setConnState("open");
 
-    ws.onclose = () => {
-      setConnState("closed");
-    };
+      ws.onmessage = (evt) => {
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(evt.data as string);
+        } catch {
+          return;
+        }
+        if (!isServerMessage(parsed)) return;
+        if (parsed.type === "frame") {
+          setFrameSrc(`data:image/jpeg;base64,${parsed.data}`);
+        } else if (parsed.type === "status") {
+          setStatusMessage(parsed.message);
+        }
+      };
+
+      ws.onerror = () => {
+        setStatusMessage((prev) => prev ?? "Connection error");
+      };
+
+      ws.onclose = () => {
+        setConnState("closed");
+      };
+      return ws;
+    }
 
     return () => {
-      ws.close(1000);
+      cancelled = true;
+      ws?.close(1000);
       wsRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -280,7 +299,7 @@ export function BrowserLiveView() {
         {connect && statusMessage && !streamEnded && (
           <div
             className="absolute bottom-2 left-2 right-2 text-[10px] px-2.5 py-1.5 rounded-md"
-            style={{ background: "rgba(0,0,0,0.6)", color: C.textSecondary, border: `1px solid ${C.border}` }}
+            style={{ background: alpha(C.scrim, 0.6), color: C.textSecondary, border: `1px solid ${C.border}` }}
           >
             {statusMessage}
           </div>

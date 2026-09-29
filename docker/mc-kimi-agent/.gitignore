@@ -2,3 +2,4 @@
 # sources live in scripts/mc-cli/ and docker/shared/poll.sh.
 mc-cli/
 poll.sh
+sigforward.sh

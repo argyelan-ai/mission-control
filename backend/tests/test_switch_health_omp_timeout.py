@@ -5,8 +5,9 @@ Container gesund war.
 Grund: der omp-TUI braucht nach einem Neustart laenger als 30 s, bis die
 Prompt-Glyphen in Fenster 0 stehen. Die kurze Neustart-Frist galt aber fuer
 alle Harnesses gleich. Fuer omp gilt darum jetzt dieselbe lange Frist wie beim
-Neuerstellen (90 s). Die Pruefung endet ohnehin, sobald die Glyphen da sind —
-die Frist ist nur die Obergrenze, kein Warten auf Vorrat.
+Neuerstellen (HEALTH_TIMEOUT_RECREATE, seit 14.09.2026 180 s). Die Pruefung
+endet ohnehin, sobald die Glyphen da sind — die Frist ist nur die Obergrenze,
+kein Warten auf Vorrat.
 """
 from __future__ import annotations
 
@@ -75,14 +76,21 @@ async def _switch_and_capture(session, agent, new_id):
 
 @pytest.mark.asyncio
 async def test_omp_same_image_switch_gets_long_health_timeout(async_session):
-    """omp -> omp ist ein Neustart im gleichen Image — trotzdem 90 s Frist."""
+    """omp -> omp ist ein Neustart im gleichen Image — trotzdem die lange Frist."""
     _old, new, agent = await _mk_pair(async_session, "omp", "omp-a", "omp-b")
 
     result, kwargs = await _switch_and_capture(async_session, agent, new.id)
 
+    from app.services.agent_runtime_switch import (
+        HEALTH_TIMEOUT_RESTART_OMP,
+        OMP_READY_SIGNALS,
+    )
+
     assert result.image_switched is False  # gleiches Image => Neustart-Pfad
-    assert kwargs.get("ready_signals") == ("╭─", "❯")
-    assert kwargs.get("timeout") == 90  # HEALTH_TIMEOUT_RESTART_OMP
+    # Additive (fix omp-acp-no-tui-window, 13.09.2026): the OMP_ACP_READY
+    # sentinel joins the native-TUI glyphs, it doesn't replace them.
+    assert kwargs.get("ready_signals") == OMP_READY_SIGNALS
+    assert kwargs.get("timeout") == HEALTH_TIMEOUT_RESTART_OMP == 180
 
 
 @pytest.mark.asyncio

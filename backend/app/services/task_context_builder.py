@@ -44,11 +44,147 @@ logger = logging.getLogger(__name__)
 #         abort dispatch — same as original `return` in auto_dispatch_task).
 #       * Success path tries worktree-isolation; on worktree failure falls back
 #         to a branch checkout in the main repo. Sets task.workspace_path.
-#   - Project absent + agent.workspace_path set: ad-hoc git workspace path.
+#   - Project absent + agent.workspace_path set + agent.requires_git_workflow:
+#       * ad-hoc git workspace, repo resolved via
+#         repo_registry.resolve_adhoc_repo_target (task.repo_id → board
+#         default → shared mc-workspace scratch repo — never "no repo").
 #       * Worktree → branch fallback identical to project path.
-#       * On any exception logs WARNING but does NOT block dispatch (returns True).
-#   - Otherwise: no-op (returns True — caller continues with non-code workspace).
+#       * Changed 2026-09-14 (task af914128): on any exception now applies
+#         the SAME hard-fail contract as the project path (blocker comment +
+#         blocked + terminal-unassign, returns False) — the old silent
+#         WARNING-and-continue left git-requiring agents dispatched into a
+#         non-git directory, which is exactly what caused the incident.
+#   - Project absent + agent.requires_git_workflow=False (or no
+#     agent.workspace_path): no-op here (returns True) — caller continues
+#     with the Phase-C non-code workspace.
 #
+# ── Review-Workspace (task dd4bf92c, 2026-09-13) ──────────────────────────
+# Vorbereiteter Arbeitsordner fuer Review-Karten: statt main+neuer-Branch
+# (was der allgemeine Pfad unten macht) wird der tatsaechliche PR-Stand
+# ausgecheckt. Getrennt von den Entwickler-Zweigen unten, damit die dort
+# dokumentierten Verhaltensvertraege unangetastet bleiben.
+async def _resolve_repo_for_review(
+    task: "Task", session: AsyncSession,
+) -> tuple[str, str] | None:
+    """Resolve (repo_url, repo_slug) for a review workspace.
+
+    Registry-Repo (task.repo_id, ADR-052) hat Vorrang vor dem Projekt-Pfad —
+    gleiche Praezedenz wie in den Entwickler-Zweigen unten. Gibt None zurueck
+    wenn die Karte keinen Code-Bezug hat (Phase-Review o.ae.) — kein Fehler.
+    """
+    if task.repo_id:
+        from app.models.repo import Repo as _Repo
+        registry_repo = await session.get(_Repo, task.repo_id)
+        if registry_repo is not None:
+            from app.services.repo_registry import clone_url_for
+            repo_slug = registry_repo.full_name.split("/", 1)[-1]
+            return clone_url_for(registry_repo), repo_slug
+    if task.project_id:
+        project = await session.get(Project, task.project_id)
+        if project and project.github_repo_url:
+            from app.services.git_service import slugify_project
+            return project.github_repo_url, slugify_project(project.name)
+    return None
+
+
+def _resolve_pr_number_for_review(task: "Task") -> int | None:
+    """Reads the explicit `task.pr_number` field (Boss decision, Task dd4bf92c,
+    2026-09-13, Option B) — NOT the `PR erstellt:` comment heuristic.
+
+    That comment marker (agent_git.py, Pitfall H) stays untouched for its
+    existing consumers (task_lifecycle.py::_merge_pr_if_exists,
+    agent_git.py::handle_done_pr_merge); extending it further would make it
+    broader, not more reliable — exactly what broke for Registry-Repo tasks
+    (task.repo_id) in the first place. `pr_number` is written explicitly:
+    by `handle_review_pr_creation()` when the backend creates the PR itself
+    (project_id path), or by the agent's own status->review PATCH when it
+    pushed + created the PR manually (repo_id path).
+
+    Deliberately no fallback/inference when this is None — an honest empty
+    field beats a guessed PR number that sends the reviewer to the wrong
+    state. Caller must surface the empty case visibly (no silent checkout
+    against a wrong or nonexistent PR).
+    """
+    return task.pr_number
+
+
+async def _setup_review_workspace_for_dispatch(
+    task: "Task", agent: "Agent", session: AsyncSession,
+) -> bool:
+    """Prepares a workspace checked out to the PR HEAD for a review dispatch.
+
+    Replaces the empty-of-changes workspace the general branches below would
+    otherwise produce (they always create a fresh branch off main — fine for
+    a developer starting new work, wrong for a reviewer who needs the PR's
+    actual diff). Writes the target SHA into the card so the reviewer can
+    match their review against the PR head without resolving it themselves.
+
+    Returns True if dispatch should continue, False if the task was blocked
+    (TaskComment + terminal-unassign already committed) — caller MUST return.
+    Mirrors the block-don't-silently-continue contract used by the developer
+    branches below (same incident class: 2026-04-19 silent-fallback writing
+    to the wrong repo; here: 2026-09-12 silent empty-of-PR-changes workspace).
+    """
+    if not agent.workspace_path:
+        return True  # nothing to prepare into — same no-op as the dev path
+
+    from app.services.task_lifecycle import apply_terminal_unassign
+
+    async def _block(reason: str) -> bool:
+        session.add(TaskComment(
+            task_id=task.id, author_type="system", comment_type="blocker",
+            content=(
+                "**Review-Workspace nicht vorbereitet** — Dispatch abgebrochen.\n\n"
+                f"{reason}\n\n"
+                "**Question for @Operator** — pruefen, dann Karte erneut auf "
+                "`review` setzen oder den Reviewer manuell dispatchen."
+            ),
+        ))
+        task.status = "blocked"
+        await apply_terminal_unassign(session, task, "blocked")
+        session.add(task)
+        await session.commit()
+        return False
+
+    repo_info = await _resolve_repo_for_review(task, session)
+    if repo_info is None:
+        return True  # kein Code-Bezug auf der Karte (z.B. Phase-Review)
+
+    repo_url, repo_slug = repo_info
+
+    pr_number = _resolve_pr_number_for_review(task)
+    if pr_number is None:
+        return await _block(
+            "Keine PR-Nummer auf der Karte (`task.pr_number` ist leer). "
+            "Fuer den Registry-Repo-Pfad (`task.repo_id`) muss der Entwickler "
+            "`pr_number` beim Uebergang auf `review` selbst mitschicken — der "
+            "Backend erstellt den PR dort nicht automatisch."
+        )
+
+    try:
+        from app.services.git_service import git_service
+        project_dir, head_sha = await git_service.prepare_review_checkout(
+            agent.workspace_path, repo_url, repo_slug, pr_number,
+        )
+        await git_service.setup_git_identity(project_dir, agent.name)
+    except Exception as e:
+        return await _block(f"**Fehler:** `{type(e).__name__}: {e}`\n\nPR: #{pr_number}")
+
+    task.workspace_path = project_dir
+    session.add(task)
+    _pr_line = f"PR #{pr_number}" + (f" ({task.pr_url})" if task.pr_url else "")
+    session.add(TaskComment(
+        task_id=task.id, author_type="system", comment_type="progress",
+        content=(
+            f"**Review-Workspace vorbereitet** — {_pr_line} ausgecheckt.\n"
+            f"**Ziel-SHA:** `{head_sha}`\n"
+            f"**Pfad:** `{project_dir}`"
+        ),
+    ))
+    await session.commit()
+    return True
+
+
 # Pattern S2 (lazy local imports) preserved for git_service + apply_terminal_unassign
 # to avoid module-load cycles with dispatch.py / task_lifecycle.py.
 async def setup_git_workspace_for_dispatch(
@@ -61,6 +197,13 @@ async def setup_git_workspace_for_dispatch(
     Returns True if dispatch should continue, False if the task was blocked
     (TaskComment + terminal-unassign already committed; caller MUST `return`).
     """
+    # Review-Karten (task.dispatch_intent == "review_handoff") brauchen den
+    # PR-Stand, nicht einen neuen Branch von main — eigener, fruehzeitiger
+    # Zweig, damit die Entwickler-Pfade unten unveraendert bleiben (Incident
+    # 2026-09-12: Reviewer bekam einen von PR-Aenderungen leeren Ordner).
+    if task.dispatch_intent == "review_handoff":
+        return await _setup_review_workspace_for_dispatch(task, agent, session)
+
     # Lazy import: dispatch.py contains is_backend_writable_path + _BACKEND_MOUNTED_ROOTS
     # (Pitfall D inseparable triple stays in dispatch.py per CONTEXT D-07 + ADR-025).
     from app.services.dispatch import is_backend_writable_path, _BACKEND_MOUNTED_ROOTS
@@ -85,8 +228,9 @@ async def setup_git_workspace_for_dispatch(
                         f"'{agent.workspace_path}' ist nicht backend-mounted."
                     )
                 repo_slug = registry_repo.full_name.split("/", 1)[-1]
+                repo_url = clone_url_for(registry_repo)
                 main_repo = await git_service.ensure_workspace(
-                    agent.workspace_path, clone_url_for(registry_repo), repo_slug,
+                    agent.workspace_path, repo_url, repo_slug,
                 )
                 task_slug = slugify_project(task.title)
                 try:
@@ -99,7 +243,16 @@ async def setup_git_workspace_for_dispatch(
                     git_project_dir = main_repo
                     await git_service.create_task_branch(main_repo, task_slug)
                     task.workspace_path = main_repo
-                await git_service.setup_git_identity(git_project_dir, agent.name)
+                await git_service.setup_git_identity(
+                    git_project_dir, agent.name, main_repo=main_repo,
+                )
+                # MC pre-push guard (PR #584 review W3): the cli-bridge twin
+                # pins the expected remote for every clone it creates; the
+                # central path did not, leaving these clones fail-open
+                # (docker/mc-agent-base/lib/mc-pre-push.sh:33 lets a push
+                # through when the marker is missing).
+                from app.services.cli_bridge_runner import _write_expected_remote
+                _write_expected_remote(git_project_dir, repo_url)
                 session.add(task)
                 await session.commit()
                 return True
@@ -174,8 +327,13 @@ async def setup_git_workspace_for_dispatch(
                     )
                     task.workspace_path = main_repo
                 await git_service.setup_git_identity(
-                    git_project_dir, agent.name,
+                    git_project_dir, agent.name, main_repo=main_repo,
                 )
+                # MC pre-push guard (PR #584 review W3): see the repo_id
+                # branch above for the rationale — the cli-bridge twin
+                # already pins this for every clone it creates.
+                from app.services.cli_bridge_runner import _write_expected_remote
+                _write_expected_remote(git_project_dir, project.github_repo_url)
                 session.add(task)
                 await session.commit()
         except Exception as e:
@@ -237,14 +395,17 @@ async def setup_git_workspace_for_dispatch(
             session.add(blocker)
             await session.commit()
             return False
-    elif agent.workspace_path:
-        # Ad-hoc task without a project → own repo or mc-workspace
+    elif agent.workspace_path and getattr(agent, "requires_git_workflow", True):
+        # Ad-hoc task without a project, git-requiring agent → prepared
+        # clone (task af914128, "Ad-hoc-Karten ohne Projekt bekommen kein
+        # Repo"). Gated on requires_git_workflow — already the
+        # authoritative per-agent "does this agent's output belong in git"
+        # flag (see dispatch_message_builder.py's git_section selection) —
+        # rather than a new opt-in tag an operator would have to remember
+        # to set per card. Non-coder ad-hoc tasks (Research/Writing) skip
+        # this branch entirely and get the Phase-C plain workspace below.
         try:
-            from app.services.git_service import (
-                ADHOC_REPO,
-                git_service,
-                slugify_project,
-            )
+            from app.services.git_service import git_service, slugify_project
             from app.services.github_config import require_github_owner
 
             if task.use_separate_repo:
@@ -268,12 +429,11 @@ async def setup_git_workspace_for_dispatch(
                 except Exception:
                     logger.warning("Task-Repo-Registrierung fehlgeschlagen", exc_info=True)
             else:
-                # Shared mc-workspace repo (previous behavior).
-                # Fail loud instead of a silent warning fallback for a missing owner.
-                _owner = await require_github_owner(session)
-                repo_url = f"https://github.com/{_owner}/{ADHOC_REPO}.git"
-                repo_slug = ADHOC_REPO
-                await git_service.ensure_adhoc_repo()
+                # Precedence: task.repo_id (Maske) → board.default_project_id
+                # → shared mc-workspace scratch repo. Never "no repo" — see
+                # repo_registry.resolve_adhoc_repo_target docstring.
+                from app.services.repo_registry import resolve_adhoc_repo_target
+                repo_url, repo_slug = await resolve_adhoc_repo_target(session, task)
 
             main_repo = await git_service.ensure_workspace(
                 agent.workspace_path, repo_url, repo_slug,
@@ -293,12 +453,45 @@ async def setup_git_workspace_for_dispatch(
                 )
                 task.workspace_path = main_repo
             await git_service.setup_git_identity(
-                git_project_dir, agent.name,
+                git_project_dir, agent.name, main_repo=main_repo,
             )
+            # MC pre-push guard (PR #584 review W3): these are exactly the
+            # ad-hoc clones that newly exist because of this PR — without
+            # this marker they had no wrong-remote protection at all (the
+            # cli-bridge twin already writes it for its own ad-hoc clones).
+            from app.services.cli_bridge_runner import _write_expected_remote
+            _write_expected_remote(git_project_dir, repo_url)
             session.add(task)
             await session.commit()
         except Exception as e:
-            logger.warning("Ad-hoc git workspace setup fehlgeschlagen: %s", e)
+            # Same hard-fail contract as the project-with-repo branch above:
+            # a git-requiring ad-hoc task must never dispatch into a
+            # workspace with no repo at all — that silence is exactly what
+            # let an agent self-clone the wrong `gh repo clone <shortname>`
+            # result on 2026-09-14 (incident, task af914128).
+            logger.error(
+                "Ad-hoc git workspace setup failed for task %s: %s", task.id, e,
+            )
+            from app.models.task import TaskComment
+            from app.services.task_lifecycle import apply_terminal_unassign
+            blocker = TaskComment(
+                task_id=task.id,
+                author_type="system",
+                comment_type="blocker",
+                content=(
+                    "**Workspace-Setup fehlgeschlagen** — Dispatch abgebrochen.\n\n"
+                    f"**Fehler:** `{type(e).__name__}: {e}`\n\n"
+                    "Ad-hoc-Task ohne Projekt — Repo-Aufloesung (repo_id / "
+                    "Board-Default / mc-workspace) schlug fehl.\n\n"
+                    "**Question for @Operator** — Repo-Zugriff bzw. Board-Default pruefen?"
+                ),
+            )
+            task.status = "blocked"
+            await apply_terminal_unassign(session, task, "blocked")
+            session.add(task)
+            session.add(blocker)
+            await session.commit()
+            return False
 
     return True
 
@@ -340,6 +533,96 @@ async def _ensure_task_workspace(
         )
         return None
     return base
+
+
+def _is_within(path: str, root: str) -> bool:
+    """True if `path` is `root` itself or lives somewhere underneath it.
+
+    Pure path-string comparison (normalized, no realpath/symlink
+    resolution) — task.workspace_path and agent.workspace_path are both
+    backend-local paths we constructed ourselves, never user input.
+    """
+    norm_path = os.path.normpath(path)
+    norm_root = os.path.normpath(root)
+    return norm_path == norm_root or norm_path.startswith(norm_root + os.sep)
+
+
+def _needs_non_code_workspace(
+    task_workspace_path: str | None,
+    agent_workspace_path: str | None,
+) -> bool:
+    """Whether Phase-C should (re)create the non-code task workspace for
+    `agent_workspace_path`.
+
+    True for a regular first dispatch (task.workspace_path unset) — original
+    behavior, untouched. Also true when task.workspace_path is SET but points
+    outside the target agent's own workspace tree: a reassign/handoff that
+    left it pointing at the OLD agent's layout (incident 2026-09-13, PR #568
+    B1 — the old guard `if not task.workspace_path` only ever checked the
+    "unset" half, never the "stale/foreign" half).
+
+    False — a genuine no-op, nothing to (re)provision — when task.workspace_path
+    already lives under agent_workspace_path (same agent reassigned to itself,
+    or step 1's git/worktree setup already placed it there), or when the
+    target agent has no workspace_path at all to compare against (existing
+    behavior for that case is unchanged by this function).
+    """
+    if not task_workspace_path:
+        return True
+    if not agent_workspace_path:
+        return False
+    return not _is_within(task_workspace_path, agent_workspace_path)
+
+
+async def prepare_agent_workspace_for_task(
+    task: "Task",
+    agent: "Agent",
+    session: AsyncSession,
+) -> bool:
+    """Full workspace preparation for `agent` on `task` — the same two-step
+    sequence `dispatch.auto_dispatch_task` runs on every first dispatch
+    (git/worktree setup via setup_git_workspace_for_dispatch, then the
+    Phase-C non-code fallback via _ensure_task_workspace if that left
+    task.workspace_path unset or pointing at a different agent's tree).
+    `auto_dispatch_task` itself calls this function (no longer a separate
+    copy — PR #568 B2) and then runs one further, agent-independent step
+    of its own (port allocation) that isn't part of this shared sequence.
+
+    Reused by every path that (re)points `assigned_agent_id` at a new agent
+    outside a normal dispatch cycle — the dedicated reassign endpoint, the
+    generic assigned_agent_id PATCH branch, and the self-review escalation
+    to the Board Lead — so a card handed to a new agent gets the identical
+    preparation a fresh dispatch would have given it. Incident 2026-09-13:
+    `mc reassign` rotated the attempt id and wrote the audit row but never
+    touched task.workspace_path, so the receiving agent's ACP guard
+    (_require_prepared_acp_workspace, docker/omp-bridge/bridge.py) refused
+    the turn — the directory the old assignment had prepared (or nothing,
+    if it had none) was never re-prepared for the new one. PR #568 fixed
+    this only for the "nothing" half (task.workspace_path unset); the
+    "old assignment's directory is still there and gets handed to the new
+    agent unchanged" half was a no-op until B1 (see _needs_non_code_workspace).
+
+    Returns True if the caller should proceed (workspace ready, or a
+    genuine no-op — e.g. the target agent has no workspace_path to build a
+    Phase-C path from, or task.workspace_path already lives under the
+    target agent's own tree). Note this is NOT "host agents never have a
+    workspace_path" — Hermes (a host agent) has one (alembic 0095); the
+    no-op depends on the actual value, not on agent_runtime. Returns False
+    if the task was blocked (setup_git_workspace_for_dispatch already
+    posted the blocker comment, set status=blocked and unassigned it — same
+    hard-fail contract a normal dispatch uses, no silent fallback).
+    """
+    if not await setup_git_workspace_for_dispatch(task, agent, session):
+        return False
+    if _needs_non_code_workspace(task.workspace_path, agent.workspace_path):
+        project = await session.get(Project, task.project_id) if task.project_id else None
+        task_ws = await _ensure_task_workspace(task.id, project, agent.workspace_path)
+        if task_ws:
+            task.workspace_path = task_ws
+            session.add(task)
+            await session.commit()
+            logger.info("Task %s: Non-Code-Workspace erstellt: %s", task.id, task_ws)
+    return True
 
 
 MAX_REFERENCE_FILES_IN_BRIEF = 15  # Directive-Grösse schützen (ADR-053)
@@ -699,13 +982,15 @@ async def _load_dispatch_context(
         except Exception:
             return ""
 
-    # Run all queries in parallel
+    # DB phase: every session.exec below. Run in parallel (as before) —
+    # deliberately WITHOUT the semantic-memory loader, because that one
+    # awaits the embedding HTTP call + Qdrant queries, which are NOT
+    # database work.
     results = await asyncio.gather(
         _load_memory(),
         _load_lessons(),
         _load_agent_lessons(),
         _load_relevant_lessons(),
-        _load_semantic_memory(),  # Phase A
         _load_intelligence(),
         _load_feedback(),
         _load_review_comment(),
@@ -716,25 +1001,37 @@ async def _load_dispatch_context(
         _load_dependencies(),
         return_exceptions=True,
     )
-
     # Assign results (errors are treated as empty values)
     ctx.memory_context = results[0] if isinstance(results[0], str) else ""
     ctx.lessons_context = results[1] if isinstance(results[1], str) else ""
     ctx.agent_lessons_context = results[2] if isinstance(results[2], str) else ""
     ctx.relevant_lessons_context = results[3] if isinstance(results[3], str) else ""
-    ctx.semantic_memory_context = results[4] if isinstance(results[4], str) else ""
-    ctx.intelligence_context = results[5] if isinstance(results[5], str) else ""
-    ctx.feedback_context = results[6] if isinstance(results[6], str) else ""
-    ctx.review_comment_context = results[7] if isinstance(results[7], str) else ""
+    ctx.intelligence_context = results[4] if isinstance(results[4], str) else ""
+    ctx.feedback_context = results[5] if isinstance(results[5], str) else ""
+    ctx.review_comment_context = results[6] if isinstance(results[6], str) else ""
 
-    if isinstance(results[8], tuple):
-        ctx.project, ctx.project_tags = results[8]
-    if isinstance(results[9], list):
-        ctx.team_agents = results[9]
-    ctx.meeting_context = results[10] if isinstance(results[10], str) else ""
-    if isinstance(results[11], list):
-        ctx.child_tasks = results[11]
-    ctx.dependency_context = results[12] if isinstance(results[12], str) else ""
+    if isinstance(results[7], tuple):
+        ctx.project, ctx.project_tags = results[7]
+    if isinstance(results[8], list):
+        ctx.team_agents = results[8]
+    ctx.meeting_context = results[9] if isinstance(results[9], str) else ""
+    if isinstance(results[10], list):
+        ctx.child_tasks = results[10]
+    ctx.dependency_context = results[11] if isinstance(results[11], str) else ""
+
+    # Pool hygiene (incident 2026-09-14): the DB phase opened a read
+    # transaction on the request session. The semantic-memory phase below
+    # awaits the embedding service and Qdrant over HTTP — possibly for a
+    # long time under load. Commit here (read phase — nothing uncommitted
+    # on the poll/recovery paths; dispatch flows commit again right after)
+    # so the pool connection's transaction is released across those
+    # network awaits instead of pinning it (29/30 connections were found
+    # pinned in open transactions during the incident).
+    try:
+        await session.commit()
+    except Exception:
+        pass
+    ctx.semantic_memory_context = await _load_semantic_memory()
 
     # Per-repo working rules (ADR-050/052) — Task-Repo hat Vorrang vor dem
     # Projekt-Repo. Läuft nach dem gather (braucht ctx.project). Best-effort.

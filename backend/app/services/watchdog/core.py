@@ -8,6 +8,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.database import engine
 from app.redis_client import RedisKeys, get_redis
+from app.services.service_heartbeat import clear_beat, record_beat
 from app.utils import utcnow
 
 from app.services.watchdog.health_checks import HealthChecksMixin
@@ -49,6 +50,10 @@ class WatchdogService(HealthChecksMixin, SessionMonitorMixin, TaskMonitorMixin):
         return self._running
 
     @property
+    def interval(self) -> int:
+        return self._interval
+
+    @property
     def last_check_at(self) -> datetime | None:
         return self._last_check_at
 
@@ -65,6 +70,7 @@ class WatchdogService(HealthChecksMixin, SessionMonitorMixin, TaskMonitorMixin):
         logger.info("Watchdog started (interval=%ds)", self._interval)
 
     async def stop(self) -> None:
+        was_running = self._running
         self._running = False
         if self._task:
             self._task.cancel()
@@ -73,6 +79,11 @@ class WatchdogService(HealthChecksMixin, SessionMonitorMixin, TaskMonitorMixin):
             except asyncio.CancelledError:
                 pass
             self._task = None
+        # A deliberate stop reads as "stopped" at once. Only the instance that
+        # ran the loop clears it: an idle singleton in the API process must not
+        # erase the heartbeat of the loop running in the worker.
+        if was_running:
+            await clear_beat("watchdog")
         logger.info("Watchdog stopped")
 
     async def _run_loop(self) -> None:
@@ -89,7 +100,19 @@ class WatchdogService(HealthChecksMixin, SessionMonitorMixin, TaskMonitorMixin):
                 return
             except Exception as e:
                 logger.error("Watchdog check error: %s", e)
+            # Liveness for the API process (the loop runs in the worker since
+            # the container split) — written on skipped ticks too: a tick that
+            # lost the lock still proves this loop is alive.
+            await self._beat()
             await asyncio.sleep(self._interval)
+
+    async def _beat(self) -> None:
+        await record_beat(
+            "watchdog",
+            interval=self._interval,
+            checks_total=self._checks_total,
+            last_check_at=self._last_check_at.isoformat() if self._last_check_at else None,
+        )
 
     async def _acquire_lock(self) -> bool:
         """Redis lock so only one worker per cycle runs the checks."""
@@ -138,6 +161,28 @@ class WatchdogService(HealthChecksMixin, SessionMonitorMixin, TaskMonitorMixin):
             await self._check_dependency_zombies(session)
             await self._check_review_tasks(session)
             await self._check_stuck_orchestrator_close(session)
+            # Report-only: in_progress/waiting cards with no turn and no
+            # (non-system) comment. Must run BEFORE orphan recovery so a
+            # silent card is visible to the Board Lead even if a later
+            # healer resets it. Never changes status.
+            await self._check_silent_cards(session)
+            # Same report-only family, one grain coarser: an agent's whole
+            # mailbox (inbox > 0, in_progress == 0) instead of a single card.
+            # Placed right after _check_silent_cards — same DB-dedup design,
+            # same "before orphan recovery" reasoning (visible even if a
+            # later healer changes something). Never changes status.
+            await self._check_silent_mailbox(session)
+            # Second stage: a stage-1 lead message (watchdog_notify /
+            # blocker_lead_notify) with no lead reaction for 30 minutes is
+            # reported to the operator — once per silent phase, report-only.
+            await self._check_lead_notify_escalations(session)
+            # Retract path for both stages above: a card that demonstrably
+            # moves again (real activity after the alert, not a status
+            # flip) gets a visible resolution note, and a still-pending
+            # stage-2 Approval is closed instead of sitting stale. Runs
+            # after both alert checks so a phase that both fired and
+            # resolved within one tick still ends the tick retracted.
+            await self._check_silent_card_retractions(session)
 
             # Orphan recovery: tasks stuck in in_progress without agent heartbeat
             recovered = await self._recover_orphaned_tasks(session)
@@ -169,7 +214,11 @@ class WatchdogService(HealthChecksMixin, SessionMonitorMixin, TaskMonitorMixin):
                 # gateway-only (TODO Phase 31: cli-bridge task-queue timeouts).
 
             db_latency, redis_latency = await self._check_system_health(session)
-            await self._collect_system_metrics(db_latency, redis_latency)
+            # session durchgereicht: der Plattenplatz-Waechter in
+            # _collect_system_metrics meldet ueber emit_event, und das braucht
+            # eine Session. Die Plattenmessung selbst hat der Snapshot dort
+            # schon gemacht — kein zweiter psutil-Aufruf.
+            await self._collect_system_metrics(db_latency, redis_latency, session)
 
             # Token harvester: Phase 31 — reads JSONL transcripts, inserts
             # model_usage_events. Runs every 5 cycles (~2.5 min at 30s interval).

@@ -10,9 +10,9 @@ import { useTranslations } from "next-intl";
 import { Search, X, Pause, Play, Trash2 } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import type { ScheduledJob } from "@/lib/types";
-import { JobRow } from "./JobRow";
+import { JobRow, JOB_GRID_COLS } from "./JobRow";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 
 interface JobsTableProps {
   jobs: ScheduledJob[];
@@ -169,7 +169,7 @@ export function JobsTable({
                   }}
                 >
                   {tag}
-                  <span className="ml-1 opacity-60">{count}</span>
+                  <span className="ml-1" style={{ color: "var(--color-text-dim)" }}>{count}</span>
                 </button>
               );
             })}
@@ -241,7 +241,7 @@ export function JobsTable({
         <div style={{ minWidth: 640 }}>
           {/* Header */}
           <div
-            className="grid grid-cols-[24px_24px_minmax(0,2fr)_minmax(0,1.5fr)_1fr_1fr_minmax(0,1fr)_auto] items-center gap-3 px-3 py-1.5 text-[10px] uppercase tracking-wide"
+            className={`grid ${JOB_GRID_COLS} items-center gap-3 px-3 py-1.5 text-[10px] uppercase tracking-wide`}
             style={{ color: C.textDim }}
           >
             <input
@@ -257,7 +257,7 @@ export function JobsTable({
                 bgSurface matches the row tone (borderSubtle over bgDeep) — bgBase read as a black hole on mobile. */}
             <span
               className="sticky z-10"
-              style={{ left: "72px", backgroundColor: C.bgSurface }}
+              style={{ left: "72px", backgroundColor: C.rowOpaque }}
             >
               {t("colName")}
             </span>
@@ -330,8 +330,8 @@ function BulkBtn({
       onClick={onClick}
       className="flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium transition"
       style={{
-        borderColor: danger ? `${C.error}59` : "rgba(255,255,255,0.1)",
-        background: danger ? `${C.error}1A` : C.borderSubtle,
+        borderColor: danger ? alpha(C.error, 0.35) : alpha(C.overlay, 0.1),
+        background: danger ? alpha(C.error, 0.1) : C.borderSubtle,
         color: danger ? STATUS_TEXT.error : C.textPrimary,
       }}
     >

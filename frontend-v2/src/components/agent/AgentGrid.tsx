@@ -194,7 +194,7 @@ function AgentListRow({ agent }: { agent: Agent }) {
             <div className="h-1 rounded-full bg-[var(--color-bg-elevated)] overflow-hidden">
               <div
                 className="h-full rounded-full transition-all"
-                style={{ backgroundColor: barColor, width: `${Math.min(pct, 100)}%` }}
+                style={{ backgroundColor: barColor, width: `${Math.min(pct ?? 0, 100)}%` }}
               />
             </div>
           </div>

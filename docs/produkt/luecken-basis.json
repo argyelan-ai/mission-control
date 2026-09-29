@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "keys": [
+    "orphans:J-job-to-merge:test",
+    "orphans:J-phone-needs-you:test",
+    "orphans:J-runtime-switch:test",
+    "orphans:J-setup:test",
+    "orphans:J-usage:test",
+    "orphans:J-vault:test"
+  ]
+}

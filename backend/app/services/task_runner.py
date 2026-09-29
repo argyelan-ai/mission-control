@@ -34,9 +34,22 @@ from app.utils import utcnow, ensure_aware
 from app.redis_client import RedisKeys, get_redis, try_claim_heal
 from app.scopes import Scope, get_agent_effective_scopes
 from app.services.activity import emit_event
-from app.services.dispatch import auto_dispatch_task
+from app.services.dispatch import auto_dispatch_task, TURN_SIGNAL_HEARTBEAT_MAX_AGE_SECONDS
 from app.services.messaging import last_task_activity, maybe_post_finish_nudge
+from app.services.operator_notices import raise_notice
+from app.services.service_heartbeat import clear_beat, record_beat
 from app.services.task_state import lock_and_set
+
+# W-busy (#25efd77c): grace window for a heal claimed while the agent's last
+# reported heartbeat status was "working". See _maybe_rotate_dispatch_attempt
+# for the full rationale — short version: a paste sent while the agent is
+# mid-Zug can land inside that running turn and get silently absorbed, so a
+# busy heal gets a short retry window instead of the normal
+# one-heal-per-dispatch-window lock. Two task-runner ticks' worth of buffer
+# (default interval 60s, see TaskRunnerService.__init__) gives a genuinely
+# just-delivered paste time to be picked up and ACK'd before we'd consider
+# rotating again.
+BUSY_HEAL_RETRY_TTL_SEC = 120
 
 logger = logging.getLogger("mc.task_runner")
 
@@ -351,6 +364,10 @@ class TaskRunnerService:
     def running(self) -> bool:
         return self._running
 
+    @property
+    def interval(self) -> int:
+        return self._interval
+
     async def start(self) -> None:
         if self._running:
             return
@@ -359,6 +376,7 @@ class TaskRunnerService:
         logger.info("Task Runner started (interval=%ds)", self._interval)
 
     async def stop(self) -> None:
+        was_running = self._running
         self._running = False
         if self._task:
             self._task.cancel()
@@ -367,6 +385,11 @@ class TaskRunnerService:
             except asyncio.CancelledError:
                 pass
             self._task = None
+        # A deliberate stop reads as "stopped" at once. Only the instance that
+        # ran the loop clears it: an idle singleton in the API process must not
+        # erase the heartbeat of the loop running in the worker.
+        if was_running:
+            await clear_beat("task_runner")
         logger.info("Task Runner stopped")
 
     async def _run_loop(self) -> None:
@@ -382,6 +405,8 @@ class TaskRunnerService:
                 return
             except Exception as e:
                 logger.error("Task Runner check error: %s", e)
+            # Liveness for the API process (see app/services/service_heartbeat.py).
+            await record_beat("task_runner", interval=self._interval)
             await asyncio.sleep(self._interval)
 
     async def _acquire_lock(self) -> bool:
@@ -601,6 +626,74 @@ class TaskRunnerService:
 
             redis = await get_redis()
 
+            # Bauplan Lauf 2 Teil 4 (21.09.2026): the ACK clock pauses while
+            # the agent is genuinely mid-turn — same signal Guard 3 (Teil 2)
+            # uses to decide whether to queue in the first place
+            # (agent.status == "working" + heartbeat younger than
+            # TURN_SIGNAL_HEARTBEAT_MAX_AGE_SECONDS). Runtime-free, same as
+            # Guard 3: covers 13/80 Hand-Starts (Nachpruefung N.2, bucket A
+            # "andere Karte in_progress") left uncovered by Teil 1-3. A
+            # stale/dead poll (no heartbeat or older than 90s) is NOT paused
+            # — that is the real hang the ladder exists to catch.
+            from app.config import settings as _ack_settings
+
+            if _ack_settings.host_turn_signal_enabled and agent.status == "working":
+                _hb_fresh = False
+                if agent.last_seen_at is not None:
+                    _hb_age = (now - ensure_aware(agent.last_seen_at)).total_seconds()
+                    _hb_fresh = _hb_age < TURN_SIGNAL_HEARTBEAT_MAX_AGE_SECONDS
+                # H1 (Nacharbeit 21.09.2026, Pruefbericht): the pause has an
+                # upper bound. Without one, a daemon stuck busy()=True
+                # forever (docker/omp-bridge acp_chat.py: prompt_timeout up
+                # to 3600s, and busy only clears at the very end of
+                # _run_turn — an exception in _restart_child() before that
+                # leaves busy permanently True while the bridge keeps
+                # heartbeating fine every 30s) would suppress BOTH ladders
+                # silently forever, with only a once-per-900s info event as
+                # a sign of life. Cap: only pause while dispatched_at is
+                # less than 2x the agent's own ack_timeout old — after that,
+                # the ladder runs exactly as if this Nacharbeit never
+                # happened.
+                #
+                # Runde 2 (21.09.2026, Pruefbericht): the pending case
+                # (dispatched_at NULL, Guard 3 queue scenario) gets the SAME
+                # cap, anchored on task.updated_at — the clock
+                # _handle_dispatch_pending itself uses
+                # (minutes_since_assigned) — instead of staying uncapped.
+                # Without this, a card that Guard 3 queues behind a
+                # permanently-"working" agent (the exact H1 failure mode)
+                # would never reach the pending ladder either.
+                _within_pause_cap = True
+                _cap_minutes = 2 * _get_ack_timeout_minutes(agent)
+                if task.dispatched_at is not None:
+                    _dispatched_minutes = (
+                        now - ensure_aware(task.dispatched_at)
+                    ).total_seconds() / 60
+                    _within_pause_cap = _dispatched_minutes < _cap_minutes
+                elif task.updated_at is not None:
+                    _pending_minutes = (
+                        now - ensure_aware(task.updated_at)
+                    ).total_seconds() / 60
+                    _within_pause_cap = _pending_minutes < _cap_minutes
+                if _hb_fresh and _within_pause_cap:
+                    turn_wait_key = RedisKeys.dispatch_turn_wait(str(task.id))
+                    if not await redis.get(turn_wait_key):
+                        await emit_event(
+                            session,
+                            "task.dispatch_queued_behind_active",
+                            f"'{task.title}' wartet — {agent.name} im Zug",
+                            severity="info",
+                            board_id=task.board_id,
+                            task_id=task.id,
+                            agent_id=agent.id,
+                            detail={
+                                "agent_status": agent.status,
+                                "heartbeat_age_seconds": round(_hb_age),
+                            },
+                        )
+                        await redis.set(turn_wait_key, "1", ex=900)
+                    continue
+
             if task.dispatched_at:
                 # G4 (W2-A): a Tier-3 recovery resume just reset
                 # dispatched_at/ack_at and redispatched — semantically a
@@ -655,14 +748,16 @@ class TaskRunnerService:
             return
 
         # Create an approval instead of auto-reassigning
-        await self._create_dispatch_approval(
+        escalation_kind = await self._create_dispatch_approval(
             session, task, agent, minutes_since_dispatch, "kein ACK nach Dispatch"
         )
         await redis.set(ack_check_key, "1", ex=86400)  # 24h Cooldown
 
         logger.warning(
-            "ACK timeout: '%s' — %s hat nicht bestaetigt (%dmin), Approval erstellt",
+            "ACK timeout: '%s' — %s did not ACK after dispatch (%dmin), %s",
             task.title, agent.name, int(minutes_since_dispatch),
+            "operator notice raised" if escalation_kind == "notice"
+            else "approval created",
         )
 
     async def _maybe_rotate_dispatch_attempt(
@@ -681,8 +776,28 @@ class TaskRunnerService:
         attempt_id than the one it last pasted on its next tick → triggers a
         fresh paste path without human intervention.
 
-        Dedup via Redis: only 1 rotation per `(task_id, original_attempt_id)`.
-        TTL = full ack_timeout so no endless rotation happens.
+        Dedup via Redis: normally only 1 rotation per `(task_id,
+        original_attempt_id)`, TTL = full ack_timeout, so no endless rotation
+        happens.
+
+        W-busy (#25efd77c) exception: poll.sh's dispatch paste is fail-open
+        (docker/shared/poll.sh paste_and_submit) — if the agent's pty is
+        already busy with an unrelated running turn ("Zug") when poll.sh
+        pastes the rotated attempt, the paste can land INSIDE that turn and
+        get silently absorbed. The agent never sees a fresh prompt, never
+        ACKs, and — since a rotation had already happened — the normal
+        full-ack_timeout lock below would then strand the card with no
+        further self-heal until the full ack_timeout escalates to a human
+        (reproduced: activity_events 14.09.2026, card healed at 05:32,
+        stayed unacked until a manual poll.sh restart at 06:50). Detect this
+        via the agent's last reported heartbeat status: if it was "working"
+        at THIS heal, use a short retry TTL (BUSY_HEAL_RETRY_TTL_SEC)
+        instead of the full window, so the next task-runner tick can retry
+        once the busy Zug plausibly cleared. If the agent was idle (the
+        normal case — nothing already running, the paste has every chance
+        to land cleanly), the full single-heal-per-window lock applies
+        unchanged, so a genuinely-delivered paste is never re-rotated
+        (double-dispatch protection, unchanged from before this fix).
 
         Returns: True if rotated, False if skipped (still too early or already rotated).
         """
@@ -714,7 +829,11 @@ class TaskRunnerService:
             caller="d1_silent_retry",
             reason=f"no_ack_after_{int(minutes_since_dispatch)}min",
         )
-        await redis.set(rotated_key, "1", ex=int(ack_timeout * 60))
+        agent_was_busy = agent.status == "working"
+        rotated_key_ttl = (
+            BUSY_HEAL_RETRY_TTL_SEC if agent_was_busy else int(ack_timeout * 60)
+        )
+        await redis.set(rotated_key, "1", ex=rotated_key_ttl)
 
         await emit_event(
             session,
@@ -729,12 +848,15 @@ class TaskRunnerService:
                 "new_attempt_id": new_attempt_id,
                 "minutes_since_dispatch": int(minutes_since_dispatch),
                 "rotation_threshold_min": int(rotation_threshold),
+                "agent_was_busy": agent_was_busy,
+                "rotated_key_ttl_sec": rotated_key_ttl,
             },
         )
         logger.warning(
-            "D-1 silent retry: '%s' — %s hat nicht ACK'd nach %dmin (threshold=%dmin), neue attempt_id %s",
+            "D-1 silent retry: '%s' — %s hat nicht ACK'd nach %dmin (threshold=%dmin), "
+            "neue attempt_id %s (agent_was_busy=%s, retry_ttl=%ds)",
             task.title[:60], agent.name, int(minutes_since_dispatch),
-            int(rotation_threshold), new_attempt_id[:8],
+            int(rotation_threshold), new_attempt_id[:8], agent_was_busy, rotated_key_ttl,
         )
         return True
 
@@ -954,8 +1076,12 @@ class TaskRunnerService:
     async def _create_dispatch_approval(
         self, session: AsyncSession, task: Task, agent: Agent,
         minutes_waiting: float, reason: str,
-    ) -> None:
-        """Create an approval instead of auto-reassigning — the operator decides.
+    ) -> str:
+        """Create an escalation for the operator — they decide what happens next.
+
+        Returns which escalation kind was created: "notice" (notice-only
+        path) or "approval" (classic Approval row) — callers use it for
+        accurate log text.
 
         D-2 fix (2026-05-14): direct Telegram push to the operator with inline
         buttons. Previously only an 'approval.created' activity event with
@@ -965,47 +1091,69 @@ class TaskRunnerService:
         operator only noticed it locally at 12:00 (= 2h 17min reaction time).
         Telegram is the operator's push channel with high action-required value.
         """
-        approval = Approval(
-            board_id=task.board_id,
-            task_id=task.id,
-            agent_id=agent.id,
-            action_type="dispatch_escalation",
-            description=(
-                f"'{task.title}' — {agent.name} hat seit {int(minutes_waiting)} Min. "
-                f"nicht reagiert ({reason}). Bitte Task manuell zuweisen oder re-dispatchen."
-            ),
-            status="pending",
-            expires_at=utcnow() + timedelta(hours=24),
-        )
-        session.add(approval)
-        await session.commit()
-        await session.refresh(approval)
+        from app.config import settings
 
-        # D-2: direct Telegram push (action-required channel)
-        try:
-            from app.services import operator_approvals
-            await operator_approvals.send_approval(
-                approval.id,
-                agent.name,
-                task.title,
-                f"Dispatch-Eskalation nach {int(minutes_waiting)}min ohne ACK ({reason}). "
-                f"Manuell entscheiden: re-dispatchen, anderem Agent zuweisen oder canceln.",
+        if settings.notice_only_escalations_enabled:
+            # Notice-only path: no Approval row, no Telegram yes/no push,
+            # and no 'approval.created' event either (nothing was created)
+            # — raise_notice() below already emits its own board-scoped
+            # 'operator.notice' event (Pruefbericht M2 / Runde-2 Punkt 4).
+            await raise_notice(
+                session,
+                action_type="dispatch_escalation",
+                task=task,
+                title=f"Dispatch-Eskalation: '{task.title}' - {agent.name} reagiert nicht",
+                body=(
+                    f"'{task.title}' - {agent.name} hat seit {int(minutes_waiting)} Min. "
+                    f"nicht reagiert ({reason}). Bitte Task manuell zuweisen oder re-dispatchen."
+                ),
+                agent_id=agent.id,
+                board_id=task.board_id,
             )
-        except Exception as e:
-            logger.warning(
-                "D-2 Telegram-Push fuer dispatch_escalation approval %s failed: %s",
-                approval.id, e,
+            return "notice"
+        else:
+            approval = Approval(
+                board_id=task.board_id,
+                task_id=task.id,
+                agent_id=agent.id,
+                action_type="dispatch_escalation",
+                description=(
+                    f"'{task.title}' — {agent.name} hat seit {int(minutes_waiting)} Min. "
+                    f"nicht reagiert ({reason}). Bitte Task manuell zuweisen oder re-dispatchen."
+                ),
+                status="pending",
+                expires_at=utcnow() + timedelta(hours=24),
             )
+            session.add(approval)
+            await session.commit()
+            await session.refresh(approval)
 
-        await emit_event(
-            session,
-            "approval.created",
-            f"Dispatch-Eskalation: '{task.title}' — {agent.name} reagiert nicht",
-            severity="warning",
-            board_id=task.board_id,
-            task_id=task.id,
-            agent_id=agent.id,
-        )
+            # D-2: direct Telegram push (action-required channel)
+            try:
+                from app.services import operator_approvals
+                await operator_approvals.send_approval(
+                    approval.id,
+                    agent.name,
+                    task.title,
+                    f"Dispatch-Eskalation nach {int(minutes_waiting)}min ohne ACK ({reason}). "
+                    f"Manuell entscheiden: re-dispatchen, anderem Agent zuweisen oder canceln.",
+                )
+            except Exception as e:
+                logger.warning(
+                    "D-2 Telegram-Push fuer dispatch_escalation approval %s failed: %s",
+                    approval.id, e,
+                )
+
+            await emit_event(
+                session,
+                "approval.created",
+                f"Dispatch-Eskalation: '{task.title}' — {agent.name} reagiert nicht",
+                severity="warning",
+                board_id=task.board_id,
+                task_id=task.id,
+                agent_id=agent.id,
+            )
+            return "approval"
 
     # ── Tiered Recovery (Phase 6 REC-01/02/03) ───────────────────────
 
@@ -1089,7 +1237,46 @@ class TaskRunnerService:
         # ── Tier 2: Process restart per runtime ──────────────────────
         runtime = getattr(agent, "agent_runtime", "openclaw")
         tier2_ok = False
-        if runtime == "docker":
+        # Option B (Mark, 2026-09-14): no process restart for ACP agents and
+        # explicitly opted-out slugs. Measured over 7 days: Tier 2 failed in
+        # 48 % of runs and, for ACP agents, the restart itself killed the
+        # running turn (double review, phantom delivery). Tier 3 (resume =
+        # re-dispatch over the agent's own delivery path) and Tier 4
+        # (operator notification) still run — a truly hung ACP agent is
+        # therefore REPORTED, not restarted, until the liveness-based
+        # restart (option A) replaces this branch.
+        from app.config import recovery_tier2_skip_agents
+        from app.services.fs_service import agent_slug as _agent_slug
+        from app.services.harness_compat import omp_driver_for
+        _slug = _agent_slug(agent) or ""
+        _harness = getattr(agent, "harness", None)
+        # ADR-084: the implicit skip is harness-derived (omp + ACP driver =
+        # restart would kill the running turn), the explicit one stays an
+        # operator opt-out for host agents the backend cannot observe.
+        _tier2_skip = (
+            _slug in recovery_tier2_skip_agents()
+            or (_harness == "omp" and omp_driver_for(_harness) == "acp")
+        )
+        if _tier2_skip:
+            logger.info(
+                "Tier 2 (restart) skipped for %s (slug=%s): ACP/opt-out agent — "
+                "restart would kill the running turn", agent.name, _slug,
+            )
+            await emit_event(
+                session,
+                "agent.recovery_tier_complete",
+                f"{agent.name}: Tier 2 uebersprungen — ACP-/Opt-out-Agent, kein Prozess-Neustart",
+                severity="info",
+                agent_id=agent.id, board_id=task.board_id, task_id=task.id,
+                detail={
+                    "tier": 2,
+                    "tier_name": "restart",
+                    "result": "skipped",
+                    "reason": "acp_or_optout_agent",
+                    "runtime": runtime,
+                },
+            )
+        elif runtime == "docker":
             try:
                 from app.services.docker_agent_sync import restart_docker_agent_container
                 # Sync function — wrap in to_thread to keep watchdog loop happy
@@ -1111,19 +1298,20 @@ class TaskRunnerService:
                 agent.name, runtime,
             )
 
-        await emit_event(
-            session,
-            "agent.recovery_tier_complete",
-            f"{agent.name}: Tier 2 {'ok' if tier2_ok else ('fehlgeschlagen' if runtime in ('docker', 'host') else 'uebersprungen')} — Restart ({runtime})",
-            severity="info" if tier2_ok else ("warning" if runtime in ("docker", "host") else "info"),
-            agent_id=agent.id, board_id=task.board_id, task_id=task.id,
-            detail={
-                "tier": 2,
-                "tier_name": "restart",
-                "runtime": runtime,
-                "result": "ok" if tier2_ok else ("failed" if runtime in ("docker", "host") else "skipped"),
-            },
-        )
+        if not _tier2_skip:
+            await emit_event(
+              session,
+              "agent.recovery_tier_complete",
+              f"{agent.name}: Tier 2 {'ok' if tier2_ok else ('fehlgeschlagen' if runtime in ('docker', 'host') else 'uebersprungen')} — Restart ({runtime})",
+              severity="info" if tier2_ok else ("warning" if runtime in ("docker", "host") else "info"),
+              agent_id=agent.id, board_id=task.board_id, task_id=task.id,
+              detail={
+                  "tier": 2,
+                  "tier_name": "restart",
+                  "runtime": runtime,
+                  "result": "ok" if tier2_ok else ("failed" if runtime in ("docker", "host") else "skipped"),
+              },
+            )
 
         # 30s wait between Tier 2 (restart) and Tier 3 (resume) — let the
         # container come up before sending the recap (D-17). Skip wait if
@@ -1139,6 +1327,7 @@ class TaskRunnerService:
         # it off to the poll-loop. We also capture the structured recovery recap
         # as a TaskComment so it's durable + visible in the task timeline.
         tier3_ok = False
+        tier3_timed_out = False
         try:
             from app.services.task_context_builder import build_recovery_context
             from app.redis_client import try_claim_recovery_comment_cooldown
@@ -1209,6 +1398,7 @@ class TaskRunnerService:
                     timeout=TIER3_DISPATCH_TIMEOUT_SECONDS,
                 )
             except asyncio.TimeoutError:
+                tier3_timed_out = True
                 logger.warning(
                     "Tier 3 (resume) dispatch timed out after %ss for %s on task %s",
                     TIER3_DISPATCH_TIMEOUT_SECONDS, agent.name, task.id,
@@ -1230,10 +1420,24 @@ class TaskRunnerService:
             return True
 
         # ── Tier 4: Notify operator (auto-Discord via severity=error) ────
+        # Nit (incident 2026-09-14): a Tier-3 TIMEOUT is not the same claim as
+        # a Tier-3 FAILURE. wait_for's own comment above says the background
+        # auto_dispatch_task "may still complete" after the bound expires —
+        # and it did, live, that night: the redispatch worked, but this event
+        # still read "Auto-Recovery fehlgeschlagen", costing an hour of
+        # looking in the wrong direction. Wording now names the ambiguous
+        # case for what it is instead of asserting an outcome nobody confirmed.
+        _tier4_msg = (
+            f"{agent.name}: Tier 3 (Resume) Zeitueberschreitung — Re-Dispatch "
+            "laeuft moeglicherweise im Hintergrund weiter, Kartenstatus vor "
+            "manuellem Eingriff pruefen"
+            if tier3_timed_out else
+            f"{agent.name}: Auto-Recovery fehlgeschlagen — Operator benachrichtigt"
+        )
         await emit_event(
             session,
             "agent.recovery_failed",
-            f"{agent.name}: Auto-Recovery fehlgeschlagen — Operator benachrichtigt",
+            _tier4_msg,
             severity="error",  # auto-triggers Discord webhook (activity.py:73-80)
             agent_id=agent.id,
             board_id=task.board_id,
@@ -1244,6 +1448,7 @@ class TaskRunnerService:
                 "task_id": str(task.id),
                 "task_title": task.title,
                 "runtime": runtime,
+                "tier3_timed_out": tier3_timed_out,
             },
         )
         return False
@@ -1580,9 +1785,26 @@ class TaskRunnerService:
             if seen_age >= _liveness_floor_seconds(agent):
                 continue  # wrapper dead → do NOT block (orphan → inbox recovery)
 
-            # DEAD TURN: last_task_activity_at stale beyond the runtime-aware,
-            # floored threshold. COALESCE onto last_seen_at only for legacy NULL.
-            activity_ref = agent.last_task_activity_at or agent.last_seen_at
+            # DEAD TURN: stale beyond the runtime-aware, floored threshold.
+            # Evidence order (2026-09-18 incident, card b2ea802f — 9h blind):
+            # 1. newest harvested ModelUsageEvent.ts for THIS task — the one
+            #    liveness signal the agent cannot fabricate by existing.
+            #    agent.last_task_activity_at alone is blind: every heartbeat
+            #    carrying status="working" restamps it, and that status is
+            #    derived from mere lock-file existence (bridge task_active
+            #    lambda) — a dead turn with a surviving lock file looks
+            #    alive forever.
+            # 2. Legacy fallback (last_task_activity_at / last_seen_at) for
+            #    runtimes whose transcripts are NOT harvested — no evidence
+            #    must mean "fall back", never "dead" (prime directive: a
+            #    genuinely-working agent must never be blocked).
+            from app.services.task_evidence import latest_model_event_at
+            model_event_at = await latest_model_event_at(session, task.id)
+            activity_ref = (
+                model_event_at
+                or agent.last_task_activity_at
+                or agent.last_seen_at
+            )
             if activity_ref is None:
                 continue
             mins_silent = (now - ensure_aware(activity_ref)).total_seconds() / 60.0

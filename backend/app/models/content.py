@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from app.utils import utcnow
 from typing import Any
 
 from sqlalchemy import JSON, DateTime, text
@@ -51,15 +52,13 @@ class ContentPipeline(SQLModel, table=True):
         default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
     )
 
-    # News-Bridge Fields (filled by News AI Worker)
+    # Source fields (filled by the retired news vertical; kept nullable, the
+    # rss_source_id FK column went with news_sources in migration 0206)
     source_url: str | None = None  # Original article URL
     source_name: str | None = None  # e.g., "TechCrunch", "arXiv"
     ai_score: float | None = None  # 0-10 post-worthiness score
     ai_tags: dict[str, Any] | None = Field(
         default=None, sa_column=Column(JSON, nullable=True)
-    )
-    rss_source_id: uuid.UUID | None = Field(
-        default=None, foreign_key="news_sources.id", nullable=True, index=True
     )
 
     # LinkedIn Video Fields
@@ -90,10 +89,10 @@ class ContentPipeline(SQLModel, table=True):
     )
 
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),
     )
     updated_at: datetime = Field(
-        default_factory=datetime.utcnow,
-        sa_column=Column(DateTime(timezone=True), server_default=text("NOW()"), onupdate=datetime.utcnow),
+        default_factory=utcnow,
+        sa_column=Column(DateTime(timezone=True), server_default=text("NOW()"), onupdate=utcnow),
     )

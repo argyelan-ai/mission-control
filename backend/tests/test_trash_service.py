@@ -133,7 +133,7 @@ def test_parse_trash_id_valid():
 
 def test_parse_trash_id_deleted_at_iso():
     ts, _, _ = trash_service.parse_trash_id("20260618-120000/deliverables/a/b.txt")
-    assert trash_service.deleted_at_iso(ts) == "2026-06-18T12:00:00"
+    assert trash_service.deleted_at_iso(ts) == "2026-06-18T12:00:00+00:00"
 
 
 @pytest.mark.parametrize(
@@ -206,7 +206,7 @@ def test_list_trash_parses_entry(trash_base):
     assert e["original_subpath"] == "a/b.txt"
     assert e["name"] == "b.txt"
     assert e["size"] == 5
-    assert e["deleted_at"] == "2026-06-18T12:00:00"
+    assert e["deleted_at"] == "2026-06-18T12:00:00+00:00"
 
 
 def test_list_trash_skips_non_deletable_root(trash_base):

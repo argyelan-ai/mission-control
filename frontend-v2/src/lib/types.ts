@@ -208,6 +208,11 @@ export interface Task {
   // Delegation Contract
   delegation_type: "code_change" | "visual_proof" | "credential_bound" | "review" | null;
   branch_name: string | null;
+  /** PR recorded on the task (set by the backend or the agent's review PATCH). */
+  pr_url?: string | null;
+  /** Set by the backend while status == blocked (naive UTC), cleared on leave. */
+  blocked_at?: string | null;
+  pr_number?: number | null;
   triggered_by_deliverable_id: string | null;
   target_url: string | null;
   acceptance_criteria: string | null;
@@ -511,6 +516,69 @@ export interface TaskTimelineEntry {
   meta?: Record<string, unknown> | null;
 }
 
+// ── Task run record ("Laufakte", GET /api/v1/tasks/{id}/run-record) ─────────
+// Mirrors backend/app/services/run_record.py build_run_record(). The box and
+// field names are the backend's (German) keys; the UI puts English/German
+// labels on top via i18n. The CONTENT (titles, comment text, step text) stays
+// in the working language and is shown as-is — never translated.
+
+export interface RunRecordChildItem {
+  titel: string | null;
+  status: TaskStatus;
+}
+
+export interface RunRecord {
+  auftrag: {
+    task_id: string;
+    board_id: string;
+    titel: string;
+    beschreibung: string | null;
+    status: TaskStatus;
+    kinder: {
+      total: number;
+      by_status: Partial<Record<TaskStatus, number>>;
+      /** Only present at <= 20 children. */
+      items?: RunRecordChildItem[];
+    };
+  };
+  zeiten: {
+    erstellt: string | null;
+    dispatched: string | null;
+    bestaetigt: string | null;
+    abgeschlossen: string | null;
+    dauer_sekunden: number | null;
+  };
+  plan: { ts: string; typ: string | null; autor: string | null; inhalt: string | null }[];
+  schritte: {
+    ts: string;
+    quelle: "status" | "ereignis";
+    actor_label: string | null;
+    changed_by: string | null;
+    text: string | null;
+  }[];
+  beweise: {
+    anzahl: number;
+    nach_typ: Record<string, number>;
+    items: { ts: string; typ: string; titel: string | null; pfad: string | null }[];
+  };
+  kosten: {
+    gesamt_usd: number;
+    je_anbieter: Record<string, { usd: number; input_tokens: number; output_tokens: number }>;
+    kinder_anteil_usd: number;
+    /** Present while no Anthropic usage is attributed — Claude cost is not tracked. */
+    hinweis?: string;
+  };
+  entscheidungen: {
+    ts: string;
+    typ: string;
+    /** "offen" = still pending. */
+    status: "approved" | "rejected" | "offen";
+    description: string | null;
+    resolver_note: string | null;
+  }[];
+  reibung: Record<string, { anzahl: number; erste: string; letzte: string }>;
+}
+
 export interface TaskTimelineResponse {
   task: {
     id: string;
@@ -613,6 +681,11 @@ export interface Agent {
   board_id: string | null;
   name: string;
   role: string | null;
+  // Canonical form of `role`, resolved server-side (case/whitespace-insensitive
+  // match against the AgentRole enum; null when `role` doesn't match any known
+  // role — e.g. freetext). `GET /api/v1/agents` only; use this for strict role
+  // comparisons instead of the raw `role` string (see lib/reviewRouting.ts).
+  role_canonical: string | null;
   emoji: string | null;
   status: AgentStatus;
   model: string | null;
@@ -634,7 +707,8 @@ export interface Agent {
   last_seen_at: string | null;
   last_task_activity_at: string | null;
   current_task_id: string | null;
-  context_tokens: number;
+  /** null = unbekannt (Agent meldet seit >= 3 Heartbeats keinen Kontextwert) */
+  context_tokens: number | null;
   context_max: number;
   session_message_count: number;
   total_tasks_completed: number;
@@ -682,6 +756,20 @@ export interface Agent {
   // when `runtime_switchable` is false.
   runtime_switchable: boolean;
   runtime_switch_blocked_reason: string | null;
+  // Derived by the backend (models/agent.py computed field): this agent is
+  // driven over ACP, so its chat IS the session — the native TUI in tmux
+  // window 0 runs nothing the operator sends. The Chat/Terminal toggle is not
+  // rendered for such an agent; `?view=terminal` stays as a deep link.
+  // Absent on older backends = not headless.
+  headless_chat?: boolean;
+  // Split language fields (Migration 0201) — two audiences, two settings.
+  // operator_language: what the agent writes TO the operator (mc report/
+  // msg/ask, chat replies). work_language: agent-to-agent traffic (task
+  // comments, reflections, handoffs, checklist items, deliverable text).
+  // Both default "en"; older backends before this migration won't send
+  // either key, hence optional.
+  operator_language?: string;
+  work_language?: string;
   created_at: string;
   updated_at: string;
 }
@@ -849,7 +937,15 @@ export interface SystemStatus {
     database: { status: string; latency_ms?: number; error?: string };
     redis: { status: string; latency_ms?: number; error?: string };
     gateway: { status: string; url?: string; error?: string };
-    watchdog: { status: string; last_check?: string | null; checks_total?: number };
+    watchdog: {
+      status: string;
+      /** "local" = API process, "worker" = worker container, null when stopped */
+      source?: "local" | "worker" | null;
+      last_seen?: string | null;
+      last_check?: string | null;
+      checks_total?: number;
+    };
+    task_runner?: { status: string; source?: "local" | "worker" | null; last_seen?: string | null };
   };
   resources: MetricsSnapshot | null;
   agents: { total: number; online: number; offline: number };
@@ -859,7 +955,9 @@ export interface SystemStatus {
 
 export interface SystemMetrics {
   tasks: { total: number; active: number };
-  agents: { total: number; online: number };
+  /** total = non-archived roster; active/paused split by operational_mode
+   *  (same as /agents). online counts heartbeat status, paused included. */
+  agents: { total: number; online: number; active?: number; paused?: number };
   approvals: { pending: number };
 }
 
@@ -1389,7 +1487,7 @@ export interface LoopCreate {
 
 export type LoopUpdate = Partial<Omit<LoopCreate, "board_id">>;
 
-// ── Henry / Playbooks ───────────────────────────────────────────────────────
+// ── Guided setup / Playbooks ───────────────────────────────────────────────────────
 
 export interface PlaybookCatalogOption {
   value: string;
@@ -1520,7 +1618,7 @@ export interface PlaybookRunProjection {
   automation: Automation | null;
 }
 
-export interface HenrySessionState {
+export interface GuidedSessionState {
   session: Project;
   messages: PlannerMessage[];
   playbook: Playbook | null;
@@ -1625,7 +1723,8 @@ export interface AgentUsageSnapshot {
   model: string | null;
   status: AgentStatus;
   run_state: string;
-  context_tokens: number;
+  /** null = unbekannt (Agent meldet seit >= 3 Heartbeats keinen Kontextwert) */
+  context_tokens: number | null;
   context_max: number;
   context_pct: number;
   tasks_completed: number;
@@ -1820,6 +1919,14 @@ export interface Runtime {
    *  the model catalog. null = no recognised vendor (local vLLM, LM Studio,
    *  unsloth). Never re-derive this client-side. */
   provider_label?: string | null;
+  /** Server-derived (routers/runtimes.py::_agent_key_fit): does this runtime
+   *  use a per-agent API key at all? False = it signs in on its own
+   *  (anthropic OAuth, grok/kimi CLI logins). Optional like other enriched
+   *  fields — absent means "unknown", never re-derive it client-side. */
+  agent_key_used?: boolean;
+  /** `secrets.provider` whose keys fit this runtime, null when no provider
+   *  key applies (e.g. a local box). */
+  agent_key_provider?: string | null;
   endpoint: string;
   healthcheck_path: string;
   container_name: string | null;

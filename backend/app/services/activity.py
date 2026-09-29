@@ -13,6 +13,7 @@ from app.redis_client import RedisKeys
 from app.services.sse import broadcast
 from app.utils import utcnow
 
+logger = logging.getLogger("mc.activity")
 
 async def emit_event(
     session: AsyncSession,
@@ -73,6 +74,17 @@ async def emit_event(
     # keine Filterlogik mehr, sonst driftet sie wieder auseinander.
     # Das Event oben ist zu diesem Zeitpunkt bereits geschrieben: die Historie
     # in der UI bleibt vollstaendig, auch wenn Discord schweigt.
+    # task.stuck receiver (2026-09-18 incident, hole 3): the escalation was a
+    # log entry — UI badge mapping + agent pull endpoint only. Route it through
+    # the one channel proven to reach a human that night: a lead-visible
+    # watchdog_notify comment on the card (see services/stuck_escalation.py).
+    if event_type == "task.stuck" and task_id is not None:
+        try:
+            from app.services.stuck_escalation import relay_stuck_event
+            await relay_stuck_event(session, event)
+        except Exception as e:  # noqa: BLE001 — alarm routing is best-effort
+            logger.debug("task.stuck relay failed: %s", e)
+
     if severity in ("warning", "error", "critical"):
         from app.services.discord_notify import notify_event as _discord_notify
         await _discord_notify(event_type, title, severity, detail=detail)
@@ -107,5 +119,3 @@ async def emit_event(
 
     return event
 
-
-logger = logging.getLogger("mc.activity")

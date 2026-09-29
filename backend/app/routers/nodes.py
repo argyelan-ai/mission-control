@@ -32,7 +32,7 @@ import os
 import secrets
 import socket
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
@@ -860,7 +860,7 @@ async def set_desired_state(
     # heisst beides "dazu keine Meinung" — genau die Semantik des Vertrags.
     desired = body.model_dump(exclude_none=True)
     host.agent_desired_state = desired or None
-    host.updated_at = datetime.utcnow()
+    host.updated_at = datetime.now(timezone.utc)
     session.add(host)
     await session.commit()
     await session.refresh(host)

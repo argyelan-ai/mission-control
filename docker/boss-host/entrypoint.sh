@@ -110,6 +110,7 @@ export MSG_ACK_DIR="$BASE/.msg-acked"
 export NUDGE_STATE_FILE="$BASE/.msg-nudge-state"
 export TASK_PROMPT_FILE="$BASE/.current-task-prompt.txt"
 export COMMENTS_PROMPT_FILE="$BASE/.new-comments-prompt.txt"
+export MC_CONTEXT_ENV_PATH="${MC_CONTEXT_ENV_PATH:-$BASE/mc-context.env}"
 export POLL_LIB_DIR="$REPO/docker/mc-agent-base/lib"
 
 # Vorhandenen Server auf diesem Socket komplett killen (nicht nur die Session):

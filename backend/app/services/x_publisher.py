@@ -14,15 +14,10 @@ Secret keys (set once by the operator via Settings -> Secrets, Admin-only):
     x_access_token          (Access Token)
     x_access_token_secret   (Access Token Secret)
 
-Note on `publish_adapters.py`: the news-studio vertical (maintainer-private,
-stripped from the public OSS repo — see ADR "extract news-studio into a
-strippable vertical module") already has a `publish_twitter()` used for
-storyboard threads, keyed on a single `twitter_bearer_token` secret. That
-adapter is thread-shaped (multi-tweet, split on blank lines) and specific to
-storyboards; it doesn't apply outside that vertical and a bearer token alone
-cannot authenticate user-context POSTs against X API v2. This module is the
-generic, always-available counterpart for single-post drafts approved via the
-core Approval flow, using the correct OAuth 1.0a user-context credentials.
+This module is the generic, always-available X publisher for single-post
+drafts approved via the core Approval flow, using OAuth 1.0a user-context
+credentials (a bearer token alone cannot authenticate user-context POSTs
+against X API v2).
 """
 from __future__ import annotations
 

@@ -22,6 +22,7 @@ export function FreeBox({
   host,
   slot,
   device,
+  probeTimedOut = false,
   onOpenCockpit,
 }: {
   host: Host;
@@ -29,9 +30,13 @@ export function FreeBox({
    *  gebundene Agenten für eine sonst leere Box. */
   slot: Runtime | null;
   device?: Device;
+  /** GET /runtimes cut this box's state probe off: nothing is known about
+   *  it, so the card must not claim "free · no model · ready". */
+  probeTimedOut?: boolean;
   onOpenCockpit: () => void;
 }) {
   const t = useTranslations("runtimes.stage");
+  const tRuntimes = useTranslations("runtimes");
   const currentUser = useAppStore((s) => s.currentUser);
 
   const { data: metrics } = useQuery({
@@ -99,13 +104,19 @@ export function FreeBox({
             {host.display_name}
           </span>
           <span className="font-mono uppercase shrink-0" style={{ fontSize: "10px", letterSpacing: "0.1em", color: C.textMuted }}>
-            {t("cornerFree")}
+            {probeTimedOut ? t("cornerUnknown") : t("cornerFree")}
           </span>
         </div>
         <HeatStrip empty />
-        <div className="text-xs mt-2 pb-4" style={{ color: C.textMuted }}>
-          {t("freeLine")}
-        </div>
+        {probeTimedOut ? (
+          <div className="text-xs mt-2 pb-4" style={{ color: C.textMuted }} title={tRuntimes("probeTimedOutHint")}>
+            {tRuntimes("unknownProbeTimedOut")}
+          </div>
+        ) : (
+          <div className="text-xs mt-2 pb-4" style={{ color: C.textMuted }}>
+            {t("freeLine")}
+          </div>
+        )}
       </div>
       <KpiRow cells={cells} />
       <div className="stage-members grid grid-cols-1" style={{ borderTop: `1px solid ${C.borderSubtle}` }}>

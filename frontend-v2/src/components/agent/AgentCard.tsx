@@ -7,7 +7,7 @@ import { useQuery } from "@tanstack/react-query";
 import { BookOpen } from "lucide-react";
 import { cn, contextPercent, contextColor, timeAgo } from "@/lib/utils";
 import { api } from "@/lib/api";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import { SpotlightCard } from "@/components/shared/SpotlightCard";
 import { GlassCard } from "@/components/shared/GlassCard";
 import { StatusDot } from "@/components/shared/StatusDot";
@@ -75,9 +75,9 @@ export function SkillBadges({ skills }: { skills: string[] }) {
             key={skillKey}
             className="text-[10px] px-1.5 py-0.5 rounded-sm leading-tight"
             style={{
-              backgroundColor: `${color}22`,
+              backgroundColor: alpha(color, 0.13),
               color,
-              border: `1px solid ${color}33`,
+              border: `1px solid ${alpha(color, 0.2)}`,
             }}
           >
             {skill?.emoji && <EntityIcon value={skill.emoji} size={10} className="mr-0.5" />}
@@ -113,7 +113,7 @@ function LearningBadge({ agentId }: { agentId: string }) {
   return (
     <span
       className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-sm"
-      style={{ color: C.warning, backgroundColor: `${C.warning}1A` }}
+      style={{ color: C.warning, backgroundColor: alpha(C.warning, 0.1) }}
     >
       <BookOpen size={10} />
       {t("lessons", { count: lessonCount })}
@@ -203,14 +203,14 @@ export function AgentCard({ agent, className }: AgentCardProps) {
             <div className="mt-3">
               <div className="flex items-center justify-between mb-1">
                 <span className="text-[10px] text-[var(--color-text-muted)]">{t("contextLabel")}</span>
-                <span className="text-[10px] text-[var(--color-text-muted)]">{pct}%</span>
+                <span className="text-[10px] text-[var(--color-text-muted)]">{pct === null ? "—" : `${pct}%`}</span>
               </div>
               <div className="h-1 rounded-sm bg-[var(--color-bg-elevated)] overflow-hidden">
                 <motion.div
                   className="h-full rounded-sm"
                   style={{ backgroundColor: barColor }}
                   initial={{ width: 0 }}
-                  animate={{ width: `${Math.min(pct, 100)}%` }}
+                  animate={{ width: `${Math.min(pct ?? 0, 100)}%` }}
                   transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
                 />
               </div>

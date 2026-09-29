@@ -13,16 +13,16 @@ import urllib.error
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from sqlmodel import select
 
 from pydantic import BaseModel
 
-from app.auth import require_user, generate_agent_token
+from app.auth import Role, generate_agent_token, require_role, require_user
 from app.config import effective_host_ssh_user, settings
-from app.database import get_session
+from app.database import get_session, release_session
 from app.models.agent import Agent
 
 
@@ -254,7 +254,7 @@ async def list_all_cli_sessions(
     return enriched
 
 
-@router.post("/agents/{agent_id}/terminal/{task_id}/input")
+@router.post("/agents/{agent_id}/terminal/{task_id}/input", dependencies=[Depends(require_role(Role.ADMIN))])
 async def send_terminal_input(
     agent_id: uuid.UUID,
     task_id: str,
@@ -269,7 +269,7 @@ async def send_terminal_input(
     return result
 
 
-@router.delete("/agents/{agent_id}/terminal/{task_id}")
+@router.delete("/agents/{agent_id}/terminal/{task_id}", dependencies=[Depends(require_role(Role.ADMIN))])
 async def kill_terminal_session(
     agent_id: uuid.UUID,
     task_id: str,
@@ -288,23 +288,19 @@ async def _proxy_terminal_websocket(
     session_key: str,
     token: Optional[str],
     session: AsyncSession,
+    ticket: Optional[str] = None,
 ):
     """Shared logic for the terminal WebSocket proxy.
 
     session_key: either agent_slug (permanent session) or task_id (per-task)
     """
-    # Auth check
-    if not token:
-        await websocket.close(code=4001)
-        return
-    try:
-        from jose import jwt as _jwt
-        payload = _jwt.decode(token, settings.jwt_secret_key, algorithms=["HS256"])
-        if not payload.get("sub"):
-            await websocket.close(code=4001)
-            return
-    except Exception:
-        await websocket.close(code=4001)
+    # Auth: stream ticket (legacy ?token= only with ALLOW_QUERY_TOKEN_AUTH),
+    # and the admin role — a terminal is command execution on the box.
+    from app.auth import Role, authorize_websocket
+
+    denied = await authorize_websocket(websocket, Role.ADMIN, token=token, ticket=ticket)
+    if denied:
+        await websocket.close(code=denied)
         return
 
     # Agent check
@@ -312,6 +308,11 @@ async def _proxy_terminal_websocket(
     if not agent or getattr(agent, "agent_runtime", "openclaw") != "cli-bridge":
         await websocket.close(code=4004)
         return
+
+    # DB work done — release before the proxy loop pins the connection for
+    # the WebSocket's whole lifetime (FastAPI unwinds Depends(get_session)
+    # only after the WS closes; finding 2026-09-16).
+    await release_session(session, route=websocket.url.path)
 
     await websocket.accept()
 
@@ -547,17 +548,18 @@ async def terminal_websocket_permanent(
     token: Optional[str] = None,
     shell: Optional[bool] = False,
     session: AsyncSession = Depends(get_session),
+    ticket: Optional[str] = None,
 ):
     """WebSocket: connects to the permanent worker session or a shell session.
 
-    Auth via ?token=<jwt> query param.
+    Auth via ?ticket=<stream ticket> (legacy ?token= only with ALLOW_QUERY_TOKEN_AUTH).
     Shell session via ?shell=1.
     Proxies bidirectionally: browser ↔ backend ↔ bridge WS (PTY ↔ tmux attach).
     """
     agent = await session.get(Agent, agent_id)
     agent_slug = agent.name.lower().replace(" ", "-") if agent else str(agent_id)
     session_key = f"{agent_slug}-shell" if shell else agent_slug
-    await _proxy_terminal_websocket(websocket, agent_id, session_key, token, session)
+    await _proxy_terminal_websocket(websocket, agent_id, session_key, token, session, ticket)
 
 
 @router.websocket("/agents/{agent_id}/terminal/{task_id}/ws")
@@ -567,13 +569,14 @@ async def terminal_websocket(
     task_id: str,
     token: Optional[str] = None,
     session: AsyncSession = Depends(get_session),
+    ticket: Optional[str] = None,
 ):
     """WebSocket: proxied PTY terminal via the bridge WebSocket server (per-task, legacy).
 
-    Auth via ?token=<jwt> query param.
+    Auth via ?ticket=<stream ticket> (legacy ?token= only with ALLOW_QUERY_TOKEN_AUTH).
     Proxies bidirectionally: browser ↔ backend ↔ bridge WS (PTY ↔ tmux attach).
     """
-    await _proxy_terminal_websocket(websocket, agent_id, task_id, token, session)
+    await _proxy_terminal_websocket(websocket, agent_id, task_id, token, session, ticket)
 
 
 # ── Direct PTY Terminal (docker exec → tmux) ─────────────────────────────────
@@ -591,26 +594,26 @@ async def agent_terminal_ws(
     agent_id: str,
     token: Optional[str] = None,
     session: AsyncSession = Depends(get_session),
+    ticket: Optional[str] = None,
 ):
     """WebSocket PTY bridge: browser xterm.js <-> backend <-> docker exec <-> container tmux.
 
     Direct connection via PTY (no bridge). Uses 'docker exec -it mc-agent-{name} tmux attach'.
-    Auth: JWT via ?token=<jwt> query param (WebSocket can't send auth headers).
+    Auth: ?ticket=<stream ticket> (WebSocket can't send auth headers).
     Resize: JSON {type: "resize", cols: N, rows: N} as a text message.
     Input:  raw bytes, or JSON {type: "input", data: "..."} as a text message.
     """
-    # 1. Auth: verify JWT from the query param
-    if not token:
-        await websocket.close(code=4001, reason="Missing token")
-        return
-    try:
-        from jose import jwt as _jwt
-        payload = _jwt.decode(token, settings.jwt_secret_key, algorithms=["HS256"])
-        if not payload.get("sub"):
-            await websocket.close(code=4001, reason="Invalid token")
-            return
-    except Exception:
-        await websocket.close(code=4001, reason="Invalid token")
+    # 1. Auth: single-use stream ticket (?ticket=); legacy ?token= only
+    #    with ALLOW_QUERY_TOKEN_AUTH. Admin only: a terminal is command
+    #    execution on the box (operator decision 24.09.2026).
+    from app.auth import Role, WS_CLOSE_FORBIDDEN, authorize_websocket
+
+    denied = await authorize_websocket(websocket, Role.ADMIN, token=token, ticket=ticket)
+    if denied:
+        await websocket.close(
+            code=denied,
+            reason="Admin role required" if denied == WS_CLOSE_FORBIDDEN else "Invalid token",
+        )
         return
 
     # 2. Load agent from DB
@@ -624,6 +627,10 @@ async def agent_terminal_ws(
     if agent is None:
         await websocket.close(code=4004, reason="Agent not found")
         return
+
+    # DB work done — release before the PTY bridge runs for hours (see
+    # _proxy_terminal_websocket).
+    await release_session(session, route=websocket.url.path)
 
     container_name = f"mc-agent-{agent.name.lower().replace(' ', '-')}"
     tmux_session = agent.name.lower().replace(" ", "-")
@@ -861,6 +868,11 @@ def _hermes_ws_send_keys(message: str) -> dict:
     - `tmux has-session -t hermes-worker` is checked first; if absent the WS
       stays open but returns an error dict so the caller can relay it to the
       client — no crash, no silent drop.
+    - `#{pane_mode}` is probed before sending (same probe and refusal shape as
+      docker/host-pty-bridge/server.py, PR #629). A pane in copy-mode swallows
+      send-keys at rc=0: the keystroke never reaches the TUI, so acking
+      {"ok": True} there was a silent loss. Refusals are honest — ok=False plus
+      the probed mode, never a fake success.
     - Session name is hardcoded to "hermes-worker" (T-27-10 mitigation: no
       user-controllable part in the tmux target).
     """
@@ -877,7 +889,37 @@ def _hermes_ws_send_keys(message: str) -> dict:
     if check.returncode != 0:
         return {"ok": False, "error": f"tmux session '{session_name}' not found"}
 
-    # 2. Send keystrokes — trailing "" means "no Enter" (caller decides)
+    # 2. Probe the pane mode first. Empty output = no mode (the normal case);
+    #    anything else (e.g. "copy-mode") means tmux would swallow the keys.
+    #    A failed probe (no server on the socket, timeout, ...) is NOT a
+    #    refusal: it falls through so send-keys' own return code decides,
+    #    exactly like the bridge does.
+    try:
+        probe = subprocess.run(
+            [
+                "tmux", "display-message", "-p",
+                "-t", session_name, "#{pane_mode}",
+            ],
+            capture_output=True,
+        )
+        pane_mode = probe.stdout.decode(errors="replace").strip() if probe.returncode == 0 else ""
+    except Exception:  # noqa: BLE001 — Probe unmoeglich: send-keys entscheidet selbst
+        pane_mode = ""
+    if pane_mode:
+        logger.warning(
+            "hermes ws send_keys refused: pane in %r (session=%s) — keys would be swallowed",
+            pane_mode, session_name,
+        )
+        return {
+            "ok": False,
+            "pane_mode": pane_mode,
+            "error": (
+                f"pane is in {pane_mode!r}; keys would be swallowed — "
+                f"leave copy-mode first"
+            ),
+        }
+
+    # 3. Send keystrokes — trailing "" means "no Enter" (caller decides)
     result = subprocess.run(
         ["tmux", "send-keys", "-t", session_name, message, ""],
         capture_output=True,
@@ -916,6 +958,7 @@ async def host_agent_terminal_ws(
     agent_id: str,
     token: Optional[str] = None,
     session: AsyncSession = Depends(get_session),
+    ticket: Optional[str] = None,
 ):
     """WebSocket bridge: browser xterm.js <-> backend <-> host-pty-bridge <-> tmux boss-host.
 
@@ -927,18 +970,17 @@ async def host_agent_terminal_ws(
 
     Requirement: the host-pty-bridge launchd job is running (com.openclaw.host-pty-bridge).
     """
-    # 1. Auth: JWT via ?token=
-    if not token:
-        await websocket.close(code=4001, reason="Missing token")
-        return
-    try:
-        from jose import jwt as _jwt
-        payload = _jwt.decode(token, settings.jwt_secret_key, algorithms=["HS256"])
-        if not payload.get("sub"):
-            await websocket.close(code=4001, reason="Invalid token")
-            return
-    except Exception:
-        await websocket.close(code=4001, reason="Invalid token")
+    # 1. Auth: single-use stream ticket (?ticket=); legacy ?token= only
+    #    with ALLOW_QUERY_TOKEN_AUTH. Admin only: a terminal is command
+    #    execution on the box (operator decision 24.09.2026).
+    from app.auth import Role, WS_CLOSE_FORBIDDEN, authorize_websocket
+
+    denied = await authorize_websocket(websocket, Role.ADMIN, token=token, ticket=ticket)
+    if denied:
+        await websocket.close(
+            code=denied,
+            reason="Admin role required" if denied == WS_CLOSE_FORBIDDEN else "Invalid token",
+        )
         return
 
     # 2. Agent + host-runtime ACL
@@ -951,6 +993,10 @@ async def host_agent_terminal_ws(
     if agent is None or agent.agent_runtime != "host":
         await websocket.close(code=4004, reason="Host agent not found")
         return
+
+    # DB work done — release before the upstream WS proxy runs (see
+    # _proxy_terminal_websocket).
+    await release_session(session, route=websocket.url.path)
 
     # 3. Upstream: custom host-pty-bridge (see docker/host-pty-bridge/) — raw bytes,
     # no ttyd frame protocol. Identical pattern to docker-exec PTY.
@@ -1189,7 +1235,27 @@ async def _host_agent_lifecycle(agent: Agent, action: str) -> dict:
         ]
         for label in labels:
             await _ssh_host(f"launchctl kickstart -k {label} 2>&1 || true")
-        return {"ok": True, "action": "restart", "agent": slug}
+        result: dict = {"ok": True, "action": "restart", "agent": slug}
+        # PR #604 review, Befund 3 (Rex, 2026-09-16): this function had the
+        # exact same false-"restart done"-during-the-boot-window mechanism
+        # as _host_agent_process_restart, on 3 callers including the
+        # user-visible POST /host-agents/{id}/restart — no verification of
+        # any kind, not even a pgrep. Same readiness wait as the process-
+        # restart path, same headless-bridge exclusion (hermes never reaches
+        # here — handled above; grok has no interactive tmux CLI to wait on).
+        if slug not in _HOST_AGENT_HEADLESS_BRIDGE_SLUGS:
+            readiness = await _wait_for_host_window_ready(slug)
+            if not readiness["healthy"]:
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        f"host-agent restart for {slug}: launchctl kickstart "
+                        f"issued but CLI never became ready ({readiness['reason']})"
+                    ),
+                )
+            result["cli_ready"] = True
+            result["readiness_reason"] = readiness["reason"]
+        return result
 
     raise HTTPException(status_code=400, detail=f"Unknown action: {action}")
 
@@ -1361,6 +1427,124 @@ async def _restart_hermes_worker_session() -> str:
     )
 
 
+# Same prompt-glyph vocabulary docker_agent_sync._wait_for_window_ready
+# already established for docker-agent readiness (╭─ openclaude header, ❯/>
+# Claude Code prompt, $ bash fallback) — this module builds a second, SSH-
+# based probe rather than reuse that function directly because host agents'
+# tmux server lives on the Mac (SSH via _ssh_host above), not in a container
+# this backend can `docker exec` into; the algorithm (poll pane text for a
+# ready glyph) is the same, only the transport differs.
+#
+# PR #604 review (Rex, 2026-09-16, geprueft 735fa683) proved two of the four
+# original glyphs false-positive with synthetic pane content:
+#   - bare "> " matched anywhere in the pane, including mid-line log/boot
+#     text that has nothing to do with a prompt (e.g. "progress: 40 > 30
+#     items/s"). Fix: "> " now only counts at the trailing edge of the
+#     pane's last non-blank line (an actual cursor position), not as a
+#     substring anywhere — see _host_pane_looks_ready below.
+#   - bare "$ " matched a bash prompt left behind after the CLI itself
+#     crashed (pane: "agent exited\n$ ") — exactly the false "restart
+#     succeeded" this fix exists to prevent, in a different disguise.
+#     Unlike "> ", this has no textual fix: a real bash-fallback prompt and
+#     a crashed-back-to-bash prompt are the same string, so no pane-content
+#     rule can tell them apart. Every caller of _wait_for_host_window_ready
+#     already excludes the headless bridge agents (hermes/grok via
+#     _HOST_AGENT_HEADLESS_BRIDGE_SLUGS below) up front, so every remaining
+#     host agent is expected to end up in the actual CLI (claude/openclaude)
+#     and bash is never a legitimate ready state for it — "$ " is therefore
+#     dropped entirely rather than kept as an ambiguous fallback. Residual
+#     unscharfe: this still can't distinguish "CLI ready" from "some other
+#     program that also draws a lone > /❯ at end of line", which is judged
+#     low-probability for the known host-agent CLIs and is the honestly
+#     named remaining gap, not a claimed-solved one.
+#   - "╭─" and "❯" are not disputed by the review (not reproduced as false
+#     positives) and stay substring-anywhere matches.
+_HOST_READY_GLYPH_SIGNALS = ("╭─", "❯")
+_HOST_READY_TRAILING_SIGNAL = ">"
+
+
+def _host_pane_looks_ready(pane: str) -> bool:
+    """True if `pane` (tmux capture-pane output) shows an unambiguous CLI
+    ready-prompt — see the _HOST_READY_GLYPH_SIGNALS comment above for why
+    "> " is trailing-edge-only and "$ " was dropped entirely."""
+    if any(sig in pane for sig in _HOST_READY_GLYPH_SIGNALS):
+        return True
+    lines = [ln for ln in pane.splitlines() if ln.strip()]
+    return bool(lines) and lines[-1].rstrip().endswith(_HOST_READY_TRAILING_SIGNAL)
+
+
+# 53s measured live 16.09.2026 (entrypoint 08:05:11, CLI ready 08:06:04) is
+# the incident this whole fix responds to. The original PR bounded the wait
+# at 45s — under its own motivating measurement, so the exact repeat case
+# would still misreport a 502 five seconds before the CLI actually comes up
+# (PR #604 review, Befund 2). 75s = 53s + ~40% margin for boot-time jitter,
+# not a round-number guess.
+_HOST_CLI_READY_TIMEOUT_SECONDS = 75.0
+
+# Host agents whose launchd-managed process is a headless bridge/poll script
+# with no interactive tmux pane to become "ready" in the CLI-prompt sense:
+# hermes-bridge.py is an HTTP server (readiness = the bridge already has its
+# own /restart reachability check, see _restart_hermes_worker_session), and
+# grok-bridge.py is a one-shot poll+dispatch process per its own comment in
+# _HOST_AGENT_PROCESS_MATCH above ("NO persistent tmux session"). Every other
+# host agent (boss, kimi, and every wizard-staged claude/openclaude agent —
+# see docker/boss-host/entrypoint.sh, docker/kimi-host/entrypoint.sh,
+# backend/templates/host_agent_run.sh.j2) runs the actual CLI inside tmux
+# Window 0, so a pgrep hit on the launcher script proves only that the
+# *launcher* is alive, not that the CLI inside has finished booting — the
+# gap measured live 16.09.2026 (entrypoint at 08:05:11, CLI ready 08:06:04,
+# 53s Mission Control had already reported the restart a success).
+_HOST_AGENT_HEADLESS_BRIDGE_SLUGS = frozenset({"hermes", "grok"})
+
+
+def _resolve_host_tmux_target(slug: str) -> tuple[str | None, str]:
+    """(-S socket arg or None for the default socket, tmux session name) for
+    a host agent's CLI window — same resolution _build_host_upstream_url
+    uses for the terminal WS, so the two paths can never disagree about
+    where an agent's tmux session lives."""
+    if slug in ("boss", "boss-host"):
+        return "$HOME/.mc/agents/boss-host/.tmux.sock", "boss-host"
+    target = _HOST_AGENT_TMUX_TARGETS.get(slug)
+    if target is not None:
+        return target["socket"], target["session"]
+    return None, slug
+
+
+async def _wait_for_host_window_ready(
+    slug: str,
+    *,
+    timeout: float = _HOST_CLI_READY_TIMEOUT_SECONDS,
+    poll_interval: float = 3.0,
+) -> dict[str, str | bool]:
+    """Polls a host agent's tmux Window 0 over SSH until a ready glyph shows
+    up, bounded by `timeout` — never waits forever (a host agent that never
+    boots must still surface as a failed restart, not hang the request).
+
+    A missing tmux server ("no server running on <socket>", exactly the
+    error a message delivered into this same window hit live 16.09.2026) is
+    treated as "not ready yet", not as a hard error: appending `|| true` to
+    the remote command keeps the SSH exit code at 0 so `_ssh_host` returns
+    the error text instead of raising, and polling continues. A genuine SSH
+    failure (host unreachable, auth broken) still raises immediately from
+    `_ssh_host` — that is not this function's problem to retry.
+    """
+    socket_arg, session = _resolve_host_tmux_target(slug)
+    tmux_prefix = f"tmux -S {socket_arg}" if socket_arg else "tmux"
+    deadline = time.monotonic() + timeout
+    last_reason = "never polled"
+    while True:
+        pane = await _ssh_host(f"{tmux_prefix} capture-pane -p -t {session}:0 2>&1 || true")
+        if _host_pane_looks_ready(pane):
+            return {"healthy": True, "reason": f"tmux window ready ({session}:0)"}
+        last_reason = pane.strip()[:200] or "empty pane"
+        if time.monotonic() >= deadline:
+            return {
+                "healthy": False,
+                "reason": f"timeout after {timeout:.0f}s — window not ready (last: {last_reason!r})",
+            }
+        await asyncio.sleep(poll_interval)
+
+
 async def _host_agent_process_restart(agent: Agent) -> dict:
     """Full process-level restart for a host (launchd) agent: orphan sweep +
     atomic kickstart (unload/load fallback) + pgrep-verified success.
@@ -1412,6 +1596,25 @@ async def _host_agent_process_restart(agent: Agent) -> dict:
             detail += f" and unload/load fallback ({fallback_out.strip()[:200]!r})"
         raise HTTPException(status_code=502, detail=detail)
 
+    # The pgrep hit above only proves the launcher SCRIPT is alive, not that
+    # the CLI inside its tmux window can accept keystrokes yet — for a
+    # tmux-CLI agent (everything except the headless bridges below) that gap
+    # was measured at 53s live (16.09.2026: entrypoint 08:05:11, CLI ready
+    # 08:06:04, restart already reported "success" throughout). Wait for the
+    # real readiness signal before reporting done, bounded so a launcher that
+    # never gets its CLI ready still fails the request instead of hanging.
+    readiness: dict[str, str | bool] | None = None
+    if slug not in _HOST_AGENT_HEADLESS_BRIDGE_SLUGS:
+        readiness = await _wait_for_host_window_ready(slug)
+        if not readiness["healthy"]:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    f"restart-process for {slug}: process running (pids={running_pids}) "
+                    f"but CLI never became ready ({readiness['reason']})"
+                ),
+            )
+
     worker_restart_output: str | None = None
     if slug == "hermes":
         worker_restart_output = await _restart_hermes_worker_session()
@@ -1426,6 +1629,9 @@ async def _host_agent_process_restart(agent: Agent) -> dict:
         "process_running": True,
         "running_pids": running_pids,
     }
+    if readiness is not None:
+        result["cli_ready"] = True
+        result["readiness_reason"] = readiness["reason"]
     if worker_restart_output is not None:
         result["worker_restart_output"] = worker_restart_output
     return result
@@ -1481,6 +1687,7 @@ async def stop_host_agent(
 @router.post("/host-agents/{agent_id}/restart-process")
 async def restart_host_agent_process(
     agent_id: str,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
@@ -1491,6 +1698,11 @@ async def restart_host_agent_process(
     label unconditionally; returns 502 if no process is running afterward.
     """
     agent = await _resolve_host_agent(agent_id, session)
+    # The restart below is docker/launchd work measured in tens of seconds —
+    # no DB involved. Release the connection instead of holding the
+    # resolution transaction across it (guard warning "transaction held
+    # across a non-DB await", watchdog #594).
+    await release_session(session, route=request.url.path)
     result = await _host_agent_process_restart(agent)
     logger.info("Host-agent process restart: %s (orphans killed: %s)", agent.name, result["orphans_killed"])
     return result
@@ -1697,16 +1909,30 @@ async def force_recreate_agent_container(
     # Same preflight as the runtime-switch path: an unreadable compose file
     # (stale Docker Desktop bind mount) or a missing agents file produces an
     # opaque compose error that says nothing about the actual fix.
-    from app.services.docker_agent_sync import compose_preflight_error
+    from app.services.docker_agent_sync import COMPOSE_PROJECT_NAME, compose_preflight_error
 
     preflight = compose_preflight_error(compose_main, compose_agents)
     if preflight:
         raise HTTPException(status_code=503, detail=preflight)
 
+    # Plattenplatz-Preflight — dieselbe Pruefung wie im Runtime-Switch-Weg
+    # (docker_agent_sync.restart_docker_agent_container). Ein Recreate baut
+    # nichts, belegt aber ein beschreibbares Layer; auf einer vollen Platte
+    # scheitert er mit dem rohen "no space left on device", das den Vorfall
+    # vom 2026-09-16 undiagnostizierbar machte. 507 (Insufficient Storage) ist
+    # hier die genaue Antwort: 503 waere "voruebergehend nicht verfuegbar",
+    # aber der Platz wird nicht von allein wiederkommen.
+    from app.services.disk_preflight import build_preflight_error as disk_build_preflight_error
+
+    disk_error = disk_build_preflight_error()
+    if disk_error:
+        logger.error("force-recreate aborted — %s", disk_error)
+        raise HTTPException(status_code=507, detail=disk_error)
+
     # Multiple --env-file flags: agents-compose references ${MC_TOKEN_*},
     # ${OPENAI_API_KEY_*} etc. — without .env.agents these are all empty and
     # the agent comes up without a token (mc CLI: 'MC_AGENT_TOKEN missing').
-    compose_args: list[str] = ["compose"]
+    compose_args: list[str] = ["compose", "-p", COMPOSE_PROJECT_NAME]
     for env_file in (env_main, env_agents, env_shared):
         if env_file.is_file():
             compose_args.extend(["--env-file", str(env_file)])

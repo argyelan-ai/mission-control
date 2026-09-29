@@ -19,7 +19,7 @@ import { CreateLoopDialog } from "@/components/loops/CreateLoopDialog";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { api } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
-import { C } from "@/lib/colors";
+import { C, alpha } from "@/lib/colors";
 import type { Loop } from "@/lib/types";
 
 /** Pull the human-readable detail out of `API 409: {"detail":"..."}` errors. */
@@ -127,7 +127,7 @@ export default function LoopsPage() {
         {actionError && (
           <div
             className="flex items-start gap-2 rounded-md px-3 py-2 text-xs mb-4"
-            style={{ background: `${C.error}14`, border: `1px solid ${C.error}55`, color: C.error }}
+            style={{ background: alpha(C.error, 0.08), border: `1px solid ${alpha(C.error, 0.33)}`, color: C.error }}
           >
             <AlertTriangle size={14} className="mt-0.5 shrink-0" />
             <span className="flex-1">{actionError}</span>

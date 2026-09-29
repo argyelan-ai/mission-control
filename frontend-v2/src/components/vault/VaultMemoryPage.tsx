@@ -55,7 +55,7 @@ function VaultViewTabs({
 }) {
   const t = useTranslations("vault");
   return (
-    <div className="flex items-center gap-1 mb-5 border-b border-white/5">
+    <div className="flex items-center gap-1 mb-5 border-b border-[var(--color-overlay)]/5">
       {(["list", "graph", "trash"] as const).map((v) => {
         const active = view === v;
         return (
@@ -437,8 +437,14 @@ export default function VaultMemoryPage() {
           </div>
         )}
 
-        {/* TRASH VIEW — list of soft-deleted notes with restore + purge. */}
-        {isTrashView && <VaultTrashPage />}
+        {/* TRASH VIEW — list of soft-deleted notes with restore + purge.
+            fullHeight AppShell clips the page (overflow hidden), so the list
+            needs its own scroll frame or long trash lists are cut off. */}
+        {isTrashView && (
+          <div className="flex-1 min-h-0 overflow-y-auto">
+            <VaultTrashPage />
+          </div>
+        )}
 
         {/* LIST VIEW — search + filters + two-column */}
         {view === "list" && (<>

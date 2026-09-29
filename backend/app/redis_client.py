@@ -329,6 +329,16 @@ class RedisKeys:
         return f"mc:session_health_escalated:{task_id}"
 
     @staticmethod
+    def disk_watchdog_notified(percent: int) -> str:
+        """Dedup-Marke fuer die Plattenplatz-Warnung des Watchdogs.
+
+        Ein Schluessel PRO Schwellenwert-Stufe (nicht pro Prozentpunkt): sonst
+        wandert der Schluessel bei jeder 0,1-%-Schwankung und die Warnung
+        wiederholt sich im Minutentakt. Die TTL setzt der Aufrufer.
+        """
+        return f"mc:watchdog:disk_notified:{percent}"
+
+    @staticmethod
     def poll_orphan_redispatch_count(task_id: str) -> str:
         """Counter: how often this task was already redispatched as an
         orphaned run by /agent/me/poll (Fix 2, 07.09.2026). No TTL — the
@@ -351,6 +361,14 @@ class RedisKeys:
         gone within LOCK_HEARTBEAT_TTL_SECONDS instead of forcing a new
         worker to wait out the full lock TTL."""
         return "mc:scheduler:lock:heartbeat"
+
+    # ── Background-loop liveness (cross-process) ─────────────────────────
+    @staticmethod
+    def service_heartbeat(service: str) -> str:
+        """Heartbeat a background loop writes every tick, so the API process
+        can tell whether the loop in the worker container is alive — see
+        app/services/service_heartbeat.py."""
+        return f"mc:service:heartbeat:{service}"
 
     # ── Task Runner ──────────────────────────────────────────────────────
     @staticmethod
@@ -376,6 +394,17 @@ class RedisKeys:
         margin, so a genuinely-never-acked resume still escalates once the
         suppression window elapses."""
         return f"mc:dispatch:resume_suppress:{task_id}"
+
+    @staticmethod
+    def dispatch_turn_wait(task_id: str) -> str:
+        """Bauplan Lauf 2 Teil 4 (21.09.2026): dedup key for the
+        `task.dispatch_queued_behind_active` event that _check_dispatch_ack
+        emits (once) when it pauses the ACK/pending ladder because the
+        assigned agent is genuinely mid-turn (status=="working" + fresh
+        heartbeat). TTL 900s: long enough that a normal turn (Hermes median
+        9 min) produces exactly one notice, short enough that an hours-long
+        hang surfaces again every 15 min."""
+        return f"mc:dispatch:turn_wait:{task_id}"
 
     @staticmethod
     def task_runner_stale(task_id: str) -> str:
@@ -431,10 +460,9 @@ class RedisKeys:
     def auto_memory_feedback(task_id: str, feedback_type: str) -> str:
         return f"mc:auto_memory:feedback:{task_id}:{feedback_type}"
 
-    # ── Auto-Memory Reflection Fold (Phase 5 MSY-01) ─────────────────────
-    @staticmethod
-    def auto_memory_reflection_fold(task_id: str, hash16: str) -> str:
-        return f"mc:auto_memory:reflection_fold:{task_id}:{hash16}"
+    # auto_memory_reflection_fold (Phase 5 MSY-01) removed — Reflexions-Triage
+    # (2026-09-11) deleted the unconditional reflection→journal fold it keyed.
+    # See app/services/auto_memory.py:record_task_completion docstring.
 
     # ── Intelligence ─────────────────────────────────────────────────────
     @staticmethod
@@ -464,6 +492,21 @@ class RedisKeys:
     @staticmethod
     def task_rejection_count(task_id: str) -> str:
         return f"mc:task:{task_id}:rejection_count"
+
+    # ── Notice-only escalations (Lauf 4) ────────────────────────────────
+    @staticmethod
+    def notice_marker(task_id: str, action_type: str) -> str:
+        """Per action_type marker (SET NX, TTL 6h) — caps send_report() to
+        once per action_type per card per TTL window (anti-spam)."""
+        return f"mc:notice:{task_id}:{action_type}"
+
+    @staticmethod
+    def notice_marker_any(task_id: str) -> str:
+        """Collective marker (same TTL as notice_marker) — any active notice
+        for this card at all. Read by the silent-card watchdog (treats
+        'Approval pending OR notice_active' the same) and the retraction
+        check, without a SCAN over per-type keys."""
+        return f"mc:notice:{task_id}"
 
     # ── Recovery Dedup ─────────────────────────────────────────────────
     @staticmethod

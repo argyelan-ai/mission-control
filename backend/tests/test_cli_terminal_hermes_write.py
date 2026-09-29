@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import subprocess as _subprocess
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -292,24 +293,64 @@ def test_hermes_ws_read_direction_unchanged_text():
 # The helper is called by host_agent_terminal_ws when the slug is "hermes"
 # and the client sends a write-frame (text or bytes).
 
-def test_ws_write_reaches_hermes_tmux():
-    """HERM-15: WS text write-message triggers tmux send-keys for hermes-worker."""
-    import subprocess
-    from unittest.mock import patch, MagicMock
+class _FakeTmux:
+    """Records every tmux argv and replays canned answers per subcommand:
+    ``has-session``, the ``#{pane_mode}`` probe and ``send-keys``.
+
+    Returns real ``subprocess.CompletedProcess`` objects — not MagicMocks —
+    so the code under test decodes genuine bytes from the probe. A MagicMock
+    stdout would be truthy and look like an active pane mode, which is
+    exactly the failure this suite has to be able to tell apart.
+    """
+
+    def __init__(self, pane_mode: str = "", probe_rc: int = 0,
+                 has_session: bool = True, send_keys_rc: int = 0):
+        self.pane_mode = pane_mode
+        self.probe_rc = probe_rc
+        self.has_session = has_session
+        self.send_keys_rc = send_keys_rc
+        self.calls: list[list[str]] = []
+
+    def run(self, argv, **kwargs) -> _subprocess.CompletedProcess:
+        self.calls.append(list(argv))
+        subcommand = argv[1] if len(argv) > 1 else ""
+        if subcommand == "has-session":
+            rc = 0 if self.has_session else 1
+            return _subprocess.CompletedProcess(argv, rc, stdout=b"", stderr=b"")
+        if subcommand == "display-message":
+            if self.probe_rc != 0:
+                return _subprocess.CompletedProcess(
+                    argv, self.probe_rc, stdout=b"", stderr=b"no server running")
+            # Real tmux prints the mode followed by a newline; empty = no mode.
+            out = f"{self.pane_mode}\n".encode() if self.pane_mode else b"\n"
+            return _subprocess.CompletedProcess(argv, 0, stdout=out, stderr=b"")
+        if subcommand == "send-keys":
+            return _subprocess.CompletedProcess(
+                argv, self.send_keys_rc, stdout=b"", stderr=b"tmux send-keys failed")
+        raise AssertionError(f"unexpected tmux call: {argv!r}")
+
+
+def _send_with_tmux(fake: _FakeTmux, message: str = "hello\n") -> tuple[dict, _FakeTmux]:
+    """Runs _hermes_ws_send_keys against ``fake`` and returns (result, fake)."""
+    from unittest.mock import patch
     from app.routers.cli_terminal import _hermes_ws_send_keys
 
     with patch("app.routers.cli_terminal.subprocess") as mock_subprocess:
-        mock_subprocess.run.return_value = MagicMock(returncode=0)
-        result = _hermes_ws_send_keys("hello\n")
+        mock_subprocess.run.side_effect = fake.run
+        result = _hermes_ws_send_keys(message)
+    return result, fake
 
-    assert result["ok"] is True
-    # Verify send-keys called with correct args
-    call_args = mock_subprocess.run.call_args
-    assert call_args is not None, "subprocess.run was not called"
-    cmd = call_args[0][0]
-    assert cmd == ["tmux", "send-keys", "-t", "hermes-worker", "hello\n", ""], (
-        f"Expected send-keys cmd; got: {cmd!r}"
-    )
+
+def test_ws_write_reaches_hermes_tmux():
+    """HERM-15: WS text write-message triggers tmux send-keys for hermes-worker."""
+    result, fake = _send_with_tmux(_FakeTmux())
+
+    assert result["ok"] is True, f"a pane with no mode must still accept keys; got {result!r}"
+    # The message itself must reach the argv byte-for-byte, with the trailing
+    # "" (no Enter) that the caller relies on.
+    assert fake.calls[-1] == [
+        "tmux", "send-keys", "-t", "hermes-worker", "hello\n", "",
+    ], f"Expected send-keys cmd; got: {fake.calls!r}"
 
 
 def test_ws_write_empty_string_dropped():
@@ -330,24 +371,51 @@ def test_ws_write_empty_string_dropped():
 
 def test_ws_write_session_not_found():
     """HERM-15: if hermes-worker tmux session doesn't exist, return error (no crash)."""
-    from unittest.mock import patch, MagicMock
-    from app.routers.cli_terminal import _hermes_ws_send_keys
-
-    # has-session fails (returncode 1) → send-keys should NOT be called, error returned
-    with patch("app.routers.cli_terminal.subprocess") as mock_subprocess:
-        mock_subprocess.run.return_value = MagicMock(returncode=1, stderr="", stdout="")
-        result = _hermes_ws_send_keys("hello\n")
+    result, fake = _send_with_tmux(_FakeTmux(has_session=False))
 
     assert result["ok"] is False
-    assert "session" in result.get("error", "").lower() or result.get("error")
-    # send-keys should only be called once (has-session) OR not at all if has-session short-circuits
-    calls = mock_subprocess.run.call_args_list
-    for call in calls:
-        cmd = call[0][0]
-        # Must not have called send-keys after failed has-session
-        assert "send-keys" not in cmd or "has-session" in calls[0][0][0], (
-            f"send-keys called even though has-session failed: {cmd!r}"
-        )
+    assert "session" in result["error"].lower()
+    # Short-circuit before the probe: no display-message, no send-keys.
+    assert [c[1] for c in fake.calls] == ["has-session"], (
+        f"must not touch the pane after a failed has-session; got: {fake.calls!r}"
+    )
+
+
+def test_ws_write_refuses_when_pane_is_in_copy_mode():
+    """A pane in copy-mode swallows send-keys at rc=0 (live-verified: the text
+    never reaches the program, tmux still exits 0). Acking ok:true there is a
+    silent loss — the helper must refuse honestly and skip send-keys entirely.
+    Same refusal shape as the host-pty-bridge (PR #629)."""
+    result, fake = _send_with_tmux(_FakeTmux(pane_mode="copy-mode"))
+
+    assert result["ok"] is False, f"copy-mode must never ack success; got {result!r}"
+    assert result["pane_mode"] == "copy-mode"
+    assert "copy-mode" in result["error"]
+    assert not [c for c in fake.calls if c[1] == "send-keys"], (
+        f"send-keys must not run while the pane is in a mode; got: {fake.calls!r}"
+    )
+
+
+def test_ws_write_probe_failure_falls_through_to_send_keys():
+    """An impossible probe (no server on the socket, timeout, missing tmux)
+    is not a refusal: it falls through so send-keys' own return code decides,
+    matching the bridge's behaviour."""
+    result, fake = _send_with_tmux(_FakeTmux(probe_rc=1))
+
+    assert result["ok"] is True, f"a failed probe must not refuse; got {result!r}"
+    assert fake.calls[-1][1] == "send-keys", (
+        f"a failed probe must fall through to send-keys; got: {fake.calls!r}"
+    )
+
+
+def test_ws_write_reports_send_keys_failure():
+    """A failing send-keys still surfaces as ok:false (no regression from the
+    added probe: the probe must not short-circuit the real error path)."""
+    result, fake = _send_with_tmux(_FakeTmux(send_keys_rc=1))
+
+    assert result["ok"] is False
+    assert "send-keys" in result["error"]
+    assert fake.calls[-1][1] == "send-keys"
 
 
 def test_ws_read_stream_unaffected():

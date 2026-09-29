@@ -135,6 +135,10 @@ const BOSS_SLUGS = new Set(["boss", "boss-host"]);
 
 function agentHasTranscript(agent: AgentWithState | null | undefined): boolean {
   if (!agent) return false;
+  // ACP-Agenten (`headless_chat`) schreiben in dieselbe omp-Ablage, auch auf
+  // dem Host — der Chat ist dort die einzige Oberflaeche. Das Merkmal kommt
+  // vom Backend, das denselben Pfad aufloest; hier nichts nachrechnen.
+  if (agent.headless_chat) return true;
   if (agent.agent_runtime === "cli-bridge") return true;
   return agent.agent_runtime === "host" && !!agent.slug && BOSS_SLUGS.has(agent.slug);
 }
@@ -424,7 +428,7 @@ function SessionsPageContent() {
         }`}
       >
         {isError && (
-          <div className="text-red-400 text-xs p-4">{t("backendConnectionFailed")}</div>
+          <div className="text-[var(--color-status-error)] text-xs p-4">{t("backendConnectionFailed")}</div>
         )}
         {/* No page-title row. The app bar already says SESSIONS and the bottom
             tab bar already says SESS, so an icon + "Agent Terminals" + count

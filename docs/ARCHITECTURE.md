@@ -49,13 +49,13 @@ Browser (Caddy :80) → Frontend (Next.js 15, :3000)
 
 **Pfad:** `backend/app/`
 
-**Routers (21)**, gruppiert nach Domäne:
+**Routers (22)**, gruppiert nach Domäne:
 
 | Gruppe | Router | Zweck |
 |---|---|---|
 | Auth | `auth.py` | User JWT, Agent PBKDF2, Legacy Token |
 | Agents | `agents.py`, `agent_scoped.py`, `agent_templates.py` | Agent CRUD, Provisioning, Agent-seitige Callbacks (Status-Updates). Wizard-Endpoints (ADR-063): `POST /agents/preview-soul` (seiteneffektfreier SOUL.md-Live-Render), `POST /agents/{id}/health-check` (runtime-bewusster Readiness-Check) |
-| Tasks | `tasks.py`, `consensus.py` | Task CRUD, Multi-Agent Konsens |
+| Tasks | `tasks.py`, `consensus.py`, `run_record.py` (Lauf 5) | Task CRUD, Multi-Agent Konsens. `run_record.py`: Laufakte — kuratierte Zusammenfassung der Task-Historie über sechs Quellen (`GET /tasks/{id}/run-record[.md]` viewer+, `POST .../to-vault` operator+) |
 | Boards & Projects | `boards.py`, `projects.py`, `project_git.py` | Board/Project CRUD, GitHub-Sync |
 | Memory & Intelligence | `memory.py`, `system.py` | Knowledge Base, 3-Layer Memory (Qdrant), Insights |
 | Realtime | `activity.py`, `cli_terminal.py` | SSE Streams, PTY WebSocket |
@@ -63,14 +63,17 @@ Browser (Caddy :80) → Frontend (Next.js 15, :3000)
 | Ops | `approvals.py`, `runtimes.py`, `workflows.py`, `scheduler` | Approvals, Runtime-Mgmt, Automation |
 | Admin | `credentials.py`, `secrets.py`, `cli_plugins.py`, `skills.py` | Credentials Vault, Plugins, Tags |
 
-**Services (29)** — Singletons, alle async:
+**Services (30)** — Singletons, alle async:
 
 | Service | Zweck | Interval |
 |---|---|---|
+| `run_record.py` (Lauf 5) | Laufakte: `build_run_record()` zieht acht kuratierte Kästen (Auftrag+Kinder, Zeiten, Plan, Schritte, Beweise, Kosten, Entscheidungen, Reibung) aus TaskEvent/TaskComment/ActivityEvent/TaskDeliverable/Approval/ModelUsageEvent; `render_run_record_markdown()` rendert davon eine ≤120-Zeilen-Markdown-Fassung. Text-Kürzung immer in Python, nie SQL `substr`/`left` (Pruefbericht Runde 3: der urspruenglich behauptete SQL-Crash war nicht reproduzierbar — Python-Kuerzung ist trotzdem die sichere, zeichengenaue Wahl) | on-demand |
 | `dispatch.py` | Task → Agent zuweisen, Structured Message bauen, RPC-Send | on-demand |
 | `task_runner.py` | Dispatch-ACK-Timeout, Stale Progress, Circuit Breaker, Silent-Abort-Auto-Block (ADR-046, cli-bridge v1) | 60s |
 | `watchdog/` (core + mixins) | Phase-Completion, Session-Recovery, Health-Checks | 30s |
 | `intelligence.py` | Task-Duration-Analyse, Failure Patterns, LLM-Destillation (Ollama) | 300s |
+| `daily_metrics_digest.py` (Lauf 3) | Vier Messzahlen (stale cards >4h, Reviews zum Lead, Doppel-Dispatch/Healer-Wiederholungen, Hand-Statuswechsel nach Grund) als Report, einmal taeglich ab `daily_metrics_hour` (UTC), Redis-Dedup `mc:daily_metrics_digest:<YYYY-MM-DD>` (20h TTL) | 600s Tick |
+| `heads/night_shift.py` (ROADMAP E2) | Nachtschicht: startet als „run tonight“ markierte Aufgaben im Zeitfenster (`night_shift_*` in app_settings, Standard 22:00–06:00, aus) nacheinander über den Head-Starter (`heads/start.py`), ein Head pro GPU-Box, Cloud-Anteil nur bei Cloud-Paaren; blockierte Heads (Frage oder 15 min ohne Lebenszeichen) und der Morgenbericht erscheinen in MC (Startseite, Karte „Letzte Nacht“, `GET /api/v1/night-shift/last-night`); an Slack/Telegram (`operator_reports.send_report`) nur mit `night_shift_send_to_channels` (Standard aus). Marken als Dateien unter `heads_root/night/` (keine Migration, kein FK) | 60s |
 | `git_service.py` | GitHub Repo+PR Management für Agents | on-demand |
 | `provisioning.py` | Agent-Create Background-Task (cli-bridge only — `host` excluded seit ADR-063, provisioniert nur explizit via `POST /agents/{id}/provision`), Template-Render | on-demand |
 | `host_provisioning.py` (NEU 2026-07-10, ADR-063) | Generisches Staging (`.plist`+`run.sh`+`agent.env`) für beliebige Host-Runtime-Agenten in `~/.mc/agents/<slug>/`; `launchctl`-Load hinter `host_agent_autoload_enabled` gegated | on-demand |
@@ -137,7 +140,7 @@ Browser (Caddy :80) → Frontend (Next.js 15, :3000)
 **API Client** (`lib/api.ts`): typed, mit `request<T>()` Wrapper, Auto-401 → /login, JWT aus localStorage.
 
 **Design System:**
-- **Dark Mode only**, Tailwind v4 `@theme`-Tokens in `globals.css`
+- **Dunkel = Standard, Hell = Option pro Browser** (ADR-087): Farb-Tokens als CSS-Variablen im einfachen `:root` von `globals.css` (hell: `:root[data-theme="light"]`), `lib/colors.ts` hält die `var()`-Namen, `lib/theme.ts` schaltet
 - **Glasmorphism** (GlassCard): `backdrop-blur-[16px]`, `bg-[rgba(255,255,255,0.03)]`, Top-Edge-Highlight
 - **Geist Sans/Mono** via `next/font`
 - **Farben:** bg-base #0A0A0A → bg-elevated #1A1A1A; online #00CC88, warning #F59E0B, error #EF4444, accent #8B5CF6
@@ -150,7 +153,7 @@ Browser (Caddy :80) → Frontend (Next.js 15, :3000)
 - `components/agent/` — AgentCard, AgentGrid, CliTerminalTab
 - `components/memory/` — MemoryLayerTabs, EpisodicTimeline, SemanticCardGrid, AgentLessonMatrix, MemoryQueryBar
 
-**xterm.js Terminal** (`app/sessions/page.tsx`): WebSocket → `/api/v1/agents/{id}/terminal?token=...` → PTY-Proxy im Backend → `docker exec -itu agent tmux attach`. Scrollback 5000, copy-on-select, Cmd+V paste, Auto-Reconnect nach 3s. Lifecycle-Buttons: Start/Stop/Restart.
+**xterm.js Terminal** (`app/sessions/page.tsx`): WebSocket → `/api/v1/agents/{id}/terminal?ticket=...` (single-use stream ticket, `POST /api/v1/auth/stream-ticket`) → PTY-Proxy im Backend → `docker exec -itu agent tmux attach`. Scrollback 5000, copy-on-select, Cmd+V paste, Auto-Reconnect nach 3s. Lifecycle-Buttons: Start/Stop/Restart.
 
 ### 3. Docker Stack
 
@@ -894,7 +897,6 @@ Verzeichnis bootet unveraendert. Kopplung nur ueber die **Hook-Registry** in
 
 | Vertical | Pfad | Flag in `verticals.ts` | Zweck |
 |---|---|---|---|
-| `news_studio` | `backend/app/verticals/news_studio/` | `newsStudio` | Newsletter/News-Produktion (privat, gitignored im OSS-Release) |
 | `bench_studio` | `backend/app/verticals/bench_studio/` | `benchStudio` (Default an) | LLM-Capability-Demos als Video auf X |
 
 **Hook-Registries (`verticals/hooks.py`):**

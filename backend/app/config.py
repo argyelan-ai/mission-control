@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -9,6 +10,17 @@ class Settings(BaseSettings):
 
     # Database
     database_url: str = "postgresql+asyncpg://mc:password@localhost:5432/mission_control"
+    # Pool exhaustion guard (incident 2026-09-14: 29/30 connections pinned in
+    # open transactions → whole API unresponsive). pool_timeout bounds how
+    # long a request WAITS for a free connection before failing fast (503)
+    # instead of piling up behind a leak. 5s ≫ any healthy checkout wait
+    # (see database.py docstring for the sizing math), ≪ the 8s client
+    # timeout observed during the incident.
+    db_pool_timeout: float = 5.0
+    # Observability: a request whose session holds a pool connection longer
+    # than this is logged with endpoint + duration at return time — the
+    # "old transactions are a leak" signature, visible without psql.
+    db_session_hold_warn_seconds: float = 10.0
 
     # Redis
     redis_url: str = "redis://localhost:6379/0"
@@ -31,6 +43,17 @@ class Settings(BaseSettings):
     # JWT Auth
     jwt_secret_key: str = "change-me-in-production"
     jwt_access_token_expire_minutes: int = 480  # 8 hours
+
+    # Stream auth (services/stream_tickets.py). SSE/WebSocket connections
+    # authenticate with a short-lived single-use ticket (?ticket=…), never with
+    # the login JWT in the URL — URLs end up in proxy/access/error logs.
+    # Env: STREAM_TICKET_TTL_SECONDS.
+    stream_ticket_ttl_seconds: int = 60
+    # Transition switch: accept the login JWT as ?token=… again (the old,
+    # log-leaking way) for clients that predate stream tickets. OFF by
+    # default; only turn it on temporarily for an outdated custom client, and
+    # plan to drop it in a later release. Env: ALLOW_QUERY_TOKEN_AUTH=true.
+    allow_query_token_auth: bool = False
 
     # Discord
     discord_webhook_ops: str = ""
@@ -70,6 +93,22 @@ class Settings(BaseSettings):
     telegram_approvals_enabled: bool = True
     slack_reports_enabled: bool = True
     slack_approvals_enabled: bool = True
+    # Lauf 3 (Messzahlen-Digest): einmal taeglich vier Messzahlen (stale
+    # cards, Reviews zum Lead, Doppel-Dispatch/Healer-Wiederholungen,
+    # Hand-Statuswechsel) als Report verschicken.
+    daily_metrics_enabled: bool = True
+    # UTC-Stunde, NICHT Marks Ortszeit. Es gibt aktuell keine
+    # Zeitzonen-Einstellung im System; die Container setzen kein TZ und
+    # laufen auf UTC (Pruefbericht N3). Stunde 7 = 09:00 in Zuerich im
+    # Sommer (UTC+2), 08:00 im Winter (UTC+1).
+    daily_metrics_hour: int = 7
+    # IANA zone the Insights days and weeks are counted in when the browser
+    # sends none (it normally sends its own). Containers run on UTC; a deployer
+    # may set TZ or USAGE_TIMEZONE.
+    usage_timezone: str = Field(default_factory=lambda: os.environ.get("TZ") or "UTC")
+    # Pilot #386 Punkt 1: Statuswechsel von aussen dem arbeitenden Agenten
+    # als System-Kommentar zustellen. Standard AUS.
+    status_change_delivery_enabled: bool = False
 
     # Slack Team-Chat (ADR-072). Bewusst dasselbe Paar wie bei Telegram:
     # ein Schalter + ein Ziel. Die beiden Slack-TOKEN liegen dagegen NICHT
@@ -172,10 +211,6 @@ class Settings(BaseSettings):
     # Rendered into SOUL.md/USER.md templates. Set OPERATOR_NAME in .env.
     operator_name: str = "Operator"
 
-    # Public brand/site name used in generated newsletter copy
-    # (header, subject, footer). Set NEWSLETTER_BRAND in .env.
-    newsletter_brand: str = "AI Weekly"
-
     # MC home root — the host's $HOME. The backend container sets HOME_HOST to
     # the host $HOME and bind-mounts ${HOME}/.mc:${HOME}/.mc 1:1, so
     # MC_HOME = home_host/.mc resolves identically in container and on the host.
@@ -195,11 +230,24 @@ class Settings(BaseSettings):
     # pydantic-settings reads PUBLIC_HOST / EXTRA_CORS_ORIGINS env vars.
     public_host: str = ""
     extra_cors_origins: str = ""  # comma-separated list of additional origins
-    # Agent slugs whose compose service gets OMP_DRIVER=acp (ADR-081). The omp
-    # bridge defaults to the native TUI driver; only slugs listed here are
-    # switched to the ACP protocol path. Comma-separated list from .env —
-    # agent names deliberately live in deployment config, not in code.
-    omp_acp_agent_slugs: str = ""  # comma-separated list of agent slugs
+    # Fleet-wide driver default for the omp harness (ADR-084): "acp" gives
+    # EVERY omp agent the ACP protocol path — harness property, never a name
+    # list (ADR-081's OMP_ACP_AGENT_SLUGS is gone). "native" is the global
+    # escape hatch: one knob, whole fleet, back to the bridge's TUI driver.
+    omp_driver_default: str = "acp"  # acp | native
+    # Recovery Tier 2 (process restart) opt-out for host agents whose bridge
+    # runs a driver the backend cannot observe (deployment config). Docker
+    # omp agents are skipped implicitly via their harness (ADR-084) — a
+    # restart kills the running ACP turn: measured 2026-09-14, PR #574.
+    recovery_tier2_skip_agent_slugs: str = ""
+
+    # Which driver the host-side hermes bridge runs (scripts/hermes-bridge.py).
+    # "native" (default) = the bridge drives a hermes TUI in tmux and the
+    # Sessions page has no chat for it at all; "acp" = the bridge runs the ACP
+    # chat daemon and the Sessions chat becomes Hermes' ONLY interface
+    # (docs/specs/chat-over-acp.md). Read by acp_chat_transport.headless_chat_kind
+    # — deployment config, the host-side counterpart to OMP_DRIVER_DEFAULT.
+    hermes_driver: str = "native"  # native | acp
 
     # Secrets encryption (Fernet key for MC-managed secrets)
     secrets_encryption_key: str = ""
@@ -223,6 +271,14 @@ class Settings(BaseSettings):
     # Enabled in Phase E (2026-04-12) after the worker SOUL audit
     enforce_reflection: bool = True
 
+    # Notice-only escalations (2026-09-21): dispatch_escalation, lead_escalation,
+    # review_stuck and dependency_zombie are watchdog STOERUNGSMELDUNGEN, not
+    # operator decisions — 77 of 92 approvals in 30 days went unanswered
+    # because these auto-supersede the moment the card leaves the
+    # triggering state. True = raise a passive operator.notice + report
+    # instead of an Approval yes/no question.
+    notice_only_escalations_enabled: bool = True
+
     # Memory-System / Embeddings (Phase 3, 2026-04-11)
     # Any OpenAI-compatible /v1/embeddings endpoint (LM Studio, llama.cpp,
     # vLLM, ...). Empty = "not configured": memory inserts are saved without a
@@ -238,7 +294,7 @@ class Settings(BaseSettings):
     # NOTE: spark_llm_model is a fallback only. The authoritative model
     # identifier is the ``model_identifier`` column on the matching ``runtimes``
     # row, resolved at call time via ``services.runtime_model_resolver``.
-    # Callers (spark_client, news_ai_worker) auto-detect recipe swaps via
+    # Callers (spark_client) auto-detect recipe swaps via
     # the resolver and fall back to this value only if the resolver fails.
     spark_llm_model: str = "Qwen/Qwen3.6-35B-A3B-FP8"
     # ── MC's own AI functions: which provider serves them ────────────────
@@ -287,6 +343,41 @@ class Settings(BaseSettings):
     # True = tasks with dispatch_phase="planning" are NOT auto-dispatched
     enable_dispatch_gating: bool = False
 
+    # ADR-085 §4/§5 (head per job, quiet mode): a task created from the UI/API
+    # WITHOUT an agent is no longer auto-assigned to the board lead (which
+    # prepared its repo workspace and queued the card for it — the old fleet
+    # path). None (default, also an empty env value) = follow the head
+    # launcher: held back only while heads_enabled is on, so an installation
+    # without heads keeps the lead path (ADR-085 "Open source / existing
+    # installations"). False = always leave the card unassigned in the inbox
+    # until the operator assigns it or a head picks the job up. True = always
+    # legacy lead-first auto-assign. Explicit assignments, agent-created tasks
+    # (lead delegation, voice agent), scheduler and loop tasks are not
+    # affected. Read it through lead_auto_assign_effective().
+    lead_auto_assign_new_tasks: bool | None = None
+
+    @field_validator("lead_auto_assign_new_tasks", mode="before")
+    @classmethod
+    def _empty_means_unset(cls, v):
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
+    def lead_auto_assign_effective(self) -> bool:
+        """ADR-085: an explicit value wins; unset follows heads_enabled."""
+        if self.lead_auto_assign_new_tasks is not None:
+            return self.lead_auto_assign_new_tasks
+        return not self.heads_enabled
+
+    # Bauplan Lauf 2 Teil 2-4 (21.09.2026): Guard 3's turn-signal check
+    # (agent.status == "working" + fresh heartbeat) applies to ANY
+    # poll-based runtime, not just cli-bridge — 60/80 Hand-Starts traced to
+    # a host agent's turn being invisible to Guard 3. True = new behaviour
+    # (default). False = legacy: only cli-bridge is turn-gated, host/other
+    # runtimes dispatch even mid-turn (pre-Lauf-2 behaviour) — rollback path,
+    # flag + backend restart, no code change needed.
+    host_turn_signal_enabled: bool = True
+
     # Promote Orchestrator (Phase 4A)
     # False = planned tasks stay put until manually promoted
     # True = system makes auto-promote/approval/wait decisions every 30s
@@ -312,6 +403,23 @@ class Settings(BaseSettings):
         / "Workspace" / "Projects" / "mission-control"
     )
 
+    # ── Plattenplatz ──────────────────────────────────────────────────────
+    # Bau-Preflight: ein Bau startet nur, wenn mindestens so viele GB frei
+    # sind. Am 2026-09-16 lief die Platte voll (75,8 GB Docker-Build-Cache,
+    # den Docker nie von selbst aufraeumt); `docker compose up --build` starb
+    # mitten im Layer-Schreiben mit einem rohen "no space left on device".
+    # Die Shell-Seite liest DIESELBE Variable (docker/shared/disk-preflight.sh)
+    # aus der Umgebung bzw. .env — ein Ort, zwei Sprachen.
+    build_min_free_gb: int = 15
+    # Obergrenze, auf die der Build-Cache NACH einem erfolgreichen Bau
+    # zurueckgestutzt wird (`docker builder prune --keep-storage`). Ohne sie
+    # ist der Cache unbegrenzt — genau das waren die 75,8 GB.
+    build_cache_keep_gb: int = 20
+    # Waechter: ab dieser Belegung wird gemeldet. MELDET NUR — es wird nie
+    # etwas geloescht und nie ein Status geaendert. 95 % ist die Fruehwarnung
+    # VOR dem Notfall, nicht der Notfall selbst.
+    disk_watchdog_percent: int = 95
+
     # Free-Code Agent: base directory for task isolation (worktrees or plain workspaces)
     # In the container: /home/mcuser/free-code-projects (mounted from the host,
     # see docker-compose.override.example.yml)
@@ -328,10 +436,6 @@ class Settings(BaseSettings):
         "/home/mcuser/free-code-projects:"
         + str(Path(os.environ.get("HOME_HOST", str(Path.home()))) / "FreeCode" / "projects")
     )
-
-    # News-Site Export (optional): absolute host path of the news repo that
-    # /api/v1/news/deploy exports to + pushes. Empty = deploy endpoint disabled.
-    news_repo_path: str = ""
 
     # SSE keepalive interval (seconds)
     sse_ping_interval: int = 15
@@ -485,6 +589,14 @@ class Settings(BaseSettings):
     # faellt NICHT unter diesen Schalter.
     enable_background_services: bool = True
 
+    # Lauf 7 (review-park grace, 30-day incident: 15x reviewer parked ~1900min
+    # total, 8 of those had already commented; 30x developer wrongly parked
+    # on their own unassigned review card). Review-Karte sperrt den Pruefer
+    # nur, solange die Pruefung frisch ist. Kill switch: False = heutiges
+    # unbedingtes Parken (unveraendert).
+    review_park_grace_enabled: bool = True
+    review_park_grace_minutes: int = 30
+
     # Remote runtime host SSH (optional — e.g. a DGX box running vLLM/LM Studio).
     # Empty = feature unused. Set DGX_SSH_HOST/DGX_SSH_USER in .env and mount
     # your SSH key (see docker-compose.override.example.yml).
@@ -516,6 +628,47 @@ class Settings(BaseSettings):
     # Root of the Markdown Vault. Source of Truth for agent memory.
     # In Docker, HOME_HOST is set to the host's $HOME so the watcher sees Phase 7's writes.
     vault_path: Path = Path(os.environ.get("HOME_HOST", str(Path.home()))) / ".mc" / "vault"
+
+    # Head launcher (docs/specs/head-launcher.md). Off until the operator
+    # accepts the UI PR: off → /api/v1/heads answers 404, the sync job idles
+    # and the box guard does nothing. heads_root is the host folder the
+    # mc-head watcher reads — same absolute path in the container via the
+    # 1:1 ~/.mc mount, derived like vault_path (never Path.home() in-container).
+    heads_enabled: bool = False
+    heads_root: Path = Path(os.environ.get("HOME_HOST", str(Path.home()))) / ".mc" / "heads"
+    heads_sync_interval: int = 60
+    # Progress watchdog (spec §6.5): mc-head stops a head (reason
+    # "no_progress") when neither head.log, step.txt, work.log nor any worktree file
+    # changed for this many minutes — long coding jobs may run as long as
+    # they move. The hard limit is only an emergency brake (reason
+    # "hard_limit"): generous locally, tighter on cloud runtimes (cost).
+    # The night-shift "blocked" notice (15 min quiet, night.BLOCKED_SILENT_S)
+    # reads the same signal, so with the default it warns before the stop;
+    # values below 16 stop a head before that warning (see .env.example).
+    heads_no_progress_min: int = Field(default=20, ge=1, le=1440)
+    heads_hard_limit_local_s: int = Field(default=8 * 3600, ge=60, le=86400)
+    heads_hard_limit_cloud_s: int = Field(default=2 * 3600, ge=60, le=86400)
+
+    # Night shift (ROADMAP E2): tasks marked "run tonight" start one after
+    # another as heads inside a time window. These are the env DEFAULTS; the
+    # operator's choice lives in app_settings (Settings → Night shift) and is
+    # read fresh on every tick, because the job runs in mc-worker, not in the
+    # API process that saves it. Off by default: unattended starts are an
+    # operator decision (ADR-085 decision 2). Needs heads_enabled too.
+    night_shift_enabled: bool = False
+    night_shift_start: str = "22:00"
+    night_shift_end: str = "06:00"
+    # IANA zone the window is read in. No system-wide zone exists (containers
+    # run on UTC), so the operator picks it once in Settings.
+    night_shift_timezone: str = "UTC"
+    # Max share (percent) of tonight's marked tasks that may start on a cloud
+    # runtime — only matters when the operator picked a cloud pair.
+    night_shift_cloud_share: int = 30
+    # MC is the operator's channel: the morning report and the blocked
+    # notices always land in MC (Home → "Last night"). Slack / Telegram get a
+    # copy only when this is on AND a channel is configured. Off by default.
+    night_shift_send_to_channels: bool = False
+    night_shift_interval: int = 60
 
     # Vault Index Rebuild on Boot
     # False (default): only rebuild on first boot when .mc_index.db is missing.
@@ -629,15 +782,16 @@ def node_agent_base_urls() -> list[str]:
     return [u.strip() for u in settings.mc_node_agent_base_url.split(",") if u.strip()]
 
 
-def omp_acp_agents(s: Settings | None = None) -> set[str]:
-    """Agent slugs whose compose service renders OMP_DRIVER=acp (ADR-081).
+def recovery_tier2_skip_agents(s: Settings | None = None) -> set[str]:
+    """Agent slugs for which tiered recovery must NOT run Tier 2 (restart).
 
-    Comma-separated OMP_ACP_AGENT_SLUGS from .env; empty (default) → no
-    agent gets the env override and the whole fleet stays on the bridge's
-    native driver default. Deployment config, deliberately not code.
+    EXPLICIT opt-outs only (RECOVERY_TIER2_SKIP_AGENT_SLUGS, e.g. a host
+    agent whose bridge runs a driver the backend cannot see). The implicit
+    omp/ACP skip is harness-derived now (ADR-084): task_runner consults
+    ``omp_driver_for(agent.harness)`` directly instead of this name list.
     """
     s = s or settings
-    return {u.strip() for u in s.omp_acp_agent_slugs.split(",") if u.strip()}
+    return {u.strip() for u in s.recovery_tier2_skip_agent_slugs.split(",") if u.strip()}
 
 
 def effective_host_ssh_user() -> str:

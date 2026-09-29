@@ -18,10 +18,12 @@ import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { Brain, Check, ChevronRight, Clock, Paperclip, Search, Send, X, Zap } from "lucide-react";
 import { api } from "@/lib/api";
-import { C, LANE } from "@/lib/colors";
+import { C, LANE, alpha } from "@/lib/colors";
+import { STATUS_LABEL_KEY } from "@/lib/taskDetail/statusLabels";
 import type { Agent, Project, Task, TaskStatus } from "@/lib/types";
 import { ProjectReferencesDialog } from "./ProjectReferencesDialog";
 import { EntityIcon } from "@/components/shared/EntityIcon";
+import { TonightList } from "@/components/night/TonightList";
 
 // ── Status vocabulary ────────────────────────────────────────────────────────
 
@@ -37,18 +39,6 @@ const STATUS_ORDER: TaskStatus[] = [
   "done",
 ];
 
-// Message keys in the tasks.* namespace — t() at the render site.
-const STATUS_LABEL_KEY: Record<TaskStatus, string> = {
-  inbox: "statusInbox",
-  in_progress: "statusInProgress",
-  review: "statusReview",
-  user_test: "statusUserTest",
-  waiting: "statusWaiting",
-  blocked: "statusBlocked",
-  failed: "statusFailed",
-  aborted: "statusAborted",
-  done: "statusDone",
-};
 
 function StatusDot({ status }: { status: TaskStatus }) {
   const icons: Partial<Record<TaskStatus, React.ReactNode>> = {
@@ -125,7 +115,7 @@ function ListRow({
           type="button"
           onClick={onClick}
           aria-label={t("openTask", { title: task.title })}
-          className="flex-1 min-w-0 text-left text-[13px] truncate cursor-pointer after:absolute after:inset-0 after:content-[''] hover:opacity-90"
+          className="flex-1 min-w-0 text-left text-[13px] truncate cursor-pointer after:absolute after:inset-0 after:content-[''] hover:opacity-90 light:hover:opacity-100!"
           style={{ color: isDone ? C.textMuted : C.textPrimary }}
         >
           <span className="truncate">{task.title}</span>
@@ -145,7 +135,7 @@ function ListRow({
               title={t("noActivityFor", { mins: staleMins })}
               style={{
                 color: isCritical ? C.error : C.warning,
-                backgroundColor: isCritical ? `${C.error}1A` : `${C.warning}1A`,
+                backgroundColor: isCritical ? alpha(C.error, 0.1) : alpha(C.warning, 0.1),
               }}
             >
               <Clock size={9} />
@@ -316,6 +306,13 @@ const DONE_PAGE = 30;
 // Search + agent filter stay ephemeral on purpose — they're filters, not a view.
 const VIEW_STORAGE_KEY = "mc:tasks:view";
 
+/** Done tasks, most recently completed first (updated_at when completed_at is
+ *  missing). Returns a new array; ties keep the API order. */
+function sortNewestCompletedFirst(list: Task[]): Task[] {
+  const stamp = (t: Task) => Date.parse(t.completed_at ?? t.updated_at ?? "") || 0;
+  return [...list].sort((a, b) => stamp(b) - stamp(a));
+}
+
 type StoredView = { mode?: TaskGroupMode; toggled?: string[] };
 
 export default function TaskListColumn({
@@ -411,11 +408,16 @@ export default function TaskListColumn({
 
   const groups: Group[] = useMemo(() => {
     if (mode === "status") {
-      return STATUS_ORDER.map((s) => ({
-        key: `status:${s}`,
-        label: t(STATUS_LABEL_KEY[s]),
-        tasks: visible.filter((task) => task.status === s),
-      })).filter((g) => g.tasks.length > 0);
+      return STATUS_ORDER.map((s) => {
+        const inGroup = visible.filter((task) => task.status === s);
+        return {
+          key: `status:${s}`,
+          label: t(STATUS_LABEL_KEY[s]),
+          // The API orders by sort_order/created_at — fine for open lanes,
+          // but Done then opens with months-old work. Newest completion first.
+          tasks: s === "done" ? sortNewestCompletedFirst(inGroup) : inGroup,
+        };
+      }).filter((g) => g.tasks.length > 0);
     }
     // project mode: Ad-hoc first, then projects in list order, skip empty
     const adHoc: Group = {
@@ -576,6 +578,14 @@ export default function TaskListColumn({
 
       {/* Grouped list */}
       <div className="flex-1 overflow-y-auto pb-4 px-1 min-h-0">
+        {/* Night shift: what starts tonight (nothing while heads are off) */}
+        <TonightList
+          onOpenTask={(id) => {
+            const hit = tasks.find((x) => x.id === id);
+            if (hit) onSelectTask(hit);
+            return !!hit;
+          }}
+        />
         {groups.length === 0 && (
           <div className="px-4 py-10 text-center label-sys">
             {query || agentFilter ? t("noTasksMatch") : t("noTasksYet")}

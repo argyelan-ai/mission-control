@@ -1,7 +1,7 @@
 """Frontmatter parse + validate. Single responsibility: read/validate
 YAML+Markdown files. No side effects, no I/O beyond the passed path."""
 
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +19,9 @@ VALID_TYPES = {
     # Auto-generated wrapper notes for TaskDeliverables (Phase A vault-as-brain).
     # Carry attachment_path pointing into ~/.mc/vault/attachments/.
     "deliverable",
+    # Task Run Record ("Laufakte") export (Lauf 5) — written to runs/<id>
+    # -laufakte.md by POST /api/v1/tasks/{id}/run-record/to-vault.
+    "run-record",
 }
 
 VALID_STATUS = {"draft", "published", "stale", "archived"}
@@ -28,8 +31,10 @@ REQUIRED_FIELDS = ("id", "type", "agent", "date")
 
 
 def parse_frontmatter(path: Path) -> frontmatter.Post:
+    # utf-8-sig strips a leading BOM (Windows editors). With plain utf-8 the
+    # BOM hides the '---' delimiter and the whole frontmatter block is lost.
     try:
-        return frontmatter.load(str(path))
+        return frontmatter.load(str(path), encoding="utf-8-sig")
     except yaml.YAMLError as e:
         raise FrontmatterError(f"YAML parse error in {path}: {e}") from e
     except Exception as e:
@@ -52,7 +57,9 @@ def validate_frontmatter(metadata: dict[str, Any]) -> None:
             datetime.fromisoformat(date_val.replace("Z", "+00:00"))
         except ValueError as e:
             raise FrontmatterError(f"invalid date {date_val!r}: must be ISO-8601") from e
-    elif not isinstance(date_val, datetime):
+    elif not isinstance(date_val, date):
+        # datetime is a subclass of date, so this accepts full ISO timestamps
+        # as well as unquoted YAML date-only values (`date: 2026-05-16`).
         raise FrontmatterError(f"invalid date {date_val!r}: must be ISO-8601 string or datetime")
 
     # Phase E (Task-Klammer): optional `task` field carries the originating
@@ -91,7 +98,7 @@ def validate_frontmatter(metadata: dict[str, Any]) -> None:
                 raise FrontmatterError(
                     f"invalid updated {updated_val!r}: must be ISO-8601"
                 ) from e
-        elif not isinstance(updated_val, datetime):
+        elif not isinstance(updated_val, date):
             raise FrontmatterError(
                 f"invalid updated {updated_val!r}: must be ISO-8601 string or datetime"
             )

@@ -108,4 +108,30 @@ describe("RepoDetailPanel", () => {
 
     await waitFor(() => expect(updateSpy).toHaveBeenCalledWith("repo-1", { is_active: false }));
   });
+
+  it("does not bring back a dismissed delete dialog or link picker when the panel is reopened", async () => {
+    vi.spyOn(api.repos, "get").mockResolvedValue(makeRepo());
+    vi.spyOn(api.boards, "list").mockResolvedValue([] as never);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const ui = (open: boolean) => (
+      <QueryClientProvider client={qc}>
+        <RepoDetailPanel repoId="repo-1" open={open} onClose={vi.fn()} />
+      </QueryClientProvider>
+    );
+    const { rerender } = render(ui(true));
+
+    await userEvent.click(await screen.findByRole("button", { name: "Link" }));
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(screen.getByText("Delete owner/name?")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Search projects...")).toBeInTheDocument();
+
+    // The panel closes (Esc / backdrop / X) while both layers were open ...
+    rerender(ui(false));
+    // ... and the next open must start clean.
+    rerender(ui(true));
+    await screen.findByLabelText(/Working rules/);
+    // waitFor: the dialog's exit animation may still be running.
+    await waitFor(() => expect(screen.queryByText("Delete owner/name?")).not.toBeInTheDocument());
+    expect(screen.queryByPlaceholderText("Search projects...")).not.toBeInTheDocument();
+  });
 });

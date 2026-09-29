@@ -1,6 +1,6 @@
 # ADR-061 — jarvis_core (geteilte Persona/Tools/Brain) + Telegram-Inbound
 
-**Status:** Accepted
+**Status:** Accepted · §2 (Telegram inbound) partially superseded by [ADR-085](085-head-per-job.md) (2026-09-22) — channels become output-only; inbound keeps running until re-routed
 **Datum:** 2026-07-10
 **Scope:** Backend/Services · Backend/Config · Infra/Compose · voice_worker · Docs
 

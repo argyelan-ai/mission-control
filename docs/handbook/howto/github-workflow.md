@@ -99,6 +99,50 @@ Once a project has a repo, an agent that picks up a task:
 5. A reviewer — another agent or you — approves, and the PR is squash-merged
    and the branch deleted.
 
+### Decision documents (ADRs) are the exception
+
+A pull request that changes a **decision document** does not merge on a code
+verdict alone. It additionally needs your explicit approval of the ADR *text*,
+recorded as a `Pending approval` of type `adr_gate`, before the card can reach
+`done`.
+
+What counts as a decision document is decided by its **content**, not its
+folder: the authority is the signature `# ADR-NNN` in the first non-empty line,
+and the gate asks that question about **every** changed file — there is no
+path pre-filter. So an ADR that lives at another path is still gated, and a
+markdown file in `docs/decisions/` without that signature (`README.md`,
+`_template.md`) is not. *Deleting* an ADR is gated like editing one, and so is
+**losing the signature**: a file *named* like an ADR (`docs/decisions/NNN-slug.md`)
+whose heading has been rewritten out of `# ADR-NNN` form, or that was renamed
+out of that folder, counts as a change too. If the signature contradicts the
+filename, the document is rejected as broken rather than silently re-targeting
+an approval.
+
+The file list is read page by page from GitHub, not via `gh pr view --json
+files`, which stops at 100 entries — a decision document hidden in a large
+commit was otherwise invisible to the gate.
+
+The approval is bound to the exact text: it stores a digest of the changed
+documents, so **editing the ADR after approving it invalidates the approval**.
+Re-approve the new text or revert the change.
+
+Why: PR #602 (2026-09-16) squash-merged `docs/decisions/084-…` — which
+superseded ADR-081 — with zero reviews, on the strength of a green *code*
+check. A code approval is not a decision approval.
+
+Two deliberate failure modes, so the gate is not simply "everything stops":
+
+- A **detected** ADR change without your approval is a hard `409`. The card
+  stays in `review`; resolve the pending approval to unblock the retry.
+- An **inconclusive check** (GitHub unreachable, `gh` not authenticated) lets
+  the merge through, because blocking every done-card during an outage gets a
+  guard deleted. It is not silent: it logs a warning and emits an
+  `adr_gate_check_unavailable` activity event on the board, so "not an ADR
+  change" stays distinguishable from "never checked".
+
+No new migration or autonomy config is needed: `approvals.action_type` is free
+text and unknown action types default to `L3` (approval required).
+
 Ad-hoc tasks with no project share a single `mc-workspace` repo rather than
 leaving orphaned branches scattered across project repos.
 

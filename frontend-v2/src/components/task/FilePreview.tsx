@@ -152,9 +152,11 @@ function CodePreview({ fileUrl, path }: { fileUrl: string; path: string }) {
       <SyntaxHighlighter
         language={lang}
         style={atomOneDark}
-        customStyle={{ margin: 0, fontSize: 12, background: C.bgBase, padding: "12px 16px" }}
+        // Code stays on a dark ground in both modes: atomOneDark's syntax
+        // colours are built for it (ADR-087).
+        customStyle={{ margin: 0, fontSize: 12, background: C.codeBg, padding: "12px 16px" }}
         showLineNumbers
-        lineNumberStyle={{ color: C.textDim, minWidth: "2.5em" }}
+        lineNumberStyle={{ color: C.codeDim, minWidth: "2.5em" }}
       >
         {text}
       </SyntaxHighlighter>

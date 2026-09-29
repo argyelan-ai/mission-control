@@ -248,6 +248,14 @@ export function pickServing(
   return null;
 }
 
+/** True when GET /runtimes cut a state probe on this box off
+ *  (container_status "probe_timeout"): the box's state is unknown, so the
+ *  stage must neither call it free nor fold it into the empty state. The
+ *  slot runtime is ignored — it is only the box's address, not a recipe. */
+export function hostProbeTimedOut(group: HostGroup): boolean {
+  return group.runtimes.some((rt) => !rt.is_slot && rt.container_status === "probe_timeout");
+}
+
 /** Die Slot-Zeile dieser Box (ADR-078) — die feste „Box-URL", an der die
  *  Agenten hängen. null, solange das Backend für die Box keine angelegt hat
  *  (ältere Stände, Boxen ohne befehlsgetriebene Runtime). Gibt es mehrere,

@@ -96,10 +96,13 @@ def _scan(tmp_path: Path, filename: str, content: str) -> subprocess.CompletedPr
         ("tailscale-ip", 'SPARK_URL = "http://100.83.41.7:8000/v1"'),
         ("magic-dns", 'BASE = "https://laptop-3.taildeadbeef.ts.net"'),
         ("home-path", 'REPO = "/Users/marianne/Workspace/Projects/mission-control"'),
+        # Claude Code keys its project folders by the cwd with "/" -> "-":
+        # the login name survives in that form, and the slash rule misses it.
+        ("dash-home-path", 'MEMORY = "~/.claude/projects/-Users-marianne-Workspace/memory"'),
     ],
 )
 def test_scanner_catches_the_addresses_that_actually_leak(tmp_path, name, leak):
-    """Sabotage-Probe als Test: genau die drei Formen, die aus diesem Repo
+    """Sabotage-Probe als Test: genau die Formen, die aus diesem Repo
     schon herausgerutscht sind, muessen anschlagen."""
     result = _scan(tmp_path, f"{name}.py", leak + "\n")
     assert result.returncode != 0, (
@@ -117,6 +120,8 @@ def test_scanner_catches_the_addresses_that_actually_leak(tmp_path, name, leak):
         ("doc-host", 'PUBLIC_HOST=your-machine.tailnet-name.ts.net'),
         ("test-home", 'HOME = "/Users/testuser"'),
         ("placeholder-home", 'path = "/Users/YOUR_USER/.mc"'),
+        ("dash-test-home", 'boss_dir = "boss_projects/-Users-testuser-Workspace-Projects-mc"'),
+        ("dash-placeholder", 'MEMORY = "~/.claude/projects/-Users-<user>-Workspace/memory"'),
         # Bewusst aus dem 10er-Bereich: Die lokale Muster-Liste des Betreibers
         # wertet das gaengigste Heimnetz-Praefix pauschal als persoenlich (ein
         # Geraet von ihm stand dort einmal), und ein solcher Testwert blockiert

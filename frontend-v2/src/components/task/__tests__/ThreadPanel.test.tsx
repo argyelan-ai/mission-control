@@ -135,4 +135,73 @@ describe("ThreadPanel", () => {
     render(<ThreadPanel taskId="t1" />);
     expect(await screen.findByText(/Thread unavailable/)).toBeTruthy();
   });
+
+  // Defekt 3 (Operator-Befund 15.09.2026): Die erste Nachricht eines neuen
+  // Tasks ist das Dispatch-Briefing — ein ganzes Dokument mit `##`-Abschnitten,
+  // `**Fettschrift**` und dem internen Marker `<!-- mc:briefing:attempt=… -->`.
+  // Es lief durch denselben Zweig wie eine einzeilige System-Notiz und stand
+  // deshalb als roher Text in `text-center font-mono text-[10px]`: der Marker
+  // war sichtbar, die Gliederung weg, Pfade und Portnummern standen als
+  // Fliesstext in der Zeile.
+  const BRIEFING_BODY =
+    "<!-- mc:briefing:attempt=abc123 -->\n" +
+    "# New Task: Mobile chat\n" +
+    "**Working directory:** `/workspace/wt`\n" +
+    "**Dev server port:** 3001\n" +
+    "## Approach\n" +
+    "- Schritt eins\n";
+
+  it("rendert das Dispatch-Briefing als Markdown und versteckt den internen Marker", async () => {
+    listMock.mockResolvedValue(
+      mkResponse({
+        messages: [
+          mkMsg({
+            id: "msg_brief",
+            direction: "system",
+            author: { kind: "system", id: "dispatch", display: "System" },
+            body_format: "markdown",
+            body: BRIEFING_BODY,
+          }),
+        ],
+      }),
+    );
+    const { container } = render(<ThreadPanel taskId="t1" />);
+
+    const card = await screen.findByTestId("thread-briefing");
+    // Der Marker ist ein internes Detail der Zustellung, keine Information
+    // fuer den Leser — er darf nirgends mehr im DOM stehen.
+    expect(container.innerHTML).not.toContain("mc:briefing");
+    expect(container.innerHTML).not.toContain("<!--");
+    // Dokumentstruktur statt Fliesstext: Ueberschrift als Ueberschrift,
+    // Fettschrift als <strong>, Pfad und Port als <code>.
+    expect(screen.getByRole("heading", { level: 1, name: /New Task: Mobile chat/ })).toBeTruthy();
+    expect(screen.getByText("/workspace/wt")).toBeTruthy();
+    expect(card.querySelector("strong")).toBeTruthy();
+    expect(card.textContent).toContain("3001");
+    // Und eben nicht mehr in der einzeiligen System-Notiz-Optik.
+    expect(container.querySelector(".text-center.font-mono")).toBeNull();
+  });
+
+  it("laesst eine echte einzeilige System-Notiz in der alten Optik", async () => {
+    listMock.mockResolvedValue(
+      mkResponse({
+        messages: [
+          mkMsg({
+            id: "msg_note",
+            direction: "system",
+            author: { kind: "system", id: "migration", display: "System" },
+            body_format: "text",
+            body: "Migration: bisheriger Verlauf liegt in den Kommentaren dieses Tasks.",
+          }),
+        ],
+      }),
+    );
+    const { container } = render(<ThreadPanel taskId="t1" />);
+
+    const note = await screen.findByText(/Migration: bisheriger Verlauf/);
+    expect(note.className).toContain("text-center");
+    expect(note.className).toContain("font-mono");
+    expect(screen.queryByTestId("thread-briefing")).toBeNull();
+    expect(container.querySelector("h1")).toBeNull();
+  });
 });

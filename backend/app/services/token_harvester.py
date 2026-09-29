@@ -13,6 +13,10 @@ Data sources:
     .../prompt_history.jsonl for task_id, see _harvest_grok)
   - ~/.hermes/state.db (Hermes host harness — sqlite session ledger, never
     opened live; copied to a temp dir first, see _harvest_hermes)
+  - <heads_root>/<run_id>/omp-sessions/*.jsonl and
+    <heads_root>/<run_id>/claude-config/projects/**/*.jsonl (head runs,
+    docs/specs/head-launcher.md — attributed from the run's spec.json, see
+    _harvest_heads)
 
 Dedup key: top-level `uuid` (UNIQUE) for Claude Code lines. message.id has
 1042+ collisions — NEVER dedupe on that! omp lines carry no top-level uuid at
@@ -142,6 +146,7 @@ def _parse_claude_line(d: dict[str, Any]) -> dict[str, Any] | None:
         "cwd": d.get("cwd", ""),
         "git_branch": d.get("gitBranch"),
         "model": model,
+        "harness": "claude",
         "input_tokens": usage.get("input_tokens", 0) or 0,
         "output_tokens": usage.get("output_tokens", 0) or 0,
         "cache_read_tokens": cache_read,
@@ -218,6 +223,7 @@ def _parse_omp_line(d: dict[str, Any], session_id: str | None) -> dict[str, Any]
         "cwd": d.get("cwd", ""),
         "git_branch": d.get("gitBranch"),
         "model": model,
+        "harness": "omp",
         "provider": message.get("provider") or d.get("provider"),
         "input_tokens": usage.get("input", 0) or 0,
         "output_tokens": usage.get("output", 0) or 0,
@@ -233,6 +239,29 @@ def _derive_omp_session_id(path: str) -> str:
     ``_parse_omp_line``; Claude Code lines carry their own sessionId field
     and ignore this."""
     return Path(path).stem
+
+
+def split_omp_context(input_tokens: int, prev_input_tokens: int) -> tuple[int, int]:
+    """Splits one omp ``usage.input`` reading into (fresh_input, cache_read).
+
+    omp (OpenAI-completions convention) reports the ENTIRE prompt — the full
+    conversation context — as ``usage.input`` on every call, with the cached
+    prefix as an unreported subset (``cacheRead`` stays 0 on local vLLM).
+    Claude Code, in contrast, reports the cached prefix as
+    ``cache_read_input_tokens`` and only the delta as ``input_tokens``.
+    Harvesting omp's number 1:1 made an omp worker look ~100x more expensive
+    than a Claude worker on the Insights page.
+
+    Session-sequence derivation (one JSONL file == one omp session, records
+    in file order):
+        fresh_input = max(0, input - input_prev)
+        cache_read  = min(input, input_prev)
+    The first message of a session (prev=0) is all fresh. A shrinking context
+    (compaction) yields fresh=0 / cache=input — never a negative delta.
+    """
+    fresh = max(0, input_tokens - prev_input_tokens)
+    cached = min(input_tokens, prev_input_tokens)
+    return fresh, cached
 
 
 def harvest_file(path: str, processed_lines: int = 0) -> list[dict[str, Any]]:
@@ -257,6 +286,11 @@ def harvest_file(path: str, processed_lines: int = 0) -> list[dict[str, Any]]:
     # Die Header-Position ist NICHT fix (real: `title`-Zeile zuerst, session
     # meist Zeile 2) → jede Zeile per Substring-Guard pruefen.
     header_cwd = ""
+    # omp usage.input is FULL CONTEXT per call (see split_omp_context) — the
+    # delta derivation needs the running previous reading across the whole
+    # session, INCLUDING lines before the offset-resume point (they set the
+    # baseline for the first emitted record).
+    omp_prev_input = 0
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             for i, line in enumerate(f):
@@ -272,13 +306,20 @@ def harvest_file(path: str, processed_lines: int = 0) -> list[dict[str, Any]]:
                             header_cwd = head.get("cwd") or ""
                     except (json.JSONDecodeError, ValueError):
                         pass
+                rec = parse_transcript_line(line, session_id=session_id)
+                if rec is None:
+                    continue
+                if rec.get("harness") == "omp":
+                    raw_input = rec["input_tokens"]
+                    fresh, cached = split_omp_context(raw_input, omp_prev_input)
+                    rec["input_tokens"] = fresh
+                    rec["cache_read_tokens"] = cached
+                    omp_prev_input = raw_input
                 if i < processed_lines:
                     continue
-                rec = parse_transcript_line(line, session_id=session_id)
-                if rec is not None:
-                    if not rec.get("cwd"):
-                        rec["cwd"] = header_cwd
-                    records.append(rec)
+                if not rec.get("cwd"):
+                    rec["cwd"] = header_cwd
+                records.append(rec)
     except OSError as e:
         logger.warning("harvest_file(%s): OS error: %s", path, e)
     return records
@@ -700,6 +741,7 @@ async def run_harvest(
     grok_log_path: str | None = None,
     grok_sessions_path: str | None = None,
     hermes_state_db_path: str | None = None,
+    heads_root: str | None = None,
 ) -> dict[str, int]:
     """Scans all JSONL files, parses assistant lines, and inserts events.
 
@@ -715,6 +757,7 @@ async def run_harvest(
       settings.grok_harvest_path / settings.grok_sessions_path, expanduser)
     - hermes_state_db_path: Hermes sqlite ledger (default:
       settings.hermes_state_db_path, expanduser)
+    - heads_root: head run folders (default: settings.heads_root)
 
     Returns:
         {"files_scanned": N, "new_events": M, "skipped_private": K,
@@ -745,6 +788,9 @@ async def run_harvest(
         hermes_state_db_path = _expand_harvest_path(
             getattr(app_settings, "hermes_state_db_path", "~/.hermes/state.db")
         )
+
+    if heads_root is None:
+        heads_root = str(getattr(app_settings, "heads_root", _host_home() / ".mc" / "heads"))
 
     if agent_slug_map is None:
         # Default: attribution from the agents table (slug = name-based)
@@ -885,6 +931,22 @@ async def run_harvest(
         await session.rollback()
         stats["source_errors"] += 1
 
+    # ── Head runs: <heads_root>/<run_id>/{omp-sessions,claude-config} ──────
+    try:
+        if Path(heads_root).is_dir():
+            await _harvest_heads(
+                session=session,
+                heads_root=Path(heads_root),
+                all_prices=all_prices,
+                state_map=state_map,
+                stats=stats,
+            )
+        await session.commit()
+    except Exception as e:
+        logger.error("run_harvest: heads source failed: %s", e)
+        await session.rollback()
+        stats["source_errors"] += 1
+
     logger.info(
         "run_harvest: files=%d new=%d skipped_private=%d backfilled_task_id=%d "
         "grok_skipped_no_summary=%d hermes_sessions_scanned=%d source_errors=%d",
@@ -910,12 +972,15 @@ async def _process_jsonl_file(
     stats: dict[str, int],
     task_workspace_map: dict[str, list[dict[str, Any]]] | None = None,
     cwd_translate_slug: str | None = None,
+    head: dict[str, Any] | None = None,
 ) -> None:
     """Processes a single JSONL file (offset resume, batch insert).
 
     cwd_translate_slug: agent slug for container→host cwd rewrite (agent
     paths only — is_boss_path lines already carry a host-native cwd and
     never get translated).
+    head: attribution of a head run ({task_id, head_run_id, locality}) —
+    taken as given; no cwd matching, no backfill.
     """
     stats["files_scanned"] += 1
 
@@ -963,6 +1028,8 @@ async def _process_jsonl_file(
     task_workspace_map = task_workspace_map or {}
 
     def _resolve_task_for_rec(rec: dict[str, Any], ts: datetime) -> Any | None:
+        if head is not None:
+            return head["task_id"]
         norm_cwd = _normalize_workspace_path(rec.get("cwd", ""))
         candidates = task_workspace_map.get(norm_cwd)
         if not candidates:
@@ -1019,6 +1086,8 @@ async def _process_jsonl_file(
             cost_usd=cost_usd,
             ts=ts,
             source_file=path,
+            head_run_id=head["head_run_id"] if head else None,
+            locality=head["locality"] if head else None,
         )
 
         # Idempotent insert: UNIQUE constraint as backstop (race condition
@@ -1060,6 +1129,105 @@ async def _process_jsonl_file(
     await _update_harvest_state(session, state_map, path, current_mtime, total_lines)
 
 
+_RUN_ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+_HEAD_TRANSCRIPT_GLOBS = {
+    # mc-head passes --session-dir <run>/omp-sessions (scripts/head/mc-head)
+    "omp": "omp-sessions/**/*.jsonl",
+    # mc-head sets CLAUDE_CONFIG_DIR=<run>/claude-config; subagents included
+    "claude": "claude-config/projects/**/*.jsonl",
+}
+
+
+def _read_head_spec(run_dir: Path) -> dict[str, Any] | None:
+    """spec.json of a head run, or None when it is missing or unreadable."""
+    try:
+        spec = json.loads((run_dir / "spec.json").read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(spec, dict) or spec.get("run_id") != run_dir.name:
+        return None
+    return spec
+
+
+async def _harvest_heads(
+    session: AsyncSession,
+    heads_root: Path,
+    all_prices: list[ModelPrice],
+    state_map: dict[str, ModelUsageHarvestState],
+    stats: dict[str, int],
+) -> None:
+    """Head runs (docs/specs/head-launcher.md) — one folder per run.
+
+    Attribution comes from spec.json, written by the backend before the
+    head starts: task_id (only if the task still exists — never a dangling
+    FK), head_run_id = the folder name, harness ``head-<harness>``, locality
+    from ``spec.locality`` or, for runs started before that field existed,
+    from the runtime row (same rule as the pair table). No agent: heads are
+    not persistent agents. Only the two transcript folders mc-head gives a
+    head are read — they sit under ``<heads_root>``, which no other source
+    scans, and message_uuid stays the dedup backstop.
+    """
+    from app.models.runtime import Runtime
+    from app.models.task import Task
+    from app.services.heads.pairs import is_local
+
+    runs: list[tuple[Path, dict[str, Any]]] = []
+    for run_dir in sorted(heads_root.iterdir()):
+        if not _RUN_ID_RE.match(run_dir.name) or not run_dir.is_dir():
+            continue
+        spec = _read_head_spec(run_dir)
+        if spec is None or spec.get("harness") not in _HEAD_TRANSCRIPT_GLOBS:
+            continue
+        runs.append((run_dir, spec))
+    if not runs:
+        return
+
+    task_ids: set[uuid.UUID] = set()
+    for _, spec in runs:
+        try:
+            task_ids.add(uuid.UUID(str(spec.get("task_id"))))
+        except ValueError:
+            pass
+    existing_tasks: set[uuid.UUID] = set()
+    if task_ids:
+        result = await session.exec(select(Task.id).where(Task.id.in_(task_ids)))
+        existing_tasks = set(result.all())
+
+    runtime_locality: dict[str, str] = {}
+    slugs = {s.get("runtime_slug") for _, s in runs if s.get("locality") not in ("local", "cloud")}
+    slugs.discard(None)
+    if slugs:
+        result = await session.exec(select(Runtime).where(Runtime.slug.in_(slugs)))
+        runtime_locality = {rt.slug: ("local" if is_local(rt) else "cloud") for rt in result.all()}
+
+    for run_dir, spec in runs:
+        try:
+            task_id = uuid.UUID(str(spec.get("task_id")))
+        except ValueError:
+            task_id = None
+        locality = spec.get("locality")
+        if locality not in ("local", "cloud"):
+            locality = runtime_locality.get(spec.get("runtime_slug"))
+        head = {
+            "task_id": task_id if task_id in existing_tasks else None,
+            "head_run_id": run_dir.name,
+            "locality": locality,
+        }
+        harness = f"head-{spec['harness']}"
+        for jsonl_path in sorted(run_dir.glob(_HEAD_TRANSCRIPT_GLOBS[spec["harness"]])):
+            await _process_jsonl_file(
+                session=session,
+                path=str(jsonl_path),
+                agent_id=None,
+                harness=harness,
+                is_boss_path=False,
+                all_prices=all_prices,
+                state_map=state_map,
+                stats=stats,
+                head=head,
+            )
+
+
 async def _update_harvest_state(
     session: AsyncSession,
     state_map: dict[str, ModelUsageHarvestState],
@@ -1094,6 +1262,88 @@ def _count_lines(path: str) -> int:
             return sum(1 for _ in f)
     except OSError:
         return 0
+
+
+async def backfill_omp_token_deltas(
+    session: AsyncSession,
+    *,
+    agent_base_paths: list[str] | None = None,
+    all_prices: list[ModelPrice] | None = None,
+    commit: bool = True,
+) -> dict[str, int]:
+    """One-time correction pass for omp events harvested with FULL-CONTEXT
+    ``usage.input`` values (pre split_omp_context data).
+
+    Re-derives fresh_input/cache_read per omp session from the JSONL source
+    files (the source of truth — same derivation as harvest_file) and UPDATEs
+    the matching model_usage_events rows, including a cost_usd recompute from
+    the corrected token counts.
+
+    Idempotent: the derived values are a pure function of the file contents,
+    so a second run finds every row already correct and corrects 0 events.
+    Only omp sessions (``*/omp-sessions/**/*.jsonl`` under the agent base
+    paths) are touched — Claude/Grok/Hermes events are never rewritten.
+    """
+    from app.config import settings as app_settings
+
+    if agent_base_paths is None:
+        harvest_paths = getattr(app_settings, "token_harvest_paths", ["~/.mc/agents"])
+        agent_base_paths = [_expand_harvest_path(p) for p in harvest_paths]
+    if all_prices is None:
+        prices_result = await session.exec(select(ModelPrice))
+        all_prices = list(prices_result.all())
+
+    stats = {"files_scanned": 0, "events_matched": 0, "events_corrected": 0}
+    for base_str in agent_base_paths:
+        base = Path(base_str)
+        if not base.exists():
+            continue
+        for jsonl_path in sorted(base.glob("*/omp-sessions/**/*.jsonl")):
+            stats["files_scanned"] += 1
+            for rec in harvest_file(str(jsonl_path), 0):
+                row_result = await session.exec(
+                    select(
+                        ModelUsageEvent.id,
+                        ModelUsageEvent.input_tokens,
+                        ModelUsageEvent.cache_read_tokens,
+                        ModelUsageEvent.output_tokens,
+                        ModelUsageEvent.cache_write_tokens,
+                        ModelUsageEvent.model,
+                        ModelUsageEvent.ts,
+                    ).where(ModelUsageEvent.message_uuid == rec["uuid"])
+                )
+                row = row_result.first()
+                if row is None:
+                    continue
+                stats["events_matched"] += 1
+                event_id, cur_in, cur_cache, out, cache_w, model, ts = row
+                if cur_in == rec["input_tokens"] and cur_cache == rec["cache_read_tokens"]:
+                    continue  # already correct → idempotent no-op
+                price_info = match_price(model, ts, all_prices)
+                cost_usd = (
+                    _compute_cost_usd(
+                        price_info,
+                        rec["input_tokens"],
+                        out,
+                        rec["cache_read_tokens"],
+                        cache_w,
+                    )
+                    if price_info is not None
+                    else None
+                )
+                await session.exec(
+                    update(ModelUsageEvent)
+                    .where(ModelUsageEvent.id == event_id)
+                    .values(
+                        input_tokens=rec["input_tokens"],
+                        cache_read_tokens=rec["cache_read_tokens"],
+                        cost_usd=cost_usd,
+                    )
+                )
+                stats["events_corrected"] += 1
+    if commit:
+        await session.commit()
+    return stats
 
 
 async def _process_grok_file(

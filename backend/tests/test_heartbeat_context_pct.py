@@ -127,3 +127,46 @@ async def test_agent_heartbeat_validates_context_pct_is_0_to_100_range(client: A
         headers={"Authorization": f"Bearer {token}"},
     )
     assert resp_full.status_code == 200
+
+
+# ── "kein Wert" statt "alter Wert" (10.09.2026) ─────────────────────────────
+
+@pytest.mark.asyncio
+async def test_heartbeat_without_context_three_times_marks_unknown(client: AsyncClient, fake_redis):
+    """Three heartbeats without context_pct → context_tokens becomes NULL
+    (unknown) instead of keeping a stale value forever."""
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        agent, token = await _create_agent(s, context_max=200_000)
+        agent.context_tokens = 200_000  # the stale "100 %" of the incident
+        s.add(agent)
+        await s.commit()
+    from app.routers.agents import CONTEXT_UNKNOWN_AFTER_MISSES
+    for i in range(CONTEXT_UNKNOWN_AFTER_MISSES):
+        resp = await client.post(
+            "/api/v1/agent/me/heartbeat", json={"status": "idle"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, resp.text
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            from app.models.agent import Agent
+            row = await s.get(Agent, agent.id)
+            if i < CONTEXT_UNKNOWN_AFTER_MISSES - 1:
+                assert row.context_tokens == 200_000, "one or two misses are tolerated"
+            else:
+                assert row.context_tokens is None, "third miss → unknown"
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_with_context_resets_miss_counter(client: AsyncClient, fake_redis):
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        agent, token = await _create_agent(s, context_max=200_000)
+    h = {"Authorization": f"Bearer {token}"}
+    await client.post("/api/v1/agent/me/heartbeat", json={"status": "idle"}, headers=h)
+    await client.post("/api/v1/agent/me/heartbeat", json={"status": "idle"}, headers=h)
+    await client.post("/api/v1/agent/me/heartbeat", json={"status": "idle", "context_pct": 35}, headers=h)
+    await client.post("/api/v1/agent/me/heartbeat", json={"status": "idle"}, headers=h)
+    await client.post("/api/v1/agent/me/heartbeat", json={"status": "idle"}, headers=h)
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        from app.models.agent import Agent
+        row = await s.get(Agent, agent.id)
+        assert row.context_tokens == 70_000, "a fresh value resets the miss counter"

@@ -126,13 +126,8 @@ vi.mock("@/components/chat/ChatView", () => ({
 import SessionsPage from "../page";
 import { C } from "@/lib/colors";
 
-/** Token value as jsdom reports it — derived from the single source in
- *  lib/colors.ts, so a palette change never breaks this assertion. */
-function rgbOf(hex: string): string {
-  const h = hex.replace("#", "");
-  const n = parseInt(h, 16);
-  return `rgb(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255})`;
-}
+// Tokens are CSS variables (ADR-087): jsdom keeps the specified inline value,
+// so assertions compare against the token from lib/colors.ts directly.
 
 function mkAgent(
   overrides: Partial<Agent> & {
@@ -152,6 +147,7 @@ function mkAgent(
     board_id: null,
     name: "Agent One",
     role: null,
+    role_canonical: null,
     emoji: null,
     status: "idle",
     model: null,
@@ -455,6 +451,22 @@ describe("SessionsPage — center view (Chat/Terminal) wiring and hasTranscript 
     );
   });
 
+  // Ein Agent mit `headless_chat` faehrt ueber ACP und schreibt in dieselbe
+  // omp-Transkript-Ablage (Spec docs/specs/chat-over-acp.md) — der Chat ist
+  // dort die EINZIGE Oberflaeche. Faengt ihn die Host-Regel als
+  // „kein Transkript" ab, steht er stumm im Terminal, das nichts faehrt.
+  it("passes hasTranscript=true for a headless (ACP) host agent", async () => {
+    vi.spyOn(api.agents, "listDockerSessions").mockResolvedValue([]);
+    vi.spyOn(api.agents, "listHostSessions").mockResolvedValue([
+      mkAgent({ id: "agent-1", name: "acp-one", agent_runtime: "host", slug: "acp-one", headless_chat: true }),
+    ]);
+    renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("chat-view-has-transcript")).toHaveTextContent("true")
+    );
+  });
+
   it("passes hasTranscript=true for the Boss host agent", async () => {
     vi.spyOn(api.agents, "listDockerSessions").mockResolvedValue([]);
     vi.spyOn(api.agents, "listHostSessions").mockResolvedValue([
@@ -652,14 +664,15 @@ describe("SessionsPage — islands sit a step above the page ground", () => {
     vi.restoreAllMocks();
   });
 
-  const BG_SURFACE = rgbOf(C.bgSurface);
+  const BG_SURFACE = C.bgSurface;
 
   it("lifts the chat island above a ground it does NOT paint itself", async () => {
     renderPage();
     await screen.findAllByText("Agent One");
 
     const chat = screen.getByTestId("chat-column");
-    expect(chat.style.backgroundColor).toBe(BG_SURFACE);
+    // jsdom keeps a var() only in the shorthand it was written in.
+    expect(chat.style.background).toBe(BG_SURFACE);
 
     // Operator-Befund 18.08.2026: der Seiten-Grund darf keine eigene deckende
     // Flaeche malen. Tat er es (bgDeep), uebermalte er den App-Hintergrund samt
@@ -682,7 +695,7 @@ describe("SessionsPage — islands sit a step above the page ground", () => {
     await user.click(
       within(screen.getByTestId("session-list-mobile")).getByRole("option", { name: /Agent One/ })
     );
-    expect(screen.getByTestId("chat-column").style.backgroundColor).toBe(BG_SURFACE);
+    expect(screen.getByTestId("chat-column").style.background).toBe(BG_SURFACE);
   });
 });
 

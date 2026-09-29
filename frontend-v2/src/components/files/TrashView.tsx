@@ -8,7 +8,7 @@ import { motion } from "framer-motion";
 import { Loader2, Trash2, RotateCcw, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import type { TrashEntry } from "@/lib/types";
 import { timeAgo } from "@/lib/utils";
 import { fileIcon, fileIconColor, humanSize } from "./fileUtils";
@@ -145,8 +145,8 @@ export function TrashView() {
         <button
           onClick={() => setPurgeOpen(true)}
           className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer"
-          style={{ color: STATUS_TEXT.error, border: `1px solid ${C.error}4D` }}
-          onMouseEnter={(e) => { e.currentTarget.style.background = `${C.error}1F`; }}
+          style={{ color: STATUS_TEXT.error, border: `1px solid ${alpha(C.error, 0.3)}` }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = alpha(C.error, 0.12); }}
           onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
         >
           <Trash2 size={15} />
@@ -233,7 +233,7 @@ export function TrashView() {
           style={{
             background: C.bgElevated,
             border: `1px solid ${C.border}`,
-            boxShadow: "0 8px 28px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
+            boxShadow: `0 8px 28px ${alpha(C.shadow, 0.5)}, 0 1px 2px ${alpha(C.shadow, 0.3)}`,
           }}
         >
           <span className="px-2 text-sm tabular-nums whitespace-nowrap" style={{ color: C.textSecondary }}>

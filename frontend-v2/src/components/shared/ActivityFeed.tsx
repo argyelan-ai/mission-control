@@ -55,7 +55,7 @@ const statusColors: Record<string, string> = {
   online: C.online,
   offline: STATUS.offline,
   error: C.error,
-  busy: STATUS.busy,          // #5890CA — busy = active work = info state
+  busy: STATUS.busy,          // status-info — busy = active work = info state
 };
 
 function getStatusForEvent(eventType: string): StatusType {

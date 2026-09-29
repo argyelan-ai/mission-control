@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
+import { useEscapeKey } from "@/hooks/useEscapeKey";
 
+import { C, alpha } from "@/lib/colors";
 interface ResponsiveModalProps {
   open: boolean;
   onClose: () => void;
@@ -12,6 +13,12 @@ interface ResponsiveModalProps {
   className?: string;
   "aria-label"?: string;
   "aria-labelledby"?: string;
+  /**
+   * Close on a click next to the dialog (default true). Form dialogs pass
+   * false so a stray click cannot discard what the operator typed; Esc and
+   * the dialog's own Close/Cancel still work.
+   */
+  dismissOnOutside?: boolean;
 }
 
 /**
@@ -26,6 +33,7 @@ export function ResponsiveModal({
   className,
   "aria-label": ariaLabel,
   "aria-labelledby": ariaLabelledBy,
+  dismissOnOutside = true,
 }: ResponsiveModalProps) {
   const prefersReducedMotion = useReducedMotion();
 
@@ -33,14 +41,7 @@ export function ResponsiveModal({
   useBodyScrollLock(open);
 
   // Esc closes (panel register rule 4) — same pattern as ConfirmDialog.
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [open, onClose]);
+  useEscapeKey(onClose, open);
 
   return (
     <AnimatePresence>
@@ -52,12 +53,16 @@ export function ResponsiveModal({
           transition={{ duration: prefersReducedMotion ? 0 : 0.15 }}
           className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4"
           style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
-          onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
         >
-          {/* Backdrop */}
+          {/* Backdrop — it covers the wrapper, so it is the click target for
+              "click outside" (a target===currentTarget check on the wrapper
+              never fired). */}
           <div
+            data-testid="responsive-modal-backdrop"
+            aria-hidden
+            onClick={dismissOnOutside ? onClose : undefined}
             className="absolute inset-0"
-            style={{ backgroundColor: "rgba(2,4,8,0.7)" }}
+            style={{ backgroundColor: alpha(C.scrim, 0.7) }}
           />
 
           {/* Panel */}
@@ -81,7 +86,7 @@ export function ResponsiveModal({
             style={{
               backgroundColor: "var(--color-bg-elevated)",
               border: "1px solid var(--color-border)",
-              boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
+              boxShadow: `0 4px 24px ${alpha(C.shadow, 0.5)}, 0 1px 2px ${alpha(C.shadow, 0.3)}`,
             }}
           >
             {/* Akzent-Kante oben — Signatur-Markierung */}

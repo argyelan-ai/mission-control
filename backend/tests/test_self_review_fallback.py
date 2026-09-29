@@ -171,3 +171,78 @@ async def test_board_lead_can_still_self_review(make_board, make_agent, make_tas
             task = await s.get(Task, task_obj.id)
             assert task.status in ("done", "user_test"), \
                 f"Board Lead Approve sollte done/user_test ergeben, ist {task.status}"
+
+
+# ── Test 4: PR #584 review W2 — Workspace-Setup-Fehler bei der ──────
+# Board-Lead-Eskalation darf nicht als "eskaliert" geloggt/emittiert
+# werden, wenn task_context_builder den Task real auf blocked +
+# unassigned gesetzt hat.
+
+
+@pytest.mark.asyncio
+async def test_self_review_escalation_does_not_claim_success_when_workspace_setup_fails(
+    make_board, make_agent, make_task,
+):
+    """Vorher: `prepare_agent_workspace_for_task`s Rueckgabewert wurde
+    ignoriert — ein Fehlschlag dort setzt intern bereits status=blocked +
+    terminal-unassign, aber `logger.info`/`emit_event` liefen trotzdem und
+    behaupteten eine erfolgreiche Eskalation an den Board Lead. Jetzt muss
+    der Fehlschlag VOR diesen beiden Zeilen abbrechen."""
+    board = await make_board(name="Escalation-Fail Board", slug="escalation-fail-board")
+    rex = await make_agent(name="Rex2", role="reviewer", board_id=board.id)
+    henry = await make_agent(name="Henry2", is_board_lead=True, board_id=board.id)
+    task_obj = await make_task(
+        board_id=board.id, title="Fact-Check mit kaputtem Workspace-Setup",
+        status="review",
+        assigned_agent_id=rex.id,
+    )
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        event = TaskEvent(
+            id=uuid.uuid4(),
+            task_id=task_obj.id,
+            from_status="inbox",
+            to_status="in_progress",
+            changed_by="agent",
+            agent_id=rex.id,
+            created_at=datetime.utcnow(),
+        )
+        s.add(event)
+        await s.commit()
+
+    with (
+        patch("app.services.activity.broadcast", new_callable=AsyncMock),
+        patch("app.services.operations.get_system_mode", new_callable=AsyncMock, return_value="active"),
+        patch(
+            "app.services.task_context_builder.prepare_agent_workspace_for_task",
+            new_callable=AsyncMock, return_value=False,
+        ),
+        patch(
+            "app.services.task_lifecycle.emit_event", new_callable=AsyncMock,
+        ) as mock_emit,
+        patch(
+            "app.services.task_lifecycle.logger",
+        ) as mock_logger,
+    ):
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            task = await s.get(Task, task_obj.id)
+            rex_agent = await s.get(Agent, rex.id)
+
+            from app.services.task_lifecycle import execute_review_decision
+            await execute_review_decision(
+                session=s,
+                task=task,
+                board_id=board.id,
+                decision="approve",
+                comment_text="Alles OK",
+                actor_agent=rex_agent,
+            )
+
+    assert not any(
+        call.args and call.args[0] == "review.self_review_escalated"
+        for call in mock_emit.await_args_list
+    ), "muss KEIN self_review_escalated Event emittieren, wenn das Workspace-Setup fehlschlug"
+    assert not any(
+        "eskaliert an Board Lead" in str(call.args)
+        for call in mock_logger.info.call_args_list
+    ), "darf keinen Erfolgs-Log schreiben, wenn die Eskalation real fehlgeschlagen ist"

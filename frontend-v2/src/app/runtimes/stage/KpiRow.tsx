@@ -16,6 +16,9 @@ export interface KpiCell {
   label: string;
   /** Wenn gesetzt, wird die Zelle als Copy-Zeile gerendert (Endpoint). */
   copyValue?: string;
+  /** Tooltip der ganzen Zelle (z.B. "In use": wer die Box gerade nutzt). */
+  title?: string;
+  testId?: string;
 }
 
 function Cell({ cell }: { cell: KpiCell }) {
@@ -38,6 +41,8 @@ function Cell({ cell }: { cell: KpiCell }) {
       // lives entirely in `.stage-kpi > div` (globals.css), which the
       // 2-/4-column nth-child rules can actually override.
       style={{ borderBottom: `1px solid ${C.borderSubtle}` }}
+      title={cell.title}
+      data-testid={cell.testId}
     >
       {cell.copyValue ? (
         <button

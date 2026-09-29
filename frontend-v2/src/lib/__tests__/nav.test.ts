@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { existsSync } from "node:fs";
+import path from "node:path";
 import {
   NAV_ITEMS,
   NAV_TREE,
@@ -33,6 +35,16 @@ describe("nav model", () => {
 
   it("still lists chrome-level destinations in the flat model, so search finds them", () => {
     for (const href of CHROME_ITEMS) expect(navItem(href)).toBeDefined();
+  });
+
+  it("links only to pages that exist in this repository", () => {
+    // A stripped vertical once left /news and /content in the nav while
+    // their pages were never part of the repo — dead links on every install.
+    const appDir = path.resolve(__dirname, "../../app");
+    for (const item of NAV_ITEMS) {
+      const page = path.join(appDir, item.href, "page.tsx");
+      expect(existsSync(page), `${item.href} has no page`).toBe(true);
+    }
   });
 
   it("has no group child that is missing from the flat list", () => {

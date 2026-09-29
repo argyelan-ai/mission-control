@@ -7,12 +7,23 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal, Power, Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
-import { C, STATUS_TEXT, XTERM_THEME } from "@/lib/colors";
+import { C, STATUS_TEXT, XTERM_THEME, alpha } from "@/lib/colors";
 import { TERM_MIN_CONTRAST, TERM_FONT_FAMILY } from "@/lib/terminalScale";
 import "@xterm/xterm/css/xterm.css";
 import { EntityIcon } from "@/components/shared/EntityIcon";
+import { AdminOnlyNotice } from "@/components/shared/AdminOnlyNotice";
+import { useIsAdmin } from "@/hooks/useIsAdmin";
 
+/** The plugin shell is a shell on the host — admin-only (the backend
+ *  answers 403 / closes the socket with 4003 for everyone else). */
 export function PluginsShellTab() {
+  const t = useTranslations("skills.shell");
+  const isAdmin = useIsAdmin();
+  if (!isAdmin) return <AdminOnlyNotice message={t("adminOnly")} />;
+  return <PluginsShellTabInner />;
+}
+
+function PluginsShellTabInner() {
   const t = useTranslations("skills.shell");
   const termRef = useRef<HTMLDivElement>(null);
   const termInstance = useRef<XTerm | null>(null);
@@ -21,11 +32,10 @@ export function PluginsShellTab() {
   const [connected, setConnected] = useState(false);
   const [starting, setStarting] = useState(false);
 
-  const connectWs = useCallback(() => {
+  const openWs = useCallback((url: string) => {
     if (!termInstance.current) return;
     const term = termInstance.current;
 
-    const url = api.plugins.shellWsUrl();
     const ws = new WebSocket(url);
     ws.binaryType = "arraybuffer";
     wsRef.current = ws;
@@ -62,12 +72,14 @@ export function PluginsShellTab() {
       if (ws.readyState === WebSocket.OPEN) ws.send(data);
     });
 
-    return () => {
-      dataDisposable.dispose();
-      ws.close(1000);
-      wsRef.current = null;
-    };
+    ws.addEventListener("close", () => dataDisposable.dispose());
   }, []);
+
+  // Fetches a single-use stream ticket first — the login token never goes
+  // into the WebSocket URL (it leaked into proxy logs).
+  const connectWs = useCallback(() => {
+    api.plugins.shellWsUrl().then(openWs, () => setConnected(false));
+  }, [openWs]);
 
   // Initialize xterm.js
   useEffect(() => {
@@ -112,20 +124,9 @@ export function PluginsShellTab() {
     };
   }, []);
 
-  // Auto-reconnect: check if plugins-shell tmux session already exists on mount
-  const autoConnectDone = useRef(false);
-  useEffect(() => {
-    if (autoConnectDone.current || !termInstance.current) return;
-    autoConnectDone.current = true;
-    // startShell is idempotent — returns ok:true if already running
-    api.plugins.startShell().then((res) => {
-      if (res?.ok) {
-        setTimeout(() => connectWs(), 300);
-      }
-    }).catch(() => {
-      // Bridge not reachable — ignore, user can click "Shell starten"
-    });
-  }, [connectWs]);
+  // No auto-start on mount: merely opening the tab must not start a shell.
+  // "Start installer" is idempotent on the bridge — if a session is already
+  // running it re-attaches to it instead of creating a second one.
 
   // Start shell + connect
   const startShell = useMutation({
@@ -173,7 +174,7 @@ export function PluginsShellTab() {
           {connected && (
             <span
               className="text-[10px] px-1.5 py-0.5 rounded-sm"
-              style={{ background: `${C.online}1A`, color: C.online }}
+              style={{ background: alpha(C.online, 0.1), color: C.online }}
             >
               {t("connected")}
             </span>
@@ -195,9 +196,9 @@ export function PluginsShellTab() {
               onClick={handleStop}
               className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg cursor-pointer transition-colors"
               style={{
-                backgroundColor: `${C.error}1A`,
+                backgroundColor: alpha(C.error, 0.1),
                 color: C.error,
-                border: `1px solid ${C.error}33`,
+                border: `1px solid ${alpha(C.error, 0.2)}`,
               }}
             >
               <Power size={12} />
@@ -217,13 +218,15 @@ export function PluginsShellTab() {
             color: "var(--color-text-muted)",
           }}
         >
+          {t("startInstallerHint")}
+          <br />
           {t("helpText")}
           <br />
           <code className="text-[11px] mt-1 inline-block" style={{ color: STATUS_TEXT.info }}>
             {t("helpExample")}
           </code>
           <br />
-          <span className="text-[10px] mt-1 inline-block" style={{ color: "var(--color-text-muted)", opacity: 0.7 }}>
+          <span className="text-[10px] mt-1 inline-block" style={{ color: "var(--color-text-dim)" }}>
             {t("helpDelegation")} <code>mc delegate --to Installer ...</code>
           </span>
         </div>

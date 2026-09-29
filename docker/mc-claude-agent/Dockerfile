@@ -134,15 +134,16 @@ RUN mkdir -p /home/agent/.ssh \
 # claude-code talkt direkt zur Anthropic API. Kein Ollama-Plugin — claude-code
 # hat eingebaute web_search + web_fetch über die native Tools.
 
-# Poll-Loop + Entrypoint + Claude-Launcher + Recycler + recycler-lib + lib/
+# Poll-Loop + Entrypoint + sigforward + Claude-Launcher + Recycler + recycler-lib + lib/
 COPY --chown=agent:agent poll.sh /home/agent/poll.sh
 COPY --chown=agent:agent entrypoint.sh /home/agent/entrypoint.sh
+COPY --chown=agent:agent sigforward.sh /home/agent/sigforward.sh
 COPY --chown=agent:agent start-claude.sh /home/agent/start-claude.sh
 COPY --chown=agent:agent recycler-lib.sh /home/agent/recycler-lib.sh
 COPY --chown=agent:agent recycler.sh /home/agent/recycler.sh
 COPY --chown=agent:agent lib /home/agent/lib
 RUN chmod +x /home/agent/poll.sh /home/agent/entrypoint.sh \
-      /home/agent/start-claude.sh /home/agent/recycler.sh \
+      /home/agent/sigforward.sh /home/agent/start-claude.sh /home/agent/recycler.sh \
       /home/agent/recycler-lib.sh /home/agent/lib/*.sh
 
 # `mc` CLI — thin Python client for the agent-scoped API. Populated by

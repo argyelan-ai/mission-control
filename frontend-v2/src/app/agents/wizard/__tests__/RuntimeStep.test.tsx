@@ -45,7 +45,9 @@ vi.mock("@/lib/api", () => ({
 import { api } from "@/lib/api";
 
 function wrap(ui: React.ReactNode) {
-  const qc = new QueryClient();
+  // retry:false — the failure-surface tests below assert isError rendering;
+  // the default retry loop (3x, exponential backoff) would only slow them.
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
 }
 
@@ -222,5 +224,42 @@ describe("RuntimeStep", () => {
     expect(vllm.disabled).toBe(true);
     const grok = screen.getByText("Grok Build (xAI Cloud)").closest("button") as HTMLButtonElement;
     expect(grok.disabled).toBe(true);
+  });
+
+  // ── Query failures surface instead of rendering as a silent empty UI ──────
+  // Regression guard for the "harness selector missing, runtime list empty"
+  // incident: a failed matrix or runtimes query used to degrade to the `?? []`
+  // fallbacks with NO error state, so the step looked normal while both
+  // controls were gone — and the wizard still allowed creating an agent with
+  // no harness and no runtime binding (unfixable after creation).
+
+  it("shows a retryable error when the compat matrix query fails", async () => {
+    vi.mocked(api.runtimes.compatMatrix).mockRejectedValueOnce(new Error("502"));
+    wrap(<RuntimeStep state={initialWizardState(null)} update={() => {}} boards={[]} goNext={() => {}} goBack={() => {}} />);
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Harness list could not be loaded");
+    const callsBefore = vi.mocked(api.runtimes.compatMatrix).mock.calls.length;
+    fireEvent.click(screen.getByText("Retry"));
+    await waitFor(() =>
+      expect(vi.mocked(api.runtimes.compatMatrix).mock.calls.length).toBeGreaterThan(callsBefore),
+    );
+  });
+
+  it("shows a retryable error when the runtimes query fails", async () => {
+    vi.mocked(api.runtimes.list).mockRejectedValueOnce(new Error("502"));
+    wrap(<RuntimeStep state={initialWizardState(null)} update={() => {}} boards={[]} goNext={() => {}} goBack={() => {}} />);
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Provider list could not be loaded");
+    const callsBefore = vi.mocked(api.runtimes.list).mock.calls.length;
+    fireEvent.click(screen.getByText("Retry"));
+    await waitFor(() =>
+      expect(vi.mocked(api.runtimes.list).mock.calls.length).toBeGreaterThan(callsBefore),
+    );
+  });
+
+  it("does not show error banners when both queries succeed", async () => {
+    wrap(<RuntimeStep state={initialWizardState(null)} update={() => {}} boards={[]} goNext={() => {}} goBack={() => {}} />);
+    await waitFor(() => screen.getByText("OpenClaude"));
+    expect(screen.queryAllByRole("alert")).toHaveLength(0);
   });
 });

@@ -22,6 +22,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { HostRecipeSwitcher, groupHostRecipes } from "../HostRecipeSwitcher";
 import { api } from "@/lib/api";
 import type { HostRecipe } from "@/lib/types";
+import { C } from "@/lib/colors";
 
 function makeRecipe(over: Partial<HostRecipe> & { slug: string }): HostRecipe {
   return {
@@ -222,13 +223,13 @@ describe("HostRecipeSwitcher", () => {
   it("primary renders an accent-filled button instead of the quiet register row", async () => {
     renderWithQuery(<HostRecipeSwitcher hostId="box-a" label="Start model" primary />);
     const trigger = await screen.findByTestId("recipe-dropdown-trigger");
-    expect(trigger.style.background).toBe("rgb(235, 232, 222)");
+    expect(trigger.style.background).toBe(C.accent);
   });
 
   it("without label/primary the trigger keeps its previous look (no regression)", async () => {
     renderWithQuery(<HostRecipeSwitcher hostId="box-a" servingName="Engine X" />);
     const trigger = await screen.findByTestId("recipe-dropdown-trigger");
     expect(trigger).toHaveTextContent("Engine X");
-    expect(trigger.style.background).toBe("rgb(38, 38, 38)");
+    expect(trigger.style.background).toBe(C.bgSurface);
   });
 });

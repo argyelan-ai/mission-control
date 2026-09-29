@@ -15,9 +15,13 @@
 FROM zenika/alpine-chrome:latest
 
 USER root
-RUN apk add --no-cache socat
+# websocat: does the WS leg of the healthcheck (see healthcheck.sh) — a real
+# CDP roundtrip, not just the HTTP /json/version probe that missed the
+# 2026-09-13 wedged-socket incident.
+RUN apk add --no-cache socat websocat
 COPY entrypoint.sh /usr/local/bin/cdp-entrypoint.sh
-RUN chmod +x /usr/local/bin/cdp-entrypoint.sh
+COPY healthcheck.sh /usr/local/bin/cdp-healthcheck.sh
+RUN chmod +x /usr/local/bin/cdp-entrypoint.sh /usr/local/bin/cdp-healthcheck.sh
 USER chrome
 
 ENTRYPOINT ["/usr/local/bin/cdp-entrypoint.sh"]
