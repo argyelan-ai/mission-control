@@ -98,7 +98,15 @@
         "port": "der Test-Port war belegt",
         "timeout": "Zeitlimit erreicht"
       },
-      "ago": "vor {age}"
+      "ago": "vor {age}",
+      "names": {
+        "J-job-to-merge": "Auftrag bis Merge",
+        "J-phone-needs-you": "Am Handy antworten",
+        "J-runtime-switch": "Runtime wechseln",
+        "J-setup": "Einrichten",
+        "J-vault": "Wissen finden",
+        "J-usage": "Kosten & lokal"
+      }
     }
   },
   "tasks": {

@@ -106,7 +106,10 @@ gui/$(id -u)/com.mc.journeys`, then remove the runner and the plist.
 (`GET /api/v1/system/journeys`, read from `last.json` through the `~/.mc`
 mount): "Journey tests: 3 of 3 passed, 1 known gap · 5 h ago", or which
 journeys failed, or why the run was skipped. Nothing shows before the first
-run. Next step: on-demand runs for a PR head with the result as a GitHub
+run. A red line names the failed journeys by their short human name
+(`home.journeys.names.<id>` in the i18n files, one per journey in
+`landkarte.yaml` — a test enforces that; an id without a name shows as the
+id). Next step: on-demand runs for a PR head with the result as a GitHub
 commit status.
 
 ## Known gaps pinned by a test

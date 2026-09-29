@@ -98,7 +98,15 @@
         "port": "the test port was busy",
         "timeout": "time limit reached"
       },
-      "ago": "{age} ago"
+      "ago": "{age} ago",
+      "names": {
+        "J-job-to-merge": "Job to merge",
+        "J-phone-needs-you": "Answer from phone",
+        "J-runtime-switch": "Switch runtime",
+        "J-setup": "Setup",
+        "J-vault": "Find knowledge",
+        "J-usage": "Cost & local share"
+      }
     }
   },
   "tasks": {

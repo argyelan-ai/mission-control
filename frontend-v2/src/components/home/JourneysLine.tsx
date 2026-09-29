@@ -4,7 +4,7 @@
  * Home → one quiet line with last night's journey tests (E6, docs/journeys.md).
  *
  *   ✓ Journey tests: 3 of 3 passed, 1 known gap · 5 h 12 min ago
- *   ✕ Journey tests: J-usage failed · 5 h 12 min ago
+ *   ✕ Journey tests: Cost & local share failed · 5 h 12 min ago
  *
  * Only the icon carries a status colour, and only when the run failed or did
  * not finish. Renders nothing until a run has written a result.
@@ -43,7 +43,9 @@ export function JourneysLineView({ result }: { result: JourneysResult }) {
     text = t("green", { passed: result.passed, total: result.total });
     if (result.known_gaps > 0) text += `, ${t("gaps", { count: result.known_gaps })}`;
   } else if (result.status === "red") {
-    const names = result.failed.join(", ");
+    // Human names from i18n (home.journeys.names.<id>) — the one source; an
+    // id without a name yet falls back to the id itself.
+    const names = result.failed.map((id) => (t.has(`names.${id}`) ? t(`names.${id}`) : id)).join(", ");
     text = names ? t("red", { names }) : t("redUnnamed", { failed: result.total - result.passed, total: result.total });
     Icon = XCircle;
     iconColor = STATUS_TEXT.error;

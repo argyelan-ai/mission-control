@@ -3,6 +3,10 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import en from "../../../../messages/en.json";
+import de from "../../../../messages/de.json";
 import { api } from "@/lib/api";
 import { journeysReason, type JourneysResult } from "@/lib/journeys";
 import { JourneysLine, JourneysLineView } from "../JourneysLine";
@@ -45,8 +49,14 @@ describe("JourneysLineView", () => {
 
   it("red names the failed journeys", () => {
     wrap(<JourneysLineView result={mk({ status: "red", passed: 1, failed: ["J-phone-needs-you", "J-usage"] })} />);
-    expect(line()).toHaveTextContent("Journey tests: J-phone-needs-you, J-usage failed · 5 h ago");
+    expect(line()).toHaveTextContent("Journey tests: Answer from phone, Cost & local share failed · 5 h ago");
+    expect(line()).not.toHaveTextContent("J-usage");
     expect(line()).toHaveAttribute("data-status", "red");
+  });
+
+  it("red falls back to the id for a journey without a name yet", () => {
+    wrap(<JourneysLineView result={mk({ status: "red", passed: 2, failed: ["J-brand-new"] })} />);
+    expect(line()).toHaveTextContent("Journey tests: J-brand-new failed");
   });
 
   it("skipped and error translate the runner reason, never show it raw", () => {
@@ -59,6 +69,17 @@ describe("JourneysLineView", () => {
     wrap(<JourneysLineView result={mk({ status: "error", total: 0, passed: 0, reason: "aborted (exit 128)" })} />);
     expect(line()).toHaveTextContent("Journey tests did not finish");
     expect(line()).not.toHaveTextContent("exit 128");
+  });
+});
+
+describe("journey names", () => {
+  it("every journey in the product map has a name in EN and DE", () => {
+    const map = readFileSync(resolve(process.cwd(), "../docs/produkt/landkarte.yaml"), "utf8");
+    const ids = [...map.matchAll(/^\s*- id: (J-[a-z0-9-]+)/gm)].map((m) => m[1]);
+    expect(ids.length).toBeGreaterThan(0);
+    for (const names of [en.home.journeys.names, de.home.journeys.names]) {
+      expect(Object.keys(names).sort()).toEqual([...ids].sort());
+    }
   });
 });
 
