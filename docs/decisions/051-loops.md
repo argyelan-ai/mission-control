@@ -11,6 +11,9 @@ das Budget aufgebraucht ist oder ein Gate stoppt." Schedules feuern unabhängig
 vom Ergebnis; Workflows laufen an der Task-Pipeline vorbei und sind seit dem
 Gateway-Sunset funktional tot.
 
+> **Removed in E5 (#711):** the workflow/automation/playbook layer and its
+> tables are gone (migration `0207_drop_workflow_tables`).
+
 ## Entscheidung (Marks 4 Entscheide, 04.07.)
 
 1. **Loop = Meta-Controller über normale Tasks.** Ein Loop führt selbst nichts
