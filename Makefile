@@ -2,7 +2,7 @@
 # `make` or `make help` lists everything.
 
 .DEFAULT_GOAL := help
-.PHONY: help setup up down build build-dev test test-backend test-frontend \
+.PHONY: help setup up down build build-dev test test-backend test-frontend backend-venv lock \
         migrate logs ps seed seed-clean update backup backup-schedule
 
 help: ## Show this help
@@ -35,6 +35,12 @@ test: test-backend test-frontend ## Run all tests
 
 test-backend: ## Backend tests (pytest — needs backend/.venv, see CONTRIBUTING)
 	cd backend && .venv/bin/python -m pytest -q
+
+backend-venv: ## Create/sync backend/.venv from requirements.lock (same pins as image + CI)
+	cd backend && uv venv --python 3.12 --allow-existing .venv && VIRTUAL_ENV=.venv uv pip sync requirements.lock && VIRTUAL_ENV=.venv uv pip install --no-deps -e .
+
+lock: ## Re-resolve backend/requirements.lock after a pyproject change (keeps other pins; bump one: make lock UPGRADE=fastapi)
+	cd backend && uv pip compile pyproject.toml -o requirements.lock --extra test --python-version 3.12 $(if $(UPGRADE),--upgrade-package $(UPGRADE),)
 
 test-frontend: ## Frontend tests (vitest) + type check
 	cd frontend-v2 && npx tsc --noEmit && npm run test:run

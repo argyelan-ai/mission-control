@@ -90,8 +90,9 @@ class PathExemptSlowAPIMiddleware(SlowAPIMiddleware):
        ``/health`` included, came back exempt and nothing was rate limited at
        all. That is exactly the failure this PR set out to fix (code that reads
        like protection and is none), one FastAPI version later, and it fails
-       silently — the pinned 0.133 in requirements.lock still works, so nothing
-       would have shown up until the next dependency bump.
+       silently — the version pinned in requirements.lock (0.136.x) still
+       resolves handlers, so nothing would have shown up until the next
+       dependency bump.
 
        So: when slowapi finds a handler we hand over to it unchanged (per-route
        ``@limiter.limit`` decorators keep working). When it does not, we run the
