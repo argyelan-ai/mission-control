@@ -1,17 +1,11 @@
 {
   "version": 1,
   "keys": [
-    "orphans:F-agents",
-    "orphans:F-bench",
-    "orphans:F-files",
-    "orphans:F-insights",
-    "orphans:F-memory",
-    "orphans:F-repos",
-    "orphans:F-schedule",
-    "orphans:F-settings",
-    "orphans:F-skills",
     "orphans:J-job-to-merge:test",
     "orphans:J-phone-needs-you:test",
-    "orphans:J-runtime-switch:test"
+    "orphans:J-runtime-switch:test",
+    "orphans:J-setup:test",
+    "orphans:J-usage:test",
+    "orphans:J-vault:test"
   ]
 }

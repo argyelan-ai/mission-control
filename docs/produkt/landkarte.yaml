@@ -10,7 +10,10 @@ journeys:
     job: "When I have a coding job, I want to hand it to a short-lived head and later merge a checked PR."
     source: "ADR-085 decision 1; ROADMAP E1b"
     steps:
-      - {feature: F-tasks}   # new task -> "Run as head" -> status, stop, result (PR + run record) on the task detail
+      - {feature: F-repos}    # register/link the repo before a job runs (ADR-050 registry)
+      - {feature: F-schedule} # a scheduled job is a second way to create the task
+      - {feature: F-tasks}    # new task -> "Run as head" -> status, stop, result (PR + run record) on the task detail
+      - {feature: F-files}    # after the head ends, check the files it produced
     end_state: "PR open with a run record; the operator merges through the merge queue"
     test: e2e/journeys/J-job-to-merge.spec.ts
 
@@ -32,6 +35,30 @@ journeys:
       - {feature: F-tasks}     # pick a pair from the matrix, "restart with ..." another pair
     end_state: "The same job continues on the new pair"
     test: e2e/journeys/J-runtime-switch.spec.ts
+
+  - id: J-setup
+    job: "When I prepare or reconfigure MC, I want one page for AI providers, secrets and credentials, users, autonomy, model prices, channels and the night-shift window."
+    source: "operator decision 2026-09-29; ADR-033 (secrets/credentials); ROADMAP E2 (night-shift window)"
+    steps:
+      - {feature: F-settings}  # AI providers, secrets, credentials, users, autonomy, model prices, channels, night-shift window
+    end_state: "MC is configured for the way the operator wants to run it"
+    test: e2e/journeys/J-setup.spec.ts
+
+  - id: J-vault
+    job: "When I stored a rule, note or run record, I want to find and reread it."
+    source: "operator decision 2026-09-29; ADR-085 section 2 (vault stays); ADR-034 (vault as source of truth)"
+    steps:
+      - {feature: F-memory}  # /memory and /memory/graph: notes, search, graph, topics
+    end_state: "The operator has the rule, note or run record back in front of them"
+    test: e2e/journeys/J-vault.spec.ts
+
+  - id: J-usage
+    job: "When I want to know what the work cost and how much ran locally, I want tokens and cost per week, source and task."
+    source: "operator decision 2026-09-29; ROADMAP E0 (baseline per week x source); PRINCIPLES section 5 rule 4"
+    steps:
+      - {feature: F-insights}  # cost/token rollups by week, day, model, task, source
+    end_state: "The operator can see cost and local share and steer accordingly"
+    test: e2e/journeys/J-usage.spec.ts
 
 features:
   - id: F-home
@@ -408,11 +435,10 @@ features:
     # of its own. Token mint for the LiveKit room. The FileCard telegram
     # action reuses the agent-scoped telegram endpoint (listed in internal,
     # an endpoint may live in several features).
-    # Review: `pending` is not a kz status (trial|active|frozen|retire|internal).
-    # `trial` = built and live (ADR-082/060) while ROADMAP stop 3 still owes the
-    # keep/rebuild/retire decision. The operator confirms this with stop 3.
+    # `trial` = built and live (ADR-082/060). Operator confirmed 2026-09-29:
+    # stays `trial` until ROADMAP stop 3 makes the keep/rebuild/retire call.
     status: trial
-    source: "ROADMAP E4 stop 3 (voice keep/rebuild/retire decision pending); ADR-082 (Jarvis voice runtime binding); ADR-060 (voice provider realtime)"
+    source: "operator decision 2026-09-29; ROADMAP E4 stop 3 (voice keep/rebuild/retire decision pending); ADR-082 (Jarvis voice runtime binding); ADR-060 (voice provider realtime)"
     api:
       - "POST /api/v1/voice/token"
       - "POST /api/v1/agent/me/telegram"
@@ -468,7 +494,10 @@ features:
       # CATALOG endpoints belong to the runtimes page (listed there).
       - "GET /api/v1/models"
       - "GET /api/v1/models/{model_id}"
-    note: unconfirmed
+    status: frozen
+    source: "operator decision 2026-09-29; ADR-085 sections 4-5 (fleet under build stop)"
+    # Frozen, not a removal candidate: the fleet layer stays usable, just not
+    # built further while the build stop holds.
     tables:
       # Agent rows, wizard templates and per-agent metrics.
       - agents
@@ -477,12 +506,10 @@ features:
   - id: F-bench
     name: "Benchmark studio"
     ui: {route: /bench}
-    status: active
-    source: "ADR-070 (benchmark studio as a vertical, accepted)"
-    # Review: ADR-070 (2026-07) predates the ADR-085 direction, which does
-    # not name the bench studio. Its status under the new direction is not
-    # confirmed yet, so the note stays until the operator confirms it.
-    note: unconfirmed
+    status: frozen
+    source: "operator decision 2026-09-29; ADR-070 (benchmark studio as a vertical); ADR-044 (strippable vertical)"
+    # Frozen, not removed: the operator has not used it lately and it stays
+    # reversible as a strippable vertical (ADR-044).
     api:
       # Benchmark studio vertical (ADR-070, backend/app/verticals/bench_studio/):
       # challenge gallery/detail CRUD, draft via approval, rerender/recompose/
@@ -532,7 +559,10 @@ features:
   - id: F-skills
     name: "Skills"
     ui: {route: /skills}
-    note: unconfirmed
+    status: frozen
+    source: "operator decision 2026-09-29; PRINCIPLES section 3 rule 2 (procedures are files now, SKILL.md / AGENTS.md)"
+    # Frozen, not removed: the installer/registry page stays usable, but
+    # procedures now live as files, not as page-managed state.
     api:
       # Skills page tabs: installer (skill list, per-agent matrix), skill
       # content editor (GET/PUT content). The agent detail page also installs
