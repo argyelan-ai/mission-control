@@ -4338,6 +4338,12 @@
         "summary": "System Daily Metrics"
       }
     },
+    "/api/v1/system/journeys": {
+      "get": {
+        "operationId": "system_journeys_api_v1_system_journeys_get",
+        "summary": "System Journeys"
+      }
+    },
     "/api/v1/system/metrics": {
       "get": {
         "operationId": "system_metrics_api_v1_system_metrics_get",

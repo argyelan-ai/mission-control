@@ -19,6 +19,7 @@ import { SystemHealthSection } from "@/components/homepage/SystemHealthSection";
 import { ActivityHistoryPanel } from "@/components/homepage/ActivityHistoryPanel";
 import { LastNightCard } from "@/components/night/LastNightCard";
 import { DailyMetricsCard } from "@/components/home/DailyMetricsCard";
+import { JourneysLine } from "@/components/home/JourneysLine";
 import { homeAlertsToBanner } from "@/lib/homeAlerts";
 import { C, sectionVariants, getGreetingKey, bentoMediaStyles } from "@/components/homepage/colors";
 
@@ -165,6 +166,11 @@ function HomePage() {
       {/* The daily metrics digest (M1–M5) — MC first, Slack / Telegram optional */}
       <motion.div custom={2} variants={sectionVariants} initial="hidden" animate="visible" className="empty:hidden">
         <DailyMetricsCard />
+      </motion.div>
+
+      {/* Last night's journey tests — one quiet line, nothing before the first run */}
+      <motion.div custom={2} variants={sectionVariants} initial="hidden" animate="visible" className="empty:hidden">
+        <JourneysLine />
       </motion.div>
 
       {/* System Health */}

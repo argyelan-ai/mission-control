@@ -81,6 +81,32 @@
       "hand": "Manual status changes",
       "week": "Week {week} · list price",
       "local": "{share} local"
+    },
+    "journeys": {
+      "green": "Journey tests: {passed} of {total} passed",
+      "gaps": "{count, plural, one {# known gap} other {# known gaps}}",
+      "red": "Journey tests: {names} failed",
+      "redUnnamed": "Journey tests: {failed} of {total} failed",
+      "skipped": "Journey tests skipped",
+      "skippedBecause": "Journey tests skipped: {reason}",
+      "error": "Journey tests did not finish",
+      "errorBecause": "Journey tests did not finish: {reason}",
+      "reason": {
+        "head": "a head was working",
+        "deploy": "a deploy was running",
+        "disk": "not enough disk space",
+        "port": "the test port was busy",
+        "timeout": "time limit reached"
+      },
+      "ago": "{age} ago",
+      "names": {
+        "J-job-to-merge": "Job to merge",
+        "J-phone-needs-you": "Answer from phone",
+        "J-runtime-switch": "Switch runtime",
+        "J-setup": "Setup",
+        "J-vault": "Find knowledge",
+        "J-usage": "Cost & local share"
+      }
     }
   },
   "tasks": {
