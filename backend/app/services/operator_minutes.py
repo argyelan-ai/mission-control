@@ -26,6 +26,10 @@ What counts as a touch (operator side, per task):
   head_stop        task_events reason 'head_stopped' (a head ends as "stopped"
                    only after a stop request)
 
+Touches of one job no more than DEDUPE_WINDOW (2 s) apart are one touch (the
+earliest is kept): one click can write two rows, e.g. an approval answer sets
+resolved_at and logs a user status change in the same request.
+
 Active minutes: touches of one job (the task and all its subtasks) sorted by
 time; touches no more than SESSION_GAP apart form one sitting. A sitting
 counts its span (first to last touch), but at least MIN_SESSION.
@@ -33,10 +37,17 @@ counts its span (first to last touch), but at least MIN_SESSION.
     the card, the log or the PR; ten minutes of quiet means they left.
   - MIN_SESSION = 3 min: even a single click needs the card opened and read
     first. A lone click is never "0 minutes".
-Not seen at all: reading without clicking, work in a terminal, reviewing or
-merging the PR on GitHub. Seen but not separable: a session acting with the
-operator's own login (e.g. the operator's coding session calling the API)
-counts as the operator — MC cannot tell the two apart.
+Known gaps (the numbers are a lower bound, not a stopwatch):
+  - Not seen at all: reading without clicking, work in a terminal, reviewing
+    or merging the PR on GitHub.
+  - Seen but not separable: a session acting with the operator's own login
+    (e.g. the operator's coding session calling the API) counts as the
+    operator — MC cannot tell the two apart.
+  - A head job reopened after its head passed keeps counting as finished at
+    its last 'head_passed', even while a new head runs on it.
+  - Planned: once cards close automatically after their PR is merged, the
+    merge / card close becomes a touch of its own, so the acceptance step of
+    a head job is no longer invisible.
 
 Counts next to the minutes:
   follow_up_questions   the job asked the operator: head 'needs you'
@@ -73,6 +84,10 @@ from app.models.thread import Message, Thread
 from app.utils import ensure_aware, utcnow
 
 SESSION_GAP = timedelta(minutes=10)
+#: one click can write two rows (an approval answer sets resolved_at AND logs
+#: a user status change in the same request): touches of one job this close
+#: together are one touch
+DEDUPE_WINDOW = timedelta(seconds=2)
 MIN_SESSION = timedelta(minutes=3)
 #: ROADMAP E1 acceptance
 TARGET_MINUTES = 15
@@ -132,7 +147,7 @@ async def _descendants(session: AsyncSession, root_ids: list[uuid.UUID]) -> dict
 
 
 def _empty_job() -> dict[str, Any]:
-    return {"touch_times": [], "kinds": Counter(), "follow_up_questions": 0,
+    return {"touches": [], "follow_up_questions": 0,
             "manual_status_changes": 0, "head_rescues": 0, "head": False}
 
 
@@ -145,8 +160,7 @@ async def _collect(session: AsyncSession, root_ids: list[uuid.UUID]) -> dict[uui
 
     def touch(task_id, ts, kind):
         job = jobs[owner[task_id]]
-        job["touch_times"].append(ts)
-        job["kinds"][kind] += 1
+        job["touches"].append((ensure_aware(ts), kind))
 
     created = (await session.exec(
         select(Task.id, Task.created_at).where(Task.id.in_(ids), Task.created_by_user_id.is_not(None))
@@ -213,14 +227,25 @@ async def _collect(session: AsyncSession, root_ids: list[uuid.UUID]) -> dict[uui
     return jobs
 
 
+def dedupe(touches: list[tuple[datetime, str]]) -> list[tuple[datetime, str]]:
+    """Drop touches within DEDUPE_WINDOW of the last kept one (earliest wins)."""
+    kept: list[tuple[datetime, str]] = []
+    for ts, kind in sorted(touches, key=lambda t: t[0]):
+        if kept and ts - kept[-1][0] <= DEDUPE_WINDOW:
+            continue
+        kept.append((ts, kind))
+    return kept
+
+
 def _summary(job: dict) -> dict[str, Any]:
-    minutes, sittings = active_minutes(job["touch_times"])
+    touches = dedupe(job["touches"])
+    minutes, sittings = active_minutes(ts for ts, _ in touches)
     return {
         "estimate": True,
         "active_minutes": round(minutes),
         "sessions": sittings,
-        "touches": len(job["touch_times"]),
-        "touches_by_kind": dict(job["kinds"]),
+        "touches": len(touches),
+        "touches_by_kind": dict(Counter(kind for _, kind in touches)),
         "follow_up_questions": job["follow_up_questions"],
         "manual_status_changes": job["manual_status_changes"],
         "head_rescues": job["head_rescues"],

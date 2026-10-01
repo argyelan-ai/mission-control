@@ -176,6 +176,31 @@ async def test_writing_the_order_in_the_ui_is_a_touch(make_board, make_task, ses
 
 
 @pytest.mark.asyncio
+async def test_one_click_writing_two_rows_is_one_touch(make_board, make_task, session):
+    """Answering an approval writes approvals.resolved_at AND a user status
+    change in the same request — that is one click, not two touches."""
+    from app.services.operator_minutes import DEDUPE_WINDOW, operator_minutes_for_task
+
+    assert DEDUPE_WINDOW == timedelta(seconds=2)
+    board = await make_board()
+    task = await make_task(board.id)
+    await _add(
+        _approval(task.id, 0, resolved_minute=10),
+        _event(task.id, 10 + 1.5 / 60, reason="blocker_approval_approved"),
+        # 3 s later is a second touch again
+        _comment(task.id, 10 + 4.5 / 60),
+    )
+
+    est = await operator_minutes_for_task(session, task.id)
+
+    assert est["touches"] == 2
+    assert sum(est["touches_by_kind"].values()) == 2
+    assert est["touches_by_kind"]["approval_answer"] == 1
+    assert est["touches_by_kind"]["comment"] == 1
+    assert est["sessions"] == 1
+
+
+@pytest.mark.asyncio
 async def test_task_without_operator_touches_is_zero(make_board, make_task, session):
     from app.services.operator_minutes import operator_minutes_for_task
 
