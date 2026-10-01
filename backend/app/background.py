@@ -222,6 +222,13 @@ async def start_background_services(app: Any) -> None:
     import asyncio as _asyncio
     from app.services.github_visibility_monitor import run_forever as _gh_monitor
     app.state.gh_monitor_task = _asyncio.create_task(_gh_monitor(), name="github_visibility_monitor")
+    # PR merge monitor: review/user_test cards whose PR got merged on GitHub
+    # move to done (actor = system) — no more stale merged cards in review.
+    # Inert while no GitHub token is configured (ADR-055).
+    from app.services.pr_merge_monitor import run_forever as _pr_merge_monitor
+    app.state.pr_merge_monitor_task = _asyncio.create_task(
+        _pr_merge_monitor(), name="pr_merge_monitor"
+    )
 
 
 async def stop_background_services(app: Any) -> None:
@@ -251,6 +258,15 @@ async def stop_background_services(app: Any) -> None:
             except (_asyncio.CancelledError, Exception):
                 pass
         await _timed_stop("github_visibility_monitor", _cancel_gh_monitor())
+    _pr_merge_monitor_task = getattr(app.state, "pr_merge_monitor_task", None)
+    if _pr_merge_monitor_task is not None:
+        async def _cancel_pr_merge_monitor() -> None:
+            _pr_merge_monitor_task.cancel()
+            try:
+                await _pr_merge_monitor_task
+            except (_asyncio.CancelledError, Exception):
+                pass
+        await _timed_stop("pr_merge_monitor", _cancel_pr_merge_monitor())
     await _timed_stop("slack_socket", slack_socket.stop())
     await _timed_stop("telegram_bot", telegram_bot.stop())
     await _timed_stop("intelligence", intelligence.stop())
