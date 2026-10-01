@@ -18,7 +18,7 @@ Schreibpfaden: der Start entscheidet, welche Box einen Befehl per SSH bekommt.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -29,6 +29,7 @@ from app.models.host import Host
 from app.models.local_recipe import LocalRecipe
 from app.routers.hosts import _get_host
 from app.services import recipe_switcher
+from app.services.activity import emit_event
 
 router = APIRouter(prefix="/api/v1/hosts", tags=["hosts"])
 
@@ -63,6 +64,7 @@ class StartRecipeBody(BaseModel):
 async def start_recipe_for_host(
     host_id: str,
     slug: str,
+    request: Request,
     body: StartRecipeBody | None = None,
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_role(Role.ADMIN)),
@@ -75,6 +77,24 @@ async def start_recipe_for_host(
     recipe = (await session.exec(select(LocalRecipe).where(LocalRecipe.slug == slug))).first()
     if recipe is None:
         raise HTTPException(status_code=404, detail=f"Rezept '{slug}' nicht gefunden")
+    # Wer hat gewechselt? Am 01.10.2026 liess sich ein Rezeptwechsel nicht
+    # zuordnen (Backend-Logs nach einem Deploy weg, ein Token = ein Konto für
+    # Browser UND Skripte). Der Client-Kopf trennt Browser von curl/Agent.
+    try:
+        await emit_event(
+            session,
+            "host.recipe_start_requested",
+            f"{host.slug}: Start von {recipe.slug} angefordert",
+            detail={
+                "host_id": str(host.id),
+                "recipe_slug": recipe.slug,
+                "worker_host_id": body.worker_host_id if body else None,
+                "user_id": str(getattr(current_user, "id", "") or ""),
+                "client": (request.headers.get("user-agent") or "")[:160],
+            },
+        )
+    except Exception:  # noqa: BLE001 — eine Notiz verhindert nie einen Start
+        await session.rollback()
     try:
         return await recipe_switcher.start_recipe_on_host(
             session, host, recipe, worker_host_id=(body.worker_host_id if body else None)

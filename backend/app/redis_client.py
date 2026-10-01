@@ -642,6 +642,14 @@ class RedisKeys:
     def runtime_switching(slug: str) -> str:
         return f"mc:runtime-switching:{slug}"
 
+    # runtime_evicted: "a start stopped this runtime ON PURPOSE to free its
+    # box" — the watcher's auto-recovery must not bring it back on its own
+    # (ping-pong after a recipe switch, live 01.10.2026). Lifted by the next
+    # start of that runtime; the TTL ends it otherwise.
+    @staticmethod
+    def runtime_evicted(slug: str) -> str:
+        return f"mc:runtime-evicted:{slug}"
+
     # One auto-recovery attempt per 15 min per runtime; the SET-nx claim on
     # this key is what keeps two workers from starting the engine twice.
     @staticmethod

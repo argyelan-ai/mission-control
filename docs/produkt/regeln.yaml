@@ -79,6 +79,18 @@ rules:
     status: active
     checked: 2026-10-01
 
+  - id: R-switch-no-pingpong
+    says: "The watcher's auto-recovery never undoes an operator's recipe switch: it skips a runtime a start stopped on purpose (eviction marker, lifted by the next start of that runtime) and never revives onto a box where an exclusive sibling's anchor runs."
+    source: "Recipe-switch live test 2026-10-01 (vLLM/TensorFold flip); ADR-059"
+    owner: backend/app/services/runtime_watcher.py
+    applies_to: ["backend/app/services/runtime_watcher.py", "backend/app/services/runtime_grace.py"]
+    enforced_by:
+      - {test: "backend/tests/test_recipe_switch_followups.py::test_a_loading_engine_without_any_marker_is_never_evicted_by_autostart"}
+      - {test: "backend/tests/test_recipe_switch_followups.py::test_a_runtime_stopped_by_a_switch_is_not_revived"}
+      - {test: "backend/tests/test_recipe_switch_followups.py::test_an_empty_box_without_a_switch_is_still_revived"}
+    status: active
+    checked: 2026-10-01
+
   - id: R-harness-compat-matrix
     says: "Harness and provider are separate axes; HARNESS_PROTOCOLS in harness_compat is the single compatibility matrix (claude to anthropic, openclaude/omp to openai) and the runtime switch refuses an incompatible pairing."
     source: "ADR-056 decision (points 2 and 4)"
