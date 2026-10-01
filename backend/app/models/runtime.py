@@ -201,6 +201,15 @@ class Runtime(SQLModel, table=True):
     # actually drained three minutes after the prep reported success).
     prestart_min_available_kb: int | None = None
 
+    # Copied from the recipe at creation (local_recipes.drop_page_cache): false
+    # = the memory prep above leaves page cache, cache dropper and watermark
+    # alone for this runtime and only waits for MemAvailable. For engines that
+    # count reclaimable cache as available (TensorFold). Default true.
+    drop_page_cache: bool = Field(
+        default=True,
+        sa_column=Column(Boolean, server_default=text("true"), nullable=False),
+    )
+
     api_key_secret_id: uuid.UUID | None = Field(
         default=None,
         sa_column=Column(

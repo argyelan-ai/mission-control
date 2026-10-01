@@ -546,6 +546,17 @@ unveraendert. Vor dem Start wird `df` gegen `est_weights_gb` geprueft und
 Operator kennt evtl. einen Mount, den wir nicht sehen. Idempotenz ist Sache des
 `install_template` (clone nur wenn fehlend, vorhandene Gewichte ueberspringen).
 
+Zweibox-Rezepte (`topology.nodes >= 2`, Nachtrag ADR-077 vom 01.10.2026): die
+Installation waehlt die zweite Box (Body `worker_host_id`, sonst `role=worker`
+zuerst), schreibt die `.env` des Rezepts auf dem Head **vor** dem Job (gleiche
+Upsert-Funktion wie der Start, darf den Ordner anlegen) und rendert das
+`install_template` mit den Adress-Platzhaltern (`{worker_ssh}` & Co.); `df`
+laeuft auf beiden Boxen. Der Install-Dialog startet ein Zweibox-Rezept danach
+ueber `POST /hosts/{id}/recipes/{slug}/start` (Rezept-Umschalter), nicht ueber
+`POST /runtimes`. Rezepte mit `drop_page_cache: false` bekommen beim Start
+keinen Page-Cache-Drop, keinen `mc-cache-dropper` und kein gesenktes
+Watermark (`services/host_memory_prep`), nur das MemAvailable-Warten.
+
 Credits: `local_recipes.author` / `author_url` stehen auf jeder Karte im
 Modell-Browser („von {author} ↗"). Fuer die mitgelieferten Rezepte traegt die
 Migration 0177 sie nach — der Seeder ist insert-only und haette bestehende

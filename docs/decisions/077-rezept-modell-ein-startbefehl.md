@@ -367,6 +367,51 @@ in `reason` (die Oberfläche hat genau einen Ort für Riegel). Die Warnungen
 zeigt `HostRecipeSwitcher` als Hinweistext unter dem Eintrag und noch einmal
 in der Bestätigungszeile — dort, wo geklickt wird.
 
+## Nachtrag (01.10.2026) — Zweibox-Installation und Page-Cache je Rezept
+
+Anlass: ein Zweibox-Rezept, dessen **Installer** selbst die zweite Box
+anfasst (Image und Gewichte auf beide Boxen), musste bisher per Hand
+vorbereitet werden — `POST /local-registry/{slug}/install` kannte nur eine
+Box, und die `.env` des Rezepts schrieb erst der Start. Für jeden anderen
+MC-Nutzer hiess das: das Rezept steht im Katalog, ist aber nicht
+installierbar. Regel des Betreibers: jedes Modell, das MC anbietet, muss sich
+auf die Boxen installieren lassen, die ein Nutzer in MC eingetragen hat.
+
+**Was die Installation jetzt für `topology.nodes >= 2` tut** (generisch,
+`recipe_switcher.plan_duo_install` + `routers/local_registry.install_recipe`):
+
+1. **Zweite Box wählen** — die genannte (`worker_host_id` im Body) oder die
+   erste andere Box mit SSH-Zugang, `role=worker` zuerst. Anders als beim
+   Start zählt Belegung nicht: eine Installation verdrängt nichts.
+2. **`.env` schreiben, BEVOR der Job startet** — dieselbe Zuordnung
+   (`env_map`), dieselbe Upsert-Funktion mit Backup und Rücklesen wie beim
+   Start. Einzige Abweichung: die Installation darf den Ordner anlegen
+   (`create_dir`), denn der Klon existiert noch nicht. Ein Start legt nie
+   einen Ordner an.
+3. **Platzhalter im `install_template`** — `{worker_ssh}` & Co. (dieselben
+   sechs Adress-Platzhalter wie in `env_map`). Nur das Install-Template kennt
+   sie; ein `launch_template` bleibt boxneutral (Regel 5).
+4. **Platte auf beiden Boxen** prüfen (Warnung, kein Riegel — wie bisher).
+
+Neu in `env_map`: der Platzhalter **`{port}`** (Port der Instanz bzw. des
+Rezepts), weil manche Verbund-Skripte ihren Port nur aus der `.env` lesen.
+`src_dir` lässt sich bei Zweibox-Rezepten nicht umbiegen (422): `env_file`
+ist ein fester Pfad im Katalog.
+
+Einzelbox-Installationen bleiben unverändert (kein `.env`-Schreiben, gleicher
+Befehl — Test `test_a_single_box_install_is_unchanged`).
+
+**Page-Cache je Rezept** (`local_recipes.drop_page_cache` →
+`runtimes.drop_page_cache`, Migration 0210, Standard `true`): die
+Speicher-Vorbereitung vor dem Start (Page-Cache leeren, `mc-cache-dropper`,
+Watermark senken) passt zu vLLM, das seinen KV-Cache aus MemFree bemisst. Eine
+Engine, die freigebbaren Cache selbst als verfügbar zählt (TensorFold),
+gewinnt dadurch nichts. Ein Rezept mit `drop_page_cache: false` bekommt
+darum weder Drop noch Dropper noch Watermark — nur das Warten auf
+MemAvailable bleibt (das liest nur). Die Instanz erbt das Feld beim Anlegen.
+
+Erstes Rezept auf diesem Weg: `glm53-flash-exl3-tensorfold` (Seed).
+
 ## Referenzen
 
 - Betroffene Dateien:

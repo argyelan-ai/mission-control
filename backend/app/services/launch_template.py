@@ -41,6 +41,17 @@ KNOWN_PLACEHOLDERS = (
 # demanding a value there would make ``env`` mandatory for every compose entry.
 OPTIONAL_PLACEHOLDERS = ("env_yaml",)
 
+# The two-box placeholders (Rezept-Umschalter P3, services/recipe_env). An
+# INSTALL template may use them: a duo recipe's installer itself reaches the
+# second box (image and weights on both), so it has to know which one. A
+# LAUNCH template may not — ADR-077 rule 5: the start talks to the head only,
+# and the recipe's own .env (written by MC) tells its script who the worker is.
+# Kept as a literal tuple here (no import of recipe_env) and pinned equal to
+# recipe_env.ADDRESS_PLACEHOLDERS by a test, so the two cannot drift apart.
+DUO_PLACEHOLDERS = (
+    "head_ip", "worker_ip", "head_fabric_ip", "worker_fabric_ip", "head_ssh", "worker_ssh",
+)
+
 _PLACEHOLDER_RE = re.compile(r"\{([a-z_]+)\}")
 
 # Defaults per engine, used when a registry entry has no launch_template.
@@ -85,12 +96,20 @@ DEFAULT_GGUF_DIR = "~/gguf"
 LABEL_FREE_ENGINES = ("ssh_process",)
 
 
-def render_launch_template(template: str, values: dict[str, object]) -> str:
+def render_launch_template(
+    template: str,
+    values: dict[str, object],
+    *,
+    known: tuple[str, ...] = KNOWN_PLACEHOLDERS,
+) -> str:
     """Substitute ``{placeholder}`` occurrences in *template*.
 
     Raises ValueError for an unknown placeholder or a known one without a
     value — both mean the caller built the command wrong, and a half-rendered
     docker command is not something to discover on the remote box.
+
+    ``known`` is the vocabulary; only the install path widens it (by
+    :data:`DUO_PLACEHOLDERS`).
     """
     if not template or not template.strip():
         raise ValueError("launch_template ist leer")
@@ -100,7 +119,7 @@ def render_launch_template(template: str, values: dict[str, object]) -> str:
 
     def _sub(match: re.Match[str]) -> str:
         name = match.group(1)
-        if name not in KNOWN_PLACEHOLDERS:
+        if name not in known:
             unknown.append(name)
             return match.group(0)
         value = values.get(name)
@@ -116,7 +135,7 @@ def render_launch_template(template: str, values: dict[str, object]) -> str:
     if unknown:
         raise ValueError(
             f"Unbekannte Platzhalter im launch_template: {', '.join(sorted(set(unknown)))}. "
-            f"Erlaubt: {', '.join(KNOWN_PLACEHOLDERS)}"
+            f"Erlaubt: {', '.join(known)}"
         )
     if missing:
         raise ValueError(
@@ -256,6 +275,7 @@ def build_install_command(
     gguf_dir: str | None = None,
     ctx: int | None = None,
     env: dict[str, str] | None = None,
+    duo: dict[str, str] | None = None,
 ) -> str:
     """Render a recipe's ``install_template`` — same renderer, same placeholders.
 
@@ -266,6 +286,12 @@ def build_install_command(
     ``env`` matters here too: the compose recipes write their override file in
     the install step as well, and an install that came up with different tuning
     than the launch would be a stack that only works until it is restarted.
+
+    ``duo`` (two-box recipes) are the addresses behind :data:`DUO_PLACEHOLDERS`
+    for the head and the worker the install was given — the same values the
+    recipe's ``.env`` gets (services/recipe_env.placeholder_values). A
+    template that uses one of them without a worker is a readable error, never
+    a literal ``{worker_ssh}`` on the box.
     """
     if not _SLUG_RE.fullmatch(slug or ""):
         raise ValueError(f"slug muss alphanumerisch / _ / - sein: {slug!r}")
@@ -283,5 +309,7 @@ def build_install_command(
             "gguf_dir": gguf_dir or DEFAULT_GGUF_DIR,
             "ctx": ctx if ctx else 0,
             "env_yaml": render_compose_env(env),
+            **{name: (duo or {}).get(name) for name in DUO_PLACEHOLDERS},
         },
+        known=KNOWN_PLACEHOLDERS + DUO_PLACEHOLDERS,
     )

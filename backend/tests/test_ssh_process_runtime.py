@@ -1298,6 +1298,7 @@ def test_migration_backfill_matches_the_seed_credits():
     seeded_not_backfilled = {
         "deepseek-v4-flash-ds4",          # new in 0177 itself
         "deepseek-v4-flash-sparkinfer",   # PR 7, no migration
+        "glm53-flash-exl3-tensorfold",    # two-box TensorFold recipe, no migration
     }
 
     for entry in seed:

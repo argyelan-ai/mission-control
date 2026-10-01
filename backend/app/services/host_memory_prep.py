@@ -551,8 +551,16 @@ async def prepare_host_memory(
     slug: str | None = None,
     min_available_kb: int | None = None,
     wait_timeout_seconds: int = DEFAULT_MEM_WAIT_TIMEOUT,
+    drop_page_cache: bool = True,
 ) -> PrepHandle:
     """Free the box's memory for an imminent start. Never raises.
+
+    ``drop_page_cache=False`` (the runtime's own flag, copied from its recipe)
+    skips steps 3–5: no lowered watermark, no one-shot drop, no dropper. For
+    engines that count reclaimable page cache as available memory
+    (TensorFold), where a drop only makes the kernel migrate pages while the
+    weights stream in. Step 6, the MemAvailable wait, still runs — it only
+    reads, and it is what keeps a start off a box that has not drained yet.
 
     Order matters and is the whole point:
 
@@ -607,7 +615,13 @@ async def prepare_host_memory(
     await _store_handle(handle)
 
     try:
-        if (
+        if not drop_page_cache:
+            logger.info(
+                "memprep: %s opts out of the page-cache drop — cache, dropper and "
+                "watermark on %s stay as they are",
+                slug or "runtime", handle.host_key,
+            )
+        elif (
             watermark_kb
             and handle.original_watermark_kb is not None
             and int(watermark_kb) < handle.original_watermark_kb
@@ -622,9 +636,10 @@ async def prepare_host_memory(
                 handle.host_key,
             )
 
-        await _drop_caches_once(host)
-        handle.dropper_started = await _start_dropper(host)
-        await _store_handle(handle)
+        if drop_page_cache:
+            await _drop_caches_once(host)
+            handle.dropper_started = await _start_dropper(host)
+            await _store_handle(handle)
 
         if min_available_kb:
             # The watermark actually in effect on the box right now — lowered
@@ -731,20 +746,28 @@ async def prepare_for_runtime(
     # everything else falls back to the conservative default rather than
     # skipping the wait entirely (see DEFAULT_MIN_AVAILABLE_KB).
     min_available_kb = runtime.get("prestart_min_available_kb") or DEFAULT_MIN_AVAILABLE_KB
+    # Only an explicit False opts out — a dict without the key (older callers,
+    # hand-built runtimes) keeps the old behaviour.
+    drop_page_cache = runtime.get("drop_page_cache") is not False
     handle = await prepare_host_memory(
         host,
         watermark_kb=runtime.get("prestart_watermark_kb"),
         slug=str(slug) if slug else None,
         min_available_kb=min_available_kb,
         wait_timeout_seconds=_wait_timeout_seconds(),
+        drop_page_cache=drop_page_cache,
     )
     await _emit(
         "runtime.memory_prep_started",
-        f"{slug}: Box-Speicher vorbereitet — Page-Cache geleert"
-        + (
-            f", Watermark {handle.original_watermark_kb} → {handle.lowered_to_kb} kB"
-            if handle.lowered_to_kb is not None
-            else ", Watermark unverändert"
+        (
+            f"{slug}: Box-Speicher vorbereitet — Page-Cache geleert"
+            + (
+                f", Watermark {handle.original_watermark_kb} → {handle.lowered_to_kb} kB"
+                if handle.lowered_to_kb is not None
+                else ", Watermark unverändert"
+            )
+            if drop_page_cache
+            else f"{slug}: Box-Speicher geprüft — Page-Cache bleibt (Rezept: drop_page_cache=false)"
         ),
         severity="info",
         detail={
@@ -754,6 +777,7 @@ async def prepare_for_runtime(
             "watermark_original_kb": handle.original_watermark_kb,
             "watermark_lowered_to_kb": handle.lowered_to_kb,
             "dropper_started": handle.dropper_started,
+            "drop_page_cache": drop_page_cache,
             "mem_available_after_wait_kb": handle.mem_available_after_wait_kb,
             "mem_wait_threshold_kb": handle.mem_wait_threshold_kb,
         },

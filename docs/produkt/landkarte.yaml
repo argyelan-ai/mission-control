@@ -223,8 +223,10 @@ features:
       - "* /api/v1/hosts/*"
       # Curated local-recipe registry: list/refresh/enable in
       # LocalModelBrowser and the box wizard; install + install log in
-      # SshProcessDeployDialog. Starts go through POST /hosts/{id}/recipes/…,
-      # not through this router.
+      # SshProcessDeployDialog (two-box recipes: the install picks the second
+      # box and writes the recipe's .env first, body field worker_host_id).
+      # Starts go through POST /hosts/{id}/recipes/…, not through this
+      # router — the dialog's two-box start calls exactly that.
       - "* /api/v1/local-registry"
       - "* /api/v1/local-registry/*"
       # Node devices (Fleet & Rezepte v2): pairing-code mint
