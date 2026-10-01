@@ -621,6 +621,9 @@ export default function AgentsPage() {
     () => (archivedRaw ?? []).filter((a) => a.archived_at != null),
     [archivedRaw]
   );
+  // Archived agents are out of the way by default: one collapsed line, the
+  // list (restore / delete) only on demand (operator 01.10.2026).
+  const [showArchived, setShowArchived] = useState(false);
 
   const boardsMap = useMemo(
     () => Object.fromEntries((boards ?? []).map((b) => [b.id, b.name])),
@@ -801,13 +804,26 @@ export default function AgentsPage() {
                 is the one irreversible path (enabled only here). */}
             {archivedAgents.length > 0 && (
               <div className="pt-2">
-                <div className="flex items-center gap-2 mb-2 px-1">
+                <button
+                  type="button"
+                  onClick={() => setShowArchived((v) => !v)}
+                  aria-expanded={showArchived}
+                  aria-controls="archived-agents"
+                  className="flex items-center gap-2 mb-2 px-1 min-h-[44px]"
+                >
                   <Archive size={13} style={{ color: C.textMuted }} />
                   <h2 className="text-[11px] font-medium uppercase tracking-[0.05em]" style={{ color: C.textMuted }}>
                     {t("archivedCount", { count: archivedAgents.length })}
                   </h2>
-                </div>
+                  <ChevronDown
+                    size={13}
+                    style={{ color: C.textMuted, transform: showArchived ? "rotate(180deg)" : undefined }}
+                    aria-hidden
+                  />
+                </button>
+                {showArchived && (
                 <div
+                  id="archived-agents"
                   className="rounded-xl overflow-hidden"
                   style={{ backgroundColor: C.bgBase, border: `1px solid ${C.borderSubtle}`, opacity: 0.85 }}
                 >
@@ -834,6 +850,7 @@ export default function AgentsPage() {
                     </div>
                   ))}
                 </div>
+                )}
               </div>
             )}
           </div>

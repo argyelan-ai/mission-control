@@ -680,6 +680,7 @@ async def list_docker_session_agents(
     result = await session.exec(
         select(Agent)
         .where(Agent.agent_runtime == "cli-bridge")  # type: ignore[union-attr]
+        .where(Agent.archived_at.is_(None))  # type: ignore[union-attr]  # archived = gone from the chat list
         .order_by(Agent.name)
     )
     agents = list(result.all())
@@ -730,6 +731,7 @@ async def list_host_session_agents(
     result = await session.exec(
         select(Agent)
         .where(Agent.agent_runtime == "host")
+        .where(Agent.archived_at.is_(None))  # type: ignore[union-attr]  # archived = gone from the chat list
         .order_by(Agent.name)
     )
     agents = list(result.all())
