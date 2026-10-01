@@ -355,6 +355,68 @@ describe("ssh_process deploy", () => {
     await screen.findByTestId("ssh-deploy-created");
   });
 
+  // ── Two-box recipes (topology.nodes >= 2) ─────────────────────────────────
+
+  it("shows the recipe notes (licence) before anything is installed", async () => {
+    vi.spyOn(api.hosts, "list").mockResolvedValue([mkHost()]);
+    vi.spyOn(api.runtimes, "list").mockResolvedValue(mkRuntimes([]));
+    vi.spyOn(api.localRegistry, "installLog").mockResolvedValue(mkLog());
+    const install = vi.spyOn(api.localRegistry, "install");
+    renderDialog(mkRecipe({ notes: "LICENCE - NON-COMMERCIAL USE ONLY (CC BY-NC-ND drafter)" }));
+
+    expect(await screen.findByText(/NON-COMMERCIAL USE ONLY/)).toBeInTheDocument();
+    expect(install).not.toHaveBeenCalled();
+  });
+
+  it("installs a two-box recipe on its own port and starts it through the recipe switcher", async () => {
+    vi.spyOn(api.hosts, "list").mockResolvedValue([
+      mkHost(),
+      mkHost({ id: "host-2", slug: "spark-b", display_name: "Spark B", ssh_host: "192.0.2.11" }),
+    ]);
+    vi.spyOn(api.runtimes, "list").mockResolvedValue(mkRuntimes([]));
+    vi.spyOn(api.localRegistry, "installLog").mockResolvedValue(mkLog({ status: "done" }));
+    const install = vi.spyOn(api.localRegistry, "install").mockResolvedValue({
+      status: "started",
+      host_id: "host-1",
+      slug: "duo-recipe",
+      worker_host_id: "host-2",
+      worker_slug: "spark-b",
+    });
+    const startRecipe = vi.spyOn(api.hosts, "startRecipe").mockResolvedValue({
+      ok: true,
+      created: true,
+      runtime_slug: "duo-recipe-spark",
+    } as Awaited<ReturnType<typeof api.hosts.startRecipe>>);
+    const create = vi.spyOn(api.runtimes, "create");
+    const launch = vi.spyOn(api.hosts, "launchCommand");
+
+    renderDialog(mkRecipe({ slug: "duo-recipe", topology: { nodes: 2 }, port: 8000 }));
+
+    const installButton = await screen.findByTestId("ssh-deploy-install");
+    await waitFor(() => expect(installButton).toBeEnabled());
+    await userEvent.click(installButton);
+    await waitFor(() =>
+      expect(install).toHaveBeenCalledWith("duo-recipe", {
+        host_id: "host-1",
+        port: 8000,
+        ctx: 262144,
+      }),
+    );
+
+    const createButton = await screen.findByTestId("ssh-deploy-create");
+    await waitFor(() => expect(createButton).toBeEnabled());
+    await userEvent.click(createButton);
+
+    // The duo start goes through the switcher (worker, .env, membership) with
+    // the worker the install used — never through a bare POST /runtimes.
+    await waitFor(() =>
+      expect(startRecipe).toHaveBeenCalledWith("host-1", "duo-recipe", { worker_host_id: "host-2" }),
+    );
+    expect(create).not.toHaveBeenCalled();
+    expect(launch).not.toHaveBeenCalled();
+    await screen.findByTestId("ssh-deploy-created");
+  });
+
   // ── Engine-Tuning (PR 8) ──────────────────────────────────────────────────
 
   it("shows the recipe env before anything is deployed", async () => {

@@ -1943,8 +1943,18 @@ export const api = {
         ctx?: number;
         src_dir?: string | null;
         gguf_dir?: string | null;
+        /** Zweibox-Rezepte: die zweite Box. Fehlt sie, wählt das Backend. */
+        worker_host_id?: string;
       },
-    ): Promise<{ status: string; host_id: string; slug: string }> =>
+    ): Promise<{
+      status: string;
+      host_id: string;
+      slug: string;
+      /** Zweibox-Rezepte: die Box, die das Backend als zweite gewählt hat. */
+      worker_host_id?: string | null;
+      worker_slug?: string | null;
+      env_written?: string[];
+    }> =>
       request(`/api/v1/local-registry/${slug}/install`, {
         method: "POST",
         body: JSON.stringify(data),

@@ -2004,6 +2004,15 @@ export interface LocalRecipe {
    * liegen. null = kein Tuning.
    */
   env: Record<string, string> | null;
+  /** Anzahl Boxen (Rezept-Umschalter). `nodes >= 2` = Zweibox-Rezept: es
+   *  installiert und startet über den Head und holt sich die zweite Box selbst. */
+  topology?: { nodes: number };
+  /** Standard-Port des Rezepts (null = das Rezept sagt nichts). */
+  port?: number | null;
+  /** Zweibox-Rezepte: kann MC die Adressen in die .env des Rezepts schreiben? */
+  env_ready?: boolean;
+  /** false = MC leert beim Start dieses Rezepts den Page-Cache nicht. */
+  drop_page_cache?: boolean;
   tags: string[];
   notes: string | null;
   enabled: boolean;

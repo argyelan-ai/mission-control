@@ -72,7 +72,16 @@ const DOCKER_ENGINES = new Set(["vllm_docker", "llamacpp_docker"]);
  * nur 8000), Host-Engines wie ds4 hören auf 8888.
  */
 export function defaultPortFor(recipe: LocalRecipe): number {
+  // A two-box recipe starts through the recipe switcher, which serves on the
+  // recipe's own port — the install has to write the same one into its .env.
+  if (isTwoBox(recipe) && recipe.port) return recipe.port;
   return DOCKER_ENGINES.has(recipe.engine) ? 8000 : DEFAULT_PORT;
+}
+
+/** `topology.nodes >= 2`: installs and starts through the head, which pulls
+ *  in the second box itself (ADR-077). */
+export function isTwoBox(recipe: LocalRecipe): boolean {
+  return (recipe.topology?.nodes ?? 1) >= 2;
 }
 
 export function extractApiError(err: unknown): string {
@@ -129,6 +138,9 @@ export function SshProcessDeployDialog({
   const [created, setCreated] = useState(false);
   const [log, setLog] = useState<HostBootstrapLogLine[]>([]);
   const [status, setStatus] = useState<RecipeInstallLog["status"]>("idle");
+  // Two-box recipes: the second box the install was set up with — the start
+  // must use the same one (its .env and its copy of the weights).
+  const [workerId, setWorkerId] = useState<string | null>(null);
   const cursor = useRef(0);
   const logEnd = useRef<HTMLDivElement | null>(null);
 
@@ -207,11 +219,12 @@ export function SshProcessDeployDialog({
     setLog([]);
     cursor.current = 0;
     try {
-      await api.localRegistry.install(recipe.slug, {
+      const started = await api.localRegistry.install(recipe.slug, {
         host_id: hostId,
         port,
         ctx: recipe.context_len ?? undefined,
       });
+      setWorkerId(started.worker_host_id ?? null);
       setStatus("running");
     } catch (err) {
       setError(extractApiError(err));
@@ -225,6 +238,23 @@ export function SshProcessDeployDialog({
     setBusy(true);
     setError(null);
     try {
+      if (isTwoBox(recipe)) {
+        // Through the recipe switcher, not POST /runtimes: only it picks the
+        // second box, writes the recipe's .env, records both boxes and copies
+        // the recipe's topology onto the instance.
+        const result = await api.hosts.startRecipe(
+          host.id,
+          recipe.slug,
+          workerId ? { worker_host_id: workerId } : undefined,
+        );
+        // Refusals arrive as HTTP errors (409/422 with a sentence); a body
+        // with ok:false carries the backend's own sentence.
+        if (result.ok === false && result.message) throw new Error(result.message);
+        queryClient.invalidateQueries({ queryKey: ["runtimes"] });
+        queryClient.invalidateQueries({ queryKey: ["local-registry"] });
+        setCreated(true);
+        return;
+      }
       const rendered = await api.hosts.launchCommand({
         engine: recipe.engine,
         model_identifier: recipe.model_identifier,
