@@ -121,7 +121,9 @@ async def test_state_failed_on_ssh_error():
 # ── Start ────────────────────────────────────────────────────────────────────
 @pytest.mark.asyncio
 async def test_start_uses_docker_start_when_container_exists():
-    ssh = AsyncMock(return_value=("running", "", 0))
+    # The container exists but is stopped — a RUNNING one is answered with
+    # "läuft bereits" before any start (live 01.10.2026).
+    ssh = AsyncMock(return_value=("exited", "", 0))
     with patch.object(runtime_manager, "_ssh_run", new=ssh):
         result = await runtime_manager.start_runtime(_rt())
     assert result["ok"] is True

@@ -1120,6 +1120,31 @@ async def start_recipe_on_host(
     if command_ok and recipe_needs_handle(recipe) and not recipe_handle(recipe, instance):
         raise RecipeStartError(422, REASON_NO_HANDLE)
 
+    # Läuft genau dieses Rezept schon? Dann ist nichts umzuschalten — und vor
+    # allem nichts anzufassen: keine `.env`, keine Worker-Verdrängung, kein
+    # Übergangs-Marker, keine Speicher-Prep (Live 01.10.2026, 19:49: ein
+    # zweiter TensorFold-Start wartete 180 s auf Speicher, den TensorFold
+    # selbst hielt, und endete mit 400). Nur lesen; eine Instanz ohne
+    # Startbefehl fällt unten wie bisher auf ihren eigenen Satz.
+    if instance is not None and command_ok:
+        already = await runtime_manager.already_running(instance.model_dump(), host=resolved)
+        if already is not None:
+            topology = instance.topology if isinstance(instance.topology, dict) else {}
+            worker_id = _as_uuid(topology.get("worker_host_id"))
+            worker_row = state.host_by_id.get(worker_id) if worker_id else None
+            return {
+                "ok": True,
+                "already_running": True,
+                "message": already.get("message"),
+                "runtime_id": str(instance.id),
+                "runtime_slug": instance.slug,
+                "created": False,
+                "worker_host_id": str(worker_id) if worker_id else None,
+                "worker_slug": worker_row.slug if worker_row is not None else None,
+                "env_written": [],
+                "switch_lock": {"state": "no_switch", "unknown": []},
+            }
+
     worker: Host | None = None
     env_values: dict[str, str] = {}
     if nodes >= 2:

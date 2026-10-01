@@ -2060,6 +2060,36 @@ async def _emit_exclusive_event(slug: str | None, result: dict) -> None:
         logger.debug("exclusive: event emit failed for %s: %s", slug, exc)
 
 
+async def already_running(runtime: dict, *, host: ResolvedHost | None = None) -> dict | None:
+    """``{"ok": True, "already_running": True, …}`` when the engine's anchor
+    runs (serving or still loading); ``None`` when a start has work to do.
+
+    Only "ready" and "warming" count — the same two states
+    ``_start_runtime_impl`` already treated as "nothing to do" for host
+    engines. Everything else (stopped, unknown, a failed probe) takes the
+    normal start path: this check may save a start, never block one.
+    """
+    try:
+        state = await get_runtime_state(runtime, host=host)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("already-running check failed for %s: %s", _grace_slug(runtime), exc)
+        return None
+    name = runtime.get("display_name") or _grace_slug(runtime) or "Runtime"
+    if state.get("state") == "ready":
+        return {"ok": True, "already_running": True,
+                "message": f"{name} läuft bereits — nichts zu tun."}
+    if state.get("state") == "warming":
+        return {
+            "ok": True,
+            "already_running": True,
+            "message": (
+                f"{name} startet bereits (Engine läuft, Endpunkt antwortet noch "
+                f"nicht) — nichts zu tun."
+            ),
+        }
+    return None
+
+
 async def start_runtime(
     runtime: dict,
     *,
@@ -2107,6 +2137,16 @@ async def start_runtime(
     blocker = ssh_process_start_preflight(runtime)
     if blocker:
         return {"ok": False, "message": blocker}
+
+    # Läuft die Engine schon? Diese Antwort kommt VOR Verdrängung und
+    # Speicher-Prep (Live 01.10.2026): ein zweiter TensorFold-Start fand
+    # nichts zu verdrängen, wartete dann 180 s auf 20 GiB freien Speicher —
+    # den TensorFold selbst belegte — und brach mit 400 ab. Ein laufendes
+    # Modell braucht keinen freien Platz, es IST der Platz.
+    if is_docker or is_ssh_process:
+        already = await already_running(runtime, host=host)
+        if already is not None:
+            return already
 
     if (is_docker or is_ssh_process) and runtime.get("exclusive_memory"):
         exclusive = await ensure_exclusive_host(runtime, host=host)

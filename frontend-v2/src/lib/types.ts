@@ -2269,6 +2269,9 @@ export interface HostRecipeStartResult {
   worker_slug?: string | null;
   /** Schlüssel, die MC in die Rezept-.env auf dem Kopf geschrieben hat. */
   env_written?: string[] | null;
+  /** Das Rezept lief schon — nichts wurde angefasst (keine Verdrängung,
+   *  keine Speicher-Prep, keine .env). */
+  already_running?: boolean;
 }
 
 // ── Autostart je Box (Rezept-Umschalter P3) ──────────────────────────────────

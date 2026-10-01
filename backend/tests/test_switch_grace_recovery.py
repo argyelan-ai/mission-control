@@ -252,7 +252,7 @@ async def test_successful_manual_start_marks_launching(grace_redis):
           "runtime_type": "vllm_docker", "endpoint": "http://192.0.2.10:8000/v1",
           "container_name": "c1", "launch_command": None}
     with patch("app.services.runtime_manager._ssh_run",
-               AsyncMock(return_value=("running", "", 0))):
+               AsyncMock(return_value=("exited", "", 0))):
         result = await runtime_manager.start_runtime(rt)
 
     assert result["ok"] is True
