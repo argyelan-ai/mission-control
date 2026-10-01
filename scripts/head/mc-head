@@ -26,6 +26,7 @@ reaches git, tmux or the harness — and nothing is ever passed through a shell.
 """
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import re
@@ -40,6 +41,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 # ── paths ────────────────────────────────────────────────────────────────
 
@@ -841,15 +843,40 @@ def _claude_abs(path: Path) -> str:
     return "/" + str(path)
 
 
-def render_claude_settings(run: Path) -> Path:
+# Claude Code warns `unrecognized_model` for a model its catalog does not know
+# (every local engine model) and falls back to generic defaults. A modelPicker
+# row with behavesAs (honoured from --settings) names a known model whose
+# client-side handling applies; the model id sent to the engine is unchanged.
+CLAUDE_BEHAVES_AS = os.environ.get("MC_HEAD_CLAUDE_BEHAVES_AS", "claude-sonnet-4-6")
+CLAUDE_SMALL_BEHAVES_AS = os.environ.get("MC_HEAD_CLAUDE_SMALL_BEHAVES_AS", "claude-haiku-4-5")
+CLAUDE_ALIASES = frozenset({"opus", "sonnet", "haiku", "best", "default", "opusplan"})
+
+
+def claude_knows(model: str) -> bool:
+    m = model.strip().lower()
+    return m.startswith("claude") or re.sub(r"\[.*\]$", "", m) in CLAUDE_ALIASES
+
+
+def claude_model_picker(env: dict) -> dict | None:
+    """behavesAs rows for the head's models Claude Code does not know."""
+    rows = []
+    for key, behaves in (("ANTHROPIC_MODEL", CLAUDE_BEHAVES_AS), ("ANTHROPIC_SMALL_FAST_MODEL", CLAUDE_SMALL_BEHAVES_AS)):
+        model = (env.get(key) or "").strip()
+        if model and not claude_knows(model) and model not in [r["model"] for r in rows]:
+            rows.append({"model": model, "behavesAs": behaves})
+    return {"options": rows} if rows else None
+
+
+def render_claude_settings(run: Path, env: dict | None = None) -> Path:
     """Render the head's Claude permission list.
 
     The template's ``~/`` rules alone are not enough: the head runs with
     HOME=<run>/home, so ``~`` points at the throw-away folder, not at the
     operator's home. Every ``~/`` deny rule is therefore repeated with the
-    REAL home as an absolute rule. Edit/Write are limited to the worktree
-    and the head's own status files in the run folder — never the shell
-    profile or another run.
+    REAL home as an absolute rule. Edit is limited to the worktree and the
+    head's own status files in the run folder — never the shell profile or
+    another run. (Only Edit(path) rules: Claude Code ignores Write(path) in
+    file permission checks — Edit rules cover every file-editing tool.)
     """
     data = json.loads(CLAUDE_SETTINGS_TEMPLATE.read_text())
     perms = data["permissions"]
@@ -864,12 +891,14 @@ def render_claude_settings(run: Path) -> Path:
         deny.append(f"Read({_claude_abs(real_home / rel)})")
     allow = [r for r in perms["allow"] if r not in ("Edit", "Write")]
     wt = run / "wt"
-    for tool in ("Edit", "Write"):
-        allow.append(f"{tool}({_claude_abs(wt)}/**)")
-        for name in ("step.txt", "question.md", "run-record.md"):
-            allow.append(f"{tool}({_claude_abs(run / name)})")
+    allow.append(f"Edit({_claude_abs(wt)}/**)")
+    for name in ("step.txt", "question.md", "run-record.md"):
+        allow.append(f"Edit({_claude_abs(run / name)})")
     perms["allow"] = allow
     perms["deny"] = deny
+    picker = claude_model_picker(env or {})
+    if picker:
+        data["modelPicker"] = picker
     target = run / "head-settings.json"
     target.write_text(json.dumps(data, indent=2))
     return target
@@ -900,7 +929,7 @@ def harness_argv(spec: dict, run: Path, home: Path, env: dict) -> list:
             job,
         ]
     if spec["harness"] == "claude":
-        settings = render_claude_settings(run)
+        settings = render_claude_settings(run, env)
         argv = [
             harness_bin("claude"),
             "-p",
@@ -1423,8 +1452,11 @@ def cmd_supervise(run_id: str) -> int:
         tee.join(timeout=5)
         code = child.returncode
         result = detect_result(spec, started)
-        reason = state["reason"] or ("hook_bypassed" if result["hook_bypassed"] else None) \
-            or (f"exit_{code}" if code else None)
+        blocked = local_network_blocked(spec) if code else None
+        reason = state["reason"] or ("local_network_blocked" if blocked else None) \
+            or ("hook_bypassed" if result["hook_bypassed"] else None) or (f"exit_{code}" if code else None)
+        if blocked:
+            result["detail"] = blocked
         write_status(
             run_id,
             phase="exited",
@@ -1519,6 +1551,32 @@ def file_run_record(spec: dict, started: float, ended: float) -> Path | None:
     tmp.write_text(text)
     os.replace(tmp, dest_dir / "run-record.md")
     return dest_dir / "run-record.md"
+
+
+# What a harness prints when macOS Local Network privacy blocks it: a program
+# started by launchd gets no prompt, its connects to LAN addresses just fail
+# (live: omp 2026-09-24, claude 2026-10-01). Apple binaries are exempt.
+LOCAL_NET_SIGNS = ("EHOSTUNREACH", "Was there a typo in the url or port?")
+
+
+def local_network_blocked(spec: dict) -> str | None:
+    """A clear operator step instead of a bare exit code, when the engine is
+    on a LAN address and head.log shows the blocked connect."""
+    try:
+        host = urlsplit(spec.get("base_url") or "").hostname or ""
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        return None
+    if not addr.is_private or addr.is_loopback:
+        return None
+    try:
+        text = read_head_file(run_dir(spec["run_id"]) / "head.log")[0][-65536:]
+    except OSError:
+        return None
+    if not any(sign in text for sign in LOCAL_NET_SIGNS):
+        return None
+    return (f"local network blocked for {spec['harness']} — grant it in System Settings → "
+            "Privacy & Security → Local Network (launchd starts get no prompt)")
 
 
 def detect_result(spec: dict, started: float) -> dict:
