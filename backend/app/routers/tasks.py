@@ -222,6 +222,21 @@ class TaskUpdate(BaseModel):
     assigned_agent_id: uuid.UUID | None = None
     due_at: datetime | None = None
     sort_order: int | None = None
+    # PR link for the card (e.g. recorded by whoever opens the PR for a head
+    # branch) — lets the PR merge monitor close the card once it merges.
+    # GitHub pull-request URLs only; pr_number is derived from it.
+    pr_url: str | None = None
+
+    @field_validator("pr_url")
+    @classmethod
+    def _validate_pr_url(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        from app.services.pr_merge_monitor import parse_pr_url
+
+        if parse_pr_url(v) is None:
+            raise ValueError("pr_url must be https://github.com/<owner>/<repo>/pull/<n>")
+        return v.strip()
 
 
 class TaskReorderItem(BaseModel):
@@ -1502,6 +1517,11 @@ async def update_task(
     # Check board rules before status is changed
     if "status" in updates:
         await _enforce_board_rules(session, board_id, task, updates["status"])
+
+    if "pr_url" in updates:
+        from app.services.pr_merge_monitor import parse_pr_url
+
+        updates["pr_number"] = parse_pr_url(updates["pr_url"])[2]
 
     for k, v in updates.items():
         setattr(task, k, v)
