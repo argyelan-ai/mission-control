@@ -1,4 +1,4 @@
-"""Daily Metrics Digest — "Vier Messzahlen, taeglich" (Lauf 3).
+"""Daily Metrics Digest — "Vier Messzahlen, taeglich" (Lauf 3; heute M1–M6).
 
 Einmal pro Tag (ab settings.daily_metrics_hour, UTC-Stunde — kein
 Zeitzonen-Setting im System, Container laufen auf UTC) vier Messzahlen als
@@ -15,6 +15,9 @@ Report verschicken:
   M5 usage_week                — Tokens der laufenden ISO-Woche, lokaler
                                   Anteil, Listenpreis (E0-Baseline,
                                   app/services/usage_baseline.py)
+  M6 operator_minutes_7d       — Bedienminuten je fertigem Auftrag, Median
+                                  der letzten 7 Tage (Schaetzung, Regeln:
+                                  app/services/operator_minutes.py)
 
 Muster: app/services/intelligence.py (Singleton, asyncio-Loop, Redis-Dedup
 fuer "einmal pro Tag").
@@ -78,6 +81,12 @@ async def _compute(session: AsyncSession, now) -> dict:
         # M5 is additive — a broken usage query must not swallow M1–M4.
         logger.warning("DailyMetricsDigest: usage week failed (non-critical): %s", e)
         usage_week = {"error": True}
+    try:
+        operator_minutes = await _operator_minutes_7d(session, now)
+    except Exception as e:
+        # M6 is additive as well — never swallow M1–M5.
+        logger.warning("DailyMetricsDigest: operator minutes failed (non-critical): %s", e)
+        operator_minutes = {"error": True}
     return {
         "stale_cards": stale_cards,
         "reviews_to_lead_24h": reviews_to_lead,
@@ -87,6 +96,7 @@ async def _compute(session: AsyncSession, now) -> dict:
         "hand_status_changes_24h": hand_total,
         "hand_status_changes_by_reason": hand_by_reason,
         "usage_week": usage_week,
+        "operator_minutes_7d": operator_minutes,
     }
 
 
@@ -232,6 +242,15 @@ async def _usage_week(session: AsyncSession, now) -> dict | None:
     }
 
 
+async def _operator_minutes_7d(session: AsyncSession, now) -> dict:
+    """M6: Bedienminuten-Schaetzung ueber die in den letzten 7 Tagen fertig
+    gewordenen Auftraege (7 statt 24 h: pro Tag werden es zu wenige fuer
+    einen Median)."""
+    from app.services.operator_minutes import operator_minutes_window
+
+    return await operator_minutes_window(session, days=7, now=now)
+
+
 _UMLAUT_MAP = str.maketrans(
     {
         "ä": "ae", "ö": "oe", "ü": "ue",
@@ -307,6 +326,20 @@ def format_digest(metrics: dict, *, now=None) -> str:
         )
     elif "usage_week" in metrics:
         lines.append("M5: Tokens diese Woche: keine Daten")
+
+    om = metrics.get("operator_minutes_7d")
+    if om and om.get("error"):
+        lines.append("M6: Bedienminuten je fertigem Auftrag: nicht verfuegbar")
+    elif om and om.get("jobs"):
+        median = om["median_minutes"]
+        median_str = f"{median:.0f}" if float(median).is_integer() else f"{median:.1f}"
+        lines.append(
+            f"M6: Bedienminuten je fertigem Auftrag (Median, Schaetzung, 7 T): "
+            f"{median_str} min bei {om['jobs']} Auftraegen, "
+            f"{om.get('jobs_over_target', 0)} ueber 15 min"
+        )
+    elif om is not None:
+        lines.append("M6: Bedienminuten je fertigem Auftrag: keine fertigen Auftraege (7 T)")
 
     # Belt-and-braces: alles, was noch nicht durch _to_ascii lief (z.B. ein
     # kuenftiges Feld), faellt hier still auf ASCII zurueck statt den

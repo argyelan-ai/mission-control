@@ -72,7 +72,7 @@ features:
       - "GET /api/v1/activity/stream"
       - "* /api/v1/night-shift/last-night"
       - "* /api/v1/night-shift/last-night/*"
-      - "GET /api/v1/system/daily-metrics"   # daily metrics digest M1-M5 on Home (E0, MC first)
+      - "GET /api/v1/system/daily-metrics"   # daily metrics digest M1-M6 on Home (E0, MC first)
       - "GET /api/v1/system/journeys"        # last night's journey-test result, one line on Home (E6)
       # System health surfaces: status strip on Home and the sidebar footer
       # (status), vertical alert strip (alerts), live engine metrics in the
@@ -662,6 +662,12 @@ internal:
   # removed in E5.
   - "endpoint:GET /api/v1/projects/{project_id}"
   - "endpoint:POST /api/v1/projects/{project_id}/phases/{phase_id}/complete"
+  # Operator minutes per finished job per week, head vs. fleet (ROADMAP E1
+  # comparison, an estimate — rules in backend/app/services/operator_minutes.py).
+  # Read by the operator and stage reports via the API; no page yet. The same
+  # estimate per job sits in the run record (zeiten.bedienung) and as M6 in
+  # the daily metrics digest.
+  - "endpoint:GET /api/v1/system/operator-minutes"
   # Task usage rollup and single checklist item delete: no caller found (the
   # CLI uses the agent-scoped /agent/... checklist route).
   - "endpoint:GET /api/v1/tasks/{task_id}/usage"

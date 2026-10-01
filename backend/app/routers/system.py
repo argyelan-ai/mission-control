@@ -98,7 +98,7 @@ async def system_daily_metrics(
     session: AsyncSession = Depends(get_session),
     current_user = Depends(require_user),
 ):
-    """The daily metrics digest (M1–M5) for the Home page — MC first, the
+    """The daily metrics digest (M1–M6) for the Home page — MC first, the
     Slack/Telegram copy stays optional. Computed live on every call with the
     same code as the digest (app/services/daily_metrics_digest.py)."""
     from app.services.daily_metrics_digest import compute_daily_metrics
@@ -106,6 +106,26 @@ async def system_daily_metrics(
     now = utcnow()
     metrics = await compute_daily_metrics(session, now=now)
     return {**metrics, "computed_at": now.isoformat()}
+
+
+@router.get("/api/v1/system/operator-minutes")
+async def system_operator_minutes(
+    weeks: int = 6,
+    tz: str | None = None,
+    session: AsyncSession = Depends(get_session),
+    current_user = Depends(require_user),
+):
+    """Operator minutes per finished job per ISO week — an estimate, split
+    head vs. fleet (ROADMAP E1 comparison). Read-only; rules and constants:
+    app/services/operator_minutes.py. weeks is clamped to 1..26."""
+    from app.services.operator_minutes import operator_minutes_by_week
+    from app.services.usage_baseline import zone
+
+    try:
+        zone(tz)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return await operator_minutes_by_week(session, weeks=weeks, tz=tz)
 
 
 @router.get("/api/v1/system/journeys")
