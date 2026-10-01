@@ -521,6 +521,23 @@ _MANUAL_NAME_FILTER = "name=vllm_node"
 _COMPOSE_PROJECT_LABEL = "com.docker.compose.project"
 
 
+def detached_launch(launch_command: str, log_path: str) -> str:
+    """Shell line that starts ``launch_command`` on a box and returns at once.
+
+    Only the ``nohup`` job goes to the background (``{ … & }``), with stdin from
+    /dev/null. ``mkdir … && nohup … &`` would background the whole ``&&`` list
+    as a subshell that keeps the SSH session's stdout open until the launch
+    command ends — fine for templates that background themselves, but a recipe
+    whose ``start.sh`` runs in the foreground (TensorFold, live 01.10.2026)
+    held the SSH call until it timed out and MC reported an empty "SSH-Fehler".
+    """
+    return (
+        "mkdir -p ~/.cache/mc && "
+        f"{{ nohup bash -lc {shlex_quote(launch_command)} "
+        f"> {log_path} 2>&1 < /dev/null & }}"
+    )
+
+
 def _sanitize_slug(slug: str) -> str:
     """Collapse anything non-slug-ish to '_'. Defensive — slugs already pass DB
     constraints, but eviction commands interpolate the slug into a docker label
@@ -2234,10 +2251,8 @@ async def _start_runtime_impl(runtime: dict, *, host: ResolvedHost | None = None
                     c if c.isalnum() or c in "-_" else "_"
                     for c in str(runtime.get("id") or runtime.get("slug") or "unknown")
                 )
-                detach_cmd = (
-                    f"mkdir -p ~/.cache/mc && "
-                    f"nohup bash -lc {shlex_quote(launch_command)} "
-                    f"> ~/.cache/mc/runtime-launch-{slug_safe}.log 2>&1 &"
+                detach_cmd = detached_launch(
+                    launch_command, f"~/.cache/mc/runtime-launch-{slug_safe}.log"
                 )
                 _, stderr, exit_code = await _ssh_run(detach_cmd, host=host)
                 log_path = f"~/.cache/mc/runtime-launch-{slug_safe}.log"
@@ -2398,11 +2413,7 @@ async def _start_runtime_impl(runtime: dict, *, host: ResolvedHost | None = None
 
             slug_safe = _sanitize_slug(runtime.get("id") or runtime.get("slug") or "unknown")
             log_path = f"~/.cache/mc/runtime-launch-{slug_safe}.log"
-            detach_cmd = (
-                f"mkdir -p ~/.cache/mc && "
-                f"nohup bash -lc {shlex_quote(launch_command)} "
-                f"> {log_path} 2>&1 &"
-            )
+            detach_cmd = detached_launch(launch_command, log_path)
             _, stderr, exit_code = await _ssh_run(detach_cmd, host=host)
             if exit_code != 0:
                 return {
@@ -2443,8 +2454,8 @@ async def _start_runtime_impl(runtime: dict, *, host: ResolvedHost | None = None
                 ),
             }
         except Exception as e:  # noqa: BLE001
-            logger.error("ssh_process Start fehlgeschlagen für %s: %s", runtime["id"], e)
-            return {"ok": False, "message": f"SSH-Fehler: {e}"}
+            logger.error("ssh_process Start fehlgeschlagen für %s: %r", runtime["id"], e)
+            return {"ok": False, "message": f"SSH-Fehler: {e or type(e).__name__}"}
 
     if runtime_type == "unsloth":
         tmux_session = runtime.get("tmux_session") or "unsloth-studio"
