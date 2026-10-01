@@ -75,6 +75,9 @@ SCRAPE_TIMEOUT = 3.0  # seconds
 # by the poll interval, reporting throughput far too low.
 _METRIC_CANDIDATES: tuple[tuple[str, str, str], ...] = (
     ("vllm", "vllm:generation_tokens_total", "counter"),
+    # TensorFold (e.g. the GLM-5.3 two-Spark recipe): same cumulative counter
+    # shape as vLLM, verified live 01.10.2026.
+    ("tensorfold", "tensorfold:generation_tokens_total", "counter"),
     ("sglang", "sglang:generation_tokens_total", "counter"),
     ("sglang", "sglang:gen_throughput", "rate"),
 )
