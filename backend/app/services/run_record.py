@@ -38,6 +38,8 @@ Curation (Analyse §3.3 / Kuratierung + Nachtrag):
     team-lead: Mark must see open real questions in the record, not just
     resolved ones. Any other status (e.g. expired) is still not a
     decision.
+  - zeiten.bedienung: operator minutes for this job (an estimate, with
+    follow-up questions and rescues) — rules in app/services/operator_minutes.py.
   - reibung: the disturbance-typed approvals above (any status) plus
     ActivityEvents with severity in (warning, error, critical) — collapsed
     per type into one row carrying a count and first/last timestamp, never
@@ -78,6 +80,7 @@ from app.models.approval import Approval
 from app.models.deliverable import TaskDeliverable
 from app.models.model_usage import ModelUsageEvent
 from app.models.task import Task, TaskComment, TaskEvent
+from app.services.operator_minutes import operator_minutes_for_task
 
 PLAN_COMMENT_TYPES = ("message", "handoff", "checkpoint")
 BEWEIS_COMMENT_TYPES = ("evidence", "deliverable")
@@ -350,6 +353,9 @@ async def build_run_record(session: AsyncSession, task_id: uuid.UUID) -> dict[st
         "bestaetigt": task.ack_at,
         "abgeschlossen": task.completed_at,
         "dauer_sekunden": dauer_sekunden,
+        # Operator minutes (estimate) for this job incl. subtasks — rules in
+        # app/services/operator_minutes.py (ROADMAP E1 "operator minutes <= 15").
+        "bedienung": await operator_minutes_for_task(session, task_id),
     }
 
     # ── Reibung (Bauplan 6.1 / Nachtrag): friction events (severity
@@ -431,6 +437,13 @@ def _build_markdown_lines(
                 lines.append(f"- {label}: {val}")
         if zeiten.get("dauer_sekunden") is not None:
             lines.append(f"- Dauer: {zeiten['dauer_sekunden']:.0f}s")
+        bedienung = zeiten.get("bedienung")
+        if bedienung:
+            lines.append(
+                f"- Bedienzeit (Schaetzung): ~{bedienung['active_minutes']} min in "
+                f"{bedienung['sessions']} Sitzung(en), {bedienung['follow_up_questions']} Rueckfragen, "
+                f"{bedienung['rescues']} Rettung(en)"
+            )
         lines.append("")
 
     lines.append("## Plan")
