@@ -4360,6 +4360,12 @@
         "summary": "Set System Mode Endpoint"
       }
     },
+    "/api/v1/system/operator-minutes": {
+      "get": {
+        "operationId": "system_operator_minutes_api_v1_system_operator_minutes_get",
+        "summary": "System Operator Minutes"
+      }
+    },
     "/api/v1/system/status": {
       "get": {
         "operationId": "system_status_api_v1_system_status_get",

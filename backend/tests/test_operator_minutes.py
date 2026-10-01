@@ -100,6 +100,8 @@ async def test_task_estimate_counts_operator_touches_questions_and_rescues(make_
         _event(task.id, 120, changed_by="head", reason="head_restart"),
         # an agent asks via approval, answered at 200 (sitting 4)
         _approval(task.id, 150, action_type="clarification_question", resolved_minute=200),
+        # an agent asks for a decision in a comment (follow-up, not an operator touch)
+        _comment(task.id, 160, author_type="agent", comment_type="needs_decision"),
         # a manual status fix at 300 (sitting 5, a rescue)
         _event(task.id, 300, changed_by="user", reason="manual_update", to_status="done"),
         # the operator stops a head (sitting 6, a rescue)
@@ -124,7 +126,7 @@ async def test_task_estimate_counts_operator_touches_questions_and_rescues(make_
         "head_start": 1, "comment": 1, "thread_reply": 1, "head_restart": 2,
         "approval_answer": 1, "status_change": 1, "head_stop": 1,
     }
-    assert est["follow_up_questions"] == 2  # head_needs_you + clarification_question
+    assert est["follow_up_questions"] == 3  # head_needs_you + clarification_question + needs_decision
     assert est["manual_status_changes"] == 1
     assert est["head_rescues"] == 2  # restart after failed + operator stop
     assert est["rescues"] == 3
@@ -151,6 +153,26 @@ async def test_children_count_into_the_parent_job(make_board, make_task, session
     assert est["active_minutes"] == 6
     assert est["manual_status_changes"] == 2
     assert est["path"] == "fleet"
+
+
+@pytest.mark.asyncio
+async def test_writing_the_order_in_the_ui_is_a_touch(make_board, make_task, session):
+    from app.models.user import User
+    from app.services.operator_minutes import operator_minutes_for_task
+
+    user = User(id=uuid.uuid4(), email="op@mc.local", name="op", role="admin", is_active=True)
+    await _add(user)
+    board = await make_board()
+    task = await make_task(board.id, created_by_user_id=user.id, created_at=_m(0))
+    agent_made = await make_task(board.id, created_at=_m(0))
+    await _add(_comment(task.id, 60))
+
+    est = await operator_minutes_for_task(session, task.id)
+
+    assert est["touches_by_kind"] == {"task_created": 1, "comment": 1}
+    assert est["sessions"] == 2
+    assert est["active_minutes"] == 6
+    assert (await operator_minutes_for_task(session, agent_made.id))["touches"] == 0
 
 
 @pytest.mark.asyncio

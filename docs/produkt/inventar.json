@@ -267,6 +267,7 @@
     "GET /api/v1/system/metrics",
     "GET /api/v1/system/metrics/history",
     "GET /api/v1/system/mode",
+    "GET /api/v1/system/operator-minutes",
     "GET /api/v1/system/status",
     "GET /api/v1/system/version",
     "GET /api/v1/tags",

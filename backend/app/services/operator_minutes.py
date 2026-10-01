@@ -8,6 +8,8 @@ operator's side touched a job. This module turns those touches into minutes
 with one simple, explainable rule — nothing more precise is claimed.
 
 What counts as a touch (operator side, per task):
+  task_created     the task was created in the UI (tasks.created_by_user_id
+                   set, at created_at) — writing the order is operator time
   status_change    task_events with changed_by='user' (the same signal as
                    digest M4 — manual moves, stop/resume, approval-driven moves)
   comment          task_comments with author_type='user'
@@ -40,7 +42,7 @@ Counts next to the minutes:
   follow_up_questions   the job asked the operator: head 'needs you'
                         (task_events reason 'head_needs_you'), approvals of
                         FOLLOW_UP_APPROVAL_TYPES (any status — it was asked),
-                        agent comments of type 'needs_decision'
+                        comments of type 'needs_decision' (agent or system)
   manual_status_changes user status changes with a reason in
                         MANUAL_FIX_REASONS (hand moves, stop/resume, drag on
                         the board, no reason given) — answers to approvals are
@@ -146,6 +148,12 @@ async def _collect(session: AsyncSession, root_ids: list[uuid.UUID]) -> dict[uui
         job["touch_times"].append(ts)
         job["kinds"][kind] += 1
 
+    created = (await session.exec(
+        select(Task.id, Task.created_at).where(Task.id.in_(ids), Task.created_by_user_id.is_not(None))
+    )).all()
+    for task_id, ts in created:
+        touch(task_id, ts, "task_created")
+
     events = (await session.exec(
         select(TaskEvent).where(
             TaskEvent.task_id.in_(ids),
@@ -185,7 +193,7 @@ async def _collect(session: AsyncSession, root_ids: list[uuid.UUID]) -> dict[uui
     for task_id, ts, author_type, comment_type in comments:
         if author_type == "user":
             touch(task_id, ts, "comment")
-        elif author_type == "agent" and comment_type in FOLLOW_UP_COMMENT_TYPES:
+        elif comment_type in FOLLOW_UP_COMMENT_TYPES:
             jobs[owner[task_id]]["follow_up_questions"] += 1
 
     replies = (await session.exec(
