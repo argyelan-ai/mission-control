@@ -292,7 +292,10 @@ def test_claude_settings_deny_the_real_home_and_scope_edits_to_the_worktree(env)
     assert "Read(~/.ssh/**)" in perms["deny"]  # the ~ form stays
     assert "Edit" not in perms["allow"] and "Write" not in perms["allow"]
     assert f"Edit(/{run}/wt/**)" in perms["allow"]
-    assert f"Write(/{run}/run-record.md)" in perms["allow"]
+    assert f"Edit(/{run}/run-record.md)" in perms["allow"]
+    # Claude Code ignores Write(path) in file permission checks ("only Edit(path)
+    # rules are") and warns on every start: Edit rules cover all editing tools.
+    assert not [r for r in perms["allow"] if r.startswith("Write(")]
 
 
 # ── A3: box lock with owner ─────────────────────────────────────────────

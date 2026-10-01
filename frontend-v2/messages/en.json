@@ -3406,6 +3406,7 @@
       "gh_identity_missing": "Heads have no GitHub identity yet (operator step).",
       "sandbox_required": "A real repo needs the sandbox for every harness (operator step).",
       "hook_bypassed": "The head pushed around the push hook (e.g. --no-verify). The run does not count, even with a PR.",
+      "local_network_blocked": "macOS blocked the local network for the harness program (operator step: System Settings → Privacy & Security → Local Network → turn it on).",
       "exit": "The harness ended with exit code {code}.",
       "unknown": "Ended without a known reason.",
       "gh_identity_unsafe": "The heads' GitHub identity has too many rights, or the base branch is not protected (operator step)."
