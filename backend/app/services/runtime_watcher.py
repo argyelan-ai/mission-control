@@ -1061,6 +1061,16 @@ class RuntimeWatcher:
         if not ssh_capable(host):
             return
 
+        failures = await self._read_recovery_failures(redis, runtime.slug)
+        if failures >= AUTO_RECOVERY_MAX_ATTEMPTS:
+            return  # given up already — the event was emitted at the transition
+
+        if not await self._host_answers(runtime, host):
+            return  # box is down, not just the container — nothing to recover
+
+        # After the cheap gates: the sibling check may ask the box over SSH
+        # (anchor of each exclusive sibling), so it runs only for a runtime
+        # that would otherwise really be started now.
         sibling = await self._active_exclusive_sibling(session, redis, runtime)
         if sibling is not None:
             # The live reboot-test failure: qwen-general (a deliberately
@@ -1076,13 +1086,6 @@ class RuntimeWatcher:
                 "on the same host", runtime.slug, sibling,
             )
             return
-
-        failures = await self._read_recovery_failures(redis, runtime.slug)
-        if failures >= AUTO_RECOVERY_MAX_ATTEMPTS:
-            return  # given up already — the event was emitted at the transition
-
-        if not await self._host_answers(runtime, host):
-            return  # box is down, not just the container — nothing to recover
 
         if not await self._claim_recovery_cooldown(redis, runtime.slug):
             return
