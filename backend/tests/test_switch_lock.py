@@ -41,6 +41,9 @@ def _metrics(text: str | None, status: int = 200):
     def handler(request: httpx.Request) -> httpx.Response:
         if text is None:
             raise httpx.ConnectError("refused", request=request)
+        if request.url.path == "/health":
+            # An engine without a /health JSON (vLLM answers it empty).
+            return httpx.Response(404, text="not found")
         assert request.url.path == "/metrics"
         return httpx.Response(status, text=text)
 
@@ -251,3 +254,117 @@ async def test_runtime_start_endpoint_answers_409(auth_client, session):
         resp = await auth_client.post(f"/api/v1/runtimes/{new.slug}/start")
     assert resp.status_code == 409, resp.text
     assert resp.json()["detail"] == refusal
+
+
+# ── TensorFold (live sample 01.10.2026) ──────────────────────────────────
+# TensorFold is not vLLM: it reports its load as ``tensorfold:requests_running``
+# and in ``/health`` as ``requests_running`` / ``busy``. Before this, the lock
+# saw "no running-requests metric" and let every switch through (fail-open).
+
+TENSORFOLD_IDLE = (
+    "# HELP tensorfold:requests_running Requests in prefill or decode.\n"
+    "# TYPE tensorfold:requests_running gauge\n"
+    "tensorfold:requests_running 0\n"
+    "# HELP tensorfold:requests_waiting Requests queued or held until a lane is free.\n"
+    "# TYPE tensorfold:requests_waiting gauge\n"
+    "tensorfold:requests_waiting 0\n"
+    "tensorfold_health:requests_total 2\n"
+    "# HELP tensorfold_health:completion_tokens_total Reply tokens, the running replies' tokens so far included.\n"
+    "tensorfold_health:completion_tokens_total 44\n"
+    'tensorfold_health:streams{state="decoding"} 0\n'
+    'tensorfold_health:streams{state="filling"} 0\n'
+)
+TENSORFOLD_BUSY = TENSORFOLD_IDLE.replace(
+    "tensorfold:requests_running 0", "tensorfold:requests_running 3"
+)
+
+
+def _engine(metrics: str | None, metrics_status: int = 200, health: dict | None = None,
+            health_status: int = 200):
+    """Fake engine with ``/metrics`` AND ``/health``."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/metrics":
+            if metrics is None:
+                raise httpx.ConnectError("refused", request=request)
+            return httpx.Response(metrics_status, text=metrics)
+        if request.url.path == "/health":
+            if health is None:
+                return httpx.Response(404, text="not found")
+            return httpx.Response(health_status, json=health)
+        raise AssertionError(f"unexpected path {request.url.path}")
+
+    return patch.object(engine, "_transport", httpx.MockTransport(handler))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("text", "expected"), [(TENSORFOLD_IDLE, 0), (TENSORFOLD_BUSY, 3)], ids=["idle", "busy"]
+)
+async def test_probe_reads_the_tensorfold_metric(text, expected):
+    with _metrics(text):
+        assert await engine.probe_running_requests("http://box:8000/v1") == (expected, None)
+
+
+@pytest.mark.asyncio
+async def test_tensorfold_waiting_and_health_counters_are_not_running_requests():
+    # Only the running gauge counts — queued requests and lifetime totals
+    # (requests_total 2) must not make an idle engine look busy.
+    with _metrics(TENSORFOLD_IDLE):
+        assert await engine.probe_running_requests("http://box:8000/v1") == (0, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("health", "expected"),
+    [
+        ({"status": "ok", "requests_running": 2, "busy": True}, 2),
+        ({"status": "ok", "requests_running": 0, "busy": False}, 0),
+        ({"status": "ok", "busy": True}, 1),
+        ({"status": "ok", "busy": False}, 0),
+    ],
+)
+async def test_health_json_is_the_fallback_when_metrics_say_nothing(health, expected):
+    with _engine(NO_METRIC, health=health):
+        assert await engine.probe_running_requests("http://box:8000/v1") == (expected, None)
+
+
+@pytest.mark.asyncio
+async def test_health_fallback_also_covers_missing_metrics_endpoint():
+    with _engine("not found", metrics_status=404, health={"requests_running": 1, "busy": True}):
+        assert await engine.probe_running_requests("http://box:8000/v1") == (1, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("metrics", "metrics_status", "health", "reason"),
+    [
+        (NO_METRIC, 200, None, "no running-requests metric"),
+        (NO_METRIC, 200, {"status": "ok"}, "no running-requests metric"),
+        ("oops", 500, None, "HTTP 500"),
+    ],
+)
+async def test_health_fallback_keeps_the_reason_when_it_knows_nothing(
+    metrics, metrics_status, health, reason
+):
+    with _engine(metrics, metrics_status=metrics_status, health=health):
+        assert await engine.probe_running_requests("http://box:8000/v1") == (None, reason)
+
+
+@pytest.mark.asyncio
+async def test_lock_refuses_a_switch_away_from_a_busy_tensorfold(session):
+    box = await _host(session, "box-a")
+    old = await _runtime(session, "glm-tf", box, display_name="GLM TensorFold")
+    with _metrics(TENSORFOLD_BUSY), pytest.raises(HTTPException) as exc:
+        await box_guard.check_engine_idle([old])
+    assert exc.value.status_code == 409
+    assert exc.value.detail["code"] == "engine_busy"
+    assert exc.value.detail["running_requests"] == 3
+
+
+@pytest.mark.asyncio
+async def test_lock_allows_a_switch_away_from_an_idle_tensorfold(session):
+    box = await _host(session, "box-a")
+    old = await _runtime(session, "glm-tf", box)
+    with _metrics(TENSORFOLD_IDLE):
+        assert await box_guard.check_engine_idle([old]) == []
