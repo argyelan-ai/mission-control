@@ -1158,11 +1158,13 @@ function TasksPageContent({ onPhoneTaskChange }: { onPhoneTaskChange?: (open: bo
 
 export default function TasksPage() {
   // Phone + an open task: the detail's own context bar (‹ Tasks · ⋯) takes
-  // the place of the app bar (DESIGN.md K12). Full height so the detail
-  // scrolls in its own body and that bar stays put.
+  // the place of the app bar (DESIGN.md K12), and its action bar (Back ·
+  // main action · Reply · More, mobile nav V2) takes the place of the tab
+  // bar — a pushed screen, like a chat. Full height so the detail scrolls in
+  // its own body and both bars stay put.
   const [taskOnPhone, setTaskOnPhone] = useState(false);
   return (
-    <AppShell fullHeight mobileHideAppBar={taskOnPhone}>
+    <AppShell fullHeight mobileChromeless={taskOnPhone}>
       <Suspense fallback={null}>
         <TasksPageContent onPhoneTaskChange={setTaskOnPhone} />
       </Suspense>

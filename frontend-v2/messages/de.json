@@ -12,7 +12,7 @@
     "repos": "Repos",
     "skills": "Skills",
     "runtimes": "Runtimes",
-    "sessions": "Sessions",
+    "sessions": "Chats",
     "loops": "Loops",
     "schedule": "Zeitplan",
     "settings": "Einstellungen",
@@ -31,7 +31,27 @@
     "navGroupWork": "Arbeit",
     "navGroupKnowledge": "Wissen",
     "navGroupStudio": "Studio",
-    "navGroupSystem": "System"
+    "navGroupSystem": "System",
+    "newItem": "Neu",
+    "mobileNav": "Hauptnavigation",
+    "inboxWaiting": "{count} wartend",
+    "quick": {
+      "title": "Neu",
+      "close": "Schliessen",
+      "newJob": "Neuer Job",
+      "newJobHint": "Jetzt oder heute Nacht als Head starten",
+      "voice": "Sprachbefehl",
+      "voiceHint": "Mit dem Sprachassistenten sprechen",
+      "continueChat": "Chat fortsetzen",
+      "allAreas": "Alle Bereiche",
+      "more": "Mehr…"
+    },
+    "detailBar": {
+      "label": "Aktionen",
+      "back": "Zurück",
+      "reply": "Antworten",
+      "more": "Mehr"
+    }
   },
   "settingsProfile": {
     "email": "E-Mail",
@@ -760,7 +780,10 @@
     "fromAgent": "von {name}",
     "approvePost": "Genehmigen & posten",
     "showFull": "Ganz anzeigen",
-    "showLess": "Weniger anzeigen"
+    "showLess": "Weniger anzeigen",
+    "headQuestionsCount": "Fragen von Heads ({count})",
+    "headQuestionUntitled": "Job ohne Titel",
+    "headQuestionAnswer": "Antworten"
   },
   "sessions": {
     "groups": {
@@ -768,7 +791,7 @@
       "foldAll": "Alle zuklappen",
       "unfoldAll": "Alle öffnen",
       "sectionTitle": "Gruppen",
-      "tabListLabel": "Sessions-Ansicht",
+      "tabListLabel": "Chat-Ansicht",
       "tabAgents": "Agenten",
       "tabGroups": "Gruppen",
       "tabGroupsWaiting": "Gruppen — {count} warten",
@@ -912,7 +935,7 @@
     "attachmentExpandImage": "Bild {name} vergrössern",
     "attachmentCollapseImage": "Bild {name} verkleinern",
     "attachmentUnavailable": "nicht mehr verfügbar",
-    "backToSessions": "Zurück zur Sessionliste",
+    "backToSessions": "Zurück zu den Chats",
     "chatOptions": "Chat-Optionen",
     "sessionWaitingAtPrompt": "Session läuft, wartet am Prompt",
     "detailLevel": "Detailgrad",
@@ -923,7 +946,7 @@
     "chat": "Chat",
     "noTranscript": "Kein Transkript verfügbar",
     "transcriptLoading": "Transkript wird geladen…",
-    "pickSession": "Wähle eine Session in der Seitenleiste.",
+    "pickSession": "Wähle einen Chat in der Seitenleiste.",
     "jumpToBottom": "Nach unten",
     "newMessagesCount": "{count} neu",
     "status": {

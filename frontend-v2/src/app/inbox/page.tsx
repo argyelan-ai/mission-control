@@ -1,10 +1,11 @@
 "use client";
 
-import { useQuery, useQueries, useQueryClient, useMutation } from "@tanstack/react-query";
+import { useQueryClient, useMutation } from "@tanstack/react-query";
+import Link from "next/link";
 import AppShell from "@/components/layout/AppShell";
 import { motion, AnimatePresence } from "framer-motion";
 import { useTranslations } from "next-intl";
-import { CheckCircle, Inbox, Clock } from "lucide-react";
+import { CheckCircle, Inbox, Clock, MessageCircleQuestion, ChevronRight } from "lucide-react";
 import { api } from "@/lib/api";
 import { useApprovalStream } from "@/lib/sse";
 import { useAppStore } from "@/lib/store";
@@ -14,8 +15,7 @@ import { ApprovalCard } from "@/components/inbox/ApprovalCard";
 import { ReviewTaskRow } from "@/components/inbox/ReviewTaskRow";
 import { GlassCard } from "@/components/shared/GlassCard";
 import { Pill } from "@/components/shared/Pill";
-import type { Approval, Task, Agent } from "@/lib/types";
-import { isOperatorReview, isSelfReviewStall } from "@/lib/reviewRouting";
+import { useInbox } from "@/hooks/useInbox";
 
 export default function InboxPage() {
   const t = useTranslations("inbox");
@@ -23,41 +23,22 @@ export default function InboxPage() {
   const { activeBoardId } = useAppStore();
 
   // ── Data ─────────────────────────────────────────────────────────────────────
-
-  const { data: approvals } = useQuery({
-    queryKey: ["approvals"],
-    queryFn: api.approvals.list,
-    refetchInterval: 15_000,
-  });
-
-  const { data: reviewTasks } = useQuery({
-    queryKey: ["review-tasks", activeBoardId],
-    queryFn: () => api.tasks.list(activeBoardId!, { status: "review" }),
-    enabled: !!activeBoardId,
-    refetchInterval: 15_000,
-  });
-
-  const { data: agents } = useQuery({
-    queryKey: ["agents", activeBoardId],
-    queryFn: () => api.agents.list(activeBoardId ?? undefined),
-    enabled: !!activeBoardId,
-  });
+  // One source for what waits on the operator (lib/inbox.ts): the phone tab
+  // bar's badge reads the same hook, so the badge always matches this page.
+  const {
+    reviews,
+    agentReviews,
+    waitingForReview,
+    approvals: pendingApprovals,
+    headQuestions,
+    count: totalCount,
+    agentMap,
+  } = useInbox();
 
   // SSE auto-refresh
   useApprovalStream(() => {
     qc.invalidateQueries({ queryKey: ["approvals"] });
     qc.invalidateQueries({ queryKey: ["review-tasks"] });
-  });
-
-  // Load comments for each review task to filter correctly
-  const allReviews = reviewTasks ?? [];
-  const commentQueries = useQueries({
-    queries: allReviews.map((task) => ({
-      queryKey: ["task-comments", activeBoardId, task.id],
-      queryFn: () => api.tasks.comments.list(activeBoardId!, task.id),
-      enabled: !!activeBoardId,
-      staleTime: 30_000,
-    })),
   });
 
   // ── Mutations ────────────────────────────────────────────────────────────────
@@ -93,37 +74,6 @@ export default function InboxPage() {
     onError: () => notify.error(t("reviewSaveFailed")),
   });
 
-  // ── Derived Data ─────────────────────────────────────────────────────────────
-
-  const pendingApprovals = approvals ?? [];
-
-  const agentMap: Record<string, Agent> = Object.fromEntries((agents ?? []).map((a) => [a.id, a]));
-
-  // Reviews held by a reviewer AGENT (e.g. Rex) are not the operator's
-  // decision — they are listed read-only below. Only tasks the operator
-  // explicitly asked to review, or that no reviewer agent holds, get buttons.
-  const agentReviews = allReviews.filter(
-    (task) => !isOperatorReview(task, task.assigned_agent_id ? agentMap[task.assigned_agent_id] : null),
-  );
-  const agentReviewIds = new Set(agentReviews.map((t) => t.id));
-
-  // Filter: Only show tasks that are ready for the operator's review
-  const reviews = allReviews.filter((task, i) => {
-    if (agentReviewIds.has(task.id)) return false;
-    if (!task.assigned_agent_id) return true;
-    // Self-review stall (W2, PR #514 Rex review): the assigned "reviewer" is
-    // the card's own developer, no independent review is ever coming — don't
-    // make the operator wait for a comment from an agent who already said
-    // everything they're going to say while developing it.
-    if (isSelfReviewStall(task)) return true;
-    const comments = commentQueries[i]?.data;
-    if (!comments) return false;
-    return comments.some((c) => c.author_agent_id === task.assigned_agent_id);
-  });
-
-  const waitingForReview = allReviews.length - reviews.length - agentReviews.length;
-  const totalCount = pendingApprovals.length + reviews.length;
-
   // ── Render ───────────────────────────────────────────────────────────────────
 
   return (
@@ -156,6 +106,46 @@ export default function InboxPage() {
           </Pill>
         )}
       </div>
+
+      {/* Head questions — a head stopped and asks the operator. Answered on
+          the task detail (HeadStateCard: answer field + continue). */}
+      {headQuestions.length > 0 && (
+        <section data-testid="inbox-head-questions">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="text-[var(--color-accent)]">
+              <MessageCircleQuestion size={14} />
+            </span>
+            <span className="text-xs uppercase tracking-wider font-semibold text-[var(--color-text-muted)]">
+              {t("headQuestionsCount", { count: headQuestions.length })}
+            </span>
+          </div>
+          <div className="flex flex-col gap-2">
+            {headQuestions.map((run) => (
+              <Link
+                key={run.run_id}
+                href={run.task_id ? `/tasks?task=${encodeURIComponent(run.task_id)}` : "/tasks"}
+                className="block cursor-pointer"
+                data-testid="inbox-head-question"
+              >
+                <GlassCard className="px-4 py-3 flex items-center gap-3 min-h-11">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm truncate text-[var(--color-text-primary)]">
+                      {run.title || t("headQuestionUntitled")}
+                    </div>
+                    {run.question && (
+                      <div className="text-xs line-clamp-2 text-[var(--color-text-secondary)] mt-1">
+                        {run.question}
+                      </div>
+                    )}
+                  </div>
+                  <span className="text-xs shrink-0 text-[var(--color-text-muted)]">{t("headQuestionAnswer")}</span>
+                  <ChevronRight size={16} className="shrink-0 text-[var(--color-text-muted)]" aria-hidden />
+                </GlassCard>
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* Review Tasks section */}
       {reviews.length > 0 && (

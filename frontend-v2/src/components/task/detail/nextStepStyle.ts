@@ -8,9 +8,10 @@ import { C } from "@/lib/colors";
 /** The surface for "you have to act" — one step above the page ground. */
 export const RAISED = "var(--detail-raised, var(--color-bg-elevated))";
 
-/** Primary button (K11): accent fill, at most one per screen. */
+/** Primary button (K11): accent fill, at most one per screen. `main-action`
+ *  lets the phone action bar mirror it (lib/taskDetail/mainAction.ts). */
 export const PRIMARY_BTN =
-  "inline-flex items-center justify-center gap-2 h-11 px-4 rounded-md text-sm cursor-pointer transition-colors hover:bg-[var(--color-accent-light)] disabled:opacity-40 disabled:cursor-not-allowed";
+  "main-action inline-flex items-center justify-center gap-2 h-11 px-4 rounded-md text-sm cursor-pointer transition-colors hover:bg-[var(--color-accent-light)] disabled:opacity-40 disabled:cursor-not-allowed";
 export const PRIMARY_STYLE = { background: C.accent, color: C.onAccent, fontWeight: 600 } as const;
 
 /** Secondary button (K11): text without a frame, 44 px target. */

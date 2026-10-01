@@ -32,8 +32,9 @@ vi.mock("../MobileNav", () => ({
   __esModule: true,
   default: () => null,
   MobileNavProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  MobileTabBar: () => null,
 }));
+vi.mock("../MobileTabBar", () => ({ MobileTabBar: () => null }));
+vi.mock("../QuickSheet", () => ({ QuickSheet: () => null }));
 vi.mock("../Sidebar", () => ({ __esModule: true, default: () => null }));
 vi.mock("../AmbientBackground", () => ({ AmbientBackground: () => null }));
 vi.mock("@/components/shared/CommandPalette", () => ({ __esModule: true, default: () => null }));
