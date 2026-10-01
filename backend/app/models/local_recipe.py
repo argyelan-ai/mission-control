@@ -183,6 +183,21 @@ class LocalRecipe(SQLModel, table=True):
         sa_column=Column(Boolean, server_default=text("false"), nullable=False),
     )
 
+    # Page-cache care at start (services/host_memory_prep, PR 8): an exclusive
+    # runtime on a GB10 normally gets its box's page cache dropped once, a
+    # cache dropper for the load window and (when configured) a lowered
+    # watermark — because vLLM sizes its KV cache from MemFree. Engines that
+    # size their budget from MemAvailable INCLUDING reclaimable page cache
+    # (TensorFold) gain nothing from it and pay for it: dropping makes the
+    # kernel migrate pages while the weights stream in. Such a recipe says
+    # ``false`` here; the instance inherits it (recipe_switcher.
+    # build_runtime_from_recipe). The MemAvailable wait still runs — it only
+    # reads. Default true = every existing row behaves as before.
+    drop_page_cache: bool = Field(
+        default=True,
+        sa_column=Column(Boolean, server_default=text("true"), nullable=False),
+    )
+
     # Operator decision — a refresh may update every other field but never
     # flips this back on (services/local_registry._apply_update).
     enabled: bool = Field(

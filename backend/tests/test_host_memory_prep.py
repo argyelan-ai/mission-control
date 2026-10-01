@@ -1130,3 +1130,65 @@ async def test_start_runtime_aborts_without_calling_impl_when_the_wait_times_out
     # same as any other start that never got off the ground.
     assert box.watermark == CONFIGURED_WATERMARK
     assert memprep.DROPPER_CONTAINER not in box.containers
+
+
+# ── Per-recipe opt-out: engines that must not have their page cache touched ──
+#
+# Some engines size their memory budget from MemAvailable INCLUDING reclaimable
+# page cache (TensorFold does), so dropping the cache buys them nothing and
+# costs a page migration while the weights stream in. Such a recipe sets
+# ``drop_page_cache: false``; the instance carries the flag (copied at
+# creation), and the prep then leaves cache, dropper and watermark alone. The
+# MemAvailable wait stays: it only READS, and it is what keeps a start from
+# landing on a box whose previous engine has not drained yet.
+
+
+@pytest.mark.asyncio
+async def test_a_runtime_that_opts_out_never_gets_a_drop_a_dropper_or_a_watermark(box, fake_redis):
+    from app.services.runtime_manager import start_runtime
+
+    opted_out = {**SPARKINFER, "drop_page_cache": False}
+    impl = AsyncMock(return_value={"ok": True, "message": "läuft"})
+    with_ = _start_patches(box, fake_redis, impl)
+    with with_[0], with_[1], with_[2], with_[3], with_[4], with_[5]:
+        result = await start_runtime(opted_out, host=SPARK)
+
+    assert result["ok"] is True
+    assert not box.ran("drop_caches")
+    assert memprep.DROPPER_CONTAINER not in box.containers
+    assert box.watermark == CONFIGURED_WATERMARK
+    impl.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_an_opted_out_runtime_still_waits_for_available_memory(box, fake_redis):
+    """The wait only reads /proc/meminfo — it is the guard against starting
+    on a box whose previous engine is still draining, and stays on."""
+    wait = AsyncMock(return_value=(True, memprep.DEFAULT_MIN_AVAILABLE_KB))
+    ssh, redis = _patched(box, fake_redis)
+    with ssh, redis, patch.object(memprep, "_wait_for_available_memory", new=wait):
+        handle = await memprep.prepare_for_runtime(
+            {**SPARKINFER, "drop_page_cache": False}, host=SPARK
+        )
+
+    assert handle is not None
+    wait.assert_awaited_once()
+    assert handle.dropper_started is False
+    assert handle.lowered_to_kb is None
+    assert not box.ran("drop_caches")
+
+
+@pytest.mark.asyncio
+async def test_a_runtime_without_the_flag_keeps_the_old_behaviour(box, fake_redis):
+    """Every existing row has no opinion (or True) — nothing changes for them."""
+    from app.services.runtime_manager import start_runtime
+
+    for runtime in (dict(SPARKINFER), {**SPARKINFER, "drop_page_cache": True}):
+        box = FakeBox()
+        impl = AsyncMock(return_value={"ok": True, "message": "läuft"})
+        with_ = _start_patches(box, fake_redis, impl)
+        with with_[0], with_[1], with_[2], with_[3], with_[4], with_[5]:
+            await start_runtime(runtime, host=SPARK)
+        assert box.ran("drop_caches")
+        assert memprep.DROPPER_CONTAINER in box.containers
+        assert box.watermark == LOWERED_WATERMARK

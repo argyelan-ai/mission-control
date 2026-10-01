@@ -162,6 +162,9 @@ def test_seed_file_is_public_safe_and_valid():
     # before the scan — what must stay forbidden is an ssh COMMAND or target
     # (`ssh user@box`), which is exactly what the bare token would catch.
     scanned = raw.replace("ssh_process", "<engine>").replace("ssh-process", "<engine>")
+    # Same for the two-box placeholders (ADR-077 P3): ``{worker_ssh}`` is a
+    # ROLE the start/install fills in per operator, never a target in the seed.
+    scanned = scanned.replace("{worker_ssh}", "<role>").replace("{head_ssh}", "<role>")
     for forbidden in ("192" ".168.", "100" ".", "/Users" "/", "tail", "ssh"):  # split literals: der Leak-Scanner soll den Seed treffen, nicht diesen Test
         assert forbidden not in scanned, f"seed leaks {forbidden!r}"
     slugs = [e["slug"] for e in entries]

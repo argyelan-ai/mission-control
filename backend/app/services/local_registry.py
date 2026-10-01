@@ -126,6 +126,10 @@ class RecipeSpec(BaseModel):
     # Start (services/recipe_env.PLACEHOLDERS).
     env_file: str | None = None
     env_map: dict[str, str] | None = None
+    # Page-cache care at start (services/host_memory_prep). False = the engine
+    # counts reclaimable cache as available and must not get the drop, the
+    # dropper or a lowered watermark. Default true = vLLM-style behaviour.
+    drop_page_cache: bool = True
     tags: list[str] = PydanticField(default_factory=list)
     notes: str | None = None
     enabled: bool = True
@@ -333,6 +337,7 @@ def _row_from_spec(spec: RecipeSpec) -> LocalRecipe:
         exclusive=spec.exclusive,
         env_file=spec.env_file,
         env_map=spec.env_map_clean,
+        drop_page_cache=spec.drop_page_cache,
         tags=list(spec.tags or []),
         notes=spec.notes,
         enabled=spec.enabled,
@@ -376,6 +381,7 @@ def _apply_update(row: LocalRecipe, spec: RecipeSpec) -> bool:
         ("exclusive", spec.exclusive),
         ("env_file", spec.env_file),
         ("env_map", spec.env_map_clean),
+        ("drop_page_cache", spec.drop_page_cache),
         ("tags", list(spec.tags or [])),
         ("notes", spec.notes),
     ):

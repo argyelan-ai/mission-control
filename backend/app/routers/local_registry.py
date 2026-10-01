@@ -30,7 +30,7 @@ from app.database import get_session
 from app.models.host import Host
 from app.models.local_recipe import LocalRecipe
 from app.models.runtime import Runtime
-from app.services import launch_template, local_registry, recipe_install, recipe_switcher
+from app.services import launch_template, local_registry, recipe_env, recipe_install, recipe_switcher
 from app.services.host_resolver import resolved_host_from_row, ssh_capable
 
 router = APIRouter(prefix="/api/v1/local-registry", tags=["local-registry"])
@@ -77,6 +77,9 @@ class LocalRecipeOut(BaseModel):
     env_file: str | None
     env_map: dict[str, str] | None
     env_ready: bool
+    # Page-cache care at start (services/host_memory_prep): false = this
+    # engine's start never drops the box's page cache.
+    drop_page_cache: bool
     tags: list[str]
     notes: str | None
     enabled: bool
@@ -145,6 +148,7 @@ def _serialize(recipe: LocalRecipe, running: bool) -> LocalRecipeOut:
         env_file=recipe.env_file,
         env_map=dict(recipe.env_map) if recipe.env_map else None,
         env_ready=recipe_switcher.recipe_env_ready(recipe),
+        drop_page_cache=recipe.drop_page_cache,
         tags=list(recipe.tags or []),
         notes=recipe.notes,
         enabled=recipe.enabled,
@@ -225,6 +229,10 @@ class InstallBody(BaseModel):
     ctx: int | None = Field(default=None, ge=0)
     src_dir: str | None = Field(default=None, max_length=512)
     gguf_dir: str | None = Field(default=None, max_length=512)
+    # Two-box recipes (topology.nodes >= 2): the second box. Omitted = the
+    # first other box with SSH access, ``role=worker`` first — the same order
+    # the recipe start uses. Ignored for single-box recipes.
+    worker_host_id: str | None = Field(default=None, max_length=64)
 
 
 async def _get_recipe(session: AsyncSession, slug: str) -> LocalRecipe:
@@ -281,11 +289,28 @@ async def install_recipe(
     recipe = await _get_recipe(session, slug)
     host = await _get_ssh_host(session, body.host_id)
 
+    # Two-box recipes: worker + .env lines are decided here, before anything
+    # touches a box (same order as the recipe start: everything that can be
+    # known without the network first). Single-box recipes skip all of it.
+    duo: recipe_switcher.DuoInstallPlan | None = None
+    if recipe_switcher.recipe_nodes(recipe.topology) >= 2:
+        try:
+            duo = await recipe_switcher.plan_duo_install(
+                session,
+                host,
+                recipe,
+                worker_host_id=body.worker_host_id,
+                port=body.port,
+                src_dir=body.src_dir,
+            )
+        except recipe_switcher.RecipeStartError as exc:
+            raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
+
     try:
         command = launch_template.build_install_command(
             slug=recipe.slug,
             install_template=recipe.install_template or "",
-            port=body.port,
+            port=body.port or (recipe.port if duo is not None else None),
             model_identifier=recipe.model_identifier,
             src_dir=body.src_dir,
             gguf_dir=body.gguf_dir,
@@ -295,6 +320,7 @@ async def install_recipe(
             # property of the recipe, and a client that could override it here
             # would be a second place deciding how the engine is configured.
             env=recipe.env,
+            duo=duo.placeholders if duo is not None else None,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -306,6 +332,23 @@ async def install_recipe(
             detail=f"Für '{recipe.display_name}' läuft auf '{host.slug}' bereits eine Installation.",
         )
 
+    worker_resolved = None
+    if duo is not None:
+        # The recipe's .env BEFORE the job: its installer reads the worker
+        # from there (same upsert as the start — backup once, read back,
+        # 502 on any difference). The clone may not exist yet, so the folder
+        # may be created here; a start never does that.
+        worker_resolved = resolved_host_from_row(duo.worker)
+        try:
+            await recipe_env.upsert_env_file(
+                resolved_host_from_row(host),
+                recipe.env_file or "",
+                duo.env_values,
+                create_dir=True,
+            )
+        except recipe_switcher.RecipeStartError as exc:
+            raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
+
     await recipe_install.start_install(
         str(host.id),
         recipe.slug,
@@ -313,8 +356,16 @@ async def install_recipe(
         command=command,
         est_weights_gb=recipe.est_weights_gb,
         display_name=recipe.display_name,
+        worker=worker_resolved,
     )
-    return {"status": "started", "host_id": str(host.id), "slug": recipe.slug}
+    return {
+        "status": "started",
+        "host_id": str(host.id),
+        "slug": recipe.slug,
+        "worker_host_id": str(duo.worker.id) if duo is not None else None,
+        "worker_slug": duo.worker.slug if duo is not None else None,
+        "env_written": list(duo.env_values) if duo is not None else [],
+    }
 
 
 @router.get("/{slug}/install/log")

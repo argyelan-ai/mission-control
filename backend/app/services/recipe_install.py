@@ -123,10 +123,15 @@ class _Run:
         command: str,
         est_weights_gb: float | None = None,
         display_name: str | None = None,
+        worker: ResolvedHost | None = None,
     ) -> None:
         self.host_id = str(host_id)
         self.slug = slug
         self.host = host
+        # Two-box recipes: the second box. The job itself still runs on the
+        # head only (the recipe's installer reaches the worker on its own);
+        # MC uses this just to check the worker's disk too.
+        self.worker = worker
         self.command = command
         self.est_weights_gb = est_weights_gb
         self.display_name = display_name or slug
@@ -144,39 +149,50 @@ class _Run:
             extra={"host_id": self.host_id, "slug": self.slug},
         )
 
-    async def run_ssh(self, command: str, *, timeout: float = _SSH_TIMEOUT):
+    async def run_ssh(
+        self, command: str, *, timeout: float = _SSH_TIMEOUT, host: ResolvedHost | None = None
+    ):
         from app.services.runtime_manager import _ssh_run  # noqa: SLF001
 
-        return await _ssh_run(command, host=self.host, timeout=timeout)
+        return await _ssh_run(command, host=host or self.host, timeout=timeout)
 
     # ── steps ───────────────────────────────────────────────────────────────
 
     async def check_disk(self) -> None:
-        """Compare free disk against the estimated weight size. Warn, never block."""
+        """Compare free disk against the estimated weight size. Warn, never block.
+
+        A two-box recipe puts its weights on both boxes, so the worker is
+        checked the same way — with its own label in the log.
+        """
+        await self._check_disk_on(self.host, prefix="")
+        if self.worker is not None:
+            await self._check_disk_on(self.worker, prefix="Zweite Box: ")
+
+    async def _check_disk_on(self, host: ResolvedHost, *, prefix: str) -> None:
         try:
-            stdout, _, exit_code = await self.run_ssh("df -Pk $HOME", timeout=30)
+            stdout, _, exit_code = await self.run_ssh("df -Pk $HOME", timeout=30, host=host)
         except Exception as exc:  # noqa: BLE001 — a failed check is not a failed install
-            await self.log(f"Speicherplatz konnte nicht geprüft werden: {exc}", level="warn")
+            await self.log(f"{prefix}Speicherplatz konnte nicht geprüft werden: {exc}", level="warn")
             return
         free_gb = _parse_free_gb(stdout) if exit_code == 0 else None
         if free_gb is None:
-            await self.log("Speicherplatz konnte nicht ermittelt werden (df unlesbar).", level="warn")
+            await self.log(f"{prefix}Speicherplatz konnte nicht ermittelt werden (df unlesbar).", level="warn")
             return
         if self.est_weights_gb is None:
-            await self.log(f"Freier Speicher: {free_gb} GB.")
+            await self.log(f"{prefix}Freier Speicher: {free_gb} GB.")
             return
         # 10 % head room: the build tree, a partial download and the package
         # cache all live next to the weights.
         needed = round(self.est_weights_gb * 1.1, 1)
         if free_gb < needed:
             await self.log(
-                f"WARNUNG: nur {free_gb} GB frei, geschätzt gebraucht werden ~{needed} GB "
+                f"{prefix}WARNUNG: nur {free_gb} GB frei, geschätzt gebraucht werden ~{needed} GB "
                 f"({self.est_weights_gb} GB Gewichte + 10 % Reserve). Die Installation "
                 f"läuft trotzdem los — sie wird abbrechen, wenn der Platz wirklich fehlt.",
                 level="warn",
             )
         else:
-            await self.log(f"Speicherplatz ok: {free_gb} GB frei, ~{needed} GB gebraucht.")
+            await self.log(f"{prefix}Speicherplatz ok: {free_gb} GB frei, ~{needed} GB gebraucht.")
 
     async def launch(self) -> str | None:
         """Start the install detached. Returns the remote PID, or None."""
@@ -273,11 +289,13 @@ async def run_install(
     command: str,
     est_weights_gb: float | None = None,
     display_name: str | None = None,
+    worker: ResolvedHost | None = None,
 ) -> None:
     """The whole run. Writes its own progress; never raises to the caller."""
     run = _Run(
         host_id, slug, host,
         command=command, est_weights_gb=est_weights_gb, display_name=display_name,
+        worker=worker,
     )
     try:
         await run.set_status(STATUS_RUNNING, phase="preflight")
@@ -305,6 +323,7 @@ async def start_install(
     command: str,
     est_weights_gb: float | None = None,
     display_name: str | None = None,
+    worker: ResolvedHost | None = None,
 ) -> None:
     """Clear the previous run's log and spawn the new one in the background.
 
@@ -324,5 +343,6 @@ async def start_install(
         run_install(
             str(host_id), slug, host,
             command=command, est_weights_gb=est_weights_gb, display_name=display_name,
+            worker=worker,
         )
     )

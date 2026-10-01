@@ -45,6 +45,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -892,6 +893,9 @@ async def build_runtime_from_recipe(
         # ohne diese Kopie bliebe jede frisch angelegte Rezept-Instanz beim
         # sicheren Default false, egal was der Katalog sagt.
         supports_vision=recipe.supports_vision,
+        # Seitenspeicher-Pflege beim Start (host_memory_prep) — das Rezept
+        # sagt, ob seine Engine sie verträgt; die Instanz trägt es weiter.
+        drop_page_cache=recipe.drop_page_cache,
         enabled=True,
     )
 
@@ -924,6 +928,92 @@ def duo_worker_candidates(
     """
     ssh_hosts = [h for h in state.hosts if host_can_ssh(h)]
     return worker_candidates(ssh_hosts, head, foreign_exclusive_busy(state, head))
+
+
+#: Installation eines Zweibox-Rezepts: die genannte zweite Box gibt es nicht
+#: (oder sie ist der Head selbst, oder MC erreicht sie nicht per SSH).
+def reason_install_worker_invalid(name: str) -> str:
+    return (
+        f"'{name}' kann nicht die zweite Box dieser Installation sein — "
+        f"es muss eine andere Box mit SSH-Zugang sein."
+    )
+
+
+#: Installation eines Zweibox-Rezepts in einen anderen Ordner: die `.env`
+#: steht im Katalog als fester Pfad, sie läge dann neben dem Klon.
+REASON_INSTALL_SRC_DIR = (
+    "Zweibox-Rezepte installieren in ihren Standardordner — dort erwartet der "
+    "Katalog ihre .env (env_file). Ein anderer Ordner (src_dir) geht hier nicht."
+)
+
+
+@dataclass
+class DuoInstallPlan:
+    """Was eine Zweibox-Installation vor dem ersten SSH-Befehl festlegt."""
+
+    worker: Host
+    #: Die Zeilen für die `.env` des Rezepts — dieselben wie beim Start.
+    env_values: dict[str, str]
+    #: Die Werte der Platzhalter ``{worker_ssh}`` & Co. für das install_template.
+    placeholders: dict[str, str]
+
+
+async def plan_duo_install(
+    session: AsyncSession,
+    head: Host,
+    recipe: LocalRecipe,
+    *,
+    worker_host_id: str | None = None,
+    port: int | None = None,
+    src_dir: str | None = None,
+) -> DuoInstallPlan:
+    """Worker wählen und `.env`-Zeilen rendern — ohne Netz, ohne Schreiben.
+
+    Dieselben Regeln wie beim Start (P3), mit einem Unterschied: Belegung
+    zählt nicht. Eine Installation verdrängt nichts — sie legt Image und
+    Gewichte auf die zweite Box, auch wenn dort gerade ein anderes Modell
+    läuft. Darum alle anderen Boxen mit SSH-Zugang als Kandidaten, in der
+    Reihenfolge von :func:`worker_candidates` (``role=worker`` zuerst).
+
+    Raises :class:`RecipeStartError` (422/409) mit einem Satz.
+    """
+    from app.services import recipe_env
+
+    if not recipe_env_ready(recipe):
+        raise RecipeStartError(422, REASON_NO_ENV_MAP)
+    if src_dir and src_dir.rstrip("/") != launch_template.DEFAULT_SRC_DIR:
+        raise RecipeStartError(422, REASON_INSTALL_SRC_DIR)
+
+    hosts = (await session.exec(select(Host))).all()
+    candidates = worker_candidates([h for h in hosts if host_can_ssh(h)], head, set())
+    if worker_host_id:
+        match = next((c for c in candidates if c["host_id"] == str(worker_host_id)), None)
+        if match is None:
+            # Nicht in der Liste heisst: unbekannt, der Head selbst, oder ohne SSH.
+            named = next((h for h in hosts if str(h.id) == str(worker_host_id)), None)
+            raise RecipeStartError(
+                409, reason_install_worker_invalid(named.slug if named else str(worker_host_id))
+            )
+    elif candidates:
+        match = candidates[0]
+    else:
+        raise RecipeStartError(409, REASON_NO_FREE_WORKER)
+    worker = next(h for h in hosts if str(h.id) == match["host_id"])
+
+    install_port = int(port or recipe.port or DEFAULT_PORT)
+    try:
+        env_values = recipe_env.render_env_map(recipe.env_map, head, worker, port=install_port)
+    except ValueError as exc:
+        raise RecipeStartError(422, str(exc)) from exc
+    if not env_values:
+        raise RecipeStartError(422, REASON_NO_ENV_MAP)
+    values = recipe_env.placeholder_values(head, worker, install_port)
+    placeholders = {
+        name: value
+        for name, value in values.items()
+        if name in recipe_env.ADDRESS_PLACEHOLDERS and value is not None
+    }
+    return DuoInstallPlan(worker=worker, env_values=env_values, placeholders=placeholders)
 
 
 async def _require_ssh_alive(host: Host) -> None:
@@ -1048,8 +1138,14 @@ async def start_recipe_on_host(
             worker = state.host_by_id[_as_uuid(candidates[0]["host_id"])]
         else:
             raise RecipeStartError(409, REASON_NO_FREE_WORKER)
+        # ``{port}``: the port the instance's endpoint points at — an existing
+        # instance keeps its own, a new one gets the recipe's (same rule as
+        # build_runtime_from_recipe).
+        port = (endpoint_port(instance.endpoint) if instance is not None else None) or int(
+            recipe.port or DEFAULT_PORT
+        )
         try:
-            env_values = recipe_env.render_env_map(recipe.env_map, host, worker)
+            env_values = recipe_env.render_env_map(recipe.env_map, host, worker, port=port)
         except ValueError as exc:
             raise RecipeStartError(422, str(exc)) from exc
         if not env_values:

@@ -56,7 +56,7 @@ logger = logging.getLogger("mc.recipe_env")
 #: ``ip`` = ``ssh_host`` (MC → Box), ``fabric_ip`` = das Verbund-Kabel
 #: (Box ↔ Box; NULL fällt auf ssh_host zurück), ``ssh`` = ``user@host`` für
 #: Skripte, die den Worker selbst per SSH anfassen.
-PLACEHOLDERS: tuple[str, ...] = (
+ADDRESS_PLACEHOLDERS: tuple[str, ...] = (
     "head_ip",
     "worker_ip",
     "head_fabric_ip",
@@ -64,6 +64,11 @@ PLACEHOLDERS: tuple[str, ...] = (
     "head_ssh",
     "worker_ssh",
 )
+
+#: Dazu ``{port}``: der Port, auf dem die Instanz antworten soll. Ein
+#: Verbund-Skript, das seinen Port aus der `.env` liest (statt von der
+#: Kommandozeile), bekäme sonst nie den Port, den MC im Endpoint erwartet.
+PLACEHOLDERS: tuple[str, ...] = ADDRESS_PLACEHOLDERS + ("port",)
 
 #: Ein Umgebungsschlüssel, wie ihn eine `.env` kennt. Bewusst eng: der Name
 #: landet in einem awk-Vergleich und in einer Shell-Zeile.
@@ -90,8 +95,10 @@ def _address_of(host: "Host") -> str | None:
     return (host.ssh_host or "").strip() or None
 
 
-def placeholder_values(head: "Host", worker: "Host | None") -> dict[str, str | None]:
-    """Die Adressen hinter den Platzhaltern — ``None``, wo es sie nicht gibt."""
+def placeholder_values(
+    head: "Host", worker: "Host | None", port: int | None = None
+) -> dict[str, str | None]:
+    """Die Werte hinter den Platzhaltern — ``None``, wo es sie nicht gibt."""
     head_ip = _address_of(head)
     worker_ip = _address_of(worker) if worker is not None else None
     head_user = _ssh_user_of(head)
@@ -108,11 +115,16 @@ def placeholder_values(head: "Host", worker: "Host | None") -> dict[str, str | N
         "worker_ssh": (
             f"{worker_user}@{worker_ip}" if worker_user and worker_ip else worker_ip
         ),
+        "port": str(int(port)) if port else None,
     }
 
 
 def render_env_map(
-    env_map: dict[str, Any] | None, head: "Host", worker: "Host | None" = None
+    env_map: dict[str, Any] | None,
+    head: "Host",
+    worker: "Host | None" = None,
+    *,
+    port: int | None = None,
 ) -> dict[str, str]:
     """``{"KEY": "{worker_fabric_ip}"}`` → ``{"KEY": "192.0.2.11"}``.
 
@@ -128,7 +140,7 @@ def render_env_map(
     """
     if not env_map:
         return {}
-    values = placeholder_values(head, worker)
+    values = placeholder_values(head, worker, port)
     rendered: dict[str, str] = {}
     for raw_key, raw_value in env_map.items():
         key = str(raw_key).strip()
@@ -146,6 +158,11 @@ def render_env_map(
                     + "."
                 )
             if values.get(name) is None:
+                if name == "port":
+                    raise EnvRenderError(
+                        f"Für '{{port}}' bei '{key}' gibt es keinen Port — das Rezept "
+                        f"nennt keinen (Katalogfeld port)."
+                    )
                 raise EnvRenderError(
                     f"Für '{{{name}}}' bei '{key}' gibt es keine Adresse — "
                     f"trage sie an der Box nach (SSH-Adresse bzw. Verbund-Adresse)."
@@ -170,20 +187,30 @@ def quote_remote_path(path: str) -> str:
     return shlex.quote(path)
 
 
-def _upsert_command(path: str, values: dict[str, str]) -> str:
+def _upsert_command(path: str, values: dict[str, str], *, create_dir: bool = False) -> str:
     """Ein einziges POSIX-sh-Skript: Backup einmalig, dann Zeile für Zeile.
 
     ``set -e`` bricht beim ersten Fehler ab; ohne das würde ein voll gelaufenes
     Dateisystem als „geschrieben" durchgehen und erst das Rücklesen es merken
     (das es zwar täte — aber ein Abbruch am Ort des Fehlers ist ehrlicher).
+
+    ``create_dir``: nur die Installation darf den Ordner anlegen — sie
+    schreibt die `.env` VOR dem Klonen, der Ordner kann also noch fehlen. Ein
+    Start legt nie etwas an: dort heisst ein fehlender Ordner „Tippfehler im
+    Katalog oder nicht installiert", und das soll auffallen.
     """
     quoted = quote_remote_path(path)
+    folder_check = (
+        'mkdir -p "$d"'
+        if create_dir
+        # Ordner muss existieren — ein Start legt keine Rezept-Ordner an.
+        else '[ -d "$d" ] || { echo "Ordner $d gibt es auf dieser Box nicht" >&2; exit 3; }'
+    )
     lines = [
         "set -e",
         f"f={quoted}",
-        # Ordner muss existieren — MC legt keine Rezept-Ordner an.
         'd=$(dirname "$f")',
-        '[ -d "$d" ] || { echo "Ordner $d gibt es auf dieser Box nicht" >&2; exit 3; }',
+        folder_check,
         '[ -f "$f" ] || : > "$f"',
         # Einmalig: das Original des Betreibers sichern.
         '[ -f "$f.bak-mc" ] || cp "$f" "$f.bak-mc"',
@@ -219,7 +246,9 @@ def parse_env_text(text: str) -> dict[str, str]:
     return found
 
 
-async def upsert_env_file(host: Any, path: str, values: dict[str, str]) -> list[str]:
+async def upsert_env_file(
+    host: Any, path: str, values: dict[str, str], *, create_dir: bool = False
+) -> list[str]:
     """Die genannten Schlüssel in die `.env` auf der Box schreiben und den
     Erfolg BEWEISEN (zurücklesen und vergleichen).
 
@@ -242,7 +271,7 @@ async def upsert_env_file(host: Any, path: str, values: dict[str, str]) -> list[
 
     try:
         _, stderr, code = await _ssh_run(
-            _upsert_command(path, values), host=host, timeout=_WRITE_TIMEOUT
+            _upsert_command(path, values, create_dir=create_dir), host=host, timeout=_WRITE_TIMEOUT
         )
     except Exception as exc:  # noqa: BLE001 — jeder SSH-Fehler ist derselbe Satz
         raise RecipeStartError(
