@@ -179,10 +179,14 @@ features:
       - repos
       - activity_events
   - id: F-inbox
-    name: "Inbox: open approvals"
+    name: "Inbox: everything that waits on the operator"
     ui: {route: /inbox}
     api:
-      # Open approvals list and resolve (inbox page, MobileNav badge,
+      # Mobile nav V2: reviews ready to decide + open approvals + open head
+      # questions, counted once in frontend-v2/src/lib/inbox.ts (page and
+      # phone tab-bar badge). Review tasks and comments come from F-tasks'
+      # task routes, head runs from the head launcher's "* /api/v1/heads".
+      # Open approvals list and resolve (inbox page, tab-bar badge,
       # useApprovalStream live reload; the task detail resolves too).
       - "* /api/v1/approvals"
       - "* /api/v1/approvals/{approval_id}"

@@ -75,13 +75,17 @@ interface CreateTaskModalProps {
   agents: Agent[] | undefined;
   /** Opens the task detail after "Run as head" (default: /tasks?task=<id>). */
   onOpenTask?: (taskId: string) => void;
+  /** Bumped by another opener (the phone's ⊕ sheet, "New job"): opens the modal. */
+  openRequest?: number;
+  /** No own "+" trigger — the caller opens it via `openRequest`. */
+  hideTrigger?: boolean;
 }
 
 function openTaskPage(taskId: string) {
   window.location.assign(`/tasks?task=${encodeURIComponent(taskId)}`);
 }
 
-export function CreateTaskModal({ activeBoardId, agents, onOpenTask = openTaskPage }: CreateTaskModalProps) {
+export function CreateTaskModal({ activeBoardId, agents, onOpenTask = openTaskPage, openRequest = 0, hideTrigger = false }: CreateTaskModalProps) {
   const qc = useQueryClient();
   const t = useTranslations("tasks.createModal");
   const tHeads = useTranslations("heads");
@@ -91,6 +95,11 @@ export function CreateTaskModal({ activeBoardId, agents, onOpenTask = openTaskPa
   // Modal state
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  // External opener (mobile nav V2): every bump opens the modal once.
+  useEffect(() => {
+    if (openRequest > 0 && activeBoardId) setOpen(true);
+  }, [openRequest, activeBoardId]);
 
   // Refs for a11y: focus-trap + initial focus target
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -439,6 +448,7 @@ export function CreateTaskModal({ activeBoardId, agents, onOpenTask = openTaskPa
   return (
     <>
       {/* Trigger — unchanged style, icon-only (just the +); accessible label + tooltip. */}
+      {!hideTrigger && (
       <button
         onClick={() => setOpen(true)}
         disabled={!activeBoardId}
@@ -453,6 +463,7 @@ export function CreateTaskModal({ activeBoardId, agents, onOpenTask = openTaskPa
       >
         <Plus size={14} />
       </button>
+      )}
 
       <AnimatePresence>
         {open && (

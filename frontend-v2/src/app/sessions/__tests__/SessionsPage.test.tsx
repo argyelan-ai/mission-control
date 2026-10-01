@@ -793,6 +793,43 @@ describe("SessionsPage — mobile stack keeps only one screen in flow", () => {
     expect(isHidden(list())).toBe(true);
   });
 
+  // Mobile nav V2: a chip in the ⊕ sheet (or the Chats tab) changes the URL
+  // while the page is already open — the screen must follow, once.
+  it("a ?agent= link arriving while the page is open opens that chat", async () => {
+    const view = renderPage();
+    await screen.findAllByText("Agent One");
+    expect(isHidden(chat())).toBe(true);
+
+    nav.searchParamsString = "agent=agent-2";
+    view.rerender(
+      <QueryClientProvider client={view.qc}>
+        <SessionsPage />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(isHidden(chat())).toBe(false));
+    expect(screen.getByText("Chat: Agent Two")).toBeInTheDocument();
+    expect(JSON.parse(localStorage.getItem("mc-recent-chats") ?? "[]")[0]).toEqual({ kind: "agent", id: "agent-2" });
+  });
+
+  it("back to the list stays on the list although the URL still names the chat", async () => {
+    const user = userEvent.setup();
+    nav.searchParamsString = "agent=agent-2";
+    renderPage();
+    await waitFor(() => expect(isHidden(chat())).toBe(false));
+
+    await user.click(screen.getByRole("button", { name: "Stub Back" }));
+    expect(isHidden(list())).toBe(false);
+    expect(isHidden(chat())).toBe(true);
+  });
+
+  it("opening a chat from the list remembers it for the Chats tab", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findAllByText("Agent One");
+    await user.click(within(list()).getByRole("option", { name: /Agent Two/ }));
+    expect(JSON.parse(localStorage.getItem("mc-recent-chats") ?? "[]")[0]).toEqual({ kind: "agent", id: "agent-2" });
+  });
+
   it("a merely remembered selection still opens on the list screen", async () => {
     localStorage.setItem("mc-sessions-last-agent", "agent-2");
     renderPage();

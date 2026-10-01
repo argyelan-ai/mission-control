@@ -22,6 +22,7 @@ import type { StateEvent } from "@/lib/chatTypes";
 import AppShell from "@/components/layout/AppShell";
 import { notify } from "@/lib/notify";
 import { useTerminalRemountSignal } from "@/hooks/useTerminalRemountSignal";
+import { rememberChat } from "@/lib/recentChats";
 
 // ── Last-selected-agent persistence ─────────────────────────────────────────
 // Same try/catch-wrapped localStorage pattern as runtimes/page.tsx's
@@ -308,6 +309,35 @@ function SessionsPageContent() {
     if (selected) saveLastAgentId(selected.id);
   }, [selected]);
 
+  // A deep link that arrives while the page is already open (phone nav V2:
+  // a "continue a chat" chip in the ⊕ sheet, or the Chats tab) opens that
+  // chat. The restore effects above only run before the first selection, so
+  // without this the URL would change and the screen would not. Each value
+  // is handled once — going back to the list keeps the URL, and must not
+  // snap straight back into the chat.
+  const handledParam = useRef<string | null>(null);
+  useEffect(() => {
+    const agentParam = searchParams.get("agent");
+    const groupParam = searchParams.get("group");
+    const key = agentParam ? `agent:${agentParam}` : groupParam ? `group:${groupParam}` : null;
+    if (!key || key === handledParam.current) return;
+    if (agentParam) {
+      const agent = agents.find((a) => a.id === agentParam);
+      if (!agent) return; // list not loaded yet — try again on the next render
+      handledParam.current = key;
+      setSelected(agent);
+      setSelectedGroupId(null);
+      setMobileView("chat");
+      rememberChat({ kind: "agent", id: agent.id });
+    } else if (groupParam) {
+      if (!groups.some((g) => g.id === groupParam)) return;
+      handledParam.current = key;
+      setSelectedGroupId(groupParam);
+      setMobileView("chat");
+      rememberChat({ kind: "group", id: groupParam });
+    }
+  }, [searchParams, agents, groups]);
+
   // Phase 15 T3.7: re-mount the terminal when the backend switches the
   // selected agent's runtime (incl. cross-image recreate). Without this
   // the WebSocket still points at the killed container's tmux PTY and
@@ -330,6 +360,7 @@ function SessionsPageContent() {
     setSelectedGroupId(null);
     saveLastGroupId(null);
     setMobileView("chat");
+    rememberChat({ kind: "agent", id: agent.id });
     // Das Ergebnis-Panel gehört zur Gruppe; beim Wechsel auf einen Agenten
     // stünde es sonst leer daneben.
     if (activePanel === "doc") setActivePanel(null);
@@ -339,6 +370,7 @@ function SessionsPageContent() {
     setSelectedGroupId(groupId);
     saveLastGroupId(groupId);
     setMobileView("chat");
+    rememberChat({ kind: "group", id: groupId });
     if (activePanel === "diff" || activePanel === "browser") setActivePanel(null);
   }
 

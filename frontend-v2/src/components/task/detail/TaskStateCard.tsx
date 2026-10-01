@@ -220,7 +220,7 @@ export function TaskStateCard({
         <p className={`${NEXT_TEXT} line-clamp-4`} style={{ color: card.reason ? C.textPrimary : C.textSecondary }} title={card.reason ?? undefined}>
           {card.reason ? preview(card.reason) : t("detail.noReason")}
         </p>
-        <button type="button" onClick={onReply} className={PRIMARY_BTN} style={PRIMARY_STYLE}>
+        <button type="button" onClick={onReply} className={PRIMARY_BTN} style={PRIMARY_STYLE} data-main-kind="reply">
           <MessageSquareReply size={16} aria-hidden />
           {t("detail.reply")}
         </button>

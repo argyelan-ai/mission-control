@@ -201,6 +201,9 @@ interface ComposerProps {
   /** Text the parent wants in the box (a withdrawn steer coming back for
    *  editing). `at` makes the same text re-applicable: a new stamp = apply. */
   prefill?: { text: string; at: number } | null;
+  /** Phone: the detail action bar sits below and owns the home-indicator
+   *  strip, so the composer drops its own safe-area padding. */
+  barBelow?: boolean;
 }
 
 /**
@@ -224,7 +227,7 @@ interface ComposerProps {
  *  globals.css passen. */
 export const EFFORT_SETTLE_MS = 320;
 
-export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = true, capabilities = null, paneObservable = true, prefill = null }: ComposerProps) {
+export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = true, capabilities = null, paneObservable = true, prefill = null, barBelow = false }: ComposerProps) {
   const t = useTranslations("sessions");
   const [text, setText] = useState("");
   useEffect(() => {
@@ -656,7 +659,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
       // zu schweben (Operator-Wunsch 19.08.2026, iPhone 15). Der Zuschlag
       // sitzt bewusst am Container und nicht an der Pille — sonst wuerde die
       // Pille selbst hoeher, statt naeher an den Rand zu ruecken.
-      className="relative px-3 pt-2 pb-safe-bottom md:pb-4 md:px-4"
+      className={`relative px-3 pt-2 ${barBelow ? "pb-2" : "pb-safe-bottom"} md:pb-4 md:px-4`}
     >
       {paletteVisible && (
         <div

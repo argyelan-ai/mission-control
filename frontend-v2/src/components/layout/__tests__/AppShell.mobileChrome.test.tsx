@@ -37,8 +37,9 @@ vi.mock("../MobileNav", () => ({
   __esModule: true,
   default: () => <div data-testid="mobile-appbar" />,
   MobileNavProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  MobileTabBar: () => <div data-testid="mobile-tabbar" />,
 }));
+vi.mock("../MobileTabBar", () => ({ MobileTabBar: () => <div data-testid="mobile-tabbar" /> }));
+vi.mock("../QuickSheet", () => ({ QuickSheet: () => null }));
 vi.mock("../Sidebar", () => ({ __esModule: true, default: () => null }));
 vi.mock("../WorkspaceSwitcher", () => ({ __esModule: true, default: () => null }));
 vi.mock("../StatusBar", () => ({ __esModule: true, default: () => null }));

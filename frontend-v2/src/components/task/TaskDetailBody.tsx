@@ -42,6 +42,8 @@ import { notify } from "@/lib/notify";
 import { C, LANE, STATUS_TEXT, alpha } from "@/lib/colors";
 import { useAppStore } from "@/lib/store";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { BAR_SLOT, DetailActionBar, type DetailMainAction } from "@/components/shared/DetailActionBar";
+import { findMainAction, runMainAction } from "@/lib/taskDetail/mainAction";
 import { TaskDescription } from "./TaskDescription";
 import { TaskActions } from "./TaskActions";
 import { TaskComments } from "./TaskComments";
@@ -323,17 +325,26 @@ function OverflowMenu({
   isActive,
   onDelete,
   deleteLoading,
+  variant = "icon",
 }: {
   items: MenuItem[];
   isActive: boolean;
   onDelete: () => void;
   deleteLoading: boolean;
+  /** "bar": the "⋯ More" slot of the phone action bar — opens upward. */
+  variant?: "icon" | "bar";
 }) {
   const t = useTranslations("tasks");
+  const tBar = useTranslations("nav.detailBar");
   const [confirm, setConfirm] = useState(false);
   // Portaled with fixed positioning + viewport clamp (see usePortalMenu);
-  // right-aligned to the trigger like the old `right-0` dropdown.
-  const { open, setOpen, toggle, pos, triggerRef, menuRef } = usePortalMenu({ width: 220, align: "right" });
+  // right-aligned to the trigger like the old `right-0` dropdown. In the
+  // bottom bar it flips upward (there is no room below the bar).
+  const { open, setOpen, toggle, pos, triggerRef, menuRef } = usePortalMenu({
+    width: 220,
+    align: "right",
+    flipMax: variant === "bar" ? 120 : undefined,
+  });
   // Closing the menu always resets the two-step delete confirm.
   useEffect(() => {
     if (!open) setConfirm(false);
@@ -343,6 +354,20 @@ function OverflowMenu({
 
   return (
     <div className="relative" ref={triggerRef}>
+      {variant === "bar" ? (
+        <button
+          type="button"
+          onClick={toggle}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-label={t("moreActions")}
+          className={BAR_SLOT}
+          style={{ color: C.textSecondary }}
+        >
+          <MoreHorizontal size={20} aria-hidden />
+          <span>{tBar("more")}</span>
+        </button>
+      ) : (
       <button
         type="button"
         onClick={toggle}
@@ -354,19 +379,20 @@ function OverflowMenu({
       >
         <MoreHorizontal size={20} />
       </button>
+      )}
       {open && pos && createPortal(
         <AnimatePresence>
           <motion.div
             ref={menuRef}
             role="menu"
-            initial={{ opacity: 0, y: -4 }}
+            initial={{ opacity: 0, y: pos.up ? 4 : -4 }}
             animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -4 }}
+            exit={{ opacity: 0, y: pos.up ? 4 : -4 }}
             transition={{ duration: 0.12, ease: "easeOut" }}
             className="w-[220px] rounded-md py-1"
             style={{
               position: "fixed",
-              top: pos.top,
+              ...(pos.up ? { bottom: pos.bottom } : { top: pos.top }),
               left: pos.left,
               zIndex: 70,
               background: C.bgBase,
@@ -605,6 +631,28 @@ export function TaskDetailBody({
   // Bumped by ⋯ "Change status" — the status row lives in the Summary tab.
   const [statusMenuRequest, setStatusMenuRequest] = useState(0);
 
+  // Phone action bar (mobile nav V2): its main button mirrors the next
+  // step's one primary button. Re-read whenever the head region changes
+  // (state card swaps, a button enables once a reason is picked).
+  const headRef = useRef<HTMLDivElement>(null);
+  const [mainFound, setMainFound] = useState<{ label: string; kind: string | null } | null>(null);
+  useEffect(() => {
+    const root = headRef.current;
+    if (!root || !onBack) return;
+    const read = () => {
+      const found = findMainAction(root);
+      setMainFound((prev) => {
+        const next = found ? { label: found.label, kind: found.kind } : null;
+        return prev?.label === next?.label && prev?.kind === next?.kind ? prev : next;
+      });
+    };
+    read();
+    if (typeof MutationObserver === "undefined") return;
+    const mo = new MutationObserver(read);
+    mo.observe(root, { subtree: true, childList: true, characterData: true });
+    return () => mo.disconnect();
+  }, [onBack, task.id]);
+
   const statusWord = (s: string) => {
     const key = statusLabelKey(s);
     return key ? t(key) : s;
@@ -629,6 +677,12 @@ export function TaskDetailBody({
   function selectTab(next: TaskTabKey) {
     setTabState({ taskId: task.id, tab: next });
     onTabChange?.(next);
+  }
+
+  // "Reply": open Comments and focus its input (state card and phone bar).
+  function replyNow() {
+    selectTab("comments");
+    setFocusCommentSignal((n) => n + 1);
   }
 
   // Roving focus in the tab strip: ←/→ and Home/End move and select.
@@ -1128,7 +1182,7 @@ export function TaskDetailBody({
         className="@container flex-1 overflow-y-auto"
         style={{ overscrollBehavior: "contain", WebkitOverflowScrolling: "touch" } as React.CSSProperties}
       >
-        <div data-region="task-head" className="px-4 @min-[560px]:px-6 pt-2 pb-6">
+        <div ref={headRef} data-region="task-head" className="px-4 @min-[560px]:px-6 pt-2 pb-6">
           <h2
             ref={titleRef}
             className="text-xl leading-snug line-clamp-3"
@@ -1142,10 +1196,7 @@ export function TaskDetailBody({
             <TaskStateCard
               card={stateCard}
               task={task}
-              onReply={() => {
-                selectTab("comments");
-                setFocusCommentSignal((n) => n + 1);
-              }}
+              onReply={replyNow}
               onOpenLog={() => selectTab("timeline")}
             />
           )}
@@ -1340,6 +1391,37 @@ export function TaskDetailBody({
           )}
         </div>
       </div>
+
+      {/* Phone: Back · main action · Reply · More within thumb reach (mobile
+          nav V2). The context bar on top stays for orientation (K12). */}
+      {onBack && (
+        <DetailActionBar
+          onBack={onBack}
+          main={
+            mainFound && mainFound.kind !== "reply"
+              ? ({
+                  label: mainFound.label,
+                  onClick: () => {
+                    const found = findMainAction(headRef.current);
+                    if (found) runMainAction(found.el);
+                  },
+                } satisfies DetailMainAction)
+              : mainFound?.kind === "reply"
+                ? { label: mainFound.label, onClick: replyNow }
+                : null
+          }
+          onReply={mainFound?.kind === "reply" ? undefined : replyNow}
+          more={
+            <OverflowMenu
+              items={menuItems}
+              isActive={isActive}
+              onDelete={() => deleteMutation.mutate()}
+              deleteLoading={deleteMutation.isPending}
+              variant="bar"
+            />
+          }
+        />
+      )}
 
       <ConfirmDialog
         open={!!confirm}

@@ -12,7 +12,7 @@
     "repos": "Repos",
     "skills": "Skills",
     "runtimes": "Runtimes",
-    "sessions": "Sessions",
+    "sessions": "Chats",
     "loops": "Loops",
     "schedule": "Schedule",
     "settings": "Settings",
@@ -31,7 +31,27 @@
     "navGroupWork": "Work",
     "navGroupKnowledge": "Knowledge",
     "navGroupStudio": "Studio",
-    "navGroupSystem": "System"
+    "navGroupSystem": "System",
+    "newItem": "New",
+    "mobileNav": "Main navigation",
+    "inboxWaiting": "{count} waiting",
+    "quick": {
+      "title": "New",
+      "close": "Close",
+      "newJob": "New job",
+      "newJobHint": "Run as head now or tonight",
+      "voice": "Voice command",
+      "voiceHint": "Speak to the voice assistant",
+      "continueChat": "Continue a chat",
+      "allAreas": "All areas",
+      "more": "More…"
+    },
+    "detailBar": {
+      "label": "Actions",
+      "back": "Back",
+      "reply": "Reply",
+      "more": "More"
+    }
   },
   "settingsProfile": {
     "email": "Email",
@@ -760,7 +780,10 @@
     "fromAgent": "from {name}",
     "approvePost": "Approve & post",
     "showFull": "Show full",
-    "showLess": "Show less"
+    "showLess": "Show less",
+    "headQuestionsCount": "Head questions ({count})",
+    "headQuestionUntitled": "Untitled job",
+    "headQuestionAnswer": "Answer"
   },
   "sessions": {
     "groups": {
@@ -768,7 +791,7 @@
       "foldAll": "Collapse all",
       "unfoldAll": "Expand all",
       "sectionTitle": "Groups",
-      "tabListLabel": "Sessions view",
+      "tabListLabel": "Chats view",
       "tabAgents": "Agents",
       "tabGroups": "Groups",
       "tabGroupsWaiting": "Groups — {count} waiting",
@@ -912,7 +935,7 @@
     "attachmentExpandImage": "Enlarge image {name}",
     "attachmentCollapseImage": "Shrink image {name}",
     "attachmentUnavailable": "no longer available",
-    "backToSessions": "Back to sessions",
+    "backToSessions": "Back to chats",
     "chatOptions": "Chat options",
     "sessionWaitingAtPrompt": "Session running, waiting at the prompt",
     "detailLevel": "Detail level",
@@ -923,7 +946,7 @@
     "chat": "Chat",
     "noTranscript": "No transcript available",
     "transcriptLoading": "Loading transcript…",
-    "pickSession": "Pick a session in the sidebar.",
+    "pickSession": "Pick a chat in the sidebar.",
     "jumpToBottom": "Jump to bottom",
     "newMessagesCount": "{count} new",
     "status": {

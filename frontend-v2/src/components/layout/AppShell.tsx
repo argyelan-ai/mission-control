@@ -6,7 +6,9 @@ import { useAppStore } from "@/lib/store";
 import { api, getToken, getStoredUser, setStoredUser } from "@/lib/api";
 import { AmbientBackground } from "./AmbientBackground";
 import Sidebar from "./Sidebar";
-import MobileNav, { MobileNavProvider, MobileTabBar } from "./MobileNav";
+import MobileNav, { MobileNavProvider } from "./MobileNav";
+import { MobileTabBar } from "./MobileTabBar";
+import { QuickSheet } from "./QuickSheet";
 import CommandPalette from "@/components/shared/CommandPalette";
 import ToastRenderer from "@/components/shared/ToastRenderer";
 import { VoiceProvider, VoiceOverlay } from "@/components/voice/VoiceWidget";
@@ -110,6 +112,9 @@ export default function AppShell({
 
       {/* Mobile navigation */}
       {!mobileChromeless && <MobileNav showBar={!mobileHideAppBar} />}
+
+      {/* Phone: the ⊕ sheet of the tab bar (mobile nav V2). md:hidden inside. */}
+      <QuickSheet />
 
       {/* Desktop: one column carries board, search, navigation and status
           (Shell v4). The former WorkspaceSwitcher rail, TopBar and StatusBar

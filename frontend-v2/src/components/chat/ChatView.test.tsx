@@ -1098,7 +1098,7 @@ describe("ChatView", () => {
   it("shows no back chevron when the caller has no list to go back to (desktop)", () => {
     mockUseChatStream.mockReturnValue(mkStream());
     renderChatView();
-    expect(screen.queryByRole("button", { name: "Back to sessions" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Back to chats" })).not.toBeInTheDocument();
   });
 
   it("the back chevron reports the intent to return to the list", async () => {
@@ -1107,7 +1107,7 @@ describe("ChatView", () => {
     const user = userEvent.setup();
     renderChatView({ onBack });
 
-    await user.click(screen.getByRole("button", { name: "Back to sessions" }));
+    await user.click(screen.getByRole("button", { name: "Back to chats" }));
     expect(onBack).toHaveBeenCalled();
   });
 
@@ -1699,7 +1699,7 @@ describe("ChatView", () => {
         onCenterViewChange={noop}
       />
     );
-    expect(screen.getByText("Pick a session in the sidebar.")).toBeInTheDocument();
+    expect(screen.getByText("Pick a chat in the sidebar.")).toBeInTheDocument();
   });
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -1941,7 +1941,7 @@ describe("ChatView", () => {
       renderChatView({ onBack: vi.fn() });
       // Der Kreis ist das SICHTBARE Element im Knopf, nicht der Knopf selbst —
       // der ist die (groessere, unsichtbare) Trefferflaeche, siehe unten.
-      expect(circleOf("Back to sessions").className).toContain("rounded-full");
+      expect(circleOf("Back to chats").className).toContain("rounded-full");
       expect(circleOf("Chat options").className).toContain("rounded-full");
     });
 
@@ -1953,7 +1953,7 @@ describe("ChatView", () => {
       // <button> nicht: `min-w-touch`/`min-h-touch` sind die WCAG-Utilities
       // aus globals.css, der Kreis liegt als Kind mittig darin.
       renderChatView({ onBack: vi.fn() });
-      for (const label of ["Back to sessions", "Chat options"]) {
+      for (const label of ["Back to chats", "Chat options"]) {
         const btn = screen.getByLabelText(label);
         expect(btn.className).toContain("min-w-touch");
         expect(btn.className).toContain("min-h-touch");
@@ -1973,7 +1973,7 @@ describe("ChatView", () => {
       // Handy-Blaetter (Optionen/Kontext) ihre Oberkante. Waere der Kopf
       // gewachsen, bliebe unter dem Blatt ein Streifen Gespraech stehen.
       renderChatView({ onBack: vi.fn() });
-      for (const label of ["Back to sessions", "Chat options"]) {
+      for (const label of ["Back to chats", "Chat options"]) {
         expect(screen.getByLabelText(label).className).toContain("-m-1");
       }
       expect(GLOBALS_CSS).toContain(

@@ -1,6 +1,7 @@
 /**
- * Phone menu ("Open menu" in the tab bar) closes on Esc — the UI probe found
- * it stayed open at 390 px (panel register rule 4: every overlay closes on Esc).
+ * Phone overlays close on Esc — the UI probe found the menu stayed open at
+ * 390 px (panel register rule 4: every overlay closes on Esc). Since mobile
+ * nav V2 the menu opens from the ⊕ sheet ("More…"); both must close on Esc.
  */
 import { describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
@@ -32,12 +33,18 @@ vi.mock("@/lib/api", () => ({
   api: {
     approvals: { list: vi.fn(async () => []) },
     boards: { list: vi.fn(async () => []) },
+    heads: { list: vi.fn(async () => ({ runs: [] })) },
   },
 }));
 
-vi.mock("@/components/voice/VoiceWidget", () => ({ VoiceButton: () => null }));
+vi.mock("@/components/voice/VoiceWidget", () => ({
+  VoiceButton: () => null,
+  useVoiceContext: () => ({ toggleButton: vi.fn() }),
+}));
 
-import MobileNav, { MobileNavProvider, MobileTabBar } from "../MobileNav";
+import MobileNav, { MobileNavProvider } from "../MobileNav";
+import { MobileTabBar } from "../MobileTabBar";
+import { QuickSheet } from "../QuickSheet";
 
 describe("phone menu", () => {
   it("closes on Esc", async () => {
@@ -47,13 +54,21 @@ describe("phone menu", () => {
         <MobileNavProvider>
           <MobileNav />
           <MobileTabBar />
+          <QuickSheet />
         </MobileNavProvider>
       </QueryClientProvider>,
     );
 
-    await userEvent.click(screen.getByRole("button", { name: "Open menu" }));
-    expect(screen.getByRole("button", { name: "Close menu" })).toBeInTheDocument();
+    // ⊕ sheet closes on Esc
+    await userEvent.click(screen.getByRole("button", { name: "New" }));
+    expect(screen.getByRole("dialog", { name: "New" })).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "New" })).toBeNull());
 
+    // ⊕ → More… opens the full menu, which closes on Esc
+    await userEvent.click(screen.getByRole("button", { name: "New" }));
+    await userEvent.click(screen.getByRole("button", { name: "More…" }));
+    expect(screen.getByRole("button", { name: "Close menu" })).toBeInTheDocument();
     await userEvent.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("button", { name: "Close menu" })).toBeNull());
   });
