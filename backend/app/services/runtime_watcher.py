@@ -67,6 +67,7 @@ from app.services.runtime_grace import (
     SOURCE_AUTO_RECOVERY,
     SOURCE_SWITCH,
     clear_switching,
+    get_evicted,
     get_switching,
     mark_switching,
 )
@@ -1021,6 +1022,18 @@ class RuntimeWatcher:
             # Slot- UND Rezeptzeile denselben Ausfall und es liefen ZWEI
             # Startpfade auf dieselbe Box (Betriebs-Review 05.09.2026, A3).
             return
+        evicted = await get_evicted(runtime.slug, redis)
+        if evicted is not None:
+            # Ein Start hat diese Runtime ABSICHTLICH gestoppt, um die Box
+            # freizumachen (Rezeptwechsel). Sie jetzt „wiederzubeleben" hiesse,
+            # den Wechsel des Betreibers rückgängig zu machen — und die neue
+            # Engine mitten im Laden zu verdrängen (Live 01.10.2026). Erst ein
+            # neuer Start dieser Runtime oder das Ablaufen der Frist hebt das auf.
+            logger.info(
+                "auto-recovery: skipping %s — stopped on purpose by the start of %s",
+                runtime.slug, evicted.get("by"),
+            )
+            return
 
         host_row, recipe = await self._autostart_target(session, runtime)
         if runtime.host_id is not None:
@@ -1317,6 +1330,36 @@ class RuntimeWatcher:
         siblings = [
             rt for rt in (await session.exec(statement)).all() if rt.slug != runtime.slug
         ]
+        if runtime.host_id is not None:
+            # Ein Verbund, dessen Head woanders steht, belegt diese Box als
+            # Worker (``runtime_hosts``) — dieselbe Sicht wie die Verdrängung
+            # in ``runtime_manager._ensure_exclusive_host``.
+            from app.models.runtime_host import RuntimeHost
+
+            member_ids = [
+                m.runtime_id
+                for m in (
+                    await session.exec(
+                        select(RuntimeHost).where(RuntimeHost.host_id == runtime.host_id)
+                    )
+                ).all()
+            ]
+            known = {rt.id for rt in siblings} | {runtime.id}
+            if member_ids:
+                siblings.extend(
+                    rt
+                    for rt in (
+                        await session.exec(
+                            select(Runtime).where(
+                                Runtime.id.in_(member_ids),
+                                Runtime.enabled == True,  # noqa: E712
+                                Runtime.exclusive_memory == True,  # noqa: E712
+                            )
+                        )
+                    ).all()
+                    if rt.id not in known
+                )
+        siblings = [rt for rt in siblings if not rt.is_slot]
         if not siblings:
             return None
 
@@ -1336,6 +1379,31 @@ class RuntimeWatcher:
             for handle in await host_memory_prep.load_host_handles(host):
                 if handle.slug and handle.slug != runtime.slug:
                     return handle.slug
+
+        # Zuletzt die Box selbst fragen (Live 01.10.2026): alle Marker oben
+        # können fehlen, während eine Engine trotzdem lädt — ein Start, der
+        # „gescheitert" meldete, obwohl die Engine hochkam, räumt Grace-Marker
+        # und Prep-Handle weg; ein Kaltstart über 20 min überlebt den
+        # Grace-Marker nicht. Läuft der ANKER eines Geschwisters (Container
+        # oder Prozess), gehört die Box ihm. Eine Prüfung, die nicht antwortet,
+        # zählt als belegt: lieber eine Wiederbelebung verpassen als eine
+        # ladende Engine verdrängen.
+        from app.services.runtime_manager import anchor_running, runtime_anchor_names
+
+        for sibling in siblings:
+            sibling_dict = sibling.to_registry_dict()
+            if not runtime_anchor_names(sibling_dict):
+                continue
+            try:
+                sibling_host = await resolve_host_for_runtime(session, sibling) or host
+                if await anchor_running(sibling_dict, host=sibling_host):
+                    return sibling.slug
+            except Exception as exc:  # noqa: BLE001
+                logger.info(
+                    "auto-recovery: anchor of sibling %s not checkable (%s) — "
+                    "treating the box as occupied", sibling.slug, exc,
+                )
+                return sibling.slug
         return None
 
     async def _read_live_reachable(self, redis, slug: str) -> bool:

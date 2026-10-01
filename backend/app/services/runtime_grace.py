@@ -105,6 +105,59 @@ async def get_switching(slug: str, redis=None) -> dict | None:
     return doc if isinstance(doc, dict) else None
 
 
+# How long a runtime that a switch stopped on purpose stays off-limits for the
+# watcher's auto-recovery. Longer than a slow cold load (≤ 30 min) — within
+# that window the operator's switch wins; after it, the box's autostart rules
+# apply again (e.g. the box rebooted hours later).
+EVICTED_TTL = 60 * 60
+
+
+async def mark_evicted(slug: str | None, *, by: str | None) -> None:
+    """Remember that a start of ``by`` stopped ``slug`` to free the box.
+    Best-effort — never raises."""
+    if not slug:
+        return
+    try:
+        redis = await get_redis()
+        await redis.setex(
+            RedisKeys.runtime_evicted(slug),
+            EVICTED_TTL,
+            json.dumps({"by": by, "at": _utcnow_iso()}),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("mark_evicted(%s) failed: %s", slug, exc)
+
+
+async def clear_evicted(slug: str | None) -> None:
+    """Lift the marker — the runtime is being started again. Never raises."""
+    if not slug:
+        return
+    try:
+        redis = await get_redis()
+        await redis.delete(RedisKeys.runtime_evicted(slug))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("clear_evicted(%s) failed: %s", slug, exc)
+
+
+async def get_evicted(slug: str, redis=None) -> dict | None:
+    """The eviction document, or ``None`` (also when Redis is down)."""
+    try:
+        redis = redis or await get_redis()
+        raw = await redis.get(RedisKeys.runtime_evicted(slug))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("get_evicted(%s) failed: %s", slug, exc)
+        return None
+    if not raw:
+        return None
+    if isinstance(raw, bytes):
+        raw = raw.decode()
+    try:
+        doc = json.loads(raw)
+    except ValueError:
+        return None
+    return doc if isinstance(doc, dict) else None
+
+
 def _utcnow_iso() -> str:
     from datetime import datetime, timezone
     return datetime.now(timezone.utc).isoformat()

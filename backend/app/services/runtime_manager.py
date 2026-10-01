@@ -2022,6 +2022,10 @@ async def _ensure_exclusive_host(
             }
         stopped.append(other.slug)
         await runtime_grace.clear_switching(other.slug)
+        # Stopped ON PURPOSE for this start: the watcher's auto-recovery must
+        # not bring it back and evict the engine that replaced it (ping-pong
+        # after a recipe switch, live 01.10.2026).
+        await runtime_grace.mark_evicted(other.slug, by=slug)
 
     return {
         "ok": True,
@@ -2035,9 +2039,14 @@ async def _ensure_exclusive_host(
     }
 
 
-async def _emit_exclusive_event(slug: str | None, result: dict) -> None:
+async def _emit_exclusive_event(slug: str | None, result: dict, *, box: str | None = None) -> None:
     """Record an exclusivity decision in the activity feed. Best-effort — a
-    failing event must never be the reason a start does not happen."""
+    failing event must never be the reason a start does not happen.
+
+    ``box``: which member box of a duo was freed ("worker"); None = the
+    runtime's own box. Without it the worker eviction of a recipe switch was
+    invisible and the head's "Box war bereits frei" read as if nothing had
+    been stopped (live 01.10.2026)."""
     try:
         from app.services.activity import emit_event
         from app.services.runtime_model_resolver import session_scope
@@ -2046,10 +2055,11 @@ async def _emit_exclusive_event(slug: str | None, result: dict) -> None:
             await emit_event(
                 session,
                 "runtime.exclusive_evicted" if result.get("ok") else "runtime.exclusive_blocked",
-                f"{slug}: {result.get('message')}",
+                f"{slug}{f' [{box}]' if box else ''}: {result.get('message')}",
                 severity="info" if result.get("ok") else "warning",
                 detail={
                     "slug": slug,
+                    "box": box,
                     "stopped": result.get("stopped") or [],
                     # E1 switch lock: the refusal, or the engines whose load was unknown.
                     "switch_lock": result.get("switch_lock"),
@@ -2143,6 +2153,11 @@ async def start_runtime(
     # nichts zu verdrängen, wartete dann 180 s auf 20 GiB freien Speicher —
     # den TensorFold selbst belegte — und brach mit 400 ab. Ein laufendes
     # Modell braucht keinen freien Platz, es IST der Platz.
+    if grace_source != runtime_grace.SOURCE_AUTO_RECOVERY:
+        # Someone chose THIS runtime again — a switch that stopped it earlier
+        # no longer speaks for the operator.
+        await runtime_grace.clear_evicted(slug)
+
     if is_docker or is_ssh_process:
         already = await already_running(runtime, host=host)
         if already is not None:

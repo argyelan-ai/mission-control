@@ -1256,6 +1256,7 @@ async def start_recipe_on_host(
                 session=session,
                 host_id=worker.id,
             )
+            await runtime_manager._emit_exclusive_event(instance.slug, freed, box="worker")
             if not freed.get("ok"):
                 raise RecipeStartError(409, str(freed.get("message")))
 
