@@ -122,11 +122,14 @@ tensorfold_health:completion_tokens_total 44
 
 
 def test_parse_tensorfold_counter():
-    """TensorFold exposes ``tensorfold:generation_tokens_total`` — a cumulative
-    counter like vLLM's (live sample, GLM-5.3 TensorFold recipe, 01.10.2026).
-    Without it the Runtimes page showed no speed for TensorFold engines."""
+    """TensorFold: speed comes from ``tensorfold_health:completion_tokens_total``,
+    which grows while a reply streams. ``tensorfold:generation_tokens_total``
+    only moves when a reply finishes (live, 01.10.2026) — reading it showed
+    0 tok/s during work and spikes afterwards."""
     result = parse_token_counter(_TENSORFOLD_METRICS)
-    assert result == ("tensorfold", 4392.0, "counter")
+    # The streaming counter (running replies included), not the
+    # finished-replies counter tensorfold:generation_tokens_total (4392).
+    assert result == ("tensorfold", 44.0, "counter")
 
 
 def test_parse_returns_none_for_unknown_metrics():
