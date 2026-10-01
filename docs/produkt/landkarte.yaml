@@ -73,6 +73,7 @@ features:
       - "* /api/v1/night-shift/last-night"
       - "* /api/v1/night-shift/last-night/*"
       - "GET /api/v1/system/daily-metrics"   # daily metrics digest M1-M6 on Home (E0, MC first)
+      - "GET /api/v1/system/journeys"        # last night's journey-test result, one line on Home (E6)
       # System health surfaces: status strip on Home and the sidebar footer
       # (status), vertical alert strip (alerts), live engine metrics in the
       # sidebar and the metrics history chart (SystemHealthSection).

@@ -210,9 +210,19 @@ export function GroupChatView({
       {/* pt-safe-top wie in ChatView: auf dem Handy laeuft die Sessions-Seite
           chromelos (AppShell `mobileChromeless`) — ueber dieser Zeile liegt
           nichts mehr, also muss SIE die Statusleiste abfedern. Ohne das sass
-          der Gruppen-Kopf unter der Uhrzeit (Operator-Befund 21.08.2026). */}
+          der Gruppen-Kopf unter der Uhrzeit (Operator-Befund 21.08.2026).
+
+          Deckende Flaeche (Operator-Befund 01.10.2026, derselbe Fund wie
+          ChatView #636): dieser Kopf hatte — anders als dort gefixt — nie
+          eine eigene Hintergrundfarbe. `pt-safe-top` haelt den Notch-Streifen
+          frei, aber ohne Flaeche malt der Plattform-Backdrop beim iOS-
+          Ueberziehen (Rubber-Band) den Verlauf darunter durch den transparenten
+          Kopf hindurch — die oberste Nachricht wirkt halb durchsichtig.
+          `bg-[var(--color-bg-surface)]` sitzt auf DEMSELBEN Element wie
+          `pt-safe-top`, damit die Polsterung innerhalb der Hintergrundbox
+          liegt. Token, nicht Farbwert — beide Themes. */}
       <div
-        className="shrink-0 flex items-center gap-2 px-3 py-2 pt-safe-top md:pt-2 border-b"
+        className="shrink-0 flex items-center gap-2 px-3 py-2 pt-safe-top md:pt-2 border-b bg-[var(--color-bg-surface)]"
         style={{ borderColor: C.border }}
       >
         {onBack && (

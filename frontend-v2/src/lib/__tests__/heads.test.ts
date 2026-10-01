@@ -67,6 +67,15 @@ describe("hook bypass", () => {
   });
 });
 
+describe("local network blocked", () => {
+  it("local_network_blocked names the operator step in EN and DE", () => {
+    const { key } = failReasonKey("local_network_blocked");
+    expect(key).toBe("failReason.local_network_blocked");
+    expect(resolve(en, `heads.${key}`)).toContain("Local Network");
+    expect(resolve(de, `heads.${key}`)).toContain("Lokales Netzwerk");
+  });
+});
+
 describe("watchdog stop reasons", () => {
   it("no_progress and hard_limit have their own sentence in EN and DE", () => {
     for (const r of ["no_progress", "hard_limit", "time_limit"]) {

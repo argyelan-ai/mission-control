@@ -264,6 +264,7 @@
     "GET /api/v1/skills/{skill_name}/content",
     "GET /api/v1/system/alerts",
     "GET /api/v1/system/daily-metrics",
+    "GET /api/v1/system/journeys",
     "GET /api/v1/system/metrics",
     "GET /api/v1/system/metrics/history",
     "GET /api/v1/system/mode",

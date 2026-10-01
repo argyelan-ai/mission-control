@@ -128,6 +128,17 @@ async def system_operator_minutes(
     return await operator_minutes_by_week(session, weeks=weeks, tz=tz)
 
 
+@router.get("/api/v1/system/journeys")
+async def system_journeys(current_user=Depends(require_user)):
+    """Last night's journey-test result for the Home line (docs/journeys.md).
+
+    Read from the runner's ``~/.mc/journeys/last.json``; ``result`` is None
+    until a run has written one (Home then shows nothing)."""
+    from app.services import journeys_result
+
+    return {"result": journeys_result.load()}
+
+
 @router.get("/api/v1/system/status")
 async def system_status(
     request: Request,

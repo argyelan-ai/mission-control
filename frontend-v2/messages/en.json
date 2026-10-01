@@ -81,6 +81,32 @@
       "hand": "Manual status changes",
       "week": "Week {week} · list price",
       "local": "{share} local"
+    },
+    "journeys": {
+      "green": "Journey tests: {passed} of {total} passed",
+      "gaps": "{count, plural, one {# known gap} other {# known gaps}}",
+      "red": "Journey tests: {names} failed",
+      "redUnnamed": "Journey tests: {failed} of {total} failed",
+      "skipped": "Journey tests skipped",
+      "skippedBecause": "Journey tests skipped: {reason}",
+      "error": "Journey tests did not finish",
+      "errorBecause": "Journey tests did not finish: {reason}",
+      "reason": {
+        "head": "a head was working",
+        "deploy": "a deploy was running",
+        "disk": "not enough disk space",
+        "port": "the test port was busy",
+        "timeout": "time limit reached"
+      },
+      "ago": "{age} ago",
+      "names": {
+        "J-job-to-merge": "Job to merge",
+        "J-phone-needs-you": "Answer from phone",
+        "J-runtime-switch": "Switch runtime",
+        "J-setup": "Setup",
+        "J-vault": "Find knowledge",
+        "J-usage": "Cost & local share"
+      }
     }
   },
   "tasks": {
@@ -225,6 +251,9 @@
       "sectionSelect": "Section",
       "noReason": "No reason was given yet.",
       "reply": "Reply",
+      "answerLabel": "Your answer",
+      "answerSent": "Answer sent — the task continues.",
+      "answerFailed": "The answer could not be sent: {msg}",
       "noHeartbeat": "No heartbeat yet",
       "openLog": "Open log",
       "noError": "No error message was recorded.",
@@ -3377,6 +3406,7 @@
       "gh_identity_missing": "Heads have no GitHub identity yet (operator step).",
       "sandbox_required": "A real repo needs the sandbox for every harness (operator step).",
       "hook_bypassed": "The head pushed around the push hook (e.g. --no-verify). The run does not count, even with a PR.",
+      "local_network_blocked": "macOS blocked the local network for the harness program (operator step: System Settings → Privacy & Security → Local Network → turn it on).",
       "exit": "The harness ended with exit code {code}.",
       "unknown": "Ended without a known reason.",
       "gh_identity_unsafe": "The heads' GitHub identity has too many rights, or the base branch is not protected (operator step)."

@@ -81,6 +81,32 @@
       "hand": "Hand-Statuswechsel",
       "week": "KW {week} · Listenpreis",
       "local": "{share} lokal"
+    },
+    "journeys": {
+      "green": "Ablauf-Tests: {passed} von {total} bestanden",
+      "gaps": "{count, plural, one {# bekannte Lücke} other {# bekannte Lücken}}",
+      "red": "Ablauf-Tests: {names} fehlgeschlagen",
+      "redUnnamed": "Ablauf-Tests: {failed} von {total} fehlgeschlagen",
+      "skipped": "Ablauf-Tests übersprungen",
+      "skippedBecause": "Ablauf-Tests übersprungen: {reason}",
+      "error": "Ablauf-Tests nicht fertig geworden",
+      "errorBecause": "Ablauf-Tests nicht fertig geworden: {reason}",
+      "reason": {
+        "head": "ein Head hat gearbeitet",
+        "deploy": "ein Deploy lief",
+        "disk": "zu wenig Speicherplatz",
+        "port": "der Test-Port war belegt",
+        "timeout": "Zeitlimit erreicht"
+      },
+      "ago": "vor {age}",
+      "names": {
+        "J-job-to-merge": "Auftrag bis Merge",
+        "J-phone-needs-you": "Am Handy antworten",
+        "J-runtime-switch": "Runtime wechseln",
+        "J-setup": "Einrichten",
+        "J-vault": "Wissen finden",
+        "J-usage": "Kosten & lokal"
+      }
     }
   },
   "tasks": {
@@ -225,6 +251,9 @@
       "sectionSelect": "Bereich",
       "noReason": "Noch kein Grund angegeben.",
       "reply": "Antworten",
+      "answerLabel": "Deine Antwort",
+      "answerSent": "Antwort gesendet — die Aufgabe läuft weiter.",
+      "answerFailed": "Die Antwort konnte nicht gesendet werden: {msg}",
       "noHeartbeat": "Noch kein Lebenszeichen",
       "openLog": "Log öffnen",
       "noError": "Es wurde keine Fehlermeldung erfasst.",
@@ -3377,6 +3406,7 @@
       "gh_identity_missing": "Heads haben noch keine GitHub-Identität (Operator-Schritt).",
       "sandbox_required": "Ein echtes Repo braucht die Sandbox, für jeden Harness (Schritt für den Operator).",
       "hook_bypassed": "Der Head hat am Push-Hook vorbei gepusht (z. B. --no-verify). Der Lauf zählt nicht, auch mit PR.",
+      "local_network_blocked": "macOS hat dem Harness-Programm das lokale Netzwerk gesperrt (Schritt für den Operator: Systemeinstellungen → Datenschutz & Sicherheit → Lokales Netzwerk → Programm einschalten).",
       "exit": "Der Harness endete mit Exit-Code {code}.",
       "unknown": "Ohne bekannten Grund beendet.",
       "gh_identity_unsafe": "Die GitHub-Identität der Heads hat zu viele Rechte, oder der Basis-Branch ist nicht geschützt (Schritt für den Operator)."

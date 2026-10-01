@@ -112,6 +112,19 @@ describe("GroupChatView", () => {
     expect(screen.getByText(/DFlash2 vs vLLM entscheiden/)).toBeInTheDocument();
   });
 
+  it("paints its own opaque surface under the notch strip (Operator-Befund 01.10.2026)", () => {
+    // Same bug as ChatView #636 ("header ist noch halb transparent"), here
+    // never fixed: `pt-safe-top` reserves the notch strip, but without a
+    // background on the SAME element the platform backdrop paints the scrolled
+    // history through the header during iOS rubber-band overscroll — the top
+    // message reads as half see-through. The fix puts `pt-safe-top` and the
+    // surface token on one element, so the padding sits inside the painted box.
+    const { container } = render(<GroupChatView group={mkGroup()} onGroupChanged={vi.fn()} />);
+    const header = container.querySelector(".pt-safe-top");
+    expect(header).not.toBeNull();
+    expect(header?.className).toContain("bg-[var(--color-bg-surface)]");
+  });
+
   it("offers the first round in the empty room and starts it", async () => {
     const onChanged = vi.fn();
     render(<GroupChatView group={mkGroup()} onGroupChanged={onChanged} />);

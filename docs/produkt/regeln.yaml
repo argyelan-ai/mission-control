@@ -56,6 +56,239 @@ rules:
     status: active
     checked: 2026-09-26
 
+  # From ADRs 050-058 (night rule-register run, reviewed 2026-10-01).
+  - id: R-task-repo-rules-precedence
+    says: "Rule injection resolves the repo as task repo (explicit) > project repo; an explicit task repo without rules does not inherit the project rules."
+    source: "ADR-052 decision (precedence rule)"
+    owner: backend/app/services/repo_registry.py
+    applies_to: ["backend/app/services/repo_registry.py"]
+    enforced_by:
+      - {test: "backend/tests/test_task_repo_select.py::test_task_repo_rules_beat_project_rules"}
+      - {test: "backend/tests/test_task_repo_select.py::test_explicit_task_repo_without_rules_blocks_project_fallback"}
+    status: active
+    checked: 2026-10-01
+
+  - id: R-drift-two-probes
+    says: "The runtime watcher commits a model-drift only after two consecutive identical probes and never touches the row on an unreachable engine."
+    source: "ADR-054 decision (points 3 and 5)"
+    owner: backend/app/services/runtime_watcher.py
+    applies_to: ["backend/app/services/runtime_watcher.py"]
+    enforced_by:
+      - {test: "backend/tests/test_runtime_watcher.py::test_drift_requires_two_consecutive_probes"}
+      - {test: "backend/tests/test_runtime_watcher.py::test_unreachable_engine_never_touches_row"}
+    status: active
+    checked: 2026-10-01
+
+  - id: R-harness-compat-matrix
+    says: "Harness and provider are separate axes; HARNESS_PROTOCOLS in harness_compat is the single compatibility matrix (claude to anthropic, openclaude/omp to openai) and the runtime switch refuses an incompatible pairing."
+    source: "ADR-056 decision (points 2 and 4)"
+    owner: backend/app/services/harness_compat.py
+    applies_to: ["backend/app/services/harness_compat.py", "backend/app/services/compose_renderer.py", "backend/app/services/agent_runtime_switch.py", "backend/app/routers/internal.py"]
+    enforced_by:
+      - {test: "backend/tests/test_harness_compat.py::test_matrix_v1"}
+      - {test: "backend/tests/test_agent_harness_switch.py::test_incompatible_harness_raises"}
+    status: active
+    checked: 2026-10-01
+
+  - id: R-github-vault-before-env
+    says: "GitHub owner and token resolve through one central resolver (services/github_config.py) with Vault before Env."
+    source: "ADR-055 decision"
+    owner: backend/app/services/github_config.py
+    applies_to: ["backend/app/services/github_config.py"]
+    enforced_by:
+      - {test: "backend/tests/test_github_config.py::test_resolver_vault_wins_over_env"}
+    status: active
+    checked: 2026-10-01
+
+  - id: R-one-active-loop-per-board
+    says: "At most one active loop per board; starting a second one is rejected with 409."
+    source: "ADR-051 mechanics (guard rails)"
+    owner: backend/app/routers/loops.py
+    applies_to: ["backend/app/routers/loops.py", "backend/app/services/loop_runner.py"]
+    enforced_by:
+      - {test: "backend/tests/test_loops_l1.py::test_one_active_loop_per_board"}
+    status: active
+    checked: 2026-10-01
+
+
+  # From ADRs 060-069 (night rule-register run, reviewed 2026-10-01).
+  - id: R-grok-tui-no-print-mode
+    says: "The grok bridge launches grok as a persistent interactive TUI; its print mode (-p / --prompt-file / streaming-json) is never launched."
+    source: "ADR-068 section 1 (supersedes ADR-066 section 1); ADR-086 later narrowed the general print-mode ban to Claude heads"
+    owner: scripts/grok-bridge.py
+    applies_to: ["scripts/grok-bridge.py"]
+    enforced_by:
+      - {test: "backend/tests/test_grok_bridge.py::test_grok_launch_cmd_is_interactive_never_headless"}
+      - {test: "backend/tests/test_grok_bridge.py::test_source_binds_localhost_and_uses_paste_model"}
+    status: active
+    checked: 2026-10-01
+
+  - id: R-vault-token-slug-keys
+    says: "Agent token vault keys derive from the stable slug (mc_token_{slug}), never from the agent name."
+    source: "ADR-069 decision"
+    owner: backend/app/services/secrets_helper.py
+    applies_to: ["backend/app/services/secrets_helper.py", "backend/app/routers/internal.py", "backend/app/services/vault_key_migration.py"]
+    enforced_by:
+      - {test: "backend/tests/test_agent_token_vault.py::test_writer_keys_token_on_slug_not_name"}
+      - {test: "backend/tests/test_agent_token_vault.py::test_bootstrap_reads_multiword_token_via_slug"}
+      - {test: "backend/tests/test_agent_token_vault.py::test_delete_agent_removes_vault_secret_after_rename"}
+    status: active
+    checked: 2026-10-01
+
+  - id: R-host-model-sync-keeps-token
+    says: "A host agent model sync overwrites only the model env keys and never regenerates or drops the agent auth token."
+    source: "ADR-064 section 1 (sync_host_agent_model)"
+    owner: backend/app/services/host_harness_adapter.py
+    applies_to: ["backend/app/services/host_harness_adapter.py"]
+    enforced_by:
+      - {test: "backend/tests/test_host_harness_adapter.py::test_sync_host_agent_model_preserves_token"}
+      - {test: "backend/tests/test_host_harness_adapter.py::test_sync_host_agent_model_token_stable_across_repeated_syncs"}
+    status: active
+    checked: 2026-10-01
+
+  - id: R-tui-reset-only-on-task-switch
+    says: "A persistent TUI bridge resets its session only on a real task switch (new task_id); a revision or re-dispatch of the same task keeps the agent's working context."
+    source: "ADR-068 addendum 2026-07-12 (dispatch = new task means fresh context)"
+    owner: scripts/grok-bridge.py
+    applies_to: ["scripts/grok-bridge.py", "scripts/hermes-bridge.py"]
+    enforced_by:
+      - {test: "backend/tests/test_grok_bridge.py::test_should_reset_session_decision_table"}
+      - {test: "backend/tests/test_grok_bridge.py::test_dispatch_task_resets_session_on_task_switch"}
+      - {test: "backend/tests/test_grok_bridge.py::test_dispatch_task_no_reset_on_same_task_revision"}
+      - {test: "backend/tests/test_hermes_bridge.py::test_poll_loop_no_reset_on_same_task_redelivery"}
+    status: active
+    checked: 2026-10-01
+
+  - id: R-parentless-dispatch-gated
+    says: "A parentless task assigned to another agent by a non-board-lead creator (e.g. dispatch_to_agent) is classified as an executable work item, so the full pre-dispatch gating applies."
+    source: "ADR-062 section on security (dispatch_to_agent gating fix)"
+    owner: backend/app/services/dispatch_gating.py
+    applies_to: ["backend/app/services/dispatch_gating.py", "backend/app/services/agent_task_status.py"]
+    enforced_by:
+      - {test: "backend/tests/test_dispatch_gating.py::test_iewi_jarvis_root_foreign_assignment_now_gated"}
+      - {test: "backend/tests/test_dispatch_gating.py::test_iewi_board_lead_root_delegation_stays_ungated"}
+    status: active
+    checked: 2026-10-01
+
+
+  # From ADRs 070-079 (night rule-register run, reviewed 2026-10-01).
+  - id: R-transcript-privacy-fails-closed
+    says: "Session-transcript access is fail-closed: the lead agent's transcripts (the operator's personal CLI directory) are gated to its slugs plus the attribution heuristic, and every read error means denied, never allowed."
+    source: "ADR-073 (consequences: fail-closed privacy)"
+    owner: backend/app/services/transcript_chat.py
+    applies_to: ["backend/app/services/transcript_chat.py", "backend/app/services/token_harvester.py"]
+    enforced_by:
+      - {test: "backend/tests/test_transcript_chat_sessions.py::test_transcript_allowed_boss_unreadable_file_denied"}
+      - {test: "backend/tests/test_transcript_chat_sessions.py::test_transcript_allowed_non_boss_host_agent_fails_closed"}
+      - {test: "backend/tests/test_transcript_chat_sessions.py::test_transcript_allowed_boss_private_cwd_denied"}
+    status: active
+    checked: 2026-10-01
+
+  - id: R-chat-sender-identity-carried-or-degraded
+    says: "Sender identity travels as a value through the neutral chat pipeline; a channel without identity capability degrades it visibly (prefix) instead of dropping who spoke."
+    source: "ADR-072 section 2 (sender identity)"
+    owner: backend/app/services/chat_outbound.py
+    applies_to: ["backend/app/services/chat_adapter.py", "backend/app/services/chat_outbound.py", "backend/app/services/chat_*.py"]
+    enforced_by:
+      - {test: "backend/tests/test_chat_adapter_tck.py::test_sender_identity_is_carried_or_visibly_degraded"}
+    status: active
+    checked: 2026-10-01
+
+  - id: R-group-mention-storm-guard
+    says: "On group threads only mention-targeted messages are delivered, and an agent post without mentions wakes nobody — storm protection is structural, not throttled."
+    source: "ADR-075 (decision; addendum PR B)"
+    owner: backend/app/services/thread_scope.py
+    applies_to: ["backend/app/services/thread_scope.py", "backend/app/services/group_service.py", "backend/app/routers/agents.py"]
+    enforced_by:
+      - {test: "backend/tests/test_group_agent_post.py::test_agent_post_without_mentions_wakes_nobody"}
+      - {test: "backend/tests/test_group_delivery.py::test_unmentioned_group_message_pushes_nobody"}
+    status: active
+    checked: 2026-10-01
+
+  - id: R-slot-row-exclusions
+    says: "A slot runtime row is never a recipe instance, box occupancy, eviction victim or autostart/recovery target; only the drift watcher always follows it."
+    source: "ADR-078 decision 3 (exclusions wherever is_slot)"
+    owner: backend/app/services/slot_runtimes.py
+    applies_to: ["backend/app/services/slot_runtimes.py", "backend/app/services/recipe_switcher.py", "backend/app/services/runtime_manager.py", "backend/app/services/runtime_watcher.py"]
+    enforced_by:
+      - {test: "backend/tests/test_slot_runtime_core.py::test_slot_row_never_matches_a_recipe"}
+      - {test: "backend/tests/test_slot_runtime_core.py::test_slot_row_is_never_an_occupancy"}
+      - {test: "backend/tests/test_slot_runtime_core.py::test_slot_row_is_never_evicted"}
+      - {test: "backend/tests/test_slot_runtime_core.py::test_slot_row_is_never_auto_recovered"}
+    status: active
+    checked: 2026-10-01
+
+  - id: R-active-content-downloads
+    says: "Active content (HTML/SVG/XML/JS) is served from every files root only as an attachment download with a neutral content type, never inline with its own MIME."
+    source: "ADR-074 (consequences, negative: security change in read_stream)"
+    owner: backend/app/services/fs_service.py
+    applies_to: ["backend/app/services/fs_service.py"]
+    enforced_by:
+      - {test: "backend/tests/test_fs_service.py::test_read_stream_forces_download_for_active_content"}
+      - {test: "backend/tests/test_fs_service.py::test_active_content_is_never_served_with_its_own_mime"}
+    status: active
+    checked: 2026-10-01
+
+
+  # From ADRs 080-087 (night rule-register run, reviewed 2026-10-01).
+  - id: R-acp-harness-property
+    says: "Whether an omp agent runs the ACP driver follows from its harness, never from an agent-name list; a new *_agent_slugs settings field needs an explicit whitelist entry in the guard test."
+    source: "ADR-084 decision 1 and guard 6 (supersedes ADR-081)"
+    owner: backend/app/services/harness_compat.py
+    applies_to: ["backend/app/services/harness_compat.py", "backend/app/services/compose_renderer.py"]
+    enforced_by:
+      - {test: "backend/tests/test_acp_harness_property.py::test_no_slug_list_identifiers_in_backend_code"}
+      - {test: "backend/tests/test_acp_harness_property.py::test_settings_has_no_new_agent_slug_fields"}
+      - {test: "backend/tests/test_acp_harness_property.py::test_driver_decision_takes_a_harness_not_a_slug"}
+    status: active
+    checked: 2026-10-01
+
+  - id: R-heartbeat-control-channel
+    says: "The heartbeat response is the control channel for a running turn: stop or a foreign blocker is a hard interrupt, an unread foreign blocker comment a soft one, and the agent's own comments never interrupt it."
+    source: "ADR-080 (decision)"
+    owner: backend/app/routers/agents.py
+    applies_to: ["backend/app/routers/agents.py", "docker/omp-bridge/**"]
+    enforced_by:
+      - {test: "backend/tests/test_heartbeat_control.py::test_heartbeat_hard_on_run_control_stopped"}
+      - {test: "backend/tests/test_heartbeat_control.py::test_heartbeat_hard_on_foreign_block"}
+      - {test: "backend/tests/test_heartbeat_control.py::test_heartbeat_hard_beats_soft"}
+      - {test: "backend/tests/test_heartbeat_control.py::test_heartbeat_own_block_does_not_interrupt"}
+    status: active
+    checked: 2026-10-01
+
+  - id: R-no-hex-alpha-concat
+    says: "A colour is never made translucent by appending a hex alpha suffix; alpha() is the only way."
+    source: "ADR-087 decision 6 (colour rules for both modes)"
+    owner: frontend-v2/src/lib/colors.ts
+    applies_to: ["frontend-v2/src/**"]
+    enforced_by:
+      - {test: "frontend-v2/src/lib/__tests__/no-hex-alpha-concat.test.ts::no source file appends a hex alpha suffix to a colour — use alpha()"}
+    status: active
+    checked: 2026-10-01
+
+  - id: R-theme-switch-data-theme-only
+    says: "data-theme on <html> is the only theme switch; no dark class on <html>, no Tailwind dark: variant, no .dark selector."
+    source: "ADR-087 decision 6 (colour rules for both modes)"
+    owner: frontend-v2/src/lib/theme.ts
+    applies_to: ["frontend-v2/src/**"]
+    enforced_by:
+      - {test: "frontend-v2/src/lib/__tests__/no-dark-class.test.ts::the root layout does not put a static dark class on <html>"}
+      - {test: "frontend-v2/src/lib/__tests__/no-dark-class.test.ts::no source file uses the Tailwind dark: variant"}
+      - {test: "frontend-v2/src/lib/__tests__/no-dark-class.test.ts::globals.css defines no .dark selector or dark custom variant"}
+    status: active
+    checked: 2026-10-01
+
+  - id: R-voice-config-no-keys
+    says: "The voice config endpoint answers with provider, model, voice and slug only — never key material — and a missing or invalid binding fails soft so the voice worker never goes silent."
+    source: "ADR-082 decision 3"
+    owner: backend/app/services/voice_runtime.py
+    applies_to: ["backend/app/routers/agent_scoped.py", "backend/app/services/voice_runtime.py"]
+    enforced_by:
+      - {test: "backend/tests/test_agent_voice_config_endpoint.py::test_response_never_carries_key_material"}
+      - {test: "backend/tests/test_agent_voice_config_endpoint.py::test_unbound_agent_falls_back_calmly"}
+    status: active
+    checked: 2026-10-01
+
 rejected:
   - id: X-own-control-room
     idea: "An own control-room UI, job page or coordinator for heads"
@@ -72,5 +305,105 @@ rejected:
     why: "Excluded until an own ADR decides otherwise; the local route is OpenClaude or omp."
     source: "PRINCIPLES 8.5; ADR-086 decision 6"
     keywords: [proxy, gateway, litellm, protocol proxy]
+  - id: X-repo-rules-on-agent
+    idea: "Per-repo work rules stored in agent.rules_md or a project_config JSON"
+    why: "Rules belong to the codebase, not to an agent or a single project; both were rejected in favour of the Repo model (ADR-050)."
+    source: "ADR-050 alternatives 1-2"
+    keywords: ["repo rules", "rules_md", "agent rules", "project_config"]
+  - id: X-loop-as-workflow-or-schedule
+    idea: "Loops implemented as a workflow child or a schedule variant"
+    why: "Workflows bypass the task pipeline (dead path since the gateway sunset) and schedules are time- not outcome-driven; a loop is a meta-controller over normal tasks."
+    source: "ADR-051 alternatives"
+    keywords: ["loop", "workflow", "schedule", "automation", "playbook"]
+  - id: X-first-probe-drift
+    idea: "Runtime watcher commits model drift on the first mismatched probe"
+    why: "Engine warm-up/reload transiently serves no or an intermediate model; acting on first sight fires spurious model_changed events and agent restarts (ADR-054)."
+    source: "ADR-054 alternatives"
+    keywords: ["runtime watcher", "drift", "probe", "two-probe confirmation"]
+  - id: X-runtime-combination-rows
+    idea: "One runtime row per harness x provider pair (e.g. claude-vllm-docker)"
+    why: "Row explosion: every new provider needs one row per harness and duplicates connection data; the compat matrix on two independent axes replaced this (ADR-056)."
+    source: "ADR-056 alternatives"
+    keywords: ["harness", "runtime", "combination rows", "compat matrix"]
+  - id: X-engine-control-own-credentials
+    idea: "An engine_control JSON field on runtimes with its own host/user/SSH settings"
+    why: "Duplicates the hosts registry as a second source for where an engine runs; SSH access resolves via host_id through host_resolver (ADR-057)."
+    source: "ADR-057 alternatives"
+    keywords: ["engine control", "ssh", "host registry", "autostart"]
+  - id: X-cli-versions-in-db
+    idea: "A database table as the source for target CLI tool versions"
+    why: "The build needs the value as a Dockerfile ARG anyway — a committed file manifest (docker/cli-versions.json) is the one source both build script and backend can read without duplication (ADR-058)."
+    source: "ADR-058 alternatives"
+    keywords: ["cli versions", "manifest", "dockerfile arg", "cli update"]
+  - id: X-cli-print-mode
+    idea: "Headless print-mode delivery (-p / --prompt-file / streaming-json subprocess) for the persistent fleet bridges (grok, hermes)"
+    why: "Print mode costs extra and breaks uniformity; persistent agents live in a TUI with an agent-driven MC lifecycle (the grok v1 headless bridge was retired for this). ADR-086 keeps the ban for Claude heads only; other short-lived heads may use their harness's official non-interactive mode."
+    source: "ADR-068 (supersedes ADR-066 section 1); narrowed by ADR-086 (print mode for heads)"
+    keywords: ["print mode", "headless", "-p", "prompt-file", "streaming-json", "subprocess dispatch"]
+  - id: X-x-post-second-lifecycle
+    idea: "A dedicated X-post lifecycle (own x_posts table with its own status field)"
+    why: "Approval already covers waiting on the operator and ContentPipeline tracks publication; a third lifecycle would duplicate both (no second lifecycle rule)."
+    source: "ADR-065"
+    keywords: ["x posts", "x_posts table", "second lifecycle", "twitter status"]
+  - id: X-host-launchd-autoload
+    idea: "Auto-load the launchd job immediately when a host agent is provisioned"
+    why: "A fresh install must never silently register a background process on the operator's Mac; staging and loading stay separate, separately-consentable steps (host_agent_autoload_enabled default false)."
+    source: "ADR-063 decision 2"
+    keywords: ["launchctl autoload", "host agent provisioning", "background process"]
+  - id: X-uuid-vault-token-keys
+    idea: "Key agent token vault entries by agent UUID"
+    why: "Unreadable for debugging and would force the compose envkey and start-all.sh consumers to move too; the slug is stable and readable."
+    source: "ADR-069"
+    keywords: ["uuid vault key", "token key scheme", "mc_token"]
+  - id: X-replace-interactive-tui
+    idea: "Replace the interactive CLI in tmux with an SDK-driven session"
+    why: "The TUI is the productive, live-hardened daily interaction path (turn signals, recycler, pane-UI detection); a replacement creates two competing truths about session state."
+    source: "ADR-073 (alternatives, decision)"
+    keywords: ["agent sdk", "tui replacement", "sdk session"]
+  - id: X-attachment-side-channel
+    idea: "A dedicated attachment upload side channel that pushes file data to the CLI"
+    why: "No harness has such an input; every harness reads files over paths, so an attachment is an agent-owned file at a shared absolute path plus a path line in the message."
+    source: "ADR-074 (alternatives)"
+    keywords: ["attachment channel", "upload endpoint for agents", "attachment protocol"]
+  - id: X-unfiltered-group-delivery
+    idea: "Deliver every group-thread message to every member"
+    why: "N agents answering each other escalate into message storms; only the mention filter and the word-granting round engine wake agents."
+    source: "ADR-075 (alternatives; decision)"
+    keywords: ["group broadcast", "unfiltered delivery", "message storm", "lead default mention"]
+  - id: X-sparkrun-concept
+    idea: "sparkrun as a first-class recipe concept with its own registry query and switch_recipe endpoint"
+    why: "The operator struck sparkrun as a concept; there is one recipe model (engine, launch command, port, topology) and a sparkrun recipe is a plain launch command."
+    source: "ADR-077 (decision 1; alternatives)"
+    keywords: ["sparkrun", "recipe registry", "switch recipe", "sparkrun_managed"]
+  - id: X-model-alias-binding
+    idea: "Bind agents to a fixed served model alias (--served-model-name) that survives recipe switches"
+    why: "The alias sticks forever and hides real model switches; the database would lose the model truth behind catalogue, cost and badge."
+    source: "ADR-078 (rejected alternatives, A)"
+    keywords: ["served model alias", "model alias", "slot alias"]
+  - id: X-signal-only-turn-detection
+    idea: "Replace pane scraping entirely with native turn signals"
+    why: "Stop hooks do not fire on interrupt or mid-turn API crash; crashed stays scrape-authoritative and scraping stays the mandatory fallback."
+    source: "ADR-071 (decision phase A; alternatives)"
+    keywords: ["turn signal", "pane scraping", "stop hook", "crashed detection"]
+  - id: X-pane-interrupt
+    idea: "Interrupting a running turn by scraping the pane for a stop state or injecting keys/messages into the session"
+    why: "The hook signal is the only truth source; pane text is not stably parseable and injected input depends on composer state — the heartbeat control channel ladder does it deterministically."
+    source: "ADR-080 (alternatives)"
+    keywords: ["pane scraping", "tmux send-keys", "interrupt", "stop state", "escape injection"]
+  - id: X-voice-polling
+    idea: "A watcher or restart job that pushes voice-runtime binding changes to the voice worker"
+    why: "It would kill a running call and add a moving part; the worker re-reads the binding per call, so a switch takes effect by the next call for free."
+    source: "ADR-082 (alternatives)"
+    keywords: ["voice worker restart", "polling", "binding propagation", "livekit watcher"]
+  - id: X-head-run-mcp
+    idea: "A run MCP server for heads"
+    why: "A CLI script is enough; nothing a head uses needs an admin token."
+    source: "ADR-085 (alternatives)"
+    keywords: ["mcp server", "run server", "admin token", "head tooling"]
+  - id: X-tailwind-dark-variant
+    idea: "Per-component Tailwind dark: variants as the light-theme mechanism"
+    why: "Zero existing uses and it would double every colour declaration; CSS variables switch every token at once."
+    source: "ADR-087 (alternatives)"
+    keywords: [{"dark": "variant"}, "tailwind theme", "light mode mechanism", "dark class"]
 
 dead: []

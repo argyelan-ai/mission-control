@@ -345,12 +345,18 @@ stoppable) in the runs list on `/runtimes`.
       with `-p`, so there is nothing to take over; `head.log` is the view. Environment: `env -i` with only `HOME`,
       `PATH` (shims first), `LANG`, `TERM` and `head.env`. Inside
       `sandbox-exec` (§9) once the sandbox is proven.
+      The same privacy setting blocks every non-Apple harness binary started
+      by launchd (no prompt is shown): when the engine is on a LAN address and
+      `head.log` shows `EHOSTUNREACH` (claude) or "Was there a typo in the url
+      or port?" (omp), the run ends with reason `local_network_blocked` and a
+      `detail` naming the operator step (System Settings → Privacy & Security
+      → Local Network).
 3. Harness table — the only place with harness commands:
 
 | Pair | Command in `wt/` |
 |---|---|
 | omp × local (v1) | `omp --profile mc-head-<id8> --model <provider>/<model> -p --session-dir <run>/omp-sessions --max-time <s> --auto-approve --append-system-prompt <run>/procedure.md "$(cat <run>/job.md)"` — profile rendered by `render_omp_host_models_yml`, never the operator's own profile. `--auto-approve` is a permission bypass → allowed **only inside the sandbox** or on the scratch repo (ADR-086) |
-| claude × local (v1, exp.) | `CLAUDE_CONFIG_DIR=<run>/claude-config claude -p --bare --settings <run>/head-settings.json --append-system-prompt-file procedure.md "$(cat job.md)"` + `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL`, placeholder `ANTHROPIC_API_KEY` (not `ANTHROPIC_AUTH_TOKEN`: under `--bare` only `ANTHROPIC_API_KEY` or `apiKeyHelper` count [cli]). `-p` is fine here: no subscription is involved. Tool permissions come only from the allow/deny list in `head-settings.json` (§9) — `acceptEdits` alone would refuse every Bash call (tests, git, `gh pr create`) in `-p` |
+| claude × local (v1, exp.) | `CLAUDE_CONFIG_DIR=<run>/claude-config claude -p --bare --settings <run>/head-settings.json --append-system-prompt-file procedure.md "$(cat job.md)"` + `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL`, placeholder `ANTHROPIC_API_KEY` (not `ANTHROPIC_AUTH_TOKEN`: under `--bare` only `ANTHROPIC_API_KEY` or `apiKeyHelper` count [cli]). `-p` is fine here: no subscription is involved. Tool permissions come only from the allow/deny list in `head-settings.json` (§9) — `acceptEdits` alone would refuse every Bash call (tests, git, `gh pr create`) in `-p`. File access uses `Edit(path)` rules only (Claude Code ignores `Write(path)` in file permission checks). A model the installed Claude Code does not know (every local engine model) gets a `modelPicker` row with `behavesAs` (default `claude-sonnet-4-6`, small model `claude-haiku-4-5`; `MC_HEAD_CLAUDE_BEHAVES_AS` / `MC_HEAD_CLAUDE_SMALL_BEHAVES_AS`) — otherwise it warns `unrecognized_model` and uses generic defaults |
 | openclaude × local (later) | `openclaude -p --bare --settings <run>/head-settings.json --append-system-prompt "$(cat procedure.md)" "$(cat job.md)"` + `OPENAI_BASE_URL/OPENAI_MODEL` |
 | claude × Claude (later) | interactive `claude` (no `-p`) in the tmux session with `CLAUDE_CONFIG_DIR=<head config dir>`, `--settings`, `--append-system-prompt-file`; end = process exit + run record. `--bg` + `/goal` only as an extra after its end-detection proof |
 
