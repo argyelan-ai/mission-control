@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { deriveStateCard } from "../stateCard";
-import { approvalFixture, commentFixture, runRecordFixture, taskFixture } from "./fixtures";
+import { approvalFixture, commentFixture, openQuestionFixture, runRecordFixture, taskFixture } from "./fixtures";
 import { mkRun } from "@/lib/__tests__/headFixtures";
 import type { HeadState } from "@/lib/heads";
 
@@ -25,6 +25,34 @@ describe("deriveStateCard", () => {
     const noise = commentFixture({ id: "c3", comment_type: "progress", content: "still here", created_at: "2026-09-22T08:00:00Z" });
     const card = deriveStateCard({ task, approvals: [], comments: [older, noise, newer], runRecord: null });
     expect(card).toMatchObject({ kind: "needs_you", approval: null, reason: "Which branch?" });
+  });
+
+  it("waiting on an open thread question → NEEDS YOU shows that question and carries it for Reply", () => {
+    const task = taskFixture({ status: "waiting" });
+    const blocker = commentFixture({ comment_type: "blocker", content: "old blocker" });
+    const question = openQuestionFixture({ options: ["Aurora", "Borealis"] });
+    const card = deriveStateCard({ task, approvals: [], comments: [blocker], runRecord: null, openQuestion: question });
+    expect(card).toMatchObject({
+      kind: "needs_you",
+      approval: null,
+      reason: "Which release name: Aurora or Borealis?",
+      since: "2026-09-21T07:30:00Z",
+      askerAgentId: "agent-1",
+      question: { id: "q-1", options: ["Aurora", "Borealis"] },
+    });
+  });
+
+  it("an open approval still wins over an open question", () => {
+    const task = taskFixture({ status: "waiting" });
+    const approval = approvalFixture({ task_id: task.id });
+    const card = deriveStateCard({ task, approvals: [approval], comments: [], runRecord: null, openQuestion: openQuestionFixture() });
+    expect(card).toMatchObject({ kind: "needs_you", approval: { id: approval.id }, question: null });
+  });
+
+  it("an open question on a running task makes no NEEDS YOU card", () => {
+    const task = taskFixture({ status: "in_progress" });
+    const card = deriveStateCard({ task, approvals: [], comments: [], runRecord: null, openQuestion: openQuestionFixture({ blocking: false }) });
+    expect(card?.kind).toBe("running");
   });
 
   it("ignores resolved approvals", () => {

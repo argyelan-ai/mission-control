@@ -1,6 +1,6 @@
 // Shared fixtures for the task-detail tests (state card, summary, URL tab).
 // Neutral example names only — this repo is public.
-import type { Agent, Approval, RunRecord, Task, TaskComment } from "@/lib/types";
+import type { Agent, Approval, RunRecord, Task, TaskComment, TaskOpenQuestion } from "@/lib/types";
 
 export function taskFixture(overrides: Partial<Task> = {}): Task {
   return {
@@ -158,6 +158,19 @@ export function runRecordFixture(overrides: Partial<RunRecord> = {}): RunRecord 
       "blocker.escalated_to_operator": { anzahl: 2, erste: "2026-09-19T08:00:00", letzte: "2026-09-20T08:00:00" },
       review_stuck: { anzahl: 1, erste: "2026-09-20T09:00:00", letzte: "2026-09-20T09:00:00" },
     },
+    ...overrides,
+  };
+}
+
+export function openQuestionFixture(overrides: Partial<TaskOpenQuestion> = {}): TaskOpenQuestion {
+  return {
+    id: "q-1",
+    body: "Which release name: Aurora or Borealis?",
+    blocking: true,
+    options: [],
+    author: { kind: "agent", id: "alpha", display: "alpha" },
+    asker_agent_id: "agent-1",
+    created_at: "2026-09-21T07:30:00Z",
     ...overrides,
   };
 }

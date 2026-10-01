@@ -285,6 +285,52 @@ async def open_questions(
     return [m for m in messages if is_open(m)]
 
 
+def pick_open_question(questions: list[Message]) -> Message | None:
+    """The one open question an operator answer is aimed at: the newest
+    BLOCKING one (it holds the task in `waiting`), else the newest open one."""
+    if not questions:
+        return None
+    blocking = [q for q in questions if (q.question_meta or {}).get("blocking")]
+    return (blocking or questions)[-1]
+
+
+async def answer_by_operator_comment(
+    session: AsyncSession, task, *, actor_user_id=None, actor_label: str | None = None,
+) -> bool:
+    """Backstop: an operator COMMENT on a `waiting` task counts as the answer
+    when exactly ONE blocking question is open — that question clears and the
+    task resumes like a thread reply would (resume_task_after_answer).
+
+    No thread reply is written: the comment itself reaches the agent through
+    the comment channel once the task is back in_progress, so the answer is
+    delivered exactly once. With several open blocking questions the comment
+    could answer any of them — nothing is guessed, the task stays `waiting`
+    (the "Reply" button addresses one question explicitly). Returns True when
+    the task resumed."""
+    from app.models.thread import Thread
+    from app.task_status import TaskStatus
+
+    if task.status != TaskStatus.WAITING or task.thread_id is None:
+        return False
+    thread = await session.get(Thread, task.thread_id)
+    if thread is None:
+        return False
+    blocking = [
+        q for q in await open_questions(session, thread_id=thread.id)
+        if (q.question_meta or {}).get("blocking")
+    ]
+    if len(blocking) != 1:
+        return False
+    question = blocking[0]
+    question.question_meta = {**question.question_meta, "awaiting": False}
+    session.add(question)
+    await session.commit()
+    return await resume_task_after_answer(
+        session, task, thread, changed_by="user",
+        actor_user_id=actor_user_id, actor_label=actor_label,
+    )
+
+
 async def last_task_activity(session: AsyncSession, task: Task, *, comm_v2: bool = False):
     """Dual-read last activity for a task (§8.1): the max of the latest
     TaskComment.created_at and the latest Message.created_at on the task's

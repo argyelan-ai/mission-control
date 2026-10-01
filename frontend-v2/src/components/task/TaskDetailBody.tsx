@@ -746,6 +746,17 @@ export function TaskDetailBody({
     enabled: activeTab === "deliverables",
   });
 
+  // The open thread question (`mc ask`) a waiting task holds for — the
+  // NEEDS YOU card shows it and answers it. One message is enough: the
+  // question rides the response independent of the page.
+  const needsYouStatus = task.status === "waiting" || task.status === "blocked" || task.status === "user_test";
+  const { data: openQuestion = null } = useQuery({
+    queryKey: ["task-open-question", task.id],
+    queryFn: async () => (await api.tasks.thread.list(task.id, { limit: 1 })).open_question ?? null,
+    enabled: needsYouStatus,
+    refetchInterval: 15_000,
+  });
+
   // Shared query key with TaskComments — feeds the state card (last step,
   // blocker reason, resolution) and is a cache hit on the Comments tab.
   const { data: comments = [] } = useQuery({
@@ -797,7 +808,14 @@ export function TaskDetailBody({
 
   // ── Derived ────────────────────────────────────────────────────────────────
 
-  const stateCard = deriveStateCard({ task, approvals, comments, runRecord: runRecord ?? null, headRun: latestHeadRun });
+  const stateCard = deriveStateCard({
+    task,
+    approvals,
+    comments,
+    runRecord: runRecord ?? null,
+    headRun: latestHeadRun,
+    openQuestion: needsYouStatus ? openQuestion : null,
+  });
   const stateLine = deriveStateLine({ task, card: stateCard, agents, locale });
 
   const briefingFields: { label: string; value: string | null | undefined }[] = task.intake_mode

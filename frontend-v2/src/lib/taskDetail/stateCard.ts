@@ -1,4 +1,4 @@
-import type { Approval, RunRecord, Task, TaskComment } from "@/lib/types";
+import type { Approval, RunRecord, Task, TaskComment, TaskOpenQuestion } from "@/lib/types";
 import { HEAD_SILENT_WARN_S, isScratchBranchPushed, type HeadRun } from "@/lib/heads";
 import { parseTs, secondsBetween } from "./format";
 
@@ -7,7 +7,9 @@ import { parseTs, secondsBetween } from "./format";
  * every state is testable with fixtures; the component only renders it.
  *
  *   blocked / waiting / user_test → NEEDS YOU (open approval embedded, else
- *                                   the latest blocker comment + Reply)
+ *                                   the agent's open thread question + an
+ *                                   answer to it, else the latest blocker
+ *                                   comment + Reply)
  *   in_progress                   → RUNNING (last step, runtime, heartbeat)
  *   done                          → RESULT (resolution, PR, evidence, duration)
  *   failed / aborted              → FAILED (error in plain words + Open log)
@@ -30,6 +32,9 @@ export type StateCard =
       reason: string | null;
       since: string | null;
       askerAgentId: string | null;
+      /** The open thread question "Reply" answers (reply_to) — a blocking
+       *  one is what parks a task in `waiting`. */
+      question?: TaskOpenQuestion | null;
     }
   | { kind: "running"; lastStep: string | null; startedAt: string | null; heartbeatAt: string | null }
   | {
@@ -86,6 +91,7 @@ export function deriveStateCard({
   comments,
   runRecord,
   headRun = null,
+  openQuestion = null,
 }: {
   task: Task;
   approvals: Approval[];
@@ -93,6 +99,8 @@ export function deriveStateCard({
   runRecord: RunRecord | null;
   /** Newest head run of this task, if any. */
   headRun?: HeadRun | null;
+  /** The open question on the task thread (GET /tasks/{id}/thread). */
+  openQuestion?: TaskOpenQuestion | null;
 }): StateCard | null {
   if (headRun) {
     return {
@@ -114,6 +122,17 @@ export function deriveStateCard({
         reason: open.description || null,
         since: task.blocked_at ?? open.created_at,
         askerAgentId: open.agent_id ?? task.assigned_agent_id,
+        question: null,
+      };
+    }
+    if (openQuestion) {
+      return {
+        kind: "needs_you",
+        approval: null,
+        reason: openQuestion.body,
+        since: openQuestion.created_at,
+        askerAgentId: openQuestion.asker_agent_id ?? task.assigned_agent_id,
+        question: openQuestion,
       };
     }
     const blocker = sorted.find((c) => c.comment_type === "blocker");
@@ -123,6 +142,7 @@ export function deriveStateCard({
       reason: blocker?.content ?? null,
       since: task.blocked_at ?? blocker?.created_at ?? task.updated_at,
       askerAgentId: blocker?.author_agent_id ?? task.assigned_agent_id,
+      question: null,
     };
   }
 

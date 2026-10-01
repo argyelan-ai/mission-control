@@ -2732,6 +2732,7 @@ async def get_task_thread(
     from sqlalchemy import func
 
     from app.models.thread import AgentThreadCursor, Message, UserThreadCursor
+    from app.services.messaging import open_questions, pick_open_question
 
     task = await session.get(Task, task_id)
     if not task:
@@ -2752,6 +2753,7 @@ async def get_task_thread(
             "has_more_before": False,
             "latest_seq": 0,
             "my_read_seq": 0,
+            "open_question": None,
         }
 
     thread_id = task.thread_id
@@ -2821,7 +2823,13 @@ async def get_task_thread(
             return "delivered"
         return "queued"
 
+    # The question the task's "Reply" answers (thread reply with reply_to) —
+    # independent of the page, an old question can sit outside it.
+    open_q = pick_open_question(await open_questions(session, thread_id=thread_id))
+
     agent_ids = {m.sender_id for m in rows if m.sender_id is not None}
+    if open_q is not None and open_q.sender_id is not None:
+        agent_ids.add(open_q.sender_id)
     agent_map: dict[uuid.UUID, Agent] = {}
     if agent_ids:
         agents_result = await session.exec(select(Agent).where(Agent.id.in_(agent_ids)))  # type: ignore[arg-type]
@@ -2837,6 +2845,19 @@ async def get_task_thread(
         "has_more_before": has_more_before,
         "latest_seq": latest_seq,
         "my_read_seq": my_read_seq,
+        "open_question": (
+            {
+                "id": str(open_q.id),
+                "body": open_q.body,
+                "blocking": bool((open_q.question_meta or {}).get("blocking")),
+                "options": (open_q.question_meta or {}).get("options") or [],
+                "author": _thread_author_dict(open_q, agent_map),
+                "asker_agent_id": str(open_q.sender_id) if open_q.sender_id else None,
+                "created_at": ensure_aware(open_q.created_at).isoformat().replace("+00:00", "Z"),
+            }
+            if open_q is not None
+            else None
+        ),
     }
 
 
@@ -2963,6 +2984,17 @@ async def add_comment(
     # Phase 29: TaskComment is the canonical delivery channel for cli-bridge / host
     # / claude-code runtimes. poll.sh pulls new_comments[] on next iteration. No
     # additional gateway notify needed — the TaskComment write above is sufficient.
+
+    # A task parked `waiting` on a blocking question gets no comments delivered
+    # — an operator comment there is the answer (backstop for the Reply button).
+    if comment.author_type == "user":
+        from app.services.messaging import answer_by_operator_comment
+        await answer_by_operator_comment(
+            session, task,
+            actor_user_id=current_user.id,
+            actor_label=current_user.preferred_name or current_user.name,
+        )
+        await session.refresh(comment)
 
     return comment
 
