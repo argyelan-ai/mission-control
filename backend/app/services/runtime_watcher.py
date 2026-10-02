@@ -423,6 +423,16 @@ class RuntimeWatcher:
             await self._confirm_autostart_recipe(session, runtime)
         except Exception:  # noqa: BLE001 — Buchhaltung darf die Probe nicht kosten
             logger.exception("autostart bookkeeping failed for %s", runtime.slug)
+        # Engine silent about its window (neither /v1/models nor /health said
+        # it)? A slot row then takes the window of the recipe the box has
+        # confirmed running — the last source before "leave it alone". Only for
+        # the PERSISTED row; the live status above keeps showing what the
+        # engine itself reported.
+        if served_ctx is None:
+            try:
+                served_ctx = await self._slot_recipe_context(session, runtime, served)
+            except Exception:  # noqa: BLE001 — a fallback may not cost the tick
+                logger.exception("slot recipe window lookup failed for %s", runtime.slug)
         model_would_change = served != (runtime.model_identifier or "")
         ctx_would_change = served_ctx is not None and self._context_would_change(
             runtime, served_ctx
@@ -543,6 +553,41 @@ class RuntimeWatcher:
             )
         except Exception:  # noqa: BLE001
             logger.exception("slot grace refresh failed for %s", runtime.slug)
+
+    @staticmethod
+    async def _slot_recipe_context(
+        session: AsyncSession, runtime: Runtime, served: str | None
+    ) -> int | None:
+        """The window of the recipe a slot row's box is confirmed to serve.
+
+        Live 01.10.2026: TensorFold's ``/v1/models`` carries no window, and
+        Sparky's slot row kept the 250000 of the previous vLLM recipe although
+        the engine served 1048576 — nothing ever told the row otherwise.
+
+        Only a slot row (ADR-078: "whatever the box serves") and only the box's
+        confirmed recipe (``hosts.autostart_recipe_slug``, written by
+        ``_confirm_autostart_recipe`` once that recipe's own instance answered)
+        — and only when that recipe's model is the one the port serves right
+        now. Anything else returns ``None`` and the row stays as it is.
+        """
+        if not runtime.is_slot or runtime.host_id is None or not served:
+            return None
+        from app.models.host import Host
+        from app.models.local_recipe import LocalRecipe
+
+        host = await session.get(Host, runtime.host_id)
+        recipe_slug = (getattr(host, "autostart_recipe_slug", None) or "").strip()
+        if not recipe_slug:
+            return None
+        recipe = (
+            await session.exec(select(LocalRecipe).where(LocalRecipe.slug == recipe_slug))
+        ).first()
+        if recipe is None or (recipe.model_identifier or "").strip() != served.strip():
+            return None
+        ctx = recipe.context_len
+        if isinstance(ctx, bool) or not isinstance(ctx, int) or ctx <= 0:
+            return None
+        return ctx
 
     @staticmethod
     def _context_would_change(runtime: Runtime, served_ctx: int) -> bool:
