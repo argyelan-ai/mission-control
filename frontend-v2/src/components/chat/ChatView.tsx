@@ -46,7 +46,6 @@ import { useIsAdmin } from "@/hooks/useIsAdmin";
 import { AdminOnlyNotice } from "@/components/shared/AdminOnlyNotice";
 import { TerminalPanel, type AgentWithState } from "./TerminalPanel";
 import { ChatOptionsSheet } from "./ChatOptionsSheet";
-import { BAR_SLOT, DetailActionBar } from "@/components/shared/DetailActionBar";
 import { VoiceButton } from "@/components/voice/VoiceWidget";
 import { CENTER_VIEWS, DETAIL_LEVELS, type CenterView, type DetailLevel } from "./chatOptions";
 import type { PanelKind } from "./PanelRail";
@@ -313,7 +312,6 @@ export function ChatView({
   onOpenPanel,
 }: ChatViewProps) {
   const t = useTranslations("sessions");
-  const tBar = useTranslations("nav.detailBar");
   /** Typing into a live session (text, keys, approvals, effort) is admin-only
    *  on the backend — non-admins read the transcript without a composer. */
   const isAdmin = useIsAdmin();
@@ -685,8 +683,6 @@ export function ChatView({
   // focuses the composer synchronously inside the tap — iOS only opens the
   // keyboard for a focus that happens in the gesture itself.
   const rootRef = useRef<HTMLDivElement>(null);
-  const focusComposer = () => rootRef.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus();
-  const showBar = !!onBack;
 
   return (
     <div ref={rootRef} className="flex flex-col flex-1 min-h-0 overflow-hidden">
@@ -980,7 +976,7 @@ export function ChatView({
         // Terminal ein andersfarbiger Streifen.
         <div
           data-testid="terminal-safe-area"
-          className={`flex flex-col flex-1 min-h-0 overflow-hidden ${showBar ? "" : "pb-safe-bottom"} bg-[var(--color-bg-surface)]`}
+          className={`flex flex-col flex-1 min-h-0 overflow-hidden pb-safe-bottom bg-[var(--color-bg-surface)]`}
         >
           <TerminalPanel key={`term-${terminalRemountTick}`} agent={agent} />
         </div>
@@ -1146,30 +1142,9 @@ export function ChatView({
              * nie widerlegbar, also bleibt Stop erreichbar. */
             paneObservable={agent.agent_runtime === "cli-bridge"}
             capabilities={stream.capabilities}
-            barBelow={showBar}
           />
           )}
         </>
-      )}
-
-      {showBar && onBack && (
-        <DetailActionBar
-          onBack={onBack}
-          onReply={effectiveView === "chat" && isAdmin ? focusComposer : undefined}
-          more={
-            <button
-              type="button"
-              onClick={() => setOptionsOpen(true)}
-              aria-haspopup="dialog"
-              aria-expanded={optionsOpen}
-              className={BAR_SLOT}
-              style={{ color: C.textSecondary }}
-            >
-              <MoreHorizontal size={20} aria-hidden />
-              <span>{tBar("more")}</span>
-            </button>
-          }
-        />
       )}
 
       <ChatOptionsSheet
