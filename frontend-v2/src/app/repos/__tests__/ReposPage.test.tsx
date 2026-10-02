@@ -5,6 +5,26 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import type { GithubStatus, Repo, RepoImportCandidate } from "@/lib/types";
 
+// The real zustand store (persist middleware) captures localStorage when the
+// module loads — before beforeEach runs. A working storage must exist by then,
+// otherwise the first store write (BoardPicker's setBoards once the boards
+// query resolves) throws "storage.setItem is not a function". Earlier this
+// only passed because the shared fetch Response was consumed by another
+// query first, so the boards query failed and never wrote.
+vi.hoisted(() => {
+  const mem: Record<string, string> = {};
+  Object.defineProperty(globalThis, "localStorage", {
+    value: {
+      getItem: (k: string) => mem[k] ?? null,
+      setItem: (k: string, v: string) => { mem[k] = v; },
+      removeItem: (k: string) => { delete mem[k]; },
+      clear: () => undefined,
+    },
+    configurable: true,
+    writable: true,
+  });
+});
+
 // next/navigation is mocked so AppShell's auth guard + Sidebar/MobileNav render
 // without a real Next router (same convention as FilesPage.test.tsx).
 vi.mock("next/navigation", () => ({

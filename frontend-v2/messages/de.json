@@ -44,7 +44,8 @@
       "voiceHint": "Mit dem Sprachassistenten sprechen",
       "continueChat": "Chat fortsetzen",
       "allAreas": "Alle Bereiche",
-      "more": "Mehr…"
+      "account": "Konto",
+      "board": "Board"
     },
     "detailBar": {
       "label": "Aktionen",

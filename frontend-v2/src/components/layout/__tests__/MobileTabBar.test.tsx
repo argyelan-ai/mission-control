@@ -4,9 +4,9 @@
  * Pins the behaviour the operator chose: five labelled places, the Inbox
  * badge is the real count from lib/inbox.ts (reviews + approvals + open head
  * questions), Chats opens the last chat directly and leads back to the list
- * on the chats page, ⊕ opens the sheet (new job, voice, last chats, all
- * areas — "More…" opens the full menu), and the bar steps aside for the
- * keyboard.
+ * on the chats page, ⊕ opens the sheet (new job, voice, last chats, every
+ * other area and the account — the one phone menu), and the bar steps aside
+ * for the keyboard.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
@@ -219,7 +219,7 @@ describe("⊕ sheet", () => {
     ]) {
       expect(areas.getByRole("link", { name })).toHaveAttribute("href", href);
     }
-    expect(areas.getByRole("button", { name: "More…" })).toBeInTheDocument();
+    expect(areas.queryByRole("button", { name: "More…" })).toBeNull();
   });
 
   it("New job closes the sheet and opens the New-task modal", async () => {
@@ -237,12 +237,11 @@ describe("⊕ sheet", () => {
     expect(voice.toggleButton).toHaveBeenCalledTimes(1);
   });
 
-  it("More… opens the full menu (all routes, board, account)", async () => {
+  it("the old index drawer is gone: no More… entry, no menu panel", async () => {
     renderNav();
     await userEvent.click(within(bar()).getByRole("button", { name: "New" }));
-    await userEvent.click(screen.getByRole("button", { name: "More…" }));
-    expect(screen.getByRole("button", { name: "Close menu" })).toBeInTheDocument();
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "New" })).toBeNull());
+    expect(screen.queryByRole("button", { name: "More…" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Close menu" })).toBeNull();
   });
 
   it("hides the chat chips when this device has no recent chat", async () => {
