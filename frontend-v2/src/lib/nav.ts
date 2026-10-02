@@ -41,13 +41,19 @@ export type NavItem = {
   /** Fallback label; the shell renders t(labelKey) and falls back to this. */
   label: string;
   labelKey: string;
+  /**
+   * Place in the phone menu's "Used most" list (⊕ sheet › Pages), 1 = first.
+   * Unranked pages fall under "Others". Ranking from the page counter
+   * (#692, 28.09.–02.10.2026): Runtimes 20 · Agents 6 · Insights 3 · Memory 1.
+   */
+  phoneRank?: number;
 };
 
 export type NavGroup = {
   key: string;
   icon: LucideIcon;
   label: string;
-  /** Caps section label — MobileNav's menu still renders groups as headings. */
+  /** Caps section label (pre-v4 group headings; kept for the translations). */
   labelKey: string;
   /** Sentence-case label for the sidebar's clickable group row. */
   rowLabelKey: string;
@@ -58,11 +64,11 @@ export type NavGroup = {
 export const NAV_ITEMS: NavItem[] = [
   { href: "/", icon: Home, label: "Home", labelKey: "home" },
   { href: "/tasks", icon: FolderKanban, label: "Tasks", labelKey: "tasks" },
-  { href: "/agents", icon: Bot, label: "Agents", labelKey: "agents" },
+  { href: "/agents", icon: Bot, label: "Agents", labelKey: "agents", phoneRank: 2 },
   { href: "/office", icon: Building2, label: "Office", labelKey: "office" },
   { href: "/inbox", icon: Inbox, label: "Inbox", labelKey: "inbox" },
-  { href: "/insights", icon: TrendingUp, label: "Insights", labelKey: "insights" },
-  { href: "/memory", icon: Brain, label: "Memory", labelKey: "memory" },
+  { href: "/insights", icon: TrendingUp, label: "Insights", labelKey: "insights", phoneRank: 3 },
+  { href: "/memory", icon: Brain, label: "Memory", labelKey: "memory", phoneRank: 4 },
   { href: "/files", icon: FolderOpen, label: "Files", labelKey: "files" },
   // Benchmark-Studio vertical — strippable (flag flipped by release script)
   ...(VERTICALS.benchStudio
@@ -70,7 +76,7 @@ export const NAV_ITEMS: NavItem[] = [
     : []),
   { href: "/repos", icon: FolderGit2, label: "Repos", labelKey: "repos" },
   { href: "/skills", icon: Puzzle, label: "Skills", labelKey: "skills" },
-  { href: "/runtimes", icon: Server, label: "Runtimes", labelKey: "runtimes" },
+  { href: "/runtimes", icon: Server, label: "Runtimes", labelKey: "runtimes", phoneRank: 1 },
   { href: "/sessions", icon: MessageSquareCode, label: "Sessions", labelKey: "sessions" },
   { href: "/loops", icon: Repeat, label: "Loops", labelKey: "loops" },
   { href: "/schedule", icon: Calendar, label: "Schedule", labelKey: "schedule" },

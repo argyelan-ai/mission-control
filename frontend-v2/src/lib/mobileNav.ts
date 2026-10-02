@@ -4,23 +4,22 @@
  *   Home · Tasks · ⊕ New · Chats · Inbox
  *
  * Five places, always icon + word (Apple HIG / Material: 3–5 destinations,
- * never drop the labels). ⊕ is the one action in the bar: it opens a sheet
- * with "New job", voice, the last chats and every other area — which is why
- * there is no "More" tab. Pure data, no React; labels are `nav.*` keys.
+ * never drop the labels). ⊕ is the one action in the bar. It opens the menu
+ * sheet, variant B „Zwei Ebenen" (operator decision 2026-10-02):
+ *
+ *   level 1 — New job · Voice · last chat · Pages › · Settings ›
+ *   level 2 — Pages: every destination not in the bar, from lib/nav.ts
+ *
+ * Pure data, no React; labels are `nav.*` keys.
  */
 import {
-  Bot,
-  Brain,
-  Calendar,
   FolderKanban,
   Home,
   Inbox,
   MessagesSquare,
-  MoreHorizontal,
-  Server,
-  TrendingUp,
   type LucideIcon,
 } from "lucide-react";
+import { CHROME_ITEMS, NAV_ITEMS, type NavItem } from "./nav";
 
 export type MobileTabKey = "home" | "tasks" | "chats" | "inbox";
 
@@ -48,15 +47,36 @@ export const TAB_LABEL_KEYS: Record<MobileTabKey, string> = {
   inbox: "inbox",
 };
 
+/** The route each tab stands for (Chats = the sessions page). */
+export const TAB_HREFS: Record<MobileTabKey, string> = {
+  home: "/",
+  tasks: "/tasks",
+  chats: "/sessions",
+  inbox: "/inbox",
+};
+
+export type SheetPages = { usedMost: NavItem[]; others: NavItem[] };
+
 /**
- * "All areas" tiles in the ⊕ sheet. `href: null` = the full menu (board,
- * account, every route) — the former "Index" drawer.
+ * Level 2 of the ⊕ sheet: every destination in NAV_ITEMS that is neither a
+ * tab nor chrome (Settings has its own row on level 1). Generated, never a
+ * second list — a page added to nav.ts shows up here, and a vertical that is
+ * switched off (Benchmark) disappears here exactly like in the sidebar.
+ *
+ * "Used most" = pages with a `phoneRank`, in rank order; "Others" = the rest,
+ * alphabetical by `labelOf` (the caller passes the translated label).
  */
-export const AREA_TILES: { key: string; href: string | null; icon: LucideIcon; labelKey: string }[] = [
-  { key: "runtimes", href: "/runtimes", icon: Server, labelKey: "runtimes" },
-  { key: "insights", href: "/insights", icon: TrendingUp, labelKey: "insights" },
-  { key: "agents", href: "/agents", icon: Bot, labelKey: "agents" },
-  { key: "memory", href: "/memory", icon: Brain, labelKey: "memory" },
-  { key: "schedule", href: "/schedule", icon: Calendar, labelKey: "schedule" },
-  { key: "more", href: null, icon: MoreHorizontal, labelKey: "quick.more" },
-];
+export function sheetPages(
+  labelOf: (item: NavItem) => string = (i) => i.label,
+  items: NavItem[] = NAV_ITEMS,
+): SheetPages {
+  const skip = new Set<string>([...Object.values(TAB_HREFS), ...CHROME_ITEMS]);
+  const pages = items.filter((i) => !skip.has(i.href));
+  const usedMost = pages
+    .filter((i) => i.phoneRank !== undefined)
+    .sort((a, b) => (a.phoneRank ?? 0) - (b.phoneRank ?? 0));
+  const others = pages
+    .filter((i) => i.phoneRank === undefined)
+    .sort((a, b) => labelOf(a).localeCompare(labelOf(b)));
+  return { usedMost, others };
+}

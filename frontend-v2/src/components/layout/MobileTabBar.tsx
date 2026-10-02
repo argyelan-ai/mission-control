@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
 import { C } from "@/lib/colors";
-import { activeTabFor, TAB_ICONS, TAB_LABEL_KEYS, type MobileTabKey } from "@/lib/mobileNav";
+import { activeTabFor, TAB_HREFS, TAB_ICONS, TAB_LABEL_KEYS, type MobileTabKey } from "@/lib/mobileNav";
 import { badgeLabel } from "@/lib/inbox";
 import { chatsTabHref, loadRecentChats, RECENT_CHATS_EVENT, type ChatRef } from "@/lib/recentChats";
 import { useInbox } from "@/hooks/useInbox";
@@ -61,7 +61,8 @@ function TabIcon({ tab, active, badge }: { tab: MobileTabKey; active: boolean; b
  *   function the Inbox page renders (lib/inbox.ts), so badge = rows.
  * - Chats opens the last chat directly; on the chats page it leads back to
  *   the list (lib/recentChats.ts).
- * - ⊕ opens the quick sheet (QuickSheet.tsx); it replaces a "More" tab.
+ * - ⊕ opens the menu sheet (QuickSheet.tsx, variant B „Zwei Ebenen"); it
+ *   replaces a "More" tab — every other page sits one level deeper there.
  *
  * Not `position: fixed`: a flex child of the shell column, so it sits at the
  * bottom of the h-dvh box on iOS too. The bar paints down into the home
@@ -113,8 +114,8 @@ export function MobileTabBar() {
       }}
     >
       <div className="grid grid-cols-5">
-        {tab("home", "/")}
-        {tab("tasks", "/tasks")}
+        {tab("home", TAB_HREFS.home)}
+        {tab("tasks", TAB_HREFS.tasks)}
         <button
           type="button"
           onClick={() => setQuickOpen(true)}
@@ -135,7 +136,7 @@ export function MobileTabBar() {
           </span>
         </button>
         {tab("chats", chatsTabHref(pathname, recent))}
-        {tab("inbox", "/inbox")}
+        {tab("inbox", TAB_HREFS.inbox)}
       </div>
     </nav>
   );

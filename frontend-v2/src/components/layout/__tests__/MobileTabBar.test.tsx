@@ -4,9 +4,9 @@
  * Pins the behaviour the operator chose: five labelled places, the Inbox
  * badge is the real count from lib/inbox.ts (reviews + approvals + open head
  * questions), Chats opens the last chat directly and leads back to the list
- * on the chats page, ⊕ opens the sheet (new job, voice, last chats, all
- * areas — "More…" opens the full menu), and the bar steps aside for the
- * keyboard.
+ * on the chats page, ⊕ opens the menu sheet (variant B „Zwei Ebenen": new
+ * job, voice, last chat, Pages ›, Settings ›), and the bar steps aside for
+ * the keyboard.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
@@ -184,13 +184,13 @@ describe("phone tab bar", () => {
   });
 });
 
-describe("⊕ sheet", () => {
-  it("offers new job, voice, the last chats and all areas", async () => {
+describe("⊕ sheet — variant B, level 1", () => {
+  it("shows exactly New job · Voice · last chat · Pages › · Settings ›", async () => {
     localStorage.setItem(
       "mc-recent-chats",
       JSON.stringify([
-        { kind: "agent", id: "a1" },
         { kind: "agent", id: "gone" },
+        { kind: "agent", id: "a1" },
         { kind: "agent", id: "a2" },
       ]),
     );
@@ -200,33 +200,32 @@ describe("⊕ sheet", () => {
     ];
     renderNav();
     await userEvent.click(within(bar()).getByRole("button", { name: "New" }));
-    const sheet = screen.getByRole("dialog", { name: "New" });
-    expect(within(sheet).getByText("New job")).toBeInTheDocument();
-    expect(within(sheet).getByText("Voice command")).toBeInTheDocument();
+    const sheet = screen.getByRole("dialog", { name: "Menu" });
 
-    // last chats: names resolved, a chat whose agent is gone is skipped
-    await waitFor(() => expect(within(sheet).getByRole("link", { name: "Lead" })).toBeInTheDocument());
-    expect(within(sheet).getByRole("link", { name: "Lead" })).toHaveAttribute("href", "/sessions?agent=a1");
-    expect(within(sheet).getByRole("link", { name: "Helper" })).toHaveAttribute("href", "/sessions?agent=a2");
+    // last chat: one row, the newest chat whose agent still exists
+    await waitFor(() => expect(screen.getByTestId("quick-last-chat")).toBeInTheDocument());
+    expect(screen.getByTestId("quick-last-chat")).toHaveAttribute("href", "/sessions?agent=a1");
+    expect(screen.getByTestId("quick-last-chat")).toHaveTextContent("Continue with Lead");
+    expect(within(sheet).queryByText(/Helper/)).toBeNull();
 
-    const areas = within(screen.getByTestId("quick-areas"));
-    for (const [name, href] of [
-      ["Runtimes", "/runtimes"],
-      ["Insights", "/insights"],
-      ["Agents", "/agents"],
-      ["Memory", "/memory"],
-      ["Schedule", "/schedule"],
-    ]) {
-      expect(areas.getByRole("link", { name })).toHaveAttribute("href", href);
-    }
-    expect(areas.getByRole("button", { name: "More…" })).toBeInTheDocument();
+    const rows = [...screen.getByTestId("quick-root").querySelectorAll("a, button")].map(
+      (e) => e.getAttribute("data-testid"),
+    );
+    expect(rows).toEqual(["quick-new-job", "quick-voice", "quick-last-chat", "quick-pages", "quick-settings"]);
+    expect(screen.getByTestId("quick-settings")).toHaveAttribute("href", "/settings");
+
+    // calm: no theme switch, no tile grid, no "More…", no visible title
+    expect(within(sheet).queryByRole("radiogroup")).toBeNull();
+    expect(within(sheet).queryByText("More…")).toBeNull();
+    expect(screen.queryByTestId("quick-areas")).toBeNull();
+    expect(within(sheet).queryByRole("heading")).toBeNull();
   });
 
   it("New job closes the sheet and opens the New-task modal", async () => {
     renderNav();
     await userEvent.click(within(bar()).getByRole("button", { name: "New" }));
     await userEvent.click(screen.getByTestId("quick-new-job"));
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "New" })).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId("quick-sheet")).toBeNull());
     expect(screen.getByTestId("create-task-modal")).toHaveAttribute("data-request", "1");
   });
 
@@ -237,18 +236,55 @@ describe("⊕ sheet", () => {
     expect(voice.toggleButton).toHaveBeenCalledTimes(1);
   });
 
-  it("More… opens the full menu (all routes, board, account)", async () => {
+  it("hides the last-chat row when this device has no recent chat", async () => {
     renderNav();
     await userEvent.click(within(bar()).getByRole("button", { name: "New" }));
-    await userEvent.click(screen.getByRole("button", { name: "More…" }));
-    expect(screen.getByRole("button", { name: "Close menu" })).toBeInTheDocument();
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "New" })).toBeNull());
+    expect(screen.queryByTestId("quick-last-chat")).toBeNull();
+    expect(mem["mc-recent-chats"]).toBeUndefined();
+  });
+});
+
+describe("⊕ sheet — variant B, level 2 Pages", () => {
+  it("Pages › opens every page outside the tab bar, Used most first", async () => {
+    renderNav();
+    await userEvent.click(within(bar()).getByRole("button", { name: "New" }));
+    await userEvent.click(screen.getByTestId("quick-pages"));
+    const level = screen.getByTestId("quick-pages-level");
+    expect(within(level).getByRole("heading", { name: "Pages" })).toBeInTheDocument();
+    const hrefs = [...level.querySelectorAll("a[data-page]")].map((a) => a.getAttribute("href"));
+    expect(hrefs.slice(0, 4)).toEqual(["/runtimes", "/agents", "/insights", "/memory"]);
+    // the rest alphabetical by label: Benchmark, Files, Loops, Office, Repos, Schedule, Skills
+    expect(hrefs.slice(4)).toEqual(["/bench", "/files", "/loops", "/office", "/repos", "/schedule", "/skills"]);
+    // tab-bar places and Settings are not repeated
+    for (const h of ["/", "/tasks", "/sessions", "/inbox", "/settings"]) expect(hrefs).not.toContain(h);
   });
 
-  it("hides the chat chips when this device has no recent chat", async () => {
+  it("‹ Back returns to level 1", async () => {
     renderNav();
     await userEvent.click(within(bar()).getByRole("button", { name: "New" }));
-    expect(screen.queryByTestId("quick-chats")).toBeNull();
-    expect(mem["mc-recent-chats"]).toBeUndefined();
+    await userEvent.click(screen.getByTestId("quick-pages"));
+    await userEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(screen.getByTestId("quick-root")).toBeInTheDocument();
+    expect(screen.queryByTestId("quick-pages-level")).toBeNull();
+  });
+
+  it("Esc on level 2 goes back one level, Esc on level 1 closes", async () => {
+    renderNav();
+    await userEvent.click(within(bar()).getByRole("button", { name: "New" }));
+    await userEvent.click(screen.getByTestId("quick-pages"));
+    await userEvent.keyboard("{Escape}");
+    expect(screen.getByTestId("quick-root")).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByTestId("quick-sheet")).toBeNull());
+  });
+
+  it("reopening always starts on level 1", async () => {
+    renderNav();
+    await userEvent.click(within(bar()).getByRole("button", { name: "New" }));
+    await userEvent.click(screen.getByTestId("quick-pages"));
+    await userEvent.click(screen.getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByTestId("quick-sheet")).toBeNull());
+    await userEvent.click(within(bar()).getByRole("button", { name: "New" }));
+    expect(screen.getByTestId("quick-root")).toBeInTheDocument();
   });
 });

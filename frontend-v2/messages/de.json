@@ -36,15 +36,18 @@
     "mobileNav": "Hauptnavigation",
     "inboxWaiting": "{count} wartend",
     "quick": {
-      "title": "Neu",
+      "title": "Menü",
       "close": "Schliessen",
       "newJob": "Neuer Job",
       "newJobHint": "Jetzt oder heute Nacht als Head starten",
       "voice": "Sprachbefehl",
       "voiceHint": "Mit dem Sprachassistenten sprechen",
-      "continueChat": "Chat fortsetzen",
-      "allAreas": "Alle Bereiche",
-      "more": "Mehr…"
+      "continueWith": "Weiter mit {name}",
+      "lastChat": "Letzter Chat",
+      "pages": "Seiten",
+      "usedMost": "Oft genutzt",
+      "others": "Weitere",
+      "back": "Zurück"
     },
     "detailBar": {
       "label": "Aktionen",
@@ -2055,6 +2058,11 @@
       "embKeyPlaceholder": "sk-…",
       "embCloudKeyLabel": "Cloud-Embeddings — Schlüssel",
       "embCloudKeyHint": "API-Schlüssel des Cloud-Anbieters aus dem Cloud-Endpunkt oben. Wird nur für Embeddings benutzt und nie an Agenten weitergegeben."
+    },
+    "phoneAccount": {
+      "label": "Konto und Board",
+      "board": "Board",
+      "chooseBoard": "Board wählen"
     }
   },
   "skills": {

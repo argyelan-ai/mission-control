@@ -36,15 +36,18 @@
     "mobileNav": "Main navigation",
     "inboxWaiting": "{count} waiting",
     "quick": {
-      "title": "New",
+      "title": "Menu",
       "close": "Close",
       "newJob": "New job",
       "newJobHint": "Run as head now or tonight",
       "voice": "Voice command",
       "voiceHint": "Speak to the voice assistant",
-      "continueChat": "Continue a chat",
-      "allAreas": "All areas",
-      "more": "More…"
+      "continueWith": "Continue with {name}",
+      "lastChat": "Last chat",
+      "pages": "Pages",
+      "usedMost": "Used most",
+      "others": "Others",
+      "back": "Back"
     },
     "detailBar": {
       "label": "Actions",
@@ -2055,6 +2058,11 @@
       "embKeyPlaceholder": "sk-…",
       "embCloudKeyLabel": "Cloud embeddings — key",
       "embCloudKeyHint": "API key of the cloud host from the cloud endpoint above. Used for embeddings only and never handed to agents."
+    },
+    "phoneAccount": {
+      "label": "Account and board",
+      "board": "Board",
+      "chooseBoard": "Choose board"
     }
   },
   "skills": {
