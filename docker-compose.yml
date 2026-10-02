@@ -779,6 +779,13 @@ services:
     profiles: ["browser"]
     restart: unless-stopped
     logging: *default-logging
+    # Reaper as PID 1 (live finding 02.10.: 71 716 zombie `timeout` processes
+    # after 14 days). The healthcheck's `timeout 5 websocat` outlives its shell,
+    # gets re-parented to PID 1 — and Chromium never reaps. Zombies hold PIDs
+    # from the Docker VM's SHARED pid space (pid_max 99 999), so this was a slow
+    # fork bomb for every container. The entrypoint still execs Chromium, so its
+    # exit still ends the container (restart policy unchanged).
+    init: true
     networks:
       default: {}
       cdpnet:
@@ -787,6 +794,17 @@ services:
       - --no-sandbox
       - --headless=new
       - --disable-gpu
+      # WebGL for agents (they verify 3D/canvas work with this browser). In
+      # headless mode WebGL runs on SwiftShader (CPU). Chromium gives up on the
+      # GPU process after 3 crashes and then reports getContext('webgl') = null
+      # until the browser restarts — the live browser had logged 63 x "GPU
+      # process exited unexpectedly" and an agent could never see its WebGL
+      # scene (02.10.). Lift that limit; docker/cdp-browser/test_webgl.sh
+      # kills the GPU process 4x and checks WebGL still renders.
+      - --disable-gpu-process-crash-limit
+      # Keeps the SwiftShader WebGL fallback on newer Chromium builds, where it
+      # is opt-in (no-op on the current Chromium 124).
+      - --enable-unsafe-swiftshader
       - --disable-dev-shm-usage
       - --remote-debugging-port=9222
       - --remote-debugging-address=0.0.0.0

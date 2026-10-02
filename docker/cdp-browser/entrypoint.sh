@@ -12,7 +12,9 @@
 # with the browser and can never bind to a stale namespace.
 socat TCP-LISTEN:9223,fork,reuseaddr TCP:127.0.0.1:9222 &
 
-# exec so Chromium becomes PID 1: its exit restarts the container (restart:
-# unless-stopped), taking socat down with it. "$@" = the chromium flags from
-# the compose `command:`.
+# exec so Chromium replaces this shell: its exit ends the container (restart:
+# unless-stopped), taking socat down with it. PID 1 is the compose `init: true`
+# reaper, not Chromium — Chromium never reaps orphans (the healthcheck's
+# `timeout` children piled up as zombies, see docker-compose.yml). "$@" = the
+# chromium flags from the compose `command:`.
 exec chromium-browser "$@"
