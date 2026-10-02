@@ -1,0 +1,31 @@
+<!doctype html>
+<!-- WebGL smoke page for test_webgl.sh: draws a green triangle over a red
+     clear, reads two pixels back and reports the result in document.title
+     (readable over plain HTTP via /json/list — no CDP client needed). -->
+<canvas id="c" width="64" height="64"></canvas>
+<script>
+(function () {
+  var gl = document.getElementById('c').getContext('webgl');
+  if (!gl) { document.title = 'WEBGL=0'; return; }
+  gl.clearColor(1, 0, 0, 1);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  function shader(type, src) {
+    var s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); return s;
+  }
+  var p = gl.createProgram();
+  gl.attachShader(p, shader(gl.VERTEX_SHADER, 'attribute vec2 a;void main(){gl_Position=vec4(a,0,1);}'));
+  gl.attachShader(p, shader(gl.FRAGMENT_SHADER, 'precision mediump float;void main(){gl_FragColor=vec4(0,1,0,1);}'));
+  gl.linkProgram(p);
+  gl.useProgram(p);
+  gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 0, -1, -1, 0]), gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  var tri = new Uint8Array(4), bg = new Uint8Array(4);
+  gl.readPixels(5, 5, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, tri);   // inside the triangle
+  gl.readPixels(60, 60, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, bg);  // outside: clear colour
+  document.title = 'WEBGL=1 TRI=' + Array.prototype.join.call(tri, ',') +
+                   ' BG=' + Array.prototype.join.call(bg, ',');
+})();
+</script>

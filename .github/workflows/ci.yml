@@ -306,6 +306,15 @@ jobs:
           mc_disk_preflight
           docker build -t mc-cdp-browser-test ./docker/cdp-browser
 
+      # WebGL must render and SURVIVE 4 GPU-process crashes, and healthchecks
+      # must leave no zombies — with the flags + init read from
+      # docker-compose.yml (live finding 02.10.: agent never saw its WebGL
+      # scene; 71 716 zombies). Sabotage knobs documented in the script.
+      - name: cdp-browser WebGL + zombie runtime test
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+          bash docker/cdp-browser/test_webgl.sh mc-cdp-browser-test docker-compose.yml
+
       # Sabotage tests for the healthcheck's WS leg against a mock CDP
       # server (real websocat, real alpine/busybox — same runtime class as
       # the image above) — see docker/cdp-browser/test_healthcheck.sh.
