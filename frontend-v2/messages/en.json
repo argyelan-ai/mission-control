@@ -44,8 +44,7 @@
       "voiceHint": "Speak to the voice assistant",
       "continueChat": "Continue a chat",
       "allAreas": "All areas",
-      "account": "Account",
-      "board": "Board"
+      "more": "More…"
     },
     "detailBar": {
       "label": "Actions",

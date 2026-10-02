@@ -5,12 +5,22 @@
  *
  * Five places, always icon + word (Apple HIG / Material: 3–5 destinations,
  * never drop the labels). ⊕ is the one action in the bar: it opens a sheet
- * with "New job", voice, the last chats, every other area and the account —
- * it is the one phone menu, which is why there is no "More" tab. Pure data,
- * no React; labels are `nav.*` keys.
+ * with "New job", voice, the last chats and every other area — which is why
+ * there is no "More" tab. Pure data, no React; labels are `nav.*` keys.
  */
-import { FolderKanban, Home, Inbox, MessagesSquare, type LucideIcon } from "lucide-react";
-import { CHROME_ITEMS, NAV_TREE, navItem, type NavGroup, type NavItem } from "./nav";
+import {
+  Bot,
+  Brain,
+  Calendar,
+  FolderKanban,
+  Home,
+  Inbox,
+  MessagesSquare,
+  MoreHorizontal,
+  Server,
+  TrendingUp,
+  type LucideIcon,
+} from "lucide-react";
 
 export type MobileTabKey = "home" | "tasks" | "chats" | "inbox";
 
@@ -38,29 +48,15 @@ export const TAB_LABEL_KEYS: Record<MobileTabKey, string> = {
   inbox: "inbox",
 };
 
-/** The route each tab stands for (Chats may carry `?agent=…`; the route is /sessions). */
-export const TAB_ROUTES: Record<MobileTabKey, string> = {
-  home: "/",
-  tasks: "/tasks",
-  chats: "/sessions",
-  inbox: "/inbox",
-};
-
 /**
- * "All areas" in the ⊕ sheet: every group of the one nav tree (lib/nav.ts),
- * minus the routes the tab bar already carries. Derived, never hand-listed —
- * a destination added to nav.ts shows up on the phone by itself, and a
- * feature-flagged one (Benchmark) follows the same flag as the sidebar.
- * Emptied groups disappear.
+ * "All areas" tiles in the ⊕ sheet. `href: null` = the full menu (board,
+ * account, every route) — the former "Index" drawer.
  */
-export function sheetAreaGroups(tree: NavGroup[] = NAV_TREE): NavGroup[] {
-  const inBar = new Set(Object.values(TAB_ROUTES));
-  return tree
-    .map((g) => ({ ...g, children: g.children.filter((c) => !inBar.has(c.href)) }))
-    .filter((g) => g.children.length > 0);
-}
-
-/** Account-level destinations (Settings) — the sheet's account section, as on the desktop column. */
-export function sheetAccountLinks(): NavItem[] {
-  return CHROME_ITEMS.map((href) => navItem(href)).filter((i): i is NavItem => !!i);
-}
+export const AREA_TILES: { key: string; href: string | null; icon: LucideIcon; labelKey: string }[] = [
+  { key: "runtimes", href: "/runtimes", icon: Server, labelKey: "runtimes" },
+  { key: "insights", href: "/insights", icon: TrendingUp, labelKey: "insights" },
+  { key: "agents", href: "/agents", icon: Bot, labelKey: "agents" },
+  { key: "memory", href: "/memory", icon: Brain, labelKey: "memory" },
+  { key: "schedule", href: "/schedule", icon: Calendar, labelKey: "schedule" },
+  { key: "more", href: null, icon: MoreHorizontal, labelKey: "quick.more" },
+];
