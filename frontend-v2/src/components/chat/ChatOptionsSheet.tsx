@@ -79,7 +79,7 @@ export function ChatOptionsSheet({
             // pretending to cover it would just leave a bright strip.
             className="fixed inset-x-0 bottom-0 top-[var(--mobile-chat-topbar-h)] z-40 md:hidden"
             // Scrim derived from the palette's deepest neutral (bg-deep at
-            // 75%), not the warm near-black the older MobileNav drawer uses —
+            // 75%), not the warm near-black the former MobileNav drawer used —
             // v4 off-blacks are neutral by doctrine.
             style={{ background: alpha(C.scrim, 0.75) }}
             onClick={onClose}

@@ -3,25 +3,8 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
-import { motion, AnimatePresence } from "framer-motion";
-import {
-  CHROME_ITEMS,
-  DEFAULT_PINS,
-  navItem,
-  resolveNav,
-  type NavGroup,
-} from "@/lib/nav";
-import { useTranslations } from "next-intl";
-import { clearToken, api } from "@/lib/api";
-import { useRouter } from "next/navigation";
-import { useAppStore } from "@/lib/store";
-import { useQuery } from "@tanstack/react-query";
-import type { Board } from "@/lib/types";
-import { useInbox } from "@/hooks/useInbox";
 import { VoiceButton } from "@/components/voice/VoiceWidget";
-import { P2, C, alpha } from "@/lib/colors";
-import { ThemeSegmented } from "@/components/shared/ThemeSwitch";
-import { EntityIcon } from "@/components/shared/EntityIcon";
+import { P2 } from "@/lib/colors";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { useEscapeKey } from "@/hooks/useEscapeKey";
 
@@ -31,24 +14,17 @@ const _dot = _BRAND.lastIndexOf(".");
 const BRAND_MAIN = _dot > 0 ? _BRAND.slice(0, _dot) : _BRAND;
 const BRAND_ACCENT = _dot > 0 ? _BRAND.slice(_dot) : "";
 
-const MONO = { fontFamily: "var(--font-p2-mono)" };
-
-function isTabActive(pathname: string, href: string) {
-  return href === "/" ? pathname === "/" : pathname.startsWith(href);
-}
-
 /* ────────────────────────────────────────────────────────────────
-   Geteilter Zustand.
+   Geteilter Zustand der Handy-Navigation.
 
-   Zwei Overlays hängen an der unteren Leiste (<MobileTabBar />, eigenes
-   Modul): der Index-Drawer (alle Bereiche, Board, Konto — erreichbar über
-   „Mehr…“ im ⊕-Blatt) und das ⊕-Blatt selbst (mobile nav V2). Beide leben
-   ausserhalb der Leiste, die ein normales Flex-Kind der App-Shell ist (kein
-   `fixed`, damit sie auf iOS wirklich am unteren Rand der h-dvh-Box klebt).
+   Das ⊕-Blatt (components/layout/QuickSheet.tsx) ist das EINE Handy-Menü:
+   alle Bereiche, Board, Konto. Es hängt an der unteren Leiste
+   (<MobileTabBar />), lebt aber ausserhalb davon — die Leiste ist ein
+   normales Flex-Kind der App-Shell (kein `fixed`, damit sie auf iOS wirklich
+   am unteren Rand der h-dvh-Box klebt). Den früheren Index-Drawer gibt es
+   nicht mehr (Operator 02.10.2026: „alle Menüpunkte ins ⊕-Menü").
    ──────────────────────────────────────────────────────────────── */
 type MobileNavState = {
-  open: boolean;
-  setOpen: (v: boolean) => void;
   /** The ⊕ "New" sheet (components/layout/QuickSheet.tsx). */
   quickOpen: boolean;
   setQuickOpen: (v: boolean) => void;
@@ -57,26 +33,21 @@ type MobileNavState = {
 const MobileNavContext = createContext<MobileNavState | null>(null);
 
 export function MobileNavProvider({ children }: { children: React.ReactNode }) {
-  const [open, setOpen] = useState(false);
   const [quickOpen, setQuickOpen] = useState(false);
   const pathname = usePathname();
 
   // Close on route change
   useEffect(() => {
-    setOpen(false);
     setQuickOpen(false);
   }, [pathname]);
 
-  // Prevent body scroll while an overlay is up — iOS-fest via Fixed-Position-Technik (MOBILE-SPEC M4)
-  useBodyScrollLock(open || quickOpen);
+  // Prevent body scroll while the sheet is up — iOS-fest via Fixed-Position-Technik (MOBILE-SPEC M4)
+  useBodyScrollLock(quickOpen);
 
-  // Esc closes the overlays like every other overlay (panel register rule 4).
-  useEscapeKey(() => {
-    setOpen(false);
-    setQuickOpen(false);
-  }, open || quickOpen);
+  // Esc closes the sheet like every other overlay (panel register rule 4).
+  useEscapeKey(() => setQuickOpen(false), quickOpen);
 
-  const value = useMemo(() => ({ open, setOpen, quickOpen, setQuickOpen }), [open, quickOpen]);
+  const value = useMemo(() => ({ quickOpen, setQuickOpen }), [quickOpen]);
 
   return <MobileNavContext.Provider value={value}>{children}</MobileNavContext.Provider>;
 }
@@ -90,438 +61,44 @@ export function useMobileNav(): MobileNavState {
 }
 
 /**
- * MobileNav — die beiden Overlays: obere Insel + Index-Drawer.
- * Beide bleiben bewusst `fixed` — das ist für Overlays korrekt.
+ * MobileNav — the phone's top app bar: wordmark (home link) left, voice
+ * right. Navigation itself lives in the tab bar and its ⊕ sheet.
  */
-/**
- * One row in the phone menu. Active is an accent-subtle fill with normal text
- * — the same restraint as the desktop column, where a full-bleed active row
- * shouted louder than the content beside it.
- */
-function MobileNavRow({
-  href,
-  label,
-  active,
-  badge = false,
-  nested = false,
-}: {
-  href: string;
-  label: string;
-  active: boolean;
-  badge?: boolean;
-  nested?: boolean;
-}) {
-  return (
-    <Link
-      href={href}
-      aria-current={active ? "page" : undefined}
-      className="flex items-center gap-2 cursor-pointer"
-      style={{
-        minHeight: "44px",
-        paddingLeft: nested ? "26px" : "12px",
-        paddingRight: "12px",
-        borderRadius: "var(--radius-md)",
-        fontFamily: "var(--font-p2-mono)",
-        fontSize: nested ? "12px" : "12.5px",
-        fontWeight: active ? 700 : 400,
-        backgroundColor: active ? "var(--color-accent-subtle)" : "transparent",
-        color: active ? "var(--color-p2-txt)" : "var(--color-p2-dim)",
-      }}
-    >
-      <span className="flex-1">{label}</span>
-      {badge && (
-        <span
-          className="w-2 h-2 rounded-full shrink-0"
-          style={{ backgroundColor: "var(--color-p2-err)" }}
-        />
-      )}
-    </Link>
-  );
-}
-
 export default function MobileNav({ showBar = true }: {
-  /** false = only the drawer: a screen with its own top bar (task detail on
-   *  the phone) hides the wordmark bar but keeps the "Index" menu working. */
+  /** false = no bar: a screen with its own top bar (task detail on the phone). */
   showBar?: boolean;
 } = {}) {
-  const { open, setOpen } = useMobileNav();
-  const t = useTranslations("nav");
-  const pathname = usePathname();
-  const router = useRouter();
-  const { currentUser, activeBoardId, setActiveBoardId } = useAppStore();
-
-  // The phone menu mirrors the desktop column: same pins, same groups.
-  const [menuOpenGroups, setMenuOpenGroups] = useState<string[]>([]);
-  const pinnedNav = useAppStore((st) => st.pinnedNav) ?? DEFAULT_PINS;
-  const { pinned: menuPinned, groups: menuGroups } = useMemo(
-    () => resolveNav(pinnedNav),
-    [pinnedNav]
-  );
-
-  // Same source as the tab bar's Inbox badge (lib/inbox.ts) — the dot in
-  // the menu means exactly "something waits on you".
-  const { count: inboxCount } = useInbox();
-  const hasPendingApprovals = inboxCount > 0;
-
-  // Boards — same query key as WorkspaceSwitcher to share cache
-  const { data: boardsData } = useQuery<Board[]>({
-    queryKey: ["boards"],
-    queryFn: api.boards.list,
-  });
-  const boards = boardsData ?? [];
-  const activeBoard = boards.find((b) => b.id === activeBoardId) ?? boards[0] ?? null;
-  const hasMultipleBoards = boards.length > 1;
-
-  function handleLogout() {
-    clearToken();
-    setOpen(false);
-    router.replace("/login");
-  }
-
-  function handleBoardSelect(id: string) {
-    setActiveBoardId(id);
-    setOpen(false);
-  }
-
+  if (!showBar) return null;
   return (
-    <>
-      {/* Top bar — Wordmark links (Home-Link), Voice rechts. pt-island hält
-          Inhalt unter der Dynamic Island; opak statt backdrop-blur (kein iOS Jank). */}
-      {showBar && (
-      <header
-        className="fixed top-0 left-0 right-0 z-40 flex items-end justify-between px-4 md:hidden pt-island"
+    // pt-island hält Inhalt unter der Dynamic Island; opak statt backdrop-blur (kein iOS Jank).
+    <header
+      className="fixed top-0 left-0 right-0 z-40 flex items-end justify-between px-4 md:hidden pt-island"
+      style={{
+        paddingBottom: "0.5rem",
+        minHeight: "calc(env(safe-area-inset-top) + 3.5rem)",
+        backgroundColor: "var(--color-p2-pan)",
+        borderBottom: "1px solid var(--color-p2-line2)",
+      }}
+    >
+      <Link
+        href="/"
+        className="flex items-center h-11 cursor-pointer"
+        aria-label="Home"
         style={{
-          paddingBottom: "0.5rem",
-          minHeight: "calc(env(safe-area-inset-top) + 3.5rem)",
-          backgroundColor: "var(--color-p2-pan)",
-          borderBottom: "1px solid var(--color-p2-line2)",
+          color: "var(--color-p2-txt)",
+          fontFamily: "var(--font-p2-display)",
+          fontWeight: 700,
+          fontSize: "15px",
+          letterSpacing: "0.02em",
         }}
       >
-        <Link
-          href="/"
-          className="flex items-center h-11 cursor-pointer"
-          aria-label="Home"
-          style={{
-            color: "var(--color-p2-txt)",
-            fontFamily: "var(--font-p2-display)",
-            fontWeight: 700,
-            fontSize: "15px",
-            letterSpacing: "0.02em",
-          }}
-        >
-          {BRAND_MAIN}
-          <span style={{ color: P2.amb }}>{BRAND_ACCENT}</span>
-        </Link>
+        {BRAND_MAIN}
+        <span style={{ color: P2.amb }}>{BRAND_ACCENT}</span>
+      </Link>
 
-        <div className="flex items-center gap-2">
-          <VoiceButton size={40} variant="header" />
-        </div>
-      </header>
-      )}
-
-      {/* Overlay + slide-out index drawer */}
-      <AnimatePresence>
-        {open && (
-          <>
-            {/* Backdrop */}
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.2 }}
-              className="fixed inset-0 z-40 md:hidden"
-              style={{ backgroundColor: alpha(C.scrim, 0.75) }}
-              onClick={() => setOpen(false)}
-            />
-
-            {/* Menu panel — slides from RIGHT to avoid Safari Edge-Back-Swipe (MOBILE-SPEC M7).
-                top-0 + pt-safe statt top-14 damit safe-area korrekt behandelt wird. */}
-            <motion.div
-              initial={{ x: "100%" }}
-              animate={{ x: 0 }}
-              exit={{ x: "100%" }}
-              transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
-              className="fixed top-0 right-0 bottom-0 z-50 w-72 flex flex-col md:hidden pt-safe"
-              style={{
-                backgroundColor: "var(--color-p2-pan)",
-                borderLeft: "1px solid var(--color-p2-line)",
-                boxShadow: `0 4px 24px ${alpha(C.shadow, 0.5)}, 0 1px 2px ${alpha(C.shadow, 0.3)}`,
-              }}
-            >
-              {/* Drawer-Header: Wordmark + Close-Key */}
-              <div
-                className="flex items-center justify-between px-3 h-14 shrink-0"
-                style={{ borderBottom: "1px solid var(--color-p2-line2)" }}
-              >
-                <span
-                  style={{
-                    color: "var(--color-p2-txt)",
-                    fontFamily: "var(--font-p2-display)",
-                    fontWeight: 700,
-                    fontSize: "14px",
-                    letterSpacing: "0.02em",
-                  }}
-                >
-                  {BRAND_MAIN}
-                  <span style={{ color: P2.amb }}>{BRAND_ACCENT}</span>
-                </span>
-                <button
-                  onClick={() => setOpen(false)}
-                  className="flex items-center justify-center w-11 h-11 cursor-pointer"
-                  style={{
-                    color: "var(--color-p2-txt)",
-                    border: "1px solid var(--color-p2-line)",
-                    ...MONO,
-                    fontWeight: 700,
-                    fontSize: "13px",
-                  }}
-                  aria-label="Close menu"
-                >
-                  ✕
-                </button>
-              </div>
-
-              <nav className="flex-1 py-3 px-3 overflow-y-auto">
-                {/* Same shape as the desktop column: the pinned destinations
-                    first, then the rest folded into groups that open in place.
-                    A flat list of seventeen was 924px of scrolling. */}
-                {menuPinned.map((item) => (
-                  <MobileNavRow
-                    key={item.href}
-                    href={item.href}
-                    label={t(item.labelKey) || item.label}
-                    active={isTabActive(pathname, item.href)}
-                    badge={item.href === "/inbox" && hasPendingApprovals}
-                  />
-                ))}
-
-                {menuPinned.length > 0 && menuGroups.length > 0 && (
-                  <div
-                    style={{
-                      height: 1,
-                      backgroundColor: "var(--color-p2-line2)",
-                      margin: "10px 8px 6px",
-                    }}
-                  />
-                )}
-
-                {menuGroups.map((group: NavGroup) => {
-                  const open = menuOpenGroups.includes(group.key);
-                  const holdsActive = group.children.some((c) => isTabActive(pathname, c.href));
-                  return (
-                    <div key={group.key}>
-                      <button
-                        onClick={() =>
-                          setMenuOpenGroups((keys) =>
-                            keys.includes(group.key)
-                              ? keys.filter((k) => k !== group.key)
-                              : [...keys, group.key]
-                          )
-                        }
-                        aria-expanded={open}
-                        className="flex items-center gap-2 w-full px-3 cursor-pointer"
-                        style={{
-                          minHeight: "44px",
-                          borderRadius: "var(--radius-md)",
-                          ...MONO,
-                          fontSize: "12.5px",
-                          color:
-                            holdsActive && !open
-                              ? "var(--color-p2-txt)"
-                              : "var(--color-p2-dim)",
-                        }}
-                      >
-                        <span className="flex-1 text-left">
-                          {t(group.rowLabelKey) || group.label}
-                        </span>
-                        {holdsActive && !open && (
-                          <span
-                            className="shrink-0"
-                            style={{
-                              width: 5,
-                              height: 5,
-                              borderRadius: "var(--radius-full)",
-                              backgroundColor: "var(--color-p2-amb)",
-                            }}
-                          />
-                        )}
-                        <span
-                          className="shrink-0"
-                          style={{ fontSize: "10px", color: "var(--color-p2-faint)" }}
-                        >
-                          {open ? "▴" : "▾"}
-                        </span>
-                      </button>
-                      {open &&
-                        group.children.map(({ href, labelKey, label }) => (
-                          <MobileNavRow
-                            key={href}
-                            href={href}
-                            label={t(labelKey) || label}
-                            active={isTabActive(pathname, href)}
-                            badge={href === "/inbox" && hasPendingApprovals}
-                            nested
-                          />
-                        ))}
-                    </div>
-                  );
-                })}
-              </nav>
-
-              {/* Bottom section: board switcher → user info + logout */}
-              <div
-                className="px-3 py-3"
-                style={{
-                  borderTop: "1px solid var(--color-p2-line2)",
-                  paddingBottom: "calc(env(safe-area-inset-bottom) + 0.75rem)",
-                }}
-              >
-                {boards.length > 0 && (
-                  <div className="mb-1">
-                    <div
-                      className="px-2 pb-1"
-                      style={{
-                        fontFamily: "var(--font-p2-display)",
-                        fontWeight: 700,
-                        fontSize: "9px",
-                        letterSpacing: "0.2em",
-                        color: "var(--color-p2-faint)",
-                      }}
-                    >
-                      BOARD
-                    </div>
-
-                    {hasMultipleBoards ? (
-                      <ul>
-                        {boards.map((board) => {
-                          const isActive = board.id === activeBoardId || board.id === activeBoard?.id;
-                          return (
-                            <li key={board.id}>
-                              <button
-                                onClick={() => handleBoardSelect(board.id)}
-                                className="w-full flex items-center gap-2.5 px-2 cursor-pointer text-left"
-                                style={{
-                                  minHeight: "44px",
-                                  ...MONO,
-                                  fontSize: "12px",
-                                  fontWeight: isActive ? 700 : 400,
-                                  backgroundColor: isActive ? "var(--color-p2-pan2)" : "transparent",
-                                  color: isActive ? "var(--color-p2-txt)" : "var(--color-p2-dim)",
-                                  borderLeft: `2px solid ${isActive ? "var(--color-p2-amb)" : "transparent"}`,
-                                }}
-                              >
-                                {board.icon ? (
-                                  <span className="shrink-0 leading-none w-5 text-center">
-                                    <EntityIcon value={board.icon} size={14} />
-                                  </span>
-                                ) : (
-                                  <span
-                                    className="shrink-0 w-2.5 h-2.5 rounded-full"
-                                    style={{
-                                      backgroundColor: board.color ?? P2.amb,
-                                    }}
-                                  />
-                                )}
-                                <span className="flex-1 truncate">{board.name}</span>
-                                {isActive && <span className="shrink-0">✓</span>}
-                              </button>
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    ) : (
-                      <div className="flex items-center gap-2.5 px-2" style={{ minHeight: "44px" }}>
-                        {activeBoard?.icon ? (
-                          <span className="shrink-0 leading-none w-5 text-center">
-                            <EntityIcon value={activeBoard.icon} size={14} />
-                          </span>
-                        ) : (
-                          <span
-                            className="shrink-0 w-2.5 h-2.5 rounded-full"
-                            style={{ backgroundColor: activeBoard?.color ?? P2.amb }}
-                          />
-                        )}
-                        <span
-                          className="flex-1 truncate"
-                          style={{ ...MONO, fontSize: "12px", color: "var(--color-p2-dim)" }}
-                        >
-                          {activeBoard?.name ?? "Board"}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* User info + logout */}
-                <div
-                  className="pt-2"
-                  style={{ borderTop: boards.length > 0 ? "1px solid var(--color-p2-line2)" : "none" }}
-                >
-                  {currentUser && (
-                    <div className="px-2 pb-2">
-                      <div
-                        className="truncate"
-                        style={{ ...MONO, fontSize: "12px", fontWeight: 700, color: "var(--color-p2-txt)" }}
-                      >
-                        {currentUser.name}
-                      </div>
-                      <div
-                        className="truncate"
-                        style={{ ...MONO, fontSize: "10px", color: "var(--color-p2-dim)" }}
-                      >
-                        {currentUser.email}
-                      </div>
-                    </div>
-                  )}
-                  {/* Theme switch (ADR-087) — same control as Settings → Appearance */}
-                  <div className="px-2 pb-2">
-                    <ThemeSegmented size="touch" />
-                  </div>
-                  {/* Settings sits with the account, not in a nav group — the
-                      desktop column puts the same gear in its footer. */}
-                  {CHROME_ITEMS.map((href) => {
-                    const item = navItem(href);
-                    if (!item) return null;
-                    const Icon = item.icon;
-                    return (
-                      <Link
-                        key={href}
-                        href={href}
-                        className="flex items-center gap-2 w-full px-2 cursor-pointer"
-                        style={{
-                          minHeight: "44px",
-                          ...MONO,
-                          fontSize: "12.5px",
-                          fontWeight: isTabActive(pathname, href) ? 700 : 400,
-                          color: isTabActive(pathname, href)
-                            ? "var(--color-p2-txt)"
-                            : "var(--color-p2-dim)",
-                        }}
-                      >
-                        <Icon size={15} strokeWidth={1.75} className="shrink-0" />
-                        {t(item.labelKey) || item.label}
-                      </Link>
-                    );
-                  })}
-                  <button
-                    onClick={handleLogout}
-                    className="flex items-center w-full px-2 cursor-pointer"
-                    style={{
-                      minHeight: "44px",
-                      ...MONO,
-                      fontSize: "12px",
-                      letterSpacing: "0.08em",
-                      color: "var(--color-p2-dim)",
-                    }}
-                  >
-                    LOGOUT →
-                  </button>
-                </div>
-              </div>
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
-    </>
+      <div className="flex items-center gap-2">
+        <VoiceButton size={40} variant="header" />
+      </div>
+    </header>
   );
 }

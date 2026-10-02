@@ -1,7 +1,7 @@
 /**
  * Phone overlays close on Esc — the UI probe found the menu stayed open at
  * 390 px (panel register rule 4: every overlay closes on Esc). Since mobile
- * nav V2 the menu opens from the ⊕ sheet ("More…"); both must close on Esc.
+ * nav V2 the ⊕ sheet is the one phone menu; it must close on Esc.
  */
 import { describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
@@ -64,12 +64,5 @@ describe("phone menu", () => {
     expect(screen.getByRole("dialog", { name: "New" })).toBeInTheDocument();
     await userEvent.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "New" })).toBeNull());
-
-    // ⊕ → More… opens the full menu, which closes on Esc
-    await userEvent.click(screen.getByRole("button", { name: "New" }));
-    await userEvent.click(screen.getByRole("button", { name: "More…" }));
-    expect(screen.getByRole("button", { name: "Close menu" })).toBeInTheDocument();
-    await userEvent.keyboard("{Escape}");
-    await waitFor(() => expect(screen.queryByRole("button", { name: "Close menu" })).toBeNull());
   });
 });

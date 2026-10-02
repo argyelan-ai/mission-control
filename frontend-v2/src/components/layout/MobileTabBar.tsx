@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
 import { C } from "@/lib/colors";
-import { activeTabFor, TAB_ICONS, TAB_LABEL_KEYS, type MobileTabKey } from "@/lib/mobileNav";
+import { activeTabFor, TAB_ICONS, TAB_LABEL_KEYS, TAB_ROUTES, type MobileTabKey } from "@/lib/mobileNav";
 import { badgeLabel } from "@/lib/inbox";
 import { chatsTabHref, loadRecentChats, RECENT_CHATS_EVENT, type ChatRef } from "@/lib/recentChats";
 import { useInbox } from "@/hooks/useInbox";
@@ -113,8 +113,8 @@ export function MobileTabBar() {
       }}
     >
       <div className="grid grid-cols-5">
-        {tab("home", "/")}
-        {tab("tasks", "/tasks")}
+        {tab("home", TAB_ROUTES.home)}
+        {tab("tasks", TAB_ROUTES.tasks)}
         <button
           type="button"
           onClick={() => setQuickOpen(true)}
@@ -135,7 +135,7 @@ export function MobileTabBar() {
           </span>
         </button>
         {tab("chats", chatsTabHref(pathname, recent))}
-        {tab("inbox", "/inbox")}
+        {tab("inbox", TAB_ROUTES.inbox)}
       </div>
     </nav>
   );
