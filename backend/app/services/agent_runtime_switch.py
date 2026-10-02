@@ -198,6 +198,47 @@ def _served_context_len(entry: object) -> int | None:
     return None
 
 
+_HEALTH_MODEL_KEYS = ("model", "model_id", "served_model", "served_model_name")
+
+
+async def _health_context_len(client, base: str, picked: str) -> int | None:
+    """Fallback for engines whose ``/v1/models`` omits the window: ``GET /health``.
+
+    Live shape (TensorFold, 01.10.2026)::
+
+        GET /v1/models → {"data": [{"id": "GLM-5.3-Flash-EXL3", "object": "model",
+                                    "owned_by": "tensorfold"}]}
+        GET /health    → {"ok": true, "backend": "tensorfold", ...,
+                          "pool_tokens": 1251328, "context_length": 1048576}
+
+    Generic, not TensorFold-specific: any engine that puts ``context_length`` /
+    ``max_model_len`` / ``max_context_length`` at the top level of its health
+    JSON is read the same way as a ``/v1/models`` entry. ``pool_tokens`` is
+    deliberately NOT a window — it is the KV pool shared by all streams.
+
+    Should the health answer name a model and that name is NOT the one picked
+    from ``/v1/models``, the number belongs to something else (a proxy in
+    front of several engines) and is ignored. Any failure → ``None``: "the
+    endpoint did not say", the stored window stays.
+    """
+    root = base[: -len("/v1")] if base.endswith("/v1") else base
+    try:
+        resp = await client.get(f"{root}/health")
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+    except Exception as e:  # noqa: BLE001 — a fallback must never fail the probe
+        logger.debug("probe_runtime_model %s/health failed: %s", root, e)
+        return None
+    if not isinstance(data, dict):
+        return None
+    for key in _HEALTH_MODEL_KEYS:
+        named = data.get(key)
+        if isinstance(named, str) and named.strip() and named.strip() != picked:
+            return None
+    return _served_context_len(data)
+
+
 async def probe_runtime_model(runtime: Runtime) -> str | None:
     """Best-effort probe of an OpenAI-compatible `/models` endpoint.
 
@@ -256,7 +297,13 @@ async def probe_runtime_model_info(runtime: Runtime) -> ProbedModel:
                         entry = next(
                             (it for it in entries if it.get("id") == picked), None
                         )
-                        return ProbedModel(picked, _served_context_len(entry))
+                        ctx = _served_context_len(entry)
+                        if ctx is None:
+                            # /v1/models carries no window on every engine
+                            # (TensorFold, 01.10.2026: only id/object/owned_by).
+                            # Several engines report it on /health instead.
+                            ctx = await _health_context_len(client, base, picked)
+                        return ProbedModel(picked, ctx)
                     # Endpoint answered, but served nothing chat-capable. Do not
                     # fall through to the next candidate URL with a different
                     # shape — report "unknown" so the caller leaves the binding

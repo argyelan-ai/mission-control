@@ -181,12 +181,17 @@ async def write_slot_state(
         # neuer Zeitpunkt für die neue Belegung dieser Zeile.
         slot.serving_since = datetime.now(timezone.utc)
     if context_len and slot.max_context_len != context_len:
+        old_max = slot.max_context_len
         slot.max_context_len = context_len
         # ``preferred`` folgt nur, wo es „nimm das ganze Fenster" ausdrückte
-        # oder das neue Maximum überschreiten würde — dieselbe Regel wie in
-        # runtime_watcher._handle_context_drift.
+        # (leer oder gleich dem alten Maximum) oder das neue Maximum
+        # überschreiten würde — dieselbe Regel wie in
+        # runtime_watcher._handle_context_drift. Ohne den ``== old_max``-Fall
+        # blieb ein Wechsel 250000 → 1048576 bei preferred 250000 stehen
+        # (Live 01.10.2026).
         if (
             slot.preferred_context_len is None
+            or slot.preferred_context_len == old_max
             or slot.preferred_context_len > context_len
         ):
             slot.preferred_context_len = context_len

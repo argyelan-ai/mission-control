@@ -1305,11 +1305,15 @@ async def start_recipe_on_host(
     if slot is not None:
         try:
             previous_model = slot.model_identifier
+            previous_ctx = (slot.max_context_len, slot.preferred_context_len)
+            previous_vision = slot.supports_vision
             updated = await slot_runtimes.write_slot_state(
                 session,
                 host.id,
                 model=recipe.model_identifier,
-                context_len=recipe.context_len,
+                # A recipe without its own window falls back to the instance
+                # row (built from the same recipe, possibly edited since).
+                context_len=recipe.context_len or instance.max_context_len,
                 supports_vision=recipe.supports_vision,
             )
             # …und die Agenten an dieser Zeile müssen es auch erfahren.
@@ -1326,13 +1330,22 @@ async def start_recipe_on_host(
             # Reload selbst passieren im Sync-Lauf des Wächters
             # (``runtime_propagation._sync_one``) — hier wird nur geflaggt,
             # damit ein langsamer Reload nie einen Start blockiert.
-            if updated is not None and (updated.model_identifier or "") != (
-                previous_model or ""
+            #
+            # Fenster und Vision zählen genauso (Live 01.10.2026): GLM vLLM →
+            # GLM TensorFold behält den Modellnamen, ändert aber das Fenster
+            # 250000 → 1048576. Ohne Flag stand das neue Fenster nur in der
+            # Zeile — die gerenderte ``OMP_CONTEXT_WINDOW`` der Agenten blieb
+            # alt, und auch der Wächter sah danach keine Drift mehr.
+            if updated is not None and (
+                (updated.model_identifier or "") != (previous_model or "")
+                or (updated.max_context_len, updated.preferred_context_len) != previous_ctx
+                or updated.supports_vision != previous_vision
             ):
                 flagged = await runtime_propagation.mark_agents_for_sync(session, updated)
                 logger.info(
-                    "slot: %s Agent(en) an %s für den Modellwechsel %r → %r geflaggt",
+                    "slot: %s Agent(en) an %s geflaggt (Modell %r → %r, Fenster %r → %r)",
                     flagged, updated.slug, previous_model, updated.model_identifier,
+                    previous_ctx[0], updated.max_context_len,
                 )
         except Exception:  # noqa: BLE001 — ein erfolgreicher Start bleibt erfolgreich
             logger.exception("slot: Sofort-Schreiben für Box %s fehlgeschlagen", host.slug)
