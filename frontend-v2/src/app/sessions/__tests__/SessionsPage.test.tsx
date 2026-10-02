@@ -8,9 +8,12 @@ import type { Agent } from "@/lib/types";
 // Task #20 (pre-chat) / Task B6 (chat rebuild): the Sessions page restores
 // the last-viewed agent from localStorage, with ?agent=<id> (from the
 // Agents list "open session" button) taking precedence.
-const nav = vi.hoisted(() => ({ searchParamsString: "" }));
+const nav = vi.hoisted(() => ({ searchParamsString: "", replaced: [] as string[] }));
 vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(nav.searchParamsString),
+  usePathname: () => "/sessions",
+  // Like Next: replace() changes what useSearchParams reports.
+  useRouter: () => ({ replace: (url: string) => { nav.replaced.push(url); nav.searchParamsString = url.split("?")[1] ?? ""; } }),
 }));
 
 // AppShell (auth guard, Sidebar, TopBar, CommandPalette, VoiceProvider, …)
@@ -827,14 +830,16 @@ describe("SessionsPage — mobile stack keeps only one screen in flow", () => {
   // to that same chat must open it again.
   it("back clears the chat from the URL, and a later link to the same chat opens it again", async () => {
     const user = userEvent.setup();
-    window.history.replaceState(null, "", "/sessions?agent=agent-2");
+    nav.replaced = [];
     nav.searchParamsString = "agent=agent-2";
     const view = renderPage();
     await waitFor(() => expect(isHidden(chat())).toBe(false));
 
     await user.click(screen.getByRole("button", { name: "Stub Back" }));
     expect(isHidden(chat())).toBe(true);
-    expect(window.location.search).toBe("");
+    // Through Next's router (a native history.replaceState left Next's own
+    // search params on the old chat — the live re-test failure).
+    expect(nav.replaced).toEqual(["/sessions"]);
 
     const rerender = () =>
       view.rerender(
@@ -842,8 +847,7 @@ describe("SessionsPage — mobile stack keeps only one screen in flow", () => {
           <SessionsPage />
         </QueryClientProvider>,
       );
-    nav.searchParamsString = "";          // what Next reports after replaceState
-    rerender();
+    rerender();                              // Next now reports no chat
     nav.searchParamsString = "agent=agent-2"; // the chip to the same chat
     rerender();
     await waitFor(() => expect(isHidden(chat())).toBe(false));

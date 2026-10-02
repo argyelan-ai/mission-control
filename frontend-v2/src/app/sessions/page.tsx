@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, Suspense } from "react";
-import { useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import { X } from "lucide-react";
@@ -150,6 +150,8 @@ function SessionsPageContent() {
   const t = useTranslations("sessions");
   const qc = useQueryClient();
   const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname() ?? "/sessions";
   const { activeBoardId } = useAppStore();
   const [selected, setSelected] = useState<AgentWithState | null>(null);
   // Gruppen-Auswahl liegt bewusst NEBEN der Agenten-Auswahl statt in einer
@@ -348,12 +350,16 @@ function SessionsPageContent() {
   // with the chat still named there, a "continue a chat" chip or the Chats
   // tab pointing at the same chat changed nothing and the phone stayed on the
   // list (live 02.10.2026). replaceState: no new history entry.
+  // router.replace, not window.history: Next keeps its own copy of the
+  // search params — a native replaceState changed the address bar but not
+  // what useSearchParams/<Link> see, so the next chip to the same chat was
+  // still a no-op (live re-test 02.10.2026).
   const backToList = useCallback(() => {
     setMobileView("list");
-    if (typeof window !== "undefined" && window.location.search) {
-      window.history.replaceState(window.history.state, "", window.location.pathname);
+    if (searchParams.get("agent") || searchParams.get("group")) {
+      router.replace(pathname, { scroll: false });
     }
-  }, []);
+  }, [router, pathname, searchParams]);
 
   // Phase 15 T3.7: re-mount the terminal when the backend switches the
   // selected agent's runtime (incl. cross-image recreate). Without this
