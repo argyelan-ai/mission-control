@@ -2170,3 +2170,15 @@ describe("ChatView — non-admin (session input is admin-only)", () => {
     expect(screen.queryByTestId("admin-only-notice")).not.toBeInTheDocument();
   });
 });
+
+// Operator 02.10.2026: on the phone the chat had the header (back · title · ⋯)
+// AND the bottom action bar (Back · Reply · More) from #726 — one header only,
+// like the Claude Code phone app.
+describe("ChatView — one header on the phone", () => {
+  it("renders no bottom action bar when a back handler is given", () => {
+    const { container } = renderChatView({ onBack: noop });
+    expect(container.querySelector("[data-testid='detail-action-bar']")).toBeNull();
+    expect(screen.queryByRole("button", { name: /^reply$|antworten/i })).toBeNull();
+    expect(screen.getAllByRole("button", { name: /back|zurück/i }).length).toBe(1);
+  });
+});
