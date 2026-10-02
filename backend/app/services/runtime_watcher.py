@@ -561,7 +561,7 @@ class RuntimeWatcher:
         """The window of the recipe a slot row's box is confirmed to serve.
 
         Live 01.10.2026: TensorFold's ``/v1/models`` carries no window, and
-        Sparky's slot row kept the 250000 of the previous vLLM recipe although
+        the box's slot row kept the 250000 of the previous vLLM recipe although
         the engine served 1048576 — nothing ever told the row otherwise.
 
         Only a slot row (ADR-078: "whatever the box serves") and only the box's
