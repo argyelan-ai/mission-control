@@ -4,26 +4,6 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 
-// The real zustand store (persist middleware) captures localStorage when the
-// module loads — before beforeEach runs. A working storage must exist by then,
-// otherwise the first store write (BoardPicker's setBoards once the boards
-// query resolves) throws "storage.setItem is not a function". Earlier this
-// only passed because the shared fetch Response was consumed by another
-// query first, so the boards query failed and never wrote.
-vi.hoisted(() => {
-  const mem: Record<string, string> = {};
-  Object.defineProperty(globalThis, "localStorage", {
-    value: {
-      getItem: (k: string) => mem[k] ?? null,
-      setItem: (k: string, v: string) => { mem[k] = v; },
-      removeItem: (k: string) => { delete mem[k]; },
-      clear: () => undefined,
-    },
-    configurable: true,
-    writable: true,
-  });
-});
-
 // next/navigation is mocked so AppShell's auth guard + Sidebar/MobileNav render
 // without a real Next router.
 vi.mock("next/navigation", () => ({
@@ -84,8 +64,7 @@ describe("FilesPage — root selector", () => {
     expect(await screen.findByRole("heading", { name: "Files" })).toBeInTheDocument();
 
     // Both roots appear as selectable tabs, with their indexed_count badges.
-    // (The selected root also shows up as the breadcrumb's first crumb.)
-    expect((await screen.findAllByRole("button", { name: /Deliverables/ }))[0]).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /Deliverables/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Vault/ })).toBeInTheDocument();
     expect(screen.getByText("42")).toBeInTheDocument();
   });
