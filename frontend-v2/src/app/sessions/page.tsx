@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, Suspense } from "react";
+import { useCallback, useEffect, useRef, useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
@@ -320,7 +320,13 @@ function SessionsPageContent() {
     const agentParam = searchParams.get("agent");
     const groupParam = searchParams.get("group");
     const key = agentParam ? `agent:${agentParam}` : groupParam ? `group:${groupParam}` : null;
-    if (!key || key === handledParam.current) return;
+    if (!key) {
+      // The URL no longer names a chat (back to the list clears it), so the
+      // next link to the SAME chat must open it again.
+      handledParam.current = null;
+      return;
+    }
+    if (key === handledParam.current) return;
     if (agentParam) {
       const agent = agents.find((a) => a.id === agentParam);
       if (!agent) return; // list not loaded yet — try again on the next render
@@ -337,6 +343,17 @@ function SessionsPageContent() {
       rememberChat({ kind: "group", id: groupParam });
     }
   }, [searchParams, agents, groups]);
+
+  // Back to the list on the phone. Also drops ?agent= / ?group= from the URL:
+  // with the chat still named there, a "continue a chat" chip or the Chats
+  // tab pointing at the same chat changed nothing and the phone stayed on the
+  // list (live 02.10.2026). replaceState: no new history entry.
+  const backToList = useCallback(() => {
+    setMobileView("list");
+    if (typeof window !== "undefined" && window.location.search) {
+      window.history.replaceState(window.history.state, "", window.location.pathname);
+    }
+  }, []);
 
   // Phase 15 T3.7: re-mount the terminal when the backend switches the
   // selected agent's runtime (incl. cross-image recreate). Without this
@@ -563,7 +580,7 @@ function SessionsPageContent() {
               <GroupChatView
                 key={selectedGroup.id}
                 group={selectedGroup}
-                onBack={() => setMobileView("list")}
+                onBack={backToList}
                 onGroupChanged={handleGroupChanged}
                 onOpenResult={() => setActivePanel(activePanel === "doc" ? null : "doc")}
                 onGroupGone={() => {
@@ -588,7 +605,7 @@ function SessionsPageContent() {
                 onCenterViewChange={setCenterView}
                 terminalRemountTick={selectedLive ? restartTick[selectedLive.id] ?? 0 : 0}
                 onStatusChange={setChatStatus}
-                onBack={() => setMobileView("list")}
+                onBack={backToList}
                 contextLine={selectedTaskTitle}
                 onOpenPanel={setActivePanel}
               />

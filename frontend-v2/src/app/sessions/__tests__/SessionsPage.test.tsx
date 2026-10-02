@@ -822,6 +822,33 @@ describe("SessionsPage — mobile stack keeps only one screen in flow", () => {
     expect(isHidden(chat())).toBe(true);
   });
 
+  // Live 02.10.2026: chat → back → ⊕ chip to the SAME chat stayed on the
+  // list. Back now clears the URL; once the URL names no chat, the next link
+  // to that same chat must open it again.
+  it("back clears the chat from the URL, and a later link to the same chat opens it again", async () => {
+    const user = userEvent.setup();
+    window.history.replaceState(null, "", "/sessions?agent=agent-2");
+    nav.searchParamsString = "agent=agent-2";
+    const view = renderPage();
+    await waitFor(() => expect(isHidden(chat())).toBe(false));
+
+    await user.click(screen.getByRole("button", { name: "Stub Back" }));
+    expect(isHidden(chat())).toBe(true);
+    expect(window.location.search).toBe("");
+
+    const rerender = () =>
+      view.rerender(
+        <QueryClientProvider client={view.qc}>
+          <SessionsPage />
+        </QueryClientProvider>,
+      );
+    nav.searchParamsString = "";          // what Next reports after replaceState
+    rerender();
+    nav.searchParamsString = "agent=agent-2"; // the chip to the same chat
+    rerender();
+    await waitFor(() => expect(isHidden(chat())).toBe(false));
+  });
+
   it("opening a chat from the list remembers it for the Chats tab", async () => {
     const user = userEvent.setup();
     renderPage();
