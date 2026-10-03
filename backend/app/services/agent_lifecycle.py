@@ -136,6 +136,12 @@ async def restore_agent(session: AsyncSession, agent: Agent) -> Agent:
         return agent  # idempotent no-op
 
     runtime = getattr(agent, "agent_runtime", None)
+    # Clear the flag BEFORE rendering: the compose renderer skips archived
+    # agents (so a later switch cannot resurrect them), so the restore render
+    # has to see this agent as active to re-add its service block.
+    agent.archived_at = None
+    session.add(agent)
+    await session.flush()
     try:
         if runtime == "host":
             agent_bootstrap._run_launchctl_bootstrap(_host_agent_plist_path(agent))
@@ -146,7 +152,6 @@ async def restore_agent(session: AsyncSession, agent: Agent) -> Agent:
     except Exception as e:  # noqa: BLE001 — best-effort
         logger.warning("restore start for %s failed (flag cleared anyway): %s", agent.name, e)
 
-    agent.archived_at = None
     agent.status = "offline"
     session.add(agent)
     await session.commit()
