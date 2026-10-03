@@ -43,8 +43,27 @@ CDP_BASE_URL = os.environ.get("CDP_BROWSER_URL", "http://cdp-browser:9223")
 # the only tab there is (live finding M11, bauplan.md).
 _BLANK_URLS = {"about:blank", ""}
 
-# Debounce window before the followed stream switches to a newly-active tab.
-FOLLOW_SWITCH_DEBOUNCE_S = 0.6
+
+ALLOWED_CDP_METHODS = {
+    "Target.setDiscoverTargets",
+    "Page.startScreencast",
+    "Page.screencastFrameAck",
+    "Page.stopScreencast",
+}
+
+
+async def _send_cdp(conn, msg_id: int, method: str, params: Optional[dict] = None) -> None:
+    """Single choke point for everything this module ever sends to a CDP
+    socket (browser-level watcher OR per-page stream). Runtime-asserts the
+    method against the view-only allow-list, so a future call-site that
+    forgets this invariant fails loudly instead of silently widening what
+    the "view-only" guarantee covers (finding: the static regex probe only
+    catches literal strings, not one built from a variable/f-string)."""
+    assert method in ALLOWED_CDP_METHODS, f"browser_live: refusing non-view-only CDP method {method!r}"
+    payload: dict = {"id": msg_id, "method": method}
+    if params is not None:
+        payload["params"] = params
+    await conn.send(json.dumps(payload))
 
 
 def _resolve_cdp_netloc(base_url: str = None) -> str:
@@ -247,11 +266,7 @@ async def _watch_targets_browser_ws(watcher: TargetWatcher, stop_event: asyncio.
         browser_ws_url = _rewrite_ws_url(resp.json()["webSocketDebuggerUrl"], netloc)
 
     async with websockets.connect(browser_ws_url, max_size=8 * 1024 * 1024) as ws:
-        await ws.send(json.dumps({
-            "id": 1,
-            "method": "Target.setDiscoverTargets",
-            "params": {"discover": True},
-        }))
+        await _send_cdp(ws, 1, "Target.setDiscoverTargets", {"discover": True})
         while not stop_event.is_set():
             raw = await ws.recv()
             msg = json.loads(raw)
@@ -337,14 +352,11 @@ async def browser_live_ws(
     state = {"followed_id": target, "following": bool(follow)}
     switch_requested = asyncio.Event()
 
-    pending_update: dict = {}
-
     def on_targets_change(targets: list[dict], active_id: Optional[str]) -> None:
-        # Called synchronously from the watcher task, same event loop —
-        # no cross-thread handoff needed (TargetWatcher never runs in a
-        # separate thread).
-        pending_update["targets"] = targets
-        pending_update["active_id"] = active_id
+        # Called synchronously from the watcher task, same event loop — no
+        # cross-thread handoff needed (TargetWatcher never runs in a
+        # separate thread). attach_and_stream re-reads watcher state itself
+        # once woken, so nothing needs to be handed over here.
         switch_requested.set()
 
     watcher.on_change = on_targets_change
@@ -373,105 +385,183 @@ async def browser_live_ws(
         msg_id += 1
         return msg_id
 
-    async def attach_and_stream(cdp_holder: dict) -> None:
-        """(Re)attach the screencast to whichever page we should be showing,
-        looping forever so a `select`/follow-switch can swap the underlying
-        CDP connection without tearing down the client WebSocket."""
-        while not stop_event.is_set():
-            pages = watcher.targets() or await _list_page_targets()
-            if not pages:
-                await websocket.send_json({"type": "status", "message": "No open page in the agent browser yet."})
-                await asyncio.sleep(1.0)
-                continue
-
-            wanted = state["followed_id"]
-            page = next((p for p in pages if p.get("id") == wanted), None) or pages[0]
-            state["followed_id"] = page["id"]
-
-            # Resolve a fresh webSocketDebuggerUrl for this id (watcher
-            # entries don't carry it; /json/list does).
-            raw_pages = await _list_page_targets()
-            raw = next((p for p in raw_pages if p.get("id") == page["id"]), None)
-            if raw is None:
-                await asyncio.sleep(0.5)
-                continue
-            ws_url = _rewrite_ws_url(raw["webSocketDebuggerUrl"], _resolve_cdp_netloc())
-
-            try:
-                async with websockets.connect(ws_url, max_size=32 * 1024 * 1024) as cdp:
-                    cdp_holder["cdp"] = cdp
-                    await cdp.send(json.dumps({
-                        "id": _next_id(),
-                        "method": "Page.startScreencast",
-                        "params": {
-                            "format": "jpeg",
-                            "quality": 70,
-                            "maxWidth": 1440,
-                            "maxHeight": 900,
-                            "everyNthFrame": 1,
-                        },
-                    }))
-                    await websocket.send_json({
-                        "type": "attached",
-                        "target": {"id": raw.get("id"), "title": raw.get("title"), "url": raw.get("url")},
-                    })
-
-                    switch_requested.clear()
-                    frame_task = asyncio.create_task(_pump(cdp))
-                    switch_wait = asyncio.create_task(switch_requested.wait())
-                    done, pending = await asyncio.wait(
-                        {frame_task, switch_wait}, return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    for t in pending:
-                        t.cancel()
-                    try:
-                        await cdp.send(json.dumps({"id": _next_id(), "method": "Page.stopScreencast"}))
-                    except Exception:
-                        pass
-
-                    if switch_wait in done:
-                        targets_now = pending_update.get("targets", watcher.targets())
-                        active_now = pending_update.get("active_id", watcher.active_id())
-                        await websocket.send_json({
-                            "type": "targets",
-                            "targets": [{"id": t["id"], "title": t["title"], "url": t["url"]} for t in targets_now],
-                            "activeId": active_now,
-                            "followedId": state["followed_id"],
-                        })
-                        if state["following"] and active_now and active_now != state["followed_id"]:
-                            await asyncio.sleep(FOLLOW_SWITCH_DEBOUNCE_S)
-                            state["followed_id"] = active_now
-                        if frame_task in done:
-                            frame_task.result()  # re-raise if the stream died
-                        continue
-                    frame_task.result()
-                    return
-            except WebSocketDisconnect:
-                raise
-            except Exception as e:
-                logger.info("browser_live stream ended: %s", e)
-                try:
-                    await websocket.send_json({"type": "status", "message": str(e)[:200]})
-                except Exception:
-                    pass
-                return
-
     async def _pump(cdp) -> None:
         while True:
             raw = await cdp.recv()
             msg = json.loads(raw)
             if msg.get("method") == "Page.screencastFrame":
                 params = msg["params"]
-                await cdp.send(json.dumps({
-                    "id": _next_id(),
-                    "method": "Page.screencastFrameAck",
-                    "params": {"sessionId": params["sessionId"]},
-                }))
+                await _send_cdp(cdp, _next_id(), "Page.screencastFrameAck", {"sessionId": params["sessionId"]})
                 await websocket.send_json({
                     "type": "frame",
                     "data": params["data"],
                     "metadata": params.get("metadata", {}),
                 })
+
+    async def _close_cdp(cdp) -> None:
+        try:
+            await _send_cdp(cdp, _next_id(), "Page.stopScreencast")
+        except Exception:
+            pass
+        try:
+            await cdp.close()
+        except Exception:
+            pass
+
+    async def attach_and_stream(cdp_holder: dict) -> None:
+        """Keep the client WebSocket showing the right page, looping forever
+        so a `select`/follow-switch — or the shown page simply closing, which
+        agents do constantly as Playwright tears pages down — swaps the
+        underlying CDP connection without ever closing the client socket.
+
+        Only reconnects the CDP screencast when the TARGET actually changes
+        or the current one died; a tab event elsewhere in the shared browser
+        just refreshes the `targets` list without a reconnect (no spurious
+        "Connecting…" flash on every background navigation).
+        """
+        cdp = None
+        current_id: Optional[str] = None
+        frame_task: Optional[asyncio.Task] = None
+        try:
+            while not stop_event.is_set():
+                # Clear BEFORE reading watcher state so a notification that
+                # lands while we are (re)connecting below is never lost —
+                # it just re-sets the event and the next loop iteration
+                # picks it up, instead of being wiped by a clear() that used
+                # to run only after the reconnect finished.
+                switch_requested.clear()
+
+                pages = watcher.targets()
+                live_ids = {p["id"] for p in pages}
+
+                if not pages:
+                    if cdp is not None:
+                        await _close_cdp(cdp)
+                        if frame_task:
+                            frame_task.cancel()
+                        cdp, frame_task, current_id = None, None, None
+                    await websocket.send_json({"type": "status", "message": "No open page in the agent browser yet."})
+                    await _wait_switch_or_timeout(1.0)
+                    continue
+
+                wanted = state["followed_id"]
+                if wanted not in live_ids:
+                    # The shown (or requested) tab is gone — Playwright closes
+                    # pages all the time. Always fall back to the active tab,
+                    # even with follow off (bauplan A1): a dead tab is never
+                    # a reasonable thing to keep "showing".
+                    wanted = watcher.active_id() if watcher.active_id() in live_ids else pages[0]["id"]
+                state["followed_id"] = wanted
+
+                if wanted != current_id or cdp is None:
+                    if cdp is not None:
+                        await _close_cdp(cdp)
+                        if frame_task:
+                            frame_task.cancel()
+                        cdp, frame_task = None, None
+
+                    raw_pages = await _list_page_targets()
+                    raw = next((p for p in raw_pages if p.get("id") == wanted), None)
+                    if raw is None:
+                        # Target vanished between the watcher snapshot and
+                        # this live lookup — retry next iteration rather
+                        # than treating it as a fatal stream error.
+                        current_id = None
+                        await _wait_switch_or_timeout(0.3)
+                        continue
+                    ws_url = _rewrite_ws_url(raw["webSocketDebuggerUrl"], _resolve_cdp_netloc())
+
+                    try:
+                        cdp = await websockets.connect(ws_url, max_size=32 * 1024 * 1024)
+                    except WebSocketDisconnect:
+                        raise
+                    except Exception as e:
+                        logger.info("browser_live: could not attach to %s: %s", wanted, e)
+                        current_id = None
+                        await _wait_switch_or_timeout(0.5)
+                        continue
+
+                    cdp_holder["cdp"] = cdp
+                    await _send_cdp(cdp, _next_id(), "Page.startScreencast", {
+                        "format": "jpeg",
+                        "quality": 70,
+                        "maxWidth": 1440,
+                        "maxHeight": 900,
+                        "everyNthFrame": 1,
+                    })
+                    await websocket.send_json({
+                        "type": "attached",
+                        "target": {"id": raw.get("id"), "title": raw.get("title"), "url": raw.get("url")},
+                    })
+                    current_id = wanted
+                    frame_task = asyncio.create_task(_pump(cdp))
+
+                await send_targets_message()
+
+                switch_wait = asyncio.create_task(switch_requested.wait())
+                done, pending = await asyncio.wait(
+                    {frame_task, switch_wait}, return_when=asyncio.FIRST_COMPLETED,
+                )
+
+                if switch_wait in done:
+                    # frame_task is NOT cancelled here — a tab event
+                    # elsewhere (or a {"follow": true} that doesn't actually
+                    # change the shown target) must not tear down a healthy
+                    # screencast. Cancelling it was the earlier bug: it
+                    # silently killed the pump, and since `Task.exception()`
+                    # raises (not returns) `CancelledError` — a BaseException,
+                    # not an Exception — on a self-cancelled task, that
+                    # propagated straight past every `except Exception` in
+                    # this function and ended the WebSocket with no log line
+                    # at all the very next time this loop ran.
+                    if switch_wait in pending:
+                        switch_wait.cancel()
+                    if state["following"]:
+                        active_now = watcher.active_id()
+                        if active_now:
+                            state["followed_id"] = active_now
+                    continue
+
+                if switch_wait in pending:
+                    switch_wait.cancel()
+
+                # frame_task finished — the page connection closed/died.
+                # Never fatal: drop it and let the next iteration decide
+                # (re-attach to the same id if it's still live, otherwise
+                # fall through to active_id / "No open page"). Task.exception()
+                # RAISES (doesn't return) CancelledError for a task that
+                # ended via cancellation — a BaseException, so it must be
+                # caught explicitly, not just via `except Exception`.
+                try:
+                    frame_task.exception()
+                except (Exception, asyncio.CancelledError):
+                    pass
+                if cdp is not None:
+                    try:
+                        await cdp.close()
+                    except Exception:
+                        pass
+                cdp, frame_task, current_id = None, None, None
+                if stop_event.is_set():
+                    return
+        except WebSocketDisconnect:
+            raise
+        except Exception as e:
+            logger.info("browser_live stream ended: %s", e)
+            try:
+                await websocket.send_json({"type": "status", "message": "Stream error — reconnecting may help."})
+            except Exception:
+                pass
+            return
+        finally:
+            if cdp is not None:
+                await _close_cdp(cdp)
+
+    async def _wait_switch_or_timeout(timeout: float) -> None:
+        try:
+            await asyncio.wait_for(switch_requested.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            pass
 
     async def drain_client() -> None:
         # Steering messages only — NEVER forwarded to Chromium.
@@ -485,6 +575,12 @@ async def browser_live_ws(
                 continue
             if "follow" in msg:
                 state["following"] = bool(msg["follow"])
+                if state["following"]:
+                    # Jump to the active tab right away instead of waiting
+                    # for the next unrelated tab event (finding: turning
+                    # Follow back on didn't move the stream until some
+                    # later navigation elsewhere happened to fire).
+                    switch_requested.set()
             if "select" in msg and isinstance(msg["select"], str):
                 state["followed_id"] = msg["select"]
                 state["following"] = False

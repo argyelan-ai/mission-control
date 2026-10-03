@@ -37,7 +37,7 @@ interface LiveSocketState {
   frameSrc: string | null;
   statusMessage: string | null;
   connState: "connecting" | "open" | "closed";
-  targets: BrowserLiveTarget[];
+  targets: BrowserLiveTarget[] | null;
   activeId: string | null;
   followedId: string | null;
   attachedTitle: string | null;
@@ -45,15 +45,39 @@ interface LiveSocketState {
   setFollow: (on: boolean) => void;
 }
 
-function useBrowserLiveSocket(enabled: boolean, connectKey: number): LiveSocketState {
+function useBrowserLiveSocket(
+  enabled: boolean,
+  connectKey: number,
+  following: boolean,
+): LiveSocketState {
   const wsRef = useRef<WebSocket | null>(null);
   const [frameSrc, setFrameSrc] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [connState, setConnState] = useState<"connecting" | "open" | "closed">("connecting");
-  const [targets, setTargets] = useState<BrowserLiveTarget[]>([]);
+  // `null` until the first server `targets` push — distinct from "[]", which
+  // means the agent browser really has no open tabs right now (finding: a
+  // momentarily-empty push must not make the UI fall back to the stale
+  // first-load list and show tabs that no longer exist).
+  const [targets, setTargets] = useState<BrowserLiveTarget[] | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [followedId, setFollowedId] = useState<string | null>(null);
   const [attachedTitle, setAttachedTitle] = useState<string | null>(null);
+
+  // Read inside the connect effect without making `following`/`followedId`
+  // reconnect triggers themselves — only `connectKey` does that. This is
+  // what lets a reconnect (visibilitychange back to visible, the manual
+  // Reconnect button) resume in whatever follow state the UI is currently
+  // showing instead of always opening with the server's default (follow=1,
+  // no target) — finding: a reconnect could silently start following again
+  // even while the picker still showed a hand-picked tab with Follow off.
+  const followingRef = useRef(following);
+  const followedIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    followingRef.current = following;
+  }, [following]);
+  useEffect(() => {
+    followedIdRef.current = followedId;
+  }, [followedId]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -65,7 +89,9 @@ function useBrowserLiveSocket(enabled: boolean, connectKey: number): LiveSocketS
     let ws: WebSocket | null = null;
 
     // Single-use stream ticket instead of the login token in the URL.
-    browserLiveWsUrl().then(
+    const wantFollow = followingRef.current;
+    const wantTarget = wantFollow ? undefined : (followedIdRef.current ?? undefined);
+    browserLiveWsUrl(wantTarget, { follow: wantFollow }).then(
       (url) => {
         if (cancelled) return;
         ws = openSocket(url);
@@ -197,9 +223,12 @@ export function BrowserLiveView() {
     attachedTitle,
     select,
     setFollow,
-  } = useBrowserLiveSocket(connect, connectKey);
+  } = useBrowserLiveSocket(connect, connectKey, following);
 
-  const targets = wsTargets.length > 0 ? wsTargets : initialTargets;
+  // wsTargets is `null` until the first server push, so a push that is
+  // legitimately empty (every tab closed) is never masked by the stale
+  // first-load `initialTargets` list — see useBrowserLiveSocket's comment.
+  const targets = wsTargets ?? initialTargets;
 
   // Pause the stream when the tab/panel isn't visible, reconnect on return —
   // cheap screencasts are still CPU on the shared cdp-browser for no reason.
@@ -215,6 +244,16 @@ export function BrowserLiveView() {
     document.addEventListener("visibilitychange", onVisibility);
     return () => document.removeEventListener("visibilitychange", onVisibility);
   }, []);
+
+  // Esc closes fullscreen (DESIGN.md / bauplan A1 item 4 — desktop keyboard).
+  useEffect(() => {
+    if (!fullscreen) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setFullscreen(false);
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [fullscreen]);
 
   // Brief "New tab: <title>" hint when the followed target switches on its own.
   const prevAttached = useRef<string | null>(null);
@@ -365,8 +404,8 @@ export function BrowserLiveView() {
           aria-label={t("closeFullscreen")}
           className="absolute top-2 right-2 flex items-center justify-center rounded-md"
           style={{
-            width: 40,
-            height: 40,
+            width: 44,
+            height: 44,
             background: alpha(C.scrim, 0.7),
             color: C.textPrimary,
             border: `1px solid ${C.border}`,
@@ -388,11 +427,13 @@ export function BrowserLiveView() {
       <label htmlFor="browser-live-target" className="sr-only">
         {t("pageLabel")}
       </label>
+      {/* min-h-11 = 44px hit area (DESIGN.md K11) around an 11px visual row;
+          text-base (16px) so iOS doesn't auto-zoom on tap. */}
       <select
         id="browser-live-target"
         value={shownId ?? ""}
         onChange={(e) => handleSelect(e.target.value)}
-        className="text-[11px] rounded-md px-2 py-1 outline-none"
+        className="min-h-11 text-base sm:text-[11px] rounded-md px-2 outline-none"
         style={{
           background: C.bgDeep,
           border: `1px solid ${C.border}`,
@@ -409,7 +450,7 @@ export function BrowserLiveView() {
 
       <button
         onClick={handleToggleFollow}
-        className="text-[10px] px-2 py-1.5 rounded-md font-medium transition-colors shrink-0"
+        className="min-h-11 min-w-11 flex items-center justify-center text-[10px] px-2 rounded-md font-medium transition-colors shrink-0"
         style={
           following
             ? { background: C.accentSubtle, color: C.accent, border: `1px solid ${C.borderAccent}` }
@@ -423,7 +464,8 @@ export function BrowserLiveView() {
       <button
         onClick={() => setFullscreen((f) => !f)}
         title={t("fullscreen")}
-        className="flex items-center justify-center w-6 h-6 rounded-md transition-colors shrink-0"
+        aria-label={t("fullscreen")}
+        className="min-h-11 min-w-11 flex items-center justify-center rounded-md transition-colors shrink-0"
         style={{ border: `1px solid ${C.border}`, color: C.textSecondary }}
       >
         {fullscreen ? <Minimize2 size={11} /> : <Maximize2 size={11} />}
