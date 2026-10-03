@@ -3659,5 +3659,19 @@
     "sectionTitle": "Darstellung",
     "sectionDescription": "Wie Mission Control in diesem Browser aussieht.",
     "hint": "Dunkel ist Standard. Die Wahl wird nur in diesem Browser gespeichert — andere Browser und Geräte behalten ihre eigene."
+  },
+  "browserLive": {
+    "notRunning": "Agenten-Browser läuft nicht — Task mit E2E-Schalter starten oder Browser-Profil aktivieren.",
+    "refresh": "Aktualisieren",
+    "connecting": "Verbinde…",
+    "streamEnded": "Stream beendet",
+    "reconnect": "Neu verbinden",
+    "live": "Live",
+    "follow": "Folgen",
+    "fullscreen": "Vollbild",
+    "closeFullscreen": "Vollbild schliessen",
+    "pageLabel": "Browser-Seite",
+    "liveViewAlt": "Live-Ansicht des Agenten-Browsers",
+    "newTab": "Neuer Tab: {title}"
   }
 }
