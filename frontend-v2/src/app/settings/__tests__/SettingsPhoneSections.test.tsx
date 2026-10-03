@@ -151,6 +151,13 @@ describe("Settings on the phone — section list", () => {
     }
   });
 
+  it("keeps the account panel (#738) at the top of the list screen, before the sections", () => {
+    renderPage();
+    const account = screen.getByTestId("phone-account");
+    const list = phoneList()!;
+    expect(account.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it("on the list screen hides the section column on the phone and shows no back button", () => {
     renderPage();
     expect(classes(screen.getByTestId("settings-section"))).toEqual(
@@ -170,6 +177,12 @@ describe("Settings on the phone — an opened section", () => {
     expect(classes(column)).not.toContain("hidden");
     // Something of the section is rendered (its header or its loader).
     expect(column.querySelector(".max-w-3xl")!.childElementCount).toBeGreaterThan(0);
+  });
+
+  it("leaves the account panel on the list — an open section shows only the section", () => {
+    nav.search = "section=profile";
+    renderPage();
+    expect(screen.queryByTestId("phone-account")).toBeNull();
   });
 
   it("hides the page header on the phone while a section is open", () => {
