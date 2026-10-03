@@ -2282,7 +2282,7 @@ function SettingsContent() {
             onClick={backToList}
             aria-label={t("phoneList.back")}
             data-testid="settings-phone-back"
-            className="flex items-center gap-1 min-h-11 pr-3 rounded-lg text-base cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
+            className="flex items-center gap-1 min-h-12 pr-3 rounded-lg text-base cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
             style={{ color: C.textSecondary }}
           >
             <ChevronLeft size={22} aria-hidden className="shrink-0" />

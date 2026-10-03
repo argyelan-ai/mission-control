@@ -46,7 +46,7 @@ export function PhoneSectionList({
         return (
           // Groups by space (K8), not by boxes: twice the gap between groups
           // as between rows.
-          <div key={group} className="pt-5 first:pt-2">
+          <div key={group} className="pt-6 first:pt-2">
             <div id={headingId} className="label-sys px-1 pb-1">
               {t(`groups.${group}`)}
             </div>
