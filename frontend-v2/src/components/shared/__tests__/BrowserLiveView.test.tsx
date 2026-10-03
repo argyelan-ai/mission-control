@@ -209,6 +209,86 @@ describe("BrowserLiveView", () => {
     ).toBeInTheDocument();
   });
 
+  it("a legitimately-empty 'targets' push clears the picker instead of falling back to the stale first-load list", async () => {
+    vi.spyOn(api.browserLive, "targets").mockResolvedValue(TARGETS);
+    renderWithQuery(<BrowserLiveView />);
+
+    await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    const ws = FakeWebSocket.instances[0];
+    ws.onopen?.(new Event("open"));
+
+    // First push has the one target — the picker shows it.
+    ws.onmessage?.(
+      new MessageEvent("message", {
+        data: JSON.stringify({
+          type: "targets",
+          targets: [{ id: "target-1", title: "Checkout flow", url: "https://example.com/checkout" }],
+          activeId: "target-1",
+          followedId: "target-1",
+        }),
+      }),
+    );
+    await screen.findByLabelText("Browser page");
+
+    // Every tab closes — a real, empty push. Before the fix, `wsTargets.length
+    // > 0 ? wsTargets : initialTargets` treated "[]" the same as "never
+    // received a push yet" and fell back to the stale TARGETS from the
+    // initial REST load, showing a tab that no longer exists.
+    ws.onmessage?.(
+      new MessageEvent("message", {
+        data: JSON.stringify({ type: "targets", targets: [], activeId: null, followedId: null }),
+      }),
+    );
+
+    // The component's own empty state ("not running") is what a genuinely
+    // empty push renders — the old bug kept showing the stale picker with
+    // "Checkout flow" selectable even though the tab was gone.
+    expect(await screen.findByText(/Agent browser not running/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText("Browser page")).not.toBeInTheDocument();
+  });
+
+  it("reconnecting (e.g. the manual Reconnect button) carries the current follow state into the new WS URL", async () => {
+    vi.spyOn(api.browserLive, "targets").mockResolvedValue(TARGETS);
+    renderWithQuery(<BrowserLiveView />);
+
+    await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    const first = FakeWebSocket.instances[0];
+    first.onopen?.(new Event("open"));
+
+    // Manually select a page — turns Follow off.
+    first.onmessage?.(
+      new MessageEvent("message", {
+        data: JSON.stringify({
+          type: "targets",
+          targets: [
+            { id: "target-1", title: "Checkout flow", url: "https://example.com/checkout" },
+            { id: "target-2", title: "New tab", url: "https://example.org" },
+          ],
+          activeId: "target-1",
+          followedId: "target-1",
+        }),
+      }),
+    );
+    const select = (await screen.findByLabelText("Browser page")) as HTMLSelectElement;
+    await waitFor(() => expect(select.options.length).toBe(2));
+    await userEvent.selectOptions(select, "target-2");
+    const followBtn = screen.getByRole("button", { name: "Follow" });
+    expect(followBtn).toHaveAttribute("aria-pressed", "false");
+
+    // The connection drops; the stream-ended Reconnect button appears.
+    first.onclose?.(new CloseEvent("close", { code: 1006 }));
+    const reconnectBtn = await screen.findByTitle("Reconnect");
+    await userEvent.click(reconnectBtn);
+
+    await waitFor(() => expect(FakeWebSocket.instances.length).toBe(2));
+    const second = FakeWebSocket.instances[1];
+    // Before the fix this always opened with the server's default
+    // (follow=1, no target), silently turning Follow back on server-side
+    // even while the UI still showed a hand-picked tab with Follow off.
+    expect(second.url).toContain("follow=0");
+    expect(second.url).toContain("target=target-2");
+  });
+
   it("has the German catalog for every string it renders", () => {
     // Sabotage check for the i18n namespace itself: if a key used by the
     // component is missing from messages/de.json this throws, since

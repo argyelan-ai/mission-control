@@ -261,14 +261,26 @@ _ALLOWED_CDP_METHODS = {
     "Page.stopScreencast",
 }
 
+# Every outgoing CDP call in this module — browser-level watcher connection
+# AND the per-page stream — goes through the single `_send_cdp()` choke
+# point (runtime-asserts its method against ALLOWED_CDP_METHODS). The static
+# regex below is a fast first line of defense that catches a literal method
+# string anywhere in the source, including one passed as `_send_cdp(...)`'s
+# third positional/keyword argument; the runtime assert in `_send_cdp` is
+# what actually catches a method built from a variable or f-string (a static
+# probe can never see that), see `test_runtime_assert_...` below.
+_METHOD_LITERAL_RE = re.compile(r'"method":\s*"([A-Za-z]+\.[A-Za-z]+)"|_send_cdp\([^)]*?,\s*"([A-Za-z]+\.[A-Za-z]+)"')
+
 
 def _cdp_methods_sent_by_module() -> set[str]:
     import inspect
     from app.routers import browser_live as bl
 
     src = inspect.getsource(bl)
-    # Matches `"method": "X.y"` literals (what every outgoing CDP frame uses).
-    return set(re.findall(r'"method":\s*"([A-Za-z]+\.[A-Za-z]+)"', src))
+    found = set()
+    for a, b in _METHOD_LITERAL_RE.findall(src):
+        found.add(a or b)
+    return found
 
 
 def test_browser_live_only_sends_view_only_cdp_methods():
@@ -282,7 +294,24 @@ def test_browser_live_only_sends_view_only_cdp_methods():
 def test_sabotage_probe_catches_an_input_method():
     """Proves the regex above actually works: injecting an input-dispatching
     method literal into a throwaway source string must be flagged."""
-    fake_src = 'await cdp.send(json.dumps({"id": 1, "method": "Input.dispatchMouseEvent"}))'
-    sent = set(re.findall(r'"method":\s*"([A-Za-z]+\.[A-Za-z]+)"', fake_src))
-    assert sent == {"Input.dispatchMouseEvent"}
-    assert not (sent <= _ALLOWED_CDP_METHODS)
+    fake_src = 'await _send_cdp(cdp, 1, "Input.dispatchMouseEvent")'
+    found = set()
+    for a, b in _METHOD_LITERAL_RE.findall(fake_src):
+        found.add(a or b)
+    assert found == {"Input.dispatchMouseEvent"}
+    assert not (found <= _ALLOWED_CDP_METHODS)
+
+
+@pytest.mark.asyncio
+async def test_send_cdp_runtime_asserts_method_allowlist():
+    """The runtime choke point catches what the static regex structurally
+    cannot: a method name built from a variable, not a literal."""
+    from app.routers.browser_live import _send_cdp
+
+    class _FakeConn:
+        async def send(self, data):
+            pass
+
+    not_a_literal = "Input" + "." + "dispatchMouseEvent"
+    with pytest.raises(AssertionError):
+        await _send_cdp(_FakeConn(), 1, not_a_literal)
