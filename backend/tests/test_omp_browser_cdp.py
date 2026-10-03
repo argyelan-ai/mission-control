@@ -74,6 +74,22 @@ def _render(tmp_path: Path, **extra: str) -> tuple[list[str], str]:
     return [c for c in calls if "browser" in c], result.stdout
 
 
+def test_default_target_is_the_gateway_port_when_unset(tmp_path):
+    """render-omp-config.sh defaults `OMP_BROWSER_CDP_TARGET` to
+    `cdp-browser:9300` (cdp-gateway, bauplan.md PR B1) when the env var is
+    not set at all — every other test here sets it explicitly, so nothing
+    guarded this default. `cdp-browser` does not resolve on the test runner
+    (no docker network), so the script falls into its own "unresolvable"
+    branch — which is exactly what makes the DEFAULT visible: the branch's
+    message echoes back the target string it computed internally. Reverting
+    the default to the pre-gateway `:9223` keeps this test green (same
+    message shape), so the assertion pins the exact default value, not just
+    that *some* fallback message appeared."""
+    calls, out = _render(tmp_path)
+    assert calls == ["omp config reset browser.cdpUrl"]
+    assert "kein gemeinsamer Agenten-Browser erreichbar (cdp-browser:9300)" in out
+
+
 def test_resolvable_target_points_omp_at_the_local_relay(tmp_path):
     # `localhost` loest ueberall auf — steht hier fuer den Compose-Dienstnamen.
     calls, out = _render(tmp_path, OMP_BROWSER_CDP_TARGET="localhost:9223")

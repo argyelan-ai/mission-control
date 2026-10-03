@@ -555,6 +555,37 @@ describe("BrowserLiveView", () => {
       ).toBeInTheDocument();
     });
 
+    it("the WS becoming authoritative clears a stale REST scope-unavailable hint (medium finding, round 5)", async () => {
+      // The REST /targets call happened to land during a brief gateway
+      // outage (scopeUnavailable: true), but the WS then connects with the
+      // gateway back up and says so explicitly. The amber hint must go
+      // away once the WS has spoken — it must never be stuck for the rest
+      // of the session just because the one-off REST snapshot said so.
+      useMapLocalStorage();
+      vi.spyOn(api.browserLive, "targets").mockResolvedValue({ targets: TARGETS, scopeUnavailable: true });
+      renderWithQuery(<BrowserLiveView agentId="agent-alpha" agentName="Alpha" />);
+
+      await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+      const ws = FakeWebSocket.instances[0];
+      ws.onopen?.(new Event("open"));
+
+      expect(
+        await screen.findByText("Showing all tabs: agent attribution unavailable"),
+      ).toBeInTheDocument();
+
+      ws.onmessage?.(
+        new MessageEvent("message", {
+          data: JSON.stringify({ type: "status", code: "scope_unavailable", active: false }),
+        }),
+      );
+
+      await waitFor(() =>
+        expect(
+          screen.queryByText("Showing all tabs: agent attribution unavailable"),
+        ).not.toBeInTheDocument(),
+      );
+    });
+
     it("sabotage: the scope-unavailable hint never shows when the REST call reports scoping as available", async () => {
       useMapLocalStorage();
       vi.spyOn(api.browserLive, "targets").mockResolvedValue(targetsResponse(TARGETS));

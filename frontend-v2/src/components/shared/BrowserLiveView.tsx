@@ -53,6 +53,14 @@ interface LiveSocketState {
   // the toolbar toggle can keep showing it even after a `frame`/`attached`
   // message clears `statusCode`.
   scopeUnavailable: boolean;
+  // True once THIS connection has actually told us its scope state (a
+  // `status`/`targets` message arrived) — distinct from `scopeUnavailable`
+  // itself, which starts at `false` and would otherwise be indistinguishable
+  // from "the WS already confirmed attribution is fine". The component uses
+  // this to stop trusting the REST call's `scopeUnavailable` the moment the
+  // WS has an opinion of its own, rather than only on an explicit change
+  // (medium finding, round 5).
+  scopeKnown: boolean;
   select: (id: string) => void;
   setFollow: (on: boolean) => void;
 }
@@ -76,6 +84,7 @@ function useBrowserLiveSocket(
   const [followedId, setFollowedId] = useState<string | null>(null);
   const [attachedTitle, setAttachedTitle] = useState<string | null>(null);
   const [scopeUnavailable, setScopeUnavailable] = useState(false);
+  const [scopeKnown, setScopeKnown] = useState(false);
 
   // Read inside the connect effect without making `following`/`followedId`
   // reconnect triggers themselves — only `connectKey` does that. This is
@@ -98,6 +107,15 @@ function useBrowserLiveSocket(
     setFrameSrc(null);
     setStatusCode(null);
     setScopeUnavailable(false);
+    setScopeKnown(false);
+    // A toggle (showAllTabs) or reconnect must not keep showing the
+    // PREVIOUS connection's target list under the new scope — without this,
+    // switching from "all tabs" to "only this agent" (or back) displayed the
+    // old, differently-scoped list until the first push from the new
+    // connection arrived (medium finding, round 5).
+    setTargets(null);
+    setActiveId(null);
+    setFollowedId(null);
     setConnState("connecting");
 
     let cancelled = false;
@@ -147,6 +165,7 @@ function useBrowserLiveSocket(
             // not silently clear it (the panel could still be showing
             // every tab, not just this agent's).
             setScopeUnavailable(!!parsed.active);
+            setScopeKnown(true);
           } else {
             setStatusCode(parsed.code ?? null);
           }
@@ -218,6 +237,7 @@ function useBrowserLiveSocket(
     followedId,
     attachedTitle,
     scopeUnavailable,
+    scopeKnown,
     select,
     setFollow,
   };
@@ -332,6 +352,7 @@ export function BrowserLiveView({ agentId, agentName }: BrowserLiveViewProps = {
     followedId,
     attachedTitle,
     scopeUnavailable: wsScopeUnavailable,
+    scopeKnown: wsScopeKnown,
     select,
     setFollow,
   } = useBrowserLiveSocket(connect, connectKey, following, effectiveAgentId);
@@ -351,11 +372,15 @@ export function BrowserLiveView({ agentId, agentName }: BrowserLiveViewProps = {
   const targets = wsTargets ?? initialTargets;
 
   // bauplan.md PR B1: true when the panel is SCOPED (not "show all tabs")
-  // but attribution isn't actually working right now — either the very
-  // first REST load said so, or the live WS later did. The toolbar toggle
-  // and an i18n hint both read this (finding: this case had no signal at
-  // all before).
-  const scopeUnavailable = !!effectiveAgentId && (initialData?.scopeUnavailable || wsScopeUnavailable);
+  // but attribution isn't actually working right now. Once the live WS has
+  // ANY opinion of its own (`wsScopeKnown`), it is authoritative — a REST
+  // `/targets` call that happened to land during a brief gateway outage
+  // must never keep the amber "attribution unavailable" hint up for the
+  // rest of the session after the WS reconnects and finds the gateway back
+  // (medium finding, round 5: the two signals used to be OR'd together
+  // forever, so only `true` could ever "win"). Before the WS has said
+  // anything yet, the REST value is still the best first-paint guess.
+  const scopeUnavailable = !!effectiveAgentId && (wsScopeKnown ? wsScopeUnavailable : !!initialData?.scopeUnavailable);
 
   // Pause the stream when the tab/panel isn't visible, reconnect on return —
   // cheap screencasts are still CPU on the shared cdp-browser for no reason.

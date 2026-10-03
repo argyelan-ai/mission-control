@@ -145,9 +145,51 @@ async def test_gateway_owned_ids_returns_set_from_mc_targets():
 
 @pytest.mark.asyncio
 async def test_gateway_owned_ids_returns_none_when_gateway_unreachable():
+    bl._gateway_last_reachable.pop("alpha", None)
     with patch("httpx.AsyncClient", side_effect=OSError("refused")):
         ids = await bl._gateway_owned_ids("alpha")
     assert ids is None
+
+
+@pytest.mark.asyncio
+async def test_gateway_unreachable_logs_once_not_on_every_poll(caplog):
+    """Low finding: every open scoped panel polls `_gateway_owned_ids` on a
+    roughly 1.5s cadence; during a real outage that is one `logger.info` line
+    per panel per poll, flooding the log for as long as the panel stays
+    open. Must log only on the up→down transition, not on every call while
+    it stays down — and must log again once it comes back."""
+    bl._gateway_last_reachable.pop("flaky-agent", None)
+    with caplog.at_level("INFO", logger="mc.browser_live"):
+        with patch("httpx.AsyncClient", side_effect=OSError("refused")):
+            for _ in range(5):
+                assert await bl._gateway_owned_ids("flaky-agent") is None
+        # 5 calls while down → exactly 1 log line, not 5.
+        down_logs = [r for r in caplog.records if "cdp-gateway unreachable" in r.message]
+        assert len(down_logs) == 1
+
+        class _FakeResp:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return []
+
+        class _FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def get(self, url, params=None):
+                return _FakeResp()
+
+        caplog.clear()
+        with patch("httpx.AsyncClient", lambda **kw: _FakeClient()):
+            ids = await bl._gateway_owned_ids("flaky-agent")
+        assert ids == set()
+        recovered_logs = [r for r in caplog.records if "reachable again" in r.message]
+        assert len(recovered_logs) == 1
 
 
 # ── /targets REST endpoint ───────────────────────────────────────────────
@@ -393,6 +435,115 @@ def test_ws_sends_scope_unavailable_status_when_gateway_is_down(real_run_target_
                     ws, lambda m: m.get("type") == "status" and m.get("code") == "scope_unavailable"
                 )
                 assert msg["active"] is True
+
+
+def test_ws_scoped_panel_picks_up_a_brand_new_tab_without_another_tab_event(real_run_target_watcher):
+    """Medium finding: `targetCreated` reaches the watcher before cdp-gateway
+    has necessarily caught up with its own bookkeeping for that same tab, so
+    the FIRST owned-ids fetch right after the watcher's change-triggered
+    cache invalidation can still legitimately return the OLD set. Without a
+    bounded re-check, nothing looks again until some later, unrelated tab
+    event happens to fire — the scoped panel then drops the agent's new tab
+    the same way A1 fixed for the unscoped one.
+
+    Simulated here: `_gateway_owned_ids` returns the old (pre-create) set on
+    its first call, then the new (post-create) set on every call after —
+    with NO further watcher/tab events following the `targetCreated`, the
+    new tab must still show up in a `targets` push and become `followedId`
+    (follow=1, it is the newest/active tab)."""
+    world = FakeCDPWorld([_page("own-tab")])
+    events = EventBus()
+    app = _make_app(world, events)
+
+    # Call 1 is the panel's pre-create fetch (just "own-tab", correct either
+    # way). Call 2 is the fetch `invalidate()` triggers right when
+    # `targetCreated` arrives — made to STILL return the old set here, on
+    # purpose, so the test actually exercises the race (gateway hasn't
+    # caught up with its own createTarget bookkeeping yet) rather than the
+    # easy case where the very next fetch already has the answer. Only from
+    # call 3 on (which nothing but the bounded re-check timeout can trigger,
+    # since no further tab/watcher event follows the one `targetCreated`)
+    # does the gateway report the new tab.
+    calls = {"n": 0}
+
+    async def _owned_ids(slug):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            return {"own-tab"}
+        return {"own-tab", "new-tab"}
+
+    with patch("websockets.connect", world.connect), \
+         patch.object(bl, "_gateway_owned_ids", new=_owned_ids):
+        with TestClient(app, raise_server_exceptions=True) as client:
+            token = _seed_user_and_token(client, "scoped-new-tab@mc.local")
+            agent_uuid = uuid.uuid4()
+
+            async def _seed():
+                async with AsyncSession(test_engine, expire_on_commit=False) as s:
+                    s.add(Agent(id=agent_uuid, name="Alpha", slug="alpha", agent_runtime="cli-bridge"))
+                    await s.commit()
+
+            client.portal.call(_seed)
+
+            with _ws(client, f"/api/v1/browser-live/ws?token={token}&agent_id={agent_uuid}&follow=1") as ws:
+                _recv_until(ws, lambda m: m.get("type") == "attached")
+                _recv_until(ws, lambda m: m.get("type") == "targets")
+
+                # The agent opens a brand-new tab. cdp-gateway hasn't caught
+                # up with it yet (our first post-invalidate fetch above still
+                # returns the old set) — exactly one `targetCreated` event,
+                # nothing else follows it.
+                world.set_pages([_page("own-tab"), _page("new-tab")])
+                events.push("targetCreated", {"targetInfo": {
+                    "targetId": "new-tab", "type": "page", "title": "new-tab",
+                    "url": "https://example.com",
+                }})
+
+                msg = _recv_until(
+                    ws,
+                    lambda m: m.get("type") == "targets" and "new-tab" in {t["id"] for t in m.get("targets", [])},
+                    timeout=5.0,
+                )
+                ids = {t["id"] for t in msg["targets"]}
+                assert ids == {"own-tab", "new-tab"}
+                assert msg["activeId"] == "new-tab"
+                assert msg["followedId"] == "new-tab"
+
+
+def test_ws_sends_scope_unavailable_false_on_first_check_even_though_value_is_the_default(
+    real_run_target_watcher,
+):
+    """Medium finding: the server used to only send `scope_unavailable` on a
+    CHANGE from its internal initial value (False) — so a connection where
+    attribution is fine from the very first check (the common, happy case)
+    never got any status at all. The frontend side of this finding relies on
+    the client always seeing at least one `scope_unavailable` status once
+    `agent_id` was given, so it can stop trusting a stale REST
+    `scopeUnavailable: true` the moment the WS says otherwise. This is the
+    backend half: the very first loop iteration must send the status
+    regardless of whether the computed value equals the default."""
+    world = FakeCDPWorld([_page("own-tab")])
+    events = EventBus()
+    app = _make_app(world, events)
+
+    with patch("websockets.connect", world.connect), \
+         patch.object(bl, "_gateway_owned_ids", new=AsyncMock(return_value={"own-tab"})):
+        with TestClient(app, raise_server_exceptions=True) as client:
+            token = _seed_user_and_token(client, "scope-first-ok@mc.local")
+            agent_uuid = uuid.uuid4()
+
+            async def _seed():
+                async with AsyncSession(test_engine, expire_on_commit=False) as s:
+                    s.add(Agent(id=agent_uuid, name="Alpha", slug="alpha", agent_runtime="cli-bridge"))
+                    await s.commit()
+
+            client.portal.call(_seed)
+
+            with _ws(client, f"/api/v1/browser-live/ws?token={token}&agent_id={agent_uuid}") as ws:
+                msg = _recv_until(
+                    ws, lambda m: m.get("type") == "status" and m.get("code") == "scope_unavailable"
+                )
+                assert msg["active"] is False
 
 
 def test_ws_does_not_send_scope_unavailable_when_not_scoped(real_run_target_watcher):

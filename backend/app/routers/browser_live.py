@@ -146,21 +146,35 @@ async def _agent_slug(agent_id: str) -> Optional[str]:
     return agent.slug or (agent.name or "").lower().replace(" ", "-") or None
 
 
+_gateway_last_reachable: dict[str, bool] = {}
+
+
 async def _gateway_owned_ids(agent_slug: str) -> Optional[set[str]]:
     """Target ids `cdp-gateway` currently attributes to `agent_slug`, or
     None if the gateway can't be reached (NOT the same as "empty set" —
     an empty set is a real, meaningful "this agent has no tabs open" that
     the UI shows as its own empty state; None means "attribution isn't
     available right now, fall back to showing everything" per bauplan.md's
-    graceful-degradation rule)."""
+    graceful-degradation rule).
+
+    Every open scoped panel calls this roughly once per cache TTL (~1.5s),
+    so during a real gateway outage this fires constantly — logged only on
+    the up→down and down→up transitions (keyed per agent_slug), not on
+    every call, so a dead gateway doesn't flood the log for as long as a
+    panel stays open (low finding)."""
     try:
         async with httpx.AsyncClient(timeout=2.0) as client:
             resp = await client.get(f"{GATEWAY_BASE_URL}/mc/targets", params={"agent": agent_slug})
             resp.raise_for_status()
             rows = resp.json()
     except Exception as e:
-        logger.info("browser_live: cdp-gateway unreachable for agent filter: %s", e)
+        if _gateway_last_reachable.get(agent_slug, True):
+            logger.info("browser_live: cdp-gateway unreachable for agent filter: %s", e)
+            _gateway_last_reachable[agent_slug] = False
         return None
+    if not _gateway_last_reachable.get(agent_slug, True):
+        logger.info("browser_live: cdp-gateway reachable again for agent filter %s", agent_slug)
+    _gateway_last_reachable[agent_slug] = True
     return {row["targetId"] for row in rows if row.get("targetId")}
 
 
@@ -439,6 +453,23 @@ class _OwnedIdsCache:
         self._fetched_at = 0.0
         self._value: Optional[set[str]] = None
 
+    @property
+    def ttl(self) -> float:
+        return self._ttl
+
+    def invalidate(self) -> None:
+        """Force the next `get()` to re-fetch instead of serving a stale
+        value. Called whenever the browser-level watcher reports a target
+        change: Chromium fires `targetCreated` to the watcher (which then
+        wakes the WS loop via `switch_requested`) before cdp-gateway has
+        necessarily caught up with its own `Target.createTarget` bookkeeping
+        for that same tab — so the FIRST re-check right after a watcher
+        event can still legitimately get the gateway's old owned-ids answer.
+        That is why the WS loop ALSO gets a bounded wait (see `ttl` above)
+        so it keeps re-checking after this invalidation, instead of trusting
+        a single post-invalidation fetch that may itself be stale."""
+        self._fetched_at = 0.0
+
     async def get(self) -> Optional[set[str]]:
         if self._now() - self._fetched_at < self._ttl:
             return self._value
@@ -536,6 +567,16 @@ async def browser_live_ws(
         # cross-thread handoff needed (TargetWatcher never runs in a
         # separate thread). attach_and_stream re-reads watcher state itself
         # once woken, so nothing needs to be handed over here.
+        #
+        # Invalidate the owned-ids cache on every watcher change (medium
+        # finding): Chromium's `targetCreated` reaches this watcher before
+        # cdp-gateway has necessarily recorded that same `createTarget` —
+        # without this, a scoped panel could keep serving the pre-create
+        # owned-ids set for up to the full cache TTL and silently drop the
+        # agent's brand-new tab until some unrelated later tab event forced
+        # a re-check.
+        if owned_cache is not None:
+            owned_cache.invalidate()
         switch_requested.set()
 
     watcher.on_change = on_targets_change
@@ -661,8 +702,16 @@ async def browser_live_ws(
 
         # Mutable holder (not a plain bool) so the closure below can flip it
         # without a `nonlocal` declaration fighting the one `_send_status`
-        # already owns on `last_status_code`.
-        last_scope_unavailable = {"value": False}
+        # already owns on `last_status_code`. `sent` starts False so the
+        # FIRST loop iteration always sends a `scope_unavailable` status
+        # (even when the value happens to be False, same as the initial
+        # `value`) — without this, a client that connects while a previous
+        # connection's `initialData.scopeUnavailable: true` (from a REST
+        # call during a brief gateway outage) is still showing never learns
+        # the WS itself considers attribution fine, because "unchanged from
+        # the initial False" never counted as a thing worth sending (medium
+        # finding, round 5).
+        last_scope_unavailable = {"value": False, "sent": False}
 
         try:
             while not stop_event.is_set():
@@ -687,8 +736,11 @@ async def browser_live_ws(
                 # the client whether the "showing only this agent" toggle it
                 # displays is actually true right now.
                 scope_unavailable_now = await _scope_unavailable()
-                if scope_unavailable_now != last_scope_unavailable["value"]:
+                if scope_requested and (
+                    not last_scope_unavailable["sent"] or scope_unavailable_now != last_scope_unavailable["value"]
+                ):
                     last_scope_unavailable["value"] = scope_unavailable_now
+                    last_scope_unavailable["sent"] = True
                     await websocket.send_json({
                         "type": "status", "code": "scope_unavailable",
                         "active": scope_unavailable_now,
@@ -771,10 +823,38 @@ async def browser_live_ws(
 
                 await send_targets_message()
 
+                # Scoped panels get a bounded wait (about the owned-ids cache
+                # TTL) instead of waiting forever for the next unrelated
+                # event: a watcher-triggered invalidate() can still hit the
+                # gateway before IT has caught up with its own createTarget
+                # bookkeeping, so the re-check right after invalidation may
+                # itself still return the old set. Without this timeout
+                # nothing re-checks again until some later, unrelated tab
+                # event happens to fire — the scoped view then drops the
+                # agent's new tab the same way A1 fixed for the unscoped one
+                # (medium finding).
+                wait_kwargs = {"return_when": asyncio.FIRST_COMPLETED}
+                if owned_cache is not None:
+                    wait_kwargs["timeout"] = owned_cache.ttl
                 switch_wait = asyncio.create_task(switch_requested.wait())
-                done, pending = await asyncio.wait(
-                    {frame_task, switch_wait}, return_when=asyncio.FIRST_COMPLETED,
-                )
+                done, pending = await asyncio.wait({frame_task, switch_wait}, **wait_kwargs)
+                if not done:
+                    # Timed out with nothing resolved — treat exactly like a
+                    # switch signal so the loop re-reads `_visible_pages()`
+                    # (and thus the freshly-invalidated/refetched owned ids)
+                    # on its next iteration, without tearing down the live
+                    # screencast. Also re-run the same "jump to active" step
+                    # an explicit switch gets below: a tab the gateway only
+                    # just attributed to this agent on the SECOND re-check
+                    # must still be able to grab follow, not just appear in
+                    # the picker.
+                    if switch_wait in pending:
+                        switch_wait.cancel()
+                    if state["following"]:
+                        active_now = _active_id_of(await _visible_pages())
+                        if active_now:
+                            state["followed_id"] = active_now
+                    continue
 
                 if switch_wait in done:
                     # frame_task is NOT cancelled here — a tab event
