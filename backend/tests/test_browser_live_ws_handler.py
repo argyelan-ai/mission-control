@@ -188,7 +188,23 @@ def _fake_watcher_driver(events: EventBus):
         while not stop_event.is_set():
             get = asyncio.ensure_future(events.get())
             stop = asyncio.ensure_future(stop_event.wait())
-            done, pending = await asyncio.wait({get, stop}, return_when=asyncio.FIRST_COMPLETED)
+            try:
+                done, pending = await asyncio.wait({get, stop}, return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                # `asyncio.wait()` does NOT cancel its member futures when the
+                # coroutine AWAITING it is itself cancelled (only when `wait`
+                # returns normally does the "for t in pending: t.cancel()"
+                # below ever run) — so if this driver task is cancelled while
+                # suspended here (the real-world shape of the handler's
+                # `watcher_task.cancel()`), `get` (awaiting `events._wakeup`,
+                # which nothing will ever set again) was left dangling
+                # forever. A permanently-pending task like that can hang the
+                # whole test process at event-loop/portal teardown — this
+                # `finally` guarantees both futures are always cancelled,
+                # cancellation-safe or not.
+                for t in (get, stop):
+                    if not t.done():
+                        t.cancel()
             for t in pending:
                 t.cancel()
             if stop in done:
@@ -642,3 +658,82 @@ def test_falls_back_to_polling_when_browser_ws_unavailable(real_run_target_watch
                     assert {t["id"] for t in msg["targets"]} == {"a", "b2"}
     finally:
         bl.TargetWatcher = _RealTargetWatcher  # type: ignore[assignment]
+
+
+def test_navigation_in_shown_tab_sends_targets_with_new_url(real_run_target_watcher):
+    """MEDIUM finding (round 4): navigating the tab that is being shown must
+    still trigger a `targets` push carrying the new url/title — the old
+    signature was just (ids, activeId, followedId), so a navigation inside
+    the one tab the agent is working in (the common case) changed none of
+    those and no `targets` message went out at all. That left the URL row
+    under the header and the picker label showing the pre-navigation page
+    for as long as the panel stayed open."""
+    world = FakeCDPWorld([_page("a")])
+    events = EventBus()
+    app = _make_app(world, events)
+
+    with patch("websockets.connect", world.connect):
+        with TestClient(app, raise_server_exceptions=True) as client:
+            token = _seed_user_and_token(client, "nav-same-tab@mc.local")
+            with _ws(client, f"/api/v1/browser-live/ws?token={token}&follow=1") as ws:
+                _recv_until(ws, lambda m: m["type"] == "attached" and m["target"]["id"] == "a")
+
+                world.set_pages([_page("a", url="https://new.example/")])
+                events.push("targetInfoChanged", {"targetInfo": {
+                    "targetId": "a", "type": "page", "title": "a", "url": "https://new.example/",
+                }})
+
+                msg = _recv_until(
+                    ws,
+                    lambda m: m["type"] == "targets"
+                    and any(t["url"] == "https://new.example/" for t in m["targets"]),
+                )
+                assert msg["targets"][0]["url"] == "https://new.example/"
+
+
+def test_handler_closes_cleanly_when_watcher_is_still_running(real_run_target_watcher):
+    """Regression guard (finding, round 4 fix-verification): in production
+    the real watcher loops forever and so is always still running when the
+    handler's `finally` cancels it on a normal panel close/disconnect; this
+    fake mirrors that by never returning on its own until cancelled. The
+    handler must tear down cleanly either way — no hang, no uncaught
+    exception escaping the WebSocket route.
+
+    NOTE: the reviewed fix for this finding (catching `asyncio.CancelledError`
+    around `await watcher_task` so it never escapes the `finally` block, per
+    the original suggestion) was tried and REJECTED: under this exact
+    TestClient/anyio harness it made `await watcher_task` hang forever at
+    `TestClient.__exit__` (confirmed with `py-spy`-equivalent thread dumps —
+    the event loop never got a `loop.stop()` because the portal's teardown
+    kept waiting), for EVERY test in this file, not just this one. Swallowing
+    that CancelledError without re-raising appears to leave anyio's asyncio
+    backend unable to tell the surrounding cancel scope has actually been
+    exited. Catching it is more dangerous than the log noise it was meant to
+    prevent (a hung WebSocket teardown vs. a log line), so the handler still
+    lets it propagate (original, unchanged behavior) and this test instead
+    locks down the thing that actually matters operationally: no hang."""
+    world = FakeCDPWorld([_page("a")])
+    app = FastAPI()
+    app.include_router(bl.router)
+
+    async def _never_ending_browser_ws(watcher, stop_event):
+        # Mirrors the real `_watch_targets_browser_ws`: blocks until the
+        # connection is torn down, which in this handler only ever happens
+        # via task cancellation.
+        await asyncio.Event().wait()
+
+    bl._watch_targets_browser_ws = _never_ending_browser_ws  # type: ignore[assignment]
+    bl._list_page_targets = world.list_page_targets  # type: ignore[assignment]
+
+    with patch("websockets.connect", world.connect):
+        # raise_server_exceptions=True: an uncaught CancelledError escaping
+        # the handler's finally block would surface as a test failure here,
+        # either directly or by `websocket.close()` never having run.
+        with TestClient(app, raise_server_exceptions=True) as client:
+            token = _seed_user_and_token(client, "watcher-cancel@mc.local")
+            with _ws(client, f"/api/v1/browser-live/ws?token={token}&follow=1") as ws:
+                _recv_until(ws, lambda m: m["type"] == "attached")
+            # Exiting `_ws(...)` closes the client side; exiting the
+            # `TestClient` context manager below tears the ASGI app down,
+            # which is where the handler's finally block (and the real
+            # watcher-cancellation path) actually runs.

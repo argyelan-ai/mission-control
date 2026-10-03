@@ -337,6 +337,14 @@ export function BrowserLiveView() {
     );
   }
 
+  // Only "the agent browser isn't reachable at all" means `notRunning`. A
+  // live, open WS that explicitly pushed an empty `targets` list (the
+  // browser IS running, it just has zero open tabs right now) is a
+  // different, far less alarming state — showing `notRunning` there used to
+  // tell the operator the agent browser was down while it was running fine
+  // (finding, round 4).
+  const wsConnectedWithNoTabs = connect && connState === "open" && wsTargets !== null && wsTargets.length === 0;
+
   if ((isError || targets.length === 0) && !hasFrame) {
     return (
       <div className="flex flex-col items-center justify-center h-full min-h-[200px] gap-3 px-6 text-center">
@@ -344,7 +352,9 @@ export function BrowserLiveView() {
         <p className="text-[11px] max-w-xs" style={{ color: C.textMuted }}>
           {isError
             ? `${t("notRunning")} (${(error as Error)?.message ?? "unreachable"})`
-            : t("notRunning")}
+            : wsConnectedWithNoTabs
+              ? t("status.no_page")
+              : t("notRunning")}
         </p>
         <button
           onClick={() => refetch()}
