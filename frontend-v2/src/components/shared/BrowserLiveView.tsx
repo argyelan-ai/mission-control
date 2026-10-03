@@ -13,7 +13,11 @@ import type { BrowserLiveTarget } from "@/lib/types";
 // ── Types ──────────────────────────────────────────────────────────────────
 
 type FrameMessage = { type: "frame"; data: string; metadata?: Record<string, unknown> };
-type StatusMessage = { type: "status"; message: string };
+// The server sends a machine-readable `code`, never a free-text message —
+// the client is bilingual (i18n) and must never render server English
+// verbatim (finding: it used to send a hardcoded English sentence that
+// showed up untranslated in the German UI).
+type StatusMessage = { type: "status"; code?: string; message?: string };
 type AttachedMessage = { type: "attached"; target: BrowserLiveTarget };
 type TargetsMessage = {
   type: "targets";
@@ -35,7 +39,9 @@ function isServerMessage(x: unknown): x is ServerMessage {
 
 interface LiveSocketState {
   frameSrc: string | null;
-  statusMessage: string | null;
+  // A status CODE, never free text — mapped to a translation key by the
+  // caller (component), which is the only place that has `t()`.
+  statusCode: string | null;
   connState: "connecting" | "open" | "closed";
   targets: BrowserLiveTarget[] | null;
   activeId: string | null;
@@ -52,7 +58,7 @@ function useBrowserLiveSocket(
 ): LiveSocketState {
   const wsRef = useRef<WebSocket | null>(null);
   const [frameSrc, setFrameSrc] = useState<string | null>(null);
-  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [statusCode, setStatusCode] = useState<string | null>(null);
   const [connState, setConnState] = useState<"connecting" | "open" | "closed">("connecting");
   // `null` until the first server `targets` push — distinct from "[]", which
   // means the agent browser really has no open tabs right now (finding: a
@@ -82,7 +88,7 @@ function useBrowserLiveSocket(
   useEffect(() => {
     if (!enabled) return;
     setFrameSrc(null);
-    setStatusMessage(null);
+    setStatusCode(null);
     setConnState("connecting");
 
     let cancelled = false;
@@ -98,7 +104,7 @@ function useBrowserLiveSocket(
       },
       () => {
         if (cancelled) return;
-        setStatusMessage((prev) => prev ?? "Connection error");
+        setStatusCode((prev) => prev ?? "connectionError");
         setConnState("closed");
       },
     );
@@ -119,20 +125,35 @@ function useBrowserLiveSocket(
         if (!isServerMessage(parsed)) return;
         if (parsed.type === "frame") {
           setFrameSrc(`data:image/jpeg;base64,${parsed.data}`);
+          // A live frame is proof the stream is healthy — any stale status
+          // (e.g. a "no_page"/"connect_error" from before this reconnect)
+          // must not linger over it (finding: statusMessage was cleared
+          // only on reconnect, never on 'attached'/'frame', so it sat at
+          // the bottom of the viewport for the whole rest of the session).
+          setStatusCode(null);
         } else if (parsed.type === "status") {
-          setStatusMessage(parsed.message);
+          setStatusCode(parsed.code ?? null);
         } else if (parsed.type === "attached") {
           setAttachedTitle(parsed.target?.title || parsed.target?.url || null);
           setFrameSrc(null);
+          setStatusCode(null);
         } else if (parsed.type === "targets") {
-          setTargets(parsed.targets ?? []);
+          const nextTargets = parsed.targets ?? [];
+          setTargets(nextTargets);
           setActiveId(parsed.activeId ?? null);
           setFollowedId(parsed.followedId ?? null);
+          // A genuinely-empty push (every tab closed) must drop the frozen
+          // last frame instead of leaving it on screen forever (finding:
+          // `hasFrame` stayed true after the last tab died since nothing
+          // ever cleared `frameSrc` again).
+          if (nextTargets.length === 0) {
+            setFrameSrc(null);
+          }
         }
       };
 
       ws.onerror = () => {
-        setStatusMessage((prev) => prev ?? "Connection error");
+        setStatusCode((prev) => prev ?? "connectionError");
       };
 
       ws.onclose = () => {
@@ -171,7 +192,7 @@ function useBrowserLiveSocket(
     [send],
   );
 
-  return { frameSrc, statusMessage, connState, targets, activeId, followedId, attachedTitle, select, setFollow };
+  return { frameSrc, statusCode, connState, targets, activeId, followedId, attachedTitle, select, setFollow };
 }
 
 function shortTitle(t: BrowserLiveTarget): string {
@@ -215,7 +236,7 @@ export function BrowserLiveView() {
 
   const {
     frameSrc,
-    statusMessage,
+    statusCode,
     connState,
     targets: wsTargets,
     activeId,
@@ -224,6 +245,15 @@ export function BrowserLiveView() {
     select,
     setFollow,
   } = useBrowserLiveSocket(connect, connectKey, following);
+
+  // Machine status code → translated text, with an unknown/legacy code
+  // falling back to a generic message instead of silently rendering
+  // nothing (or, worse, raw server English — the thing this fixes).
+  const statusMessage = statusCode
+    ? t.has(`status.${statusCode}`)
+      ? t(`status.${statusCode}` as Parameters<typeof t>[0])
+      : t("status.unknown")
+    : null;
 
   // wsTargets is `null` until the first server push, so a push that is
   // legitimately empty (every tab closed) is never masked by the stale
@@ -283,12 +313,15 @@ export function BrowserLiveView() {
   );
 
   const handleToggleFollow = useCallback(() => {
-    setFollowingState((prev) => {
-      const next = !prev;
-      setFollow(next);
-      return next;
-    });
-  }, [setFollow]);
+    // Compute the next state outside the setState updater — a setState
+    // updater must be pure, but this one also sent over the socket as a
+    // side effect; harmless under StrictMode's double-invoke (sends the
+    // same steering message twice) but impure for no reason (cleanup
+    // finding). `following` is read fresh via the functional form below
+    // only for the value actually stored.
+    setFollowingState((prev) => !prev);
+    setFollow(!following);
+  }, [following, setFollow]);
 
   const hasFrame = connect && frameSrc !== null;
   const streamEnded = connect && connState === "closed";
@@ -450,14 +483,19 @@ export function BrowserLiveView() {
 
       <button
         onClick={handleToggleFollow}
-        className="min-h-11 min-w-11 flex items-center justify-center text-[10px] px-2 rounded-md font-medium transition-colors shrink-0"
+        className="min-h-11 min-w-11 flex items-center justify-center gap-1.5 text-[10px] px-2 rounded-md font-medium transition-colors shrink-0"
         style={
           following
-            ? { background: C.accentSubtle, color: C.accent, border: `1px solid ${C.borderAccent}` }
+            ? { background: C.accent, color: C.onAccent, border: `1px solid ${C.accent}` }
             : { border: `1px solid ${C.border}`, color: C.textSecondary }
         }
         aria-pressed={following}
       >
+        {/* A filled dot on top of the solid-fill button (not just the
+            subtler tint the button used before) makes "Follow" on vs. off
+            tell apart at a glance — finding: the two states were almost
+            indistinguishable in the build-A screenshots. */}
+        {following && <span className="w-1.5 h-1.5 rounded-full" style={{ background: C.onAccent }} />}
         {t("follow")}
       </button>
 
@@ -480,7 +518,8 @@ export function BrowserLiveView() {
           <button
             onClick={handleReconnect}
             title={t("reconnect")}
-            className="flex items-center gap-1 text-[10px] px-2 py-1.5 rounded-md transition-colors"
+            aria-label={t("reconnect")}
+            className="min-h-11 min-w-11 flex items-center justify-center gap-1 text-[10px] rounded-md transition-colors"
             style={{ border: `1px solid ${C.border}`, color: C.textSecondary }}
           >
             <RotateCcw size={10} />

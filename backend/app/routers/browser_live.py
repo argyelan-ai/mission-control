@@ -293,14 +293,27 @@ async def _watch_targets_poll(watcher: TargetWatcher, stop_event: asyncio.Event)
             pass
 
 
-async def run_target_watcher(watcher: TargetWatcher, stop_event: asyncio.Event) -> None:
+async def run_target_watcher(
+    watcher: TargetWatcher, stop_event: asyncio.Event, *, ready_event: Optional[asyncio.Event] = None
+) -> None:
     """Seed from /json/list, then prefer the passive WS; fall back to polling
-    on any failure (M11's "ersatzweg"). Runs until stop_event is set."""
+    on any failure (M11's "ersatzweg"). Runs until stop_event is set.
+
+    `ready_event` (if given) is set once the initial seed attempt — success
+    OR failure — has happened, so a caller can wait for "the watcher has an
+    opinion now" instead of racing it: without this, the WS handler's first
+    `targets` message always went out before `_list_page_targets()`'s HTTP
+    round-trip finished, so the client's very first push was always the
+    empty-looking `{targets: []}` (finding: this also double-counted as the
+    "no page open" status appearing on every single panel open)."""
     try:
         watcher.replace_from_list(await _list_page_targets())
         watcher.notify()
     except Exception as e:
         logger.info("browser_live watcher: initial /json/list failed: %s", e)
+    finally:
+        if ready_event is not None:
+            ready_event.set()
 
     while not stop_event.is_set():
         try:
@@ -334,7 +347,11 @@ async def browser_live_ws(
       {"type": "frame", "data": "<base64 jpeg>", "metadata": {...}}
       {"type": "attached", "target": {"id", "title", "url"}}
       {"type": "targets", "targets": [...], "activeId": "...", "followedId": "..."}
-      {"type": "status", "message": "..."}   (info/errors before close)
+      {"type": "status", "code": "no_page"|"connect_error"|"stream_error"}
+        A machine-readable code, never a free-text message — the client is
+        bilingual (i18n) and must never render server English verbatim
+        (finding: it used to send a hardcoded English sentence that showed
+        up untranslated in the German UI).
 
     Client → server messages are steering only, never forwarded to Chromium:
       {"follow": true|false}, {"select": "<target id>"}
@@ -351,6 +368,7 @@ async def browser_live_ws(
     stop_event = asyncio.Event()
     state = {"followed_id": target, "following": bool(follow)}
     switch_requested = asyncio.Event()
+    watcher_ready = asyncio.Event()
 
     def on_targets_change(targets: list[dict], active_id: Optional[str]) -> None:
         # Called synchronously from the watcher task, same event loop — no
@@ -360,18 +378,30 @@ async def browser_live_ws(
         switch_requested.set()
 
     watcher.on_change = on_targets_change
-    watcher_task = asyncio.create_task(run_target_watcher(watcher, stop_event))
+    watcher_task = asyncio.create_task(run_target_watcher(watcher, stop_event, ready_event=watcher_ready))
+
+    # Last `targets` payload actually sent, so a resend only goes out when
+    # something in it changed — the no-pages branch used to re-send the
+    # same empty list (and the same status) every single poll tick.
+    _last_targets_sig: dict = {"sig": None}
 
     async def send_targets_message() -> None:
+        targets_list = [
+            {"id": t["id"], "title": t["title"], "url": t["url"]}
+            for t in watcher.targets()
+        ]
+        active_id = watcher.active_id()
+        followed_id = state["followed_id"]
+        sig = (tuple(t["id"] for t in targets_list), active_id, followed_id)
+        if sig == _last_targets_sig["sig"]:
+            return
+        _last_targets_sig["sig"] = sig
         try:
             await websocket.send_json({
                 "type": "targets",
-                "targets": [
-                    {"id": t["id"], "title": t["title"], "url": t["url"]}
-                    for t in watcher.targets()
-                ],
-                "activeId": watcher.active_id(),
-                "followedId": state["followed_id"],
+                "targets": targets_list,
+                "activeId": active_id,
+                "followedId": followed_id,
             })
         except Exception:
             pass
@@ -422,6 +452,11 @@ async def browser_live_ws(
         cdp = None
         current_id: Optional[str] = None
         frame_task: Optional[asyncio.Task] = None
+        # Gate the "no_page" status so it goes out once per empty stretch,
+        # not every 1s poll tick (finding: it used to repeat forever and the
+        # dead tab's targets entry was never cleared because this branch
+        # returned to the top of the loop before calling send_targets_message()).
+        no_page_status_sent = False
         try:
             while not stop_event.is_set():
                 # Clear BEFORE reading watcher state so a notification that
@@ -440,9 +475,13 @@ async def browser_live_ws(
                         if frame_task:
                             frame_task.cancel()
                         cdp, frame_task, current_id = None, None, None
-                    await websocket.send_json({"type": "status", "message": "No open page in the agent browser yet."})
+                    await send_targets_message()
+                    if not no_page_status_sent:
+                        await websocket.send_json({"type": "status", "code": "no_page"})
+                        no_page_status_sent = True
                     await _wait_switch_or_timeout(1.0)
                     continue
+                no_page_status_sent = False
 
                 wanted = state["followed_id"]
                 if wanted not in live_ids:
@@ -460,7 +499,22 @@ async def browser_live_ws(
                             frame_task.cancel()
                         cdp, frame_task = None, None
 
-                    raw_pages = await _list_page_targets()
+                    try:
+                        raw_pages = await _list_page_targets()
+                    except Exception as e:
+                        # cdp-browser restarting / a brief network hiccup —
+                        # never fatal (finding: this used to escape to the
+                        # outer `except Exception` and close the client
+                        # socket with "Stream ended", needing a manual
+                        # Reconnect for a transient outage that resolves
+                        # itself a second later).
+                        logger.info("browser_live: /json/list lookup failed: %s", e)
+                        if not no_page_status_sent:
+                            await websocket.send_json({"type": "status", "code": "connect_error"})
+                            no_page_status_sent = True
+                        current_id = None
+                        await _wait_switch_or_timeout(1.0)
+                        continue
                     raw = next((p for p in raw_pages if p.get("id") == wanted), None)
                     if raw is None:
                         # Target vanished between the watcher snapshot and
@@ -469,12 +523,11 @@ async def browser_live_ws(
                         current_id = None
                         await _wait_switch_or_timeout(0.3)
                         continue
+                    no_page_status_sent = False
                     ws_url = _rewrite_ws_url(raw["webSocketDebuggerUrl"], _resolve_cdp_netloc())
 
                     try:
                         cdp = await websockets.connect(ws_url, max_size=32 * 1024 * 1024)
-                    except WebSocketDisconnect:
-                        raise
                     except Exception as e:
                         logger.info("browser_live: could not attach to %s: %s", wanted, e)
                         current_id = None
@@ -549,11 +602,17 @@ async def browser_live_ws(
         except Exception as e:
             logger.info("browser_live stream ended: %s", e)
             try:
-                await websocket.send_json({"type": "status", "message": "Stream error — reconnecting may help."})
+                await websocket.send_json({"type": "status", "code": "stream_error"})
             except Exception:
                 pass
             return
         finally:
+            if frame_task is not None:
+                frame_task.cancel()
+                try:
+                    await frame_task
+                except (Exception, asyncio.CancelledError):
+                    pass
             if cdp is not None:
                 await _close_cdp(cdp)
 
@@ -588,6 +647,16 @@ async def browser_live_ws(
 
     cdp_holder: dict = {}
     try:
+        # Wait for the watcher's initial seed before the first `targets`
+        # push — otherwise it always went out as the hollow {targets: []}
+        # before `_list_page_targets()`'s HTTP round-trip had a chance to
+        # finish (finding: this doubled up with the "no open page" status
+        # flashing on every single panel open, even with tabs open the
+        # whole time). Bounded so a dead cdp-browser never hangs the socket.
+        try:
+            await asyncio.wait_for(watcher_ready.wait(), timeout=5.0)
+        except asyncio.TimeoutError:
+            pass
         await send_targets_message()
         drain = asyncio.create_task(drain_client())
         stream = asyncio.create_task(attach_and_stream(cdp_holder))

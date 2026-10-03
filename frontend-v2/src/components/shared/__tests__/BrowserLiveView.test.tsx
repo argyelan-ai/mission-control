@@ -191,7 +191,10 @@ describe("BrowserLiveView", () => {
     expect(followBtn).toHaveAttribute("aria-pressed", "false");
   });
 
-  it("shows a status message sent by the server", async () => {
+  it("shows a status message sent by the server, translated from its code", async () => {
+    // The server sends a machine code, never free text (finding: it used to
+    // send a hardcoded English sentence that showed up untranslated in the
+    // German UI) — the client maps it through i18n.
     vi.spyOn(api.browserLive, "targets").mockResolvedValue(TARGETS);
     renderWithQuery(<BrowserLiveView />);
 
@@ -200,13 +203,101 @@ describe("BrowserLiveView", () => {
     ws.onopen?.(new Event("open"));
     ws.onmessage?.(
       new MessageEvent("message", {
-        data: JSON.stringify({ type: "status", message: "No open page in the agent browser yet." }),
+        data: JSON.stringify({ type: "status", code: "no_page" }),
       }),
     );
 
     expect(
       await screen.findByText("No open page in the agent browser yet."),
     ).toBeInTheDocument();
+  });
+
+  it("clears the status overlay once 'attached' arrives", async () => {
+    // Finding: statusMessage was only cleared on reconnect, never on
+    // 'attached'/the first 'frame' — the "No open page…" overlay used to sit
+    // at the bottom of the viewport for the rest of the live session even
+    // after a real page attached.
+    vi.spyOn(api.browserLive, "targets").mockResolvedValue(TARGETS);
+    renderWithQuery(<BrowserLiveView />);
+
+    await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    const ws = FakeWebSocket.instances[0];
+    ws.onopen?.(new Event("open"));
+    ws.onmessage?.(
+      new MessageEvent("message", { data: JSON.stringify({ type: "status", code: "no_page" }) }),
+    );
+    await screen.findByText("No open page in the agent browser yet.");
+
+    ws.onmessage?.(
+      new MessageEvent("message", {
+        data: JSON.stringify({ type: "attached", target: { id: "target-1", title: "Checkout flow" } }),
+      }),
+    );
+
+    await waitFor(() =>
+      expect(screen.queryByText("No open page in the agent browser yet.")).not.toBeInTheDocument(),
+    );
+  });
+
+  it("clears the status overlay once the first frame arrives", async () => {
+    vi.spyOn(api.browserLive, "targets").mockResolvedValue(TARGETS);
+    renderWithQuery(<BrowserLiveView />);
+
+    await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    const ws = FakeWebSocket.instances[0];
+    ws.onopen?.(new Event("open"));
+    ws.onmessage?.(
+      new MessageEvent("message", { data: JSON.stringify({ type: "status", code: "connect_error" }) }),
+    );
+    await screen.findByText(/Connecting to the agent browser/i);
+
+    ws.onmessage?.(
+      new MessageEvent("message", {
+        data: JSON.stringify({ type: "frame", data: "ZmFrZQ==", metadata: {} }),
+      }),
+    );
+
+    await waitFor(() =>
+      expect(screen.queryByText(/Connecting to the agent browser/i)).not.toBeInTheDocument(),
+    );
+  });
+
+  it("clears the frozen last frame when every tab closes (empty 'targets' push)", async () => {
+    // Finding: the no-pages branch used to `continue` before sending
+    // anything, so the client's `hasFrame` stayed true forever and the
+    // last screencast frame sat frozen on screen after the last tab died.
+    vi.spyOn(api.browserLive, "targets").mockResolvedValue(TARGETS);
+    renderWithQuery(<BrowserLiveView />);
+
+    await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    const ws = FakeWebSocket.instances[0];
+    ws.onopen?.(new Event("open"));
+    ws.onmessage?.(
+      new MessageEvent("message", {
+        data: JSON.stringify({
+          type: "targets",
+          targets: [{ id: "target-1", title: "Checkout flow", url: "https://example.com/checkout" }],
+          activeId: "target-1",
+          followedId: "target-1",
+        }),
+      }),
+    );
+    ws.onmessage?.(
+      new MessageEvent("message", {
+        data: JSON.stringify({ type: "frame", data: "ZmFrZQ==", metadata: {} }),
+      }),
+    );
+    await screen.findByAltText("Live agent browser view");
+
+    ws.onmessage?.(
+      new MessageEvent("message", {
+        data: JSON.stringify({ type: "targets", targets: [], activeId: null, followedId: null }),
+      }),
+    );
+
+    await waitFor(() =>
+      expect(screen.queryByAltText("Live agent browser view")).not.toBeInTheDocument(),
+    );
   });
 
   it("a legitimately-empty 'targets' push clears the picker instead of falling back to the stale first-load list", async () => {
@@ -298,5 +389,12 @@ describe("BrowserLiveView", () => {
     const browserLiveEn = (en as Record<string, unknown>).browserLive as Record<string, string>;
     expect(browserLiveDe).toBeDefined();
     expect(Object.keys(browserLiveDe).sort()).toEqual(Object.keys(browserLiveEn).sort());
+
+    // The nested "status" sub-catalog (machine codes → translated text) must
+    // match too — the top-level key check above doesn't look inside it.
+    const statusDe = browserLiveDe.status as unknown as Record<string, string>;
+    const statusEn = browserLiveEn.status as unknown as Record<string, string>;
+    expect(statusDe).toBeDefined();
+    expect(Object.keys(statusDe).sort()).toEqual(Object.keys(statusEn).sort());
   });
 });

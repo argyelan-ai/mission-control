@@ -3672,6 +3672,13 @@
     "closeFullscreen": "Close fullscreen",
     "pageLabel": "Browser page",
     "liveViewAlt": "Live agent browser view",
-    "newTab": "New tab: {title}"
+    "newTab": "New tab: {title}",
+    "status": {
+      "no_page": "No open page in the agent browser yet.",
+      "connect_error": "Connecting to the agent browser…",
+      "stream_error": "Stream error — reconnecting may help.",
+      "connectionError": "Connection error",
+      "unknown": "Connection issue"
+    }
   }
 }
