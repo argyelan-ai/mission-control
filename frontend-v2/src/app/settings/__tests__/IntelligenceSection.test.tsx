@@ -6,11 +6,37 @@ import { api } from "@/lib/api";
 import type { AiProviderSettingsResponse, IntelligenceConfig } from "@/lib/types";
 
 // Deep-link straight into ?section=intelligence so only that section mounts.
-vi.mock("next/navigation", () => ({
-  useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
-  usePathname: () => "/settings",
-  useSearchParams: () => new URLSearchParams("section=intelligence"),
-}));
+// The section lives in the URL. router.replace updates a small store that
+// useSearchParams subscribes to — like Next's router, a section jump is a URL
+// change the page re-renders from.
+const url = vi.hoisted(() => {
+  let search = "section=intelligence";
+  const listeners = new Set<() => void>();
+  return {
+    get: () => search,
+    set: (next: string) => {
+      search = next;
+      listeners.forEach((l) => l());
+    },
+    subscribe: (l: () => void) => {
+      listeners.add(l);
+      return () => listeners.delete(l);
+    },
+  };
+});
+vi.mock("next/navigation", async () => {
+  const { useSyncExternalStore } = await import("react");
+  return {
+    useRouter: () => ({
+      replace: (href: string) => url.set(href.split("?")[1] ?? ""),
+      push: vi.fn(),
+      back: vi.fn(),
+      refresh: vi.fn(),
+    }),
+    usePathname: () => "/settings",
+    useSearchParams: () => new URLSearchParams(useSyncExternalStore(url.subscribe, url.get, url.get)),
+  };
+});
 
 const mockAppState = vi.hoisted(() => ({
   state: {
@@ -96,6 +122,7 @@ function renderPage() {
 
 describe("IntelligenceSection (Settings)", () => {
   beforeEach(() => {
+    url.set("section=intelligence");
     vi.restoreAllMocks();
     mockAppState.state.currentUser = { id: "u1", email: "a@b.com", name: "Admin", role: "admin" };
 

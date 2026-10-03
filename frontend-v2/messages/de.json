@@ -2063,6 +2063,10 @@
       "label": "Konto und Board",
       "board": "Board",
       "chooseBoard": "Board wählen"
+    },
+    "phoneList": {
+      "label": "Einstellungsbereiche",
+      "back": "Zurück zu Einstellungen"
     }
   },
   "skills": {

@@ -55,11 +55,10 @@ describe("Settings section navigation", () => {
     expect(shellProps.last.fullHeight).toBe(true);
   });
 
-  // On a phone the app bar and the bottom tab bar already take height; pinning
-  // the page header and the section strip too would leave little room. So on
-  // phones the whole page scrolls as one (bare overflow-y-auto), and only from
-  // md up does it switch to "content column scrolls, nav stays put".
-  it("scrolls header, section strip and content as one on phones; pins the nav from md up", () => {
+  // On a phone the app bar and the bottom tab bar already take height, so the
+  // whole page scrolls as one (bare overflow-y-auto); only from md up does it
+  // switch to "content column scrolls, nav stays put".
+  it("scrolls the phone screen as one; pins the nav from md up", () => {
     renderPage();
     const heading = screen.getByRole("heading", { level: 1 });
     let scroller: HTMLElement | null = heading.parentElement;
@@ -70,5 +69,14 @@ describe("Settings section navigation", () => {
     expect(scroller!.className.split(/\s+/)).toContain("md:overflow-hidden");
     expect(scroller!.contains(screen.getByRole("button", { name: "About" }))).toBe(true);
     expect(document.querySelector(".md\\:overflow-y-auto.p-4")).not.toBeNull();
+  });
+
+  // The side nav is the desktop's; the phone gets the section list instead
+  // (SettingsPhoneSections.test.tsx). Without `hidden md:block` the old
+  // wrapping button cloud would come back on the phone.
+  it("shows the side nav from md up only", () => {
+    renderPage();
+    const nav = screen.getByRole("button", { name: "About" }).closest("nav")!;
+    expect(nav.className.split(/\s+/)).toEqual(expect.arrayContaining(["hidden", "md:block"]));
   });
 });
