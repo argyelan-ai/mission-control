@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserLiveView } from "../BrowserLiveView";
 import { api } from "@/lib/api";
 import type { BrowserLiveTarget } from "@/lib/types";
+import de from "../../../../messages/de.json";
 
 // Stream auth: the WS URL carries a single-use ticket (lib/streamTicket.ts).
 vi.mock("@/lib/streamTicket", () => ({
@@ -25,11 +26,15 @@ const TARGETS: BrowserLiveTarget[] = [
 // ── WebSocket stub ───────────────────────────────────────────────────────────
 // A minimal fake that records the last instance so tests can push server
 // messages by calling `instance.onmessage({ data: ... })` directly — no real
-// network involved (view-only client never sends anything).
+// network involved (view-only client never sends anything to Chromium; here
+// we only assert on `sent`, the steering messages the UI sends the server).
 
 class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
+  static OPEN = 1;
   url: string;
+  readyState = 1;
+  sent: string[] = [];
   onopen: ((ev: Event) => void) | null = null;
   onmessage: ((ev: MessageEvent) => void) | null = null;
   onerror: ((ev: Event) => void) | null = null;
@@ -41,7 +46,10 @@ class FakeWebSocket {
     FakeWebSocket.instances.push(this);
   }
 
-  send() {}
+  send(data: string) {
+    this.sent.push(data);
+  }
+
   close() {
     this.closed = true;
     this.onclose?.(new CloseEvent("close", { code: 1000 }));
@@ -93,19 +101,24 @@ describe("BrowserLiveView", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows a frame on the canvas/img after a fake 'frame' WS message", async () => {
+  it("connects WITHOUT a click (PR A1: no more manual Connect button)", async () => {
     vi.spyOn(api.browserLive, "targets").mockResolvedValue(TARGETS);
     renderWithQuery(<BrowserLiveView />);
-
-    await screen.findByText("Checkout flow");
-    await userEvent.click(screen.getByRole("button", { name: "Connect" }));
 
     await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
     const ws = FakeWebSocket.instances[0];
     expect(ws.url).toContain("/api/v1/browser-live/ws");
-    expect(ws.url).toContain("target=target-1");
     expect(ws.url).toContain("ticket=test-ticket");
     expect(ws.url).not.toContain("token=");
+    expect(screen.queryByRole("button", { name: "Connect" })).not.toBeInTheDocument();
+  });
+
+  it("shows a frame on the img after a fake 'frame' WS message", async () => {
+    vi.spyOn(api.browserLive, "targets").mockResolvedValue(TARGETS);
+    renderWithQuery(<BrowserLiveView />);
+
+    await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    const ws = FakeWebSocket.instances[0];
 
     ws.onopen?.(new Event("open"));
     ws.onmessage?.(
@@ -119,12 +132,68 @@ describe("BrowserLiveView", () => {
     expect(screen.getByText("Live")).toBeInTheDocument();
   });
 
-  it("shows a status message sent by the server", async () => {
+  it("follows the active tab: a 'targets' push with a new activeId updates the picker", async () => {
     vi.spyOn(api.browserLive, "targets").mockResolvedValue(TARGETS);
     renderWithQuery(<BrowserLiveView />);
 
-    await screen.findByText("Checkout flow");
-    await userEvent.click(screen.getByRole("button", { name: "Connect" }));
+    await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    const ws = FakeWebSocket.instances[0];
+    ws.onopen?.(new Event("open"));
+
+    ws.onmessage?.(
+      new MessageEvent("message", {
+        data: JSON.stringify({
+          type: "targets",
+          targets: [
+            { id: "target-1", title: "Checkout flow", url: "https://example.com/checkout" },
+            { id: "target-2", title: "New tab", url: "https://example.org" },
+          ],
+          activeId: "target-2",
+          followedId: "target-2",
+        }),
+      }),
+    );
+
+    await waitFor(() => {
+      const select = screen.getByLabelText("Browser page") as HTMLSelectElement;
+      expect(select.value).toBe("target-2");
+    });
+  });
+
+  it("manually selecting a page sends {select} and turns Follow off", async () => {
+    vi.spyOn(api.browserLive, "targets").mockResolvedValue(TARGETS);
+    renderWithQuery(<BrowserLiveView />);
+
+    await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+    const ws = FakeWebSocket.instances[0];
+    ws.onopen?.(new Event("open"));
+    ws.onmessage?.(
+      new MessageEvent("message", {
+        data: JSON.stringify({
+          type: "targets",
+          targets: [
+            { id: "target-1", title: "Checkout flow", url: "https://example.com/checkout" },
+            { id: "target-2", title: "New tab", url: "https://example.org" },
+          ],
+          activeId: "target-1",
+          followedId: "target-1",
+        }),
+      }),
+    );
+
+    const followBtn = await screen.findByRole("button", { name: "Follow" });
+    expect(followBtn).toHaveAttribute("aria-pressed", "true");
+
+    const select = screen.getByLabelText("Browser page") as HTMLSelectElement;
+    await userEvent.selectOptions(select, "target-2");
+
+    expect(ws.sent.some((m) => JSON.parse(m).select === "target-2")).toBe(true);
+    expect(followBtn).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("shows a status message sent by the server", async () => {
+    vi.spyOn(api.browserLive, "targets").mockResolvedValue(TARGETS);
+    renderWithQuery(<BrowserLiveView />);
 
     await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
     const ws = FakeWebSocket.instances[0];
@@ -138,5 +207,16 @@ describe("BrowserLiveView", () => {
     expect(
       await screen.findByText("No open page in the agent browser yet."),
     ).toBeInTheDocument();
+  });
+
+  it("has the German catalog for every string it renders", () => {
+    // Sabotage check for the i18n namespace itself: if a key used by the
+    // component is missing from messages/de.json this throws, since
+    // browserLive.* must exist and have the same keys as English.
+    const en = require("../../../../messages/en.json") as Record<string, unknown>;
+    const browserLiveDe = (de as Record<string, unknown>).browserLive as Record<string, string>;
+    const browserLiveEn = (en as Record<string, unknown>).browserLive as Record<string, string>;
+    expect(browserLiveDe).toBeDefined();
+    expect(Object.keys(browserLiveDe).sort()).toEqual(Object.keys(browserLiveEn).sort());
   });
 });
