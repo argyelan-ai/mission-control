@@ -3672,6 +3672,13 @@
     "closeFullscreen": "Vollbild schliessen",
     "pageLabel": "Browser-Seite",
     "liveViewAlt": "Live-Ansicht des Agenten-Browsers",
-    "newTab": "Neuer Tab: {title}"
+    "newTab": "Neuer Tab: {title}",
+    "status": {
+      "no_page": "Noch keine offene Seite im Agenten-Browser.",
+      "connect_error": "Verbinde mit dem Agenten-Browser…",
+      "stream_error": "Stream-Fehler — neu verbinden kann helfen.",
+      "connectionError": "Verbindungsfehler",
+      "unknown": "Verbindungsproblem"
+    }
   }
 }

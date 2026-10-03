@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 import uuid
 from unittest.mock import patch
 
@@ -98,12 +99,21 @@ class FakeCDPWorld:
     def __init__(self, pages: list[dict]):
         self.pages = pages
         self.conns: dict[str, FakePageConn] = {}
+        # Every connect() call ever made, in order — `conns[id]` only ever
+        # shows the LATEST connection for a target, which let a sabotage
+        # (reconnecting to "a" a second time) hide behind the fact that
+        # `len(conns["a"].sent) == 1` is still true for the NEW connection.
+        # (finding: the background-tab-change test's own guard didn't guard.)
+        self.all_conns: list[FakePageConn] = []
 
     def set_pages(self, pages: list[dict]) -> None:
         self.pages = pages
 
     async def list_page_targets(self) -> list[dict]:
         return list(self.pages)
+
+    def connect_count(self, target_id: str) -> int:
+        return sum(1 for c in self.all_conns if c.target_id == target_id)
 
     def connect(self, url: str, **kwargs) -> FakePageConn:
         # Our fake ws URLs are exactly f"ws://fake/{target_id}". Called
@@ -115,6 +125,7 @@ class FakeCDPWorld:
         conn = FakePageConn(target_id)
         conn._loop = asyncio.get_running_loop()
         self.conns[target_id] = conn
+        self.all_conns.append(conn)
         return conn
 
 
@@ -168,10 +179,12 @@ def _fake_watcher_driver(events: EventBus):
     watcher, so `TargetWatcher`'s real (already unit-tested) logic runs
     unmodified."""
 
-    async def _driver(watcher, stop_event, *, initial_pages):
+    async def _driver(watcher, stop_event, *, initial_pages, ready_event=None):
         events.bind()
         watcher.replace_from_list(initial_pages)
         watcher.notify()
+        if ready_event is not None:
+            ready_event.set()
         while not stop_event.is_set():
             get = asyncio.ensure_future(events.get())
             stop = asyncio.ensure_future(stop_event.wait())
@@ -193,8 +206,8 @@ def _make_app(world: FakeCDPWorld, events: EventBus) -> FastAPI:
 
     driver = _fake_watcher_driver(events)
 
-    async def _run_target_watcher(watcher, stop_event):
-        await driver(watcher, stop_event, initial_pages=world.pages)
+    async def _run_target_watcher(watcher, stop_event, *, ready_event=None):
+        await driver(watcher, stop_event, initial_pages=world.pages, ready_event=ready_event)
 
     # Patched for the app's whole lifetime (module-level, restored by the
     # `with` block the test wraps the TestClient in).
@@ -242,9 +255,54 @@ def _ws(client: TestClient, url: str):
             pass
 
 
-def _recv_until(ws, predicate, max_messages: int = 50):
+_RECV_TIMEOUT = 5.0
+
+
+def _recv_with_timeout(ws, timeout: float):
+    """`ws.receive_json()`, bounded by a wall-clock deadline. `anyio`'s test
+    portal has no timeout parameter of its own, so the blocking call runs on
+    a DAEMON thread we never join — a `ThreadPoolExecutor` used as a context
+    manager calls `shutdown(wait=True)` on exit, which re-introduces the
+    exact hang this is meant to prevent if the receive never returns (a
+    regression that makes the handler stop sending). Raises
+    `TimeoutError` on timeout; the leaked thread dies with the process."""
+    import queue
+    import threading
+
+    q: "queue.Queue" = queue.Queue(maxsize=1)
+
+    def _run():
+        try:
+            q.put(("ok", ws.receive_json()))
+        except Exception as e:  # noqa: BLE001 - relayed to the caller's thread
+            q.put(("err", e))
+
+    threading.Thread(target=_run, daemon=True).start()
+    try:
+        kind, value = q.get(timeout=timeout)
+    except queue.Empty:
+        raise TimeoutError(f"no message within {timeout}s — server likely stopped sending") from None
+    if kind == "err":
+        raise value
+    return value
+
+
+def _recv_until(ws, predicate, max_messages: int = 50, timeout: float = _RECV_TIMEOUT):
+    """Reads messages until `predicate` matches, with a per-call wall-clock
+    deadline (finding: a stuck server used to hang this forever, needing an
+    external alarm/kill in CI rather than a clear red test)."""
+    deadline = time.monotonic() + timeout
     for _ in range(max_messages):
-        msg = ws.receive_json()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise AssertionError(
+                f"no matching message within {timeout}s (predicate never matched — "
+                "server likely stopped sending)"
+            )
+        try:
+            msg = _recv_with_timeout(ws, remaining)
+        except TimeoutError as e:
+            raise AssertionError(str(e)) from None
         if predicate(msg):
             return msg
     raise AssertionError(f"predicate never matched within {max_messages} messages")
@@ -409,7 +467,143 @@ def test_background_tab_change_does_not_reattach_shown_stream(real_run_target_wa
                 msg = _recv_until(ws, lambda m: m["type"] == "targets" and len(m["targets"]) == 3)
                 assert {t["id"] for t in msg["targets"]} == {"a", "b", "c"}
                 assert len(world.conns["a"].sent) == 1  # only the original startScreencast
+                assert world.connect_count("a") == 1  # never reconnected — proven below, not just inferred
                 assert "c" not in world.conns
+
+                # Drain past the targets push and prove the ORIGINAL "a"
+                # connection is still what's streaming: push a frame on it
+                # and confirm no second "attached" for "a" ever arrives.
+                # Sabotage (re-adding `frame_task.cancel()` on the
+                # switch_wait branch) makes this fail: the reconnect to "a"
+                # replaces `world.conns["a"]` with a fresh FakePageConn,
+                # `connect_count("a")` becomes 2, and a second "attached"
+                # for "a" shows up right after the targets push.
+                world.conns["a"].push_frame()
+                frame = _recv_until(ws, lambda m: m["type"] == "frame")
+                assert frame["data"] == "ZmFrZQ=="
+                assert world.connect_count("a") == 1
+
+
+def test_seed_race_first_message_is_never_empty_targets_or_no_page(real_run_target_watcher):
+    """HIGH-ish finding: the first message out of a fresh connection must
+    never be the hollow `{targets: []}` / `status: no_page` pair that shows
+    up every time the watcher's initial `/json/list` seed is still in
+    flight when the client connects. Uses the REAL `run_target_watcher` (not
+    the instant fake driver) with an artificially slow seed, so the race
+    this finding describes is actually exercised."""
+    world = FakeCDPWorld([_page("a")])
+    app = FastAPI()
+    app.include_router(bl.router)
+
+    real_list_page_targets = bl._list_page_targets
+
+    async def _slow_list_page_targets():
+        await asyncio.sleep(0.05)  # probe: realistic seed latency
+        return await world.list_page_targets()
+
+    async def _broken_browser_ws(watcher, stop_event):
+        raise OSError("cdp-browser browser-level socket refused")
+
+    bl._watch_targets_browser_ws = _broken_browser_ws  # type: ignore[assignment]
+    bl._list_page_targets = _slow_list_page_targets  # type: ignore[assignment]
+
+    _RealTargetWatcher = bl.TargetWatcher
+    bl.TargetWatcher = lambda: _RealTargetWatcher(poll_interval=0.05)  # type: ignore[assignment]
+
+    try:
+        with patch("websockets.connect", world.connect):
+            with TestClient(app, raise_server_exceptions=True) as client:
+                token = _seed_user_and_token(client, "seed-race@mc.local")
+                with _ws(client, f"/api/v1/browser-live/ws?token={token}&follow=1") as ws:
+                    seen = []
+                    for _ in range(10):
+                        msg = ws.receive_json()
+                        seen.append(msg)
+                        if msg["type"] == "attached":
+                            break
+                    else:
+                        raise AssertionError(f"never got 'attached' within 10 messages: {seen}")
+                    for msg in seen:
+                        if msg["type"] == "targets":
+                            assert msg["targets"], f"got an empty targets push before 'attached': {seen}"
+                        assert not (
+                            msg["type"] == "status" and msg.get("code") == "no_page"
+                        ), f"got 'no_page' status before 'attached': {seen}"
+    finally:
+        bl.TargetWatcher = _RealTargetWatcher  # type: ignore[assignment]
+        bl._list_page_targets = real_list_page_targets  # type: ignore[assignment]
+
+
+def test_last_tab_closing_sends_empty_targets_once_not_repeated_status(real_run_target_watcher):
+    """MEDIUM finding: when the last tab closes, the client must get a real
+    `targets: []` push (so the picker clears and the frontend drops the
+    frozen last frame) and the `no_page` status exactly once — not spammed
+    every poll tick."""
+    world = FakeCDPWorld([_page("a")])
+    events = EventBus()
+    app = _make_app(world, events)
+
+    with patch("websockets.connect", world.connect):
+        with TestClient(app, raise_server_exceptions=True) as client:
+            token = _seed_user_and_token(client, "last-tab-closes@mc.local")
+            with _ws(client, f"/api/v1/browser-live/ws?token={token}&follow=1") as ws:
+                _recv_until(ws, lambda m: m["type"] == "attached" and m["target"]["id"] == "a")
+
+                world.set_pages([])
+                world.conns["a"].sever()
+                events.push("targetDestroyed", {"targetId": "a"})
+
+                empty_targets = _recv_until(ws, lambda m: m["type"] == "targets" and m["targets"] == [])
+                assert empty_targets["activeId"] is None
+
+                # Collect the next several messages: exactly one `no_page`
+                # status, never a repeat, never another empty targets push.
+                statuses = []
+                targets_pushes = []
+                deadline = time.monotonic() + 1.5
+                while time.monotonic() < deadline:
+                    try:
+                        msg = _recv_with_timeout(ws, max(deadline - time.monotonic(), 0.01))
+                    except TimeoutError:
+                        break
+                    if msg["type"] == "status":
+                        statuses.append(msg)
+                    elif msg["type"] == "targets":
+                        targets_pushes.append(msg)
+                assert len(statuses) == 1 and statuses[0]["code"] == "no_page"
+                assert targets_pushes == []  # no repeat of the already-sent empty push
+
+
+def test_transient_json_list_error_is_not_fatal(real_run_target_watcher):
+    """LOW finding: a `_list_page_targets()` failure from inside
+    `attach_and_stream` (cdp-browser restarting, a brief network hiccup)
+    must retry, never close the client socket with 'Stream ended'."""
+    world = FakeCDPWorld([_page("a")])
+    events = EventBus()
+    app = _make_app(world, events)
+
+    calls = {"n": 0}
+    real_list = world.list_page_targets
+
+    async def _flaky_list_page_targets():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("cdp-browser: connection reset")
+        return await real_list()
+
+    bl._list_page_targets = _flaky_list_page_targets  # type: ignore[assignment]
+
+    with patch("websockets.connect", world.connect):
+        with TestClient(app, raise_server_exceptions=True) as client:
+            token = _seed_user_and_token(client, "flaky-list@mc.local")
+            with _ws(client, f"/api/v1/browser-live/ws?token={token}&follow=1") as ws:
+                # Must recover to 'attached' on its own — no client Reconnect,
+                # and no fatal 'status: stream_error' in between.
+                seen = []
+                msg = _recv_until(ws, lambda m: (seen.append(m), m["type"] == "attached")[-1])
+                assert msg["type"] == "attached"
+                assert not any(m["type"] == "status" and m.get("code") == "stream_error" for m in seen)
+                assert calls["n"] >= 2  # the retry actually happened
 
 
 def test_falls_back_to_polling_when_browser_ws_unavailable(real_run_target_watcher):
