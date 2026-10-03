@@ -37,6 +37,8 @@ import os
 import re
 from pathlib import Path
 
+import yaml
+
 from app import config as app_config
 from app.config import settings
 from app.services.harness_compat import omp_driver_for
@@ -50,6 +52,48 @@ from app.redis_client import get_redis
 from app.scopes import Scope
 
 logger = logging.getLogger("mc.compose_renderer")
+
+
+class ComposeValidationError(RuntimeError):
+    """A rendered/pruned compose file failed validation and was NOT written."""
+
+
+def _compose_services(text: str) -> dict:
+    """Parse compose YAML and return its ``services`` mapping.
+
+    Raises ComposeValidationError when the text is not valid YAML, is not a
+    mapping, has no ``services`` mapping, or a service is not a mapping —
+    every one of those makes ``docker compose`` refuse the file.
+    """
+    try:
+        doc = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise ComposeValidationError(f"not valid YAML: {exc}") from exc
+    if not isinstance(doc, dict):
+        raise ComposeValidationError("top level is not a mapping")
+    services = doc.get("services")
+    if not isinstance(services, dict):
+        raise ComposeValidationError("'services' is missing or not a mapping")
+    for name, body in services.items():
+        if not isinstance(body, dict):
+            raise ComposeValidationError(f"service {name!r} is not a mapping")
+    return services
+
+
+def _refuse_compose_write(target: Path, rendered: str, reason: str) -> None:
+    """Keep the live file and its .bak untouched; park the rejected text in
+    ``<path>.rejected`` for diagnosis, log, and raise."""
+    rejected = target.with_suffix(target.suffix + ".rejected")
+    try:
+        rejected.write_text(rendered, encoding="utf-8")
+        os.chmod(rejected, COMPOSE_FILE_MODE)
+    except OSError:  # diagnosis aid only — never mask the real refusal
+        logger.exception("compose_renderer could not write %s", rejected)
+    logger.error(
+        "compose_renderer refused to write %s: %s (rejected text in %s)",
+        target, reason, rejected,
+    )
+    raise ComposeValidationError(f"refused to write {target}: {reason}")
 
 # Lock hierarchy (hold outermost first to avoid deadlock):
 #   1. mc:agent:{id}:runtime-switch  — per-agent switch lock (agent_runtime_switch.py)
@@ -365,10 +409,12 @@ def _find_block_range(
         if other_top_re.match(line):
             end = j
             break
-        # If we hit something that's not indented at all, stop (shouldn't
-        # happen inside a service body — that's the service-boundary case
-        # already handled by the caller).
-        if line and not line.startswith(" "):
+        # Anything non-blank indented less than a service key (4) is outside
+        # the service body — in practice a section comment at 2-space indent
+        # that introduces the NEXT service (``  # ── Section ──``). Running
+        # past it is how appended mounts once landed below such a comment,
+        # which a later prune then left behind as orphan lines (2026-10-03).
+        if line.strip() and len(line) - len(line.lstrip(" ")) < 4:
             end = j
             break
     # Trim trailing blank/whitespace-only lines so insertions land *inside*
@@ -816,6 +862,23 @@ def _rewrite_compose(
 
             i += 1
 
+        # Trailing blank lines and comments at indent <= 2 belong to what
+        # FOLLOWS (typically the next service's section comment), not to this
+        # service. Split them off so nothing gets appended below them.
+        tail_start = len(body_lines)
+        while tail_start > 0:
+            prev = body_lines[tail_start - 1]
+            stripped_prev = prev.strip()
+            if not stripped_prev:
+                tail_start -= 1
+                continue
+            if stripped_prev.startswith("#") and len(prev) - len(prev.lstrip(" ")) <= 2:
+                tail_start -= 1
+                continue
+            break
+        body_tail = body_lines[tail_start:]
+        body_lines = body_lines[:tail_start]
+
         # Apply image override (if any).
         if target_image is not None:
             if explicit_image_line_idx is not None:
@@ -874,6 +937,7 @@ def _rewrite_compose(
         )
 
         out.extend(body_lines)
+        out.extend(body_tail)
 
     rendered = "\n".join(out)
     if not rendered.endswith("\n"):
@@ -1040,7 +1104,13 @@ async def render_compose_agents(
     static = _read_compose_or_template(path)
 
     result = await session.exec(
-        select(Agent).where(Agent.agent_runtime == "cli-bridge")
+        select(Agent).where(
+            Agent.agent_runtime == "cli-bridge",
+            # Archived agents had their block pruned on archive; rendering
+            # them again would resurrect the container on the next switch or
+            # start-all.sh. restore_agent clears the flag before it renders.
+            Agent.archived_at.is_(None),  # type: ignore[union-attr]
+        )
     )
     agents = list(result.all())
 
@@ -1185,7 +1255,10 @@ async def write_compose_agents(
       1. Acquire global compose-write lock (prevents concurrent renders from
          different agents racing to write the shared file).
       2. Render via render_compose_agents (reads fresh DB state inside lock).
-      3. Backup current file to <path>.bak (overwrite previous backup).
+      3. Validate the render (valid YAML, ``services`` a mapping, no service
+         lost). Invalid → nothing written, .bak kept, text parked in
+         <path>.rejected, ComposeValidationError raised.
+      3b. Backup current file to <path>.bak (overwrite previous backup).
       4. Write rendered content to <path>.tmp.
       5. os.replace(.tmp, target) — atomic on POSIX.
       6. Release lock.
@@ -1233,6 +1306,22 @@ async def write_compose_agents(
                 "bytes": str(len(rendered)),
                 "changed": "false",
             }
+
+        # Never replace the live file with something docker compose rejects.
+        try:
+            new_services = _compose_services(rendered)
+        except ComposeValidationError as exc:
+            _refuse_compose_write(target, rendered, str(exc))
+        try:
+            old_services = _compose_services(previous) if previous.strip() else None
+        except ComposeValidationError:
+            old_services = None  # already broken on disk — a valid render heals it
+        if old_services is not None:
+            lost = set(old_services) - set(new_services)
+            if lost:  # rendering is additive; losing a service is a bug
+                _refuse_compose_write(
+                    target, rendered, f"render dropped services {sorted(lost)}"
+                )
 
         if target.exists():
             bak.write_text(previous, encoding="utf-8")
@@ -1303,8 +1392,9 @@ def prune_compose_agent_block(content: str, slug: str) -> tuple[str, bool]:
     drop a static anchor agent whose DB row is momentarily absent.
 
     A service block starts at a line ``^  mc-agent-<slug>:`` (2-space indent
-    under ``services:``) and runs until the next line at ≤2-space indent
-    (the next service, or a top-level key) or EOF. Pure function: returns
+    under ``services:``) and runs until the next non-comment line at ≤2-space
+    indent (the next service, or a top-level key) or EOF; section comments
+    at ≤2-space indent inside that range are kept. Pure function: returns
     ``(new_content, removed)``.
     """
     lines = content.splitlines(keepends=True)
@@ -1318,20 +1408,33 @@ def prune_compose_agent_block(content: str, slug: str) -> tuple[str, bool]:
     if start is None:
         return content, False
 
+    def _indent(line: str) -> int:
+        return len(line) - len(line.lstrip(" "))
+
+    # The block ends where YAML says it ends: at the first CONTENT line
+    # (not blank, not a comment) indented two or less — the next service or
+    # a top-level key. Comments never end a block: YAML does not see them.
+    # Stopping at a section comment is what left five orphan lines of a
+    # removed block in front of the next service (2026-10-03).
     end = len(lines)
     for idx in range(start + 1, len(lines)):
         line = lines[idx]
-        # Blank / whitespace-only lines belong to the block (trailing spacing).
-        if not line.strip():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
             continue
-        # A line whose first non-space column is ≤ 2 ends the block: either a
-        # sibling service ("  other:") or a top-level key ("services:").
-        indent = len(line) - len(line.lstrip(" "))
-        if indent <= 2:
+        if _indent(line) <= 2:
             end = idx
             break
 
-    del lines[start:end]
+    # Comments at indent <= 2 inside the range are section headers of the
+    # file layout (e.g. the comment introducing the next service that an
+    # older renderer misplaced into this block) — keep them. Everything
+    # else in the range belongs to the removed service.
+    kept = [
+        line for line in lines[start + 1:end]
+        if line.strip().startswith("#") and _indent(line) <= 2
+    ]
+    lines[start:end] = kept
     # If that was the last agent the empty mapping has to come back — a bare
     # ``services:`` would leave the file invalid.
     return _restore_empty_services_map("".join(lines)), True
@@ -1345,6 +1448,11 @@ async def prune_compose_agent(slug: str, compose_path: Path | None = None) -> di
     <path>.tmp + os.replace. A no-op (no matching block, or file absent)
     writes nothing. Callers in the delete path must treat this as best-effort
     — a lock/IO failure must never block the DB delete.
+
+    The result is validated before it is written (valid YAML, ``services``
+    a mapping, exactly the one service gone). On failure nothing is written,
+    the existing .bak stays, the rejected text lands in ``<path>.rejected``
+    and ComposeValidationError is raised.
 
     Returns ``{"removed": "true|false", "path": str, "changed": "true|false"}``.
     """
@@ -1371,6 +1479,25 @@ async def prune_compose_agent(slug: str, compose_path: Path | None = None) -> di
         rendered, removed = prune_compose_agent_block(previous, slug)
         if not removed or rendered == previous:
             return {"removed": "false", "path": str(path), "changed": "false"}
+
+        # Prove the result before it replaces the live file: valid compose,
+        # and exactly the one service gone — nothing else lost or orphaned.
+        try:
+            new_services = _compose_services(rendered)
+        except ComposeValidationError as exc:
+            _refuse_compose_write(path, rendered, str(exc))
+        try:
+            old_services = _compose_services(previous)
+        except ComposeValidationError:
+            old_services = None  # already broken on disk — valid output heals it
+        if old_services is not None:
+            expected = set(old_services) - {f"mc-agent-{slug}"}
+            if set(new_services) != expected:
+                _refuse_compose_write(
+                    path, rendered,
+                    f"prune of mc-agent-{slug} changed other services: "
+                    f"{sorted(set(new_services) ^ expected)}",
+                )
 
         tmp = path.with_suffix(path.suffix + ".tmp")
         bak = path.with_suffix(path.suffix + ".bak")
