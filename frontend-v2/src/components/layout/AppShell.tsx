@@ -110,10 +110,11 @@ export default function AppShell({
     >
       <AmbientBackground />
 
-      {/* Mobile navigation */}
+      {/* Phone: top app bar (wordmark + voice) */}
       {!mobileChromeless && <MobileNav showBar={!mobileHideAppBar} />}
 
-      {/* Phone: the ⊕ sheet of the tab bar (mobile nav V2). md:hidden inside. */}
+      {/* Phone: the ⊕ menu sheet of the tab bar — the one phone menu
+          (variant B „Zwei Ebenen"). md:hidden inside. */}
       <QuickSheet />
 
       {/* Desktop: one column carries board, search, navigation and status

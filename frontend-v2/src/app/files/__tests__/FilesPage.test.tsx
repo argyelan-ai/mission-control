@@ -64,7 +64,10 @@ describe("FilesPage — root selector", () => {
     expect(await screen.findByRole("heading", { name: "Files" })).toBeInTheDocument();
 
     // Both roots appear as selectable tabs, with their indexed_count badges.
-    expect(await screen.findByRole("button", { name: /Deliverables/ })).toBeInTheDocument();
+    // The active root also shows as the first breadcrumb button — whether
+    // both are already there when the query resolves depends on render
+    // timing, so "at least one" is the stable check.
+    expect((await screen.findAllByRole("button", { name: /Deliverables/ })).length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: /Vault/ })).toBeInTheDocument();
     expect(screen.getByText("42")).toBeInTheDocument();
   });

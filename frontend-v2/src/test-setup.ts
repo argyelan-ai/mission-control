@@ -13,6 +13,32 @@ if (typeof Element !== "undefined" && !Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = function scrollIntoView() {};
 }
 
+// Node 25 ships its own global `localStorage`; without `--localstorage-file`
+// it is an object without working methods, and it shadows jsdom's Storage.
+// zustand's persist middleware captures the storage when lib/store.ts is
+// first imported — before any test's beforeEach can stub it — so every
+// store write (e.g. the board picker's setBoards) threw "storage.setItem is
+// not a function". Page tests only passed while an earlier query happened
+// to fail first. A working in-memory Storage here, before any import, fixes
+// the whole class; tests that stub localStorage themselves still win.
+if (typeof globalThis.localStorage?.setItem !== "function") {
+  const mem = new Map<string, string>();
+  Object.defineProperty(globalThis, "localStorage", {
+    value: {
+      get length() {
+        return mem.size;
+      },
+      key: (i: number) => [...mem.keys()][i] ?? null,
+      getItem: (k: string) => (mem.has(k) ? (mem.get(k) as string) : null),
+      setItem: (k: string, v: string) => void mem.set(k, String(v)),
+      removeItem: (k: string) => void mem.delete(k),
+      clear: () => mem.clear(),
+    },
+    configurable: true,
+    writable: true,
+  });
+}
+
 // next-intl global mock: resolves keys against the REAL English catalog, so
 // tests keep asserting the actual English labels ("Tasks", "Settings", …)
 // without every test having to mount a NextIntlClientProvider. A key that is

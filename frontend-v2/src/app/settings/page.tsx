@@ -55,6 +55,7 @@ import { TelegramTab } from "@/components/settings/TelegramTab";
 import { AiProvidersTab } from "@/components/settings/AiProvidersTab";
 import { AppearanceSection } from "@/components/settings/AppearanceSection";
 import { NightShiftTab } from "@/components/settings/NightShiftTab";
+import { PhoneAccountPanel } from "@/components/settings/PhoneAccountPanel";
 import { StatusDot } from "@/components/shared/StatusDot";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { C, STATUS_TEXT, alpha } from "@/lib/colors";
@@ -2283,6 +2284,9 @@ function SettingsContent() {
           />
         </div>
       </motion.div>
+
+      {/* Phone only: account, board and log out (formerly in the menu drawer). */}
+      <PhoneAccountPanel />
 
       <div className="flex-1 flex flex-col md:flex-row md:min-h-0 md:overflow-hidden">
         {/* Left: Section Nav (glass sidebar) */}
