@@ -946,6 +946,25 @@ def compose_preflight_error(compose_main: Path, compose_agents: Path) -> str | N
     return None
 
 
+def agent_is_archived(agent: "Agent | str") -> bool:
+    """True when ``agent`` is an archived ``Agent`` row.
+
+    Generic guard (live incident 02.10.2026, PR #739 fallout): an archived
+    agent's container was stopped by ``agent_lifecycle.archive_agent`` on
+    purpose and must never come back on its own — not via a restart, not via
+    a force-recreate, not via a bare ``docker start``. Every start/restart/
+    recreate entry point below calls this first.
+
+    Raw slug strings (the delete/stop teardown path passes one after the ORM
+    row has already expired) carry no ``archived_at`` to check — they are
+    never used to START anything, so this returns False for them rather than
+    guessing.
+    """
+    if isinstance(agent, str):
+        return False
+    return getattr(agent, "archived_at", None) is not None
+
+
 def restart_docker_agent_container(
     agent: Agent,
     *,
@@ -982,6 +1001,16 @@ def restart_docker_agent_container(
             agent.agent_runtime,
         )
         return {"status": "skipped (host runtime)", "container": "", "mode": "skip"}
+
+    if agent_is_archived(agent):
+        logger.info(
+            "Skipping restart of archived agent %s (archived_at=%s) — an "
+            "archived agent's container was stopped on purpose and must "
+            "never come back on its own",
+            agent.name,
+            agent.archived_at,
+        )
+        return {"status": "skipped (archived)", "container": "", "mode": "skip"}
 
     if respawn_window_only:
         return _respawn_agent_window(agent)
@@ -1199,6 +1228,11 @@ def ensure_agent_container_started(agent: Agent) -> dict[str, str]:
     """
     if getattr(agent, "agent_runtime", None) == "host":
         return {"status": "skipped (host runtime)", "container": "", "mode": "skip"}
+    if agent_is_archived(agent):
+        logger.info(
+            "Skipping autostart-provision of archived agent %s", agent.name
+        )
+        return {"status": "skipped (archived)", "container": "", "mode": "skip"}
 
     container_name = f"mc-agent-{_agent_slug(agent)}"
     if _agent_container_running(container_name):
@@ -1245,7 +1279,17 @@ def stop_docker_agent_container(agent: "Agent | str") -> dict[str, str]:
 
 
 def start_docker_agent_container(agent: "Agent | str") -> dict[str, str]:
-    """Start a previously-stopped agent container (restore path)."""
+    """Start a previously-stopped agent container (restore path).
+
+    Guarded the same way as restart/recreate: an archived ``Agent`` row is
+    never started here. Only applies when ``agent`` is an actual Agent object
+    (see ``agent_is_archived``) — ``restore_agent`` clears ``archived_at``
+    *before* calling this, so a legitimate restore is unaffected.
+    """
+    if agent_is_archived(agent):
+        logger.info("Skipping start of archived agent container (slug derived below)")
+        slug = agent if isinstance(agent, str) else _agent_slug(agent)
+        return {"ok": "false", "container": f"mc-agent-{slug}", "error": "archived"}
     return _agent_container_cmd(agent, ["start"], "start_docker_agent_container")
 
 
