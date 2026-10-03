@@ -7,7 +7,7 @@ using it exactly as before). This gateway listens on port 9300 and answers
 the same shapes Chromium's own debug port does (`/json/version`, `/json/list`,
 `/json/new`) plus a WebSocket proxy to the real browser — but it also figures
 out WHICH AGENT a connection belongs to, so the operator's per-agent panel
-can show "Sparky's tabs" instead of "every tab in the shared browser"
+can show "Alpha's tabs" instead of "every tab in the shared browser"
 (bauplan.md, PR B1).
 
 Scope of THIS module (B1 only): identify the agent behind a connection and
@@ -137,7 +137,7 @@ class _ReverseDnsCache:
             host, _aliases, _addrs = await asyncio.to_thread(self._resolver, ip)
         except OSError:
             return None
-        # "mc-agent-sparky.mission-control_default" -> "sparky" (M13).
+        # "mc-agent-alpha.<net>" -> "alpha" (M13).
         short = host.split(".", 1)[0]
         if not short.startswith("mc-agent-"):
             return None
@@ -193,7 +193,23 @@ class GatewayState:
                 return False
             tid = info["targetId"]
             ctx = info.get("browserContextId")
-            agent = self.target_owner.get(tid) or (self.ctx_owner.get(ctx) if ctx else None)
+            opener = info.get("openerId")
+            # Attribution order: an explicit Target.createTarget response
+            # already recorded against this id, then the browser context's
+            # owner, then — for a `window.open()` from page JS, which never
+            # goes through createTarget — the opener tab's own owner
+            # (a popup belongs to whoever owns the tab that opened it).
+            # Never attribute from "whichever connection happened to see
+            # this event": any connection with Target.setDiscoverTargets on
+            # (every Puppeteer/omp client) receives targetCreated for EVERY
+            # tab in the shared browser, not just its own, so that would
+            # misattribute foreign tabs to whichever agent connection is
+            # currently open (incident: bauplan.md review, 03.10.2026).
+            agent = (
+                self.target_owner.get(tid)
+                or (self.ctx_owner.get(ctx) if ctx else None)
+                or (self.target_owner.get(opener) if opener else None)
+            )
             self.targets[tid] = TargetInfo(
                 id=tid,
                 title=info.get("title", ""),
@@ -267,6 +283,18 @@ class GatewayState:
 
     # ── read side for /mc/targets and per-agent /json/list ─────────────────
 
+    def reset_targets(self) -> None:
+        """Called on every watcher (re)connect: `Target.setDiscoverTargets`
+        re-emits a fresh `targetCreated` for every tab that still exists, but
+        it never emits `targetDestroyed` for one that closed WHILE the
+        watcher was disconnected — without a reset, a tab that closed during
+        an outage lingers in `targets`/`target_owner` forever (review
+        finding: stale entries can linger across a reconnect)."""
+        self.targets.clear()
+        self.target_owner.clear()
+        self.ctx_owner.clear()
+        self.session_target.clear()
+
     def targets_for(self, agent: Optional[str]) -> list[TargetInfo]:
         values = list(self.targets.values())
         if agent is not None:
@@ -309,6 +337,12 @@ class CdpGateway:
         self._upstream_port = upstream_port
         self._dns_cache = _ReverseDnsCache()
         self._next_gateway_id = 2_000_000_000  # reserved range, bauplan.md §3
+        # bauplan.md says /mc/health means "the watcher connection is up", not
+        # just "this process is alive" — a dead watcher silently stops
+        # tracking every tab (no more ownership, no more active/newest),
+        # which is exactly the kind of failure a healthcheck exists to catch
+        # (review finding, 03.10.2026: /mc/health always said 200 even then).
+        self._watcher_connected = False
 
     async def identify(self, path: str, headers, peer_ip: Optional[str]) -> str:
         slug, _method = identify_agent_sync(path=path, headers=headers, peer_ip=peer_ip)
@@ -371,7 +405,9 @@ class CdpGateway:
         Caller (the websockets server's process_request hook) turns this
         into an actual HTTP response."""
         if path in ("/mc/health",):
-            return 200, "text/plain", b"ok"
+            if self._watcher_connected:
+                return 200, "text/plain", b"ok"
+            return 503, "text/plain", b"cdp-gateway: watcher not connected"
         if path.startswith("/mc/targets"):
             agent = None
             if "?" in path:
@@ -428,7 +464,13 @@ class CdpGateway:
                 if not ws_url:
                     raise RuntimeError("no webSocketDebuggerUrl")
                 async with websockets.connect(ws_url, max_size=8 * 1024 * 1024) as ws:
+                    # A tab that closed WHILE we were disconnected never
+                    # sends us its targetDestroyed — start this (re)connect
+                    # from a clean slate so discover's fresh targetCreated
+                    # burst is the only truth, not a merge with stale state.
+                    self.state.reset_targets()
                     await ws.send(json.dumps({"id": 1, "method": "Target.setDiscoverTargets", "params": {"discover": True}}))
+                    self._watcher_connected = True
                     while not stop_event.is_set():
                         raw = await ws.recv()
                         msg = json.loads(raw)
@@ -439,7 +481,10 @@ class CdpGateway:
                             self.state.observe_event(method, msg.get("params", {}))
             except Exception as e:
                 logger.info("cdp_gateway watcher: %s, retrying", e)
+                self._watcher_connected = False
                 await asyncio.sleep(2.0)
+            finally:
+                self._watcher_connected = False
 
     async def proxy_ws(self, client_ws, path: str, headers, peer_ip: Optional[str]) -> None:
         """Bidirectional proxy between one agent's WS connection and the
@@ -480,20 +525,53 @@ class CdpGateway:
                         self.state.observe_response(method, params, msg.get("result", {}) or {}, agent)
                     method = msg.get("method", "")
                     if method.startswith("Target.target"):
+                        # Attribution for the resulting target comes only
+                        # from `GatewayState.apply_target_event` itself (an
+                        # explicit createTarget response, the browser
+                        # context's owner, or the opener tab's owner) — never
+                        # from "this connection happened to observe the
+                        # event", because every discover-enabled connection
+                        # (all of them) observes every tab's targetCreated,
+                        # not just the ones it created.
                         self.state.apply_target_event(method.split(".", 1)[1], msg.get("params", {}))
-                        tid = (msg.get("params", {}).get("targetInfo") or {}).get("targetId") or msg.get("params", {}).get("targetId")
-                        if method == "Target.targetCreated" and agent != _SHARED and tid:
-                            # A target this agent's connection just created
-                            # and did not get via an explicit createTarget
-                            # response (e.g. window.open from page JS) still
-                            # gets attributed, so the panel doesn't lose it.
-                            if self.state.owner_of(tid) is None:
-                                self.state.record_owner(tid, agent)
                     elif method == "Target.attachedToTarget":
                         self.state.observe_event(method, msg.get("params", {}))
                     await client_ws.send(raw)
 
-            await asyncio.gather(from_client(), from_upstream())
+            # Not `asyncio.gather`: that waits for BOTH tasks to finish, so
+            # when the agent disconnects (from_client's `async for` ends),
+            # from_upstream keeps waiting on Chromium's still-open WebSocket
+            # until some later event fails to send to the now-closed
+            # client_ws — a dangling task per disconnected agent, holding a
+            # live browser-level CDP session open (review finding, 03.10.2026:
+            # a handler was still running 3s after the client closed, and
+            # server shutdown hung on it). `wait(..., FIRST_COMPLETED)` ends
+            # the proxy the instant EITHER side closes, and the `finally`
+            # cancels and closes whichever side is still open.
+            t_client = asyncio.ensure_future(from_client())
+            t_upstream = asyncio.ensure_future(from_upstream())
+            try:
+                done, pending = await asyncio.wait(
+                    {t_client, t_upstream}, return_when=asyncio.FIRST_COMPLETED
+                )
+                for task in done:
+                    exc = task.exception()
+                    if exc is not None and not isinstance(exc, websockets.exceptions.ConnectionClosed):
+                        raise exc
+            finally:
+                for task in (t_client, t_upstream):
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(t_client, t_upstream, return_exceptions=True)
+                await _safe_close(client_ws)
+                await _safe_close(upstream)
+
+
+async def _safe_close(ws) -> None:
+    try:
+        await ws.close()
+    except Exception:
+        pass
 
 
 def build_app(gateway: CdpGateway):

@@ -174,7 +174,10 @@ async def list_targets(
     `agent_id` (bauplan.md PR B1): when given and `cdp-gateway` is reachable
     and knows this agent, the list is filtered to that agent's own tabs.
     Omitted, unresolvable, or gateway-down → every tab in the shared
-    browser, exactly as before B1 (never a harder failure than that)."""
+    browser, exactly as before B1 (never a harder failure than that) — but
+    `scopeUnavailable: true` tells the caller the list is NOT actually
+    scoped, so the UI can say so instead of silently looking like a
+    (misleadingly empty-looking "only agent X") filtered view."""
     try:
         pages = await _list_page_targets()
     except Exception as e:
@@ -183,16 +186,23 @@ async def list_targets(
             detail=f"Agent-Browser (cdp-browser) nicht erreichbar: {e}",
         )
     owned_ids: Optional[set[str]] = None
+    scope_unavailable = False
     if agent_id:
         slug = await _agent_slug(agent_id)
         if slug:
             owned_ids = await _gateway_owned_ids(slug)
+            scope_unavailable = owned_ids is None
+        else:
+            scope_unavailable = True
     if owned_ids is not None:
         pages = [p for p in pages if p.get("id") in owned_ids]
-    return [
-        {"id": t.get("id"), "title": t.get("title"), "url": t.get("url")}
-        for t in pages
-    ]
+    return {
+        "targets": [
+            {"id": t.get("id"), "title": t.get("title"), "url": t.get("url")}
+            for t in pages
+        ],
+        "scopeUnavailable": scope_unavailable,
+    }
 
 
 def _validate_ws_token(token: Optional[str]) -> bool:
@@ -470,6 +480,13 @@ async def browser_live_ws(
         bilingual (i18n) and must never render server English verbatim
         (finding: it used to send a hardcoded English sentence that showed
         up untranslated in the German UI).
+      {"type": "status", "code": "scope_unavailable", "active": bool}
+        Only ever sent when `agent_id` was given at all. `active: true` means
+        attribution is down right now (gateway unreachable, or the agent
+        couldn't be resolved) and the panel is silently showing EVERY tab
+        even though the toolbar toggle still names this one agent — the UI
+        must say so. `active: false` means attribution came back (sent once,
+        on the transition back).
 
     Client → server messages are steering only, never forwarded to Chromium:
       {"follow": true|false}, {"select": "<target id>"}
@@ -489,6 +506,14 @@ async def browser_live_ws(
     # per-agent attribution degrading is never allowed to make the panel
     # itself unusable.
     owned_cache: Optional[_OwnedIdsCache] = None
+    # True whenever the CALLER asked for a scoped panel (?agent_id= was
+    # given) — independent of whether that scope actually resolved. Used
+    # below to tell "not scoped at all" (never send the hint) apart from
+    # "scoped, but attribution is unavailable right now" (finding: the
+    # panel used to fall back to showing everything in that case with NO
+    # signal to the operator — the toolbar toggle still said the scoped
+    # agent's name and follow could silently jump to a foreign tab).
+    scope_requested = bool(agent_id)
     if agent_id:
         slug = await _agent_slug(agent_id)
         if slug:
@@ -496,6 +521,9 @@ async def browser_live_ws(
 
     async def _owned_ids() -> Optional[set[str]]:
         return await owned_cache.get() if owned_cache is not None else None
+
+    async def _scope_unavailable() -> bool:
+        return scope_requested and (await _owned_ids()) is None
 
     watcher = TargetWatcher()
     stop_event = asyncio.Event()
@@ -631,6 +659,11 @@ async def browser_live_ws(
             last_status_code = code
             await websocket.send_json({"type": "status", "code": code})
 
+        # Mutable holder (not a plain bool) so the closure below can flip it
+        # without a `nonlocal` declaration fighting the one `_send_status`
+        # already owns on `last_status_code`.
+        last_scope_unavailable = {"value": False}
+
         try:
             while not stop_event.is_set():
                 # Clear BEFORE reading watcher state so a notification that
@@ -647,6 +680,19 @@ async def browser_live_ws(
                 # "follow whatever is active" behaviour.
                 pages = await _visible_pages()
                 live_ids = {p["id"] for p in pages}
+
+                # Separate from `_send_status`'s connection-state codes (it
+                # tracks exactly one "last code", and no_page/connect_error
+                # must still win the visible banner) — this one just tells
+                # the client whether the "showing only this agent" toggle it
+                # displays is actually true right now.
+                scope_unavailable_now = await _scope_unavailable()
+                if scope_unavailable_now != last_scope_unavailable["value"]:
+                    last_scope_unavailable["value"] = scope_unavailable_now
+                    await websocket.send_json({
+                        "type": "status", "code": "scope_unavailable",
+                        "active": scope_unavailable_now,
+                    })
 
                 if not pages:
                     if cdp is not None:

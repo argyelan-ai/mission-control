@@ -3678,7 +3678,9 @@
     "showingAllTabs": "Alle Tabs",
     "showingOnlyThisAgent": "Nur Tabs von {name}",
     "allTabs": "Alle Tabs",
+    "onlyAgent": "Nur {name}",
     "thisAgent": "diesem Agenten",
+    "scopeUnavailableHint": "Zeige alle Tabs: Agenten-Zuordnung nicht verfügbar",
     "status": {
       "no_page": "Noch keine offene Seite im Agenten-Browser.",
       "connect_error": "Verbinde mit dem Agenten-Browser…",

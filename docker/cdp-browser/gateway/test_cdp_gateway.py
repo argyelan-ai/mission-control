@@ -41,8 +41,8 @@ class FakeHeaders(dict):
 # ── slug parsing / validation ──────────────────────────────────────────────
 
 def test_normalize_slug_accepts_lowercase_alnum_dash():
-    assert normalize_slug("sparky") == "sparky"
-    assert normalize_slug("Sparky") == "sparky"
+    assert normalize_slug("alpha") == "alpha"
+    assert normalize_slug("Alpha") == "alpha"
     assert normalize_slug("agent-2") == "agent-2"
 
 
@@ -55,15 +55,15 @@ def test_normalize_slug_rejects_path_traversal_and_junk():
 
 
 def test_slug_from_path_extracts_agent_segment():
-    assert slug_from_path("/a/sparky/json/version") == "sparky"
-    assert slug_from_path("/a/boss") == "boss"
+    assert slug_from_path("/a/alpha/json/version") == "alpha"
+    assert slug_from_path("/a/beta") == "beta"
     assert slug_from_path("/json/version") is None
     assert slug_from_path("/a/../etc/json/version") is None
 
 
 def test_strip_agent_prefix_removes_only_the_recognised_prefix():
-    assert strip_agent_prefix("/a/sparky/json/version") == "/json/version"
-    assert strip_agent_prefix("/a/sparky") == "/"
+    assert strip_agent_prefix("/a/alpha/json/version") == "/json/version"
+    assert strip_agent_prefix("/a/alpha") == "/"
     assert strip_agent_prefix("/json/version") == "/json/version"
     # Sabotage probe target: an invalid slug must NOT be stripped, so a
     # malformed /a/ path falls through to Chromium unchanged (and 404s
@@ -103,10 +103,10 @@ def test_identify_ignores_malformed_header_value():
 async def test_reverse_dns_cache_extracts_slug_from_container_name():
     def fake_resolver(ip):
         assert ip == "172.18.0.9"
-        return ("mc-agent-sparky.mission-control_default", [], ["172.18.0.9"])
+        return ("mc-agent-alpha.<net>", [], ["172.18.0.9"])
 
     cache = _ReverseDnsCache(resolver=fake_resolver)
-    assert await cache.lookup_slug("172.18.0.9") == "sparky"
+    assert await cache.lookup_slug("172.18.0.9") == "alpha"
 
 
 @pytest.mark.asyncio
@@ -133,13 +133,13 @@ async def test_reverse_dns_cache_reuses_cached_result_within_ttl():
 
     def counting_resolver(ip):
         calls["n"] += 1
-        return ("mc-agent-sparky.net", [], [ip])
+        return ("mc-agent-alpha.<net>", [], [ip])
 
     fake_time = {"t": 0.0}
     cache = _ReverseDnsCache(now_fn=lambda: fake_time["t"], resolver=counting_resolver)
-    assert await cache.lookup_slug("172.18.0.9") == "sparky"
+    assert await cache.lookup_slug("172.18.0.9") == "alpha"
     fake_time["t"] += 10  # well within the 60s TTL
-    assert await cache.lookup_slug("172.18.0.9") == "sparky"
+    assert await cache.lookup_slug("172.18.0.9") == "alpha"
     assert calls["n"] == 1, "second lookup within TTL must hit the cache, not resolve again"
 
 
@@ -149,7 +149,7 @@ async def test_reverse_dns_cache_expires_after_ttl():
 
     def counting_resolver(ip):
         calls["n"] += 1
-        return ("mc-agent-sparky.net", [], [ip])
+        return ("mc-agent-alpha.<net>", [], [ip])
 
     fake_time = {"t": 0.0}
     cache = _ReverseDnsCache(now_fn=lambda: fake_time["t"], resolver=counting_resolver)
@@ -163,8 +163,8 @@ async def test_reverse_dns_cache_expires_after_ttl():
 
 def test_create_target_response_sets_owner():
     state = GatewayState(now_fn=lambda: 1.0)
-    state.observe_response("Target.createTarget", {}, {"targetId": "T1"}, agent="sparky")
-    assert state.owner_of("T1") == "sparky"
+    state.observe_response("Target.createTarget", {}, {"targetId": "T1"}, agent="alpha")
+    assert state.owner_of("T1") == "alpha"
 
 
 def test_create_target_response_ignored_for_shared_agent():
@@ -175,12 +175,12 @@ def test_create_target_response_ignored_for_shared_agent():
 
 def test_create_browser_context_then_target_created_inherits_context_owner():
     state = GatewayState(now_fn=lambda: 1.0)
-    state.observe_response("Target.createBrowserContext", {}, {"browserContextId": "ctx1"}, agent="boss")
+    state.observe_response("Target.createBrowserContext", {}, {"browserContextId": "ctx1"}, agent="beta")
     state.apply_target_event("targetCreated", {
         "targetInfo": {"targetId": "T2", "type": "page", "browserContextId": "ctx1", "title": "", "url": ""},
     })
     assert state.owner_of("T2") is None  # target_owner unset...
-    assert state.targets["T2"].agent == "boss"  # ...but attributed via the context
+    assert state.targets["T2"].agent == "beta"  # ...but attributed via the context
 
 
 def test_session_activity_updates_last_active_at_without_a_target_event():
@@ -192,7 +192,7 @@ def test_session_activity_updates_last_active_at_without_a_target_event():
     state.apply_target_event("targetCreated", {
         "targetInfo": {"targetId": "T1", "type": "page", "title": "", "url": "https://example.org"},
     })
-    state.observe_response("Target.attachToTarget", {"targetId": "T1"}, {"sessionId": "S1"}, agent="sparky")
+    state.observe_response("Target.attachToTarget", {"targetId": "T1"}, {"sessionId": "S1"}, agent="alpha")
     state.mark_active_by_session("S1")
     assert state.targets["T1"].last_active_at == 5.0
 
@@ -204,7 +204,7 @@ def test_mark_active_by_session_is_a_noop_for_unknown_session():
 
 def test_target_destroyed_clears_ownership_too():
     state = GatewayState(now_fn=lambda: 1.0)
-    state.observe_response("Target.createTarget", {}, {"targetId": "T1"}, agent="sparky")
+    state.observe_response("Target.createTarget", {}, {"targetId": "T1"}, agent="alpha")
     state.apply_target_event("targetCreated", {"targetInfo": {"targetId": "T1", "type": "page", "title": "", "url": ""}})
     state.apply_target_event("targetDestroyed", {"targetId": "T1"})
     assert "T1" not in state.targets
@@ -213,30 +213,68 @@ def test_target_destroyed_clears_ownership_too():
 
 def test_targets_for_filters_by_agent():
     state = GatewayState(now_fn=lambda: 1.0)
-    state.observe_response("Target.createTarget", {}, {"targetId": "T1"}, agent="sparky")
+    state.observe_response("Target.createTarget", {}, {"targetId": "T1"}, agent="alpha")
     state.apply_target_event("targetCreated", {"targetInfo": {"targetId": "T1", "type": "page", "title": "A", "url": "https://a"}})
-    state.observe_response("Target.createTarget", {}, {"targetId": "T2"}, agent="boss")
+    state.observe_response("Target.createTarget", {}, {"targetId": "T2"}, agent="beta")
     state.apply_target_event("targetCreated", {"targetInfo": {"targetId": "T2", "type": "page", "title": "B", "url": "https://b"}})
 
-    sparky_ids = {t.id for t in state.targets_for("sparky")}
-    boss_ids = {t.id for t in state.targets_for("boss")}
-    assert sparky_ids == {"T1"}
-    assert boss_ids == {"T2"}
+    alpha_ids = {t.id for t in state.targets_for("alpha")}
+    beta_ids = {t.id for t in state.targets_for("beta")}
+    assert alpha_ids == {"T1"}
+    assert beta_ids == {"T2"}
     assert {t.id for t in state.targets_for(None)} == {"T1", "T2"}
 
 
 def test_as_mc_targets_json_shape():
     state = GatewayState(now_fn=lambda: 1.0)
-    state.observe_response("Target.createTarget", {}, {"targetId": "T1"}, agent="sparky")
+    state.observe_response("Target.createTarget", {}, {"targetId": "T1"}, agent="alpha")
     state.apply_target_event("targetCreated", {"targetInfo": {"targetId": "T1", "type": "page", "title": "A", "url": "https://a"}})
-    [row] = state.as_mc_targets_json("sparky")
+    [row] = state.as_mc_targets_json("alpha")
     assert row["targetId"] == "T1"
-    assert row["agent"] == "sparky"
+    assert row["agent"] == "alpha"
     assert row["title"] == "A"
     assert row["url"] == "https://a"
 
 
 # ── sabotage probes: each must flip exactly the test(s) it breaks ─────────
+
+def test_opener_id_inherits_opener_tabs_owner():
+    """A `window.open()` popup never goes through Target.createTarget (no
+    response to attribute from), but CDP's targetCreated carries the new
+    tab's `openerId` — the popup belongs to whoever owns the tab that
+    opened it."""
+    state = GatewayState(now_fn=lambda: 1.0)
+    state.observe_response("Target.createTarget", {}, {"targetId": "T1"}, agent="alpha")
+    state.apply_target_event("targetCreated", {"targetInfo": {"targetId": "T1", "type": "page", "title": "", "url": ""}})
+    state.apply_target_event("targetCreated", {
+        "targetInfo": {"targetId": "T2", "type": "page", "title": "", "url": "", "openerId": "T1"},
+    })
+    assert state.targets["T2"].agent == "alpha"
+
+
+def test_discovering_connection_does_not_attribute_a_foreign_targets_created_event():
+    """Regression guard for the misattribution bug found in review: a
+    connection with `Target.setDiscoverTargets` on (every Puppeteer/omp
+    client) receives targetCreated for EVERY tab in the shared browser, not
+    just the ones it created. `apply_target_event` must never be told "this
+    connection's agent" and use it as a fallback owner — attribution comes
+    only from an explicit createTarget response, a context owner, or the
+    opener tab's owner. Simulates the `proxy_ws.from_upstream` path: the
+    event is fed through `apply_target_event` exactly as the real proxy does
+    (no per-connection agent is passed in anywhere)."""
+    state = GatewayState(now_fn=lambda: 1.0)
+    # alpha's own connection creates and owns T1.
+    state.observe_response("Target.createTarget", {}, {"targetId": "T1"}, agent="alpha")
+    state.apply_target_event("targetCreated", {"targetInfo": {"targetId": "T1", "type": "page", "title": "", "url": ""}})
+    # beta opens a brand-new, unrelated tab (no opener, no shared context) —
+    # alpha's discover-enabled connection sees this targetCreated too, but
+    # must never end up owning it.
+    state.apply_target_event("targetCreated", {
+        "targetInfo": {"targetId": "FOREIGN", "type": "page", "title": "", "url": "https://foreign.example"},
+    })
+    assert state.owner_of("FOREIGN") is None
+    assert state.targets["FOREIGN"].agent is None
+
 
 def test_sabotage_removing_owner_attribution_breaks_filtering():
     """If `record_owner`/context inheritance were commented out,
@@ -248,4 +286,4 @@ def test_sabotage_removing_owner_attribution_breaks_filtering():
     state.apply_target_event("targetCreated", {"targetInfo": {"targetId": "T1", "type": "page", "title": "", "url": ""}})
     # No observe_response call at all -> must stay unattributed.
     assert state.targets["T1"].agent is None
-    assert state.targets_for("sparky") == []
+    assert state.targets_for("alpha") == []

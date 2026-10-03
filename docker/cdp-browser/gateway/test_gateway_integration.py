@@ -119,6 +119,7 @@ class FakeChromium:
             head = await reader.read(2)
             if len(head) < 2:
                 break
+            opcode = head[0] & 0x0F
             length = head[1] & 0x7F
             extra = 0
             if length == 126:
@@ -129,6 +130,10 @@ class FakeChromium:
                 length = struct.unpack("!H", ext)[0]
             payload = await reader.read(length)
             payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+            if opcode == 0x8:  # close frame: ack it and stop, like a real server
+                writer.write(struct.pack("!BB", 0x88, len(payload)) + payload)
+                await writer.drain()
+                break
             msg = json.loads(payload)
             # Echo a canned response for Target.createTarget specifically,
             # so the proxy's response-attribution path has something to see.
@@ -138,6 +143,22 @@ class FakeChromium:
                 reply = {"id": msg.get("id", 0), "result": {}}
             writer.write(_ws_frame(json.dumps(reply).encode()))
             await writer.drain()
+            if msg.get("method") == "Target.setDiscoverTargets":
+                # Real Chromium broadcasts a targetCreated event for EVERY
+                # existing/new tab to a connection with discover turned on —
+                # not just tabs that connection itself creates. Puppeteer/omp
+                # always sends this (bauplan.md M13), which is exactly the
+                # shape that let one agent's connection misattribute another
+                # agent's brand-new, unrelated tab (review finding, 03.10.2026).
+                broadcast = {
+                    "method": "Target.targetCreated",
+                    "params": {"targetInfo": {
+                        "targetId": "FOREIGN", "type": "page",
+                        "title": "", "url": "https://foreign.example",
+                    }},
+                }
+                writer.write(_ws_frame(json.dumps(broadcast).encode()))
+                await writer.drain()
 
         writer.close()
 
@@ -179,7 +200,12 @@ async def test_upstream_json_request_includes_port_in_host_header():
 
 
 @pytest.mark.asyncio
-async def test_mc_health_endpoint():
+async def test_mc_health_endpoint_503_when_watcher_not_connected():
+    """bauplan.md: `/mc/health` means "the watcher connection is up", not
+    merely "this process is alive" — a dead watcher silently stops tracking
+    every tab (review finding: it used to always say 200, hiding exactly the
+    failure mode a healthcheck exists to catch). No `run_watcher` task is
+    started here, so the gateway's watcher connection is never up."""
     chromium = FakeChromium()
     await chromium.start()
     gateway = CdpGateway(upstream_host="127.0.0.1", upstream_port=chromium.port)
@@ -190,9 +216,67 @@ async def test_mc_health_endpoint():
         import httpx
         async with httpx.AsyncClient() as client:
             resp = await client.get(f"http://127.0.0.1:{gw_port}/mc/health")
-            assert resp.status_code == 200
+            assert resp.status_code == 503
 
     await chromium.stop()
+
+
+@pytest.mark.asyncio
+async def test_mc_health_endpoint_200_once_the_watcher_connects():
+    chromium = FakeChromium()
+    await chromium.start()
+    gateway = CdpGateway(upstream_host="127.0.0.1", upstream_port=chromium.port)
+    process_request, ws_handler = build_app(gateway)
+    stop_event = asyncio.Event()
+    watcher_task = asyncio.ensure_future(gateway.run_watcher(stop_event))
+
+    try:
+        async with ws_serve(ws_handler, "127.0.0.1", 0, process_request=process_request) as server:
+            gw_port = server.sockets[0].getsockname()[1]
+            import httpx
+            async with httpx.AsyncClient() as client:
+                for _ in range(50):
+                    resp = await client.get(f"http://127.0.0.1:{gw_port}/mc/health")
+                    if resp.status_code == 200:
+                        break
+                    await asyncio.sleep(0.05)
+                assert resp.status_code == 200
+    finally:
+        stop_event.set()
+        watcher_task.cancel()
+        try:
+            await watcher_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        await chromium.stop()
+
+
+@pytest.mark.asyncio
+async def test_watcher_reconnect_clears_a_tab_that_closed_during_the_outage():
+    """Regression guard: a tab that closes WHILE the watcher is disconnected
+    never sends `targetDestroyed` — the watcher only ever hears about it
+    again via a (re)connect's fresh `targetCreated` burst, which must not
+    just MERGE onto the stale state (review finding: stale entries can
+    linger across a reconnect). Simulated directly against `GatewayState`,
+    which is what `run_watcher` calls on every reconnect — no real sockets
+    needed to prove this."""
+    from cdp_gateway import GatewayState
+
+    state = GatewayState(now_fn=lambda: 1.0)
+    state.apply_target_event("targetCreated", {"targetInfo": {
+        "targetId": "stale-tab", "type": "page", "title": "", "url": "https://stale.example",
+    }})
+    assert "stale-tab" in state.targets
+
+    # The watcher reconnects; "stale-tab" closed in the meantime and is NOT
+    # part of the fresh discover burst.
+    state.reset_targets()
+    state.apply_target_event("targetCreated", {"targetInfo": {
+        "targetId": "still-open", "type": "page", "title": "", "url": "https://open.example",
+    }})
+
+    assert "stale-tab" not in state.targets
+    assert set(state.targets) == {"still-open"}
 
 
 @pytest.mark.asyncio
@@ -207,7 +291,7 @@ async def test_proxy_ws_attributes_created_target_to_identified_agent():
 
     async with ws_serve(ws_handler, "127.0.0.1", 0, process_request=process_request) as server:
         gw_port = server.sockets[0].getsockname()[1]
-        async with websockets.connect(f"ws://127.0.0.1:{gw_port}/a/sparky/devtools/browser/abc") as client:
+        async with websockets.connect(f"ws://127.0.0.1:{gw_port}/a/alpha/devtools/browser/abc") as client:
             await client.send(json.dumps({"id": 1, "method": "Target.createTarget", "params": {"url": "about:blank"}}))
             raw = await asyncio.wait_for(client.recv(), timeout=5)
             reply = json.loads(raw)
@@ -217,7 +301,71 @@ async def test_proxy_ws_attributes_created_target_to_identified_agent():
         # (it runs inside proxy_ws, inside the ws_handler coroutine, which
         # ends when `async with` above closes the connection).
         await asyncio.sleep(0.1)
-        assert gateway.state.owner_of("FAKE-T1") == "sparky"
+        assert gateway.state.owner_of("FAKE-T1") == "alpha"
+
+    await chromium.stop()
+
+
+@pytest.mark.asyncio
+async def test_proxy_ws_handler_finishes_quickly_after_client_disconnects():
+    """Regression guard for a connection leak: `from_upstream` used to keep
+    waiting on Chromium's still-open WebSocket long after the agent
+    disconnected (`asyncio.gather` only returns once BOTH sides finish).
+    Sabotage: swapping `proxy_ws`'s `asyncio.wait(..., FIRST_COMPLETED)` back
+    for `asyncio.gather(from_client(), from_upstream())` must flip this red
+    (the fake Chromium never closes its side on its own, so the handler would
+    hang until the test's own timeout)."""
+    chromium = FakeChromium()
+    await chromium.start()
+    gateway = CdpGateway(upstream_host="127.0.0.1", upstream_port=chromium.port)
+
+    handler_done = asyncio.Event()
+
+    async def _tracked_proxy_ws(client_ws, path, headers, peer_ip):
+        try:
+            await CdpGateway.proxy_ws(gateway, client_ws, path, headers, peer_ip)
+        finally:
+            handler_done.set()
+
+    gateway.proxy_ws = _tracked_proxy_ws  # type: ignore[method-assign]
+    process_request, ws_handler = build_app(gateway)
+
+    async with ws_serve(ws_handler, "127.0.0.1", 0, process_request=process_request) as server:
+        gw_port = server.sockets[0].getsockname()[1]
+        client = await websockets.connect(f"ws://127.0.0.1:{gw_port}/a/alpha/devtools/browser/abc")
+        await client.close()
+
+        start = asyncio.get_event_loop().time()
+        await asyncio.wait_for(handler_done.wait(), timeout=1.5)
+        elapsed = asyncio.get_event_loop().time() - start
+        assert elapsed < 1.0, f"proxy_ws handler took {elapsed:.2f}s to finish after client close"
+
+    await chromium.stop()
+
+
+@pytest.mark.asyncio
+async def test_discovering_agent_connection_does_not_attribute_a_foreign_tab():
+    """Regression guard, exercised through the real `proxy_ws` path (not just
+    the pure `GatewayState` unit test): an agent's connection with discover
+    on receives `Target.targetCreated` for a tab it never created (the shared
+    browser broadcasts every tab to every discovering connection). That must
+    never make `agent` the owner of a target it did not create, has no shared
+    context with, and did not open. Sabotage: restoring the removed
+    `from_upstream` fallback (`if self.state.owner_of(tid) is None:
+    self.state.record_owner(tid, agent)`) must flip this red."""
+    chromium = FakeChromium()
+    await chromium.start()
+    gateway = CdpGateway(upstream_host="127.0.0.1", upstream_port=chromium.port)
+    process_request, ws_handler = build_app(gateway)
+
+    async with ws_serve(ws_handler, "127.0.0.1", 0, process_request=process_request) as server:
+        gw_port = server.sockets[0].getsockname()[1]
+        async with websockets.connect(f"ws://127.0.0.1:{gw_port}/a/alpha/devtools/browser/abc") as client:
+            await client.send(json.dumps({"id": 1, "method": "Target.setDiscoverTargets", "params": {"discover": True}}))
+            await asyncio.wait_for(client.recv(), timeout=5)  # the ack
+            await asyncio.wait_for(client.recv(), timeout=5)  # the broadcast targetCreated
+        await asyncio.sleep(0.1)
+        assert gateway.state.owner_of("FOREIGN") is None
 
     await chromium.stop()
 
@@ -226,7 +374,7 @@ async def test_proxy_ws_attributes_created_target_to_identified_agent():
 async def test_sabotage_wrong_agent_path_does_not_attribute_target():
     """Sabotage probe: if the path-based identification were broken (e.g.
     always returning `_shared`), this test's assertion flips — proving the
-    previous test actually depends on `/a/sparky/...` being read."""
+    previous test actually depends on `/a/alpha/...` being read."""
     chromium = FakeChromium()
     await chromium.start()
     gateway = CdpGateway(upstream_host="127.0.0.1", upstream_port=chromium.port)

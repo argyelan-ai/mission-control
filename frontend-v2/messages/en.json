@@ -3678,7 +3678,9 @@
     "showingAllTabs": "All tabs",
     "showingOnlyThisAgent": "Only {name}'s tabs",
     "allTabs": "All tabs",
+    "onlyAgent": "Only {name}",
     "thisAgent": "this agent",
+    "scopeUnavailableHint": "Showing all tabs: agent attribution unavailable",
     "status": {
       "no_page": "No open page in the agent browser yet.",
       "connect_error": "Connecting to the agent browser…",

@@ -7,7 +7,7 @@ import type {
   Approval,
   Board,
   BoardMemory,
-  BrowserLiveTarget,
+  BrowserLiveTargetsResponse,
   Credential,
   CostOverview,
   IntelligenceConfig,
@@ -2240,7 +2240,7 @@ export const api = {
     // `agentId` (bauplan.md PR B1): scope to that agent's own tabs via
     // cdp-gateway — omitted, unresolvable or gateway-down all fall back to
     // every tab in the shared browser (unchanged pre-B1 behaviour).
-    targets: (agentId?: string): Promise<BrowserLiveTarget[]> =>
+    targets: (agentId?: string): Promise<BrowserLiveTargetsResponse> =>
       request(`/api/v1/browser-live/targets${agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ""}`),
   },
 };

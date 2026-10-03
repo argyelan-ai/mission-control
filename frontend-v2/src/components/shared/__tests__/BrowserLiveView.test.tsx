@@ -4,12 +4,21 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserLiveView } from "../BrowserLiveView";
 import { api } from "@/lib/api";
-import type { BrowserLiveTarget } from "@/lib/types";
+import type { BrowserLiveTarget, BrowserLiveTargetsResponse } from "@/lib/types";
 import de from "../../../../messages/de.json";
 
 // Stream auth: the WS URL carries a single-use ticket (lib/streamTicket.ts).
+// `vi.fn()` (not a bare arrow function) so tests can assert HOW MANY TIMES a
+// stream ticket was minted — each call is a real ticket spent server-side
+// (review finding: a connect effect could fire twice on first mount, which
+// wastes one and would be invisible if we only counted WebSocket objects,
+// since the first connect's own cancellation guard silently drops the stale
+// one before `new WebSocket(...)` is ever called).
+const withStreamTicketMock = vi.fn(
+  async (url: string) => `${url}${url.includes("?") ? "&" : "?"}ticket=test-ticket`,
+);
 vi.mock("@/lib/streamTicket", () => ({
-  withStreamTicket: async (url: string) => `${url}${url.includes("?") ? "&" : "?"}ticket=test-ticket`,
+  withStreamTicket: (url: string) => withStreamTicketMock(url),
 }));
 
 function renderWithQuery(ui: React.ReactElement) {
@@ -22,6 +31,15 @@ function renderWithQuery(ui: React.ReactElement) {
 const TARGETS: BrowserLiveTarget[] = [
   { id: "target-1", title: "Checkout flow", url: "https://example.com/checkout" },
 ];
+
+// GET /api/v1/browser-live/targets now returns {targets, scopeUnavailable}
+// (bauplan.md PR B1 round 2) — this wraps a plain target list the way every
+// existing test in this file expects, with scoping reported as available by
+// default (not under test here; see test_browser_live_agent_scope.py for
+// the backend's own scopeUnavailable coverage).
+function targetsResponse(targets: BrowserLiveTarget[]): BrowserLiveTargetsResponse {
+  return { targets, scopeUnavailable: false };
+}
 
 // ── WebSocket stub ───────────────────────────────────────────────────────────
 // A minimal fake that records the last instance so tests can push server
@@ -59,6 +77,7 @@ class FakeWebSocket {
 describe("BrowserLiveView", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    withStreamTicketMock.mockClear();
     FakeWebSocket.instances = [];
     // @ts-expect-error -- test stub, not a full WebSocket implementation
     global.WebSocket = FakeWebSocket;
@@ -82,7 +101,7 @@ describe("BrowserLiveView", () => {
   });
 
   it("renders empty state when there are no open targets", async () => {
-    vi.spyOn(api.browserLive, "targets").mockResolvedValue([]);
+    vi.spyOn(api.browserLive, "targets").mockResolvedValue(targetsResponse([]));
     renderWithQuery(<BrowserLiveView />);
 
     expect(
@@ -102,7 +121,7 @@ describe("BrowserLiveView", () => {
   });
 
   it("connects WITHOUT a click (PR A1: no more manual Connect button)", async () => {
-    vi.spyOn(api.browserLive, "targets").mockResolvedValue(TARGETS);
+    vi.spyOn(api.browserLive, "targets").mockResolvedValue(targetsResponse(TARGETS));
     renderWithQuery(<BrowserLiveView />);
 
     await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
@@ -114,7 +133,7 @@ describe("BrowserLiveView", () => {
   });
 
   it("shows a frame on the img after a fake 'frame' WS message", async () => {
-    vi.spyOn(api.browserLive, "targets").mockResolvedValue(TARGETS);
+    vi.spyOn(api.browserLive, "targets").mockResolvedValue(targetsResponse(TARGETS));
     renderWithQuery(<BrowserLiveView />);
 
     await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
@@ -133,7 +152,7 @@ describe("BrowserLiveView", () => {
   });
 
   it("follows the active tab: a 'targets' push with a new activeId updates the picker", async () => {
-    vi.spyOn(api.browserLive, "targets").mockResolvedValue(TARGETS);
+    vi.spyOn(api.browserLive, "targets").mockResolvedValue(targetsResponse(TARGETS));
     renderWithQuery(<BrowserLiveView />);
 
     await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
@@ -161,7 +180,7 @@ describe("BrowserLiveView", () => {
   });
 
   it("manually selecting a page sends {select} and turns Follow off", async () => {
-    vi.spyOn(api.browserLive, "targets").mockResolvedValue(TARGETS);
+    vi.spyOn(api.browserLive, "targets").mockResolvedValue(targetsResponse(TARGETS));
     renderWithQuery(<BrowserLiveView />);
 
     await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
@@ -195,7 +214,7 @@ describe("BrowserLiveView", () => {
     // The server sends a machine code, never free text (finding: it used to
     // send a hardcoded English sentence that showed up untranslated in the
     // German UI) — the client maps it through i18n.
-    vi.spyOn(api.browserLive, "targets").mockResolvedValue(TARGETS);
+    vi.spyOn(api.browserLive, "targets").mockResolvedValue(targetsResponse(TARGETS));
     renderWithQuery(<BrowserLiveView />);
 
     await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
@@ -217,7 +236,7 @@ describe("BrowserLiveView", () => {
     // 'attached'/the first 'frame' — the "No open page…" overlay used to sit
     // at the bottom of the viewport for the rest of the live session even
     // after a real page attached.
-    vi.spyOn(api.browserLive, "targets").mockResolvedValue(TARGETS);
+    vi.spyOn(api.browserLive, "targets").mockResolvedValue(targetsResponse(TARGETS));
     renderWithQuery(<BrowserLiveView />);
 
     await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
@@ -240,7 +259,7 @@ describe("BrowserLiveView", () => {
   });
 
   it("clears the status overlay once the first frame arrives", async () => {
-    vi.spyOn(api.browserLive, "targets").mockResolvedValue(TARGETS);
+    vi.spyOn(api.browserLive, "targets").mockResolvedValue(targetsResponse(TARGETS));
     renderWithQuery(<BrowserLiveView />);
 
     await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
@@ -266,7 +285,7 @@ describe("BrowserLiveView", () => {
     // Finding: the no-pages branch used to `continue` before sending
     // anything, so the client's `hasFrame` stayed true forever and the
     // last screencast frame sat frozen on screen after the last tab died.
-    vi.spyOn(api.browserLive, "targets").mockResolvedValue(TARGETS);
+    vi.spyOn(api.browserLive, "targets").mockResolvedValue(targetsResponse(TARGETS));
     renderWithQuery(<BrowserLiveView />);
 
     await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
@@ -301,7 +320,7 @@ describe("BrowserLiveView", () => {
   });
 
   it("a legitimately-empty 'targets' push clears the picker instead of falling back to the stale first-load list", async () => {
-    vi.spyOn(api.browserLive, "targets").mockResolvedValue(TARGETS);
+    vi.spyOn(api.browserLive, "targets").mockResolvedValue(targetsResponse(TARGETS));
     renderWithQuery(<BrowserLiveView />);
 
     await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
@@ -345,7 +364,7 @@ describe("BrowserLiveView", () => {
   });
 
   it("reconnecting (e.g. the manual Reconnect button) carries the current follow state into the new WS URL", async () => {
-    vi.spyOn(api.browserLive, "targets").mockResolvedValue(TARGETS);
+    vi.spyOn(api.browserLive, "targets").mockResolvedValue(targetsResponse(TARGETS));
     renderWithQuery(<BrowserLiveView />);
 
     await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
@@ -423,7 +442,7 @@ describe("BrowserLiveView", () => {
 
     it("passes agentId through to both the REST fetch and the WS URL by default", async () => {
       useMapLocalStorage();
-      const targetsSpy = vi.spyOn(api.browserLive, "targets").mockResolvedValue(TARGETS);
+      const targetsSpy = vi.spyOn(api.browserLive, "targets").mockResolvedValue(targetsResponse(TARGETS));
       renderWithQuery(<BrowserLiveView agentId="agent-alpha" agentName="Alpha" />);
 
       await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
@@ -433,7 +452,7 @@ describe("BrowserLiveView", () => {
 
     it("omits agent_id entirely when no agentId prop is given (unscoped panel, unchanged pre-B1 behaviour)", async () => {
       useMapLocalStorage();
-      const targetsSpy = vi.spyOn(api.browserLive, "targets").mockResolvedValue(TARGETS);
+      const targetsSpy = vi.spyOn(api.browserLive, "targets").mockResolvedValue(targetsResponse(TARGETS));
       renderWithQuery(<BrowserLiveView />);
 
       await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
@@ -443,7 +462,7 @@ describe("BrowserLiveView", () => {
 
     it('shows "<name> has no open tab" with a "show all tabs" way out when scoped and empty', async () => {
       useMapLocalStorage();
-      vi.spyOn(api.browserLive, "targets").mockResolvedValue([]);
+      vi.spyOn(api.browserLive, "targets").mockResolvedValue(targetsResponse([]));
       renderWithQuery(<BrowserLiveView agentId="agent-alpha" agentName="Alpha" />);
 
       await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
@@ -454,7 +473,7 @@ describe("BrowserLiveView", () => {
       expect(await screen.findByText("Alpha has no open tab right now.")).toBeInTheDocument();
       const button = await screen.findByText("Show all tabs");
 
-      const targetsSpy = vi.spyOn(api.browserLive, "targets").mockResolvedValue(TARGETS);
+      const targetsSpy = vi.spyOn(api.browserLive, "targets").mockResolvedValue(targetsResponse(TARGETS));
       await userEvent.click(button);
 
       // Clicking it reconnects WITHOUT the agent scope and persists the
@@ -470,7 +489,7 @@ describe("BrowserLiveView", () => {
       // first test in this block if the initial-state read were removed.
       const store = useMapLocalStorage();
       store.set("mc.browserLive.showAllTabs.agent-alpha", "1");
-      const targetsSpy = vi.spyOn(api.browserLive, "targets").mockResolvedValue(TARGETS);
+      const targetsSpy = vi.spyOn(api.browserLive, "targets").mockResolvedValue(targetsResponse(TARGETS));
       renderWithQuery(<BrowserLiveView agentId="agent-alpha" agentName="Alpha" />);
 
       await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
@@ -480,11 +499,11 @@ describe("BrowserLiveView", () => {
 
     it("the scope toggle button switches back to this agent's own tabs and updates localStorage", async () => {
       const store = useMapLocalStorage();
-      vi.spyOn(api.browserLive, "targets").mockResolvedValue(TARGETS);
+      vi.spyOn(api.browserLive, "targets").mockResolvedValue(targetsResponse(TARGETS));
       renderWithQuery(<BrowserLiveView agentId="agent-alpha" agentName="Alpha" />);
       await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
 
-      const toggle = await screen.findByText("Alpha");
+      const toggle = await screen.findByText("Only Alpha");
       await userEvent.click(toggle);
 
       await waitFor(() => expect(FakeWebSocket.instances.length).toBe(2));
@@ -495,6 +514,65 @@ describe("BrowserLiveView", () => {
       await waitFor(() => expect(FakeWebSocket.instances.length).toBe(3));
       expect(FakeWebSocket.instances[2].url).toContain("agent_id=agent-alpha");
       expect(store.has("mc.browserLive.showAllTabs.agent-alpha")).toBe(false);
+    });
+
+    it("mints exactly ONE stream ticket on first mount with an agentId (no double-connect)", async () => {
+      // Regression guard (review finding): the agentId effect used to bump
+      // `connectKey` on every run including the very first one. The connect
+      // effect's own cancellation guard means that never produced a SECOND
+      // `WebSocket` object (the stale one is dropped before `new
+      // WebSocket(...)` runs) — but it did mean `browserLiveWsUrl()`, and so
+      // `withStreamTicket()`, ran twice, burning a real stream ticket for
+      // nothing on every single panel open. Sabotage: dropping the
+      // `didMountAgentEffect` ref guard must flip this to 2.
+      useMapLocalStorage();
+      vi.spyOn(api.browserLive, "targets").mockResolvedValue(targetsResponse(TARGETS));
+      renderWithQuery(<BrowserLiveView agentId="agent-alpha" agentName="Alpha" />);
+
+      await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThanOrEqual(1));
+      // Give any extra, erroneous connect effect a chance to fire too.
+      await new Promise((r) => setTimeout(r, 50));
+      expect(withStreamTicketMock).toHaveBeenCalledTimes(1);
+      expect(FakeWebSocket.instances.length).toBe(1);
+    });
+
+    it('shows the scope-unavailable hint and switches the toggle state when the gateway is down', async () => {
+      useMapLocalStorage();
+      vi.spyOn(api.browserLive, "targets").mockResolvedValue({ targets: TARGETS, scopeUnavailable: true });
+      renderWithQuery(<BrowserLiveView agentId="agent-alpha" agentName="Alpha" />);
+
+      await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+      const ws = FakeWebSocket.instances[0];
+      ws.onopen?.(new Event("open"));
+      ws.onmessage?.(
+        new MessageEvent("message", {
+          data: JSON.stringify({ type: "frame", data: "ZmFrZQ==", metadata: {} }),
+        }),
+      );
+
+      expect(
+        await screen.findByText("Showing all tabs: agent attribution unavailable"),
+      ).toBeInTheDocument();
+    });
+
+    it("sabotage: the scope-unavailable hint never shows when the REST call reports scoping as available", async () => {
+      useMapLocalStorage();
+      vi.spyOn(api.browserLive, "targets").mockResolvedValue(targetsResponse(TARGETS));
+      renderWithQuery(<BrowserLiveView agentId="agent-alpha" agentName="Alpha" />);
+
+      await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+      const ws = FakeWebSocket.instances[0];
+      ws.onopen?.(new Event("open"));
+      ws.onmessage?.(
+        new MessageEvent("message", {
+          data: JSON.stringify({ type: "frame", data: "ZmFrZQ==", metadata: {} }),
+        }),
+      );
+
+      await screen.findByAltText("Live agent browser view");
+      expect(
+        screen.queryByText("Showing all tabs: agent attribution unavailable"),
+      ).not.toBeInTheDocument();
     });
   });
 });

@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
-import { Maximize2, Minimize2, MonitorOff, RefreshCw, RotateCcw, Loader2, X } from "lucide-react";
+import { Filter, Maximize2, Minimize2, MonitorOff, RefreshCw, RotateCcw, Loader2, X } from "lucide-react";
 import { api, browserLiveWsUrl } from "@/lib/api";
 import { C, alpha } from "@/lib/colors";
 import { StatusDot } from "@/components/shared/StatusDot";
@@ -17,7 +17,7 @@ type FrameMessage = { type: "frame"; data: string; metadata?: Record<string, unk
 // the client is bilingual (i18n) and must never render server English
 // verbatim (finding: it used to send a hardcoded English sentence that
 // showed up untranslated in the German UI).
-type StatusMessage = { type: "status"; code?: string; message?: string };
+type StatusMessage = { type: "status"; code?: string; message?: string; active?: boolean };
 type AttachedMessage = { type: "attached"; target: BrowserLiveTarget };
 type TargetsMessage = {
   type: "targets";
@@ -47,6 +47,12 @@ interface LiveSocketState {
   activeId: string | null;
   followedId: string | null;
   attachedTitle: string | null;
+  // bauplan.md PR B1: true once the server has said attribution is down for
+  // THIS scoped connection (gateway unreachable / agent unresolved) — a
+  // separate, persistent flag, not the transient `statusCode` banner, so
+  // the toolbar toggle can keep showing it even after a `frame`/`attached`
+  // message clears `statusCode`.
+  scopeUnavailable: boolean;
   select: (id: string) => void;
   setFollow: (on: boolean) => void;
 }
@@ -69,6 +75,7 @@ function useBrowserLiveSocket(
   const [activeId, setActiveId] = useState<string | null>(null);
   const [followedId, setFollowedId] = useState<string | null>(null);
   const [attachedTitle, setAttachedTitle] = useState<string | null>(null);
+  const [scopeUnavailable, setScopeUnavailable] = useState(false);
 
   // Read inside the connect effect without making `following`/`followedId`
   // reconnect triggers themselves — only `connectKey` does that. This is
@@ -90,6 +97,7 @@ function useBrowserLiveSocket(
     if (!enabled) return;
     setFrameSrc(null);
     setStatusCode(null);
+    setScopeUnavailable(false);
     setConnState("connecting");
 
     let cancelled = false;
@@ -133,7 +141,15 @@ function useBrowserLiveSocket(
           // the bottom of the viewport for the whole rest of the session).
           setStatusCode(null);
         } else if (parsed.type === "status") {
-          setStatusCode(parsed.code ?? null);
+          if (parsed.code === "scope_unavailable") {
+            // Persistent attribution flag, kept separate from the
+            // transient connection-state banner below — a live frame must
+            // not silently clear it (the panel could still be showing
+            // every tab, not just this agent's).
+            setScopeUnavailable(!!parsed.active);
+          } else {
+            setStatusCode(parsed.code ?? null);
+          }
         } else if (parsed.type === "attached") {
           setAttachedTitle(parsed.target?.title || parsed.target?.url || null);
           setFrameSrc(null);
@@ -193,7 +209,18 @@ function useBrowserLiveSocket(
     [send],
   );
 
-  return { frameSrc, statusCode, connState, targets, activeId, followedId, attachedTitle, select, setFollow };
+  return {
+    frameSrc,
+    statusCode,
+    connState,
+    targets,
+    activeId,
+    followedId,
+    attachedTitle,
+    scopeUnavailable,
+    select,
+    setFollow,
+  };
 }
 
 function shortTitle(t: BrowserLiveTarget): string {
@@ -249,13 +276,22 @@ export function BrowserLiveView({ agentId, agentName }: BrowserLiveViewProps = {
   const [justSwitchedTitle, setJustSwitchedTitle] = useState<string | null>(null);
   const switchHintTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showAllTabs, setShowAllTabsState] = useState(() => (agentId ? readShowAllTabs(agentId) : true));
+  // Skips the very first run of the effect below — on mount there is no
+  // "previous" connection to re-scope away from, so bumping `connectKey`
+  // there just opens a second WS connection (and a second stream ticket)
+  // immediately after the first, for no reason (finding: every panel open
+  // made two connects).
+  const didMountAgentEffect = useRef(false);
 
   // A different agentId (switched chats) re-reads this device's choice for
   // THAT agent instead of carrying over whatever the previous agent's panel
   // was showing.
   useEffect(() => {
     setShowAllTabsState(agentId ? readShowAllTabs(agentId) : true);
-    setConnectKey((k) => k + 1); // switched chats: re-scope the live WS to the new agent
+    if (didMountAgentEffect.current) {
+      setConnectKey((k) => k + 1); // switched chats: re-scope the live WS to the new agent
+    }
+    didMountAgentEffect.current = true;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally only on agentId, see useBrowserLiveSocket's connect effect for the same pattern
   }, [agentId]);
 
@@ -274,7 +310,7 @@ export function BrowserLiveView({ agentId, agentName }: BrowserLiveViewProps = {
   // the live `targets` push once connected (that was the old bug: the panel
   // only ever refreshed on a manual tap).
   const {
-    data: initialTargets = [],
+    data: initialData,
     isLoading,
     isError,
     error,
@@ -285,6 +321,7 @@ export function BrowserLiveView({ agentId, agentName }: BrowserLiveViewProps = {
     queryFn: () => api.browserLive.targets(effectiveAgentId),
     refetchInterval: connect ? false : 5_000,
   });
+  const initialTargets = initialData?.targets ?? [];
 
   const {
     frameSrc,
@@ -294,6 +331,7 @@ export function BrowserLiveView({ agentId, agentName }: BrowserLiveViewProps = {
     activeId,
     followedId,
     attachedTitle,
+    scopeUnavailable: wsScopeUnavailable,
     select,
     setFollow,
   } = useBrowserLiveSocket(connect, connectKey, following, effectiveAgentId);
@@ -311,6 +349,13 @@ export function BrowserLiveView({ agentId, agentName }: BrowserLiveViewProps = {
   // legitimately empty (every tab closed) is never masked by the stale
   // first-load `initialTargets` list — see useBrowserLiveSocket's comment.
   const targets = wsTargets ?? initialTargets;
+
+  // bauplan.md PR B1: true when the panel is SCOPED (not "show all tabs")
+  // but attribution isn't actually working right now — either the very
+  // first REST load said so, or the live WS later did. The toolbar toggle
+  // and an i18n hint both read this (finding: this case had no signal at
+  // all before).
+  const scopeUnavailable = !!effectiveAgentId && (initialData?.scopeUnavailable || wsScopeUnavailable);
 
   // Pause the stream when the tab/panel isn't visible, reconnect on return —
   // cheap screencasts are still CPU on the shared cdp-browser for no reason.
@@ -417,7 +462,7 @@ export function BrowserLiveView({ agentId, agentName }: BrowserLiveViewProps = {
         {scopedEmpty ? (
           <button
             onClick={() => setShowAllTabs(true)}
-            className="flex items-center gap-1.5 text-[10px] px-2.5 py-1.5 rounded-md transition-colors"
+            className="min-h-11 flex items-center gap-1.5 text-[10px] px-3 rounded-md transition-colors"
             style={{ background: C.accentSubtle, color: C.accent, border: `1px solid ${C.borderAccent}` }}
           >
             {t("showAllTabs")}
@@ -426,7 +471,7 @@ export function BrowserLiveView({ agentId, agentName }: BrowserLiveViewProps = {
           <button
             onClick={() => refetch()}
             disabled={isFetching}
-            className="flex items-center gap-1.5 text-[10px] px-2.5 py-1.5 rounded-md transition-colors disabled:opacity-40"
+            className="min-h-11 flex items-center gap-1.5 text-[10px] px-3 rounded-md transition-colors disabled:opacity-40"
             style={{
               background: "transparent",
               border: `1px solid ${C.border}`,
@@ -491,12 +536,24 @@ export function BrowserLiveView({ agentId, agentName }: BrowserLiveViewProps = {
         </div>
       )}
 
-      {connect && statusMessage && !streamEnded && (
+      {/* One bottom banner slot, not two: the transient connection-status
+          message and the persistent "attribution unavailable" hint
+          (bauplan.md PR B1 / review finding — the panel used to fall back to
+          showing EVERY tab here with NO signal at all, while the toolbar
+          toggle still claimed to be scoped) share it rather than stacking
+          two near-identical `absolute bottom-2` bars. Scope-unavailable
+          wins when both are true — it says more (and stays up alongside a
+          live frame, unlike the transient one). */}
+      {connect && !streamEnded && (scopeUnavailable || statusMessage) && (
         <div
           className="absolute bottom-2 left-2 right-2 text-[10px] px-2.5 py-1.5 rounded-md"
-          style={{ background: alpha(C.scrim, 0.6), color: C.textSecondary, border: `1px solid ${C.border}` }}
+          style={
+            scopeUnavailable
+              ? { background: alpha(C.warning, 0.15), color: C.warning, border: `1px solid ${C.warning}` }
+              : { background: alpha(C.scrim, 0.6), color: C.textSecondary, border: `1px solid ${C.border}` }
+          }
         >
-          {statusMessage}
+          {scopeUnavailable ? t("scopeUnavailableHint") : statusMessage}
         </div>
       )}
 
@@ -579,16 +636,31 @@ export function BrowserLiveView({ agentId, agentName }: BrowserLiveViewProps = {
 
       {/* bauplan.md PR B1: only an agent-scoped panel gets this toggle — a
           panel opened with no agentId (e.g. a future "all agents" view)
-          always shows everything and has nothing to switch between. */}
+          always shows everything and has nothing to switch between.
+          A filter icon + "Only <name>" / "All tabs" reads as a FILTER at a
+          glance (finding: the bare agent name alone didn't); `aria-pressed`
+          always means the SAME thing — "the only-this-agent filter is on" —
+          instead of flipping its meaning together with the visible label. */}
       {agentId && (
         <button
           onClick={() => setShowAllTabs(!showAllTabs)}
           className="min-h-11 flex items-center gap-1 text-[10px] px-2 rounded-md transition-colors shrink-0"
-          style={{ border: `1px solid ${C.border}`, color: C.textSecondary }}
-          aria-pressed={showAllTabs}
-          title={showAllTabs ? t("showingAllTabs") : t("showingOnlyThisAgent", { name: agentName ?? t("thisAgent") })}
+          style={
+            scopeUnavailable
+              ? { border: `1px solid ${C.warning}`, color: C.warning }
+              : { border: `1px solid ${C.border}`, color: C.textSecondary }
+          }
+          aria-pressed={!showAllTabs}
+          title={
+            scopeUnavailable
+              ? t("scopeUnavailableHint")
+              : showAllTabs
+                ? t("showingAllTabs")
+                : t("showingOnlyThisAgent", { name: agentName ?? t("thisAgent") })
+          }
         >
-          {showAllTabs ? t("allTabs") : (agentName ?? t("thisAgent"))}
+          <Filter size={11} />
+          {showAllTabs ? t("allTabs") : t("onlyAgent", { name: agentName ?? t("thisAgent") })}
         </button>
       )}
 

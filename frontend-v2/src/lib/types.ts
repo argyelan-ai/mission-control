@@ -2981,6 +2981,15 @@ export interface BrowserLiveTarget {
   url: string;
 }
 
+/** Response shape of GET /api/v1/browser-live/targets (bauplan.md PR B1) */
+export interface BrowserLiveTargetsResponse {
+  targets: BrowserLiveTarget[];
+  /** True only when `agent_id` was passed AND attribution couldn't be
+   *  resolved right now (gateway down, or the agent id doesn't resolve) —
+   *  `targets` is then the UNFILTERED list, not "this agent has none". */
+  scopeUnavailable: boolean;
+}
+
 // ── Prompt Library (Benchmark Studio core, PR 2) ─────────────────────────────
 
 export interface PromptTemplate {
