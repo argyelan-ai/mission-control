@@ -163,6 +163,13 @@ async def mark_agents_for_sync(session: AsyncSession, runtime: Runtime) -> int:
     result = await session.exec(select(Agent).where(Agent.runtime_id == runtime.id))
     flagged = 0
     for agent in result.all():
+        if agent.archived_at is not None:
+            # Live incident 02.10.2026 (PR #739 fallout): an archived agent's
+            # container is stopped on purpose. Flagging it for sync meant the
+            # next watcher tick (or a force-sync-agents call) would restart
+            # it — resurrecting a deliberately shut-down agent. Archived
+            # agents get no notification either; there is nothing to reload.
+            continue
         if agent.agent_runtime == "cli-bridge":
             pass
         elif agent.agent_runtime == "host" and get_adapter(
@@ -202,6 +209,15 @@ async def sync_pending_agents(
 
 
 async def _sync_one(session: AsyncSession, agent: Agent, *, force: bool = False) -> None:
+    if agent.archived_at is not None:
+        # Defense in depth: mark_agents_for_sync no longer flags archived
+        # agents, but a row flagged before that fix (or a stray write) must
+        # still never reach restart/reload here — just clear the flag.
+        agent.pending_runtime_sync = False
+        session.add(agent)
+        await session.commit()
+        return
+
     runtime = (
         await session.get(Runtime, agent.runtime_id) if agent.runtime_id else None
     )
