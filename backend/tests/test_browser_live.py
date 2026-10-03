@@ -40,15 +40,47 @@ async def test_targets_endpoint_lists_pages(auth_client: AsyncClient):
     assert "webSocketDebuggerUrl" not in r.json()[0]  # interne URL nicht leaken
 
 
-def test_page_filter_and_order():
-    """Filter-/Sortierlogik von _list_page_targets (ohne HTTP)."""
+@pytest.mark.asyncio
+async def test_list_page_targets_keeps_chromium_newest_first_order(monkeypatch):
+    """Ruft die ECHTE _list_page_targets auf (HTTP gemockt). Chromium liefert
+    /json/list neueste-zuerst (live geprueft 03.10.: frisch per /json/new
+    geoeffneter Tab stand VOR dem alten about:blank). Die Liste darf weder
+    umgedreht werden (Bug bis 03.10.: Panel oeffnete immer den aeltesten Tab)
+    noch Nicht-Seiten enthalten. Der alte Test baute die Logik nur nach und
+    pruefte damit nichts."""
     from app.routers import browser_live as bl
+
     raw = [
-        {"id": "old", "type": "page"},
-        {"id": "bg", "type": "background_page"},
         {"id": "new", "type": "page"},
+        {"id": "bg", "type": "background_page"},
+        {"id": "sw", "type": "service_worker"},
+        {"id": "old", "type": "page"},
     ]
-    pages = list(reversed([t for t in raw if t.get("type") == "page"]))
+
+    class _Resp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return raw
+
+    class _Client:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, url):
+            assert url.endswith("/json/list")
+            return _Resp()
+
+    monkeypatch.setattr(bl.httpx, "AsyncClient", _Client)
+    monkeypatch.setattr(bl, "_resolve_cdp_netloc", lambda base_url=None: "10.0.0.7:9223")
+    pages = await bl._list_page_targets()
     assert [t["id"] for t in pages] == ["new", "old"]
 
 

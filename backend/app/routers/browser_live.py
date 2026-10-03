@@ -61,10 +61,13 @@ async def _list_page_targets() -> list[dict]:
         resp = await client.get(f"http://{netloc}/json/list")
         resp.raise_for_status()
         targets = resp.json()
-    pages = [t for t in targets if t.get("type") == "page"]
-    # Newest tab last in most Chromium builds — surface newest first so the
-    # UI defaults to what the tester is working on right now.
-    return list(reversed(pages))
+    # Chromium's /json/list already lists the NEWEST tab first (live-verified
+    # 03.10. on cdp-browser: a tab opened via /json/new came before the older
+    # about:blank). Keep that order — the UI defaults to the first entry, so
+    # the panel opens on what the agent is working on right now. Until 03.10.
+    # this list was reversed on the wrong assumption "newest last", and the
+    # panel always opened the OLDEST tab (usually the idle about:blank).
+    return [t for t in targets if t.get("type") == "page"]
 
 
 @router.get("/targets")
