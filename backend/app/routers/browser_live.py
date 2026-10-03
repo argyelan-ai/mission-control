@@ -186,6 +186,20 @@ class TargetWatcher:
                 # pure title change (e.g. an SPA updating document.title)
                 # must not steal "active" from a tab the agent is reading.
                 existing["last_active_at"] = now
+            # NOTE (finding, round 4): the finding's *optional* suggestion —
+            # also returning True for a title-only change, so the picker's
+            # label follows `document.title` without a navigation — was
+            # tried and reverted: it breaks the existing, deliberate
+            # contract covered by
+            # `test_watcher_pure_title_change_does_not_move_active` and
+            # `test_watcher_on_change_callback_fires_only_on_real_change`
+            # (test_browser_live.py), which assert a pure title update is
+            # NOT a "change" worth a watcher notification. The REQUIRED part
+            # of this finding — url/title in `send_targets_message`'s own
+            # signature below — already fixes the actual bug (a navigation's
+            # new URL reaching the picker); extending "changed" here as well
+            # is a separate, independently-reviewable UI nicety, not part of
+            # the reported failure scenario.
             return url_changed
         if method == "targetDestroyed":
             tid = params.get("targetId")
@@ -392,7 +406,17 @@ async def browser_live_ws(
         ]
         active_id = watcher.active_id()
         followed_id = state["followed_id"]
-        sig = (tuple(t["id"] for t in targets_list), active_id, followed_id)
+        # url + title are part of the signature, not just the id tuple — a
+        # navigation inside the shown tab (the common case: the agent works
+        # in one tab) changes neither the set of ids nor active/followed, so
+        # without this a `targets` push never goes out and the picker/URL
+        # row under the header keep showing the page the tab had before it
+        # navigated for as long as the panel stays open (finding, round 4).
+        sig = (
+            tuple((t["id"], t["url"], t["title"]) for t in targets_list),
+            active_id,
+            followed_id,
+        )
         if sig == _last_targets_sig["sig"]:
             return
         _last_targets_sig["sig"] = sig
@@ -452,11 +476,23 @@ async def browser_live_ws(
         cdp = None
         current_id: Optional[str] = None
         frame_task: Optional[asyncio.Task] = None
-        # Gate the "no_page" status so it goes out once per empty stretch,
-        # not every 1s poll tick (finding: it used to repeat forever and the
-        # dead tab's targets entry was never cleared because this branch
-        # returned to the top of the loop before calling send_targets_message()).
-        no_page_status_sent = False
+        # Track the last status CODE sent rather than a plain sent/not-sent
+        # boolean, so a status goes out once per stretch (not every 1s poll
+        # tick) but a transition like connect_error → no_page still gets
+        # through. A boolean here used to gate `no_page` on its own flag, so
+        # once a `connect_error` had been sent and every tab then closed,
+        # `no_page` was never sent and the panel kept showing "connection
+        # error" forever even though the browser had simply gone tab-less
+        # (finding, round 4).
+        last_status_code: Optional[str] = None
+
+        async def _send_status(code: str) -> None:
+            nonlocal last_status_code
+            if code == last_status_code:
+                return
+            last_status_code = code
+            await websocket.send_json({"type": "status", "code": code})
+
         try:
             while not stop_event.is_set():
                 # Clear BEFORE reading watcher state so a notification that
@@ -476,12 +512,9 @@ async def browser_live_ws(
                             frame_task.cancel()
                         cdp, frame_task, current_id = None, None, None
                     await send_targets_message()
-                    if not no_page_status_sent:
-                        await websocket.send_json({"type": "status", "code": "no_page"})
-                        no_page_status_sent = True
+                    await _send_status("no_page")
                     await _wait_switch_or_timeout(1.0)
                     continue
-                no_page_status_sent = False
 
                 wanted = state["followed_id"]
                 if wanted not in live_ids:
@@ -509,9 +542,7 @@ async def browser_live_ws(
                         # Reconnect for a transient outage that resolves
                         # itself a second later).
                         logger.info("browser_live: /json/list lookup failed: %s", e)
-                        if not no_page_status_sent:
-                            await websocket.send_json({"type": "status", "code": "connect_error"})
-                            no_page_status_sent = True
+                        await _send_status("connect_error")
                         current_id = None
                         await _wait_switch_or_timeout(1.0)
                         continue
@@ -523,7 +554,6 @@ async def browser_live_ws(
                         current_id = None
                         await _wait_switch_or_timeout(0.3)
                         continue
-                    no_page_status_sent = False
                     ws_url = _rewrite_ws_url(raw["webSocketDebuggerUrl"], _resolve_cdp_netloc())
 
                     try:
@@ -674,7 +704,12 @@ async def browser_live_ws(
     except Exception as e:
         logger.info("browser_live ws ended: %s", e)
         try:
-            await websocket.send_json({"type": "status", "message": str(e)[:200]})
+            # Machine-readable code only — this branch used to send
+            # {"message": str(e)[:200]}, free server-side English the
+            # bilingual client can't translate and silently ignores anyway
+            # (finding, round 4: broke the code-only contract this
+            # docstring already promises for every other status send).
+            await websocket.send_json({"type": "status", "code": "stream_error"})
         except Exception:
             pass
     finally:

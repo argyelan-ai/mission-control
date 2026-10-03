@@ -331,10 +331,16 @@ describe("BrowserLiveView", () => {
       }),
     );
 
-    // The component's own empty state ("not running") is what a genuinely
-    // empty push renders — the old bug kept showing the stale picker with
-    // "Checkout flow" selectable even though the tab was gone.
-    expect(await screen.findByText(/Agent browser not running/i)).toBeInTheDocument();
+    // The component's own empty state is what a genuinely empty push
+    // renders — the old bug kept showing the stale picker with "Checkout
+    // flow" selectable even though the tab was gone. The WS is still open
+    // and connected (the browser itself is running, it just has zero open
+    // tabs), so this is the less alarming "no open page" message, not
+    // "not running" (finding, round 4: showing "not running" here used to
+    // tell the operator the agent browser was down while it was fine).
+    expect(
+      await screen.findByText("No open page in the agent browser yet."),
+    ).toBeInTheDocument();
     expect(screen.queryByLabelText("Browser page")).not.toBeInTheDocument();
   });
 
