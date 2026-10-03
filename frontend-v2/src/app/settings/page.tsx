@@ -1,22 +1,13 @@
 "use client";
 
-import { Suspense, useState, useEffect } from "react";
+import { Suspense, useState, useEffect, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useTranslations, useLocale } from "next-intl";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  User,
-  Shield,
-  Users,
-  Key,
-  KeyRound,
   Github,
-  Zap,
-  SlidersHorizontal,
-  Keyboard,
-  Info,
   Save,
   Loader2,
   Check,
@@ -28,13 +19,9 @@ import {
   Trash2,
   Play,
   ExternalLink,
-  DollarSign,
   MessageSquare,
   Send,
-  BrainCircuit,
-  Moon,
-  type LucideIcon,
-  Palette,
+  ChevronLeft,
 } from "lucide-react";
 import { api, setStoredUser } from "@/lib/api";
 import { useAppStore, type AuthUser } from "@/lib/store";
@@ -56,48 +43,15 @@ import { AiProvidersTab } from "@/components/settings/AiProvidersTab";
 import { AppearanceSection } from "@/components/settings/AppearanceSection";
 import { NightShiftTab } from "@/components/settings/NightShiftTab";
 import { PhoneAccountPanel } from "@/components/settings/PhoneAccountPanel";
+import { PhoneSectionList } from "@/components/settings/PhoneSectionList";
+import { GROUP_ORDER, SECTIONS, sectionHref } from "@/components/settings/sections";
 import { StatusDot } from "@/components/shared/StatusDot";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 
 // ── Section Registry ──────────────────────────────────────────────────────────
-
-// labelKey pattern (docs/i18n.md): keys resolve via t() at the render site —
-// never store translated strings in module constants.
-// Thirteen entries in one flat list put "change my password" next to "how much
-// autonomy do agents have" next to "where does the Slack token live". The
-// groups answer one question each: whose account, how the fleet behaves, what
-// it talks to, what secrets it holds, who administers it.
-type SettingsGroup = "account" | "fleet" | "connections" | "secrets" | "system";
-
-const GROUP_ORDER: SettingsGroup[] = ["account", "fleet", "connections", "secrets", "system"];
-
-interface SettingsSection {
-  id: string;
-  labelKey: string;
-  icon: LucideIcon;
-  group: SettingsGroup;
-  adminOnly?: boolean;
-}
-
-const SECTIONS: SettingsSection[] = [
-  { id: "profile", labelKey: "sections.profile", icon: User, group: "account" },
-  { id: "security", labelKey: "sections.security", icon: Shield, group: "account" },
-  { id: "appearance", labelKey: "sections.appearance", icon: Palette, group: "account" },
-  { id: "shortcuts", labelKey: "sections.shortcuts", icon: Keyboard, group: "account" },
-  { id: "autonomy", labelKey: "sections.autonomy", icon: SlidersHorizontal, group: "fleet", adminOnly: true },
-  { id: "intelligence", labelKey: "sections.intelligence", icon: Zap, group: "fleet", adminOnly: true },
-  { id: "costs", labelKey: "sections.costs", icon: DollarSign, group: "fleet", adminOnly: true },
-  { id: "night-shift", labelKey: "sections.nightShift", icon: Moon, group: "fleet", adminOnly: true },
-  { id: "github", labelKey: "sections.github", icon: Github, group: "connections", adminOnly: true },
-  { id: "slack", labelKey: "sections.slack", icon: MessageSquare, group: "connections", adminOnly: true },
-  { id: "telegram", labelKey: "sections.telegram", icon: Send, group: "connections", adminOnly: true },
-  { id: "ai-providers", labelKey: "sections.aiProviders", icon: BrainCircuit, group: "connections", adminOnly: true },
-  { id: "apikeys", labelKey: "sections.apikeys", icon: Key, group: "secrets", adminOnly: true },
-  { id: "credentials", labelKey: "sections.credentials", icon: KeyRound, group: "secrets", adminOnly: true },
-  { id: "users", labelKey: "sections.users", icon: Users, group: "system", adminOnly: true },
-  { id: "about", labelKey: "sections.about", icon: Info, group: "system" },
-];
+// SECTIONS / GROUP_ORDER live in components/settings/sections.ts — the desktop
+// side nav and the phone section list read the same list.
 
 // ── Keyboard shortcuts reference ──────────────────────────────────────────────
 
@@ -2233,42 +2187,75 @@ function AboutSection() {
 
 function SettingsContent() {
   const t = useTranslations("settings");
-  // Deep-link support: /settings?section=github lets other pages link
-  // straight into a section (e.g. the /repos onboarding banner).
-  const searchParams = useSearchParams();
-  const sectionParam = searchParams.get("section");
-  const [activeSection, setActiveSection] = useState(
-    sectionParam && SECTIONS.some((s) => s.id === sectionParam) ? sectionParam : "profile"
-  );
-  useEffect(() => {
-    if (sectionParam && SECTIONS.some((s) => s.id === sectionParam)) {
-      setActiveSection(sectionParam);
-    }
-  }, [sectionParam]);
-  // Write the choice back so a reload or a shared link lands on it.
-  const router = useRouter();
-  const selectSection = (id: string) => {
-    setActiveSection(id);
-    router.replace(`/settings?section=${id}`, { scroll: false });
-  };
-
   const currentUser = useAppStore((s) => s.currentUser);
   const isAdmin = currentUser?.role === "admin";
-
   const visibleSections = SECTIONS.filter((s) => !s.adminOnly || isAdmin);
+
+  // The section lives in the URL — /settings?section=github — so a reload, a
+  // shared link and the browser's back button all land on it (other pages
+  // deep-link here too, e.g. the /repos onboarding banner). Derived on every
+  // render, never copied into state: a back step that drops the parameter
+  // must show the list again.
+  const searchParams = useSearchParams();
+  const sectionParam = searchParams.get("section");
+  const named = SECTIONS.find((s) => s.id === sectionParam);
+  // A member who follows a link to an admin section gets the list, not an
+  // empty screen. While the user is still loading, keep the section (no flash).
+  const openSection =
+    named && (!named.adminOnly || isAdmin || !currentUser) ? named.id : null;
+  // Desktop always shows a section; without one in the URL that is Profile.
+  // On the phone "no section" means the section list.
+  const activeSection = openSection ?? "profile";
+
+  const router = useRouter();
+  // Desktop side nav: switch in place (replace) — the nav stays on screen, a
+  // history entry per click would only make "back" tedious.
+  const selectSection = (id: string) => {
+    router.replace(sectionHref(id), { scroll: false });
+  };
+
+  // Phone: the list and a section are two screens of one scroll container.
+  // Opening a row pushes a history entry (PhoneSectionList links); the back
+  // button steps back to it, so the list comes back where it was scrolled.
+  // Arrived by a link or a reload instead? Then there is no list entry to go
+  // back to — replace to /settings rather than leaving the app.
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const openedFromList = useRef(false);
+  const listScrollTop = useRef(0);
+  const rememberList = () => {
+    openedFromList.current = true;
+    listScrollTop.current = scrollerRef.current?.scrollTop ?? 0;
+  };
+  const backToList = () => {
+    if (openedFromList.current) {
+      openedFromList.current = false;
+      router.back();
+    } else {
+      router.replace("/settings", { scroll: false });
+    }
+  };
+  // A section starts at its top; the list returns to where it was left.
+  useEffect(() => {
+    const el = scrollerRef.current;
+    if (!el || typeof el.scrollTo !== "function") return;
+    el.scrollTo({ top: openSection ? 0 : listScrollTop.current });
+  }, [openSection]);
 
   return (
     // fullHeight shell. From md up only the content column scrolls, so the
     // section nav stays in view on long sections. On phones the whole page
-    // scrolls as one: the app bar and bottom tab bar already take height, and
-    // pinning the header plus the section strip would leave little room.
-    <div className="flex-1 min-h-0 flex flex-col overflow-y-auto md:overflow-hidden md:-m-6">
-      {/* Header */}
+    // scrolls as one: the app bar and bottom tab bar already take height.
+    <div
+      ref={scrollerRef}
+      className="flex-1 min-h-0 flex flex-col overflow-y-auto md:overflow-hidden md:-m-6"
+    >
+      {/* Header — on the phone only above the section list; an opened
+          section carries its own title under the back button. */}
       <motion.div
         initial={{ opacity: 0, y: 12 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
-        className="shrink-0 px-4 py-4 md:px-6"
+        className={cn("shrink-0 px-4 py-4 md:px-6", openSection && "hidden md:block")}
       >
         {/* label-sys stays untranslated: P2 mono instrument code (round-6 decision) */}
         <div className="label-sys mb-2">System · Settings</div>
@@ -2285,21 +2272,41 @@ function SettingsContent() {
         </div>
       </motion.div>
 
-      {/* Phone only: account, board and log out (formerly in the menu drawer). */}
-      <PhoneAccountPanel />
+      {/* Phone, section screen: back to the list. A symbol plus the word it
+          leads to, no box (K11); the chevron's drawn stroke sits on the 16 px
+          content edge (K9). */}
+      {openSection && (
+        <div className="md:hidden shrink-0 px-2 pt-2" data-region="settings-phone-back">
+          <button
+            type="button"
+            onClick={backToList}
+            aria-label={t("phoneList.back")}
+            data-testid="settings-phone-back"
+            className="flex items-center gap-1 min-h-11 pr-3 rounded-lg text-base cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
+            style={{ color: C.textSecondary }}
+          >
+            <ChevronLeft size={22} aria-hidden className="shrink-0" />
+            <span>{t("title")}</span>
+          </button>
+        </div>
+      )}
+
+      {/* Phone, list screen: who is signed in, board, log out (#738) — then
+          the section list. Both belong to the list, not to an open section. */}
+      {!openSection && <PhoneAccountPanel />}
+      {!openSection && <PhoneSectionList sections={visibleSections} onOpen={rememberList} />}
 
       <div className="flex-1 flex flex-col md:flex-row md:min-h-0 md:overflow-hidden">
-        {/* Left: Section Nav (glass sidebar) */}
+        {/* Left: Section Nav — desktop only; the phone has PhoneSectionList. */}
         <motion.nav
           initial={{ opacity: 0, x: -8 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ delay: 0.1, duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
-          className="w-full md:w-52 shrink-0 border-b md:border-b-0 md:border-r overflow-x-auto md:overflow-y-auto py-3 tab-strip-nav"
+          className="hidden md:block md:w-52 shrink-0 md:border-r md:overflow-y-auto py-3"
           style={{
             borderColor: "var(--color-border-subtle)",
-            // Transparent on desktop: the filled panel used to stop mid-page
-            // with a hard edge floating in the dark. The divider carries the
-            // separation; the surface is only needed for the mobile strip.
+            // Transparent: the filled panel used to stop mid-page with a hard
+            // edge floating in the dark. The divider carries the separation.
             backgroundColor: "transparent",
           }}
         >
@@ -2307,13 +2314,11 @@ function SettingsContent() {
             const items = visibleSections.filter((s) => s.group === group);
             if (items.length === 0) return null;
             return (
-              <div key={group} className="md:mb-3 last:mb-0 flex md:block items-center">
-                {/* Group labels are desktop-only: on mobile the nav is one
-                    horizontal strip, where headings would break the scan. */}
-                <div className="hidden md:block label-sys px-3 pb-1 pt-2">
+              <div key={group} className="mb-3 last:mb-0">
+                <div className="label-sys px-3 pb-1 pt-2">
                   {t(`groups.${group}`)}
                 </div>
-                <ul className="flex md:flex-col gap-1 md:gap-0.5 px-2 min-w-max md:min-w-0">
+                <ul className="flex flex-col gap-0.5 px-2">
             {items.map((section) => {
               const Icon = section.icon;
               const isActive = activeSection === section.id;
@@ -2364,7 +2369,12 @@ function SettingsContent() {
         </motion.nav>
 
         {/* Right: Section Content */}
-        <div className="flex-1 md:overflow-y-auto p-4 md:p-6 min-w-0">
+        {/* On the phone only when a section is open; the list is the other screen. */}
+        <div
+          className={cn("flex-1 md:overflow-y-auto p-4 md:p-6 min-w-0", !openSection && "hidden md:block")}
+          data-region="settings-section"
+          data-testid="settings-section"
+        >
           {/* 3xl, not 2xl: two nav columns already eat ~530 px of a 1440 px
               screen, and the dense sections (autonomy matrix, key lists) were
               being squeezed while 300 px sat empty on the right. */}

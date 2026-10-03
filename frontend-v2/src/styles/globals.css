@@ -1128,28 +1128,6 @@ option {
   }
 }
 
-/* ── Settings-Nav: wie tab-strip aber ohne overflow-Reset auf Desktop
-   (Desktop-Nav braucht overflow-y:auto für vertikales Scrollen) */
-.tab-strip-nav {
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-  overscroll-behavior-x: contain;
-  scroll-snap-type: x proximity;
-  -webkit-mask-image: linear-gradient(to right, black calc(100% - 32px), transparent 100%);
-  mask-image: linear-gradient(to right, black calc(100% - 32px), transparent 100%);
-}
-.tab-strip-nav::-webkit-scrollbar { display: none; }
-.tab-strip-nav > * { scroll-snap-align: start; }
-
-@media (min-width: 768px) {
-  .tab-strip-nav {
-    -webkit-mask-image: none;
-    mask-image: none;
-    scroll-snap-type: none;
-    overscroll-behavior-x: auto;
-  }
-}
-
 /* ── Mobile Wave 3 — Touch-Sichtbarkeit (MOBILE-SPEC M5) ─────────────────────
    Hover-only-Controls (opacity-0/hidden group-hover:) sind auf Touch unsichtbar.
    .touch-visible macht sie immer sichtbar auf Geräten mit grobem Zeiger (Finger).
