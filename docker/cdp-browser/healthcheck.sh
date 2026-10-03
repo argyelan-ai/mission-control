@@ -47,4 +47,13 @@ WS_URL=$(timeout 3 wget -qO- "http://$CDP_HOST/json/version" 2>/dev/null \
 
 echo '{"id":1,"method":"Target.getTargets"}' \
   | timeout 5 websocat -n "$WS_URL" 2>/dev/null \
-  | grep -q '"id":1'
+  | grep -q '"id":1' || exit 1
+
+# cdp-gateway (PR B1, port 9300): same container, same lifecycle as Chromium
+# and socat above — if the gateway process died, the container is unhealthy
+# too, the same existing restart/alerting path that already watches this
+# healthcheck. Soft dependency: GATEWAY_CHECK=0 skips this (useful for the
+# bare `test_webgl.sh` runs that don't build the gateway into their image).
+if [ "${GATEWAY_CHECK:-1}" != "0" ]; then
+  timeout 3 wget -qO- "http://127.0.0.1:9300/mc/health" >/dev/null 2>&1 || exit 1
+fi

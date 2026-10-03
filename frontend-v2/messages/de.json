@@ -3673,6 +3673,12 @@
     "pageLabel": "Browser-Seite",
     "liveViewAlt": "Live-Ansicht des Agenten-Browsers",
     "newTab": "Neuer Tab: {title}",
+    "noTabsForAgent": "{name} hat gerade keinen Tab offen.",
+    "showAllTabs": "Alle Tabs zeigen",
+    "showingAllTabs": "Alle Tabs",
+    "showingOnlyThisAgent": "Nur Tabs von {name}",
+    "allTabs": "Alle Tabs",
+    "thisAgent": "diesem Agenten",
     "status": {
       "no_page": "Noch keine offene Seite im Agenten-Browser.",
       "connect_error": "Verbinde mit dem Agenten-Browser…",

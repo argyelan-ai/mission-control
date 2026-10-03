@@ -32,14 +32,24 @@
 # Env
 # ---
 #   OMP_BROWSER_CDP_TARGET  host:port of the shared browser's CDP endpoint.
-#                           Default `cdp-browser:9223`. Empty or `off` = no
-#                           relay (omp keeps its own browser handling).
+#                           Default `cdp-browser:9300` (the cdp-gateway added
+#                           in bauplan.md PR B1 — NOT the plain socat port
+#                           :9223 any more). The gateway answers the exact
+#                           same /json/* shapes Chromium itself does, so this
+#                           relay needs no other change, but it now also
+#                           identifies the connection by source IP (reverse
+#                           DNS of this container -> "mc-agent-<slug>",
+#                           bauplan M13) so the operator's per-agent browser
+#                           panel can tell omp's tabs apart from everyone
+#                           else's. Set back to `cdp-browser:9223` to bypass
+#                           the gateway (loses per-agent attribution, keeps
+#                           everything else working — safe rollback).
 #   OMP_BROWSER_CDP_PORT    local relay port. Default 9222.
 #
 # Exit: always 0 — a missing browser must never stop the agent from booting.
 set -u
 
-TARGET="${OMP_BROWSER_CDP_TARGET-cdp-browser:9223}"
+TARGET="${OMP_BROWSER_CDP_TARGET-cdp-browser:9300}"
 PORT="${OMP_BROWSER_CDP_PORT:-9222}"
 
 case "$TARGET" in

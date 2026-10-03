@@ -403,4 +403,98 @@ describe("BrowserLiveView", () => {
     expect(statusDe).toBeDefined();
     expect(Object.keys(statusDe).sort()).toEqual(Object.keys(statusEn).sort());
   });
+
+  // ── bauplan.md PR B1: per-agent scoping ──────────────────────────────────
+
+  describe("agent scoping (PR B1)", () => {
+    function useMapLocalStorage() {
+      const store = new Map<string, string>();
+      const storage = {
+        getItem: (k: string) => store.get(k) ?? null,
+        setItem: (k: string, v: string) => void store.set(k, v),
+        removeItem: (k: string) => void store.delete(k),
+        clear: () => store.clear(),
+      };
+      Object.defineProperty(globalThis, "localStorage", {
+        value: storage, configurable: true, writable: true,
+      });
+      return store;
+    }
+
+    it("passes agentId through to both the REST fetch and the WS URL by default", async () => {
+      useMapLocalStorage();
+      const targetsSpy = vi.spyOn(api.browserLive, "targets").mockResolvedValue(TARGETS);
+      renderWithQuery(<BrowserLiveView agentId="agent-alpha" agentName="Alpha" />);
+
+      await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+      expect(targetsSpy).toHaveBeenCalledWith("agent-alpha");
+      expect(FakeWebSocket.instances[0].url).toContain("agent_id=agent-alpha");
+    });
+
+    it("omits agent_id entirely when no agentId prop is given (unscoped panel, unchanged pre-B1 behaviour)", async () => {
+      useMapLocalStorage();
+      const targetsSpy = vi.spyOn(api.browserLive, "targets").mockResolvedValue(TARGETS);
+      renderWithQuery(<BrowserLiveView />);
+
+      await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+      expect(targetsSpy).toHaveBeenCalledWith(undefined);
+      expect(FakeWebSocket.instances[0].url).not.toContain("agent_id");
+    });
+
+    it('shows "<name> has no open tab" with a "show all tabs" way out when scoped and empty', async () => {
+      useMapLocalStorage();
+      vi.spyOn(api.browserLive, "targets").mockResolvedValue([]);
+      renderWithQuery(<BrowserLiveView agentId="agent-alpha" agentName="Alpha" />);
+
+      await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+      const ws = FakeWebSocket.instances[0];
+      ws.onopen?.(new Event("open"));
+      ws.onmessage?.({ data: JSON.stringify({ type: "targets", targets: [], activeId: null, followedId: null }) } as MessageEvent);
+
+      expect(await screen.findByText("Alpha has no open tab right now.")).toBeInTheDocument();
+      const button = await screen.findByText("Show all tabs");
+
+      const targetsSpy = vi.spyOn(api.browserLive, "targets").mockResolvedValue(TARGETS);
+      await userEvent.click(button);
+
+      // Clicking it reconnects WITHOUT the agent scope and persists the
+      // choice for this agent (bauplan.md: "pro Gerät in localStorage").
+      await waitFor(() => expect(FakeWebSocket.instances.length).toBe(2));
+      expect(FakeWebSocket.instances[1].url).not.toContain("agent_id");
+      await waitFor(() => expect(targetsSpy).toHaveBeenCalledWith(undefined));
+    });
+
+    it("sabotage: a stale truthy showAllTabs in localStorage must unscope the panel on mount", async () => {
+      // Proves the localStorage read is actually wired up, not just the
+      // button's own setShowAllTabs call — flips the EXPECTED state of the
+      // first test in this block if the initial-state read were removed.
+      const store = useMapLocalStorage();
+      store.set("mc.browserLive.showAllTabs.agent-alpha", "1");
+      const targetsSpy = vi.spyOn(api.browserLive, "targets").mockResolvedValue(TARGETS);
+      renderWithQuery(<BrowserLiveView agentId="agent-alpha" agentName="Alpha" />);
+
+      await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+      expect(targetsSpy).toHaveBeenCalledWith(undefined);
+      expect(FakeWebSocket.instances[0].url).not.toContain("agent_id");
+    });
+
+    it("the scope toggle button switches back to this agent's own tabs and updates localStorage", async () => {
+      const store = useMapLocalStorage();
+      vi.spyOn(api.browserLive, "targets").mockResolvedValue(TARGETS);
+      renderWithQuery(<BrowserLiveView agentId="agent-alpha" agentName="Alpha" />);
+      await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+
+      const toggle = await screen.findByText("Alpha");
+      await userEvent.click(toggle);
+
+      await waitFor(() => expect(FakeWebSocket.instances.length).toBe(2));
+      expect(FakeWebSocket.instances[1].url).not.toContain("agent_id");
+      expect(store.get("mc.browserLive.showAllTabs.agent-alpha")).toBe("1");
+
+      await userEvent.click(await screen.findByText("All tabs"));
+      await waitFor(() => expect(FakeWebSocket.instances.length).toBe(3));
+      expect(FakeWebSocket.instances[2].url).toContain("agent_id=agent-alpha");
+      expect(store.has("mc.browserLive.showAllTabs.agent-alpha")).toBe(false);
+    });
+  });
 });

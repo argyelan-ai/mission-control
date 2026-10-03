@@ -55,6 +55,7 @@ function useBrowserLiveSocket(
   enabled: boolean,
   connectKey: number,
   following: boolean,
+  agentId: string | undefined,
 ): LiveSocketState {
   const wsRef = useRef<WebSocket | null>(null);
   const [frameSrc, setFrameSrc] = useState<string | null>(null);
@@ -97,7 +98,7 @@ function useBrowserLiveSocket(
     // Single-use stream ticket instead of the login token in the URL.
     const wantFollow = followingRef.current;
     const wantTarget = wantFollow ? undefined : (followedIdRef.current ?? undefined);
-    browserLiveWsUrl(wantTarget, { follow: wantFollow }).then(
+    browserLiveWsUrl(wantTarget, { follow: wantFollow, agentId }).then(
       (url) => {
         if (cancelled) return;
         ws = openSocket(url);
@@ -207,9 +208,39 @@ function shortTitle(t: BrowserLiveTarget): string {
   return t.id;
 }
 
+// Per-device, per-agent "show all tabs instead of just mine" choice
+// (bauplan.md PR B1). try/catch: a private window or blocked site data must
+// never break the panel — it just forgets the choice, same as any other
+// localStorage convenience in this codebase (never load-bearing state).
+function readShowAllTabs(agentId: string): boolean {
+  try {
+    return localStorage.getItem(`mc.browserLive.showAllTabs.${agentId}`) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeShowAllTabs(agentId: string, value: boolean): void {
+  try {
+    if (value) localStorage.setItem(`mc.browserLive.showAllTabs.${agentId}`, "1");
+    else localStorage.removeItem(`mc.browserLive.showAllTabs.${agentId}`);
+  } catch {
+    // per-viewer convenience only — nothing to recover
+  }
+}
+
 // ── Main component ───────────────────────────────────────────────────────────
 
-export function BrowserLiveView() {
+interface BrowserLiveViewProps {
+  /** bauplan.md PR B1: when given, the panel scopes to this agent's own
+   *  tabs (via cdp-gateway) unless the operator picked "show all tabs" for
+   *  this agent on this device. Omitted entirely (e.g. no agent context) →
+   *  always every tab, exactly like before B1. */
+  agentId?: string;
+  agentName?: string;
+}
+
+export function BrowserLiveView({ agentId, agentName }: BrowserLiveViewProps = {}) {
   const t = useTranslations("browserLive");
   const [connectKey, setConnectKey] = useState(0);
   const [connect, setConnect] = useState(true); // PR A1: connects on open, no click needed
@@ -217,6 +248,27 @@ export function BrowserLiveView() {
   const [fullscreen, setFullscreen] = useState(false);
   const [justSwitchedTitle, setJustSwitchedTitle] = useState<string | null>(null);
   const switchHintTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [showAllTabs, setShowAllTabsState] = useState(() => (agentId ? readShowAllTabs(agentId) : true));
+
+  // A different agentId (switched chats) re-reads this device's choice for
+  // THAT agent instead of carrying over whatever the previous agent's panel
+  // was showing.
+  useEffect(() => {
+    setShowAllTabsState(agentId ? readShowAllTabs(agentId) : true);
+    setConnectKey((k) => k + 1); // switched chats: re-scope the live WS to the new agent
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally only on agentId, see useBrowserLiveSocket's connect effect for the same pattern
+  }, [agentId]);
+
+  const setShowAllTabs = useCallback(
+    (value: boolean) => {
+      setShowAllTabsState(value);
+      if (agentId) writeShowAllTabs(agentId, value);
+      setConnectKey((k) => k + 1); // re-scope the live WS immediately
+    },
+    [agentId],
+  );
+
+  const effectiveAgentId = agentId && !showAllTabs ? agentId : undefined;
 
   // First paint + fallback while the WS is down — not a 15s poll that fights
   // the live `targets` push once connected (that was the old bug: the panel
@@ -229,8 +281,8 @@ export function BrowserLiveView() {
     refetch,
     isFetching,
   } = useQuery({
-    queryKey: ["browser-live", "targets"],
-    queryFn: () => api.browserLive.targets(),
+    queryKey: ["browser-live", "targets", effectiveAgentId ?? "all"],
+    queryFn: () => api.browserLive.targets(effectiveAgentId),
     refetchInterval: connect ? false : 5_000,
   });
 
@@ -244,7 +296,7 @@ export function BrowserLiveView() {
     attachedTitle,
     select,
     setFollow,
-  } = useBrowserLiveSocket(connect, connectKey, following);
+  } = useBrowserLiveSocket(connect, connectKey, following, effectiveAgentId);
 
   // Machine status code → translated text, with an unknown/legacy code
   // falling back to a generic message instead of silently rendering
@@ -344,6 +396,10 @@ export function BrowserLiveView() {
   // tell the operator the agent browser was down while it was running fine
   // (finding, round 4).
   const wsConnectedWithNoTabs = connect && connState === "open" && wsTargets !== null && wsTargets.length === 0;
+  // bauplan.md PR B1: scoped to an agent, genuinely has no tabs, nothing is
+  // actually broken — a different empty state than "browser unreachable",
+  // with its own way out (look at every tab instead of waiting).
+  const scopedEmpty = !!effectiveAgentId && !isError && (wsConnectedWithNoTabs || (!connect && targets.length === 0));
 
   if ((isError || targets.length === 0) && !hasFrame) {
     return (
@@ -352,23 +408,35 @@ export function BrowserLiveView() {
         <p className="text-[11px] max-w-xs" style={{ color: C.textMuted }}>
           {isError
             ? `${t("notRunning")} (${(error as Error)?.message ?? "unreachable"})`
-            : wsConnectedWithNoTabs
-              ? t("status.no_page")
-              : t("notRunning")}
+            : scopedEmpty
+              ? t("noTabsForAgent", { name: agentName ?? t("thisAgent") })
+              : wsConnectedWithNoTabs
+                ? t("status.no_page")
+                : t("notRunning")}
         </p>
-        <button
-          onClick={() => refetch()}
-          disabled={isFetching}
-          className="flex items-center gap-1.5 text-[10px] px-2.5 py-1.5 rounded-md transition-colors disabled:opacity-40"
-          style={{
-            background: "transparent",
-            border: `1px solid ${C.border}`,
-            color: C.textSecondary,
-          }}
-        >
-          <RefreshCw size={11} className={isFetching ? "animate-spin" : ""} />
-          {t("refresh")}
-        </button>
+        {scopedEmpty ? (
+          <button
+            onClick={() => setShowAllTabs(true)}
+            className="flex items-center gap-1.5 text-[10px] px-2.5 py-1.5 rounded-md transition-colors"
+            style={{ background: C.accentSubtle, color: C.accent, border: `1px solid ${C.borderAccent}` }}
+          >
+            {t("showAllTabs")}
+          </button>
+        ) : (
+          <button
+            onClick={() => refetch()}
+            disabled={isFetching}
+            className="flex items-center gap-1.5 text-[10px] px-2.5 py-1.5 rounded-md transition-colors disabled:opacity-40"
+            style={{
+              background: "transparent",
+              border: `1px solid ${C.border}`,
+              color: C.textSecondary,
+            }}
+          >
+            <RefreshCw size={11} className={isFetching ? "animate-spin" : ""} />
+            {t("refresh")}
+          </button>
+        )}
       </div>
     );
   }
@@ -508,6 +576,21 @@ export function BrowserLiveView() {
         {following && <span className="w-1.5 h-1.5 rounded-full" style={{ background: C.onAccent }} />}
         {t("follow")}
       </button>
+
+      {/* bauplan.md PR B1: only an agent-scoped panel gets this toggle — a
+          panel opened with no agentId (e.g. a future "all agents" view)
+          always shows everything and has nothing to switch between. */}
+      {agentId && (
+        <button
+          onClick={() => setShowAllTabs(!showAllTabs)}
+          className="min-h-11 flex items-center gap-1 text-[10px] px-2 rounded-md transition-colors shrink-0"
+          style={{ border: `1px solid ${C.border}`, color: C.textSecondary }}
+          aria-pressed={showAllTabs}
+          title={showAllTabs ? t("showingAllTabs") : t("showingOnlyThisAgent", { name: agentName ?? t("thisAgent") })}
+        >
+          {showAllTabs ? t("allTabs") : (agentName ?? t("thisAgent"))}
+        </button>
+      )}
 
       <button
         onClick={() => setFullscreen((f) => !f)}
