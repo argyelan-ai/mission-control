@@ -252,6 +252,37 @@ if command -v omp >/dev/null 2>&1; then
             && echo "[render-omp-config] kein Vision-Modell: images.blockImages=true (omp lehnt Bilder ab statt extern nachzufragen)" \
             || echo "[render-omp-config] WARN: omp config set (images.blockImages) fehlgeschlagen"
     fi
+
+    # ── Browser: der gemeinsame Agenten-Browser (cdp-browser) ───────────────
+    # omps eigener Chrome-Start scheitert auf arm64 immer. Stattdessen hängt
+    # omp sich über das lokale Relay (cdp-relay.sh, 127.0.0.1) an den
+    # gemeinsamen Chromium — mit WebGL, und sichtbar im Browser-Panel.
+    # Gesetzt wird das nur, wenn der Dienstname auflöst: ohne laufenden
+    # cdp-browser (Browser-Profil aus, fremde Installation) behält omp sein
+    # eigenes Verhalten, statt gegen ein totes Relay zu laufen. Ein Reload
+    # (`docker exec … render-omp-config.sh`) zieht beides neu nach.
+    _cdp_target="${OMP_BROWSER_CDP_TARGET-cdp-browser:9223}"
+    _cdp_port="${OMP_BROWSER_CDP_PORT:-9222}"
+    _cdp_host="${_cdp_target%:*}"
+    case "$_cdp_target" in
+        ""|off|none|0) _cdp_on=0 ;;
+        *)
+            if python3 -c 'import socket, sys; socket.gethostbyname(sys.argv[1])' \
+                    "$_cdp_host" >/dev/null 2>&1; then
+                _cdp_on=1
+            else
+                _cdp_on=0
+            fi
+            ;;
+    esac
+    if [ "$_cdp_on" = "1" ]; then
+        omp config set browser.cdpUrl "http://127.0.0.1:${_cdp_port}" >/dev/null 2>&1 \
+            && echo "[render-omp-config] Browser: gemeinsamer Agenten-Browser (${_cdp_target} über 127.0.0.1:${_cdp_port})" \
+            || echo "[render-omp-config] WARN: omp config set browser.cdpUrl fehlgeschlagen"
+    else
+        omp config reset browser.cdpUrl >/dev/null 2>&1 || true
+        echo "[render-omp-config] Browser: kein gemeinsamer Agenten-Browser erreichbar (${_cdp_target:-aus}) — omp nutzt sein eigenes Verhalten"
+    fi
 fi
 
 echo "[render-omp-config] models.yml + omp.env geschrieben (${_BASE_URL}, Modell ${_MODEL})"

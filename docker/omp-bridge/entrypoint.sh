@@ -295,6 +295,11 @@ start_native() {
     tmux select-window -t "$SESSION":0
 }
 
+# ── 3b. Browser relay (cdp-relay.sh): omp's browser tool → shared cdp-browser.
+# Started before the windows so the first task already finds it; the watchdog
+# below restarts it if socat ever dies. Never fatal.
+/opt/omp-bridge/cdp-relay.sh || true
+
 start_native
 
 # ── 4. PID-1 watchdog: keep the session (and its 3 windows) alive ───────────
@@ -303,6 +308,7 @@ while true; do
         echo "[entrypoint] tmux session gone — recreating"
         start_native
     fi
+    /opt/omp-bridge/cdp-relay.sh >/dev/null 2>&1 || true
     # mc_sleep_wait, NOT bare `sleep 30` — a foreground external sleep defers
     # the TERM trap until it completes (30s > 20s stop_grace_period).
     mc_sleep_wait 30

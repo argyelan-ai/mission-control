@@ -774,6 +774,9 @@ services:
   # socat lives INSIDE this image (docker/cdp-browser/) — not a standalone
   # cdp-socat sidecar — so it shares Chromium's exact lifecycle and can never
   # bind to a stale netns after a browser crash-loop (the old ECONNREFUSED bug).
+  # omp agents (agent compose) are NOT on cdpnet: they reach this service by
+  # name through a socat relay on 127.0.0.1 inside their own container (Host
+  # header = IP, so Chromium accepts it) — see docker/omp-bridge/cdp-relay.sh.
   cdp-browser:
     build: ./docker/cdp-browser
     profiles: ["browser"]
