@@ -287,3 +287,164 @@ def test_sabotage_removing_owner_attribution_breaks_filtering():
     # No observe_response call at all -> must stay unattributed.
     assert state.targets["T1"].agent is None
     assert state.targets_for("alpha") == []
+
+
+# ── claim on use (live finding 04.10.2026: omp never creates a tab) ────────
+
+def _page_event(tid, url="https://example.org"):
+    return {"targetInfo": {"targetId": tid, "type": "page", "title": "", "url": url}}
+
+
+def test_omp_claim_target_on_a_session_claims_the_tab():
+    state = GatewayState(now_fn=lambda: 1.0)
+    state.apply_target_event("targetCreated", _page_event("T1"))
+    state.observe_response("Target.attachToTarget", {"targetId": "T1", "flatten": True}, {"sessionId": "S1"}, agent="alpha")
+    state.observe_command("OMP.claimTarget", "S1", "alpha")
+    assert state.owner_of("T1") == "alpha"
+    assert state.targets["T1"].agent == "alpha"
+
+
+def test_navigation_claims_and_the_last_navigating_agent_wins():
+    state = GatewayState(now_fn=lambda: 1.0)
+    state.apply_target_event("targetCreated", _page_event("T1"))
+    state.observe_event("Target.attachedToTarget", {"sessionId": "SA", "targetInfo": {"targetId": "T1"}})
+    state.observe_event("Target.attachedToTarget", {"sessionId": "SB", "targetInfo": {"targetId": "T1"}})
+    state.observe_command("Page.navigate", "SA", "alpha")
+    assert state.owner_of("T1") == "alpha"
+    state.observe_command("Page.navigate", "SB", "beta")
+    assert state.owner_of("T1") == "beta"
+
+
+def test_bookkeeping_commands_never_claim():
+    """Puppeteer auto-attaches to EVERY tab on connect and sends
+    Runtime.enable / Page.enable / runIfWaitingForDebugger on each — that is
+    plumbing, not "working in this tab"."""
+    state = GatewayState(now_fn=lambda: 1.0)
+    state.apply_target_event("targetCreated", _page_event("T1"))
+    state.observe_event("Target.attachedToTarget", {"sessionId": "S1", "targetInfo": {"targetId": "T1"}})
+    for method in ("Runtime.enable", "Page.enable", "Runtime.runIfWaitingForDebugger", "Page.getFrameTree"):
+        state.observe_command(method, "S1", "alpha")
+    assert state.owner_of("T1") is None
+
+
+def test_unidentified_connection_never_claims():
+    state = GatewayState(now_fn=lambda: 1.0)
+    state.apply_target_event("targetCreated", _page_event("T1"))
+    state.observe_event("Target.attachedToTarget", {"sessionId": "S1", "targetInfo": {"targetId": "T1"}})
+    state.observe_command("OMP.claimTarget", "S1", _SHARED)
+    state.observe_command("Page.navigate", "S1", None)
+    assert state.owner_of("T1") is None
+
+
+def test_page_level_socket_claims_the_page_in_its_url():
+    state = GatewayState(now_fn=lambda: 1.0)
+    state.apply_target_event("targetCreated", _page_event("T7"))
+    state.observe_command("Page.navigate", None, "alpha", page_target="T7")
+    assert state.owner_of("T7") == "alpha"
+
+
+def test_session_map_is_recorded_for_unidentified_connections_too():
+    """The session -> tab map is a fact about the browser; an agent's later
+    claim on a session another connection opened must still resolve."""
+    state = GatewayState(now_fn=lambda: 1.0)
+    state.observe_response("Target.attachToTarget", {"targetId": "T1"}, {"sessionId": "S1"}, agent=_SHARED)
+    assert state.session_target["S1"] == "T1"
+
+
+def test_watcher_reset_keeps_claims_for_tabs_that_still_exist():
+    state = GatewayState(now_fn=lambda: 1.0)
+    state.apply_target_event("targetCreated", _page_event("T1"))
+    state.observe_command("Page.navigate", None, "alpha", page_target="T1")
+    state.reset_targets()  # our watcher reconnected; the tab is still open
+    state.apply_target_event("targetCreated", _page_event("T1"))
+    assert state.targets["T1"].agent == "alpha"
+
+
+def test_mc_targets_reports_unclaimed_tabs_as_unassigned():
+    state = GatewayState(now_fn=lambda: 1.0)
+    state.apply_target_event("targetCreated", _page_event("MINE"))
+    state.apply_target_event("targetCreated", _page_event("NOBODY"))
+    state.observe_command("Page.navigate", None, "alpha", page_target="MINE")
+    rows = {r["targetId"]: r["agent"] for r in state.as_mc_targets_json()}
+    assert rows == {"MINE": "alpha", "NOBODY": None}
+
+
+# ── _FrameSniffer: observes a copy of the byte stream ─────────────────────
+
+import json as _json  # noqa: E402
+import os as _os  # noqa: E402
+import struct as _struct  # noqa: E402
+
+from cdp_gateway import _FrameSniffer, page_id_from_path  # noqa: E402
+
+
+def _ws_frame(payload: bytes, *, opcode=0x1, fin=True, mask=None) -> bytes:
+    b0 = (0x80 if fin else 0) | opcode
+    n = len(payload)
+    mbit = 0x80 if mask else 0
+    if n < 126:
+        head = _struct.pack("!BB", b0, mbit | n)
+    elif n < 65536:
+        head = _struct.pack("!BBH", b0, mbit | 126, n)
+    else:
+        head = _struct.pack("!BBQ", b0, mbit | 127, n)
+    if mask:
+        payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+        return head + mask + payload
+    return head + payload
+
+
+def test_sniffer_reads_masked_client_frames_split_across_feeds():
+    seen = []
+    sniffer = _FrameSniffer(seen.append)
+    data = _ws_frame(_json.dumps({"id": 1, "method": "OMP.claimTarget"}).encode(), mask=b"\x01\x02\x03\x04")
+    for i in range(len(data)):  # worst case: one byte at a time
+        sniffer.feed(data[i:i + 1])
+    assert seen == [{"id": 1, "method": "OMP.claimTarget"}]
+
+
+def test_sniffer_reassembles_fragments_around_a_control_frame():
+    seen = []
+    sniffer = _FrameSniffer(seen.append)
+    body = _json.dumps({"method": "Target.targetCreated", "params": {}}).encode()
+    data = (
+        _ws_frame(body[:10], fin=False)
+        + _ws_frame(b"ping", opcode=0x9)
+        + _ws_frame(body[10:], opcode=0x0)
+    )
+    sniffer.feed(data)
+    assert seen == [{"method": "Target.targetCreated", "params": {}}]
+
+
+def test_sniffer_skips_oversized_messages_and_keeps_going():
+    seen = []
+    sniffer = _FrameSniffer(seen.append, max_message=1024)
+    big = _ws_frame(_json.dumps({"id": 2, "result": {"data": "x" * 5000}}).encode())
+    small = _ws_frame(_json.dumps({"id": 3, "result": {}}).encode())
+    stream = big + small
+    for i in range(0, len(stream), 700):
+        sniffer.feed(stream[i:i + 700])
+    assert seen == [{"id": 3, "result": {}}]
+    assert not sniffer.broken
+
+
+def test_sniffer_switches_off_on_a_compressed_frame_instead_of_raising():
+    seen = []
+    sniffer = _FrameSniffer(seen.append)
+    sniffer.feed(bytes([0xC1, 0x02]) + b"xx")  # RSV1 set = permessage-deflate
+    sniffer.feed(_ws_frame(b'{"id": 1}'))
+    assert sniffer.broken
+    assert seen == []
+
+
+def test_sniffer_handles_64bit_lengths():
+    seen = []
+    sniffer = _FrameSniffer(seen.append, max_message=200_000)
+    payload = _json.dumps({"id": 9, "result": {"blob": "y" * 70_000}}).encode()
+    sniffer.feed(_ws_frame(payload, mask=_os.urandom(4)))
+    assert seen and seen[0]["id"] == 9
+
+
+def test_page_id_from_path():
+    assert page_id_from_path("/devtools/page/ABC") == "ABC"
+    assert page_id_from_path("/devtools/browser/ABC") is None

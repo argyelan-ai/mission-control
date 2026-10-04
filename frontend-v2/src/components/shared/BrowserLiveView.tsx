@@ -6,7 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import { Filter, Maximize2, Minimize2, MonitorOff, RefreshCw, RotateCcw, Loader2, X } from "lucide-react";
 import { api, browserLiveWsUrl } from "@/lib/api";
-import { C, alpha } from "@/lib/colors";
+import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import { StatusDot } from "@/components/shared/StatusDot";
 import type { BrowserLiveTarget } from "@/lib/types";
 
@@ -61,6 +61,12 @@ interface LiveSocketState {
   // WS has an opinion of its own, rather than only on an explicit change
   // (medium finding, round 5).
   scopeKnown: boolean;
+  // Live finding 04.10.2026: the agent owns no open tab, but tabs assigned
+  // to NO agent exist — the server then streams EVERY tab and says so with
+  // `unassigned_fallback`. Persistent like `scopeUnavailable`; `fallbackKnown`
+  // marks that this connection has reported it at all (REST value until then).
+  unassignedFallback: boolean;
+  fallbackKnown: boolean;
   select: (id: string) => void;
   setFollow: (on: boolean) => void;
 }
@@ -85,6 +91,8 @@ function useBrowserLiveSocket(
   const [attachedTitle, setAttachedTitle] = useState<string | null>(null);
   const [scopeUnavailable, setScopeUnavailable] = useState(false);
   const [scopeKnown, setScopeKnown] = useState(false);
+  const [unassignedFallback, setUnassignedFallback] = useState(false);
+  const [fallbackKnown, setFallbackKnown] = useState(false);
 
   // Read inside the connect effect without making `following`/`followedId`
   // reconnect triggers themselves — only `connectKey` does that. This is
@@ -108,6 +116,8 @@ function useBrowserLiveSocket(
     setStatusCode(null);
     setScopeUnavailable(false);
     setScopeKnown(false);
+    setUnassignedFallback(false);
+    setFallbackKnown(false);
     // A toggle (showAllTabs) or reconnect must not keep showing the
     // PREVIOUS connection's target list under the new scope — without this,
     // switching from "all tabs" to "only this agent" (or back) displayed the
@@ -166,6 +176,9 @@ function useBrowserLiveSocket(
             // every tab, not just this agent's).
             setScopeUnavailable(!!parsed.active);
             setScopeKnown(true);
+          } else if (parsed.code === "unassigned_fallback") {
+            setUnassignedFallback(!!parsed.active);
+            setFallbackKnown(true);
           } else {
             setStatusCode(parsed.code ?? null);
           }
@@ -238,6 +251,8 @@ function useBrowserLiveSocket(
     attachedTitle,
     scopeUnavailable,
     scopeKnown,
+    unassignedFallback,
+    fallbackKnown,
     select,
     setFollow,
   };
@@ -353,6 +368,8 @@ export function BrowserLiveView({ agentId, agentName }: BrowserLiveViewProps = {
     attachedTitle,
     scopeUnavailable: wsScopeUnavailable,
     scopeKnown: wsScopeKnown,
+    unassignedFallback: wsUnassignedFallback,
+    fallbackKnown: wsFallbackKnown,
     select,
     setFollow,
   } = useBrowserLiveSocket(connect, connectKey, following, effectiveAgentId);
@@ -381,6 +398,19 @@ export function BrowserLiveView({ agentId, agentName }: BrowserLiveViewProps = {
   // forever, so only `true` could ever "win"). Before the WS has said
   // anything yet, the REST value is still the best first-paint guess.
   const scopeUnavailable = !!effectiveAgentId && (wsScopeKnown ? wsScopeUnavailable : !!initialData?.scopeUnavailable);
+
+  // Scoped, the agent owns no open tab, but some tab is assigned to no agent
+  // (live finding 04.10.2026 — the panel used to say "<agent> has no open
+  // tab" while the agent was working in such a tab). The list then holds
+  // exactly the unassigned tabs (never another agent's); the hint says why.
+  // Same "WS is authoritative once it spoke" rule as `scopeUnavailable`,
+  // which outranks it (nothing is attributed then).
+  const unassignedFallback =
+    !!effectiveAgentId &&
+    !scopeUnavailable &&
+    (wsFallbackKnown ? wsUnassignedFallback : !!initialData?.unassignedFallback);
+  const displayName = agentName ?? t("thisAgent");
+  const fallbackHint = t("unassignedFallbackHint", { name: displayName });
 
   // Pause the stream when the tab/panel isn't visible, reconnect on return —
   // cheap screencasts are still CPU on the shared cdp-browser for no reason.
@@ -561,24 +591,28 @@ export function BrowserLiveView({ agentId, agentName }: BrowserLiveViewProps = {
         </div>
       )}
 
-      {/* One bottom banner slot, not two: the transient connection-status
-          message and the persistent "attribution unavailable" hint
+      {/* One bottom banner slot, not three: the transient connection-status
+          message, the persistent "attribution unavailable" hint and the
+          "showing the unassigned tabs" hint
           (bauplan.md PR B1 / review finding — the panel used to fall back to
           showing EVERY tab here with NO signal at all, while the toolbar
           toggle still claimed to be scoped) share it rather than stacking
-          two near-identical `absolute bottom-2` bars. Scope-unavailable
-          wins when both are true — it says more (and stays up alongside a
-          live frame, unlike the transient one). */}
-      {connect && !streamEnded && (scopeUnavailable || statusMessage) && (
+          near-identical `absolute bottom-2` bars. Scope-unavailable wins —
+          it says more (and stays up alongside a live frame, unlike the
+          transient one); a live connection problem ("Connecting…") wins
+          over the unassigned hint, which comes back once it clears. */}
+      {connect && !streamEnded && (scopeUnavailable || unassignedFallback || statusMessage) && (
         <div
           className="absolute bottom-2 left-2 right-2 text-[10px] px-2.5 py-1.5 rounded-md"
           style={
             scopeUnavailable
               ? { background: alpha(C.warning, 0.15), color: C.warning, border: `1px solid ${C.warning}` }
-              : { background: alpha(C.scrim, 0.6), color: C.textSecondary, border: `1px solid ${C.border}` }
+              : statusMessage
+                ? { background: alpha(C.scrim, 0.6), color: C.textSecondary, border: `1px solid ${C.border}` }
+                : { background: C.bgElevated, color: STATUS_TEXT.info, border: `1px solid ${C.info}` }
           }
         >
-          {scopeUnavailable ? t("scopeUnavailableHint") : statusMessage}
+          {scopeUnavailable ? t("scopeUnavailableHint") : statusMessage ?? fallbackHint}
         </div>
       )}
 
@@ -622,11 +656,15 @@ export function BrowserLiveView({ agentId, agentName }: BrowserLiveViewProps = {
       </label>
       {/* min-h-11 = 44px hit area (DESIGN.md K11) around an 11px visual row;
           text-base (16px) so iOS doesn't auto-zoom on tap. */}
+      {/* flex-1 + min-w-0: the picker takes whatever width is left and
+          truncates, so Follow / filter / fullscreen stay on ONE line at
+          393 px (finding: the fullscreen button used to wrap below). pr-6
+          keeps the truncated title clear of the native dropdown arrow. */}
       <select
         id="browser-live-target"
         value={shownId ?? ""}
         onChange={(e) => handleSelect(e.target.value)}
-        className="min-h-11 text-base sm:text-[11px] rounded-md px-2 outline-none"
+        className="min-h-11 min-w-0 flex-1 text-base sm:text-[11px] rounded-md pl-2 pr-6 outline-none"
         style={{
           background: C.bgDeep,
           border: `1px solid ${C.border}`,
@@ -636,7 +674,7 @@ export function BrowserLiveView({ agentId, agentName }: BrowserLiveViewProps = {
       >
         {targets.map((tg) => (
           <option key={tg.id} value={tg.id}>
-            {shortTitle(tg)}
+            {tg.unassigned ? `${shortTitle(tg)} · ${t("unassignedTag")}` : shortTitle(tg)}
           </option>
         ))}
       </select>
@@ -676,16 +714,30 @@ export function BrowserLiveView({ agentId, agentName }: BrowserLiveViewProps = {
               : { border: `1px solid ${C.border}`, color: C.textSecondary }
           }
           aria-pressed={!showAllTabs}
+          // One accessible name for both visible label sizes below, built
+          // from the SAME key as the full label so it contains whichever
+          // text is visible in every language (WCAG 2.5.3 "label in name").
+          aria-label={showAllTabs ? t("allTabs") : t("onlyAgent", { name: displayName })}
           title={
             scopeUnavailable
               ? t("scopeUnavailableHint")
-              : showAllTabs
-                ? t("showingAllTabs")
-                : t("showingOnlyThisAgent", { name: agentName ?? t("thisAgent") })
+              : unassignedFallback
+                ? fallbackHint
+                : showAllTabs
+                  ? t("showingAllTabs")
+                  : t("showingOnlyThisAgent", { name: displayName })
           }
         >
           <Filter size={11} />
-          {showAllTabs ? t("allTabs") : t("onlyAgent", { name: agentName ?? t("thisAgent") })}
+          {/* Phone: just the name / "All" (393 px finding — "Only <name>" pushed
+              the fullscreen button onto a second line). From `sm` up the
+              full "Only <name>" / "All tabs". */}
+          <span data-chip-label="compact" className="sm:hidden truncate max-w-20">
+            {showAllTabs ? t("allTabsShort") : displayName}
+          </span>
+          <span data-chip-label="full" className="hidden sm:inline">
+            {showAllTabs ? t("allTabs") : t("onlyAgent", { name: displayName })}
+          </span>
         </button>
       )}
 

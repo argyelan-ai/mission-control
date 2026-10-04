@@ -3679,8 +3679,11 @@
     "showingOnlyThisAgent": "Nur Tabs von {name}",
     "allTabs": "Alle Tabs",
     "onlyAgent": "Nur {name}",
+    "allTabsShort": "Alle",
     "thisAgent": "diesem Agenten",
     "scopeUnavailableHint": "Zeige alle Tabs: Agenten-Zuordnung nicht verfügbar",
+    "unassignedFallbackHint": "Kein Tab ist {name} zugeordnet — gezeigt werden die Tabs ohne Agenten-Zuordnung.",
+    "unassignedTag": "nicht zugeordnet",
     "status": {
       "no_page": "Noch keine offene Seite im Agenten-Browser.",
       "connect_error": "Verbinde mit dem Agenten-Browser…",

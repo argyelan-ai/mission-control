@@ -114,12 +114,17 @@ COPY launch-omp.sh        /opt/omp-bridge/launch-omp.sh
 # löst nur absolute Pfade oder PATH-Einträge auf.
 COPY render-omp-config.sh /opt/omp-bridge/render-omp-config.sh
 COPY cdp-relay.sh         /opt/omp-bridge/cdp-relay.sh
+# cdp_relay.py: the attributing relay cdp-relay.sh starts instead of socat
+# when cdp-gateway is the target — prefixes every CDP request with
+# /a/<slug> so the operator's per-agent browser panel knows whose tab it is.
+COPY cdp_relay.py         /opt/omp-bridge/cdp_relay.py
 COPY sigforward.sh        /opt/omp-bridge/sigforward.sh
 COPY entrypoint.sh        /usr/local/bin/entrypoint.sh
 COPY omp-recycler.sh      /usr/local/bin/omp-recycler.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/omp-recycler.sh \
         /opt/omp-bridge/sigforward.sh /opt/omp-bridge/launch-omp.sh /opt/omp-bridge/render-omp-config.sh \
         /opt/omp-bridge/cdp-relay.sh \
+        /opt/omp-bridge/cdp_relay.py \
     && ln -sf /opt/omp-bridge/launch-omp.sh /usr/local/bin/launch-omp.sh \
     && ln -sf /opt/omp-bridge/render-omp-config.sh /usr/local/bin/render-omp-config.sh
 
