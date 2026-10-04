@@ -22,9 +22,9 @@
  *
  * Content (question, step, log) is shown as the head wrote it; only labels
  * are translated — EXCEPT the step line, which is parsed (`parseStep`) and
- * shown via the 8 fixed `heads.steps.*` keys (bauplan PR 3 §4: "Schritte in
- * Marks Sprache", since every head follows the same 8 steps); a step line
- * that does not parse falls back to the raw text, same as before.
+ * shown via the 8 fixed `heads.steps.*` keys (bauplan PR 3 §4: the steps in
+ * the operator's own language, since every head follows the same 8 steps);
+ * a step line that does not parse falls back to the raw text, same as before.
  */
 
 import { useState } from "react";
@@ -32,7 +32,7 @@ import Link from "next/link";
 import { useLocale, useTranslations } from "next-intl";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ChevronDown, ChevronRight, Copy, ExternalLink, RotateCcw, ScrollText, Terminal, FileText, Send, Wrench,
+  ChevronDown, ChevronRight, Copy, ExternalLink, MessageSquare, RotateCcw, ScrollText, Terminal, FileText, Send, Wrench,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
@@ -277,7 +277,11 @@ export function HeadStateCard({
           {lastActivity && (
             <div className="mt-3 flex items-center gap-2" data-testid="head-card-last-activity">
               <span className="flex items-center gap-2 min-w-0 flex-1 text-sm" style={{ color: C.textMuted }}>
-                <Wrench size={14} className="shrink-0" aria-hidden />
+                {lastActivity.kind === "tool" ? (
+                  <Wrench size={14} className="shrink-0" aria-hidden />
+                ) : (
+                  <MessageSquare size={14} className="shrink-0" aria-hidden />
+                )}
                 <span className="truncate">{t("card.last", { text: lastActivity.text })}</span>
               </span>
               {lastActivityAge && (
@@ -290,7 +294,7 @@ export function HeadStateCard({
           <Link
             href={`/sessions?head=${encodeURIComponent(run.run_id)}`}
             data-testid="head-card-view-live"
-            className="mt-3 inline-flex items-center gap-1 text-sm cursor-pointer transition-colors hover:opacity-80"
+            className="mt-3 inline-flex items-center gap-1 text-sm cursor-pointer transition-colors hover:opacity-80 pointer-coarse:min-h-[44px]"
             style={{ color: C.textPrimary }}
           >
             {t("card.viewLiveTranscript")}

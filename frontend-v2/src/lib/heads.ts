@@ -748,20 +748,52 @@ export function headListLine(
   return `${t("runs.fact")} · ${headContextLine(run, t, locale, { withAge: false })}`;
 }
 
+/** A fenced-code-block delimiter line ("```", "```bash", trailing "```ts" …)
+ *  on its own — never meaningful as a one-line summary by itself. */
+function isFenceLine(line: string): boolean {
+  return /^`{3,}/.test(line.trim());
+}
+
+/** Strips the handful of Markdown marks a head's own sentence can carry
+ *  (`**bold**`, `__bold__`, inline `` `code` ``, a leading heading `#…` or
+ *  bullet `-`/`*`) down to plain text for a one-line "Last: …" summary — the
+ *  real chat view renders full Markdown, this card does not. Collapses any
+ *  run of whitespace left behind by the removed marks. */
+function stripMarkdownLine(line: string): string {
+  return line
+    .replace(/^#{1,6}\s+/, "")
+    .replace(/^[-*]\s+/, "")
+    .replace(/\*\*(.*?)\*\*/g, "$1")
+    .replace(/__(.*?)__/g, "$1")
+    .replace(/`([^`]*)`/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 /** The most recent tool title or assistant sentence in a transcript window —
  *  `HeadStateCard`'s "Last: …" line (bauplan PR 3 §4) while a run is still
  *  active. Scans from the newest event backwards: a `thinking`/`usage`/
  *  `command` event or the operator's own `user`/`teammate` turn carries
  *  nothing a one-line summary should show, so it is skipped rather than
  *  shown blank or stopping the scan. `null` once the whole window has
- *  neither (e.g. only `usage` frames have arrived so far). */
-export function lastHeadActivity(events: ChatEvent[]): { text: string; ts: string } | null {
+ *  neither (e.g. only `usage` frames have arrived so far).
+ *
+ *  `kind` tells the caller which icon fits ("tool" vs. a plain sentence) —
+ *  review fix round 5: the card used to show the tool wrench for a sentence
+ *  too, and a raw assistant line like "Run complete — **Status: passed**."
+ *  showed its asterisks and a bare fence-opener ("```bash") as the "line"
+ *  itself; both are now stripped/skipped before a line is accepted. */
+export function lastHeadActivity(events: ChatEvent[]): { text: string; ts: string; kind: "tool" | "message" } | null {
   for (let i = events.length - 1; i >= 0; i--) {
     const ev = events[i];
-    if (ev.kind === "tool" && ev.title?.trim()) return { text: ev.title.trim(), ts: ev.ts };
+    if (ev.kind === "tool" && ev.title?.trim()) return { text: ev.title.trim(), ts: ev.ts, kind: "tool" };
     if (ev.kind === "message" && ev.role === "assistant" && ev.text?.trim()) {
-      const firstLine = ev.text.trim().split("\n").find((l) => l.trim().length > 0);
-      if (firstLine) return { text: firstLine.trim(), ts: ev.ts };
+      for (const raw of ev.text.trim().split("\n")) {
+        const line = raw.trim();
+        if (!line || isFenceLine(line)) continue;
+        const stripped = stripMarkdownLine(line);
+        if (stripped) return { text: stripped, ts: ev.ts, kind: "message" };
+      }
     }
   }
   return null;

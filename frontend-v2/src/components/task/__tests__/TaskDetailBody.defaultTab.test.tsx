@@ -541,6 +541,27 @@ describe("head-owned task (head launcher §8.2)", () => {
     expect(screen.queryByText(/Review blockiert/)).not.toBeInTheDocument();
   });
 
+  it("an ended head + a real assigned agent shows the AGENT's name, not a stale 'Head · …' (review fix round 5)", async () => {
+    mockApi();
+    const { mkRun } = await import("@/lib/__tests__/headFixtures");
+    vi.spyOn(api.heads, "list").mockResolvedValue({
+      runs: [mkRun({ state: "failed", reason: "no_progress", exited_at: "2026-09-23T12:00:00Z" })],
+    });
+    vi.spyOn(api.heads, "pairs").mockRejectedValue(new Error("API 404: {}"));
+    renderBody(taskFixture({ status: "in_progress", run_control: "manual_hold", assigned_agent_id: "agent-1" }));
+    // Wait for the head run to actually be loaded (reflected in the state
+    // card's own `data-head-state`) before checking the Agent property —
+    // otherwise this assertion would trivially pass on the PRE-fetch render
+    // too, since `headRuns` defaults to `[]` before the query resolves.
+    await waitFor(() => expect(screen.getByTestId("task-state-card")).toHaveAttribute("data-head-state", "failed"));
+    fireEvent.click(screen.getByRole("tab", { name: "Summary" }));
+    // Before PR 3 round 5, `latestHeadRun` alone decided the value — a failed/
+    // ended head still hid the real `assigned_agent_id`, and the operator's
+    // own pick in the property menu appeared to do nothing.
+    expect(await screen.findByTestId("fact-agent")).toHaveTextContent("alpha");
+    expect(screen.queryByTestId("fact-agent")).not.toHaveTextContent("Head ·");
+  });
+
   it("without a head run the fleet controls stay, and the Agent fact reads plain 'Unassigned'", async () => {
     mockApi();
     vi.spyOn(api.heads, "list").mockRejectedValue(new Error('API 404: {"detail":{"code":"heads_disabled"}}'));

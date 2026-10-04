@@ -530,7 +530,7 @@ describe("lastHeadActivity — HeadStateCard's 'Last: …' line", () => {
 
   it("picks the NEWEST tool title, scanning backward — not the first event in the window", () => {
     const events = [tool("t1", "2026-09-23T10:00:00Z", "older tool"), tool("t2", "2026-09-23T10:00:30Z", "newer tool")];
-    expect(lastHeadActivity(events)).toEqual({ text: "newer tool", ts: "2026-09-23T10:00:30Z" });
+    expect(lastHeadActivity(events)).toEqual({ text: "newer tool", ts: "2026-09-23T10:00:30Z", kind: "tool" });
   });
 
   it("falls back to the newest assistant message's first line when the newest event has no title", () => {
@@ -538,7 +538,7 @@ describe("lastHeadActivity — HeadStateCard's 'Last: …' line", () => {
       tool("t1", "2026-09-23T10:00:00Z", "earlier tool"),
       message("m1", "2026-09-23T10:00:10Z", "assistant", "Looking at the diff\nmore detail below"),
     ];
-    expect(lastHeadActivity(events)).toEqual({ text: "Looking at the diff", ts: "2026-09-23T10:00:10Z" });
+    expect(lastHeadActivity(events)).toEqual({ text: "Looking at the diff", ts: "2026-09-23T10:00:10Z", kind: "message" });
   });
 
   it("skips thinking/usage frames and the operator's own user turn — neither carries a sentence to show", () => {
@@ -547,11 +547,39 @@ describe("lastHeadActivity — HeadStateCard's 'Last: …' line", () => {
       thinking("th1", "2026-09-23T10:00:05Z"),
       message("u1", "2026-09-23T10:00:10Z", "user", "do the thing"),
     ];
-    expect(lastHeadActivity(events)).toEqual({ text: "the real last thing it did", ts: "2026-09-23T10:00:00Z" });
+    expect(lastHeadActivity(events)).toEqual({ text: "the real last thing it did", ts: "2026-09-23T10:00:00Z", kind: "tool" });
   });
 
   it("is null for an empty window or one with nothing renderable", () => {
     expect(lastHeadActivity([])).toBeNull();
     expect(lastHeadActivity([thinking("th1", "2026-09-23T10:00:00Z")])).toBeNull();
+  });
+
+  // Review fix round 5: a raw assistant line went straight to the UI,
+  // asterisks and all, and a bare code-fence opener counted as "the line".
+  it("strips bold/inline-code marks from an assistant sentence (real omp run shape)", () => {
+    const events = [message("m1", "2026-09-23T10:00:10Z", "assistant", "Run complete — **Status: passed**.")];
+    expect(lastHeadActivity(events)).toEqual({ text: "Run complete — Status: passed.", ts: "2026-09-23T10:00:10Z", kind: "message" });
+  });
+
+  it("strips a leading heading/bullet mark and collapses `code` spans", () => {
+    expect(lastHeadActivity([message("m1", "t1", "assistant", "## Next: run `pytest -q` again")]))
+      .toEqual({ text: "Next: run pytest -q again", ts: "t1", kind: "message" });
+    expect(lastHeadActivity([message("m2", "t2", "assistant", "- wait for reviewer result")]))
+      .toEqual({ text: "wait for reviewer result", ts: "t2", kind: "message" });
+  });
+
+  it("a bare code-fence line is skipped — the next real line in the same message wins", () => {
+    const events = [message("m1", "2026-09-23T10:00:10Z", "assistant", "```bash\npytest -q\n```")];
+    expect(lastHeadActivity(events)).toEqual({ text: "pytest -q", ts: "2026-09-23T10:00:10Z", kind: "message" });
+  });
+
+  it("a message that is ONLY fence lines (nothing else) falls through, same as an all-skipped window", () => {
+    expect(lastHeadActivity([message("m1", "t1", "assistant", "```\n```")])).toBeNull();
+  });
+
+  it("a tool event's own kind is \"tool\", an assistant sentence's is \"message\" — the card picks its icon from this", () => {
+    expect(lastHeadActivity([tool("t1", "t", "bash: pytest")])?.kind).toBe("tool");
+    expect(lastHeadActivity([message("m1", "t", "assistant", "Looking at the diff")])?.kind).toBe("message");
   });
 });

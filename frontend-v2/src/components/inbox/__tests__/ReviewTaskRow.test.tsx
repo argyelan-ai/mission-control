@@ -124,11 +124,32 @@ describe("ReviewTaskRow — head chip (heads-sichtbar PR 3, bauplan §4)", () =>
     const { default: userEvent } = await import("@testing-library/user-event");
     const run = mkRun({ state: "passed" });
     renderRow(mkTask(), run);
-    expect(screen.queryByText("No comments yet.")).not.toBeInTheDocument();
+    const header = screen.getByTestId("review-row-header");
+    // `aria-expanded` is synchronous and does not depend on the (unmocked)
+    // comments query ever resolving — review fix round 5: the previous
+    // version of this test asserted on "No comments yet.", text that only
+    // renders once `api.tasks.comments.list` resolves; since that call was
+    // never mocked here, the query never settled in jsdom and the assertion
+    // passed vacuously whether or not the card actually expanded.
+    expect(header).toHaveAttribute("aria-expanded", "false");
     await userEvent.click(screen.getByTestId("review-row-head-chip"));
     // still collapsed — the chip's own stopPropagation held (sabotage: removing
     // it would expand the card on every chip click, a confusing side effect
     // of what reads as "open the head chat").
-    expect(screen.queryByText("No comments yet.")).not.toBeInTheDocument();
+    expect(header).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("an ended head + a real assigned agent shows the AGENT's chip, not a stale head chip (review fix round 5)", () => {
+    const run = mkRun({ state: "failed", reason: "no_progress", exited_at: "2026-09-23T12:00:00Z" });
+    renderRow(mkTask({ assigned_agent_id: "a1" }), run, { id: "a1", name: "Beta", emoji: "🔧" } as never);
+    expect(screen.getByText("Beta")).toBeInTheDocument();
+    expect(screen.queryByTestId("review-row-head-chip")).not.toBeInTheDocument();
+  });
+
+  it("an ACTIVE head still wins over an assigned agent — the head owns the work right now", () => {
+    const run = mkRun({ state: "running" });
+    renderRow(mkTask({ assigned_agent_id: "a1" }), run, { id: "a1", name: "Beta", emoji: "🔧" } as never);
+    expect(screen.getByTestId("review-row-head-chip")).toBeInTheDocument();
+    expect(screen.queryByText("Beta")).not.toBeInTheDocument();
   });
 });

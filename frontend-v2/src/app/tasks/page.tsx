@@ -547,7 +547,12 @@ function RevisionSection({
 
 // ── Project Detail ─────────────────────────────────────────────────────────────
 
-function ProjectDetail({
+// Exported for its own focused test (ProjectDetail.headLine.test.tsx, review
+// fix round 5) — the `headByTask.get(task.id)` lookup lines below (phases'
+// subtasks AND the standalone list) had no test at all; `TaskRow`'s own test
+// only ever supplied `headRun` as a plain prop, never exercising this file's
+// own lookup.
+export function ProjectDetail({
   project,
   tasks,
   agents,

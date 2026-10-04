@@ -1040,7 +1040,19 @@ export function TaskDetailBody({
           // who is working twice (K3). PR 3 (bauplan §4) folds the two into
           // this one row's VALUE; the menu underneath still lets the
           // operator assign a real agent regardless of a head.
-          value={latestHeadRun ? `${tHeads("runs.fact")} · ${pairShort(latestHeadRun)}` : agent ? agent.name : t("unassigned")}
+          //
+          // Review fix (round 5): a head only OWNS the value while it is
+          // still active, or while nobody else has been assigned — once the
+          // head has ended AND a real agent sits in `assigned_agent_id`, the
+          // agent wins (an ended head is history, not the current assignee;
+          // this used to hide a real assignment behind a stale "Head · …").
+          value={
+            latestHeadRun && (isHeadActive(latestHeadRun) || !agent)
+              ? `${tHeads("runs.fact")} · ${pairShort(latestHeadRun)}`
+              : agent
+                ? agent.name
+                : t("unassigned")
+          }
           options={agents.map((a) => ({ id: a.id, label: a.name, active: a.id === task.assigned_agent_id }))}
           onSelect={(id) => id && updateMutation.mutate({ assigned_agent_id: id } as Partial<Task>)}
         />

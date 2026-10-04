@@ -23,7 +23,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { api } from "@/lib/api";
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
@@ -31,6 +31,7 @@ import type { Agent, Device, Host, Runtime, RuntimeLiveStatus } from "@/lib/type
 import { typeLabel } from "../runtimeTypeLabel";
 import { formatUptimeParts, pad2 } from "./uptimeFormat";
 import { fmtCtx } from "@/lib/utils";
+import { formatDuration } from "@/lib/taskDetail/format";
 import { FlowEdge, type FlowKind } from "./FlowEdge";
 import { HeatStrip } from "./HeatStrip";
 import { KpiRow, type KpiCell } from "./KpiRow";
@@ -40,7 +41,8 @@ import { PhaseBar } from "./PhaseBar";
 import { shortModelTitle } from "./modelTitle";
 import { useAppStore } from "@/lib/store";
 import { headOnBoxes, useHeadOccupancy } from "@/components/heads/HeadOccupancy";
-import type { HeadBusy } from "@/lib/heads";
+import { useHeadPairsForLabels } from "@/components/heads/HeadStateCard";
+import { runPairLabel, type HeadBusy } from "@/lib/heads";
 import { fleetCount } from "@/app/agents/fleetCount";
 
 export interface StageMember {
@@ -86,6 +88,7 @@ export function Stage({
   onOpenCockpit: (headHostId: string) => void;
 }) {
   const t = useTranslations("runtimes.stage");
+  const locale = useLocale();
   const currentUser = useAppStore((s) => s.currentUser);
   const reduceMotion = useReducedMotion();
   const headHost = members.find((m) => m.role === "head" || m.role == null) ?? members[0];
@@ -102,6 +105,10 @@ export function Stage({
     }
     return [...byRun.values()];
   }, [headOccupancy, members]);
+  // Nicer runtime names for the KPI popover's "pair · duration" lines
+  // (bare `harness`/`runtime_slug` otherwise) — only fetched once there is
+  // a head on the card, same gate `useHeadPairsForLabels` elsewhere uses.
+  const headPairsForLabels = useHeadPairsForLabels(headsOnCard.length > 0);
 
   const { data: pulse } = useQuery({
     queryKey: ["hosts", headHost?.host.id, "pulse"],
@@ -191,7 +198,10 @@ export function Stage({
   const agentSplit = fleetCount(boundAgents);
   const activeAgents = boundAgents.filter((a) => a.operational_mode !== "paused");
   const busyAgents = activeAgents.filter((a) => a.status === "busy");
-  const connectedAgents = activeAgents.filter((a) => a.status !== "busy");
+  // Review fix round 5: only a genuinely reachable, idle agent is CONNECTED —
+  // `status !== "busy"` used to also count offline/error/provisioning/
+  // restarting agents as connected, which overstated the box's own number.
+  const connectedAgents = activeAgents.filter((a) => a.status === "online" || a.status === "idle");
   const activeNames = activeAgents.map((a) => a.name).filter(Boolean);
   const pausedNames = boundAgents.filter((a) => a.operational_mode === "paused").map((a) => a.name).filter(Boolean);
   const workingCount = headsOnCard.length + busyAgents.length;
@@ -209,6 +219,43 @@ export function Stage({
     ...(pausedNames.length > 0 ? [t("inUsePaused", { names: pausedNames.join(", ") })] : []),
   ].join("\n");
 
+  // Tap target (review fix round 5, bauplan §4 "Antippen zeigt wer"): the
+  // `title` tooltip above never fires on iOS, so the same facts — who is
+  // WORKING (heads with their pair + how long, plus a busy agent's name)
+  // and who is only CONNECTED — are repeated here as a tappable disclosure.
+  const workingEntries: { id: string; text: string }[] = [
+    ...headsOnCard.map((h) => {
+      const sinceMs = h.since ? Date.parse(h.since) : NaN;
+      const seconds = Number.isNaN(sinceMs) ? null : Math.max(0, Math.round((Date.now() - sinceMs) / 1000));
+      const duration = seconds != null ? formatDuration(seconds, locale) : null;
+      const pair = runPairLabel(h, headPairsForLabels);
+      return { id: h.run_id, text: duration ? `${pair} · ${duration}` : pair };
+    }),
+    ...busyAgents.map((a) => ({ id: a.id, text: a.name })),
+  ];
+  const connectedEntries = connectedAgents.map((a) => ({ id: a.id, text: a.name }));
+  const inUsePopover = (
+    <>
+      {workingEntries.length > 0 && (
+        <div>
+          <div className="font-semibold mb-1" style={{ color: C.textPrimary }}>{t("kpiPopoverWorking")}</div>
+          <ul className="flex flex-col gap-1">
+            {workingEntries.map((e) => <li key={e.id}>{e.text}</li>)}
+          </ul>
+        </div>
+      )}
+      {connectedEntries.length > 0 && (
+        <div>
+          <div className="font-semibold mb-1" style={{ color: C.textPrimary }}>{t("kpiPopoverConnected")}</div>
+          <ul className="flex flex-col gap-1">
+            {connectedEntries.map((e) => <li key={e.id}>{e.text}</li>)}
+          </ul>
+        </div>
+      )}
+      {workingEntries.length === 0 && connectedEntries.length === 0 && <div>{t("kpiPopoverEmpty")}</div>}
+    </>
+  );
+
   const endpointPort = runtime.endpoint?.match(/:(\d+)/)?.[1] ?? null;
   const cells: KpiCell[] = [
     { value: fmtCtx(live?.served_context_len ?? runtime.max_context_len), label: t("kpiContext") },
@@ -219,10 +266,12 @@ export function Stage({
     },
     {
       value: String(workingCount),
-      unit: t("kpiWorking"),
-      label: t("kpiConnected", { count: connectedCount }),
+      unit: t(workingCount === 1 ? "kpiWorking" : "kpiWorkingPlural"),
+      label: connectedCount > 0 ? t("kpiConnected", { count: connectedCount }) : t("kpiConnectedNone"),
       title: inUseTitle,
       testId: "kpi-in-use",
+      popoverContent: inUsePopover,
+      popoverLabel: t("kpiPopoverLabel"),
     },
     {
       value: endpointPort != null ? `:${endpointPort}` : "–",

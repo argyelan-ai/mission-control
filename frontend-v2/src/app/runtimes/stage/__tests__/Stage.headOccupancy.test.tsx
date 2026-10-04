@@ -129,7 +129,33 @@ describe("Stage — model card while a head works", () => {
     expect(title).toContain("Resting");
   });
 
-  it("paused agents count toward neither number: 1 head + 3 paused agents → '1 working · + 0 connected'", async () => {
+  it("tapping the KPI cell reveals who is working and who is only connected (review fix round 5 — a bare title never fires on a phone)", async () => {
+    vi.spyOn(api.heads, "occupancy").mockResolvedValue({ boxes: { "host-1": head } });
+    vi.spyOn(api.heads, "pairs").mockResolvedValue({ pairs: [], default_pair: null });
+    vi.spyOn(api.runtimes.db, "agents").mockResolvedValue({
+      runtime_slug: "glm-local", count: 2,
+      agents: [{ id: "a1", name: "Nova", agent_runtime: "x" }, { id: "a2", name: "Beta", agent_runtime: "x" }],
+    });
+    vi.spyOn(api.agents, "list").mockResolvedValue([
+      { id: "a1", name: "Nova", operational_mode: "active", status: "busy" } as unknown as Agent,
+      mkAgent("a2", "Beta", "active"),
+    ]);
+    renderWithQuery(<Stage runtime={runtime} members={[{ host, role: "head" }]} onOpenCockpit={() => {}} />);
+    const tile = await screen.findByTestId("kpi-in-use");
+    await waitFor(() => expect(tile).toHaveTextContent("2")); // 1 head + Nova (busy)
+    expect(tile).not.toHaveAttribute("open");
+    await userEvent.click(tile.querySelector("summary")!);
+    expect(tile).toHaveAttribute("open");
+    const popover = within(tile).getByTestId("kpi-in-use-popover");
+    // The head's own title ("Fix flaky retry test") is not part of this list
+    // (that is what the tooltip's `inUseHead` line already says) — this is
+    // the pair + how long, same facts the full head chat header shows.
+    expect(popover).toHaveTextContent("omp");
+    expect(popover).toHaveTextContent("Nova");
+    expect(popover).toHaveTextContent("Beta");
+  });
+
+  it("paused agents count toward neither number: 1 head + 3 paused agents → '1 working · nothing connected'", async () => {
     vi.spyOn(api.heads, "occupancy").mockResolvedValue({ boxes: { "host-1": head } });
     vi.spyOn(api.runtimes.db, "agents").mockResolvedValue({
       runtime_slug: "glm-local", count: 3,
@@ -145,7 +171,13 @@ describe("Stage — model card while a head works", () => {
     renderWithQuery(<Stage runtime={runtime} members={[{ host, role: "head" }]} onOpenCockpit={() => {}} />);
     const tile = await screen.findByTestId("kpi-in-use");
     await waitFor(() => expect(tile.getAttribute("title") ?? "").toContain("Paused: Alpha, Beta, Gamma"));
-    expect(tile).toHaveTextContent(/^1working\+ 0 connected$/);
+    // Review fix round 5: "+ 0 connected" read as if 0 were a real, counted
+    // fact; a zero count now shows neutral wording instead (the paused
+    // agents count toward neither number, same as before — they just never
+    // show as "+ 0").
+    expect(tile).toHaveTextContent(/^1working/);
+    expect(tile).toHaveTextContent("nothing connected");
+    expect(tile).not.toHaveTextContent("+ 0 connected");
     const title = tile.getAttribute("title") ?? "";
     expect(title).toContain("{paused, plural"); // the "with paused" sentence
     expect(title).not.toContain("Agents:");
@@ -156,7 +188,8 @@ describe("Stage — model card while a head works", () => {
     renderWithQuery(<Stage runtime={runtime} members={[{ host, role: "head" }]} onOpenCockpit={() => {}} />);
     await waitFor(() => expect(api.heads.occupancy).toHaveBeenCalled());
     const tile = await screen.findByTestId("kpi-in-use");
-    expect(tile).toHaveTextContent(/^0working\+ 0 connected$/);
+    expect(tile).toHaveTextContent(/^0working/);
+    expect(tile).toHaveTextContent("nothing connected");
     expect(tile.getAttribute("title")).not.toContain("Head:");
     expect(await screen.findByTestId("stop-runtime")).toBeEnabled();
   });
@@ -211,10 +244,36 @@ describe("Switch / stop under a working head", () => {
 
   it("the German texts are there", () => {
     expect(de.runtimes.stage.kpiWorking).toBe("arbeitet");
+    // Review fix round 5: German has no invariant plural for "arbeitet" — "3
+    // arbeitet" is wrong grammar ("3 arbeiten" is correct). `kpiWorkingPlural`
+    // is picked in code for any count other than exactly 1.
+    expect(de.runtimes.stage.kpiWorkingPlural).toBe("arbeiten");
     expect(de.runtimes.stage.kpiConnected).toContain("verbunden");
+    expect(de.runtimes.stage.kpiConnectedNone).toBeTruthy();
     expect(de.heads.runtimes.onBoxBodyStop).toBeTruthy();
     expect(de.heads.runtimes.ok).toBeTruthy();
     expect(de.runtimes.stage.inUseTooltip).toContain("{heads");
+  });
+
+  it("an offline/error agent counts toward neither number, though the tooltip still names it (review fix round 5)", async () => {
+    vi.spyOn(api.heads, "occupancy").mockResolvedValue({ boxes: { "host-1": head } });
+    vi.spyOn(api.runtimes.db, "agents").mockResolvedValue({
+      runtime_slug: "glm-local", count: 2,
+      agents: [{ id: "a1", name: "Flaky", agent_runtime: "x" }, { id: "a2", name: "Down", agent_runtime: "x" }],
+    });
+    vi.spyOn(api.agents, "list").mockResolvedValue([
+      { id: "a1", name: "Flaky", operational_mode: "active", status: "error" } as unknown as Agent,
+      { id: "a2", name: "Down", operational_mode: "active", status: "offline" } as unknown as Agent,
+    ]);
+    renderWithQuery(<Stage runtime={runtime} members={[{ host, role: "head" }]} onOpenCockpit={() => {}} />);
+    const tile = await screen.findByTestId("kpi-in-use");
+    await waitFor(() => expect(tile).toHaveTextContent("1"));
+    // Sabotage: reverting the filter to `status !== "busy"` would count both
+    // as connected and this would read "+ 2 connected" instead.
+    expect(tile).toHaveTextContent("nothing connected");
+    const title = tile.getAttribute("title") ?? "";
+    expect(title).toContain("Flaky");
+    expect(title).toContain("Down");
   });
 
   it("a dead engine stays recoverable: trouble variant keeps Stop enabled", async () => {

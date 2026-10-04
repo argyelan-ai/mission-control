@@ -19,7 +19,7 @@ import Link from "next/link";
 import type { Task, Agent } from "@/lib/types";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 import { isSelfReviewStall } from "@/lib/reviewRouting";
-import { headListLine, type HeadRun } from "@/lib/heads";
+import { headListLine, isHeadActive, type HeadRun } from "@/lib/heads";
 
 // ── Review Task Row ──────────────────────────────────────────────────────────
 
@@ -70,6 +70,12 @@ export function ReviewTaskRow({
   // without ever having human_review_required set. Say why.
   const selfReviewStall = !task.human_review_required && isSelfReviewStall(task);
 
+  // A head only OWNS this card's chip while it is still active, or while
+  // nobody else has been assigned (review fix round 5 — mirrors the same
+  // rule in TaskDetailBody's Agent property): an ENDED head run must not
+  // keep hiding a real `assigned_agent_id` the operator picked afterward.
+  const showHeadChip = headRun != null && (!agent || isHeadActive(headRun));
+
   return (
     <motion.div
       layout
@@ -82,6 +88,16 @@ export function ReviewTaskRow({
         <div
           className="flex items-start justify-between gap-4 cursor-pointer"
           onClick={() => setExpanded(!expanded)}
+          role="button"
+          tabIndex={0}
+          aria-expanded={expanded}
+          data-testid="review-row-header"
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              setExpanded(!expanded);
+            }
+          }}
         >
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
@@ -120,24 +136,13 @@ export function ReviewTaskRow({
               {/* A head owns the card before `assigned_agent_id` ever does
                   (anhang.md A11: that field stays NULL while a head runs) —
                   the two chips are mutually exclusive in practice, named
-                  once each (K3). */}
-              {headRun ? (
-                <Link
-                  href={`/sessions?head=${encodeURIComponent(headRun.run_id)}`}
-                  onClick={(e) => e.stopPropagation()}
-                  className="inline-flex items-center gap-1 text-xs cursor-pointer underline-offset-2 hover:underline"
-                  style={{ color: C.textMuted }}
-                  data-testid="review-row-head-chip"
-                >
-                  {headListLine(headRun, tHeads, locale)}
-                  <ChevronRight size={11} aria-hidden />
-                </Link>
-              ) : (
-                agent && (
-                  <span className="text-[11px] text-[var(--color-text-muted)]">
-                    <EntityIcon value={agent.emoji} size={14} className="inline-block align-[-2px] mr-1" />{agent.name}
-                  </span>
-                )
+                  once each (K3). The head chip itself sits in its own row
+                  under the title now (mockup C-inbox, review fix round 5):
+                  inline here it pushed "… ago" onto a line of its own. */}
+              {!showHeadChip && agent && (
+                <span className="text-[11px] text-[var(--color-text-muted)]">
+                  <EntityIcon value={agent.emoji} size={14} className="inline-block align-[-2px] mr-1" />{agent.name}
+                </span>
               )}
               <span className="text-[10px] ml-auto text-[var(--color-text-muted)]">
                 {timeAgo(task.updated_at, locale)}
@@ -153,8 +158,20 @@ export function ReviewTaskRow({
                 {task.title}
               </p>
             </div>
+            {showHeadChip && headRun && (
+              <Link
+                href={`/sessions?head=${encodeURIComponent(headRun.run_id)}`}
+                onClick={(e) => e.stopPropagation()}
+                className="inline-flex items-center gap-1 text-xs mt-1 ml-6 cursor-pointer underline-offset-2 hover:underline pointer-coarse:min-h-[44px]"
+                style={{ color: C.textMuted }}
+                data-testid="review-row-head-chip"
+              >
+                {headListLine(headRun, tHeads, locale)}
+                <ChevronRight size={11} aria-hidden />
+              </Link>
+            )}
             {!expanded && task.description && (
-              <p className="text-[11px] mt-1 ml-5 line-clamp-2 text-[var(--color-text-secondary)]">
+              <p className="text-[11px] mt-1 ml-6 line-clamp-2 text-[var(--color-text-secondary)]">
                 {task.description}
               </p>
             )}
@@ -174,7 +191,7 @@ export function ReviewTaskRow({
               {/* Description */}
               {task.description && (
                 <div
-                  className="mt-3 ml-5 p-3 rounded-xl prose-description"
+                  className="mt-3 ml-6 p-3 rounded-xl prose-description"
                   style={{
                     backgroundColor: "var(--color-bg-surface)",
                     border: "1px solid var(--color-border-subtle)",
@@ -186,7 +203,7 @@ export function ReviewTaskRow({
 
               {/* Comments */}
               {comments && comments.length > 0 && (
-                <div className="mt-3 ml-5 flex flex-col gap-2">
+                <div className="mt-3 ml-6 flex flex-col gap-2">
                   <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-1">
                     {t("historyCount", { count: comments.length })}
                   </div>
@@ -197,13 +214,13 @@ export function ReviewTaskRow({
               )}
 
               {comments && comments.length === 0 && (
-                <div className="mt-3 ml-5 text-[11px] text-[var(--color-text-muted)]">
+                <div className="mt-3 ml-6 text-[11px] text-[var(--color-text-muted)]">
                   {t("noCommentsYet")}
                 </div>
               )}
 
               {/* Link to tasks */}
-              <div className="mt-3 ml-5">
+              <div className="mt-3 ml-6">
                 <Link
                   href="/tasks"
                   className="inline-flex items-center gap-1 text-[11px] transition-colors"

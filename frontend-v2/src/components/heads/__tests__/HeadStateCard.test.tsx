@@ -3,7 +3,7 @@
  * §8.2, build plan B5–B7).
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { api } from "@/lib/api";
@@ -297,6 +297,21 @@ describe("HeadStateCard — translated step, last activity, live link (heads-sic
     expect(link).toHaveTextContent("View live transcript");
   });
 
+  it("picks the icon by event kind — the wrench for a tool, a message icon for a plain sentence (review fix round 5)", async () => {
+    vi.spyOn(api.heads, "history").mockResolvedValue({
+      etag: "e1",
+      data: {
+        events: [{ kind: "message", uuid: "m1", ts: "2026-09-23T10:00:10Z", role: "assistant", text: "Run complete.", model: null, sidechain: false }],
+        session: { sessionId: "s1", live: true, startedAt: null, aliveness: "active" },
+        hasMore: false, subagentRuns: [], source: "transcript", reader: "omp", reason: null,
+      },
+    });
+    renderCard(mkRun({ state: "running" }));
+    const line = await screen.findByTestId("head-card-last-activity");
+    expect(line.querySelector(".lucide-message-square")).toBeInTheDocument();
+    expect(line.querySelector(".lucide-wrench")).not.toBeInTheDocument();
+  });
+
   it("with no transcript yet, there is no 'Last: …' line — only the live link", async () => {
     vi.spyOn(api.heads, "history").mockResolvedValue({
       etag: "e1",
@@ -312,9 +327,67 @@ describe("HeadStateCard — translated step, last activity, live link (heads-sic
   });
 
   it("the live link only appears while the run is active — not once it has ended", () => {
+    // Review fix round 5: this used to render with NO spy on `api.heads.history`
+    // at all — the real fetch simply fails in jsdom, so "no Last: line" passed
+    // whether or not the `enabled: isActive` gate actually worked. Spying here
+    // and asserting the call count proves the gate itself, not a side effect
+    // of an unmocked network call.
+    const history = vi.spyOn(api.heads, "history");
     renderCard(mkRun({ state: "passed", pr_url: "https://github.com/o/r/pull/1" }));
     expect(screen.queryByTestId("head-card-view-live")).not.toBeInTheDocument();
     expect(screen.queryByTestId("head-card-last-activity")).not.toBeInTheDocument();
+    expect(history).not.toHaveBeenCalled();
+  });
+
+  it("polls history every 10s while running, and stops once the run has ended (review fix round 5)", async () => {
+    vi.useFakeTimers();
+    try {
+      const history = vi.spyOn(api.heads, "history").mockResolvedValue({
+        etag: "e1",
+        data: {
+          events: [], session: { sessionId: "s1", live: true, startedAt: null, aliveness: "active" },
+          hasMore: false, subagentRuns: [], source: "transcript", reader: "omp", reason: "not_yet",
+        },
+      });
+      const runningCard = () => {
+        const card = deriveStateCard({ task: taskFixture({ status: "in_progress" }), approvals: [], comments: [], runRecord: null, headRun: mkRun({ state: "running" }) });
+        if (card?.kind !== "head") throw new Error("expected a head card");
+        return card;
+      };
+      const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+      const running = runningCard();
+      const { rerender } = render(
+        <QueryClientProvider client={qc}>
+          <HeadStateCard run={running.run} mainAction={running.mainAction} silentWarn={running.silentWarn} />
+        </QueryClientProvider>,
+      );
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(history).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(history).toHaveBeenCalledTimes(2);
+
+      // The run has now ended — a sabotage that removed the `enabled: isActive`
+      // gate from the poll would keep refetching here, same as a running card.
+      const endedCard = deriveStateCard({ task: taskFixture({ status: "in_progress" }), approvals: [], comments: [], runRecord: null, headRun: mkRun({ state: "passed", pr_url: "https://github.com/o/r/pull/1" }) });
+      if (endedCard?.kind !== "head") throw new Error("expected a head card");
+      rerender(
+        <QueryClientProvider client={qc}>
+          <HeadStateCard run={endedCard.run} mainAction={endedCard.mainAction} silentWarn={endedCard.silentWarn} />
+        </QueryClientProvider>,
+      );
+      history.mockClear();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(history).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   // Sabotage: a last-activity scan that reads forward (oldest-first) instead

@@ -7,7 +7,7 @@
  * what they say. This test is the sabotage check for that regression class.
  */
 import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { KpiRow, type KpiCell } from "../KpiRow";
 
 const cells: KpiCell[] = [
@@ -30,6 +30,48 @@ describe("KpiRow", () => {
     const row = screen.getByTestId("kpi-row");
     for (const cell of Array.from(row.children)) {
       expect((cell as HTMLElement).style.borderRight).toBe("");
+    }
+  });
+});
+
+describe("KpiRow — tappable cell (review fix round 5: a bare `title` tooltip never fires on a phone)", () => {
+  function renderWithPopover() {
+    const withPopover: KpiCell[] = [
+      ...cells,
+      {
+        value: "1", unit: "working", label: "+ 1 connected", title: "who summary",
+        testId: "kpi-in-use", popoverContent: <div>Working: Alpha</div>, popoverLabel: "Who is working",
+      },
+    ];
+    render(<KpiRow cells={withPopover} />);
+    return screen.getByTestId("kpi-in-use");
+  }
+
+  it("is closed by default, keeps the usual title/value/label, and carries the popover's own test id", () => {
+    const tile = renderWithPopover();
+    expect(tile.tagName).toBe("DETAILS");
+    expect(tile).not.toHaveAttribute("open");
+    expect(tile).toHaveAttribute("title", "who summary");
+    expect(tile).toHaveTextContent("1");
+    expect(tile).toHaveTextContent("working");
+    expect(screen.getByTestId("kpi-in-use-popover")).toHaveTextContent("Working: Alpha");
+    expect(screen.getByLabelText("Who is working")).toBeInTheDocument();
+  });
+
+  it("tapping the summary opens the native disclosure (and tapping again closes it)", () => {
+    const tile = renderWithPopover();
+    const summary = tile.querySelector("summary")!;
+    fireEvent.click(summary);
+    expect(tile).toHaveAttribute("open");
+    fireEvent.click(summary);
+    expect(tile).not.toHaveAttribute("open");
+  });
+
+  it("a plain cell (no popoverContent) still renders as a div, not a details element", () => {
+    render(<KpiRow cells={cells} />);
+    const row = screen.getByTestId("kpi-row");
+    for (const cell of Array.from(row.children)) {
+      expect(cell.tagName).toBe("DIV");
     }
   });
 });
