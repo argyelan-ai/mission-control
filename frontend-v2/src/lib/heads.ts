@@ -409,3 +409,183 @@ export function headRunsActive(data: { runs?: HeadRun[] } | undefined | null): b
   const runs = Array.isArray(data?.runs) ? data!.runs : [];
   return isHeadActive(sortRunsNewestFirst(runs)[0]);
 }
+
+// ── Transport shapes (heads-sichtbar PR 2) ──────────────────────────────────
+//
+// `GET /heads/{run_id}/chat/history` (backend `services/heads/transcript.py`
+// — see its module docstring for the full contract) answers in the SAME
+// shape an agent's `GET /agents/{id}/chat/history` does
+// (`chatTypes.ChatHistoryResponse`), plus three fields an agent's own
+// endpoint has no use for: `source`/`reader`/`reason` say WHY there is (or
+// is not) a transcript at all. Declared here, not in `chatTypes.ts`, because
+// nothing about an agent's chat ever needs them.
+
+export type HeadTranscriptSource = "transcript" | "none";
+export type HeadTranscriptReader = "claude" | "omp" | null;
+export type HeadTranscriptReason = "no_reader" | "not_yet" | "no_transcript" | "too_large" | null;
+
+export interface HeadChatHistoryResponse {
+  events: import("./chatTypes").ChatEvent[];
+  session: import("./chatTypes").ChatSession;
+  hasMore: boolean;
+  subagentRuns: import("./chatTypes").SubagentRun[];
+  source: HeadTranscriptSource;
+  reader: HeadTranscriptReader;
+  reason: HeadTranscriptReason;
+}
+
+/** `GET /heads/{run_id}/summary` (backend `services/heads/summary.py`'s own
+ *  docstring has the field-by-field contract) — every field but `run_id`/
+ *  `branch`/`pr_url` can legitimately be `null`: the run record simply never
+ *  recorded that fact, which is not an error. */
+export interface HeadSummary {
+  run_id: string;
+  status: "running" | "passed" | "failed" | null;
+  result_line: string | null;
+  tests: { failed_before: string | null; passed_after: string | null };
+  sabotage: boolean | null;
+  kz_ok: boolean | null;
+  review: "helper" | "self" | null;
+  bypass: number | null;
+  operator_minutes: number | null;
+  helpers: number | null;
+  branch: string | null;
+  pr_url: string | null;
+}
+
+/** `GET /heads` with `recent_days`/`archived` — see `routers/heads.py`'s own
+ *  docstring on `list_heads` for the exact boundary rule. `archived_count`
+ *  is only present on the `recent_days` call, never on a plain or an
+ *  `archived=true` one — callers must not assume it is always there. */
+export interface HeadListResponse {
+  runs: HeadRun[];
+  archived_count?: number;
+}
+
+// ── Heads in Chats (heads-sichtbar PR 2) ────────────────────────────────────
+//
+// Everything below is new frontend-only model for "Heads" as a section in
+// the Chats list and its own read-only chat view — nothing here changes the
+// shape the backend already returns (`/heads`, `/heads/{id}/summary`).
+
+/** "GLM-5.3-Flash-EXL3" → "GLM-5.3": the chat list has no room for a
+ *  quantisation/variant tag the operator did not ask about (K4/K5) — the
+ *  pair is already named in full on the task's own properties page. Strips
+ *  known variant/quant suffixes off the END, one at a time, so a model
+ *  carrying several of them ("-Flash-EXL3") loses all of them, not just
+ *  the last. A model with none of these suffixes (or `null`) passes
+ *  through unchanged — this never invents a shorter name, only removes
+ *  recognised noise. */
+const MODEL_VARIANT_SUFFIX =
+  /-(Flash|Turbo|Mini|Nano|Preview|Instruct|Chat|Base|EXL2|EXL3|GGUF|AWQ|GPTQ|NVFP4|FP8|FP16|INT4|INT8|exp)$/i;
+
+export function modelFamily(model: string | null | undefined): string {
+  if (!model) return "—";
+  let out = model;
+  for (let guard = 0; guard < 6; guard++) {
+    const next = out.replace(MODEL_VARIANT_SUFFIX, "");
+    if (next === out) break;
+    out = next;
+  }
+  return out || model;
+}
+
+/** "omp × GLM-5.3" (Mark's word for the pair, ADR-086 §5) — the SHORT form
+ *  for a list row or a chat header, where `pairLabel`'s "harness · full
+ *  runtime name" would not fit. Deliberately a separate function rather
+ *  than changing `pairLabel`'s own separator or shortening: that change is
+ *  PR 3's (bauplan §4, `pairLabel() Trenner "·" → "×"`), and touches every
+ *  existing `pairLabel` caller/test — this one is additive and touches
+ *  none of them. */
+export function pairShort(run: Pick<HeadRun, "harness" | "model">): string {
+  return `${harnessLabel(run.harness)} × ${modelFamily(run.model)}`;
+}
+
+/** The task title, as the Chats list shows it: a leading bracket tag
+ *  (`"[fixture] scrubbed head run…"`, `"[night] …"`) is operator/tooling
+ *  bookkeeping, not what the head is doing — K3 ("jede Angabe genau
+ *  einmal"), the tag means nothing extra to someone scanning the list.
+ *  More than one leading tag is stripped in one pass. A title that is
+ *  NOTHING but tags (empty after stripping) falls back to the original,
+ *  trimmed — never an empty list row. */
+export function headListTitle(run: Pick<HeadRun, "title">): string {
+  const raw = (run.title ?? "").trim();
+  const stripped = raw.replace(/^(\[[^\]]*\]\s*)+/, "").trim();
+  return stripped || raw;
+}
+
+/** "5/7 independent review · waiting for: reviewer" (the exact line
+ *  `scripts/head/mc-head`'s wrapper asks the head to write, `step.txt`,
+ *  with or without the leading "step " word some writers include) →
+ *  `{n, total, name, waitingFor}`. `null` for anything that does not match
+ *  that shape — an older/garbled `step.txt` must never be guessed at, it
+ *  just renders as "no step reported yet" (existing `card.noStep` key),
+ *  same contract `headStateKey`/`failReasonKey` already follow. */
+export interface ParsedStep {
+  n: number;
+  total: number;
+  name: string;
+  waitingFor: string;
+}
+
+const STEP_RE = /^(?:step\s+)?(\d+)\s*\/\s*(\d+)\s+(.+?)\s*·\s*waiting for:\s*(.+?)\s*$/i;
+
+export function parseStep(step: string | null | undefined): ParsedStep | null {
+  if (!step) return null;
+  const m = STEP_RE.exec(step.trim());
+  if (!m) return null;
+  return { n: Number(m[1]), total: Number(m[2]), name: m[3].trim(), waitingFor: m[4].trim() };
+}
+
+/** The 8 fixed steps of the head procedure (`~/.claude/skills/
+ *  head-procedure`, `backend/templates/heads/head-AGENTS.md` §Workflow,
+ *  0-indexed) — MC can translate the step NAME because every head follows
+ *  the same 8, unlike `parseStep`'s free-text `name`/`waitingFor` (what the
+ *  head itself wrote, shown as-is). Index = the parsed step's `n`. The i18n
+ *  key is `heads.steps.<value>`. */
+export const HEAD_STEP_KEYS = [
+  "context", // 0 — context brief (kz brief), create the run record
+  "plan", // 1 — plan
+  "redTest", // 2 — failing test first
+  "change", // 3 — implement
+  "sabotage", // 4 — sabotage check
+  "review", // 5 — independent review
+  "pr", // 6 — push, open the pull request
+  "runRecord", // 7 — finish the run record
+] as const;
+
+export function headStepKey(n: number): string | null {
+  const key = HEAD_STEP_KEYS[n];
+  return key ? `steps.${key}` : null;
+}
+
+/** List order inside the "Heads" section (bauplan §3.2 `SessionSidebar`):
+ *  needs-you first (the operator is blocked on it), then active (running
+ *  or still starting), then every ended run — newest end first, same
+ *  "most recent first" rule the Archive sheet already uses
+ *  (`sortRunsNewestFirst`). Stable within a group: ties keep their
+ *  original relative order rather than reshuffling on every re-render. */
+const LIST_GROUP: Record<HeadState, 0 | 1 | 2> = {
+  needs_you: 0,
+  running: 1,
+  starting: 1,
+  passed: 2,
+  failed: 2,
+  stopped: 2,
+};
+
+export function sortHeadsForList(runs: HeadRun[]): HeadRun[] {
+  return runs
+    .map((r, i) => ({ r, i }))
+    .sort((a, b) => {
+      const groupDiff = LIST_GROUP[a.r.state] - LIST_GROUP[b.r.state];
+      if (groupDiff !== 0) return groupDiff;
+      if (LIST_GROUP[a.r.state] === 2) {
+        const endA = ts(a.r.exited_at) ?? ts(a.r.created_at) ?? 0;
+        const endB = ts(b.r.exited_at) ?? ts(b.r.created_at) ?? 0;
+        if (endA !== endB) return endB - endA;
+      }
+      return a.i - b.i;
+    })
+    .map(({ r }) => r);
+}

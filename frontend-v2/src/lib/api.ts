@@ -108,11 +108,14 @@ import type {
   TrashEntry,
 } from "./types";
 import type {
+  HeadChatHistoryResponse,
+  HeadListResponse,
   HeadPairsResponse,
   HeadRestartBody,
   HeadRun,
   HeadBusy,
   HeadStartBody,
+  HeadSummary,
 } from "./heads";
 import type { LastNight, NightConfig, NightConfigUpdate, NightEntry, NightTonight } from "./nightShift";
 
@@ -2020,11 +2023,15 @@ export const api = {
       request("/api/v1/heads", { method: "POST", body: JSON.stringify(body) }),
     restart: (runId: string, body: HeadRestartBody): Promise<{ run_id: string; state: string; restarted_from: string }> =>
       request(`/api/v1/heads/${encodeURIComponent(runId)}/restart`, { method: "POST", body: JSON.stringify(body) }),
-    list: (params: { taskId?: string; active?: boolean; box?: string } = {}): Promise<{ runs: HeadRun[] }> => {
+    list: (
+      params: { taskId?: string; active?: boolean; box?: string; recentDays?: number; archived?: boolean } = {},
+    ): Promise<HeadListResponse> => {
       const q = new URLSearchParams();
       if (params.taskId) q.set("task_id", params.taskId);
       if (params.active != null) q.set("active", String(params.active));
       if (params.box) q.set("box", params.box);
+      if (params.recentDays != null) q.set("recent_days", String(params.recentDays));
+      if (params.archived != null) q.set("archived", String(params.archived));
       const qs = q.toString();
       return request(`/api/v1/heads${qs ? `?${qs}` : ""}`);
     },
@@ -2033,6 +2040,45 @@ export const api = {
       requestText(`/api/v1/heads/${encodeURIComponent(runId)}/log?tail=${tail}`),
     runRecord: (runId: string): Promise<string> =>
       requestText(`/api/v1/heads/${encodeURIComponent(runId)}/run-record`),
+    summary: (runId: string): Promise<HeadSummary> => request(`/api/v1/heads/${encodeURIComponent(runId)}/summary`),
+    /**
+     * `GET /heads/{run_id}/chat/history`, read-only (ADR-085 Nachtrag
+     * 2026-10-04 §4). Does NOT go through `request()`: a 304 is a normal,
+     * expected outcome here (unlike every other endpoint, where a non-2xx
+     * status is always an error) and `request()` has no way to tell the two
+     * apart — it would throw on a 304 the same as on a 500. Returns `null`
+     * on 304 (nothing changed — caller keeps its own last page), otherwise
+     * the page plus the `ETag` header the caller must send back as
+     * `etag` on the next call.
+     */
+    history: async (
+      runId: string,
+      params: { limit?: number; beforeUuid?: string; etag?: string | null } = {},
+    ): Promise<{ data: HeadChatHistoryResponse; etag: string | null } | null> => {
+      const q = new URLSearchParams();
+      if (params.limit != null) q.set("limit", String(params.limit));
+      if (params.beforeUuid) q.set("before_uuid", params.beforeUuid);
+      const qs = q.toString();
+      const res = await fetch(`${BASE_URL}/api/v1/heads/${encodeURIComponent(runId)}/chat/history${qs ? `?${qs}` : ""}`, {
+        cache: "no-store",
+        headers: {
+          Authorization: `Bearer ${getToken()}`,
+          ...(params.etag ? { "If-None-Match": params.etag } : {}),
+        },
+      });
+      if (res.status === 304) return null;
+      if (res.status === 401 && typeof window !== "undefined") {
+        clearToken();
+        window.location.href = "/login";
+        throw new Error("Session abgelaufen");
+      }
+      if (!res.ok) {
+        const text = await res.text().catch(() => res.statusText);
+        throw new Error(`API ${res.status}: ${text}`);
+      }
+      const data = (await res.json()) as HeadChatHistoryResponse;
+      return { data, etag: res.headers.get("ETag") };
+    },
     stop: (runId: string): Promise<{ run_id: string; state: string }> =>
       request(`/api/v1/heads/${encodeURIComponent(runId)}/stop`, { method: "POST" }),
     occupancy: (): Promise<{ boxes: Record<string, HeadBusy> }> => request("/api/v1/heads/occupancy"),

@@ -11,15 +11,22 @@ import {
   defaultRestartMode,
   failReasonKey,
   headErrorKey,
+  headListTitle,
+  HEAD_STEP_KEYS,
+  headStepKey,
+  modelFamily,
   pairKey,
   pairReasonKey,
+  pairShort,
   parseHeadOnBox,
+  parseStep,
   prNumberFromUrl,
   runDurationSeconds,
+  sortHeadsForList,
   splitPairs,
   type HeadPairsResponse,
 } from "../heads";
-import { mkPair } from "./headFixtures";
+import { mkPair, mkRun } from "./headFixtures";
 
 function flatKeys(obj: unknown, prefix = ""): string[] {
   if (typeof obj !== "object" || obj === null) return [prefix];
@@ -210,5 +217,116 @@ describe("restart mode (review: continue needs an existing branch)", () => {
     for (const reason of [null, "stopped", "time_limit", "no_pr", "exit_1", "process_vanished"]) {
       expect(defaultRestartMode({ reason, started_at: "2026-09-23T10:00:00Z" })).toBe("continue");
     }
+  });
+});
+
+// ── Heads in Chats (heads-sichtbar PR 2) ────────────────────────────────────
+
+describe("modelFamily", () => {
+  it("strips every trailing variant/quant tag, one at a time", () => {
+    expect(modelFamily("GLM-5.3-Flash-EXL3")).toBe("GLM-5.3");
+    expect(modelFamily("Qwen3.8-27B-NVFP4")).toBe("Qwen3.8-27B");
+  });
+
+  it("leaves a model with no recognised suffix untouched", () => {
+    expect(modelFamily("glm")).toBe("glm");
+    expect(modelFamily(null)).toBe("—");
+  });
+});
+
+describe("pairShort", () => {
+  it("harness label × model family, joined with the Mark word", () => {
+    expect(pairShort({ harness: "omp", model: "GLM-5.3-Flash-EXL3" })).toBe("omp × GLM-5.3");
+    expect(pairShort({ harness: "claude", model: "claude-opus-4-7" })).toBe("Claude Code × claude-opus-4-7");
+  });
+});
+
+describe("headListTitle", () => {
+  it("strips a leading bracket tag", () => {
+    expect(headListTitle({ title: "[fixture] scrubbed head run for the reader tests" })).toBe(
+      "scrubbed head run for the reader tests",
+    );
+  });
+
+  it("strips more than one leading tag", () => {
+    expect(headListTitle({ title: "[night] [retry] Fix flaky retry test" })).toBe("Fix flaky retry test");
+  });
+
+  it("falls back to the raw (trimmed) title when there is nothing left, or nothing to strip", () => {
+    expect(headListTitle({ title: "[fixture]" })).toBe("[fixture]");
+    expect(headListTitle({ title: "Fix flaky retry test" })).toBe("Fix flaky retry test");
+    expect(headListTitle({ title: null })).toBe("");
+  });
+});
+
+describe("parseStep", () => {
+  it("parses the exact line step.txt writes, with the leading word", () => {
+    expect(parseStep("step 7/7 finish run record · waiting for: nothing")).toEqual({
+      n: 7, total: 7, name: "finish run record", waitingFor: "nothing",
+    });
+  });
+
+  it("parses it without the leading word too", () => {
+    expect(parseStep("5/7 independent review · waiting for: reviewer")).toEqual({
+      n: 5, total: 7, name: "independent review", waitingFor: "reviewer",
+    });
+  });
+
+  it("returns null for anything that does not match — never a guess", () => {
+    expect(parseStep(null)).toBeNull();
+    expect(parseStep("")).toBeNull();
+    expect(parseStep("thinking about it")).toBeNull();
+    // Sabotage: a step missing the "waiting for:" half must not parse
+    // partially (a half-filled {n,total} would be worse than nothing).
+    expect(parseStep("4/7 sabotage probe")).toBeNull();
+  });
+});
+
+describe("HEAD_STEP_KEYS / headStepKey", () => {
+  it("has exactly 8 keys, 0-indexed to the head procedure's own steps", () => {
+    expect(HEAD_STEP_KEYS).toHaveLength(8);
+    expect(headStepKey(0)).toBe("steps.context");
+    expect(headStepKey(7)).toBe("steps.runRecord");
+  });
+
+  it("is i18n-translated in both languages (parity test above already covers the keys)", async () => {
+    const en = (await import("../../../messages/en.json")).default as Record<string, unknown>;
+    const steps = (en.heads as Record<string, unknown>).steps as Record<string, unknown>;
+    for (const key of HEAD_STEP_KEYS) expect(typeof steps[key]).toBe("string");
+  });
+
+  it("returns null out of range rather than an undefined key", () => {
+    expect(headStepKey(8)).toBeNull();
+    expect(headStepKey(-1)).toBeNull();
+  });
+});
+
+describe("sortHeadsForList", () => {
+  it("orders needs_you before running/starting before every ended state", () => {
+    const needsYou = mkRun({ run_id: "a", state: "needs_you" });
+    const running = mkRun({ run_id: "b", state: "running" });
+    const starting = mkRun({ run_id: "c", state: "starting" });
+    const passed = mkRun({ run_id: "d", state: "passed", exited_at: "2026-09-23T10:00:00Z" });
+    const failed = mkRun({ run_id: "e", state: "failed", exited_at: "2026-09-23T09:00:00Z" });
+    const order = sortHeadsForList([passed, running, failed, needsYou, starting]).map((r) => r.run_id);
+    expect(order).toEqual(["a", "b", "c", "d", "e"]);
+  });
+
+  it("sorts ended runs newest-end-first, within the ended group only", () => {
+    const older = mkRun({ run_id: "old", state: "passed", exited_at: "2026-09-20T10:00:00Z" });
+    const newer = mkRun({ run_id: "new", state: "failed", exited_at: "2026-09-23T10:00:00Z" });
+    expect(sortHeadsForList([older, newer]).map((r) => r.run_id)).toEqual(["new", "old"]);
+  });
+
+  it("falls back to created_at when an ended run has no exited_at", () => {
+    const noExit = mkRun({ run_id: "stopped-early", state: "stopped", exited_at: null, created_at: "2026-09-22T00:00:00Z" });
+    const withExit = mkRun({ run_id: "ran-a-while", state: "stopped", exited_at: "2026-09-21T00:00:00Z" });
+    expect(sortHeadsForList([withExit, noExit]).map((r) => r.run_id)).toEqual(["stopped-early", "ran-a-while"]);
+  });
+
+  it("is stable within a group — does not reorder ties", () => {
+    const r1 = mkRun({ run_id: "1", state: "running" });
+    const r2 = mkRun({ run_id: "2", state: "starting" });
+    expect(sortHeadsForList([r1, r2]).map((r) => r.run_id)).toEqual(["1", "2"]);
   });
 });

@@ -3534,7 +3534,62 @@
     },
     "keepTask": "Keep task, close",
     "retryStart": "Start head again",
-    "keptHeld": "The task stays on hold in Inbox — the fleet will not pick it up."
+    "keptHeld": "The task stays on hold in Inbox — the fleet will not pick it up.",
+    "steps": {
+      "context": "Context brief",
+      "plan": "Plan",
+      "redTest": "Failing test",
+      "change": "Change",
+      "sabotage": "Sabotage check",
+      "review": "Independent review",
+      "pr": "Push / PR",
+      "runRecord": "Run record"
+    },
+    "time": {
+      "runningFor": "running for {duration}",
+      "startingNow": "starting…",
+      "ago": "{age} ago"
+    },
+    "list": {
+      "sectionTitle": "Heads",
+      "doneDivider": "Done · 7 days",
+      "archiveTitle": "Archive",
+      "searchPlaceholder": "Search title or pair",
+      "empty": "No older heads yet.",
+      "noResults": "No matches."
+    },
+    "chat": {
+      "backToChats": "Back to chats",
+      "noTranscriptTitle": "No live transcript for this harness",
+      "noTranscriptHint": "Showing the last log lines instead.",
+      "logEmpty": "No output yet.",
+      "jobTitle": "Job",
+      "jobShow": "Show the job",
+      "jobHide": "Hide the job",
+      "footer": {
+        "step": "Step {n}/{total} · {name}",
+        "continueRun": "Continue"
+      }
+    },
+    "summary": {
+      "title": "Run record",
+      "openFull": "Open the full run record",
+      "testsLabel": "Tests",
+      "testsRedBefore": "Red before",
+      "testsGreenAfter": "Green after",
+      "sabotage": "Sabotage probe",
+      "yes": "Yes",
+      "no": "No",
+      "kz": "kz check",
+      "review": "Review",
+      "reviewHelper": "Independent reviewer",
+      "reviewSelf": "Self-review (no helper)",
+      "bypass": "Bypasses",
+      "operatorMinutes": "Your minutes",
+      "helpers": "Helpers",
+      "branch": "Branch",
+      "failed": "could not be loaded"
+    }
   },
   "nightShift": {
     "runTonight": "Run tonight",
