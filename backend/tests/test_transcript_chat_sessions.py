@@ -802,3 +802,132 @@ async def test_state_probe_reports_idle_right_after_final_answer(tmp_path, monke
     f.write_text(_assistant_line("thinking", "tool_use"))
     state = await mgr._compute_pane_state(_A(), f)
     assert state["status"] == "working"
+
+
+async def test_state_probe_uses_acp_daemon_state_for_headless_agent(tmp_path, monkeypatch):
+    """Operator-Befund 02.10.2026: ein omp-Agent (OMP_DRIVER=acp) beantwortete
+    Nachrichten normal, aber die Statuszeile zeigte dauerhaft "Status
+    unknown — check the terminal". Root cause: unter ACP gibt es kein
+    TUI-Pane mehr zu sondieren (Fenster 0 ist nur noch eine statische
+    Banner-Zeile), gegen die der omp-Pane-Parser immer "unknown" liefert.
+    Fix: fuer einen kopflosen ACP-Agenten entscheidet die Zustandsdatei des
+    Chat-Daemons (``busy``), nicht das Pane."""
+    from app.services import acp_chat_transport, omp_chat, transcript_chat as tc
+
+    f = tmp_path / "s.jsonl"
+    f.write_text(_mk_line({"type": "user", "message": {"content": "mach was"}}))
+
+    async def _fail_capture_pane(agent):
+        raise AssertionError("ACP agents must not probe a TUI pane for status")
+
+    async def _fake_aliveness(agent, path, adapter=None):
+        return "active"
+
+    monkeypatch.setattr(tc, "capture_pane", _fail_capture_pane)
+    monkeypatch.setattr(tc, "resolve_aliveness", _fake_aliveness)
+
+    sessions_root = tmp_path / "sessions"
+    (sessions_root / "--workspace--").mkdir(parents=True)
+    monkeypatch.setattr(omp_chat, "_host_home", lambda: tmp_path.parent)
+
+    class _Agent:
+        slug = "acp-one"
+        agent_runtime = "cli-bridge"
+        harness = "omp"
+
+    agent = _Agent()
+
+    # Monkeypatch read_acp_chat_state directly (independent of the real
+    # on-disk session-dir layout — that resolution is covered by
+    # test_acp_chat_transport.py already).
+    monkeypatch.setattr(
+        acp_chat_transport, "read_acp_chat_state", lambda a: {"busy": True}
+    )
+    mgr = tc.ChatTailerManager()
+    state = await mgr._compute_pane_state(agent, f)
+    assert state["status"] == "working"
+
+    monkeypatch.setattr(
+        acp_chat_transport, "read_acp_chat_state", lambda a: {"busy": False}
+    )
+    state = await mgr._compute_pane_state(agent, f)
+    assert state["status"] == "idle"
+
+
+async def test_state_probe_acp_falls_back_to_mtime_when_daemon_state_missing(tmp_path, monkeypatch):
+    """No fabricated status: if the daemon hasn't written its state file
+    yet, the probe falls back to the same mtime heuristic the pane-less
+    Boss/host branch already uses -- never "unknown" for a headless agent
+    just because capture_pane was never asked."""
+    from app.services import acp_chat_transport, transcript_chat as tc
+
+    f = tmp_path / "s.jsonl"
+    f.write_text(_mk_line({"type": "user", "message": {"content": "mach was"}}))
+
+    async def _fail_capture_pane(agent):
+        raise AssertionError("ACP agents must not probe a TUI pane for status")
+
+    async def _fake_aliveness(agent, path, adapter=None):
+        return "active"
+
+    monkeypatch.setattr(tc, "capture_pane", _fail_capture_pane)
+    monkeypatch.setattr(tc, "resolve_aliveness", _fake_aliveness)
+    monkeypatch.setattr(acp_chat_transport, "read_acp_chat_state", lambda a: None)
+
+    class _Agent:
+        slug = "acp-one"
+        agent_runtime = "cli-bridge"
+        harness = "omp"
+
+    mgr = tc.ChatTailerManager()
+    state = await mgr._compute_pane_state(_Agent(), f)
+    assert state["status"] == "working"  # fresh mtime, no recorded turn end
+
+
+# ── _is_genuine_rollover ─────────────────────────────────────────────────
+
+
+def test_is_genuine_rollover_false_for_identical_path(tmp_path):
+    from app.services import transcript_chat as tc
+
+    p = tmp_path / "s.jsonl"
+    adapter = SimpleNamespace(session_id_for=lambda path: path.stem)
+    assert tc.ChatTailerManager._is_genuine_rollover(adapter, p, p) is False
+
+
+def test_is_genuine_rollover_false_for_sibling_file_same_session_id(tmp_path):
+    """Operator-Befund 04.10.2026 (ACP/omp): two different files, SAME
+    embedded session id (adapter-resolved) -> not a rollover, even though
+    the paths themselves differ."""
+    from app.services import transcript_chat as tc
+
+    current = tmp_path / "2026-10-03T15-49-48_acp-one.jsonl"
+    sibling = tmp_path / "2026-10-03T15-49-48-606Z_acp-one.jsonl"
+    adapter = SimpleNamespace(
+        session_id_for=lambda path: path.stem.split("_", 1)[1] if "_" in path.stem else path.stem
+    )
+    assert tc.ChatTailerManager._is_genuine_rollover(adapter, sibling, current) is False
+
+
+def test_is_genuine_rollover_true_for_a_real_new_session(tmp_path):
+    from app.services import transcript_chat as tc
+
+    current = tmp_path / "2026-10-03T15-49-48_acp-one.jsonl"
+    new_session = tmp_path / "2026-10-04T09-00-00_acp-two.jsonl"
+    adapter = SimpleNamespace(
+        session_id_for=lambda path: path.stem.split("_", 1)[1] if "_" in path.stem else path.stem
+    )
+    assert tc.ChatTailerManager._is_genuine_rollover(adapter, new_session, current) is True
+
+
+def test_is_genuine_rollover_true_for_claude_code_default_session_id_for(tmp_path):
+    """Claude Code's default session_id_for is the full stem (== the uuid,
+    since Claude Code's filename IS the session uuid) -- a different file
+    always means a different stem, so this preserves the OLD plain-path
+    comparison exactly: zero behaviour change for Claude Code agents."""
+    from app.services import transcript_chat as tc
+
+    current = tmp_path / "11111111-1111-1111-1111-111111111111.jsonl"
+    new_session = tmp_path / "22222222-2222-2222-2222-222222222222.jsonl"
+    adapter = SimpleNamespace(session_id_for=lambda path: path.stem)
+    assert tc.ChatTailerManager._is_genuine_rollover(adapter, new_session, current) is True
