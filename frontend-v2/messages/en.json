@@ -3659,5 +3659,26 @@
     "sectionTitle": "Appearance",
     "sectionDescription": "How Mission Control looks in this browser.",
     "hint": "Dark is the default. Your choice is saved in this browser only — other browsers and devices keep their own."
+  },
+  "browserLive": {
+    "notRunning": "Agent browser not running — start a task with the E2E toggle or enable the browser profile.",
+    "refresh": "Refresh",
+    "connecting": "Connecting…",
+    "streamEnded": "Stream ended",
+    "reconnect": "Reconnect",
+    "live": "Live",
+    "follow": "Follow",
+    "fullscreen": "Fullscreen",
+    "closeFullscreen": "Close fullscreen",
+    "pageLabel": "Browser page",
+    "liveViewAlt": "Live agent browser view",
+    "newTab": "New tab: {title}",
+    "status": {
+      "no_page": "No open page in the agent browser yet.",
+      "connect_error": "Connecting to the agent browser…",
+      "stream_error": "Stream error — reconnecting may help.",
+      "connectionError": "Connection error",
+      "unknown": "Connection issue"
+    }
   }
 }

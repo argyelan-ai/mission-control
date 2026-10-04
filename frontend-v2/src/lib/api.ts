@@ -2250,9 +2250,18 @@ function wsBase(): string {
 
 // Separate helper (not on `api`, mirrors cliSessions.*WsUrl). Async: fetches a
 // single-use stream ticket — the login token never goes into the URL.
-export function browserLiveWsUrl(targetId?: string): Promise<string> {
-  const targetParam = targetId ? `?target=${encodeURIComponent(targetId)}` : "";
-  return withStreamTicket(`${wsBase()}/api/v1/browser-live/ws${targetParam}`);
+// Target selection after connecting goes over the socket itself
+// ({"select": "<id>"}) so the client doesn't reconnect just to switch tabs;
+// `targetId`/`follow` only seed the very first attach.
+export function browserLiveWsUrl(
+  targetId?: string,
+  opts?: { follow?: boolean },
+): Promise<string> {
+  const params = new URLSearchParams();
+  if (targetId) params.set("target", targetId);
+  if (opts?.follow === false) params.set("follow", "0");
+  const query = params.toString();
+  return withStreamTicket(`${wsBase()}/api/v1/browser-live/ws${query ? `?${query}` : ""}`);
 }
 
 // ── SSE URLs ──────────────────────────────────────────────────────────────────
