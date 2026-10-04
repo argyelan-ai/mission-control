@@ -20,14 +20,16 @@ import logging
 import os
 import socket
 import time
+import uuid
 from typing import Optional
 from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
-
 from app.auth import require_user
 from app.config import settings
+from app.database import async_session_maker
+from app.models.agent import Agent
 
 logger = logging.getLogger("mc.browser_live")
 
@@ -36,6 +38,19 @@ router = APIRouter(prefix="/api/v1/browser-live", tags=["browser-live"])
 # cdp-browser's in-container socat re-exposes Chromium's 127.0.0.1-only debug
 # port on this host:port inside the docker network. Overridable for tests.
 CDP_BASE_URL = os.environ.get("CDP_BROWSER_URL", "http://cdp-browser:9223")
+
+# cdp-gateway (bauplan.md PR B1) — same container as CDP_BASE_URL, different
+# port. Answers `GET /mc/targets[?agent=<slug>]`: which open pages belong to
+# which agent, figured out from the agent's own CDP connection (URL path /
+# X-MC-Agent header / reverse DNS of its container — see
+# docker/cdp-browser/gateway/cdp_gateway.py). Used ONLY to FILTER the
+# `targets`/`active_id` picture this module already builds from Chromium
+# directly — the screencast itself (attach_and_stream) is unchanged and
+# still a read-only second CDP session straight to Chromium, same as before
+# B1. If the gateway is unreachable, every call here degrades to "no
+# attribution" (None), and callers fall back to showing every tab — a
+# gateway outage must never make the whole live-view panel unusable.
+GATEWAY_BASE_URL = os.environ.get("CDP_GATEWAY_URL", "http://cdp-browser:9300")
 
 # A newly-created tab (e.g. Playwright's "page for the next navigation") is
 # briefly about:blank before the agent navigates it. Don't let it steal the
@@ -103,9 +118,80 @@ async def _list_page_targets() -> list[dict]:
     return [t for t in targets if t.get("type") == "page"]
 
 
+async def _agent_slug(agent_id: str) -> Optional[str]:
+    """Same derivation `agent_lifecycle`/`agent_bootstrap` already use for
+    the container/workspace name: the persisted `slug` column, falling back
+    to a name-derived one for older rows that predate it. Returns None for
+    an unknown id (caller then shows every tab, same as not passing
+    `agent_id` at all — an agent the operator can't resolve must never hide
+    the whole panel).
+
+    Opens its own short-lived session via `async_session_maker()` rather
+    than taking `Depends(get_session)` on the route: `get_session` needs a
+    `Request` to key its managed_session timing/logging, which a WebSocket
+    route never has, and existing tests mount this router on a minimal app
+    with no `get_session` override at all (test_browser_live_ws_handler.py)."""
+    try:
+        agent_uuid = uuid.UUID(agent_id)
+    except (ValueError, AttributeError, TypeError):
+        return None
+    try:
+        async with async_session_maker() as session:
+            agent = await session.get(Agent, agent_uuid)
+    except Exception as e:
+        logger.info("browser_live: could not resolve agent %s: %s", agent_id, e)
+        return None
+    if agent is None:
+        return None
+    return agent.slug or (agent.name or "").lower().replace(" ", "-") or None
+
+
+_gateway_last_reachable: dict[str, bool] = {}
+
+
+async def _gateway_owned_ids(agent_slug: str) -> Optional[set[str]]:
+    """Target ids `cdp-gateway` currently attributes to `agent_slug`, or
+    None if the gateway can't be reached (NOT the same as "empty set" —
+    an empty set is a real, meaningful "this agent has no tabs open" that
+    the UI shows as its own empty state; None means "attribution isn't
+    available right now, fall back to showing everything" per bauplan.md's
+    graceful-degradation rule).
+
+    Every open scoped panel calls this roughly once per cache TTL (~1.5s),
+    so during a real gateway outage this fires constantly — logged only on
+    the up→down and down→up transitions (keyed per agent_slug), not on
+    every call, so a dead gateway doesn't flood the log for as long as a
+    panel stays open (low finding)."""
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            resp = await client.get(f"{GATEWAY_BASE_URL}/mc/targets", params={"agent": agent_slug})
+            resp.raise_for_status()
+            rows = resp.json()
+    except Exception as e:
+        if _gateway_last_reachable.get(agent_slug, True):
+            logger.info("browser_live: cdp-gateway unreachable for agent filter: %s", e)
+            _gateway_last_reachable[agent_slug] = False
+        return None
+    if not _gateway_last_reachable.get(agent_slug, True):
+        logger.info("browser_live: cdp-gateway reachable again for agent filter %s", agent_slug)
+    _gateway_last_reachable[agent_slug] = True
+    return {row["targetId"] for row in rows if row.get("targetId")}
+
+
 @router.get("/targets")
-async def list_targets(current_user=Depends(require_user)):
-    """Open pages in the shared agent browser (for the live-view picker)."""
+async def list_targets(
+    agent_id: Optional[str] = None,
+    current_user=Depends(require_user),
+):
+    """Open pages in the shared agent browser (for the live-view picker).
+
+    `agent_id` (bauplan.md PR B1): when given and `cdp-gateway` is reachable
+    and knows this agent, the list is filtered to that agent's own tabs.
+    Omitted, unresolvable, or gateway-down → every tab in the shared
+    browser, exactly as before B1 (never a harder failure than that) — but
+    `scopeUnavailable: true` tells the caller the list is NOT actually
+    scoped, so the UI can say so instead of silently looking like a
+    (misleadingly empty-looking "only agent X") filtered view."""
     try:
         pages = await _list_page_targets()
     except Exception as e:
@@ -113,10 +199,24 @@ async def list_targets(current_user=Depends(require_user)):
             status_code=502,
             detail=f"Agent-Browser (cdp-browser) nicht erreichbar: {e}",
         )
-    return [
-        {"id": t.get("id"), "title": t.get("title"), "url": t.get("url")}
-        for t in pages
-    ]
+    owned_ids: Optional[set[str]] = None
+    scope_unavailable = False
+    if agent_id:
+        slug = await _agent_slug(agent_id)
+        if slug:
+            owned_ids = await _gateway_owned_ids(slug)
+            scope_unavailable = owned_ids is None
+        else:
+            scope_unavailable = True
+    if owned_ids is not None:
+        pages = [p for p in pages if p.get("id") in owned_ids]
+    return {
+        "targets": [
+            {"id": t.get("id"), "title": t.get("title"), "url": t.get("url")}
+            for t in pages
+        ],
+        "scopeUnavailable": scope_unavailable,
+    }
 
 
 def _validate_ws_token(token: Optional[str]) -> bool:
@@ -339,6 +439,45 @@ async def run_target_watcher(
             await _watch_targets_poll(watcher, stop_event)
 
 
+class _OwnedIdsCache:
+    """Short-TTL cache in front of `_gateway_owned_ids` — the WS loop below
+    consults this on nearly every iteration (≤1s cadence), and hitting the
+    gateway's HTTP endpoint that often for a value that only meaningfully
+    changes on a tab create/close/navigate would be pure waste. None (cache
+    miss or gateway down) always means "unfiltered", never "empty"."""
+
+    def __init__(self, agent_slug: str, *, ttl: float = 1.5, now_fn=time.monotonic):
+        self._slug = agent_slug
+        self._ttl = ttl
+        self._now = now_fn
+        self._fetched_at = 0.0
+        self._value: Optional[set[str]] = None
+
+    @property
+    def ttl(self) -> float:
+        return self._ttl
+
+    def invalidate(self) -> None:
+        """Force the next `get()` to re-fetch instead of serving a stale
+        value. Called whenever the browser-level watcher reports a target
+        change: Chromium fires `targetCreated` to the watcher (which then
+        wakes the WS loop via `switch_requested`) before cdp-gateway has
+        necessarily caught up with its own `Target.createTarget` bookkeeping
+        for that same tab — so the FIRST re-check right after a watcher
+        event can still legitimately get the gateway's old owned-ids answer.
+        That is why the WS loop ALSO gets a bounded wait (see `ttl` above)
+        so it keeps re-checking after this invalidation, instead of trusting
+        a single post-invalidation fetch that may itself be stale."""
+        self._fetched_at = 0.0
+
+    async def get(self) -> Optional[set[str]]:
+        if self._now() - self._fetched_at < self._ttl:
+            return self._value
+        self._value = await _gateway_owned_ids(self._slug)
+        self._fetched_at = self._now()
+        return self._value
+
+
 @router.websocket("/ws")
 async def browser_live_ws(
     websocket: WebSocket,
@@ -346,6 +485,7 @@ async def browser_live_ws(
     target: Optional[str] = None,
     ticket: Optional[str] = None,
     follow: int = 1,
+    agent_id: Optional[str] = None,
 ):
     """Stream JPEG screencast frames of one agent-browser page to the client,
     optionally following whichever page is currently active.
@@ -353,6 +493,11 @@ async def browser_live_ws(
     Auth: single-use stream ticket via ?ticket= (WebSocket can't send
     headers); legacy ?token=<jwt> only with ALLOW_QUERY_TOKEN_AUTH.
     ?target=<cdp target id> picks a starting page (default = active/newest).
+    ?agent_id=<agent uuid> (bauplan.md PR B1) scopes everything above — the
+    target list, "active"/follow and the no-open-page state — to that
+    agent's own tabs via cdp-gateway (:9300). Omitted, an id that doesn't
+    resolve, or the gateway being unreachable all fall back to showing
+    every tab in the shared browser (today's behaviour, unchanged).
     ?follow=1 (default) keeps switching to whichever page becomes active;
     a client {"select": "<id>"} message turns following off for that
     connection.
@@ -366,6 +511,13 @@ async def browser_live_ws(
         bilingual (i18n) and must never render server English verbatim
         (finding: it used to send a hardcoded English sentence that showed
         up untranslated in the German UI).
+      {"type": "status", "code": "scope_unavailable", "active": bool}
+        Only ever sent when `agent_id` was given at all. `active: true` means
+        attribution is down right now (gateway unreachable, or the agent
+        couldn't be resolved) and the panel is silently showing EVERY tab
+        even though the toolbar toggle still names this one agent — the UI
+        must say so. `active: false` means attribution came back (sent once,
+        on the transition back).
 
     Client → server messages are steering only, never forwarded to Chromium:
       {"follow": true|false}, {"select": "<target id>"}
@@ -378,6 +530,32 @@ async def browser_live_ws(
 
     await websocket.accept()
 
+    # bauplan.md PR B1: when the panel is opened from a specific agent's
+    # chat, scope it to that agent's own tabs via cdp-gateway. `owned_cache`
+    # stays None (meaning "show everything", the pre-B1 behaviour) whenever
+    # agent_id is absent, unresolvable, or the gateway can't be reached —
+    # per-agent attribution degrading is never allowed to make the panel
+    # itself unusable.
+    owned_cache: Optional[_OwnedIdsCache] = None
+    # True whenever the CALLER asked for a scoped panel (?agent_id= was
+    # given) — independent of whether that scope actually resolved. Used
+    # below to tell "not scoped at all" (never send the hint) apart from
+    # "scoped, but attribution is unavailable right now" (finding: the
+    # panel used to fall back to showing everything in that case with NO
+    # signal to the operator — the toolbar toggle still said the scoped
+    # agent's name and follow could silently jump to a foreign tab).
+    scope_requested = bool(agent_id)
+    if agent_id:
+        slug = await _agent_slug(agent_id)
+        if slug:
+            owned_cache = _OwnedIdsCache(slug)
+
+    async def _owned_ids() -> Optional[set[str]]:
+        return await owned_cache.get() if owned_cache is not None else None
+
+    async def _scope_unavailable() -> bool:
+        return scope_requested and (await _owned_ids()) is None
+
     watcher = TargetWatcher()
     stop_event = asyncio.Event()
     state = {"followed_id": target, "following": bool(follow)}
@@ -389,6 +567,16 @@ async def browser_live_ws(
         # cross-thread handoff needed (TargetWatcher never runs in a
         # separate thread). attach_and_stream re-reads watcher state itself
         # once woken, so nothing needs to be handed over here.
+        #
+        # Invalidate the owned-ids cache on every watcher change (medium
+        # finding): Chromium's `targetCreated` reaches this watcher before
+        # cdp-gateway has necessarily recorded that same `createTarget` —
+        # without this, a scoped panel could keep serving the pre-create
+        # owned-ids set for up to the full cache TTL and silently drop the
+        # agent's brand-new tab until some unrelated later tab event forced
+        # a re-check.
+        if owned_cache is not None:
+            owned_cache.invalidate()
         switch_requested.set()
 
     watcher.on_change = on_targets_change
@@ -399,12 +587,31 @@ async def browser_live_ws(
     # same empty list (and the same status) every single poll tick.
     _last_targets_sig: dict = {"sig": None}
 
+    def _active_id_of(pages: list[dict]) -> Optional[str]:
+        """Same preference TargetWatcher.active_id() applies (skip a blank
+        tab unless it's the only one) — reimplemented here because it must
+        run on a FILTERED subset when agent_id scoping is on, not on the
+        watcher's full (unfiltered) target set."""
+        if not pages:
+            return None
+        non_blank = [p for p in pages if p.get("url") not in _BLANK_URLS]
+        pool = non_blank or pages
+        return max(pool, key=lambda p: p["last_active_at"])["id"]
+
+    async def _visible_pages() -> list[dict]:
+        all_pages = watcher.targets()
+        owned = await _owned_ids()
+        if owned is None:
+            return all_pages
+        return [p for p in all_pages if p["id"] in owned]
+
     async def send_targets_message() -> None:
+        pages = await _visible_pages()
         targets_list = [
             {"id": t["id"], "title": t["title"], "url": t["url"]}
-            for t in watcher.targets()
+            for t in pages
         ]
-        active_id = watcher.active_id()
+        active_id = _active_id_of(pages)
         followed_id = state["followed_id"]
         # url + title are part of the signature, not just the id tuple — a
         # navigation inside the shown tab (the common case: the agent works
@@ -493,6 +700,19 @@ async def browser_live_ws(
             last_status_code = code
             await websocket.send_json({"type": "status", "code": code})
 
+        # Mutable holder (not a plain bool) so the closure below can flip it
+        # without a `nonlocal` declaration fighting the one `_send_status`
+        # already owns on `last_status_code`. `sent` starts False so the
+        # FIRST loop iteration always sends a `scope_unavailable` status
+        # (even when the value happens to be False, same as the initial
+        # `value`) — without this, a client that connects while a previous
+        # connection's `initialData.scopeUnavailable: true` (from a REST
+        # call during a brief gateway outage) is still showing never learns
+        # the WS itself considers attribution fine, because "unchanged from
+        # the initial False" never counted as a thing worth sending (medium
+        # finding, round 5).
+        last_scope_unavailable = {"value": False, "sent": False}
+
         try:
             while not stop_event.is_set():
                 # Clear BEFORE reading watcher state so a notification that
@@ -502,8 +722,29 @@ async def browser_live_ws(
                 # to run only after the reconnect finished.
                 switch_requested.clear()
 
-                pages = watcher.targets()
+                # bauplan.md PR B1: when scoped to one agent, "pages" here
+                # means ONLY that agent's own tabs — this is what makes the
+                # picker, "no open page" empty state, and auto-follow all
+                # respect the per-agent scope, on top of A1's existing
+                # "follow whatever is active" behaviour.
+                pages = await _visible_pages()
                 live_ids = {p["id"] for p in pages}
+
+                # Separate from `_send_status`'s connection-state codes (it
+                # tracks exactly one "last code", and no_page/connect_error
+                # must still win the visible banner) — this one just tells
+                # the client whether the "showing only this agent" toggle it
+                # displays is actually true right now.
+                scope_unavailable_now = await _scope_unavailable()
+                if scope_requested and (
+                    not last_scope_unavailable["sent"] or scope_unavailable_now != last_scope_unavailable["value"]
+                ):
+                    last_scope_unavailable["value"] = scope_unavailable_now
+                    last_scope_unavailable["sent"] = True
+                    await websocket.send_json({
+                        "type": "status", "code": "scope_unavailable",
+                        "active": scope_unavailable_now,
+                    })
 
                 if not pages:
                     if cdp is not None:
@@ -522,7 +763,8 @@ async def browser_live_ws(
                     # pages all the time. Always fall back to the active tab,
                     # even with follow off (bauplan A1): a dead tab is never
                     # a reasonable thing to keep "showing".
-                    wanted = watcher.active_id() if watcher.active_id() in live_ids else pages[0]["id"]
+                    active_now = _active_id_of(pages)
+                    wanted = active_now if active_now in live_ids else pages[0]["id"]
                 state["followed_id"] = wanted
 
                 if wanted != current_id or cdp is None:
@@ -581,10 +823,38 @@ async def browser_live_ws(
 
                 await send_targets_message()
 
+                # Scoped panels get a bounded wait (about the owned-ids cache
+                # TTL) instead of waiting forever for the next unrelated
+                # event: a watcher-triggered invalidate() can still hit the
+                # gateway before IT has caught up with its own createTarget
+                # bookkeeping, so the re-check right after invalidation may
+                # itself still return the old set. Without this timeout
+                # nothing re-checks again until some later, unrelated tab
+                # event happens to fire — the scoped view then drops the
+                # agent's new tab the same way A1 fixed for the unscoped one
+                # (medium finding).
+                wait_kwargs = {"return_when": asyncio.FIRST_COMPLETED}
+                if owned_cache is not None:
+                    wait_kwargs["timeout"] = owned_cache.ttl
                 switch_wait = asyncio.create_task(switch_requested.wait())
-                done, pending = await asyncio.wait(
-                    {frame_task, switch_wait}, return_when=asyncio.FIRST_COMPLETED,
-                )
+                done, pending = await asyncio.wait({frame_task, switch_wait}, **wait_kwargs)
+                if not done:
+                    # Timed out with nothing resolved — treat exactly like a
+                    # switch signal so the loop re-reads `_visible_pages()`
+                    # (and thus the freshly-invalidated/refetched owned ids)
+                    # on its next iteration, without tearing down the live
+                    # screencast. Also re-run the same "jump to active" step
+                    # an explicit switch gets below: a tab the gateway only
+                    # just attributed to this agent on the SECOND re-check
+                    # must still be able to grab follow, not just appear in
+                    # the picker.
+                    if switch_wait in pending:
+                        switch_wait.cancel()
+                    if state["following"]:
+                        active_now = _active_id_of(await _visible_pages())
+                        if active_now:
+                            state["followed_id"] = active_now
+                    continue
 
                 if switch_wait in done:
                     # frame_task is NOT cancelled here — a tab event
@@ -600,7 +870,7 @@ async def browser_live_ws(
                     if switch_wait in pending:
                         switch_wait.cancel()
                     if state["following"]:
-                        active_now = watcher.active_id()
+                        active_now = _active_id_of(await _visible_pages())
                         if active_now:
                             state["followed_id"] = active_now
                     continue

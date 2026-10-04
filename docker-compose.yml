@@ -777,6 +777,17 @@ services:
   # omp agents (agent compose) are NOT on cdpnet: they reach this service by
   # name through a socat relay on 127.0.0.1 inside their own container (Host
   # header = IP, so Chromium accepts it) — see docker/omp-bridge/cdp-relay.sh.
+  #
+  # Port 9300 (same container, bauplan.md PR B1): `cdp-gateway` — an
+  # agent-aware front door in front of Chromium's debug port. It answers the
+  # same /json/* shapes as :9223 but also figures out which agent a
+  # connection belongs to (URL path / X-MC-Agent header / reverse DNS of the
+  # peer IP) and exposes `GET /mc/targets[?agent=<slug>]` so the operator's
+  # per-agent browser panel can show only that agent's tabs instead of every
+  # tab in the shared browser. :9223 (plain socat, no attribution) stays
+  # exactly as it is for the backend's screencast path and anything not yet
+  # moved over. No host port published — internal to the compose network
+  # only, same as :9223 today.
   cdp-browser:
     build: ./docker/cdp-browser
     profiles: ["browser"]

@@ -37,8 +37,11 @@ async def test_targets_endpoint_lists_pages(auth_client: AsyncClient):
     with patch("app.routers.browser_live._list_page_targets", new=AsyncMock(return_value=pages)):
         r = await auth_client.get("/api/v1/browser-live/targets")
     assert r.status_code == 200
-    assert [t["id"] for t in r.json()] == ["new", "old"]
-    assert "webSocketDebuggerUrl" not in r.json()[0]  # interne URL nicht leaken
+    body = r.json()
+    assert [t["id"] for t in body["targets"]] == ["new", "old"]
+    assert "webSocketDebuggerUrl" not in body["targets"][0]  # interne URL nicht leaken
+    # No `agent_id` was passed at all — never scoped, so never "unavailable".
+    assert body["scopeUnavailable"] is False
 
 
 @pytest.mark.asyncio

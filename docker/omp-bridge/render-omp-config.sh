@@ -261,7 +261,7 @@ if command -v omp >/dev/null 2>&1; then
     # cdp-browser (Browser-Profil aus, fremde Installation) behält omp sein
     # eigenes Verhalten, statt gegen ein totes Relay zu laufen. Ein Reload
     # (`docker exec … render-omp-config.sh`) zieht beides neu nach.
-    _cdp_target="${OMP_BROWSER_CDP_TARGET-cdp-browser:9223}"
+    _cdp_target="${OMP_BROWSER_CDP_TARGET-cdp-browser:9300}"
     _cdp_port="${OMP_BROWSER_CDP_PORT:-9222}"
     _cdp_host="${_cdp_target%:*}"
     case "$_cdp_target" in

@@ -683,7 +683,9 @@ function SessionsPageContent() {
                 {activePanel === "diff" && selectedLive && (
                   <DiffPanel agentId={selectedLive.id} refreshHot={chatStatus === "working"} />
                 )}
-                {activePanel === "browser" && <BrowserLiveView />}
+                {activePanel === "browser" && (
+                  <BrowserLiveView agentId={selectedLive?.id} agentName={selectedLive?.name} />
+                )}
                 {activePanel === "doc" && selectedGroup && (
                   <ResultDocPanel
                     groupId={selectedGroup.id}
