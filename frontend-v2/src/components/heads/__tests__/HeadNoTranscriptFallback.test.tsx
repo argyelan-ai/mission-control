@@ -12,11 +12,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { HeadNoTranscriptFallback } from "../HeadNoTranscriptFallback";
 
-function renderFallback(reason: string | null) {
+function renderFallback(reason: string | null, historyFailed = false) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={qc}>
-      <HeadNoTranscriptFallback runId="run-1" reason={reason} />
+      <HeadNoTranscriptFallback runId="run-1" reason={reason} historyFailed={historyFailed} />
     </QueryClientProvider>,
   );
 }
@@ -56,6 +56,18 @@ describe("HeadNoTranscriptFallback", () => {
     vi.spyOn(api.heads, "log").mockResolvedValue("");
     renderFallback(null);
     expect(await screen.findByText("Waiting for the first transcript lines …")).toBeInTheDocument();
+  });
+
+  // Review finding on PR #756 round 4: `reason: null` also covers an
+  // outright FAILED history fetch (nothing cached to read a reason off at
+  // all) — on an ended run this used to say "Waiting for the first
+  // transcript lines …", promising something that was not coming because
+  // of a transient error, not because nothing had happened yet.
+  it("a null reason WITH a failed history fetch shows 'could not load', never 'waiting'", async () => {
+    vi.spyOn(api.heads, "log").mockResolvedValue("");
+    renderFallback(null, true);
+    expect(await screen.findByText("Could not load the transcript.")).toBeInTheDocument();
+    expect(screen.queryByText(/waiting/i)).not.toBeInTheDocument();
   });
 
   it("shows the log tail once it has content, under any reason", async () => {

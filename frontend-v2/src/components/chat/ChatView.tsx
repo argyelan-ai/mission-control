@@ -29,7 +29,7 @@ import { useChatStream } from "@/hooks/useChatStream";
 import { useHeadTranscript, useHeadTranscriptMeta } from "@/hooks/useHeadTranscript";
 import { isAgentStartingError, isNoTranscriptError, resolveSessionAliveness } from "@/lib/chatTypes";
 import type { StateEvent, TimelineChatEvent } from "@/lib/chatTypes";
-import { isHeadActive, type HeadRun } from "@/lib/heads";
+import { isHeadDone, type HeadRun } from "@/lib/heads";
 import { HeadChatHeader } from "@/components/heads/HeadChatHeader";
 import { HeadChatFooter } from "@/components/heads/HeadChatFooter";
 import { HeadRunRecordCard } from "@/components/heads/HeadRunRecordCard";
@@ -310,6 +310,17 @@ interface ChatViewProps {
   /** Lets the mobile options sheet open the side panels the desktop rail
    *  owns. Omitted = no Panels section in the sheet. */
   onOpenPanel?: (panel: PanelKind) => void;
+  /** The run that superseded `head`'s own `needs_you` question (a later run
+   *  on the same task, `lib/heads.ts::newerHeadRunIdFor`) — when set,
+   *  `HeadChatFooter` shows a link to it instead of the answer field
+   *  (review finding on PR #756 round 4: an answered `needs_you` kept
+   *  offering "Answer & continue" forever). `null`/omitted for every run
+   *  that is not a superseded `needs_you`. */
+  newerHeadRunId?: string | null;
+  /** Navigates to another head run — used by the "open the newer run" link
+   *  above. Omitted alongside `newerHeadRunId` on any caller that never
+   *  supplies either. */
+  onSelectHeadRun?: (runId: string) => void;
 }
 
 export function ChatView({
@@ -325,6 +336,8 @@ export function ChatView({
   onBack,
   contextLine,
   onOpenPanel,
+  newerHeadRunId = null,
+  onSelectHeadRun,
 }: ChatViewProps) {
   const t = useTranslations("sessions");
   /** Typing into a live session (text, keys, approvals, effort) is admin-only
@@ -1072,7 +1085,7 @@ export function ChatView({
               stream.loading ? (
                 <TimelineSkeleton />
               ) : head ? (
-                <HeadNoTranscriptFallback runId={head.run_id} reason={headMeta.reason} />
+                <HeadNoTranscriptFallback runId={head.run_id} reason={headMeta.reason} historyFailed={!!stream.error} />
               ) : (
                 // Teaches the surface instead of reporting emptiness: a fresh
                 // session genuinely has no transcript yet, and the two things
@@ -1162,7 +1175,13 @@ export function ChatView({
                 `HeadStateCard` already reads). Last in the timeline, same
                 place `pendingEchoes`/`preview` claim for an agent: it is the
                 newest fact about this conversation. */}
-            {head && !isHeadActive(head) && head.run_record && <HeadRunRecordCard runId={head.run_id} />}
+            {/* `isHeadDone`, not "not active": `needs_you` is a FINAL state
+                too (it is not in `HEAD_ACTIVE_STATES`) but it is not DONE —
+                the operator is still blocked on it, and the record card
+                would show whatever a run writes for itself at step 0
+                ("pending"/zeroed counters) as if it were the real result
+                (review finding on PR #756 round 4). */}
+            {head && isHeadDone(head) && head.run_record && <HeadRunRecordCard runId={head.run_id} />}
           </div>
           </div>
 
@@ -1205,7 +1224,12 @@ export function ChatView({
             // No StatusLine (that line is "is the AGENT's terminal alive",
             // meaningless for a head) and no Composer at all — the footer
             // below is the one surface a head's chat shows instead.
-            <HeadChatFooter run={head} transcriptFallbackQuestion={lastAssistantMessage} />
+            <HeadChatFooter
+              run={head}
+              transcriptFallbackQuestion={lastAssistantMessage}
+              newerRunId={newerHeadRunId}
+              onOpenNewerRun={onSelectHeadRun}
+            />
           ) : (
             <>
               <StatusLine

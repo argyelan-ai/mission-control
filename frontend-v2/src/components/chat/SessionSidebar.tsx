@@ -16,7 +16,7 @@
  * Defaults to "everyone has a transcript" so the sidebar renders sensibly
  * standalone.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Archive, ChevronDown, ChevronLeft, ChevronRight, Plus } from "lucide-react";
 import { C } from "@/lib/colors";
@@ -28,7 +28,7 @@ import { AvatarStack } from "@/components/groupchat/AvatarStack";
 import { sortGroups, type GroupSummary } from "@/lib/groupTypes";
 import { HeadChatRow } from "@/components/heads/HeadChatRow";
 import { HeadArchiveSheet } from "@/components/heads/HeadArchiveSheet";
-import type { HeadRun } from "@/lib/heads";
+import { supersededNeedsYouIds, type HeadRun } from "@/lib/heads";
 import type { Agent, AgentStatus, Task, Project } from "@/lib/types";
 
 // Umschalter Agents · Groups (Marks Wunsch 11.09.: Gruppen standardmässig
@@ -49,6 +49,7 @@ function saveSidebarMode(mode: SidebarMode) {
 
 const ADHOC_KEY = "__adhoc__";
 const ADHOC_LABEL = "Ad-hoc";
+const EMPTY_SUPERSEDED: ReadonlySet<string> = new Set();
 
 type DotStatus = "online" | "warning" | "error" | "busy" | "idle" | "offline";
 
@@ -175,11 +176,21 @@ export function SessionSidebar({
   const [sheetOpen, setSheetOpen] = useState(false);
   const [headArchiveOpen, setHeadArchiveOpen] = useState(false);
   const showHeads = !!onSelectHead && ((heads?.length ?? 0) > 0 || archivedCount > 0);
+  // A needs_you run the caller's `sortHeadsForList` already sorted into the
+  // ended group (a later run on the same task superseded it — review
+  // finding on PR #756 round 4) keeps its own `state` field "needs_you"
+  // regardless; this is the same check `sortHeadsForList` used to decide
+  // that placement, read again here so the row itself renders as answered/
+  // ended (not the pulsing "needs you") and the divider below still lands
+  // in the right spot for it.
+  const supersededHeadIds = useMemo(() => (heads ? supersededNeedsYouIds(heads) : EMPTY_SUPERSEDED), [heads]);
   // Where the "Done · 7 days" divider goes — right before the first ended
   // run. `heads` is already sorted by the caller (needs_you → running/
   // starting → ended, newest-end-first within that last group), so this is
   // just "which index first fails the active test", never a re-sort here.
-  const firstDoneIndex = heads ? heads.findIndex((r) => r.state === "passed" || r.state === "failed" || r.state === "stopped") : -1;
+  const firstDoneIndex = heads
+    ? heads.findIndex((r) => r.state === "passed" || r.state === "failed" || r.state === "stopped" || supersededHeadIds.has(r.run_id))
+    : -1;
   const groups = buildGroups(agents, tasks, projects);
   const selectedAgent = agents.find((a) => a.id === selectedId) ?? null;
   const showGroupSection = !!onSelectGroup;
@@ -326,6 +337,7 @@ export function SessionSidebar({
                   variant={stack ? "list" : "rail"}
                   selected={run.run_id === selectedHeadId}
                   onSelect={onSelectHead!}
+                  superseded={supersededHeadIds.has(run.run_id)}
                 />
               </div>
             ))}

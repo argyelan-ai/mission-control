@@ -104,6 +104,19 @@ export function isHeadActive(run: Pick<HeadRun, "state"> | null | undefined): bo
   return !!run && HEAD_ACTIVE_STATES.has(run.state);
 }
 
+/** The three states that actually wrote a result — `needs_you` is a FINAL
+ *  state in the backend's own `state.py` (it carries an `exited_at`), but
+ *  it is NOT "done": the operator is still blocked on it. Used to gate the
+ *  run-record card, which must show only once a run has actually ended
+ *  with a result (review finding on PR #756 round 4: the card's own guard,
+ *  `!isHeadActive(head)`, let it through for `needs_you` too, since that
+ *  state is simply not in `HEAD_ACTIVE_STATES` either). */
+const HEAD_DONE_STATES: ReadonlySet<HeadState> = new Set<HeadState>(["passed", "failed", "stopped"]);
+
+export function isHeadDone(run: Pick<HeadRun, "state"> | null | undefined): boolean {
+  return !!run && HEAD_DONE_STATES.has(run.state);
+}
+
 export function pairKey(p: { harness: string | null; runtime_slug: string | null }): string {
   return `${p.harness ?? ""}::${p.runtime_slug ?? ""}`;
 }
@@ -604,13 +617,61 @@ const LIST_GROUP: Record<HeadState, 0 | 1 | 2> = {
   stopped: 2,
 };
 
+/**
+ * A `needs_you` run that a LATER run on the same task has superseded — the
+ * operator answered it (a "continue" restart) or a second one was launched
+ * — mirrors `routers/heads.py::_is_superseded_needs_you` on the backend,
+ * kept in sync deliberately: `question.md` never changes once the head has
+ * moved on, so nothing about the run's OWN `state` field ever turns back
+ * from `needs_you` on its own (review finding on PR #756 round 4: an
+ * answered `needs_you` stayed pinned at the top of the Chats "Heads"
+ * section forever, its footer still offering "Answer & continue"). "Newest
+ * for its task" is the SAME rule `openHeadQuestions` (lib/inbox.ts) already
+ * uses for the Inbox's own open-question count.
+ */
+export function supersededNeedsYouIds(runs: HeadRun[]): ReadonlySet<string> {
+  const latestRunIdByTask = new Map<string, string>();
+  const latestCreatedByTask = new Map<string, string>();
+  const restartedFromIds = new Set<string>();
+  for (const r of runs) {
+    if (r.restarted_from) restartedFromIds.add(r.restarted_from);
+    if (!r.task_id) continue;
+    const created = r.created_at ?? "";
+    if (created > (latestCreatedByTask.get(r.task_id) ?? "")) {
+      latestCreatedByTask.set(r.task_id, created);
+      latestRunIdByTask.set(r.task_id, r.run_id);
+    }
+  }
+  const out = new Set<string>();
+  for (const r of runs) {
+    if (r.state !== "needs_you") continue;
+    const superseded = restartedFromIds.has(r.run_id) || (!!r.task_id && latestRunIdByTask.get(r.task_id) !== r.run_id);
+    if (superseded) out.add(r.run_id);
+  }
+  return out;
+}
+
+/** The run that superseded a given `needs_you` run (for "open the newer
+ *  run" in `HeadChatFooter`) — the run naming it as `restarted_from`, or
+ *  else the newest OTHER run on the same task. `null` when `run` is not
+ *  superseded (nothing to link to) or genuinely orphaned. */
+export function newerHeadRunIdFor(run: Pick<HeadRun, "run_id" | "task_id">, runs: HeadRun[]): string | null {
+  const direct = runs.find((r) => r.restarted_from === run.run_id);
+  if (direct) return direct.run_id;
+  if (!run.task_id) return null;
+  const siblings = runs.filter((r) => r.task_id === run.task_id && r.run_id !== run.run_id);
+  return sortRunsNewestFirst(siblings)[0]?.run_id ?? null;
+}
+
 export function sortHeadsForList(runs: HeadRun[]): HeadRun[] {
+  const superseded = supersededNeedsYouIds(runs);
+  const group = (r: HeadRun) => (superseded.has(r.run_id) ? 2 : LIST_GROUP[r.state]);
   return runs
     .map((r, i) => ({ r, i }))
     .sort((a, b) => {
-      const groupDiff = LIST_GROUP[a.r.state] - LIST_GROUP[b.r.state];
+      const groupDiff = group(a.r) - group(b.r);
       if (groupDiff !== 0) return groupDiff;
-      if (LIST_GROUP[a.r.state] === 2) {
+      if (group(a.r) === 2) {
         const endA = ts(a.r.exited_at) ?? ts(a.r.created_at) ?? 0;
         const endB = ts(b.r.exited_at) ?? ts(b.r.created_at) ?? 0;
         if (endA !== endB) return endB - endA;

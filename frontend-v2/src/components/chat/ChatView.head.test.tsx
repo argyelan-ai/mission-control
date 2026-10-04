@@ -170,13 +170,55 @@ describe("ChatView — head branch", () => {
     expect(screen.getByText("Added the thing.")).toBeInTheDocument();
   });
 
-  it("no run-record card for an active run, even if run_record is already true", () => {
+  // Review finding on PR #756 round 4: these two cases used to assert
+  // synchronously, with no `await`, against the module mock's default
+  // REJECTING `api.heads.summary` — so `HeadRunRecordCard` rendered "no
+  // card" regardless of whether ChatView's own guard ever ran it, since
+  // react-query had not had a tick to even start the rejecting fetch yet.
+  // Sabotage (dropping line 1165's two conditions entirely,
+  // `{head && <HeadRunRecordCard …/>}`) kept both tests green. Mocking a
+  // RESOLVING summary and flushing a tick closes that gap: with the guard
+  // intact, the card never mounts at all, so `api.heads.summary` is never
+  // even called.
+  const VALID_SUMMARY = {
+    run_id: "r1", status: "passed" as const, result_line: "Added the thing.",
+    tests: { failed_before: null, passed_after: null }, sabotage: null, kz_ok: null,
+    review: null, bypass: null, operator_minutes: null, helpers: null, branch: null, pr_url: null,
+  };
+
+  it("no run-record card for an active run, even if run_record is already true", async () => {
+    // `mockClear()` first: `api.heads.summary` is one shared module mock
+    // across every test in this file, and an EARLIER test ("shows the
+    // run-record card once…") legitimately calls it for this same default
+    // run id — without clearing, "not called" would fail for a reason that
+    // has nothing to do with THIS test's own guard.
+    vi.mocked(api.heads.summary).mockClear();
+    vi.mocked(api.heads.summary).mockResolvedValueOnce(VALID_SUMMARY);
     renderHead(mkRun({ state: "running", run_record: true }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(api.heads.summary).not.toHaveBeenCalled();
     expect(screen.queryByTestId("head-run-record-card")).not.toBeInTheDocument();
   });
 
-  it("no run-record card when the run never wrote one", () => {
+  it("no run-record card for a needs_you run, even if run_record is already true", async () => {
+    // `needs_you` is a FINAL state (it has an `exited_at`, like passed/
+    // failed/stopped) but is NOT done — the operator is still blocked on
+    // it; the router's own docstring calls it "not done" too. The card
+    // guard must exclude it explicitly, not just "not active".
+    vi.mocked(api.heads.summary).mockClear();
+    vi.mocked(api.heads.summary).mockResolvedValueOnce(VALID_SUMMARY);
+    renderHead(mkRun({ state: "needs_you", run_record: true }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(api.heads.summary).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("head-run-record-card")).not.toBeInTheDocument();
+  });
+
+  it("no run-record card when the run never wrote one", async () => {
+    vi.mocked(api.heads.summary).mockClear();
+    vi.mocked(api.heads.summary).mockResolvedValueOnce(VALID_SUMMARY);
     renderHead(mkRun({ state: "passed", run_record: false }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(api.heads.summary).not.toHaveBeenCalled();
     expect(screen.queryByTestId("head-run-record-card")).not.toBeInTheDocument();
   });
 

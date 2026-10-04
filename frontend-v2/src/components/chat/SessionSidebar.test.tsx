@@ -857,6 +857,31 @@ describe("SessionSidebar — Heads-Sektion", () => {
     expect(rows.map((r) => r.getAttribute("data-head-state"))).toEqual(["needs_you", "running", "passed"]);
   });
 
+  // Review finding on PR #756 round 4: a needs_you run that `sortHeadsForList`
+  // placed in the ended group (a later run on the same task superseded it)
+  // kept `state: "needs_you"` on its OWN record, so the old `firstDoneIndex`
+  // (which only matched `passed`/`failed`/`stopped`) put the "Done" divider
+  // AFTER it, leaving it visually pinned in the active section anyway.
+  it("a superseded needs_you counts as done for the divider, and renders as answered — not pulsing", () => {
+    const superseded = mkRun({ run_id: "a", task_id: "t1", state: "needs_you", exited_at: "2026-09-01T00:00:00Z" });
+    const successor = mkRun({ run_id: "b", task_id: "t1", restarted_from: "a", state: "failed", exited_at: "2026-09-10T00:00:00Z" });
+    const running = mkRun({ run_id: "c", task_id: "t2", state: "running" });
+    // Pre-sorted the way the real caller (`sessions/page.tsx`) would hand
+    // it in: running first (active group), then the ended group newest-
+    // end-first, including the superseded needs_you at the end.
+    renderWithClient(<SessionSidebar {...sidebarBase} heads={[running, successor, superseded]} onSelectHead={() => {}} />);
+    const section = screen.getByTestId("heads-section");
+    const divider = screen.getByTestId("heads-done-divider");
+    const rows = within(section).getAllByTestId("head-chat-row");
+    // Divider sits right before "successor" (the first ended-group row) —
+    // not after "superseded", which would leave it above the divider.
+    expect(rows.map((r) => r.getAttribute("data-head-state"))).toEqual(["running", "failed", "needs_you"]);
+    expect(divider.compareDocumentPosition(rows[1])).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    const supersededRow = rows[2];
+    expect(supersededRow).toHaveTextContent("answered");
+    expect(supersededRow).not.toHaveTextContent("needs you");
+  });
+
   it("shows no divider when every head in the window is still active", () => {
     renderWithClient(
       <SessionSidebar

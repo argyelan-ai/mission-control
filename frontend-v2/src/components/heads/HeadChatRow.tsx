@@ -20,9 +20,13 @@ import { headListTitle, headStateKey, midLineStateWord, pairShort, runDurationSe
  *  shows while it works, passed = online, failed = error, stopped = idle.
  *  `needs_you` has no `StatusDot` status of its own (that palette is
  *  status/online/error/idle/busy/offline, not "accent") — a small bespoke
- *  dot, same pattern `GroupRow` already uses for its own "waiting" dot. */
-function HeadDot({ state }: { state: HeadRun["state"] }) {
-  if (state === "needs_you") {
+ *  dot, same pattern `GroupRow` already uses for its own "waiting" dot.
+ *  `superseded` overrides a `needs_you` run back to the plain idle dot — a
+ *  later run on the same task already answered or replaced it, so nothing
+ *  here is actually asking for the operator any more (review finding on
+ *  PR #756 round 4). */
+function HeadDot({ state, superseded }: { state: HeadRun["state"]; superseded: boolean }) {
+  if (state === "needs_you" && !superseded) {
     return (
       <span
         className="relative inline-flex shrink-0 h-1.5 w-1.5 rounded-full animate-pulse"
@@ -31,6 +35,7 @@ function HeadDot({ state }: { state: HeadRun["state"] }) {
       />
     );
   }
+  if (state === "needs_you") return <StatusDot status="idle" size="sm" />;
   const map: Record<Exclude<HeadRun["state"], "needs_you">, { status: "busy" | "online" | "error" | "idle"; pulse?: boolean }> = {
     starting: { status: "busy", pulse: true },
     running: { status: "busy", pulse: true },
@@ -48,16 +53,31 @@ interface HeadChatRowProps {
   onSelect: (runId: string) => void;
   /** Rail = dense desktop column. List = the mobile stack screen. */
   variant?: "rail" | "list";
+  /** This run's `needs_you` question has been superseded by a later run on
+   *  the same task (`lib/heads.ts::supersededNeedsYouIds`) — render it like
+   *  an ended, answered run instead of the pulsing "needs you" row (review
+   *  finding on PR #756 round 4: an answered `needs_you` stayed pinned at
+   *  the top of the Heads section forever). Ignored for every other state. */
+  superseded?: boolean;
 }
 
-export function HeadChatRow({ run, selected, onSelect, variant = "rail" }: HeadChatRowProps) {
+export function HeadChatRow({ run, selected, onSelect, variant = "rail", superseded = false }: HeadChatRowProps) {
   const t = useTranslations("heads");
   const locale = useLocale();
   const stack = variant === "list";
+  const supersededNeedsYou = run.state === "needs_you" && superseded;
 
   const pair = pairShort(run);
   let line2: string;
-  if (run.state === "needs_you") {
+  if (supersededNeedsYou) {
+    // Same shape as the "ended" branch below (pair + state word + age) —
+    // this run no longer asks anything of the operator, so it reads like
+    // any other finished row, not like a second "needs you".
+    const endedAt = run.exited_at ?? run.created_at;
+    const age = formatAgeRounded(endedAt, locale);
+    const stateWord = midLineStateWord(t("answered"));
+    line2 = age ? `${pair} · ${stateWord} · ${t("time.ago", { age })}` : `${pair} · ${stateWord}`;
+  } else if (run.state === "needs_you") {
     // The pair + exactly ONE state word — never a second word for the
     // same state on top of it (the prototype review's actual finding,
     // anhang.md H: "braucht dich · Frage offen" is ONE state in two
@@ -99,7 +119,7 @@ export function HeadChatRow({ run, selected, onSelect, variant = "rail" }: HeadC
         borderTop: stack ? `1px solid ${C.borderSubtle}` : undefined,
       }}
     >
-      <HeadDot state={run.state} />
+      <HeadDot state={run.state} superseded={supersededNeedsYou} />
       <span className="flex-1 min-w-0">
         <span
           className="block font-medium truncate text-sm"

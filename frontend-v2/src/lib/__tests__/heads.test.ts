@@ -22,9 +22,11 @@ import {
   parseHeadOnBox,
   parseStep,
   prNumberFromUrl,
+  newerHeadRunIdFor,
   runDurationSeconds,
   sortHeadsForList,
   splitPairs,
+  supersededNeedsYouIds,
   type HeadPairsResponse,
 } from "../heads";
 import { mkPair, mkRun } from "./headFixtures";
@@ -319,11 +321,17 @@ describe("HEAD_STEP_KEYS / headStepKey", () => {
 
 describe("sortHeadsForList", () => {
   it("orders needs_you before running/starting before every ended state", () => {
-    const needsYou = mkRun({ run_id: "a", state: "needs_you" });
-    const running = mkRun({ run_id: "b", state: "running" });
-    const starting = mkRun({ run_id: "c", state: "starting" });
-    const passed = mkRun({ run_id: "d", state: "passed", exited_at: "2026-09-23T10:00:00Z" });
-    const failed = mkRun({ run_id: "e", state: "failed", exited_at: "2026-09-23T09:00:00Z" });
+    // Distinct task ids: these five runs stand in for five UNRELATED tasks
+    // here, purely to exercise group ordering — on a shared task id,
+    // `needsYou` would (correctly) be judged superseded by whichever of the
+    // others has the latest `created_at`, which is not what this test is
+    // about (see the `sortHeadsForList + supersededNeedsYouIds` describe
+    // block below for that behaviour).
+    const needsYou = mkRun({ run_id: "a", task_id: "task-a", state: "needs_you" });
+    const running = mkRun({ run_id: "b", task_id: "task-b", state: "running" });
+    const starting = mkRun({ run_id: "c", task_id: "task-c", state: "starting" });
+    const passed = mkRun({ run_id: "d", task_id: "task-d", state: "passed", exited_at: "2026-09-23T10:00:00Z" });
+    const failed = mkRun({ run_id: "e", task_id: "task-e", state: "failed", exited_at: "2026-09-23T09:00:00Z" });
     const order = sortHeadsForList([passed, running, failed, needsYou, starting]).map((r) => r.run_id);
     expect(order).toEqual(["a", "b", "c", "d", "e"]);
   });
@@ -344,6 +352,69 @@ describe("sortHeadsForList", () => {
     const r1 = mkRun({ run_id: "1", state: "running" });
     const r2 = mkRun({ run_id: "2", state: "starting" });
     expect(sortHeadsForList([r1, r2]).map((r) => r.run_id)).toEqual(["1", "2"]);
+  });
+
+  // Review finding on PR #756 round 4: an answered `needs_you` stayed
+  // pinned at the top forever, its own `state` field never changing once
+  // the head moved on — the list itself has to notice a later run exists.
+  it("a needs_you run superseded by a later run on the same task sorts into the ended group, newest-end-first", () => {
+    const needsYou = mkRun({ run_id: "a", task_id: "t1", state: "needs_you", exited_at: "2026-09-03T00:00:00Z" });
+    const successor = mkRun({ run_id: "b", task_id: "t1", restarted_from: "a", state: "failed", exited_at: "2026-09-10T00:00:00Z" });
+    const older = mkRun({ run_id: "c", task_id: "t2", state: "passed", exited_at: "2026-09-05T00:00:00Z" });
+    const order = sortHeadsForList([needsYou, successor, older]).map((r) => r.run_id);
+    // Ended group, newest-end-first: successor (09-10) → older (09-05) →
+    // the superseded needs_you (09-03) — never pinned ahead of them.
+    expect(order).toEqual(["b", "c", "a"]);
+  });
+
+  it("a needs_you run that IS the newest run for its task stays pinned, even alongside an older ended run on the same task", () => {
+    const olderEnded = mkRun({ run_id: "x", task_id: "t1", state: "passed", created_at: "2026-09-01T00:00:00Z", exited_at: "2026-09-01T00:00:00Z" });
+    const needsYou = mkRun({ run_id: "y", task_id: "t1", state: "needs_you", created_at: "2026-09-10T00:00:00Z", exited_at: "2026-09-10T00:00:00Z" });
+    expect(sortHeadsForList([olderEnded, needsYou]).map((r) => r.run_id)).toEqual(["y", "x"]);
+  });
+});
+
+describe("supersededNeedsYouIds / newerHeadRunIdFor", () => {
+  it("flags a needs_you run with a later run on the same task, by created_at", () => {
+    const old = mkRun({ run_id: "a", task_id: "t1", state: "needs_you", created_at: "2026-09-01T00:00:00Z" });
+    const successor = mkRun({ run_id: "b", task_id: "t1", state: "running", created_at: "2026-09-02T00:00:00Z" });
+    expect(supersededNeedsYouIds([old, successor]).has("a")).toBe(true);
+    expect(supersededNeedsYouIds([old, successor]).has("b")).toBe(false); // not needs_you — never flagged
+  });
+
+  it("flags a needs_you run named as another run's restarted_from, even with an identical created_at", () => {
+    const old = mkRun({ run_id: "a", task_id: "t1", state: "needs_you", created_at: "2026-09-01T00:00:00Z" });
+    const successor = mkRun({ run_id: "b", task_id: "t1", restarted_from: "a", state: "failed", created_at: "2026-09-01T00:00:00Z" });
+    expect(supersededNeedsYouIds([old, successor]).has("a")).toBe(true);
+  });
+
+  it("does not flag the newest needs_you run for its task", () => {
+    const needsYou = mkRun({ run_id: "a", task_id: "t1", state: "needs_you", created_at: "2026-09-10T00:00:00Z" });
+    const olderEnded = mkRun({ run_id: "b", task_id: "t1", state: "passed", created_at: "2026-09-01T00:00:00Z" });
+    expect(supersededNeedsYouIds([needsYou, olderEnded]).has("a")).toBe(false);
+  });
+
+  it("never flags a needs_you run with no other run on its task", () => {
+    const solo = mkRun({ run_id: "a", task_id: "t1", state: "needs_you" });
+    expect(supersededNeedsYouIds([solo]).size).toBe(0);
+  });
+
+  it("newerHeadRunIdFor prefers the direct restarted_from link over a same-task guess", () => {
+    const old = mkRun({ run_id: "a", task_id: "t1", state: "needs_you", created_at: "2026-09-01T00:00:00Z" });
+    const unrelatedLater = mkRun({ run_id: "z", task_id: "t1", state: "passed", created_at: "2026-09-05T00:00:00Z" });
+    const directSuccessor = mkRun({ run_id: "b", task_id: "t1", restarted_from: "a", state: "running", created_at: "2026-09-02T00:00:00Z" });
+    expect(newerHeadRunIdFor(old, [old, unrelatedLater, directSuccessor])).toBe("b");
+  });
+
+  it("newerHeadRunIdFor falls back to the newest other run on the same task with no direct link", () => {
+    const old = mkRun({ run_id: "a", task_id: "t1", state: "needs_you", created_at: "2026-09-01T00:00:00Z" });
+    const sibling = mkRun({ run_id: "b", task_id: "t1", state: "passed", created_at: "2026-09-05T00:00:00Z" });
+    expect(newerHeadRunIdFor(old, [old, sibling])).toBe("b");
+  });
+
+  it("newerHeadRunIdFor is null for an orphaned run with no task and no restarted_from link", () => {
+    const solo = mkRun({ run_id: "a", task_id: null, state: "needs_you" });
+    expect(newerHeadRunIdFor(solo, [solo])).toBeNull();
   });
 });
 

@@ -96,21 +96,44 @@ describe("HeadRunRecordCard", () => {
     expect(screen.queryByTestId("head-run-record-card")).not.toBeInTheDocument();
   });
 
-  it("fact values wrap instead of truncating, left-aligned below their own label (DESIGN.md K3)", async () => {
+  it("fact values sit label-left/value-right by default, wrapping instead of truncating (DESIGN.md K3/K12)", async () => {
+    // Round 4 (review finding on PR #756): server-side shortening keeps a
+    // test fact to one clause now, so most facts are short — K12's "field
+    // left in meta, value right" phone property-list layout is back as the
+    // default; only a value that GENUINELY still overflows stacks (covered
+    // by the "stacks…" test below). jsdom with no stubbed `scrollHeight`
+    // reports every value as fitting (see the component's own comment), so
+    // this test exercises exactly that default, non-overflowing path.
     vi.spyOn(api.heads, "summary").mockResolvedValue({
       ...FULL,
-      tests: { failed_before: "ModuleNotFoundError: app.services.heads.transcript — no module named transcript_adapters", passed_after: null },
+      tests: { failed_before: "ModuleNotFoundError", passed_after: null },
     });
     renderCard();
-    const value = await screen.findByText(/ModuleNotFoundError/);
+    const value = await screen.findByText("ModuleNotFoundError");
     expect(value.className).toMatch(/break-words/);
     expect(value.className).not.toMatch(/\btruncate\b/);
-    // Review finding on PR #756 round 3: a right-aligned paragraph next to a
-    // fixed label used to be the layout; stacked now — label above, value
-    // below, both left-aligned (no `text-right`/`justify-between` split).
-    expect(value.className).not.toMatch(/text-right/);
+    expect(value.className).toMatch(/text-right/);
+    expect(value.className).toMatch(/flex-1/);
     const label = screen.getByText("Red before");
-    expect(label.className).not.toMatch(/whitespace-nowrap|shrink-0/);
+    expect(label.className).toMatch(/shrink-0/);
+  });
+
+  it("stacks label above value, full width, only once the value actually overflows", async () => {
+    vi.spyOn(api.heads, "summary").mockResolvedValue({
+      ...FULL,
+      tests: { failed_before: "a very long explanation that really does not fit two lines on a phone screen at all", passed_after: null },
+    });
+    const restoreScrollHeight = stubScrollHeight(80); // > the 2-line clamp max
+    try {
+      renderCard();
+      const value = await screen.findByText(/a very long explanation/);
+      expect(value.className).not.toMatch(/text-right/);
+      expect(value.className).not.toMatch(/flex-1/);
+      const label = screen.getByText("Red before");
+      expect(label.className).not.toMatch(/shrink-0/);
+    } finally {
+      restoreScrollHeight();
+    }
   });
 
   it("clamps a genuinely overflowing fact to two lines with an expand control, never silently", async () => {

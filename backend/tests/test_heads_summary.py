@@ -19,6 +19,8 @@ import uuid
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from app.services.heads import redact, summary
 from tests.heads_backend_helpers import heads_root, iso, make_run  # noqa: F401 (fixture)
 
@@ -203,6 +205,87 @@ def test_sabotage_negative_with_explanation_after_dash_is_still_false():
     assert summary.build_summary(run)["sabotage"] is False
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        "n/a (docs-only change)",
+        "none; docs only",
+        "skipped, no code change",
+        "N/A: docs only",
+        "none (docs-only)",
+    ],
+)
+def test_sabotage_negative_forms_beyond_the_em_dash_separator(value):
+    """Review finding on PR #756 round 4: `_sabotage` only ever split on the
+    template's own `` — `` separator, so a real bullet's own punctuation
+    after the negative verdict — `(…)`, `;`, `,`, `:` — fell through to "not
+    an exact match against the whole value" and reported `sabotage=True`
+    regardless of what the bullet actually said. Sabotage-checked: widening
+    `_SABOTAGE_NEGATIVE_RE` to match anything (e.g. `r".*"`) turns every one
+    of these red."""
+    text = RICH_TEMPLATE.format(secret="x" * 20).replace(
+        "Sabotage probe: dropped the mask call → the field leaked xxxxxxxxxxxxxxxxxxxx · restored → green",
+        f"Sabotage check: {value}",
+    )
+    run = _fake_run(folder=FIXTURES / "claude-run", text=text)
+    assert summary.build_summary(run)["sabotage"] is False
+
+
+@pytest.mark.parametrize("value", ["pending", "PENDING", "Pending", "tbd", "todo", "-", "–", "—"])
+def test_placeholder_words_read_as_none_not_real_content(value):
+    """Review finding on PR #756 round 4, reproduced on real run 6bcf49ea: a
+    head writes the literal word "pending" into a freshly-scaffolded
+    `## Result` bullet at step 0, not the template's own `<…>` bracket
+    shape — `_is_placeholder` only checked for a leading `<`, so "pending"
+    (and the same idea spelled "tbd"/"todo"/a bare dash) passed straight
+    through as if it were a real, written answer."""
+    text = RICH_TEMPLATE.format(secret="x" * 20).replace(
+        "- The chat view now shows a run-record summary card instead of raw markdown; key secret xxxxxxxxxxxxxxxxxxxx",
+        f"- {value}",
+    )
+    run = _fake_run(folder=FIXTURES / "claude-run", text=text)
+    assert summary.build_summary(run)["result_line"] is None
+
+
+def test_running_status_record_returns_none_not_a_half_empty_card():
+    """Real case (scrubbed shape), run 6bcf49ea: the head ended
+    `failed`/`no_progress` before ever reaching a later step, so its run
+    record is still exactly the step-0 scaffold — `Status: running`, a
+    literal "pending" Result bullet, zeroed counters nobody ever filled in.
+    Before this fix `build_summary` still returned `result_line: "pending"`,
+    `operator_minutes: 0`, `helpers: 0` — a believable-looking card for a
+    run that did nothing (review finding on PR #756 round 4). The scaffold
+    `Status:` line is the one signal every per-field check above lacks (a
+    scaffolded "- Helpers: 0" is indistinguishable, field by field, from a
+    real zero) — the router now treats this the same as no run record at
+    all, same 404 `run_record_missing`."""
+    text = (
+        "---\nid: job-x\ntype: run-record\nagent: head\ndate: 2026-09-29\n"
+        "head_run: 6bcf49ea\ntask: task-x\n---\n\n# Run record: scrubbed\n\n"
+        "Heartbeat: 2026-09-29 09:00 · step 0 context brief · waiting for: nothing\n"
+        "Status: running\n\n"
+        "## Result\n- pending\n\n"
+        "## Evidence\n- Green after: pending\n\n"
+        "## Numbers\n- Helpers: 0\n- Operator minutes (estimate): 0\n"
+    )
+    run = _fake_run(folder=FIXTURES / "claude-run", text=text)
+    assert summary.build_summary(run) is None
+
+
+def test_running_status_gate_does_not_affect_a_record_with_no_status_line():
+    """The "Status: running → None" rule above must not swallow the
+    genuinely-common "no `##` sections, no `Status:` line at all" shape —
+    that stays every-field-`None`, not a whole-record `None` (see
+    `test_record_with_no_sections_at_all_is_all_none_not_a_500` for the
+    existing coverage of that shape; this is the boundary check that the
+    NEW rule only fires on an ACTUAL `running` match)."""
+    text = "---\nhead_run: fake-run\n---\n\n# Run record\n\n## Result\n- Added the thing.\n"
+    run = _fake_run(folder=FIXTURES / "claude-run", text=text)
+    out = summary.build_summary(run)
+    assert out is not None
+    assert out["result_line"] == "Added the thing."
+
+
 # ── 3 — a broken record (frontmatter + heading only, no body at all) ─────────
 
 
@@ -278,13 +361,15 @@ def test_real_claude_run_record_parses_the_in_repo_template_labels():
     # on PR #756 round 3 — SHORTENED to its key result: the real bullet's
     # "(ModuleNotFoundError: …)" parenthetical aside is cut, not shown; a
     # ~500-character "Green after" explanation, backticks and all, is exactly
-    # what made the real card unreadable on the phone.
-    assert out["tests"]["failed_before"] == '"11 failed"'
+    # what made the real card unreadable on the phone. Round 4: the real
+    # bullet quotes its key line (`"11 failed"`) — those quote marks are now
+    # stripped too, the same debris `_strip_backticks` already removes.
+    assert out["tests"]["failed_before"] == "11 failed"
     # "Green after" carries TWO arrows on this real line — splitting at the
     # first one keeps "11 passed" (the actual result); the semicolon right
     # after it then cuts the ~500-character "full suite … 24 failed, 9765
     # passed …" explanation, which is no longer part of the card's fact.
-    assert out["tests"]["passed_after"] == '"11 passed"'
+    assert out["tests"]["passed_after"] == "11 passed"
     assert out["sabotage"] is True  # "Sabotage check:" (not "Sabotage probe:")
     assert out["kz_ok"] is True  # Evidence "kz check: … -> OK", not the Context-brief heuristic
     assert out["review"] == "self"  # "Review: self, no helper available …" — "self" wins over the later word "helper"
@@ -311,6 +396,68 @@ def test_no_backtick_survives_into_any_rendered_fact():
     assert "`" not in out["result_line"]
     assert "`" not in out["tests"]["failed_before"]
     assert "`" not in out["tests"]["passed_after"]
+
+
+def test_no_quote_survives_into_a_shortened_test_fact():
+    """Review finding on PR #756 round 4: the real claude-run fixture's
+    "Failing test before"/"Green after" bullets quote their key line
+    (`"11 failed"`/`"11 passed"`) — harmless debris once that quoted
+    fragment IS the card's own one-line fact rather than an aside inside a
+    longer sentence, visible as literal quote marks in the round-3
+    screenshots. Also covers the UNBALANCED case the same fixture's two
+    sibling bugs produced on other real run ids (5a7269a3 `"12 keys`,
+    708843ce `"0 new, 96 known…`): a shortened fact that kept only the
+    OPENING quote (because the aside-marker cut sliced the closing one
+    away) must lose that stray quote too, not just a genuinely balanced
+    pair."""
+    text = (FIXTURES / "claude-run" / "run-record-filled.md").read_text()
+    out = summary.build_summary(_fake_run(folder=FIXTURES / "claude-run", text=text))
+    assert out["tests"]["failed_before"] == "11 failed"
+    assert '"' not in out["tests"]["failed_before"]
+    assert out["tests"]["passed_after"] == "11 passed"
+    assert '"' not in out["tests"]["passed_after"]
+
+    unbalanced_text = text.replace(
+        '- Failing test before: `uv run pytest tests/test_pr_merge_monitor.py -q` → "11 failed" (ModuleNotFoundError: app.services.pr_merge_monitor)',
+        '- Failing test before: `uv run pytest tests/test_pr_merge_monitor.py -q` → "12 keys missing; full trace omitted',
+    )
+    assert unbalanced_text != text
+    out2 = summary.build_summary(_fake_run(folder=FIXTURES / "claude-run", text=unbalanced_text))
+    assert out2["tests"]["failed_before"] == "12 keys missing"
+    assert '"' not in out2["tests"]["failed_before"]
+
+
+def test_bold_markdown_emphasis_stripped_from_a_shortened_test_fact():
+    """Review finding on PR #756 round 4: a real, fully-bolded "Green
+    after" bullet (run 7f9be9f3's shape) printed
+    '**9305 passed, 24 failed, 50 skipped**' verbatim — `_strip_backticks`
+    only ever removed backtick characters, leaving the asterisks. A bare
+    `value.replace("**", "")` would also corrupt a literal double
+    underscore inside real test output — covered below by a value
+    containing `tests/__init__.py`, which must survive untouched since it
+    does not both START and END with `__` (none of that is markdown
+    emphasis)."""
+    text = (FIXTURES / "claude-run" / "run-record-filled.md").read_text()
+    bold_text = text.replace(
+        '- Green after: same command → "11 passed"; full suite',
+        '- Green after: same command → **"11 passed"**; full suite',
+    )
+    assert bold_text != text
+    out = summary.build_summary(_fake_run(folder=FIXTURES / "claude-run", text=bold_text))
+    assert out["tests"]["passed_after"] == "11 passed"
+    assert "*" not in out["tests"]["passed_after"]
+
+    # A literal double underscore that is NOT emphasis — the whole value
+    # does not both start AND end with `__` — must survive untouched: a
+    # blanket `value.replace("__", "")` would mangle a real filename like
+    # `tests/__init__.py` inside a real key result.
+    underscore_text = text.replace(
+        '- Green after: same command → "11 passed"; full suite',
+        '- Green after: same command → tests/__init__.py added; full suite',
+    )
+    assert underscore_text != text
+    out2 = summary.build_summary(_fake_run(folder=FIXTURES / "claude-run", text=underscore_text))
+    assert out2["tests"]["passed_after"] == "tests/__init__.py added"
 
 
 def test_real_omp_run_record_parses_the_in_repo_template_labels():

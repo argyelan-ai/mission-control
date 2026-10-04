@@ -26,14 +26,17 @@ const FACT_LINE_HEIGHT_PX = 17;
 const FACT_CLAMP_MAX_PX = FACT_CLAMP_LINES * FACT_LINE_HEIGHT_PX;
 
 function Fact({ label, value, t }: { label: string; value: string; t: ReturnType<typeof useTranslations> }) {
-  // Review finding on PR #756 round 3: a right-aligned paragraph next to a
-  // fixed label (the round-2 fix for DESIGN.md K3's "nothing cut off") still
-  // printed a real ~500-character test fact as ten unreadable lines on the
-  // phone, backticks and all. Stacked instead: the short label on its own
-  // line, the value left-aligned beneath it, clamped to two lines with an
-  // expand control when it genuinely overflows — never a silent, permanent
-  // cut (K3 bans "…" outside the title; this recovers the rest on tap,
-  // which plain `truncate` never did).
+  // DESIGN.md K12 ("phone property lists: field left in `meta`, value
+  // right") — round 3's fix stacked EVERY fact (label above, value below)
+  // to fix a real ~500-character test fact printing as ten unreadable
+  // lines; that was the right call for THAT value, but server-side
+  // shortening (`_shorten_to_key_result`) now keeps a test fact to one
+  // clause, so most facts here are short ("Yes", "0", "self") and stacking
+  // them cost a full card's worth of phone height for no reason (review
+  // finding on PR #756 round 4). Label-left/value-right by default;
+  // stacked (full width, clamped to two lines with an expand control) only
+  // once a value genuinely still overflows — never a silent, permanent cut
+  // (K3 bans "…" outside the title; this recovers the rest on tap).
   const [expanded, setExpanded] = useState(false);
   const [overflows, setOverflows] = useState(false);
   const valueRef = useRef<HTMLParagraphElement>(null);
@@ -57,11 +60,13 @@ function Fact({ label, value, t }: { label: string; value: string; t: ReturnType
   const clamped = overflows && !expanded;
 
   return (
-    <div className="py-1 text-xs">
-      <span className="block" style={{ color: C.textMuted }}>{label}</span>
+    <div className={`py-1 text-xs flex gap-3${overflows ? " flex-col" : " items-baseline"}`}>
+      <span className={overflows ? "block" : "shrink-0"} style={{ color: C.textMuted }}>
+        {label}
+      </span>
       <p
         ref={valueRef}
-        className={`mt-1 break-words${clamped ? " line-clamp-2" : ""}`}
+        className={`min-w-0 break-words${overflows ? "" : " flex-1 text-right"}${clamped ? " line-clamp-2" : ""}`}
         style={{ color: C.textSecondary }}
       >
         {value}
@@ -74,7 +79,7 @@ function Fact({ label, value, t }: { label: string; value: string; t: ReturnType
           type="button"
           onClick={() => setExpanded((v) => !v)}
           aria-expanded={expanded}
-          className="mt-1 min-h-touch text-xs font-medium cursor-pointer"
+          className="min-h-touch text-xs font-medium cursor-pointer self-start"
           style={{ color: C.textMuted }}
         >
           {expanded ? t("summary.collapse") : t("summary.expand")}

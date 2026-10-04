@@ -25,7 +25,7 @@ import { useTerminalRemountSignal } from "@/hooks/useTerminalRemountSignal";
 import { rememberChat } from "@/lib/recentChats";
 import { useHeadRuns } from "@/components/heads/useHeadRuns";
 import { HeadChatPlaceholder } from "@/components/heads/HeadChatPlaceholder";
-import { sortHeadsForList, type HeadRun } from "@/lib/heads";
+import { newerHeadRunIdFor, sortHeadsForList, type HeadRun } from "@/lib/heads";
 
 // ── Last-selected-agent persistence ─────────────────────────────────────────
 // Same try/catch-wrapped localStorage pattern as runtimes/page.tsx's
@@ -314,6 +314,28 @@ function SessionsPageContent() {
   const headStillResolving =
     !!selectedHeadId && !selectedHeadRun && (headRunsLoading || (!headFromRecent && headFetchedLoading));
   const headNotFound = !!selectedHeadId && !selectedHeadRun && !headStillResolving;
+
+  // The "open the newer run" link in a superseded `needs_you` footer
+  // (review finding on PR #756 round 4) needs the FULL run history for
+  // this one task, not just the 7-day `headRuns` window: a `needs_you` run
+  // opened from the Archive sheet can be old enough that both it and its
+  // successor have long since aged out of `headRuns` entirely. A plain
+  // `GET /heads?task_id=` (no `recent_days`) is the one call that returns
+  // every run for a task regardless of age — enabled only while it could
+  // matter (the selected run is actually `needs_you`), and cheap: one task's
+  // worth of runs, not the whole fleet.
+  const needsYouTaskId = selectedHeadRun?.state === "needs_you" ? selectedHeadRun.task_id : null;
+  const { data: taskRunHistory } = useQuery({
+    queryKey: ["heads", "runs", "by-task", needsYouTaskId],
+    queryFn: () => api.heads.list({ taskId: needsYouTaskId as string }),
+    enabled: !!needsYouTaskId,
+    staleTime: 30_000,
+  });
+  const newerHeadRunId = useMemo(() => {
+    if (!selectedHeadRun || selectedHeadRun.state !== "needs_you") return null;
+    const candidates = taskRunHistory?.runs ?? headRuns;
+    return newerHeadRunIdFor(selectedHeadRun, candidates);
+  }, [selectedHeadRun, taskRunHistory, headRuns]);
 
   const agents: AgentWithState[] = [...dockerAgents, ...hostAgents];
 
@@ -683,6 +705,8 @@ function SessionsPageContent() {
                   centerView="chat"
                   onCenterViewChange={() => {}}
                   onBack={backToList}
+                  newerHeadRunId={newerHeadRunId}
+                  onSelectHeadRun={handleSelectHead}
                 />
               )
             ) : selectedGroupId && selectedGroup ? (

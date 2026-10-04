@@ -14,7 +14,7 @@ import { Search, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { C } from "@/lib/colors";
 import { ResponsiveModal } from "@/components/shared/ResponsiveModal";
-import { headListTitle, pairShort, sortRunsNewestFirst, type HeadRun } from "@/lib/heads";
+import { headListTitle, pairShort, sortRunsNewestFirst, supersededNeedsYouIds, type HeadRun } from "@/lib/heads";
 import { HEAD_RUNS_RECENT_DAYS } from "./useHeadRuns";
 import { HeadChatRow } from "./HeadChatRow";
 
@@ -44,6 +44,11 @@ export function HeadArchiveSheet({ open, onClose, onSelectHead, selectedHeadId =
 
   const runs = useMemo(() => sortRunsNewestFirst(archiveQuery.data?.runs ?? []), [archiveQuery.data]);
   const filtered = useMemo(() => runs.filter((r) => matches(r, query)), [runs, query]);
+  // A `needs_you` run that aged into the archive is almost always one the
+  // Chats list already classified as superseded (review finding on PR #756
+  // round 4) — same rendering here, not a pulsing "needs you" row in a
+  // sheet whose whole point is "find an ENDED run again".
+  const supersededIds = useMemo(() => supersededNeedsYouIds(runs), [runs]);
 
   return (
     <ResponsiveModal open={open} onClose={onClose} dismissOnOutside={false} aria-labelledby="head-archive-title">
@@ -100,6 +105,7 @@ export function HeadArchiveSheet({ open, onClose, onSelectHead, selectedHeadId =
                     onSelectHead(id);
                     onClose();
                   }}
+                  superseded={supersededIds.has(run.run_id)}
                 />
               ))}
             </div>

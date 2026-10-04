@@ -23,7 +23,19 @@ import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import { C } from "@/lib/colors";
 
-function headingKey(reason: string | null): string {
+function headingKey(reason: string | null, historyFailed: boolean): string {
+  // `reason: null` covers TWO different real situations: the meta query
+  // has not resolved yet (genuinely "not yet"), or it resolved to an
+  // ERROR — the fetch itself failed, nothing is still coming until a retry
+  // succeeds. Both left no cached `source`/`reader`/`reason` to read
+  // (`useHeadTranscriptMeta` only has data once a request SUCCEEDED), so
+  // `reason` alone cannot tell them apart — the caller passes the stream's
+  // own error flag for that (review finding on PR #756 round 4: an ended
+  // run whose history fetch had outright failed still said "Waiting for
+  // the first transcript lines …", promising something that was not
+  // coming because of a transient error, not because nothing had happened
+  // yet).
+  if (reason == null && historyFailed) return "chat.historyLoadFailed";
   switch (reason) {
     case "no_reader":
       return "chat.noTranscriptTitle";
@@ -33,8 +45,9 @@ function headingKey(reason: string | null): string {
       return "chat.transcriptTooLarge";
     case "not_yet":
     default:
-      // `null` (meta not resolved yet) reads the same as `not_yet` — both
-      // are "nothing to show YET", the one heading that still earns "yet".
+      // `null` (meta not resolved yet, no error) reads the same as
+      // `not_yet` — both are "nothing to show YET", the one heading that
+      // still earns "yet".
       return "chat.waitingFirstLines";
   }
 }
@@ -42,9 +55,14 @@ function headingKey(reason: string | null): string {
 export function HeadNoTranscriptFallback({
   runId,
   reason,
+  historyFailed = false,
 }: {
   runId: string;
   reason: string | null;
+  /** The transcript history query itself errored (`stream.error` on
+   *  ChatView's side) — distinct from `reason` being `null` merely because
+   *  nothing has resolved yet. */
+  historyFailed?: boolean;
 }) {
   const t = useTranslations("heads");
   const logQuery = useQuery({
@@ -62,7 +80,7 @@ export function HeadNoTranscriptFallback({
   return (
     <div className="flex flex-col gap-2 px-4 py-6" data-testid="head-no-transcript">
       <p className="text-sm font-medium" style={{ color: C.textSecondary }}>
-        {t(headingKey(reason))}
+        {t(headingKey(reason, historyFailed))}
       </p>
       {noReader && (
         <p className="text-xs" style={{ color: C.textMuted }}>

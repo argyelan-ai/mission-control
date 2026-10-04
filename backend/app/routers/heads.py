@@ -294,13 +294,19 @@ async def list_heads(
     Archive sheet's own listing. Active runs are never "archived"."""
     _enabled()
     now = time.time()
+    all_runs = list(files.list_runs())
+    # Computed over ALL runs, never just the (possibly task_id/box-filtered)
+    # `out` below: a restart's successor can land on a different box, and
+    # `_is_superseded_needs_you` has to see it regardless of what this one
+    # call happened to filter for.
+    all_views = [run_view(run, now) for run in all_runs]
+
     out = []
-    for run in files.list_runs():
+    for run, view in zip(all_runs, all_views):
         if task_id and run.task_id != str(task_id):
             continue
         if box and box not in (run.spec.get("box_keys") or []):
             continue
-        view = run_view(run, now)
         if active is not None and (view["state"] in ACTIVE_STATES) != active:
             continue
         out.append(view)
@@ -310,16 +316,50 @@ async def list_heads(
 
     window_s = (recent_days if recent_days is not None else RECENT_DAYS_DEFAULT) * 86400
 
+    # A `needs_you` run stays pinned on top (always "recent", regardless of
+    # age) only while it is the NEWEST run for its task: no later run shares
+    # its `task_id`, and no run names it as its own `restarted_from`. The
+    # operator answering the question (a "continue" restart) or launching a
+    # second one supersedes it — from then on it is windowed by its own
+    # `exited_at` like any other ended run, exactly as the Inbox's own
+    # `openHeadQuestions` (lib/inbox.ts) already treats "latest run per
+    # task" for the SAME reason. Before this, an answered `needs_you` stayed
+    # pinned at the top of the Chats "Heads" section forever — its own
+    # `question.md` never changes once the head has moved on, so nothing
+    # here ever turned it back into "not needs_you" on its own (review
+    # finding on PR #756 round 4, reproduced: an old `needs_you` run, exited
+    # 30 days ago, plus a `continue` successor that itself ended 20 days
+    # ago — `GET /heads?recent_days=7` returned the stale `needs_you` as
+    # current while the successor was already archived).
+    latest_run_id_by_task: dict[str, str] = {}
+    latest_created_by_task: dict[str, str] = {}
+    restarted_from_ids: set[str] = set()
+    for v in all_views:
+        rf = v.get("restarted_from")
+        if rf:
+            restarted_from_ids.add(rf)
+        tid = v.get("task_id")
+        if not tid:
+            continue
+        created = v.get("created_at") or ""
+        if tid not in latest_created_by_task or created > latest_created_by_task[tid]:
+            latest_created_by_task[tid] = created
+            latest_run_id_by_task[tid] = v["run_id"]
+
+    def _is_superseded_needs_you(view: dict) -> bool:
+        if view["state"] != "needs_you":
+            return False
+        if view["run_id"] in restarted_from_ids:
+            return True
+        tid = view.get("task_id")
+        return bool(tid) and latest_run_id_by_task.get(tid) != view["run_id"]
+
     def is_recent(view: dict) -> bool:
-        # `needs_you` is a FINAL state in `state.py` (it has an `exited_at`,
-        # like passed/failed/stopped) but it is NOT done — the operator is
-        # blocked on it. Treating it like any other ended state let a head
-        # that has waited 7+ days for an answer silently fall out of the
-        # Heads section into the Archive sheet (review finding on PR #756);
-        # the Inbox still showed it, so it never looked "lost", just buried
-        # one tap deeper than the one place "needs you" is meant to stay on
-        # top of.
-        return view["state"] in ACTIVE_STATES or view["state"] == "needs_you" or (now - _ended_ts(view)) < window_s
+        if view["state"] in ACTIVE_STATES:
+            return True
+        if view["state"] == "needs_you" and not _is_superseded_needs_you(view):
+            return True
+        return (now - _ended_ts(view)) < window_s
 
     if archived:
         return {"runs": [v for v in out if not is_recent(v)]}
@@ -414,14 +454,21 @@ async def get_head_summary(run_id: str):
     """The run record as keys (`services/heads/summary.py`'s own docstring
     has the field-by-field contract) — the Laufakten-Karte reads this
     instead of parsing `run-record.md` itself. Same 404 as the plain
-    markdown endpoint below when there is no run record at all; a record
-    that exists but is missing MOST of its optional sections is not an
-    error, `build_summary` simply returns `None` for what it cannot find."""
+    markdown endpoint below when there is no run record at all, OR when the
+    record is still exactly its own step-0 scaffold (`build_summary`
+    returns `None` there — see its own docstring, review finding on PR #756
+    round 4); a record that exists and has moved past that scaffold but is
+    still missing MOST of its optional sections is not an error,
+    `build_summary` simply returns `None` for each individual field it
+    cannot find."""
     _enabled()
     run = _load(run_id)
     if not run.run_record_text:
         raise _err(404, "run_record_missing")
-    return summary.build_summary(run)
+    result = summary.build_summary(run)
+    if result is None:
+        raise _err(404, "run_record_missing")
+    return result
 
 
 @router.get("/{run_id}/run-record", dependencies=[Depends(require_role(Role.VIEWER))])

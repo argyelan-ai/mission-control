@@ -672,6 +672,51 @@ async def test_needs_you_never_falls_into_the_archive_however_old(auth_client, h
     assert passed_long_ago in {r["run_id"] for r in archived["runs"]}
 
 
+async def test_superseded_needs_you_leaves_the_heads_section_once_answered(auth_client, heads_root):
+    """Review finding on PR #756 round 4, reproduced live: an old
+    `needs_you` run (exited 31 days ago, its `question.md` never changes
+    once the head has moved on) plus a `continue` successor on the SAME
+    task (itself ended 20 days ago). The previous `is_recent` rule kept
+    EVERY `needs_you` run pinned "recent" forever, however old, with no
+    check for whether a later run on the same task had superseded it — so
+    this endpoint returned the stale run as current `needs_you` (Inbox,
+    which already dedupes "latest run per task" via `openHeadQuestions`,
+    showed 0 open questions) while the real successor was already reported
+    `archived`. Once superseded, the old run must be windowed by its own
+    `exited_at` like any other ended run — here, well outside the 7-day
+    line, so it lands in the archive with every other ended run, its OWN
+    `state` field untouched (still literally `needs_you` — only its LIST
+    placement changed)."""
+    now = time.time()
+    task_id = str(uuid.uuid4())
+    old = make_run(
+        heads_root,
+        task_id=task_id,
+        created_ago=31 * 86400,
+        status={"phase": "exited", "exit_code": 0, "exited_at": iso(now - 31 * 86400)},
+        question="Deprecate the old field or keep it?",
+    )
+    successor = make_run(
+        heads_root,
+        task_id=task_id,
+        created_ago=21 * 86400,
+        restarted_from=old,
+        status={"phase": "exited", "exit_code": 1, "reason": "no_progress", "exited_at": iso(now - 20 * 86400)},
+    )
+
+    body = (await auth_client.get("/api/v1/heads?recent_days=7")).json()
+    recent_ids = {r["run_id"] for r in body["runs"]}
+    assert old not in recent_ids  # superseded — no longer pinned as "needs you"
+    assert successor not in recent_ids  # genuinely 20 days old, outside the window
+    assert body["archived_count"] == 2
+
+    archived = (await auth_client.get("/api/v1/heads?recent_days=7&archived=true")).json()
+    archived_by_id = {r["run_id"]: r for r in archived["runs"]}
+    assert old in archived_by_id
+    assert successor in archived_by_id
+    assert archived_by_id[old]["state"] == "needs_you"  # the record itself never changes
+
+
 async def test_run_record_endpoint_masks_head_env_secrets_like_the_log_endpoint(auth_client, heads_root):
     """Review finding on PR #756: `/summary` masks `result_line`/the two
     `tests` strings precisely because a run record can carry prose copied

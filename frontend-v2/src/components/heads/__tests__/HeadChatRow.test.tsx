@@ -67,6 +67,34 @@ describe("HeadChatRow", () => {
     vi.restoreAllMocks();
   });
 
+  // Review finding on PR #756 round 4: an answered needs_you stayed
+  // pulsing forever — nothing in HeadChatRow itself ever noticed a later
+  // run had superseded it.
+  it("superseded needs_you renders like an ended, answered row — not pulsing", () => {
+    const now = Date.parse("2026-09-23T10:00:00Z");
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    render(
+      <HeadChatRow
+        run={mkRun({ state: "needs_you", harness: "omp", model: "GLM-5.3-Flash-EXL3", exited_at: "2026-09-20T10:00:00Z" })}
+        selected={false}
+        onSelect={vi.fn()}
+        superseded
+      />,
+    );
+    const row = screen.getByTestId("head-chat-row");
+    expect(row).toHaveTextContent("omp × GLM-5.3");
+    expect(row).toHaveTextContent("answered");
+    expect(row).not.toHaveTextContent("needs you");
+    expect(row).not.toHaveTextContent("Needs you");
+    expect(row).toHaveTextContent("ago");
+    vi.restoreAllMocks();
+  });
+
+  it("a non-superseded needs_you row is unaffected by the superseded prop defaulting to false", () => {
+    render(<HeadChatRow run={mkRun({ state: "needs_you" })} selected={false} onSelect={vi.fn()} />);
+    expect(screen.getByTestId("head-chat-row")).toHaveTextContent("needs you");
+  });
+
   it("strips a leading bracket tag from the title", () => {
     render(<HeadChatRow run={mkRun({ title: "[night] Fix flaky retry test" })} selected={false} onSelect={vi.fn()} />);
     expect(screen.getByTestId("head-chat-row")).toHaveTextContent("Fix flaky retry test");

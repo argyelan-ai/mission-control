@@ -17,7 +17,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslations } from "next-intl";
-import { RotateCcw, Send } from "lucide-react";
+import { ArrowRight, RotateCcw, Send } from "lucide-react";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import { C } from "@/lib/colors";
@@ -35,6 +35,8 @@ const QUIET_BTN =
 export function HeadChatFooter({
   run,
   transcriptFallbackQuestion = null,
+  newerRunId = null,
+  onOpenNewerRun,
 }: {
   run: HeadRun;
   /** The transcript's last assistant message, for the rare run whose
@@ -44,6 +46,13 @@ export function HeadChatFooter({
    *  `run.question` always wins when it is there; this is the fallback,
    *  never the first choice. */
   transcriptFallbackQuestion?: string | null;
+  /** The run that superseded THIS run's `needs_you` question (a later run
+   *  on the same task) — when set, replaces the answer field with a link
+   *  to it instead (review finding on PR #756 round 4: an answered
+   *  `needs_you` kept offering "Answer & continue" forever, inviting a
+   *  SECOND restart from an already-stale question). */
+  newerRunId?: string | null;
+  onOpenNewerRun?: (runId: string) => void;
 }) {
   const t = useTranslations("heads");
   const qc = useQueryClient();
@@ -88,7 +97,12 @@ export function HeadChatFooter({
     return (
       <div className="flex items-center gap-3 px-3 md:px-4 py-3 border-t shrink-0" style={{ borderColor: C.border }}>
         {stepLine && (
-          <span className="flex-1 min-w-0 truncate text-xs" style={{ color: C.textMuted }} data-testid="head-footer-step">
+          // `break-words`, not `truncate` (DESIGN.md K3 — "…" is for the
+          // title only): a long `waitingFor` clause a real run wrote for
+          // itself must stay fully readable, not cut off (review finding
+          // on PR #756 round 4, same pattern as the failed/stopped reason
+          // line below).
+          <span className="flex-1 min-w-0 break-words text-xs" style={{ color: C.textMuted }} data-testid="head-footer-step">
             {stepLine}
           </span>
         )}
@@ -98,6 +112,31 @@ export function HeadChatFooter({
           done={stop.isSuccess}
           testId="head-footer-stop"
         />
+      </div>
+    );
+  }
+
+  if (run.state === "needs_you" && newerRunId) {
+    // Superseded: a later run on the same task already answered this
+    // question (or started over) — the answer field would restart a
+    // SECOND time from an already-stale question (review finding on
+    // PR #756 round 4). One line of explanation and a link, nothing to
+    // type into.
+    return (
+      <div className="flex items-center gap-3 px-3 md:px-4 py-3 border-t shrink-0" style={{ borderColor: C.border }}>
+        <span className="flex-1 min-w-0 break-words text-xs" style={{ color: C.textMuted }} data-testid="head-footer-superseded">
+          {t("card.supersededHint")}
+        </span>
+        <button
+          type="button"
+          onClick={() => onOpenNewerRun?.(newerRunId)}
+          data-testid="head-footer-open-newer"
+          className={QUIET_BTN}
+          style={{ color: C.textSecondary }}
+        >
+          {t("card.openNewerRun")}
+          <ArrowRight size={15} aria-hidden />
+        </button>
       </div>
     );
   }
@@ -189,15 +228,21 @@ export function HeadChatFooter({
   // failed / stopped
   const fail = failReasonKey(run.reason);
   return (
-    <div className="flex items-center gap-3 px-3 md:px-4 py-3 border-t shrink-0" style={{ borderColor: C.border }}>
-      <span className="flex-1 min-w-0 truncate text-xs" style={{ color: C.textMuted }} data-testid="head-footer-reason">
+    // Stacked on the phone (reason first, Restart on its own row below),
+    // side by side from md up — a long reason (e.g. `local_network_
+    // blocked`, which carries the operator's own fix steps) needs the full
+    // row width to stay readable; squeezed next to the Restart button it
+    // either truncated (DESIGN.md K3 — "…" is for the title only) or read
+    // cramped (review finding on PR #756 round 4).
+    <div className="flex flex-col md:flex-row md:items-center gap-2 md:gap-3 px-3 md:px-4 py-3 border-t shrink-0" style={{ borderColor: C.border }}>
+      <span className="flex-1 min-w-0 break-words text-xs" style={{ color: C.textMuted }} data-testid="head-footer-reason">
         {t(fail.key, fail.values)}
       </span>
       <button
         type="button"
         onClick={() => setRestartOpen(true)}
         data-testid="head-footer-restart"
-        className={QUIET_BTN}
+        className={`${QUIET_BTN} self-start md:self-auto`}
         style={{ color: C.textSecondary }}
       >
         <RotateCcw size={15} aria-hidden />
