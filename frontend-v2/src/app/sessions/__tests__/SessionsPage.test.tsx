@@ -74,6 +74,7 @@ vi.mock("@/components/chat/TerminalPanel", async () => {
 vi.mock("@/components/chat/ChatView", () => ({
   ChatView: ({
     agent,
+    head,
     hasTranscript,
     centerView,
     onCenterViewChange,
@@ -81,6 +82,7 @@ vi.mock("@/components/chat/ChatView", () => ({
     contextLine,
   }: {
     agent: { name: string } | null;
+    head?: { run_id: string; title: string | null } | null;
     hasTranscript: boolean;
     centerView: string;
     onCenterViewChange: (v: string) => void;
@@ -88,6 +90,9 @@ vi.mock("@/components/chat/ChatView", () => ({
     contextLine?: string | null;
   }) => (
     <div data-testid="chat-view-stub">
+      {/* Heads in Chats (PR 2): the page's own `selectedHeadRun` resolution
+          (recent list vs. the one-off fallback fetch) is observable here. */}
+      <span data-testid="chat-view-head">{head ? `Head: ${head.run_id}` : ""}</span>
       <span>{agent ? `Chat: ${agent.name}` : "Chat: none"}</span>
       <span data-testid="chat-view-has-transcript">{String(hasTranscript)}</span>
       <span data-testid="chat-view-center">{centerView}</span>
@@ -868,5 +873,60 @@ describe("SessionsPage — mobile stack keeps only one screen in flow", () => {
 
     expect(isHidden(list())).toBe(false);
     expect(isHidden(chat())).toBe(true);
+  });
+});
+
+// ── Heads in Chats (heads-sichtbar PR 2) ────────────────────────────────────
+
+describe("SessionsPage — heads deep link (?head=)", () => {
+  beforeEach(() => {
+    nav.searchParamsString = "";
+    nav.replaced = [];
+    vi.spyOn(api.agents, "listDockerSessions").mockResolvedValue([]);
+    vi.spyOn(api.agents, "listHostSessions").mockResolvedValue([]);
+  });
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it("opens the named run even when it is outside the recent-runs window (the one-off fallback fetch)", async () => {
+    vi.spyOn(api.heads, "occupancy").mockResolvedValue({ boxes: {} });
+    vi.spyOn(api.heads, "list").mockResolvedValue({ runs: [], archived_count: 1 });
+    vi.spyOn(api.heads, "get").mockResolvedValue({
+      run_id: "archived-1", task_id: null, title: "Old fixed head", harness: "omp", runtime_slug: "x",
+      model: "glm", repo_full_name: null, branch: "b", mode: "fresh", restarted_from: null, box_keys: [],
+      created_at: "2026-09-01T00:00:00Z", started_at: null, exited_at: "2026-09-02T00:00:00Z",
+      state: "passed", reason: null, silent_s: null, heartbeat_stale: false, step: null, question: null,
+      pr_url: null, tmux: null, run_record: false, task_deleted: false,
+    });
+
+    nav.searchParamsString = "head=archived-1";
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId("chat-view-head")).toHaveTextContent("archived-1"));
+    expect(api.heads.get).toHaveBeenCalledWith("archived-1");
+  });
+
+  it("selecting a head from the sidebar's Heads section opens it without a fallback fetch (already in the recent list)", async () => {
+    vi.spyOn(api.heads, "occupancy").mockResolvedValue({ boxes: {} });
+    vi.spyOn(api.heads, "list").mockResolvedValue({
+      runs: [{
+        run_id: "run-1", task_id: null, title: "Fix flaky retry test", harness: "omp", runtime_slug: "x",
+        model: "glm", repo_full_name: null, branch: "b", mode: "fresh", restarted_from: null, box_keys: [],
+        created_at: "2026-10-04T09:00:00Z", started_at: "2026-10-04T09:00:00Z", exited_at: null,
+        state: "running", reason: null, silent_s: 5, heartbeat_stale: false, step: null, question: null,
+        pr_url: null, tmux: null, run_record: false, task_deleted: false,
+      }],
+      archived_count: 0,
+    });
+    const getSpy = vi.spyOn(api.heads, "get");
+
+    const user = userEvent.setup();
+    renderPage();
+    // Mobile list AND desktop rail are both mounted in jsdom regardless of
+    // viewport (same reason `findOptionRow` exists above) — the mobile
+    // list's own row is the one guaranteed clickable one.
+    const row = (await within(screen.getByTestId("session-list-mobile")).findAllByTestId("head-chat-row"))[0];
+    await user.click(row);
+    await waitFor(() => expect(screen.getByTestId("chat-view-head")).toHaveTextContent("run-1"));
+    expect(getSpy).not.toHaveBeenCalled();
   });
 });

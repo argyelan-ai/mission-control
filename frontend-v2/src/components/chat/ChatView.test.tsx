@@ -52,6 +52,20 @@ function circleOf(label: string): HTMLElement {
 }
 
 vi.mock("@/hooks/useChatStream", () => ({ useChatStream: vi.fn() }));
+// Heads-in-Chats (PR 2) branch: no test in this file passes a `head` prop
+// (that's ChatView.head.test.tsx's job), but every render still calls this
+// hook unconditionally (rules of hooks) — mocked the same way
+// `useChatStream` is, so these agent-only tests keep running without a
+// QueryClientProvider they were never written to need.
+vi.mock("@/hooks/useHeadTranscript", () => ({
+  useHeadTranscript: vi.fn(() => ({
+    events: [], subagentRuns: [], state: null, usage: null, session: null, hasMore: false,
+    connected: false, loading: false, error: null, capabilities: null, pendingEchoes: [],
+    echoSent: vi.fn(), echoFailed: vi.fn(), echoAgentStarting: vi.fn(), withdrawQueued: vi.fn(() => []),
+    awaitingResponse: false, preview: null,
+  })),
+  useHeadTranscriptMeta: vi.fn(() => ({ source: null, reader: null, reason: null })),
+}));
 vi.mock("@/lib/api", () => ({
   api: {
     chat: {
