@@ -12,11 +12,22 @@
  *  2. kein Umlaut ausserhalb von Kommentaren — die Kommentare dieses
  *     Bereichs schreiben ohnehin `ae/oe/ue`, deutscher Text im Code fällt
  *     damit sofort auf.
+ *
+ * Lücke gefunden bei der ContextPanel-i18n-Migration (Okt 2026): die Mehrzahl
+ * der dort fest verdrahteten Wörter ("Eingabe", "Kontext", "Schliessen",
+ * "Quelle", "Frei", "Belegt", "Fenster gesamt", "unbekannt" — und in
+ * claudeCommands.ts "Modell wechseln", "Kontext komprimieren" etc.) hat GAR
+ * KEINEN Umlaut, die Sabotage-Probe mit "Schliessen" lief durch Zusicherung 2
+ * also unbemerkt durch. Zusicherung 3 unten schliesst diese Lücke gezielt für
+ * genau die Woerter, die in diesem Fund zurueckfielen — kein allgemeiner
+ * Woerterbuch-Scan (zu viele False-Positives in TSX mit Generics), sondern
+ * die konkreten Strings dieses Rueckfalls, dauerhaft verboten.
  */
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { SLASH_COMMANDS } from "../../lib/claudeCommands";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -41,6 +52,19 @@ const FILES = [
   "PanelRail.tsx",
   "../git/GitDiffView.tsx",
   "../../app/sessions/page.tsx",
+  // Das Kontext-Panel hinter dem Ring im Composer: stand bis zum Fund fest
+  // deutsch ("Eingabe", "Frei", "Schliessen", ...) in der sonst zweisprachigen
+  // Oberflaeche.
+  "ContextPanel.tsx",
+  // claudeCommands.ts (die statische Slash-Kommando-Liste und das
+  // CLAUDE_MODELS-Array, die der Composer fuer "/"-Palette + Modell-Switcher
+  // einbindet) steht bewusst NICHT in dieser Liste: CLAUDE_MODELS trägt
+  // `label: "Opus"/"Sonnet"/"Haiku"/"Default"` — Markennamen, in beiden
+  // Sprachen identisch (wie "CLI"), kein Rueckfall. Die generische
+  // `label:`-Zusicherung oben kann Markennamen nicht von echten
+  // deutschen Labels unterscheiden; claudeCommands.ts bekommt dafuer die
+  // praeziseren, dediziert gebauten Zusicherungen weiter unten
+  // (Rueckfall-Strings + descriptionKey/description-Form).
 ];
 
 function read(rel: string): string {
@@ -86,6 +110,63 @@ describe("Chat-Oberfläche — keine fest verdrahteten Texte", () => {
       expect(german).toEqual([]);
     });
   }
+});
+
+/**
+ * Konkrete Rückfall-Woerter des ContextPanel-/claudeCommands-Funds (Okt
+ * 2026) — siehe Datei-Kopfkommentar. Umlaut-frei, darum eine eigene Liste
+ * statt sich auf Zusicherung 2 oben zu verlassen.
+ */
+const REGRESSION_STRINGS: Record<string, string[]> = {
+  "ContextPanel.tsx": [
+    "Eingabe",
+    "Cache gelesen",
+    "Cache geschrieben",
+    "Ausgabe",
+    "Belegt",
+    "Frei",
+    "Kontext",
+    "Fenster gesamt",
+    "unbekannt",
+    "Quelle",
+    "Schliessen",
+    "Statuszeile",
+  ],
+  "../../lib/claudeCommands.ts": [
+    "Modell wechseln",
+    "Verlauf löschen",
+    "Kontext komprimieren",
+    "Kontext-Nutzung anzeigen",
+    "Session-Status anzeigen",
+    "Hilfe anzeigen",
+  ],
+};
+
+describe("ContextPanel / claudeCommands — Rückfall-Strings bleiben draussen", () => {
+  for (const [rel, strings] of Object.entries(REGRESSION_STRINGS)) {
+    it(`${rel}: keines der frueher fest verdrahteten Woerter ist zurueck`, () => {
+      const code = stripComments(read(rel));
+      const found = strings.filter((s) => code.includes(s));
+      expect(found).toEqual([]);
+    });
+  }
+});
+
+/**
+ * claudeCommands.ts — die statische Slash-Liste traegt einen i18n-Schluessel,
+ * nie einen rohen Text. Der Fund war genau das: `description: "Modell
+ * wechseln"` statt `descriptionKey: "model"`. Diese Zusicherung prueft die
+ * FORM (Schluessel vorhanden, kein roher Text), unabhaengig von der Sprache —
+ * ein englischer Rueckfall ("description: 'Switch model'") faellt genauso
+ * durch wie ein deutscher.
+ */
+describe("claudeCommands — statische Slash-Liste trägt descriptionKey, nie Text", () => {
+  it("jeder statische Eintrag hat descriptionKey und keine literale description", () => {
+    for (const cmd of SLASH_COMMANDS) {
+      expect(cmd.descriptionKey, `${cmd.command} hat keinen descriptionKey`).toBeTruthy();
+      expect(cmd.description, `${cmd.command} darf keine literale description tragen`).toBeUndefined();
+    }
+  });
 });
 
 /**

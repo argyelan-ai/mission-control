@@ -21,19 +21,26 @@ export const CLAUDE_MODELS: ClaudeModel[] = [
 
 export interface SlashCommand {
   command: string;
-  description: string;
+  /** Static list only: resolves to `sessions.slashCommands.<key>` at the
+   *  render site (Composer.tsx) — never store a translated string here (see
+   *  the `labelKey` convention, docs/i18n.md). */
+  descriptionKey?: string;
+  /** Harness-reported commands only (see `resolveSlashCommands`): raw text
+   *  from the CLI, already whatever form the harness sends — not a catalog
+   *  entry, so it is used as-is instead of looked up. */
+  description?: string;
 }
 
 /** Listed in the "/" palette. Anything the user types that isn't one of
  *  these passes through as free text — the palette is a shortcut, not a
  *  gate. */
 export const SLASH_COMMANDS: SlashCommand[] = [
-  { command: "/model", description: "Modell wechseln" },
-  { command: "/clear", description: "Verlauf löschen" },
-  { command: "/compact", description: "Kontext komprimieren" },
-  { command: "/context", description: "Kontext-Nutzung anzeigen" },
-  { command: "/status", description: "Session-Status anzeigen" },
-  { command: "/help", description: "Hilfe anzeigen" },
+  { command: "/model", descriptionKey: "model" },
+  { command: "/clear", descriptionKey: "clear" },
+  { command: "/compact", descriptionKey: "compact" },
+  { command: "/context", descriptionKey: "context" },
+  { command: "/status", descriptionKey: "status" },
+  { command: "/help", descriptionKey: "help" },
 ];
 
 /**

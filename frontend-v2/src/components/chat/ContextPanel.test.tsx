@@ -55,14 +55,14 @@ describe("usedTokensOf", () => {
 describe("ContextPanel", () => {
   it("names every bucket with its token count", () => {
     renderPanel();
-    expect(screen.getByTestId("context-row-input")).toHaveTextContent("Eingabe");
+    expect(screen.getByTestId("context-row-input")).toHaveTextContent("Input");
     expect(screen.getByTestId("context-row-input")).toHaveTextContent("10k");
-    expect(screen.getByTestId("context-row-cacheRead")).toHaveTextContent("Cache gelesen");
-    expect(screen.getByTestId("context-row-cacheCreation")).toHaveTextContent("Cache geschrieben");
-    expect(screen.getByTestId("context-row-output")).toHaveTextContent("Ausgabe");
+    expect(screen.getByTestId("context-row-cacheRead")).toHaveTextContent("Cache read");
+    expect(screen.getByTestId("context-row-cacheCreation")).toHaveTextContent("Cache written");
+    expect(screen.getByTestId("context-row-output")).toHaveTextContent("Output");
   });
 
-  it("derives Frei as the window minus everything used", () => {
+  it("derives Free as the window minus everything used", () => {
     renderPanel();
     // 1,000,000 − 151,000 = 849,000 → "849k"
     expect(screen.getByTestId("context-row-free")).toHaveTextContent("849k");
@@ -74,7 +74,7 @@ describe("ContextPanel", () => {
     expect(screen.getByTestId("context-row-free")).toHaveTextContent("84.9%");
   });
 
-  it("never lets Frei go negative when the used total overshoots the window", () => {
+  it("never lets Free go negative when the used total overshoots the window", () => {
     renderPanel({
       usage: mkUsage({
         contextWindow: 100_000,
@@ -89,14 +89,14 @@ describe("ContextPanel", () => {
     expect(screen.getByTestId("context-panel-pct")).toHaveTextContent("15%");
   });
 
-  it("falls back to one 'Belegt' row when the backend has no breakdown", () => {
+  it("falls back to one 'Used' row when the backend has no breakdown", () => {
     renderPanel({ usage: mkUsage({ components: null, inputTokens: 200_000 }) });
-    expect(screen.getByTestId("context-row-used")).toHaveTextContent("Belegt");
+    expect(screen.getByTestId("context-row-used")).toHaveTextContent("Used");
     expect(screen.getByTestId("context-row-free")).toHaveTextContent("800k");
     expect(screen.queryByTestId("context-row-cacheRead")).not.toBeInTheDocument();
   });
 
-  it("shows the omp fill figure (usedTokens) as Belegt, never the cumulative input — live 14.09.2026: fill 92,799 of 500k while cumulative input was 11.8M (task 156f57c7)", () => {
+  it("shows the omp fill figure (usedTokens) as Used, never the cumulative input — live 14.09.2026: fill 92,799 of 500k while cumulative input was 11.8M (task 156f57c7)", () => {
     renderPanel({
       usage: mkUsage({
         inputTokens: 92_799,
@@ -111,10 +111,10 @@ describe("ContextPanel", () => {
     expect(screen.getByTestId("context-panel-pct")).toHaveTextContent("19%");
   });
 
-  it("omits Frei and the shares when the window is unknown", () => {
+  it("omits Free and the shares when the window is unknown", () => {
     renderPanel({ usage: mkUsage({ contextWindow: null }) });
     expect(screen.queryByTestId("context-row-free")).not.toBeInTheDocument();
-    expect(screen.getByText("unbekannt")).toBeInTheDocument();
+    expect(screen.getByText("unknown")).toBeInTheDocument();
     expect(screen.getByTestId("context-row-input")).not.toHaveTextContent("%");
   });
 
@@ -133,7 +133,7 @@ describe("ContextPanel", () => {
 
   it("says so when the figures are an estimate", () => {
     renderPanel({ pctSource: "estimate" });
-    expect(screen.getByTestId("context-panel-source")).toHaveTextContent("Schätzung");
+    expect(screen.getByTestId("context-panel-source")).toHaveTextContent("estimate");
   });
 
   it("closes on Escape", async () => {
@@ -156,7 +156,7 @@ describe("ContextPanel", () => {
     const onClose = vi.fn();
     const user = userEvent.setup();
     renderPanel({ onClose });
-    await user.click(screen.getByText("Kontext"));
+    await user.click(screen.getByText("Context"));
     expect(onClose).not.toHaveBeenCalled();
   });
 
@@ -164,7 +164,7 @@ describe("ContextPanel", () => {
     const onClose = vi.fn();
     const user = userEvent.setup();
     renderPanel({ onClose });
-    await user.click(screen.getByRole("button", { name: "Schliessen" }));
+    await user.click(screen.getByRole("button", { name: "Close" }));
     expect(onClose).toHaveBeenCalled();
   });
 });

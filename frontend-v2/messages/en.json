@@ -979,6 +979,28 @@
     "contextTokensUsed": "≈{used}/{win} used. ",
     "contextSourceEstimate": "estimate",
     "contextRingTooltip": "{detail}Source: {source}. The CLI status line shows what is left until auto-compaction instead — different basis, both correct.",
+    "contextPanelTitle": "Context",
+    "contextPanelSegment": {
+      "input": "Input",
+      "cacheRead": "Cache read",
+      "cacheCreation": "Cache written",
+      "output": "Output",
+      "used": "Used",
+      "free": "Free"
+    },
+    "contextPanelWindowTotal": "Total window",
+    "contextPanelWindowUnknown": "unknown",
+    "contextPanelSource": "Source",
+    "contextPanelNote": "The CLI status line shows what is left until auto-compaction instead — different basis, both correct.",
+    "contextPanelClose": "Close",
+    "slashCommands": {
+      "model": "Switch model",
+      "clear": "Clear history",
+      "compact": "Compact context",
+      "context": "Show context usage",
+      "status": "Show session status",
+      "help": "Show help"
+    },
     "effortLevel": "Effort level",
     "effortLevelCurrent": "Effort level: {level}",
     "effortLevelLocked": "Effort level: {level} (not switchable)",

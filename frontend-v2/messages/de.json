@@ -979,6 +979,28 @@
     "contextTokensUsed": "≈{used}/{win} belegt. ",
     "contextSourceEstimate": "Schätzung",
     "contextRingTooltip": "{detail}Quelle: {source}. Die CLI-Statuszeile zeigt dagegen den Rest bis zur Auto-Komprimierung an — andere Basis, beide korrekt.",
+    "contextPanelTitle": "Kontext",
+    "contextPanelSegment": {
+      "input": "Eingabe",
+      "cacheRead": "Cache gelesen",
+      "cacheCreation": "Cache geschrieben",
+      "output": "Ausgabe",
+      "used": "Belegt",
+      "free": "Frei"
+    },
+    "contextPanelWindowTotal": "Fenster gesamt",
+    "contextPanelWindowUnknown": "unbekannt",
+    "contextPanelSource": "Quelle",
+    "contextPanelNote": "Die CLI-Statuszeile zeigt dagegen den Rest bis zur Auto-Komprimierung an — andere Basis, beide korrekt.",
+    "contextPanelClose": "Schliessen",
+    "slashCommands": {
+      "model": "Modell wechseln",
+      "clear": "Verlauf löschen",
+      "compact": "Kontext komprimieren",
+      "context": "Kontext-Nutzung anzeigen",
+      "status": "Session-Status anzeigen",
+      "help": "Hilfe anzeigen"
+    },
     "effortLevel": "Effort-Stufe",
     "effortLevelCurrent": "Effort-Stufe: {level}",
     "effortLevelLocked": "Effort-Stufe: {level} (nicht umschaltbar)",
