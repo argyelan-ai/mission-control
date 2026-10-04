@@ -23,8 +23,7 @@ import websockets
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from cdp_gateway import CdpGateway, build_app  # noqa: E402
-from websockets.asyncio.server import serve as ws_serve  # noqa: E402
+from cdp_gateway import CdpGateway, start_server  # noqa: E402
 
 WS_MAGIC = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
@@ -168,9 +167,7 @@ async def test_http_json_version_is_rewritten_with_agent_prefix():
     chromium = FakeChromium()
     await chromium.start()
     gateway = CdpGateway(upstream_host="127.0.0.1", upstream_port=chromium.port)
-    process_request, ws_handler = build_app(gateway)
-
-    async with ws_serve(ws_handler, "127.0.0.1", 0, process_request=process_request) as server:
+    async with await start_server(gateway, host="127.0.0.1", port=0) as server:
         gw_port = server.sockets[0].getsockname()[1]
         import httpx
         async with httpx.AsyncClient() as client:
@@ -209,9 +206,7 @@ async def test_mc_health_endpoint_503_when_watcher_not_connected():
     chromium = FakeChromium()
     await chromium.start()
     gateway = CdpGateway(upstream_host="127.0.0.1", upstream_port=chromium.port)
-    process_request, ws_handler = build_app(gateway)
-
-    async with ws_serve(ws_handler, "127.0.0.1", 0, process_request=process_request) as server:
+    async with await start_server(gateway, host="127.0.0.1", port=0) as server:
         gw_port = server.sockets[0].getsockname()[1]
         import httpx
         async with httpx.AsyncClient() as client:
@@ -226,12 +221,11 @@ async def test_mc_health_endpoint_200_once_the_watcher_connects():
     chromium = FakeChromium()
     await chromium.start()
     gateway = CdpGateway(upstream_host="127.0.0.1", upstream_port=chromium.port)
-    process_request, ws_handler = build_app(gateway)
     stop_event = asyncio.Event()
     watcher_task = asyncio.ensure_future(gateway.run_watcher(stop_event))
 
     try:
-        async with ws_serve(ws_handler, "127.0.0.1", 0, process_request=process_request) as server:
+        async with await start_server(gateway, host="127.0.0.1", port=0) as server:
             gw_port = server.sockets[0].getsockname()[1]
             import httpx
             async with httpx.AsyncClient() as client:
@@ -287,9 +281,7 @@ async def test_proxy_ws_attributes_created_target_to_identified_agent():
     chromium = FakeChromium()
     await chromium.start()
     gateway = CdpGateway(upstream_host="127.0.0.1", upstream_port=chromium.port)
-    process_request, ws_handler = build_app(gateway)
-
-    async with ws_serve(ws_handler, "127.0.0.1", 0, process_request=process_request) as server:
+    async with await start_server(gateway, host="127.0.0.1", port=0) as server:
         gw_port = server.sockets[0].getsockname()[1]
         async with websockets.connect(f"ws://127.0.0.1:{gw_port}/a/alpha/devtools/browser/abc") as client:
             await client.send(json.dumps({"id": 1, "method": "Target.createTarget", "params": {"url": "about:blank"}}))
@@ -312,7 +304,7 @@ async def test_proxy_ws_handler_finishes_quickly_after_client_disconnects():
     waiting on Chromium's still-open WebSocket long after the agent
     disconnected (`asyncio.gather` only returns once BOTH sides finish).
     Sabotage: swapping `proxy_ws`'s `asyncio.wait(..., FIRST_COMPLETED)` back
-    for `asyncio.gather(from_client(), from_upstream())` must flip this red
+    for `asyncio.gather(t_client, t_upstream)` must flip this red
     (the fake Chromium never closes its side on its own, so the handler would
     hang until the test's own timeout)."""
     chromium = FakeChromium()
@@ -321,19 +313,22 @@ async def test_proxy_ws_handler_finishes_quickly_after_client_disconnects():
 
     handler_done = asyncio.Event()
 
-    async def _tracked_proxy_ws(client_ws, path, headers, peer_ip):
+    async def _tracked_proxy_ws(client_reader, client_writer, req, peer_ip):
         try:
-            await CdpGateway.proxy_ws(gateway, client_ws, path, headers, peer_ip)
+            await CdpGateway.proxy_ws(gateway, client_reader, client_writer, req, peer_ip)
         finally:
             handler_done.set()
 
     gateway.proxy_ws = _tracked_proxy_ws  # type: ignore[method-assign]
-    process_request, ws_handler = build_app(gateway)
-
-    async with ws_serve(ws_handler, "127.0.0.1", 0, process_request=process_request) as server:
+    async with await start_server(gateway, host="127.0.0.1", port=0) as server:
         gw_port = server.sockets[0].getsockname()[1]
         client = await websockets.connect(f"ws://127.0.0.1:{gw_port}/a/alpha/devtools/browser/abc")
-        await client.close()
+        # An agent that just vanishes (container killed, TCP reset) — no
+        # close frame reaches Chromium, so Chromium's side stays open
+        # forever. A clean `client.close()` is not enough to catch the leak
+        # any more: the byte-transparent proxy forwards the close frame,
+        # Chromium answers and closes, and both pumps end on their own.
+        client.transport.abort()
 
         start = asyncio.get_event_loop().time()
         await asyncio.wait_for(handler_done.wait(), timeout=1.5)
@@ -351,14 +346,13 @@ async def test_discovering_agent_connection_does_not_attribute_a_foreign_tab():
     browser broadcasts every tab to every discovering connection). That must
     never make `agent` the owner of a target it did not create, has no shared
     context with, and did not open. Sabotage: restoring the removed
-    `from_upstream` fallback (`if self.state.owner_of(tid) is None:
-    self.state.record_owner(tid, agent)`) must flip this red."""
+    "observing connection owns it" fallback (`self.state.record_owner(tid,
+    agent)` for every `Target.targetCreated` in
+    `_ConnectionObserver.from_upstream`) must flip this red."""
     chromium = FakeChromium()
     await chromium.start()
     gateway = CdpGateway(upstream_host="127.0.0.1", upstream_port=chromium.port)
-    process_request, ws_handler = build_app(gateway)
-
-    async with ws_serve(ws_handler, "127.0.0.1", 0, process_request=process_request) as server:
+    async with await start_server(gateway, host="127.0.0.1", port=0) as server:
         gw_port = server.sockets[0].getsockname()[1]
         async with websockets.connect(f"ws://127.0.0.1:{gw_port}/a/alpha/devtools/browser/abc") as client:
             await client.send(json.dumps({"id": 1, "method": "Target.setDiscoverTargets", "params": {"discover": True}}))
@@ -378,9 +372,7 @@ async def test_sabotage_wrong_agent_path_does_not_attribute_target():
     chromium = FakeChromium()
     await chromium.start()
     gateway = CdpGateway(upstream_host="127.0.0.1", upstream_port=chromium.port)
-    process_request, ws_handler = build_app(gateway)
-
-    async with ws_serve(ws_handler, "127.0.0.1", 0, process_request=process_request) as server:
+    async with await start_server(gateway, host="127.0.0.1", port=0) as server:
         gw_port = server.sockets[0].getsockname()[1]
         async with websockets.connect(f"ws://127.0.0.1:{gw_port}/devtools/browser/abc") as client:
             await client.send(json.dumps({"id": 1, "method": "Target.createTarget", "params": {"url": "about:blank"}}))
