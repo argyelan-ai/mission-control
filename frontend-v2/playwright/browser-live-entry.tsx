@@ -3,7 +3,7 @@
  *
  * Mounts the REAL `BrowserLiveView` (real Tailwind, real i18n catalog) inside
  * the same full-width sheet the Sessions page uses on a phone, with a fake
- * WebSocket the driver feeds server messages through (`window.__push`). REST
+ * WebSocket the driver feeds server messages through (`window.__blvPush`). REST
  * (`/browser-live/targets`, the stream ticket) is answered by the driver's
  * request interception, exactly like production traffic.
  */
@@ -16,10 +16,10 @@ import en from "../messages/en.json";
 
 declare global {
   interface Window {
-    __mount?: (opts: { agentName: string; showAllTabs?: boolean }) => void;
-    __push?: (msg: unknown) => void;
-    __frame?: (title: string, url: string) => string;
-    __measure?: () => unknown;
+    __blvMount?: (opts: { agentName: string; showAllTabs?: boolean }) => void;
+    __blvPush?: (msg: unknown) => void;
+    __blvFrame?: (title: string, url: string) => string;
+    __blvMeasure?: () => unknown;
   }
 }
 
@@ -41,12 +41,12 @@ class FakeWebSocket {
 // @ts-expect-error -- fixture stub, not a full WebSocket
 window.WebSocket = FakeWebSocket;
 
-window.__push = (msg) => {
+window.__blvPush = (msg) => {
   FakeWebSocket.last?.onmessage?.(new MessageEvent("message", { data: JSON.stringify(msg) }));
 };
 
 /** A plain JPEG "page" so the viewport shows something page-like. */
-window.__frame = (title, url) => {
+window.__blvFrame = (title, url) => {
   const c = document.createElement("canvas");
   c.width = 1280;
   c.height = 800;
@@ -63,7 +63,7 @@ window.__frame = (title, url) => {
   return c.toDataURL("image/jpeg", 0.8).split(",")[1];
 };
 
-window.__measure = () => {
+window.__blvMeasure = () => {
   const picker = document.querySelector("#browser-live-target") as HTMLElement | null;
   const full = document.querySelector('[aria-label="Fullscreen"]') as HTMLElement | null;
   const bar = picker?.parentElement as HTMLElement | null;
@@ -78,7 +78,7 @@ window.__measure = () => {
 
 const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
-window.__mount = ({ agentName, showAllTabs }) => {
+window.__blvMount = ({ agentName, showAllTabs }) => {
   try {
     if (showAllTabs) localStorage.setItem("mc.browserLive.showAllTabs.a1", "1");
     else localStorage.removeItem("mc.browserLive.showAllTabs.a1");
@@ -104,5 +104,5 @@ window.__mount = ({ agentName, showAllTabs }) => {
 };
 
 export function mount() {
-  // The driver calls window.__mount once it has set its routes up.
+  // The driver calls window.__blvMount once it has set its routes up.
 }

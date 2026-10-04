@@ -164,17 +164,17 @@ for (const width of [393, 430]) {
         if (t === "light") document.documentElement.setAttribute("data-theme", "light");
         document.documentElement.style.colorScheme = t;
       }, theme);
-      await page.waitForFunction(() => typeof window.__mount === "function", { timeout: 30000 });
-      await page.evaluate((o) => window.__mount(o), { agentName: AGENT, showAllTabs: !!state.showAllTabs });
+      await page.waitForFunction(() => typeof window.__blvMount === "function", { timeout: 30000 });
+      await page.evaluate((o) => window.__blvMount(o), { agentName: AGENT, showAllTabs: !!state.showAllTabs });
       await page.waitForTimeout(300);
-      for (const msg of state.ws) await page.evaluate((m) => window.__push(m), msg);
+      for (const msg of state.ws) await page.evaluate((m) => window.__blvPush(m), msg);
       if (state.frame) {
         await page.evaluate(({ title, url }) =>
-          window.__push({ type: "frame", data: window.__frame(title, url), metadata: {} }), state.frame);
+          window.__blvPush({ type: "frame", data: window.__blvFrame(title, url), metadata: {} }), state.frame);
       }
       await page.waitForTimeout(300);
 
-      const m = await page.evaluate(() => window.__measure());
+      const m = await page.evaluate(() => window.__blvMeasure());
       const label = `${name} @ ${width} ${theme}`;
       let oneLine = null;
       if (m.picker && m.fullscreen) {
