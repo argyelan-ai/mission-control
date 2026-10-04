@@ -34,7 +34,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         tmux \
         pandoc \
         # ffmpeg + imagemagick: Video/Audio und Bilder bearbeiten (Thumbnails,
-        # Formatwandlung, Screenshots zuschneiden). Fehlte Sparky am 04.10.2026
+        # Formatwandlung, Screenshots zuschneiden). Fehlte dem omp-Agenten am 04.10.2026
         # ("No ffmpeg, no imagemagick") bei Medien-Aufgaben.
         ffmpeg \
         imagemagick \
