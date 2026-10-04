@@ -227,6 +227,55 @@ decided then.
 | ADR-077, ADR-078 Box manager | Kept, frozen; extended only by the switch lock. |
 | ADR-034 Vault, ADR-043 OSS release contract | Kept; run records go to the vault; public-repo rules apply unchanged. |
 
+## Nachtrag (2026-10-04) — §4: head transcripts in Chats (read-only) and retention
+
+Operator decision 2026-10-04 (concept "Heads sichtbar", variant A): a head's
+run folder already holds a full conversation transcript and a run record
+(§1 above), but nothing in Mission Control shows either — a head that is
+working, waiting on a question, or long finished looks the same as one that
+never existed. This addendum narrows the build stop on §4 by exactly one
+thing and leaves the rest of it in place.
+
+(a) **Scope of the exception.** Head runs get a **read-only** chat view:
+    Chats lists them next to the fixed agents, and opening one renders its
+    existing transcript file (Claude Code / omp / hermes) the same way an
+    agent's chat renders. This view only *reads files already on disk* in
+    the run folder (transcript, run record, `step.txt`). It adds **no**
+    delivery into a head's turn, **no** tmux pane probe or mirror, **no**
+    SSE tailer and **no** live input channel — a head takes no message from
+    this view, ever. Everything else the build stop covers (terminal remote
+    control, the `mc` back-channel, group chat, dispatch/delivery into a
+    running turn) stays frozen exactly as before.
+(b) **Harness knowledge stays where it was.** The reader lives in the
+    existing adapter register (`backend/app/services/transcript_adapters.py`)
+    and in `scripts/head/mc-head`; the rest of the backend still carries no
+    harness-specific branches (house rule 3, §6 above still applies to
+    everything but this one reading path).
+(c) **The rest of the build stop is unchanged.** Dispatch, healers,
+    watchdogs and the frozen fleet-chat delivery code get safety and
+    operations fixes only, same as before this addendum.
+(d) **Effect on ROADMAP E5.** Before this addendum, E5 listed "Sessions
+    chat" whole as a clean-up candidate (its build stop, §4, made the whole
+    page a frozen-and-unused surface). That is corrected: the **read-only**
+    chat view (the Chats list and the transcript view it opens) is not a
+    removal candidate — it is now the home for heads. What stays a clean-up
+    candidate is the input/delivery half of that same page for **paused
+    fixed agents** (the composer, the tmux mirror, the terminal remote
+    control) — nothing in this addendum revives that. Only two agents keep
+    a fixed, persistent chat going forward: the lead agent and one local
+    omp agent; every other agent on that list is paused fleet, unchanged by
+    this addendum.
+(e) **Retention.** A head's transcript, run record, `job.md`, `spec.json`
+    and logs are kept forever — nothing in this addendum deletes them. Its
+    working copy (`wt/`, the git worktree) and its disposable caches
+    (`home/.cache`, …) are cleaned up by a separate host rule
+    (`mc-head gc`, `scripts/head/mc-head`), which **defaults to a dry run**
+    and reports what it would remove; it only deletes when the operator
+    turns on `MC_HEAD_GC_APPLY=1` in the host's launchd plist, never from a
+    switch the backend can write. Native CLI session resumption
+    (`--resume`) is explicitly **not** part of this addendum — it is
+    unproven after a worktree move and stays a later decision.
+
 ## References
 
 - Quiet mode: `backend/app/models/agent.py:188` (`operational_mode`),
