@@ -2584,6 +2584,15 @@
         ]
       }
     },
+    "/api/v1/heads/cleanup": {
+      "get": {
+        "operationId": "get_heads_cleanup_api_v1_heads_cleanup_get",
+        "summary": "Get Heads Cleanup",
+        "tags": [
+          "heads"
+        ]
+      }
+    },
     "/api/v1/heads/occupancy": {
       "get": {
         "operationId": "get_occupancy_api_v1_heads_occupancy_get",
@@ -2606,6 +2615,15 @@
       "get": {
         "operationId": "get_head_api_v1_heads__run_id__get",
         "summary": "Get Head",
+        "tags": [
+          "heads"
+        ]
+      }
+    },
+    "/api/v1/heads/{run_id}/chat/history": {
+      "get": {
+        "operationId": "get_head_chat_history_api_v1_heads__run_id__chat_history_get",
+        "summary": "Get Head Chat History",
         "tags": [
           "heads"
         ]

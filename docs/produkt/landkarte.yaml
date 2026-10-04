@@ -132,8 +132,13 @@ features:
       # Heads (ADR-085): "run as head" from the task form (pairs, start),
       # live head state, log, run record, restart and stop on the task
       # detail. The runtimes cockpit also reads the head list (orphan runs).
+      # Read-only head transcript in Chats (ADR-085 Nachtrag 2026-10-04):
+      # GET …/{run_id}/chat/history is already covered by the {run_id}/*
+      # wildcard below; GET …/cleanup is a literal sibling route (not a
+      # {run_id} match in the real FastAPI path table) and needs its own line.
       - "* /api/v1/heads"
       - "* /api/v1/heads/pairs"
+      - "GET /api/v1/heads/cleanup"
       - "* /api/v1/heads/{run_id}"
       - "* /api/v1/heads/{run_id}/*"
       # Night shift (ROADMAP E2): mark/unmark a task for tonight
@@ -435,7 +440,7 @@ features:
       - threads
       - messages
     status: frozen
-    source: "ADR-085 section 4 (build stop); ROADMAP E5 (group chat to be deleted together with the sessions chat); ROADMAP: candidate for removal"
+    source: "ADR-085 section 4 (build stop) + Nachtrag 2026-10-04 (read-only head transcripts in this view are not a removal candidate; input/delivery for paused agents still is); ROADMAP E5 (group chat to be deleted together with the paused-agent input/delivery half of the sessions chat); ROADMAP: candidate for removal (input/delivery half only)"
   - id: F-voice
     name: "Voice overlay (Jarvis)"
     # Global overlay (sidebar mic button, VoiceWidget/VoiceDrawer) — no route

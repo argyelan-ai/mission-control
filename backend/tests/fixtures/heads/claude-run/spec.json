@@ -1,0 +1,24 @@
+{
+ "run_id": "11111111-1111-4111-8111-111111111111",
+ "task_id": "33333333-3333-4333-8333-333333333333",
+ "title": "[fixture] scrubbed head run for the transcript reader tests",
+ "repo_full_name": "scratch/mission-control",
+ "base_branch": "main",
+ "branch": "mc-head/2026-10-01-fixture-claude-run-1111",
+ "harness": "claude",
+ "runtime_slug": "dgx-spark-slot",
+ "model": "GLM-5.3-Flash-EXL3",
+ "base_url": "http://192.0.2.10:8000/v1",
+ "box_keys": [
+  "55555555-5555-4555-8555-555555555555"
+ ],
+ "locality": "local",
+ "recipe_slug": null,
+ "time_limit_s": 28800,
+ "no_progress_s": 1200,
+ "restarted_from": null,
+ "mode": "fresh",
+ "job_folder": "2026-10-01-fixture-claude-run",
+ "created_by": "00000000-0000-0000-0000-000000000000",
+ "created_at": "2026-10-01T11:53:16Z"
+}

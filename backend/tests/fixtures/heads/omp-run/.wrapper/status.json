@@ -1,0 +1,22 @@
+{
+ "run_id": "22222222-2222-4222-8222-222222222222",
+ "phase": "exited",
+ "pid": 1234,
+ "pgid": 1234,
+ "supervisor_pid": 1230,
+ "external_ref": null,
+ "tmux": null,
+ "started_at": "2026-10-01T11:53:17Z",
+ "exited_at": "2026-10-01T12:25:14Z",
+ "exit_code": 0,
+ "last_output_at": "2026-10-01T12:23:01Z",
+ "last_progress_at": "2026-10-01T12:23:01Z",
+ "pr_url": null,
+ "scratch_branch_pushed": true,
+ "run_record_path": null,
+ "question": false,
+ "reason": null,
+ "branch_tip_at_start": null,
+ "kz_brief": "ok",
+ "hook_bypassed": false
+}

@@ -173,6 +173,21 @@ class TranscriptAdapter:
     #: Geschwisterdatei ist keine neue Sitzung.
     session_id_for: Callable[[Path], str] = lambda path: path.stem
 
+    #: Glob (relative to a head run folder, forward slashes) that finds this
+    #: harness's TOP-LEVEL transcript file(s) among `scripts/head/mc-head`'s
+    #: run layout (docs/specs/head-launcher.md §6.1) — ``None`` for a harness
+    #: without a head reader yet.
+    #:
+    #: Deliberately ONE level shallower than the token harvester's own glob
+    #: (``token_harvester._HEAD_TRANSCRIPT_GLOBS``, which also wants
+    #: subagent files for usage accounting): Claude Code's subagent
+    #: transcripts live two levels under ``claude-config/projects/<dir>/``
+    #: (``<session>/subagents/agent-*.jsonl``), so ``projects/*/*.jsonl``
+    #: already excludes them without special-casing the name. The head chat
+    #: view shows exactly the one conversation the operator started — never
+    #: a subagent's.
+    head_transcript_glob: str | None = None
+
 
 def _claude_adapter(
     name: str = CLAUDE, process_name: str = "claude"
@@ -208,6 +223,7 @@ def _claude_adapter(
         parse_pane_state=pane_state.parse_pane_state,
         process_name=process_name,
         subagent_runs=transcript_chat.subagent_runs,
+        head_transcript_glob="claude-config/projects/*/*.jsonl",
     )
 
 
@@ -229,6 +245,7 @@ def _omp_adapter() -> TranscriptAdapter:
         parse_pane_state=omp_chat.parse_pane_state,
         process_name=omp_chat.PROCESS_NAME,
         session_id_for=omp_chat.session_id_for,
+        head_transcript_glob="omp-sessions/*.jsonl",
     )
 
 
@@ -269,3 +286,32 @@ def adapter_for(agent: Any | None) -> TranscriptAdapter:
     harness = getattr(agent, "harness", None)
     builder = _BUILDERS.get(harness or CLAUDE, _claude_adapter)
     return builder()
+
+
+def adapter_for_harness(name: str | None) -> TranscriptAdapter | None:
+    """The adapter for a head's ``spec["harness"]`` — or ``None``.
+
+    ``adapter_for`` is duck-typed on an object's ``.harness`` attribute and
+    falls back to the Claude adapter for anything unknown: right for an
+    agent (an unknown/missing harness still has a Claude Code process
+    behind it), wrong for a head. A head's harness is an exact string from
+    ``spec.json`` (docs/specs/head-launcher.md §6.1) — passing that string
+    itself to ``adapter_for`` would read its OWN ``.harness`` *attribute*
+    (strings have none), silently resolve to the Claude builder, and read a
+    head that never ran Claude Code through the Claude parser. That is
+    exactly the trap `anhang.md` section B calls out (0 events, no error).
+
+    So this function takes the plain string directly and is strict in the
+    other direction instead: a harness with no registered adapter, or whose
+    adapter has no ``head_transcript_glob`` (no head reader built for it
+    yet, e.g. a future harness that is chat-adapter-only), gets ``None`` —
+    never a silent Claude fallback. Callers (``services/heads/transcript.py``)
+    turn that into ``reason="no_reader"``.
+    """
+    if not isinstance(name, str) or not name:
+        return None
+    builder = _BUILDERS.get(name)
+    if builder is None:
+        return None
+    adapter = builder()
+    return adapter if adapter.head_transcript_glob else None

@@ -5,8 +5,10 @@
   POST /api/v1/heads/{run_id}/restart      operator  restart with another pair / mode
   GET  /api/v1/heads                       viewer    runs (?task_id= &active= &box=)
   GET  /api/v1/heads/occupancy             viewer    busy boxes
+  GET  /api/v1/heads/cleanup                viewer    last `mc-head gc` report (host-written, dry-run by default)
   GET  /api/v1/heads/{run_id}              viewer    spec + derived state
   GET  /api/v1/heads/{run_id}/log          viewer    last lines of head.log, masked
+  GET  /api/v1/heads/{run_id}/chat/history  viewer    transcript page, read-only (ADR-085 Nachtrag 2026-10-04)
   GET  /api/v1/heads/{run_id}/run-record   viewer    run record markdown
   POST /api/v1/heads/{run_id}/stop         operator  stop request
 
@@ -17,13 +19,14 @@ frontend renders them via i18n. Behind ``settings.heads_enabled``.
 """
 from __future__ import annotations
 
+import asyncio
 import contextlib
-import re
+import json
 import time
 import uuid
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -31,12 +34,12 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.auth import Role, require_role
 from app.config import settings
 from app.database import get_session
-from app.log_redaction import redact_secrets
 from app.models.repo import Repo
 from app.models.task import Task
-from app.services.heads import box_guard, files, launcher, pairs
+from app.services.heads import box_guard, files, launcher, pairs, paths, transcript
 from app.services.heads import start as start_service
 from app.services.heads.files import write_backend_file
+from app.services.heads.redact import mask_text
 from app.services.heads.start import HeadStartError
 from app.services.heads.state import ACTIVE_STATES, derive_for_run
 
@@ -272,21 +275,37 @@ async def get_occupancy():
     return {"boxes": box_guard.occupancy()}
 
 
+@router.get("/cleanup", dependencies=[Depends(require_role(Role.VIEWER))])
+async def get_heads_cleanup():
+    """The host's own ``mc-head gc`` report, as-is — this endpoint never
+    computes or triggers anything itself, it only shows what the host last
+    wrote (``heads_root/gc-report.json``, dry run by default; see
+    ``scripts/head/mc-head`` and docs/decisions/085 Nachtrag 2026-10-04 §4).
+    Declared BEFORE ``/{run_id}`` on purpose: a path parameter route would
+    otherwise swallow this literal one ("cleanup" parsed as a run id)."""
+    _enabled()
+    raw = files.read_head_file(paths.heads_root() / "gc-report.json", 2_000_000)
+    if raw is None:
+        return {"report": None}
+    try:
+        report = json.loads(raw)
+    except ValueError:
+        return {"report": None}
+    return {"report": report if isinstance(report, dict) else None}
+
+
 @router.get("/{run_id}", dependencies=[Depends(require_role(Role.VIEWER))])
 async def get_head(run_id: str):
     _enabled()
     return run_view(_load(run_id))
 
 
-# Extra masks on top of log_redaction for tokens that appear bare in a
-# harness transcript (no key= / Bearer prefix).
-_BARE_TOKENS = re.compile(
-    r"\b(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|sk-ant-[A-Za-z0-9_-]{20,})\b"
-)
-
-
-def mask_log(text: str) -> str:
-    return _BARE_TOKENS.sub("<redacted>", redact_secrets(text))
+# Back-compat alias: the mask itself moved to services/heads/redact.py
+# (shared with the chat-history endpoint below), so it can also fold in
+# this run's own head.env values — something a plain module-level function
+# in a router has no run to read. Kept here under its old name because it
+# is part of this router's public surface (tests import it from here).
+mask_log = mask_text
 
 
 @router.get("/{run_id}/log", dependencies=[Depends(require_role(Role.VIEWER))])
@@ -296,7 +315,35 @@ async def get_head_log(run_id: str, tail: int = Query(200, ge=1, le=2000)):
     # the head can write head.log — never follow a symlink (files.read_head_file)
     data = files.read_head_file(run.folder / "head.log", 512_000, tail=True) or ""
     lines = data.splitlines()[-tail:]
-    return PlainTextResponse(mask_log("\n".join(lines)))
+    from app.services.heads.redact import head_env_values
+
+    return PlainTextResponse(mask_text("\n".join(lines), head_env_values(run)))
+
+
+@router.get("/{run_id}/chat/history", dependencies=[Depends(require_role(Role.VIEWER))])
+async def get_head_chat_history(
+    run_id: str,
+    request: Request,
+    response: Response,
+    limit: int = Query(400, ge=1, le=1000),
+    before_uuid: str | None = None,
+):
+    """A head's transcript as one page of chat events — read-only, files
+    only (ADR-085 Nachtrag 2026-10-04 §4). Same response shape as an agent's
+    chat history so the frontend's existing reducer/components apply
+    unchanged (``services/heads/transcript.py`` docstring has the full
+    contract: ``events``/``session``/``hasMore``/``subagentRuns`` plus
+    ``source``/``reader``/``reason``)."""
+    _enabled()
+    run = _load(run_id)
+    located = transcript.locate(run)
+    tag = transcript.etag(located, limit, before_uuid)
+    if tag is not None:
+        response.headers["ETag"] = tag
+        if request.headers.get("if-none-match") == tag:
+            return Response(status_code=304, headers={"ETag": tag})
+    result = await asyncio.to_thread(transcript.read, run, located, limit, before_uuid)
+    return result
 
 
 @router.get("/{run_id}/run-record", dependencies=[Depends(require_role(Role.VIEWER))])

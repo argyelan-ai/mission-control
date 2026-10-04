@@ -10,7 +10,7 @@ import pytest
 import dataclasses
 from pathlib import Path
 from app.services import omp_chat, pane_state, transcript_chat
-from app.services.transcript_adapters import TranscriptAdapter, adapter_for
+from app.services.transcript_adapters import TranscriptAdapter, adapter_for, adapter_for_harness
 
 
 class _Agent:
@@ -105,8 +105,30 @@ def test_every_adapter_offers_the_full_contract():
                 # "kein zweiter Tailer, kein Thread-Hop" — eine Lambda-Attrappe
                 # wuerde das Gate unterlaufen.
                 assert value is None or callable(value), (harness, field.name)
+            elif field.name == "head_transcript_glob":
+                # Optional: a harness adapter may have no head reader yet
+                # (docs/decisions/085 Nachtrag 2026-10-04) — ``None`` means
+                # ``adapter_for_harness`` reports "no_reader" for it, never
+                # a silent wrong glob.
+                assert value is None or (isinstance(value, str) and value), (harness, field.name)
             else:
                 assert callable(value), (harness, field.name)
+
+
+def test_adapter_for_harness_is_strict_never_a_silent_claude_fallback():
+    """``adapter_for`` is right for an agent (duck-typed, Claude default for
+    anything unknown). A head is identified by a plain harness STRING
+    (``spec["harness"]``), which has no ``.harness`` attribute for
+    ``adapter_for`` to read — so this strict sibling exists instead
+    (docs/decisions/085 Nachtrag 2026-10-04; anhang.md section B)."""
+    assert adapter_for_harness("claude").name == "claude"
+    assert adapter_for_harness("openclaude").name == "openclaude"
+    assert adapter_for_harness("omp").name == "omp"
+    # hermes shares the omp reader (same transcript format) — same contract
+    # as adapter_for's own hermes-shares-omp wiring, tested above.
+    assert adapter_for_harness("hermes").name == "omp"
+    for bad in ("kimi", "grok", None, "", 123, object()):
+        assert adapter_for_harness(bad) is None, bad
 
 
 def test_only_omp_needs_a_pane_marker_for_a_fresh_session():
