@@ -205,6 +205,32 @@ def test_shape_layer_catches_env_style_header_hf_and_jwt_secrets(line, secret):
     assert redact.REDACTED in out
 
 
+@pytest.mark.parametrize(
+    "line,secret",
+    [
+        ('"OPENAI_API_KEY": "sk-live-abcdefghijklmnop"', "sk-live-abcdefghijklmnop"),
+        ('{"apiKey":"abcdefghijklmnopqrstuvwx"}', "abcdefghijklmnopqrstuvwx"),
+        ('{"access_token": "abcdefghijklmnopqrstuvwx"}', "abcdefghijklmnopqrstuvwx"),
+        ("password=hunter2plutonium", "hunter2plutonium"),
+        ("postgresql://dbuser:s3cr3t-passw0rd@db.internal:5432/mc", "s3cr3t-passw0rd"),
+    ],
+)
+def test_shape_layer_catches_json_keys_password_eq_and_url_userinfo(line, secret):
+    out = redact.mask_text(line, ())
+    assert secret not in out, f"{line!r} must be masked"
+    assert redact.REDACTED in out
+
+
+def test_shape_layer_json_key_secret_keeps_the_key_name_readable():
+    out = redact.mask_text('{"OPENAI_API_KEY": "sk-live-abcdefghijklmnop"}', ())
+    assert '"OPENAI_API_KEY"' in out, "the key itself must survive masking, only the value is secret"
+
+
+def test_shape_layer_url_userinfo_keeps_the_username_readable():
+    out = redact.mask_text("postgresql://dbuser:s3cr3t-passw0rd@db.internal:5432/mc", ())
+    assert "dbuser" in out, "the username half of userinfo is not the secret"
+
+
 # ── 4 — symlinks, never followed ─────────────────────────────────────────
 
 
@@ -250,6 +276,37 @@ def test_transcript_swapped_to_a_symlink_after_locate_is_not_followed(heads_root
 
     result = tr.read(run, located, limit=1000, before_uuid=None)
     assert "OUTSIDE-SECRET" not in json.dumps(result), "a post-locate() symlink swap must never be followed"
+    assert result["source"] == "none" and result["reason"] == tr.REASON_NO_TRANSCRIPT
+
+
+def test_transcript_swapped_via_intermediate_directory_after_locate_is_not_followed(heads_root, tmp_path):
+    """TOCTOU round 2 (review finding on PR #751): the previous fix pinned
+    identity with a fresh ``lstat()`` taken immediately before the
+    ``O_NOFOLLOW`` open — but that lstat runs AFTER the possible swap too,
+    so it just reports whatever file now sits there. It does not help when
+    an INTERMEDIATE directory (not the final component) is swapped for a
+    symlink between ``locate()`` and the actual read: ``O_NOFOLLOW`` only
+    blocks a symlink on the FINAL component, so the open still succeeds,
+    through the swapped parent, against an attacker-chosen file of the
+    same name. ``locate()`` must pin the real file's identity
+    (``st_dev``/``st_ino``) at validation time, in ``Located``, and
+    ``read()`` must check the opened file against THAT pinned identity —
+    not a fresh lstat taken after the swap could already have happened."""
+    run_id = install_fixture(heads_root, "claude-run")
+    run = load_run(run_id)
+    located = tr.locate(run)
+    assert isinstance(located, tr.Located)
+
+    real_dir = located.path.parent
+    foreign_dir = run.folder.parent / "foreign-intermediate"
+    foreign_dir.mkdir()
+    secret_outside = foreign_dir / located.path.name
+    secret_outside.write_text(json.dumps({"type": "user", "message": {"role": "user", "content": "OUTSIDE-SECRET"}}))
+    shutil.rmtree(real_dir)
+    os.symlink(foreign_dir, real_dir)
+
+    result = tr.read(run, located, limit=1000, before_uuid=None)
+    assert "OUTSIDE-SECRET" not in json.dumps(result), "a post-locate() intermediate-directory swap must never be followed"
     assert result["source"] == "none" and result["reason"] == tr.REASON_NO_TRANSCRIPT
 
 
@@ -369,6 +426,7 @@ async def test_chat_history_etag_changes_when_a_head_ends_with_no_new_transcript
     first = await auth_client.get(f"/api/v1/heads/{run_id}/chat/history?limit=1000")
     assert first.status_code == 200
     assert first.json()["session"]["aliveness"] == "active"
+    assert first.json()["session"]["live"] is True
     etag1 = first.headers["ETag"]
 
     # The transcript file itself is untouched — only the wrapper's status
@@ -385,6 +443,13 @@ async def test_chat_history_etag_changes_when_a_head_ends_with_no_new_transcript
     assert again.status_code == 200, "a state change must never be served as a stale 304"
     body = again.json()
     assert body["session"]["aliveness"] == "ended"
+    # Review finding on PR #751: ``live`` used to come from read_history's
+    # own mtime-recency heuristic (the transcript file is untouched here,
+    # so that heuristic alone would still say True) rather than from the
+    # derived head state — contradicting the "never from pane/process,
+    # only head state" contract and able to mislead a PR 2 UI into showing
+    # an ended head as still live.
+    assert body["session"]["live"] is False, "an ended head must never report live:true"
     assert again.headers["ETag"] != etag1
 
 

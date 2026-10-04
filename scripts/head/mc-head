@@ -123,7 +123,9 @@ GC_MIN_AGE_S = int(os.environ.get("MC_HEAD_GC_MIN_AGE_S", str(14 * 24 * 3600)))
 # A run younger than this (since it exited) is not even considered — the
 # operator may still be reading its result.
 GC_SKIP_MIN_ENDED_S = int(os.environ.get("MC_HEAD_GC_SKIP_MIN_ENDED_S", "3600"))
-# cmd_watch() only re-runs gc when the last report is older than this.
+# cmd_watch() only re-runs gc when the last ATTEMPT (locks/gc.last, written
+# on every cmd_gc call regardless of outcome — see _touch_gc_attempt_stamp)
+# is older than this.
 GC_THROTTLE_S = int(os.environ.get("MC_HEAD_GC_THROTTLE_S", str(6 * 3600)))
 # Allowlist, deliberately short and literal — see cmd_gc()'s docstring for
 # why nothing in here may ever be computed from a pattern.
@@ -1906,6 +1908,25 @@ def _wt_is_clean(spec: dict, wt: Path) -> bool:
     return res.returncode == 0 and not res.stdout.strip()
 
 
+def _wt_has_ignored_files(spec: dict, wt: Path) -> bool:
+    """True when this worktree holds at least one git-ignored path — e.g.
+    an ``info/exclude``-ignored notes file a head left behind on purpose.
+
+    Review finding on PR #751: ``_wt_is_clean``'s own ``status`` call never
+    asked about ignored paths, and ``git worktree remove`` WITHOUT
+    ``--force`` deletes them anyway (verified directly: a clean, pushed
+    scratch worktree carrying one such file lost it after ``--apply``).
+    ``--ignored=matching`` lists every ignored FILE individually rather than
+    collapsing a whole ignored directory into one entry, so nothing in an
+    ignored subtree is missed. On any error this fails CLOSED (treated as
+    "has ignored files", i.e. kept) — "can't tell" must never read as "safe
+    to delete"."""
+    res = _wt_git(spec, wt, ["status", "--porcelain", "--ignored=matching"])
+    if res.returncode != 0:
+        return True
+    return any(line.startswith("!! ") for line in res.stdout.splitlines())
+
+
 def _wt_is_detached(spec: dict, wt: Path) -> bool:
     res = _wt_git(spec, wt, ["symbolic-ref", "-q", "HEAD"])
     return res.returncode != 0
@@ -1976,6 +1997,8 @@ def _wt_decision(spec: dict, active_clones: frozenset) -> tuple:
         return "kept", "foreign_gitdir"
     if not _wt_is_clean(spec, wt):
         return "kept", "dirty"
+    if _wt_has_ignored_files(spec, wt):
+        return "kept", "ignored_files"
     if _wt_is_detached(spec, wt):
         return "kept", "detached"
     if not _wt_head_in_scratch_origin(spec, wt):
@@ -2140,12 +2163,50 @@ def _write_gc_report(report: dict) -> None:
     os.replace(tmp, root / "gc-report.json")
 
 
+def _touch_gc_attempt_stamp() -> None:
+    """``locks/gc.last`` — the throttle's OWN signal, separate from
+    ``heads/gc-report.json`` (review finding on PR #751). Written at the
+    very start of every ``cmd_gc`` call, success, failure, or a locked-out
+    skip alike, so ``_gc_due()`` throttles on an attempt having been made,
+    not on a report having been successfully produced. Before this split,
+    a raised exception inside ``_run_gc`` (or the lock already being held)
+    meant NO report was ever written, so ``_gc_due()`` kept returning
+    ``True`` and every 30s watch tick re-ran a full pass (two tree walks
+    plus a git fetch per scratch worktree) instead of backing off. It also
+    means an operator deleting or inspecting the report (or a compromised
+    backend touching it) cannot itself change when the NEXT real attempt
+    happens. ``O_NOFOLLOW`` for the same reason as every other file under
+    the backend-writable ``heads/`` tree; failing to write the stamp is
+    not fatal — worst case is the old behaviour (re-attempt next tick).
+
+    Stays a 0-byte file forever, only its mtime matters (same pattern as
+    ``locks/gc.lock``) — a timestamp payload would make this file part of
+    ``heads_root()``'s own byte count, which ``_run_gc``'s budget math
+    (``GC_BUDGET_BYTES``) measures; a throttle bookkeeping file growing on
+    every tick has no business feeding that number. ``os.utime`` on the
+    open FD, not the path, so bumping an EXISTING stamp's mtime cannot
+    itself be raced by a symlink swap between the open and the utime."""
+    locks_root().mkdir(parents=True, exist_ok=True)
+    try:
+        fd = os.open(str(locks_root() / "gc.last"), os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o644)
+    except OSError:
+        return
+    try:
+        os.utime(fd, None)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
 def cmd_gc(apply: bool) -> int:
     """``mc-head gc [--apply]`` — never deletes anything unless ``--apply``
     (or, from ``cmd_watch``, ``MC_HEAD_GC_APPLY=1`` in the process
     environment) is given. Always writes ``heads/gc-report.json``, dry run
     or not — the report IS the dry run's result, there is no separate
-    "would do" output.
+    "would do" output. The throttle itself is keyed on a SEPARATE stamp
+    (``_touch_gc_attempt_stamp``, written first, unconditionally), not on
+    this report.
 
     ``fcntl.flock`` (POSIX-only, matching this whole script) keeps two
     overlapping calls — a manual run while ``watch`` is also due — from
@@ -2156,6 +2217,7 @@ def cmd_gc(apply: bool) -> int:
     lock-acquire failure."""
     import fcntl
 
+    _touch_gc_attempt_stamp()
     heads_root().mkdir(parents=True, exist_ok=True)
     locks_root().mkdir(parents=True, exist_ok=True)
     try:
@@ -2185,7 +2247,7 @@ def cmd_gc(apply: bool) -> int:
 
 def _gc_due() -> bool:
     try:
-        mtime = (heads_root() / "gc-report.json").stat().st_mtime
+        mtime = (locks_root() / "gc.last").stat().st_mtime
     except OSError:
         return True
     return (time.time() - mtime) >= GC_THROTTLE_S

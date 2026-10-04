@@ -47,7 +47,14 @@ block = (
 text = text.replace("        <!-- __GC_APPLY_ENV__ -->\n", block)
 open(out_path, "w").write(text)
 PYEOF
-plutil -lint "$PLIST" >/dev/null
+# plutil is macOS-only (launchd itself is too, so a real install always has
+# it); the python3 plistlib fallback exists so this script's own exit code
+# stays meaningful under test on Linux CI (review finding on PR #751).
+if command -v plutil >/dev/null 2>&1; then
+  plutil -lint "$PLIST" >/dev/null
+else
+  python3 -c 'import plistlib,sys; plistlib.load(open(sys.argv[1], "rb"))' "$PLIST"
+fi
 echo "Installed $MC_HOME/bin/mc-head and $PLIST"
 echo "Before the first real repo (spec §9): put the heads' own GitHub token into"
 echo "  $MC_HOME/heads/gh-token (chmod 600). Scratch repos go into $MC_HOME/heads/scratch-repos."

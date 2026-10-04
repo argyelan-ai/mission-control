@@ -62,6 +62,30 @@ _ENV_STYLE_SECRET = re.compile(r"\b([A-Z][A-Z0-9_]*(?:API_KEY|TOKEN|SECRET))(\s*
 #: request might carry it.
 _HEADER_SECRET = re.compile(r"\b(x-api-key:\s*)\S+", re.IGNORECASE)
 
+#: A JSON-quoted secret-shaped key: ``"OPENAI_API_KEY": "value"`` or
+#: ``{"apiKey":"value"}`` — a tool call's own request/response body logged
+#: verbatim into the transcript. Neither ``_ENV_STYLE_SECRET`` (anchors
+#: directly on ``KEY<sep>value``, with no room for the key's own closing
+#: quote in between) nor ``redact_secrets``'s plain ``key=``/``token=``
+#: catches this shape; review finding on PR #751. The key itself (and its
+#: surrounding quotes/colon) is kept — only the quoted value is replaced.
+_JSON_KEY_SECRET = re.compile(
+    r'("(?:[A-Za-z_]*(?:api[_-]?key|token|secret|password)[A-Za-z_]*)"\s*:\s*")[^"]*(")',
+    re.IGNORECASE,
+)
+
+#: A bare ``password=value`` assignment (query string, config dump, debug
+#: print) — distinct from ``_ENV_STYLE_SECRET``, which only matches an
+#: ALL-CAPS ``…_API_KEY``/``…_TOKEN``/``…_SECRET`` identifier and never
+#: lowercase ``password``. Review finding on PR #751.
+_PASSWORD_EQ = re.compile(r"\b(password\s*=\s*)\S+", re.IGNORECASE)
+
+#: HTTP Basic-auth-style userinfo embedded in a URL — ``scheme://user:pass@
+#: host``. Only the password half is replaced; the username stays (it is
+#: rarely secret on its own, and keeping it makes the masked line still
+#: readable). Review finding on PR #751.
+_URL_USERINFO_SECRET = re.compile(r"(://[^/\s:@]+:)[^@\s]+(@)")
+
 #: A value shorter than this is too common (model slugs, short flags) to
 #: redact just for appearing in ``head.env`` — matches the bauplan's "≥ 8
 #: Zeichen" rule and avoids masking e.g. a one-word model family name.
@@ -84,6 +108,9 @@ def mask_text(text: str, extra: tuple[str, ...] = ()) -> str:
     out = _BARE_TOKENS.sub(REDACTED, redact_secrets(text))
     out = _ENV_STYLE_SECRET.sub(lambda m: f"{m.group(1)}{m.group(2)}{REDACTED}", out)
     out = _HEADER_SECRET.sub(lambda m: f"{m.group(1)}{REDACTED}", out)
+    out = _JSON_KEY_SECRET.sub(lambda m: f"{m.group(1)}{REDACTED}{m.group(2)}", out)
+    out = _PASSWORD_EQ.sub(lambda m: f"{m.group(1)}{REDACTED}", out)
+    out = _URL_USERINFO_SECRET.sub(lambda m: f"{m.group(1)}{REDACTED}{m.group(2)}", out)
     for value in extra:
         if value and len(value) >= _MIN_EXTRA_LEN:
             out = out.replace(value, REDACTED)

@@ -54,6 +54,14 @@ class Located:
     path: Path
     adapter: TranscriptAdapter
     reader: str
+    #: (st_dev, st_ino) of ``path``, captured from the SAME lstat chain that
+    #: validated it as a safe descendant — not a fresh lstat taken later.
+    #: ``_open_verified`` checks the opened fd's identity against THIS
+    #: pinned pair (review finding on PR #751 round 2: a fresh lstat taken
+    #: right before the open is itself taken AFTER a possible swap of an
+    #: INTERMEDIATE directory, so it just reports whatever file sits there
+    #: now and the check passes against the wrong file).
+    identity: tuple[int, int]
 
 
 @dataclass(frozen=True)
@@ -61,10 +69,13 @@ class Unavailable:
     reason: str
 
 
-def _is_safe_descendant(run_folder: Path, path: Path) -> bool:
+def _safe_descendant_lstat(run_folder: Path, path: Path) -> os.stat_result | None:
     """``path`` is a regular file strictly under ``run_folder``, with NO
     symlink on any path component between them (including the file itself),
-    and its resolved form still lies inside the resolved run folder.
+    and its resolved form still lies inside the resolved run folder. Returns
+    the FINAL component's ``lstat()`` result (the caller pins its
+    ``st_dev``/``st_ino`` as that file's identity) or ``None`` when any of
+    that does not hold.
 
     Same defence as ``routers/agent_chat.get_subagent_history`` (its
     docstring explains why a symlink on an INTERMEDIATE directory, not just
@@ -77,9 +88,9 @@ def _is_safe_descendant(run_folder: Path, path: Path) -> bool:
     try:
         rel = path.relative_to(run_folder)
     except ValueError:
-        return False
+        return None
     if not rel.parts:
-        return False
+        return None
     cur = run_folder
     info = None
     for part in rel.parts:
@@ -87,17 +98,23 @@ def _is_safe_descendant(run_folder: Path, path: Path) -> bool:
         try:
             info = cur.lstat()
         except OSError:
-            return False
+            return None
         if stat.S_ISLNK(info.st_mode):
-            return False
+            return None
     if info is None or not stat.S_ISREG(info.st_mode):
-        return False
+        return None
     try:
         root_r = run_folder.resolve()
         path_r = path.resolve()
     except OSError:
-        return False
-    return root_r == path_r or root_r in path_r.parents
+        return None
+    if root_r == path_r or root_r in path_r.parents:
+        return info
+    return None
+
+
+def _is_safe_descendant(run_folder: Path, path: Path) -> bool:
+    return _safe_descendant_lstat(run_folder, path) is not None
 
 
 def _candidates(run_folder: Path, glob_pattern: str) -> list[Path]:
@@ -135,6 +152,13 @@ def locate(run: Any) -> Located | Unavailable:
         return Unavailable(reason=REASON_NO_TRANSCRIPT)
     if size > MAX_TRANSCRIPT_BYTES:
         return Unavailable(reason=REASON_TOO_LARGE)
+    # Re-validated right here (candidates were already checked once inside
+    # _candidates(), via the same function) so the identity pinned into
+    # Located is taken at THIS moment, as close as possible to the actual
+    # read — not reused from an earlier call further back in time.
+    identity_lstat = _safe_descendant_lstat(run.folder, newest)
+    if identity_lstat is None:
+        return Unavailable(reason=REASON_NO_TRANSCRIPT)
     # ``adapter.name``, not the raw ``harness`` string: the adapter is the
     # one source of truth for "which reader actually parsed this" (review
     # finding on PR #751) — today a head's ``spec["harness"]`` is validated
@@ -142,7 +166,7 @@ def locate(run: Any) -> Located | Unavailable:
     # already agree, but ``reader`` is a public API field (docs/specs/
     # head-launcher.md §7: "claude"|"omp"|null) and must come from the thing
     # that was actually used to read the file, not from an echo of the input.
-    return Located(path=newest, adapter=adapter, reader=adapter.name)
+    return Located(path=newest, adapter=adapter, reader=adapter.name, identity=(identity_lstat.st_dev, identity_lstat.st_ino))
 
 
 def etag(located: Located | Unavailable, limit: int, before_uuid: str | None, state: str | None = None) -> str | None:
@@ -189,9 +213,13 @@ def _aliveness(run: Any, state: str | None = None) -> str:
 
 
 def _empty(run: Any, reason: str, state: str | None = None) -> dict[str, Any]:
+    aliveness = _aliveness(run, state)
     return {
         "events": [],
-        "session": {"sessionId": run.run_id, "live": False, "startedAt": None, "aliveness": _aliveness(run, state)},
+        # ``live`` mirrors ``aliveness`` — head state, never a pane/process
+        # probe or (as read_history's own default would do) a transcript
+        # mtime, which does not exist here anyway (see read()'s comment).
+        "session": {"sessionId": run.run_id, "live": aliveness == "active", "startedAt": None, "aliveness": aliveness},
         "hasMore": False,
         "subagentRuns": [],
         "source": "none",
@@ -200,32 +228,38 @@ def _empty(run: Any, reason: str, state: str | None = None) -> dict[str, Any]:
     }
 
 
-def _open_verified(path: Path) -> Any | None:
+def _open_verified(path: Path, identity: tuple[int, int]) -> Any | None:
     """Open ``path`` for reading, re-proving right NOW the exact safety
-    ``locate()``'s ``_is_safe_descendant`` already checked — a head's
-    sandbox can swap the final component for a symlink in the window
-    between that check and this call (the ETag computation plus an
+    ``locate()``'s ``_safe_descendant_lstat`` already checked — a head's
+    sandbox can swap a path component for a symlink in the window between
+    that check and this call (the ETag computation plus an
     ``asyncio.to_thread`` hop both sit in between). ``O_NOFOLLOW`` makes a
-    swap-to-symlink fail outright; the ``st_ino``/``st_dev`` comparison
-    against a fresh ``lstat`` additionally catches a swap to a DIFFERENT
-    regular file (e.g. a hard link planted next to the original) that an
-    ``O_NOFOLLOW``-only open would not notice. Returns a text-mode file
-    object positioned at the start, or ``None`` when anything about that
-    does not hold — the caller treats that exactly like "transcript
-    vanished", never raises and never falls back to a plain ``open()``."""
-    try:
-        pre = path.lstat()
-    except OSError:
-        return None
-    if not stat.S_ISREG(pre.st_mode):
-        return None
+    swap of the FINAL component to a symlink fail outright.
+
+    That alone is not enough: ``O_NOFOLLOW`` only ever looks at the final
+    component, so a swap of an INTERMEDIATE directory (``omp-sessions``,
+    a ``claude-config/projects/<dir>``) to a symlink still lets the open
+    succeed, through the swapped parent, against an attacker-planted file
+    of the same name (review finding on PR #751 round 2 — a fresh
+    ``lstat()`` taken here, immediately before the open, does not catch
+    this: that lstat runs AFTER the swap too, so it simply reports
+    whatever file now sits there and agrees with itself). The defence is
+    therefore identity pinned at ``locate()`` time, BEFORE any swap this
+    call's caller is worried about — ``identity`` is that ``(st_dev,
+    st_ino)`` pair from ``Located``, and the opened fd's own ``fstat`` is
+    checked against it, never against a lstat taken now.
+
+    Returns a text-mode file object positioned at the start, or ``None``
+    when anything about that does not hold — the caller treats that
+    exactly like "transcript vanished", never raises and never falls back
+    to a plain ``open()``."""
     try:
         fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW)
     except OSError:
         return None
     try:
         post = os.fstat(fd)
-        if not stat.S_ISREG(post.st_mode) or (post.st_ino, post.st_dev) != (pre.st_ino, pre.st_dev):
+        if not stat.S_ISREG(post.st_mode) or (post.st_dev, post.st_ino) != identity:
             os.close(fd)
             return None
     except OSError:
@@ -259,11 +293,20 @@ def read(
     # Same pattern as ``routers.agent_chat.get_subagent_history``.
     quiet = dataclasses.replace(located.adapter, stamp_usage=lambda ev, p: None, subagent_runs=lambda p: [])
 
-    fileobj = _open_verified(located.path)
+    fileobj = _open_verified(located.path, located.identity)
     if fileobj is None:
         return _empty(run, REASON_NO_TRANSCRIPT, state)
     result = read_history(located.path, quiet, limit=limit, before_uuid=before_uuid, fileobj=fileobj)
-    result["session"]["aliveness"] = _aliveness(run, state)
+    aliveness = _aliveness(run, state)
+    result["session"]["aliveness"] = aliveness
+    # Override read_history's own ``live`` (an mtime-recency heuristic that
+    # is right for an AGENT's chat, which has no other liveness signal) —
+    # a head's contract is "never from pane/process, only head state"
+    # (review finding on PR #751: a head that ended less than the live
+    # window ago returned ``live: true`` together with ``aliveness:
+    # "ended"``, contradicting that contract and able to mislead the PR 2
+    # UI into treating an ended head as still live).
+    result["session"]["live"] = aliveness == "active"
     result["source"] = "transcript"
     result["reader"] = located.reader
     result["reason"] = None

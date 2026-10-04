@@ -7,6 +7,7 @@ no network, no real launchd load (that stays an explicit operator step the
 script only prints)."""
 from __future__ import annotations
 
+import plistlib
 import subprocess
 import sys
 from pathlib import Path
@@ -17,6 +18,15 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 INSTALLER = REPO_ROOT / "scripts" / "head" / "install-head-starter.sh"
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="installer is POSIX-only (sh, launchd)")
+
+
+def _assert_valid_plist(path: Path) -> None:
+    """Real validation that the file is well-formed plist XML — via
+    ``plistlib`` (stdlib, cross-platform) rather than shelling out to the
+    macOS-only ``plutil`` binary, which does not exist on Linux CI (review
+    finding on PR #751: this test's own direct ``plutil`` calls, not just
+    the installer's internal one, made the whole file skip on Linux)."""
+    plistlib.loads(path.read_bytes())
 
 
 def _run(home: Path, mc_home: Path, *args: str) -> subprocess.CompletedProcess:
@@ -41,7 +51,7 @@ def test_default_install_has_no_gc_apply_key(tmp_path: Path):
     text = _plist(home).read_text()
     assert "<key>MC_HEAD_GC_APPLY</key>" not in text
     assert "dry-run only" in res.stdout and "ARMED" not in res.stdout
-    assert subprocess.run(["plutil", "-lint", str(_plist(home))], capture_output=True).returncode == 0
+    _assert_valid_plist(_plist(home))
 
 
 def test_gc_apply_flag_arms_the_plist(tmp_path: Path):
@@ -51,11 +61,11 @@ def test_gc_apply_flag_arms_the_plist(tmp_path: Path):
     text = _plist(home).read_text()
     assert "<key>MC_HEAD_GC_APPLY</key>" in text
     # The value sits on the line right after the key — a real plist reader
-    # (plutil, loaded below) is the actual proof; this is just belt+braces.
+    # (plistlib, loaded below) is the actual proof; this is just belt+braces.
     idx = text.index("<key>MC_HEAD_GC_APPLY</key>")
     assert "<string>1</string>" in text[idx: idx + 120]
     assert "ARMED" in res.stdout
-    assert subprocess.run(["plutil", "-lint", str(_plist(home))], capture_output=True).returncode == 0
+    _assert_valid_plist(_plist(home))
 
 
 def test_gc_apply_env_var_is_what_mc_head_actually_reads(tmp_path: Path):

@@ -93,7 +93,7 @@ def _write_status(run_dir: Path, *, exited_ago_s: float, supervisor_pid: int = 9
 
 def _make_run(
     mc_home: Path, *, repo_full_name: str, branch_suffix: str, origin: Path | None = None,
-    dirty=False, untracked=False, detached=False, pushed=True, exited_ago_s=15 * 86400,
+    dirty=False, untracked=False, detached=False, pushed=True, ignored=False, exited_ago_s=15 * 86400,
     scratch_repo=True, **spec_over,
 ) -> tuple[str, Path]:
     run_id = write_spec(
@@ -129,6 +129,16 @@ def _make_run(
         (wt / "README.md").write_text("dirty change, never committed\n")
     if untracked:
         (wt / "scratchpad.txt").write_text("untracked\n")
+    if ignored:
+        # info/exclude (not a committed .gitignore) so the worktree stays
+        # otherwise identical to the non-ignored case — the file this
+        # plants is NOT untracked-dirty (git status shows it only under
+        # --ignored), the exact gap the review finding is about.
+        exclude = clone / ".git" / "info" / "exclude"
+        exclude.parent.mkdir(parents=True, exist_ok=True)
+        with exclude.open("a") as f:
+            f.write("notes.md\n")
+        (wt / "notes.md").write_text("ignored scratch notes, never committed\n")
     if detached:
         sha = subprocess.run(
             ["git", "-C", str(wt), "rev-parse", "HEAD"], capture_output=True, text=True, check=True
@@ -173,8 +183,9 @@ def test_dry_run_lists_caches_and_old_pushed_worktree_and_changes_nothing(scratc
     res = run_head(mc_home, "gc")
     assert res.returncode == 0, res.stderr
 
-    # gc always creates its own lock file + the report — neither is a run
-    # folder's content, so both are excluded from the "changed nothing" proof.
+    # gc always creates its own lock file + throttle stamp + the report —
+    # none of these is a run folder's content, so all are excluded from
+    # the "changed nothing" proof.
     # ``clones/`` (shared git plumbing, never a run's own data) is excluded
     # too: the worktree-safety hardening on PR #751 makes EVERY gc pass,
     # dry run included, call ``sanitize_clone()`` before it runs a single
@@ -186,7 +197,7 @@ def test_dry_run_lists_caches_and_old_pushed_worktree_and_changes_nothing(scratc
     def _keep(k: str) -> bool:
         return k not in ignore and not k.startswith("clones/")
 
-    ignore = {"gc-report.json", "locks", "locks/gc.lock"}
+    ignore = {"gc-report.json", "locks", "locks/gc.lock", "locks/gc.last"}
     before_excl_clones = {k: v for k, v in before.items() if _keep(k)}
     after_excl_report = {k: v for k, v in _tree_signature(heads_dir).items() if _keep(k)}
     assert after_excl_report == before_excl_clones, "dry run must not change a single byte of the run folders"
@@ -276,6 +287,45 @@ def test_untracked_file_counts_as_dirty(scratch):
     assert wt.exists()
     kept = _run_for(_report(mc_home), run_id)["kept"]
     assert any(k["path"] == str(wt) and k["reason"] == "dirty" for k in kept)
+
+
+def test_ignored_file_in_an_otherwise_clean_pushed_worktree_is_kept(scratch):
+    """Review finding on PR #751: ``_wt_is_clean`` only asked ``git status``
+    about tracked + untracked changes, never about git-ignored paths — and
+    ``git worktree remove`` WITHOUT ``--force`` deletes ignored paths too.
+    Verified directly against the pre-fix code: an ``info/exclude``-ignored
+    ``notes.md`` in a clean, pushed scratch worktree was gone after
+    ``--apply``. The worktree must now be KEPT (reason ``ignored_files``),
+    never silently swept away with the file still inside it."""
+    mc_home = scratch["mc_home"]
+    run_id, wt = _make_run(
+        mc_home, repo_full_name=scratch["full_name"], branch_suffix="ignored", origin=scratch["origin"], ignored=True,
+    )
+    run_head(mc_home, "gc", "--apply")
+    assert wt.exists(), "an ignored file must never be lost to a worktree removal"
+    assert (wt / "notes.md").exists()
+    kept = _run_for(_report(mc_home), run_id)["kept"]
+    assert any(k["path"] == str(wt) and k["reason"] == "ignored_files" for k in kept)
+
+
+def test_sabotage_skipping_the_ignored_files_check_loses_the_file_on_apply(scratch):
+    """Sabotage, run directly against the loaded module: with the ignored-
+    files check disabled, the worktree is offered for removal and ``git
+    worktree remove`` actually deletes the ignored file along with it —
+    proving the check is load-bearing, not decorative."""
+    mc_home = scratch["mc_home"]
+    run_id, wt = _make_run(
+        mc_home, repo_full_name=scratch["full_name"], branch_suffix="ignoredsab", origin=scratch["origin"], ignored=True,
+    )
+    assert (wt / "notes.md").exists()
+    mod = _load()
+    os.environ["MC_HOME"] = str(mc_home)
+    try:
+        mod._wt_has_ignored_files = lambda spec, wt: False  # SABOTAGE
+        mod._run_gc(apply=True)
+    finally:
+        del os.environ["MC_HOME"]
+    assert not wt.exists(), "with the check disabled, the worktree (and its ignored file) is actually removed"
 
 
 def test_head_not_pushed_is_kept_not_pushed(scratch):
@@ -468,6 +518,55 @@ def test_watch_throttles_a_second_gc_pass(scratch):
 
     run_head(mc_home, "watch")  # default throttle is 6h — must not touch the report again
     assert report_path.read_text() == first_written
+
+
+def test_gc_failure_still_writes_the_attempt_stamp_so_it_does_not_busy_loop(scratch):
+    """Review finding on PR #751: before this fix, the throttle was keyed
+    on ``heads/gc-report.json``'s mtime, which is only written AFTER
+    ``_run_gc`` returns successfully — so a raised exception (or the lock
+    already being held) left NO throttle signal at all, and every 30s
+    watch tick re-attempted a full pass (two tree walks plus a git fetch
+    per scratch worktree) forever. Sabotage: force ``_run_gc`` to raise and
+    confirm the separate attempt stamp (``locks/gc.last``) is still
+    written, so a second tick inside the throttle window does not call
+    ``_run_gc`` again."""
+    mc_home = scratch["mc_home"]
+    (mc_home / "heads" / "spool").mkdir(exist_ok=True)
+    mod = _load()
+    os.environ["MC_HOME"] = str(mc_home)
+    calls = {"n": 0}
+
+    def boom(apply):
+        calls["n"] += 1
+        raise RuntimeError("sabotage: gc blew up")
+
+    try:
+        mod._run_gc = boom
+        mod.cmd_watch()
+        assert calls["n"] == 1
+        stamp = mc_home / "heads" / "locks" / "gc.last"
+        assert stamp.exists(), "the attempt stamp must be written even though gc raised"
+        mod.cmd_watch()
+        assert calls["n"] == 1, "a failed attempt must still throttle the next tick, not busy-loop"
+    finally:
+        del os.environ["MC_HOME"]
+
+
+def test_gc_throttle_is_keyed_on_the_attempt_stamp_not_the_report(scratch):
+    """Direct check of the split: deleting ``heads/gc-report.json`` (what a
+    compromised, report-reading backend could do) must not make
+    ``_gc_due()`` return ``True`` again right after a real attempt — only
+    the separate ``locks/gc.last`` stamp governs that."""
+    mc_home = scratch["mc_home"]
+    (mc_home / "heads" / "spool").mkdir(exist_ok=True)
+    mod = _load()
+    os.environ["MC_HOME"] = str(mc_home)
+    try:
+        mod.cmd_watch()
+        (mc_home / "heads" / "gc-report.json").unlink()
+        assert mod._gc_due() is False, "deleting the report must not reset the throttle"
+    finally:
+        del os.environ["MC_HOME"]
 
 
 # ── symlinked INTERMEDIATE cache directory is never followed ────────────

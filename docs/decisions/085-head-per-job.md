@@ -272,9 +272,16 @@ thing and leaves the rest of it in place.
     (`mc-head gc`, `scripts/head/mc-head`), which **defaults to a dry run**
     and reports what it would remove; it only deletes when the operator
     turns on `MC_HEAD_GC_APPLY=1` in the host's launchd plist, never from a
-    switch the backend can write. Native CLI session resumption
-    (`--resume`) is explicitly **not** part of this addendum — it is
-    unproven after a worktree move and stays a later decision.
+    switch the backend can write. A worktree that is otherwise clean and
+    pushed but still carries a git-ignored file is **kept**, not removed —
+    `git worktree remove` on its own deletes ignored paths too, so `mc-head
+    gc` checks for them explicitly and reports `ignored_files` instead of
+    deleting (review finding on PR #751). The dry run normalises each
+    scratch clone's git config and fetches one disposable check ref against
+    it (idempotent host-side plumbing, review finding on PR #751) but never
+    touches a run folder's own data either way. Native CLI session
+    resumption (`--resume`) is explicitly **not** part of this addendum — it
+    is unproven after a worktree move and stays a later decision.
 
 ## References
 

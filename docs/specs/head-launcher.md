@@ -868,7 +868,14 @@ Acceptance criteria v1:
   the backend cannot write. Set/unset that env var and reinstall the plist
   (`install-head-starter.sh [--gc-apply]`) to arm/disarm deletion; a run
   whose worktree is a real (non-scratch) GitHub repo is never removed by v1,
-  only its caches.
+  only its caches. A clean, pushed worktree that still carries a
+  git-ignored file is kept (reason `ignored_files`), never removed —
+  `git worktree remove` without `--force` deletes ignored paths too, so the
+  check is explicit rather than relying on "clean" alone. The dry run is
+  not perfectly side-effect-free: it normalises each scratch clone's own
+  git config and fetches one disposable check ref into it (idempotent host
+  plumbing needed to inspect the clone safely), but it never touches a run
+  folder's own data either way.
 - Tasks: head cards are ordinary tasks with `manual_hold`; clearing
   `run_control` returns them to normal behaviour.
 - The launcher itself has no migration. Head token usage adds migration 0205
