@@ -168,6 +168,28 @@ export interface CommitDiff {
   date: string;
   stats: { files: number; additions: number; deletions: number };
   files: CommitDiffFile[];
+  /** Chat diff only (`GET /agents/{id}/chat/diff`): which view this is. */
+  scope?: "worktree" | "last-commit";
+  /** Chat diff, last-commit only: ISO author time — format it in the UI's
+   *  locale (`date` is git's English relative text). */
+  committed_at?: string | null;
+  /** Chat diff only: WHICH repository is shown and why. */
+  source?: ChatDiffSource;
+}
+
+/** Why the chat diff shows this repository — a code the UI translates:
+ *  the running task's workspace, the chat session's own folder, or the
+ *  repository git touched last in the agent's workspace. */
+export type ChatDiffSourceKind = "task" | "session" | "recent";
+
+export interface ChatDiffSource {
+  kind: ChatDiffSourceKind;
+  /** Folder name of the repository. */
+  repo: string;
+  /** Checked-out branch, or the short commit id when HEAD is detached. */
+  branch: string | null;
+  /** Location as the agent sees it (`/workspace/…`, `~/…`). */
+  path: string;
 }
 
 export interface Task {

@@ -59,8 +59,12 @@ from app.services.transcript_chat import (
 )
 from app.services.workspace_diff import (
     NoWorkspaceError,
-    find_repo_root,
+    choose_repo,
+    cwd_boundary,
+    display_path,
+    host_path_for_agent_cwd,
     resolve_workspace_path,
+    source_info,
     workspace_diff,
 )
 
@@ -403,6 +407,25 @@ async def _load_agent_or_404(agent_id: uuid.UUID, session: AsyncSession) -> Agen
     return agent
 
 
+def _chat_session_cwd(agent: Agent) -> str | None:
+    """The working directory of the agent's live chat session, as its CLI
+    recorded it — or ``None`` (no transcript, harness records none, privacy
+    gate closed). Same adapter chain and the same fail-closed gate as the
+    history endpoint: a Boss session that isn't MC work never lends its
+    folder to the panel. Synchronous (file reads) — run via ``to_thread``."""
+    adapter = adapter_for(agent)
+    tdir = adapter.resolve_transcript_dir(agent)
+    if tdir is None:
+        return None
+    active = adapter.find_active_session(tdir)
+    if active is None:
+        return None
+    path, _meta = active
+    if not adapter.transcript_allowed(agent, path):
+        return None
+    return adapter.session_cwd(path)
+
+
 @router.get("/agents/{agent_id}/chat/diff")
 async def get_chat_diff(
     agent_id: uuid.UUID,
@@ -410,24 +433,27 @@ async def get_chat_diff(
     current_user=Depends(require_user),
     session: AsyncSession = Depends(get_session),
 ):
-    """Structured git diff over the agent's workspace: uncommitted changes
-    (``scope=worktree``, default) or the most recent commit
-    (``scope=last-commit``). 404 ``{"reason": "no_workspace"}`` when the
-    agent has no ``workspace_path``, the path doesn't exist on disk, isn't a
-    git repository, or (``last-commit`` only) has no commits yet."""
+    """Structured git diff of the repository that shows what the agent is
+    doing: uncommitted changes incl. new files (``scope=worktree``, default)
+    or the most recent commit (``scope=last-commit``). The payload carries a
+    ``source`` block (``kind``/``repo``/``branch``/``path``) so the panel
+    can say WHICH repository it shows and why. 404 ``{"reason":
+    "no_workspace"}`` when no candidate folder holds a git repository.
+
+    Which repository: ``workspace_diff.choose_repo`` — running task first,
+    then the chat session's own folder (``TranscriptAdapter.session_cwd``,
+    harness-neutral), then the most recently git-active repository among the
+    session folder, the agent's workspace root and its last task. Both
+    scopes resolve the SAME repository, so the two tabs never show two
+    different projects."""
     agent = await _load_agent_or_404(agent_id, session)
 
-    # Where the agent actually works is the TASK workspace
-    # (``<agent_ws>/<task-slug>/…``), not ``agent.workspace_path`` — that is
-    # the per-agent root holding every task dir and is never a repo itself.
-    # Order: running task → most recently touched task with a workspace →
-    # agent root. First candidate that resolves to a git repo wins.
-    candidates: list[str] = []
+    running_task_raw: str | None = None
     if agent.current_task_id:
         current = await session.get(Task, agent.current_task_id)
         if current and current.workspace_path:
-            candidates.append(current.workspace_path)
-    latest = (
+            running_task_raw = current.workspace_path
+    latest_raw = (
         await session.exec(
             select(Task.workspace_path)
             .where(Task.assigned_agent_id == agent.id, Task.workspace_path.is_not(None))
@@ -435,19 +461,31 @@ async def get_chat_diff(
             .limit(1)
         )
     ).first()
-    if latest and latest not in candidates:
-        candidates.append(latest)
-    if agent.workspace_path and agent.workspace_path not in candidates:
-        candidates.append(agent.workspace_path)
 
-    for raw in candidates:
-        try:
-            repo = await asyncio.to_thread(find_repo_root, resolve_workspace_path(raw))
-            return await asyncio.to_thread(workspace_diff, repo, scope)
-        except NoWorkspaceError:
-            continue
+    runtime = agent.agent_runtime
+    root = resolve_workspace_path(agent.workspace_path) if agent.workspace_path else None
+    cwd = await asyncio.to_thread(_chat_session_cwd, agent)
+    session_dir = host_path_for_agent_cwd(runtime, root, cwd)
+    boundary = cwd_boundary(runtime, root)
 
-    return JSONResponse(status_code=404, content=_NO_WORKSPACE)
+    def _pick_and_diff() -> dict[str, Any]:
+        choice = choose_repo(
+            running_task=resolve_workspace_path(running_task_raw) if running_task_raw else None,
+            session_dir=session_dir,
+            boundary=boundary,
+            fallbacks=(
+                root,
+                resolve_workspace_path(latest_raw) if latest_raw else None,
+            ),
+        )
+        result = workspace_diff(choice.path, scope)
+        result["source"] = source_info(choice, display_path(runtime, root, choice.path))
+        return result
+
+    try:
+        return await asyncio.to_thread(_pick_and_diff)
+    except NoWorkspaceError:
+        return JSONResponse(status_code=404, content=_NO_WORKSPACE)
 
 
 @router.post("/agents/{agent_id}/chat/input", status_code=204)

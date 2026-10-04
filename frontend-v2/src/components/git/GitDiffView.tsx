@@ -1,8 +1,9 @@
 "use client";
 
-import { Fragment, useState } from "react";
+import { Fragment, useState, type ReactNode } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ChevronDown } from "lucide-react";
+import { useTranslations } from "next-intl";
 import type { CommitDiff, CommitDiffFile } from "@/lib/types";
 import { C, BRAND, alpha } from "@/lib/colors";
 
@@ -81,6 +82,7 @@ function LangBadge({ ext }: { ext: string }) {
 const MAX_LINES = 500;
 
 function FileDiff({ file, defaultOpen = true }: { file: CommitDiffFile; defaultOpen?: boolean }) {
+  const t = useTranslations("gitDiff");
   const [open, setOpen] = useState(defaultOpen);
   const ext = getFileExt(file.filename);
   const allLines = file.hunks.flatMap((h) => h.lines);
@@ -285,7 +287,7 @@ function FileDiff({ file, defaultOpen = true }: { file: CommitDiffFile; defaultO
                         className="text-[10px] text-center"
                         style={{ padding: "6px 12px", color: C.textMuted, background: C.borderSubtle }}
                       >
-                        … {allLines.length - MAX_LINES} more lines hidden
+                        {t("moreLinesHidden", { count: allLines.length - MAX_LINES })}
                       </td>
                     </tr>
                   )}
@@ -321,7 +323,15 @@ function DiffBar({ additions, deletions }: { additions: number; deletions: numbe
 
 // ── Main export ──────────────────────────────────────────────────────────────
 
-export function GitDiffView({ diff }: { diff: CommitDiff }) {
+export function GitDiffView({
+  diff,
+  subtitle,
+}: {
+  diff: CommitDiff;
+  /** Optional second line under the message (e.g. short id · time). */
+  subtitle?: ReactNode;
+}) {
+  const t = useTranslations("gitDiff");
   return (
     <div className="text-xs" style={{ borderTop: `1px solid ${C.borderSubtle}` }}>
       {/* Stats header */}
@@ -333,11 +343,18 @@ export function GitDiffView({ diff }: { diff: CommitDiff }) {
           color: C.textMuted,
         }}
       >
-        <span className="flex items-center gap-2">
-          <span style={{ color: C.textPrimary, fontWeight: 500 }}>{diff.message}</span>
-        </span>
+        {(diff.message || subtitle) && (
+          <span className="flex flex-col min-w-0">
+            {diff.message && (
+              <span className="truncate" style={{ color: C.textPrimary, fontWeight: 500 }}>{diff.message}</span>
+            )}
+            {subtitle && <span style={{ color: C.textMuted }}>{subtitle}</span>}
+          </span>
+        )}
         <span className="flex items-center gap-3 ml-auto shrink-0">
-          <span style={{ color: C.textDim }}>{diff.stats.files} {diff.stats.files === 1 ? "file" : "files"}</span>
+          <span style={{ color: C.textMuted }}>
+            {t(diff.stats.files === 1 ? "fileOne" : "fileOther", { count: diff.stats.files })}
+          </span>
           <span style={{ color: C.online, fontWeight: 600 }}>+{diff.stats.additions}</span>
           <span style={{ color: C.error, fontWeight: 600 }}>-{diff.stats.deletions}</span>
         </span>

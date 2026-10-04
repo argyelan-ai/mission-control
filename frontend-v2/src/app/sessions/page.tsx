@@ -439,9 +439,9 @@ function SessionsPageContent() {
 
   const panelTitle =
     activePanel === "diff"
-      ? "Diff"
+      ? t("panels.diff")
       : activePanel === "browser"
-        ? "Browser"
+        ? t("panels.browser")
         : activePanel === "doc"
           ? t("groups.resultPanel")
           : "";
@@ -672,7 +672,7 @@ function SessionsPageContent() {
                 <button
                   type="button"
                   onClick={() => setActivePanel(null)}
-                  aria-label="Schliessen"
+                  aria-label={t("panels.close")}
                   className="flex items-center justify-center w-10 h-10 rounded-lg cursor-pointer"
                   style={{ color: C.textMuted }}
                 >

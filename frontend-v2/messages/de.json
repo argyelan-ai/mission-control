@@ -1004,7 +1004,29 @@
     "effortRejectedReason": "Effort abgelehnt: {reason}",
     "effortRejected": "Effort-Wechsel abgelehnt",
     "effortUnconfirmed": "Effort-Wechsel nicht bestätigt — im Terminal prüfen",
-    "effortFailed": "Effort-Wechsel fehlgeschlagen"
+    "effortFailed": "Effort-Wechsel fehlgeschlagen",
+    "diff": {
+      "scopeLabel": "Diff-Bereich",
+      "scopeWorktree": "Arbeitsstand",
+      "scopeLastCommit": "Letzter Commit",
+      "refresh": "Aktualisieren",
+      "kind": {
+        "task": "Laufende Aufgabe",
+        "session": "Chat-Ordner",
+        "recent": "Zuletzt benutzt"
+      },
+      "commitMeta": "{hash} · {ago}",
+      "noChanges": "Keine offenen Änderungen",
+      "noCommit": "Noch kein Commit",
+      "noRepo": "Kein Git-Repository gefunden",
+      "noRepoHint": "Weder im Ordner des Chats noch im Workspace des Agenten liegt ein Git-Repository.",
+      "loadFailed": "Diff konnte nicht geladen werden."
+    },
+    "panels": {
+      "diff": "Diff",
+      "browser": "Browser",
+      "close": "Panel schliessen"
+    }
   },
   "shell": {
     "searchPlaceholder": "Suchen oder Befehl...",
@@ -3688,5 +3710,10 @@
       "connectionError": "Verbindungsfehler",
       "unknown": "Verbindungsproblem"
     }
+  },
+  "gitDiff": {
+    "fileOne": "{count} Datei",
+    "fileOther": "{count} Dateien",
+    "moreLinesHidden": "… {count} weitere Zeilen ausgeblendet"
   }
 }

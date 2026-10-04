@@ -33,6 +33,14 @@ const FILES = [
   "NotificationRow.tsx",
   "chatOptions.ts",
   "../layout/AppShell.tsx",
+  // Die Diff-Ansicht im Chat (Operator-Befund 04.10.2026: „Arbeitsstand",
+  // „Letzter Commit", „Kein Workspace" standen deutsch in der englischen
+  // Oberflaeche — die Datei stand nie auf dieser Liste) samt Panel-Schiene,
+  // Sessions-Seite und der geteilten Diff-Darstellung.
+  "DiffPanel.tsx",
+  "PanelRail.tsx",
+  "../git/GitDiffView.tsx",
+  "../../app/sessions/page.tsx",
 ];
 
 function read(rel: string): string {
@@ -53,6 +61,19 @@ describe("Chat-Oberfläche — keine fest verdrahteten Texte", () => {
       const literals = [...code.matchAll(/\b(aria-label|title|placeholder|alt)="([^"]*[A-Za-z][^"]*)"/g)]
         .map((m) => `${m[1]}="${m[2]}"`);
       expect(literals).toEqual([]);
+    });
+
+    // Der Umlaut-Test allein liess „Arbeitsstand" und „Kein Workspace"
+    // durch. Diese zwei Muster fangen Text, der als JSX-Knoten oder als
+    // `label: "…"` im Code steht. Erlaubt bleiben Maschinen-Kuerzel ohne
+    // Kleinbuchstaben (Git-Status „A"/„M", Datei-Marke „IMG").
+    it(`${rel}: kein Wort als JSX-Text oder label-Literal`, () => {
+      const code = stripComments(read(rel));
+      const jsxText = [...code.matchAll(/>\s*([A-Za-zÄÖÜäöüß][^<>{}=;()&|]*?)\s*<\//g)]
+        .map((m) => m[1])
+        .filter((txt) => /[a-zäöüß]/.test(txt));
+      const labels = [...code.matchAll(/\blabel:\s*"([^"]*[a-zäöüß][^"]*)"/g)].map((m) => m[1]);
+      expect([...jsxText, ...labels]).toEqual([]);
     });
 
     it(`${rel}: kein deutscher Text im Code`, () => {
@@ -105,6 +126,43 @@ describe("chat.error — EN/DE", () => {
     expect(Object.keys(errorNs(en)).sort()).toEqual(Object.keys(errorNs(de)).sort());
     for (const [key, value] of Object.entries(errorNs(de))) {
       expect(typeof value === "string" && value.trim().length > 0, `chat.error.${key} is empty`).toBe(true);
+    }
+  });
+});
+
+/**
+ * Diff-Ansicht, Panel-Schiene, geteilte Diff-Darstellung — EN/DE gleich.
+ * Ein Schluessel nur in EN zeigte auf Deutsch den rohen Punkt-Pfad.
+ */
+function flatten(tree: unknown, prefix = ""): Record<string, unknown> {
+  if (typeof tree !== "object" || tree === null) return { [prefix]: tree };
+  return Object.entries(tree as Record<string, unknown>).reduce<Record<string, unknown>>(
+    (acc, [k, v]) => ({ ...acc, ...flatten(v, prefix ? `${prefix}.${k}` : k) }),
+    {},
+  );
+}
+
+function pick(tree: unknown, path: string): unknown {
+  return path.split(".").reduce<unknown>((cur, p) => (cur as Record<string, unknown> | undefined)?.[p], tree);
+}
+
+describe("sessions.diff / sessions.panels / gitDiff — EN/DE", () => {
+  for (const ns of ["sessions.diff", "sessions.panels", "gitDiff"]) {
+    it(`${ns}: identical keys, no empty value`, () => {
+      const enKeys = flatten(pick(en, ns));
+      const deKeys = flatten(pick(de, ns));
+      expect(Object.keys(enKeys).length).toBeGreaterThan(0);
+      expect(Object.keys(deKeys).sort()).toEqual(Object.keys(enKeys).sort());
+      for (const [k, v] of Object.entries(deKeys)) {
+        expect(typeof v === "string" && v.trim().length > 0, `${ns}.${k} empty in DE`).toBe(true);
+      }
+    });
+  }
+
+  it("every source kind the backend sends has a label", () => {
+    for (const kind of ["task", "session", "recent"]) {
+      expect(typeof pick(en, `sessions.diff.kind.${kind}`)).toBe("string");
+      expect(typeof pick(de, `sessions.diff.kind.${kind}`)).toBe("string");
     }
   });
 });
