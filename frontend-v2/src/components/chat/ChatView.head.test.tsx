@@ -19,8 +19,10 @@ import { useChatStream } from "@/hooks/useChatStream";
 import { useHeadTranscript, useHeadTranscriptMeta } from "@/hooks/useHeadTranscript";
 import { api } from "@/lib/api";
 import { mkRun } from "@/lib/__tests__/headFixtures";
-import type { MessageEvent } from "@/lib/chatTypes";
+import type { MessageEvent, TimelineChatEvent } from "@/lib/chatTypes";
 import type { UseChatStreamResult } from "@/hooks/useChatStream";
+import historyClaude from "@/__fixtures__/heads/history-claude.json";
+import historyOmp from "@/__fixtures__/heads/history-omp.json";
 
 vi.mock("@/hooks/useChatStream", () => ({ useChatStream: vi.fn() }));
 vi.mock("@/hooks/useHeadTranscript", () => ({ useHeadTranscript: vi.fn(), useHeadTranscriptMeta: vi.fn() }));
@@ -184,6 +186,107 @@ describe("ChatView — head branch", () => {
     renderHead(mkRun({ state: "passed" }));
     expect(screen.getByTestId("head-no-transcript")).toBeInTheDocument();
     expect(screen.queryByText("noMessagesYet")).not.toBeInTheDocument();
+  });
+
+  it("re-rendering the SAME instance from no-head to a head never throws (Rules of Hooks — review finding on PR #756)", () => {
+    // Reproduces the real crash: `sessions/page.tsx` mounts `ChatView` with
+    // `head={selectedHeadRun}` while that run is still resolving (the
+    // Archive sheet's "tap a row" path — an archived run is never in the
+    // recent list — and every `?head=` deep link, since the recent list
+    // has not loaded on page load), so the SAME component instance
+    // re-renders from `head: null` to a real `head` a tick later. With the
+    // early-return guard positioned BEFORE the hooks below it (the
+    // previous shape of this component), that second render called more
+    // hooks than the first and React threw "Rendered more hooks than
+    // during the previous render" — caught here with the real component,
+    // no stub.
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { rerender } = render(
+      <QueryClientProvider client={qc}>
+        <ChatView
+          agent={null}
+          head={null}
+          hasTranscript={false}
+          detailLevel="normal"
+          onDetailLevelChange={vi.fn()}
+          centerView="chat"
+          onCenterViewChange={vi.fn()}
+          onBack={vi.fn()}
+        />
+      </QueryClientProvider>,
+    );
+    expect(screen.getByText("Pick a chat in the sidebar.")).toBeInTheDocument();
+
+    expect(() =>
+      rerender(
+        <QueryClientProvider client={qc}>
+          <ChatView
+            agent={null}
+            head={mkRun({ state: "running" })}
+            hasTranscript
+            detailLevel="normal"
+            onDetailLevelChange={vi.fn()}
+            centerView="chat"
+            onCenterViewChange={vi.fn()}
+            onBack={vi.fn()}
+          />
+        </QueryClientProvider>,
+      ),
+    ).not.toThrow();
+    expect(screen.getByTestId("chat-header")).toHaveAttribute("data-kind", "head");
+  });
+
+  // Harness-neutral guard (bauplan §3.3, review finding on PR #756): both
+  // fixtures are the REAL PR-1 `transcript.read()` output over
+  // `backend/tests/fixtures/heads/{claude-run,omp-run}` (regenerated with
+  // `app.services.heads.transcript.read`, already scrubbed/masked — see
+  // those fixtures' own docstring). Only the backend had two-harness
+  // coverage before this; `ChatView.head.test.tsx` itself rendered a
+  // single synthetic `MessageEvent` for both harnesses alike.
+  it.each([
+    ["claude", historyClaude],
+    ["omp", historyOmp],
+  ])("renders the real %s reader output — tool groups, thinking and messages all present", async (_harness, history) => {
+    mockUseHeadTranscript.mockReturnValue(
+      mkHeadStream({ events: history.events as unknown as TimelineChatEvent[], session: history.session as never }),
+    );
+    const { container } = renderHead(mkRun({ state: "passed", harness: _harness, model: "GLM-5.3-Flash-EXL3" }));
+
+    // A message rendered (markdown splits the text across several DOM
+    // nodes — `container.textContent` is the robust check, not a single
+    // `getByText`). The component mounts only the last `INITIAL_RENDER_
+    // WINDOW` timeline items first and joins the rest one animation frame
+    // later ("Tail first" — real transcripts, unlike the single synthetic
+    // `MSG` every other test here uses, are long enough to hit that
+    // window), so this waits for the full, deferred render.
+    const firstMessage = (history.events as { kind: string; role?: string; text?: string }[]).find(
+      (ev) => ev.kind === "message" && ev.role === "user",
+    );
+    expect(firstMessage?.text).toBeTruthy();
+    const needle = firstMessage!.text!.split("\n")[0].replace(/^#\s*/, "").trim();
+    await waitFor(() => expect(container.textContent).toContain(needle));
+
+    // A tool event rendered — either as its own `ToolRow` with its real
+    // title text visible (Claude's real transcript stamps a `usage` event
+    // after EVERY tool call, which closes the activity run at length 1
+    // every time, so nothing ever groups there) or folded into a
+    // `ToolGroup` chip, collapsed by default, which shows "N Tool(s)
+    // verwendet" instead of the individual titles (omp's real transcript:
+    // long uninterrupted tool/thinking runs). A real, harness-specific
+    // rendering difference this test deliberately does not paper over.
+    const firstTool = (history.events as { kind: string; title?: string }[]).find((ev) => ev.kind === "tool");
+    expect(firstTool?.title).toBeTruthy();
+    const toolGroups = screen.queryAllByTestId("tool-group");
+    if (toolGroups.length > 0) {
+      expect(toolGroups.some((g) => /Tool/.test(g.textContent ?? ""))).toBe(true);
+    } else {
+      expect(container.textContent).toContain(firstTool!.title);
+    }
+
+    // A thinking event rendered — grouped ("N× nachgedacht") or standalone
+    // ("Denkt nach…", `ThinkingRow`'s own collapsed label) — same
+    // either/or reasoning as the tool check above.
+    expect(/nachgedacht|Denkt nach/i.test(container.textContent ?? "")).toBe(true);
   });
 
   it("the back chevron calls onBack", async () => {

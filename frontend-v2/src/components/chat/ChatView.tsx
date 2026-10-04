@@ -620,14 +620,6 @@ export function ChatView({
      gezeigt — nicht zusaetzlich als eigene Zeile daneben. */
   const toolNotices = useMemo(() => notificationsByTool(stream.events), [stream.events]);
 
-  if (!agent && !head) {
-    return (
-      <div className="flex flex-1 items-center justify-center text-[13px]" style={{ color: C.textMuted }}>
-        {t("pickSession")}
-      </div>
-    );
-  }
-
   /* useMemo mit Grund: ein preview-Tick (alle 0.3 s ein replace-me-Event)
      erzeugt ein neues `stream`-Objekt, veraendert aber `events` nicht. Ohne
      Memo liefen filter + buildTimelineItems über den ganzen Verlauf bei JEDEM
@@ -674,6 +666,19 @@ export function ChatView({
     return null;
   }, [stream.events]);
 
+  // Fallback for `HeadChatFooter`'s "needs you" question: `run.question`
+  // (question.md) is the real answer, but the rare run that ended before
+  // writing one still needs the operator to see SOMETHING here rather than
+  // a bare answer field (review finding on PR #756) — the transcript's own
+  // last assistant message is the next best thing.
+  const lastAssistantMessage = useMemo(() => {
+    for (let i = stream.events.length - 1; i >= 0; i--) {
+      const ev = stream.events[i];
+      if (ev.kind === "message" && ev.role === "assistant" && ev.text?.trim()) return ev.text.trim();
+    }
+    return null;
+  }, [stream.events]);
+
   function jumpToBottom() {
     const el = scrollRef.current;
     if (!el) return;
@@ -711,6 +716,29 @@ export function ChatView({
   // focuses the composer synchronously inside the tap — iOS only opens the
   // keyboard for a focus that happens in the gesture itself.
   const rootRef = useRef<HTMLDivElement>(null);
+
+  // Moved here, AFTER every hook above (review finding on PR #756): every
+  // value computed since `stream` is already null/empty-safe for
+  // `agent: null, head: null` (`stream` itself comes from
+  // `useChatStream(null, false)`/`useHeadTranscript(null, null)`, each
+  // other's documented no-op), so gating only the JSX — not the hook
+  // calls — costs nothing. Guarding with an early `return` BEFORE the
+  // `useMemo`/`useRef`/`useEffect` calls above (the previous shape) broke
+  // the Rules of Hooks: the very first real-world case that re-renders
+  // this component from "no head yet" to "a head" on the SAME mount — the
+  // Archive sheet's own "tap a row" path (the run is not in the recent
+  // list, so `head` arrives one tick late from `sessions/page.tsx`'s
+  // fallback fetch) and every `?head=` deep link (the list has not loaded
+  // yet on page load) — threw "Rendered more hooks than during the
+  // previous render" (reproduced directly: render with `head={null}`, then
+  // re-render the SAME `ChatView` instance with a real `head`).
+  if (!agent && !head) {
+    return (
+      <div className="flex flex-1 items-center justify-center text-[13px]" style={{ color: C.textMuted }}>
+        {t("pickSession")}
+      </div>
+    );
+  }
 
   return (
     <div ref={rootRef} className="flex flex-col flex-1 min-h-0 overflow-hidden">
@@ -1177,7 +1205,7 @@ export function ChatView({
             // No StatusLine (that line is "is the AGENT's terminal alive",
             // meaningless for a head) and no Composer at all — the footer
             // below is the one surface a head's chat shows instead.
-            <HeadChatFooter run={head} />
+            <HeadChatFooter run={head} transcriptFallbackQuestion={lastAssistantMessage} />
           ) : (
             <>
               <StatusLine

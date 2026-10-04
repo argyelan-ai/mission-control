@@ -910,6 +910,17 @@ describe("SessionSidebar — Heads-Sektion", () => {
     expect(screen.queryByTestId("heads-archive-button")).not.toBeInTheDocument();
   });
 
+  // Review finding on PR #756 (K10, "Pro Ansicht eine Sprache"): the agent
+  // list's own empty state was hardcoded German ("Keine Sessions aktiv.")
+  // right under a running or waiting head in the English UI.
+  it("the agent-sessions empty state is i18n'd, English UI, never the hardcoded German string", () => {
+    renderWithClient(
+      <SessionSidebar {...sidebarBase} agents={[]} heads={[mkRun({ state: "running" })]} onSelectHead={() => {}} />,
+    );
+    expect(screen.getByText("No agent sessions.")).toBeInTheDocument();
+    expect(screen.queryByText("Keine Sessions aktiv.")).not.toBeInTheDocument();
+  });
+
   it("the Heads section is hidden on the Groups tab (showGroups === true)", async () => {
     renderWithClient(
       <SessionSidebar

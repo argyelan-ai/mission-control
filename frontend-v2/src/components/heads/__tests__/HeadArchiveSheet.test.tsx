@@ -71,4 +71,17 @@ describe("HeadArchiveSheet", () => {
     expect(onSelectHead).toHaveBeenCalledWith("archived-1");
     expect(onClose).toHaveBeenCalled();
   });
+
+  // Review finding on PR #756 (DESIGN.md K11, touch targets ≥44px): the
+  // close button was 36px (`w-9 h-9`) with `aria-label="Archive"` — the
+  // sheet's own TITLE, not a close action.
+  it("the close button meets the 44px touch target and is labelled as a close action, not the sheet's title", async () => {
+    vi.spyOn(api.heads, "list").mockResolvedValue({ runs: [] });
+    renderSheet();
+    const close = await screen.findByTestId("head-archive-close");
+    expect(close.className).toMatch(/min-w-touch/);
+    expect(close.className).toMatch(/min-h-touch/);
+    expect(close).toHaveAccessibleName("Close");
+    expect(close).not.toHaveAccessibleName("Archive");
+  });
 });

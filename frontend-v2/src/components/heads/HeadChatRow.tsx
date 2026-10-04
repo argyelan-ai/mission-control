@@ -12,7 +12,7 @@ import { useLocale, useTranslations } from "next-intl";
 import { ChevronRight } from "lucide-react";
 import { C } from "@/lib/colors";
 import { StatusDot } from "@/components/shared/StatusDot";
-import { formatAge, formatDuration } from "@/lib/taskDetail/format";
+import { formatAgeRounded, formatDuration } from "@/lib/taskDetail/format";
 import { headListTitle, headStateKey, pairShort, runDurationSeconds, type HeadRun } from "@/lib/heads";
 
 /** Dot per state (bauplan §3.2): needs_you = accent (the one thing asking
@@ -58,10 +58,15 @@ export function HeadChatRow({ run, selected, onSelect, variant = "rail" }: HeadC
   const pair = pairShort(run);
   let line2: string;
   if (run.state === "needs_you") {
-    // One word, no pair, no time — the dot already says "urgent", adding a
-    // second segment here would be exactly the "Frage offen" duplicate the
-    // prototype review flagged (anhang.md H).
-    line2 = t(headStateKey(run.state));
+    // The pair + exactly ONE state word — never a second word for the
+    // same state on top of it (the prototype review's actual finding,
+    // anhang.md H: "braucht dich · Frage offen" is ONE state in two
+    // words). Dropping the pair entirely here (as an earlier revision
+    // did, citing K15) was an over-correction: K15 itself is "nicht
+    // gesetzt" (anhang.md H — a proposal, not an adopted rule), and
+    // without the pair there is no way to tell, from this row alone,
+    // which harness the waiting head is running on.
+    line2 = `${pair} · ${t(headStateKey(run.state))}`;
   } else if (run.state === "starting") {
     line2 = `${pair} · ${t("time.startingNow")}`;
   } else if (run.state === "running") {
@@ -69,12 +74,14 @@ export function HeadChatRow({ run, selected, onSelect, variant = "rail" }: HeadC
     const duration = seconds != null ? formatDuration(seconds, locale) : null;
     line2 = duration ? `${pair} · ${t("time.runningFor", { duration })}` : pair;
   } else {
-    // Ended: the state word carries the outcome, the pair would be the
-    // second dimension K15 is proposing against — bauplan's own examples
-    // ("· bestanden · vor 3 Tagen") drop the pair here too.
+    // Ended: pair + state word + age — the approved mockup's own example
+    // ("Claude Code × GLM-5.3 · bestanden · vor 3 Tagen") keeps the pair
+    // here too, same reasoning as needs_you above.
     const endedAt = run.exited_at ?? run.created_at;
-    const age = formatAge(endedAt, locale);
-    line2 = age ? `${t(headStateKey(run.state))} · ${t("time.ago", { age })}` : t(headStateKey(run.state));
+    const age = formatAgeRounded(endedAt, locale);
+    line2 = age
+      ? `${pair} · ${t(headStateKey(run.state))} · ${t("time.ago", { age })}`
+      : `${pair} · ${t(headStateKey(run.state))}`;
   }
 
   return (

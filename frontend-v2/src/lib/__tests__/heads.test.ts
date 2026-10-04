@@ -235,7 +235,7 @@ describe("modelFamily", () => {
 });
 
 describe("pairShort", () => {
-  it("harness label × model family, joined with the Mark word", () => {
+  it("harness label × model family, joined with the operator's pair word", () => {
     expect(pairShort({ harness: "omp", model: "GLM-5.3-Flash-EXL3" })).toBe("omp × GLM-5.3");
     expect(pairShort({ harness: "claude", model: "claude-opus-4-7" })).toBe("Claude Code × claude-opus-4-7");
   });
@@ -269,6 +269,21 @@ describe("parseStep", () => {
   it("parses it without the leading word too", () => {
     expect(parseStep("5/7 independent review · waiting for: reviewer")).toEqual({
       n: 5, total: 7, name: "independent review", waitingFor: "reviewer",
+    });
+  });
+
+  // Review finding on PR #756: live-checked against every real step.txt on
+  // disk (24 heads) — 3 did not parse (2 missing "/total", 1 missing the
+  // "waiting for:" clause entirely). Both real forms below.
+  it("defaults total to 7 when step.txt omits '/total' (real form, 2/24 on disk)", () => {
+    expect(parseStep("step 7 finished · waiting for: nothing")).toEqual({
+      n: 7, total: 7, name: "finished", waitingFor: "nothing",
+    });
+  });
+
+  it("parses a trailing clause that isn't 'waiting for:' — waitingFor is null, not a mis-read (real form, 1/24 on disk)", () => {
+    expect(parseStep("step 7/7 done · run record written")).toEqual({
+      n: 7, total: 7, name: "done", waitingFor: null,
     });
   });
 

@@ -490,7 +490,7 @@ export function modelFamily(model: string | null | undefined): string {
   return out || model;
 }
 
-/** "omp × GLM-5.3" (Mark's word for the pair, ADR-086 §5) — the SHORT form
+/** "omp × GLM-5.3" (the operator's word for the pair, ADR-086 §5) — the SHORT form
  *  for a list row or a chat header, where `pairLabel`'s "harness · full
  *  runtime name" would not fit. Deliberately a separate function rather
  *  than changing `pairLabel`'s own separator or shortening: that change is
@@ -520,21 +520,37 @@ export function headListTitle(run: Pick<HeadRun, "title">): string {
  *  `{n, total, name, waitingFor}`. `null` for anything that does not match
  *  that shape — an older/garbled `step.txt` must never be guessed at, it
  *  just renders as "no step reported yet" (existing `card.noStep` key),
- *  same contract `headStateKey`/`failReasonKey` already follow. */
+ *  same contract `headStateKey`/`failReasonKey` already follow.
+ *
+ *  Two parts of the line are optional in practice (review finding on
+ *  PR #756, live-checked against every real `step.txt` on disk — 3 of 24
+ *  did not parse before this): the `/total` half ("step 7 finished ·
+ *  waiting for: nothing" — `total` then defaults to 7, the fixed step
+ *  count) and the literal "waiting for: …" clause itself ("step 7/7 done ·
+ *  run record written" — a different trailing clause after the same "·"
+ *  separator; `waitingFor` is `null` then). The "·" separator itself stays
+ *  REQUIRED: that is what still rejects genuinely truncated input (e.g. a
+ *  step line caught mid-write, before its trailing clause was flushed) —
+ *  `"4/7 sabotage probe"` has no "·" anywhere and correctly stays `null`. */
 export interface ParsedStep {
   n: number;
   total: number;
   name: string;
-  waitingFor: string;
+  waitingFor: string | null;
 }
 
-const STEP_RE = /^(?:step\s+)?(\d+)\s*\/\s*(\d+)\s+(.+?)\s*·\s*waiting for:\s*(.+?)\s*$/i;
+const STEP_RE = /^(?:step\s+)?(\d+)(?:\s*\/\s*(\d+))?\s+(.+?)\s*·\s*(?:waiting for:\s*(.+?)|.+?)\s*$/i;
 
 export function parseStep(step: string | null | undefined): ParsedStep | null {
   if (!step) return null;
   const m = STEP_RE.exec(step.trim());
   if (!m) return null;
-  return { n: Number(m[1]), total: Number(m[2]), name: m[3].trim(), waitingFor: m[4].trim() };
+  return {
+    n: Number(m[1]),
+    total: m[2] ? Number(m[2]) : 7,
+    name: m[3].trim(),
+    waitingFor: m[4] ? m[4].trim() : null,
+  };
 }
 
 /** The 8 fixed steps of the head procedure (`~/.claude/skills/

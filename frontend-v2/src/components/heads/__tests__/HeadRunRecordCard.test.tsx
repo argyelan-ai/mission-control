@@ -84,6 +84,28 @@ describe("HeadRunRecordCard", () => {
     expect(screen.queryByTestId("head-run-record-card")).not.toBeInTheDocument();
   });
 
+  it("fact values wrap instead of truncating, and the label never does (DESIGN.md K3)", async () => {
+    vi.spyOn(api.heads, "summary").mockResolvedValue({
+      ...FULL,
+      tests: { failed_before: "ModuleNotFoundError: app.services.heads.transcript — no module named transcript_adapters", passed_after: null },
+    });
+    renderCard();
+    const value = await screen.findByText(/ModuleNotFoundError/);
+    expect(value.className).toMatch(/break-words/);
+    expect(value.className).not.toMatch(/\btruncate\b/);
+    const label = screen.getByText("Red before");
+    expect(label.className).toMatch(/whitespace-nowrap/);
+    expect(label.className).toMatch(/shrink-0/);
+  });
+
+  it("the copy-branch button meets the 44px touch target (DESIGN.md K11)", async () => {
+    vi.spyOn(api.heads, "summary").mockResolvedValue(FULL);
+    renderCard();
+    const button = await screen.findByTestId("head-record-copy-branch");
+    expect(button.className).toMatch(/min-w-touch/);
+    expect(button.className).toMatch(/min-h-touch/);
+  });
+
   it("'Open the full run record' lazily fetches the raw markdown", async () => {
     vi.spyOn(api.heads, "summary").mockResolvedValue(FULL);
     const runRecord = vi.spyOn(api.heads, "runRecord").mockResolvedValue("# Run record\n\nfull text");

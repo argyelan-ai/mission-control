@@ -21,9 +21,15 @@ import { prNumberFromUrl } from "@/lib/heads";
 
 function Fact({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-baseline justify-between gap-3 py-1 text-xs">
-      <span style={{ color: C.textMuted }}>{label}</span>
-      <span className="text-right min-w-0 truncate" style={{ color: C.textSecondary }}>{value}</span>
+    // Review finding on PR #756 (DESIGN.md K3, "nur beim Titel [kürzen]"):
+    // the VALUE used to `truncate` (cut mid-word at 393px — a test command
+    // or a run-record result line is exactly the kind of fact that does not
+    // fit one line) while the LABEL wrapped onto two instead. Flipped: the
+    // label is the short, fixed part (`shrink-0`, never wraps), the value
+    // is the one allowed to grow and wrap onto more than one line.
+    <div className="flex items-start justify-between gap-3 py-1 text-xs">
+      <span className="shrink-0 whitespace-nowrap" style={{ color: C.textMuted }}>{label}</span>
+      <span className="text-right min-w-0 break-words" style={{ color: C.textSecondary }}>{value}</span>
     </div>
   );
 }
@@ -96,7 +102,7 @@ export function HeadRunRecordCard({ runId }: { runId: string }) {
                 notify.error(t("errors.unknown"));
               }
             }}
-            className="shrink-0 flex items-center justify-center w-7 h-7 rounded-md cursor-pointer"
+            className="shrink-0 flex items-center justify-center min-w-touch min-h-touch -m-2 rounded-md cursor-pointer"
             style={{ color: C.textSecondary }}
           >
             <Copy size={13} aria-hidden />

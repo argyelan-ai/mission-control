@@ -352,7 +352,7 @@ export function SessionSidebar({
       )}
       {!showGroups && groups.length === 0 && (
         <div className="px-4 py-8 text-[13px]" style={{ color: C.textMuted }}>
-          Keine Sessions aktiv.
+          {t("noAgentSessions")}
         </div>
       )}
       {!showGroups && groups.map((group) => (

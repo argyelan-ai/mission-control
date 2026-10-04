@@ -24,6 +24,7 @@ import { notify } from "@/lib/notify";
 import { useTerminalRemountSignal } from "@/hooks/useTerminalRemountSignal";
 import { rememberChat } from "@/lib/recentChats";
 import { useHeadRuns } from "@/components/heads/useHeadRuns";
+import { HeadChatPlaceholder } from "@/components/heads/HeadChatPlaceholder";
 import { sortHeadsForList, type HeadRun } from "@/lib/heads";
 
 // ── Last-selected-agent persistence ─────────────────────────────────────────
@@ -279,20 +280,40 @@ function SessionsPageContent() {
   // recent_days=" fetch (bauplan §3.2: "nie je Zeile abfragen"); `null`
   // while the launcher is off or the probe hasn't resolved yet, same as
   // every other heads consumer.
-  const { runs: headRuns, archivedCount: headArchivedCount } = useHeadRuns();
+  const { runs: headRuns, archivedCount: headArchivedCount, isLoading: headRunsLoading } = useHeadRuns();
   const sortedHeadRuns = useMemo(() => sortHeadsForList(headRuns), [headRuns]);
   // The SELECTED head's own full record: usually already in `headRuns`
   // (most runs are inside the 7-day window), but a run opened from the
   // Archive sheet is not — this one-off fetch covers exactly that case
   // without a second poll for the common one.
   const headFromRecent = selectedHeadId ? headRuns.find((r) => r.run_id === selectedHeadId) ?? null : null;
-  const { data: headFetched = null } = useQuery({
+  const {
+    data: headFetched = null,
+    isLoading: headFetchedLoading,
+  } = useQuery({
     queryKey: ["heads", selectedHeadId],
     queryFn: () => api.heads.get(selectedHeadId as string),
     enabled: !!selectedHeadId && !headFromRecent,
     staleTime: 30_000,
+    // A 404 (deleted/cleaned-up run, or a stale `?head=` link) is a real
+    // answer, not a transient failure — retrying would only delay the
+    // "not found" state below, never fix it.
+    retry: false,
   });
   const selectedHeadRun: HeadRun | null = headFromRecent ?? headFetched;
+  // `selectedHeadId` is set (by `handleSelectHead`/the `?head=` deep-link
+  // effect below) BEFORE `selectedHeadRun` resolves, in two real cases: the
+  // Archive sheet's own row tap (an archived run is never in `headRuns`)
+  // and every `?head=` link (the recent list has not loaded on page load
+  // yet). Rendering `ChatView` with `head={null}` during that gap used to
+  // fall straight into its generic "pick a session" copy — chromeless, no
+  // header, no back chevron, on the phone — and, before `ChatView`'s own
+  // hooks-order fix, crash outright the moment the real run arrived a tick
+  // later on the SAME mounted instance (review finding on PR #756). These
+  // two flags swap in `HeadChatPlaceholder` for that gap instead.
+  const headStillResolving =
+    !!selectedHeadId && !selectedHeadRun && (headRunsLoading || (!headFromRecent && headFetchedLoading));
+  const headNotFound = !!selectedHeadId && !selectedHeadRun && !headStillResolving;
 
   const agents: AgentWithState[] = [...dockerAgents, ...hostAgents];
 
@@ -643,21 +664,27 @@ function SessionsPageContent() {
             data-testid="chat-column"
           >
             {selectedHeadId ? (
-              // Head chat — read-only (ADR-085 Nachtrag 2026-10-04 §4).
-              // `key` on the run id, same reasoning as the agent branch
-              // below: a different run is a different transcript, never a
-              // seamless continuation of the one on screen.
-              <ChatView
-                key={selectedHeadId}
-                agent={null}
-                head={selectedHeadRun}
-                hasTranscript
-                detailLevel={detailLevel}
-                onDetailLevelChange={setDetailLevel}
-                centerView="chat"
-                onCenterViewChange={() => {}}
-                onBack={backToList}
-              />
+              headStillResolving ? (
+                <HeadChatPlaceholder key={selectedHeadId} variant="loading" onBack={backToList} />
+              ) : headNotFound ? (
+                <HeadChatPlaceholder key={selectedHeadId} variant="not_found" onBack={backToList} />
+              ) : (
+                // Head chat — read-only (ADR-085 Nachtrag 2026-10-04 §4).
+                // `key` on the run id, same reasoning as the agent branch
+                // below: a different run is a different transcript, never a
+                // seamless continuation of the one on screen.
+                <ChatView
+                  key={selectedHeadId}
+                  agent={null}
+                  head={selectedHeadRun}
+                  hasTranscript
+                  detailLevel={detailLevel}
+                  onDetailLevelChange={setDetailLevel}
+                  centerView="chat"
+                  onCenterViewChange={() => {}}
+                  onBack={backToList}
+                />
+              )
             ) : selectedGroupId && selectedGroup ? (
               // Gruppenraum statt 1:1-Chat — gleiche Insel, andere Ansicht.
               // `key` auf der Gruppen-id, damit ein Wechsel den Strom sauber

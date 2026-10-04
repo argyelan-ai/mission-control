@@ -55,9 +55,9 @@ export function HeadArchiveSheet({ open, onClose, onSelectHead, selectedHeadId =
           <button
             type="button"
             onClick={onClose}
-            aria-label={t("list.archiveTitle")}
+            aria-label={t("list.close")}
             data-testid="head-archive-close"
-            className="shrink-0 flex items-center justify-center w-9 h-9 rounded-md cursor-pointer"
+            className="shrink-0 flex items-center justify-center min-w-touch min-h-touch -m-1 rounded-md cursor-pointer"
             style={{ color: C.textMuted }}
           >
             <X size={16} aria-hidden />

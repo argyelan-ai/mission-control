@@ -66,18 +66,44 @@ def _bullet(section: str, label: str) -> str | None:
     exact "``- Field: value``" shape every template bullet uses — a record
     that instead free-writes the result as plain prose (no leading ``- X:``)
     is a record this function correctly does not understand, rather than one
-    it mis-reads."""
+    it mis-reads. Anchored at the START of the bullet (``^-\\s*Label\\s*:``),
+    never a bare "contains" search — a label that is merely MENTIONED inside
+    an earlier, unrelated bullet's free text (e.g. "``- Quota: … no
+    helpers``" ahead of the real "``- Helpers: 2``" bullet) must never be
+    mistaken for the labelled bullet itself (review finding on PR #756)."""
     m = re.search(rf"(?mi)^-[ \t]*{re.escape(label)}[ \t]*:[ \t]*(.+)$", section)
     return m.group(1).strip() or None if m else None
 
 
+def _bullet_any(section: str, *labels: str) -> str | None:
+    """``_bullet`` over several labels, first match wins — the in-repo
+    template (`backend/templates/heads/head-AGENTS.md`) renamed several
+    fields from the older personal-skill template
+    (``~/.claude/skills/head-procedure/templates/run-record.md``); both
+    wordings are accepted so neither a pre-rename run record nor a future
+    template edit silently goes back to all-``None`` (review finding on
+    PR #756: every real run on disk used the NEW labels, which the old
+    parser never matched at all)."""
+    for label in labels:
+        value = _bullet(section, label)
+        if value is not None:
+            return value
+    return None
+
+
 def _after_arrow(value: str | None) -> str | None:
-    """"`<command>` → <key line>" → just the key line. A bullet with no
-    arrow at all is returned whole (some runs write the result directly, no
-    arrow needed) rather than discarded."""
+    """"`<command>` → <key line>" → just the key line, split at the FIRST
+    arrow (not the last): a real run's bullet often carries more than one
+    "``<command>`` → ``<result>``" pair on the same line (e.g. a quick
+    command's result, then "full suite `...` → ..." after it) — splitting
+    on the LAST arrow silently discarded the actual first result and kept
+    only a trailing aside (review finding on PR #756, reproduced on a real
+    "Green after" bullet). A bullet with no arrow at all is returned whole
+    (some runs write the result directly, no arrow needed) rather than
+    discarded."""
     if value is None:
         return None
-    return value.rsplit("→", 1)[-1].strip() or None
+    return value.split("→", 1)[-1].strip() or None
 
 
 #: Bullet values the template itself uses for "this step was skipped" —
@@ -87,18 +113,36 @@ _NEGATIVE = {"none", "n/a", "na", "not performed", "not done", "skipped", "no"}
 
 
 def _sabotage(section: str) -> bool | None:
-    value = _bullet(section, "Sabotage probe")
+    value = _bullet_any(section, "Sabotage check", "Sabotage probe")
     if value is None:
         return None
     return value.strip().lower() not in _NEGATIVE
 
 
 def _review(section: str) -> str | None:
-    """"``Reviewer (fresh subagent): PASSED — …``" → ``"helper"``;
-    "``Reviewer (self): …``" (a record that says so explicitly, never the
-    template's own default wording) → ``"self"``. Whether that review
-    PASSED or FAILED is not this field's job — ``result_line``/``status``
-    already carry the run's outcome; this one only answers "who looked"."""
+    """Two template generations, two shapes:
+
+    - in-repo (`backend/templates/heads/head-AGENTS.md`): a free-text
+      ``- Review: <fresh helper PASSED/FAILED | self-review> — …`` bullet.
+      "starts with self" → ``"self"`` (real runs write "self, no helper
+      available …" — the word "helper" also appears LATER in that same
+      sentence, so this must be checked before the "helper" substring
+      check below, not instead of it); otherwise "helper" anywhere in the
+      bullet → ``"helper"``.
+    - older personal-skill template: "``Reviewer (fresh subagent):
+      PASSED — …``" → ``"helper"``; "``Reviewer (self): …``" → ``"self"``.
+
+    Either way, whether that review PASSED or FAILED is not this field's
+    job — ``result_line``/``status`` already carry the run's outcome; this
+    one only answers "who looked"."""
+    value = _bullet(section, "Review")
+    if value is not None:
+        v = value.strip().lower()
+        if v.startswith("self"):
+            return "self"
+        if "helper" in v:
+            return "helper"
+        return None
     m = re.search(r"(?mi)^-[ \t]*Reviewer[ \t]*\(([^)]*)\)[ \t]*:", section)
     if not m:
         return None
@@ -113,28 +157,67 @@ def _bypass(section: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
-def _table_int(section: str, row_label: str, after: str) -> int | None:
-    """The run record's two counters live in the ``## Numbers`` markdown
-    table, each as free text inside one cell (`"head estimate: <n> min (…)"`,
-    `"<n> subagents · <m> local steps"`) rather than their own column — so
-    the row is found by its label, and the number by the fixed word
-    immediately in front of it, on that same line (a markdown table row is
-    always one line)."""
-    m = re.search(rf"(?mi)^.*{re.escape(row_label)}.*$", section)
-    if not m:
-        return None
-    n = re.search(rf"{re.escape(after)}[ \t]*(\d+)", m.group(0), re.IGNORECASE)
-    return int(n.group(1)) if n else None
+#: In-repo template: plain bullets, anchored at the start of the line —
+#: ``- Helpers: <n>`` / ``- Operator minutes (estimate): <n>`` (the
+#: "(estimate)" qualifier is part of the label, optional only because an
+#: older run record may have been written before it was added to the
+#: template). A leading ``~`` ("~25") is allowed before the digits — the
+#: template's own "estimate" wording invites an approximate number.
+_HELPERS_RE = re.compile(r"(?mi)^-[ \t]*Helpers[ \t]*:[ \t]*~?[ \t]*(\d+)")
+_OPERATOR_MINUTES_RE = re.compile(
+    r"(?mi)^-[ \t]*Operator minutes(?:[ \t]*\(estimate\))?[ \t]*:[ \t]*~?[ \t]*(\d+)"
+)
+#: Older personal-skill template: a ``## Numbers`` MARKDOWN TABLE, one row
+#: per fact, the number free-text inside the cell rather than its own
+#: column (`"<n> subagents · <m> local steps"`, `"head estimate: <n> min
+#: (…)"`) — so the row is found by its label, anchored at the start of the
+#: table row (never a bare "contains" search: an earlier, unrelated row can
+#: mention the same word in its own free text, e.g. a "Quota" row that ends
+#: "… no helpers" ahead of the real "Helpers" row — review finding on
+#: PR #756, reproduced on a real run record), and the number by the fixed
+#: word immediately in front of it, on that same line.
+_HELPERS_TABLE_RE = re.compile(r"(?mi)^\|[ \t]*Helpers[ \t]*\|[ \t]*(\d+)")
+_OPERATOR_MINUTES_TABLE_RE = re.compile(
+    r"(?mi)^\|[ \t]*Operator minutes[ \t]*\|[ \t]*.*?estimate:[ \t]*(\d+)"
+)
 
 
-def _kz_ok(sections: dict[str, str]) -> bool | None:
-    """The run's own context brief, not a separate field: step 0 of the head
-    procedure either pastes the real ``kz brief`` output in, or — when the
-    tool was unavailable — copies the literal line "``kz brief
-    unavailable: …``" into this same section (`head-AGENTS.md` §0's own
-    instruction). A record with no context-brief-named section at all
-    (older runs, or one that ended before step 0 finished) answers
-    ``None`` — there is nothing here to call ok or not."""
+def _first_int(section: str, *patterns: re.Pattern[str]) -> int | None:
+    for pattern in patterns:
+        m = pattern.search(section)
+        if m:
+            return int(m.group(1))
+    return None
+
+
+def _kz_ok(evidence: str, sections: dict[str, str]) -> bool | None:
+    """The in-repo template's own ``- kz check: …`` bullet (Evidence
+    section) is the real signal — "a pasted output, last line e.g. 'OK (4
+    skipped)' | red lines + 'Known limits' in the PR | no .kohaerenz.yaml |
+    unavailable: …" (`head-AGENTS.md`'s own template line). The card used to
+    read this from the unrelated "kz brief: …" line in the Context brief
+    instead (a review finding on PR #756: that line answers "was step 0's
+    research brief available", not "did the push-time kz check pass" — a
+    run whose Context brief had a real brief but whose later kz check
+    actually failed still showed "kz check: Yes").
+
+    ``unavailable``/``no .kohaerenz.yaml`` → ``None`` (nothing to call ok or
+    not). Otherwise OK only when the pasted output actually SAYS so (an
+    "OK" token, typically at the end of a "``-> OK``"/"``→ OK``" line) —
+    never the default: a red kz check with no "OK" anywhere in the pasted
+    text must read as failed, not silently "Yes" (the exact PR #756
+    finding)."""
+    value = _bullet(evidence, "kz check")
+    if value is not None:
+        v = value.strip().lower()
+        if "unavailable" in v or "no .kohaerenz.yaml" in v or "no kohaerenz.yaml" in v:
+            return None
+        return bool(re.search(r"(?:^|[\s(>-])ok\b", v)) and "not ok" not in v
+
+    # Older personal-skill template never had a dedicated kz-check bullet —
+    # fall back to the pre-existing heuristic (a Context-brief section
+    # present, without its own "kz brief unavailable: …" line) so a record
+    # written before this field existed does not regress to `None`.
     for name, body in sections.items():
         if "context brief" in name:
             return "kz brief unavailable" not in body.lower()
@@ -163,8 +246,10 @@ def build_summary(run: Any) -> dict[str, Any]:
     m = re.search(r"(?m)^-[ \t]*(.+)$", result)
     result_line = mask_text(m.group(1).strip(), extra) if m else None
 
-    failed_before = mask_text(t, extra) if (t := _after_arrow(_bullet(evidence, "Red test before"))) else None
-    passed_after = mask_text(t, extra) if (t := _after_arrow(_bullet(evidence, "Green after"))) else None
+    failed_before_raw = _bullet_any(evidence, "Failing test before", "Red test before")
+    passed_after_raw = _bullet_any(evidence, "Green after")
+    failed_before = mask_text(t, extra) if (t := _after_arrow(failed_before_raw)) else None
+    passed_after = mask_text(t, extra) if (t := _after_arrow(passed_after_raw)) else None
 
     return {
         "run_id": run.run_id,
@@ -172,11 +257,11 @@ def build_summary(run: Any) -> dict[str, Any]:
         "result_line": result_line,
         "tests": {"failed_before": failed_before, "passed_after": passed_after},
         "sabotage": _sabotage(evidence),
-        "kz_ok": _kz_ok(sections),
+        "kz_ok": _kz_ok(evidence, sections),
         "review": _review(evidence),
         "bypass": _bypass(evidence),
-        "operator_minutes": _table_int(numbers, "Operator minutes", "estimate:"),
-        "helpers": _table_int(numbers, "Helpers", ""),
+        "operator_minutes": _first_int(numbers, _OPERATOR_MINUTES_RE, _OPERATOR_MINUTES_TABLE_RE),
+        "helpers": _first_int(numbers, _HELPERS_RE, _HELPERS_TABLE_RE),
         "branch": run.spec.get("branch") if isinstance(run.spec, dict) else None,
         "pr_url": run.pr_url,
     }

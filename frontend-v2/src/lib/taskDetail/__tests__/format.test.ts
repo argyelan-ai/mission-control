@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatDuration, secondsBetween, formatUsd, parseTs } from "../format";
+import { formatDuration, formatAgeRounded, secondsBetween, formatUsd, parseTs } from "../format";
 
 describe("parseTs", () => {
   it("reads a naive backend timestamp as UTC, not local time", () => {
@@ -49,6 +49,31 @@ describe("secondsBetween", () => {
   });
   it("returns null without a start", () => {
     expect(secondsBetween(null, "2026-09-20T10:00:00")).toBeNull();
+  });
+});
+
+describe("formatAgeRounded", () => {
+  it("rounds to a single unit instead of formatDuration's floored two-unit combo (review finding on PR #756)", () => {
+    const now = new Date("2026-10-04T12:00:00Z");
+    // 2 d 23 h — formatDuration would floor this to "2 d 23 h"; K10's
+    // relative-time form wants the nearest whole day, "3 d".
+    const ts = "2026-10-01T13:00:00Z";
+    expect(formatAgeRounded(ts, "en", now)).toBe("3 d");
+    expect(formatDuration(secondsBetween(ts, null, now)!, "en")).toBe("2 d 23 h");
+  });
+  it("picks the dominant unit at each boundary", () => {
+    const now = new Date("2026-10-04T12:00:00Z");
+    expect(formatAgeRounded("2026-10-04T11:50:00Z", "en", now)).toBe("10 min");
+    expect(formatAgeRounded("2026-10-04T09:10:00Z", "en", now)).toBe("3 h");
+    expect(formatAgeRounded("2026-10-04T11:59:40Z", "en", now)).toBe("20 s");
+  });
+  it("uses the locale's day unit, same as formatDuration", () => {
+    const now = new Date("2026-10-04T12:00:00Z");
+    expect(formatAgeRounded("2026-10-01T12:00:00Z", "de", now)).toBe("3 T");
+  });
+  it("returns null without a parseable timestamp", () => {
+    expect(formatAgeRounded(null)).toBeNull();
+    expect(formatAgeRounded(undefined)).toBeNull();
   });
 });
 

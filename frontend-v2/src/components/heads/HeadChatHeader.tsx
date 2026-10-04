@@ -15,7 +15,7 @@
 import { useLocale, useTranslations } from "next-intl";
 import { ChevronLeft } from "lucide-react";
 import { C } from "@/lib/colors";
-import { formatAge, formatDuration } from "@/lib/taskDetail/format";
+import { formatAgeRounded, formatDuration } from "@/lib/taskDetail/format";
 import { headListTitle, headStateKey, pairShort, runDurationSeconds, type HeadRun } from "@/lib/heads";
 
 /** Same visual weight as `ChatView`'s own back chevron (36px circle, 44px
@@ -32,7 +32,11 @@ export function HeadChatHeader({ head, onBack }: { head: HeadRun; onBack?: () =>
   const pair = pairShort(head);
   let contextLine: string;
   if (head.state === "needs_you") {
-    contextLine = t(headStateKey(head.state));
+    // Pair + exactly one state word — same rule as `HeadChatRow`'s own
+    // needs_you line (review finding on PR #756: dropping the pair here
+    // left no way to tell, from the header alone, which harness is
+    // waiting on the operator).
+    contextLine = `${pair} · ${t(headStateKey(head.state))}`;
   } else if (head.state === "starting") {
     contextLine = `${pair} · ${t("time.startingNow")}`;
   } else if (head.state === "running") {
@@ -40,8 +44,10 @@ export function HeadChatHeader({ head, onBack }: { head: HeadRun; onBack?: () =>
     const duration = seconds != null ? formatDuration(seconds, locale) : null;
     contextLine = duration ? `${pair} · ${t("time.runningFor", { duration })}` : pair;
   } else {
-    const age = formatAge(head.exited_at ?? head.created_at, locale);
-    contextLine = age ? `${t(headStateKey(head.state))} · ${t("time.ago", { age })}` : t(headStateKey(head.state));
+    const age = formatAgeRounded(head.exited_at ?? head.created_at, locale);
+    contextLine = age
+      ? `${pair} · ${t(headStateKey(head.state))} · ${t("time.ago", { age })}`
+      : `${pair} · ${t(headStateKey(head.state))}`;
   }
 
   return (

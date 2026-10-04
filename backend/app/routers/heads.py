@@ -311,7 +311,15 @@ async def list_heads(
     window_s = (recent_days if recent_days is not None else RECENT_DAYS_DEFAULT) * 86400
 
     def is_recent(view: dict) -> bool:
-        return view["state"] in ACTIVE_STATES or (now - _ended_ts(view)) < window_s
+        # `needs_you` is a FINAL state in `state.py` (it has an `exited_at`,
+        # like passed/failed/stopped) but it is NOT done — the operator is
+        # blocked on it. Treating it like any other ended state let a head
+        # that has waited 7+ days for an answer silently fall out of the
+        # Heads section into the Archive sheet (review finding on PR #756);
+        # the Inbox still showed it, so it never looked "lost", just buried
+        # one tap deeper than the one place "needs you" is meant to stay on
+        # top of.
+        return view["state"] in ACTIVE_STATES or view["state"] == "needs_you" or (now - _ended_ts(view)) < window_s
 
     if archived:
         return {"runs": [v for v in out if not is_recent(v)]}
@@ -418,11 +426,20 @@ async def get_head_summary(run_id: str):
 
 @router.get("/{run_id}/run-record", dependencies=[Depends(require_role(Role.VIEWER))])
 async def get_head_run_record(run_id: str):
+    """Review finding on PR #756: ``summary.py`` masks ``result_line``/the
+    two ``tests`` strings precisely because a run record can carry prose
+    copied out of a transcript-adjacent file — but this plain-markdown
+    endpoint (the "Open the full run record" button one tap below the
+    summary card) handed the SAME file back unmasked, so a secret the card
+    had just hidden would show verbatim here. Same mask, same `head.env`
+    values, as `/log` already does for this run's log tail."""
     _enabled()
     run = _load(run_id)
     if not run.run_record_text:
         raise _err(404, "run_record_missing")
-    return PlainTextResponse(run.run_record_text, media_type="text/markdown")
+    from app.services.heads.redact import head_env_values
+
+    return PlainTextResponse(mask_text(run.run_record_text, head_env_values(run)), media_type="text/markdown")
 
 
 @router.post("/{run_id}/stop", status_code=202, dependencies=[Depends(require_role(Role.OPERATOR))])

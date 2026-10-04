@@ -1,7 +1,10 @@
 /**
  * HeadChatRow — the Chats list row for a head (bauplan `heads-sichtbar`
- * PR 2 §3.2). One state word / time segment per line (K15), pair shown for
- * active runs, dropped for ended ones.
+ * PR 2 §3.2). Pair + exactly one state-word segment per line, for every
+ * state including needs_you/ended (review finding on PR #756: the pair was
+ * dropped there entirely, citing an un-adopted rule proposal, K15 — see
+ * anhang.md H — leaving no way to tell which harness ran a finished or
+ * waiting head anywhere in Chats).
  */
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
@@ -9,12 +12,14 @@ import { HeadChatRow } from "../HeadChatRow";
 import { mkRun } from "@/lib/__tests__/headFixtures";
 
 describe("HeadChatRow", () => {
-  it("needs_you shows a single word, no pair, no time — never two segments for one fact", () => {
-    render(<HeadChatRow run={mkRun({ state: "needs_you" })} selected={false} onSelect={vi.fn()} />);
+  it("needs_you shows the pair and exactly one state segment — never two words for the same fact", () => {
+    render(<HeadChatRow run={mkRun({ state: "needs_you", harness: "omp", model: "GLM-5.3-Flash-EXL3" })} selected={false} onSelect={vi.fn()} />);
     const row = screen.getByTestId("head-chat-row");
+    expect(row).toHaveTextContent("omp × GLM-5.3");
     expect(row).toHaveTextContent("Needs you");
-    expect(row).not.toHaveTextContent("omp");
-    expect(row.textContent?.split("·").length).toBe(1);
+    // One "·" between pair and state — not a second one repeating/
+    // qualifying the same "needs you" fact (the actual anhang.md H finding).
+    expect(row.textContent?.split("·").length).toBe(2);
   });
 
   it("running shows the pair and a running-for duration", () => {
@@ -38,18 +43,21 @@ describe("HeadChatRow", () => {
     expect(screen.getByTestId("head-chat-row")).toHaveTextContent("starting…");
   });
 
-  it("an ended run shows the state word and age, never the pair (K15: one dimension per segment)", () => {
+  it("an ended run shows the pair, the state word and the age", () => {
+    const now = Date.parse("2026-09-23T10:00:00Z");
+    vi.spyOn(Date, "now").mockReturnValue(now);
     render(
       <HeadChatRow
-        run={mkRun({ state: "passed", exited_at: "2026-09-20T10:00:00Z" })}
+        run={mkRun({ state: "passed", harness: "omp", model: "GLM-5.3-Flash-EXL3", exited_at: "2026-09-20T10:00:00Z" })}
         selected={false}
         onSelect={vi.fn()}
       />,
     );
     const row = screen.getByTestId("head-chat-row");
+    expect(row).toHaveTextContent("omp × GLM-5.3");
     expect(row).toHaveTextContent("Passed");
     expect(row).toHaveTextContent("ago");
-    expect(row).not.toHaveTextContent("omp ×");
+    vi.restoreAllMocks();
   });
 
   it("strips a leading bracket tag from the title", () => {

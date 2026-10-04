@@ -800,6 +800,7 @@
       "tabGroupsWaiting": "Gruppen — {count} warten",
       "newGroup": "Neue Gruppe",
       "emptyList": "Noch keine Gruppe — mehrere Agenten, ein Ziel.",
+      "noAgentSessions": "Keine Agenten-Sitzungen.",
       "chipWaiting": "wartet",
       "chipPaused": "pausiert",
       "chipDone": "fertig",
@@ -3554,6 +3555,7 @@
       "sectionTitle": "Heads",
       "doneDivider": "Fertig · 7 Tage",
       "archiveTitle": "Archiv",
+      "close": "Schliessen",
       "searchPlaceholder": "Titel oder Paar suchen",
       "empty": "Noch keine älteren Heads.",
       "noResults": "Keine Treffer."
@@ -3563,9 +3565,9 @@
       "noTranscriptTitle": "Kein Live-Verlauf für diesen Harness",
       "noTranscriptHint": "Zeigt stattdessen die letzten Log-Zeilen.",
       "logEmpty": "Noch keine Ausgabe.",
-      "jobTitle": "Auftrag",
-      "jobShow": "Auftrag anzeigen",
-      "jobHide": "Auftrag ausblenden",
+      "resolving": "Lauf wird geladen…",
+      "notFoundTitle": "Dieser Lauf wurde nicht gefunden.",
+      "notFoundHint": "Er wurde vielleicht aufgeräumt, oder der Link ist alt.",
       "footer": {
         "step": "Schritt {n}/{total} · {name}",
         "continueRun": "Weitermachen"

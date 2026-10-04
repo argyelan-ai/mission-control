@@ -800,6 +800,7 @@
       "tabGroupsWaiting": "Groups — {count} waiting",
       "newGroup": "New group",
       "emptyList": "No groups yet — several agents, one goal.",
+      "noAgentSessions": "No agent sessions.",
       "chipWaiting": "waiting",
       "chipPaused": "paused",
       "chipDone": "done",
@@ -3554,6 +3555,7 @@
       "sectionTitle": "Heads",
       "doneDivider": "Done · 7 days",
       "archiveTitle": "Archive",
+      "close": "Close",
       "searchPlaceholder": "Search title or pair",
       "empty": "No older heads yet.",
       "noResults": "No matches."
@@ -3563,9 +3565,9 @@
       "noTranscriptTitle": "No live transcript for this harness",
       "noTranscriptHint": "Showing the last log lines instead.",
       "logEmpty": "No output yet.",
-      "jobTitle": "Job",
-      "jobShow": "Show the job",
-      "jobHide": "Hide the job",
+      "resolving": "Loading this run…",
+      "notFoundTitle": "This run could not be found.",
+      "notFoundHint": "It may have been cleaned up, or the link is old.",
       "footer": {
         "step": "Step {n}/{total} · {name}",
         "continueRun": "Continue"

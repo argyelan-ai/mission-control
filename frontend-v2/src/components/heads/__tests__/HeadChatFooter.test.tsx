@@ -48,6 +48,38 @@ describe("HeadChatFooter", () => {
     );
   });
 
+  // Review finding on PR #756: "braucht dich" showed only the answer field
+  // — the operator could not see WHAT was being asked without leaving the
+  // footer to scroll the transcript above it.
+  it("needs_you: shows the question text above the answer field", () => {
+    renderFooter({ state: "needs_you", question: "Deprecate the old field or keep it for one more release?" });
+    expect(screen.getByTestId("head-footer-question")).toHaveTextContent(
+      "Deprecate the old field or keep it for one more release?",
+    );
+    expect(screen.getByTestId("head-footer-answer")).toBeInTheDocument();
+  });
+
+  it("needs_you: falls back to the transcript's last assistant message when question.md is empty", () => {
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })}>
+        <HeadChatFooter
+          run={mkRun({ state: "needs_you", question: null })}
+          transcriptFallbackQuestion="Should the retry loop cap at 3 attempts or 5?"
+        />
+      </QueryClientProvider>,
+    );
+    expect(screen.getByTestId("head-footer-question")).toHaveTextContent(
+      "Should the retry loop cap at 3 attempts or 5?",
+    );
+  });
+
+  it("needs_you: shows a 'no question recorded' notice when there is neither a question nor a transcript fallback", () => {
+    renderFooter({ state: "needs_you", question: null });
+    expect(screen.getByTestId("head-footer-question")).toHaveTextContent(
+      "The head asked a question, but it is empty.",
+    );
+  });
+
   it("needs_you: the send button is disabled until something is typed", () => {
     renderFooter({ state: "needs_you" });
     expect(screen.getByTestId("head-footer-answer-send")).toBeDisabled();

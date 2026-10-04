@@ -5,8 +5,8 @@
  * composer (bauplan `heads-sichtbar` PR 2 §3.2): a translated step line +
  * Stop while it runs, the question + answer field while it needs the
  * operator, and "Continue" once it is done. No "Ask about the result" (not
- * built — Entscheid 4, answered by Boss 2.0, not a new head process) and
- * no native "resume the conversation" (out of scope, bauplan §7).
+ * built — Entscheid 4, answered by the lead-agent program, not a new head
+ * process) and no native "resume the conversation" (out of scope, bauplan §7).
  *
  * Failed/stopped get the same reason-plus-restart treatment
  * `HeadStateCard` already gives them on the task detail — not named
@@ -21,6 +21,7 @@ import { RotateCcw, Send } from "lucide-react";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import { C } from "@/lib/colors";
+import { NEXT_TEXT } from "@/components/task/detail/nextStepStyle";
 import { failReasonKey, headErrorKey, headStepKey, parseStep, type HeadRun } from "@/lib/heads";
 import { HeadStopButton } from "./HeadStopButton";
 import { HeadRestartDialog } from "./HeadRestartDialog";
@@ -31,7 +32,19 @@ const PRIMARY_STYLE = { background: C.accent, color: C.onAccent } as const;
 const QUIET_BTN =
   "inline-flex items-center justify-center gap-2 px-3 min-h-[40px] pointer-coarse:min-h-[44px] rounded-md text-sm font-medium cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]";
 
-export function HeadChatFooter({ run }: { run: HeadRun }) {
+export function HeadChatFooter({
+  run,
+  transcriptFallbackQuestion = null,
+}: {
+  run: HeadRun;
+  /** The transcript's last assistant message, for the rare run whose
+   *  `question.md` is missing/empty (review finding on PR #756: "braucht
+   *  dich" showed only the answer field, no question — the operator had to
+   *  scroll the transcript above to find out what was even being asked).
+   *  `run.question` always wins when it is there; this is the fallback,
+   *  never the first choice. */
+  transcriptFallbackQuestion?: string | null;
+}) {
   const t = useTranslations("heads");
   const qc = useQueryClient();
   const [answer, setAnswer] = useState("");
@@ -90,8 +103,27 @@ export function HeadChatFooter({ run }: { run: HeadRun }) {
   }
 
   if (run.state === "needs_you") {
+    const question = run.question?.trim() || transcriptFallbackQuestion?.trim() || null;
     return (
       <div className="flex flex-col gap-2 px-3 md:px-4 py-3 border-t shrink-0" style={{ borderColor: C.border }}>
+        <div className="flex flex-col gap-1">
+          <span className="text-xs font-medium" style={{ color: C.textMuted }}>
+            {t("state.needs_you")}
+          </span>
+          {question ? (
+            <p
+              className={`${NEXT_TEXT} whitespace-pre-line line-clamp-6`}
+              style={{ color: C.textPrimary }}
+              data-testid="head-footer-question"
+            >
+              {question}
+            </p>
+          ) : (
+            <p className={NEXT_TEXT} style={{ color: C.textSecondary }} data-testid="head-footer-question">
+              {t("card.noQuestion")}
+            </p>
+          )}
+        </div>
         <label htmlFor={`head-footer-answer-${run.run_id}`} className="sr-only">
           {t("card.answerLabel")}
         </label>

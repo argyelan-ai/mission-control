@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import uuid
 from pathlib import Path
@@ -22,6 +23,7 @@ from app.services.heads import redact, summary
 from tests.heads_backend_helpers import heads_root, iso, make_run  # noqa: F401 (fixture)
 
 FIXTURES = Path(__file__).parent / "fixtures" / "heads"
+TEMPLATE_PATH = Path(__file__).parents[1] / "templates" / "heads" / "head-AGENTS.md"
 
 
 def _fake_run(*, folder: Path, text: str, spec: dict | None = None, pr_url: str | None = None):
@@ -183,3 +185,150 @@ async def test_summary_endpoint_200_with_a_real_run_record(auth_client, heads_ro
     assert body["result_line"] == "Added the summary endpoint."
     assert body["pr_url"] == "https://github.com/owner/demo/pull/42"
     assert body["sabotage"] is None and body["bypass"] is None
+
+
+# ── 5 — real, scrubbed head-AGENTS.md-shaped records (review finding on ────
+# PR #756: the parser above was written against the OLD personal-skill
+# template and never matched a real run on disk — live-checked over all 26
+# real run records in ~/.mc/heads: failed_before/sabotage/review/
+# operator_minutes were 0/26). These two fixtures are scrubbed copies of a
+# real PASSED run per harness (`run-record-filled.md`, next to each
+# harness's existing minimal fixture).
+
+
+def test_real_claude_run_record_parses_the_in_repo_template_labels():
+    text = (FIXTURES / "claude-run" / "run-record-filled.md").read_text()
+    run = _fake_run(folder=FIXTURES / "claude-run", text=text, spec={"branch": "mc-head/2026-10-01-fixture-claude-run-1111"})
+    out = summary.build_summary(run)
+
+    assert out["status"] == "passed"
+    # "Failing test before" (not the old "Red test before") must parse, and
+    # split at the FIRST arrow (not the last — the old behaviour would have
+    # cut this down to just the ModuleNotFoundError text).
+    assert out["tests"]["failed_before"] is not None
+    assert '"11 failed"' in out["tests"]["failed_before"]
+    assert "ModuleNotFoundError" in out["tests"]["failed_before"]
+    # "Green after" carries TWO arrows on this real line — splitting at the
+    # first one keeps "11 passed" (the actual result), not just the trailing
+    # "24 failed, 9765 passed, …" aside the old last-arrow split produced.
+    assert out["tests"]["passed_after"] is not None
+    assert out["tests"]["passed_after"].startswith('"11 passed"')
+    assert "24 failed, 9765 passed" in out["tests"]["passed_after"]
+    assert out["sabotage"] is True  # "Sabotage check:" (not "Sabotage probe:")
+    assert out["kz_ok"] is True  # Evidence "kz check: … -> OK", not the Context-brief heuristic
+    assert out["review"] == "self"  # "Review: self, no helper available …" — "self" wins over the later word "helper"
+    assert out["bypass"] == 0
+    assert out["helpers"] == 0  # plain "- Helpers: 0" bullet, not the unrelated "- Quota: … no helpers" line above it
+    assert out["operator_minutes"] == 0  # "- Operator minutes (estimate): 0 (unattended)"
+    assert out["branch"] == "mc-head/2026-10-01-fixture-claude-run-1111"
+
+
+def test_real_omp_run_record_parses_the_in_repo_template_labels():
+    text = (FIXTURES / "omp-run" / "run-record-filled.md").read_text()
+    run = _fake_run(folder=FIXTURES / "omp-run", text=text, spec={"branch": "mc-head/2026-10-04-fixture-omp-run-2222"})
+    out = summary.build_summary(run)
+
+    assert out["status"] == "passed"
+    assert out["tests"]["failed_before"] is not None and "1 failed" in out["tests"]["failed_before"]
+    assert out["tests"]["passed_after"] is not None and "29 passed" in out["tests"]["passed_after"]
+    assert out["sabotage"] is True
+    assert out["kz_ok"] is True  # "kz check: … -> OK (1 skipped)"
+    assert out["review"] == "helper"  # "Review: fresh helper (reviewer agent) PASSED — …"
+    assert out["bypass"] == 0
+    assert out["helpers"] == 1  # "- Helpers: 1 (reviewer)"
+    assert out["operator_minutes"] == 25  # "- Operator minutes (estimate): ~25" — leading "~" allowed
+    assert out["branch"] == "mc-head/2026-10-04-fixture-omp-run-2222"
+
+
+def test_a_red_kz_check_never_reads_as_yes():
+    """The exact PR #756 bug: kz_ok used to come from the Context brief's
+    "kz brief unavailable: …" line, so a run with a fine context brief but
+    an actually-FAILED kz check still showed "kz check: Yes". Sabotage: feed
+    a real record with its "-> OK" kz-check line turned into a red one."""
+    text = (FIXTURES / "claude-run" / "run-record-filled.md").read_text()
+    red_text = text.replace(
+        '"kz check: 0 new, 4 known, 0 fixed, 0 skipped -> OK"; push hook ran kz check again → OK.',
+        '"kz check: 2 new, 4 known, 0 fixed, 0 skipped"; push hook refused the push.',
+    )
+    assert red_text != text  # the sabotage actually changed something
+    run = _fake_run(folder=FIXTURES / "claude-run", text=red_text)
+    assert summary.build_summary(run)["kz_ok"] is False
+
+    unavailable_text = text.replace(
+        '`kz check --pr-body-file .pr-body.md` → first run 2 new (missing PR sections), after completing the body → "kz check: 0 new, 4 known, 0 fixed, 0 skipped -> OK"; push hook ran kz check again → OK.',
+        "kz check unavailable: no kz binary on this box",
+    )
+    assert unavailable_text != text
+    run2 = _fake_run(folder=FIXTURES / "claude-run", text=unavailable_text)
+    assert summary.build_summary(run2)["kz_ok"] is None
+
+
+# ── 6 — drift guard: the parser must stay in sync with the template it ─────
+# actually parses (`backend/templates/heads/head-AGENTS.md`), not a copy of
+# its wording frozen into this test file.
+
+
+def _replace_once(text: str, old: str, new: str) -> str:
+    count = text.count(old)
+    assert count == 1, f"drift: expected exactly one occurrence of {old!r} in head-AGENTS.md's run-record template, found {count}"
+    return text.replace(old, new, 1)
+
+
+def test_template_run_record_block_parses_into_every_field_build_summary_promises():
+    """Fills `head-AGENTS.md`'s own "Run record template" code block with one
+    distinctive, checkable value per field this module extracts, then
+    asserts `build_summary` reads every one of them. If a future edit to
+    that template renames or reshapes a bullet this module depends on,
+    `_replace_once` fails here — loudly, in CI — instead of every future
+    head's run record silently going back to all-`None` the way PR #756's
+    bug did."""
+    text = TEMPLATE_PATH.read_text()
+    m = re.search(r"## Run record template\n.*?```markdown\n(.*?)\n```", text, re.DOTALL)
+    assert m, "head-AGENTS.md: 'Run record template' markdown code block not found"
+    block = m.group(1)
+
+    block = _replace_once(block, "Status: <running | passed | failed>", "Status: passed")
+    block = _replace_once(
+        block,
+        "- Failing test before: `<command>` → <key line>",
+        "- Failing test before: `pytest -q` → 3 failed",
+    )
+    block = _replace_once(
+        block,
+        '- Green after: `<command>` → <e.g. "42 passed">',
+        "- Green after: `pytest -q` → 42 passed",
+    )
+    block = _replace_once(
+        block,
+        "- Sabotage check: <what was broken> → red · restored → green",
+        "- Sabotage check: removed the guard → red · restored → green",
+    )
+    block = _replace_once(
+        block,
+        '- kz check: <pasted output, last line e.g. "OK (4 skipped)" | red lines + "Known limits" in the PR | no .kohaerenz.yaml | unavailable: …>',
+        "- kz check: 0 new, 0 known, 0 fixed, 0 skipped -> OK",
+    )
+    block = _replace_once(
+        block,
+        "- Review: <fresh helper PASSED/FAILED | self-review> — <1 sentence, incl. the three reviewer questions>",
+        "- Review: fresh helper PASSED — looks good",
+    )
+    block = _replace_once(
+        block,
+        "- Bypass: <0 | n — why> (admin merge, skipped check, push around the queue)",
+        "- Bypass: 0 — none needed",
+    )
+    block = _replace_once(block, "- Helpers: <n>", "- Helpers: 3")
+    block = _replace_once(block, "- Operator minutes (estimate): <n>", "- Operator minutes (estimate): 12")
+
+    run = _fake_run(folder=FIXTURES / "claude-run", text=block)
+    out = summary.build_summary(run)
+    assert out["status"] == "passed"
+    assert out["tests"]["failed_before"] == "3 failed"
+    assert out["tests"]["passed_after"] == "42 passed"
+    assert out["sabotage"] is True
+    assert out["kz_ok"] is True
+    assert out["review"] == "helper"
+    assert out["bypass"] == 0
+    assert out["helpers"] == 3
+    assert out["operator_minutes"] == 12
