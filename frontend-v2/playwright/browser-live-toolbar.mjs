@@ -12,7 +12,7 @@
  *     picker (it used to drop to a second line at 393 px), nothing else wraps
  *     either, and the page does not scroll sideways;
  *   - the panel states render: own tab (scoped), the unassigned fallback
- *     (agent owns no tab, unassigned tabs exist → every tab + hint, never
+ *     (agent owns no tab, unassigned tabs exist → those tabs + hint, never
  *     "no open tab"), the real "no open tab" (every tab is another agent's),
  *     and "all tabs".
  *
@@ -57,13 +57,14 @@ const STATES = {
     ],
     frame: OWN,
   },
+  // The backend sends ONLY the unassigned tabs here, never another agent's.
   "unassigned-fallback": {
-    rest: { targets: [FREE, OTHER], scopeUnavailable: false, unassignedFallback: true, unassignedCount: 1 },
+    rest: { targets: [FREE], scopeUnavailable: false, unassignedFallback: true, unassignedCount: 1 },
     ws: [
       { type: "status", code: "scope_unavailable", active: false },
       { type: "status", code: "unassigned_fallback", active: true, count: 1 },
       { type: "attached", target: FREE },
-      { type: "targets", targets: [FREE, OTHER], activeId: "free", followedId: "free" },
+      { type: "targets", targets: [FREE], activeId: "free", followedId: "free" },
     ],
     frame: FREE,
   },
