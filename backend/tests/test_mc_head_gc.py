@@ -328,6 +328,101 @@ def test_sabotage_skipping_the_ignored_files_check_loses_the_file_on_apply(scrat
     assert not wt.exists(), "with the check disabled, the worktree (and its ignored file) is actually removed"
 
 
+def _plant_regenerable_caches(wt: Path) -> None:
+    """Exactly the live reproduction (round 3 review finding): a worktree
+    whose ONLY ignored entries are build/test caches a `pytest`/`node` run
+    always leaves behind — `__pycache__/x.pyc`, `tests/__pycache__/y.pyc`
+    (the two entries the live probe actually found) and `.pytest_cache/`
+    (a non-`.pyc` file inside it, so this also exercises the directory-NAME
+    half of the allowlist, not just the bare-`*.pyc` shortcut)."""
+    (wt / "__pycache__").mkdir()
+    (wt / "__pycache__" / "x.pyc").write_bytes(b"x")
+    (wt / "tests" / "__pycache__").mkdir(parents=True)
+    (wt / "tests" / "__pycache__" / "y.pyc").write_bytes(b"y")
+    (wt / ".pytest_cache").mkdir()
+    (wt / ".pytest_cache" / "CACHEDIR.TAG").write_text("Signature: 8a477f597d28d172789f06886806bc55\n")
+    gi = wt / ".gitignore"
+    gi.write_text("__pycache__/\n.pytest_cache/\n")
+    subprocess.run(["git", "-C", str(wt), "add", ".gitignore"], check=True)
+    subprocess.run([*GIT, "-C", str(wt), "commit", "-q", "-m", "chore: gitignore"], check=True)
+    subprocess.run(["git", "-C", str(wt), "push", "-q"], check=True)
+
+
+def test_regenerable_ignored_caches_do_not_block_an_otherwise_removable_worktree(scratch):
+    """Round 3 review finding: ``_wt_decision`` kept ANY ignored path,
+    including build/test caches that EVERY real head run leaves behind (the
+    procedure requires running tests). Proven live on a copy of
+    ``~/.mc/heads``: the only remaining worktree was kept with reason
+    ``ignored_files``, whose only ignored entries were ``__pycache__/`` and
+    ``tests/__pycache__/`` — so the approved lifecycle rule "worktrees
+    cleaned" never actually fired on a real run. A worktree whose only
+    ignored paths are known-regenerable caches must now be offered for
+    removal (dry run) and actually removed (``--apply``)."""
+    mc_home = scratch["mc_home"]
+    run_id, wt = _make_run(
+        mc_home, repo_full_name=scratch["full_name"], branch_suffix="regen-cache", origin=scratch["origin"],
+    )
+    _plant_regenerable_caches(wt)
+
+    res = run_head(mc_home, "gc")  # dry run first
+    assert res.returncode == 0, res.stderr
+    run_report = _run_for(_report(mc_home), run_id)
+    assert any(
+        a["path"] == str(wt) and a["kind"] == "worktree" and a["would_remove"] for a in run_report["actions"]
+    ), "a worktree whose only ignored paths are regenerable caches must be offered for removal"
+
+    res2 = run_head(mc_home, "gc", "--apply")
+    assert res2.returncode == 0, res2.stderr
+    assert not wt.exists(), "regenerable caches must never block an otherwise-removable worktree"
+
+
+def test_sabotage_dropping_the_regenerable_allowlist_keeps_the_worktree_again(scratch):
+    """Sabotage, run directly against the loaded module: clearing the
+    allowlist must turn ``__pycache__``/``.pytest_cache`` back into
+    BLOCKING paths — proving the allowlist, not luck, is what lets a real
+    head run's worktree ever get gc'd. Uses the SAME fixture as the test
+    above (the ``.pytest_cache/CACHEDIR.TAG`` entry is not a ``*.pyc`` file,
+    so it relies purely on the directory-name allowlist, not the separate
+    bare-``*.pyc`` shortcut — the sabotage below must still catch it)."""
+    mc_home = scratch["mc_home"]
+    run_id, wt = _make_run(
+        mc_home, repo_full_name=scratch["full_name"], branch_suffix="regen-cache-sab", origin=scratch["origin"],
+    )
+    _plant_regenerable_caches(wt)
+
+    mod = _load()
+    os.environ["MC_HOME"] = str(mc_home)
+    try:
+        mod.GC_REGENERABLE_IGNORED_DIR_NAMES = frozenset()  # SABOTAGE: empty allowlist
+        report = mod._run_gc(apply=True)
+    finally:
+        del os.environ["MC_HOME"]
+    assert wt.exists(), "with the allowlist dropped, the worktree is wrongly kept again"
+    run_report = next(r for r in report["runs"] if r["run_id"] == run_id)
+    assert any(k["path"] == str(wt) and k["reason"] == "ignored_files" for k in run_report["kept"])
+
+
+def test_ignored_files_kept_entry_names_the_blocking_paths(scratch):
+    """Round 3 review finding's own ask: the operator must be able to see
+    WHICH ignored paths kept a worktree, not just the bare reason string —
+    especially now that a mix of regenerable and blocking paths in the same
+    worktree is possible."""
+    mc_home = scratch["mc_home"]
+    run_id, wt = _make_run(
+        mc_home, repo_full_name=scratch["full_name"], branch_suffix="ignored-detail", origin=scratch["origin"],
+        ignored=True,
+    )
+    _plant_regenerable_caches(wt)
+    run_head(mc_home, "gc", "--apply")
+    assert wt.exists()
+    kept = _run_for(_report(mc_home), run_id)["kept"]
+    entry = next(k for k in kept if k["path"] == str(wt))
+    assert entry["reason"] == "ignored_files"
+    assert entry.get("ignored") == ["notes.md"], (
+        "the regenerable caches must not be listed, only the real blocker"
+    )
+
+
 def test_head_not_pushed_is_kept_not_pushed(scratch):
     mc_home = scratch["mc_home"]
     run_id, wt = _make_run(
@@ -357,6 +452,69 @@ def test_sabotage_removing_the_ancestry_check_misclassifies_not_pushed(scratch):
     run_report = next(r for r in report["runs"] if r["run_id"] == run_id)
     assert any(a["path"] == str(wt) for a in run_report["actions"]), (
         "with the ancestry check disabled, the unpushed worktree is wrongly offered for removal"
+    )
+
+
+def test_pushed_branch_with_one_more_local_unpushed_commit_is_kept_not_pushed(scratch):
+    """Subprocess-level regression for the merge-base ancestry check,
+    round 3 review finding: the sabotage test above only ever monkeypatches
+    the WHOLE ``_wt_head_in_scratch_origin`` function, so it proves the
+    function is CALLED, never that its merge-base logic is correct — and
+    the plain "not pushed" test above never reaches the merge-base call at
+    all (the branch was never pushed, so the earlier ``fetch`` already
+    fails). This drives the REAL script end to end: push the branch, then
+    add one MORE local commit that is never pushed, and confirm gc still
+    keeps the worktree as ``not_pushed`` — the live probe the finding
+    describes, run here against the fixed code instead of a deliberately
+    broken one."""
+    mc_home = scratch["mc_home"]
+    run_id, wt = _make_run(
+        mc_home, repo_full_name=scratch["full_name"], branch_suffix="aheadlocal", origin=scratch["origin"],
+    )
+    (wt / "one-more-change.txt").write_text("not pushed\n")
+    subprocess.run(["git", "-C", str(wt), "add", "."], check=True)
+    subprocess.run([*GIT, "-C", str(wt), "commit", "-q", "-m", "fix: one more local commit, never pushed"], check=True)
+
+    res = run_head(mc_home, "gc", "--apply")
+    assert res.returncode == 0, res.stderr
+    assert wt.exists(), "a local commit ahead of the pushed branch must never be removed"
+    kept = _run_for(_report(mc_home), run_id)["kept"]
+    assert any(k["path"] == str(wt) and k["reason"] == "not_pushed" for k in kept)
+
+
+def test_sabotage_removing_the_merge_base_line_in_the_real_script_lets_it_through(scratch, tmp_path):
+    """Round 3 review finding, reproduced as a REAL sabotage rather than a
+    monkeypatch: copy the actual ``mc-head`` script, delete the
+    ``merge-base --is-ancestor`` line (replace it with an unconditional
+    ``True``, exactly the probe the review finding describes doing by
+    hand), and run THAT copy as a real subprocess against the same
+    ahead-but-unpushed worktree as the test above. Without the real
+    ancestry check, gc must wrongly treat the local-only commit as
+    removable — proving the merge-base CALL ITSELF is load-bearing, not
+    just that something named ``_wt_head_in_scratch_origin`` gets invoked."""
+    mc_home = scratch["mc_home"]
+    run_id, wt = _make_run(
+        mc_home, repo_full_name=scratch["full_name"], branch_suffix="aheadlocal-sab", origin=scratch["origin"],
+    )
+    (wt / "one-more-change.txt").write_text("not pushed\n")
+    subprocess.run(["git", "-C", str(wt), "add", "."], check=True)
+    subprocess.run([*GIT, "-C", str(wt), "commit", "-q", "-m", "fix: one more local commit, never pushed"], check=True)
+
+    original = MC_HEAD.read_text()
+    needle = (
+        '        res = _git(["-C", str(clone), "merge-base", "--is-ancestor", sha, ref], check=False)\n'
+        "        return res.returncode == 0\n"
+    )
+    assert needle in original, "the merge-base check moved — update this sabotage probe's exact text"
+    sabotaged = original.replace(needle, "        return True  # SABOTAGE: merge-base check removed\n")
+    assert sabotaged.count("return True  # SABOTAGE") == 1
+    sab_path = tmp_path / "mc-head-sabotaged"
+    sab_path.write_text(sabotaged)
+
+    res = run_head(mc_home, "gc", "--apply", script=sab_path)
+    assert res.returncode == 0, res.stderr
+    assert not wt.exists(), (
+        "with the merge-base ancestry check removed, an unpushed local commit is wrongly deleted"
     )
 
 

@@ -53,24 +53,66 @@ _BARE_TOKENS = re.compile(
 #: which never matches after a ``_`` (``\b`` needs a transition between a
 #: word and a non-word character, and ``_`` is a word character) — so
 #: ``OPENAI_API_KEY=…`` or ``export ANTHROPIC_API_KEY=…`` pass it untouched.
-#: This pattern matches the WHOLE uppercase identifier by character class
-#: instead of anchoring mid-word, so it does not have that gap; the
-#: replacement keeps the key and separator, only the value is redacted.
-_ENV_STYLE_SECRET = re.compile(r"\b([A-Z][A-Z0-9_]*(?:API_KEY|TOKEN|SECRET))(\s*[=:]\s*)\S+")
+#: This pattern matches the WHOLE identifier by character class instead of
+#: anchoring mid-word, so it does not have that gap; the replacement keeps
+#: the key and separator, only the value is redacted.
+#:
+#: Round 3 review finding: the prefix used to be MANDATORY
+#: (``[A-Z][A-Z0-9_]*`` followed directly by the suffix), so a BARE
+#: ``API_KEY=…``/``TOKEN=…``/``PASSWORD=…`` (no prefix at all) never
+#: matched, and ``AWS_SECRET_ACCESS_KEY=…`` never matched either (the
+#: identifier ends in ``ACCESS_KEY``, not in ``API_KEY``/``TOKEN``/
+#: ``SECRET``). The prefix is now optional and ``SECRET_ACCESS_KEY``/
+#: ``PASSWORD`` were added as their own suffixes. ``re.IGNORECASE`` closes
+#: the matching lowercase gaps found live: a bare YAML ``token: …`` line and
+#: a lowercase ``client_secret=…`` assignment — this module already masks
+#: by VALUE-independent SHAPE, so erring towards redacting ordinary prose
+#: that happens to look like ``word: value`` costs nothing a transcript
+#: reader needs, and a missed real secret costs everything.
+_ENV_STYLE_SECRET = re.compile(
+    r"\b([A-Z][A-Z0-9_]*)?(API_KEY|SECRET_ACCESS_KEY|TOKEN|SECRET|PASSWORD)(\s*[=:]\s*)\S+",
+    re.IGNORECASE,
+)
 
 #: An ``x-api-key:`` header line (any case), as a debug print or a logged
 #: request might carry it.
 _HEADER_SECRET = re.compile(r"\b(x-api-key:\s*)\S+", re.IGNORECASE)
 
-#: A JSON-quoted secret-shaped key: ``"OPENAI_API_KEY": "value"`` or
-#: ``{"apiKey":"value"}`` — a tool call's own request/response body logged
-#: verbatim into the transcript. Neither ``_ENV_STYLE_SECRET`` (anchors
-#: directly on ``KEY<sep>value``, with no room for the key's own closing
-#: quote in between) nor ``redact_secrets``'s plain ``key=``/``token=``
-#: catches this shape; review finding on PR #751. The key itself (and its
-#: surrounding quotes/colon) is kept — only the quoted value is replaced.
+#: ``Authorization: Basic …`` / ``authorization: token …`` — a Basic- or
+#: Token-scheme Authorization header, logged verbatim (a bare Bearer value
+#: with no further scheme word is already a JWT/opaque token caught by
+#: ``_BARE_TOKENS`` or ``redact_secrets``'s own ``Bearer `` pattern; this
+#: one is for the OTHER two schemes a debug print of a request might show).
+#: Round 3 review finding on PR #751. Only the credential half is
+#: replaced — the header name and scheme word stay readable.
+_AUTH_SCHEME_SECRET = re.compile(r"(\bAuthorization:\s*(?:Basic|Token)\s+)\S+", re.IGNORECASE)
+
+#: A secret passed as a CLI flag, as a shell command logged into a
+#: transcript might show it: ``--api-key xxx``, ``--token=xxx``. Round 3
+#: review finding on PR #751 — neither ``_ENV_STYLE_SECRET`` (needs an
+#: identifier made of ``[A-Z0-9_]`` only; a flag name has hyphens) nor
+#: ``redact_secrets``'s ``key=`` pattern (anchors ``\b`` right before the
+#: keyword, which a leading ``--`` also defeats the same way a leading
+#: ``_`` does) catches this shape.
+_CLI_FLAG_SECRET = re.compile(r"(--(?:api[_-]?key|token|secret|password)[=\s]+)\S+", re.IGNORECASE)
+
+#: A JSON- or Python-dict-quoted secret-shaped key: ``"OPENAI_API_KEY":
+#: "value"``, ``{"apiKey":"value"}`` or a Python ``repr()``'d dict's
+#: ``{'api_key': 'value'}`` — a tool call's own request/response body (or a
+#: debug print of a dict) logged verbatim into the transcript. Neither
+#: ``_ENV_STYLE_SECRET`` (anchors directly on ``KEY<sep>value``, with no
+#: room for the key's own closing quote in between) nor ``redact_secrets``'s
+#: plain ``key=``/``token=`` catches this shape; review finding on PR #751.
+#: The key's quote char is captured once (``q``) and backreferenced for
+#: BOTH the key's closing quote and the value's quotes, so a single-quoted
+#: Python dict and a double-quoted JSON body are each masked with their own
+#: matching quote style, never a mismatched one. The key itself (and its
+#: surrounding quotes/colon, plus the value's own quotes) is kept — only
+#: the quoted value's content is replaced.
 _JSON_KEY_SECRET = re.compile(
-    r'("(?:[A-Za-z_]*(?:api[_-]?key|token|secret|password)[A-Za-z_]*)"\s*:\s*")[^"]*(")',
+    r"(?P<prefix>(?P<q>[\"'])(?:[A-Za-z_]*(?:api[_-]?key|token|secret|password)[A-Za-z_]*)(?P=q)\s*:\s*(?P=q))"
+    r"[^\"']*"
+    r"(?P<suffix>(?P=q))",
     re.IGNORECASE,
 )
 
@@ -83,8 +125,14 @@ _PASSWORD_EQ = re.compile(r"\b(password\s*=\s*)\S+", re.IGNORECASE)
 #: HTTP Basic-auth-style userinfo embedded in a URL — ``scheme://user:pass@
 #: host``. Only the password half is replaced; the username stays (it is
 #: rarely secret on its own, and keeping it makes the masked line still
-#: readable). Review finding on PR #751.
-_URL_USERINFO_SECRET = re.compile(r"(://[^/\s:@]+:)[^@\s]+(@)")
+#: readable). Review finding on PR #751. The password half excludes ``/``
+#: (round 3 review finding): without that, ``http://localhost:3000/@vite/
+#: client`` over-matched — the ``[^@\s]+`` password class happily crossed
+#: the path separator to reach the FIRST ``@`` anywhere later in the path,
+#: masking ``3000/`` as if it were a credential. A real userinfo ``@`` is
+#: always part of the URL's AUTHORITY, which ends at the first ``/`` — so
+#: the password can never legitimately contain one either.
+_URL_USERINFO_SECRET = re.compile(r"(://[^/\s:@]+:)[^/@\s]+(@)")
 
 #: A value shorter than this is too common (model slugs, short flags) to
 #: redact just for appearing in ``head.env`` — matches the bauplan's "≥ 8
@@ -106,9 +154,11 @@ def mask_text(text: str, extra: tuple[str, ...] = ()) -> str:
     above + every ``extra`` value this run's own ``head.env`` carries
     (longer than a few characters)."""
     out = _BARE_TOKENS.sub(REDACTED, redact_secrets(text))
-    out = _ENV_STYLE_SECRET.sub(lambda m: f"{m.group(1)}{m.group(2)}{REDACTED}", out)
+    out = _ENV_STYLE_SECRET.sub(lambda m: f"{m.group(1) or ''}{m.group(2)}{m.group(3)}{REDACTED}", out)
     out = _HEADER_SECRET.sub(lambda m: f"{m.group(1)}{REDACTED}", out)
-    out = _JSON_KEY_SECRET.sub(lambda m: f"{m.group(1)}{REDACTED}{m.group(2)}", out)
+    out = _AUTH_SCHEME_SECRET.sub(lambda m: f"{m.group(1)}{REDACTED}", out)
+    out = _CLI_FLAG_SECRET.sub(lambda m: f"{m.group(1)}{REDACTED}", out)
+    out = _JSON_KEY_SECRET.sub(lambda m: f"{m.group('prefix')}{REDACTED}{m.group('suffix')}", out)
     out = _PASSWORD_EQ.sub(lambda m: f"{m.group(1)}{REDACTED}", out)
     out = _URL_USERINFO_SECRET.sub(lambda m: f"{m.group(1)}{REDACTED}{m.group(2)}", out)
     for value in extra:
@@ -117,15 +167,44 @@ def mask_text(text: str, extra: tuple[str, ...] = ()) -> str:
     return out
 
 
+#: A dict KEY whose name alone marks its value as secret, regardless of
+#: shape — a structured tool event carries its payload as an actual dict
+#: (``detail: {"api_key": "…", "headers": {"Authorization": "Basic …"}}``,
+#: an MCP or web tool's input/output can be any key/value pairs), and by
+#: the time ``mask_tree`` sees it, the value is already a plain Python
+#: string with no ``=``/``:``/quote shape left for ``mask_text``'s TEXT
+#: patterns to anchor on — round 3 review finding on PR #751:
+#: ``mask_tree({'detail': {'api_key': 'Zq9x…', 'password': 'Zq9x…',
+#: 'headers': {'Authorization': 'Basic Zq9x…'}}})`` returned all three
+#: values unredacted before this fix. No ``\b`` anchors on purpose: a key
+#: like ``input_tokens`` matching the ``token`` fragment is harmless (its
+#: value is an ``int``, never checked below), and a false-positive STRING
+#: match only means over-redacting, never under-redacting.
+_SECRET_KEY_NAME = re.compile(r"(?i)(api[_-]?key|token|secret|password|passwd|authorization|cookie|credential)")
+
+
 def mask_tree(obj: Any, extra: tuple[str, ...] = ()) -> Any:
     """``mask_text`` recursively over a dict/list/str structure — the shape
     returned by ``transcript_chat.read_history`` (events, nested ``detail``
     dicts, tool results). Non-string leaves (ints, bools, ``None``) pass
-    through unchanged; only string content can carry a secret."""
+    through unchanged; only string content can carry a secret.
+
+    A dict value is checked AGAINST ITS OWN KEY first (``_SECRET_KEY_NAME``)
+    before anything else: a secret-shaped key's STRING value is replaced
+    wholesale, never handed to ``mask_text``'s shape patterns at all — the
+    value of ``"api_key"`` might be an opaque provider token with no
+    recognisable shape of its own, exactly the case layer 1 (shape) and the
+    old key-blind layer 2 (nested recursion only) both missed."""
     if isinstance(obj, str):
         return mask_text(obj, extra)
     if isinstance(obj, dict):
-        return {k: mask_tree(v, extra) for k, v in obj.items()}
+        out: dict[Any, Any] = {}
+        for k, v in obj.items():
+            if isinstance(k, str) and isinstance(v, str) and _SECRET_KEY_NAME.search(k):
+                out[k] = REDACTED
+            else:
+                out[k] = mask_tree(v, extra)
+        return out
     if isinstance(obj, list):
         return [mask_tree(v, extra) for v in obj]
     return obj

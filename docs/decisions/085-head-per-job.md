@@ -276,7 +276,13 @@ thing and leaves the rest of it in place.
     pushed but still carries a git-ignored file is **kept**, not removed —
     `git worktree remove` on its own deletes ignored paths too, so `mc-head
     gc` checks for them explicitly and reports `ignored_files` instead of
-    deleting (review finding on PR #751). The dry run normalises each
+    deleting (review finding on PR #751) — except for a short, literal
+    allowlist of regenerable build/test caches (`__pycache__/`, `*.pyc`,
+    `.pytest_cache/`, `.mypy_cache/`, `.ruff_cache/`, `node_modules/`),
+    which never block removal on their own: the procedure's own red/green
+    test step leaves at least one of these behind in every worktree, so
+    without the allowlist "worktrees cleaned" never actually fires on a
+    real run (round 3 review finding). The dry run normalises each
     scratch clone's git config and fetches one disposable check ref against
     it (idempotent host-side plumbing, review finding on PR #751) but never
     touches a run folder's own data either way. Native CLI session

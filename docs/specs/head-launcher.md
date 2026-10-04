@@ -871,7 +871,15 @@ Acceptance criteria v1:
   only its caches. A clean, pushed worktree that still carries a
   git-ignored file is kept (reason `ignored_files`), never removed —
   `git worktree remove` without `--force` deletes ignored paths too, so the
-  check is explicit rather than relying on "clean" alone. The dry run is
+  check is explicit rather than relying on "clean" alone. That keep is not
+  unconditional (round 3 review finding): a short, literal allowlist of
+  regenerable build/test caches (`__pycache__/`, `*.pyc`, `.pytest_cache/`,
+  `.mypy_cache/`, `.ruff_cache/`, `node_modules/`) never blocks removal on
+  its own, since the procedure's own red/green test step leaves at least
+  one of these behind in EVERY worktree — without the allowlist,
+  "worktrees cleaned" never actually fires on a real run. Anything else
+  ignored still keeps the worktree, and the report names exactly which
+  path(s) blocked it. The dry run is
   not perfectly side-effect-free: it normalises each scratch clone's own
   git config and fetches one disposable check ref into it (idempotent host
   plumbing needed to inspect the clone safely), but it never touches a run

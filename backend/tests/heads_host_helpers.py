@@ -44,9 +44,17 @@ def passthrough_sandbox(where: Path) -> Path:
     return p
 
 
-def run_head(mc_home: Path, *args: str, env_extra: dict | None = None, timeout: float = 60):
+def run_head(mc_home: Path, *args: str, env_extra: dict | None = None, timeout: float = 60, script: Path | None = None):
     """Runs mc-head with the sandbox ON (passthrough stand-in unless the test
-    passes MC_HEAD_SANDBOX_EXEC=/usr/bin/sandbox-exec, or MC_HEAD_SANDBOX=0)."""
+    passes MC_HEAD_SANDBOX_EXEC=/usr/bin/sandbox-exec, or MC_HEAD_SANDBOX=0).
+
+    ``script`` overrides which file is run in place of the real ``MC_HEAD``
+    — a sabotage probe that needs to prove a GIT-level check (e.g. the
+    merge-base ancestry check in ``_wt_head_in_scratch_origin``) is
+    load-bearing drives a deliberately mutated COPY of the actual script as
+    a real subprocess, rather than monkeypatching a function in a loaded
+    module: the latter only proves the function is CALLED, never that the
+    logic inside it is correct (round 3 review finding on PR #751)."""
     env = {
         "MC_HEAD_SANDBOX": "1",
         "MC_HEAD_SANDBOX_EXEC": str(passthrough_sandbox(mc_home.parent if mc_home.exists() else mc_home)),
@@ -63,7 +71,7 @@ def run_head(mc_home: Path, *args: str, env_extra: dict | None = None, timeout: 
     if env_extra:
         env.update(env_extra)
     return subprocess.run(
-        [sys.executable, str(MC_HEAD), *args],
+        [sys.executable, str(script or MC_HEAD), *args],
         env=env,
         capture_output=True,
         text=True,

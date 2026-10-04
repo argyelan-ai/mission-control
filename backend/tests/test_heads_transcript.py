@@ -13,9 +13,11 @@ masking regresses, not decorative.
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import shutil
+import time
 import uuid
 from pathlib import Path
 
@@ -68,8 +70,27 @@ def test_claude_fixture_reads_with_right_reader_and_kinds(heads_root):
 
 
 def test_omp_fixture_reads_and_never_picks_the_sidecar_file(heads_root):
+    """Round 3 review finding: this test used to pass by MTIME LUCK, not by
+    actually proving the non-recursive glob is what keeps the sidecar out —
+    the main fixture file happened to be newer than the sidecar on disk, so
+    widening ``head_transcript_glob`` to ``omp-sessions/**/*.jsonl`` (which
+    would then ALSO match the sidecar) kept all transcript tests green,
+    ``locate()``'s own "pick the newest candidate" tie-break just happened
+    to still land on the right file either way. Forcing the sidecar
+    strictly newer here closes that gap: a recursive glob would now pick
+    IT, and the ``reader``/``parent.name`` assertions below would catch it."""
     run_id = install_fixture(heads_root, "omp-run")
     run = load_run(run_id)
+    main = run.folder / "omp-sessions" / "2026-10-04T09-10-32-976Z_00000000-0000-4000-8000-000000000002.jsonl"
+    sidecar = (
+        run.folder / "omp-sessions" / "2026-10-04T09-10-32-976Z_00000000-0000-4000-8000-000000000002"
+        / "DriftReview.jsonl"
+    )
+    assert main.exists() and sidecar.exists(), "fixture layout moved — update this test's hardcoded paths"
+    now = time.time()
+    os.utime(main, (now - 100, now - 100))
+    os.utime(sidecar, (now, now))  # strictly newer than the main file, on purpose
+
     located = tr.locate(run)
     assert isinstance(located, tr.Located) and located.reader == "omp"
     # The sidecar one level below the flat session file was never a
@@ -77,6 +98,38 @@ def test_omp_fixture_reads_and_never_picks_the_sidecar_file(heads_root):
     assert located.path.parent.name == "omp-sessions"
     result = tr.read(run, located, limit=1000, before_uuid=None)
     assert len(result["events"]) > 0
+
+
+def test_sabotage_a_recursive_omp_glob_picks_the_newer_sidecar_file(heads_root, monkeypatch):
+    """Sabotage, proving the hardening above is load-bearing: with
+    ``head_transcript_glob`` widened to recurse into subdirectories, and
+    the sidecar made newer (same setup as the test above), ``locate()``
+    must now actually pick the sidecar — the exact regression round 3's
+    finding describes, reproduced rather than just asserted away."""
+    from app.services import transcript_adapters as ta
+
+    run_id = install_fixture(heads_root, "omp-run")
+    run = load_run(run_id)
+    main = run.folder / "omp-sessions" / "2026-10-04T09-10-32-976Z_00000000-0000-4000-8000-000000000002.jsonl"
+    sidecar = (
+        run.folder / "omp-sessions" / "2026-10-04T09-10-32-976Z_00000000-0000-4000-8000-000000000002"
+        / "DriftReview.jsonl"
+    )
+    now = time.time()
+    os.utime(main, (now - 100, now - 100))
+    os.utime(sidecar, (now, now))
+
+    omp_adapter = ta.adapter_for_harness("omp")
+    sabotaged = dataclasses.replace(omp_adapter, head_transcript_glob="omp-sessions/**/*.jsonl")
+    # ``tr`` imported the NAME ``adapter_for_harness`` (``from ... import``),
+    # so it must be patched in ``tr``'s own namespace — patching it on
+    # ``transcript_adapters`` itself would leave ``tr.locate()`` calling the
+    # original, unpatched function.
+    monkeypatch.setattr(tr, "adapter_for_harness", lambda name: sabotaged if name == "omp" else None)
+
+    located = tr.locate(run)
+    assert isinstance(located, tr.Located)
+    assert located.path == sidecar, "sabotage must be visible: the widened glob picked the sidecar, not the main file"
 
 
 def test_sabotage_adapter_for_is_the_documented_trap() -> None:
@@ -229,6 +282,106 @@ def test_shape_layer_json_key_secret_keeps_the_key_name_readable():
 def test_shape_layer_url_userinfo_keeps_the_username_readable():
     out = redact.mask_text("postgresql://dbuser:s3cr3t-passw0rd@db.internal:5432/mc", ())
     assert "dbuser" in out, "the username half of userinfo is not the secret"
+
+
+# ── round 3 review findings: structured dict keys, remaining shape gaps,
+# the omp sidecar test's mtime-luck, the URL-path over-mask ──────────────
+
+
+def test_mask_tree_redacts_secret_shaped_dict_keys_not_just_shaped_values():
+    """Round 3 review finding: a structured tool event carries its payload
+    as an actual dict (``detail: {command: …}``; an MCP or web tool's input
+    can be any key/value pairs), so a value stored under a secret-NAMED key
+    with no recognisable shape of its own (an opaque provider token) used
+    to sail through untouched — verified directly against the pre-fix code:
+    ``mask_tree({'detail': {'api_key': 'Zq9x…', 'password': 'Zq9x…',
+    'headers': {'Authorization': 'Basic Zq9x…'}}})`` returned all three
+    values unredacted."""
+    tree = {
+        "detail": {
+            "api_key": "zzzzzzzzzzzzzzzzzzzz",
+            "password": "zzzzzzzzzzzzzzzzzzzz",
+            "headers": {"Authorization": "Basic zzzzzzzzzzzzzzzzzzzz"},
+            "input_tokens": 42,
+            "command": "echo hi",
+        }
+    }
+    out = redact.mask_tree(tree)
+    assert out["detail"]["api_key"] == redact.REDACTED
+    assert out["detail"]["password"] == redact.REDACTED
+    assert out["detail"]["headers"]["Authorization"] == redact.REDACTED
+    assert out["detail"]["input_tokens"] == 42, "a non-string leaf must never be touched, matching key or not"
+    assert out["detail"]["command"] == "echo hi", "a key with no secret-shaped name must survive untouched"
+
+
+def test_sabotage_a_key_blind_mask_tree_leaks_the_structured_secret():
+    """Sabotage: the OLD ``mask_tree`` (recursion only, never inspecting a
+    dict's own keys) must leak the exact structured secret the fix above
+    proves is now caught — pinning the bug, not just the fix."""
+
+    def _key_blind_mask_tree(obj, extra=()):
+        if isinstance(obj, str):
+            return redact.mask_text(obj, extra)
+        if isinstance(obj, dict):
+            return {k: _key_blind_mask_tree(v, extra) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [_key_blind_mask_tree(v, extra) for v in obj]
+        return obj
+
+    out = _key_blind_mask_tree({"detail": {"api_key": "zzzzzzzzzzzzzzzzzzzz"}})
+    assert out["detail"]["api_key"] == "zzzzzzzzzzzzzzzzzzzz", (
+        "sabotage must be visible: without key-awareness the structured secret leaks"
+    )
+
+
+@pytest.mark.parametrize(
+    "line,secret",
+    [
+        ("API_KEY=abcdefgh12345678", "abcdefgh12345678"),
+        ("AWS_SECRET_ACCESS_KEY=abcdefgh12345678", "abcdefgh12345678"),
+        ("client_secret=abcdefgh12345678", "abcdefgh12345678"),
+        ("Authorization: Basic abcdefgh12345678", "abcdefgh12345678"),
+        ("authorization: token abcdefgh12345678", "abcdefgh12345678"),
+        ("token: abcdefgh12345678", "abcdefgh12345678"),
+        ("--api-key abcdefgh12345678", "abcdefgh12345678"),
+        ("{'api_key': 'abcdefgh12345678'}", "abcdefgh12345678"),
+    ],
+)
+def test_shape_layer_round3_closes_the_remaining_plain_text_gaps(line, secret):
+    """Round 3 review finding: each of these shapes was verified, live
+    against the pre-fix code, to pass through ``mask_text`` untouched —
+    a bare ``API_KEY=…`` (no prefix), ``AWS_SECRET_ACCESS_KEY=…`` (the
+    identifier ends in ``ACCESS_KEY``, not ``API_KEY``/``TOKEN``/``SECRET``),
+    a lowercase ``client_secret=…``, an ``Authorization: Basic``/
+    ``authorization: token`` header, a YAML-style ``token: …`` and a CLI
+    flag ``--api-key …``, plus a single-quoted Python-dict-repr
+    ``'api_key': '…'``."""
+    out = redact.mask_text(line, ())
+    assert secret not in out, f"{line!r} must be masked"
+    assert redact.REDACTED in out
+
+
+def test_shape_layer_env_style_still_leaves_non_secret_identifiers_readable():
+    """Widening ``_ENV_STYLE_SECRET`` (optional prefix, case-insensitive,
+    more suffixes) must not start masking ordinary operational env values —
+    review finding on PR #751 (round 1) already named ``ANTHROPIC_MODEL``/
+    ``ANTHROPIC_BASE_URL`` as must-stay-readable; this is the round 3
+    regression guard that the widening did not reopen that gap."""
+    for line in ("ANTHROPIC_MODEL=claude-sonnet-5", "OPENAI_BASE_URL=http://127.0.0.1:9/v1", "MAX_TOKENS=4096"):
+        out = redact.mask_text(line, ())
+        assert out == line, f"{line!r} must survive masking untouched"
+
+
+def test_shape_layer_url_userinfo_never_crosses_a_slash_into_the_path():
+    """Round 3 review finding: ``_URL_USERINFO_SECRET``'s password class
+    (``[^@\\s]+``) happily crossed a ``/`` to reach the first ``@`` anywhere
+    LATER in the URL, so ``http://localhost:3000/@vite/client`` (a Vite dev
+    server asset path, no basic auth involved at all) was over-masked into
+    ``http://localhost:<redacted>@vite/client`` — verified directly against
+    the pre-fix code. Nothing leaked, but it made a frontend-dev transcript
+    harder to read for no reason."""
+    line = "http://localhost:3000/@vite/client"
+    assert redact.mask_text(line, ()) == line, "a bare '@' in a URL PATH is not basic-auth userinfo"
 
 
 # ── 4 — symlinks, never followed ─────────────────────────────────────────

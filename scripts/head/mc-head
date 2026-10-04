@@ -131,6 +131,24 @@ GC_THROTTLE_S = int(os.environ.get("MC_HEAD_GC_THROTTLE_S", str(6 * 3600)))
 # why nothing in here may ever be computed from a pattern.
 GC_CACHE_RELATIVE_PATHS = ("home/.cache", "home/Library/Caches", "home/.npm/_cacache")
 GC_RESERVED_DIR_NAMES = frozenset({"clones", "scratch-origin", "locks", "spool", "night", "task-locks"})
+# Directory NAMES (any depth inside a worktree) that are always a
+# regenerable build/test cache, never worth keeping a whole worktree
+# around for. Round 3 review finding: `_wt_has_ignored_files` used to
+# block removal on ANY git-ignored path, and a head run ALWAYS leaves at
+# least one behind — the procedure requires running tests, which plants
+# `__pycache__`/`.pytest_cache`/`node_modules` into every single worktree
+# — so the approved lifecycle rule "worktrees cleaned" never actually
+# fired on a real run (proven live on a copy of ~/.mc/heads: the one
+# remaining worktree was kept with reason `ignored_files`, whose only
+# ignored entries were `__pycache__/` and `tests/__pycache__/`). This is
+# NOT the same risk `GC_CACHE_RELATIVE_PATHS`' comment above warns about:
+# that list drives a targeted `rmtree` of a computed path (a symlink-escape
+# surface), this one only feeds a yes/no decision — the worktree is still
+# removed as ONE unit, through `git worktree remove`, never a path this
+# allowlist names directly.
+GC_REGENERABLE_IGNORED_DIR_NAMES = frozenset(
+    {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "node_modules"}
+)
 
 # ── validation (§6.1) ────────────────────────────────────────────────────
 
@@ -1908,23 +1926,58 @@ def _wt_is_clean(spec: dict, wt: Path) -> bool:
     return res.returncode == 0 and not res.stdout.strip()
 
 
-def _wt_has_ignored_files(spec: dict, wt: Path) -> bool:
-    """True when this worktree holds at least one git-ignored path — e.g.
-    an ``info/exclude``-ignored notes file a head left behind on purpose.
+def _wt_ignored_path_is_regenerable(rel_path: str) -> bool:
+    """``rel_path`` is exactly one line's path as ``git status
+    --ignored=matching`` prints it after the ``"!! "`` marker: forward-slash
+    separated, relative to the worktree root, optionally wrapped in double
+    quotes (git quotes a path containing unusual characters). True when
+    EVERY bit that makes this path worth keeping around is just a
+    build/test cache: a path component matches
+    ``GC_REGENERABLE_IGNORED_DIR_NAMES``, or the file itself is a bare
+    ``*.pyc`` (Python can leave one next to its source outside a
+    ``__pycache__`` directory too, pre-3.2 layout). Anything else — a
+    head's own ``notes.md`` under ``info/exclude``, say — is not."""
+    if len(rel_path) >= 2 and rel_path[0] == '"' and rel_path[-1] == '"':
+        rel_path = rel_path[1:-1]
+    parts = rel_path.split("/")
+    if parts and parts[-1].endswith(".pyc"):
+        return True
+    return any(part in GC_REGENERABLE_IGNORED_DIR_NAMES for part in parts)
 
-    Review finding on PR #751: ``_wt_is_clean``'s own ``status`` call never
-    asked about ignored paths, and ``git worktree remove`` WITHOUT
-    ``--force`` deletes them anyway (verified directly: a clean, pushed
-    scratch worktree carrying one such file lost it after ``--apply``).
-    ``--ignored=matching`` lists every ignored FILE individually rather than
-    collapsing a whole ignored directory into one entry, so nothing in an
-    ignored subtree is missed. On any error this fails CLOSED (treated as
-    "has ignored files", i.e. kept) — "can't tell" must never read as "safe
-    to delete"."""
+
+def _wt_has_ignored_files(spec: dict, wt: Path) -> list | None:
+    """The git-ignored paths in this worktree that are NOT a known
+    regenerable build/test cache (``_wt_ignored_path_is_regenerable``) —
+    e.g. an ``info/exclude``-ignored notes file a head left behind on
+    purpose. These are what actually BLOCK removal; a ``__pycache__`` or
+    ``node_modules`` a test run left behind does not (round 3 review
+    finding — see ``GC_REGENERABLE_IGNORED_DIR_NAMES``'s comment).
+
+    Review finding on PR #751 (round 1): ``_wt_is_clean``'s own ``status``
+    call never asked about ignored paths, and ``git worktree remove``
+    WITHOUT ``--force`` deletes them anyway (verified directly: a clean,
+    pushed scratch worktree carrying one such file lost it after
+    ``--apply``). ``--ignored=matching`` lists every ignored FILE
+    individually rather than collapsing a whole ignored directory into one
+    entry, so a mix of regenerable and non-regenerable paths under the same
+    worktree is still caught correctly, one file at a time.
+
+    Returns the list of blocking paths (empty = nothing blocks), or
+    ``None`` on a git error — the caller must treat ``None`` as "blocks",
+    not as "nothing blocks": ``bool(None)`` is falsy just like
+    ``bool([])``, so this is checked explicitly, never just truthiness.
+    "Can't tell" must never read as "safe to delete"."""
     res = _wt_git(spec, wt, ["status", "--porcelain", "--ignored=matching"])
     if res.returncode != 0:
-        return True
-    return any(line.startswith("!! ") for line in res.stdout.splitlines())
+        return None
+    blocking = []
+    for line in res.stdout.splitlines():
+        if not line.startswith("!! "):
+            continue
+        rel = line[len("!! "):]
+        if not _wt_ignored_path_is_regenerable(rel):
+            blocking.append(rel)
+    return blocking
 
 
 def _wt_is_detached(spec: dict, wt: Path) -> bool:
@@ -1969,9 +2022,14 @@ def _wt_head_in_scratch_origin(spec: dict, wt: Path) -> bool:
 
 
 def _wt_decision(spec: dict, active_clones: frozenset) -> tuple:
-    """``("removable", None)`` or ``("kept", reason)`` for this run's
-    worktree — never for a real (non-scratch) repo, v1's one hard line
-    (bauplan §2.3): "Echte GitHub-Repos: v1 entfernt KEINE Arbeitskopie".
+    """``("removable", None, None)`` or ``("kept", reason, detail)`` for
+    this run's worktree — never for a real (non-scratch) repo, v1's one
+    hard line (bauplan §2.3): "Echte GitHub-Repos: v1 entfernt KEINE
+    Arbeitskopie". ``detail`` is the list of blocking ignored paths when
+    ``reason == "ignored_files"`` (round 3 review finding: the operator
+    needs to see WHICH paths kept the worktree, now that a mix of
+    regenerable and blocking ignored paths in the same worktree is
+    possible), ``None`` for every other reason.
 
     Every git call below goes through ``_wt_git``, which revalidates
     ``wt/.git`` itself on every call (``_wt_safe_gitdir``); ``sanitize_clone``
@@ -1985,25 +2043,32 @@ def _wt_decision(spec: dict, active_clones: frozenset) -> tuple:
     """
     wt = run_dir(spec["run_id"]) / "wt"
     if spec.get("repo_full_name") not in scratch_repos():
-        return "kept", "real_repo_v1"
+        return "kept", "real_repo_v1", None
     if spec.get("repo_full_name") in active_clones:
-        return "kept", "clone_active"
+        return "kept", "clone_active", None
     clone = clones_root() / spec["repo_full_name"].replace("/", "--")
     try:
         sanitize_clone(spec["repo_full_name"], clone)
     except (RuntimeError, OSError, subprocess.SubprocessError):
-        return "kept", "clone_unsafe"
+        return "kept", "clone_unsafe", None
     if _wt_safe_gitdir(spec, wt) is None:
-        return "kept", "foreign_gitdir"
+        return "kept", "foreign_gitdir", None
     if not _wt_is_clean(spec, wt):
-        return "kept", "dirty"
-    if _wt_has_ignored_files(spec, wt):
-        return "kept", "ignored_files"
+        return "kept", "dirty", None
+    blocking_ignored = _wt_has_ignored_files(spec, wt)
+    # Explicit ``is None`` check (not truthiness): a git ERROR must fail
+    # CLOSED exactly like a real blocking path, never like "nothing
+    # blocks" — ``bool(None)`` and ``bool([])`` are both falsy, so this has
+    # to be spelled out rather than written as a plain ``if``.
+    if blocking_ignored is None:
+        return "kept", "ignored_files", None
+    if blocking_ignored:
+        return "kept", "ignored_files", blocking_ignored
     if _wt_is_detached(spec, wt):
-        return "kept", "detached"
+        return "kept", "detached", None
     if not _wt_head_in_scratch_origin(spec, wt):
-        return "kept", "not_pushed"
-    return "removable", None
+        return "kept", "not_pushed", None
+    return "removable", None, None
 
 
 def _remove_worktree(spec: dict, wt: Path) -> bool:
@@ -2077,10 +2142,13 @@ def _run_gc(apply: bool) -> dict:
 
         wt = folder / "wt"
         if wt.is_dir() and not wt.is_symlink():
-            decision, reason = _wt_decision(spec, active_clones)
+            decision, reason, detail = _wt_decision(spec, active_clones)
             wt_bytes = _dir_bytes(wt)
             if decision == "kept":
-                kept.append({"path": str(wt), "reason": reason})
+                entry = {"path": str(wt), "reason": reason}
+                if detail:
+                    entry["ignored"] = detail
+                kept.append(entry)
             else:
                 exited_at = _parse_iso(status.get("exited_at")) or now
                 if now - exited_at >= GC_MIN_AGE_S:
