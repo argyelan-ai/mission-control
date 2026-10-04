@@ -54,11 +54,17 @@ const FILES = [
   "../../app/sessions/page.tsx",
   // Das Kontext-Panel hinter dem Ring im Composer: stand bis zum Fund fest
   // deutsch ("Eingabe", "Frei", "Schliessen", ...) in der sonst zweisprachigen
-  // Oberflaeche. Die statische Slash-Kommando-Liste, die der Composer fuer
-  // die "/"-Palette einbindet, hatte denselben Fehler (deutsche
-  // `description`-Literale in claudeCommands.ts).
+  // Oberflaeche.
   "ContextPanel.tsx",
-  "../../lib/claudeCommands.ts",
+  // claudeCommands.ts (die statische Slash-Kommando-Liste und das
+  // CLAUDE_MODELS-Array, die der Composer fuer "/"-Palette + Modell-Switcher
+  // einbindet) steht bewusst NICHT in dieser Liste: CLAUDE_MODELS trägt
+  // `label: "Opus"/"Sonnet"/"Haiku"/"Default"` — Markennamen, in beiden
+  // Sprachen identisch (wie "CLI"), kein Rueckfall. Die generische
+  // `label:`-Zusicherung oben kann Markennamen nicht von echten
+  // deutschen Labels unterscheiden; claudeCommands.ts bekommt dafuer die
+  // praeziseren, dediziert gebauten Zusicherungen weiter unten
+  // (Rueckfall-Strings + descriptionKey/description-Form).
 ];
 
 function read(rel: string): string {
