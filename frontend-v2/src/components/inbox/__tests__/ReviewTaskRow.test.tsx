@@ -146,10 +146,40 @@ describe("ReviewTaskRow — head chip (heads-sichtbar PR 3, bauplan §4)", () =>
     expect(screen.queryByTestId("review-row-head-chip")).not.toBeInTheDocument();
   });
 
+  // Review fix round 6, finding 8: no screenshot script set `hasTouch` on
+  // its Playwright context, so `pointer-coarse:` never matched and the
+  // phone-only 44px chip layout showed up in no screenshot — removing the
+  // class entirely left every test (this file included) green. A plain
+  // class-presence check is cheap insurance against that regression class.
+  it("carries the 44px coarse-pointer touch target (DESIGN.md K11)", () => {
+    const run = mkRun({ state: "passed" });
+    renderRow(mkTask(), run);
+    expect(screen.getByTestId("review-row-head-chip")).toHaveClass("pointer-coarse:min-h-[44px]");
+  });
+
   it("an ACTIVE head still wins over an assigned agent — the head owns the work right now", () => {
     const run = mkRun({ state: "running" });
     renderRow(mkTask({ assigned_agent_id: "a1" }), run, { id: "a1", name: "Beta", emoji: "🔧" } as never);
     expect(screen.getByTestId("review-row-head-chip")).toBeInTheDocument();
     expect(screen.queryByText("Beta")).not.toBeInTheDocument();
+  });
+
+  // Review fix round 6, finding 1: the header's own onKeyDown used to call
+  // `preventDefault()` on EVERY Enter/Space keydown that bubbled up to it,
+  // including one that started on the chip `<Link>` nested inside — a
+  // keyboard user tabbing to the chip and pressing Enter never followed the
+  // link because the header swallowed the key first (and it's a link nested
+  // inside a button, axe rule nested-interactive). Confirmed red by hand
+  // against the pre-fix header (no `e.target !== e.currentTarget` guard):
+  // this assertion failed with defaultPrevented === true.
+  it("a cancelable Enter keydown that starts on the head chip is not swallowed by the header (nested-interactive guard)", () => {
+    const run = mkRun({ state: "passed" });
+    renderRow(mkTask(), run);
+    const header = screen.getByTestId("review-row-header");
+    const chip = screen.getByTestId("review-row-head-chip");
+    const event = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    chip.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+    expect(header).toHaveAttribute("aria-expanded", "false");
   });
 });

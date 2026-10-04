@@ -569,6 +569,18 @@ describe("lastHeadActivity — HeadStateCard's 'Last: …' line", () => {
       .toEqual({ text: "wait for reviewer result", ts: "t2", kind: "message" });
   });
 
+  // Review fix round 6, finding 5: a head works on a Python backend
+  // constantly — `__init__`/`__main__` are dunder names, not bold markup,
+  // but the old bold-stripping regex ran over raw backtick content and
+  // `__init__` IS, literally, `__` + "init" + `__`. Confirmed red by hand
+  // against the pre-fix code: this came out as "Edited
+  // backend/app/init.py and main".
+  it("does not mangle Python dunder names inside `code` spans", () => {
+    const events = [message("m1", "t1", "assistant", "Edited `backend/app/__init__.py` and `__main__`")];
+    expect(lastHeadActivity(events))
+      .toEqual({ text: "Edited backend/app/__init__.py and __main__", ts: "t1", kind: "message" });
+  });
+
   it("a bare code-fence line is skipped — the next real line in the same message wins", () => {
     const events = [message("m1", "2026-09-23T10:00:10Z", "assistant", "```bash\npytest -q\n```")];
     expect(lastHeadActivity(events)).toEqual({ text: "pytest -q", ts: "2026-09-23T10:00:10Z", kind: "message" });

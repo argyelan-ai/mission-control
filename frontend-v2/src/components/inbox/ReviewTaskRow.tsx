@@ -93,6 +93,12 @@ export function ReviewTaskRow({
           aria-expanded={expanded}
           data-testid="review-row-header"
           onKeyDown={(e) => {
+            // The head chip is a real `<Link>` nested inside this header
+            // (review fix round 6, finding 1): a keydown that bubbles up
+            // from IT is not a keydown on this header, so it must not be
+            // swallowed here — same guard as `ListRow.tsx`'s own
+            // `role="button"` header.
+            if (e.target !== e.currentTarget) return;
             if (e.key === "Enter" || e.key === " ") {
               e.preventDefault();
               setExpanded(!expanded);

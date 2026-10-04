@@ -35,6 +35,12 @@ function renderWithQuery(ui: React.ReactElement) {
   return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
 }
 
+// Real ICU formatter (not this file's next-intl mock) — shared by every test
+// below that checks a plural catalog string actually inflects correctly.
+function fmt(msg: string, v: Record<string, number>, loc: string) {
+  return new IntlMessageFormat(msg, loc).format(v);
+}
+
 const host = {
   id: "host-1", slug: "box", display_name: "Box", kind: "ssh",
   ssh_host: null, ssh_user: null, ssh_key_path: null, ssh_credential_id: null, role: null, fabric_ip: null, control_url: null,
@@ -92,10 +98,11 @@ describe("Stage — model card while a head works", () => {
     expect(screen.queryByText("Agents")).not.toBeInTheDocument();
     const title = tile.getAttribute("title") ?? "";
     // The tooltip's own "N heads · N active agents" summary is unchanged by
-    // the working/connected split above (the test mock of next-intl does
-    // not render ICU plurals — the counts sentence itself is checked with
-    // the real formatter below).
-    expect(title).toContain("{heads, plural");
+    // the working/connected split above (review fix round 6, finding 4: the
+    // test mock of next-intl now DOES render ICU plurals — see
+    // src/test-setup.ts — so this asserts the real formatted sentence
+    // rather than the raw template).
+    expect(title).toContain("1 head · 2 active agents");
     expect(title).toContain("Fix flaky retry test");
     expect(title).toContain("Beta, Nova");
   });
@@ -179,7 +186,9 @@ describe("Stage — model card while a head works", () => {
     expect(tile).toHaveTextContent("nothing connected");
     expect(tile).not.toHaveTextContent("+ 0 connected");
     const title = tile.getAttribute("title") ?? "";
-    expect(title).toContain("{paused, plural"); // the "with paused" sentence
+    // Review fix round 6, finding 4: the mock now renders ICU plurals for
+    // real (src/test-setup.ts), so this is the actual "with paused" sentence.
+    expect(title).toContain("1 head · 0 active agents · 3 paused");
     expect(title).not.toContain("Agents:");
   });
 
@@ -234,7 +243,6 @@ describe("Switch / stop under a working head", () => {
   });
 
   it("the counts sentence reads right in both languages (real ICU formatter)", () => {
-    const fmt = (msg: string, v: Record<string, number>, loc: string) => new IntlMessageFormat(msg, loc).format(v);
     expect(fmt(en.runtimes.stage.inUseTooltip, { heads: 1, agents: 0 }, "en")).toBe("1 head · 0 active agents");
     expect(fmt(en.runtimes.stage.inUseTooltip, { heads: 2, agents: 1 }, "en")).toBe("2 heads · 1 active agent");
     expect(fmt(de.runtimes.stage.inUseTooltip, { heads: 1, agents: 2 }, "de")).toBe("1 Head · 2 aktive Agenten");
@@ -243,11 +251,18 @@ describe("Switch / stop under a working head", () => {
   });
 
   it("the German texts are there", () => {
-    expect(de.runtimes.stage.kpiWorking).toBe("arbeitet");
-    // Review fix round 5: German has no invariant plural for "arbeitet" — "3
-    // arbeitet" is wrong grammar ("3 arbeiten" is correct). `kpiWorkingPlural`
-    // is picked in code for any count other than exactly 1.
-    expect(de.runtimes.stage.kpiWorkingPlural).toBe("arbeiten");
+    // Review fix round 6, finding 4: `kpiWorking`/`kpiWorkingPlural` (two
+    // catalog keys picked by a ternary in code) collapsed into ONE ICU
+    // plural key — a sabotage that hardcoded the English branch (both
+    // "working") left every one of these 107 runtimes tests green, because
+    // the suite's own next-intl mock always resolves against the English
+    // catalog and never actually renders German. German has no invariant
+    // plural for "arbeitet" — "3 arbeitet" is wrong grammar ("3 arbeiten" is
+    // correct) — so this exercises the REAL ICU formatter against both
+    // branches, the only way to actually catch that regression.
+    expect(fmt(de.runtimes.stage.kpiWorkingUnit, { count: 1 }, "de")).toBe("arbeitet");
+    expect(fmt(de.runtimes.stage.kpiWorkingUnit, { count: 3 }, "de")).toBe("arbeiten");
+    expect(fmt(de.runtimes.stage.kpiWorkingUnit, { count: 0 }, "de")).toBe("arbeiten");
     expect(de.runtimes.stage.kpiConnected).toContain("verbunden");
     expect(de.runtimes.stage.kpiConnectedNone).toBeTruthy();
     expect(de.heads.runtimes.onBoxBodyStop).toBeTruthy();

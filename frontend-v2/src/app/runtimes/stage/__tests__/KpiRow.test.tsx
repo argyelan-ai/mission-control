@@ -55,7 +55,34 @@ describe("KpiRow — tappable cell (review fix round 5: a bare `title` tooltip n
     expect(tile).toHaveTextContent("1");
     expect(tile).toHaveTextContent("working");
     expect(screen.getByTestId("kpi-in-use-popover")).toHaveTextContent("Working: Alpha");
-    expect(screen.getByLabelText("Who is working")).toBeInTheDocument();
+    // Review fix round 6, finding 6: an `aria-label` on the <summary> used
+    // to REPLACE its accessible name entirely, so a screen reader announced
+    // only "Who is working" and never the value ("1 working · + 1
+    // connected") — the one thing a screen reader user actually needs here.
+    // The hint rides along as part of the name now (a trailing `sr-only`
+    // span), never overriding it.
+    const summary = tile.querySelector("summary")!;
+    expect(summary).not.toHaveAttribute("aria-label");
+    expect(summary).toHaveTextContent("1");
+    expect(summary).toHaveTextContent("working");
+    expect(summary).toHaveTextContent("Who is working");
+  });
+
+  it("gives sighted phone users a visible open/close signal: a chevron that flips when the disclosure opens", () => {
+    const tile = renderWithPopover();
+    const chevron = tile.querySelector("summary svg");
+    expect(chevron).toBeTruthy();
+    expect(chevron).not.toHaveClass("rotate-180");
+    expect(chevron).toHaveClass("group-open:rotate-180");
+  });
+
+  // Review fix round 6, finding 8: same regression class as the Inbox head
+  // chip — no screenshot script set `hasTouch`, so a removed
+  // `pointer-coarse:min-h-[44px]` would show up in no screenshot and pass
+  // every existing test here too.
+  it("carries the 44px coarse-pointer touch target (DESIGN.md K11)", () => {
+    const tile = renderWithPopover();
+    expect(tile.querySelector("summary")).toHaveClass("pointer-coarse:min-h-[44px]");
   });
 
   it("tapping the summary opens the native disclosure (and tapping again closes it)", () => {

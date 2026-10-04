@@ -754,20 +754,44 @@ function isFenceLine(line: string): boolean {
   return /^`{3,}/.test(line.trim());
 }
 
+// A boundary a bold delimiter must sit against to count as one (review fix
+// round 6, finding 5) — start/end of line, whitespace, or punctuation.
+// Plain `\w` (word) characters on both sides of the OUTSIDE of a `__…__` or
+// `**…**` run are what makes it a Python dunder name instead of real bold.
+const MD_BOUNDARY = "(?:[\\s.,;:!?()\\[\\]{}\"'/\\-\\u2013\\u2014]|^|$)";
+
+function boldRegex(delim: "\\*\\*" | "__"): RegExp {
+  return new RegExp(`(${MD_BOUNDARY})${delim}(\\S(?:.*?\\S)?)${delim}(?=${MD_BOUNDARY})`, "g");
+}
+
 /** Strips the handful of Markdown marks a head's own sentence can carry
  *  (`**bold**`, `__bold__`, inline `` `code` ``, a leading heading `#…` or
  *  bullet `-`/`*`) down to plain text for a one-line "Last: …" summary — the
  *  real chat view renders full Markdown, this card does not. Collapses any
- *  run of whitespace left behind by the removed marks. */
+ *  run of whitespace left behind by the removed marks.
+ *
+ *  Review fix round 6, finding 5: a head works on a Python backend
+ *  constantly, and `` `__init__` ``/`` `__main__` `` used to come out as
+ *  "init"/"main" — the bold-stripping regexes ran over raw code-span text,
+ *  and `__init__` IS, literally, `__` + "init" + `__`. Code spans now come
+ *  out FIRST (their content restored untouched at the end), and `**`/`__`
+ *  outside a code span are only treated as bold when flanked by a real
+ *  boundary, not a word character — a bare (non-code) dunder is just as
+ *  much at risk and gets the same guard. */
 function stripMarkdownLine(line: string): string {
-  return line
+  const codeSpans: string[] = [];
+  const withPlaceholders = line.replace(/`([^`]*)`/g, (_m, code: string) => {
+    codeSpans.push(code);
+    return `\u0000${codeSpans.length - 1}\u0000`;
+  });
+  const stripped = withPlaceholders
     .replace(/^#{1,6}\s+/, "")
     .replace(/^[-*]\s+/, "")
-    .replace(/\*\*(.*?)\*\*/g, "$1")
-    .replace(/__(.*?)__/g, "$1")
-    .replace(/`([^`]*)`/g, "$1")
+    .replace(boldRegex("\\*\\*"), "$1$2")
+    .replace(boldRegex("__"), "$1$2")
     .replace(/\s+/g, " ")
     .trim();
+  return stripped.replace(/\u0000(\d+)\u0000/g, (_m, i: string) => codeSpans[Number(i)]);
 }
 
 /** The most recent tool title or assistant sentence in a transcript window —

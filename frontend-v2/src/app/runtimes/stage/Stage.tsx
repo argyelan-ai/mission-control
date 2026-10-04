@@ -266,7 +266,15 @@ export function Stage({
     },
     {
       value: String(workingCount),
-      unit: t(workingCount === 1 ? "kpiWorking" : "kpiWorkingPlural"),
+      // One ICU plural key, not a ternary between two catalog keys (review
+      // fix round 6, finding 4): a ternary is only ever exercised by the
+      // test suite's hardcoded-English next-intl mock, where "working" is
+      // both the singular AND the plural string — a sabotage that collapsed
+      // both branches to the same literal left all 107 runtimes tests
+      // green. Real pluralisation (German needs "arbeitet"/"arbeiten") now
+      // lives in the message catalog, where a locale-aware render can
+      // actually exercise both branches.
+      unit: t("kpiWorkingUnit", { count: workingCount }),
       label: connectedCount > 0 ? t("kpiConnected", { count: connectedCount }) : t("kpiConnectedNone"),
       title: inUseTitle,
       testId: "kpi-in-use",

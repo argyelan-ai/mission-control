@@ -1241,10 +1241,14 @@ option {
    always outranks a stylesheet rule, so these nth-child overrides were dead
    code against it before. Default: every cell gets a right divider; each
    breakpoint below zeroes it only at the card's actual right edge. */
-.stage-kpi > div {
+/* `> *` not `> div` (review fix round 6, finding 2): a KpiRow cell with a
+   tappable popover (bauplan §4) renders as `<details>`, not `<div>` — the
+   "in use" cell lost its right hairline at every breakpoint because these
+   selectors never matched it. */
+.stage-kpi > * {
   border-right: 1px solid var(--color-border-subtle);
 }
-.stage-kpi > div:nth-child(2n) {
+.stage-kpi > *:nth-child(2n) {
   border-right: 0;
 }
 @container (min-width: 600px) {
@@ -1253,10 +1257,10 @@ option {
   }
   /* 4-column case: column 2 is now an interior divider, not the edge — put
      its border back. Only column 4 (4n) is the true right edge. */
-  .stage-kpi > div:nth-child(2n) {
+  .stage-kpi > *:nth-child(2n) {
     border-right: 1px solid var(--color-border-subtle);
   }
-  .stage-kpi > div:nth-child(4n) {
+  .stage-kpi > *:nth-child(4n) {
     border-right: 0;
   }
 }
