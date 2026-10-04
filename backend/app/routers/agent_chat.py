@@ -412,18 +412,23 @@ def _chat_session_cwd(agent: Agent) -> str | None:
     recorded it — or ``None`` (no transcript, harness records none, privacy
     gate closed). Same adapter chain and the same fail-closed gate as the
     history endpoint: a Boss session that isn't MC work never lends its
-    folder to the panel. Synchronous (file reads) — run via ``to_thread``."""
+    folder to the panel. Synchronous (file reads) — run via ``to_thread``.
+    A transcript that can't be read is "no session folder", never a 500:
+    the panel then falls back to the agent's other folders."""
     adapter = adapter_for(agent)
-    tdir = adapter.resolve_transcript_dir(agent)
-    if tdir is None:
+    try:
+        tdir = adapter.resolve_transcript_dir(agent)
+        if tdir is None:
+            return None
+        active = adapter.find_active_session(tdir)
+        if active is None:
+            return None
+        path, _meta = active
+        if not adapter.transcript_allowed(agent, path):
+            return None
+        return adapter.session_cwd(path)
+    except (OSError, ValueError):
         return None
-    active = adapter.find_active_session(tdir)
-    if active is None:
-        return None
-    path, _meta = active
-    if not adapter.transcript_allowed(agent, path):
-        return None
-    return adapter.session_cwd(path)
 
 
 @router.get("/agents/{agent_id}/chat/diff")

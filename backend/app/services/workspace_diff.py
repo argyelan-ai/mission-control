@@ -38,6 +38,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
+from app.services.fs_roots import sensitive_subpaths
 from app.services.token_harvester import _host_home
 
 logger = logging.getLogger("mc.workspace_diff")
@@ -495,7 +496,8 @@ def host_path_for_agent_cwd(
       workspace and maps to ``None``. ``..`` cannot escape the root.
     * Host agents record host paths. They are accepted only inside the MC
       home (``~/.mc``) — the only tree the backend container mounts, and the
-      only one it has any business reading for the operator's chat.
+      only one it has any business reading for the operator's chat — and
+      never inside its sensitive folders (``fs_roots.sensitive_subpaths``).
 
     The runtime split mirrors ``dispatch._container_workspace_path`` (the
     host -> container direction); it is a mount fact, not a harness detail.
@@ -513,9 +515,14 @@ def host_path_for_agent_cwd(
         return workspace_root / norm[len("/workspace/"):]
     mc_home = _host_home() / ".mc"
     candidate = Path(os.path.normpath(cwd))
-    if candidate == mc_home or mc_home in candidate.parents:
-        return candidate
-    return None
+    if candidate != mc_home and mc_home not in candidate.parents:
+        return None
+    rel = candidate.relative_to(mc_home).parts
+    if rel and rel[0] in sensitive_subpaths():
+        # Secrets, agent tokens, logs, backups: the same trees the Files
+        # API refuses — a session folder there lends nothing to the panel.
+        return None
+    return candidate
 
 
 def cwd_boundary(runtime: str | None, workspace_root: Path | None) -> Path | None:

@@ -421,6 +421,13 @@ def test_host_cwd_is_accepted_only_inside_the_mc_home(tmp_path, monkeypatch):
     assert wd.host_path_for_agent_cwd("host", None, str(tmp_path / ".mc" / ".." / "x")) is None
 
 
+def test_host_cwd_inside_a_sensitive_mc_folder_maps_to_nothing(tmp_path, monkeypatch):
+    monkeypatch.setattr(wd, "_host_home", lambda: tmp_path)
+    for folder in ("secrets", "agents", "logs", "backups", "browser-profiles"):
+        assert wd.host_path_for_agent_cwd("host", None, str(tmp_path / ".mc" / folder / "x")) is None, folder
+    assert wd.host_path_for_agent_cwd("host", None, str(tmp_path / ".mc" / "vault")) == tmp_path / ".mc" / "vault"
+
+
 def test_display_path_uses_the_agents_own_view(tmp_path, monkeypatch):
     monkeypatch.setattr(wd, "_host_home", lambda: tmp_path)
     root = tmp_path / ".mc" / "workspaces" / "a"
