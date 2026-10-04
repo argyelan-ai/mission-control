@@ -3,20 +3,24 @@
  * plan B1–B3): i18n parity, error codes → i18n keys, picker order and the
  * "always local" pre-selection.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import en from "../../../messages/en.json";
 import de from "../../../messages/de.json";
 import {
   chooseInitialPair,
   defaultRestartMode,
   failReasonKey,
+  headContextLine,
   headErrorKey,
+  headListLine,
   headListTitle,
   HEAD_STEP_KEYS,
   headStepKey,
+  lastHeadActivity,
   midLineStateWord,
   modelFamily,
   pairKey,
+  pairLabel,
   pairReasonKey,
   pairShort,
   parseHeadOnBox,
@@ -29,6 +33,7 @@ import {
   supersededNeedsYouIds,
   type HeadPairsResponse,
 } from "../heads";
+import type { ChatEvent } from "../chatTypes";
 import { mkPair, mkRun } from "./headFixtures";
 
 function flatKeys(obj: unknown, prefix = ""): string[] {
@@ -434,5 +439,119 @@ describe("midLineStateWord (review finding on PR #756 round 3)", () => {
   it("is a no-op on an already-empty or already-lowercase word", () => {
     expect(midLineStateWord("")).toBe("");
     expect(midLineStateWord("already lowercase")).toBe("already lowercase");
+  });
+});
+
+describe("pairLabel (heads-sichtbar PR 3 §4: one separator, '×', everywhere)", () => {
+  it("joins harness and runtime with '×', not '·'", () => {
+    expect(pairLabel({ harness: "omp", runtime_label: "GLM local" })).toBe("omp × GLM local");
+  });
+
+  it("falls back to the runtime slug, then em dash, same as before", () => {
+    expect(pairLabel({ harness: "omp", runtime_slug: "glm-local" })).toBe("omp × glm-local");
+    expect(pairLabel({ harness: "omp" })).toBe("omp × —");
+  });
+});
+
+// ── headContextLine / headListLine (heads-sichtbar PR 3 §4) ─────────────────
+//
+// `t` here is a minimal stand-in for `useTranslations("heads")`: it resolves
+// a dotted key against the REAL catalog (so a typo'd key surfaces as the
+// literal key, same failure mode as `next-intl` itself) and does the same
+// plain `{var}` interpolation the component-level tests' `next-intl` mock
+// does (see `src/test-setup.ts`) — no ICU plurals are involved here.
+function makeHeadsT(tree: typeof en) {
+  return (key: string, values?: Record<string, string | number>): string => {
+    const raw = resolve(tree.heads, key);
+    let s = typeof raw === "string" ? raw : key;
+    if (values) for (const [k, v] of Object.entries(values)) s = s.split(`{${k}}`).join(String(v));
+    return s;
+  };
+}
+const tEn = makeHeadsT(en);
+const tDe = makeHeadsT(de);
+
+const GLM = "GLM-5.3-Flash-EXL3"; // modelFamily() strips the variant suffixes down to "GLM-5.3"
+
+describe("headContextLine — the one 'pair + state/time fact' line", () => {
+  it("needs_you: pair + exactly one state word, no time fact", () => {
+    const run = mkRun({ state: "needs_you", harness: "omp", model: GLM });
+    expect(headContextLine(run, tEn, "en")).toBe("omp × GLM-5.3 · needs you");
+    expect(headContextLine(run, tDe, "de")).toBe("omp × GLM-5.3 · braucht dich");
+  });
+
+  it("starting: pair + 'starting…'", () => {
+    const run = mkRun({ state: "starting", model: GLM });
+    expect(headContextLine(run, tEn, "en")).toBe("omp × GLM-5.3 · starting…");
+  });
+
+  it("running: pair + running-for duration (falls back to bare pair with no started_at)", () => {
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-23T10:12:00Z"));
+    const run = mkRun({ state: "running", model: GLM, started_at: "2026-09-23T10:00:00Z" });
+    expect(headContextLine(run, tEn, "en")).toBe("omp × GLM-5.3 · running for 12 min");
+    const noStart = mkRun({ state: "running", model: GLM, started_at: null, created_at: null });
+    expect(headContextLine(noStart, tEn, "en")).toBe("omp × GLM-5.3");
+    vi.restoreAllMocks();
+  });
+
+  // `formatAgeRounded`'s own age computation defaults to `new Date()`, which
+  // (unlike `runDurationSeconds`'s `Date.now()` default above) is NOT moved
+  // by mocking `Date.now` — the same reason `HeadChatRow.test.tsx`'s own
+  // "ended" case checks only for the word "ago", never an exact day count.
+  // A relative `exited_at` keeps this test exact without fighting that.
+  it("ended: withAge (default) appends '… ago'; withAge:false stops at the state word", () => {
+    const exitedAt = new Date(Date.now() - 3 * 86_400_000).toISOString();
+    const run = mkRun({ state: "passed", model: GLM, exited_at: exitedAt });
+    expect(headContextLine(run, tEn, "en")).toBe("omp × GLM-5.3 · passed · 3 d ago");
+    expect(headContextLine(run, tEn, "en", { withAge: false })).toBe("omp × GLM-5.3 · passed");
+  });
+});
+
+describe("headListLine — 'Head · <pair> · <state/time>', no end-of-run age", () => {
+  it("prefixes with the translated 'Head' word, in both locales", () => {
+    const run = mkRun({ state: "running", model: GLM, started_at: null, created_at: null });
+    expect(headListLine(run, tEn, "en")).toBe("Head · omp × GLM-5.3");
+    expect(headListLine(run, tDe, "de")).toBe("Head · omp × GLM-5.3");
+  });
+
+  it("an ended run has no '… ago' clause, unlike headContextLine's own default", () => {
+    const exitedAt = new Date(Date.now() - 3 * 86_400_000).toISOString();
+    const run = mkRun({ state: "passed", model: GLM, exited_at: exitedAt });
+    expect(headListLine(run, tEn, "en")).toBe("Head · omp × GLM-5.3 · passed");
+  });
+});
+
+describe("lastHeadActivity — HeadStateCard's 'Last: …' line", () => {
+  const tool = (uuid: string, ts: string, title: string): ChatEvent =>
+    ({ kind: "tool", uuid, ts, name: "bash", title, detail: {}, toolUseId: null, result: null, status: "done", stats: null, sidechain: false }) as ChatEvent;
+  const message = (uuid: string, ts: string, role: "user" | "assistant" | "teammate", text: string): ChatEvent =>
+    ({ kind: "message", uuid, ts, role, text, model: null, sidechain: false }) as ChatEvent;
+  const thinking = (uuid: string, ts: string): ChatEvent => ({ kind: "thinking", uuid, ts, text: "hmm", sidechain: false }) as ChatEvent;
+
+  it("picks the NEWEST tool title, scanning backward — not the first event in the window", () => {
+    const events = [tool("t1", "2026-09-23T10:00:00Z", "older tool"), tool("t2", "2026-09-23T10:00:30Z", "newer tool")];
+    expect(lastHeadActivity(events)).toEqual({ text: "newer tool", ts: "2026-09-23T10:00:30Z" });
+  });
+
+  it("falls back to the newest assistant message's first line when the newest event has no title", () => {
+    const events = [
+      tool("t1", "2026-09-23T10:00:00Z", "earlier tool"),
+      message("m1", "2026-09-23T10:00:10Z", "assistant", "Looking at the diff\nmore detail below"),
+    ];
+    expect(lastHeadActivity(events)).toEqual({ text: "Looking at the diff", ts: "2026-09-23T10:00:10Z" });
+  });
+
+  it("skips thinking/usage frames and the operator's own user turn — neither carries a sentence to show", () => {
+    const events = [
+      tool("t1", "2026-09-23T10:00:00Z", "the real last thing it did"),
+      thinking("th1", "2026-09-23T10:00:05Z"),
+      message("u1", "2026-09-23T10:00:10Z", "user", "do the thing"),
+    ];
+    expect(lastHeadActivity(events)).toEqual({ text: "the real last thing it did", ts: "2026-09-23T10:00:00Z" });
+  });
+
+  it("is null for an empty window or one with nothing renderable", () => {
+    expect(lastHeadActivity([])).toBeNull();
+    expect(lastHeadActivity([thinking("th1", "2026-09-23T10:00:00Z")])).toBeNull();
   });
 });

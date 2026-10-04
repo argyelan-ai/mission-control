@@ -65,7 +65,7 @@ import { useHeadPairsForLabels } from "@/components/heads/HeadStateCard";
 import { useHeadsEnabled } from "@/components/heads/useHeadsEnabled";
 import { NightShiftToggle } from "@/components/night/NightShiftToggle";
 import { canMarkTonight } from "@/lib/nightShift";
-import { HEAD_POLL_MS, headRunsActive, isHeadActive, runPairLabel, sortRunsNewestFirst } from "@/lib/heads";
+import { HEAD_POLL_MS, headRunsActive, isHeadActive, pairShort, sortRunsNewestFirst } from "@/lib/heads";
 import { formatAbsolute, formatAge, formatDuration, formatUsd, secondsBetween } from "@/lib/taskDetail/format";
 import { parseInvalidTransition } from "@/lib/taskDetail/errors";
 import { STATUS_LABEL_KEY, statusLabelKey } from "@/lib/taskDetail/statusLabels";
@@ -1033,7 +1033,14 @@ export function TaskDetailBody({
       <PropRow label={t("detail.factAgent")} testId="fact-agent">
         <PropertyMenu
           label={t("detail.factAgent")}
-          value={agent ? agent.name : t("unassigned")}
+          // A head run owns this task's work before any `assigned_agent_id`
+          // does (heads-sichtbar anhang.md A11: the DB keeps that field
+          // NULL while a head runs) — showing both an "Unassigned" agent
+          // value AND a separate "Head" fact row said the same thing about
+          // who is working twice (K3). PR 3 (bauplan §4) folds the two into
+          // this one row's VALUE; the menu underneath still lets the
+          // operator assign a real agent regardless of a head.
+          value={latestHeadRun ? `${tHeads("runs.fact")} · ${pairShort(latestHeadRun)}` : agent ? agent.name : t("unassigned")}
           options={agents.map((a) => ({ id: a.id, label: a.name, active: a.id === task.assigned_agent_id }))}
           onSelect={(id) => id && updateMutation.mutate({ assigned_agent_id: id } as Partial<Task>)}
         />
@@ -1066,11 +1073,6 @@ export function TaskDetailBody({
             {task.pr_number ? t("prChipNumber", { number: task.pr_number }) : t("prChipOpen")}
             <ExternalLink size={14} aria-hidden />
           </a>
-        </PropRow>
-      )}
-      {latestHeadRun && (
-        <PropRow label={tHeads("runs.fact")} testId="fact-head">
-          <span className="truncate">{runPairLabel(latestHeadRun, headPairs)}</span>
         </PropRow>
       )}
       {stateCard?.kind === "running" && (

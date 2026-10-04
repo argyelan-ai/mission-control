@@ -3092,7 +3092,8 @@
       "kpiMemoryFree": "Speicher frei",
       "kpiRecipesFit": "Rezepte passen",
       "kpiAgents": "Agenten",
-      "kpiInUse": "In Nutzung",
+      "kpiWorking": "arbeitet",
+      "kpiConnected": "+ {count} verbunden",
       "inUseTooltip": "{heads, plural, one {# Head} other {# Heads}} · {agents, plural, one {# aktiver Agent} other {# aktive Agenten}}",
       "inUseTooltipWithPaused": "{heads, plural, one {# Head} other {# Heads}} · {agents, plural, one {# aktiver Agent} other {# aktive Agenten}} · {paused, plural, other {# pausiert}}",
       "inUseHead": "Head: „{title}“",
@@ -3459,6 +3460,8 @@
     "card": {
       "step": "Schritt: {step}",
       "noStep": "Noch kein Schritt gemeldet.",
+      "last": "Zuletzt: {text}",
+      "viewLiveTranscript": "Verlauf live ansehen",
       "lastSign": "Letzte Ausgabe vor {age}",
       "noSign": "Noch keine Ausgabe",
       "silentWarn": "Seit {age} still — läuft noch",

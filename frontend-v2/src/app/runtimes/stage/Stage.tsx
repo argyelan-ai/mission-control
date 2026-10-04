@@ -176,18 +176,30 @@ export function Stage({
   const dotColor =
     status === "failed" ? STATUS_TEXT.error : status === "switching" ? STATUS_TEXT.warning : STATUS.online;
 
-  // "In use" = active (not paused) agents bound to this box's runtime + heads
-  // working on it — a paused agent does not use the box (same split as the
-  // /agents page and the sidebar counter). An agent the roster does not
-  // know yet counts as active: better one too many than a free-looking box.
-  // The tooltip says who; heads first (they are the ones that block a switch).
+  // "In use" used to count a working head and a merely-connected, idle
+  // agent as the same "1" (bauplan `heads-sichtbar` PR 3 §4 — the approved
+  // mockup's own annotation: "'2' zählt einen arbeitenden Head und einen
+  // ruhenden Agenten gleich."). Split instead into WORKING (heads on this
+  // box + bound agents actually `status === "busy"`) and CONNECTED (the
+  // box's other active-but-idle bound agents) — a paused agent counts as
+  // neither (same split as the /agents page and the sidebar counter). An
+  // agent the roster does not know yet counts as active-and-idle: better
+  // counted as merely connected than missing from a free-looking box.
   const boundAgents = (agentsData?.agents ?? []).map(
-    (ref) => roster?.find((a) => a.id === ref.id) ?? ({ ...ref, operational_mode: "active" } as unknown as Agent),
+    (ref) => roster?.find((a) => a.id === ref.id) ?? ({ ...ref, operational_mode: "active", status: "idle" } as unknown as Agent),
   );
   const agentSplit = fleetCount(boundAgents);
-  const activeNames = boundAgents.filter((a) => a.operational_mode !== "paused").map((a) => a.name).filter(Boolean);
+  const activeAgents = boundAgents.filter((a) => a.operational_mode !== "paused");
+  const busyAgents = activeAgents.filter((a) => a.status === "busy");
+  const connectedAgents = activeAgents.filter((a) => a.status !== "busy");
+  const activeNames = activeAgents.map((a) => a.name).filter(Boolean);
   const pausedNames = boundAgents.filter((a) => a.operational_mode === "paused").map((a) => a.name).filter(Boolean);
-  const agentCount = agentSplit.active;
+  const workingCount = headsOnCard.length + busyAgents.length;
+  const connectedCount = connectedAgents.length;
+  // The tooltip keeps its own existing "N heads · N active agents" summary
+  // (unchanged by the working/connected split above — it still answers
+  // "who, in total, is on this box", heads first since they are the ones
+  // that block a switch) plus the per-name breakdown.
   const inUseTitle = [
     agentSplit.paused > 0
       ? t("inUseTooltipWithPaused", { heads: headsOnCard.length, agents: agentSplit.active, paused: agentSplit.paused })
@@ -206,8 +218,9 @@ export function Stage({
       testId: "kpi-speed",
     },
     {
-      value: String(agentCount + headsOnCard.length),
-      label: t("kpiInUse"),
+      value: String(workingCount),
+      unit: t("kpiWorking"),
+      label: t("kpiConnected", { count: connectedCount }),
       title: inUseTitle,
       testId: "kpi-in-use",
     },

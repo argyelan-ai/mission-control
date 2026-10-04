@@ -75,27 +75,61 @@ describe("Stage — model card while a head works", () => {
     expect(screen.getByTestId("stop-runtime")).toBeEnabled();
   });
 
-  it("IN USE counts active agents + heads and says who in the tooltip", async () => {
+  it("WORKING = heads + busy agents; an idle active agent is only CONNECTED — tooltip still says who", async () => {
     vi.spyOn(api.heads, "occupancy").mockResolvedValue({ boxes: { "host-1": head } });
     vi.spyOn(api.runtimes.db, "agents").mockResolvedValue({
       runtime_slug: "glm-local", count: 2,
       agents: [{ id: "a1", name: "Beta", agent_runtime: "x" }, { id: "a2", name: "Nova", agent_runtime: "x" }],
     });
+    // mkAgent's default status is "idle" — neither is busy, so both are
+    // merely CONNECTED; only the head is WORKING.
     vi.spyOn(api.agents, "list").mockResolvedValue([mkAgent("a1", "Beta", "active"), mkAgent("a2", "Nova", "active")]);
     renderWithQuery(<Stage runtime={runtime} members={[{ host, role: "head" }]} onOpenCockpit={() => {}} />);
     const tile = await screen.findByTestId("kpi-in-use");
-    await waitFor(() => expect(tile).toHaveTextContent("3"));
-    expect(tile).toHaveTextContent("In use");
+    await waitFor(() => expect(tile).toHaveTextContent("1"));
+    expect(tile).toHaveTextContent("working");
+    expect(tile).toHaveTextContent("+ 2 connected");
     expect(screen.queryByText("Agents")).not.toBeInTheDocument();
     const title = tile.getAttribute("title") ?? "";
-    // (the test mock of next-intl does not render ICU plurals — the counts
-    // sentence itself is checked with the real formatter below)
+    // The tooltip's own "N heads · N active agents" summary is unchanged by
+    // the working/connected split above (the test mock of next-intl does
+    // not render ICU plurals — the counts sentence itself is checked with
+    // the real formatter below).
     expect(title).toContain("{heads, plural");
     expect(title).toContain("Fix flaky retry test");
     expect(title).toContain("Beta, Nova");
   });
 
-  it("paused agents do not count: 1 head + 3 paused agents → 1", async () => {
+  it("a duo: 2 heads + 1 busy + 1 idle + 1 paused agent → '3 working · + 1 connected'", async () => {
+    const host2: Host = { ...host, id: "host-2", slug: "box-2", display_name: "Box 2" };
+    const head2: HeadBusy = { run_id: "run-2", task_id: "task-8", title: "Second job", harness: "omp", runtime_slug: "glm-local", since: null };
+    vi.spyOn(api.heads, "occupancy").mockResolvedValue({ boxes: { "host-1": head, "host-2": head2 } });
+    vi.spyOn(api.runtimes.db, "agents").mockResolvedValue({
+      runtime_slug: "glm-local", count: 3,
+      agents: [
+        { id: "a1", name: "Working", agent_runtime: "x" },
+        { id: "a2", name: "Idle", agent_runtime: "x" },
+        { id: "a3", name: "Resting", agent_runtime: "x" },
+      ],
+    });
+    vi.spyOn(api.agents, "list").mockResolvedValue([
+      { id: "a1", name: "Working", operational_mode: "active", status: "busy" } as unknown as Agent,
+      mkAgent("a2", "Idle", "active"),
+      mkAgent("a3", "Resting", "paused"),
+    ]);
+    renderWithQuery(
+      <Stage runtime={runtime} members={[{ host, role: "head" }, { host: host2, role: "worker" }]} onOpenCockpit={() => {}} />,
+    );
+    const tile = await screen.findByTestId("kpi-in-use");
+    await waitFor(() => expect(tile).toHaveTextContent("3"));
+    expect(tile).toHaveTextContent("working");
+    expect(tile).toHaveTextContent("+ 1 connected");
+    // the paused agent counts toward neither number, but the tooltip still names it
+    const title = tile.getAttribute("title") ?? "";
+    expect(title).toContain("Resting");
+  });
+
+  it("paused agents count toward neither number: 1 head + 3 paused agents → '1 working · + 0 connected'", async () => {
     vi.spyOn(api.heads, "occupancy").mockResolvedValue({ boxes: { "host-1": head } });
     vi.spyOn(api.runtimes.db, "agents").mockResolvedValue({
       runtime_slug: "glm-local", count: 3,
@@ -111,18 +145,18 @@ describe("Stage — model card while a head works", () => {
     renderWithQuery(<Stage runtime={runtime} members={[{ host, role: "head" }]} onOpenCockpit={() => {}} />);
     const tile = await screen.findByTestId("kpi-in-use");
     await waitFor(() => expect(tile.getAttribute("title") ?? "").toContain("Paused: Alpha, Beta, Gamma"));
-    expect(tile).toHaveTextContent(/^1In use$/);
+    expect(tile).toHaveTextContent(/^1working\+ 0 connected$/);
     const title = tile.getAttribute("title") ?? "";
     expect(title).toContain("{paused, plural"); // the "with paused" sentence
     expect(title).not.toContain("Agents:");
   });
 
-  it("free box: IN USE is only the agents, nothing locked", async () => {
+  it("free box: nothing working, nothing connected, nothing locked", async () => {
     vi.spyOn(api.heads, "occupancy").mockRejectedValue(new Error('API 404: {"detail":{"code":"heads_disabled"}}'));
     renderWithQuery(<Stage runtime={runtime} members={[{ host, role: "head" }]} onOpenCockpit={() => {}} />);
     await waitFor(() => expect(api.heads.occupancy).toHaveBeenCalled());
     const tile = await screen.findByTestId("kpi-in-use");
-    expect(tile).toHaveTextContent("0");
+    expect(tile).toHaveTextContent(/^0working\+ 0 connected$/);
     expect(tile.getAttribute("title")).not.toContain("Head:");
     expect(await screen.findByTestId("stop-runtime")).toBeEnabled();
   });
@@ -176,7 +210,8 @@ describe("Switch / stop under a working head", () => {
   });
 
   it("the German texts are there", () => {
-    expect(de.runtimes.stage.kpiInUse).toBe("In Nutzung");
+    expect(de.runtimes.stage.kpiWorking).toBe("arbeitet");
+    expect(de.runtimes.stage.kpiConnected).toContain("verbunden");
     expect(de.heads.runtimes.onBoxBodyStop).toBeTruthy();
     expect(de.heads.runtimes.ok).toBeTruthy();
     expect(de.runtimes.stage.inUseTooltip).toContain("{heads");
@@ -289,7 +324,7 @@ describe("Runs without a task", () => {
     const section = await screen.findByTestId("head-orphan-runs");
     expect(within(section).getAllByRole("listitem")).toHaveLength(1);
     // display name, not the runtime slug
-    await waitFor(() => expect(section).toHaveTextContent("omp · GLM local · task deleted"));
+    await waitFor(() => expect(section).toHaveTextContent("omp × GLM local · task deleted"));
     await userEvent.click(within(section).getByRole("button", { name: "Stop" }));
     expect(stop).not.toHaveBeenCalled(); // asks first
     await userEvent.click(within(section).getByTestId("head-orphan-stop-orphan-confirm-yes"));

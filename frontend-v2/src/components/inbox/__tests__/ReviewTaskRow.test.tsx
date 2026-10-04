@@ -2,6 +2,8 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ReviewTaskRow } from "../ReviewTaskRow";
+import { mkRun } from "@/lib/__tests__/headFixtures";
+import type { HeadRun } from "@/lib/heads";
 import type { Task } from "@/lib/types";
 
 function mkTask(overrides: Partial<Task> = {}): Task {
@@ -75,14 +77,16 @@ function mkTask(overrides: Partial<Task> = {}): Task {
   };
 }
 
-function renderRow(task: Task) {
+function renderRow(task: Task, headRun: HeadRun | null = null, agent?: Parameters<typeof ReviewTaskRow>[0]["agent"]) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={qc}>
       <ReviewTaskRow
         task={task}
         boardId="board-1"
+        agent={agent}
         agentMap={{}}
+        headRun={headRun}
         onDecision={vi.fn()}
       />
     </QueryClientProvider>,
@@ -98,5 +102,33 @@ describe("ReviewTaskRow — Human review badge", () => {
   it('hides the badge when human_review_required is false or unset', () => {
     renderRow(mkTask({ human_review_required: false }));
     expect(screen.queryByText("Your review")).not.toBeInTheDocument();
+  });
+});
+
+describe("ReviewTaskRow — head chip (heads-sichtbar PR 3, bauplan §4)", () => {
+  it("a head-finished card shows 'Head · <pair> · passed ›', linking to the head chat", () => {
+    const run = mkRun({ run_id: "run-9", harness: "omp", model: "GLM-5.3-Flash-EXL3", state: "passed", pr_url: "https://github.com/o/r/pull/9" });
+    renderRow(mkTask(), run);
+    const chip = screen.getByTestId("review-row-head-chip");
+    expect(chip).toHaveTextContent("Head · omp × GLM-5.3 · passed");
+    expect(chip).toHaveAttribute("href", "/sessions?head=run-9");
+  });
+
+  it("without a head run, an assigned agent's own chip shows instead — unchanged default", () => {
+    renderRow(mkTask({ assigned_agent_id: "a1" }), null, { id: "a1", name: "Beta", emoji: "🔧" } as never);
+    expect(screen.getByText("Beta")).toBeInTheDocument();
+    expect(screen.queryByTestId("review-row-head-chip")).not.toBeInTheDocument();
+  });
+
+  it("clicking the head chip does not also toggle the row's own expand/collapse", async () => {
+    const { default: userEvent } = await import("@testing-library/user-event");
+    const run = mkRun({ state: "passed" });
+    renderRow(mkTask(), run);
+    expect(screen.queryByText("No comments yet.")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("review-row-head-chip"));
+    // still collapsed — the chip's own stopPropagation held (sabotage: removing
+    // it would expand the card on every chip click, a confusing side effect
+    // of what reads as "open the head chat").
+    expect(screen.queryByText("No comments yet.")).not.toBeInTheDocument();
   });
 });

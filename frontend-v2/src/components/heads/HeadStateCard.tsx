@@ -8,7 +8,9 @@
  * Here: the head's next step + ONE main action, everything else under
  * "Details" (collapsed):
  *
- *   Step: 4/7 sabotage probe
+ *   Schritt 5/7 · unabhängige Prüfung                (translated via heads.steps, bauplan PR 3 §4)
+ *   🔧 Last: job: wait for reviewer result                       26 s ago
+ *   View live transcript ›
  *   [Stop]                                         Details ▾
  *     Last output 40 s ago · Restart with … · Open log · Run record · tmux (desktop)
  *
@@ -19,21 +21,30 @@
  *   failed / stopped → surface: reason in one sentence + branch  [Restart with …]
  *
  * Content (question, step, log) is shown as the head wrote it; only labels
- * are translated.
+ * are translated — EXCEPT the step line, which is parsed (`parseStep`) and
+ * shown via the 8 fixed `heads.steps.*` keys (bauplan PR 3 §4: "Schritte in
+ * Marks Sprache", since every head follows the same 8 steps); a step line
+ * that does not parse falls back to the raw text, same as before.
  */
 
 import { useState } from "react";
+import Link from "next/link";
 import { useLocale, useTranslations } from "next-intl";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, Copy, ExternalLink, RotateCcw, ScrollText, Terminal, FileText, Send } from "lucide-react";
+import {
+  ChevronDown, ChevronRight, Copy, ExternalLink, RotateCcw, ScrollText, Terminal, FileText, Send, Wrench,
+} from "lucide-react";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import { C, STATUS_TEXT } from "@/lib/colors";
-import { formatDuration } from "@/lib/taskDetail/format";
+import { formatAgeRounded, formatDuration } from "@/lib/taskDetail/format";
 import {
   failReasonKey,
   headErrorKey,
   headStateKey,
+  headStepKey,
+  lastHeadActivity,
+  parseStep,
   prNumberFromUrl,
   type HeadPairsResponse,
   type HeadRun,
@@ -42,6 +53,13 @@ import type { HeadMainAction } from "@/lib/taskDetail/stateCard";
 import { HeadRestartDialog } from "./HeadRestartDialog";
 import { HeadStopButton } from "./HeadStopButton";
 import { NEXT_TEXT, PRIMARY_BTN, PRIMARY_STYLE, QUIET_BTN, RAISED } from "@/components/task/detail/nextStepStyle";
+
+/** Window of events a lightweight "what did it just do" poll reads — far
+ *  smaller than the full chat view's own `limit: 1000` (bauplan PR 3 §4,
+ *  `heads.history(runId, {limit: 20})`): this card only ever shows the ONE
+ *  most recent tool title or sentence, never a transcript. */
+const LAST_ACTIVITY_LIMIT = 20;
+const LAST_ACTIVITY_POLL_MS = 10_000;
 
 /** Pairs for nicer runtime names — shared cache with the pickers. */
 export function useHeadPairsForLabels(enabled = true) {
@@ -127,6 +145,30 @@ export function HeadStateCard({
 
   const prNumber = prNumberFromUrl(run.pr_url);
   const fail = failReasonKey(run.reason);
+
+  // "Schritt 5/7 · unabhängige Prüfung" — the 8 fixed steps translated
+  // (bauplan PR 3 §4); a step line the head wrote that does not match the
+  // fixed shape (`parseStep` → `null`, ~3 of 24 real `step.txt` files on a
+  // live check) falls back to the raw text exactly as before, never blank.
+  const isActive = run.state === "running" || run.state === "starting";
+  const parsedStep = parseStep(run.step);
+  const stepKey = parsedStep ? headStepKey(parsedStep.n) : null;
+  const stepLine =
+    parsedStep && stepKey ? t("chat.footer.step", { n: parsedStep.n, total: parsedStep.total, name: t(stepKey) }) : null;
+
+  // "Last: …" — the most recent tool title/sentence, from a small, separate
+  // poll (bauplan PR 3 §4: `heads.history(runId, {limit: 20})`, NOT the full
+  // chat view's own `useHeadTranscript`) that only runs while the run is
+  // still active.
+  const lastActivityQuery = useQuery({
+    queryKey: ["heads", run.run_id, "chat", "history", "last"],
+    queryFn: () => api.heads.history(run.run_id, { limit: LAST_ACTIVITY_LIMIT }),
+    enabled: isActive,
+    retry: false,
+    refetchInterval: isActive ? LAST_ACTIVITY_POLL_MS : false,
+  });
+  const lastActivity = lastActivityQuery.data ? lastHeadActivity(lastActivityQuery.data.data.events) : null;
+  const lastActivityAge = lastActivity ? formatAgeRounded(lastActivity.ts, locale) : null;
 
   // ── Main action (exactly one) ──
   let main: React.ReactNode = null;
@@ -225,13 +267,35 @@ export function HeadStateCard({
       {(run.state === "running" || run.state === "starting") && (
         <div>
           <p className={`${NEXT_TEXT} line-clamp-2`} style={{ color: C.textSecondary }}>
-            {run.step ? t("card.step", { step: run.step }) : t("card.noStep")}
+            {stepLine ?? (run.step ? t("card.step", { step: run.step }) : t("card.noStep"))}
           </p>
           {/* Overdue sign of life is a warning, so it stays in view; the
               normal "last output" age lives under Details (one time per header). */}
           {run.heartbeat_stale && (
             <p className="mt-1 text-sm" style={{ color: STATUS_TEXT.warning }}>{t("card.heartbeatStale")}</p>
           )}
+          {lastActivity && (
+            <div className="mt-3 flex items-center gap-2" data-testid="head-card-last-activity">
+              <span className="flex items-center gap-2 min-w-0 flex-1 text-sm" style={{ color: C.textMuted }}>
+                <Wrench size={14} className="shrink-0" aria-hidden />
+                <span className="truncate">{t("card.last", { text: lastActivity.text })}</span>
+              </span>
+              {lastActivityAge && (
+                <span className="shrink-0 text-sm tabular-nums" style={{ color: C.textMuted }}>
+                  {t("time.ago", { age: lastActivityAge })}
+                </span>
+              )}
+            </div>
+          )}
+          <Link
+            href={`/sessions?head=${encodeURIComponent(run.run_id)}`}
+            data-testid="head-card-view-live"
+            className="mt-3 inline-flex items-center gap-1 text-sm cursor-pointer transition-colors hover:opacity-80"
+            style={{ color: C.textPrimary }}
+          >
+            {t("card.viewLiveTranscript")}
+            <ChevronRight size={15} aria-hidden />
+          </Link>
         </div>
       )}
 

@@ -147,7 +147,7 @@ describe("Restart with … (B6)", () => {
     await userEvent.click(screen.getByTestId("head-main-restart"));
     const dialog = await screen.findByTestId("head-restart-dialog");
     const trigger = await within(dialog).findByTestId("head-pair-trigger");
-    expect(trigger).toHaveTextContent("omp · GLM local");
+    expect(trigger).toHaveTextContent("omp × GLM local");
     await userEvent.click(trigger);
     await userEvent.click(within(dialog).getByTestId(`head-pair-option-${pairKey(claudeLocal)}`));
     await userEvent.click(within(dialog).getByTestId("head-restart-mode-fresh"));
@@ -225,9 +225,9 @@ describe("Runs list + polling (B7)", () => {
     ];
     render(<QueryClientProvider client={qc}><HeadRunsList runs={runs} pairs={[ompLocal, claudeLocal]} /></QueryClientProvider>);
     const rows = screen.getAllByTestId("head-run-row");
-    expect(rows[0]).toHaveTextContent("omp · GLM local");
+    expect(rows[0]).toHaveTextContent("omp × GLM local");
     expect(rows[0]).toHaveTextContent("Failed · Time limit reached.");
-    expect(rows[1]).toHaveTextContent("Claude Code · GLM local");
+    expect(rows[1]).toHaveTextContent("Claude Code × GLM local");
     expect(rows[1]).toHaveTextContent("Passed · PR #712");
   });
 
@@ -246,4 +246,80 @@ describe("Runs list + polling (B7)", () => {
     expect(headRunsActive({ runs: [] })).toBe(false);
     expect(headRunsActive(undefined)).toBe(false);
   });
+});
+
+describe("HeadStateCard — translated step, last activity, live link (heads-sichtbar PR 3 §4)", () => {
+  it("a step line matching the fixed shape is shown translated — not the head's raw 'waiting for' clause", () => {
+    vi.spyOn(api.heads, "history").mockResolvedValue(null);
+    renderCard(mkRun({ state: "running", step: "5/7 independent review · waiting for: reviewer" }));
+    expect(screen.getByText("Step 5/7 · Independent review")).toBeInTheDocument();
+    expect(screen.queryByText(/waiting for: reviewer/)).not.toBeInTheDocument();
+  });
+
+  it("a step line that does not match the fixed shape falls back to the raw text, same as before", () => {
+    vi.spyOn(api.heads, "history").mockResolvedValue(null);
+    renderCard(mkRun({ state: "running", step: "4/7 sabotage probe" }));
+    expect(screen.getByText("Step: 4/7 sabotage probe")).toBeInTheDocument();
+  });
+
+  it("'Last: …' shows the most recent tool title with its age, next to a link into the live transcript", async () => {
+    const messageAt = new Date(Date.now() - 60_000).toISOString();
+    const toolAt = new Date(Date.now() - 26_000).toISOString();
+    vi.spyOn(api.heads, "history").mockResolvedValue({
+      etag: "e1",
+      data: {
+        events: [
+          {
+            kind: "message", uuid: "m1", ts: messageAt, role: "assistant",
+            text: "Looking at the diff", model: null, sidechain: false,
+          },
+          {
+            kind: "tool", uuid: "t1", ts: toolAt, name: "bash",
+            title: "job: wait for reviewer result", detail: {}, toolUseId: null, result: null, status: "done",
+            stats: null, sidechain: false,
+          },
+        ],
+        session: { sessionId: "s1", live: true, startedAt: null, aliveness: "active" },
+        hasMore: false,
+        subagentRuns: [],
+        source: "transcript",
+        reader: "omp",
+        reason: null,
+      },
+    });
+    renderCard(mkRun({ state: "running", run_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }));
+    const line = await screen.findByTestId("head-card-last-activity");
+    // The newer tool event wins over the earlier message — not the first one.
+    expect(line).toHaveTextContent("Last: job: wait for reviewer result");
+    expect(line).toHaveTextContent(/\d+ s ago/);
+    const link = screen.getByTestId("head-card-view-live");
+    expect(link).toHaveAttribute("href", "/sessions?head=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+    expect(link).toHaveTextContent("View live transcript");
+  });
+
+  it("with no transcript yet, there is no 'Last: …' line — only the live link", async () => {
+    vi.spyOn(api.heads, "history").mockResolvedValue({
+      etag: "e1",
+      data: {
+        events: [], session: { sessionId: "s1", live: true, startedAt: null, aliveness: "active" },
+        hasMore: false, subagentRuns: [], source: "transcript", reader: "omp", reason: "not_yet",
+      },
+    });
+    renderCard(mkRun({ state: "starting" }));
+    await waitFor(() => expect(api.heads.history).toHaveBeenCalled());
+    expect(screen.queryByTestId("head-card-last-activity")).not.toBeInTheDocument();
+    expect(screen.getByTestId("head-card-view-live")).toBeInTheDocument();
+  });
+
+  it("the live link only appears while the run is active — not once it has ended", () => {
+    renderCard(mkRun({ state: "passed", pr_url: "https://github.com/o/r/pull/1" }));
+    expect(screen.queryByTestId("head-card-view-live")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("head-card-last-activity")).not.toBeInTheDocument();
+  });
+
+  // Sabotage: a last-activity scan that reads forward (oldest-first) instead
+  // of backward from the newest event would show "Looking at the diff"
+  // instead of the tool title above — proven by `lastHeadActivity`'s own
+  // unit test in lib/__tests__/heads.test.ts, which breaks red the moment
+  // the loop direction flips.
 });

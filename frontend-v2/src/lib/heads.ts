@@ -14,6 +14,9 @@
  *     in the `heads` i18n namespace.
  */
 
+import { formatAgeRounded, formatDuration } from "./taskDetail/format";
+import type { ChatEvent } from "./chatTypes";
+
 export type HeadPairStatus = "ok" | "experimental" | "blocked";
 export type HeadLocality = "local" | "cloud";
 
@@ -121,11 +124,15 @@ export function pairKey(p: { harness: string | null; runtime_slug: string | null
   return `${p.harness ?? ""}::${p.runtime_slug ?? ""}`;
 }
 
-/** Plain pair name for the UI: "omp · GLM-5.3 Flash". */
+/** Plain pair name for the UI: "omp × GLM-5.3 Flash". "×" (not "·") is the
+ *  ONE separator for a harness/runtime(/model) pair everywhere in the app —
+ *  heads-sichtbar PR 3 (bauplan §4, K10/ADR-086's own wording, "omp ×
+ *  GLM-5.3") made this the single pair notation and changed every caller +
+ *  test that rendered this function's output accordingly. */
 export function pairLabel(p: { harness_label?: string | null; harness?: string | null; runtime_label?: string | null; runtime_slug?: string | null }): string {
   const harness = p.harness_label || harnessLabel(p.harness);
   const runtime = p.runtime_label || p.runtime_slug || "—";
-  return `${harness} · ${runtime}`;
+  return `${harness} × ${runtime}`;
 }
 
 const HARNESS_LABELS: Record<string, string> = {
@@ -517,13 +524,13 @@ export function modelFamily(model: string | null | undefined): string {
   return out || model;
 }
 
-/** "omp × GLM-5.3" (the operator's word for the pair, ADR-086 §5) — the SHORT form
- *  for a list row or a chat header, where `pairLabel`'s "harness · full
- *  runtime name" would not fit. Deliberately a separate function rather
- *  than changing `pairLabel`'s own separator or shortening: that change is
- *  PR 3's (bauplan §4, `pairLabel() Trenner "·" → "×"`), and touches every
- *  existing `pairLabel` caller/test — this one is additive and touches
- *  none of them. */
+/** "omp × GLM-5.3" (the operator's word for the pair, ADR-086 §5) — the SHORT
+ *  form for a list row or a chat header, where `pairLabel`'s "harness ×
+ *  full runtime name" would not fit. Kept as its own function rather than
+ *  folded into `pairLabel` even after PR 3 unified their separator: the two
+ *  still differ on which NAME they show (`modelFamily(run.model)` here vs.
+ *  `runtime_label`/`runtime_slug` there) and `pairLabel` also serves plain
+ *  `HeadPair` objects that carry no `model` field at all. */
 export function pairShort(run: Pick<HeadRun, "harness" | "model">): string {
   return `${harnessLabel(run.harness)} × ${modelFamily(run.model)}`;
 }
@@ -679,4 +686,83 @@ export function sortHeadsForList(runs: HeadRun[]): HeadRun[] {
       return a.i - b.i;
     })
     .map(({ r }) => r);
+}
+
+// ── Heads everywhere else (heads-sichtbar PR 3) ─────────────────────────────
+//
+// One shared "pair + a single state/time fact" formatter, used by every
+// surface that names a head run next to a task (the task list's second
+// line, the Inbox's head rows) — the same rule `HeadChatRow`/
+// `HeadChatHeader` already apply to their own second line/context line.
+
+/** `t()` as `useTranslations("heads")` gives it — the only shape every
+ *  caller of `headContextLine`/`headListLine` needs. */
+type HeadsT = (key: string, values?: Record<string, string | number>) => string;
+
+/**
+ * "<pair> · <one state or time fact>" — e.g. "omp × GLM-5.3 · running for
+ * 12 min", "omp × GLM-5.3 · needs you", "Claude Code × GLM-5.3 · passed ·
+ * 3 d ago". `withAge` (default on) appends the ended-run's "… ago" clause;
+ * callers that already show the run's age elsewhere on the same row (so
+ * showing it twice would break K3) pass `withAge: false` and get just
+ * "<pair> · <state word>".
+ */
+export function headContextLine(
+  run: Pick<HeadRun, "harness" | "model" | "state" | "created_at" | "started_at" | "exited_at">,
+  t: HeadsT,
+  locale: string,
+  opts: { withAge?: boolean } = {},
+): string {
+  const withAge = opts.withAge ?? true;
+  const pair = pairShort(run);
+  if (run.state === "needs_you") {
+    return `${pair} · ${midLineStateWord(t(headStateKey(run.state)))}`;
+  }
+  if (run.state === "starting") {
+    return `${pair} · ${t("time.startingNow")}`;
+  }
+  if (run.state === "running") {
+    const seconds = runDurationSeconds(run);
+    const duration = seconds != null ? formatDuration(seconds, locale) : null;
+    return duration ? `${pair} · ${t("time.runningFor", { duration })}` : pair;
+  }
+  const stateWord = midLineStateWord(t(headStateKey(run.state)));
+  if (!withAge) return `${pair} · ${stateWord}`;
+  const endedAt = run.exited_at ?? run.created_at;
+  const age = formatAgeRounded(endedAt, locale);
+  return age ? `${pair} · ${stateWord} · ${t("time.ago", { age })}` : `${pair} · ${stateWord}`;
+}
+
+/** "Head · <pair> · <state/time>" — the task list's second line (bauplan
+ *  PR 3 §4: `TaskListColumn`/`TaskRow`) and the Inbox's head rows. No
+ *  end-of-run age here (`withAge: false`): a dense list row keeps one time
+ *  fact at most, and these rows carry no other time fact to begin with, so
+ *  dropping it (rather than keeping it and removing some other fact) is the
+ *  one that matches the approved mockup's own rows ("Head · Claude Code ×
+ *  GLM-5.3 · passed", no "… ago"). */
+export function headListLine(
+  run: Pick<HeadRun, "harness" | "model" | "state" | "created_at" | "started_at" | "exited_at">,
+  t: HeadsT,
+  locale: string,
+): string {
+  return `${t("runs.fact")} · ${headContextLine(run, t, locale, { withAge: false })}`;
+}
+
+/** The most recent tool title or assistant sentence in a transcript window —
+ *  `HeadStateCard`'s "Last: …" line (bauplan PR 3 §4) while a run is still
+ *  active. Scans from the newest event backwards: a `thinking`/`usage`/
+ *  `command` event or the operator's own `user`/`teammate` turn carries
+ *  nothing a one-line summary should show, so it is skipped rather than
+ *  shown blank or stopping the scan. `null` once the whole window has
+ *  neither (e.g. only `usage` frames have arrived so far). */
+export function lastHeadActivity(events: ChatEvent[]): { text: string; ts: string } | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const ev = events[i];
+    if (ev.kind === "tool" && ev.title?.trim()) return { text: ev.title.trim(), ts: ev.ts };
+    if (ev.kind === "message" && ev.role === "assistant" && ev.text?.trim()) {
+      const firstLine = ev.text.trim().split("\n").find((l) => l.trim().length > 0);
+      if (firstLine) return { text: firstLine.trim(), ts: ev.ts };
+    }
+  }
+  return null;
 }

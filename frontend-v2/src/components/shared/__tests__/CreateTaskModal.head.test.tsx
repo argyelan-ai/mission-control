@@ -79,7 +79,7 @@ describe("CreateTaskModal — Run as head", () => {
 
     await openAndFill();
     const trigger = await screen.findByTestId("head-pair-trigger");
-    expect(trigger).toHaveTextContent("omp · GLM local");
+    expect(trigger).toHaveTextContent("omp × GLM local");
     expect(screen.getByTestId("head-pair-hints")).toHaveTextContent("costs no Claude quota");
 
     await userEvent.click(screen.getByTestId("run-as-head"));
@@ -111,7 +111,7 @@ describe("CreateTaskModal — Run as head", () => {
 
     // Choosing the experimental pair sends it.
     await userEvent.click(screen.getByTestId(`head-pair-option-${pairKey(claudeLocal)}`));
-    expect(screen.getByTestId("head-pair-trigger")).toHaveTextContent("Claude Code · GLM local");
+    expect(screen.getByTestId("head-pair-trigger")).toHaveTextContent("Claude Code × GLM local");
   });
 
   it("default stays local when its engine is down: Run as head disabled + Runtimes link, never a cloud pair", async () => {
@@ -122,7 +122,7 @@ describe("CreateTaskModal — Run as head", () => {
     await openAndFill();
 
     const trigger = await screen.findByTestId("head-pair-trigger");
-    expect(trigger).toHaveTextContent("omp · GLM local");
+    expect(trigger).toHaveTextContent("omp × GLM local");
     expect(trigger).not.toHaveTextContent("Cloud X");
     expect(screen.getByTestId("run-as-head")).toBeDisabled();
     expect(screen.getByTestId("head-engine-down")).toHaveTextContent("The local model is not running");
@@ -155,7 +155,7 @@ describe("CreateTaskModal — Run as head", () => {
     vi.spyOn(api.heads, "pairs").mockResolvedValue({ pairs: [ompLocal, claudeBusy], default_pair: ompLocal });
     renderModal();
     await openAndFill();
-    expect(await screen.findByTestId("head-pair-trigger")).toHaveTextContent("omp · GLM local");
+    expect(await screen.findByTestId("head-pair-trigger")).toHaveTextContent("omp × GLM local");
   });
 
   it("no repo → Run as head disabled with the reason, main button stays 'Create task'", async () => {

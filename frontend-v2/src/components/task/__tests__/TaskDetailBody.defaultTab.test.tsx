@@ -519,9 +519,12 @@ describe("head-owned task (head launcher §8.2)", () => {
     vi.spyOn(api.heads, "pairs").mockRejectedValue(new Error("API 404: {}"));
     renderBody(taskFixture({ status: "in_progress", run_control: "manual_hold" }));
     await waitFor(() => expect(screen.getByTestId("task-state-card")).toHaveAttribute("data-kind", "head"));
-    // The pair is a property (Summary tab — a running task opens on Comments).
+    // The pair is part of the Agent property (Summary tab — a running task
+    // opens on Comments); there is no separate "Head" fact row any more
+    // (heads-sichtbar PR 3, bauplan §4 — K3: the pair is named once).
     fireEvent.click(screen.getByRole("tab", { name: "Summary" }));
-    expect(await screen.findByTestId("fact-head")).toHaveTextContent("omp · glm-local");
+    expect(await screen.findByTestId("fact-agent")).toHaveTextContent("Head · omp × glm");
+    expect(screen.queryByTestId("fact-head")).not.toBeInTheDocument();
     expect(screen.queryByText("Requeue")).not.toBeInTheDocument();
   });
 
@@ -538,11 +541,13 @@ describe("head-owned task (head launcher §8.2)", () => {
     expect(screen.queryByText(/Review blockiert/)).not.toBeInTheDocument();
   });
 
-  it("without a head run the fleet controls stay", async () => {
+  it("without a head run the fleet controls stay, and the Agent fact reads plain 'Unassigned'", async () => {
     mockApi();
     vi.spyOn(api.heads, "list").mockRejectedValue(new Error('API 404: {"detail":{"code":"heads_disabled"}}'));
     renderBody(taskFixture({ status: "in_progress", run_control: "manual_hold" }));
     expect(await screen.findByText("Requeue")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Summary" }));
+    expect(await screen.findByTestId("fact-agent")).toHaveTextContent("Unassigned");
     expect(screen.queryByTestId("fact-head")).not.toBeInTheDocument();
   });
 });

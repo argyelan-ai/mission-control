@@ -19,6 +19,7 @@ import Link from "next/link";
 import type { Task, Agent } from "@/lib/types";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 import { isSelfReviewStall } from "@/lib/reviewRouting";
+import { headListLine, type HeadRun } from "@/lib/heads";
 
 // ── Review Task Row ──────────────────────────────────────────────────────────
 
@@ -27,6 +28,10 @@ interface ReviewTaskRowProps {
   boardId: string;
   agent?: Agent;
   agentMap: Record<string, Agent>;
+  /** The head that finished this card, or `null`/absent without one
+   *  (heads-sichtbar PR 3, bauplan §4) — looked up ONCE by the caller
+   *  (`useHeadRuns().byTask`), never queried per row. */
+  headRun?: HeadRun | null;
   onDecision: (decision: "approve" | "request_changes" | "hold", comment: string) => void;
   loading?: boolean;
 }
@@ -36,10 +41,12 @@ export function ReviewTaskRow({
   boardId,
   agent,
   agentMap,
+  headRun,
   onDecision,
   loading,
 }: ReviewTaskRowProps) {
   const t = useTranslations("inbox");
+  const tHeads = useTranslations("heads");
   const locale = useLocale();
   const [expanded, setExpanded] = useState(false);
   const [showRejectInput, setShowRejectInput] = useState(false);
@@ -110,10 +117,27 @@ export function ReviewTaskRow({
               >
                 {task.priority}
               </span>
-              {agent && (
-                <span className="text-[11px] text-[var(--color-text-muted)]">
-                  <EntityIcon value={agent.emoji} size={14} className="inline-block align-[-2px] mr-1" />{agent.name}
-                </span>
+              {/* A head owns the card before `assigned_agent_id` ever does
+                  (anhang.md A11: that field stays NULL while a head runs) —
+                  the two chips are mutually exclusive in practice, named
+                  once each (K3). */}
+              {headRun ? (
+                <Link
+                  href={`/sessions?head=${encodeURIComponent(headRun.run_id)}`}
+                  onClick={(e) => e.stopPropagation()}
+                  className="inline-flex items-center gap-1 text-xs cursor-pointer underline-offset-2 hover:underline"
+                  style={{ color: C.textMuted }}
+                  data-testid="review-row-head-chip"
+                >
+                  {headListLine(headRun, tHeads, locale)}
+                  <ChevronRight size={11} aria-hidden />
+                </Link>
+              ) : (
+                agent && (
+                  <span className="text-[11px] text-[var(--color-text-muted)]">
+                    <EntityIcon value={agent.emoji} size={14} className="inline-block align-[-2px] mr-1" />{agent.name}
+                  </span>
+                )
               )}
               <span className="text-[10px] ml-auto text-[var(--color-text-muted)]">
                 {timeAgo(task.updated_at, locale)}

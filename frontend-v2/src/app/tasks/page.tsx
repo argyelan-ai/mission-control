@@ -29,6 +29,8 @@ import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 import { STATUS_CONFIG, TaskRow, TaskStatusDot } from "./TaskRow";
 import { isTaskTabKey } from "@/lib/taskDetail/tabs";
+import { useHeadRuns } from "@/components/heads/useHeadRuns";
+import type { HeadRun } from "@/lib/heads";
 
 // ── Tag Chip ───────────────────────────────────────────────────────────────
 
@@ -221,6 +223,7 @@ function PhaseSection({
   previousPhase,
   onTaskClick,
   repoUrl,
+  headByTask,
 }: {
   phase: Task;
   subtasks: Task[];
@@ -229,6 +232,10 @@ function PhaseSection({
   previousPhase?: Task;
   onTaskClick: (task: Task) => void;
   repoUrl?: string | null;
+  /** The newest head run per task, from the ONE shared fetch in
+   *  `ProjectDetail` (heads-sichtbar PR 3, bauplan §4: "ein Abruf für die
+   *  ganze Liste") — never queried per row. */
+  headByTask: Map<string, HeadRun>;
 }) {
   const t = useTranslations("tasks");
   const [collapsed, setCollapsed] = useState(phase.status === "done");
@@ -329,6 +336,7 @@ function PhaseSection({
                   task={task}
                   agents={agents}
                   boardId={boardId}
+                  headRun={headByTask.get(task.id) ?? null}
                   onClick={() => onTaskClick(task)}
                 />
               ))}
@@ -556,6 +564,10 @@ function ProjectDetail({
 }) {
   const t = useTranslations("tasks");
   const [showTagManager, setShowTagManager] = useState(false);
+  // One shared fetch for the whole project view (heads-sichtbar PR 3,
+  // bauplan §4: "ein Abruf für die ganze Liste") — every phase's subtasks
+  // and the standalone list below read from this one map, never per row.
+  const { byTask: headByTask } = useHeadRuns();
 
   const regularTasks = useMemo(
     () => tasks.filter((t) => t.task_type !== "revision"),
@@ -717,6 +729,7 @@ function ProjectDetail({
             previousPhase={index > 0 ? phases[index - 1] : undefined}
             onTaskClick={onTaskClick}
             repoUrl={project.github_repo_url}
+            headByTask={headByTask}
           />
         ))}
 
@@ -734,6 +747,7 @@ function ProjectDetail({
                 task={task}
                 agents={agents}
                 boardId={boardId}
+                headRun={headByTask.get(task.id) ?? null}
                 onClick={() => onTaskClick(task)}
               />
             ))}
