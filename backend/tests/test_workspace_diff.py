@@ -324,7 +324,7 @@ def _commit_file(repo: Path, name: str, text: str, message: str) -> None:
 def test_find_repo_root_counts_a_worktree_checkouts_own_activity(tmp_path):
     """A `git worktree` checkout has a `.git` FILE whose mtime never changes
     on commits. Ranking by that mtime hid every worktree behind older clones
-    (Sparky's layout: ~70 worktrees next to two clones)."""
+    (a real omp agent layout: ~70 worktrees next to two clones)."""
     import os
     main = tmp_path / "main-clone"
     _init_repo(main)
@@ -676,7 +676,7 @@ async def test_diff_router_follows_the_chat_session_not_the_finished_task(
     monkeypatch.setattr(omp_chat, "_host_home", lambda: home)
     monkeypatch.setattr(wd, "_host_home", lambda: home)
 
-    root = home / ".mc" / "workspaces" / "sparky"
+    root = home / ".mc" / "workspaces" / "alpha"
     scratch = root / "scratch"
     _init_repo(scratch)
     _commit_file(scratch, "hello.txt", "probe\n", "test: chat commit")
@@ -685,11 +685,11 @@ async def test_diff_router_follows_the_chat_session_not_the_finished_task(
     _init_repo(old_task)
     _commit_file(old_task, "fib.py", "x\n", "months old task commit")
     _make_stale(old_task)
-    _write_omp_session(home / ".mc" / "agents" / "sparky" / "omp-sessions", "/workspace/scratch", sink=True)
+    _write_omp_session(home / ".mc" / "agents" / "alpha" / "omp-sessions", "/workspace/scratch", sink=True)
 
     board = await make_board()
     agent = await make_agent(
-        name="Sparky", slug="sparky", harness="omp", agent_runtime="cli-bridge",
+        name="Alpha", slug="alpha", harness="omp", agent_runtime="cli-bridge",
         workspace_path=str(root),
     )
     await make_task(
