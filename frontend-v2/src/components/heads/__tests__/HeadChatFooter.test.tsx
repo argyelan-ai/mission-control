@@ -1,0 +1,74 @@
+/**
+ * HeadChatFooter — the footer the head chat shows INSTEAD of a composer
+ * (bauplan `heads-sichtbar` PR 2 §3.2): step+Stop while running, question+
+ * answer while it needs the operator, Continue once passed, reason+Restart
+ * once failed/stopped.
+ */
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { api } from "@/lib/api";
+import { mkRun } from "@/lib/__tests__/headFixtures";
+import { HeadChatFooter } from "../HeadChatFooter";
+
+function renderFooter(run: Parameters<typeof mkRun>[0]) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  render(
+    <QueryClientProvider client={qc}>
+      <HeadChatFooter run={mkRun(run)} />
+    </QueryClientProvider>,
+  );
+}
+
+beforeEach(() => vi.restoreAllMocks());
+
+describe("HeadChatFooter", () => {
+  it("running: shows the translated step and a Stop button, no composer", async () => {
+    renderFooter({ state: "running", step: "5/7 independent review · waiting for: reviewer" });
+    expect(screen.getByTestId("head-footer-step")).toHaveTextContent("Step 5/7 · Independent review");
+    expect(screen.getByTestId("head-footer-stop")).toBeInTheDocument();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+  });
+
+  it("running with an unparseable step shows no step line, still shows Stop", () => {
+    renderFooter({ state: "running", step: null });
+    expect(screen.queryByTestId("head-footer-step")).not.toBeInTheDocument();
+    expect(screen.getByTestId("head-footer-stop")).toBeInTheDocument();
+  });
+
+  it("needs_you: answer field + Answer & continue calls restart with mode=continue and the typed answer", async () => {
+    const restart = vi.spyOn(api.heads, "restart").mockResolvedValue({ run_id: "r2", state: "starting", restarted_from: "r1" });
+    renderFooter({ run_id: "r1", state: "needs_you", harness: "omp", runtime_slug: "glm-local" });
+    const field = screen.getByTestId("head-footer-answer");
+    await userEvent.type(field, "Yes, deprecate it.");
+    await userEvent.click(screen.getByTestId("head-footer-answer-send"));
+    await waitFor(() =>
+      expect(restart).toHaveBeenCalledWith("r1", { harness: "omp", runtime_slug: "glm-local", mode: "continue", answer: "Yes, deprecate it." }),
+    );
+  });
+
+  it("needs_you: the send button is disabled until something is typed", () => {
+    renderFooter({ state: "needs_you" });
+    expect(screen.getByTestId("head-footer-answer-send")).toBeDisabled();
+  });
+
+  it("passed: shows exactly one Continue action, no Stop, no answer field", () => {
+    renderFooter({ state: "passed" });
+    expect(screen.getByTestId("head-footer-continue")).toHaveTextContent("Continue");
+    expect(screen.queryByTestId("head-footer-stop")).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+  });
+
+  it("failed: shows the reason sentence and a Restart action", () => {
+    renderFooter({ state: "failed", reason: "no_pr" });
+    expect(screen.getByTestId("head-footer-reason")).toHaveTextContent("Ended without a pull request.");
+    expect(screen.getByTestId("head-footer-restart")).toBeInTheDocument();
+  });
+
+  it("stopped: shows the reason sentence and a Restart action", () => {
+    renderFooter({ state: "stopped", reason: "stopped" });
+    expect(screen.getByTestId("head-footer-reason")).toHaveTextContent("Stopped by you.");
+    expect(screen.getByTestId("head-footer-restart")).toBeInTheDocument();
+  });
+});
