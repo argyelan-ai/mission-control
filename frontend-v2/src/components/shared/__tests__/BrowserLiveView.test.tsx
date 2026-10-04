@@ -586,6 +586,99 @@ describe("BrowserLiveView", () => {
       );
     });
 
+    // ── unassigned fallback (live finding 04.10.2026) ─────────────────────
+    // Every tab came back unattributed, and the scoped panel said "Alpha has
+    // no open tab right now" while Alpha had one open. When the agent owns
+    // no tab but tabs assigned to NO agent exist, the server sends every tab
+    // (unassigned ones flagged) plus an `unassigned_fallback` status; the
+    // panel must show them with a clear hint, never the empty state.
+
+    const FALLBACK_HINT = "No tab is assigned to Alpha — showing all tabs. Tabs marked “not assigned” aren't assigned to any agent.";
+
+    it("shows every tab with a 'not assigned' hint instead of claiming the agent has no tab", async () => {
+      useMapLocalStorage();
+      vi.spyOn(api.browserLive, "targets").mockResolvedValue({
+        targets: [{ id: "free", title: "Example Domain", url: "https://example.org/", unassigned: true }],
+        scopeUnavailable: false,
+        unassignedFallback: true,
+        unassignedCount: 1,
+      });
+      renderWithQuery(<BrowserLiveView agentId="agent-alpha" agentName="Alpha" />);
+
+      await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+      const ws = FakeWebSocket.instances[0];
+      ws.onopen?.(new Event("open"));
+      ws.onmessage?.({ data: JSON.stringify({ type: "status", code: "scope_unavailable", active: false }) } as MessageEvent);
+      ws.onmessage?.({ data: JSON.stringify({ type: "status", code: "unassigned_fallback", active: true, count: 1 }) } as MessageEvent);
+      ws.onmessage?.({ data: JSON.stringify({
+        type: "targets",
+        targets: [{ id: "free", title: "Example Domain", url: "https://example.org/", unassigned: true }],
+        activeId: "free", followedId: "free",
+      }) } as MessageEvent);
+
+      expect(await screen.findByText(FALLBACK_HINT)).toBeInTheDocument();
+      expect(screen.queryByText("Alpha has no open tab right now.")).not.toBeInTheDocument();
+      // The picker marks which tab nobody is assigned to.
+      expect(screen.getByRole("option", { name: "Example Domain · not assigned" })).toBeInTheDocument();
+    });
+
+    it("the WS ending the fallback (agent now owns a tab) removes the hint and the tag", async () => {
+      useMapLocalStorage();
+      vi.spyOn(api.browserLive, "targets").mockResolvedValue(targetsResponse(TARGETS));
+      renderWithQuery(<BrowserLiveView agentId="agent-alpha" agentName="Alpha" />);
+
+      await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+      const ws = FakeWebSocket.instances[0];
+      ws.onopen?.(new Event("open"));
+      ws.onmessage?.({ data: JSON.stringify({ type: "status", code: "unassigned_fallback", active: true, count: 1 }) } as MessageEvent);
+      ws.onmessage?.({ data: JSON.stringify({
+        type: "targets", targets: [{ ...TARGETS[0], unassigned: true }], activeId: "target-1", followedId: "target-1",
+      }) } as MessageEvent);
+      expect(await screen.findByText(FALLBACK_HINT)).toBeInTheDocument();
+
+      ws.onmessage?.({ data: JSON.stringify({ type: "status", code: "unassigned_fallback", active: false, count: 0 }) } as MessageEvent);
+      ws.onmessage?.({ data: JSON.stringify({
+        type: "targets", targets: TARGETS, activeId: "target-1", followedId: "target-1",
+      }) } as MessageEvent);
+
+      await waitFor(() => expect(screen.queryByText(FALLBACK_HINT)).not.toBeInTheDocument());
+      expect(screen.getByRole("option", { name: "Checkout flow" })).toBeInTheDocument();
+    });
+
+    it("sabotage: no fallback hint when the server never reports one", async () => {
+      useMapLocalStorage();
+      vi.spyOn(api.browserLive, "targets").mockResolvedValue(targetsResponse(TARGETS));
+      renderWithQuery(<BrowserLiveView agentId="agent-alpha" agentName="Alpha" />);
+
+      await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+      const ws = FakeWebSocket.instances[0];
+      ws.onopen?.(new Event("open"));
+      ws.onmessage?.({ data: JSON.stringify({ type: "frame", data: "ZmFrZQ==", metadata: {} }) } as MessageEvent);
+      await screen.findByAltText("Live agent browser view");
+      expect(screen.queryByText(/No tab is assigned to Alpha/)).not.toBeInTheDocument();
+    });
+
+    it("keeps the phone toolbar on one line: the picker shrinks and the filter chip has a compact label", async () => {
+      // 393 px finding: the fullscreen button dropped to a second toolbar
+      // line. The chip shows just the agent name below `sm` (full "Only
+      // <name>" from `sm` up) and the picker takes whatever width is left.
+      useMapLocalStorage();
+      vi.spyOn(api.browserLive, "targets").mockResolvedValue(targetsResponse(TARGETS));
+      renderWithQuery(<BrowserLiveView agentId="agent-alpha" agentName="Alpha" />);
+
+      const chip = await screen.findByRole("button", { name: "Only Alpha's tabs" });
+      const compact = chip.querySelector("[data-chip-label='compact']");
+      const full = chip.querySelector("[data-chip-label='full']");
+      expect(compact?.textContent).toBe("Alpha");
+      expect(compact?.className).toMatch(/\bsm:hidden\b/);
+      expect(compact?.className).toMatch(/\btruncate\b/);
+      expect(full?.textContent).toBe("Only Alpha");
+      expect(full?.className).toMatch(/\bhidden\b.*\bsm:inline\b/);
+      const picker = screen.getByLabelText("Browser page");
+      expect(picker.className).toMatch(/\bmin-w-0\b/);
+      expect(picker.className).toMatch(/\bflex-1\b/);
+    });
+
     it("sabotage: the scope-unavailable hint never shows when the REST call reports scoping as available", async () => {
       useMapLocalStorage();
       vi.spyOn(api.browserLive, "targets").mockResolvedValue(targetsResponse(TARGETS));

@@ -2979,6 +2979,10 @@ export interface BrowserLiveTarget {
   id: string;
   title: string;
   url: string;
+  /** Only in the unassigned fallback (see BrowserLiveTargetsResponse):
+   *  true = no agent is assigned to this tab (e.g. playwright-mcp's tabs,
+   *  shared by every claude agent, or one no agent has claimed yet). */
+  unassigned?: boolean;
 }
 
 /** Response shape of GET /api/v1/browser-live/targets (bauplan.md PR B1) */
@@ -2988,6 +2992,12 @@ export interface BrowserLiveTargetsResponse {
    *  resolved right now (gateway down, or the agent id doesn't resolve) —
    *  `targets` is then the UNFILTERED list, not "this agent has none". */
   scopeUnavailable: boolean;
+  /** True when `agent_id` was passed, the agent owns no open tab, but tabs
+   *  assigned to NO agent exist — `targets` is then EVERY tab (unassigned
+   *  ones flagged), never "this agent has none" (live finding 04.10.2026).
+   *  Optional: an older backend doesn't send it. */
+  unassignedFallback?: boolean;
+  unassignedCount?: number;
 }
 
 // ── Prompt Library (Benchmark Studio core, PR 2) ─────────────────────────────

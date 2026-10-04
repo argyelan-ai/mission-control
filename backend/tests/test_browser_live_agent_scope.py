@@ -567,3 +567,206 @@ def test_ws_does_not_send_scope_unavailable_when_not_scoped(real_run_target_watc
                     pass
 
 
+
+
+# ── unassigned fallback (live finding 04.10.2026) ────────────────────────
+#
+# Live, every tab in the shared browser came back `agent: null` from
+# cdp-gateway, so a scoped panel (opened from an agent's chat) told the
+# operator "<agent> has no open tab right now" while that agent HAD a tab
+# open — just not one the gateway could attribute. Tabs nobody is assigned
+# to (playwright-mcp's — shared by every claude agent — or a tab no
+# identified agent has claimed yet) can't be ruled out as "this agent's".
+# Rule: scoped list empty + unassigned tabs exist → show every tab, flag the
+# unassigned ones, and say so. Only "every tab belongs to some OTHER agent"
+# is a real "no open tab".
+
+def _get_targets(pages, *, owned, assigned):
+    app = FastAPI()
+    app.include_router(bl.router)
+    with patch.object(bl, "_list_page_targets", new=AsyncMock(return_value=pages)), \
+         patch.object(bl, "_agent_slug", new=AsyncMock(return_value="alpha")), \
+         patch.object(bl, "_gateway_owned_ids", new=AsyncMock(return_value=owned)), \
+         patch.object(bl, "_gateway_assigned_ids", new=AsyncMock(return_value=assigned)):
+        app.dependency_overrides[bl.require_user] = lambda: {"sub": "u1"}
+        with TestClient(app) as client:
+            resp = client.get("/api/v1/browser-live/targets", params={"agent_id": str(uuid.uuid4())})
+    assert resp.status_code == 200
+    return resp.json()
+
+
+_TWO_PAGES = [
+    {"id": "FREE", "title": "unassigned page", "url": "https://free.example", "type": "page"},
+    {"id": "BETA", "title": "beta's page", "url": "https://beta.example", "type": "page"},
+]
+
+
+def test_targets_empty_scope_with_unassigned_tabs_falls_back_to_all_tabs():
+    body = _get_targets(_TWO_PAGES, owned=set(), assigned={"BETA"})
+    assert [t["id"] for t in body["targets"]] == ["FREE", "BETA"]
+    flags = {t["id"]: t.get("unassigned", False) for t in body["targets"]}
+    assert flags == {"FREE": True, "BETA": False}
+    assert body["unassignedFallback"] is True
+    assert body["unassignedCount"] == 1
+    assert body["scopeUnavailable"] is False
+
+
+def test_targets_a_tab_the_gateway_never_saw_counts_as_unassigned():
+    """Chromium lists it, the gateway has no row for it at all (just opened,
+    or the gateway restarted): nobody is known to own it."""
+    body = _get_targets(_TWO_PAGES, owned=set(), assigned=set())
+    assert body["unassignedFallback"] is True
+    assert body["unassignedCount"] == 2
+
+
+def test_targets_every_tab_owned_by_another_agent_is_a_real_empty_scope():
+    body = _get_targets(_TWO_PAGES, owned=set(), assigned={"FREE", "BETA"})
+    assert body["targets"] == []
+    assert body["unassignedFallback"] is False
+
+
+def test_targets_own_tabs_win_over_the_fallback():
+    body = _get_targets(_TWO_PAGES, owned={"FREE"}, assigned={"FREE"})
+    assert [t["id"] for t in body["targets"]] == ["FREE"]
+    assert body["unassignedFallback"] is False
+    assert "unassigned" not in body["targets"][0]
+
+
+def test_targets_unknown_assignment_never_claims_a_fallback():
+    """Owned set answered, the all-tabs query failed — we can't tell, so we
+    don't pretend: the plain scoped (empty) view, no fallback flag."""
+    body = _get_targets(_TWO_PAGES, owned=set(), assigned=None)
+    assert body["targets"] == []
+    assert body["unassignedFallback"] is False
+
+
+def test_targets_gateway_down_is_scope_unavailable_not_fallback():
+    body = _get_targets(_TWO_PAGES, owned=None, assigned=None)
+    assert body["scopeUnavailable"] is True
+    assert body["unassignedFallback"] is False
+    assert {t["id"] for t in body["targets"]} == {"FREE", "BETA"}
+
+
+@pytest.mark.asyncio
+async def test_gateway_assigned_ids_reads_every_row_with_an_agent():
+    rows = [
+        {"targetId": "T1", "agent": "alpha"},
+        {"targetId": "T2", "agent": None},
+        {"targetId": "T3", "agent": "beta"},
+    ]
+
+    class _FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return rows
+
+    class _FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, url, params=None):
+            assert url.endswith("/mc/targets")
+            assert not params  # every agent's rows, not one agent's
+            return _FakeResp()
+
+    with patch("httpx.AsyncClient", lambda **kw: _FakeClient()):
+        assert await bl._gateway_assigned_ids() == {"T1", "T3"}
+    with patch("httpx.AsyncClient", side_effect=OSError("refused")):
+        assert await bl._gateway_assigned_ids() is None
+
+
+def _seed_alpha(client):
+    agent_uuid = uuid.uuid4()
+
+    async def _seed():
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            s.add(Agent(id=agent_uuid, name="Alpha", slug="alpha", agent_runtime="cli-bridge"))
+            await s.commit()
+
+    client.portal.call(_seed)
+    return agent_uuid
+
+
+def test_ws_empty_scope_with_an_unassigned_tab_streams_it_with_a_fallback_status(real_run_target_watcher):
+    world = FakeCDPWorld([_page("free-tab")])
+    events = EventBus()
+    app = _make_app(world, events)
+
+    with patch("websockets.connect", world.connect), \
+         patch.object(bl, "_gateway_owned_ids", new=AsyncMock(return_value=set())), \
+         patch.object(bl, "_gateway_assigned_ids", new=AsyncMock(return_value=set())):
+        with TestClient(app, raise_server_exceptions=True) as client:
+            token = _seed_user_and_token(client, "fallback-ws@mc.local")
+            agent_uuid = _seed_alpha(client)
+            with _ws(client, f"/api/v1/browser-live/ws?token={token}&agent_id={agent_uuid}") as ws:
+                status = _recv_until(
+                    ws, lambda m: m.get("type") == "status" and m.get("code") == "unassigned_fallback"
+                )
+                assert status["active"] is True
+                assert status["count"] == 1
+                attached = _recv_until(ws, lambda m: m.get("type") == "attached")
+                assert attached["target"]["id"] == "free-tab"
+                msg = _recv_until(ws, lambda m: m.get("type") == "targets" and m.get("targets"))
+                assert msg["targets"] == [{
+                    "id": "free-tab", "title": "free-tab", "url": "https://example.com", "unassigned": True,
+                }]
+
+
+def test_ws_fallback_ends_once_the_agent_owns_a_tab(real_run_target_watcher):
+    world = FakeCDPWorld([_page("free-tab")])
+    events = EventBus()
+    app = _make_app(world, events)
+    owned = {"value": set()}
+
+    async def _owned(slug):
+        return set(owned["value"])
+
+    async def _assigned():
+        return set(owned["value"])
+
+    with patch("websockets.connect", world.connect), \
+         patch.object(bl, "_gateway_owned_ids", new=_owned), \
+         patch.object(bl, "_gateway_assigned_ids", new=_assigned):
+        with TestClient(app, raise_server_exceptions=True) as client:
+            token = _seed_user_and_token(client, "fallback-ends@mc.local")
+            agent_uuid = _seed_alpha(client)
+            with _ws(client, f"/api/v1/browser-live/ws?token={token}&agent_id={agent_uuid}") as ws:
+                _recv_until(ws, lambda m: m.get("type") == "status" and m.get("code") == "unassigned_fallback"
+                            and m.get("active") is True)
+                owned["value"] = {"free-tab"}  # the agent claimed/navigated it
+                done = _recv_until(
+                    ws,
+                    lambda m: m.get("type") == "status" and m.get("code") == "unassigned_fallback"
+                    and m.get("active") is False,
+                    timeout=5.0,
+                )
+                assert done["count"] == 0
+                msg = _recv_until(ws, lambda m: m.get("type") == "targets"
+                                  and m.get("targets") and "unassigned" not in m["targets"][0], timeout=5.0)
+                assert [t["id"] for t in msg["targets"]] == ["free-tab"]
+
+
+def test_ws_every_tab_foreign_stays_a_real_no_page(real_run_target_watcher):
+    """Sabotage guard for the rule's other half: the fallback must not fire
+    when every tab is attributed to some other agent."""
+    world = FakeCDPWorld([_page("beta-tab")])
+    events = EventBus()
+    app = _make_app(world, events)
+
+    with patch("websockets.connect", world.connect), \
+         patch.object(bl, "_gateway_owned_ids", new=AsyncMock(return_value=set())), \
+         patch.object(bl, "_gateway_assigned_ids", new=AsyncMock(return_value={"beta-tab"})):
+        with TestClient(app, raise_server_exceptions=True) as client:
+            token = _seed_user_and_token(client, "fallback-foreign@mc.local")
+            agent_uuid = _seed_alpha(client)
+            with _ws(client, f"/api/v1/browser-live/ws?token={token}&agent_id={agent_uuid}") as ws:
+                status = _recv_until(
+                    ws, lambda m: m.get("type") == "status" and m.get("code") == "unassigned_fallback"
+                )
+                assert status["active"] is False
+                _recv_until(ws, lambda m: m.get("type") == "status" and m.get("code") == "no_page")

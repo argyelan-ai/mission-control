@@ -41,9 +41,9 @@ CDP_BASE_URL = os.environ.get("CDP_BROWSER_URL", "http://cdp-browser:9223")
 
 # cdp-gateway (bauplan.md PR B1) — same container as CDP_BASE_URL, different
 # port. Answers `GET /mc/targets[?agent=<slug>]`: which open pages belong to
-# which agent, figured out from the agent's own CDP connection (URL path /
-# X-MC-Agent header / reverse DNS of its container — see
-# docker/cdp-browser/gateway/cdp_gateway.py). Used ONLY to FILTER the
+# which agent (`agent: null` = not assigned to any agent), figured out from
+# the agent's own CDP connection — see docker/cdp-browser/gateway/cdp_gateway.py
+# (path prefix the omp relay adds; tabs claimed on use). Used ONLY to FILTER the
 # `targets`/`active_id` picture this module already builds from Chromium
 # directly — the screencast itself (attach_and_stream) is unchanged and
 # still a read-only second CDP session straight to Chromium, same as before
@@ -178,6 +178,51 @@ async def _gateway_owned_ids(agent_slug: str) -> Optional[set[str]]:
     return {row["targetId"] for row in rows if row.get("targetId")}
 
 
+async def _gateway_assigned_ids() -> Optional[set[str]]:
+    """Target ids cdp-gateway attributes to ANY agent, or None if it can't
+    be reached. A live page that is not in this set is "not assigned to an
+    agent" — playwright-mcp's tabs (shared by every claude agent, never
+    attributed), or a tab no identified agent has claimed yet. Reachability
+    logging stays with `_gateway_owned_ids`, which every scoped call makes
+    first anyway."""
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            resp = await client.get(f"{GATEWAY_BASE_URL}/mc/targets")
+            resp.raise_for_status()
+            rows = resp.json()
+    except Exception:
+        return None
+    return {row["targetId"] for row in rows if row.get("targetId") and row.get("agent")}
+
+
+def _apply_scope(
+    pages: list[dict], owned: Optional[set[str]], assigned: Optional[set[str]],
+) -> tuple[list[dict], Optional[set[str]]]:
+    """The scoping rule for an agent's panel -> (pages to show, ids of the
+    unassigned pages when the unassigned fallback is on, else None).
+
+    - attribution unavailable (`owned` None): every page (scope_unavailable).
+    - the agent owns at least one open page: only those.
+    - it owns none, but some open page is NOT assigned to any agent: every
+      page, with the unassigned ones flagged. Those could be this agent's
+      (live 04.10.2026: every tab was unassigned and the panel claimed the
+      agent had no tab while it had one open) — so never say "no open tab"
+      then; show them and say they aren't assigned.
+    - every open page belongs to some OTHER agent: nothing — a real "this
+      agent has no open tab".
+    - assignment unknown (`assigned` None, gateway flapped between the two
+      calls): nothing, no fallback claimed; the next poll decides."""
+    if owned is None:
+        return pages, None
+    own = [p for p in pages if p.get("id") in owned]
+    if own or assigned is None:
+        return own, None
+    unassigned = {p.get("id") for p in pages if p.get("id") not in assigned}
+    if unassigned:
+        return pages, unassigned
+    return [], None
+
+
 @router.get("/targets")
 async def list_targets(
     agent_id: Optional[str] = None,
@@ -191,7 +236,10 @@ async def list_targets(
     browser, exactly as before B1 (never a harder failure than that) — but
     `scopeUnavailable: true` tells the caller the list is NOT actually
     scoped, so the UI can say so instead of silently looking like a
-    (misleadingly empty-looking "only agent X") filtered view."""
+    (misleadingly empty-looking "only agent X") filtered view.
+    `unassignedFallback: true` — the agent owns no open tab but tabs that
+    are assigned to no agent exist: every tab is listed, the unassigned ones
+    carry `unassigned: true` (see `_apply_scope`)."""
     try:
         pages = await _list_page_targets()
     except Exception as e:
@@ -199,23 +247,33 @@ async def list_targets(
             status_code=502,
             detail=f"Agent-Browser (cdp-browser) nicht erreichbar: {e}",
         )
-    owned_ids: Optional[set[str]] = None
     scope_unavailable = False
+    unassigned: Optional[set[str]] = None
     if agent_id:
         slug = await _agent_slug(agent_id)
         if slug:
             owned_ids = await _gateway_owned_ids(slug)
             scope_unavailable = owned_ids is None
+            assigned: Optional[set[str]] = None
+            if owned_ids is not None and not any(p.get("id") in owned_ids for p in pages):
+                assigned = await _gateway_assigned_ids()
+            pages, unassigned = _apply_scope(pages, owned_ids, assigned)
         else:
             scope_unavailable = True
-    if owned_ids is not None:
-        pages = [p for p in pages if p.get("id") in owned_ids]
+    targets = []
+    for t in pages:
+        row = {"id": t.get("id"), "title": t.get("title"), "url": t.get("url")}
+        if unassigned is not None and t.get("id") in unassigned:
+            row["unassigned"] = True
+        targets.append(row)
     return {
-        "targets": [
-            {"id": t.get("id"), "title": t.get("title"), "url": t.get("url")}
-            for t in pages
-        ],
+        "targets": targets,
         "scopeUnavailable": scope_unavailable,
+        # Scoped, the agent owns no open tab, but unassigned tabs exist — so
+        # `targets` is EVERY tab (unassigned ones flagged), not "this agent
+        # has none". See `_apply_scope`.
+        "unassignedFallback": unassigned is not None,
+        "unassignedCount": len(unassigned) if unassigned else 0,
     }
 
 
@@ -452,6 +510,8 @@ class _OwnedIdsCache:
         self._now = now_fn
         self._fetched_at = 0.0
         self._value: Optional[set[str]] = None
+        self._assigned_at = 0.0
+        self._assigned: Optional[set[str]] = None
 
     @property
     def ttl(self) -> float:
@@ -469,6 +529,7 @@ class _OwnedIdsCache:
         so it keeps re-checking after this invalidation, instead of trusting
         a single post-invalidation fetch that may itself be stale."""
         self._fetched_at = 0.0
+        self._assigned_at = 0.0
 
     async def get(self) -> Optional[set[str]]:
         if self._now() - self._fetched_at < self._ttl:
@@ -476,6 +537,16 @@ class _OwnedIdsCache:
         self._value = await _gateway_owned_ids(self._slug)
         self._fetched_at = self._now()
         return self._value
+
+    async def get_assigned(self) -> Optional[set[str]]:
+        """Ids attributed to ANY agent (same TTL) — only needed when this
+        agent owns no open tab, to tell "every tab is someone else's" apart
+        from "some tab is nobody's" (see `_apply_scope`)."""
+        if self._now() - self._assigned_at < self._ttl:
+            return self._assigned
+        self._assigned = await _gateway_assigned_ids()
+        self._assigned_at = self._now()
+        return self._assigned
 
 
 @router.websocket("/ws")
@@ -518,6 +589,12 @@ async def browser_live_ws(
         even though the toolbar toggle still names this one agent — the UI
         must say so. `active: false` means attribution came back (sent once,
         on the transition back).
+      {"type": "status", "code": "unassigned_fallback", "active": bool, "count": int}
+        Also scoped panels only, sent first thing and on every change.
+        `active: true`: the agent owns no open tab, but `count` tabs are not
+        assigned to any agent, so the panel shows EVERY tab (`targets`
+        entries then carry `"unassigned": true` where it applies) instead of
+        a misleading "no open tab" (see `_apply_scope`).
 
     Client → server messages are steering only, never forwarded to Chromium:
       {"follow": true|false}, {"select": "<target id>"}
@@ -598,19 +675,28 @@ async def browser_live_ws(
         pool = non_blank or pages
         return max(pool, key=lambda p: p["last_active_at"])["id"]
 
+    # Ids of the unassigned pages while the unassigned fallback is on (see
+    # `_apply_scope`), else None — refreshed by every `_visible_pages()` call.
+    scope_view: dict = {"unassigned": None}
+
     async def _visible_pages() -> list[dict]:
         all_pages = watcher.targets()
         owned = await _owned_ids()
-        if owned is None:
-            return all_pages
-        return [p for p in all_pages if p["id"] in owned]
+        assigned: Optional[set[str]] = None
+        if owned is not None and owned_cache is not None and not any(p["id"] in owned for p in all_pages):
+            assigned = await owned_cache.get_assigned()
+        pages, scope_view["unassigned"] = _apply_scope(all_pages, owned, assigned)
+        return pages
 
     async def send_targets_message() -> None:
         pages = await _visible_pages()
-        targets_list = [
-            {"id": t["id"], "title": t["title"], "url": t["url"]}
-            for t in pages
-        ]
+        unassigned = scope_view["unassigned"] or set()
+        targets_list = []
+        for t in pages:
+            row = {"id": t["id"], "title": t["title"], "url": t["url"]}
+            if t["id"] in unassigned:
+                row["unassigned"] = True
+            targets_list.append(row)
         active_id = _active_id_of(pages)
         followed_id = state["followed_id"]
         # url + title are part of the signature, not just the id tuple — a
@@ -620,7 +706,7 @@ async def browser_live_ws(
         # row under the header keep showing the page the tab had before it
         # navigated for as long as the panel stays open (finding, round 4).
         sig = (
-            tuple((t["id"], t["url"], t["title"]) for t in targets_list),
+            tuple((t["id"], t["url"], t["title"], t.get("unassigned", False)) for t in targets_list),
             active_id,
             followed_id,
         )
@@ -712,6 +798,10 @@ async def browser_live_ws(
         # the initial False" never counted as a thing worth sending (medium
         # finding, round 5).
         last_scope_unavailable = {"value": False, "sent": False}
+        # Same "send first, then on change" pattern for the unassigned
+        # fallback; (active, count) so a growing/shrinking count reaches the
+        # hint text too.
+        last_fallback = {"value": None}
 
         try:
             while not stop_event.is_set():
@@ -745,6 +835,15 @@ async def browser_live_ws(
                         "type": "status", "code": "scope_unavailable",
                         "active": scope_unavailable_now,
                     })
+                if scope_requested:
+                    unassigned_now = scope_view["unassigned"]
+                    fallback_now = (unassigned_now is not None, len(unassigned_now or ()))
+                    if fallback_now != last_fallback["value"]:
+                        last_fallback["value"] = fallback_now
+                        await websocket.send_json({
+                            "type": "status", "code": "unassigned_fallback",
+                            "active": fallback_now[0], "count": fallback_now[1],
+                        })
 
                 if not pages:
                     if cdp is not None:
