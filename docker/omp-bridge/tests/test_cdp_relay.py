@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import os
 import struct
 
 import pytest
@@ -239,10 +240,12 @@ async def test_websocket_frames_after_the_upgrade_pass_through_untouched():
     port = relay.sockets[0].getsockname()[1]
     try:
         reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        # A fresh random handshake key (a fixed sample key trips gitleaks).
+        ws_key = base64.b64encode(os.urandom(16))
         writer.write(
             b"GET /devtools/browser/abc HTTP/1.1\r\nHost: 127.0.0.1:9222\r\n"
             b"Upgrade: websocket\r\nConnection: Upgrade\r\n"
-            b"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+            b"Sec-WebSocket-Key: " + ws_key + b"\r\nSec-WebSocket-Version: 13\r\n\r\n"
         )
         await writer.drain()
         head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 5)

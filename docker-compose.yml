@@ -780,14 +780,17 @@ services:
   #
   # Port 9300 (same container, bauplan.md PR B1): `cdp-gateway` — an
   # agent-aware front door in front of Chromium's debug port. It answers the
-  # same /json/* shapes as :9223 but also figures out which agent a
-  # connection belongs to (URL path / X-MC-Agent header / reverse DNS of the
-  # peer IP) and exposes `GET /mc/targets[?agent=<slug>]` so the operator's
-  # per-agent browser panel can show only that agent's tabs instead of every
-  # tab in the shared browser. :9223 (plain socat, no attribution) stays
-  # exactly as it is for the backend's screencast path and anything not yet
-  # moved over. No host port published — internal to the compose network
-  # only, same as :9223 today.
+  # same /json/* shapes as :9223 (PUT /json/new included) but also works out
+  # which agent a connection belongs to — from the `/a/<slug>/` path prefix
+  # the omp relay puts on every request (docker/omp-bridge/cdp_relay.py;
+  # reverse DNS of the peer IP is only a last resort, it failed live) — and
+  # which tab is whose (created, or claimed on use: omp reuses existing tabs).
+  # `GET /mc/targets[?agent=<slug>]` lets the operator's per-agent browser
+  # panel show only that agent's tabs; `agent: null` = not assigned to any
+  # agent. :9223 (plain socat, no attribution) stays exactly as it is for
+  # the backend's screencast path and playwright-mcp — whose tabs (shared by
+  # every claude agent) therefore always show as "not assigned". No host
+  # port published — internal to the compose network only, same as :9223.
   cdp-browser:
     build: ./docker/cdp-browser
     profiles: ["browser"]
