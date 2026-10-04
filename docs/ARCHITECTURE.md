@@ -1111,6 +1111,14 @@ claude-TUI ──JSONL live──▶  transcript_chat.ChatTailerManager (1s-Poll
 - **Diff-Panel:** `GET /agents/{id}/chat/diff?scope=worktree|last-commit` läuft
   `git diff`/`git show` im Agent-Workspace und liefert dieselbe `CommitDiff`-Form, die
   `GitDiffView` schon aus dem Git-Workflow (oben) kennt — read-only, kein Staging/Revert.
+  Welches Repo: `workspace_diff.choose_repo` — laufende Task → Ordner der Chat-Sitzung
+  (`TranscriptAdapter.session_cwd`, je Harness aus dem eigenen Transkript) → zuletzt von
+  git berührtes Repo (worktree-fest) in Sitzungsordner, Agent-Workspace und letzter Task.
+  Die Antwort trägt `source{kind,repo,branch,path}`, `scope` und `committed_at` (ISO) —
+  Codes statt Sätze; das Panel benennt damit Repo, Branch und Grund und lädt am Ende
+  jedes Zugs neu. „Arbeitsstand" zeigt auch neue, ungetrackte Dateien (ohne Symlink-Ziele).
+  Vor 04.10.2026 gewann immer die zuletzt aktualisierte Task-Zeile — der Chat sah dann
+  den Monate alten Commit einer erledigten Task.
 - **Adapter-Kontrakt:** die vier Bausteine (Session-Resolution+Parser, Tailer,
   Eingabe-Kanal, Pane-Sonde) sind bewusst austauschbar pro CLI gehalten (Muster wie
   `HOST_ADAPTERS`/ADR-064 und der Turn-Signal-Kontrakt/ADR-071) — v1 liefert nur den

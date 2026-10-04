@@ -1004,7 +1004,29 @@
     "effortRejectedReason": "Effort rejected: {reason}",
     "effortRejected": "Effort change rejected",
     "effortUnconfirmed": "Effort change not confirmed — check the terminal",
-    "effortFailed": "Effort change failed"
+    "effortFailed": "Effort change failed",
+    "diff": {
+      "scopeLabel": "Diff scope",
+      "scopeWorktree": "Uncommitted",
+      "scopeLastCommit": "Last commit",
+      "refresh": "Refresh",
+      "kind": {
+        "task": "Running task",
+        "session": "Chat folder",
+        "recent": "Last used"
+      },
+      "commitMeta": "{hash} · {ago}",
+      "noChanges": "No uncommitted changes",
+      "noCommit": "No commit yet",
+      "noRepo": "No git repository found",
+      "noRepoHint": "Neither the chat's folder nor the agent's workspace contains a git repository.",
+      "loadFailed": "Couldn't load the diff."
+    },
+    "panels": {
+      "diff": "Diff",
+      "browser": "Browser",
+      "close": "Close panel"
+    }
   },
   "shell": {
     "searchPlaceholder": "Search or command...",
@@ -3691,5 +3713,10 @@
       "connectionError": "Connection error",
       "unknown": "Connection issue"
     }
+  },
+  "gitDiff": {
+    "fileOne": "{count} file",
+    "fileOther": "{count} files",
+    "moreLinesHidden": "… {count} more lines hidden"
   }
 }

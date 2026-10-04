@@ -180,6 +180,13 @@ def browsable_roots() -> list[FsRoot]:
     return [r for r in _ROOTS if not r.sensitive]
 
 
+def sensitive_subpaths() -> frozenset[str]:
+    """Folder names under ``~/.mc`` that hold secrets, tokens, logs or
+    backups — for any reader outside the Files API that must stay out of
+    them too (the chat diff panel never follows a session folder there)."""
+    return frozenset(r.subpath for r in _ROOTS if r.sensitive and r.subpath)
+
+
 def get_browsable_root(key: str) -> FsRoot:
     """Look up a browsable root by key.
 

@@ -3,11 +3,13 @@
  *
  * Coverage: renders the loaded diff via GitDiffView, scope switch refetches
  * with the new scope, `refreshHot` drives the 15s auto-poll on/off, the
- * manual refresh button always works, and the two special-case states
- * (empty diff / no_workspace 404) render their German copy.
+ * manual refresh button always works, the end of a turn refetches, the
+ * special-case states (empty diff / no commit yet / no_workspace 404) render
+ * their catalog copy, and the source line names WHICH repository is shown.
+ * Labels come from the real EN catalog (test-setup's next-intl mock).
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { DiffPanel } from "./DiffPanel";
@@ -26,7 +28,12 @@ const diffMock = vi.mocked(api.chat.diff);
 
 function renderWithQuery(ui: React.ReactElement) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
+  const view = render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
+  return {
+    ...view,
+    rerenderWithQuery: (next: React.ReactElement) =>
+      view.rerender(<QueryClientProvider client={qc}>{next}</QueryClientProvider>),
+  };
 }
 
 function mkDiff(overrides: Partial<CommitDiff> = {}): CommitDiff {
@@ -87,26 +94,26 @@ describe("DiffPanel", () => {
     expect(diffMock).toHaveBeenCalledWith("agent-1", "worktree");
   });
 
-  it("defaults to the Arbeitsstand (worktree) scope tab active", async () => {
+  it("defaults to the Uncommitted (worktree) scope tab active", async () => {
     diffMock.mockResolvedValue(mkDiff());
     renderWithQuery(<DiffPanel agentId="agent-1" />);
 
     await waitFor(() => expect(diffMock).toHaveBeenCalled());
-    expect(screen.getByRole("tab", { name: "Arbeitsstand" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("tab", { name: "Letzter Commit" })).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByRole("tab", { name: "Uncommitted" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Last commit" })).toHaveAttribute("aria-selected", "false");
   });
 
-  it("switching to Letzter Commit refetches with scope=last-commit", async () => {
+  it("switching to Last commit refetches with scope=last-commit", async () => {
     diffMock.mockResolvedValue(mkDiff());
     const user = userEvent.setup();
     renderWithQuery(<DiffPanel agentId="agent-1" />);
 
     await waitFor(() => expect(diffMock).toHaveBeenCalledWith("agent-1", "worktree"));
 
-    await user.click(screen.getByRole("tab", { name: "Letzter Commit" }));
+    await user.click(screen.getByRole("tab", { name: "Last commit" }));
 
     await waitFor(() => expect(diffMock).toHaveBeenCalledWith("agent-1", "last-commit"));
-    expect(screen.getByRole("tab", { name: "Letzter Commit" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Last commit" })).toHaveAttribute("aria-selected", "true");
   });
 
   it("persists the scope choice to localStorage and restores it on remount", async () => {
@@ -115,7 +122,7 @@ describe("DiffPanel", () => {
     const { unmount } = renderWithQuery(<DiffPanel agentId="agent-1" />);
 
     await waitFor(() => expect(diffMock).toHaveBeenCalledWith("agent-1", "worktree"));
-    await user.click(screen.getByRole("tab", { name: "Letzter Commit" }));
+    await user.click(screen.getByRole("tab", { name: "Last commit" }));
     await waitFor(() => expect(diffMock).toHaveBeenCalledWith("agent-1", "last-commit"));
     unmount();
 
@@ -128,21 +135,21 @@ describe("DiffPanel", () => {
     diffMock.mockResolvedValue(mkDiff({ files: [], stats: { files: 0, additions: 0, deletions: 0 } }));
     renderWithQuery(<DiffPanel agentId="agent-1" />);
 
-    expect(await screen.findByText("Keine Änderungen")).toBeInTheDocument();
+    expect(await screen.findByText("No uncommitted changes")).toBeInTheDocument();
   });
 
   it("shows the no-workspace state on a 404 no_workspace error", async () => {
     diffMock.mockRejectedValue(new Error('API 404: {"reason": "no_workspace"}'));
     renderWithQuery(<DiffPanel agentId="agent-1" />);
 
-    expect(await screen.findByText("Kein Workspace")).toBeInTheDocument();
+    expect(await screen.findByText("No git repository found")).toBeInTheDocument();
   });
 
   it("shows a generic error state for other failures", async () => {
     diffMock.mockRejectedValue(new Error("API 500: boom"));
     renderWithQuery(<DiffPanel agentId="agent-1" />);
 
-    expect(await screen.findByText("Diff konnte nicht geladen werden.")).toBeInTheDocument();
+    expect(await screen.findByText("Couldn't load the diff.")).toBeInTheDocument();
   });
 
   it("manual refresh button always refetches, even when refreshHot is false", async () => {
@@ -151,7 +158,7 @@ describe("DiffPanel", () => {
     renderWithQuery(<DiffPanel agentId="agent-1" refreshHot={false} />);
 
     await waitFor(() => expect(diffMock).toHaveBeenCalledTimes(1));
-    await user.click(screen.getByRole("button", { name: "Aktualisieren" }));
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
 
     await waitFor(() => expect(diffMock).toHaveBeenCalledTimes(2));
   });
@@ -178,5 +185,80 @@ describe("DiffPanel", () => {
     await vi.advanceTimersByTimeAsync(15_000);
     await vi.waitFor(() => expect(diffMock).toHaveBeenCalledTimes(3));
     vi.useRealTimers();
+  });
+
+  it("refetches once when a turn ends (refreshHot true -> false)", async () => {
+    diffMock.mockResolvedValue(mkDiff());
+    const { rerenderWithQuery } = renderWithQuery(<DiffPanel agentId="agent-1" refreshHot={true} />);
+    await waitFor(() => expect(diffMock).toHaveBeenCalledTimes(1));
+
+    rerenderWithQuery(<DiffPanel agentId="agent-1" refreshHot={false} />);
+
+    await waitFor(() => expect(diffMock).toHaveBeenCalledTimes(2));
+    expect(diffMock).toHaveBeenLastCalledWith("agent-1", "worktree");
+  });
+
+  it("does not refetch when refreshHot merely stays false", async () => {
+    diffMock.mockResolvedValue(mkDiff());
+    const { rerenderWithQuery } = renderWithQuery(<DiffPanel agentId="agent-1" refreshHot={false} />);
+    await waitFor(() => expect(diffMock).toHaveBeenCalledTimes(1));
+
+    rerenderWithQuery(<DiffPanel agentId="agent-1" refreshHot={false} />);
+
+    await new Promise((r) => setTimeout(r, 50));
+    expect(diffMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("names the repository, branch and why it is shown", async () => {
+    diffMock.mockResolvedValue(
+      mkDiff({ source: { kind: "session", repo: "scratch", branch: "main", path: "/workspace/scratch" } }),
+    );
+    renderWithQuery(<DiffPanel agentId="agent-1" />);
+
+    const line = await screen.findByTestId("diff-source");
+    expect(line).toHaveTextContent("scratch · main");
+    expect(within(line).getByText("Chat folder")).toBeInTheDocument();
+    expect(line).toHaveAttribute("title", "/workspace/scratch");
+  });
+
+  it("shows no raw key for a source kind it does not know", async () => {
+    diffMock.mockResolvedValue(
+      mkDiff({ source: { kind: "future" as never, repo: "r", branch: null, path: "/workspace/r" } }),
+    );
+    renderWithQuery(<DiffPanel agentId="agent-1" />);
+
+    const line = await screen.findByTestId("diff-source");
+    expect(line).toHaveTextContent("r");
+    expect(line.textContent).not.toContain("kind.");
+  });
+
+  it("last commit shows its short id and age next to the message", async () => {
+    store["mc.chat.diffscope"] = "last-commit";
+    const committedAt = new Date(Date.now() - 3 * 60_000).toISOString();
+    diffMock.mockResolvedValue(
+      mkDiff({ scope: "last-commit", hash: "ea3dd2f", message: "test: probe", committed_at: committedAt }),
+    );
+    renderWithQuery(<DiffPanel agentId="agent-1" />);
+
+    expect(await screen.findByText("test: probe")).toBeInTheDocument();
+    expect(screen.getByText(/^ea3dd2f · 3 minutes ago$/)).toBeInTheDocument();
+  });
+
+  it("says 'No commit yet' for a repository without commits", async () => {
+    store["mc.chat.diffscope"] = "last-commit";
+    diffMock.mockResolvedValue(
+      mkDiff({ scope: "last-commit", hash: "", message: "", files: [], stats: { files: 0, additions: 0, deletions: 0 } }),
+    );
+    renderWithQuery(<DiffPanel agentId="agent-1" />);
+
+    expect(await screen.findByText("No commit yet")).toBeInTheDocument();
+  });
+
+  it("an uncommitted diff renders no backend sentence, only the stats", async () => {
+    diffMock.mockResolvedValue(mkDiff({ scope: "worktree", hash: "", message: "" }));
+    renderWithQuery(<DiffPanel agentId="agent-1" />);
+
+    expect(await screen.findByText("1 file")).toBeInTheDocument();
+    expect(screen.queryByText("Uncommitted changes")).not.toBeInTheDocument();
   });
 });
