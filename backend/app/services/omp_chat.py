@@ -262,6 +262,43 @@ def transcript_allowed(agent, path: Path) -> bool:
     return resolved != root and root in resolved.parents
 
 
+def _session_id_from_stem(stem: str) -> str:
+    """Die Sitzungs-UUID aus einem Transkript-Dateistamm ``<ts>_<uuid>``.
+
+    Der Zeitstempel-Teil enthaelt keinen Unterstrich, die UUID also der Rest
+    nach dem ersten. Geteilt aus ``preview_channel`` (Session-Bindung) und
+    ``session_id_for`` (Rollover-Vergleich) — beide brauchen exakt dieselbe
+    Extraktion, und zwei leicht abweichende Kopien waeren genau die Falle,
+    die ein gemeinsamer Helfer verhindert."""
+    return stem.split("_", 1)[1] if "_" in stem else stem
+
+
+def session_id_for(path: Path) -> str:
+    """Die stabile Sitzungs-UUID einer Transkript-Datei — fuer den Tailer-
+    Rollover-Vergleich (``transcript_chat.ChatTailerManager.
+    _is_genuine_rollover``), der sonst JEDEN Pfadwechsel als neue Sitzung
+    liest.
+
+    Unter ``OMP_DRIVER=acp`` schreiben ZWEI unabhaengige Prozesse je eine
+    eigene Datei fuer DIESELBE Sitzung in denselben cwd-Ordner: die native
+    omp-CLI und der ACP-Bridge-Sink (``docker/omp-bridge/acp_chat_events.
+    ChatEventSink`` — dessen eigener Docstring sagt „the same shape omp
+    writes", bewusst dasselbe Schema). Beide Dateinamen tragen dieselbe
+    Sitzungs-UUID, nur mit unterschiedlich genauem Zeitstempel-Praefix
+    (Sekunden vs. Millisekunden+``Z``), und beide wachsen ueber einen langen
+    Zug mit vielen Werkzeugaufrufen unabhaengig weiter — „die neueste Datei"
+    kann darum im Sekundentakt zwischen ihnen hin- und herspringen, OHNE
+    dass sich die Sitzung je aendert (Operator-Befund 04.10.2026: der
+    Kontext-Ring im Composer blinkte deshalb waehrend eines laufenden Zugs
+    mehrfach weg/zurueck — jeder Sprung loeste einen echten, aber
+    FALSCHEN ``session_changed`` auf dem SSE-Strom aus).
+
+    Vergleicht der Aufrufer zwei Pfaden ueber diese Funktion statt ueber den
+    Pfad selbst, ist eine Geschwisterdatei mit derselben UUID keine neue
+    Sitzung mehr."""
+    return _session_id_from_stem(path.stem)
+
+
 def preview_channel(session_path: Path) -> Path | None:
     """Die Vorschau-Kanal-Datei zu einer ACP-Session, oder ``None``.
 
@@ -288,10 +325,7 @@ def preview_channel(session_path: Path) -> Path | None:
     ueber diesen Kanal — der Pane-Strom bleibt unberuehrt.
     """
     pdir = session_path.parent / _PREVIEWS_DIRNAME
-    stem = session_path.stem
-    # Der Transkript-Stem ist ``<ts>_<sessionId>`` — der Zeitstempel enthaelt
-    # keinen Unterstrich, die Session-ID ist also der Rest nach dem ersten.
-    session_id = stem.split("_", 1)[1] if "_" in stem else stem
+    session_id = _session_id_from_stem(session_path.stem)
     own_file = re.compile(rf"(?:^|_){re.escape(session_id)}(?:_|\.)")
     try:
         newest: Path | None = None

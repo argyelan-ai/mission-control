@@ -319,3 +319,94 @@ def test_read_acp_chat_state_missing_is_none(tmp_path, monkeypatch, acp_slug):
     monkeypatch.setattr(omp_chat, "_host_home", lambda: tmp_path)
     agent = _StubAgent(slug=acp_slug, agent_runtime="cli-bridge", harness="omp")
     assert acp_chat_transport.read_acp_chat_state(agent) is None
+
+
+def test_read_acp_turn_status_busy_true_is_working(tmp_path, monkeypatch, acp_slug):
+    """Operator-Befund 02.10.2026: ein omp/ACP-Agent blieb im Composer dauerhaft
+    "Status unknown" stehen, waehrend der Chat normal funktionierte. Root
+    cause: unter OMP_DRIVER=acp gibt es kein TUI-Pane mehr zu sondieren —
+    dieser Zweig liest stattdessen die Zustandsdatei des Chat-Daemons."""
+    from app.services import acp_chat_transport, omp_chat
+
+    root = tmp_path / ".mc" / "agents" / acp_slug / "omp-sessions"
+    (root / "--workspace--").mkdir(parents=True)
+    (root / "--workspace--" / "acp-chat-state.json").write_text(json.dumps({"busy": True}))
+
+    monkeypatch.setattr(omp_chat, "_host_home", lambda: tmp_path)
+    agent = _StubAgent(slug=acp_slug, agent_runtime="cli-bridge", harness="omp")
+    assert acp_chat_transport.read_acp_turn_status(agent) == "working"
+
+
+def test_read_acp_turn_status_busy_false_is_idle(tmp_path, monkeypatch, acp_slug):
+    from app.services import acp_chat_transport, omp_chat
+
+    root = tmp_path / ".mc" / "agents" / acp_slug / "omp-sessions"
+    (root / "--workspace--").mkdir(parents=True)
+    (root / "--workspace--" / "acp-chat-state.json").write_text(json.dumps({"busy": False}))
+
+    monkeypatch.setattr(omp_chat, "_host_home", lambda: tmp_path)
+    agent = _StubAgent(slug=acp_slug, agent_runtime="cli-bridge", harness="omp")
+    assert acp_chat_transport.read_acp_turn_status(agent) == "idle"
+
+
+def test_read_acp_turn_status_missing_file_is_none(tmp_path, monkeypatch, acp_slug):
+    """Kein frischer Zug-Zustand bekannt -- der Aufrufer faellt auf die
+    mtime-Heuristik zurueck, statt eine falsche Antwort zu erfinden."""
+    from app.services import acp_chat_transport, omp_chat
+
+    monkeypatch.setattr(omp_chat, "_host_home", lambda: tmp_path)
+    agent = _StubAgent(slug=acp_slug, agent_runtime="cli-bridge", harness="omp")
+    assert acp_chat_transport.read_acp_turn_status(agent) is None
+
+
+def test_read_acp_turn_status_busy_not_a_bool_is_none(tmp_path, monkeypatch, acp_slug):
+    from app.services import acp_chat_transport, omp_chat
+
+    root = tmp_path / ".mc" / "agents" / acp_slug / "omp-sessions"
+    (root / "--workspace--").mkdir(parents=True)
+    (root / "--workspace--" / "acp-chat-state.json").write_text(json.dumps({"busy": None}))
+
+    monkeypatch.setattr(omp_chat, "_host_home", lambda: tmp_path)
+    agent = _StubAgent(slug=acp_slug, agent_runtime="cli-bridge", harness="omp")
+    assert acp_chat_transport.read_acp_turn_status(agent) is None
+
+
+def test_omp_session_id_for_strips_timestamp_prefix():
+    """The embedded session uuid is everything after the first underscore —
+    the timestamp prefix (no underscore itself) is not part of it."""
+    from app.services import omp_chat
+    from pathlib import Path
+
+    assert omp_chat.session_id_for(
+        Path("2026-10-03T15-49-48_01a10275-0fbe-755f-be16-ecf54cfdfa41.jsonl")
+    ) == "01a10275-0fbe-755f-be16-ecf54cfdfa41"
+
+
+def test_omp_session_id_for_matches_across_sibling_filenames():
+    """Operator-Befund 04.10.2026: the native omp CLI and the ACP bridge's
+    own sink each write their OWN .jsonl for the SAME session into the same
+    folder — identical embedded uuid, only the timestamp prefix differs in
+    precision (seconds vs. milliseconds+Z). session_id_for must treat both
+    as the same session."""
+    from app.services import omp_chat
+    from pathlib import Path
+
+    a = Path("2026-10-03T15-49-48_01a10275-0fbe-755f-be16-ecf54cfdfa41.jsonl")
+    b = Path("2026-10-03T15-49-48-606Z_01a10275-0fbe-755f-be16-ecf54cfdfa41.jsonl")
+    assert omp_chat.session_id_for(a) == omp_chat.session_id_for(b)
+
+
+def test_omp_session_id_for_differs_for_a_real_new_session():
+    from app.services import omp_chat
+    from pathlib import Path
+
+    a = Path("2026-10-03T15-49-48_01a10275-0fbe-755f-be16-ecf54cfdfa41.jsonl")
+    c = Path("2026-10-04T09-00-00_9999999-aaaa-bbbb-cccc-dddddddddddd.jsonl")
+    assert omp_chat.session_id_for(a) != omp_chat.session_id_for(c)
+
+
+def test_omp_session_id_for_has_no_underscore_falls_back_to_full_stem():
+    from app.services import omp_chat
+    from pathlib import Path
+
+    assert omp_chat.session_id_for(Path("justauuid.jsonl")) == "justauuid"

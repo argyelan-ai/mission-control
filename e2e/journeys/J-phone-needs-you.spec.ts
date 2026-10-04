@@ -4,7 +4,7 @@
 // effect at the agent (concept C6/F21), not on the click.
 import { expect, test, type Page } from "@playwright/test";
 import { FakeAgent } from "./lib/fakeHarness";
-import { api, createBoard, createTask, getTask, operatorToken, signIn } from "./lib/mc";
+import { createBoard, createTask, getTask, operatorToken, signIn } from "./lib/mc";
 
 test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
 
@@ -29,9 +29,11 @@ test("a blocked task is unblocked from the phone and the agent gets the instruct
   await page.goto("/");
   await expect(lane(page, "blocked").getByRole("button", { name: new RegExp(title) })).toBeVisible();
 
-  // Menu → Inbox: the decision is there with the agent's question.
-  await page.getByRole("button", { name: "Open menu" }).click();
-  await page.getByRole("link", { name: "Inbox", exact: true }).click();
+  // Tab bar → Inbox (phone menu B, #738): the tab already counts the one
+  // waiting decision; the decision is there with the agent's question.
+  const inboxTab = page.getByRole("navigation", { name: "Main navigation" }).getByRole("link", { name: /^Inbox\b/ });
+  await expect(inboxTab).toHaveAccessibleName("Inbox, 1 waiting");
+  await inboxTab.click();
   await expect(page).toHaveURL(/\/inbox/);
   const card = page.getByTestId("approval-card").filter({ hasText: title });
   await expect(card).toContainText("Which changelog is right: v1 or v2?");
@@ -57,19 +59,12 @@ test("a blocked task is unblocked from the phone and the agent gets the instruct
   await expect(lane(page, "blocked")).toHaveCount(0);
 });
 
-// KNOWN GAP (found by this journey, 2026-09-29): a blocking question
-// (`mc ask --blocking`) parks the task in `waiting`. The task's "Reply"
-// button only posts a plain comment, and comments are not delivered to the
-// agent while the task is `waiting` (agents.py _collect_and_ack_new_comments
-// has no `waiting` in its status list) — so the agent never gets the answer
-// and the task stays `waiting`. The answer path that does resume the task is
-// POST /tasks/{id}/thread/messages with reply_to, which no UI calls yet.
-// This test pins the gap: every step up to the answer must work, the answer
-// typed in the UI must NOT arrive, and — as a control that the fake agent
-// and the poll path are fine — the same answer sent through the resuming
-// API path does arrive. When the gap is fixed this test turns red — then
-// replace the gap block with the real effect check of the UI answer.
-test("a waiting question is answered from the phone [known gap: answer does not reach the agent]", async ({ page }) => {
+// Found by this journey on 2026-09-29 as a known gap ("Reply" only posted a
+// plain comment, which is not delivered while the task is `waiting`); closed
+// by #712: the needs-you card shows the agent's open question with an answer
+// field, and Reply sends a thread reply addressed to that question
+// (reply_to), which clears it and resumes the task.
+test("a waiting question is answered from the phone and the agent gets the answer", async ({ page }) => {
   const token = await operatorToken();
   const board = await createBoard(token, `Phone answer ${run}`);
   // Only a board lead can ask blocking questions today (workers have no
@@ -78,7 +73,7 @@ test("a waiting question is answered from the phone [known gap: answer does not 
   const title = `Choose the release name ${run}`;
   const task = await createTask(token, board.id, title, agent.id);
   await agent.takeTask();
-  const question = await agent.askBlocking("Which release name: Aurora or Borealis?");
+  await agent.askBlocking("Which release name: Aurora or Borealis?");
   expect((await getTask(token, board.id, task.id)).status).toBe("waiting");
 
   await signIn(page, token, board.id);
@@ -89,24 +84,20 @@ test("a waiting question is answered from the phone [known gap: answer does not 
   const detail = page.getByRole("dialog", { name: "Task details" });
   await expect(detail.getByText(/^Waiting · Fake Lead asked/)).toBeVisible();
 
-  // Reply.
-  await detail.getByRole("button", { name: "Reply" }).click();
-  const box = detail.getByRole("textbox", { name: "Add comment" });
-  await box.fill("Aurora.");
-  await box.press("Enter");
-  await expect(detail.getByText("Aurora.", { exact: true })).toBeVisible();
+  // The card shows the agent's question with an answer field; Reply stays
+  // off until there is an answer.
+  const card = detail.getByTestId("task-state-card");
+  await expect(card.getByTestId("state-card-question")).toHaveText("Which release name: Aurora or Borealis?");
+  const reply = card.getByRole("button", { name: "Reply" });
+  await expect(reply).toBeDisabled();
+  await card.getByRole("textbox", { name: "Your answer" }).fill("Aurora.");
+  await reply.click();
 
-  // The gap, pinned: the answer does not reach the agent and the task stays
-  // parked. Turns red once fixed (see the comment above the test).
-  const delivered = await agent.deliveriesDuring(6_000);
-  expect(delivered.filter((text) => text.includes("Aurora."))).toEqual([]);
-  expect((await getTask(token, board.id, task.id)).status).toBe("waiting");
-
-  // Control: the resuming answer path works end to end.
-  await api("POST", `/tasks/${task.id}/thread/messages`, token, {
-    body: "Aurora (answered through the thread).",
-    reply_to: question.message_id,
-  });
-  await agent.waitForDelivery((text) => text.includes("Aurora (answered through the thread)."));
+  // Effect: the agent receives the answer — once — and the task runs again.
+  const delivered = await agent.waitForDelivery((text) => text.includes("Aurora."));
+  expect(delivered).toContain("Aurora.");
+  expect((await agent.deliveriesDuring(3_000)).filter((text) => text.includes("Aurora."))).toEqual([]);
   expect((await getTask(token, board.id, task.id)).status).toBe("in_progress");
+  // The question is answered, so the card no longer asks it.
+  await expect(card.getByTestId("state-card-question")).toHaveCount(0);
 });

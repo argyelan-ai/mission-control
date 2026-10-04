@@ -24,7 +24,7 @@ fork code must never run on that machine).
 
 | Journey | Covers | Proves |
 |---|---|---|
-| `J-phone-needs-you` | Home → Inbox → task, at 390 px | A blocked task is unblocked from the phone and the agent receives the instruction and the task again; afterwards nothing is blocked. A second test pins a **known gap** (below) and checks, as a control, that the resuming answer path reaches the agent. |
+| `J-phone-needs-you` | Home → Inbox (tab bar) → task, at 390 px | A blocked task is unblocked from the phone and the agent receives the instruction and the task again; afterwards nothing is blocked. A waiting question (`mc ask --blocking`) is answered in the task card: the agent receives the answer once and the task runs again. |
 | `J-usage` | Insights, at 390 px | Recorded usage rows show up as exactly that cost, local share (this week, last week), day and source. |
 | `J-vault`, `J-setup`, `J-runtime-switch`, `J-job-to-merge` | — | Not written yet; listed in `docs/produkt/luecken-basis.json`. One per round, cheapest first. |
 
@@ -121,9 +121,11 @@ that the gap **still exists**, with `[known gap: …]` in its title
 test turns red, and the fix PR flips the last assertion into the real effect
 check.
 
-| Test | Gap |
-|---|---|
-| `J-phone-needs-you` › a waiting question is answered from the phone | A blocking question parks the task in `waiting`. "Reply" posts a plain comment; comments are not delivered while a task is `waiting`, so the agent never gets the answer and the task stays parked. The resuming answer path (`POST /tasks/{id}/thread/messages` with `reply_to`) has no UI caller. The task card also does not show the question itself. |
+None open. Closed so far:
+
+| Test | Gap | Closed by |
+|---|---|---|
+| `J-phone-needs-you` › a waiting question is answered from the phone | "Reply" on a `waiting` task posted a plain comment, which is not delivered while the task waits; the task stayed parked. | #712 — the card shows the open question with an answer field; Reply is a thread reply to it (`reply_to`) and resumes the task. |
 
 ## Writing a new journey
 
