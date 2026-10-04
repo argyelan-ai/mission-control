@@ -276,8 +276,22 @@ if command -v omp >/dev/null 2>&1; then
             ;;
     esac
     if [ "$_cdp_on" = "1" ]; then
-        omp config set browser.cdpUrl "http://127.0.0.1:${_cdp_port}" >/dev/null 2>&1 \
-            && echo "[render-omp-config] Browser: gemeinsamer Agenten-Browser (${_cdp_target} über 127.0.0.1:${_cdp_port})" \
+        # Agent-Zuordnung (04.10.2026): steht hinter dem Ziel cdp-gateway,
+        # trägt die cdpUrl den Pfad `/a/<slug>` — dieselbe Entscheidung, die
+        # cdp-relay.sh trifft (beide fragen cdp_relay.py --agent-path, eine
+        # Quelle). Allein reicht das NICHT: Puppeteer wirft den Pfad für
+        # /json/version weg; das Relay setzt ihn darum auf jede Anfrage
+        # selbst. Hier macht er die Zuordnung sichtbar (`omp config get
+        # browser.cdpUrl`) und gilt auch für omps eigene Erreichbarkeits-Probe.
+        _self="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
+        _relay_py="$(cd "$(dirname "$_self")" && pwd)/cdp_relay.py"
+        _cdp_agent_path=""
+        if [ -f "$_relay_py" ]; then
+            _cdp_agent_path="$(OMP_BROWSER_CDP_TARGET="$_cdp_target" python3 "$_relay_py" --agent-path 2>/dev/null || true)"
+        fi
+        _cdp_url="http://127.0.0.1:${_cdp_port}${_cdp_agent_path}"
+        omp config set browser.cdpUrl "$_cdp_url" >/dev/null 2>&1 \
+            && echo "[render-omp-config] Browser: gemeinsamer Agenten-Browser (${_cdp_target} über ${_cdp_url})" \
             || echo "[render-omp-config] WARN: omp config set browser.cdpUrl fehlgeschlagen"
     else
         omp config reset browser.cdpUrl >/dev/null 2>&1 || true

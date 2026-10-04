@@ -174,3 +174,103 @@ def test_image_and_entrypoint_wire_the_relay():
     assert entrypoint.count("/opt/omp-bridge/cdp-relay.sh") == 2
     assert entrypoint.index("/opt/omp-bridge/cdp-relay.sh || true") < entrypoint.index("\nstart_native\n")
     assert os.access(RELAY_SCRIPT, os.X_OK)
+
+
+# ── Agent-Zuordnung (Live-Befund 04.10.2026) ─────────────────────────────
+#
+# Hinter `cdp-browser:9300` sitzt cdp-gateway; es erkennt den Agenten am
+# Pfad-Praefix `/a/<slug>`. Puppeteer (omp) wirft einen Pfad in der cdpUrl
+# fuer /json/version weg, Reverse-DNS scheiterte im echten Netz — darum
+# startet cdp-relay.sh dann cdp_relay.py, das JEDE Anfrage praefixiert, und
+# render-omp-config.sh zeigt die Zuordnung in der cdpUrl.
+
+def test_gateway_target_gives_omp_a_prefixed_cdp_url(tmp_path):
+    calls, out = _render(tmp_path, OMP_BROWSER_CDP_TARGET="localhost:9300", AGENT_SLUG="alpha")
+    assert calls == ["omp config set browser.cdpUrl http://127.0.0.1:9222/a/alpha"]
+    assert "127.0.0.1:9222/a/alpha" in out
+
+
+def test_plain_chromium_target_keeps_the_bare_cdp_url(tmp_path):
+    """`:9223` ist der dokumentierte Rueckweg am Gateway vorbei — Chromium
+    selbst kennt `/a/<slug>/json/version` nicht (404)."""
+    calls, _ = _render(tmp_path, OMP_BROWSER_CDP_TARGET="localhost:9223", AGENT_SLUG="alpha")
+    assert calls == ["omp config set browser.cdpUrl http://127.0.0.1:9222"]
+
+
+@pytest.mark.parametrize("extra", [
+    {"AGENT_SLUG": "../etc"},
+    {"AGENT_SLUG": "alpha", "OMP_BROWSER_CDP_ATTRIBUTION": "off"},
+])
+def test_no_prefix_without_a_valid_slug_or_with_attribution_off(tmp_path, extra):
+    calls, _ = _render(tmp_path, OMP_BROWSER_CDP_TARGET="localhost:9300", **extra)
+    assert calls == ["omp config set browser.cdpUrl http://127.0.0.1:9222"]
+
+
+def test_relay_with_attribution_prefixes_every_request_end_to_end(tmp_path):
+    """cdp-relay.sh wirklich starten (echtes python3, keine Fakes), eine
+    Anfrage durchschicken und am Ziel nachsehen, was ankommt."""
+    import socket
+    import threading
+
+    seen: list[bytes] = []
+    upstream = socket.socket()
+    upstream.bind(("127.0.0.1", 0))
+    upstream.listen(1)
+    upstream_port = upstream.getsockname()[1]
+
+    def _serve_once():
+        conn, _ = upstream.accept()
+        with conn:
+            data = b""
+            while b"\r\n\r\n" not in data:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+            seen.append(data.split(b"\r\n", 1)[0])
+            conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+
+    t = threading.Thread(target=_serve_once, daemon=True)
+    t.start()
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        relay_port = probe.getsockname()[1]
+
+    env = _scrubbed_env(tmp_path)
+    env.update(
+        OMP_BROWSER_CDP_TARGET=f"127.0.0.1:{upstream_port}",
+        OMP_BROWSER_CDP_ATTRIBUTION="on",
+        OMP_BROWSER_CDP_PORT=str(relay_port),
+        AGENT_SLUG="alpha",
+    )
+    r = subprocess.run([str(RELAY_SCRIPT)], env=env, capture_output=True, text=True, timeout=10)
+    assert r.returncode == 0, r.stderr
+    assert "Agent-Zuordnung /a/alpha" in r.stdout
+    try:
+        resp = b""
+        for _ in range(50):
+            try:
+                with socket.create_connection(("127.0.0.1", relay_port), timeout=2) as c:
+                    c.sendall(b"GET /json/version HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+                    while True:
+                        chunk = c.recv(4096)
+                        if not chunk:
+                            break
+                        resp += chunk
+                break
+            except ConnectionRefusedError:
+                subprocess.run(["sleep", "0.1"])
+        assert resp.startswith(b"HTTP/1.1 200")
+        t.join(timeout=5)
+        assert seen == [b"GET /a/alpha/json/version HTTP/1.1"]
+    finally:
+        subprocess.run(["pkill", "-f", f"cdp_relay.py --listen-port {relay_port} "])
+        upstream.close()
+
+
+def test_image_ships_the_attributing_relay():
+    dockerfile = (OMP_DIR / "Dockerfile").read_text()
+    assert "COPY cdp_relay.py         /opt/omp-bridge/cdp_relay.py" in dockerfile
+    assert "/opt/omp-bridge/cdp_relay.py \\" in dockerfile  # chmod +x
+    assert os.access(OMP_DIR / "cdp_relay.py", os.X_OK)
