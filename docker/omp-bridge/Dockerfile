@@ -33,6 +33,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         openssh-client \
         tmux \
         pandoc \
+        # ffmpeg + imagemagick: Video/Audio und Bilder bearbeiten (Thumbnails,
+        # Formatwandlung, Screenshots zuschneiden). Fehlte dem omp-Agenten am 04.10.2026
+        # ("No ffmpeg, no imagemagick") bei Medien-Aufgaben.
+        ffmpeg \
+        imagemagick \
         # poppler-utils: das `Read`-Werkzeug der CLIs rendert PDF-Seiten mit
         # `pdftoppm`. Ohne das Paket bricht jedes mehrseitige PDF mit
         # "pdftoppm is not installed" ab — und der naheliegende Ausweg (macOS
