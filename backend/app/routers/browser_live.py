@@ -255,7 +255,7 @@ async def list_targets(
             owned_ids = await _gateway_owned_ids(slug)
             scope_unavailable = owned_ids is None
             assigned: Optional[set[str]] = None
-            if owned_ids is not None and not any(p.get("id") in owned_ids for p in pages):
+            if owned_ids is not None and pages and not any(p.get("id") in owned_ids for p in pages):
                 assigned = await _gateway_assigned_ids()
             pages, unassigned = _apply_scope(pages, owned_ids, assigned)
         else:
@@ -683,7 +683,10 @@ async def browser_live_ws(
         all_pages = watcher.targets()
         owned = await _owned_ids()
         assigned: Optional[set[str]] = None
-        if owned is not None and owned_cache is not None and not any(p["id"] in owned for p in all_pages):
+        if (
+            owned is not None and owned_cache is not None and all_pages
+            and not any(p["id"] in owned for p in all_pages)
+        ):
             assigned = await owned_cache.get_assigned()
         pages, scope_view["unassigned"] = _apply_scope(all_pages, owned, assigned)
         return pages
