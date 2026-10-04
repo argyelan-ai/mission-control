@@ -203,11 +203,13 @@ def _apply_scope(
 
     - attribution unavailable (`owned` None): every page (scope_unavailable).
     - the agent owns at least one open page: only those.
-    - it owns none, but some open page is NOT assigned to any agent: every
-      page, with the unassigned ones flagged. Those could be this agent's
-      (live 04.10.2026: every tab was unassigned and the panel claimed the
-      agent had no tab while it had one open) — so never say "no open tab"
-      then; show them and say they aren't assigned.
+    - it owns none, but some open page is NOT assigned to any agent: exactly
+      those unassigned pages, flagged. They could be this agent's (live
+      04.10.2026: every tab was unassigned and the panel claimed the agent
+      had no tab while it had one open) — so never say "no open tab" then.
+      Another agent's tab is NEVER part of this view (review finding: the
+      first version returned every page, so the panel showed — and
+      auto-followed — a tab that belonged to a different agent).
     - every open page belongs to some OTHER agent: nothing — a real "this
       agent has no open tab".
     - assignment unknown (`assigned` None, gateway flapped between the two
@@ -217,9 +219,9 @@ def _apply_scope(
     own = [p for p in pages if p.get("id") in owned]
     if own or assigned is None:
         return own, None
-    unassigned = {p.get("id") for p in pages if p.get("id") not in assigned}
-    if unassigned:
-        return pages, unassigned
+    unassigned_pages = [p for p in pages if p.get("id") not in assigned]
+    if unassigned_pages:
+        return unassigned_pages, {p.get("id") for p in unassigned_pages}
     return [], None
 
 
@@ -238,8 +240,8 @@ async def list_targets(
     scoped, so the UI can say so instead of silently looking like a
     (misleadingly empty-looking "only agent X") filtered view.
     `unassignedFallback: true` — the agent owns no open tab but tabs that
-    are assigned to no agent exist: every tab is listed, the unassigned ones
-    carry `unassigned: true` (see `_apply_scope`)."""
+    are assigned to no agent exist: exactly those are listed, each with
+    `unassigned: true`, never another agent's tab (see `_apply_scope`)."""
     try:
         pages = await _list_page_targets()
     except Exception as e:
@@ -270,8 +272,8 @@ async def list_targets(
         "targets": targets,
         "scopeUnavailable": scope_unavailable,
         # Scoped, the agent owns no open tab, but unassigned tabs exist — so
-        # `targets` is EVERY tab (unassigned ones flagged), not "this agent
-        # has none". See `_apply_scope`.
+        # `targets` holds exactly those unassigned tabs (flagged), never
+        # another agent's, and not "this agent has none". See `_apply_scope`.
         "unassignedFallback": unassigned is not None,
         "unassignedCount": len(unassigned) if unassigned else 0,
     }
@@ -592,9 +594,10 @@ async def browser_live_ws(
       {"type": "status", "code": "unassigned_fallback", "active": bool, "count": int}
         Also scoped panels only, sent first thing and on every change.
         `active: true`: the agent owns no open tab, but `count` tabs are not
-        assigned to any agent, so the panel shows EVERY tab (`targets`
-        entries then carry `"unassigned": true` where it applies) instead of
-        a misleading "no open tab" (see `_apply_scope`).
+        assigned to any agent, so the panel shows exactly those (`targets`
+        entries carry `"unassigned": true`; another agent's tab is never in
+        the list, so follow can't land on one) instead of a misleading "no
+        open tab" (see `_apply_scope`).
 
     Client → server messages are steering only, never forwarded to Chromium:
       {"follow": true|false}, {"select": "<target id>"}

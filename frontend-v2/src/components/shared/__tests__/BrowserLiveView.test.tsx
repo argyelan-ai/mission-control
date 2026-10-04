@@ -593,9 +593,9 @@ describe("BrowserLiveView", () => {
     // (unassigned ones flagged) plus an `unassigned_fallback` status; the
     // panel must show them with a clear hint, never the empty state.
 
-    const FALLBACK_HINT = "No tab is assigned to Alpha — showing all tabs. Tabs marked “not assigned” aren't assigned to any agent.";
+    const FALLBACK_HINT = "No tab is assigned to Alpha — showing the tabs that aren't assigned to any agent.";
 
-    it("shows every tab with a 'not assigned' hint instead of claiming the agent has no tab", async () => {
+    it("shows the unassigned tabs with a 'not assigned' hint instead of claiming the agent has no tab", async () => {
       useMapLocalStorage();
       vi.spyOn(api.browserLive, "targets").mockResolvedValue({
         targets: [{ id: "free", title: "Example Domain", url: "https://example.org/", unassigned: true }],
@@ -645,6 +645,29 @@ describe("BrowserLiveView", () => {
       expect(screen.getByRole("option", { name: "Checkout flow" })).toBeInTheDocument();
     });
 
+    it("a live connection problem wins over the unassigned hint in the shared banner slot", async () => {
+      useMapLocalStorage();
+      vi.spyOn(api.browserLive, "targets").mockResolvedValue(targetsResponse(TARGETS));
+      renderWithQuery(<BrowserLiveView agentId="agent-alpha" agentName="Alpha" />);
+
+      await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1));
+      const ws = FakeWebSocket.instances[0];
+      ws.onopen?.(new Event("open"));
+      ws.onmessage?.({ data: JSON.stringify({ type: "status", code: "unassigned_fallback", active: true, count: 1 }) } as MessageEvent);
+      ws.onmessage?.({ data: JSON.stringify({
+        type: "targets", targets: [{ ...TARGETS[0], unassigned: true }], activeId: "target-1", followedId: "target-1",
+      }) } as MessageEvent);
+      expect(await screen.findByText(FALLBACK_HINT)).toBeInTheDocument();
+
+      ws.onmessage?.({ data: JSON.stringify({ type: "status", code: "connect_error" }) } as MessageEvent);
+      expect(await screen.findByText("Connecting to the agent browser…")).toBeInTheDocument();
+      expect(screen.queryByText(FALLBACK_HINT)).not.toBeInTheDocument();
+
+      // Once a frame proves the stream is fine again, the hint is back.
+      ws.onmessage?.({ data: JSON.stringify({ type: "frame", data: "ZmFrZQ==", metadata: {} }) } as MessageEvent);
+      expect(await screen.findByText(FALLBACK_HINT)).toBeInTheDocument();
+    });
+
     it("sabotage: no fallback hint when the server never reports one", async () => {
       useMapLocalStorage();
       vi.spyOn(api.browserLive, "targets").mockResolvedValue(targetsResponse(TARGETS));
@@ -666,7 +689,9 @@ describe("BrowserLiveView", () => {
       vi.spyOn(api.browserLive, "targets").mockResolvedValue(targetsResponse(TARGETS));
       renderWithQuery(<BrowserLiveView agentId="agent-alpha" agentName="Alpha" />);
 
-      const chip = await screen.findByRole("button", { name: "Only Alpha's tabs" });
+      // Accessible name = the full visible label's key, so it contains the
+      // visible text in every language (WCAG 2.5.3) — German "Nur Alpha".
+      const chip = await screen.findByRole("button", { name: "Only Alpha" });
       const compact = chip.querySelector("[data-chip-label='compact']");
       const full = chip.querySelector("[data-chip-label='full']");
       expect(compact?.textContent).toBe("Alpha");

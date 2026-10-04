@@ -28,9 +28,9 @@ That makes attribution independent of how any client library builds its
 URLs. Rules:
   * Every request on a keep-alive connection is rewritten, not just the
     first (omp's Bun fetch reuses connections).
-  * A path that already carries this agent's prefix stays as it is; another
-    agent's prefix is replaced — from inside this container the relay speaks
-    for its own agent only.
+  * A path that already carries exactly this agent's prefix stays as it is
+    (no doubling); nothing else is stripped — a foreign `/a/<other>` would
+    end up behind ours and fail loudly instead of being re-attributed.
   * After a protocol upgrade (WebSocket `101`) the rest of the connection is
     passed through byte for byte. So is anything that does not parse as an
     origin-form HTTP/1.x request, and anything after a chunked body.
@@ -40,10 +40,11 @@ When attribution is OFF (empty agent path) this is a plain TCP relay —
 `cdp-relay.sh` still prefers socat then, so the rollback path stays the
 exact pre-change setup.
 
-Attribution is ON when `OMP_BROWSER_CDP_ATTRIBUTION` is `on`, or `auto` (the
-default) and the target is the gateway port 9300. `cdp-browser:9223` — the
-documented rollback that bypasses the gateway — is plain Chromium, which
-would answer `/a/<slug>/json/version` with 404, so `auto` leaves it alone.
+Attribution is ON when `OMP_BROWSER_CDP_ATTRIBUTION` is `auto` (the default)
+and the target is the gateway port 9300, or `on` for another gateway port.
+`cdp-browser:9223` — the documented rollback that bypasses the gateway — is
+plain Chromium, which would answer `/a/<slug>/json/version` with 404: `auto`
+leaves it alone and `on` is refused there with a warning.
 The slug comes from `AGENT_SLUG`, else `AGENT_NAME` (lowercased), and must
 match the gateway's own slug rule or attribution stays off.
 
@@ -68,6 +69,7 @@ logger = logging.getLogger("cdp_relay")
 # never be sent (it would silently fall back to "unidentified" there).
 _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 _GATEWAY_PORT = "9300"
+_PLAIN_CHROMIUM_PORT = "9223"  # cdp-browser's socat port: Chromium itself, no gateway
 _MAX_HEAD_BYTES = 64 * 1024
 _CHUNK = 64 * 1024
 # After one direction ends, give the other this long to finish (socat's -t).
@@ -79,11 +81,27 @@ def agent_path(env: Optional[dict] = None) -> str:
     env = os.environ if env is None else env
     target = (env.get("OMP_BROWSER_CDP_TARGET") or "cdp-browser:9300").strip()
     mode = (env.get("OMP_BROWSER_CDP_ATTRIBUTION") or "auto").strip().lower()
+    port = target.rsplit(":", 1)[-1]
     if mode in ("off", "0", "false", "no"):
         return ""
-    if mode not in ("on", "1", "true", "yes"):  # auto
-        if target.rsplit(":", 1)[-1] != _GATEWAY_PORT:
+    if mode in ("on", "1", "true", "yes"):
+        if port == _PLAIN_CHROMIUM_PORT:
+            # Plain Chromium answers every `/a/<slug>/...` path with 404 —
+            # forcing the prefix there would break the browser outright.
+            print(
+                f"[cdp-relay] WARN: OMP_BROWSER_CDP_ATTRIBUTION=on ignored — {target} is plain "
+                "Chromium (no cdp-gateway), it would answer every prefixed request with 404",
+                file=sys.stderr,
+            )
             return ""
+        if port != _GATEWAY_PORT:
+            print(
+                f"[cdp-relay] note: attribution forced on for {target} — it must be a cdp-gateway, "
+                "plain Chromium would answer every prefixed request with 404",
+                file=sys.stderr,
+            )
+    elif port != _GATEWAY_PORT:  # auto
+        return ""
     slug = (env.get("AGENT_SLUG") or env.get("AGENT_NAME") or "").strip().lower()
     if not _SLUG_RE.match(slug):
         return ""
@@ -91,8 +109,13 @@ def agent_path(env: Optional[dict] = None) -> str:
 
 
 def prefix_request_line(line: bytes, path_prefix: str) -> bytes:
-    """Returns the request line with `path_prefix` in front of its path.
-    Lines that are not an origin-form HTTP/1.x request come back unchanged."""
+    """Returns the request line with `path_prefix` in front of its path —
+    unless the path already starts with exactly this prefix (omp's own
+    cdpUrl, or a WebSocket URL the gateway handed out). Nothing else is
+    stripped or reinterpreted: a foreign `/a/<other>` stays behind our
+    prefix and fails loudly at the gateway instead of being silently
+    re-attributed. Lines that are not an origin-form HTTP/1.x request come
+    back unchanged."""
     if not path_prefix:
         return line
     parts = line.split(b" ")
@@ -101,16 +124,10 @@ def prefix_request_line(line: bytes, path_prefix: str) -> bytes:
     method, target, version = parts
     if not target.startswith(b"/"):
         return line  # absolute-form / authority-form: not CDP, leave it
-    if target == b"/a" or target.startswith(b"/a/"):
-        # Drop whatever agent segment is there (ours or a stale/foreign one).
-        rest = target[3:]
-        slash = rest.find(b"/")
-        query = rest.find(b"?")
-        cut = min(i for i in (slash, query, len(rest)) if i >= 0)
-        target = rest[cut:] or b"/"
-        if not target.startswith(b"/"):
-            target = b"/" + target
-    return b" ".join((method, path_prefix.encode("ascii") + target, version))
+    prefix = path_prefix.encode("ascii")
+    if target == prefix or (target.startswith(prefix) and target[len(prefix):len(prefix) + 1] in (b"/", b"?")):
+        return line
+    return b" ".join((method, prefix + target, version))
 
 
 def _header(head: bytes, name: bytes) -> Optional[bytes]:

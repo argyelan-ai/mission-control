@@ -55,6 +55,15 @@ Attributing a tab to an agent
   * Never from "this connection saw the event": every discover-enabled
     client receives `targetCreated` for every tab in the shared browser.
 
+Direction (PRINCIPLES "build future-proof"): identity is by construction —
+the `/a/<slug>` prefix every agent connection carries. That is exactly the key
+a later "one browser context per agent" model (B3) maps to that agent's own
+context; context-based attribution (`ctx_owner`) then covers every tab and
+already exists here. Claim on use is the transitional rule for today's ONE
+shared context, where omp reuses whatever page is open: it is isolated in
+`observe_command` / `_CLAIM_METHODS`, and with per-agent contexts it can only
+ever claim an agent's own tabs, so it needs no removal, just stops mattering.
+
 Who stays unassigned: playwright-mcp (shared by every claude agent) talks to
 :9223 directly, not through this gateway — and even through it, one MCP
 server serving every agent could only ever be one identity. Its tabs show up
@@ -116,6 +125,9 @@ _MAX_HEAD_BYTES = 64 * 1024
 _MAX_BODY_BYTES = 1024 * 1024
 _UPSTREAM_HTTP_TIMEOUT = 10.0
 _PUMP_CHUNK = 64 * 1024
+# After one side of a proxied WebSocket ends, the other direction gets this
+# long to deliver what is already in flight before it is cut.
+_HALF_CLOSE_GRACE = 0.5
 
 # Commands that mean "the sending agent is working in this tab now".
 _CLAIM_METHODS = frozenset({
@@ -501,14 +513,16 @@ def _status_line(status: int) -> str:
     return f"HTTP/1.1 {status} {reason}\r\n"
 
 
-async def _respond(writer: asyncio.StreamWriter, status: int, content_type: str, body: bytes) -> None:
+async def _respond(
+    writer: asyncio.StreamWriter, status: int, content_type: str, body: bytes, *, head_only: bool = False,
+) -> None:
     head = (
         _status_line(status)
         + f"Content-Type: {content_type}\r\n"
         + f"Content-Length: {len(body)}\r\n"
         + "Connection: close\r\n\r\n"
     )
-    writer.write(head.encode("latin-1") + body)
+    writer.write(head.encode("latin-1") + (b"" if head_only else body))
     await writer.drain()
 
 
@@ -670,6 +684,14 @@ class _ConnectionObserver:
         self._agent = agent
         self._page_target = page_target
         self._pending: dict[tuple[Optional[str], int], tuple[str, dict]] = {}
+        # Flattened CDP sessions live and die with the connection that
+        # opened them; their ids are dropped from the shared map on close.
+        self._sessions: set[str] = set()
+
+    def close(self) -> None:
+        for session_id in self._sessions:
+            self._state.session_target.pop(session_id, None)
+        self._sessions.clear()
 
     def from_client(self, msg: dict) -> None:
         method = msg.get("method")
@@ -689,7 +711,10 @@ class _ConnectionObserver:
             pending = self._pending.pop((msg.get("sessionId"), msg_id), None)
             if pending is not None:
                 method, params = pending
-                self._state.observe_response(method, params, msg.get("result") or {}, self._agent)
+                result = msg.get("result") or {}
+                self._state.observe_response(method, params, result, self._agent)
+                if method == "Target.attachToTarget" and isinstance(result.get("sessionId"), str):
+                    self._sessions.add(result["sessionId"])
             return
         method = msg.get("method") or ""
         if method.startswith("Target.target"):
@@ -698,7 +723,10 @@ class _ConnectionObserver:
             # never from "this connection happened to observe the event".
             self._state.apply_target_event(method.split(".", 1)[1], msg.get("params") or {})
         elif method in ("Target.attachedToTarget", "Target.detachedFromTarget"):
-            self._state.observe_event(method, msg.get("params") or {})
+            params = msg.get("params") or {}
+            self._state.observe_event(method, params)
+            if method == "Target.attachedToTarget" and isinstance(params.get("sessionId"), str):
+                self._sessions.add(params["sessionId"])
 
 
 async def _pump(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, sniffer: Optional[_FrameSniffer]) -> None:
@@ -784,7 +812,12 @@ class CdpGateway:
                         content_length = int(value.strip())
                     elif lname == "content-type":
                         content_type = value.strip()
-                if content_length is not None:
+                if method == "HEAD" or status in (204, 304) or 100 <= status < 200:
+                    # No body by definition, whatever Content-Length says —
+                    # reading one would wait for bytes that never come
+                    # (review finding: HEAD hung 10 s, then 502).
+                    body = b""
+                elif content_length is not None:
                     body = await reader.readexactly(content_length) if content_length else b""
                 else:
                     body = await reader.read()
@@ -853,6 +886,14 @@ class CdpGateway:
 
         route = local_path.split("?", 1)[0]
         if route in ("/json/list", "/json", "/json/list/", "/json/"):
+            # An identified agent's /json/list shows only its own tabs. omp
+            # does not depend on it (checked in the 18.1.10 bundle: it picks
+            # a page from Puppeteer's CDP target list — `browser.targets()` /
+            # `browser.pages()`, first visible one — and only SERVES /json/list
+            # in its own browser relay), so a fresh agent with no tab of its
+            # own still reuses and claims an open page, no tab growth (seen in
+            # the live-identical replica: each agent's first run reused the
+            # one open tab).
             pages = [t for t in data if isinstance(t, dict) and t.get("type") == "page"]
             if agent != _SHARED:
                 pages = [t for t in pages if self.state.owner_of(t.get("id")) == agent]
@@ -893,7 +934,7 @@ class CdpGateway:
                 if n:
                     await reader.readexactly(n)
             status, content_type, body = await self.handle_http(req.target, req.headers, peer_ip, req.method)
-            await _respond(writer, status, content_type, body)
+            await _respond(writer, status, content_type, body, head_only=req.method == "HEAD")
         except (ConnectionError, asyncio.IncompleteReadError):
             pass
         except Exception as e:  # noqa: BLE001 - one bad connection must never take the server down
@@ -984,16 +1025,29 @@ class CdpGateway:
             t_client = asyncio.ensure_future(_pump(client_reader, up_writer, c2u))
             t_upstream = asyncio.ensure_future(_pump(up_reader, client_writer, u2c))
             # FIRST_COMPLETED, not gather: when either side goes away the
-            # other must be torn down at once (review finding 03.10.2026: a
+            # other must be torn down promptly (review finding 03.10.2026: a
             # dangling task per disconnected agent held a live browser-level
-            # CDP session open and hung server shutdown).
+            # CDP session open and hung server shutdown). The side whose
+            # source ended is half-closed and the other direction gets a
+            # short grace to deliver what is already in flight (a close
+            # frame, a last response), like socat's -t.
             try:
-                await asyncio.wait({t_client, t_upstream}, return_when=asyncio.FIRST_COMPLETED)
+                done, pending = await asyncio.wait({t_client, t_upstream}, return_when=asyncio.FIRST_COMPLETED)
+                for task, writer in ((t_client, up_writer), (t_upstream, client_writer)):
+                    if task in done:
+                        try:
+                            if writer.can_write_eof():
+                                writer.write_eof()
+                        except (OSError, RuntimeError):
+                            pass
+                if pending:
+                    await asyncio.wait(pending, timeout=_HALF_CLOSE_GRACE)
             finally:
                 for task in (t_client, t_upstream):
                     if not task.done():
                         task.cancel()
                 await asyncio.gather(t_client, t_upstream, return_exceptions=True)
+                observer.close()
         finally:
             await _close_writer(up_writer)
 

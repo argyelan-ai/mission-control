@@ -3682,7 +3682,7 @@
     "allTabsShort": "All",
     "thisAgent": "this agent",
     "scopeUnavailableHint": "Showing all tabs: agent attribution unavailable",
-    "unassignedFallbackHint": "No tab is assigned to {name} — showing all tabs. Tabs marked “not assigned” aren't assigned to any agent.",
+    "unassignedFallbackHint": "No tab is assigned to {name} — showing the tabs that aren't assigned to any agent.",
     "unassignedTag": "not assigned",
     "status": {
       "no_page": "No open page in the agent browser yet.",

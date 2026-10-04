@@ -348,3 +348,89 @@ async def test_large_messages_pass_through_byte_for_byte():
             assert reply == {"id": 7, "result": {}}
         assert chromium.ws_messages[-1]["params"]["expression"] == big
     await chromium.stop()
+
+
+# ── review follow-ups ─────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_head_request_is_answered_without_waiting_for_a_body():
+    """A HEAD answer carries Content-Length but no body; reading one used to
+    wait 10 s and end in a 502."""
+    chromium, gateway = await _gateway_with_fake()
+
+    async def _head_aware(reader, writer):
+        head = await reader.readuntil(b"\r\n\r\n")
+        chromium.requests.append((head.split(b"\r\n", 1)[0].decode(), ""))
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 42\r\n\r\n")
+        await writer.drain()  # no body: it's a HEAD answer
+        await asyncio.sleep(5)
+        writer.close()
+
+    chromium.server.close()
+    await chromium.server.wait_closed()
+    chromium.server = await asyncio.start_server(_head_aware, "127.0.0.1", chromium.port)
+    async with _Served(gateway) as srv:
+        async with httpx.AsyncClient(timeout=5) as client:
+            start = asyncio.get_event_loop().time()
+            resp = await client.head(f"http://127.0.0.1:{srv.port}/a/alpha/json/version")
+            elapsed = asyncio.get_event_loop().time() - start
+        assert resp.status_code == 200
+        assert elapsed < 2.0, f"HEAD took {elapsed:.1f}s"
+    await chromium.stop()
+
+
+@pytest.mark.asyncio
+async def test_sessions_opened_on_a_connection_are_forgotten_when_it_closes():
+    chromium, gateway = await _gateway_with_fake()
+    async with _Served(gateway) as srv:
+        async with websockets.connect(f"ws://127.0.0.1:{srv.port}/a/alpha/devtools/browser/abc") as ws:
+            attach = await _ws_call(ws, {"id": 1, "method": "Target.attachToTarget",
+                                         "params": {"targetId": "P1", "flatten": True}})
+            sid = attach["result"]["sessionId"]
+            await asyncio.sleep(0.05)
+            assert gateway.state.session_target.get(sid) == "P1"
+        for _ in range(40):
+            if sid not in gateway.state.session_target:
+                break
+            await asyncio.sleep(0.05)
+        assert sid not in gateway.state.session_target
+    await chromium.stop()
+
+
+@pytest.mark.asyncio
+async def test_vanished_agent_ends_the_proxy_even_if_chromium_ignores_the_half_close():
+    """The other direction only gets a short grace after one side ends — an
+    upstream that neither answers nor closes must not keep the handler (and
+    a browser-level CDP session) alive."""
+    accepted = asyncio.Event()
+
+    async def _stubborn(reader, writer):
+        head = await reader.readuntil(b"\r\n\r\n")
+        key = [ln.split(b":", 1)[1].strip() for ln in head.split(b"\r\n") if ln.lower().startswith(b"sec-websocket-key")][0]
+        accept = base64.b64encode(hashlib.sha1(key + WS_MAGIC.encode()).digest())
+        writer.write(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n"
+                     b"Connection: Upgrade\r\nSec-WebSocket-Accept: " + accept + b"\r\n\r\n")
+        await writer.drain()
+        accepted.set()
+        await asyncio.sleep(30)  # never reads, never closes
+
+    upstream = await asyncio.start_server(_stubborn, "127.0.0.1", 0)
+    gateway = CdpGateway(upstream_host="127.0.0.1", upstream_port=upstream.sockets[0].getsockname()[1])
+    done = asyncio.Event()
+    original = CdpGateway.proxy_ws
+
+    async def _tracked(*args, **kwargs):
+        try:
+            await original(gateway, *args, **kwargs)
+        finally:
+            done.set()
+
+    gateway.proxy_ws = _tracked  # type: ignore[method-assign]
+    async with _Served(gateway) as srv:
+        client = await websockets.connect(f"ws://127.0.0.1:{srv.port}/a/alpha/devtools/browser/abc")
+        await accepted.wait()
+        client.transport.abort()
+        start = asyncio.get_event_loop().time()
+        await asyncio.wait_for(done.wait(), timeout=3)
+        assert asyncio.get_event_loop().time() - start < 1.5
+    upstream.close()

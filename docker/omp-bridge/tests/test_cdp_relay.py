@@ -40,9 +40,13 @@ WS_MAGIC = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
         # gateway handed out): unchanged, never doubled.
         (b"GET /a/alpha/json/version HTTP/1.1", b"GET /a/alpha/json/version HTTP/1.1"),
         (b"GET /a/alpha/devtools/browser/abc HTTP/1.1", b"GET /a/alpha/devtools/browser/abc HTTP/1.1"),
-        # A different agent's prefix from inside THIS container is a stale or
-        # copied URL — the relay speaks for its own agent only.
-        (b"GET /a/beta/json/version HTTP/1.1", b"GET /a/alpha/json/version HTTP/1.1"),
+        (b"GET /a/alpha?x=1 HTTP/1.1", b"GET /a/alpha?x=1 HTTP/1.1"),
+        # Only exactly OUR prefix counts as "already attributed": a foreign
+        # one (stale/copied URL) is not stripped or re-attributed, it ends up
+        # behind ours and fails loudly at the gateway; a path that merely
+        # starts with our slug's letters is not ours either.
+        (b"GET /a/beta/json/version HTTP/1.1", b"GET /a/alpha/a/beta/json/version HTTP/1.1"),
+        (b"GET /a/alphabet/json HTTP/1.1", b"GET /a/alpha/a/alphabet/json HTTP/1.1"),
         (b"GET / HTTP/1.1", b"GET /a/alpha/ HTTP/1.1"),
     ],
 )
@@ -83,12 +87,16 @@ def test_agent_path_off_for_the_plain_chromium_port(monkeypatch):
     ("on", "browser.example:7000", "/a/alpha"),
     ("off", "cdp-browser:9300", ""),
     ("auto", "cdp-browser:9300", "/a/alpha"),
+    # Forcing the prefix onto plain Chromium would 404 every request.
+    ("on", "cdp-browser:9223", ""),
 ])
-def test_agent_path_explicit_mode(monkeypatch, mode, target, expected):
+def test_agent_path_explicit_mode(monkeypatch, capsys, mode, target, expected):
     monkeypatch.setenv("OMP_BROWSER_CDP_ATTRIBUTION", mode)
     monkeypatch.setenv("OMP_BROWSER_CDP_TARGET", target)
     monkeypatch.setenv("AGENT_SLUG", "alpha")
     assert cdp_relay.agent_path() == expected
+    if mode == "on" and target.endswith(":9223"):
+        assert "ignored" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("slug", ["", "../etc", "Has Space", "-lead", "a" * 70])

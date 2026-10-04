@@ -402,8 +402,9 @@ export function BrowserLiveView({ agentId, agentName }: BrowserLiveViewProps = {
   // Scoped, the agent owns no open tab, but some tab is assigned to no agent
   // (live finding 04.10.2026 — the panel used to say "<agent> has no open
   // tab" while the agent was working in such a tab). The list then holds
-  // EVERY tab; the hint says why. Same "WS is authoritative once it spoke"
-  // rule as `scopeUnavailable`, which outranks it (nothing is attributed then).
+  // exactly the unassigned tabs (never another agent's); the hint says why.
+  // Same "WS is authoritative once it spoke" rule as `scopeUnavailable`,
+  // which outranks it (nothing is attributed then).
   const unassignedFallback =
     !!effectiveAgentId &&
     !scopeUnavailable &&
@@ -592,25 +593,26 @@ export function BrowserLiveView({ agentId, agentName }: BrowserLiveViewProps = {
 
       {/* One bottom banner slot, not three: the transient connection-status
           message, the persistent "attribution unavailable" hint and the
-          "showing all tabs, some aren't assigned" hint
+          "showing the unassigned tabs" hint
           (bauplan.md PR B1 / review finding — the panel used to fall back to
           showing EVERY tab here with NO signal at all, while the toolbar
           toggle still claimed to be scoped) share it rather than stacking
-          two near-identical `absolute bottom-2` bars. Scope-unavailable
-          wins when both are true — it says more (and stays up alongside a
-          live frame, unlike the transient one). */}
+          near-identical `absolute bottom-2` bars. Scope-unavailable wins —
+          it says more (and stays up alongside a live frame, unlike the
+          transient one); a live connection problem ("Connecting…") wins
+          over the unassigned hint, which comes back once it clears. */}
       {connect && !streamEnded && (scopeUnavailable || unassignedFallback || statusMessage) && (
         <div
           className="absolute bottom-2 left-2 right-2 text-[10px] px-2.5 py-1.5 rounded-md"
           style={
             scopeUnavailable
               ? { background: alpha(C.warning, 0.15), color: C.warning, border: `1px solid ${C.warning}` }
-              : unassignedFallback
-                ? { background: C.bgElevated, color: STATUS_TEXT.info, border: `1px solid ${C.info}` }
-                : { background: alpha(C.scrim, 0.6), color: C.textSecondary, border: `1px solid ${C.border}` }
+              : statusMessage
+                ? { background: alpha(C.scrim, 0.6), color: C.textSecondary, border: `1px solid ${C.border}` }
+                : { background: C.bgElevated, color: STATUS_TEXT.info, border: `1px solid ${C.info}` }
           }
         >
-          {scopeUnavailable ? t("scopeUnavailableHint") : unassignedFallback ? fallbackHint : statusMessage}
+          {scopeUnavailable ? t("scopeUnavailableHint") : statusMessage ?? fallbackHint}
         </div>
       )}
 
@@ -712,9 +714,10 @@ export function BrowserLiveView({ agentId, agentName }: BrowserLiveViewProps = {
               : { border: `1px solid ${C.border}`, color: C.textSecondary }
           }
           aria-pressed={!showAllTabs}
-          // One accessible name for both visible label sizes below; it
-          // contains either visible text ("label in name").
-          aria-label={showAllTabs ? t("showingAllTabs") : t("showingOnlyThisAgent", { name: displayName })}
+          // One accessible name for both visible label sizes below, built
+          // from the SAME key as the full label so it contains whichever
+          // text is visible in every language (WCAG 2.5.3 "label in name").
+          aria-label={showAllTabs ? t("allTabs") : t("onlyAgent", { name: displayName })}
           title={
             scopeUnavailable
               ? t("scopeUnavailableHint")

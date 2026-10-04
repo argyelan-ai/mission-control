@@ -67,7 +67,8 @@ _self="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
 RELAY_PY="$(cd "$(dirname "$_self")" && pwd)/cdp_relay.py"
 AGENT_PATH=""
 if command -v python3 >/dev/null 2>&1 && [ -f "$RELAY_PY" ]; then
-    AGENT_PATH="$(OMP_BROWSER_CDP_TARGET="$TARGET" python3 "$RELAY_PY" --agent-path 2>/dev/null || true)"
+    # stderr stays visible (boot log): a refused OMP_BROWSER_CDP_ATTRIBUTION=on says why.
+    AGENT_PATH="$(OMP_BROWSER_CDP_TARGET="$TARGET" python3 "$RELAY_PY" --agent-path || true)"
 fi
 
 # Already running? (idempotent: the watchdog calls this every 30 s) — either

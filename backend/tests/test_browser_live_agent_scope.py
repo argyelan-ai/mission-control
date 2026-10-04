@@ -577,9 +577,9 @@ def test_ws_does_not_send_scope_unavailable_when_not_scoped(real_run_target_watc
 # open — just not one the gateway could attribute. Tabs nobody is assigned
 # to (playwright-mcp's — shared by every claude agent — or a tab no
 # identified agent has claimed yet) can't be ruled out as "this agent's".
-# Rule: scoped list empty + unassigned tabs exist → show every tab, flag the
-# unassigned ones, and say so. Only "every tab belongs to some OTHER agent"
-# is a real "no open tab".
+# Rule: scoped list empty + unassigned tabs exist → show exactly the
+# unassigned tabs, flagged, and say so. Only "every tab belongs to some OTHER agent"
+# is a real "no open tab". Another agent's tab is never shown in the fallback.
 
 def _get_targets(pages, *, owned, assigned):
     app = FastAPI()
@@ -601,11 +601,13 @@ _TWO_PAGES = [
 ]
 
 
-def test_targets_empty_scope_with_unassigned_tabs_falls_back_to_all_tabs():
+def test_targets_empty_scope_with_unassigned_tabs_shows_only_the_unassigned_ones():
+    """Never another agent's tab (review finding: the first version listed
+    BETA too, untagged, under "No tab is assigned to alpha")."""
     body = _get_targets(_TWO_PAGES, owned=set(), assigned={"BETA"})
-    assert [t["id"] for t in body["targets"]] == ["FREE", "BETA"]
-    flags = {t["id"]: t.get("unassigned", False) for t in body["targets"]}
-    assert flags == {"FREE": True, "BETA": False}
+    assert body["targets"] == [
+        {"id": "FREE", "title": "unassigned page", "url": "https://free.example", "unassigned": True},
+    ]
     assert body["unassignedFallback"] is True
     assert body["unassignedCount"] == 1
     assert body["scopeUnavailable"] is False
@@ -617,6 +619,7 @@ def test_targets_a_tab_the_gateway_never_saw_counts_as_unassigned():
     body = _get_targets(_TWO_PAGES, owned=set(), assigned=set())
     assert body["unassignedFallback"] is True
     assert body["unassignedCount"] == 2
+    assert all(t["unassigned"] for t in body["targets"])
 
 
 def test_targets_every_tab_owned_by_another_agent_is_a_real_empty_scope():
@@ -770,3 +773,37 @@ def test_ws_every_tab_foreign_stays_a_real_no_page(real_run_target_watcher):
                 )
                 assert status["active"] is False
                 _recv_until(ws, lambda m: m.get("type") == "status" and m.get("code") == "no_page")
+
+
+def test_ws_fallback_never_lists_or_follows_another_agents_tab(real_run_target_watcher):
+    """Review finding (MEDIUM): with the fallback on, the panel listed EVERY
+    tab and followed the newest — another agent's. The foreign tab here is
+    newer and active; the panel must still show and stream only the
+    unassigned one, and stay quiet when the foreign tab navigates."""
+    world = FakeCDPWorld([_page("free-tab"), _page("beta-tab")])
+    events = EventBus()
+    app = _make_app(world, events)
+
+    with patch("websockets.connect", world.connect), \
+         patch.object(bl, "_gateway_owned_ids", new=AsyncMock(return_value=set())), \
+         patch.object(bl, "_gateway_assigned_ids", new=AsyncMock(return_value={"beta-tab"})):
+        with TestClient(app, raise_server_exceptions=True) as client:
+            token = _seed_user_and_token(client, "fallback-no-foreign@mc.local")
+            agent_uuid = _seed_alpha(client)
+            with _ws(client, f"/api/v1/browser-live/ws?token={token}&agent_id={agent_uuid}&follow=1") as ws:
+                attached = _recv_until(ws, lambda m: m.get("type") == "attached")
+                assert attached["target"]["id"] == "free-tab"
+                msg = _recv_until(ws, lambda m: m.get("type") == "targets" and m.get("targets"))
+                assert [t["id"] for t in msg["targets"]] == ["free-tab"]
+
+                world.set_pages([_page("free-tab"), _page("beta-tab", url="https://beta.example/new")])
+                events.push("targetInfoChanged", {"targetInfo": {
+                    "targetId": "beta-tab", "type": "page", "title": "beta-tab",
+                    "url": "https://beta.example/new",
+                }})
+                try:
+                    extra = _recv_with_timeout(ws, 0.5)
+                except TimeoutError:
+                    extra = None
+                assert extra is None, f"the foreign tab leaked into the fallback view: {extra}"
+                assert "beta-tab" not in world.conns
