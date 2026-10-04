@@ -74,6 +74,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 import re
 import time
 from datetime import datetime, timezone
@@ -1478,9 +1479,21 @@ def read_history(
     limit: int = 200,
     before_uuid: str | None = None,
     observed_windows: dict[str, int] | None = None,
+    fileobj: Any = None,
 ) -> dict[str, Any]:
     """Reads a transcript file top-to-bottom and returns one page of chat
     events plus session metadata.
+
+    ``fileobj`` (heads round): an already-OPENED, text-mode file object to
+    read instead of this function doing its own ``path.open()`` — used by
+    ``services/heads/transcript.read()``, which opens the file itself with
+    ``O_NOFOLLOW`` and re-verifies its identity right before calling this
+    function. Without it, a head could swap its own transcript file for a
+    symlink in the window between ``transcript.locate()`` (which checks the
+    path once) and this function's own, unguarded ``path.open()`` — the
+    ETag computation and an ``asyncio.to_thread`` hop both sit in that
+    window. ``path`` is still used for ``.stem``/``.stat()`` below; only the
+    actual line-reading goes through ``fileobj`` when given.
 
     ``adapter`` (omp round) is the harness-specific half —
     ``transcript_adapters.adapter_for(agent)`` — and it is REQUIRED. It used
@@ -1525,7 +1538,8 @@ def read_history(
 
     session_id = path.stem
     try:
-        live = (time.time() - path.stat().st_mtime) < _LIVE_WINDOW_SECONDS
+        mtime = os.fstat(fileobj.fileno()).st_mtime if fileobj is not None else path.stat().st_mtime
+        live = (time.time() - mtime) < _LIVE_WINDOW_SECONDS
     except OSError:
         live = False
 
@@ -1535,10 +1549,13 @@ def read_history(
     tool_events_by_id: dict[str, dict[str, Any]] = {}
     command_events_by_uuid: dict[str, dict[str, Any]] = {}
 
-    try:
-        lines_file = path.open("r", encoding="utf-8", errors="replace")
-    except OSError:
-        lines_file = None
+    if fileobj is not None:
+        lines_file = fileobj
+    else:
+        try:
+            lines_file = path.open("r", encoding="utf-8", errors="replace")
+        except OSError:
+            lines_file = None
 
     if lines_file is not None:
         with lines_file:

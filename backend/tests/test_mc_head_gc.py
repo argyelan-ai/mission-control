@@ -175,9 +175,21 @@ def test_dry_run_lists_caches_and_old_pushed_worktree_and_changes_nothing(scratc
 
     # gc always creates its own lock file + the report — neither is a run
     # folder's content, so both are excluded from the "changed nothing" proof.
+    # ``clones/`` (shared git plumbing, never a run's own data) is excluded
+    # too: the worktree-safety hardening on PR #751 makes EVERY gc pass,
+    # dry run included, call ``sanitize_clone()`` before it runs a single
+    # git command against a worktree (rewriting the clone's ``.git/config``
+    # to a canonical form — the fix IS that rewrite, it cannot be skipped
+    # just because nothing will be deleted this time) and fetch a
+    # throwaway check ref into the clone to verify ancestry safely. Both
+    # are idempotent, host-owned plumbing, never a byte of run-folder data.
+    def _keep(k: str) -> bool:
+        return k not in ignore and not k.startswith("clones/")
+
     ignore = {"gc-report.json", "locks", "locks/gc.lock"}
-    after_excl_report = {k: v for k, v in _tree_signature(heads_dir).items() if k not in ignore}
-    assert after_excl_report == before, "dry run must not change a single byte of the run folders"
+    before_excl_clones = {k: v for k, v in before.items() if _keep(k)}
+    after_excl_report = {k: v for k, v in _tree_signature(heads_dir).items() if _keep(k)}
+    assert after_excl_report == before_excl_clones, "dry run must not change a single byte of the run folders"
 
     report = _report(mc_home)
     assert report["mode"] == "dry_run"
@@ -456,3 +468,230 @@ def test_watch_throttles_a_second_gc_pass(scratch):
 
     run_head(mc_home, "watch")  # default throttle is 6h — must not touch the report again
     assert report_path.read_text() == first_written
+
+
+# ── symlinked INTERMEDIATE cache directory is never followed ────────────
+# (review finding on PR #751: the old check only looked at the FINAL
+# component — ``home/.cache`` itself — never at ``home`` or ``home/Library``,
+# both of which a head can also replace with a symlink to escape the run
+# folder entirely.)
+
+
+@pytest.mark.parametrize(
+    "swap_rel,cache_rel",
+    [
+        ("home", "home/.cache"),
+        ("home/Library", "home/Library/Caches"),
+    ],
+)
+def test_symlinked_intermediate_dir_above_a_cache_path_is_untouched(scratch, swap_rel, cache_rel):
+    mc_home = scratch["mc_home"]
+    # branch names are lowercase-only (mc-head's own PATTERNS["branch"]
+    # regex) — a suffix derived from "home/Library" must not leak its
+    # capital "L" into it, or load_spec silently drops the whole run.
+    suffix_tag = swap_rel.replace("/", "-").lower()
+    run_id, _wt = _make_run(
+        mc_home, repo_full_name=scratch["full_name"], branch_suffix=f"symlink-mid-{suffix_tag}",
+        origin=scratch["origin"],
+    )
+    run_dir = mc_home / "heads" / run_id
+    foreign = scratch["tmp"] / f"foreign-{swap_rel.replace('/', '-')}"
+    # The sentinel sits where the REAL cache path would resolve to if the
+    # symlink were followed — same relative suffix below the swapped
+    # component, so a successful escape would delete exactly this file.
+    suffix = Path(cache_rel).relative_to(swap_rel)
+    (foreign / suffix.parent).mkdir(parents=True, exist_ok=True)
+    (foreign / suffix).write_bytes(b"do not touch")
+    import shutil as _shutil
+
+    target = run_dir / swap_rel
+    _shutil.rmtree(target, ignore_errors=True)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    os.symlink(foreign, target)
+
+    res = run_head(mc_home, "gc", "--apply")
+    assert res.returncode == 0, res.stderr
+    assert (foreign / suffix).exists(), f"a symlinked {swap_rel!r} must never let gc escape the run folder"
+    kept = _run_for(_report(mc_home), run_id)["kept"]
+    assert any(k["path"] == str(run_dir / cache_rel) and k["reason"] == "symlink" for k in kept)
+
+
+# ── worktree git calls never execute code a head planted (review finding,
+# PR #751): a forged wt/.git pointing OUTSIDE the clone, at a repo carrying
+# its own filter driver, must never be followed by gc's unsandboxed git
+# calls — not even in a DRY RUN. ─────────────────────────────────────────
+
+
+def _evil_repo_with_filter_bomb(tmp: Path, marker: Path, tracked_name: str, committed_text: str) -> Path:
+    """A repo OUTSIDE the clone, tracking ``tracked_name`` with
+    ``committed_text``, whose CLEAN filter touches ``marker``. The filter is
+    configured only AFTER the initial commit (so constructing the repo
+    itself never fires it — ``git add``/``git commit`` would otherwise run
+    straight through the freshly-configured filter and make any later
+    "did gc trigger this" check meaningless)."""
+    evil = tmp / "evilrepo"
+    evil.mkdir(exist_ok=True)
+    git = ["git", "-C", str(evil)]
+    subprocess.run(["git", "init", "-q", str(evil)], check=True)
+    (evil / tracked_name).write_text(committed_text)
+    subprocess.run([*git, "add", tracked_name], check=True)
+    subprocess.run(
+        [*git, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "x"], check=True
+    )
+    subprocess.run([*git, "config", "filter.x.clean", f"sh -c 'touch {marker}'"], check=True)
+    (evil / ".git" / "info").mkdir(parents=True, exist_ok=True)
+    (evil / ".git" / "info" / "attributes").write_text("* filter=x\n")
+    return evil
+
+
+def _forge_wt_gitdir(wt: Path, evil: Path) -> None:
+    """Exactly what a head's sandbox can do: ``wt/.git`` is a regular file
+    directly under ``WT``, which the sandbox profile grants full write
+    access to (``head.sb``'s ``CLONE_GIT``/``WT`` subpaths)."""
+    (wt / ".git").write_text(f"gitdir: {evil / '.git'}\n")
+
+
+def test_control_a_forged_gitdir_really_does_execute_a_planted_filter(scratch, tmp_path):
+    """Not a regression guard by itself — proof that the construction below
+    is genuinely dangerous: a plain, unguarded git command that needs the
+    worktree file's CONTENT (``diff``, unlike ``status``, cannot answer from
+    size/mtime alone) against a forged ``wt/.git`` executes the attacker's
+    filter. This is the exact capability ``_wt_safe_gitdir``/``_wt_git``
+    below exist to deny gc's own git calls."""
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    (wt / "f.txt").write_text("real worktree content, not evil's\n")
+    marker = tmp_path / "PWNED-control"
+    evil = _evil_repo_with_filter_bomb(tmp_path, marker, "f.txt", "evil committed content\n")
+    _forge_wt_gitdir(wt, evil)
+
+    subprocess.run(["git", "-C", str(wt), "diff"], capture_output=True)
+    assert marker.exists(), "control failed: the forged-gitdir filter-bomb construction does not fire"
+
+
+def test_dry_run_forged_worktree_gitdir_is_kept_as_foreign_gitdir_and_never_executed(scratch):
+    """End-to-end reproduction of the review finding's own PoC shape: plain
+    ``mc-head gc`` (no ``--apply``) must never run a single git command
+    against a forged ``wt/.git`` — reported ``kept: foreign_gitdir``, not
+    silently "clean" or "pushed" through it."""
+    mc_home, tmp = scratch["mc_home"], scratch["tmp"]
+    run_id, wt = _make_run(mc_home, repo_full_name=scratch["full_name"], branch_suffix="gitdir-bomb", origin=scratch["origin"])
+    marker = tmp / "PWNED"
+    evil = _evil_repo_with_filter_bomb(tmp, marker, "change.txt", "evil committed content\n")
+    _forge_wt_gitdir(wt, evil)
+
+    res = run_head(mc_home, "gc")  # DRY RUN
+    assert res.returncode == 0, res.stderr
+    assert not marker.exists(), "gc must never run a git command against a forged wt/.git, dry run or not"
+    kept = _run_for(_report(mc_home), run_id)["kept"]
+    assert any(k["path"] == str(wt) and k["reason"] == "foreign_gitdir" for k in kept)
+
+
+def test_apply_forged_worktree_gitdir_is_never_removed_or_executed(scratch):
+    """Same construction, with ``--apply`` — the worktree must survive
+    (never "removable" through the forged gitdir) and the filter must still
+    never fire."""
+    mc_home, tmp = scratch["mc_home"], scratch["tmp"]
+    run_id, wt = _make_run(mc_home, repo_full_name=scratch["full_name"], branch_suffix="gitdir-bomb-apply", origin=scratch["origin"])
+    marker = tmp / "PWNED2"
+    evil = _evil_repo_with_filter_bomb(tmp, marker, "change.txt", "evil committed content\n")
+    _forge_wt_gitdir(wt, evil)
+
+    res = run_head(mc_home, "gc", "--apply")
+    assert res.returncode == 0, res.stderr
+    assert not marker.exists()
+    assert wt.exists(), "a forged gitdir must never make gc treat the worktree as removable"
+    kept = _run_for(_report(mc_home), run_id)["kept"]
+    assert any(k["path"] == str(wt) and k["reason"] == "foreign_gitdir" for k in kept)
+
+
+def test_sabotage_skipping_the_gitdir_validation_lets_wt_git_reach_the_forged_repo(scratch):
+    """Sabotage, run directly against the loaded module: short-circuiting
+    ``_wt_safe_gitdir`` back to the old "always trust wt/.git" behaviour
+    must let ``_wt_git`` actually run a content-reading command (``diff``)
+    against the forged repo and fire its filter — proving the validation,
+    not luck, is what stops it. ``_wt_decision`` itself never calls
+    ``diff`` (that is the honest control above, isolating the dangerous
+    CAPABILITY from gc's specific, narrower call list), so this probes
+    ``_wt_git`` directly rather than through a full ``_run_gc`` pass."""
+    mc_home, tmp = scratch["mc_home"], scratch["tmp"]
+    run_id, wt = _make_run(mc_home, repo_full_name=scratch["full_name"], branch_suffix="gitdir-bomb-sabotage", origin=scratch["origin"])
+    marker = tmp / "PWNED3"
+    evil = _evil_repo_with_filter_bomb(tmp, marker, "change.txt", "evil committed content\n")
+    _forge_wt_gitdir(wt, evil)
+
+    mod = _load()
+    os.environ["MC_HOME"] = str(mc_home)
+    try:
+        spec = json.loads((mc_home / "heads" / run_id / "spec.json").read_text())
+        mod._wt_safe_gitdir = lambda spec, wt: evil / ".git"  # SABOTAGE: always "validated"
+        mod._wt_git(spec, wt, ["diff"])
+    finally:
+        del os.environ["MC_HOME"]
+    assert marker.exists(), "sabotage must be visible: _wt_git reached the forged repo and ran its filter"
+
+
+def test_wt_safe_gitdir_rejects_the_forged_gitdir_directly(scratch):
+    """Unit-level proof (no subprocess, no filter side-channel needed) that
+    ``_wt_safe_gitdir`` itself is what refuses the forged pointer."""
+    mc_home, tmp = scratch["mc_home"], scratch["tmp"]
+    run_id, wt = _make_run(mc_home, repo_full_name=scratch["full_name"], branch_suffix="gitdir-unit", origin=scratch["origin"])
+    evil = _evil_repo_with_filter_bomb(tmp, tmp / "unused-marker", "change.txt", "evil committed content\n")
+    _forge_wt_gitdir(wt, evil)
+
+    mod = _load()
+    os.environ["MC_HOME"] = str(mc_home)
+    try:
+        spec = json.loads((mc_home / "heads" / run_id / "spec.json").read_text())
+        assert mod._wt_safe_gitdir(spec, wt) is None
+        # And _wt_git refuses WITHOUT ever invoking subprocess against it.
+        calls = []
+        mod._git = lambda *a, **kw: calls.append(a) or subprocess.CompletedProcess(a, 0, "", "")
+        res = mod._wt_git(spec, wt, ["diff"])
+        assert res.returncode != 0 and calls == [], "a foreign gitdir must never reach a real git call"
+    finally:
+        del os.environ["MC_HOME"]
+
+
+# ── a run whose clone is shared with another, still-active run is skipped ─
+
+
+def test_worktree_inspection_is_skipped_while_another_run_on_the_same_clone_is_active(scratch):
+    mc_home = scratch["mc_home"]
+    old_id, old_wt = _make_run(mc_home, repo_full_name=scratch["full_name"], branch_suffix="clone-active-old", origin=scratch["origin"])
+    # A second, unrelated run on the SAME clone (different branch), still running.
+    other_id = write_spec(
+        mc_home, repo_full_name=scratch["full_name"],
+        branch=f"mc-head/2026-10-04-gc-clone-active-other", job_folder="2026-10-04-gc-clone-active-other",
+    )
+    (mc_home / "heads" / other_id / ".wrapper").mkdir(exist_ok=True)
+    (mc_home / "heads" / other_id / ".wrapper" / "status.json").write_text(
+        json.dumps({"run_id": other_id, "phase": "running", "supervisor_pid": os.getpid()})
+    )
+
+    run_head(mc_home, "gc", "--apply")
+    assert old_wt.exists(), "a worktree must be kept while ANOTHER run shares its clone and is still active"
+    kept = _run_for(_report(mc_home), old_id)["kept"]
+    assert any(k["path"] == str(old_wt) and k["reason"] == "clone_active" for k in kept)
+
+
+# ── skipped runs are listed in the report, with their reason ─────────────
+
+
+def test_skipped_runs_are_listed_in_the_report_with_their_reason(scratch):
+    mc_home = scratch["mc_home"]
+    running_id, _wt = _make_run(mc_home, repo_full_name=scratch["full_name"], branch_suffix="skip-running", origin=scratch["origin"])
+    (mc_home / "heads" / running_id / ".wrapper" / "status.json").write_text(
+        json.dumps({"run_id": running_id, "phase": "running", "supervisor_pid": os.getpid()})
+    )
+    young_id, _wt2 = _make_run(
+        mc_home, repo_full_name=scratch["full_name"], branch_suffix="skip-young", origin=scratch["origin"],
+        exited_ago_s=60,
+    )
+
+    run_head(mc_home, "gc", "--apply")
+    report = _report(mc_home)
+    skipped_by_id = {s["run_id"]: s["reason"] for s in report["skipped"]}
+    assert skipped_by_id.get(running_id) == "not_exited"
+    assert skipped_by_id.get(young_id) == "too_recent"
+    assert not any(r["run_id"] in (running_id, young_id) for r in report["runs"])

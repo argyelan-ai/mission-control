@@ -99,4 +99,9 @@ regexes = [
   # React state variable names (linkedinPostMd*) that trip the
   # linkedin-client-id/secret rules — identifiers, not credentials.
   '''linkedinPostMd''',
+  # Obviously-fake JWT used in backend/tests/test_heads_transcript.py to
+  # exercise redact.py's own bare-JWT shape pattern — three short,
+  # low-information base64url segments, never a real token (PR #751 review
+  # fix round).
+  '''eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiIxMjM0NTY3ODkwIn0\.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U''',
 ]

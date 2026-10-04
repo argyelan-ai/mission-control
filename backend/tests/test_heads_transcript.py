@@ -123,6 +123,88 @@ def test_masking_removes_the_planted_secrets(heads_root, name):
     assert ghp not in shape_only and bearer not in shape_only, "shape-based masking should still catch these two"
 
 
+@pytest.mark.parametrize("name", ["claude-run", "omp-run"])
+def test_masking_survives_the_real_quoted_head_env_format(heads_root, name):
+    """Regression for the review finding on PR #751: ``head_env_values``
+    used to return the value WITH its surrounding quotes (a bare
+    ``.strip()``), which only ever matches a hand-written, unquoted
+    ``head.env`` — never the real one. ``services/heads/launcher._format_env``
+    is the ONLY writer of a real ``head.env`` and always wraps a value in
+    single quotes; this test writes the fixture's own value through that
+    exact function (not a hand-typed ``KEY=value`` line) and proves the
+    planted secret is still gone from both read surfaces. Live check against
+    a real run (fcbf9b5d, 2026-10-04) found 4/4 quoted values and 0
+    redactions before this fix — this is the regression guard for that."""
+    from app.services.heads.launcher import _format_env
+
+    run_id = install_fixture(heads_root, name)
+    run = load_run(run_id)
+    env_value = PLANTED[name][0]
+    key = "ANTHROPIC_API_KEY" if name == "claude-run" else "OPENAI_API_KEY"
+    formatted = _format_env({key: env_value})
+    assert formatted == f"{key}='{env_value}'\n", "fixture and _format_env's own format must match"
+    (run.folder / "head.env").write_text(formatted)
+
+    located = tr.locate(run)
+    result = tr.read(run, located, limit=1000, before_uuid=None)
+    assert env_value not in json.dumps(result), "a real, quoted head.env value must still be masked"
+
+
+@pytest.mark.parametrize("name", ["claude-run", "omp-run"])
+async def test_masking_survives_the_real_quoted_head_env_format_via_log_endpoint(auth_client, heads_root, name):
+    from app.services.heads.launcher import _format_env
+
+    run_id = install_fixture(heads_root, name)
+    env_value = PLANTED[name][0]
+    key = "ANTHROPIC_API_KEY" if name == "claude-run" else "OPENAI_API_KEY"
+    (heads_root / run_id / "head.env").write_text(_format_env({key: env_value}))
+    (heads_root / run_id / "head.log").write_text(f"using key {env_value} to call the provider\nnext line\n")
+    log = (await auth_client.get(f"/api/v1/heads/{run_id}/log")).text
+    assert env_value not in log
+    assert "next line" in log
+
+
+@pytest.mark.parametrize("name", ["claude-run", "omp-run"])
+def test_masking_leaves_the_model_value_readable(heads_root, name):
+    """Review finding on PR #751: folding EVERY ≥8-char head.env value into
+    ``extra`` also redacted ``ANTHROPIC_MODEL``/``ANTHROPIC_SMALL_FAST_MODEL``
+    — a claude-harness run showed the model as "<redacted>" everywhere (279
+    occurrences on the real run fcbf9b5d), which also made the harness
+    asymmetric against the omp fixture (whose head.env has no *_MODEL key).
+    Only *_API_KEY/*_TOKEN/*_SECRET values are secrets; the model must stay
+    visible for both harnesses."""
+    run_id = install_fixture(heads_root, name)
+    run = load_run(run_id)
+    located = tr.locate(run)
+    result = tr.read(run, located, limit=1000, before_uuid=None)
+    blob = json.dumps(result)
+    assert "GLM-5.3-Flash-EXL3" in blob, "the model value must survive masking"
+
+
+# ── shape layer: env-style keys, header, hf_ token, JWT ─────────────────
+
+
+@pytest.mark.parametrize(
+    "line,secret",
+    [
+        ("OPENAI_API_KEY=sk-live-abcdefghijklmnop", "sk-live-abcdefghijklmnop"),
+        ("export ANTHROPIC_API_KEY=abcdefghijklmnopqrstuvwx", "abcdefghijklmnopqrstuvwx"),
+        ("GH_TOKEN: abcdefghijklmnopqrstuvwx", "abcdefghijklmnopqrstuvwx"),
+        ("x-api-key: abcdefghijklmnopqrstuvwx", "abcdefghijklmnopqrstuvwx"),
+        ("X-API-KEY: ABCDEFGHIJKLMNOPQRSTUVWX", "ABCDEFGHIJKLMNOPQRSTUVWX"),
+        ("token is hf_abcdefghijklmnopqrstuvwxyz012345", "hf_abcdefghijklmnopqrstuvwxyz012345"),
+        (
+            "Authorization: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
+        ),
+    ],
+)
+def test_shape_layer_catches_env_style_header_hf_and_jwt_secrets(line, secret):
+    out = redact.mask_text(line, ())
+    assert secret not in out, f"{line!r} must be masked"
+    assert redact.REDACTED in out
+
+
 # ── 4 — symlinks, never followed ─────────────────────────────────────────
 
 
@@ -148,6 +230,27 @@ def test_symlinked_omp_sessions_dir_is_rejected(heads_root):
     os.symlink(foreign, real_dir)
     located = tr.locate(run)
     assert isinstance(located, tr.Unavailable) and located.reason == "no_transcript"
+
+
+def test_transcript_swapped_to_a_symlink_after_locate_is_not_followed(heads_root, tmp_path):
+    """TOCTOU: ``locate()`` only checks the path ONCE; the ETag computation
+    and an ``asyncio.to_thread`` hop both sit between that check and the
+    moment the file is actually read. If the head swaps the file for a
+    symlink in that window, ``read()`` must notice at the moment of use
+    (``_open_verified``'s ``O_NOFOLLOW`` open) — not trust the earlier
+    check and follow it via a plain ``open()``."""
+    run_id = install_fixture(heads_root, "claude-run")
+    run = load_run(run_id)
+    located = tr.locate(run)
+    assert isinstance(located, tr.Located)
+    secret_outside = tmp_path / "outside.jsonl"
+    secret_outside.write_text(json.dumps({"type": "user", "message": {"role": "user", "content": "OUTSIDE-SECRET"}}))
+    os.unlink(located.path)
+    os.symlink(secret_outside, located.path)
+
+    result = tr.read(run, located, limit=1000, before_uuid=None)
+    assert "OUTSIDE-SECRET" not in json.dumps(result), "a post-locate() symlink swap must never be followed"
+    assert result["source"] == "none" and result["reason"] == tr.REASON_NO_TRANSCRIPT
 
 
 def test_symlinked_claude_project_dir_is_rejected(heads_root):
@@ -232,6 +335,59 @@ def test_etag_changes_when_the_file_grows(heads_root):
     assert tag2 is not None and tag2 != tag1
 
 
+def test_etag_changes_when_only_the_state_changes(heads_root):
+    """Review finding on PR #751: the ETag used to key only on file stats +
+    page params, not the derived head state. The NORMAL end of a head (the
+    wrapper writes ``exited`` to status.json strictly AFTER the
+    transcript's last line) leaves the file completely unchanged — without
+    ``state`` in the key, that transition produced no new ETag at all, so a
+    client polling with ``If-None-Match`` would keep getting 304 and never
+    learn the run ended."""
+    run_id = install_fixture(heads_root, "omp-run")
+    run = load_run(run_id)
+    located = tr.locate(run)
+    tag_running = tr.etag(located, 400, None, "running")
+    tag_failed = tr.etag(located, 400, None, "failed")
+    assert tag_running is not None and tag_failed is not None
+    assert tag_running != tag_failed, "a state change alone must change the ETag"
+
+
+async def test_chat_history_etag_changes_when_a_head_ends_with_no_new_transcript_bytes(auth_client, heads_root):
+    """Same finding, through the real endpoint: flip status.json from
+    running to exited WITHOUT touching the transcript file at all, and
+    confirm a client's cached ETag is rejected (200, not 304) with
+    aliveness now "ended" — the exact client-visible symptom the finding
+    describes (a PR2 poller stuck showing "running" forever)."""
+    run_id = install_fixture(heads_root, "omp-run")
+    status_path = heads_root / run_id / ".wrapper" / "status.json"
+    status_path.write_text(json.dumps({
+        "run_id": run_id, "phase": "running", "supervisor_pid": os.getpid(),
+        "started_at": "2026-10-04T09:00:00Z",
+    }))
+    (heads_root / run_id / ".wrapper" / "heartbeat").touch()
+
+    first = await auth_client.get(f"/api/v1/heads/{run_id}/chat/history?limit=1000")
+    assert first.status_code == 200
+    assert first.json()["session"]["aliveness"] == "active"
+    etag1 = first.headers["ETag"]
+
+    # The transcript file itself is untouched — only the wrapper's status
+    # flips, exactly like a real head ending.
+    status_path.write_text(json.dumps({
+        "run_id": run_id, "phase": "exited", "exit_code": 1, "reason": "no_pr",
+        "started_at": "2026-10-04T09:00:00Z", "exited_at": "2026-10-04T09:05:00Z",
+        "supervisor_pid": None, "pr_url": None,
+    }))
+
+    again = await auth_client.get(
+        f"/api/v1/heads/{run_id}/chat/history?limit=1000", headers={"If-None-Match": etag1}
+    )
+    assert again.status_code == 200, "a state change must never be served as a stale 304"
+    body = again.json()
+    assert body["session"]["aliveness"] == "ended"
+    assert again.headers["ETag"] != etag1
+
+
 def test_etag_is_none_for_an_unavailable_transcript(heads_root):
     from tests.heads_backend_helpers import make_run
 
@@ -260,6 +416,30 @@ async def test_chat_history_endpoint_round_trip(auth_client, heads_root):
 async def test_chat_history_unknown_run_is_404(auth_client, heads_root):
     assert (await auth_client.get(f"/api/v1/heads/{uuid.uuid4()}/chat/history")).status_code == 404
     assert (await auth_client.get("/api/v1/heads/not-a-uuid/chat/history")).status_code == 404
+
+
+async def test_chat_history_unknown_role_is_403(client, heads_root):
+    """The PR body's test list claims "auth (401/403/200)" — 401
+    (test_chat_history_requires_login_viewer_may_read, below) and 200 were
+    covered; 403 was not (review finding on PR #751). A user whose role is
+    not in ``ROLE_HIERARCHY`` (corrupted data, a role removed from the enum
+    on a rolling deploy) must still be refused, not default-allowed —
+    ``require_role(Role.VIEWER)`` has no room between "no role" (401,
+    unauthenticated) and "viewer" (the lowest role that exists), so this is
+    the only way 403 is reachable on a viewer-gated endpoint at all."""
+    from app.auth import create_access_token
+    from app.models.user import User
+    from sqlmodel.ext.asyncio.session import AsyncSession
+    from tests.conftest import test_engine
+
+    run_id = install_fixture(heads_root, "omp-run")
+    uid = uuid.uuid4()
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(User(id=uid, email=f"u-{uid.hex[:6]}@mc.local", name="U", role="deprecated-role", is_active=True))
+        await s.commit()
+    client.headers["Authorization"] = f"Bearer {create_access_token(str(uid), 'deprecated-role')}"
+    resp = await client.get(f"/api/v1/heads/{run_id}/chat/history")
+    assert resp.status_code == 403
 
 
 async def test_chat_history_requires_login_viewer_may_read(client, heads_root):

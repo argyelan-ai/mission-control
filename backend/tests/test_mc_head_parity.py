@@ -44,6 +44,13 @@ def test_launchd_template_watches_spool_and_runs_installed_copy():
     # it on, or a reinstall would make every start end in sandbox_required
     assert plist["EnvironmentVariables"]["MC_HEAD_SANDBOX"] == "1"
     assert "MC_HEAD_SANDBOX_EXEC" not in plist["EnvironmentVariables"]
+    # Review finding on PR #751: the template documented a "--gc-apply"
+    # installer flag that did not exist, and the raw template (the form
+    # this test parses, BEFORE the installer's own substitution) must stay
+    # valid plist XML on its own — the key stays ABSENT by default; see
+    # test_mc_head_install_starter.py for the installer's own --gc-apply
+    # round trip (which the ABSENT key here is the control for).
+    assert "MC_HEAD_GC_APPLY" not in plist["EnvironmentVariables"]
 
 
 def test_procedure_template_in_backend_is_the_docs_source():

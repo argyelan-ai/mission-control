@@ -337,12 +337,17 @@ async def get_head_chat_history(
     _enabled()
     run = _load(run_id)
     located = transcript.locate(run)
-    tag = transcript.etag(located, limit, before_uuid)
+    # Computed ONCE and passed into both etag() and read(): a head's normal
+    # end (wrapper writes "exited" after the transcript's last line) must
+    # become a new ETag, not a 304 that leaves a polling client's aliveness
+    # stuck on "active" forever (review finding on PR #751).
+    state = derive_for_run(run, time.time())["state"]
+    tag = transcript.etag(located, limit, before_uuid, state)
     if tag is not None:
         response.headers["ETag"] = tag
         if request.headers.get("if-none-match") == tag:
             return Response(status_code=304, headers={"ETag": tag})
-    result = await asyncio.to_thread(transcript.read, run, located, limit, before_uuid)
+    result = await asyncio.to_thread(transcript.read, run, located, limit, before_uuid, state)
     return result
 
 

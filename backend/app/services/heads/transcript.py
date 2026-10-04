@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import os
 import stat
 import time
 from dataclasses import dataclass
@@ -134,42 +135,63 @@ def locate(run: Any) -> Located | Unavailable:
         return Unavailable(reason=REASON_NO_TRANSCRIPT)
     if size > MAX_TRANSCRIPT_BYTES:
         return Unavailable(reason=REASON_TOO_LARGE)
-    return Located(path=newest, adapter=adapter, reader=harness)
+    # ``adapter.name``, not the raw ``harness`` string: the adapter is the
+    # one source of truth for "which reader actually parsed this" (review
+    # finding on PR #751) — today a head's ``spec["harness"]`` is validated
+    # to exactly "omp"/"claude" by ``mc-head``'s ``load_spec``, so the two
+    # already agree, but ``reader`` is a public API field (docs/specs/
+    # head-launcher.md §7: "claude"|"omp"|null) and must come from the thing
+    # that was actually used to read the file, not from an echo of the input.
+    return Located(path=newest, adapter=adapter, reader=adapter.name)
 
 
-def etag(located: Located | Unavailable, limit: int, before_uuid: str | None) -> str | None:
+def etag(located: Located | Unavailable, limit: int, before_uuid: str | None, state: str | None = None) -> str | None:
     """A strong ETag over the file identity Claude/omp cannot fake by
     touching mtime alone (``st_ino`` survives an editor's atomic-replace
     only on the SAME filesystem, which every head transcript is — it is
     written in place by the harness, never replaced), plus the page
-    parameters: a different ``limit``/``before_uuid`` is a different page
-    and must not collide on the cache key. ``None`` for an unavailable
-    transcript — there is nothing stable to key on, and the body is tiny
-    anyway."""
+    parameters (a different ``limit``/``before_uuid`` is a different page
+    and must not collide on the cache key) and the derived head ``state``.
+
+    ``state`` matters because the response body carries more than the file's
+    bytes: ``session.aliveness`` is derived from ``.wrapper/status.json``,
+    not from the transcript file. Without it in the key, the NORMAL end of a
+    head (the transcript's last write lands before the wrapper writes
+    ``exited``) produces no new ETag: a client polling with
+    ``If-None-Match`` gets 304 forever and never learns the run ended —
+    review finding on PR #751. The caller computes the state once
+    (``derive_for_run``) and passes the SAME value to both this function and
+    ``read()`` so the two can never disagree about which state the response
+    reflects. ``None`` for an unavailable transcript — there is nothing
+    stable to key on, and the body is tiny anyway."""
     if isinstance(located, Unavailable):
         return None
     try:
         st = located.path.stat()
     except OSError:
         return None
-    raw = f"{st.st_ino}:{st.st_size}:{st.st_mtime_ns}:{limit}:{before_uuid or ''}"
+    raw = f"{st.st_ino}:{st.st_size}:{st.st_mtime_ns}:{limit}:{before_uuid or ''}:{state or ''}"
     return '"' + hashlib.sha256(raw.encode()).hexdigest()[:32] + '"'
 
 
-def _aliveness(run: Any) -> str:
+def _aliveness(run: Any, state: str | None = None) -> str:
     """Head aliveness comes ONLY from the derived head state (files MC
     already trusts for every other surface) — never from a pane probe or a
     process check. ``starting``/``running`` is the one meaning of "this
     could still grow"; everything else (needs_you, passed, failed, stopped)
-    is ended, even if the transcript's own mtime looks recent."""
-    state = derive_for_run(run, time.time())["state"]
+    is ended, even if the transcript's own mtime looks recent. ``state``, if
+    given, is the CALLER's already-computed ``derive_for_run(...)["state"]``
+    (same value used for the ETag above) — reused rather than derived again
+    with a fresh ``now``, so the two can never read a different moment."""
+    if state is None:
+        state = derive_for_run(run, time.time())["state"]
     return "active" if state in ACTIVE_STATES else "ended"
 
 
-def _empty(run: Any, reason: str) -> dict[str, Any]:
+def _empty(run: Any, reason: str, state: str | None = None) -> dict[str, Any]:
     return {
         "events": [],
-        "session": {"sessionId": run.run_id, "live": False, "startedAt": None, "aliveness": _aliveness(run)},
+        "session": {"sessionId": run.run_id, "live": False, "startedAt": None, "aliveness": _aliveness(run, state)},
         "hasMore": False,
         "subagentRuns": [],
         "source": "none",
@@ -178,18 +200,55 @@ def _empty(run: Any, reason: str) -> dict[str, Any]:
     }
 
 
+def _open_verified(path: Path) -> Any | None:
+    """Open ``path`` for reading, re-proving right NOW the exact safety
+    ``locate()``'s ``_is_safe_descendant`` already checked — a head's
+    sandbox can swap the final component for a symlink in the window
+    between that check and this call (the ETag computation plus an
+    ``asyncio.to_thread`` hop both sit in between). ``O_NOFOLLOW`` makes a
+    swap-to-symlink fail outright; the ``st_ino``/``st_dev`` comparison
+    against a fresh ``lstat`` additionally catches a swap to a DIFFERENT
+    regular file (e.g. a hard link planted next to the original) that an
+    ``O_NOFOLLOW``-only open would not notice. Returns a text-mode file
+    object positioned at the start, or ``None`` when anything about that
+    does not hold — the caller treats that exactly like "transcript
+    vanished", never raises and never falls back to a plain ``open()``."""
+    try:
+        pre = path.lstat()
+    except OSError:
+        return None
+    if not stat.S_ISREG(pre.st_mode):
+        return None
+    try:
+        fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return None
+    try:
+        post = os.fstat(fd)
+        if not stat.S_ISREG(post.st_mode) or (post.st_ino, post.st_dev) != (pre.st_ino, pre.st_dev):
+            os.close(fd)
+            return None
+    except OSError:
+        os.close(fd)
+        return None
+    return os.fdopen(fd, "r", encoding="utf-8", errors="replace")
+
+
 def read(
     run: Any,
     located: Located | Unavailable,
     limit: int = 400,
     before_uuid: str | None = None,
+    state: str | None = None,
 ) -> dict[str, Any]:
     """One page of this run's transcript, in the exact shape an agent's
     chat history has (``events``/``session``/``hasMore``/``subagentRuns``),
     plus ``source``/``reader``/``reason`` for a frontend/empty state. Always
-    masked before it is returned — see module docstring."""
+    masked before it is returned — see module docstring. ``state`` is the
+    caller's ``derive_for_run(...)["state"]`` (see ``etag()``'s docstring);
+    omitting it just derives it again here with a fresh ``now``."""
     if isinstance(located, Unavailable):
-        return _empty(run, located.reason)
+        return _empty(run, located.reason, state)
 
     # Read exactly the one file: no usage-context side effects on other
     # runs (``stamp_usage`` is the token harvester's job, not this
@@ -200,8 +259,11 @@ def read(
     # Same pattern as ``routers.agent_chat.get_subagent_history``.
     quiet = dataclasses.replace(located.adapter, stamp_usage=lambda ev, p: None, subagent_runs=lambda p: [])
 
-    result = read_history(located.path, quiet, limit=limit, before_uuid=before_uuid)
-    result["session"]["aliveness"] = _aliveness(run)
+    fileobj = _open_verified(located.path)
+    if fileobj is None:
+        return _empty(run, REASON_NO_TRANSCRIPT, state)
+    result = read_history(located.path, quiet, limit=limit, before_uuid=before_uuid, fileobj=fileobj)
+    result["session"]["aliveness"] = _aliveness(run, state)
     result["source"] = "transcript"
     result["reader"] = located.reader
     result["reason"] = None
