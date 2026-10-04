@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import uuid
 from unittest.mock import AsyncMock, patch
 
@@ -17,7 +18,7 @@ from app.models.task import Task
 from app.services import runtime_protocols as rp
 from app.services.heads import engine
 from tests.conftest import test_engine
-from tests.heads_backend_helpers import heads_root, make_run, write_run_record  # noqa: F401
+from tests.heads_backend_helpers import heads_root, iso, make_run, write_run_record  # noqa: F401
 
 EP = "http://192.0.2.10:8000/v1"
 
@@ -587,3 +588,51 @@ async def test_scratch_check_runs_off_the_event_loop(auth_client, heads_root, ma
                                                          "runtime_slug": "box-slot"})
     assert resp.status_code == 201, resp.text
     assert scratch.local_origin in calls
+
+
+# ── heads-sichtbar PR 2 §3.1: GET /heads?recent_days= / ?archived= ──────────
+
+
+async def test_plain_list_is_unchanged_by_the_new_params_existing(auth_client, heads_root):
+    """No `recent_days`/`archived` at all → the exact old shape (Inbox/
+    Insights read it this way) — no `archived_count` key, every run in,
+    however old. Bauplan §3.1: "Ohne Parameter wie heute (Inbox/Insights
+    unverändert)"."""
+    run_id = make_run(heads_root, status={"phase": "exited", "exit_code": 0,
+                                           "exited_at": iso(time.time() - 40 * 86400)})
+    body = (await auth_client.get("/api/v1/heads")).json()
+    assert [r["run_id"] for r in body["runs"]] == [run_id]
+    assert "archived_count" not in body
+
+
+async def test_recent_days_boundary_is_exactly_the_cutoff(auth_client, heads_root):
+    now = time.time()
+    active = make_run(heads_root, status={"phase": "running", "started_at": iso(now - 60)}, heartbeat_age=3)
+    just_inside = make_run(heads_root, status={"phase": "exited", "exit_code": 0,
+                                                "exited_at": iso(now - 7 * 86400 + 30)})
+    just_outside = make_run(heads_root, status={"phase": "exited", "exit_code": 0,
+                                                 "exited_at": iso(now - 7 * 86400 - 30)})
+
+    body = (await auth_client.get("/api/v1/heads?recent_days=7")).json()
+    assert {r["run_id"] for r in body["runs"]} == {active, just_inside}
+    assert body["archived_count"] == 1
+
+    arc = (await auth_client.get("/api/v1/heads?recent_days=7&archived=true")).json()
+    assert [r["run_id"] for r in arc["runs"]] == [just_outside]
+    assert "archived_count" not in arc
+
+    # Sabotage: an active run must never count as archived, no matter how
+    # old `created_at` is.
+    stale_active = make_run(heads_root, status={"phase": "running", "started_at": iso(now - 20 * 86400)},
+                             heartbeat_age=3, created_ago=20 * 86400)
+    arc2 = (await auth_client.get("/api/v1/heads?recent_days=7&archived=true")).json()
+    assert stale_active not in {r["run_id"] for r in arc2["runs"]}
+
+
+async def test_archived_default_window_without_recent_days(auth_client, heads_root):
+    now = time.time()
+    old = make_run(heads_root, status={"phase": "exited", "exit_code": 0, "exited_at": iso(now - 10 * 86400)})
+    recent = make_run(heads_root, status={"phase": "exited", "exit_code": 0, "exited_at": iso(now - 1 * 86400)})
+    body = (await auth_client.get("/api/v1/heads?archived=true")).json()
+    assert [r["run_id"] for r in body["runs"]] == [old]
+    assert recent not in {r["run_id"] for r in body["runs"]}

@@ -13,6 +13,7 @@ journeys:
       - {feature: F-repos}    # register/link the repo before a job runs (ADR-050 registry)
       - {feature: F-schedule} # a scheduled job is a second way to create the task
       - {feature: F-tasks}    # new task -> "Run as head" -> status, stop, result (PR + run record) on the task detail
+      - {feature: F-sessions} # follow the head live in Chats (ADR-085 Nachtrag 2026-10-04 §4, read-only)
       - {feature: F-files}    # after the head ends, check the files it produced
     end_state: "PR open with a run record; the operator merges through the merge queue"
     test: e2e/journeys/J-job-to-merge.spec.ts
