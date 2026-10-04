@@ -144,6 +144,35 @@ class TranscriptAdapter:
     #: liefe bei jedem Takt fuer Adapter ohne eigenen Kanal ins Leere.
     preview_channel: Callable[[Path], Path | None] | None = None
 
+    #: Session-Datei -> die stabile ID der LOGISCHEN Sitzung, die sie
+    #: traegt — fuer den Rollover-Vergleich im Tailer (``transcript_chat.
+    #: ChatTailerManager``'s ``_is_genuine_rollover``), der sonst JEDEN
+    #: Pfadwechsel als neue Sitzung behandelt.
+    #:
+    #: Vorgabe: der volle Datei-Stamm (deckt sich mit Claude Code, wo der
+    #: Stamm selbst die Sitzungs-UUID ist — ``_claude_adapter`` setzt dieses
+    #: Feld deshalb nie explizit, der Vorgabewert ist dort bereits exakt die
+    #: alte Pfadgleichheits-Pruefung).
+    #:
+    #: omp (``_omp_adapter``) ueberschreibt das: unter ``OMP_DRIVER=acp``
+    #: schreiben ZWEI unabhaengige Prozesse — die native omp-CLI und der
+    #: ACP-Bridge-Sink (``docker/omp-bridge/acp_chat_events.ChatEventSink``,
+    #: dessen eigener Docstring sagt „the same shape omp writes" — bewusst
+    #: dasselbe Schema) — je eine eigene Datei fuer DIESELBE Sitzung in
+    #: denselben Ordner; beide tragen dieselbe Sitzungs-UUID im Dateinamen,
+    #: nur mit unterschiedlich genauem Zeitstempel-Praefix. Beide wachsen
+    #: ueber den ganzen Zug hinweg unabhaengig weiter, sodass „die neueste
+    #: Datei" im Sekundentakt zwischen ihnen hin- und herspringen kann, OHNE
+    #: dass sich die Sitzung je aendert — Operator-Befund 04.10.2026: der
+    #: Kontext-Ring im Composer blinkte waehrend eines laufenden Zugs mehrfach
+    #: weg und kam zurueck, weil jeder Sprung einen echten (aber falschen)
+    #: ``session_changed`` auf dem SSE-Strom ausloeste (der den Verlauf im
+    #: Frontend-Reducer absichtlich leert — richtig bei einem ECHTEN Rollover
+    #: wie ``/clear``, falsch hier). Mit diesem Feld vergleicht der Tailer die
+    #: eingebettete UUID statt des Pfades: dieselbe UUID in einer
+    #: Geschwisterdatei ist keine neue Sitzung.
+    session_id_for: Callable[[Path], str] = lambda path: path.stem
+
 
 def _claude_adapter(
     name: str = CLAUDE, process_name: str = "claude"
@@ -199,6 +228,7 @@ def _omp_adapter() -> TranscriptAdapter:
         transcript_suggests_turn_ended=omp_chat.transcript_suggests_turn_ended,
         parse_pane_state=omp_chat.parse_pane_state,
         process_name=omp_chat.PROCESS_NAME,
+        session_id_for=omp_chat.session_id_for,
     )
 
 

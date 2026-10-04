@@ -297,3 +297,30 @@ def read_acp_chat_state(agent) -> dict | None:
         logger.warning("acp chat: Zustandsdatei unlesbar: %s", newest, exc_info=True)
         return None
     return parsed if isinstance(parsed, dict) else None
+
+
+def read_acp_turn_status(agent) -> str | None:
+    """``"working"`` / ``"idle"`` / ``None`` — der Zug-Zustand eines
+    kopflosen ACP-Agenten, direkt aus ``busy`` in ``read_acp_chat_state``.
+
+    ``None`` heisst "kein frischer Zustand bekannt" (Datei fehlt/kaputt,
+    ``busy`` fehlt oder ist kein bool) — der Aufrufer (``transcript_chat.
+    ChatTailerManager._compute_pane_state``) faellt dann auf die
+    mtime-Heuristik zurueck, genau wie der pane-lose Boss/host-Zweig.
+
+    Das ist die EINZIGE Zug-Zustands-Quelle, die ein ACP-Agent hat: kein
+    TUI-Pane zum Sondieren. Unter ``OMP_DRIVER=acp`` laeuft in Fenster 0
+    keine interaktive TUI mehr, nur eine statische Banner-Zeile
+    (``docker/omp-bridge/entrypoint.sh``) — gegen die klassifizierte JEDER
+    TUI-Pane-Parser (``pane_state.parse_pane_state``, ``omp_chat.
+    parse_pane_state``) die Sitzung dauerhaft als ``unknown``. Das war der
+    Operator-Befund 02.10.2026: ein omp/ACP-Agent antwortete im Chat normal, die
+    Statuszeile zeigte trotzdem fortwaehrend "Status unknown — check the
+    terminal" ueber dem Composer."""
+    state = read_acp_chat_state(agent)
+    if state is None:
+        return None
+    busy = state.get("busy")
+    if not isinstance(busy, bool):
+        return None
+    return "working" if busy else "idle"

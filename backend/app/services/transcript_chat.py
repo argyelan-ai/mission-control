@@ -84,6 +84,7 @@ from app.config import settings
 from app.services import fresh_session, sse
 from app.services.harness_catalog import get_observed_model_windows, observe_model_window
 from app.services.pane_preview import PanePreview
+from app.services.acp_chat_transport import headless_chat_kind, read_acp_turn_status
 from app.services.pane_state import capture_pane, process_alive
 from app.redis_client import RedisKeys
 from app.services.token_harvester import _host_home, _should_attribute_boss_path
@@ -2052,7 +2053,9 @@ class ChatTailerManager:
                         active = await asyncio.to_thread(adapter.find_active_session, tdir)
                     except OSError:
                         active = None
-                    if active is not None and active[0] != current_path:
+                    if active is not None and self._is_genuine_rollover(
+                        adapter, active[0], current_path
+                    ):
                         # Re-run the same Boss privacy gate the SSE handshake
                         # enforces at connect time (agent_chat.py:80) — a
                         # rollover mid-stream is a second, later "which file
@@ -2227,6 +2230,40 @@ class ChatTailerManager:
             # A silently dead tailer looks identical to "no new events yet"
             # from the outside — make every exit visible.
             logger.warning("chat tailer loop exited (agent_id=%s)", agent_id)
+
+    @staticmethod
+    def _is_genuine_rollover(adapter: Any, new_path: Path, current_path: Path) -> bool:
+        """True when ``new_path`` (``find_active_session``'s latest pick) is
+        a DIFFERENT logical session than ``current_path`` — not merely a
+        sibling file carrying the SAME conversation under a different name.
+
+        Plain path equality used to be the whole check, which worked for
+        Claude Code (one file per session, filename == session uuid) but
+        broke for an ACP/headless omp agent (Operator-Befund 04.10.2026):
+        under ``OMP_DRIVER=acp`` the native omp CLI and the ACP bridge's own
+        sink (``docker/omp-bridge/acp_chat_events.ChatEventSink`` — "the
+        same shape omp writes", by its own docstring) each write their OWN
+        ``.jsonl`` file for the SAME session into the SAME per-cwd folder,
+        both carrying the same session uuid in their name but a differently
+        precise timestamp prefix. Both keep growing independently through a
+        long multi-tool-call turn, so "the newest file" can legitimately
+        flip between the two every few seconds without the session ever
+        changing — and every flip used to broadcast a real-but-wrong
+        ``session_changed``, which the frontend reducer treats as a genuine
+        rollover and wipes `usage`/the message list for (correct for a REAL
+        rollover like ``/clear``, wrong here): the context-ring next to the
+        model chip blinked out and back in sync with it, live-reproduced in
+        a browser against a running omp/ACP agent's turn.
+
+        ``adapter.session_id_for`` resolves the embedded, harness-aware
+        session id (default: the full stem, i.e. unchanged behaviour for
+        Claude Code, where the stem already IS the session uuid); omp's own
+        adapter overrides it to strip the timestamp prefix first. Fast path
+        first (identical path is trivially not a rollover, and skips the
+        session_id_for calls entirely) before the harness-aware compare."""
+        if new_path == current_path:
+            return False
+        return adapter.session_id_for(new_path) != adapter.session_id_for(current_path)
 
     @staticmethod
     def _transcript_suggests_turn_ended(path: Path) -> bool:
@@ -2502,6 +2539,26 @@ class ChatTailerManager:
             transcript_active = False
 
         aliveness = await resolve_aliveness(agent, current_path, adapter)
+
+        # Kopflose ACP-Agenten (OMP_DRIVER=acp) haben kein
+        # TUI-Pane mehr zu sondieren -- Fenster 0 zeigt nur eine statische
+        # Banner-Zeile (docker/omp-bridge/entrypoint.sh), gegen die JEDER
+        # TUI-Parser dauerhaft "unknown" liefert (Operator-Befund 02.10.2026:
+        # der Agent antwortete normal, Statuszeile blieb trotzdem auf "Status
+        # unknown"). Fuer sie ist der Chat-Daemon selbst die Zug-Zustands-
+        # Quelle (acp-chat-state.json, "busy") statt Pane-Text -- siehe
+        # acp_chat_transport.read_acp_turn_status. Fehlt sie (Daemon noch
+        # nie gelaufen, Dateisystem-Hickup), faellt das genauso auf die
+        # mtime-Heuristik zurueck wie der pane-lose Boss/host-Zweig unten.
+        if headless_chat_kind(agent) is not None:
+            status = await asyncio.to_thread(read_acp_turn_status, agent)
+            if status is None:
+                return {
+                    "status": "working" if transcript_active else "idle",
+                    "prompt": None,
+                    "aliveness": aliveness,
+                }
+            return {"status": status, "prompt": None, "aliveness": aliveness}
 
         if pane_text is _PANE_UNSET:
             pane_text = await capture_pane(agent)
