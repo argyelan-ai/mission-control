@@ -18,6 +18,9 @@ Usable without MC from a terminal:
                                      released its box lock, then start <new>
     mc-head status <run_id>          print .wrapper/status.json
     mc-head watch                    process the spool once (launchd entry)
+    mc-head gc [--apply]             retention report (ADR-085 Nachtrag
+                                     2026-10-04); deletes only with --apply
+                                     (or MC_HEAD_GC_APPLY=1 from cmd_watch)
 
 Python 3.9 stdlib only, so the macOS system python can run it from launchd.
 Nothing in here trusts spec.json: the backend container mounts $MC_HOME
@@ -106,6 +109,26 @@ BASE_PATH = os.environ.get(
 )
 GIT_NAME = os.environ.get("MC_HEAD_GIT_NAME", "MC head")
 GIT_EMAIL = os.environ.get("MC_HEAD_GIT_EMAIL", "head@users.noreply.invalid")
+
+# ── gc (ADR-085 Nachtrag 2026-10-04 — retention, dry run by default) ─────
+
+# Scharf nur, wenn dieser Schalter in der PROZESS-Umgebung steht (launchd
+# plist, nur auf dem Host setzbar). Es gibt bewusst KEINE vom Backend
+# beschreibbare Datei dafuer — eine solche Datei waere ein Schalter, den ein
+# kompromittiertes Backend selbst umlegen koennte.
+GC_APPLY_ENV = "MC_HEAD_GC_APPLY"
+GC_BUDGET_BYTES = int(os.environ.get("MC_HEAD_GC_BUDGET_BYTES", str(5 * 1024**3)))
+GC_WARN_FREE_BYTES = int(os.environ.get("MC_HEAD_GC_WARN_FREE_BYTES", str(20 * 1024**3)))
+GC_MIN_AGE_S = int(os.environ.get("MC_HEAD_GC_MIN_AGE_S", str(14 * 24 * 3600)))
+# A run younger than this (since it exited) is not even considered — the
+# operator may still be reading its result.
+GC_SKIP_MIN_ENDED_S = int(os.environ.get("MC_HEAD_GC_SKIP_MIN_ENDED_S", "3600"))
+# cmd_watch() only re-runs gc when the last report is older than this.
+GC_THROTTLE_S = int(os.environ.get("MC_HEAD_GC_THROTTLE_S", str(6 * 3600)))
+# Allowlist, deliberately short and literal — see cmd_gc()'s docstring for
+# why nothing in here may ever be computed from a pattern.
+GC_CACHE_RELATIVE_PATHS = ("home/.cache", "home/Library/Caches", "home/.npm/_cacache")
+GC_RESERVED_DIR_NAMES = frozenset({"clones", "scratch-origin", "locks", "spool", "night", "task-locks"})
 
 # ── validation (§6.1) ────────────────────────────────────────────────────
 
@@ -1658,10 +1681,342 @@ def cmd_restart(old_id: str, new_id: str) -> int:
     return cmd_start(new_id)
 
 
+# ── gc (ADR-085 Nachtrag 2026-10-04): retention, dry run by default ─────
+#
+# Lives on the host, not in the backend: mc-head already owns the clones,
+# worktrees, locks and git identity this needs (module docstring: "The MC
+# backend never gets a shell on the host"). The backend only ever SHOWS the
+# report this writes (``GET /heads/cleanup``), never triggers or computes it.
+#
+# Kept forever, never touched here: spec.json, job.md, procedure.md,
+# run-record.md, step.txt, question.md, head.log, work.log,
+# hook-passed.txt, head-settings.json, head.env, .wrapper/, .backend/,
+# claude-config/**, omp-sessions/**, home/.omp/**, anything under the vault.
+# Only two kinds of path are ever candidates: the literal cache allowlist
+# below, and a run's own ``wt/`` worktree.
+
+
+def _parse_iso(value) -> float | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
+    except ValueError:
+        return None
+
+
+def _dir_bytes(path: Path) -> int:
+    """Sum of regular-file sizes under ``path`` — never follows a symlinked
+    directory (``os.walk`` default), so a symlink planted inside cannot make
+    this walk (or a later removal built on the same walk) leave the run."""
+    total = 0
+    if not path.exists() or path.is_symlink():
+        return 0
+    for root, _dirs, files in os.walk(path, onerror=lambda *_exc: None):
+        for name in files:
+            try:
+                st = Path(root, name).lstat()
+            except OSError:
+                continue
+            if stat.S_ISREG(st.st_mode):
+                total += st.st_size
+    return total
+
+
+def _remove_tree(path: Path) -> None:
+    if path.is_symlink():
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        return
+    shutil.rmtree(path, ignore_errors=True)
+
+
+def _gc_candidate_run_ids() -> list:
+    root = heads_root()
+    if not root.is_dir():
+        return []
+    out = []
+    try:
+        entries = sorted(root.iterdir())
+    except OSError:
+        return []
+    for entry in entries:
+        if entry.name in GC_RESERVED_DIR_NAMES or not UUID_RE.match(entry.name):
+            continue
+        if not entry.is_dir() or entry.is_symlink():
+            continue
+        if (entry / "spec.json").exists():
+            out.append(entry.name)
+    return out
+
+
+def _gc_load(run_id: str):
+    """``(spec, status)`` for a run gc may consider, or ``None`` — the same
+    validation gate every other entry point uses (``load_spec``): a run
+    whose spec.json does not pass is left alone, never guessed at."""
+    try:
+        spec = load_spec(run_id)
+    except SpecInvalid:
+        return None
+    return spec, read_status(run_id)
+
+
+def _gc_skip_reason(run_id: str, spec: dict, status: dict, now: float, by_task: dict, by_restarted_from: dict) -> str | None:
+    """``None`` means "consider this run for cleanup". Anything else is a
+    run gc must not even look at yet (still running, just finished, or a
+    predecessor/sibling still is)."""
+    if status.get("phase") != "exited":
+        return "not_exited"
+    exited_at = _parse_iso(status.get("exited_at"))
+    if exited_at is None or now - exited_at < GC_SKIP_MIN_ENDED_S:
+        return "too_recent"
+    if pid_alive(status.get("supervisor_pid")):
+        return "supervisor_alive"
+    task_id = spec.get("task_id")
+    if task_id:
+        for other_id in by_task.get(task_id, ()):
+            if other_id != run_id and read_status(other_id).get("phase") != "exited":
+                return "task_active"
+    for successor_id in by_restarted_from.get(run_id, ()):
+        if read_status(successor_id).get("phase") != "exited":
+            return "has_active_continuation"
+    return None
+
+
+def _wt_head_sha(wt: Path) -> str | None:
+    res = _git(["-C", str(wt), "rev-parse", "HEAD"], check=False)
+    out = res.stdout.strip() if res.returncode == 0 else ""
+    return out or None
+
+
+def _wt_is_clean(wt: Path) -> bool:
+    res = _git(["-C", str(wt), "status", "--porcelain", "--untracked-files=all"], check=False)
+    return res.returncode == 0 and not res.stdout.strip()
+
+
+def _wt_is_detached(wt: Path) -> bool:
+    res = _git(["-C", str(wt), "symbolic-ref", "-q", "HEAD"], check=False)
+    return res.returncode != 0
+
+
+def _wt_head_in_scratch_origin(spec: dict, wt: Path) -> bool:
+    """The clone's current HEAD is already an ancestor of the branch ref as
+    it sits on the LOCAL bare origin — i.e. this exact commit was pushed.
+    Reads the origin directly (it is a bare repo already on disk, no
+    ``fetch``/network); a real GitHub repo's origin is never this, so this
+    check only ever fires for a listed scratch repo (``scratch_origin``
+    already filters on that)."""
+    origin = scratch_origin(spec)
+    if origin is None:
+        return False
+    sha = _wt_head_sha(wt)
+    if not sha:
+        return False
+    res = _git(
+        ["--git-dir", str(origin), "merge-base", "--is-ancestor", sha, f"refs/heads/{spec['branch']}"],
+        check=False,
+    )
+    return res.returncode == 0
+
+
+def _wt_decision(spec: dict) -> tuple:
+    """``("removable", None)`` or ``("kept", reason)`` for this run's
+    worktree — never for a real (non-scratch) repo, v1's one hard line
+    (bauplan §2.3): "Echte GitHub-Repos: v1 entfernt KEINE Arbeitskopie"."""
+    wt = run_dir(spec["run_id"]) / "wt"
+    if spec.get("repo_full_name") not in scratch_repos():
+        return "kept", "real_repo_v1"
+    if not _wt_is_clean(wt):
+        return "kept", "dirty"
+    if _wt_is_detached(wt):
+        return "kept", "detached"
+    if not _wt_head_in_scratch_origin(spec, wt):
+        return "kept", "not_pushed"
+    return "removable", None
+
+
+def _remove_worktree(spec: dict, wt: Path) -> bool:
+    """``git worktree remove`` WITHOUT ``--force`` — it refuses on its own
+    if anything changed since the last status check (race with a
+    just-started "continue"); the caller leaves the path alone on refusal.
+    The local branch in the clone is untouched either way: "Weitermachen"
+    re-checks it out (``prepare_worktree``)."""
+    clone = clones_root() / spec["repo_full_name"].replace("/", "--")
+    res = _git(["-C", str(clone), "worktree", "remove", str(wt)], check=False)
+    if res.returncode != 0:
+        return False
+    _git(["-C", str(clone), "worktree", "prune"], check=False)
+    return True
+
+
+def _run_gc(apply: bool) -> dict:
+    now = time.time()
+    loaded = {}
+    by_task: dict = {}
+    by_restarted_from: dict = {}
+    for run_id in _gc_candidate_run_ids():
+        pair = _gc_load(run_id)
+        if pair is None:
+            continue
+        spec, status = pair
+        loaded[run_id] = (spec, status)
+        task_id = spec.get("task_id")
+        if task_id:
+            by_task.setdefault(task_id, []).append(run_id)
+        restarted_from = spec.get("restarted_from")
+        if restarted_from:
+            by_restarted_from.setdefault(restarted_from, []).append(run_id)
+
+    # Phase 1 — DECIDE, against the UNTOUCHED disk (nothing removed yet:
+    # the budget math below needs the real pre-removal size, and deciding
+    # while deleting would make "how much is left" a moving target mid-walk).
+    heads_bytes_before = _dir_bytes(heads_root())
+    reports: dict = {}
+    pending_removals: list = []  # (kind, spec_or_None, path)
+    budget_wait: list = []  # (run_id, wt, bytes, exited_at, spec)
+
+    for run_id, (spec, status) in loaded.items():
+        if _gc_skip_reason(run_id, spec, status, now, by_task, by_restarted_from) is not None:
+            continue
+        folder = run_dir(run_id)
+        actions: list = []
+        kept: list = []
+
+        for rel in GC_CACHE_RELATIVE_PATHS:
+            p = folder / rel
+            if p.is_symlink():
+                kept.append({"path": str(p), "reason": "symlink"})
+                continue
+            if not p.exists():
+                continue
+            actions.append({"path": str(p), "kind": "cache", "bytes": _dir_bytes(p), "would_remove": True})
+            pending_removals.append(("cache", None, p))
+
+        wt = folder / "wt"
+        if wt.is_dir() and not wt.is_symlink():
+            decision, reason = _wt_decision(spec)
+            wt_bytes = _dir_bytes(wt)
+            if decision == "kept":
+                kept.append({"path": str(wt), "reason": reason})
+            else:
+                exited_at = _parse_iso(status.get("exited_at")) or now
+                if now - exited_at >= GC_MIN_AGE_S:
+                    actions.append({"path": str(wt), "kind": "worktree", "bytes": wt_bytes, "would_remove": True})
+                    pending_removals.append(("worktree", spec, wt))
+                else:
+                    kept.append({"path": str(wt), "reason": "age"})
+                    budget_wait.append((run_id, wt, wt_bytes, exited_at, spec))
+
+        reports[run_id] = {"run_id": run_id, "actions": actions, "kept": kept}
+
+    projected = heads_bytes_before
+    for rep in reports.values():
+        for a in rep["actions"]:
+            projected -= a["bytes"]
+
+    budget_wait.sort(key=lambda row: row[3])  # oldest exited_at first
+    for run_id, wt, wt_bytes, _exited_at, spec in budget_wait:
+        if projected <= GC_BUDGET_BYTES:
+            break
+        rep = reports[run_id]
+        rep["kept"] = [k for k in rep["kept"] if k["path"] != str(wt)]
+        rep["actions"].append({"path": str(wt), "kind": "worktree", "bytes": wt_bytes, "would_remove": True})
+        pending_removals.append(("worktree", spec, wt))
+        projected -= wt_bytes
+
+    # Phase 2 — EXECUTE, only now, only with --apply. Every decision above
+    # is final before a single byte is removed.
+    if apply:
+        for kind, spec, path in pending_removals:
+            if kind == "cache":
+                _remove_tree(path)
+            else:
+                _remove_worktree(spec, path)
+
+    try:
+        free_bytes = shutil.disk_usage(str(heads_root())).free
+    except OSError:
+        free_bytes = None
+
+    return {
+        "mode": "apply" if apply else "dry_run",
+        "at": now_iso(),
+        "runs": list(reports.values()),
+        "action_bytes": sum(a["bytes"] for rep in reports.values() for a in rep["actions"]),
+        "heads_bytes": _dir_bytes(heads_root()),
+        "free_bytes": free_bytes,
+        "warn_low_disk": bool(free_bytes is not None and free_bytes < GC_WARN_FREE_BYTES),
+        "budget_bytes": GC_BUDGET_BYTES,
+    }
+
+
+def _write_gc_report(report: dict) -> None:
+    root = heads_root()
+    root.mkdir(parents=True, exist_ok=True)
+    tmp = root / ".gc-report.json.tmp"
+    tmp.write_text(json.dumps(report, indent=1))
+    tmp.replace(root / "gc-report.json")
+
+
+def cmd_gc(apply: bool) -> int:
+    """``mc-head gc [--apply]`` — never deletes anything unless ``--apply``
+    (or, from ``cmd_watch``, ``MC_HEAD_GC_APPLY=1`` in the process
+    environment) is given. Always writes ``heads/gc-report.json``, dry run
+    or not — the report IS the dry run's result, there is no separate
+    "would do" output.
+
+    ``fcntl.flock`` (POSIX-only, matching this whole script) keeps two
+    overlapping calls — a manual run while ``watch`` is also due — from
+    racing each other's removals or report write."""
+    import fcntl
+
+    heads_root().mkdir(parents=True, exist_ok=True)
+    locks_root().mkdir(parents=True, exist_ok=True)
+    lock_fh = open(locks_root() / "gc.lock", "a+")
+    try:
+        fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print("gc: already running, skipped")
+        return 0
+    try:
+        report = _run_gc(apply)
+    finally:
+        try:
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+        lock_fh.close()
+    _write_gc_report(report)
+    print(json.dumps({"mode": report["mode"], "runs": len(report["runs"]), "action_bytes": report["action_bytes"]}))
+    return 0
+
+
+def _gc_due() -> bool:
+    try:
+        mtime = (heads_root() / "gc-report.json").stat().st_mtime
+    except OSError:
+        return True
+    return (time.time() - mtime) >= GC_THROTTLE_S
+
+
 # ── spool watcher (launchd, §5) ──────────────────────────────────────────
 
 
 def cmd_watch() -> int:
+    # Throttled retention pass (ADR-085 Nachtrag 2026-10-04): runs on every
+    # watch tick but only ACTS when the last report is stale, and only
+    # DELETES when the host's own launchd plist carries MC_HEAD_GC_APPLY=1
+    # — never from anything the backend can write. First, so a stop/start
+    # below it never gets delayed by it, and so it still runs even when the
+    # spool folder itself does not exist yet (fresh install).
+    if _gc_due():
+        try:
+            cmd_gc(os.environ.get(GC_APPLY_ENV) == "1")
+        except Exception:  # noqa: BLE001 — gc must never block start/stop
+            pass
+
     spool = spool_root()
     if not spool.is_dir():
         return 0
@@ -1748,6 +2103,11 @@ def main(argv: list) -> int:
             return 0
         if cmd == "watch" and not args:
             return cmd_watch()
+        if cmd == "gc" and len(args) <= 1:
+            if args and args[0] != "--apply":
+                print(__doc__)
+                return 2
+            return cmd_gc(bool(args))
     except SpecInvalid as exc:
         print(f"spec_invalid {exc}")
         return 2
