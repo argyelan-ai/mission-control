@@ -3,20 +3,24 @@
 /**
  * ToolGroup — one tappable summary row standing in for a run of consecutive
  * tool/thinking events, the way the Claude app collapses an agent's working
- * stretch into "3 Befehle ausgeführt, 2 Tools verwendet ›".
+ * stretch into "3 commands executed, 2 tools used ›".
  *
  * Why: a transcript's tool rows outnumber its prose by an order of magnitude.
  * Rendering each one is truthful but unreadable — the reader loses the
  * conversation inside the machinery. The group keeps every row (tap to open,
- * `Ausführlich` opens them all) while making the DEFAULT reading experience
- * the conversation itself.
+ * "Verbose" opens them all) while making the DEFAULT reading experience the
+ * conversation itself.
  *
  * Grouping/boundary logic lives in ChatView (`buildTimelineItems`) — this
  * component only renders a run it is handed. `summarizeActivity` is exported
- * because the label is the part with the interesting edge cases (singular vs.
- * plural, thinking-only runs, error aggregation) and deserves its own tests.
+ * because the counting is the part with the interesting edge cases (thinking
+ * vs. tool runs, error aggregation) and deserves its own tests, independent
+ * of the i18n wording `toolGroupLabel` builds on top of it (review finding on
+ * PR #756 round 2: the label used to be hardcoded German text inside a
+ * component the rest of the English UI never mixes languages in).
  */
 import { useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import { AlertTriangle, Brain, ChevronRight, Terminal, Wrench } from "lucide-react";
 import { C, STATUS_TEXT } from "@/lib/colors";
 import type { ThinkingEvent, ToolEvent } from "@/lib/chatTypes";
@@ -25,14 +29,13 @@ import { ThinkingRow } from "./ThinkingRow";
 
 export type ActivityEvent = ToolEvent | ThinkingEvent;
 
-/** Tool names that read as "einen Befehl ausgeführt" rather than "ein Tool
- *  verwendet" — the distinction the Claude app's summary line makes. */
+/** Tool names that read as "a command executed" rather than "a tool used" —
+ *  the distinction the Claude app's summary line makes. */
 function isCommandTool(ev: ToolEvent): boolean {
   return ev.name === "Bash" || ev.name === "BashOutput";
 }
 
 export interface ActivitySummary {
-  label: string;
   /** True when any tool in the run failed — drives the warning icon. */
   hasError: boolean;
   /** How many tool calls (commands included) ended in an error. */
@@ -58,22 +61,31 @@ export function summarizeActivity(events: ActivityEvent[]): ActivitySummary {
     else tools += 1;
   }
 
+  return { hasError: failed > 0, failed, commands, tools, thoughts };
+}
+
+/** The counts above, as one sentence — in whatever language `t` resolves to.
+ * Kept apart from `summarizeActivity` so the counting stays a plain, i18n-free
+ * unit (the hook `useTranslations` lives in the component, not here — this
+ * function is not itself a hook). */
+export function toolGroupLabel(
+  summary: ActivitySummary,
+  t: (key: string, values?: Record<string, string | number | Date>) => string,
+): string {
   const parts: string[] = [];
-  if (commands > 0) parts.push(`${commands} ${commands === 1 ? "Befehl" : "Befehle"} ausgeführt`);
-  if (tools > 0) parts.push(`${tools} ${tools === 1 ? "Tool" : "Tools"} verwendet`);
-  // The failure used to be carried by colour alone: „35 Tools verwendet" with
-  // a red triangle read as „the whole run broke" on the operator's phone
+  if (summary.commands > 0) parts.push(t("toolGroup.commands", { count: summary.commands }));
+  if (summary.tools > 0) parts.push(t("toolGroup.tools", { count: summary.tools }));
+  // The failure used to be carried by colour alone: "35 tools used" with a
+  // red triangle read as "the whole run broke" on the operator's phone
   // (04.09.2026) — it was one `mc review` 400 out of 35, retried and fine.
   // Naming the number turns the alarm back into information.
-  if (failed > 0) parts.push(`${failed} fehlgeschlagen`);
-  if (thoughts > 0) parts.push(thoughts === 1 ? "nachgedacht" : `${thoughts}× nachgedacht`);
+  if (summary.failed > 0) parts.push(t("toolGroup.failed", { count: summary.failed }));
+  if (summary.thoughts > 0) parts.push(t("toolGroup.thoughts", { count: summary.thoughts }));
 
-  // Sentence-cases whatever landed first ("nachgedacht" → "Nachgedacht"; a
-  // leading digit is unaffected), so the label reads as one line either way.
+  // Sentence-cases whatever landed first ("thought" → "Thought"; a leading
+  // digit is unaffected), so the label reads as one line either way.
   const joined = parts.join(", ");
-  const label = joined.length > 0 ? joined.charAt(0).toUpperCase() + joined.slice(1) : "Aktivität";
-
-  return { label, hasError: failed > 0, failed, commands, tools, thoughts };
+  return joined.length > 0 ? joined.charAt(0).toUpperCase() + joined.slice(1) : t("toolGroup.activity");
 }
 
 function leadingIcon(summary: ActivitySummary) {
@@ -98,6 +110,7 @@ export function ToolGroup({
   events: ActivityEvent[];
   detailLevel?: "compact" | "normal" | "verbose";
 }) {
+  const t = useTranslations("sessions");
   const [expanded, setExpanded] = useState(detailLevel === "verbose");
   // Same re-sync as ToolRow/ThinkingRow (review finding I-3): useState reads
   // its initial value once, so a mounted group would never react to the
@@ -110,6 +123,7 @@ export function ToolGroup({
   if (events.length === 0) return null;
 
   const summary = summarizeActivity(events);
+  const label = toolGroupLabel(summary, t);
   const Icon = leadingIcon(summary);
 
   return (
@@ -140,11 +154,11 @@ export function ToolGroup({
           aria-hidden="true"
         />
         <span className="flex-1 min-w-0 truncate text-[13px] font-medium" style={{ color: C.textSecondary }}>
-          {summary.label}
+          {label}
           {/* The failure was carried by colour and an aria-hidden icon alone,
               which is nothing at all to a screen reader. This puts it into the
               button's accessible name without changing the visual line. */}
-          {summary.hasError && <span className="sr-only"> — Fehler enthalten</span>}
+          {summary.hasError && <span className="sr-only"> — {t("toolGroup.errorIncluded")}</span>}
         </span>
         <span
           className="shrink-0 font-mono text-[10px] font-medium tabular-nums"

@@ -67,9 +67,15 @@ describe("formatAgeRounded", () => {
     expect(formatAgeRounded("2026-10-04T09:10:00Z", "en", now)).toBe("3 h");
     expect(formatAgeRounded("2026-10-04T11:59:40Z", "en", now)).toBe("20 s");
   });
-  it("uses the locale's day unit, same as formatDuration", () => {
+  it("spells German days out in full, correctly declined for 'vor …' (K10, review finding on PR #756 round 3)", () => {
+    // K10's own fixed form is "seit 5 Tagen" — the "T" abbreviation
+    // `formatDuration` uses for a standalone duration ("3 T 2 h") read as a
+    // typo once embedded in "vor {age}". Dative plural "Tagen" for more
+    // than one day, dative singular "Tag" (no "-en") for exactly one.
     const now = new Date("2026-10-04T12:00:00Z");
-    expect(formatAgeRounded("2026-10-01T12:00:00Z", "de", now)).toBe("3 T");
+    expect(formatAgeRounded("2026-10-01T12:00:00Z", "de", now)).toBe("3 Tagen");
+    expect(formatAgeRounded("2026-10-03T12:00:00Z", "de", now)).toBe("1 Tag");
+    expect(formatAgeRounded("2026-10-01T12:00:00Z", "en", now)).toBe("3 d");
   });
   it("returns null without a parseable timestamp", () => {
     expect(formatAgeRounded(null)).toBeNull();

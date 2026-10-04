@@ -106,10 +106,12 @@ export function HeadChatFooter({
     const question = run.question?.trim() || transcriptFallbackQuestion?.trim() || null;
     return (
       <div className="flex flex-col gap-2 px-3 md:px-4 py-3 border-t shrink-0" style={{ borderColor: C.border }}>
+        {/* No "Needs you" label here (review finding on PR #756 round 3,
+            K3/K10: the header right above already says "{pair} · Needs
+            you" — repeating the same state word a second time here was the
+            one fact twice). The question block itself IS the needs-you
+            state; it needs no label of its own. */}
         <div className="flex flex-col gap-1">
-          <span className="text-xs font-medium" style={{ color: C.textMuted }}>
-            {t("state.needs_you")}
-          </span>
           {question ? (
             <p
               className={`${NEXT_TEXT} whitespace-pre-line line-clamp-6`}

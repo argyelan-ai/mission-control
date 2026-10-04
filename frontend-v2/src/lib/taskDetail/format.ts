@@ -71,8 +71,19 @@ export function formatAgeRounded(
   const s = secondsBetween(ts, null, now);
   if (s == null) return null;
   const total = Math.max(0, s);
-  const dayUnit = DAY_UNIT[locale] ?? DAY_UNIT.en;
-  if (total >= 86400) return `${Math.round(total / 86400)} ${dayUnit}`;
+  if (total >= 86400) {
+    const n = Math.round(total / 86400);
+    // This value only ever feeds `heads.time.ago` → "vor {age}" (German) —
+    // a dative context, where `formatDuration`'s compact "T" abbreviation
+    // (correct for a standalone duration like "3 T 2 h") reads as a typo
+    // next to a real word. K10's own example is "seit 5 Tagen"; the
+    // "vor …" sentence needs the same full, correctly declined word
+    // (review finding on PR #756 round 3: "vor 3 T" instead of "vor 3
+    // Tagen"). Dative singular of "Tag" has no "-en" suffix, unlike the
+    // plural — "vor 1 Tag", not "vor 1 Tagen".
+    if (locale === "de") return n === 1 ? "1 Tag" : `${n} Tagen`;
+    return `${n} ${DAY_UNIT.en}`;
+  }
   if (total >= 3600) return `${Math.round(total / 3600)} h`;
   if (total >= 60) return `${Math.round(total / 60)} min`;
   return `${total} s`;

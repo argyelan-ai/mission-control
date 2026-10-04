@@ -10,7 +10,7 @@
  * prototype's "A fertig" image — the chat header above already carries
  * it).
  */
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronDown, Copy, ExternalLink } from "lucide-react";
@@ -19,17 +19,67 @@ import { notify } from "@/lib/notify";
 import { C } from "@/lib/colors";
 import { prNumberFromUrl } from "@/lib/heads";
 
-function Fact({ label, value }: { label: string; value: string }) {
+// text-xs (12px) at leading-snug (1.375) ≈ 16.5px/line, rounded up — two
+// lines is the clamp the review asked for (see Fact below).
+const FACT_CLAMP_LINES = 2;
+const FACT_LINE_HEIGHT_PX = 17;
+const FACT_CLAMP_MAX_PX = FACT_CLAMP_LINES * FACT_LINE_HEIGHT_PX;
+
+function Fact({ label, value, t }: { label: string; value: string; t: ReturnType<typeof useTranslations> }) {
+  // Review finding on PR #756 round 3: a right-aligned paragraph next to a
+  // fixed label (the round-2 fix for DESIGN.md K3's "nothing cut off") still
+  // printed a real ~500-character test fact as ten unreadable lines on the
+  // phone, backticks and all. Stacked instead: the short label on its own
+  // line, the value left-aligned beneath it, clamped to two lines with an
+  // expand control when it genuinely overflows — never a silent, permanent
+  // cut (K3 bans "…" outside the title; this recovers the rest on tap,
+  // which plain `truncate` never did).
+  const [expanded, setExpanded] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+  const valueRef = useRef<HTMLParagraphElement>(null);
+
+  useEffect(() => {
+    const el = valueRef.current;
+    if (!el) return;
+    const measure = () => {
+      // jsdom (and an off-screen `display: none` pane) reports 0 for every
+      // layout metric — that must read as "nothing hidden", not "clamp it".
+      if (el.scrollHeight === 0) return;
+      setOverflows(el.scrollHeight > FACT_CLAMP_MAX_PX + FACT_LINE_HEIGHT_PX / 2);
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [value]);
+
+  const clamped = overflows && !expanded;
+
   return (
-    // Review finding on PR #756 (DESIGN.md K3, "nur beim Titel [kürzen]"):
-    // the VALUE used to `truncate` (cut mid-word at 393px — a test command
-    // or a run-record result line is exactly the kind of fact that does not
-    // fit one line) while the LABEL wrapped onto two instead. Flipped: the
-    // label is the short, fixed part (`shrink-0`, never wraps), the value
-    // is the one allowed to grow and wrap onto more than one line.
-    <div className="flex items-start justify-between gap-3 py-1 text-xs">
-      <span className="shrink-0 whitespace-nowrap" style={{ color: C.textMuted }}>{label}</span>
-      <span className="text-right min-w-0 break-words" style={{ color: C.textSecondary }}>{value}</span>
+    <div className="py-1 text-xs">
+      <span className="block" style={{ color: C.textMuted }}>{label}</span>
+      <p
+        ref={valueRef}
+        className={`mt-1 break-words${clamped ? " line-clamp-2" : ""}`}
+        style={{ color: C.textSecondary }}
+      >
+        {value}
+      </p>
+      {overflows && (
+        // On the spacing/type scale this component already uses everywhere
+        // else, not an off-grid 2px gap or an arbitrary 11px size — the
+        // design ratchet counts either kind of new free value as a regression.
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+          className="mt-1 min-h-touch text-xs font-medium cursor-pointer"
+          style={{ color: C.textMuted }}
+        >
+          {expanded ? t("summary.collapse") : t("summary.expand")}
+        </button>
+      )}
     </div>
   );
 }
@@ -75,19 +125,24 @@ export function HeadRunRecordCard({ runId }: { runId: string }) {
       )}
 
       <div className="pt-1">
-        {s.tests.failed_before && <Fact label={t("summary.testsRedBefore")} value={s.tests.failed_before} />}
-        {s.tests.passed_after && <Fact label={t("summary.testsGreenAfter")} value={s.tests.passed_after} />}
-        {yn(s.sabotage) && <Fact label={t("summary.sabotage")} value={yn(s.sabotage) as string} />}
-        {s.kz_ok != null && <Fact label={t("summary.kz")} value={yn(s.kz_ok) as string} />}
-        {reviewLabel && <Fact label={t("summary.review")} value={reviewLabel} />}
-        {s.bypass != null && <Fact label={t("summary.bypass")} value={String(s.bypass)} />}
-        {s.operator_minutes != null && <Fact label={t("summary.operatorMinutes")} value={String(s.operator_minutes)} />}
-        {s.helpers != null && <Fact label={t("summary.helpers")} value={String(s.helpers)} />}
+        {s.tests.failed_before && <Fact label={t("summary.testsRedBefore")} value={s.tests.failed_before} t={t} />}
+        {s.tests.passed_after && <Fact label={t("summary.testsGreenAfter")} value={s.tests.passed_after} t={t} />}
+        {yn(s.sabotage) && <Fact label={t("summary.sabotage")} value={yn(s.sabotage) as string} t={t} />}
+        {s.kz_ok != null && <Fact label={t("summary.kz")} value={yn(s.kz_ok) as string} t={t} />}
+        {reviewLabel && <Fact label={t("summary.review")} value={reviewLabel} t={t} />}
+        {s.bypass != null && <Fact label={t("summary.bypass")} value={String(s.bypass)} t={t} />}
+        {s.operator_minutes != null && <Fact label={t("summary.operatorMinutes")} value={String(s.operator_minutes)} t={t} />}
+        {s.helpers != null && <Fact label={t("summary.helpers")} value={String(s.helpers)} t={t} />}
       </div>
 
       {s.branch && (
-        <div className="flex items-center gap-2 pt-1">
-          <span className="text-xs font-mono truncate min-w-0" style={{ color: C.textMuted }}>
+        // DESIGN.md K3 (review finding on PR #756 round 3): "…" is only for
+        // the title — a `mc-head/<date>-<slug>` branch cut mid-word hid the
+        // very thing the copy button exists to let the operator paste
+        // whole. `break-all` instead of `truncate`; `items-start` keeps the
+        // copy button pinned to the first line once the name wraps.
+        <div className="flex items-start gap-2 pt-1">
+          <span className="text-xs font-mono break-all min-w-0" style={{ color: C.textMuted }}>
             {s.branch}
           </span>
           <button
@@ -111,12 +166,16 @@ export function HeadRunRecordCard({ runId }: { runId: string }) {
       )}
 
       {s.pr_url && (
+        // DESIGN.md K11 (review finding on PR #756 round 3): a `text-xs`
+        // link with no padding of its own sits well under the 44px touch
+        // target — `min-h-touch` plus centering the row on it, not just the
+        // glyph, is what actually grows the tappable area.
         <a
           href={s.pr_url}
           target="_blank"
           rel="noopener noreferrer"
           data-testid="head-record-open-pr"
-          className="inline-flex items-center gap-2 text-xs font-medium"
+          className="inline-flex min-h-touch items-center gap-2 text-xs font-medium"
           style={{ color: C.accent }}
         >
           {prNumber != null ? t("card.openPr", { number: prNumber }) : t("card.openPrNoNumber")}
@@ -129,7 +188,7 @@ export function HeadRunRecordCard({ runId }: { runId: string }) {
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         data-testid="head-record-open-full"
-        className="flex items-center gap-1 pt-1 text-xs cursor-pointer"
+        className="flex min-h-touch items-center gap-1 text-xs cursor-pointer"
         style={{ color: C.textMuted }}
       >
         {t("summary.openFull")}

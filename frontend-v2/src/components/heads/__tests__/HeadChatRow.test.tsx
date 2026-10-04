@@ -16,7 +16,13 @@ describe("HeadChatRow", () => {
     render(<HeadChatRow run={mkRun({ state: "needs_you", harness: "omp", model: "GLM-5.3-Flash-EXL3" })} selected={false} onSelect={vi.fn()} />);
     const row = screen.getByTestId("head-chat-row");
     expect(row).toHaveTextContent("omp × GLM-5.3");
-    expect(row).toHaveTextContent("Needs you");
+    // Lowercase mid-line (review finding on PR #756 round 3, K10): the
+    // running row's own "running for …" is lowercase, so the state word
+    // matches it here instead of standing out as "Needs you" — the i18n
+    // value itself stays sentence case for the surfaces that show it
+    // standalone (HeadStateCard's badge etc.).
+    expect(row).toHaveTextContent("needs you");
+    expect(row).not.toHaveTextContent("Needs you");
     // One "·" between pair and state — not a second one repeating/
     // qualifying the same "needs you" fact (the actual anhang.md H finding).
     expect(row.textContent?.split("·").length).toBe(2);
@@ -55,7 +61,8 @@ describe("HeadChatRow", () => {
     );
     const row = screen.getByTestId("head-chat-row");
     expect(row).toHaveTextContent("omp × GLM-5.3");
-    expect(row).toHaveTextContent("Passed");
+    expect(row).toHaveTextContent("passed");
+    expect(row).not.toHaveTextContent("Passed");
     expect(row).toHaveTextContent("ago");
     vi.restoreAllMocks();
   });

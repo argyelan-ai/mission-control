@@ -194,6 +194,20 @@ export function headStateKey(state: HeadState): string {
   return `state.${state}`;
 }
 
+/** Lowercases a resolved state word's first letter, for embedding mid-
+ *  sentence after a "·" separator in `HeadChatRow`/`HeadChatHeader`'s
+ *  context line. `heads.state.*` is sentence case ("Passed", "Needs you",
+ *  German "Bestanden", "Braucht dich") because other surfaces show the SAME
+ *  word standalone, as a badge (`HeadStateCard`, `HeadRunsList`, the
+ *  night-shift list) — correct there. Embedded next to the running row's
+ *  own lowercase phrase ("läuft seit …"/"running for …"), the sentence-case
+ *  word read as inconsistently capitalised (review finding on PR #756
+ *  round 3: "· Bestanden ·", "· Braucht dich"). Only the mid-line USE
+ *  lowercases; the i18n value and every other reader of it are untouched. */
+export function midLineStateWord(word: string): string {
+  return word.length > 0 ? word.charAt(0).toLowerCase() + word.slice(1) : word;
+}
+
 /** One sentence for why a run ended as failed/stopped — `heads.failReason.<code>`. */
 const FAIL_REASONS = new Set([
   "stopped",

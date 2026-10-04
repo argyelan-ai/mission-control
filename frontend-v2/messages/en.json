@@ -1005,7 +1005,15 @@
     "effortRejectedReason": "Effort rejected: {reason}",
     "effortRejected": "Effort change rejected",
     "effortUnconfirmed": "Effort change not confirmed — check the terminal",
-    "effortFailed": "Effort change failed"
+    "effortFailed": "Effort change failed",
+    "toolGroup": {
+      "commands": "{count, plural, one {# command executed} other {# commands executed}}",
+      "tools": "{count, plural, one {# tool used} other {# tools used}}",
+      "failed": "{count} failed",
+      "thoughts": "{count, plural, one {thought} other {#× thought}}",
+      "activity": "Activity",
+      "errorIncluded": "error included"
+    }
   },
   "shell": {
     "searchPlaceholder": "Search or command...",
@@ -3564,7 +3572,9 @@
       "backToChats": "Back to chats",
       "noTranscriptTitle": "No live transcript for this harness",
       "noTranscriptHint": "Showing the last log lines instead.",
-      "logEmpty": "No output yet.",
+      "waitingFirstLines": "Waiting for the first transcript lines …",
+      "noTranscriptKept": "No transcript was kept for this run.",
+      "transcriptTooLarge": "Transcript too large to show.",
       "resolving": "Loading this run…",
       "notFoundTitle": "This run could not be found.",
       "notFoundHint": "It may have been cleaned up, or the link is old.",
@@ -3590,7 +3600,9 @@
       "operatorMinutes": "Your minutes",
       "helpers": "Helpers",
       "branch": "Branch",
-      "failed": "could not be loaded"
+      "failed": "could not be loaded",
+      "expand": "Show more",
+      "collapse": "Show less"
     }
   },
   "nightShift": {

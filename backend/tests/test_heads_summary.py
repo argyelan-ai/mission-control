@@ -110,17 +110,72 @@ def test_rich_record_every_field_and_masked_against_this_runs_head_env():
     assert out["helpers"] == 2
     assert out["branch"] == "mc-head/rich"
     assert out["pr_url"] == "https://github.com/o/r/pull/9"
-    # kz_ok: a real context brief with no "unavailable" line present → True.
-    assert out["kz_ok"] is True
+    # RICH_TEMPLATE's Evidence section has no "kz check:" bullet at all (it
+    # only carries "Reviewer"/"Bypass") — extracted, never guessed: None,
+    # not a guess lifted from the unrelated Context brief (review finding on
+    # PR #756 round 2 — see test_kz_check_bullet_absent_is_none_never_guessed
+    # below for the exact scenario this used to get wrong).
+    assert out["kz_ok"] is None
 
 
-def test_kz_brief_unavailable_line_makes_kz_ok_false():
+def test_kz_brief_unavailable_context_line_never_sets_kz_ok():
+    """"kz brief unavailable: …" lives in the Context-brief section and
+    answers a different question (was step 0's research brief available)
+    than kz_ok (did the push-time kz check actually pass). Review finding on
+    PR #756 round 1 + round 2: the old parser read kz_ok off this line (or
+    off the mere presence/absence of that line) whenever Evidence had no own
+    "kz check:" bullet — so a run whose Context brief happened to mention
+    this phrase, or happened not to, silently got a kz_ok guess instead of
+    None. With no "kz check:" bullet in Evidence, kz_ok must stay None
+    regardless of what the Context brief says."""
     text = RICH_TEMPLATE.format(secret="x" * 20).replace(
         "- Already exists: nothing found — searched the router and the lib for a summary endpoint",
         "kz brief unavailable: tool not installed on this box",
     )
     run = _fake_run(folder=FIXTURES / "claude-run", text=text)
-    assert summary.build_summary(run)["kz_ok"] is False
+    assert summary.build_summary(run)["kz_ok"] is None
+
+
+def test_kz_check_bullet_absent_is_none_never_guessed():
+    """Review finding on PR #756 round 2, reproduced live: real run
+    6bcf49ea (Status running, Evidence section empty — the run never reached
+    step 6) gave kz_ok=True under the old Context-brief fallback, and so did
+    both PR-1 fixtures and a Status: failed record, since none of them carry
+    a "kz brief unavailable" line either. A real, filled in-repo-template
+    record (the same fixture the parser's own drift/shape tests use) with
+    its "kz check:" bullet removed and Status changed to failed must give
+    kz_ok None — a run that never reached (or never finished) step 6 has no
+    kz check result to report, whatever its Context brief says."""
+    text = (FIXTURES / "claude-run" / "run-record-filled.md").read_text()
+    text = text.replace("Status: passed", "Status: failed")
+    text = text.replace(
+        '- kz check: `kz check --pr-body-file .pr-body.md` → first run 2 new (missing PR sections), after completing the body → "kz check: 0 new, 4 known, 0 fixed, 0 skipped -> OK"; push hook ran kz check again → OK.\n',
+        "",
+    )
+    assert "kz check" not in text.split("## Evidence", 1)[1].split("## Questions", 1)[0]
+    run = _fake_run(folder=FIXTURES / "claude-run", text=text)
+    out = summary.build_summary(run)
+    assert out["status"] == "failed"
+    assert out["kz_ok"] is None
+
+
+def test_raw_template_placeholders_give_sabotage_and_review_none():
+    """The unfilled "Run record template" block in head-AGENTS.md itself —
+    ``- Sabotage check: <what was broken> → red · restored → green`` and
+    ``- Review: <fresh helper PASSED/FAILED | self-review> — …`` — must read
+    as None, not as a real answer (review finding on PR #756 round 3: these
+    exact placeholders used to parse as sabotage=True and review='helper')."""
+    text = TEMPLATE_PATH.read_text()
+    m = re.search(r"## Run record template\n.*?```markdown\n(.*?)\n```", text, re.DOTALL)
+    assert m, "head-AGENTS.md: 'Run record template' markdown code block not found"
+    block = _replace_once(m.group(1), "Status: <running | passed | failed>", "Status: passed")
+    run = _fake_run(folder=FIXTURES / "claude-run", text=block)
+    out = summary.build_summary(run)
+    assert out["sabotage"] is None
+    assert out["review"] is None
+    assert out["kz_ok"] is None
+    assert out["result_line"] is None
+    assert out["tests"] == {"failed_before": None, "passed_after": None}
 
 
 def test_review_self_and_negative_sabotage_bullet():
@@ -131,6 +186,21 @@ def test_review_self_and_negative_sabotage_bullet():
     out = summary.build_summary(run)
     assert out["review"] == "self"
     assert out["sabotage"] is False
+
+
+def test_sabotage_negative_with_explanation_after_dash_is_still_false():
+    """"n/a — docs-only change" must read as sabotage=False: the bullet's own
+    first clause (before the template's " — " separator) is the exact word
+    "n/a". Comparing the WHOLE value against `_NEGATIVE` (the old behaviour)
+    never matched this — only a bare "none"/"n/a" with nothing after it did —
+    so any run that explained its "n/a" (which real runs do) silently read
+    as sabotage=True (review finding on PR #756 round 3)."""
+    text = RICH_TEMPLATE.format(secret="x" * 20).replace(
+        "Sabotage probe: dropped the mask call → the field leaked xxxxxxxxxxxxxxxxxxxx · restored → green",
+        "Sabotage probe: n/a — docs-only change",
+    )
+    run = _fake_run(folder=FIXTURES / "claude-run", text=text)
+    assert summary.build_summary(run)["sabotage"] is False
 
 
 # ── 3 — a broken record (frontmatter + heading only, no body at all) ─────────
@@ -202,18 +272,19 @@ def test_real_claude_run_record_parses_the_in_repo_template_labels():
     out = summary.build_summary(run)
 
     assert out["status"] == "passed"
-    # "Failing test before" (not the old "Red test before") must parse, and
-    # split at the FIRST arrow (not the last — the old behaviour would have
-    # cut this down to just the ModuleNotFoundError text).
-    assert out["tests"]["failed_before"] is not None
-    assert '"11 failed"' in out["tests"]["failed_before"]
-    assert "ModuleNotFoundError" in out["tests"]["failed_before"]
+    # "Failing test before" (not the old "Red test before") must parse, split
+    # at the FIRST arrow (not the last — the old behaviour would have cut
+    # this down to just the ModuleNotFoundError text), and — review finding
+    # on PR #756 round 3 — SHORTENED to its key result: the real bullet's
+    # "(ModuleNotFoundError: …)" parenthetical aside is cut, not shown; a
+    # ~500-character "Green after" explanation, backticks and all, is exactly
+    # what made the real card unreadable on the phone.
+    assert out["tests"]["failed_before"] == '"11 failed"'
     # "Green after" carries TWO arrows on this real line — splitting at the
-    # first one keeps "11 passed" (the actual result), not just the trailing
-    # "24 failed, 9765 passed, …" aside the old last-arrow split produced.
-    assert out["tests"]["passed_after"] is not None
-    assert out["tests"]["passed_after"].startswith('"11 passed"')
-    assert "24 failed, 9765 passed" in out["tests"]["passed_after"]
+    # first one keeps "11 passed" (the actual result); the semicolon right
+    # after it then cuts the ~500-character "full suite … 24 failed, 9765
+    # passed …" explanation, which is no longer part of the card's fact.
+    assert out["tests"]["passed_after"] == '"11 passed"'
     assert out["sabotage"] is True  # "Sabotage check:" (not "Sabotage probe:")
     assert out["kz_ok"] is True  # Evidence "kz check: … -> OK", not the Context-brief heuristic
     assert out["review"] == "self"  # "Review: self, no helper available …" — "self" wins over the later word "helper"
@@ -221,6 +292,25 @@ def test_real_claude_run_record_parses_the_in_repo_template_labels():
     assert out["helpers"] == 0  # plain "- Helpers: 0" bullet, not the unrelated "- Quota: … no helpers" line above it
     assert out["operator_minutes"] == 0  # "- Operator minutes (estimate): 0 (unattended)"
     assert out["branch"] == "mc-head/2026-10-01-fixture-claude-run-1111"
+
+
+def test_no_backtick_survives_into_any_rendered_fact():
+    """Review finding on PR #756 round 3, reproduced live: this real fixture's
+    ``## Result`` bullet names `backend/app/services/pr_merge_monitor.py`,
+    `pr_url`, `` `changed_by="system"` `` (a DOUBLED backtick, escaping the
+    inner quote) and more, all as markdown inline code — the card has no
+    markdown renderer, so every one of those showed up as literal backtick
+    characters. None of the three prose fields this module ever emits may
+    carry a backtick."""
+    text = (FIXTURES / "claude-run" / "run-record-filled.md").read_text()
+    assert "`" in text  # the sabotage: the raw source really is backtick-laden
+    run = _fake_run(folder=FIXTURES / "claude-run", text=text, spec={"branch": "mc-head/2026-10-01-fixture-claude-run-1111"})
+    out = summary.build_summary(run)
+
+    assert out["result_line"] and "pr_merge_monitor.py" in out["result_line"]  # content kept
+    assert "`" not in out["result_line"]
+    assert "`" not in out["tests"]["failed_before"]
+    assert "`" not in out["tests"]["passed_after"]
 
 
 def test_real_omp_run_record_parses_the_in_repo_template_labels():

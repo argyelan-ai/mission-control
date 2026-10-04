@@ -5,12 +5,24 @@
  * carries it — anhang.md H's review finding on the prototype).
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { HeadRunRecordCard } from "../HeadRunRecordCard";
 import type { HeadSummary } from "@/lib/heads";
+
+/** jsdom reports 0 for every layout metric, so the 2-line clamp can never see
+ *  an overflow on its own (same trap/fix as ChatMessage.test.tsx's own
+ *  `stubScrollHeight` for the 10-line user-bubble clamp). */
+function stubScrollHeight(px: number) {
+  const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollHeight");
+  Object.defineProperty(HTMLElement.prototype, "scrollHeight", { configurable: true, get: () => px });
+  return () => {
+    if (original) Object.defineProperty(HTMLElement.prototype, "scrollHeight", original);
+    else delete (HTMLElement.prototype as unknown as Record<string, unknown>).scrollHeight;
+  };
+}
 
 function renderCard() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -84,7 +96,7 @@ describe("HeadRunRecordCard", () => {
     expect(screen.queryByTestId("head-run-record-card")).not.toBeInTheDocument();
   });
 
-  it("fact values wrap instead of truncating, and the label never does (DESIGN.md K3)", async () => {
+  it("fact values wrap instead of truncating, left-aligned below their own label (DESIGN.md K3)", async () => {
     vi.spyOn(api.heads, "summary").mockResolvedValue({
       ...FULL,
       tests: { failed_before: "ModuleNotFoundError: app.services.heads.transcript — no module named transcript_adapters", passed_after: null },
@@ -93,9 +105,56 @@ describe("HeadRunRecordCard", () => {
     const value = await screen.findByText(/ModuleNotFoundError/);
     expect(value.className).toMatch(/break-words/);
     expect(value.className).not.toMatch(/\btruncate\b/);
+    // Review finding on PR #756 round 3: a right-aligned paragraph next to a
+    // fixed label used to be the layout; stacked now — label above, value
+    // below, both left-aligned (no `text-right`/`justify-between` split).
+    expect(value.className).not.toMatch(/text-right/);
     const label = screen.getByText("Red before");
-    expect(label.className).toMatch(/whitespace-nowrap/);
-    expect(label.className).toMatch(/shrink-0/);
+    expect(label.className).not.toMatch(/whitespace-nowrap|shrink-0/);
+  });
+
+  it("clamps a genuinely overflowing fact to two lines with an expand control, never silently", async () => {
+    vi.spyOn(api.heads, "summary").mockResolvedValue({
+      ...FULL,
+      tests: { failed_before: "a very long explanation that really does not fit two lines on a phone screen at all", passed_after: null },
+    });
+    const restoreScrollHeight = stubScrollHeight(80); // > the 2-line clamp max
+    try {
+      renderCard();
+      const value = await screen.findByText(/a very long explanation/);
+      expect(value.className).toMatch(/line-clamp-2/);
+      // Scoped to this Fact's own row: `stubScrollHeight` makes every ref in
+      // the card report the same height, so every Fact clamps in this test —
+      // the point here is this ONE row's toggle, not the others.
+      const row = within(value.parentElement as HTMLElement);
+      const toggle = row.getByRole("button", { name: "Show more" });
+      await userEvent.click(toggle);
+      expect(value.className).not.toMatch(/line-clamp-2/);
+      expect(row.getByRole("button", { name: "Show less" })).toBeInTheDocument();
+    } finally {
+      restoreScrollHeight();
+    }
+  });
+
+  it("never clamps a fact that actually fits — no expand control appears", async () => {
+    vi.spyOn(api.heads, "summary").mockResolvedValue(FULL);
+    renderCard();
+    await screen.findByText("ModuleNotFoundError");
+    expect(screen.queryByRole("button", { name: "Show more" })).not.toBeInTheDocument();
+  });
+
+  it("strips markdown backticks from the result line and test facts (served already-stripped)", async () => {
+    // summary.py now strips backticks server-side (review finding on PR #756
+    // round 3) — this guards the card against ever re-introducing raw
+    // markdown rendering for a value the API already hands over as plain
+    // text, by asserting the card prints exactly what it is given, verbatim.
+    vi.spyOn(api.heads, "summary").mockResolvedValue({
+      ...FULL,
+      result_line: "New background service backend/app/services/pr_merge_monitor.py wired in.",
+    });
+    renderCard();
+    const result = await screen.findByTestId("head-record-result");
+    expect(result.textContent).not.toMatch(/`/);
   });
 
   it("the copy-branch button meets the 44px touch target (DESIGN.md K11)", async () => {
@@ -104,6 +163,22 @@ describe("HeadRunRecordCard", () => {
     const button = await screen.findByTestId("head-record-copy-branch");
     expect(button.className).toMatch(/min-w-touch/);
     expect(button.className).toMatch(/min-h-touch/);
+  });
+
+  it("the branch name wraps instead of truncating (DESIGN.md K3)", async () => {
+    vi.spyOn(api.heads, "summary").mockResolvedValue({ ...FULL, branch: "mc-head/2026-10-04-a-very-long-descriptive-branch-slug-for-this-fixture" });
+    renderCard();
+    const branch = await screen.findByText(/mc-head\/2026-10-04/);
+    expect(branch.className).toMatch(/break-all/);
+    expect(branch.className).not.toMatch(/\btruncate\b/);
+  });
+
+  it("'Open the full run record' and 'Open PR' meet the 44px touch target (DESIGN.md K11)", async () => {
+    vi.spyOn(api.heads, "summary").mockResolvedValue(FULL);
+    renderCard();
+    const openPr = await screen.findByTestId("head-record-open-pr");
+    expect(openPr.className).toMatch(/min-h-touch/);
+    expect(screen.getByTestId("head-record-open-full").className).toMatch(/min-h-touch/);
   });
 
   it("'Open the full run record' lazily fetches the raw markdown", async () => {

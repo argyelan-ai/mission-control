@@ -26,6 +26,16 @@ router. ``branch``/``pr_url``/``status``/``review``/the three counters never
 touch free text; they are either read straight off ``HeadRun``/its spec
 (already-trusted fields the rest of the API returns unmasked today) or a
 single word/number lifted out of a fixed template phrase.
+
+The same three prose fields also go through ``_strip_backticks``: the card
+has no markdown renderer, so a run record's own `` `inline code` `` would
+otherwise show its literal backtick characters as plain text (review finding
+on PR #756 round 3). The two ``tests`` strings additionally go through
+``_shorten_to_key_result``, which cuts a bullet's remainder at its first
+aside marker (``;``, `` — ``, ``(``) — a real "Green after" bullet's full
+explanation is ~500 characters, unreadable as a one-line fact on the phone;
+``result_line`` is left at its full sentence length (the template already
+asks for "1–2 sentences" there), only its backticks are removed.
 """
 from __future__ import annotations
 
@@ -60,19 +70,37 @@ def _sections(text: str) -> dict[str, str]:
     return out
 
 
+def _is_placeholder(value: str) -> bool:
+    """``<…>`` — the template's own unfilled-bullet shape (``- Review:
+    <fresh helper PASSED/FAILED | self-review>``, ``- Sabotage check: <what
+    was broken> → red · restored → green``). A run record that still carries
+    this text never actually filled the bullet in, so it must read exactly
+    like the bullet being absent (``None``), never like a real answer
+    (review finding on PR #756 round 3: an unfilled ``Sabotage check``
+    placeholder parsed as ``sabotage=True``, an unfilled ``Review``
+    placeholder as ``review='helper'``)."""
+    return value.startswith("<")
+
+
 def _bullet(section: str, label: str) -> str | None:
     """The remainder of a ``- <Label>: <value>`` bullet (case-insensitive
-    label), or ``None`` when that bullet is not there at all. Matches the
-    exact "``- Field: value``" shape every template bullet uses — a record
-    that instead free-writes the result as plain prose (no leading ``- X:``)
-    is a record this function correctly does not understand, rather than one
-    it mis-reads. Anchored at the START of the bullet (``^-\\s*Label\\s*:``),
+    label), or ``None`` when that bullet is not there at all, or is still the
+    template's own unfilled ``<…>`` placeholder. Matches the exact
+    "``- Field: value``" shape every template bullet uses — a record that
+    instead free-writes the result as plain prose (no leading ``- X:``) is a
+    record this function correctly does not understand, rather than one it
+    mis-reads. Anchored at the START of the bullet (``^-\\s*Label\\s*:``),
     never a bare "contains" search — a label that is merely MENTIONED inside
     an earlier, unrelated bullet's free text (e.g. "``- Quota: … no
     helpers``" ahead of the real "``- Helpers: 2``" bullet) must never be
     mistaken for the labelled bullet itself (review finding on PR #756)."""
     m = re.search(rf"(?mi)^-[ \t]*{re.escape(label)}[ \t]*:[ \t]*(.+)$", section)
-    return m.group(1).strip() or None if m else None
+    if not m:
+        return None
+    value = m.group(1).strip()
+    if not value or _is_placeholder(value):
+        return None
+    return value
 
 
 def _bullet_any(section: str, *labels: str) -> str | None:
@@ -91,6 +119,38 @@ def _bullet_any(section: str, *labels: str) -> str | None:
     return None
 
 
+def _strip_backticks(value: str) -> str:
+    """Markdown inline-code backticks (`` `x` ``, or doubled ```` ``x`` ````
+    when ``x`` itself contains a backtick) read as literal backtick
+    characters once a value is lifted out of the record and printed as a
+    plain-text fact — the card has no markdown renderer for these one-line
+    facts (review finding on PR #756 round 3: a real card showed
+    "`` `backend/app/services/pr_merge_monitor.py` ``" and
+    "```` ``changed_by=\"system\"`` ````" verbatim, backticks and all).
+    Removing every backtick is enough: none of this module's fields depend
+    on the backtick itself to stay readable once unquoted."""
+    return value.replace("`", "")
+
+
+#: After the arrow, a real run's bullet often keeps going — a parenthetical
+#: aside, a second clause after an em dash, a second sentence after a
+#: semicolon (every one of these appears in a real, scrubbed run record's
+#: "Green after" bullet). None of that is the "key result" a one-line fact
+#: card should show; left in, it printed as ~500 characters across 10 lines
+#: on the phone (review finding on PR #756 round 3). Cut at the FIRST of
+#: these three markers the bullet actually uses.
+_ASIDE_MARKERS = (";", "—", "(")
+
+
+def _shorten_to_key_result(value: str) -> str | None:
+    cut = len(value)
+    for marker in _ASIDE_MARKERS:
+        idx = value.find(marker)
+        if idx != -1:
+            cut = min(cut, idx)
+    return _strip_backticks(value[:cut]).strip() or None
+
+
 def _after_arrow(value: str | None) -> str | None:
     """"`<command>` → <key line>" → just the key line, split at the FIRST
     arrow (not the last): a real run's bullet often carries more than one
@@ -100,10 +160,15 @@ def _after_arrow(value: str | None) -> str | None:
     only a trailing aside (review finding on PR #756, reproduced on a real
     "Green after" bullet). A bullet with no arrow at all is returned whole
     (some runs write the result directly, no arrow needed) rather than
-    discarded."""
+    discarded. The key line itself is then shortened to its first clause and
+    stripped of backticks (``_shorten_to_key_result``) — the full remainder
+    of a real bullet is often a run-on explanation, not the result itself."""
     if value is None:
         return None
-    return value.split("→", 1)[-1].strip() or None
+    rest = value.split("→", 1)[-1].strip()
+    if not rest or _is_placeholder(rest):
+        return None
+    return _shorten_to_key_result(rest)
 
 
 #: Bullet values the template itself uses for "this step was skipped" —
@@ -113,10 +178,19 @@ _NEGATIVE = {"none", "n/a", "na", "not performed", "not done", "skipped", "no"}
 
 
 def _sabotage(section: str) -> bool | None:
+    """``True`` unless the bullet's own first word/clause (before a
+    `` — ``, the template's own separator between the verdict and an
+    explanation, e.g. ``"n/a — docs-only change"``) IS one of ``_NEGATIVE``'s
+    exact words. Matching the whole value against that set (the old
+    behaviour) only ever caught a bare ``"none"``/``"n/a"`` — any real run
+    that explained itself after a dash, which most do, fell through to
+    "not in the set" → ``True`` even though the run explicitly said no
+    sabotage probe ran (review finding on PR #756 round 3)."""
     value = _bullet_any(section, "Sabotage check", "Sabotage probe")
     if value is None:
         return None
-    return value.strip().lower() not in _NEGATIVE
+    head = value.split(" — ", 1)[0].strip().lower()
+    return head not in _NEGATIVE
 
 
 def _review(section: str) -> str | None:
@@ -190,16 +264,23 @@ def _first_int(section: str, *patterns: re.Pattern[str]) -> int | None:
     return None
 
 
-def _kz_ok(evidence: str, sections: dict[str, str]) -> bool | None:
+def _kz_ok(evidence: str) -> bool | None:
     """The in-repo template's own ``- kz check: …`` bullet (Evidence
-    section) is the real signal — "a pasted output, last line e.g. 'OK (4
+    section) is the ONLY signal — "a pasted output, last line e.g. 'OK (4
     skipped)' | red lines + 'Known limits' in the PR | no .kohaerenz.yaml |
-    unavailable: …" (`head-AGENTS.md`'s own template line). The card used to
-    read this from the unrelated "kz brief: …" line in the Context brief
-    instead (a review finding on PR #756: that line answers "was step 0's
-    research brief available", not "did the push-time kz check pass" — a
-    run whose Context brief had a real brief but whose later kz check
-    actually failed still showed "kz check: Yes").
+    unavailable: …" (`head-AGENTS.md`'s own template line). No bullet at all
+    → ``None``, full stop.
+
+    This used to fall back to the unrelated "kz brief: …" line in the
+    Context brief when Evidence had no ``kz check:`` bullet (review finding
+    on PR #756 round 1: that line answers "was step 0's research brief
+    available", not "did the push-time kz check pass"). Round 2 narrowed the
+    fallback instead of removing it, which still guessed ``True`` for every
+    run that never reached step 6 at all — aborted, failed, question-open or
+    still running, as long as a Context brief existed without the words "kz
+    brief unavailable" (review finding on PR #756 round 2, reproduced live on
+    a real ``running`` run with an empty Evidence section). Extracted, never
+    guessed: a record that never recorded a kz check has nothing to report.
 
     ``unavailable``/``no .kohaerenz.yaml`` → ``None`` (nothing to call ok or
     not). Otherwise OK only when the pasted output actually SAYS so (an
@@ -208,20 +289,12 @@ def _kz_ok(evidence: str, sections: dict[str, str]) -> bool | None:
     text must read as failed, not silently "Yes" (the exact PR #756
     finding)."""
     value = _bullet(evidence, "kz check")
-    if value is not None:
-        v = value.strip().lower()
-        if "unavailable" in v or "no .kohaerenz.yaml" in v or "no kohaerenz.yaml" in v:
-            return None
-        return bool(re.search(r"(?:^|[\s(>-])ok\b", v)) and "not ok" not in v
-
-    # Older personal-skill template never had a dedicated kz-check bullet —
-    # fall back to the pre-existing heuristic (a Context-brief section
-    # present, without its own "kz brief unavailable: …" line) so a record
-    # written before this field existed does not regress to `None`.
-    for name, body in sections.items():
-        if "context brief" in name:
-            return "kz brief unavailable" not in body.lower()
-    return None
+    if value is None:
+        return None
+    v = value.strip().lower()
+    if "unavailable" in v or "no .kohaerenz.yaml" in v or "no kohaerenz.yaml" in v:
+        return None
+    return bool(re.search(r"(?:^|[\s(>-])ok\b", v)) and "not ok" not in v
 
 
 def build_summary(run: Any) -> dict[str, Any]:
@@ -244,7 +317,12 @@ def build_summary(run: Any) -> dict[str, Any]:
     # the FIRST ``- …`` line, not a labelled one (unlike every other field
     # here, this section has no fixed label to search for).
     m = re.search(r"(?m)^-[ \t]*(.+)$", result)
-    result_line = mask_text(m.group(1).strip(), extra) if m else None
+    result_raw = m.group(1).strip() if m else None
+    if result_raw and _is_placeholder(result_raw):
+        result_raw = None
+    if result_raw:
+        result_raw = _strip_backticks(result_raw).strip() or None
+    result_line = mask_text(result_raw, extra) if result_raw else None
 
     failed_before_raw = _bullet_any(evidence, "Failing test before", "Red test before")
     passed_after_raw = _bullet_any(evidence, "Green after")
@@ -257,7 +335,7 @@ def build_summary(run: Any) -> dict[str, Any]:
         "result_line": result_line,
         "tests": {"failed_before": failed_before, "passed_after": passed_after},
         "sabotage": _sabotage(evidence),
-        "kz_ok": _kz_ok(evidence, sections),
+        "kz_ok": _kz_ok(evidence),
         "review": _review(evidence),
         "bypass": _bypass(evidence),
         "operator_minutes": _first_int(numbers, _OPERATOR_MINUTES_RE, _OPERATOR_MINUTES_TABLE_RE),

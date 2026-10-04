@@ -14,6 +14,7 @@ import {
   headListTitle,
   HEAD_STEP_KEYS,
   headStepKey,
+  midLineStateWord,
   modelFamily,
   pairKey,
   pairReasonKey,
@@ -343,5 +344,24 @@ describe("sortHeadsForList", () => {
     const r1 = mkRun({ run_id: "1", state: "running" });
     const r2 = mkRun({ run_id: "2", state: "starting" });
     expect(sortHeadsForList([r1, r2]).map((r) => r.run_id)).toEqual(["1", "2"]);
+  });
+});
+
+describe("midLineStateWord (review finding on PR #756 round 3)", () => {
+  it("lowercases only the first letter, to match the running row's own lowercase phrase", () => {
+    expect(midLineStateWord(en.heads.state.needs_you)).toBe("needs you");
+    expect(midLineStateWord(en.heads.state.passed)).toBe("passed");
+    expect(midLineStateWord(de.heads.state.needs_you)).toBe("braucht dich");
+    expect(midLineStateWord(de.heads.state.passed)).toBe("bestanden");
+  });
+
+  it("leaves the i18n catalog itself sentence case — other surfaces show the word standalone", () => {
+    expect(en.heads.state.passed).toBe("Passed");
+    expect(de.heads.state.passed).toBe("Bestanden");
+  });
+
+  it("is a no-op on an already-empty or already-lowercase word", () => {
+    expect(midLineStateWord("")).toBe("");
+    expect(midLineStateWord("already lowercase")).toBe("already lowercase");
   });
 });

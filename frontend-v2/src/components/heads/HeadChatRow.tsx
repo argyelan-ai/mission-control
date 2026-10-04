@@ -13,7 +13,7 @@ import { ChevronRight } from "lucide-react";
 import { C } from "@/lib/colors";
 import { StatusDot } from "@/components/shared/StatusDot";
 import { formatAgeRounded, formatDuration } from "@/lib/taskDetail/format";
-import { headListTitle, headStateKey, pairShort, runDurationSeconds, type HeadRun } from "@/lib/heads";
+import { headListTitle, headStateKey, midLineStateWord, pairShort, runDurationSeconds, type HeadRun } from "@/lib/heads";
 
 /** Dot per state (bauplan §3.2): needs_you = accent (the one thing asking
  *  for the operator), running/starting = the SAME busy pulse an agent row
@@ -66,7 +66,7 @@ export function HeadChatRow({ run, selected, onSelect, variant = "rail" }: HeadC
     // gesetzt" (anhang.md H — a proposal, not an adopted rule), and
     // without the pair there is no way to tell, from this row alone,
     // which harness the waiting head is running on.
-    line2 = `${pair} · ${t(headStateKey(run.state))}`;
+    line2 = `${pair} · ${midLineStateWord(t(headStateKey(run.state)))}`;
   } else if (run.state === "starting") {
     line2 = `${pair} · ${t("time.startingNow")}`;
   } else if (run.state === "running") {
@@ -79,9 +79,8 @@ export function HeadChatRow({ run, selected, onSelect, variant = "rail" }: HeadC
     // here too, same reasoning as needs_you above.
     const endedAt = run.exited_at ?? run.created_at;
     const age = formatAgeRounded(endedAt, locale);
-    line2 = age
-      ? `${pair} · ${t(headStateKey(run.state))} · ${t("time.ago", { age })}`
-      : `${pair} · ${t(headStateKey(run.state))}`;
+    const stateWord = midLineStateWord(t(headStateKey(run.state)));
+    line2 = age ? `${pair} · ${stateWord} · ${t("time.ago", { age })}` : `${pair} · ${stateWord}`;
   }
 
   return (

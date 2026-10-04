@@ -278,15 +278,19 @@ describe("ChatView — head branch", () => {
     expect(firstTool?.title).toBeTruthy();
     const toolGroups = screen.queryAllByTestId("tool-group");
     if (toolGroups.length > 0) {
-      expect(toolGroups.some((g) => /Tool/.test(g.textContent ?? ""))).toBe(true);
+      // Case-insensitive: the chip's own EN label is lowercase ("tool
+      // used" — review finding on PR #756 round 3, ToolGroup's summary
+      // line used to be hardcoded German, now i18n'd and no longer
+      // capitalised the way the old "Tool" check assumed).
+      expect(toolGroups.some((g) => /tool/i.test(g.textContent ?? ""))).toBe(true);
     } else {
       expect(container.textContent).toContain(firstTool!.title);
     }
 
-    // A thinking event rendered — grouped ("N× nachgedacht") or standalone
-    // ("Denkt nach…", `ThinkingRow`'s own collapsed label) — same
+    // A thinking event rendered — grouped ("N× thought"/"N× nachgedacht") or
+    // standalone ("Denkt nach…", `ThinkingRow`'s own collapsed label) — same
     // either/or reasoning as the tool check above.
-    expect(/nachgedacht|Denkt nach/i.test(container.textContent ?? "")).toBe(true);
+    expect(/nachgedacht|Denkt nach|thought/i.test(container.textContent ?? "")).toBe(true);
   });
 
   it("the back chevron calls onBack", async () => {

@@ -51,6 +51,15 @@ describe("HeadChatFooter", () => {
   // Review finding on PR #756: "braucht dich" showed only the answer field
   // — the operator could not see WHAT was being asked without leaving the
   // footer to scroll the transcript above it.
+  it("needs_you: never repeats the bare state word — the header above already says it (K3/K10)", () => {
+    // Review finding on PR #756 round 3: the footer used to carry its own
+    // "Needs you" label on top of the question, duplicating the SAME state
+    // word `HeadChatHeader`'s context line already shows ("{pair} · Needs
+    // you") right above this footer on the same screen.
+    renderFooter({ state: "needs_you", question: "Deprecate the old field or keep it for one more release?" });
+    expect(screen.queryByText("Needs you")).not.toBeInTheDocument();
+  });
+
   it("needs_you: shows the question text above the answer field", () => {
     renderFooter({ state: "needs_you", question: "Deprecate the old field or keep it for one more release?" });
     expect(screen.getByTestId("head-footer-question")).toHaveTextContent(

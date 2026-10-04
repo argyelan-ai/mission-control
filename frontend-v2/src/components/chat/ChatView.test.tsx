@@ -609,7 +609,12 @@ describe("ChatView", () => {
     renderChatView({ detailLevel: "normal" });
 
     // The wall of rows is gone by default — one summary chip stands in for it.
-    const chip = screen.getByRole("button", { name: /1 Tool verwendet, nachgedacht/ });
+    // The chip's own label comes from `toolGroupLabel` (ToolGroup.test.tsx
+    // owns its exact EN/DE wording); the global test mock here does not
+    // emulate ICU plurals, so this only checks the key resolved, in English
+    // (review finding on PR #756 round 3: this used to be hardcoded German).
+    const chip = screen.getByRole("button", { name: /tool used/ });
+    expect(chip).toHaveTextContent(/thought/);
     expect(screen.queryByText("Read foo.py")).not.toBeInTheDocument();
     expect(screen.queryByText("Denkt nach…")).not.toBeInTheDocument();
 

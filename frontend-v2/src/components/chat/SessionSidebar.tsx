@@ -308,9 +308,14 @@ export function SessionSidebar({
             {(heads ?? []).map((run, i) => (
               <div key={run.run_id}>
                 {i === firstDoneIndex && i > 0 && (
+                  // `textDim` is decoration/inactive-icon only, never body
+                  // text (its own comment in colors.ts) — this divider's
+                  // label IS readable text (review finding on PR #756
+                  // round 3), so it takes `textMuted` like the section
+                  // title right above it.
                   <div
                     className={`label-sys pt-2 pb-1 truncate ${stack ? "px-4" : "px-3"}`}
-                    style={{ color: C.textDim }}
+                    style={{ color: C.textMuted }}
                     data-testid="heads-done-divider"
                   >
                     {th("list.doneDivider")}
@@ -337,7 +342,9 @@ export function SessionSidebar({
             >
               <Archive size={13} className="shrink-0" aria-hidden="true" />
               <span className="text-xs truncate">{th("list.archiveTitle")}</span>
-              <span className="text-xs tabular-nums" style={{ color: C.textDim }} aria-hidden="true">
+              {/* Same `textDim`-is-decoration-only fix as the divider above:
+                  this count is the readable part of the row's own label. */}
+              <span className="text-xs tabular-nums" style={{ color: C.textMuted }} aria-hidden="true">
                 {archivedCount}
               </span>
             </button>

@@ -1005,7 +1005,15 @@
     "effortRejectedReason": "Effort abgelehnt: {reason}",
     "effortRejected": "Effort-Wechsel abgelehnt",
     "effortUnconfirmed": "Effort-Wechsel nicht bestätigt — im Terminal prüfen",
-    "effortFailed": "Effort-Wechsel fehlgeschlagen"
+    "effortFailed": "Effort-Wechsel fehlgeschlagen",
+    "toolGroup": {
+      "commands": "{count, plural, one {# Befehl ausgeführt} other {# Befehle ausgeführt}}",
+      "tools": "{count, plural, one {# Tool verwendet} other {# Tools verwendet}}",
+      "failed": "{count} fehlgeschlagen",
+      "thoughts": "{count, plural, one {nachgedacht} other {#× nachgedacht}}",
+      "activity": "Aktivität",
+      "errorIncluded": "Fehler enthalten"
+    }
   },
   "shell": {
     "searchPlaceholder": "Suchen oder Befehl...",
@@ -3564,7 +3572,9 @@
       "backToChats": "Zurück zu Chats",
       "noTranscriptTitle": "Kein Live-Verlauf für diesen Harness",
       "noTranscriptHint": "Zeigt stattdessen die letzten Log-Zeilen.",
-      "logEmpty": "Noch keine Ausgabe.",
+      "waitingFirstLines": "Warte auf die ersten Protokollzeilen …",
+      "noTranscriptKept": "Für diesen Lauf wurde kein Protokoll aufbewahrt.",
+      "transcriptTooLarge": "Protokoll zu gross zum Anzeigen.",
       "resolving": "Lauf wird geladen…",
       "notFoundTitle": "Dieser Lauf wurde nicht gefunden.",
       "notFoundHint": "Er wurde vielleicht aufgeräumt, oder der Link ist alt.",
@@ -3590,7 +3600,9 @@
       "operatorMinutes": "Deine Minuten",
       "helpers": "Helfer",
       "branch": "Branch",
-      "failed": "konnte nicht geladen werden"
+      "failed": "konnte nicht geladen werden",
+      "expand": "Mehr anzeigen",
+      "collapse": "Weniger anzeigen"
     }
   },
   "nightShift": {
