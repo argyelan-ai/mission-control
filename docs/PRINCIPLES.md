@@ -86,6 +86,15 @@ their knowledge, their hardware and their evidence.
 9. **Open formats, operator-owned data.** Run records live in the vault, not
    with a vendor. No confidential employer data through vendor-hosted remote
    sessions without clarification (ADR-085 §6 rule 8, ADR-034).
+10. **Build for the future, sustainably — extend, don't replace.** Design
+    every part so later features attach as additions (new adapter, new
+    provider, new view, new field) instead of forcing a rebuild of what
+    exists. Before building, ask: will this have to be removed when the next
+    expected feature arrives? If yes, choose the seam that lets both live.
+    Avoid one-off paths that only fit today's single case. Replacing or
+    rewriting a part stays a legitimate option when it is clearly simpler and
+    better — decide it explicitly (ADR or PR note), with a migration and
+    rollback path, never as an accident. (Operator decision, 2026-10-04.)
 
 ## 4 · Evidence rules
 

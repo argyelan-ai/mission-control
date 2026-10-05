@@ -26,9 +26,10 @@ const VIEW_ICON: Record<CenterView, typeof MonitorPlay> = {
   terminal: MonitorPlay,
 };
 
-const PANELS: { key: PanelKind; label: string; icon: typeof GitCompare }[] = [
-  { key: "diff", label: "Diff", icon: GitCompare },
-  { key: "browser", label: "Browser", icon: Globe },
+// Labels live in `sessions.panels.*` — the same keys PanelRail uses.
+const PANELS: { key: PanelKind; labelKey: "panels.diff" | "panels.browser"; icon: typeof GitCompare }[] = [
+  { key: "diff", labelKey: "panels.diff", icon: GitCompare },
+  { key: "browser", labelKey: "panels.browser", icon: Globe },
 ];
 
 interface ChatOptionsSheetProps {
@@ -152,7 +153,7 @@ export function ChatOptionsSheet({
               <>
                 <SectionLabel>{t("sectionPanels")}</SectionLabel>
                 <div className="flex flex-col">
-                  {PANELS.map(({ key, label, icon: Icon }) => (
+                  {PANELS.map(({ key, labelKey, icon: Icon }) => (
                     <button
                       key={key}
                       type="button"
@@ -164,7 +165,7 @@ export function ChatOptionsSheet({
                       style={{ color: C.textSecondary }}
                     >
                       <Icon size={16} style={{ color: C.textMuted }} aria-hidden="true" />
-                      <span className="flex-1 text-[14px]">{label}</span>
+                      <span className="flex-1 text-[14px]">{t(labelKey)}</span>
                     </button>
                   ))}
                 </div>

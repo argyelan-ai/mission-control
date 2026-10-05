@@ -7,7 +7,7 @@ import type {
   Approval,
   Board,
   BoardMemory,
-  BrowserLiveTarget,
+  BrowserLiveTargetsResponse,
   Credential,
   CostOverview,
   IntelligenceConfig,
@@ -2288,7 +2288,11 @@ export const api = {
   // ── Browser Live View (view-only CDP screencast) ─────────────────────────
   browserLive: {
     // 502 when the shared cdp-browser container isn't running (browser profile).
-    targets: (): Promise<BrowserLiveTarget[]> => request("/api/v1/browser-live/targets"),
+    // `agentId` (bauplan.md PR B1): scope to that agent's own tabs via
+    // cdp-gateway — omitted, unresolvable or gateway-down all fall back to
+    // every tab in the shared browser (unchanged pre-B1 behaviour).
+    targets: (agentId?: string): Promise<BrowserLiveTargetsResponse> =>
+      request(`/api/v1/browser-live/targets${agentId ? `?agent_id=${encodeURIComponent(agentId)}` : ""}`),
   },
 };
 
@@ -2301,9 +2305,22 @@ function wsBase(): string {
 
 // Separate helper (not on `api`, mirrors cliSessions.*WsUrl). Async: fetches a
 // single-use stream ticket — the login token never goes into the URL.
-export function browserLiveWsUrl(targetId?: string): Promise<string> {
-  const targetParam = targetId ? `?target=${encodeURIComponent(targetId)}` : "";
-  return withStreamTicket(`${wsBase()}/api/v1/browser-live/ws${targetParam}`);
+// Target selection after connecting goes over the socket itself
+// ({"select": "<id>"}) so the client doesn't reconnect just to switch tabs;
+// `targetId`/`follow` only seed the very first attach.
+export function browserLiveWsUrl(
+  targetId?: string,
+  opts?: { follow?: boolean; agentId?: string },
+): Promise<string> {
+  const params = new URLSearchParams();
+  if (targetId) params.set("target", targetId);
+  if (opts?.follow === false) params.set("follow", "0");
+  // bauplan.md PR B1: scopes the whole stream (picker, follow, "no open
+  // page") to this agent's own tabs — see api.browserLive.targets' comment
+  // for the fallback rule.
+  if (opts?.agentId) params.set("agent_id", opts.agentId);
+  const query = params.toString();
+  return withStreamTicket(`${wsBase()}/api/v1/browser-live/ws${query ? `?${query}` : ""}`);
 }
 
 // ── SSE URLs ──────────────────────────────────────────────────────────────────
