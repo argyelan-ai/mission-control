@@ -109,6 +109,7 @@ import type {
 } from "./types";
 import type {
   HeadChatHistoryResponse,
+  HeadCleanupResponse,
   HeadListResponse,
   HeadPairsResponse,
   HeadRestartBody,
@@ -2082,6 +2083,10 @@ export const api = {
     stop: (runId: string): Promise<{ run_id: string; state: string }> =>
       request(`/api/v1/heads/${encodeURIComponent(runId)}/stop`, { method: "POST" }),
     occupancy: (): Promise<{ boxes: Record<string, HeadBusy> }> => request("/api/v1/heads/occupancy"),
+    // The host's own `mc-head gc` report, read-only (bauplan PR 4 §5) —
+    // "Arbeitskopie: nicht gesichert" on the run record card, the low-disk
+    // warning on Runtimes. Never triggers a run itself.
+    cleanup: (): Promise<HeadCleanupResponse> => request("/api/v1/heads/cleanup"),
   },
   // ── Night shift (ROADMAP E2) — marked tasks start as heads tonight ────────
   // Behind the same switch as heads (404 `heads_disabled` while off).

@@ -129,6 +129,23 @@ describe("HeadChatFooter", () => {
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
   });
 
+  // bauplan `heads-sichtbar` PR 4 §5: the passed-state Continue button opens
+  // the focused HeadContinueSheet, not the full HeadRestartDialog (PR 2's
+  // stand-in) with its fresh/continue toggle and pair-switch framing.
+  it("passed: Continue opens the focused HeadContinueSheet, not the full restart dialog", async () => {
+    renderFooter({ state: "passed" });
+    await userEvent.click(screen.getByTestId("head-footer-continue"));
+    expect(screen.getByTestId("head-continue-sheet")).toBeInTheDocument();
+    expect(screen.queryByTestId("head-restart-dialog")).not.toBeInTheDocument();
+  });
+
+  it("failed: Restart still opens the full HeadRestartDialog, unchanged", async () => {
+    renderFooter({ state: "failed", reason: "no_pr" });
+    await userEvent.click(screen.getByTestId("head-footer-restart"));
+    expect(screen.getByTestId("head-restart-dialog")).toBeInTheDocument();
+    expect(screen.queryByTestId("head-continue-sheet")).not.toBeInTheDocument();
+  });
+
   it("failed: shows the reason sentence and a Restart action", () => {
     renderFooter({ state: "failed", reason: "no_pr" });
     expect(screen.getByTestId("head-footer-reason")).toHaveTextContent("Ended without a pull request.");

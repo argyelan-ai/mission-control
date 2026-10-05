@@ -3496,7 +3496,8 @@
       "stopCancel": "Abbrechen",
       "reviewDecides": "Der Pull Request ist offen — dein Review entscheidet über den Merge.",
       "copyBranch": "Branch-Namen kopieren",
-      "branchCopied": "Branch-Name kopiert"
+      "branchCopied": "Branch-Name kopiert",
+      "workingCopyUnsaved": "Arbeitskopie: nicht gesichert"
     },
     "restart": {
       "title": "Neu starten mit …",
@@ -3509,6 +3510,14 @@
       "submitting": "Startet neu…",
       "done": "Head neu gestartet",
       "noBranchYet": "Noch keine Arbeit auf diesem Branch — der Lauf endete vor dem Start."
+    },
+    "continueSheet": {
+      "title": "Weitermachen",
+      "explain": "Gleicher Branch — der neue Lauf bekommt die Laufakte und eine Zusammenfassung des Verlaufs.",
+      "noteLabel": "Notiz an den Head (optional)",
+      "notePlaceholder": "optionale Notiz …",
+      "submit": "Weitermachen",
+      "submitting": "Startet…"
     },
     "runs": {
       "title": "Läufe",
@@ -3524,7 +3533,9 @@
       "openTask": "Task öffnen",
       "orphanTitle": "Heads ohne Task",
       "orphanRow": "{pair} · Task gelöscht · {duration}",
-      "stop": "Stoppen"
+      "stop": "Stoppen",
+      "diskWarning": "Platte fast voll — noch {gb} GB frei. Arbeitskopien und Caches von Heads brauchen evtl. Aufräumen.",
+      "diskWarningNoNumber": "Platte fast voll. Arbeitskopien und Caches von Heads brauchen evtl. Aufräumen."
     },
     "errors": {
       "pair_blocked": "Dieses Paar kann nicht starten.",

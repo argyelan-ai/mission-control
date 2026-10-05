@@ -28,7 +28,7 @@ from app.services.heads import transcript as tr
 from app.services.heads.files import load_run
 from app.services.transcript_adapters import adapter_for, adapter_for_harness
 from app.services import token_harvester
-from tests.heads_backend_helpers import heads_root  # noqa: F401 (fixture)
+from tests.heads_backend_helpers import heads_root, make_run  # noqa: F401 (fixture)
 
 FIXTURES = Path(__file__).parent / "fixtures" / "heads"
 
@@ -743,3 +743,91 @@ async def test_cleanup_endpoint_reflects_the_hosts_report_file(auth_client, head
 async def test_cleanup_endpoint_ignores_a_corrupt_report(auth_client, heads_root):
     (heads_root / "gc-report.json").write_text("not json")
     assert (await auth_client.get("/api/v1/heads/cleanup")).json() == {"report": None}
+
+
+# ── summarize()/summary_for_restart() — "Continue" transcript recap ──────
+#
+# bauplan `heads-sichtbar` PR 4 §5: `job.md`'s "previous run" block gets a
+# deterministic, model-free recap of the transcript on a continue restart.
+
+
+def test_summarize_claude_fixture_lists_the_edited_file_and_tool_count(heads_root):
+    run_id = install_fixture(heads_root, "claude-run")
+    run = load_run(run_id)
+    result = tr.read(run, tr.locate(run), limit=1000)
+    text = tr.summarize(result["events"], last_step=run.step)
+    assert "test_pr_merge_monitor.py" in text
+    assert "Tools used:" in text
+    assert f"Last step: {run.step}" in text
+    assert "Last assistant notes:" in text
+
+
+def test_summarize_omp_fixture_extracts_files_from_both_detail_shapes(heads_root):
+    """omp's `write` tool carries `detail.path` directly; its `edit` tool
+    carries no path field at all — only a `[<path>#<hash>]` prefix inside
+    `detail.input`. Both basenames must show up, proving the harness-
+    neutral extractor reads either shape, not just the easy one."""
+    run_id = install_fixture(heads_root, "omp-run")
+    run = load_run(run_id)
+    result = tr.read(run, tr.locate(run), limit=1000)
+    text = tr.summarize(result["events"], last_step=run.step)
+    assert "run-record.md" in text  # omp `write`, detail.path
+    assert "checks.py" in text  # omp `edit`, detail.input's "[path#hash]"
+
+
+def test_summarize_is_empty_for_nothing_to_say():
+    assert tr.summarize([]) == ""
+    assert tr.summarize([{"kind": "usage", "inputTokens": 1}]) == ""
+
+
+def test_summarize_masks_a_planted_value_with_no_recognisable_shape():
+    """A bare opaque string (no `key=`, no `Bearer `, no JSON-key shape) —
+    the ONLY thing that can redact it is `env_values`, exactly like a real
+    `head.env` secret in a real transcript line (anhang.md section D)."""
+    events = [{"kind": "message", "role": "assistant", "text": "Reusing the cached value q7Jk2xN9pLmZ as-is."}]
+    text = tr.summarize(events, env_values=("q7Jk2xN9pLmZ",))
+    assert "q7Jk2xN9pLmZ" not in text
+    assert "<redacted>" in text
+
+
+def test_sabotage_without_masking_the_planted_value_leaks(monkeypatch):
+    """Sabotage: bypass `redact.mask_text` entirely (as if `summarize()`
+    forgot to call it) — the SAME planted value from the test above must
+    now leak, proving masking (not luck, not a value that would never have
+    appeared) is what kept it out."""
+    monkeypatch.setattr(tr.redact, "mask_text", lambda text, extra=(): text)
+    events = [{"kind": "message", "role": "assistant", "text": "Reusing the cached value q7Jk2xN9pLmZ as-is."}]
+    text = tr.summarize(events, env_values=("q7Jk2xN9pLmZ",))
+    assert "q7Jk2xN9pLmZ" in text
+
+
+def test_summarize_caps_at_4kb_for_a_very_long_transcript():
+    # Each displayed field is already clipped on its own (600 chars/message,
+    # 12 files) — only PILING UP several long fields at once actually
+    # exceeds 4 KB, so this plants long, distinct basenames rather than
+    # just many short events (which would never get near the cap at all).
+    long_files = [{"kind": "tool", "name": "Edit", "detail": {"file_path": f"/repo/{'x' * 290}{i:03d}.py"}} for i in range(12)]
+    long_messages = [{"kind": "message", "role": "assistant", "text": "n" * 600} for _ in range(3)]
+    text = tr.summarize(long_files + long_messages, last_step="s" * 200)
+    assert len(text.encode("utf-8")) <= tr.MAX_SUMMARY_BYTES + 16  # small slack for the "…\n" tail
+    assert text.rstrip().endswith("…")
+
+
+def test_summary_for_restart_reads_the_runs_own_transcript_and_masks_head_env(heads_root):
+    run_id = install_fixture(heads_root, "claude-run")
+    run = load_run(run_id)
+    text = tr.summary_for_restart(run)
+    assert "test_pr_merge_monitor.py" in text
+    assert PLANTED["claude-run"][0] not in text
+
+
+def test_summary_for_restart_is_empty_without_a_transcript(heads_root):
+    run_id = make_run(heads_root, task_id=str(uuid.uuid4()), status={"phase": "exited", "exit_code": 0})
+    run = load_run(run_id)
+    assert tr.summary_for_restart(run) == ""
+
+
+def test_summary_for_restart_never_raises_on_a_broken_run():
+    """A `None`/garbage run object must not crash a restart — `locate()`
+    itself would raise on `run.spec`/`run.folder` attribute access."""
+    assert tr.summary_for_restart(object()) == ""

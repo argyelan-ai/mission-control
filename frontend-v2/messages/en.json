@@ -3496,7 +3496,8 @@
       "stopCancel": "Cancel",
       "reviewDecides": "The pull request is open — your review decides the merge.",
       "copyBranch": "Copy branch name",
-      "branchCopied": "Branch name copied"
+      "branchCopied": "Branch name copied",
+      "workingCopyUnsaved": "Working copy: not saved"
     },
     "restart": {
       "title": "Restart with …",
@@ -3509,6 +3510,14 @@
       "submitting": "Restarting…",
       "done": "Head restarted",
       "noBranchYet": "No work on this branch yet — the run ended before it started."
+    },
+    "continueSheet": {
+      "title": "Continue",
+      "explain": "Same branch — the new run gets the run record plus a summary of the transcript.",
+      "noteLabel": "Note to the head (optional)",
+      "notePlaceholder": "optional note …",
+      "submit": "Continue",
+      "submitting": "Starting…"
     },
     "runs": {
       "title": "Runs",
@@ -3524,7 +3533,9 @@
       "openTask": "Open task",
       "orphanTitle": "Heads without a task",
       "orphanRow": "{pair} · task deleted · {duration}",
-      "stop": "Stop"
+      "stop": "Stop",
+      "diskWarning": "Disk nearly full — {gb} GB free. Head working copies and caches may need cleanup.",
+      "diskWarningNoNumber": "Disk nearly full. Head working copies and caches may need cleanup."
     },
     "errors": {
       "pair_blocked": "This pair cannot start.",

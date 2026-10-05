@@ -25,6 +25,7 @@ import { NEXT_TEXT } from "@/components/task/detail/nextStepStyle";
 import { failReasonKey, headErrorKey, headStepKey, parseStep, type HeadRun } from "@/lib/heads";
 import { HeadStopButton } from "./HeadStopButton";
 import { HeadRestartDialog } from "./HeadRestartDialog";
+import { HeadContinueSheet } from "./HeadContinueSheet";
 
 const PRIMARY_BTN =
   "inline-flex items-center justify-center gap-2 px-4 min-h-[40px] pointer-coarse:min-h-[44px] rounded-md text-sm font-medium cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed";
@@ -220,7 +221,7 @@ export function HeadChatFooter({
           <RotateCcw size={15} aria-hidden />
           {t("chat.footer.continueRun")}
         </button>
-        <HeadRestartDialog open={restartOpen} onClose={() => setRestartOpen(false)} run={run} />
+        <HeadContinueSheet open={restartOpen} onClose={() => setRestartOpen(false)} run={run} />
       </div>
     );
   }

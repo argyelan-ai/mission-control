@@ -13,13 +13,14 @@ import logging
 import time
 import uuid
 
+from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.config import settings
 from app.models.task import Task
 from app.services.heads import files
 from app.services.heads.mirror import apply_head_state
-from app.services.heads.state import derive_for_run
+from app.services.heads.state import ACTIVE_STATES, derive_for_run
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,8 @@ def latest_runs_by_task(runs: list) -> tuple[dict[str, object], list]:
 async def sync_once(session: AsyncSession, now: float | None = None) -> int:
     """One pass. Returns how many task cards changed."""
     now = time.time() if now is None else now
-    latest, superseded = latest_runs_by_task(files.list_runs())
+    runs = files.list_runs()
+    latest, superseded = latest_runs_by_task(runs)
     for run in superseded:
         if run.mirror.get("state") != "superseded":
             files.write_backend_file(run.run_id, "mirror.json", {"state": "superseded", "at": now})
@@ -60,7 +62,44 @@ async def sync_once(session: AsyncSession, now: float | None = None) -> int:
         await session.commit()
         files.write_backend_file(run.run_id, "mirror.json", {"state": derived["state"], "at": now})
         changed += int(moved)
+    await _write_task_status_hints(session, runs, now)
     return changed
+
+
+async def _write_task_status_hints(session: AsyncSession, runs: list, now: float) -> None:
+    """Mirrors each ENDED run's task's CURRENT status back onto that run's
+    own folder as ``.backend/task.json`` (bauplan `heads-sichtbar` PR 4
+    §5) — the one hint ``mc-head gc`` on the host is allowed to read to
+    shorten a clean, already-pushed worktree's 14-day grace period once its
+    card reaches `done`. Every ended run gets this (not just the latest run
+    per task): a superseded run from BEFORE a "continue" restart has its own
+    worktree and its own gc decision, and still carries the same `task_id`.
+
+    One batched query for every distinct task behind an ended run this pass
+    (never one query per run — the N+1 the docstring's own convention at the
+    top of this module warns about), and a write only when the status
+    actually changed, so a steady-state pass with nothing new touches no
+    file. ``mc-head``'s own safety checks (clean tree, HEAD pushed to the
+    scratch origin) are what actually protect a worktree; this hint can only
+    ever make it consider removal EARLIER, never skip a real check."""
+    ended = [r for r in runs if r.task_id and derive_for_run(r, now)["state"] not in ACTIVE_STATES]
+    if not ended:
+        return
+    task_ids: set[uuid.UUID] = set()
+    for r in ended:
+        try:
+            task_ids.add(uuid.UUID(r.task_id))
+        except ValueError:
+            continue
+    if not task_ids:
+        return
+    rows = (await session.exec(select(Task).where(Task.id.in_(task_ids)))).all()
+    status_by_task = {str(t.id): t.status for t in rows}
+    for run in ended:
+        status = status_by_task.get(run.task_id)
+        current = files.read_backend_file(run.run_id, "task.json")
+        if current.get("status") != status:
+            files.write_backend_file(run.run_id, "task.json", {"status": status, "at": now})
 
 
 class HeadsSync:
