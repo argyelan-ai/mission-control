@@ -795,7 +795,7 @@
       "unfoldAll": "Expand all",
       "sectionTitle": "Groups",
       "tabListLabel": "Chats view",
-      "tabAgents": "Agents",
+      "tabAgents": "All",
       "tabGroups": "Groups",
       "tabGroupsWaiting": "Groups — {count} waiting",
       "newGroup": "New group",

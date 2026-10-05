@@ -570,7 +570,7 @@ describe("SessionSidebar — Gruppen-Sektion", () => {
         onCreateGroup={() => {}}
       />
     );
-    expect(screen.getByRole("tab", { name: "Agents" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "All" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "Groups" })).toHaveAttribute("aria-selected", "false");
     expect(screen.getByRole("option", { name: /Agent One/ })).toBeInTheDocument();
     expect(screen.queryByRole("option", { name: /Spark-Runde/ })).not.toBeInTheDocument();
