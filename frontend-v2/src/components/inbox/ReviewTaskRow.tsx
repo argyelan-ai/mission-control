@@ -84,27 +84,18 @@ export function ReviewTaskRow({
       exit={{ opacity: 0, x: 8, height: 0 }}
     >
       <GlassCard className="p-4">
-        {/* Header */}
-        <div
-          className="flex items-start justify-between gap-4 cursor-pointer"
-          onClick={() => setExpanded(!expanded)}
-          role="button"
-          tabIndex={0}
-          aria-expanded={expanded}
-          data-testid="review-row-header"
-          onKeyDown={(e) => {
-            // The head chip is a real `<Link>` nested inside this header
-            // (review fix round 6, finding 1): a keydown that bubbles up
-            // from IT is not a keydown on this header, so it must not be
-            // swallowed here — same guard as `ListRow.tsx`'s own
-            // `role="button"` header.
-            if (e.target !== e.currentTarget) return;
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              setExpanded(!expanded);
-            }
-          }}
-        >
+        {/* Header — review fix round 7, finding 3: a `role="button"` div
+            wrapping the head chip `<Link>` made the whole header (chip text
+            included) the button's accessible name and nested a link inside
+            a button (axe `nested-interactive`, confirmed via axe-core on
+            `review-row-header`). TaskRow.tsx's own pattern avoids this on
+            purpose (see its comment): a real `<button>` only around the
+            chevron+title line, stretched over the whole header via
+            `after:absolute after:inset-0` against this `relative` ancestor,
+            with the chip `Link` raised above it (`relative z-[1]`) so it
+            stays independently clickable/focusable and out of the button's
+            accessible name. */}
+        <div className="flex items-start justify-between gap-4 relative">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
               <Pill color={C.accent} size="sm">review</Pill>
@@ -154,7 +145,13 @@ export function ReviewTaskRow({
                 {timeAgo(task.updated_at, locale)}
               </span>
             </div>
-            <div className="flex items-center gap-2 mt-2">
+            <button
+              type="button"
+              onClick={() => setExpanded(!expanded)}
+              aria-expanded={expanded}
+              data-testid="review-row-header"
+              className="flex items-center gap-2 mt-2 w-full text-left cursor-pointer after:absolute after:inset-0 after:content-['']"
+            >
               {expanded ? (
                 <ChevronDown size={14} className="text-[var(--color-text-muted)] shrink-0" />
               ) : (
@@ -163,12 +160,12 @@ export function ReviewTaskRow({
               <p className="text-sm font-medium text-[var(--color-text-primary)]">
                 {task.title}
               </p>
-            </div>
+            </button>
             {showHeadChip && headRun && (
               <Link
                 href={`/sessions?head=${encodeURIComponent(headRun.run_id)}`}
                 onClick={(e) => e.stopPropagation()}
-                className="inline-flex items-center gap-1 text-xs mt-1 ml-6 cursor-pointer underline-offset-2 hover:underline pointer-coarse:min-h-[44px]"
+                className="relative z-[1] inline-flex items-center gap-1 text-xs mt-1 ml-6 cursor-pointer underline-offset-2 hover:underline pointer-coarse:min-h-[44px]"
                 style={{ color: C.textMuted }}
                 data-testid="review-row-head-chip"
               >

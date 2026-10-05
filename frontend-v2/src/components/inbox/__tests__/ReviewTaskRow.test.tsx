@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import axe from "axe-core";
 import { ReviewTaskRow } from "../ReviewTaskRow";
 import { mkRun } from "@/lib/__tests__/headFixtures";
 import type { HeadRun } from "@/lib/heads";
@@ -79,7 +80,7 @@ function mkTask(overrides: Partial<Task> = {}): Task {
 
 function renderRow(task: Task, headRun: HeadRun | null = null, agent?: Parameters<typeof ReviewTaskRow>[0]["agent"]) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  render(
+  return render(
     <QueryClientProvider client={qc}>
       <ReviewTaskRow
         task={task}
@@ -164,22 +165,37 @@ describe("ReviewTaskRow — head chip (heads-sichtbar PR 3, bauplan §4)", () =>
     expect(screen.queryByText("Beta")).not.toBeInTheDocument();
   });
 
-  // Review fix round 6, finding 1: the header's own onKeyDown used to call
-  // `preventDefault()` on EVERY Enter/Space keydown that bubbled up to it,
-  // including one that started on the chip `<Link>` nested inside — a
-  // keyboard user tabbing to the chip and pressing Enter never followed the
-  // link because the header swallowed the key first (and it's a link nested
-  // inside a button, axe rule nested-interactive). Confirmed red by hand
-  // against the pre-fix header (no `e.target !== e.currentTarget` guard):
-  // this assertion failed with defaultPrevented === true.
-  it("a cancelable Enter keydown that starts on the head chip is not swallowed by the header (nested-interactive guard)", () => {
+  // Review fix round 6, finding 1 made the Enter/Space keydown stop being
+  // swallowed, but round 7's independent review found the underlying
+  // structure was still wrong: `review-row-header` was a `role="button"`
+  // div wrapping the chip `<Link>`, which is a link nested inside a button
+  // (axe rule `nested-interactive`, serious) — an event-only test can be
+  // green while the DOM shape itself is still invalid. Round 7 replaced
+  // the div with TaskRow.tsx's own pattern (a real `<button>` stretched via
+  // `after:absolute after:inset-0`, the chip raised `relative z-[1]` above
+  // it) and this asserts the actual DOM shape via axe-core instead of one
+  // event. Confirmed red by hand against the pre-fix (`role="button"` div)
+  // header: axe reported a `nested-interactive` violation on this node.
+  it("the header has no nested-interactive accessibility violation (axe-core)", async () => {
+    const run = mkRun({ state: "passed" });
+    const { container } = renderRow(mkTask(), run);
+    const results = await axe.run(container, {
+      runOnly: { type: "rule", values: ["nested-interactive"] },
+    });
+    expect(results.violations).toEqual([]);
+  });
+
+  it("the head chip is still independently focusable and clickable above the stretched title button", async () => {
+    const { default: userEvent } = await import("@testing-library/user-event");
     const run = mkRun({ state: "passed" });
     renderRow(mkTask(), run);
     const header = screen.getByTestId("review-row-header");
     const chip = screen.getByTestId("review-row-head-chip");
-    const event = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
-    chip.dispatchEvent(event);
-    expect(event.defaultPrevented).toBe(false);
+    expect(header.tagName).toBe("BUTTON");
+    expect(header.contains(chip)).toBe(false);
+    await userEvent.click(chip);
+    // still collapsed — the chip's own stopPropagation held, and it is a
+    // sibling of the title button now, not nested inside it.
     expect(header).toHaveAttribute("aria-expanded", "false");
   });
 });
