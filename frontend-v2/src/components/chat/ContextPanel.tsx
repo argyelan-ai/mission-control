@@ -21,13 +21,16 @@
  * here on purpose.)
  */
 import { useEffect, useRef } from "react";
+import { useLocale, useTranslations } from "next-intl";
 import { C, alpha } from "@/lib/colors";
 import { formatCompactTokens } from "@/lib/claudeCommands";
 import type { UsageComponents, UsageEvent } from "@/lib/chatTypes";
 
 interface Segment {
+  /** Stable row id — also the lookup key under `sessions.contextPanelSegment`
+   *  (never a translated string here; the render site resolves the label via
+   *  `t()`, same convention as `labelKey` elsewhere — see docs/i18n.md). */
   key: string;
-  label: string;
   tokens: number;
   color: string;
 }
@@ -36,10 +39,10 @@ interface Segment {
  *  remainder. `free` is appended by the caller once the window is known. */
 export function buildSegments(components: UsageComponents): Segment[] {
   return [
-    { key: "input", label: "Eingabe", tokens: components.input, color: C.chart.cpu },
-    { key: "cacheRead", label: "Cache gelesen", tokens: components.cacheRead, color: C.accentDeep },
-    { key: "cacheCreation", label: "Cache geschrieben", tokens: components.cacheCreation, color: C.chart.ram },
-    { key: "output", label: "Ausgabe", tokens: components.output, color: C.chart.disk },
+    { key: "input", tokens: components.input, color: C.chart.cpu },
+    { key: "cacheRead", tokens: components.cacheRead, color: C.accentDeep },
+    { key: "cacheCreation", tokens: components.cacheCreation, color: C.chart.ram },
+    { key: "output", tokens: components.output, color: C.chart.disk },
   ];
 }
 
@@ -61,6 +64,8 @@ interface ContextPanelProps {
 
 export function ContextPanel({ usage, pct, pctSource, onClose }: ContextPanelProps) {
   const panelRef = useRef<HTMLDivElement>(null);
+  const t = useTranslations("sessions");
+  const locale = useLocale();
 
   // Escape closes; a click anywhere outside closes. The mobile scrim covers
   // the outside-click case visually, but the listener is what makes the
@@ -94,17 +99,25 @@ export function ContextPanel({ usage, pct, pctSource, onClose }: ContextPanelPro
 
   const usedSegments: Segment[] = usage.components
     ? buildSegments(usage.components).filter((s) => s.tokens > 0)
-    : [{ key: "used", label: "Belegt", tokens: used, color: C.chart.cpu }];
+    : [{ key: "used", tokens: used, color: C.chart.cpu }];
 
   const rows: Segment[] =
     free != null
-      ? [...usedSegments, { key: "free", label: "Frei", tokens: free, color: C.bgHover }]
+      ? [...usedSegments, { key: "free", tokens: free, color: C.bgHover }]
       : usedSegments;
 
   // Bar shares come from the window when we know it, otherwise from the used
   // total — a bar without a denominator would be decoration.
   const barTotal = window_ ?? used;
   const share = (tokens: number) => (barTotal > 0 ? (tokens / barTotal) * 100 : 0);
+  const segmentLabel = (key: string) => t(`contextPanelSegment.${key}`);
+  // Percent formatting goes through the active locale (K3/i18n): "15%" in
+  // English, "15 %" with a narrow no-break space in German — never a bare
+  // `Math.round(...) + "%"` string concat.
+  const formatPct = (value: number, fractionDigits: number) =>
+    new Intl.NumberFormat(locale, { style: "percent", maximumFractionDigits: fractionDigits }).format(
+      value / 100,
+    );
 
   return (
     <>
@@ -119,7 +132,7 @@ export function ContextPanel({ usage, pct, pctSource, onClose }: ContextPanelPro
         ref={panelRef}
         role="dialog"
         aria-modal="false"
-        aria-label="Kontext"
+        aria-label={t("contextPanelTitle")}
         data-testid="context-panel"
         className="fixed inset-x-0 bottom-0 z-50 px-4 pt-3 pb-safe md:absolute md:inset-auto md:bottom-full md:left-0 md:z-30 md:mb-2 md:w-[300px] md:max-w-[320px] md:px-3 md:py-3 md:pb-3"
         // One radius on all four corners: as a desktop popover the box is fully
@@ -134,7 +147,7 @@ export function ContextPanel({ usage, pct, pctSource, onClose }: ContextPanelPro
       >
         <div className="flex items-baseline justify-between gap-2 mb-2.5">
           <span className="text-[14px] font-semibold" style={{ color: C.textPrimary }}>
-            Kontext
+            {t("contextPanelTitle")}
           </span>
           {pct != null && (
             <span
@@ -142,7 +155,7 @@ export function ContextPanel({ usage, pct, pctSource, onClose }: ContextPanelPro
               data-testid="context-panel-pct"
               style={{ color: C.textSecondary }}
             >
-              {Math.round(pct)}%
+              {formatPct(pct, 0)}
             </span>
           )}
         </div>
@@ -169,7 +182,7 @@ export function ContextPanel({ usage, pct, pctSource, onClose }: ContextPanelPro
                 aria-hidden="true"
               />
               <span className="flex-1 min-w-0 truncate text-[12px]" style={{ color: C.textSecondary }}>
-                {s.label}
+                {segmentLabel(s.key)}
               </span>
               <span
                 className="font-mono text-xs font-medium tabular-nums shrink-0"
@@ -182,7 +195,7 @@ export function ContextPanel({ usage, pct, pctSource, onClose }: ContextPanelPro
                   className="font-mono text-xs font-medium tabular-nums shrink-0 w-12 text-right"
                   style={{ color: C.textMuted }}
                 >
-                  {share(s.tokens).toFixed(1)}%
+                  {formatPct(share(s.tokens), 1)}
                 </span>
               )}
             </div>
@@ -191,20 +204,22 @@ export function ContextPanel({ usage, pct, pctSource, onClose }: ContextPanelPro
 
         <div className="mt-3 pt-2.5 flex flex-col gap-1" style={{ borderTop: `1px solid ${C.borderSubtle}` }}>
           <div className="flex items-center justify-between gap-2 text-xs font-medium" style={{ color: C.textMuted }}>
-            <span>Fenster gesamt</span>
+            <span>{t("contextPanelWindowTotal")}</span>
             <span className="font-mono tabular-nums" style={{ color: C.textSecondary }}>
-              {window_ != null ? formatCompactTokens(window_) : "unbekannt"}
+              {window_ != null ? formatCompactTokens(window_) : t("contextPanelWindowUnknown")}
             </span>
           </div>
           <div className="flex items-center justify-between gap-2 text-xs font-medium" style={{ color: C.textMuted }}>
-            <span>Quelle</span>
+            <span>{t("contextPanelSource")}</span>
             <span className="font-mono" data-testid="context-panel-source" style={{ color: C.textSecondary }}>
-              {pctSource === "estimate" ? "Schätzung" : pctSource === "cli" ? "CLI" : "—"}
+              {/* "CLI" is the same word in both languages (see Composer.tsx's
+                  ringTitle comment), so it stays a literal — only the
+                  estimate alternative is translated. */}
+              {pctSource === "estimate" ? t("contextSourceEstimate") : pctSource === "cli" ? "CLI" : "—"}
             </span>
           </div>
           <p className="text-[12px] leading-[1.55] mt-1" style={{ color: C.textMuted }}>
-            Die CLI-Statuszeile zeigt dagegen den Rest bis zur Auto-Komprimierung an — andere Basis,
-            beide korrekt.
+            {t("contextPanelNote")}
           </p>
         </div>
 
@@ -214,7 +229,7 @@ export function ContextPanel({ usage, pct, pctSource, onClose }: ContextPanelPro
           className="md:hidden mt-3 w-full min-h-touch text-[13px] font-medium rounded-lg cursor-pointer"
           style={{ color: C.textSecondary, border: `1px solid ${C.borderActive}` }}
         >
-          Schliessen
+          {t("contextPanelClose")}
         </button>
       </div>
     </>

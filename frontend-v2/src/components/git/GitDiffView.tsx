@@ -1,8 +1,9 @@
 "use client";
 
-import { Fragment, useState } from "react";
+import { Fragment, useState, type ReactNode } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ChevronDown } from "lucide-react";
+import { useTranslations } from "next-intl";
 import type { CommitDiff, CommitDiffFile } from "@/lib/types";
 import { C, BRAND, alpha } from "@/lib/colors";
 
@@ -78,18 +79,30 @@ function LangBadge({ ext }: { ext: string }) {
 
 // ── Single file diff ─────────────────────────────────────────────────────────
 
+/** added / deleted / modified, read from the hunk headers: a new file's
+ *  hunks all start at `-0,0`, a deleted file's all end at `+0,0`. The old
+ *  rule ("no removed line = added") badged every edit that only ADDED lines
+ *  as a new file — in the chat's uncommitted view that was most edits.
+ *  Without hunks (binary, listed without content) the line rule remains. */
+export function fileStatus(file: CommitDiffFile): "added" | "deleted" | "modified" {
+  if (file.hunks.length > 0) {
+    if (file.hunks.every((h) => /^@@ -0,0 /.test(h.header))) return "added";
+    if (file.hunks.every((h) => / \+0,0 @@/.test(h.header))) return "deleted";
+    return "modified";
+  }
+  return file.deletions === 0 ? "added" : file.additions === 0 ? "deleted" : "modified";
+}
+
 const MAX_LINES = 500;
 
 function FileDiff({ file, defaultOpen = true }: { file: CommitDiffFile; defaultOpen?: boolean }) {
+  const t = useTranslations("gitDiff");
   const [open, setOpen] = useState(defaultOpen);
   const ext = getFileExt(file.filename);
   const allLines = file.hunks.flatMap((h) => h.lines);
   const truncated = allLines.length > MAX_LINES;
 
-  // Detect status from hunks
-  const hasAdded = allLines.some((l) => l.type === "add");
-  const hasDel = allLines.some((l) => l.type === "del");
-  const status = !hasDel ? "added" : !hasAdded ? "deleted" : "modified";
+  const status = fileStatus(file);
 
   // Extract just filename for display
   const parts = file.filename.split("/");
@@ -123,12 +136,22 @@ function FileDiff({ file, defaultOpen = true }: { file: CommitDiffFile; defaultO
         {/* Status badge */}
         <FileStatusBadge status={status} />
 
-        {/* File path */}
-        <span className="flex-1 min-w-0 flex items-baseline gap-1.5 font-mono text-[11px]">
+        {/* File path — one line. On a phone a long path used to wrap and the
+            file name ran over the language badge and the +/- counts; now the
+            folder part gives way first (ellipsis), then the name. */}
+        <span
+          title={file.filename}
+          className="flex-1 min-w-0 flex items-baseline gap-1.5 font-mono text-[11px] overflow-hidden"
+        >
           {fdir && (
-            <span style={{ color: C.textMuted }}>{fdir}/</span>
+            // Gives way before the name: the huge shrink weight leaves the
+            // name's share below one layout unit, so the name only loses
+            // characters once the folder sits at its 3ch floor (squeezed to
+            // nothing, the folder's own ellipsis was cut into a stray glyph;
+            // "b…" still says "there is a folder").
+            <span className="truncate" style={{ color: C.textMuted, minWidth: "3ch", flexShrink: 100000 }}>{fdir}/</span>
           )}
-          <span style={{ color: C.textPrimary, fontWeight: 500 }}>{fname}</span>
+          <span className="truncate min-w-0" style={{ color: C.textPrimary, fontWeight: 500 }}>{fname}</span>
         </span>
 
         {/* Lang badge */}
@@ -285,7 +308,7 @@ function FileDiff({ file, defaultOpen = true }: { file: CommitDiffFile; defaultO
                         className="text-[10px] text-center"
                         style={{ padding: "6px 12px", color: C.textMuted, background: C.borderSubtle }}
                       >
-                        … {allLines.length - MAX_LINES} more lines hidden
+                        {t("moreLinesHidden", { count: allLines.length - MAX_LINES })}
                       </td>
                     </tr>
                   )}
@@ -321,7 +344,15 @@ function DiffBar({ additions, deletions }: { additions: number; deletions: numbe
 
 // ── Main export ──────────────────────────────────────────────────────────────
 
-export function GitDiffView({ diff }: { diff: CommitDiff }) {
+export function GitDiffView({
+  diff,
+  subtitle,
+}: {
+  diff: CommitDiff;
+  /** Optional second line under the message (e.g. short id · time). */
+  subtitle?: ReactNode;
+}) {
+  const t = useTranslations("gitDiff");
   return (
     <div className="text-xs" style={{ borderTop: `1px solid ${C.borderSubtle}` }}>
       {/* Stats header */}
@@ -333,11 +364,18 @@ export function GitDiffView({ diff }: { diff: CommitDiff }) {
           color: C.textMuted,
         }}
       >
-        <span className="flex items-center gap-2">
-          <span style={{ color: C.textPrimary, fontWeight: 500 }}>{diff.message}</span>
-        </span>
+        {(diff.message || subtitle) && (
+          <span className="flex flex-col min-w-0">
+            {diff.message && (
+              <span className="truncate" style={{ color: C.textPrimary, fontWeight: 500 }}>{diff.message}</span>
+            )}
+            {subtitle && <span style={{ color: C.textMuted }}>{subtitle}</span>}
+          </span>
+        )}
         <span className="flex items-center gap-3 ml-auto shrink-0">
-          <span style={{ color: C.textDim }}>{diff.stats.files} {diff.stats.files === 1 ? "file" : "files"}</span>
+          <span style={{ color: C.textMuted }}>
+            {t(diff.stats.files === 1 ? "fileOne" : "fileOther", { count: diff.stats.files })}
+          </span>
           <span style={{ color: C.online, fontWeight: 600 }}>+{diff.stats.additions}</span>
           <span style={{ color: C.error, fontWeight: 600 }}>-{diff.stats.deletions}</span>
         </span>

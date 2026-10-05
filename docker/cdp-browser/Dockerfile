@@ -18,9 +18,15 @@ USER root
 # websocat: does the WS leg of the healthcheck (see healthcheck.sh) — a real
 # CDP roundtrip, not just the HTTP /json/version probe that missed the
 # 2026-09-13 wedged-socket incident.
-RUN apk add --no-cache socat websocat
+# python3 + websockets: runs cdp-gateway.py (port 9300), the agent-aware
+# front door added in bauplan.md PR B1 — see gateway/cdp_gateway.py for why.
+# `--break-system-packages`: this is alpine's system python3, not a venv;
+# there is nothing else installed in this image for pip to conflict with.
+RUN apk add --no-cache socat websocat python3 py3-pip && \
+    pip install --no-cache-dir --break-system-packages "websockets==15.0.1"
 COPY entrypoint.sh /usr/local/bin/cdp-entrypoint.sh
 COPY healthcheck.sh /usr/local/bin/cdp-healthcheck.sh
+COPY gateway/cdp_gateway.py /opt/cdp-gateway/cdp_gateway.py
 RUN chmod +x /usr/local/bin/cdp-entrypoint.sh /usr/local/bin/cdp-healthcheck.sh
 USER chrome
 

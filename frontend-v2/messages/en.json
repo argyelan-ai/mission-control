@@ -795,7 +795,7 @@
       "unfoldAll": "Expand all",
       "sectionTitle": "Groups",
       "tabListLabel": "Chats view",
-      "tabAgents": "Agents",
+      "tabAgents": "All",
       "tabGroups": "Groups",
       "tabGroupsWaiting": "Groups — {count} waiting",
       "newGroup": "New group",
@@ -980,6 +980,28 @@
     "contextTokensUsed": "≈{used}/{win} used. ",
     "contextSourceEstimate": "estimate",
     "contextRingTooltip": "{detail}Source: {source}. The CLI status line shows what is left until auto-compaction instead — different basis, both correct.",
+    "contextPanelTitle": "Context",
+    "contextPanelSegment": {
+      "input": "Input",
+      "cacheRead": "Cache read",
+      "cacheCreation": "Cache written",
+      "output": "Output",
+      "used": "Used",
+      "free": "Free"
+    },
+    "contextPanelWindowTotal": "Total window",
+    "contextPanelWindowUnknown": "unknown",
+    "contextPanelSource": "Source",
+    "contextPanelNote": "The CLI status line shows what is left until auto-compaction instead — different basis, both correct.",
+    "contextPanelClose": "Close",
+    "slashCommands": {
+      "model": "Switch model",
+      "clear": "Clear history",
+      "compact": "Compact context",
+      "context": "Show context usage",
+      "status": "Show session status",
+      "help": "Show help"
+    },
     "effortLevel": "Effort level",
     "effortLevelCurrent": "Effort level: {level}",
     "effortLevelLocked": "Effort level: {level} (not switchable)",
@@ -1013,6 +1035,28 @@
       "thoughts": "{count, plural, one {thought} other {#× thought}}",
       "activity": "Activity",
       "errorIncluded": "error included"
+    },
+    "diff": {
+      "scopeLabel": "Diff scope",
+      "scopeWorktree": "Uncommitted",
+      "scopeLastCommit": "Last commit",
+      "refresh": "Refresh",
+      "kind": {
+        "task": "Running task",
+        "session": "Chat folder",
+        "recent": "Last used"
+      },
+      "commitMeta": "{hash} · {ago}",
+      "noChanges": "No uncommitted changes",
+      "noCommit": "No commit yet",
+      "noRepo": "No git repository found",
+      "noRepoHint": "Neither the chat's folder nor the agent's workspace contains a git repository.",
+      "loadFailed": "Couldn't load the diff."
+    },
+    "panels": {
+      "diff": "Diff",
+      "browser": "Browser",
+      "close": "Close panel"
     }
   },
   "shell": {
@@ -3740,5 +3784,42 @@
     "sectionTitle": "Appearance",
     "sectionDescription": "How Mission Control looks in this browser.",
     "hint": "Dark is the default. Your choice is saved in this browser only — other browsers and devices keep their own."
+  },
+  "browserLive": {
+    "notRunning": "Agent browser not running — start a task with the E2E toggle or enable the browser profile.",
+    "refresh": "Refresh",
+    "connecting": "Connecting…",
+    "streamEnded": "Stream ended",
+    "reconnect": "Reconnect",
+    "live": "Live",
+    "follow": "Follow",
+    "fullscreen": "Fullscreen",
+    "closeFullscreen": "Close fullscreen",
+    "pageLabel": "Browser page",
+    "liveViewAlt": "Live agent browser view",
+    "newTab": "New tab: {title}",
+    "noTabsForAgent": "{name} has no open tab right now.",
+    "showAllTabs": "Show all tabs",
+    "showingAllTabs": "All tabs",
+    "showingOnlyThisAgent": "Only {name}'s tabs",
+    "allTabs": "All tabs",
+    "onlyAgent": "Only {name}",
+    "allTabsShort": "All",
+    "thisAgent": "this agent",
+    "scopeUnavailableHint": "Showing all tabs: agent attribution unavailable",
+    "unassignedFallbackHint": "No tab is assigned to {name} — showing the tabs that aren't assigned to any agent.",
+    "unassignedTag": "not assigned",
+    "status": {
+      "no_page": "No open page in the agent browser yet.",
+      "connect_error": "Connecting to the agent browser…",
+      "stream_error": "Stream error — reconnecting may help.",
+      "connectionError": "Connection error",
+      "unknown": "Connection issue"
+    }
+  },
+  "gitDiff": {
+    "fileOne": "{count} file",
+    "fileOther": "{count} files",
+    "moreLinesHidden": "… {count} more lines hidden"
   }
 }

@@ -1319,6 +1319,55 @@ def _extract_cwd_and_branch(path: Path) -> tuple[str, str | None]:
     return "", None
 
 
+#: How much of a transcript's END ``session_cwd`` reads. Claude Code stamps
+#: ``cwd`` on every entry, so the last few lines suffice; a single huge
+#: ``tool_result`` line can fill the window, which is why the head scan
+#: (``_extract_cwd_and_branch``) stays as the fallback.
+_SESSION_CWD_TAIL_BYTES = 262_144
+
+
+def session_cwd(path: Path) -> str | None:
+    """The working directory a Claude Code session is in RIGHT NOW, as the
+    CLI itself recorded it — the ``cwd`` of the LAST entry that carries one.
+
+    The last entry and not the first: Claude Code updates ``cwd`` when the
+    shell changes directory, so the tail is where the conversation actually
+    works. Falls back to the head scan when the tail window holds no ``cwd``
+    (one oversized line), and returns ``None`` when the file is unreadable or
+    has no ``cwd`` at all. The value is the CLI's own path (a container path
+    for Docker agents) — mapping it to a path this backend can read is the
+    caller's job (``workspace_diff.host_path_for_agent_cwd``).
+    """
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as fh:
+            if size > _SESSION_CWD_TAIL_BYTES:
+                fh.seek(-_SESSION_CWD_TAIL_BYTES, 2)
+                fh.readline()  # drop the cut-off first line
+            chunk = fh.read()
+    except OSError:
+        return None
+
+    for raw in reversed(chunk.splitlines()):
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line.decode("utf-8", errors="replace"))
+        except ValueError:
+            continue
+        if isinstance(entry, dict):
+            cwd = entry.get("cwd")
+            if isinstance(cwd, str) and cwd:
+                return cwd
+
+    try:
+        cwd, _branch = _extract_cwd_and_branch(path)
+    except OSError:
+        return None
+    return cwd or None
+
+
 def transcript_allowed(agent, path: Path) -> bool:
     """Privacy gate: cli-bridge agent transcripts are always MC's own
     workspace (Docker containers have nothing else to write) — always

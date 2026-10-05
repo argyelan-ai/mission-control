@@ -19,17 +19,20 @@
  * full-screen sheets — the phone has no room for a permanent rail anyway.
  */
 import { FileText, GitCompare, Globe } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { C } from "@/lib/colors";
 
 export type PanelKind = "diff" | "browser" | "doc";
 
-const PANELS: { key: PanelKind; label: string; icon: typeof GitCompare }[] = [
-  { key: "diff", label: "Diff", icon: GitCompare },
-  { key: "browser", label: "Browser", icon: Globe },
+// Labels are i18n keys under `sessions` (the doc label reuses the group
+// room's own `groups.resultPanel`, so both places say the same word).
+const PANELS: { key: PanelKind; labelKey: string; icon: typeof GitCompare }[] = [
+  { key: "diff", labelKey: "panels.diff", icon: GitCompare },
+  { key: "browser", labelKey: "panels.browser", icon: Globe },
   // Nur im Gruppenraum: das lebende Ergebnis-Dokument (ADR-075). Ein Agent
   // hat keins, eine Gruppe hat keinen Workspace-Diff — deshalb entscheidet
   // die Seite über `only`, welche Knöpfe hier überhaupt erscheinen.
-  { key: "doc", label: "Ergebnis", icon: FileText },
+  { key: "doc", labelKey: "groups.resultPanel", icon: FileText },
 ];
 
 interface PanelRailProps {
@@ -41,11 +44,12 @@ interface PanelRailProps {
 }
 
 export function PanelRail({ active, onSelect, only }: PanelRailProps) {
+  const t = useTranslations("sessions");
   const visible = only ?? (["diff", "browser"] as PanelKind[]);
   return (
     <div
       role="toolbar"
-      aria-label="Panels"
+      aria-label={t("sectionPanels")}
       // Top-aligned, not centred: two icons floating in the middle of a
       // full-height column read as a mistake. They belong next to the chat
       // header they act on.
@@ -55,8 +59,9 @@ export function PanelRail({ active, onSelect, only }: PanelRailProps) {
       className="hidden md:flex md:flex-col items-center gap-1 md:px-1.5 md:py-3 md:border-l md:overflow-hidden shrink-0"
       style={{ background: C.bgSurface, borderColor: C.border }}
     >
-      {PANELS.filter((p) => visible.includes(p.key)).map(({ key, label, icon: Icon }) => {
+      {PANELS.filter((p) => visible.includes(p.key)).map(({ key, labelKey, icon: Icon }) => {
         const isActive = active === key;
+        const label = t(labelKey);
         return (
           <button
             key={key}

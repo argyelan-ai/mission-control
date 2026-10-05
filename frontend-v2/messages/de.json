@@ -795,7 +795,7 @@
       "unfoldAll": "Alle öffnen",
       "sectionTitle": "Gruppen",
       "tabListLabel": "Chat-Ansicht",
-      "tabAgents": "Agenten",
+      "tabAgents": "Alle",
       "tabGroups": "Gruppen",
       "tabGroupsWaiting": "Gruppen — {count} warten",
       "newGroup": "Neue Gruppe",
@@ -980,6 +980,28 @@
     "contextTokensUsed": "≈{used}/{win} belegt. ",
     "contextSourceEstimate": "Schätzung",
     "contextRingTooltip": "{detail}Quelle: {source}. Die CLI-Statuszeile zeigt dagegen den Rest bis zur Auto-Komprimierung an — andere Basis, beide korrekt.",
+    "contextPanelTitle": "Kontext",
+    "contextPanelSegment": {
+      "input": "Eingabe",
+      "cacheRead": "Cache gelesen",
+      "cacheCreation": "Cache geschrieben",
+      "output": "Ausgabe",
+      "used": "Belegt",
+      "free": "Frei"
+    },
+    "contextPanelWindowTotal": "Fenster gesamt",
+    "contextPanelWindowUnknown": "unbekannt",
+    "contextPanelSource": "Quelle",
+    "contextPanelNote": "Die CLI-Statuszeile zeigt dagegen den Rest bis zur Auto-Komprimierung an — andere Basis, beide korrekt.",
+    "contextPanelClose": "Schliessen",
+    "slashCommands": {
+      "model": "Modell wechseln",
+      "clear": "Verlauf löschen",
+      "compact": "Kontext komprimieren",
+      "context": "Kontext-Nutzung anzeigen",
+      "status": "Session-Status anzeigen",
+      "help": "Hilfe anzeigen"
+    },
     "effortLevel": "Effort-Stufe",
     "effortLevelCurrent": "Effort-Stufe: {level}",
     "effortLevelLocked": "Effort-Stufe: {level} (nicht umschaltbar)",
@@ -1013,6 +1035,28 @@
       "thoughts": "{count, plural, one {nachgedacht} other {#× nachgedacht}}",
       "activity": "Aktivität",
       "errorIncluded": "Fehler enthalten"
+    },
+    "diff": {
+      "scopeLabel": "Diff-Bereich",
+      "scopeWorktree": "Arbeitsstand",
+      "scopeLastCommit": "Letzter Commit",
+      "refresh": "Aktualisieren",
+      "kind": {
+        "task": "Laufende Aufgabe",
+        "session": "Chat-Ordner",
+        "recent": "Zuletzt benutzt"
+      },
+      "commitMeta": "{hash} · {ago}",
+      "noChanges": "Keine offenen Änderungen",
+      "noCommit": "Noch kein Commit",
+      "noRepo": "Kein Git-Repository gefunden",
+      "noRepoHint": "Weder im Ordner des Chats noch im Workspace des Agenten liegt ein Git-Repository.",
+      "loadFailed": "Diff konnte nicht geladen werden."
+    },
+    "panels": {
+      "diff": "Diff",
+      "browser": "Browser",
+      "close": "Panel schliessen"
     }
   },
   "shell": {
@@ -3740,5 +3784,42 @@
     "sectionTitle": "Darstellung",
     "sectionDescription": "Wie Mission Control in diesem Browser aussieht.",
     "hint": "Dunkel ist Standard. Die Wahl wird nur in diesem Browser gespeichert — andere Browser und Geräte behalten ihre eigene."
+  },
+  "browserLive": {
+    "notRunning": "Agenten-Browser läuft nicht — Task mit E2E-Schalter starten oder Browser-Profil aktivieren.",
+    "refresh": "Aktualisieren",
+    "connecting": "Verbinde…",
+    "streamEnded": "Stream beendet",
+    "reconnect": "Neu verbinden",
+    "live": "Live",
+    "follow": "Folgen",
+    "fullscreen": "Vollbild",
+    "closeFullscreen": "Vollbild schliessen",
+    "pageLabel": "Browser-Seite",
+    "liveViewAlt": "Live-Ansicht des Agenten-Browsers",
+    "newTab": "Neuer Tab: {title}",
+    "noTabsForAgent": "{name} hat gerade keinen Tab offen.",
+    "showAllTabs": "Alle Tabs zeigen",
+    "showingAllTabs": "Alle Tabs",
+    "showingOnlyThisAgent": "Nur Tabs von {name}",
+    "allTabs": "Alle Tabs",
+    "onlyAgent": "Nur {name}",
+    "allTabsShort": "Alle",
+    "thisAgent": "diesem Agenten",
+    "scopeUnavailableHint": "Zeige alle Tabs: Agenten-Zuordnung nicht verfügbar",
+    "unassignedFallbackHint": "Kein Tab ist {name} zugeordnet — gezeigt werden die Tabs ohne Agenten-Zuordnung.",
+    "unassignedTag": "nicht zugeordnet",
+    "status": {
+      "no_page": "Noch keine offene Seite im Agenten-Browser.",
+      "connect_error": "Verbinde mit dem Agenten-Browser…",
+      "stream_error": "Stream-Fehler — neu verbinden kann helfen.",
+      "connectionError": "Verbindungsfehler",
+      "unknown": "Verbindungsproblem"
+    }
+  },
+  "gitDiff": {
+    "fileOne": "{count} Datei",
+    "fileOther": "{count} Dateien",
+    "moreLinesHidden": "… {count} weitere Zeilen ausgeblendet"
   }
 }

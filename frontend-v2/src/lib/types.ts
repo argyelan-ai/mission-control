@@ -168,6 +168,28 @@ export interface CommitDiff {
   date: string;
   stats: { files: number; additions: number; deletions: number };
   files: CommitDiffFile[];
+  /** Chat diff only (`GET /agents/{id}/chat/diff`): which view this is. */
+  scope?: "worktree" | "last-commit";
+  /** Chat diff, last-commit only: ISO author time — format it in the UI's
+   *  locale (`date` is git's English relative text). */
+  committed_at?: string | null;
+  /** Chat diff only: WHICH repository is shown and why. */
+  source?: ChatDiffSource;
+}
+
+/** Why the chat diff shows this repository — a code the UI translates:
+ *  the running task's workspace, the chat session's own folder, or the
+ *  repository git touched last in the agent's workspace. */
+export type ChatDiffSourceKind = "task" | "session" | "recent";
+
+export interface ChatDiffSource {
+  kind: ChatDiffSourceKind;
+  /** Folder name of the repository. */
+  repo: string;
+  /** Checked-out branch, or the short commit id when HEAD is detached. */
+  branch: string | null;
+  /** Location as the agent sees it (`/workspace/…`, `~/…`). */
+  path: string;
 }
 
 export interface Task {
@@ -2979,6 +3001,25 @@ export interface BrowserLiveTarget {
   id: string;
   title: string;
   url: string;
+  /** Only in the unassigned fallback (see BrowserLiveTargetsResponse):
+   *  true = no agent is assigned to this tab (e.g. playwright-mcp's tabs,
+   *  shared by every claude agent, or one no agent has claimed yet). */
+  unassigned?: boolean;
+}
+
+/** Response shape of GET /api/v1/browser-live/targets (bauplan.md PR B1) */
+export interface BrowserLiveTargetsResponse {
+  targets: BrowserLiveTarget[];
+  /** True only when `agent_id` was passed AND attribution couldn't be
+   *  resolved right now (gateway down, or the agent id doesn't resolve) —
+   *  `targets` is then the UNFILTERED list, not "this agent has none". */
+  scopeUnavailable: boolean;
+  /** True when `agent_id` was passed, the agent owns no open tab, but tabs
+   *  assigned to NO agent exist — `targets` is then EVERY tab (unassigned
+   *  ones flagged), never "this agent has none" (live finding 04.10.2026).
+   *  Optional: an older backend doesn't send it. */
+  unassignedFallback?: boolean;
+  unassignedCount?: number;
 }
 
 // ── Prompt Library (Benchmark Studio core, PR 2) ─────────────────────────────

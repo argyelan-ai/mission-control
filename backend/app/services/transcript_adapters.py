@@ -53,6 +53,11 @@ def _no_subagent_runs(_session_path: Path) -> list[dict[str, Any]]:
     return []
 
 
+def _no_session_cwd(_session_path: Path) -> str | None:
+    """The default for a harness that records no working directory."""
+    return None
+
+
 @dataclass(frozen=True)
 class TranscriptAdapter:
     """Die harness-spezifische Haelfte der Chat-Ansicht.
@@ -144,6 +149,18 @@ class TranscriptAdapter:
     #: liefe bei jedem Takt fuer Adapter ohne eigenen Kanal ins Leere.
     preview_channel: Callable[[Path], Path | None] | None = None
 
+    #: Session file -> the working directory the CLI recorded for it (its own
+    #: path, a container path for Docker agents), or ``None`` when the
+    #: harness records none.
+    #:
+    #: The chat's diff panel needs it: what "just happened in the chat"
+    #: happens where the SESSION works, not in the last task's workspace —
+    #: operator finding 04.10.2026, the panel showed a months-old commit from
+    #: a finished task while the chat had just committed elsewhere. Default
+    #: ``None`` so a harness without this knowledge simply keeps the older
+    #: fallbacks (running task, most recently used repo).
+    session_cwd: Callable[[Path], str | None] = _no_session_cwd
+
     #: Session-Datei -> die stabile ID der LOGISCHEN Sitzung, die sie
     #: traegt — fuer den Rollover-Vergleich im Tailer (``transcript_chat.
     #: ChatTailerManager``'s ``_is_genuine_rollover``), der sonst JEDEN
@@ -210,6 +227,7 @@ def _claude_adapter(
         find_active_session=transcript_chat.find_active_session,
         session_scan_root=lambda session_path: session_path.parent,
         transcript_allowed=transcript_chat.transcript_allowed,
+        session_cwd=transcript_chat.session_cwd,
         # Claude Codes Parser ist zustandslos — die Fabrik gibt schlicht ihn
         # selbst zurueck; der Pfad interessiert ihn nicht.
         new_parser=lambda session_path=None: transcript_chat.parse_transcript_line,
@@ -238,6 +256,7 @@ def _omp_adapter() -> TranscriptAdapter:
         preview_channel=omp_chat.preview_channel,
         session_scan_root=omp_chat.session_scan_root,
         transcript_allowed=omp_chat.transcript_allowed,
+        session_cwd=omp_chat.session_cwd,
         new_parser=omp_chat.new_parser,
         peek_entry_id=omp_chat.peek_entry_id,
         stamp_usage=omp_chat.stamp_usage,
