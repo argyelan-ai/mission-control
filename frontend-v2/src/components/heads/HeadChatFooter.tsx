@@ -38,6 +38,7 @@ export function HeadChatFooter({
   transcriptFallbackQuestion = null,
   newerRunId = null,
   onOpenNewerRun,
+  onRestarted,
 }: {
   run: HeadRun;
   /** The transcript's last assistant message, for the rare run whose
@@ -54,6 +55,13 @@ export function HeadChatFooter({
    *  SECOND restart from an already-stale question). */
   newerRunId?: string | null;
   onOpenNewerRun?: (runId: string) => void;
+  /** Threaded straight through to `HeadContinueSheet` (round 4 review
+   *  finding): without it, a successful "Continue" left the operator
+   *  looking at THIS now-superseded run's chat, having to find the new
+   *  run in the list by hand. The caller (`ChatView`) already has a
+   *  "jump to this head run" callback for the `newerRunId` link above —
+   *  the same one belongs here. */
+  onRestarted?: (newRunId: string) => void;
 }) {
   const t = useTranslations("heads");
   const qc = useQueryClient();
@@ -221,7 +229,7 @@ export function HeadChatFooter({
           <RotateCcw size={15} aria-hidden />
           {t("chat.footer.continueRun")}
         </button>
-        <HeadContinueSheet open={restartOpen} onClose={() => setRestartOpen(false)} run={run} />
+        <HeadContinueSheet open={restartOpen} onClose={() => setRestartOpen(false)} run={run} onRestarted={onRestarted} />
       </div>
     );
   }

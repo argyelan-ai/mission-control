@@ -371,6 +371,30 @@ def _basename(path: str) -> str:
     return path.rstrip("/").rsplit("/", 1)[-1] or path
 
 
+def _quote_note(text: str) -> str:
+    """Markdown-blockquote every line of ``text``, escaping a leading
+    ``#`` so a note's own heading-shaped line (``### Open question``,
+    ``## Previous run``) can never be mistaken for one of job.md's OWN
+    section headings once pasted into the "previous run" block (round 4
+    review finding). A real assistant note is multi-line markdown — the
+    old code only put the bullet marker on the FIRST line (an f-string
+    with an embedded ``\\n`` does not re-prefix later lines), so a later
+    line that happened to read ``### Open question`` would land at column
+    0 and look like a real section boundary to the next head reading
+    job.md as its prompt. Blockquoting every line keeps the whole note
+    visually and structurally "quoted text" no matter how many lines it
+    has; escaping ``#`` defeats it even inside the blockquote, for a
+    renderer or a naive ``^#+`` scan alike."""
+    out: list[str] = []
+    for line in text.splitlines() or [""]:
+        stripped = line.lstrip()
+        if stripped.startswith("#"):
+            indent = line[: len(line) - len(stripped)]
+            line = f"{indent}\\{stripped}"
+        out.append(f"> {line}" if line else ">")
+    return "\n".join(out)
+
+
 def summarize(events: list[dict[str, Any]], *, last_step: str | None = None, env_values: tuple[str, ...] = ()) -> str:
     """A short, deterministic recap of ``events`` (the same ``ChatEvent``
     list ``read()``/the chat history endpoint return) — NO model call, ever:
@@ -398,16 +422,28 @@ def summarize(events: list[dict[str, Any]], *, last_step: str | None = None, env
             tool_count += 1
             path = _tool_changed_file(ev)
             if path:
-                base = _basename(path)
+                # Masked before it is even kept (round 4 review finding: a
+                # tool's own path is caller-controlled text exactly like an
+                # assistant message, so the same "mask before you cut/keep
+                # it" rule applies here too).
+                base = redact.mask_text(_basename(path), env_values)
                 if base not in seen_files:
                     seen_files.add(base)
                     files.append(base)
         elif kind == "message" and ev.get("role") == "assistant":
             text = (ev.get("text") or "").strip()
             if text:
-                assistant_texts.append(text)
+                # Masked on the FULL text, BEFORE the per-message clip
+                # below ever shortens it (round 4 review finding: the old
+                # order — clip to 600 chars first, mask the assembled
+                # result after — let a secret straddling that cut leave a
+                # partial, no-longer-matching prefix behind; live probe: a
+                # 32-char env value at offset 581 leaked its first 18
+                # chars). Masking while the value is still whole means the
+                # match is made, and replaced, before any clip can split it.
+                assistant_texts.append(redact.mask_text(text, env_values))
 
-    last_step = (last_step or "").strip() or None
+    last_step = redact.mask_text((last_step or "").strip(), env_values) or None
     if not tool_count and not files and not assistant_texts and not last_step:
         return ""
 
@@ -429,8 +465,17 @@ def summarize(events: list[dict[str, Any]], *, last_step: str | None = None, env
         lines.append("Last assistant notes:")
         for text in recent:
             clipped = text if len(text) <= MAX_SUMMARY_MESSAGE_CHARS else text[: MAX_SUMMARY_MESSAGE_CHARS - 1] + "…"
-            lines.append(f"- {clipped}")
+            # Blockquoted, every line — see `_quote_note`'s own docstring
+            # (round 4 review finding: a real note is multi-line markdown
+            # and can contain a line shaped exactly like one of job.md's
+            # OWN section headings).
+            lines.append(_quote_note(clipped))
 
+    # A second, whole-text pass: idempotent on what the per-field masking
+    # above already redacted, and still this function's own standing
+    # contract regardless of what the caller passes in (unchanged from
+    # before this fix) — e.g. a secret that somehow reached `last_step`'s
+    # non-string neighbours or a future field this function grows.
     text = redact.mask_text("\n".join(lines).strip() + "\n", env_values)
     encoded = text.encode("utf-8")
     if len(encoded) > MAX_SUMMARY_BYTES:
@@ -442,8 +487,16 @@ def summary_for_restart(run: Any) -> str:
     """Best-effort ``summarize()`` for THIS run, for a ``mode=continue``
     restart (``routers.heads.restart_head``). Never raises: a transcript
     that cannot be located or read (no reader, nothing written yet, too
-    large) just yields ``""`` — the same "nothing to add" outcome as a run
-    with no transcript at all, not a failed restart."""
+    large) just means no events reach ``summarize()`` — NOT the same as an
+    empty result. The run's last reported step (``run.step``) is passed
+    through regardless, and almost every real run has one by the time a
+    "continue" restart is even possible, so the result still carries a
+    "Last step: …" line (round 4 review finding: an earlier version of
+    this docstring, and the PR text, claimed "no transcript" alone means
+    "nothing to add" — live check against three runs with no transcript,
+    including 1b386683, found a non-empty 51-byte recap in every one).
+    ``""`` only when there is truly nothing at all to show — no events AND
+    no step."""
     try:
         state = derive_for_run(run, time.time())["state"]
         result = read(run, locate(run), limit=1000, state=state)

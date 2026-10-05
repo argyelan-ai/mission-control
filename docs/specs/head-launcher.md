@@ -893,7 +893,16 @@ Acceptance criteria v1:
   real repo) still runs first, so a forged or stale hint can only ever make
   gc consider an already-safe copy sooner, never skip a check. Anything else
   ignored still keeps the worktree, and the report names exactly which
-  path(s) blocked it. The dry run is
+  path(s) blocked it. A worktree's own `actions`/`kept` entry in
+  `gc-report.json` carries the hint it was measured against — `task_status`
+  (the `.backend/task.json` value read, absent when there was none) and
+  `min_age_s` (which of the two constants actually applied) — on BOTH a
+  `would_remove` action and an `age`-kept entry, so the operator's own
+  dry-run reading shows not just THAT a `done` task's worktree is still
+  waiting but how much longer, and the orchestrator's live check after
+  deploy can assert the hint reached the report at all (round 4 review
+  finding: it used to decide the age silently and record nothing). The dry
+  run is
   not perfectly side-effect-free: it normalises each scratch clone's own
   git config and fetches one disposable check ref into it (idempotent host
   plumbing needed to inspect the clone safely), but it never touches a run

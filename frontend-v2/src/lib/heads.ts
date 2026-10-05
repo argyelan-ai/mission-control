@@ -498,12 +498,26 @@ export interface HeadGcAction {
   kind: "cache" | "worktree";
   bytes: number;
   would_remove: boolean;
+  /** Present only for a `kind: "worktree"` entry (round 4 review finding):
+   *  which age rule actually decided this — the `.backend/task.json`
+   *  hint's `status` when one was read (e.g. `"done"`), absent when there
+   *  was no hint to read. */
+  task_status?: string;
+  /** The age-wait rule this entry was measured against in seconds —
+   *  `MC_HEAD_GC_MIN_AGE_DONE_S` (default 24h) with a `"done"`
+   *  `task_status`, `MC_HEAD_GC_MIN_AGE_S` (default 14d) otherwise. */
+  min_age_s?: number;
 }
 
 export interface HeadGcKept {
   path: string;
   reason: string;
   ignored?: string[];
+  /** Same hint fields as `HeadGcAction`, present only on a `reason: "age"`
+   *  entry — so a kept, not-yet-eligible worktree still shows which rule
+   *  (and hint, if any) it is waiting on. */
+  task_status?: string;
+  min_age_s?: number;
 }
 
 export interface HeadGcRunReport {

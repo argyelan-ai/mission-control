@@ -48,6 +48,39 @@ def install_fixture(heads_root: Path, name: str, *, run_id: str | None = None) -
     return use_id
 
 
+def _append_assistant_text(run, text: str) -> None:
+    """Appends one assistant TEXT message to this (already-installed) run's
+    own transcript file, in the exact shape ``read()`` already parses for
+    EITHER harness — located the same way ``read()`` itself does
+    (``tr.locate()``), never a hardcoded path, so this works unchanged for
+    both fixtures.
+
+    Round 4 review finding: the old masking test planted its secret only
+    in a TOOL-RESULT line (`role: "user"`), which `summarize()` never
+    scans at all (it only reads tool-changed-file paths and ASSISTANT
+    message text) — so the assertion that the secret was absent from the
+    summary proved nothing. This puts it where `summarize()` actually
+    looks."""
+    located = tr.locate(run)
+    assert isinstance(located, tr.Located), "fixture must have a real transcript to append to"
+    if located.adapter.name == "omp":
+        line = json.dumps({
+            "type": "message", "id": "99999999-aaaa-4aaa-8aaa-000000000099", "parentId": None,
+            "timestamp": "2026-10-04T09:30:00.000Z",
+            "message": {"role": "assistant", "content": [{"type": "text", "text": text}]},
+        })
+    else:
+        line = json.dumps({
+            "parentUuid": None, "isSidechain": False,
+            "message": {"id": "chatcmpl-test-secret", "type": "message", "role": "assistant",
+                        "content": [{"type": "text", "text": text}]},
+            "apiBlockIndex": 0, "type": "assistant", "uuid": "99999999-aaaa-4aaa-8aaa-000000000098",
+            "timestamp": "2026-10-01T12:30:00.000Z",
+        })
+    with located.path.open("a", encoding="utf-8") as fh:
+        fh.write(line + "\n")
+
+
 PLANTED = {
     "claude-run": ("test-fake-9f3a7c21b8e4", "ghp_abcdefghijklmnopqrstuvwx", "Bearer zzzzzzzzzzzzzzzzzzzzzzzz"),
     "omp-run": ("test-fake-2b6e81cfa903", "ghp_abcdefghijklmnopqrstuvwx", "Bearer zzzzzzzzzzzzzzzzzzzzzzzz"),
@@ -813,18 +846,106 @@ def test_summarize_caps_at_4kb_for_a_very_long_transcript():
     assert text.rstrip().endswith("…")
 
 
-def test_summary_for_restart_reads_the_runs_own_transcript_and_masks_head_env(heads_root):
+def test_summarize_masks_a_secret_that_straddles_the_600_char_message_clip():
+    """Round 4 review finding: the per-message clip used to run BEFORE the
+    final mask, so a secret straddling the 600-char cut kept only a
+    PARTIAL prefix — which no longer equals the full `env_values` string
+    and so never matches — and that prefix leaked verbatim. Reproduces the
+    exact live probe: a 32-char value at offset 581 (581+32=613>600)
+    leaked its first 18 chars under the old order."""
+    secret = "q" * 32
+    text = ("x" * 581) + secret + ("y" * 50)
+    events = [{"kind": "message", "role": "assistant", "text": text}]
+    out = tr.summarize(events, env_values=(secret,))
+    assert secret not in out
+    assert secret[:18] not in out, "a partial prefix of the secret must not survive either"
+    assert "<redacted>" in out
+
+
+def test_sabotage_clip_before_mask_would_leak_the_secret_prefix():
+    """Sabotage-equivalent for the test above: reproduces the OLD, buggy
+    order (clip the raw message to 600 chars FIRST, mask the result after)
+    with the REAL `redact.mask_text` the fix relies on — not a stand-in —
+    and shows the live probe's own numbers (18 of 32 chars) actually leak
+    under that order, proving the NEW order (mask first, clip after) is
+    what closes the gap, not luck."""
+    secret = "q" * 32
+    text = ("x" * 581) + secret + ("y" * 50)
+    clipped_before_masking = text[:599] + "…"
+    leaked = redact.mask_text(clipped_before_masking, (secret,))
+    assert secret[:18] in leaked, "the live probe's own reproduction must still leak under the old order"
+
+
+def test_summarize_quotes_a_multiline_note_and_escapes_its_own_heading_lines():
+    """Round 4 review finding: a real assistant note is multi-line
+    markdown (e.g. fcbf9b5d's last note was a whole 'Run record: …
+    Status: passed' block) and can contain a line shaped exactly like one
+    of job.md's OWN section headings (`### Open question`). The old code
+    put the bullet marker only on the message's FIRST line — a later line
+    reading `### Open question` landed at column 0, unquoted, and could be
+    mistaken for a real section boundary by the next head reading job.md
+    as its prompt."""
+    note = "Status ok, nothing else to flag.\n### Open question\nShould I continue with step 4?"
+    events = [{"kind": "message", "role": "assistant", "text": note}]
+    text = tr.summarize(events)
+    assert "\n### Open question" not in text, "a bare, unquoted heading-shaped line must never appear"
+    assert "> \\### Open question" in text, "the line must be blockquoted AND have its '#' escaped"
+    assert "> Status ok, nothing else to flag." in text
+
+
+@pytest.mark.parametrize("name", ["claude-run", "omp-run"])
+def test_summary_for_restart_reads_the_runs_own_transcript_and_masks_head_env(heads_root, name):
+    """Round 4 review finding: the old version of this test asserted the
+    PLANTED env value absent from the summary without ever putting it
+    anywhere `summarize()` looks (it sat only in a tool-result/env line,
+    never an assistant message) — it passed by construction, not because
+    masking did anything. This plants the value inside an actual
+    ASSISTANT message of the installed fixture copy, for BOTH harnesses,
+    so the assertion is real."""
+    run_id = install_fixture(heads_root, name)
+    run = load_run(run_id)
+    secret = PLANTED[name][0]
+    _append_assistant_text(run, f"Reusing the cached credential {secret} for the retry.")
+    text = tr.summary_for_restart(run)
+    assert secret not in text
+    assert "<redacted>" in text
+
+
+def test_sabotage_summary_for_restart_without_masking_leaks_the_planted_value(monkeypatch, heads_root):
+    """Sabotage for the test above: with masking disabled end to end
+    (`read()`'s own `mask_tree` AND `summarize()`'s final pass both go
+    through `redact.mask_text`), the same planted value must now leak —
+    proving masking, not the absence of a code path that ever looks at
+    it, is what kept it out."""
+    monkeypatch.setattr(tr.redact, "mask_text", lambda text, extra=(): text)
     run_id = install_fixture(heads_root, "claude-run")
     run = load_run(run_id)
+    secret = PLANTED["claude-run"][0]
+    _append_assistant_text(run, f"Reusing the cached credential {secret} for the retry.")
     text = tr.summary_for_restart(run)
-    assert "test_pr_merge_monitor.py" in text
-    assert PLANTED["claude-run"][0] not in text
+    assert secret in text
 
 
-def test_summary_for_restart_is_empty_without_a_transcript(heads_root):
+def test_summary_for_restart_is_empty_without_a_transcript_or_a_step(heads_root):
     run_id = make_run(heads_root, task_id=str(uuid.uuid4()), status={"phase": "exited", "exit_code": 0})
     run = load_run(run_id)
     assert tr.summary_for_restart(run) == ""
+
+
+def test_summary_for_restart_still_reports_the_last_step_without_a_transcript(heads_root):
+    """Round 4 review finding: the PR claimed 'continue with no transcript
+    renders byte-for-byte the same job.md as before' and both docstrings
+    promised the same — false for a REAL run, which almost always has
+    written a step by the time a continue restart is even possible (live
+    check: three no-transcript runs, including 1b386683, each produced a
+    non-empty 51-byte recap). Showing the last step with no transcript to
+    read is useful, not a bug — this test gives the no-transcript run a
+    real step so it checks the actual case, not a vacuous one."""
+    run_id = make_run(heads_root, task_id=str(uuid.uuid4()), status={"phase": "exited", "exit_code": 0})
+    (heads_root / run_id / "step.txt").write_text("step 3/7 implement")
+    run = load_run(run_id)
+    text = tr.summary_for_restart(run)
+    assert text == "- Last step: step 3/7 implement\n"
 
 
 def test_summary_for_restart_never_raises_on_a_broken_run():

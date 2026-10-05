@@ -623,6 +623,65 @@ def test_a_forged_done_hint_on_a_young_worktree_still_waits(scratch):
     assert any(k["path"] == str(wt) and k["reason"] == "age" for k in kept)
 
 
+def test_done_hint_report_names_itself_on_the_removed_worktree_action(scratch):
+    """Round 4 review finding: the decision used `.backend/task.json`'s
+    `done` hint to pick `GC_MIN_AGE_DONE_S`, but recorded nothing about it
+    — a dry-run report on a 2-day-old, clean, pushed worktree with the hint
+    present listed the action as `{path, kind, bytes, would_remove}` with
+    no reason at all, indistinguishable from an ordinary 14-day removal.
+    The action must now carry `task_status`/`min_age_s`."""
+    mc_home = scratch["mc_home"]
+    run_id, wt = _make_run(
+        mc_home, repo_full_name=scratch["full_name"], branch_suffix="donehintseen", origin=scratch["origin"],
+        exited_ago_s=2 * 86400,
+    )
+    _write_task_hint(mc_home, run_id, "done")
+    res = run_head(mc_home, "gc")  # dry run — the worktree must still exist to inspect the entry against
+    assert res.returncode == 0, res.stderr
+    assert wt.exists()
+    action = next(a for a in _run_for(_report(mc_home), run_id)["actions"] if a["path"] == str(wt))
+    assert action["task_status"] == "done"
+    assert action["min_age_s"] == 24 * 3600
+
+
+def test_done_hint_report_names_itself_on_a_still_kept_age_entry(scratch):
+    """Same hint, but the worktree is still too young even for the
+    shortened window — the `kept: age` entry must say so too, so the
+    operator reading a dry-run report can see WHEN it becomes eligible,
+    not just THAT it is waiting."""
+    mc_home = scratch["mc_home"]
+    run_id, wt = _make_run(
+        mc_home, repo_full_name=scratch["full_name"], branch_suffix="donehintkept", origin=scratch["origin"],
+        exited_ago_s=3600 * 2,
+    )
+    _write_task_hint(mc_home, run_id, "done")
+    res = run_head(mc_home, "gc")
+    assert res.returncode == 0, res.stderr
+    assert wt.exists()
+    kept = next(k for k in _run_for(_report(mc_home), run_id)["kept"] if k["path"] == str(wt))
+    assert kept["reason"] == "age"
+    assert kept["task_status"] == "done"
+    assert kept["min_age_s"] == 24 * 3600
+
+
+def test_without_a_hint_the_kept_age_entry_still_names_the_default_min_age(scratch):
+    """Control for the test above: no `.backend/task.json` at all — the
+    entry still carries `min_age_s` (the default 14-day rule it is
+    actually waiting on) but no `task_status` key."""
+    mc_home = scratch["mc_home"]
+    run_id, wt = _make_run(
+        mc_home, repo_full_name=scratch["full_name"], branch_suffix="nohintkept", origin=scratch["origin"],
+        exited_ago_s=2 * 86400,
+    )
+    res = run_head(mc_home, "gc")
+    assert res.returncode == 0, res.stderr
+    assert wt.exists()
+    kept = next(k for k in _run_for(_report(mc_home), run_id)["kept"] if k["path"] == str(wt))
+    assert kept["reason"] == "age"
+    assert "task_status" not in kept
+    assert kept["min_age_s"] == 14 * 24 * 3600
+
+
 def test_running_run_is_skipped_entirely(scratch):
     mc_home = scratch["mc_home"]
     run_id, wt = _make_run(mc_home, repo_full_name=scratch["full_name"], branch_suffix="running", origin=scratch["origin"])

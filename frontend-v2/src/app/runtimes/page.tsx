@@ -945,6 +945,14 @@ export default function RuntimesPage() {
 
             {pageTab === "fleet" && !isEmpty && (
               <>
+                {/* Above the stage, right under the tab bar (round 4
+                    review finding): stage groups stack at ~490px per card
+                    on the phone, so this rare-but-important warning used
+                    to land below the first screen with a real fleet. It
+                    is rare enough (K4) to still never reserve layout space
+                    when there is nothing to warn about. */}
+                <HeadDiskWarning />
+
                 <div className="flex flex-col gap-6">
                   <FleetStage
                     stageGroups={stageGroups}
@@ -953,8 +961,6 @@ export default function RuntimesPage() {
                     onOpen={openPanel}
                   />
                 </div>
-
-                <HeadDiskWarning />
 
                 <HeadOrphanRuns />
 

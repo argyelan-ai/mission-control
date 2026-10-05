@@ -1229,6 +1229,7 @@ export function ChatView({
               transcriptFallbackQuestion={lastAssistantMessage}
               newerRunId={newerHeadRunId}
               onOpenNewerRun={onSelectHeadRun}
+              onRestarted={onSelectHeadRun}
             />
           ) : (
             <>
