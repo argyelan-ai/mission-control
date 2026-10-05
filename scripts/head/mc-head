@@ -18,6 +18,9 @@ Usable without MC from a terminal:
                                      released its box lock, then start <new>
     mc-head status <run_id>          print .wrapper/status.json
     mc-head watch                    process the spool once (launchd entry)
+    mc-head gc [--apply]             retention report (ADR-085 Nachtrag
+                                     2026-10-04); deletes only with --apply
+                                     (or MC_HEAD_GC_APPLY=1 from cmd_watch)
 
 Python 3.9 stdlib only, so the macOS system python can run it from launchd.
 Nothing in here trusts spec.json: the backend container mounts $MC_HOME
@@ -106,6 +109,46 @@ BASE_PATH = os.environ.get(
 )
 GIT_NAME = os.environ.get("MC_HEAD_GIT_NAME", "MC head")
 GIT_EMAIL = os.environ.get("MC_HEAD_GIT_EMAIL", "head@users.noreply.invalid")
+
+# ── gc (ADR-085 Nachtrag 2026-10-04 — retention, dry run by default) ─────
+
+# Scharf nur, wenn dieser Schalter in der PROZESS-Umgebung steht (launchd
+# plist, nur auf dem Host setzbar). Es gibt bewusst KEINE vom Backend
+# beschreibbare Datei dafuer — eine solche Datei waere ein Schalter, den ein
+# kompromittiertes Backend selbst umlegen koennte.
+GC_APPLY_ENV = "MC_HEAD_GC_APPLY"
+GC_BUDGET_BYTES = int(os.environ.get("MC_HEAD_GC_BUDGET_BYTES", str(5 * 1024**3)))
+GC_WARN_FREE_BYTES = int(os.environ.get("MC_HEAD_GC_WARN_FREE_BYTES", str(20 * 1024**3)))
+GC_MIN_AGE_S = int(os.environ.get("MC_HEAD_GC_MIN_AGE_S", str(14 * 24 * 3600)))
+# A run younger than this (since it exited) is not even considered — the
+# operator may still be reading its result.
+GC_SKIP_MIN_ENDED_S = int(os.environ.get("MC_HEAD_GC_SKIP_MIN_ENDED_S", "3600"))
+# cmd_watch() only re-runs gc when the last ATTEMPT (locks/gc.last, written
+# on every cmd_gc call regardless of outcome — see _touch_gc_attempt_stamp)
+# is older than this.
+GC_THROTTLE_S = int(os.environ.get("MC_HEAD_GC_THROTTLE_S", str(6 * 3600)))
+# Allowlist, deliberately short and literal — see cmd_gc()'s docstring for
+# why nothing in here may ever be computed from a pattern.
+GC_CACHE_RELATIVE_PATHS = ("home/.cache", "home/Library/Caches", "home/.npm/_cacache")
+GC_RESERVED_DIR_NAMES = frozenset({"clones", "scratch-origin", "locks", "spool", "night", "task-locks"})
+# Directory NAMES (any depth inside a worktree) that are always a
+# regenerable build/test cache, never worth keeping a whole worktree
+# around for. Round 3 review finding: `_wt_has_ignored_files` used to
+# block removal on ANY git-ignored path, and a head run ALWAYS leaves at
+# least one behind — the procedure requires running tests, which plants
+# `__pycache__`/`.pytest_cache`/`node_modules` into every single worktree
+# — so the approved lifecycle rule "worktrees cleaned" never actually
+# fired on a real run (proven live on a copy of ~/.mc/heads: the one
+# remaining worktree was kept with reason `ignored_files`, whose only
+# ignored entries were `__pycache__/` and `tests/__pycache__/`). This is
+# NOT the same risk `GC_CACHE_RELATIVE_PATHS`' comment above warns about:
+# that list drives a targeted `rmtree` of a computed path (a symlink-escape
+# surface), this one only feeds a yes/no decision — the worktree is still
+# removed as ONE unit, through `git worktree remove`, never a path this
+# allowlist names directly.
+GC_REGENERABLE_IGNORED_DIR_NAMES = frozenset(
+    {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "node_modules"}
+)
 
 # ── validation (§6.1) ────────────────────────────────────────────────────
 
@@ -1658,12 +1701,651 @@ def cmd_restart(old_id: str, new_id: str) -> int:
     return cmd_start(new_id)
 
 
+# ── gc (ADR-085 Nachtrag 2026-10-04): retention, dry run by default ─────
+#
+# Lives on the host, not in the backend: mc-head already owns the clones,
+# worktrees, locks and git identity this needs (module docstring: "The MC
+# backend never gets a shell on the host"). The backend only ever SHOWS the
+# report this writes (``GET /heads/cleanup``), never triggers or computes it.
+#
+# Kept forever, never touched here: spec.json, job.md, procedure.md,
+# run-record.md, step.txt, question.md, head.log, work.log,
+# hook-passed.txt, head-settings.json, head.env, .wrapper/, .backend/,
+# claude-config/**, omp-sessions/**, home/.omp/**, anything under the vault.
+# Only two kinds of path are ever candidates: the literal cache allowlist
+# below, and a run's own ``wt/`` worktree.
+
+
+def _parse_iso(value) -> float | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
+    except ValueError:
+        return None
+
+
+def _dir_bytes(path: Path) -> int:
+    """Sum of regular-file sizes under ``path`` — never follows a symlinked
+    directory (``os.walk`` default), so a symlink planted inside cannot make
+    this walk (or a later removal built on the same walk) leave the run."""
+    total = 0
+    if not path.exists() or path.is_symlink():
+        return 0
+    for root, _dirs, files in os.walk(path, onerror=lambda *_exc: None):
+        for name in files:
+            try:
+                st = Path(root, name).lstat()
+            except OSError:
+                continue
+            if stat.S_ISREG(st.st_mode):
+                total += st.st_size
+    return total
+
+
+def _remove_tree(path: Path) -> None:
+    if path.is_symlink():
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        return
+    shutil.rmtree(path, ignore_errors=True)
+
+
+def _cache_blocked_by_symlink(folder: Path, rel: str) -> bool:
+    """``True`` when ANY path component between ``folder`` and
+    ``folder / rel`` is a symlink, or the fully resolved target does not lie
+    inside the resolved ``folder`` — review finding on PR #751: the old
+    check (``p.is_symlink()``) only looked at the FINAL component
+    (``home/.cache``), so a head replacing an INTERMEDIATE one
+    (``home/Library -> <outside>``, or ``home -> <outside>`` itself) was
+    never caught — proven end to end: ``--apply`` then deleted a sentinel
+    file outside the run folder entirely. Called twice: once to decide, and
+    again right before the actual ``rmtree`` (a head's sandbox can replant
+    the symlink in between — ``CLONE_GIT``/``WT`` are writable throughout
+    the run, and gc can run while a head is still finishing up)."""
+    cur = folder
+    for part in Path(rel).parts:
+        cur = cur / part
+        try:
+            info = cur.lstat()
+        except OSError:
+            return False  # does not exist (yet) at this component — not a symlink issue
+        if stat.S_ISLNK(info.st_mode):
+            return True
+    try:
+        folder_r = folder.resolve()
+        cur_r = cur.resolve()
+    except OSError:
+        return True
+    return not (folder_r == cur_r or folder_r in cur_r.parents)
+
+
+def _gc_candidate_run_ids() -> list:
+    root = heads_root()
+    if not root.is_dir():
+        return []
+    out = []
+    try:
+        entries = sorted(root.iterdir())
+    except OSError:
+        return []
+    for entry in entries:
+        if entry.name in GC_RESERVED_DIR_NAMES or not UUID_RE.match(entry.name):
+            continue
+        if not entry.is_dir() or entry.is_symlink():
+            continue
+        if (entry / "spec.json").exists():
+            out.append(entry.name)
+    return out
+
+
+def _gc_load(run_id: str):
+    """``(spec, status)`` for a run gc may consider, or ``None`` — the same
+    validation gate every other entry point uses (``load_spec``): a run
+    whose spec.json does not pass is left alone, never guessed at."""
+    try:
+        spec = load_spec(run_id)
+    except SpecInvalid:
+        return None
+    return spec, read_status(run_id)
+
+
+def _gc_skip_reason(run_id: str, spec: dict, status: dict, now: float, by_task: dict, by_restarted_from: dict) -> str | None:
+    """``None`` means "consider this run for cleanup". Anything else is a
+    run gc must not even look at yet (still running, just finished, or a
+    predecessor/sibling still is)."""
+    if status.get("phase") != "exited":
+        return "not_exited"
+    exited_at = _parse_iso(status.get("exited_at"))
+    if exited_at is None or now - exited_at < GC_SKIP_MIN_ENDED_S:
+        return "too_recent"
+    if pid_alive(status.get("supervisor_pid")):
+        return "supervisor_alive"
+    task_id = spec.get("task_id")
+    if task_id:
+        for other_id in by_task.get(task_id, ()):
+            if other_id != run_id and read_status(other_id).get("phase") != "exited":
+                return "task_active"
+    for successor_id in by_restarted_from.get(run_id, ()):
+        if read_status(successor_id).get("phase") != "exited":
+            return "has_active_continuation"
+    return None
+
+
+def _wt_safe_gitdir(spec: dict, wt: Path) -> Path | None:
+    """The worktree's real git-dir INSIDE the clone, iff ``wt/.git`` is
+    exactly the plain-text worktree link git itself writes — never a detour
+    a head's sandbox could plant (review finding on PR #751: the sandbox's
+    ``CLONE_GIT`` grant and ``wt/.git`` being head-writable together let a
+    head point it at an entirely different, head-crafted bare repo carrying
+    its own ``filter.x.clean`` command; every git call this module used to
+    make with ``-C wt`` would then run that command the moment ``git
+    status``/``symbolic-ref`` needed to compare file content).
+
+    Returns ``None`` (the caller's ``kept`` reason: ``foreign_gitdir``) for
+    ANYTHING that is not exactly: ``wt/.git`` a regular, non-symlink file
+    containing ``gitdir: <path>`` whose target is a real, non-symlink
+    directory directly under ``<clone>/.git/worktrees/``, whose own
+    ``commondir`` resolves back to this exact clone's ``.git``. A head can
+    rewrite ``wt/.git`` itself, or any of ``commondir``, at any time; this
+    is called again right before every git call below, never cached.
+    """
+    dotgit = wt / ".git"
+    try:
+        info = dotgit.lstat()
+    except OSError:
+        return None
+    if not stat.S_ISREG(info.st_mode):
+        return None  # symlink, directory, or missing — never trusted
+    try:
+        text = dotgit.read_text(errors="replace")
+    except OSError:
+        return None
+    m = re.match(r"^gitdir:\s*(.+?)\s*$", text, re.S)
+    if not m:
+        return None
+    clone = clones_root() / spec["repo_full_name"].replace("/", "--")
+    try:
+        worktrees_root = (clone / ".git" / "worktrees").resolve()
+    except OSError:
+        return None
+    raw_gitdir = Path(m.group(1))
+    gitdir = raw_gitdir if raw_gitdir.is_absolute() else (wt / raw_gitdir)
+    try:
+        if gitdir.is_symlink() or not gitdir.is_dir():
+            return None
+        gitdir_r = gitdir.resolve()
+    except OSError:
+        return None
+    if gitdir_r.parent != worktrees_root:
+        return None
+    try:
+        commondir_raw = (gitdir / "commondir").read_text(errors="replace").strip()
+        commondir = (gitdir / commondir_raw).resolve()
+    except OSError:
+        return None
+    try:
+        clone_git = (clone / ".git").resolve()
+    except OSError:
+        return None
+    if commondir != clone_git:
+        return None
+    return gitdir_r
+
+
+def _wt_git(spec: dict, wt: Path, args: list) -> subprocess.CompletedProcess:
+    """Run git against this worktree ONLY through an explicit
+    ``--git-dir``/``--work-tree`` pointing at the gitdir ``_wt_safe_gitdir``
+    just re-validated — never ``-C wt`` (which trusts ``wt/.git`` blindly,
+    exactly the trap this function exists to close). The caller must have
+    called ``sanitize_clone()`` on this clone first in the same decision —
+    this function does not repeat it on every call, so the clone's config
+    (where a filter driver's COMMAND actually lives; ``commondir`` is
+    shared, so even a validated gitdir reads it from there) is only ever as
+    fresh as the caller made it."""
+    gitdir = _wt_safe_gitdir(spec, wt)
+    if gitdir is None:
+        return subprocess.CompletedProcess(args, 1, "", "foreign or missing .git")
+    return _git(
+        ["--git-dir", str(gitdir), "--work-tree", str(wt), *args],
+        env={"GIT_OPTIONAL_LOCKS": "0"},
+        check=False,
+    )
+
+
+def _wt_head_sha(spec: dict, wt: Path) -> str | None:
+    res = _wt_git(spec, wt, ["rev-parse", "HEAD"])
+    out = res.stdout.strip() if res.returncode == 0 else ""
+    return out or None
+
+
+def _wt_is_clean(spec: dict, wt: Path) -> bool:
+    res = _wt_git(spec, wt, ["status", "--porcelain", "--untracked-files=all"])
+    return res.returncode == 0 and not res.stdout.strip()
+
+
+def _wt_ignored_path_is_regenerable(rel_path: str) -> bool:
+    """``rel_path`` is exactly one line's path as ``git status
+    --ignored=matching`` prints it after the ``"!! "`` marker: forward-slash
+    separated, relative to the worktree root, optionally wrapped in double
+    quotes (git quotes a path containing unusual characters). True when
+    EVERY bit that makes this path worth keeping around is just a
+    build/test cache: a path component matches
+    ``GC_REGENERABLE_IGNORED_DIR_NAMES``, or the file itself is a bare
+    ``*.pyc`` (Python can leave one next to its source outside a
+    ``__pycache__`` directory too, pre-3.2 layout). Anything else — a
+    head's own ``notes.md`` under ``info/exclude``, say — is not."""
+    if len(rel_path) >= 2 and rel_path[0] == '"' and rel_path[-1] == '"':
+        rel_path = rel_path[1:-1]
+    parts = rel_path.split("/")
+    if parts and parts[-1].endswith(".pyc"):
+        return True
+    return any(part in GC_REGENERABLE_IGNORED_DIR_NAMES for part in parts)
+
+
+def _wt_has_ignored_files(spec: dict, wt: Path) -> list | None:
+    """The git-ignored paths in this worktree that are NOT a known
+    regenerable build/test cache (``_wt_ignored_path_is_regenerable``) —
+    e.g. an ``info/exclude``-ignored notes file a head left behind on
+    purpose. These are what actually BLOCK removal; a ``__pycache__`` or
+    ``node_modules`` a test run left behind does not (round 3 review
+    finding — see ``GC_REGENERABLE_IGNORED_DIR_NAMES``'s comment).
+
+    Review finding on PR #751 (round 1): ``_wt_is_clean``'s own ``status``
+    call never asked about ignored paths, and ``git worktree remove``
+    WITHOUT ``--force`` deletes them anyway (verified directly: a clean,
+    pushed scratch worktree carrying one such file lost it after
+    ``--apply``). ``--ignored=matching`` lists every ignored FILE
+    individually rather than collapsing a whole ignored directory into one
+    entry, so a mix of regenerable and non-regenerable paths under the same
+    worktree is still caught correctly, one file at a time.
+
+    Returns the list of blocking paths (empty = nothing blocks), or
+    ``None`` on a git error — the caller must treat ``None`` as "blocks",
+    not as "nothing blocks": ``bool(None)`` is falsy just like
+    ``bool([])``, so this is checked explicitly, never just truthiness.
+    "Can't tell" must never read as "safe to delete"."""
+    res = _wt_git(spec, wt, ["status", "--porcelain", "--ignored=matching"])
+    if res.returncode != 0:
+        return None
+    blocking = []
+    for line in res.stdout.splitlines():
+        if not line.startswith("!! "):
+            continue
+        rel = line[len("!! "):]
+        if not _wt_ignored_path_is_regenerable(rel):
+            blocking.append(rel)
+    return blocking
+
+
+def _wt_is_detached(spec: dict, wt: Path) -> bool:
+    res = _wt_git(spec, wt, ["symbolic-ref", "-q", "HEAD"])
+    return res.returncode != 0
+
+
+def _wt_head_in_scratch_origin(spec: dict, wt: Path) -> bool:
+    """The clone's current HEAD is already an ancestor of the branch ref as
+    it sits on the LOCAL bare origin — i.e. this exact commit was pushed.
+
+    Never runs git directly against the bare origin (same safety as
+    ``scratch_branch_pushed``/``pushed_branch_tip``, review finding on PR
+    #751 — this function used to be the one exception, calling
+    ``--git-dir <origin>`` straight at the untrusted bare repo): fetches the
+    branch ref into the sanitized CLONE first and checks ancestry there. A
+    real GitHub repo's origin is never reached this way either —
+    ``scratch_origin`` already filters on that."""
+    origin = scratch_origin(spec)
+    if origin is None:
+        return False
+    sha = _wt_head_sha(spec, wt)
+    if not sha:
+        return False
+    clone = clones_root() / spec["repo_full_name"].replace("/", "--")
+    ref = CHECK_REFS[1]
+    try:
+        sanitize_clone(spec["repo_full_name"], clone)
+        fetched = _git(
+            ["-C", str(clone), "fetch", "-q", "--no-tags", "--no-write-fetch-head", "origin",
+             f"+refs/heads/{spec['branch']}:{ref}"],
+            check=False,
+        )
+        if fetched.returncode != 0:
+            return False
+        res = _git(["-C", str(clone), "merge-base", "--is-ancestor", sha, ref], check=False)
+        return res.returncode == 0
+    except (RuntimeError, OSError, subprocess.SubprocessError):
+        return False
+    finally:
+        _git(["-C", str(clone), "update-ref", "-d", ref], check=False)
+
+
+def _wt_decision(spec: dict, active_clones: frozenset) -> tuple:
+    """``("removable", None, None)`` or ``("kept", reason, detail)`` for
+    this run's worktree — never for a real (non-scratch) repo, v1's one
+    hard line (bauplan §2.3): "Echte GitHub-Repos: v1 entfernt KEINE
+    Arbeitskopie". ``detail`` is the list of blocking ignored paths when
+    ``reason == "ignored_files"`` (round 3 review finding: the operator
+    needs to see WHICH paths kept the worktree, now that a mix of
+    regenerable and blocking ignored paths in the same worktree is
+    possible), ``None`` for every other reason.
+
+    Every git call below goes through ``_wt_git``, which revalidates
+    ``wt/.git`` itself on every call (``_wt_safe_gitdir``); ``sanitize_clone``
+    runs here, once, before any of them — rebuilding the clone's config from
+    a fixed key list wipes any ``filter.*``/``credential.helper``/``include``
+    entry a head wrote into it (review finding on PR #751). Skipped
+    entirely (``clone_active``) while ANOTHER run shares this same clone and
+    is still active: that run's head can re-plant the clone's config at any
+    moment, and gc inspecting it mid-write is the same trust gap under a
+    different name.
+    """
+    wt = run_dir(spec["run_id"]) / "wt"
+    if spec.get("repo_full_name") not in scratch_repos():
+        return "kept", "real_repo_v1", None
+    if spec.get("repo_full_name") in active_clones:
+        return "kept", "clone_active", None
+    clone = clones_root() / spec["repo_full_name"].replace("/", "--")
+    try:
+        sanitize_clone(spec["repo_full_name"], clone)
+    except (RuntimeError, OSError, subprocess.SubprocessError):
+        return "kept", "clone_unsafe", None
+    if _wt_safe_gitdir(spec, wt) is None:
+        return "kept", "foreign_gitdir", None
+    if not _wt_is_clean(spec, wt):
+        return "kept", "dirty", None
+    blocking_ignored = _wt_has_ignored_files(spec, wt)
+    # Explicit ``is None`` check (not truthiness): a git ERROR must fail
+    # CLOSED exactly like a real blocking path, never like "nothing
+    # blocks" — ``bool(None)`` and ``bool([])`` are both falsy, so this has
+    # to be spelled out rather than written as a plain ``if``.
+    if blocking_ignored is None:
+        return "kept", "ignored_files", None
+    if blocking_ignored:
+        return "kept", "ignored_files", blocking_ignored
+    if _wt_is_detached(spec, wt):
+        return "kept", "detached", None
+    if not _wt_head_in_scratch_origin(spec, wt):
+        return "kept", "not_pushed", None
+    return "removable", None, None
+
+
+def _remove_worktree(spec: dict, wt: Path) -> bool:
+    """``git worktree remove`` WITHOUT ``--force`` — it refuses on its own
+    if anything changed since the last status check (race with a
+    just-started "continue"); the caller leaves the path alone on refusal.
+    The local branch in the clone is untouched either way: "Weitermachen"
+    re-checks it out (``prepare_worktree``)."""
+    clone = clones_root() / spec["repo_full_name"].replace("/", "--")
+    res = _git(["-C", str(clone), "worktree", "remove", str(wt)], check=False)
+    if res.returncode != 0:
+        return False
+    _git(["-C", str(clone), "worktree", "prune"], check=False)
+    return True
+
+
+def _run_gc(apply: bool) -> dict:
+    now = time.time()
+    loaded = {}
+    by_task: dict = {}
+    by_restarted_from: dict = {}
+    for run_id in _gc_candidate_run_ids():
+        pair = _gc_load(run_id)
+        if pair is None:
+            continue
+        spec, status = pair
+        loaded[run_id] = (spec, status)
+        task_id = spec.get("task_id")
+        if task_id:
+            by_task.setdefault(task_id, []).append(run_id)
+        restarted_from = spec.get("restarted_from")
+        if restarted_from:
+            by_restarted_from.setdefault(restarted_from, []).append(run_id)
+
+    # Repos with at least one NOT-exited run right now: that run's head can
+    # re-plant its shared clone's config at any moment, so every OTHER run
+    # on the same clone has its worktree inspection skipped outright below
+    # (``_wt_decision``'s own ``clone_active`` reason) — this is a decision
+    # input, computed once against the same snapshot as everything else.
+    active_clones = frozenset(
+        spec.get("repo_full_name") for spec, status in loaded.values() if status.get("phase") != "exited"
+    )
+
+    # Phase 1 — DECIDE, against the UNTOUCHED disk (nothing removed yet:
+    # the budget math below needs the real pre-removal size, and deciding
+    # while deleting would make "how much is left" a moving target mid-walk).
+    heads_bytes_before = _dir_bytes(heads_root())
+    reports: dict = {}
+    skipped: list = []  # [{"run_id", "reason"}] — runs gc did not even consider
+    pending_removals: list = []  # (kind, ctx, path) — ctx is (folder, rel) for cache, spec for worktree
+    budget_wait: list = []  # (run_id, wt, bytes, exited_at, spec)
+
+    for run_id, (spec, status) in loaded.items():
+        skip_reason = _gc_skip_reason(run_id, spec, status, now, by_task, by_restarted_from)
+        if skip_reason is not None:
+            skipped.append({"run_id": run_id, "reason": skip_reason})
+            continue
+        folder = run_dir(run_id)
+        actions: list = []
+        kept: list = []
+
+        for rel in GC_CACHE_RELATIVE_PATHS:
+            p = folder / rel
+            if _cache_blocked_by_symlink(folder, rel):
+                kept.append({"path": str(p), "reason": "symlink"})
+                continue
+            if not p.exists():
+                continue
+            actions.append({"path": str(p), "kind": "cache", "bytes": _dir_bytes(p), "would_remove": True})
+            pending_removals.append(("cache", (folder, rel), p))
+
+        wt = folder / "wt"
+        if wt.is_dir() and not wt.is_symlink():
+            decision, reason, detail = _wt_decision(spec, active_clones)
+            wt_bytes = _dir_bytes(wt)
+            if decision == "kept":
+                entry = {"path": str(wt), "reason": reason}
+                if detail:
+                    entry["ignored"] = detail
+                kept.append(entry)
+            else:
+                exited_at = _parse_iso(status.get("exited_at")) or now
+                if now - exited_at >= GC_MIN_AGE_S:
+                    actions.append({"path": str(wt), "kind": "worktree", "bytes": wt_bytes, "would_remove": True})
+                    pending_removals.append(("worktree", spec, wt))
+                else:
+                    kept.append({"path": str(wt), "reason": "age"})
+                    budget_wait.append((run_id, wt, wt_bytes, exited_at, spec))
+
+        reports[run_id] = {"run_id": run_id, "actions": actions, "kept": kept}
+
+    projected = heads_bytes_before
+    for rep in reports.values():
+        for a in rep["actions"]:
+            projected -= a["bytes"]
+
+    budget_wait.sort(key=lambda row: row[3])  # oldest exited_at first
+    for run_id, wt, wt_bytes, _exited_at, spec in budget_wait:
+        if projected <= GC_BUDGET_BYTES:
+            break
+        rep = reports[run_id]
+        rep["kept"] = [k for k in rep["kept"] if k["path"] != str(wt)]
+        rep["actions"].append({"path": str(wt), "kind": "worktree", "bytes": wt_bytes, "would_remove": True})
+        pending_removals.append(("worktree", spec, wt))
+        projected -= wt_bytes
+
+    # Phase 2 — EXECUTE, only now, only with --apply. Every decision above
+    # is final before a single byte is removed, but a cache path is
+    # re-checked for a symlink right here too — the window between the
+    # decision above and this line is small but real (a still-running
+    # sibling step, or this very run if it has not fully exited its
+    # supervisor yet) and the whole point of the check is that it is not
+    # decoration.
+    if apply:
+        for kind, ctx, path in pending_removals:
+            if kind == "cache":
+                folder, rel = ctx
+                if _cache_blocked_by_symlink(folder, rel):
+                    continue
+                _remove_tree(path)
+            else:
+                _remove_worktree(ctx, path)
+
+    try:
+        free_bytes = shutil.disk_usage(str(heads_root())).free
+    except OSError:
+        free_bytes = None
+
+    return {
+        "mode": "apply" if apply else "dry_run",
+        "at": now_iso(),
+        "runs": list(reports.values()),
+        "skipped": skipped,
+        "action_bytes": sum(a["bytes"] for rep in reports.values() for a in rep["actions"]),
+        "heads_bytes": _dir_bytes(heads_root()),
+        "free_bytes": free_bytes,
+        "warn_low_disk": bool(free_bytes is not None and free_bytes < GC_WARN_FREE_BYTES),
+        "budget_bytes": GC_BUDGET_BYTES,
+    }
+
+
+def _write_gc_report(report: dict) -> None:
+    """Write ``heads/gc-report.json`` without ever following a symlink —
+    ``heads/`` is backend-read-WRITE (mc-head's own threat model), so a
+    compromised backend could pre-plant ``.gc-report.json.tmp`` as a
+    symlink to redirect this write anywhere the host process can write.
+    Same pattern as ``write_kz_brief``: unlink any stale tmp, then open with
+    ``O_EXCL | O_NOFOLLOW`` so this process only ever writes to a file it
+    JUST created itself."""
+    root = heads_root()
+    root.mkdir(parents=True, exist_ok=True)
+    tmp = root / ".gc-report.json.tmp"
+    try:
+        tmp.unlink()
+    except OSError:
+        pass
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(json.dumps(report, indent=1))
+    os.replace(tmp, root / "gc-report.json")
+
+
+def _touch_gc_attempt_stamp() -> None:
+    """``locks/gc.last`` — the throttle's OWN signal, separate from
+    ``heads/gc-report.json`` (review finding on PR #751). Written at the
+    very start of every ``cmd_gc`` call, success, failure, or a locked-out
+    skip alike, so ``_gc_due()`` throttles on an attempt having been made,
+    not on a report having been successfully produced. Before this split,
+    a raised exception inside ``_run_gc`` (or the lock already being held)
+    meant NO report was ever written, so ``_gc_due()`` kept returning
+    ``True`` and every 30s watch tick re-ran a full pass (two tree walks
+    plus a git fetch per scratch worktree) instead of backing off. It also
+    means an operator deleting or inspecting the report (or a compromised
+    backend touching it) cannot itself change when the NEXT real attempt
+    happens. ``O_NOFOLLOW`` for the same reason as every other file under
+    the backend-writable ``heads/`` tree; failing to write the stamp is
+    not fatal — worst case is the old behaviour (re-attempt next tick).
+
+    Stays a 0-byte file forever, only its mtime matters (same pattern as
+    ``locks/gc.lock``) — a timestamp payload would make this file part of
+    ``heads_root()``'s own byte count, which ``_run_gc``'s budget math
+    (``GC_BUDGET_BYTES``) measures; a throttle bookkeeping file growing on
+    every tick has no business feeding that number. ``os.utime`` on the
+    open FD, not the path, so bumping an EXISTING stamp's mtime cannot
+    itself be raced by a symlink swap between the open and the utime."""
+    locks_root().mkdir(parents=True, exist_ok=True)
+    try:
+        fd = os.open(str(locks_root() / "gc.last"), os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o644)
+    except OSError:
+        return
+    try:
+        os.utime(fd, None)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def cmd_gc(apply: bool) -> int:
+    """``mc-head gc [--apply]`` — never deletes anything unless ``--apply``
+    (or, from ``cmd_watch``, ``MC_HEAD_GC_APPLY=1`` in the process
+    environment) is given. Always writes ``heads/gc-report.json``, dry run
+    or not — the report IS the dry run's result, there is no separate
+    "would do" output. The throttle itself is keyed on a SEPARATE stamp
+    (``_touch_gc_attempt_stamp``, written first, unconditionally), not on
+    this report.
+
+    ``fcntl.flock`` (POSIX-only, matching this whole script) keeps two
+    overlapping calls — a manual run while ``watch`` is also due — from
+    racing each other's removals or report write. Opened with
+    ``O_NOFOLLOW`` for the same reason as ``_write_gc_report`` above
+    (``locks/`` is backend-writable too); a lock that turns out to be a
+    symlink is treated as "cannot lock right now", the same as any other
+    lock-acquire failure."""
+    import fcntl
+
+    _touch_gc_attempt_stamp()
+    heads_root().mkdir(parents=True, exist_ok=True)
+    locks_root().mkdir(parents=True, exist_ok=True)
+    try:
+        lock_fd = os.open(str(locks_root() / "gc.lock"), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o644)
+    except OSError:
+        print("gc: lock unavailable, skipped")
+        return 0
+    lock_fh = os.fdopen(lock_fd, "a+")
+    try:
+        fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print("gc: already running, skipped")
+        lock_fh.close()
+        return 0
+    try:
+        report = _run_gc(apply)
+    finally:
+        try:
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+        lock_fh.close()
+    _write_gc_report(report)
+    print(json.dumps({"mode": report["mode"], "runs": len(report["runs"]), "action_bytes": report["action_bytes"]}))
+    return 0
+
+
+def _gc_due() -> bool:
+    try:
+        mtime = (locks_root() / "gc.last").stat().st_mtime
+    except OSError:
+        return True
+    return (time.time() - mtime) >= GC_THROTTLE_S
+
+
 # ── spool watcher (launchd, §5) ──────────────────────────────────────────
 
 
 def cmd_watch() -> int:
+    # Throttled retention pass (ADR-085 Nachtrag 2026-10-04): runs on every
+    # watch tick but only ACTS when the last report is stale, and only
+    # DELETES when the host's own launchd plist carries MC_HEAD_GC_APPLY=1
+    # — never from anything the backend can write. Run AFTER the spool loop
+    # below (review finding on PR #751: this used to run FIRST, with a
+    # comment claiming that was so "a stop/start below it never gets
+    # delayed by it" — exactly backwards, since a gc pass is two full walks
+    # of heads root plus a git call per worktree, and running it before the
+    # loop is what delays every queued start/stop, not what protects them).
+    def _run_gc_if_due() -> None:
+        if _gc_due():
+            try:
+                cmd_gc(os.environ.get(GC_APPLY_ENV) == "1")
+            except Exception as exc:  # noqa: BLE001 — gc must never block start/stop
+                log(f"gc failed: {exc.__class__.__name__}: {exc}")
+
     spool = spool_root()
     if not spool.is_dir():
+        # Still runs even when the spool folder itself does not exist yet
+        # (fresh install) — nothing below needs it to exist.
+        _run_gc_if_due()
         return 0
     for sub in ("processing", "done", "rejected"):
         (spool / sub).mkdir(exist_ok=True)
@@ -1720,6 +2402,7 @@ def cmd_watch() -> int:
         except Exception as exc:  # noqa: BLE001
             note(f"{action} {run_id} failed: {exc.__class__.__name__}: {exc}")
         os.replace(claimed, spool / "done" / req.name)
+    _run_gc_if_due()
     return 0
 
 
@@ -1748,6 +2431,11 @@ def main(argv: list) -> int:
             return 0
         if cmd == "watch" and not args:
             return cmd_watch()
+        if cmd == "gc" and len(args) <= 1:
+            if args and args[0] != "--apply":
+                print(__doc__)
+                return 2
+            return cmd_gc(bool(args))
     except SpecInvalid as exc:
         print(f"spec_invalid {exc}")
         return 2

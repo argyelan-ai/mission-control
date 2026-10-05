@@ -230,7 +230,11 @@ agent turn on it.
 **Retention.** `omp-sessions/` and `claude-config/` hold the full conversation,
 tool output included — anything the head read stays on the host until the run
 folder is deleted (see "Data" in the rollback section). Treat run folders like
-the transcripts of persistent agents.
+the transcripts of persistent agents. The transcript, run record, `job.md`,
+`spec.json` and logs are kept **forever**; only the worktree (`wt/`) and the
+disposable caches under `home/` are ever removed, by the host rule
+`mc-head gc` (dry run by default, a report at `heads/gc-report.json`; see
+§13) — never from MC itself.
 
 **`mc-head` never trusts `spec.json`**: the backend container mounts
 `~/.mc` read-write, so a compromised backend could plant values that become
@@ -550,6 +554,8 @@ stoppable) in the runs list on `/runtimes`.
 | GET | `/heads/{run_id}/run-record` | viewer | run-record markdown from the vault (the existing `/tasks/{id}/run-record` stays untouched — frozen) |
 | POST | `/heads/{run_id}/stop` | operator | stop request |
 | GET | `/heads/occupancy` | viewer | `{box_key: {runtime_slugs, run: {run_id, task_id, title, pair, since}}}` |
+| GET | `/heads/{run_id}/chat/history?limit=&before_uuid=` | viewer | the run's transcript as one page of chat events, same shape as an agent's chat history (ADR-085 Nachtrag, read-only, files only); `ETag` + `If-None-Match` → 304; `source`/`reader`/`reason` say why there is nothing to show |
+| GET | `/heads/cleanup` | viewer | the host's last `mc-head gc` report (dry-run by default) as-is, or `{"report": null}` before the first run |
 
 Errors are codes (`pair_blocked`, `engine_not_ready`, `box_busy`,
 `head_active`, `repo_required`, `spool_unavailable`, `heads_disabled`); the
@@ -854,8 +860,30 @@ Acceptance criteria v1:
   picker hidden, `POST /heads` 404, sync job idle, box guard inactive.
 - Uninstall host side: `launchctl bootout` the watcher, remove
   `$MC_HOME/bin/mc-head`. Running heads: `mc-head stop <id>`.
-- Data: run folders and branches stay (plain files and git); delete with
-  `git worktree remove` + folder removal by the operator — never automatic.
+- Data: transcripts, run records, `job.md`, `spec.json` and logs stay
+  forever, never deleted by any automation. The working copy (`wt/`) and
+  disposable caches are cleaned up by `mc-head gc` (`scripts/head/mc-head`),
+  which only ever **reports** what it would remove (`heads/gc-report.json`)
+  unless the host's launchd plist carries `MC_HEAD_GC_APPLY=1` — a switch
+  the backend cannot write. Set/unset that env var and reinstall the plist
+  (`install-head-starter.sh [--gc-apply]`) to arm/disarm deletion; a run
+  whose worktree is a real (non-scratch) GitHub repo is never removed by v1,
+  only its caches. A clean, pushed worktree that still carries a
+  git-ignored file is kept (reason `ignored_files`), never removed —
+  `git worktree remove` without `--force` deletes ignored paths too, so the
+  check is explicit rather than relying on "clean" alone. That keep is not
+  unconditional (round 3 review finding): a short, literal allowlist of
+  regenerable build/test caches (`__pycache__/`, `*.pyc`, `.pytest_cache/`,
+  `.mypy_cache/`, `.ruff_cache/`, `node_modules/`) never blocks removal on
+  its own, since the procedure's own red/green test step leaves at least
+  one of these behind in EVERY worktree — without the allowlist,
+  "worktrees cleaned" never actually fires on a real run. Anything else
+  ignored still keeps the worktree, and the report names exactly which
+  path(s) blocked it. The dry run is
+  not perfectly side-effect-free: it normalises each scratch clone's own
+  git config and fetches one disposable check ref into it (idempotent host
+  plumbing needed to inspect the clone safely), but it never touches a run
+  folder's own data either way.
 - Tasks: head cards are ordinary tasks with `manual_hold`; clearing
   `run_control` returns them to normal behaviour.
 - The launcher itself has no migration. Head token usage adds migration 0205

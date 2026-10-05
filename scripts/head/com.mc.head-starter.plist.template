@@ -6,6 +6,18 @@
   __MC_HOME__ (e.g. $HOME/.mc) and __HOME__. Runs the INSTALLED copy in
   $MC_HOME/bin, never a file inside a git checkout (a removed worktree would
   silently kill the watcher).
+
+  The "__GC_APPLY_ENV__" comment below (inside EnvironmentVariables) is
+  replaced by the installer with the MC_HEAD_GC_APPLY=1 key/value pair when
+  run with the gc-apply flag, or with nothing at all otherwise — the key is
+  then simply ABSENT, which is what keeps `mc-head gc` a dry-run report
+  forever until an operator deliberately re-installs with that flag
+  (docs/specs/head-launcher.md §13: "a switch the backend cannot write").
+  Never hand-edit this key into an INSTALLED plist without also re-running
+  the installer: a hand-edit survives only until the next install
+  overwrites it, which is confusing either way. (Note for maintainers: an
+  XML comment itself may never contain two hyphens in a row, which is why
+  this paragraph avoids writing the flag's own two leading dashes.)
 -->
 <plist version="1.0">
 <dict>
@@ -49,6 +61,7 @@
         <string>1</string>
         <key>PATH</key>
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <!-- __GC_APPLY_ENV__ -->
     </dict>
 </dict>
 </plist>
