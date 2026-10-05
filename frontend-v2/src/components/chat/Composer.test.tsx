@@ -443,7 +443,7 @@ describe("Composer", () => {
 
     expect(screen.getByTestId("context-panel")).toBeInTheDocument();
     expect(trigger).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByTestId("context-row-cacheRead")).toHaveTextContent("Cache gelesen");
+    expect(screen.getByTestId("context-row-cacheRead")).toHaveTextContent("Cache read");
   });
 
   it("puts the fill percentage in the trigger's accessible name, and keeps it current", () => {

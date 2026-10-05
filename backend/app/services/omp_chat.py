@@ -299,6 +299,66 @@ def session_id_for(path: Path) -> str:
     return _session_id_from_stem(path.stem)
 
 
+#: How many lines from the top of a session file ``session_cwd`` reads to
+#: find the ``session`` header. omp writes it as line 1 or 2 (a ``title``
+#: line can come first — seen live 04.10.2026); the margin is for safety.
+_SESSION_HEADER_SCAN_LINES = 10
+
+
+def _header_cwd(path: Path) -> str | None:
+    """``cwd`` of the ``{"type": "session", ...}`` header line, or ``None``
+    when the file has none or records it empty."""
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as fh:
+            for i, line in enumerate(fh):
+                if i >= _SESSION_HEADER_SCAN_LINES:
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(entry, dict) and entry.get("type") == "session":
+                    cwd = entry.get("cwd")
+                    return cwd if isinstance(cwd, str) and cwd else None
+    except OSError:
+        return None
+    return None
+
+
+def session_cwd(path: Path) -> str | None:
+    """The working directory an omp session runs in, as omp recorded it in
+    the session header (a container path for Docker agents, e.g.
+    ``/workspace``).
+
+    Under ``OMP_DRIVER=acp`` two files carry the same session (see
+    ``session_id_for``): omp's own file has the real ``cwd``, the ACP bridge
+    sink writes the header with an EMPTY ``cwd`` — and the sink file is often
+    the one ``find_active_session`` returns. So when this file's header is
+    empty, the siblings in the same folder that carry the same session id
+    are asked. The folder NAME also encodes the cwd, but not reversibly
+    (``-`` stands for both ``/`` and a literal dash), so it is deliberately
+    not decoded. ``None`` when no file of this session records a cwd.
+    """
+    own = _header_cwd(path)
+    if own:
+        return own
+    session_id = session_id_for(path)
+    try:
+        siblings = sorted(path.parent.glob("*.jsonl"))
+    except OSError:
+        return None
+    for sibling in siblings:
+        if sibling == path or session_id_for(sibling) != session_id:
+            continue
+        cwd = _header_cwd(sibling)
+        if cwd:
+            return cwd
+    return None
+
+
 def preview_channel(session_path: Path) -> Path | None:
     """Die Vorschau-Kanal-Datei zu einer ACP-Session, oder ``None``.
 

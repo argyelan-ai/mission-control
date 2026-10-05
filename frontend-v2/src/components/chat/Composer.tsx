@@ -705,7 +705,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
               >
                 <span style={{ color: C.accent }}>{cmd.command}</span>
                 <span className="text-[10px] font-medium" style={{ color: C.textMuted }}>
-                  {cmd.description}
+                  {cmd.descriptionKey ? t(`slashCommands.${cmd.descriptionKey}`) : cmd.description}
                 </span>
               </button>
             ))}
