@@ -104,6 +104,13 @@ and MC re-registers the sessions it still considers open (`PUT` is
 idempotent). The browser itself is started on demand: registering creates
 nothing in Chromium.
 
+MC's lifecycle loop also reads `idleSeconds` per tab in `/mc/targets`, takes
+the session's last image with `GET /mc/sessions/<token>/snapshot` (JPEG of its
+most recently active tab), and ends an agent's working phase with
+`DELETE /mc/sessions/<token>?agent_tabs=1`, which also closes that agent's
+own `/a/<slug>/` tabs (its connections stay — the agent keeps working).
+A session opened for an agent "sees" the agent's tabs as well as its own.
+
 Trust model: identification is NOT authentication. Any container on the
 Docker-internal network can already reach Chromium's CDP port directly
 (:9223) — this gateway does not change that boundary, it only labels
@@ -162,6 +169,7 @@ _HALF_CLOSE_GRACE = 0.5
 # they can never clash with an agent's ids; high anyway for readable logs.
 _OWN_MSG_ID_BASE = 2_000_000_000
 # Chromium's answers when a tab or context to close no longer exists.
+_SNAPSHOT_QUALITY = 70
 _ALREADY_GONE = re.compile(r"Failed to find context|No target with given id", re.I)
 
 # Commands that mean "the sending agent is working in this tab now".
@@ -370,6 +378,16 @@ class GatewayState:
             if (t.agent == key or self.target_owner.get(t.id) == key) and t.ctx not in owned_ctx
         )
         return tabs, contexts
+
+    def session_view_tabs(self, entry: "BrowserSessionEntry") -> list[TargetInfo]:
+        """The tabs a session stands for, newest activity first: its own,
+        plus — for a session opened for an agent — that agent's tabs (an
+        agent's working phase is opened lazily while the agent keeps using
+        its `/a/<slug>/` address)."""
+        tabs = {t.id: t for t in self.targets_for(None, entry.session_id)}
+        if entry.agent:
+            tabs.update({t.id: t for t in self.targets_for(entry.agent)})
+        return sorted(tabs.values(), key=lambda t: t.last_active_at, reverse=True)
 
     def tab_owner(self, target_id: Optional[str]) -> Optional[str]:
         """Owner key of a live tab — recorded directly or via its context."""
@@ -580,6 +598,9 @@ class GatewayState:
                 "browserContextId": t.ctx,
                 "createdAt": t.created_at,
                 "lastActiveAt": t.last_active_at,
+                # Same clock as lastActiveAt, already subtracted: consumers in
+                # other processes can't compare our monotonic stamps.
+                "idleSeconds": max(0.0, self.now_fn() - t.last_active_at),
             })
         return rows
 
@@ -1033,12 +1054,45 @@ class CdpGateway:
                         break
         return replies
 
+    async def _page_call(self, target_id: str, method: str, params: dict) -> dict:
+        """One command on a tab's own page connection (gateway-owned, short
+        lived); returns Chromium's reply."""
+        url = f"ws://{self._upstream_netloc}/devtools/page/{target_id}"
+        async with websockets.connect(url, max_size=None) as ws:
+            await ws.send(json.dumps({"id": _OWN_MSG_ID_BASE, "method": method, "params": params}))
+            while True:
+                reply = json.loads(await asyncio.wait_for(ws.recv(), timeout=_UPSTREAM_HTTP_TIMEOUT))
+                if reply.get("id") == _OWN_MSG_ID_BASE:
+                    return reply
+
     # ── browser sessions (ADR-088) ─────────────────────────────────────────
+
+    async def session_snapshot(self, token: str) -> tuple[int, dict]:
+        """(status, body): 200 with a JPEG of the session's most recently
+        active tab, 204 without a tab, 404 unknown token, 502 capture failed."""
+        entry = self.state.session_for_token(token)
+        if entry is None:
+            return 404, {}
+        tabs = self.state.session_view_tabs(entry)
+        if not tabs:
+            return 204, {}
+        tab = tabs[0]
+        try:
+            reply = await self._page_call(
+                tab.id, "Page.captureScreenshot", {"format": "jpeg", "quality": _SNAPSHOT_QUALITY},
+            )
+        except (OSError, asyncio.TimeoutError, ValueError, websockets.WebSocketException) as e:
+            logger.info("cdp_gateway: snapshot of session %s failed: %s", entry.session_id, e)
+            return 502, {}
+        data = (reply.get("result") or {}).get("data")
+        if not isinstance(data, str):
+            return 502, {}
+        return 200, {"targetId": tab.id, "url": tab.url, "title": tab.title, "mime": "image/jpeg", "data": data}
 
     def _live_connection_counts(self) -> dict[str, int]:
         return {key: len(tasks) for key, tasks in self._live_conns.items() if tasks}
 
-    async def end_session(self, token: str) -> Optional[dict]:
+    async def end_session(self, token: str, *, agent_tabs: bool = False) -> Optional[dict]:
         """Ends one browser session: unregister the token first (a reconnect
         is refused from here on), cut the session's open CDP connections,
         then close its tabs and dispose its contexts in Chromium. None if the
@@ -1055,6 +1109,14 @@ class CdpGateway:
             await asyncio.gather(*conns, return_exceptions=True)
 
         tabs, contexts = self.state.session_resources(entry.session_id)
+        if agent_tabs and entry.agent:
+            # End of an agent's working phase: its idle `/a/<slug>/` tabs go
+            # too. Its connections are not cut — the agent keeps working and
+            # opens a new tab (and a new phase) when it needs the browser.
+            owned_ctx = set(contexts)
+            tabs = sorted(set(tabs) | {
+                t.id for t in self.state.targets_for(entry.agent) if t.ctx not in owned_ctx
+            })
         commands = [("Target.closeTarget", {"targetId": tid}) for tid in tabs]
         commands += [("Target.disposeBrowserContext", {"browserContextId": ctx}) for ctx in contexts]
         errors: list[str] = []
@@ -1094,6 +1156,16 @@ class CdpGateway:
             body = json.dumps(self.state.as_mc_sessions_json(self._live_connection_counts())).encode()
             return 200, "application/json", body
         token = route[len("/mc/sessions/"):]
+        if token.endswith("/snapshot"):
+            token = token[: -len("/snapshot")]
+            if not _TOKEN_RE.match(token):
+                return 400, "text/plain", b"cdp-gateway: malformed session token"
+            if method != "GET":
+                return 405, "text/plain", b"cdp-gateway: method not allowed"
+            status, snap = await self.session_snapshot(token)
+            if status != 200:
+                return status, "text/plain", b""
+            return 200, "application/json", json.dumps(snap).encode()
         if not _TOKEN_RE.match(token):
             return 400, "text/plain", b"cdp-gateway: malformed session token"
         if method == "PUT":
@@ -1110,7 +1182,8 @@ class CdpGateway:
             body = json.dumps({"sessionId": session_id, "agent": agent}).encode()
             return (201 if outcome == "created" else 200), "application/json", body
         if method == "DELETE":
-            result = await self.end_session(token)
+            qs = parse_qs(parsed.query)
+            result = await self.end_session(token, agent_tabs=(qs.get("agent_tabs") or [""])[0] == "1")
             if result is None:
                 return 404, "text/plain", b"cdp-gateway: unknown browser session"
             return 200, "application/json", json.dumps(result).encode()
