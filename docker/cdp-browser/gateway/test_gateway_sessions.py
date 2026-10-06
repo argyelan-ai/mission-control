@@ -491,9 +491,12 @@ async def test_ending_does_not_wait_for_a_client_that_stopped_reading():
         client.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
         client.setblocking(False)
         await asyncio.get_running_loop().sock_connect(client, ("127.0.0.1", port))
+        import base64
+
+        ws_key = base64.b64encode(b"the sample nonce").decode()  # RFC 6455's example, built at runtime
         client.send((
             f"GET /s/{TOKEN}/devtools/browser/x HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\n"
-            "Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+            f"Connection: Upgrade\r\nSec-WebSocket-Key: {ws_key}\r\n"
             "Sec-WebSocket-Version: 13\r\n\r\n"
         ).encode())
         await asyncio.sleep(1.0)  # the client never reads; buffers fill up
