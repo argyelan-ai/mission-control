@@ -287,17 +287,27 @@ async def lifecycle_tick(session: AsyncSession, *, now: Optional[datetime] = Non
                 agents[agent.id] = agent
 
         # 1. Agent working phases open lazily at the agent's first tab
-        #    (decision a): tabs on `/a/<slug>/` that no session owns.
-        phase_slugs = {t.get("agent") for t in targets if t.get("agent") and not t.get("session")}
+        #    (decision a): tabs on `/a/<slug>/` that no session owns — and
+        #    only recently active ones. A tab idle past the limit is not a new
+        #    phase; without this, a leftover tab would open and end a phase on
+        #    every pass.
+        phase_slugs = {
+            t.get("agent") for t in targets
+            if t.get("agent") and not t.get("session")
+            and float(t.get("idleSeconds") or 0.0) < settings.browser_session_idle_s
+        }
         open_agent_slugs = {_agent_slug(agents[r.agent_id]) for r in rows if r.agent_id in agents}
         for slug in sorted(phase_slugs - open_agent_slugs):
-            agent = (await session.exec(select(Agent).where(Agent.slug == slug))).first()
-            if agent is None or agent.archived_at is not None:
+            matches = (await session.exec(select(Agent).where(Agent.slug == slug))).all()
+            # Ambiguous or unknown slug: never guess whose browser it is.
+            if len(matches) != 1 or matches[0].archived_at is not None:
                 continue
-            row, _registered = await open_session(session, agent=agent)
+            agent = matches[0]
+            row, registered = await open_session(session, agent=agent)
             agents[agent.id] = agent
             rows.append(row)
-            known.add(str(row.id))
+            if registered:
+                known.add(str(row.id))
             report["opened"] += 1
 
         for row in rows:
@@ -324,7 +334,10 @@ async def lifecycle_tick(session: AsyncSession, *, now: Optional[datetime] = Non
             # 4. Should it end?
             reason = None
             started = aware(row.started_at)
-            if started is not None and (now - started).total_seconds() >= settings.browser_session_max_age_s:
+            # Measured from the first tab, or from the opening for a session
+            # that never got one (a head whose harness never connected).
+            age_from = started or aware(row.created_at) or now
+            if (now - age_from).total_seconds() >= settings.browser_session_max_age_s:
                 reason = "max_age"
             elif row.owner_kind == "head" and row.head_run_id:
                 reason = _head_run_ended(row.head_run_id, now)

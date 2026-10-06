@@ -192,6 +192,23 @@ async def test_closing_agent_tabs_on_idle_end_can_be_switched_off(session: Async
     assert "agent_tabs" not in delete.url.params
 
 
+async def test_a_leftover_idle_agent_tab_opens_no_phase(session: AsyncSession, gw, make_agent):
+    """A tab idle past the limit is not a new working phase — otherwise a
+    leftover tab would open and end a phase on every pass."""
+    await make_agent(name="Alpha", slug="alpha")
+    gw.tab("OLD", agent="alpha", idle=2 * 3600)
+    await _tick(session)
+    assert await _rows() == []
+
+
+async def test_an_ambiguous_agent_slug_opens_no_phase(session: AsyncSession, gw, make_agent):
+    await make_agent(name="Alpha One", slug="alpha")
+    await make_agent(name="Alpha Two", slug="alpha")
+    gw.tab("A1", agent="alpha", idle=1.0)
+    await _tick(session)
+    assert await _rows() == []
+
+
 # ── heads: end with the run ────────────────────────────────────────────────
 
 async def test_head_session_ends_when_the_run_has_ended(session: AsyncSession, gw, heads_root):  # noqa: F811
@@ -222,6 +239,15 @@ async def test_any_session_ends_at_the_hard_age_limit(session: AsyncSession, gw,
     row = await _add(owner_kind="head", head_run_id=run, status="live",
                      started_at=utcnow() - timedelta(seconds=settings.browser_session_max_age_s + 60))
     gw.tab("H1", session=str(row.id), idle=1.0)
+    await _tick(session)
+    row = await _get(row.id)
+    assert row.status == "ended" and row.end_reason == "max_age"
+
+
+async def test_a_session_that_never_got_a_tab_still_ends_at_the_age_limit(session: AsyncSession, gw, heads_root):  # noqa: F811
+    run = make_run(heads_root, status={"phase": "running"}, heartbeat_age=5)
+    row = await _add(owner_kind="head", head_run_id=run,
+                     created_at=utcnow() - timedelta(seconds=settings.browser_session_max_age_s + 60))
     await _tick(session)
     row = await _get(row.id)
     assert row.status == "ended" and row.end_reason == "max_age"
