@@ -473,12 +473,14 @@ _EXPECTED_BUILD_SITES = {
 # red. The pair is what makes this a split rather than a hole: the census
 # cannot be satisfied by quietly dropping a workflow guard, and applying the
 # patch turns this green without editing the test.
+# ci.yml: 4 builds since 2026-10-07 (the thin playwright-mcp image joined
+# frontend-v2, backend and cdp-browser) — guarded like the others.
 _EXPECTED_WORKFLOW_BUILD_SITES_PENDING = {
-    ".github/workflows/ci.yml": (3, 0),
+    ".github/workflows/ci.yml": (4, 0),
     ".github/workflows/release.yml": (1, 0),
 }
 _EXPECTED_WORKFLOW_BUILD_SITES_APPLIED = {
-    ".github/workflows/ci.yml": (3, 3),
+    ".github/workflows/ci.yml": (4, 4),
     ".github/workflows/release.yml": (1, 1),
 }
 
