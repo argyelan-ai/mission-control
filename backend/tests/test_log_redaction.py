@@ -514,3 +514,12 @@ def test_snapshot_and_delete_urls_are_redacted_too(redact):
 
 def test_short_s_paths_are_left_alone(redact):
     assert redact("GET /s/abc/index.html") == "GET /s/abc/index.html"
+
+
+def test_redacts_the_session_token_when_httpx_passes_a_url_object(redact):
+    """httpx logs `request.url` as an httpx.URL object, not a str."""
+    import httpx
+
+    url = httpx.URL("http://cdp-browser:9300/mc/sessions/" + BROWSER_TOKEN + "?session=x")
+    out = redact('HTTP Request: %s %s "%s %d %s"', "PUT", url, "HTTP/1.1", 201, "Created")
+    assert BROWSER_TOKEN not in out
