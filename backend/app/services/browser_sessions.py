@@ -76,11 +76,11 @@ _transport: Optional[httpx.AsyncBaseTransport] = None
 
 
 def _token_key() -> bytes:
-    """A dedicated secret if configured, else the encryption key (stable by
-    necessity: rotating it already breaks every stored secret). The JWT
-    secret is only the last resort for installs without either — rotating it
-    to log users out must not strand open sessions (review finding)."""
-    return (settings.browser_session_secret or settings.secrets_encryption_key or settings.jwt_secret_key).encode()
+    """The encryption key — stable by necessity, since rotating it already
+    breaks every stored secret — so no extra setting has to reach the
+    containers. The JWT secret is only the last resort for installs without
+    one: rotating it to log users out must not strand open sessions."""
+    return (settings.secrets_encryption_key or settings.jwt_secret_key).encode()
 
 
 def session_token(session_id: uuid.UUID) -> str:

@@ -435,9 +435,82 @@ async def test_cleanup_answers_within_its_deadline_even_if_chromium_hangs(monkey
     monkeypatch.setattr(gateway, "_upstream_json", hanging_version)
     monkeypatch.setattr(cdp_gateway.websockets, "connect", lambda *a, **k: ws)
     start = asyncio.get_event_loop().time()
-    result = await gateway.end_session(TOKEN)
+    # Bounded here too: a broken deadline must turn this red, not hang it.
+    result = await asyncio.wait_for(gateway.end_session(TOKEN), timeout=2)
     elapsed = asyncio.get_event_loop().time() - start
     assert elapsed < 1.5
     assert len(ws.sent) == 3                       # all sent at once, not one per round trip
     assert result["closedTargets"] == 3
     assert any("unanswered" in e for e in result["errors"])
+
+
+# ── re-review N1: a stalled client must not block the end ──────────────────
+
+@pytest.mark.asyncio
+async def test_ending_does_not_wait_for_a_client_that_stopped_reading():
+    """A frozen harness stops reading while Chromium keeps sending: its send
+    buffer fills and a polite close never completes. Ending the session must
+    still answer promptly (cut hard) and go on to the tab cleanup. Before the
+    fix DELETE hung forever. Probe from the independent re-review."""
+    import socket
+    import time
+
+    upstream_writers = []
+
+    async def upstream(reader, writer):
+        upstream_writers.append(writer)
+        while (await reader.readline()) not in (b"\r\n", b""):
+            pass
+        writer.write(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
+        frame = b"\x82\x7e\xff\xff" + b"x" * 65535  # binary frames, 64 KiB each
+        try:
+            while True:
+                writer.write(frame)
+                await writer.drain()
+        except Exception:
+            pass
+
+    up = await asyncio.start_server(upstream, "127.0.0.1", 0)
+    gateway = CdpGateway(upstream_host="127.0.0.1", upstream_port=up.sockets[0].getsockname()[1])
+    gateway.state.register_session(TOKEN, SID, None)
+    cleanup_ran = asyncio.Event()
+
+    async def no_cdp(commands, **kw):
+        cleanup_ran.set()
+        return []
+
+    gateway._cdp_call = no_cdp
+    gateway.state.observe_response("Target.createTarget", {}, {"targetId": "T"}, agent=session_owner_key(SID))
+    _created(gateway.state, "T")
+    client = socket.socket()
+    # No `async with server`: its exit waits for every handler, and a hung
+    # handler is exactly what this test catches — fail, don't hang.
+    server = await start_server(gateway, host="127.0.0.1", port=0)
+    try:
+        port = server.sockets[0].getsockname()[1]
+        client.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+        client.setblocking(False)
+        await asyncio.get_running_loop().sock_connect(client, ("127.0.0.1", port))
+        import base64
+
+        ws_key = base64.b64encode(b"the sample nonce").decode()  # RFC 6455's example, built at runtime
+        client.send((
+            f"GET /s/{TOKEN}/devtools/browser/x HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\n"
+            f"Connection: Upgrade\r\nSec-WebSocket-Key: {ws_key}\r\n"
+            "Sec-WebSocket-Version: 13\r\n\r\n"
+        ).encode())
+        await asyncio.sleep(1.0)  # the client never reads; buffers fill up
+        start = time.monotonic()
+        result = await asyncio.wait_for(gateway.end_session(TOKEN), timeout=6)
+        assert time.monotonic() - start < 4
+        assert result["closedConnections"] == 1
+        assert cleanup_ran.is_set()  # the tab cleanup was not skipped
+    finally:
+        client.close()
+        for w in upstream_writers:
+            w.transport.abort()
+        server.close()
+        up.close()
+        for conns in gateway._live_conns.values():
+            for task in conns:
+                task.cancel()

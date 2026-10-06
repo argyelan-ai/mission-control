@@ -88,12 +88,6 @@ def test_rotating_the_jwt_secret_does_not_strand_open_sessions(monkeypatch):
     assert svc.session_token(sid) == before
 
 
-def test_a_dedicated_browser_session_secret_wins(monkeypatch):
-    sid = uuid.uuid4()
-    before = svc.session_token(sid)
-    monkeypatch.setattr(svc.settings, "browser_session_secret", "dedicated")
-    assert svc.session_token(sid) != before
-
 
 def test_the_token_is_never_stored():
     """The row carries no token column: the token is derived on demand, so a

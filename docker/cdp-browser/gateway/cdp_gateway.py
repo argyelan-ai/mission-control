@@ -169,6 +169,8 @@ _PUMP_CHUNK = 64 * 1024
 # After one side of a proxied WebSocket ends, the other direction gets this
 # long to deliver what is already in flight before it is cut.
 _HALF_CLOSE_GRACE = 0.5
+# How long a polite close may take before the socket is aborted.
+_CLOSE_GRACE = 1.0
 # Ids of the gateway's own CDP commands (session cleanup). Own connection, so
 # they can never clash with an agent's ids; high anyway for readable logs.
 _OWN_MSG_ID_BASE = 2_000_000_000
@@ -768,9 +770,14 @@ async def _respond(
 
 
 async def _close_writer(writer: asyncio.StreamWriter) -> None:
+    """Close politely, but never wait on a peer that stopped reading: a full
+    send buffer keeps `wait_closed()` pending forever (re-review N1), so after
+    a short grace the transport is aborted."""
     try:
         writer.close()
-        await writer.wait_closed()
+        await asyncio.wait_for(writer.wait_closed(), timeout=_CLOSE_GRACE)
+    except asyncio.TimeoutError:
+        writer.transport.abort()
     except Exception:
         pass
 
@@ -996,6 +1003,8 @@ class CdpGateway:
         # Owner key -> the connection tasks currently proxying for it, so
         # ending a browser session can cut its live CDP connections.
         self._live_conns: dict[str, set[asyncio.Task]] = {}
+        # Each such task's client writer, so ending a session can cut it hard.
+        self._conn_writers: dict[asyncio.Task, asyncio.StreamWriter] = {}
 
     @property
     def _upstream_netloc(self) -> str:
@@ -1188,9 +1197,14 @@ class CdpGateway:
         key = session_owner_key(entry.session_id)
         conns = list(self._live_conns.pop(key, set()))
         for task in conns:
+            # Hard cut: a client that stopped reading would otherwise keep the
+            # polite close (and this DELETE) pending forever (re-review N1).
+            writer = self._conn_writers.pop(task, None)
+            if writer is not None:
+                writer.transport.abort()
             task.cancel()
         if conns:
-            await asyncio.gather(*conns, return_exceptions=True)
+            await asyncio.wait(conns, timeout=_CLOSE_GRACE)
 
         tabs, contexts = self.state.session_resources(entry.session_id)
         if agent_tabs and entry.agent:
@@ -1459,9 +1473,11 @@ class CdpGateway:
         me = asyncio.current_task()
         if me is not None:
             self._live_conns.setdefault(agent, set()).add(me)
+            self._conn_writers[me] = client_writer
         try:
             await self._proxy_ws_identified(client_reader, client_writer, req, agent, upstream_path)
         finally:
+            self._conn_writers.pop(me, None)
             conns = self._live_conns.get(agent)
             if conns is not None:
                 conns.discard(me)
