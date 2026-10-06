@@ -455,6 +455,20 @@ features:
     api:
       - "POST /api/v1/voice/token"
       - "POST /api/v1/agent/me/telegram"
+  - id: F-agent-browser
+    name: "Agent browser sessions"
+    # One browser area per agent session or head run in the shared agent
+    # browser (ADR-088). S1 is the invisible foundation: the session row, the
+    # operator API and the cdp-gateway register (/s/<token>/). The live panel
+    # itself still sits on the sessions page (F-sessions, browser-live); the
+    # tab strip and session states move here in a later step.
+    status: active
+    source: "ADR-088 (browser sessions, operator decision 2026-10-06)"
+    api:
+      - "* /api/v1/browser-sessions"
+      - "* /api/v1/browser-sessions/*"
+    tables:
+      - browser_sessions
   - id: F-loops
     name: "Loops"
     ui: {route: /loops}

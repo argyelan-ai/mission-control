@@ -295,3 +295,31 @@ async def test_delete_session_closes_its_tabs_contexts_and_connections():
             assert gateway.state.session_for_token(TOKEN) is None
     finally:
         await chromium.stop()
+
+
+@pytest.mark.asyncio
+async def test_end_session_does_not_report_already_gone_tabs_or_contexts_as_errors(monkeypatch):
+    """Lab finding (real Chromium 124 + Playwright): cutting Playwright's
+    connection disposes its `disposeOnDetach` context before our own
+    disposeBrowserContext arrives -> "Failed to find context". That is the
+    goal state, not a cleanup failure; anything else still is."""
+    gateway = CdpGateway(upstream_host="127.0.0.1", upstream_port=1)
+    gateway.state.register_session(TOKEN, SID, None)
+    key = session_owner_key(SID)
+    gateway.state.observe_response("Target.createBrowserContext", {}, {"browserContextId": "CTX-S"}, agent=key)
+    gateway.state.observe_response("Target.createTarget", {}, {"targetId": "LOOSE"}, agent=key)
+    _created(gateway.state, "LOOSE")
+    gateway.state.observe_response("Target.createTarget", {}, {"targetId": "STUCK"}, agent=key)
+    _created(gateway.state, "STUCK")
+
+    async def fake_call(commands):
+        replies = {
+            "LOOSE": {"error": {"code": -32602, "message": "No target with given id found"}},
+            "STUCK": {"error": {"code": -32000, "message": "Target is busy"}},
+            "CTX-S": {"error": {"code": -32602, "message": "Failed to find context with id CTX-S"}},
+        }
+        return [replies[p.get("targetId") or p.get("browserContextId")] for _m, p in commands]
+
+    monkeypatch.setattr(gateway, "_cdp_call", fake_call)
+    result = await gateway.end_session(TOKEN)
+    assert result["errors"] == ["Target.closeTarget: Target is busy"]

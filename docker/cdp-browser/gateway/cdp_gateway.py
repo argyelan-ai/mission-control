@@ -161,6 +161,8 @@ _HALF_CLOSE_GRACE = 0.5
 # Ids of the gateway's own CDP commands (session cleanup). Own connection, so
 # they can never clash with an agent's ids; high anyway for readable logs.
 _OWN_MSG_ID_BASE = 2_000_000_000
+# Chromium's answers when a tab or context to close no longer exists.
+_ALREADY_GONE = re.compile(r"Failed to find context|No target with given id", re.I)
 
 # Commands that mean "the sending agent is working in this tab now".
 _CLAIM_METHODS = frozenset({
@@ -1059,8 +1061,13 @@ class CdpGateway:
         if commands:
             try:
                 for (method, _params), reply in zip(commands, await self._cdp_call(commands)):
-                    if "error" in reply:
-                        errors.append(f"{method}: {reply['error'].get('message', reply['error'])}")
+                    message = str((reply.get("error") or {}).get("message", "")) if "error" in reply else None
+                    # Already gone is the goal, not a failure: a client that
+                    # created its context with disposeOnDetach (Playwright
+                    # does) loses it the moment its connection is cut above
+                    # (lab, real Chromium 124: "Failed to find context").
+                    if message is not None and not _ALREADY_GONE.search(message):
+                        errors.append(f"{method}: {message}")
             except (OSError, asyncio.TimeoutError, RuntimeError, ValueError, websockets.WebSocketException) as e:
                 errors.append(f"cleanup: {e}")
         for ctx in contexts:
