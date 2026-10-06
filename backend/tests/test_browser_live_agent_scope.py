@@ -683,6 +683,36 @@ async def test_gateway_assigned_ids_reads_every_row_with_an_agent():
         assert await bl._gateway_assigned_ids() is None
 
 
+@pytest.mark.asyncio
+async def test_a_head_sessions_tab_counts_as_assigned():
+    """A head run's browser session has no agent, but its tab is not
+    "unassigned": an agent's panel must neither show nor follow it."""
+    rows = [
+        {"targetId": "HEAD-TAB", "agent": None, "session": "11111111-2222-3333-4444-555555555555"},
+        {"targetId": "FREE", "agent": None, "session": None},
+    ]
+
+    class _FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return rows
+
+    class _FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, url, params=None):
+            return _FakeResp()
+
+    with patch("httpx.AsyncClient", lambda **kw: _FakeClient()):
+        assert await bl._gateway_assigned_ids() == {"HEAD-TAB"}
+
+
 def _seed_alpha(client):
     agent_uuid = uuid.uuid4()
 

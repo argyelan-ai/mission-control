@@ -62,6 +62,9 @@ class FakeChromium:
         self.server = None
         self.port = None
         self._bad_host_seen = False
+        # Every CDP method the fake was sent, in order (browser-session
+        # cleanup tests check what the gateway itself asked Chromium to do).
+        self.methods: list[str] = []
 
     async def start(self):
         self.server = await asyncio.start_server(self._handle, "127.0.0.1", 0)
@@ -134,6 +137,8 @@ class FakeChromium:
                 await writer.drain()
                 break
             msg = json.loads(payload)
+            if msg.get("method"):
+                self.methods.append(msg["method"])
             # Echo a canned response for Target.createTarget specifically,
             # so the proxy's response-attribution path has something to see.
             if msg.get("method") == "Target.createTarget":

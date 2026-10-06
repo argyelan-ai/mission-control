@@ -50,7 +50,8 @@ CDP_BASE_URL = os.environ.get("CDP_BROWSER_URL", "http://cdp-browser:9223")
 # B1. If the gateway is unreachable, every call here degrades to "no
 # attribution" (None), and callers fall back to showing every tab — a
 # gateway outage must never make the whole live-view panel unusable.
-GATEWAY_BASE_URL = os.environ.get("CDP_GATEWAY_URL", "http://cdp-browser:9300")
+# One definition (env CDP_GATEWAY_URL), shared with the browser-session register.
+from app.services.browser_sessions import GATEWAY_BASE_URL  # noqa: E402
 
 # A newly-created tab (e.g. Playwright's "page for the next navigation") is
 # briefly about:blank before the agent navigates it. Don't let it steal the
@@ -192,7 +193,9 @@ async def _gateway_assigned_ids() -> Optional[set[str]]:
             rows = resp.json()
     except Exception:
         return None
-    return {row["targetId"] for row in rows if row.get("targetId") and row.get("agent")}
+    # A head run's browser session (ADR-088) has no agent but is assigned all
+    # the same — an agent's panel must neither show nor follow its tab.
+    return {row["targetId"] for row in rows if row.get("targetId") and (row.get("agent") or row.get("session"))}
 
 
 def _apply_scope(
