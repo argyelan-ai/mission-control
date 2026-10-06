@@ -351,3 +351,14 @@ async def test_tabs_left_behind_by_an_ended_session_are_swept(session: AsyncSess
     [sweep] = gw.calls("POST", "/mc/orphans/close")
     assert sweep.url.params["session"] == str(ended.id)
     assert report["swept"] == 1
+
+
+async def test_only_ended_or_unknown_sessions_are_ended_or_swept_at_the_gateway(session: AsyncSession, gw):
+    """Defense in depth for steps 6: re-read from the database right before
+    acting, so an open session is never ended or swept at the gateway."""
+    open_row = await _add(owner_kind="head", head_run_id=str(uuid.uuid4()))
+    ended_row = await _add(owner_kind="head", head_run_id=str(uuid.uuid4()), status="ended", ended_at=utcnow())
+    assert await svc._ended_or_unknown(session, str(open_row.id)) is False
+    assert await svc._ended_or_unknown(session, str(ended_row.id)) is True
+    assert await svc._ended_or_unknown(session, str(uuid.uuid4())) is True
+    assert await svc._ended_or_unknown(session, "not-a-uuid") is False
