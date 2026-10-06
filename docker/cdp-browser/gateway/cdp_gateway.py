@@ -97,8 +97,9 @@ unchanged.
 The token is a credential, not a label: an unregistered token is refused
 (404) instead of falling back to `_shared`. `GET /mc/sessions` lists sessions
 without their tokens. `DELETE /mc/sessions/<token>` ends one: the token stops
-working, the session's open CDP connections are cut, its tabs are closed and
-its contexts disposed. The register lives in memory — a restart of this
+working, the session's open CDP connections are cut, the tabs it CREATED are
+closed (never a tab it only claimed — see `TargetInfo.creator`) and its
+contexts disposed, all within `_CLEANUP_DEADLINE`. The register lives in memory — a restart of this
 container (which restarts Chromium and loses every context anyway) empties it,
 and MC re-registers the sessions it still considers open (`PUT` is
 idempotent). The browser itself is started on demand: registering creates

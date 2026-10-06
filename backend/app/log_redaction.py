@@ -29,7 +29,7 @@ REDACTED = "<REDACTED>"
 # durch die Regex-Kette geschickt. Access-Logs sind hochfrequent — die
 # ueberwaeltigende Mehrheit trifft keinen Marker und kostet dann nur einen
 # Substring-Scan.
-_MARKERS = ("/bot", "token", "ticket", "Bearer", "key=", "apikey", "secret")
+_MARKERS = ("/bot", "token", "ticket", "Bearer", "key=", "apikey", "secret", "/mc/sessions/", "/s/")
 
 _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     # Telegram-Bot-Token im Pfad: /bot<id>:<secret>/method — ID mitredigieren,
@@ -47,6 +47,11 @@ _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     ),
     # Authorization-Header, falls eine Library ihre Headers loggt.
     (re.compile(r"\bBearer\s+[A-Za-z0-9._\-]+"), f"Bearer {REDACTED}"),
+    # Browser-session tokens (ADR-088): a session's credential sits in the
+    # gateway URL MC calls (`/mc/sessions/<token>`, logged by httpx) and in
+    # the address a harness uses (`/s/<token>/`).
+    (re.compile(r"(/mc/sessions/)[A-Za-z0-9_-]{32,128}"), rf"\1{REDACTED}"),
+    (re.compile(r"(/s/)[A-Za-z0-9_-]{32,128}(?=[/?\s\"']|$)"), rf"\1{REDACTED}"),
 )
 
 

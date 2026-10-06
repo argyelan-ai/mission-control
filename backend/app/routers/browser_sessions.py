@@ -1,8 +1,8 @@
 """/api/v1/browser-sessions — browser sessions of agents and head runs (ADR-088).
 
-PR S1: list (viewer), open and end (operator). Opening hands the session's
-gateway address back exactly once, to the caller; the listing never contains
-it. Heads and agents get their sessions from the harness layer (ADR-088 harness-wiring step) through
+PR S1: list (viewer), open and end (operator). Only the open call returns the
+session's gateway address (a repeat open of the same session returns the same,
+deterministic address); the listing and the end call never contain it. Heads and agents get their sessions from the harness layer (ADR-088 harness-wiring step) through
 `services/browser_sessions`, not through this API.
 """
 from __future__ import annotations

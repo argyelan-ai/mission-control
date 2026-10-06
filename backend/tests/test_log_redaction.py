@@ -481,3 +481,36 @@ def test_integration_real_httpx_url_and_uvicorn_formatter():
             lg.handlers.clear()
             lg.filters.clear()
             lg.propagate = True
+
+
+
+# ── browser-session tokens (ADR-088): httpx logs the gateway URL ──────────
+
+BROWSER_TOKEN = "Zk3v9QpL2mN8xR4tY7wB1cD6fH0jK5sA9uE3gI2oP7q"
+
+
+def test_redacts_browser_session_token_in_gateway_register_url(redact):
+    line = (
+        "HTTP Request: PUT http://cdp-browser:9300/mc/sessions/" + BROWSER_TOKEN
+        + '?session=11111111-2222-3333-4444-555555555555&agent=alpha "HTTP/1.1 201 Created"'
+    )
+    out = redact(line)
+    assert BROWSER_TOKEN not in out
+    assert "/mc/sessions/<REDACTED>" in out
+    assert "session=11111111-2222-3333-4444-555555555555" in out  # the id stays readable
+
+
+def test_redacts_browser_session_token_in_session_address(redact):
+    out = redact("connect ws://cdp-browser:9300/s/" + BROWSER_TOKEN + "/devtools/browser/abc")
+    assert BROWSER_TOKEN not in out
+    assert "/s/<REDACTED>/devtools/browser/abc" in out
+
+
+def test_snapshot_and_delete_urls_are_redacted_too(redact):
+    for suffix in ("/snapshot", "?agent_tabs=1", ""):
+        out = redact("HTTP Request: DELETE http://cdp-browser:9300/mc/sessions/" + BROWSER_TOKEN + suffix)
+        assert BROWSER_TOKEN not in out
+
+
+def test_short_s_paths_are_left_alone(redact):
+    assert redact("GET /s/abc/index.html") == "GET /s/abc/index.html"

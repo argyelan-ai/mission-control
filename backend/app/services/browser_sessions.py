@@ -8,8 +8,8 @@ session. Registering creates nothing in Chromium — the browser part starts
 when the harness first uses the address, and ending the session closes its
 tabs and contexts (`DELETE /mc/sessions/<token>`).
 
-The token is derived, never stored: HMAC-SHA256 over the session id with the
-server secret, url-safe base64. MC can recompute it to re-register after a
+The token is derived, never stored: HMAC-SHA256 over the session id with a
+stable server secret (`_token_key`), url-safe base64. MC can recompute it to re-register after a
 gateway restart (the gateway's register lives in memory), and a database dump
 contains no live address.
 
@@ -43,6 +43,10 @@ logger = logging.getLogger(__name__)
 # cdp-gateway inside the cdp-browser container (also used by routers/browser_live.py).
 GATEWAY_BASE_URL = os.environ.get("CDP_GATEWAY_URL", "http://cdp-browser:9300")
 _GATEWAY_TIMEOUT = 5.0
+# Ending waits longer: the gateway answers DELETE within its cleanup deadline
+# (cdp_gateway.py `_CLEANUP_DEADLINE`, 8 s), so "unreachable" never hides a
+# cleanup that is still running.
+_END_TIMEOUT = 15.0
 # Head run ids are uuids (docs/specs/head-launcher.md); anything else never
 # reaches a URL or the database.
 _RUN_ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
@@ -52,12 +56,18 @@ _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 _transport: Optional[httpx.AsyncBaseTransport] = None
 
 
+def _token_key() -> bytes:
+    """A dedicated secret if configured, else the encryption key (stable by
+    necessity: rotating it already breaks every stored secret). The JWT
+    secret is only the last resort for installs without either — rotating it
+    to log users out must not strand open sessions (review finding)."""
+    return (settings.browser_session_secret or settings.secrets_encryption_key or settings.jwt_secret_key).encode()
+
+
 def session_token(session_id: uuid.UUID) -> str:
     """The session's credential at the gateway: 43 url-safe characters,
     stable for the session, unguessable without the server secret."""
-    digest = hmac.new(
-        settings.jwt_secret_key.encode(), b"mc-browser-session:" + session_id.bytes, hashlib.sha256,
-    ).digest()
+    digest = hmac.new(_token_key(), b"mc-browser-session:" + session_id.bytes, hashlib.sha256).digest()
     return base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
 
 
@@ -154,7 +164,7 @@ async def end_session(session: AsyncSession, row: BrowserSession, *, reason: str
     result: Optional[dict] = None
     try:
         async with _client() as client:
-            resp = await client.delete(f"/mc/sessions/{session_token(row.id)}")
+            resp = await client.delete(f"/mc/sessions/{session_token(row.id)}", timeout=_END_TIMEOUT)
         if resp.status_code == 200:
             result = resp.json()
         elif resp.status_code != 404:
