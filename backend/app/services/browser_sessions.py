@@ -14,18 +14,35 @@ gateway restart (the gateway's register lives in memory), and a database dump
 contains no live address.
 
 This module knows no harness: how an address reaches playwright-mcp, omp or a
-head is the harness layer's job (ADR-088 harness-wiring step). For now there is no caller besides the
-operator API — nothing opens a session on its own yet.
+head is the harness layer's job (ADR-088 harness-wiring step).
+
+Lifecycle (`lifecycle_tick`, run every few seconds by `browser_session_lifecycle`
+in the background-services process; operator decisions 2026-10-06):
+- an agent's working phase opens lazily at its first `/a/<slug>/` tab and ends
+  after `browser_session_idle_s` without browser activity — with its tabs;
+- a head's session ends when its run has ended (MC's run status, never a
+  dropped connection); every session ends after `browser_session_max_age_s`;
+- open sessions the gateway forgot (restart) are registered again;
+- the last image is taken while a session is active (at most every
+  `browser_frame_interval_s`) and right before it ends, and deleted
+  `browser_frame_retention_days` after the end;
+- the shared Chromium itself always stays on; nothing here starts or stops it.
+Nothing is ever ended while the gateway is unreachable.
 """
 from __future__ import annotations
 
+import asyncio
 import base64
+import binascii
 import hashlib
 import hmac
 import logging
 import os
 import re
+import shutil
 import uuid
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Optional
 
 import httpx
@@ -143,18 +160,22 @@ async def open_session(
     return row, registered
 
 
-async def end_session(session: AsyncSession, row: BrowserSession, *, reason: str) -> Optional[dict]:
+async def end_session(
+    session: AsyncSession, row: BrowserSession, *, reason: str, agent_tabs: bool = False,
+) -> Optional[dict]:
     """End the session: the gateway closes its tabs, contexts and open
     connections, the row becomes "ended". Idempotent. Returns the gateway's
     cleanup report, or None if there was nothing to clean up there (already
-    ended, gateway restarted, or unreachable — the row is ended anyway; tabs a
-    reachable-but-failed gateway still holds are the ADR-088 lifecycle step's job)."""
+    ended, gateway restarted, or unreachable — the row is ended anyway).
+    `agent_tabs`: an agent's working phase also closes the agent's own tabs."""
     if row.status == "ended":
         return None
     result: Optional[dict] = None
     try:
         async with _client() as client:
-            resp = await client.delete(f"/mc/sessions/{session_token(row.id)}")
+            resp = await client.delete(
+                f"/mc/sessions/{session_token(row.id)}", params={"agent_tabs": "1"} if agent_tabs else None,
+            )
         if resp.status_code == 200:
             result = resp.json()
         elif resp.status_code != 404:
@@ -168,3 +189,217 @@ async def end_session(session: AsyncSession, row: BrowserSession, *, reason: str
     await session.commit()
     await session.refresh(row)
     return result
+
+
+# ── lifecycle (ADR-088 lifecycle step) ─────────────────────────────────────
+
+_FRAME_NAME = "last.jpg"
+# A last image larger than this is not a screenshot of one tab; refuse it.
+_MAX_FRAME_BYTES = 8 * 1024 * 1024
+_RETENTION_BATCH = 50
+
+
+def aware(value: Optional[datetime]) -> Optional[datetime]:
+    """SQLite hands back naive datetimes; everything here compares in UTC."""
+    if value is not None and value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
+def frame_path(session_id: uuid.UUID) -> Path:
+    return Path(settings.browser_sessions_root) / str(session_id) / _FRAME_NAME
+
+
+async def _gateway_json(client: httpx.AsyncClient, path: str):
+    resp = await client.get(path)
+    resp.raise_for_status()
+    return resp.json()
+
+
+async def _take_frame(client: httpx.AsyncClient, row: BrowserSession, now: datetime) -> bool:
+    """Ask the gateway for the session's last image and store it. False (and
+    the previous image kept) when there is no tab or the capture failed."""
+    try:
+        resp = await client.get(f"/mc/sessions/{session_token(row.id)}/snapshot")
+        if resp.status_code != 200:
+            return False
+        snap = resp.json()
+        data = base64.b64decode(snap.get("data") or "", validate=True)
+    except (httpx.HTTPError, ValueError, binascii.Error) as e:
+        logger.info("browser_sessions: no last image for %s: %s", row.id, e)
+        return False
+    if not data or len(data) > _MAX_FRAME_BYTES:
+        return False
+    target = frame_path(row.id)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(".tmp")
+    tmp.write_bytes(data)
+    tmp.replace(target)
+    row.last_frame_at = now
+    row.last_url = (snap.get("url") or "")[:2048] or None
+    row.last_title = (snap.get("title") or "")[:512] or None
+    return True
+
+
+def _head_run_ended(run_id: str, now: datetime) -> Optional[str]:
+    """End reason for a head's session, or None while its run is going."""
+    from app.services.heads import files
+    from app.services.heads.state import FINAL_STATES, derive_for_run
+
+    run = files.load_run(run_id)
+    if run is None:
+        return "run_missing"
+    if derive_for_run(run, now.timestamp())["state"] in FINAL_STATES:
+        return "run_ended"
+    return None
+
+
+def _purge_old_frames(rows: list[BrowserSession], now: datetime) -> int:
+    cutoff = now - timedelta(days=settings.browser_frame_retention_days)
+    purged = 0
+    for row in rows:
+        ended = aware(row.ended_at)
+        folder = frame_path(row.id).parent
+        if ended is not None and ended < cutoff and folder.is_dir():
+            shutil.rmtree(folder, ignore_errors=True)
+            purged += 1
+    return purged
+
+
+async def lifecycle_tick(session: AsyncSession, *, now: Optional[datetime] = None) -> dict:
+    """One pass of the browser-session lifecycle. Returns a small report."""
+    now = aware(now) or utcnow()
+    report = {"gateway": "ok", "registered": 0, "opened": 0, "ended": 0, "frames": 0, "purged": 0}
+    async with _client() as client:
+        try:
+            known = {s.get("sessionId") for s in await _gateway_json(client, "/mc/sessions")}
+            targets = await _gateway_json(client, "/mc/targets")
+        except (httpx.HTTPError, ValueError) as e:
+            logger.info("browser_sessions: gateway unreachable, lifecycle pass skipped: %s", e)
+            report["gateway"] = "unreachable"
+            return report
+
+        rows = list((await session.exec(select(BrowserSession).where(BrowserSession.status != "ended"))).all())
+        agents: dict[uuid.UUID, Agent] = {}
+        agent_ids = [r.agent_id for r in rows if r.agent_id]
+        if agent_ids:
+            for agent in (await session.exec(select(Agent).where(Agent.id.in_(agent_ids)))).all():
+                agents[agent.id] = agent
+
+        # 1. Agent working phases open lazily at the agent's first tab
+        #    (decision a): tabs on `/a/<slug>/` that no session owns.
+        phase_slugs = {t.get("agent") for t in targets if t.get("agent") and not t.get("session")}
+        open_agent_slugs = {_agent_slug(agents[r.agent_id]) for r in rows if r.agent_id in agents}
+        for slug in sorted(phase_slugs - open_agent_slugs):
+            agent = (await session.exec(select(Agent).where(Agent.slug == slug))).first()
+            if agent is None or agent.archived_at is not None:
+                continue
+            row, _registered = await open_session(session, agent=agent)
+            agents[agent.id] = agent
+            rows.append(row)
+            known.add(str(row.id))
+            report["opened"] += 1
+
+        for row in rows:
+            slug = _agent_slug(agents[row.agent_id]) if row.agent_id in agents else None
+            # 2. The gateway forgot it (restart): register again.
+            if str(row.id) not in known:
+                if await register_with_gateway(row, slug):
+                    report["registered"] += 1
+
+            # 3. Its tabs: its own, plus the agent's for an agent's phase.
+            tabs = {
+                t["targetId"]: t for t in targets
+                if t.get("session") == str(row.id) or (slug and row.owner_kind == "agent" and t.get("agent") == slug)
+            }
+            if tabs:
+                if row.status == "open":
+                    row.status = "live"
+                row.started_at = aware(row.started_at) or now
+                idle = min(float(t.get("idleSeconds") or 0.0) for t in tabs.values())
+                seen = now - timedelta(seconds=idle)
+                if aware(row.last_active_at) is None or seen > aware(row.last_active_at):
+                    row.last_active_at = seen
+
+            # 4. Should it end?
+            reason = None
+            started = aware(row.started_at)
+            if started is not None and (now - started).total_seconds() >= settings.browser_session_max_age_s:
+                reason = "max_age"
+            elif row.owner_kind == "head" and row.head_run_id:
+                reason = _head_run_ended(row.head_run_id, now)
+            elif row.owner_kind == "agent":
+                reference = aware(row.last_active_at) or started or aware(row.created_at) or now
+                if (now - reference).total_seconds() >= settings.browser_session_idle_s:
+                    reason = "idle"
+
+            # 5. Last image: while active (new activity, not more often than
+            #    the interval), and once more right before the end.
+            last_frame = aware(row.last_frame_at)
+            active_since_frame = last_frame is None or (
+                aware(row.last_active_at) is not None and aware(row.last_active_at) > last_frame
+            )
+            due = last_frame is None or (now - last_frame).total_seconds() >= settings.browser_frame_interval_s
+            if tabs and (reason is not None or (active_since_frame and due)):
+                if await _take_frame(client, row, now):
+                    report["frames"] += 1
+
+            session.add(row)
+            await session.commit()
+            if reason is not None:
+                await end_session(
+                    session, row, reason=reason,
+                    agent_tabs=row.owner_kind == "agent" and settings.browser_idle_close_agent_tabs,
+                )
+                report["ended"] += 1
+
+    ended_rows = (await session.exec(
+        select(BrowserSession)
+        .where(BrowserSession.status == "ended")
+        .where(BrowserSession.ended_at < now - timedelta(days=settings.browser_frame_retention_days))
+        .order_by(BrowserSession.ended_at.desc())
+        .limit(_RETENTION_BATCH * 4)
+    )).all()
+    report["purged"] = _purge_old_frames(list(ended_rows), now)
+    return report
+
+
+class BrowserSessionLifecycle:
+    """Runs `lifecycle_tick` every `browser_sessions_interval` seconds in the
+    background-services process (same pattern as heads_sync)."""
+
+    def __init__(self) -> None:
+        self._task: Optional[asyncio.Task] = None
+        self._running = False
+
+    async def start(self) -> None:
+        interval = settings.browser_sessions_interval
+        if self._running or not interval or interval <= 0 or interval >= 99999:
+            return
+        self._running = True
+        self._task = asyncio.create_task(self._loop(interval), name="browser_session_lifecycle")
+        logger.info("browser session lifecycle started (interval=%ss)", interval)
+
+    async def stop(self) -> None:
+        self._running = False
+        if self._task:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            self._task = None
+
+    async def _loop(self, interval: int) -> None:
+        from app.database import engine
+
+        while self._running:
+            await asyncio.sleep(interval)
+            try:
+                async with AsyncSession(engine, expire_on_commit=False) as session:
+                    await lifecycle_tick(session)
+            except Exception:  # noqa: BLE001 — never kill the loop
+                logger.exception("browser session lifecycle pass failed")
+
+
+browser_session_lifecycle = BrowserSessionLifecycle()

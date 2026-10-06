@@ -1,6 +1,6 @@
 """/api/v1/browser-sessions — browser sessions of agents and head runs (ADR-088).
 
-PR S1: list (viewer), open and end (operator). Opening hands the session's
+List and last image (viewer), open and end (operator). Opening hands the session's
 gateway address back exactly once, to the caller; the listing never contains
 it. Heads and agents get their sessions from the harness layer (ADR-088 harness-wiring step) through
 `services/browser_sessions`, not through this API.
@@ -11,6 +11,7 @@ import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, model_validator
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -52,6 +53,12 @@ def _public(row: BrowserSession) -> dict:
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "ended_at": row.ended_at.isoformat() if row.ended_at else None,
         "end_reason": row.end_reason,
+        "started_at": row.started_at.isoformat() if row.started_at else None,
+        "last_active_at": row.last_active_at.isoformat() if row.last_active_at else None,
+        "last_frame_at": row.last_frame_at.isoformat() if row.last_frame_at else None,
+        "last_url": row.last_url,
+        "last_title": row.last_title,
+        "has_last_frame": svc.frame_path(row.id).is_file(),
     }
 
 
@@ -64,6 +71,15 @@ async def list_browser_sessions(
     if status:
         query = query.where(BrowserSession.status == status)
     return [_public(row) for row in (await session.exec(query)).all()]
+
+
+@router.get("/{session_id}/last-frame", dependencies=[Depends(require_role(Role.VIEWER))])
+async def browser_session_last_frame(session_id: uuid.UUID):
+    """The session's last image (JPEG), kept after the browser part ended."""
+    path = svc.frame_path(session_id)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="no image for this browser session")
+    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
 @router.post("", status_code=201, dependencies=[Depends(require_role(Role.OPERATOR))])

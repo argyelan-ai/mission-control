@@ -637,6 +637,23 @@ class Settings(BaseSettings):
     heads_enabled: bool = False
     heads_root: Path = Path(os.environ.get("HOME_HOST", str(Path.home()))) / ".mc" / "heads"
     heads_sync_interval: int = 60
+
+    # Browser sessions (ADR-088, lifecycle step + operator decisions
+    # 2026-10-06). The loop runs in the background-services process.
+    # browser_sessions_root holds each session's last image
+    # (<root>/<session-id>/last.jpg), derived like heads_root.
+    browser_sessions_root: Path = Path(os.environ.get("HOME_HOST", str(Path.home()))) / ".mc" / "browser-sessions"
+    browser_sessions_interval: int = 15
+    # An agent's working phase ends after this long without browser activity.
+    browser_session_idle_s: int = 30 * 60
+    # Hard limit for any session (= the longest head time limit).
+    browser_session_max_age_s: int = 8 * 3600
+    # A new last image at most this often, and only after new activity.
+    browser_frame_interval_s: int = 60
+    browser_frame_retention_days: int = 30
+    # At the end of an agent's working phase also close its idle tabs
+    # (its connections stay). Off = only the session's own tabs close.
+    browser_idle_close_agent_tabs: bool = True
     # Progress watchdog (spec §6.5): mc-head stops a head (reason
     # "no_progress") when neither head.log, step.txt, work.log nor any worktree file
     # changed for this many minutes — long coding jobs may run as long as
