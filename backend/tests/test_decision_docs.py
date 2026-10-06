@@ -35,7 +35,8 @@ from app.services.decision_docs import (
 # Gemessen am 2026-09-23 auf docs/adr-086-cross-switch (origin/main 19cffe2c
 # + ADR-086): 87 `.md`-Dateien unter docs/decisions/, davon 85 echte
 # Entscheidungsdokumente; die zwei uebrigen sind README.md und _template.md.
-EXPECTED_DECISION_DOCS = 86
+# +1 on 2026-10-06: ADR-088 (browser sessions), confirmed on purpose.
+EXPECTED_DECISION_DOCS = 87
 
 
 def _repo_root() -> Path:
