@@ -111,6 +111,9 @@ most recently active tab), and ends an agent's working phase with
 `DELETE /mc/sessions/<token>?agent_tabs=1`, which also closes that agent's
 own `/a/<slug>/` tabs (its connections stay — the agent keeps working).
 A session opened for an agent "sees" the agent's tabs as well as its own.
+`POST /mc/orphans/close?session=<uuid>` closes what an already ENDED session
+created and left behind (refused while it is registered); `/mc/targets`
+reports the creating session as `creatorSession` for that sweep.
 
 Trust model: identification is NOT authentication. Any container on the
 Docker-internal network can already reach Chromium's CDP port directly
@@ -606,6 +609,13 @@ class GatewayState:
             self.target_owner = {k: v for k, v in self.target_owner.items() if k in self.targets}
         if len(self.target_creator) > _OWNER_MAP_SOFT_CAP and self.targets:
             self.target_creator = {k: v for k, v in self.target_creator.items() if k in self.targets}
+        if len(self.session_agent) > _OWNER_MAP_SOFT_CAP:
+            referenced = {e.session_id for e in self.sessions.values()}
+            for t in self.targets.values():
+                for key in (t.agent, t.creator, self.target_owner.get(t.id)):
+                    if key and key.startswith(_SESSION_OWNER_PREFIX):
+                        referenced.add(key[len(_SESSION_OWNER_PREFIX):])
+            self.session_agent = {k: v for k, v in self.session_agent.items() if k in referenced}
         if len(self.session_target) > _OWNER_MAP_SOFT_CAP and self.targets:
             self.session_target = {k: v for k, v in self.session_target.items() if v in self.targets}
 
@@ -633,6 +643,9 @@ class GatewayState:
                 # The browser session (ADR-088) the tab belongs to, if any.
                 "session": owner_session,
                 "browserContextId": t.ctx,
+                # The session that CREATED the tab (not a claim): MC's sweep
+                # closes tabs a session left behind after it ended.
+                "creatorSession": self.describe_owner(t.creator or self.target_creator.get(t.id))[1],
                 "createdAt": t.created_at,
                 "lastActiveAt": t.last_active_at,
                 # Same clock as lastActiveAt, already subtracted: consumers in
@@ -1139,6 +1152,30 @@ class CdpGateway:
     def _live_connection_counts(self) -> dict[str, int]:
         return {key: len(tasks) for key, tasks in self._live_conns.items() if tasks}
 
+    async def close_orphans(self, session_id: str) -> Optional[dict]:
+        """Close what an ENDED session created and left behind (e.g. a
+        `/json/new` that was still in flight while it ended). None if the
+        session is still registered — a live session is ended, not swept."""
+        if any(e.session_id == session_id for e in self.state.sessions.values()):
+            return None
+        tabs, contexts = self.state.session_resources(session_id)
+        commands = [("Target.closeTarget", {"targetId": tid}) for tid in tabs]
+        commands += [("Target.disposeBrowserContext", {"browserContextId": ctx}) for ctx in contexts]
+        errors: list[str] = []
+        if commands:
+            try:
+                for (method, _params), reply in zip(commands, await self._cdp_call(commands)):
+                    message = str((reply.get("error") or {}).get("message", "")) if "error" in reply else None
+                    if message is not None and not _ALREADY_GONE.search(message):
+                        errors.append(f"{method}: {message}")
+            except (OSError, asyncio.TimeoutError, RuntimeError, ValueError, websockets.WebSocketException) as e:
+                errors.append(f"cleanup: {e}")
+        for ctx in contexts:
+            self.state.ctx_owner.pop(ctx, None)
+        if commands:
+            logger.info("cdp_gateway: swept %d tabs, %d contexts of ended session %s", len(tabs), len(contexts), session_id)
+        return {"sessionId": session_id, "closedTargets": len(tabs), "disposedContexts": len(contexts), "errors": errors}
+
     async def end_session(self, token: str, *, agent_tabs: bool = False) -> Optional[dict]:
         """Ends one browser session: unregister the token first (a reconnect
         is refused from here on), cut the session's open CDP connections,
@@ -1160,9 +1197,14 @@ class CdpGateway:
             # End of an agent's working phase: its idle `/a/<slug>/` tabs go
             # too. Its connections are not cut — the agent keeps working and
             # opens a new tab (and a new phase) when it needs the browser.
+            # Same rule as for sessions (review M1): never a tab another
+            # owner created and the agent only claimed. A tab nobody known
+            # created (Chromium's startup tab, omp's reused page) is fine.
             owned_ctx = set(contexts)
             tabs = sorted(set(tabs) | {
-                t.id for t in self.state.targets_for(entry.agent) if t.ctx not in owned_ctx
+                t.id for t in self.state.targets_for(entry.agent)
+                if t.ctx not in owned_ctx
+                and (t.creator or self.state.target_creator.get(t.id)) in (None, entry.agent)
             })
         commands = [("Target.closeTarget", {"targetId": tid}) for tid in tabs]
         commands += [("Target.disposeBrowserContext", {"browserContextId": ctx}) for ctx in contexts]
@@ -1258,6 +1300,17 @@ class CdpGateway:
                 want_session = normalize_session_id((qs.get("session") or [None])[0])
             body = json.dumps(self.state.as_mc_targets_json(want, want_session)).encode()
             return 200, "application/json", body
+        if local_path.split("?", 1)[0] == "/mc/orphans/close":
+            if method != "POST":
+                return 405, "text/plain", b"cdp-gateway: method not allowed"
+            qs = parse_qs(local_path.split("?", 1)[1]) if "?" in local_path else {}
+            session_id = normalize_session_id((qs.get("session") or [None])[0])
+            if session_id is None:
+                return 400, "text/plain", b"cdp-gateway: session=<uuid> required"
+            result = await self.close_orphans(session_id)
+            if result is None:
+                return 409, "text/plain", b"cdp-gateway: session still registered - end it instead"
+            return 200, "application/json", json.dumps(result).encode()
         if local_path == "/mc/sessions" or local_path.startswith(("/mc/sessions/", "/mc/sessions?")):
             return await self._handle_sessions_http(method, local_path)
 

@@ -175,3 +175,89 @@ async def test_delete_without_agent_tabs_leaves_the_agents_tabs(monkeypatch):
     status, _ct, body = await _http(gateway, "DELETE", f"/mc/sessions/{TOKEN}")
     assert status == 200 and json.loads(body)["closedTargets"] == 0
     assert sent == []
+
+
+# ── review L1: orphan tabs of an ended session ─────────────────────────────
+
+def test_targets_report_which_session_created_a_tab():
+    state = GatewayState(now_fn=Clock())
+    state.register_session(TOKEN, SID, None)
+    state.observe_response("Target.createTarget", {}, {"targetId": "T"}, agent=session_owner_key(SID))
+    _created(state, "T")
+    state.observe_response("Target.createTarget", {}, {"targetId": "A"}, agent="alpha")
+    _created(state, "A")
+    rows = {r["targetId"]: r for r in state.as_mc_targets_json()}
+    assert rows["T"]["creatorSession"] == SID
+    assert rows["A"]["creatorSession"] is None
+
+
+@pytest.mark.asyncio
+async def test_orphan_tabs_of_an_ended_session_can_be_closed(monkeypatch):
+    """A `/json/new` still in flight during DELETE leaves a tab created by a
+    session that no longer exists. MC's sweep closes exactly those — and is
+    refused for a session that is still registered."""
+    gateway = CdpGateway(upstream_host="127.0.0.1", upstream_port=1)
+    key = session_owner_key(SID)
+    gateway.state.record_creator("ORPHAN", key)
+    _created(gateway.state, "ORPHAN")
+    gateway.state.observe_response("Target.createTarget", {}, {"targetId": "CLAIMED"}, agent="beta")
+    _created(gateway.state, "CLAIMED")
+    gateway.state.record_owner("CLAIMED", key)       # the ended session had only claimed it
+    sent = []
+
+    async def fake_call(commands, **kw):
+        sent.extend(commands)
+        return [{"result": {}} for _ in commands]
+
+    monkeypatch.setattr(gateway, "_cdp_call", fake_call)
+    status, _ct, body = await _http(gateway, "POST", f"/mc/orphans/close?session={SID}")
+    assert status == 200 and json.loads(body)["closedTargets"] == 1
+    assert sent == [("Target.closeTarget", {"targetId": "ORPHAN"})]
+
+    gateway.state.register_session(TOKEN, SID, None)
+    assert (await _http(gateway, "POST", f"/mc/orphans/close?session={SID}"))[0] == 409
+    assert (await _http(gateway, "POST", "/mc/orphans/close?session=nope"))[0] == 400
+
+
+# ── review M1 carried into agent phases ────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_ending_an_agent_phase_never_closes_a_tab_another_owner_created(monkeypatch):
+    gateway = CdpGateway(upstream_host="127.0.0.1", upstream_port=1)
+    gateway.state.register_session(TOKEN, SID, "alpha")
+    gateway.state.observe_response("Target.createTarget", {}, {"targetId": "A1"}, agent="alpha")
+    _created(gateway.state, "A1")
+    _created(gateway.state, "BLANK")                      # created by nobody known (the startup tab)
+    gateway.state.record_owner("BLANK", "alpha")          # alpha claimed it
+    gateway.state.observe_response("Target.createTarget", {}, {"targetId": "B1"}, agent="beta")
+    _created(gateway.state, "B1")
+    gateway.state.record_owner("B1", "alpha")             # alpha claimed beta's tab
+    sent = []
+
+    async def fake_call(commands, **kw):
+        sent.extend(commands)
+        return [{"result": {}} for _ in commands]
+
+    monkeypatch.setattr(gateway, "_cdp_call", fake_call)
+    await _http(gateway, "DELETE", f"/mc/sessions/{TOKEN}?agent_tabs=1")
+    assert sorted(p["targetId"] for _m, p in sent) == ["A1", "BLANK"]
+
+
+# ── session_agent pruning ──────────────────────────────────────────────────
+
+def test_session_agent_map_is_pruned_once_it_grows(monkeypatch):
+    import cdp_gateway
+
+    monkeypatch.setattr(cdp_gateway, "_OWNER_MAP_SOFT_CAP", 3)
+    state = GatewayState(now_fn=Clock())
+    _created(state, "LIVE")
+    live_key = session_owner_key("aaaaaaaa-0000-4000-8000-000000000000")
+    state.session_agent["aaaaaaaa-0000-4000-8000-000000000000"] = "alpha"
+    state.record_owner("LIVE", live_key)
+    for i in range(5):
+        sid = f"bbbbbbbb-0000-4000-8000-00000000000{i}"
+        state.register_session(f"tok_{i}" + "x" * 40, sid, "beta")
+        state.unregister_session(f"tok_{i}" + "x" * 40)
+    _created(state, "GONE")
+    state.apply_target_event("targetDestroyed", {"targetId": "GONE"})
+    assert set(state.session_agent) == {"aaaaaaaa-0000-4000-8000-000000000000"}

@@ -22,7 +22,9 @@ in the background-services process; operator decisions 2026-10-06):
   after `browser_session_idle_s` without browser activity — with its tabs;
 - a head's session ends when its run has ended (MC's run status, never a
   dropped connection); every session ends after `browser_session_max_age_s`;
-- open sessions the gateway forgot (restart) are registered again;
+- open sessions the gateway forgot (restart) are registered again, gateway
+  sessions MC has ended are ended there too, and tabs an ended session left
+  behind are swept;
 - the last image is taken while a session is active (at most every
   `browser_frame_interval_s`) and right before it ends, and deleted
   `browser_frame_retention_days` after the end;
@@ -232,7 +234,7 @@ async def _take_frame(client: httpx.AsyncClient, row: BrowserSession, now: datet
     """Ask the gateway for the session's last image and store it. False (and
     the previous image kept) when there is no tab or the capture failed."""
     try:
-        resp = await client.get(f"/mc/sessions/{session_token(row.id)}/snapshot")
+        resp = await client.get(f"/mc/sessions/{session_token(row.id)}/snapshot", timeout=_END_TIMEOUT)
         if resp.status_code != 200:
             return False
         snap = resp.json()
@@ -251,6 +253,20 @@ async def _take_frame(client: httpx.AsyncClient, row: BrowserSession, now: datet
     row.last_url = (snap.get("url") or "")[:2048] or None
     row.last_title = (snap.get("title") or "")[:512] or None
     return True
+
+
+async def _ended_or_unknown(session: AsyncSession, session_id: str) -> bool:
+    """True if MC has no open row for this session id (ended, or no row at
+    all). Read fresh: a session opened by the API after this pass listed its
+    rows must never be ended or swept."""
+    try:
+        sid = uuid.UUID(session_id)
+    except (ValueError, TypeError):
+        return False
+    row = await session.get(BrowserSession, sid)
+    if row is not None:
+        await session.refresh(row)
+    return row is None or row.status == "ended"
 
 
 def _head_run_ended(run_id: str, now: datetime) -> Optional[str]:
@@ -281,11 +297,15 @@ def _purge_old_frames(rows: list[BrowserSession], now: datetime) -> int:
 async def lifecycle_tick(session: AsyncSession, *, now: Optional[datetime] = None) -> dict:
     """One pass of the browser-session lifecycle. Returns a small report."""
     now = aware(now) or utcnow()
-    report = {"gateway": "ok", "registered": 0, "opened": 0, "ended": 0, "frames": 0, "purged": 0}
+    report = {
+        "gateway": "ok", "registered": 0, "opened": 0, "ended": 0, "frames": 0, "purged": 0,
+        "stale_ended": 0, "swept": 0,
+    }
     async with _client() as client:
         try:
             known = {s.get("sessionId") for s in await _gateway_json(client, "/mc/sessions")}
             targets = await _gateway_json(client, "/mc/targets")
+            gateway_ids = set(known)
         except (httpx.HTTPError, ValueError) as e:
             logger.info("browser_sessions: gateway unreachable, lifecycle pass skipped: %s", e)
             report["gateway"] = "unreachable"
@@ -377,6 +397,28 @@ async def lifecycle_tick(session: AsyncSession, *, now: Optional[datetime] = Non
                     agent_tabs=row.owner_kind == "agent" and settings.browser_idle_close_agent_tabs,
                 )
                 report["ended"] += 1
+
+        # 6. The other direction: the gateway still knows a session MC has
+        #    ended (an open/end race, a gateway 5xx on DELETE) -> end it there.
+        #    And tabs an ended session created and left behind (a /json/new
+        #    still in flight while it ended) -> sweep them.
+        live_ids = {str(r.id) for r in rows if r.status != "ended"}
+        ended_now = {str(r.id) for r in rows if r.status == "ended"}
+        for sid in sorted(gateway_ids - live_ids - ended_now - {None}):
+            if await _ended_or_unknown(session, sid):
+                try:
+                    await client.delete(f"/mc/sessions/{session_token(uuid.UUID(sid))}", timeout=_END_TIMEOUT)
+                    report["stale_ended"] += 1
+                except httpx.HTTPError as e:
+                    logger.info("browser_sessions: could not end stale gateway session %s: %s", sid, e)
+        creators = {t.get("creatorSession") for t in targets if t.get("creatorSession")}
+        for sid in sorted(creators - live_ids - ended_now):
+            if await _ended_or_unknown(session, sid):
+                try:
+                    await client.post("/mc/orphans/close", params={"session": sid}, timeout=_END_TIMEOUT)
+                    report["swept"] += 1
+                except httpx.HTTPError as e:
+                    logger.info("browser_sessions: could not sweep tabs of ended session %s: %s", sid, e)
 
     ended_rows = (await session.exec(
         select(BrowserSession)

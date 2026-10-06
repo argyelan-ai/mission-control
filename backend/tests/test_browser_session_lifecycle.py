@@ -39,10 +39,11 @@ class FakeGateway:
         self.jpeg = JPEG
         self.requests: list[httpx.Request] = []
 
-    def tab(self, tid, *, agent=None, session=None, idle=5.0, url="https://x.example", title="X"):
+    def tab(self, tid, *, agent=None, session=None, idle=5.0, url="https://x.example", title="X", creator_session=None):
         self.targets.append({
             "targetId": tid, "title": title, "url": url, "agent": agent, "session": session,
             "browserContextId": None, "idleSeconds": idle,
+            "creatorSession": creator_session if creator_session is not None else session,
         })
 
     def handler(self, request: httpx.Request) -> httpx.Response:
@@ -57,6 +58,8 @@ class FakeGateway:
                 {"sessionId": v["session"], "agent": v["agent"], "tabs": 0, "contexts": 0, "connections": 0}
                 for v in self.registered.values()
             ])
+        if path == "/mc/orphans/close":
+            return httpx.Response(200, json={"closedTargets": 1, "disposedContexts": 0, "errors": []})
         token = path.split("/")[3]
         if path.endswith("/snapshot"):
             if self.snapshot_status != 200:
@@ -314,3 +317,37 @@ async def test_api_serves_the_last_image(auth_client, gw):
     assert resp.content == JPEG
     listing = (await auth_client.get("/api/v1/browser-sessions")).json()
     assert listing[0]["has_last_frame"] is True
+
+
+
+# ── review L3: gateway sessions whose row has ended ────────────────────────
+
+async def test_a_gateway_session_whose_row_ended_is_ended_there_too(session: AsyncSession, gw, heads_root):  # noqa: F811
+    """open/end race or a gateway 5xx on DELETE can leave the token alive at
+    the gateway while the row is ended: the pass ends it there as well — but
+    never a session whose row is still open."""
+    run = make_run(heads_root, status={"phase": "running"}, heartbeat_age=5)
+    ended = await _add(owner_kind="head", head_run_id=str(uuid.uuid4()), status="ended", ended_at=utcnow())
+    alive = await _add(owner_kind="head", head_run_id=run)
+    stranger = uuid.uuid4()   # registered at the gateway, no row at all
+    for sid in (ended.id, alive.id, stranger):
+        gw.registered[svc.session_token(sid)] = {"session": str(sid), "agent": None}
+    report = await _tick(session)
+    deleted = {r.url.path.rsplit("/", 1)[-1] for r in gw.calls("DELETE")}
+    assert deleted == {svc.session_token(ended.id), svc.session_token(stranger)}
+    assert report["stale_ended"] == 2
+    assert (await _get(alive.id)).status == "open"
+
+
+# ── review L1: orphan tabs of an ended session ─────────────────────────────
+
+async def test_tabs_left_behind_by_an_ended_session_are_swept(session: AsyncSession, gw, heads_root):  # noqa: F811
+    run = make_run(heads_root, status={"phase": "running"}, heartbeat_age=5)
+    ended = await _add(owner_kind="head", head_run_id=str(uuid.uuid4()), status="ended", ended_at=utcnow())
+    alive = await _add(owner_kind="head", head_run_id=run)
+    gw.tab("ORPHAN", creator_session=str(ended.id), session=str(ended.id))
+    gw.tab("LIVE", session=str(alive.id))
+    report = await _tick(session)
+    [sweep] = gw.calls("POST", "/mc/orphans/close")
+    assert sweep.url.params["session"] == str(ended.id)
+    assert report["swept"] == 1
