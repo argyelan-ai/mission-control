@@ -38,6 +38,7 @@ class FakeGateway:
         self.snapshot_status = 200
         self.jpeg = JPEG
         self.orphans: list[dict] = []
+        self.health = 200
         self.requests: list[httpx.Request] = []
 
     def tab(self, tid, *, agent=None, session=None, idle=5.0, url="https://x.example", title="X", creator_session=None):
@@ -52,6 +53,8 @@ class FakeGateway:
             raise httpx.ConnectError("down", request=request)
         self.requests.append(request)
         path = request.url.path
+        if path == "/mc/health":
+            return httpx.Response(self.health, text="ok" if self.health == 200 else "watcher not connected")
         if path == "/mc/targets":
             return httpx.Response(200, json=self.targets)
         if path == "/mc/sessions":
@@ -163,9 +166,10 @@ async def test_tabs_of_unknown_or_session_owned_tabs_open_no_phase(session: Asyn
     assert await _rows() == []
 
 
-async def test_agent_phase_ends_after_30_minutes_without_activity(session: AsyncSession, gw, make_agent):
+async def test_agent_phase_ends_after_30_minutes_without_activity(session: AsyncSession, gw, make_agent, monkeypatch):
     """Sabotage: compare against the frame interval instead of the idle limit
     -> the phase ends far too early and the 'still active' half goes red."""
+    monkeypatch.setattr(settings, "browser_idle_close_agent_tabs", True)  # opt-in (default off, F3)
     agent = await make_agent(name="Alpha", slug="alpha")
     t0 = utcnow()
     gw.tab("A1", agent="alpha", idle=29 * 60)
@@ -227,6 +231,9 @@ async def test_head_session_ends_when_the_run_has_ended(session: AsyncSession, g
 
     assert (await _get(alive.id)).status == "open"
     assert (await _get(done.id)).status == "ended" and (await _get(done.id)).end_reason == "run_ended"
+    # A missing run folder gets one pass of grace (F5) before the end.
+    assert (await _get(gone.id)).status == "open"
+    await _tick(session)
     assert (await _get(gone.id)).status == "ended" and (await _get(gone.id)).end_reason == "run_missing"
 
 
@@ -294,9 +301,9 @@ async def test_failed_or_empty_snapshot_keeps_the_previous_image(session: AsyncS
 
 async def test_last_images_are_deleted_30_days_after_the_end(session: AsyncSession, gw):
     old = await _add(owner_kind="head", head_run_id=str(uuid.uuid4()), status="ended",
-                     ended_at=utcnow() - timedelta(days=31))
+                     ended_at=utcnow() - timedelta(days=31), last_frame_at=utcnow() - timedelta(days=31))
     recent = await _add(owner_kind="head", head_run_id=str(uuid.uuid4()), status="ended",
-                        ended_at=utcnow() - timedelta(days=29))
+                        ended_at=utcnow() - timedelta(days=29), last_frame_at=utcnow() - timedelta(days=29))
     for row in (old, recent):
         folder = settings.browser_sessions_root / str(row.id)
         folder.mkdir(parents=True)
@@ -377,3 +384,160 @@ async def test_a_context_left_without_tabs_is_swept_too(session: AsyncSession, g
     report = await _tick(session)
     [sweep] = gw.calls("POST", "/mc/orphans/close")
     assert sweep.url.params["session"] == str(ended.id) and report["swept"] == 1
+
+
+
+# ── review #760: F1 agent phases roll over at the age limit ────────────────
+
+async def test_age_limit_rolls_an_agent_phase_over_without_closing_its_tabs(
+    session: AsyncSession, gw, make_agent, monkeypatch,
+):
+    """An agent working without a break for 8 h must not lose its tabs: the
+    phase is closed in the record and a new one opens at once.
+    Sabotage: treat the agent like a head (hard end with its tabs) -> red."""
+    monkeypatch.setattr(settings, "browser_idle_close_agent_tabs", True)
+    agent = await make_agent(name="Alpha", slug="alpha")
+    old = await _add(owner_kind="agent", agent_id=agent.id, status="live",
+                     started_at=utcnow() - timedelta(seconds=settings.browser_session_max_age_s + 1),
+                     last_active_at=utcnow() - timedelta(seconds=2))
+    gw.tab("A1", agent="alpha", idle=2.0)
+    report = await _tick(session)
+    old = await _get(old.id)
+    assert old.status == "ended" and old.end_reason == "max_age_rollover"
+    [delete] = gw.calls("DELETE")
+    assert "agent_tabs" not in delete.url.params
+    await _tick(session)
+    rows = [r for r in await _rows() if r.status != "ended"]
+    assert len(rows) == 1 and rows[0].agent_id == agent.id   # the next phase is open
+    assert report["ended"] == 1
+
+
+async def test_closing_agent_tabs_is_off_by_default():
+    """F3: whether omp recovers from a closed tab under its open connection
+    is unproven — only the record ends until a live test says otherwise."""
+    from app.config import Settings
+
+    assert Settings.model_fields["browser_idle_close_agent_tabs"].default is False
+
+
+# ── F2: frame retention gets through every expired row ─────────────────────
+
+async def test_frame_retention_purges_more_than_one_batch(session: AsyncSession, gw):
+    """Sabotage: newest-first without marking purged rows re-reads the same
+    batch every pass and the older rows are never purged."""
+    ended_at = utcnow() - timedelta(days=40)
+    ids = []
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        for i in range(260):
+            row = BrowserSession(owner_kind="head", head_run_id=str(uuid.uuid4()), status="ended",
+                                 ended_at=ended_at + timedelta(seconds=i), last_frame_at=ended_at)
+            s.add(row)
+            ids.append(row.id)
+        await s.commit()
+    for sid in ids:
+        folder = settings.browser_sessions_root / str(sid)
+        folder.mkdir(parents=True)
+        (folder / "last.jpg").write_bytes(JPEG)
+    for _ in range(3):
+        await _tick(session)
+    left = [sid for sid in ids if (settings.browser_sessions_root / str(sid)).exists()]
+    assert left == []
+
+
+# ── F4: heads end at their own time limit ──────────────────────────────────
+
+async def test_head_session_ends_at_the_runs_own_time_limit(session: AsyncSession, gw, heads_root):  # noqa: F811
+    short = make_run(heads_root, status={"phase": "running"}, heartbeat_age=5, time_limit_s=3600)
+    long_ = make_run(heads_root, status={"phase": "running"}, heartbeat_age=5, time_limit_s=10 * 3600)
+    margin = svc._HEAD_LIMIT_MARGIN_S
+    over = await _add(owner_kind="head", head_run_id=short, status="live",
+                      started_at=utcnow() - timedelta(seconds=3600 + margin + 60))
+    within = await _add(owner_kind="head", head_run_id=long_, status="live",
+                        started_at=utcnow() - timedelta(hours=9))     # past the old fixed 8 h
+    await _tick(session)
+    assert (await _get(over.id)).end_reason == "max_age"
+    assert (await _get(within.id)).status == "live"
+
+
+# ── F5: a vanished head process gets a grace pass ──────────────────────────
+
+async def test_a_vanished_head_process_gets_one_pass_of_grace(session: AsyncSession, gw, heads_root):  # noqa: F811
+    run = make_run(heads_root, status={"phase": "running"}, heartbeat_age=600)   # failed/process_vanished
+    row = await _add(owner_kind="head", head_run_id=run)
+    await _tick(session)
+    assert (await _get(row.id)).status == "open"
+    await _tick(session)
+    assert (await _get(row.id)).end_reason == "run_ended"
+
+
+async def test_the_grace_resets_when_the_head_is_back(session: AsyncSession, gw, heads_root):  # noqa: F811
+    import json as _json
+    import os
+    import time
+
+    run = make_run(heads_root, status={"phase": "running"}, heartbeat_age=600)
+    row = await _add(owner_kind="head", head_run_id=run)
+    await _tick(session)
+    hb = heads_root / run / ".wrapper" / "heartbeat"
+    os.utime(hb, (time.time(), time.time()))                       # heartbeat again
+    await _tick(session)
+    os.utime(hb, (time.time() - 600, time.time() - 600))           # vanished again: grace starts over
+    await _tick(session)
+    assert (await _get(row.id)).status == "open"
+
+
+# ── F6: the lifecycle client does not flood the log ────────────────────────
+
+def test_gateway_request_logs_are_kept_out_of_info():
+    import logging
+
+    flt = svc.GatewayRequestLogFilter()
+
+    def rec(level, url):
+        return logging.LogRecord("httpx", level, __file__, 1, 'HTTP Request: %s %s "HTTP/1.1 200 OK"',
+                                 ("GET", httpx.URL(url)), None)
+
+    assert flt.filter(rec(logging.INFO, svc.GATEWAY_BASE_URL + "/mc/targets")) is False
+    assert flt.filter(rec(logging.INFO, "https://api.example.invalid/v1")) is True
+    assert flt.filter(rec(logging.WARNING, svc.GATEWAY_BASE_URL + "/mc/targets")) is True
+
+
+# ── F7: no query strings in the stored URL ─────────────────────────────────
+
+async def test_last_url_is_stored_without_query_or_fragment(session: AsyncSession, gw, make_agent):
+    await make_agent(name="Alpha", slug="alpha")
+    gw.tab("A1", agent="alpha", idle=1.0)
+    original = gw.handler
+
+    def handler(request):
+        resp = original(request)
+        if request.url.path.endswith("/snapshot"):
+            import json as _json
+            body = _json.loads(resp.content)
+            body["url"] = "https://login.example/callback?code=OAUTHSECRET&state=x#tok=FRAG"
+            return httpx.Response(200, json=body)
+        return resp
+
+    import app.services.browser_sessions as mod
+    mod._transport = httpx.MockTransport(handler)
+    await _tick(session)
+    [row] = await _rows()
+    assert row.last_url == "https://login.example/callback"
+
+
+# ── F8: no idle decisions while the gateway's watcher reconnects ───────────
+
+async def test_no_idle_decisions_while_the_gateway_is_not_healthy(session: AsyncSession, gw, make_agent, heads_root):  # noqa: F811
+    agent = await make_agent(name="Alpha", slug="alpha")
+    await make_agent(name="Beta", slug="beta")
+    stale = await _add(owner_kind="agent", agent_id=agent.id, status="live",
+                       started_at=utcnow() - timedelta(hours=1), last_active_at=utcnow() - timedelta(minutes=40))
+    exited = make_run(heads_root, status={"phase": "exited", "reason": "stopped"})
+    head = await _add(owner_kind="head", head_run_id=exited)
+    gw.tab("B1", agent="beta", idle=0.0)       # looks fresh only because the watcher just reset
+    gw.health = 503
+    report = await _tick(session)
+    assert (await _get(stale.id)).status == "live"                 # no idle end
+    assert [r for r in await _rows() if r.agent_id and r.agent_id != agent.id] == []   # no lazy phase
+    assert (await _get(head.id)).end_reason == "run_ended"         # the run's own status still counts
+    assert report["gateway"] == "degraded"
