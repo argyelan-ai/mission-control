@@ -44,6 +44,12 @@ const FILES = [
   "NotificationRow.tsx",
   "chatOptions.ts",
   "../layout/AppShell.tsx",
+  // The head-chat read-only view (ADR-085 §4 Nachtrag) made ToolGroup part
+  // of the frozen Chat surface's own exception, so its summary line is no
+  // longer a one-off — review finding on PR #756 round 2: it rendered
+  // hardcoded German ("5 Tools verwendet, 2× nachgedacht") inside every
+  // transcript, agent and head alike, in the otherwise-English UI.
+  "ToolGroup.tsx",
   // Die Diff-Ansicht im Chat (Operator-Befund 04.10.2026: „Arbeitsstand",
   // „Letzter Commit", „Kein Workspace" standen deutsch in der englischen
   // Oberflaeche — die Datei stand nie auf dieser Liste) samt Panel-Schiene,

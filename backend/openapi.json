@@ -2665,6 +2665,15 @@
         ]
       }
     },
+    "/api/v1/heads/{run_id}/summary": {
+      "get": {
+        "operationId": "get_head_summary_api_v1_heads__run_id__summary_get",
+        "summary": "Get Head Summary",
+        "tags": [
+          "heads"
+        ]
+      }
+    },
     "/api/v1/host-agents/{agent_id}/restart": {
       "post": {
         "operationId": "restart_host_agent_api_v1_host_agents__agent_id__restart_post",

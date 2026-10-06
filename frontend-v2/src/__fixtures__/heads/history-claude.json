@@ -1,0 +1,1870 @@
+{
+  "events": [
+    {
+      "kind": "message",
+      "uuid": "4fe88ef9-5854-4a98-9f45-c4073283a3df",
+      "ts": "2026-10-01T11:53:18.136Z",
+      "role": "user",
+      "text": "# [trial: Claude head] Close cards automatically when their PR is merged\n\n## Goal\nCards whose work is merged must not stay in \"review\" forever. Today 12 head cards sit in review although their PRs are merged (daily metrics \"stale cards\"). When a task's PR is merged on GitHub, the task should move to done automatically (and an open/closed-unmerged PR should leave it alone).\n\n## How\n1. Context first: does MC already detect merged PRs anywhere (grep for pr_url, pr_number, \"merged\", GitHub polling/watchers, the token harvester, heads launcher result handling, night shift)? Which decision applies (docs/decisions \u2014 ADR-085 frozen fleet layer: do NOT touch dispatch/healers; heads launcher is allowed)? Write the context brief into the run record.\n2. Smallest correct design: a periodic check in the worker (existing scheduler/service, not a new loop if one fits) for tasks in review/user_test with a pr_url, asking GitHub (existing GitHub client/token config) whether the PR is merged \u2192 move the task to done through the normal status path (activity event, actor = system), with rate limiting and no calls when no token is configured. Head cards: make sure the head result path stores pr_url on the task when known.\n3. Red test first, then implementation, then a sabotage probe; tests must not call the real GitHub (mock the client).\n4. kz check (with your PR body) 0 new; map any new endpoint/setting in docs/produkt/landkarte.yaml.\n5. Never use --no-verify or bypass any check. Push your branch; the orchestrator opens the PR.\n\n## Done when\nA merged PR moves its task to done within one check interval; unmerged/closed PRs don't; tests + sabotage probe green; run record has the context brief and the operator-facing behaviour in 3 sentences.\n\n## Scratch repo \u2014 push only\n\nThis is a scratch repo whose origin is a local bare repo: no pull request is possible here.\nIn step 6 run `git push -u origin mc-head/2026-10-01-trial-claude-head-close-cards-fcbf` and skip `gh pr create`.\nThe pushed branch plus the run record with `Status: passed` is the result \u2014 do not mark the run failed because there is no PR. In the run record write `PR: none (scratch repo, branch pushed)`.\n\n<!-- mc-head: kz brief -->\n## Context brief (kz)\n\nWritten by `kz brief` in this worktree before you started (max. 60 lines).\nStep 0 builds on it.\n\n```text\nfresh: HEAD vs origin/main: 0 behind, 0 ahead - up to date\nFeatures/journeys for these paths: none\nRules for these paths: none\nRejected ideas matching the job text:\n  X-loop-as-workflow-or-schedule: Loops implemented as a workflow child or a schedule variant - why: Workflows bypass the task pipeline (dead path since the gateway sunset) and schedules are time- not outcome-driven; a loop is a meta-controller over normal tasks.\n  X-first-probe-drift: Runtime watcher commits model drift on the first mismatched probe - why: Engine warm-up/reload transiently serves no or an intermediate model; acting on first sight fires spurious model_changed events and agent restarts (ADR-054).\n  X-voice-polling: A watcher or restart job that pushes voice-runtime binding changes to the voice worker - why: It would kill a running call and add a moving part; the worker re-reads the binding per call, so a switch takes effect by the next call for free.\nOpen dead entries: none\nDoes it exist already?: none\nMatching ADRs:\n  docs/decisions/019-claude-fleet-hybrid.md - ADR-019 \u2014 Claude Fleet (Hybrid)\n  docs/decisions/030-hermes-autonomous-worker-config.md - ADR-030: Hermes Autonomous-Worker Configuration\n  docs/decisions/055-github-connection-config.md - ADR-055 \u2014 GitHub-Verbindung als konfigurierbarer First-Class-Anschluss (Vault > Env, live)\n  docs/decisions/062-jarvis-intelligence.md - ADR-062 \u2014 Jarvis Intelligence: Frontier-Delegation, Agent-Dispatch, Morgenbriefing\n  docs/decisions/085-head-per-job.md - ADR-085 \u2014 Head per job: one short-lived coding session per job instead of a persistent agent fleet\n```\n",
+      "model": null,
+      "sidechain": false
+    },
+    {
+      "kind": "thinking",
+      "uuid": "df37a3b5-ba6d-480b-b43e-63611e66d49a",
+      "ts": "2026-10-01T11:53:30.854Z",
+      "text": "Let me start with step 0: check the start, read the job, repo rules, write run record.",
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "df37a3b5-ba6d-480b-b43e-63611e66d49a",
+      "ts": "2026-10-01T11:53:30.854Z",
+      "inputTokens": 8231,
+      "outputTokens": 122,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 8231,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 122
+      }
+    },
+    {
+      "kind": "tool",
+      "uuid": "f512e939-8475-4e4c-93a6-c6a232cca083",
+      "ts": "2026-10-01T11:53:32.148Z",
+      "name": "Bash",
+      "title": "$ git rev-parse --show-toplevel && git branch --show-current && git fetch origi\u2026",
+      "detail": {
+        "command": "git rev-parse --show-toplevel && git branch --show-current && git fetch origin && git rev-parse origin/main && git log --oneline -1",
+        "description": "Verify worktree, branch, fetch origin/main"
+      },
+      "toolUseId": "chatcmpl-tool-a2a217dc51f694b9",
+      "result": "/Users/op/.mc/heads/11111111-1111-4111-8111-111111111111/wt\nmc-head/2026-10-01-trial-claude-head-close-cards-fcbf\nf0cb774ab3857e0589aff5f597904b85ace05a5a\nf0cb774a fix(chat): group-chat header paints its own surface under the notch (#723)",
+      "status": "done",
+      "stats": null,
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "f512e939-8475-4e4c-93a6-c6a232cca083",
+      "ts": "2026-10-01T11:53:32.148Z",
+      "inputTokens": 8231,
+      "outputTokens": 122,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 8231,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 122
+      }
+    },
+    {
+      "kind": "tool",
+      "uuid": "17d7f842-a9d3-4816-a8fb-8a1a5acac088",
+      "ts": "2026-10-01T11:53:33.499Z",
+      "name": "Read",
+      "title": "Read job.md",
+      "detail": {
+        "file_path": "/Users/op/.mc/heads/11111111-1111-4111-8111-111111111111/job.md"
+      },
+      "toolUseId": "chatcmpl-tool-82733710b68c33d9",
+      "result": "1\t# [trial: Claude head] Close cards automatically when their PR is merged\n2\t\n3\t## Goal\n4\tCards whose work is merged must not stay in \"review\" forever. Today 12 head cards sit in review although their PRs are merged (daily metrics \"stale cards\"). When a task's PR is merged on GitHub, the task should move to done automatically (and an open/closed-unmerged PR should leave it alone).\n5\t\n6\t## How\n7\t1. Context first: does MC already detect merged PRs anywhere (grep for pr_url, pr_number, \"merged\", GitHub polling/watchers, the token harvester, heads launcher result handling, night shift)? Which decision applies (docs/decisions \u2014 ADR-085 frozen fleet layer: do NOT touch dispatch/healers; heads launcher is allowed)? Write the context brief into the run record.\n8\t2. Smallest correct design: a periodic check in the worker (existing scheduler/service, not a new loop if one fits) for tasks in review/user_test with a pr_url, asking GitHub (existing GitHub client/token config) whether the PR is merged \u2192 move the task to done through the normal status path (activity event, actor = system), with rate limiting and no calls when no token is configured. Head cards: make sure the head result path stores pr_url on the task when known.\n9\t3. Red test first, then implementation, then a sabotage probe; tests must not call the real GitHub (mock the client).\n10\t4. kz check (with your PR body) 0 new; map any new endpoint/setting in docs/produkt/landkarte.yaml.\n11\t5. Never use --no-verify or bypass any check. Push your branch; the orchestrator opens the PR.\n12\t\n13\t## Done when\n14\tA merged PR moves its task to done within one check interval; unmerged/closed PRs don't; tests + sabotage probe green; run record has the context brief and the operator-facing behaviour in 3 sentences.\n15\t\n16\t## Scratch repo \u2014 push only\n17\t\n18\tThis is a scratch repo whose origin is a local bare repo: no pull request is possible here.\n19\tIn step 6 run `git push -u origin mc-head/2026-10-01-trial-claude-head-close-cards-fcbf` and skip `gh pr create`.\n20\tThe pushed branch plus the run record with `Status: passed` is the result \u2014 do not mark the run failed because there is no PR. In the run record write `PR: none (scratch repo, branch pushed)`.\n21\t\n22\t<!-- mc-head: kz brief -->\n23\t## Context brief (kz)\n24\t\n25\tWritten by `kz brief` in this worktree before you started (max. 60 lines).\n26\tStep 0 builds on it.\n27\t\n28\t```text\n29\tfresh: HEAD vs origin/main: 0 behind, 0 ahead - up to date\n30\tFeatures/journeys for these paths: none\n31\tRules for these paths: none\n32\tRejected ideas matching the job text:\n33\t  X-loop-as-workflow-or-schedule: Loops implemented as a workflow child or a schedule variant - why: Workflows bypass the task pipeline (dead path since the gateway sunset) and schedules are time- not outcome-driven; a loop is a meta-controller over normal tasks.\n34\t  X-first-probe-drift: Runtime watcher commits model drift on the first mismatched probe - why: Engine warm-up/reload transiently serves no or an intermediate model; acting on first sight fires spurious model_changed events and agent restarts (ADR-054).\n35\t  X-voice-polling: A watcher or restart job that pushes voice-runtime binding changes to the voice worker - why: It would kill a running call and add a moving part; the worker re-reads the binding per call, so a switch takes effect by the next call for free.\n36\tOpen dead entries: none\n37\tDoes it exist already?: none\n38\tMatching ADRs:\n39\t  docs/decisions/019-claude-fleet-hybrid.md - ADR-019 \u2014 Claude Fleet (Hybrid)\n40\t  docs/decisions/030-hermes-autonomous-worker-config.md - ADR-030: Hermes Autonomous-Worker Configuration\n41\t  docs/decisions/055-github-connection-config.md - ADR-055 \u2014 GitHub-Verbindung als konfigurierbarer First-Class-Anschluss (Vault > Env, live)\n42\t  docs/decisions/062-jarvis-intelligence.md - ADR-062 \u2014 Jarvis Intelligence: Frontier-Delegation, Agent-Dispatch, Morgenbriefing\n43\t  docs/decisions/085-head-per-job.md - ADR-085 \u2014 Head per job: one short-lived codi",
+      "status": "done",
+      "stats": null,
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "17d7f842-a9d3-4816-a8fb-8a1a5acac088",
+      "ts": "2026-10-01T11:53:33.499Z",
+      "inputTokens": 8231,
+      "outputTokens": 122,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 8231,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 122
+      }
+    },
+    {
+      "kind": "thinking",
+      "uuid": "2bb2ec5e-1e94-4f96-9bef-72971d1a54d2",
+      "ts": "2026-10-01T11:53:37.110Z",
+      "text": "Now grep for pr_url, pr_number, merged, GitHub client, scheduler in backend. Let me do a broad exploration.",
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "2bb2ec5e-1e94-4f96-9bef-72971d1a54d2",
+      "ts": "2026-10-01T11:53:37.110Z",
+      "inputTokens": 9511,
+      "outputTokens": 137,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 9511,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 137
+      }
+    },
+    {
+      "kind": "tool",
+      "uuid": "430b1c57-2df7-4a56-9328-a5a79edd3182",
+      "ts": "2026-10-01T11:53:38.535Z",
+      "name": "Bash",
+      "title": "$ git grep -l \"pr_url\" -- backend | head -30; echo ---; git grep -l \"pr_number\"\u2026",
+      "detail": {
+        "command": "git grep -l \"pr_url\" -- backend | head -30; echo ---; git grep -l \"pr_number\" -- backend | head -30",
+        "description": "Find files referencing pr_url / pr_number"
+      },
+      "toolUseId": "chatcmpl-tool-b37c9a785e256b63",
+      "result": "backend/alembic/versions/0200_task_pr_reference.py\nbackend/app/models/task.py\nbackend/app/routers/agent_git.py\nbackend/app/routers/agent_task_status.py\nbackend/app/routers/heads.py\nbackend/app/routers/night_shift.py\nbackend/app/routers/projects.py\nbackend/app/services/git_service.py\nbackend/app/services/heads/files.py\nbackend/app/services/heads/mirror.py\nbackend/app/services/heads/night.py\nbackend/app/services/heads/night_shift.py\nbackend/app/services/heads/state.py\nbackend/app/services/task_context_builder.py\nbackend/tests/test_heads_api.py\nbackend/tests/test_heads_mirror.py\nbackend/tests/test_heads_state.py\nbackend/tests/test_mc_head_run.py\nbackend/tests/test_mc_head_scratch_origin.py\nbackend/tests/test_night_rules.py\nbackend/tests/test_night_shift.py\nbackend/tests/test_review_workspace_setup.py\n---\nbackend/alembic/versions/0200_task_pr_reference.py\nbackend/app/models/task.py\nbackend/app/routers/agent_git.py\nbackend/app/routers/agent_task_status.py\nbackend/app/services/adr_gate.py\nbackend/app/services/git_service.py\nbackend/app/services/task_context_builder.py\nbackend/app/services/task_lifecycle.py\nbackend/tests/test_adr_gate.py\nbackend/tests/test_review_pr_number_gate.py\nbackend/tests/test_review_workspace_setup.py",
+      "status": "done",
+      "stats": null,
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "430b1c57-2df7-4a56-9328-a5a79edd3182",
+      "ts": "2026-10-01T11:53:38.535Z",
+      "inputTokens": 9511,
+      "outputTokens": 137,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 9511,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 137
+      }
+    },
+    {
+      "kind": "tool",
+      "uuid": "56af1152-aaee-49fa-97ce-f4f6ca3e8038",
+      "ts": "2026-10-01T11:53:40.061Z",
+      "name": "Bash",
+      "title": "$ ls backend/app/services | head -80; echo ---; ls backend/app | head; echo ---\u2026",
+      "detail": {
+        "command": "ls backend/app/services | head -80; echo ---; ls backend/app | head; echo ---; git grep -il \"merged\" -- backend/app | head -20",
+        "description": "List backend services and grep for merged"
+      },
+      "toolUseId": "chatcmpl-tool-927b9683398523e8",
+      "result": "__init__.py\nacp_chat_transport.py\nactivity.py\naddress_classify.py\nadr_gate.py\nagent_bootstrap.py\nagent_chat_input.py\nagent_lifecycle.py\nagent_runtime_switch.py\nai_provider_config.py\napproval_cleanup.py\nauto_memory.py\nautonomy.py\nblocker_triage.py\nchannel_config.py\nchat_adapter.py\nchat_inbound.py\nchat_outbound.py\nchat_rooms.py\nchat_slack.py\nchat_telegram.py\nclaude_code_runner.py\ncli_bridge_runner.py\ncli_update_check.py\ncli_update_runner.py\ncli_versions.py\ncompose_renderer.py\ncost_collector.py\ndaily_metrics_digest.py\ndecision_docs.py\ndelegation_contracts.py\ndeliverable_extractor.py\ndeliverable_fs_resolver.py\ndeliverable_paths.py\ndeliverable_wrapper.py\ndeploy.py\ndevice_state.py\ndiscord_notify.py\ndiscord_router.py\ndiscord.py\ndisk_preflight.py\ndispatch_attempt_audit.py\ndispatch_delivery.py\ndispatch_gating.py\ndispatch_message_builder.py\ndispatch.py\ndocker_agent_sync.py\nembedding_provider.py\nembedding_retry.py\nembedding_service.py\nencryption.py\nendpoint_probe.py\nfile_indexer.py\nfresh_session.py\nfs_roots.py\nfs_service.py\ngit_service.py\ngithub_config.py\ngithub_visibility_monitor.py\ngroup_preview.py\ngroup_runner.py\ngroup_service.py\nharness_catalog.py\nharness_compat.py\nheads\nhost_bootstrap.py\nhost_harness_adapter.py\nhost_memory_prep.py\nhost_metrics_history.py\nhost_onboarding.py\nhost_probe.py\nhost_provisioning.py\nhost_resolver.py\nhost_seeder.py\ninstall_allowlist.py\ninstall_executor.py\nintelligence.py\njarvis_briefing.py\njarvis_telegram.py\njob_log.py\n---\n__init__.py\nagent_doc_constants.py\nauth.py\nbackground.py\ncomm_constants.py\ncomment_types.py\nconfig.py\nconstants.py\ndatabase.py\nhelpers\n---\nbackend/app/routers/agent_git.py\nbackend/app/routers/memory.py\nbackend/app/routers/tasks.py\nbackend/app/services/adr_gate.py\nbackend/app/services/agent_chat_input.py\nbackend/app/services/decision_docs.py\nbackend/app/services/docker_agent_sync.py\nbackend/app/services/git_service.py\nbackend/app/services/heads/night_store.py\nbackend/app/services/job_log.py\nbackend/app/services/model_catalog.py\nbackend/app/services/omp_chat.py\nbackend/app/services/runtime_naming.py\nbackend/app/services/task_create.py\nbackend/app/services/task_lifecycle.py\nbackend/app/services/transcript_chat.py\nbackend/app/services/vault_key_migration.py",
+      "status": "done",
+      "stats": null,
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "56af1152-aaee-49fa-97ce-f4f6ca3e8038",
+      "ts": "2026-10-01T11:53:40.061Z",
+      "inputTokens": 9511,
+      "outputTokens": 137,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 9511,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 137
+      }
+    },
+    {
+      "kind": "tool",
+      "uuid": "878ec5e8-90da-4386-8789-4f35c9d02c4a",
+      "ts": "2026-10-01T11:53:44.221Z",
+      "name": "Bash",
+      "title": "$ ls backend/app/services | sed -n '80,200p'; echo ===; ls backend/app/services\u2026",
+      "detail": {
+        "command": "ls backend/app/services | sed -n '80,200p'; echo ===; ls backend/app/services/heads",
+        "description": "List remaining services and heads package"
+      },
+      "toolUseId": "chatcmpl-tool-a8b435d6a59e70f1",
+      "result": "Exit code 1\njob_log.py\njourneys_result.py\nlaunch_template.py\nlocal_registry.py\nloop_runner.py\nmcp_media_cleanup.py\nmcp_registry.py\nmcp_sync.py\nmemory_indexing.py\nmemory_query.py\nmessaging.py\nmodel_catalog_check.py\nmodel_catalog.py\nobsidian_export.py\nomp_chat.py\noperations.py\noperator_approvals.py\noperator_notices.py\noperator_reports.py\npane_preview.py\npane_state.py\npane_stream.py\npdf_generator.py\nphase_engine.py\nplugin_manager.py\nprovisioning.py\nqdrant_service.py\nrecipe_env.py\nrecipe_install.py\nrecipe_switcher.py\nrecycler_config.py\nreference_cleanup.py\nreference_docs_builder.py\nreference_ingest.py\nrepo_binding.py\nrepo_registry.py\nreport_auto_draft.py\nreview_park.py\nrun_record.py\nruntime_autostart.py\nruntime_context.py\nruntime_grace.py\nruntime_lifecycle.py\nruntime_manager.py\nruntime_model_resolver.py\nruntime_multinode.py\nruntime_naming.py\nruntime_ownership.py\nruntime_propagation.py\nruntime_protocols.py\nruntime_pulse.py\nruntime_readiness.py\nruntime_schedule_service.py\nruntime_seeder.py\nruntime_stop.py\nruntime_watcher.py\nschedule_seeder.py\nscheduler.py\nsecrets_helper.py\nservice_heartbeat.py\nskill_candidates.py\nslack_client.py\nslack_file_ingest.py\nslack_files.py\nslack_inbound.py\nslack_socket.py\nslack_voice.py\nslot_runtimes.py\nspark_client.py\nsse.py\nstream_tickets.py\nstuck_escalation.py\ntask_context_builder.py\ntask_create.py\ntask_evidence.py\ntask_lifecycle.py\ntask_queue.py\ntask_runner.py\ntask_state.py\ntask_workspace_files.py\ntelegram_bot.py\ntelegram_inbound.py\ntelegram_outbound.py\ntelegram_reports.py\ntelegram_topics.py\ntemplate_renderer.py\ntemplate_seeder.py\nthread_scope.py\ntoken_harvester.py\ntools_md_builder.py\ntranscript_adapters.py\ntranscript_chat.py\ntrash_service.py\nupdate_check.py\nusage_baseline.py\nusage_pages.py\nvault_activity.py\nvault_cache.py\nvault_cascade.py\nvault_cleanup_state.py\nvault_cleanup.py\nvault_compactor.py\nvault_contradiction.py\nvault_decay.py\nvault_embeddings.py\nvault_git.py\nvault_graph.py\nvault_index.py\nvault_key_migration.py\nvault_lint.py\nvault_log.py\nvault_migration_helpers.py\nvault_promoter.py\nvault_similarity_edges.py\nvault_title_backfill.py\nvault_watcher.py\nvault_wikilink_backfill.py\nvisual_proof.py\nvisual_verifier.py\nvoice_runtime.py\nvoice_transcription.py\n(eval):1: == not found",
+      "status": "error",
+      "stats": null,
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "878ec5e8-90da-4386-8789-4f35c9d02c4a",
+      "ts": "2026-10-01T11:53:44.221Z",
+      "inputTokens": 10473,
+      "outputTokens": 117,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 10473,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 117
+      }
+    },
+    {
+      "kind": "tool",
+      "uuid": "f2c3d0ff-4877-492c-bbcf-18f045842cb0",
+      "ts": "2026-10-01T11:53:45.813Z",
+      "name": "Bash",
+      "title": "$ git grep -n \"pr_url\\|pr_number\" -- backend/app/models/task.py backend/app/ser\u2026",
+      "detail": {
+        "command": "git grep -n \"pr_url\\|pr_number\" -- backend/app/models/task.py backend/app/services/task_lifecycle.py backend/app/services/heads/night.py backend/app/services/heads/night_shift.py | head -40",
+        "description": "Show pr_url usage in task model, lifecycle, heads night"
+      },
+      "toolUseId": "chatcmpl-tool-bfeab4e6778113c8",
+      "result": "backend/app/models/task.py:193:    pr_number: int | None = None\nbackend/app/models/task.py:194:    pr_url: str | None = None\nbackend/app/services/heads/night.py:324:    ``entries``: ``{task_id, title, started, state, reason, blocked, pr_url}``.\nbackend/app/services/heads/night.py:354:            if e.get(\"pr_url\"):\nbackend/app/services/heads/night.py:355:                parts.append(f\"{tx['pr']}: {e['pr_url']}\")\nbackend/app/services/heads/night_shift.py:107:        \"pr_url\": run.pr_url,\nbackend/app/services/task_lifecycle.py:617:        pr_number = int(pr_match.group(1))\nbackend/app/services/task_lifecycle.py:625:                await git_service.merge_pr(reviewer_dir, pr_number)\nbackend/app/services/task_lifecycle.py:626:                logger.info(\"PR #%d gemerged fuer Task '%s'\", pr_number, task.title)\nbackend/app/services/task_lifecycle.py:632:                \"gh\", \"pr\", \"merge\", str(pr_number),\nbackend/app/services/task_lifecycle.py:636:            logger.info(\"PR #%d gemerged (global) fuer Task '%s'\", pr_number, task.title)",
+      "status": "done",
+      "stats": null,
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "f2c3d0ff-4877-492c-bbcf-18f045842cb0",
+      "ts": "2026-10-01T11:53:45.813Z",
+      "inputTokens": 10473,
+      "outputTokens": 117,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 10473,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 117
+      }
+    },
+    {
+      "kind": "tool",
+      "uuid": "664af2bd-202a-474b-b0e8-29615f9a062c",
+      "ts": "2026-10-01T11:53:52.329Z",
+      "name": "Bash",
+      "title": "$ ls backend/app/services/heads; echo ---; git grep -n \"github\" -- backend/app/\u2026",
+      "detail": {
+        "command": "ls backend/app/services/heads; echo ---; git grep -n \"github\" -- backend/app/services/github_config.py | head -5; echo ---; sed -n 1,60p backend/app/services/github_config.py",
+        "description": "List heads package, inspect github_config service"
+      },
+      "toolUseId": "chatcmpl-tool-bd037042aa8263e4",
+      "result": "__init__.py\nbox_guard.py\nengine.py\nfiles.py\nlauncher.py\nmirror.py\nnight_shift.py\nnight_store.py\nnight.py\npairs.py\npaths.py\nscratch.py\nstart.py\nstate.py\nsync.py\n---\nbackend/app/services/github_config.py:4:  1. Secrets vault (keys ``github_owner`` / ``github_token``) \u2014 set via\nbackend/app/services/github_config.py:24:logger = logging.getLogger(\"mc.github_config\")\nbackend/app/services/github_config.py:26:OWNER_SECRET_KEY = \"github_owner\"\nbackend/app/services/github_config.py:27:TOKEN_SECRET_KEY = \"github_token\"\nbackend/app/services/github_config.py:48:def invalidate_github_config_cache() -> None:\n---\n\"\"\"GitHub connection config (ADR-055) \u2014 single resolver for owner + token.\n\nSources in priority order:\n  1. Secrets vault (keys ``github_owner`` / ``github_token``) \u2014 set via\n     Settings \u2192 GitHub or the setup wizard; applies live, no restart.\n  2. Backend env (``GITHUB_OWNER`` / ``GH_TOKEN`` from .env) \u2014 the\n     CLI-first path seeded by install.sh.\n\nEvery consumer (git_service, repos router, visibility monitor, template\nrenderer) goes through this module. Nobody reads os.environ[\"GITHUB_OWNER\"]\nor the vault keys directly anymore \u2014 that was the pre-ADR-055 state where\nthe owner was frozen at import time and UI edits needed a restart.\n\nThe resolver must never crash callers: vault errors degrade to the env\nfallback. A short TTL cache keeps hot paths (every git subprocess) cheap;\nsecrets writes invalidate explicitly.\n\"\"\"\n\nimport logging\nimport os\nimport time\nfrom dataclasses import dataclass\n\nlogger = logging.getLogger(\"mc.github_config\")\n\nOWNER_SECRET_KEY = \"github_owner\"\nTOKEN_SECRET_KEY = \"github_token\"\n\n_CACHE_TTL_SECONDS = 30.0\n\n\n@dataclass(frozen=True)\nclass GithubConfig:\n    owner: str\n    owner_source: str | None  # \"vault\" | \"env\" | None\n    token: <redacted>\n    token_source: str | None  # \"vault\" | \"env\" | None\n\n    @property\n    def configured(self) -> bool:\n        return bool(self.owner and self.token)\n\n\n_cache: GithubConfig | None = None\n_cache_ts: float = 0.0\n\n\ndef invalidate_github_config_cache() -> None:\n    \"\"\"Called by the secrets router after github_* vault writes.\"\"\"\n    global _cache, _cache_ts\n    _cache = None\n    _cache_ts = 0.0\n\n\ndef get_cached_owner() -> str:\n    \"\"\"Sync accessor for sync contexts (template rendering).\n\n    Returns the last resolved owner, falling back to the env var when no\n    async resolution has happened yet (e.g. very early in startup).\n    \"\"\"",
+      "status": "done",
+      "stats": null,
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "664af2bd-202a-474b-b0e8-29615f9a062c",
+      "ts": "2026-10-01T11:53:52.329Z",
+      "inputTokens": 11446,
+      "outputTokens": 130,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 11446,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 130
+      }
+    },
+    {
+      "kind": "tool",
+      "uuid": "25da1d16-0811-48e8-bca7-1d1377393aaf",
+      "ts": "2026-10-01T11:53:53.975Z",
+      "name": "Bash",
+      "title": "$ grep -rn \"github\" backend/app/services/scheduler.py | head -20; echo ---; gre\u2026",
+      "detail": {
+        "command": "grep -rn \"github\" backend/app/services/scheduler.py | head -20; echo ---; grep -n \"def \\|INTERVAL\\|interval\" backend/app/services/scheduler.py | head -60",
+        "description": "Inspect scheduler service structure"
+      },
+      "toolUseId": "chatcmpl-tool-96b20c10f5a9b8fc",
+      "result": "---\n47:LOCK_REFRESH_INTERVAL_SECONDS = 60\n55:# LOCK_HEARTBEAT_INTERVAL_SECONDS=5s aufgefrischt) hat im Absturzmoment\n87:LOCK_HEARTBEAT_INTERVAL_SECONDS = 5\n91:    def __init__(self):\n107:    async def _acquire_lock(self) -> bool:\n154:    async def _steal_stale_lock(self, redis) -> bool:\n186:    async def _refresh_lock_loop(self):\n189:        Refreshes every LOCK_REFRESH_INTERVAL_SECONDS via compare-and-expire \u2014\n202:                await asyncio.sleep(LOCK_REFRESH_INTERVAL_SECONDS)\n211:    async def _heartbeat_loop(self):\n220:                await asyncio.sleep(LOCK_HEARTBEAT_INTERVAL_SECONDS)\n233:    async def _compare_and_expire(self, redis, key: str, ttl: int) -> bool:\n256:    async def _release_lock_if_owner(self, redis) -> bool:\n290:    async def start(self):\n311:    async def stop(self):\n327:    async def _load_jobs_from_db(self):\n339:    def _build_trigger(self, job: ScheduledJob) -> tuple[str, dict]:\n354:        elif job.schedule_type == \"interval\" and job.schedule_interval_hours:\n355:            return (\"interval\", {\"hours\": job.schedule_interval_hours, **date_kwargs})\n389:                f\"interval={job.schedule_interval_hours}\"\n392:    def _register_job(self, job: ScheduledJob):\n420:    def _unregister_job(self, job_id: str):\n427:    async def _update_next_run(self, job_id: str):\n439:    async def _execute_job(self, job_id: str, retry_attempt: int = 0):\n617:    async def _prune_run_history(self, job_id: str, max_runs: int = 50):\n638:    async def _schedule_retry(self, job_id: str, attempt: int, delay_minutes: int):\n653:    async def _trigger_dependent_jobs(self, completed_job_id: str):\n667:    async def _send_failure_notification(self, job: ScheduledJob, error: str | None):\n678:    async def _do_create_task(\n747:    async def _do_start_loop(\n786:    async def _resolve_agent_id(self, session: AsyncSession, job: ScheduledJob) -> str | None:\n801:    async def add_job(self, job: ScheduledJob):\n805:    async def update_job(self, job: ScheduledJob):\n810:    async def remove_job(self, job_id: str):\n813:    async def trigger_now(self, job_id: str):",
+      "status": "done",
+      "stats": null,
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "25da1d16-0811-48e8-bca7-1d1377393aaf",
+      "ts": "2026-10-01T11:53:53.975Z",
+      "inputTokens": 11446,
+      "outputTokens": 130,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 11446,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 130
+      }
+    },
+    {
+      "kind": "thinking",
+      "uuid": "387b48da-b646-4e69-9694-43f8bcaab33e",
+      "ts": "2026-10-01T11:53:58.341Z",
+      "text": "The scheduler is APScheduler-ish over DB jobs. The job says \"periodic check in the worker (existing scheduler/service, not a new loop if one fits)\". Let me look at github_visibility_monitor.py \u2014 that's an existing periodic GitHub poller likely. Let's inspect it.",
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "387b48da-b646-4e69-9694-43f8bcaab33e",
+      "ts": "2026-10-01T11:53:58.341Z",
+      "inputTokens": 12748,
+      "outputTokens": 93,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 12748,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 93
+      }
+    },
+    {
+      "kind": "tool",
+      "uuid": "093b30b0-dd8a-4eea-9599-72a7b2bb7583",
+      "ts": "2026-10-01T11:53:58.925Z",
+      "name": "Bash",
+      "title": "$ sed -n 1,120p backend/app/services/github_visibility_monitor.py",
+      "detail": {
+        "command": "sed -n 1,120p backend/app/services/github_visibility_monitor.py",
+        "description": "Read github_visibility_monitor service"
+      },
+      "toolUseId": "chatcmpl-tool-85f612efd7619403",
+      "result": "\"\"\"Defense-in-depth: periodic check + auto-privatization for MC GitHub repos.\n\nBackground: agents sometimes call `gh repo create` directly without\n`--private`. GitHub's default is public \u2192 code leaks. This monitor scans\nthe operator's repos every 5 minutes and sets MC task repos (prefix\n`mc-task-`, `mc-`, `t2-`, etc. \u2014 see MC_OWNED_REPO_PREFIXES) that are\npublic to private \u2014 unless they are a fork.\n\nFallback for when SOUL rules don't apply or the agent doesn't follow them.\n\"\"\"\n\nfrom __future__ import annotations\n\nimport asyncio\nimport json\nimport logging\nimport os\n\nfrom app.services.github_config import get_github_owner\n\nlogger = logging.getLogger(\"mc.github_visibility_monitor\")\n\n# Repo names that count as MC-owned and should be private.\n# Fork repos are NEVER touched (GitHub blocks private forks of public repos).\n# Extensible via MC_OWNED_REPO_PREFIXES (comma-separated) in .env.\nMC_OWNED_PREFIXES = tuple(\n    p.strip()\n    for p in os.environ.get(\"MC_OWNED_REPO_PREFIXES\", \"mc-,mc-task-,t2-\").split(\",\")\n    if p.strip()\n)\n\nCHECK_INTERVAL_SECONDS = 300  # 5 minutes\n\n\nasync def _run(*args: str) -> tuple[int, str, str]:\n    proc = await asyncio.create_subprocess_exec(\n        *args,\n        stdout=asyncio.subprocess.PIPE,\n        stderr=asyncio.subprocess.PIPE,\n    )\n    stdout, stderr = await proc.communicate()\n    return proc.returncode or 0, stdout.decode().strip(), stderr.decode().strip()\n\n\nasync def _list_public_mc_repos(owner: str) -> list[dict]:\n    \"\"\"Lists all public non-fork repos that match an MC-owned prefix.\"\"\"\n    rc, out, err = await _run(\n        \"gh\", \"repo\", \"list\", owner,\n        \"--limit\", \"200\",\n        \"--visibility\", \"public\",\n        \"--json\", \"name,visibility,isFork,createdAt\",\n    )\n    if rc != 0:\n        logger.warning(\"gh repo list failed: %s\", err)\n        return []\n    try:\n        data = json.loads(out)\n    except json.JSONDecodeError:\n        logger.warning(\"gh repo list: JSON parse failed\")\n        return []\n    return [\n        r for r in data\n        if not r.get(\"isFork\", False)\n        and any(r[\"name\"].startswith(p) for p in MC_OWNED_PREFIXES)\n    ]\n\n\nasync def _set_private(owner: str, repo_name: str) -> bool:\n    full = f\"{owner}/{repo_name}\"\n    rc, _, err = await _run(\n        \"gh\", \"repo\", \"edit\", full,\n        \"--visibility\", \"private\",\n        \"--accept-visibility-change-consequences\",\n    )\n    if rc == 0:\n        logger.warning(\n            \"Repo %s wurde AUTO-PRIVATISIERT (Defense-in-Depth, Agent hat --private vergessen)\",\n            full,\n        )\n        return True\n    logger.error(\"Auto-privatize failed for %s: %s\", full, err)\n    return False\n\n\nasync def check_once() -> int:\n    \"\"\"One-off check. Returns: number of auto-privatized repos.\"\"\"\n    owner = await get_github_owner()\n    if not owner:\n        return 0\n    public = await _list_public_mc_repos(owner)\n    if not public:\n        return 0\n    count = 0\n    for repo in public:\n        ok = await _set_private(owner, repo[\"name\"])\n        if ok:\n            count += 1\n            # Optional: send an operator alert (reports adapter: Telegram +\n            # Slack) so the operator notices\n            try:\n                from app.services.operator_reports import (\n                    report_backends,\n                    send_report,\n                )\n                if report_backends():\n                    await send_report(\n                        f\"\u26a0\ufe0f <b>Security-Alert</b> \u00b7 Repo auto-privatisiert\\n\\n\"\n                        f\"<code>{owner}/{repo['name']}</code> war PUBLIC \u2014 Defense-in-Depth-Monitor hat \"\n                        f\"es auf private gesetzt.\\n\\n\"\n                        f\"Ursache wahrscheinlich: Agent hat <code>gh repo create</code> ohne \"\n                        f\"<code>--private</code> aufgerufen. SOUL-Regel greift jetzt.\"\n                    )\n            except Exception as e:\n                logger.debug(\"Operator-alert skipped: %s\", e)\n    return count\n\n\nasync def run_forever() -> None:\n    \"\"\"Backgroun",
+      "status": "done",
+      "stats": null,
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "093b30b0-dd8a-4eea-9599-72a7b2bb7583",
+      "ts": "2026-10-01T11:53:58.925Z",
+      "inputTokens": 12748,
+      "outputTokens": 93,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 12748,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 93
+      }
+    },
+    {
+      "kind": "thinking",
+      "uuid": "d8922832-304b-469e-9975-e205e5ef1632",
+      "ts": "2026-10-01T11:54:05.918Z",
+      "text": "This visibility monitor uses `gh` CLI. The job says use existing GitHub client/token config. There might be an existing GitHub API client. Let me check git_service.py for GitHub API usage, and check where run_forever loops are started (app/main.py lifespan), and check how tasks transition status (task_state / task_lifecycle \"normal status path\" with activity event actor=system).\n\nAlso check heads launcher result handling \u2014 where pr_url is stored on task. Let me look at routers/heads.py and services/heads/night_shift.py.",
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "d8922832-304b-469e-9975-e205e5ef1632",
+      "ts": "2026-10-01T11:54:05.918Z",
+      "inputTokens": 13824,
+      "outputTokens": 251,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 13824,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 251
+      }
+    },
+    {
+      "kind": "tool",
+      "uuid": "6d9e92ba-b9d9-4675-af62-8f6242477d4d",
+      "ts": "2026-10-01T11:54:07.741Z",
+      "name": "Bash",
+      "title": "$ grep -n \"run_forever\\|visibility_monitor\\|github\" backend/app/main.py | head;\u2026",
+      "detail": {
+        "command": "grep -n \"run_forever\\|visibility_monitor\\|github\" backend/app/main.py | head; echo ---; sed -n 120,160p backend/app/services/github_visibility_monitor.py",
+        "description": "Check main.py lifespan loops and monitor tail"
+      },
+      "toolUseId": "chatcmpl-tool-87deb8afd641ac98",
+      "result": "136:    _seed_github_token,\n---\n\n    Keeps looping even while no owner is configured (warns once): since\n    ADR-055 the owner can be set live via Settings \u2192 GitHub, and the\n    monitor must pick that up without a backend restart.\n    \"\"\"\n    logger.info(\n        \"github_visibility_monitor: Starte Loop (Intervall %ds)\",\n        CHECK_INTERVAL_SECONDS,\n    )\n    warned_unconfigured = False\n    while True:\n        try:\n            owner = await get_github_owner()\n            if not owner:\n                if not warned_unconfigured:\n                    logger.warning(\n                        \"github_visibility_monitor: kein GitHub-Owner konfiguriert \u2014 \"\n                        \"Monitor wartet (Defense-in-Depth fuer public Repos inaktiv).\"\n                    )\n                    warned_unconfigured = True\n                await asyncio.sleep(CHECK_INTERVAL_SECONDS)\n                continue\n            warned_unconfigured = False\n            n = await check_once()\n            if n > 0:\n                logger.warning(\"Auto-privatisiert: %d Repo(s)\", n)\n        except Exception as e:\n            logger.error(\"github_visibility_monitor cycle failed: %s\", e)\n        await asyncio.sleep(CHECK_INTERVAL_SECONDS)",
+      "status": "done",
+      "stats": null,
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "6d9e92ba-b9d9-4675-af62-8f6242477d4d",
+      "ts": "2026-10-01T11:54:07.741Z",
+      "inputTokens": 13824,
+      "outputTokens": 251,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 13824,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 251
+      }
+    },
+    {
+      "kind": "tool",
+      "uuid": "62e71a05-cc2b-4043-980d-7334ce79c2b9",
+      "ts": "2026-10-01T11:54:09.729Z",
+      "name": "Bash",
+      "title": "$ grep -n \"def \\|pr_url\\|status\" backend/app/services/heads/night_shift.py | he\u2026",
+      "detail": {
+        "command": "grep -n \"def \\|pr_url\\|status\" backend/app/services/heads/night_shift.py | head -50; echo ===; grep -rn \"pr_url\" backend/app/routers/heads.py backend/app/services/heads/*.py | head -30",
+        "description": "Inspect night_shift and heads pr_url handling"
+      },
+      "toolUseId": "chatcmpl-tool-acc6f102d770dc5e",
+      "result": "Exit code 1\n76:async def _send(text: str) -> bool:\n85:async def _operator_language(session: AsyncSession) -> str:\n91:def run_facts(run, now: float) -> dict:\n97:    state_for_block = \"running\" if run.status.get(\"phase\") == \"running\" else derived[\"state\"]\n107:        \"pr_url\": run.pr_url,\n111:def _report_entry(m: NightMark, task: Task, runs: dict, now_ts: float) -> dict:\n125:async def _tasks(session: AsyncSession, marks: list[NightMark]) -> dict[str, Task]:\n138:async def tick(session: AsyncSession, now: datetime | None = None, *, send=None) -> TickResult:\n159:        if task is None or (m.run_id is None and task.status in FINISHED_TASK_STATUSES):\n235:async def _retry_reports(skip: set[str], now: datetime, send, out: TickResult) -> None:\n254:def _store_report(night_key: str, claim: dict, now: datetime) -> None:\n264:async def _send_report(night_key: str, claim: dict, now: datetime, send) -> bool:\n282:def busy_lanes(occupancy: dict, runs: dict, night_marks: list[NightMark], now_ts: float) -> set[str]:\n300:async def _start_next(session: AsyncSession, cfg: NightConfig, window: night.Window, marks: list[NightMark],\n321:        if not night.still_ours(task.status, task.run_control):\n350:async def _start_one(session: AsyncSession, snapshot: NightMark, task: Task, now_ts: float) -> bool:\n360:    if not night.still_ours(task.status, task.run_control):\n384:def _note(mark: NightMark, code: str, *, permanent: bool = False) -> None:\n395:    def __init__(self) -> None:\n399:    async def start(self) -> None:\n407:    async def stop(self) -> None:\n417:    async def _loop(self, interval: int) -> None:\n(eval):1: == not found",
+      "status": "error",
+      "stats": null,
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "62e71a05-cc2b-4043-980d-7334ce79c2b9",
+      "ts": "2026-10-01T11:54:09.729Z",
+      "inputTokens": 13824,
+      "outputTokens": 251,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 13824,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 251
+      }
+    },
+    {
+      "kind": "tool",
+      "uuid": "be5a640d-8063-4812-a55f-e5262463349f",
+      "ts": "2026-10-01T11:54:14.932Z",
+      "name": "Bash",
+      "title": "$ grep -rn \"pr_url\" backend/app/routers/heads.py backend/app/services/heads/ | \u2026",
+      "detail": {
+        "command": "grep -rn \"pr_url\" backend/app/routers/heads.py backend/app/services/heads/ | head -30",
+        "description": "Find pr_url in heads router/services"
+      },
+      "toolUseId": "chatcmpl-tool-ad06cf182c3fa62b",
+      "result": "backend/app/routers/heads.py:85:        \"pr_url\": run.pr_url,\nbackend/app/services/heads/mirror.py:120:        if run.pr_url:\nbackend/app/services/heads/mirror.py:121:            task.pr_url = run.pr_url\nbackend/app/services/heads/mirror.py:122:        if moved and run.pr_url:\nbackend/app/services/heads/mirror.py:123:            _comment(session, task, \"resolution\", f\"Head ({pair}) passed \u2014 PR open: {run.pr_url}\")\nbackend/app/services/heads/night.py:324:    ``entries``: ``{task_id, title, started, state, reason, blocked, pr_url}``.\nbackend/app/services/heads/night.py:354:            if e.get(\"pr_url\"):\nbackend/app/services/heads/night.py:355:                parts.append(f\"{tx['pr']}: {e['pr_url']}\")\nbackend/app/services/heads/night_shift.py:107:        \"pr_url\": run.pr_url,\nbackend/app/services/heads/files.py:138:    def pr_url(self) -> str | None:\nbackend/app/services/heads/files.py:139:        url = self.status.get(\"pr_url\")\nbackend/app/services/heads/state.py:71:    pr_url = status.get(\"pr_url\")\nbackend/app/services/heads/state.py:80:    elif question_exists and not pr_url:\nbackend/app/services/heads/state.py:82:    elif pr_url and run_record_passed:\nbackend/app/services/heads/state.py:88:            reason = \"no_pr\" if not (pr_url or scratch_branch_pushed) else \"run_record_missing\"",
+      "status": "done",
+      "stats": null,
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "be5a640d-8063-4812-a55f-e5262463349f",
+      "ts": "2026-10-01T11:54:14.932Z",
+      "inputTokens": 14790,
+      "outputTokens": 138,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 14790,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 138
+      }
+    },
+    {
+      "kind": "tool",
+      "uuid": "0aeb9b09-70d6-463d-98bc-4f7f32bd248e",
+      "ts": "2026-10-01T11:54:17.061Z",
+      "name": "Bash",
+      "title": "$ grep -n \"pr_url\\|pr_number\\|merged\" backend/app/routers/heads.py | head -20; \u2026",
+      "detail": {
+        "command": "grep -n \"pr_url\\|pr_number\\|merged\" backend/app/routers/heads.py | head -20; echo ---; grep -rn \"pr_url\" backend/app/services/heads/launcher.py backend/app/services/heads/state.py backend/app/services/heads/mirror.py 2>/dev/null | head -20",
+        "description": "Grep heads router and launcher for pr_url"
+      },
+      "toolUseId": "chatcmpl-tool-b19a961e941fac87",
+      "result": "85:        \"pr_url\": run.pr_url,\n---\nbackend/app/services/heads/mirror.py:120:        if run.pr_url:\nbackend/app/services/heads/mirror.py:121:            task.pr_url = run.pr_url\nbackend/app/services/heads/mirror.py:122:        if moved and run.pr_url:\nbackend/app/services/heads/mirror.py:123:            _comment(session, task, \"resolution\", f\"Head ({pair}) passed \u2014 PR open: {run.pr_url}\")\nbackend/app/services/heads/state.py:71:    pr_url = status.get(\"pr_url\")\nbackend/app/services/heads/state.py:80:    elif question_exists and not pr_url:\nbackend/app/services/heads/state.py:82:    elif pr_url and run_record_passed:\nbackend/app/services/heads/state.py:88:            reason = \"no_pr\" if not (pr_url or scratch_branch_pushed) else \"run_record_missing\"",
+      "status": "done",
+      "stats": null,
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "0aeb9b09-70d6-463d-98bc-4f7f32bd248e",
+      "ts": "2026-10-01T11:54:17.061Z",
+      "inputTokens": 14790,
+      "outputTokens": 138,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 14790,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 138
+      }
+    },
+    {
+      "kind": "thinking",
+      "uuid": "d790a82f-0618-4529-bb34-2d5ce9a0e1e8",
+      "ts": "2026-10-01T11:54:24.150Z",
+      "text": "Good \u2014 heads mirror already stores `run.pr_url` onto task.pr_url. So \"head result path stores pr_url on the task when known\" \u2014 already exists (mirror.py line 120-121). Verify the conditions: it only sets when run.pr_url truthy. Check when mirror runs and to which status the task moves.\n\nNow check how PR merge status could be checked: git_service.py \u2014 does it have a GitHub API client? Check `merge_pr` and any `gh pr view`. Also check task status transition path: task_state.py / task_lifecycle.py \u2014 how to move task to done with activity event actor=system.",
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "d790a82f-0618-4529-bb34-2d5ce9a0e1e8",
+      "ts": "2026-10-01T11:54:24.150Z",
+      "inputTokens": 15482,
+      "outputTokens": 212,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 15482,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 212
+      }
+    },
+    {
+      "kind": "tool",
+      "uuid": "68e5d004-493c-4428-817a-097462d81be0",
+      "ts": "2026-10-01T11:54:25.338Z",
+      "name": "Bash",
+      "title": "$ grep -n \"def \\|gh\\\"\\|'gh'\\|github\" backend/app/services/git_service.py | head\u2026",
+      "detail": {
+        "command": "grep -n \"def \\|gh\\\"\\|'gh'\\|github\" backend/app/services/git_service.py | head -60",
+        "description": "Inspect git_service functions"
+      },
+      "toolUseId": "chatcmpl-tool-8c8a5648f9e684b0",
+      "result": "15:from app.services.github_config import require_github_owner, resolve_github_config\n22:def slugify_project(name: str) -> str:\n27:def slugify_workspace_slug(title: str, max_len: int = 50) -> str:\n46:    def __init__(self) -> None:\n50:    async def _ensure_git_auth(self) -> None:\n56:        token = <redacted> resolve_github_config()).token\n74:            f.write(f\"https://x-access-token:<redacted>\n88:    async def _run_cmd(self, *args: str, cwd: str | None = None) -> str:\n111:    async def create_repo(self, repo_name: str, description: str = \"\") -> str:\n113:        full_name = f\"{await require_github_owner()}/{repo_name}\"\n116:                \"gh\", \"repo\", \"create\", full_name,\n127:        return f\"https://github.com/{full_name}.git\"\n129:    async def init_repo_files(\n135:        full_name = f\"{await require_github_owner()}/{repo_name}\"\n142:                f\"https://github.com/{full_name}.git\", cwd=tmpdir,\n167:    async def ensure_workspace(\n188:    async def create_task_branch(\n197:    async def setup_git_identity(\n218:    def _relativize_worktree_gitdir(\n276:    async def ensure_adhoc_repo(self) -> str:\n283:    async def create_project_repo(self, project_slug: str, description: str = \"\") -> str:\n297:    async def list_github_repos(self, limit: int = 100) -> list[dict]:\n305:        owner = await require_github_owner()\n307:            \"gh\", \"repo\", \"list\", owner,\n324:    async def fetch_repo_meta(self, full_name: str) -> dict:\n329:            \"gh\", \"repo\", \"view\", full_name,\n335:            \"url\": r.get(\"url\", f\"https://github.com/{full_name}\"),\n341:    async def init_repo_files_with_briefing(\n347:        full_name = f\"{await require_github_owner()}/{repo_name}\"\n373:                f\"https://github.com/{full_name}.git\", cwd=tmpdir,\n396:    async def create_phase_branch(\n415:    async def commit_deliverable(\n446:    async def ensure_task_repo(self, task_title: str, task_id: str) -> str:\n464:    async def create_task_worktree(\n534:    async def cleanup_worktree(\n577:    async def get_commit_diff(self, workspace_path: str, commit_hash: str) -> dict:\n682:    async def create_pr(\n687:            \"gh\", \"pr\", \"create\",\n696:    async def create_phase_pr(\n719:    async def create_git_tag(self, project_dir: str, tag_name: str) -> None:\n727:    async def get_resume_briefing(self, project_dir: str) -> str:\n742:    async def push_branch(self, project_dir: str, branch: str) -> None:\n746:    async def merge_pr(self, project_dir: str, pr_number: int) -> None:\n749:            \"gh\", \"pr\", \"merge\", str(pr_number),\n755:    async def prepare_review_checkout(\n783:        await self._run_cmd(\"gh\", \"pr\", \"checkout\", str(pr_number), cwd=project_dir)\n788:    async def cleanup_task_worktree(\n819:    async def list_repo_branches(self, repo_name: str) -> list[str]:\n823:                \"gh\", \"api\", f\"repos/{repo_name}/branches\",\n839:    async def has_task_commits(self, workspace_path: str) -> bool:\n847:    async def get_task_git_info(self, workspace_path: str, branch_name: str | None = None) -> dict:\n893:                        \"gh\", \"pr\", \"view\", \"--json\", \"url\", \"--jq\", \".url\",\n905:    def _gitignore_for(self, project_type: str) -> str:",
+      "status": "done",
+      "stats": null,
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "68e5d004-493c-4428-817a-097462d81be0",
+      "ts": "2026-10-01T11:54:25.338Z",
+      "inputTokens": 15482,
+      "outputTokens": 212,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 15482,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 212
+      }
+    },
+    {
+      "kind": "tool",
+      "uuid": "e654111f-d61e-4575-b065-bf9c5ce0b836",
+      "ts": "2026-10-01T11:54:26.238Z",
+      "name": "Bash",
+      "title": "$ sed -n 100,140p backend/app/services/heads/mirror.py",
+      "detail": {
+        "command": "sed -n 100,140p backend/app/services/heads/mirror.py",
+        "description": "Read mirror.py task update section"
+      },
+      "toolUseId": "chatcmpl-tool-aa18292814173b5c",
+      "result": "        # failed \u2192 in_progress UPDATE at commit (live: restart \u2192 HTTP 500).\n        session.add(task)\n        await session.flush()\n    if hops:\n        task.updated_at = utcnow()\n    return bool(hops)\n\n\nasync def apply_head_state(session: AsyncSession, task: Task, run, derived: dict) -> bool:\n    \"\"\"Mirror one derived head state onto ``task`` (caller commits).\"\"\"\n    state = derived[\"state\"]\n    target = HEAD_TO_TASK[state]\n    # The hold keeps dispatch + healers away for the whole life of the card.\n    task.run_control = \"manual_hold\"\n    moved = await move_task(session, task, target, reason=f\"head_{state}\")\n    pair = f\"{run.spec.get('harness')} \u00d7 {run.spec.get('runtime_slug')}\"\n    if state == \"needs_you\" and moved:\n        question = (run.question or \"\").strip() or \"(question.md is empty)\"\n        _comment(session, task, \"blocker\", f\"Head ({pair}) needs you:\\n\\n{question}\")\n    elif state == \"passed\":\n        if run.pr_url:\n            task.pr_url = run.pr_url\n        if moved and run.pr_url:\n            _comment(session, task, \"resolution\", f\"Head ({pair}) passed \u2014 PR open: {run.pr_url}\")\n        elif moved:\n            _comment(\n                session, task, \"resolution\",\n                f\"Head ({pair}) passed \u2014 branch pushed: {run.spec.get('branch')} \"\n                \"(scratch repo with a local origin \u2014 no PR possible).\",\n            )\n    elif state == \"failed\" and moved:\n        _comment(session, task, \"message\", f\"Head ({pair}) failed: {derived.get('reason') or 'unknown'}\")\n    session.add(task)\n    return moved",
+      "status": "done",
+      "stats": null,
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "e654111f-d61e-4575-b065-bf9c5ce0b836",
+      "ts": "2026-10-01T11:54:26.238Z",
+      "inputTokens": 15482,
+      "outputTokens": 212,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 15482,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 212
+      }
+    },
+    {
+      "kind": "thinking",
+      "uuid": "54130694-43d6-4296-8553-88fc74a0c52d",
+      "ts": "2026-10-01T11:54:34.234Z",
+      "text": "So mirror already sets task.pr_url when head passed with a PR. Good \u2014 that requirement already exists.\n\nNow I need:\n1. A periodic check in the worker for tasks in review/user_test with pr_url \u2192 ask GitHub whether PR is merged \u2192 move to done through normal status path.\n2. Where do periodic loops live? There's `app/background.py` maybe, and github_visibility_monitor's run_forever started from main.py lifespan \u2014 but grep of main.py for \"github\" only showed _seed_github_token. Let me check where run_forever is started. Also check task status transition service: task_state.py / task_lifecycle.py move function.\n\nLet me check app/main.py lifespan and app/background.py.",
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "54130694-43d6-4296-8553-88fc74a0c52d",
+      "ts": "2026-10-01T11:54:34.234Z",
+      "inputTokens": 16975,
+      "outputTokens": 277,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 16975,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 277
+      }
+    },
+    {
+      "kind": "tool",
+      "uuid": "d6b392c0-d4cf-408f-918a-ac07c3ebef47",
+      "ts": "2026-10-01T11:54:36.398Z",
+      "name": "Bash",
+      "title": "$ grep -n \"run_forever\\|_loop\\|asyncio.create_task\\|lifespan\" backend/app/main.\u2026",
+      "detail": {
+        "command": "grep -n \"run_forever\\|_loop\\|asyncio.create_task\\|lifespan\" backend/app/main.py | head -40; echo ---; grep -rn \"github_visibility_monitor\" backend/app --include=*.py | grep -v \"services/github_visibility_monitor\"",
+        "description": "Find where background loops are started"
+      },
+      "toolUseId": "chatcmpl-tool-a4a898ae5e9b42a4",
+      "result": "119:    _vault_lint_loop,\n120:    _vault_decay_loop,\n121:    _telegram_topic_purge_loop,\n143:async def lifespan(app: FastAPI):\n192:            _vault_decay_loop(),\n193:            name=\"vault_decay_loop\",\n205:        from app.services.jarvis_briefing import jarvis_briefing_loop\n207:            jarvis_briefing_loop(),\n208:            name=\"jarvis_briefing_loop\",\n222:            _telegram_topic_purge_loop(),\n223:            name=\"telegram_topic_purge_loop\",\n231:    # the FIRST shutdown step on main and got lost in the lifespan split.\n337:    lifespan=lifespan,\n---\n(eval):1: no matches found: --include=*.py",
+      "status": "done",
+      "stats": null,
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "d6b392c0-d4cf-408f-918a-ac07c3ebef47",
+      "ts": "2026-10-01T11:54:36.398Z",
+      "inputTokens": 16975,
+      "outputTokens": 277,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 16975,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 277
+      }
+    },
+    {
+      "kind": "tool",
+      "uuid": "0663fb38-f089-4ff7-b4b5-9a0ebccce013",
+      "ts": "2026-10-01T11:54:37.738Z",
+      "name": "Bash",
+      "title": "$ grep -n \"def move_task\\|def \\|^class\\|actor\" backend/app/services/task_lifecy\u2026",
+      "detail": {
+        "command": "grep -n \"def move_task\\|def \\|^class\\|actor\" backend/app/services/task_lifecycle.py | head -60",
+        "description": "Inspect task_lifecycle move/status functions"
+      },
+      "toolUseId": "chatcmpl-tool-9d37d477bd618e1a",
+      "result": "41:async def record_task_event(\n49:    actor_user_id: uuid.UUID | None = None,\n50:    actor_label: str | None = None,\n65:        actor_user_id=actor_user_id,\n66:        actor_label=actor_label,\n95:async def _deliver_status_change(\n109:    the actor is not the assigned agent itself. Never commits, never raises:\n167:def task_still_reactivatable(task: Task, *, expected_status: str | None = None) -> bool:\n236:def apply_ack_handshake(session: AsyncSession, task: Task, agent: Agent) -> bool:\n292:async def reopen_parent_for_new_subtask(\n348:def clear_spawn_tracking(task: Task) -> None:\n390:async def apply_terminal_unassign(\n489:async def update_agent_active_task(\n586:async def _merge_pr_if_exists(\n589:    actor_agent: Agent | None,\n621:        workspace = actor_agent.workspace_path if actor_agent else None\n641:async def get_review_worker_agent_ids(session: AsyncSession, task: Task) -> set[uuid.UUID]:\n724:async def stop_running_reviewer_turn(\n728:    actor_name: str,\n769:            f\"(Entscheider: {actor_name}). Der Zug wurde hart beendet, \"\n780:        detail={\"decision\": decision, \"decider\": actor_name},\n790:async def execute_review_decision(\n796:    actor_agent: Agent | None = None,\n797:    actor_user_id: uuid.UUID | None = None,\n828:    # Deliberately NOT keyed on `task.assigned_agent_id == actor.id`: in the\n833:    if decision in (\"approve\", \"request_changes\", \"hold\") and actor_agent:\n836:        if actor_agent.id in worker_agent_ids and decision != \"approve\":\n838:            # the actor's to make. Hard 409 with the fix spelled out.\n839:            if not actor_agent.is_board_lead:\n842:                    f\"Eigene Karte: Agent '{actor_agent.name}' hat auf '{task.title}' \"\n850:        if actor_agent.id in worker_agent_ids and decision == \"approve\":\n851:            if not actor_agent.is_board_lead:\n860:                if _board_lead and _board_lead.id != actor_agent.id:\n878:                        actor_agent.name, _board_lead.name,\n882:                        f\"Self-review von {actor_agent.name} blockiert \u2014 eskaliert an {_board_lead.name}\",\n883:                        board_id=board_id, task_id=task.id, agent_id=actor_agent.id,\n890:                        f\"Self-review not allowed: Agent '{actor_agent.name}' war als Bearbeiter beteiligt. \"\n920:    actor_name = actor_agent.name if actor_agent else \"Operator\"\n924:    # (actor_agent is None). The agent path (actor_agent set) is the\n926:    if actor_agent is None:\n927:        await stop_running_reviewer_turn(session, task, decision, actor_name)\n932:        author_type=\"agent\" if actor_agent else \"user\",\n933:        author_agent_id=actor_agent.id if actor_agent else None,\n953:                actor_agent if (actor_agent and actor_agent.id == reviewer_id)\n1018:                agent_id=actor_agent.id if actor_agent is not None else None,\n1036:            await _merge_pr_if_exists(session, task, actor_agent)\n1099:            changed_by=\"agent\" if actor_agent else \"user\",\n1100:            agent_id=actor_agent.id if actor_agent else None,\n1107:            f\"Review approved von {actor_name} \u2014 '{task.title}'\",\n1109:            agent_id=actor_agent.id if actor_agent else None,\n1110:            detail={\"decision\": \"approved\", \"actor\": actor_name},\n1118:        if actor_agent:\n1119:            actor_agent.total_tasks_completed += 1\n1120:            actor_agent.last_task_activity_at = utcnow()\n1121:            session.add(actor_agent)\n1145:            _notify_lead_on_completion(session, task, board_id, actor_name)\n1162:            session, task, board_id, rejecting_agent=actor_agent,\n1169:            f\"Review angehalten von {actor_name} \u2014 '{task.title}'\",\n1171:            agent_id=actor_agent.id if actor_agent else None,\n1173:            detail={\"decision\": \"hold\", \"actor\": actor_name},",
+      "status": "done",
+      "stats": null,
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "0663fb38-f089-4ff7-b4b5-9a0ebccce013",
+      "ts": "2026-10-01T11:54:37.738Z",
+      "inputTokens": 16975,
+      "outputTokens": 277,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 16975,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 277
+      }
+    },
+    {
+      "kind": "thinking",
+      "uuid": "ba1a8c79-b049-4a40-92f6-b80e7348e0c2",
+      "ts": "2026-10-01T11:54:44.639Z",
+      "text": "Let me look at how \"move_task\" works in mirror.py \u2014 imported from where? Check `move_task` definition, and also task_state.py. And find where github_visibility_monitor.run_forever gets started (maybe app/startup.py or background.py). Also look for existing status transition helper with actor=system.",
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "ba1a8c79-b049-4a40-92f6-b80e7348e0c2",
+      "ts": "2026-10-01T11:54:44.639Z",
+      "inputTokens": 18367,
+      "outputTokens": 145,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 18367,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 145
+      }
+    },
+    {
+      "kind": "tool",
+      "uuid": "aeffb196-a48f-4207-9f56-344892a3fafc",
+      "ts": "2026-10-01T11:54:46.754Z",
+      "name": "Bash",
+      "title": "$ grep -rn \"github_visibility_monitor\" backend/app | head; echo ---; grep -rn \"\u2026",
+      "detail": {
+        "command": "grep -rn \"github_visibility_monitor\" backend/app | head; echo ---; grep -rn \"def move_task\" backend/app; echo ---; sed -n 1,99p backend/app/services/heads/mirror.py | grep -n \"import\\|from\" ",
+        "description": "Locate monitor startup and move_task definition"
+      },
+      "toolUseId": "chatcmpl-tool-b3ea69a3978628e1",
+      "result": "backend/app/background.py:223:    from app.services.github_visibility_monitor import run_forever as _gh_monitor\nbackend/app/background.py:224:    app.state.gh_monitor_task = _asyncio.create_task(_gh_monitor(), name=\"github_visibility_monitor\")\nbackend/app/background.py:253:        await _timed_stop(\"github_visibility_monitor\", _cancel_gh_monitor())\nbackend/app/background.py:438:    Runs every 7 days. Sleep-first semantics (like github_visibility_monitor).\nbackend/app/services/github_visibility_monitor.py:21:logger = logging.getLogger(\"mc.github_visibility_monitor\")\nbackend/app/services/github_visibility_monitor.py:126:        \"github_visibility_monitor: Starte Loop (Intervall %ds)\",\nbackend/app/services/github_visibility_monitor.py:136:                        \"github_visibility_monitor: kein GitHub-Owner konfiguriert \u2014 \"\nbackend/app/services/github_visibility_monitor.py:147:            logger.error(\"github_visibility_monitor cycle failed: %s\", e)\n---\nbackend/app/services/heads/mirror.py:82:async def move_task(session: AsyncSession, task: Task, target: str, reason: str) -> bool:\n---\n11:from __future__ import annotations\n13:import logging\n14:from collections import deque\n16:from sqlmodel.ext.asyncio.session import AsyncSession\n18:from app.models.task import Task, TaskComment\n19:from app.services.task_lifecycle import record_task_event\n20:from app.task_status import VALID_TRANSITIONS, TaskStatus, is_valid_transition\n21:from app.utils import utcnow\n51:def mirror_path(from_status: str, to_status: str) -> list[str] | None:\n52:    \"\"\"Shortest list of hops (excluding ``from_status``) from \u2192 to.\n56:    if from_status == to_status:\n58:    prev: dict[str, str | None] = {from_status: None}\n59:    queue = deque([from_status])\n70:                while back is not None and back != from_status:",
+      "status": "done",
+      "stats": null,
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "aeffb196-a48f-4207-9f56-344892a3fafc",
+      "ts": "2026-10-01T11:54:46.754Z",
+      "inputTokens": 18367,
+      "outputTokens": 145,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 18367,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 145
+      }
+    },
+    {
+      "kind": "tool",
+      "uuid": "232fcad4-b98d-45e0-904f-aef4cdf0fc4d",
+      "ts": "2026-10-01T11:54:49.467Z",
+      "name": "Bash",
+      "title": "$ sed -n 40,100p backend/app/services/heads/mirror.py; echo ===; grep -n \"revie\u2026",
+      "detail": {
+        "command": "sed -n 40,100p backend/app/services/heads/mirror.py; echo ===; grep -n \"review\\|user_test\\|done\" backend/app/task_status.py | head -30",
+        "description": "Read move_task and task status constants"
+      },
+      "toolUseId": "chatcmpl-tool-86e79390d16263bd",
+      "result": "Exit code 1\n    TaskStatus.INBOX,\n    TaskStatus.IN_PROGRESS,\n    TaskStatus.WAITING,\n    TaskStatus.REVIEW,\n    TaskStatus.FAILED,\n    TaskStatus.USER_TEST,\n    TaskStatus.DONE,\n    TaskStatus.ABORTED,\n]\n\n\ndef mirror_path(from_status: str, to_status: str) -> list[str] | None:\n    \"\"\"Shortest list of hops (excluding ``from_status``) from \u2192 to.\n\n    ``[]`` when already there, ``None`` when unreachable.\n    \"\"\"\n    if from_status == to_status:\n        return []\n    prev: dict[str, str | None] = {from_status: None}\n    queue = deque([from_status])\n    while queue:\n        cur = queue.popleft()\n        targets = VALID_TRANSITIONS.get(cur, set())\n        for nxt in sorted(targets, key=<REDACTED> s: _PRIORITY.index(s) if s in _PRIORITY else 99):\n            if nxt in prev:\n                continue\n            prev[nxt] = cur\n            if nxt == to_status:\n                hops = [nxt]\n                back = cur\n                while back is not None and back != from_status:\n                    hops.append(back)\n                    back = prev[back]\n                return [str(h) for h in reversed(hops)]\n            queue.append(nxt)\n    return None\n\n\ndef _comment(session: AsyncSession, task: Task, kind: str, text: str) -> None:\n    session.add(TaskComment(task_id=task.id, author_type=\"system\", comment_type=kind, content=text))\n\n\nasync def move_task(session: AsyncSession, task: Task, target: str, reason: str) -> bool:\n    \"\"\"Walk ``task`` to ``target`` hop by hop. Returns True when it moved.\"\"\"\n    hops = mirror_path(str(task.status), target)\n    if hops is None:\n        logger.warning(\"heads: no path %s \u2192 %s for task %s\", task.status, target, task.id)\n        return False\n    for hop in hops:\n        if not is_valid_transition(str(task.status), hop):  # belt and braces\n            logger.error(\"heads: refusing invalid hop %s \u2192 %s\", task.status, hop)\n            return False\n        await record_task_event(\n            session, task.id, str(task.status), hop,\n            changed_by=\"head\", reason=reason, actor_label=\"head\",\n        )\n        task.status = hop\n        # One UPDATE per hop: the Postgres trigger validate_task_transition\n        # sees OLD \u2192 NEW of each statement. Without the flush a multi-hop walk\n        # (failed \u2192 inbox \u2192 in_progress) reaches the DB as ONE invalid\n        # failed \u2192 in_progress UPDATE at commit (live: restart \u2192 HTTP 500).\n(eval):1: == not found",
+      "status": "error",
+      "stats": null,
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "232fcad4-b98d-45e0-904f-aef4cdf0fc4d",
+      "ts": "2026-10-01T11:54:49.467Z",
+      "inputTokens": 18933,
+      "outputTokens": 65,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 18933,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 65
+      }
+    },
+    {
+      "kind": "tool",
+      "uuid": "1e3e6acf-ac77-4847-8e6a-2692f4a12e33",
+      "ts": "2026-10-01T11:54:52.255Z",
+      "name": "Bash",
+      "title": "$ grep -n \"review\\|user_test\\|done\\|VALID_TRANSITIONS\" backend/app/task_status.\u2026",
+      "detail": {
+        "command": "grep -n \"review\\|user_test\\|done\\|VALID_TRANSITIONS\" backend/app/task_status.py | head -40",
+        "description": "Show task_status transitions"
+      },
+      "toolUseId": "chatcmpl-tool-874547e0c4cf3097",
+      "result": "13:    REVIEW = \"review\"\n14:    USER_TEST = \"user_test\"\n16:    DONE = \"done\"\n26:# `blocked` (external impediment) and `user_test` (Operator's manual test gate).\n38:VALID_TRANSITIONS: dict[str, set[str]] = {\n68:    allowed = VALID_TRANSITIONS.get(from_status, set())\n72:# Terminal status: when a task moves here, it is \"done\"\n80:        (True, \"\") if no children exist or all are done.",
+      "status": "done",
+      "stats": null,
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "1e3e6acf-ac77-4847-8e6a-2692f4a12e33",
+      "ts": "2026-10-01T11:54:52.255Z",
+      "inputTokens": 19584,
+      "outputTokens": 96,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 19584,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 96
+      }
+    },
+    {
+      "kind": "tool",
+      "uuid": "ba537cfb-6fba-4884-bc03-850ccf6e1682",
+      "ts": "2026-10-01T11:54:53.337Z",
+      "name": "Bash",
+      "title": "$ sed -n 200,260p backend/app/background.py; echo ---; sed -n 420,470p backend/\u2026",
+      "detail": {
+        "command": "sed -n 200,260p backend/app/background.py; echo ---; sed -n 420,470p backend/app/background.py",
+        "description": "Read background.py loop startup section"
+      },
+      "toolUseId": "chatcmpl-tool-995520ae87ea2464",
+      "result": "    # heads_enabled is off; only reads files + writes task status).\n    await heads_sync.start()\n    # Night shift (ROADMAP E2): starts heads marked \"run tonight\" inside the\n    # operator's time window, one after another, and sends one morning\n    # report. Idles while heads_enabled is off or nothing is marked.\n    await night_shift.start()\n    await cli_update_checker.start()  # CLI Tool Updates \u2014 periodic version check\n    # Provider Model Catalog \u2014 hourly probe + \"model.new_available\" notification\n    # so a newly shipped provider model no longer waits for someone to open the\n    # /runtimes page.\n    await model_catalog_checker.start()\n    # Local Model Registry \u2014 refresh the curated local-model catalogue from the\n    # configured registries. Inert unless settings.local_registry_sources is set.\n    await local_registry_checker.start()\n    await telegram_bot.start()\n    # Slack inbound (ADR-072). MC has no public URL, so Slack cannot call us \u2014\n    # this opens the Socket Mode websocket outbound. Silently inert unless the\n    # Slack channel is switched on; one Redis lock keeps multi-worker setups\n    # from reading every message twice.\n    await slack_socket.start()\n    # Defense-in-depth: agents that call `gh repo create` without --private\n    # get auto-privatized every 5 min. Fail-safe for SOUL rule violations.\n    import asyncio as _asyncio\n    from app.services.github_visibility_monitor import run_forever as _gh_monitor\n    app.state.gh_monitor_task = _asyncio.create_task(_gh_monitor(), name=\"github_visibility_monitor\")\n\n\nasync def stop_background_services(app: Any) -> None:\n    \"\"\"Mirror shutdown for start_background_services().\n\n    Safe to call even when the services were never started \u2014 every\n    .stop() implementation in this codebase no-ops on a None/absent task\n    (verified across all 17 services below during the ADR-E audit).\n\n    Every step is timed and logged via the module-level ``_timed_stop()``\n    (W4, 11.09.2026 \u2014 incident: Deploy #504, the old worker's\n    SchedulerService.stop() never ran because the process was SIGKILLed\n    before this sequential chain reached it; the scheduler's Redis lock\n    then only healed via its 120s TTL). Without per-service timing there\n    was no way to tell WHICH of the 17 services ate the shutdown grace\n    period \u2014 this logs each one so the next incident has that answer\n    immediately instead of requiring a repro.\n    \"\"\"\n    import asyncio as _asyncio\n\n    _gh_monitor_task = getattr(app.state, \"gh_monitor_task\", None)\n    if _gh_monitor_task is not None:\n        async def _cancel_gh_monitor() -> None:\n            _gh_monitor_task.cancel()\n            try:\n                await _gh_monitor_task\n            except (_asyncio.CancelledError, Exception):\n                pass\n        await _timed_stop(\"github_visibility_monitor\", _cancel_gh_monitor())\n    await _timed_stop(\"slack_socket\", slack_socket.stop())\n    await _timed_stop(\"telegram_bot\", telegram_bot.stop())\n    await _timed_stop(\"intelligence\", intelligence.stop())\n    await _timed_stop(\"daily_metrics_digest\", daily_metrics_digest.stop())\n    await _timed_stop(\"file_indexer\", file_indexer.stop())\n    await _timed_stop(\"embedding_retry\", embedding_retry.stop())\n    if getattr(app.state, \"obsidian_export_started\", False):\n---\n                        logger.info(\n                            \"vault_lint: %d issues but no report backend configured; report written only\",\n                            total,\n                        )\n                except Exception as te:\n                    logger.warning(\"vault_lint operator ping failed (non-fatal): %s\", te)\n        except asyncio.CancelledError:\n            logger.info(\"vault_lint_loop cancelled\")\n            break\n        except Exception as e:\n            # Don't break \u2014 sleep + retry on next interval.\n            logger.error(\"vault_lint_loop iteration error: %s\", e, exc_info=True)\n\n\n\nasync def _vault_decay_loop() -> None:\n    \"\"\"Weekly vault-decay cron \u2014 demotes c",
+      "status": "done",
+      "stats": null,
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "ba537cfb-6fba-4884-bc03-850ccf6e1682",
+      "ts": "2026-10-01T11:54:53.337Z",
+      "inputTokens": 19584,
+      "outputTokens": 96,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 19584,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 96
+      }
+    },
+    {
+      "kind": "thinking",
+      "uuid": "7116ffd4-e99a-49aa-b855-24037de652b6",
+      "ts": "2026-10-01T11:55:04.532Z",
+      "text": "Design is becoming clear. Now look at:\n1. `record_task_event` signature (actor_label etc.) \u2014 actor = system. The job says \"move the task to done through the normal status path (activity event, actor = system)\". `record_task_event(session, task.id, from, to, changed_by=?, reason, actor_label)`. Let me check its signature.\n2. How to check merged: existing `gh` CLI usage (git_service uses gh). There is no full REST GitHub client? Let me grep for \"api.github.com\" and \"httpx\" GitHub calls.\n3. pr_url format: \"https://github.com/owner/repo/pull/123\". Parse owner/repo/number from URL.\n\nAlso check tests directory for how tests mock things and check `task_status` DONE and FINISHED_TASK_STATUSES. Also check \"stale cards\" daily metrics maybe references. Let me check record_task_event signature and pr_url values in the DB model.",
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "7116ffd4-e99a-49aa-b855-24037de652b6",
+      "ts": "2026-10-01T11:55:04.532Z",
+      "inputTokens": 20938,
+      "outputTokens": 290,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 20938,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 290
+      }
+    },
+    {
+      "kind": "tool",
+      "uuid": "5620f998-b307-4c24-8ae3-912e34635bd0",
+      "ts": "2026-10-01T11:55:07.131Z",
+      "name": "Bash",
+      "title": "$ sed -n 41,95p backend/app/services/task_lifecycle.py; echo ---; grep -rn \"api\u2026",
+      "detail": {
+        "command": "sed -n 41,95p backend/app/services/task_lifecycle.py; echo ---; grep -rn \"api.github.com\" backend/app | head; echo ---; grep -rn \"def get_github_owner\\|def resolve_github_config\\|def require_github_owner\" backend/app/services/github_config.py",
+        "description": "Read record_task_event and GitHub config API"
+      },
+      "toolUseId": "chatcmpl-tool-bd344da8c1e6eabe",
+      "result": "async def record_task_event(\n    session: AsyncSession,\n    task_id: uuid.UUID,\n    from_status: str,\n    to_status: str,\n    changed_by: str = \"system\",\n    agent_id: uuid.UUID | None = None,\n    reason: str | None = None,\n    actor_user_id: uuid.UUID | None = None,\n    actor_label: str | None = None,\n) -> None:\n    \"\"\"Log a task-status event (event sourcing).\n\n    Called on EVERY status change \u2014 regardless of whether it's User, Agent, Watchdog, or System.\n    Behind the ``status_change_delivery_enabled`` flag it also delivers the\n    change to the assigned agent as a system comment (#386 point 1).\n    \"\"\"\n    event = TaskEvent(\n        task_id=task_id,\n        from_status=from_status,\n        to_status=to_status,\n        changed_by=changed_by,\n        agent_id=agent_id,\n        reason=reason,\n        actor_user_id=actor_user_id,\n        actor_label=actor_label,\n    )\n    session.add(event)\n    # No separate commit \u2014 caller commits together with the status update\n    await _deliver_status_change(\n        session, task_id, from_status, to_status, changed_by, agent_id, reason\n    )\n\n\n# Status transitions whose own code path already tells the agent (system\n# comment written right before, or a redispatch that carries the full\n# prompt). Review finding B on the pilot PR: a second comment here would\n# duplicate them. Everything NOT listed is delivered.\n_SELF_DELIVERING_REASONS: frozenset[str] = frozenset({\n    \"review_rejection_redispatch\",\n    \"review_rejection_no_developer\",\n    \"review_rejection_queued\",\n    \"review_rejection_dispatch_blocked\",\n    \"unblock_requeue_agent_busy\",\n    # Actor-tracking follow-up (Pruefbericht N3/N4, 21.09.2026): both paths\n    # already write their own TaskComment right before this event fires\n    # (telegram_bot.py \"UNBLOCKED\" comment / approvals.py \"Antwort auf\n    # deine Klaerungsfrage\" comment) \u2014 a second, generic status-change\n    # comment here would duplicate the answer the agent already got.\n    \"telegram_button_resume\",\n    \"clarification_answered\",\n})\n\n\nasync def _deliver_status_change(\n---\nbackend/app/services/cli_versions.py:181:            f\"https://api.github.com/repos/{config['github_repo']}/releases/latest\"\nbackend/app/services/update_check.py:22:    \"https://api.github.com/repos/argyelan-ai/mission-control/releases/latest\"\n---\nbackend/app/services/github_config.py:73:async def resolve_github_config(session=None, *, fresh: bool = False) -> GithubConfig:\nbackend/app/services/github_config.py:112:async def get_github_owner(session=None) -> str:\nbackend/app/services/github_config.py:120:async def require_github_owner(session=None) -> str:",
+      "status": "done",
+      "stats": null,
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "5620f998-b307-4c24-8ae3-912e34635bd0",
+      "ts": "2026-10-01T11:55:07.131Z",
+      "inputTokens": 20938,
+      "outputTokens": 290,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 20938,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 290
+      }
+    },
+    {
+      "kind": "thinking",
+      "uuid": "8a06ea0f-0105-4751-81fd-430a9d905121",
+      "ts": "2026-10-01T11:55:32.496Z",
+      "text": "Good. Design decision: use `gh pr view <number> --repo owner/repo --json state,mergedAt` via subprocess like git_service, or use GitHub REST via httpx with token? Existing pattern is `gh` CLI subprocess (git_service, visibility monitor). The job says \"asking GitHub (existing GitHub client/token config)\". There's no real HTTP GitHub client; `gh` CLI is the \"GitHub client\" here and github_config supplies owner/token. I'll implement a small module `backend/app/services/pr_merge_monitor.py` that:\n\n- `parse_pr_url(url) -> (owner, repo, number) | None`\n- `async check_pr_merged(owner, repo, number) -> bool | None` using `gh pr view <number> --repo owner/repo --json state,mergedAt` (respects GH_TOKEN via env; gh handles auth). Actually token config: github_config resolves token; gh CLI reads GH_TOKEN env. The visibility monitor just calls gh without explicit token. I'll follow the same pattern but gate on configured token via resolve_github_config().configured.\n- `check_once(session) -> int`: select tasks with status in (review, user_test) and pr_url not null; for each, ask GitHub; if merged \u2192 move to done through hop path with record_task_event changed_by=\"system\", actor_label=\"system\"; add a TaskComment resolution \"PR #n merged \u2014 card closed automatically\". Rate limiting: limit number of PR checks per cycle (e.g. 20) and interval 10 min.\n- `run_forever()` loop similar to visibility monitor; started in background.py; stop entry.\n\nWait \u2014 tasks in review with merged PR: is moving review\u2192done valid? Check VALID_TRANSITIONS. Also user_test\u2192done. Let me check the transitions map. Also \"heads\" cards: head cards go to review on passed (HEAD_TO_TASK). So review\u2192done should be valid via mirror_path anyway.\n\nAlso requirement: \"no calls when no token is configured\" \u2014 gate with resolve_github_config().configured.\n\nAlso \"rate limiting\" \u2014 cache per PR result within a cycle; cap checks per cycle.\n\nHead result path storing pr_url: already done in mirror.py apply_head_state (line 120). But also check night_shift path and state.py \u2014 the run.pr_url comes from heads files. Also check routers/heads.py line 85 just serializes. I think mirror covers it. But wait \u2014 is there another path where head completes and task moves to review without mirror? engine.py? mirror.apply_head_state is called from sync.py presumably. Good enough; I'll note it exists.\n\nLet me check VALID_TRANSITIONS fully and where tests live for similar monitors (test file for visibility monitor?).",
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "8a06ea0f-0105-4751-81fd-430a9d905121",
+      "ts": "2026-10-01T11:55:32.496Z",
+      "inputTokens": 21853,
+      "outputTokens": 632,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 21853,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 632
+      }
+    },
+    {
+      "kind": "tool",
+      "uuid": "eac703d2-8f44-425c-b1e7-9fdebed07d65",
+      "ts": "2026-10-01T11:55:34.081Z",
+      "name": "Bash",
+      "title": "$ sed -n 26,60p backend/app/task_status.py; echo ---; ls backend/tests | grep -\u2026",
+      "detail": {
+        "command": "sed -n 26,60p backend/app/task_status.py; echo ---; ls backend/tests | grep -i \"monitor\\|visibility\\|github\"; echo ---; grep -rn \"apply_head_state\" backend/app | head",
+        "description": "Read transitions and find monitor tests"
+      },
+      "toolUseId": "chatcmpl-tool-8607d428d13eba49",
+      "result": "# `blocked` (external impediment) and `user_test` (Operator's manual test gate).\n# Deliberately NOT inbox -> waiting: a task must be actively worked before it\n# can wait on an answer. Mirrored in the Postgres trigger\n# `validate_task_transition` (migration 0159) \u2014 that DB-level guard is the\n# only one enforced in production; this dict is what tests exercise since the\n# SQLite test engine doesn't run Postgres triggers. One deliberate\n# divergence: the trigger treats X -> X as a silent no-op\n# (`IF OLD.status = NEW.status THEN RETURN NEW`), this dict has no\n# self-transitions and is_valid_transition() therefore rejects them with a\n# 409 \u2014 callers are expected to skip the write instead of asking for a\n# same-status transition, and a 409 here is the intentional way to catch\n# that programmatically.\nVALID_TRANSITIONS: dict[str, set[str]] = {\n    TaskStatus.INBOX:       {TaskStatus.IN_PROGRESS, TaskStatus.BLOCKED},\n    TaskStatus.IN_PROGRESS: {TaskStatus.REVIEW, TaskStatus.DONE, TaskStatus.BLOCKED, TaskStatus.INBOX, TaskStatus.FAILED, TaskStatus.WAITING},\n    TaskStatus.REVIEW:      {TaskStatus.DONE, TaskStatus.IN_PROGRESS, TaskStatus.INBOX, TaskStatus.BLOCKED, TaskStatus.FAILED, TaskStatus.USER_TEST},\n    TaskStatus.USER_TEST:   {TaskStatus.DONE, TaskStatus.IN_PROGRESS, TaskStatus.REVIEW},\n    TaskStatus.WAITING:     {TaskStatus.IN_PROGRESS, TaskStatus.BLOCKED},\n    TaskStatus.BLOCKED:     {TaskStatus.INBOX, TaskStatus.IN_PROGRESS, TaskStatus.FAILED},\n    TaskStatus.FAILED:      {TaskStatus.INBOX},\n    TaskStatus.DONE:        {TaskStatus.IN_PROGRESS},\n    TaskStatus.ABORTED:     {TaskStatus.IN_PROGRESS, TaskStatus.INBOX},\n}\n\n# Status labels for error messages\nSTATUS_LABELS: dict[str, str] = {\n    TaskStatus.INBOX: \"Inbox\",\n    TaskStatus.IN_PROGRESS: \"In Progress\",\n    TaskStatus.REVIEW: \"Review\",\n    TaskStatus.USER_TEST: \"User Test\",\n    TaskStatus.WAITING: \"Waiting\",\n    TaskStatus.DONE: \"Done\",\n    TaskStatus.BLOCKED: \"Blocked\",\n    TaskStatus.FAILED: \"Failed\",\n    TaskStatus.ABORTED: \"Aborted\",\n---\ntest_github_config.py\ntest_session_monitor_skips_non_gateway.py\ntest_w6_review_handoff_visibility.py\n---\nbackend/app/services/heads/sync.py:21:from app.services.heads.mirror import apply_head_state\nbackend/app/services/heads/sync.py:59:        moved = await apply_head_state(session, task, run, derived)\nbackend/app/services/heads/mirror.py:108:async def apply_head_state(session: AsyncSession, task: Task, run, derived: dict) -> bool:",
+      "status": "done",
+      "stats": null,
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "eac703d2-8f44-425c-b1e7-9fdebed07d65",
+      "ts": "2026-10-01T11:55:34.081Z",
+      "inputTokens": 21853,
+      "outputTokens": 632,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 21853,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 632
+      }
+    },
+    {
+      "kind": "thinking",
+      "uuid": "cc54233c-7ccc-421d-aef0-acd2cfc99332",
+      "ts": "2026-10-01T11:55:37.901Z",
+      "text": "review\u2192done and user_test\u2192done are both valid direct transitions.\n\nNow let me look at an existing test for a similar service to copy the test setup (conftest, async session fixture). Check test_github_config.py and how tests create tasks/async sessions.",
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "cc54233c-7ccc-421d-aef0-acd2cfc99332",
+      "ts": "2026-10-01T11:55:37.901Z",
+      "inputTokens": 23126,
+      "outputTokens": 130,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 23126,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 130
+      }
+    },
+    {
+      "kind": "tool",
+      "uuid": "0c7b923d-5893-44f0-87a9-4613912ec592",
+      "ts": "2026-10-01T11:55:39.548Z",
+      "name": "Bash",
+      "title": "$ sed -n 1,60p backend/tests/test_github_config.py; echo ---; ls backend/tests/\u2026",
+      "detail": {
+        "command": "sed -n 1,60p backend/tests/test_github_config.py; echo ---; ls backend/tests/conftest.py 2>/dev/null && grep -n \"def \\|fixture\" backend/tests/conftest.py | head -30",
+        "description": "Look at test conventions and conftest fixtures"
+      },
+      "toolUseId": "chatcmpl-tool-9add9242e4b287b6",
+      "result": "\"\"\"ADR-055: GitHub connection config \u2014 resolver (vault > env), status + config API.\"\"\"\nimport json\nimport os\nfrom unittest.mock import AsyncMock, patch\n\nimport pytest\nfrom httpx import AsyncClient\nfrom sqlmodel.ext.asyncio.session import AsyncSession\n\nfrom app.models.secret import Secret\nfrom app.services.encryption import encrypt\nfrom app.services.github_config import (\n    OWNER_SECRET_KEY,\n    TOKEN_SECRET_KEY,\n    get_cached_owner,\n    invalidate_github_config_cache,\n    resolve_github_config,\n)\n\nfrom tests.conftest import test_engine\n\n\nasync def _put_vault(key: str, value: str) -> None:\n    async with AsyncSession(test_engine, expire_on_commit=False) as s:\n        s.add(Secret(key=<REDACTED> encrypted_value=encrypt(value), provider=\"github\"))\n        await s.commit()\n\n\n# \u2500\u2500 Resolver \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\n\n@pytest.mark.asyncio\nasync def test_resolver_env_fallback(monkeypatch):\n    monkeypatch.setenv(\"GITHUB_OWNER\", \"env-owner\")\n    monkeypatch.setenv(\"GH_TOKEN\", \"env-token\")\n    async with AsyncSession(test_engine, expire_on_commit=False) as s:\n        cfg = await resolve_github_config(s, fresh=True)\n    assert (cfg.owner, cfg.owner_source) == (\"env-owner\", \"env\")\n    assert (cfg.token, cfg.token_source) == (\"env-token\", \"env\")\n    assert cfg.configured\n\n\n@pytest.mark.asyncio\nasync def test_resolver_vault_wins_over_env(monkeypatch):\n    monkeypatch.setenv(\"GITHUB_OWNER\", \"env-owner\")\n    monkeypatch.setenv(\"GH_TOKEN\", \"env-token\")\n    await _put_vault(OWNER_SECRET_KEY, \"vault-owner\")\n    await _put_vault(TOKEN_SECRET_KEY, \"vault-token\")\n    async with AsyncSession(test_engine, expire_on_commit=False) as s:\n        cfg = await resolve_github_config(s, fresh=True)\n    assert (cfg.owner, cfg.owner_source) == (\"vault-owner\", \"vault\")\n    assert (cfg.token, cfg.token_source) == (\"vault-token\", \"vault\")\n    # Sync accessor (template rendering) sees the resolved owner.\n    assert get_cached_owner() == \"vault-owner\"\n\n\n@pytest.mark.asyncio\nasync def test_resolver_unconfigured(monkeypatch):\n    monkeypatch.delenv(\"GITHUB_OWNER\", raising=False)\n    monkeypatch.delenv(\"GH_TOKEN\", raising=False)\n---\nbackend/tests/conftest.py\n2:Central test fixtures for Mission Control Backend.\n35:# during Phase 29 verification 160 fixture notes ended up in the operator's real vault.\n56:# variable over OMP_HOME, so a fixture run inside an omp agent's own container\n57:# rewrote the agent's REAL omp.env with fixture values (HOME=/tmp/pytest-...,\n83:def _assert_test_database(url: str) -> None:\n167:# \u2500\u2500 Database fixtures \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n169:async def _empty_all_tables(conn) -> None:\n186:async def _schema_fingerprint(conn) -> tuple:\n195:async def _rebuild_schema(conn) -> None:\n201:async def _ensure_pristine_schema(conn) -> bool:\n213:@pytest.fixture(autouse=True)\n214:async def setup_db():\n217:    Until 10.09.2026 this fixture ran create_all + drop_all around EVERY test:\n254:def pytest_collection_modifyitems(config, items):\n265:@pytest.fixture(autouse=True)\n266:async def isolate_redis_singleton():\n269:    Most code takes `redis` from a fixture, but service code that calls\n275:    server for every test; the ``client`` fixture still layers its own\n289:@pytest.fixture(autouse=True)\n290:def block_real_docker():\n325:    def _is_docker(cmd) -> bool:\n339:    def _guard(name, original):\n340:        def _wrapped(cmd, *args, **kwargs):\n366:@pytest.fixture(autouse=True)\n367:def reset_github_config_cache():\n375:@pytest.fixture(autouse=True)\n376:def block_real_engine_metrics():\n379:    Every switch now probes the engine it would end; the test fixtures use\n388:    def unreachable(request: httpx.Request) -> httpx.Response:\n397:@pytest.fixture",
+      "status": "done",
+      "stats": null,
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "0c7b923d-5893-44f0-87a9-4613912ec592",
+      "ts": "2026-10-01T11:55:39.548Z",
+      "inputTokens": 23126,
+      "outputTokens": 130,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 23126,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 130
+      }
+    },
+    {
+      "kind": "thinking",
+      "uuid": "cbfcfa2b-0cf5-4896-9072-e6a610dc9fd3",
+      "ts": "2026-10-01T11:55:44.542Z",
+      "text": "Good. Now write the run record (step 0), then plan, then red test, then implement.\n\nLet me check how Task model is created in tests and what fields are needed (board_id? agent?). Look at a test that creates tasks directly.",
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "cbfcfa2b-0cf5-4896-9072-e6a610dc9fd3",
+      "ts": "2026-10-01T11:55:44.542Z",
+      "inputTokens": 24168,
+      "outputTokens": 127,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 24168,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 127
+      }
+    },
+    {
+      "kind": "tool",
+      "uuid": "ff29231c-3c5b-4a1b-9786-f676af9e1503",
+      "ts": "2026-10-01T11:55:46.516Z",
+      "name": "Bash",
+      "title": "$ grep -rln \"Task(\" backend/tests | head -5; echo ---; grep -n \"Task(\" backend/\u2026",
+      "detail": {
+        "command": "grep -rln \"Task(\" backend/tests | head -5; echo ---; grep -n \"Task(\" backend/tests/test_review_pr_number_gate.py | head; echo ---; sed -n 1,50p backend/tests/test_review_pr_number_gate.py",
+        "description": "Find test patterns creating Task rows"
+      },
+      "toolUseId": "chatcmpl-tool-8722e9ebda8eb6b8",
+      "result": "backend/tests/test_resolution_auto_promote.py\nbackend/tests/test_clarification_callback_runtime_agnostic.py\nbackend/tests/test_subtask_blocked_parent_notify.py\nbackend/tests/test_recovery_audit_trail.py\nbackend/tests/test_task_thread_duplication.py\n---\n82:        task = Task(\n---\n\"\"\"Regression tests: Registry-Repo cards must carry pr_number INTO the\nin_progress\u2192review transition \u2014 not discover its absence at reviewer\ndispatch (Task 27ab2ef9, incidents 6f1afe01 + d9910cf3).\n\nOn pre-fix main, PATCH status=review on a repo_id card without pr_number\nanswered 200, committed the status, and the developer's turn ended; only\nthe reviewer DISPATCH then hit _setup_review_workspace_for_dispatch's\n_block() \u2014 status=blocked, \"Question for @Operator\", human repair.\nThe gate in agent_task_status.py now rejects the transition with an honest\n400 while the developer can still fix it in the same turn.\n\"\"\"\n\nimport uuid\nfrom unittest.mock import AsyncMock, patch\n\nimport pytest\nfrom sqlmodel.ext.asyncio.session import AsyncSession\n\nfrom tests.conftest import test_engine\n\n_REFLECTION = (\n    # Body must carry >=80 chars below the headers \u2014 the W1 reflection\n    # validator rejects header-only skeletons.\n    \"## Was wurde gemacht\\nFeature implementiert inklusive Unit-Tests \"\n    \"und Doku-Update im README.\\n\\n\"\n    \"## Was hat funktioniert\\nTDD-Zyklus lief sauber durch, alle Tests \"\n    \"auf Anhieb gruen.\\n\\n\"\n    \"## Was war unklar\\nNichts Nennenswertes.\\n\\n\"\n    \"## Lesson fuer Agent-Memory\\nKeine neue Lesson.\"\n)\n\n\nasync def _create_repo_card_data(*, repo_id=True, human_review_required=None):\n    \"\"\"Board + developer + reviewer + registry Repo + in_progress task.\"\"\"\n    from app.models.board import Board\n    from app.models.agent import Agent\n    from app.models.repo import Repo\n    from app.models.task import Task, TaskComment\n    from app.auth import generate_agent_token\n\n    board_id = uuid.uuid4()\n    dev_id = uuid.uuid4()\n    reviewer_id = uuid.uuid4()\n    task_id = uuid.uuid4()\n    repo_pk = uuid.uuid4()\n\n    async with AsyncSession(test_engine, expire_on_commit=False) as s:\n        board = Board(id=board_id, name=\"PR Gate Board\", slug=f\"prgate-{board_id.hex[:8]}\")\n        s.add(board)",
+      "status": "done",
+      "stats": null,
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "ff29231c-3c5b-4a1b-9786-f676af9e1503",
+      "ts": "2026-10-01T11:55:46.516Z",
+      "inputTokens": 24168,
+      "outputTokens": 127,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 24168,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 127
+      }
+    },
+    {
+      "kind": "tool",
+      "uuid": "0081b0af-7d82-472d-9115-d6e701d0e6ec",
+      "ts": "2026-10-01T11:55:50.462Z",
+      "name": "Bash",
+      "title": "$ sed -n 50,120p backend/tests/test_review_pr_number_gate.py",
+      "detail": {
+        "command": "sed -n 50,120p backend/tests/test_review_pr_number_gate.py",
+        "description": "See Task creation fields in tests"
+      },
+      "toolUseId": "chatcmpl-tool-bb74aab8cdad11dd",
+      "result": "        dev_token_raw, dev_token_hash = generate_agent_token()\n        developer = Agent(\n            id=dev_id,\n            name=\"Cody\",\n            role=\"developer\",\n            board_id=board_id,\n            agent_token_hash=dev_token_hash,\n            is_board_lead=False,\n            scopes=[\"tasks:read\", \"tasks:write\", \"tasks:create\"],\n        )\n        s.add(developer)\n\n        reviewer_token_raw, reviewer_token_hash = generate_agent_token()\n        reviewer = Agent(\n            id=reviewer_id,\n            name=\"Rex\",\n            role=\"reviewer\",\n            board_id=board_id,\n            agent_token_hash=reviewer_token_hash,\n            is_board_lead=False,\n            scopes=[\"tasks:read\", \"tasks:write\"],\n        )\n        s.add(reviewer)\n\n        if repo_id:\n            s.add(Repo(\n                id=repo_pk,\n                full_name=\"argyelan-ai/mission-control\",\n                url=\"https://github.com/argyelan-ai/mission-control\",\n            ))\n\n        task = Task(\n            id=task_id,\n            board_id=board_id,\n            title=\"Implement feature Z\",\n            status=\"in_progress\",\n            assigned_agent_id=dev_id,\n            repo_id=repo_pk if repo_id else None,\n            human_review_required=human_review_required,\n        )\n        s.add(task)\n        s.add(TaskComment(\n            task_id=task_id, author_type=\"agent\", author_agent_id=dev_id,\n            comment_type=\"progress\", content=\"Implementation complete\",\n        ))\n        s.add(TaskComment(\n            task_id=task_id, author_type=\"agent\", author_agent_id=dev_id,\n            comment_type=\"reflection\", content=_REFLECTION,\n        ))\n        await s.commit()\n        await s.refresh(board)\n        await s.refresh(developer)\n        await s.refresh(reviewer)\n        await s.refresh(task)\n\n    return {\n        \"board\": board,\n        \"developer\": developer,\n        \"reviewer\": reviewer,\n        \"task\": task,\n        \"dev_token\": dev_token_raw,\n    }\n\n\ndef _patch_ctx():\n    \"\"\"Shared patch context: events + telegram silenced, handoff observed.\"\"\"\n    return (\n        patch(\"app.routers.agent_scoped.emit_event\", new_callable=AsyncMock),\n        patch(\"app.routers.agent_task_status.emit_event\", new_callable=AsyncMock),\n        patch(\"app.services.task_lifecycle.update_agent_active_task\", new_callable=AsyncMock),",
+      "status": "done",
+      "stats": null,
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "0081b0af-7d82-472d-9115-d6e701d0e6ec",
+      "ts": "2026-10-01T11:55:50.462Z",
+      "inputTokens": 24826,
+      "outputTokens": 38,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 24826,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 38
+      }
+    },
+    {
+      "kind": "thinking",
+      "uuid": "c3ded806-e9a2-4175-bf02-360e3856eb0b",
+      "ts": "2026-10-01T11:55:55.190Z",
+      "text": "I have enough context. Now write the run record (step 0) and update step.txt. Then plan, red test, implement.\n\nLet me create the run record file.",
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "c3ded806-e9a2-4175-bf02-360e3856eb0b",
+      "ts": "2026-10-01T11:55:55.190Z",
+      "inputTokens": 25369,
+      "outputTokens": 86,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 25369,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 86
+      }
+    },
+    {
+      "kind": "message",
+      "uuid": "f4ba921d-11a5-4546-8d55-83d8140c1481",
+      "ts": "2026-10-01T11:55:55.676Z",
+      "role": "assistant",
+      "text": "I have enough context. Writing the run record and step file now (step 0).",
+      "model": "GLM-5.3-Flash-EXL3",
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "f4ba921d-11a5-4546-8d55-83d8140c1481",
+      "ts": "2026-10-01T11:55:55.676Z",
+      "inputTokens": 25369,
+      "outputTokens": 86,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 25369,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 86
+      }
+    },
+    {
+      "kind": "tool",
+      "uuid": "68ce1ef3-d387-4a02-b3e0-5e7b9b751a45",
+      "ts": "2026-10-01T11:55:56.340Z",
+      "name": "Bash",
+      "title": "$ date +\"%Y-%m-%d %H:%M\"",
+      "detail": {
+        "command": "date +\"%Y-%m-%d %H:%M\"",
+        "description": "Get current time"
+      },
+      "toolUseId": "chatcmpl-tool-964c5bada53ed4e9",
+      "result": "2026-10-01 13:55",
+      "status": "done",
+      "stats": null,
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "68ce1ef3-d387-4a02-b3e0-5e7b9b751a45",
+      "ts": "2026-10-01T11:55:56.340Z",
+      "inputTokens": 25369,
+      "outputTokens": 86,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 25369,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 86
+      }
+    },
+    {
+      "kind": "tool",
+      "uuid": "8f078222-a8de-4ea9-a1bd-21af4279346b",
+      "ts": "2026-10-01T11:56:41.743Z",
+      "name": "Bash",
+      "title": "$ cat > /Users/op/.mc/heads/11111111-1111-4111-8111-111111111111/step.txt <<'EO\u2026",
+      "detail": {
+        "command": "cat > /Users/op/.mc/heads/11111111-1111-4111-8111-111111111111/step.txt <<'EOF'\nstep 0/7 context brief \u00b7 waiting for: nothing\nEOF\ncat > /Users/op/.mc/heads/11111111-1111-4111-8111-111111111111/run-record.md <<'EOF'\n---\nid: job-2026-10-01-trial-claude-head-close\ntype: run-record\nagent: head\ndate: 2026-10-01T13:55:00\ntitle: 'Run record: trial-claude-head-close'\nhead_run: 11111111-1111-4111-8111-111111111111\ntask: 2750bad5-33de-4e8e-b742-af10a4cbe6f2\n---\n\n# Run record: trial-claude-head-close\n\nHeartbeat: 2026-10-01 13:55 \u00b7 step 0 context \u00b7 waiting for: nothing\nStatus: running\n\n## Job\n- Goal: Tasks whose PR is merged on GitHub move automatically to done (today 12 head cards sit in review forever); open/closed-unmerged PRs leave the card alone.\n- Repo / branch: scratch/mission-control \u00b7 mc-head/2026-10-01-trial-claude-head-close-cards-fcbf\n- Base: origin/main f0cb774ab3857e0589aff5f597904b85ace05a5a\n- Pair: claude \u00d7 DGX Spark :8000 (aktuell: GLM-5.3-Flash-EXL3) (GLM-5.3-Flash-EXL3) \u00b7 start 13:53 \u00b7 end \u2014\n\n## Context brief (max. 60 lines, written in step 0)\n- kz brief: used \u2014 named rejected ideas (X-loop-as-workflow-or-schedule: no workflow child / schedule variant for loops; workflows bypass the task pipeline) and ADRs 019/030/055/062/085. No existing feature for the paths.\n- Already exists:\n  - `Task.pr_url` / `Task.pr_number` columns: `backend/app/models/task.py:193` (migration `backend/alembic/versions/0200_task_pr_reference.py`).\n  - **Head result path already stores pr_url**: `backend/app/services/heads/mirror.py` `apply_head_state()` sets `task.pr_url = run.pr_url` when a head passes with a PR \u2014 requirement \"head result path stores pr_url\" already satisfied; no second writer built.\n  - GitHub config resolver (ADR-055): `backend/app/services/github_config.py` (`resolve_github_config`, `get_github_owner`, `configured` flag, TTL cache).\n  - Existing GitHub access pattern = `gh` CLI subprocess (`backend/app/services/git_service.py`), not a HTTP client; periodic-loop pat\u2026",
+        "description": "Write step.txt and run-record.md skeleton"
+      },
+      "toolUseId": "chatcmpl-tool-b3dab44271b7be8c",
+      "result": "written",
+      "status": "done",
+      "stats": null,
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "8f078222-a8de-4ea9-a1bd-21af4279346b",
+      "ts": "2026-10-01T11:56:41.743Z",
+      "inputTokens": 25469,
+      "outputTokens": 1328,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 25469,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 1328
+      }
+    },
+    {
+      "kind": "thinking",
+      "uuid": "fef3baa7-32b3-4aec-a6ed-82a9fb275c65",
+      "ts": "2026-10-01T11:57:19.390Z",
+      "text": "Step 1: plan is in the run record. Now step 2: failing test first. Before writing the test, I need to decide the module API precisely.\n\nModule: `backend/app/services/pr_merge_monitor.py`\n\n```python\nCHECK_INTERVAL_SECONDS = 600  # 10 min\nMAX_PR_CHECKS_PER_CYCLE = 20\n\ndef parse_pr_url(url: str | None) -> tuple[str, str, int] | None  # owner, repo, number\n\nasync def fetch_pr_merged(owner: str, repo: str, number: int) -> bool | None\n    # gh pr view number --repo owner/repo --json state,mergedAt\n    # returns True if mergedAt is set / state == MERGED, False if open/closed not merged, None on error\n\nasync def check_once(session=None) -> int  # number of tasks closed\n    # resolve_github_config \u2192 if not configured: return 0 (no calls)\n    # select Task where status in (review, user_test) and pr_url is not null\n    # for each (cap MAX): merged = await fetch_pr_merged(...)\n    # if merged: move to done via mirror.move_task? move_task uses changed_by=\"head\", actor_label=\"head\".\n```\n\nHmm \u2014 move_task hardcodes `changed_by=\"head\", actor_label=\"head\"`. The job wants actor = system. Options: call record_task_event directly with changed_by=\"system\" and single hop (review\u2192done is one hop; user_test\u2192done is one hop). But blocked cards? We only pick review/user_test, both have direct done transition. So I can write my own small move using record_task_event + valid transition check, changed_by=\"system\", actor_label=\"system\", reason=\"pr_merged\". Also add a TaskComment resolution \"PR #n merged \u2014 card closed automatically (pr merge monitor)\". And mirror hop-flush semantics: task.status = hop; session.add; flush per hop. Single hop \u2192 simple.\n\nActually, better to reuse mirror.move_task but parameterize actor? That changes existing behaviour for heads callers... adding a keyword arg `changed_by=\"head\", actor_label=\"head\"` default keeps behaviour. But that touches heads mirror (frozen fleet layer? ADR-085 says don't touch dispatch/healers; heads launcher allowed). mirror.py is the heads mirror \u2014 modifying its signature is low-risk but adds surface. Simpler: implement the close inside pr_merge_monitor using record_task_event directly. It duplicates a little hop logic but for one-hop transitions it's trivial.\n\nRate limiting: cap per cycle (MAX_PR_CHECKS_PER_CYCLE=20), and that's it plus interval. Also skip pr_urls that don't parse.\n\nBackground wiring in background.py: follow gh_monitor pattern (create_task run_forever, cancel on stop).\n\nInterval: daily metrics mention stale cards; 10 min is fine (job: \"within one check interval\").\n\nfetch_pr_merged must be mockable in tests: patch `app.services.pr_merge_monitor.fetch_pr_merged`.\n\nConfig: no new env setting; interval constant. Job says \"map any new endpoint/setting in landkarte.yaml\" \u2014 none, so nothing to map. I'll double check kz check later.\n\nTest file plan (`backend/tests/test_pr_merge_monitor.py`):\n\n1. `test_parse_pr_url` \u2014 pure.\n2. `test_merged_pr_moves_review_task_to_done`: create board+task in review with pr_url; patch fetch_pr_merged \u2192 True; run check_once; assert task.status == \"done\", TaskEvent exists changed_by=\"system\" to_status done, resolution comment present.\n3. `test_open_pr_leaves_task`: fetch \u2192 False; status stays review.\n4. `test_closed_unmerged_pr_leaves_task`: fetch \u2192 False (state CLOSED, mergedAt null \u2192 False).\n5. `test_no_token_no_github_calls`: env cleared, no vault secrets \u2192 check_once returns 0 and fetch mock not called. Need to patch something to count calls \u2014 patch fetch_pr_merged with AsyncMock and assert not called. But resolve_github_config is called; with no owner/token configured \u2192 configured False \u2192 return before fetch.\n6. `test_user_test_task_closed`: same as 2 with user_test status.\n7. `test_rate_limit_cap`: 25 tasks with pr_url \u2192 only 20 fetch calls.\n8. `test_unparseable_pr_url_skipped`.\n\nCheck TaskEvent model fields and TaskComment. Also need Board for task? Task requires board_id \u2014 create Board like the gate test. Does Task need assigned_agent_id? Optional.\n\nAlso check emit_event etc. in record_task_event \u2192 _deliver_status_change; it may query agent etc. \u2014 with no assigned agent it probably no-ops. Check _deliver_status_change body quickly.",
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "fef3baa7-32b3-4aec-a6ed-82a9fb275c65",
+      "ts": "2026-10-01T11:57:19.390Z",
+      "inputTokens": 26802,
+      "outputTokens": 1086,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 26802,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 1086
+      }
+    },
+    {
+      "kind": "message",
+      "uuid": "b7ea6db3-3950-43fb-a99c-e417ae316c26",
+      "ts": "2026-10-01T11:57:20.691Z",
+      "role": "assistant",
+      "text": "Step 1 (plan) is in the run record. Now checking `_deliver_status_change` behaviour with no assigned agent, and TaskEvent model, before writing the red test.",
+      "model": "GLM-5.3-Flash-EXL3",
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "b7ea6db3-3950-43fb-a99c-e417ae316c26",
+      "ts": "2026-10-01T11:57:20.691Z",
+      "inputTokens": 26802,
+      "outputTokens": 1086,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 26802,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 1086
+      }
+    },
+    {
+      "kind": "tool",
+      "uuid": "bae157ff-9436-4eb3-bca6-f4defa214f51",
+      "ts": "2026-10-01T11:57:21.924Z",
+      "name": "Bash",
+      "title": "$ sed -n 95,167p backend/app/services/task_lifecycle.py; echo ---; grep -n \"cla\u2026",
+      "detail": {
+        "command": "sed -n 95,167p backend/app/services/task_lifecycle.py; echo ---; grep -n \"class TaskEvent\" -A 20 backend/app/models/task.py | head -30",
+        "description": "Read _deliver_status_change and TaskEvent model"
+      },
+      "toolUseId": "chatcmpl-tool-b27910215322db6b",
+      "result": "async def _deliver_status_change(\n    session: AsyncSession,\n    task_id: uuid.UUID,\n    from_status: str,\n    to_status: str,\n    changed_by: str,\n    agent_id: uuid.UUID | None,\n    reason: str | None,\n) -> None:\n    \"\"\"Deliver an externally-triggered status change to the working agent.\n\n    Writes a ``system`` comment (already in DELIVERABLE_SYSTEM_TYPES, so the\n    next ``/agent/me/poll`` hands it to the assigned agent; the heartbeat\n    soft-interrupt only carries blocker/handoff and is NOT involved) when\n    the actor is not the assigned agent itself. Never commits, never raises:\n    a delivery problem must not break the status change it rides on.\n\n    Skipped on purpose:\n    - flag off (default) -> pure no-op, no session access\n    - reasons in ``_SELF_DELIVERING_REASONS`` -> those lifecycle paths\n      already write their own system comment or redispatch the card with a\n      full prompt; a second comment would be noise. Other system-authored\n      transitions (phase auto-advance, parent reopened for a new subtask)\n      ARE delivered \u2014 nothing else tells the agent about them\n    - the assigned agent changed it itself (``changed_by=\"agent\"`` and\n      ``agent_id == assigned``) -> no echo. A watchdog/user change that\n      passes the affected agent's id as ``agent_id`` IS delivered\n    - no assigned agent, or terminal ``failed``/``aborted``\n\n    Known limit: the poll only serves comments on inbox/in_progress/review/\n    blocked/done/user_test, so a change INTO ``waiting`` reaches the agent\n    only once the card is back in one of those lanes.\n    \"\"\"\n    from app.config import settings\n\n    try:\n        if not getattr(settings, \"status_change_delivery_enabled\", False):\n            return\n        if to_status in (\"failed\", \"aborted\"):\n            return\n        task = await session.get(Task, task_id)\n        if task is None or task.assigned_agent_id is None:\n            return\n        if reason in _SELF_DELIVERING_REASONS:\n            return\n        if (\n            changed_by == \"agent\"\n            and agent_id is not None\n            and agent_id == task.assigned_agent_id\n        ):\n            return\n        content = (\n            f\"Status von aussen geaendert: {from_status} -> {to_status} \"\n            f\"(durch {changed_by}\"\n            + (f\", Grund: {reason}\" if reason else \"\")\n            + \"). Bitte beruecksichtigen.\"\n        )\n        session.add(\n            TaskComment(\n                task_id=task_id,\n                author_type=\"system\",\n                author_agent_id=None,\n                comment_type=\"system\",\n                content=content,\n            )\n        )\n    except Exception:\n        logger.warning(\n            \"status-change delivery failed for task %s\", task_id, exc_info=True\n        )\n\n\ndef task_still_reactivatable(task: Task, *, expected_status: str | None = None) -> bool:\n---\n316:class TaskEvent(SQLModel, table=True):\n317-    \"\"\"Event sourcing for task status changes.\n318-\n319-    Every status change is logged as an immutable event.\n320-    Enables: silent failure detection, audit trail, duration analytics.\n321-    \"\"\"\n322-    __tablename__ = \"task_events\"\n323-\n324-    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)\n325-    task_id: uuid.UUID = Field(foreign_key=\"tasks.id\", index=True)\n326-    from_status: str\n327-    to_status: str\n328-    changed_by: str  # \"user\" | \"agent\" | \"watchdog\" | \"system\"\n329-    agent_id: uuid.UUID | None = Field(\n330-        default=None, foreign_key=\"agents.id\", nullable=True\n331-    )\n332-    reason: str | None = None  # Optional context (e.g. \"aborted_recovery\", \"review_handoff\")\n333-    actor_user_id: uuid.UUID | None = Field(\n334-        default=None, foreign_key=\"users.id\", nullable=True\n335-    )\n336-    actor_label: str | None = None",
+      "status": "done",
+      "stats": null,
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "bae157ff-9436-4eb3-bca6-f4defa214f51",
+      "ts": "2026-10-01T11:57:21.924Z",
+      "inputTokens": 26802,
+      "outputTokens": 1086,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 26802,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 1086
+      }
+    },
+    {
+      "kind": "thinking",
+      "uuid": "93902f1e-0ef1-4a0c-86f5-eb9d9847d6a2",
+      "ts": "2026-10-01T11:57:36.471Z",
+      "text": "All clear. Now step 2: write the red test. Test file `backend/tests/test_pr_merge_monitor.py`.\n\nCareful: conftest has autouse fixtures (setup_db, isolate_redis_singleton, block_real_docker, reset_github_config_cache, block_real_engine_metrics). Good.\n\nFor \"no token\" test: monkeypatch.delenv GITHUB_OWNER/GH_TOKEN; ensure vault has no github secrets. conftest `reset_github_config_cache` resets cache each test. But vault secrets table might have leftovers? setup_db rebuilds schema per test presumably (pristine schema). test_github_config's _put_vault inserts secrets per test \u2014 the DB is emptied between tests. But wait, is GH_TOKEN set in the test environment via .env loading? conftest _assert_test_database etc. Let me check conftest for env seeding of GITHUB_OWNER. Actually test_github_config tests monkeypatch env explicitly, so probably not set by default. To be safe, my test will delenv both.\n\nAlso check_once should resolve config per call with fresh cache; test_github_config uses `resolve_github_config(s, fresh=True)`. My monitor will call `resolve_github_config()` without session? Signature: `resolve_github_config(session=None, *, fresh=False)`. Fine to call without session (env fallback only; vault read needs session? Let me check lines 73-120 to see whether session=None breaks vault read).",
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "93902f1e-0ef1-4a0c-86f5-eb9d9847d6a2",
+      "ts": "2026-10-01T11:57:36.471Z",
+      "inputTokens": 28814,
+      "outputTokens": 334,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 28814,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 334
+      }
+    },
+    {
+      "kind": "tool",
+      "uuid": "5349c65d-5952-4973-bff9-76ec5a408109",
+      "ts": "2026-10-01T11:57:37.225Z",
+      "name": "Bash",
+      "title": "$ sed -n 60,130p backend/app/services/github_config.py",
+      "detail": {
+        "command": "sed -n 60,130p backend/app/services/github_config.py",
+        "description": "Read resolve_github_config implementation"
+      },
+      "toolUseId": "chatcmpl-tool-abfca3a21a778736",
+      "result": "    \"\"\"\n    if _cache is not None:\n        return _cache.owner\n    return os.environ.get(\"GITHUB_OWNER\", \"\")\n\n\nasync def _read_vault(session, key: str) -> str | None:\n    from app.services.secrets_helper import get_secret_plaintext_by_key\n\n    value = await get_secret_plaintext_by_key(session, key)\n    return value.strip() if value else None\n\n\nasync def resolve_github_config(session=None, *, fresh: bool = False) -> GithubConfig:\n    \"\"\"Resolve owner + token (vault > env). Pass a session where you have one;\n    without one the resolver opens its own (background services).\"\"\"\n    global _cache, _cache_ts\n\n    if not fresh and _cache is not None and time.monotonic() - _cache_ts < _CACHE_TTL_SECONDS:\n        return _cache\n\n    vault_owner: str | None = None\n    vault_token: <redacted> | None = None\n    try:\n        if session is not None:\n            vault_owner = await _read_vault(session, OWNER_SECRET_KEY)\n            vault_token = <redacted> _read_vault(session, TOKEN_SECRET_KEY)\n        else:\n            from sqlmodel.ext.asyncio.session import AsyncSession\n\n            from app.database import engine\n\n            async with AsyncSession(engine, expire_on_commit=False) as own:\n                vault_owner = await _read_vault(own, OWNER_SECRET_KEY)\n                vault_token = <redacted> _read_vault(own, TOKEN_SECRET_KEY)\n    except Exception as e:  # vault down \u2260 git down \u2014 degrade to env\n        logger.warning(\"resolve_github_config: vault lookup failed (%s) \u2014 env fallback\", e)\n\n    env_owner = os.environ.get(\"GITHUB_OWNER\", \"\").strip()\n    env_token = <redacted> \"\").strip()\n\n    config = GithubConfig(\n        owner=vault_owner or env_owner,\n        owner_source=\"vault\" if vault_owner else (\"env\" if env_owner else None),\n        token=<redacted> or env_token,\n        token_source=\"vault\" if vault_token else (\"env\" if env_token else None),\n    )\n    _cache = config\n    _cache_ts = time.monotonic()\n    return config\n\n\nasync def get_github_owner(session=None) -> str:\n    return (await resolve_github_config(session)).owner\n\n\nasync def get_github_token(session=None) -> str:\n    return (await resolve_github_config(session)).token\n\n\nasync def require_github_owner(session=None) -> str:\n    \"\"\"Fail fast with a clear message instead of building '/repo' slugs.\"\"\"\n    owner = await get_github_owner(session)\n    if not owner:\n        raise RuntimeError(\n            \"GITHUB_OWNER is not configured \u2014 set it in Settings \u2192 GitHub \"\n            \"(or GITHUB_OWNER in .env): the GitHub user/org under which MC \"\n            \"creates project repos.\"\n        )\n    return owner",
+      "status": "done",
+      "stats": null,
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "5349c65d-5952-4973-bff9-76ec5a408109",
+      "ts": "2026-10-01T11:57:37.225Z",
+      "inputTokens": 28814,
+      "outputTokens": 334,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 28814,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 334
+      }
+    },
+    {
+      "kind": "thinking",
+      "uuid": "e301cd45-c945-45e4-bbb8-39d7aec3a835",
+      "ts": "2026-10-01T11:57:44.437Z",
+      "text": "Good \u2014 `resolve_github_config()` without a session works for background services, opening its own session on `app.database.engine`. But in tests, `test_engine` from conftest is used; `app.database.engine` \u2014 conftest probably points app.database.engine to test engine? The `reset_github_config_cache` autouse fixture exists, suggesting tests do exercise resolve paths. For my check_once, I'll pass the session I already have (I'll open a session on test_engine in tests... but check_once opens its own session if I design `check_once()` without args). Design: `check_once() -> int` opens its own AsyncSession on `app.database.engine`. In tests, does app.database.engine point to the test DB? Let me check conftest for engine patching.",
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "e301cd45-c945-45e4-bbb8-39d7aec3a835",
+      "ts": "2026-10-01T11:57:44.437Z",
+      "inputTokens": 29753,
+      "outputTokens": 228,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 29753,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 228
+      }
+    },
+    {
+      "kind": "tool",
+      "uuid": "86b9678b-9f94-4fe0-9cc4-d24bfb885c5e",
+      "ts": "2026-10-01T11:57:45.939Z",
+      "name": "Bash",
+      "title": "$ grep -n \"app.database\\|engine\" backend/tests/conftest.py | head -20; echo ---\u2026",
+      "detail": {
+        "command": "grep -n \"app.database\\|engine\" backend/tests/conftest.py | head -20; echo ---; sed -n 160,255p backend/tests/conftest.py",
+        "description": "Check how conftest wires the test engine"
+      },
+      "toolUseId": "chatcmpl-tool-91e4a78c1ffe48d3",
+      "result": "20:from sqlalchemy.ext.asyncio import create_async_engine\n26:# database_url stays PostgreSQL (so app.database.engine is created without error).\n27:# The engine is never used \u2014 we override get_session with our SQLite engine.\n70:# SQLite in-memory engine to a real Postgres whose schema was applied by\n128:from app.database import get_session\n145:# \u2500\u2500 Test engine (SQLite in-memory, StaticPool = all connections share one DB) \u2500\u2500\n152:    test_engine = create_async_engine(_PG_TEST_URL, echo=False, poolclass=NullPool)\n154:    test_engine = create_async_engine(\n175:# Schema fingerprint of the SQLite engine right after create_all \u2014 one row\n221:    schema is created once per engine (lazily, on the first test of each\n227:    Alembic steps against this engine \u2014 they drop tables and ADD COLUMNs and\n239:        async with test_engine.begin() as conn:\n243:    async with test_engine.begin() as conn:\n376:def block_real_engine_metrics():\n377:    \"\"\"No test may ask a real engine's ``/metrics`` (E1 switch lock).\n379:    Every switch now probes the engine it would end; the test fixtures use\n381:    engine is unreachable \u2014 the lock then fails open, as it does live. Tests\n386:    from app.services.heads import engine\n389:        raise httpx.ConnectError(\"no real engine in tests\", request=request)\n391:    original = engine._transport\n---\n\n# SQLite: do NOT enable foreign keys.\n# Reason: SQLAlchemy ORM only orders INSERTs via relationship() definitions,\n# not via FK constraints. Since the models have no relationship()s,\n# PRAGMA foreign_keys=ON would break every test that creates Board+Agent+Task\n# in one session. FK enforcement runs in production via PostgreSQL + Alembic migrations.\n\n# \u2500\u2500 Database fixtures \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\nasync def _empty_all_tables(conn) -> None:\n    from sqlalchemy import text as _text\n    for table in reversed(SQLModel.metadata.sorted_tables):\n        await conn.execute(_text(f'DELETE FROM \"{table.name}\"'))\n\n\n# Schema fingerprint of the SQLite engine right after create_all \u2014 one row\n# per table with its CREATE statement, so COLUMNS count, not just table\n# presence. Review #488 B1: a migration test seeds `ALTER TABLE \u2026 ADD COLUMN`\n# and aborts on purpose; `DELETE` names no columns, so the OperationalError\n# rescue never fired and the next test saw the drifted schema (\"duplicate\n# column name\"). The fingerprint is compared before EVERY test (one cheap\n# query) and any drift \u2014 dropped table, added/removed column, changed\n# constraint \u2014 triggers a full drop_all + create_all.\n_PRISTINE_FINGERPRINT: dict = {\"value\": None}\n\n\nasync def _schema_fingerprint(conn) -> tuple:\n    from sqlalchemy import text as _text\n    rows = await conn.execute(_text(\n        \"SELECT name, sql FROM sqlite_master WHERE type IN ('table','index') \"\n        \"AND name NOT LIKE 'sqlite_%' ORDER BY name\"\n    ))\n    return tuple((r[0], r[1]) for r in rows)\n\n\nasync def _rebuild_schema(conn) -> None:\n    await conn.run_sync(SQLModel.metadata.drop_all)\n    await conn.run_sync(SQLModel.metadata.create_all)\n    _PRISTINE_FINGERPRINT[\"value\"] = await _schema_fingerprint(conn)\n\n\nasync def _ensure_pristine_schema(conn) -> bool:\n    \"\"\"Rebuild the schema if it drifted from the pristine fingerprint.\n    Returns True when a rebuild happened (tests use this as the oracle).\"\"\"\n    if _PRISTINE_FINGERPRINT[\"value\"] is None:\n        await _rebuild_schema(conn)\n        return True\n    if await _schema_fingerprint(conn) != _PRISTINE_FINGERPRINT[\"value\"]:\n        await _rebuild_schema(conn)\n        return True\n    return False\n\n\n@pytest.fixture(autouse=True)\nasync def setup_db():\n    \"\"\"Give every test an empty database \u2014 without rebuilding the schema.\n\n    Until 10.09.2026 this fixture ran create_all + drop_all around EVERY test:\n    78 CREATE TABLEs plus 78 DROPs per test, each crossing aiosqlite's thread\n    boundary \u2014 measured at ~78 ms per test (PR #316), i.e. most of the\n    22-minute CI job spent building a schema that never changes. Now the\n",
+      "status": "done",
+      "stats": null,
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "86b9678b-9f94-4fe0-9cc4-d24bfb885c5e",
+      "ts": "2026-10-01T11:57:45.939Z",
+      "inputTokens": 29753,
+      "outputTokens": 228,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 29753,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 228
+      }
+    },
+    {
+      "kind": "thinking",
+      "uuid": "4f3138a4-68ef-40eb-93ee-af8a18376048",
+      "ts": "2026-10-01T11:57:54.954Z",
+      "text": "app.database.engine is not overridden \u2014 so a service opening its own session on app.database.engine would hit the real (unconfigured) DB in tests. So `check_once` must accept a session OR use a session factory that tests can patch. Better design: `check_once(session: AsyncSession | None = None)` \u2014 opens its own on app.database.engine when None (background use), tests pass a test_engine session. For \"no token\" gating, resolve_github_config(session) \u2014 pass session.\n\nNow write the test file. Then run it to show red (module doesn't exist \u2192 import error counts as red? Better: write test, run, fails with ModuleNotFoundError/AttributeError \u2014 that's the red proof).\n\nLet me write the test.",
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "4f3138a4-68ef-40eb-93ee-af8a18376048",
+      "ts": "2026-10-01T11:57:54.954Z",
+      "inputTokens": 31314,
+      "outputTokens": 2552,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 31314,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 2552
+      }
+    },
+    {
+      "kind": "message",
+      "uuid": "4fad2b8e-2bae-4290-ab98-3254a8ab1d11",
+      "ts": "2026-10-01T11:57:56.469Z",
+      "role": "assistant",
+      "text": "Conftest keeps `app.database.engine` on the real DB, so `check_once` will accept an optional session (tests pass the `test_engine` session; background loop passes None). Now step 2 \u2014 the red test.",
+      "model": "GLM-5.3-Flash-EXL3",
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "4fad2b8e-2bae-4290-ab98-3254a8ab1d11",
+      "ts": "2026-10-01T11:57:56.469Z",
+      "inputTokens": 31314,
+      "outputTokens": 2552,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 31314,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 2552
+      }
+    },
+    {
+      "kind": "tool",
+      "uuid": "2ba79a12-8cec-4a2f-8b56-65e8f6aca6a3",
+      "ts": "2026-10-01T11:58:49.637Z",
+      "name": "Bash",
+      "title": "$ cat > /Users/op/.mc/heads/11111111-1111-4111-8111-111111111111/wt/backend/tes\u2026",
+      "detail": {
+        "command": "cat > /Users/op/.mc/heads/11111111-1111-4111-8111-111111111111/wt/backend/tests/test_pr_merge_monitor.py <<'EOF'\n\"\"\"PR merge monitor: merged PRs close their review/user_test cards.\n\nRegression for the 12 stale head cards: a head passes, the card lands in\nreview with ``pr_url``, the PR gets merged on GitHub \u2014 and the card sat in\nreview forever. The monitor polls GitHub for review/user_test cards with a\n``pr_url`` and walks merged ones to done through the normal status path\n(TaskEvent, actor = system). Open or closed-but-unmerged PRs are left alone;\nwithout a configured GitHub token nothing is called at all (ADR-055).\n\"\"\"\n\nimport uuid\nfrom unittest.mock import AsyncMock, patch\n\nimport pytest\nfrom sqlmodel.ext.asyncio.session import AsyncSession\n\nfrom tests.conftest import test_engine\n\n\nasync def _create_review_task(*, status: str = \"review\", pr_url: str | None = None,\n                              n: int = 1) -> list:\n    \"\"\"Board + n tasks in the given status with the given pr_url.\"\"\"\n    from app.models.board import Board\n    from app.models.task import Task\n\n    board_id = uuid.uuid4()\n    async with AsyncSession(test_engine, expire_on_commit=False) as s:\n        s.add(Board(id=board_id, name=\"Merge Monitor\", slug=f\"mm-{board_id.hex[:8]}\"))\n        tasks = []\n        for i in range(n):\n            task = Task(\n                id=uuid.uuid4(),\n                board_id=board_id,\n                title=f\"Card {i}\",\n                status=status,\n                pr_url=pr_url,\n            )\n            s.add(task)\n            tasks.append(task)\n        await s.commit()\n        for t in tasks:\n            await s.refresh(t)\n    return tasks\n\n\ndef _pr_url(n: int = 42) -> str:\n    return f\"https://github.com/acme/widgets/pull/{n}\"\n\n\n# \u2500\u2500 pr_url parsing \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\n\ndef test_parse_pr_url():\n    from app.services.pr_merge_monitor import parse_pr_url\n    assert parse_pr_url(_pr_url()) == (\"acme\", \"widgets\", 42)\n    assert parse_pr_url\u2026",
+        "description": "Write red test file for pr merge monitor"
+      },
+      "toolUseId": "chatcmpl-tool-b144e14c7571cf90",
+      "result": "written",
+      "status": "done",
+      "stats": null,
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "2ba79a12-8cec-4a2f-8b56-65e8f6aca6a3",
+      "ts": "2026-10-01T11:58:49.637Z",
+      "inputTokens": 31314,
+      "outputTokens": 2552,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 31314,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 2552
+      }
+    },
+    {
+      "kind": "thinking",
+      "uuid": "8d23b93b-4857-4320-86a0-d1b126106ed9",
+      "ts": "2026-10-01T11:58:55.922Z",
+      "text": "Oops, in test_checks_capped_per_cycle I wrote a weird line: `closed = await check_once(mon, s) if False else await mon.check_once(s)` \u2014 clean that up. Let me fix.",
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "8d23b93b-4857-4320-86a0-d1b126106ed9",
+      "ts": "2026-10-01T11:58:55.922Z",
+      "inputTokens": 33871,
+      "outputTokens": 222,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 33871,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 222
+      }
+    },
+    {
+      "kind": "tool",
+      "uuid": "1f42e73f-2d96-4bf5-b707-feff28478bb0",
+      "ts": "2026-10-01T11:59:00.068Z",
+      "name": "Bash",
+      "title": "$ cd backend && python - <<'EOF'\nimport re\np = \"tests/test_pr_merge_monitor.py\"\u2026",
+      "detail": {
+        "command": "cd backend && python - <<'EOF'\nimport re\np = \"tests/test_pr_merge_monitor.py\"\nsrc = open(p).read()\nsrc = src.replace(\"            closed = await check_once(mon, s) if False else await mon.check_once(s)\\n\", \"            closed = await mon.check_once(s)\\n\")\nopen(p, \"w\").write(src)\nEOF\nsed -i '' 's/    from app.services import pr_merge_monitor as mon\\n\\n    await _create_review_task(status=\"review\", pr_url=_pr_url(), n=mon.MAX_PR_CHECKS_PER_CYCLE + 5)/X/' tests/test_pr_merge_monitor.py; grep -n \"mon.check_once\\|import pr_merge\" tests/test_pr_merge_monitor.py | head",
+        "description": "Clean up awkward line in cap test"
+      },
+      "toolUseId": "chatcmpl-tool-987bb6c6a5f0d841",
+      "result": "This Bash command contains multiple operations. The following part requires approval: cd backend && python - <<'EOF'\nimport re\np = \"tests/test_pr_merge_monitor.py\"\nsrc = open(p).read()\nsrc = src.replace(\"            closed = await check_once(mon, s) if False else await mon.check_once(s)\\n\", \"            closed = await mon.check_once(s)\\n\")\nopen(p, \"w\").write(src)\nEOF\nsed -i '' 's/    from app.services import pr_merge_monitor as mon\\n\\n    await _create_review_task(status=\"review\", pr_url=_pr_url(), n=mon.MAX_PR_CHECKS_PER_CYCLE + 5)/X/' tests/test_pr_merge_monitor.py; grep -n \"mon.check_once\\|import pr_merge\" tests/test_pr_merge_monitor.py",
+      "status": "error",
+      "stats": null,
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "1f42e73f-2d96-4bf5-b707-feff28478bb0",
+      "ts": "2026-10-01T11:59:00.068Z",
+      "inputTokens": 33871,
+      "outputTokens": 222,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 33871,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 222
+      }
+    },
+    {
+      "kind": "tool",
+      "uuid": "36bdf4b1-31b8-4769-a150-549e44794726",
+      "ts": "2026-10-01T11:59:04.855Z",
+      "name": "Edit",
+      "title": "Edit test_pr_merge_monitor.py",
+      "detail": {
+        "replace_all": false,
+        "file_path": "/Users/op/.mc/heads/11111111-1111-4111-8111-111111111111/wt/backend/tests/test_pr_merge_monitor.py",
+        "old_string": "            closed = await check_once(mon, s) if False else await mon.check_once(s)",
+        "new_string": "            closed = await mon.check_once(s)"
+      },
+      "toolUseId": "chatcmpl-tool-90b1df14281ca925",
+      "result": "The file /Users/op/.mc/heads/11111111-1111-4111-8111-111111111111/wt/backend/tests/test_pr_merge_monitor.py has been updated successfully.",
+      "status": "done",
+      "stats": {
+        "additions": 1,
+        "deletions": 1
+      },
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "36bdf4b1-31b8-4769-a150-549e44794726",
+      "ts": "2026-10-01T11:59:04.855Z",
+      "inputTokens": 34264,
+      "outputTokens": 99,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 34264,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 99
+      }
+    },
+    {
+      "kind": "tool",
+      "uuid": "f08cb7a3-f4e2-4fd4-a637-aa929a417505",
+      "ts": "2026-10-01T11:59:08.975Z",
+      "name": "Bash",
+      "title": "$ cd /Users/op/.mc/heads/11111111-1111-4111-8111-111111111111/wt/backend && pyt\u2026",
+      "detail": {
+        "command": "cd /Users/op/.mc/heads/11111111-1111-4111-8111-111111111111/wt/backend && python -m pytest tests/test_pr_merge_monitor.py -q 2>&1 | tail -15",
+        "description": "Run new test file \u2014 expect red (module missing)"
+      },
+      "toolUseId": "chatcmpl-tool-bbd744217b288bde",
+      "result": "(eval):1: command not found: python",
+      "status": "done",
+      "stats": null,
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "f08cb7a3-f4e2-4fd4-a637-aa929a417505",
+      "ts": "2026-10-01T11:59:08.975Z",
+      "inputTokens": 34416,
+      "outputTokens": 85,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 34416,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 85
+      }
+    },
+    {
+      "kind": "tool",
+      "uuid": "073e964d-f94d-4e6b-b653-dadd837aba6e",
+      "ts": "2026-10-01T11:59:13.596Z",
+      "name": "Bash",
+      "title": "$ ls .venv/bin/python venv/bin/python 2>/dev/null; which python3 pytest 2>/dev/\u2026",
+      "detail": {
+        "command": "ls .venv/bin/python venv/bin/python 2>/dev/null; which python3 pytest 2>/dev/null; cat Makefile 2>/dev/null | head; grep -rn \"pytest\" ../AGENTS.md | head -3",
+        "description": "Find the Python environment for tests"
+      },
+      "toolUseId": "chatcmpl-tool-8e539c3169a19945",
+      "result": "/opt/homebrew/bin/python3\npytest not found\n../AGENTS.md:69:- Tests: backend `cd backend && pytest -q` \u00b7 frontend `cd frontend-v2 && npx tsc --noEmit && npm run test:run`.",
+      "status": "done",
+      "stats": null,
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "073e964d-f94d-4e6b-b653-dadd837aba6e",
+      "ts": "2026-10-01T11:59:13.596Z",
+      "inputTokens": 34514,
+      "outputTokens": 73,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 34514,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 73
+      }
+    },
+    {
+      "kind": "tool",
+      "uuid": "9bf953f1-d2e4-4db0-ba1e-36e7ab9b7df1",
+      "ts": "2026-10-01T11:59:19.623Z",
+      "name": "Bash",
+      "title": "$ ls /Users/op/Workspace/Projects/mission-control/backend 2>/dev/null | head; l\u2026",
+      "detail": {
+        "command": "ls /Users/op/Workspace/Projects/mission-control/backend 2>/dev/null | head; ls ~/Workspace/Projects/mission-control/backend/.venv/bin/pytest 2>/dev/null; ls .venv 2>/dev/null; git grep -n \"pytest\" ../CONTRIBUTING.md 2>/dev/null | head -5; ls ../scripts | head",
+        "description": "Locate venv with pytest"
+      },
+      "toolUseId": "chatcmpl-tool-92044cad95bfa078",
+      "result": "This Bash command contains multiple operations. The following parts require approval: ls /Users/op/Workspace/Projects/mission-control/backend, head; ls ~/Workspace/Projects/mission-control/backend/.venv/bin/pytest ; ls .venv ; git grep -n \"pytest\" ../CONTRIBUTING.md",
+      "status": "error",
+      "stats": null,
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "9bf953f1-d2e4-4db0-ba1e-36e7ab9b7df1",
+      "ts": "2026-10-01T11:59:19.623Z",
+      "inputTokens": 34643,
+      "outputTokens": 103,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 34643,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 103
+      }
+    },
+    {
+      "kind": "tool",
+      "uuid": "e4eef158-dfea-47a0-afcb-464a56b8ed8f",
+      "ts": "2026-10-01T11:59:23.805Z",
+      "name": "Bash",
+      "title": "$ ls /Users/op/Workspace/Projects/mission-control/backend/.venv/bin/ 2>/dev/nul\u2026",
+      "detail": {
+        "command": "ls /Users/op/Workspace/Projects/mission-control/backend/.venv/bin/ 2>/dev/null | grep -m3 pytest",
+        "description": "Check main checkout for a venv with pytest"
+      },
+      "toolUseId": "chatcmpl-tool-b4599808ab55e4b0",
+      "result": "This Bash command contains multiple operations. The following part requires approval: ls /Users/op/Workspace/Projects/mission-control/backend/.venv/bin/",
+      "status": "error",
+      "stats": null,
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "e4eef158-dfea-47a0-afcb-464a56b8ed8f",
+      "ts": "2026-10-01T11:59:23.805Z",
+      "inputTokens": 34814,
+      "outputTokens": 55,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 34814,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 55
+      }
+    },
+    {
+      "kind": "thinking",
+      "uuid": "aac67483-eb16-4d1b-9a5a-4a841b418e94",
+      "ts": "2026-10-01T11:59:27.175Z",
+      "text": "Sandbox is blocking some things oddly. Let me try a single simple command.",
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "aac67483-eb16-4d1b-9a5a-4a841b418e94",
+      "ts": "2026-10-01T11:59:27.175Z",
+      "inputTokens": 34905,
+      "outputTokens": 60,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 34905,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 60
+      }
+    },
+    {
+      "kind": "tool",
+      "uuid": "85455d64-c5cc-453d-952a-6fbdb3315030",
+      "ts": "2026-10-01T11:59:28.010Z",
+      "name": "Bash",
+      "title": "$ ls /Users/op/Workspace/Projects/mission-control/backend/.venv/bin/pytest",
+      "detail": {
+        "command": "ls /Users/op/Workspace/Projects/mission-control/backend/.venv/bin/pytest",
+        "description": "Check for pytest in main checkout venv"
+      },
+      "toolUseId": "chatcmpl-tool-8941d6812d2434bd",
+      "result": "ls in '/Users/op/Workspace/Projects/mission-control/backend/.venv/bin/pytest' was blocked. For security, Claude Code may only list files in the allowed working directories for this session: '/Users/op/.mc/heads/11111111-1111-4111-8111-111111111111/wt'.",
+      "status": "error",
+      "stats": null,
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "85455d64-c5cc-453d-952a-6fbdb3315030",
+      "ts": "2026-10-01T11:59:28.010Z",
+      "inputTokens": 34905,
+      "outputTokens": 60,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 34905,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 60
+      }
+    },
+    {
+      "kind": "tool",
+      "uuid": "dbd9858e-3b3e-440f-a0cb-f3b65dcd08cf",
+      "ts": "2026-10-01T11:59:32.304Z",
+      "name": "Bash",
+      "title": "$ ls -a /Users/op/.mc/heads/11111111-1111-4111-8111-111111111111/wt/backend | h\u2026",
+      "detail": {
+        "command": "ls -a /Users/op/.mc/heads/11111111-1111-4111-8111-111111111111/wt/backend | head -20",
+        "description": "List backend dir for venv"
+      },
+      "toolUseId": "chatcmpl-tool-957b986c2bafd9ee",
+      "result": ".\n..\n.gitignore\nalembic\nalembic.ini\napp\nconfig\ndocker-entrypoint.sh\nDockerfile\nopenapi.json\npyproject.toml\nrequirements.lock\nscripts\ntemplates\ntests\ntools",
+      "status": "done",
+      "stats": null,
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "dbd9858e-3b3e-440f-a0cb-f3b65dcd08cf",
+      "ts": "2026-10-01T11:59:32.304Z",
+      "inputTokens": 35048,
+      "outputTokens": 65,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 35048,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 65
+      }
+    },
+    {
+      "kind": "tool",
+      "uuid": "2b255efb-6a1f-4f2a-b577-f85d0786bba3",
+      "ts": "2026-10-01T11:59:38.007Z",
+      "name": "Bash",
+      "title": "$ ls -a /Users/op/.mc/heads/11111111-1111-4111-8111-111111111111/wt | head; fin\u2026",
+      "detail": {
+        "command": "ls -a /Users/op/.mc/heads/11111111-1111-4111-8111-111111111111/wt | head; find /Users/op/.mc/heads/11111111-1111-4111-8111-111111111111/wt -maxdepth 3 -name \"pytest\" -path \"*/bin/*\" 2>/dev/null | head",
+        "description": "Look for venvs in the worktree"
+      },
+      "toolUseId": "chatcmpl-tool-b0f0b2318f35acc2",
+      "result": ".\n..\n.dockerignore\n.env.example\n.git\n.gitattributes\n.github\n.gitignore\n.gitleaks.toml\n.impeccable",
+      "status": "done",
+      "stats": null,
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "2b255efb-6a1f-4f2a-b577-f85d0786bba3",
+      "ts": "2026-10-01T11:59:38.007Z",
+      "inputTokens": 35163,
+      "outputTokens": 126,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 35163,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 126
+      }
+    },
+    {
+      "kind": "tool",
+      "uuid": "8127ae63-df0a-46c9-b4b8-7c1e9287ddc9",
+      "ts": "2026-10-01T11:59:43.433Z",
+      "name": "Bash",
+      "title": "$ find /Users/op/.mc/heads/11111111-1111-4111-8111-111111111111/wt -maxdepth 4 \u2026",
+      "detail": {
+        "command": "find /Users/op/.mc/heads/11111111-1111-4111-8111-111111111111/wt -maxdepth 4 -name \"pytest\" -path \"*/bin/*\" 2>/dev/null; which uv pytest-3 2>/dev/null; ls /opt/homebrew/bin | grep -i pytest",
+        "description": "Search worktree and homebrew for pytest"
+      },
+      "toolUseId": "chatcmpl-tool-a09727ff2cd48aad",
+      "result": null,
+      "status": "done",
+      "stats": null,
+      "sidechain": false
+    },
+    {
+      "kind": "usage",
+      "uuid": "8127ae63-df0a-46c9-b4b8-7c1e9287ddc9",
+      "ts": "2026-10-01T11:59:43.433Z",
+      "inputTokens": 35321,
+      "outputTokens": 105,
+      "model": "GLM-5.3-Flash-EXL3",
+      "effort": "high",
+      "contextWindow": null,
+      "components": {
+        "input": 35321,
+        "cacheRead": 0,
+        "cacheCreation": 0,
+        "output": 105
+      }
+    },
+    {
+      "kind": "message",
+      "uuid": "99999999-0000-4000-8000-000000000001",
+      "ts": "2026-10-01T12:23:00Z",
+      "role": "user",
+      "text": "planted-secret check (masking test fixture, never a real credential): <redacted> and Bearer <REDACTED> and <redacted>",
+      "model": null,
+      "sidechain": false
+    }
+  ],
+  "session": {
+    "sessionId": "00000000-0000-4000-8000-000000000001",
+    "live": false,
+    "startedAt": "2026-10-01T11:53:18.119Z",
+    "aliveness": "ended"
+  },
+  "hasMore": false,
+  "subagentRuns": [],
+  "source": "transcript",
+  "reader": "claude",
+  "reason": null
+}

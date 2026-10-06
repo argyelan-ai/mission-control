@@ -795,11 +795,12 @@
       "unfoldAll": "Expand all",
       "sectionTitle": "Groups",
       "tabListLabel": "Chats view",
-      "tabAgents": "Agents",
+      "tabAgents": "All",
       "tabGroups": "Groups",
       "tabGroupsWaiting": "Groups — {count} waiting",
       "newGroup": "New group",
       "emptyList": "No groups yet — several agents, one goal.",
+      "noAgentSessions": "No agent sessions.",
       "chipWaiting": "waiting",
       "chipPaused": "paused",
       "chipDone": "done",
@@ -1027,6 +1028,14 @@
     "effortRejected": "Effort change rejected",
     "effortUnconfirmed": "Effort change not confirmed — check the terminal",
     "effortFailed": "Effort change failed",
+    "toolGroup": {
+      "commands": "{count, plural, one {# command executed} other {# commands executed}}",
+      "tools": "{count, plural, one {# tool used} other {# tools used}}",
+      "failed": "{count} failed",
+      "thoughts": "{count, plural, one {thought} other {#× thought}}",
+      "activity": "Activity",
+      "errorIncluded": "error included"
+    },
     "diff": {
       "scopeLabel": "Diff scope",
       "scopeWorktree": "Uncommitted",
@@ -3449,6 +3458,7 @@
     "onlyCreate": "Only create task",
     "startFailed": "Task created, but the head did not start: {message}",
     "started": "Head started",
+    "answered": "Answered",
     "reason": {
       "protocol_mismatch": "This harness cannot talk to this model.",
       "harness_not_supported": "This harness cannot run as a head.",
@@ -3510,6 +3520,8 @@
       "answerLabel": "Your answer",
       "answerPlaceholder": "your answer …",
       "answerContinue": "Answer & continue",
+      "supersededHint": "A newer run already answered this.",
+      "openNewerRun": "Open the newer run",
       "details": "Details",
       "openLog": "Open log",
       "hideLog": "Hide log",
@@ -3578,7 +3590,68 @@
     },
     "keepTask": "Keep task, close",
     "retryStart": "Start head again",
-    "keptHeld": "The task stays on hold in Inbox — the fleet will not pick it up."
+    "keptHeld": "The task stays on hold in Inbox — the fleet will not pick it up.",
+    "steps": {
+      "context": "Context brief",
+      "plan": "Plan",
+      "redTest": "Failing test",
+      "change": "Change",
+      "sabotage": "Sabotage check",
+      "review": "Independent review",
+      "pr": "Push / PR",
+      "runRecord": "Run record"
+    },
+    "time": {
+      "runningFor": "running for {duration}",
+      "startingNow": "starting…",
+      "ago": "{age} ago"
+    },
+    "list": {
+      "sectionTitle": "Heads",
+      "doneDivider": "Done · 7 days",
+      "archiveTitle": "Archive",
+      "close": "Close",
+      "searchPlaceholder": "Search title or pair",
+      "empty": "No older heads yet.",
+      "noResults": "No matches."
+    },
+    "chat": {
+      "backToChats": "Back to chats",
+      "noTranscriptTitle": "No live transcript for this harness",
+      "noTranscriptHint": "Showing the last log lines instead.",
+      "waitingFirstLines": "Waiting for the first transcript lines …",
+      "noTranscriptKept": "No transcript was kept for this run.",
+      "transcriptTooLarge": "Transcript too large to show.",
+      "historyLoadFailed": "Could not load the transcript.",
+      "resolving": "Loading this run…",
+      "notFoundTitle": "This run could not be found.",
+      "notFoundHint": "It may have been cleaned up, or the link is old.",
+      "footer": {
+        "step": "Step {n}/{total} · {name}",
+        "continueRun": "Continue"
+      }
+    },
+    "summary": {
+      "title": "Run record",
+      "openFull": "Open the full run record",
+      "testsLabel": "Tests",
+      "testsRedBefore": "Red before",
+      "testsGreenAfter": "Green after",
+      "sabotage": "Sabotage probe",
+      "yes": "Yes",
+      "no": "No",
+      "kz": "kz check",
+      "review": "Review",
+      "reviewHelper": "Independent reviewer",
+      "reviewSelf": "Self-review (no helper)",
+      "bypass": "Bypasses",
+      "operatorMinutes": "Your minutes",
+      "helpers": "Helpers",
+      "branch": "Branch",
+      "failed": "could not be loaded",
+      "expand": "Show more",
+      "collapse": "Show less"
+    }
   },
   "nightShift": {
     "runTonight": "Run tonight",

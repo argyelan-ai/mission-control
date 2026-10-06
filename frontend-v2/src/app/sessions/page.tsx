@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, Suspense } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, Suspense } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
@@ -23,6 +23,9 @@ import AppShell from "@/components/layout/AppShell";
 import { notify } from "@/lib/notify";
 import { useTerminalRemountSignal } from "@/hooks/useTerminalRemountSignal";
 import { rememberChat } from "@/lib/recentChats";
+import { useHeadRuns } from "@/components/heads/useHeadRuns";
+import { HeadChatPlaceholder } from "@/components/heads/HeadChatPlaceholder";
+import { newerHeadRunIdFor, sortHeadsForList, type HeadRun } from "@/lib/heads";
 
 // ── Last-selected-agent persistence ─────────────────────────────────────────
 // Same try/catch-wrapped localStorage pattern as runtimes/page.tsx's
@@ -158,6 +161,12 @@ function SessionsPageContent() {
   // Union: wer aus einer Gruppe zurück zu seinem Agenten springt, landet
   // wieder in derselben Session statt in einer leeren Seite.
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
+  // Heads in Chats (heads-sichtbar PR 2) — a third, mutually-exclusive
+  // selection NEXT TO `selected`/`selectedGroupId`, same pattern groups
+  // already use: picking a head does NOT null the other two (an agent
+  // auto-select effect below would otherwise immediately re-fire and steal
+  // the selection back the instant `selected` became null).
+  const [selectedHeadId, setSelectedHeadId] = useState<string | null>(null);
   const [createGroupOpen, setCreateGroupOpen] = useState(false);
   // Mobile (<md) stack navigation: which pane is visible. Desktop (≥md) ignores
   // this and always shows the split. Kept separate from `selected` so a
@@ -267,6 +276,67 @@ function SessionsPageContent() {
     enabled: !!activeBoardId,
   });
 
+  // Heads in Chats (heads-sichtbar PR 2) — the one shared "/heads?
+  // recent_days=" fetch (bauplan §3.2: "nie je Zeile abfragen"); `null`
+  // while the launcher is off or the probe hasn't resolved yet, same as
+  // every other heads consumer.
+  const { runs: headRuns, archivedCount: headArchivedCount, isLoading: headRunsLoading } = useHeadRuns();
+  const sortedHeadRuns = useMemo(() => sortHeadsForList(headRuns), [headRuns]);
+  // The SELECTED head's own full record: usually already in `headRuns`
+  // (most runs are inside the 7-day window), but a run opened from the
+  // Archive sheet is not — this one-off fetch covers exactly that case
+  // without a second poll for the common one.
+  const headFromRecent = selectedHeadId ? headRuns.find((r) => r.run_id === selectedHeadId) ?? null : null;
+  const {
+    data: headFetched = null,
+    isLoading: headFetchedLoading,
+  } = useQuery({
+    queryKey: ["heads", selectedHeadId],
+    queryFn: () => api.heads.get(selectedHeadId as string),
+    enabled: !!selectedHeadId && !headFromRecent,
+    staleTime: 30_000,
+    // A 404 (deleted/cleaned-up run, or a stale `?head=` link) is a real
+    // answer, not a transient failure — retrying would only delay the
+    // "not found" state below, never fix it.
+    retry: false,
+  });
+  const selectedHeadRun: HeadRun | null = headFromRecent ?? headFetched;
+  // `selectedHeadId` is set (by `handleSelectHead`/the `?head=` deep-link
+  // effect below) BEFORE `selectedHeadRun` resolves, in two real cases: the
+  // Archive sheet's own row tap (an archived run is never in `headRuns`)
+  // and every `?head=` link (the recent list has not loaded on page load
+  // yet). Rendering `ChatView` with `head={null}` during that gap used to
+  // fall straight into its generic "pick a session" copy — chromeless, no
+  // header, no back chevron, on the phone — and, before `ChatView`'s own
+  // hooks-order fix, crash outright the moment the real run arrived a tick
+  // later on the SAME mounted instance (review finding on PR #756). These
+  // two flags swap in `HeadChatPlaceholder` for that gap instead.
+  const headStillResolving =
+    !!selectedHeadId && !selectedHeadRun && (headRunsLoading || (!headFromRecent && headFetchedLoading));
+  const headNotFound = !!selectedHeadId && !selectedHeadRun && !headStillResolving;
+
+  // The "open the newer run" link in a superseded `needs_you` footer
+  // (review finding on PR #756 round 4) needs the FULL run history for
+  // this one task, not just the 7-day `headRuns` window: a `needs_you` run
+  // opened from the Archive sheet can be old enough that both it and its
+  // successor have long since aged out of `headRuns` entirely. A plain
+  // `GET /heads?task_id=` (no `recent_days`) is the one call that returns
+  // every run for a task regardless of age — enabled only while it could
+  // matter (the selected run is actually `needs_you`), and cheap: one task's
+  // worth of runs, not the whole fleet.
+  const needsYouTaskId = selectedHeadRun?.state === "needs_you" ? selectedHeadRun.task_id : null;
+  const { data: taskRunHistory } = useQuery({
+    queryKey: ["heads", "runs", "by-task", needsYouTaskId],
+    queryFn: () => api.heads.list({ taskId: needsYouTaskId as string }),
+    enabled: !!needsYouTaskId,
+    staleTime: 30_000,
+  });
+  const newerHeadRunId = useMemo(() => {
+    if (!selectedHeadRun || selectedHeadRun.state !== "needs_you") return null;
+    const candidates = taskRunHistory?.runs ?? headRuns;
+    return newerHeadRunIdFor(selectedHeadRun, candidates);
+  }, [selectedHeadRun, taskRunHistory, headRuns]);
+
   const agents: AgentWithState[] = [...dockerAgents, ...hostAgents];
 
   // `selected` is a SNAPSHOT taken when the row was clicked — it never updates,
@@ -321,7 +391,8 @@ function SessionsPageContent() {
   useEffect(() => {
     const agentParam = searchParams.get("agent");
     const groupParam = searchParams.get("group");
-    const key = agentParam ? `agent:${agentParam}` : groupParam ? `group:${groupParam}` : null;
+    const headParam = searchParams.get("head");
+    const key = agentParam ? `agent:${agentParam}` : groupParam ? `group:${groupParam}` : headParam ? `head:${headParam}` : null;
     if (!key) {
       // The URL no longer names a chat (back to the list clears it), so the
       // next link to the SAME chat must open it again.
@@ -335,28 +406,41 @@ function SessionsPageContent() {
       handledParam.current = key;
       setSelected(agent);
       setSelectedGroupId(null);
+      setSelectedHeadId(null);
       setMobileView("chat");
       rememberChat({ kind: "agent", id: agent.id });
     } else if (groupParam) {
       if (!groups.some((g) => g.id === groupParam)) return;
       handledParam.current = key;
       setSelectedGroupId(groupParam);
+      setSelectedHeadId(null);
       setMobileView("chat");
       rememberChat({ kind: "group", id: groupParam });
+    } else if (headParam) {
+      // Unlike the agent/group branches above, a head deep link does not
+      // wait for its own list to load first (`?head=` can point at a run
+      // the 7-day window has never carried, e.g. a link from the Archive
+      // sheet or an older inbox/task-detail row) — `handleSelectHead` below
+      // asks for that one run directly, same as `selectedHeadRun`'s own
+      // fallback query above.
+      handledParam.current = key;
+      setSelectedHeadId(headParam);
+      setMobileView("chat");
     }
   }, [searchParams, agents, groups]);
 
-  // Back to the list on the phone. Also drops ?agent= / ?group= from the URL:
-  // with the chat still named there, a "continue a chat" chip or the Chats
-  // tab pointing at the same chat changed nothing and the phone stayed on the
-  // list (live 02.10.2026). replaceState: no new history entry.
+  // Back to the list on the phone. Also drops ?agent= / ?group= / ?head=
+  // from the URL: with the chat still named there, a "continue a chat" chip
+  // or the Chats tab pointing at the same chat changed nothing and the
+  // phone stayed on the list (live 02.10.2026). replaceState: no new
+  // history entry.
   // router.replace, not window.history: Next keeps its own copy of the
   // search params — a native replaceState changed the address bar but not
   // what useSearchParams/<Link> see, so the next chip to the same chat was
   // still a no-op (live re-test 02.10.2026).
   const backToList = useCallback(() => {
     setMobileView("list");
-    if (searchParams.get("agent") || searchParams.get("group")) {
+    if (searchParams.get("agent") || searchParams.get("group") || searchParams.get("head")) {
       router.replace(pathname, { scroll: false });
     }
   }, [router, pathname, searchParams]);
@@ -381,6 +465,7 @@ function SessionsPageContent() {
     if (!agent) return;
     setSelected(agent);
     setSelectedGroupId(null);
+    setSelectedHeadId(null);
     saveLastGroupId(null);
     setMobileView("chat");
     rememberChat({ kind: "agent", id: agent.id });
@@ -391,10 +476,23 @@ function SessionsPageContent() {
 
   function handleSelectGroup(groupId: string) {
     setSelectedGroupId(groupId);
+    setSelectedHeadId(null);
     saveLastGroupId(groupId);
     setMobileView("chat");
     rememberChat({ kind: "group", id: groupId });
     if (activePanel === "diff" || activePanel === "browser") setActivePanel(null);
+  }
+
+  // Heads in Chats (heads-sichtbar PR 2) — `selected`/`selectedGroupId`
+  // stay whatever they were (same reasoning as `handleSelectGroup`'s own
+  // choice not to touch `selected`): nulling them here would hand control
+  // straight back to the auto-select effect above. No `rememberChat` — a
+  // head run is not "the last chat" the way an agent/group is, it comes
+  // and goes within the 7-day window on its own.
+  function handleSelectHead(runId: string) {
+    setSelectedHeadId(runId);
+    setMobileView("chat");
+    if (activePanel) setActivePanel(null);
   }
 
   // Gruppen-Deep-Link (?group=<id>) und zuletzt geöffnete Gruppe. Der
@@ -450,7 +548,7 @@ function SessionsPageContent() {
   // list + chat side by side, so every branch below resolves via `md:` classes.
   // Auch eine Gruppe ist ein „Chat-Bildschirm" im Handy-Stapel — sonst
   // tippt man eine Gruppe an und landet wieder in der Liste.
-  const onChatScreen = mobileView === "chat" && (!!selectedLive || !!selectedGroupId);
+  const onChatScreen = mobileView === "chat" && (!!selectedLive || !!selectedGroupId || !!selectedHeadId);
   const selectedTaskTitle = selectedLive?.current_task_id
     ? tasks.find((task) => task.id === selectedLive.current_task_id)?.title ?? null
     : null;
@@ -508,7 +606,7 @@ function SessionsPageContent() {
               agents={agents}
               tasks={tasks}
               projects={projects}
-              selectedId={selectedGroupId ? null : selectedLive?.id ?? null}
+              selectedId={selectedGroupId || selectedHeadId ? null : selectedLive?.id ?? null}
               onSelect={handleSelect}
               groups={activeGroups}
               selectedGroupId={selectedGroupId}
@@ -518,6 +616,10 @@ function SessionsPageContent() {
               onUnarchiveGroup={handleUnarchiveGroup}
               variant="list"
               hasTranscript={(id) => agentHasTranscript(agents.find((a) => a.id === id))}
+              heads={sortedHeadRuns}
+              archivedCount={headArchivedCount}
+              onSelectHead={handleSelectHead}
+              selectedHeadId={selectedHeadId}
             />
           </div>
           {/* `hidden md:flex` already gates this to desktop-only — the island
@@ -543,7 +645,7 @@ function SessionsPageContent() {
               agents={agents}
               tasks={tasks}
               projects={projects}
-              selectedId={selectedGroupId ? null : selectedLive?.id ?? null}
+              selectedId={selectedGroupId || selectedHeadId ? null : selectedLive?.id ?? null}
               onSelect={handleSelect}
               groups={activeGroups}
               selectedGroupId={selectedGroupId}
@@ -555,6 +657,10 @@ function SessionsPageContent() {
               hasTranscript={(id) => agentHasTranscript(agents.find((a) => a.id === id))}
               collapsed={sidebarCollapsed}
               onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
+              heads={sortedHeadRuns}
+              archivedCount={headArchivedCount}
+              onSelectHead={handleSelectHead}
+              selectedHeadId={selectedHeadId}
             />
           </div>
 
@@ -579,7 +685,31 @@ function SessionsPageContent() {
             style={{ background: C.bgSurface }}
             data-testid="chat-column"
           >
-            {selectedGroupId && selectedGroup ? (
+            {selectedHeadId ? (
+              headStillResolving ? (
+                <HeadChatPlaceholder key={selectedHeadId} variant="loading" onBack={backToList} />
+              ) : headNotFound ? (
+                <HeadChatPlaceholder key={selectedHeadId} variant="not_found" onBack={backToList} />
+              ) : (
+                // Head chat — read-only (ADR-085 Nachtrag 2026-10-04 §4).
+                // `key` on the run id, same reasoning as the agent branch
+                // below: a different run is a different transcript, never a
+                // seamless continuation of the one on screen.
+                <ChatView
+                  key={selectedHeadId}
+                  agent={null}
+                  head={selectedHeadRun}
+                  hasTranscript
+                  detailLevel={detailLevel}
+                  onDetailLevelChange={setDetailLevel}
+                  centerView="chat"
+                  onCenterViewChange={() => {}}
+                  onBack={backToList}
+                  newerHeadRunId={newerHeadRunId}
+                  onSelectHeadRun={handleSelectHead}
+                />
+              )
+            ) : selectedGroupId && selectedGroup ? (
               // Gruppenraum statt 1:1-Chat — gleiche Insel, andere Ansicht.
               // `key` auf der Gruppen-id, damit ein Wechsel den Strom sauber
               // neu aufbaut (gleiche Begründung wie beim Agenten unten).
@@ -628,7 +758,10 @@ function SessionsPageContent() {
               und sie stand als loser Balken zwischen Chat und Panel
               (Operator-Befund 22.08.2026). Für Agenten bleibt sie: dort führt
               sie zu Diff UND Browser, also trägt sie eine echte Wahl. */}
-          {!selectedGroupId && (
+          {/* A head has neither a Diff nor a Browser panel either (ADR-085
+              Nachtrag §4: files only) — same reasoning as the group case
+              right above. */}
+          {!selectedGroupId && !selectedHeadId && (
             <PanelRail
               active={activePanel}
               onSelect={setActivePanel}

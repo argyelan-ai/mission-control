@@ -52,6 +52,20 @@ function circleOf(label: string): HTMLElement {
 }
 
 vi.mock("@/hooks/useChatStream", () => ({ useChatStream: vi.fn() }));
+// Heads-in-Chats (PR 2) branch: no test in this file passes a `head` prop
+// (that's ChatView.head.test.tsx's job), but every render still calls this
+// hook unconditionally (rules of hooks) — mocked the same way
+// `useChatStream` is, so these agent-only tests keep running without a
+// QueryClientProvider they were never written to need.
+vi.mock("@/hooks/useHeadTranscript", () => ({
+  useHeadTranscript: vi.fn(() => ({
+    events: [], subagentRuns: [], state: null, usage: null, session: null, hasMore: false,
+    connected: false, loading: false, error: null, capabilities: null, pendingEchoes: [],
+    echoSent: vi.fn(), echoFailed: vi.fn(), echoAgentStarting: vi.fn(), withdrawQueued: vi.fn(() => []),
+    awaitingResponse: false, preview: null,
+  })),
+  useHeadTranscriptMeta: vi.fn(() => ({ source: null, reader: null, reason: null })),
+}));
 vi.mock("@/lib/api", () => ({
   api: {
     chat: {
@@ -595,7 +609,12 @@ describe("ChatView", () => {
     renderChatView({ detailLevel: "normal" });
 
     // The wall of rows is gone by default — one summary chip stands in for it.
-    const chip = screen.getByRole("button", { name: /1 Tool verwendet, nachgedacht/ });
+    // The chip's own label comes from `toolGroupLabel` (ToolGroup.test.tsx
+    // owns its exact EN/DE wording); the global test mock here does not
+    // emulate ICU plurals, so this only checks the key resolved, in English
+    // (review finding on PR #756 round 3: this used to be hardcoded German).
+    const chip = screen.getByRole("button", { name: /tool used/ });
+    expect(chip).toHaveTextContent(/thought/);
     expect(screen.queryByText("Read foo.py")).not.toBeInTheDocument();
     expect(screen.queryByText("Denkt nach…")).not.toBeInTheDocument();
 

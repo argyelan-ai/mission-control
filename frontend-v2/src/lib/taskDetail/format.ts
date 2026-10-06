@@ -54,6 +54,41 @@ export function formatAge(
   return s == null ? null : formatDuration(Math.max(0, s), locale);
 }
 
+/** Age of a timestamp as a SINGLE rounded unit ("3 d", "5 h", "12 min"),
+ *  never `formatAge`'s floor-based two-unit combo ("2 d 23 h"). K10's fixed
+ *  relative-time forms ("vor 3 Tagen"/"3 d ago") name one rounded unit —
+ *  right for "how long ago did this end"; `formatAge`/`formatDuration` keep
+ *  their existing floored, up-to-two-unit shape for everything that already
+ *  calls them (a running duration reads naturally as "3 d 2 h left/so
+ *  far" — rounding that one would overstate it). Review finding on
+ *  PR #756: the ended-head row used `formatAge` and so showed "2 d 23 h
+ *  ago" instead of the bauplan's "vor 3 Tagen" form. */
+export function formatAgeRounded(
+  ts: string | null | undefined,
+  locale: string = "en",
+  now: Date = new Date(),
+): string | null {
+  const s = secondsBetween(ts, null, now);
+  if (s == null) return null;
+  const total = Math.max(0, s);
+  if (total >= 86400) {
+    const n = Math.round(total / 86400);
+    // This value only ever feeds `heads.time.ago` → "vor {age}" (German) —
+    // a dative context, where `formatDuration`'s compact "T" abbreviation
+    // (correct for a standalone duration like "3 T 2 h") reads as a typo
+    // next to a real word. K10's own example is "seit 5 Tagen"; the
+    // "vor …" sentence needs the same full, correctly declined word
+    // (review finding on PR #756 round 3: "vor 3 T" instead of "vor 3
+    // Tagen"). Dative singular of "Tag" has no "-en" suffix, unlike the
+    // plural — "vor 1 Tag", not "vor 1 Tagen".
+    if (locale === "de") return n === 1 ? "1 Tag" : `${n} Tagen`;
+    return `${n} ${DAY_UNIT.en}`;
+  }
+  if (total >= 3600) return `${Math.round(total / 3600)} h`;
+  if (total >= 60) return `${Math.round(total / 60)} min`;
+  return `${total} s`;
+}
+
 export function formatUsd(amount: number): string {
   if (amount > 0 && amount < 0.005) return "<$0.01";
   return `$${amount.toFixed(2)}`;

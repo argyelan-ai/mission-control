@@ -104,6 +104,19 @@ export function isHeadActive(run: Pick<HeadRun, "state"> | null | undefined): bo
   return !!run && HEAD_ACTIVE_STATES.has(run.state);
 }
 
+/** The three states that actually wrote a result — `needs_you` is a FINAL
+ *  state in the backend's own `state.py` (it carries an `exited_at`), but
+ *  it is NOT "done": the operator is still blocked on it. Used to gate the
+ *  run-record card, which must show only once a run has actually ended
+ *  with a result (review finding on PR #756 round 4: the card's own guard,
+ *  `!isHeadActive(head)`, let it through for `needs_you` too, since that
+ *  state is simply not in `HEAD_ACTIVE_STATES` either). */
+const HEAD_DONE_STATES: ReadonlySet<HeadState> = new Set<HeadState>(["passed", "failed", "stopped"]);
+
+export function isHeadDone(run: Pick<HeadRun, "state"> | null | undefined): boolean {
+  return !!run && HEAD_DONE_STATES.has(run.state);
+}
+
 export function pairKey(p: { harness: string | null; runtime_slug: string | null }): string {
   return `${p.harness ?? ""}::${p.runtime_slug ?? ""}`;
 }
@@ -192,6 +205,20 @@ export function pairReasonKey(code: string | null | undefined): string {
 /** State word for a run — `heads.state.<state>`. */
 export function headStateKey(state: HeadState): string {
   return `state.${state}`;
+}
+
+/** Lowercases a resolved state word's first letter, for embedding mid-
+ *  sentence after a "·" separator in `HeadChatRow`/`HeadChatHeader`'s
+ *  context line. `heads.state.*` is sentence case ("Passed", "Needs you",
+ *  German "Bestanden", "Braucht dich") because other surfaces show the SAME
+ *  word standalone, as a badge (`HeadStateCard`, `HeadRunsList`, the
+ *  night-shift list) — correct there. Embedded next to the running row's
+ *  own lowercase phrase ("läuft seit …"/"running for …"), the sentence-case
+ *  word read as inconsistently capitalised (review finding on PR #756
+ *  round 3: "· Bestanden ·", "· Braucht dich"). Only the mid-line USE
+ *  lowercases; the i18n value and every other reader of it are untouched. */
+export function midLineStateWord(word: string): string {
+  return word.length > 0 ? word.charAt(0).toLowerCase() + word.slice(1) : word;
 }
 
 /** One sentence for why a run ended as failed/stopped — `heads.failReason.<code>`. */
@@ -408,4 +435,248 @@ export function chooseRestartPair(
 export function headRunsActive(data: { runs?: HeadRun[] } | undefined | null): boolean {
   const runs = Array.isArray(data?.runs) ? data!.runs : [];
   return isHeadActive(sortRunsNewestFirst(runs)[0]);
+}
+
+// ── Transport shapes (heads-sichtbar PR 2) ──────────────────────────────────
+//
+// `GET /heads/{run_id}/chat/history` (backend `services/heads/transcript.py`
+// — see its module docstring for the full contract) answers in the SAME
+// shape an agent's `GET /agents/{id}/chat/history` does
+// (`chatTypes.ChatHistoryResponse`), plus three fields an agent's own
+// endpoint has no use for: `source`/`reader`/`reason` say WHY there is (or
+// is not) a transcript at all. Declared here, not in `chatTypes.ts`, because
+// nothing about an agent's chat ever needs them.
+
+export type HeadTranscriptSource = "transcript" | "none";
+export type HeadTranscriptReader = "claude" | "omp" | null;
+export type HeadTranscriptReason = "no_reader" | "not_yet" | "no_transcript" | "too_large" | null;
+
+export interface HeadChatHistoryResponse {
+  events: import("./chatTypes").ChatEvent[];
+  session: import("./chatTypes").ChatSession;
+  hasMore: boolean;
+  subagentRuns: import("./chatTypes").SubagentRun[];
+  source: HeadTranscriptSource;
+  reader: HeadTranscriptReader;
+  reason: HeadTranscriptReason;
+}
+
+/** `GET /heads/{run_id}/summary` (backend `services/heads/summary.py`'s own
+ *  docstring has the field-by-field contract) — every field but `run_id`/
+ *  `branch`/`pr_url` can legitimately be `null`: the run record simply never
+ *  recorded that fact, which is not an error. */
+export interface HeadSummary {
+  run_id: string;
+  status: "running" | "passed" | "failed" | null;
+  result_line: string | null;
+  tests: { failed_before: string | null; passed_after: string | null };
+  sabotage: boolean | null;
+  kz_ok: boolean | null;
+  review: "helper" | "self" | null;
+  bypass: number | null;
+  operator_minutes: number | null;
+  helpers: number | null;
+  branch: string | null;
+  pr_url: string | null;
+}
+
+/** `GET /heads` with `recent_days`/`archived` — see `routers/heads.py`'s own
+ *  docstring on `list_heads` for the exact boundary rule. `archived_count`
+ *  is only present on the `recent_days` call, never on a plain or an
+ *  `archived=true` one — callers must not assume it is always there. */
+export interface HeadListResponse {
+  runs: HeadRun[];
+  archived_count?: number;
+}
+
+// ── Heads in Chats (heads-sichtbar PR 2) ────────────────────────────────────
+//
+// Everything below is new frontend-only model for "Heads" as a section in
+// the Chats list and its own read-only chat view — nothing here changes the
+// shape the backend already returns (`/heads`, `/heads/{id}/summary`).
+
+/** "GLM-5.3-Flash-EXL3" → "GLM-5.3": the chat list has no room for a
+ *  quantisation/variant tag the operator did not ask about (K4/K5) — the
+ *  pair is already named in full on the task's own properties page. Strips
+ *  known variant/quant suffixes off the END, one at a time, so a model
+ *  carrying several of them ("-Flash-EXL3") loses all of them, not just
+ *  the last. A model with none of these suffixes (or `null`) passes
+ *  through unchanged — this never invents a shorter name, only removes
+ *  recognised noise. */
+const MODEL_VARIANT_SUFFIX =
+  /-(Flash|Turbo|Mini|Nano|Preview|Instruct|Chat|Base|EXL2|EXL3|GGUF|AWQ|GPTQ|NVFP4|FP8|FP16|INT4|INT8|exp)$/i;
+
+export function modelFamily(model: string | null | undefined): string {
+  if (!model) return "—";
+  let out = model;
+  for (let guard = 0; guard < 6; guard++) {
+    const next = out.replace(MODEL_VARIANT_SUFFIX, "");
+    if (next === out) break;
+    out = next;
+  }
+  return out || model;
+}
+
+/** "omp × GLM-5.3" (the operator's word for the pair, ADR-086 §5) — the SHORT form
+ *  for a list row or a chat header, where `pairLabel`'s "harness · full
+ *  runtime name" would not fit. Deliberately a separate function rather
+ *  than changing `pairLabel`'s own separator or shortening: that change is
+ *  PR 3's (bauplan §4, `pairLabel() Trenner "·" → "×"`), and touches every
+ *  existing `pairLabel` caller/test — this one is additive and touches
+ *  none of them. */
+export function pairShort(run: Pick<HeadRun, "harness" | "model">): string {
+  return `${harnessLabel(run.harness)} × ${modelFamily(run.model)}`;
+}
+
+/** The task title, as the Chats list shows it: a leading bracket tag
+ *  (`"[fixture] scrubbed head run…"`, `"[night] …"`) is operator/tooling
+ *  bookkeeping, not what the head is doing — K3 ("jede Angabe genau
+ *  einmal"), the tag means nothing extra to someone scanning the list.
+ *  More than one leading tag is stripped in one pass. A title that is
+ *  NOTHING but tags (empty after stripping) falls back to the original,
+ *  trimmed — never an empty list row. */
+export function headListTitle(run: Pick<HeadRun, "title">): string {
+  const raw = (run.title ?? "").trim();
+  const stripped = raw.replace(/^(\[[^\]]*\]\s*)+/, "").trim();
+  return stripped || raw;
+}
+
+/** "5/7 independent review · waiting for: reviewer" (the exact line
+ *  `scripts/head/mc-head`'s wrapper asks the head to write, `step.txt`,
+ *  with or without the leading "step " word some writers include) →
+ *  `{n, total, name, waitingFor}`. `null` for anything that does not match
+ *  that shape — an older/garbled `step.txt` must never be guessed at, it
+ *  just renders as "no step reported yet" (existing `card.noStep` key),
+ *  same contract `headStateKey`/`failReasonKey` already follow.
+ *
+ *  Two parts of the line are optional in practice (review finding on
+ *  PR #756, live-checked against every real `step.txt` on disk — 3 of 24
+ *  did not parse before this): the `/total` half ("step 7 finished ·
+ *  waiting for: nothing" — `total` then defaults to 7, the fixed step
+ *  count) and the literal "waiting for: …" clause itself ("step 7/7 done ·
+ *  run record written" — a different trailing clause after the same "·"
+ *  separator; `waitingFor` is `null` then). The "·" separator itself stays
+ *  REQUIRED: that is what still rejects genuinely truncated input (e.g. a
+ *  step line caught mid-write, before its trailing clause was flushed) —
+ *  `"4/7 sabotage probe"` has no "·" anywhere and correctly stays `null`. */
+export interface ParsedStep {
+  n: number;
+  total: number;
+  name: string;
+  waitingFor: string | null;
+}
+
+const STEP_RE = /^(?:step\s+)?(\d+)(?:\s*\/\s*(\d+))?\s+(.+?)\s*·\s*(?:waiting for:\s*(.+?)|.+?)\s*$/i;
+
+export function parseStep(step: string | null | undefined): ParsedStep | null {
+  if (!step) return null;
+  const m = STEP_RE.exec(step.trim());
+  if (!m) return null;
+  return {
+    n: Number(m[1]),
+    total: m[2] ? Number(m[2]) : 7,
+    name: m[3].trim(),
+    waitingFor: m[4] ? m[4].trim() : null,
+  };
+}
+
+/** The 8 fixed steps of the head procedure (`~/.claude/skills/
+ *  head-procedure`, `backend/templates/heads/head-AGENTS.md` §Workflow,
+ *  0-indexed) — MC can translate the step NAME because every head follows
+ *  the same 8, unlike `parseStep`'s free-text `name`/`waitingFor` (what the
+ *  head itself wrote, shown as-is). Index = the parsed step's `n`. The i18n
+ *  key is `heads.steps.<value>`. */
+export const HEAD_STEP_KEYS = [
+  "context", // 0 — context brief (kz brief), create the run record
+  "plan", // 1 — plan
+  "redTest", // 2 — failing test first
+  "change", // 3 — implement
+  "sabotage", // 4 — sabotage check
+  "review", // 5 — independent review
+  "pr", // 6 — push, open the pull request
+  "runRecord", // 7 — finish the run record
+] as const;
+
+export function headStepKey(n: number): string | null {
+  const key = HEAD_STEP_KEYS[n];
+  return key ? `steps.${key}` : null;
+}
+
+/** List order inside the "Heads" section (bauplan §3.2 `SessionSidebar`):
+ *  needs-you first (the operator is blocked on it), then active (running
+ *  or still starting), then every ended run — newest end first, same
+ *  "most recent first" rule the Archive sheet already uses
+ *  (`sortRunsNewestFirst`). Stable within a group: ties keep their
+ *  original relative order rather than reshuffling on every re-render. */
+const LIST_GROUP: Record<HeadState, 0 | 1 | 2> = {
+  needs_you: 0,
+  running: 1,
+  starting: 1,
+  passed: 2,
+  failed: 2,
+  stopped: 2,
+};
+
+/**
+ * A `needs_you` run that a LATER run on the same task has superseded — the
+ * operator answered it (a "continue" restart) or a second one was launched
+ * — mirrors `routers/heads.py::_is_superseded_needs_you` on the backend,
+ * kept in sync deliberately: `question.md` never changes once the head has
+ * moved on, so nothing about the run's OWN `state` field ever turns back
+ * from `needs_you` on its own (review finding on PR #756 round 4: an
+ * answered `needs_you` stayed pinned at the top of the Chats "Heads"
+ * section forever, its footer still offering "Answer & continue"). "Newest
+ * for its task" is the SAME rule `openHeadQuestions` (lib/inbox.ts) already
+ * uses for the Inbox's own open-question count.
+ */
+export function supersededNeedsYouIds(runs: HeadRun[]): ReadonlySet<string> {
+  const latestRunIdByTask = new Map<string, string>();
+  const latestCreatedByTask = new Map<string, string>();
+  const restartedFromIds = new Set<string>();
+  for (const r of runs) {
+    if (r.restarted_from) restartedFromIds.add(r.restarted_from);
+    if (!r.task_id) continue;
+    const created = r.created_at ?? "";
+    if (created > (latestCreatedByTask.get(r.task_id) ?? "")) {
+      latestCreatedByTask.set(r.task_id, created);
+      latestRunIdByTask.set(r.task_id, r.run_id);
+    }
+  }
+  const out = new Set<string>();
+  for (const r of runs) {
+    if (r.state !== "needs_you") continue;
+    const superseded = restartedFromIds.has(r.run_id) || (!!r.task_id && latestRunIdByTask.get(r.task_id) !== r.run_id);
+    if (superseded) out.add(r.run_id);
+  }
+  return out;
+}
+
+/** The run that superseded a given `needs_you` run (for "open the newer
+ *  run" in `HeadChatFooter`) — the run naming it as `restarted_from`, or
+ *  else the newest OTHER run on the same task. `null` when `run` is not
+ *  superseded (nothing to link to) or genuinely orphaned. */
+export function newerHeadRunIdFor(run: Pick<HeadRun, "run_id" | "task_id">, runs: HeadRun[]): string | null {
+  const direct = runs.find((r) => r.restarted_from === run.run_id);
+  if (direct) return direct.run_id;
+  if (!run.task_id) return null;
+  const siblings = runs.filter((r) => r.task_id === run.task_id && r.run_id !== run.run_id);
+  return sortRunsNewestFirst(siblings)[0]?.run_id ?? null;
+}
+
+export function sortHeadsForList(runs: HeadRun[]): HeadRun[] {
+  const superseded = supersededNeedsYouIds(runs);
+  const group = (r: HeadRun) => (superseded.has(r.run_id) ? 2 : LIST_GROUP[r.state]);
+  return runs
+    .map((r, i) => ({ r, i }))
+    .sort((a, b) => {
+      const groupDiff = group(a.r) - group(b.r);
+      if (groupDiff !== 0) return groupDiff;
+      if (group(a.r) === 2) {
+        const endA = ts(a.r.exited_at) ?? ts(a.r.created_at) ?? 0;
+        const endB = ts(b.r.exited_at) ?? ts(b.r.created_at) ?? 0;
+        if (endA !== endB) return endB - endA;
+      }
+      return a.i - b.i;
+    })
+    .map(({ r }) => r);
 }

@@ -16,9 +16,9 @@
  * Defaults to "everyone has a transcript" so the sidebar renders sensibly
  * standalone.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
-import { ChevronDown, ChevronLeft, ChevronRight, Plus } from "lucide-react";
+import { Archive, ChevronDown, ChevronLeft, ChevronRight, Plus } from "lucide-react";
 import { C } from "@/lib/colors";
 import { StatusDot } from "@/components/shared/StatusDot";
 import { EntityIcon } from "@/components/shared/EntityIcon";
@@ -26,6 +26,9 @@ import { GroupRow } from "@/components/groupchat/GroupRow";
 import { ArchivedGroupsSection } from "@/components/groupchat/ArchivedGroupsSection";
 import { AvatarStack } from "@/components/groupchat/AvatarStack";
 import { sortGroups, type GroupSummary } from "@/lib/groupTypes";
+import { HeadChatRow } from "@/components/heads/HeadChatRow";
+import { HeadArchiveSheet } from "@/components/heads/HeadArchiveSheet";
+import { supersededNeedsYouIds, type HeadRun } from "@/lib/heads";
 import type { Agent, AgentStatus, Task, Project } from "@/lib/types";
 
 // Umschalter Agents · Groups (Marks Wunsch 11.09.: Gruppen standardmässig
@@ -46,6 +49,7 @@ function saveSidebarMode(mode: SidebarMode) {
 
 const ADHOC_KEY = "__adhoc__";
 const ADHOC_LABEL = "Ad-hoc";
+const EMPTY_SUPERSEDED: ReadonlySet<string> = new Set();
 
 type DotStatus = "online" | "warning" | "error" | "busy" | "idle" | "offline";
 
@@ -131,6 +135,19 @@ interface SessionSidebarProps {
   /** Presence of this prop is also what shows the collapse/expand chevron —
    *  omit it to render the rail without one (backward compatible). */
   onToggleCollapse?: () => void;
+  /** Heads in Chats (heads-sichtbar PR 2, bauplan §3.2) — a "Heads" section
+   *  ABOVE the agents: active ones (needs-you/running/starting) first, a
+   *  "Done · 7 days" divider, then ended ones inside the window. Already
+   *  sorted by the caller (`sortHeadsForList`) — this component only
+   *  decides WHERE the divider goes. All four head props are optional and
+   *  go together: omitting `onSelectHead` hides the whole section
+   *  (backward compatible, and the one way to turn it off without a
+   *  separate boolean — `heads_enabled=false` upstream already means the
+   *  caller never passes any of this). */
+  heads?: HeadRun[];
+  archivedCount?: number;
+  onSelectHead?: (runId: string) => void;
+  selectedHeadId?: string | null;
 }
 
 export function SessionSidebar({
@@ -149,9 +166,31 @@ export function SessionSidebar({
   hasTranscript = () => true,
   collapsed = false,
   onToggleCollapse,
+  heads,
+  archivedCount = 0,
+  onSelectHead,
+  selectedHeadId = null,
 }: SessionSidebarProps) {
   const t = useTranslations("sessions.groups");
+  const th = useTranslations("heads");
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [headArchiveOpen, setHeadArchiveOpen] = useState(false);
+  const showHeads = !!onSelectHead && ((heads?.length ?? 0) > 0 || archivedCount > 0);
+  // A needs_you run the caller's `sortHeadsForList` already sorted into the
+  // ended group (a later run on the same task superseded it — review
+  // finding on PR #756 round 4) keeps its own `state` field "needs_you"
+  // regardless; this is the same check `sortHeadsForList` used to decide
+  // that placement, read again here so the row itself renders as answered/
+  // ended (not the pulsing "needs you") and the divider below still lands
+  // in the right spot for it.
+  const supersededHeadIds = useMemo(() => (heads ? supersededNeedsYouIds(heads) : EMPTY_SUPERSEDED), [heads]);
+  // Where the "Done · 7 days" divider goes — right before the first ended
+  // run. `heads` is already sorted by the caller (needs_you → running/
+  // starting → ended, newest-end-first within that last group), so this is
+  // just "which index first fails the active test", never a re-sort here.
+  const firstDoneIndex = heads
+    ? heads.findIndex((r) => r.state === "passed" || r.state === "failed" || r.state === "stopped" || supersededHeadIds.has(r.run_id))
+    : -1;
   const groups = buildGroups(agents, tasks, projects);
   const selectedAgent = agents.find((a) => a.id === selectedId) ?? null;
   const showGroupSection = !!onSelectGroup;
@@ -271,9 +310,68 @@ export function SessionSidebar({
     <div role="listbox" aria-label="Sessions" className="flex flex-col gap-3">
       {modeSwitch}
       {groupSection}
+      {!showGroups && showHeads && (
+        <div data-testid="heads-section">
+          <div className={`label-sys pb-1 truncate ${stack ? "px-4" : "px-3"}`} style={{ color: C.textMuted }}>
+            {th("list.sectionTitle")}
+          </div>
+          <div className="flex flex-col">
+            {(heads ?? []).map((run, i) => (
+              <div key={run.run_id}>
+                {i === firstDoneIndex && i > 0 && (
+                  // `textDim` is decoration/inactive-icon only, never body
+                  // text (its own comment in colors.ts) — this divider's
+                  // label IS readable text (review finding on PR #756
+                  // round 3), so it takes `textMuted` like the section
+                  // title right above it.
+                  <div
+                    className={`label-sys pt-2 pb-1 truncate ${stack ? "px-4" : "px-3"}`}
+                    style={{ color: C.textMuted }}
+                    data-testid="heads-done-divider"
+                  >
+                    {th("list.doneDivider")}
+                  </div>
+                )}
+                <HeadChatRow
+                  run={run}
+                  variant={stack ? "list" : "rail"}
+                  selected={run.run_id === selectedHeadId}
+                  onSelect={onSelectHead!}
+                  superseded={supersededHeadIds.has(run.run_id)}
+                />
+              </div>
+            ))}
+          </div>
+          {archivedCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setHeadArchiveOpen(true)}
+              data-testid="heads-archive-button"
+              className={`flex items-center gap-2 w-full text-left cursor-pointer transition-colors ${
+                stack ? "px-4 min-h-[44px]" : "px-3 py-2 rounded-md"
+              }`}
+              style={{ color: C.textMuted }}
+            >
+              <Archive size={13} className="shrink-0" aria-hidden="true" />
+              <span className="text-xs truncate">{th("list.archiveTitle")}</span>
+              {/* Same `textDim`-is-decoration-only fix as the divider above:
+                  this count is the readable part of the row's own label. */}
+              <span className="text-xs tabular-nums" style={{ color: C.textMuted }} aria-hidden="true">
+                {archivedCount}
+              </span>
+            </button>
+          )}
+          <HeadArchiveSheet
+            open={headArchiveOpen}
+            onClose={() => setHeadArchiveOpen(false)}
+            onSelectHead={onSelectHead!}
+            selectedHeadId={selectedHeadId}
+          />
+        </div>
+      )}
       {!showGroups && groups.length === 0 && (
         <div className="px-4 py-8 text-[13px]" style={{ color: C.textMuted }}>
-          Keine Sessions aktiv.
+          {t("noAgentSessions")}
         </div>
       )}
       {!showGroups && groups.map((group) => (

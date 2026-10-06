@@ -11,15 +11,25 @@ import {
   defaultRestartMode,
   failReasonKey,
   headErrorKey,
+  headListTitle,
+  HEAD_STEP_KEYS,
+  headStepKey,
+  midLineStateWord,
+  modelFamily,
   pairKey,
   pairReasonKey,
+  pairShort,
   parseHeadOnBox,
+  parseStep,
   prNumberFromUrl,
+  newerHeadRunIdFor,
   runDurationSeconds,
+  sortHeadsForList,
   splitPairs,
+  supersededNeedsYouIds,
   type HeadPairsResponse,
 } from "../heads";
-import { mkPair } from "./headFixtures";
+import { mkPair, mkRun } from "./headFixtures";
 
 function flatKeys(obj: unknown, prefix = ""): string[] {
   if (typeof obj !== "object" || obj === null) return [prefix];
@@ -210,5 +220,219 @@ describe("restart mode (review: continue needs an existing branch)", () => {
     for (const reason of [null, "stopped", "time_limit", "no_pr", "exit_1", "process_vanished"]) {
       expect(defaultRestartMode({ reason, started_at: "2026-09-23T10:00:00Z" })).toBe("continue");
     }
+  });
+});
+
+// ── Heads in Chats (heads-sichtbar PR 2) ────────────────────────────────────
+
+describe("modelFamily", () => {
+  it("strips every trailing variant/quant tag, one at a time", () => {
+    expect(modelFamily("GLM-5.3-Flash-EXL3")).toBe("GLM-5.3");
+    expect(modelFamily("Qwen3.8-27B-NVFP4")).toBe("Qwen3.8-27B");
+  });
+
+  it("leaves a model with no recognised suffix untouched", () => {
+    expect(modelFamily("glm")).toBe("glm");
+    expect(modelFamily(null)).toBe("—");
+  });
+});
+
+describe("pairShort", () => {
+  it("harness label × model family, joined with the operator's pair word", () => {
+    expect(pairShort({ harness: "omp", model: "GLM-5.3-Flash-EXL3" })).toBe("omp × GLM-5.3");
+    expect(pairShort({ harness: "claude", model: "claude-opus-4-7" })).toBe("Claude Code × claude-opus-4-7");
+  });
+});
+
+describe("headListTitle", () => {
+  it("strips a leading bracket tag", () => {
+    expect(headListTitle({ title: "[fixture] scrubbed head run for the reader tests" })).toBe(
+      "scrubbed head run for the reader tests",
+    );
+  });
+
+  it("strips more than one leading tag", () => {
+    expect(headListTitle({ title: "[night] [retry] Fix flaky retry test" })).toBe("Fix flaky retry test");
+  });
+
+  it("falls back to the raw (trimmed) title when there is nothing left, or nothing to strip", () => {
+    expect(headListTitle({ title: "[fixture]" })).toBe("[fixture]");
+    expect(headListTitle({ title: "Fix flaky retry test" })).toBe("Fix flaky retry test");
+    expect(headListTitle({ title: null })).toBe("");
+  });
+});
+
+describe("parseStep", () => {
+  it("parses the exact line step.txt writes, with the leading word", () => {
+    expect(parseStep("step 7/7 finish run record · waiting for: nothing")).toEqual({
+      n: 7, total: 7, name: "finish run record", waitingFor: "nothing",
+    });
+  });
+
+  it("parses it without the leading word too", () => {
+    expect(parseStep("5/7 independent review · waiting for: reviewer")).toEqual({
+      n: 5, total: 7, name: "independent review", waitingFor: "reviewer",
+    });
+  });
+
+  // Review finding on PR #756: live-checked against every real step.txt on
+  // disk (24 heads) — 3 did not parse (2 missing "/total", 1 missing the
+  // "waiting for:" clause entirely). Both real forms below.
+  it("defaults total to 7 when step.txt omits '/total' (real form, 2/24 on disk)", () => {
+    expect(parseStep("step 7 finished · waiting for: nothing")).toEqual({
+      n: 7, total: 7, name: "finished", waitingFor: "nothing",
+    });
+  });
+
+  it("parses a trailing clause that isn't 'waiting for:' — waitingFor is null, not a mis-read (real form, 1/24 on disk)", () => {
+    expect(parseStep("step 7/7 done · run record written")).toEqual({
+      n: 7, total: 7, name: "done", waitingFor: null,
+    });
+  });
+
+  it("returns null for anything that does not match — never a guess", () => {
+    expect(parseStep(null)).toBeNull();
+    expect(parseStep("")).toBeNull();
+    expect(parseStep("thinking about it")).toBeNull();
+    // Sabotage: a step missing the "waiting for:" half must not parse
+    // partially (a half-filled {n,total} would be worse than nothing).
+    expect(parseStep("4/7 sabotage probe")).toBeNull();
+  });
+});
+
+describe("HEAD_STEP_KEYS / headStepKey", () => {
+  it("has exactly 8 keys, 0-indexed to the head procedure's own steps", () => {
+    expect(HEAD_STEP_KEYS).toHaveLength(8);
+    expect(headStepKey(0)).toBe("steps.context");
+    expect(headStepKey(7)).toBe("steps.runRecord");
+  });
+
+  it("is i18n-translated in both languages (parity test above already covers the keys)", async () => {
+    const en = (await import("../../../messages/en.json")).default as Record<string, unknown>;
+    const steps = (en.heads as Record<string, unknown>).steps as Record<string, unknown>;
+    for (const key of HEAD_STEP_KEYS) expect(typeof steps[key]).toBe("string");
+  });
+
+  it("returns null out of range rather than an undefined key", () => {
+    expect(headStepKey(8)).toBeNull();
+    expect(headStepKey(-1)).toBeNull();
+  });
+});
+
+describe("sortHeadsForList", () => {
+  it("orders needs_you before running/starting before every ended state", () => {
+    // Distinct task ids: these five runs stand in for five UNRELATED tasks
+    // here, purely to exercise group ordering — on a shared task id,
+    // `needsYou` would (correctly) be judged superseded by whichever of the
+    // others has the latest `created_at`, which is not what this test is
+    // about (see the `sortHeadsForList + supersededNeedsYouIds` describe
+    // block below for that behaviour).
+    const needsYou = mkRun({ run_id: "a", task_id: "task-a", state: "needs_you" });
+    const running = mkRun({ run_id: "b", task_id: "task-b", state: "running" });
+    const starting = mkRun({ run_id: "c", task_id: "task-c", state: "starting" });
+    const passed = mkRun({ run_id: "d", task_id: "task-d", state: "passed", exited_at: "2026-09-23T10:00:00Z" });
+    const failed = mkRun({ run_id: "e", task_id: "task-e", state: "failed", exited_at: "2026-09-23T09:00:00Z" });
+    const order = sortHeadsForList([passed, running, failed, needsYou, starting]).map((r) => r.run_id);
+    expect(order).toEqual(["a", "b", "c", "d", "e"]);
+  });
+
+  it("sorts ended runs newest-end-first, within the ended group only", () => {
+    const older = mkRun({ run_id: "old", state: "passed", exited_at: "2026-09-20T10:00:00Z" });
+    const newer = mkRun({ run_id: "new", state: "failed", exited_at: "2026-09-23T10:00:00Z" });
+    expect(sortHeadsForList([older, newer]).map((r) => r.run_id)).toEqual(["new", "old"]);
+  });
+
+  it("falls back to created_at when an ended run has no exited_at", () => {
+    const noExit = mkRun({ run_id: "stopped-early", state: "stopped", exited_at: null, created_at: "2026-09-22T00:00:00Z" });
+    const withExit = mkRun({ run_id: "ran-a-while", state: "stopped", exited_at: "2026-09-21T00:00:00Z" });
+    expect(sortHeadsForList([withExit, noExit]).map((r) => r.run_id)).toEqual(["stopped-early", "ran-a-while"]);
+  });
+
+  it("is stable within a group — does not reorder ties", () => {
+    const r1 = mkRun({ run_id: "1", state: "running" });
+    const r2 = mkRun({ run_id: "2", state: "starting" });
+    expect(sortHeadsForList([r1, r2]).map((r) => r.run_id)).toEqual(["1", "2"]);
+  });
+
+  // Review finding on PR #756 round 4: an answered `needs_you` stayed
+  // pinned at the top forever, its own `state` field never changing once
+  // the head moved on — the list itself has to notice a later run exists.
+  it("a needs_you run superseded by a later run on the same task sorts into the ended group, newest-end-first", () => {
+    const needsYou = mkRun({ run_id: "a", task_id: "t1", state: "needs_you", exited_at: "2026-09-03T00:00:00Z" });
+    const successor = mkRun({ run_id: "b", task_id: "t1", restarted_from: "a", state: "failed", exited_at: "2026-09-10T00:00:00Z" });
+    const older = mkRun({ run_id: "c", task_id: "t2", state: "passed", exited_at: "2026-09-05T00:00:00Z" });
+    const order = sortHeadsForList([needsYou, successor, older]).map((r) => r.run_id);
+    // Ended group, newest-end-first: successor (09-10) → older (09-05) →
+    // the superseded needs_you (09-03) — never pinned ahead of them.
+    expect(order).toEqual(["b", "c", "a"]);
+  });
+
+  it("a needs_you run that IS the newest run for its task stays pinned, even alongside an older ended run on the same task", () => {
+    const olderEnded = mkRun({ run_id: "x", task_id: "t1", state: "passed", created_at: "2026-09-01T00:00:00Z", exited_at: "2026-09-01T00:00:00Z" });
+    const needsYou = mkRun({ run_id: "y", task_id: "t1", state: "needs_you", created_at: "2026-09-10T00:00:00Z", exited_at: "2026-09-10T00:00:00Z" });
+    expect(sortHeadsForList([olderEnded, needsYou]).map((r) => r.run_id)).toEqual(["y", "x"]);
+  });
+});
+
+describe("supersededNeedsYouIds / newerHeadRunIdFor", () => {
+  it("flags a needs_you run with a later run on the same task, by created_at", () => {
+    const old = mkRun({ run_id: "a", task_id: "t1", state: "needs_you", created_at: "2026-09-01T00:00:00Z" });
+    const successor = mkRun({ run_id: "b", task_id: "t1", state: "running", created_at: "2026-09-02T00:00:00Z" });
+    expect(supersededNeedsYouIds([old, successor]).has("a")).toBe(true);
+    expect(supersededNeedsYouIds([old, successor]).has("b")).toBe(false); // not needs_you — never flagged
+  });
+
+  it("flags a needs_you run named as another run's restarted_from, even with an identical created_at", () => {
+    const old = mkRun({ run_id: "a", task_id: "t1", state: "needs_you", created_at: "2026-09-01T00:00:00Z" });
+    const successor = mkRun({ run_id: "b", task_id: "t1", restarted_from: "a", state: "failed", created_at: "2026-09-01T00:00:00Z" });
+    expect(supersededNeedsYouIds([old, successor]).has("a")).toBe(true);
+  });
+
+  it("does not flag the newest needs_you run for its task", () => {
+    const needsYou = mkRun({ run_id: "a", task_id: "t1", state: "needs_you", created_at: "2026-09-10T00:00:00Z" });
+    const olderEnded = mkRun({ run_id: "b", task_id: "t1", state: "passed", created_at: "2026-09-01T00:00:00Z" });
+    expect(supersededNeedsYouIds([needsYou, olderEnded]).has("a")).toBe(false);
+  });
+
+  it("never flags a needs_you run with no other run on its task", () => {
+    const solo = mkRun({ run_id: "a", task_id: "t1", state: "needs_you" });
+    expect(supersededNeedsYouIds([solo]).size).toBe(0);
+  });
+
+  it("newerHeadRunIdFor prefers the direct restarted_from link over a same-task guess", () => {
+    const old = mkRun({ run_id: "a", task_id: "t1", state: "needs_you", created_at: "2026-09-01T00:00:00Z" });
+    const unrelatedLater = mkRun({ run_id: "z", task_id: "t1", state: "passed", created_at: "2026-09-05T00:00:00Z" });
+    const directSuccessor = mkRun({ run_id: "b", task_id: "t1", restarted_from: "a", state: "running", created_at: "2026-09-02T00:00:00Z" });
+    expect(newerHeadRunIdFor(old, [old, unrelatedLater, directSuccessor])).toBe("b");
+  });
+
+  it("newerHeadRunIdFor falls back to the newest other run on the same task with no direct link", () => {
+    const old = mkRun({ run_id: "a", task_id: "t1", state: "needs_you", created_at: "2026-09-01T00:00:00Z" });
+    const sibling = mkRun({ run_id: "b", task_id: "t1", state: "passed", created_at: "2026-09-05T00:00:00Z" });
+    expect(newerHeadRunIdFor(old, [old, sibling])).toBe("b");
+  });
+
+  it("newerHeadRunIdFor is null for an orphaned run with no task and no restarted_from link", () => {
+    const solo = mkRun({ run_id: "a", task_id: null, state: "needs_you" });
+    expect(newerHeadRunIdFor(solo, [solo])).toBeNull();
+  });
+});
+
+describe("midLineStateWord (review finding on PR #756 round 3)", () => {
+  it("lowercases only the first letter, to match the running row's own lowercase phrase", () => {
+    expect(midLineStateWord(en.heads.state.needs_you)).toBe("needs you");
+    expect(midLineStateWord(en.heads.state.passed)).toBe("passed");
+    expect(midLineStateWord(de.heads.state.needs_you)).toBe("braucht dich");
+    expect(midLineStateWord(de.heads.state.passed)).toBe("bestanden");
+  });
+
+  it("leaves the i18n catalog itself sentence case — other surfaces show the word standalone", () => {
+    expect(en.heads.state.passed).toBe("Passed");
+    expect(de.heads.state.passed).toBe("Bestanden");
+  });
+
+  it("is a no-op on an already-empty or already-lowercase word", () => {
+    expect(midLineStateWord("")).toBe("");
+    expect(midLineStateWord("already lowercase")).toBe("already lowercase");
   });
 });

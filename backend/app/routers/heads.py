@@ -9,6 +9,7 @@
   GET  /api/v1/heads/{run_id}              viewer    spec + derived state
   GET  /api/v1/heads/{run_id}/log          viewer    last lines of head.log, masked
   GET  /api/v1/heads/{run_id}/chat/history  viewer    transcript page, read-only (ADR-085 Nachtrag 2026-10-04)
+  GET  /api/v1/heads/{run_id}/summary       viewer    run record as keys, not markdown (heads-sichtbar PR 2)
   GET  /api/v1/heads/{run_id}/run-record   viewer    run record markdown
   POST /api/v1/heads/{run_id}/stop         operator  stop request
 
@@ -36,12 +37,19 @@ from app.config import settings
 from app.database import get_session
 from app.models.repo import Repo
 from app.models.task import Task
-from app.services.heads import box_guard, files, launcher, pairs, paths, transcript
+from app.services.heads import box_guard, files, launcher, pairs, paths, summary, transcript
 from app.services.heads import start as start_service
-from app.services.heads.files import write_backend_file
+from app.services.heads.files import parse_ts, write_backend_file
 from app.services.heads.redact import mask_text
 from app.services.heads.start import HeadStartError
 from app.services.heads.state import ACTIVE_STATES, derive_for_run
+
+#: Default window for `GET /heads?recent_days=` when the caller leaves the
+#: parameter out but still asks for `archived=true` — the Chats list (PR 2,
+#: bauplan §2 "Lebenslauf": "fertig 7 Tage; dann Archiv") and the Archive
+#: sheet both read this same constant so the boundary between the two can
+#: never silently drift apart between two call sites.
+RECENT_DAYS_DEFAULT = 7
 
 router = APIRouter(prefix="/api/v1/heads", tags=["heads"])
 
@@ -248,25 +256,115 @@ async def restart_head(
     return {"run_id": spec["run_id"], "state": "starting", "restarted_from": old.run_id}
 
 
+def _ended_ts(view: dict) -> float:
+    """``exited_at`` when the run has one, else ``created_at`` (a run that
+    never got past `starting` has no exit time at all) — the same fallback
+    the bauplan names for `recent_days`/`archived`. ``0.0`` (never recent,
+    always eligible for the archive) only when BOTH are unparseable, which
+    cannot happen for a run `files.load_run` accepted (`created_at` is
+    required there) but keeps this total rather than raising on a future
+    caller that hands it a hand-built dict in a test."""
+    return parse_ts(view.get("exited_at")) or parse_ts(view.get("created_at")) or 0.0
+
+
 @router.get("", dependencies=[Depends(require_role(Role.VIEWER))])
 async def list_heads(
     task_id: uuid.UUID | None = None,
     active: bool | None = None,
     box: str | None = None,
+    recent_days: int | None = Query(None, ge=1, le=90),
+    archived: bool | None = None,
 ):
+    """Plain (no `recent_days`/`archived`) is byte-for-byte what this
+    endpoint always returned — the Inbox and Insights callers (bauplan §0:
+    "Ohne Parameter wie heute") read it exactly that way and must not see a
+    new field or a narrower list just because PR 2 exists.
+
+    `recent_days=N`: every ACTIVE run (it is never "old", however long ago
+    it started) plus every ENDED run whose end (`exited_at`, or
+    `created_at` for one that never got an exit time) is younger than N
+    days — the Chats list's "Heads" section (bauplan §3.2 `sortHeadsForList`
+    feeds on exactly this). `archived_count` says how many ended runs were
+    left out, without the operator having to open the archive sheet just to
+    see whether there is one.
+
+    `archived=true`: the complement — ended runs OLDER than the same N-day
+    line (`recent_days` still sets where that line is; default
+    `RECENT_DAYS_DEFAULT` when the caller only passes `archived=true`) — the
+    Archive sheet's own listing. Active runs are never "archived"."""
     _enabled()
     now = time.time()
+    all_runs = list(files.list_runs())
+    # Computed over ALL runs, never just the (possibly task_id/box-filtered)
+    # `out` below: a restart's successor can land on a different box, and
+    # `_is_superseded_needs_you` has to see it regardless of what this one
+    # call happened to filter for.
+    all_views = [run_view(run, now) for run in all_runs]
+
     out = []
-    for run in files.list_runs():
+    for run, view in zip(all_runs, all_views):
         if task_id and run.task_id != str(task_id):
             continue
         if box and box not in (run.spec.get("box_keys") or []):
             continue
-        view = run_view(run, now)
         if active is not None and (view["state"] in ACTIVE_STATES) != active:
             continue
         out.append(view)
-    return {"runs": out}
+
+    if recent_days is None and not archived:
+        return {"runs": out}
+
+    window_s = (recent_days if recent_days is not None else RECENT_DAYS_DEFAULT) * 86400
+
+    # A `needs_you` run stays pinned on top (always "recent", regardless of
+    # age) only while it is the NEWEST run for its task: no later run shares
+    # its `task_id`, and no run names it as its own `restarted_from`. The
+    # operator answering the question (a "continue" restart) or launching a
+    # second one supersedes it — from then on it is windowed by its own
+    # `exited_at` like any other ended run, exactly as the Inbox's own
+    # `openHeadQuestions` (lib/inbox.ts) already treats "latest run per
+    # task" for the SAME reason. Before this, an answered `needs_you` stayed
+    # pinned at the top of the Chats "Heads" section forever — its own
+    # `question.md` never changes once the head has moved on, so nothing
+    # here ever turned it back into "not needs_you" on its own (review
+    # finding on PR #756 round 4, reproduced: an old `needs_you` run, exited
+    # 30 days ago, plus a `continue` successor that itself ended 20 days
+    # ago — `GET /heads?recent_days=7` returned the stale `needs_you` as
+    # current while the successor was already archived).
+    latest_run_id_by_task: dict[str, str] = {}
+    latest_created_by_task: dict[str, str] = {}
+    restarted_from_ids: set[str] = set()
+    for v in all_views:
+        rf = v.get("restarted_from")
+        if rf:
+            restarted_from_ids.add(rf)
+        tid = v.get("task_id")
+        if not tid:
+            continue
+        created = v.get("created_at") or ""
+        if tid not in latest_created_by_task or created > latest_created_by_task[tid]:
+            latest_created_by_task[tid] = created
+            latest_run_id_by_task[tid] = v["run_id"]
+
+    def _is_superseded_needs_you(view: dict) -> bool:
+        if view["state"] != "needs_you":
+            return False
+        if view["run_id"] in restarted_from_ids:
+            return True
+        tid = view.get("task_id")
+        return bool(tid) and latest_run_id_by_task.get(tid) != view["run_id"]
+
+    def is_recent(view: dict) -> bool:
+        if view["state"] in ACTIVE_STATES:
+            return True
+        if view["state"] == "needs_you" and not _is_superseded_needs_you(view):
+            return True
+        return (now - _ended_ts(view)) < window_s
+
+    if archived:
+        return {"runs": [v for v in out if not is_recent(v)]}
+    recent = [v for v in out if is_recent(v)]
+    return {"runs": recent, "archived_count": len(out) - len(recent)}
 
 
 @router.get("/occupancy", dependencies=[Depends(require_role(Role.VIEWER))])
@@ -351,13 +449,44 @@ async def get_head_chat_history(
     return result
 
 
-@router.get("/{run_id}/run-record", dependencies=[Depends(require_role(Role.VIEWER))])
-async def get_head_run_record(run_id: str):
+@router.get("/{run_id}/summary", dependencies=[Depends(require_role(Role.VIEWER))])
+async def get_head_summary(run_id: str):
+    """The run record as keys (`services/heads/summary.py`'s own docstring
+    has the field-by-field contract) — the Laufakten-Karte reads this
+    instead of parsing `run-record.md` itself. Same 404 as the plain
+    markdown endpoint below when there is no run record at all, OR when the
+    record is still exactly its own step-0 scaffold (`build_summary`
+    returns `None` there — see its own docstring, review finding on PR #756
+    round 4); a record that exists and has moved past that scaffold but is
+    still missing MOST of its optional sections is not an error,
+    `build_summary` simply returns `None` for each individual field it
+    cannot find."""
     _enabled()
     run = _load(run_id)
     if not run.run_record_text:
         raise _err(404, "run_record_missing")
-    return PlainTextResponse(run.run_record_text, media_type="text/markdown")
+    result = summary.build_summary(run)
+    if result is None:
+        raise _err(404, "run_record_missing")
+    return result
+
+
+@router.get("/{run_id}/run-record", dependencies=[Depends(require_role(Role.VIEWER))])
+async def get_head_run_record(run_id: str):
+    """Review finding on PR #756: ``summary.py`` masks ``result_line``/the
+    two ``tests`` strings precisely because a run record can carry prose
+    copied out of a transcript-adjacent file — but this plain-markdown
+    endpoint (the "Open the full run record" button one tap below the
+    summary card) handed the SAME file back unmasked, so a secret the card
+    had just hidden would show verbatim here. Same mask, same `head.env`
+    values, as `/log` already does for this run's log tail."""
+    _enabled()
+    run = _load(run_id)
+    if not run.run_record_text:
+        raise _err(404, "run_record_missing")
+    from app.services.heads.redact import head_env_values
+
+    return PlainTextResponse(mask_text(run.run_record_text, head_env_values(run)), media_type="text/markdown")
 
 
 @router.post("/{run_id}/stop", status_code=202, dependencies=[Depends(require_role(Role.OPERATOR))])

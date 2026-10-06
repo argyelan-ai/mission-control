@@ -26,8 +26,14 @@ import { C, alpha } from "@/lib/colors";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import { useChatStream } from "@/hooks/useChatStream";
+import { useHeadTranscript, useHeadTranscriptMeta } from "@/hooks/useHeadTranscript";
 import { isAgentStartingError, isNoTranscriptError, resolveSessionAliveness } from "@/lib/chatTypes";
 import type { StateEvent, TimelineChatEvent } from "@/lib/chatTypes";
+import { isHeadDone, type HeadRun } from "@/lib/heads";
+import { HeadChatHeader } from "@/components/heads/HeadChatHeader";
+import { HeadChatFooter } from "@/components/heads/HeadChatFooter";
+import { HeadRunRecordCard } from "@/components/heads/HeadRunRecordCard";
+import { HeadNoTranscriptFallback } from "@/components/heads/HeadNoTranscriptFallback";
 import { AgentCard } from "./AgentCard";
 import { NotificationRow } from "./NotificationRow";
 import { isAgentSpawn, matchRuns, notificationsByTool } from "./agentRuns";
@@ -268,6 +274,14 @@ function renderTimelineEvent(
 
 interface ChatViewProps {
   agent: AgentWithState | null;
+  /** Heads in Chats (heads-sichtbar PR 2, bauplan §3.2) — read-only ONLY
+   *  branch: `agent` stays `null` whenever this is set. Switches the whole
+   *  body over to `useHeadTranscript`, drops the composer/StatusLine/
+   *  Terminal toggle/live-ended badge, and swaps the header for
+   *  `HeadChatHeader`. Every other prop below is simply ignored while a
+   *  head is shown (ChatView's agent-era contract stays exactly as it
+   *  was — nothing here narrows or changes it for an agent). */
+  head?: HeadRun | null;
   /** Sidebar-derived, mirrors the backend's fail-closed transcript gate
    *  (resolve_transcript_dir). `false` skips the history/SSE fetch outright
    *  and forces terminal mode — there's nothing to chat with. */
@@ -296,10 +310,22 @@ interface ChatViewProps {
   /** Lets the mobile options sheet open the side panels the desktop rail
    *  owns. Omitted = no Panels section in the sheet. */
   onOpenPanel?: (panel: PanelKind) => void;
+  /** The run that superseded `head`'s own `needs_you` question (a later run
+   *  on the same task, `lib/heads.ts::newerHeadRunIdFor`) — when set,
+   *  `HeadChatFooter` shows a link to it instead of the answer field
+   *  (review finding on PR #756 round 4: an answered `needs_you` kept
+   *  offering "Answer & continue" forever). `null`/omitted for every run
+   *  that is not a superseded `needs_you`. */
+  newerHeadRunId?: string | null;
+  /** Navigates to another head run — used by the "open the newer run" link
+   *  above. Omitted alongside `newerHeadRunId` on any caller that never
+   *  supplies either. */
+  onSelectHeadRun?: (runId: string) => void;
 }
 
 export function ChatView({
   agent,
+  head = null,
   hasTranscript,
   detailLevel,
   onDetailLevelChange,
@@ -310,6 +336,8 @@ export function ChatView({
   onBack,
   contextLine,
   onOpenPanel,
+  newerHeadRunId = null,
+  onSelectHeadRun,
 }: ChatViewProps) {
   const t = useTranslations("sessions");
   /** Typing into a live session (text, keys, approvals, effort) is admin-only
@@ -333,7 +361,7 @@ export function ChatView({
   // and this costs one boolean.
   const [renderAll, setRenderAll] = useState(false);
 
-  const streamEnabled = hasTranscript && !!agent;
+  const streamEnabled = hasTranscript && !!agent && !head;
   // Klick daneben oder Escape schliesst die Detailgrad-Liste. Ohne das bliebe
   // sie offen stehen, waehrend man laengst woanders arbeitet — dasselbe Muster
   // wie beim Modell-Waehler im Composer.
@@ -353,7 +381,15 @@ export function ChatView({
     };
   }, [detailOpen]);
 
-  const stream = useChatStream(agent?.id ?? null, streamEnabled);
+  // Both hooks run unconditionally (rules of hooks) regardless of which one
+  // actually feeds `stream` below — `useChatStream(null, false)` and
+  // `useHeadTranscript(null, …)` are each other's safe no-op, so switching
+  // between an agent and a head never leaves a disabled hook holding a
+  // stale subscription open.
+  const agentStream = useChatStream(head ? null : agent?.id ?? null, streamEnabled);
+  const headStream = useHeadTranscript(head?.run_id ?? null, head?.state ?? null);
+  const stream = head ? headStream : agentStream;
+  const headMeta = useHeadTranscriptMeta(head?.run_id ?? null);
 
   const streamStatus = stream.state?.status ?? null;
   useEffect(() => {
@@ -376,11 +412,16 @@ export function ChatView({
   // docs/specs/chat-over-acp.md, Nicht-Ziele).
   const headlessChat = !!agent?.headless_chat;
   const terminalDeepLink = searchParams?.get("view") === "terminal";
-  const effectiveView: CenterView = !canChat
-    ? "terminal"
-    : headlessChat
-      ? (terminalDeepLink ? "terminal" : "chat")
-      : centerView;
+  // A head never has a terminal (ADR-085 Nachtrag 2026-10-04 §4: files only,
+  // no tmux) — forced to "chat" ahead of every other rule below, including
+  // `!canChat`, which otherwise exists precisely to FALL BACK to terminal.
+  const effectiveView: CenterView = head
+    ? "chat"
+    : !canChat
+      ? "terminal"
+      : headlessChat
+        ? (terminalDeepLink ? "terminal" : "chat")
+        : centerView;
 
   // `renderAll` is in the deps for a reason: when the deferred remainder mounts,
   // content appears ABOVE the viewport, so a scroll position left untouched
@@ -592,14 +633,6 @@ export function ChatView({
      gezeigt — nicht zusaetzlich als eigene Zeile daneben. */
   const toolNotices = useMemo(() => notificationsByTool(stream.events), [stream.events]);
 
-  if (!agent) {
-    return (
-      <div className="flex flex-1 items-center justify-center text-[13px]" style={{ color: C.textMuted }}>
-        {t("pickSession")}
-      </div>
-    );
-  }
-
   /* useMemo mit Grund: ein preview-Tick (alle 0.3 s ein replace-me-Event)
      erzeugt ein neues `stream`-Objekt, veraendert aber `events` nicht. Ohne
      Memo liefen filter + buildTimelineItems über den ganzen Verlauf bei JEDEM
@@ -646,6 +679,19 @@ export function ChatView({
     return null;
   }, [stream.events]);
 
+  // Fallback for `HeadChatFooter`'s "needs you" question: `run.question`
+  // (question.md) is the real answer, but the rare run that ended before
+  // writing one still needs the operator to see SOMETHING here rather than
+  // a bare answer field (review finding on PR #756) — the transcript's own
+  // last assistant message is the next best thing.
+  const lastAssistantMessage = useMemo(() => {
+    for (let i = stream.events.length - 1; i >= 0; i--) {
+      const ev = stream.events[i];
+      if (ev.kind === "message" && ev.role === "assistant" && ev.text?.trim()) return ev.text.trim();
+    }
+    return null;
+  }, [stream.events]);
+
   function jumpToBottom() {
     const el = scrollRef.current;
     if (!el) return;
@@ -684,12 +730,41 @@ export function ChatView({
   // keyboard for a focus that happens in the gesture itself.
   const rootRef = useRef<HTMLDivElement>(null);
 
+  // Moved here, AFTER every hook above (review finding on PR #756): every
+  // value computed since `stream` is already null/empty-safe for
+  // `agent: null, head: null` (`stream` itself comes from
+  // `useChatStream(null, false)`/`useHeadTranscript(null, null)`, each
+  // other's documented no-op), so gating only the JSX — not the hook
+  // calls — costs nothing. Guarding with an early `return` BEFORE the
+  // `useMemo`/`useRef`/`useEffect` calls above (the previous shape) broke
+  // the Rules of Hooks: the very first real-world case that re-renders
+  // this component from "no head yet" to "a head" on the SAME mount — the
+  // Archive sheet's own "tap a row" path (the run is not in the recent
+  // list, so `head` arrives one tick late from `sessions/page.tsx`'s
+  // fallback fetch) and every `?head=` deep link (the list has not loaded
+  // yet on page load) — threw "Rendered more hooks than during the
+  // previous render" (reproduced directly: render with `head={null}`, then
+  // re-render the SAME `ChatView` instance with a real `head`).
+  if (!agent && !head) {
+    return (
+      <div className="flex flex-1 items-center justify-center text-[13px]" style={{ color: C.textMuted }}>
+        {t("pickSession")}
+      </div>
+    );
+  }
+
   return (
     <div ref={rootRef} className="flex flex-col flex-1 min-h-0 overflow-hidden">
       {/* One header for both breakpoints — the parts that only make sense on
           a phone (back chevron, context line, options button) carry
           `md:hidden`, the desktop toolbar carries `hidden md:flex`. Rendering
-          two headers would duplicate the agent name in the DOM for no gain. */}
+          two headers would duplicate the agent name in the DOM for no gain.
+          A head gets its OWN, much smaller header (`HeadChatHeader`) instead
+          of a branch threaded through this one — see that component's own
+          docstring for why. */}
+      {head ? (
+        <HeadChatHeader head={head} onBack={onBack} />
+      ) : agent ? (
       <div
         data-testid="chat-header"
         // pt-safe-top: auf dem Handy liegt ueber dieser Zeile nichts mehr
@@ -959,6 +1034,7 @@ export function ChatView({
           )}
         </div>
       </div>
+      ) : null}
 
       {effectiveView === "terminal" ? (
         // Home-Balken freihalten. Die Tab-Leiste trug den Zuschlag
@@ -978,7 +1054,13 @@ export function ChatView({
           data-testid="terminal-safe-area"
           className={`flex flex-col flex-1 min-h-0 overflow-hidden pb-safe-bottom bg-[var(--color-bg-surface)]`}
         >
-          <TerminalPanel key={`term-${terminalRemountTick}`} agent={agent} />
+          {/* `agent!`: this branch only renders when `effectiveView ===
+              "terminal"`, which is forced to `"chat"` whenever `head` is
+              set (above) — so reaching here means `head` is falsy, and the
+              function's own early return already guarantees `agent` is set
+              whenever `head` is not. TypeScript cannot see that cross-
+              variable guarantee on its own. */}
+          <TerminalPanel key={`term-${terminalRemountTick}`} agent={agent!} />
         </div>
       ) : (
         <>
@@ -1002,6 +1084,8 @@ export function ChatView({
             {items.length === 0 && stream.pendingEchoes.length === 0 ? (
               stream.loading ? (
                 <TimelineSkeleton />
+              ) : head ? (
+                <HeadNoTranscriptFallback runId={head.run_id} reason={headMeta.reason} historyFailed={!!stream.error} />
               ) : (
                 // Teaches the surface instead of reporting emptiness: a fresh
                 // session genuinely has no transcript yet, and the two things
@@ -1012,7 +1096,7 @@ export function ChatView({
                     {t("noMessagesYet")}
                   </span>
                   <span className="text-[12px] max-w-[42ch]" style={{ color: C.textMuted }}>
-                    {t("noMessagesHint", { name: agent.name })}
+                    {t("noMessagesHint", { name: agent?.name ?? "" })}
                   </span>
                 </div>
               )
@@ -1025,7 +1109,11 @@ export function ChatView({
                       ev={item.event}
                       run={runMatches.get(item.event.toolUseId ?? "")}
                       notice={toolNotices.get(item.event.toolUseId ?? "")}
-                      agentId={agent.id}
+                      // A head has no subagent-detail endpoint of its own
+                      // (ADR-085 Nachtrag §4: the main transcript only) — an
+                      // empty id just makes the "open subagent" affordance a
+                      // harmless no-reply instead of crashing on `agent.id`.
+                      agentId={agent?.id ?? ""}
                     />
                   );
                 }
@@ -1066,7 +1154,7 @@ export function ChatView({
                   sidechain: false,
                 }}
                 echoStatus={echo.status}
-                harness={agent.harness}
+                harness={agent?.harness ?? null}
                 onWithdraw={() => handleWithdrawQueued(false)}
                 onEdit={() => handleWithdrawQueued(true)}
               />
@@ -1081,6 +1169,19 @@ export function ChatView({
             {stream.preview && stream.preview.source === "acp" && (
               <PreviewRow preview={stream.preview} />
             )}
+
+            {/* The run-record summary card — only once the head has ended
+                AND actually wrote one (`run.run_record`, the same boolean
+                `HeadStateCard` already reads). Last in the timeline, same
+                place `pendingEchoes`/`preview` claim for an agent: it is the
+                newest fact about this conversation. */}
+            {/* `isHeadDone`, not "not active": `needs_you` is a FINAL state
+                too (it is not in `HEAD_ACTIVE_STATES`) but it is not DONE —
+                the operator is still blocked on it, and the record card
+                would show whatever a run writes for itself at step 0
+                ("pending"/zeroed counters) as if it were the real result
+                (review finding on PR #756 round 4). */}
+            {head && isHeadDone(head) && head.run_record && <HeadRunRecordCard runId={head.run_id} />}
           </div>
           </div>
 
@@ -1119,44 +1220,60 @@ export function ChatView({
             </div>
           )}
 
-          <StatusLine
-            state={stream.state}
-            connected={stream.connected}
-            activity={activity}
-            aliveness={aliveness}
-            sending={stream.awaitingResponse}
-          />
-          {!isAdmin ? (
-            <AdminOnlyNotice compact message={t("inputAdminOnly")} />
+          {head ? (
+            // No StatusLine (that line is "is the AGENT's terminal alive",
+            // meaningless for a head) and no Composer at all — the footer
+            // below is the one surface a head's chat shows instead.
+            <HeadChatFooter
+              run={head}
+              transcriptFallbackQuestion={lastAssistantMessage}
+              newerRunId={newerHeadRunId}
+              onOpenNewerRun={onSelectHeadRun}
+            />
           ) : (
-          <Composer
-            agentId={agent.id}
-            usage={stream.usage}
-            state={stream.state}
-            onSend={handleSend}
-            onStop={handleStop}
-            prefill={composerPrefill}
-            sessionLive={aliveness !== "ended"}
-            /* Nur die Docker-tmux-Bruecke liefert echten Pane-Text; Host-Agenten
-             * (Boss/Hermes/Jarvis) haben diesen Kanal nicht — dort ist "arbeitet"
-             * nie widerlegbar, also bleibt Stop erreichbar. */
-            paneObservable={agent.agent_runtime === "cli-bridge"}
-            capabilities={stream.capabilities}
-          />
+            <>
+              <StatusLine
+                state={stream.state}
+                connected={stream.connected}
+                activity={activity}
+                aliveness={aliveness}
+                sending={stream.awaitingResponse}
+              />
+              {!isAdmin ? (
+                <AdminOnlyNotice compact message={t("inputAdminOnly")} />
+              ) : agent ? (
+                <Composer
+                  agentId={agent.id}
+                  usage={stream.usage}
+                  state={stream.state}
+                  onSend={handleSend}
+                  onStop={handleStop}
+                  prefill={composerPrefill}
+                  sessionLive={aliveness !== "ended"}
+                  /* Nur die Docker-tmux-Bruecke liefert echten Pane-Text; Host-Agenten
+                   * (Boss/Hermes/Jarvis) haben diesen Kanal nicht — dort ist "arbeitet"
+                   * nie widerlegbar, also bleibt Stop erreichbar. */
+                  paneObservable={agent.agent_runtime === "cli-bridge"}
+                  capabilities={stream.capabilities}
+                />
+              ) : null}
+            </>
           )}
         </>
       )}
 
-      <ChatOptionsSheet
-        open={optionsOpen}
-        onClose={() => setOptionsOpen(false)}
-        centerView={effectiveView}
-        onCenterViewChange={onCenterViewChange}
-        canChat={canChat}
-        detailLevel={detailLevel}
-        onDetailLevelChange={onDetailLevelChange}
-        onOpenPanel={onOpenPanel}
-      />
+      {!head && (
+        <ChatOptionsSheet
+          open={optionsOpen}
+          onClose={() => setOptionsOpen(false)}
+          centerView={effectiveView}
+          onCenterViewChange={onCenterViewChange}
+          canChat={canChat}
+          detailLevel={detailLevel}
+          onDetailLevelChange={onDetailLevelChange}
+          onOpenPanel={onOpenPanel}
+        />
+      )}
     </div>
   );
 }

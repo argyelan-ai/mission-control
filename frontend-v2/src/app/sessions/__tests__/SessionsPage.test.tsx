@@ -3,6 +3,7 @@ import { render, screen, waitFor, fireEvent, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import type { HeadRun } from "@/lib/heads";
 import type { Agent } from "@/lib/types";
 
 // Task #20 (pre-chat) / Task B6 (chat rebuild): the Sessions page restores
@@ -74,6 +75,7 @@ vi.mock("@/components/chat/TerminalPanel", async () => {
 vi.mock("@/components/chat/ChatView", () => ({
   ChatView: ({
     agent,
+    head,
     hasTranscript,
     centerView,
     onCenterViewChange,
@@ -81,6 +83,7 @@ vi.mock("@/components/chat/ChatView", () => ({
     contextLine,
   }: {
     agent: { name: string } | null;
+    head?: { run_id: string; title: string | null } | null;
     hasTranscript: boolean;
     centerView: string;
     onCenterViewChange: (v: string) => void;
@@ -88,6 +91,9 @@ vi.mock("@/components/chat/ChatView", () => ({
     contextLine?: string | null;
   }) => (
     <div data-testid="chat-view-stub">
+      {/* Heads in Chats (PR 2): the page's own `selectedHeadRun` resolution
+          (recent list vs. the one-off fallback fetch) is observable here. */}
+      <span data-testid="chat-view-head">{head ? `Head: ${head.run_id}` : ""}</span>
       <span>{agent ? `Chat: ${agent.name}` : "Chat: none"}</span>
       <span data-testid="chat-view-has-transcript">{String(hasTranscript)}</span>
       <span data-testid="chat-view-center">{centerView}</span>
@@ -868,5 +874,138 @@ describe("SessionsPage — mobile stack keeps only one screen in flow", () => {
 
     expect(isHidden(list())).toBe(false);
     expect(isHidden(chat())).toBe(true);
+  });
+});
+
+// ── Heads in Chats (heads-sichtbar PR 2) ────────────────────────────────────
+
+describe("SessionsPage — heads deep link (?head=)", () => {
+  beforeEach(() => {
+    nav.searchParamsString = "";
+    nav.replaced = [];
+    vi.spyOn(api.agents, "listDockerSessions").mockResolvedValue([]);
+    vi.spyOn(api.agents, "listHostSessions").mockResolvedValue([]);
+  });
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it("opens the named run even when it is outside the recent-runs window (the one-off fallback fetch)", async () => {
+    vi.spyOn(api.heads, "occupancy").mockResolvedValue({ boxes: {} });
+    vi.spyOn(api.heads, "list").mockResolvedValue({ runs: [], archived_count: 1 });
+    vi.spyOn(api.heads, "get").mockResolvedValue({
+      run_id: "archived-1", task_id: null, title: "Old fixed head", harness: "omp", runtime_slug: "x",
+      model: "glm", repo_full_name: null, branch: "b", mode: "fresh", restarted_from: null, box_keys: [],
+      created_at: "2026-09-01T00:00:00Z", started_at: null, exited_at: "2026-09-02T00:00:00Z",
+      state: "passed", reason: null, silent_s: null, heartbeat_stale: false, step: null, question: null,
+      pr_url: null, tmux: null, run_record: false, task_deleted: false,
+    });
+
+    nav.searchParamsString = "head=archived-1";
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId("chat-view-head")).toHaveTextContent("archived-1"));
+    expect(api.heads.get).toHaveBeenCalledWith("archived-1");
+  });
+
+  it("selecting a head from the sidebar's Heads section opens it without a fallback fetch (already in the recent list)", async () => {
+    vi.spyOn(api.heads, "occupancy").mockResolvedValue({ boxes: {} });
+    vi.spyOn(api.heads, "list").mockResolvedValue({
+      runs: [{
+        run_id: "run-1", task_id: null, title: "Fix flaky retry test", harness: "omp", runtime_slug: "x",
+        model: "glm", repo_full_name: null, branch: "b", mode: "fresh", restarted_from: null, box_keys: [],
+        created_at: "2026-10-04T09:00:00Z", started_at: "2026-10-04T09:00:00Z", exited_at: null,
+        state: "running", reason: null, silent_s: 5, heartbeat_stale: false, step: null, question: null,
+        pr_url: null, tmux: null, run_record: false, task_deleted: false,
+      }],
+      archived_count: 0,
+    });
+    const getSpy = vi.spyOn(api.heads, "get");
+
+    const user = userEvent.setup();
+    renderPage();
+    // Mobile list AND desktop rail are both mounted in jsdom regardless of
+    // viewport (same reason `findOptionRow` exists above) — the mobile
+    // list's own row is the one guaranteed clickable one.
+    const row = (await within(screen.getByTestId("session-list-mobile")).findAllByTestId("head-chat-row"))[0];
+    await user.click(row);
+    await waitFor(() => expect(screen.getByTestId("chat-view-head")).toHaveTextContent("run-1"));
+    expect(getSpy).not.toHaveBeenCalled();
+  });
+
+  // Review finding on PR #756: `selectedHeadId` is set before `selectedHeadRun`
+  // resolves in this exact gap — `ChatView` (stubbed above) used to mount
+  // with `head={null}` here, which the REAL component's "pick a session"
+  // empty state (no header, no back chevron — see `ChatView.head.test.tsx`'s
+  // own hooks-order regression test for the crash this caused) covered up in
+  // THIS file because `ChatView` is a stub. `HeadChatPlaceholder` is not
+  // mocked, so these two assert against the real component.
+  it("while the fallback fetch for an off-window run is in flight, shows the loading placeholder with a back chevron — never the chat stub with head=null", async () => {
+    vi.spyOn(api.heads, "occupancy").mockResolvedValue({ boxes: {} });
+    vi.spyOn(api.heads, "list").mockResolvedValue({ runs: [], archived_count: 1 });
+    let resolveGet!: (run: HeadRun) => void;
+    vi.spyOn(api.heads, "get").mockReturnValue(new Promise<HeadRun>((resolve) => { resolveGet = resolve; }));
+
+    nav.searchParamsString = "head=archived-1";
+    renderPage();
+
+    await waitFor(() => expect(screen.getByTestId("head-chat-placeholder")).toHaveAttribute("data-variant", "loading"));
+    expect(screen.getByTestId("head-chat-back")).toBeInTheDocument();
+    expect(screen.queryByTestId("chat-view-stub")).not.toBeInTheDocument();
+
+    resolveGet({
+      run_id: "archived-1", task_id: null, title: "Old fixed head", harness: "omp", runtime_slug: "x",
+      model: "glm", repo_full_name: null, branch: "b", mode: "fresh", restarted_from: null, box_keys: [],
+      created_at: "2026-09-01T00:00:00Z", started_at: null, exited_at: "2026-09-02T00:00:00Z",
+      state: "passed", reason: null, silent_s: null, heartbeat_stale: false, step: null, question: null,
+      pr_url: null, tmux: null, run_record: false, task_deleted: false,
+    });
+    await waitFor(() => expect(screen.getByTestId("chat-view-head")).toHaveTextContent("archived-1"));
+  });
+
+  it("a `?head=` id that no longer exists (deleted/cleaned up) shows the not-found placeholder with a back chevron, never the chromeless agent empty-state", async () => {
+    vi.spyOn(api.heads, "occupancy").mockResolvedValue({ boxes: {} });
+    vi.spyOn(api.heads, "list").mockResolvedValue({ runs: [], archived_count: 0 });
+    vi.spyOn(api.heads, "get").mockRejectedValue(new Error("API 404: run_not_found"));
+
+    nav.searchParamsString = "head=gone-1";
+    renderPage();
+
+    await waitFor(() => expect(screen.getByTestId("head-chat-placeholder")).toHaveAttribute("data-variant", "not_found"));
+    expect(screen.getByTestId("head-chat-not-found")).toBeInTheDocument();
+    expect(screen.getByTestId("head-chat-back")).toBeInTheDocument();
+    expect(screen.queryByTestId("chat-view-stub")).not.toBeInTheDocument();
+  });
+
+  it("tapping an Archive-sheet row (archived run, never in the recent list) opens it through the same resolving → chat path", async () => {
+    vi.spyOn(api.heads, "occupancy").mockResolvedValue({ boxes: {} });
+    const ARCHIVED_ROW: HeadRun = {
+      run_id: "archived-row-1", task_id: null, title: "Rotate the API key", harness: "claude", runtime_slug: "x",
+      model: "claude-opus", repo_full_name: null, branch: "b", mode: "fresh", restarted_from: null, box_keys: [],
+      created_at: "2026-09-01T00:00:00Z", started_at: null, exited_at: "2026-09-02T00:00:00Z",
+      state: "passed", reason: null, silent_s: null, heartbeat_stale: false, step: null, question: null,
+      pr_url: null, tmux: null, run_record: false, task_deleted: false,
+    };
+    vi.spyOn(api.heads, "list").mockImplementation(async (opts) =>
+      opts?.archived ? { runs: [ARCHIVED_ROW] } : { runs: [], archived_count: 1 },
+    );
+    let resolveGet!: (run: HeadRun) => void;
+    vi.spyOn(api.heads, "get").mockReturnValue(new Promise<HeadRun>((resolve) => { resolveGet = resolve; }));
+
+    const user = userEvent.setup();
+    renderPage();
+    // Mobile list AND desktop rail both mount in jsdom regardless of
+    // viewport — same reasoning as the recent-list click test above.
+    const mobileList = await screen.findByTestId("session-list-mobile");
+    await user.click(await within(mobileList).findByTestId("heads-archive-button"));
+    const row = await within(await screen.findByTestId("head-archive-sheet")).findByTestId("head-chat-row");
+    await user.click(row);
+
+    // Sheet closes, placeholder shows while `api.heads.get` (the row's run
+    // is not in the recent list) is still in flight.
+    await waitFor(() => expect(screen.queryByTestId("head-archive-sheet")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId("head-chat-placeholder")).toHaveAttribute("data-variant", "loading"));
+    expect(api.heads.get).toHaveBeenCalledWith("archived-row-1");
+
+    resolveGet(ARCHIVED_ROW);
+    await waitFor(() => expect(screen.getByTestId("chat-view-head")).toHaveTextContent("archived-row-1"));
   });
 });

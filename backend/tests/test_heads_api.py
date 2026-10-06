@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import uuid
 from unittest.mock import AsyncMock, patch
 
@@ -17,7 +18,7 @@ from app.models.task import Task
 from app.services import runtime_protocols as rp
 from app.services.heads import engine
 from tests.conftest import test_engine
-from tests.heads_backend_helpers import heads_root, make_run, write_run_record  # noqa: F401
+from tests.heads_backend_helpers import heads_root, iso, make_run, write_run_record  # noqa: F401
 
 EP = "http://192.0.2.10:8000/v1"
 
@@ -587,3 +588,158 @@ async def test_scratch_check_runs_off_the_event_loop(auth_client, heads_root, ma
                                                          "runtime_slug": "box-slot"})
     assert resp.status_code == 201, resp.text
     assert scratch.local_origin in calls
+
+
+# ── heads-sichtbar PR 2 §3.1: GET /heads?recent_days= / ?archived= ──────────
+
+
+async def test_plain_list_is_unchanged_by_the_new_params_existing(auth_client, heads_root):
+    """No `recent_days`/`archived` at all → the exact old shape (Inbox/
+    Insights read it this way) — no `archived_count` key, every run in,
+    however old. Bauplan §3.1: "Ohne Parameter wie heute (Inbox/Insights
+    unverändert)"."""
+    run_id = make_run(heads_root, status={"phase": "exited", "exit_code": 0,
+                                           "exited_at": iso(time.time() - 40 * 86400)})
+    body = (await auth_client.get("/api/v1/heads")).json()
+    assert [r["run_id"] for r in body["runs"]] == [run_id]
+    assert "archived_count" not in body
+
+
+async def test_recent_days_boundary_is_exactly_the_cutoff(auth_client, heads_root):
+    now = time.time()
+    active = make_run(heads_root, status={"phase": "running", "started_at": iso(now - 60)}, heartbeat_age=3)
+    just_inside = make_run(heads_root, status={"phase": "exited", "exit_code": 0,
+                                                "exited_at": iso(now - 7 * 86400 + 30)})
+    just_outside = make_run(heads_root, status={"phase": "exited", "exit_code": 0,
+                                                 "exited_at": iso(now - 7 * 86400 - 30)})
+
+    body = (await auth_client.get("/api/v1/heads?recent_days=7")).json()
+    assert {r["run_id"] for r in body["runs"]} == {active, just_inside}
+    assert body["archived_count"] == 1
+
+    arc = (await auth_client.get("/api/v1/heads?recent_days=7&archived=true")).json()
+    assert [r["run_id"] for r in arc["runs"]] == [just_outside]
+    assert "archived_count" not in arc
+
+    # Sabotage: an active run must never count as archived, no matter how
+    # old `created_at` is.
+    stale_active = make_run(heads_root, status={"phase": "running", "started_at": iso(now - 20 * 86400)},
+                             heartbeat_age=3, created_ago=20 * 86400)
+    arc2 = (await auth_client.get("/api/v1/heads?recent_days=7&archived=true")).json()
+    assert stale_active not in {r["run_id"] for r in arc2["runs"]}
+
+
+async def test_archived_default_window_without_recent_days(auth_client, heads_root):
+    now = time.time()
+    old = make_run(heads_root, status={"phase": "exited", "exit_code": 0, "exited_at": iso(now - 10 * 86400)})
+    recent = make_run(heads_root, status={"phase": "exited", "exit_code": 0, "exited_at": iso(now - 1 * 86400)})
+    body = (await auth_client.get("/api/v1/heads?archived=true")).json()
+    assert [r["run_id"] for r in body["runs"]] == [old]
+    assert recent not in {r["run_id"] for r in body["runs"]}
+
+
+async def test_needs_you_never_falls_into_the_archive_however_old(auth_client, heads_root):
+    """Review finding on PR #756: `needs_you` is a FINAL state in
+    `state.py` (it has an `exited_at` like passed/failed/stopped), so the
+    plain `is_recent` rule used to move a head that has waited past the
+    window for an operator answer out of the Heads section and into the
+    Archive sheet — exactly the one state the section is meant to keep on
+    top of. `needs_you` must count as recent no matter how long ago it
+    stopped, the same way an ACTIVE run already does."""
+    now = time.time()
+    waiting = make_run(
+        heads_root,
+        status={"phase": "exited", "exit_code": 0, "exited_at": iso(now - 30 * 86400)},
+        question="Deprecate the old field or keep it?",
+    )
+    passed_long_ago = make_run(
+        heads_root, status={"phase": "exited", "exit_code": 0, "pr_url": "https://github.com/o/r/pull/1",
+                             "exited_at": iso(now - 30 * 86400)},
+    )
+    write_run_record(heads_root, passed_long_ago, mtime=now - 30 * 86400)
+    sp = heads_root / passed_long_ago / ".wrapper" / "status.json"
+    st = json.loads(sp.read_text())
+    st["run_record_path"] = str(write_run_record(heads_root, passed_long_ago, mtime=now - 30 * 86400))
+    sp.write_text(json.dumps(st))
+
+    recent_body = (await auth_client.get("/api/v1/heads?recent_days=7")).json()
+    assert waiting in {r["run_id"] for r in recent_body["runs"]}
+    assert passed_long_ago not in {r["run_id"] for r in recent_body["runs"]}
+    assert recent_body["archived_count"] == 1  # only the actually-done run
+
+    archived = (await auth_client.get("/api/v1/heads?recent_days=7&archived=true")).json()
+    assert waiting not in {r["run_id"] for r in archived["runs"]}
+    assert passed_long_ago in {r["run_id"] for r in archived["runs"]}
+
+
+async def test_superseded_needs_you_leaves_the_heads_section_once_answered(auth_client, heads_root):
+    """Review finding on PR #756 round 4, reproduced live: an old
+    `needs_you` run (exited 31 days ago, its `question.md` never changes
+    once the head has moved on) plus a `continue` successor on the SAME
+    task (itself ended 20 days ago). The previous `is_recent` rule kept
+    EVERY `needs_you` run pinned "recent" forever, however old, with no
+    check for whether a later run on the same task had superseded it — so
+    this endpoint returned the stale run as current `needs_you` (Inbox,
+    which already dedupes "latest run per task" via `openHeadQuestions`,
+    showed 0 open questions) while the real successor was already reported
+    `archived`. Once superseded, the old run must be windowed by its own
+    `exited_at` like any other ended run — here, well outside the 7-day
+    line, so it lands in the archive with every other ended run, its OWN
+    `state` field untouched (still literally `needs_you` — only its LIST
+    placement changed)."""
+    now = time.time()
+    task_id = str(uuid.uuid4())
+    old = make_run(
+        heads_root,
+        task_id=task_id,
+        created_ago=31 * 86400,
+        status={"phase": "exited", "exit_code": 0, "exited_at": iso(now - 31 * 86400)},
+        question="Deprecate the old field or keep it?",
+    )
+    successor = make_run(
+        heads_root,
+        task_id=task_id,
+        created_ago=21 * 86400,
+        restarted_from=old,
+        status={"phase": "exited", "exit_code": 1, "reason": "no_progress", "exited_at": iso(now - 20 * 86400)},
+    )
+
+    body = (await auth_client.get("/api/v1/heads?recent_days=7")).json()
+    recent_ids = {r["run_id"] for r in body["runs"]}
+    assert old not in recent_ids  # superseded — no longer pinned as "needs you"
+    assert successor not in recent_ids  # genuinely 20 days old, outside the window
+    assert body["archived_count"] == 2
+
+    archived = (await auth_client.get("/api/v1/heads?recent_days=7&archived=true")).json()
+    archived_by_id = {r["run_id"]: r for r in archived["runs"]}
+    assert old in archived_by_id
+    assert successor in archived_by_id
+    assert archived_by_id[old]["state"] == "needs_you"  # the record itself never changes
+
+
+async def test_run_record_endpoint_masks_head_env_secrets_like_the_log_endpoint(auth_client, heads_root):
+    """Review finding on PR #756: `/summary` masks `result_line`/the two
+    `tests` strings precisely because a run record can carry prose copied
+    out of a transcript-adjacent file — but the plain-markdown
+    `/run-record` endpoint (the "Open the full run record" button one tap
+    below the summary card) handed the file back unmasked. Sabotage done by
+    the fix itself: without `mask_text(...)` this assertion fails (the
+    secret is right there in the fixture text planted below)."""
+    now = time.time()
+    run_id = make_run(heads_root, status={
+        "phase": "exited", "exit_code": 0, "started_at": iso(now - 300), "exited_at": iso(now - 10)})
+    (heads_root / run_id / "head.env").write_text("ANTHROPIC_API_KEY='test-fake-run-record-leak-9f3a7c'\n")
+    path = write_run_record(heads_root, run_id, mtime=now - 10)
+    path.write_text(
+        path.read_text().rstrip("\n")
+        + "\n\n## Evidence\n- Failing test before: copied the key by accident: test-fake-run-record-leak-9f3a7c\n"
+    )
+    sp = heads_root / run_id / ".wrapper" / "status.json"
+    st = json.loads(sp.read_text())
+    st["run_record_path"] = str(path)
+    sp.write_text(json.dumps(st))
+
+    rr = await auth_client.get(f"/api/v1/heads/{run_id}/run-record")
+    assert rr.status_code == 200
+    assert "test-fake-run-record-leak-9f3a7c" not in rr.text
+    assert "head_run" in rr.text  # the rest of the record still comes through

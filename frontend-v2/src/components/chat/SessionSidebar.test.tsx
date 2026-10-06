@@ -570,7 +570,7 @@ describe("SessionSidebar — Gruppen-Sektion", () => {
         onCreateGroup={() => {}}
       />
     );
-    expect(screen.getByRole("tab", { name: "Agents" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "All" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "Groups" })).toHaveAttribute("aria-selected", "false");
     expect(screen.getByRole("option", { name: /Agent One/ })).toBeInTheDocument();
     expect(screen.queryByRole("option", { name: /Spark-Runde/ })).not.toBeInTheDocument();
@@ -799,5 +799,163 @@ describe("SessionSidebar — Archiv-Sektion", () => {
     );
     await userEvent.click(screen.getByRole("tab", { name: "Groups" }));
     expect(screen.getByRole("button", { name: /Archive/ }).className).toContain("min-h-[44px]");
+  });
+});
+
+// ── Heads-Sektion (heads-sichtbar PR 2) ─────────────────────────────────────
+
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { mkRun } from "@/lib/__tests__/headFixtures";
+
+function renderWithClient(ui: React.ReactElement) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
+}
+
+const sidebarBase = {
+  agents: [] as Agent[],
+  tasks: [] as Task[],
+  projects: [] as Project[],
+  selectedId: null,
+  onSelect: () => {},
+  groups: [],
+  onSelectGroup: () => {},
+};
+
+describe("SessionSidebar — Heads-Sektion", () => {
+  it("is absent without onSelectHead (backward compatible, existing callers unaffected)", () => {
+    render(<SessionSidebar {...sidebarBase} heads={[mkRun()]} />);
+    expect(screen.queryByTestId("heads-section")).not.toBeInTheDocument();
+  });
+
+  it("is absent with onSelectHead but zero heads and zero archived", () => {
+    render(<SessionSidebar {...sidebarBase} heads={[]} archivedCount={0} onSelectHead={() => {}} />);
+    expect(screen.queryByTestId("heads-section")).not.toBeInTheDocument();
+  });
+
+  it("renders above the agent groups, with its own section title", () => {
+    renderWithClient(
+      <SessionSidebar
+        {...sidebarBase}
+        agents={[]}
+        heads={[mkRun({ run_id: "h1" })]}
+        onSelectHead={() => {}}
+      />,
+    );
+    const section = screen.getByTestId("heads-section");
+    expect(section).toHaveTextContent("Heads");
+    expect(screen.getAllByTestId("head-chat-row")).toHaveLength(1);
+  });
+
+  it("puts the 'Done · 7 days' divider right before the first ended run, never above an all-active list", () => {
+    const needsYou = mkRun({ run_id: "a", state: "needs_you" });
+    const running = mkRun({ run_id: "b", state: "running" });
+    const done = mkRun({ run_id: "c", state: "passed", exited_at: "2026-09-23T10:00:00Z" });
+    renderWithClient(<SessionSidebar {...sidebarBase} heads={[needsYou, running, done]} onSelectHead={() => {}} />);
+    expect(screen.getByTestId("heads-done-divider")).toBeInTheDocument();
+    const rows = within(screen.getByTestId("heads-section")).getAllByTestId("head-chat-row");
+    expect(rows.map((r) => r.getAttribute("data-head-state"))).toEqual(["needs_you", "running", "passed"]);
+  });
+
+  // Review finding on PR #756 round 4: a needs_you run that `sortHeadsForList`
+  // placed in the ended group (a later run on the same task superseded it)
+  // kept `state: "needs_you"` on its OWN record, so the old `firstDoneIndex`
+  // (which only matched `passed`/`failed`/`stopped`) put the "Done" divider
+  // AFTER it, leaving it visually pinned in the active section anyway.
+  it("a superseded needs_you counts as done for the divider, and renders as answered — not pulsing", () => {
+    const superseded = mkRun({ run_id: "a", task_id: "t1", state: "needs_you", exited_at: "2026-09-01T00:00:00Z" });
+    const successor = mkRun({ run_id: "b", task_id: "t1", restarted_from: "a", state: "failed", exited_at: "2026-09-10T00:00:00Z" });
+    const running = mkRun({ run_id: "c", task_id: "t2", state: "running" });
+    // Pre-sorted the way the real caller (`sessions/page.tsx`) would hand
+    // it in: running first (active group), then the ended group newest-
+    // end-first, including the superseded needs_you at the end.
+    renderWithClient(<SessionSidebar {...sidebarBase} heads={[running, successor, superseded]} onSelectHead={() => {}} />);
+    const section = screen.getByTestId("heads-section");
+    const divider = screen.getByTestId("heads-done-divider");
+    const rows = within(section).getAllByTestId("head-chat-row");
+    // Divider sits right before "successor" (the first ended-group row) —
+    // not after "superseded", which would leave it above the divider.
+    expect(rows.map((r) => r.getAttribute("data-head-state"))).toEqual(["running", "failed", "needs_you"]);
+    expect(divider.compareDocumentPosition(rows[1])).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    const supersededRow = rows[2];
+    expect(supersededRow).toHaveTextContent("answered");
+    expect(supersededRow).not.toHaveTextContent("needs you");
+  });
+
+  it("shows no divider when every head in the window is still active", () => {
+    renderWithClient(
+      <SessionSidebar
+        {...sidebarBase}
+        heads={[mkRun({ run_id: "a", state: "needs_you" }), mkRun({ run_id: "b", state: "running" })]}
+        onSelectHead={() => {}}
+      />,
+    );
+    expect(screen.queryByTestId("heads-done-divider")).not.toBeInTheDocument();
+  });
+
+  it("shows no divider when every head in the window has already ended", () => {
+    renderWithClient(
+      <SessionSidebar
+        {...sidebarBase}
+        heads={[mkRun({ run_id: "a", state: "passed" }), mkRun({ run_id: "b", state: "failed" })]}
+        onSelectHead={() => {}}
+      />,
+    );
+    expect(screen.queryByTestId("heads-done-divider")).not.toBeInTheDocument();
+  });
+
+  it("clicking a head row calls onSelectHead with its run id, and marks it selected", () => {
+    const onSelectHead = vi.fn();
+    renderWithClient(
+      <SessionSidebar
+        {...sidebarBase}
+        heads={[mkRun({ run_id: "h-9" })]}
+        onSelectHead={onSelectHead}
+        selectedHeadId="h-9"
+      />,
+    );
+    expect(screen.getByTestId("head-chat-row")).toHaveAttribute("aria-selected", "true");
+    screen.getByTestId("head-chat-row").click();
+    expect(onSelectHead).toHaveBeenCalledWith("h-9");
+  });
+
+  it("shows an Archive row with the count only when archivedCount > 0, opens the sheet", async () => {
+    renderWithClient(
+      <SessionSidebar {...sidebarBase} heads={[mkRun()]} archivedCount={3} onSelectHead={() => {}} />,
+    );
+    const archiveBtn = screen.getByTestId("heads-archive-button");
+    expect(archiveBtn).toHaveTextContent("3");
+    expect(screen.queryByTestId("head-archive-sheet")).not.toBeInTheDocument();
+    await userEvent.click(archiveBtn);
+    expect(screen.getByTestId("head-archive-sheet")).toBeInTheDocument();
+  });
+
+  it("no Archive row at all when archivedCount is 0", () => {
+    renderWithClient(<SessionSidebar {...sidebarBase} heads={[mkRun()]} archivedCount={0} onSelectHead={() => {}} />);
+    expect(screen.queryByTestId("heads-archive-button")).not.toBeInTheDocument();
+  });
+
+  // Review finding on PR #756 (K10, "Pro Ansicht eine Sprache"): the agent
+  // list's own empty state was hardcoded German ("Keine Sessions aktiv.")
+  // right under a running or waiting head in the English UI.
+  it("the agent-sessions empty state is i18n'd, English UI, never the hardcoded German string", () => {
+    renderWithClient(
+      <SessionSidebar {...sidebarBase} agents={[]} heads={[mkRun({ state: "running" })]} onSelectHead={() => {}} />,
+    );
+    expect(screen.getByText("No agent sessions.")).toBeInTheDocument();
+    expect(screen.queryByText("Keine Sessions aktiv.")).not.toBeInTheDocument();
+  });
+
+  it("the Heads section is hidden on the Groups tab (showGroups === true)", async () => {
+    renderWithClient(
+      <SessionSidebar
+        {...sidebarBase}
+        heads={[mkRun()]}
+        onSelectHead={() => {}}
+        onSelectGroup={() => {}}
+      />,
+    );
+    await userEvent.click(screen.getByRole("tab", { name: "Groups" }));
+    expect(screen.queryByTestId("heads-section")).not.toBeInTheDocument();
   });
 });

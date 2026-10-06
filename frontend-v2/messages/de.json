@@ -795,11 +795,12 @@
       "unfoldAll": "Alle öffnen",
       "sectionTitle": "Gruppen",
       "tabListLabel": "Chat-Ansicht",
-      "tabAgents": "Agenten",
+      "tabAgents": "Alle",
       "tabGroups": "Gruppen",
       "tabGroupsWaiting": "Gruppen — {count} warten",
       "newGroup": "Neue Gruppe",
       "emptyList": "Noch keine Gruppe — mehrere Agenten, ein Ziel.",
+      "noAgentSessions": "Keine Agenten-Sitzungen.",
       "chipWaiting": "wartet",
       "chipPaused": "pausiert",
       "chipDone": "fertig",
@@ -1027,6 +1028,14 @@
     "effortRejected": "Effort-Wechsel abgelehnt",
     "effortUnconfirmed": "Effort-Wechsel nicht bestätigt — im Terminal prüfen",
     "effortFailed": "Effort-Wechsel fehlgeschlagen",
+    "toolGroup": {
+      "commands": "{count, plural, one {# Befehl ausgeführt} other {# Befehle ausgeführt}}",
+      "tools": "{count, plural, one {# Tool verwendet} other {# Tools verwendet}}",
+      "failed": "{count} fehlgeschlagen",
+      "thoughts": "{count, plural, one {nachgedacht} other {#× nachgedacht}}",
+      "activity": "Aktivität",
+      "errorIncluded": "Fehler enthalten"
+    },
     "diff": {
       "scopeLabel": "Diff-Bereich",
       "scopeWorktree": "Arbeitsstand",
@@ -3449,6 +3458,7 @@
     "onlyCreate": "Nur Task anlegen",
     "startFailed": "Task angelegt, aber der Head ist nicht gestartet: {message}",
     "started": "Head gestartet",
+    "answered": "Beantwortet",
     "reason": {
       "protocol_mismatch": "Dieser Harness kann mit diesem Modell nicht sprechen.",
       "harness_not_supported": "Dieser Harness kann nicht als Head laufen.",
@@ -3510,6 +3520,8 @@
       "answerLabel": "Deine Antwort",
       "answerPlaceholder": "deine Antwort …",
       "answerContinue": "Antworten & weiter",
+      "supersededHint": "Ein neuerer Lauf hat das bereits beantwortet.",
+      "openNewerRun": "Neueren Lauf öffnen",
       "details": "Details",
       "openLog": "Log öffnen",
       "hideLog": "Log ausblenden",
@@ -3578,7 +3590,68 @@
     },
     "keepTask": "Task behalten, schliessen",
     "retryStart": "Head erneut starten",
-    "keptHeld": "Der Task bleibt angehalten in der Inbox — die Flotte nimmt ihn nicht."
+    "keptHeld": "Der Task bleibt angehalten in der Inbox — die Flotte nimmt ihn nicht.",
+    "steps": {
+      "context": "Kontext-Brief",
+      "plan": "Plan",
+      "redTest": "Roter Test",
+      "change": "Änderung",
+      "sabotage": "Sabotage-Probe",
+      "review": "Unabhängige Prüfung",
+      "pr": "Push / PR",
+      "runRecord": "Laufakte"
+    },
+    "time": {
+      "runningFor": "läuft seit {duration}",
+      "startingNow": "startet …",
+      "ago": "vor {age}"
+    },
+    "list": {
+      "sectionTitle": "Heads",
+      "doneDivider": "Fertig · 7 Tage",
+      "archiveTitle": "Archiv",
+      "close": "Schliessen",
+      "searchPlaceholder": "Titel oder Paar suchen",
+      "empty": "Noch keine älteren Heads.",
+      "noResults": "Keine Treffer."
+    },
+    "chat": {
+      "backToChats": "Zurück zu Chats",
+      "noTranscriptTitle": "Kein Live-Verlauf für diesen Harness",
+      "noTranscriptHint": "Zeigt stattdessen die letzten Log-Zeilen.",
+      "waitingFirstLines": "Warte auf die ersten Verlaufszeilen …",
+      "noTranscriptKept": "Für diesen Lauf wurde kein Verlauf aufbewahrt.",
+      "transcriptTooLarge": "Verlauf zu gross zum Anzeigen.",
+      "historyLoadFailed": "Verlauf konnte nicht geladen werden.",
+      "resolving": "Lauf wird geladen…",
+      "notFoundTitle": "Dieser Lauf wurde nicht gefunden.",
+      "notFoundHint": "Er wurde vielleicht aufgeräumt, oder der Link ist alt.",
+      "footer": {
+        "step": "Schritt {n}/{total} · {name}",
+        "continueRun": "Weitermachen"
+      }
+    },
+    "summary": {
+      "title": "Laufakte",
+      "openFull": "Ganze Laufakte öffnen",
+      "testsLabel": "Tests",
+      "testsRedBefore": "Rot vorher",
+      "testsGreenAfter": "Grün danach",
+      "sabotage": "Sabotage-Probe",
+      "yes": "Ja",
+      "no": "Nein",
+      "kz": "kz-Prüfung",
+      "review": "Prüfung",
+      "reviewHelper": "Unabhängiger Prüfer",
+      "reviewSelf": "Selbstprüfung (kein Helfer)",
+      "bypass": "Umgehungen",
+      "operatorMinutes": "Deine Minuten",
+      "helpers": "Helfer",
+      "branch": "Branch",
+      "failed": "konnte nicht geladen werden",
+      "expand": "Mehr anzeigen",
+      "collapse": "Weniger anzeigen"
+    }
   },
   "nightShift": {
     "runTonight": "Heute Nacht ausführen",
