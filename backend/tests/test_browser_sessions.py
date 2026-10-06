@@ -2,7 +2,7 @@
 
 PR S1 is the invisible foundation: the `browser_sessions` row, the session's
 gateway address `/s/<token>/`, registering it with cdp-gateway and ending it
-there. Nothing in MC opens a session on its own yet (harness wiring is S2).
+there. Nothing in MC opens a session on its own yet (harness wiring is a later ADR-088 step).
 The gateway is faked with an `httpx.MockTransport`.
 """
 from __future__ import annotations
@@ -122,7 +122,7 @@ async def test_open_needs_exactly_one_owner(session: AsyncSession, make_agent, g
 
 async def test_open_survives_an_unreachable_gateway(session: AsyncSession, monkeypatch):
     """Opening is cheap and must not fail a head start: the row exists, the
-    gateway learns about it on the next register (S2 lifecycle loop)."""
+    gateway learns about it on the next register (ADR-088 lifecycle step)."""
     fake = FakeGateway(reachable=False)
     monkeypatch.setattr(svc, "_transport", httpx.MockTransport(fake.handler))
     row, registered = await svc.open_session(session, head_run_id=RUN_ID)
@@ -142,6 +142,28 @@ async def test_database_allows_one_open_session_per_head_run(gateway):
         s.add(BrowserSession(owner_kind="head", head_run_id=RUN_ID, status="ended"))
         s.add(BrowserSession(owner_kind="head", head_run_id=RUN_ID))
         await s.commit()  # ended sessions don't count
+
+
+async def test_open_that_loses_a_race_returns_the_winning_row(session: AsyncSession, gateway, monkeypatch):
+    """Two opens for one head run at the same moment: both SELECT nothing,
+    the second INSERT hits the partial unique index. The loser must get the
+    winner's row back, not a 500."""
+    async with AsyncSession(test_engine, expire_on_commit=False) as other:
+        winner = BrowserSession(owner_kind="head", head_run_id=RUN_ID)
+        other.add(winner)
+        await other.commit()
+
+    real_find = svc._find_open
+    calls = {"n": 0}
+
+    async def stale_first_lookup(*args, **kwargs):
+        calls["n"] += 1
+        return None if calls["n"] == 1 else await real_find(*args, **kwargs)
+
+    monkeypatch.setattr(svc, "_find_open", stale_first_lookup)
+    row, registered = await svc.open_session(session, head_run_id=RUN_ID)
+    assert row.id == winner.id
+    assert registered is True
 
 
 # ── end ────────────────────────────────────────────────────────────────────

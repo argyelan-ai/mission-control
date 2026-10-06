@@ -29,6 +29,7 @@ import uuid
 from typing import Optional
 
 import httpx
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -39,8 +40,7 @@ from app.utils import utcnow
 
 logger = logging.getLogger(__name__)
 
-# Same variable and default as routers/browser_live.py: cdp-gateway inside the
-# cdp-browser container.
+# cdp-gateway inside the cdp-browser container (also used by routers/browser_live.py).
 GATEWAY_BASE_URL = os.environ.get("CDP_GATEWAY_URL", "http://cdp-browser:9300")
 _GATEWAY_TIMEOUT = 5.0
 # Head run ids are uuids (docs/specs/head-launcher.md); anything else never
@@ -96,6 +96,17 @@ async def register_with_gateway(row: BrowserSession, agent_slug: Optional[str] =
     return True
 
 
+async def _find_open(
+    session: AsyncSession, agent: Optional[Agent], head_run_id: Optional[str],
+) -> Optional[BrowserSession]:
+    query = select(BrowserSession).where(BrowserSession.status != "ended")
+    if agent is not None:
+        query = query.where(BrowserSession.agent_id == agent.id)
+    else:
+        query = query.where(BrowserSession.head_run_id == head_run_id)
+    return (await session.exec(query)).first()
+
+
 async def open_session(
     session: AsyncSession,
     *,
@@ -109,12 +120,7 @@ async def open_session(
     if head_run_id is not None and not _RUN_ID_RE.match(head_run_id):
         raise ValueError("head_run_id must be a run uuid")
 
-    query = select(BrowserSession).where(BrowserSession.status != "ended")
-    if agent is not None:
-        query = query.where(BrowserSession.agent_id == agent.id)
-    else:
-        query = query.where(BrowserSession.head_run_id == head_run_id)
-    row = (await session.exec(query)).first()
+    row = await _find_open(session, agent, head_run_id)
     if row is None:
         row = BrowserSession(
             owner_kind="agent" if agent is not None else "head",
@@ -122,8 +128,17 @@ async def open_session(
             head_run_id=head_run_id,
         )
         session.add(row)
-        await session.commit()
-        await session.refresh(row)
+        try:
+            await session.commit()
+        except IntegrityError:
+            # Lost a race against a second open for the same owner: the
+            # partial unique index kept it to one row — use that one.
+            await session.rollback()
+            row = await _find_open(session, agent, head_run_id)
+            if row is None:
+                raise
+        else:
+            await session.refresh(row)
     registered = await register_with_gateway(row, _agent_slug(agent) if agent is not None else None)
     return row, registered
 
