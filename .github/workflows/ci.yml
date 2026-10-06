@@ -307,13 +307,13 @@ jobs:
           mc_disk_preflight
           docker build -t mc-frontend-v2-test ./frontend-v2
 
-      # PR #544 review (W1): this image was never built in CI, so the one
-      # line that could make the container PERMANENTLY unhealthy
-      # (`RUN apk add --no-cache socat websocat`) had never actually run —
-      # a healthcheck failing on a missing binary is worse than the bug it
-      # looks for. Runner is ubuntu-latest (x86_64); websocat ships in the
-      # Alpine v3.19 community repo for x86_64 (and aarch64, for the arm64
-      # hosts this image also runs on in production — not exercised here).
+      # PR #544 review (W1): this image was never built in CI, so the line
+      # that could make the container PERMANENTLY unhealthy (installing the
+      # healthcheck's tools) had never actually run — a healthcheck failing on
+      # a missing binary is worse than the bug it looks for. Since the Debian
+      # base (ADR-088 images step) websocat is the static release binary,
+      # sha256-checked per arch; runner is ubuntu-latest (x86_64), the arm64
+      # checksum is exercised on the production hardware at rollout.
       # NOTE: this proves the Dockerfile builds, not that this exact image
       # is the one running in production (that's built on arm64 hardware
       # and gets its own runtime/sabotage verification at rollout) — the
@@ -337,16 +337,26 @@ jobs:
           bash docker/cdp-browser/test_webgl.sh mc-cdp-browser-test docker-compose.yml
 
       # Sabotage tests for the healthcheck's WS leg against a mock CDP
-      # server (real websocat, real alpine/busybox — same runtime class as
-      # the image above) — see docker/cdp-browser/test_healthcheck.sh.
+      # server — run INSIDE the image built above (its websocat, wget,
+      # timeout and python3), the exact runtime the healthcheck ships in —
+      # see docker/cdp-browser/test_healthcheck.sh.
       - name: cdp-browser healthcheck sabotage tests
         run: |
-          docker run --rm \
+          docker run --rm --entrypoint bash \
             -v "$PWD/docker/cdp-browser:/t:ro" \
-            alpine:3.19 sh -c '
-              apk add --no-cache bash websocat python3 >/dev/null &&
-              bash /t/test_healthcheck.sh
-            '
+            mc-cdp-browser-test /t/test_healthcheck.sh
+
+      # Thin playwright-mcp image (exact npm version, WORKDIR /output for
+      # named screenshots): it must build and report the pinned version.
+      - name: Build playwright-mcp image
+        env:
+          BUILD_MIN_FREE_GB: "5"
+        run: |
+          . ./docker/shared/disk-preflight.sh
+          mc_disk_preflight
+          docker build -t mc-playwright-mcp-test ./docker/playwright-mcp
+          docker run --rm mc-playwright-mcp-test --version | grep -qx 'Version 0.0.83'
+          test "$(docker run --rm --entrypoint pwd mc-playwright-mcp-test)" = /output
 
       # The agent images are node:alpine — BusyBox grep on musl, NOT GNU/BSD.
       # The fixtures in test_context_detect.sh catch most regressions on any
