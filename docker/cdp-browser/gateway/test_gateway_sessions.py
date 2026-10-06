@@ -345,3 +345,99 @@ async def test_agent_json_list_includes_tabs_of_its_own_context():
     status, _ct, body = await _http(gateway, "GET", "/a/alpha/json/list")
     assert status == 200
     assert [p["id"] for p in json.loads(body)] == ["IN-CTX"]
+
+
+# ── review fix M1: cleanup closes only what the session created ────────────
+
+OTHER_TOKEN_2 = "tok_" + "C" * 40
+
+
+def test_ending_a_session_never_closes_a_tab_it_only_claimed():
+    """A Puppeteer/omp client on /s/<token>/ that does `pages()[0].goto()`
+    claims a foreign tab (claim on use rewrites the display owner). That tab
+    was never the session's to close: an agent's tab (BETA-TAB) or a tab in
+    another session's own context (B-TAB) must survive the end of session A.
+    Sabotage: base cleanup on the claim owner again -> both reappear here."""
+    state = GatewayState(now_fn=lambda: 1.0)
+    state.register_session(TOKEN, SID, None)
+    state.register_session(OTHER_TOKEN_2, OTHER_SID, None)
+    a, b = session_owner_key(SID), session_owner_key(OTHER_SID)
+    # beta (a fixed agent) created BETA-TAB in the default context
+    state.observe_response("Target.createTarget", {}, {"targetId": "BETA-TAB"}, agent="beta")
+    _created(state, "BETA-TAB")
+    # session B created a context and B-TAB inside it
+    state.observe_response("Target.createBrowserContext", {}, {"browserContextId": "CTX-B"}, agent=b)
+    _created(state, "B-TAB", ctx="CTX-B")
+    # session A created its own tab
+    state.observe_response("Target.createTarget", {}, {"targetId": "A-TAB"}, agent=a)
+    _created(state, "A-TAB")
+    # session A attaches to both foreign tabs and navigates them (claim on use)
+    for tid, sess in (("BETA-TAB", "S-1"), ("B-TAB", "S-2")):
+        state.observe_response("Target.attachToTarget", {"targetId": tid}, {"sessionId": sess}, agent=a)
+        state.observe_command("Page.navigate", sess, a)
+    assert state.owner_of("BETA-TAB") == a and state.owner_of("B-TAB") == a  # display follows the claim
+
+    tabs, contexts = state.session_resources(SID)
+    assert tabs == ["A-TAB"]
+    assert contexts == []
+
+
+def test_tabs_a_session_opened_by_popup_or_json_new_are_its_to_close():
+    state = GatewayState(now_fn=lambda: 1.0)
+    state.register_session(TOKEN, SID, None)
+    a = session_owner_key(SID)
+    state.observe_response("Target.createTarget", {}, {"targetId": "A-TAB"}, agent=a)
+    _created(state, "A-TAB")
+    _created(state, "POPUP", opener="A-TAB")          # window.open() from A's tab
+    state.record_creator("JSON-NEW", a)               # PUT /json/new over A's address
+    _created(state, "JSON-NEW")
+    tabs, _ = state.session_resources(SID)
+    assert tabs == ["A-TAB", "JSON-NEW", "POPUP"]
+
+
+# ── review fix L5: cleanup answers within a deadline ───────────────────────
+
+@pytest.mark.asyncio
+async def test_cleanup_answers_within_its_deadline_even_if_chromium_hangs(monkeypatch):
+    """The backend waits a bounded time for DELETE; the gateway must answer
+    inside it even when Chromium never replies. Commands are sent in one go
+    and unanswered ones are reported, not waited on one by one."""
+    import cdp_gateway
+
+    monkeypatch.setattr(cdp_gateway, "_CLEANUP_DEADLINE", 0.3)
+    gateway = CdpGateway(upstream_host="127.0.0.1", upstream_port=1)
+    gateway.state.register_session(TOKEN, SID, None)
+    key = session_owner_key(SID)
+    for tid in ("T1", "T2", "T3"):
+        gateway.state.observe_response("Target.createTarget", {}, {"targetId": tid}, agent=key)
+        _created(gateway.state, tid)
+
+    async def hanging_version(path):
+        return {"webSocketDebuggerUrl": "ws://127.0.0.1:1/devtools/browser/x"}
+
+    class HangingWs:
+        def __init__(self):
+            self.sent = []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def send(self, data):
+            self.sent.append(json.loads(data))
+
+        async def recv(self):
+            await asyncio.sleep(3600)
+
+    ws = HangingWs()
+    monkeypatch.setattr(gateway, "_upstream_json", hanging_version)
+    monkeypatch.setattr(cdp_gateway.websockets, "connect", lambda *a, **k: ws)
+    start = asyncio.get_event_loop().time()
+    result = await gateway.end_session(TOKEN)
+    elapsed = asyncio.get_event_loop().time() - start
+    assert elapsed < 1.5
+    assert len(ws.sent) == 3                       # all sent at once, not one per round trip
+    assert result["closedTargets"] == 3
+    assert any("unanswered" in e for e in result["errors"])

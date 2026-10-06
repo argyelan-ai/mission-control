@@ -162,6 +162,10 @@ _HALF_CLOSE_GRACE = 0.5
 # they can never clash with an agent's ids; high anyway for readable logs.
 _OWN_MSG_ID_BASE = 2_000_000_000
 # Chromium's answers when a tab or context to close no longer exists.
+# The whole cleanup answers within this, however many tabs and however slow
+# Chromium is: the backend waits a bounded time for DELETE (its timeout must
+# stay above this). Leftovers are reported, MC's lifecycle loop sweeps them.
+_CLEANUP_DEADLINE = 8.0
 _ALREADY_GONE = re.compile(r"Failed to find context|No target with given id", re.I)
 
 # Commands that mean "the sending agent is working in this tab now".
@@ -296,8 +300,13 @@ class TargetInfo:
     created_at: float = 0.0
     last_active_at: float = 0.0
     # Owner key: an agent slug, or `s/<session-id>` for a browser session.
+    # Follows claim on use — this is who works in the tab now (display).
     agent: Optional[str] = None
     ctx: Optional[str] = None
+    # Who CREATED the tab (createTarget, /json/new, inherited from the
+    # creator's own context or opener). Never changed by a claim; the only
+    # basis for closing tabs when a session ends.
+    creator: Optional[str] = None
 
 
 @dataclass
@@ -318,6 +327,8 @@ class GatewayState:
     ctx_owner: dict[str, str] = field(default_factory=dict)
     target_owner: dict[str, str] = field(default_factory=dict)
     session_target: dict[str, str] = field(default_factory=dict)
+    # target -> owner key of whoever created it (see TargetInfo.creator).
+    target_creator: dict[str, str] = field(default_factory=dict)
     # Browser sessions (ADR-088): token -> entry, and every session id ever
     # registered -> its agent (kept after unregister so a tab that outlives
     # its session for a moment still reports the right agent).
@@ -358,16 +369,18 @@ class GatewayState:
         return key, None
 
     def session_resources(self, session_id: str) -> tuple[list[str], list[str]]:
-        """What ending a session has to close: (tabs, contexts). Contexts the
-        session created take their tabs with them, so a tab is listed on its
-        own only when it lives outside those contexts (e.g. omp's
-        `newPage()` lands in the shared default context)."""
+        """What ending a session has to close: (tabs, contexts). Only what the
+        session CREATED — never a tab it merely claimed by navigating it
+        (review finding: a claimed agent tab, or a tab in another session's
+        own context, must survive). Contexts the session created take their
+        tabs with them, so a tab is listed on its own only when it lives
+        outside those contexts (e.g. omp's `newPage()` in the default context)."""
         key = session_owner_key(session_id)
         contexts = sorted(ctx for ctx, owner in self.ctx_owner.items() if owner == key)
         owned_ctx = set(contexts)
         tabs = sorted(
             t.id for t in self.targets.values()
-            if (t.agent == key or self.target_owner.get(t.id) == key) and t.ctx not in owned_ctx
+            if (t.creator or self.target_creator.get(t.id)) == key and t.ctx not in owned_ctx
         )
         return tabs, contexts
 
@@ -392,6 +405,21 @@ class GatewayState:
             info = self.targets.get(target_id)
             if info is not None:
                 info.agent = agent
+
+    def record_creator(self, target_id: str, agent: Optional[str]) -> None:
+        """First creator wins; a claim never calls this."""
+        if agent and agent != _SHARED and target_id not in self.target_creator:
+            self.target_creator[target_id] = agent
+            info = self.targets.get(target_id)
+            if info is not None:
+                info.creator = agent
+
+    def _creator_for(self, tid: str, ctx: Optional[str], opener: Optional[str]) -> Optional[str]:
+        return (
+            self.target_creator.get(tid)
+            or (self.ctx_owner.get(ctx) if ctx else None)
+            or (self.target_creator.get(opener) if opener else None)
+        )
 
     def record_context_owner(self, context_id: str, agent: Optional[str]) -> None:
         if agent and agent != _SHARED:
@@ -431,7 +459,10 @@ class GatewayState:
                 last_active_at=existing.last_active_at if existing else now,
                 agent=agent,
                 ctx=ctx,
+                creator=self._creator_for(tid, ctx, opener),
             )
+            if self.targets[tid].creator:
+                self.target_creator.setdefault(tid, self.targets[tid].creator)
             return existing is None
         if method == "targetInfoChanged":
             info = params.get("targetInfo", {})
@@ -446,6 +477,7 @@ class GatewayState:
                     created_at=now, last_active_at=now,
                     agent=self.target_owner.get(tid) or (self.ctx_owner.get(ctx) if ctx else None),
                     ctx=ctx,
+                    creator=self._creator_for(tid, ctx, None),
                 )
                 return True
             url_changed = existing.url != info.get("url", existing.url)
@@ -457,6 +489,7 @@ class GatewayState:
         if method == "targetDestroyed":
             tid = params.get("targetId")
             self.target_owner.pop(tid, None)
+            self.target_creator.pop(tid, None)
             if tid in self.targets:
                 del self.targets[tid]
                 self._prune_owner_maps()
@@ -515,6 +548,7 @@ class GatewayState:
             tid = result.get("targetId")
             if tid:
                 self.record_owner(tid, agent)
+                self.record_creator(tid, agent)
 
     def observe_event(self, method: str, params: dict) -> None:
         if method == "Target.attachedToTarget":
@@ -551,6 +585,8 @@ class GatewayState:
     def _prune_owner_maps(self) -> None:
         if len(self.target_owner) > _OWNER_MAP_SOFT_CAP and self.targets:
             self.target_owner = {k: v for k, v in self.target_owner.items() if k in self.targets}
+        if len(self.target_creator) > _OWNER_MAP_SOFT_CAP and self.targets:
+            self.target_creator = {k: v for k, v in self.target_creator.items() if k in self.targets}
         if len(self.session_target) > _OWNER_MAP_SOFT_CAP and self.targets:
             self.session_target = {k: v for k, v in self.session_target.items() if v in self.targets}
 
@@ -1013,25 +1049,35 @@ class CdpGateway:
         _status, _ctype, body = await self._upstream_http("GET", path)
         return json.loads(body or b"{}")
 
-    async def _cdp_call(self, commands: list[tuple[str, dict]]) -> list[dict]:
+    async def _cdp_call(self, commands: list[tuple[str, dict]], *, deadline: Optional[float] = None) -> list[dict]:
         """Send browser-level CDP commands over a short-lived connection of
         the gateway's own and return one reply per command (`result` or
-        `error`, as Chromium sent it)."""
-        version = await self._upstream_json("/json/version")
-        ws_url = version.get("webSocketDebuggerUrl")
-        if not ws_url:
-            raise RuntimeError("no webSocketDebuggerUrl")
-        replies: list[dict] = []
-        async with websockets.connect(ws_url, max_size=None) as ws:
-            for offset, (method, params) in enumerate(commands):
-                msg_id = _OWN_MSG_ID_BASE + offset
-                await ws.send(json.dumps({"id": msg_id, "method": method, "params": params}))
-                while True:
-                    reply = json.loads(await asyncio.wait_for(ws.recv(), timeout=_UPSTREAM_HTTP_TIMEOUT))
-                    if reply.get("id") == msg_id:
-                        replies.append(reply)
-                        break
-        return replies
+        `error`, as Chromium sent it). All commands go out at once; whatever
+        is still unanswered at the deadline gets an `error` reply of ours
+        ("unanswered"), so the caller never waits longer than `deadline`."""
+        deadline = _CLEANUP_DEADLINE if deadline is None else deadline
+        replies: dict[int, dict] = {}
+
+        async def _run() -> None:
+            version = await self._upstream_json("/json/version")
+            ws_url = version.get("webSocketDebuggerUrl")
+            if not ws_url:
+                raise RuntimeError("no webSocketDebuggerUrl")
+            async with websockets.connect(ws_url, max_size=None) as ws:
+                for offset, (method, params) in enumerate(commands):
+                    await ws.send(json.dumps({"id": _OWN_MSG_ID_BASE + offset, "method": method, "params": params}))
+                while len(replies) < len(commands):
+                    reply = json.loads(await ws.recv())
+                    msg_id = reply.get("id")
+                    if isinstance(msg_id, int) and 0 <= msg_id - _OWN_MSG_ID_BASE < len(commands):
+                        replies[msg_id - _OWN_MSG_ID_BASE] = reply
+
+        try:
+            await asyncio.wait_for(_run(), timeout=deadline)
+        except asyncio.TimeoutError:
+            pass
+        missing = {"error": {"message": f"unanswered within {deadline:g}s"}}
+        return [replies.get(i, missing) for i in range(len(commands))]
 
     # ── browser sessions (ADR-088) ─────────────────────────────────────────
 
@@ -1194,6 +1240,7 @@ class CdpGateway:
             # watcher's targetCreated for it may arrive before or after this;
             # `apply_target_event` picks the recorded owner up either way.
             self.state.record_owner(data["id"], agent)
+            self.state.record_creator(data["id"], agent)
 
         return 200, "application/json", json.dumps(_rewrite(data)).encode()
 
