@@ -1532,14 +1532,14 @@ Alle ADRs in `docs/decisions/`:
 
 ## Änderungshistorie (high-level)
 
-- **2026-10-06** — **Browser-Sitzungen, Fundament (ADR-088, S1, Migration 0211):** Jede Agenten-Sitzung und jeder
-  Head-Lauf bekommt künftig einen eigenen Browser-Bereich im gemeinsamen `cdp-browser`. Neu: Tabelle
-  `browser_sessions` (Besitzer Agent oder Head-Lauf, `open → live → ended`, höchstens eine offene Sitzung pro
-  Besitzer), `services/browser_sessions.py` (Token = HMAC der Sitzungs-ID, nie gespeichert),
-  `/api/v1/browser-sessions` (Liste ohne Token; Öffnen/Beenden nur Operator). `cdp-gateway` bekommt ein
-  Sitzungs-Register (`PUT/GET/DELETE /mc/sessions`) und die Adresse `/s/<token>/` **neben** `/a/<slug>/`;
-  alles über die Adresse Erzeugte gehört der Sitzung, Beenden trennt Verbindungen, schliesst Tabs und
-  Kontexte. Noch ohne Aufrufer im Betrieb (Anschluss der Harnesses folgt), unsichtbar für den Operator.
+- **2026-10-06** — **Browser sessions, foundation (ADR-088, S1, migration 0211):** every agent session and
+  head run is to get its own browser area in the shared `cdp-browser`. New: table `browser_sessions` (owner
+  agent or head run, `open → live → ended`, at most one open session per owner),
+  `services/browser_sessions.py` (token = HMAC of the session id, never stored), `/api/v1/browser-sessions`
+  (listing without token; open/end operator only). `cdp-gateway` gets a session register
+  (`PUT/GET/DELETE /mc/sessions`) and the address `/s/<token>/` **next to** `/a/<slug>/`; everything created
+  over the address belongs to the session; ending cuts its connections, closes its tabs and contexts. No
+  caller in operation yet (harness wiring follows); invisible to the operator.
 - **2026-09-10** — **Jarvis' Sprachmodell wird Runtime-Bindung (ADR-082):** `JarvisVoiceAdapter`
   in `HOST_ADAPTERS` (ADR-064-Muster) macht Jarvis im MC-Runtime-Picker umschaltbar wie jeden
   anderen Agenten — bisher las `voice_worker/main.py` den Provider nur aus der Container-Env
