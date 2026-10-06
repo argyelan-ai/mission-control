@@ -299,3 +299,16 @@ async def test_unconfirmed_disposal_keeps_context_ownership_for_the_sweep(monkey
     assert ("Target.disposeBrowserContext", {"browserContextId": "CTX-SLOW"}) in swept
     assert ("Target.closeTarget", {"targetId": "T-SLOW"}) in swept
     assert "CTX-SLOW" not in gateway.state.ctx_owner
+
+
+def test_orphans_lists_ended_sessions_that_still_own_tabs_or_contexts():
+    """The sweep must also find a context left without tabs (it never shows
+    up in /mc/targets)."""
+    state = GatewayState(now_fn=Clock())
+    ended, live = SID, "99999999-8888-4777-8666-555555555555"
+    state.register_session(TOKEN, live, None)
+    state.observe_response("Target.createBrowserContext", {}, {"browserContextId": "CTX-LEFT"},
+                           agent=session_owner_key(ended))
+    state.record_creator("T-LIVE", session_owner_key(live))
+    _created(state, "T-LIVE")
+    assert state.as_mc_orphans_json() == [{"sessionId": ended, "tabs": 0, "contexts": 1}]

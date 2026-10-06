@@ -37,6 +37,7 @@ class FakeGateway:
         self.targets: list[dict] = []
         self.snapshot_status = 200
         self.jpeg = JPEG
+        self.orphans: list[dict] = []
         self.requests: list[httpx.Request] = []
 
     def tab(self, tid, *, agent=None, session=None, idle=5.0, url="https://x.example", title="X", creator_session=None):
@@ -58,6 +59,8 @@ class FakeGateway:
                 {"sessionId": v["session"], "agent": v["agent"], "tabs": 0, "contexts": 0, "connections": 0}
                 for v in self.registered.values()
             ])
+        if path == "/mc/orphans":
+            return httpx.Response(200, json=self.orphans)
         if path == "/mc/orphans/close":
             return httpx.Response(200, json={"closedTargets": 1, "disposedContexts": 0, "errors": []})
         token = path.split("/")[3]
@@ -347,6 +350,10 @@ async def test_tabs_left_behind_by_an_ended_session_are_swept(session: AsyncSess
     alive = await _add(owner_kind="head", head_run_id=run)
     gw.tab("ORPHAN", creator_session=str(ended.id), session=str(ended.id))
     gw.tab("LIVE", session=str(alive.id))
+    # The gateway lists ended sessions that still own tabs OR contexts (a
+    # context without tabs never shows up in /mc/targets, re-review N2).
+    gw.orphans = [{"sessionId": str(ended.id), "tabs": 1, "contexts": 0},
+                  {"sessionId": str(alive.id), "tabs": 1, "contexts": 0}]   # racing open: never swept
     report = await _tick(session)
     [sweep] = gw.calls("POST", "/mc/orphans/close")
     assert sweep.url.params["session"] == str(ended.id)
@@ -362,3 +369,11 @@ async def test_only_ended_or_unknown_sessions_are_ended_or_swept_at_the_gateway(
     assert await svc._ended_or_unknown(session, str(ended_row.id)) is True
     assert await svc._ended_or_unknown(session, str(uuid.uuid4())) is True
     assert await svc._ended_or_unknown(session, "not-a-uuid") is False
+
+
+async def test_a_context_left_without_tabs_is_swept_too(session: AsyncSession, gw):
+    ended = await _add(owner_kind="head", head_run_id=str(uuid.uuid4()), status="ended", ended_at=utcnow())
+    gw.orphans = [{"sessionId": str(ended.id), "tabs": 0, "contexts": 1}]
+    report = await _tick(session)
+    [sweep] = gw.calls("POST", "/mc/orphans/close")
+    assert sweep.url.params["session"] == str(ended.id) and report["swept"] == 1

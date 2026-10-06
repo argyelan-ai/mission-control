@@ -411,8 +411,12 @@ async def lifecycle_tick(session: AsyncSession, *, now: Optional[datetime] = Non
                     report["stale_ended"] += 1
                 except httpx.HTTPError as e:
                     logger.info("browser_sessions: could not end stale gateway session %s: %s", sid, e)
-        creators = {t.get("creatorSession") for t in targets if t.get("creatorSession")}
-        for sid in sorted(creators - live_ids - ended_now):
+        try:
+            orphans = {o.get("sessionId") for o in await _gateway_json(client, "/mc/orphans")}
+        except (httpx.HTTPError, ValueError):
+            orphans = set()
+        orphans |= {t.get("creatorSession") for t in targets if t.get("creatorSession")}
+        for sid in sorted(orphans - live_ids - ended_now - {None}):
             if await _ended_or_unknown(session, sid):
                 try:
                     await client.post("/mc/orphans/close", params={"session": sid}, timeout=_END_TIMEOUT)

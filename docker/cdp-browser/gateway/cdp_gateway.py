@@ -111,6 +111,7 @@ most recently active tab), and ends an agent's working phase with
 `DELETE /mc/sessions/<token>?agent_tabs=1`, which also closes that agent's
 own `/a/<slug>/` tabs (its connections stay — the agent keeps working).
 A session opened for an agent "sees" the agent's tabs as well as its own.
+`GET /mc/orphans` lists ended sessions that still own tabs or contexts;
 `POST /mc/orphans/close?session=<uuid>` closes what an already ENDED session
 created and left behind (refused while it is registered); `/mc/targets`
 reports the creating session as `creatorSession` for that sweep.
@@ -655,6 +656,30 @@ class GatewayState:
                 "idleSeconds": max(0.0, self.now_fn() - t.last_active_at),
             })
         return rows
+
+    def as_mc_orphans_json(self) -> list[dict]:
+        """`GET /mc/orphans` — sessions no longer registered that still own
+        tabs they created or contexts (what MC's sweep closes)."""
+        registered = {e.session_id for e in self.sessions.values()}
+        found: dict[str, dict] = {}
+
+        def _slot(key: Optional[str]) -> Optional[dict]:
+            if not key or not key.startswith(_SESSION_OWNER_PREFIX):
+                return None
+            sid = key[len(_SESSION_OWNER_PREFIX):]
+            if sid in registered:
+                return None
+            return found.setdefault(sid, {"sessionId": sid, "tabs": 0, "contexts": 0})
+
+        for t in self.targets.values():
+            slot = _slot(t.creator or self.target_creator.get(t.id))
+            if slot is not None:
+                slot["tabs"] += 1
+        for owner in self.ctx_owner.values():
+            slot = _slot(owner)
+            if slot is not None:
+                slot["contexts"] += 1
+        return sorted(found.values(), key=lambda r: r["sessionId"])
 
     def as_mc_sessions_json(self, live_connections: dict[str, int]) -> list[dict]:
         """`GET /mc/sessions` — never includes the tokens."""
@@ -1322,6 +1347,8 @@ class CdpGateway:
                 want_session = normalize_session_id((qs.get("session") or [None])[0])
             body = json.dumps(self.state.as_mc_targets_json(want, want_session)).encode()
             return 200, "application/json", body
+        if local_path.split("?", 1)[0] == "/mc/orphans":
+            return 200, "application/json", json.dumps(self.state.as_mc_orphans_json()).encode()
         if local_path.split("?", 1)[0] == "/mc/orphans/close":
             if method != "POST":
                 return 405, "text/plain", b"cdp-gateway: method not allowed"
