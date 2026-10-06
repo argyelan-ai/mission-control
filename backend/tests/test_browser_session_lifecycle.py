@@ -36,6 +36,7 @@ class FakeGateway:
         self.registered: dict[str, dict] = {}   # token -> {"session":..., "agent":...}
         self.targets: list[dict] = []
         self.snapshot_status = 200
+        self.jpeg = JPEG
         self.requests: list[httpx.Request] = []
 
     def tab(self, tid, *, agent=None, session=None, idle=5.0, url="https://x.example", title="X"):
@@ -62,7 +63,7 @@ class FakeGateway:
                 return httpx.Response(self.snapshot_status)
             return httpx.Response(200, json={
                 "targetId": "T", "url": "https://shot.example/page", "title": "Shot",
-                "mime": "image/jpeg", "data": base64.b64encode(JPEG).decode(),
+                "mime": "image/jpeg", "data": base64.b64encode(self.jpeg).decode(),
             })
         if request.method == "PUT":
             self.registered[token] = {"session": request.url.params["session"], "agent": request.url.params.get("agent")}
@@ -167,14 +168,16 @@ async def test_agent_phase_ends_after_30_minutes_without_activity(session: Async
     assert row.status == "live"
 
     gw.targets[0]["idleSeconds"] = 31 * 60                 # two minutes later, still untouched
+    gw.jpeg = b"\xff\xd8\xff-at-the-end"
     report = await _tick(session, t0 + timedelta(minutes=2))
     row = await _get(row.id)
     assert report["ended"] == 1
     assert row.status == "ended" and row.end_reason == "idle"
     [delete] = gw.calls("DELETE")
     assert delete.url.params["agent_tabs"] == "1"
-    # The last image was taken before the cleanup.
-    assert (settings.browser_sessions_root / str(row.id) / "last.jpg").read_bytes() == JPEG
+    # A fresh last image was taken right before the cleanup (sabotage:
+    # no capture on the way out -> the file still holds the first image).
+    assert (settings.browser_sessions_root / str(row.id) / "last.jpg").read_bytes() == b"\xff\xd8\xff-at-the-end"
     snap_at = [i for i, r in enumerate(gw.requests) if r.url.path.endswith("/snapshot")]
     assert snap_at and snap_at[-1] < gw.requests.index(delete)
 
