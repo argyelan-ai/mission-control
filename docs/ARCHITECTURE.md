@@ -1532,6 +1532,11 @@ Alle ADRs in `docs/decisions/`:
 
 ## Änderungshistorie (high-level)
 
+- **2026-10-07** — **Agent browser images (ADR-088 images step):** `cdp-browser` moves from the frozen
+  `zenika/alpine-chrome` (Chromium 124) to a digest-pinned `debian:trixie-slim` with Debian's Chromium 154
+  (SwiftShader WebGL), websocat as a checksum-verified static binary, `mem_limit: 2g`, `--window-size=1280,900`.
+  `playwright-mcp` is built from `docker/playwright-mcp` (exact `@playwright/mcp@0.0.83`, no browser download,
+  `WORKDIR /output` so named screenshots land in the shared folder) with `--viewport-size 1280x800`.
 - **2026-09-10** — **Jarvis' Sprachmodell wird Runtime-Bindung (ADR-082):** `JarvisVoiceAdapter`
   in `HOST_ADAPTERS` (ADR-064-Muster) macht Jarvis im MC-Runtime-Picker umschaltbar wie jeden
   anderen Agenten — bisher las `voice_worker/main.py` den Provider nur aus der Container-Env
