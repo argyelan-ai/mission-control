@@ -19,6 +19,7 @@ import Link from "next/link";
 import type { Task, Agent } from "@/lib/types";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 import { isSelfReviewStall } from "@/lib/reviewRouting";
+import { headListLine, isHeadActive, type HeadRun } from "@/lib/heads";
 
 // ── Review Task Row ──────────────────────────────────────────────────────────
 
@@ -27,6 +28,10 @@ interface ReviewTaskRowProps {
   boardId: string;
   agent?: Agent;
   agentMap: Record<string, Agent>;
+  /** The head that finished this card, or `null`/absent without one
+   *  (heads-sichtbar PR 3, bauplan §4) — looked up ONCE by the caller
+   *  (`useHeadRuns().byTask`), never queried per row. */
+  headRun?: HeadRun | null;
   onDecision: (decision: "approve" | "request_changes" | "hold", comment: string) => void;
   loading?: boolean;
 }
@@ -36,10 +41,12 @@ export function ReviewTaskRow({
   boardId,
   agent,
   agentMap,
+  headRun,
   onDecision,
   loading,
 }: ReviewTaskRowProps) {
   const t = useTranslations("inbox");
+  const tHeads = useTranslations("heads");
   const locale = useLocale();
   const [expanded, setExpanded] = useState(false);
   const [showRejectInput, setShowRejectInput] = useState(false);
@@ -63,6 +70,12 @@ export function ReviewTaskRow({
   // without ever having human_review_required set. Say why.
   const selfReviewStall = !task.human_review_required && isSelfReviewStall(task);
 
+  // A head only OWNS this card's chip while it is still active, or while
+  // nobody else has been assigned (review fix round 5 — mirrors the same
+  // rule in TaskDetailBody's Agent property): an ENDED head run must not
+  // keep hiding a real `assigned_agent_id` the operator picked afterward.
+  const showHeadChip = headRun != null && (!agent || isHeadActive(headRun));
+
   return (
     <motion.div
       layout
@@ -71,11 +84,18 @@ export function ReviewTaskRow({
       exit={{ opacity: 0, x: 8, height: 0 }}
     >
       <GlassCard className="p-4">
-        {/* Header */}
-        <div
-          className="flex items-start justify-between gap-4 cursor-pointer"
-          onClick={() => setExpanded(!expanded)}
-        >
+        {/* Header — review fix round 7, finding 3: a `role="button"` div
+            wrapping the head chip `<Link>` made the whole header (chip text
+            included) the button's accessible name and nested a link inside
+            a button (axe `nested-interactive`, confirmed via axe-core on
+            `review-row-header`). TaskRow.tsx's own pattern avoids this on
+            purpose (see its comment): a real `<button>` only around the
+            chevron+title line, stretched over the whole header via
+            `after:absolute after:inset-0` against this `relative` ancestor,
+            with the chip `Link` raised above it (`relative z-[1]`) so it
+            stays independently clickable/focusable and out of the button's
+            accessible name. */}
+        <div className="flex items-start justify-between gap-4 relative">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
               <Pill color={C.accent} size="sm">review</Pill>
@@ -110,7 +130,13 @@ export function ReviewTaskRow({
               >
                 {task.priority}
               </span>
-              {agent && (
+              {/* A head owns the card before `assigned_agent_id` ever does
+                  (anhang.md A11: that field stays NULL while a head runs) —
+                  the two chips are mutually exclusive in practice, named
+                  once each (K3). The head chip itself sits in its own row
+                  under the title now (mockup C-inbox, review fix round 5):
+                  inline here it pushed "… ago" onto a line of its own. */}
+              {!showHeadChip && agent && (
                 <span className="text-[11px] text-[var(--color-text-muted)]">
                   <EntityIcon value={agent.emoji} size={14} className="inline-block align-[-2px] mr-1" />{agent.name}
                 </span>
@@ -119,7 +145,13 @@ export function ReviewTaskRow({
                 {timeAgo(task.updated_at, locale)}
               </span>
             </div>
-            <div className="flex items-center gap-2 mt-2">
+            <button
+              type="button"
+              onClick={() => setExpanded(!expanded)}
+              aria-expanded={expanded}
+              data-testid="review-row-header"
+              className="flex items-center gap-2 mt-2 w-full text-left cursor-pointer after:absolute after:inset-0 after:content-['']"
+            >
               {expanded ? (
                 <ChevronDown size={14} className="text-[var(--color-text-muted)] shrink-0" />
               ) : (
@@ -128,9 +160,21 @@ export function ReviewTaskRow({
               <p className="text-sm font-medium text-[var(--color-text-primary)]">
                 {task.title}
               </p>
-            </div>
+            </button>
+            {showHeadChip && headRun && (
+              <Link
+                href={`/sessions?head=${encodeURIComponent(headRun.run_id)}`}
+                onClick={(e) => e.stopPropagation()}
+                className="relative z-[1] inline-flex items-center gap-1 text-xs mt-1 ml-6 cursor-pointer underline-offset-2 hover:underline pointer-coarse:min-h-[44px]"
+                style={{ color: C.textMuted }}
+                data-testid="review-row-head-chip"
+              >
+                {headListLine(headRun, tHeads, locale)}
+                <ChevronRight size={11} aria-hidden />
+              </Link>
+            )}
             {!expanded && task.description && (
-              <p className="text-[11px] mt-1 ml-5 line-clamp-2 text-[var(--color-text-secondary)]">
+              <p className="text-[11px] mt-1 ml-6 line-clamp-2 text-[var(--color-text-secondary)]">
                 {task.description}
               </p>
             )}
@@ -150,7 +194,7 @@ export function ReviewTaskRow({
               {/* Description */}
               {task.description && (
                 <div
-                  className="mt-3 ml-5 p-3 rounded-xl prose-description"
+                  className="mt-3 ml-6 p-3 rounded-xl prose-description"
                   style={{
                     backgroundColor: "var(--color-bg-surface)",
                     border: "1px solid var(--color-border-subtle)",
@@ -162,7 +206,7 @@ export function ReviewTaskRow({
 
               {/* Comments */}
               {comments && comments.length > 0 && (
-                <div className="mt-3 ml-5 flex flex-col gap-2">
+                <div className="mt-3 ml-6 flex flex-col gap-2">
                   <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-1">
                     {t("historyCount", { count: comments.length })}
                   </div>
@@ -173,13 +217,13 @@ export function ReviewTaskRow({
               )}
 
               {comments && comments.length === 0 && (
-                <div className="mt-3 ml-5 text-[11px] text-[var(--color-text-muted)]">
+                <div className="mt-3 ml-6 text-[11px] text-[var(--color-text-muted)]">
                   {t("noCommentsYet")}
                 </div>
               )}
 
               {/* Link to tasks */}
-              <div className="mt-3 ml-5">
+              <div className="mt-3 ml-6">
                 <Link
                   href="/tasks"
                   className="inline-flex items-center gap-1 text-[11px] transition-colors"

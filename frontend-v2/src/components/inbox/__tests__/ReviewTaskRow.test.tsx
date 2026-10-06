@@ -1,7 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import axe from "axe-core";
 import { ReviewTaskRow } from "../ReviewTaskRow";
+import { mkRun } from "@/lib/__tests__/headFixtures";
+import type { HeadRun } from "@/lib/heads";
 import type { Task } from "@/lib/types";
 
 function mkTask(overrides: Partial<Task> = {}): Task {
@@ -75,14 +78,16 @@ function mkTask(overrides: Partial<Task> = {}): Task {
   };
 }
 
-function renderRow(task: Task) {
+function renderRow(task: Task, headRun: HeadRun | null = null, agent?: Parameters<typeof ReviewTaskRow>[0]["agent"]) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  render(
+  return render(
     <QueryClientProvider client={qc}>
       <ReviewTaskRow
         task={task}
         boardId="board-1"
+        agent={agent}
         agentMap={{}}
+        headRun={headRun}
         onDecision={vi.fn()}
       />
     </QueryClientProvider>,
@@ -98,5 +103,99 @@ describe("ReviewTaskRow — Human review badge", () => {
   it('hides the badge when human_review_required is false or unset', () => {
     renderRow(mkTask({ human_review_required: false }));
     expect(screen.queryByText("Your review")).not.toBeInTheDocument();
+  });
+});
+
+describe("ReviewTaskRow — head chip (heads-sichtbar PR 3, bauplan §4)", () => {
+  it("a head-finished card shows 'Head · <pair> · passed ›', linking to the head chat", () => {
+    const run = mkRun({ run_id: "run-9", harness: "omp", model: "GLM-5.3-Flash-EXL3", state: "passed", pr_url: "https://github.com/o/r/pull/9" });
+    renderRow(mkTask(), run);
+    const chip = screen.getByTestId("review-row-head-chip");
+    expect(chip).toHaveTextContent("Head · omp × GLM-5.3 · passed");
+    expect(chip).toHaveAttribute("href", "/sessions?head=run-9");
+  });
+
+  it("without a head run, an assigned agent's own chip shows instead — unchanged default", () => {
+    renderRow(mkTask({ assigned_agent_id: "a1" }), null, { id: "a1", name: "Beta", emoji: "🔧" } as never);
+    expect(screen.getByText("Beta")).toBeInTheDocument();
+    expect(screen.queryByTestId("review-row-head-chip")).not.toBeInTheDocument();
+  });
+
+  it("clicking the head chip does not also toggle the row's own expand/collapse", async () => {
+    const { default: userEvent } = await import("@testing-library/user-event");
+    const run = mkRun({ state: "passed" });
+    renderRow(mkTask(), run);
+    const header = screen.getByTestId("review-row-header");
+    // `aria-expanded` is synchronous and does not depend on the (unmocked)
+    // comments query ever resolving — review fix round 5: the previous
+    // version of this test asserted on "No comments yet.", text that only
+    // renders once `api.tasks.comments.list` resolves; since that call was
+    // never mocked here, the query never settled in jsdom and the assertion
+    // passed vacuously whether or not the card actually expanded.
+    expect(header).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(screen.getByTestId("review-row-head-chip"));
+    // still collapsed — the chip's own stopPropagation held (sabotage: removing
+    // it would expand the card on every chip click, a confusing side effect
+    // of what reads as "open the head chat").
+    expect(header).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("an ended head + a real assigned agent shows the AGENT's chip, not a stale head chip (review fix round 5)", () => {
+    const run = mkRun({ state: "failed", reason: "no_progress", exited_at: "2026-09-23T12:00:00Z" });
+    renderRow(mkTask({ assigned_agent_id: "a1" }), run, { id: "a1", name: "Beta", emoji: "🔧" } as never);
+    expect(screen.getByText("Beta")).toBeInTheDocument();
+    expect(screen.queryByTestId("review-row-head-chip")).not.toBeInTheDocument();
+  });
+
+  // Review fix round 6, finding 8: no screenshot script set `hasTouch` on
+  // its Playwright context, so `pointer-coarse:` never matched and the
+  // phone-only 44px chip layout showed up in no screenshot — removing the
+  // class entirely left every test (this file included) green. A plain
+  // class-presence check is cheap insurance against that regression class.
+  it("carries the 44px coarse-pointer touch target (DESIGN.md K11)", () => {
+    const run = mkRun({ state: "passed" });
+    renderRow(mkTask(), run);
+    expect(screen.getByTestId("review-row-head-chip")).toHaveClass("pointer-coarse:min-h-[44px]");
+  });
+
+  it("an ACTIVE head still wins over an assigned agent — the head owns the work right now", () => {
+    const run = mkRun({ state: "running" });
+    renderRow(mkTask({ assigned_agent_id: "a1" }), run, { id: "a1", name: "Beta", emoji: "🔧" } as never);
+    expect(screen.getByTestId("review-row-head-chip")).toBeInTheDocument();
+    expect(screen.queryByText("Beta")).not.toBeInTheDocument();
+  });
+
+  // Review fix round 6, finding 1 made the Enter/Space keydown stop being
+  // swallowed, but round 7's independent review found the underlying
+  // structure was still wrong: `review-row-header` was a `role="button"`
+  // div wrapping the chip `<Link>`, which is a link nested inside a button
+  // (axe rule `nested-interactive`, serious) — an event-only test can be
+  // green while the DOM shape itself is still invalid. Round 7 replaced
+  // the div with TaskRow.tsx's own pattern (a real `<button>` stretched via
+  // `after:absolute after:inset-0`, the chip raised `relative z-[1]` above
+  // it) and this asserts the actual DOM shape via axe-core instead of one
+  // event. Confirmed red by hand against the pre-fix (`role="button"` div)
+  // header: axe reported a `nested-interactive` violation on this node.
+  it("the header has no nested-interactive accessibility violation (axe-core)", async () => {
+    const run = mkRun({ state: "passed" });
+    const { container } = renderRow(mkTask(), run);
+    const results = await axe.run(container, {
+      runOnly: { type: "rule", values: ["nested-interactive"] },
+    });
+    expect(results.violations).toEqual([]);
+  });
+
+  it("the head chip is still independently focusable and clickable above the stretched title button", async () => {
+    const { default: userEvent } = await import("@testing-library/user-event");
+    const run = mkRun({ state: "passed" });
+    renderRow(mkTask(), run);
+    const header = screen.getByTestId("review-row-header");
+    const chip = screen.getByTestId("review-row-head-chip");
+    expect(header.tagName).toBe("BUTTON");
+    expect(header.contains(chip)).toBe(false);
+    await userEvent.click(chip);
+    // still collapsed — the chip's own stopPropagation held, and it is a
+    // sibling of the title button now, not nested inside it.
+    expect(header).toHaveAttribute("aria-expanded", "false");
   });
 });

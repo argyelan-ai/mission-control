@@ -23,7 +23,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { api } from "@/lib/api";
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
@@ -31,6 +31,7 @@ import type { Agent, Device, Host, Runtime, RuntimeLiveStatus } from "@/lib/type
 import { typeLabel } from "../runtimeTypeLabel";
 import { formatUptimeParts, pad2 } from "./uptimeFormat";
 import { fmtCtx } from "@/lib/utils";
+import { formatDuration } from "@/lib/taskDetail/format";
 import { FlowEdge, type FlowKind } from "./FlowEdge";
 import { HeatStrip } from "./HeatStrip";
 import { KpiRow, type KpiCell } from "./KpiRow";
@@ -40,7 +41,8 @@ import { PhaseBar } from "./PhaseBar";
 import { shortModelTitle } from "./modelTitle";
 import { useAppStore } from "@/lib/store";
 import { headOnBoxes, useHeadOccupancy } from "@/components/heads/HeadOccupancy";
-import type { HeadBusy } from "@/lib/heads";
+import { useHeadPairsForLabels } from "@/components/heads/HeadStateCard";
+import { runPairLabel, type HeadBusy } from "@/lib/heads";
 import { fleetCount } from "@/app/agents/fleetCount";
 
 export interface StageMember {
@@ -86,6 +88,7 @@ export function Stage({
   onOpenCockpit: (headHostId: string) => void;
 }) {
   const t = useTranslations("runtimes.stage");
+  const locale = useLocale();
   const currentUser = useAppStore((s) => s.currentUser);
   const reduceMotion = useReducedMotion();
   const headHost = members.find((m) => m.role === "head" || m.role == null) ?? members[0];
@@ -102,6 +105,10 @@ export function Stage({
     }
     return [...byRun.values()];
   }, [headOccupancy, members]);
+  // Nicer runtime names for the KPI popover's "pair · duration" lines
+  // (bare `harness`/`runtime_slug` otherwise) — only fetched once there is
+  // a head on the card, same gate `useHeadPairsForLabels` elsewhere uses.
+  const headPairsForLabels = useHeadPairsForLabels(headsOnCard.length > 0);
 
   const { data: pulse } = useQuery({
     queryKey: ["hosts", headHost?.host.id, "pulse"],
@@ -176,18 +183,33 @@ export function Stage({
   const dotColor =
     status === "failed" ? STATUS_TEXT.error : status === "switching" ? STATUS_TEXT.warning : STATUS.online;
 
-  // "In use" = active (not paused) agents bound to this box's runtime + heads
-  // working on it — a paused agent does not use the box (same split as the
-  // /agents page and the sidebar counter). An agent the roster does not
-  // know yet counts as active: better one too many than a free-looking box.
-  // The tooltip says who; heads first (they are the ones that block a switch).
+  // "In use" used to count a working head and a merely-connected, idle
+  // agent as the same "1" (bauplan `heads-sichtbar` PR 3 §4 — the approved
+  // mockup's own annotation: "'2' zählt einen arbeitenden Head und einen
+  // ruhenden Agenten gleich."). Split instead into WORKING (heads on this
+  // box + bound agents actually `status === "busy"`) and CONNECTED (the
+  // box's other active-but-idle bound agents) — a paused agent counts as
+  // neither (same split as the /agents page and the sidebar counter). An
+  // agent the roster does not know yet counts as active-and-idle: better
+  // counted as merely connected than missing from a free-looking box.
   const boundAgents = (agentsData?.agents ?? []).map(
-    (ref) => roster?.find((a) => a.id === ref.id) ?? ({ ...ref, operational_mode: "active" } as unknown as Agent),
+    (ref) => roster?.find((a) => a.id === ref.id) ?? ({ ...ref, operational_mode: "active", status: "idle" } as unknown as Agent),
   );
   const agentSplit = fleetCount(boundAgents);
-  const activeNames = boundAgents.filter((a) => a.operational_mode !== "paused").map((a) => a.name).filter(Boolean);
+  const activeAgents = boundAgents.filter((a) => a.operational_mode !== "paused");
+  const busyAgents = activeAgents.filter((a) => a.status === "busy");
+  // Review fix round 5: only a genuinely reachable, idle agent is CONNECTED —
+  // `status !== "busy"` used to also count offline/error/provisioning/
+  // restarting agents as connected, which overstated the box's own number.
+  const connectedAgents = activeAgents.filter((a) => a.status === "online" || a.status === "idle");
+  const activeNames = activeAgents.map((a) => a.name).filter(Boolean);
   const pausedNames = boundAgents.filter((a) => a.operational_mode === "paused").map((a) => a.name).filter(Boolean);
-  const agentCount = agentSplit.active;
+  const workingCount = headsOnCard.length + busyAgents.length;
+  const connectedCount = connectedAgents.length;
+  // The tooltip keeps its own existing "N heads · N active agents" summary
+  // (unchanged by the working/connected split above — it still answers
+  // "who, in total, is on this box", heads first since they are the ones
+  // that block a switch) plus the per-name breakdown.
   const inUseTitle = [
     agentSplit.paused > 0
       ? t("inUseTooltipWithPaused", { heads: headsOnCard.length, agents: agentSplit.active, paused: agentSplit.paused })
@@ -196,6 +218,43 @@ export function Stage({
     ...(activeNames.length > 0 ? [t("inUseAgents", { names: activeNames.join(", ") })] : []),
     ...(pausedNames.length > 0 ? [t("inUsePaused", { names: pausedNames.join(", ") })] : []),
   ].join("\n");
+
+  // Tap target (review fix round 5, bauplan §4 "Antippen zeigt wer"): the
+  // `title` tooltip above never fires on iOS, so the same facts — who is
+  // WORKING (heads with their pair + how long, plus a busy agent's name)
+  // and who is only CONNECTED — are repeated here as a tappable disclosure.
+  const workingEntries: { id: string; text: string }[] = [
+    ...headsOnCard.map((h) => {
+      const sinceMs = h.since ? Date.parse(h.since) : NaN;
+      const seconds = Number.isNaN(sinceMs) ? null : Math.max(0, Math.round((Date.now() - sinceMs) / 1000));
+      const duration = seconds != null ? formatDuration(seconds, locale) : null;
+      const pair = runPairLabel(h, headPairsForLabels);
+      return { id: h.run_id, text: duration ? `${pair} · ${duration}` : pair };
+    }),
+    ...busyAgents.map((a) => ({ id: a.id, text: a.name })),
+  ];
+  const connectedEntries = connectedAgents.map((a) => ({ id: a.id, text: a.name }));
+  const inUsePopover = (
+    <>
+      {workingEntries.length > 0 && (
+        <div>
+          <div className="font-semibold mb-1" style={{ color: C.textPrimary }}>{t("kpiPopoverWorking")}</div>
+          <ul className="flex flex-col gap-1">
+            {workingEntries.map((e) => <li key={e.id}>{e.text}</li>)}
+          </ul>
+        </div>
+      )}
+      {connectedEntries.length > 0 && (
+        <div>
+          <div className="font-semibold mb-1" style={{ color: C.textPrimary }}>{t("kpiPopoverConnected")}</div>
+          <ul className="flex flex-col gap-1">
+            {connectedEntries.map((e) => <li key={e.id}>{e.text}</li>)}
+          </ul>
+        </div>
+      )}
+      {workingEntries.length === 0 && connectedEntries.length === 0 && <div>{t("kpiPopoverEmpty")}</div>}
+    </>
+  );
 
   const endpointPort = runtime.endpoint?.match(/:(\d+)/)?.[1] ?? null;
   const cells: KpiCell[] = [
@@ -206,10 +265,21 @@ export function Stage({
       testId: "kpi-speed",
     },
     {
-      value: String(agentCount + headsOnCard.length),
-      label: t("kpiInUse"),
+      value: String(workingCount),
+      // One ICU plural key, not a ternary between two catalog keys (review
+      // fix round 6, finding 4): a ternary is only ever exercised by the
+      // test suite's hardcoded-English next-intl mock, where "working" is
+      // both the singular AND the plural string — a sabotage that collapsed
+      // both branches to the same literal left all 107 runtimes tests
+      // green. Real pluralisation (German needs "arbeitet"/"arbeiten") now
+      // lives in the message catalog, where a locale-aware render can
+      // actually exercise both branches.
+      unit: t("kpiWorkingUnit", { count: workingCount }),
+      label: connectedCount > 0 ? t("kpiConnected", { count: connectedCount }) : t("kpiConnectedNone"),
       title: inUseTitle,
       testId: "kpi-in-use",
+      popoverContent: inUsePopover,
+      popoverLabel: t("kpiPopoverLabel"),
     },
     {
       value: endpointPort != null ? `:${endpointPort}` : "–",

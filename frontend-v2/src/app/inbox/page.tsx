@@ -11,6 +11,8 @@ import { useApprovalStream } from "@/lib/sse";
 import { useAppStore } from "@/lib/store";
 import { notify } from "@/lib/notify";
 import { C, alpha } from "@/lib/colors";
+import { pairShort } from "@/lib/heads";
+import { useHeadRuns } from "@/components/heads/useHeadRuns";
 import { ApprovalCard } from "@/components/inbox/ApprovalCard";
 import { ReviewTaskRow } from "@/components/inbox/ReviewTaskRow";
 import { GlassCard } from "@/components/shared/GlassCard";
@@ -19,8 +21,15 @@ import { useInbox } from "@/hooks/useInbox";
 
 export default function InboxPage() {
   const t = useTranslations("inbox");
+  const tHeads = useTranslations("heads");
   const qc = useQueryClient();
   const { activeBoardId } = useAppStore();
+  // One shared fetch (heads-sichtbar PR 3, bauplan §4: "ein Abruf für die
+  // ganze Liste") — looks up which review card a head finished, without a
+  // query per row. The head-questions bucket below has its own run objects
+  // already (`useInbox`'s own `heads.list()` call, unbounded by recency —
+  // an open question must never age out of sight) and needs no lookup.
+  const { byTask: headByTask } = useHeadRuns();
 
   // ── Data ─────────────────────────────────────────────────────────────────────
   // One source for what waits on the operator (lib/inbox.ts): the phone tab
@@ -123,7 +132,7 @@ export default function InboxPage() {
             {headQuestions.map((run) => (
               <Link
                 key={run.run_id}
-                href={run.task_id ? `/tasks?task=${encodeURIComponent(run.task_id)}` : "/tasks"}
+                href={`/sessions?head=${encodeURIComponent(run.run_id)}`}
                 className="block cursor-pointer"
                 data-testid="inbox-head-question"
               >
@@ -131,6 +140,13 @@ export default function InboxPage() {
                   <div className="flex-1 min-w-0">
                     <div className="text-sm truncate text-[var(--color-text-primary)]">
                       {run.title || t("headQuestionUntitled")}
+                    </div>
+                    {/* "Head · <pair>" (bauplan PR 3 §4) — the question text
+                        below already fills the row; the state itself
+                        ("needs you") is redundant with this whole section's
+                        own heading, so only the pair is named here (K3). */}
+                    <div className="text-xs truncate text-[var(--color-text-muted)] mt-1">
+                      {tHeads("runs.fact")} · {pairShort(run)}
                     </div>
                     {run.question && (
                       <div className="text-xs line-clamp-2 text-[var(--color-text-secondary)] mt-1">
@@ -167,6 +183,7 @@ export default function InboxPage() {
                   boardId={activeBoardId!}
                   agent={task.assigned_agent_id ? agentMap[task.assigned_agent_id] : undefined}
                   agentMap={agentMap}
+                  headRun={headByTask.get(task.id) ?? null}
                   onDecision={(decision, comment) =>
                     reviewMutation.mutate({ taskId: task.id, decision, comment })
                   }
