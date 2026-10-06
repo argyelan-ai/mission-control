@@ -196,7 +196,12 @@ describe("Stage — Agents KPI reads the box's slot runtime (Team-Lead-Fund 06.0
       />
     );
 
-    expect(await screen.findByText("3")).toBeInTheDocument();
+    // 3 idle, non-paused agents, no head on the box: all 3 are merely
+    // CONNECTED (none WORKING) — the KPI redesign's own count split
+    // (heads-sichtbar PR 3, bauplan §4), not this test's own concern (it is
+    // about which runtime slug the Agents fetch used, asserted below).
+    const tile = await screen.findByTestId("kpi-in-use");
+    await vi.waitFor(() => expect(tile).toHaveTextContent("+ 3 connected"));
     expect(agentsSpy).toHaveBeenCalledWith("dgx-spark-slot");
     expect(agentsSpy).not.toHaveBeenCalledWith("qwen38-flash-next");
   });
@@ -217,7 +222,8 @@ describe("Stage — Agents KPI reads the box's slot runtime (Team-Lead-Fund 06.0
       />
     );
 
-    await screen.findByText("1");
+    const tile = await screen.findByTestId("kpi-in-use");
+    await vi.waitFor(() => expect(tile).toHaveTextContent("+ 1 connected"));
     expect(agentsSpy).toHaveBeenCalledWith("qwen38-flash-next");
   });
 });

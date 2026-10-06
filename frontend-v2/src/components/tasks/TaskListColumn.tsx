@@ -14,12 +14,14 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import Link from "next/link";
 import { Brain, Check, ChevronRight, Clock, Paperclip, Search, Send, X, Zap } from "lucide-react";
 import { api } from "@/lib/api";
 import { C, LANE, alpha } from "@/lib/colors";
 import { STATUS_LABEL_KEY } from "@/lib/taskDetail/statusLabels";
+import { headListLine, type HeadRun } from "@/lib/heads";
+import { useHeadRuns } from "@/components/heads/useHeadRuns";
 import type { Agent, Project, Task, TaskStatus } from "@/lib/types";
 import { ProjectReferencesDialog } from "./ProjectReferencesDialog";
 import { EntityIcon } from "@/components/shared/EntityIcon";
@@ -72,6 +74,7 @@ function ListRow({
   selected,
   showProject,
   projectName,
+  headRun,
   onClick,
 }: {
   task: Task;
@@ -80,12 +83,19 @@ function ListRow({
   selected: boolean;
   showProject: boolean;
   projectName: string | null;
+  /** The task's current/most recent head run, or `null` without one
+   *  (heads-sichtbar PR 3, bauplan §4) — looked up ONCE for the whole list
+   *  by the caller (`useHeadRuns().byTask`), never queried per row. */
+  headRun: HeadRun | null;
   onClick: () => void;
 }) {
   const t = useTranslations("tasks");
+  const tHeads = useTranslations("heads");
+  const locale = useLocale();
   const qc = useQueryClient();
   const agent = agents.find((a) => a.id === task.assigned_agent_id);
   const isDone = task.status === "done";
+  const headLine = headRun ? headListLine(headRun, tHeads, locale) : null;
 
   const dispatchMutation = useMutation({
     mutationFn: () => api.tasks.update(boardId, task.id, { status: "in_progress" }),
@@ -103,82 +113,95 @@ function ListRow({
   return (
     <div className="relative group">
       <div
-        className="w-full flex items-center gap-2.5 px-3 py-2 rounded-md transition-colors bg-[var(--color-bg-surface)] hover:bg-[var(--color-bg-hover)]"
+        className="w-full rounded-md transition-colors bg-[var(--color-bg-surface)] hover:bg-[var(--color-bg-hover)]"
         style={
           selected
             ? { backgroundColor: C.accentSubtle, border: `1px solid ${C.borderAccent}` }
             : { border: `1px solid ${C.border}` }
         }
       >
-        <StatusDot status={task.status} />
-        <button
-          type="button"
-          onClick={onClick}
-          aria-label={t("openTask", { title: task.title })}
-          className="flex-1 min-w-0 text-left text-[13px] truncate cursor-pointer after:absolute after:inset-0 after:content-[''] hover:opacity-90 light:hover:opacity-100!"
-          style={{ color: isDone ? C.textMuted : C.textPrimary }}
-        >
-          <span className="truncate">{task.title}</span>
-        </button>
-        <div className="relative z-[1] flex items-center gap-1.5 shrink-0">
-          {task.priority === "critical" || task.priority === "high" ? (
-            <span
-              className="text-[9px] px-1 rounded-sm uppercase font-semibold"
-              style={{ color: task.priority === "critical" ? C.error : C.warning }}
-            >
-              {task.priority}
-            </span>
-          ) : null}
-          {isStale && (
-            <span
-              className="inline-flex items-center gap-0.5 text-[10px] font-medium px-1 py-0.5 rounded-sm"
-              title={t("noActivityFor", { mins: staleMins })}
-              style={{
-                color: isCritical ? C.error : C.warning,
-                backgroundColor: isCritical ? alpha(C.error, 0.1) : alpha(C.warning, 0.1),
-              }}
-            >
-              <Clock size={9} />
-              {staleMins}m
-            </span>
-          )}
-          {showProject && (
-            <span
-              className="text-[9px] px-1.5 py-px rounded-sm truncate max-w-[88px]"
-              style={{ color: C.textDim, border: `1px solid ${C.border}` }}
-            >
-              {projectName ?? t("adHoc")}
-            </span>
-          )}
-          {agent && (
-            <span className="text-xs" title={agent.name}>
-              <EntityIcon value={agent.emoji} size={13} />
-            </span>
-          )}
-          <Link
-            href={`/memory?task=${task.id}`}
-            onClick={(e) => e.stopPropagation()}
-            className="p-1 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity hover:bg-[var(--color-bg-hover)] cursor-pointer touch-visible"
-            title={t("vaultLink")}
-            style={{ color: C.textMuted }}
+        <div className="flex items-center gap-2.5 px-3 py-2">
+          <StatusDot status={task.status} />
+          <button
+            type="button"
+            onClick={onClick}
+            aria-label={t("openTask", { title: task.title })}
+            className="flex-1 min-w-0 text-left text-[13px] truncate cursor-pointer after:absolute after:inset-0 after:content-[''] hover:opacity-90 light:hover:opacity-100!"
+            style={{ color: isDone ? C.textMuted : C.textPrimary }}
           >
-            <Brain size={12} />
-          </Link>
-          {canDispatch && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                dispatchMutation.mutate();
-              }}
-              disabled={dispatchMutation.isPending}
+            <span className="truncate">{task.title}</span>
+          </button>
+          <div className="relative z-[1] flex items-center gap-1.5 shrink-0">
+            {task.priority === "critical" || task.priority === "high" ? (
+              <span
+                className="text-[9px] px-1 rounded-sm uppercase font-semibold"
+                style={{ color: task.priority === "critical" ? C.error : C.warning }}
+              >
+                {task.priority}
+              </span>
+            ) : null}
+            {isStale && (
+              <span
+                className="inline-flex items-center gap-0.5 text-[10px] font-medium px-1 py-0.5 rounded-sm"
+                title={t("noActivityFor", { mins: staleMins })}
+                style={{
+                  color: isCritical ? C.error : C.warning,
+                  backgroundColor: isCritical ? alpha(C.error, 0.1) : alpha(C.warning, 0.1),
+                }}
+              >
+                <Clock size={9} />
+                {staleMins}m
+              </span>
+            )}
+            {showProject && (
+              <span
+                className="text-[9px] px-1.5 py-px rounded-sm truncate max-w-[88px]"
+                style={{ color: C.textDim, border: `1px solid ${C.border}` }}
+              >
+                {projectName ?? t("adHoc")}
+              </span>
+            )}
+            {agent && (
+              <span className="text-xs" title={agent.name}>
+                <EntityIcon value={agent.emoji} size={13} />
+              </span>
+            )}
+            <Link
+              href={`/memory?task=${task.id}`}
+              onClick={(e) => e.stopPropagation()}
               className="p-1 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity hover:bg-[var(--color-bg-hover)] cursor-pointer touch-visible"
-              title={t("dispatchTask")}
-              style={{ color: C.accent }}
+              title={t("vaultLink")}
+              style={{ color: C.textMuted }}
             >
-              <Send size={12} />
-            </button>
-          )}
+              <Brain size={12} />
+            </Link>
+            {canDispatch && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  dispatchMutation.mutate();
+                }}
+                disabled={dispatchMutation.isPending}
+                className="p-1 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity hover:bg-[var(--color-bg-hover)] cursor-pointer touch-visible"
+                title={t("dispatchTask")}
+                style={{ color: C.accent }}
+              >
+                <Send size={12} />
+              </button>
+            )}
+          </div>
         </div>
+        {/* Second line only while a head works this task (heads-sichtbar
+            PR 3, bauplan §4) — a plain-agent row stays exactly as it was,
+            one line, nothing new to scan past. */}
+        {headLine && (
+          <div className="flex items-center gap-2 px-3 pb-2">
+            <span className="w-3.5 h-3.5 shrink-0" aria-hidden />
+            <span className="flex-1 min-w-0 truncate text-xs" style={{ color: C.textMuted }} data-testid="task-row-head-line">
+              {headLine}
+            </span>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -338,6 +361,10 @@ export default function TaskListColumn({
   onFocusHandled?: () => void;
 }) {
   const t = useTranslations("tasks");
+  // One shared fetch for the whole list (heads-sichtbar PR 3, bauplan §4:
+  // "ein Abruf für die ganze Liste") — every `ListRow` gets its own run (or
+  // `null`) from this single map, never a per-row query.
+  const { byTask: headByTask } = useHeadRuns();
   // First visit (nothing stored): project view, all groups collapsed —
   // a scannable project overview instead of a wall of status lanes.
   const [mode, setMode] = useState<TaskGroupMode>("project");
@@ -619,6 +646,7 @@ export default function TaskListColumn({
                         selected={t.id === selectedTaskId}
                         showProject={mode === "status"}
                         projectName={t.project_id ? (projectName.get(t.project_id) ?? null) : null}
+                        headRun={headByTask.get(t.id) ?? null}
                         onClick={() => onSelectTask(t)}
                       />
                     </div>

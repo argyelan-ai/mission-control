@@ -54,8 +54,37 @@ vi.mock("next-intl", async () => {
     }
     return typeof cur === "string" ? cur : key;
   };
+  // ICU plural, e.g. "{count, plural, one {# head} other {# heads}}" (review
+  // fix round 6, finding 4): a prior version of this mock did not emulate
+  // plural/select at all, so a component keying its own t() call on count
+  // via a single ICU plural string — instead of an explicit ternary between
+  // two catalog keys — got the raw, unformatted ICU template back from every
+  // test that rendered it through this mock. Nothing here asserted on that
+  // text (grep confirmed no test referenced it), so this was a silent gap,
+  // not a passing-on-purpose behaviour; filling it makes those render tests
+  // assert the real output instead of an unchecked template string. English
+  // plural categories only (`Intl.PluralRules("en")`) — this mock always
+  // resolves against the English catalog regardless of the caller's own
+  // locale (see `resolve` above), so that's the only grammar it ever needs.
+  const BRANCH_RE = /(\w+)\s*\{((?:[^{}]|\{[^{}]*\})*)\}/g;
+  const pluralRules = new Intl.PluralRules("en");
+  const resolvePlurals = (s: string, values: Record<string, unknown>): string =>
+    s.replace(
+      /\{(\w+),\s*plural,\s*((?:\w+\s*\{(?:[^{}]|\{[^{}]*\})*\}\s*)+)\}/g,
+      (_match, varName: string, branches: string) => {
+        const count = Number(values[varName]);
+        const map: Record<string, string> = {};
+        let bm: RegExpExecArray | null;
+        BRANCH_RE.lastIndex = 0;
+        while ((bm = BRANCH_RE.exec(branches))) map[bm[1]] = bm[2];
+        const category = Number.isFinite(count) ? pluralRules.select(count) : "other";
+        const chosen = map[category] ?? map.other ?? "";
+        return chosen.replace(/#/g, String(count));
+      },
+    );
   const interpolate = (s: string, values?: Record<string, unknown>): string => {
     if (values) {
+      s = resolvePlurals(s, values);
       for (const [k, v] of Object.entries(values)) {
         if (typeof v !== "function") s = s.split(`{${k}}`).join(String(v));
       }
@@ -63,9 +92,9 @@ vi.mock("next-intl", async () => {
     return s;
   };
   // Simple {var} interpolation — enough for tests to assert full labels like
-  // "Open task: <title>". ICU plural/select is NOT emulated here. t.rich
-  // resolves one non-nested level of <tag>chunk</tag> markup against the
-  // tag-render functions in `values`.
+  // "Open task: <title>". ICU select is NOT emulated here (only plural,
+  // above). t.rich resolves one non-nested level of <tag>chunk</tag> markup
+  // against the tag-render functions in `values`.
   const makeT = (ns?: string) => {
     const t = (key: string, values?: Record<string, unknown>) =>
       interpolate(resolve(ns, key), values);

@@ -73,12 +73,12 @@ describe("Tonight list", () => {
     expect(screen.getByTestId("tonight-window")).toHaveTextContent("22:00–06:00 · Europe/Berlin");
     const rows = screen.getAllByTestId(/^tonight-row-/);
     expect(rows.map((r) => r.getAttribute("data-testid"))).toEqual(["tonight-row-t-1", "tonight-row-t-2", "tonight-row-t-3"]);
-    expect(within(rows[0]).getByText(/omp · /)).toHaveTextContent("Queued");
+    expect(within(rows[0]).getByText(/omp × /)).toHaveTextContent("Queued");
     expect(rows[1]).toHaveTextContent("Waiting · another head uses the box");
     expect(rows[2]).toHaveTextContent("Running");
     // a started run cannot be removed from tonight (stop it on the head card)
     expect(within(rows[2]).queryByRole("button")).toBeNull();
-    await waitFor(() => expect(rows[0]).toHaveTextContent("omp · GLM local"));
+    await waitFor(() => expect(rows[0]).toHaveTextContent("omp × GLM local"));
     expect(screen.queryByTestId("tonight-off")).toBeNull();
   });
 
@@ -164,7 +164,7 @@ describe("Run tonight on the task detail", () => {
     wrap(<NightShiftToggle taskId="t-1" />);
     const sw = await screen.findByRole("switch", { name: "Run tonight" });
     await waitFor(() => expect(sw).toHaveAttribute("aria-checked", "true"));
-    await waitFor(() => expect(screen.getByTestId("night-line")).toHaveTextContent("Queued · omp · GLM local"));
+    await waitFor(() => expect(screen.getByTestId("night-line")).toHaveTextContent("Queued · omp × GLM local"));
     expect(screen.getByTestId("head-pair-trigger")).toBeInTheDocument();
     await userEvent.click(sw);
     await waitFor(() => expect(unmark).toHaveBeenCalledWith("t-1"));
