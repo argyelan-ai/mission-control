@@ -44,13 +44,18 @@ stays visible, and the panel shows clear states. Taking over the page
    per-agent panel keeps working.
 3. **The token is a credential.** An unknown `/s/` token is refused (404),
    never served as "unidentified". It is derived (HMAC of the session id with
-   the server secret), never stored, and never listed (`GET /mc/sessions`,
-   `GET /api/v1/browser-sessions`). The operator API hands it back once, when
-   a session is opened.
+   a stable server secret: `BROWSER_SESSION_SECRET`, else the encryption key —
+   not the JWT secret, whose rotation would strand open sessions), never
+   stored, never listed (`GET /mc/sessions`, `GET /api/v1/browser-sessions`)
+   and redacted from logs (`/mc/sessions/<token>`, `/s/<token>/`). Only the
+   operator API's open call returns it (a repeat open returns the same,
+   deterministic address).
 4. **On demand, cleaned up, DB is the truth.** Registering creates nothing in
    Chromium. Ending a session (`DELETE /mc/sessions/<token>`) refuses the
-   token from then on, cuts the session's open CDP connections, closes its
-   tabs and disposes its contexts. The gateway register lives in memory; MC
+   token from then on, cuts the session's open CDP connections, closes the
+   tabs it **created** and disposes its contexts — a tab it merely claimed by
+   navigating it is shown as the session's but never closed by its end. The
+   gateway answers within a fixed cleanup deadline; leftovers are reported. The gateway register lives in memory; MC
    re-registers open sessions after a gateway restart (idempotent `PUT`).
    Sessions end with MC's run status, not with a dropped connection.
 5. **Extend, don't replace (PRINCIPLES §3.10).** `/a/<slug>/` and unprefixed

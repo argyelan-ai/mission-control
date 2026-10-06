@@ -637,6 +637,10 @@ class Settings(BaseSettings):
     heads_enabled: bool = False
     heads_root: Path = Path(os.environ.get("HOME_HOST", str(Path.home()))) / ".mc" / "heads"
     heads_sync_interval: int = 60
+    # Key for browser-session tokens (ADR-088). Empty = derived from
+    # SECRETS_ENCRYPTION_KEY, which must stay stable anyway; never from the
+    # JWT secret (rotating that would strand every open session).
+    browser_session_secret: str = ""
 
     # Browser sessions (ADR-088, lifecycle step + operator decisions
     # 2026-10-06). The loop runs in the background-services process.

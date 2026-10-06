@@ -72,7 +72,26 @@ def test_token_is_deterministic_url_safe_and_per_session():
 def test_token_depends_on_the_server_secret(monkeypatch):
     sid = uuid.uuid4()
     before = svc.session_token(sid)
-    monkeypatch.setattr(svc.settings, "jwt_secret_key", "another-secret")
+    monkeypatch.setattr(svc.settings, "secrets_encryption_key", "another-key")
+    assert svc.session_token(sid) != before
+
+
+def test_rotating_the_jwt_secret_does_not_strand_open_sessions(monkeypatch):
+    """Review L4: the token used to hang off the JWT secret — rotating it (to
+    log every user out) changed every token, so MC could neither re-register
+    (409, the gateway refuses to re-point) nor end (404) its open sessions.
+    It now derives from the encryption key, which must stay stable anyway
+    (rotating it already breaks every stored secret)."""
+    sid = uuid.uuid4()
+    before = svc.session_token(sid)
+    monkeypatch.setattr(svc.settings, "jwt_secret_key", "rotated-jwt-secret")
+    assert svc.session_token(sid) == before
+
+
+def test_a_dedicated_browser_session_secret_wins(monkeypatch):
+    sid = uuid.uuid4()
+    before = svc.session_token(sid)
+    monkeypatch.setattr(svc.settings, "browser_session_secret", "dedicated")
     assert svc.session_token(sid) != before
 
 
@@ -198,14 +217,15 @@ async def test_api_open_list_end(auth_client, make_agent, gateway):
     assert resp.status_code == 201, resp.text
     opened = resp.json()
     token = svc.session_token(uuid.UUID(opened["id"]))
-    # The address is handed out once, to the caller that opened the session.
+    # Only the open call returns the address (a repeat open of the same
+    # session returns the same, deterministic address)...
     assert opened["endpoint_path"] == f"/s/{token}/"
     assert opened["registered"] is True and opened["status"] == "open"
 
     listing = await auth_client.get("/api/v1/browser-sessions")
     assert listing.status_code == 200
     assert [r["id"] for r in listing.json()] == [opened["id"]]
-    # ...and never again: the listing must not leak the credential.
+    # ...the listing and the end call never do.
     assert token not in listing.text
     assert "endpoint_path" not in listing.json()[0]
 
@@ -241,3 +261,10 @@ async def test_api_open_and_end_need_operator(client, gateway):
     assert gateway.requests == []
     body = json.dumps({})
     assert (await client.post(f"/api/v1/browser-sessions/{uuid.uuid4()}/end", content=body)).status_code == 403
+
+
+
+def test_ending_waits_longer_than_the_gateways_cleanup_deadline():
+    """Review L5: the gateway answers DELETE within its cleanup deadline
+    (8 s); the backend must not give up ("unreachable") before that."""
+    assert svc._END_TIMEOUT > 8.0

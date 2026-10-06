@@ -193,7 +193,9 @@ async def _gateway_assigned_ids() -> Optional[set[str]]:
             rows = resp.json()
     except Exception:
         return None
-    return {row["targetId"] for row in rows if row.get("targetId") and row.get("agent")}
+    # A head run's browser session (ADR-088) has no agent but is assigned all
+    # the same — an agent's panel must neither show nor follow its tab.
+    return {row["targetId"] for row in rows if row.get("targetId") and (row.get("agent") or row.get("session"))}
 
 
 def _apply_scope(
