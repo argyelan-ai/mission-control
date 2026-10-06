@@ -496,6 +496,74 @@ export interface HeadListResponse {
   archived_count?: number;
 }
 
+/** `GET /heads/cleanup` — the host's own `mc-head gc` report, exactly as
+ *  written (`scripts/head/mc-head`'s `_run_gc`/`_write_gc_report`; bauplan
+ *  `heads-sichtbar` PR 1 §2.3, consumed in PR 4 §5). `report` is `null`
+ *  while the host has not run `gc` yet — never an error. */
+export interface HeadGcAction {
+  path: string;
+  kind: "cache" | "worktree";
+  bytes: number;
+  would_remove: boolean;
+  /** Present only for a `kind: "worktree"` entry (round 4 review finding):
+   *  which age rule actually decided this — the `.backend/task.json`
+   *  hint's `status` when one was read (e.g. `"done"`), absent when there
+   *  was no hint to read. */
+  task_status?: string;
+  /** The age-wait rule this entry was measured against in seconds —
+   *  `MC_HEAD_GC_MIN_AGE_DONE_S` (default 24h) with a `"done"`
+   *  `task_status`, `MC_HEAD_GC_MIN_AGE_S` (default 14d) otherwise. */
+  min_age_s?: number;
+}
+
+export interface HeadGcKept {
+  path: string;
+  reason: string;
+  ignored?: string[];
+  /** Same hint fields as `HeadGcAction`, present only on a `reason: "age"`
+   *  entry — so a kept, not-yet-eligible worktree still shows which rule
+   *  (and hint, if any) it is waiting on. */
+  task_status?: string;
+  min_age_s?: number;
+}
+
+export interface HeadGcRunReport {
+  run_id: string;
+  actions: HeadGcAction[];
+  kept: HeadGcKept[];
+}
+
+export interface HeadGcReport {
+  mode: "dry_run" | "apply";
+  at: string;
+  runs: HeadGcRunReport[];
+  skipped: { run_id: string; reason: string }[];
+  action_bytes: number;
+  heads_bytes: number;
+  free_bytes: number | null;
+  warn_low_disk: boolean;
+  budget_bytes: number;
+}
+
+export interface HeadCleanupResponse {
+  report: HeadGcReport | null;
+}
+
+/** A run's own working copy sits on changes `mc-head gc` will not touch for
+ *  exactly that reason (bauplan PR 4 §5, "Arbeitskopie: nicht gesichert") —
+ *  uncommitted changes (`dirty`) or a branch tip that never reached the
+ *  scratch origin (`not_pushed`). Both are host-side SAFETY reasons the
+ *  cleanup report already carries; this deliberately does NOT flag
+ *  `real_repo_v1` (a real GitHub repo whose worktree v1 never removes
+ *  anyway — nothing to warn about) or `age`/`clone_active` (normal,
+ *  temporary holds). `false` while there is no report yet, or no entry for
+ *  this run (e.g. it never had a worktree at all). */
+export function workingCopyUnsaved(runId: string, report: HeadGcReport | null | undefined): boolean {
+  const run = report?.runs.find((r) => r.run_id === runId);
+  if (!run) return false;
+  return run.kept.some((k) => k.reason === "dirty" || k.reason === "not_pushed");
+}
+
 // ── Heads in Chats (heads-sichtbar PR 2) ────────────────────────────────────
 //
 // Everything below is new frontend-only model for "Heads" as a section in

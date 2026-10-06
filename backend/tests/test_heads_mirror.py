@@ -145,6 +145,78 @@ def test_move_task_refuses_an_invalid_hop(monkeypatch):
     assert asyncio.run(mirror.move_task(None, T(), "blocked", "x")) is False
 
 
+async def test_sync_writes_a_task_status_hint_for_an_ended_run(session, heads_root, make_board, make_task):
+    """bauplan `heads-sichtbar` PR 4 §5: `.backend/task.json` mirrors the
+    task's CURRENT status back onto the run's own folder — the hint
+    `mc-head gc` reads to shorten the 14-day wait for a `done` card. The
+    run below passes (pr_url + a valid run record, like the mirror test
+    above) so sync's OWN mirroring settles the task at "review" on this
+    same pass — the hint must reflect that settled status, not a stale
+    pre-mirror one."""
+    import json
+
+    task = await _task(session, make_board, make_task)
+    now = time.time()
+    run_id = make_run(
+        heads_root, task_id=str(task.id),
+        status={"phase": "exited", "exit_code": 0, "pr_url": "https://github.com/o/r/pull/5",
+                "started_at": iso(now - 600), "exited_at": iso(now - 5), "run_record_path": None},
+    )
+    rr = write_run_record(heads_root, run_id, mtime=now - 30)
+    sp = heads_root / run_id / ".wrapper" / "status.json"
+    st = json.loads(sp.read_text()); st["run_record_path"] = str(rr); sp.write_text(json.dumps(st))
+
+    await sync_once(session)
+    hint = json.loads((heads_root / run_id / ".backend" / "task.json").read_text())
+    assert hint["status"] == "review"
+
+    fresh = await session.get(Task, task.id)
+    fresh.status = "done"
+    session.add(fresh)
+    await session.commit()
+    await sync_once(session)
+    hint2 = json.loads((heads_root / run_id / ".backend" / "task.json").read_text())
+    assert hint2["status"] == "done"
+
+
+async def test_sync_does_not_rewrite_the_hint_when_status_is_unchanged(session, heads_root, make_board, make_task):
+    import json
+    import os
+
+    task = await _task(session, make_board, make_task, status="waiting")
+    run_id = make_run(heads_root, task_id=str(task.id), status={"phase": "exited", "reason": "stopped"})
+    await sync_once(session)
+    path = heads_root / run_id / ".backend" / "task.json"
+    before = json.loads(path.read_text())
+    os.utime(path, (1_000_000_000, 1_000_000_000))
+
+    await sync_once(session)
+    after = json.loads(path.read_text())
+    assert before["status"] == after["status"]
+    assert path.stat().st_mtime == 1_000_000_000, "unchanged status must not rewrite the hint file"
+
+
+async def test_sync_writes_the_hint_for_a_superseded_run_too(session, heads_root, make_board, make_task):
+    """The run folder from BEFORE a "continue" restart gets its own gc
+    decision (it is a run folder like any other) — its hint must be
+    written even though it is no longer the task's latest run."""
+    import json
+
+    task = await _task(session, make_board, make_task, status="in_progress")
+    old_id = make_run(heads_root, task_id=str(task.id), created_ago=600, status={"phase": "exited", "reason": "stopped"})
+    make_run(heads_root, task_id=str(task.id), created_ago=10, status={"phase": "running"}, heartbeat_age=5)
+    await sync_once(session)
+    hint = json.loads((heads_root / old_id / ".backend" / "task.json").read_text())
+    assert hint["status"] == "in_progress"
+
+
+async def test_sync_writes_no_hint_for_an_active_run(session, heads_root, make_board, make_task):
+    task = await _task(session, make_board, make_task)
+    run_id = make_run(heads_root, task_id=str(task.id), status={"phase": "running"}, heartbeat_age=5)
+    await sync_once(session)
+    assert not (heads_root / run_id / ".backend" / "task.json").exists()
+
+
 async def test_sync_mirrors_scratch_branch_pushed_to_review_without_pr(session, heads_root, make_board, make_task):
     import json
 

@@ -9,7 +9,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { mkRun } from "@/lib/__tests__/headFixtures";
+import { mkPair, mkRun } from "@/lib/__tests__/headFixtures";
 import { HeadChatFooter } from "../HeadChatFooter";
 
 function renderFooter(
@@ -127,6 +127,48 @@ describe("HeadChatFooter", () => {
     expect(screen.getByTestId("head-footer-continue")).toHaveTextContent("Continue");
     expect(screen.queryByTestId("head-footer-stop")).not.toBeInTheDocument();
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+  });
+
+  // bauplan `heads-sichtbar` PR 4 §5: the passed-state Continue button opens
+  // the focused HeadContinueSheet, not the full HeadRestartDialog (PR 2's
+  // stand-in) with its fresh/continue toggle and pair-switch framing.
+  it("passed: Continue opens the focused HeadContinueSheet, not the full restart dialog", async () => {
+    renderFooter({ state: "passed" });
+    await userEvent.click(screen.getByTestId("head-footer-continue"));
+    expect(screen.getByTestId("head-continue-sheet")).toBeInTheDocument();
+    expect(screen.queryByTestId("head-restart-dialog")).not.toBeInTheDocument();
+  });
+
+  // Round 4 review finding: a successful Continue left the operator
+  // looking at THIS now-superseded run's chat — the footer never passed
+  // `onRestarted` through to `HeadContinueSheet`, so nothing told the
+  // page a new run existed; finding the new run in the list meant
+  // scrolling by hand. `onRestarted` is the same "jump to this head run"
+  // callback the footer already uses for the superseded-question link.
+  it("passed: a successful Continue calls onRestarted with the new run's id", async () => {
+    const pair = mkPair();
+    vi.spyOn(api.heads, "pairs").mockResolvedValue({ pairs: [pair], default_pair: pair });
+    const restart = vi
+      .spyOn(api.heads, "restart")
+      .mockResolvedValue({ run_id: "r2", state: "starting", restarted_from: "r1" });
+    const onRestarted = vi.fn();
+    renderFooter(
+      { run_id: "r1", state: "passed", harness: pair.harness, runtime_slug: pair.runtime_slug },
+      { onRestarted },
+    );
+    await userEvent.click(screen.getByTestId("head-footer-continue"));
+    await screen.findByTestId("head-continue-submit");
+    await waitFor(() => expect(screen.getByTestId("head-continue-submit")).not.toBeDisabled());
+    await userEvent.click(screen.getByTestId("head-continue-submit"));
+    await waitFor(() => expect(restart).toHaveBeenCalledWith("r1", expect.objectContaining({ mode: "continue" })));
+    await waitFor(() => expect(onRestarted).toHaveBeenCalledWith("r2"));
+  });
+
+  it("failed: Restart still opens the full HeadRestartDialog, unchanged", async () => {
+    renderFooter({ state: "failed", reason: "no_pr" });
+    await userEvent.click(screen.getByTestId("head-footer-restart"));
+    expect(screen.getByTestId("head-restart-dialog")).toBeInTheDocument();
+    expect(screen.queryByTestId("head-continue-sheet")).not.toBeInTheDocument();
   });
 
   it("failed: shows the reason sentence and a Restart action", () => {

@@ -472,7 +472,13 @@ stoppable) in the runs list on `/runtimes`.
   - *Continue on this branch* (default): same worktree/branch; `job.md` gets
     a "previous run" block (pair, `git log origin/main..HEAD`, run record so
     far, question + answer). Git and the run record are the harness-neutral
-    memory — chat histories do not transfer.
+    memory — chat histories do not transfer. Since PR 4 (bauplan
+    `heads-sichtbar` §5), that block also carries a deterministic,
+    model-free summary of the previous run's own transcript when one could
+    be read (`services/heads/transcript.summarize` — tool count, touched
+    file basenames, last step, last few assistant notes; masked, ≤ 4 KB) —
+    still not the old conversation itself: no native `--resume` (unproven
+    after a worktree move, out of scope).
   - *Start fresh from main*: new branch and worktree.
 - **Answer & continue** = Restart with the same pair, mode continue, answer
   appended. There is no message into a running process.
@@ -877,9 +883,26 @@ Acceptance criteria v1:
   `.mypy_cache/`, `.ruff_cache/`, `node_modules/`) never blocks removal on
   its own, since the procedure's own red/green test step leaves at least
   one of these behind in EVERY worktree — without the allowlist,
-  "worktrees cleaned" never actually fires on a real run. Anything else
+  "worktrees cleaned" never actually fires on a real run. Since PR 4, a
+  clean, already-pushed worktree whose task card has reached `done` waits
+  `MC_HEAD_GC_MIN_AGE_DONE_S` (default 24 h) instead of the full 14 days —
+  `services/heads/sync.py` mirrors the task's current status onto
+  `.backend/task.json` every pass (one batched query, write only on
+  change), and `gc` reads it as a HINT only: every `_wt_decision` safety
+  check (clean tree, HEAD pushed to the scratch origin, not detached, not a
+  real repo) still runs first, so a forged or stale hint can only ever make
+  gc consider an already-safe copy sooner, never skip a check. Anything else
   ignored still keeps the worktree, and the report names exactly which
-  path(s) blocked it. The dry run is
+  path(s) blocked it. A worktree's own `actions`/`kept` entry in
+  `gc-report.json` carries the hint it was measured against — `task_status`
+  (the `.backend/task.json` value read, absent when there was none) and
+  `min_age_s` (which of the two constants actually applied) — on BOTH a
+  `would_remove` action and an `age`-kept entry, so the operator's own
+  dry-run reading shows not just THAT a `done` task's worktree is still
+  waiting but how much longer, and the orchestrator's live check after
+  deploy can assert the hint reached the report at all (round 4 review
+  finding: it used to decide the age silently and record nothing). The dry
+  run is
   not perfectly side-effect-free: it normalises each scratch clone's own
   git config and fetches one disposable check ref into it (idempotent host
   plumbing needed to inspect the clone safely), but it never touches a run

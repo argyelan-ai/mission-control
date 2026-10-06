@@ -31,6 +31,8 @@ import {
   sortHeadsForList,
   splitPairs,
   supersededNeedsYouIds,
+  workingCopyUnsaved,
+  type HeadGcReport,
   type HeadPairsResponse,
 } from "../heads";
 import type { ChatEvent } from "../chatTypes";
@@ -439,6 +441,55 @@ describe("midLineStateWord (review finding on PR #756 round 3)", () => {
   it("is a no-op on an already-empty or already-lowercase word", () => {
     expect(midLineStateWord("")).toBe("");
     expect(midLineStateWord("already lowercase")).toBe("already lowercase");
+  });
+});
+
+// ── workingCopyUnsaved (heads-sichtbar PR 4 §5) ─────────────────────────────
+
+function mkGcReport(runs: HeadGcReport["runs"]): HeadGcReport {
+  return {
+    mode: "dry_run", at: "2026-10-04T12:00:00Z", runs, skipped: [],
+    action_bytes: 0, heads_bytes: 0, free_bytes: null, warn_low_disk: false, budget_bytes: 0,
+  };
+}
+
+describe("workingCopyUnsaved", () => {
+  it("false while there is no report at all", () => {
+    expect(workingCopyUnsaved("r1", null)).toBe(false);
+    expect(workingCopyUnsaved("r1", undefined)).toBe(false);
+  });
+
+  it("false while the report has no entry for this run", () => {
+    expect(workingCopyUnsaved("r1", mkGcReport([]))).toBe(false);
+  });
+
+  it("true when the run's worktree is kept for being dirty", () => {
+    const report = mkGcReport([{ run_id: "r1", actions: [], kept: [{ path: "/x/r1/wt", reason: "dirty" }] }]);
+    expect(workingCopyUnsaved("r1", report)).toBe(true);
+  });
+
+  it("true when the run's worktree is kept for not being pushed", () => {
+    const report = mkGcReport([{ run_id: "r1", actions: [], kept: [{ path: "/x/r1/wt", reason: "not_pushed" }] }]);
+    expect(workingCopyUnsaved("r1", report)).toBe(true);
+  });
+
+  // Sabotage (review-style): a reason like "age" or "real_repo_v1" is a
+  // normal, temporary hold — not a "your work is unsaved" warning. Without
+  // the explicit reason allowlist (checking only "there is a kept entry"),
+  // EVERY passed run with a worktree would show the warning forever.
+  it("false for a worktree kept for an unrelated, non-warning reason", () => {
+    for (const reason of ["age", "real_repo_v1", "clone_active", "detached", "ignored_files"]) {
+      const report = mkGcReport([{ run_id: "r1", actions: [], kept: [{ path: "/x/r1/wt", reason }] }]);
+      expect(workingCopyUnsaved("r1", report)).toBe(false);
+    }
+  });
+
+  it("only looks at the matching run's own entry, never another run's", () => {
+    const report = mkGcReport([
+      { run_id: "other", actions: [], kept: [{ path: "/x/other/wt", reason: "dirty" }] },
+      { run_id: "r1", actions: [], kept: [] },
+    ]);
+    expect(workingCopyUnsaved("r1", report)).toBe(false);
   });
 });
 

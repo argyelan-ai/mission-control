@@ -130,6 +130,17 @@ def render_job(
         ]
         if previous.get("run_record"):
             parts += ["### Run record so far", "", previous["run_record"].strip(), ""]
+        if previous.get("transcript_summary"):
+            # Deterministic, model-free recap of the previous run's
+            # transcript (`services/heads/transcript.summarize`, bauplan
+            # `heads-sichtbar` PR 4 §5) — git and the run record are still
+            # the real memory (see the branch note above); this is a
+            # cheaper-to-read pointer into what just happened, not a
+            # replacement for either. Only ever set on `mode="continue"`
+            # (`routers.heads.restart_head`); absent on a fresh restart, and
+            # absent just as often on continue when nothing could be read —
+            # either way this block simply does not appear, never an error.
+            parts += ["### What the previous run did (transcript summary)", "", previous["transcript_summary"].strip(), ""]
         if previous.get("question"):
             parts += ["### Open question", "", previous["question"].strip(), ""]
     if answer:
@@ -283,6 +294,7 @@ async def write_run(
             "branch": prev_spec.get("branch"),
             "base": prev_spec.get("base_branch"),
             "run_record": restarted_from.get("run_record") if mode == "continue" else None,
+            "transcript_summary": restarted_from.get("transcript_summary") if mode == "continue" else None,
             "question": restarted_from.get("question"),
         }
     procedure = render_procedure({

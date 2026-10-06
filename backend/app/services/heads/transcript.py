@@ -24,6 +24,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import os
+import re
 import stat
 import time
 from dataclasses import dataclass
@@ -311,3 +312,197 @@ def read(
     result["reader"] = located.reader
     result["reason"] = None
     return redact.mask_tree(result, redact.head_env_values(run))
+
+
+# ── Transcript summary for "Continue" (bauplan `heads-sichtbar` PR 4 §5) ────
+#
+# A `mode=continue` restart's `job.md` gets a deterministic, model-free
+# recap of what the PREVIOUS run did — never the old conversation itself
+# (native `--resume` is out of scope, bauplan §7; see `launcher.render_job`).
+# `summarize()` is pure (events in, text out) and harness-neutral: it reads
+# only the `ChatEvent` shapes `transcript_chat.read_history` already
+# produces for EITHER harness, never a harness-specific field name on its
+# own. `summary_for_restart()` is the one impure wrapper that ties it to a
+# run on disk; it never raises — any failure to locate or read a
+# transcript just means an empty summary, exactly like a head whose
+# harness has no reader at all (`reason: "no_reader"`).
+
+#: Harness-neutral file-edit tool names — Claude Code capitalises them
+#: ("Edit", "Write"), omp does not ("edit", "write"); compared lower-cased.
+_FILE_TOOL_NAMES = frozenset({"edit", "write", "multiedit", "notebookedit"})
+
+#: Claude's tool `detail` carries the path directly; omp's `write` carries
+#: `path`, its `edit` carries neither — see `_omp_edit_path`.
+_FILE_DETAIL_KEYS = ("file_path", "path")
+
+#: omp's `edit` tool detail has no path field at all — the path is the
+#: first line of its own `input` diff text, `[<path>#<hash>]` (live-checked
+#: against a real run, anhang.md section B's proto). Anchored at the start
+#: so a path that happens to contain `#` or `]` later in a long diff body
+#: is never mistaken for the bracket's own close.
+_OMP_EDIT_PATH = re.compile(r"^\[([^\]#]+)")
+
+MAX_SUMMARY_BYTES = 4096
+MAX_SUMMARY_MESSAGES = 3
+MAX_SUMMARY_MESSAGE_CHARS = 600
+MAX_SUMMARY_FILES_LISTED = 12
+
+
+def _tool_changed_file(ev: dict[str, Any]) -> str | None:
+    name = ev.get("name")
+    if not isinstance(name, str) or name.lower() not in _FILE_TOOL_NAMES:
+        return None
+    detail = ev.get("detail")
+    if not isinstance(detail, dict):
+        return None
+    for key in _FILE_DETAIL_KEYS:
+        value = detail.get(key)
+        if isinstance(value, str) and value:
+            return value
+    raw = detail.get("input")
+    if isinstance(raw, str):
+        m = _OMP_EDIT_PATH.match(raw.strip())
+        if m:
+            return m.group(1)
+    return None
+
+
+def _basename(path: str) -> str:
+    return path.rstrip("/").rsplit("/", 1)[-1] or path
+
+
+def _quote_note(text: str) -> str:
+    """Markdown-blockquote every line of ``text``, escaping a leading
+    ``#`` so a note's own heading-shaped line (``### Open question``,
+    ``## Previous run``) can never be mistaken for one of job.md's OWN
+    section headings once pasted into the "previous run" block (round 4
+    review finding). A real assistant note is multi-line markdown — the
+    old code only put the bullet marker on the FIRST line (an f-string
+    with an embedded ``\\n`` does not re-prefix later lines), so a later
+    line that happened to read ``### Open question`` would land at column
+    0 and look like a real section boundary to the next head reading
+    job.md as its prompt. Blockquoting every line keeps the whole note
+    visually and structurally "quoted text" no matter how many lines it
+    has; escaping ``#`` defeats it even inside the blockquote, for a
+    renderer or a naive ``^#+`` scan alike."""
+    out: list[str] = []
+    for line in text.splitlines() or [""]:
+        stripped = line.lstrip()
+        if stripped.startswith("#"):
+            indent = line[: len(line) - len(stripped)]
+            line = f"{indent}\\{stripped}"
+        out.append(f"> {line}" if line else ">")
+    return "\n".join(out)
+
+
+def summarize(events: list[dict[str, Any]], *, last_step: str | None = None, env_values: tuple[str, ...] = ()) -> str:
+    """A short, deterministic recap of ``events`` (the same ``ChatEvent``
+    list ``read()``/the chat history endpoint return) — NO model call, ever:
+    a tool-use count, the basenames of files an ``Edit``/``Write`` tool
+    touched (first-touch order, deduplicated), the last reported step, and
+    the last few assistant messages verbatim (clipped). ``""`` when there is
+    nothing to say (a fresh run, or a harness with no reader) — the caller
+    (``launcher.render_job``) treats that exactly like no previous run at
+    all, never as an error.
+
+    Always masked (``redact.mask_text`` with the caller's ``env_values``)
+    and capped at ``MAX_SUMMARY_BYTES`` regardless of what the caller
+    passes in — this function's own contract, proven by a sabotage test
+    that plants a secret directly in ``events`` and calls it with no
+    upstream masking at all, not just a property of ``read()``'s pipeline."""
+    tool_count = 0
+    seen_files: set[str] = set()
+    files: list[str] = []
+    assistant_texts: list[str] = []
+    for ev in events:
+        if not isinstance(ev, dict):
+            continue
+        kind = ev.get("kind")
+        if kind == "tool":
+            tool_count += 1
+            path = _tool_changed_file(ev)
+            if path:
+                # Masked before it is even kept (round 4 review finding: a
+                # tool's own path is caller-controlled text exactly like an
+                # assistant message, so the same "mask before you cut/keep
+                # it" rule applies here too).
+                base = redact.mask_text(_basename(path), env_values)
+                if base not in seen_files:
+                    seen_files.add(base)
+                    files.append(base)
+        elif kind == "message" and ev.get("role") == "assistant":
+            text = (ev.get("text") or "").strip()
+            if text:
+                # Masked on the FULL text, BEFORE the per-message clip
+                # below ever shortens it (round 4 review finding: the old
+                # order — clip to 600 chars first, mask the assembled
+                # result after — let a secret straddling that cut leave a
+                # partial, no-longer-matching prefix behind; live probe: a
+                # 32-char env value at offset 581 leaked its first 18
+                # chars). Masking while the value is still whole means the
+                # match is made, and replaced, before any clip can split it.
+                assistant_texts.append(redact.mask_text(text, env_values))
+
+    last_step = redact.mask_text((last_step or "").strip(), env_values) or None
+    if not tool_count and not files and not assistant_texts and not last_step:
+        return ""
+
+    lines: list[str] = []
+    if last_step:
+        lines.append(f"- Last step: {last_step}")
+    if tool_count:
+        lines.append(f"- Tools used: {tool_count}")
+    if files:
+        shown = files[:MAX_SUMMARY_FILES_LISTED]
+        more = len(files) - len(shown)
+        listed = ", ".join(shown) + (f", +{more} more" if more > 0 else "")
+        lines.append(f"- Files touched: {listed}")
+
+    recent = assistant_texts[-MAX_SUMMARY_MESSAGES:]
+    if recent:
+        if lines:
+            lines.append("")
+        lines.append("Last assistant notes:")
+        for text in recent:
+            clipped = text if len(text) <= MAX_SUMMARY_MESSAGE_CHARS else text[: MAX_SUMMARY_MESSAGE_CHARS - 1] + "…"
+            # Blockquoted, every line — see `_quote_note`'s own docstring
+            # (round 4 review finding: a real note is multi-line markdown
+            # and can contain a line shaped exactly like one of job.md's
+            # OWN section headings).
+            lines.append(_quote_note(clipped))
+
+    # A second, whole-text pass: idempotent on what the per-field masking
+    # above already redacted, and still this function's own standing
+    # contract regardless of what the caller passes in (unchanged from
+    # before this fix) — e.g. a secret that somehow reached `last_step`'s
+    # non-string neighbours or a future field this function grows.
+    text = redact.mask_text("\n".join(lines).strip() + "\n", env_values)
+    encoded = text.encode("utf-8")
+    if len(encoded) > MAX_SUMMARY_BYTES:
+        text = encoded[:MAX_SUMMARY_BYTES].decode("utf-8", errors="ignore").rstrip() + "\n…\n"
+    return text
+
+
+def summary_for_restart(run: Any) -> str:
+    """Best-effort ``summarize()`` for THIS run, for a ``mode=continue``
+    restart (``routers.heads.restart_head``). Never raises: a transcript
+    that cannot be located or read (no reader, nothing written yet, too
+    large) just means no events reach ``summarize()`` — NOT the same as an
+    empty result. The run's last reported step (``run.step``) is passed
+    through regardless, and almost every real run has one by the time a
+    "continue" restart is even possible, so the result still carries a
+    "Last step: …" line (round 4 review finding: an earlier version of
+    this docstring, and the PR text, claimed "no transcript" alone means
+    "nothing to add" — live check against three runs with no transcript,
+    including 1b386683, found a non-empty 51-byte recap in every one).
+    ``""`` only when there is truly nothing at all to show — no events AND
+    no step."""
+    try:
+        state = derive_for_run(run, time.time())["state"]
+        result = read(run, locate(run), limit=1000, state=state)
+    except Exception:  # noqa: BLE001 — a restart must never fail because of this
+        return ""
+    events = result.get("events")
+    if not isinstance(events, list):
+        return ""
+    return summarize(events, last_step=run.step, env_values=redact.head_env_values(run))

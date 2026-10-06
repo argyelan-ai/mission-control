@@ -252,6 +252,61 @@ async def test_restart_with_another_pair_continue_mode(auth_client, heads_root, 
     assert spool == {"action": "restart", "run_id": new, "from_run_id": old}
 
 
+# ── PR 4 §5: continue restart feeds job.md a transcript summary ─────────
+
+
+async def test_restart_continue_mode_calls_summarize_and_embeds_it_in_job(
+    auth_client, heads_root, make_board, make_task, monkeypatch,
+):
+    from app.services.heads import transcript as tr_mod
+
+    _, task = await _world(make_board, make_task)
+    resp = await auth_client.post("/api/v1/heads", json={"task_id": str(task.id), "harness": "omp",
+                                                         "runtime_slug": "box-slot"})
+    old = resp.json()["run_id"]
+    (heads_root / old / ".wrapper").mkdir(exist_ok=True)
+    (heads_root / old / ".wrapper" / "status.json").write_text(json.dumps({"phase": "exited", "exit_code": 0}))
+
+    calls = []
+
+    def fake_summary(run):
+        calls.append(run.run_id)
+        return "- Tools used: 3\n- Files touched: checks.py\n"
+
+    monkeypatch.setattr(tr_mod, "summary_for_restart", fake_summary)
+
+    r2 = await auth_client.post(f"/api/v1/heads/{old}/restart", json={
+        "harness": "claude", "runtime_slug": "box-slot", "mode": "continue"})
+    assert r2.status_code == 202, r2.text
+    assert calls == [old]
+    job = (heads_root / r2.json()["run_id"] / "job.md").read_text()
+    assert "### What the previous run did (transcript summary)" in job
+    assert "Files touched: checks.py" in job
+
+
+async def test_restart_fresh_mode_never_reads_or_embeds_a_transcript_summary(
+    auth_client, heads_root, make_board, make_task, monkeypatch,
+):
+    from app.services.heads import transcript as tr_mod
+
+    _, task = await _world(make_board, make_task)
+    resp = await auth_client.post("/api/v1/heads", json={"task_id": str(task.id), "harness": "omp",
+                                                         "runtime_slug": "box-slot"})
+    old = resp.json()["run_id"]
+    (heads_root / old / ".wrapper").mkdir(exist_ok=True)
+    (heads_root / old / ".wrapper" / "status.json").write_text(json.dumps({"phase": "exited", "exit_code": 0}))
+
+    calls = []
+    monkeypatch.setattr(tr_mod, "summary_for_restart", lambda run: (calls.append(run.run_id), "unused")[1])
+
+    r2 = await auth_client.post(f"/api/v1/heads/{old}/restart", json={
+        "harness": "claude", "runtime_slug": "box-slot", "mode": "fresh"})
+    assert r2.status_code == 202, r2.text
+    assert calls == []
+    job = (heads_root / r2.json()["run_id"] / "job.md").read_text()
+    assert "### What the previous run did (transcript summary)" not in job
+
+
 async def test_viewer_cannot_start(client, heads_root, make_board, make_task):
     from app.auth import create_access_token
     from app.models.user import User

@@ -220,3 +220,16 @@ def write_backend_file(run_id: str, name: str, data: dict) -> None:
     tmp = folder / f".{name}.tmp"
     tmp.write_text(json.dumps(data))
     tmp.replace(folder / name)
+
+
+def read_backend_file(run_id: str, name: str) -> dict:
+    """The counterpart read for ``write_backend_file`` — ``{}`` for a
+    missing or unparseable file, same as every other ``_read_json`` call in
+    this module (e.g. ``mirror.json`` in ``load_run``). Used by
+    ``services.heads.sync`` to avoid rewriting ``task.json`` when the task's
+    status has not actually changed since the last pass."""
+    try:
+        folder = paths.run_dir(run_id)
+    except ValueError:
+        return {}
+    return _read_json(folder / ".backend" / name)

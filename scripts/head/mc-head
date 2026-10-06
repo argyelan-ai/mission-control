@@ -120,6 +120,12 @@ GC_APPLY_ENV = "MC_HEAD_GC_APPLY"
 GC_BUDGET_BYTES = int(os.environ.get("MC_HEAD_GC_BUDGET_BYTES", str(5 * 1024**3)))
 GC_WARN_FREE_BYTES = int(os.environ.get("MC_HEAD_GC_WARN_FREE_BYTES", str(20 * 1024**3)))
 GC_MIN_AGE_S = int(os.environ.get("MC_HEAD_GC_MIN_AGE_S", str(14 * 24 * 3600)))
+# Shortened wait for a run whose `.backend/task.json` hint says the task is
+# "done" (bauplan `heads-sichtbar` PR 4 §5) — backend-written, read-only
+# here. It can only ever make gc consider an ALREADY-removable worktree
+# (clean, pushed, not detached, not a real repo) sooner; every safety check
+# in _wt_decision() still runs first and is untouched by this constant.
+GC_MIN_AGE_DONE_S = int(os.environ.get("MC_HEAD_GC_MIN_AGE_DONE_S", str(24 * 3600)))
 # A run younger than this (since it exited) is not even considered — the
 # operator may still be reading its result.
 GC_SKIP_MIN_ENDED_S = int(os.environ.get("MC_HEAD_GC_SKIP_MIN_ENDED_S", "3600"))
@@ -1725,6 +1731,23 @@ def _parse_iso(value) -> float | None:
         return None
 
 
+def _task_status_hint(run_id: str) -> str | None:
+    """``.backend/task.json``'s ``status`` field, written by the MC backend
+    (``services/heads/sync.py``) — never by the head itself (the sandbox has
+    no write access to ``.backend/``, same as ``.wrapper/``). At most a
+    forged or stale value here can make gc consider an already-safe
+    (clean, pushed) worktree for removal EARLIER than ``GC_MIN_AGE_S``; it
+    never substitutes for ``_wt_decision()``'s own checks. A missing or
+    unparseable file (brand new run, backend never ran a sync pass yet)
+    reads as "no hint" — ``None``, never an error."""
+    try:
+        data = json.loads((run_dir(run_id) / ".backend" / "task.json").read_text())
+    except (OSError, ValueError):
+        return None
+    status = data.get("status") if isinstance(data, dict) else None
+    return status if isinstance(status, str) else None
+
+
 def _dir_bytes(path: Path) -> int:
     """Sum of regular-file sizes under ``path`` — never follows a symlinked
     directory (``os.walk`` default), so a symlink planted inside cannot make
@@ -2151,12 +2174,28 @@ def _run_gc(apply: bool) -> dict:
                 kept.append(entry)
             else:
                 exited_at = _parse_iso(status.get("exited_at")) or now
-                if now - exited_at >= GC_MIN_AGE_S:
-                    actions.append({"path": str(wt), "kind": "worktree", "bytes": wt_bytes, "would_remove": True})
+                task_status = _task_status_hint(run_id)
+                min_age = GC_MIN_AGE_DONE_S if task_status == "done" else GC_MIN_AGE_S
+                if now - exited_at >= min_age:
+                    action = {"path": str(wt), "kind": "worktree", "bytes": wt_bytes, "would_remove": True,
+                              "min_age_s": min_age}
+                    if task_status is not None:
+                        action["task_status"] = task_status
+                    actions.append(action)
                     pending_removals.append(("worktree", spec, wt))
                 else:
-                    kept.append({"path": str(wt), "reason": "age"})
-                    budget_wait.append((run_id, wt, wt_bytes, exited_at, spec))
+                    # Bauplan `heads-sichtbar` PR 4 §5 / round 4 review
+                    # finding: without the hint recorded HERE, a dry-run
+                    # report could not show WHY a `done` task's worktree
+                    # was still waiting (or confirm the hint was even
+                    # seen) — the operator's own pre-arm reading of
+                    # `gc-report.json` is the only place this is visible
+                    # before `--apply` ever runs.
+                    kept_entry = {"path": str(wt), "reason": "age", "min_age_s": min_age}
+                    if task_status is not None:
+                        kept_entry["task_status"] = task_status
+                    kept.append(kept_entry)
+                    budget_wait.append((run_id, wt, wt_bytes, exited_at, spec, task_status, min_age))
 
         reports[run_id] = {"run_id": run_id, "actions": actions, "kept": kept}
 
@@ -2166,12 +2205,16 @@ def _run_gc(apply: bool) -> dict:
             projected -= a["bytes"]
 
     budget_wait.sort(key=lambda row: row[3])  # oldest exited_at first
-    for run_id, wt, wt_bytes, _exited_at, spec in budget_wait:
+    for run_id, wt, wt_bytes, _exited_at, spec, task_status, min_age in budget_wait:
         if projected <= GC_BUDGET_BYTES:
             break
         rep = reports[run_id]
         rep["kept"] = [k for k in rep["kept"] if k["path"] != str(wt)]
-        rep["actions"].append({"path": str(wt), "kind": "worktree", "bytes": wt_bytes, "would_remove": True})
+        action = {"path": str(wt), "kind": "worktree", "bytes": wt_bytes, "would_remove": True,
+                  "min_age_s": min_age}
+        if task_status is not None:
+            action["task_status"] = task_status
+        rep["actions"].append(action)
         pending_removals.append(("worktree", spec, wt))
         projected -= wt_bytes
 
