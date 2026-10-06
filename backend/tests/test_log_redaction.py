@@ -523,3 +523,12 @@ def test_redacts_the_session_token_when_httpx_passes_a_url_object(redact):
     url = httpx.URL("http://cdp-browser:9300/mc/sessions/" + BROWSER_TOKEN + "?session=x")
     out = redact('HTTP Request: %s %s "%s %d %s"', "PUT", url, "HTTP/1.1", 201, "Created")
     assert BROWSER_TOKEN not in out
+
+
+
+def test_session_address_redaction_does_not_depend_on_what_follows(redact):
+    """Re-review nit: the token can be followed by `#`, `,`, `)` or an
+    encoded slash — it must go in every case."""
+    for tail in ("#frag", ",next", ")", "%2Fdevtools", ""):
+        out = redact("see ws://cdp-browser:9300/s/" + BROWSER_TOKEN + tail)
+        assert BROWSER_TOKEN not in out, tail

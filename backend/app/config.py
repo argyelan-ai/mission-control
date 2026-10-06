@@ -637,10 +637,6 @@ class Settings(BaseSettings):
     heads_enabled: bool = False
     heads_root: Path = Path(os.environ.get("HOME_HOST", str(Path.home()))) / ".mc" / "heads"
     heads_sync_interval: int = 60
-    # Key for browser-session tokens (ADR-088). Empty = derived from
-    # SECRETS_ENCRYPTION_KEY, which must stay stable anyway; never from the
-    # JWT secret (rotating that would strand every open session).
-    browser_session_secret: str = ""
     # Progress watchdog (spec §6.5): mc-head stops a head (reason
     # "no_progress") when neither head.log, step.txt, work.log nor any worktree file
     # changed for this many minutes — long coding jobs may run as long as

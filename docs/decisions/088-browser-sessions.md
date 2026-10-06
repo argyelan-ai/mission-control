@@ -44,8 +44,8 @@ stays visible, and the panel shows clear states. Taking over the page
    per-agent panel keeps working.
 3. **The token is a credential.** An unknown `/s/` token is refused (404),
    never served as "unidentified". It is derived (HMAC of the session id with
-   a stable server secret: `BROWSER_SESSION_SECRET`, else the encryption key —
-   not the JWT secret, whose rotation would strand open sessions), never
+   `SECRETS_ENCRYPTION_KEY`, which must stay stable anyway — not the JWT
+   secret, whose rotation would strand open sessions), never
    stored, never listed (`GET /mc/sessions`, `GET /api/v1/browser-sessions`)
    and redacted from logs (`/mc/sessions/<token>`, `/s/<token>/`). Only the
    operator API's open call returns it (a repeat open returns the same,
@@ -95,6 +95,12 @@ env) · image at run end in the run record.
   shared browser; logins are shared within Chromium's default context.
 - `/mc/*` stays unauthenticated on the internal network; ending a session
   needs its token, listing does not reveal it.
+- Residual token risks: (a) right after a gateway restart, anyone on the
+  internal network could pre-register a known session id (ids are visible in
+  `/mc/targets`) with a token of their own, so MC's re-register gets 409 and
+  that session must be ended and reopened; (b) changing
+  `SECRETS_ENCRYPTION_KEY` changes every token and strands the sessions open
+  at that moment (end them first).
 
 ## References
 

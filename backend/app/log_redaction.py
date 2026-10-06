@@ -51,7 +51,7 @@ _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     # gateway URL MC calls (`/mc/sessions/<token>`, logged by httpx) and in
     # the address a harness uses (`/s/<token>/`).
     (re.compile(r"(/mc/sessions/)[A-Za-z0-9_-]{32,128}"), rf"\1{REDACTED}"),
-    (re.compile(r"(/s/)[A-Za-z0-9_-]{32,128}(?=[/?\s\"']|$)"), rf"\1{REDACTED}"),
+    (re.compile(r"(/s/)[A-Za-z0-9_-]{32,128}(?![A-Za-z0-9_-])"), rf"\1{REDACTED}"),
 )
 
 
