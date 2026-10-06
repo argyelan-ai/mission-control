@@ -2,7 +2,7 @@
 
 PR S1: list (viewer), open and end (operator). Opening hands the session's
 gateway address back exactly once, to the caller; the listing never contains
-it. Heads and agents get their sessions from the harness layer (PR S2) through
+it. Heads and agents get their sessions from the harness layer (ADR-088 harness-wiring step) through
 `services/browser_sessions`, not through this API.
 """
 from __future__ import annotations

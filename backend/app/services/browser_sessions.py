@@ -14,7 +14,7 @@ gateway restart (the gateway's register lives in memory), and a database dump
 contains no live address.
 
 This module knows no harness: how an address reaches playwright-mcp, omp or a
-head is the harness layer's job (PR S2). PR S1 has no caller besides the
+head is the harness layer's job (ADR-088 harness-wiring step). For now there is no caller besides the
 operator API — nothing opens a session on its own yet.
 """
 from __future__ import annotations
@@ -133,7 +133,7 @@ async def end_session(session: AsyncSession, row: BrowserSession, *, reason: str
     connections, the row becomes "ended". Idempotent. Returns the gateway's
     cleanup report, or None if there was nothing to clean up there (already
     ended, gateway restarted, or unreachable — the row is ended anyway; tabs a
-    reachable-but-failed gateway still holds are the lifecycle loop's job)."""
+    reachable-but-failed gateway still holds are the ADR-088 lifecycle step's job)."""
     if row.status == "ended":
         return None
     result: Optional[dict] = None

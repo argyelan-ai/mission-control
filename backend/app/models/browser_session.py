@@ -17,7 +17,7 @@ are folders on the host, not rows, so it is a plain string, no FK). Not a task
 column: the task core is frozen (ADR-085 §4).
 
 Status: "open" (address valid, nothing started in the browser yet) → "live"
-(at least one tab; set by the lifecycle loop, PR S1b) → "ended".
+(at least one tab; set by the ADR-088 lifecycle step) → "ended".
 """
 import uuid
 from datetime import datetime
