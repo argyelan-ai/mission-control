@@ -129,8 +129,15 @@ taken at most every `browser_frame_interval_s` and only after new activity,
 and once more right before the end; stored as
 `<browser_sessions_root>/<session-id>/last.jpg` (only its time, URL and title
 in the row), served by `GET /api/v1/browser-sessions/{id}/last-frame`, and
-deleted `browser_frame_retention_days` after the end. While the gateway is
-unreachable the loop changes nothing.
+deleted `browser_frame_retention_days` after the end. It also reconciles the
+other way: a gateway session whose row has ended (open/end race, a gateway
+error on DELETE) is ended at the gateway, and tabs an ended session created and
+left behind (a `/json/new` still in flight) are swept
+(`POST /mc/orphans/close?session=<id>`, refused while the session is
+registered). Both re-read the row first, so an open session is never touched.
+Ending an agent's phase closes only tabs the agent created or nobody known
+created — never a tab another owner created that the agent merely claimed.
+While the gateway is unreachable the loop changes nothing.
 
 ## Alternatives
 
