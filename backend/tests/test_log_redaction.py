@@ -486,7 +486,7 @@ def test_integration_real_httpx_url_and_uvicorn_formatter():
 
 # ── browser-session tokens (ADR-088): httpx logs the gateway URL ──────────
 
-BROWSER_TOKEN = "Zk3v9QpL2mN8xR4tY7wB1cD6fH0jK5sA9uE3gI2oP7q"
+BROWSER_TOKEN = "browser-session-token-" + "x" * 21  # low entropy: a placeholder, not a key
 
 
 def test_redacts_browser_session_token_in_gateway_register_url(redact):
