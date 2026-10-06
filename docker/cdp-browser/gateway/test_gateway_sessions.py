@@ -323,3 +323,25 @@ async def test_end_session_does_not_report_already_gone_tabs_or_contexts_as_erro
     monkeypatch.setattr(gateway, "_cdp_call", fake_call)
     result = await gateway.end_session(TOKEN)
     assert result["errors"] == ["Target.closeTarget: Target is busy"]
+
+
+@pytest.mark.asyncio
+async def test_agent_json_list_includes_tabs_of_its_own_context():
+    """`/a/<slug>/json/list` used to match only tabs with a recorded owner
+    entry (createTarget, claim); a tab that inherited its owner from the
+    agent's own context (or opener) was missing. It now lists every tab
+    `/mc/targets` attributes to the agent — the same rule, one place."""
+    gateway = CdpGateway(upstream_host="127.0.0.1", upstream_port=1)
+    gateway.state.observe_response("Target.createBrowserContext", {}, {"browserContextId": "CTX-A"}, agent="alpha")
+    _created(gateway.state, "IN-CTX", ctx="CTX-A")
+    _created(gateway.state, "OTHER")
+
+    async def fake_upstream(method, path):
+        pages = [{"id": tid, "type": "page", "webSocketDebuggerUrl": f"ws://127.0.0.1:9222/devtools/page/{tid}"}
+                 for tid in ("IN-CTX", "OTHER")]
+        return 200, "application/json", json.dumps(pages).encode()
+
+    gateway._upstream_http = fake_upstream
+    status, _ct, body = await _http(gateway, "GET", "/a/alpha/json/list")
+    assert status == 200
+    assert [p["id"] for p in json.loads(body)] == ["IN-CTX"]
