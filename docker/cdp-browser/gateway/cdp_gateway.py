@@ -1161,6 +1161,39 @@ class CdpGateway:
     def _live_connection_counts(self) -> dict[str, int]:
         return {key: len(tasks) for key, tasks in self._live_conns.items() if tasks}
 
+    async def _close_and_dispose(self, tabs: list[str], contexts: list[str]) -> tuple[int, int, list[str]]:
+        """Close tabs and dispose contexts in one bounded call. Counts only
+        what Chromium CONFIRMED (or reported already gone); a context whose
+        disposal was not confirmed keeps its owner, so MC's orphan sweep can
+        find and dispose it later (re-review N2)."""
+        commands = [("Target.closeTarget", {"targetId": tid}) for tid in tabs]
+        commands += [("Target.disposeBrowserContext", {"browserContextId": ctx}) for ctx in contexts]
+        if not commands:
+            return 0, 0, []
+        errors: list[str] = []
+        confirmed: list[bool] = [False] * len(commands)
+        try:
+            replies = await self._cdp_call(commands)
+        except (OSError, asyncio.TimeoutError, RuntimeError, ValueError, websockets.WebSocketException) as e:
+            return 0, 0, [f"cleanup: {e}"]
+        for i, ((method, _params), reply) in enumerate(zip(commands, replies)):
+            message = str((reply.get("error") or {}).get("message", "")) if "error" in reply else None
+            # Already gone is the goal, not a failure: a client that created
+            # its context with disposeOnDetach (Playwright does) loses it the
+            # moment its connection is cut (lab, real Chromium 124:
+            # "Failed to find context").
+            if message is None or _ALREADY_GONE.search(message):
+                confirmed[i] = True
+            else:
+                errors.append(f"{method}: {message}")
+        closed = sum(confirmed[: len(tabs)])
+        disposed = 0
+        for ctx, ok in zip(contexts, confirmed[len(tabs):]):
+            if ok:
+                self.state.ctx_owner.pop(ctx, None)
+                disposed += 1
+        return closed, disposed, errors
+
     async def close_orphans(self, session_id: str) -> Optional[dict]:
         """Close what an ENDED session created and left behind (e.g. a
         `/json/new` that was still in flight while it ended). None if the
@@ -1168,22 +1201,13 @@ class CdpGateway:
         if any(e.session_id == session_id for e in self.state.sessions.values()):
             return None
         tabs, contexts = self.state.session_resources(session_id)
-        commands = [("Target.closeTarget", {"targetId": tid}) for tid in tabs]
-        commands += [("Target.disposeBrowserContext", {"browserContextId": ctx}) for ctx in contexts]
-        errors: list[str] = []
-        if commands:
-            try:
-                for (method, _params), reply in zip(commands, await self._cdp_call(commands)):
-                    message = str((reply.get("error") or {}).get("message", "")) if "error" in reply else None
-                    if message is not None and not _ALREADY_GONE.search(message):
-                        errors.append(f"{method}: {message}")
-            except (OSError, asyncio.TimeoutError, RuntimeError, ValueError, websockets.WebSocketException) as e:
-                errors.append(f"cleanup: {e}")
-        for ctx in contexts:
-            self.state.ctx_owner.pop(ctx, None)
-        if commands:
-            logger.info("cdp_gateway: swept %d tabs, %d contexts of ended session %s", len(tabs), len(contexts), session_id)
-        return {"sessionId": session_id, "closedTargets": len(tabs), "disposedContexts": len(contexts), "errors": errors}
+        closed, disposed, errors = await self._close_and_dispose(tabs, contexts)
+        if tabs or contexts:
+            logger.info(
+                "cdp_gateway: swept ended session %s: %d/%d tabs, %d/%d contexts confirmed",
+                session_id, closed, len(tabs), disposed, len(contexts),
+            )
+        return {"sessionId": session_id, "closedTargets": closed, "disposedContexts": disposed, "errors": errors}
 
     async def end_session(self, token: str, *, agent_tabs: bool = False) -> Optional[dict]:
         """Ends one browser session: unregister the token first (a reconnect
@@ -1220,31 +1244,15 @@ class CdpGateway:
                 if t.ctx not in owned_ctx
                 and (t.creator or self.state.target_creator.get(t.id)) in (None, entry.agent)
             })
-        commands = [("Target.closeTarget", {"targetId": tid}) for tid in tabs]
-        commands += [("Target.disposeBrowserContext", {"browserContextId": ctx}) for ctx in contexts]
-        errors: list[str] = []
-        if commands:
-            try:
-                for (method, _params), reply in zip(commands, await self._cdp_call(commands)):
-                    message = str((reply.get("error") or {}).get("message", "")) if "error" in reply else None
-                    # Already gone is the goal, not a failure: a client that
-                    # created its context with disposeOnDetach (Playwright
-                    # does) loses it the moment its connection is cut above
-                    # (lab, real Chromium 124: "Failed to find context").
-                    if message is not None and not _ALREADY_GONE.search(message):
-                        errors.append(f"{method}: {message}")
-            except (OSError, asyncio.TimeoutError, RuntimeError, ValueError, websockets.WebSocketException) as e:
-                errors.append(f"cleanup: {e}")
-        for ctx in contexts:
-            self.state.ctx_owner.pop(ctx, None)
+        closed, disposed, errors = await self._close_and_dispose(tabs, contexts)
         logger.info(
-            "cdp_gateway: browser session %s ended (%d tabs, %d contexts, %d connections)",
-            entry.session_id, len(tabs), len(contexts), len(conns),
+            "cdp_gateway: browser session %s ended (%d/%d tabs, %d/%d contexts confirmed, %d connections)",
+            entry.session_id, closed, len(tabs), disposed, len(contexts), len(conns),
         )
         return {
             "sessionId": entry.session_id,
-            "closedTargets": len(tabs),
-            "disposedContexts": len(contexts),
+            "closedTargets": closed,
+            "disposedContexts": disposed,
             "closedConnections": len(conns),
             "errors": errors,
         }

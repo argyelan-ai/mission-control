@@ -261,3 +261,41 @@ def test_session_agent_map_is_pruned_once_it_grows(monkeypatch):
     _created(state, "GONE")
     state.apply_target_event("targetDestroyed", {"targetId": "GONE"})
     assert set(state.session_agent) == {"aaaaaaaa-0000-4000-8000-000000000000"}
+
+
+# ── re-review N2: a cleanup that timed out keeps ownership for the sweep ───
+
+@pytest.mark.asyncio
+async def test_unconfirmed_disposal_keeps_context_ownership_for_the_sweep(monkeypatch):
+    """When Chromium does not confirm a disposal in time, the context still
+    belongs to the (now ended) session: the report counts only confirmed
+    closes, and MC's orphan sweep can still find and dispose it."""
+    gateway = CdpGateway(upstream_host="127.0.0.1", upstream_port=1)
+    gateway.state.register_session(TOKEN, SID, None)
+    key = session_owner_key(SID)
+    gateway.state.observe_response("Target.createBrowserContext", {}, {"browserContextId": "CTX-OK"}, agent=key)
+    gateway.state.observe_response("Target.createBrowserContext", {}, {"browserContextId": "CTX-SLOW"}, agent=key)
+    gateway.state.observe_response("Target.createTarget", {}, {"targetId": "T-SLOW"}, agent=key)
+    _created(gateway.state, "T-SLOW")
+    unanswered = {"error": {"message": "unanswered within 8s"}}
+
+    async def partly_answered(commands, **kw):
+        return [{"result": {}} if p.get("browserContextId") == "CTX-OK" else unanswered for _m, p in commands]
+
+    monkeypatch.setattr(gateway, "_cdp_call", partly_answered)
+    result = await gateway.end_session(TOKEN)
+    assert result["disposedContexts"] == 1 and result["closedTargets"] == 0
+    assert "CTX-SLOW" in gateway.state.ctx_owner and "CTX-OK" not in gateway.state.ctx_owner
+
+    swept = []
+
+    async def all_answered(commands, **kw):
+        swept.extend(commands)
+        return [{"result": {}} for _ in commands]
+
+    monkeypatch.setattr(gateway, "_cdp_call", all_answered)
+    status, _ct, body = await _http(gateway, "POST", f"/mc/orphans/close?session={SID}")
+    assert status == 200
+    assert ("Target.disposeBrowserContext", {"browserContextId": "CTX-SLOW"}) in swept
+    assert ("Target.closeTarget", {"targetId": "T-SLOW"}) in swept
+    assert "CTX-SLOW" not in gateway.state.ctx_owner
