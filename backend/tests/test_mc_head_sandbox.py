@@ -164,6 +164,73 @@ def test_docker_socket_is_not_reachable(layout, tmp_path):
     assert res.returncode != 0
 
 
+# ── the login browser (persistent Chrome with saved logins) ─────────────
+
+LOGIN_BROWSER_PORT = 18800
+
+
+def test_browser_profiles_are_not_readable(layout):
+    """MC_HOME/browser-profiles holds the persistent login browser's profile
+    (cookies of every site the operator logged into). A head never reads it."""
+    profile = layout["mc_home"] / "browser-profiles" / "login" / "Default"
+    profile.mkdir(parents=True)
+    (profile / "Cookies").write_text("SESSIONCOOKIE\n")
+    res = _sh(layout, f"cat {profile}/Cookies")
+    assert res.returncode != 0
+    assert "SESSIONCOOKIE" not in res.stdout
+    res = _sh(layout, f"ls {layout['mc_home']}/browser-profiles")
+    assert res.returncode != 0
+
+
+def _tcp_probe(port: int) -> str:
+    return (
+        "import socket\n"
+        f"s=socket.create_connection(('127.0.0.1',{port}),3)\n"
+        "print('CONNECTED')\n"
+    )
+
+
+def _port_in_use(port: int) -> bool:
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
+def test_login_browser_debug_port_is_not_reachable(layout):
+    """The login browser listens for remote control on localhost:18800. A
+    head must not drive it (it holds the operator's logged-in sessions),
+    while other localhost ports stay reachable (control below)."""
+    import socket
+    import threading
+
+    servers = []
+
+    def _serve(port: int) -> int:
+        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        srv.bind(("127.0.0.1", port))
+        srv.listen(4)
+        threading.Thread(target=lambda: [srv.accept() for _ in range(4)], daemon=True).start()
+        servers.append(srv)
+        return srv.getsockname()[1]
+
+    try:
+        # On a machine that runs the login browser the port is taken — the
+        # probe inside the sandbox must be refused before it ever gets there.
+        if not _port_in_use(LOGIN_BROWSER_PORT):
+            _serve(LOGIN_BROWSER_PORT)
+        other = _serve(0)
+        blocked = _sh(layout, f'/usr/bin/python3 -c "{_tcp_probe(LOGIN_BROWSER_PORT)}"')
+        allowed = _sh(layout, f'/usr/bin/python3 -c "{_tcp_probe(other)}"')
+    finally:
+        for srv in servers:
+            srv.close()
+    assert "CONNECTED" in allowed.stdout, allowed.stderr
+    assert "CONNECTED" not in blocked.stdout
+    assert blocked.returncode != 0
+
+
 # ── scratch repo with a local bare origin ───────────────────────────────
 
 

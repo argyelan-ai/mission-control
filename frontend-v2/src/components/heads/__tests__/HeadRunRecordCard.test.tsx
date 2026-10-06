@@ -213,4 +213,44 @@ describe("HeadRunRecordCard", () => {
     await userEvent.click(screen.getByTestId("head-record-open-full"));
     await waitFor(() => expect(screen.getByTestId("head-record-full")).toHaveTextContent("full text"));
   });
+
+  // ── "Arbeitskopie: nicht gesichert" (bauplan PR 4 §5) ────────────────
+
+  it("shows 'Working copy: not saved' when the cleanup report keeps this run's worktree as dirty", async () => {
+    vi.spyOn(api.heads, "summary").mockResolvedValue(FULL);
+    vi.spyOn(api.heads, "cleanup").mockResolvedValue({
+      report: {
+        mode: "dry_run", at: "2026-10-04T12:00:00Z",
+        runs: [{ run_id: "run-1", actions: [], kept: [{ path: "/x/run-1/wt", reason: "dirty" }] }],
+        skipped: [], action_bytes: 0, heads_bytes: 0, free_bytes: null, warn_low_disk: false, budget_bytes: 0,
+      },
+    });
+    renderCard();
+    await waitFor(() => expect(screen.getByTestId("head-record-unsaved")).toHaveTextContent("Working copy: not saved"));
+  });
+
+  it("shows no 'not saved' line when the report has no entry for this run", async () => {
+    vi.spyOn(api.heads, "summary").mockResolvedValue(FULL);
+    vi.spyOn(api.heads, "cleanup").mockResolvedValue({ report: null });
+    renderCard();
+    await waitFor(() => expect(screen.getByTestId("head-record-result")).toBeInTheDocument());
+    expect(screen.queryByTestId("head-record-unsaved")).not.toBeInTheDocument();
+  });
+
+  // Sabotage: a worktree kept for "age" (a normal, temporary hold — see
+  // `lib/heads.test.ts`'s own `workingCopyUnsaved` sabotage note) must NOT
+  // show this warning; only `dirty`/`not_pushed` are real safety concerns.
+  it("shows no 'not saved' line for a worktree kept for an unrelated reason like age", async () => {
+    vi.spyOn(api.heads, "summary").mockResolvedValue(FULL);
+    vi.spyOn(api.heads, "cleanup").mockResolvedValue({
+      report: {
+        mode: "dry_run", at: "2026-10-04T12:00:00Z",
+        runs: [{ run_id: "run-1", actions: [], kept: [{ path: "/x/run-1/wt", reason: "age" }] }],
+        skipped: [], action_bytes: 0, heads_bytes: 0, free_bytes: null, warn_low_disk: false, budget_bytes: 0,
+      },
+    });
+    renderCard();
+    await waitFor(() => expect(screen.getByTestId("head-record-result")).toBeInTheDocument());
+    expect(screen.queryByTestId("head-record-unsaved")).not.toBeInTheDocument();
+  });
 });

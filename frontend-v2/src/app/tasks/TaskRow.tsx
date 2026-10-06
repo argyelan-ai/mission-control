@@ -2,13 +2,14 @@
 
 import { useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { notify } from "@/lib/notify";
 import Link from "next/link";
 import { Brain, Check, Clock, RotateCcw, Send, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { C, LANE, alpha } from "@/lib/colors";
 import { STATUS_LABEL_KEY } from "@/lib/taskDetail/statusLabels";
+import { headListLine, type HeadRun } from "@/lib/heads";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { OverflowMenu } from "@/components/shared/OverflowMenu";
@@ -64,15 +65,24 @@ export function TaskRow({
   task,
   agents,
   boardId,
+  headRun = null,
   onClick,
 }: {
   task: Task;
   agents: Agent[];
   boardId: string;
+  /** The task's current/most recent head run, or `null` without one
+   *  (heads-sichtbar PR 3, bauplan §4) — looked up ONCE by the caller
+   *  (`useHeadRuns().byTask`), never queried per row. Defaults to `null`
+   *  so every existing caller keeps rendering exactly as before. */
+  headRun?: HeadRun | null;
   onClick: () => void;
 }) {
   const t = useTranslations("tasks");
+  const tHeads = useTranslations("heads");
+  const locale = useLocale();
   const agent = agents.find((a) => a.id === task.assigned_agent_id);
+  const headLine = headRun ? headListLine(headRun, tHeads, locale) : null;
   const qc = useQueryClient();
   // Re-dispatching a finished task is rare and restarts an agent: it lives in
   // the row's ⋯ menu and goes through the shared confirm dialog.
@@ -117,101 +127,113 @@ export function TaskRow({
     <div className="relative">
       {/* Kein <button> als Container (nested-interactive): Titel-Button deckt
           per ::after die ganze Zeile ab, Aktionen liegen mit z-[1] darüber. */}
-      <div className="w-full flex items-center gap-3 px-3 py-2 rounded-md text-left transition-all bg-[var(--color-bg-surface)] hover:bg-[var(--color-bg-hover)] group" style={{ border: `1px solid ${C.border}` }}>
-        <TaskStatusDot status={task.status} />
-        <button
-          type="button"
-          onClick={onClick}
-          aria-label={t("openTask", { title: task.title })}
-          className="flex-1 text-sm truncate flex items-center gap-1 min-w-0 text-left cursor-pointer after:absolute after:inset-0 after:content-['']"
-          style={{ color: isDone ? C.textMuted : C.textPrimary }}
-        >
-          <span className="truncate">{task.title}</span>
-          {/* Checklist-Progress Badge */}
-          {task.checklist_total > 0 && (
-            <span
-              className="ml-1.5 px-1.5 py-0.5 rounded-sm text-xs font-mono shrink-0"
-              style={{
-                background:
-                  task.checklist_done === task.checklist_total
-                    ? alpha(C.online, 0.15)
-                    : C.accentSubtle,
-                color:
-                  task.checklist_done === task.checklist_total
-                    ? C.online
-                    : C.accent,
-              }}
-            >
-              {task.checklist_done}/{task.checklist_total}
-            </span>
-          )}
-        </button>
-        <div className="relative z-[1] flex items-center gap-2 shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">
-          {task.priority !== "medium" && priorityColor(task.priority) && (
-            <span
-              className="text-[10px] px-1 py-0.5 rounded-sm uppercase font-semibold"
-              style={{ color: priorityColor(task.priority)! }}
-            >
-              {task.priority}
-            </span>
-          )}
-          {agent && (
-            <span title={agent.name}>
-              <EntityIcon value={agent.emoji} size={13} />
-            </span>
-          )}
-          {isStale && (
-            <span
-              className="inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-sm"
-              title={t("noActivityFor", { mins: staleMins })}
-              style={{
-                color: isCritical ? C.error : C.warning,
-                backgroundColor: isCritical ? alpha(C.error, 0.1) : alpha(C.warning, 0.1),
-              }}
-            >
-              <Clock size={10} />
-              {staleMins}m
-            </span>
-          )}
-          {/* Phase E task-klammer quick-link: jump to all vault notes +
-              wrappers that share this task's UUID. Hover-only so the row
-              stays uncluttered for the common case where the operator just wants
-              to scan the task list. */}
-          <Link
-            href={`/memory?task=${task.id}`}
-            onClick={(e) => e.stopPropagation()}
-            className="p-1 rounded-sm transition-colors opacity-0 group-hover:opacity-100 hover:bg-[var(--color-bg-hover)] cursor-pointer touch-visible"
-            title={t("vaultLink")}
-            style={{ color: C.textMuted }}
+      <div className="w-full rounded-md transition-all bg-[var(--color-bg-surface)] hover:bg-[var(--color-bg-hover)] group" style={{ border: `1px solid ${C.border}` }}>
+        <div className="flex items-center gap-3 px-3 py-2 text-left">
+          <TaskStatusDot status={task.status} />
+          <button
+            type="button"
+            onClick={onClick}
+            aria-label={t("openTask", { title: task.title })}
+            className="flex-1 text-sm truncate flex items-center gap-1 min-w-0 text-left cursor-pointer after:absolute after:inset-0 after:content-['']"
+            style={{ color: isDone ? C.textMuted : C.textPrimary }}
           >
-            <Brain size={12} />
-          </Link>
-          {canDispatch && (
-            <button
-              onClick={handleDispatch}
-              disabled={dispatchMutation.isPending}
+            <span className="truncate">{task.title}</span>
+            {/* Checklist-Progress Badge */}
+            {task.checklist_total > 0 && (
+              <span
+                className="ml-1.5 px-1.5 py-0.5 rounded-sm text-xs font-mono shrink-0"
+                style={{
+                  background:
+                    task.checklist_done === task.checklist_total
+                      ? alpha(C.online, 0.15)
+                      : C.accentSubtle,
+                  color:
+                    task.checklist_done === task.checklist_total
+                      ? C.online
+                      : C.accent,
+                }}
+              >
+                {task.checklist_done}/{task.checklist_total}
+              </span>
+            )}
+          </button>
+          <div className="relative z-[1] flex items-center gap-2 shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">
+            {task.priority !== "medium" && priorityColor(task.priority) && (
+              <span
+                className="text-[10px] px-1 py-0.5 rounded-sm uppercase font-semibold"
+                style={{ color: priorityColor(task.priority)! }}
+              >
+                {task.priority}
+              </span>
+            )}
+            {agent && (
+              <span title={agent.name}>
+                <EntityIcon value={agent.emoji} size={13} />
+              </span>
+            )}
+            {isStale && (
+              <span
+                className="inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-sm"
+                title={t("noActivityFor", { mins: staleMins })}
+                style={{
+                  color: isCritical ? C.error : C.warning,
+                  backgroundColor: isCritical ? alpha(C.error, 0.1) : alpha(C.warning, 0.1),
+                }}
+              >
+                <Clock size={10} />
+                {staleMins}m
+              </span>
+            )}
+            {/* Phase E task-klammer quick-link: jump to all vault notes +
+                wrappers that share this task's UUID. Hover-only so the row
+                stays uncluttered for the common case where the operator just wants
+                to scan the task list. */}
+            <Link
+              href={`/memory?task=${task.id}`}
+              onClick={(e) => e.stopPropagation()}
               className="p-1 rounded-sm transition-colors opacity-0 group-hover:opacity-100 hover:bg-[var(--color-bg-hover)] cursor-pointer touch-visible"
-              title={t("dispatchTask")}
-              style={{ color: C.accent }}
+              title={t("vaultLink")}
+              style={{ color: C.textMuted }}
             >
-              <Send size={12} />
-            </button>
-          )}
-          {isDone && (
-            <OverflowMenu
-              label={t("moreActions")}
-              actions={[
-                {
-                  id: "dispatch-again",
-                  label: t("dispatchAgainMenu"),
-                  icon: RotateCcw,
-                  onClick: () => setConfirmRedispatch(true),
-                  loading: dispatchMutation.isPending,
-                },
-              ]}
-            />
-          )}
+              <Brain size={12} />
+            </Link>
+            {canDispatch && (
+              <button
+                onClick={handleDispatch}
+                disabled={dispatchMutation.isPending}
+                className="p-1 rounded-sm transition-colors opacity-0 group-hover:opacity-100 hover:bg-[var(--color-bg-hover)] cursor-pointer touch-visible"
+                title={t("dispatchTask")}
+                style={{ color: C.accent }}
+              >
+                <Send size={12} />
+              </button>
+            )}
+            {isDone && (
+              <OverflowMenu
+                label={t("moreActions")}
+                actions={[
+                  {
+                    id: "dispatch-again",
+                    label: t("dispatchAgainMenu"),
+                    icon: RotateCcw,
+                    onClick: () => setConfirmRedispatch(true),
+                    loading: dispatchMutation.isPending,
+                  },
+                ]}
+              />
+            )}
+          </div>
         </div>
+        {/* Second line only while a head works this task (heads-sichtbar
+            PR 3, bauplan §4) — a plain-agent row stays exactly as it was. */}
+        {headLine && (
+          <div className="flex items-center gap-3 px-3 pb-2">
+            <span className="w-4 h-4 shrink-0" aria-hidden />
+            <span className="flex-1 min-w-0 truncate text-xs" style={{ color: C.textMuted }} data-testid="task-row-head-line">
+              {headLine}
+            </span>
+          </div>
+        )}
       </div>
 
       <ConfirmDialog

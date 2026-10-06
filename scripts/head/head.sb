@@ -68,6 +68,9 @@
   (subpath (string-append (param "REAL_HOME") "/Library/Application Support/Arc"))
   (subpath (string-append (param "REAL_HOME") "/Library/Safari"))
   (subpath (string-append (param "MC_HOME") "/secrets"))
+  ;; The persistent login browser's profile (saved logins of every site the
+  ;; operator signed into) — see the network rule below.
+  (subpath (string-append (param "MC_HOME") "/browser-profiles"))
   (literal (string-append (param "MC_HOME") "/heads/gh-token"))
   (regex #"/\.env(\..*)?$"))
 
@@ -77,3 +80,9 @@
   (remote unix-socket (path-literal "/var/run/docker.sock"))
   (remote unix-socket (path-literal "/private/var/run/docker.sock"))
   (remote unix-socket (path-literal (string-append (param "REAL_HOME") "/.docker/run/docker.sock"))))
+;; The persistent login browser (a Chrome with saved logins, remote control on
+;; localhost:18800) is the operator's and the fixed agents' — a head never
+;; drives it: it would act inside the operator's logged-in sessions. Heads get
+;; their own browser session instead (ADR-088). Other localhost ports stay open.
+(deny network-outbound
+  (remote tcp "localhost:18800"))

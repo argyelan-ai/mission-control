@@ -3,20 +3,24 @@
  * plan B1–B3): i18n parity, error codes → i18n keys, picker order and the
  * "always local" pre-selection.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import en from "../../../messages/en.json";
 import de from "../../../messages/de.json";
 import {
   chooseInitialPair,
   defaultRestartMode,
   failReasonKey,
+  headContextLine,
   headErrorKey,
+  headListLine,
   headListTitle,
   HEAD_STEP_KEYS,
   headStepKey,
+  lastHeadActivity,
   midLineStateWord,
   modelFamily,
   pairKey,
+  pairLabel,
   pairReasonKey,
   pairShort,
   parseHeadOnBox,
@@ -27,8 +31,11 @@ import {
   sortHeadsForList,
   splitPairs,
   supersededNeedsYouIds,
+  workingCopyUnsaved,
+  type HeadGcReport,
   type HeadPairsResponse,
 } from "../heads";
+import type { ChatEvent } from "../chatTypes";
 import { mkPair, mkRun } from "./headFixtures";
 
 function flatKeys(obj: unknown, prefix = ""): string[] {
@@ -434,5 +441,208 @@ describe("midLineStateWord (review finding on PR #756 round 3)", () => {
   it("is a no-op on an already-empty or already-lowercase word", () => {
     expect(midLineStateWord("")).toBe("");
     expect(midLineStateWord("already lowercase")).toBe("already lowercase");
+  });
+});
+
+// ── workingCopyUnsaved (heads-sichtbar PR 4 §5) ─────────────────────────────
+
+function mkGcReport(runs: HeadGcReport["runs"]): HeadGcReport {
+  return {
+    mode: "dry_run", at: "2026-10-04T12:00:00Z", runs, skipped: [],
+    action_bytes: 0, heads_bytes: 0, free_bytes: null, warn_low_disk: false, budget_bytes: 0,
+  };
+}
+
+describe("workingCopyUnsaved", () => {
+  it("false while there is no report at all", () => {
+    expect(workingCopyUnsaved("r1", null)).toBe(false);
+    expect(workingCopyUnsaved("r1", undefined)).toBe(false);
+  });
+
+  it("false while the report has no entry for this run", () => {
+    expect(workingCopyUnsaved("r1", mkGcReport([]))).toBe(false);
+  });
+
+  it("true when the run's worktree is kept for being dirty", () => {
+    const report = mkGcReport([{ run_id: "r1", actions: [], kept: [{ path: "/x/r1/wt", reason: "dirty" }] }]);
+    expect(workingCopyUnsaved("r1", report)).toBe(true);
+  });
+
+  it("true when the run's worktree is kept for not being pushed", () => {
+    const report = mkGcReport([{ run_id: "r1", actions: [], kept: [{ path: "/x/r1/wt", reason: "not_pushed" }] }]);
+    expect(workingCopyUnsaved("r1", report)).toBe(true);
+  });
+
+  // Sabotage (review-style): a reason like "age" or "real_repo_v1" is a
+  // normal, temporary hold — not a "your work is unsaved" warning. Without
+  // the explicit reason allowlist (checking only "there is a kept entry"),
+  // EVERY passed run with a worktree would show the warning forever.
+  it("false for a worktree kept for an unrelated, non-warning reason", () => {
+    for (const reason of ["age", "real_repo_v1", "clone_active", "detached", "ignored_files"]) {
+      const report = mkGcReport([{ run_id: "r1", actions: [], kept: [{ path: "/x/r1/wt", reason }] }]);
+      expect(workingCopyUnsaved("r1", report)).toBe(false);
+    }
+  });
+
+  it("only looks at the matching run's own entry, never another run's", () => {
+    const report = mkGcReport([
+      { run_id: "other", actions: [], kept: [{ path: "/x/other/wt", reason: "dirty" }] },
+      { run_id: "r1", actions: [], kept: [] },
+    ]);
+    expect(workingCopyUnsaved("r1", report)).toBe(false);
+  });
+});
+
+describe("pairLabel (heads-sichtbar PR 3 §4: one separator, '×', everywhere)", () => {
+  it("joins harness and runtime with '×', not '·'", () => {
+    expect(pairLabel({ harness: "omp", runtime_label: "GLM local" })).toBe("omp × GLM local");
+  });
+
+  it("falls back to the runtime slug, then em dash, same as before", () => {
+    expect(pairLabel({ harness: "omp", runtime_slug: "glm-local" })).toBe("omp × glm-local");
+    expect(pairLabel({ harness: "omp" })).toBe("omp × —");
+  });
+});
+
+// ── headContextLine / headListLine (heads-sichtbar PR 3 §4) ─────────────────
+//
+// `t` here is a minimal stand-in for `useTranslations("heads")`: it resolves
+// a dotted key against the REAL catalog (so a typo'd key surfaces as the
+// literal key, same failure mode as `next-intl` itself) and does the same
+// plain `{var}` interpolation the component-level tests' `next-intl` mock
+// does (see `src/test-setup.ts`) — no ICU plurals are involved here.
+function makeHeadsT(tree: typeof en) {
+  return (key: string, values?: Record<string, string | number>): string => {
+    const raw = resolve(tree.heads, key);
+    let s = typeof raw === "string" ? raw : key;
+    if (values) for (const [k, v] of Object.entries(values)) s = s.split(`{${k}}`).join(String(v));
+    return s;
+  };
+}
+const tEn = makeHeadsT(en);
+const tDe = makeHeadsT(de);
+
+const GLM = "GLM-5.3-Flash-EXL3"; // modelFamily() strips the variant suffixes down to "GLM-5.3"
+
+describe("headContextLine — the one 'pair + state/time fact' line", () => {
+  it("needs_you: pair + exactly one state word, no time fact", () => {
+    const run = mkRun({ state: "needs_you", harness: "omp", model: GLM });
+    expect(headContextLine(run, tEn, "en")).toBe("omp × GLM-5.3 · needs you");
+    expect(headContextLine(run, tDe, "de")).toBe("omp × GLM-5.3 · braucht dich");
+  });
+
+  it("starting: pair + 'starting…'", () => {
+    const run = mkRun({ state: "starting", model: GLM });
+    expect(headContextLine(run, tEn, "en")).toBe("omp × GLM-5.3 · starting…");
+  });
+
+  it("running: pair + running-for duration (falls back to bare pair with no started_at)", () => {
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-23T10:12:00Z"));
+    const run = mkRun({ state: "running", model: GLM, started_at: "2026-09-23T10:00:00Z" });
+    expect(headContextLine(run, tEn, "en")).toBe("omp × GLM-5.3 · running for 12 min");
+    const noStart = mkRun({ state: "running", model: GLM, started_at: null, created_at: null });
+    expect(headContextLine(noStart, tEn, "en")).toBe("omp × GLM-5.3");
+    vi.restoreAllMocks();
+  });
+
+  // `formatAgeRounded`'s own age computation defaults to `new Date()`, which
+  // (unlike `runDurationSeconds`'s `Date.now()` default above) is NOT moved
+  // by mocking `Date.now` — the same reason `HeadChatRow.test.tsx`'s own
+  // "ended" case checks only for the word "ago", never an exact day count.
+  // A relative `exited_at` keeps this test exact without fighting that.
+  it("ended: withAge (default) appends '… ago'; withAge:false stops at the state word", () => {
+    const exitedAt = new Date(Date.now() - 3 * 86_400_000).toISOString();
+    const run = mkRun({ state: "passed", model: GLM, exited_at: exitedAt });
+    expect(headContextLine(run, tEn, "en")).toBe("omp × GLM-5.3 · passed · 3 d ago");
+    expect(headContextLine(run, tEn, "en", { withAge: false })).toBe("omp × GLM-5.3 · passed");
+  });
+});
+
+describe("headListLine — 'Head · <pair> · <state/time>', no end-of-run age", () => {
+  it("prefixes with the translated 'Head' word, in both locales", () => {
+    const run = mkRun({ state: "running", model: GLM, started_at: null, created_at: null });
+    expect(headListLine(run, tEn, "en")).toBe("Head · omp × GLM-5.3");
+    expect(headListLine(run, tDe, "de")).toBe("Head · omp × GLM-5.3");
+  });
+
+  it("an ended run has no '… ago' clause, unlike headContextLine's own default", () => {
+    const exitedAt = new Date(Date.now() - 3 * 86_400_000).toISOString();
+    const run = mkRun({ state: "passed", model: GLM, exited_at: exitedAt });
+    expect(headListLine(run, tEn, "en")).toBe("Head · omp × GLM-5.3 · passed");
+  });
+});
+
+describe("lastHeadActivity — HeadStateCard's 'Last: …' line", () => {
+  const tool = (uuid: string, ts: string, title: string): ChatEvent =>
+    ({ kind: "tool", uuid, ts, name: "bash", title, detail: {}, toolUseId: null, result: null, status: "done", stats: null, sidechain: false }) as ChatEvent;
+  const message = (uuid: string, ts: string, role: "user" | "assistant" | "teammate", text: string): ChatEvent =>
+    ({ kind: "message", uuid, ts, role, text, model: null, sidechain: false }) as ChatEvent;
+  const thinking = (uuid: string, ts: string): ChatEvent => ({ kind: "thinking", uuid, ts, text: "hmm", sidechain: false }) as ChatEvent;
+
+  it("picks the NEWEST tool title, scanning backward — not the first event in the window", () => {
+    const events = [tool("t1", "2026-09-23T10:00:00Z", "older tool"), tool("t2", "2026-09-23T10:00:30Z", "newer tool")];
+    expect(lastHeadActivity(events)).toEqual({ text: "newer tool", ts: "2026-09-23T10:00:30Z", kind: "tool" });
+  });
+
+  it("falls back to the newest assistant message's first line when the newest event has no title", () => {
+    const events = [
+      tool("t1", "2026-09-23T10:00:00Z", "earlier tool"),
+      message("m1", "2026-09-23T10:00:10Z", "assistant", "Looking at the diff\nmore detail below"),
+    ];
+    expect(lastHeadActivity(events)).toEqual({ text: "Looking at the diff", ts: "2026-09-23T10:00:10Z", kind: "message" });
+  });
+
+  it("skips thinking/usage frames and the operator's own user turn — neither carries a sentence to show", () => {
+    const events = [
+      tool("t1", "2026-09-23T10:00:00Z", "the real last thing it did"),
+      thinking("th1", "2026-09-23T10:00:05Z"),
+      message("u1", "2026-09-23T10:00:10Z", "user", "do the thing"),
+    ];
+    expect(lastHeadActivity(events)).toEqual({ text: "the real last thing it did", ts: "2026-09-23T10:00:00Z", kind: "tool" });
+  });
+
+  it("is null for an empty window or one with nothing renderable", () => {
+    expect(lastHeadActivity([])).toBeNull();
+    expect(lastHeadActivity([thinking("th1", "2026-09-23T10:00:00Z")])).toBeNull();
+  });
+
+  // Review fix round 5: a raw assistant line went straight to the UI,
+  // asterisks and all, and a bare code-fence opener counted as "the line".
+  it("strips bold/inline-code marks from an assistant sentence (real omp run shape)", () => {
+    const events = [message("m1", "2026-09-23T10:00:10Z", "assistant", "Run complete — **Status: passed**.")];
+    expect(lastHeadActivity(events)).toEqual({ text: "Run complete — Status: passed.", ts: "2026-09-23T10:00:10Z", kind: "message" });
+  });
+
+  it("strips a leading heading/bullet mark and collapses `code` spans", () => {
+    expect(lastHeadActivity([message("m1", "t1", "assistant", "## Next: run `pytest -q` again")]))
+      .toEqual({ text: "Next: run pytest -q again", ts: "t1", kind: "message" });
+    expect(lastHeadActivity([message("m2", "t2", "assistant", "- wait for reviewer result")]))
+      .toEqual({ text: "wait for reviewer result", ts: "t2", kind: "message" });
+  });
+
+  // Review fix round 6, finding 5: a head works on a Python backend
+  // constantly — `__init__`/`__main__` are dunder names, not bold markup,
+  // but the old bold-stripping regex ran over raw backtick content and
+  // `__init__` IS, literally, `__` + "init" + `__`. Confirmed red by hand
+  // against the pre-fix code: this came out as "Edited
+  // backend/app/init.py and main".
+  it("does not mangle Python dunder names inside `code` spans", () => {
+    const events = [message("m1", "t1", "assistant", "Edited `backend/app/__init__.py` and `__main__`")];
+    expect(lastHeadActivity(events))
+      .toEqual({ text: "Edited backend/app/__init__.py and __main__", ts: "t1", kind: "message" });
+  });
+
+  it("a bare code-fence line is skipped — the next real line in the same message wins", () => {
+    const events = [message("m1", "2026-09-23T10:00:10Z", "assistant", "```bash\npytest -q\n```")];
+    expect(lastHeadActivity(events)).toEqual({ text: "pytest -q", ts: "2026-09-23T10:00:10Z", kind: "message" });
+  });
+
+  it("a message that is ONLY fence lines (nothing else) falls through, same as an all-skipped window", () => {
+    expect(lastHeadActivity([message("m1", "t1", "assistant", "```\n```")])).toBeNull();
+  });
+
+  it("a tool event's own kind is \"tool\", an assistant sentence's is \"message\" — the card picks its icon from this", () => {
+    expect(lastHeadActivity([tool("t1", "t", "bash: pytest")])?.kind).toBe("tool");
+    expect(lastHeadActivity([message("m1", "t", "assistant", "Looking at the diff")])?.kind).toBe("message");
   });
 });

@@ -35,6 +35,12 @@ function renderWithQuery(ui: React.ReactElement) {
   return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
 }
 
+// Real ICU formatter (not this file's next-intl mock) — shared by every test
+// below that checks a plural catalog string actually inflects correctly.
+function fmt(msg: string, v: Record<string, number>, loc: string) {
+  return new IntlMessageFormat(msg, loc).format(v);
+}
+
 const host = {
   id: "host-1", slug: "box", display_name: "Box", kind: "ssh",
   ssh_host: null, ssh_user: null, ssh_key_path: null, ssh_credential_id: null, role: null, fabric_ip: null, control_url: null,
@@ -75,27 +81,88 @@ describe("Stage — model card while a head works", () => {
     expect(screen.getByTestId("stop-runtime")).toBeEnabled();
   });
 
-  it("IN USE counts active agents + heads and says who in the tooltip", async () => {
+  it("WORKING = heads + busy agents; an idle active agent is only CONNECTED — tooltip still says who", async () => {
     vi.spyOn(api.heads, "occupancy").mockResolvedValue({ boxes: { "host-1": head } });
     vi.spyOn(api.runtimes.db, "agents").mockResolvedValue({
       runtime_slug: "glm-local", count: 2,
       agents: [{ id: "a1", name: "Beta", agent_runtime: "x" }, { id: "a2", name: "Nova", agent_runtime: "x" }],
     });
+    // mkAgent's default status is "idle" — neither is busy, so both are
+    // merely CONNECTED; only the head is WORKING.
     vi.spyOn(api.agents, "list").mockResolvedValue([mkAgent("a1", "Beta", "active"), mkAgent("a2", "Nova", "active")]);
     renderWithQuery(<Stage runtime={runtime} members={[{ host, role: "head" }]} onOpenCockpit={() => {}} />);
     const tile = await screen.findByTestId("kpi-in-use");
-    await waitFor(() => expect(tile).toHaveTextContent("3"));
-    expect(tile).toHaveTextContent("In use");
+    await waitFor(() => expect(tile).toHaveTextContent("1"));
+    expect(tile).toHaveTextContent("working");
+    expect(tile).toHaveTextContent("+ 2 connected");
     expect(screen.queryByText("Agents")).not.toBeInTheDocument();
     const title = tile.getAttribute("title") ?? "";
-    // (the test mock of next-intl does not render ICU plurals — the counts
-    // sentence itself is checked with the real formatter below)
-    expect(title).toContain("{heads, plural");
+    // The tooltip's own "N heads · N active agents" summary is unchanged by
+    // the working/connected split above (review fix round 6, finding 4: the
+    // test mock of next-intl now DOES render ICU plurals — see
+    // src/test-setup.ts — so this asserts the real formatted sentence
+    // rather than the raw template).
+    expect(title).toContain("1 head · 2 active agents");
     expect(title).toContain("Fix flaky retry test");
     expect(title).toContain("Beta, Nova");
   });
 
-  it("paused agents do not count: 1 head + 3 paused agents → 1", async () => {
+  it("a duo: 2 heads + 1 busy + 1 idle + 1 paused agent → '3 working · + 1 connected'", async () => {
+    const host2: Host = { ...host, id: "host-2", slug: "box-2", display_name: "Box 2" };
+    const head2: HeadBusy = { run_id: "run-2", task_id: "task-8", title: "Second job", harness: "omp", runtime_slug: "glm-local", since: null };
+    vi.spyOn(api.heads, "occupancy").mockResolvedValue({ boxes: { "host-1": head, "host-2": head2 } });
+    vi.spyOn(api.runtimes.db, "agents").mockResolvedValue({
+      runtime_slug: "glm-local", count: 3,
+      agents: [
+        { id: "a1", name: "Working", agent_runtime: "x" },
+        { id: "a2", name: "Idle", agent_runtime: "x" },
+        { id: "a3", name: "Resting", agent_runtime: "x" },
+      ],
+    });
+    vi.spyOn(api.agents, "list").mockResolvedValue([
+      { id: "a1", name: "Working", operational_mode: "active", status: "busy" } as unknown as Agent,
+      mkAgent("a2", "Idle", "active"),
+      mkAgent("a3", "Resting", "paused"),
+    ]);
+    renderWithQuery(
+      <Stage runtime={runtime} members={[{ host, role: "head" }, { host: host2, role: "worker" }]} onOpenCockpit={() => {}} />,
+    );
+    const tile = await screen.findByTestId("kpi-in-use");
+    await waitFor(() => expect(tile).toHaveTextContent("3"));
+    expect(tile).toHaveTextContent("working");
+    expect(tile).toHaveTextContent("+ 1 connected");
+    // the paused agent counts toward neither number, but the tooltip still names it
+    const title = tile.getAttribute("title") ?? "";
+    expect(title).toContain("Resting");
+  });
+
+  it("tapping the KPI cell reveals who is working and who is only connected (review fix round 5 — a bare title never fires on a phone)", async () => {
+    vi.spyOn(api.heads, "occupancy").mockResolvedValue({ boxes: { "host-1": head } });
+    vi.spyOn(api.heads, "pairs").mockResolvedValue({ pairs: [], default_pair: null });
+    vi.spyOn(api.runtimes.db, "agents").mockResolvedValue({
+      runtime_slug: "glm-local", count: 2,
+      agents: [{ id: "a1", name: "Nova", agent_runtime: "x" }, { id: "a2", name: "Beta", agent_runtime: "x" }],
+    });
+    vi.spyOn(api.agents, "list").mockResolvedValue([
+      { id: "a1", name: "Nova", operational_mode: "active", status: "busy" } as unknown as Agent,
+      mkAgent("a2", "Beta", "active"),
+    ]);
+    renderWithQuery(<Stage runtime={runtime} members={[{ host, role: "head" }]} onOpenCockpit={() => {}} />);
+    const tile = await screen.findByTestId("kpi-in-use");
+    await waitFor(() => expect(tile).toHaveTextContent("2")); // 1 head + Nova (busy)
+    expect(tile).not.toHaveAttribute("open");
+    await userEvent.click(tile.querySelector("summary")!);
+    expect(tile).toHaveAttribute("open");
+    const popover = within(tile).getByTestId("kpi-in-use-popover");
+    // The head's own title ("Fix flaky retry test") is not part of this list
+    // (that is what the tooltip's `inUseHead` line already says) — this is
+    // the pair + how long, same facts the full head chat header shows.
+    expect(popover).toHaveTextContent("omp");
+    expect(popover).toHaveTextContent("Nova");
+    expect(popover).toHaveTextContent("Beta");
+  });
+
+  it("paused agents count toward neither number: 1 head + 3 paused agents → '1 working · nothing connected'", async () => {
     vi.spyOn(api.heads, "occupancy").mockResolvedValue({ boxes: { "host-1": head } });
     vi.spyOn(api.runtimes.db, "agents").mockResolvedValue({
       runtime_slug: "glm-local", count: 3,
@@ -111,18 +178,27 @@ describe("Stage — model card while a head works", () => {
     renderWithQuery(<Stage runtime={runtime} members={[{ host, role: "head" }]} onOpenCockpit={() => {}} />);
     const tile = await screen.findByTestId("kpi-in-use");
     await waitFor(() => expect(tile.getAttribute("title") ?? "").toContain("Paused: Alpha, Beta, Gamma"));
-    expect(tile).toHaveTextContent(/^1In use$/);
+    // Review fix round 5: "+ 0 connected" read as if 0 were a real, counted
+    // fact; a zero count now shows neutral wording instead (the paused
+    // agents count toward neither number, same as before — they just never
+    // show as "+ 0").
+    expect(tile).toHaveTextContent(/^1working/);
+    expect(tile).toHaveTextContent("nothing connected");
+    expect(tile).not.toHaveTextContent("+ 0 connected");
     const title = tile.getAttribute("title") ?? "";
-    expect(title).toContain("{paused, plural"); // the "with paused" sentence
+    // Review fix round 6, finding 4: the mock now renders ICU plurals for
+    // real (src/test-setup.ts), so this is the actual "with paused" sentence.
+    expect(title).toContain("1 head · 0 active agents · 3 paused");
     expect(title).not.toContain("Agents:");
   });
 
-  it("free box: IN USE is only the agents, nothing locked", async () => {
+  it("free box: nothing working, nothing connected, nothing locked", async () => {
     vi.spyOn(api.heads, "occupancy").mockRejectedValue(new Error('API 404: {"detail":{"code":"heads_disabled"}}'));
     renderWithQuery(<Stage runtime={runtime} members={[{ host, role: "head" }]} onOpenCockpit={() => {}} />);
     await waitFor(() => expect(api.heads.occupancy).toHaveBeenCalled());
     const tile = await screen.findByTestId("kpi-in-use");
-    expect(tile).toHaveTextContent("0");
+    expect(tile).toHaveTextContent(/^0working/);
+    expect(tile).toHaveTextContent("nothing connected");
     expect(tile.getAttribute("title")).not.toContain("Head:");
     expect(await screen.findByTestId("stop-runtime")).toBeEnabled();
   });
@@ -167,7 +243,6 @@ describe("Switch / stop under a working head", () => {
   });
 
   it("the counts sentence reads right in both languages (real ICU formatter)", () => {
-    const fmt = (msg: string, v: Record<string, number>, loc: string) => new IntlMessageFormat(msg, loc).format(v);
     expect(fmt(en.runtimes.stage.inUseTooltip, { heads: 1, agents: 0 }, "en")).toBe("1 head · 0 active agents");
     expect(fmt(en.runtimes.stage.inUseTooltip, { heads: 2, agents: 1 }, "en")).toBe("2 heads · 1 active agent");
     expect(fmt(de.runtimes.stage.inUseTooltip, { heads: 1, agents: 2 }, "de")).toBe("1 Head · 2 aktive Agenten");
@@ -176,10 +251,44 @@ describe("Switch / stop under a working head", () => {
   });
 
   it("the German texts are there", () => {
-    expect(de.runtimes.stage.kpiInUse).toBe("In Nutzung");
+    // Review fix round 6, finding 4: `kpiWorking`/`kpiWorkingPlural` (two
+    // catalog keys picked by a ternary in code) collapsed into ONE ICU
+    // plural key — a sabotage that hardcoded the English branch (both
+    // "working") left every one of these 107 runtimes tests green, because
+    // the suite's own next-intl mock always resolves against the English
+    // catalog and never actually renders German. German has no invariant
+    // plural for "arbeitet" — "3 arbeitet" is wrong grammar ("3 arbeiten" is
+    // correct) — so this exercises the REAL ICU formatter against both
+    // branches, the only way to actually catch that regression.
+    expect(fmt(de.runtimes.stage.kpiWorkingUnit, { count: 1 }, "de")).toBe("arbeitet");
+    expect(fmt(de.runtimes.stage.kpiWorkingUnit, { count: 3 }, "de")).toBe("arbeiten");
+    expect(fmt(de.runtimes.stage.kpiWorkingUnit, { count: 0 }, "de")).toBe("arbeiten");
+    expect(de.runtimes.stage.kpiConnected).toContain("verbunden");
+    expect(de.runtimes.stage.kpiConnectedNone).toBeTruthy();
     expect(de.heads.runtimes.onBoxBodyStop).toBeTruthy();
     expect(de.heads.runtimes.ok).toBeTruthy();
     expect(de.runtimes.stage.inUseTooltip).toContain("{heads");
+  });
+
+  it("an offline/error agent counts toward neither number, though the tooltip still names it (review fix round 5)", async () => {
+    vi.spyOn(api.heads, "occupancy").mockResolvedValue({ boxes: { "host-1": head } });
+    vi.spyOn(api.runtimes.db, "agents").mockResolvedValue({
+      runtime_slug: "glm-local", count: 2,
+      agents: [{ id: "a1", name: "Flaky", agent_runtime: "x" }, { id: "a2", name: "Down", agent_runtime: "x" }],
+    });
+    vi.spyOn(api.agents, "list").mockResolvedValue([
+      { id: "a1", name: "Flaky", operational_mode: "active", status: "error" } as unknown as Agent,
+      { id: "a2", name: "Down", operational_mode: "active", status: "offline" } as unknown as Agent,
+    ]);
+    renderWithQuery(<Stage runtime={runtime} members={[{ host, role: "head" }]} onOpenCockpit={() => {}} />);
+    const tile = await screen.findByTestId("kpi-in-use");
+    await waitFor(() => expect(tile).toHaveTextContent("1"));
+    // Sabotage: reverting the filter to `status !== "busy"` would count both
+    // as connected and this would read "+ 2 connected" instead.
+    expect(tile).toHaveTextContent("nothing connected");
+    const title = tile.getAttribute("title") ?? "";
+    expect(title).toContain("Flaky");
+    expect(title).toContain("Down");
   });
 
   it("a dead engine stays recoverable: trouble variant keeps Stop enabled", async () => {
@@ -289,7 +398,7 @@ describe("Runs without a task", () => {
     const section = await screen.findByTestId("head-orphan-runs");
     expect(within(section).getAllByRole("listitem")).toHaveLength(1);
     // display name, not the runtime slug
-    await waitFor(() => expect(section).toHaveTextContent("omp · GLM local · task deleted"));
+    await waitFor(() => expect(section).toHaveTextContent("omp × GLM local · task deleted"));
     await userEvent.click(within(section).getByRole("button", { name: "Stop" }));
     expect(stop).not.toHaveBeenCalled(); // asks first
     await userEvent.click(within(section).getByTestId("head-orphan-stop-orphan-confirm-yes"));

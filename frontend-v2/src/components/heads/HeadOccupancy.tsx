@@ -10,6 +10,9 @@
  *                        clicked (ActionBar) and counts heads under "In use".
  *   useHeadConflictText  409 head_on_box / engine_busy → one translated sentence
  *   HeadOrphanRuns       active runs whose task card was deleted, with Stop
+ *   HeadDiskWarning      "~/.mc/heads" nearly full (bauplan PR 4 §5,
+ *                        `GET /heads/cleanup`'s `warn_low_disk`) — same
+ *                        amber-banner style as HeadOnBoxNotice
  */
 
 import Link from "next/link";
@@ -161,5 +164,39 @@ export function HeadOrphanRuns() {
         ))}
       </ul>
     </section>
+  );
+}
+
+/** "~/.mc/heads" nearly full (bauplan `heads-sichtbar` PR 4 §5) — the
+ *  host's own `mc-head gc` already computes `warn_low_disk` against the
+ *  same 20 GB line the operator saw "would clean up" reports for; this
+ *  just surfaces it where the operator looks when a box feels off, next to
+ *  the other head-occupancy notices on this page. Rare and important, so
+ *  it gets its own line here rather than living only inside one run's
+ *  record card. Hidden whenever there is nothing to warn about — never a
+ *  permanent fixture of the page (K4). */
+export function HeadDiskWarning() {
+  const t = useTranslations("heads.runtimes");
+  const headsEnabled = useHeadsEnabled();
+  const q = useQuery({
+    queryKey: ["heads", "cleanup"],
+    queryFn: () => api.heads.cleanup(),
+    enabled: headsEnabled === true,
+    retry: false,
+    refetchInterval: 60_000,
+  });
+  const report = q.data?.report ?? null;
+  if (!report?.warn_low_disk) return null;
+  const freeGb = report.free_bytes != null ? Math.max(0, Math.round(report.free_bytes / 1024 ** 3)) : null;
+  return (
+    <div
+      role="status"
+      data-testid="head-disk-warning"
+      className="flex items-center gap-2 rounded-md px-3 py-2 text-xs"
+      style={{ background: alpha(C.warning, 0.07), border: `1px solid ${alpha(C.warning, 0.25)}`, color: STATUS_TEXT.warning }}
+    >
+      <AlertTriangle size={13} className="shrink-0" aria-hidden />
+      <span>{freeGb != null ? t("diskWarning", { gb: freeGb }) : t("diskWarningNoNumber")}</span>
+    </div>
   );
 }

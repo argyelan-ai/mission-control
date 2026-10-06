@@ -15,8 +15,7 @@
 import { useLocale, useTranslations } from "next-intl";
 import { ChevronLeft } from "lucide-react";
 import { C } from "@/lib/colors";
-import { formatAgeRounded, formatDuration } from "@/lib/taskDetail/format";
-import { headListTitle, headStateKey, midLineStateWord, pairShort, runDurationSeconds, type HeadRun } from "@/lib/heads";
+import { headContextLine, headListTitle, type HeadRun } from "@/lib/heads";
 
 /** Same visual weight as `ChatView`'s own back chevron (36px circle, 44px
  *  touch target via `-m-1`) — not re-exported from there (that module is
@@ -29,25 +28,12 @@ export function HeadChatHeader({ head, onBack }: { head: HeadRun; onBack?: () =>
   const t = useTranslations("heads");
   const locale = useLocale();
 
-  const pair = pairShort(head);
-  let contextLine: string;
-  if (head.state === "needs_you") {
-    // Pair + exactly one state word — same rule as `HeadChatRow`'s own
-    // needs_you line (review finding on PR #756: dropping the pair here
-    // left no way to tell, from the header alone, which harness is
-    // waiting on the operator).
-    contextLine = `${pair} · ${midLineStateWord(t(headStateKey(head.state)))}`;
-  } else if (head.state === "starting") {
-    contextLine = `${pair} · ${t("time.startingNow")}`;
-  } else if (head.state === "running") {
-    const seconds = runDurationSeconds(head);
-    const duration = seconds != null ? formatDuration(seconds, locale) : null;
-    contextLine = duration ? `${pair} · ${t("time.runningFor", { duration })}` : pair;
-  } else {
-    const age = formatAgeRounded(head.exited_at ?? head.created_at, locale);
-    const stateWord = midLineStateWord(t(headStateKey(head.state)));
-    contextLine = age ? `${pair} · ${stateWord} · ${t("time.ago", { age })}` : `${pair} · ${stateWord}`;
-  }
+  // Same "pair + exactly one state/time fact" rule as `HeadChatRow`'s own
+  // second line (review finding on PR #756: dropping the pair left no way
+  // to tell, from the header alone, which harness is running/waiting) —
+  // `headContextLine` (lib/heads.ts, shared with the task list and Inbox
+  // rows, PR 3) is that one rule, kept in one place.
+  const contextLine = headContextLine(head, t, locale);
 
   return (
     <div

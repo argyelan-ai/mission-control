@@ -12,8 +12,8 @@ import { useLocale, useTranslations } from "next-intl";
 import { ChevronRight } from "lucide-react";
 import { C } from "@/lib/colors";
 import { StatusDot } from "@/components/shared/StatusDot";
-import { formatAgeRounded, formatDuration } from "@/lib/taskDetail/format";
-import { headListTitle, headStateKey, midLineStateWord, pairShort, runDurationSeconds, type HeadRun } from "@/lib/heads";
+import { formatAgeRounded } from "@/lib/taskDetail/format";
+import { headContextLine, headListTitle, midLineStateWord, pairShort, type HeadRun } from "@/lib/heads";
 
 /** Dot per state (bauplan §3.2): needs_you = accent (the one thing asking
  *  for the operator), running/starting = the SAME busy pulse an agent row
@@ -67,40 +67,24 @@ export function HeadChatRow({ run, selected, onSelect, variant = "rail", superse
   const stack = variant === "list";
   const supersededNeedsYou = run.state === "needs_you" && superseded;
 
-  const pair = pairShort(run);
+  // The pair + exactly ONE state/time fact — never a second word for the
+  // same state on top of it (the prototype review's actual finding,
+  // anhang.md H: "braucht dich · Frage offen" is ONE state in two words).
+  // Dropping the pair entirely (as an earlier revision did, citing K15) was
+  // an over-correction: K15 itself is "nicht gesetzt" (anhang.md H — a
+  // proposal, not an adopted rule), and without the pair there is no way to
+  // tell, from this row alone, which harness the waiting/ended head ran on.
+  // `headContextLine` (lib/heads.ts, shared with the task list and Inbox
+  // rows, PR 3) is this exact rule; the superseded branch alone still needs
+  // its own text ("answered" is not one of `headContextLine`'s states).
   let line2: string;
   if (supersededNeedsYou) {
-    // Same shape as the "ended" branch below (pair + state word + age) —
-    // this run no longer asks anything of the operator, so it reads like
-    // any other finished row, not like a second "needs you".
-    const endedAt = run.exited_at ?? run.created_at;
-    const age = formatAgeRounded(endedAt, locale);
+    const pair = pairShort(run);
+    const age = formatAgeRounded(run.exited_at ?? run.created_at, locale);
     const stateWord = midLineStateWord(t("answered"));
     line2 = age ? `${pair} · ${stateWord} · ${t("time.ago", { age })}` : `${pair} · ${stateWord}`;
-  } else if (run.state === "needs_you") {
-    // The pair + exactly ONE state word — never a second word for the
-    // same state on top of it (the prototype review's actual finding,
-    // anhang.md H: "braucht dich · Frage offen" is ONE state in two
-    // words). Dropping the pair entirely here (as an earlier revision
-    // did, citing K15) was an over-correction: K15 itself is "nicht
-    // gesetzt" (anhang.md H — a proposal, not an adopted rule), and
-    // without the pair there is no way to tell, from this row alone,
-    // which harness the waiting head is running on.
-    line2 = `${pair} · ${midLineStateWord(t(headStateKey(run.state)))}`;
-  } else if (run.state === "starting") {
-    line2 = `${pair} · ${t("time.startingNow")}`;
-  } else if (run.state === "running") {
-    const seconds = runDurationSeconds(run);
-    const duration = seconds != null ? formatDuration(seconds, locale) : null;
-    line2 = duration ? `${pair} · ${t("time.runningFor", { duration })}` : pair;
   } else {
-    // Ended: pair + state word + age — the approved mockup's own example
-    // ("Claude Code × GLM-5.3 · bestanden · vor 3 Tagen") keeps the pair
-    // here too, same reasoning as needs_you above.
-    const endedAt = run.exited_at ?? run.created_at;
-    const age = formatAgeRounded(endedAt, locale);
-    const stateWord = midLineStateWord(t(headStateKey(run.state)));
-    line2 = age ? `${pair} · ${stateWord} · ${t("time.ago", { age })}` : `${pair} · ${stateWord}`;
+    line2 = headContextLine(run, t, locale);
   }
 
   return (

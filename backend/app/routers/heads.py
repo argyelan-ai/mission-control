@@ -230,6 +230,15 @@ async def restart_head(
             raise _err(409, "head_active")
         pair, runtime = await _checked_pair(session, body.harness, body.runtime_slug, ignore_run_id=old.run_id)
         derived = derive_for_run(old, now)
+        # Only read/summarize the OLD run's transcript on a continue restart
+        # (bauplan `heads-sichtbar` PR 4 §5) — a fresh restart gets no
+        # "previous run" block at all (`launcher.render_job`), so there is
+        # nothing for a summary to add. `summary_for_restart` never raises
+        # and is file I/O, hence `asyncio.to_thread` — same reason the chat
+        # history endpoint reads off the event loop.
+        transcript_summary = (
+            await asyncio.to_thread(transcript.summary_for_restart, old) if body.mode == "continue" else None
+        )
         try:
             spec = await launcher.write_run(
                 session, task=task, repo=repo, harness=pair.harness, runtime=runtime,
@@ -237,6 +246,7 @@ async def restart_head(
                 restarted_from={
                     "spec": old.spec, "state": derived["state"], "reason": derived["reason"],
                     "run_record": old.run_record_text, "question": old.question,
+                    "transcript_summary": transcript_summary,
                 },
                 mode=body.mode,
             )

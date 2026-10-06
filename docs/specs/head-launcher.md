@@ -472,7 +472,13 @@ stoppable) in the runs list on `/runtimes`.
   - *Continue on this branch* (default): same worktree/branch; `job.md` gets
     a "previous run" block (pair, `git log origin/main..HEAD`, run record so
     far, question + answer). Git and the run record are the harness-neutral
-    memory — chat histories do not transfer.
+    memory — chat histories do not transfer. Since PR 4 (bauplan
+    `heads-sichtbar` §5), that block also carries a deterministic,
+    model-free summary of the previous run's own transcript when one could
+    be read (`services/heads/transcript.summarize` — tool count, touched
+    file basenames, last step, last few assistant notes; masked, ≤ 4 KB) —
+    still not the old conversation itself: no native `--resume` (unproven
+    after a worktree move, out of scope).
   - *Start fresh from main*: new branch and worktree.
 - **Answer & continue** = Restart with the same pair, mode continue, answer
   appended. There is no message into a running process.
@@ -729,7 +735,7 @@ The head runs on the host with the operator's user. Honest weighting:
 | 2 Tool guards | `pre-push` hook (main/master, force); shim folder first on `PATH` blocking `docker`, `ssh`, `scp`, `sudo`, `launchctl`, `kubectl`; `gh` shim allows only `pr create/view/list`, `repo view`, `auth status`; `env -i` (no inherited secrets); `GIT_CONFIG_GLOBAL=/dev/null` | guard rail — bypassable (absolute paths, `git push --no-verify`, `git -c core.hooksPath=`) |
 | 2b Claude allow list | `--settings <run>/head-settings.json` (under `--bare` only managed settings and `--settings` apply reliably [cli]): `permissions.allow` is a **positive list** — `Bash(git add/commit/status/diff/log …)`, `Bash(git push origin mc-head/*)`, `Bash(gh pr create/view/list …)`, the repo's test/lint/privacy commands from the repo row; `permissions.deny`: `Read(~/.ssh/**)`, `Read(**/.env*)`, `Bash(docker/ssh/sudo/curl …)`. Everything else is refused in `-p` | the strongest per-command filter of all harnesses — Claude only |
 | 2c omp | **no per-command filter exists** (`--approval-mode always-ask\|write\|yolo`, `--auto-approve` [cli]); `always-ask` blocks a `-p` run → `--auto-approve` | none — omp relies on layers 2 + 3 |
-| 3 Sandbox | `sandbox-exec` profile (`/usr/bin/sandbox-exec` exists [cli]): deny read of `~/.ssh`, `**/.env*`, `$MC_HOME/secrets`, the login keychain, other harness config dirs; deny write outside `wt/`, `step.txt`, `question.md`, `head.log`, vault `jobs/`, temp, harness caches — **`.wrapper/` (status, heartbeat) is not writable** | process-level [assumption: works on current macOS incl. network; proof with sabotage `cat ~/.ssh/<key>` → denied] |
+| 3 Sandbox | `sandbox-exec` profile (`/usr/bin/sandbox-exec` exists [cli]): deny read of `~/.ssh`, `**/.env*`, `$MC_HOME/secrets`, `$MC_HOME/browser-profiles` (the persistent login browser's profile), the login keychain, other harness config dirs; deny connecting to the login browser's remote-control port `localhost:18800` and to the Docker sockets; deny write outside `wt/`, `step.txt`, `question.md`, `head.log`, vault `jobs/`, temp, harness caches — **`.wrapper/` (status, heartbeat) is not writable** | process-level [assumption: works on current macOS incl. network; proof with sabotage `cat ~/.ssh/<key>` → denied] |
 | 4 Server identity | heads push and open PRs with their **own weak GitHub identity** (fine-grained token of a non-admin account or a GitHub App: `contents:write` + `pull_requests:write` on the head repos), set as `GH_TOKEN` in `head.env`; the operator's admin token is never reachable (keychain denied by the sandbox, `GIT_CONFIG_GLOBAL=/dev/null`). Plus a ruleset rule "restrict updates" on `main` **without bypass for that identity** | the only layer that holds against push/merge |
 
 **Live finding (2026-09-23, read-only):** `gh api repos/<owner>/mission-control/branches/main/protection`
@@ -877,9 +883,26 @@ Acceptance criteria v1:
   `.mypy_cache/`, `.ruff_cache/`, `node_modules/`) never blocks removal on
   its own, since the procedure's own red/green test step leaves at least
   one of these behind in EVERY worktree — without the allowlist,
-  "worktrees cleaned" never actually fires on a real run. Anything else
+  "worktrees cleaned" never actually fires on a real run. Since PR 4, a
+  clean, already-pushed worktree whose task card has reached `done` waits
+  `MC_HEAD_GC_MIN_AGE_DONE_S` (default 24 h) instead of the full 14 days —
+  `services/heads/sync.py` mirrors the task's current status onto
+  `.backend/task.json` every pass (one batched query, write only on
+  change), and `gc` reads it as a HINT only: every `_wt_decision` safety
+  check (clean tree, HEAD pushed to the scratch origin, not detached, not a
+  real repo) still runs first, so a forged or stale hint can only ever make
+  gc consider an already-safe copy sooner, never skip a check. Anything else
   ignored still keeps the worktree, and the report names exactly which
-  path(s) blocked it. The dry run is
+  path(s) blocked it. A worktree's own `actions`/`kept` entry in
+  `gc-report.json` carries the hint it was measured against — `task_status`
+  (the `.backend/task.json` value read, absent when there was none) and
+  `min_age_s` (which of the two constants actually applied) — on BOTH a
+  `would_remove` action and an `age`-kept entry, so the operator's own
+  dry-run reading shows not just THAT a `done` task's worktree is still
+  waiting but how much longer, and the orchestrator's live check after
+  deploy can assert the hint reached the report at all (round 4 review
+  finding: it used to decide the age silently and record nothing). The dry
+  run is
   not perfectly side-effect-free: it normalises each scratch clone's own
   git config and fetches one disposable check ref into it (idempotent host
   plumbing needed to inspect the clone safely), but it never touches a run

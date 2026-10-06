@@ -14,6 +14,9 @@
  *     in the `heads` i18n namespace.
  */
 
+import { formatAgeRounded, formatDuration } from "./taskDetail/format";
+import type { ChatEvent } from "./chatTypes";
+
 export type HeadPairStatus = "ok" | "experimental" | "blocked";
 export type HeadLocality = "local" | "cloud";
 
@@ -121,11 +124,15 @@ export function pairKey(p: { harness: string | null; runtime_slug: string | null
   return `${p.harness ?? ""}::${p.runtime_slug ?? ""}`;
 }
 
-/** Plain pair name for the UI: "omp · GLM-5.3 Flash". */
+/** Plain pair name for the UI: "omp × GLM-5.3 Flash". "×" (not "·") is the
+ *  ONE separator for a harness/runtime(/model) pair everywhere in the app —
+ *  heads-sichtbar PR 3 (bauplan §4, K10/ADR-086's own wording, "omp ×
+ *  GLM-5.3") made this the single pair notation and changed every caller +
+ *  test that rendered this function's output accordingly. */
 export function pairLabel(p: { harness_label?: string | null; harness?: string | null; runtime_label?: string | null; runtime_slug?: string | null }): string {
   const harness = p.harness_label || harnessLabel(p.harness);
   const runtime = p.runtime_label || p.runtime_slug || "—";
-  return `${harness} · ${runtime}`;
+  return `${harness} × ${runtime}`;
 }
 
 const HARNESS_LABELS: Record<string, string> = {
@@ -489,6 +496,74 @@ export interface HeadListResponse {
   archived_count?: number;
 }
 
+/** `GET /heads/cleanup` — the host's own `mc-head gc` report, exactly as
+ *  written (`scripts/head/mc-head`'s `_run_gc`/`_write_gc_report`; bauplan
+ *  `heads-sichtbar` PR 1 §2.3, consumed in PR 4 §5). `report` is `null`
+ *  while the host has not run `gc` yet — never an error. */
+export interface HeadGcAction {
+  path: string;
+  kind: "cache" | "worktree";
+  bytes: number;
+  would_remove: boolean;
+  /** Present only for a `kind: "worktree"` entry (round 4 review finding):
+   *  which age rule actually decided this — the `.backend/task.json`
+   *  hint's `status` when one was read (e.g. `"done"`), absent when there
+   *  was no hint to read. */
+  task_status?: string;
+  /** The age-wait rule this entry was measured against in seconds —
+   *  `MC_HEAD_GC_MIN_AGE_DONE_S` (default 24h) with a `"done"`
+   *  `task_status`, `MC_HEAD_GC_MIN_AGE_S` (default 14d) otherwise. */
+  min_age_s?: number;
+}
+
+export interface HeadGcKept {
+  path: string;
+  reason: string;
+  ignored?: string[];
+  /** Same hint fields as `HeadGcAction`, present only on a `reason: "age"`
+   *  entry — so a kept, not-yet-eligible worktree still shows which rule
+   *  (and hint, if any) it is waiting on. */
+  task_status?: string;
+  min_age_s?: number;
+}
+
+export interface HeadGcRunReport {
+  run_id: string;
+  actions: HeadGcAction[];
+  kept: HeadGcKept[];
+}
+
+export interface HeadGcReport {
+  mode: "dry_run" | "apply";
+  at: string;
+  runs: HeadGcRunReport[];
+  skipped: { run_id: string; reason: string }[];
+  action_bytes: number;
+  heads_bytes: number;
+  free_bytes: number | null;
+  warn_low_disk: boolean;
+  budget_bytes: number;
+}
+
+export interface HeadCleanupResponse {
+  report: HeadGcReport | null;
+}
+
+/** A run's own working copy sits on changes `mc-head gc` will not touch for
+ *  exactly that reason (bauplan PR 4 §5, "Arbeitskopie: nicht gesichert") —
+ *  uncommitted changes (`dirty`) or a branch tip that never reached the
+ *  scratch origin (`not_pushed`). Both are host-side SAFETY reasons the
+ *  cleanup report already carries; this deliberately does NOT flag
+ *  `real_repo_v1` (a real GitHub repo whose worktree v1 never removes
+ *  anyway — nothing to warn about) or `age`/`clone_active` (normal,
+ *  temporary holds). `false` while there is no report yet, or no entry for
+ *  this run (e.g. it never had a worktree at all). */
+export function workingCopyUnsaved(runId: string, report: HeadGcReport | null | undefined): boolean {
+  const run = report?.runs.find((r) => r.run_id === runId);
+  if (!run) return false;
+  return run.kept.some((k) => k.reason === "dirty" || k.reason === "not_pushed");
+}
+
 // ── Heads in Chats (heads-sichtbar PR 2) ────────────────────────────────────
 //
 // Everything below is new frontend-only model for "Heads" as a section in
@@ -517,13 +592,13 @@ export function modelFamily(model: string | null | undefined): string {
   return out || model;
 }
 
-/** "omp × GLM-5.3" (the operator's word for the pair, ADR-086 §5) — the SHORT form
- *  for a list row or a chat header, where `pairLabel`'s "harness · full
- *  runtime name" would not fit. Deliberately a separate function rather
- *  than changing `pairLabel`'s own separator or shortening: that change is
- *  PR 3's (bauplan §4, `pairLabel() Trenner "·" → "×"`), and touches every
- *  existing `pairLabel` caller/test — this one is additive and touches
- *  none of them. */
+/** "omp × GLM-5.3" (the operator's word for the pair, ADR-086 §5) — the SHORT
+ *  form for a list row or a chat header, where `pairLabel`'s "harness ×
+ *  full runtime name" would not fit. Kept as its own function rather than
+ *  folded into `pairLabel` even after PR 3 unified their separator: the two
+ *  still differ on which NAME they show (`modelFamily(run.model)` here vs.
+ *  `runtime_label`/`runtime_slug` there) and `pairLabel` also serves plain
+ *  `HeadPair` objects that carry no `model` field at all. */
 export function pairShort(run: Pick<HeadRun, "harness" | "model">): string {
   return `${harnessLabel(run.harness)} × ${modelFamily(run.model)}`;
 }
@@ -679,4 +754,139 @@ export function sortHeadsForList(runs: HeadRun[]): HeadRun[] {
       return a.i - b.i;
     })
     .map(({ r }) => r);
+}
+
+// ── Heads everywhere else (heads-sichtbar PR 3) ─────────────────────────────
+//
+// One shared "pair + a single state/time fact" formatter, used by every
+// surface that names a head run next to a task (the task list's second
+// line, the Inbox's head rows) — the same rule `HeadChatRow`/
+// `HeadChatHeader` already apply to their own second line/context line.
+
+/** `t()` as `useTranslations("heads")` gives it — the only shape every
+ *  caller of `headContextLine`/`headListLine` needs. */
+type HeadsT = (key: string, values?: Record<string, string | number>) => string;
+
+/**
+ * "<pair> · <one state or time fact>" — e.g. "omp × GLM-5.3 · running for
+ * 12 min", "omp × GLM-5.3 · needs you", "Claude Code × GLM-5.3 · passed ·
+ * 3 d ago". `withAge` (default on) appends the ended-run's "… ago" clause;
+ * callers that already show the run's age elsewhere on the same row (so
+ * showing it twice would break K3) pass `withAge: false` and get just
+ * "<pair> · <state word>".
+ */
+export function headContextLine(
+  run: Pick<HeadRun, "harness" | "model" | "state" | "created_at" | "started_at" | "exited_at">,
+  t: HeadsT,
+  locale: string,
+  opts: { withAge?: boolean } = {},
+): string {
+  const withAge = opts.withAge ?? true;
+  const pair = pairShort(run);
+  if (run.state === "needs_you") {
+    return `${pair} · ${midLineStateWord(t(headStateKey(run.state)))}`;
+  }
+  if (run.state === "starting") {
+    return `${pair} · ${t("time.startingNow")}`;
+  }
+  if (run.state === "running") {
+    const seconds = runDurationSeconds(run);
+    const duration = seconds != null ? formatDuration(seconds, locale) : null;
+    return duration ? `${pair} · ${t("time.runningFor", { duration })}` : pair;
+  }
+  const stateWord = midLineStateWord(t(headStateKey(run.state)));
+  if (!withAge) return `${pair} · ${stateWord}`;
+  const endedAt = run.exited_at ?? run.created_at;
+  const age = formatAgeRounded(endedAt, locale);
+  return age ? `${pair} · ${stateWord} · ${t("time.ago", { age })}` : `${pair} · ${stateWord}`;
+}
+
+/** "Head · <pair> · <state/time>" — the task list's second line (bauplan
+ *  PR 3 §4: `TaskListColumn`/`TaskRow`) and the Inbox's head rows. No
+ *  end-of-run age here (`withAge: false`): a dense list row keeps one time
+ *  fact at most, and these rows carry no other time fact to begin with, so
+ *  dropping it (rather than keeping it and removing some other fact) is the
+ *  one that matches the approved mockup's own rows ("Head · Claude Code ×
+ *  GLM-5.3 · passed", no "… ago"). */
+export function headListLine(
+  run: Pick<HeadRun, "harness" | "model" | "state" | "created_at" | "started_at" | "exited_at">,
+  t: HeadsT,
+  locale: string,
+): string {
+  return `${t("runs.fact")} · ${headContextLine(run, t, locale, { withAge: false })}`;
+}
+
+/** A fenced-code-block delimiter line ("```", "```bash", trailing "```ts" …)
+ *  on its own — never meaningful as a one-line summary by itself. */
+function isFenceLine(line: string): boolean {
+  return /^`{3,}/.test(line.trim());
+}
+
+// A boundary a bold delimiter must sit against to count as one (review fix
+// round 6, finding 5) — start/end of line, whitespace, or punctuation.
+// Plain `\w` (word) characters on both sides of the OUTSIDE of a `__…__` or
+// `**…**` run are what makes it a Python dunder name instead of real bold.
+const MD_BOUNDARY = "(?:[\\s.,;:!?()\\[\\]{}\"'/\\-\\u2013\\u2014]|^|$)";
+
+function boldRegex(delim: "\\*\\*" | "__"): RegExp {
+  return new RegExp(`(${MD_BOUNDARY})${delim}(\\S(?:.*?\\S)?)${delim}(?=${MD_BOUNDARY})`, "g");
+}
+
+/** Strips the handful of Markdown marks a head's own sentence can carry
+ *  (`**bold**`, `__bold__`, inline `` `code` ``, a leading heading `#…` or
+ *  bullet `-`/`*`) down to plain text for a one-line "Last: …" summary — the
+ *  real chat view renders full Markdown, this card does not. Collapses any
+ *  run of whitespace left behind by the removed marks.
+ *
+ *  Review fix round 6, finding 5: a head works on a Python backend
+ *  constantly, and `` `__init__` ``/`` `__main__` `` used to come out as
+ *  "init"/"main" — the bold-stripping regexes ran over raw code-span text,
+ *  and `__init__` IS, literally, `__` + "init" + `__`. Code spans now come
+ *  out FIRST (their content restored untouched at the end), and `**`/`__`
+ *  outside a code span are only treated as bold when flanked by a real
+ *  boundary, not a word character — a bare (non-code) dunder is just as
+ *  much at risk and gets the same guard. */
+function stripMarkdownLine(line: string): string {
+  const codeSpans: string[] = [];
+  const withPlaceholders = line.replace(/`([^`]*)`/g, (_m, code: string) => {
+    codeSpans.push(code);
+    return `\u0000${codeSpans.length - 1}\u0000`;
+  });
+  const stripped = withPlaceholders
+    .replace(/^#{1,6}\s+/, "")
+    .replace(/^[-*]\s+/, "")
+    .replace(boldRegex("\\*\\*"), "$1$2")
+    .replace(boldRegex("__"), "$1$2")
+    .replace(/\s+/g, " ")
+    .trim();
+  return stripped.replace(/\u0000(\d+)\u0000/g, (_m, i: string) => codeSpans[Number(i)]);
+}
+
+/** The most recent tool title or assistant sentence in a transcript window —
+ *  `HeadStateCard`'s "Last: …" line (bauplan PR 3 §4) while a run is still
+ *  active. Scans from the newest event backwards: a `thinking`/`usage`/
+ *  `command` event or the operator's own `user`/`teammate` turn carries
+ *  nothing a one-line summary should show, so it is skipped rather than
+ *  shown blank or stopping the scan. `null` once the whole window has
+ *  neither (e.g. only `usage` frames have arrived so far).
+ *
+ *  `kind` tells the caller which icon fits ("tool" vs. a plain sentence) —
+ *  review fix round 5: the card used to show the tool wrench for a sentence
+ *  too, and a raw assistant line like "Run complete — **Status: passed**."
+ *  showed its asterisks and a bare fence-opener ("```bash") as the "line"
+ *  itself; both are now stripped/skipped before a line is accepted. */
+export function lastHeadActivity(events: ChatEvent[]): { text: string; ts: string; kind: "tool" | "message" } | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const ev = events[i];
+    if (ev.kind === "tool" && ev.title?.trim()) return { text: ev.title.trim(), ts: ev.ts, kind: "tool" };
+    if (ev.kind === "message" && ev.role === "assistant" && ev.text?.trim()) {
+      for (const raw of ev.text.trim().split("\n")) {
+        const line = raw.trim();
+        if (!line || isFenceLine(line)) continue;
+        const stripped = stripMarkdownLine(line);
+        if (stripped) return { text: stripped, ts: ev.ts, kind: "message" };
+      }
+    }
+  }
+  return null;
 }

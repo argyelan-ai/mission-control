@@ -13,11 +13,11 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, Copy, ExternalLink } from "lucide-react";
+import { AlertTriangle, ChevronDown, Copy, ExternalLink } from "lucide-react";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
-import { C } from "@/lib/colors";
-import { prNumberFromUrl } from "@/lib/heads";
+import { C, STATUS_TEXT } from "@/lib/colors";
+import { prNumberFromUrl, workingCopyUnsaved } from "@/lib/heads";
 
 // text-xs (12px) at leading-snug (1.375) ≈ 16.5px/line, rounded up — two
 // lines is the clamp the review asked for (see Fact below).
@@ -105,10 +105,21 @@ export function HeadRunRecordCard({ runId }: { runId: string }) {
     enabled: open,
     retry: false,
   });
+  // Shared with the Runtimes low-disk warning (same query key, same host
+  // report) — bauplan `heads-sichtbar` PR 4 §5, "Arbeitskopie: nicht
+  // gesichert". A missing/not-yet-run report just means no warning here,
+  // never an error on the card.
+  const cleanupQuery = useQuery({
+    queryKey: ["heads", "cleanup"],
+    queryFn: () => api.heads.cleanup(),
+    retry: false,
+    staleTime: 30_000,
+  });
 
   if (summaryQuery.isError || !summaryQuery.data) return null;
   const s = summaryQuery.data;
   const prNumber = prNumberFromUrl(s.pr_url);
+  const unsaved = workingCopyUnsaved(runId, cleanupQuery.data?.report);
 
   const yn = (v: boolean | null) => (v == null ? null : v ? t("summary.yes") : t("summary.no"));
   const reviewLabel = s.review === "helper" ? t("summary.reviewHelper") : s.review === "self" ? t("summary.reviewSelf") : null;
@@ -139,6 +150,13 @@ export function HeadRunRecordCard({ runId }: { runId: string }) {
         {s.operator_minutes != null && <Fact label={t("summary.operatorMinutes")} value={String(s.operator_minutes)} t={t} />}
         {s.helpers != null && <Fact label={t("summary.helpers")} value={String(s.helpers)} t={t} />}
       </div>
+
+      {unsaved && (
+        <div className="flex items-center gap-2 pt-1 text-xs" style={{ color: STATUS_TEXT.warning }} data-testid="head-record-unsaved">
+          <AlertTriangle size={12} aria-hidden className="shrink-0" />
+          <span>{t("card.workingCopyUnsaved")}</span>
+        </div>
+      )}
 
       {s.branch && (
         // DESIGN.md K3 (review finding on PR #756 round 3): "…" is only for

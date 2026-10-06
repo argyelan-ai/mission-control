@@ -3136,7 +3136,13 @@
       "kpiMemoryFree": "Memory free",
       "kpiRecipesFit": "Recipes fit",
       "kpiAgents": "Agents",
-      "kpiInUse": "In use",
+      "kpiWorkingUnit": "{count, plural, one {working} other {working}}",
+      "kpiConnected": "+ {count} connected",
+      "kpiConnectedNone": "nothing connected",
+      "kpiPopoverLabel": "Who is working and who is connected",
+      "kpiPopoverWorking": "Working",
+      "kpiPopoverConnected": "Connected",
+      "kpiPopoverEmpty": "Nobody on this box right now",
       "inUseTooltip": "{heads, plural, one {# head} other {# heads}} · {agents, plural, one {# active agent} other {# active agents}}",
       "inUseTooltipWithPaused": "{heads, plural, one {# head} other {# heads}} · {agents, plural, one {# active agent} other {# active agents}} · {paused, plural, other {# paused}}",
       "inUseHead": "Head: “{title}”",
@@ -3503,6 +3509,8 @@
     "card": {
       "step": "Step: {step}",
       "noStep": "No step reported yet.",
+      "last": "Last: {text}",
+      "viewLiveTranscript": "View live transcript",
       "lastSign": "Last output {age} ago",
       "noSign": "No output yet",
       "silentWarn": "Silent for {age} — still running",
@@ -3540,7 +3548,8 @@
       "stopCancel": "Cancel",
       "reviewDecides": "The pull request is open — your review decides the merge.",
       "copyBranch": "Copy branch name",
-      "branchCopied": "Branch name copied"
+      "branchCopied": "Branch name copied",
+      "workingCopyUnsaved": "Working copy: not saved"
     },
     "restart": {
       "title": "Restart with …",
@@ -3553,6 +3562,14 @@
       "submitting": "Restarting…",
       "done": "Head restarted",
       "noBranchYet": "No work on this branch yet — the run ended before it started."
+    },
+    "continueSheet": {
+      "title": "Continue",
+      "explain": "Same branch — the new run gets the run record plus a summary of the transcript.",
+      "noteLabel": "Note to the head (optional)",
+      "notePlaceholder": "optional note …",
+      "submit": "Continue",
+      "submitting": "Starting…"
     },
     "runs": {
       "title": "Runs",
@@ -3568,7 +3585,9 @@
       "openTask": "Open task",
       "orphanTitle": "Heads without a task",
       "orphanRow": "{pair} · task deleted · {duration}",
-      "stop": "Stop"
+      "stop": "Stop",
+      "diskWarning": "Disk nearly full — {gb} GB free. Head working copies and caches may need cleanup.",
+      "diskWarningNoNumber": "Disk nearly full. Head working copies and caches may need cleanup."
     },
     "errors": {
       "pair_blocked": "This pair cannot start.",

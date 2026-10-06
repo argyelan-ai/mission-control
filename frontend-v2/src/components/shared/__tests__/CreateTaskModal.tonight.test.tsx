@@ -86,7 +86,7 @@ describe("CreateTaskModal — Run tonight", () => {
     const queue = screen.getByTestId("queue-tonight");
     expect(queue).toHaveTextContent("Queue for tonight");
     expect(queue).toBeEnabled();
-    expect(screen.getByTestId("head-pair-trigger")).toHaveTextContent("omp · GLM local");
+    expect(screen.getByTestId("head-pair-trigger")).toHaveTextContent("omp × GLM local");
     await userEvent.click(queue);
 
     await waitFor(() =>
@@ -104,7 +104,7 @@ describe("CreateTaskModal — Run tonight", () => {
     renderModal();
     await openAndFill();
     await userEvent.click(await screen.findByRole("switch", { name: "Run tonight" }));
-    expect(screen.getByTestId("head-pair-trigger")).toHaveTextContent("omp · GLM local");
+    expect(screen.getByTestId("head-pair-trigger")).toHaveTextContent("omp × GLM local");
   });
 
   it("while marking the button says so in words (i18n), not '...'", async () => {
