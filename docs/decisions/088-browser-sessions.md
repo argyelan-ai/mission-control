@@ -71,8 +71,9 @@ The operator decided the three open lifecycle questions on 2026-10-06:
 - **(a) Persistent agents: one session per working phase.** It opens at the
   agent's first tab and ends after 30 minutes without browser activity
   (`browser_session_idle_s`). It is opened lazily by MC's lifecycle loop when
-  a tab on the agent's `/a/<slug>/` address shows up that no session owns —
-  never through dispatch, which stays frozen (ADR-085 §4). Ending a phase also
+  a recently active tab on the agent's `/a/<slug>/` address shows up that no
+  session owns (a tab idle past the limit, or a slug two agents share, opens
+  nothing) — never through dispatch, which stays frozen (ADR-085 §4). Ending a phase also
   closes the agent's idle tabs; its connections stay, so the agent simply
   starts a new phase with its next tab (switch: `browser_idle_close_agent_tabs`).
 - **(b) The shared Chromium is always on.** Only the per-session parts
@@ -116,7 +117,8 @@ open sessions the gateway forgot after a restart, moves `open → live` at the
 first tab, records the last activity (`idleSeconds` per tab from the
 gateway), ends an agent's phase after the idle limit, ends a head's session
 when its run reached a final state (or its run folder is gone) and every
-session after `browser_session_max_age_s`. It keeps the **last image**: a
+session after `browser_session_max_age_s` (from its first tab, or from its
+opening if it never got one). It keeps the **last image**: a
 JPEG of the session's most recently active tab (`GET /mc/sessions/<token>/snapshot`),
 taken at most every `browser_frame_interval_s` and only after new activity,
 and once more right before the end; stored as
