@@ -1532,6 +1532,14 @@ Alle ADRs in `docs/decisions/`:
 
 ## Änderungshistorie (high-level)
 
+- **2026-10-06** — **Browser sessions, foundation (ADR-088, S1, migration 0211):** every agent session and
+  head run is to get its own browser area in the shared `cdp-browser`. New: table `browser_sessions` (owner
+  agent or head run, `open → live → ended`, at most one open session per owner),
+  `services/browser_sessions.py` (token = HMAC of the session id, never stored), `/api/v1/browser-sessions`
+  (listing without token; open/end operator only). `cdp-gateway` gets a session register
+  (`PUT/GET/DELETE /mc/sessions`) and the address `/s/<token>/` **next to** `/a/<slug>/`; everything created
+  over the address belongs to the session; ending cuts its connections, closes its tabs and contexts. No
+  caller in operation yet (harness wiring follows); invisible to the operator.
 - **2026-09-10** — **Jarvis' Sprachmodell wird Runtime-Bindung (ADR-082):** `JarvisVoiceAdapter`
   in `HOST_ADAPTERS` (ADR-064-Muster) macht Jarvis im MC-Runtime-Picker umschaltbar wie jeden
   anderen Agenten — bisher las `voice_worker/main.py` den Provider nur aus der Container-Env

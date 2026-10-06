@@ -40,6 +40,7 @@ from app.models.reference_file import ReferenceFile  # noqa: F401
 from app.models.prompt_template import PromptTemplate  # noqa: F401
 from app.models.bench import BenchChallenge, BenchEntry  # noqa: F401
 from app.models.thread import Thread, Message, AgentThreadCursor, UserThreadCursor  # noqa: F401
+from app.models.browser_session import BrowserSession  # noqa: F401
 
 __all__ = [
     "AgentMessage",
@@ -93,4 +94,5 @@ __all__ = [
     "Message",
     "AgentThreadCursor",
     "UserThreadCursor",
+    "BrowserSession",
 ]

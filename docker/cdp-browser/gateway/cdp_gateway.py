@@ -82,12 +82,37 @@ each direction's frames to keep `GatewayState` current and never alters,
 delays or drops a byte. No message-size limit (the old proxy closed any
 client message over 1 MiB with code 1009).
 
+Browser sessions (ADR-088)
+--------------------------
+MC opens one browser session per head run or agent working phase and
+registers it here: `PUT /mc/sessions/<token>?session=<uuid>[&agent=<slug>]`.
+A harness then talks to `/s/<token>/...` instead of `/a/<slug>/...` — same
+shapes, same byte-for-byte proxy. Everything created over that address
+(browser contexts, tabs, their popups) is owned by the session; the owner key
+is `s/<session-id>` (a slug can never contain `/`). A session opened for an
+agent still reports that agent in `/mc/targets`, so the per-agent panel keeps
+working while harnesses move over. `/a/<slug>/` and unprefixed requests are
+unchanged.
+
+The token is a credential, not a label: an unregistered token is refused
+(404) instead of falling back to `_shared`. `GET /mc/sessions` lists sessions
+without their tokens. `DELETE /mc/sessions/<token>` ends one: the token stops
+working, the session's open CDP connections are cut, the tabs it CREATED are
+closed (never a tab it only claimed — see `TargetInfo.creator`) and its
+contexts disposed, all within `_CLEANUP_DEADLINE`. The register lives in memory — a restart of this
+container (which restarts Chromium and loses every context anyway) empties it,
+and MC re-registers the sessions it still considers open (`PUT` is
+idempotent). The browser itself is started on demand: registering creates
+nothing in Chromium.
+
 Trust model: identification is NOT authentication. Any container on the
 Docker-internal network can already reach Chromium's CDP port directly
 (:9223) — this gateway does not change that boundary, it only labels
 connections for the UI. A container could claim to be any agent by sending
 a matching path or header; an accepted limitation until B3's isolation + a
-real per-agent credential exist.
+real per-agent credential exist. A session token is that credential for the
+`/s/` path; `/mc/*` itself stays unauthenticated on the internal network
+(ending a session needs its token).
 """
 
 from __future__ import annotations
@@ -100,6 +125,7 @@ import os
 import re
 import socket
 import time
+import uuid
 from dataclasses import dataclass, field
 from http import HTTPStatus
 from typing import Callable, Optional
@@ -114,7 +140,12 @@ CHROMIUM_PORT = int(os.environ.get("CDP_GATEWAY_UPSTREAM_PORT", "9222"))
 LISTEN_PORT = int(os.environ.get("CDP_GATEWAY_PORT", "9300"))
 
 _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
+# A browser-session token as MC hands it out (url-safe base64 of an HMAC).
+_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{32,128}$")
 _SHARED = "_shared"
+# Owner key prefix of a browser session (`s/<session-id>`); a slug never
+# contains "/", so the two kinds of owner key cannot collide.
+_SESSION_OWNER_PREFIX = "s/"
 _REVERSE_DNS_CACHE_SECONDS = 60.0
 _BLANK_URLS = {"about:blank", ""}
 
@@ -128,6 +159,17 @@ _PUMP_CHUNK = 64 * 1024
 # After one side of a proxied WebSocket ends, the other direction gets this
 # long to deliver what is already in flight before it is cut.
 _HALF_CLOSE_GRACE = 0.5
+# How long a polite close may take before the socket is aborted.
+_CLOSE_GRACE = 1.0
+# Ids of the gateway's own CDP commands (session cleanup). Own connection, so
+# they can never clash with an agent's ids; high anyway for readable logs.
+_OWN_MSG_ID_BASE = 2_000_000_000
+# Chromium's answers when a tab or context to close no longer exists.
+# The whole cleanup answers within this, however many tabs and however slow
+# Chromium is: the backend waits a bounded time for DELETE (its timeout must
+# stay above this). Leftovers are reported, MC's lifecycle loop sweeps them.
+_CLEANUP_DEADLINE = 8.0
+_ALREADY_GONE = re.compile(r"Failed to find context|No target with given id", re.I)
 
 # Commands that mean "the sending agent is working in this tab now".
 _CLAIM_METHODS = frozenset({
@@ -165,14 +207,54 @@ def slug_from_path(path: str) -> Optional[str]:
     return None
 
 
-def strip_agent_prefix(path: str) -> str:
-    """`/a/<slug>/json/version` -> `/json/version`; leaves other paths as-is
-    (the legacy, unprefixed shape stays valid — callers without a slug keep
-    working exactly like talking to Chromium directly)."""
+def token_from_path(path: str) -> Optional[str]:
+    """`/s/<token>/json/version` -> `<token>` (a browser session's address),
+    None for any other shape or a token that doesn't look like one."""
     parts = path.lstrip("/").split("/", 2)
-    if len(parts) >= 2 and parts[0] == "a" and normalize_slug(parts[1]):
+    if len(parts) >= 2 and parts[0] == "s":
+        token = parts[1].split("?", 1)[0]
+        return token if _TOKEN_RE.match(token) else None
+    return None
+
+
+def is_session_path(path: str) -> bool:
+    """Any `/s/...` request — a well-formed token or not. Such a request is
+    never served as `_shared`: it either names a registered session or fails."""
+    return path.lstrip("/").split("/", 1)[0] == "s"
+
+
+def session_owner_key(session_id: str) -> str:
+    return _SESSION_OWNER_PREFIX + session_id
+
+
+def normalize_session_id(raw: Optional[str]) -> Optional[str]:
+    try:
+        return str(uuid.UUID(raw)) if raw else None
+    except ValueError:
+        return None
+
+
+def strip_agent_prefix(path: str) -> str:
+    """`/a/<slug>/json/version` or `/s/<token>/json/version` ->
+    `/json/version`; leaves other paths as-is (the legacy, unprefixed shape
+    stays valid — callers without a slug keep working exactly like talking to
+    Chromium directly)."""
+    parts = path.lstrip("/").split("/", 2)
+    if len(parts) >= 2 and (
+        (parts[0] == "a" and normalize_slug(parts[1])) or (parts[0] == "s" and token_from_path(path))
+    ):
         return "/" + (parts[2] if len(parts) > 2 else "")
     return path
+
+
+def request_prefix(path: str) -> str:
+    """The `/a/<slug>` or `/s/<token>` prefix a request came in with ("" if
+    none) — handed back in rewritten WebSocket URLs so the client's next
+    connection carries the same identity."""
+    stripped = strip_agent_prefix(path)
+    if stripped == path:
+        return ""
+    return path[: len(path) - len(stripped)] if stripped != "/" else path.rstrip("/")
 
 
 def page_id_from_path(path: str) -> Optional[str]:
@@ -220,6 +302,20 @@ class TargetInfo:
     url: str = ""
     created_at: float = 0.0
     last_active_at: float = 0.0
+    # Owner key: an agent slug, or `s/<session-id>` for a browser session.
+    # Follows claim on use — this is who works in the tab now (display).
+    agent: Optional[str] = None
+    ctx: Optional[str] = None
+    # Who CREATED the tab (createTarget, /json/new, inherited from the
+    # creator's own context or opener). Never changed by a claim; the only
+    # basis for closing tabs when a session ends.
+    creator: Optional[str] = None
+
+
+@dataclass
+class BrowserSessionEntry:
+    token: str
+    session_id: str
     agent: Optional[str] = None
 
 
@@ -234,7 +330,69 @@ class GatewayState:
     ctx_owner: dict[str, str] = field(default_factory=dict)
     target_owner: dict[str, str] = field(default_factory=dict)
     session_target: dict[str, str] = field(default_factory=dict)
+    # target -> owner key of whoever created it (see TargetInfo.creator).
+    target_creator: dict[str, str] = field(default_factory=dict)
+    # Browser sessions (ADR-088): token -> entry, and every session id ever
+    # registered -> its agent (kept after unregister so a tab that outlives
+    # its session for a moment still reports the right agent).
+    sessions: dict[str, BrowserSessionEntry] = field(default_factory=dict)
+    session_agent: dict[str, Optional[str]] = field(default_factory=dict)
     now_fn: Callable[[], float] = field(default=time.monotonic)
+
+    # ── browser-session register ───────────────────────────────────────────
+
+    def register_session(self, token: str, session_id: str, agent: Optional[str]) -> str:
+        """"created" or "exists" (idempotent re-register). Raises ValueError
+        when the token already names another session or the session already
+        has another token — a register must never re-point a credential."""
+        existing = self.sessions.get(token)
+        if existing is not None:
+            if existing.session_id != session_id:
+                raise ValueError("token already registered for another session")
+            existing.agent = agent
+            self.session_agent[session_id] = agent
+            return "exists"
+        if any(e.session_id == session_id for e in self.sessions.values()):
+            raise ValueError("session already registered with another token")
+        self.sessions[token] = BrowserSessionEntry(token=token, session_id=session_id, agent=agent)
+        self.session_agent[session_id] = agent
+        return "created"
+
+    def unregister_session(self, token: str) -> Optional[BrowserSessionEntry]:
+        return self.sessions.pop(token, None)
+
+    def session_for_token(self, token: str) -> Optional[BrowserSessionEntry]:
+        return self.sessions.get(token)
+
+    def describe_owner(self, key: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+        """Owner key -> (agent slug, session id)."""
+        if key and key.startswith(_SESSION_OWNER_PREFIX):
+            session_id = key[len(_SESSION_OWNER_PREFIX):]
+            return self.session_agent.get(session_id), session_id
+        return key, None
+
+    def session_resources(self, session_id: str) -> tuple[list[str], list[str]]:
+        """What ending a session has to close: (tabs, contexts). Only what the
+        session CREATED — never a tab it merely claimed by navigating it
+        (review finding: a claimed agent tab, or a tab in another session's
+        own context, must survive). Contexts the session created take their
+        tabs with them, so a tab is listed on its own only when it lives
+        outside those contexts (e.g. omp's `newPage()` in the default context)."""
+        key = session_owner_key(session_id)
+        contexts = sorted(ctx for ctx, owner in self.ctx_owner.items() if owner == key)
+        owned_ctx = set(contexts)
+        tabs = sorted(
+            t.id for t in self.targets.values()
+            if (t.creator or self.target_creator.get(t.id)) == key and t.ctx not in owned_ctx
+        )
+        return tabs, contexts
+
+    def tab_owner(self, target_id: Optional[str]) -> Optional[str]:
+        """Owner key of a live tab — recorded directly or via its context."""
+        if not target_id:
+            return None
+        info = self.targets.get(target_id)
+        return self.target_owner.get(target_id) or (info.agent if info else None)
 
     # ── identification plumbing used by both HTTP and WS entry points ─────
 
@@ -250,6 +408,21 @@ class GatewayState:
             info = self.targets.get(target_id)
             if info is not None:
                 info.agent = agent
+
+    def record_creator(self, target_id: str, agent: Optional[str]) -> None:
+        """First creator wins; a claim never calls this."""
+        if agent and agent != _SHARED and target_id not in self.target_creator:
+            self.target_creator[target_id] = agent
+            info = self.targets.get(target_id)
+            if info is not None:
+                info.creator = agent
+
+    def _creator_for(self, tid: str, ctx: Optional[str], opener: Optional[str]) -> Optional[str]:
+        return (
+            self.target_creator.get(tid)
+            or (self.ctx_owner.get(ctx) if ctx else None)
+            or (self.target_creator.get(opener) if opener else None)
+        )
 
     def record_context_owner(self, context_id: str, agent: Optional[str]) -> None:
         if agent and agent != _SHARED:
@@ -288,7 +461,11 @@ class GatewayState:
                 created_at=existing.created_at if existing else now,
                 last_active_at=existing.last_active_at if existing else now,
                 agent=agent,
+                ctx=ctx,
+                creator=self._creator_for(tid, ctx, opener),
             )
+            if self.targets[tid].creator:
+                self.target_creator.setdefault(tid, self.targets[tid].creator)
             return existing is None
         if method == "targetInfoChanged":
             info = params.get("targetInfo", {})
@@ -297,10 +474,13 @@ class GatewayState:
             tid = info["targetId"]
             existing = self.targets.get(tid)
             if existing is None:
+                ctx = info.get("browserContextId")
                 self.targets[tid] = TargetInfo(
                     id=tid, title=info.get("title", ""), url=info.get("url", ""),
                     created_at=now, last_active_at=now,
-                    agent=self.target_owner.get(tid),
+                    agent=self.target_owner.get(tid) or (self.ctx_owner.get(ctx) if ctx else None),
+                    ctx=ctx,
+                    creator=self._creator_for(tid, ctx, None),
                 )
                 return True
             url_changed = existing.url != info.get("url", existing.url)
@@ -312,6 +492,7 @@ class GatewayState:
         if method == "targetDestroyed":
             tid = params.get("targetId")
             self.target_owner.pop(tid, None)
+            self.target_creator.pop(tid, None)
             if tid in self.targets:
                 del self.targets[tid]
                 self._prune_owner_maps()
@@ -370,6 +551,7 @@ class GatewayState:
             tid = result.get("targetId")
             if tid:
                 self.record_owner(tid, agent)
+                self.record_creator(tid, agent)
 
     def observe_event(self, method: str, params: dict) -> None:
         if method == "Target.attachedToTarget":
@@ -406,29 +588,56 @@ class GatewayState:
     def _prune_owner_maps(self) -> None:
         if len(self.target_owner) > _OWNER_MAP_SOFT_CAP and self.targets:
             self.target_owner = {k: v for k, v in self.target_owner.items() if k in self.targets}
+        if len(self.target_creator) > _OWNER_MAP_SOFT_CAP and self.targets:
+            self.target_creator = {k: v for k, v in self.target_creator.items() if k in self.targets}
         if len(self.session_target) > _OWNER_MAP_SOFT_CAP and self.targets:
             self.session_target = {k: v for k, v in self.session_target.items() if v in self.targets}
 
-    def targets_for(self, agent: Optional[str]) -> list[TargetInfo]:
+    def targets_for(self, agent: Optional[str], session: Optional[str] = None) -> list[TargetInfo]:
+        """Live tabs, newest activity first. `agent` matches the agent behind
+        the owner — directly, or the agent a session was opened for."""
         values = list(self.targets.values())
         if agent is not None:
-            values = [t for t in values if t.agent == agent]
+            values = [t for t in values if self.describe_owner(t.agent)[0] == agent]
+        if session is not None:
+            values = [t for t in values if self.describe_owner(t.agent)[1] == session]
         return sorted(values, key=lambda t: t.last_active_at, reverse=True)
 
-    def as_mc_targets_json(self, agent: Optional[str] = None) -> list[dict]:
-        return [
-            {
+    def as_mc_targets_json(self, agent: Optional[str] = None, session: Optional[str] = None) -> list[dict]:
+        rows = []
+        for t in self.targets_for(agent, session):
+            owner_agent, owner_session = self.describe_owner(t.agent)
+            rows.append({
                 "targetId": t.id,
                 "title": t.title,
                 "url": t.url,
                 # None = not assigned to any agent (playwright-mcp's tabs, a
                 # tab no identified agent has created/claimed/navigated yet).
-                "agent": t.agent,
+                "agent": owner_agent,
+                # The browser session (ADR-088) the tab belongs to, if any.
+                "session": owner_session,
+                "browserContextId": t.ctx,
                 "createdAt": t.created_at,
                 "lastActiveAt": t.last_active_at,
-            }
-            for t in self.targets_for(agent)
-        ]
+            })
+        return rows
+
+    def as_mc_sessions_json(self, live_connections: dict[str, int]) -> list[dict]:
+        """`GET /mc/sessions` — never includes the tokens."""
+        rows = []
+        for entry in self.sessions.values():
+            tabs = self.targets_for(None, entry.session_id)
+            rows.append({
+                "sessionId": entry.session_id,
+                "agent": entry.agent,
+                "tabs": len(tabs),
+                "contexts": sum(
+                    1 for owner in self.ctx_owner.values() if owner == session_owner_key(entry.session_id)
+                ),
+                "connections": live_connections.get(session_owner_key(entry.session_id), 0),
+                "lastActiveAt": max((t.last_active_at for t in tabs), default=None),
+            })
+        return rows
 
 
 def identify_agent_sync(
@@ -527,9 +736,14 @@ async def _respond(
 
 
 async def _close_writer(writer: asyncio.StreamWriter) -> None:
+    """Close politely, but never wait on a peer that stopped reading: a full
+    send buffer keeps `wait_closed()` pending forever (re-review N1), so after
+    a short grace the transport is aborted."""
     try:
         writer.close()
-        await writer.wait_closed()
+        await asyncio.wait_for(writer.wait_closed(), timeout=_CLOSE_GRACE)
+    except asyncio.TimeoutError:
+        writer.transport.abort()
     except Exception:
         pass
 
@@ -752,12 +966,25 @@ class CdpGateway:
         # which is exactly the kind of failure a healthcheck exists to catch
         # (review finding, 03.10.2026: /mc/health always said 200 even then).
         self._watcher_connected = False
+        # Owner key -> the connection tasks currently proxying for it, so
+        # ending a browser session can cut its live CDP connections.
+        self._live_conns: dict[str, set[asyncio.Task]] = {}
+        # Each such task's client writer, so ending a session can cut it hard.
+        self._conn_writers: dict[asyncio.Task, asyncio.StreamWriter] = {}
 
     @property
     def _upstream_netloc(self) -> str:
         return f"{self._upstream_host}:{self._upstream_port}"
 
-    async def identify(self, path: str, headers, peer_ip: Optional[str]) -> str:
+    async def identify(self, path: str, headers, peer_ip: Optional[str]) -> Optional[str]:
+        """Owner key for a request: `s/<session-id>` for a registered
+        `/s/<token>/` address, else the agent slug (path, header, reverse
+        DNS) or `_shared`. None = refused: a `/s/` address that names no
+        registered session — never downgraded to `_shared`."""
+        if is_session_path(path):
+            token = token_from_path(path)
+            entry = self.state.session_for_token(token) if token else None
+            return session_owner_key(entry.session_id) if entry else None
         slug, _method = identify_agent_sync(path=path, headers=headers, peer_ip=peer_ip)
         if slug:
             return slug
@@ -832,6 +1059,124 @@ class CdpGateway:
         _status, _ctype, body = await self._upstream_http("GET", path)
         return json.loads(body or b"{}")
 
+    async def _cdp_call(self, commands: list[tuple[str, dict]], *, deadline: Optional[float] = None) -> list[dict]:
+        """Send browser-level CDP commands over a short-lived connection of
+        the gateway's own and return one reply per command (`result` or
+        `error`, as Chromium sent it). All commands go out at once; whatever
+        is still unanswered at the deadline gets an `error` reply of ours
+        ("unanswered"), so the caller never waits longer than `deadline`."""
+        deadline = _CLEANUP_DEADLINE if deadline is None else deadline
+        replies: dict[int, dict] = {}
+
+        async def _run() -> None:
+            version = await self._upstream_json("/json/version")
+            ws_url = version.get("webSocketDebuggerUrl")
+            if not ws_url:
+                raise RuntimeError("no webSocketDebuggerUrl")
+            async with websockets.connect(ws_url, max_size=None) as ws:
+                for offset, (method, params) in enumerate(commands):
+                    await ws.send(json.dumps({"id": _OWN_MSG_ID_BASE + offset, "method": method, "params": params}))
+                while len(replies) < len(commands):
+                    reply = json.loads(await ws.recv())
+                    msg_id = reply.get("id")
+                    if isinstance(msg_id, int) and 0 <= msg_id - _OWN_MSG_ID_BASE < len(commands):
+                        replies[msg_id - _OWN_MSG_ID_BASE] = reply
+
+        try:
+            await asyncio.wait_for(_run(), timeout=deadline)
+        except asyncio.TimeoutError:
+            pass
+        missing = {"error": {"message": f"unanswered within {deadline:g}s"}}
+        return [replies.get(i, missing) for i in range(len(commands))]
+
+    # ── browser sessions (ADR-088) ─────────────────────────────────────────
+
+    def _live_connection_counts(self) -> dict[str, int]:
+        return {key: len(tasks) for key, tasks in self._live_conns.items() if tasks}
+
+    async def end_session(self, token: str) -> Optional[dict]:
+        """Ends one browser session: unregister the token first (a reconnect
+        is refused from here on), cut the session's open CDP connections,
+        then close its tabs and dispose its contexts in Chromium. None if the
+        token names no session. Chromium being unreachable does not undo the
+        end — the result reports it under `errors`."""
+        entry = self.state.unregister_session(token)
+        if entry is None:
+            return None
+        key = session_owner_key(entry.session_id)
+        conns = list(self._live_conns.pop(key, set()))
+        for task in conns:
+            # Hard cut: a client that stopped reading would otherwise keep the
+            # polite close (and this DELETE) pending forever (re-review N1).
+            writer = self._conn_writers.pop(task, None)
+            if writer is not None:
+                writer.transport.abort()
+            task.cancel()
+        if conns:
+            await asyncio.wait(conns, timeout=_CLOSE_GRACE)
+
+        tabs, contexts = self.state.session_resources(entry.session_id)
+        commands = [("Target.closeTarget", {"targetId": tid}) for tid in tabs]
+        commands += [("Target.disposeBrowserContext", {"browserContextId": ctx}) for ctx in contexts]
+        errors: list[str] = []
+        if commands:
+            try:
+                for (method, _params), reply in zip(commands, await self._cdp_call(commands)):
+                    message = str((reply.get("error") or {}).get("message", "")) if "error" in reply else None
+                    # Already gone is the goal, not a failure: a client that
+                    # created its context with disposeOnDetach (Playwright
+                    # does) loses it the moment its connection is cut above
+                    # (lab, real Chromium 124: "Failed to find context").
+                    if message is not None and not _ALREADY_GONE.search(message):
+                        errors.append(f"{method}: {message}")
+            except (OSError, asyncio.TimeoutError, RuntimeError, ValueError, websockets.WebSocketException) as e:
+                errors.append(f"cleanup: {e}")
+        for ctx in contexts:
+            self.state.ctx_owner.pop(ctx, None)
+        logger.info(
+            "cdp_gateway: browser session %s ended (%d tabs, %d contexts, %d connections)",
+            entry.session_id, len(tabs), len(contexts), len(conns),
+        )
+        return {
+            "sessionId": entry.session_id,
+            "closedTargets": len(tabs),
+            "disposedContexts": len(contexts),
+            "closedConnections": len(conns),
+            "errors": errors,
+        }
+
+    async def _handle_sessions_http(self, method: str, local_path: str) -> tuple[int, str, bytes]:
+        """`/mc/sessions` (GET) and `/mc/sessions/<token>` (PUT, DELETE)."""
+        parsed = urlparse(local_path)
+        route = parsed.path.rstrip("/")
+        if route == "/mc/sessions":
+            if method not in ("GET", "HEAD"):
+                return 405, "text/plain", b"cdp-gateway: method not allowed"
+            body = json.dumps(self.state.as_mc_sessions_json(self._live_connection_counts())).encode()
+            return 200, "application/json", body
+        token = route[len("/mc/sessions/"):]
+        if not _TOKEN_RE.match(token):
+            return 400, "text/plain", b"cdp-gateway: malformed session token"
+        if method == "PUT":
+            qs = parse_qs(parsed.query)
+            session_id = normalize_session_id((qs.get("session") or [None])[0])
+            raw_agent = (qs.get("agent") or [None])[0]
+            agent = normalize_slug(raw_agent) if raw_agent else None
+            if session_id is None or (raw_agent and agent is None):
+                return 400, "text/plain", b"cdp-gateway: session=<uuid> required, agent must be a slug"
+            try:
+                outcome = self.state.register_session(token, session_id, agent)
+            except ValueError as e:
+                return 409, "text/plain", f"cdp-gateway: {e}".encode()
+            body = json.dumps({"sessionId": session_id, "agent": agent}).encode()
+            return (201 if outcome == "created" else 200), "application/json", body
+        if method == "DELETE":
+            result = await self.end_session(token)
+            if result is None:
+                return 404, "text/plain", b"cdp-gateway: unknown browser session"
+            return 200, "application/json", json.dumps(result).encode()
+        return 405, "text/plain", b"cdp-gateway: method not allowed"
+
     # ── HTTP side: /json/*, /mc/targets, /mc/health ────────────────────────
 
     async def handle_http(self, path: str, headers, peer_ip: Optional[str], method: str = "GET"):
@@ -846,15 +1191,20 @@ class CdpGateway:
                 return 200, "text/plain", b"ok"
             return 503, "text/plain", b"cdp-gateway: watcher not connected"
         if local_path.startswith("/mc/targets"):
-            want = None
+            want = want_session = None
             if "?" in local_path:
                 qs = parse_qs(local_path.split("?", 1)[1])
                 raw = (qs.get("agent") or [None])[0]
                 want = normalize_slug(raw) if raw else None
-            body = json.dumps(self.state.as_mc_targets_json(want)).encode()
+                want_session = normalize_session_id((qs.get("session") or [None])[0])
+            body = json.dumps(self.state.as_mc_targets_json(want, want_session)).encode()
             return 200, "application/json", body
+        if local_path == "/mc/sessions" or local_path.startswith(("/mc/sessions/", "/mc/sessions?")):
+            return await self._handle_sessions_http(method, local_path)
 
         agent = await self.identify(path, headers, peer_ip)
+        if agent is None:
+            return 404, "text/plain", b"cdp-gateway: unknown browser session"
         try:
             status, content_type, body = await self._upstream_http(method, local_path)
         except (OSError, asyncio.TimeoutError, asyncio.IncompleteReadError, ValueError) as e:
@@ -867,7 +1217,9 @@ class CdpGateway:
             return status, content_type, body
 
         host_header = headers.get("Host") or f"127.0.0.1:{LISTEN_PORT}"
-        prefix = f"/a/{agent}" if agent != _SHARED else ""
+        # Hand back the address the client came in on (`/a/<slug>` or
+        # `/s/<token>`); a header/DNS-identified agent gets its `/a/` form.
+        prefix = request_prefix(path) or (f"/a/{agent}" if agent != _SHARED else "")
 
         def _rewrite(obj):
             if isinstance(obj, dict):
@@ -896,13 +1248,14 @@ class CdpGateway:
             # one open tab).
             pages = [t for t in data if isinstance(t, dict) and t.get("type") == "page"]
             if agent != _SHARED:
-                pages = [t for t in pages if self.state.owner_of(t.get("id")) == agent]
+                pages = [t for t in pages if self.state.tab_owner(t.get("id")) == agent]
             data = pages
         elif route.rstrip("/") == "/json/new" and isinstance(data, dict) and data.get("id"):
             # A tab opened over HTTP belongs to whoever opened it — the
             # watcher's targetCreated for it may arrive before or after this;
             # `apply_target_event` picks the recorded owner up either way.
             self.state.record_owner(data["id"], agent)
+            self.state.record_creator(data["id"], agent)
 
         return 200, "application/json", json.dumps(_rewrite(data)).encode()
 
@@ -987,7 +1340,32 @@ class CdpGateway:
         """Pass one agent's CDP WebSocket through to Chromium unchanged,
         reading a copy of both directions to keep `GatewayState` current."""
         agent = await self.identify(req.target, req.headers, peer_ip)
+        if agent is None:
+            await _respond(client_writer, 404, "text/plain", b"cdp-gateway: unknown browser session")
+            return
         upstream_path = strip_agent_prefix(req.target)
+        me = asyncio.current_task()
+        if me is not None:
+            self._live_conns.setdefault(agent, set()).add(me)
+            self._conn_writers[me] = client_writer
+        try:
+            await self._proxy_ws_identified(client_reader, client_writer, req, agent, upstream_path)
+        finally:
+            self._conn_writers.pop(me, None)
+            conns = self._live_conns.get(agent)
+            if conns is not None:
+                conns.discard(me)
+                if not conns:
+                    self._live_conns.pop(agent, None)
+
+    async def _proxy_ws_identified(
+        self,
+        client_reader: asyncio.StreamReader,
+        client_writer: asyncio.StreamWriter,
+        req: HttpRequest,
+        agent: str,
+        upstream_path: str,
+    ) -> None:
         try:
             up_reader, up_writer = await asyncio.open_connection(self._upstream_host, self._upstream_port)
         except OSError as e:

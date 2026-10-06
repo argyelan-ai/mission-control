@@ -2134,6 +2134,31 @@
         ]
       }
     },
+    "/api/v1/browser-sessions": {
+      "get": {
+        "operationId": "list_browser_sessions_api_v1_browser_sessions_get",
+        "summary": "List Browser Sessions",
+        "tags": [
+          "browser-sessions"
+        ]
+      },
+      "post": {
+        "operationId": "open_browser_session_api_v1_browser_sessions_post",
+        "summary": "Open Browser Session",
+        "tags": [
+          "browser-sessions"
+        ]
+      }
+    },
+    "/api/v1/browser-sessions/{session_id}/end": {
+      "post": {
+        "operationId": "end_browser_session_api_v1_browser_sessions__session_id__end_post",
+        "summary": "End Browser Session",
+        "tags": [
+          "browser-sessions"
+        ]
+      }
+    },
     "/api/v1/channels/settings": {
       "get": {
         "operationId": "get_channel_settings_api_v1_channels_settings_get",
