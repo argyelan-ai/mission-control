@@ -1,6 +1,6 @@
 # ADR-088 — Browser sessions: one browser area per agent session and head run
 
-**Status:** Accepted
+**Status:** Accepted · Addendum 2026-10-06 (operator decisions a–c, lifecycle)
 **Datum:** 2026-10-06
 **Scope:** Infra/cdp-browser · Backend/DB · Harness layer
 
@@ -63,6 +63,67 @@ exit, last image) · harness wiring (playwright-mcp router per session, omp
 relay prefix, head env) · tab strip and states in the panel · minimal
 isolation per session (context filter, `Browser.close` blocked, switchable by
 env) · image at run end in the run record.
+
+## Addendum 2026-10-06 — operator decisions and the lifecycle
+
+The operator decided the three open lifecycle questions on 2026-10-06:
+
+- **(a) Persistent agents: one session per working phase.** It opens at the
+  agent's first tab and ends after 30 minutes without browser activity
+  (`browser_session_idle_s`). It is opened lazily by MC's lifecycle loop when
+  a tab on the agent's `/a/<slug>/` address shows up that no session owns —
+  never through dispatch, which stays frozen (ADR-085 §4). Ending a phase also
+  closes the agent's idle tabs; its connections stay, so the agent simply
+  starts a new phase with its next tab (switch: `browser_idle_close_agent_tabs`).
+- **(b) The shared Chromium is always on.** Only the per-session parts
+  (contexts, tabs) start on demand and are cleaned up; MC never starts or
+  stops the browser container for a session.
+- **(c) Logins are kept per agent** — not a fresh incognito window per
+  session. Delivered as its own step after per-session isolation, because a
+  stored login may only ever be restored into a context that belongs to that
+  one agent's session:
+  - storage state (cookies + localStorage per origin) is saved at the end of a
+    session and periodically while it lives, and restored into the agent's
+    own context at the start of its next session;
+  - encrypted at rest with MC's existing Fernet mechanism
+    (`services/encryption.py`, `SECRETS_ENCRYPTION_KEY`, as for `secrets` and
+    `credentials`), in its own table — not in `credentials`, which agents can
+    read through the agent API (ADR-033); never in the repository, logs or
+    list responses;
+  - agents stay separated: agent A never gets agent B's state; the shared
+    default context never gets a stored login; at most one live session per
+    login identity (a second one starts fresh, no write race);
+  - an operator action deletes an agent's stored logins (API first, button
+    with the tab strip);
+  - **heads start fresh.** A head gets an agent's logins only when the
+    operator explicitly starts it *as* that agent — never derived from the
+    card's assigned agent. Heads run unattended and their sandbox already
+    denies browser profiles and secrets; a stored login is standing access,
+    so the default is least privilege.
+
+  **Security trade-off.** Stored logins are standing access to the operator's
+  accounts. Whoever holds both the database and `SECRETS_ENCRYPTION_KEY` holds
+  every agent's logins — the same exposure `secrets` and `credentials` have
+  today. Plaintext exists only briefly in backend memory, in the gateway's
+  memory while restoring, and inside Chromium. A malicious page inside an
+  agent's own context can still read that agent's cookies, as it can today.
+  Mitigations: separation per agent, the delete action, a size cap, and no
+  plaintext in logs or listings.
+
+**Lifecycle (this step).** A loop in the background-services process
+(`browser_session_lifecycle`, every `browser_sessions_interval` s) registers
+open sessions the gateway forgot after a restart, moves `open → live` at the
+first tab, records the last activity (`idleSeconds` per tab from the
+gateway), ends an agent's phase after the idle limit, ends a head's session
+when its run reached a final state (or its run folder is gone) and every
+session after `browser_session_max_age_s`. It keeps the **last image**: a
+JPEG of the session's most recently active tab (`GET /mc/sessions/<token>/snapshot`),
+taken at most every `browser_frame_interval_s` and only after new activity,
+and once more right before the end; stored as
+`<browser_sessions_root>/<session-id>/last.jpg` (only its time, URL and title
+in the row), served by `GET /api/v1/browser-sessions/{id}/last-frame`, and
+deleted `browser_frame_retention_days` after the end. While the gateway is
+unreachable the loop changes nothing.
 
 ## Alternatives
 

@@ -1532,6 +1532,12 @@ Alle ADRs in `docs/decisions/`:
 
 ## Änderungshistorie (high-level)
 
+- **2026-10-06** — **Browser sessions, lifecycle (ADR-088 addendum, migration 0212):** loop
+  `browser_session_lifecycle` in the background-services process: re-registers sessions after a gateway restart,
+  opens an agent's working phase lazily at its first tab and ends it after 30 min idle (with its tabs), ends a
+  head's session with its run, hard age limit, last image per session (`<browser_sessions_root>/<id>/last.jpg`,
+  `GET /api/v1/browser-sessions/{id}/last-frame`, 30-day retention). Gateway: `/mc/sessions/<token>/snapshot`,
+  `idleSeconds` per tab, `DELETE …?agent_tabs=1`. The shared Chromium stays always on.
 - **2026-10-06** — **Browser sessions, foundation (ADR-088, S1, migration 0211):** every agent session and
   head run is to get its own browser area in the shared `cdp-browser`. New: table `browser_sessions` (owner
   agent or head run, `open → live → ended`, at most one open session per owner),
