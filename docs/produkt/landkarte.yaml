@@ -462,8 +462,10 @@ features:
     # operator API and the cdp-gateway register (/s/<token>/). The live panel
     # itself still sits on the sessions page (F-sessions, browser-live); the
     # tab strip and session states move here in a later step.
-    status: active
-    source: "ADR-088 (browser sessions, operator decision 2026-10-06)"
+    # `trial` = built, not yet part of an operator flow: it becomes `active`
+    # and a step of J-job-to-merge once heads open sessions (harness wiring).
+    status: trial
+    source: "ADR-088 (browser sessions, operator decision 2026-10-06; delivered in steps, S1 = foundation)"
     api:
       - "* /api/v1/browser-sessions"
       - "* /api/v1/browser-sessions/*"
