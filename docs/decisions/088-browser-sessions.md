@@ -150,6 +150,24 @@ Ending an agent's phase closes only tabs the agent created or nobody known
 created — never a tab another owner created that the agent merely claimed.
 While the gateway is unreachable the loop changes nothing.
 
+## Addendum 2026-10-07 — harness wiring (heads)
+
+Switch `HEADS_BROWSER_ENABLED` (off until a live check). Each head run opens
+its browser session at start (`services/heads/launcher.py`, own DB session)
+and gets its two addresses in `head.env` (0600; never in `spec.json`):
+`MC_BROWSER_MCP_URL = http://127.0.0.1:8931/s/<token>/mcp` and
+`MC_BROWSER_CDP_URL = http://127.0.0.1:9300/s/<token>/`. `mc-head` accepts
+only loopback addresses of exactly that shape. **Claude Code** (`-p --bare`)
+gets an `--mcp-config` with that router address, `--strict-mcp-config` and
+`mcp__browser` allowed. **omp** gets a relay (`cdp_relay.py --prefix
+/s/<token>`, started by `mc-head` outside the sandbox, ended with the run) and
+its profile's `browser.cdpUrl` points there. Published to the host on
+loopback only: the gateway (`127.0.0.1:9300`) and the router's
+**sessions-only** listener (`127.0.0.1:8931` → container `8932`: only
+`/s/<token>/mcp` and `/healthz`). The head sandbox denies `localhost:9300`
+(raw CDP to every tab) — a head reaches only its own session. Ending a session
+also stops its router child (`DELETE /_router/sessions/<token>`).
+
 ## Alternatives
 
 - **Keep the agent as the unit, improve the guessing** → rejected: heads have

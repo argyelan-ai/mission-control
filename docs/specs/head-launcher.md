@@ -186,7 +186,10 @@ $MC_HOME/heads/<run_id>/
   spec.json        written by backend, read-only for the head
   job.md           task title, description, acceptance criteria (+ previous-run context on restart)
   procedure.md     head-launcher-AGENTS.md with placeholders filled
-  head.env         0600, provider env + the head's own weak GH_TOKEN (§9); no MC token, no Claude OAuth token
+  head.env         0600, provider env + the head's own weak GH_TOKEN (§9); no MC token, no Claude OAuth token;
+                   with HEADS_BROWSER_ENABLED also MC_BROWSER_CDP_URL / MC_BROWSER_MCP_URL — the run's own
+                   browser session (ADR-088): Claude gets an --mcp-config on the router's sessions-only port,
+                   omp a per-run relay (mcp.json / .wrapper/relay.log in the run folder)
   head-settings.json  claude only: allow/deny lists (§9)
   .wrapper/        NOT writable by the head (sandbox deny):
     status.json      written only by the mc-head wrapper (atomic tmp + mv)
@@ -213,7 +216,8 @@ $MC_HOME/heads/<run_id>/
  "created_by": "user-uuid", "created_at": "…"}
 ```
 A test asserts `spec.json` carries no key matching `KEY|TOKEN|SECRET|PASSWORD`
-and `head.env` only the allowed ones (§9: provider key for cloud runtimes,
+and `head.env` only the allowed ones (§9: provider key for cloud runtimes, the
+run's two loopback browser-session addresses when the head browser is on,
 placeholder `ANTHROPIC_API_KEY`, the head's `GH_TOKEN`).
 
 **Token usage of heads.** The token harvester reads `omp-sessions/` and

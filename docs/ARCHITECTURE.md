@@ -1532,6 +1532,11 @@ Alle ADRs in `docs/decisions/`:
 
 ## Änderungshistorie (high-level)
 
+- **2026-10-07** — **Heads get a browser (ADR-088 harness wiring, switch `HEADS_BROWSER_ENABLED`, off):** a head
+  run opens its own browser session; `head.env` carries its loopback addresses; `mc-head` gives Claude Code an
+  `--mcp-config` on the playwright-mcp router's sessions-only port and omp a per-run `cdp_relay.py --prefix`.
+  Host ports (loopback): gateway 9300, router 8931→8932 (sessions only). Head sandbox denies localhost:9300.
+  Ending a session also stops its router child.
 - **2026-10-07** — **playwright-mcp router (ADR-088 router step):** the playwright-mcp image's entrypoint is
   now `docker/playwright-mcp/router.mjs` (Node standard library): `/s/<token>/mcp` gets its own playwright-mcp
   child on the gateway's session address, `/a/<slug>/mcp` one on the agent address, `/mcp` stays the shared child
