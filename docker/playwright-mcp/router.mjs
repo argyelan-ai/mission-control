@@ -102,6 +102,33 @@ function waitForPort(port, deadline, gaveUp = () => false) {
   });
 }
 
+// A Host (or Origin host) that cannot be a DNS-rebinding name: localhost or an
+// IP literal, with or without a port. The published sessions-only listener
+// serves nothing else — a page on rebind.example resolved to 127.0.0.1 sends
+// its own name.
+export function localHost(value) {
+  if (!value) return false;
+  let host = String(value).trim();
+  if (host.startsWith("[")) {
+    const end = host.indexOf("]");
+    if (end < 0) return false;
+    host = host.slice(1, end);
+  } else if (host.split(":").length === 2) {
+    host = host.split(":")[0];
+  }
+  if (host.toLowerCase() === "localhost") return true;
+  return net.isIP(host) !== 0;
+}
+
+function localOrigin(origin) {
+  if (origin === undefined) return true; // not a browser page (CLI clients send none)
+  try {
+    return localHost(new URL(origin).host);
+  } catch {
+    return false; // "null", malformed
+  }
+}
+
 // "/s/<token>/mcp" -> { key, kind, id, rest: "/mcp" }; null = not a route.
 export function parseRoute(url) {
   const [pathname, query = ""] = url.split("?");
@@ -343,6 +370,11 @@ export function createRouter({
   // path: from outside Docker, the browser needs a session's token.
   async function handle(req, res, sessionsOnly) {
     const url = req.url || "/";
+    if (sessionsOnly && (!localHost(req.headers.host) || !localOrigin(req.headers.origin))) {
+      res.writeHead(403, { "content-type": "text/plain" });
+      res.end("router: host or origin not allowed");
+      return;
+    }
     if (req.method === "GET" && url === "/healthz") {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ ok: true, children: children.size }));

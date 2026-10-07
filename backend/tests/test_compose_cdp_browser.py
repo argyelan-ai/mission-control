@@ -172,4 +172,7 @@ def test_heads_reach_router_and_gateway_on_loopback_only():
     assert _service("playwright-mcp").get("ports") == ["127.0.0.1:8931:8932"]
     args = _service("playwright-mcp")["command"]
     assert args[args.index("--session-port") + 1] == "8932"
-    assert _service("cdp-browser").get("ports") == ["127.0.0.1:9300:9300"]
+    # The gateway's published port is its sessions-only listener (9301): no
+    # unprefixed CDP, no /a/, no /mc, local Host/Origin only (DNS rebinding).
+    assert _service("cdp-browser").get("ports") == ["127.0.0.1:9300:9301"]
+    assert (_service("cdp-browser").get("environment") or {}).get("CDP_GATEWAY_SESSION_PORT") == "9301"

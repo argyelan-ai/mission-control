@@ -267,6 +267,34 @@ def test_heads_cannot_talk_to_the_browser_gateway_directly(layout):
     assert mapped.returncode != 0
 
 
+def test_other_runs_folders_are_not_readable(layout):
+    """Another run's folder holds its head.env / mcp.json — its browser
+    session token. A head reads only its own run (plus the clones its
+    worktree points into and a scratch origin); stat still works so paths
+    through heads/ resolve."""
+    heads = layout["mc_home"] / "heads"
+    other = heads / "run2"
+    other.mkdir()
+    (other / "head.env").write_text("MC_BROWSER_MCP_URL='http://127.0.0.1:8931/s/othertoken/mcp'\n")
+    (other / "mcp.json").write_text("{}\n")
+    (layout["run"] / "head.env").write_text("OWN=1\n")
+    (layout["run"] / "job.md").write_text("# job\n")
+    (layout["clone_git"] / "HEAD").write_text("ref: refs/heads/main\n")
+    (layout["scratch_origin"] / "HEAD").write_text("ref: refs/heads/main\n")
+    run = layout["run"]
+    for path in (other / "head.env", other / "mcp.json"):
+        res = _sh(layout, f"cat {path}")
+        assert res.returncode != 0 and "othertoken" not in res.stdout, path
+    assert _sh(layout, f"ls {heads}").returncode != 0                 # no listing of every run either
+    assert _sh(layout, f"test -d {other}").returncode == 0            # metadata: paths still resolve
+    for path in (run / "head.env", run / "job.md", layout["clone_git"] / "HEAD"):
+        res = _sh(layout, f"cat {path}")
+        assert res.returncode == 0, (path, res.stderr)
+    res = _sh(layout, f"cat {layout['scratch_origin']}/HEAD", SCRATCH_ORIGIN=layout["scratch_origin"])
+    assert res.returncode == 0, res.stderr
+    assert _sh(layout, f"cat {run}/wt/.env").returncode != 0         # the .env rule still wins in the own run
+
+
 # ── scratch repo with a local bare origin ───────────────────────────────
 
 
@@ -299,8 +327,10 @@ def test_real_repo_gets_no_origin_write(layout):
     res = _sh(layout, f"echo x > {origin}/objects/forged")
     assert res.returncode != 0
     assert not (origin / "objects" / "forged").exists()
-    # reads still work (git ls-remote / fetch)
-    assert _sh(layout, f"ls {origin}/objects").returncode == 0
+    # Not readable either: a real repo's head has no business in heads/ beyond
+    # its own run and the clones (a scratch repo's head gets SCRATCH_ORIGIN
+    # and reads it — test_other_runs_folders_are_not_readable).
+    assert _sh(layout, f"ls {origin}/objects").returncode != 0
 
 
 def test_missing_scratch_origin_param_fails_closed(layout):

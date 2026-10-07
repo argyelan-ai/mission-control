@@ -47,6 +47,24 @@
   (subpath (string-append (param "RUN") "/.wrapper"))
   (subpath (string-append (param "RUN") "/.backend")))
 
+;; Other runs' folders are not readable: their head.env and mcp.json carry
+;; their browser session tokens (ADR-088). A head reads its own run, the
+;; clones its worktree points into (git data, the push hook) and a scratch
+;; origin. Only data reads are denied — stat keeps working, so paths through
+;; heads/ still resolve. Placed before the secrets rules: those still win
+;; inside the own run (a .env in the worktree stays unreadable).
+(deny file-read-data
+  (subpath (string-append (param "MC_HOME") "/heads")))
+(allow file-read-data
+  (subpath (param "RUN"))
+  (subpath (param "CLONE_GIT"))
+  (subpath (string-append (param "MC_HOME") "/heads/clones")))
+(if (not (string=? (param "SCRATCH_ORIGIN") ""))
+  (allow file-read-data (subpath (param "SCRATCH_ORIGIN"))))
+;; A data-level allow outranks the file-read* denies below, so the one secret
+;; that can sit inside those places (.env files) is denied at data level too.
+(deny file-read-data (regex #"/\.env(\..*)?$"))
+
 ;; Secrets are never readable.
 (deny file-read*
   (subpath (string-append (param "REAL_HOME") "/.ssh"))

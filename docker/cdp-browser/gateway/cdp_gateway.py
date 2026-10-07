@@ -149,6 +149,9 @@ logger = logging.getLogger("cdp_gateway")
 CHROMIUM_HOST = os.environ.get("CDP_GATEWAY_UPSTREAM_HOST", "127.0.0.1")
 CHROMIUM_PORT = int(os.environ.get("CDP_GATEWAY_UPSTREAM_PORT", "9222"))
 LISTEN_PORT = int(os.environ.get("CDP_GATEWAY_PORT", "9300"))
+# A second listener that serves browser sessions only — the one published on
+# the host's loopback (heads). Off when unset.
+SESSION_PORT = int(os.environ.get("CDP_GATEWAY_SESSION_PORT") or 0)
 
 _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 # A browser-session token as MC hands it out (url-safe base64 of an HMAC).
@@ -244,6 +247,44 @@ def normalize_session_id(raw: Optional[str]) -> Optional[str]:
         return str(uuid.UUID(raw)) if raw else None
     except ValueError:
         return None
+
+
+def local_host(value: Optional[str]) -> bool:
+    """A Host (or Origin host) that cannot be a DNS-rebinding name: localhost,
+    the compose service name, or an IP literal — with or without a port."""
+    if not value:
+        return False
+    host = value.strip()
+    if host.startswith("["):
+        end = host.find("]")
+        if end < 0:
+            return False
+        host = host[1:end]
+    elif host.count(":") == 1:
+        host = host.split(":", 1)[0]
+    if host.lower() in ("localhost", "cdp-browser"):
+        return True
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return True
+
+
+def sessions_only_refusal(req: "HttpRequest") -> Optional[tuple[int, bytes]]:
+    """The host-published listener answers only `/s/<token>/…` (never MC's own
+    `/mc/*` behind a session prefix), only for a local Host, and never for a
+    page from another origin: the gateway rewrites the Host header upstream,
+    which defeats Chromium's own DNS-rebinding check, so this listener does it.
+    None = allowed."""
+    if not local_host(req.headers.get("Host")):
+        return 403, b"cdp-gateway: host not allowed"
+    origin = req.headers.get("Origin")
+    if origin is not None and not local_host(urlparse(origin).netloc if "://" in origin else None):
+        return 403, b"cdp-gateway: origin not allowed"
+    if not is_session_path(req.target) or strip_agent_prefix(req.target).startswith("/mc"):
+        return 404, b"cdp-gateway: only browser-session addresses here"
+    return None
 
 
 def strip_agent_prefix(path: str) -> str:
@@ -1422,7 +1463,9 @@ class CdpGateway:
 
     # ── connection handling ────────────────────────────────────────────────
 
-    async def handle_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    async def handle_connection(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, *, sessions_only: bool = False,
+    ) -> None:
         peer = writer.get_extra_info("peername")
         peer_ip = peer[0] if peer else None
         try:
@@ -1433,6 +1476,11 @@ class CdpGateway:
             if req is None:
                 await _respond(writer, 400, "text/plain", b"cdp-gateway: malformed request")
                 return
+            if sessions_only:
+                refusal = sessions_only_refusal(req)
+                if refusal is not None:
+                    await _respond(writer, refusal[0], "text/plain", refusal[1])
+                    return
             if req.is_websocket_upgrade and "/devtools/" in req.target:
                 await self.proxy_ws(reader, writer, req, peer_ip)
                 return
@@ -1591,9 +1639,14 @@ class CdpGateway:
             await _close_writer(up_writer)
 
 
-async def start_server(gateway: CdpGateway, host: str = "0.0.0.0", port: int = LISTEN_PORT):
-    """Starts the gateway's listening socket; returns the asyncio Server."""
-    return await asyncio.start_server(gateway.handle_connection, host, port, limit=_MAX_HEAD_BYTES)
+async def start_server(gateway: CdpGateway, host: str = "0.0.0.0", port: int = LISTEN_PORT, *, sessions_only: bool = False):
+    """Starts one of the gateway's listening sockets; returns the asyncio
+    Server. `sessions_only`: the host-published listener (see
+    `sessions_only_refusal`)."""
+    async def _handle(reader, writer):
+        await gateway.handle_connection(reader, writer, sessions_only=sessions_only)
+
+    return await asyncio.start_server(_handle, host, port, limit=_MAX_HEAD_BYTES)
 
 
 async def main() -> None:
@@ -1603,10 +1656,16 @@ async def main() -> None:
     watcher_task = asyncio.create_task(gateway.run_watcher(stop_event))
     server = await start_server(gateway)
     logger.info("cdp-gateway listening on :%d -> %s:%d", LISTEN_PORT, CHROMIUM_HOST, CHROMIUM_PORT)
+    session_server = None
+    if SESSION_PORT:
+        session_server = await start_server(gateway, port=SESSION_PORT, sessions_only=True)
+        logger.info("cdp-gateway: browser sessions only on :%d", SESSION_PORT)
     try:
         async with server:
             await server.serve_forever()
     finally:
+        if session_server is not None:
+            session_server.close()
         stop_event.set()
         watcher_task.cancel()
 

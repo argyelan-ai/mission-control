@@ -792,10 +792,15 @@ services:
     # eat the shared Docker VM. Idle it needs ~0.25-0.4 GB.
     mem_limit: 2g
     # Heads run on the host and reach their browser session through the
-    # gateway (/s/<token>/, ADR-088). Loopback only; Chromium's own debug
-    # ports (9222/9223) stay inside Docker.
+    # gateway (/s/<token>/, ADR-088). Loopback only, and only the gateway's
+    # sessions-only listener (9301): no unprefixed CDP, no /a/, no /mc, and a
+    # local Host/Origin only — a DNS-rebinding page in the operator's own
+    # browser must not reach the shared browser. The full gateway (9300) and
+    # Chromium's own debug ports (9222/9223) stay inside Docker.
     ports:
-      - "127.0.0.1:9300:9300"
+      - "127.0.0.1:9300:9301"
+    environment:
+      CDP_GATEWAY_SESSION_PORT: "9301"
     # Reaper as PID 1 (live finding 02.10.: 71 716 zombie `timeout` processes
     # after 14 days). The healthcheck's `timeout 5 websocat` outlives its shell,
     # gets re-parented to PID 1 — and Chromium never reaps. Zombies hold PIDs
