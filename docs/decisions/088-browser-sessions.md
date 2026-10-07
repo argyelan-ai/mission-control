@@ -78,9 +78,13 @@ The operator decided the three open lifecycle questions on 2026-10-06:
   (`browser_session_idle_s`). It is opened lazily by MC's lifecycle loop when
   a recently active tab on the agent's `/a/<slug>/` address shows up that no
   session owns (a tab idle past the limit, or a slug two agents share, opens
-  nothing) — never through dispatch, which stays frozen (ADR-085 §4). Ending a phase also
-  closes the agent's idle tabs; its connections stay, so the agent simply
-  starts a new phase with its next tab (switch: `browser_idle_close_agent_tabs`).
+  nothing) — never through dispatch, which stays frozen (ADR-085 §4). Ending a phase can
+  also close the agent's idle tabs (its connections stay, so the agent starts a
+  new phase with its next tab) — **off by default** (`browser_idle_close_agent_tabs`)
+  until a live test shows omp recovers from a tab closed under its open
+  connection. An agent working without a break past `browser_session_max_age_s`
+  only rolls over: the phase ends in the record and the next pass opens a new
+  one, its tabs stay.
 - **(b) The shared Chromium is always on.** Only the per-session parts
   (contexts, tabs) start on demand and are cleaned up; MC never starts or
   stops the browser container for a session.
@@ -121,15 +125,20 @@ The operator decided the three open lifecycle questions on 2026-10-06:
 open sessions the gateway forgot after a restart, moves `open → live` at the
 first tab, records the last activity (`idleSeconds` per tab from the
 gateway), ends an agent's phase after the idle limit, ends a head's session
-when its run reached a final state (or its run folder is gone) and every
-session after `browser_session_max_age_s` (from its first tab, or from its
-opening if it never got one). It keeps the **last image**: a
+when its run reached a final state (a vanished process or a missing run folder
+gets one pass of grace) or after the run's own `time_limit_s` plus a margin
+(measured from the first tab, or from the opening if it never got one). While
+the gateway's watcher reconnects (`/mc/health` not OK) it makes no activity-
+based decision (no idle end, no new phase). Stored URLs carry no query or
+fragment (OAuth codes). Its own calls to the gateway stay out of httpx's INFO
+log. It keeps the **last image**: a
 JPEG of the session's most recently active tab (`GET /mc/sessions/<token>/snapshot`),
 taken at most every `browser_frame_interval_s` and only after new activity,
 and once more right before the end; stored as
 `<browser_sessions_root>/<session-id>/last.jpg` (only its time, URL and title
 in the row), served by `GET /api/v1/browser-sessions/{id}/last-frame`, and
-deleted `browser_frame_retention_days` after the end. It also reconciles the
+deleted `browser_frame_retention_days` after the end (the row is marked, so
+each pass moves on to the next batch). It also reconciles the
 other way: a gateway session whose row has ended (open/end race, a gateway
 error on DELETE) is ended at the gateway, and tabs an ended session created and
 left behind (a `/json/new` still in flight) — and contexts whose disposal
