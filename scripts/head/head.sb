@@ -84,12 +84,16 @@
 ;; localhost:18800) is the operator's and the fixed agents' — a head never
 ;; drives it: it would act inside the operator's logged-in sessions. Heads get
 ;; their own browser session instead (ADR-088). Other localhost ports stay open.
+;; The port is matched on any host ("*:18800"): a "localhost:18800" rule does
+;; not cover the IPv4-mapped IPv6 form ::ffff:127.0.0.1, which reaches the same
+;; IPv4 listener. Remote hosts never serve this port, so nothing else is lost.
 (deny network-outbound
-  (remote tcp "localhost:18800"))
+  (remote tcp "*:18800"))
 
-;; Nor the browser gateway (localhost:9300): it also serves unprefixed CDP to
-;; every tab of the shared browser. A head reaches only its own session —
-;; Claude through the router's sessions-only port, omp through mc-head's
-;; relay, which runs outside this sandbox (ADR-088 harness wiring).
+;; Nor the browser gateway (port 9300): it also serves unprefixed CDP to every
+;; tab of the shared browser. A head reaches only its own session — Claude
+;; through the router's sessions-only port, omp through mc-head's relay, which
+;; runs outside this sandbox (ADR-088 harness wiring). Matched on any host for
+;; the same IPv4-mapped reason as above.
 (deny network-outbound
-  (remote tcp "localhost:9300"))
+  (remote tcp "*:9300"))

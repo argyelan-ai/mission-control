@@ -164,8 +164,9 @@ gets an `--mcp-config` with that router address, `--strict-mcp-config` and
 its profile's `browser.cdpUrl` points there. Published to the host on
 loopback only: the gateway (`127.0.0.1:9300`) and the router's
 **sessions-only** listener (`127.0.0.1:8931` → container `8932`: only
-`/s/<token>/mcp` and `/healthz`). The head sandbox denies `localhost:9300`
-(raw CDP to every tab) — a head reaches only its own session. Ending a session
+`/s/<token>/mcp` and `/healthz`). The head sandbox denies port 9300 on any
+host (`*:9300`, which also covers the IPv4-mapped `::ffff:127.0.0.1`; raw CDP
+to every tab) — a head reaches only its own session. Ending a session
 also stops its router child (`DELETE /_router/sessions/<token>`).
 
 ## Alternatives
