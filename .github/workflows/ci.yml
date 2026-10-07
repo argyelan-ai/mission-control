@@ -355,8 +355,20 @@ jobs:
           . ./docker/shared/disk-preflight.sh
           mc_disk_preflight
           docker build -t mc-playwright-mcp-test ./docker/playwright-mcp
-          docker run --rm mc-playwright-mcp-test --version | grep -qx 'Version 0.0.83'
+          docker run --rm --entrypoint playwright-mcp mc-playwright-mcp-test --version | grep -qx 'Version 0.0.83'
           test "$(docker run --rm --entrypoint pwd mc-playwright-mcp-test)" = /output
+          # The entrypoint is the router: a stray flag must exit with 2, never
+          # start a server (`timeout` would exit 124 — that is a failure too).
+          rc=0; timeout 20 docker run --rm mc-playwright-mcp-test --version || rc=$?
+          test "$rc" -eq 2
+
+      # The router (one playwright-mcp child per browser session) — its node
+      # tests run with the image's own node, against a fake playwright-mcp.
+      - name: playwright-mcp router tests
+        run: |
+          timeout 180 docker run --rm --entrypoint node \
+            -v "$PWD/docker/playwright-mcp:/t:ro" \
+            mc-playwright-mcp-test --test --test-timeout=20000 /t/test/router.test.mjs
 
       # The agent images are node:alpine — BusyBox grep on musl, NOT GNU/BSD.
       # The fixtures in test_context_detect.sh catch most regressions on any

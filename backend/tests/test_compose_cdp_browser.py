@@ -128,3 +128,40 @@ def test_websocat_architecture_comes_from_the_image_not_a_default():
     text = CDP_DOCKERFILE.read_text(encoding="utf-8")
     assert "dpkg --print-architecture" in text
     assert "TARGETARCH:-amd64" not in text
+
+
+# ── router (ADR-088 router step): one playwright-mcp child per session ─────
+
+def test_playwright_mcp_entrypoint_is_the_router():
+    text = PW_DOCKERFILE.read_text(encoding="utf-8")
+    assert 'ENTRYPOINT ["node", "/opt/router/router.mjs"]' in text
+    assert "COPY router.mjs /opt/router/router.mjs" in text
+
+
+def test_playwright_mcp_router_runs_under_init():
+    # The router is PID 1 with many children: without init, exited children
+    # stay zombies and SIGTERM is not forwarded.
+    assert _service("playwright-mcp").get("init") is True
+
+
+def test_router_sends_sessions_through_the_gateway_and_keeps_the_legacy_path():
+    args = _service("playwright-mcp")["command"]
+    own, child = args[: args.index("--")], args[args.index("--") + 1:]
+    assert own[own.index("--gateway") + 1] == "http://cdp-browser:9300"
+    # /mcp stays exactly where every existing MCP config points today.
+    assert own[own.index("--legacy-cdp-endpoint") + 1] == "http://172.30.99.10:9223"
+    # The router sets these per child; a fixed value would send every
+    # session to the same address again.
+    for flag in ("--cdp-endpoint", "--port", "--host"):
+        assert flag not in child
+    assert "--isolated" in child and "--output-dir" in child
+
+
+def test_playwright_mcp_health_does_not_start_a_child():
+    test = " ".join(_service("playwright-mcp")["healthcheck"]["test"])
+    assert "/healthz" in test and "/mcp" not in test
+
+
+def test_playwright_mcp_stays_off_the_host_network():
+    """The host port for heads comes with the harness wiring, not here."""
+    assert "ports" not in _service("playwright-mcp")

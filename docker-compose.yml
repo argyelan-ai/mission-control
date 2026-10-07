@@ -857,19 +857,32 @@ services:
     build: ./docker/playwright-mcp
     profiles: ["browser"]
     restart: unless-stopped
+    # The router is PID 1 and starts up to 17 playwright-mcp children: an init
+    # reaps them and forwards SIGTERM.
+    init: true
     logging: *default-logging
     depends_on:
       - cdp-browser
     networks:
       - default
       - cdpnet
-    # The entrypoint is `playwright-mcp`; these are all its arguments. Since the
-    # live-view feature the browser itself runs in the cdp-browser service
-    # (connected via CDP); playwright-mcp never launches its own.
+    # The entrypoint is the router (docker/playwright-mcp/router.mjs): one
+    # playwright-mcp child per browser session (/s/<token>/mcp -> CDP over the
+    # gateway's session address), per agent address (/a/<slug>/mcp) and the
+    # unchanged shared one (/mcp -> the legacy endpoint). Its own flags come
+    # first; everything after `--` is passed to every child. Since the
+    # live-view feature the browser runs in cdp-browser; playwright-mcp never
+    # launches its own.
     command: [
-      "--cdp-endpoint", "http://172.30.99.10:9223",
-      "--port", "8931",
-      "--host", "0.0.0.0",
+      "--listen", "8931",
+      # Session and agent addresses go through cdp-gateway (it accepts the
+      # service name as Host; Chromium itself only takes an IP — hence the
+      # fixed cdpnet address for the legacy shared child).
+      "--gateway", "http://cdp-browser:9300",
+      "--legacy-cdp-endpoint", "http://172.30.99.10:9223",
+      "--idle-minutes", "30",
+      "--max-children", "16",
+      "--",
       "--isolated",
       # Same size as the live panel shows it (Playwright's own default is 1280x720).
       "--viewport-size", "1280x800",
@@ -891,7 +904,8 @@ services:
       # Inhalt verifizieren kann ohne Container-Boundary-Tricks.
       - ${HOME}/.mc/mcp-screenshots:/output
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:8931/mcp', r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))\""]
+      # The router's own health (starts no playwright-mcp child).
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:8931/healthz', r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))\""]
       interval: 30s
       timeout: 10s
       retries: 3
