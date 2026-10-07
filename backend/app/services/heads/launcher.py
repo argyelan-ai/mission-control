@@ -8,6 +8,7 @@ The backend never starts a process on the host. It writes
 from __future__ import annotations
 
 import asyncio
+import logging
 import json
 import os
 import re
@@ -26,6 +27,8 @@ from app.models.runtime import Runtime
 from app.models.task import Task
 from app.services.heads import pairs, paths, scratch
 from app.services.runtime_protocols import engine_root
+
+logger = logging.getLogger(__name__)
 
 TEMPLATE = Path(__file__).resolve().parents[3] / "templates" / "heads" / "head-AGENTS.md"
 
@@ -266,7 +269,10 @@ async def write_run(
     now = datetime.now(timezone.utc)
     env, base_url, model = await head_env(session, harness, runtime)
     if settings.heads_browser_enabled:
-        env.update(await _browser_env(session, run_id))
+        try:
+            env.update(await _browser_env(session, run_id))
+        except Exception:  # noqa: BLE001 — a browser problem costs the head its browser, not its start
+            logger.exception("heads: no browser session for run %s", run_id)
     local = runtime.host_id is not None
     limit = settings.heads_hard_limit_local_s if local else settings.heads_hard_limit_cloud_s
     no_progress_s = settings.heads_no_progress_min * 60

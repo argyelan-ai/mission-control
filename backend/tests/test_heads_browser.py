@@ -121,3 +121,20 @@ async def test_router_trouble_never_blocks_the_end(session, monkeypatch):
     row, _ = await svc.open_session(session, head_run_id=str(uuid.uuid4()))
     await svc.end_session(session, row, reason="run_ended")
     assert row.status == "ended"
+
+
+async def test_a_broken_browser_session_never_stops_the_head(auth_client, heads_root, make_board, make_task,  # noqa: F811
+                                                            gateway, monkeypatch):
+    """Independent review: a DB error while opening the session must cost the
+    head its browser, not its start."""
+    monkeypatch.setattr(settings, "heads_browser_enabled", True)
+
+    async def boom(*a, **kw):
+        raise RuntimeError("database hiccup")
+
+    monkeypatch.setattr(svc, "open_session", boom)
+    _, task = await _world(make_board, make_task)
+    resp = await auth_client.post("/api/v1/heads", json={"task_id": str(task.id), "harness": "claude",
+                                                         "runtime_slug": "box-slot"})
+    assert resp.status_code == 201, resp.text
+    assert "MC_BROWSER" not in (heads_root / resp.json()["run_id"] / "head.env").read_text()

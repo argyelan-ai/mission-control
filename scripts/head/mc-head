@@ -1023,21 +1023,27 @@ def start_browser_relay(run_id: str, home: Path, env: dict):
     gateway_port, token = m.group(1), m.group(2)
     port = _free_port()
     log = open(wrapper_dir(run_id) / "relay.log", "ab")
+    # The token goes by environment: a command line is visible to every host
+    # process (ps). The relay itself never logs it.
+    relay_env = {"PATH": BASE_PATH, "CDP_RELAY_PREFIX": f"/s/{token}"}
     proc = subprocess.Popen(
-        [sys.executable, str(script), "--listen-port", str(port),
-         "--target", f"127.0.0.1:{gateway_port}", "--prefix", f"/s/{token}"],
-        stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True,
+        [sys.executable, str(script), "--listen-port", str(port), "--target", f"127.0.0.1:{gateway_port}"],
+        stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True, env=relay_env,
     )
     log.close()
     deadline = time.time() + 5
-    while time.time() < deadline:
+    listening = False
+    while time.time() < deadline and proc.poll() is None:
         try:
             socket.create_connection(("127.0.0.1", port), timeout=0.5).close()
+            listening = True
             break
         except OSError:
-            if proc.poll() is not None:
-                return None
             time.sleep(0.05)
+    if not listening:
+        # Never point omp at a port nobody serves.
+        stop_browser_relay(proc)
+        return None
     agent_dir = home / ".omp" / "profiles" / OMP_PROFILE / "agent"
     agent_dir.mkdir(parents=True, exist_ok=True)
     (agent_dir / "config.yml").write_text(f"browser:\n  cdpUrl: http://127.0.0.1:{port}\n")

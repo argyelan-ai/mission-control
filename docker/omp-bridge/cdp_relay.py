@@ -52,9 +52,9 @@ Usage
 -----
   cdp_relay.py --agent-path                      # print "/a/<slug>" or "" (shell helper)
   cdp_relay.py --listen-port 9222 --target cdp-browser:9300
-  cdp_relay.py --listen-port <free> --target 127.0.0.1:9300 --prefix /s/<token>
+  CDP_RELAY_PREFIX=/s/<token> cdp_relay.py --listen-port <free> --target 127.0.0.1:9300
       (a head on the host: mc-head starts it for the head's browser session,
-      ADR-088; the token never appears in the log)
+      ADR-088; the token is passed by environment, never logged)
 """
 from __future__ import annotations
 
@@ -132,8 +132,15 @@ def display_prefix(prefix: str) -> str:
 
 
 def resolve_prefix(explicit: Optional[str], env: Optional[dict] = None) -> str:
-    """An explicit `--prefix` wins; otherwise the container's agent path."""
-    return parse_prefix(explicit) if explicit else agent_path(env)
+    """An explicit `--prefix` wins, then `CDP_RELAY_PREFIX` from the
+    environment (how mc-head passes a session token — a command line is
+    readable by every host process), otherwise the container's agent path."""
+    env = os.environ if env is None else env
+    if explicit:
+        return parse_prefix(explicit)
+    if env.get("CDP_RELAY_PREFIX"):
+        return parse_prefix(env["CDP_RELAY_PREFIX"])
+    return agent_path(env)
 
 
 def prefix_request_line(line: bytes, path_prefix: str) -> bytes:
@@ -186,23 +193,45 @@ async def _pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> N
         await writer.drain()
 
 
+def _strict_request_ok(head: bytes, path_prefix: str) -> bool:
+    """For a session relay: the request line is origin-form HTTP/1.x, its
+    path has no `..` segment, and no chunked body hides the next request."""
+    first = head.split(b"\r\n", 1)[0]
+    parts = first.split(b" ")
+    if len(parts) != 3 or not parts[2].startswith(b"HTTP/1.") or not parts[1].startswith(b"/"):
+        return False
+    path = parts[1].split(b"?", 1)[0]
+    if b".." in path.split(b"/") or b"%2e" in path.lower() or b"\\" in path:
+        return False
+    return b"chunked" not in (_header(head, b"Transfer-Encoding") or b"").lower()
+
+
 async def _client_to_upstream(
     reader: asyncio.StreamReader, writer: asyncio.StreamWriter, path_prefix: str,
 ) -> None:
     if not path_prefix:
         await _pipe(reader, writer)
         return
+    # A head's browser session (/s/<token>): this relay runs outside the head's
+    # sandbox, so whatever cannot be scoped with certainty is refused — never
+    # passed through like the container relay does.
+    strict = path_prefix.startswith("/s/")
     while True:
         try:
             head = await reader.readuntil(b"\r\n\r\n")
         except asyncio.IncompleteReadError as e:
-            if e.partial:  # trailing bytes that never became a request head
+            if e.partial and not strict:  # trailing bytes that never became a request head
                 writer.write(e.partial)
                 await writer.drain()
             return
         except asyncio.LimitOverrunError:
+            if strict:
+                return
             # Not an HTTP head we understand — stop interpreting, just relay.
             await _pipe(reader, writer)
+            return
+        if strict and not _strict_request_ok(head, path_prefix):
+            logger.info("cdp_relay: refused a request it cannot scope to the session")
             return
         first, sep, rest = head.partition(b"\r\n")
         new_first = prefix_request_line(first, path_prefix)
@@ -222,6 +251,8 @@ async def _client_to_upstream(
             try:
                 n = int(length)
             except ValueError:
+                if strict:
+                    return
                 await _pipe(reader, writer)
                 return
             await _copy_exact(reader, writer, n)

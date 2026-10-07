@@ -131,3 +131,23 @@ def test_omp_head_reaches_its_session_through_the_relay(tmp_path):
     with pytest.raises(OSError):                                   # the relay ended with the run
         socket.create_connection(("127.0.0.1", port), timeout=1).close()
     assert TOKEN not in (run / "head.log").read_text()
+
+
+def test_the_relay_gets_its_token_by_environment_not_on_the_command_line(mc_head, tmp_path, monkeypatch):
+    """Another host process can read a command line (ps); the token goes to
+    the relay through its environment."""
+    up = _Upstream()
+    run_id = "00000000-0000-4000-8000-000000000001"
+    monkeypatch.setattr(mc_head, "wrapper_dir", lambda _rid: tmp_path)
+    env = {"MC_BROWSER_CDP_URL": f"http://127.0.0.1:{up.port}/s/{TOKEN}/"}
+    proc = mc_head.start_browser_relay(run_id, tmp_path / "home", env)
+    try:
+        assert proc is not None
+        assert TOKEN not in " ".join(map(str, proc.args))
+        port = int((tmp_path / "home/.omp/profiles/mc-head/agent/config.yml").read_text().rsplit(":", 1)[1])
+        import urllib.request
+
+        urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=5).read()
+        assert up.lines[-1] == f"GET /s/{TOKEN}/json/version HTTP/1.1"
+    finally:
+        mc_head.stop_browser_relay(proc)
