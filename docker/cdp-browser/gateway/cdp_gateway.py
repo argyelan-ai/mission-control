@@ -11,9 +11,9 @@ AGENT a connection belongs to and which open tab belongs to which agent, so
 the operator's per-agent panel can show "Alpha's tabs" instead of "every
 tab in the shared browser" (bauplan.md, PR B1).
 
-Scope: identify + attribute only. It does **not** stop one agent from
-seeing or touching another agent's tabs — that is PR B3's job, built on the
-ownership map this module produces.
+Scope: identify + attribute, and — switched on with `CDP_GATEWAY_ISOLATE=1`
+— isolate browser sessions (see "Isolation" below). Agent (`/a/<slug>/`) and
+unprefixed connections are never filtered.
 
 Identifying the agent behind a connection
 -----------------------------------------
@@ -116,6 +116,26 @@ A session opened for an agent "sees" the agent's tabs as well as its own.
 created and left behind (refused while it is registered); `/mc/targets`
 reports the creating session as `creatorSession` for that sweep.
 
+Isolation (ADR-088 isolation step, `CDP_GATEWAY_ISOLATE=1`, off by default)
+---------------------------------------------------------------------------
+With the switch on, a `/s/<token>/` connection is no longer passed through
+byte for byte: whole WebSocket messages are read and filtered by
+`SessionIsolation`, so the session sees and touches only its own tabs — those
+in browser contexts it created (Playwright's `--isolated`) or in the session
+context the gateway makes for it on first need (a Puppeteer/omp `newPage()`,
+`createTarget` without a context, cookies without a context), plus tabs it
+created itself. Everything else is invisible (target events, `getTargets`,
+`getBrowserContexts`) or refused (`attachToTarget`, `closeTarget`, a foreign
+`browserContextId`, a page socket for a foreign tab, `/json/close|activate`).
+A foreign tab the session's client was auto-attached to while it waits for a
+debugger is resumed and detached by the gateway — otherwise every other
+client's new tabs would hang (Playwright and Puppeteer auto-attach with
+`waitForDebuggerOnStart`). `Browser.close`/`Browser.crash` never reach
+Chromium: the client gets `{}` and only its own connection ends. The session
+context is disposed with the session. This is "minimal isolation" for honest
+clients sharing one browser, not a sandbox: a page can still reach whatever
+the browser can reach on the network.
+
 Trust model: identification is NOT authentication. Any container on the
 Docker-internal network can already reach Chromium's CDP port directly
 (:9223) — this gateway does not change that boundary, it only labels
@@ -149,6 +169,8 @@ logger = logging.getLogger("cdp_gateway")
 CHROMIUM_HOST = os.environ.get("CDP_GATEWAY_UPSTREAM_HOST", "127.0.0.1")
 CHROMIUM_PORT = int(os.environ.get("CDP_GATEWAY_UPSTREAM_PORT", "9222"))
 LISTEN_PORT = int(os.environ.get("CDP_GATEWAY_PORT", "9300"))
+# Session isolation (see the module docstring). Off unless explicitly "1".
+ISOLATE = os.environ.get("CDP_GATEWAY_ISOLATE", "0") == "1"
 
 _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 # A browser-session token as MC hands it out (url-safe base64 of an HMAC).
@@ -199,6 +221,39 @@ _TRACKED_RESPONSE_METHODS = frozenset({
     "Target.createBrowserContext",
     "Target.attachToTarget",
 })
+
+# ── isolation rules (SessionIsolation) ─────────────────────────────────────
+# Browser-level commands whose missing `browserContextId` means "Chromium's
+# default context" — for an isolated session it means the session's own.
+_ISOLATION_DEFAULT_CONTEXT_METHODS = frozenset({
+    "Target.createTarget",
+    "Storage.getCookies",
+    "Storage.setCookies",
+    "Storage.clearCookies",
+    "Browser.grantPermissions",
+    "Browser.resetPermissions",
+    "Browser.setPermission",
+    "Browser.setDownloadBehavior",
+})
+# Never forwarded: answered with `{}`; the first two also end the connection.
+_ISOLATION_ENDS_CONNECTION = frozenset({"Browser.close", "Browser.crash"})
+_ISOLATION_SWALLOWED = frozenset({"Browser.crashGpuProcess"})
+# Browser-wide commands that would reach other sessions (browser-level only;
+# on a tab's own session they concern that tab). Every other browser-level
+# `Storage.*` besides the cookie trio is refused as well.
+_ISOLATION_REFUSED = frozenset({"Tracing.start", "Browser.executeBrowserCommand"})
+_ISOLATION_COOKIE_METHODS = frozenset({"Storage.getCookies", "Storage.setCookies", "Storage.clearCookies"})
+# Answers this filter rewrites or learns sessions from.
+_ISOLATION_TRACKED = frozenset({
+    "Target.getTargets",
+    "Target.getBrowserContexts",
+    "Target.attachToTarget",
+    "Target.attachToBrowserTarget",
+})
+_NO_TARGET = "No target with given id found"
+# One isolated message may be this large (a full-page screenshot); a bigger
+# frame ends the connection instead of buffering without bound.
+_ISOLATED_MAX_MESSAGE = 256 * 1024 * 1024
 
 
 def normalize_slug(raw: Optional[str]) -> Optional[str]:
@@ -349,6 +404,9 @@ class GatewayState:
     # its session for a moment still reports the right agent).
     sessions: dict[str, BrowserSessionEntry] = field(default_factory=dict)
     session_agent: dict[str, Optional[str]] = field(default_factory=dict)
+    # session id -> the browser context the gateway made for an isolated
+    # session (its `newPage()`/cookies without a context land there).
+    session_contexts: dict[str, str] = field(default_factory=dict)
     now_fn: Callable[[], float] = field(default=time.monotonic)
 
     # ── browser-session register ───────────────────────────────────────────
@@ -408,6 +466,16 @@ class GatewayState:
         if entry.agent:
             tabs.update({t.id: t for t in self.targets_for(entry.agent)})
         return sorted(tabs.values(), key=lambda t: t.last_active_at, reverse=True)
+
+    def owns_target(self, key: str, target_id: str, ctx: Optional[str] = None) -> bool:
+        """Isolation's notion of "this session's tab": it lives in a context
+        the session owns, or the session created (or claimed) it. A tab the
+        gateway knows nothing about is nobody's."""
+        info = self.targets.get(target_id)
+        ctx = ctx or (info.ctx if info else None)
+        if ctx and self.ctx_owner.get(ctx) == key:
+            return True
+        return key in (self.target_owner.get(target_id), self.target_creator.get(target_id))
 
     def tab_owner(self, target_id: Optional[str]) -> Optional[str]:
         """Owner key of a live tab — recorded directly or via its context."""
@@ -1002,6 +1070,310 @@ class _ConnectionObserver:
                 self._sessions.add(params["sessionId"])
 
 
+class SessionIsolation:
+    """Per-connection message filter of an isolated browser session (see the
+    module docstring). `from_client` decides each command, `from_upstream`
+    each answer or event. Pure apart from `default_context`, the coroutine
+    that makes (or returns) the session's own browser context.
+
+    A dict that comes back unchanged is the very object passed in, so the
+    caller can forward the original frame; a changed one is a new dict."""
+
+    def __init__(
+        self,
+        state: GatewayState,
+        key: str,
+        default_context: Callable[[], "asyncio.Future[str]"],
+        *,
+        page_socket: bool = False,
+    ):
+        self.state = state
+        self.key = key
+        self._default_context = default_context
+        # A page socket (`/devtools/page/<id>`) talks to one tab: its
+        # session-less commands are that tab's, not the browser's.
+        self._page_socket = page_socket
+        # CDP sessions this client may use (own tabs, the browser target).
+        self._sessions: set[str] = set()
+        self._browser_sessions: set[str] = set()
+        # targetId -> browserContextId, from every target info seen here
+        # (iframes and workers are not in GatewayState.targets).
+        self._known_ctx: dict[str, Optional[str]] = {}
+        # Targets this client was told about: their targetDestroyed (which
+        # carries no context) passes, other ones do not.
+        self._announced: set[str] = set()
+        self._pending: dict[tuple[Optional[str], int], str] = {}
+        self._own_pending: set[tuple[Optional[str], int]] = set()
+        self._next_id = _OWN_MSG_ID_BASE
+
+    # ── ownership ─────────────────────────────────────────────────────────
+
+    def _owns_ctx(self, ctx) -> bool:
+        return isinstance(ctx, str) and self.state.ctx_owner.get(ctx) == self.key
+
+    def _owns_target(self, target_id, ctx=None) -> bool:
+        if not isinstance(target_id, str):
+            return False
+        return self.state.owns_target(self.key, target_id, ctx or self._known_ctx.get(target_id))
+
+    def _browser_level(self, session_id: Optional[str]) -> bool:
+        if session_id is None:
+            return not self._page_socket
+        return session_id in self._browser_sessions
+
+    @staticmethod
+    def _answer(msg: dict, **body) -> dict:
+        reply = {"id": msg.get("id"), **body}
+        if msg.get("sessionId") is not None:
+            reply["sessionId"] = msg["sessionId"]
+        return reply
+
+    def _refuse(self, msg: dict, code: int, message: str) -> dict:
+        logger.info("cdp_gateway: isolated %s: refused %s (%s)", self.key, msg.get("method"), message)
+        return self._answer(msg, error={"code": code, "message": message})
+
+    def _own(self, command: dict) -> dict:
+        """A command of the gateway's own on this connection; its answer is
+        swallowed in `from_upstream`."""
+        msg_id = self._next_id
+        self._next_id += 1
+        self._own_pending.add((command.get("sessionId"), msg_id))
+        return {"id": msg_id, **command}
+
+    # ── client -> Chromium ─────────────────────────────────────────────────
+
+    async def from_client(self, msg: dict) -> tuple[Optional[dict], Optional[dict], bool]:
+        """-> (forward to Chromium, answer to the client, end the connection)."""
+        method = msg.get("method")
+        msg_id = msg.get("id")
+        if not isinstance(method, str) or not isinstance(msg_id, int):
+            return msg, None, False                   # not a command; Chromium answers it
+        session_id = msg.get("sessionId")
+        if session_id is not None and session_id not in self._sessions:
+            return None, self._refuse(msg, -32001, "Session with given id not found."), False
+        browser_level = self._browser_level(session_id)
+        if browser_level and method in _ISOLATION_ENDS_CONNECTION:
+            logger.info("cdp_gateway: isolated %s: %s answered, connection ends", self.key, method)
+            return None, self._answer(msg, result={}), True
+        if browser_level and method in _ISOLATION_SWALLOWED:
+            return None, self._answer(msg, result={}), False
+        if browser_level and (
+            method in _ISOLATION_REFUSED
+            or (method.startswith("Storage.") and method not in _ISOLATION_COOKIE_METHODS)
+        ):
+            return None, self._refuse(msg, -32000, "not allowed for an isolated browser session"), False
+        params = msg.get("params") if isinstance(msg.get("params"), dict) else {}
+        if "targetId" in params and not self._owns_target(params["targetId"]):
+            return None, self._refuse(msg, -32602, _NO_TARGET), False
+        if "browserContextId" in params:
+            if not self._owns_ctx(params["browserContextId"]):
+                return None, self._refuse(
+                    msg, -32602, f"Failed to find browser context with id {params['browserContextId']}",
+                ), False
+        elif browser_level and method in _ISOLATION_DEFAULT_CONTEXT_METHODS:
+            try:
+                ctx = await self._default_context()
+            except Exception as e:  # noqa: BLE001 - becomes the client's error answer
+                return None, self._refuse(msg, -32000, f"cdp-gateway: no browser context for this session ({e})"), False
+            msg = {**msg, "params": {**params, "browserContextId": ctx}}
+        if method in _ISOLATION_TRACKED:
+            self._pending[(session_id, msg_id)] = method
+        return msg, None, False
+
+    # ── Chromium -> client ─────────────────────────────────────────────────
+
+    def from_upstream(self, msg: dict) -> tuple[Optional[dict], list[dict]]:
+        """-> (forward to the client or None, commands to send to Chromium)."""
+        session_id = msg.get("sessionId")
+        msg_id = msg.get("id")
+        if isinstance(msg_id, int):
+            key = (session_id, msg_id)
+            if key in self._own_pending:
+                self._own_pending.discard(key)
+                return None, []
+            method = self._pending.pop(key, None)
+            return (self._filter_result(method, msg) if method else msg), []
+        method = msg.get("method")
+        params = msg.get("params") if isinstance(msg.get("params"), dict) else {}
+        if method == "Target.attachedToTarget":
+            return self._on_attached(msg, session_id, params)
+        if session_id is not None and session_id not in self._sessions:
+            return None, []                           # a foreign session's event in flight
+        if method in ("Target.targetCreated", "Target.targetInfoChanged"):
+            info = params.get("targetInfo") if isinstance(params.get("targetInfo"), dict) else {}
+            tid, ctx = info.get("targetId"), info.get("browserContextId")
+            if isinstance(tid, str):
+                self._known_ctx[tid] = ctx
+            if self._owns_target(tid, ctx):
+                self._announced.add(tid)
+                return msg, []
+            return None, []
+        if method in ("Target.targetDestroyed", "Target.targetCrashed"):
+            tid = params.get("targetId")
+            if tid not in self._announced:
+                return None, []
+            if method == "Target.targetDestroyed":
+                self._announced.discard(tid)
+                self._known_ctx.pop(tid, None)
+            return msg, []
+        if method in ("Target.detachedFromTarget", "Target.receivedMessageFromTarget"):
+            child = params.get("sessionId")
+            if child not in self._sessions:
+                return None, []
+            if method == "Target.detachedFromTarget":
+                self._sessions.discard(child)
+                self._browser_sessions.discard(child)
+            return msg, []
+        return msg, []
+
+    def _on_attached(self, msg: dict, parent: Optional[str], params: dict) -> tuple[Optional[dict], list[dict]]:
+        child = params.get("sessionId")
+        info = params.get("targetInfo") if isinstance(params.get("targetInfo"), dict) else {}
+        tid, ctx = info.get("targetId"), info.get("browserContextId")
+        if isinstance(tid, str):
+            self._known_ctx[tid] = ctx
+        if not isinstance(child, str):
+            return None, []
+        parent_ok = parent is None or parent in self._sessions
+        if parent_ok and info.get("type") == "browser":
+            # The browser target (Target.attachToBrowserTarget): everyone's
+            # root; what is sent on it goes through this filter as
+            # browser-level traffic.
+            self._sessions.add(child)
+            self._browser_sessions.add(child)
+            return msg, []
+        if parent_ok and self._owns_target(tid, ctx):
+            self._sessions.add(child)
+            if isinstance(tid, str):
+                self._announced.add(tid)
+            return msg, []
+        # A foreign target this client was auto-attached to: let it go. If it
+        # waits for a debugger (a NEW tab, waitForDebuggerOnStart), resume it
+        # first — nobody else will on this connection, and the tab would hang.
+        inject = []
+        if params.get("waitingForDebugger"):
+            inject.append(self._own({"sessionId": child, "method": "Runtime.runIfWaitingForDebugger"}))
+        detach = {"method": "Target.detachFromTarget", "params": {"sessionId": child}}
+        if parent is not None:
+            detach["sessionId"] = parent
+        inject.append(self._own(detach))
+        return None, inject
+
+    def _filter_result(self, method: str, msg: dict) -> dict:
+        result = msg.get("result")
+        if not isinstance(result, dict):
+            return msg
+        if method == "Target.getTargets":
+            infos = [i for i in result.get("targetInfos") or [] if isinstance(i, dict)]
+            own = []
+            for info in infos:
+                tid, ctx = info.get("targetId"), info.get("browserContextId")
+                if isinstance(tid, str):
+                    self._known_ctx[tid] = ctx
+                if self._owns_target(tid, ctx):
+                    self._announced.add(tid)
+                    own.append(info)
+            return {**msg, "result": {**result, "targetInfos": own}}
+        if method == "Target.getBrowserContexts":
+            ids = [c for c in result.get("browserContextIds") or [] if self._owns_ctx(c)]
+            return {**msg, "result": {**result, "browserContextIds": ids}}
+        sid = result.get("sessionId")
+        if isinstance(sid, str):
+            self._sessions.add(sid)
+            if method == "Target.attachToBrowserTarget":
+                self._browser_sessions.add(sid)
+        return msg
+
+
+class _WsFrame:
+    __slots__ = ("fin", "opcode", "payload", "raw")
+
+    def __init__(self, fin: bool, opcode: int, payload: bytes, raw: bytes):
+        self.fin, self.opcode, self.payload, self.raw = fin, opcode, payload, raw
+
+
+async def _read_ws_frame(reader: asyncio.StreamReader) -> _WsFrame:
+    """One whole WebSocket frame (raises IncompleteReadError at EOF)."""
+    head = await reader.readexactly(2)
+    b0, b1 = head[0], head[1]
+    if b0 & 0x70:
+        raise ValueError("RSV bits set (compressed or extended frame)")
+    length = b1 & 0x7F
+    ext = b""
+    if length == 126:
+        ext = await reader.readexactly(2)
+        length = int.from_bytes(ext, "big")
+    elif length == 127:
+        ext = await reader.readexactly(8)
+        length = int.from_bytes(ext, "big")
+    if length > _ISOLATED_MAX_MESSAGE:
+        raise ValueError("frame too large")
+    mask = await reader.readexactly(4) if b1 & 0x80 else b""
+    body = await reader.readexactly(length) if length else b""
+    return _WsFrame(bool(b0 & 0x80), b0 & 0x0F, _unmask(body, mask) if mask else body, head + ext + mask + body)
+
+
+def _ws_frame(opcode: int, payload: bytes, *, masked: bool) -> bytes:
+    """One final frame. Towards Chromium we are the client: masked."""
+    n = len(payload)
+    mask_bit = 0x80 if masked else 0
+    if n < 126:
+        head = bytes([0x80 | opcode, mask_bit | n])
+    elif n < 65536:
+        head = bytes([0x80 | opcode, mask_bit | 126]) + n.to_bytes(2, "big")
+    else:
+        head = bytes([0x80 | opcode, mask_bit | 127]) + n.to_bytes(8, "big")
+    if not masked:
+        return head + payload
+    mask = os.urandom(4)
+    return head + mask + _unmask(payload, mask)
+
+
+def _json_object(payload: bytes) -> Optional[dict]:
+    try:
+        msg = json.loads(payload)
+    except ValueError:
+        return None
+    return msg if isinstance(msg, dict) else None
+
+
+async def _message_pump(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, on_message) -> None:
+    """Read whole messages (fragments joined) and hand each to
+    `on_message(opcode, payload, raw) -> bool` (False = stop). Control frames
+    go straight through. Every write is one complete frame, so the other
+    direction's task can write to the same socket without interleaving."""
+    frag_op: Optional[int] = None
+    frag_payload = bytearray()
+    frag_raw = bytearray()
+    while True:
+        try:
+            frame = await _read_ws_frame(reader)
+        except asyncio.IncompleteReadError:
+            return
+        if frame.opcode >= 0x8:
+            writer.write(frame.raw)
+            await writer.drain()
+            continue
+        if frame.opcode == 0x0:
+            if frag_op is None:
+                raise ValueError("continuation frame without a start")
+            frag_payload += frame.payload
+            frag_raw += frame.raw
+            if len(frag_payload) > _ISOLATED_MAX_MESSAGE:
+                raise ValueError("message too large")
+            if not frame.fin:
+                continue
+            opcode, payload, raw = frag_op, bytes(frag_payload), bytes(frag_raw)
+            frag_op, frag_payload, frag_raw = None, bytearray(), bytearray()
+        elif not frame.fin:
+            frag_op, frag_payload, frag_raw = frame.opcode, bytearray(frame.payload), bytearray(frame.raw)
+            continue
+        else:
+            opcode, payload, raw = frame.opcode, frame.payload, frame.raw
+        if not await on_message(opcode, payload, raw):
+            return
+
+
 async def _pump(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, sniffer: Optional[_FrameSniffer]) -> None:
     while True:
         data = await reader.read(_PUMP_CHUNK)
@@ -1014,8 +1386,13 @@ async def _pump(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, snif
 
 
 class CdpGateway:
-    def __init__(self, *, upstream_host: str = CHROMIUM_HOST, upstream_port: int = CHROMIUM_PORT):
+    def __init__(
+        self, *, upstream_host: str = CHROMIUM_HOST, upstream_port: int = CHROMIUM_PORT, isolate: bool = ISOLATE,
+    ):
         self.state = GatewayState()
+        # Session isolation (module docstring); only `/s/` connections.
+        self.isolate = isolate
+        self._ctx_locks: dict[str, asyncio.Lock] = {}
         self._upstream_host = upstream_host
         self._upstream_port = upstream_port
         self._dns_cache = _ReverseDnsCache()
@@ -1034,6 +1411,30 @@ class CdpGateway:
     @property
     def _upstream_netloc(self) -> str:
         return f"{self._upstream_host}:{self._upstream_port}"
+
+    def _isolated(self, key: Optional[str]) -> bool:
+        return self.isolate and bool(key) and key.startswith(_SESSION_OWNER_PREFIX)
+
+    async def _session_context(self, key: str) -> str:
+        """The browser context the gateway made for an isolated session,
+        made on first need over a connection of its own. `disposeOnDetach`
+        off: it outlives that connection and is disposed with the session."""
+        session_id = key[len(_SESSION_OWNER_PREFIX):]
+        lock = self._ctx_locks.setdefault(session_id, asyncio.Lock())
+        async with lock:
+            ctx = self.state.session_contexts.get(session_id)
+            if ctx and self.state.ctx_owner.get(ctx) == key:
+                return ctx
+            reply = (await self._cdp_call(
+                [("Target.createBrowserContext", {"disposeOnDetach": False})], deadline=_UPSTREAM_HTTP_TIMEOUT,
+            ))[0]
+            ctx = (reply.get("result") or {}).get("browserContextId")
+            if not isinstance(ctx, str):
+                raise RuntimeError((reply.get("error") or {}).get("message", "no browser context"))
+            self.state.record_context_owner(ctx, key)
+            self.state.session_contexts[session_id] = ctx
+            logger.info("cdp_gateway: isolated %s: own browser context made", key)
+            return ctx
 
     async def identify(self, path: str, headers, peer_ip: Optional[str]) -> Optional[str]:
         """Owner key for a request: `s/<session-id>` for a registered
@@ -1244,6 +1645,9 @@ class CdpGateway:
         if entry is None:
             return None
         key = session_owner_key(entry.session_id)
+        # Its context is one of the session's contexts below (owner = key).
+        self.state.session_contexts.pop(entry.session_id, None)
+        self._ctx_locks.pop(entry.session_id, None)
         conns = list(self._live_conns.pop(key, set()))
         for task in conns:
             # Hard cut: a client that stopped reading would otherwise keep the
@@ -1366,8 +1770,19 @@ class CdpGateway:
         agent = await self.identify(path, headers, peer_ip)
         if agent is None:
             return 404, "text/plain", b"cdp-gateway: unknown browser session"
+        isolated_new = None
+        if self._isolated(agent):
+            route = local_path.split("?", 1)[0].rstrip("/")
+            if route.startswith(("/json/close/", "/json/activate/")):
+                if not self.state.owns_target(agent, route.rsplit("/", 1)[1]):
+                    return 404, "text/plain", b"No such target id"
+            elif route == "/json/new":
+                isolated_new = local_path.split("?", 1)[1] if "?" in local_path else "about:blank"
         try:
-            status, content_type, body = await self._upstream_http(method, local_path)
+            if isolated_new is not None:
+                status, content_type, body = await self._isolated_json_new(agent, isolated_new)
+            else:
+                status, content_type, body = await self._upstream_http(method, local_path)
         except (OSError, asyncio.TimeoutError, asyncio.IncompleteReadError, ValueError) as e:
             return 502, "text/plain", f"cdp-gateway: upstream unreachable: {e}".encode()
         if status != 200 or "json" not in content_type.lower():
@@ -1419,6 +1834,29 @@ class CdpGateway:
             self.state.record_creator(data["id"], agent)
 
         return 200, "application/json", json.dumps(_rewrite(data)).encode()
+
+    async def _isolated_json_new(self, key: str, url: str) -> tuple[int, str, bytes]:
+        """`/json/new` of an isolated session: the tab opens in the session's
+        own context (Chromium's own `/json/new` always uses the default one),
+        answered in Chromium's shape."""
+        try:
+            ctx = await self._session_context(key)
+            reply = (await self._cdp_call(
+                [("Target.createTarget", {"url": url, "browserContextId": ctx})], deadline=_UPSTREAM_HTTP_TIMEOUT,
+            ))[0]
+        except (OSError, asyncio.TimeoutError, RuntimeError, ValueError, websockets.WebSocketException) as e:
+            return 502, "text/plain", f"cdp-gateway: could not open a tab: {e}".encode()
+        tid = (reply.get("result") or {}).get("targetId")
+        if not isinstance(tid, str):
+            return 502, "text/plain", b"cdp-gateway: could not open a tab"
+        body = {
+            "id": tid, "type": "page", "title": "", "url": url, "description": "", "devtoolsFrontendUrl": "",
+            "webSocketDebuggerUrl": f"ws://{self._upstream_netloc}/devtools/page/{tid}",
+        }
+        return 200, "application/json", json.dumps(body).encode()
+
+    def _isolated_pumps(self, *args):
+        return _isolated_pumps_impl(self, *args)
 
     # ── connection handling ────────────────────────────────────────────────
 
@@ -1505,6 +1943,10 @@ class CdpGateway:
             await _respond(client_writer, 404, "text/plain", b"cdp-gateway: unknown browser session")
             return
         upstream_path = strip_agent_prefix(req.target)
+        page = page_id_from_path(upstream_path)
+        if self._isolated(agent) and page and not self.state.owns_target(agent, page):
+            await _respond(client_writer, 404, "text/plain", b"cdp-gateway: no such tab in this browser session")
+            return
         me = asyncio.current_task()
         if me is not None:
             self._live_conns.setdefault(agent, set()).add(me)
@@ -1559,10 +2001,15 @@ class CdpGateway:
                 upgraded = False
 
             observer = _ConnectionObserver(self.state, agent, page_id_from_path(upstream_path))
-            c2u = _FrameSniffer(observer.from_client) if upgraded else None
-            u2c = _FrameSniffer(observer.from_upstream) if upgraded else None
-            t_client = asyncio.ensure_future(_pump(client_reader, up_writer, c2u))
-            t_upstream = asyncio.ensure_future(_pump(up_reader, client_writer, u2c))
+            if upgraded and self._isolated(agent):
+                t_client, t_upstream = self._isolated_pumps(
+                    observer, agent, upstream_path, client_reader, client_writer, up_reader, up_writer,
+                )
+            else:
+                c2u = _FrameSniffer(observer.from_client) if upgraded else None
+                u2c = _FrameSniffer(observer.from_upstream) if upgraded else None
+                t_client = asyncio.ensure_future(_pump(client_reader, up_writer, c2u))
+                t_upstream = asyncio.ensure_future(_pump(up_reader, client_writer, u2c))
             # FIRST_COMPLETED, not gather: when either side goes away the
             # other must be torn down promptly (review finding 03.10.2026: a
             # dangling task per disconnected agent held a live browser-level
@@ -1589,6 +2036,68 @@ class CdpGateway:
                 observer.close()
         finally:
             await _close_writer(up_writer)
+
+
+def _isolated_pumps_impl(
+    gateway: "CdpGateway",
+    observer: _ConnectionObserver,
+    key: str,
+    upstream_path: str,
+    client_reader: asyncio.StreamReader,
+    client_writer: asyncio.StreamWriter,
+    up_reader: asyncio.StreamReader,
+    up_writer: asyncio.StreamWriter,
+) -> tuple[asyncio.Future, asyncio.Future]:
+    """Both directions of an isolated session's connection, message by
+    message through `SessionIsolation`. Unchanged messages go on as the very
+    frames that came in; changed, answered or injected ones are re-framed."""
+    iso = SessionIsolation(
+        gateway.state, key, lambda: gateway._session_context(key),
+        page_socket=page_id_from_path(upstream_path) is not None,
+    )
+
+    def _text(msg: dict, *, masked: bool) -> bytes:
+        return _ws_frame(0x1, json.dumps(msg).encode(), masked=masked)
+
+    async def from_client(opcode: int, payload: bytes, raw: bytes) -> bool:
+        msg = _json_object(payload) if opcode == 0x1 else None
+        if msg is None:
+            up_writer.write(raw)
+            await up_writer.drain()
+            return True
+        forward, answer, close = await iso.from_client(msg)
+        if forward is not None:
+            observer.from_client(forward)
+            up_writer.write(raw if forward is msg else _text(forward, masked=True))
+            await up_writer.drain()
+        if answer is not None:
+            client_writer.write(_text(answer, masked=False))
+        if close:
+            client_writer.write(_ws_frame(0x8, (1000).to_bytes(2, "big"), masked=False))
+        await client_writer.drain()
+        return not close
+
+    async def from_upstream(opcode: int, payload: bytes, raw: bytes) -> bool:
+        msg = _json_object(payload) if opcode == 0x1 else None
+        if msg is None:
+            client_writer.write(raw)
+            await client_writer.drain()
+            return True
+        observer.from_upstream(msg)
+        forward, inject = iso.from_upstream(msg)
+        for command in inject:
+            up_writer.write(_text(command, masked=True))
+        if inject:
+            await up_writer.drain()
+        if forward is not None:
+            client_writer.write(raw if forward is msg else _text(forward, masked=False))
+            await client_writer.drain()
+        return True
+
+    return (
+        asyncio.ensure_future(_message_pump(client_reader, up_writer, from_client)),
+        asyncio.ensure_future(_message_pump(up_reader, client_writer, from_upstream)),
+    )
 
 
 async def start_server(gateway: CdpGateway, host: str = "0.0.0.0", port: int = LISTEN_PORT):

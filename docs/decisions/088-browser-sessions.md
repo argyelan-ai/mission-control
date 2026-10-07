@@ -150,6 +150,41 @@ Ending an agent's phase closes only tabs the agent created or nobody known
 created — never a tab another owner created that the agent merely claimed.
 While the gateway is unreachable the loop changes nothing.
 
+## Addendum 2026-10-07 — minimal isolation per session
+
+`cdp-gateway` can now isolate browser sessions, behind `CDP_GATEWAY_ISOLATE`
+(compose sets `"0"`; `"1"` after the live check; back to `"0"` needs no
+rebuild). Only `/s/<token>/` connections are affected; `/a/<slug>/` and
+unprefixed ones stay byte for byte (PRINCIPLES §3.10).
+
+- **Unit of separation = browser context.** A session's tabs are those in
+  contexts it owns — the ones its client creates (Playwright `--isolated`)
+  and one context the gateway makes for it on first need — plus tabs it
+  created. A `createTarget`, cookie or permission command without a context
+  goes to the session's context instead of Chromium's shared default context;
+  `/json/new` too. The gateway's context is disposed with the session.
+- **What a session cannot see or do:** other targets in events,
+  `getTargets` and `getBrowserContexts`; `attachToTarget`/`closeTarget`/
+  `activateTarget` or a page socket or `/json/close|activate` for a foreign
+  tab; a foreign `browserContextId`; a CDP session id it does not hold;
+  browser-wide `Storage.*` (other than cookies in its context),
+  `Tracing.start`, `Browser.executeBrowserCommand`. `Browser.close` and
+  `Browser.crash` never reach Chromium: `{}` back, and only that connection
+  ends.
+- **No hangs for others:** Playwright and Puppeteer auto-attach with
+  `waitForDebuggerOnStart`. When such a client is auto-attached to a foreign
+  tab, the gateway hides the event, resumes the tab and detaches.
+  Lab-verified with real Chromium: dropping the event without either makes
+  the other session's new tab hang.
+- **Not a sandbox.** This separates honest clients sharing one browser; a
+  page can still reach whatever the browser can reach on the network, and
+  the unprefixed and agent paths stay open on the internal network.
+
+Verified: unit and socket tests with a fake Chromium, and
+`docker/cdp-browser/test_isolation.sh` in CI — real Chromium, a
+Puppeteer-pattern client next to real Playwright, isolation on and off.
+Checked once more in the lab with real puppeteer-core 24 (omp's library).
+
 ## Alternatives
 
 - **Keep the agent as the unit, improve the guessing** → rejected: heads have

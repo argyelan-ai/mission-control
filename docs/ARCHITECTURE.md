@@ -1532,6 +1532,13 @@ Alle ADRs in `docs/decisions/`:
 
 ## Änderungshistorie (high-level)
 
+- **2026-10-07** — **Browser-session isolation (ADR-088 addendum "minimal isolation"):** `cdp-gateway` reads
+  whole WebSocket messages of `/s/<token>/` connections when `CDP_GATEWAY_ISOLATE=1` (compose: `"0"`) and filters
+  them (`SessionIsolation`): a session sees and touches only tabs in its own contexts. Tabs, cookies and
+  permissions without a context go to a gateway-made session context, which is disposed with the session.
+  Foreign auto-attached tabs are resumed and detached, so they do not hang. `Browser.close` is answered, not
+  forwarded. Agent and unprefixed connections are unchanged. Real-Chromium test
+  `docker/cdp-browser/test_isolation.sh` runs in CI.
 - **2026-10-07** — **Agent browser images (ADR-088 images step):** `cdp-browser` moves from the frozen
   `zenika/alpine-chrome` (Chromium 124) to a digest-pinned `debian:trixie-slim` with Debian's Chromium 154
   (SwiftShader WebGL), websocat as a checksum-verified static binary, `mem_limit: 2g`, `--window-size=1280,900`.
