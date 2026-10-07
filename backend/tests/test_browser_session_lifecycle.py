@@ -169,7 +169,7 @@ async def test_tabs_of_unknown_or_session_owned_tabs_open_no_phase(session: Asyn
 async def test_agent_phase_ends_after_30_minutes_without_activity(session: AsyncSession, gw, make_agent, monkeypatch):
     """Sabotage: compare against the frame interval instead of the idle limit
     -> the phase ends far too early and the 'still active' half goes red."""
-    monkeypatch.setattr(settings, "browser_idle_close_agent_tabs", True)  # opt-in (default off, F3)
+    monkeypatch.setattr(settings, "browser_idle_close_agent_tabs", True)  # explicit (default on since the F3 live test)
     agent = await make_agent(name="Alpha", slug="alpha")
     t0 = utcnow()
     gw.tab("A1", agent="alpha", idle=29 * 60)
@@ -412,12 +412,13 @@ async def test_age_limit_rolls_an_agent_phase_over_without_closing_its_tabs(
     assert report["ended"] == 1
 
 
-async def test_closing_agent_tabs_is_off_by_default():
-    """F3: whether omp recovers from a closed tab under its open connection
-    is unproven — only the record ends until a live test says otherwise."""
+async def test_closing_agent_tabs_is_on_by_default():
+    """F3: a live test showed the local omp agent recovers from a tab closed
+    under its open connection (its next browser call opened a working tab),
+    so an idle working phase also closes the agent's idle tabs by default."""
     from app.config import Settings
 
-    assert Settings.model_fields["browser_idle_close_agent_tabs"].default is False
+    assert Settings.model_fields["browser_idle_close_agent_tabs"].default is True
 
 
 # ── F2: frame retention gets through every expired row ─────────────────────
