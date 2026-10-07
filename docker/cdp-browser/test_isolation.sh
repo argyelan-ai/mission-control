@@ -9,7 +9,8 @@
 # although alpha auto-attaches with waitForDebuggerOnStart (the hang
 # regression — the gateway must resume the foreign tabs it hides); cookies
 # stay in their session; Browser.close from alpha leaves Chromium running;
-# ending a session disposes its context. With the switch off (second run)
+# ending a session disposes its context; a legacy /a/<slug>/ agent (omp's
+# container relay) still sees and drives tabs. With the switch off (second run)
 # alpha sees beta's tabs exactly as before.
 #
 # Chromium's flags are read from docker-compose.yml (the configuration that

@@ -165,6 +165,27 @@ async function main() {
   check("an unprefixed client still sees every tab (not filtered)", sharedList.includes(alphaTab) && betaIds.every((id) => sharedList.includes(id)));
   shared.close();
 
+  // A legacy agent on /a/<slug>/ (what omp's container relay sends) is not
+  // filtered: it sees every tab, opens and drives its own, owned by the agent.
+  const agent = await cdpFor("/a/omp-probe");
+  const agentList = (await agent.send("Target.getTargets")).result.targetInfos.map((t) => t.targetId);
+  check("an /a/<slug> agent still sees every tab", agentList.includes(alphaTab) && betaIds.every((id) => agentList.includes(id)));
+  const agentTab = (await agent.send("Target.createTarget", { url: "data:text/html,<title>AGENT</title>" })).result?.targetId;
+  const attached = (await agent.send("Target.attachToTarget", { targetId: agentTab, flatten: true })).result?.sessionId;
+  let title = "";
+  for (let i = 0; i < 25 && title !== "AGENT"; i++) {        // the data: page may still be loading
+    const evald = await agent.send("Runtime.evaluate", { expression: "document.title", returnByValue: true }, attached);
+    title = evald.result?.result?.value ?? JSON.stringify(evald.error);
+    if (title !== "AGENT") await sleep(200);
+  }
+  check("an /a/<slug> agent opens and drives its own tab", title === "AGENT", String(title));
+  await sleep(300);
+  const agentRow = (await targets()).find((r) => r.targetId === agentTab);
+  check("the agent's tab is attributed to the agent", agentRow?.agent === "omp-probe", JSON.stringify(agentRow));
+  check("alpha does not hear of the agent's tab", !alpha.events.some((m) => (m.params?.targetInfo?.targetId || m.params?.targetId) === agentTab));
+  await agent.send("Target.closeTarget", { targetId: agentTab });
+  agent.close();
+
   // Browser.close from alpha ends alpha's connection only.
   const closed = await alpha.send("Browser.close");
   check("Browser.close is answered with {}", JSON.stringify(closed.result) === "{}", JSON.stringify(closed));
