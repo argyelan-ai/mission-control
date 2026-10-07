@@ -81,6 +81,13 @@ is today: the operator's call.
 Every change is classified by the paths it touches. No new approval system:
 the classes map onto the existing autonomy types and levels.
 
+**Single source:** the class table lives in code,
+`backend/app/services/change_classes.py` (step B2), and its contract test
+`backend/tests/test_change_classes.py` fails when a tracked file is on no
+list. The table below shows the classes with examples; where the two
+differ, the code is the rule — a change to it is itself a security-core
+change.
+
 | Class | Recognised by (examples) | Autonomy type | Level | What the lead agent does |
 |---|---|---|---|---|
 | Reading, diagnosis, a card, a subagent, starting a local head | — | — | L1 | does it |
@@ -283,6 +290,8 @@ at L3, so an installation that does nothing keeps today's behaviour.
 
 ## References
 
+- Change classes (single source of §2): `backend/app/services/change_classes.py`,
+  contract test `backend/tests/test_change_classes.py`
 - Autonomy levels: `backend/app/services/autonomy.py` (`AUTONOMY_DEFAULTS`,
   `enforce_autonomy`); approvals: `backend/app/services/operator_approvals.py`
 - ADR gate: `backend/app/services/adr_gate.py`,
