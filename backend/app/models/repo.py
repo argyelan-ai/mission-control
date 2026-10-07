@@ -28,7 +28,7 @@ class Repo(SQLModel, table=True):
     rules_md: str | None = None  # Arbeitsregeln — injected into dispatch directives
     visibility: str = "private"  # private|public (informational, from GitHub)
     is_active: bool = True  # False = archived in MC (hidden from pickers)
-    source: str = "mc"  # mc (created by MC) | imported (existing GitHub repo)
+    source: str = "mc"  # mc (created by MC) | imported (existing GitHub repo) | scratch (heads only, head-launcher §9)
     last_synced_at: datetime | None = Field(
         default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
     )

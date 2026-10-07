@@ -37,7 +37,7 @@ from app.config import settings
 from app.database import get_session
 from app.models.repo import Repo
 from app.models.task import Task
-from app.services.heads import box_guard, files, launcher, pairs, paths, summary, transcript
+from app.services.heads import box_guard, files, launcher, pairs, paths, scratch, summary, transcript
 from app.services.heads import start as start_service
 from app.services.heads.files import parse_ts, write_backend_file
 from app.services.heads.redact import mask_text
@@ -250,6 +250,8 @@ async def restart_head(
                 },
                 mode=body.mode,
             )
+        except scratch.ScratchSourceMissing as exc:
+            raise _err(422, "scratch_source_missing", repo=exc.full_name) from exc
         except OSError as exc:
             raise _err(503, "spool_unavailable") from exc
         await _hold_and_move(session, task, spec["run_id"], reason="head_restart")

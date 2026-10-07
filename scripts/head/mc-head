@@ -245,7 +245,41 @@ def load_spec(run_id: str) -> dict:
     task_id = spec.get("task_id")
     if task_id is not None and not _is_uuid(task_id):
         raise SpecInvalid("task_id", "uuid or null")
+    source = spec.get("scratch_source")
+    if source is not None and not scratch_source_allowed(source):
+        raise SpecInvalid("scratch_source", "absolute local path or git URL, nothing inside heads/")
     return spec
+
+
+# Where a fresh scratch repo's bare origin may be built from (the repos row's
+# source, passed by the backend). Read-only for mc-head: it is cloned with
+# --no-local and never written. No options (leading "-"), no ext::, no
+# credentials in a URL, no whitespace, no "..", nothing inside heads/ (runs,
+# tokens, locks). Mirrors SOURCE_RE in backend/app/services/heads/scratch.py.
+SCRATCH_SOURCE_RE = re.compile(
+    r"^(/[^\s\x00-\x1f\x7f]*"
+    r"|file:///[^\s\x00-\x1f\x7f]*"
+    r"|https://[^\s\x00-\x1f\x7f/@]+/[^\s\x00-\x1f\x7f]+"
+    r"|ssh://([A-Za-z0-9._-]+@)?[A-Za-z0-9.-]+(:[0-9]+)?/[^\s\x00-\x1f\x7f]+"
+    r"|[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:[A-Za-z0-9._/-]+)$"
+)
+
+
+def scratch_source_allowed(source) -> bool:
+    if not isinstance(source, str) or len(source) > 1000 or not SCRATCH_SOURCE_RE.match(source):
+        return False
+    if "/../" in source or source.endswith("/..") or "/./" in source:
+        return False
+    local = source[len("file://"):] if source.startswith("file://") else source
+    if local.startswith("/"):
+        try:
+            path = Path(local).resolve()
+            heads = heads_root().resolve()
+        except (OSError, RuntimeError):
+            return False
+        if path == heads or heads in path.parents:
+            return False
+    return True
 
 
 def read_head_env(run_id: str) -> dict:
@@ -748,6 +782,114 @@ def sandbox_exec() -> str:
 
 def sandbox_enabled() -> bool:
     return os.environ.get("MC_HEAD_SANDBOX") == "1" and Path(sandbox_exec()).exists()
+
+
+class ScratchPrepareError(RuntimeError):
+    """A fresh scratch repo could not be prepared; ``reason`` is the run's
+    exit reason (``scratch_source_missing`` / ``scratch_source_failed``)."""
+
+    def __init__(self, reason: str, detail: str) -> None:
+        super().__init__(detail)
+        self.reason = reason
+        self.detail = detail
+
+
+#: Scratch repos mc-head prepares itself: ``scratch/<name>`` → bare origin
+#: ``heads/scratch-origin/<name>.git`` + clone ``heads/clones/scratch--<name>``
+#: (the layout the sandbox's SCRATCH_ORIGIN grant already expects).
+SCRATCH_AUTO_RE = re.compile(r"^scratch/([A-Za-z0-9][A-Za-z0-9_.-]{0,99})$")
+
+
+def _fresh_dir(target: Path) -> Path:
+    """Unused sibling path to build ``target`` in; renamed into place at the end."""
+    return target.with_name(f".{target.name}.mc-head-{os.getpid()}-{uuid.uuid4().hex[:8]}")
+
+
+def _move_into_place(tmp: Path, target: Path) -> bool:
+    """Atomic publish. False when another start won the race (tmp removed)."""
+    try:
+        os.rename(tmp, target)
+        return True
+    except OSError:
+        shutil.rmtree(tmp, ignore_errors=True)
+        if target.is_dir() and not target.is_symlink():
+            return False
+        raise
+
+
+def prepare_scratch(spec: dict) -> dict | None:
+    """Build a fresh scratch repo's bare origin and clone (spec §9).
+
+    Only for ``scratch/<name>`` listed in heads/scratch-repos and only when
+    the clone is missing. The bare origin is reused when it exists; otherwise
+    it is cloned (``--bare --no-local``, upload-pack only) from the run's
+    ``scratch_source`` and its remote to that source is dropped. Both are
+    built next to their target and renamed into place, so a failure or a
+    concurrent start never leaves half a repo behind. Returns what was done
+    (for status.json), or None when there was nothing to do.
+    """
+    full_name = spec["repo_full_name"]
+    m = SCRATCH_AUTO_RE.match(full_name)
+    clone = clones_root() / full_name.replace("/", "--")
+    if not m or full_name not in scratch_repos() or (clone / ".git").exists():
+        return None
+    name = m.group(1)
+    origin = heads_root() / "scratch-origin" / f"{name}.git"
+    base = spec["base_branch"]
+    done = {"origin": "existing", "clone": "created"}
+    if origin.is_symlink() or (origin.exists() and not origin.is_dir()):
+        raise ScratchPrepareError(
+            "scratch_source_failed", f"scratch repo {full_name}: {origin.name} in scratch-origin is not a folder"
+        )
+    if not origin.exists():
+        source = spec.get("scratch_source")
+        if not source:
+            raise ScratchPrepareError(
+                "scratch_source_missing", f"scratch repo {full_name} has no source; add it under Repos"
+            )
+        origin.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _fresh_dir(origin)
+        try:
+            res = _git(["clone", "-q", "--bare", "--no-local", "--", source, str(tmp)], check=False)
+            if res.returncode != 0:
+                raise ScratchPrepareError(
+                    "scratch_source_failed",
+                    f"scratch repo {full_name}: cloning the source failed: {res.stderr.strip()[-300:]}",
+                )
+            has_base = _git(["--git-dir", str(tmp), "rev-parse", "--verify", "--quiet", f"refs/heads/{base}"],
+                            check=False)
+            if has_base.returncode != 0:
+                raise ScratchPrepareError(
+                    "scratch_source_failed", f"scratch repo {full_name}: the source has no branch {base}"
+                )
+            # The head can write this origin: it must not point back at the
+            # operator's source.
+            _git(["--git-dir", str(tmp), "remote", "remove", "origin"], check=False)
+        except BaseException:
+            shutil.rmtree(tmp, ignore_errors=True)
+            raise
+        if _move_into_place(tmp, origin):
+            done["origin"] = "created"
+            log(f"scratch repo {full_name}: bare origin created")
+    clones_root().mkdir(parents=True, exist_ok=True)
+    if clone.exists() or clone.is_symlink():
+        raise ScratchPrepareError(
+            "scratch_source_failed", f"scratch repo {full_name}: {clone.name} exists but is not a git clone"
+        )
+    tmp = _fresh_dir(clone)
+    # The origin is head-writable: clone it like a fetch (--no-local, no
+    # checkout of head-written files outside the sandbox). Worktrees are
+    # added per run (prepare_worktree).
+    res = _git(["clone", "-q", "--no-local", "--no-checkout", "--", str(origin), str(tmp)], check=False)
+    if res.returncode != 0:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise ScratchPrepareError(
+            "scratch_source_failed", f"scratch repo {full_name}: cloning the bare origin failed: {res.stderr.strip()[-300:]}"
+        )
+    if not _move_into_place(tmp, clone):
+        return None
+    log(f"scratch repo {full_name}: clone created")
+    return done
 
 
 def ensure_clone(full_name: str) -> Path:
@@ -1286,12 +1428,19 @@ def cmd_start(run_id: str) -> int:
         return 3
     run = run_dir(run_id)
     try:
+        prepared = prepare_scratch(spec)
+        if prepared:
+            write_status(run_id, scratch_prepared=prepared)
         clone = ensure_clone(spec["repo_full_name"])
         prepare_worktree(spec, clone)
         # continue mode: a tip pushed by the previous run is not this run's push
         write_status(run_id, branch_tip_at_start=pushed_branch_tip(spec) if spec["mode"] == "continue" else None)
         write_shims(run)
         (run / "home").mkdir(exist_ok=True)
+    except ScratchPrepareError as exc:
+        exit_status(run_id, exc.reason, detail=exc.detail[-500:])
+        print(f"{exc.reason} {exc.detail}")
+        return 4
     except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
         exit_status(run_id, "prepare_failed", detail=str(exc)[-500:])
         print(f"prepare_failed {exc}")
