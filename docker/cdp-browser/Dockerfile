@@ -41,13 +41,16 @@ RUN apt-get update \
 # CDP roundtrip, not just the HTTP /json/version probe that missed the
 # 2026-09-13 wedged-socket incident. No Debian package, and the upstream
 # container image is musl-only: the static release binary, checksum-verified.
-ARG TARGETARCH
+# The architecture comes from the image itself (dpkg), not from BuildKit's
+# TARGETARCH — a classic `docker build` leaves that empty, and a silent
+# amd64 fallback would put the wrong binary into an arm64 image.
 ARG WEBSOCAT_VERSION=1.14.1
 RUN set -eu; \
-    case "${TARGETARCH:-amd64}" in \
+    dpkg_arch="$(dpkg --print-architecture)"; \
+    case "${dpkg_arch}" in \
       arm64) arch=aarch64; sum=711a69576a2ff473fb01a90ffafb571c2ed019e55479d7ae71b12c2eadeb7011 ;; \
       amd64) arch=x86_64;  sum=66f8dd3a0394761556339117f8bb5123bddefd44e087af2a72ec22b0bd08d514 ;; \
-      *) echo "unsupported arch: ${TARGETARCH}" >&2; exit 1 ;; \
+      *) echo "unsupported arch: ${dpkg_arch}" >&2; exit 1 ;; \
     esac; \
     wget -qO /usr/local/bin/websocat \
       "https://github.com/vi/websocat/releases/download/v${WEBSOCAT_VERSION}/websocat.${arch}-unknown-linux-musl"; \
