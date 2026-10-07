@@ -188,3 +188,11 @@ test("two first requests at the same moment share one child", async (t) => {
   assert.equal(new Set([a, b, c].map((r) => json(r).pid)).size, 1);
   assert.equal(router.childCount(), 1);
 });
+
+test("an unknown router flag is refused instead of starting a server that never exits", async () => {
+  // CI ran `docker run <image> --version` after the entrypoint became the
+  // router: it started listening and the job hung for half an hour.
+  const { parseCli } = await import("../router.mjs");
+  assert.throws(() => parseCli(["--version"]), /unknown router flag/);
+  assert.equal(parseCli(["--listen", "9000", "--", "--version"]).childArgs[0], "--version");
+});

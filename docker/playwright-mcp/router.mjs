@@ -261,10 +261,19 @@ export function createRouter({
 
 // CLI: router.mjs --gateway <url> --legacy-cdp-endpoint <url> [--listen 8931]
 //                 [--idle-minutes 30] [--max-children 16] -- <playwright-mcp args>
-function parseCli(argv) {
+const OWN_FLAGS = new Set(["--listen", "--host", "--gateway", "--legacy-cdp-endpoint", "--idle-minutes", "--max-children"]);
+
+export function parseCli(argv) {
   const sep = argv.indexOf("--");
   const own = sep >= 0 ? argv.slice(0, sep) : argv;
   const childArgs = sep >= 0 ? argv.slice(sep + 1) : [];
+  // Every router flag takes a value; anything else is a mistake (e.g. a
+  // playwright-mcp flag placed before `--`) and must not start a server.
+  for (let i = 0; i < own.length; i += 2) {
+    if (!OWN_FLAGS.has(own[i]) || own[i + 1] === undefined) {
+      throw new Error(`unknown router flag: ${own[i]} (playwright-mcp flags go after --)`);
+    }
+  }
   const get = (name, fallback) => {
     const i = own.indexOf(name);
     return i >= 0 ? own[i + 1] : fallback;
@@ -281,7 +290,13 @@ function parseCli(argv) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] || "").href) {
-  const cli = parseCli(process.argv.slice(2));
+  let cli;
+  try {
+    cli = parseCli(process.argv.slice(2));
+  } catch (err) {
+    process.stderr.write(`router: ${err.message}\n`);
+    process.exit(2);
+  }
   const router = createRouter(cli);
   await router.listen(cli.listen, cli.host);
   process.stderr.write(`router: listening on ${cli.host}:${cli.listen}\n`);
