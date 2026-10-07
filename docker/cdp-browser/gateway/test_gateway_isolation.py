@@ -16,6 +16,7 @@ The real-Chromium half (a Puppeteer-pattern client next to Playwright,
 including the waitForDebugger hang regression) is `../test_isolation.sh`.
 """
 import asyncio
+import base64
 import json
 import sys
 from pathlib import Path
@@ -575,7 +576,7 @@ async def test_wire_json_new_needs_put_like_chromium(rig):
 async def _raw_ws(port, path):
     reader, writer = await asyncio.open_connection("127.0.0.1", port)
     writer.write((f"GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
-                  "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n").encode())
+                  f"Sec-WebSocket-Key: {base64.b64encode(bytes(16)).decode()}\r\nSec-WebSocket-Version: 13\r\n\r\n").encode())
     await writer.drain()
     head = await reader.readuntil(b"\r\n\r\n")
     assert b" 101 " in head.split(b"\r\n", 1)[0]
