@@ -166,11 +166,13 @@ unprefixed ones stay byte for byte (PRINCIPLES §3.10).
 - **What a session cannot see or do:** other targets in events,
   `getTargets` and `getBrowserContexts`; `attachToTarget`/`closeTarget`/
   `activateTarget` or a page socket or `/json/close|activate` for a foreign
-  tab; a foreign `browserContextId`; a CDP session id it does not hold;
-  browser-wide `Storage.*` (other than cookies in its context),
-  `Tracing.start`, `Browser.executeBrowserCommand`. `Browser.close` and
-  `Browser.crash` never reach Chromium: `{}` back, and only that connection
-  ends.
+  tab; a foreign `browserContextId` or window; a CDP session id it does not
+  hold (top level or in params); non-flat ("wrapped") sessions. Browser-level
+  commands are an allowlist (what Puppeteer and Playwright use for their own
+  tabs and contexts); anything else browser-wide is refused. Commands on a
+  tab's own CDP session are not limited (Chromium scopes them to that tab and
+  its context's storage). `Browser.close` and `Browser.crash` never reach
+  Chromium: `{}` back, and only that connection ends.
 - **No hangs for others:** Playwright and Puppeteer auto-attach with
   `waitForDebuggerOnStart`. When such a client is auto-attached to a foreign
   tab, the gateway hides the event, resumes the tab and detaches.

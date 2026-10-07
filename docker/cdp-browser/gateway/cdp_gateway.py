@@ -160,7 +160,7 @@ import uuid
 from dataclasses import dataclass, field
 from http import HTTPStatus
 from typing import Callable, Optional
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import websockets
 
@@ -234,26 +234,63 @@ _ISOLATION_DEFAULT_CONTEXT_METHODS = frozenset({
     "Browser.resetPermissions",
     "Browser.setPermission",
     "Browser.setDownloadBehavior",
+    "Browser.cancelDownload",
 })
+# Browser-level commands an isolated session may send at all (allowlist): what
+# Puppeteer and Playwright use to drive their own tabs and contexts. Anything
+# else at browser level (SystemInfo, Tethering, Target.setRemoteLocations,
+# histograms, ...) reaches beyond the session and is refused; commands on a
+# tab's own CDP session concern that tab and are not limited this way.
+_ISOLATION_BROWSER_METHODS = frozenset({
+    "Target.setDiscoverTargets",
+    "Target.setAutoAttach",
+    "Target.autoAttachRelated",
+    "Target.createTarget",
+    "Target.closeTarget",
+    "Target.activateTarget",
+    "Target.attachToTarget",
+    "Target.attachToBrowserTarget",
+    "Target.detachFromTarget",
+    "Target.getTargets",
+    "Target.getTargetInfo",
+    "Target.createBrowserContext",
+    "Target.disposeBrowserContext",
+    "Target.getBrowserContexts",
+    "Browser.getVersion",
+    "Browser.getWindowForTarget",
+    "Browser.getWindowBounds",
+    "Browser.setWindowBounds",
+    "Browser.setContentsSize",
+    "Browser.grantPermissions",
+    "Browser.resetPermissions",
+    "Browser.setPermission",
+    "Browser.setDownloadBehavior",
+    "Browser.cancelDownload",
+    "Storage.getCookies",
+    "Storage.setCookies",
+    "Storage.clearCookies",
+})
+# Commands that address a browser window by id: only windows of own tabs
+# (learned from Browser.getWindowForTarget).
+_ISOLATION_WINDOW_METHODS = frozenset({"Browser.getWindowBounds", "Browser.setWindowBounds", "Browser.setContentsSize"})
+# Non-flat ("wrapped") sessions would carry commands inside a string param the
+# filter cannot see; an isolated session must use flat sessions.
+_ISOLATION_FLATTEN_METHODS = frozenset({"Target.setAutoAttach", "Target.attachToTarget"})
 # Never forwarded: answered with `{}`; the first two also end the connection.
 _ISOLATION_ENDS_CONNECTION = frozenset({"Browser.close", "Browser.crash"})
 _ISOLATION_SWALLOWED = frozenset({"Browser.crashGpuProcess"})
-# Browser-wide commands that would reach other sessions (browser-level only;
-# on a tab's own session they concern that tab). Every other browser-level
-# `Storage.*` besides the cookie trio is refused as well.
-_ISOLATION_REFUSED = frozenset({"Tracing.start", "Browser.executeBrowserCommand"})
-_ISOLATION_COOKIE_METHODS = frozenset({"Storage.getCookies", "Storage.setCookies", "Storage.clearCookies"})
 # Answers this filter rewrites or learns sessions from.
 _ISOLATION_TRACKED = frozenset({
     "Target.getTargets",
     "Target.getBrowserContexts",
     "Target.attachToTarget",
     "Target.attachToBrowserTarget",
+    "Browser.getWindowForTarget",
 })
 _NO_TARGET = "No target with given id found"
 # One isolated message may be this large (a full-page screenshot); a bigger
 # frame ends the connection instead of buffering without bound.
-_ISOLATED_MAX_MESSAGE = 256 * 1024 * 1024
+_ISOLATED_MAX_MESSAGE = 64 * 1024 * 1024
 
 
 def normalize_slug(raw: Optional[str]) -> Optional[str]:
@@ -1102,6 +1139,8 @@ class SessionIsolation:
         # Targets this client was told about: their targetDestroyed (which
         # carries no context) passes, other ones do not.
         self._announced: set[str] = set()
+        # Browser window ids of own tabs (Browser.getWindowForTarget).
+        self._windows: set[int] = set()
         self._pending: dict[tuple[Optional[str], int], str] = {}
         self._own_pending: set[tuple[Optional[str], int]] = set()
         self._next_id = _OWN_MSG_ID_BASE
@@ -1151,25 +1190,38 @@ class SessionIsolation:
         session_id = msg.get("sessionId")
         if session_id is not None and session_id not in self._sessions:
             return None, self._refuse(msg, -32001, "Session with given id not found."), False
+        if msg_id >= _OWN_MSG_ID_BASE:
+            # The gateway's own commands use these ids on this connection.
+            return None, self._refuse(msg, -32600, f"command ids from {_OWN_MSG_ID_BASE} on are reserved"), False
         browser_level = self._browser_level(session_id)
         if browser_level and method in _ISOLATION_ENDS_CONNECTION:
             logger.info("cdp_gateway: isolated %s: %s answered, connection ends", self.key, method)
             return None, self._answer(msg, result={}), True
         if browser_level and method in _ISOLATION_SWALLOWED:
             return None, self._answer(msg, result={}), False
-        if browser_level and (
-            method in _ISOLATION_REFUSED
-            or (method.startswith("Storage.") and method not in _ISOLATION_COOKIE_METHODS)
-        ):
+        if browser_level and method not in _ISOLATION_BROWSER_METHODS:
             return None, self._refuse(msg, -32000, "not allowed for an isolated browser session"), False
         params = msg.get("params") if isinstance(msg.get("params"), dict) else {}
+        if method == "Target.sendMessageToTarget" or (
+            method in _ISOLATION_FLATTEN_METHODS and params.get("flatten") is not True
+        ):
+            return None, self._refuse(msg, -32000, "an isolated browser session needs flat sessions (flatten: true)"), False
         if "targetId" in params and not self._owns_target(params["targetId"]):
             return None, self._refuse(msg, -32602, _NO_TARGET), False
+        if "sessionId" in params and params["sessionId"] not in self._sessions:
+            return None, self._refuse(msg, -32001, "Session with given id not found."), False
+        if method in _ISOLATION_WINDOW_METHODS and params.get("windowId") not in self._windows:
+            return None, self._refuse(msg, -32000, "Browser window not found"), False
+        if browser_level and method == "Browser.getWindowForTarget" and "targetId" not in params:
+            return None, self._refuse(msg, -32602, _NO_TARGET), False
         if "browserContextId" in params:
-            if not self._owns_ctx(params["browserContextId"]):
-                return None, self._refuse(
-                    msg, -32602, f"Failed to find browser context with id {params['browserContextId']}",
-                ), False
+            ctx = params["browserContextId"]
+            if not self._owns_ctx(ctx):
+                return None, self._refuse(msg, -32602, f"Failed to find browser context with id {ctx}"), False
+            if method == "Target.disposeBrowserContext" and ctx in self.state.session_contexts.values():
+                # The gateway's session context goes with the session; a
+                # client disposing it would strand every later newPage().
+                return None, self._refuse(msg, -32000, "the session's own context is disposed with the session"), False
         elif browser_level and method in _ISOLATION_DEFAULT_CONTEXT_METHODS:
             try:
                 ctx = await self._default_context()
@@ -1202,9 +1254,8 @@ class SessionIsolation:
         if method in ("Target.targetCreated", "Target.targetInfoChanged"):
             info = params.get("targetInfo") if isinstance(params.get("targetInfo"), dict) else {}
             tid, ctx = info.get("targetId"), info.get("browserContextId")
-            if isinstance(tid, str):
-                self._known_ctx[tid] = ctx
             if self._owns_target(tid, ctx):
+                self._known_ctx[tid] = ctx
                 self._announced.add(tid)
                 return msg, []
             return None, []
@@ -1230,8 +1281,6 @@ class SessionIsolation:
         child = params.get("sessionId")
         info = params.get("targetInfo") if isinstance(params.get("targetInfo"), dict) else {}
         tid, ctx = info.get("targetId"), info.get("browserContextId")
-        if isinstance(tid, str):
-            self._known_ctx[tid] = ctx
         if not isinstance(child, str):
             return None, []
         parent_ok = parent is None or parent in self._sessions
@@ -1244,8 +1293,8 @@ class SessionIsolation:
             return msg, []
         if parent_ok and self._owns_target(tid, ctx):
             self._sessions.add(child)
-            if isinstance(tid, str):
-                self._announced.add(tid)
+            self._known_ctx[tid] = ctx
+            self._announced.add(tid)
             return msg, []
         # A foreign target this client was auto-attached to: let it go. If it
         # waits for a debugger (a NEW tab, waitForDebuggerOnStart), resume it
@@ -1268,15 +1317,18 @@ class SessionIsolation:
             own = []
             for info in infos:
                 tid, ctx = info.get("targetId"), info.get("browserContextId")
-                if isinstance(tid, str):
-                    self._known_ctx[tid] = ctx
                 if self._owns_target(tid, ctx):
+                    self._known_ctx[tid] = ctx
                     self._announced.add(tid)
                     own.append(info)
             return {**msg, "result": {**result, "targetInfos": own}}
         if method == "Target.getBrowserContexts":
             ids = [c for c in result.get("browserContextIds") or [] if self._owns_ctx(c)]
             return {**msg, "result": {**result, "browserContextIds": ids}}
+        if method == "Browser.getWindowForTarget":
+            if isinstance(result.get("windowId"), int):
+                self._windows.add(result["windowId"])
+            return msg
         sid = result.get("sessionId")
         if isinstance(sid, str):
             self._sessions.add(sid)
@@ -1431,6 +1483,11 @@ class CdpGateway:
             ctx = (reply.get("result") or {}).get("browserContextId")
             if not isinstance(ctx, str):
                 raise RuntimeError((reply.get("error") or {}).get("message", "no browser context"))
+            if not any(e.session_id == session_id for e in self.state.sessions.values()):
+                # The session ended while the context was being made: it
+                # would have no owner left to dispose it.
+                await self._cdp_call([("Target.disposeBrowserContext", {"browserContextId": ctx})])
+                raise RuntimeError("browser session ended")
             self.state.record_context_owner(ctx, key)
             self.state.session_contexts[session_id] = ctx
             logger.info("cdp_gateway: isolated %s: own browser context made", key)
@@ -1777,7 +1834,10 @@ class CdpGateway:
                 if not self.state.owns_target(agent, route.rsplit("/", 1)[1]):
                     return 404, "text/plain", b"No such target id"
             elif route == "/json/new":
-                isolated_new = local_path.split("?", 1)[1] if "?" in local_path else "about:blank"
+                if method != "PUT":
+                    # Chromium's own rule (it refuses GET since 111).
+                    return 405, "text/plain", b"Using unsafe HTTP verb GET to invoke /json/new. This action supports only PUT verb."
+                isolated_new = unquote(local_path.split("?", 1)[1]) if "?" in local_path else "about:blank"
         try:
             if isolated_new is not None:
                 status, content_type, body = await self._isolated_json_new(agent, isolated_new)
@@ -1944,9 +2004,12 @@ class CdpGateway:
             return
         upstream_path = strip_agent_prefix(req.target)
         page = page_id_from_path(upstream_path)
-        if self._isolated(agent) and page and not self.state.owns_target(agent, page):
-            await _respond(client_writer, 404, "text/plain", b"cdp-gateway: no such tab in this browser session")
-            return
+        if self._isolated(agent) and page:
+            if not self.state.owns_target(agent, page):
+                await _respond(client_writer, 404, "text/plain", b"cdp-gateway: no such tab in this browser session")
+                return
+            # Exactly the tab that was checked, whatever the path looked like.
+            upstream_path = f"/devtools/page/{page}"
         me = asyncio.current_task()
         if me is not None:
             self._live_conns.setdefault(agent, set()).add(me)

@@ -89,10 +89,10 @@ async def test_foreign_tabs_cannot_be_attached_closed_or_activated():
     iso, _ = _iso()
     for method in ("Target.attachToTarget", "Target.closeTarget", "Target.activateTarget", "Target.getTargetInfo"):
         for tid in ("T-OTHER", "T-AGENT", "T-DEFAULT", "T-UNKNOWN"):
-            up, back, _ = await iso.from_client({"id": 3, "method": method, "params": {"targetId": tid}})
+            up, back, _ = await iso.from_client({"id": 3, "method": method, "params": {"targetId": tid, "flatten": True}})
             assert up is None, (method, tid)
             assert back["error"]["message"] == "No target with given id found"
-        up, back, _ = await iso.from_client({"id": 4, "method": method, "params": {"targetId": "T-ME"}})
+        up, back, _ = await iso.from_client({"id": 4, "method": method, "params": {"targetId": "T-ME", "flatten": True}})
         assert up is not None and back is None, method
 
 
@@ -125,7 +125,10 @@ async def test_cookies_without_a_context_are_the_sessions_own():
 @pytest.mark.asyncio
 async def test_browser_wide_commands_that_reach_other_sessions_are_refused():
     iso, _ = _iso()
-    for method in ("Storage.clearDataForOrigin", "Tracing.start", "Browser.executeBrowserCommand"):
+    for method in (
+        "Storage.clearDataForOrigin", "Tracing.start", "Browser.executeBrowserCommand",
+        "SystemInfo.getProcessInfo", "Target.setRemoteLocations", "Browser.getHistograms", "Tethering.bind",
+    ):
         up, back, _ = await iso.from_client({"id": 12, "method": method, "params": {"origin": "http://x"}})
         assert up is None and "error" in back, method
 
@@ -135,6 +138,73 @@ async def test_a_session_id_this_connection_does_not_hold_is_refused():
     iso, _ = _iso()
     up, back, _ = await iso.from_client({"id": 13, "sessionId": "FOREIGN", "method": "Runtime.evaluate", "params": {}})
     assert up is None and back["sessionId"] == "FOREIGN" and "error" in back
+
+
+@pytest.mark.asyncio
+async def test_wrapped_non_flat_sessions_are_refused():
+    """A non-flat session carries commands inside a string the filter cannot
+    read (`Target.sendMessageToTarget`): only flat sessions are allowed."""
+    iso, _ = _iso()
+    for msg in (
+        {"id": 60, "method": "Target.sendMessageToTarget", "params": {"message": "{}", "sessionId": "S"}},
+        {"id": 61, "method": "Target.attachToTarget", "params": {"targetId": "T-ME"}},
+        {"id": 62, "method": "Target.attachToTarget", "params": {"targetId": "T-ME", "flatten": False}},
+        {"id": 63, "method": "Target.setAutoAttach", "params": {"autoAttach": True, "waitForDebuggerOnStart": True}},
+    ):
+        up, back, _ = await iso.from_client(msg)
+        assert up is None and "error" in back, msg
+
+
+@pytest.mark.asyncio
+async def test_a_session_id_inside_params_must_be_one_this_connection_holds():
+    iso, _ = _iso()
+    up, back, _ = await iso.from_client({"id": 64, "method": "Target.detachFromTarget", "params": {"sessionId": "S-FOREIGN"}})
+    assert up is None and "error" in back
+    iso.from_upstream({"method": "Target.attachedToTarget",
+                       "params": {"sessionId": "S-MINE", "targetInfo": _info("T-ME", "CTX-ME"), "waitingForDebugger": False}})
+    up, back, _ = await iso.from_client({"id": 65, "method": "Target.detachFromTarget", "params": {"sessionId": "S-MINE"}})
+    assert up is not None and back is None
+
+
+@pytest.mark.asyncio
+async def test_only_windows_of_own_tabs_can_be_moved():
+    iso, _ = _iso()
+    up, back, _ = await iso.from_client({"id": 66, "method": "Browser.setWindowBounds", "params": {"windowId": 7, "bounds": {}}})
+    assert up is None and "error" in back
+    up, back, _ = await iso.from_client({"id": 67, "method": "Browser.getWindowForTarget", "params": {}})
+    assert up is None and "error" in back                        # at browser level: name the tab
+    await iso.from_client({"id": 68, "method": "Browser.getWindowForTarget", "params": {"targetId": "T-ME"}})
+    iso.from_upstream({"id": 68, "result": {"windowId": 7, "bounds": {}}})
+    up, back, _ = await iso.from_client({"id": 69, "method": "Browser.setWindowBounds", "params": {"windowId": 7, "bounds": {}}})
+    assert up is not None and back is None
+
+
+@pytest.mark.asyncio
+async def test_the_gateway_made_session_context_cannot_be_disposed_by_the_client():
+    st = _state()
+    st.session_contexts[ME[2:]] = "CTX-ME"
+    iso, _ = _iso(st)
+    up, back, _ = await iso.from_client({"id": 70, "method": "Target.disposeBrowserContext", "params": {"browserContextId": "CTX-ME"}})
+    assert up is None and "error" in back
+    st.ctx_owner["CTX-MINE-OWN"] = ME                              # a context the client made itself
+    up, back, _ = await iso.from_client({"id": 71, "method": "Target.disposeBrowserContext", "params": {"browserContextId": "CTX-MINE-OWN"}})
+    assert up is not None and back is None
+
+
+@pytest.mark.asyncio
+async def test_command_ids_the_gateway_uses_are_refused_for_the_client():
+    iso, _ = _iso()
+    up, back, _ = await iso.from_client({"id": cdp_gateway._OWN_MSG_ID_BASE, "method": "Target.getTargets"})
+    assert up is None and "error" in back
+
+
+def test_foreign_targets_are_not_remembered():
+    iso, _ = _iso()
+    for n in range(50):
+        iso.from_upstream({"method": "Target.targetCreated", "params": {"targetInfo": _info(f"T-F{n}", "CTX-OTHER")}})
+        iso.from_upstream({"method": "Target.attachedToTarget",
+                           "params": {"sessionId": f"S{n}", "targetInfo": _info(f"T-G{n}", "CTX-OTHER"), "waitingForDebugger": False}})
+    assert iso._known_ctx == {} and iso._announced == set()
 
 
 # ── Chromium -> client ───────────────────────────────────────────────────
@@ -269,6 +339,8 @@ class FakeChromium:
         self.paths: list[str] = []
         self.conns: list = []
         self.contexts = 0
+        self.ctx_delay = 0.0
+        self.binary: list[bytes] = []
         self.server = None
         self.port = None
 
@@ -284,9 +356,13 @@ class FakeChromium:
             self.conns.append(ws)
             try:
                 async for raw in ws:
+                    if isinstance(raw, bytes):
+                        self.binary.append(raw)
+                        continue
                     msg = json.loads(raw)
                     self.received.append(msg)
                     if msg.get("method") == "Target.createBrowserContext":
+                        await asyncio.sleep(self.ctx_delay)
                         self.contexts += 1
                         await ws.send(json.dumps({"id": msg["id"], "result": {"browserContextId": f"CTX-GW-{self.contexts}"}}))
                     elif msg.get("method") == "Target.createTarget" and msg.get("id", 0) >= cdp_gateway._OWN_MSG_ID_BASE:
@@ -395,7 +471,7 @@ async def test_wire_large_and_fragmented_messages_pass_intact(rig):
         big = "x" * 200_000
         await ws.send(json.dumps({"id": 2, "method": "Target.setDiscoverTargets", "params": {"discover": True, "pad": big}}))
         # A fragmented client message (websockets sends an iterable as fragments).
-        frag = json.dumps({"id": 3, "method": "Target.setAutoAttach", "params": {"autoAttach": True, "pad": big}})
+        frag = json.dumps({"id": 3, "method": "Target.setAutoAttach", "params": {"autoAttach": True, "flatten": True, "pad": big}})
         await ws.send([frag[:1000], frag[1000:150_000], frag[150_000:]])
         for _ in range(100):
             if len(fake.received) >= 3:
@@ -471,3 +547,74 @@ async def test_wire_json_close_and_activate_refuse_foreign_tabs(rig):
     for route in ("close", "activate"):
         status, _c, _b = await gw.handle_http(f"/s/{TOKEN_ME}/json/{route}/T-OTHER", {}, None, "GET")
         assert status == 404, route
+
+
+@pytest.mark.asyncio
+async def test_wire_a_context_made_while_the_session_ends_is_disposed_at_once(rig):
+    fake, make = rig
+    gw, _port = await make()
+    fake.ctx_delay = 0.3
+    attempt = asyncio.ensure_future(gw._session_context(ME))
+    await asyncio.sleep(0.1)
+    await gw.end_session(TOKEN_ME)
+    with pytest.raises(RuntimeError):
+        await attempt
+    disposed = [m["params"]["browserContextId"] for m in fake.received if m.get("method") == "Target.disposeBrowserContext"]
+    assert disposed == ["CTX-GW-1"]
+    assert "CTX-GW-1" not in gw.state.ctx_owner
+
+
+@pytest.mark.asyncio
+async def test_wire_json_new_needs_put_like_chromium(rig):
+    _fake, make = rig
+    gw, port = await make()
+    status, _c, _b = await gw.handle_http(f"/s/{TOKEN_ME}/json/new?about:blank", {"Host": f"127.0.0.1:{port}"}, None, "GET")
+    assert status == 405
+
+
+async def _raw_ws(port, path):
+    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+    writer.write((f"GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                  "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n").encode())
+    await writer.drain()
+    head = await reader.readuntil(b"\r\n\r\n")
+    assert b" 101 " in head.split(b"\r\n", 1)[0]
+    return reader, writer
+
+
+def _client_frame(opcode, payload, fin=True):
+    head = bytes([(0x80 if fin else 0) | opcode])
+    mask = b"\x01\x02\x03\x04"
+    n = len(payload)
+    head += bytes([0x80 | n]) if n < 126 else bytes([0x80 | 126]) + n.to_bytes(2, "big")
+    return head + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+
+
+@pytest.mark.asyncio
+async def test_wire_a_ping_between_fragments_and_a_binary_frame_pass(rig):
+    fake, make = rig
+    _gw, port = await make()
+    reader, writer = await _raw_ws(port, f"/s/{TOKEN_ME}/devtools/browser/x")
+    body = json.dumps({"id": 80, "method": "Target.getBrowserContexts"}).encode()
+    writer.write(_client_frame(0x1, body[:10], fin=False))
+    writer.write(_client_frame(0x9, b"hi"))                       # ping in the middle of a message
+    writer.write(_client_frame(0x0, body[10:], fin=True))
+    writer.write(_client_frame(0x2, b"\x00\x01binary"))
+    await writer.drain()
+    for _ in range(50):
+        if any(m.get("id") == 80 for m in fake.received):
+            break
+        await asyncio.sleep(0.02)
+    assert any(m.get("id") == 80 for m in fake.received)          # the joined message arrived whole
+    pong = await asyncio.wait_for(reader.readexactly(4), 2)       # Chromium's pong came back through
+    assert pong[0] & 0x0F == 0xA
+    for _ in range(50):
+        if fake.binary:
+            break
+        await asyncio.sleep(0.02)
+    assert fake.binary == [b"\x00\x01binary"]                    # binary frames are passed as they are
+    writer.write(_client_frame(0x8, (1000).to_bytes(2, "big")))  # close: answered, connection ends
+    await writer.drain()
+    rest = await asyncio.wait_for(reader.read(), 3)
+    assert rest[:1] and rest[0] & 0x0F == 0x8
+    writer.close()
