@@ -138,6 +138,12 @@ def test_playwright_mcp_entrypoint_is_the_router():
     assert "COPY router.mjs /opt/router/router.mjs" in text
 
 
+def test_playwright_mcp_router_runs_under_init():
+    # The router is PID 1 with many children: without init, exited children
+    # stay zombies and SIGTERM is not forwarded.
+    assert _service("playwright-mcp").get("init") is True
+
+
 def test_router_sends_sessions_through_the_gateway_and_keeps_the_legacy_path():
     args = _service("playwright-mcp")["command"]
     own, child = args[: args.index("--")], args[args.index("--") + 1:]

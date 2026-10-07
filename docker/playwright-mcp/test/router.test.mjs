@@ -3,11 +3,14 @@
 // Run: node --test docker/playwright-mcp/test/
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import http from "node:http";
+import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { createRouter } from "../router.mjs";
+import { createRouter, gatewayKnowsSession } from "../router.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FAKE = path.join(HERE, "fake-playwright-mcp.mjs");
@@ -24,6 +27,7 @@ async function start(options = {}) {
     childCommand: [process.execPath, FAKE],
     childArgs: ["--isolated", "--viewport-size", "1280x800", "--output-dir", "/output"],
     log: (line) => lines.push(line),
+    checkSession: async () => true, // the gateway knows every test token unless a test says otherwise
     ...options,
   });
   await router.listen(0, "127.0.0.1");
@@ -54,6 +58,35 @@ function request(url, { method = "POST", headers = {}, body = method === "POST" 
 }
 
 const json = (r) => JSON.parse(r.text);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// An event stream left open: `first` resolves with the first chunk, `ended`
+// with how the response ended ("end" | "aborted") — or never, if it hangs.
+function openStream(url, headers = {}) {
+  const { hostname, port, pathname } = new URL(url);
+  let req;
+  const first = new Promise((resolveFirst, rejectFirst) => {
+    req = http.request({ hostname, port, path: pathname, method: "GET", headers: { accept: "text/event-stream", "x-test-sse-hold": "1", ...headers } });
+    req.on("error", rejectFirst);
+    req.end();
+  });
+  let resolveFirst;
+  let resolveEnded;
+  const firstChunk = new Promise((r) => (resolveFirst = r));
+  const ended = new Promise((r) => (resolveEnded = r));
+  req.on("response", (res) => {
+    res.once("data", (c) => resolveFirst(String(c)));
+    res.on("end", () => resolveEnded("end"));
+    res.on("aborted", () => resolveEnded("aborted"));
+    res.on("error", () => resolveEnded("aborted"));
+    res.on("close", () => resolveEnded(res.complete ? "end" : "aborted"));
+  });
+  req.on("error", () => resolveEnded("aborted"));
+  first.catch(() => {});
+  return { first: firstChunk, ended, abort: () => req.destroy() };
+}
+
+const within = (promise, ms) => Promise.race([promise, sleep(ms).then(() => "HUNG")]);
 
 test("a session address gets its own child on the session's gateway address", async (t) => {
   const { router, base } = await start();
@@ -141,6 +174,10 @@ test("the child limit answers 503 instead of starting yet another browser client
   t.after(() => router.close());
   assert.equal((await request(`${base}/s/${TOKEN}/mcp`)).status, 200);
   assert.equal((await request(`${base}/s/${OTHER}/mcp`)).status, 503);
+  assert.equal(router.tokenCount(), 1);                              // the refused token is not kept
+  await request(`${base}/_router/sessions/${TOKEN}`, { method: "DELETE" });
+  await sleep(200);
+  assert.equal(router.tokenCount(), 0);                              // nor the ended one
 });
 
 test("ending a session stops its child (control path, token required)", async (t) => {
@@ -207,4 +244,155 @@ test("the sessions-only listener (published to the host) serves nothing but sess
   assert.equal((await request(`${host}/a/alpha/mcp`)).status, 404);
   assert.equal((await request(`${host}/_router/sessions/${TOKEN}`, { method: "DELETE" })).status, 404);
   assert.equal((await request(`${host}/healthz`, { method: "GET" })).status, 200);
+});
+
+// ── review R1: the shared /mcp child is exactly as before ──────────────────
+
+test("the shared child is never stopped for idleness", async (t) => {
+  const { router, base } = await start({ idleMs: 200 });
+  t.after(() => router.close());
+  const first = json(await request(`${base}/mcp`));
+  await sleep(600);
+  assert.equal(router.childCount(), 1);
+  assert.equal(json(await request(`${base}/mcp`)).pid, first.pid);   // same child, same MCP sessions
+});
+
+test("the shared child does not count against the child limit", async (t) => {
+  const { router, base } = await start({ maxChildren: 1 });
+  t.after(() => router.close());
+  assert.equal((await request(`${base}/mcp`)).status, 200);
+  assert.equal((await request(`${base}/s/${TOKEN}/mcp`)).status, 200);  // the shared one took no slot
+  assert.equal((await request(`${base}/s/${OTHER}/mcp`)).status, 503);
+  assert.equal((await request(`${base}/mcp`)).status, 200);           // a full limit never blocks /mcp
+});
+
+test("a token the gateway does not know starts no child", async (t) => {
+  const asked = [];
+  const { router, base, lines } = await start({
+    checkSession: async (token) => {
+      asked.push(token);
+      return token === TOKEN;
+    },
+  });
+  t.after(() => router.close());
+  const r = await request(`${base}/s/${OTHER}/mcp`);
+  assert.equal(r.status, 404);
+  assert.equal(router.childCount(), 0);
+  assert.equal((await request(`${base}/s/${TOKEN}/mcp`)).status, 200);
+  await request(`${base}/s/${TOKEN}/mcp`);
+  assert.deepEqual(asked, [OTHER, TOKEN]);                          // checked once per child start, not per request
+  for (const line of lines) assert.ok(!line.includes(OTHER), line);
+});
+
+test("a gateway that cannot answer means 502, no child", async (t) => {
+  const { router, base } = await start({
+    checkSession: async () => {
+      throw new Error("connect refused");
+    },
+  });
+  t.after(() => router.close());
+  assert.equal((await request(`${base}/s/${TOKEN}/mcp`)).status, 502);
+  assert.equal(router.childCount(), 0);
+});
+
+test("the gateway check reads 404 as unknown and 200 as known", async (t) => {
+  const seen = [];
+  const gw = http.createServer((req, res) => {
+    seen.push(req.url);
+    const status = req.url.includes(TOKEN) ? 200 : req.url.includes(OTHER) ? 404 : 500;
+    res.writeHead(status).end("{}");
+  });
+  await new Promise((r) => gw.listen(0, "127.0.0.1", r));
+  t.after(() => gw.close());
+  const url = `http://127.0.0.1:${gw.address().port}/`;
+  assert.equal(await gatewayKnowsSession(url, TOKEN), true);
+  assert.equal(await gatewayKnowsSession(url, OTHER), false);
+  await assert.rejects(gatewayKnowsSession(url, "tok_" + "C".repeat(40)), /500/);
+  assert.equal(seen[0], `/s/${TOKEN}/json/version`);
+});
+
+// ── review R2: a child that goes away never leaves a client hanging ────────
+
+test("an open stream keeps its child from idling out", async (t) => {
+  const { router, base } = await start({ idleMs: 200 });
+  t.after(() => router.close());
+  const stream = openStream(`${base}/s/${TOKEN}/mcp`);
+  await stream.first;
+  await sleep(600);
+  assert.equal(router.childCount(), 1);                              // still streaming = still active
+  stream.abort();
+  await sleep(500);
+  assert.equal(router.childCount(), 0);                              // idle counts from the last close
+});
+
+test("ending a session aborts its open streams", async (t) => {
+  const { router, base } = await start();
+  t.after(() => router.close());
+  const stream = openStream(`${base}/s/${TOKEN}/mcp`);
+  await stream.first;
+  assert.equal((await request(`${base}/_router/sessions/${TOKEN}`, { method: "DELETE" })).status, 200);
+  assert.equal(await within(stream.ended, 2000), "aborted");
+});
+
+test("a child that crashes mid-stream aborts the client's response", async (t) => {
+  const { router, base } = await start();
+  t.after(() => router.close());
+  const stream = openStream(`${base}/s/${TOKEN}/mcp`, { "x-test-exit-after-ms": "100" });
+  await stream.first;
+  assert.equal(await within(stream.ended, 2000), "aborted");
+  await sleep(100);
+  assert.equal(router.childCount(), 0);
+});
+
+// ── review R3: one port, one child ─────────────────────────────────────────
+
+async function realFreePort() {
+  return new Promise((resolve) => {
+    const srv = net.createServer().listen(0, "127.0.0.1", () => {
+      const { port } = srv.address();
+      srv.close(() => resolve(port));
+    });
+  });
+}
+
+test("a port handed out twice never serves two sessions from one child", async (t) => {
+  // The allocator offers the same port again while the first child holds it
+  // (what the OS does when it is asked between "port free" and "child bound").
+  const fixed = await realFreePort();
+  let calls = 0;
+  const allocatePort = async () => (++calls <= 2 ? fixed : realFreePort());
+  const { router, base } = await start({ allocatePort });
+  t.after(() => router.close());
+  const a = json(await request(`${base}/s/${TOKEN}/mcp`));
+  const b = json(await request(`${base}/s/${OTHER}/mcp`));
+  assert.notEqual(a.pid, b.pid);
+  assert.equal(b.cdp, `${GATEWAY}/s/${OTHER}/`);                     // B is answered by B's own child
+  assert.notEqual(Number(b.args[b.args.indexOf("--port") + 1]), fixed);
+});
+
+test("a port somebody else listens on is not handed to a child", async (t) => {
+  const foreign = net.createServer((sock) => {
+    sock.on("error", () => {}); // the router's probe hangs up right away
+    sock.end("HTTP/1.1 200 OK\r\ncontent-length: 7\r\n\r\nforeign");
+  });
+  await new Promise((r) => foreign.listen(0, "127.0.0.1", r));
+  t.after(() => foreign.close());
+  let calls = 0;
+  const allocatePort = async () => (++calls === 1 ? foreign.address().port : realFreePort());
+  const { router, base, lines } = await start({ allocatePort });
+  t.after(() => router.close());
+  const r = await request(`${base}/s/${TOKEN}/mcp`);
+  assert.equal(json(r).cdp, `${GATEWAY}/s/${TOKEN}/`);
+  assert.equal(calls, 2);
+  assert.ok(!lines.some((l) => /retrying/.test(l)), "skipped before a child was started on it");
+});
+
+test("a child that exits while starting is started again on a fresh port", async (t) => {
+  const marker = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "router-")), "failed");
+  const { router, base, lines } = await start({ childArgs: ["--isolated", "--test-fail-once", marker] });
+  t.after(() => router.close());
+  const r = await request(`${base}/s/${TOKEN}/mcp`);
+  assert.equal(r.status, 200);
+  assert.ok(fs.existsSync(marker), "the first child really failed");
+  assert.ok(lines.some((l) => /retrying/.test(l)), lines.join("\n"));
 });
