@@ -2159,6 +2159,15 @@
         ]
       }
     },
+    "/api/v1/browser-sessions/{session_id}/last-frame": {
+      "get": {
+        "operationId": "browser_session_last_frame_api_v1_browser_sessions__session_id__last_frame_get",
+        "summary": "Browser Session Last Frame",
+        "tags": [
+          "browser-sessions"
+        ]
+      }
+    },
     "/api/v1/channels/settings": {
       "get": {
         "operationId": "get_channel_settings_api_v1_channels_settings_get",

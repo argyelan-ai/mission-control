@@ -142,6 +142,7 @@
     "GET /api/v1/boards/{board_id}/tasks/{task_id}/workspace/list",
     "GET /api/v1/browser-live/targets",
     "GET /api/v1/browser-sessions",
+    "GET /api/v1/browser-sessions/{session_id}/last-frame",
     "GET /api/v1/channels/settings",
     "GET /api/v1/clawhub/skills",
     "GET /api/v1/clawhub/skills/{slug}",
