@@ -122,6 +122,14 @@ def test_playwright_mcp_viewport_matches_the_panel():
     assert args[args.index("--viewport-size") + 1] == "1280x800"
 
 
+def test_websocat_architecture_comes_from_the_image_not_a_default():
+    """A classic `docker build` leaves TARGETARCH empty; the old amd64
+    fallback would have shipped an x86_64 websocat in an arm64 image."""
+    text = CDP_DOCKERFILE.read_text(encoding="utf-8")
+    assert "dpkg --print-architecture" in text
+    assert "TARGETARCH:-amd64" not in text
+
+
 # ── router (ADR-088 router step): one playwright-mcp child per session ─────
 
 def test_playwright_mcp_entrypoint_is_the_router():
