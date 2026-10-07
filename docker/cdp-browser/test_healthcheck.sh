@@ -4,9 +4,9 @@
 # Runs against a mock CDP server (test_mock_cdp_server.py) that fakes the
 # HTTP /json/version endpoint and the WS Target.getTargets roundtrip, so
 # these tests need only websocat + python3 + bash — no real Chromium.
-# Wired into CI via .github/workflows/ci.yml ("Docker Build Check" job),
-# same pattern as backend/tests/test_context_detect.sh: mount into a real
-# alpine container instead of trusting the Ubuntu host's own tools.
+# Wired into CI via .github/workflows/ci.yml ("Docker Build Check" job):
+# mounted into the cdp-browser image itself, so the healthcheck is tested with
+# the exact websocat/wget/timeout it ships with, not the Ubuntu host's tools.
 #
 # W2 (Rex' review on PR #544): `websocat -1 -n` reads exactly ONE WS
 # message and exits. If Chromium sends an unsolicited event before the

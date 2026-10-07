@@ -657,14 +657,6 @@ services:
       timeout: 10s
       retries: 3
 
-  # Playwright MCP Server (Sidecar) — replaces mc-playwright HTTP service for
-  # agent-driven browser tests. Agents see screenshots inline as image content
-  # in the MCP tool response (no more "blind" hallucination problem from the
-  # 2026-04-23 visual-verify bug class). mc-playwright above stays for
-  # CI-style automated reporting workflows.
-  #
-  # Connection from agents: http://playwright-mcp:8931/mcp (HTTP transport)
-  # Image-Responses are enabled by default (--image-responses allow).
   # LiveKit Voice-Server — Grundlage fuer den Voice-Agent (Voice-Worker Runtime).
   # LIVEKIT_KEYS Format: "<api_key>: <api_secret>" (YAML-Mapping mit Colon+Space).
   # Beide Werte liegen im credentials-Store (ADR-033, Settings → Credentials),
@@ -796,6 +788,9 @@ services:
     profiles: ["browser"]
     restart: unless-stopped
     logging: *default-logging
+    # One Chromium serves every agent session (ADR-088): a runaway tab must not
+    # eat the shared Docker VM. Idle it needs ~0.25-0.4 GB.
+    mem_limit: 2g
     # Reaper as PID 1 (live finding 02.10.: 71 716 zombie `timeout` processes
     # after 14 days). The healthcheck's `timeout 5 websocat` outlives its shell,
     # gets re-parented to PID 1 — and Chromium never reaps. Zombies hold PIDs
@@ -819,9 +814,13 @@ services:
       # scene (02.10.). Lift that limit; docker/cdp-browser/test_webgl.sh
       # kills the GPU process 4x and checks WebGL still renders.
       - --disable-gpu-process-crash-limit
-      # Keeps the SwiftShader WebGL fallback on newer Chromium builds, where it
-      # is opt-in (no-op on the current Chromium 124).
+      # Keeps the SwiftShader WebGL fallback: opt-in on current Chromium (154),
+      # the safety net should --disable-gpu ever be dropped.
       - --enable-unsafe-swiftshader
+      # A real window size for new tabs: the headless default was 780x493 on
+      # Chromium 124 (the live panel showed a small picture with a border);
+      # 1280x900 gives a 1280x813 page.
+      - --window-size=1280,900
       - --disable-dev-shm-usage
       - --remote-debugging-port=9222
       - --remote-debugging-address=0.0.0.0
@@ -844,8 +843,18 @@ services:
       start_period: 30s
       retries: 3
 
+  # Playwright MCP Server (Sidecar) — replaces mc-playwright HTTP service for
+  # agent-driven browser tests. Agents see screenshots inline as image content
+  # in the MCP tool response (no more "blind" hallucination problem from the
+  # 2026-04-23 visual-verify bug class). mc-playwright above stays for
+  # CI-style automated reporting workflows.
+  #
+  # Connection from agents: http://playwright-mcp:8931/mcp (HTTP transport)
+  # Image-Responses are enabled by default (--image-responses allow).
   playwright-mcp:
-    image: mcr.microsoft.com/playwright/mcp:latest
+    # Thin image, exact npm version (docker/playwright-mcp/Dockerfile): no own
+    # browser, attaches to cdp-browser. Was mcr.microsoft.com/playwright/mcp:latest.
+    build: ./docker/playwright-mcp
     profiles: ["browser"]
     restart: unless-stopped
     logging: *default-logging
@@ -854,15 +863,16 @@ services:
     networks:
       - default
       - cdpnet
-    # Default entrypoint is `node /app/cli.js --headless --browser chromium --no-sandbox`
-    # — we override only the trailing args. Since the live-view feature the
-    # browser itself runs in the cdp-browser service (connected via CDP);
-    # playwright-mcp no longer launches its own.
+    # The entrypoint is `playwright-mcp`; these are all its arguments. Since the
+    # live-view feature the browser itself runs in the cdp-browser service
+    # (connected via CDP); playwright-mcp never launches its own.
     command: [
       "--cdp-endpoint", "http://172.30.99.10:9223",
       "--port", "8931",
       "--host", "0.0.0.0",
       "--isolated",
+      # Same size as the live panel shows it (Playwright's own default is 1280x720).
+      "--viewport-size", "1280x800",
       # Output-Dir auf shared bind-mount damit Backend + Agents die Screenshots
       # als Files sehen koennen (und der Operator im UI). Convention: Agent ruft
       # browser_take_screenshot(filename="<task_id>/<descriptive>.png") auf,
