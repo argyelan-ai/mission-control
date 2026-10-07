@@ -3502,6 +3502,8 @@
       "sandbox_required": "Ein echtes Repo braucht die Sandbox, für jeden Harness (Schritt für den Operator).",
       "hook_bypassed": "Der Head hat am Push-Hook vorbei gepusht (z. B. --no-verify). Der Lauf zählt nicht, auch mit PR.",
       "local_network_blocked": "macOS hat dem Harness-Programm das lokale Netzwerk gesperrt (Schritt für den Operator: Systemeinstellungen → Datenschutz & Sicherheit → Lokales Netzwerk → Programm einschalten).",
+      "scratch_source_missing": "Dieses Scratch-Repo hat noch keine Quelle. Unter Repos eintragen, wo sein Code liegt, dann neu starten.",
+      "scratch_source_failed": "Das Scratch-Repo liess sich aus seiner Quelle nicht einrichten (Pfad, URL oder Basis-Branch). Quelle unter Repos prüfen.",
       "exit": "Der Harness endete mit Exit-Code {code}.",
       "unknown": "Ohne bekannten Grund beendet.",
       "gh_identity_unsafe": "Die GitHub-Identität der Heads hat zu viele Rechte, oder der Basis-Branch ist nicht geschützt (Schritt für den Operator)."
@@ -3605,7 +3607,8 @@
       "engine_busy": "Das Modell beantwortet noch Anfragen. Warte, bis sie fertig sind, oder stoppe die Runtime zuerst.",
       "engine_busy_named": "{engine} arbeitet noch an {count, plural, one {# Anfrage} other {# Anfragen}}. Ein Wechsel würde sie jetzt abbrechen — warte, bis sie fertig {count, plural, one {ist} other {sind}}, oder stoppe die Runtime zuerst.",
       "unknown": "Etwas ist schiefgelaufen.",
-      "head_not_active": "Dieser Head ist schon beendet."
+      "head_not_active": "Dieser Head ist schon beendet.",
+      "scratch_source_missing": "Dieses Scratch-Repo hat noch keine Quelle. Unter Repos eintragen, wo sein Code liegt."
     },
     "keepTask": "Task behalten, schliessen",
     "retryStart": "Head erneut starten",

@@ -3502,6 +3502,8 @@
       "sandbox_required": "A real repo needs the sandbox for every harness (operator step).",
       "hook_bypassed": "The head pushed around the push hook (e.g. --no-verify). The run does not count, even with a PR.",
       "local_network_blocked": "macOS blocked the local network for the harness program (operator step: System Settings → Privacy & Security → Local Network → turn it on).",
+      "scratch_source_missing": "This scratch repo has no source yet. Add where its code lives under Repos, then start again.",
+      "scratch_source_failed": "The scratch repo could not be set up from its source (path, URL or base branch). Check the source under Repos.",
       "exit": "The harness ended with exit code {code}.",
       "unknown": "Ended without a known reason.",
       "gh_identity_unsafe": "The heads' GitHub identity has too many rights, or the base branch is not protected (operator step)."
@@ -3605,7 +3607,8 @@
       "engine_busy": "The model is still answering requests. Wait until they finish, or stop the runtime first.",
       "engine_busy_named": "{engine} is still working on {count, plural, one {# request} other {# requests}}. Switching now would break {count, plural, one {it} other {them}} off — wait until {count, plural, one {it finishes} other {they finish}}, or stop the runtime first.",
       "unknown": "Something went wrong.",
-      "head_not_active": "This head has already ended."
+      "head_not_active": "This head has already ended.",
+      "scratch_source_missing": "This scratch repo has no source yet. Add where its code lives under Repos."
     },
     "keepTask": "Keep task, close",
     "retryStart": "Start head again",
