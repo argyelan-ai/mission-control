@@ -857,6 +857,9 @@ services:
     build: ./docker/playwright-mcp
     profiles: ["browser"]
     restart: unless-stopped
+    # The router is PID 1 and starts up to 17 playwright-mcp children: an init
+    # reaps them and forwards SIGTERM.
+    init: true
     logging: *default-logging
     depends_on:
       - cdp-browser
