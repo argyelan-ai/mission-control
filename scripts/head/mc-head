@@ -186,6 +186,9 @@ HEAD_ENV_KEYS = frozenset(
         "OPENAI_BASE_URL",
         "OPENAI_MODEL",
         "OPENAI_API_KEY",
+        # The head's browser session (ADR-088): checked by browser_addresses().
+        "MC_BROWSER_CDP_URL",
+        "MC_BROWSER_MCP_URL",
     }
 )
 
@@ -943,6 +946,10 @@ def render_claude_settings(run: Path, env: dict | None = None) -> Path:
     allow.append(f"Edit({_claude_abs(wt)}/**)")
     for name in ("step.txt", "question.md", "run-record.md"):
         allow.append(f"Edit({_claude_abs(run / name)})")
+    if browser_addresses(env or {}).get("MC_BROWSER_MCP_URL"):
+        # -p refuses every tool that is not allowed: the browser MCP server's
+        # tools (its own session — ADR-088) are.
+        allow.append(f"mcp__{BROWSER_MCP_SERVER}")
     perms["allow"] = allow
     perms["deny"] = deny
     picker = claude_model_picker(env or {})
@@ -951,6 +958,99 @@ def render_claude_settings(run: Path, env: dict | None = None) -> Path:
     target = run / "head-settings.json"
     target.write_text(json.dumps(data, indent=2))
     return target
+
+
+# ── the head's browser session (ADR-088 harness wiring) ──────────────────
+#
+# head.env may carry the session's addresses. The backend container can write
+# the run folder, so only loopback addresses of exactly this shape are used.
+_BROWSER_URL_RES = {
+    "MC_BROWSER_CDP_URL": re.compile(r"^http://127\.0\.0\.1:(\d{2,5})/s/([A-Za-z0-9_-]{32,128})/$"),
+    "MC_BROWSER_MCP_URL": re.compile(r"^http://127\.0\.0\.1:(\d{2,5})/s/([A-Za-z0-9_-]{32,128})/mcp$"),
+}
+BROWSER_MCP_SERVER = "browser"
+
+
+def browser_addresses(env: dict) -> dict:
+    """The session addresses from ``env`` that pass the check (others dropped)."""
+    out = {}
+    for key, pattern in _BROWSER_URL_RES.items():
+        value = env.get(key)
+        if value and pattern.match(value):
+            out[key] = value
+    return out
+
+
+def write_claude_mcp_config(run: Path, url: str) -> Path:
+    """The head's only MCP server: its session's playwright-mcp router address."""
+    path = run / "mcp.json"
+    data = {"mcpServers": {BROWSER_MCP_SERVER: {"type": "http", "url": url}}}
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(json.dumps(data, indent=2))
+    return path
+
+
+def _relay_script() -> "Path | None":
+    """cdp_relay.py next to the installed mc-head, else in the repository."""
+    here = Path(__file__).resolve().parent
+    for candidate in (here / "cdp_relay.py", here.parent.parent / "docker" / "omp-bridge" / "cdp_relay.py"):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _free_port() -> int:
+    import socket
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def start_browser_relay(run_id: str, home: Path, env: dict):
+    """omp only: Puppeteer drops a path prefix, so the session address goes
+    through a local relay that puts ``/s/<token>`` on every request. Points
+    omp's profile at it. Returns the relay process, or None (no session, or
+    the relay is missing — then omp keeps its own browser behaviour)."""
+    import socket
+
+    url = browser_addresses(env).get("MC_BROWSER_CDP_URL")
+    script = _relay_script()
+    if not url or script is None:
+        return None
+    m = _BROWSER_URL_RES["MC_BROWSER_CDP_URL"].match(url)
+    gateway_port, token = m.group(1), m.group(2)
+    port = _free_port()
+    log = open(wrapper_dir(run_id) / "relay.log", "ab")
+    proc = subprocess.Popen(
+        [sys.executable, str(script), "--listen-port", str(port),
+         "--target", f"127.0.0.1:{gateway_port}", "--prefix", f"/s/{token}"],
+        stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True,
+    )
+    log.close()
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        try:
+            socket.create_connection(("127.0.0.1", port), timeout=0.5).close()
+            break
+        except OSError:
+            if proc.poll() is not None:
+                return None
+            time.sleep(0.05)
+    agent_dir = home / ".omp" / "profiles" / OMP_PROFILE / "agent"
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    (agent_dir / "config.yml").write_text(f"browser:\n  cdpUrl: http://127.0.0.1:{port}\n")
+    return proc
+
+
+def stop_browser_relay(proc) -> None:
+    if proc is not None and proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
 
 
 def harness_argv(spec: dict, run: Path, home: Path, env: dict) -> list:
@@ -979,10 +1079,12 @@ def harness_argv(spec: dict, run: Path, home: Path, env: dict) -> list:
         ]
     if spec["harness"] == "claude":
         settings = render_claude_settings(run, env)
-        argv = [
-            harness_bin("claude"),
-            "-p",
-            "--bare",
+        argv = [harness_bin("claude"), "-p", "--bare"]
+        mcp_url = browser_addresses(env).get("MC_BROWSER_MCP_URL")
+        if mcp_url:
+            # --mcp-config is variadic: closed right away by the next flag.
+            argv += ["--mcp-config", str(write_claude_mcp_config(run, mcp_url)), "--strict-mcp-config"]
+        argv += [
             "--settings", str(settings),
             "--append-system-prompt-file", procedure,
         ]
@@ -1029,6 +1131,10 @@ def harness_env(spec: dict, run: Path, home: Path) -> dict:
         "MC_HEAD_RUN_ID": spec["run_id"],
     }
     env.update(head_env)
+    # Session addresses that fail the check never reach the head.
+    for key in _BROWSER_URL_RES:
+        env.pop(key, None)
+    env.update(browser_addresses(head_env))
     token = gh_token()
     if token:
         env["GH_TOKEN"] = token
@@ -1412,6 +1518,7 @@ def cmd_supervise(run_id: str) -> int:
     wdir = wrapper_dir(run_id)
     held: list = []
     child = None
+    relay = None
     state = {"reason": None}
 
     def on_signal(signum, _frame):
@@ -1436,6 +1543,8 @@ def cmd_supervise(run_id: str) -> int:
             return 5
         home = run / "home"
         env = harness_env(spec, run, home)
+        if spec["harness"] == "omp":
+            relay = start_browser_relay(run_id, home, env)
         argv = sandbox_prefix(spec, run) + harness_argv(spec, run, home, env)
         if (wdir / "stop-requested").exists():
             exit_status(run_id, "stopped")
@@ -1524,6 +1633,7 @@ def cmd_supervise(run_id: str) -> int:
         exit_status(run_id, "wrapper_error", detail=f"{exc.__class__.__name__}: {exc}"[-500:])
         return 6
     finally:
+        stop_browser_relay(relay)
         release_locks(run_id, held)
 
 

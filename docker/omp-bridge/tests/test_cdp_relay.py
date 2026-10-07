@@ -304,3 +304,31 @@ async def test_upstream_down_closes_the_client_instead_of_hanging():
     finally:
         relay.close()
         await relay.wait_closed()
+
+
+# ── explicit prefix (ADR-088 harness wiring): a head's browser session ─────
+
+SESSION_TOKEN = "relay-session-token-" + "x" * 24
+
+
+def test_explicit_session_prefix_is_accepted():
+    assert cdp_relay.parse_prefix(f"/s/{SESSION_TOKEN}") == f"/s/{SESSION_TOKEN}"
+    assert cdp_relay.parse_prefix("/a/alpha") == "/a/alpha"
+
+
+@pytest.mark.parametrize("bad", ["/s/short", "/s/../x", "s/abc", "/x/alpha", "/a/Alpha!", "", "/s/" + "y" * 40 + "/extra"])
+def test_malformed_prefixes_are_refused(bad):
+    with pytest.raises(ValueError):
+        cdp_relay.parse_prefix(bad)
+
+
+def test_the_session_token_never_reaches_the_relay_log():
+    assert cdp_relay.display_prefix(f"/s/{SESSION_TOKEN}") == "/s/<REDACTED>"
+    assert cdp_relay.display_prefix("/a/alpha") == "/a/alpha"
+    assert cdp_relay.display_prefix("") == "(off)"
+
+
+def test_cli_prefix_wins_over_the_container_agent(monkeypatch):
+    monkeypatch.setenv("AGENT_SLUG", "alpha")
+    assert cdp_relay.resolve_prefix(f"/s/{SESSION_TOKEN}") == f"/s/{SESSION_TOKEN}"
+    assert cdp_relay.resolve_prefix(None) == "/a/alpha"

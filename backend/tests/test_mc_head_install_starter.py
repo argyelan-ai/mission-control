@@ -100,3 +100,11 @@ def test_unknown_flag_is_refused(tmp_path: Path):
     res = _run(home, mc_home, "--bogus")
     assert res.returncode == 2
     assert "unknown argument" in res.stderr
+
+
+def test_install_ships_the_cdp_relay_next_to_mc_head(tmp_path: Path):
+    """omp heads reach their browser session through cdp_relay.py, which
+    mc-head looks for next to itself (ADR-088 harness wiring)."""
+    home, mc_home = tmp_path / "home", tmp_path / "home" / ".mc"
+    assert _run(home, mc_home).returncode == 0
+    assert (mc_home / "bin" / "cdp_relay.py").is_file()

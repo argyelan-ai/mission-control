@@ -31,11 +31,17 @@ class FakeGateway:
     def __init__(self, *, reachable: bool = True):
         self.reachable = reachable
         self.requests: list[httpx.Request] = []
+        self.router_requests: list[httpx.Request] = []
         self.registered: dict[str, str] = {}
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         if not self.reachable:
             raise httpx.ConnectError("gateway down", request=request)
+        if request.url.path.startswith("/_router/"):
+            # The playwright-mcp router (separate service): stopping a
+            # session's child is checked in test_heads_browser.py.
+            self.router_requests.append(request)
+            return httpx.Response(200, json={"stopped": True})
         self.requests.append(request)
         token = request.url.path.rsplit("/", 1)[-1]
         if request.method == "PUT":

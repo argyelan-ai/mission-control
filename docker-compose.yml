@@ -791,6 +791,11 @@ services:
     # One Chromium serves every agent session (ADR-088): a runaway tab must not
     # eat the shared Docker VM. Idle it needs ~0.25-0.4 GB.
     mem_limit: 2g
+    # Heads run on the host and reach their browser session through the
+    # gateway (/s/<token>/, ADR-088). Loopback only; Chromium's own debug
+    # ports (9222/9223) stay inside Docker.
+    ports:
+      - "127.0.0.1:9300:9300"
     # Reaper as PID 1 (live finding 02.10.: 71 716 zombie `timeout` processes
     # after 14 days). The healthcheck's `timeout 5 websocat` outlives its shell,
     # gets re-parented to PID 1 — and Chromium never reaps. Zombies hold PIDs
@@ -855,6 +860,12 @@ services:
     # Thin image, exact npm version (docker/playwright-mcp/Dockerfile): no own
     # browser, attaches to cdp-browser. Was mcr.microsoft.com/playwright/mcp:latest.
     build: ./docker/playwright-mcp
+    # Claude Code heads on the host use their session's router address
+    # (http://127.0.0.1:8931/s/<token>/mcp). Published: the router's
+    # sessions-only listener (8932) — from the host, the browser needs a
+    # session token (no shared /mcp, no agent address). Loopback only.
+    ports:
+      - "127.0.0.1:8931:8932"
     profiles: ["browser"]
     restart: unless-stopped
     logging: *default-logging
@@ -872,6 +883,7 @@ services:
     # launches its own.
     command: [
       "--listen", "8931",
+      "--session-port", "8932",
       # Session and agent addresses go through cdp-gateway (it accepts the
       # service name as Host; Chromium itself only takes an IP — hence the
       # fixed cdpnet address for the legacy shared child).

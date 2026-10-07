@@ -86,3 +86,10 @@
 ;; their own browser session instead (ADR-088). Other localhost ports stay open.
 (deny network-outbound
   (remote tcp "localhost:18800"))
+
+;; Nor the browser gateway (localhost:9300): it also serves unprefixed CDP to
+;; every tab of the shared browser. A head reaches only its own session —
+;; Claude through the router's sessions-only port, omp through mc-head's
+;; relay, which runs outside this sandbox (ADR-088 harness wiring).
+(deny network-outbound
+  (remote tcp "localhost:9300"))

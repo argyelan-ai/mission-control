@@ -36,6 +36,9 @@ SECRETISH = re.compile(r"(^|_)(api_?key|key|token|secret|password|passwd)$", re.
 HEAD_ENV_KEYS = frozenset({
     "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL", "ANTHROPIC_API_KEY",
     "OPENAI_BASE_URL", "OPENAI_MODEL", "OPENAI_API_KEY",
+    # The head's browser session (ADR-088): its CDP address (omp, through
+    # mc-head's relay) and its playwright-mcp address (Claude Code).
+    "MC_BROWSER_CDP_URL", "MC_BROWSER_MCP_URL",
 })
 #: Placeholder key for Claude Code on a local engine — under --bare only
 #: ANTHROPIC_API_KEY (or apiKeyHelper) authenticates; the engine ignores it.
@@ -226,6 +229,24 @@ def spool(action: str, run_id: str, from_run_id: str | None = None) -> Path:
     return target
 
 
+async def _browser_env(session: AsyncSession, run_id: str) -> dict[str, str]:
+    """Open the run's browser session and return its addresses for head.env.
+
+    Its own DB session: the caller's transaction (task hold + move) must not
+    be committed early. A gateway that cannot be reached does not stop the
+    head — the lifecycle loop registers the session later; a session left
+    by a start that failed afterwards is ended by the loop (run missing)."""
+    from app.services import browser_sessions
+
+    async with AsyncSession(session.bind, expire_on_commit=False) as own:
+        row, _registered = await browser_sessions.open_session(own, head_run_id=run_id)
+    path = browser_sessions.endpoint_path(row.id)  # /s/<token>/
+    return {
+        "MC_BROWSER_CDP_URL": settings.browser_host_gateway_url.rstrip("/") + path,
+        "MC_BROWSER_MCP_URL": settings.browser_host_mcp_url.rstrip("/") + path + "mcp",
+    }
+
+
 async def write_run(
     session: AsyncSession,
     *,
@@ -244,6 +265,8 @@ async def write_run(
     run_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc)
     env, base_url, model = await head_env(session, harness, runtime)
+    if settings.heads_browser_enabled:
+        env.update(await _browser_env(session, run_id))
     local = runtime.host_id is not None
     limit = settings.heads_hard_limit_local_s if local else settings.heads_hard_limit_cloud_s
     no_progress_s = settings.heads_no_progress_min * 60

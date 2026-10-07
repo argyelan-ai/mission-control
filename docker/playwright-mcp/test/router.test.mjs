@@ -196,3 +196,15 @@ test("an unknown router flag is refused instead of starting a server that never 
   assert.throws(() => parseCli(["--version"]), /unknown router flag/);
   assert.equal(parseCli(["--listen", "9000", "--", "--version"]).childArgs[0], "--version");
 });
+
+test("the sessions-only listener (published to the host) serves nothing but session addresses", async (t) => {
+  const { router } = await start();
+  t.after(() => router.close());
+  const port = await router.listen(0, "127.0.0.1", { sessionsOnly: true });
+  const host = `http://127.0.0.1:${port}`;
+  assert.equal(json(await request(`${host}/s/${TOKEN}/mcp`)).cdp, `${GATEWAY}/s/${TOKEN}/`);
+  assert.equal((await request(`${host}/mcp`)).status, 404);                 // no token, no browser
+  assert.equal((await request(`${host}/a/alpha/mcp`)).status, 404);
+  assert.equal((await request(`${host}/_router/sessions/${TOKEN}`, { method: "DELETE" })).status, 404);
+  assert.equal((await request(`${host}/healthz`, { method: "GET" })).status, 200);
+});

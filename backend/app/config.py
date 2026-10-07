@@ -637,6 +637,12 @@ class Settings(BaseSettings):
     heads_enabled: bool = False
     heads_root: Path = Path(os.environ.get("HOME_HOST", str(Path.home()))) / ".mc" / "heads"
     heads_sync_interval: int = 60
+    # Heads get their own browser session (ADR-088 harness wiring): off until
+    # the operator turns it on after a live check. The addresses a head (on
+    # the host) uses: the published gateway and playwright-mcp router ports.
+    heads_browser_enabled: bool = False
+    browser_host_gateway_url: str = "http://127.0.0.1:9300"
+    browser_host_mcp_url: str = "http://127.0.0.1:8931"
     # Browser sessions (ADR-088, lifecycle step + operator decisions
     # 2026-10-06). The loop runs in the background-services process.
     # browser_sessions_root holds each session's last image

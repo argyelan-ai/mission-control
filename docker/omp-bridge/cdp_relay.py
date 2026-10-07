@@ -52,6 +52,9 @@ Usage
 -----
   cdp_relay.py --agent-path                      # print "/a/<slug>" or "" (shell helper)
   cdp_relay.py --listen-port 9222 --target cdp-browser:9300
+  cdp_relay.py --listen-port <free> --target 127.0.0.1:9300 --prefix /s/<token>
+      (a head on the host: mc-head starts it for the head's browser session,
+      ADR-088; the token never appears in the log)
 """
 from __future__ import annotations
 
@@ -68,6 +71,9 @@ logger = logging.getLogger("cdp_relay")
 # Same rule as cdp_gateway._SLUG_RE — a slug the gateway would reject must
 # never be sent (it would silently fall back to "unidentified" there).
 _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
+# An explicit prefix (--prefix): a browser session's address (ADR-088) or an
+# agent's. Same token rule as the gateway's.
+_PREFIX_RE = re.compile(r"^/(?:s/[A-Za-z0-9_-]{32,128}|a/[a-z0-9][a-z0-9-]{0,62})$")
 _GATEWAY_PORT = "9300"
 _PLAIN_CHROMIUM_PORT = "9223"  # cdp-browser's socat port: Chromium itself, no gateway
 _MAX_HEAD_BYTES = 64 * 1024
@@ -106,6 +112,28 @@ def agent_path(env: Optional[dict] = None) -> str:
     if not _SLUG_RE.match(slug):
         return ""
     return f"/a/{slug}"
+
+
+def parse_prefix(raw: str) -> str:
+    """A `--prefix` value: `/s/<token>` (a head's browser session) or
+    `/a/<slug>`. Anything else is refused — never sent to the gateway."""
+    if not _PREFIX_RE.match(raw or ""):
+        raise ValueError("prefix must be /s/<token> or /a/<slug>")
+    return raw
+
+
+def display_prefix(prefix: str) -> str:
+    """The prefix as it may appear in a log: a session token is a credential."""
+    if not prefix:
+        return "(off)"
+    if prefix.startswith("/s/"):
+        return "/s/<REDACTED>"
+    return prefix
+
+
+def resolve_prefix(explicit: Optional[str], env: Optional[dict] = None) -> str:
+    """An explicit `--prefix` wins; otherwise the container's agent path."""
+    return parse_prefix(explicit) if explicit else agent_path(env)
 
 
 def prefix_request_line(line: bytes, path_prefix: str) -> bytes:
@@ -264,12 +292,12 @@ def _split_target(target: str) -> tuple[str, int]:
     return host, int(port)
 
 
-async def _serve(listen_port: int, target: str) -> None:
+async def _serve(listen_port: int, target: str, explicit_prefix: Optional[str] = None) -> None:
     host, port = _split_target(target)
-    prefix = agent_path()
+    prefix = resolve_prefix(explicit_prefix)
     server = await start_relay("127.0.0.1", listen_port, host, port, prefix)
     logger.info(
-        "cdp_relay: 127.0.0.1:%d -> %s (agent path %s)", listen_port, target, prefix or "(off)",
+        "cdp_relay: 127.0.0.1:%d -> %s (agent path %s)", listen_port, target, display_prefix(prefix),
     )
     async with server:
         await server.serve_forever()
@@ -280,13 +308,23 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--agent-path", action="store_true", help='print "/a/<slug>" or "" and exit')
     parser.add_argument("--listen-port", type=int, default=9222)
     parser.add_argument("--target", default=os.environ.get("OMP_BROWSER_CDP_TARGET") or "cdp-browser:9300")
+    parser.add_argument(
+        "--prefix", default=None,
+        help="explicit path prefix (/s/<token> for a head's browser session, or /a/<slug>)",
+    )
     args = parser.parse_args(argv)
+    if args.prefix is not None:
+        try:
+            parse_prefix(args.prefix)
+        except ValueError as e:
+            print(f"cdp_relay: {e}", file=sys.stderr)
+            return 2
     if args.agent_path:
         print(agent_path())
         return 0
     logging.basicConfig(level=logging.INFO, format="[cdp-relay] %(message)s")
     try:
-        asyncio.run(_serve(args.listen_port, args.target))
+        asyncio.run(_serve(args.listen_port, args.target, args.prefix))
     except KeyboardInterrupt:
         return 0
     return 0

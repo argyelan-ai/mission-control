@@ -231,6 +231,30 @@ def test_login_browser_debug_port_is_not_reachable(layout):
     assert blocked.returncode != 0
 
 
+def test_heads_cannot_talk_to_the_browser_gateway_directly(layout):
+    """The gateway (localhost:9300) also serves unprefixed CDP — every tab in
+    the shared browser. A head reaches only its own session: Claude through
+    the router's sessions-only port, omp through mc-head's relay, which runs
+    outside the sandbox (ADR-088)."""
+    import socket
+    import threading
+
+    srv = None
+    try:
+        if not _port_in_use(9300):
+            srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            srv.bind(("127.0.0.1", 9300))
+            srv.listen(2)
+            threading.Thread(target=lambda: [srv.accept() for _ in range(2)], daemon=True).start()
+        blocked = _sh(layout, f'/usr/bin/python3 -c "{_tcp_probe(9300)}"')
+    finally:
+        if srv is not None:
+            srv.close()
+    assert "CONNECTED" not in blocked.stdout
+    assert blocked.returncode != 0
+
+
 # ── scratch repo with a local bare origin ───────────────────────────────
 
 

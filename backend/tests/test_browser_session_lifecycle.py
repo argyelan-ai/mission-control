@@ -40,6 +40,7 @@ class FakeGateway:
         self.orphans: list[dict] = []
         self.health = 200
         self.requests: list[httpx.Request] = []
+        self.router_requests: list[httpx.Request] = []
 
     def tab(self, tid, *, agent=None, session=None, idle=5.0, url="https://x.example", title="X", creator_session=None):
         self.targets.append({
@@ -51,6 +52,11 @@ class FakeGateway:
     def handler(self, request: httpx.Request) -> httpx.Response:
         if not self.reachable:
             raise httpx.ConnectError("down", request=request)
+        if request.url.path.startswith("/_router/"):
+            # The playwright-mcp router (separate service): stopping a
+            # session's child is checked in test_heads_browser.py.
+            self.router_requests.append(request)
+            return httpx.Response(200, json={"stopped": True})
         self.requests.append(request)
         path = request.url.path
         if path == "/mc/health":
