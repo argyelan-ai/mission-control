@@ -182,10 +182,10 @@ def test_browser_profiles_are_not_readable(layout):
     assert res.returncode != 0
 
 
-def _tcp_probe(port: int) -> str:
+def _tcp_probe(port: int, host: str = "127.0.0.1") -> str:
     return (
         "import socket\n"
-        f"s=socket.create_connection(('127.0.0.1',{port}),3)\n"
+        f"s=socket.create_connection(('{host}',{port}),3)\n"
         "print('CONNECTED')\n"
     )
 
@@ -222,13 +222,21 @@ def test_login_browser_debug_port_is_not_reachable(layout):
             _serve(LOGIN_BROWSER_PORT)
         other = _serve(0)
         blocked = _sh(layout, f'/usr/bin/python3 -c "{_tcp_probe(LOGIN_BROWSER_PORT)}"')
+        # The same port via an IPv4-mapped IPv6 address must be refused too:
+        # a host-specific rule ("localhost:<port>") does not cover
+        # ::ffff:127.0.0.1, which reaches the same IPv4 listener.
+        mapped = _sh(layout, f'/usr/bin/python3 -c "{_tcp_probe(LOGIN_BROWSER_PORT, "::ffff:127.0.0.1")}"')
         allowed = _sh(layout, f'/usr/bin/python3 -c "{_tcp_probe(other)}"')
+        allowed_mapped = _sh(layout, f'/usr/bin/python3 -c "{_tcp_probe(other, "::ffff:127.0.0.1")}"')
     finally:
         for srv in servers:
             srv.close()
     assert "CONNECTED" in allowed.stdout, allowed.stderr
+    assert "CONNECTED" in allowed_mapped.stdout, allowed_mapped.stderr
     assert "CONNECTED" not in blocked.stdout
     assert blocked.returncode != 0
+    assert "CONNECTED" not in mapped.stdout
+    assert mapped.returncode != 0
 
 
 # ── scratch repo with a local bare origin ───────────────────────────────

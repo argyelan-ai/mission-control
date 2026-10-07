@@ -84,5 +84,8 @@
 ;; localhost:18800) is the operator's and the fixed agents' — a head never
 ;; drives it: it would act inside the operator's logged-in sessions. Heads get
 ;; their own browser session instead (ADR-088). Other localhost ports stay open.
+;; The port is matched on any host ("*:18800"): a "localhost:18800" rule does
+;; not cover the IPv4-mapped IPv6 form ::ffff:127.0.0.1, which reaches the same
+;; IPv4 listener. Remote hosts never serve this port, so nothing else is lost.
 (deny network-outbound
-  (remote tcp "localhost:18800"))
+  (remote tcp "*:18800"))
