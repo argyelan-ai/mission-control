@@ -651,9 +651,9 @@ class Settings(BaseSettings):
     browser_frame_interval_s: int = 60
     browser_frame_retention_days: int = 30
     # At the end of an agent's working phase also close its idle tabs (its
-    # connections stay). Off by default until a live test proves omp recovers
+    # connections stay). On since a live test showed the omp agent recovers
     # from a tab closed under its open connection; off = only the record ends.
-    browser_idle_close_agent_tabs: bool = False
+    browser_idle_close_agent_tabs: bool = True
     # Progress watchdog (spec §6.5): mc-head stops a head (reason
     # "no_progress") when neither head.log, step.txt, work.log nor any worktree file
     # changed for this many minutes — long coding jobs may run as long as

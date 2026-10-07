@@ -80,9 +80,10 @@ The operator decided the three open lifecycle questions on 2026-10-06:
   session owns (a tab idle past the limit, or a slug two agents share, opens
   nothing) — never through dispatch, which stays frozen (ADR-085 §4). Ending a phase can
   also close the agent's idle tabs (its connections stay, so the agent starts a
-  new phase with its next tab) — **off by default** (`browser_idle_close_agent_tabs`)
-  until a live test shows omp recovers from a tab closed under its open
-  connection. An agent working without a break past `browser_session_max_age_s`
+  new phase with its next tab) — **on by default** (`browser_idle_close_agent_tabs`)
+  since a live test (2026-10-07) showed the local omp agent recovers from a tab
+  closed under its open connection: its next browser call opened a working tab
+  and answered normally. Setting it to false keeps only the record ending. An agent working without a break past `browser_session_max_age_s`
   only rolls over: the phase ends in the record and the next pass opens a new
   one, its tabs stay.
 - **(b) The shared Chromium is always on.** Only the per-session parts
