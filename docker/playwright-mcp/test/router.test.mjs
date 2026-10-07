@@ -174,6 +174,10 @@ test("the child limit answers 503 instead of starting yet another browser client
   t.after(() => router.close());
   assert.equal((await request(`${base}/s/${TOKEN}/mcp`)).status, 200);
   assert.equal((await request(`${base}/s/${OTHER}/mcp`)).status, 503);
+  assert.equal(router.tokenCount(), 1);                              // the refused token is not kept
+  await request(`${base}/_router/sessions/${TOKEN}`, { method: "DELETE" });
+  await sleep(200);
+  assert.equal(router.tokenCount(), 0);                              // nor the ended one
 });
 
 test("ending a session stops its child (control path, token required)", async (t) => {

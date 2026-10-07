@@ -187,6 +187,7 @@ export function createRouter({
   async function reservePort() {
     for (let i = 0; i < 20; i++) {
       const port = await allocatePort();
+      // Checked again after the await: another start may have taken it meanwhile.
       if (usedPorts.has(port) || (await isListening(port)) || usedPorts.has(port)) continue;
       usedPorts.add(port);
       return port;
@@ -371,6 +372,7 @@ export function createRouter({
       return;
     }
     if (!child) {
+      forgetToken(route);
       res.writeHead(503, { "content-type": "text/plain" });
       res.end("router: too many browser sessions at once");
       return;
@@ -393,6 +395,7 @@ export function createRouter({
       return server?.address()?.port;
     },
     childCount: () => children.size,
+    tokenCount: () => tokens.size,
     async close() {
       for (const key of [...children.keys()]) stop(key, "router closing");
       if (server) await new Promise((resolve) => server.close(resolve));
