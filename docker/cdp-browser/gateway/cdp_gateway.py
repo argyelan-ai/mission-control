@@ -105,6 +105,17 @@ and MC re-registers the sessions it still considers open (`PUT` is
 idempotent). The browser itself is started on demand: registering creates
 nothing in Chromium.
 
+MC's lifecycle loop also reads `idleSeconds` per tab in `/mc/targets`, takes
+the session's last image with `GET /mc/sessions/<token>/snapshot` (JPEG of its
+most recently active tab), and ends an agent's working phase with
+`DELETE /mc/sessions/<token>?agent_tabs=1`, which also closes that agent's
+own `/a/<slug>/` tabs (its connections stay — the agent keeps working).
+A session opened for an agent "sees" the agent's tabs as well as its own.
+`GET /mc/orphans` lists ended sessions that still own tabs or contexts;
+`POST /mc/orphans/close?session=<uuid>` closes what an already ENDED session
+created and left behind (refused while it is registered); `/mc/targets`
+reports the creating session as `creatorSession` for that sweep.
+
 Trust model: identification is NOT authentication. Any container on the
 Docker-internal network can already reach Chromium's CDP port directly
 (:9223) — this gateway does not change that boundary, it only labels
@@ -165,6 +176,7 @@ _CLOSE_GRACE = 1.0
 # they can never clash with an agent's ids; high anyway for readable logs.
 _OWN_MSG_ID_BASE = 2_000_000_000
 # Chromium's answers when a tab or context to close no longer exists.
+_SNAPSHOT_QUALITY = 70
 # The whole cleanup answers within this, however many tabs and however slow
 # Chromium is: the backend waits a bounded time for DELETE (its timeout must
 # stay above this). Leftovers are reported, MC's lifecycle loop sweeps them.
@@ -387,6 +399,16 @@ class GatewayState:
         )
         return tabs, contexts
 
+    def session_view_tabs(self, entry: "BrowserSessionEntry") -> list[TargetInfo]:
+        """The tabs a session stands for, newest activity first: its own,
+        plus — for a session opened for an agent — that agent's tabs (an
+        agent's working phase is opened lazily while the agent keeps using
+        its `/a/<slug>/` address)."""
+        tabs = {t.id: t for t in self.targets_for(None, entry.session_id)}
+        if entry.agent:
+            tabs.update({t.id: t for t in self.targets_for(entry.agent)})
+        return sorted(tabs.values(), key=lambda t: t.last_active_at, reverse=True)
+
     def tab_owner(self, target_id: Optional[str]) -> Optional[str]:
         """Owner key of a live tab — recorded directly or via its context."""
         if not target_id:
@@ -590,6 +612,13 @@ class GatewayState:
             self.target_owner = {k: v for k, v in self.target_owner.items() if k in self.targets}
         if len(self.target_creator) > _OWNER_MAP_SOFT_CAP and self.targets:
             self.target_creator = {k: v for k, v in self.target_creator.items() if k in self.targets}
+        if len(self.session_agent) > _OWNER_MAP_SOFT_CAP:
+            referenced = {e.session_id for e in self.sessions.values()}
+            for t in self.targets.values():
+                for key in (t.agent, t.creator, self.target_owner.get(t.id)):
+                    if key and key.startswith(_SESSION_OWNER_PREFIX):
+                        referenced.add(key[len(_SESSION_OWNER_PREFIX):])
+            self.session_agent = {k: v for k, v in self.session_agent.items() if k in referenced}
         if len(self.session_target) > _OWNER_MAP_SOFT_CAP and self.targets:
             self.session_target = {k: v for k, v in self.session_target.items() if v in self.targets}
 
@@ -617,10 +646,40 @@ class GatewayState:
                 # The browser session (ADR-088) the tab belongs to, if any.
                 "session": owner_session,
                 "browserContextId": t.ctx,
+                # The session that CREATED the tab (not a claim): MC's sweep
+                # closes tabs a session left behind after it ended.
+                "creatorSession": self.describe_owner(t.creator or self.target_creator.get(t.id))[1],
                 "createdAt": t.created_at,
                 "lastActiveAt": t.last_active_at,
+                # Same clock as lastActiveAt, already subtracted: consumers in
+                # other processes can't compare our monotonic stamps.
+                "idleSeconds": max(0.0, self.now_fn() - t.last_active_at),
             })
         return rows
+
+    def as_mc_orphans_json(self) -> list[dict]:
+        """`GET /mc/orphans` — sessions no longer registered that still own
+        tabs they created or contexts (what MC's sweep closes)."""
+        registered = {e.session_id for e in self.sessions.values()}
+        found: dict[str, dict] = {}
+
+        def _slot(key: Optional[str]) -> Optional[dict]:
+            if not key or not key.startswith(_SESSION_OWNER_PREFIX):
+                return None
+            sid = key[len(_SESSION_OWNER_PREFIX):]
+            if sid in registered:
+                return None
+            return found.setdefault(sid, {"sessionId": sid, "tabs": 0, "contexts": 0})
+
+        for t in self.targets.values():
+            slot = _slot(t.creator or self.target_creator.get(t.id))
+            if slot is not None:
+                slot["tabs"] += 1
+        for owner in self.ctx_owner.values():
+            slot = _slot(owner)
+            if slot is not None:
+                slot["contexts"] += 1
+        return sorted(found.values(), key=lambda r: r["sessionId"])
 
     def as_mc_sessions_json(self, live_connections: dict[str, int]) -> list[dict]:
         """`GET /mc/sessions` — never includes the tokens."""
@@ -1089,12 +1148,93 @@ class CdpGateway:
         missing = {"error": {"message": f"unanswered within {deadline:g}s"}}
         return [replies.get(i, missing) for i in range(len(commands))]
 
+    async def _page_call(self, target_id: str, method: str, params: dict) -> dict:
+        """One command on a tab's own page connection (gateway-owned, short
+        lived); returns Chromium's reply."""
+        url = f"ws://{self._upstream_netloc}/devtools/page/{target_id}"
+        async with websockets.connect(url, max_size=None) as ws:
+            await ws.send(json.dumps({"id": _OWN_MSG_ID_BASE, "method": method, "params": params}))
+            while True:
+                reply = json.loads(await asyncio.wait_for(ws.recv(), timeout=_UPSTREAM_HTTP_TIMEOUT))
+                if reply.get("id") == _OWN_MSG_ID_BASE:
+                    return reply
+
     # ── browser sessions (ADR-088) ─────────────────────────────────────────
+
+    async def session_snapshot(self, token: str) -> tuple[int, dict]:
+        """(status, body): 200 with a JPEG of the session's most recently
+        active tab, 204 without a tab, 404 unknown token, 502 capture failed."""
+        entry = self.state.session_for_token(token)
+        if entry is None:
+            return 404, {}
+        tabs = self.state.session_view_tabs(entry)
+        if not tabs:
+            return 204, {}
+        tab = tabs[0]
+        try:
+            reply = await self._page_call(
+                tab.id, "Page.captureScreenshot", {"format": "jpeg", "quality": _SNAPSHOT_QUALITY},
+            )
+        except (OSError, asyncio.TimeoutError, ValueError, websockets.WebSocketException) as e:
+            logger.info("cdp_gateway: snapshot of session %s failed: %s", entry.session_id, e)
+            return 502, {}
+        data = (reply.get("result") or {}).get("data")
+        if not isinstance(data, str):
+            return 502, {}
+        return 200, {"targetId": tab.id, "url": tab.url, "title": tab.title, "mime": "image/jpeg", "data": data}
 
     def _live_connection_counts(self) -> dict[str, int]:
         return {key: len(tasks) for key, tasks in self._live_conns.items() if tasks}
 
-    async def end_session(self, token: str) -> Optional[dict]:
+    async def _close_and_dispose(self, tabs: list[str], contexts: list[str]) -> tuple[int, int, list[str]]:
+        """Close tabs and dispose contexts in one bounded call. Counts only
+        what Chromium CONFIRMED (or reported already gone); a context whose
+        disposal was not confirmed keeps its owner, so MC's orphan sweep can
+        find and dispose it later (re-review N2)."""
+        commands = [("Target.closeTarget", {"targetId": tid}) for tid in tabs]
+        commands += [("Target.disposeBrowserContext", {"browserContextId": ctx}) for ctx in contexts]
+        if not commands:
+            return 0, 0, []
+        errors: list[str] = []
+        confirmed: list[bool] = [False] * len(commands)
+        try:
+            replies = await self._cdp_call(commands)
+        except (OSError, asyncio.TimeoutError, RuntimeError, ValueError, websockets.WebSocketException) as e:
+            return 0, 0, [f"cleanup: {e}"]
+        for i, ((method, _params), reply) in enumerate(zip(commands, replies)):
+            message = str((reply.get("error") or {}).get("message", "")) if "error" in reply else None
+            # Already gone is the goal, not a failure: a client that created
+            # its context with disposeOnDetach (Playwright does) loses it the
+            # moment its connection is cut (lab, real Chromium 124:
+            # "Failed to find context").
+            if message is None or _ALREADY_GONE.search(message):
+                confirmed[i] = True
+            else:
+                errors.append(f"{method}: {message}")
+        closed = sum(confirmed[: len(tabs)])
+        disposed = 0
+        for ctx, ok in zip(contexts, confirmed[len(tabs):]):
+            if ok:
+                self.state.ctx_owner.pop(ctx, None)
+                disposed += 1
+        return closed, disposed, errors
+
+    async def close_orphans(self, session_id: str) -> Optional[dict]:
+        """Close what an ENDED session created and left behind (e.g. a
+        `/json/new` that was still in flight while it ended). None if the
+        session is still registered — a live session is ended, not swept."""
+        if any(e.session_id == session_id for e in self.state.sessions.values()):
+            return None
+        tabs, contexts = self.state.session_resources(session_id)
+        closed, disposed, errors = await self._close_and_dispose(tabs, contexts)
+        if tabs or contexts:
+            logger.info(
+                "cdp_gateway: swept ended session %s: %d/%d tabs, %d/%d contexts confirmed",
+                session_id, closed, len(tabs), disposed, len(contexts),
+            )
+        return {"sessionId": session_id, "closedTargets": closed, "disposedContexts": disposed, "errors": errors}
+
+    async def end_session(self, token: str, *, agent_tabs: bool = False) -> Optional[dict]:
         """Ends one browser session: unregister the token first (a reconnect
         is refused from here on), cut the session's open CDP connections,
         then close its tabs and dispose its contexts in Chromium. None if the
@@ -1116,31 +1256,28 @@ class CdpGateway:
             await asyncio.wait(conns, timeout=_CLOSE_GRACE)
 
         tabs, contexts = self.state.session_resources(entry.session_id)
-        commands = [("Target.closeTarget", {"targetId": tid}) for tid in tabs]
-        commands += [("Target.disposeBrowserContext", {"browserContextId": ctx}) for ctx in contexts]
-        errors: list[str] = []
-        if commands:
-            try:
-                for (method, _params), reply in zip(commands, await self._cdp_call(commands)):
-                    message = str((reply.get("error") or {}).get("message", "")) if "error" in reply else None
-                    # Already gone is the goal, not a failure: a client that
-                    # created its context with disposeOnDetach (Playwright
-                    # does) loses it the moment its connection is cut above
-                    # (lab, real Chromium 124: "Failed to find context").
-                    if message is not None and not _ALREADY_GONE.search(message):
-                        errors.append(f"{method}: {message}")
-            except (OSError, asyncio.TimeoutError, RuntimeError, ValueError, websockets.WebSocketException) as e:
-                errors.append(f"cleanup: {e}")
-        for ctx in contexts:
-            self.state.ctx_owner.pop(ctx, None)
+        if agent_tabs and entry.agent:
+            # End of an agent's working phase: its idle `/a/<slug>/` tabs go
+            # too. Its connections are not cut — the agent keeps working and
+            # opens a new tab (and a new phase) when it needs the browser.
+            # Same rule as for sessions (review M1): never a tab another
+            # owner created and the agent only claimed. A tab nobody known
+            # created (Chromium's startup tab, omp's reused page) is fine.
+            owned_ctx = set(contexts)
+            tabs = sorted(set(tabs) | {
+                t.id for t in self.state.targets_for(entry.agent)
+                if t.ctx not in owned_ctx
+                and (t.creator or self.state.target_creator.get(t.id)) in (None, entry.agent)
+            })
+        closed, disposed, errors = await self._close_and_dispose(tabs, contexts)
         logger.info(
-            "cdp_gateway: browser session %s ended (%d tabs, %d contexts, %d connections)",
-            entry.session_id, len(tabs), len(contexts), len(conns),
+            "cdp_gateway: browser session %s ended (%d/%d tabs, %d/%d contexts confirmed, %d connections)",
+            entry.session_id, closed, len(tabs), disposed, len(contexts), len(conns),
         )
         return {
             "sessionId": entry.session_id,
-            "closedTargets": len(tabs),
-            "disposedContexts": len(contexts),
+            "closedTargets": closed,
+            "disposedContexts": disposed,
             "closedConnections": len(conns),
             "errors": errors,
         }
@@ -1155,6 +1292,16 @@ class CdpGateway:
             body = json.dumps(self.state.as_mc_sessions_json(self._live_connection_counts())).encode()
             return 200, "application/json", body
         token = route[len("/mc/sessions/"):]
+        if token.endswith("/snapshot"):
+            token = token[: -len("/snapshot")]
+            if not _TOKEN_RE.match(token):
+                return 400, "text/plain", b"cdp-gateway: malformed session token"
+            if method != "GET":
+                return 405, "text/plain", b"cdp-gateway: method not allowed"
+            status, snap = await self.session_snapshot(token)
+            if status != 200:
+                return status, "text/plain", b""
+            return 200, "application/json", json.dumps(snap).encode()
         if not _TOKEN_RE.match(token):
             return 400, "text/plain", b"cdp-gateway: malformed session token"
         if method == "PUT":
@@ -1171,7 +1318,8 @@ class CdpGateway:
             body = json.dumps({"sessionId": session_id, "agent": agent}).encode()
             return (201 if outcome == "created" else 200), "application/json", body
         if method == "DELETE":
-            result = await self.end_session(token)
+            qs = parse_qs(parsed.query)
+            result = await self.end_session(token, agent_tabs=(qs.get("agent_tabs") or [""])[0] == "1")
             if result is None:
                 return 404, "text/plain", b"cdp-gateway: unknown browser session"
             return 200, "application/json", json.dumps(result).encode()
@@ -1199,6 +1347,19 @@ class CdpGateway:
                 want_session = normalize_session_id((qs.get("session") or [None])[0])
             body = json.dumps(self.state.as_mc_targets_json(want, want_session)).encode()
             return 200, "application/json", body
+        if local_path.split("?", 1)[0] == "/mc/orphans":
+            return 200, "application/json", json.dumps(self.state.as_mc_orphans_json()).encode()
+        if local_path.split("?", 1)[0] == "/mc/orphans/close":
+            if method != "POST":
+                return 405, "text/plain", b"cdp-gateway: method not allowed"
+            qs = parse_qs(local_path.split("?", 1)[1]) if "?" in local_path else {}
+            session_id = normalize_session_id((qs.get("session") or [None])[0])
+            if session_id is None:
+                return 400, "text/plain", b"cdp-gateway: session=<uuid> required"
+            result = await self.close_orphans(session_id)
+            if result is None:
+                return 409, "text/plain", b"cdp-gateway: session still registered - end it instead"
+            return 200, "application/json", json.dumps(result).encode()
         if local_path == "/mc/sessions" or local_path.startswith(("/mc/sessions/", "/mc/sessions?")):
             return await self._handle_sessions_http(method, local_path)
 

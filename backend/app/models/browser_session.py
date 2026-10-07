@@ -17,7 +17,7 @@ are folders on the host, not rows, so it is a plain string, no FK). Not a task
 column: the task core is frozen (ADR-085 §4).
 
 Status: "open" (address valid, nothing started in the browser yet) → "live"
-(at least one tab; set by the ADR-088 lifecycle step) → "ended".
+(at least one tab; set by the lifecycle loop) → "ended".
 """
 import uuid
 from datetime import datetime
@@ -78,3 +78,11 @@ class BrowserSession(SQLModel, table=True):
         default=None, sa_column=Column(DateTime(timezone=True), nullable=True),
     )
     end_reason: Optional[str] = Field(default=None, max_length=64)
+    # Lifecycle (migration 0212): first tab seen, last browser activity, and
+    # the last image (file <browser_sessions_root>/<id>/last.jpg) with the
+    # page it showed.
+    started_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
+    last_active_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
+    last_frame_at: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
+    last_url: Optional[str] = Field(default=None, max_length=2048)
+    last_title: Optional[str] = Field(default=None, max_length=512)
