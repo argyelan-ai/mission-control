@@ -3,6 +3,7 @@
 **Status:** Accepted (direction; first two-week trial running) · partially supersedes ADR-005, ADR-019, ADR-021, ADR-061 §2, ADR-072 (inbound routing)
 **Datum:** 2026-09-22
 **Amended by:** [ADR-086](086-harness-runtime-cross-switch.md) — §6 rule 2 (operator surface is swappable too), §7 decision 1 and §8 stop 1 (local first instead of GPU boxes as helpers)
+**Amended by:** [ADR-089](089-lead-agent-with-hands.md) — §4 (exception for the lead agent's chat input and driver), §5 (fixed agents = lead agent + one local omp agent), §8 stop 3 (answered); see the note at the end
 **Scope:** Architecture/Direction · Backend/Dispatch · Infra/Runtime · Agent Protocol · Docs
 
 ## Context
@@ -288,6 +289,17 @@ thing and leaves the rest of it in place.
     touches a run folder's own data either way. Native CLI session
     resumption (`--resume`) is explicitly **not** part of this addendum — it
     is unproven after a worktree move and stays a later decision.
+
+## Note (2026-10-07) — amended by ADR-089
+
+The open questions this ADR left about the lead agent are decided in
+[ADR-089 — The lead agent is the operator's single right hand, with hands](089-lead-agent-with-hands.md).
+In short: §4 gains one exception (the lead agent's chat input and driver);
+§5 keeps exactly two fixed agents (the lead agent and one local omp agent,
+as Nachtrag (d) already says); the voice agent becomes the lead agent's
+voice, which answers stop 3 (§8). §7 decisions 2 and 5 and the output-only
+channels of decision 4 are unchanged. The text above is not rewritten;
+ADR-089 §9 lists each change.
 
 ## References
 

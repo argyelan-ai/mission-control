@@ -36,7 +36,8 @@ from app.services.decision_docs import (
 # + ADR-086): 87 `.md`-Dateien unter docs/decisions/, davon 85 echte
 # Entscheidungsdokumente; die zwei uebrigen sind README.md und _template.md.
 # +1 on 2026-10-06: ADR-088 (browser sessions), confirmed on purpose.
-EXPECTED_DECISION_DOCS = 87
+# +1 on 2026-10-07: ADR-089 (lead agent with hands), confirmed on purpose.
+EXPECTED_DECISION_DOCS = 88
 
 
 def _repo_root() -> Path:

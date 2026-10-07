@@ -7,7 +7,8 @@ code is the bug — or the rule needs a new ADR, not a quiet exception.
 Where the project stands on these rules: [ROADMAP.md](ROADMAP.md).
 The decisions behind the current direction:
 [ADR-085 — Head per job](decisions/085-head-per-job.md), amended by
-[ADR-086 — Harness and runtime freely switchable, local first](decisions/086-harness-runtime-cross-switch.md).
+[ADR-086 — Harness and runtime freely switchable, local first](decisions/086-harness-runtime-cross-switch.md)
+and [ADR-089 — The lead agent is the operator's single right hand, with hands](decisions/089-lead-agent-with-hands.md).
 
 ---
 
@@ -39,7 +40,8 @@ their knowledge, their hardware and their evidence.
    gap gets built (ADR-085 §3).
 4. **Build stop on the fleet layer.** Dispatch, watchdog/healers, Sessions
    chat and group chat get safety and operations fixes only — no features
-   (ADR-085 §4).
+   (ADR-085 §4). Exception: the lead agent's chat input and driver
+   (ADR-089).
 5. **Reversible first.** Persistent agents are paused, not deleted. Code is
    deleted only after two weeks of measured non-use, in themed PRs
    (ADR-085 §5).
@@ -125,7 +127,9 @@ their knowledge, their hardware and their evidence.
    services. Data: deletes, migrations that drop data, anything personal.
    Outside effect: deploys, messages or posts to people, anything public.
    Merges to `main` follow the operator's standing merge rule; a head never
-   merges on its own.
+   merges on its own. The lead agent merges and deploys only through MC's
+   change-class gate (ADR-089); until its merge gate exists, it does not
+   merge on its own either.
 2. **Everything else the head decides** — and records the decision and its
    reason in the run record. A head asks only when a question falls into one
    of the four areas above (ADR-085 §1).
@@ -202,7 +206,9 @@ the rules every UI change is checked against. Visual rules:
    coding-CLI vendor is shipping one (ADR-085 §7, decision 5). The head
    launcher on the existing task form and task detail (start, status, stop,
    restart with another pair) is not a control room (ADR-086 decision 5).
-2. No persistent "heads" and no new long-running lead ("lead agent 2.0").
+2. No persistent heads. Exactly one lead agent (ADR-089): it runs as turns
+   of the coding CLI's official background mode or of omp over ACP, on either
+   brain, and acts only through MC's gates.
 3. No own harness driver, agent loop or MCP server for heads — a CLI script is
    enough; an admin token is never handed to a head.
 4. No new task columns, statuses or "head" run type; the task core is frozen.
