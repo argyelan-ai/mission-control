@@ -9,7 +9,7 @@ Read this first; it points to the rest. Human contributors: see
 |---|---|
 | Why MC exists, build/evidence/decision/language rules | [docs/PRINCIPLES.md](docs/PRINCIPLES.md) |
 | Current stage, what is next, what is stopped | [docs/ROADMAP.md](docs/ROADMAP.md) |
-| Decisions and their reasons (ADRs, index + template) | [docs/decisions/README.md](docs/decisions/README.md) — direction since [ADR-085](docs/decisions/085-head-per-job.md) + [ADR-086](docs/decisions/086-harness-runtime-cross-switch.md) |
+| Decisions and their reasons (ADRs, index + template) | [docs/decisions/README.md](docs/decisions/README.md) — direction since [ADR-085](docs/decisions/085-head-per-job.md) + [ADR-086](docs/decisions/086-harness-runtime-cross-switch.md) + [ADR-089](docs/decisions/089-lead-agent-with-hands.md) |
 | Architecture, "where do I change what" | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
 | Product and design | [PRODUCT.md](PRODUCT.md) · [DESIGN.md](DESIGN.md) + [docs/design/ui-craft.md](docs/design/ui-craft.md) |
 | Product map, rule register, known gaps (checked by `kz check`) | [docs/produkt/README.md](docs/produkt/README.md) |
@@ -57,7 +57,10 @@ Every review (self-review, fresh reviewer, PR review) answers these, with eviden
   Agents never use `gh pr merge --admin`, never disable or edit rules or
   checks, never push around the queue — not even for an urgent fix.
 - Heads and unattended agents never merge at all; merges follow the
-  operator's merge rule.
+  operator's merge rule. The lead agent merges only via MC's merge gate
+  (`mc pr merge`, change-class gate, ADR-089). That gate is not built yet
+  (it waits for a non-admin GitHub App), so until then the lead agent does
+  not merge on its own either.
 - **Every bypass is counted and reported:** if a merge or push went past the
   queue or a required check by any means, write `bypass: <n> — <why>` in the
   run record and tell the operator. An unreported bypass is a failed job.
@@ -85,7 +88,9 @@ Every review (self-review, fresh reviewer, PR review) answers these, with eviden
   `credentials` — referenced by id, never inline.
 - **FastAPI routes:** static segments (`/tasks/reorder`) before parameterised ones (`/tasks/{id}`).
 - **Deploys and live writes** are not agent work: no `docker compose up`, no DB
-  writes, no restarts of live services from a coding session.
+  writes, no restarts of live services from a coding session. Only exception:
+  the lead agent via MC's deploy gate (`mc deploy`) for the change classes
+  ADR-089 allows — not built yet, so until then this rule applies to it too.
 
 ## Anything visible in `frontend-v2/`
 
