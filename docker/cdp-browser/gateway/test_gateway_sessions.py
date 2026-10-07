@@ -440,8 +440,9 @@ async def test_cleanup_answers_within_its_deadline_even_if_chromium_hangs(monkey
     elapsed = asyncio.get_event_loop().time() - start
     assert elapsed < 1.5
     assert len(ws.sent) == 3                       # all sent at once, not one per round trip
-    assert result["closedTargets"] == 3
-    assert any("unanswered" in e for e in result["errors"])
+    # Nothing was confirmed (re-review N2: counts are confirmed closes only).
+    assert result["closedTargets"] == 0
+    assert sum("unanswered" in e for e in result["errors"]) == 3
 
 
 # ── re-review N1: a stalled client must not block the end ──────────────────

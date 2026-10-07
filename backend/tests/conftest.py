@@ -49,6 +49,8 @@ _TEST_HARVEST_ROOT = Path(tempfile.mkdtemp(prefix="mc-test-harvest-"))
 # ~/.mc/heads, which the real mc-head watcher reads. A test that forgot its
 # monkeypatch must never drop a spool request there.
 _TEST_HEADS_ROOT = Path(tempfile.mkdtemp(prefix="mc-test-heads-"))
+# And for browser-session last images (ADR-088): never into the real ~/.mc.
+_TEST_BROWSER_SESSIONS_ROOT = Path(tempfile.mkdtemp(prefix="mc-test-browser-sessions-"))
 
 # Third incident of the same class (2026-09-07, omp agent): tests that spawn
 # real subprocesses (render-omp-config.sh & Co.) inherited the agent
@@ -116,6 +118,8 @@ app.config.settings = app.config.Settings(
     vault_path=_TEST_VAULT_ROOT,
     heads_root=_TEST_HEADS_ROOT,
     heads_sync_interval=99999,
+    browser_sessions_root=_TEST_BROWSER_SESSIONS_ROOT,
+    browser_sessions_interval=99999,  # lifecycle loop never auto-fires in tests
     night_shift_interval=99999,  # night shift loop never auto-fires in tests
     lifecycle_watchdog_enabled=True,  # ADR-046: on by default; the check is only ever
                                       # invoked when a test calls _check_stuck_in_progress directly.

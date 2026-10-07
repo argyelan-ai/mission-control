@@ -120,6 +120,7 @@ from app.services.runtime_schedule_service import runtime_schedule_service
 from app.services.runtime_watcher import runtime_watcher
 from app.services.runtime_pulse import runtime_pulse
 from app.services.heads.sync import heads_sync
+from app.services.browser_sessions import browser_session_lifecycle
 from app.services.heads.night_shift import night_shift
 from app.services.task_runner import task_runner
 from app.services.group_runner import group_runner
@@ -199,6 +200,7 @@ async def start_background_services(app: Any) -> None:
     # Head launcher: mirror head states onto task cards (idles while
     # heads_enabled is off; only reads files + writes task status).
     await heads_sync.start()
+    await browser_session_lifecycle.start()  # ADR-088 — browser-session lifecycle
     # Night shift (ROADMAP E2): starts heads marked "run tonight" inside the
     # operator's time window, one after another, and sends one morning
     # report. Idles while heads_enabled is off or nothing is marked.
@@ -279,6 +281,7 @@ async def stop_background_services(app: Any) -> None:
     await _timed_stop("runtime_pulse", runtime_pulse.stop())
     await _timed_stop("night_shift", night_shift.stop())
     await _timed_stop("heads_sync", heads_sync.stop())
+    await _timed_stop("browser_session_lifecycle", browser_session_lifecycle.stop())
     await _timed_stop("cli_update_checker", cli_update_checker.stop())
     await _timed_stop("model_catalog_checker", model_catalog_checker.stop())
     await _timed_stop("local_registry_checker", local_registry_checker.stop())
