@@ -14,6 +14,11 @@ RUN npm install -g @playwright/mcp@0.0.83 && npm cache clean --force
 # shared folder the backend reads (lab: without it 0.0.83 refuses "outside
 # allowed roots", the old 0.0.70 image wrote into /home/node and failed).
 RUN mkdir -p /output && chown node:node /output
+
+# The router (ADR-088 router step) is the entrypoint: one playwright-mcp child
+# per browser session (/s/<token>/mcp), per agent address (/a/<slug>/mcp) and
+# the unchanged shared one (/mcp). Standard library only — see router.mjs.
+COPY router.mjs /opt/router/router.mjs
 WORKDIR /output
 USER node
-ENTRYPOINT ["playwright-mcp"]
+ENTRYPOINT ["node", "/opt/router/router.mjs"]

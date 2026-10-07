@@ -1539,6 +1539,14 @@ Alle ADRs in `docs/decisions/`:
   Foreign auto-attached tabs are resumed and detached, so they do not hang. `Browser.close` is answered, not
   forwarded. Agent and unprefixed connections are unchanged. Real-Chromium test
   `docker/cdp-browser/test_isolation.sh` runs in CI.
+- **2026-10-07** — **playwright-mcp router (ADR-088 router step):** the playwright-mcp image's entrypoint is
+  now `docker/playwright-mcp/router.mjs` (Node standard library): `/s/<token>/mcp` gets its own playwright-mcp
+  child on the gateway's session address, `/a/<slug>/mcp` one on the agent address, `/mcp` stays the shared child
+  on the legacy endpoint. Children start on first use (a session child only for a token the gateway knows),
+  listen on 127.0.0.1 on a port no other child holds, stop after 30 min without an open request or via
+  `DELETE /_router/sessions/<token>`, at most 16 session/agent children; the shared child never idles out and
+  takes no slot. A child that dies aborts its open responses. Tokens never reach the log. No host port yet
+  (harness wiring).
 - **2026-10-07** — **Agent browser images (ADR-088 images step):** `cdp-browser` moves from the frozen
   `zenika/alpine-chrome` (Chromium 124) to a digest-pinned `debian:trixie-slim` with Debian's Chromium 154
   (SwiftShader WebGL), websocat as a checksum-verified static binary, `mem_limit: 2g`, `--window-size=1280,900`.
