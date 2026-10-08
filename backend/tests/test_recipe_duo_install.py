@@ -25,6 +25,7 @@ Only RFC 5737 / RFC 1918 placeholder addresses, no device names — public repo.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -410,8 +411,9 @@ def test_tf_recipe_is_a_generic_duo_entry():
     assert tf["notes"].startswith("LICENCE - NON-COMMERCIAL USE ONLY (CC BY-NC-ND drafter)")
     assert tf["description"].startswith("NON-COMMERCIAL USE ONLY")
     assert "DRAFTER=mtp" in tf["notes"] and "ONE request at a time" in tf["notes"]
-    # Pinned, never a moving branch.
-    assert "1f3d909b00b7be7aa8f00d3a33e0b9e7aa56d221" in tf["install_template"]
+    # Pinned, never a moving branch: upstream v1.10.
+    assert "REV=549fdc562c477d477244d2df0590d6c14bda4889\n" in tf["install_template"]
+    assert "1f3d909b" not in json.dumps(tf)
     # No operator data anywhere in the entry.
     blob = json.dumps(tf)
     assert not re.search(r"\b(?:192\.168|100\.\d+)\.\d+\.\d+\b", blob)
@@ -470,53 +472,122 @@ def test_tf_launch_is_detached_and_stop_stops_both_boxes():
     assert cmds["stop"].endswith("./stop.sh")
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
-@pytest.mark.parametrize("upstream_changed", [False, True])
-def test_tf_install_skips_only_prepare_sh_image_steps(tmp_path, upstream_changed):
-    """The splice the install runs when the two image stores report different
-    image IDs: steps 2 and 3 of prepare.sh go, everything else stays — and the
-    guard after it refuses to run anything when upstream renamed a section
-    marker (then the image lines would survive the splice). Executed for real against a
-    prepare.sh with upstream's section markers, including the header comment
-    that mentions `docker save` (a first guard tripped over exactly that)."""
-    install = _rendered_tf_commands()["install"]
-    lines = install.splitlines()
-    first = next(i for i, line in enumerate(lines) if "P=scripts/.mc-prepare-weights.sh" in line)
-    last = next(i for i, line in enumerate(lines) if line.strip() == 'bash "$P"')
-    splice = "\n".join(lines[first:last])
-    second = (
-        "# ---------------------------------------------------------------- 2. image (head)"
-        if not upstream_changed
-        else "# ---------------------------------------------------------------- 2. the image here"
+# A stand-in for the pinned upstream checkout: config.sh / nodes.sh with the
+# helper signatures upstream has since v1.4 (``worker <i> <cmd...>``,
+# ``need_worker <i>``, ``image_ident`` / ``worker_image_ident <i>`` — v1.3.1's
+# content identity, issue #8), and a docker that answers per side. Under
+# ``set -u`` the old call shape (``need_worker`` with no index) dies exactly
+# like it does against upstream's real nodes.sh.
+_FAKE_CONFIG = """\
+WORKER="${WORKER:-mc@192.0.2.11}"
+TP="${TP:-2}"
+IMAGE=tensorfold-glm53:v0.6.0
+die() { echo "DIE: $*"; exit 7; }
+prebuilt_image() { echo "ghcr.io/example/tf@sha256:abc"; }
+"""
+_FAKE_NODES = """\
+worker() { local i=$1; shift; [[ "$i" =~ ^[0-9]+$ ]] || { echo "BAD-WORKER-INDEX $i"; exit 9; }; SIDE=worker "$@"; }
+need_worker() { local i=$1; [ "$i" = 1 ] || die "need_worker $i"; }
+image_ident() { docker image inspect -f X "$1" >/dev/null && echo "ident-$(cat "$STUB/ident-head")" || echo missing; }
+worker_image_ident() { worker "$1" docker image inspect -f X "$2" >/dev/null && echo "ident-$(cat "$STUB/ident-worker")" || echo missing; }
+"""
+_FAKE_DOCKER = """\
+#!/usr/bin/env bash
+echo "${SIDE:-head} docker $*" >> "$STUB/calls"
+case "$*" in
+  *RepoDigests*) echo "[ghcr.io/example/tf@sha256:abc]" ;;
+esac
+exit 0
+"""
+
+
+def _run_tf_install(tmp_path: Path, *, head: str = "same", worker: str = "same",
+                    template: str | None = None, env: dict[str, str] | None = None):
+    """Run the rendered install for real against the stand-in checkout.
+
+    Returns ``(stdout, calls)``: what the install printed (with recipe_install's
+    ``MC_EXIT:<code>`` marker) and every docker call, prefixed by its side."""
+    import os
+
+    src = tmp_path / "engines"
+    repo = src / "GLM-5.3-Flash-EXL3-2x-DGX-Sparks-TensorFold"
+    (repo / "scripts").mkdir(parents=True)
+    (repo / ".git").mkdir()
+    (repo / "scripts" / "config.sh").write_text(_FAKE_CONFIG)
+    (repo / "scripts" / "nodes.sh").write_text(_FAKE_NODES)
+    (repo / "scripts" / "prepare.sh").write_text("#!/usr/bin/env bash\necho PREPARE-RAN\n")
+    (repo / "scripts" / "prepare.sh").chmod(0o755)
+    stub = tmp_path / "stub"
+    stub.mkdir()
+    (stub / "docker").write_text(_FAKE_DOCKER)
+    (stub / "git").write_text("#!/usr/bin/env bash\nexit 0\n")
+    for tool in ("docker", "git"):
+        (stub / tool).chmod(0o755)
+    (stub / "ident-head").write_text(head)
+    (stub / "ident-worker").write_text(worker)
+    tf = _tf_spec()
+    install = launch_template.build_install_command(
+        slug=TF_SLUG, install_template=template or tf["install_template"], port=8000,
+        model_identifier=tf["model_identifier"], ctx=tf["context_len"], src_dir=str(src),
+        duo={"worker_ssh": "mc@192.0.2.11", "worker_fabric_ip": "10.0.0.2", "head_ip": "192.0.2.10",
+             "worker_ip": "192.0.2.11", "head_fabric_ip": "10.0.0.1", "head_ssh": "mc@192.0.2.10"},
     )
-    fake = "\n".join([
-        "#!/usr/bin/env bash",
-        "#   3. the same image on the worker: pulled there, else streamed (docker save | ssh docker load)",
-        "# ---------------------------------------------------------------- 1. preflight",
-        "echo preflight",
-        second,
-        'docker pull "$prebuilt"',
-        "# ---------------------------------------------------------------- 3. image (worker)",
-        'docker save "$IMAGE" | worker docker load >/dev/null',
-        "# ---------------------------------------------------------------- 4. download (head)",
-        "echo download",
-        "# ---------------------------------------------------------------- 6. the same files on the worker",
-        "echo rsync",
-        "",
-    ])
-    (tmp_path / "scripts").mkdir()
-    (tmp_path / "scripts" / "prepare.sh").write_text(fake)
-    script = 'die() { echo "DIE: $*"; exit 7; }\n' + splice + '\necho SPLICED-OK\n'
-    done = subprocess.run(["bash", "-c", script], cwd=tmp_path, capture_output=True, text=True)
-    kept = (tmp_path / "scripts" / ".mc-prepare-weights.sh").read_text()
-    if upstream_changed:
-        assert done.returncode == 7, done.stdout + done.stderr
-        assert "prepare.sh changed shape" in done.stdout
-        return
-    assert done.returncode == 0, done.stdout + done.stderr
-    assert "SPLICED-OK" in done.stdout
-    assert "echo preflight" in kept and "echo download" in kept and "echo rsync" in kept
-    assert 'docker pull "$prebuilt"' not in kept and 'docker save "$IMAGE"' not in kept
+    run_env = {k: v for k, v in os.environ.items() if k not in ("WORKER", "TP")}
+    run_env.update(PATH=f"{stub}:{os.environ['PATH']}", STUB=str(stub), **(env or {}))
+    done = subprocess.run(["bash", "-c", f'{install}; echo "MC_EXIT:$?"'], cwd=tmp_path,
+                          capture_output=True, text=True, env=run_env)
+    calls = (stub / "calls").read_text() if (stub / "calls").exists() else ""
+    return done.stdout + done.stderr, calls
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
+def test_tf_install_pulls_on_both_boxes_then_runs_prepare_sh(tmp_path):
+    """v1.10: upstream compares images by content, so the install runs plain
+    prepare.sh — after MC's own pull by digest on both boxes."""
+    out, calls = _run_tf_install(tmp_path)
+    assert "MC_EXIT:0" in out, out
+    assert "PREPARE-RAN" in out
+    assert "head docker pull -q ghcr.io/example/tf@sha256:abc" in calls
+    assert "worker docker pull -q ghcr.io/example/tf@sha256:abc" in calls
+    assert "worker docker tag ghcr.io/example/tf@sha256:abc tensorfold-glm53:v0.6.0" in calls
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
+def test_tf_install_refuses_images_that_differ_by_content(tmp_path):
+    out, _ = _run_tf_install(tmp_path, head="aaa", worker="bbb")
+    assert "MC_EXIT:7" in out, out
+    assert "PREPARE-RAN" not in out
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
+def test_tf_install_refuses_a_third_spark(tmp_path):
+    """MC's topology for this recipe is two boxes; a TP=3 from the
+    environment (or scripts/local.sh) would start a setup MC does not track."""
+    out, _ = _run_tf_install(tmp_path, env={"TP": "3"})
+    assert "MC_EXIT:7" in out, out
+    assert "PREPARE-RAN" not in out
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
+def test_tf_install_fails_loudly_without_upstreams_image_ident(tmp_path):
+    """Without upstream's content identity both sides would read as empty and
+    'equal' — the install must stop instead."""
+    tf = _tf_spec()
+    template = tf["install_template"].replace("source scripts/nodes.sh",
+                                              "source scripts/nodes.sh\nunset -f image_ident")
+    out, _ = _run_tf_install(tmp_path, template=template)
+    assert "MC_EXIT:7" in out, out
+    assert "PREPARE-RAN" not in out
+
+
+def test_tf_install_has_no_image_step_splice_left():
+    """The awk splice around prepare.sh's image steps was for v1.2, whose
+    prepare.sh compared .Id (containerd vs classic store). Upstream fixed that
+    (issue #8); the splice would now cut sections whose markers changed."""
+    install = _tf_spec()["install_template"]
+    assert "mc-prepare-weights" not in install
+    assert "awk" not in install
+    assert install.count("./scripts/prepare.sh") == 1
 
 
 @pytest.mark.asyncio
