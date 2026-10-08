@@ -151,6 +151,43 @@ Ending an agent's phase closes only tabs the agent created or nobody known
 created — never a tab another owner created that the agent merely claimed.
 While the gateway is unreachable the loop changes nothing.
 
+## Addendum 2026-10-07 — harness wiring (heads)
+
+Switch `HEADS_BROWSER_ENABLED` (off until a live check). Each head run opens
+its browser session at start (`services/heads/launcher.py`, own DB session)
+and gets its two addresses in `head.env` (0600; never in `spec.json`):
+`MC_BROWSER_MCP_URL = http://127.0.0.1:8931/s/<token>/mcp` and
+`MC_BROWSER_CDP_URL = http://127.0.0.1:9300/s/<token>/`. `mc-head` accepts
+only loopback addresses of exactly that shape. **Claude Code** (`-p --bare`)
+gets an `--mcp-config` with that router address, `--strict-mcp-config` and
+`mcp__browser` allowed. **omp** gets a relay (`cdp_relay.py --prefix
+/s/<token>`, started by `mc-head` outside the sandbox, ended with the run) and
+its profile's `browser.cdpUrl` points there. Published to the host on
+loopback only, and in both cases a **sessions-only** listener: the gateway's
+(`127.0.0.1:9300` → container `9301`, `CDP_GATEWAY_SESSION_PORT`: only
+`/s/<token>/…`, never unprefixed CDP, `/a/<slug>/` or `/mc/*`) and the
+router's (`127.0.0.1:8931` → container `8932`: only `/s/<token>/mcp` and
+`/healthz`). Both accept only a local `Host` (localhost, an IP literal; the
+gateway also its service name) and refuse any non-local `Origin`: the gateway
+rewrites the Host header it sends to Chromium, which defeats Chromium's own
+DNS-rebinding check, so a page in the operator's browser on a rebinding name
+could otherwise drive the shared browser. The full gateway (9300) and
+Chromium's ports stay inside Docker. The head sandbox denies port 9300 on any
+host (`*:9300`, which also covers the IPv4-mapped `::ffff:127.0.0.1`) and
+reading other runs' folders under `heads/` (their `head.env`/`mcp.json` carry
+their tokens) — a head reaches only its own session. Ending a session also
+stops its router child (`DELETE /_router/sessions/<token>`).
+
+Residual risks: any local process that holds a token can use that session
+(the token is the credential; it lives in the run folder, 0600, and in the
+harness's environment). omp's per-run relay listens on a free loopback port
+**without its own check**: any local process — another head included — that
+finds the port can drive that one session (never another, never the shared
+browser). omp connects through Puppeteer's `browserURL`, which drops any path
+prefix and supports no credentials, so a per-run secret cannot be added on
+omp's side; a fix needs either omp supporting a WebSocket endpoint/socket or
+the relay identifying its peer. Tracked as a known gap.
+
 ## Alternatives
 
 - **Keep the agent as the unit, improve the guessing** → rejected: heads have

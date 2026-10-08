@@ -52,6 +52,9 @@ Usage
 -----
   cdp_relay.py --agent-path                      # print "/a/<slug>" or "" (shell helper)
   cdp_relay.py --listen-port 9222 --target cdp-browser:9300
+  CDP_RELAY_PREFIX=/s/<token> cdp_relay.py --listen-port <free> --target 127.0.0.1:9300
+      (a head on the host: mc-head starts it for the head's browser session,
+      ADR-088; the token is passed by environment, never logged)
 """
 from __future__ import annotations
 
@@ -68,6 +71,9 @@ logger = logging.getLogger("cdp_relay")
 # Same rule as cdp_gateway._SLUG_RE — a slug the gateway would reject must
 # never be sent (it would silently fall back to "unidentified" there).
 _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
+# An explicit prefix (--prefix): a browser session's address (ADR-088) or an
+# agent's. Same token rule as the gateway's.
+_PREFIX_RE = re.compile(r"^/(?:s/[A-Za-z0-9_-]{32,128}|a/[a-z0-9][a-z0-9-]{0,62})$")
 _GATEWAY_PORT = "9300"
 _PLAIN_CHROMIUM_PORT = "9223"  # cdp-browser's socat port: Chromium itself, no gateway
 _MAX_HEAD_BYTES = 64 * 1024
@@ -106,6 +112,35 @@ def agent_path(env: Optional[dict] = None) -> str:
     if not _SLUG_RE.match(slug):
         return ""
     return f"/a/{slug}"
+
+
+def parse_prefix(raw: str) -> str:
+    """A `--prefix` value: `/s/<token>` (a head's browser session) or
+    `/a/<slug>`. Anything else is refused — never sent to the gateway."""
+    if not _PREFIX_RE.match(raw or ""):
+        raise ValueError("prefix must be /s/<token> or /a/<slug>")
+    return raw
+
+
+def display_prefix(prefix: str) -> str:
+    """The prefix as it may appear in a log: a session token is a credential."""
+    if not prefix:
+        return "(off)"
+    if prefix.startswith("/s/"):
+        return "/s/<REDACTED>"
+    return prefix
+
+
+def resolve_prefix(explicit: Optional[str], env: Optional[dict] = None) -> str:
+    """An explicit `--prefix` wins, then `CDP_RELAY_PREFIX` from the
+    environment (how mc-head passes a session token — a command line is
+    readable by every host process), otherwise the container's agent path."""
+    env = os.environ if env is None else env
+    if explicit:
+        return parse_prefix(explicit)
+    if env.get("CDP_RELAY_PREFIX"):
+        return parse_prefix(env["CDP_RELAY_PREFIX"])
+    return agent_path(env)
 
 
 def prefix_request_line(line: bytes, path_prefix: str) -> bytes:
@@ -158,23 +193,45 @@ async def _pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> N
         await writer.drain()
 
 
+def _strict_request_ok(head: bytes, path_prefix: str) -> bool:
+    """For a session relay: the request line is origin-form HTTP/1.x, its
+    path has no `..` segment, and no chunked body hides the next request."""
+    first = head.split(b"\r\n", 1)[0]
+    parts = first.split(b" ")
+    if len(parts) != 3 or not parts[2].startswith(b"HTTP/1.") or not parts[1].startswith(b"/"):
+        return False
+    path = parts[1].split(b"?", 1)[0]
+    if b".." in path.split(b"/") or b"%2e" in path.lower() or b"\\" in path:
+        return False
+    return b"chunked" not in (_header(head, b"Transfer-Encoding") or b"").lower()
+
+
 async def _client_to_upstream(
     reader: asyncio.StreamReader, writer: asyncio.StreamWriter, path_prefix: str,
 ) -> None:
     if not path_prefix:
         await _pipe(reader, writer)
         return
+    # A head's browser session (/s/<token>): this relay runs outside the head's
+    # sandbox, so whatever cannot be scoped with certainty is refused — never
+    # passed through like the container relay does.
+    strict = path_prefix.startswith("/s/")
     while True:
         try:
             head = await reader.readuntil(b"\r\n\r\n")
         except asyncio.IncompleteReadError as e:
-            if e.partial:  # trailing bytes that never became a request head
+            if e.partial and not strict:  # trailing bytes that never became a request head
                 writer.write(e.partial)
                 await writer.drain()
             return
         except asyncio.LimitOverrunError:
+            if strict:
+                return
             # Not an HTTP head we understand — stop interpreting, just relay.
             await _pipe(reader, writer)
+            return
+        if strict and not _strict_request_ok(head, path_prefix):
+            logger.info("cdp_relay: refused a request it cannot scope to the session")
             return
         first, sep, rest = head.partition(b"\r\n")
         new_first = prefix_request_line(first, path_prefix)
@@ -194,6 +251,8 @@ async def _client_to_upstream(
             try:
                 n = int(length)
             except ValueError:
+                if strict:
+                    return
                 await _pipe(reader, writer)
                 return
             await _copy_exact(reader, writer, n)
@@ -264,12 +323,12 @@ def _split_target(target: str) -> tuple[str, int]:
     return host, int(port)
 
 
-async def _serve(listen_port: int, target: str) -> None:
+async def _serve(listen_port: int, target: str, explicit_prefix: Optional[str] = None) -> None:
     host, port = _split_target(target)
-    prefix = agent_path()
+    prefix = resolve_prefix(explicit_prefix)
     server = await start_relay("127.0.0.1", listen_port, host, port, prefix)
     logger.info(
-        "cdp_relay: 127.0.0.1:%d -> %s (agent path %s)", listen_port, target, prefix or "(off)",
+        "cdp_relay: 127.0.0.1:%d -> %s (agent path %s)", listen_port, target, display_prefix(prefix),
     )
     async with server:
         await server.serve_forever()
@@ -280,13 +339,23 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--agent-path", action="store_true", help='print "/a/<slug>" or "" and exit')
     parser.add_argument("--listen-port", type=int, default=9222)
     parser.add_argument("--target", default=os.environ.get("OMP_BROWSER_CDP_TARGET") or "cdp-browser:9300")
+    parser.add_argument(
+        "--prefix", default=None,
+        help="explicit path prefix (/s/<token> for a head's browser session, or /a/<slug>)",
+    )
     args = parser.parse_args(argv)
+    if args.prefix is not None:
+        try:
+            parse_prefix(args.prefix)
+        except ValueError as e:
+            print(f"cdp_relay: {e}", file=sys.stderr)
+            return 2
     if args.agent_path:
         print(agent_path())
         return 0
     logging.basicConfig(level=logging.INFO, format="[cdp-relay] %(message)s")
     try:
-        asyncio.run(_serve(args.listen_port, args.target))
+        asyncio.run(_serve(args.listen_port, args.target, args.prefix))
     except KeyboardInterrupt:
         return 0
     return 0

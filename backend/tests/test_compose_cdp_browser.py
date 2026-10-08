@@ -162,6 +162,17 @@ def test_playwright_mcp_health_does_not_start_a_child():
     assert "/healthz" in test and "/mcp" not in test
 
 
-def test_playwright_mcp_stays_off_the_host_network():
-    """The host port for heads comes with the harness wiring, not here."""
-    assert "ports" not in _service("playwright-mcp")
+def test_heads_reach_router_and_gateway_on_loopback_only():
+    """Heads run on the host (ADR-088 harness wiring): the router and the
+    gateway are published on 127.0.0.1 only — never on the network, and
+    never Chromium's own debug ports (9222/9223), which have no session
+    check at all."""
+    # The host gets the router's sessions-only listener: from outside Docker
+    # the browser needs a session token (no shared /mcp, no agent address).
+    assert _service("playwright-mcp").get("ports") == ["127.0.0.1:8931:8932"]
+    args = _service("playwright-mcp")["command"]
+    assert args[args.index("--session-port") + 1] == "8932"
+    # The gateway's published port is its sessions-only listener (9301): no
+    # unprefixed CDP, no /a/, no /mc, local Host/Origin only (DNS rebinding).
+    assert _service("cdp-browser").get("ports") == ["127.0.0.1:9300:9301"]
+    assert (_service("cdp-browser").get("environment") or {}).get("CDP_GATEWAY_SESSION_PORT") == "9301"

@@ -27,6 +27,9 @@ MC_HOME=${MC_HOME:-"$HOME/.mc"}
 mkdir -p "$MC_HOME/bin" "$MC_HOME/heads/spool" "$MC_HOME/logs"
 chmod 700 "$MC_HOME/heads"
 cp "$HERE/mc-head" "$HERE/head.sb" "$HERE/claude-head-settings.json" "$MC_HOME/bin/"
+# omp heads reach their browser session through this relay (ADR-088); mc-head
+# looks for it next to itself.
+cp "$HERE/../../docker/omp-bridge/cdp_relay.py" "$MC_HOME/bin/"
 chmod 755 "$MC_HOME/bin/mc-head"
 PLIST="$HOME/Library/LaunchAgents/com.mc.head-starter.plist"
 # python3 (not sed/awk) for the __GC_APPLY_ENV__ substitution: it is a

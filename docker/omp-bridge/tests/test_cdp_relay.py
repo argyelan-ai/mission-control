@@ -304,3 +304,88 @@ async def test_upstream_down_closes_the_client_instead_of_hanging():
     finally:
         relay.close()
         await relay.wait_closed()
+
+
+# ── explicit prefix (ADR-088 harness wiring): a head's browser session ─────
+
+SESSION_TOKEN = "relay-session-token-" + "x" * 24
+
+
+def test_explicit_session_prefix_is_accepted():
+    assert cdp_relay.parse_prefix(f"/s/{SESSION_TOKEN}") == f"/s/{SESSION_TOKEN}"
+    assert cdp_relay.parse_prefix("/a/alpha") == "/a/alpha"
+
+
+@pytest.mark.parametrize("bad", ["/s/short", "/s/../x", "s/abc", "/x/alpha", "/a/Alpha!", "", "/s/" + "y" * 40 + "/extra"])
+def test_malformed_prefixes_are_refused(bad):
+    with pytest.raises(ValueError):
+        cdp_relay.parse_prefix(bad)
+
+
+def test_the_session_token_never_reaches_the_relay_log():
+    assert cdp_relay.display_prefix(f"/s/{SESSION_TOKEN}") == "/s/<REDACTED>"
+    assert cdp_relay.display_prefix("/a/alpha") == "/a/alpha"
+    assert cdp_relay.display_prefix("") == "(off)"
+
+
+def test_cli_prefix_wins_over_the_container_agent(monkeypatch):
+    monkeypatch.setenv("AGENT_SLUG", "alpha")
+    assert cdp_relay.resolve_prefix(f"/s/{SESSION_TOKEN}") == f"/s/{SESSION_TOKEN}"
+    assert cdp_relay.resolve_prefix(None) == "/a/alpha"
+
+
+# ── a session relay is strict: nothing reaches the gateway without the prefix ─
+
+async def _strict_probe(raw: bytes) -> list[bytes]:
+    upstream = FakeUpstream()
+    await upstream.start()
+    relay = await _start_relay(upstream.port, f"/s/{SESSION_TOKEN}")
+    port = relay.sockets[0].getsockname()[1]
+    try:
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.write(raw)
+        await writer.drain()
+        try:
+            await asyncio.wait_for(reader.read(65536), 2)
+        except asyncio.TimeoutError:
+            pass
+        writer.close()
+        await asyncio.sleep(0.1)
+        return list(upstream.request_lines)
+    finally:
+        relay.close()
+        await relay.wait_closed()
+        await upstream.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw", [
+    # absolute-form: would otherwise pass unprefixed (independent review, P5)
+    b"GET http://127.0.0.1:9300/json/list HTTP/1.1\r\nHost: x\r\n\r\n",
+    # a valid request, then a chunked body hiding an unprefixed second request
+    b"POST /json/new HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n"
+    b"GET /json/list HTTP/1.1\r\nHost: x\r\n\r\n",
+    # a path that climbs out of the session prefix
+    b"GET /../json/list HTTP/1.1\r\nHost: x\r\n\r\n",
+    # not HTTP at all
+    b"\x16\x03\x01garbage that never becomes a request head\r\n\r\n",
+])
+async def test_session_relay_refuses_what_it_cannot_scope(raw):
+    """A head's relay sits outside the sandbox; whatever it cannot put
+    under the session prefix with certainty it refuses (closes) instead of
+    passing it through — the container relay's lenient pass-through would
+    hand a head unscoped access to the gateway."""
+    assert await _strict_probe(raw) == []
+
+
+@pytest.mark.asyncio
+async def test_session_relay_still_passes_normal_cdp_requests():
+    lines = await _strict_probe(b"GET /json/version HTTP/1.1\r\nHost: 127.0.0.1:9222\r\n\r\n")
+    assert lines == [f"GET /s/{SESSION_TOKEN}/json/version HTTP/1.1".encode()]
+
+
+def test_session_prefix_from_the_environment():
+    env = {"CDP_RELAY_PREFIX": f"/s/{SESSION_TOKEN}", "AGENT_SLUG": "alpha"}
+    assert cdp_relay.resolve_prefix(None, env) == f"/s/{SESSION_TOKEN}"
+    with pytest.raises(ValueError):
+        cdp_relay.resolve_prefix(None, {"CDP_RELAY_PREFIX": "/s/short"})

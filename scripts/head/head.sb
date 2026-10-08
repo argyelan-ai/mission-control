@@ -47,6 +47,24 @@
   (subpath (string-append (param "RUN") "/.wrapper"))
   (subpath (string-append (param "RUN") "/.backend")))
 
+;; Other runs' folders are not readable: their head.env and mcp.json carry
+;; their browser session tokens (ADR-088). A head reads its own run, the
+;; clones its worktree points into (git data, the push hook) and a scratch
+;; origin. Only data reads are denied — stat keeps working, so paths through
+;; heads/ still resolve. Placed before the secrets rules: those still win
+;; inside the own run (a .env in the worktree stays unreadable).
+(deny file-read-data
+  (subpath (string-append (param "MC_HOME") "/heads")))
+(allow file-read-data
+  (subpath (param "RUN"))
+  (subpath (param "CLONE_GIT"))
+  (subpath (string-append (param "MC_HOME") "/heads/clones")))
+(if (not (string=? (param "SCRATCH_ORIGIN") ""))
+  (allow file-read-data (subpath (param "SCRATCH_ORIGIN"))))
+;; A data-level allow outranks the file-read* denies below, so the one secret
+;; that can sit inside those places (.env files) is denied at data level too.
+(deny file-read-data (regex #"/\.env(\..*)?$"))
+
 ;; Secrets are never readable.
 (deny file-read*
   (subpath (string-append (param "REAL_HOME") "/.ssh"))
@@ -89,3 +107,11 @@
 ;; IPv4 listener. Remote hosts never serve this port, so nothing else is lost.
 (deny network-outbound
   (remote tcp "*:18800"))
+
+;; Nor the browser gateway (port 9300): it also serves unprefixed CDP to every
+;; tab of the shared browser. A head reaches only its own session — Claude
+;; through the router's sessions-only port, omp through mc-head's relay, which
+;; runs outside this sandbox (ADR-088 harness wiring). Matched on any host for
+;; the same IPv4-mapped reason as above.
+(deny network-outbound
+  (remote tcp "*:9300"))

@@ -234,6 +234,18 @@ test("an unknown router flag is refused instead of starting a server that never 
   assert.equal(parseCli(["--listen", "9000", "--", "--version"]).childArgs[0], "--version");
 });
 
+test("the sessions-only listener (published to the host) serves nothing but session addresses", async (t) => {
+  const { router } = await start();
+  t.after(() => router.close());
+  const port = await router.listen(0, "127.0.0.1", { sessionsOnly: true });
+  const host = `http://127.0.0.1:${port}`;
+  assert.equal(json(await request(`${host}/s/${TOKEN}/mcp`)).cdp, `${GATEWAY}/s/${TOKEN}/`);
+  assert.equal((await request(`${host}/mcp`)).status, 404);                 // no token, no browser
+  assert.equal((await request(`${host}/a/alpha/mcp`)).status, 404);
+  assert.equal((await request(`${host}/_router/sessions/${TOKEN}`, { method: "DELETE" })).status, 404);
+  assert.equal((await request(`${host}/healthz`, { method: "GET" })).status, 200);
+});
+
 // ── review R1: the shared /mcp child is exactly as before ──────────────────
 
 test("the shared child is never stopped for idleness", async (t) => {
@@ -383,4 +395,28 @@ test("a child that exits while starting is started again on a fresh port", async
   assert.equal(r.status, 200);
   assert.ok(fs.existsSync(marker), "the first child really failed");
   assert.ok(lines.some((l) => /retrying/.test(l)), lines.join("\n"));
+});
+
+test("the sessions-only listener refuses a rebinding Host and a foreign Origin", async (t) => {
+  // DNS rebinding: a page on rebind.example resolved to 127.0.0.1 sends its own name as Host.
+  const { router } = await start();
+  t.after(() => router.close());
+  const port = await router.listen(0, "127.0.0.1", { sessionsOnly: true });
+  const host = `http://127.0.0.1:${port}`;
+  for (const bad of ["rebind.attacker.example", "rebind.attacker.example:8931", "localhost.evil.example"]) {
+    assert.equal((await request(`${host}/s/${TOKEN}/mcp`, { headers: { host: bad } })).status, 403, bad);
+  }
+  for (const origin of ["http://rebind.attacker.example", "null", "chrome-extension://abc"]) {
+    assert.equal((await request(`${host}/s/${TOKEN}/mcp`, { headers: { origin } })).status, 403, origin);
+  }
+  assert.equal(router.childCount(), 0);
+  for (const ok of ["127.0.0.1:8931", "localhost:8931", "[::1]:8931"]) {
+    assert.equal((await request(`${host}/s/${TOKEN}/mcp`, { headers: { host: ok, origin: "http://localhost:3000" } })).status, 200, ok);
+  }
+});
+
+test("the local-host rule", async () => {
+  const { localHost } = await import("../router.mjs");
+  for (const ok of ["127.0.0.1", "127.0.0.1:8931", "localhost:1", "LOCALHOST", "[::1]:8931", "10.0.0.5"]) assert.ok(localHost(ok), ok);
+  for (const bad of ["", undefined, "example.org", "rebind.example:8931", "[::1", "localhost.evil.example"]) assert.ok(!localHost(bad), String(bad));
 });

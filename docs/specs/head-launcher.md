@@ -186,7 +186,10 @@ $MC_HOME/heads/<run_id>/
   spec.json        written by backend, read-only for the head
   job.md           task title, description, acceptance criteria (+ previous-run context on restart)
   procedure.md     head-launcher-AGENTS.md with placeholders filled
-  head.env         0600, provider env + the head's own weak GH_TOKEN (§9); no MC token, no Claude OAuth token
+  head.env         0600, provider env + the head's own weak GH_TOKEN (§9); no MC token, no Claude OAuth token;
+                   with HEADS_BROWSER_ENABLED also MC_BROWSER_CDP_URL / MC_BROWSER_MCP_URL — the run's own
+                   browser session (ADR-088): Claude gets an --mcp-config on the router's sessions-only port,
+                   omp a per-run relay (mcp.json / .wrapper/relay.log in the run folder)
   head-settings.json  claude only: allow/deny lists (§9)
   .wrapper/        NOT writable by the head (sandbox deny):
     status.json      written only by the mc-head wrapper (atomic tmp + mv)
@@ -213,7 +216,8 @@ $MC_HOME/heads/<run_id>/
  "created_by": "user-uuid", "created_at": "…"}
 ```
 A test asserts `spec.json` carries no key matching `KEY|TOKEN|SECRET|PASSWORD`
-and `head.env` only the allowed ones (§9: provider key for cloud runtimes,
+and `head.env` only the allowed ones (§9: provider key for cloud runtimes, the
+run's two loopback browser-session addresses when the head browser is on,
 placeholder `ANTHROPIC_API_KEY`, the head's `GH_TOKEN`).
 
 **Token usage of heads.** The token harvester reads `omp-sessions/` and
@@ -735,7 +739,7 @@ The head runs on the host with the operator's user. Honest weighting:
 | 2 Tool guards | `pre-push` hook (main/master, force); shim folder first on `PATH` blocking `docker`, `ssh`, `scp`, `sudo`, `launchctl`, `kubectl`; `gh` shim allows only `pr create/view/list`, `repo view`, `auth status`; `env -i` (no inherited secrets); `GIT_CONFIG_GLOBAL=/dev/null` | guard rail — bypassable (absolute paths, `git push --no-verify`, `git -c core.hooksPath=`) |
 | 2b Claude allow list | `--settings <run>/head-settings.json` (under `--bare` only managed settings and `--settings` apply reliably [cli]): `permissions.allow` is a **positive list** — `Bash(git add/commit/status/diff/log …)`, `Bash(git push origin mc-head/*)`, `Bash(gh pr create/view/list …)`, the repo's test/lint/privacy commands from the repo row; `permissions.deny`: `Read(~/.ssh/**)`, `Read(**/.env*)`, `Bash(docker/ssh/sudo/curl …)`. Everything else is refused in `-p` | the strongest per-command filter of all harnesses — Claude only |
 | 2c omp | **no per-command filter exists** (`--approval-mode always-ask\|write\|yolo`, `--auto-approve` [cli]); `always-ask` blocks a `-p` run → `--auto-approve` | none — omp relies on layers 2 + 3 |
-| 3 Sandbox | `sandbox-exec` profile (`/usr/bin/sandbox-exec` exists [cli]): deny read of `~/.ssh`, `**/.env*`, `$MC_HOME/secrets`, `$MC_HOME/browser-profiles` (the persistent login browser's profile), the login keychain, other harness config dirs; deny connecting to the login browser's remote-control port 18800 on any host (`*:18800`, so the IPv4-mapped form `::ffff:127.0.0.1` is covered too) and to the Docker sockets; deny write outside `wt/`, `step.txt`, `question.md`, `head.log`, vault `jobs/`, temp, harness caches — **`.wrapper/` (status, heartbeat) is not writable** | process-level [assumption: works on current macOS incl. network; proof with sabotage `cat ~/.ssh/<key>` → denied] |
+| 3 Sandbox | `sandbox-exec` profile (`/usr/bin/sandbox-exec` exists [cli]): deny read of `~/.ssh`, `**/.env*`, `$MC_HOME/secrets`, `$MC_HOME/browser-profiles` (the persistent login browser's profile), the login keychain, other harness config dirs; deny reading other runs' folders under `$MC_HOME/heads` (their `head.env`/`mcp.json` carry their browser session tokens; the own run, the clones and a scratch origin stay readable, stat everywhere); deny connecting to the login browser's remote-control port 18800 and to the browser gateway's port 9300 on any host (`*:18800`, `*:9300`, so the IPv4-mapped form `::ffff:127.0.0.1` is covered too) and to the Docker sockets; deny write outside `wt/`, `step.txt`, `question.md`, `head.log`, vault `jobs/`, temp, harness caches — **`.wrapper/` (status, heartbeat) is not writable** | process-level [assumption: works on current macOS incl. network; proof with sabotage `cat ~/.ssh/<key>` → denied] |
 | 4 Server identity | heads push and open PRs with their **own weak GitHub identity** (fine-grained token of a non-admin account or a GitHub App: `contents:write` + `pull_requests:write` on the head repos), set as `GH_TOKEN` in `head.env`; the operator's admin token is never reachable (keychain denied by the sandbox, `GIT_CONFIG_GLOBAL=/dev/null`). Plus a ruleset rule "restrict updates" on `main` **without bypass for that identity** | the only layer that holds against push/merge |
 
 **Live finding (2026-09-23, read-only):** `gh api repos/<owner>/mission-control/branches/main/protection`

@@ -15,6 +15,8 @@
 //   GET /healthz     router alive (starts no child)
 //   DELETE /_router/sessions/<token>   stop that session's child (MC's control
 //                    path when a session ends; needs the token)
+// --session-port adds a listener (the one published to the host for heads)
+// that serves ONLY /s/<token>/mcp and /healthz.
 // Everything else is 404. A child is started on first use, listens on
 // 127.0.0.1 only, is stopped after `idleMs` without an open request (an open
 // event stream counts as activity) and started again when it died. A session
@@ -100,6 +102,33 @@ function waitForPort(port, deadline, gaveUp = () => false) {
   });
 }
 
+// A Host (or Origin host) that cannot be a DNS-rebinding name: localhost or an
+// IP literal, with or without a port. The published sessions-only listener
+// serves nothing else — a page on rebind.example resolved to 127.0.0.1 sends
+// its own name.
+export function localHost(value) {
+  if (!value) return false;
+  let host = String(value).trim();
+  if (host.startsWith("[")) {
+    const end = host.indexOf("]");
+    if (end < 0) return false;
+    host = host.slice(1, end);
+  } else if (host.split(":").length === 2) {
+    host = host.split(":")[0];
+  }
+  if (host.toLowerCase() === "localhost") return true;
+  return net.isIP(host) !== 0;
+}
+
+function localOrigin(origin) {
+  if (origin === undefined) return true; // not a browser page (CLI clients send none)
+  try {
+    return localHost(new URL(origin).host);
+  } catch {
+    return false; // "null", malformed
+  }
+}
+
 // "/s/<token>/mcp" -> { key, kind, id, rest: "/mcp" }; null = not a route.
 export function parseRoute(url) {
   const [pathname, query = ""] = url.split("?");
@@ -131,7 +160,7 @@ export function createRouter({
   const children = new Map(); // key -> { proc, port, ready, timer, label, active, open, live, stopped }
   const tokens = new Set(); // tokens of sessions with a child (or being checked), for redaction
   const usedPorts = new Set(); // ports our children hold or are about to bind
-  let server;
+  const servers = [];
 
   const redact = (text) => {
     let out = String(text);
@@ -336,15 +365,23 @@ export function createRouter({
     return false;
   }
 
-  async function handle(req, res) {
+  // `sessionsOnly`: the listener published to the host (heads) serves only
+  // /s/<token>/mcp and /healthz — no shared /mcp, no agent address, no control
+  // path: from outside Docker, the browser needs a session's token.
+  async function handle(req, res, sessionsOnly) {
     const url = req.url || "/";
+    if (sessionsOnly && (!localHost(req.headers.host) || !localOrigin(req.headers.origin))) {
+      res.writeHead(403, { "content-type": "text/plain" });
+      res.end("router: host or origin not allowed");
+      return;
+    }
     if (req.method === "GET" && url === "/healthz") {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ ok: true, children: children.size }));
       return;
     }
     const control = /^\/_router\/sessions\/([^/?]+)$/.exec(url);
-    if (control) {
+    if (control && !sessionsOnly) {
       const token = control[1];
       if (req.method !== "DELETE" || !TOKEN_RE.test(token)) {
         res.writeHead(404).end();
@@ -356,7 +393,7 @@ export function createRouter({
       return;
     }
     const route = parseRoute(url);
-    if (!route) {
+    if (!route || (sessionsOnly && route.kind !== "session")) {
       res.writeHead(404, { "content-type": "text/plain" });
       res.end("router: unknown route");
       return;
@@ -381,24 +418,27 @@ export function createRouter({
   }
 
   return {
-    listen(port, host) {
-      server = http.createServer((req, res) => {
-        handle(req, res).catch((err) => {
+    // Resolves to the bound port. Call again with { sessionsOnly: true } for
+    // the host-facing listener.
+    listen(port, host, { sessionsOnly = false } = {}) {
+      const server = http.createServer((req, res) => {
+        handle(req, res, sessionsOnly).catch((err) => {
           say(`router: ${err.message}`);
           if (!res.headersSent) res.writeHead(500);
           res.end();
         });
       });
-      return new Promise((resolve) => server.listen(port, host, resolve));
+      servers.push(server);
+      return new Promise((resolve) => server.listen(port, host, () => resolve(server.address().port)));
     },
     get port() {
-      return server?.address()?.port;
+      return servers[0]?.address()?.port;
     },
     childCount: () => children.size,
     tokenCount: () => tokens.size,
     async close() {
       for (const key of [...children.keys()]) stop(key, "router closing");
-      if (server) await new Promise((resolve) => server.close(resolve));
+      await Promise.all(servers.map((server) => new Promise((resolve) => server.close(resolve))));
     },
   };
 }
@@ -406,7 +446,9 @@ export function createRouter({
 // CLI: router.mjs --gateway <url> --legacy-cdp-endpoint <url> [--listen 8931]
 //                 [--idle-minutes 30] [--max-children 16] -- <playwright-mcp args>
 // --max-children counts session and agent children; the shared one is extra.
-const OWN_FLAGS = new Set(["--listen", "--host", "--gateway", "--legacy-cdp-endpoint", "--idle-minutes", "--max-children"]);
+const OWN_FLAGS = new Set([
+  "--listen", "--host", "--session-port", "--gateway", "--legacy-cdp-endpoint", "--idle-minutes", "--max-children",
+]);
 
 export function parseCli(argv) {
   const sep = argv.indexOf("--");
@@ -425,6 +467,8 @@ export function parseCli(argv) {
   };
   return {
     listen: Number(get("--listen", "8931")),
+    // Optional second listener that serves only /s/<token>/mcp (published to the host).
+    sessionPort: get("--session-port") ? Number(get("--session-port")) : null,
     host: get("--host", "0.0.0.0"),
     gatewayUrl: get("--gateway", "http://cdp-browser:9300"),
     legacyCdpEndpoint: get("--legacy-cdp-endpoint", "http://cdp-browser:9223"),
@@ -445,6 +489,10 @@ if (import.meta.url === pathToFileURL(process.argv[1] || "").href) {
   const router = createRouter(cli);
   await router.listen(cli.listen, cli.host);
   process.stderr.write(`router: listening on ${cli.host}:${cli.listen}\n`);
+  if (cli.sessionPort) {
+    await router.listen(cli.sessionPort, cli.host, { sessionsOnly: true });
+    process.stderr.write(`router: session addresses only on ${cli.host}:${cli.sessionPort}\n`);
+  }
   for (const sig of ["SIGTERM", "SIGINT"]) {
     process.on(sig, async () => {
       await router.close();

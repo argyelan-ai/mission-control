@@ -61,6 +61,9 @@ logger = logging.getLogger(__name__)
 
 # cdp-gateway inside the cdp-browser container (also used by routers/browser_live.py).
 GATEWAY_BASE_URL = os.environ.get("CDP_GATEWAY_URL", "http://cdp-browser:9300")
+# The playwright-mcp router (docker/playwright-mcp/router.mjs): ending a
+# session also stops that session's playwright-mcp child there.
+ROUTER_BASE_URL = os.environ.get("BROWSER_ROUTER_URL", "http://playwright-mcp:8931")
 _GATEWAY_TIMEOUT = 5.0
 # Ending waits longer: the gateway answers DELETE within its cleanup deadline
 # (cdp_gateway.py `_CLEANUP_DEADLINE`, 8 s), so "unreachable" never hides a
@@ -196,6 +199,13 @@ async def end_session(
             logger.warning("browser_sessions: gateway end of %s answered %s", row.id, resp.status_code)
     except (httpx.HTTPError, ValueError) as e:
         logger.info("browser_sessions: gateway unreachable while ending %s: %s", row.id, e)
+    try:
+        async with httpx.AsyncClient(base_url=ROUTER_BASE_URL, timeout=_GATEWAY_TIMEOUT, transport=_transport) as router:
+            await router.delete(f"/_router/sessions/{session_token(row.id)}")
+    except httpx.HTTPError as e:
+        # No router (playwright-mcp not running) or no child for this session:
+        # nothing to stop — its idle timeout would end it anyway.
+        logger.info("browser_sessions: router not reachable while ending %s: %s", row.id, e)
     row.status = "ended"
     row.ended_at = utcnow()
     row.end_reason = reason[:64]
