@@ -65,6 +65,30 @@ _EXIT_MARKER = "MC_EXIT:"
 _EXIT_RE = re.compile(rf"{_EXIT_MARKER}(-?\d+)")
 
 
+def install_detach_command(command: str, log_path: str) -> str:
+    """Shell line that starts the install on a box, prints its PID and returns.
+
+    Only the ``nohup`` job goes to the background (``{ … & }``), with stdin from
+    /dev/null — same rule as ``runtime_manager.detached_launch``. The old form
+    ``mkdir … && : > log && nohup … & echo $!`` backgrounded the whole ``&&``
+    list as a subshell that kept the SSH session's stdout open until the
+    install ended (live 08.10.2026): the SSH call timed out and MC marked a
+    running install as failed.
+    """
+    from shlex import quote as shlex_quote
+
+    wrapped = f"{command}; echo \"{_EXIT_MARKER}$?\""
+    return (
+        f"mkdir -p ~/.cache/mc && : > {log_path} && "
+        f"{{ nohup bash -lc {shlex_quote(wrapped)} >> {log_path} 2>&1 < /dev/null & }} && echo $!"
+    )
+
+
+def failure_reason(exc: BaseException) -> str:
+    """A reason the operator can read — a bare TimeoutError has an empty str()."""
+    return str(exc) or type(exc).__name__
+
+
 def job_for(host_id: str, slug: str) -> JobLog:
     """The job log for one (box, recipe) pair.
 
@@ -196,13 +220,7 @@ class _Run:
 
     async def launch(self) -> str | None:
         """Start the install detached. Returns the remote PID, or None."""
-        from shlex import quote as shlex_quote
-
-        wrapped = f"{self.command}; echo \"{_EXIT_MARKER}$?\""
-        detach = (
-            f"mkdir -p ~/.cache/mc && : > {self.log_path} && "
-            f"nohup bash -lc {shlex_quote(wrapped)} >> {self.log_path} 2>&1 & echo $!"
-        )
+        detach = install_detach_command(self.command, self.log_path)
         stdout, stderr, exit_code = await self.run_ssh(detach)
         if exit_code != 0:
             raise RuntimeError(stderr.strip() or f"Start der Installation schlug fehl (exit {exit_code})")
@@ -311,8 +329,8 @@ async def run_install(
         await run.follow(pid)
     except Exception as exc:  # noqa: BLE001 — the run reports, it never propagates
         logger.exception("install %s on %s failed", slug, host_id)
-        await run.log(str(exc), level="error")
-        await run.set_status(STATUS_FAILED, phase="failed", message=str(exc))
+        await run.log(failure_reason(exc), level="error")
+        await run.set_status(STATUS_FAILED, phase="failed", message=failure_reason(exc))
 
 
 async def start_install(
