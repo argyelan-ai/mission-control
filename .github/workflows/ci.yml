@@ -370,6 +370,15 @@ jobs:
             -v "$PWD/docker/playwright-mcp:/t:ro" \
             mc-playwright-mcp-test --test --test-timeout=20000 /t/test/router.test.mjs
 
+      # Browser-session isolation against real Chromium (ADR-088 isolation
+      # step): a Puppeteer-pattern client next to real Playwright, the
+      # waitForDebugger hang regression, cookies, Browser.close; then the
+      # same with the switch off (unchanged). Sabotage knob in the script.
+      - name: cdp-gateway isolation test (real Chromium + Playwright)
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+          timeout 600 bash docker/cdp-browser/test_isolation.sh mc-cdp-browser-test mc-playwright-mcp-test docker-compose.yml
+
       # The agent images are node:alpine — BusyBox grep on musl, NOT GNU/BSD.
       # The fixtures in test_context_detect.sh catch most regressions on any
       # grep; this step exists for the NARROW class of divergences that only

@@ -130,6 +130,15 @@ def test_websocat_architecture_comes_from_the_image_not_a_default():
     assert "TARGETARCH:-amd64" not in text
 
 
+def test_session_isolation_is_wired_and_off_until_accepted():
+    # ADR-088 isolation step: the switch exists in compose and starts at "0";
+    # turning it on is a deliberate step after the live check.
+    env = _cdp_browser().get("environment") or {}
+    assert env.get("CDP_GATEWAY_ISOLATE") == "0"
+    workflow = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    assert "docker/cdp-browser/test_isolation.sh" in workflow
+
+
 # ── router (ADR-088 router step): one playwright-mcp child per session ─────
 
 def test_playwright_mcp_entrypoint_is_the_router():

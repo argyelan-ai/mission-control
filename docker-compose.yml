@@ -798,6 +798,12 @@ services:
     # fork bomb for every container. The entrypoint still execs Chromium, so its
     # exit still ends the container (restart policy unchanged).
     init: true
+    environment:
+      # Browser-session isolation in cdp-gateway (ADR-088 isolation step): "1"
+      # = a /s/<token>/ connection sees and touches only its own session's
+      # tabs, contexts and cookies. Off until the live check is accepted;
+      # switching back needs no rebuild (set "0", recreate cdp-browser).
+      CDP_GATEWAY_ISOLATE: "0"
     networks:
       default: {}
       cdpnet:
