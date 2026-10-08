@@ -25,6 +25,10 @@ export interface OverflowAction {
   loading?: boolean;
   /** Renders the label in the error tone. Use only for destructive actions. */
   destructive?: boolean;
+  /** Stays in the menu while disabled (a coming action the operator should
+   *  know about); `hint` says why it is not available yet. */
+  keepWhenDisabled?: boolean;
+  hint?: string;
 }
 
 export function OverflowMenu({
@@ -41,7 +45,7 @@ export function OverflowMenu({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  const visible = actions.filter((a) => !a.disabled || a.loading);
+  const visible = actions.filter((a) => !a.disabled || a.loading || a.keepWhenDisabled);
   const items = visible.length > 0 ? visible : actions;
 
   useLayoutEffect(() => {
@@ -153,7 +157,16 @@ export function OverflowMenu({
                   ) : (
                     <Icon size={13} className="shrink-0" />
                   )}
-                  <span className="truncate">{a.label}</span>
+                  {a.hint ? (
+                    <span className="flex flex-col min-w-0">
+                      <span className="truncate">{a.label}</span>
+                      <span className="text-xs" style={{ color: C.textMuted }}>
+                        {a.hint}
+                      </span>
+                    </span>
+                  ) : (
+                    <span className="truncate">{a.label}</span>
+                  )}
                 </button>
               );
             })}
