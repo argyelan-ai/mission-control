@@ -160,19 +160,37 @@ unprefixed ones stay byte for byte (PRINCIPLES §3.10).
 - **Unit of separation = browser context.** A session's tabs are those in
   contexts it owns — the ones its client creates (Playwright `--isolated`)
   and one context the gateway makes for it on first need — plus tabs it
-  created. A `createTarget`, cookie or permission command without a context
-  goes to the session's context instead of Chromium's shared default context;
-  `/json/new` too. The gateway's context is disposed with the session.
+  created. A `createTarget`, cookie-trio (`Storage.get/set/clearCookies`),
+  permission or download command without a context goes to the session's
+  context instead of Chromium's shared default context — **on every CDP
+  session**, a tab's own and a page socket included: on Chromium 154 these
+  take their context from the parameter wherever they are sent (the cookie
+  trio on a tab session read, wrote and cleared the shared default context;
+  with the injected context Chromium refuses it there instead). `/json/new`
+  too. The gateway's context is disposed with the session.
 - **What a session cannot see or do:** other targets in events,
   `getTargets` and `getBrowserContexts`; `attachToTarget`/`closeTarget`/
   `activateTarget` or a page socket or `/json/close|activate` for a foreign
   tab; a foreign `browserContextId` or window; a CDP session id it does not
   hold (top level or in params); non-flat ("wrapped") sessions. Browser-level
   commands are an allowlist (what Puppeteer and Playwright use for their own
-  tabs and contexts); anything else browser-wide is refused. Commands on a
-  tab's own CDP session are not limited (Chromium scopes them to that tab and
-  its context's storage). `Browser.close` and `Browser.crash` never reach
-  Chromium: `{}` back, and only that connection ends.
+  tabs and contexts); anything else browser-wide is refused, and so are
+  `Browser.*` methods outside that list and `Target.setRemoteLocations` on a
+  tab's session. Other commands on a tab's own session are not limited
+  (lab-checked: `Storage.clearDataForOrigin`/`clearDataForStorageKey` and
+  `Network.clearBrowserCookies` there leave the default context alone).
+  `Browser.close` and `Browser.crash` never reach Chromium **from any
+  session** (Chromium 154 exits on one sent on a tab session too): `{}` back,
+  and only that connection ends.
+- **Fail closed.** Only a JSON object with a non-negative int `id`, a string
+  `method` (params an object, sessionId a string) is accepted, parsed the way
+  Chromium parses it (raw control characters inside strings allowed), and
+  forwarded **re-serialised** — Chromium never sees bytes the filter did not
+  read. Anything else (unparseable text, a float id, invalid UTF-8, a binary
+  frame, an unmasked or oversized control frame, a new message inside a
+  fragmented one) ends the connection. A message over 64 MiB ends it too,
+  logged (owner key, never the token) — a very large `getResponseBody` or
+  full-page screenshot fails on an isolated session.
 - **No hangs for others:** Playwright and Puppeteer auto-attach with
   `waitForDebuggerOnStart`. When such a client is auto-attached to a foreign
   tab, the gateway hides the event, resumes the tab and detaches.

@@ -131,8 +131,12 @@ A foreign tab the session's client was auto-attached to while it waits for a
 debugger is resumed and detached by the gateway — otherwise every other
 client's new tabs would hang (Playwright and Puppeteer auto-attach with
 `waitForDebuggerOnStart`). `Browser.close`/`Browser.crash` never reach
-Chromium: the client gets `{}` and only its own connection ends. The session
-context is disposed with the session. This is "minimal isolation" for honest
+Chromium: the client gets `{}` and only its own connection ends. These rules
+and the context injection apply on every CDP session of the connection — a
+tab's flat session and a page socket too (Chromium 154 honours both there).
+The filter fails closed: only well-formed commands pass, re-serialised; any
+other frame ends the connection. The session context is disposed with the
+session. This is "minimal isolation" for honest
 clients sharing one browser, not a sandbox: a page can still reach whatever
 the browser can reach on the network.
 
@@ -223,8 +227,10 @@ _TRACKED_RESPONSE_METHODS = frozenset({
 })
 
 # ── isolation rules (SessionIsolation) ─────────────────────────────────────
-# Browser-level commands whose missing `browserContextId` means "Chromium's
-# default context" — for an isolated session it means the session's own.
+# Commands whose missing `browserContextId` means "Chromium's default context"
+# — on EVERY session, a tab's own and a page socket included (verified on
+# Chromium 154: the cookie trio on a tab session reads and writes the shared
+# default context). For an isolated session it means the session's own.
 _ISOLATION_DEFAULT_CONTEXT_METHODS = frozenset({
     "Target.createTarget",
     "Storage.getCookies",
@@ -276,7 +282,11 @@ _ISOLATION_WINDOW_METHODS = frozenset({"Browser.getWindowBounds", "Browser.setWi
 # Non-flat ("wrapped") sessions would carry commands inside a string param the
 # filter cannot see; an isolated session must use flat sessions.
 _ISOLATION_FLATTEN_METHODS = frozenset({"Target.setAutoAttach", "Target.attachToTarget"})
-# Never forwarded: answered with `{}`; the first two also end the connection.
+# Refused on every session, a tab's included: they reach beyond the session.
+_ISOLATION_NEVER = frozenset({"Target.setRemoteLocations", "Browser.executeBrowserCommand"})
+# Never forwarded (on any session — Chromium 154 exits on a Browser.close sent
+# on a tab's session too): answered with `{}`; the first two also end the
+# connection.
 _ISOLATION_ENDS_CONNECTION = frozenset({"Browser.close", "Browser.crash"})
 _ISOLATION_SWALLOWED = frozenset({"Browser.crashGpuProcess"})
 # Answers this filter rewrites or learns sessions from.
@@ -1107,6 +1117,22 @@ class _ConnectionObserver:
                 self._sessions.add(params["sessionId"])
 
 
+def _well_formed_command(msg) -> bool:
+    """A CDP command the filter can vouch for: an object with a non-negative
+    int id (not a bool, not a float), a str method, params an object and
+    sessionId a str when present."""
+    if not isinstance(msg, dict):
+        return False
+    msg_id = msg.get("id")
+    if not isinstance(msg_id, int) or isinstance(msg_id, bool) or msg_id < 0:
+        return False
+    if not isinstance(msg.get("method"), str):
+        return False
+    if "params" in msg and not isinstance(msg["params"], dict):
+        return False
+    return "sessionId" not in msg or isinstance(msg["sessionId"], str)
+
+
 class SessionIsolation:
     """Per-connection message filter of an isolated browser session (see the
     module docstring). `from_client` decides each command, `from_upstream`
@@ -1183,10 +1209,13 @@ class SessionIsolation:
 
     async def from_client(self, msg: dict) -> tuple[Optional[dict], Optional[dict], bool]:
         """-> (forward to Chromium, answer to the client, end the connection)."""
-        method = msg.get("method")
-        msg_id = msg.get("id")
-        if not isinstance(method, str) or not isinstance(msg_id, int):
-            return msg, None, False                   # not a command; Chromium answers it
+        if not _well_formed_command(msg):
+            # Fail closed: Chromium runs shapes a lenient reading would wave
+            # through as "not a command" (a float id, for one).
+            logger.info("cdp_gateway: isolated %s: malformed command, connection ends", self.key)
+            return None, None, True
+        method = msg["method"]
+        msg_id = msg["id"]
         session_id = msg.get("sessionId")
         if session_id is not None and session_id not in self._sessions:
             return None, self._refuse(msg, -32001, "Session with given id not found."), False
@@ -1194,12 +1223,14 @@ class SessionIsolation:
             # The gateway's own commands use these ids on this connection.
             return None, self._refuse(msg, -32600, f"command ids from {_OWN_MSG_ID_BASE} on are reserved"), False
         browser_level = self._browser_level(session_id)
-        if browser_level and method in _ISOLATION_ENDS_CONNECTION:
+        if method in _ISOLATION_ENDS_CONNECTION:
             logger.info("cdp_gateway: isolated %s: %s answered, connection ends", self.key, method)
             return None, self._answer(msg, result={}), True
-        if browser_level and method in _ISOLATION_SWALLOWED:
+        if method in _ISOLATION_SWALLOWED:
             return None, self._answer(msg, result={}), False
-        if browser_level and method not in _ISOLATION_BROWSER_METHODS:
+        if method in _ISOLATION_NEVER or (
+            (browser_level or method.startswith("Browser.")) and method not in _ISOLATION_BROWSER_METHODS
+        ):
             return None, self._refuse(msg, -32000, "not allowed for an isolated browser session"), False
         params = msg.get("params") if isinstance(msg.get("params"), dict) else {}
         if method == "Target.sendMessageToTarget" or (
@@ -1222,7 +1253,7 @@ class SessionIsolation:
                 # The gateway's session context goes with the session; a
                 # client disposing it would strand every later newPage().
                 return None, self._refuse(msg, -32000, "the session's own context is disposed with the session"), False
-        elif browser_level and method in _ISOLATION_DEFAULT_CONTEXT_METHODS:
+        elif method in _ISOLATION_DEFAULT_CONTEXT_METHODS:
             try:
                 ctx = await self._default_context()
             except Exception as e:  # noqa: BLE001 - becomes the client's error answer
@@ -1344,13 +1375,20 @@ class _WsFrame:
         self.fin, self.opcode, self.payload, self.raw = fin, opcode, payload, raw
 
 
-async def _read_ws_frame(reader: asyncio.StreamReader) -> _WsFrame:
-    """One whole WebSocket frame (raises IncompleteReadError at EOF)."""
+async def _read_ws_frame(reader: asyncio.StreamReader, *, masked: Optional[bool] = None) -> _WsFrame:
+    """One whole WebSocket frame (raises IncompleteReadError at EOF,
+    ValueError on a protocol violation). `masked`: what this direction must
+    send (a client always masks, a server never does); None = either."""
     head = await reader.readexactly(2)
     b0, b1 = head[0], head[1]
     if b0 & 0x70:
         raise ValueError("RSV bits set (compressed or extended frame)")
+    if masked is not None and bool(b1 & 0x80) != masked:
+        raise ValueError("frame masking does not match its direction")
+    opcode = b0 & 0x0F
     length = b1 & 0x7F
+    if opcode >= 0x8 and (length > 125 or not b0 & 0x80):
+        raise ValueError("oversized or fragmented control frame")
     ext = b""
     if length == 126:
         ext = await reader.readexactly(2)
@@ -1382,14 +1420,20 @@ def _ws_frame(opcode: int, payload: bytes, *, masked: bool) -> bytes:
 
 
 def _json_object(payload: bytes) -> Optional[dict]:
+    """Parsed like Chromium does it as far as it matters: raw control
+    characters inside strings are accepted (Chromium does, Python's strict
+    mode does not). Anything else unparseable is None — the caller fails
+    closed and never forwards those bytes."""
     try:
-        msg = json.loads(payload)
-    except ValueError:
+        msg = json.loads(payload.decode("utf-8"), strict=False)
+    except (ValueError, UnicodeDecodeError):
         return None
     return msg if isinstance(msg, dict) else None
 
 
-async def _message_pump(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, on_message) -> None:
+async def _message_pump(
+    reader: asyncio.StreamReader, writer: asyncio.StreamWriter, on_message, *, masked: Optional[bool] = None,
+) -> None:
     """Read whole messages (fragments joined) and hand each to
     `on_message(opcode, payload, raw) -> bool` (False = stop). Control frames
     go straight through. Every write is one complete frame, so the other
@@ -1399,7 +1443,7 @@ async def _message_pump(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
     frag_raw = bytearray()
     while True:
         try:
-            frame = await _read_ws_frame(reader)
+            frame = await _read_ws_frame(reader, masked=masked)
         except asyncio.IncompleteReadError:
             return
         if frame.opcode >= 0x8:
@@ -1409,14 +1453,16 @@ async def _message_pump(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
         if frame.opcode == 0x0:
             if frag_op is None:
                 raise ValueError("continuation frame without a start")
+            if len(frag_payload) + len(frame.payload) > _ISOLATED_MAX_MESSAGE:
+                raise ValueError("message too large")
             frag_payload += frame.payload
             frag_raw += frame.raw
-            if len(frag_payload) > _ISOLATED_MAX_MESSAGE:
-                raise ValueError("message too large")
             if not frame.fin:
                 continue
             opcode, payload, raw = frag_op, bytes(frag_payload), bytes(frag_raw)
             frag_op, frag_payload, frag_raw = None, bytearray(), bytearray()
+        elif frag_op is not None:
+            raise ValueError("new message while a fragmented one is still open")
         elif not frame.fin:
             frag_op, frag_payload, frag_raw = frame.opcode, bytearray(frame.payload), bytearray(frame.raw)
             continue
@@ -2122,29 +2168,39 @@ def _isolated_pumps_impl(
     def _text(msg: dict, *, masked: bool) -> bytes:
         return _ws_frame(0x1, json.dumps(msg).encode(), masked=masked)
 
+    def _end(code: int, why: str) -> bool:
+        # Logged with the owner key only — never the token.
+        logger.info("cdp_gateway: isolated %s: connection ends (%s)", key, why)
+        client_writer.write(_ws_frame(0x8, code.to_bytes(2, "big"), masked=False))
+        return False
+
     async def from_client(opcode: int, payload: bytes, raw: bytes) -> bool:
-        msg = _json_object(payload) if opcode == 0x1 else None
+        # Fail closed: only a JSON object the filter can read goes on, and
+        # always as the filter read it (re-serialised), never the raw bytes —
+        # Chromium's parser accepts shapes Python's does not.
+        if opcode != 0x1:
+            return _end(1003, "binary frame")
+        msg = _json_object(payload)
         if msg is None:
-            up_writer.write(raw)
-            await up_writer.drain()
-            return True
+            return _end(1007, "unparseable message")
         forward, answer, close = await iso.from_client(msg)
         if forward is not None:
             observer.from_client(forward)
-            up_writer.write(raw if forward is msg else _text(forward, masked=True))
+            up_writer.write(_text(forward, masked=True))
             await up_writer.drain()
         if answer is not None:
             client_writer.write(_text(answer, masked=False))
         if close:
-            client_writer.write(_ws_frame(0x8, (1000).to_bytes(2, "big"), masked=False))
+            client_writer.write(_ws_frame(0x8, (1000 if answer is not None else 1008).to_bytes(2, "big"), masked=False))
         await client_writer.drain()
         return not close
 
     async def from_upstream(opcode: int, payload: bytes, raw: bytes) -> bool:
         msg = _json_object(payload) if opcode == 0x1 else None
         if msg is None:
-            client_writer.write(raw)
-            await client_writer.drain()
+            # Chromium sends JSON text only; whatever the filter cannot read
+            # does not reach the client.
+            logger.info("cdp_gateway: isolated %s: dropped an unreadable message from Chromium", key)
             return True
         observer.from_upstream(msg)
         forward, inject = iso.from_upstream(msg)
@@ -2157,9 +2213,22 @@ def _isolated_pumps_impl(
             await client_writer.drain()
         return True
 
+    async def guarded(pump):
+        try:
+            await pump
+        except ValueError as e:
+            # A protocol violation or an oversized message (_ISOLATED_MAX_MESSAGE):
+            # the connection ends — said in the log, never silently.
+            code = 1009 if "too large" in str(e) else 1002
+            try:
+                _end(code, str(e))
+                await client_writer.drain()
+            except (ConnectionError, RuntimeError):
+                pass
+
     return (
-        asyncio.ensure_future(_message_pump(client_reader, up_writer, from_client)),
-        asyncio.ensure_future(_message_pump(up_reader, client_writer, from_upstream)),
+        asyncio.ensure_future(guarded(_message_pump(client_reader, up_writer, from_client, masked=True))),
+        asyncio.ensure_future(guarded(_message_pump(up_reader, client_writer, from_upstream, masked=False))),
     )
 
 

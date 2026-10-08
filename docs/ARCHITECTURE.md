@@ -1537,7 +1537,8 @@ Alle ADRs in `docs/decisions/`:
   them (`SessionIsolation`): a session sees and touches only tabs in its own contexts. Tabs, cookies and
   permissions without a context go to a gateway-made session context, which is disposed with the session.
   Foreign auto-attached tabs are resumed and detached, so they do not hang. `Browser.close` is answered, not
-  forwarded. Agent and unprefixed connections are unchanged. Real-Chromium test
+  forwarded — on every CDP session, tab sessions and page sockets included, like the context injection. Fails
+  closed: only well-formed commands, forwarded re-serialised; anything else ends the connection. Agent and unprefixed connections are unchanged. Real-Chromium test
   `docker/cdp-browser/test_isolation.sh` runs in CI.
 - **2026-10-07** — **playwright-mcp router (ADR-088 router step):** the playwright-mcp image's entrypoint is
   now `docker/playwright-mcp/router.mjs` (Node standard library): `/s/<token>/mcp` gets its own playwright-mcp

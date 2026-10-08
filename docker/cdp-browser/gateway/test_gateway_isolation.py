@@ -592,7 +592,7 @@ def _client_frame(opcode, payload, fin=True):
 
 
 @pytest.mark.asyncio
-async def test_wire_a_ping_between_fragments_and_a_binary_frame_pass(rig):
+async def test_wire_a_ping_between_fragments_and_a_close_round_trip_pass(rig):
     fake, make = rig
     _gw, port = await make()
     reader, writer = await _raw_ws(port, f"/s/{TOKEN_ME}/devtools/browser/x")
@@ -600,7 +600,6 @@ async def test_wire_a_ping_between_fragments_and_a_binary_frame_pass(rig):
     writer.write(_client_frame(0x1, body[:10], fin=False))
     writer.write(_client_frame(0x9, b"hi"))                       # ping in the middle of a message
     writer.write(_client_frame(0x0, body[10:], fin=True))
-    writer.write(_client_frame(0x2, b"\x00\x01binary"))
     await writer.drain()
     for _ in range(50):
         if any(m.get("id") == 80 for m in fake.received):
@@ -609,13 +608,244 @@ async def test_wire_a_ping_between_fragments_and_a_binary_frame_pass(rig):
     assert any(m.get("id") == 80 for m in fake.received)          # the joined message arrived whole
     pong = await asyncio.wait_for(reader.readexactly(4), 2)       # Chromium's pong came back through
     assert pong[0] & 0x0F == 0xA
-    for _ in range(50):
-        if fake.binary:
-            break
-        await asyncio.sleep(0.02)
-    assert fake.binary == [b"\x00\x01binary"]                    # binary frames are passed as they are
     writer.write(_client_frame(0x8, (1000).to_bytes(2, "big")))  # close: answered, connection ends
     await writer.drain()
     rest = await asyncio.wait_for(reader.read(), 3)
     assert rest[:1] and rest[0] & 0x0F == 0x8
+    writer.close()
+
+
+# ── review of #766: fail closed, every session, codec ───────────────────
+
+
+async def _iso_with_tab_session():
+    iso, made = _iso()
+    iso._sessions.add("S-ME")                     # an own tab's flat session (attach answered earlier)
+    return iso, made
+
+
+@pytest.mark.asyncio
+async def test_browser_close_on_an_own_tab_session_or_page_socket_never_reaches_chromium():
+    """Real Chromium 154 exits on Browser.close sent on a TAB session too."""
+    iso, _ = await _iso_with_tab_session()
+    for method in ("Browser.close", "Browser.crash"):
+        up, back, close = await iso.from_client({"id": 1, "sessionId": "S-ME", "method": method})
+        assert up is None and close and back["result"] == {}, method
+    up, back, close = await iso.from_client({"id": 2, "sessionId": "S-ME", "method": "Browser.crashGpuProcess"})
+    assert up is None and not close
+    page, _ = _iso()
+    page._page_socket = True
+    up, back, close = await page.from_client({"id": 3, "method": "Browser.close"})
+    assert up is None and close
+
+
+@pytest.mark.asyncio
+async def test_context_less_commands_on_an_own_tab_session_or_page_socket_use_the_sessions_context():
+    """Storage's cookie trio, createTarget and the permission/download
+    commands take their context from the parameter on EVERY session — none
+    means Chromium's shared default context (verified on 154)."""
+    methods = ("Storage.getCookies", "Storage.setCookies", "Storage.clearCookies", "Target.createTarget",
+               "Browser.grantPermissions", "Browser.resetPermissions", "Browser.setPermission",
+               "Browser.setDownloadBehavior", "Browser.cancelDownload")
+    iso, _ = await _iso_with_tab_session()
+    page, _ = _iso()
+    page._page_socket = True
+    for method in methods:
+        up, back, _ = await iso.from_client({"id": 4, "sessionId": "S-ME", "method": method, "params": {}})
+        assert back is None and up["params"]["browserContextId"] == "CTX-MINE-DEFAULT", method
+        up, back, _ = await page.from_client({"id": 5, "method": method, "params": {}})
+        assert back is None and up["params"]["browserContextId"] == "CTX-MINE-DEFAULT", method
+
+
+@pytest.mark.asyncio
+async def test_browser_wide_commands_are_refused_on_tab_sessions_too():
+    iso, _ = await _iso_with_tab_session()
+    for method in ("Target.setRemoteLocations", "Browser.executeBrowserCommand", "Browser.getHistograms"):
+        up, back, _ = await iso.from_client({"id": 6, "sessionId": "S-ME", "method": method, "params": {}})
+        assert up is None and "error" in back, method
+    # A tab's own commands are not limited.
+    for method in ("Runtime.evaluate", "Page.navigate", "Network.getAllCookies", "Browser.getVersion"):
+        up, back, _ = await iso.from_client({"id": 7, "sessionId": "S-ME", "method": method, "params": {}})
+        assert up is not None and back is None, method
+
+
+@pytest.mark.asyncio
+async def test_anything_that_is_not_a_well_formed_command_ends_the_connection():
+    """Fail closed: Chromium runs `"id": 33.0`, which a check for int ids
+    would wave through as "not a command"."""
+    iso, _ = _iso()
+    for msg in (
+        {"id": 5.0, "method": "Target.attachToTarget", "params": {"targetId": "T-OTHER", "flatten": True}},
+        {"id": True, "method": "Storage.getCookies"},
+        {"id": "7", "method": "Storage.getCookies"},
+        {"method": "Storage.getCookies"},
+        {"id": 8},
+        {"id": 9, "method": 3},
+        {"id": 10, "method": "Target.getTargets", "params": []},
+        {"id": 11, "method": "Target.getTargets", "sessionId": 4},
+        {"id": -1, "method": "Target.getTargets"},
+    ):
+        up, back, close = await iso.from_client(msg)
+        assert up is None and close, msg
+
+
+class RawUpstream:
+    """Raw TCP 'Chromium': answers the handshake with 101, records bytes."""
+
+    def __init__(self):
+        self.got = bytearray()
+        self.writer = None
+
+    async def start(self):
+        async def handle(reader, writer):
+            await reader.readuntil(b"\r\n\r\n")
+            writer.write(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                         b"Sec-WebSocket-Accept: x\r\n\r\n")
+            await writer.drain()
+            self.writer = writer
+            while data := await reader.read(65536):
+                self.got += data
+
+        self.server = await asyncio.start_server(handle, "127.0.0.1", 0)
+        return self.server.sockets[0].getsockname()[1]
+
+
+def _frame(b0, payload, masked=True, rsv=0):
+    n = len(payload)
+    head = bytes([b0 | rsv]) + (bytes([(0x80 if masked else 0) | n]) if n < 126
+                                else bytes([(0x80 if masked else 0) | 126]) + n.to_bytes(2, "big"))
+    if not masked:
+        return head + payload
+    mask = b"\x05\x06\x07\x08"
+    return head + mask + bytes(c ^ mask[i % 4] for i, c in enumerate(payload))
+
+
+@pytest.mark.asyncio
+async def test_switch_off_a_session_connection_is_passed_byte_for_byte_both_ways():
+    """Compared as bytes, including frames the isolated path refuses."""
+    up = RawUpstream()
+    port_up = await up.start()
+    gw = CdpGateway(upstream_host="127.0.0.1", upstream_port=port_up, isolate=False)
+    gw.state.register_session(TOKEN_ME, ME[2:], None)
+    server = await start_server(gw, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    reader, writer = await _raw_ws_any(port, f"/s/{TOKEN_ME}/devtools/browser/x")
+    sent = b"".join([
+        _frame(0x81, b'{"id":1,"method":"Target.attachToTarget","params":{"targetId":"T-OTHER","x":"\t"}}'),
+        _frame(0x01, b'{"id":2,'), _frame(0x89, b"ping"), _frame(0x80, b'"method":"Browser.close"}'),
+        _frame(0x81, b'{"id":3,"method":"Browser.close"}', rsv=0x40),
+        _frame(0x81, b'{"id":4,"method":"Browser.crash"}', masked=False),
+        _frame(0x82, bytes(range(256)) * 200),
+    ])
+    writer.write(sent)
+    await writer.drain()
+    for _ in range(100):
+        if len(up.got) >= len(sent):
+            break
+        await asyncio.sleep(0.02)
+    assert bytes(up.got) == sent
+    back = b"\x81\x7e\x01\x00" + b"y" * 256 + b"\x01\x03abc" + b"\x80\x01d" + b"\x8a\x00"
+    up.writer.write(back)
+    await up.writer.drain()
+    assert await asyncio.wait_for(reader.readexactly(len(back)), 2) == back
+    writer.close()
+    server.close()
+    up.server.close()
+
+
+async def _raw_ws_any(port, path):
+    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+    writer.write((f"GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                  f"Sec-WebSocket-Key: {base64.b64encode(bytes(16)).decode()}\r\nSec-WebSocket-Version: 13\r\n\r\n").encode())
+    await writer.drain()
+    await reader.readuntil(b"\r\n\r\n")
+    return reader, writer
+
+
+async def _ends_with_close(reader, timeout=3):
+    """True when the gateway answers with a close frame and/or ends the connection."""
+    try:
+        data = await asyncio.wait_for(reader.read(), timeout)
+    except asyncio.TimeoutError:
+        return False
+    return data == b"" or (data[0] & 0x0F) == 0x8
+
+
+@pytest.mark.asyncio
+async def test_wire_unparseable_or_binary_client_messages_end_the_connection(rig):
+    """Chromium's JSON parser takes a raw TAB/LF inside a string and a float
+    id, which Python's does not: such a frame must never be forwarded raw."""
+    fake, make = rig
+    _gw, port = await make()
+    for payload, opcode in (
+        (b'{"id":1,"method":"Target.getTargetInfo","params":{"targetId":"T-OTHER","x":"a,}}', 0x1),  # broken
+        (b'{"id":2,"method":"Target.getTargetInfo","params":{"targetId":"T-OTHER",}}', 0x1),       # trailing comma
+        (b'{"id":33.0,"method":"Storage.getCookies"}', 0x1),
+        (b'{"id":4,"method":"Target.getTargetInfo","params":{"targetId":"T-OTHER","x":"\xff"}}', 0x1),  # bad UTF-8
+        (json.dumps({"id": 5, "method": "Target.getTargets"}).encode(), 0x2),                      # binary
+    ):
+        before = len(fake.received)
+        reader, writer = await _raw_ws_any(port, f"/s/{TOKEN_ME}/devtools/browser/x")
+        writer.write(_frame(0x80 | opcode, payload))
+        await writer.drain()
+        assert await _ends_with_close(reader), payload
+        assert len(fake.received) == before, payload           # nothing reached Chromium
+        writer.close()
+
+
+@pytest.mark.asyncio
+async def test_wire_a_raw_tab_inside_a_string_is_checked_and_forwarded_as_the_filter_read_it(rig):
+    fake, make = rig
+    _gw, port = await make()
+    reader, writer = await _raw_ws_any(port, f"/s/{TOKEN_ME}/devtools/browser/x")
+    writer.write(_frame(0x81, b'{"id":6,"method":"Target.getTargetInfo","params":{"targetId":"T-OTHER","x":"a\tb"}}'))
+    writer.write(_frame(0x81, b'{"id":7,"method":"Target.setDiscoverTargets","params":{"discover":true,"x":"a\tb"}}'))
+    await writer.drain()
+    head = await asyncio.wait_for(reader.readexactly(2), 2)
+    answer = json.loads(await reader.readexactly(head[1] & 0x7F))
+    assert answer["id"] == 6 and "error" in answer                 # the foreign tab is refused
+    for _ in range(50):
+        if any(m.get("id") == 7 for m in fake.received):
+            break
+        await asyncio.sleep(0.02)
+    got = [m for m in fake.received if m.get("id") in (6, 7)]
+    assert [m["id"] for m in got] == [7] and got[0]["params"]["x"] == "a\tb"
+    writer.close()
+
+
+@pytest.mark.asyncio
+async def test_wire_frame_rules_end_the_connection(rig):
+    """A new data frame inside an open fragmented message, an unmasked client
+    frame, an oversized or fragmented control frame."""
+    fake, make = rig
+    _gw, port = await make()
+    for frames in (
+        [_frame(0x01, b'{"id":1,'), _frame(0x81, b'{"id":2,"method":"Target.getTargets"}')],
+        [_frame(0x81, b'{"id":3,"method":"Target.getTargets"}', masked=False)],
+        [_frame(0x89, b"p" * 126)],
+        [_frame(0x09, b"ping")],
+    ):
+        before = len(fake.received)
+        reader, writer = await _raw_ws_any(port, f"/s/{TOKEN_ME}/devtools/browser/x")
+        writer.write(b"".join(frames))
+        await writer.drain()
+        assert await _ends_with_close(reader), frames
+        assert len(fake.received) == before
+        writer.close()
+
+
+@pytest.mark.asyncio
+async def test_wire_an_oversized_message_ends_the_connection_and_says_so_without_the_token(rig, monkeypatch, caplog):
+    fake, make = rig
+    monkeypatch.setattr(cdp_gateway, "_ISOLATED_MAX_MESSAGE", 1000)
+    _gw, port = await make()
+    reader, writer = await _raw_ws_any(port, f"/s/{TOKEN_ME}/devtools/browser/x")
+    big = json.dumps({"id": 1, "method": "Target.getTargets", "params": {"pad": "x" * 1200}}).encode()
+    writer.write(_frame(0x01, big[:600]) + _frame(0x80, big[600:]))
+    await writer.drain()
+    with caplog.at_level("INFO", logger="cdp_gateway"):
+        assert await _ends_with_close(reader)
+        await asyncio.sleep(0.1)
+    assert any("too large" in r.getMessage() for r in caplog.records), [r.getMessage() for r in caplog.records]
+    assert not any(TOKEN_ME in r.getMessage() for r in caplog.records)
     writer.close()

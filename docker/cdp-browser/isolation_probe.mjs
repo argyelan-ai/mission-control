@@ -76,6 +76,13 @@ class CdpClient {
       this.ws.send(JSON.stringify(msg));
     });
   }
+  // A hand-written text frame (exactly these characters), answered by id.
+  sendRaw(text, id) {
+    return new Promise((resolve) => {
+      this.waiting.set(id, resolve);
+      this.ws.send(text);
+    });
+  }
   close() {
     this.ws.close();
   }
@@ -185,6 +192,52 @@ async function main() {
   check("alpha does not hear of the agent's tab", !alpha.events.some((m) => (m.params?.targetInfo?.targetId || m.params?.targetId) === agentTab));
   await agent.send("Target.closeTarget", { targetId: agentTab });
   agent.close();
+
+  // Review of the first version: shapes and sessions the filter must not miss.
+  // A shared (unprefixed) client puts a cookie into Chromium's default context.
+  const victim = await cdpFor("");
+  await victim.send("Storage.setCookies", { cookies: [{ name: "victim", value: "secret", domain: "example.com", path: "/" }] });
+  const victimHas = async () => ((await victim.send("Storage.getCookies")).result?.cookies || []).some((c) => c.name === "victim");
+  const foreignTab = betaIds[0];
+  // H1: Chromium accepts a raw TAB inside a string, Python's strict parser does not.
+  const tabTry = await alpha.sendRaw(`{"id":901,"method":"Target.getTargetInfo","params":{"targetId":"${foreignTab}","x":"a\tb"}}`, 901);
+  check("a raw TAB inside a string does not open a foreign tab", Boolean(tabTry.error), JSON.stringify(tabTry).slice(0, 120));
+  const floaty = await cdpFor(`/s/${A.token}`);
+  const floatAnswer = await within(floaty.sendRaw('{"id":33.0,"method":"Storage.getCookies"}', 33), 3000);
+  const floatClosed = await within(floaty.closed, 3000);
+  check("a float id ends the connection, no cookies", floatClosed === "closed" && !JSON.stringify(floatAnswer).includes("victim"),
+    JSON.stringify(floatAnswer).slice(0, 120));
+  // H3/H4 on an own tab's flat session and on its page socket.
+  const ownSession = (await alpha.send("Target.attachToTarget", { targetId: alphaTab, flatten: true })).result?.sessionId;
+  const trio = await alpha.send("Storage.getCookies", {}, ownSession);
+  check("the cookie trio on an own tab session never reads the default context", !JSON.stringify(trio).includes("victim"),
+    JSON.stringify(trio).slice(0, 120));
+  await alpha.send("Storage.clearCookies", {}, ownSession);
+  check("the cookie trio on an own tab session never clears the default context", await victimHas());
+  const onSession = (await alpha.send("Target.createTarget", { url: "data:text/html,<title>H4</title>" }, ownSession)).result?.targetId;
+  const pageSock = await (async () => {
+    const c = new CdpClient(`${GW.replace("http", "ws")}/s/${A.token}/devtools/page/${alphaTab}`);
+    await c.open();
+    return c;
+  })();
+  const onPage = (await pageSock.send("Target.createTarget", { url: "data:text/html,<title>H4P</title>" })).result?.targetId;
+  await sleep(300);
+  const h4 = await targets();
+  const sessionOf = (id) => h4.find((r) => r.targetId === id)?.session;
+  check("createTarget on an own tab session or page socket opens in the session's context",
+    sessionOf(onSession) === A.id && sessionOf(onPage) === A.id, `${sessionOf(onSession)} ${sessionOf(onPage)}`);
+  // H2: Browser.close on the tab session and on the page socket.
+  const closeOnPage = await pageSock.send("Browser.close");
+  check("Browser.close on an own page socket is answered and ends only that socket",
+    JSON.stringify(closeOnPage.result) === "{}" && (await within(pageSock.closed, 3000)) === "closed");
+  const tabAlpha = await cdpFor(`/s/${A.token}`);
+  const s2 = (await tabAlpha.send("Target.attachToTarget", { targetId: alphaTab, flatten: true })).result?.sessionId;
+  const closeOnTab = await tabAlpha.send("Browser.close", {}, s2);
+  check("Browser.close on an own tab session is answered and ends only that connection",
+    JSON.stringify(closeOnTab.result) === "{}" && (await within(tabAlpha.closed, 3000)) === "closed");
+  await sleep(500);
+  check("Chromium still runs after both", await fetch(`${GW}/json/version`).then((r) => r.ok).catch(() => false));
+  victim.close();
 
   // Browser.close from alpha ends alpha's connection only.
   const closed = await alpha.send("Browser.close");
