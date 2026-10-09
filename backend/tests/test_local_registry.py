@@ -670,6 +670,91 @@ async def test_patch_unknown_slug_is_404(auth_client, session):
     assert response.status_code == 404
 
 
+# ── Vision capability (operator incident 09.10.2026) ────────────────────────
+#
+# The TensorFold GLM-5.3 Flash recipe went live tagged "vision" in its
+# human-readable `tags`, but `RecipeSpec` had no `supports_vision` field at
+# all — so the structured column (`local_recipes.supports_vision`, the one
+# `recipe_switcher.build_runtime_from_recipe` actually copies into a started
+# instance) could never become true through the seed/refresh path, no matter
+# what the JSON said. omp then rendered `images.blockImages: true` for a
+# model that can read images. These tests pin the field to the wire schema so
+# a recipe author declaring vision support is enough — no second, silent
+# channel (free-text tags) that nothing reads.
+
+
+@pytest.mark.asyncio
+async def test_refresh_adds_a_vision_capable_recipe(session, monkeypatch, fake_redis):
+    use_fake_redis(monkeypatch, fake_redis)
+    use_sources(monkeypatch, "https://registry.example/recipes.json")
+    mock_httpx(
+        monkeypatch, json_source(recipe_payload("alpha", supports_vision=True))
+    )
+
+    result = await refresh_from_sources(session)
+
+    assert result.added == 1
+    alpha = await get_recipe(session, "alpha")
+    assert alpha.supports_vision is True
+
+
+@pytest.mark.asyncio
+async def test_refresh_without_the_field_defaults_to_no_vision(session, monkeypatch, fake_redis):
+    """Sabotage probe for the test above: omitting the field must NOT default
+    to true — an unknown/older source stays on the safe (blocked) side."""
+    use_fake_redis(monkeypatch, fake_redis)
+    use_sources(monkeypatch, "https://registry.example/recipes.json")
+    mock_httpx(monkeypatch, json_source(recipe_payload("alpha")))
+
+    await refresh_from_sources(session)
+
+    alpha = await get_recipe(session, "alpha")
+    assert alpha.supports_vision is False
+
+
+@pytest.mark.asyncio
+async def test_refresh_updates_supports_vision_on_an_existing_row(session, monkeypatch, fake_redis):
+    """A recipe that gains vision support later (an engine upgrade, like the
+    TensorFold v1.10 bump) must be able to flip the field on a refresh — not
+    only on first insert."""
+    use_fake_redis(monkeypatch, fake_redis)
+    use_sources(monkeypatch, "https://registry.example/recipes.json")
+    mock_httpx(monkeypatch, json_source(recipe_payload("alpha")))
+    await refresh_from_sources(session)
+    assert (await get_recipe(session, "alpha")).supports_vision is False
+
+    mock_httpx(
+        monkeypatch, json_source(recipe_payload("alpha", supports_vision=True))
+    )
+    result = await refresh_from_sources(session)
+
+    assert result.updated == 1
+    assert (await get_recipe(session, "alpha")).supports_vision is True
+
+
+def test_seed_glm53_tensorfold_recipe_declares_vision_support():
+    """Regression pin for the incident itself: the TensorFold GLM-5.3 Flash
+    recipe is tagged "vision" and the operator verified (launch log, TensorFold
+    v1.10) that the engine reads images — the structured field must say so too,
+    or omp keeps blocking images for this exact recipe again."""
+    entries = json.loads(SEED_FILE.read_text(encoding="utf-8"))
+    by_slug = {e["slug"]: e for e in entries}
+    recipe = by_slug["glm53-flash-exl3-tensorfold"]
+    assert "vision" in recipe["tags"]
+    assert recipe["supports_vision"] is True
+
+
+def test_every_vision_tagged_seed_entry_declares_supports_vision():
+    """General invariant, not just the one incident: a recipe tagged "vision"
+    in free text with no backing `supports_vision: true` is exactly the bug
+    that shipped — nothing downstream of the catalog ever reads the tag."""
+    entries = json.loads(SEED_FILE.read_text(encoding="utf-8"))
+    offenders = [
+        e["slug"] for e in entries if "vision" in e.get("tags", []) and not e.get("supports_vision")
+    ]
+    assert offenders == []
+
+
 # ── Migration guard ──────────────────────────────────────────────────────────
 
 

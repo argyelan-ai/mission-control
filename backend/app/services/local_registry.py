@@ -130,6 +130,15 @@ class RecipeSpec(BaseModel):
     # counts reclaimable cache as available and must not get the drop, the
     # dropper or a lowered watermark. Default true = vLLM-style behaviour.
     drop_page_cache: bool = True
+    # Vision capability (operator incident 09.10.2026): the ONE structured
+    # channel a recipe has to say "my engine reads images" — `tags` is free
+    # text that nothing downstream reads. `recipe_switcher.
+    # build_runtime_from_recipe` copies this straight into a started
+    # instance's `runtimes.supports_vision`, which `build_runtime_env` turns
+    # into omp's `OMP_MODEL_INPUT` (render-omp-config.sh then sets
+    # `images.blockImages` from that). Default false: an unannounced/older
+    # recipe keeps the safe, blocked state.
+    supports_vision: bool = False
     tags: list[str] = PydanticField(default_factory=list)
     notes: str | None = None
     enabled: bool = True
@@ -338,6 +347,7 @@ def _row_from_spec(spec: RecipeSpec) -> LocalRecipe:
         env_file=spec.env_file,
         env_map=spec.env_map_clean,
         drop_page_cache=spec.drop_page_cache,
+        supports_vision=spec.supports_vision,
         tags=list(spec.tags or []),
         notes=spec.notes,
         enabled=spec.enabled,
@@ -382,6 +392,7 @@ def _apply_update(row: LocalRecipe, spec: RecipeSpec) -> bool:
         ("env_file", spec.env_file),
         ("env_map", spec.env_map_clean),
         ("drop_page_cache", spec.drop_page_cache),
+        ("supports_vision", spec.supports_vision),
         ("tags", list(spec.tags or [])),
         ("notes", spec.notes),
     ):

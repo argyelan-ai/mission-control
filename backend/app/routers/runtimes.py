@@ -1165,6 +1165,7 @@ async def update_runtime_db(
     # emit runtime.model_changed. Non-probeable cloud runtimes (Anthropic) have
     # no watcher, so this PATCH is their only path to a fresh model.
     old_model = rt.model_identifier
+    old_vision = rt.supports_vision
     for k, v in changes.items():
         setattr(rt, k, v)
     if "host_id" in body.model_fields_set:
@@ -1216,6 +1217,29 @@ async def update_runtime_db(
                 "source": "manual_edit",
             },
         )
+
+    # A manual supports_vision edit (operator incident 09.10.2026) is the only
+    # way to fix an already-running instance's vision flag without a restart —
+    # recipe_switcher.build_runtime_from_recipe flags agents on exactly this
+    # change during a switch (previous_vision != updated.supports_vision), and
+    # this endpoint must do the same, or the edit lands in the DB and never
+    # reaches the bound omp agent's rendered models.yml until something else
+    # happens to restart it.
+    vision_changed = "supports_vision" in changes and rt.supports_vision != old_vision
+    if vision_changed:
+        await activity.emit_event(
+            session,
+            "runtime.vision_changed",
+            f"{rt.slug}: supports_vision {old_vision} → {rt.supports_vision}",
+            severity="info",
+            detail={
+                "slug": rt.slug,
+                "supports_vision": rt.supports_vision,
+                "source": "manual_edit",
+            },
+        )
+
+    if model_changed or vision_changed:
         await mark_agents_for_sync(session, rt)
 
     return await _runtime_row_response(session, rt)
