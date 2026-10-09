@@ -44,6 +44,24 @@ MESSAGE_ACTIVE_STATUSES = [
     "in_progress", "inbox", "review", "blocked", "done", "user_test", "waiting",
 ]
 
+# Task statuses in which nobody works the card any more. Their threads stay
+# reachable (a fresh operator follow-up on a done card is still delivered),
+# but old peer chatter on them expires instead of waking an agent days later
+# (routers/agents._is_stale_message).
+FINISHED_TASK_STATUSES = ("done", "failed", "aborted")
+
+
+async def thread_is_finished(session: AsyncSession, thread: Thread, task: Task | None) -> bool:
+    """True when nobody works this thread any more: it is closed, or the task
+    it belongs to is finished. ``task`` is the one ``message_threads_for_agent``
+    carried along; it is None for lead-question threads ON PURPOSE (see there),
+    so the task is looked up from the thread in that case."""
+    if thread.closed_at is not None:
+        return True
+    if task is None and thread.task_id is not None:
+        task = await session.get(Task, thread.task_id)
+    return task is not None and task.status in FINISHED_TASK_STATUSES
+
 
 async def message_threads_for_agent(agent: Agent, session: AsyncSession) -> list:
     """``[(thread, task|None)]`` — the threads this agent takes part in.

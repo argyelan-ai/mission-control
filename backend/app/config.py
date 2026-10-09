@@ -537,6 +537,13 @@ class Settings(BaseSettings):
     # 600 s default ≫ the 30 s heartbeat cadence + harvest lag.
     poll_orphan_run_threshold_seconds: int = 600
 
+    # Stale thread messages (inbox nudges, live finding 2026-10-09). A system
+    # notice older than this — or a peer-agent message this old on a thread
+    # nobody works any more — is no longer delivered by /me/poll or /me/inbox,
+    # so it cannot wake an agent days later. Operator messages never expire.
+    # See routers/agents._is_stale_message.
+    agent_message_stale_after_seconds: int = 86400
+
     # File Indexer — periodic walk of browsable ~/.mc roots into file_index.
     # Accelerator only (bytes always stream live). Tests override to 99999 so
     # the loop never auto-fires; they call run_once() directly.
