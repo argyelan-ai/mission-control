@@ -2743,8 +2743,8 @@ async def _resolve_agent_threads_with_cursors(session: AsyncSession, agent: Agen
     """Scope + cursor resolution shared by the poll delivery path
     (`_collect_new_messages`) and the inbox pull endpoint (`GET /me/inbox`).
 
-    Returns ``([(thread, cursor)], created_any)`` for the agent's active-task
-    threads. Cursors are created on first sight — fast-forwarded past history
+    Returns ``([(thread, task|None, cursor)], created_any)`` for the agent's
+    threads (the task as ``message_threads_for_agent`` carried it). Cursors are created on first sight — fast-forwarded past history
     for done/failed tasks (Befund C, live pilot 2026-07-20) — and added to the
     session, but NOT committed here: the caller runs a single commit after
     applying its own cursor advances, matching the existing one-commit-per-poll
@@ -2771,7 +2771,7 @@ async def _resolve_agent_threads_with_cursors(session: AsyncSession, agent: Agen
             start_after_seq=(_start_after - 1) if _start_after else None,
         )
         created_any = created_any or created
-        resolved.append((thread, cursor))
+        resolved.append((thread, thread_task, cursor))
     return resolved, created_any
 
 
@@ -2788,6 +2788,107 @@ async def _unacked_thread_messages(session: AsyncSession, thread, cursor):
         .order_by(Message.seq.asc())  # type: ignore[union-attr]
     )
     return list(res.all())
+
+
+# rule: R-stale-messages-do-not-wake - old notices must not wake an agent days later
+def _stale_kind(message, *, thread_finished: bool, now) -> str | None:
+    """Whether ``message`` is too old to be worth waking an agent for.
+
+    Live finding 2026-10-09: the lead's turn gate stayed closed for a week;
+    the moment it opened, two week-old "TASK ERLEDIGT" system notices in its
+    DM thread produced a nudge, and the lead went off re-inspecting a card
+    that had been approved days before — paid turns for nothing.
+
+    * ``None`` — not stale. Operator messages never expire (the operator's
+      word is always delivered), and neither does a peer-agent message on a
+      card that is still being worked.
+    * ``"final"`` — a system notice older than
+      ``agent_message_stale_after_seconds``. It never becomes deliverable
+      again; the task state, not the notice, is the source of truth.
+    * ``"held"`` — a peer-agent message that old on a thread nobody works any
+      more (finished task or closed thread). Withheld only while that lasts:
+      a finished card can be reopened (done → in_progress, failed/aborted →
+      inbox), and then the agent must still get it (review #774 L1).
+    """
+    from app.config import settings as _settings
+    from app.utils import ensure_aware
+
+    if message.sender_type == "user" or message.created_at is None:
+        return None
+    if message.sender_type == "agent" and not thread_finished:
+        return None
+    age = (now - ensure_aware(message.created_at)).total_seconds()
+    if age <= _settings.agent_message_stale_after_seconds:
+        return None
+    return "held" if message.sender_type == "agent" else "final"
+
+
+async def _pending_thread_messages(
+    session: AsyncSession, agent: Agent, thread, thread_task, cursor
+) -> tuple[list, list, bool]:
+    """``(deliverable, window, changed)`` for one thread — the filter core
+    shared by poll delivery and inbox pull.
+
+    ``window`` is every unacked message (own posts included, which the ack
+    target spans); ``deliverable`` is what the agent is actually shown.
+
+    Held peer messages (see ``_stale_kind``) do not wake the agent on their
+    own. But once anything else in the thread is delivered, they are shown
+    along with it — `mc inbox` acks the whole window, so a held message left
+    out there would be acked unseen.
+
+    Catch-up: a leading run of messages that will never be delivered (own
+    posts, briefings, group posts without a mention, ``final`` stale notices)
+    is acked here. These filters are final — such a message never becomes
+    deliverable later — so nothing is lost. Without it such a thread sat
+    "unacked" forever: `mc inbox` acks only threads it has something to show,
+    so the backlog never cleared and was rescanned on every poll. The catch-up
+    stops at the first message that is or may become deliverable (including a
+    held one) — it never marks an unseen message as read.
+    """
+    from app.config import settings as _settings
+
+    window = await _unacked_thread_messages(session, thread, cursor)
+    if not window:
+        return [], [], False
+    finished = await thread_scope.thread_is_finished(session, thread, thread_task)
+    now = utcnow()
+    deliverable, shown = [], []
+    caught_up = cursor.last_acked_seq
+    blocked = False  # a deliverable or held message ends the catch-up run
+    skipped_stale = 0
+    for m in window:
+        kind = (
+            "final"
+            if _is_own_message(m, agent)
+            or _is_briefing_message(m)
+            or not _group_message_visible_to(m, thread, agent)
+            else None
+        )
+        stale = None if kind else _stale_kind(m, thread_finished=finished, now=now)
+        if kind == "final" or stale == "final":
+            if not blocked:
+                caught_up = m.seq
+                skipped_stale += stale == "final"
+            continue
+        blocked = True
+        shown.append(m)
+        if stale is None:
+            deliverable.append(m)
+    changed = False
+    if caught_up > cursor.last_acked_seq:
+        cursor.last_acked_seq = caught_up
+        cursor.last_delivered_seq = max(cursor.last_delivered_seq, caught_up)
+        session.add(cursor)
+        changed = True
+        if skipped_stale:
+            # Logged once: the cursor has moved, the next poll skips nothing.
+            logger.info(
+                "Skipped %d stale notice(s) for %s on thread %s (older than %ss)",
+                skipped_stale, agent.name, thread.id,
+                _settings.agent_message_stale_after_seconds,
+            )
+    return (shown if deliverable else []), window, changed
 
 
 async def _collect_new_messages(session: AsyncSession, agent: Agent, acked: dict[str, int]) -> list[dict]:
@@ -2807,7 +2908,7 @@ async def _collect_new_messages(session: AsyncSession, agent: Agent, acked: dict
     # eingetroffene Messages hinweg. (Explizites created-Signal statt
     # `cursor in session.new`: Autoflush leert session.new vor dem Check.)
     resolved, changed = await _resolve_agent_threads_with_cursors(session, agent)
-    for thread, cursor in resolved:
+    for thread, thread_task, cursor in resolved:
         tid = str(thread.id)
         if tid in acked:
             # Cap the ack at what was actually delivered — an agent can never
@@ -2819,7 +2920,10 @@ async def _collect_new_messages(session: AsyncSession, agent: Agent, acked: dict
                 cursor.last_acked_seq = new_ack
                 changed = True
 
-        msgs = await _unacked_thread_messages(session, thread, cursor)
+        deliverable, msgs, caught_up = await _pending_thread_messages(
+            session, agent, thread, thread_task, cursor
+        )
+        changed = changed or caught_up
         if not msgs:
             continue
 
@@ -2827,13 +2931,7 @@ async def _collect_new_messages(session: AsyncSession, agent: Agent, acked: dict
         if msgs[-1].seq > cursor.last_delivered_seq:
             cursor.last_delivered_seq = msgs[-1].seq
             changed = True
-        out.extend(
-            _serialize_message(m)
-            for m in msgs
-            if not _is_own_message(m, agent)
-            and not _is_briefing_message(m)
-            and _group_message_visible_to(m, thread, agent)
-        )
+        out.extend(_serialize_message(m) for m in deliverable)
 
     if changed:
         await session.commit()
@@ -3619,12 +3717,13 @@ async def agent_inbox(
     `mc inbox` prints the messages and then acks the highest seq per thread via
     POST /me/inbox/ack.
 
-    Returns every not-yet-acked, non-own message (`seq > last_acked_seq`) on the
-    agent's active-task threads — the same scope/cursor/filter core the poll
-    delivery path uses (`_resolve_agent_threads_with_cursors` +
-    `_unacked_thread_messages`). Cursors are created (fast-forwarded for
-    finished tasks) but no delivered/acked advance happens here; that is the
-    explicit job of the ack endpoint.
+    Returns every not-yet-acked, deliverable message (`seq > last_acked_seq`,
+    not own, not stale) on the agent's threads — the same scope/cursor/filter
+    core the poll delivery path uses (`_resolve_agent_threads_with_cursors` +
+    `_pending_thread_messages`). Cursors are created (fast-forwarded for
+    finished tasks), and a leading run of never-deliverable messages is caught
+    up; acking anything the agent is shown is the explicit job of the ack
+    endpoint.
 
     Response: ``{"messages": [...], "threads": {thread_id: max_seq}}`` where
     max_seq is the highest unacked seq per thread (what `mc inbox` acks back).
@@ -3640,14 +3739,11 @@ async def agent_inbox(
     # signal instead of `cursor in session.new` (autoflush empties session.new
     # before the check — see _resolve_agent_threads_with_cursors).
     resolved, changed = await _resolve_agent_threads_with_cursors(session, agent)
-    for thread, cursor in resolved:
-        msgs = await _unacked_thread_messages(session, thread, cursor)
-        non_own = [
-            m for m in msgs
-            if not _is_own_message(m, agent)
-            and not _is_briefing_message(m)
-            and _group_message_visible_to(m, thread, agent)
-        ]
+    for thread, thread_task, cursor in resolved:
+        non_own, msgs, caught_up = await _pending_thread_messages(
+            session, agent, thread, thread_task, cursor
+        )
+        changed = changed or caught_up
         if not non_own:
             continue
         # `thread_kind` lets `mc inbox` point at the room rules (`mc docs
