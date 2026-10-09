@@ -394,6 +394,7 @@
     "POST /api/v1/agents/{agent_id}/chat/effort",
     "POST /api/v1/agents/{agent_id}/chat/input",
     "POST /api/v1/agents/{agent_id}/chat/keys",
+    "POST /api/v1/agents/{agent_id}/chat/queue/clear",
     "POST /api/v1/agents/{agent_id}/force-recreate",
     "POST /api/v1/agents/{agent_id}/health-check",
     "POST /api/v1/agents/{agent_id}/heartbeat",
