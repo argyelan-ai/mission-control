@@ -28,6 +28,7 @@ import {
 } from "./ChatView";
 import { useChatStream, type UseChatStreamResult } from "@/hooks/useChatStream";
 import { api } from "@/lib/api";
+import { notify } from "@/lib/notify";
 import type { AgentWithState } from "./TerminalPanel";
 import type { MessageEvent, PreviewEvent, SubagentRun, ThinkingEvent, TimelineChatEvent, ToolEvent } from "@/lib/chatTypes";
 import { readFileSync } from "node:fs";
@@ -1602,6 +1603,31 @@ describe("ChatView", () => {
   it("headless agent: Stop still cancels when the daemon cannot hand the queue back", async () => {
     const user = userEvent.setup();
     vi.mocked(api.chat.clearQueue).mockRejectedValue(new Error("409"));
+    const errorSpy = vi.spyOn(notify, "error");
+    const withdrawQueued = vi.fn(() => ["noch das"]);
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        state: { kind: "state", status: "working", prompt: null },
+        pendingEchoes: [{ id: "echo-1", text: "noch das", sentAt: Date.now(), status: "queued" }],
+        withdrawQueued,
+      })
+    );
+    renderChatView({ agent: mkAgent({ harness: "omp", headless_chat: true }) });
+
+    await user.click(screen.getByRole("button", { name: "Stop" }));
+    await waitFor(() => expect(api.chat.sendKeys).toHaveBeenCalledWith("agent-1", ["Escape"]));
+    // The daemon still holds the message and will send it: the row stays,
+    // and the operator is told the take-back failed (review #777).
+    expect(withdrawQueued).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith("Couldn't take the queued messages back");
+    expect(screen.getByPlaceholderText(/Message the agent/)).toHaveValue("");
+    errorSpy.mockRestore();
+  });
+
+  it("headless agent: Stop with nothing queued stays quiet when the queue call fails", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.chat.clearQueue).mockRejectedValue(new Error("409"));
+    const errorSpy = vi.spyOn(notify, "error");
     mockUseChatStream.mockReturnValue(
       mkStream({ state: { kind: "state", status: "working", prompt: null } })
     );
@@ -1609,6 +1635,32 @@ describe("ChatView", () => {
 
     await user.click(screen.getByRole("button", { name: "Stop" }));
     await waitFor(() => expect(api.chat.sendKeys).toHaveBeenCalledWith("agent-1", ["Escape"]));
+    expect(errorSpy).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it("headless agent: a failed take-back keeps the row and says so", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.chat.clearQueue).mockRejectedValue(new Error("502"));
+    const errorSpy = vi.spyOn(notify, "error");
+    const withdrawQueued = vi.fn(() => ["und danach das"]);
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        state: { kind: "state", status: "working", prompt: null },
+        pendingEchoes: [
+          { id: "echo-1", text: "und danach das", sentAt: Date.now(), status: "queued" },
+        ],
+        withdrawQueued,
+      })
+    );
+    renderChatView({ agent: mkAgent({ harness: "omp", headless_chat: true }) });
+
+    await user.click(screen.getByRole("button", { name: "Edit queued message" }));
+
+    await waitFor(() => expect(errorSpy).toHaveBeenCalledWith("Couldn't take the queued messages back"));
+    expect(withdrawQueued).not.toHaveBeenCalled();
+    expect(screen.getByPlaceholderText(/Message the agent/)).toHaveValue("");
+    errorSpy.mockRestore();
   });
 
   it("offers no withdraw on an echo that is already on its way", () => {

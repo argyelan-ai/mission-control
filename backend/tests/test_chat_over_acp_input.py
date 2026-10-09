@@ -224,6 +224,51 @@ async def test_send_text_new_on_a_daemon_without_new_session_is_not_supported(
     assert transport.calls == [("new_session", "queue")]
 
 
+@pytest.mark.parametrize("op,typed", [("prompt", "hallo"), ("new_session", "/new")])
+async def test_send_text_daemon_not_started_is_agent_starting(acp_agent, acp_state, monkeypatch, op, typed):
+    """``not_started`` writes no card — swallowing it as 204 left the operator
+    with a message that went nowhere. It is the same wait as a booting TUI."""
+    from app.services import agent_chat_input
+
+    _install(monkeypatch, _FakeTransport({op: {"ok": False, "error": "not_started"}}))
+    with pytest.raises(agent_chat_input.AgentStartingError):
+        await agent_chat_input.send_text(acp_agent, typed)
+
+
+@pytest.mark.parametrize("op,typed", [("prompt", "hallo"), ("new_session", "/clear")])
+async def test_send_text_other_refusals_are_errors_not_204(acp_agent, acp_state, monkeypatch, op, typed):
+    from app.services import agent_chat_input
+
+    _install(monkeypatch, _FakeTransport({op: {"ok": False, "error": "bad_mode", "detail": "x"}}))
+    with pytest.raises(agent_chat_input.AcpChatRefusedError) as exc:
+        await agent_chat_input.send_text(acp_agent, typed)
+    assert exc.value.code == "bad_mode"
+
+
+async def test_send_text_queue_full_is_already_a_card(acp_agent, monkeypatch):
+    """``queue_full`` is the one refusal the daemon itself puts in the chat
+    as a card — no second error on top."""
+    from app.services import agent_chat_input
+
+    _install(monkeypatch, _FakeTransport({"prompt": {"ok": False, "error": "queue_full"}}))
+    await agent_chat_input.send_text(acp_agent, "einer zu viel")
+
+
+async def test_router_maps_acp_refusal_to_409(auth_client, make_agent, monkeypatch):
+    import app.routers.agent_chat as agent_chat_mod
+    from app.services.agent_chat_input import AcpChatRefusedError
+
+    agent = await make_agent(name="Acp One", agent_runtime="cli-bridge")
+
+    async def _refused(a, text):
+        raise AcpChatRefusedError("bad_mode")
+
+    monkeypatch.setattr(agent_chat_mod, "send_text", _refused)
+    resp = await auth_client.post(f"/api/v1/agents/{agent.id}/chat/input", json={"text": "x"})
+    assert resp.status_code == 409, resp.text
+    assert resp.json() == {"reason": "acp_refused", "error": "bad_mode"}
+
+
 async def test_clear_queue_hands_back_the_texts_oldest_first(acp_agent, monkeypatch):
     from app.services import agent_chat_input
 

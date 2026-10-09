@@ -189,8 +189,13 @@ class ChatSession:
         self._state_dir.mkdir(parents=True, exist_ok=True)
         self._sessions_dir.mkdir(parents=True, exist_ok=True)
         persisted = self._read_persisted()
+        # Read BEFORE anything rewrites the mirror: the queue lives in memory,
+        # so whatever a previous daemon still held is gone after a restart.
+        lost = self._previous_queue()
         self._connect(persisted)
         self._write_state()
+        if lost:
+            self._report_lost_queue(lost)
 
     def _connect(self, persisted: dict) -> None:
         client = self._client_factory()
@@ -234,6 +239,26 @@ class ChatSession:
                 text="Previous chat session could not be loaded — "
                      "started a new one (history starts over).",
             )
+
+    def _previous_queue(self) -> list[dict]:
+        """The jobs a previous daemon was holding, from its state mirror."""
+        try:
+            with open(self.state_file, "r", encoding="utf-8") as fh:
+                queue = (json.load(fh) or {}).get("queue")
+        except (OSError, ValueError, AttributeError):
+            return []
+        return [j for j in queue or [] if isinstance(j, dict)]
+
+    def _report_lost_queue(self, lost: list[dict]) -> None:
+        """One card naming what a restart dropped — the operator typed it and
+        must see that it never ran (spec: the queue is in memory only)."""
+        texts = ["/new" if j.get("kind") == "new_session" else str(j.get("text") or "")
+                 for j in lost]
+        listed = "\n".join(f"- {t}" for t in texts if t)
+        self._emit_error(
+            "queue_lost", f"{len(lost)} queued job(s) dropped by a chat restart",
+            text=f"The chat restarted — {len(lost)} queued message(s) were not sent:\n{listed}",
+        )
 
     def _pin_model(self) -> None:
         """Pin the session to the MC model (twin of bridge.py's #483 fix).
@@ -743,17 +768,29 @@ class ChatSession:
 
     def _write_state(self) -> None:
         """Mirror the state next to the transcript, where the backend reads
-        it (same mount). Atomic rename: a reader never sees half a file."""
-        payload = self.state()
+        it (same mount). Atomic rename: a reader never sees half a file.
+
+        Under `_lock`, with a tmp name of its own: the worker writes outside
+        the lock while socket handlers write under it, and two writers
+        sharing ONE tmp file truncated each other's half-written file and
+        renamed it into place (torn JSON, review #777). The lock also keeps
+        snapshot and rename in order, so an older snapshot can never land
+        after a newer one."""
         target = self.state_file
-        tmp = target.with_suffix(".json.tmp")
-        try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump(payload, fh, ensure_ascii=False)
-            os.replace(tmp, target)
-        except OSError:
-            logger.warning("state mirror unavailable: %s", target)
+        with self._lock:
+            payload = self.state()
+            tmp = target.with_name(f"{target.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with open(tmp, "w", encoding="utf-8") as fh:
+                    json.dump(payload, fh, ensure_ascii=False)
+                os.replace(tmp, target)
+            except OSError:
+                logger.warning("state mirror unavailable: %s", target)
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
 
     def _read_persisted(self) -> dict:
         try:

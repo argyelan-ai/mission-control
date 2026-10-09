@@ -180,6 +180,18 @@ class DockerCtlTransport:
                 f"acp_chat_ctl {op}: socket unreachable in mc-agent-{self._slug}"
             )
 
+        if (
+            proc.returncode == _CTL_EXIT_NOT_OK
+            and not stdout.strip()
+            and b"invalid choice" in stderr
+        ):
+            # Agent-Image aelter als die Op: der alte Shim verwirft sie schon
+            # in argparse (Exit 2, leeres stdout, "invalid choice" auf stderr).
+            # Das ist eine ANTWORT ("kenne ich nicht") und kein toter Socket —
+            # sonst wuerde aus /new oder Zurueckziehen eine 502 statt der
+            # ehrlichen 409 (Review #777).
+            return {"ok": False, "error": "unknown_op", "detail": op}
+
         try:
             answer = json.loads(stdout.decode(errors="replace"))
         except ValueError:

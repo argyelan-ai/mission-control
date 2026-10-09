@@ -1132,6 +1132,84 @@ def test_socket_queue_and_new_session_ops_through_the_ctl_shim(tmp_path):
     print("PASS test_socket_queue_and_new_session_ops_through_the_ctl_shim")
 
 
+# ── review #777: state mirror under concurrent writers, queue across restart ─
+
+
+def test_state_mirror_is_never_torn_under_concurrent_writers(tmp_path):
+    """The worker writes the mirror outside the lock while socket handlers
+    write it under the lock. With ONE shared tmp file two writers truncate
+    each other's tmp and rename half a file into place — the backend reads
+    torn JSON (review: 20–97 parse errors per run)."""
+    client = FakeClient(session_result=SESSION_RESULT)
+    sess = make_session(tmp_path, client)
+    sess.start()
+    # A big payload makes each write slow enough to overlap.
+    sess._set_commands([{"name": f"cmd{i}", "description": "x" * 400} for i in range(200)])
+    stop = threading.Event()
+    errors: list[str] = []
+
+    def writer():
+        while not stop.is_set():
+            sess._write_state()
+
+    def reader():
+        while not stop.is_set():
+            try:
+                raw = sess.state_file.read_text()
+            except OSError:
+                continue
+            try:
+                json.loads(raw)
+            except ValueError as exc:
+                errors.append(str(exc))
+
+    threads = [threading.Thread(target=writer) for _ in range(6)] + [threading.Thread(target=reader)]
+    for t in threads:
+        t.start()
+    time.sleep(1.5)
+    stop.set()
+    for t in threads:
+        t.join()
+    sess.close()
+    assert errors == [], f"{len(errors)} torn reads of acp-chat-state.json"
+    assert not list(sess.state_file.parent.glob("*.tmp")), "tmp files left behind"
+    print("PASS test_state_mirror_is_never_torn_under_concurrent_writers")
+
+
+def test_messages_held_when_the_daemon_restarts_are_reported_not_lost_silently(tmp_path):
+    """The queue lives in memory. A daemon restart (container recreate,
+    bridge reload) drops it — the restarted daemon finds the old queue in the
+    state mirror and says so in the chat, with the texts."""
+    gate = threading.Event()
+    client = FakeClient(session_result=SESSION_RESULT, turns=[{"chunks": ["x"], "gate": gate}])
+    sess = make_session(tmp_path, client)
+    sess.start()
+    sess.prompt("first", mode="queue")
+    _wait_busy(sess)
+    sess.prompt("held one", mode="queue")
+    sess.prompt("held two", mode="queue")
+    transcript = sess.transcript_path
+    sess.close()          # the daemon dies with two messages held
+    gate.set()
+
+    again = make_session(tmp_path, FakeClient(session_result=SESSION_RESULT))
+    again.start()         # session/load -> same transcript file
+    again.close()
+    lost = [l for l in entries_of_type(read_lines(transcript), "custom_message", "chat_error")
+            if (l.get("data") or {}).get("code") == "queue_lost"]
+    assert len(lost) == 1
+    assert "held one" in lost[0]["content"] and "held two" in lost[0]["content"]
+    assert again.state()["queue"] == []
+
+    third = make_session(tmp_path, FakeClient(session_result=SESSION_RESULT))
+    third.start()         # nothing held this time -> no second card
+    third.close()
+    lost = [l for l in entries_of_type(read_lines(transcript), "custom_message", "chat_error")
+            if (l.get("data") or {}).get("code") == "queue_lost"]
+    assert len(lost) == 1
+    print("PASS test_messages_held_when_the_daemon_restarts_are_reported_not_lost_silently")
+
+
 if __name__ == "__main__":  # standalone runner
     import tempfile
 

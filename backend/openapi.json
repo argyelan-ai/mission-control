@@ -1110,6 +1110,15 @@
         ]
       }
     },
+    "/api/v1/agents/{agent_id}/chat/queue/clear": {
+      "post": {
+        "operationId": "post_chat_queue_clear_api_v1_agents__agent_id__chat_queue_clear_post",
+        "summary": "Post Chat Queue Clear",
+        "tags": [
+          "agent-chat"
+        ]
+      }
+    },
     "/api/v1/agents/{agent_id}/chat/stream": {
       "get": {
         "operationId": "stream_agent_chat_api_v1_agents__agent_id__chat_stream_get",

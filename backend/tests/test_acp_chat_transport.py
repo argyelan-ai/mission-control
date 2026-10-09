@@ -452,3 +452,65 @@ def test_omp_session_id_for_has_no_underscore_falls_back_to_full_stem():
     from pathlib import Path
 
     assert omp_chat.session_id_for(Path("justauuid.jsonl")) == "justauuid"
+
+
+# ── review #777 M1: an agent image older than new_session/queue_clear ────────
+
+#: The control shim as it shipped BEFORE new_session/queue_clear: argparse
+#: with choices limited to the four old ops. Run as a real process — the
+#: point is argparse's real behaviour (exit 2, empty stdout, "invalid choice"
+#: on stderr), which a mocked answer would only guess.
+_OLD_CTL = """
+import argparse, json, sys
+OPS = ("prompt", "cancel", "config", "state")
+parser = argparse.ArgumentParser(description="control the ACP chat daemon")
+parser.add_argument("op", choices=OPS)
+parser.add_argument("--json", dest="payload", default=None)
+parser.add_argument("--socket", default=None)
+parser.add_argument("--timeout", type=float, default=30.0)
+args = parser.parse_args()
+print(json.dumps({"ok": True}))
+"""
+
+
+def _run_old_ctl(tmp_path, monkeypatch):
+    """Route the transport's `docker exec ... acp_chat_ctl.py <op>` to the
+    old-style shim, as a real subprocess."""
+    import sys
+
+    from app.services import acp_chat_transport
+
+    stub = tmp_path / "acp_chat_ctl_old.py"
+    stub.write_text(_OLD_CTL)
+    real_exec = acp_chat_transport.asyncio.create_subprocess_exec
+
+    async def _exec(*argv, **kwargs):
+        tail = list(argv[list(argv).index(acp_chat_transport.CTL_PATH) + 1:])
+        return await real_exec(sys.executable, str(stub), *tail, **kwargs)
+
+    monkeypatch.setattr(acp_chat_transport.asyncio, "create_subprocess_exec", _exec)
+
+
+async def test_old_image_ctl_answers_unknown_op_not_unreachable(tmp_path, monkeypatch, acp_slug):
+    """The old shim rejects new ops in argparse (exit 2, empty stdout). That
+    is "this agent does not know the op" — an answer — not "nobody there"
+    (which would surface as 502 acp_unreachable)."""
+    from app.services import acp_chat_transport
+
+    _run_old_ctl(tmp_path, monkeypatch)
+    transport = acp_chat_transport.DockerCtlTransport(acp_slug)
+
+    for answer in (await transport.queue_clear(), await transport.new_session(mode="queue")):
+        assert answer["ok"] is False and answer["error"] == "unknown_op"
+    assert await transport.state() == {"ok": True}  # known ops still answer
+
+
+async def test_old_image_queue_clear_is_409_input_not_supported(
+    tmp_path, monkeypatch, auth_client, make_agent
+):
+    _run_old_ctl(tmp_path, monkeypatch)
+    agent = await make_agent(name="Acp Old", agent_runtime="cli-bridge", harness="omp")
+
+    resp = await auth_client.post(f"/api/v1/agents/{agent.id}/chat/queue/clear")
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["reason"] == "input_not_supported"

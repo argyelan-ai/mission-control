@@ -603,24 +603,33 @@ export function ChatView({
       // The chat daemon holds follow-ups behind the running reply and would
       // start the next one the moment this turn is cancelled. Stop means stop:
       // take them back first, into the composer — the way Claude Code and
-      // Codex hand queued input back on interrupt. A daemon that cannot (older
-      // agent image) must not block the cancel itself.
-      const dropped = await takeBackHeadlessQueue();
-      stream.withdrawQueued();
-      if (dropped.length > 0) setComposerPrefill({ text: dropped.join("\n\n"), at: Date.now() });
+      // Codex hand queued input back on interrupt. If the daemon cannot (older
+      // agent image, no answer), the rows stay — it still holds them and will
+      // send them — and the cancel goes out regardless.
+      const hadQueued = stream.pendingEchoes.some((e) => e.status === "queued");
+      const dropped = await takeBackHeadlessQueue({ quiet: !hadQueued });
+      if (dropped && dropped.length > 0) {
+        setComposerPrefill({ text: dropped.join("\n\n"), at: Date.now() });
+      }
     }
     api.chat.sendKeys(agent.id, ["Escape"]).catch(() => notify.error(t("stopActionFailed")));
   }
 
-  /** The follow-ups a headless agent's daemon still holds, taken back.
-   *  Empty when there were none or the daemon could not answer. */
-  async function takeBackHeadlessQueue(): Promise<string[]> {
-    if (!agent) return [];
+  /** Takes the follow-ups a headless agent's daemon still holds back and
+   *  drops their local rows — only once the daemon has answered. `null` when
+   *  it could not: the rows stay (the daemon still holds the messages) and,
+   *  unless `quiet`, the operator is told (review #777). */
+  async function takeBackHeadlessQueue({ quiet = false } = {}): Promise<string[] | null> {
+    if (!agent) return null;
+    let dropped: string[];
     try {
-      return (await api.chat.clearQueue(agent.id)).dropped ?? [];
+      dropped = (await api.chat.clearQueue(agent.id)).dropped ?? [];
     } catch {
-      return [];
+      if (!quiet) notify.error(t("queueTakeBackFailed"));
+      return null;
     }
+    stream.withdrawQueued();
+    return dropped;
   }
 
   /** Take a queued message back. On a TUI agent Up pops the CLI's whole queue
@@ -633,15 +642,15 @@ export function ChatView({
    *  in the composer for another go. */
   async function handleWithdrawQueued(edit: boolean) {
     if (!agent) return;
-    const taken = stream.withdrawQueued();
-    if (taken.length === 0) return;
     if (headlessChat) {
       const dropped = await takeBackHeadlessQueue();
-      if (edit && dropped.length > 0) {
+      if (edit && dropped && dropped.length > 0) {
         setComposerPrefill({ text: dropped.join("\n\n"), at: Date.now() });
       }
       return;
     }
+    const taken = stream.withdrawQueued();
+    if (taken.length === 0) return;
     api.chat.sendKeys(agent.id, ["Up", "C-u"]).catch(() => notify.error(t("stopActionFailed")));
     if (edit) setComposerPrefill({ text: taken.join("\n\n"), at: Date.now() });
   }

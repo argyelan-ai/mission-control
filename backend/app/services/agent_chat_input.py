@@ -344,6 +344,45 @@ class BossDeliveryError(Exception):
     was the bug this replaces."""
 
 
+class AcpChatRefusedError(Exception):
+    """Der Chat-Daemon eines kopflosen Agenten hat abgelehnt, OHNE die Absage
+    selbst als Karte in den Chat zu schreiben (z. B. ``bad_mode``). Sie muss
+    darum hier sichtbar werden — als 204 verschluckt ginge die Nachricht
+    spurlos verloren (Review #777)."""
+
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
+
+#: Absagen, die der Daemon SELBST als ``chat_error``-Karte ins Transkript
+#: schreibt — hier keine zweite Fehlermeldung obendrauf.
+_ACP_REFUSALS_WITH_CARD = frozenset({"queue_full"})
+
+
+def _raise_for_acp_refusal(error: str | None, slug: str) -> None:
+    """Uebersetzt eine Daemon-Absage in die Ausnahme, die der Router kennt.
+    Kehrt nur zurueck, wenn der Chat die Absage schon als Karte zeigt."""
+    if error == "busy":
+        raise AgentBusyError()
+    if error == "not_started":
+        # Daemon laeuft, Sitzung noch nicht offen: dasselbe Warten wie eine
+        # bootende TUI — der Composer versucht es einmal von selbst erneut.
+        raise AgentStartingError()
+    if error == "unknown_op":
+        # Agent-Image aelter als die Op: ehrlich ablehnen. Fuer /new hiesse
+        # Weiterreichen als Prompt wieder: das Modell SPIELT "Sitzung geleert".
+        logger.warning(
+            "acp chat: Daemon kennt die Op nicht (slug=%s) — Agent-Image neu bauen",
+            slug,
+        )
+        raise InputNotSupportedError()
+    if error in _ACP_REFUSALS_WITH_CARD:
+        logger.info("acp chat: Absage %s (slug=%s), steht als Karte im Chat", error, slug)
+        return
+    raise AcpChatRefusedError(str(error or "unknown"))
+
+
 class AgentStartingError(Exception):
     """Raised when send_text's readiness gate never saw the pane become
     ready within its poll budget — the CLI is still booting/loading plugins,
@@ -672,33 +711,14 @@ async def send_text(agent, text: str) -> None:
         if await _acp_session_reset_command(agent, text):
             answer = await transport.new_session(mode="queue")
             if not answer.get("ok"):
-                error = answer.get("error")
-                if error == "busy":
-                    raise AgentBusyError()
-                if error == "unknown_op":
-                    # Agent-Image aelter als ``new_session``: ehrlich ablehnen.
-                    # Als Prompt weiterzureichen hiesse wieder: das Modell
-                    # SPIELT "Sitzung geleert".
-                    logger.warning(
-                        "acp chat: Daemon kennt new_session nicht (slug=%s) — "
-                        "Agent-Image neu bauen", slug,
-                    )
-                    raise InputNotSupportedError()
-                logger.warning(
-                    "acp chat: neue Sitzung abgelehnt (slug=%s): %s", slug, error
-                )
+                _raise_for_acp_refusal(answer.get("error"), slug)
             return
         answer = await transport.prompt(text, mode="queue")
         if not answer.get("ok"):
-            if answer.get("error") == "busy":
-                raise AgentBusyError()
-            # Jede andere Absage hat der Daemon bereits als ``chat_error``
-            # ins Transkript geschrieben — sie erscheint im Chat als rote
-            # Karte. Hier noch eine Ausnahme zu werfen wuerde dieselbe
-            # Nachricht ein zweites Mal erzaehlen, nur ohne Code.
-            logger.warning(
-                "acp chat: prompt abgelehnt (slug=%s): %s", slug, answer.get("error")
-            )
+            # Zurueck kommt hier nur eine Absage, die der Daemon schon als
+            # Karte zeigt (``queue_full``); jede andere wird zur Ausnahme.
+            _raise_for_acp_refusal(answer.get("error"), slug)
+            return
         note_sent(str(getattr(agent, "id", "") or slug), text)
         return
 

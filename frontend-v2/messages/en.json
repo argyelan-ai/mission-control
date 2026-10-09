@@ -1057,7 +1057,8 @@
       "diff": "Diff",
       "browser": "Browser",
       "close": "Close panel"
-    }
+    },
+    "queueTakeBackFailed": "Couldn't take the queued messages back"
   },
   "shell": {
     "searchPlaceholder": "Search or command...",
@@ -3438,7 +3439,8 @@
       "busy": "Still working",
       "session_reset": "Session restarted",
       "queue_full": "Queue full",
-      "new_session_failed": "New session failed"
+      "new_session_failed": "New session failed",
+      "queue_lost": "Queue lost"
     },
     "queue": {
       "queued": "Queued — sent when the current reply ends",

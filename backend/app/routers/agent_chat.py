@@ -27,6 +27,7 @@ from app.models.task import Task
 from app.redis_client import RedisKeys
 from app.services.acp_chat_transport import AcpChatUnreachableError
 from app.services.agent_chat_input import (
+    AcpChatRefusedError,
     AgentBusyError,
     AgentStartingError,
     BossDeliveryError,
@@ -508,7 +509,9 @@ async def post_chat_input(
     (docker only) when the pane never became ready within ``send_text``'s
     readiness gate — the CLI is still booting/loading plugins or a recycler
     respawn is mid-flight, and nothing was typed (see
-    ``agent_chat_input._wait_for_send_readiness``)."""
+    ``agent_chat_input._wait_for_send_readiness``). Headless (ACP) agents:
+    409 ``{"reason":"acp_refused","error":code}`` when the chat daemon refused
+    without putting a card into the chat itself."""
     agent = await _load_agent_or_404(agent_id, session)
 
     if not body.text or not body.text.strip():
@@ -535,6 +538,12 @@ async def post_chat_input(
         # einem Daemon, der die Warteschlange nicht kennt (altes Image) —
         # eine Absage, keine 500.
         return JSONResponse(status_code=409, content=_AGENT_BUSY)
+    except AcpChatRefusedError as e:
+        # Eine Absage des Chat-Daemons, die er NICHT selbst als Karte zeigt —
+        # der Composer muss sie melden, sonst ginge die Nachricht spurlos weg.
+        return JSONResponse(
+            status_code=409, content={"reason": "acp_refused", "error": e.code}
+        )
     except AcpChatUnreachableError as e:
         return _acp_unreachable(e)
     except BossDeliveryError as e:
