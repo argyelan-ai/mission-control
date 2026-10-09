@@ -82,7 +82,7 @@ describe("Inbox — head questions link into the head chat", () => {
 
     renderInbox();
     const link = await screen.findByTestId("inbox-head-question");
-    expect(link).toHaveAttribute("href", "/sessions?head=run-needs-you");
+    expect(link).toHaveAttribute("href", "/sessions?head=run-needs-you&enter=1");
     expect(link).toHaveTextContent("Head · omp × GLM-5.3");
     expect(link).toHaveTextContent("Which week do you mean?");
   });
@@ -100,6 +100,6 @@ describe("Inbox — a head-finished review card shows its pair, not an agent", (
     renderInbox();
     const chip = await screen.findByTestId("review-row-head-chip");
     expect(chip).toHaveTextContent("Head · omp × GLM-5.3 · passed");
-    expect(chip).toHaveAttribute("href", "/sessions?head=run-passed");
+    expect(chip).toHaveAttribute("href", "/sessions?head=run-passed&enter=1");
   });
 });

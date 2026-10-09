@@ -31,6 +31,7 @@ import type { WizardState } from "./wizard/types";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 import { fleetCount, fleetCountLabel } from "./fleetCount";
 import { useEscapeKey } from "@/hooks/useEscapeKey";
+import { chatEntryHref } from "@/lib/chatHistory";
 
 // ── Design Tokens (migrated from CINEMA inline map → lib/colors.ts) ────────
 const CINEMA = {
@@ -422,7 +423,7 @@ function AgentRosterRow({
 
       {/* Actions — above the row overlay */}
       <Link
-        href={`/sessions?agent=${agent.id}`}
+        href={chatEntryHref("agent", agent.id)}
         aria-label={t("openSession", { name: agent.name })}
         title={t("openSession", { name: agent.name })}
         className="relative z-[1] flex items-center justify-center w-9 h-9 min-h-touch rounded-lg shrink-0 cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"

@@ -125,3 +125,6 @@ docker/docker-compose.agents.yml.*
 # UI probe output (docs/ui-probe.md) — default is outside the repo, this catches runs pointed inside it
 ui-probe-out/
 frontend-v2/ui-probe-out/
+
+# Playwright run output (npx playwright test from frontend-v2/)
+frontend-v2/test-results/

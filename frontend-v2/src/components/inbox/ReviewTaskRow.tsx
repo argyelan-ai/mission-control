@@ -20,6 +20,7 @@ import type { Task, Agent } from "@/lib/types";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 import { isSelfReviewStall } from "@/lib/reviewRouting";
 import { headListLine, isHeadActive, type HeadRun } from "@/lib/heads";
+import { chatEntryHref } from "@/lib/chatHistory";
 
 // ── Review Task Row ──────────────────────────────────────────────────────────
 
@@ -163,7 +164,7 @@ export function ReviewTaskRow({
             </button>
             {showHeadChip && headRun && (
               <Link
-                href={`/sessions?head=${encodeURIComponent(headRun.run_id)}`}
+                href={chatEntryHref("head", headRun.run_id)}
                 onClick={(e) => e.stopPropagation()}
                 className="relative z-[1] inline-flex items-center gap-1 text-xs mt-1 ml-6 cursor-pointer underline-offset-2 hover:underline pointer-coarse:min-h-[44px]"
                 style={{ color: C.textMuted }}

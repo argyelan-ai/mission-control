@@ -112,7 +112,7 @@ describe("ReviewTaskRow — head chip (heads-sichtbar PR 3, bauplan §4)", () =>
     renderRow(mkTask(), run);
     const chip = screen.getByTestId("review-row-head-chip");
     expect(chip).toHaveTextContent("Head · omp × GLM-5.3 · passed");
-    expect(chip).toHaveAttribute("href", "/sessions?head=run-9");
+    expect(chip).toHaveAttribute("href", "/sessions?head=run-9&enter=1");
   });
 
   it("without a head run, an assigned agent's own chip shows instead — unchanged default", () => {

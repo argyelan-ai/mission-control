@@ -23,6 +23,7 @@ import AppShell from "@/components/layout/AppShell";
 import { notify } from "@/lib/notify";
 import { useTerminalRemountSignal } from "@/hooks/useTerminalRemountSignal";
 import { rememberChat } from "@/lib/recentChats";
+import { CHAT_ENTRY_PARAM, chatUrl, isPhoneViewport, takeDirectLoad, type ChatKind } from "@/lib/chatHistory";
 import { useHeadRuns } from "@/components/heads/useHeadRuns";
 import { HeadChatPlaceholder } from "@/components/heads/HeadChatPlaceholder";
 import { newerHeadRunIdFor, sortHeadsForList, type HeadRun } from "@/lib/heads";
@@ -385,21 +386,51 @@ function SessionsPageContent() {
   // a "continue a chat" chip in the ⊕ sheet, or the Chats tab) opens that
   // chat. The restore effects above only run before the first selection, so
   // without this the URL would change and the screen would not. Each value
-  // is handled once — going back to the list keeps the URL, and must not
-  // snap straight back into the chat.
+  // is handled once.
+  //
+  // Phone history (lib/chatHistory.ts): back from an open chat — the edge
+  // swipe is the browser's back — must land on the chats list, so the list
+  // is the entry directly behind every chat. A link from elsewhere carries
+  // `enter=1`; when it opens this page, its one entry becomes two: replace
+  // it with the list, then push the chat. Entries the browser returns to
+  // later carry no marker and are left alone (no doubled list on reload or
+  // back/forward).
   const handledParam = useRef<string | null>(null);
+  // Decided on the first run of this mount: did a link (or a direct load)
+  // open the page on a chat whose list still has to go underneath it?
+  const arrival = useRef<"pending" | "insert" | "none">("pending");
+  // Set between "replace with the list" and "push the chat".
+  const pendingChatUrl = useRef<string | null>(null);
+  // The chat the URL named last — when it leaves the URL, back went to the list.
+  const lastChatKey = useRef<string | null>(null);
   useEffect(() => {
     const agentParam = searchParams.get("agent");
     const groupParam = searchParams.get("group");
     const headParam = searchParams.get("head");
     const key = agentParam ? `agent:${agentParam}` : groupParam ? `group:${groupParam}` : headParam ? `head:${headParam}` : null;
+    const viaLink = searchParams.get(CHAT_ENTRY_PARAM) === "1";
+    if (arrival.current === "pending") {
+      const direct = takeDirectLoad();
+      arrival.current = key && (viaLink || direct) ? "insert" : "none";
+    }
     if (!key) {
-      // The URL no longer names a chat (back to the list clears it), so the
-      // next link to the SAME chat must open it again.
+      // The URL no longer names a chat, so the next link to the SAME chat
+      // must open it again.
       handledParam.current = null;
+      if (pendingChatUrl.current) {
+        const url = pendingChatUrl.current;
+        pendingChatUrl.current = null;
+        router.push(url, { scroll: false });
+        return;
+      }
+      // Back (swipe, browser or the header chevron) left the chat's entry
+      // for the list's.
+      if (lastChatKey.current) setMobileView("list");
+      lastChatKey.current = null;
       return;
     }
     if (key === handledParam.current) return;
+    let url: string;
     if (agentParam) {
       const agent = agents.find((a) => a.id === agentParam);
       if (!agent) return; // list not loaded yet — try again on the next render
@@ -409,6 +440,7 @@ function SessionsPageContent() {
       setSelectedHeadId(null);
       setMobileView("chat");
       rememberChat({ kind: "agent", id: agent.id });
+      url = chatUrl("agent", agent.id);
     } else if (groupParam) {
       if (!groups.some((g) => g.id === groupParam)) return;
       handledParam.current = key;
@@ -416,7 +448,8 @@ function SessionsPageContent() {
       setSelectedHeadId(null);
       setMobileView("chat");
       rememberChat({ kind: "group", id: groupParam });
-    } else if (headParam) {
+      url = chatUrl("group", groupParam);
+    } else {
       // Unlike the agent/group branches above, a head deep link does not
       // wait for its own list to load first (`?head=` can point at a run
       // the 7-day window has never carried, e.g. a link from the Archive
@@ -424,26 +457,55 @@ function SessionsPageContent() {
       // asks for that one run directly, same as `selectedHeadRun`'s own
       // fallback query above.
       handledParam.current = key;
-      setSelectedHeadId(headParam);
+      setSelectedHeadId(headParam as string);
       setMobileView("chat");
+      url = chatUrl("head", headParam as string);
     }
-  }, [searchParams, agents, groups]);
+    lastChatKey.current = key;
+    const insert = arrival.current === "insert";
+    arrival.current = "none";
+    if (insert && isPhoneViewport()) {
+      pendingChatUrl.current = url;
+      router.replace(pathname, { scroll: false });
+    } else if (viaLink) {
+      // Already on the chats page (the list is behind), or on desktop:
+      // only the marker goes.
+      router.replace(url, { scroll: false });
+    }
+  }, [searchParams, agents, groups, router, pathname]);
 
-  // Back to the list on the phone. Also drops ?agent= / ?group= / ?head=
-  // from the URL: with the chat still named there, a "continue a chat" chip
-  // or the Chats tab pointing at the same chat changed nothing and the
-  // phone stayed on the list (live 02.10.2026). replaceState: no new
-  // history entry.
+  // The chat header's back chevron. On the phone the list is the history
+  // entry behind an open chat (see above), so the chevron goes back exactly
+  // like the swipe — no second list entry, and back from the list then
+  // leaves the page.
+  // Otherwise (desktop, or a chat the URL does not name): back to the list
+  // and drop ?agent= / ?group= / ?head= from the URL — with the chat still
+  // named there, a link to the same chat changed nothing (live 02.10.2026).
   // router.replace, not window.history: Next keeps its own copy of the
   // search params — a native replaceState changed the address bar but not
-  // what useSearchParams/<Link> see, so the next chip to the same chat was
-  // still a no-op (live re-test 02.10.2026).
+  // what useSearchParams/<Link> see (live re-test 02.10.2026).
   const backToList = useCallback(() => {
-    setMobileView("list");
-    if (searchParams.get("agent") || searchParams.get("group") || searchParams.get("head")) {
-      router.replace(pathname, { scroll: false });
+    const chatInUrl = !!(searchParams.get("agent") || searchParams.get("group") || searchParams.get("head"));
+    if (chatInUrl && isPhoneViewport()) {
+      router.back();
+      return;
     }
+    setMobileView("list");
+    if (chatInUrl) router.replace(pathname, { scroll: false });
   }, [router, pathname, searchParams]);
+
+  // Opening a chat from the list puts it on top of the list in history, so
+  // back returns to the list. Phone only: desktop shows both side by side
+  // and keeps one entry for the page. `replace` for a jump from one chat to
+  // another (a head's newer run) — back still goes to the list.
+  function putChatInHistory(kind: ChatKind, id: string, replace = false) {
+    // A pick from the list settles how the page was entered — even if the
+    // linked chat never loaded (deleted), its list must not go in later.
+    arrival.current = "none";
+    if (!isPhoneViewport()) return;
+    if (replace) router.replace(chatUrl(kind, id), { scroll: false });
+    else router.push(chatUrl(kind, id), { scroll: false });
+  }
 
   // Phase 15 T3.7: re-mount the terminal when the backend switches the
   // selected agent's runtime (incl. cross-image recreate). Without this
@@ -469,6 +531,7 @@ function SessionsPageContent() {
     saveLastGroupId(null);
     setMobileView("chat");
     rememberChat({ kind: "agent", id: agent.id });
+    putChatInHistory("agent", agent.id);
     // Das Ergebnis-Panel gehört zur Gruppe; beim Wechsel auf einen Agenten
     // stünde es sonst leer daneben.
     if (activePanel === "doc") setActivePanel(null);
@@ -480,6 +543,7 @@ function SessionsPageContent() {
     saveLastGroupId(groupId);
     setMobileView("chat");
     rememberChat({ kind: "group", id: groupId });
+    putChatInHistory("group", groupId);
     if (activePanel === "diff" || activePanel === "browser") setActivePanel(null);
   }
 
@@ -489,9 +553,10 @@ function SessionsPageContent() {
   // straight back to the auto-select effect above. No `rememberChat` — a
   // head run is not "the last chat" the way an agent/group is, it comes
   // and goes within the 7-day window on its own.
-  function handleSelectHead(runId: string) {
+  function handleSelectHead(runId: string, replace = false) {
     setSelectedHeadId(runId);
     setMobileView("chat");
+    putChatInHistory("head", runId, replace);
     if (activePanel) setActivePanel(null);
   }
 
@@ -618,7 +683,7 @@ function SessionsPageContent() {
               hasTranscript={(id) => agentHasTranscript(agents.find((a) => a.id === id))}
               heads={sortedHeadRuns}
               archivedCount={headArchivedCount}
-              onSelectHead={handleSelectHead}
+              onSelectHead={(runId) => handleSelectHead(runId)}
               selectedHeadId={selectedHeadId}
             />
           </div>
@@ -659,7 +724,7 @@ function SessionsPageContent() {
               onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
               heads={sortedHeadRuns}
               archivedCount={headArchivedCount}
-              onSelectHead={handleSelectHead}
+              onSelectHead={(runId) => handleSelectHead(runId)}
               selectedHeadId={selectedHeadId}
             />
           </div>
@@ -706,7 +771,7 @@ function SessionsPageContent() {
                   onCenterViewChange={() => {}}
                   onBack={backToList}
                   newerHeadRunId={newerHeadRunId}
-                  onSelectHeadRun={handleSelectHead}
+                  onSelectHeadRun={(runId) => handleSelectHead(runId, true)}
                 />
               )
             ) : selectedGroupId && selectedGroup ? (

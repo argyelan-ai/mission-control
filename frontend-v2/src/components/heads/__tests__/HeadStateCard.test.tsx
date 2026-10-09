@@ -293,7 +293,7 @@ describe("HeadStateCard — translated step, last activity, live link (heads-sic
     expect(line).toHaveTextContent("Last: job: wait for reviewer result");
     expect(line).toHaveTextContent(/\d+ s ago/);
     const link = screen.getByTestId("head-card-view-live");
-    expect(link).toHaveAttribute("href", "/sessions?head=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+    expect(link).toHaveAttribute("href", "/sessions?head=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa&enter=1");
     expect(link).toHaveTextContent("View live transcript");
   });
 
