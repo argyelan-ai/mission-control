@@ -397,8 +397,8 @@ async def test_slash_commands_from_state(acp_agent, acp_state):
     assert caps["slashCommands"] == [
         {"name": "usage", "description": "Show usage"},
         {"name": "model", "description": None},
-        {"name": "new", "description": "Start a new session (the old one stays in the history)"},
-        {"name": "clear", "description": "Clear the conversation: start a new session"},
+        {"name": "new", "description": "Start a new session"},
+        {"name": "clear", "description": "Clear the conversation (starts a new session)"},
     ]
 
 

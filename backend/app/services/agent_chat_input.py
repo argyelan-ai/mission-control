@@ -526,8 +526,8 @@ _ACP_KINDS = ("acp-docker", "acp-http")
 #: ACP-Sitzung (``new_session``); die alte Transkript-Datei bleibt liegen.
 #: Name -> Beschreibung fuer die Slash-Palette.
 _ACP_SESSION_RESET_COMMANDS: dict[str, str] = {
-    "new": "Start a new session (the old one stays in the history)",
-    "clear": "Clear the conversation: start a new session",
+    "new": "Start a new session",
+    "clear": "Clear the conversation (starts a new session)",
 }
 
 

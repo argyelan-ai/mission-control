@@ -449,10 +449,13 @@ class ChatSession:
         stays set from the first job to the last, so a prompt arriving in
         between queues behind them instead of racing the next turn."""
         while job is not None:
-            if job["kind"] == "new_session":
-                self._renew_session()
-            else:
-                self._run_turn(job["text"], job["turn"])
+            try:
+                if job["kind"] == "new_session":
+                    self._renew_session()
+                else:
+                    self._run_turn(job["text"], job["turn"])
+            except Exception:  # noqa: BLE001 — one broken job must not strand the queue busy
+                logger.exception("chat job %s failed", job.get("kind"))
             with self._lock:
                 closed = self._closed
                 if closed or not self._queue:
