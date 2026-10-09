@@ -2791,29 +2791,36 @@ async def _unacked_thread_messages(session: AsyncSession, thread, cursor):
 
 
 # rule: R-stale-messages-do-not-wake - old notices must not wake an agent days later
-def _is_stale_message(message, *, thread_finished: bool, now) -> bool:
-    """True when ``message`` is too old to be worth waking an agent for.
+def _stale_kind(message, *, thread_finished: bool, now) -> str | None:
+    """Whether ``message`` is too old to be worth waking an agent for.
 
     Live finding 2026-10-09: the lead's turn gate stayed closed for a week;
     the moment it opened, two week-old "TASK ERLEDIGT" system notices in its
     DM thread produced a nudge, and the lead went off re-inspecting a card
     that had been approved days before — paid turns for nothing.
 
-    * operator messages never expire — the operator's word is always delivered;
-    * system notices expire after ``agent_message_stale_after_seconds``;
-    * peer-agent messages expire after the same age only on a thread nobody
-      works any more (finished task or closed thread). On a live card a peer
-      message is delivered however long it waited.
+    * ``None`` — not stale. Operator messages never expire (the operator's
+      word is always delivered), and neither does a peer-agent message on a
+      card that is still being worked.
+    * ``"final"`` — a system notice older than
+      ``agent_message_stale_after_seconds``. It never becomes deliverable
+      again; the task state, not the notice, is the source of truth.
+    * ``"held"`` — a peer-agent message that old on a thread nobody works any
+      more (finished task or closed thread). Withheld only while that lasts:
+      a finished card can be reopened (done → in_progress, failed/aborted →
+      inbox), and then the agent must still get it (review #774 L1).
     """
     from app.config import settings as _settings
     from app.utils import ensure_aware
 
     if message.sender_type == "user" or message.created_at is None:
-        return False
+        return None
     if message.sender_type == "agent" and not thread_finished:
-        return False
+        return None
     age = (now - ensure_aware(message.created_at)).total_seconds()
-    return age > _settings.agent_message_stale_after_seconds
+    if age <= _settings.agent_message_stale_after_seconds:
+        return None
+    return "held" if message.sender_type == "agent" else "final"
 
 
 async def _pending_thread_messages(
@@ -2825,40 +2832,63 @@ async def _pending_thread_messages(
     ``window`` is every unacked message (own posts included, which the ack
     target spans); ``deliverable`` is what the agent is actually shown.
 
-    Catch-up: a leading run of messages that can never be delivered (own
-    posts, briefings, group posts without a mention, stale messages) is acked
-    here. Every one of these filters is final — a message never becomes
+    Held peer messages (see ``_stale_kind``) do not wake the agent on their
+    own. But once anything else in the thread is delivered, they are shown
+    along with it — `mc inbox` acks the whole window, so a held message left
+    out there would be acked unseen.
+
+    Catch-up: a leading run of messages that will never be delivered (own
+    posts, briefings, group posts without a mention, ``final`` stale notices)
+    is acked here. These filters are final — such a message never becomes
     deliverable later — so nothing is lost. Without it such a thread sat
     "unacked" forever: `mc inbox` acks only threads it has something to show,
     so the backlog never cleared and was rescanned on every poll. The catch-up
-    stops at the first deliverable message — it never marks an unseen
-    message as read.
+    stops at the first message that is or may become deliverable (including a
+    held one) — it never marks an unseen message as read.
     """
+    from app.config import settings as _settings
+
     window = await _unacked_thread_messages(session, thread, cursor)
     if not window:
         return [], [], False
     finished = await thread_scope.thread_is_finished(session, thread, thread_task)
     now = utcnow()
-    deliverable = []
+    deliverable, shown = [], []
     caught_up = cursor.last_acked_seq
+    blocked = False  # a deliverable or held message ends the catch-up run
+    skipped_stale = 0
     for m in window:
-        if (
-            _is_own_message(m, agent)
+        kind = (
+            "final"
+            if _is_own_message(m, agent)
             or _is_briefing_message(m)
             or not _group_message_visible_to(m, thread, agent)
-            or _is_stale_message(m, thread_finished=finished, now=now)
-        ):
-            if not deliverable:
+            else None
+        )
+        stale = None if kind else _stale_kind(m, thread_finished=finished, now=now)
+        if kind == "final" or stale == "final":
+            if not blocked:
                 caught_up = m.seq
+                skipped_stale += stale == "final"
             continue
-        deliverable.append(m)
+        blocked = True
+        shown.append(m)
+        if stale is None:
+            deliverable.append(m)
     changed = False
     if caught_up > cursor.last_acked_seq:
         cursor.last_acked_seq = caught_up
         cursor.last_delivered_seq = max(cursor.last_delivered_seq, caught_up)
         session.add(cursor)
         changed = True
-    return deliverable, window, changed
+        if skipped_stale:
+            # Logged once: the cursor has moved, the next poll skips nothing.
+            logger.info(
+                "Skipped %d stale notice(s) for %s on thread %s (older than %ss)",
+                skipped_stale, agent.name, thread.id,
+                _settings.agent_message_stale_after_seconds,
+            )
+    return (shown if deliverable else []), window, changed
 
 
 async def _collect_new_messages(session: AsyncSession, agent: Agent, acked: dict[str, int]) -> list[dict]:

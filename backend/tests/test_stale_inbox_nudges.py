@@ -7,17 +7,20 @@ moment it opened, two week-old "✅ TASK ERLEDIGT" system notices in its DM
 thread woke it, and it went off inspecting a benchmark card that had been
 approved days before.
 
-The rule these tests pin down (``routers/agents._is_stale_message``):
+The rule these tests pin down (``routers/agents._stale_kind``):
 
 * operator messages never expire — the operator's word is always delivered;
 * system notices expire after ``agent_message_stale_after_seconds``;
-* peer-agent messages expire after the same age only when nobody works the
-  thread any more (its task is done/failed/aborted or the thread is closed);
+* peer-agent messages that old are withheld only while nobody works the
+  thread (its task is done/failed/aborted or the thread is closed) — they
+  never wake the agent on their own, but are shown next to anything else
+  delivered there and come back if the card is reopened;
 * fresh messages are delivered everywhere, exactly as before.
 
-An expired message is skipped like a briefing or an own post, and the cursor
-is caught up past any leading run of messages that can never be delivered, so
-the backlog clears itself server-side instead of lingering as "unacked".
+A stale system notice is skipped like a briefing or an own post, and the
+cursor is caught up past any leading run of messages that can never be
+delivered, so the backlog clears itself server-side instead of lingering as
+"unacked". A withheld peer message stops that catch-up.
 """
 import datetime as dt
 import json
@@ -225,8 +228,9 @@ async def test_done_task_thread_old_peer_reply_does_not_nudge(client: AsyncClien
     await async_session.commit()
 
     assert await _poll_ids(client, token) == []
+    # Withheld, not consumed: the card may still be reopened (review #774 L1).
     cur = await _cursor(async_session, agent, thread)
-    assert cur.last_acked_seq == reply.seq
+    assert cur.last_acked_seq < reply.seq
 
 
 @pytest.mark.asyncio
@@ -361,3 +365,56 @@ async def test_stale_window_is_configurable(client: AsyncClient, async_session, 
                 body="two hours old", age=dt.timedelta(hours=2))
 
     assert await _poll_ids(client, token) == []
+
+
+# ── Reopened cards (review #774 L1) ──────────────────────────────────────
+
+async def _set_status(async_session, task, status):
+    task.status = status
+    async_session.add(task)
+    await async_session.commit()
+
+
+@pytest.mark.asyncio
+async def test_reopened_card_still_delivers_old_unseen_peer_message(client: AsyncClient, async_session):
+    """Peer chatter only expires while the card is finished — and a finished
+    card can be reopened (done → in_progress, failed/aborted → inbox). While
+    done the message is withheld, but the cursor must not move past it: after
+    the reopen the agent gets it."""
+    board = await _board(async_session)
+    agent, token = await _agent(async_session, board)
+    peer, _ = await _agent(async_session, board)
+    task = await _task(async_session, board, agent, "in_progress")
+    thread = await ensure_task_thread(async_session, task)
+    await _seen_up_to(async_session, agent, thread, 0)
+    msg = await _post(async_session, thread, sender_type="agent", sender_id=peer.id,
+                      body="found a bug in your change", age=dt.timedelta(days=2))
+    await _set_status(async_session, task, "done")
+    assert await _poll_ids(client, token) == []
+    assert (await _cursor(async_session, agent, thread)).last_acked_seq == 0
+
+    await _set_status(async_session, task, "in_progress")
+    assert await _poll_ids(client, token) == [str(msg.id)]
+
+
+@pytest.mark.asyncio
+async def test_finished_card_shows_old_peer_message_next_to_a_fresh_one(client: AsyncClient, async_session):
+    """`mc inbox` acks the whole window of a thread it shows. An old peer
+    message must therefore never sit in an acked window unseen: once something
+    fresh is delivered on the finished card anyway, the old peer message is
+    shown with it (it only must not wake the agent ON ITS OWN)."""
+    board = await _board(async_session)
+    agent, token = await _agent(async_session, board)
+    peer, _ = await _agent(async_session, board)
+    task = await _task(async_session, board, agent, "done")
+    thread = await ensure_task_thread(async_session, task)
+    await _seen_up_to(async_session, agent, thread, 0)
+    old = await _post(async_session, thread, sender_type="agent", sender_id=peer.id,
+                      body="old remark", age=dt.timedelta(days=2))
+    stale_notice = await _post(async_session, thread, sender_type="system", message_type="system",
+                               body="old notice", age=dt.timedelta(days=2))
+    fresh = await _post(async_session, thread, body="one more thing")
+
+    body = await _inbox(client, token)
+    assert [m["id"] for m in body["messages"]] == [str(old.id), str(fresh.id)]
+    assert str(stale_notice.id) not in [m["id"] for m in body["messages"]]

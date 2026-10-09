@@ -72,6 +72,10 @@ def is_valid_transition(from_status: str, to_status: str) -> bool:
 # Terminal status: when a task moves here, it is "done"
 TERMINAL_STATUSES = {TaskStatus.DONE}
 
+# Nobody works the card any more — but unlike TERMINAL_STATUSES these can be
+# reopened (see VALID_TRANSITIONS), so nothing may treat them as final.
+FINISHED_STATUSES = frozenset({TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.ABORTED})
+
 
 async def check_children_complete(task_id, session) -> tuple[bool, str]:
     """Check whether all children of a task are complete.
