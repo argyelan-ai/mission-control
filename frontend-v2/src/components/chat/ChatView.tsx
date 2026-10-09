@@ -1270,6 +1270,7 @@ export function ChatView({
           centerView={effectiveView}
           onCenterViewChange={onCenterViewChange}
           canChat={canChat}
+          headlessChat={headlessChat}
           detailLevel={detailLevel}
           onDetailLevelChange={onDetailLevelChange}
           onOpenPanel={onOpenPanel}
