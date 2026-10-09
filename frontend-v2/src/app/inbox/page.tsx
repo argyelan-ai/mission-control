@@ -18,6 +18,7 @@ import { ReviewTaskRow } from "@/components/inbox/ReviewTaskRow";
 import { GlassCard } from "@/components/shared/GlassCard";
 import { Pill } from "@/components/shared/Pill";
 import { useInbox } from "@/hooks/useInbox";
+import { chatEntryHref } from "@/lib/chatHistory";
 
 export default function InboxPage() {
   const t = useTranslations("inbox");
@@ -132,7 +133,7 @@ export default function InboxPage() {
             {headQuestions.map((run) => (
               <Link
                 key={run.run_id}
-                href={`/sessions?head=${encodeURIComponent(run.run_id)}`}
+                href={chatEntryHref("head", run.run_id)}
                 className="block cursor-pointer"
                 data-testid="inbox-head-question"
               >

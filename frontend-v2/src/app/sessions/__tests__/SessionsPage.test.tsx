@@ -9,12 +9,21 @@ import type { Agent } from "@/lib/types";
 // Task #20 (pre-chat) / Task B6 (chat rebuild): the Sessions page restores
 // the last-viewed agent from localStorage, with ?agent=<id> (from the
 // Agents list "open session" button) taking precedence.
-const nav = vi.hoisted(() => ({ searchParamsString: "", replaced: [] as string[] }));
+const nav = vi.hoisted(() => ({
+  searchParamsString: "",
+  replaced: [] as string[],
+  pushed: [] as string[],
+  backs: 0,
+}));
 vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(nav.searchParamsString),
   usePathname: () => "/sessions",
-  // Like Next: replace() changes what useSearchParams reports.
-  useRouter: () => ({ replace: (url: string) => { nav.replaced.push(url); nav.searchParamsString = url.split("?")[1] ?? ""; } }),
+  // Like Next: replace()/push() change what useSearchParams reports.
+  useRouter: () => ({
+    replace: (url: string) => { nav.replaced.push(url); nav.searchParamsString = url.split("?")[1] ?? ""; },
+    push: (url: string) => { nav.pushed.push(url); nav.searchParamsString = url.split("?")[1] ?? ""; },
+    back: () => { nav.backs += 1; },
+  }),
 }));
 
 // AppShell (auth guard, Sidebar, TopBar, CommandPalette, VoiceProvider, …)
@@ -1007,5 +1016,132 @@ describe("SessionsPage — heads deep link (?head=)", () => {
 
     resolveGet(ARCHIVED_ROW);
     await waitFor(() => expect(screen.getByTestId("chat-view-head")).toHaveTextContent("archived-row-1"));
+  });
+});
+
+// ── Phone history: back from a chat lands on the chats list ─────────────────
+// The edge swipe is the browser's back, so on the phone the list must be the
+// history entry directly behind every open chat (lib/chatHistory.ts). These
+// tests pin the router calls; the history itself is proven in a real browser
+// (playwright/chat-back.spec.ts) — a mocked router cannot show what back does.
+
+describe("SessionsPage — phone history puts the list behind every chat", () => {
+  const list = () => screen.getByTestId("session-list-mobile");
+  const chat = () => screen.getByTestId("chat-column");
+  const isHidden = (el: HTMLElement) => el.className.split(/\s+/).includes("hidden");
+  let phone = true;
+
+  beforeEach(() => {
+    phone = true;
+    nav.searchParamsString = "";
+    nav.replaced = [];
+    nav.pushed = [];
+    nav.backs = 0;
+    installLocalStorageShim();
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: (query: string) => ({ matches: phone && query.includes("max-width"), media: query }),
+    });
+    vi.spyOn(api.agents, "listDockerSessions").mockResolvedValue([
+      mkAgent({ id: "agent-1", name: "Agent One" }),
+      mkAgent({ id: "agent-2", name: "Agent Two" }),
+    ]);
+    vi.spyOn(api.agents, "listHostSessions").mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    delete (window as { matchMedia?: unknown }).matchMedia;
+  });
+
+  // The mocked router does not re-render on its own; Next does.
+  const rerenderWith = (view: ReturnType<typeof renderPage>) =>
+    view.rerender(
+      <QueryClientProvider client={view.qc}>
+        <SessionsPage />
+      </QueryClientProvider>,
+    );
+
+  it("a link from elsewhere (enter=1) turns its one entry into list + chat", async () => {
+    nav.searchParamsString = "agent=agent-2&enter=1";
+    const view = renderPage();
+    await waitFor(() => expect(nav.replaced).toEqual(["/sessions"]));
+    expect(nav.pushed).toEqual([]);
+    // The chat stays on screen while the list entry goes in underneath.
+    expect(isHidden(chat())).toBe(false);
+
+    rerenderWith(view); // Next now reports the list URL
+    await waitFor(() => expect(nav.pushed).toEqual(["/sessions?agent=agent-2"]));
+    expect(isHidden(chat())).toBe(false);
+
+    rerenderWith(view); // … and then the chat's own URL
+    expect(nav.replaced).toEqual(["/sessions"]);
+    expect(nav.pushed).toEqual(["/sessions?agent=agent-2"]);
+    expect(screen.getByText("Chat: Agent Two")).toBeInTheDocument();
+  });
+
+  it("a chat the browser returns to (no marker) is left alone — no doubled list", async () => {
+    nav.searchParamsString = "agent=agent-2";
+    renderPage();
+    await waitFor(() => expect(isHidden(chat())).toBe(false));
+    expect(nav.replaced).toEqual([]);
+    expect(nav.pushed).toEqual([]);
+  });
+
+  it("a link arriving while the list is open only drops the marker (the list is already behind)", async () => {
+    const view = renderPage();
+    await screen.findAllByText("Agent One");
+    nav.searchParamsString = "agent=agent-2&enter=1";
+    rerenderWith(view);
+    await waitFor(() => expect(isHidden(chat())).toBe(false));
+    expect(nav.replaced).toEqual(["/sessions?agent=agent-2"]);
+    expect(nav.pushed).toEqual([]);
+  });
+
+  it("opening a chat from the list pushes it on top of the list", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findAllByText("Agent One");
+    await user.click(within(list()).getByRole("option", { name: /Agent Two/ }));
+    expect(nav.pushed).toEqual(["/sessions?agent=agent-2"]);
+    expect(isHidden(chat())).toBe(false);
+  });
+
+  it("the header's back chevron goes back in history, like the swipe", async () => {
+    const user = userEvent.setup();
+    nav.searchParamsString = "agent=agent-2";
+    renderPage();
+    await waitFor(() => expect(isHidden(chat())).toBe(false));
+    await user.click(screen.getByRole("button", { name: "Stub Back" }));
+    expect(nav.backs).toBe(1);
+    expect(nav.replaced).toEqual([]);
+  });
+
+  it("when back takes the chat out of the URL, the list shows", async () => {
+    nav.searchParamsString = "agent=agent-2";
+    const view = renderPage();
+    await waitFor(() => expect(isHidden(chat())).toBe(false));
+
+    nav.searchParamsString = ""; // the browser went back to the list entry
+    rerenderWith(view);
+    await waitFor(() => expect(isHidden(list())).toBe(false));
+    expect(isHidden(chat())).toBe(true);
+  });
+
+  it("desktop keeps one entry per link: the marker goes, nothing is pushed", async () => {
+    phone = false;
+    nav.searchParamsString = "agent=agent-2&enter=1";
+    renderPage();
+    await waitFor(() => expect(nav.replaced).toEqual(["/sessions?agent=agent-2"]));
+    expect(nav.pushed).toEqual([]);
+  });
+
+  it("desktop: picking a chat from the list adds no history entry", async () => {
+    phone = false;
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findAllByText("Agent One");
+    await user.click(within(screen.getByTestId("sidebar-desktop")).getByRole("option", { name: /Agent Two/ }));
+    expect(nav.pushed).toEqual([]);
   });
 });

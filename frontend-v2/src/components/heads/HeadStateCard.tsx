@@ -53,6 +53,7 @@ import type { HeadMainAction } from "@/lib/taskDetail/stateCard";
 import { HeadRestartDialog } from "./HeadRestartDialog";
 import { HeadStopButton } from "./HeadStopButton";
 import { NEXT_TEXT, PRIMARY_BTN, PRIMARY_STYLE, QUIET_BTN, RAISED } from "@/components/task/detail/nextStepStyle";
+import { chatEntryHref } from "@/lib/chatHistory";
 
 /** Window of events a lightweight "what did it just do" poll reads — far
  *  smaller than the full chat view's own `limit: 1000` (bauplan PR 3 §4,
@@ -292,7 +293,7 @@ export function HeadStateCard({
             </div>
           )}
           <Link
-            href={`/sessions?head=${encodeURIComponent(run.run_id)}`}
+            href={chatEntryHref("head", run.run_id)}
             data-testid="head-card-view-live"
             className="mt-3 inline-flex items-center gap-1 text-sm cursor-pointer transition-colors hover:opacity-80 pointer-coarse:min-h-[44px]"
             style={{ color: C.textPrimary }}

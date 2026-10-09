@@ -156,7 +156,7 @@ describe("phone menu completeness (old drawer + old ⊕ sheet → variant B)", (
     renderPhoneChrome();
     await userEvent.click(within(screen.getByTestId("mobile-tab-bar")).getByRole("button", { name: "New" }));
     await waitFor(() =>
-      expect(screen.getByTestId("quick-last-chat")).toHaveAttribute("href", "/sessions?agent=a1"),
+      expect(screen.getByTestId("quick-last-chat")).toHaveAttribute("href", "/sessions?agent=a1&enter=1"),
     );
     await userEvent.click(screen.getByTestId("quick-voice"));
     expect(voice.toggleButton).toHaveBeenCalledTimes(1);

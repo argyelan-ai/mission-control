@@ -155,7 +155,7 @@ describe("phone tab bar", () => {
   it("Chats opens the last chat directly from anywhere else", () => {
     localStorage.setItem("mc-recent-chats", JSON.stringify([{ kind: "agent", id: "agent-7" }]));
     renderNav();
-    expect(within(bar()).getByRole("link", { name: "Chats" })).toHaveAttribute("href", "/sessions?agent=agent-7");
+    expect(within(bar()).getByRole("link", { name: "Chats" })).toHaveAttribute("href", "/sessions?agent=agent-7&enter=1");
   });
 
   it("Chats on the chats page leads back to the list", () => {
@@ -204,7 +204,7 @@ describe("⊕ sheet — variant B, level 1", () => {
 
     // last chat: one row, the newest chat whose agent still exists
     await waitFor(() => expect(screen.getByTestId("quick-last-chat")).toBeInTheDocument());
-    expect(screen.getByTestId("quick-last-chat")).toHaveAttribute("href", "/sessions?agent=a1");
+    expect(screen.getByTestId("quick-last-chat")).toHaveAttribute("href", "/sessions?agent=a1&enter=1");
     expect(screen.getByTestId("quick-last-chat")).toHaveTextContent("Continue with Lead");
     expect(within(sheet).queryByText(/Helper/)).toBeNull();
 

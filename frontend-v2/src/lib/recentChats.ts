@@ -11,6 +11,8 @@
  * break navigation.
  */
 
+import { chatEntryHref } from "@/lib/chatHistory";
+
 export type ChatRef = { kind: "agent" | "group"; id: string };
 
 export const RECENT_CHATS_KEY = "mc-recent-chats";
@@ -53,9 +55,13 @@ export function rememberChat(ref: ChatRef): void {
   }
 }
 
-/** Deep link that opens one chat directly (sessions page reads ?agent / ?group). */
+/**
+ * Link that opens one chat directly from outside the chats list (sessions
+ * page reads ?agent / ?group). Carries the entry marker, so the list ends up
+ * behind the chat in history (lib/chatHistory.ts).
+ */
 export function chatHref(ref: ChatRef): string {
-  return `/sessions?${ref.kind}=${encodeURIComponent(ref.id)}`;
+  return chatEntryHref(ref.kind, ref.id);
 }
 
 /**

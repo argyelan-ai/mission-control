@@ -123,7 +123,7 @@ describe("recent chats", () => {
 
   it("Chats tab: last chat from elsewhere, the list on the chats page", () => {
     const recent = [{ kind: "group" as const, id: "g 1" }];
-    expect(chatsTabHref("/", recent)).toBe("/sessions?group=g%201");
+    expect(chatsTabHref("/", recent)).toBe("/sessions?group=g%201&enter=1");
     expect(chatsTabHref("/sessions", recent)).toBe("/sessions");
     expect(chatsTabHref("/tasks", [])).toBe("/sessions");
   });
