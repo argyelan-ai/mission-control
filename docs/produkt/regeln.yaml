@@ -217,6 +217,18 @@ rules:
     status: active
     checked: 2026-10-01
 
+  - id: R-stale-messages-do-not-wake
+    says: "A stale thread message never wakes an agent: system notices expire after agent_message_stale_after_seconds, peer-agent messages expire only on a finished task or closed thread, operator messages never expire; never-deliverable leading messages are acked server-side."
+    source: "Inbox-nudge live finding 2026-10-09; ADR-071 (pull delivery)"
+    owner: backend/app/routers/agents.py
+    applies_to: ["backend/app/routers/agents.py", "backend/app/services/thread_scope.py"]
+    enforced_by:
+      - {test: "backend/tests/test_stale_inbox_nudges.py::test_week_old_system_notice_in_dm_does_not_nudge"}
+      - {test: "backend/tests/test_stale_inbox_nudges.py::test_old_operator_message_in_dm_still_nudges"}
+      - {test: "backend/tests/test_stale_inbox_nudges.py::test_catch_up_stops_at_the_first_deliverable_message"}
+    status: active
+    checked: 2026-10-09
+
   - id: R-slot-row-exclusions
     says: "A slot runtime row is never a recipe instance, box occupancy, eviction victim or autostart/recovery target; only the drift watcher always follows it."
     source: "ADR-078 decision 3 (exclusions wherever is_slot)"

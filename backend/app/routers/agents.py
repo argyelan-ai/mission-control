@@ -2790,6 +2790,7 @@ async def _unacked_thread_messages(session: AsyncSession, thread, cursor):
     return list(res.all())
 
 
+# rule: R-stale-messages-do-not-wake - old notices must not wake an agent days later
 def _is_stale_message(message, *, thread_finished: bool, now) -> bool:
     """True when ``message`` is too old to be worth waking an agent for.
 
