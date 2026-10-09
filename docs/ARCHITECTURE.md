@@ -1532,6 +1532,15 @@ Alle ADRs in `docs/decisions/`:
 
 ## Änderungshistorie (high-level)
 
+- **2026-10-09** — **Stale thread messages no longer wake an agent (rule R-stale-messages-do-not-wake, ADR-071
+  pull delivery):** `/me/poll` (source of the poll.sh/bridge "📬 … mc inbox" nudge) and `GET /me/inbox` share
+  `routers/agents._pending_thread_messages`. Operator messages never expire. A system notice older than
+  `agent_message_stale_after_seconds` (default 24 h) is never delivered — **an agent that was paused or blocked
+  for more than 24 h misses old completion notices; the task state stays the source of truth.** A peer-agent
+  message that old on a finished card (`task_status.FINISHED_STATUSES`) or closed thread is withheld: it never
+  wakes the agent alone, is shown next to anything else delivered there, and comes back if the card is reopened.
+  The ack cursor is caught up past a leading run of never-deliverable messages (own, briefing, unmentioned
+  group post, stale notice), so unacked phantom backlog clears itself.
 - **2026-10-07** — **playwright-mcp router (ADR-088 router step):** the playwright-mcp image's entrypoint is
   now `docker/playwright-mcp/router.mjs` (Node standard library): `/s/<token>/mcp` gets its own playwright-mcp
   child on the gateway's session address, `/a/<slug>/mcp` one on the agent address, `/mcp` stays the shared child

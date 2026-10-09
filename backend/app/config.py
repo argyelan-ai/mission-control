@@ -538,9 +538,10 @@ class Settings(BaseSettings):
     poll_orphan_run_threshold_seconds: int = 600
 
     # Stale thread messages (inbox nudges, live finding 2026-10-09). A system
-    # notice older than this — or a peer-agent message this old on a thread
-    # nobody works any more — is no longer delivered by /me/poll or /me/inbox,
-    # so it cannot wake an agent days later. Operator messages never expire.
+    # notice older than this is never delivered by /me/poll or /me/inbox, so it
+    # cannot wake an agent days later (the task state stays the source of
+    # truth). A peer-agent message this old on a thread nobody works any more
+    # is withheld until the card is reopened. Operator messages never expire.
     # See routers/agents._stale_kind.
     agent_message_stale_after_seconds: int = 86400
 
