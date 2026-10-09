@@ -10,7 +10,8 @@ Endpoints:
   GET  /health      -> {"status","session","tmux_running","agent_env_present",
                         "driver","chat_daemon_running"}
   POST /start       -> spawn tmux session (or the ACP chat daemon) if not running
-  POST /chat/<op>   -> prompt|cancel|config|state against the ACP chat daemon
+  POST /chat/<op>   -> prompt|cancel|config|state|new_session|queue_clear against
+                       the ACP chat daemon
                        (HERMES_DRIVER=acp only; see scripts/hermes_acp_chat.py)
 
 Auto-loaded by ~/Library/LaunchAgents/com.mc.hermes-bridge.plist at login.

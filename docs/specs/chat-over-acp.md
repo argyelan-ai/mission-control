@@ -17,7 +17,7 @@ For an agent whose driver is ACP, the Sessions chat is the **only** interface an
 
 ## Non-goals
 
-- Multi-turn concurrency. One turn at a time per agent chat session; a second prompt while busy is rejected with `busy` (the composer already disables send while working).
+- Multi-turn concurrency. One turn at a time per agent chat session. A second prompt while busy is rejected with `busy` — unless it asks for `mode: "queue"` (the chat does): then the daemon holds it and runs it when the running turn ends (FIFO, see the op table). Steering INTO a running turn is not possible over ACP: omp cancels the running turn when a second `session/prompt` arrives (omp 18.1.10 `AcpAgent.prompt`); steering needs omp's RPC mode (`steer`/`follow_up`).
 
 Done, no longer a non-goal (fix omp-acp-no-tui-window, 13.09.2026): the native
 TUI in window 0 was removed for `OMP_DRIVER=acp` agents — Mark saw the live
@@ -55,14 +55,18 @@ acp_chat_ctl.py <op>  (CLI shim used by docker exec)      ·      hermes-bridge.
 - Uses `acp_chat_events.ACPEventMapper` + `ChatEventSink` + `PreviewEventSink` exactly like `run_acp_once` (user line via `map_user_prompt`, streaming previews, ONE final assistant line with usage).
 - `configOptions` (from `session/new`/`session/load` result and `config_option_update` notifications) and `available_commands_update` are kept in memory and mirrored to `sessions_dir/acp-chat-state.json` after every change.
 - Permissions: `OMP_ACP_PERMISSIONS` policy (yolo → allow), same helper as the bridge.
-- Errors → transcript `custom_message` line, `customType: "chat_error"`, content = human text, plus `data: {"code": ..., "detail": ...}`. Codes: `rpc_error` (JSON-RPC error on prompt/config), `provider_error` (`401`/`403`/`429`/quota text detected in the error or in the final agent text when the turn produced no text), `empty_turn` (turn ended with stopReason `end_turn` and zero agent text), `process_exit` (child died; daemon restarts it and re-loads the session), `busy`, `session_reset`, `cancelled` is NOT an error (it produces a normal end-of-turn).
+- Errors → transcript `custom_message` line, `customType: "chat_error"`, content = human text, plus `data: {"code": ..., "detail": ...}`. Codes: `rpc_error` (JSON-RPC error on prompt/config), `provider_error` (`401`/`403`/`429`/quota text detected in the error or in the final agent text when the turn produced no text), `empty_turn` (turn ended with stopReason `end_turn` and zero agent text), `process_exit` (child died; daemon restarts it and re-loads the session), `busy`, `session_reset`, `queue_full` (20 messages already held), `new_session_failed` (`session/new` refused; the current session continues), `queue_lost` (a restart dropped held jobs), `cancelled` is NOT an error (it produces a normal end-of-turn).
 - Socket server: `$OMP_HOME/acp-chat.sock` (path configurable via `--socket`), newline-delimited JSON; each connection = one request/one response.
 
 ### Control protocol (socket and HTTP share the schema)
 
 | op | request | response |
 |----|---------|----------|
-| `prompt` | `{"op":"prompt","text":"..."}` | `{"ok":true,"turn":n}` immediately (turn runs async) · `{"ok":false,"error":"busy"}` |
+| `prompt` | `{"op":"prompt","text":"...","mode"?:"now"\|"queue"}` | `{"ok":true,"turn":n}` immediately (turn runs async) · busy + `mode:"queue"`: `{"ok":true,"queued":true,"queueId":"…","position":n,"at":"…"}` · busy otherwise: `{"ok":false,"error":"busy"}` · `{"ok":false,"error":"queue_full"}` |
+| `new_session` | `{"op":"new_session","mode"?:"now"\|"queue"}` | `{"ok":true,"previousSessionId":"…"}` — `session/new` runs in the worker; a new transcript file starts (the chat view follows it as a rollover), the old file stays, model + thinking carry over, the old ACP session gets `session/close`. Busy: `{"ok":false,"error":"busy"}`, or held in the queue with `mode:"queue"` |
+| `queue_clear` | `{"op":"queue_clear"}` | `{"ok":true,"dropped":[{"id","kind":"prompt"\|"new_session","text","at"}, …]}` oldest first |
+
+The queue lives in the daemon's memory only. A daemon restart (container recreate, bridge reload) drops held jobs; the restarted daemon reads the old `queue` from the state mirror and posts one `queue_lost` card listing them. The composer shows held messages from its own optimistic echo, so after a page reload or on another device they are not shown until they run (follow-up: render them from the state file's `queue`).
 | `cancel` | `{"op":"cancel"}` | `{"ok":true}` (no-op when idle) |
 | `config` | `{"op":"config","id":"thinking","value":"high"}` | `{"ok":true,"configOptions":[...]}` / `{"ok":false,"error":"rpc_error","detail":"..."}` |
 | `state` | `{"op":"state"}` | `{"ok":true, ...state}` |
@@ -79,12 +83,13 @@ acp_chat_ctl.py <op>  (CLI shim used by docker exec)      ·      hermes-bridge.
   "transcript": "/abs/path/…jsonl",
   "configOptions": [{"id":"thinking","category":"thought_level","currentValue":"medium","options":[{"value":"off","name":"Off"}, …]}, {"id":"model","category":"model","currentValue":"…","options":[…]}, {"id":"mode", …}],
   "commands": [{"name":"usage","description":"…","input":null}, …],
+  "queue": [{"id":"…","kind":"prompt" | "new_session","text":"…","at":"…"}, …],
   "updatedAt": "2026-09-13T12:00:00Z",
   "lastError": null | {"code":"…","detail":"…","at":"…"}
 }
 ```
 
-Slash commands are sent as prompt text (`/usage`, `/model X`); omp executes them inside `session/prompt`. `/model` is additionally offered via `config id=model` so the composer's model picker uses the option list.
+Slash commands are sent as prompt text (`/usage`, `/model X`); omp executes them inside `session/prompt`. Exception: `/new` and `/clear` — omp does not advertise them over ACP, so the backend sends them as `new_session` (queued behind a running turn) and the slash palette lists them; a harness that advertises its own `new`/`clear` keeps it. `/model` is additionally offered via `config id=model` so the composer's model picker uses the option list.
 
 ### CLI shim `acp_chat_ctl.py`
 
@@ -98,6 +103,7 @@ When `OMP_DRIVER=acp`, `start_native` additionally opens tmux window 3 `win3`: `
 
 - `Agent.headless_chat` (computed_field, `models/agent.py`): `True` when (`agent_runtime == "cli-bridge"` and `harness == "omp"` and `omp_driver_for("omp") == "acp"` — ADR-084, harness property; the ADR-081 slug list is gone) or (`agent_runtime == "host"` and `harness == "hermes"` and `settings.hermes_driver == "acp"`). Exposed in `AgentRead`.
 - `agent_chat_input._target_kind` gains `"acp-docker"` / `"acp-http"`; `send_text`, `send_keys` (`Escape` → `cancel`, everything else → `InputNotSupportedError`), `set_effort` (→ `config thinking=<level>`; `EffortSwitchRejectedError` on `ok:false`), and a new `set_model(agent, name)` (→ `config model=<name>`) route through `acp_chat_transport.py`.
+- `send_text` asks the daemon for `mode: "queue"` (a mid-turn message is held, not refused) and turns an exact `/new` or `/clear` into `new_session` unless the agent advertises that command itself; an agent image without the op answers `unknown_op` (its old `acp_chat_ctl.py` rejects the op in argparse: exit 2, empty stdout, `invalid choice` — the Docker transport reads that as `unknown_op`, not as unreachable) → 409 `input_not_supported` (never a prompt the model would play along with). Refusals the daemon does not show as a card itself (`not_started` → 409 `agent_starting`, anything else → 409 `acp_refused`) are errors, never a silent 204. `clear_queue(agent)` → `queue_clear`, exposed as `POST /agents/{id}/chat/queue/clear` → `{"dropped": [text, …]}`.
 - `effort_capabilities` → levels from `configOptions[id=thinking].options` in `acp-chat-state.json`; `slash_command_capabilities` → `commands`; `model_options_capabilities` → `configOptions[id=model].options` (label = name, command = `/model <value>`). Empty/missing state file → empty lists with reason `acp_state_missing` (never raises).
 - `omp_chat.resolve_transcript_dir` accepts `host` + `harness == "hermes"` (dir `~/.mc/agents/hermes/omp-sessions`), so the Hermes daemon reuses the omp transcript format and the whole reader/preview stack unchanged.
 - `_parse_custom_message`: `customType == "chat_error"` → `{"kind":"message","role":"teammate","source":{"kind":"error","title":"chat_error"},"error":{"code","detail"}}` so the frontend can style it.
@@ -105,7 +111,7 @@ When `OMP_DRIVER=acp`, `start_native` additionally opens tmux window 3 `win3`: `
 ### Frontend
 
 - `Agent.headless_chat?: boolean` in `types.ts`.
-- `ChatView`: when `agent.headless_chat` the Chat/Terminal toggle is not rendered and `effectiveView` is forced to `chat` unless `?view=terminal` is explicitly in the URL. Stop button sends `Escape` (unchanged API → cancel).
+- `ChatView`: when `agent.headless_chat` the Chat/Terminal toggle is not rendered and `effectiveView` is forced to `chat` unless `?view=terminal` is explicitly in the URL. Stop button sends `Escape` (unchanged API → cancel); for a headless agent it first calls `POST /agents/{id}/chat/queue/clear` and puts the held messages back into the composer, so the next held message does not start the moment the turn is cancelled. A mid-turn send shows as a queued row ("sent when the current reply ends") with take-back / edit, both backed by `queue/clear`.
 - Error events (`source.kind === "error"`) render as a red-bordered system card with the code chip (Signal palette tokens, i18n keys `chat.error.<code>`).
 - Effort chip, model picker and slash palette already come from capabilities; nothing hardcoded.
 

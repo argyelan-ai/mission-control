@@ -3,16 +3,24 @@
 Ein Agent mit ACP-Treiber hat KEINE bedienbare TUI mehr: der Sessions-Chat ist
 seine einzige Oberflaeche (docs/specs/chat-over-acp.md). Statt Tastendruecken
 in einen tmux-Pane (``agent_chat_input``'s TUI-Pfade) spricht das Backend hier
-ein winziges Vier-Operationen-Protokoll mit dem Chat-Daemon, der die eine
-lange ACP-Sitzung haelt:
+ein kleines Protokoll mit dem Chat-Daemon, der die eine lange ACP-Sitzung
+haelt:
 
-===========  ==========================================  ==========================
-``prompt``   ``{"text": "..."}``                         ``{"ok":true,"turn":n}`` ·
+===============  ======================================  ==========================
+``prompt``       ``{"text": "...", "mode"?: "queue"}``   ``{"ok":true,"turn":n}`` ·
+                                                         ``{"ok":true,"queued":true,...}`` ·
                                                          ``{"ok":false,"error":"busy"}``
-``cancel``   —                                           ``{"ok":true}``
-``config``   ``{"id":"thinking","value":"high"}``        ``{"ok":true,"configOptions":[...]}``
-``state``    —                                           ``{"ok":true, ...state}``
-===========  ==========================================  ==========================
+``new_session``  ``{"mode"?: "queue"}``                  ``{"ok":true,"previousSessionId":...}``
+``queue_clear``  —                                       ``{"ok":true,"dropped":[...]}``
+``cancel``       —                                       ``{"ok":true}``
+``config``       ``{"id":"thinking","value":"high"}``    ``{"ok":true,"configOptions":[...]}``
+``state``        —                                       ``{"ok":true, ...state}``
+===============  ======================================  ==========================
+
+``mode: "queue"`` ist die Folge-Nachricht des Chats: laeuft gerade ein Zug,
+haelt der Daemon den Auftrag zurueck und liefert ihn, sobald der Zug endet.
+Ohne ``mode`` bleibt es bei der Absage ``busy`` (die Maschinen-Aufrufer der
+Bridge versuchen es beim naechsten Poll selbst).
 
 Zwei Kanaele, dieselbe Schema-Sprache:
 
@@ -70,6 +78,12 @@ HERMES_BRIDGE_BASE_URL = "http://host.docker.internal:18794"
 _STATE_FILENAME = "acp-chat-state.json"
 
 
+def _with_mode(payload: dict[str, Any], mode: str | None) -> dict[str, Any]:
+    """``mode`` nur, wenn gesetzt — ohne bleibt die Anfrage byte-gleich mit
+    der vor der Warteschlange (ein aelterer Daemon kennt das Feld nicht)."""
+    return {**payload, "mode": mode} if mode else payload
+
+
 class AcpChatUnreachableError(Exception):
     """Der Chat-Daemon hat nicht geantwortet — Container weg, Socket tot,
     Bridge aus. NICHT dasselbe wie ``{"ok": false}``: dort hat der Daemon
@@ -77,11 +91,15 @@ class AcpChatUnreachableError(Exception):
 
 
 class ChatTransport(Protocol):
-    """Die vier Operationen des Steuerkanals. Jede liefert die Antwort des
+    """Die Operationen des Steuerkanals. Jede liefert die Antwort des
     Daemons als ``dict`` (inkl. ``ok:false``) oder wirft
     ``AcpChatUnreachableError``."""
 
-    async def prompt(self, text: str) -> dict: ...
+    async def prompt(self, text: str, mode: str | None = None) -> dict: ...
+
+    async def new_session(self, mode: str | None = None) -> dict: ...
+
+    async def queue_clear(self) -> dict: ...
 
     async def cancel(self) -> dict: ...
 
@@ -162,6 +180,18 @@ class DockerCtlTransport:
                 f"acp_chat_ctl {op}: socket unreachable in mc-agent-{self._slug}"
             )
 
+        if (
+            proc.returncode == _CTL_EXIT_NOT_OK
+            and not stdout.strip()
+            and b"invalid choice" in stderr
+        ):
+            # Agent-Image aelter als die Op: der alte Shim verwirft sie schon
+            # in argparse (Exit 2, leeres stdout, "invalid choice" auf stderr).
+            # Das ist eine ANTWORT ("kenne ich nicht") und kein toter Socket —
+            # sonst wuerde aus /new oder Zurueckziehen eine 502 statt der
+            # ehrlichen 409 (Review #777).
+            return {"ok": False, "error": "unknown_op", "detail": op}
+
         try:
             answer = json.loads(stdout.decode(errors="replace"))
         except ValueError:
@@ -181,8 +211,14 @@ class DockerCtlTransport:
             )
         return answer
 
-    async def prompt(self, text: str) -> dict:
-        return await self._call("prompt", {"text": text})
+    async def prompt(self, text: str, mode: str | None = None) -> dict:
+        return await self._call("prompt", _with_mode({"text": text}, mode))
+
+    async def new_session(self, mode: str | None = None) -> dict:
+        return await self._call("new_session", _with_mode({}, mode))
+
+    async def queue_clear(self) -> dict:
+        return await self._call("queue_clear")
 
     async def cancel(self) -> dict:
         return await self._call("cancel")
@@ -228,8 +264,14 @@ class HttpCtlTransport:
             raise AcpChatUnreachableError(f"hermes bridge {op}: kein JSON-Objekt")
         return answer
 
-    async def prompt(self, text: str) -> dict:
-        return await self._call("prompt", {"text": text})
+    async def prompt(self, text: str, mode: str | None = None) -> dict:
+        return await self._call("prompt", _with_mode({"text": text}, mode))
+
+    async def new_session(self, mode: str | None = None) -> dict:
+        return await self._call("new_session", _with_mode({}, mode))
+
+    async def queue_clear(self) -> dict:
+        return await self._call("queue_clear")
 
     async def cancel(self) -> dict:
         return await self._call("cancel")

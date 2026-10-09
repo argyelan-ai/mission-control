@@ -149,6 +149,27 @@ async def test_docker_transport_prompt_argv_and_json(monkeypatch, acp_slug):
     assert json.loads(argv[-1]) == {"text": "hallo"}
 
 
+async def test_docker_transport_queue_and_new_session_ops(monkeypatch, acp_slug):
+    from app.services import acp_chat_transport
+
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        acp_chat_transport.asyncio, "create_subprocess_exec",
+        _fake_exec(calls, _FakeProc(0, b'{"ok": true}')),
+    )
+    transport = acp_chat_transport.DockerCtlTransport(acp_slug)
+
+    await transport.prompt("danach", mode="queue")
+    await transport.new_session(mode="queue")
+    await transport.queue_clear()
+
+    assert calls[0][-3:-1] == ["prompt", "--json"]
+    assert json.loads(calls[0][-1]) == {"text": "danach", "mode": "queue"}
+    assert calls[1][-3:-1] == ["new_session", "--json"]
+    assert json.loads(calls[1][-1]) == {"mode": "queue"}
+    assert calls[2][-1] == "queue_clear"
+
+
 async def test_docker_transport_cancel_sends_no_payload(monkeypatch, acp_slug):
     from app.services import acp_chat_transport
 
@@ -223,6 +244,27 @@ async def test_http_transport_posts_config_to_chat_endpoint():
     assert result == {"ok": True, "configOptions": []}
     assert str(seen[0].url) == "http://host.example:18794/chat/config"
     assert json.loads(seen[0].content) == {"id": "thinking", "value": "high"}
+
+
+async def test_http_transport_posts_new_session_and_queue_clear():
+    from app.services import acp_chat_transport
+
+    seen: list[httpx.Request] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"ok": True})
+
+    transport = acp_chat_transport.HttpCtlTransport(
+        "http://host.example:18794", transport=httpx.MockTransport(_handler)
+    )
+    await transport.prompt("danach", mode="queue")
+    await transport.new_session(mode="queue")
+    await transport.queue_clear()
+
+    assert [str(r.url).rsplit("/", 1)[1] for r in seen] == ["prompt", "new_session", "queue_clear"]
+    assert json.loads(seen[0].content) == {"text": "danach", "mode": "queue"}
+    assert json.loads(seen[1].content) == {"mode": "queue"}
 
 
 async def test_http_transport_409_is_busy_not_an_exception():
@@ -410,3 +452,65 @@ def test_omp_session_id_for_has_no_underscore_falls_back_to_full_stem():
     from pathlib import Path
 
     assert omp_chat.session_id_for(Path("justauuid.jsonl")) == "justauuid"
+
+
+# ── review #777 M1: an agent image older than new_session/queue_clear ────────
+
+#: The control shim as it shipped BEFORE new_session/queue_clear: argparse
+#: with choices limited to the four old ops. Run as a real process — the
+#: point is argparse's real behaviour (exit 2, empty stdout, "invalid choice"
+#: on stderr), which a mocked answer would only guess.
+_OLD_CTL = """
+import argparse, json, sys
+OPS = ("prompt", "cancel", "config", "state")
+parser = argparse.ArgumentParser(description="control the ACP chat daemon")
+parser.add_argument("op", choices=OPS)
+parser.add_argument("--json", dest="payload", default=None)
+parser.add_argument("--socket", default=None)
+parser.add_argument("--timeout", type=float, default=30.0)
+args = parser.parse_args()
+print(json.dumps({"ok": True}))
+"""
+
+
+def _run_old_ctl(tmp_path, monkeypatch):
+    """Route the transport's `docker exec ... acp_chat_ctl.py <op>` to the
+    old-style shim, as a real subprocess."""
+    import sys
+
+    from app.services import acp_chat_transport
+
+    stub = tmp_path / "acp_chat_ctl_old.py"
+    stub.write_text(_OLD_CTL)
+    real_exec = acp_chat_transport.asyncio.create_subprocess_exec
+
+    async def _exec(*argv, **kwargs):
+        tail = list(argv[list(argv).index(acp_chat_transport.CTL_PATH) + 1:])
+        return await real_exec(sys.executable, str(stub), *tail, **kwargs)
+
+    monkeypatch.setattr(acp_chat_transport.asyncio, "create_subprocess_exec", _exec)
+
+
+async def test_old_image_ctl_answers_unknown_op_not_unreachable(tmp_path, monkeypatch, acp_slug):
+    """The old shim rejects new ops in argparse (exit 2, empty stdout). That
+    is "this agent does not know the op" — an answer — not "nobody there"
+    (which would surface as 502 acp_unreachable)."""
+    from app.services import acp_chat_transport
+
+    _run_old_ctl(tmp_path, monkeypatch)
+    transport = acp_chat_transport.DockerCtlTransport(acp_slug)
+
+    for answer in (await transport.queue_clear(), await transport.new_session(mode="queue")):
+        assert answer["ok"] is False and answer["error"] == "unknown_op"
+    assert await transport.state() == {"ok": True}  # known ops still answer
+
+
+async def test_old_image_queue_clear_is_409_input_not_supported(
+    tmp_path, monkeypatch, auth_client, make_agent
+):
+    _run_old_ctl(tmp_path, monkeypatch)
+    agent = await make_agent(name="Acp Old", agent_runtime="cli-bridge", harness="omp")
+
+    resp = await auth_client.post(f"/api/v1/agents/{agent.id}/chat/queue/clear")
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["reason"] == "input_not_supported"

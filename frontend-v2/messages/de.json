@@ -1057,7 +1057,8 @@
       "diff": "Diff",
       "browser": "Browser",
       "close": "Panel schliessen"
-    }
+    },
+    "queueTakeBackFailed": "Eingereihte Nachrichten konnten nicht zurückgeholt werden"
   },
   "shell": {
     "searchPlaceholder": "Suchen oder Befehl...",
@@ -3436,7 +3437,17 @@
       "empty_turn": "Keine Antwort",
       "process_exit": "Prozess beendet",
       "busy": "Arbeitet noch",
-      "session_reset": "Sitzung neu gestartet"
+      "session_reset": "Sitzung neu gestartet",
+      "queue_full": "Warteschlange voll",
+      "new_session_failed": "Neue Sitzung fehlgeschlagen",
+      "queue_lost": "Warteschlange verloren"
+    },
+    "queue": {
+      "queued": "Eingereiht — wird nach der laufenden Antwort gesendet",
+      "steer": "Steuernachricht — greift nach dem laufenden Werkzeug",
+      "starting": "Agent startet — wird zugestellt…",
+      "withdraw": "Eingereihte Nachricht zurückziehen",
+      "edit": "Eingereihte Nachricht bearbeiten"
     }
   },
   "heads": {

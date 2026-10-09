@@ -59,6 +59,9 @@ class FakeSession:
 
     def __init__(self, *, busy: bool = False):
         self.prompts: list[str] = []
+        self.modes: list[str] = []
+        self.new_sessions: list[str] = []
+        self.queue_clears = 0
         self.configs: list[tuple] = []
         self.cancelled = 0
         self.closed = 0
@@ -75,11 +78,22 @@ class FakeSession:
     def close(self):
         self.closed += 1
 
-    def prompt(self, text):
+    def prompt(self, text, mode="now"):
         self.prompts.append(text)
-        if self._busy:
+        self.modes.append(mode)
+        if self._busy and mode != "queue":
             return {"ok": False, "error": "busy"}
+        if self._busy:
+            return {"ok": True, "queued": True, "queueId": "q1", "position": 1}
         return {"ok": True, "turn": len(self.prompts)}
+
+    def new_session(self, mode="now"):
+        self.new_sessions.append(mode)
+        return {"ok": True, "previousSessionId": "sid-1"}
+
+    def queue_clear(self):
+        self.queue_clears += 1
+        return {"ok": True, "dropped": []}
 
     def cancel(self):
         self.cancelled += 1
@@ -224,6 +238,25 @@ def test_chat_config_and_cancel_reach_the_session(bridge, monkeypatch):
     assert status == 200 and payload["ok"] is True and payload["driver"] == "hermes"
     assert session.configs == [("thinking", "high")]
     assert session.cancelled == 1
+
+
+def test_chat_queue_and_new_session_ops_reach_the_session(bridge, monkeypatch):
+    """The HTTP twin speaks the same op set as the container's socket: the
+    chat's ``mode=queue``, ``new_session`` (/new, /clear) and ``queue_clear``
+    (withdraw) must reach the session, not die as 404 unknown_op."""
+    monkeypatch.setenv("HERMES_DRIVER", "acp")
+    session = FakeSession(busy=True)
+    daemon = _daemon(bridge, session)
+    monkeypatch.setattr(bridge, "chat_daemon", lambda: daemon)
+
+    status, payload = _post(bridge, "/chat/prompt", {"text": "danach", "mode": "queue"})
+    assert status == 200 and payload["queued"] is True
+    assert session.modes == ["queue"]
+    assert _post(bridge, "/chat/new_session", {"mode": "queue"})[0] == 200
+    assert session.new_sessions == ["queue"]
+    status, payload = _post(bridge, "/chat/queue_clear")
+    assert status == 200 and payload == {"ok": True, "dropped": []}
+    assert session.queue_clears == 1
 
 
 def test_chat_prompt_while_busy_is_409(bridge, monkeypatch):

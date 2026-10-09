@@ -167,7 +167,7 @@ def build_session(
 
 
 class ChatDaemon:
-    """Owns the one ChatSession this host serves, and answers the four
+    """Owns the one ChatSession this host serves, and answers the
     control ops with an HTTP status.
 
     The session is built by ``factory`` on every ``start()`` — a restart must
@@ -177,7 +177,7 @@ class ChatDaemon:
 
     #: `prompt` returns immediately (the turn runs async), `state` only reads
     #: memory — the op set is the spec's, nothing else is routed.
-    OPS = ("prompt", "cancel", "config", "state")
+    OPS = ("prompt", "cancel", "config", "state", "new_session", "queue_clear")
 
     def __init__(self, factory: Callable[[], Any]):
         self._factory = factory
@@ -257,7 +257,14 @@ class ChatDaemon:
                          "detail": "acp chat daemon not running"}
         try:
             if op == "prompt":
-                answer = session.prompt(str(payload.get("text") or ""))
+                mode = payload.get("mode")
+                text = str(payload.get("text") or "")
+                answer = session.prompt(text, mode) if mode else session.prompt(text)
+            elif op == "new_session":
+                mode = payload.get("mode")
+                answer = session.new_session(mode) if mode else session.new_session()
+            elif op == "queue_clear":
+                answer = session.queue_clear()
             elif op == "cancel":
                 answer = session.cancel()
             elif op == "config":

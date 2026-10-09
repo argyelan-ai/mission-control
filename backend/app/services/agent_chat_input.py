@@ -344,6 +344,45 @@ class BossDeliveryError(Exception):
     was the bug this replaces."""
 
 
+class AcpChatRefusedError(Exception):
+    """Der Chat-Daemon eines kopflosen Agenten hat abgelehnt, OHNE die Absage
+    selbst als Karte in den Chat zu schreiben (z. B. ``bad_mode``). Sie muss
+    darum hier sichtbar werden — als 204 verschluckt ginge die Nachricht
+    spurlos verloren (Review #777)."""
+
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
+
+#: Absagen, die der Daemon SELBST als ``chat_error``-Karte ins Transkript
+#: schreibt — hier keine zweite Fehlermeldung obendrauf.
+_ACP_REFUSALS_WITH_CARD = frozenset({"queue_full"})
+
+
+def _raise_for_acp_refusal(error: str | None, slug: str) -> None:
+    """Uebersetzt eine Daemon-Absage in die Ausnahme, die der Router kennt.
+    Kehrt nur zurueck, wenn der Chat die Absage schon als Karte zeigt."""
+    if error == "busy":
+        raise AgentBusyError()
+    if error == "not_started":
+        # Daemon laeuft, Sitzung noch nicht offen: dasselbe Warten wie eine
+        # bootende TUI — der Composer versucht es einmal von selbst erneut.
+        raise AgentStartingError()
+    if error == "unknown_op":
+        # Agent-Image aelter als die Op: ehrlich ablehnen. Fuer /new hiesse
+        # Weiterreichen als Prompt wieder: das Modell SPIELT "Sitzung geleert".
+        logger.warning(
+            "acp chat: Daemon kennt die Op nicht (slug=%s) — Agent-Image neu bauen",
+            slug,
+        )
+        raise InputNotSupportedError()
+    if error in _ACP_REFUSALS_WITH_CARD:
+        logger.info("acp chat: Absage %s (slug=%s), steht als Karte im Chat", error, slug)
+        return
+    raise AcpChatRefusedError(str(error or "unknown"))
+
+
 class AgentStartingError(Exception):
     """Raised when send_text's readiness gate never saw the pane become
     ready within its poll budget — the CLI is still booting/loading plugins,
@@ -518,6 +557,43 @@ def _target_kind(agent) -> str:
 _ACP_KINDS = ("acp-docker", "acp-http")
 
 
+#: Was MC fuer einen kopflosen Agenten SELBST erledigt, solange sein Harness
+#: es ueber ACP nicht anbietet. omp meldet 45 Befehle, ``new`` und ``clear``
+#: sind nicht dabei — als Text gingen sie ans MODELL, das "Sitzung geleert"
+#: antwortete, waehrend Sitzung und Kontext dieselben blieben (Operator-Befund
+#: 09.10.2026). Stattdessen oeffnet der Chat-Daemon eine echte neue
+#: ACP-Sitzung (``new_session``); die alte Transkript-Datei bleibt liegen.
+#: Name -> Beschreibung fuer die Slash-Palette.
+_ACP_SESSION_RESET_COMMANDS: dict[str, str] = {
+    "new": "Start a new session",
+    "clear": "Clear the conversation (starts a new session)",
+}
+
+
+def _acp_advertised_commands(state: dict | None) -> list[dict]:
+    """Die Befehle, die der Agent selbst ueber ACP meldet (vom Daemon in die
+    Zustandsdatei gespiegelt), als ``{"name", "description"}``."""
+    return [
+        {"name": c["name"], "description": c.get("description") or None}
+        for c in (state or {}).get("commands") or []
+        if isinstance(c, dict) and c.get("name")
+    ]
+
+
+async def _acp_session_reset_command(agent, text: str) -> str | None:
+    """``"new"``/``"clear"``, wenn ``text`` genau einer dieser Befehle ist UND
+    der Agent ihn nicht selbst anbietet — dann erledigt MC ihn. Sonst
+    ``None``: ``/clear den Cache`` ist eine gewoehnliche Nachricht, und ein
+    Harness mit eigenem ``/new`` behaelt seinen."""
+    word = text.strip().lower()
+    if not word.startswith("/") or word[1:] not in _ACP_SESSION_RESET_COMMANDS:
+        return None
+    state = await asyncio.to_thread(read_acp_chat_state, agent)
+    if any(c["name"].lower() == word[1:] for c in _acp_advertised_commands(state)):
+        return None
+    return word[1:]
+
+
 def _acp_config_option(state: dict | None, option_id: str) -> tuple[list[dict], str | None]:
     """``(Optionen, aktueller Wert)`` einer ``configOptions``-Zeile aus der
     Zustandsdatei des Chat-Daemons. Leer/``None``, wenn der Daemon diese
@@ -623,17 +699,26 @@ async def send_text(agent, text: str) -> None:
         # (der Chat-Daemon IST die Sitzung — er wird nicht weggeraeumt). Der
         # Zug laeuft im Daemon asynchron weiter; ``ok:true`` heisst nur
         # "angenommen", genau wie beim TUI-Pfad das abgesetzte Enter.
-        answer = await transport_for(agent).prompt(text)
+        #
+        # ``mode="queue"``: laeuft gerade ein Zug, haelt der Daemon die
+        # Nachricht zurueck und liefert sie, sobald der Zug endet — eine
+        # Folge-Nachricht, wie der Composer sie als "eingereiht" zeigt.
+        # Vorher lehnte er ab ("a turn is already running"), und die als
+        # eingereiht angezeigte Nachricht war weg (Operator-Befund 09.10.2026).
+        # Lenken MITTEN im Zug gibt es ueber ACP nicht: ein zweites
+        # ``session/prompt`` bricht bei omp den laufenden Zug ab.
+        transport = transport_for(agent)
+        if await _acp_session_reset_command(agent, text):
+            answer = await transport.new_session(mode="queue")
+            if not answer.get("ok"):
+                _raise_for_acp_refusal(answer.get("error"), slug)
+            return
+        answer = await transport.prompt(text, mode="queue")
         if not answer.get("ok"):
-            if answer.get("error") == "busy":
-                raise AgentBusyError()
-            # Jede andere Absage hat der Daemon bereits als ``chat_error``
-            # ins Transkript geschrieben — sie erscheint im Chat als rote
-            # Karte. Hier noch eine Ausnahme zu werfen wuerde dieselbe
-            # Nachricht ein zweites Mal erzaehlen, nur ohne Code.
-            logger.warning(
-                "acp chat: prompt abgelehnt (slug=%s): %s", slug, answer.get("error")
-            )
+            # Zurueck kommt hier nur eine Absage, die der Daemon schon als
+            # Karte zeigt (``queue_full``); jede andere wird zur Ausnahme.
+            _raise_for_acp_refusal(answer.get("error"), slug)
+            return
         note_sent(str(getattr(agent, "id", "") or slug), text)
         return
 
@@ -698,6 +783,38 @@ def note_sent(agent_id: str, text: str) -> None:
 
 def pop_last_sent(agent_id: str) -> str | None:
     return _LAST_SENT.pop(agent_id, None)
+
+
+async def clear_queue(agent) -> list[str]:
+    """Holt die zurueckgehaltenen Folge-Nachrichten eines kopflosen Agenten
+    zurueck (Daemon-Op ``queue_clear``) und gibt ihre Texte zurueck, aelteste
+    zuerst — der Composer legt sie wieder ins Eingabefeld (Zurueckziehen,
+    Bearbeiten, Stop). Die Liste kommt vom DAEMON, nicht aus dem Echo des
+    Browsers: was schon als Zug gestartet ist, kommt nicht doppelt zurueck.
+
+    ``InputNotSupportedError`` fuer TUI-Agenten (dort holt ``Up`` die
+    Warteschlange der CLI zurueck, ``send_keys``) und fuer einen Daemon, der
+    die Op noch nicht kennt."""
+    if _target_kind(agent) not in _ACP_KINDS:
+        raise InputNotSupportedError()
+    answer = await transport_for(agent).queue_clear()
+    if not answer.get("ok"):
+        if answer.get("error") == "unknown_op":
+            raise InputNotSupportedError()
+        logger.warning(
+            "acp chat: queue_clear abgelehnt (slug=%s): %s",
+            getattr(agent, "slug", None), answer.get("error"),
+        )
+        return []
+    texts: list[str] = []
+    for job in answer.get("dropped") or []:
+        if not isinstance(job, dict):
+            continue
+        if job.get("kind") == "new_session":
+            texts.append("/new")
+        elif job.get("text"):
+            texts.append(str(job["text"]))
+    return texts
 
 
 async def send_keys(agent, keys: list[str]) -> None:
@@ -1755,11 +1872,16 @@ async def slash_command_capabilities(agent) -> dict[str, object]:
         # (``available_commands_update`` ueber ACP, vom Daemon in die
         # Zustandsdatei gespiegelt). Keine gepflegte Builtin-Tabelle mehr —
         # und keine Skill-Suche im Container: was der Agent kann, sagt er.
+        #
+        # Dazu kommen ``/new`` und ``/clear``, wenn der Agent sie nicht
+        # selbst meldet: die erledigt MC (``send_text`` -> ``new_session``).
         state = await asyncio.to_thread(read_acp_chat_state, agent)
-        commands = [
-            {"name": c["name"], "description": c.get("description") or None}
-            for c in (state or {}).get("commands") or []
-            if isinstance(c, dict) and c.get("name")
+        commands = _acp_advertised_commands(state)
+        offered = {c["name"].lower() for c in commands}
+        commands += [
+            {"name": name, "description": description}
+            for name, description in _ACP_SESSION_RESET_COMMANDS.items()
+            if name not in offered
         ]
         return {"slashCommands": commands}
 

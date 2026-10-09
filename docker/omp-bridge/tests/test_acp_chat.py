@@ -42,10 +42,16 @@ class FakeClient:
       {"usage": {...}}             session/prompt result usage
       {"raise": exc}               raise instead of returning
       {"block": True}              block until cancel() (then stopReason)
+      {"gate": threading.Event()}  block until the test sets the event
     """
 
-    def __init__(self, *, turns=None, session_result=None, load_raises=None):
+    def __init__(self, *, turns=None, session_result=None, load_raises=None,
+                 new_ids=None, new_raises=None):
         self.turns = list(turns or [])
+        # session/new ids handed out in order (a fresh session per call);
+        # empty = always session_result's id, the single-session default.
+        self._new_ids = list(new_ids or [])
+        self._new_raises = new_raises
         self.last_session_result = session_result or {}
         self._session_result = session_result or {}
         self._load_raises = load_raises
@@ -71,8 +77,18 @@ class FakeClient:
 
     def new_session(self, cwd, mcp_servers=None, timeout=60.0):
         self.calls.append(("new_session", cwd))
+        if self._new_raises is not None and any(c[0] == "new_session" for c in self.calls[:-1]):
+            raise self._new_raises
         self.last_session_result = dict(self._session_result)
+        if self._new_ids:
+            sid = self._new_ids.pop(0)
+            self.last_session_result["sessionId"] = sid
+            return sid
         return self._session_result.get("sessionId", "sid-new")
+
+    def close_session(self, session_id, timeout=30.0):
+        self.calls.append(("close_session", session_id))
+        return {}
 
     def load_session(self, session_id, cwd, mcp_servers=None, timeout=60.0):
         self.calls.append(("load_session", session_id, cwd))
@@ -101,6 +117,8 @@ class FakeClient:
             })
         if turn.get("block"):
             self._cancelled.wait(timeout=5)
+        if turn.get("gate") is not None:
+            turn["gate"].wait(timeout=5)
         exc = turn.get("raise")
         if exc is not None:
             raise exc
@@ -831,6 +849,365 @@ def test_build_session_refuses_to_start_without_a_model(tmp_path, monkeypatch=No
             else:
                 os.environ[k] = v
     print("PASS test_build_session_refuses_to_start_without_a_model")
+
+
+# ── follow-up queue (operator finding 09.10.2026) ───────────────────────────
+#
+# A message sent while a reply runs used to be REFUSED by this daemon ("a turn
+# is already running") while the composer showed it as queued — the second
+# message was simply gone. `mode: "queue"` holds it in a FIFO and delivers it
+# the moment the running turn ends; the default mode keeps the old refusal for
+# machine callers (bridge wake-ups retry on their own).
+
+
+def _wait_busy(sess, timeout=3.0):
+    deadline = time.time() + timeout
+    while not sess.state()["busy"] and time.time() < deadline:
+        time.sleep(0.01)
+    assert sess.state()["busy"], "the first turn never started"
+
+
+def test_queued_prompts_run_in_order_after_the_running_turn(tmp_path):
+    gate = threading.Event()
+    client = FakeClient(session_result=SESSION_RESULT, turns=[
+        {"chunks": ["one"], "gate": gate}, {"chunks": ["two"]}, {"chunks": ["three"]},
+    ])
+    sess = make_session(tmp_path, client)
+    sess.start()
+    assert sess.prompt("first", mode="queue") == {"ok": True, "turn": 1}
+    _wait_busy(sess)
+
+    second = sess.prompt("second", mode="queue")
+    third = sess.prompt("third", mode="queue")
+    assert second["ok"] is True and second["queued"] is True and second["position"] == 1
+    assert third["ok"] is True and third["queued"] is True and third["position"] == 2
+    # visible as queued: the state mirror (what the backend reads) lists both
+    mirrored = json.loads(sess.state_file.read_text())
+    assert [q["text"] for q in mirrored["queue"]] == ["second", "third"]
+    assert [q["id"] for q in mirrored["queue"]] == [second["queueId"], third["queueId"]]
+    # held, not sent: nothing reached the agent or the transcript yet
+    assert [c[2] for c in client.calls if c[0] == "prompt"] == ["first"]
+    assert user_texts(read_lines(sess.transcript_path)) == ["first"]
+
+    gate.set()
+    assert sess.wait_idle(timeout=5)
+    sess.close()
+
+    lines = read_lines(sess.transcript_path)
+    assert user_texts(lines) == ["first", "second", "third"]
+    assert assistant_texts(lines) == ["one", "two", "three"]
+    assert [c[2] for c in client.calls if c[0] == "prompt"] == ["first", "second", "third"]
+    assert not [l for l in entries_of_type(lines, "custom_message", "chat_error")
+                if (l.get("data") or {}).get("code") == "busy"], \
+        "a queued message is not a refusal — no busy card"
+    final = json.loads(sess.state_file.read_text())
+    assert final["busy"] is False and final["queue"] == [] and final["turn"] == 3
+    print("PASS test_queued_prompts_run_in_order_after_the_running_turn")
+
+
+def test_queue_on_an_idle_session_starts_the_turn_right_away(tmp_path):
+    client = FakeClient(session_result=SESSION_RESULT, turns=[{"chunks": ["ok"]}])
+    sess = make_session(tmp_path, client)
+    sess.start()
+    assert sess.prompt("now", mode="queue") == {"ok": True, "turn": 1}
+    assert sess.wait_idle(timeout=5)
+    sess.close()
+    assert user_texts(read_lines(sess.transcript_path)) == ["now"]
+    print("PASS test_queue_on_an_idle_session_starts_the_turn_right_away")
+
+
+def test_queue_clear_hands_back_the_held_messages_and_they_never_run(tmp_path):
+    gate = threading.Event()
+    client = FakeClient(session_result=SESSION_RESULT,
+                        turns=[{"chunks": ["one"], "gate": gate}, {"chunks": ["never"]}])
+    sess = make_session(tmp_path, client)
+    sess.start()
+    sess.prompt("first", mode="queue")
+    _wait_busy(sess)
+    held = sess.prompt("take me back", mode="queue")
+
+    cleared = sess.queue_clear()
+    assert cleared["ok"] is True
+    assert cleared["dropped"] == [{"id": held["queueId"], "kind": "prompt",
+                                   "text": "take me back", "at": held["at"]}]
+    assert json.loads(sess.state_file.read_text())["queue"] == []
+
+    gate.set()
+    assert sess.wait_idle(timeout=5)
+    sess.close()
+    assert user_texts(read_lines(sess.transcript_path)) == ["first"]
+    assert [c[2] for c in client.calls if c[0] == "prompt"] == ["first"]
+    assert sess.queue_clear() == {"ok": True, "dropped": []}
+    print("PASS test_queue_clear_hands_back_the_held_messages_and_they_never_run")
+
+
+def test_a_full_queue_refuses_visibly_instead_of_dropping(tmp_path):
+    gate = threading.Event()
+    client = FakeClient(session_result=SESSION_RESULT, turns=[{"gate": gate, "chunks": ["x"]}])
+    sess = make_session(tmp_path, client)
+    sess.start()
+    sess.prompt("first", mode="queue")
+    _wait_busy(sess)
+    for i in range(acp_chat.MAX_QUEUE):
+        assert sess.prompt(f"q{i}", mode="queue")["queued"] is True
+    over = sess.prompt("one too many", mode="queue")
+    assert over == {"ok": False, "error": "queue_full"}
+    sess.queue_clear()
+    gate.set()
+    assert sess.wait_idle(timeout=5)
+    sess.close()
+    codes = [(l.get("data") or {}).get("code")
+             for l in entries_of_type(read_lines(sess.transcript_path), "custom_message", "chat_error")]
+    assert codes == ["queue_full"]
+    print("PASS test_a_full_queue_refuses_visibly_instead_of_dropping")
+
+
+def test_an_unknown_mode_is_refused_not_guessed(tmp_path):
+    client = FakeClient(session_result=SESSION_RESULT)
+    sess = make_session(tmp_path, client)
+    sess.start()
+    assert sess.prompt("hi", mode="steer") == {"ok": False, "error": "bad_mode", "detail": "steer"}
+    sess.close()
+    print("PASS test_an_unknown_mode_is_refused_not_guessed")
+
+
+# ── /new and /clear: a REAL new ACP session ─────────────────────────────────
+#
+# omp advertises 45 commands over ACP; `new` and `clear` are not among them.
+# Typed into the chat they reached the MODEL, which answered "session
+# cleared" while session and context stayed the same. `new_session` opens a
+# fresh `session/new`, writes a new transcript file (the chat view follows it
+# as a rollover) and leaves the old file untouched.
+
+
+def test_new_session_opens_a_fresh_session_and_keeps_the_old_transcript(tmp_path):
+    client = FakeClient(session_result=SESSION_RESULT, new_ids=["sid-1", "sid-2"],
+                        turns=[{"chunks": ["before"]}, {"chunks": ["after"]}])
+    sess = make_session(tmp_path, client, model="model-b")
+    sess.start()
+    sess.prompt("old context")
+    assert sess.wait_idle(timeout=5)
+    sess.config("thinking", "high")
+    old_transcript = sess.transcript_path
+
+    answer = sess.new_session()
+    assert answer == {"ok": True, "previousSessionId": "sid-1"}
+    assert sess.wait_idle(timeout=5)
+
+    state = sess.state()
+    assert state["sessionId"] == "sid-2"
+    assert sess.transcript_path != old_transcript
+    assert ("close_session", "sid-1") in client.calls
+    # same model and thinking level as before — /clear forgets the
+    # conversation, not the operator's settings
+    assert ("set_config_option", "sid-2", "model", "model-b") in client.calls
+    assert ("set_config_option", "sid-2", "thinking", "high") in client.calls
+    # restart-safe: a daemon restart re-loads the NEW session
+    persisted = json.loads(sess.persist_file.read_text())
+    assert persisted == {"sessionId": "sid-2", "transcript": str(sess.transcript_path)}
+
+    sess.prompt("fresh start")
+    assert sess.wait_idle(timeout=5)
+    sess.close()
+    assert ("prompt", "sid-2", "fresh start") in client.calls
+    old_lines = read_lines(old_transcript)
+    assert user_texts(old_lines) == ["old context"], "old history must stay readable"
+    new_lines = read_lines(sess.transcript_path)
+    assert new_lines[0]["type"] == "session" and new_lines[0]["id"] == "sid-2"
+    assert user_texts(new_lines) == ["fresh start"]
+    print("PASS test_new_session_opens_a_fresh_session_and_keeps_the_old_transcript")
+
+
+def test_new_session_closes_the_old_session_before_the_new_file_exists(tmp_path):
+    """The chat view follows the file whose LAST entry is newest. omp may
+    persist into the old session's file while disposing it, so the close must
+    come first — otherwise the old session could out-rank the new one."""
+    files_at_close: list[int] = []
+
+    class _Client(FakeClient):
+        def close_session(self, session_id, timeout=30.0):
+            files_at_close.append(len(list((tmp_path / "sessions").glob("*.jsonl"))))
+            return super().close_session(session_id, timeout)
+
+    client = _Client(session_result=SESSION_RESULT, new_ids=["sid-1", "sid-2"])
+    sess = make_session(tmp_path, client)
+    sess.start()
+    sess.new_session()
+    assert sess.wait_idle(timeout=5)
+    sess.close()
+    assert files_at_close == [1], "new transcript was created before session/close"
+    assert len(list((tmp_path / "sessions").glob("*.jsonl"))) == 2
+    print("PASS test_new_session_closes_the_old_session_before_the_new_file_exists")
+
+
+def test_new_session_while_busy_refuses_by_default_and_queues_on_request(tmp_path):
+    gate = threading.Event()
+    client = FakeClient(session_result=SESSION_RESULT, new_ids=["sid-1", "sid-2"],
+                        turns=[{"chunks": ["one"], "gate": gate}, {"chunks": ["two"]}])
+    sess = make_session(tmp_path, client)
+    sess.start()
+    sess.prompt("first", mode="queue")
+    _wait_busy(sess)
+
+    assert sess.new_session() == {"ok": False, "error": "busy"}
+    queued_new = sess.new_session(mode="queue")
+    assert queued_new["ok"] is True and queued_new["queued"] is True
+    sess.prompt("after the reset", mode="queue")
+    assert [q["kind"] for q in sess.state()["queue"]] == ["new_session", "prompt"]
+    first_transcript = sess.transcript_path
+
+    gate.set()
+    assert sess.wait_idle(timeout=5)
+    sess.close()
+    assert sess.state()["sessionId"] == "sid-2"
+    assert user_texts(read_lines(first_transcript)) == ["first"]
+    assert user_texts(read_lines(sess.transcript_path)) == ["after the reset"]
+    assert ("prompt", "sid-2", "after the reset") in client.calls
+    print("PASS test_new_session_while_busy_refuses_by_default_and_queues_on_request")
+
+
+def test_new_session_failure_keeps_the_current_session_and_says_so(tmp_path):
+    client = FakeClient(session_result=SESSION_RESULT,
+                        new_raises=acp_client.ACPError("session/new failed: boom"),
+                        turns=[{"chunks": ["still here"]}])
+    sess = make_session(tmp_path, client)
+    sess.start()
+    assert sess.new_session()["ok"] is True
+    assert sess.wait_idle(timeout=5)
+    assert sess.state()["sessionId"] == "sid-1"
+    assert ("close_session", "sid-1") not in client.calls
+    sess.prompt("hello")
+    assert sess.wait_idle(timeout=5)
+    sess.close()
+    lines = read_lines(sess.transcript_path)
+    codes = [(l.get("data") or {}).get("code")
+             for l in entries_of_type(lines, "custom_message", "chat_error")]
+    assert codes == ["new_session_failed"]
+    assert user_texts(lines) == ["hello"]
+    print("PASS test_new_session_failure_keeps_the_current_session_and_says_so")
+
+
+def test_socket_queue_and_new_session_ops_through_the_ctl_shim(tmp_path):
+    import tempfile
+
+    gate = threading.Event()
+    client = FakeClient(session_result=SESSION_RESULT, new_ids=["sid-1", "sid-2"],
+                        turns=[{"chunks": ["one"], "gate": gate}, {"chunks": ["two"]}])
+    sess = make_session(tmp_path, client)
+    sess.start()
+    sock = Path(tempfile.mkdtemp(prefix="acpchat")) / "c.sock"
+    server = acp_chat.ChatSocketServer(sess, str(sock))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    deadline = time.time() + 3
+    while not sock.exists() and time.time() < deadline:
+        time.sleep(0.01)
+
+    def ctl(*args):
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "acp_chat_ctl.py"), *args, "--socket", str(sock)],
+            capture_output=True, text=True, timeout=30,
+        )
+        return proc.returncode, json.loads(proc.stdout or "{}")
+
+    try:
+        code, body = ctl("prompt", "--json", json.dumps({"text": "first", "mode": "queue"}))
+        assert code == 0 and body == {"ok": True, "turn": 1}
+        _wait_busy(sess)
+        code, body = ctl("prompt", "--json", json.dumps({"text": "held", "mode": "queue"}))
+        assert code == 0 and body["queued"] is True
+        code, body = ctl("queue_clear")
+        assert code == 0 and [d["text"] for d in body["dropped"]] == ["held"]
+        code, body = ctl("new_session")
+        assert code == 2 and body == {"ok": False, "error": "busy"}
+        gate.set()
+        assert sess.wait_idle(timeout=5)
+        code, body = ctl("new_session")
+        assert code == 0 and body == {"ok": True, "previousSessionId": "sid-1"}
+        assert sess.wait_idle(timeout=5)
+        code, body = ctl("state")
+        assert code == 0 and body["sessionId"] == "sid-2" and body["queue"] == []
+    finally:
+        server.shutdown()
+        sess.close()
+    print("PASS test_socket_queue_and_new_session_ops_through_the_ctl_shim")
+
+
+# ── review #777: state mirror under concurrent writers, queue across restart ─
+
+
+def test_state_mirror_is_never_torn_under_concurrent_writers(tmp_path):
+    """The worker writes the mirror outside the lock while socket handlers
+    write it under the lock. With ONE shared tmp file two writers truncate
+    each other's tmp and rename half a file into place — the backend reads
+    torn JSON (review: 20–97 parse errors per run)."""
+    client = FakeClient(session_result=SESSION_RESULT)
+    sess = make_session(tmp_path, client)
+    sess.start()
+    # A big payload makes each write slow enough to overlap.
+    sess._set_commands([{"name": f"cmd{i}", "description": "x" * 400} for i in range(200)])
+    stop = threading.Event()
+    errors: list[str] = []
+
+    def writer():
+        while not stop.is_set():
+            sess._write_state()
+
+    def reader():
+        while not stop.is_set():
+            try:
+                raw = sess.state_file.read_text()
+            except OSError:
+                continue
+            try:
+                json.loads(raw)
+            except ValueError as exc:
+                errors.append(str(exc))
+
+    threads = [threading.Thread(target=writer) for _ in range(6)] + [threading.Thread(target=reader)]
+    for t in threads:
+        t.start()
+    time.sleep(1.5)
+    stop.set()
+    for t in threads:
+        t.join()
+    sess.close()
+    assert errors == [], f"{len(errors)} torn reads of acp-chat-state.json"
+    assert not list(sess.state_file.parent.glob("*.tmp")), "tmp files left behind"
+    print("PASS test_state_mirror_is_never_torn_under_concurrent_writers")
+
+
+def test_messages_held_when_the_daemon_restarts_are_reported_not_lost_silently(tmp_path):
+    """The queue lives in memory. A daemon restart (container recreate,
+    bridge reload) drops it — the restarted daemon finds the old queue in the
+    state mirror and says so in the chat, with the texts."""
+    gate = threading.Event()
+    client = FakeClient(session_result=SESSION_RESULT, turns=[{"chunks": ["x"], "gate": gate}])
+    sess = make_session(tmp_path, client)
+    sess.start()
+    sess.prompt("first", mode="queue")
+    _wait_busy(sess)
+    sess.prompt("held one", mode="queue")
+    sess.prompt("held two", mode="queue")
+    transcript = sess.transcript_path
+    sess.close()          # the daemon dies with two messages held
+    gate.set()
+
+    again = make_session(tmp_path, FakeClient(session_result=SESSION_RESULT))
+    again.start()         # session/load -> same transcript file
+    again.close()
+    lost = [l for l in entries_of_type(read_lines(transcript), "custom_message", "chat_error")
+            if (l.get("data") or {}).get("code") == "queue_lost"]
+    assert len(lost) == 1
+    assert "held one" in lost[0]["content"] and "held two" in lost[0]["content"]
+    assert again.state()["queue"] == []
+
+    third = make_session(tmp_path, FakeClient(session_result=SESSION_RESULT))
+    third.start()         # nothing held this time -> no second card
+    third.close()
+    lost = [l for l in entries_of_type(read_lines(transcript), "custom_message", "chat_error")
+            if (l.get("data") or {}).get("code") == "queue_lost"]
+    assert len(lost) == 1
+    print("PASS test_messages_held_when_the_daemon_restarts_are_reported_not_lost_silently")
 
 
 if __name__ == "__main__":  # standalone runner
