@@ -34,9 +34,17 @@ class _FakeTransport:
     def _answer(self, op: str) -> dict:
         return self._answers.get(op, {"ok": True})
 
-    async def prompt(self, text: str) -> dict:
-        self.calls.append(("prompt", text))
+    async def prompt(self, text: str, mode: str | None = None) -> dict:
+        self.calls.append(("prompt", text, mode))
         return self._answer("prompt")
+
+    async def new_session(self, mode: str | None = None) -> dict:
+        self.calls.append(("new_session", mode))
+        return self._answer("new_session")
+
+    async def queue_clear(self) -> dict:
+        self.calls.append(("queue_clear",))
+        return self._answer("queue_clear")
 
     async def cancel(self) -> dict:
         self.calls.append(("cancel",))
@@ -126,7 +134,7 @@ async def test_send_text_goes_through_the_transport(acp_agent, fake_transport, m
 
     await agent_chat_input.send_text(acp_agent, "hallo Agent")
 
-    assert fake_transport.calls == [("prompt", "hallo Agent")]
+    assert fake_transport.calls == [("prompt", "hallo Agent", "queue")]
 
 
 async def test_send_text_records_last_sent_for_the_preview(acp_agent, fake_transport):
@@ -147,7 +155,94 @@ async def test_send_text_busy_raises_agent_busy(acp_agent, monkeypatch):
 
     with pytest.raises(agent_chat_input.AgentBusyError):
         await agent_chat_input.send_text(acp_agent, "zweiter Zug")
-    assert transport.calls == [("prompt", "zweiter Zug")]
+    assert transport.calls == [("prompt", "zweiter Zug", "queue")]
+
+
+async def test_send_text_queues_a_mid_turn_message_instead_of_refusing(acp_agent, monkeypatch):
+    """Operator finding 09.10.2026: a message sent while the agent works was
+    refused by the daemon ("a turn is already running") while the composer
+    showed it as queued. The chat asks for ``mode=queue``: the daemon holds
+    the message and delivers it when the running turn ends — an answer
+    ``queued: true`` is a success, not an error."""
+    from app.services import agent_chat_input
+
+    transport = _install(monkeypatch, _FakeTransport(
+        {"prompt": {"ok": True, "queued": True, "queueId": "q1", "position": 1}}
+    ))
+    await agent_chat_input.send_text(acp_agent, "und danach noch das")
+    assert transport.calls == [("prompt", "und danach noch das", "queue")]
+
+
+@pytest.mark.parametrize("typed", ["/new", "/clear", "  /CLEAR \n"])
+async def test_send_text_new_and_clear_open_a_real_new_session(
+    acp_agent, fake_transport, acp_state, typed
+):
+    """omp does not advertise ``new``/``clear`` over ACP, so typed as text
+    they reached the MODEL, which answered "session cleared" while nothing
+    changed. MC handles them: a daemon ``new_session`` (queued behind a
+    running turn), never a prompt."""
+    from app.services import agent_chat_input
+
+    await agent_chat_input.send_text(acp_agent, typed)
+    assert fake_transport.calls == [("new_session", "queue")]
+
+
+async def test_send_text_new_goes_to_the_agent_when_it_advertises_new(
+    acp_agent, fake_transport, acp_state
+):
+    """A harness that DOES offer ``/new`` over ACP keeps its own command —
+    MC only fills the gap."""
+    from app.services import agent_chat_input
+
+    acp_state["commands"].append({"name": "new", "description": "New session"})
+    await agent_chat_input.send_text(acp_agent, "/new")
+    assert fake_transport.calls == [("prompt", "/new", "queue")]
+
+
+async def test_send_text_clear_with_more_words_is_an_ordinary_message(
+    acp_agent, fake_transport, acp_state
+):
+    from app.services import agent_chat_input
+
+    await agent_chat_input.send_text(acp_agent, "/clear the build cache first")
+    assert fake_transport.calls == [("prompt", "/clear the build cache first", "queue")]
+
+
+async def test_send_text_new_on_a_daemon_without_new_session_is_not_supported(
+    acp_agent, acp_state, monkeypatch
+):
+    """An agent image older than this change answers ``unknown_op``. That
+    must be an honest refusal — falling back to a prompt would bring back the
+    model pretending to have cleared the session."""
+    from app.services import agent_chat_input
+
+    transport = _install(monkeypatch, _FakeTransport(
+        {"new_session": {"ok": False, "error": "unknown_op", "detail": "new_session"}}
+    ))
+    with pytest.raises(agent_chat_input.InputNotSupportedError):
+        await agent_chat_input.send_text(acp_agent, "/clear")
+    assert transport.calls == [("new_session", "queue")]
+
+
+async def test_clear_queue_hands_back_the_texts_oldest_first(acp_agent, monkeypatch):
+    from app.services import agent_chat_input
+
+    transport = _install(monkeypatch, _FakeTransport({"queue_clear": {"ok": True, "dropped": [
+        {"id": "a", "kind": "prompt", "text": "erste", "at": "t"},
+        {"id": "b", "kind": "new_session", "text": "", "at": "t"},
+        {"id": "c", "kind": "prompt", "text": "dritte", "at": "t"},
+    ]}}))
+    assert await agent_chat_input.clear_queue(acp_agent) == ["erste", "/new", "dritte"]
+    assert transport.calls == [("queue_clear",)]
+
+
+async def test_clear_queue_is_not_supported_on_a_tui_agent(monkeypatch):
+    from app import config
+    from app.services import agent_chat_input
+
+    monkeypatch.setattr(config.settings, "omp_driver_default", "native")
+    with pytest.raises(agent_chat_input.InputNotSupportedError):
+        await agent_chat_input.clear_queue(_StubAgent(slug="tui-one"))
 
 
 async def test_send_keys_escape_cancels(acp_agent, fake_transport):
@@ -302,7 +397,19 @@ async def test_slash_commands_from_state(acp_agent, acp_state):
     assert caps["slashCommands"] == [
         {"name": "usage", "description": "Show usage"},
         {"name": "model", "description": None},
+        {"name": "new", "description": "Start a new session (the old one stays in the history)"},
+        {"name": "clear", "description": "Clear the conversation: start a new session"},
     ]
+
+
+async def test_slash_commands_do_not_shadow_an_advertised_new(acp_agent, acp_state):
+    from app.services import agent_chat_input
+
+    acp_state["commands"].append({"name": "new", "description": "agent's own"})
+    caps = await agent_chat_input.slash_command_capabilities(acp_agent)
+    names = [c["name"] for c in caps["slashCommands"]]
+    assert names.count("new") == 1 and names.count("clear") == 1
+    assert {"name": "new", "description": "agent's own"} in caps["slashCommands"]
 
 
 async def test_slash_commands_without_state(acp_agent, monkeypatch):
@@ -310,7 +417,7 @@ async def test_slash_commands_without_state(acp_agent, monkeypatch):
 
     monkeypatch.setattr(agent_chat_input, "read_acp_chat_state", lambda agent: None)
     caps = await agent_chat_input.slash_command_capabilities(acp_agent)
-    assert caps["slashCommands"] == []
+    assert [c["name"] for c in caps["slashCommands"]] == ["new", "clear"]
 
 
 async def test_model_options_from_state(acp_agent, acp_state):
@@ -379,6 +486,42 @@ async def test_router_maps_unreachable_to_502(auth_client, make_agent, monkeypat
     )
     assert resp.status_code == 502, resp.text
     assert resp.json()["reason"] == "acp_unreachable"
+
+
+async def test_router_queue_clear_returns_the_dropped_texts(auth_client, make_agent, monkeypatch):
+    import app.routers.agent_chat as agent_chat_mod
+
+    agent = await make_agent(name="Acp One", agent_runtime="cli-bridge")
+
+    async def _clear(a):
+        return ["erste", "zweite"]
+
+    monkeypatch.setattr(agent_chat_mod, "clear_queue", _clear)
+    resp = await auth_client.post(f"/api/v1/agents/{agent.id}/chat/queue/clear")
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"dropped": ["erste", "zweite"]}
+
+
+async def test_router_queue_clear_maps_refusals(auth_client, make_agent, monkeypatch):
+    import app.routers.agent_chat as agent_chat_mod
+    from app.services.acp_chat_transport import AcpChatUnreachableError
+    from app.services.agent_chat_input import InputNotSupportedError
+
+    agent = await make_agent(name="Acp One", agent_runtime="cli-bridge")
+
+    async def _tui(a):
+        raise InputNotSupportedError()
+
+    monkeypatch.setattr(agent_chat_mod, "clear_queue", _tui)
+    resp = await auth_client.post(f"/api/v1/agents/{agent.id}/chat/queue/clear")
+    assert resp.status_code == 409 and resp.json()["reason"] == "input_not_supported"
+
+    async def _dead(a):
+        raise AcpChatUnreachableError("socket weg")
+
+    monkeypatch.setattr(agent_chat_mod, "clear_queue", _dead)
+    resp = await auth_client.post(f"/api/v1/agents/{agent.id}/chat/queue/clear")
+    assert resp.status_code == 502 and resp.json()["reason"] == "acp_unreachable"
 
 
 # ══════════════════════════════════════════════════════════════════════════

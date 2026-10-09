@@ -9,6 +9,17 @@ was a key press against a console an ACP agent should not need. This daemon
 gives the chat its OWN long-lived ACP session: one `omp acp` child, ONE ACP
 session that survives restarts via `session/load`, one turn at a time.
 
+Two things ACP itself does not give the chat, so the daemon does them:
+
+- a follow-up QUEUE: `prompt` with `mode: "queue"` holds a message sent while
+  a reply runs and delivers it when that turn ends (FIFO, `queue_clear` takes
+  the held ones back). omp has no steer over ACP — a second `session/prompt`
+  mid-turn CANCELS the running turn (omp 18.1.10 `AcpAgent.prompt`) — so the
+  daemon never forwards one early. Steering needs omp's RPC mode (`steer`).
+- `new_session` for `/new` and `/clear`: omp does not advertise either over
+  ACP, so typed as text they only reached the model. A fresh `session/new`
+  with its own transcript file is what a real reset looks like.
+
 Spec: docs/specs/chat-over-acp.md. Contract in one picture:
 
     acp_chat_ctl.py <op>  ──unix socket──►  ChatSocketServer
@@ -40,6 +51,7 @@ import socketserver
 import sys
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 
@@ -63,6 +75,19 @@ _PREVIEW_GROWTH_CHARS = 200
 _PREVIEW_INTERVAL_S = 0.25
 
 _STATE_VERSION = 1
+
+#: `prompt`/`new_session` modes. `now` refuses while a turn runs — the
+#: contract of the machine callers (bridge wake-ups retry on their own poll).
+#: `queue` holds the job and runs it when the running turn ends — the chat.
+MODE_NOW = "now"
+MODE_QUEUE = "queue"
+_MODES = (MODE_NOW, MODE_QUEUE)
+
+#: Held jobs at most. A cap the operator never meets by typing, but a stuck
+#: turn plus a retrying caller must not grow the queue without bound.
+MAX_QUEUE = 20
+#: The state mirror shows a held message's text up to this length.
+_QUEUE_PREVIEW_CHARS = 2000
 _STATE_FILENAME = "acp-chat-state.json"
 _PERSIST_FILENAME = "acp-chat.json"
 _DEFAULT_SOCKET_NAME = "acp-chat.sock"
@@ -146,6 +171,9 @@ class ChatSession:
         self._config_options: list[dict] = []
         self._commands: list[dict] = []
         self._last_error: Optional[dict] = None
+        # Jobs waiting behind the running turn, oldest first:
+        # {"id", "kind": "prompt"|"new_session", "text", "at"}.
+        self._queue: list[dict] = []
         self._worker: Optional[threading.Thread] = None
         self._closed = False
 
@@ -237,11 +265,18 @@ class ChatSession:
     # control ops (the socket protocol)
     # ------------------------------------------------------------------
 
-    def prompt(self, text: str) -> dict:
-        """Start ONE turn. Returns immediately; the turn runs in a worker."""
+    def prompt(self, text: str, mode: str = MODE_NOW) -> dict:
+        """Start ONE turn — or, with `mode="queue"` while a turn runs, hold
+        the message and run it when that turn ends. Returns immediately; turns
+        run in the worker."""
         text = str(text or "")
+        mode = mode or MODE_NOW
+        if mode not in _MODES:
+            return {"ok": False, "error": "bad_mode", "detail": str(mode)}
         with self._lock:
             if self._busy:
+                if mode == MODE_QUEUE and not self._closed:
+                    return self._enqueue_locked("prompt", text)
                 # Rejected, and the operator sees why — silently dropping a
                 # typed message is the worst possible failure here.
                 self._emit_error(
@@ -251,17 +286,46 @@ class ChatSession:
                 return {"ok": False, "error": "busy"}
             if self._closed or self._client is None:
                 return {"ok": False, "error": "not_started"}
-            self._turn += 1
-            self._busy = True
-            self._idle.clear()
-            turn = self._turn
-            self._worker = threading.Thread(
-                target=self._run_turn, args=(text, turn),
-                name="acp-chat-turn", daemon=True,
-            )
+            job = self._claim_locked({"kind": "prompt", "text": text})
         self._write_state()
-        self._worker.start()
-        return {"ok": True, "turn": turn}
+        self._spawn(job)
+        return {"ok": True, "turn": job["turn"]}
+
+    def new_session(self, mode: str = MODE_NOW) -> dict:
+        """`/new` and `/clear`: open a fresh ACP session (`session/new`) with
+        its own transcript file. The old file stays as it is — the chat view
+        follows the new one as a rollover, the history is not deleted.
+
+        Runs in the worker like a turn (session/new can take seconds while
+        omp connects MCP servers), so it never overlaps one: while a turn
+        runs it is refused (`busy`), or held in the queue with
+        `mode="queue"`. A failure keeps the current session and lands as a
+        `new_session_failed` card."""
+        mode = mode or MODE_NOW
+        if mode not in _MODES:
+            return {"ok": False, "error": "bad_mode", "detail": str(mode)}
+        with self._lock:
+            if self._closed or self._client is None:
+                return {"ok": False, "error": "not_started"}
+            if self._busy:
+                if mode == MODE_QUEUE:
+                    return self._enqueue_locked("new_session", "")
+                return {"ok": False, "error": "busy"}
+            previous = self._session_id
+            job = self._claim_locked({"kind": "new_session"})
+        self._write_state()
+        self._spawn(job)
+        return {"ok": True, "previousSessionId": previous}
+
+    def queue_clear(self) -> dict:
+        """Take every held job back, oldest first. The composer's withdraw
+        and Stop put the texts back into the input — nothing held is lost
+        without the operator seeing it."""
+        with self._lock:
+            dropped, self._queue = self._queue, []
+        if dropped:
+            self._write_state()
+        return {"ok": True, "dropped": [dict(job) for job in dropped]}
 
     def cancel(self) -> dict:
         """`session/cancel` — a no-op when idle, never an error."""
@@ -308,6 +372,10 @@ class ChatSession:
                 "transcript": str(self.transcript_path) if self.transcript_path else None,
                 "configOptions": json.loads(json.dumps(self._config_options)),
                 "commands": json.loads(json.dumps(self._commands)),
+                "queue": [
+                    {**job, "text": job["text"][:_QUEUE_PREVIEW_CHARS]}
+                    for job in self._queue
+                ],
                 "updatedAt": _now_iso(),
                 "lastError": json.loads(json.dumps(self._last_error))
                 if self._last_error else None,
@@ -336,6 +404,122 @@ class ChatSession:
     @property
     def persist_file(self) -> Path:
         return self._state_dir / _PERSIST_FILENAME
+
+    # ------------------------------------------------------------------
+    # the worker: one job, then everything queued behind it
+    # ------------------------------------------------------------------
+
+    def _enqueue_locked(self, kind: str, text: str) -> dict:
+        """Hold one job behind the running turn. Caller holds `_lock`."""
+        if len(self._queue) >= MAX_QUEUE:
+            self._emit_error(
+                "queue_full", f"{MAX_QUEUE} messages already waiting",
+                text=f"Not sent — {MAX_QUEUE} messages are already waiting. "
+                     "Wait for the reply or take some back.",
+            )
+            return {"ok": False, "error": "queue_full"}
+        job = {"id": uuid.uuid4().hex[:12], "kind": kind, "text": text,
+               "at": _now_iso()}
+        self._queue.append(job)
+        position = len(self._queue)
+        self._write_state()
+        return {"ok": True, "queued": True, "queueId": job["id"],
+                "position": position, "at": job["at"]}
+
+    def _claim_locked(self, job: dict) -> dict:
+        """Mark the session busy for `job`; a prompt gets its turn number
+        here, when it STARTS — not when it was queued. Caller holds `_lock`."""
+        self._busy = True
+        self._idle.clear()
+        if job["kind"] == "prompt":
+            self._turn += 1
+            job = {**job, "turn": self._turn}
+        return job
+
+    def _spawn(self, job: dict) -> None:
+        worker = threading.Thread(
+            target=self._work, args=(job,), name="acp-chat-turn", daemon=True,
+        )
+        with self._lock:
+            self._worker = worker
+        worker.start()
+
+    def _work(self, job: Optional[dict]) -> None:
+        """Run `job`, then each queued job in order, then go idle. `_busy`
+        stays set from the first job to the last, so a prompt arriving in
+        between queues behind them instead of racing the next turn."""
+        while job is not None:
+            if job["kind"] == "new_session":
+                self._renew_session()
+            else:
+                self._run_turn(job["text"], job["turn"])
+            with self._lock:
+                closed = self._closed
+                if closed or not self._queue:
+                    self._busy = False
+                    job = None
+                else:
+                    job = self._claim_locked(self._queue.pop(0))
+            if closed:
+                # A retired session touches nothing shared (see the closed
+                # branch in _run_turn) — only the idle flag opens.
+                break
+            # The mirror must be on disk BEFORE the idle flag opens: a waiter
+            # that reads acp-chat-state.json the moment it wakes would
+            # otherwise see the stale busy=true snapshot of the turn it just
+            # waited out.
+            self._write_state()
+        self._idle.set()
+
+    def _renew_session(self) -> None:
+        """The `new_session` job: a fresh `session/new` on the same child.
+
+        Model and thinking level carry over — `/clear` forgets the
+        conversation, not the operator's settings. The replaced session is
+        closed (`session/close`, best-effort) so the child does not keep one
+        live session per reset; its transcript stays on disk.
+
+        Order matters: close the old session BEFORE the new transcript file
+        is created. The chat view follows the file whose LAST entry is newest
+        (omp_chat.find_active_session), and omp may still persist into the old
+        session's own file while disposing it — the new header must be later
+        than anything that teardown writes."""
+        with self._lock:
+            client, previous = self._client, self._session_id
+            thinking = self._config_value("thinking")
+        try:
+            new_id = client.new_session(self._cwd)
+        except Exception as exc:  # noqa: BLE001 — the old session keeps serving
+            self._emit_error(
+                "new_session_failed", f"{exc}",
+                text="Could not start a new session — the current one continues.",
+            )
+            return
+        result = getattr(client, "last_session_result", None)
+        if previous and previous != new_id and hasattr(client, "close_session"):
+            try:
+                client.close_session(previous)
+            except Exception as exc:  # noqa: BLE001 — a leaked session is not a failed reset
+                logger.warning("session/close %s failed: %s", previous, exc)
+        with self._lock:
+            self._session_id = new_id
+            self._mapper.set_session_id(new_id)
+            self._sink = acp_chat_events.ChatEventSink(self._sessions_dir, new_id)
+            self._preview = acp_chat_events.PreviewEventSink(self._sessions_dir, new_id)
+        self._absorb_session_result(result)
+        self._pin_model()
+        offered = self._config_value("thinking")
+        if thinking is not None and offered is not None and offered != thinking:
+            self.config("thinking", thinking)
+        self._write_persisted()
+
+    def _config_value(self, option_id: str) -> Any:
+        """`currentValue` of one config option, None when not offered."""
+        with self._lock:
+            for opt in self._config_options:
+                if opt.get("id") == option_id:
+                    return opt.get("currentValue")
+        return None
 
     # ------------------------------------------------------------------
     # the turn
@@ -380,10 +564,7 @@ class ChatSession:
             # or writing acp-chat-state.json / the persist file here would
             # race the active session's own writes and can clobber its
             # sessionId with this dead session's — kill the turn silently and
-            # stop touching anything.
-            with self._lock:
-                self._busy = False
-            self._idle.set()
+            # stop touching anything (_work only opens the idle flag).
             return
 
         final_text = "".join(self._full_text)
@@ -405,14 +586,6 @@ class ChatSession:
             code, detail = _classify_turn(stop_reason, final_text, error_text)
             if code:
                 self._emit_error(code, detail)
-
-        with self._lock:
-            self._busy = False
-        # The mirror must be on disk BEFORE the idle flag opens: a waiter
-        # that reads acp-chat-state.json the moment it wakes would otherwise
-        # see the stale busy=true snapshot of the turn it just waited out.
-        self._write_state()
-        self._idle.set()
 
     def _client_alive(self) -> bool:
         """False only when a REAL child process died. An injected/in-memory
@@ -553,8 +726,11 @@ class ChatSession:
     def _set_config_options(self, options: Any) -> None:
         if not isinstance(options, list):
             return
+        # A copy: config() edits currentValue in place, and that must never
+        # write through into the client's session result.
+        copied = json.loads(json.dumps([o for o in options if isinstance(o, dict)]))
         with self._lock:
-            self._config_options = [o for o in options if isinstance(o, dict)]
+            self._config_options = copied
 
     def _set_commands(self, commands: Any) -> None:
         if not isinstance(commands, list):
@@ -631,7 +807,11 @@ def dispatch(session: ChatSession, request: dict) -> dict:
     """One control request -> one response (spec's op table)."""
     op = request.get("op")
     if op == "prompt":
-        return session.prompt(request.get("text") or "")
+        return session.prompt(request.get("text") or "", request.get("mode") or MODE_NOW)
+    if op == "new_session":
+        return session.new_session(request.get("mode") or MODE_NOW)
+    if op == "queue_clear":
+        return session.queue_clear()
     if op == "cancel":
         return session.cancel()
     if op == "config":

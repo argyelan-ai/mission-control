@@ -72,8 +72,10 @@ export interface PendingEcho {
  *  hier der Beweis (Operator-Befund 19.08.2026: nach /clear bei Boss stand
  *  "Nicht bestaetigt — Terminal pruefen", obwohl /clear sauber lief).
  *  Bewusst eng gehalten: nur Kommandos, bei denen der Rollover der Zweck ist.
- *  /compact steht NICHT drin - es verdichtet innerhalb derselben Session. */
-const SESSION_CLEARING_COMMANDS = ["/clear"];
+ *  /compact steht NICHT drin - es verdichtet innerhalb derselben Session.
+ *  /new: bei kopflosen Agenten oeffnet der Chat-Daemon damit eine neue
+ *  ACP-Sitzung (eigene Datei) — derselbe Beweis. */
+const SESSION_CLEARING_COMMANDS = ["/clear", "/new"];
 
 export function isSessionClearingCommand(text: string): boolean {
   const first = text.trim().split(/\s+/)[0]?.toLowerCase() ?? "";

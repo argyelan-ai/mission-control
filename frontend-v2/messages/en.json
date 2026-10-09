@@ -3436,7 +3436,16 @@
       "empty_turn": "No answer",
       "process_exit": "Process ended",
       "busy": "Still working",
-      "session_reset": "Session restarted"
+      "session_reset": "Session restarted",
+      "queue_full": "Queue full",
+      "new_session_failed": "New session failed"
+    },
+    "queue": {
+      "queued": "Queued — sent when the current reply ends",
+      "steer": "Steering message — takes effect after the running tool",
+      "starting": "Agent starting — will be delivered…",
+      "withdraw": "Take back queued message",
+      "edit": "Edit queued message"
     }
   },
   "heads": {

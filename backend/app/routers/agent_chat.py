@@ -34,6 +34,7 @@ from app.services.agent_chat_input import (
     EffortSwitchRejectedError,
     InputNotSupportedError,
     can_receive_input,
+    clear_queue,
     effort_capabilities,
     model_options_capabilities,
     send_keys,
@@ -529,13 +530,38 @@ async def post_chat_input(
     except AgentStartingError:
         return JSONResponse(status_code=409, content=_AGENT_STARTING)
     except AgentBusyError:
-        # Kopflose Agenten (ACP): ein zweiter Prompt waehrend eines laufenden
-        # Zugs wird abgelehnt statt eingereiht — eine Absage, keine 500.
+        # Kopflose Agenten (ACP): der Chat reiht eine Nachricht waehrend eines
+        # laufenden Zugs ein (``mode=queue``). ``busy`` kommt nur noch von
+        # einem Daemon, der die Warteschlange nicht kennt (altes Image) —
+        # eine Absage, keine 500.
         return JSONResponse(status_code=409, content=_AGENT_BUSY)
     except AcpChatUnreachableError as e:
         return _acp_unreachable(e)
     except BossDeliveryError as e:
         return _boss_delivery_failed(e)
+
+
+@router.post("/agents/{agent_id}/chat/queue/clear")
+async def post_chat_queue_clear(
+    agent_id: uuid.UUID,
+    current_user=Depends(require_role(Role.ADMIN)),
+    session: AsyncSession = Depends(get_session),
+):
+    """Takes back the follow-up messages a headless (ACP) agent's chat daemon
+    is holding behind the running turn: ``{"dropped": [text, ...]}``, oldest
+    first, straight from the daemon — the composer puts them back into the
+    input (withdraw, edit, Stop). 409 ``{"reason":"input_not_supported"}``
+    for TUI agents (their CLI keeps its own queue, see ``/chat/keys``) and for
+    an agent image without the op; 502 ``acp_unreachable`` when the daemon
+    does not answer."""
+    agent = await _load_agent_or_404(agent_id, session)
+    try:
+        dropped = await clear_queue(agent)
+    except InputNotSupportedError:
+        return JSONResponse(status_code=409, content=_INPUT_NOT_SUPPORTED)
+    except AcpChatUnreachableError as e:
+        return _acp_unreachable(e)
+    return {"dropped": dropped}
 
 
 @router.post("/agents/{agent_id}/chat/attachment", status_code=201)

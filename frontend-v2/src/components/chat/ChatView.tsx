@@ -597,20 +597,51 @@ export function ChatView({
     });
   }
 
-  function handleStop() {
+  async function handleStop() {
     if (!agent) return;
+    if (headlessChat) {
+      // The chat daemon holds follow-ups behind the running reply and would
+      // start the next one the moment this turn is cancelled. Stop means stop:
+      // take them back first, into the composer — the way Claude Code and
+      // Codex hand queued input back on interrupt. A daemon that cannot (older
+      // agent image) must not block the cancel itself.
+      const dropped = await takeBackHeadlessQueue();
+      stream.withdrawQueued();
+      if (dropped.length > 0) setComposerPrefill({ text: dropped.join("\n\n"), at: Date.now() });
+    }
     api.chat.sendKeys(agent.id, ["Escape"]).catch(() => notify.error(t("stopActionFailed")));
   }
 
-  /** Take a queued steer back from the CLI. Up pops the whole queue into the
-   *  terminal's input line, C-u clears that line — proven live on a Docker
-   *  agent 03.09.2026 (the withdrawn message was never delivered). The CLI
-   *  keeps ONE queue, so every queued message comes back together; with
-   *  `edit` their texts land in the composer for another go. */
-  function handleWithdrawQueued(edit: boolean) {
+  /** The follow-ups a headless agent's daemon still holds, taken back.
+   *  Empty when there were none or the daemon could not answer. */
+  async function takeBackHeadlessQueue(): Promise<string[]> {
+    if (!agent) return [];
+    try {
+      return (await api.chat.clearQueue(agent.id)).dropped ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** Take a queued message back. On a TUI agent Up pops the CLI's whole queue
+   *  into the terminal's input line and C-u clears that line — proven live on
+   *  a Docker agent 03.09.2026 (the withdrawn message was never delivered).
+   *  On a headless (ACP) agent the chat daemon holds the queue; it answers
+   *  with what it still held, which is the truth for the composer (a message
+   *  that already started as a turn does not come back twice). Either way
+   *  every queued message comes back together; with `edit` their texts land
+   *  in the composer for another go. */
+  async function handleWithdrawQueued(edit: boolean) {
     if (!agent) return;
     const taken = stream.withdrawQueued();
     if (taken.length === 0) return;
+    if (headlessChat) {
+      const dropped = await takeBackHeadlessQueue();
+      if (edit && dropped.length > 0) {
+        setComposerPrefill({ text: dropped.join("\n\n"), at: Date.now() });
+      }
+      return;
+    }
     api.chat.sendKeys(agent.id, ["Up", "C-u"]).catch(() => notify.error(t("stopActionFailed")));
     if (edit) setComposerPrefill({ text: taken.join("\n\n"), at: Date.now() });
   }
@@ -1155,6 +1186,7 @@ export function ChatView({
                 }}
                 echoStatus={echo.status}
                 harness={agent?.harness ?? null}
+                headless={headlessChat}
                 onWithdraw={() => handleWithdrawQueued(false)}
                 onEdit={() => handleWithdrawQueued(true)}
               />

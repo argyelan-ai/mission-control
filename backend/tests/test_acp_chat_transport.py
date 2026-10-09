@@ -149,6 +149,27 @@ async def test_docker_transport_prompt_argv_and_json(monkeypatch, acp_slug):
     assert json.loads(argv[-1]) == {"text": "hallo"}
 
 
+async def test_docker_transport_queue_and_new_session_ops(monkeypatch, acp_slug):
+    from app.services import acp_chat_transport
+
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        acp_chat_transport.asyncio, "create_subprocess_exec",
+        _fake_exec(calls, _FakeProc(0, b'{"ok": true}')),
+    )
+    transport = acp_chat_transport.DockerCtlTransport(acp_slug)
+
+    await transport.prompt("danach", mode="queue")
+    await transport.new_session(mode="queue")
+    await transport.queue_clear()
+
+    assert calls[0][-3:-1] == ["prompt", "--json"]
+    assert json.loads(calls[0][-1]) == {"text": "danach", "mode": "queue"}
+    assert calls[1][-3:-1] == ["new_session", "--json"]
+    assert json.loads(calls[1][-1]) == {"mode": "queue"}
+    assert calls[2][-1] == "queue_clear"
+
+
 async def test_docker_transport_cancel_sends_no_payload(monkeypatch, acp_slug):
     from app.services import acp_chat_transport
 
@@ -223,6 +244,27 @@ async def test_http_transport_posts_config_to_chat_endpoint():
     assert result == {"ok": True, "configOptions": []}
     assert str(seen[0].url) == "http://host.example:18794/chat/config"
     assert json.loads(seen[0].content) == {"id": "thinking", "value": "high"}
+
+
+async def test_http_transport_posts_new_session_and_queue_clear():
+    from app.services import acp_chat_transport
+
+    seen: list[httpx.Request] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"ok": True})
+
+    transport = acp_chat_transport.HttpCtlTransport(
+        "http://host.example:18794", transport=httpx.MockTransport(_handler)
+    )
+    await transport.prompt("danach", mode="queue")
+    await transport.new_session(mode="queue")
+    await transport.queue_clear()
+
+    assert [str(r.url).rsplit("/", 1)[1] for r in seen] == ["prompt", "new_session", "queue_clear"]
+    assert json.loads(seen[0].content) == {"text": "danach", "mode": "queue"}
+    assert json.loads(seen[1].content) == {"mode": "queue"}
 
 
 async def test_http_transport_409_is_busy_not_an_exception():

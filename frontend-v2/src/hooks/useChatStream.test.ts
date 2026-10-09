@@ -742,6 +742,8 @@ describe("echoes answered by a session rollover", () => {
   it("recognises the command regardless of case and trailing args", () => {
     expect(isSessionClearingCommand("  /CLEAR  ")).toBe(true);
     expect(isSessionClearingCommand("/clear now")).toBe(true);
+    // /new opens a fresh session too (headless agents: daemon new_session)
+    expect(isSessionClearingCommand("/new")).toBe(true);
     // /compact verdichtet INNERHALB der Session — kein Rollover-Beweis.
     expect(isSessionClearingCommand("/compact")).toBe(false);
     expect(isSessionClearingCommand("bitte /clear machen")).toBe(false);

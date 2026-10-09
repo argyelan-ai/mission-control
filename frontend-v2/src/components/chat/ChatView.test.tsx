@@ -75,6 +75,7 @@ vi.mock("@/lib/api", () => ({
       // (effort switching); stubbed so the mock stays a faithful stand-in even
       // though no test here drives the chip.
       setEffort: vi.fn().mockResolvedValue(undefined),
+      clearQueue: vi.fn().mockResolvedValue({ dropped: [] }),
     },
   },
 }));
@@ -1398,10 +1399,10 @@ describe("ChatView", () => {
     // A symbol, not a sentence (Mark, 03.09.2026): the meaning sits on the
     // icon as its accessible name / tooltip, never as visible prose.
     expect(
-      screen.getByRole("img", { name: "Eingereiht — wird nach dem laufenden Zug gesendet" })
+      screen.getByRole("img", { name: "Queued — sent when the current reply ends" })
     ).toBeInTheDocument();
     expect(
-      screen.queryByText("Eingereiht — wird nach dem laufenden Zug gesendet")
+      screen.queryByText("Queued — sent when the current reply ends")
     ).not.toBeInTheDocument();
     // The whole point: nothing here looks like a problem.
     expect(screen.queryByText("Nicht bestätigt — Terminal prüfen")).not.toBeInTheDocument();
@@ -1425,7 +1426,7 @@ describe("ChatView", () => {
     );
     renderChatView();
 
-    await user.click(screen.getByRole("button", { name: "Zurückziehen" }));
+    await user.click(screen.getByRole("button", { name: "Take back queued message" }));
 
     await waitFor(() => expect(api.chat.sendKeys).toHaveBeenCalledWith("agent-1", ["Up", "C-u"]));
     expect(withdrawQueued).toHaveBeenCalledTimes(1);
@@ -1446,7 +1447,7 @@ describe("ChatView", () => {
     );
     renderChatView();
 
-    await user.click(screen.getByRole("button", { name: "Bearbeiten" }));
+    await user.click(screen.getByRole("button", { name: "Edit queued message" }));
 
     await waitFor(() => expect(api.chat.sendKeys).toHaveBeenCalledWith("agent-1", ["Up", "C-u"]));
     expect(screen.getByPlaceholderText(/Message the agent/)).toHaveValue("mach danach noch X");
@@ -1494,13 +1495,120 @@ describe("ChatView", () => {
     );
     renderChatView({ agent: mkAgent({ harness: "omp" }) });
     expect(
-      screen.getByRole("img", { name: "Steuernachricht — greift nach dem laufenden Werkzeug" })
+      screen.getByRole("img", { name: "Steering message — takes effect after the running tool" })
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole("img", { name: "Eingereiht — wird nach dem laufenden Zug gesendet" })
+      screen.queryByRole("img", { name: "Queued — sent when the current reply ends" })
     ).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Zurückziehen" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Bearbeiten" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Take back queued message" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit queued message" })).not.toBeInTheDocument();
+  });
+
+  // Operator finding 09.10.2026: on a headless (ACP) omp agent the chat
+  // daemon now HOLDS a mid-turn message and delivers it when the reply ends
+  // — a follow-up, not a steer. The row must say so, and taking it back goes
+  // to the daemon's queue (there is no terminal to press Up in).
+  it("headless agent: a mid-turn send reads as a follow-up that can be taken back", () => {
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        state: { kind: "state", status: "working", prompt: null },
+        pendingEchoes: [
+          { id: "echo-1", text: "und danach das", sentAt: Date.now(), status: "queued" },
+        ],
+      })
+    );
+    renderChatView({ agent: mkAgent({ harness: "omp", headless_chat: true }) });
+    expect(screen.getByRole("img", { name: "Queued — sent when the current reply ends" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("img", { name: "Steering message — takes effect after the running tool" })
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Take back queued message" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit queued message" })).toBeInTheDocument();
+  });
+
+  it("headless agent: taking back asks the daemon, never the terminal keys", async () => {
+    const user = userEvent.setup();
+    const withdrawQueued = vi.fn(() => ["und danach das"]);
+    vi.mocked(api.chat.clearQueue).mockResolvedValue({ dropped: ["und danach das"] });
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        state: { kind: "state", status: "working", prompt: null },
+        pendingEchoes: [
+          { id: "echo-1", text: "und danach das", sentAt: Date.now(), status: "queued" },
+        ],
+        withdrawQueued,
+      })
+    );
+    renderChatView({ agent: mkAgent({ harness: "omp", headless_chat: true }) });
+
+    await user.click(screen.getByRole("button", { name: "Take back queued message" }));
+
+    await waitFor(() => expect(api.chat.clearQueue).toHaveBeenCalledWith("agent-1"));
+    expect(api.chat.sendKeys).not.toHaveBeenCalled();
+    expect(withdrawQueued).toHaveBeenCalledTimes(1);
+    expect(screen.getByPlaceholderText(/Message the agent/)).toHaveValue("");
+  });
+
+  it("headless agent: edit puts back what the DAEMON still held", async () => {
+    const user = userEvent.setup();
+    // The browser's echo still lists two, but the first one already started
+    // as a turn — only the daemon knows. Its answer wins, nothing is doubled.
+    vi.mocked(api.chat.clearQueue).mockResolvedValue({ dropped: ["zweite"] });
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        state: { kind: "state", status: "working", prompt: null },
+        pendingEchoes: [
+          { id: "echo-1", text: "erste", sentAt: Date.now(), status: "queued" },
+          { id: "echo-2", text: "zweite", sentAt: Date.now(), status: "queued" },
+        ],
+        withdrawQueued: vi.fn(() => ["erste", "zweite"]),
+      })
+    );
+    renderChatView({ agent: mkAgent({ harness: "omp", headless_chat: true }) });
+
+    await user.click(screen.getAllByRole("button", { name: "Edit queued message" })[0]);
+
+    await waitFor(() =>
+      expect(screen.getByPlaceholderText(/Message the agent/)).toHaveValue("zweite")
+    );
+    expect(api.chat.sendKeys).not.toHaveBeenCalled();
+  });
+
+  it("headless agent: Stop takes the held messages back into the composer, then cancels", async () => {
+    const user = userEvent.setup();
+    const order: string[] = [];
+    vi.mocked(api.chat.clearQueue).mockImplementation(async () => {
+      order.push("clearQueue");
+      return { dropped: ["noch das", "und das"] };
+    });
+    vi.mocked(api.chat.sendKeys).mockImplementation(async () => {
+      order.push("cancel");
+    });
+    const withdrawQueued = vi.fn(() => ["noch das", "und das"]);
+    mockUseChatStream.mockReturnValue(
+      mkStream({ state: { kind: "state", status: "working", prompt: null }, withdrawQueued })
+    );
+    renderChatView({ agent: mkAgent({ harness: "omp", headless_chat: true }) });
+
+    await user.click(screen.getByRole("button", { name: "Stop" }));
+
+    await waitFor(() => expect(api.chat.sendKeys).toHaveBeenCalledWith("agent-1", ["Escape"]));
+    // queue first: cancelling first would let the next held message start
+    expect(order).toEqual(["clearQueue", "cancel"]);
+    expect(withdrawQueued).toHaveBeenCalledTimes(1);
+    expect(screen.getByPlaceholderText(/Message the agent/)).toHaveValue("noch das\n\nund das");
+  });
+
+  it("headless agent: Stop still cancels when the daemon cannot hand the queue back", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.chat.clearQueue).mockRejectedValue(new Error("409"));
+    mockUseChatStream.mockReturnValue(
+      mkStream({ state: { kind: "state", status: "working", prompt: null } })
+    );
+    renderChatView({ agent: mkAgent({ harness: "omp", headless_chat: true }) });
+
+    await user.click(screen.getByRole("button", { name: "Stop" }));
+    await waitFor(() => expect(api.chat.sendKeys).toHaveBeenCalledWith("agent-1", ["Escape"]));
   });
 
   it("offers no withdraw on an echo that is already on its way", () => {
@@ -1510,8 +1618,8 @@ describe("ChatView", () => {
       })
     );
     renderChatView();
-    expect(screen.queryByRole("button", { name: "Zurückziehen" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Bearbeiten" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Take back queued message" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit queued message" })).not.toBeInTheDocument();
   });
 
   it("shows a send waiting on a booting agent calmly", () => {
@@ -1525,7 +1633,7 @@ describe("ChatView", () => {
     renderChatView();
 
     expect(screen.getByTestId("echo-bubble")).toHaveAttribute("data-echo-status", "starting");
-    expect(screen.getByText("Agent startet — wird zugestellt…")).toBeInTheDocument();
+    expect(screen.getByText("Agent starting — will be delivered…")).toBeInTheDocument();
     expect(screen.queryByText("Nicht bestätigt — Terminal prüfen")).not.toBeInTheDocument();
   });
 

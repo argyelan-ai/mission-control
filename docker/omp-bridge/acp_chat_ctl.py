@@ -13,6 +13,9 @@ so the transport is a process exit code plus one JSON line on stdout:
 Examples:
     acp_chat_ctl.py state
     acp_chat_ctl.py prompt --json '{"text": "hello"}'
+    acp_chat_ctl.py prompt --json '{"text": "and then this", "mode": "queue"}'
+    acp_chat_ctl.py queue_clear
+    acp_chat_ctl.py new_session
     acp_chat_ctl.py config --json '{"id": "thinking", "value": "high"}'
     acp_chat_ctl.py cancel
 """
@@ -27,7 +30,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import acp_chat  # noqa: E402
 
-OPS = ("prompt", "cancel", "config", "state")
+OPS = ("prompt", "cancel", "config", "state", "new_session", "queue_clear")
 
 EXIT_OK = 0
 EXIT_NOT_OK = 2

@@ -1,6 +1,7 @@
 "use client";
 
 import { AlertTriangle, Clock, Pencil, Users, X } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import { MarkdownContent } from "@/components/chat/MarkdownContent";
 import { splitAttachments } from "./attachments";
@@ -48,14 +49,14 @@ function ClampedUserContent({ text }: { text: string }) {
  *  Transkript der CLI, nicht unsere Datenbank (siehe attachments.ts). */
 /**
  * What a send mid-turn actually does, per CLI. Claude Code QUEUES it until the
- * running turn ends. omp treats Enter as a STEERING message: it lands after
- * the running tool call and cuts the rest of that batch short — waiting for
- * the turn would be the wrong promise there.
+ * running turn ends. omp's TUI treats Enter as a STEERING message: it lands
+ * after the running tool call and cuts the rest of that batch short — waiting
+ * for the turn would be the wrong promise there. A headless (ACP) agent has no
+ * TUI: its chat daemon holds the message and sends it when the reply ends —
+ * a follow-up again, whatever the harness (operator finding 09.10.2026).
  */
-function queuedNote(harness: Harness | HostHarness | null | undefined): string {
-  return harness === "omp"
-    ? "Steuernachricht — greift nach dem laufenden Werkzeug"
-    : "Eingereiht — wird nach dem laufenden Zug gesendet";
+function isSteer(harness: Harness | HostHarness | null | undefined, headless: boolean): boolean {
+  return harness === "omp" && !headless;
 }
 
 export function ChatMessage({
@@ -65,6 +66,7 @@ export function ChatMessage({
   onWithdraw,
   onEdit,
   harness,
+  headless = false,
   live = false,
 }: {
   ev: MessageEvent;
@@ -81,11 +83,15 @@ export function ChatMessage({
   /** The CLI behind the agent. A mid-turn send means something different per
    *  harness (see `queuedNote`), so the waiting line names the right thing. */
   harness?: Harness | HostHarness | null;
+  /** The agent chats over ACP (`agent.headless_chat`): a mid-turn send is
+   *  held by the chat daemon as a follow-up and can be taken back there. */
+  headless?: boolean;
   /** Nur fuer Zeilen „von aussen": der Agent arbeitet gerade an genau
    *  diesem Ereignis (juengstes Ereignis + Zustand `working`). Bewegt das
    *  Motiv; alles andere bleibt gleich. */
   live?: boolean;
 }) {
+  const t = useTranslations("chat");
   // Rueckmeldung eines Subagenten / einer anderen Sitzung. Claude Code legt
   // die als gewoehnlichen USER-Turn ab — ohne eigene Behandlung erschiene sie
   // als rechtsbuendige Blase, also als etwas, das der Operator selbst getippt
@@ -150,16 +156,18 @@ export function ChatMessage({
     // Queued and starting are WAITS, not problems: the CLI genuinely holds a
     // message sent mid-turn until the turn ends, and a booting agent will get it
     // shortly. They say what they are waiting for and stay out of the way.
+    const steer = isSteer(harness, headless);
     const waitingNote =
       echoStatus === "queued"
-        ? queuedNote(harness)
+        ? t(steer ? "queue.steer" : "queue.queued")
         : echoStatus === "starting"
-          ? "Agent startet — wird zugestellt…"
+          ? t("queue.starting")
           : null;
-    // Only Claude Code lets us take a held message back (Up pops the queue
-    // into the input line, Ctrl+U clears it). omp consumes a steer after the
-    // running tool call; there is nothing to pull back, so no buttons.
-    const canWithdraw = echoStatus === "queued" && harness !== "omp";
+    // A held message can be taken back where something holds it: Claude
+    // Code's queue (Up pops it into the input line, Ctrl+U clears it) and the
+    // chat daemon of a headless agent (`queue_clear`). omp's TUI consumes a
+    // steer after the running tool call; there is nothing to pull back there.
+    const canWithdraw = echoStatus === "queued" && !steer;
     if (echoStatus === "queued") {
       // Not a turn yet, so not a bubble: while the CLI holds the message it
       // sits as a small inset line under the running answer — the way Codex
@@ -205,8 +213,8 @@ export function ChatMessage({
                     <button
                       type="button"
                       onClick={onEdit}
-                      aria-label="Bearbeiten"
-                      title="Bearbeiten"
+                      aria-label={t("queue.edit")}
+                      title={t("queue.edit")}
                       className="inline-flex p-0.5 rounded hover:opacity-100 opacity-70"
                       style={{ color: C.textSecondary }}
                     >
@@ -217,8 +225,8 @@ export function ChatMessage({
                     <button
                       type="button"
                       onClick={onWithdraw}
-                      aria-label="Zurückziehen"
-                      title="Zurückziehen"
+                      aria-label={t("queue.withdraw")}
+                      title={t("queue.withdraw")}
                       className="inline-flex p-0.5 rounded hover:opacity-100 opacity-70"
                       style={{ color: C.textSecondary }}
                     >

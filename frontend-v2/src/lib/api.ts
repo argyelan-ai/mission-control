@@ -802,6 +802,14 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ keys }),
       }),
+    /** Headless (ACP) agents only: takes back the follow-ups the chat daemon
+     *  is holding behind the running reply. `dropped` comes from the daemon,
+     *  oldest first — a message that already started as a turn is not in it.
+     *  409 `input_not_supported` for TUI agents (their CLI keeps the queue). */
+    clearQueue: (agentId: string) =>
+      request<{ dropped: string[] }>(`/api/v1/agents/${agentId}/chat/queue/clear`, {
+        method: "POST",
+      }),
     // 204 on success. Two distinct 409s the caller must tell apart:
     // `input_not_supported` (host agents — no pane to drive, the control is
     // simply unavailable) and `effort_switch_failed` (the switch was sent but

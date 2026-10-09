@@ -393,6 +393,18 @@ class ACPClient:
             self._fs_jail = None
         return result
 
+    def close_session(self, session_id: str, timeout: float = 30.0) -> dict:
+        """`session/close` — the agent drops the session from memory.
+
+        The chat daemon's `new_session` op calls this for the session it just
+        replaced, so a long-lived `omp acp` child does not keep one live
+        session per `/new`. omp 18.1.10 advertises it
+        (`sessionCapabilities.close`); it only disposes the in-memory record,
+        the session file on disk stays. An unknown id answers `{}`.
+        """
+        return self._request("session/close", {"sessionId": session_id},
+                             timeout=timeout)
+
     def set_config_option(self, session_id: str, key: str, value: Any,
                           timeout: float = 30.0) -> dict:
         """Set one config option (`model`, `mode`, `thinking`, ...).
