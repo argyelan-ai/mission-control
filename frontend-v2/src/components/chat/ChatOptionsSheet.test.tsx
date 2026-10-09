@@ -16,6 +16,7 @@ function renderSheet(props: Partial<React.ComponentProps<typeof ChatOptionsSheet
       centerView="chat"
       onCenterViewChange={vi.fn()}
       canChat
+      headlessChat={false}
       detailLevel="normal"
       onDetailLevelChange={vi.fn()}
       onOpenPanel={vi.fn()}
@@ -91,5 +92,35 @@ describe("ChatOptionsSheet", () => {
 
     await user.click(screen.getByRole("button", { name: "Close options" }));
     expect(onClose).toHaveBeenCalled();
+  });
+
+  /**
+   * Operator report, 09.10.2026: a "Terminal" entry sat in this sheet for
+   * every agent, including ACP-driven ones whose second console runs no
+   * job — tapping it showed a checkmark but never changed the screen,
+   * because ChatView's `effectiveView` ignores the stored choice for a
+   * `headless_chat` agent (docs/specs/chat-over-acp.md). The desktop header
+   * already withheld this toggle for such agents (ChatView.tsx); the sheet
+   * did not. Proof #6 of that spec requires "no Chat/Terminal toggle" —
+   * this closes the gap on the one surface that still showed it.
+   */
+  it("withholds the View section for a headless-chat (ACP) agent", () => {
+    renderSheet({ headlessChat: true });
+    expect(screen.queryByText("View")).not.toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: /Terminal/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: /Chat/ })).not.toBeInTheDocument();
+  });
+
+  // Sabotage-Probe: without the flag the toggle must stand unchanged.
+  it("still offers the View section for a non-headless agent", () => {
+    renderSheet({ headlessChat: false });
+    expect(screen.getByRole("radio", { name: /Terminal/ })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /Chat/ })).toBeInTheDocument();
+  });
+
+  it("keeps Panels and Detail Level for a headless-chat agent", () => {
+    renderSheet({ headlessChat: true, onOpenPanel: vi.fn() });
+    expect(screen.getByRole("button", { name: "Diff" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Normal" })).toBeInTheDocument();
   });
 });

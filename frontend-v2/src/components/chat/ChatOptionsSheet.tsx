@@ -13,6 +13,15 @@
  * Owns no state of its own: the caller holds view/detail/panel state (it is
  * persisted per-agent in localStorage by sessions/page.tsx) and this only
  * reports intent.
+ *
+ * The View section (Chat/Terminal) is withheld for a `headless_chat` agent,
+ * the same condition that already hides it from the desktop header (see
+ * ChatView.tsx + docs/specs/chat-over-acp.md, Goal: "The Chat/Terminal toggle
+ * is not rendered for such agents"). The mobile sheet used to skip that
+ * check: the toggle rendered and the "Terminal" radio even showed a
+ * checkmark, but for a headless agent `effectiveView` ignores the stored
+ * choice and stays on "chat" — a visible control that could never do
+ * anything (operator report, 09.10.2026).
  */
 import { AnimatePresence, motion } from "framer-motion";
 import { useTranslations } from "next-intl";
@@ -40,6 +49,10 @@ interface ChatOptionsSheetProps {
   onCenterViewChange: (view: CenterView) => void;
   /** False for agents with no transcript — the Chat row is then unreachable. */
   canChat: boolean;
+  /** True for an ACP-driven agent (docs/specs/chat-over-acp.md) — its second
+   *  console runs no job, so the View section (Chat/Terminal) is withheld
+   *  entirely rather than offered and ignored. */
+  headlessChat: boolean;
   detailLevel: DetailLevel;
   onDetailLevelChange: (level: DetailLevel) => void;
   /** Omitted when the caller has no side panels to offer. */
@@ -60,6 +73,7 @@ export function ChatOptionsSheet({
   centerView,
   onCenterViewChange,
   canChat,
+  headlessChat,
   detailLevel,
   onDetailLevelChange,
   onOpenPanel,
@@ -120,34 +134,38 @@ export function ChatOptionsSheet({
               </button>
             </div>
 
-            <SectionLabel>{t("sectionView")}</SectionLabel>
-            <div role="radiogroup" aria-label={t("sectionView")} className="flex flex-col">
-              {CENTER_VIEWS.map(({ key, labelKey }) => {
-                const Icon = VIEW_ICON[key];
-                const active = centerView === key;
-                const disabled = key === "chat" && !canChat;
-                return (
-                  <button
-                    key={key}
-                    type="button"
-                    role="radio"
-                    aria-checked={active}
-                    disabled={disabled}
-                    title={disabled ? t("noTranscript") : undefined}
-                    onClick={() => {
-                      onCenterViewChange(key);
-                      onClose();
-                    }}
-                    className="flex items-center gap-3 min-h-touch px-2 rounded-lg text-left cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
-                    style={{ color: active ? C.textPrimary : C.textSecondary }}
-                  >
-                    <Icon size={16} style={{ color: active ? C.accent : C.textMuted }} aria-hidden="true" />
-                    <span className="flex-1 text-[14px]">{t(labelKey)}</span>
-                    {active && <Check size={15} style={{ color: C.accent }} aria-hidden="true" />}
-                  </button>
-                );
-              })}
-            </div>
+            {!headlessChat && (
+              <>
+                <SectionLabel>{t("sectionView")}</SectionLabel>
+                <div role="radiogroup" aria-label={t("sectionView")} className="flex flex-col">
+                  {CENTER_VIEWS.map(({ key, labelKey }) => {
+                    const Icon = VIEW_ICON[key];
+                    const active = centerView === key;
+                    const disabled = key === "chat" && !canChat;
+                    return (
+                      <button
+                        key={key}
+                        type="button"
+                        role="radio"
+                        aria-checked={active}
+                        disabled={disabled}
+                        title={disabled ? t("noTranscript") : undefined}
+                        onClick={() => {
+                          onCenterViewChange(key);
+                          onClose();
+                        }}
+                        className="flex items-center gap-3 min-h-touch px-2 rounded-lg text-left cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
+                        style={{ color: active ? C.textPrimary : C.textSecondary }}
+                      >
+                        <Icon size={16} style={{ color: active ? C.accent : C.textMuted }} aria-hidden="true" />
+                        <span className="flex-1 text-[14px]">{t(labelKey)}</span>
+                        {active && <Check size={15} style={{ color: C.accent }} aria-hidden="true" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
+            )}
 
             {onOpenPanel && (
               <>
