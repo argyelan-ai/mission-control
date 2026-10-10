@@ -17,7 +17,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.repo import Repo
 from app.models.task import Task
-from app.services.heads import box_guard, files, launcher, pairs
+from app.services.heads import box_guard, files, launcher, pairs, scratch
 from app.services.heads.files import write_backend_file
 from app.services.heads.mirror import move_task
 from app.services.heads.state import ACTIVE_STATES, derive_for_run
@@ -126,6 +126,8 @@ async def start_head(
                 session, task=task, repo=repo, harness=pair.harness, runtime=runtime,
                 box_keys=pair.box_keys, user_id=user_id, answer=answer,
             )
+        except scratch.ScratchSourceMissing as exc:
+            raise HeadStartError(422, "scratch_source_missing", repo=exc.full_name) from exc
         except OSError as exc:
             raise HeadStartError(503, "spool_unavailable") from exc
         # inbox → in_progress AND the hold in one transaction: no operator PATCH

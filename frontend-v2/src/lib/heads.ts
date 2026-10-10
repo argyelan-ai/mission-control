@@ -248,6 +248,8 @@ const FAIL_REASONS = new Set([
   "sandbox_required",
   "hook_bypassed",
   "local_network_blocked",
+  "scratch_source_missing",
+  "scratch_source_failed",
 ]);
 
 export function failReasonKey(reason: string | null | undefined): { key: string; values?: Record<string, string> } {
@@ -294,6 +296,7 @@ const ERROR_CODES = new Set([
   "head_on_box",
   "engine_busy",
   "head_not_active",
+  "scratch_source_missing",
 ]);
 
 // ── Restart mode ─────────────────────────────────────────────────────────────
@@ -309,6 +312,8 @@ const NO_WORKTREE_REASONS = new Set([
   "spec_invalid",
   "box_busy",
   "previous_run_still_active",
+  "scratch_source_missing",
+  "scratch_source_failed",
 ]);
 
 /** Whether "Continue on this branch" can work for this run. */

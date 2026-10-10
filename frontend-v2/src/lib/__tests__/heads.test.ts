@@ -93,6 +93,30 @@ describe("local network blocked", () => {
   });
 });
 
+describe("scratch repo preparation", () => {
+  it("scratch_source_missing / scratch_source_failed name the fix in EN and DE", () => {
+    for (const r of ["scratch_source_missing", "scratch_source_failed"]) {
+      const { key } = failReasonKey(r);
+      expect(key).toBe(`failReason.${r}`);
+      expect(resolve(en, `heads.${key}`)).toContain("Repos");
+      expect(resolve(de, `heads.${key}`)).toContain("Repos");
+    }
+  });
+
+  it("the start refusal has its own sentence", () => {
+    const key = headErrorKey(apiErr(422, { code: "scratch_source_missing", repo: "scratch/tool" }));
+    expect(key).toBe("errors.scratch_source_missing");
+    expect(resolve(en, `heads.${key}`)).toContain("Repos");
+    expect(resolve(de, `heads.${key}`)).toContain("Repos");
+  });
+
+  it("nothing was prepared — restart starts fresh", () => {
+    for (const reason of ["scratch_source_missing", "scratch_source_failed"]) {
+      expect(defaultRestartMode({ reason, started_at: "2026-10-04T10:00:00Z" })).toBe("fresh");
+    }
+  });
+});
+
 describe("watchdog stop reasons", () => {
   it("no_progress and hard_limit have their own sentence in EN and DE", () => {
     for (const r of ["no_progress", "hard_limit", "time_limit"]) {
