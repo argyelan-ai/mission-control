@@ -595,9 +595,11 @@ async def find_last_developer(
     in_progress events, because reviewer ACKs and multiple dispatch cycles
     also produce in_progress events.
 
-    Fallback: agent who wrote progress/resolution comments.
+    Fallback: agent who wrote progress/resolution comments, then an agent
+    comment of any type, then the last dispatch target (always skipping the
+    reviewer).
 
-    Verbatim moved from backend/app/routers/agent_scoped.py:3563-3608
+    Originally moved from backend/app/routers/agent_scoped.py:3563-3608
     (Phase 4 REF-02 Plan 04-04).
     """
     from app.models.activity import ActivityEvent
@@ -638,5 +640,38 @@ async def find_last_developer(
     for c in comment_result.all():
         if c.author_agent_id and c.author_agent_id != reviewer_id:
             return await session.get(Agent, c.author_agent_id)
+
+    # Fallbacks for histories with no attributed status event and no
+    # progress/resolution comment (e.g. a status change that reached the
+    # operator endpoint and was recorded without agent_id, plus a builder
+    # who only wrote a plain `message`). Without these the rework went to
+    # the Board Lead instead of the builder who has the context.
+    # (1) agent comment of any type (not the reviewer)
+    any_comment_result = await session.exec(
+        select(TaskComment).where(
+            TaskComment.task_id == task.id,
+            TaskComment.author_type == "agent",
+            TaskComment.author_agent_id.is_not(None),  # type: ignore[union-attr]
+        ).order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
+    )
+    for c in any_comment_result.all():
+        if c.author_agent_id != reviewer_id:
+            return await session.get(Agent, c.author_agent_id)
+
+    # (2) last agent the task was dispatched to (not the reviewer)
+    dispatch_result = await session.exec(
+        select(ActivityEvent).where(
+            ActivityEvent.task_id == task.id,
+            ActivityEvent.event_type.in_([  # type: ignore[attr-defined]
+                "task.auto_dispatched",
+                "task.dispatch_queued",
+                "task.dispatch_queued_behind_active",
+            ]),
+            ActivityEvent.agent_id.is_not(None),  # type: ignore[union-attr]
+        ).order_by(ActivityEvent.created_at.desc())
+    )
+    for ev in dispatch_result.all():
+        if ev.agent_id != reviewer_id:
+            return await session.get(Agent, ev.agent_id)
 
     return None

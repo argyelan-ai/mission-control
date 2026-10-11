@@ -92,16 +92,16 @@ def _agent_token() -> str:
             pass
     return ""
 
-def _api_agent(method: str, path: str, **kwargs):
+def _api_agent(method: str, path: str, extra_headers: dict | None = None, **kwargs):
     """Call an agent-scoped endpoint AS the agent. Returns None when no agent
     token is available so callers can fall back to the admin _api()."""
     token = _agent_token()
     if not token:
         return None
+    headers = {"Authorization": f"Bearer {token}", **(extra_headers or {})}
     try:
         with httpx.Client(timeout=15) as c:
-            r = c.request(method, f"{MC_BASE}{path}",
-                          headers={"Authorization": f"Bearer {token}"}, **kwargs)
+            r = c.request(method, f"{MC_BASE}{path}", headers=headers, **kwargs)
             r.raise_for_status()
             return r.json()
     except httpx.HTTPStatusError as e:
@@ -272,7 +272,8 @@ def mc_create_task(title: str, description: str = "", board_id: str = "",
 
 
 @mcp.tool()
-def mc_patch_task(task_id: str, status: str = "", comment: str = "", board_id: str = "") -> str:
+def mc_patch_task(task_id: str, status: str = "", comment: str = "", board_id: str = "",
+                  attempt_id: str = "") -> str:
     """Task-Status aktualisieren und/oder Kommentar hinzufügen.
 
     Args:
@@ -280,6 +281,9 @@ def mc_patch_task(task_id: str, status: str = "", comment: str = "", board_id: s
         status: One of inbox | in_progress | review | done | blocked | failed
         comment: Optional comment text. Format: "Update: ...\\nEvidence: ...\\nNext: ..."
         board_id: Optional board UUID. Auto-resolved from task lookup if empty.
+        attempt_id: Dispatch attempt id from the [MC DISPATCH] header. Sent as
+            X-Dispatch-Attempt-Id — status changes on a dispatched task are
+            rejected (409) without it.
 
     Returns: Human-readable status string with one entry per applied change.
     """
@@ -300,9 +304,16 @@ def mc_patch_task(task_id: str, status: str = "", comment: str = "", board_id: s
     if status:
         # Change status AS the agent via the agent-scoped state-machine endpoint
         # (ACK handshake, review handoff, parent reactivation) — the same path
-        # Docker agents use. Falls back to the admin endpoint without a token.
-        r = _api_agent("PATCH", f"/agent/boards/{board_id}/tasks/{task_id}", json={"status": status})
-        if r is None or "error" in r:
+        # Docker agents use. Falls back to the admin endpoint ONLY without an
+        # agent token (operator use of this server). With a token, a rejected
+        # agent call (e.g. the 409 dispatch-attempt guard) is surfaced, never
+        # retried as the operator: that bypassed the guard and recorded the
+        # change without the agent (changed_by='user'), so a later "request
+        # changes" could not find the builder and went to the Board Lead.
+        extra = {"X-Dispatch-Attempt-Id": attempt_id} if attempt_id else None
+        r = _api_agent("PATCH", f"/agent/boards/{board_id}/tasks/{task_id}",
+                       extra_headers=extra, json={"status": status})
+        if r is None:
             r = _api("PATCH", f"/boards/{board_id}/tasks/{task_id}", json={"status": status})
         if "error" in r:
             return f"Status-Fehler: {r['error']}"

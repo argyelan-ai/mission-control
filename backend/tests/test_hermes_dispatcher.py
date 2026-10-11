@@ -196,3 +196,20 @@ def test_dispatch_poll_loop_function_exists_and_is_callable(bridge_module):
     """Smoke: dispatch_poll_loop is a top-level callable (started via threading.Thread)."""
     assert callable(bridge_module.dispatch_poll_loop)
     assert bridge_module.dispatch_poll_loop.__name__ == "dispatch_poll_loop"
+
+
+def test_dispatch_prompt_passes_attempt_id_to_status_tool_calls(bridge_module):
+    """The status calls in the protocol hint must hand the attempt id to
+    mc_patch_task as an explicit arg. Telling the model "send the header"
+    is useless when the tool has no way to send it — the status PATCH then
+    409s on the agent endpoint (live regression: the status change ended up
+    recorded without the agent, and a later rework went to the Board Lead)."""
+    attempt = "c366d934-f209-4a77-9833-8099f018b1e6"
+    task = {"id": "task-XYZ", "board_id": "board-789",
+            "dispatch_attempt_id": attempt, "title": "T", "description": "D"}
+    prompt = bridge_module._build_dispatch_prompt(task)
+    status_calls = [ln for ln in prompt.splitlines()
+                    if "mc_patch_task(" in ln and "status=" in ln]
+    assert len(status_calls) >= 2  # ACK + review hand-off
+    for ln in status_calls:
+        assert f'attempt_id="{attempt}"' in ln, ln

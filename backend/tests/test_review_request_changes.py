@@ -544,3 +544,145 @@ async def test_rejection_queued_outcome_real_requeue(client, fake_redis, make_bo
     dequeued_id = await dequeue_task(str(dev.id))
     assert dequeued_id == str(task.id)
     assert await queue_length(str(dev.id)) == 0
+
+
+async def _seed_unattributed_review_history(task_id, board_id, dev_id):
+    """Reproduce a live history in which the builder's own status changes
+    were recorded WITHOUT an agent_id (they went through the operator
+    endpoint), the builder only wrote a `message` comment, and the only
+    agent-attributed trace is the dispatch event naming the builder."""
+    from app.models.activity import ActivityEvent
+    from app.models.task import TaskComment
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(ActivityEvent(
+            event_type="task.dispatch_queued_behind_active", title="queued",
+            board_id=board_id, task_id=task_id, agent_id=dev_id,
+        ))
+        s.add(ActivityEvent(
+            event_type="task.status_changed", title="status",
+            board_id=board_id, task_id=task_id, agent_id=None,
+            detail={"old_status": "inbox", "new_status": "in_progress"},
+        ))
+        s.add(TaskComment(
+            task_id=task_id, author_type="agent", author_agent_id=dev_id,
+            comment_type="message", content="## Was wurde gemacht\nReport done.",
+        ))
+        s.add(ActivityEvent(
+            event_type="task.status_changed", title="status",
+            board_id=board_id, task_id=task_id, agent_id=None,
+            detail={"old_status": "in_progress", "new_status": "review"},
+        ))
+        await s.commit()
+
+
+@pytest.mark.asyncio
+async def test_request_changes_unattributed_history_routes_to_builder_not_lead(
+    fake_redis, make_board, make_task, make_agent,
+):
+    """Live regression: the operator requested changes on a human-review
+    root task whose builder left no agent-attributed status event and only a
+    `message` comment. find_last_developer missed both of its signals and the
+    rejection fell back to the Board Lead — the card went to the lead instead
+    of back to the builder who had all the context. Must route to the builder."""
+    from app.models.task import Task
+    from app.services.task_lifecycle import execute_review_decision
+
+    board = await make_board(name="Unattributed Board", slug=f"ua-{uuid.uuid4().hex[:8]}")
+    lead = await make_agent(name="Lead", role="lead", board_id=board.id, is_board_lead=True)
+    dev = await make_agent(name="Builder", role="developer", board_id=board.id,
+                           agent_runtime="host")
+    task = await make_task(
+        board_id=board.id, title="Root task built by a host agent",
+        status="review", assigned_agent_id=None, human_review_required=True,
+    )
+    await _seed_unattributed_review_history(task.id, board.id, dev.id)
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        with patch("app.services.task_lifecycle.emit_event", new_callable=AsyncMock), \
+             patch("app.services.dispatch.auto_dispatch_task", new_callable=AsyncMock):
+            t = await s.get(Task, task.id)
+            await execute_review_decision(
+                s, t, board.id, "request_changes", "please as a pdf",
+                actor_user_id=uuid.uuid4(),
+            )
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        updated = await s.get(Task, task.id)
+        assert updated.assigned_agent_id != lead.id, "rework went to the Board Lead"
+        assert updated.assigned_agent_id == dev.id
+        assert updated.status == "inbox"
+        assert updated.dispatch_intent == "review_rework"
+
+
+@pytest.mark.asyncio
+async def test_find_last_developer_falls_back_to_any_builder_comment_not_reviewer(
+    fake_redis, make_board, make_task, make_agent,
+):
+    """Without attributed status events or dispatch events, a builder's
+    comment of any type still identifies them — but a reviewer's comment
+    never does (exclude-the-reviewer semantics)."""
+    from app.models.task import Task, TaskComment
+    from app.services.work_context import find_last_developer
+
+    board = await make_board(name="Comment Fallback Board", slug=f"cf-{uuid.uuid4().hex[:8]}")
+    reviewer = await make_agent(name="Rev", role="reviewer", board_id=board.id)
+    dev = await make_agent(name="Builder", role="developer", board_id=board.id)
+    task = await make_task(board_id=board.id, title="t", status="review")
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(TaskComment(
+            task_id=task.id, author_type="agent", author_agent_id=dev.id,
+            comment_type="message", content="built it",
+        ))
+        await s.commit()
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(TaskComment(
+            task_id=task.id, author_type="agent", author_agent_id=reviewer.id,
+            comment_type="message", content="reviewer note",
+        ))
+        await s.commit()
+
+    with patch("app.services.work_context.find_reviewer",
+               new=AsyncMock(return_value=reviewer)):
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            t = await s.get(Task, task.id)
+            found = await find_last_developer(s, t)
+
+    assert found is not None and found.id == dev.id
+
+
+@pytest.mark.asyncio
+async def test_find_last_developer_falls_back_to_last_dispatch_target(
+    fake_redis, make_board, make_task, make_agent,
+):
+    """No attributed status events and no agent comments at all: the last
+    agent the task was dispatched to (not the reviewer) is the builder."""
+    from app.models.activity import ActivityEvent
+    from app.models.task import Task
+    from app.services.work_context import find_last_developer
+
+    board = await make_board(name="Dispatch Fallback Board", slug=f"df-{uuid.uuid4().hex[:8]}")
+    reviewer = await make_agent(name="Rev", role="reviewer", board_id=board.id)
+    dev = await make_agent(name="Builder", role="developer", board_id=board.id)
+    task = await make_task(board_id=board.id, title="t", status="review")
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(ActivityEvent(
+            event_type="task.auto_dispatched", title="d",
+            board_id=board.id, task_id=task.id, agent_id=dev.id,
+        ))
+        await s.commit()
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        # A later dispatch to the reviewer (review handoff) must be skipped.
+        s.add(ActivityEvent(
+            event_type="task.auto_dispatched", title="d",
+            board_id=board.id, task_id=task.id, agent_id=reviewer.id,
+        ))
+        await s.commit()
+
+    with patch("app.services.work_context.find_reviewer",
+               new=AsyncMock(return_value=reviewer)):
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            t = await s.get(Task, task.id)
+            found = await find_last_developer(s, t)
+
+    assert found is not None and found.id == dev.id
