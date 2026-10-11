@@ -591,7 +591,7 @@ async def find_last_developer(
     """Find the developer who last submitted the task for review.
 
     Looks for the agent who set in_progress → review (= submitted code)
-    and is NOT the reviewer. This is more reliable than searching for
+    and did not review this card. This is more reliable than searching for
     in_progress events, because reviewer ACKs and multiple dispatch cycles
     also produce in_progress events.
 
@@ -613,7 +613,29 @@ async def find_last_developer(
     reviewer = await find_reviewer(session, task.board_id)
     reviewer_id = reviewer.id if reviewer else None
 
-    # Primary: agent who set in_progress → review (not the reviewer)
+    # Agents that reviewed THIS card: received its review handoff or left a
+    # review comment on it. A reviewer also moves a card in_progress → review
+    # while reviewing it, so those moves must not count as building.
+    handoff_result = await session.exec(
+        select(ActivityEvent.agent_id).where(
+            ActivityEvent.task_id == task.id,
+            ActivityEvent.event_type == "task.review_handoff",
+            ActivityEvent.agent_id.is_not(None),  # type: ignore[union-attr]
+        )
+    )
+    review_comment_result = await session.exec(
+        select(TaskComment.author_agent_id).where(
+            TaskComment.task_id == task.id,
+            TaskComment.author_type == "agent",
+            TaskComment.comment_type == "review",
+            TaskComment.author_agent_id.is_not(None),  # type: ignore[union-attr]
+        )
+    )
+    reviewed_this_card = set(handoff_result.all()) | set(review_comment_result.all())
+
+    # Primary: agent who set in_progress → review. The board's reviewer-role
+    # agent counts here too when it built the card itself (it never got this
+    # card's review handoff); only an agent that reviewed this card is skipped.
     result = await session.exec(
         select(ActivityEvent).where(
             ActivityEvent.task_id == task.id,
@@ -626,7 +648,7 @@ async def find_last_developer(
         if (detail.get("new_status") == "review"
                 and detail.get("old_status") == "in_progress"
                 and ev.agent_id
-                and ev.agent_id != reviewer_id):
+                and ev.agent_id not in reviewed_this_card):
             return await session.get(Agent, ev.agent_id)
 
     # Fallback: agent with progress/resolution comments (not the reviewer)
