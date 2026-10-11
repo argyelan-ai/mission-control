@@ -1498,6 +1498,17 @@
       "rest": "Other ({count})",
       "empty": "No cost recorded this week yet."
     },
+    "box": {
+      "title": "Local boxes",
+      "period": "this week · tokens",
+      "totalLabel": "tokens on the boxes · without cache",
+      "viaMc": "Through MC",
+      "external": "Direct API (not through MC)",
+      "cached": "+ {tokens} cached prompt tokens (reused, not counted above)",
+      "clamped": "In some hours MC counted more than the boxes reported — that difference is shown as 0.",
+      "since": "Counted from the boxes' own counters since {date}. Nothing before that.",
+      "notYet": "Not counting yet — counting starts the first time a local box answers after this update."
+    },
     "trend": {
       "title": "Local share per week",
       "period": "{count} weeks",

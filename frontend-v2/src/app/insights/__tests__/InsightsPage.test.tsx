@@ -36,11 +36,11 @@ beforeEach(() => {
 });
 
 describe("InsightsPage", () => {
-  it("tells the story in order: hero, heatmap, sources, trend, done, details", async () => {
+  it("tells the story in order: hero, heatmap, sources, trend, box, done, details", async () => {
     const { container } = renderPage();
     await screen.findByTestId("hero-cost");
     const regions = [...container.querySelectorAll("[data-region]")].map((el) => el.getAttribute("data-region"));
-    expect(regions).toEqual(["hero", "heatmap", "sources", "trend", "done", "details"]);
+    expect(regions).toEqual(["hero", "heatmap", "sources", "trend", "box", "done", "details"]);
   });
 
   it("has no tabs and no eyebrow line any more", async () => {

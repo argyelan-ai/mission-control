@@ -1498,6 +1498,17 @@
       "rest": "Übrige ({count})",
       "empty": "Diese Woche noch keine Kosten erfasst."
     },
+    "box": {
+      "title": "Lokale Boxen",
+      "period": "diese Woche · Tokens",
+      "totalLabel": "Tokens auf den Boxen · ohne Cache",
+      "viaMc": "Über MC",
+      "external": "Direkte API (nicht über MC)",
+      "cached": "+ {tokens} Prompt-Tokens aus dem Cache (wiederverwendet, oben nicht gezählt)",
+      "clamped": "In manchen Stunden hat MC mehr gezählt, als die Boxen gemeldet haben — dieser Unterschied steht als 0 da.",
+      "since": "Gezählt aus den eigenen Zählern der Boxen seit {date}. Davor gibt es keine Werte.",
+      "notYet": "Noch keine Zählung — sie beginnt, sobald eine lokale Box nach diesem Update antwortet."
+    },
     "trend": {
       "title": "Lokal-Anteil pro Woche",
       "period": "{count} Wochen",
