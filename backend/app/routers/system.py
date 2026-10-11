@@ -716,6 +716,9 @@ async def costs_by_week(
     Response: {generated_at, start, tz, weeks: [{week, week_start, partial,
     totals, sources: [{source, ...totals}]}]}. weeks is clamped to 1..26;
     the current week is partial. tz (IANA) defaults to settings.usage_timezone.
+    Each week's totals also carry {box, via_mc_local, external} — the local
+    boxes' own counters next to MC's local tokens — and the response
+    box_tracking_since (None until a box was first seen).
     """
     from app.services.usage_baseline import compute_weekly_baseline
 
@@ -736,6 +739,9 @@ async def costs_by_day(
     Response: {generated_at, start, tz, days: [{date, ...totals,
     generated_tokens, local_generated_tokens, top_source}]}, every day of the
     window oldest first, today last. days is clamped to 1..371.
+    Each day also carries {box, via_mc_local, external} (the local boxes'
+    own counters, MC's local share of them, the rest = direct API use) and
+    the response box_tracking_since; see usage_baseline.box_view.
     """
     from app.services.usage_baseline import compute_daily_usage
 
