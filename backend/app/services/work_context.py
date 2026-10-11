@@ -591,7 +591,7 @@ async def find_last_developer(
     """Find the developer who last submitted the task for review.
 
     Looks for the agent who set in_progress → review (= submitted code)
-    and is NOT the reviewer. This is more reliable than searching for
+    and did not review this card. This is more reliable than searching for
     in_progress events, because reviewer ACKs and multiple dispatch cycles
     also produce in_progress events.
 
@@ -613,7 +613,21 @@ async def find_last_developer(
     reviewer = await find_reviewer(session, task.board_id)
     reviewer_id = reviewer.id if reviewer else None
 
-    # Primary: agent who set in_progress → review (not the reviewer)
+    # Agents that actually reviewed THIS card (left a review comment on it).
+    review_comment_result = await session.exec(
+        select(TaskComment.author_agent_id).where(
+            TaskComment.task_id == task.id,
+            TaskComment.author_type == "agent",
+            TaskComment.comment_type == "review",
+            TaskComment.author_agent_id.is_not(None),  # type: ignore[union-attr]
+        )
+    )
+    reviewed_this_card = set(review_comment_result.all())
+
+    # Primary: agent who set in_progress → review. Submitting a card for
+    # review is what a builder does, so the board's reviewer-role agent
+    # counts here too when it built the card itself; only an agent that
+    # reviewed this very card is skipped.
     result = await session.exec(
         select(ActivityEvent).where(
             ActivityEvent.task_id == task.id,
@@ -626,7 +640,7 @@ async def find_last_developer(
         if (detail.get("new_status") == "review"
                 and detail.get("old_status") == "in_progress"
                 and ev.agent_id
-                and ev.agent_id != reviewer_id):
+                and ev.agent_id not in reviewed_this_card):
             return await session.get(Agent, ev.agent_id)
 
     # Fallback: agent with progress/resolution comments (not the reviewer)

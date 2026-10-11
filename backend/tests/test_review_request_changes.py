@@ -686,3 +686,95 @@ async def test_find_last_developer_falls_back_to_last_dispatch_target(
             found = await find_last_developer(s, t)
 
     assert found is not None and found.id == dev.id
+
+
+@pytest.mark.asyncio
+async def test_request_changes_routes_to_builder_who_holds_board_reviewer_role(
+    fake_redis, make_board, make_task, make_agent,
+):
+    """Live regression: the board's reviewer-role agent also builds cards.
+    It submitted its own card (attributed in_progress → review event), the
+    operator requested changes, and find_last_developer skipped it purely
+    because it holds the board's reviewer role — the rework went to the
+    Board Lead. Whoever submitted the card for review is its builder; only
+    an agent that actually reviewed THIS card is excluded."""
+    from app.models.activity import ActivityEvent
+    from app.models.task import Task
+    from app.services.task_lifecycle import execute_review_decision
+
+    board = await make_board(name="Reviewer Builds Board", slug=f"rb-{uuid.uuid4().hex[:8]}")
+    lead = await make_agent(name="Lead", role="lead", board_id=board.id, is_board_lead=True)
+    builder = await make_agent(name="ReviewerRole", role="reviewer", board_id=board.id,
+                               agent_runtime="host")
+    task = await make_task(
+        board_id=board.id, title="Card built by the reviewer-role agent",
+        status="review", assigned_agent_id=None, human_review_required=True,
+    )
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(ActivityEvent(
+            event_type="task.status_changed", title="status",
+            board_id=board.id, task_id=task.id, agent_id=builder.id,
+            detail={"old_status": "inbox", "new_status": "in_progress"},
+        ))
+        s.add(ActivityEvent(
+            event_type="task.status_changed", title="status",
+            board_id=board.id, task_id=task.id, agent_id=builder.id,
+            detail={"old_status": "in_progress", "new_status": "review"},
+        ))
+        await s.commit()
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        with patch("app.services.task_lifecycle.emit_event", new_callable=AsyncMock), \
+             patch("app.services.dispatch.auto_dispatch_task", new_callable=AsyncMock), \
+             patch("app.services.work_context.find_reviewer",
+                   new=AsyncMock(return_value=builder)):
+            t = await s.get(Task, task.id)
+            await execute_review_decision(
+                s, t, board.id, "request_changes", "one more change",
+                actor_user_id=uuid.uuid4(),
+            )
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        updated = await s.get(Task, task.id)
+        assert updated.assigned_agent_id != lead.id, "rework went to the Board Lead"
+        assert updated.assigned_agent_id == builder.id
+
+
+@pytest.mark.asyncio
+async def test_find_last_developer_skips_submitter_who_reviewed_this_card(
+    fake_redis, make_board, make_task, make_agent,
+):
+    """The submitter signal still excludes an agent that left a review
+    comment on this very card — a reviewer never counts as the builder."""
+    from app.models.activity import ActivityEvent
+    from app.models.task import Task, TaskComment
+    from app.services.work_context import find_last_developer
+
+    board = await make_board(name="Reviewed Card Board", slug=f"rc-{uuid.uuid4().hex[:8]}")
+    reviewer = await make_agent(name="Rev", role="reviewer", board_id=board.id)
+    dev = await make_agent(name="Builder", role="developer", board_id=board.id)
+    task = await make_task(board_id=board.id, title="t", status="review")
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(ActivityEvent(
+            event_type="task.status_changed", title="status",
+            board_id=board.id, task_id=task.id, agent_id=dev.id,
+            detail={"old_status": "in_progress", "new_status": "review"},
+        ))
+        await s.commit()
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(TaskComment(
+            task_id=task.id, author_type="agent", author_agent_id=reviewer.id,
+            comment_type="review", content="needs work",
+        ))
+        s.add(ActivityEvent(
+            event_type="task.status_changed", title="status",
+            board_id=board.id, task_id=task.id, agent_id=reviewer.id,
+            detail={"old_status": "in_progress", "new_status": "review"},
+        ))
+        await s.commit()
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        t = await s.get(Task, task.id)
+        found = await find_last_developer(s, t)
+
+    assert found is not None and found.id == dev.id
