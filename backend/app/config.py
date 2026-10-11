@@ -455,6 +455,10 @@ class Settings(BaseSettings):
     # Prometheus token-counter poller feeding the card's heat strip.
     # 0 = poller disabled (RuntimePulse.start() no-ops).
     runtime_pulse_interval: int = 5
+    # Box token ledger (services/runtime_token_ledger.py): how often the pulse
+    # books the boxes' prompt/cached/generated counter deltas into the
+    # durable hourly table that Insights reads. 0 = ledger off.
+    runtime_token_flush_interval: int = 300
 
     # PR5 kill-switch: when the watcher sees a confirmed outage on a docker
     # engine whose host answers again (box rebooted, container gone), it makes
