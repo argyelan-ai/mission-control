@@ -495,3 +495,72 @@ def test_api_agent_returns_none_without_any_token(mc_mcp_module, monkeypatch):
     monkeypatch.delenv("MC_AGENT_TOKEN", raising=False)
     monkeypatch.delenv("MC_AGENT_ENV_FILE", raising=False)
     assert mc_mcp_module._api_agent("POST", "/agent/x") is None
+
+
+# ── Status changes stay attributed to the agent (live regression) ─────────
+# With an agent token present, a rejected agent-scoped status PATCH (e.g. the
+# dispatch-attempt guard's 409) used to fall back to the operator endpoint
+# with the admin JWT. The status change then landed as changed_by='user',
+# activity event without agent_id — the guard was bypassed and a later
+# "request changes" could no longer find the builder (went to the Board Lead).
+
+def test_mc_patch_task_status_never_falls_back_to_operator_with_agent_token(mc_mcp_module):
+    fake_task_id = "11111111-2222-3333-4444-555555555555"
+    fake_board_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    admin_calls = []
+
+    def fake_api(method, path, **kwargs):
+        admin_calls.append((method, path))
+        return {"id": fake_task_id}
+
+    def fake_api_agent(method, path, **kwargs):
+        return {"error": "HTTP 409: Fehlender X-Dispatch-Attempt-Id Header"}
+
+    with patch.object(mc_mcp_module, "_api", side_effect=fake_api), \
+         patch.object(mc_mcp_module, "_api_agent", side_effect=fake_api_agent):
+        result = _unwrap(mc_mcp_module.mc_patch_task)(
+            fake_task_id, status="review", board_id=fake_board_id
+        )
+    assert not [c for c in admin_calls if c[0] == "PATCH"], (
+        "status PATCH fell back to the operator endpoint despite an agent token"
+    )
+    assert "409" in result
+    assert "Status → review" not in result
+
+
+def test_mc_patch_task_sends_attempt_id_header(mc_mcp_module, monkeypatch):
+    fake_task_id = "11111111-2222-3333-4444-555555555555"
+    fake_board_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    monkeypatch.setenv("MC_AGENT_TOKEN", "tok-agent")
+    seen = []
+
+    class _FakeResp:
+        def raise_for_status(self):
+            pass
+        def json(self):
+            return {"id": fake_task_id, "status": "review"}
+
+    class _FakeClient:
+        def __init__(self, **kw):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def request(self, method, url, headers=None, **kw):
+            seen.append((method, url, dict(headers or {}), kw.get("json")))
+            return _FakeResp()
+
+    monkeypatch.setattr(mc_mcp_module.httpx, "Client", _FakeClient)
+    result = _unwrap(mc_mcp_module.mc_patch_task)(
+        fake_task_id, status="review", board_id=fake_board_id,
+        attempt_id="att-123",
+    )
+    patches = [c for c in seen if c[0] == "PATCH"]
+    assert len(patches) == 1
+    method, url, headers, body = patches[0]
+    assert url.endswith(f"/agent/boards/{fake_board_id}/tasks/{fake_task_id}")
+    assert headers.get("Authorization") == "Bearer tok-agent"
+    assert headers.get("X-Dispatch-Attempt-Id") == "att-123"
+    assert body == {"status": "review"}
+    assert "Status → review" in result
