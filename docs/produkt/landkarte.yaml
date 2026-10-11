@@ -410,6 +410,11 @@ features:
       # harvester; the old cost_events table is only a historical archive,
       # listed under internal).
       - model_usage_events
+      # Box token ledger: the local boxes' own counter deltas per hour
+      # (written by the runtime pulse), shown as box total / via MC /
+      # direct API next to MC's own local tokens.
+      - runtime_token_hours
+      - runtime_token_counters
   - id: F-sessions
     name: "Sessions chat"
     ui: {route: /sessions}

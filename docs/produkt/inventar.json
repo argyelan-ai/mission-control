@@ -629,6 +629,8 @@
     "runtime_hosts",
     "runtime_schedule_runs",
     "runtime_schedules",
+    "runtime_token_counters",
+    "runtime_token_hours",
     "runtimes",
     "scheduled_job_runs",
     "scheduled_jobs",
