@@ -47,6 +47,7 @@ import json
 import logging
 import re
 import time
+from datetime import datetime, timezone
 
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -55,6 +56,7 @@ from app.config import settings
 from app.models.runtime import Runtime
 from app.redis_client import RedisKeys, get_redis
 from app.services.runtime_model_resolver import session_scope
+from app.services.runtime_token_ledger import parse_box_counters, token_ledger
 
 logger = logging.getLogger(__name__)
 
@@ -234,6 +236,7 @@ class RuntimePulse:
 
         engine, value, kind = parsed
         now = time.time()
+        await self._feed_ledger(runtime, engine, resp.text, now)
         if kind == "rate":
             # Already tokens/second (e.g. sglang:gen_throughput, a gauge) —
             # use it as-is, no delta, no counter-sample bookkeeping.
@@ -243,6 +246,19 @@ class RuntimePulse:
             await self._write_sample(redis, host_id, t=now, counter=value, engine=engine)
         await self._push_point(redis, host_id, t=now, tps=tps)
         await self._write_meta(redis, host_id, available=True, last_ok=now, engine=engine)
+
+    async def _feed_ledger(self, runtime: Runtime, engine: str, text: str, now: float) -> None:
+        """Hand the same scrape to the box token ledger (Insights' box totals).
+        Never lets a ledger failure touch the tok/s strip."""
+        try:
+            await token_ledger.observe(
+                runtime.host_id,
+                engine,
+                parse_box_counters(text, engine),
+                datetime.fromtimestamp(now, tz=timezone.utc),
+            )
+        except Exception:  # noqa: BLE001 — the pulse must survive the ledger
+            logger.exception("token ledger booking failed for runtime %s", runtime.slug)
 
     @staticmethod
     def _metrics_url(endpoint: str) -> str:

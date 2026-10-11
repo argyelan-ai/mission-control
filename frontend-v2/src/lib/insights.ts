@@ -18,6 +18,7 @@ export interface UsageByDay {
   generated_at: string;
   start: string;
   tz: string;
+  box_tracking_since?: string | null; // first time a local box was seen
   days: UsageDay[]; // every day of the window, oldest first, today last
 }
 
@@ -151,6 +152,39 @@ export function sourceSplit(week: UsageWeek | undefined, n = 4) {
   return {
     rows,
     rest: others.length ? { count: others.length, cost_usd: restCost, share: restCost / total } : null,
+  };
+}
+
+export interface BoxSplit {
+  total: number; // fresh tokens on the boxes: prompt − cached + generated
+  viaMc: number; // the part MC's own transcripts account for
+  external: number; // the rest: requests straight to a box's API
+  cached: number; // cached prompt tokens, apart from the total
+  viaMcShare: number;
+  externalShare: number;
+  clamped: boolean; // MC counted more than the boxes saw somewhere
+}
+
+/**
+ * A week's box total split into "via MC" and "external" (direct API). Via MC
+ * is box − external, so the two always add up to the box total even when MC
+ * counted more than the box saw. Null before counting started.
+ */
+export function boxSplit(week: UsageWeek | undefined): BoxSplit | null {
+  const box = week?.totals.box;
+  const ext = week?.totals.external;
+  if (!box || !ext) return null;
+  const total = box.fresh_tokens;
+  const external = Math.min(ext.fresh_tokens, total);
+  const viaMc = total - external;
+  return {
+    total,
+    viaMc,
+    external,
+    cached: box.cached_tokens,
+    viaMcShare: total > 0 ? viaMc / total : 0,
+    externalShare: total > 0 ? external / total : 0,
+    clamped: ext.clamped,
   };
 }
 

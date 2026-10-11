@@ -6,6 +6,7 @@
  *   2. When was there work?                                            (heatmap)
  *   3. Where does the usage come from?                                 (sources)
  *   4. Is the local share going the right way?                         (trend)
+ *      How much ran on the local boxes, and how much of it bypassed MC?  (box)
  *   5. What got done?                                                  (done)
  * Everything the old tabs showed lives folded away in "Details".
  * Days and weeks are counted in the browser's time zone.
@@ -21,6 +22,7 @@ import { InsightsHero } from "@/components/insights/InsightsHero";
 import { UsageHeatmap } from "@/components/insights/UsageHeatmap";
 import { SourceSplit } from "@/components/insights/SourceSplit";
 import { LocalShareTrend } from "@/components/insights/LocalShareTrend";
+import { BoxTokens } from "@/components/insights/BoxTokens";
 import { DoneSummary } from "@/components/insights/DoneSummary";
 import { InsightsDetails } from "@/components/insights/InsightsDetails";
 
@@ -84,6 +86,7 @@ export default function InsightsPage() {
             <div className="mt-12 grid grid-cols-1 lg:grid-cols-2 gap-12">
               <SourceSplit week={weeks[weeks.length - 1]} />
               <LocalShareTrend weeks={weeks} />
+              <BoxTokens week={weeks[weeks.length - 1]} since={byWeek.data.box_tracking_since} />
             </div>
           </>
         )}

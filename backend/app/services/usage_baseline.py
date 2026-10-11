@@ -31,6 +31,23 @@ SQLite and Postgres and survives the DST switch. Zones with a 30/45-minute
 offset get their day boundary to the hour. ``compute_daily_usage`` (the
 Insights heatmap) and ``compute_weekly_baseline`` share this query, so a day
 and its week never disagree.
+
+Box totals: next to MC's own numbers every day and every week's totals carry
+what the local boxes themselves counted (``runtime_token_hours``, booked by
+services/runtime_token_ledger.py from the engines' Prometheus counters):
+
+  box           prompt / cached / generated on all boxes; ``fresh_tokens`` =
+                prompt − cached + generated (cached prompt tokens are reused,
+                not recomputed, so they stay out of the headline).
+  via_mc_local  the same three from MC's local rows: prompt = input + cache
+                read + cache write, cached = cache read, generated = output.
+                Only rows from the hour the first box was seen on count.
+  external      box − via_mc_local per field — requests sent straight to a
+                box's API from another machine. Never negative: when MC
+                counted more than the box saw, it is 0 and ``clamped`` is true.
+
+All three are None for a day/week that ended before the first box was seen
+(``box_tracking_since``): counting starts there, there is no history before.
 """
 
 from datetime import date, datetime, timedelta, timezone
@@ -43,6 +60,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.models.agent import Agent
 from app.models.model_usage import ModelUsageEvent
 from app.models.runtime import Runtime
+from app.models.runtime_token import RuntimeTokenCounter, RuntimeTokenHour
 from app.services.token_harvester import _host_home, _slugify_agent_name
 from app.services.transcript_chat import encode_cwd
 from app.utils import ensure_aware, utcnow
@@ -118,12 +136,61 @@ def _hour_bucket(session: AsyncSession):
     return func.strftime("%Y-%m-%d %H:00:00", ModelUsageEvent.ts).label("hour")
 
 
-def _hour_to_day(hour, tzinfo) -> date:
+def _hour_at(hour) -> datetime:
     if isinstance(hour, datetime):
-        at = ensure_aware(hour)
-    else:
-        at = datetime.fromisoformat(str(hour)[:19]).replace(tzinfo=timezone.utc)
-    return at.astimezone(tzinfo).date()
+        return ensure_aware(hour)
+    return datetime.fromisoformat(str(hour)[:19]).replace(tzinfo=timezone.utc)
+
+
+def _hour_to_day(hour, tzinfo) -> date:
+    return _hour_at(hour).astimezone(tzinfo).date()
+
+
+# ── Box totals (see module docstring) ──────────────────────────────────────
+
+_BOX_FIELDS = ("prompt_tokens", "cached_tokens", "generated_tokens")
+
+
+def _box_zero() -> dict:
+    return {f: 0 for f in _BOX_FIELDS}
+
+
+async def _box_since(session: AsyncSession) -> datetime | None:
+    first = (await session.exec(select(func.min(RuntimeTokenCounter.first_seen_at)))).first()
+    return ensure_aware(first) if first is not None else None
+
+
+async def _box_by_day(session: AsyncSession, start: datetime, tzinfo) -> dict[date, dict]:
+    out: dict[date, dict] = {}
+    rows = (await session.exec(select(RuntimeTokenHour).where(RuntimeTokenHour.hour >= start))).all()
+    for row in rows:
+        bucket = out.setdefault(_hour_to_day(row.hour, tzinfo), _box_zero())
+        for f in _BOX_FIELDS:
+            bucket[f] += int(getattr(row, f) or 0)
+    return out
+
+
+def _mc_local_add(bucket: dict, tokens: dict) -> None:
+    bucket["prompt_tokens"] += tokens["input_tokens"] + tokens["cache_read_tokens"] + tokens["cache_write_tokens"]
+    bucket["cached_tokens"] += tokens["cache_read_tokens"]
+    bucket["generated_tokens"] += tokens["output_tokens"]
+
+
+def _with_fresh(b: dict) -> dict:
+    return {**b, "fresh_tokens": max(0, b["prompt_tokens"] - b["cached_tokens"]) + b["generated_tokens"]}
+
+
+def box_view(box: dict | None, mc: dict | None) -> dict:
+    """``{box, via_mc_local, external}`` for one day or week; all None while
+    the bucket lies before the first box was seen (``box`` is None)."""
+    if box is None:
+        return {"box": None, "via_mc_local": None, "external": None}
+    box = _with_fresh(box)
+    mc = _with_fresh(mc or _box_zero())
+    fields = (*_BOX_FIELDS, "fresh_tokens")
+    external = {f: max(0, box[f] - mc[f]) for f in fields}
+    external["clamped"] = any(box[f] < mc[f] for f in fields)
+    return {"box": box, "via_mc_local": mc, "external": external}
 
 
 async def _classified(session: AsyncSession, start: datetime, tzinfo,
@@ -202,6 +269,15 @@ async def _classified(session: AsyncSession, start: datetime, tzinfo,
     return out
 
 
+def _counts_against_box(r, local: bool, since_hour: datetime | None) -> bool:
+    """A local row from the hour the first box was seen on, or later."""
+    return local and since_hour is not None and _hour_at(r.hour) >= since_hour
+
+
+def _floor_hour(at: datetime | None) -> datetime | None:
+    return at.replace(minute=0, second=0, microsecond=0) if at is not None else None
+
+
 def _add(bucket: dict, local: bool, tokens: dict, r) -> None:
     total = sum(tokens.values())
     generated = tokens["input_tokens"] + tokens["output_tokens"]
@@ -243,20 +319,39 @@ async def compute_weekly_baseline(
                             "partial": m == mondays[-1], "totals": _empty(), "sources": {}}
         for m in mondays
     }
+    since = await _box_since(session)
+    since_hour = _floor_hour(since)
+    mc_local = {label: _box_zero() for label in weeks_out}
     for day, source, local, tokens, r in await _classified(session, start, tzinfo, harvested_before):
-        week = weeks_out.get(iso_week_label(day))
+        label = iso_week_label(day)
+        week = weeks_out.get(label)
         if week is None:
             continue
         for bucket in (week["totals"], week["sources"].setdefault(source, _empty())):
             _add(bucket, local, tokens, r)
+        if _counts_against_box(r, local, since_hour):
+            _mc_local_add(mc_local[label], tokens)
 
+    box_days = await _box_by_day(session, start, tzinfo) if since is not None else {}
+    since_day = since.astimezone(tzinfo).date() if since is not None else None
     result_weeks = []
-    for week in weeks_out.values():
+    for m in mondays:
+        label = iso_week_label(m)
+        week = weeks_out[label]
         sources = [{"source": name, **_finish(b)} for name, b in week["sources"].items()]
         sources.sort(key=lambda s: (s["cost_usd"], s["total_tokens"]), reverse=True)
-        result_weeks.append({**week, "totals": _finish(week["totals"]), "sources": sources})
+        box = None
+        if since_day is not None and m + timedelta(days=6) >= since_day:
+            box = _box_zero()
+            for d, b in box_days.items():
+                if m <= d <= m + timedelta(days=6):
+                    for f in _BOX_FIELDS:
+                        box[f] += b[f]
+        totals = {**_finish(week["totals"]), **box_view(box, mc_local[label])}
+        result_weeks.append({**week, "totals": totals, "sources": sources})
 
     return {"generated_at": now.isoformat(), "start": start.isoformat(), "tz": tz or "UTC",
+            "box_tracking_since": since.isoformat() if since is not None else None,
             "weeks": result_weeks}
 
 
@@ -279,20 +374,31 @@ async def compute_daily_usage(
 
     buckets = {first + timedelta(days=i): _empty() for i in range(days)}
     per_source: dict[date, dict[str, int]] = {}
-    for day, source, local, tokens, r in await _classified(
-        session, _local_midnight(first, tzinfo), tzinfo, None
-    ):
+    since = await _box_since(session)
+    since_hour = _floor_hour(since)
+    mc_local = {d: _box_zero() for d in buckets}
+    start = _local_midnight(first, tzinfo)
+    for day, source, local, tokens, r in await _classified(session, start, tzinfo, None):
         bucket = buckets.get(day)
         if bucket is None:
             continue
         _add(bucket, local, tokens, r)
         by_source = per_source.setdefault(day, {})
         by_source[source] = by_source.get(source, 0) + tokens["input_tokens"] + tokens["output_tokens"]
+        if _counts_against_box(r, local, since_hour):
+            _mc_local_add(mc_local[day], tokens)
 
+    box_days = await _box_by_day(session, start, tzinfo) if since is not None else {}
+    since_day = since.astimezone(tzinfo).date() if since is not None else None
     out = []
     for day, bucket in buckets.items():
         sources = per_source.get(day)
         top = max(sources.items(), key=lambda kv: kv[1])[0] if sources else None
-        out.append({"date": day.isoformat(), **_finish(bucket), "top_source": top})
+        box = None
+        if since_day is not None and day >= since_day:
+            box = box_days.get(day, _box_zero())
+        out.append({"date": day.isoformat(), **_finish(bucket), "top_source": top,
+                    **box_view(box, mc_local[day])})
     return {"generated_at": now.isoformat(), "start": first.isoformat(), "tz": tz or "UTC",
+            "box_tracking_since": since.isoformat() if since is not None else None,
             "days": out}

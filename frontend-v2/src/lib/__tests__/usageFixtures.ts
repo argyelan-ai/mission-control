@@ -92,3 +92,15 @@ export function mkUsageByDay(): UsageByDay {
   }
   return { generated_at: "2026-09-30T09:00:00Z", start: days[0].date, tz: "Europe/Zurich", days };
 }
+
+/** A week's box block (local boxes' own counters) — made-up numbers. */
+export function mkBox(boxFresh = 1_200_000, mcFresh = 480_000, cached = 14_800_000, clamped = false) {
+  const box = { prompt_tokens: cached + 900_000, cached_tokens: cached, generated_tokens: boxFresh - 900_000, fresh_tokens: boxFresh };
+  const via = { prompt_tokens: 0, cached_tokens: 0, generated_tokens: 0, fresh_tokens: mcFresh };
+  const ext = Math.max(0, boxFresh - mcFresh);
+  return {
+    box,
+    via_mc_local: via,
+    external: { prompt_tokens: 0, cached_tokens: 0, generated_tokens: 0, fresh_tokens: ext, clamped },
+  };
+}

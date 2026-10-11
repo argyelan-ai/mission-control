@@ -19,6 +19,19 @@ export interface UsageTotals {
   local_output_tokens: number;
   local_share: number | null;
   local_output_share: number | null;
+  // Local boxes' own counters (by-day days and by-week totals only; null
+  // before the first box was seen). See backend usage_baseline.box_view.
+  box?: BoxTokens | null;
+  via_mc_local?: BoxTokens | null;
+  external?: (BoxTokens & { clamped: boolean }) | null;
+}
+
+/** Prompt includes cached; fresh = prompt − cached + generated. */
+export interface BoxTokens {
+  prompt_tokens: number;
+  cached_tokens: number;
+  generated_tokens: number;
+  fresh_tokens: number;
 }
 
 export interface UsageSource extends UsageTotals {
@@ -37,6 +50,7 @@ export interface UsageByWeek {
   generated_at: string;
   start: string;
   tz?: string; // IANA zone the weeks were counted in
+  box_tracking_since?: string | null; // first time a local box was seen
   weeks: UsageWeek[];
 }
 

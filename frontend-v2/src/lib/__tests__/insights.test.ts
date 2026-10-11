@@ -7,8 +7,9 @@ import {
   weekSoFar,
   fullWeeks,
   shiftDay,
+  boxSplit,
 } from "../insights";
-import { mkUsageByDay, mkDay, mkUsageByWeek, mkSource, mkUsageWeek } from "./usageFixtures";
+import { mkUsageByDay, mkDay, mkUsageByWeek, mkSource, mkUsageWeek, mkBox } from "./usageFixtures";
 
 describe("heatLevels", () => {
   it("gives 0 to empty days and splits the rest into four equal groups", () => {
@@ -113,5 +114,31 @@ describe("shiftDay", () => {
     expect(shiftDay(days, "2026-09-29", 1)).toBe("2026-09-30");
     expect(shiftDay(days, "2026-09-30", 1)).toBe("2026-09-30");
     expect(shiftDay(days, days[0].date, -1)).toBe(days[0].date);
+  });
+});
+
+describe("boxSplit", () => {
+  it("splits the box total into via MC and external, cached apart", () => {
+    const week = mkUsageWeek({ totals: { ...mkUsageWeek().totals, ...mkBox(1_200_000, 480_000, 14_800_000) } });
+    const s = boxSplit(week)!;
+    expect(s.total).toBe(1_200_000);
+    expect(s.viaMc).toBe(480_000);
+    expect(s.external).toBe(720_000);
+    expect(s.cached).toBe(14_800_000);
+    expect(s.externalShare).toBeCloseTo(0.6);
+    expect(s.clamped).toBe(false);
+  });
+
+  it("via MC never exceeds the box total when MC counted more", () => {
+    const week = mkUsageWeek({ totals: { ...mkUsageWeek().totals, ...mkBox(100, 500, 0, true) } });
+    const s = boxSplit(week)!;
+    expect(s.viaMc).toBe(100);
+    expect(s.external).toBe(0);
+    expect(s.clamped).toBe(true);
+  });
+
+  it("is null before counting started", () => {
+    expect(boxSplit(mkUsageWeek())).toBeNull();
+    expect(boxSplit(undefined)).toBeNull();
   });
 });
