@@ -613,7 +613,16 @@ async def find_last_developer(
     reviewer = await find_reviewer(session, task.board_id)
     reviewer_id = reviewer.id if reviewer else None
 
-    # Agents that actually reviewed THIS card (left a review comment on it).
+    # Agents that reviewed THIS card: received its review handoff or left a
+    # review comment on it. A reviewer also moves a card in_progress → review
+    # while reviewing it, so those moves must not count as building.
+    handoff_result = await session.exec(
+        select(ActivityEvent.agent_id).where(
+            ActivityEvent.task_id == task.id,
+            ActivityEvent.event_type == "task.review_handoff",
+            ActivityEvent.agent_id.is_not(None),  # type: ignore[union-attr]
+        )
+    )
     review_comment_result = await session.exec(
         select(TaskComment.author_agent_id).where(
             TaskComment.task_id == task.id,
@@ -622,12 +631,11 @@ async def find_last_developer(
             TaskComment.author_agent_id.is_not(None),  # type: ignore[union-attr]
         )
     )
-    reviewed_this_card = set(review_comment_result.all())
+    reviewed_this_card = set(handoff_result.all()) | set(review_comment_result.all())
 
-    # Primary: agent who set in_progress → review. Submitting a card for
-    # review is what a builder does, so the board's reviewer-role agent
-    # counts here too when it built the card itself; only an agent that
-    # reviewed this very card is skipped.
+    # Primary: agent who set in_progress → review. The board's reviewer-role
+    # agent counts here too when it built the card itself (it never got this
+    # card's review handoff); only an agent that reviewed this card is skipped.
     result = await session.exec(
         select(ActivityEvent).where(
             ActivityEvent.task_id == task.id,

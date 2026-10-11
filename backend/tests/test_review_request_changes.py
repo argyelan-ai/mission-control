@@ -778,3 +778,47 @@ async def test_find_last_developer_skips_submitter_who_reviewed_this_card(
         found = await find_last_developer(s, t)
 
     assert found is not None and found.id == dev.id
+
+
+@pytest.mark.asyncio
+async def test_find_last_developer_ignores_reviewer_resubmit_during_review(
+    fake_redis, make_board, make_task, make_agent,
+):
+    """Live history: the builder submits, the card is handed to the reviewer,
+    and the reviewer itself moves it in_progress → review while reviewing
+    (no review comment). The latest submit is the reviewer's — the builder
+    must still be found, never the reviewer."""
+    from app.models.activity import ActivityEvent
+    from app.models.task import Task
+    from app.services.work_context import find_last_developer
+
+    board = await make_board(name="Resubmit Board", slug=f"rs-{uuid.uuid4().hex[:8]}")
+    reviewer = await make_agent(name="Rev", role="reviewer", board_id=board.id)
+    dev = await make_agent(name="Builder", role="developer", board_id=board.id)
+    task = await make_task(board_id=board.id, title="t", status="review")
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(ActivityEvent(
+            event_type="task.status_changed", title="status",
+            board_id=board.id, task_id=task.id, agent_id=dev.id,
+            detail={"old_status": "in_progress", "new_status": "review"},
+        ))
+        await s.commit()
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(ActivityEvent(
+            event_type="task.review_handoff", title="handoff",
+            board_id=board.id, task_id=task.id, agent_id=reviewer.id,
+        ))
+        await s.commit()
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(ActivityEvent(
+            event_type="task.status_changed", title="status",
+            board_id=board.id, task_id=task.id, agent_id=reviewer.id,
+            detail={"old_status": "in_progress", "new_status": "review"},
+        ))
+        await s.commit()
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        t = await s.get(Task, task.id)
+        found = await find_last_developer(s, t)
+
+    assert found is not None and found.id == dev.id
