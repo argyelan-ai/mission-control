@@ -344,6 +344,106 @@ class BossDeliveryError(Exception):
     was the bug this replaces."""
 
 
+class InstallCommandBlockedError(Exception):
+    """Operator rule (12.10.2026): installing plugins/skills/MCP servers from
+    the phone/chat only via an approval card — that card flow does not exist
+    yet. Until it does, ``send_text`` refuses any message whose first slash
+    command is an install/modify verb for plugins, marketplaces, MCP servers
+    or skills, across every harness and every runtime (docker TUI, Boss,
+    headless ACP all funnel through this one function). The router turns
+    this into 409 ``{"reason": "install_blocked", "command": str}``.
+
+    Read-only variants (list, search, help, discover, installed, status, a
+    bare ``/mcp``/``/marketplace``/.../) are NOT blocked — see
+    ``_blocked_install_command``'s verb tables, derived live from omp's ACP
+    builtins and Claude Code's own CLI strings (not guessed).
+
+    This does NOT stop an agent from running e.g. ``omp plugin install`` in
+    its own shell once a message reaches it — that is a separate permission-
+    mode gap, out of scope here (see the PR this class shipped with)."""
+
+    def __init__(self, command: str):
+        super().__init__(command)
+        self.command = command
+
+
+# Verbs that change what is installed/enabled — blocked. Everything else for
+# the same command name (list, search, help, discover, installed, status, a
+# bare command with no verb at all) stays allowed: it cannot install or
+# modify anything, so the approval-card gap this guard exists for does not
+# apply to it.
+#
+# Source (live, not guessed — 12.10.2026):
+# - omp (oh-my-pi) ACP builtins: ``packages/coding-agent/src/slash-commands/
+#   builtin-marketplace.ts`` (``/marketplace``'s own add/remove/rm/install/
+#   uninstall/upgrade subcommands; ``/plugins``, aliased ``/plugin``,
+#   enable/disable) and ``builtin-session.ts`` (``/mcp``'s add/remove/enable/
+#   disable) — ``update``/``test``/``reconnect``/``reload``/``resources``/
+#   ``prompts``/``notifications``/``smithery-*``/``help`` stay allowed.
+# - omp skillshare: ``builtin-skills.ts`` (``/skills``'s install/update;
+#   search/installed/help stay allowed). Note: ``/skills`` has no ACP
+#   ``handle`` (TUI-only in omp today), so this entry is forward-looking —
+#   it costs nothing to block now and saves a second incident if omp ever
+#   wires it to ACP chat.
+# - Claude Code's own CLI (``strings`` on the 2.1.295 binary): ``/plugin
+#   install|enable|disable``, ``/plugin marketplace add|remove`` (Claude Code
+#   nests marketplace management one level under ``/plugin`` rather than as
+#   its own top-level command like omp). ``/plugin marketplace update``,
+#   ``/plugin list``, ``/plugin directory``, ``/plugin validate``, ``/plugin
+#   tag`` are not installs and stay allowed. Claude Code's own ``/mcp`` has
+#   no slash-form add/remove at all (``Usage: /mcp [reconnect|enable|disable
+#   [<server>|all]]`` — add/remove is ``claude mcp add`` on the host shell,
+#   outside chat text entirely); its enable/disable still toggles an MCP
+#   server's active set, so it is blocked here too.
+_BLOCKED_INSTALL_VERBS: dict[str, frozenset[str]] = {
+    "marketplace": frozenset({"add", "remove", "rm", "install", "uninstall", "upgrade"}),
+    "plugin": frozenset({"install", "enable", "disable"}),
+    "plugins": frozenset({"enable", "disable"}),
+    "mcp": frozenset({"add", "remove", "enable", "disable"}),
+    "skills": frozenset({"install", "update"}),
+}
+
+# ``/plugin marketplace <verb>`` — same blocked verbs as top-level
+# ``/marketplace`` (see table above), just nested one token deeper the way
+# Claude Code's own CLI structures it.
+_PLUGIN_MARKETPLACE_BLOCKED_VERBS = _BLOCKED_INSTALL_VERBS["marketplace"]
+
+# Bare ``/install`` is not a real builtin in any onboarded harness today, but
+# it is an obvious phrasing an operator-mobile message could use — refused
+# outright rather than silently forwarded as a prompt no harness recognizes.
+_BARE_BLOCKED_COMMANDS = frozenset({"install"})
+
+
+def _blocked_install_command(text: str) -> str | None:
+    """Returns the exact command text to refuse (e.g. ``"/marketplace
+    install"``), or ``None`` when ``text`` is not a blocked install/modify
+    slash command.
+
+    Only the message's FIRST token is ever a command to any harness's own
+    parser — a slash command mentioned later in a longer message, or on a
+    later line, is plain prose as far as every onboarded CLI is concerned,
+    so it is not inspected here."""
+    stripped = text.strip()
+    if not stripped.startswith("/"):
+        return None
+    tokens = stripped.split()
+    head = tokens[0][1:].lower()
+    if head in _BARE_BLOCKED_COMMANDS:
+        return f"/{head}"
+    if head == "plugin" and len(tokens) >= 2 and tokens[1].lower() == "marketplace":
+        verb = tokens[2].lower() if len(tokens) >= 3 else ""
+        if verb in _PLUGIN_MARKETPLACE_BLOCKED_VERBS:
+            return f"/{head} marketplace {verb}"
+        return None
+    blocked_verbs = _BLOCKED_INSTALL_VERBS.get(head)
+    if blocked_verbs is None:
+        return None
+    verb = tokens[1].lower() if len(tokens) >= 2 else ""
+    if verb in blocked_verbs:
+        return f"/{head} {verb}"
+    return None
+
+
 class AcpChatRefusedError(Exception):
     """Der Chat-Daemon eines kopflosen Agenten hat abgelehnt, OHNE die Absage
     selbst als Karte in den Chat zu schreiben (z. B. ``bad_mode``). Sie muss
@@ -691,6 +791,14 @@ async def send_text(agent, text: str) -> None:
     ``{"reason":"agent_starting"}``) — never type into a half-booted TUI or
     a plain shell prompt left behind by a mid-respawn container. (3) only
     then the actual keystrokes."""
+    blocked = _blocked_install_command(text)
+    if blocked is not None:
+        # Checked before ANY harness-specific dispatch (ACP/docker/Boss) —
+        # the one property that makes this guard harness-neutral: nothing
+        # below this line has run yet, so no pane was touched, no recycler
+        # marker refreshed, no ACP prompt sent.
+        raise InstallCommandBlockedError(blocked)
+
     kind = _target_kind(agent)
     slug = agent.slug
 
@@ -1862,11 +1970,36 @@ async def _discover_skill_commands(slug: str) -> list[dict[str, str | None]]:
     return discovered
 
 
+# Top-level command names hidden from the slash picker entirely because they
+# CAN be used to install/modify something (even though some of their own
+# subcommands are read-only — the picker only knows the command name, not
+# the subcommand the operator is about to type, so a per-subcommand toggle
+# isn't possible here the way ``_blocked_install_command`` does it for the
+# actual guard). Same operator rule as ``InstallCommandBlockedError``: no
+# approval-card flow exists yet, so these stay out of the autocomplete list
+# until it does. Typing the read-only form by hand (``/marketplace list``)
+# still works — ``send_text``'s guard allows it; only the picker suggestion
+# is gone.
+_PICKER_HIDDEN_COMMAND_NAMES: frozenset[str] = frozenset(
+    _BLOCKED_INSTALL_VERBS.keys() | _BARE_BLOCKED_COMMANDS
+)
+
+
+def _hide_install_capable_commands(
+    commands: list[dict[str, str | None]],
+) -> list[dict[str, str | None]]:
+    return [c for c in commands if c.get("name", "").lower() not in _PICKER_HIDDEN_COMMAND_NAMES]
+
+
 async def slash_command_capabilities(agent) -> dict[str, object]:
     """``{"slashCommands": [{"name": str, "description": str|None}, ...]}``
     — builtins merged with this agent's installed skills. Docker/cli-bridge
     only: every other runtime gets builtins alone (no ``claude-config``
-    mount to scan for skills)."""
+    mount to scan for skills). Install-capable commands (``/marketplace``,
+    ``/plugin(s)``, ``/mcp``, ``/skills``, ``/install``) are filtered out of
+    this list entirely by ``_hide_install_capable_commands`` — see its
+    docstring; they are still refused if typed by hand, by ``send_text``'s
+    own guard."""
     if headless_chat_kind(agent) is not None:
         # Kopflos: die Liste kommt vom Agenten selbst
         # (``available_commands_update`` ueber ACP, vom Daemon in die
@@ -1883,7 +2016,7 @@ async def slash_command_capabilities(agent) -> dict[str, object]:
             for name, description in _ACP_SESSION_RESET_COMMANDS.items()
             if name not in offered
         ]
-        return {"slashCommands": commands}
+        return {"slashCommands": _hide_install_capable_commands(commands)}
 
     # Die Builtins sind CLI-Vokabular und pro Harness verschieden. Fuer eine
     # fremde CLI ohne aufgenommene Liste (kimi) waeren sie falsche
@@ -1901,7 +2034,7 @@ async def slash_command_capabilities(agent) -> dict[str, object]:
     if runtime == "cli-bridge" and slug and harness in _HARNESSES_WITH_CLAUDE_CONFIG_SKILLS:
         commands = commands + await _discover_skill_commands(slug)
 
-    return {"slashCommands": commands}
+    return {"slashCommands": _hide_install_capable_commands(commands)}
 
 
 # Aliasse, die Claude Code annimmt, aber im /model-Picker VERSCHWEIGT, bis sie

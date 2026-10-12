@@ -505,6 +505,17 @@ export function isAgentStartingError(err: unknown): boolean {
   return err instanceof Error && err.message.includes("agent_starting");
 }
 
+/** 409 from `/chat/input` when the message's first slash command would
+ *  install/modify a plugin, marketplace, MCP server or skill. Operator rule
+ *  (decided 12.10.2026): that needs an approval card from the phone/chat,
+ *  and the card flow does not exist yet — so chat refuses it outright
+ *  rather than letting the agent's own CLI act on it unsupervised. Not a
+ *  bug, but a real refusal: the echo is withdrawn and the operator is told
+ *  why, same as any other rejected send. */
+export function isInstallBlockedError(err: unknown): boolean {
+  return err instanceof Error && err.message.includes("install_blocked");
+}
+
 /** 409 from `/chat/effort` when the CLI itself said no and explained why.
  *  Distinct from `effort_switch_failed` (which means "we could not verify it"):
  *  here the outcome is known and there is a real reason to pass on. */

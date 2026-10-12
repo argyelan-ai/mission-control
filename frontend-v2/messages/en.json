@@ -966,6 +966,7 @@
     "noMessagesYet": "No messages yet",
     "noMessagesHint": "Write the first message to {name} below — or open the terminal to see the raw session.",
     "sendFailed": "Send failed",
+    "installBlocked": "Installs need an approval card — not available from chat yet.",
     "stopActionFailed": "Stop failed",
     "answerFailed": "Answer failed",
     "options": "Options",
