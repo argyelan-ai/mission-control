@@ -13,6 +13,8 @@ import type {
   StateEvent,
   TimelineChatEvent,
   TodoEvent,
+  ToolEvent,
+  ToolOutputEvent,
   UsageEvent,
 } from "@/lib/chatTypes";
 
@@ -260,10 +262,34 @@ export interface ChatReducerState {
    *  the backend). Its own slot, never the timeline: a snapshot replaces the
    *  one before it. */
   todos: TodoEvent | null;
+  /** Live output of RUNNING tools, by `toolUseId` (ACP only so far). Its own
+   *  slot like `preview`: the tool's result ends an entry, a resting agent or
+   *  a new session clears all of them. Replaced as a whole object on every
+   *  change, so consumers can select by identity. */
+  toolOutputs: Record<string, ToolOutputEvent>;
 }
 
+const NO_TOOL_OUTPUTS: Record<string, ToolOutputEvent> = {};
+
 export function createInitialChatState(): ChatReducerState {
-  return { events: [], index: new Map(), state: null, usage: null, preview: null, sessionChangedAt: 0, todos: null };
+  return {
+    events: [], index: new Map(), state: null, usage: null, preview: null,
+    sessionChangedAt: 0, todos: null, toolOutputs: NO_TOOL_OUTPUTS,
+  };
+}
+
+/** The tool event this live output belongs to, if it is already known. */
+function toolFor(state: ChatReducerState, toolUseId: string): ToolEvent | null {
+  const i = state.index.get(`tool:${toolUseId}`);
+  const ev = i === undefined ? undefined : state.events[i];
+  return ev && ev.kind === "tool" ? ev : null;
+}
+
+function withoutToolOutput(state: ChatReducerState, toolUseId: string | null): ChatReducerState {
+  if (!toolUseId || !(toolUseId in state.toolOutputs)) return state;
+  const next = { ...state.toolOutputs };
+  delete next[toolUseId];
+  return { ...state, toolOutputs: next };
 }
 
 /**
@@ -332,9 +358,19 @@ export function chatReducer(state: ChatReducerState, event: ChatEvent): ChatRedu
         ...state,
         state: event,
         preview: event.status === "idle" ? null : state.preview,
+        toolOutputs: event.status === "idle" ? NO_TOOL_OUTPUTS : state.toolOutputs,
       };
     case "preview":
       return { ...state, preview: event };
+    case "tool_output": {
+      /* Die Ausgabe-Datei und das Transkript sind zwei Dateien ohne
+         gemeinsame Reihenfolge: ein Schnappschuss kann NACH dem Ergebnis
+         eintreffen. Ein fertiges Werkzeug bekommt dann keine Live-Ausgabe
+         mehr — das Ergebnis ist die Wahrheit. */
+      const owner = toolFor(state, event.toolUseId);
+      if (owner && owner.result != null) return state;
+      return { ...state, toolOutputs: { ...state.toolOutputs, [event.toolUseId]: event } };
+    }
     case "usage":
       return { ...state, usage: event };
     case "todo":
@@ -359,6 +395,7 @@ export function chatReducer(state: ChatReducerState, event: ChatEvent): ChatRedu
         usage: null,
         preview: null,
         todos: null,
+        toolOutputs: NO_TOOL_OUTPUTS,
         sessionChangedAt: state.sessionChangedAt + 1,
       };
     case "message":
@@ -370,6 +407,12 @@ export function chatReducer(state: ChatReducerState, event: ChatEvent): ChatRedu
         event,
       );
     case "tool":
+      /* Sein Ergebnis beendet die Live-Ausgabe (die Karte zeigt ab jetzt
+         das Ergebnis selbst). */
+      return pushOrReplace(
+        event.result != null ? withoutToolOutput(state, event.toolUseId) : state,
+        event,
+      );
     case "thinking":
     case "command":
     case "notification":
@@ -490,6 +533,8 @@ export interface UseChatStreamResult {
   /** The agent's newest todo snapshot, or `null` (none written yet, an older
    *  backend, or a fresh session). */
   todos: TodoEvent | null;
+  /** Live output of running tools by `toolUseId` — see ChatReducerState. */
+  toolOutputs: Record<string, ToolOutputEvent>;
 }
 
 /**
@@ -523,7 +568,7 @@ export function useChatStream(agentId: string | null, enabled = true): UseChatSt
      `seedSequence`. */
   /* Preview-Zeilen warten hier jetzt MIT (ruhiger Erst-Aufbau) — darum
      breiter als TimelineChatEvent. */
-  const liveBufferRef = useRef<(TimelineChatEvent | PreviewEvent)[]>([]);
+  const liveBufferRef = useRef<(TimelineChatEvent | PreviewEvent | ToolOutputEvent)[]>([]);
   /* Laufende Wiederhol-Timer (agent_starting), damit sie beim Verlassen
      sterben statt an den vorigen Agenten zu senden. */
   const retryTimersRef = useRef<Set<number>>(new Set());
@@ -736,7 +781,9 @@ export function useChatStream(agentId: string | null, enabled = true): UseChatSt
          springen — das "flackert extrem" beim Oeffnen (Mark, 14.09.2026).
          Nach dem Seed entscheidet seedSequence, welche davon ueberhaupt noch
          leben (die letzte Antwort ist dann schon als message da). */
-      if ((isTimeline || ev.kind === "preview") && !hasSeededRef.current) {
+      /* Live-Werkzeugausgabe wartet ebenso: erst mit der Historie weiss der
+         Reducer, ob ihr Werkzeug schon fertig ist (dann ist sie veraltet). */
+      if ((isTimeline || ev.kind === "preview" || ev.kind === "tool_output") && !hasSeededRef.current) {
         liveBufferRef.current.push(ev);
       } else {
         dispatch(ev);
@@ -774,7 +821,10 @@ export function useChatStream(agentId: string | null, enabled = true): UseChatSt
       }
       // Any sign the agent processed the turn ends the "Gesendet…" line. A
       // `usage` frame alone doesn't count — it can arrive for the previous turn.
-      if (ev.kind === "state" || ev.kind === "tool" || ev.kind === "thinking" || ev.kind === "message" || ev.kind === "preview") {
+      if (
+        ev.kind === "state" || ev.kind === "tool" || ev.kind === "thinking" ||
+        ev.kind === "message" || ev.kind === "preview" || ev.kind === "tool_output"
+      ) {
         setAwaitingResponse(false);
       }
       if (ev.kind === "session_changed") {
@@ -828,5 +878,6 @@ export function useChatStream(agentId: string | null, enabled = true): UseChatSt
     awaitingResponse,
     preview: chatState.preview,
     todos: chatState.todos,
+    toolOutputs: chatState.toolOutputs,
   };
 }

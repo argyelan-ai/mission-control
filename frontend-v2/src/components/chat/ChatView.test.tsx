@@ -210,6 +210,7 @@ function mkAgent(overrides: Partial<AgentWithState> = {}): AgentWithState {
 function mkStream(overrides: Partial<UseChatStreamResult> = {}): UseChatStreamResult {
   return {
     events: [],
+    toolOutputs: {},
     subagentRuns: [],
     state: null,
     usage: null,

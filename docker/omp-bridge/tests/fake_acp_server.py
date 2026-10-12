@@ -81,18 +81,27 @@ def replay(msgs_in: list, fin, fout, *, sink: list | None = None, delay_s: float
                 ev.set()
                 continue
             if "method" in msg and "id" in msg:
-                i = _cursor[0]
+                with _lock:
+                    i = _cursor[0]
+                    _cursor[0] += 1
                 # Wait until the walk emitted everything before this reply's
                 # transcript position (bounded — a stalled walk must not hang
-                # the client past its own request timeout).
+                # the client past its own request timeout). The wait runs on
+                # its OWN thread: blocking this reader here deadlocked a
+                # fixture whose walk sends a server->client request (e.g.
+                # fs/write_text_file) mid-turn — the walk waited for the
+                # client's answer, which this reader could no longer read
+                # while it waited for the walk (P1 fixture, 1 in ~20 runs).
                 want = _reply_positions.get(i, 0)
-                _deadline = time.time() + 30
-                while _walk_at[0] < want and time.time() < _deadline:
-                    time.sleep(0.005)
-                with _lock:
-                    _cursor[0] += 1
-                if i < len(_replies):
-                    _send(_replies[i])
+
+                def _gated_reply(i=i, want=want):
+                    _deadline = time.time() + 30
+                    while _walk_at[0] < want and time.time() < _deadline:
+                        time.sleep(0.005)
+                    if i < len(_replies):
+                        _send(_replies[i])
+
+                threading.Thread(target=_gated_reply, daemon=True).start()
 
     rt = threading.Thread(target=_reader, daemon=True)
     rt.start()

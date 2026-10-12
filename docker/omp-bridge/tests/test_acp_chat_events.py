@@ -194,19 +194,26 @@ def test_failed_tool_call_marks_error():
 
 
 def test_interim_update_produces_no_result_line():
-    """in_progress updates must not spam result lines — the card exists, the
-    output would overwrite itself repeatedly."""
+    """in_progress updates must not spam result lines into the TRANSCRIPT —
+    the card exists, a permanent line per snapshot would grow the file and
+    settle the card early. Since chat package P1 the running output travels
+    as ONE volatile ``acp-tool-output`` line (preview channel only): nothing
+    permanent, and the backend parser never turns it into a timeline row."""
     mapper = acp_chat_events.ACPEventMapper()
     mapper.map_update(
         {"update": {"sessionUpdate": "tool_call", "toolCallId": "t1",
                     "title": "$ work", "kind": "execute", "rawInput": {}}}
     )
-    lines = mapper.dump(mapper.map_update(
+    entries = mapper.map_update(
         {"update": {"sessionUpdate": "tool_call_update", "toolCallId": "t1",
                     "status": "in_progress",
                     "rawOutput": {"content": [{"type": "text", "text": "partial"}]}}}
-    ))
-    assert parse_all(lines) == []
+    )
+    assert [e.get("customType") for e in entries] == [acp_chat_events.TOOL_OUTPUT_CUSTOM_TYPE]
+    assert all(acp_chat_events.is_volatile(e) for e in entries)
+    timeline = [ev for ev in parse_all(mapper.dump(entries))
+                if ev["kind"] in ("message", "tool", "thinking")]
+    assert timeline == []
 
 
 def test_update_without_seed_is_fail_closed():

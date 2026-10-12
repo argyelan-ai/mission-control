@@ -999,6 +999,7 @@
     "contextPanelWindowUnknown": "unbekannt",
     "contextPanelSource": "Quelle",
     "contextPanelCacheRate": "Cache-Trefferquote",
+    "contextPanelCost": "Sitzungskosten",
     "contextPanelNote": "Die CLI-Statuszeile zeigt dagegen den Rest bis zur Auto-Komprimierung an — andere Basis, beide korrekt.",
     "contextPanelClose": "Schliessen",
     "slashCommands": {
@@ -1042,6 +1043,19 @@
       "thoughts": "{count, plural, one {nachgedacht} other {#× nachgedacht}}",
       "activity": "Aktivität",
       "errorIncluded": "Fehler enthalten"
+    },
+    "toolCard": {
+      "running": "läuft",
+      "liveOutput": "Laufende Ausgabe",
+      "copyPath": "Pfad {path} kopieren",
+      "copied": "Kopiert",
+      "copyFailed": "Kopieren nicht möglich",
+      "files": "Dateien",
+      "diffShowAll": "Alle {count} Zeilen zeigen",
+      "diffShowLess": "Weniger zeigen",
+      "diffTruncated": "Diff gekürzt — die ganze Änderung steht in der Datei.",
+      "diffCreate": "Neue Datei",
+      "diffWrite": "Geschriebener Inhalt"
     },
     "diff": {
       "scopeLabel": "Diff-Bereich",

@@ -150,6 +150,7 @@ export function useHeadTranscript(runId: string | null, headState: HeadState | n
     awaitingResponse: false,
     preview: null,
     todos: chatState.todos,
+    toolOutputs: chatState.toolOutputs, // a finished head's history carries none; kept for shape parity
   };
 }
 

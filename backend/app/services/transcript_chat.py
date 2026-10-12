@@ -8,7 +8,11 @@ Normalized event shapes (plain dicts, JSON-serializable):
    "model":str|None,"sidechain":bool}
   {"kind":"tool","uuid":str,"ts":str,"name":str,"title":str,"detail":dict,
    "toolUseId":str|None,"result":str|None,"status":"done"|"error",
-   "stats":{"additions":int,"deletions":int}|None,"sidechain":bool}
+   "stats":{"additions":int,"deletions":int}|None,"sidechain":bool,
+   "diffs"?:[ToolDiff],"locations"?:[str]}     (P1; see chat_diff.py)
+  {"kind":"tool_output","uuid":None,"ts":str,"toolUseId":str,"text":str}
+      — VOLATILE (P1): a running tool's output so far, from the ACP preview
+        channel; replace-me per toolUseId, never in the history.
   {"kind":"thinking","uuid":str,"ts":str,"text":str,"sidechain":bool}
   {"kind":"command","uuid":str,"ts":str,"command":str,"result":str|None}
   {"kind":"todo","uuid":str,"ts":str,"source":str,
@@ -16,7 +20,8 @@ Normalized event shapes (plain dicts, JSON-serializable):
              "priority"?:"high"|"medium"|"low"}]}   (see chat_todos.py)
   {"kind":"usage","uuid":str,"ts":str,"inputTokens":int,"outputTokens":int,
    "model":str|None,"effort":str|None,"contextWindow":int|None,
-   "components":{"input":int,"cacheRead":int,"cacheCreation":int,"output":int}}
+   "components":{"input":int,"cacheRead":int,"cacheCreation":int,"output":int},
+   "sessionCost"?:{"amount":float,"currency":str}}   (P1, only when reported)
 
 ``inputTokens`` is deliberately the SUM of the three input-side fields
 (``input`` + ``cacheRead`` + ``cacheCreation``); ``components`` carries the same
@@ -86,6 +91,7 @@ from typing import Any
 
 from app.config import settings
 from app.services import fresh_session, sse
+from app.services.chat_diff import diffs_from_claude_tool, stats_of
 from app.services.chat_todos import todo_event_from_tool
 from app.services.harness_catalog import get_observed_model_windows, observe_model_window
 from app.services.pane_preview import PanePreview
@@ -633,21 +639,29 @@ def _parse_assistant_entry(
             if not name:
                 continue
             tool_input = block.get("input") or {}
-            events.append(
-                {
-                    "kind": "tool",
-                    "uuid": msg_uuid,
-                    "ts": ts,
-                    "name": name,
-                    "title": build_tool_title(name, tool_input),
-                    "detail": _truncate_detail(tool_input),
-                    "toolUseId": block.get("id"),
-                    "result": None,
-                    "status": "done",
-                    "stats": None,
-                    "sidechain": sidechain,
-                }
-            )
+            tool_ev: dict[str, Any] = {
+                "kind": "tool",
+                "uuid": msg_uuid,
+                "ts": ts,
+                "name": name,
+                "title": build_tool_title(name, tool_input),
+                "detail": _truncate_detail(tool_input),
+                "toolUseId": block.get("id"),
+                "result": None,
+                "status": "done",
+                "stats": None,
+                "sidechain": sidechain,
+            }
+            # Chat package P1: the edit as a diff (same shape the ACP path
+            # produces — one component renders both), from the UNtruncated
+            # input. And the file it touched, as a location chip.
+            diffs = diffs_from_claude_tool(name, tool_input)
+            if diffs:
+                tool_ev["diffs"] = diffs
+            file_path = tool_input.get("file_path") if isinstance(tool_input, dict) else None
+            if name in _LOCATION_TOOLS and isinstance(file_path, str) and file_path.strip():
+                tool_ev["locations"] = [file_path.strip()[:500]]
+            events.append(tool_ev)
             # A full todo list (TodoWrite) also becomes the session's todo
             # snapshot — but never a subagent's: its list is its own small
             # job, not what the session is working through.
@@ -1517,6 +1531,8 @@ def _stamp_usage_source(ev: dict[str, Any], claude_config_root: Path, session_id
 
 _RESULT_TRUNCATE_LEN = 4000
 _STATS_TOOLS = ("Edit", "Write")
+# Tools whose ``file_path`` names the file they touched (P1 location chip).
+_LOCATION_TOOLS = ("Read", "Edit", "MultiEdit", "Write", "NotebookEdit")
 
 
 def _last_message_anchor(path: Path, adapter: Any) -> str:
@@ -1654,7 +1670,9 @@ def read_history(
                         continue
 
                     if ev["kind"] == "tool":
-                        stats = _compute_edit_stats(ev["name"], ev["detail"])
+                        stats = stats_of(ev.get("diffs") or []) or _compute_edit_stats(
+                            ev["name"], ev["detail"]
+                        )
                         if stats is not None:
                             ev["stats"] = stats
                         tool_use_id = ev.get("toolUseId")
@@ -1671,6 +1689,11 @@ def read_history(
                         # independent of the page, so a list written 300
                         # events ago still shows on the first load.
                         latest_todo = ev
+                        continue
+
+                    if ev["kind"] == "tool_output":
+                        # P1: live tool output is volatile by contract — the
+                        # tool's own result is the history's truth.
                         continue
 
                     if ev["kind"] == "preview":
@@ -1722,6 +1745,20 @@ def _merge_tool_result(tool_event: dict[str, Any], tool_result: dict[str, Any]) 
     tool_event["result"] = str(content)[:_RESULT_TRUNCATE_LEN]
     if tool_result.get("is_error"):
         tool_event["status"] = "error"
+    # Chat package P1 (ACP): the settled update carries the diff per edited
+    # file and the final file locations. The +/− badge then counts the SAME
+    # diff the card shows.
+    diffs = tool_result.get("diffs")
+    if diffs:
+        tool_event["diffs"] = diffs
+        tool_event["stats"] = stats_of(diffs)
+    locations = tool_result.get("locations")
+    if locations:
+        merged = list(tool_event.get("locations") or [])
+        for path in locations:
+            if path not in merged:
+                merged.append(path)
+        tool_event["locations"] = merged
 
 
 def _merge_command_result(command_event: dict[str, Any], command_result: dict[str, Any]) -> None:
@@ -1827,6 +1864,20 @@ def _read_preview_channel(state: dict[str, Any]) -> list[dict[str, Any]]:
             content = d.get("content")
             ts = d.get("timestamp")
             if not isinstance(content, str) or not content:
+                continue
+            if d.get("customType") == "acp-tool-output":
+                # P1: a running tool's output so far — its own volatile
+                # event, keyed by the tool call, never the text preview slot.
+                data = d.get("data") if isinstance(d.get("data"), dict) else {}
+                tool_use_id = data.get("toolCallId")
+                if isinstance(tool_use_id, str) and tool_use_id:
+                    events.append({
+                        "kind": "tool_output",
+                        "uuid": None,
+                        "ts": ts if isinstance(ts, str) else datetime.now(timezone.utc).isoformat(),
+                        "toolUseId": tool_use_id,
+                        "text": content[:_RESULT_TRUNCATE_LEN],
+                    })
                 continue
             events.append({
                 "kind": "preview",
@@ -2258,7 +2309,9 @@ class ChatTailerManager:
                                 continue
 
                             if ev["kind"] == "tool":
-                                stats = _compute_edit_stats(ev["name"], ev["detail"])
+                                stats = stats_of(ev.get("diffs") or []) or _compute_edit_stats(
+                                    ev["name"], ev["detail"]
+                                )
                                 if stats is not None:
                                     ev["stats"] = stats
                                 tool_use_id = ev.get("toolUseId")

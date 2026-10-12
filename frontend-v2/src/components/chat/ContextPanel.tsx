@@ -24,7 +24,7 @@ import { useEffect, useRef } from "react";
 import { useLocale, useTranslations } from "next-intl";
 import { C, alpha } from "@/lib/colors";
 import { formatCompactTokens } from "@/lib/claudeCommands";
-import type { UsageComponents, UsageEvent } from "@/lib/chatTypes";
+import type { SessionCost, UsageComponents, UsageEvent } from "@/lib/chatTypes";
 
 interface Segment {
   /** Stable row id — also the lookup key under `sessions.contextPanelSegment`
@@ -64,6 +64,29 @@ export function usedTokensOf(usage: UsageEvent): number {
   // No breakdown: `inputTokens` is already the input-side sum the ring's own
   // fallback estimate uses, so the two views can't disagree.
   return usage.inputTokens;
+}
+
+/** The session's cost as the harness reported it, in the active locale —
+ *  or `null` when there is nothing real to show (absent, zero, negative or
+ *  not a number: a local model reports nothing, and "0.00" would be a
+ *  figure nobody measured). Small amounts keep four decimals so a cheap
+ *  session does not read as free. An unknown currency code falls back to
+ *  the plain number plus the code rather than throwing. */
+export function formatSessionCost(cost: SessionCost | null | undefined, locale: string): string | null {
+  if (!cost || typeof cost.amount !== "number" || !Number.isFinite(cost.amount) || cost.amount <= 0) {
+    return null;
+  }
+  const digits = cost.amount < 1 ? 4 : 2;
+  try {
+    return new Intl.NumberFormat(locale, {
+      style: "currency",
+      currency: cost.currency || "USD",
+      minimumFractionDigits: 2,
+      maximumFractionDigits: digits,
+    }).format(cost.amount);
+  } catch {
+    return `${cost.amount.toFixed(digits)} ${cost.currency}`;
+  }
 }
 
 interface ContextPanelProps {
@@ -130,6 +153,7 @@ export function ContextPanel({ usage, pct, pctSource, onClose }: ContextPanelPro
   // Percent formatting goes through the active locale (K3/i18n): "15%" in
   // English, "15 %" with a narrow no-break space in German — never a bare
   // `Math.round(...) + "%"` string concat.
+  const cost = formatSessionCost(usage.sessionCost, locale);
   const formatPct = (value: number, fractionDigits: number) =>
     new Intl.NumberFormat(locale, { style: "percent", maximumFractionDigits: fractionDigits }).format(
       value / 100,
@@ -243,6 +267,18 @@ export function ContextPanel({ usage, pct, pctSource, onClose }: ContextPanelPro
                 style={{ color: C.textSecondary }}
               >
                 {formatPct(cacheRate * 100, 0)}
+              </span>
+            </div>
+          )}
+          {cost && (
+            <div className="flex items-center justify-between gap-2 text-xs font-medium" style={{ color: C.textMuted }}>
+              <span>{t("contextPanelCost")}</span>
+              <span
+                className="font-mono tabular-nums"
+                data-testid="context-panel-cost"
+                style={{ color: C.textSecondary }}
+              >
+                {cost}
               </span>
             </div>
           )}

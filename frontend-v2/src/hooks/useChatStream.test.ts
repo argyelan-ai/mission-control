@@ -26,6 +26,7 @@ import type {
   ThinkingEvent,
   TodoEvent,
   ToolEvent,
+  ToolOutputEvent,
   UsageEvent,
 } from "@/lib/chatTypes";
 
@@ -788,5 +789,49 @@ describe("todo snapshot — own slot, newest wins", () => {
     let state = chatReducer(createInitialChatState(), snap("u1", "2026-10-12T09:00:00.000Z", 0));
     state = chatReducer(state, { kind: "session_changed" });
     expect(state.todos).toBeNull();
+  });
+});
+
+
+describe("Live-Werkzeugausgabe (tool_output) — eigenes Fach je Werkzeugaufruf", () => {
+  function out(toolUseId: string, text: string, ts = "2026-10-12T16:18:08Z"): ToolOutputEvent {
+    return { kind: "tool_output", uuid: null, ts, toolUseId, text };
+  }
+
+  it("haelt die neueste Ausgabe eines laufenden Werkzeugs, nie in der Zeitachse", () => {
+    let st = chatReducer(createInitialChatState(), tool("u1", "call_bash_1", { name: "bash", title: "$ make" }));
+    st = chatReducer(st, out("call_bash_1", "step 1"));
+    st = chatReducer(st, out("call_bash_1", "step 1\nstep 2"));
+    expect(st.toolOutputs["call_bash_1"].text).toBe("step 1\nstep 2");
+    expect(st.events).toHaveLength(1);
+  });
+
+  it("das Ergebnis des Werkzeugs loest die Live-Ausgabe ab", () => {
+    let st = chatReducer(createInitialChatState(), tool("u1", "call_bash_1"));
+    st = chatReducer(st, out("call_bash_1", "step 1"));
+    st = chatReducer(st, tool("u1", "call_bash_1", { result: "step 1\nstep 2\nWall time: 5.02 seconds" }));
+    expect(st.toolOutputs["call_bash_1"]).toBeUndefined();
+  });
+
+  it("eine verspaetete Ausgabe nach dem Ergebnis wird verworfen (zwei Dateien, keine Reihenfolge)", () => {
+    let st = chatReducer(createInitialChatState(), tool("u1", "call_bash_1", { result: "fertig" }));
+    st = chatReducer(st, out("call_bash_1", "step 1"));
+    expect(st.toolOutputs["call_bash_1"]).toBeUndefined();
+  });
+
+  it("ruhender Agent und Sitzungswechsel leeren das Fach", () => {
+    let st = chatReducer(createInitialChatState(), tool("u1", "t1"));
+    st = chatReducer(st, out("t1", "x"));
+    const idle: StateEvent = { kind: "state", status: "idle", prompt: null };
+    expect(chatReducer(st, idle).toolOutputs).toEqual({});
+    const rollover: SessionChangedEvent = { kind: "session_changed" };
+    expect(chatReducer(st, rollover).toolOutputs).toEqual({});
+  });
+
+  it("Seed: History-Werkzeug mit Ergebnis vor gepufferter Live-Ausgabe -> nichts Veraltetes", () => {
+    const done = tool("u1", "t1", { result: "ok" });
+    let st = createInitialChatState();
+    for (const ev of seedSequence([done], [out("t1", "alt")])) st = chatReducer(st, ev);
+    expect(st.toolOutputs).toEqual({});
   });
 });

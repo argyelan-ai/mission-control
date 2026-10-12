@@ -93,6 +93,7 @@ from app.services.transcript_chat import (
     resolve_context_window,
 )
 from app.services.token_harvester import _host_home
+from app.services.chat_diff import diffs_from_acp
 from app.services.chat_todos import (
     ACP_PLAN_CUSTOM_TYPE,
     todo_event_from_acp_plan,
@@ -491,6 +492,45 @@ def build_tool_title(name: str, args: dict[str, Any]) -> str:
     return _truncate_title(title.strip() or name)
 
 
+_MAX_LOCATIONS = 20
+
+
+def _clean_locations(raw: Any) -> list[str]:
+    """File paths a tool call touched (chat package P1): the bridge writes
+    plain strings, ACP itself ``{path, line?}`` — both accepted, deduped,
+    capped. Anything else is dropped (fail closed)."""
+    out: list[str] = []
+    if not isinstance(raw, list):
+        return out
+    for item in raw:
+        path = item.get("path") if isinstance(item, dict) else item
+        if not isinstance(path, str) or not path.strip():
+            continue
+        path = path.strip()[:500]
+        if path not in out:
+            out.append(path)
+        if len(out) >= _MAX_LOCATIONS:
+            break
+    return out
+
+
+def _clean_session_cost(raw: Any) -> dict[str, Any] | None:
+    """``{amount, currency}`` only for a real, positive, finite amount —
+    a local model reports none, and "0.00" would be a figure nobody
+    measured."""
+    if not isinstance(raw, dict):
+        return None
+    amount = raw.get("amount")
+    if isinstance(amount, bool) or not isinstance(amount, (int, float)):
+        return None
+    if amount != amount or amount in (float("inf"),) or amount <= 0:
+        return None
+    currency = raw.get("currency")
+    if not isinstance(currency, str) or not currency.strip():
+        currency = "USD"
+    return {"amount": float(amount), "currency": currency.strip().upper()[:8]}
+
+
 def _basename(path: Any) -> str:
     if not path:
         return ""
@@ -803,21 +843,26 @@ class OmpLineParser:
                 args = block.get("arguments")
                 if not isinstance(args, dict):
                     args = {}
-                events.append(
-                    {
-                        "kind": "tool",
-                        "uuid": entry_id,
-                        "ts": ts,
-                        "name": name,
-                        "title": build_tool_title(name, args),
-                        "detail": _truncate_detail(args),
-                        "toolUseId": block.get("id"),
-                        "result": None,
-                        "status": "done",
-                        "stats": None,
-                        "sidechain": False,
-                    }
-                )
+                tool_ev: dict[str, Any] = {
+                    "kind": "tool",
+                    "uuid": entry_id,
+                    "ts": ts,
+                    "name": name,
+                    "title": build_tool_title(name, args),
+                    "detail": _truncate_detail(args),
+                    "toolUseId": block.get("id"),
+                    "result": None,
+                    "status": "done",
+                    "stats": None,
+                    "sidechain": False,
+                }
+                # Chat package P1: the file paths ACP named for this call
+                # (the bridge copies them onto the block) — a running card
+                # already shows which file it touches. Absent = no key.
+                locations = _clean_locations(block.get("locations"))
+                if locations:
+                    tool_ev["locations"] = locations
+                events.append(tool_ev)
                 # A tool that sends the FULL list (todo_write/update_plan —
                 # what a model drives over ACP/Hermes may call it) becomes
                 # the todo snapshot too. omp's native ``todo`` tool sends
@@ -872,8 +917,7 @@ class OmpLineParser:
                 if cache_hit_denom > 0
                 else None
             )
-            events.append(
-                {
+            usage_ev: dict[str, Any] = {
                     "kind": "usage",
                     "uuid": entry_id,
                     "ts": ts,
@@ -909,7 +953,14 @@ class OmpLineParser:
                         else {}
                     ),
                 }
-            )
+            # Chat package P1: the SESSION's running cost, stamped by the ACP
+            # bridge from ``usage_update.cost`` (only when the harness
+            # reported a real one). omp's native per-message ``cost`` is a
+            # different number and stays out (see module docstring).
+            session_cost = _clean_session_cost(usage.get("sessionCost"))
+            if session_cost is not None:
+                usage_ev["sessionCost"] = session_cost
+            events.append(usage_ev)
 
         return events
 
@@ -926,14 +977,23 @@ class OmpLineParser:
         tool_call_id = message.get("toolCallId")
         if not tool_call_id:
             return []
-        return [
-            {
-                "kind": "_tool_result",
-                "tool_use_id": tool_call_id,
-                "content": _blocks_to_text(message.get("content"))[:_RESULT_TRUNCATE_LEN],
-                "is_error": bool(message.get("isError")),
-            }
-        ]
+        result: dict[str, Any] = {
+            "kind": "_tool_result",
+            "tool_use_id": tool_call_id,
+            "content": _blocks_to_text(message.get("content"))[:_RESULT_TRUNCATE_LEN],
+            "is_error": bool(message.get("isError")),
+        }
+        # Chat package P1: one diff per edited file — from the ACP bridge's
+        # ``details.diffs`` or omp's own edit details (native TUI path).
+        details = message.get("details")
+        if isinstance(details, dict) and not message.get("isError"):
+            diffs = diffs_from_acp(details.get("diffs") if "diffs" in details else details)
+            if diffs:
+                result["diffs"] = diffs
+            locations = _clean_locations(details.get("locations"))
+            if locations:
+                result["locations"] = locations
+        return [result]
 
     @staticmethod
     def _parse_custom_message(d: dict[str, Any]) -> list[dict[str, Any]]:
@@ -981,6 +1041,26 @@ class OmpLineParser:
                     "ts": ts,
                     "text": content[:_RESULT_TRUNCATE_LEN],
                     "source": "acp",
+                }
+            ]
+        if custom_type == "acp-tool-output":
+            # Chat package P1: a running tool's output so far (the bridge's
+            # volatile snapshot). Never a timeline row: it rides its own
+            # replace-me slot keyed by the tool call and dies once the
+            # tool's result lands. It belongs on the preview channel; this
+            # branch keeps it from ever rendering as a system message should
+            # one reach a transcript.
+            data = d.get("data") if isinstance(d.get("data"), dict) else {}
+            tool_use_id = data.get("toolCallId")
+            if not isinstance(tool_use_id, str) or not tool_use_id:
+                return []
+            return [
+                {
+                    "kind": "tool_output",
+                    "uuid": None,
+                    "ts": ts,
+                    "toolUseId": tool_use_id,
+                    "text": content[:_RESULT_TRUNCATE_LEN],
                 }
             ]
         if custom_type == "chat_error":
