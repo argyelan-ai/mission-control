@@ -789,6 +789,28 @@ export const api = {
         `/api/v1/agents/${agentId}/chat/history${suffix}`,
       );
     },
+    // ── Changes panel actions (part 3) — operator-only, each needs `confirm`
+    // (the server refuses without it). Errors keep the backend's
+    // `{"reason": …}` body in the message (see `actionReason`).
+    revertFile: (agentId: string, path: string) =>
+      request<import("./chatTypes").ChatRevertResult>(`/api/v1/agents/${agentId}/chat/revert`, {
+        method: "POST",
+        body: JSON.stringify({ path, confirm: true }),
+      }),
+    commitDraft: (agentId: string) =>
+      request<import("./chatTypes").ChatCommitDraft>(`/api/v1/agents/${agentId}/chat/commit/draft`),
+    commit: (agentId: string, message: string) =>
+      request<import("./chatTypes").ChatCommitResult>(`/api/v1/agents/${agentId}/chat/commit`, {
+        method: "POST",
+        body: JSON.stringify({ message, confirm: true }),
+      }),
+    prDraft: (agentId: string) =>
+      request<import("./chatTypes").ChatPrDraft>(`/api/v1/agents/${agentId}/chat/pr/draft`),
+    openPr: (agentId: string, title: string) =>
+      request<import("./chatTypes").ChatPrResult>(`/api/v1/agents/${agentId}/chat/pr`, {
+        method: "POST",
+        body: JSON.stringify({ title, confirm: true }),
+      }),
     // Normalizes CRLF/CR to LF before sending — the backend's C0 control-char
     // filter 422s on a bare \r (agent_chat.py's _DISALLOWED_CONTROL_CHARS),
     // which a pasted Windows-origin clipboard or a textarea's native line
