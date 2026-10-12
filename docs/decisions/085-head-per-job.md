@@ -4,6 +4,7 @@
 **Datum:** 2026-09-22
 **Amended by:** [ADR-086](086-harness-runtime-cross-switch.md) — §6 rule 2 (operator surface is swappable too), §7 decision 1 and §8 stop 1 (local first instead of GPU boxes as helpers)
 **Amended by:** [ADR-089](089-lead-agent-with-hands.md) — §4 (exception for the lead agent's chat input and driver), §5 (fixed agents = lead agent + one local omp agent), §8 stop 3 (answered); see the note at the end
+**Amended by:** [ADR-090](090-chat-as-remote-control.md) — §4 (the chat of both fixed agents — lead agent and local omp agent — may grow inside a closed feature list); see the note at the end
 **Scope:** Architecture/Direction · Backend/Dispatch · Infra/Runtime · Agent Protocol · Docs
 
 ## Context
@@ -300,6 +301,15 @@ as Nachtrag (d) already says); the voice agent becomes the lead agent's
 voice, which answers stop 3 (§8). §7 decisions 2 and 5 and the output-only
 channels of decision 4 are unchanged. The text above is not rewritten;
 ADR-089 §9 lists each change.
+
+## Note (2026-10-12) — amended by ADR-090
+
+[ADR-090 — The MC chat is the operator's remote control](090-chat-as-remote-control.md)
+widens the §4 exception from the lead agent's chat input and driver to the
+chat of both fixed agents (the lead agent and the local omp agent), inside a
+closed feature list, a budget per package and stop points. Paused agents'
+chat input, group chat, dispatch and healers stay frozen. The text above is
+not rewritten.
 
 ## References
 

@@ -7,8 +7,9 @@ code is the bug — or the rule needs a new ADR, not a quiet exception.
 Where the project stands on these rules: [ROADMAP.md](ROADMAP.md).
 The decisions behind the current direction:
 [ADR-085 — Head per job](decisions/085-head-per-job.md), amended by
-[ADR-086 — Harness and runtime freely switchable, local first](decisions/086-harness-runtime-cross-switch.md)
-and [ADR-089 — The lead agent is the operator's single right hand, with hands](decisions/089-lead-agent-with-hands.md).
+[ADR-086 — Harness and runtime freely switchable, local first](decisions/086-harness-runtime-cross-switch.md),
+[ADR-089 — The lead agent is the operator's single right hand, with hands](decisions/089-lead-agent-with-hands.md)
+and [ADR-090 — The MC chat is the operator's remote control](decisions/090-chat-as-remote-control.md).
 
 ---
 
@@ -40,8 +41,9 @@ their knowledge, their hardware and their evidence.
    gap gets built (ADR-085 §3).
 4. **Build stop on the fleet layer.** Dispatch, watchdog/healers, Sessions
    chat and group chat get safety and operations fixes only — no features
-   (ADR-085 §4). Exception: the lead agent's chat input and driver
-   (ADR-089).
+   (ADR-085 §4). Exception: the chat of the two fixed agents — the lead
+   agent and the local omp agent — the operator's remote control away from
+   the desk, inside a closed feature list (ADR-089, ADR-090).
 5. **Reversible first.** Persistent agents are paused, not deleted. Code is
    deleted only after two weeks of measured non-use, in themed PRs
    (ADR-085 §5).
