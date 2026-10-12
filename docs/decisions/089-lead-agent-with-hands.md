@@ -1,6 +1,7 @@
 # ADR-089 — The lead agent is the operator's single right hand, with hands
 
 **Status:** Accepted · amends ADR-085 (§4 build stop, §5 quiet mode, §7 decision 4 wording, §8 stop 3) and PRINCIPLES §8 rule 2
+**Amended by:** [ADR-090](090-chat-as-remote-control.md) — §4 / §9 (the chat exception now covers the chat of both fixed agents, not only the lead agent's chat input and driver); see the note before the references
 **Datum:** 2026-10-07
 **Scope:** Architecture/Direction · Agent Protocol · Backend/Autonomy · Infra/Runtime · Docs
 
@@ -280,6 +281,15 @@ information (R3), never an instruction. This keeps ADR-085 decision 4.
 Nothing changes for existing installations with this ADR: it is a decision
 record. Each later step ships behind its own switch or with every new type
 at L3, so an installation that does nothing keeps today's behaviour.
+
+## Note (2026-10-12) — amended by ADR-090
+
+[ADR-090 — The MC chat is the operator's remote control](090-chat-as-remote-control.md)
+widens the chat exception of §4 and §9 (ADR-085 §4 row): not only the lead
+agent's chat input and driver, but the chat of both fixed agents — the lead
+agent and the local omp agent — may grow, inside a closed feature list, a
+budget per package and stop points. §5 (omp over ACP as the local brain) is
+unchanged. The text above is not rewritten.
 
 ## References
 

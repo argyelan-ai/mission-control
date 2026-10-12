@@ -37,7 +37,8 @@ from app.services.decision_docs import (
 # Entscheidungsdokumente; die zwei uebrigen sind README.md und _template.md.
 # +1 on 2026-10-06: ADR-088 (browser sessions), confirmed on purpose.
 # +1 on 2026-10-07: ADR-089 (lead agent with hands), confirmed on purpose.
-EXPECTED_DECISION_DOCS = 88
+# +1 on 2026-10-12: ADR-090 (chat as remote control), confirmed on purpose.
+EXPECTED_DECISION_DOCS = 89
 
 
 def _repo_root() -> Path:

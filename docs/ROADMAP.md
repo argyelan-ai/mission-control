@@ -2,8 +2,9 @@
 
 Where the project is on the direction set in
 [ADR-085 — Head per job](decisions/085-head-per-job.md), amended by
-[ADR-086 — Harness and runtime freely switchable, local first](decisions/086-harness-runtime-cross-switch.md)
-and [ADR-089 — The lead agent is the operator's single right hand, with hands](decisions/089-lead-agent-with-hands.md).
+[ADR-086 — Harness and runtime freely switchable, local first](decisions/086-harness-runtime-cross-switch.md),
+[ADR-089 — The lead agent is the operator's single right hand, with hands](decisions/089-lead-agent-with-hands.md)
+and [ADR-090 — The MC chat is the operator's remote control](decisions/090-chat-as-remote-control.md).
 The rules behind it:
 [PRINCIPLES.md](PRINCIPLES.md).
 
@@ -39,6 +40,7 @@ fleet is paused instead of running in parallel.
 | **E3** — measured gaps only | Possibly switch lock stage 2 (lease with expiry), a jobs table without FK to tasks (or Markdown only), usage attribution by worktree path · **mandatory swap probe** with a second coding CLI, including watchdog and question path · the lead agent's equal-quality test (ADR-089) counts as one swap probe | later | A second CLI finishes one job with the same files, and its "blocked" notice arrives too |
 | **E4** — lead agent with hands (ADR-089) | One lead agent on two brains (coding CLI subscription / omp + local model, same package, no protocol proxy) · change-class gate on the existing autonomy levels for merge, deploy and runtime switch (docs/tests L1, invisible fixes L2 with proof and undo, visible UI after the picture, decisions via the ADR gate, data/infra/fleet L3 unless pre-approved) · hard never-list, counted · helpers (subagents and heads) visible in its chat · brain fallback to the cloud with a notice · voice through the same lead (local voice note first, live voice later) · chat inbound re-routed: channels output-only (ADR-085 decision 4, ADR-089 §7) · paused agents off for good, "restart individually if missed" · separation stage A now, stage B before unattended night deploys · build order below | in progress (decision recorded in ADR-089; the merge gate waits for the operator's GitHub App — operator: later) | Equal-quality test green on both brains · an invisible fix merged and deployed by the lead agent with proof of effect · a UI change waits for the picture · a forbidden action is refused and counted · a chat-channel message gets a clean pointer to the MC chat instead of being acted on or dropped · voice decision recorded (done, ADR-089) |
 | **Stop 3** — voice agent | Keep, rebuild on the new path, or retire; decided together with the channel re-routing | done — answered by ADR-089 (operator decision 2026-10-03): rebuilt as the lead agent's voice; the separate voice agent is paused once the lead agent's voice replaces it | Operator decision recorded |
+| **E4b** — chat as remote control (ADR-090) | The chat of the two fixed agents (lead + local omp agent) is unfrozen as the operator's remote control away from the desk, inside a closed feature list: chat reliability first, todo panel = task checklist, cache rate, then the omp port packages P1–P7, effort per harness, automations from the chat · omp stays the local harness over ACP; plugins, skills and MCP reach omp through its own native places · budget per package (+50 % → operator), live proof on phone and desktop before done, omp pinned (18.10.1, #788) · package list below | in progress (todo panel #787, #790 and cache rate #786, #791 done; install/modify slash commands refused until the approval card exists, #792; P1 done, #794, #795; reliability stage: queue + real `/new` merged, #777, phone reproduction not yet done) | Five jobs done completely from the phone within two weeks after stage 5 — fix to PR with the local agent, answer/approve a card, install an MCP server and see it used, create an automation and read its result, long chat with follow-ups, Stop and `/new` without a chat error (5/5) · chat error lines caused by MC per week = 0 (from transcripts) · secondary: local fresh-token share through MC (#779, baseline ~1 %) |
 | **E5** — clean-up | Delete frozen code in themed PRs: news/content vertical removed (#708) · workflows, automations and playbooks removed (#711) · webhooks, meetings and the Discord config API removed (#714) · cli-session leftovers, the research router and agents runtime-status removed (#715) · board groups, phase CRUD, board approvals and two board streams removed (#717) · skill lab, ClawHub and plugin management frozen but not yet removed (#710) · still open: terminal remote control, healers, Sessions-chat input/delivery for paused agents (the read-only chat view stays — it shows heads, ADR-085 Nachtrag 2026-10-04), `mc` back-channel, group chat · review the box manager against existing swap/orchestration tools (new ADR) · UI only as decision 5 says | in progress | CI green; fix commits on fleet-layer code near zero, and the overall fix share below the recorded baseline (counting: non-merge commits on `main` with a `fix` prefix over 60 days — 245 of 494, about 50 %, on 2026-09-23); existing installations get release notes for each removal |
 
 ### E4 build order (ADR-089)
@@ -62,6 +64,27 @@ Small PRs, each extending an existing part. Until B9, merges work as today.
 | B13 | Voice stage 1: local voice note → the lead agent's chat | local speech-to-text service, the lead agent's chat | later |
 | B14 | Voice stage 2: live voice delegating to the lead agent; the separate voice agent paused (operator: later) | ADR-083 transport | later |
 | B15 | Clean-up: terminal driver and its web terminal, only after two weeks of non-use | ADR-085 §5 | later |
+
+### E4b packages (ADR-090)
+
+Each package plans its PRs before it starts; one that needs 50 % more than
+planned stops and goes to the operator. Done = live test in the real MC on
+phone and desktop with real data and a screenshot to the operator.
+
+| Package | What | Status |
+|---|---|---|
+| S1 | Chat reliability: reproduce "a turn is already running" on the phone, slash list from what omp advertises, honest unreachable-daemon lines, chat control contract test with sabotage probe — **stop point** after it | in progress (queue + real `/new`, #777) |
+| S2 | Todo panel = task checklist (harness-neutral chat event) | done (#787, #790) |
+| S3 | Prompt cache hit rate in the context ring | done (#786, #791) |
+| P1 | Live tool output, per-edit diffs, file chips, session cost | done (#794, #795) |
+| P2 | Screenshots / images from tools | next |
+| P3 | Question cards and plan mode | later |
+| P4 | Session list, resume, fork | later |
+| P5 | Send an image | later |
+| P6 | Install plugins / skills / MCP: one-tap approval card, allowlist, re-render into omp's native places after recreate; omp capability row only after live proof | later (chat-typed install commands refused meanwhile, #792) |
+| P7 | Small items | later |
+| Effort | Effort per harness, measured on the local model — **stop point**: keep or hide the switch | later |
+| Automations | Create a schedule from the chat (agent tool in the MCP agent mode, #783) and read its result in the chat | later |
 
 ---
 

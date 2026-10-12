@@ -93,7 +93,7 @@ from app.services.transcript_chat import (
     resolve_context_window,
 )
 from app.services.token_harvester import _host_home
-from app.services.chat_diff import diffs_from_acp
+from app.services.chat_diff import build_diff, diffs_from_acp
 from app.services.chat_todos import (
     ACP_PLAN_CUSTOM_TYPE,
     todo_event_from_acp_plan,
@@ -609,10 +609,12 @@ def _mention_source(name: str | None, content: str) -> dict[str, Any] | None:
 class OmpLineParser:
     """Zustandsbehafteter Zeilen-Parser: eine Rohzeile -> 0..n ChatEvents.
 
-    Der Zustand ist bewusst minimal — nur die zuletzt gesehene Effort-Stufe
+    Der Zustand ist bewusst minimal — die zuletzt gesehene Effort-Stufe
     (``thinking_level_change``), weil omp sie in einer EIGENEN Zeile
-    protokolliert statt am Zug. Jeder Lesevorgang (History-Seite, Tailer-
-    Lauf) bekommt eine eigene Instanz; ein Session-Wechsel setzt sie zurueck.
+    protokolliert statt am Zug, und ein kleiner Zwischenspeicher fuer
+    ``write``-Werkzeugaufrufe (s. ``_write_args``). Jeder Lesevorgang
+    (History-Seite, Tailer-Lauf) bekommt eine eigene Instanz; ein
+    Session-Wechsel setzt sie zurueck.
 
     Wirft nie: eine kaputte oder unbekannte Zeile ergibt eine leere Liste
     (Transkript-Formate aendern sich ohne Ankuendigung, ein Parser darf
@@ -621,9 +623,19 @@ class OmpLineParser:
 
     def __init__(self) -> None:
         self._effort: str | None = None
+        # toolCallId -> {"path", "content"} for a seeded tool call whose
+        # arguments carry a WHOLE new file body (omp's native `write` tool,
+        # or the ACP bridge forwarding the same tool generically under
+        # kind/name "edit" — see `_parse_tool_result`). The matching
+        # toolResult never repeats the body (omp: {"resolvedPath": ...};
+        # ACP: no "diff" content item at all), so without this the card had
+        # nothing to build a diff from and fell back to raw JSON (task 475,
+        # live 12.10.2026 omp 18.10.1 over ACP). Popped on first use.
+        self._write_args: dict[str, dict[str, str]] = {}
 
     def reset(self) -> None:
         self._effort = None
+        self._write_args = {}
 
     def seed_from(self, session_path: Path) -> None:
         """Liest die zuletzt geschriebene Effort-Stufe aus einer bestehenden
@@ -843,6 +855,7 @@ class OmpLineParser:
                 args = block.get("arguments")
                 if not isinstance(args, dict):
                     args = {}
+                tool_use_id = block.get("id")
                 tool_ev: dict[str, Any] = {
                     "kind": "tool",
                     "uuid": entry_id,
@@ -850,7 +863,7 @@ class OmpLineParser:
                     "name": name,
                     "title": build_tool_title(name, args),
                     "detail": _truncate_detail(args),
-                    "toolUseId": block.get("id"),
+                    "toolUseId": tool_use_id,
                     "result": None,
                     "status": "done",
                     "stats": None,
@@ -863,6 +876,18 @@ class OmpLineParser:
                 if locations:
                     tool_ev["locations"] = locations
                 events.append(tool_ev)
+                # Remember a WHOLE-file write (content + path) by call id —
+                # see `_write_args`'s docstring. Not gated on `name == "write"`:
+                # the ACP bridge forwards the same call generically as "edit".
+                path, content = args.get("path"), args.get("content")
+                if (
+                    isinstance(tool_use_id, str)
+                    and tool_use_id
+                    and isinstance(path, str)
+                    and path.strip()
+                    and isinstance(content, str)
+                ):
+                    self._write_args[tool_use_id] = {"path": path, "content": content}
                 # A tool that sends the FULL list (todo_write/update_plan —
                 # what a model drives over ACP/Hermes may call it) becomes
                 # the todo snapshot too. omp's native ``todo`` tool sends
@@ -964,8 +989,7 @@ class OmpLineParser:
 
         return events
 
-    @staticmethod
-    def _parse_tool_result(message: dict[str, Any]) -> list[dict[str, Any]]:
+    def _parse_tool_result(self, message: dict[str, Any]) -> list[dict[str, Any]]:
         """``role: toolResult`` -> internes ``_tool_result``-Ereignis.
 
         Verknuepft ueber ``toolCallId`` == ``toolCall.id`` — genau die
@@ -983,16 +1007,36 @@ class OmpLineParser:
             "content": _blocks_to_text(message.get("content"))[:_RESULT_TRUNCATE_LEN],
             "is_error": bool(message.get("isError")),
         }
+        is_error = bool(message.get("isError"))
+        # A seeded whole-file write is only ever consumed once — pop it now,
+        # error or not, so a stray later result with the same id (should
+        # never happen) never reuses it (test:
+        # write_args_do_not_leak_into_an_unrelated_later_result).
+        write_args = self._write_args.pop(tool_call_id, None)
         # Chat package P1: one diff per edited file — from the ACP bridge's
         # ``details.diffs`` or omp's own edit details (native TUI path).
+        diffs: list[dict[str, Any]] = []
         details = message.get("details")
-        if isinstance(details, dict) and not message.get("isError"):
+        if isinstance(details, dict) and not is_error:
             diffs = diffs_from_acp(details.get("diffs") if "diffs" in details else details)
-            if diffs:
-                result["diffs"] = diffs
             locations = _clean_locations(details.get("locations"))
             if locations:
                 result["locations"] = locations
+        if not diffs and not is_error and write_args is not None:
+            # omp's `write` tool result repeats only "wrote N bytes" / the
+            # resolved path (native: {"resolvedPath": ...}; ACP-forwarded:
+            # no diff content item at all) — the toolCall's own content is
+            # the only place the new body survives. Rendered as "create"
+            # (all additions, +N badge, "New file" label): the card used to
+            # show raw JSON for every one of these, create or overwrite —
+            # "New file" is the task's explicit choice over that, not a
+            # claim that a prior body never existed (unlike an ACP edit's
+            # verified ``oldText: null``).
+            diff = build_diff(write_args["path"], None, write_args["content"], kind="create")
+            if diff is not None:
+                diffs = [diff]
+        if diffs:
+            result["diffs"] = diffs
         return [result]
 
     @staticmethod
