@@ -783,6 +783,60 @@ def test_pane_draft_made_of_border_glyphs_still_reads_as_working():
         assert parse_pane_state(pane, False)["status"] == "working", draft
 
 
+# omp 18.10.1 (verbatim, throwaway container, 160 columns, 12.10.2026): the
+# composer frame lost its right edge, and an EMPTY composer in a fresh session
+# carries a right-aligned placeholder hint on its bottom line
+# (packages/tui/src/prompt/composer-hints.ts). capture-pane -p drops the dim
+# styling, so the hint looks like typed text.
+_STATUS_18101 = (
+    " π > ◒ MC model > 📁 /workspace ▶───────5%──────────────────────────────"
+    "────────────────────────────────────────────────────╎────────────┃────"
+    "─────────────131K─"
+)
+PANE_IDLE_18101_HINT = (
+    "                         Tip: `/force read` pins the next turn to one specific tool\n"
+    f"{_STATUS_18101}\n"
+    "╰─" + " " * 130 + "⇧⇥ to change thinking effort\n"
+)
+PANE_IDLE_18101_AGENTS_HINT = PANE_IDLE_18101_HINT.replace(
+    "⇧⇥ to change thinking effort", "←← to see 2 running agents"
+)
+PANE_IDLE_18101 = f" Done.\n{_STATUS_18101}\n╰─\n"
+PANE_DRAFT_18101 = f"{_STATUS_18101}\n╰─ noch nicht abgeschickt\n"
+
+
+@pytest.mark.parametrize(
+    "pane",
+    [PANE_IDLE_18101_HINT, PANE_IDLE_18101_AGENTS_HINT, PANE_IDLE_18101],
+    ids=["effort-hint", "agents-hint", "no-hint"],
+)
+def test_pane_18101_empty_composer_is_idle(pane):
+    """The placeholder hint is not a draft: a freshly (re)started omp TUI
+    must read as idle, not as working forever."""
+    assert parse_pane_state(pane, False) == {"status": "idle", "prompt": None}
+
+
+def test_pane_18101_draft_reads_as_working():
+    assert parse_pane_state(PANE_DRAFT_18101, False)["status"] == "working"
+
+
+def test_pane_18101_draft_ending_like_the_hint_is_still_a_draft():
+    """Typed right after the border (not right-aligned) -> a draft."""
+    pane = f"{_STATUS_18101}\n╰─ please x to change thinking effort\n"
+    assert parse_pane_state(pane, False)["status"] == "working"
+
+
+def test_omp_ready_signals_match_the_18101_tui():
+    """omp 18.10.1 dropped the boxed welcome banner (`╭─── omp v… ───╮`),
+    which was the only `╭─` on an idle 18.1.10 pane. The health gate must
+    still recognise a booted TUI."""
+    from app.services.agent_runtime_switch import OMP_READY_SIGNALS
+
+    for pane in (PANE_IDLE_18101_HINT, PANE_IDLE_18101):
+        assert any(sig in pane for sig in OMP_READY_SIGNALS), pane
+    assert not any(sig in PANE_BOOTING for sig in OMP_READY_SIGNALS)
+
+
 @pytest.mark.parametrize("pane", [PANE_BOOTING, "", "   \n  "])
 def test_pane_without_a_composer_is_unknown(pane):
     """``unknown`` ist ein vollwertiger Status — „Status unklar" ist ehrlicher

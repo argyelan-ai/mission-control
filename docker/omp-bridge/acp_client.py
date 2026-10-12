@@ -398,7 +398,7 @@ class ACPClient:
 
         The chat daemon's `new_session` op calls this for the session it just
         replaced, so a long-lived `omp acp` child does not keep one live
-        session per `/new`. omp 18.1.10 advertises it
+        session per `/new`. omp 18.1.10 and 18.10.1 advertise it
         (`sessionCapabilities.close`); it only disposes the in-memory record,
         the session file on disk stays. An unknown id answers `{}`.
         """
@@ -409,7 +409,8 @@ class ACPClient:
                           timeout: float = 30.0) -> dict:
         """Set one config option (`model`, `mode`, `thinking`, ...).
 
-        Wire name is `configId` (verified against omp 18.1.10).
+        Wire name is `configId` (verified against omp 18.1.10; re-checked live
+        against 18.10.1, 12.10.2026).
         """
         return self._request("session/set_config_option", {
             "sessionId": session_id,
