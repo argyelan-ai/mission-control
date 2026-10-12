@@ -9,6 +9,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import { useAppStore } from "@/lib/store";
 import { api } from "@/lib/api";
+import { useCanSwitchBoards } from "@/lib/boards";
 import type { SystemMetrics } from "@/lib/types";
 import { VoiceButton } from "@/components/voice/VoiceWidget";
 import BoardPicker from "./BoardPicker";
@@ -41,6 +42,12 @@ export default function Sidebar() {
   const pathname = usePathname();
   const store = useAppStore();
   const { sidebarCollapsed, setCommandPaletteOpen } = store;
+  // Operator decision (12.10.2026, "V2"): with exactly one board, the
+  // expanded sidebar drops the board-name row entirely — search becomes
+  // the visual top. Settings -> Profile ("Boards" card) is where the one
+  // board's name and "New board" live instead. Collapsed rail unaffected
+  // (BoardPicker still renders its own icon mark there either way).
+  const showBoardRow = useCanSwitchBoards();
   // Fall back rather than crash: state persisted by an older build carries no
   // pinnedNav, and partial store mocks in tests carry neither.
   const pinnedNav = store.pinnedNav ?? DEFAULT_PINS;
@@ -247,16 +254,26 @@ export default function Sidebar() {
         padding: sidebarCollapsed ? "10px 0" : "10px",
       }}
     >
-      {/* Zone 1 — where am I. With one board this is plain text (operator
-          decision 12.10.2026, variant B) — BoardPicker decides that itself
-          via canSwitchBoards(). The voice assistant used to live here; it
-          now sits beside the search row (zone 2) instead, see the note
-          there for why. */}
-      <div className={sidebarCollapsed ? "px-2.5" : "flex items-center gap-2"}>
-        <div className={sidebarCollapsed ? "" : "flex-1 min-w-0"}>
-          <BoardPicker collapsed={sidebarCollapsed} />
+      {/* Zone 1 — where am I. Collapsed rail: BoardPicker always renders its
+          icon mark, board count or not. Expanded: with 2+ boards, the
+          ordinary switcher; with exactly one, this row is skipped outright
+          (operator decision 12.10.2026, "V2" — a bare board name "looked
+          silly", the name lives in Settings -> Profile instead). The voice
+          assistant used to live here; it now sits beside the search row
+          (zone 2), see the note there for why. */}
+      {sidebarCollapsed ? (
+        <div className="px-2.5">
+          <BoardPicker collapsed />
         </div>
-      </div>
+      ) : (
+        showBoardRow && (
+          <div className="flex items-center gap-2">
+            <div className="flex-1 min-w-0">
+              <BoardPicker collapsed={false} />
+            </div>
+          </div>
+        )
+      )}
 
       {/* Zone 2 — search / jump */}
       {sidebarCollapsed ? (
@@ -293,7 +310,7 @@ export default function Sidebar() {
         // it (operator feedback 12.10.2026). A separate ghost button, same
         // height, with its own "Voice (Jarvis)" label avoids both: one clear
         // target next to the other.
-        <div className="flex items-center gap-2 mt-2">
+        <div className={`flex items-center gap-2 ${showBoardRow ? "mt-2" : ""}`}>
           <button
             onClick={() => setCommandPaletteOpen(true)}
             className="flex items-center gap-2 shrink-0 flex-1 min-w-0 cursor-pointer text-left px-3"

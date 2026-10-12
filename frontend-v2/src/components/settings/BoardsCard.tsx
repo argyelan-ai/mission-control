@@ -2,12 +2,14 @@
 
 /**
  * Boards — Settings/Profile. "Create board" lives here while there is only
- * one board (operator decision 12.10.2026, variant B): the sidebar keeps
- * showing the board name as plain text with no switcher or lone "+" to
- * create one, so this quiet card is where the capability is not lost. With
- * two or more boards, the sidebar's own switcher already carries "+ New
- * board" in its dropdown, so this card steps back (K3 — the same action
- * is not offered twice).
+ * one board. With variant B (12.10.2026) the sidebar kept the board name as
+ * plain text; with "V2" (12.10.2026) that row is gone from the sidebar
+ * entirely ("looked silly" with nothing to switch to), so this card is now
+ * the ONLY place the one board's name shows — it is shown here, plus the
+ * quiet "+ New board" entry that keeps the capability from being lost. With
+ * two or more boards, the sidebar's own switcher already carries both the
+ * active name and "+ New board" in its dropdown, so this card steps back
+ * (K3 — the same facts are not shown twice).
  */
 import { useState, useRef, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -59,6 +61,8 @@ export function BoardsCard() {
   // a second time (K3).
   if (canSwitchBoards(boards)) return null;
 
+  const current = boards[0];
+
   function handleCreate() {
     if (!name.trim()) return;
     createMutation.mutate({ name: name.trim(), slug: slugify(name.trim()), color, icon });
@@ -74,6 +78,26 @@ export function BoardsCard() {
           {t("boards.description")}
         </p>
       </div>
+
+      {/* The one board's name — the sidebar no longer shows it at all, so
+          this is its only home now. */}
+      {current && (
+        <div className="flex items-center gap-2" data-testid="settings-boards-current">
+          <span
+            aria-hidden
+            className="shrink-0"
+            style={{
+              width: 10,
+              height: 10,
+              borderRadius: "var(--radius-full)",
+              background: current.color ?? C.textSecondary,
+            }}
+          />
+          <span className="text-sm truncate" style={{ color: C.textPrimary }}>
+            {current.name}
+          </span>
+        </div>
+      )}
 
       {!creating ? (
         <button

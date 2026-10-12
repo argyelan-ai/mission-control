@@ -1,16 +1,18 @@
 /**
- * Sidebar top area — variant B + V1 (operator decisions 12.10.2026):
+ * Sidebar top area — variant B + V1 + "V2" (operator decisions 12.10.2026):
  *
- * - One board: the board name is plain text (no switcher/chevron/+), and
- *   the voice assistant (Jarvis) is a separate button beside the search
- *   row, not floating next to the name and not inside the search field
- *   (commit f61f392a moved it out of there once already). Its accessible
- *   name is "Voice (Jarvis)" — never reads as "search by voice".
+ * - One board: the board-name row is gone from the sidebar entirely — not
+ *   even as plain text ("looked silly" with nothing to switch to; the name
+ *   now lives only in Settings -> Profile, see BoardsCard.test.tsx). The
+ *   search/voice row becomes the visual top. The voice assistant (Jarvis)
+ *   is a separate button beside the search row, not inside the search
+ *   field (commit f61f392a moved it out of there once already). Its
+ *   accessible name is "Voice (Jarvis)" — never reads as "search by voice".
  * - Two or more boards: the ordinary switcher (name + dropdown) is back,
  *   and the mic stays in the same place beside search.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 const oneBoard = [
@@ -86,18 +88,20 @@ describe("Sidebar top area", () => {
     boardsResult = oneBoard;
   });
 
-  it("one board: name is plain text, mic sits beside search with a clear label", async () => {
+  it("one board: no board row at all, mic sits beside search with a clear label", async () => {
     renderSidebar();
 
-    const name = await screen.findByText("Only Board");
-    expect(name.closest("button")).toBeNull();
-    expect(screen.queryByRole("listbox")).toBeNull();
-
-    const mic = screen.getByTestId("voice-button");
+    // Settle: the boards query has resolved (one way or another the board
+    // row would be rendered or not by then — nothing async left to wait on).
+    const mic = await screen.findByTestId("voice-button");
     expect(mic).toHaveAccessibleName("Voice (Jarvis)");
 
-    // Beside the search row, not floating next to the board name: the
-    // search trigger and the mic share one parent row.
+    // No board row at all — not plain text, not a switcher, nothing.
+    expect(screen.queryByText("Only Board")).toBeNull();
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(screen.queryByRole("button", { name: /choose board/i })).toBeNull();
+
+    // Search becomes the visual top: its row holds the mic beside it.
     const search = screen.getByText("Search").closest("button")!;
     expect(mic.parentElement).toBe(search.parentElement);
   });

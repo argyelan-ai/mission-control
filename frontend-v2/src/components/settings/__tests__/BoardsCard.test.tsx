@@ -1,8 +1,11 @@
 /**
  * BoardsCard (Settings → Profile) — "create board" moved here while the
  * sidebar switcher is hidden for a single board (operator decision
- * 12.10.2026, variant B). With two or more boards the sidebar's own
- * switcher already carries "+ New board", so this card steps back (K3).
+ * 12.10.2026, variant B). With "V2" (12.10.2026) the sidebar drops the
+ * board-name row entirely for one board, so this card is also the only
+ * place the current board's name is shown. With two or more boards the
+ * sidebar's own switcher already carries the name and "+ New board", so
+ * this card steps back (K3).
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
@@ -46,6 +49,11 @@ describe("BoardsCard", () => {
   beforeEach(() => {
     listResult = oneBoard;
     createMock.mockClear();
+  });
+
+  it("shows the current board's name — the sidebar no longer shows it at all", async () => {
+    renderCard();
+    expect(await screen.findByTestId("settings-boards-current")).toHaveTextContent("Only Board");
   });
 
   it("offers a quiet create entry with one board, and creates a board through it", async () => {
