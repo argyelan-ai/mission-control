@@ -1065,17 +1065,19 @@
       "kind": {
         "task": "Running task",
         "session": "Chat folder",
-        "recent": "Last used"
+        "workspace": "Agent workspace"
       },
       "commitMeta": "{hash} · {ago}",
       "noChanges": "No uncommitted changes",
       "noCommit": "No commit yet",
-      "noRepo": "No git repository found",
-      "noRepoHint": "Neither the chat's folder nor the agent's workspace contains a git repository.",
-      "loadFailed": "Couldn't load the diff."
+      "noRepo": "This chat's folder is not a git repository",
+      "noRepoHint": "Only the repository the chat works in is shown — never another workspace.",
+      "loadFailed": "Couldn't load the diff.",
+      "ahead": "{count} commits ahead of upstream",
+      "behind": "{count} commits behind upstream"
     },
     "panels": {
-      "diff": "Diff",
+      "diff": "Changes",
       "browser": "Browser",
       "close": "Close panel"
     },

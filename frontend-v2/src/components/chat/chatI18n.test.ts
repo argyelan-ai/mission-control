@@ -247,7 +247,7 @@ describe("sessions.diff / sessions.panels / gitDiff — EN/DE", () => {
   }
 
   it("every source kind the backend sends has a label", () => {
-    for (const kind of ["task", "session", "recent"]) {
+    for (const kind of ["task", "session", "workspace"]) {
       expect(typeof pick(en, `sessions.diff.kind.${kind}`)).toBe("string");
       expect(typeof pick(de, `sessions.diff.kind.${kind}`)).toBe("string");
     }

@@ -13,16 +13,16 @@ import userEvent from "@testing-library/user-event";
 import { PanelRail } from "./PanelRail";
 
 describe("PanelRail", () => {
-  it("renders one button per panel — Diff and Browser only, no Terminal", () => {
+  it("renders one button per panel — Changes and Browser only, no Terminal", () => {
     render(<PanelRail active={null} onSelect={vi.fn()} />);
-    expect(screen.getByRole("button", { name: "Diff" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Changes" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Browser" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Terminal" })).not.toBeInTheDocument();
   });
 
   it("marks the active panel as pressed", () => {
     render(<PanelRail active="diff" onSelect={vi.fn()} />);
-    expect(screen.getByRole("button", { name: "Diff" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Changes" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "Browser" })).toHaveAttribute("aria-pressed", "false");
   });
 

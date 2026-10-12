@@ -142,7 +142,7 @@ describe("DiffPanel", () => {
     diffMock.mockRejectedValue(new Error('API 404: {"reason": "no_workspace"}'));
     renderWithQuery(<DiffPanel agentId="agent-1" />);
 
-    expect(await screen.findByText("No git repository found")).toBeInTheDocument();
+    expect(await screen.findByText("This chat's folder is not a git repository")).toBeInTheDocument();
   });
 
   it("shows a generic error state for other failures", async () => {
@@ -219,6 +219,27 @@ describe("DiffPanel", () => {
     expect(line).toHaveTextContent("scratch · main");
     expect(within(line).getByText("Chat folder")).toBeInTheDocument();
     expect(line).toHaveAttribute("title", "/workspace/scratch");
+  });
+
+  it("shows ahead/behind of the upstream only when non-zero", async () => {
+    diffMock.mockResolvedValue(
+      mkDiff({ source: { kind: "session", repo: "mc", branch: "feat/x", path: "/workspace/mc", ahead: 2, behind: 0 } }),
+    );
+    renderWithQuery(<DiffPanel agentId="agent-1" />);
+
+    const counts = await screen.findByTestId("diff-ahead-behind");
+    expect(counts).toHaveTextContent(/^↑2$/);
+    expect(within(counts).getByTitle("2 commits ahead of upstream")).toBeInTheDocument();
+  });
+
+  it("shows no ahead/behind without an upstream", async () => {
+    diffMock.mockResolvedValue(
+      mkDiff({ source: { kind: "session", repo: "mc", branch: "main", path: "/workspace/mc", ahead: null, behind: null } }),
+    );
+    renderWithQuery(<DiffPanel agentId="agent-1" />);
+
+    await screen.findByTestId("diff-source");
+    expect(screen.queryByTestId("diff-ahead-behind")).not.toBeInTheDocument();
   });
 
   it("shows no raw key for a source kind it does not know", async () => {

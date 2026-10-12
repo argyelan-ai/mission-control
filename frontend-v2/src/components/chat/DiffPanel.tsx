@@ -7,11 +7,12 @@
  * mirrors `GET /agents/{id}/chat/diff?scope=`.
  *
  * WHICH repository is the backend's call (`workspace_diff.choose_repo`:
- * running task → the chat session's own folder → the repository git touched
- * last). The payload's `source` block names it, and this panel shows it in a
- * line under the tabs — repo, branch and why — so the operator can always
- * tell what they are looking at. Before 04.10.2026 the panel showed a
- * months-old commit of a finished task with no hint where it came from.
+ * running task → the chat session's own folder; nothing is guessed). The
+ * payload's `source` block names it, and this panel shows it in a line under
+ * the tabs — repo, branch, ahead/behind and why — so the operator can always
+ * tell what they are looking at. A chat whose folder is no repository gets an
+ * honest empty state (404 `no_workspace`), never another workspace: until
+ * 12.10.2026 it showed the freshest of ~70 old task worktrees.
  *
  * Refresh: every 15s while the parent-supplied `refreshHot` is true (the chat
  * stream's `status === "working"`), and once more the moment it turns false —
@@ -65,9 +66,12 @@ function isNoWorkspaceError(err: unknown): boolean {
   return err instanceof Error && err.message.includes("no_workspace");
 }
 
-/** Repo · branch · why — one quiet line, machine values in mono (K7). */
+/** Repo · branch · ahead/behind · why — one quiet line, machine values in
+ *  mono (K7). Ahead/behind only when non-zero (K3: nothing empty). */
 function SourceLine({ source }: { source: ChatDiffSource }) {
   const t = useTranslations("sessions.diff");
+  const ahead = source.ahead ?? 0;
+  const behind = source.behind ?? 0;
   return (
     <div
       data-testid="diff-source"
@@ -80,6 +84,13 @@ function SourceLine({ source }: { source: ChatDiffSource }) {
         {source.repo}
         {source.branch && <span style={{ color: C.textMuted }}>{` · ${source.branch}`}</span>}
       </span>
+      {(ahead > 0 || behind > 0) && (
+        <span data-testid="diff-ahead-behind" className="font-mono tabular-nums shrink-0">
+          {ahead > 0 && <span title={t("ahead", { count: ahead })}>{`↑${ahead}`}</span>}
+          {ahead > 0 && behind > 0 && " "}
+          {behind > 0 && <span title={t("behind", { count: behind })}>{`↓${behind}`}</span>}
+        </span>
+      )}
       {/* A kind a newer backend invents shows nothing rather than a raw key. */}
       {t.has(`kind.${source.kind}`) && <span className="ml-auto shrink-0">{t(`kind.${source.kind}`)}</span>}
     </div>

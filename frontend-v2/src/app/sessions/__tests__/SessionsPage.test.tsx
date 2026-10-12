@@ -374,7 +374,7 @@ describe("SessionsPage — panel rail switches the panel slot's content (Diff/Br
     renderPage();
     await screen.findAllByText("Agent One");
 
-    await user.click(screen.getByRole("button", { name: "Diff" }));
+    await user.click(screen.getByRole("button", { name: "Changes" }));
     await screen.findByTestId("diff-panel-stub");
 
     await user.click(screen.getByRole("button", { name: "Browser" }));
@@ -387,10 +387,10 @@ describe("SessionsPage — panel rail switches the panel slot's content (Diff/Br
     renderPage();
     await screen.findAllByText("Agent One");
 
-    await user.click(screen.getByRole("button", { name: "Diff" }));
+    await user.click(screen.getByRole("button", { name: "Changes" }));
     await screen.findByTestId("diff-panel-stub");
 
-    await user.click(screen.getByRole("button", { name: "Diff" }));
+    await user.click(screen.getByRole("button", { name: "Changes" }));
     expect(screen.queryByTestId("diff-panel-stub")).not.toBeInTheDocument();
   });
 });
