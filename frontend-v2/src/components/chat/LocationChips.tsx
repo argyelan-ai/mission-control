@@ -87,7 +87,7 @@ export function LocationChips({ paths }: { paths: string[] }) {
                 wide as the wider of the two, so swapping the label to "Copied"
                 never shifts the row, and no second element appears that could
                 read as another file. */}
-            <span className="grid min-w-0">
+            <span className="grid min-w-0 text-left">
               <span
                 className="truncate [grid-area:1/1]"
                 style={{ visibility: state ? "hidden" : "visible" }}
