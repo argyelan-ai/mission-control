@@ -789,7 +789,7 @@ export const api = {
         `/api/v1/agents/${agentId}/chat/history${suffix}`,
       );
     },
-    // ── Changes panel actions (P3) — operator-only, each needs `confirm`
+    // ── Changes panel actions (part 3) — operator-only, each needs `confirm`
     // (the server refuses without it). Errors keep the backend's
     // `{"reason": …}` body in the message (see `actionReason`).
     revertFile: (agentId: string, path: string) =>

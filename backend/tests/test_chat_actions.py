@@ -1,4 +1,4 @@
-"""chat_actions — the Changes panel's write actions (chat package P3):
+"""chat_actions — the Changes panel's write actions (Changes panel, part 3):
 revert one file the chat changed, commit, open a pull request.
 
 The guards are the point, so most tests are refusals: a path out of the

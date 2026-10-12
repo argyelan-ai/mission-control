@@ -1131,7 +1131,7 @@ claude-TUI ──JSONL live──▶  transcript_chat.ChatTailerManager (1s-Poll
   kombinierter Diff; fehlgeschlagene Aufrufe und MC-Hilfsdateien zählen nicht) — für jede
   Harness und ohne Git. Die Antwort trägt `repo` (derselbe `source`-Block wie oben, oder
   `null`); nur mit Repo zeigt das Panel die Reiter „Arbeitsstand"/„Letzter Commit".
-- **Panel „Änderungen" / Aktionen (P3, Operator-Entscheid 12.10.2026):** drei schreibende
+- **Panel „Änderungen" / Aktionen (Teil 3, Operator-Entscheid 12.10.2026):** drei schreibende
   Aktionen, jede hinter genau einer Bestätigung (Sheet; der Server verlangt `confirm: true`,
   nur `require_user`, also nie ein Agent-Token), jede als Activity-Event mit `actor:
   "operator"` protokolliert — Ablehnungen eingeschlossen (`chat.action_refused`).

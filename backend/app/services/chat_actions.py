@@ -1,4 +1,4 @@
-"""chat_actions — the Changes panel's three write actions (chat package P3).
+"""chat_actions — the Changes panel's three write actions (Changes panel, part 3).
 
 The operator's phone is the remote control of a chat: what the chat changed
 can be put back, committed, or opened as a pull request — each behind one

@@ -119,7 +119,7 @@ export interface ChatChangeFile {
   reverted?: boolean;
 }
 
-/** Whether Commit / Open PR can run for the chat's repository (P3). A
+/** Whether Commit / Open PR can run for the chat's repository (Changes panel, part 3). A
  *  `reason` is a code the panel translates (`sessions.diff.reason.*`). */
 export interface ChatActionAvailability {
   ok: boolean;

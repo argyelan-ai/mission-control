@@ -23,7 +23,7 @@
  * the end of a turn is exactly when edits and commits land. A manual refresh
  * button is always there.
  *
- * Actions (P3, operator decision 12.10.2026): "Revert" per file the chat
+ * Actions (part 3, operator decision 12.10.2026): "Revert" per file the chat
  * changed — in "This chat" (file detail) and in "Uncommitted" (when the git
  * file is one of the chat's files) — and, for a repository, a footer with
  * "Commit" and "Open PR" (only the ones the backend says can run,

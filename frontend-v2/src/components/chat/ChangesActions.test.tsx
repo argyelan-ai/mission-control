@@ -1,5 +1,5 @@
 /**
- * Changes panel actions (chat package P3): Revert per file, Commit, Open PR —
+ * Changes panel actions (part 3): Revert per file, Commit, Open PR —
  * each behind one confirmation sheet.
  *
  * The guards that matter on this side: nothing is sent before the operator

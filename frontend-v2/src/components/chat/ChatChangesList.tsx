@@ -12,7 +12,7 @@
  * machine value, K7), its folder and how often/when it changed sit quietly
  * below; +/− on the right in tabular numbers. Tap → the file's combined diff
  * (all its edits, oldest first) in the same `ToolDiffView` the tool cards use,
- * with a back row. The detail view carries "Revert" (P3): one tap opens the
+ * with a back row. The detail view carries "Revert" (part 3): one tap opens the
  * confirmation sheet (`RevertSheet`); a file MC already put back says so
  * instead (`reverted`).
  */

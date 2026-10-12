@@ -24,7 +24,7 @@ Shape (``ToolDiff`` in ``frontend-v2/src/lib/chatTypes.ts``)::
 
 Pure, never raises on odd input (returns ``None``/``[]`` instead).
 
-**Raw texts for "Revert file" (chat package P3).** Only inside
+**Raw texts for "Revert file" (Changes panel, part 3).** Only inside
 ``capture_texts()`` does every diff also carry ``_texts`` — the edit's
 untruncated before/after (``scope`` ``"file"`` = whole file, ``"snippet"``
 = a Claude Edit's ``old_string``/``new_string``) and whether the harness

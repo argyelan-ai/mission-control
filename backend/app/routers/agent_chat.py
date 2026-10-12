@@ -597,7 +597,7 @@ async def get_chat_changes(
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# Changes panel actions (chat package P3): revert file · commit · open PR
+# Changes panel actions (Changes panel, part 3): revert file · commit · open PR
 # ══════════════════════════════════════════════════════════════════════════
 #
 # Operator-initiated only (``require_user``: an agent token can't call

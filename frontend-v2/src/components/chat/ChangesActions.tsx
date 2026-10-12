@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * ChangesActions — the Changes panel's three write actions (chat package P3),
+ * ChangesActions — the Changes panel's three write actions (Changes panel, part 3),
  * each behind ONE confirmation sheet (operator decision 12.10.2026: the chat is
  * the phone remote, every write needs one explicit tap):
  *
