@@ -23,6 +23,13 @@
  * the end of a turn is exactly when edits and commits land. A manual refresh
  * button is always there.
  *
+ * Actions (P3, operator decision 12.10.2026): "Revert" per file the chat
+ * changed — in "This chat" (file detail) and in "Uncommitted" (when the git
+ * file is one of the chat's files) — and, for a repository, a footer with
+ * "Commit" and "Open PR" (only the ones the backend says can run,
+ * `changes.actions`). Each opens one confirmation sheet (`ChangesActions`);
+ * after a PR opens, its link stays in the footer.
+ *
  * Every visible string comes from `sessions.diff.*` (EN/DE); the backend
  * sends codes (`scope`, `source.kind`) and ISO times, never sentences. The
  * tab choice persists in localStorage ("mc.chat.changestab").
@@ -30,13 +37,15 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocale, useTranslations } from "next-intl";
-import { RefreshCw, Loader2, FolderX, FolderGit2 } from "lucide-react";
+import { RefreshCw, Loader2, FolderX, FolderGit2, RotateCcw, ExternalLink, GitPullRequest } from "lucide-react";
 import { api } from "@/lib/api";
 import { C } from "@/lib/colors";
 import { timeAgo } from "@/lib/utils";
-import type { ChatDiffSource, CommitDiff } from "@/lib/types";
+import type { ChatDiffSource, CommitDiff, CommitDiffFile } from "@/lib/types";
+import type { ChatChangeFile, ChatChanges } from "@/lib/chatTypes";
 import { GitDiffView } from "@/components/git/GitDiffView";
 import { ChatChangesList } from "./ChatChangesList";
+import { CommitSheet, PrSheet, RevertSheet, type RevertTarget } from "./ChangesActions";
 
 type DiffScope = "worktree" | "last-commit";
 type ChangesTab = "chat" | DiffScope;
@@ -119,6 +128,88 @@ function NoRepoLine() {
   );
 }
 
+/** The chat's own entry for a file of the git diff, if the chat changed it.
+ *  Git names files relative to the repository, the chat relative to its
+ *  folder (or absolute, outside it): equal, or one is the other below a
+ *  folder boundary — the session folder may sit above or below the repo
+ *  root. The server re-checks everything; this only decides where the
+ *  Revert button shows. */
+export function chatFileFor(file: CommitDiffFile, changes: ChatChanges | undefined, repo: ChatDiffSource | null) {
+  if (!changes) return undefined;
+  const name = file.filename;
+  return changes.files.find((f: ChatChangeFile) => {
+    if (f.reverted) return false;
+    if (f.path.startsWith("/")) return repo ? f.path === `${repo.path}/${name}` : false;
+    return f.path === name || name.endsWith(`/${f.path}`) || f.path.endsWith(`/${name}`);
+  });
+}
+
+/** Commit (primary) and Open PR (text) — only what can run; the PR link
+ *  once one is open. */
+function ActionFooter({
+  changes,
+  prUrl,
+  onCommit,
+  onPr,
+}: {
+  changes: ChatChanges;
+  prUrl: string | null;
+  onCommit: () => void;
+  onPr: () => void;
+}) {
+  const t = useTranslations("sessions.diff");
+  const canCommit = changes.actions?.commit.ok ?? false;
+  const canPr = changes.actions?.pr.ok ?? false;
+  if (!canCommit && !canPr && !prUrl) return null;
+  return (
+    <div
+      data-region="changes-actions"
+      className="flex items-center gap-2 px-3 py-2 border-t shrink-0 min-w-0"
+      style={{ borderColor: C.border }}
+    >
+      {prUrl && (
+        <a
+          href={prUrl}
+          target="_blank"
+          rel="noreferrer"
+          data-testid="changes-pr-link"
+          title={prUrl}
+          className="flex items-center gap-2 min-h-11 min-w-0 font-mono text-xs"
+          style={{ color: C.textSecondary }}
+        >
+          <ExternalLink size={14} className="shrink-0" aria-hidden="true" />
+          <span className="truncate">{prUrl.replace(/^https:\/\/github\.com\//, "")}</span>
+        </a>
+      )}
+      <span className="ml-auto flex items-center gap-2 shrink-0">
+        {canPr && (
+          <button
+            type="button"
+            onClick={onPr}
+            data-testid="changes-open-pr"
+            className="flex items-center gap-2 min-h-11 px-3 rounded-md text-sm cursor-pointer bg-transparent border-0"
+            style={{ color: C.textSecondary }}
+          >
+            <GitPullRequest size={14} aria-hidden="true" />
+            {t("act.openPr")}
+          </button>
+        )}
+        {canCommit && (
+          <button
+            type="button"
+            onClick={onCommit}
+            data-testid="changes-commit"
+            className="min-h-11 px-4 rounded-md text-sm font-medium cursor-pointer border-0"
+            style={{ background: C.accent, color: C.onAccent }}
+          >
+            {t("act.commit")}
+          </button>
+        )}
+      </span>
+    </div>
+  );
+}
+
 interface DiffPanelProps {
   agentId: string;
   /** True while the chat stream is actively working — enables the 15s
@@ -133,6 +224,9 @@ export function DiffPanel({ agentId, refreshHot = false }: DiffPanelProps) {
   const locale = useLocale();
   const queryClient = useQueryClient();
   const [tab, setTabState] = useState<ChangesTab>("chat");
+  const [revert, setRevert] = useState<RevertTarget | null>(null);
+  const [sheet, setSheet] = useState<"commit" | "pr" | null>(null);
+  const [prUrl, setPrUrl] = useState<string | null>(null);
 
   // Same SSR-safe restore pattern as sessions/page.tsx's persisted state:
   // localStorage doesn't exist during the server render, so the real value
@@ -253,7 +347,7 @@ export function DiffPanel({ agentId, refreshHot = false }: DiffPanelProps) {
           ) : changesQuery.isError || !changesQuery.data ? (
             <Message text={t("chatLoadFailed")} />
           ) : (
-            <ChatChangesList key={agentId} changes={changesQuery.data} />
+            <ChatChangesList key={agentId} changes={changesQuery.data} agentId={agentId} />
           )
         ) : diffQuery.isLoading ? (
           <Spinner />
@@ -272,9 +366,45 @@ export function DiffPanel({ agentId, refreshHot = false }: DiffPanelProps) {
         ) : !diff || diff.files.length === 0 ? (
           <Message text={isCommit && !diff?.hash ? t("noCommit") : t("noChanges")} />
         ) : (
-          <GitDiffView diff={diff} subtitle={commitMeta} />
+          <GitDiffView
+            diff={diff}
+            subtitle={commitMeta}
+            fileAction={
+              scope === "worktree"
+                ? (file) => {
+                    const own = chatFileFor(file, changesQuery.data, repo);
+                    if (!own) return null;
+                    return (
+                      <button
+                        type="button"
+                        onClick={() => setRevert({ path: own.path, edits: own.edits, created: own.created })}
+                        data-testid="diff-file-revert"
+                        className="flex items-center gap-2 px-3 min-h-11 text-sm cursor-pointer bg-transparent border-0"
+                        style={{ color: C.textSecondary }}
+                      >
+                        <RotateCcw size={14} aria-hidden="true" />
+                        {t("act.revert")}
+                      </button>
+                    );
+                  }
+                : undefined
+            }
+          />
         )}
       </div>
+
+      {repo && changesQuery.data && (
+        <ActionFooter
+          changes={changesQuery.data}
+          prUrl={prUrl}
+          onCommit={() => setSheet("commit")}
+          onPr={() => setSheet("pr")}
+        />
+      )}
+
+      <RevertSheet agentId={agentId} target={revert} onClose={() => setRevert(null)} />
+      <CommitSheet agentId={agentId} open={sheet === "commit"} onClose={() => setSheet(null)} />
+      <PrSheet agentId={agentId} open={sheet === "pr"} onClose={() => setSheet(null)} onOpened={setPrUrl} />
     </div>
   );
 }

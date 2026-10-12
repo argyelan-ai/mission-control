@@ -1110,7 +1110,7 @@ claude-TUI ──JSONL live──▶  transcript_chat.ChatTailerManager (1s-Poll
   touched den Marker deshalb bei jeder Chat-Eingabe mit.
 - **Diff-Panel:** `GET /agents/{id}/chat/diff?scope=worktree|last-commit` läuft
   `git diff`/`git show` im Agent-Workspace und liefert dieselbe `CommitDiff`-Form, die
-  `GitDiffView` schon aus dem Git-Workflow (oben) kennt — read-only, kein Staging/Revert.
+  `GitDiffView` schon aus dem Git-Workflow (oben) kennt — read-only (Schreiben: siehe Aktionen unten).
   Welches Repo: `workspace_diff.choose_repo` — laufende Task → Ordner der Chat-Sitzung
   (`TranscriptAdapter.session_cwd`, je Harness aus dem eigenen Transkript; nach oben bis
   zur Workspace-Grenze) → nur wenn die Sitzung gar keinen Ordner kennt: der Agent-Workspace
@@ -1131,6 +1131,29 @@ claude-TUI ──JSONL live──▶  transcript_chat.ChatTailerManager (1s-Poll
   kombinierter Diff; fehlgeschlagene Aufrufe und MC-Hilfsdateien zählen nicht) — für jede
   Harness und ohne Git. Die Antwort trägt `repo` (derselbe `source`-Block wie oben, oder
   `null`); nur mit Repo zeigt das Panel die Reiter „Arbeitsstand"/„Letzter Commit".
+- **Panel „Änderungen" / Aktionen (P3, Operator-Entscheid 12.10.2026):** drei schreibende
+  Aktionen, jede hinter genau einer Bestätigung (Sheet; der Server verlangt `confirm: true`,
+  nur `require_user`, also nie ein Agent-Token), jede als Activity-Event mit `actor:
+  "operator"` protokolliert — Ablehnungen eingeschlossen (`chat.action_refused`).
+  Ausgeführt im Backend auf demselben Host-Pfad, den das Panel liest (kein zweiter Kanal).
+  Logik: `services/chat_actions.py`, Endpunkte in `routers/agent_chat.py`.
+  - `POST /chat/revert {path}` — eine Datei, die DIESER Chat geändert hat, zurück auf den
+    Stand vor dem Chat. Quelle ist das Transkript selbst (`chat_diff.capture_texts`: rohe
+    Vorher/Nachher-Texte, nur in diesem Kontext, nie in einem Chat-Frame): rückwärts von der
+    Datei auf der Platte — ein Ganzdatei-Edit muss exakt passen, ein Snippet-Edit noch da
+    sein, sonst `changed_externally` (nie überschreiben). Vom Chat angelegte Datei → gelöscht.
+    Im Repo: ist der Ursprung genau der letzte Commit → `git checkout HEAD -- <datei>`.
+    Nur innerhalb des Chat-Ordners (bzw. Repo einer laufenden Task), aufgelöst ohne `..`/
+    Symlink-Ausweg; `.git/` nie. Wiederholung → `already` (über das Activity-Event).
+  - `GET /chat/commit/draft` + `POST /chat/commit {message}` — alles Offene committen
+    (MC-Hilfsdateien ausgenommen), Nachricht deterministisch vorgeschlagen und editierbar,
+    Hooks laufen (nie `--no-verify`); nicht auf dem Default-Branch eines Repos mit Remote.
+  - `GET /chat/pr/draft` + `POST /chat/pr {title}` — normaler Push des Branches und PR über
+    `GitService.push_branch`/`create_pr` (derselbe Weg wie der Task-Flow); nie `--force`,
+    nie `main`/`master`/Default-Branch; ein offener PR des Branches wird zurückgegeben statt
+    eines zweiten. `GET /chat/changes` trägt mit Repo `actions{commit,pr}` (ok + Grund), damit
+    das Panel nur Knöpfe zeigt, die laufen können. Einordnung nach ADR-089: vom Operator
+    ausgelöst, sein Tipp ist die Freigabe; einen eigenen PR-Gate gibt es noch nicht.
 - **Adapter-Kontrakt:** die vier Bausteine (Session-Resolution+Parser, Tailer,
   Eingabe-Kanal, Pane-Sonde) sind bewusst austauschbar pro CLI gehalten (Muster wie
   `HOST_ADAPTERS`/ADR-064 und der Turn-Signal-Kontrakt/ADR-071) — v1 liefert nur den
