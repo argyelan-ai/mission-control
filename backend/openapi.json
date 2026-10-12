@@ -4770,6 +4770,24 @@
         ]
       }
     },
+    "/api/v1/voice/live/config": {
+      "get": {
+        "operationId": "get_config_api_v1_voice_live_config_get",
+        "summary": "Get Config",
+        "tags": [
+          "voice-live"
+        ]
+      }
+    },
+    "/api/v1/voice/live/session": {
+      "post": {
+        "operationId": "create_session_api_v1_voice_live_session_post",
+        "summary": "Create Session",
+        "tags": [
+          "voice-live"
+        ]
+      }
+    },
     "/api/v1/voice/token": {
       "post": {
         "operationId": "issue_voice_token_api_v1_voice_token_post",

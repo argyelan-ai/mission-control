@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
 import { Brain, Square, ArrowUp, ChevronDown, Paperclip, X, FileText} from "lucide-react";
 import { C, STATUS } from "@/lib/colors";
@@ -205,6 +205,9 @@ interface ComposerProps {
   /** Phone: the detail action bar sits below and owns the home-indicator
    *  strip, so the composer drops its own safe-area padding. */
   barBelow?: boolean;
+  /** Live-voice mic (voice PR 1), rendered left of send/stop. `null` when
+   *  the feature is off — then nothing is shown (K3). */
+  voiceSlot?: ReactNode;
 }
 
 /**
@@ -228,7 +231,7 @@ interface ComposerProps {
  *  globals.css passen. */
 export const EFFORT_SETTLE_MS = 320;
 
-export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = true, capabilities = null, paneObservable = true, prefill = null, barBelow = false }: ComposerProps) {
+export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = true, capabilities = null, paneObservable = true, prefill = null, barBelow = false, voiceSlot = null }: ComposerProps) {
   const t = useTranslations("sessions");
   const locale = useLocale();
   const [text, setText] = useState("");
@@ -1242,6 +1245,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                 {currentEffort}
               </span>
             ))}
+            {voiceSlot}
             {sessionLive && (
               !showStop ? (
                 <button

@@ -2121,6 +2121,29 @@ export const api = {
       request(`/api/v1/night-shift/tasks/${encodeURIComponent(taskId)}`, { method: "DELETE" }),
   },
 
+  // ── Live voice in the chat (voice PR 1, ADR-091 draft) ─────────────────
+  voiceLive: {
+    /** 404 = feature off or no OpenAI key. */
+    config: (): Promise<{ enabled: boolean; model: string; voice: string }> =>
+      request("/api/v1/voice/live/config"),
+    /** Short-lived client secret for one WebRTC call with this agent. */
+    session: (
+      agentId: string,
+      lang: "de" | "en",
+    ): Promise<{
+      client_secret: string;
+      expires_at: number;
+      model: string;
+      voice: string;
+      calls_url: string;
+      agent_name: string;
+    }> =>
+      request("/api/v1/voice/live/session", {
+        method: "POST",
+        body: JSON.stringify({ agent_id: agentId, lang }),
+      }),
+  },
+
   spark: {
     // Back-compat alias — delegates to the host with slug `dgx-spark` (ADR-048).
     metrics: (): Promise<SparkMetrics> =>

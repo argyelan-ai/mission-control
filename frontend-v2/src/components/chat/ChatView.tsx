@@ -60,6 +60,7 @@ import { AdminOnlyNotice } from "@/components/shared/AdminOnlyNotice";
 import { TerminalPanel, type AgentWithState } from "./TerminalPanel";
 import { ChatOptionsSheet } from "./ChatOptionsSheet";
 import { VoiceButton } from "@/components/voice/VoiceWidget";
+import { VoiceLiveDock } from "@/components/voice/live/VoiceLive";
 import { CENTER_VIEWS, DETAIL_LEVELS, type CenterView, type DetailLevel } from "./chatOptions";
 import type { PanelKind } from "./PanelRail";
 
@@ -1313,7 +1314,10 @@ export function ChatView({
               {!isAdmin ? (
                 <AdminOnlyNotice compact message={t("inputAdminOnly")} />
               ) : agent ? (
+                <VoiceLiveDock agentId={agent.id} agentName={agent.name}>
+                {(voiceSlot) => (
                 <Composer
+                  voiceSlot={voiceSlot}
                   agentId={agent.id}
                   usage={stream.usage}
                   state={stream.state}
@@ -1327,6 +1331,8 @@ export function ChatView({
                   paneObservable={agent.agent_runtime === "cli-bridge"}
                   capabilities={stream.capabilities}
                 />
+                )}
+                </VoiceLiveDock>
               ) : null}
             </>
           )}

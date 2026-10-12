@@ -46,6 +46,16 @@ function mkState(status: StateEvent["status"]): StateEvent {
 }
 
 describe("Composer", () => {
+  it("renders the live-voice slot directly before the send button, and nothing without it", () => {
+    const { rerender } = render(
+      <Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} voiceSlot={<button data-testid="mic-slot">mic</button>} />,
+    );
+    const mic = screen.getByTestId("mic-slot");
+    expect(mic.nextElementSibling).toBe(screen.getByTestId("send-button"));
+    rerender(<Composer agentId="a1" usage={null} state={mkState("idle")} onSend={vi.fn()} onStop={vi.fn()} />);
+    expect(screen.queryByTestId("mic-slot")).toBeNull();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockSetEffort.mockResolvedValue(undefined);

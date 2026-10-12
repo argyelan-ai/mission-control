@@ -109,6 +109,7 @@ from app.routers import (
     tasks,
     usage,
     voice,
+    voice_live,
     x_posts,
 )
 from app.background import (
@@ -455,6 +456,7 @@ app.include_router(agent_chat.router)  # /api/v1/agents/{id}/chat/history|stream
 app.include_router(consensus.router)
 app.include_router(schedule.router)
 app.include_router(voice.router)
+app.include_router(voice_live.router)
 app.include_router(usage.router)  # /api/v1/usage/page|pages — E0 page-usage beacon
 
 # ── Verticals (optional, strippable feature bundles — ADR-044) ──────────────
