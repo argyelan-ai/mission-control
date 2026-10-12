@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import dataclasses
+import logging
 import re
 import uuid
 from pathlib import Path
@@ -16,6 +17,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
@@ -51,7 +53,11 @@ from app.services.reference_ingest import (
     serialize_reference,
     store_reference,
 )
+from app.models.activity import ActivityEvent
+from app.services import chat_actions
+from app.services.activity import emit_event
 from app.services.chat_changes import aggregate_changes
+from app.services.chat_diff import capture_texts
 from app.services.sse import _sse_generator
 from app.services.transcript_adapters import adapter_for
 from app.services.checklist_todo_sync import chat_todo_sync
@@ -73,6 +79,7 @@ from app.services.workspace_diff import (
 )
 
 router = APIRouter(prefix="/api/v1", tags=["agent-chat"])
+logger = logging.getLogger("mc.agent_chat")
 
 _NO_TRANSCRIPT = {"reason": "no_transcript"}
 _NO_WORKSPACE = {"reason": "no_workspace"}
@@ -442,7 +449,37 @@ def _chat_session_cwd(agent: Agent) -> str | None:
         return None
 
 
-async def _chat_repo_picker(agent: Agent, session: AsyncSession):
+@dataclasses.dataclass(frozen=True)
+class _ChatFolders:
+    """What MC knows about where a chat works (collected async, used in a
+    thread). Calling it picks the repository: ``(RepoChoice,
+    display_path)`` or ``NoWorkspaceError`` — shared by the diff, changes
+    and action endpoints, so all of them name the same repository.
+
+    ``session_dir`` is the host path of the chat session's folder (``None``
+    when it recorded none or it is not readable here); ``cwd`` the folder
+    as the agent itself names it."""
+
+    runtime: str | None
+    root: Path | None
+    cwd: str | None
+    session_dir: Path | None
+    boundary: Path | None
+    running_task: Path | None
+
+    def __call__(self):
+        choice = choose_repo(
+            running_task=self.running_task,
+            session_dir=self.session_dir,
+            boundary=self.boundary,
+            # A recorded folder that maps to nothing readable is NOT "no
+            # folder": the root then must not stand in for it.
+            workspace_root=self.root if self.cwd is None else None,
+        )
+        return choice, display_path(self.runtime, self.root, choice.path)
+
+
+async def _chat_repo_picker(agent: Agent, session: AsyncSession) -> _ChatFolders:
     """Collects what the repo choice needs (DB + transcript, async) and
     returns a SYNCHRONOUS picker for ``asyncio.to_thread`` that yields
     ``(RepoChoice, display_path)`` or raises ``NoWorkspaceError``. Shared by
@@ -456,21 +493,14 @@ async def _chat_repo_picker(agent: Agent, session: AsyncSession):
     runtime = agent.agent_runtime
     root = resolve_workspace_path(agent.workspace_path) if agent.workspace_path else None
     cwd = await asyncio.to_thread(_chat_session_cwd, agent)
-    session_dir = host_path_for_agent_cwd(runtime, root, cwd)
-    boundary = cwd_boundary(runtime, root)
-
-    def _pick():
-        choice = choose_repo(
-            running_task=resolve_workspace_path(running_task_raw) if running_task_raw else None,
-            session_dir=session_dir,
-            boundary=boundary,
-            # A recorded folder that maps to nothing readable is NOT "no
-            # folder": the root then must not stand in for it.
-            workspace_root=root if cwd is None else None,
-        )
-        return choice, display_path(runtime, root, choice.path)
-
-    return _pick
+    return _ChatFolders(
+        runtime=runtime,
+        root=root,
+        cwd=cwd,
+        session_dir=host_path_for_agent_cwd(runtime, root, cwd),
+        boundary=cwd_boundary(runtime, root),
+        running_task=resolve_workspace_path(running_task_raw) if running_task_raw else None,
+    )
 
 
 @router.get("/agents/{agent_id}/chat/diff")
@@ -558,7 +588,380 @@ async def get_chat_changes(
 
     changes = await asyncio.to_thread(_read)
     changes["repo"] = repo
+    recorded = await _recorded_reverts(session, agent.id, path.stem)
+    if recorded:
+        await asyncio.to_thread(_mark_reverted, changes["files"], recorded, pick, path, adapter)
+    if repo is not None:
+        changes["actions"] = await asyncio.to_thread(_action_availability, pick)
     return changes
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Changes panel actions (chat package P3): revert file · commit · open PR
+# ══════════════════════════════════════════════════════════════════════════
+#
+# Operator-initiated only (``require_user``: an agent token can't call
+# these), each behind an explicit confirmation the server insists on
+# (``confirm: true``), each audited as an activity event with actor
+# "operator" — refusals included. ADR-089: the operator's tap is the
+# approval; the never-list holds (no force push, no push to the default
+# branch, no hook bypass). Logic and reasons: ``services/chat_actions.py``.
+
+_REVERTED_EVENT = "chat.file_reverted"
+
+
+class ChatRevertBody(BaseModel):
+    path: str
+    confirm: bool = False
+
+
+class ChatCommitBody(BaseModel):
+    message: str
+    confirm: bool = False
+
+
+class ChatPrBody(BaseModel):
+    title: str
+    body: str | None = None
+    confirm: bool = False
+
+
+def _refused(e: chat_actions.Refused) -> JSONResponse:
+    return JSONResponse(status_code=e.status, content=e.body())
+
+
+def _actor(user: Any) -> dict[str, Any]:
+    return {"actor": "operator", "userId": str(getattr(user, "id", "") or "") or None}
+
+
+async def _audit(session: AsyncSession, agent: Agent, event_type: str, title: str,
+                 detail: dict[str, Any], *, severity: str = "info") -> None:
+    """One activity event per action or refusal — never lets an audit
+    hiccup turn a done action into a 500 (the action already happened)."""
+    try:
+        await emit_event(session, event_type, title, severity=severity,
+                         agent_id=agent.id, detail=detail)
+    except Exception:  # noqa: BLE001 — audit is best effort AFTER the act
+        logger.warning("chat action audit failed: %s", event_type, exc_info=True)
+
+
+def _agent_busy(agent_id: uuid.UUID) -> bool:
+    """The chat is mid-turn (as the live stream last saw it): writing into
+    its files now would race the agent's own edits."""
+    state = tailer_manager.last_state(str(agent_id))
+    return isinstance(state, dict) and state.get("status") == "working"
+
+
+async def _recorded_reverts(
+    session: AsyncSession, agent_id: uuid.UUID, session_id: str
+) -> dict[str, tuple[str, int]]:
+    """``{agent-side path: (content sha after the revert, edits it undid)}``
+    for this chat session — the newest record per file wins."""
+    rows = (
+        await session.exec(
+            select(ActivityEvent)
+            .where(ActivityEvent.agent_id == agent_id, ActivityEvent.event_type == _REVERTED_EVENT)
+            .order_by(ActivityEvent.created_at.desc())
+            .limit(500)
+        )
+    ).all()
+    out: dict[str, tuple[str, int]] = {}
+    for row in rows:
+        d = row.detail or {}
+        if d.get("session") != session_id or not isinstance(d.get("key"), str):
+            continue
+        out.setdefault(d["key"], (str(d.get("resultSha")), int(d.get("toolCalls") or 0)))
+    return out
+
+
+def _allowed_roots(folders: "_ChatFolders") -> list[Path]:
+    """Folders an action may touch: the chat session's own folder, and a
+    running task's repository."""
+    roots: list[Path] = []
+    if folders.session_dir is not None:
+        roots.append(folders.session_dir)
+    try:
+        choice, _display = folders()
+    except NoWorkspaceError:
+        choice = None
+    if choice is not None and choice.kind == "task":
+        roots.append(choice.path)
+    return roots
+
+
+def _mark_reverted(files: list[dict[str, Any]], recorded: dict[str, tuple[str, int]],
+                   folders: "_ChatFolders", path: Path, adapter: Any) -> None:
+    """``reverted: true`` on a listed file MC put back in this session and
+    that still holds exactly that content (and no new edit came since)."""
+    try:
+        cwd = adapter.session_cwd(path)
+    except (OSError, ValueError):
+        cwd = None
+    roots = _allowed_roots(folders)
+    for f in files:
+        key = chat_actions._normalise(f["path"], cwd)
+        rec = recorded.get(key)
+        if rec is None or rec[1] != f.get("edits"):
+            continue
+        try:
+            target, _root = chat_actions.resolve_target(
+                key, runtime=folders.runtime, workspace_root=folders.root, allowed_roots=roots)
+            f["reverted"] = chat_actions.sha256_text(chat_actions.read_current(target)) == rec[0]
+        except chat_actions.Refused:
+            continue
+
+
+def _action_availability(folders: "_ChatFolders") -> dict[str, Any]:
+    """Whether Commit / Open PR can run for the chat's repository, and if
+    not, why (a code) — so the panel never offers a button that can only
+    fail."""
+    try:
+        choice, _display = folders()
+    except NoWorkspaceError:
+        return {"commit": {"ok": False, "reason": "no_repo"}, "pr": {"ok": False, "reason": "no_repo"}}
+    out: dict[str, Any] = {}
+    try:
+        chat_actions.commit_guard(choice.path)
+        pending = len(chat_actions.pending_files(choice.path))
+        out["commit"] = {"ok": pending > 0, "reason": None if pending else "nothing_to_commit",
+                         "files": pending}
+    except chat_actions.Refused as e:
+        out["commit"] = {"ok": False, "reason": e.reason}
+    try:
+        chat_actions.pr_guard(choice.path)
+        out["pr"] = {"ok": True, "reason": None}
+    except chat_actions.Refused as e:
+        out["pr"] = {"ok": False, "reason": e.reason}
+    return out
+
+
+@router.post("/agents/{agent_id}/chat/revert")
+async def post_chat_revert(
+    agent_id: uuid.UUID,
+    body: ChatRevertBody,
+    current_user=Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Puts one file this chat changed back to its state before the chat's
+    edits (``chat_actions.revert_file``). Only a file in this chat's
+    Changes list, only inside the chat's folder; refused — never
+    overwritten — when the file changed since the chat's last edit
+    (``changed_externally``). A repeat after success answers ``already``."""
+    agent = await _load_agent_or_404(agent_id, session)
+    audit = {**_actor(current_user), "path": body.path[:500]}
+    if not body.confirm:
+        return JSONResponse(status_code=400, content={"reason": "confirm_required"})
+    if _agent_busy(agent_id):
+        return JSONResponse(status_code=409, content={"reason": "agent_busy"})
+
+    folders = await _chat_repo_picker(agent, session)
+    resolved = await _resolve_transcript_path(agent_id, session)
+    if isinstance(resolved, JSONResponse):
+        return JSONResponse(status_code=404, content={"reason": "not_changed_by_chat"})
+    _agent, tpath, adapter = resolved
+    recorded = await _recorded_reverts(session, agent.id, tpath.stem)
+
+    def _do() -> dict[str, Any]:
+        with capture_texts():
+            history = read_history(tpath, adapter, limit=_WHOLE_SESSION)
+        try:
+            cwd = adapter.session_cwd(tpath)
+        except (OSError, ValueError):
+            cwd = None
+        found = chat_actions.collect_edits(history["events"], cwd, body.path)
+        target, root = chat_actions.resolve_target(
+            found.key, runtime=folders.runtime, workspace_root=folders.root,
+            allowed_roots=_allowed_roots(folders))
+        rec = recorded.get(found.key)
+        if rec is not None and rec[1] == found.tool_calls:
+            if chat_actions.sha256_text(chat_actions.read_current(target)) == rec[0]:
+                return {"status": "already", "key": found.key, "toolCalls": found.tool_calls,
+                        "edits": len(found.edits), "resultSha": rec[0]}
+        result = chat_actions.revert_file(target, root, found.edits)
+        return {**result, "key": found.key, "toolCalls": found.tool_calls, "edits": len(found.edits)}
+
+    try:
+        result = await asyncio.to_thread(_do)
+    except chat_actions.Refused as e:
+        await _audit(session, agent, "chat.action_refused", f"Revert refused: {body.path[:120]}",
+                     {**audit, "action": "revert", "reason": e.reason}, severity="warning")
+        return _refused(e)
+
+    if result["status"] == "reverted":
+        await _audit(session, agent, _REVERTED_EVENT, f"File reverted: {body.path[:120]}", {
+            **audit, "session": tpath.stem, "key": result["key"], "method": result.get("method"),
+            "deleted": result.get("deleted", False), "toolCalls": result["toolCalls"],
+            "resultSha": result["resultSha"],
+        })
+    return {
+        "status": result["status"],
+        "path": body.path,
+        "method": result.get("method"),
+        "deleted": result.get("deleted", False),
+        "edits": result["toolCalls"],
+    }
+
+
+async def _chat_repo_or_refuse(agent: Agent, session: AsyncSession) -> tuple[Path, "_ChatFolders"]:
+    folders = await _chat_repo_picker(agent, session)
+
+    def _pick() -> Path:
+        try:
+            choice, _display = folders()
+        except NoWorkspaceError:
+            raise chat_actions.Refused("no_repo", 404) from None
+        return choice.path
+
+    return await asyncio.to_thread(_pick), folders
+
+
+@router.get("/agents/{agent_id}/chat/commit/draft")
+async def get_chat_commit_draft(
+    agent_id: uuid.UUID,
+    current_user=Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """What a commit would take and a suggested message (editable in the
+    confirmation sheet): ``{branch, files: [{path, status, additions,
+    deletions}], message}``. Read-only."""
+    agent = await _load_agent_or_404(agent_id, session)
+    try:
+        repo, _folders = await _chat_repo_or_refuse(agent, session)
+
+        def _draft() -> dict[str, Any]:
+            branch = chat_actions.commit_guard(repo)
+            files = chat_actions.pending_files(repo)
+            return {"branch": branch, "files": files,
+                    "message": chat_actions.suggest_commit_message(files)}
+
+        return await asyncio.to_thread(_draft)
+    except chat_actions.Refused as e:
+        return _refused(e)
+
+
+@router.post("/agents/{agent_id}/chat/commit")
+async def post_chat_commit(
+    agent_id: uuid.UUID,
+    body: ChatCommitBody,
+    current_user=Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Commits every uncommitted change of the chat's repository with the
+    operator's message. Local only — nothing is pushed."""
+    agent = await _load_agent_or_404(agent_id, session)
+    if not body.confirm:
+        return JSONResponse(status_code=400, content={"reason": "confirm_required"})
+    if _agent_busy(agent_id):
+        return JSONResponse(status_code=409, content={"reason": "agent_busy"})
+    audit = _actor(current_user)
+    try:
+        repo, _folders = await _chat_repo_or_refuse(agent, session)
+        result = await asyncio.to_thread(chat_actions.commit_all, repo, body.message[:10_000])
+    except chat_actions.Refused as e:
+        await _audit(session, agent, "chat.action_refused", "Commit refused",
+                     {**audit, "action": "commit", "reason": e.reason}, severity="warning")
+        return _refused(e)
+    if result["status"] == "committed":
+        await _audit(session, agent, "chat.committed", f"Committed {result['sha']} on {result['branch']}", {
+            **audit, "repo": repo.name, "branch": result["branch"], "sha": result["sha"],
+            "subject": result.get("subject"),
+        })
+    return result
+
+
+@router.get("/agents/{agent_id}/chat/pr/draft")
+async def get_chat_pr_draft(
+    agent_id: uuid.UUID,
+    current_user=Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """What a pull request would be: ``{branch, base, title, ahead,
+    uncommitted}`` (title = the newest commit's subject, editable).
+    Read-only, local refs only."""
+    agent = await _load_agent_or_404(agent_id, session)
+    try:
+        repo, _folders = await _chat_repo_or_refuse(agent, session)
+        return await asyncio.to_thread(chat_actions.pr_guard, repo)
+    except chat_actions.Refused as e:
+        return _refused(e)
+
+
+@router.post("/agents/{agent_id}/chat/pr")
+async def post_chat_pr(
+    agent_id: uuid.UUID,
+    body: ChatPrBody,
+    current_user=Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Pushes the chat's branch (a normal push, never ``--force``, never
+    the default branch) and opens a pull request into the default branch
+    through ``GitService`` — the path MC's task flow uses. An open PR for
+    the branch is returned instead of a second one."""
+    agent = await _load_agent_or_404(agent_id, session)
+    if not body.confirm:
+        return JSONResponse(status_code=400, content={"reason": "confirm_required"})
+    if not body.title.strip():
+        return JSONResponse(status_code=400, content={"reason": "title_required"})
+    if _agent_busy(agent_id):
+        return JSONResponse(status_code=409, content={"reason": "agent_busy"})
+    audit = _actor(current_user)
+    from app.services.git_service import git_service  # lazy: dispatch import cycle
+
+    try:
+        repo, _folders = await _chat_repo_or_refuse(agent, session)
+        plan = await asyncio.to_thread(chat_actions.pr_guard, repo)
+        cwd = str(repo)
+        try:
+            await git_service.push_branch(cwd, plan["branch"])
+        except RuntimeError as exc:
+            raise chat_actions.Refused("push_failed", 502, detail=_redact_git_error(exc)) from None
+        existing = await _open_pr_for_branch(git_service, cwd, plan["branch"])
+        if existing:
+            url, status = existing, "exists"
+        else:
+            pr_body = (body.body or "").strip() or "Opened from a Mission Control chat."
+            try:
+                url = await git_service.create_pr(cwd, title=body.title.strip()[:256],
+                                                  body=pr_body[:20_000], base=plan["base"])
+            except RuntimeError as exc:
+                raise chat_actions.Refused("pr_failed", 502, detail=_redact_git_error(exc)) from None
+            status = "opened"
+    except chat_actions.Refused as e:
+        await _audit(session, agent, "chat.action_refused", "Open PR refused",
+                     {**audit, "action": "pr", "reason": e.reason}, severity="warning")
+        return _refused(e)
+    url = _first_url(url)
+    await _audit(session, agent, "chat.pr_opened", f"PR {status}: {url}", {
+        **audit, "repo": repo.name, "branch": plan["branch"], "base": plan["base"],
+        "url": url, "status": status,
+    })
+    return {"status": status, "url": url, "branch": plan["branch"], "base": plan["base"]}
+
+
+_URL_RE = re.compile(r"https://\S+")
+_TOKEN_RE = re.compile(r"(https?://)[^/\s@]+@")
+
+
+def _first_url(text: str) -> str:
+    m = _URL_RE.search(text or "")
+    return m.group(0) if m else (text or "").strip()
+
+
+def _redact_git_error(exc: Exception) -> str:
+    """git/gh's message without credentials embedded in a URL."""
+    return _TOKEN_RE.sub(r"\1***@", str(exc))[:300]
+
+
+async def _open_pr_for_branch(git_service: Any, cwd: str, branch: str) -> str | None:
+    """The URL of an OPEN pull request for ``branch``, or ``None``."""
+    try:
+        out = await git_service._run_cmd(
+            "gh", "pr", "list", "--head", branch, "--state", "open",
+            "--json", "url", "--jq", ".[0].url // empty", cwd=cwd,
+        )
+    except RuntimeError:
+        return None
+    return out.strip() or None
 
 
 @router.post("/agents/{agent_id}/chat/input", status_code=204)
