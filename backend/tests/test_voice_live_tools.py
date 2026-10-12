@@ -445,3 +445,15 @@ def test_message_format_matches_the_chat_parser():
     assert "\n" not in voice_live_tools.VOICE_NOTE
     msg = voice_live_tools.compose_message("A", "b c")
     assert msg.split("\n")[1] == "Wortlaut: „b c“"
+
+
+def test_voice_note_tells_the_agent_it_is_the_addressee():
+    """Live test 13.10.2026: the operator said "Gib bitte an <agent> weiter: …"
+    in that agent's own chat; the agent took "pass on to <agent>" literally and
+    tried to forward the message to another agent ("Unknown agent"). The note
+    must say the operator is talking to THIS agent and that "pass on to …"
+    phrasing addresses it."""
+    note = voice_live_tools.VOICE_NOTE
+    assert "speaking to you" in note
+    assert "pass on" in note and "weiter" in note
+    assert "do it yourself" in note
