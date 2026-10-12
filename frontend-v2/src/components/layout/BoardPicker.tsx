@@ -20,8 +20,81 @@ const MONO = { fontFamily: "var(--font-p2-mono)" };
 /**
  * BoardPicker — Shell v4 zone 1. Replaces the 48px WorkspaceSwitcher rail:
  * same boards, same create flow, one row instead of a column.
+ *
+ * Operator decision (12.10.2026, variant B): with nothing to switch between,
+ * the switcher (name + dropdown) is not shown at all — it becomes a plain,
+ * non-interactive label with the one board's name, same as the sidebar
+ * always showed before boards existed. No chevron, no dropdown, no lone "+".
+ * "Create board" moves to Settings → Profile (`BoardsCard`) instead, so the
+ * capability is not lost. The rule itself (`canSwitchBoards`) is shared with
+ * the phone settings panel so it is decided once, not twice.
  */
 export default function BoardPicker({ collapsed = false }: { collapsed?: boolean }) {
+  const t = useTranslations("shell");
+  const { boards, activeBoardId, setActiveBoardId, setBoards } = useAppStore();
+
+  const { data } = useQuery({ queryKey: ["boards"], queryFn: api.boards.list });
+
+  useEffect(() => {
+    if (data && data !== boards) {
+      setBoards(data);
+      if (!activeBoardId && data.length > 0) setActiveBoardId(data[0].id);
+    }
+  }, [data, boards, activeBoardId, setBoards, setActiveBoardId]);
+
+  const displayBoards = data ?? boards;
+  const active = displayBoards.find((b) => b.id === activeBoardId) ?? displayBoards[0];
+  const canSwitch = canSwitchBoards(displayBoards);
+
+  if (!canSwitch) {
+    return <StaticBoardLabel board={active} collapsed={collapsed} boardPickerLabel={t("boardPicker")} />;
+  }
+
+  return <Switcher collapsed={collapsed} />;
+}
+
+/** Nothing to switch to — the board name as plain text, not a control. */
+function StaticBoardLabel({
+  board,
+  collapsed,
+  boardPickerLabel,
+}: {
+  board: Board | undefined;
+  collapsed: boolean;
+  boardPickerLabel: string;
+}) {
+  const activeColor = board?.color ?? P2.amb;
+  return (
+    <div
+      className="w-full flex items-center gap-3 shrink-0 text-xs"
+      title={collapsed ? (board?.name ?? boardPickerLabel) : undefined}
+      style={{
+        height: "38px",
+        padding: collapsed ? 0 : "0 12px",
+        justifyContent: collapsed ? "center" : "flex-start",
+        ...MONO,
+        color: "var(--color-p2-txt)",
+      }}
+    >
+      <span
+        className="shrink-0 flex items-center justify-center"
+        style={{
+          width: collapsed ? 20 : 10,
+          height: collapsed ? 20 : 10,
+          borderRadius: "var(--radius-full)",
+          backgroundColor: collapsed ? "transparent" : activeColor,
+          color: activeColor,
+        }}
+      >
+        {collapsed && (board?.icon ? <EntityIcon value={board.icon} size={16} /> : null)}
+      </span>
+      {!collapsed && <span className="truncate">{board?.name ?? boardPickerLabel}</span>}
+    </div>
+  );
+}
+
+/** Two or more boards — the ordinary switcher, unchanged. */
+function Switcher({ collapsed }: { collapsed: boolean }) {
   const t = useTranslations("shell");
   const { boards, activeBoardId, setActiveBoardId, setBoards } = useAppStore();
   const [open, setOpen] = useState(false);
@@ -108,85 +181,55 @@ export default function BoardPicker({ collapsed = false }: { collapsed?: boolean
   const displayBoards = data ?? boards;
   const active = displayBoards.find((b) => b.id === activeBoardId) ?? displayBoards[0];
   const activeColor = active?.color ?? P2.amb;
-  // Operator decision (12.10.2026): with nothing to switch between, the
-  // switcher itself disappears — the concept stays (boards remain creatable,
-  // may come back visibly later), only the picker's "choose between boards"
-  // UI goes quiet. Rule shared with the phone settings panel via
-  // `canSwitchBoards` so it is decided once, not twice.
-  const canSwitch = canSwitchBoards(displayBoards);
 
   function handleCreate() {
     if (!name.trim()) return;
     createMutation.mutate({ name: name.trim(), slug: slugify(name.trim()), color, icon });
   }
 
-  function openPicker() {
-    if (canSwitch) {
-      setOpen((o) => !o);
-    } else {
-      // Nothing to switch to — go straight to the create form instead of a
-      // one-item list, so the capability is not lost, just quieter (K11).
-      setCreating(true);
-      setOpen(true);
-    }
-  }
-
   return (
     <div ref={rootRef} className="relative shrink-0">
       <button
         ref={triggerRef}
-        onClick={openPicker}
-        aria-haspopup={canSwitch ? "listbox" : "dialog"}
+        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="listbox"
         aria-expanded={open}
-        aria-label={canSwitch ? undefined : t("newBoard")}
-        title={collapsed ? (canSwitch ? active?.name ?? t("boardPicker") : t("newBoard")) : undefined}
+        title={collapsed ? (active?.name ?? t("boardPicker")) : undefined}
         className="w-full flex items-center gap-2.5 cursor-pointer"
         style={{
-          height: "38px",
-          padding: collapsed || !canSwitch ? 0 : "0 12px",
-          justifyContent: collapsed || !canSwitch ? "center" : "flex-start",
+          height: collapsed ? "38px" : "38px",
+          padding: collapsed ? 0 : "0 12px",
+          justifyContent: collapsed ? "center" : "flex-start",
           borderRadius: "var(--radius-md)",
-          backgroundColor: collapsed || !canSwitch ? "transparent" : "var(--color-p2-pan2)",
-          border: `1px solid ${
-            open && canSwitch
-              ? "var(--color-p2-amb-d)"
-              : collapsed || !canSwitch
-                ? "transparent"
-                : "var(--color-p2-line2)"
-          }`,
+          backgroundColor: collapsed ? "transparent" : "var(--color-p2-pan2)",
+          border: `1px solid ${open ? "var(--color-p2-amb-d)" : collapsed ? "transparent" : "var(--color-p2-line2)"}`,
           ...MONO,
           fontSize: "12px",
-          color: canSwitch ? "var(--color-p2-txt)" : "var(--color-p2-faint)",
+          color: "var(--color-p2-txt)",
         }}
       >
-        {canSwitch ? (
+        <span
+          className="shrink-0 flex items-center justify-center"
+          style={{
+            width: collapsed ? 20 : 10,
+            height: collapsed ? 20 : 10,
+            borderRadius: "var(--radius-full)",
+            backgroundColor: collapsed ? "transparent" : activeColor,
+            color: activeColor,
+          }}
+        >
+          {collapsed && (active?.icon ? <EntityIcon value={active.icon} size={16} /> : null)}
+        </span>
+        {!collapsed && (
           <>
+            <span className="truncate">{active?.name ?? t("boardPicker")}</span>
             <span
-              className="shrink-0 flex items-center justify-center"
-              style={{
-                width: collapsed ? 20 : 10,
-                height: collapsed ? 20 : 10,
-                borderRadius: "var(--radius-full)",
-                backgroundColor: collapsed ? "transparent" : activeColor,
-                color: activeColor,
-              }}
+              className="ml-auto shrink-0"
+              style={{ color: open ? "var(--color-p2-amb)" : "var(--color-p2-faint)", fontSize: "10px" }}
             >
-              {collapsed && (active?.icon ? <EntityIcon value={active.icon} size={16} /> : null)}
+              {open ? "▴" : "▾"}
             </span>
-            {!collapsed && (
-              <>
-                <span className="truncate">{active?.name ?? t("boardPicker")}</span>
-                <span
-                  className="ml-auto shrink-0"
-                  style={{ color: open ? "var(--color-p2-amb)" : "var(--color-p2-faint)", fontSize: "10px" }}
-                >
-                  {open ? "▴" : "▾"}
-                </span>
-              </>
-            )}
           </>
-        ) : (
-          <Plus size={16} aria-hidden className="shrink-0" />
         )}
       </button>
 
@@ -199,7 +242,7 @@ export default function BoardPicker({ collapsed = false }: { collapsed?: boolean
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -6 }}
               transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
-              role={canSwitch ? "listbox" : undefined}
+              role="listbox"
               className="fixed z-[60] p-1.5"
               style={{
                 top: anchor.top,
@@ -211,63 +254,53 @@ export default function BoardPicker({ collapsed = false }: { collapsed?: boolean
                 boxShadow: "var(--shadow-elevated)",
               }}
             >
-            {canSwitch && (
-              <>
-                {displayBoards.map((board) => {
-                  const isActive = board.id === (active?.id ?? null);
-                  return (
-                    <button
-                      key={board.id}
-                      role="option"
-                      aria-selected={isActive}
-                      onClick={() => {
-                        setActiveBoardId(board.id);
-                        setOpen(false);
-                      }}
-                      className="w-full flex items-center gap-2.5 cursor-pointer"
-                      style={{
-                        height: "32px",
-                        padding: "0 10px",
-                        borderRadius: "var(--radius-md)",
-                        ...MONO,
-                        fontSize: "11.5px",
-                        fontWeight: isActive ? 700 : 400,
-                        color: isActive ? "var(--color-p2-txt)" : "var(--color-p2-dim)",
-                        backgroundColor: isActive ? "var(--color-accent-subtle)" : "transparent",
-                      }}
-                      onMouseEnter={(e) => {
-                        if (!isActive) (e.currentTarget as HTMLElement).style.backgroundColor = "var(--color-p2-pan)";
-                      }}
-                      onMouseLeave={(e) => {
-                        if (!isActive) (e.currentTarget as HTMLElement).style.backgroundColor = "transparent";
-                      }}
-                    >
-                      <span
-                        className="shrink-0"
-                        style={{
-                          width: 9,
-                          height: 9,
-                          borderRadius: "var(--radius-full)",
-                          backgroundColor: board.color ?? P2.amb,
-                        }}
-                      />
-                      <span className="truncate">{board.name}</span>
-                      {isActive && <Check size={12} className="ml-auto shrink-0" />}
-                    </button>
-                  );
-                })}
+            {displayBoards.map((board) => {
+              const isActive = board.id === (active?.id ?? null);
+              return (
+                <button
+                  key={board.id}
+                  role="option"
+                  aria-selected={isActive}
+                  onClick={() => {
+                    setActiveBoardId(board.id);
+                    setOpen(false);
+                  }}
+                  className="w-full flex items-center gap-2.5 cursor-pointer"
+                  style={{
+                    height: "32px",
+                    padding: "0 10px",
+                    borderRadius: "var(--radius-md)",
+                    ...MONO,
+                    fontSize: "11.5px",
+                    fontWeight: isActive ? 700 : 400,
+                    color: isActive ? "var(--color-p2-txt)" : "var(--color-p2-dim)",
+                    backgroundColor: isActive ? "var(--color-accent-subtle)" : "transparent",
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!isActive) (e.currentTarget as HTMLElement).style.backgroundColor = "var(--color-p2-pan)";
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!isActive) (e.currentTarget as HTMLElement).style.backgroundColor = "transparent";
+                  }}
+                >
+                  <span
+                    className="shrink-0"
+                    style={{
+                      width: 9,
+                      height: 9,
+                      borderRadius: "var(--radius-full)",
+                      backgroundColor: board.color ?? P2.amb,
+                    }}
+                  />
+                  <span className="truncate">{board.name}</span>
+                  {isActive && <Check size={12} className="ml-auto shrink-0" />}
+                </button>
+              );
+            })}
 
-                <div style={{ height: 1, backgroundColor: "var(--color-p2-line2)", margin: "5px 4px" }} />
-              </>
-            )}
+            <div style={{ height: 1, backgroundColor: "var(--color-p2-line2)", margin: "5px 4px" }} />
 
-            {!canSwitch && (
-              // No list above to give context (there is nothing to switch
-              // between), so the create-only panel gets its own heading.
-              <div className="px-3 pt-1 pb-2 label-sys">{t("newBoardHeading")}</div>
-            )}
-
-            {!creating && canSwitch ? (
+            {!creating ? (
               <button
                 onClick={() => setCreating(true)}
                 className="w-full flex items-center gap-2.5 cursor-pointer"

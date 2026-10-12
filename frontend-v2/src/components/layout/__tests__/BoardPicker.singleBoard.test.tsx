@@ -1,8 +1,10 @@
 /**
  * BoardPicker — the switcher disappears while there is only one board
- * (operator decision 12.10.2026); "create board" stays reachable through a
- * quiet entry instead of being lost. With a second board, the ordinary
- * switcher (board name + dropdown) is unchanged.
+ * (operator decision 12.10.2026, variant B): the board name stays visible
+ * as plain text (no chevron, no dropdown, no lone "+"); "create board"
+ * moves to Settings → Profile (`BoardsCard`, covered by its own test).
+ * With a second board, the ordinary switcher (board name + dropdown) is
+ * unchanged.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
@@ -53,14 +55,14 @@ describe("BoardPicker single-board mode", () => {
     listResult = oneBoard;
   });
 
-  it("hides the switcher (no board-name trigger, no dropdown listbox) with one board", async () => {
+  it("shows the board name as plain text with one board — no button, no menu", async () => {
     renderPicker();
-    // No "choose board" switcher trigger with the board name/chevron.
-    expect(screen.queryByRole("button", { name: /choose board/i })).toBeNull();
-    // "Create board" stays reachable via a quiet entry.
-    const createTrigger = await screen.findByRole("button", { name: /new board/i });
-    await userEvent.click(createTrigger);
-    expect(screen.getByRole("textbox")).toBeInTheDocument();
+    const label = await screen.findByText("Only Board");
+    // Plain text, not an interactive control: no enclosing button/listbox role.
+    expect(label.closest("button")).toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.queryByRole("listbox")).toBeNull();
+    await userEvent.click(label);
     expect(screen.queryByRole("listbox")).toBeNull();
   });
 
@@ -68,6 +70,7 @@ describe("BoardPicker single-board mode", () => {
     listResult = twoBoards;
     renderPicker();
     const trigger = await screen.findByText("Only Board");
+    expect(trigger.closest("button")).not.toBeNull();
     await userEvent.click(trigger);
     expect(screen.getByRole("listbox")).toBeInTheDocument();
     expect(screen.getByText("Second Board")).toBeInTheDocument();
