@@ -44,6 +44,10 @@ vi.mock("@/components/voice/VoiceWidget", () => ({
   VoiceOverlay: () => null,
 }));
 
+vi.mock("@/lib/boards", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/boards")>()),
+  useBoardsBootstrap: () => {},
+}));
 import AppShell from "../AppShell";
 
 beforeEach(() => vi.clearAllMocks());

@@ -10,6 +10,10 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
+vi.mock("@/lib/boards", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/boards")>()),
+  useBoardsBootstrap: () => {},
+}));
 import AppShell from "../AppShell";
 
 vi.mock("next/navigation", () => ({
