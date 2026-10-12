@@ -783,6 +783,15 @@
         ]
       }
     },
+    "/api/v1/agent/projects/{project_id}": {
+      "get": {
+        "operationId": "agent_get_project_api_v1_agent_projects__project_id__get",
+        "summary": "Agent Get Project",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
     "/api/v1/agent/tasks/current/ask": {
       "post": {
         "operationId": "agent_ask_api_v1_agent_tasks_current_ask_post",

@@ -984,6 +984,7 @@
     "contextTokensUsed": "≈{used}/{win} belegt. ",
     "contextSourceEstimate": "Schätzung",
     "contextRingTooltip": "{detail}Quelle: {source}. Die CLI-Statuszeile zeigt dagegen den Rest bis zur Auto-Komprimierung an — andere Basis, beide korrekt.",
+    "contextRingCacheHint": " Cache {rate}.",
     "contextPanelTitle": "Kontext",
     "contextPanelSegment": {
       "input": "Eingabe",
@@ -996,6 +997,7 @@
     "contextPanelWindowTotal": "Fenster gesamt",
     "contextPanelWindowUnknown": "unbekannt",
     "contextPanelSource": "Quelle",
+    "contextPanelCacheRate": "Cache-Trefferquote",
     "contextPanelNote": "Die CLI-Statuszeile zeigt dagegen den Rest bis zur Auto-Komprimierung an — andere Basis, beide korrekt.",
     "contextPanelClose": "Schliessen",
     "slashCommands": {

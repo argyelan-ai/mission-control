@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { Brain, Square, ArrowUp, ChevronDown, Paperclip, X, FileText} from "lucide-react";
 import { C, STATUS } from "@/lib/colors";
 import { api } from "@/lib/api";
@@ -21,7 +21,8 @@ import {
   type UsageEvent,
 } from "@/lib/chatTypes";
 import { CLAUDE_MODELS, SLASH_COMMANDS, formatCompactTokens, type SlashCommand } from "@/lib/claudeCommands";
-import { ContextPanel } from "./ContextPanel";
+import { ContextPanel, cacheHitRateOf } from "./ContextPanel";
+import { formatShare } from "@/lib/usage";
 
 const MAX_ROWS = 8;
 /** Rows of room the input holds at rest, before anything is typed. */
@@ -229,6 +230,7 @@ export const EFFORT_SETTLE_MS = 320;
 
 export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = true, capabilities = null, paneObservable = true, prefill = null, barBelow = false }: ComposerProps) {
   const t = useTranslations("sessions");
+  const locale = useLocale();
   const [text, setText] = useState("");
   useEffect(() => {
     if (prefill) setText(prefill.text);
@@ -636,9 +638,14 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
   // "CLI" ist in beiden Sprachen dasselbe Wort und bleibt darum ein Literal —
   // uebersetzt wird nur die Alternative dazu.
   const sourceLabel = pctSource === "estimate" ? t("contextSourceEstimate") : "CLI";
+  // Prompt cache hit rate for the latest turn — the figure that matters most
+  // for the local GLM (omp), where ~90% of prompt tokens come from cache.
+  // Left out entirely when the harness has no breakdown (ADR-nothing-fake).
+  const cacheRate = cacheHitRateOf(usage?.components);
+  const cacheHint = cacheRate != null ? t("contextRingCacheHint", { rate: formatShare(cacheRate, locale) ?? "" }) : "";
   const ringTitle =
     pct != null
-      ? t("contextRingTooltip", { detail: tokenDetail, source: sourceLabel })
+      ? t("contextRingTooltip", { detail: tokenDetail, source: sourceLabel }) + cacheHint
       : undefined;
 
   return (

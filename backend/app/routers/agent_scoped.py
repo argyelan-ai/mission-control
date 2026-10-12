@@ -888,6 +888,67 @@ async def agent_list_projects(
     return projects
 
 
+@router.get("/projects/{project_id}")
+async def agent_get_project(
+    project_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    agent: Agent = Depends(require_scope(Scope.PROJECT_READ)),
+):
+    """Read one project of the agent's own board, with its phases (read-only).
+
+    The agent counterpart of `GET /projects/{id}` — documented in TOOLS.md for
+    agents with project:read. Returns a fixed field list (no project_config).
+    """
+    from app.models.project_phase import ProjectPhase
+
+    project = await session.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if agent.board_id != project.board_id:
+        raise HTTPException(status_code=403, detail="Agent not assigned to this board")
+
+    phases = (
+        await session.exec(
+            select(ProjectPhase)
+            .where(ProjectPhase.project_id == project_id)
+            .order_by(ProjectPhase.order)
+        )
+    ).all()
+
+    def _id(v):
+        return str(v) if v else None
+
+    return {
+        "id": str(project.id),
+        "board_id": str(project.board_id),
+        "name": project.name,
+        "description": project.description,
+        "project_type": project.project_type,
+        "status": project.status,
+        "priority": project.priority,
+        "plan_summary": project.plan_summary,
+        "progress_pct": project.progress_pct,
+        "github_repo_url": project.github_repo_url,
+        "workspace_path": project.workspace_path,
+        "briefing_doc": project.briefing_doc,
+        "resume_briefing": project.resume_briefing,
+        "parent_project_id": _id(project.parent_project_id),
+        "last_active_phase_id": _id(project.last_active_phase_id),
+        "phases": [
+            {
+                "id": str(p.id),
+                "title": p.title,
+                "order": p.order,
+                "status": p.status,
+                "depends_on_phases": p.depends_on_phases,
+                "gate_required": p.gate_required,
+                "git_branch": p.git_branch,
+            }
+            for p in phases
+        ],
+    }
+
+
 @router.post("/boards/{board_id}/projects", status_code=status.HTTP_201_CREATED)
 async def agent_create_project(
     board_id: uuid.UUID,

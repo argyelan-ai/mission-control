@@ -46,6 +46,18 @@ export function buildSegments(components: UsageComponents): Segment[] {
   ];
 }
 
+/** Prompt cache hit rate for the latest turn: cached / (cached + uncached
+ *  input). `cacheCreation` (freshly written this turn, not yet a hit) is
+ *  deliberately left out of both sides — the same convention Insights' own
+ *  `cacheHitRate` uses, so the two figures never disagree. `null` whenever a
+ *  harness has no breakdown, or both buckets are empty — never a fake 0%. */
+export function cacheHitRateOf(components: UsageComponents | null | undefined): number | null {
+  if (!components) return null;
+  const { cacheRead, input } = components;
+  const denom = cacheRead + input;
+  return denom > 0 ? cacheRead / denom : null;
+}
+
 export function usedTokensOf(usage: UsageEvent): number {
   const c = usage.components;
   if (c) return c.input + c.cacheRead + c.cacheCreation + c.output;
@@ -111,6 +123,7 @@ export function ContextPanel({ usage, pct, pctSource, onClose }: ContextPanelPro
   const barTotal = window_ ?? used;
   const share = (tokens: number) => (barTotal > 0 ? (tokens / barTotal) * 100 : 0);
   const segmentLabel = (key: string) => t(`contextPanelSegment.${key}`);
+  const cacheRate = cacheHitRateOf(usage.components);
   // Percent formatting goes through the active locale (K3/i18n): "15%" in
   // English, "15 %" with a narrow no-break space in German — never a bare
   // `Math.round(...) + "%"` string concat.
@@ -218,6 +231,18 @@ export function ContextPanel({ usage, pct, pctSource, onClose }: ContextPanelPro
               {pctSource === "estimate" ? t("contextSourceEstimate") : pctSource === "cli" ? "CLI" : "—"}
             </span>
           </div>
+          {cacheRate != null && (
+            <div className="flex items-center justify-between gap-2 text-xs font-medium" style={{ color: C.textMuted }}>
+              <span>{t("contextPanelCacheRate")}</span>
+              <span
+                className="font-mono tabular-nums"
+                data-testid="context-panel-cache-rate"
+                style={{ color: C.textSecondary }}
+              >
+                {formatPct(cacheRate * 100, 0)}
+              </span>
+            </div>
+          )}
           <p className="text-[12px] leading-[1.55] mt-1" style={{ color: C.textMuted }}>
             {t("contextPanelNote")}
           </p>
