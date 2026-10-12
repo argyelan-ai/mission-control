@@ -305,6 +305,39 @@ def test_old_build_without_fill_fields_keeps_the_estimate_path():
     assert usage["components"] is not None
 
 
+def test_cache_hit_rate_computed_even_without_fill_truth():
+    """ASSISTANT_LINE's cacheRead=7 against input=23908 — same ratio a
+    harness-neutral panel would show via `components`, now also available as
+    a plain number (the ACP path needs this independent of `components`,
+    see test_cache_hit_rate_survives_fill_truth below)."""
+    usage = parse(ASSISTANT_LINE)[-1]
+    assert usage["cacheHitRate"] == round(7 / (7 + 23908), 4)
+
+
+def test_cache_hit_rate_survives_fill_truth():
+    """omp's ACP mapper (acp_chat_events.py) stamps usedTokens/contextWindow
+    from usage_update ALONGSIDE this turn's real cacheRead/input — the normal
+    ACP shape. `has_fill_truth` nulls `components` (a window breakdown isn't
+    derivable from cumulative buckets, see test_fill_truth_stamps_...), but
+    the cache hit RATIO is not a window breakdown and must still reach the
+    chat event — this was PR #464 mid's root cause: an ACP agent's context
+    panel never showed a cache hit rate at all."""
+    line = FILL_TRUTH_LINE.replace('"cacheRead":0,"cacheWrite":0,', '"cacheRead":5000,"cacheWrite":0,')
+    usage = parse(line)[-1]
+    assert usage["components"] is None, "fill truth still nulls the window breakdown"
+    assert usage["cacheHitRate"] == round(5000 / (5000 + 11795309), 4)
+    assert usage["cacheHitRate"] is not None and usage["cacheHitRate"] > 0
+
+
+def test_cache_hit_rate_is_none_not_a_fake_zero_when_nothing_cached():
+    """FILL_TRUTH_LINE as recorded (cacheRead=0) really has no cache
+    activity this turn — 0.0 is the honest number there, not None; this
+    pins that `cache_hit_denom == 0` (no input AND no cacheRead at all) is
+    the only None case, so a real 0% is never silently hidden either."""
+    usage = parse(FILL_TRUTH_LINE)[-1]
+    assert usage["cacheHitRate"] == 0.0
+
+
 # ── Parser: Werkzeuge ───────────────────────────────────────────────────────
 
 
@@ -857,7 +890,7 @@ _ALLOWED_KEYS = {
     },
     "usage": {
         "kind", "uuid", "ts", "inputTokens", "outputTokens", "model", "effort",
-        "contextWindow", "components",
+        "contextWindow", "components", "cacheHitRate",
     },
     "_tool_result": {"kind", "tool_use_id", "content", "is_error"},
 }

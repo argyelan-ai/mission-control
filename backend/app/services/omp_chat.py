@@ -857,6 +857,21 @@ class OmpLineParser:
                 isinstance(omp_window, (int, float)) and omp_window > 0 and
                 isinstance(used_tokens, (int, float)) and used_tokens >= 0
             )
+            # Cache hit rate (cacheRead / (cacheRead + input)) is a RATIO,
+            # not a window breakdown — unlike `components` above it survives
+            # `has_fill_truth` on purpose. An ACP agent's `_usage_block`
+            # (acp_chat_events.py) always stamps usedTokens/contextWindow
+            # from usage_update ALONGSIDE this turn's real input/cacheRead,
+            # so has_fill_truth is normally True there; nulling the ratio
+            # too (as `components` does) would mean an ACP agent's context
+            # panel never shows a hit rate at all (#464 mid — this is the
+            # fix). cache_hit_denom==0 -> None, never a fake 0%.
+            cache_hit_denom = components["input"] + components["cacheRead"]
+            cache_hit_rate = (
+                round(components["cacheRead"] / cache_hit_denom, 4)
+                if cache_hit_denom > 0
+                else None
+            )
             events.append(
                 {
                     "kind": "usage",
@@ -884,6 +899,7 @@ class OmpLineParser:
                     # Kein Breakdown aus kumulativen Buckets ableitbar (s.o.)
                     # — ehrlich gar keine statt einer falschen.
                     "components": components if not has_fill_truth else None,
+                    "cacheHitRate": cache_hit_rate,
                     **(
                         {
                             "usedPct": round(used_tokens / omp_window * 100, 1),

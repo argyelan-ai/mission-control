@@ -338,6 +338,39 @@ def test_prompt_result_usage_flows_into_usage_event():
     assert usage and usage[0]["inputTokens"] == 34876 and usage[0]["outputTokens"] == 57
 
 
+def test_prompt_result_cache_tokens_reach_the_cache_hit_rate():
+    """omp's ACP `session/prompt` result carries `cachedReadTokens`/
+    `cachedWriteTokens` (verified: agent_client_protocol 0.9.0's acp/schema.py
+    `Usage` model — the ACP spec's own field names, UNSTABLE but real). The
+    mapper used to hard-code cacheRead/cacheWrite to 0 (#464 mid), so the
+    chat's context panel never showed a cache hit rate for an omp ACP agent
+    even though the provider was serving most tokens from cache.
+
+    This also exercises the case that matters: `usage_update` ALSO landed
+    (contextWindow/usedTokens known — the normal ACP shape), which is the
+    condition under which `components` gets nulled out for the window-
+    breakdown view (omp_chat.py `has_fill_truth`). The hit rate is a
+    per-TURN ratio, not a window breakdown, and must survive that."""
+    mapper = acp_chat_events.ACPEventMapper()
+    mapper.map_update({"update": {"sessionUpdate": "usage_update", "size": 500000, "used": 17395}})
+    mapper.set_prompt_usage(
+        {
+            "inputTokens": 1200,
+            "outputTokens": 44,
+            "totalTokens": 1244,
+            "cachedReadTokens": 1000,
+            "cachedWriteTokens": 50,
+        }
+    )
+    lines = mapper.dump(mapper.map_final_assistant_message("done"))
+    usage = [e for e in parse_all(lines) if e["kind"] == "usage"][0]
+    expected_rate = 1000 / (1000 + 1200)
+    assert usage.get("cacheHitRate") is not None, (
+        "no fake 0% — but no hit rate at all reached the chat event either"
+    )
+    assert abs(usage["cacheHitRate"] - expected_rate) < 1e-3
+
+
 # ── tests: user prompt + sink file layout ──────────────────────────────────
 
 
