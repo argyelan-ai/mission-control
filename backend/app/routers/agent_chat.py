@@ -579,7 +579,13 @@ async def get_chat_changes(
         return empty
 
     def _read() -> dict[str, Any]:
-        history = read_history(path, adapter, limit=_WHOLE_SESSION)
+        # capture_texts(): aggregate_changes needs each edit's whole-file
+        # before/after to report the NET +/- (chat_changes module docstring)
+        # instead of summing every edit's own — never a problem for THIS
+        # endpoint's one-shot response, which never puts a diff's raw
+        # ``_texts`` into what it returns.
+        with capture_texts():
+            history = read_history(path, adapter, limit=_WHOLE_SESSION)
         try:
             cwd = adapter.session_cwd(path)
         except (OSError, ValueError):
