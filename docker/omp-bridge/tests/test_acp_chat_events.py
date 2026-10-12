@@ -373,6 +373,15 @@ def test_sink_writes_session_file_in_omp_layout(tmp_path):
     assert json.loads(content[0])["type"] == "session"
 
 
+def test_sink_header_names_the_task_only_for_a_task_run(tmp_path):
+    task_run = acp_chat_events.ChatEventSink(tmp_path, "sess-task", task_id="0f0e0d0c-0000-4000-8000-000000000001")
+    chat = acp_chat_events.ChatEventSink(tmp_path, "sess-chat")
+    task_header = json.loads(task_run.path.read_text(encoding="utf-8").splitlines()[0])
+    chat_header = json.loads(chat.path.read_text(encoding="utf-8").splitlines()[0])
+    assert task_header["taskId"] == "0f0e0d0c-0000-4000-8000-000000000001"
+    assert "taskId" not in chat_header
+
+
 def test_sink_degrades_to_noop_on_unwritable_dir(tmp_path):
     # A FILE where the agent dir should be -> mkdir fails -> None (fail closed)
     (tmp_path / "nope").touch()

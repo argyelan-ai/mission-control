@@ -4747,7 +4747,7 @@ def _make_acp_run_factory(
             if sink_obj is None or sink_obj.session_id != holder["session_id"]:
                 directory = acp_chat_events.session_dir(cwd=cwd)
                 sink_obj = acp_chat_events.ChatEventSink(
-                    directory, holder["session_id"]
+                    directory, holder["session_id"], task_id=task_id
                 )
                 holder["sink"] = sink_obj
             sink_obj.write(lines)

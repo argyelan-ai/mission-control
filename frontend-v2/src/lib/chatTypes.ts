@@ -208,6 +208,11 @@ export interface TodoEvent {
   /** Where it came from (tool name or `acp_plan`) — for debugging only. */
   source: string;
   items: TodoItem[];
+  /** Set when the list is the snapshot of the task the agent is working on,
+   *  read from the task's own session (an ACP task run writes its plan
+   *  there, not into the chat session) — history `todos` and live pushes
+   *  from the backend's todo sync. Absent for the chat session's own list. */
+  taskId?: string;
 }
 
 export type ChatEvent =
