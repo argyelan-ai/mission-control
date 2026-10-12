@@ -1252,6 +1252,49 @@ NATIVE_EDIT_RESULT_LINE = json.dumps({
                 "isError": False},
 })
 
+# Native omp ``write`` tool (file create/overwrite): the toolCall carries the
+# WHOLE new body as `content`, the toolResult's own `details` never repeats
+# it (only `resolvedPath`) — live capture 12.10.2026, mc-agent-alpha,
+# session ``…/p1-demo.py`` (redacted path, same shape).
+NATIVE_WRITE_SEED_LINE = json.dumps({
+    "type": "message", "id": "a27d57c4", "parentId": "891ac465", "timestamp": "2026-10-12T19:59:23.576Z",
+    "message": {"role": "assistant", "model": None, "content": [{
+        "type": "toolCall", "id": "call_write_1", "name": "write",
+        "arguments": {"content": "def value(): return 1\n", "i": "Creating demo.py",
+                      "path": "/workspace/demo.py"},
+    }]},
+})
+
+NATIVE_WRITE_RESULT_LINE = json.dumps({
+    "type": "message", "id": "a6c6da0f", "parentId": "ed5404c4", "timestamp": "2026-10-12T19:59:23.589Z",
+    "message": {"role": "toolResult", "toolCallId": "call_write_1", "toolName": "write",
+                "content": [{"type": "text", "text": "Successfully wrote 22 bytes to demo.py"}],
+                "details": {"resolvedPath": "/workspace/demo.py"},
+                "isError": False},
+})
+
+# The ACP bridge forwarding the SAME write tool over ACP (live: omp 18.10.1,
+# phone view) — reported generically under kind "edit" with the write
+# tool's own rawInput shape (content/path), and NO ACP diff content item.
+# Same omp-format shape the bridge writes (acp_chat_events.py _tool_seed/
+# _tool_update) — this is what omp_chat.py actually parses either way.
+ACP_WRITE_SEED_LINE = json.dumps({
+    "type": "message", "id": "acp0000a", "parentId": None, "timestamp": "2026-10-12T19:59:23.576Z",
+    "message": {"role": "assistant", "model": None, "content": [{
+        "type": "toolCall", "id": "call_acp_write_1", "name": "edit",
+        "arguments": {"content": "def value(): return 1\n", "path": "/workspace/demo.py",
+                      "i": "Creating demo.py"},
+    }]},
+})
+
+ACP_WRITE_RESULT_LINE = json.dumps({
+    "type": "message", "id": "acp0000b", "parentId": None, "timestamp": "2026-10-12T19:59:23.589Z",
+    "message": {"role": "toolResult", "toolCallId": "call_acp_write_1", "toolName": "edit",
+                "content": [{"type": "text", "text": "Successfully wrote 22 bytes to demo.py"}],
+                "details": {"title": "edit: /workspace/demo.py", "status": "completed"},
+                "isError": False},
+})
+
 ACP_TOOL_OUTPUT_LINE = json.dumps({
     "type": "custom_message", "customType": "acp-tool-output", "content": "step 1\nstep 2",
     "display": True, "attribution": "agent", "data": {"toolCallId": "call_bash_1"},
@@ -1289,6 +1332,69 @@ def test_native_omp_edit_details_become_the_same_diff():
     (res,) = parse(NATIVE_EDIT_RESULT_LINE)
     (diff,) = res["diffs"]
     assert (diff["path"], diff["additions"], diff["deletions"]) == ("/workspace/x.txt", 1, 1)
+
+
+def test_native_write_tool_becomes_a_new_file_diff_not_raw_json():
+    """Task 475: a file CREATE via omp's own ``write`` tool used to leave
+    the card with no diff (the toolResult's ``details`` carries only
+    ``resolvedPath``) — the frontend then fell back to raw JSON. The
+    toolCall's ``content``/``path`` are the only place the new body
+    survives, so the parser remembers them across the two lines."""
+    p = OmpLineParser()
+    p(NATIVE_WRITE_SEED_LINE)
+    (res,) = p(NATIVE_WRITE_RESULT_LINE)
+    (diff,) = res["diffs"]
+    assert diff["path"] == "/workspace/demo.py"
+    assert diff["kind"] == "create"
+    assert diff["additions"] == 1
+    assert diff["deletions"] == 0
+    assert [ln["t"] for ln in diff["lines"]] == ["hunk", "add"]
+
+
+def test_acp_forwarded_write_without_a_diff_item_also_becomes_a_new_file_diff():
+    """Live 18.10.1 (phone, ACP): the write tool arrives generically as
+    kind/name "edit" with rawInput {content, path} and no ACP diff content
+    item — same gap, same fix, reached through the bridge's forwarded
+    toolCall/toolResult shape."""
+    p = OmpLineParser()
+    p(ACP_WRITE_SEED_LINE)
+    (res,) = p(ACP_WRITE_RESULT_LINE)
+    (diff,) = res["diffs"]
+    assert diff["path"] == "/workspace/demo.py"
+    assert diff["kind"] == "create"
+    assert diff["additions"] == 1
+
+
+def test_write_fallback_never_fires_on_error_or_when_a_real_diff_exists():
+    p = OmpLineParser()
+    p(NATIVE_WRITE_SEED_LINE)
+    error_line = json.loads(NATIVE_WRITE_RESULT_LINE)
+    error_line["message"]["isError"] = True
+    (res,) = p(json.dumps(error_line))
+    assert "diffs" not in res
+    # A seeded write whose result DOES carry a real diff keeps that one —
+    # the synthetic fallback never overrides a genuine answer.
+    p2 = OmpLineParser()
+    p2(NATIVE_WRITE_SEED_LINE)
+    real_diff_line = json.loads(NATIVE_WRITE_RESULT_LINE)
+    real_diff_line["message"]["toolCallId"] = "call_write_1"
+    real_diff_line["message"]["details"] = {
+        "diffs": [{"path": "/workspace/demo.py", "oldText": "old\n", "newText": "new\n"}]
+    }
+    (res2,) = p2(json.dumps(real_diff_line))
+    (diff2,) = res2["diffs"]
+    assert diff2["kind"] == "edit"
+
+
+def test_write_args_do_not_leak_into_an_unrelated_later_result():
+    """The toolCall cache is popped on first use — a second toolResult that
+    happens to reuse the id (should never occur, but fail closed) gets no
+    diff rather than a stale one."""
+    p = OmpLineParser()
+    p(NATIVE_WRITE_SEED_LINE)
+    p(NATIVE_WRITE_RESULT_LINE)
+    (res,) = p(NATIVE_WRITE_RESULT_LINE)
+    assert "diffs" not in res
 
 
 def test_plain_tool_result_keeps_its_old_shape():
