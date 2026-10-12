@@ -21,6 +21,13 @@ import type { ToolDiff } from "@/lib/chatTypes";
 /** Lines visible before "show all" — about one phone screen of code. */
 export const DIFF_PREVIEW_LINES = 12;
 
+/** `ch`-based hanging indent for one code line (a tab counts as 8 — the browser default tab-size). */
+export function hangingIndent(text: string): { paddingLeft: string; textIndent: string } {
+  const lead = /^[ \t]*/.exec(text)?.[0] ?? "";
+  const cols = [...lead].reduce((n, c) => n + (c === "\t" ? 8 : 1), 0) + 2;
+  return { paddingLeft: `${cols}ch`, textIndent: `-${cols}ch` };
+}
+
 function splitPath(path: string): { dir: string; base: string } {
   const i = path.lastIndexOf("/");
   return i < 0 ? { dir: "", base: path } : { dir: path.slice(0, i + 1), base: path.slice(i + 1) };
@@ -105,7 +112,16 @@ export function ToolDiffView({ diff, multi }: { diff: ToolDiff; multi: boolean }
               >
                 {add ? "+" : del ? "−" : " "}
               </span>
-              <span className="min-w-0 pr-2 whitespace-pre-wrap break-words">{line.text || " "}</span>
+              {/* Hanging indent: a wrapped code line continues under its OWN
+                  code column (its leading whitespace + 2), never under the
+                  +/− gutter. Negative text-indent pulls only the first line
+                  back; the padding holds every following one. */}
+              <span
+                className="min-w-0 pr-2 whitespace-pre-wrap break-words"
+                style={hangingIndent(line.text)}
+              >
+                {line.text || " "}
+              </span>
             </div>
           );
         })}

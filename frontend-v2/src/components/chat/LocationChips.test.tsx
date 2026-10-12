@@ -24,6 +24,24 @@ describe("LocationChips (ACP locations, chat package P1)", () => {
     expect(screen.getByText("b.txt")).toBeInTheDocument();
   });
 
+  it("copy swaps the TAPPED chip's own label — no extra chip, no second file name", async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: vi.fn().mockResolvedValue(undefined) }, configurable: true,
+    });
+    render(<LocationChips paths={["/workspace/src/demo.py", "/workspace/b.txt"]} />);
+    const before = screen.getAllByRole("button");
+    await user.click(before[0]);
+    expect(await screen.findByText("Copied")).toBeInTheDocument();
+    const after = screen.getAllByRole("button");
+    expect(after).toHaveLength(2);
+    expect(after[0]).toBe(before[0]);
+    expect(after[0]).toHaveTextContent("Copied");
+    // The file name stays in the same cell (hidden) so the chip keeps its width.
+    expect(screen.getByText("demo.py")).toHaveStyle({ visibility: "hidden" });
+    expect(after[1]).not.toHaveTextContent("Copied");
+  });
+
   it("renders nothing without paths", () => {
     const { container } = render(<LocationChips paths={[]} />);
     expect(container).toBeEmptyDOMElement();

@@ -83,8 +83,26 @@ export function LocationChips({ paths }: { paths: string[] }) {
             ) : (
               <Copy size={12} className="shrink-0" style={{ color: C.textMuted }} aria-hidden="true" />
             )}
-            <span className="truncate">
-              {state ? (state.ok ? t("copied") : t("copyFailed")) : basename(path)}
+            {/* Name and confirmation share ONE grid cell: the chip is always as
+                wide as the wider of the two, so swapping the label to "Copied"
+                never shifts the row, and no second element appears that could
+                read as another file. */}
+            <span className="grid min-w-0">
+              <span
+                className="truncate [grid-area:1/1]"
+                style={{ visibility: state ? "hidden" : "visible" }}
+                aria-hidden={state ? true : undefined}
+              >
+                {basename(path)}
+              </span>
+              <span
+                className="truncate [grid-area:1/1]"
+                style={{ visibility: state ? "visible" : "hidden" }}
+                aria-hidden={state ? undefined : true}
+                aria-live="polite"
+              >
+                {state ? (state.ok ? t("copied") : t("copyFailed")) : ""}
+              </span>
             </span>
           </button>
         );

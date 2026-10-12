@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ToolRow } from "./ToolRow";
 import type { ToolEvent, ToolOutputEvent } from "@/lib/chatTypes";
@@ -112,6 +112,37 @@ describe("ToolRow — chat package P1 (live output, diff, locations)", () => {
     );
     expect(screen.getByTestId("tool-live-output")).toHaveTextContent("step 1 step 2");
     expect(screen.getByText("running")).toBeInTheDocument();
+  });
+
+  it("live output never wraps (terminal layout, sideways scroll inside the box)", async () => {
+    await withStore(
+      <ToolRow ev={mkEvent({ toolUseId: "call_bash_1", result: null })} detailLevel="normal" />,
+      { call_bash_1: live("tests/test_api.py ........................................ [  9%]") },
+    );
+    const box = screen.getByTestId("tool-live-output");
+    expect(box.className).toMatch(/\bwhitespace-pre\b/);
+    expect(box.className).not.toMatch(/pre-wrap|break-words/);
+    expect(box.className).toMatch(/overflow-auto/);
+  });
+
+  it("follows the tail, but stays put once the operator scrolled up", async () => {
+    const { store } = await withStore(
+      <ToolRow ev={mkEvent({ toolUseId: "call_bash_1", result: null })} detailLevel="normal" />,
+      { call_bash_1: live("a") },
+    );
+    const box = screen.getByTestId("tool-live-output");
+    Object.defineProperty(box, "scrollHeight", { value: 500, configurable: true });
+    Object.defineProperty(box, "clientHeight", { value: 100, configurable: true });
+    act(() => store.set({ call_bash_1: live("a\nb") }));
+    expect(box.scrollTop).toBe(500);
+    box.scrollTop = 40;
+    fireEvent.scroll(box);
+    act(() => store.set({ call_bash_1: live("a\nb\nc") }));
+    expect(box.scrollTop).toBe(40);
+    box.scrollTop = 400;
+    fireEvent.scroll(box);
+    act(() => store.set({ call_bash_1: live("a\nb\nc\nd") }));
+    expect(box.scrollTop).toBe(500);
   });
 
   it("the result replaces the live output", async () => {

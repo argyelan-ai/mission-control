@@ -68,3 +68,19 @@ describe("ToolDiffView", () => {
     expect(screen.getByText(/Diff shortened/)).toBeInTheDocument();
   });
 });
+
+describe("hanging indent (wrapped lines stay under their code column)", () => {
+  it("indents continuations by the line's own leading whitespace + 2", async () => {
+    const { hangingIndent } = await import("./ToolDiffView");
+    expect(hangingIndent("    # never below zero")).toEqual({ paddingLeft: "6ch", textIndent: "-6ch" });
+    expect(hangingIndent("def x():")).toEqual({ paddingLeft: "2ch", textIndent: "-2ch" });
+    expect(hangingIndent("\tx")).toEqual({ paddingLeft: "10ch", textIndent: "-10ch" });
+  });
+
+  it("the rendered code cell carries it", () => {
+    render(<ToolDiffView diff={EDIT} multi={false} />);
+    const cell = screen.getByText("# doubled", { exact: false });
+    expect(cell.style.paddingLeft).toBe("6ch");
+    expect(cell.style.textIndent).toBe("-6ch");
+  });
+});
