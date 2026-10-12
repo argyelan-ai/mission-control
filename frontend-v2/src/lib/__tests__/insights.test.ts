@@ -8,6 +8,7 @@ import {
   fullWeeks,
   shiftDay,
   boxSplit,
+  dayTotals,
 } from "../insights";
 import { mkUsageByDay, mkDay, mkUsageByWeek, mkSource, mkUsageWeek, mkBox } from "./usageFixtures";
 
@@ -56,6 +57,16 @@ describe("heatmapGrid", () => {
     expect(all.slice(0, 3).map((c) => c?.value)).toEqual([1000, 10, 0]);
     expect(local.slice(0, 3).map((c) => c?.value)).toEqual([0, 10, 0]);
     expect(local[1]?.level).toBe(4);
+  });
+
+  it("adds the boxes' direct API tokens to a day in both modes", () => {
+    // 1000 via MC (100 of them local) + 500 sent straight to a box's API.
+    const withBox = { ...mkDay("2026-09-29", 1000, 100), ...mkBox(600, 100) };
+    const days = [mkDay("2026-09-28", 1000, 0), withBox, mkDay("2026-09-30", 0, 0)];
+    const all = heatmapGrid(days, 1, "all").columns[0];
+    const local = heatmapGrid(days, 1, "local").columns[0];
+    expect(all.slice(0, 3).map((c) => c?.value)).toEqual([1000, 1500, 0]);
+    expect(local.slice(0, 3).map((c) => c?.value)).toEqual([0, 600, 0]);
   });
 
   it("labels the column that holds the first of a month", () => {
@@ -140,5 +151,25 @@ describe("boxSplit", () => {
   it("is null before counting started", () => {
     expect(boxSplit(mkUsageWeek())).toBeNull();
     expect(boxSplit(undefined)).toBeNull();
+  });
+});
+
+describe("dayTotals", () => {
+  it("counts direct API tokens as local and keeps the local share consistent", () => {
+    const t = dayTotals({ ...mkDay("2026-09-29", 1000, 100), ...mkBox(600, 100) });
+    expect(t).toEqual({ all: 1500, local: 600, external: 500, localShare: 0.4 });
+  });
+
+  it("is MC's own numbers on days without box data (no made-up numbers)", () => {
+    expect(dayTotals(mkDay("2026-09-29", 1000, 100))).toEqual({ all: 1000, local: 100, external: 0, localShare: 0.1 });
+    const before = { ...mkDay("2026-09-29", 1000, 100), box: null, via_mc_local: null, external: null };
+    expect(dayTotals(before)).toEqual({ all: 1000, local: 100, external: 0, localShare: 0.1 });
+  });
+
+  it("has a day used only through the direct API", () => {
+    expect(dayTotals({ ...mkDay("2026-09-29", 0, 0), ...mkBox(800, 0) })).toEqual({
+      all: 800, local: 800, external: 800, localShare: 1,
+    });
+    expect(dayTotals(mkDay("2026-09-29", 0, 0)).localShare).toBeNull();
   });
 });

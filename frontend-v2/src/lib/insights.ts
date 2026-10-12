@@ -41,8 +41,23 @@ export function browserTimeZone(): string | undefined {
   }
 }
 
+/**
+ * A day's tokens including the ones sent straight to a local box's API from
+ * another machine (`external.fresh_tokens`: the boxes' own counters minus
+ * what MC booked, prompt − cached + generated — the same "no cache" measure
+ * as `generated_tokens`). Those ran on a local box, so they count as local.
+ * Days before the boxes were first seen have no `external`: MC's own numbers.
+ */
+export function dayTotals(day: UsageDay) {
+  const external = Math.max(0, day.external?.fresh_tokens ?? 0);
+  const all = day.generated_tokens + external;
+  const local = day.local_generated_tokens + external;
+  return { all, local, external, localShare: all > 0 ? local / all : null };
+}
+
 export function dayValue(day: UsageDay, metric: HeatMetric): number {
-  return metric === "local" ? day.local_generated_tokens : day.generated_tokens;
+  const t = dayTotals(day);
+  return metric === "local" ? t.local : t.all;
 }
 
 /**
