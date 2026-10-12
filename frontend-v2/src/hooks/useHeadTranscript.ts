@@ -128,6 +128,7 @@ export function useHeadTranscript(runId: string | null, headState: HeadState | n
     // key, so re-dispatching the exact same page after a 304 (same object,
     // new `dataUpdatedAt`) costs a little work, never a wrong result.
     for (const ev of data.events) dispatch(ev);
+    if (data.todos) dispatch(data.todos);
   }, [query.data, query.dataUpdatedAt]);
 
   return {
@@ -148,6 +149,7 @@ export function useHeadTranscript(runId: string | null, headState: HeadState | n
     withdrawQueued: NO_OP_WITHDRAW,
     awaitingResponse: false,
     preview: null,
+    todos: chatState.todos,
   };
 }
 

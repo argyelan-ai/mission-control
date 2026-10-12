@@ -24,6 +24,7 @@ import type {
   SessionChangedEvent,
   StateEvent,
   ThinkingEvent,
+  TodoEvent,
   ToolEvent,
   UsageEvent,
 } from "@/lib/chatTypes";
@@ -747,5 +748,38 @@ describe("echoes answered by a session rollover", () => {
     // /compact verdichtet INNERHALB der Session — kein Rollover-Beweis.
     expect(isSessionClearingCommand("/compact")).toBe(false);
     expect(isSessionClearingCommand("bitte /clear machen")).toBe(false);
+  });
+});
+
+describe("todo snapshot — own slot, newest wins", () => {
+  const snap = (uuid: string, ts: string, done: number): TodoEvent => ({
+    kind: "todo",
+    uuid,
+    ts,
+    source: "TodoWrite",
+    items: [
+      { content: "a", status: done >= 1 ? "completed" : "in_progress" },
+      { content: "b", status: done >= 2 ? "completed" : "pending" },
+    ],
+  });
+
+  it("stores the snapshot outside the timeline", () => {
+    const state = chatReducer(createInitialChatState(), snap("u1", "2026-10-12T09:00:00.000Z", 0));
+    expect(state.todos?.uuid).toBe("u1");
+    expect(state.events).toHaveLength(0);
+  });
+
+  it("a newer snapshot replaces, an older one (late history page) does not", () => {
+    let state = chatReducer(createInitialChatState(), snap("u2", "2026-10-12T09:05:00.000Z", 1));
+    state = chatReducer(state, snap("u1", "2026-10-12T09:00:00.000Z", 0));
+    expect(state.todos?.uuid).toBe("u2");
+    state = chatReducer(state, snap("u3", "2026-10-12T09:06:00.000Z", 2));
+    expect(state.todos?.uuid).toBe("u3");
+  });
+
+  it("is cleared on session_changed", () => {
+    let state = chatReducer(createInitialChatState(), snap("u1", "2026-10-12T09:00:00.000Z", 0));
+    state = chatReducer(state, { kind: "session_changed" });
+    expect(state.todos).toBeNull();
   });
 });

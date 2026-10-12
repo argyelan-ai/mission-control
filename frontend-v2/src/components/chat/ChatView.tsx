@@ -40,6 +40,7 @@ import { isAgentSpawn, matchRuns, notificationsByTool } from "./agentRuns";
 import { buildTimelineItems } from "./buildTimelineItems";
 import { ChatMessage } from "./ChatMessage";
 import { PreviewRow } from "./PreviewRow";
+import { TodoPanel } from "./TodoPanel";
 import { ToolRow } from "./ToolRow";
 import { ThinkingRow } from "./ThinkingRow";
 import { SubagentGroup } from "./SubagentGroup";
@@ -1260,6 +1261,10 @@ export function ChatView({
               />
             </div>
           )}
+
+          {/* The agent's todo list, pinned under the conversation (agents and
+              heads alike): one line collapsed, the full list on tap. */}
+          <TodoPanel todo={stream.todos} />
 
           {head ? (
             // No StatusLine (that line is "is the AGENT's terminal alive",

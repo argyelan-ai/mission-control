@@ -78,6 +78,7 @@ function mkHeadStream(overrides: Partial<UseChatStreamResult> = {}): UseChatStre
     withdrawQueued: vi.fn(() => []),
     awaitingResponse: false,
     preview: null,
+    todos: null,
     ...overrides,
   };
 }
@@ -125,6 +126,22 @@ describe("ChatView — head branch", () => {
   it("the agent stream hook is called with a null id — it must not keep an agent subscription alive", () => {
     renderHead();
     expect(mockUseChatStream).toHaveBeenCalledWith(null, false);
+  });
+
+  it("shows the head's todo list in the same panel", () => {
+    mockUseHeadTranscript.mockReturnValue(mkHeadStream({ events: [MSG], todos: {
+      kind: "todo" as const,
+      uuid: "t1",
+      ts: "2026-10-12T09:00:00.000Z",
+      source: "TodoWrite",
+      items: [
+        { content: "Read the code", status: "completed" as const },
+        { content: "Write the test", status: "in_progress" as const },
+        { content: "Ship it", status: "pending" as const },
+      ],
+    } }));
+    renderHead();
+    expect(screen.getByTestId("todo-progress")).toHaveTextContent("1/3 done");
   });
 
   it("feeds the timeline from useHeadTranscript, not useChatStream", () => {

@@ -118,6 +118,7 @@ app.config.settings = app.config.Settings(
     vault_path=_TEST_VAULT_ROOT,
     heads_root=_TEST_HEADS_ROOT,
     heads_sync_interval=99999,
+    chat_todo_sync_interval=99999,  # todo->checklist loop never auto-fires in tests
     browser_sessions_root=_TEST_BROWSER_SESSIONS_ROOT,
     browser_sessions_interval=99999,  # lifecycle loop never auto-fires in tests
     night_shift_interval=99999,  # night shift loop never auto-fires in tests

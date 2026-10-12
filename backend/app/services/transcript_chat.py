@@ -11,6 +11,9 @@ Normalized event shapes (plain dicts, JSON-serializable):
    "stats":{"additions":int,"deletions":int}|None,"sidechain":bool}
   {"kind":"thinking","uuid":str,"ts":str,"text":str,"sidechain":bool}
   {"kind":"command","uuid":str,"ts":str,"command":str,"result":str|None}
+  {"kind":"todo","uuid":str,"ts":str,"source":str,
+   "items":[{"content":str,"status":"pending"|"in_progress"|"completed",
+             "priority"?:"high"|"medium"|"low"}]}   (see chat_todos.py)
   {"kind":"usage","uuid":str,"ts":str,"inputTokens":int,"outputTokens":int,
    "model":str|None,"effort":str|None,"contextWindow":int|None,
    "components":{"input":int,"cacheRead":int,"cacheCreation":int,"output":int}}
@@ -83,6 +86,7 @@ from typing import Any
 
 from app.config import settings
 from app.services import fresh_session, sse
+from app.services.chat_todos import todo_event_from_tool
 from app.services.harness_catalog import get_observed_model_windows, observe_model_window
 from app.services.pane_preview import PanePreview
 from app.services.acp_chat_transport import headless_chat_kind, read_acp_turn_status
@@ -644,6 +648,13 @@ def _parse_assistant_entry(
                     "sidechain": sidechain,
                 }
             )
+            # A full todo list (TodoWrite) also becomes the session's todo
+            # snapshot — but never a subagent's: its list is its own small
+            # job, not what the session is working through.
+            if not sidechain:
+                todo = todo_event_from_tool(name, tool_input, uuid=msg_uuid, ts=ts)
+                if todo is not None:
+                    events.append(todo)
 
     usage = message.get("usage")
     if usage:
@@ -1597,6 +1608,7 @@ def read_history(
     seen_uuids: set[str] = set()
     tool_events_by_id: dict[str, dict[str, Any]] = {}
     command_events_by_uuid: dict[str, dict[str, Any]] = {}
+    latest_todo: dict[str, Any] | None = None
 
     if fileobj is not None:
         lines_file = fileobj
@@ -1653,6 +1665,14 @@ def read_history(
                     elif ev["kind"] == "usage":
                         adapter.stamp_usage(ev, path)
 
+                    if ev["kind"] == "todo":
+                        # A snapshot SLOT, not a timeline row: the newest one
+                        # wins and travels as the top-level ``todos`` key —
+                        # independent of the page, so a list written 300
+                        # events ago still shows on the first load.
+                        latest_todo = ev
+                        continue
+
                     if ev["kind"] == "preview":
                         # Review #471 N3 + Folge-PR: previews are VOLATILE —
                         # live write their own previews/ file; this guard
@@ -1688,6 +1708,10 @@ def read_history(
         # ein Handshake-Wert — ein Subagent, der NACH dem Laden startet,
         # erscheint erst beim naechsten Abruf.
         "subagentRuns": adapter.subagent_runs(path),
+        # The session's newest todo snapshot (chat_todos.py) or ``None`` —
+        # the whole file's, never just this page's. Live updates arrive as
+        # ``kind: "todo"`` chat events from the tailer.
+        "todos": latest_todo,
     }
 
 

@@ -93,6 +93,11 @@ from app.services.transcript_chat import (
     resolve_context_window,
 )
 from app.services.token_harvester import _host_home
+from app.services.chat_todos import (
+    ACP_PLAN_CUSTOM_TYPE,
+    todo_event_from_acp_plan,
+    todo_event_from_tool,
+)
 
 logger = logging.getLogger("mc.omp_chat")
 
@@ -617,6 +622,14 @@ class OmpLineParser:
             if entry_type == "custom_message":
                 return self._parse_custom_message(d)
             if entry_type == "custom":
+                if d.get("customType") == ACP_PLAN_CUSTOM_TYPE:
+                    # The omp bridge's forwarded ACP ``plan`` update
+                    # (docker/omp-bridge/acp_chat_events.py ``_plan``).
+                    data = d.get("data") if isinstance(d.get("data"), dict) else {}
+                    todo = todo_event_from_acp_plan(
+                        data.get("entries"), uuid=d.get("id"), ts=d.get("timestamp")
+                    )
+                    return [todo] if todo is not None else []
                 if d.get("customType") not in _SILENT_CUSTOM_TYPES:
                     logger.debug("omp_chat: unbekannter custom-Typ %s", d.get("customType"))
                 return []
@@ -805,6 +818,13 @@ class OmpLineParser:
                         "sidechain": False,
                     }
                 )
+                # A tool that sends the FULL list (todo_write/update_plan —
+                # what a model drives over ACP/Hermes may call it) becomes
+                # the todo snapshot too. omp's native ``todo`` tool sends
+                # deltas (``op``) and is deliberately not mapped (chat_todos).
+                todo = todo_event_from_tool(name, args, uuid=entry_id, ts=ts)
+                if todo is not None:
+                    events.append(todo)
 
         usage = message.get("usage")
         if isinstance(usage, dict):

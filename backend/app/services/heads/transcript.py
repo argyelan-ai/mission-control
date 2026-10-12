@@ -223,6 +223,7 @@ def _empty(run: Any, reason: str, state: str | None = None) -> dict[str, Any]:
         "session": {"sessionId": run.run_id, "live": aliveness == "active", "startedAt": None, "aliveness": aliveness},
         "hasMore": False,
         "subagentRuns": [],
+        "todos": None,
         "source": "none",
         "reader": None,
         "reason": reason,
