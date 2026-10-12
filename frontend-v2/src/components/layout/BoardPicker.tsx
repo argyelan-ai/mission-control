@@ -9,6 +9,7 @@ import { Plus, Check } from "lucide-react";
 import { useAppStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { slugify } from "@/lib/utils";
+import { canSwitchBoards } from "@/lib/boards";
 import type { Board } from "@/lib/types";
 import { P2, WORKSPACE_COLORS as BOARD_COLORS } from "@/lib/colors";
 import { EntityIcon, ENTITY_ICON_KEYS } from "@/components/shared/EntityIcon";
@@ -107,55 +108,85 @@ export default function BoardPicker({ collapsed = false }: { collapsed?: boolean
   const displayBoards = data ?? boards;
   const active = displayBoards.find((b) => b.id === activeBoardId) ?? displayBoards[0];
   const activeColor = active?.color ?? P2.amb;
+  // Operator decision (12.10.2026): with nothing to switch between, the
+  // switcher itself disappears — the concept stays (boards remain creatable,
+  // may come back visibly later), only the picker's "choose between boards"
+  // UI goes quiet. Rule shared with the phone settings panel via
+  // `canSwitchBoards` so it is decided once, not twice.
+  const canSwitch = canSwitchBoards(displayBoards);
 
   function handleCreate() {
     if (!name.trim()) return;
     createMutation.mutate({ name: name.trim(), slug: slugify(name.trim()), color, icon });
   }
 
+  function openPicker() {
+    if (canSwitch) {
+      setOpen((o) => !o);
+    } else {
+      // Nothing to switch to — go straight to the create form instead of a
+      // one-item list, so the capability is not lost, just quieter (K11).
+      setCreating(true);
+      setOpen(true);
+    }
+  }
+
   return (
     <div ref={rootRef} className="relative shrink-0">
       <button
         ref={triggerRef}
-        onClick={() => setOpen((o) => !o)}
-        aria-haspopup="listbox"
+        onClick={openPicker}
+        aria-haspopup={canSwitch ? "listbox" : "dialog"}
         aria-expanded={open}
-        title={collapsed ? (active?.name ?? t("boardPicker")) : undefined}
+        aria-label={canSwitch ? undefined : t("newBoard")}
+        title={collapsed ? (canSwitch ? active?.name ?? t("boardPicker") : t("newBoard")) : undefined}
         className="w-full flex items-center gap-2.5 cursor-pointer"
         style={{
-          height: collapsed ? "38px" : "38px",
-          padding: collapsed ? 0 : "0 12px",
-          justifyContent: collapsed ? "center" : "flex-start",
+          height: "38px",
+          padding: collapsed || !canSwitch ? 0 : "0 12px",
+          justifyContent: collapsed || !canSwitch ? "center" : "flex-start",
           borderRadius: "var(--radius-md)",
-          backgroundColor: collapsed ? "transparent" : "var(--color-p2-pan2)",
-          border: `1px solid ${open ? "var(--color-p2-amb-d)" : collapsed ? "transparent" : "var(--color-p2-line2)"}`,
+          backgroundColor: collapsed || !canSwitch ? "transparent" : "var(--color-p2-pan2)",
+          border: `1px solid ${
+            open && canSwitch
+              ? "var(--color-p2-amb-d)"
+              : collapsed || !canSwitch
+                ? "transparent"
+                : "var(--color-p2-line2)"
+          }`,
           ...MONO,
           fontSize: "12px",
-          color: "var(--color-p2-txt)",
+          color: canSwitch ? "var(--color-p2-txt)" : "var(--color-p2-faint)",
         }}
       >
-        <span
-          className="shrink-0 flex items-center justify-center"
-          style={{
-            width: collapsed ? 20 : 10,
-            height: collapsed ? 20 : 10,
-            borderRadius: "var(--radius-full)",
-            backgroundColor: collapsed ? "transparent" : activeColor,
-            color: activeColor,
-          }}
-        >
-          {collapsed && (active?.icon ? <EntityIcon value={active.icon} size={16} /> : null)}
-        </span>
-        {!collapsed && (
+        {canSwitch ? (
           <>
-            <span className="truncate">{active?.name ?? t("boardPicker")}</span>
             <span
-              className="ml-auto shrink-0"
-              style={{ color: open ? "var(--color-p2-amb)" : "var(--color-p2-faint)", fontSize: "10px" }}
+              className="shrink-0 flex items-center justify-center"
+              style={{
+                width: collapsed ? 20 : 10,
+                height: collapsed ? 20 : 10,
+                borderRadius: "var(--radius-full)",
+                backgroundColor: collapsed ? "transparent" : activeColor,
+                color: activeColor,
+              }}
             >
-              {open ? "▴" : "▾"}
+              {collapsed && (active?.icon ? <EntityIcon value={active.icon} size={16} /> : null)}
             </span>
+            {!collapsed && (
+              <>
+                <span className="truncate">{active?.name ?? t("boardPicker")}</span>
+                <span
+                  className="ml-auto shrink-0"
+                  style={{ color: open ? "var(--color-p2-amb)" : "var(--color-p2-faint)", fontSize: "10px" }}
+                >
+                  {open ? "▴" : "▾"}
+                </span>
+              </>
+            )}
           </>
+        ) : (
+          <Plus size={16} aria-hidden className="shrink-0" />
         )}
       </button>
 
@@ -168,7 +199,7 @@ export default function BoardPicker({ collapsed = false }: { collapsed?: boolean
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -6 }}
               transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
-              role="listbox"
+              role={canSwitch ? "listbox" : undefined}
               className="fixed z-[60] p-1.5"
               style={{
                 top: anchor.top,
@@ -180,53 +211,63 @@ export default function BoardPicker({ collapsed = false }: { collapsed?: boolean
                 boxShadow: "var(--shadow-elevated)",
               }}
             >
-            {displayBoards.map((board) => {
-              const isActive = board.id === (active?.id ?? null);
-              return (
-                <button
-                  key={board.id}
-                  role="option"
-                  aria-selected={isActive}
-                  onClick={() => {
-                    setActiveBoardId(board.id);
-                    setOpen(false);
-                  }}
-                  className="w-full flex items-center gap-2.5 cursor-pointer"
-                  style={{
-                    height: "32px",
-                    padding: "0 10px",
-                    borderRadius: "var(--radius-md)",
-                    ...MONO,
-                    fontSize: "11.5px",
-                    fontWeight: isActive ? 700 : 400,
-                    color: isActive ? "var(--color-p2-txt)" : "var(--color-p2-dim)",
-                    backgroundColor: isActive ? "var(--color-accent-subtle)" : "transparent",
-                  }}
-                  onMouseEnter={(e) => {
-                    if (!isActive) (e.currentTarget as HTMLElement).style.backgroundColor = "var(--color-p2-pan)";
-                  }}
-                  onMouseLeave={(e) => {
-                    if (!isActive) (e.currentTarget as HTMLElement).style.backgroundColor = "transparent";
-                  }}
-                >
-                  <span
-                    className="shrink-0"
-                    style={{
-                      width: 9,
-                      height: 9,
-                      borderRadius: "var(--radius-full)",
-                      backgroundColor: board.color ?? P2.amb,
-                    }}
-                  />
-                  <span className="truncate">{board.name}</span>
-                  {isActive && <Check size={12} className="ml-auto shrink-0" />}
-                </button>
-              );
-            })}
+            {canSwitch && (
+              <>
+                {displayBoards.map((board) => {
+                  const isActive = board.id === (active?.id ?? null);
+                  return (
+                    <button
+                      key={board.id}
+                      role="option"
+                      aria-selected={isActive}
+                      onClick={() => {
+                        setActiveBoardId(board.id);
+                        setOpen(false);
+                      }}
+                      className="w-full flex items-center gap-2.5 cursor-pointer"
+                      style={{
+                        height: "32px",
+                        padding: "0 10px",
+                        borderRadius: "var(--radius-md)",
+                        ...MONO,
+                        fontSize: "11.5px",
+                        fontWeight: isActive ? 700 : 400,
+                        color: isActive ? "var(--color-p2-txt)" : "var(--color-p2-dim)",
+                        backgroundColor: isActive ? "var(--color-accent-subtle)" : "transparent",
+                      }}
+                      onMouseEnter={(e) => {
+                        if (!isActive) (e.currentTarget as HTMLElement).style.backgroundColor = "var(--color-p2-pan)";
+                      }}
+                      onMouseLeave={(e) => {
+                        if (!isActive) (e.currentTarget as HTMLElement).style.backgroundColor = "transparent";
+                      }}
+                    >
+                      <span
+                        className="shrink-0"
+                        style={{
+                          width: 9,
+                          height: 9,
+                          borderRadius: "var(--radius-full)",
+                          backgroundColor: board.color ?? P2.amb,
+                        }}
+                      />
+                      <span className="truncate">{board.name}</span>
+                      {isActive && <Check size={12} className="ml-auto shrink-0" />}
+                    </button>
+                  );
+                })}
 
-            <div style={{ height: 1, backgroundColor: "var(--color-p2-line2)", margin: "5px 4px" }} />
+                <div style={{ height: 1, backgroundColor: "var(--color-p2-line2)", margin: "5px 4px" }} />
+              </>
+            )}
 
-            {!creating ? (
+            {!canSwitch && (
+              // No list above to give context (there is nothing to switch
+              // between), so the create-only panel gets its own heading.
+              <div className="px-3 pt-1 pb-2 label-sys">{t("newBoardHeading")}</div>
+            )}
+
+            {!creating && canSwitch ? (
               <button
                 onClick={() => setCreating(true)}
                 className="w-full flex items-center gap-2.5 cursor-pointer"
