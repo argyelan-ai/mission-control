@@ -38,7 +38,9 @@ from app.services.decision_docs import (
 # +1 on 2026-10-06: ADR-088 (browser sessions), confirmed on purpose.
 # +1 on 2026-10-07: ADR-089 (lead agent with hands), confirmed on purpose.
 # +1 on 2026-10-12: ADR-090 (chat as remote control), confirmed on purpose.
-EXPECTED_DECISION_DOCS = 89
+# +1 on 2026-10-12: ADR-091 (live voice in the chat) — status Proposed, the
+#   operator accepts or rejects it in the voice PR 1 review.
+EXPECTED_DECISION_DOCS = 90
 
 
 def _repo_root() -> Path:

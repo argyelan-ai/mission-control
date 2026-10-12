@@ -15,7 +15,7 @@
  * verbatim move covered by its own future test surface / manual live-gate).
  */
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { act, render, screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
   ChatView,
@@ -2237,6 +2237,19 @@ describe("ChatView", () => {
       // Nur auf dem Handy: auf dem Desktop steht der Knopf in der Sidebar,
       // zweimal derselbe Schalter waere ein Duplikat im Dokument.
       expect(mic.parentElement?.className).toContain("md:hidden");
+    });
+
+    it("blendet das Jarvis-Mikro aus, solange in DIESEM Chat ein Stimm-Anruf laeuft (voice PR 2)", async () => {
+      const { setVoiceLiveActive } = await import("@/components/voice/live/voiceLiveActivity");
+      renderChatView({ onBack: vi.fn() });
+      expect(screen.getByLabelText("Start voice assistant")).toBeInTheDocument();
+      act(() => setVoiceLiveActive("other-agent", true));
+      expect(screen.getByLabelText("Start voice assistant")).toBeInTheDocument();
+      act(() => setVoiceLiveActive("agent-1", true));
+      expect(screen.queryByLabelText("Start voice assistant")).toBeNull();
+      act(() => setVoiceLiveActive("agent-1", false));
+      act(() => setVoiceLiveActive("other-agent", false));
+      expect(screen.getByLabelText("Start voice assistant")).toBeInTheDocument();
     });
 
     it("zeigt die Aufgaben-Zeile mittig unter dem Namen", () => {

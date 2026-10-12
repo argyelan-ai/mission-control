@@ -3948,5 +3948,30 @@
     "fileOne": "{count} file",
     "fileOther": "{count} files",
     "moreLinesHidden": "… {count} more lines hidden"
+  },
+  "voiceLive": {
+    "micStart": "Talk to {name}",
+    "micInsecure": "Microphone only works over HTTPS",
+    "stateConnecting": "Connecting…",
+    "stateListening": "Listening",
+    "stateSpeaking": "Speaking",
+    "statePassing": "Passing on…",
+    "stateEnded": "Disconnected",
+    "hangUp": "Hang up",
+    "retry": "Try again",
+    "close": "Close",
+    "byVoice": "by voice",
+    "forwarded": "to {name}",
+    "verbatim": "Your words",
+    "voiceOf": "{name}'s voice",
+    "emptyHint": "Say what {name} should do. The voice passes it on in the chat.",
+    "errInsecure": "The microphone only works over HTTPS. Open MC via its https:// address.",
+    "errMicDenied": "Microphone access was denied. Allow it for this site in the browser or phone settings.",
+    "errMicMissing": "No microphone found on this device.",
+    "errNetwork": "Connection lost. The agent keeps working.",
+    "errNoCredits": "No OpenAI credit left for the voice.",
+    "errRateLimited": "OpenAI is busy right now. Try again in a minute.",
+    "errUnavailable": "Voice is not available right now.",
+    "errMaxLength": "Call ended after {minutes} minutes."
   }
 }

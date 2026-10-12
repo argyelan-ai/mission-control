@@ -160,6 +160,16 @@ class Settings(BaseSettings):
     jarvis_telegram_enabled: bool = False
     # OpenAI-Key fuer den Text-Brain + Sprachnachrichten-Transkription.
     openai_api_key: str = ""
+    # ── Live voice in the chat (ADR-091, draft) ──────────────────────────
+    # The chat's agent gets "ears and a mouth": the browser talks WebRTC
+    # straight to OpenAI Realtime with a short-lived client secret the backend
+    # mints from openai_api_key above (the key itself never leaves the
+    # backend). Off by default — the mic button only appears when this is true
+    # AND openai_api_key is set. Needs the compose mapping for backend AND
+    # mc-worker (same Settings class in both).
+    voice_live_enabled: bool = False
+    voice_live_model: str = "gpt-realtime-2.1"
+    voice_live_voice: str = "marin"
     # Chat-Modell fuer den Text-Brain (konservativer Default, existiert sicher).
     jarvis_text_model: str = "gpt-4o-mini"
     # Transcription-Modell fuer Telegram-Sprachnotizen (ogg/opus direkt).

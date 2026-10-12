@@ -227,6 +227,11 @@ services:
       # zerlegte den jeweils inaktiven Arm.
       VOICE_OPENAI_VOICE_ID: ${VOICE_OPENAI_VOICE_ID:-}
       VOICE_XAI_VOICE_ID: ${VOICE_XAI_VOICE_ID:-}
+      # Live voice in the chat (ADR-091 draft): off unless set; needs
+      # OPENAI_API_KEY too. Mapped for backend AND mc-worker (one Settings).
+      VOICE_LIVE_ENABLED: ${VOICE_LIVE_ENABLED:-false}
+      VOICE_LIVE_MODEL: ${VOICE_LIVE_MODEL:-gpt-realtime-2.1}
+      VOICE_LIVE_VOICE: ${VOICE_LIVE_VOICE:-marin}
       # Self-Call-Basis fuer den geteilten mc_client (Brain laeuft IM Backend).
       MC_BACKEND_URL: http://localhost:8000
       MC_BASE_URL: ${MC_BASE_URL:-http://localhost}
@@ -491,6 +496,9 @@ services:
       JARVIS_OPERATOR_USER_ID: ${JARVIS_OPERATOR_USER_ID:-}
       VOICE_OPENAI_VOICE_ID: ${VOICE_OPENAI_VOICE_ID:-}
       VOICE_XAI_VOICE_ID: ${VOICE_XAI_VOICE_ID:-}
+      VOICE_LIVE_ENABLED: ${VOICE_LIVE_ENABLED:-false}
+      VOICE_LIVE_MODEL: ${VOICE_LIVE_MODEL:-gpt-realtime-2.1}
+      VOICE_LIVE_VOICE: ${VOICE_LIVE_VOICE:-marin}
       MC_BACKEND_URL: http://backend:8000
       MC_BASE_URL: ${MC_BASE_URL:-http://localhost}
       MC_NODE_AGENT_BASE_URL: ${MC_NODE_AGENT_BASE_URL:-}

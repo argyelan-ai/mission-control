@@ -3948,5 +3948,30 @@
     "fileOne": "{count} Datei",
     "fileOther": "{count} Dateien",
     "moreLinesHidden": "… {count} weitere Zeilen ausgeblendet"
+  },
+  "voiceLive": {
+    "micStart": "Mit {name} sprechen",
+    "micInsecure": "Mikrofon nur über HTTPS",
+    "stateConnecting": "Verbinde…",
+    "stateListening": "Hört zu",
+    "stateSpeaking": "Spricht",
+    "statePassing": "Gibt weiter…",
+    "stateEnded": "Getrennt",
+    "hangUp": "Auflegen",
+    "retry": "Nochmal",
+    "close": "Schliessen",
+    "byVoice": "per Stimme",
+    "forwarded": "an {name}",
+    "verbatim": "Wortlaut",
+    "voiceOf": "Stimme von {name}",
+    "emptyHint": "Sag, was {name} tun soll. Die Stimme gibt es im Chat weiter.",
+    "errInsecure": "Das Mikrofon geht nur über HTTPS. Öffne MC über die https://-Adresse.",
+    "errMicDenied": "Mikrofon-Zugriff verweigert. Erlaube ihn für diese Seite in den Browser- oder Handy-Einstellungen.",
+    "errMicMissing": "Kein Mikrofon auf diesem Gerät gefunden.",
+    "errNetwork": "Verbindung weg. Der Agent arbeitet weiter.",
+    "errNoCredits": "Kein OpenAI-Guthaben mehr für die Stimme.",
+    "errRateLimited": "OpenAI ist gerade ausgelastet. In einer Minute nochmal versuchen.",
+    "errUnavailable": "Die Stimme ist gerade nicht verfügbar.",
+    "errMaxLength": "Gespräch nach {minutes} Minuten beendet."
   }
 }
