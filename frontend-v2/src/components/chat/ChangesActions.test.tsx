@@ -154,6 +154,51 @@ describe("Revert file", () => {
     expect(screen.queryByText(/changed_externally/)).not.toBeInTheDocument();
   });
 
+  it("a permanent refusal (changed_externally) leaves only Close — Revert can never succeed", async () => {
+    chat.revertFile.mockRejectedValue(new Error('API 409: {"reason":"changed_externally"}'));
+    const user = userEvent.setup();
+    renderPanel();
+    await openRevertSheet(user);
+    await user.click(screen.getByTestId("revert-sheet-confirm"));
+
+    await screen.findByText("The file changed after this chat's last edit, so MC leaves it alone.");
+    expect(screen.queryByTestId("revert-sheet-confirm")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
+  });
+
+  it("another permanent refusal (path outside the chat's folder) also drops to Close only", async () => {
+    chat.revertFile.mockRejectedValue(new Error('API 400: {"reason":"path_outside"}'));
+    const user = userEvent.setup();
+    renderPanel();
+    await openRevertSheet(user);
+    await user.click(screen.getByTestId("revert-sheet-confirm"));
+
+    await screen.findByText("This file is outside the chat's folder.");
+    expect(screen.queryByTestId("revert-sheet-confirm")).not.toBeInTheDocument();
+  });
+
+  it("a transient refusal (agent busy) keeps Try again", async () => {
+    chat.revertFile.mockRejectedValue(new Error('API 409: {"reason":"agent_busy"}'));
+    const user = userEvent.setup();
+    renderPanel();
+    await openRevertSheet(user);
+    await user.click(screen.getByTestId("revert-sheet-confirm"));
+
+    await screen.findByText("The agent is working. Try again when its turn ends.");
+    expect(screen.getByTestId("revert-sheet-confirm")).toBeInTheDocument();
+  });
+
+  it("a network error (no parsed reason) also keeps Try again", async () => {
+    chat.revertFile.mockRejectedValue(new Error("Failed to fetch"));
+    const user = userEvent.setup();
+    renderPanel();
+    await openRevertSheet(user);
+    await user.click(screen.getByTestId("revert-sheet-confirm"));
+
+    await screen.findByText("That didn't work.");
+    expect(screen.getByTestId("revert-sheet-confirm")).toBeInTheDocument();
+  });
+
   it("a file MC already put back shows 'Reverted' instead of the button", async () => {
     chat.changes.mockResolvedValue(mkChanges({ files: [mkFile({ reverted: true })] }));
     const user = userEvent.setup();
