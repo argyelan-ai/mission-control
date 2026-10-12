@@ -26,27 +26,28 @@ const EDIT: ToolDiff = {
 
 describe("ToolDiffView", () => {
   it("renders removed and added lines with their sign, context muted", () => {
-    const { container } = render(<ToolDiffView diff={EDIT} showCounts={false} />);
+    const { container } = render(<ToolDiffView diff={EDIT} multi={false} />);
     const rows = [...container.querySelectorAll("[data-line]")].map((el) => el.getAttribute("data-line"));
     expect(rows).toEqual(["hunk", "ctx", "del", "add", "add"]);
     expect(screen.getByText("return 1")).toBeInTheDocument();
     expect(screen.getByText("# doubled")).toBeInTheDocument();
     // The raw hunk header (excerpt line numbers) is never shown as text.
     expect(screen.queryByText(/@@/)).toBeNull();
-    expect(screen.getByText("demo.py")).toBeInTheDocument();
   });
 
-  it("per-file counts only when asked (the row badge already has the total)", () => {
-    const { rerender } = render(<ToolDiffView diff={EDIT} showCounts={false} />);
+  it("names the file and counts only in a multi-file card (title + badge cover one file)", () => {
+    const { rerender } = render(<ToolDiffView diff={EDIT} multi={false} />);
     expect(screen.queryByText("+2")).toBeNull();
-    rerender(<ToolDiffView diff={EDIT} showCounts />);
+    expect(screen.queryByText("demo.py")).toBeNull();
+    rerender(<ToolDiffView diff={EDIT} multi />);
+    expect(screen.getByText("demo.py")).toBeInTheDocument();
     expect(screen.getByText("+2")).toBeInTheDocument();
     expect(screen.getByText("−1")).toBeInTheDocument();
   });
 
   it("caps long diffs on a phone and opens them with one button", async () => {
     const lines = Array.from({ length: 30 }, (_, i) => ({ t: "add" as const, text: `line ${i}` }));
-    render(<ToolDiffView diff={{ ...EDIT, lines, additions: 30, deletions: 0 }} showCounts={false} />);
+    render(<ToolDiffView diff={{ ...EDIT, lines, additions: 30, deletions: 0 }} multi={false} />);
     expect(screen.getByText(`line ${DIFF_PREVIEW_LINES - 1}`)).toBeInTheDocument();
     expect(screen.queryByText(`line ${DIFF_PREVIEW_LINES}`)).toBeNull();
     await userEvent.setup().click(screen.getByRole("button", { name: "Show all 30 lines" }));
@@ -55,15 +56,15 @@ describe("ToolDiffView", () => {
   });
 
   it("names a created file and a write whose before is unknown differently", () => {
-    const { rerender } = render(<ToolDiffView diff={{ ...EDIT, kind: "create" }} showCounts={false} />);
+    const { rerender } = render(<ToolDiffView diff={{ ...EDIT, kind: "create" }} multi={false} />);
     expect(screen.getByText("New file")).toBeInTheDocument();
-    rerender(<ToolDiffView diff={{ ...EDIT, kind: "write" }} showCounts={false} />);
+    rerender(<ToolDiffView diff={{ ...EDIT, kind: "write" }} multi={false} />);
     expect(screen.getByText("Written content")).toBeInTheDocument();
     expect(screen.queryByText("New file")).toBeNull();
   });
 
   it("says when the backend shortened the diff", () => {
-    render(<ToolDiffView diff={{ ...EDIT, truncated: true }} showCounts={false} />);
+    render(<ToolDiffView diff={{ ...EDIT, truncated: true }} multi={false} />);
     expect(screen.getByText(/Diff shortened/)).toBeInTheDocument();
   });
 });

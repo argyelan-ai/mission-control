@@ -26,7 +26,13 @@ function splitPath(path: string): { dir: string; base: string } {
   return i < 0 ? { dir: "", base: path } : { dir: path.slice(0, i + 1), base: path.slice(i + 1) };
 }
 
-export function ToolDiffView({ diff, showCounts }: { diff: ToolDiff; showCounts: boolean }) {
+/**
+ * `multi`: the card holds diffs of SEVERAL files — then each diff names its
+ * file and carries its own +/− counts. With one file the card title already
+ * names it and the row badge already counts it, so the diff shows neither
+ * (K3: each fact once).
+ */
+export function ToolDiffView({ diff, multi }: { diff: ToolDiff; multi: boolean }) {
   const t = useTranslations("sessions.toolCard");
   const [all, setAll] = useState(false);
   const lines = all ? diff.lines : diff.lines.slice(0, DIFF_PREVIEW_LINES);
@@ -40,12 +46,12 @@ export function ToolDiffView({ diff, showCounts }: { diff: ToolDiff; showCounts:
       className="rounded-sm overflow-hidden"
       style={{ border: `1px solid ${C.border}` }}
     >
-      {(diff.path || label || showCounts) && (
+      {((multi && diff.path) || label || multi) && (
         <div
           className="flex items-center gap-2 px-2 py-1 text-xs"
           style={{ background: C.bgElevated, borderBottom: `1px solid ${C.borderSubtle}` }}
         >
-          {diff.path && (
+          {multi && diff.path && (
             <span className="font-mono truncate min-w-0" title={diff.path} style={{ color: C.textSecondary }}>
               <span style={{ color: C.textMuted }}>{dir}</span>
               {base}
@@ -56,7 +62,7 @@ export function ToolDiffView({ diff, showCounts }: { diff: ToolDiff; showCounts:
               {label}
             </span>
           )}
-          {showCounts && (
+          {multi && (
             <span className="ml-auto shrink-0 flex items-center gap-2 font-mono tabular-nums">
               {diff.additions > 0 && <span style={{ color: STATUS_TEXT.online }}>+{diff.additions}</span>}
               {diff.deletions > 0 && <span style={{ color: STATUS_TEXT.error }}>−{diff.deletions}</span>}
@@ -88,7 +94,7 @@ export function ToolDiffView({ diff, showCounts }: { diff: ToolDiff; showCounts:
               data-line={line.t}
               className="flex"
               style={{
-                background: add ? alpha(C.online, 0.08) : del ? alpha(C.error, 0.08) : undefined,
+                background: add ? alpha(C.online, 0.12) : del ? alpha(C.error, 0.12) : undefined,
                 color: add || del ? C.textPrimary : C.textMuted,
               }}
             >

@@ -145,7 +145,7 @@ export function ToolRow({
             <>
               {locations.length > 0 && <LocationChips paths={locations} />}
               {diffs.map((diff, i) => (
-                <ToolDiffView key={`${diff.path ?? ""}:${i}`} diff={diff} showCounts={diffs.length > 1} />
+                <ToolDiffView key={`${diff.path ?? ""}:${i}`} diff={diff} multi={diffs.length > 1} />
               ))}
               {showDetail && (
                 <pre
