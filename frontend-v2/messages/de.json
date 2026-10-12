@@ -1488,6 +1488,7 @@
       "next": "Tag danach",
       "dayTokens": "{tokens} Tokens",
       "dayLocal": "{share} lokal",
+      "dayExternal": "davon direkte API: {tokens}",
       "dayEmpty": "An dem Tag nichts",
       "mostly": "Meist {source}",
       "note": "Tokens = Input + Output, ohne Cache-Lesen. Ein Tag endet um Mitternacht in {tz}."

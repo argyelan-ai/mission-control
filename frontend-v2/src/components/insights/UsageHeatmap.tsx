@@ -5,7 +5,9 @@
  * graph — 26 weeks on the phone, 52 from 1024 px. Colour = generated tokens
  * (input + output, no cache reads) in five brightness steps of the accent by
  * quartiles (DESIGN.md: colour means status, so no green). "All · Local"
- * switches to the tokens that ran locally.
+ * switches to the tokens that ran locally. Since the local boxes count their
+ * own tokens, a day also holds what was sent straight to a box's API from
+ * another machine (local in both modes); the day row names that part.
  *
  *   Tokens per day                                  ( All | Local )
  *        Apr      May      Jun      Jul      Aug      Sep
@@ -13,7 +15,7 @@
  *   …
  *        less ▢▢▣▣■ more
  *   ‹  Wednesday, 23 September                                          ›
- *      1.2M tokens · $214 · 18 % local · Mostly You, interactive
+ *      1.2M tokens · of which direct API: 300K · $214 · 38 % local · Mostly You, interactive
  *
  * A cell is ~12 px — too small to aim at on a phone — so the day row below
  * has 44 px arrows; tapping a cell selects it too. The day text starts on the
@@ -26,6 +28,7 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { C, alpha } from "@/lib/colors";
 import { formatShare, formatUsd, sourceLabel } from "@/lib/usage";
 import {
+  dayTotals,
   heatmapGrid,
   shiftDay,
   formatTokens,
@@ -59,7 +62,8 @@ export function UsageHeatmap({ data }: { data: UsageByDay }) {
     new Intl.DateTimeFormat(locale, { weekday: "long", day: "numeric", month: "long", timeZone: "UTC" }).format(
       new Date(`${iso}T00:00:00Z`),
     );
-  const localShare = day && day.generated_tokens > 0 ? day.local_generated_tokens / day.generated_tokens : null;
+  const totals = day ? dayTotals(day) : null;
+  const localShare = totals?.localShare ?? null;
 
   return (
     <section data-region="heatmap" aria-labelledby="heatmap-heading" className="min-w-0">
@@ -129,11 +133,17 @@ export function UsageHeatmap({ data }: { data: UsageByDay }) {
         <div className="py-3 min-w-0" aria-live="polite">
           <p className="text-sm font-medium" style={{ color: C.textPrimary }}>{selected && dayLabel(selected)}</p>
           <p className="mt-1 text-xs" style={{ color: C.textSecondary }}>
-            {!day || day.generated_tokens === 0 ? (
+            {!day || !totals || totals.all === 0 ? (
               t("dayEmpty")
             ) : (
               <>
-                <span className="tabular-nums">{t("dayTokens", { tokens: formatTokens(day.generated_tokens, locale) })}</span>
+                <span className="tabular-nums">{t("dayTokens", { tokens: formatTokens(totals.all, locale) })}</span>
+                {totals.external > 0 && (
+                  <>
+                    {" · "}
+                    <span className="tabular-nums">{t("dayExternal", { tokens: formatTokens(totals.external, locale) })}</span>
+                  </>
+                )}
                 {" · "}
                 <span className="tabular-nums">{formatUsd(day.cost_usd, locale)}</span>
                 {localShare !== null && localShare > 0 && (
@@ -190,6 +200,12 @@ function Grid({
   const t = useTranslations("insights.heatmap");
   const locale = useLocale();
   const grid = useMemo(() => heatmapGrid(data.days, weeks, metric), [data.days, weeks, metric]);
+  const external = useMemo(() => new Map(data.days.map((d) => [d.date, dayTotals(d).external])), [data.days]);
+  const cellTitle = (date: string, value: number) => {
+    const ext = external.get(date) ?? 0;
+    const base = `${date} · ${formatTokens(value, locale)}`;
+    return ext > 0 ? `${base} · ${t("dayExternal", { tokens: formatTokens(ext, locale) })}` : base;
+  };
   const month = new Intl.DateTimeFormat(locale, { month: "short", timeZone: "UTC" });
   const weekday = new Intl.DateTimeFormat(locale, { weekday: "short", timeZone: "UTC" });
   // 2026-09-28 is a Monday: rows 0 (Mon), 2 (Wed), 4 (Fri) get a label.
@@ -238,7 +254,7 @@ function Grid({
                 onClick={cell.inWindow ? () => onSelect(cell.date) : undefined}
                 className={cell.inWindow ? "cursor-pointer" : undefined}
               >
-                <title>{`${cell.date} · ${formatTokens(cell.value, locale)}`}</title>
+                <title>{cellTitle(cell.date, cell.value)}</title>
               </rect>
             ) : null,
           ),

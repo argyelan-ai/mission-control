@@ -4,7 +4,7 @@ import { fireEvent, render, screen, within, waitFor } from "@testing-library/rea
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { api } from "@/lib/api";
-import { mkDay, mkSource, mkTotals, mkUsageByDay, mkUsageByWeek, mkUsageWeek } from "@/lib/__tests__/usageFixtures";
+import { mkBox, mkDay, mkSource, mkTotals, mkUsageByDay, mkUsageByWeek, mkUsageWeek } from "@/lib/__tests__/usageFixtures";
 import { InsightsHero } from "../InsightsHero";
 import { UsageHeatmap } from "../UsageHeatmap";
 import { SourceSplit } from "../SourceSplit";
@@ -105,6 +105,35 @@ describe("UsageHeatmap", () => {
     fireEvent.click(screen.getByRole("radio", { name: "Local" }));
     expect(level("2026-09-28")).toBe("0");
     expect(level("2026-09-29")).toBe("4");
+  });
+
+  it("adds direct API tokens to the day and says how many", () => {
+    const data = mkUsageByDay();
+    data.days[data.days.length - 1] = { ...mkDay("2026-09-30", 1_000_000, 100_000, 50), ...mkBox(700_000, 100_000) };
+    wrap(<UsageHeatmap data={data} />);
+    const row = screen.getByTestId("heatmap-day");
+    expect(row).toHaveTextContent("1.6M tokens");
+    expect(row).toHaveTextContent("of which direct API: 600K");
+    expect(row).toHaveTextContent("43.8% local"); // (100K + 600K) / 1.6M
+    const cell = screen.getByTestId("heatmap-grid-26").querySelector('rect[data-date="2026-09-30"]')!;
+    expect(cell.querySelector("title")).toHaveTextContent("2026-09-30 · 1.6M · of which direct API: 600K");
+    fireEvent.click(screen.getByRole("radio", { name: "Local" }));
+    expect(cell.querySelector("title")).toHaveTextContent("2026-09-30 · 700K · of which direct API: 600K");
+  });
+
+  it("says nothing about the direct API on a day without it", () => {
+    wrap(<UsageHeatmap data={mkUsageByDay()} />);
+    expect(screen.getByTestId("heatmap-day")).not.toHaveTextContent("direct API");
+  });
+
+  it("shows a day used only through the direct API instead of 'nothing'", () => {
+    const data = mkUsageByDay();
+    data.days[data.days.length - 1] = { ...mkDay("2026-09-30", 0, 0), ...mkBox(300_000, 0) };
+    wrap(<UsageHeatmap data={data} />);
+    const row = screen.getByTestId("heatmap-day");
+    expect(row).not.toHaveTextContent("Nothing that day");
+    expect(row).toHaveTextContent("300K tokens");
+    expect(row).toHaveTextContent("100% local");
   });
 
   it("names what counts as a token and where the day ends", () => {

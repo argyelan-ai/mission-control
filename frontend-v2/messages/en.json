@@ -1488,6 +1488,7 @@
       "next": "Next day",
       "dayTokens": "{tokens} tokens",
       "dayLocal": "{share} local",
+      "dayExternal": "of which direct API: {tokens}",
       "dayEmpty": "Nothing that day",
       "mostly": "Mostly {source}",
       "note": "Tokens = input + output, without cache reads. A day ends at midnight in {tz}."
