@@ -999,6 +999,7 @@
     "contextPanelWindowUnknown": "unknown",
     "contextPanelSource": "Source",
     "contextPanelCacheRate": "Cache hit rate",
+    "contextPanelCost": "Session cost",
     "contextPanelNote": "The CLI status line shows what is left until auto-compaction instead — different basis, both correct.",
     "contextPanelClose": "Close",
     "slashCommands": {
@@ -1042,6 +1043,19 @@
       "thoughts": "{count, plural, one {thought} other {#× thought}}",
       "activity": "Activity",
       "errorIncluded": "error included"
+    },
+    "toolCard": {
+      "running": "running",
+      "liveOutput": "Live output",
+      "copyPath": "Copy path {path}",
+      "copied": "Copied",
+      "copyFailed": "Copy not available",
+      "files": "Files",
+      "diffShowAll": "Show all {count} lines",
+      "diffShowLess": "Show less",
+      "diffTruncated": "Diff shortened — the whole change is in the file.",
+      "diffCreate": "New file",
+      "diffWrite": "Written content"
     },
     "diff": {
       "scopeLabel": "Diff scope",

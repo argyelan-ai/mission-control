@@ -62,6 +62,7 @@ beforeAll(() => {
 function mkHeadStream(overrides: Partial<UseChatStreamResult> = {}): UseChatStreamResult {
   return {
     events: [],
+    toolOutputs: {},
     subagentRuns: [],
     state: null,
     usage: null,

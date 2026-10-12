@@ -1,8 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ToolRow } from "./ToolRow";
-import type { ToolEvent } from "@/lib/chatTypes";
+import type { ToolEvent, ToolOutputEvent } from "@/lib/chatTypes";
+import { ToolOutputContext, createToolOutputStore } from "./toolOutputStore";
 
 function mkEvent(overrides: Partial<ToolEvent> = {}): ToolEvent {
   return {
@@ -90,5 +91,80 @@ describe("ToolRow", () => {
 
     await user.click(screen.getByText("Read backend/app/main.py"));
     expect(screen.queryByText(/line 1/)).not.toBeInTheDocument();
+  });
+});
+
+describe("ToolRow — chat package P1 (live output, diff, locations)", () => {
+  async function withStore(ui: React.ReactElement, outputs: Record<string, ToolOutputEvent>) {
+    const store = createToolOutputStore();
+    store.set(outputs);
+    const view = render(<ToolOutputContext.Provider value={store}>{ui}</ToolOutputContext.Provider>);
+    return { store, ...view };
+  }
+  const live = (text: string): ToolOutputEvent => ({
+    kind: "tool_output", uuid: null, ts: "2026-10-12T16:18:08Z", toolUseId: "call_bash_1", text,
+  });
+
+  it("a RUNNING tool shows its live output without a tap", async () => {
+    await withStore(
+      <ToolRow ev={mkEvent({ name: "bash", title: "$ make", toolUseId: "call_bash_1", result: null })} detailLevel="normal" />,
+      { call_bash_1: live("step 1\nstep 2") },
+    );
+    expect(screen.getByTestId("tool-live-output")).toHaveTextContent("step 1 step 2");
+    expect(screen.getByText("running")).toBeInTheDocument();
+  });
+
+  it("the result replaces the live output", async () => {
+    await withStore(
+      <ToolRow ev={mkEvent({ toolUseId: "call_bash_1", result: "done" })} detailLevel="normal" />,
+      { call_bash_1: live("step 1") },
+    );
+    expect(screen.queryByTestId("tool-live-output")).toBeNull();
+    expect(screen.queryByText("running")).toBeNull();
+  });
+
+  it("a new snapshot re-renders the running row in place", async () => {
+    const { store } = await withStore(
+      <ToolRow ev={mkEvent({ toolUseId: "call_bash_1", result: null })} detailLevel="normal" />,
+      { call_bash_1: live("step 1") },
+    );
+    act(() => store.set({ call_bash_1: live("step 1\nstep 2\nstep 3") }));
+    expect(screen.getByTestId("tool-live-output")).toHaveTextContent("step 3");
+  });
+
+  it("an edit shows its diff and file chip instead of the raw strings", async () => {
+    const user = userEvent.setup();
+    render(
+      <ToolRow
+        ev={mkEvent({
+          name: "edit",
+          title: "edit: /workspace/demo.py",
+          detail: { path: "/workspace/demo.py", old_string: "OLD-RAW", new_string: "NEW-RAW" },
+          result: "[/workspace/demo.py]\n1:def value():",
+          stats: { additions: 2, deletions: 1 },
+          locations: ["/workspace/demo.py"],
+          diffs: [{
+            path: "/workspace/demo.py", kind: "edit", additions: 2, deletions: 1, truncated: false,
+            lines: [{ t: "ctx", text: "def value():" }, { t: "del", text: "    return 1" },
+                    { t: "add", text: "    return 2" }],
+          }],
+        })}
+        detailLevel="normal"
+      />,
+    );
+    await user.click(screen.getByText("edit: /workspace/demo.py"));
+    expect(screen.getByTestId("tool-diff")).toBeInTheDocument();
+    expect(screen.getByText("return 2")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy path /workspace/demo.py" })).toBeInTheDocument();
+    expect(screen.queryByText(/OLD-RAW/)).toBeNull();
+    expect(screen.queryByText(/1:def value/)).toBeNull();
+  });
+
+  it("a tool without diffs keeps the old expanded view (no regression)", async () => {
+    const user = userEvent.setup();
+    render(<ToolRow ev={mkEvent()} detailLevel="normal" />);
+    await user.click(screen.getByText("Read backend/app/main.py"));
+    expect(screen.queryByTestId("tool-diff")).toBeNull();
+    expect(screen.getByText(/line 1/)).toBeInTheDocument();
   });
 });

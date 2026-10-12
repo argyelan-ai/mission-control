@@ -26,6 +26,7 @@ import { C, STATUS_TEXT } from "@/lib/colors";
 import type { ThinkingEvent, ToolEvent } from "@/lib/chatTypes";
 import { ToolRow } from "./ToolRow";
 import { ThinkingRow } from "./ThinkingRow";
+import { useStreamingToolIds } from "./toolOutputStore";
 
 export type ActivityEvent = ToolEvent | ThinkingEvent;
 
@@ -120,6 +121,13 @@ export function ToolGroup({
     setExpanded(detailLevel === "verbose");
   }, [detailLevel]);
 
+  /* A tool that is RUNNING with live output stays visible below a collapsed
+     group: "what is it doing right now" must not hide behind a tap. It folds
+     back in by itself once its result lands (its live slot is gone then). */
+  const streaming = useStreamingToolIds(
+    events.map((ev) => (ev.kind === "tool" && ev.result == null ? ev.toolUseId : null)),
+  );
+
   if (events.length === 0) return null;
 
   const summary = summarizeActivity(events);
@@ -177,16 +185,19 @@ export function ToolGroup({
         />
       </button>
 
-      {expanded && (
+      {(expanded || streaming.size > 0) && (
         // 1px hairline rail instead of a card: the rows stay in the timeline's
         // own rhythm (Flach-Regel — no nested card), the line just says
         // "these belong to the row above".
         <div
           className="mt-1 ml-3.5 pl-1"
           style={{ borderLeft: `1px solid ${C.border}` }}
-          data-testid="tool-group-children"
+          data-testid={expanded ? "tool-group-children" : "tool-group-running"}
         >
-          {events.map((ev) => renderChild(ev, detailLevel))}
+          {(expanded
+            ? events
+            : events.filter((ev) => ev.kind === "tool" && !!ev.toolUseId && streaming.has(ev.toolUseId))
+          ).map((ev) => renderChild(ev, detailLevel))}
         </div>
       )}
     </div>

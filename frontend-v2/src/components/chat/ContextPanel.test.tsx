@@ -214,3 +214,31 @@ describe("ContextPanel", () => {
     expect(onClose).toHaveBeenCalled();
   });
 });
+
+describe("session cost (ACP usage_update.cost, chat package P1)", () => {
+  it("shows the reported cost in the active locale", () => {
+    renderPanel({ usage: mkUsage({ sessionCost: { amount: 0.012855, currency: "USD" } }) });
+    expect(screen.getByText("Session cost")).toBeInTheDocument();
+    expect(screen.getByTestId("context-panel-cost")).toHaveTextContent("$0.0129");
+  });
+
+  it("shows NO cost row when the harness reported none (local model)", () => {
+    renderPanel({ usage: mkUsage({ sessionCost: null }) });
+    expect(screen.queryByTestId("context-panel-cost")).toBeNull();
+    renderPanel({ usage: mkUsage({ sessionCost: { amount: 0, currency: "USD" } }) });
+    expect(screen.queryByTestId("context-panel-cost")).toBeNull();
+  });
+});
+
+describe("formatSessionCost", () => {
+  it("keeps four decimals below one unit, two above, never fakes zero", async () => {
+    const { formatSessionCost } = await import("./ContextPanel");
+    expect(formatSessionCost({ amount: 0.012855, currency: "USD" }, "en")).toBe("$0.0129");
+    expect(formatSessionCost({ amount: 12.5, currency: "USD" }, "en")).toBe("$12.50");
+    expect(formatSessionCost({ amount: 1.5, currency: "EUR" }, "de")?.replace(/\s/g, " ")).toBe("1,50 €");
+    expect(formatSessionCost({ amount: 0, currency: "USD" }, "en")).toBeNull();
+    expect(formatSessionCost({ amount: Number.NaN, currency: "USD" }, "en")).toBeNull();
+    expect(formatSessionCost(undefined, "en")).toBeNull();
+    expect(formatSessionCost({ amount: 2, currency: "NOT-A-CODE" }, "en")).toBe("2.00 NOT-A-CODE");
+  });
+});

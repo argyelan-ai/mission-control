@@ -18,7 +18,7 @@
  * Owns nothing about the Diff/Browser side panel — that's PanelRail's job,
  * orthogonal to this toggle.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { useSearchParams } from "next/navigation";
 import { ChevronDown, ChevronLeft, MessagesSquare, MoreHorizontal } from "lucide-react";
@@ -50,6 +50,7 @@ import { ToolRow } from "./ToolRow";
 import { ThinkingRow } from "./ThinkingRow";
 import { SubagentGroup } from "./SubagentGroup";
 import { ToolGroup } from "./ToolGroup";
+import { ToolOutputContext, createToolOutputStore, type ToolOutputStore } from "./toolOutputStore";
 import { CommandRow } from "./CommandRow";
 import { ApprovalCard } from "./ApprovalCard";
 import { StatusLine } from "./StatusLine";
@@ -397,6 +398,17 @@ export function ChatView({
   const stream = head ? headStream : agentStream;
   const headMeta = useHeadTranscriptMeta(head?.run_id ?? null);
 
+  /* Live tool output reaches the rows through a store, not a context value:
+     only the row whose tool streams re-renders per snapshot (see
+     toolOutputStore.ts). Layout effect, so the snapshot and the scroll pin
+     below land in the same frame. */
+  const toolOutputStoreRef = useRef<ToolOutputStore | null>(null);
+  if (toolOutputStoreRef.current === null) toolOutputStoreRef.current = createToolOutputStore();
+  const toolOutputStore = toolOutputStoreRef.current;
+  useLayoutEffect(() => {
+    toolOutputStore.set(stream.toolOutputs);
+  }, [toolOutputStore, stream.toolOutputs]);
+
   const streamStatus = stream.state?.status ?? null;
   useEffect(() => {
     onStatusChange?.(streamStatus);
@@ -442,7 +454,7 @@ export function ChatView({
     // Basis fuer handleScroll gleich mitfuehren: ohne sie kann das erste
     // Scroll-Ereignis nicht sagen, ob sich Hoehe oder Ansicht geaendert hat.
     lastMetricsRef.current = { top: el.scrollTop, height: el.scrollHeight };
-  }, [stream.events, stream.preview, stickToBottom, renderAll, effectiveView]);
+  }, [stream.events, stream.preview, stream.toolOutputs, stickToBottom, renderAll, effectiveView]);
 
   // One frame later, not on a timer: the browser gets to paint the tail first,
   // which is the whole point.
@@ -806,6 +818,7 @@ export function ChatView({
   }
 
   return (
+    <ToolOutputContext.Provider value={toolOutputStore}>
     <div ref={rootRef} className="flex flex-col flex-1 min-h-0 overflow-hidden">
       {/* One header for both breakpoints — the parts that only make sense on
           a phone (back chevron, context line, options button) carry
@@ -1334,5 +1347,6 @@ export function ChatView({
         />
       )}
     </div>
+    </ToolOutputContext.Provider>
   );
 }

@@ -252,3 +252,33 @@ describe("ToolGroup", () => {
     expect(screen.getAllByText(/file_path/)).toHaveLength(RUN.length);
   });
 });
+
+describe("ToolGroup — a running tool stays visible when collapsed (chat package P1)", () => {
+  it("shows ONLY the streaming tool below the collapsed summary, with its output", async () => {
+    const { ToolOutputContext, createToolOutputStore } = await import("./toolOutputStore");
+    const store = createToolOutputStore();
+    store.set({
+      run1: { kind: "tool_output", uuid: null, ts: "2026-10-12T16:18:08Z", toolUseId: "run1", text: "step 3" },
+    });
+    render(
+      <ToolOutputContext.Provider value={store}>
+        <ToolGroup
+          events={[
+            tool({ title: "Read a.py", toolUseId: "done1", result: "ok" }),
+            tool({ name: "bash", title: "$ make", toolUseId: "run1", result: null }),
+          ]}
+        />
+      </ToolOutputContext.Provider>,
+    );
+    expect(screen.getByTestId("tool-group-running")).toBeInTheDocument();
+    expect(screen.getByText("$ make")).toBeInTheDocument();
+    expect(screen.queryByText("Read a.py")).toBeNull();
+    expect(screen.getByTestId("tool-live-output")).toHaveTextContent("step 3");
+  });
+
+  it("without live output a collapsed group shows no children (unchanged)", () => {
+    render(<ToolGroup events={[tool({ title: "Read a.py" }), tool({ title: "Read b.py" })]} />);
+    expect(screen.queryByTestId("tool-group-running")).toBeNull();
+    expect(screen.queryByText("Read a.py")).toBeNull();
+  });
+});

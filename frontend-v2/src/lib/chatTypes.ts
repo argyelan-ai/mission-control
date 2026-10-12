@@ -67,6 +67,44 @@ export interface ToolEvent {
   status: "done" | "error";
   stats: { additions: number; deletions: number } | null;
   sidechain: boolean;
+  /** One diff per edited file (backend `chat_diff.py`), harness-neutral: an
+   *  ACP edit's whole-file old/new text, a Claude Edit/MultiEdit's own
+   *  strings, a Claude Write's content. Absent = the tool changed no file
+   *  (or the harness did not say). `stats` then counts these same diffs. */
+  diffs?: ToolDiff[] | null;
+  /** File paths the call touched (ACP `locations`, Claude `file_path`).
+   *  Container/host paths — shown as copyable chips, never opened blindly. */
+  locations?: string[] | null;
+}
+
+export interface ToolDiffLine {
+  /** `hunk` = a gap between changed regions (rendered as a separator). */
+  t: "hunk" | "ctx" | "add" | "del";
+  text: string;
+}
+
+export interface ToolDiff {
+  path: string | null;
+  /** `create` = the harness said the file is new. `write` = new content
+   *  whose predecessor is unknown (Claude Write) — never called "new file". */
+  kind: "edit" | "create" | "write";
+  /** Capped by the backend; `truncated` says when lines were dropped. */
+  lines: ToolDiffLine[];
+  additions: number;
+  deletions: number;
+  truncated: boolean;
+}
+
+/** A running tool's output so far (ACP `tool_call_update` in_progress, via
+ *  the bridge's preview channel). VOLATILE like `preview`: no uuid, one slot
+ *  per `toolUseId`, the newest replaces the older, and the tool's own result
+ *  ends it. Never in the history. */
+export interface ToolOutputEvent {
+  kind: "tool_output";
+  uuid: null;
+  ts: string;
+  toolUseId: string;
+  text: string;
 }
 
 export interface ThinkingEvent {
@@ -130,6 +168,16 @@ export interface UsageEvent {
    *  `null`/absent means the harness reported no cache activity at all this
    *  turn, or no breakdown — never a fake 0%. */
   cacheHitRate?: number | null;
+  /** What the session has cost so far, as the harness reported it (ACP
+   *  `usage_update.cost`). Absent when nothing was reported — a local model
+   *  reports nothing, and the panel then shows no cost row at all. */
+  sessionCost?: SessionCost | null;
+}
+
+export interface SessionCost {
+  amount: number;
+  /** ISO 4217 code, e.g. "USD". */
+  currency: string;
 }
 
 export interface UsageComponents {
@@ -232,6 +280,7 @@ export type ChatEvent =
   | UsageEvent
   | StateEvent
   | PreviewEvent
+  | ToolOutputEvent
   | NotificationEvent
   | TodoEvent
   | SessionChangedEvent;
