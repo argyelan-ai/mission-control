@@ -777,6 +777,13 @@ describe("todo snapshot — own slot, newest wins", () => {
     expect(state.todos?.uuid).toBe("u3");
   });
 
+  it("a task run's snapshot pushed by the backend fills the agent's panel", () => {
+    let state = chatReducer(createInitialChatState(), snap("chat", "2026-10-12T09:00:00.000Z", 0));
+    state = chatReducer(state, { ...snap("task", "2026-10-12T09:02:00.000Z", 1), taskId: "t-1" });
+    expect(state.todos?.taskId).toBe("t-1");
+    expect(state.todos?.items[0].status).toBe("completed");
+  });
+
   it("is cleared on session_changed", () => {
     let state = chatReducer(createInitialChatState(), snap("u1", "2026-10-12T09:00:00.000Z", 0));
     state = chatReducer(state, { kind: "session_changed" });

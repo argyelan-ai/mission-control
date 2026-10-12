@@ -454,15 +454,24 @@ class ACPEventMapper:
         """message.usage in the shape omp_chat._parse_assistant reads:
         input/cacheRead/cacheWrite/output counts. Token counts come from the
         prompt result; the context window from usage_update. Neither present
-        -> None (no invented numbers)."""
+        -> None (no invented numbers).
+
+        cacheRead/cacheWrite used to be hard-coded 0 (#464 mid), so the chat
+        never showed a cache hit rate for an ACP agent. omp's ACP
+        `session/prompt` result carries them as `cachedReadTokens`/
+        `cachedWriteTokens` — the ACP spec's own field names (verified:
+        agent_client_protocol 0.9.0 `acp/schema.py` `Usage` model; UNSTABLE
+        per the spec but the real wire shape, not an omp-only convention).
+        Missing on a given turn (older omp, or a turn with nothing cached)
+        -> 0, same "no cache activity" meaning omp's native format uses."""
         if not self._prompt_usage and not self._usage_window:
             return None
         usage = self._prompt_usage or {}
         window = self._usage_window or {}
         return {
             "input": int(usage.get("inputTokens") or 0),
-            "cacheRead": 0,
-            "cacheWrite": 0,
+            "cacheRead": int(usage.get("cachedReadTokens") or 0),
+            "cacheWrite": int(usage.get("cachedWriteTokens") or 0),
             "output": int(usage.get("outputTokens") or 0),
             "contextWindow": window.get("size"),
             "usedTokens": window.get("used"),
@@ -741,7 +750,15 @@ class ChatEventSink:
       raises into the ACP turn
     """
 
-    def __init__(self, directory: Optional[Path], session_id: str):
+    def __init__(
+        self, directory: Optional[Path], session_id: str, task_id: Optional[str] = None
+    ):
+        """``task_id``: set for a TASK run (bridge serve loop), ``None`` for
+        the chat daemon. It lands in the session header as ``taskId``: every
+        attempt of a task (continue nudge, reflection retry) is a NEW ACP
+        session without the dispatch prompt, and the backend's todo ->
+        checklist sync finds the task's plan by this tag — not by "newest
+        session", which is the chat (live 12.10.2026)."""
         self._dir = directory
         self._session_id = session_id or "acp-session"
         self._path: Optional[Path] = None
@@ -756,6 +773,8 @@ class ChatEventSink:
                 "cwd": os.environ.get("OMP_ACP_CWD") or "",
                 "bridge": "acp",
             }
+            if task_id:
+                header["taskId"] = task_id
             try:
                 with open(candidate, "a", encoding="utf-8") as fh:
                     fh.write(json.dumps(header, ensure_ascii=False) + "\n")

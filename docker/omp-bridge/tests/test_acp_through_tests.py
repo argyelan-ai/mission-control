@@ -375,6 +375,10 @@ def test_make_acp_run_factory_sink_survives_multiple_events():
         assert header["type"] == "session"
         assert header["id"] == outcome.session_id, header
         assert header["id"] != "acp-session"
+        # The task run names its task in the header: every attempt is a new
+        # ACP session without the dispatch prompt, and the backend's todo
+        # sync finds the task's plan by this tag (live 12.10.2026).
+        assert header.get("taskId") == "T1", header
         events = [json.loads(l) for l in files[0].read_text().splitlines()[1:]]
         assert len(events) >= 3, f"expected all 3 batches, got {len(events)}"
         types = [e.get("type") for e in events]

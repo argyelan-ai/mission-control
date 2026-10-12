@@ -3416,6 +3416,17 @@ class NativeTuiController:
 
     _COMPOSER_BOTTOM_PREFIX = "╰─"  # '╰─' — composer bottom-border edge
     _COMPOSER_BORDER_CHARS = "╰╯─│╭╮ "  # ╰╯─│╭╮ + space
+    # omp 18.x placeholder hint in an EMPTY composer (verified on 18.10.1,
+    # absent in 18.1.10): right-aligned "<key> to change thinking effort"
+    # (fresh session) or "<key> to see N running agents" — source
+    # packages/tui/src/prompt/composer-hints.ts. capture-pane -p drops its dim
+    # styling, so without this it reads as a draft and a submitted paste is
+    # re-pasted. Right-aligned = at least two spaces before the key; the key
+    # label may itself contain one space ("Left Left"). Same rule as
+    # backend/app/services/omp_chat.py::_COMPOSER_HINT_RE.
+    _COMPOSER_HINT_RE = re.compile(
+        r"^\s{2,}\S+(?: \S+)? to (?:change thinking effort|see \d+ running agents?)\s*$"
+    )
 
     def _composer_state(
         self, fragment: str, verify_attempts: int, verify_wait: float,
@@ -3467,6 +3478,9 @@ class NativeTuiController:
         if composer_line is None:
             return "unclear"
 
+        after_edge = composer_line.strip().removeprefix(self._COMPOSER_BOTTOM_PREFIX)
+        if self._COMPOSER_HINT_RE.match(after_edge):
+            return "submitted"  # only the empty-composer placeholder is shown
         content = composer_line.strip(self._COMPOSER_BORDER_CHARS).strip()
         if not content:
             return "submitted"
@@ -3635,7 +3649,8 @@ def _run_interrupt_ladder(
     now: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
 ) -> RunOutcome:
-    """The abort ladder (Fix 3, Step-0-verified against omp v18.1.10):
+    """The abort ladder (Fix 3, Step-0-verified against omp v18.1.10; Escape ->
+    hook turn_end stopReason=aborted re-checked live on v18.10.1, 12.10.2026):
 
       1. Protocol abort — none exists in the TUI (no rpc/abort channel);
          Escape IS the verified protocol abort, so rung 1 = Escape.
@@ -4732,7 +4747,7 @@ def _make_acp_run_factory(
             if sink_obj is None or sink_obj.session_id != holder["session_id"]:
                 directory = acp_chat_events.session_dir(cwd=cwd)
                 sink_obj = acp_chat_events.ChatEventSink(
-                    directory, holder["session_id"]
+                    directory, holder["session_id"], task_id=task_id
                 )
                 holder["sink"] = sink_obj
             sink_obj.write(lines)

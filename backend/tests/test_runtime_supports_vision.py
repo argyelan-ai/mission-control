@@ -5,7 +5,7 @@ beantwortet Bilder korrekt über die API. omp im Agenten-Container bekam von MC
 bislang eine ``models.yml`` OHNE ``input:``-Liste — das MC-Modell galt für omp
 als text-only, und sein Auflösungspfad (``s.find(u => u.input.includes
 ("image"))``, im omp-Binary ``/usr/local/bin/omp`` v18.1.10 per ``grep``
-nachgelesen) fiel auf ein eingebautes, nie konfiguriertes Standard-Vision-
+nachgelesen, in v18.10.1 unveraendert) fiel auf ein eingebautes, nie konfiguriertes Standard-Vision-
 Modell zurück — Ergebnis: ``401 Incorrect API key provided: sk-noauth`` gegen
 api.openai.com statt gegen unsere eigene Box.
 

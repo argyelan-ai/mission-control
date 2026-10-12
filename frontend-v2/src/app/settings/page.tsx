@@ -43,6 +43,7 @@ import { AiProvidersTab } from "@/components/settings/AiProvidersTab";
 import { AppearanceSection } from "@/components/settings/AppearanceSection";
 import { NightShiftTab } from "@/components/settings/NightShiftTab";
 import { PhoneAccountPanel } from "@/components/settings/PhoneAccountPanel";
+import { BoardsCard } from "@/components/settings/BoardsCard";
 import { PhoneSectionList } from "@/components/settings/PhoneSectionList";
 import { GROUP_ORDER, SECTIONS, sectionHref } from "@/components/settings/sections";
 import { StatusDot } from "@/components/shared/StatusDot";
@@ -477,6 +478,8 @@ function ProfileSection() {
           />
         </div>
       </div>
+
+      <BoardsCard />
     </SectionMotion>
   );
 }

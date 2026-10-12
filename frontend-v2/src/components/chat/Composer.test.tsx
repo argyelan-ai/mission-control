@@ -490,6 +490,20 @@ describe("Composer", () => {
     expect(screen.getByTestId("context-ring")).not.toHaveAttribute("title", expect.stringContaining("Cache"));
   });
 
+  it("names the cache hit rate for an omp ACP agent (components is null — no window breakdown — but the backend still computed a per-turn rate; see acp_chat_events.py)", () => {
+    render(
+      <Composer
+        agentId="a1"
+        usage={mkUsage({ components: null, cacheHitRate: 0.9 })}
+        state={null}
+        onSend={vi.fn()}
+        onStop={vi.fn()}
+      />
+    );
+    expect(screen.getByTestId("context-ring")).toHaveAttribute("title", expect.stringContaining("Cache"));
+    expect(screen.getByTestId("context-ring")).toHaveAttribute("title", expect.stringContaining("90"));
+  });
+
   it("does not offer the breakdown when there is no usage to break down", () => {
     render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
     expect(screen.queryByRole("button", { name: /Kontext:/ })).not.toBeInTheDocument();

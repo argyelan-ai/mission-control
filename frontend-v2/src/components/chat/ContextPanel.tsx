@@ -123,7 +123,10 @@ export function ContextPanel({ usage, pct, pctSource, onClose }: ContextPanelPro
   const barTotal = window_ ?? used;
   const share = (tokens: number) => (barTotal > 0 ? (tokens / barTotal) * 100 : 0);
   const segmentLabel = (key: string) => t(`contextPanelSegment.${key}`);
-  const cacheRate = cacheHitRateOf(usage.components);
+  // `cacheHitRate` (backend-computed, survives the components-null case —
+  // see its doc comment in chatTypes.ts) wins; `components`-derived stays
+  // the fallback for older event shapes that never set the new field.
+  const cacheRate = usage.cacheHitRate ?? cacheHitRateOf(usage.components);
   // Percent formatting goes through the active locale (K3/i18n): "15%" in
   // English, "15 %" with a narrow no-break space in German — never a bare
   // `Math.round(...) + "%"` string concat.

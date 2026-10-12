@@ -641,7 +641,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
   // Prompt cache hit rate for the latest turn — the figure that matters most
   // for the local GLM (omp), where ~90% of prompt tokens come from cache.
   // Left out entirely when the harness has no breakdown (ADR-nothing-fake).
-  const cacheRate = cacheHitRateOf(usage?.components);
+  const cacheRate = usage?.cacheHitRate ?? cacheHitRateOf(usage?.components);
   const cacheHint = cacheRate != null ? t("contextRingCacheHint", { rate: formatShare(cacheRate, locale) ?? "" }) : "";
   const ringTitle =
     pct != null

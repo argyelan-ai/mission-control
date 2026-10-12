@@ -1258,10 +1258,11 @@ async def test_slash_command_capabilities_omp_lists_omp_builtins(monkeypatch, tm
     """omp bekam seit 18.08.2026 eine LEERE Palette („bis deren Harness eigene
     Kommandos meldet"). Marks Befund 05.09.2026: der Composer zeigt dem
     omp-Agenten beim Tippen von "/" nichts. Die omp-Builtins wurden live durch
-    den Picker geblaettert (omp v18.1.10, Wegwerf-Session) — sie muessen
-    kommen, Claude-Vokabular (/effort, /help) darf NICHT dabei sein, und die
-    claude-config-Skills gehoeren nicht in eine omp-Palette (omp liest den
-    Ordner nicht)."""
+    den Picker geblaettert (omp v18.1.10, Wegwerf-Session; neu aufgenommen
+    an v18.10.1, 12.10.2026) — sie muessen kommen, Claude-Vokabular (/help)
+    darf NICHT dabei sein, und die claude-config-Skills gehoeren nicht in eine
+    omp-Palette (omp liest den Ordner nicht). Seit omp 18.5.0 hat omp ein
+    EIGENES /effort, und 18.2.1 benannte /drop in /delete um."""
     from app.services import agent_chat_input
 
     monkeypatch.setattr(agent_chat_input, "_host_home", lambda: tmp_path)
@@ -1273,9 +1274,10 @@ async def test_slash_command_capabilities_omp_lists_omp_builtins(monkeypatch, tm
     agent = _StubAgent(slug="ompy", agent_runtime="cli-bridge", harness="omp")
     names = [c["name"] for c in (await agent_chat_input.slash_command_capabilities(agent))["slashCommands"]]
 
-    for expected in ("compact", "model", "new", "shake", "autoresearch", "clear"):
+    for expected in ("compact", "model", "new", "shake", "autoresearch", "clear",
+                     "delete", "effort", "annotate", "skills"):
         assert expected in names
-    for foreign in ("effort", "help", "mc-tdd"):
+    for foreign in ("help", "mc-tdd", "drop"):
         assert foreign not in names
     assert len(names) == len(set(names))
 

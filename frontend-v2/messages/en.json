@@ -72,7 +72,11 @@
     "title": "Profile",
     "description": "Your personal information.",
     "timezoneAria": "Select timezone",
-    "roleHint": "Can only be changed by an admin."
+    "roleHint": "Can only be changed by an admin.",
+    "boards": {
+      "title": "Boards",
+      "description": "Only one board right now — the switcher in the sidebar comes back automatically once there is a second one."
+    }
   },
   "home": {
     "consoleOverview": "Console · Overview",
@@ -1099,7 +1103,8 @@
     "settings": "Settings",
     "boardPicker": "Choose board",
     "collapseSidebar": "Collapse sidebar",
-    "expandSidebar": "Expand sidebar"
+    "expandSidebar": "Expand sidebar",
+    "voiceButton": "Voice (Jarvis)"
   },
   "login": {
     "consoleAccess": "Console · Access",
