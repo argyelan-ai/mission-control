@@ -1,0 +1,1 @@
+{"sessionId":"01a08150-b7ac-71d0-b036-e8536d952cc3","update":{"sessionUpdate":"plan","entries":[{"content":"Inspect the failing test","priority":"high","status":"completed"},{"content":"Patch the parser","priority":"medium","status":"in_progress"},{"content":"Run the suite","priority":"low","status":"pending"}]}}

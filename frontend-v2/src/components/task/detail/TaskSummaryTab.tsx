@@ -25,7 +25,7 @@ import ReactMarkdown from "react-markdown";
 import { useOverflows } from "@/hooks/useOverflows";
 import { FADE } from "./nextStepStyle";
 import { useLocale, useTranslations } from "next-intl";
-import { ChevronDown, CheckSquare, Square, AlertCircle } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import { C, LANE } from "@/lib/colors";
 import { formatAge } from "@/lib/taskDetail/format";
 import { eventLabel } from "@/lib/taskDetail/eventLabel";
@@ -33,6 +33,7 @@ import { statusLabelKey } from "@/lib/taskDetail/statusLabels";
 import type { RunRecord, Task, TaskChecklistItem, TaskSummary } from "@/lib/types";
 import { TaskDescription } from "../TaskDescription";
 import { PrChip } from "./PrChip";
+import { ChecklistItems } from "@/components/shared/ChecklistItems";
 
 const STEP_LINKS = 10;
 // Order of the status counts in STEPS — finished first, then the open ends.
@@ -194,22 +195,9 @@ export function TaskSummaryTab({
           <div>
             <Toggle open={planOpen} onClick={() => setPlanOpen((o) => !o)}>{t("checklist")}</Toggle>
           </div>
-          {planOpen && (
-            <ul className="mt-1.5 space-y-1">
-              {checklist.map((item) => (
-                <li key={item.id} className="flex items-center gap-2">
-                  {item.status === "done" ? (
-                    <CheckSquare size={12} style={{ color: C.online, flexShrink: 0 }} />
-                  ) : item.status === "blocked" ? (
-                    <AlertCircle size={12} style={{ color: C.error, flexShrink: 0 }} />
-                  ) : (
-                    <Square size={12} style={{ color: C.textMuted, flexShrink: 0 }} />
-                  )}
-                  <span style={{ color: item.status === "done" ? C.textMuted : C.textPrimary }}>{item.title}</span>
-                </li>
-              ))}
-            </ul>
-          )}
+          {/* The same list renderer as the chat's todo panel — since the
+              todo -> checklist sync it is the same list. */}
+          {planOpen && <ChecklistItems items={checklist} className="mt-2" />}
         </>
       );
     } else if (plan.length > 0) {

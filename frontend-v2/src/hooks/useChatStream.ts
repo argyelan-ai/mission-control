@@ -12,6 +12,7 @@ import type {
   PreviewEvent,
   StateEvent,
   TimelineChatEvent,
+  TodoEvent,
   UsageEvent,
 } from "@/lib/chatTypes";
 
@@ -255,10 +256,14 @@ export interface ChatReducerState {
    *  `events` being empty as the signal, since a second rollover could land
    *  before the first refetch re-seeds anything. */
   sessionChangedAt: number;
+  /** The agent's newest todo snapshot (TodoWrite / ACP plan, normalised by
+   *  the backend). Its own slot, never the timeline: a snapshot replaces the
+   *  one before it. */
+  todos: TodoEvent | null;
 }
 
 export function createInitialChatState(): ChatReducerState {
-  return { events: [], index: new Map(), state: null, usage: null, preview: null, sessionChangedAt: 0 };
+  return { events: [], index: new Map(), state: null, usage: null, preview: null, sessionChangedAt: 0, todos: null };
 }
 
 /**
@@ -332,6 +337,11 @@ export function chatReducer(state: ChatReducerState, event: ChatEvent): ChatRedu
       return { ...state, preview: event };
     case "usage":
       return { ...state, usage: event };
+    case "todo":
+      /* Newest wins. A history page can land AFTER a live snapshot (the two
+         race at connect), so an older timestamp never replaces a newer one. */
+      if (state.todos && event.ts < state.todos.ts) return state;
+      return { ...state, todos: event };
     case "session_changed":
       /* Der VERBRAUCH gehoerte zum alten Gespraech und wird geleert: nach
          /clear stand der Kontext-Ring sonst weiter auf dem alten Prozentwert,
@@ -348,6 +358,7 @@ export function chatReducer(state: ChatReducerState, event: ChatEvent): ChatRedu
         index: new Map(),
         usage: null,
         preview: null,
+        todos: null,
         sessionChangedAt: state.sessionChangedAt + 1,
       };
     case "message":
@@ -476,6 +487,9 @@ export interface UseChatStreamResult {
   /** Die Live-Vorschau aus dem Terminal, solange der Agent schreibt und das
    *  Transkript die Antwort noch nicht traegt. Render AFTER `pendingEchoes`. */
   preview: PreviewEvent | null;
+  /** The agent's newest todo snapshot, or `null` (none written yet, an older
+   *  backend, or a fresh session). */
+  todos: TodoEvent | null;
 }
 
 /**
@@ -583,6 +597,8 @@ export function useChatStream(agentId: string | null, enabled = true): UseChatSt
     const buffered = liveBufferRef.current;
     liveBufferRef.current = [];
     for (const ev of seedSequence(data.events, buffered)) dispatch(ev);
+    // The todo snapshot rides beside the page (newest of the whole file).
+    if (data.todos) dispatch(data.todos);
   }, [historyQuery.data, historyQuery.dataUpdatedAt]);
 
   /* Faellt der Historien-Abruf aus, duerfen die gepufferten Live-Zeilen nicht
@@ -811,5 +827,6 @@ export function useChatStream(agentId: string | null, enabled = true): UseChatSt
     withdrawQueued,
     awaitingResponse,
     preview: chatState.preview,
+    todos: chatState.todos,
   };
 }

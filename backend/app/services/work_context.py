@@ -213,7 +213,12 @@ async def validate_task_completion(session, task) -> tuple[bool, list[str]]:
     checklist_result = await session.exec(
         select(TaskChecklistItem).where(TaskChecklistItem.task_id == task.id)
     )
-    all_checklist_items = checklist_result.all()
+    # Rows mirrored from the model's own todo list (source "agent_todo",
+    # services/checklist_todo_sync.py) are its working memory, not a
+    # commitment — and the sync lags by one tick, so a finish right after
+    # the last TodoWrite would be refused for steps already completed.
+    from app.models.checklist import SOURCE_AGENT_TODO
+    all_checklist_items = [i for i in checklist_result.all() if i.source != SOURCE_AGENT_TODO]
     if all_checklist_items:
         pending_items = [i for i in all_checklist_items if i.status not in ("done", "skipped")]
         if pending_items:

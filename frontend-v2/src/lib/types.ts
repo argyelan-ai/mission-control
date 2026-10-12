@@ -117,8 +117,11 @@ export interface TaskChecklistItem {
   task_id: string;
   agent_id: string | null;
   title: string;
-  status: "pending" | "done" | "blocked" | "skipped";
+  status: "pending" | "in_progress" | "done" | "blocked" | "skipped";
   sort_order: number;
+  /** "manual" (a person or `mc checklist`) or "agent_todo" (mirrored from the
+   *  model's todo list). Absent on older backends. */
+  source?: "manual" | "agent_todo";
   completed_at: string | null;
   created_at: string;
 }

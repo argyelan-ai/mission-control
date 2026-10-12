@@ -649,6 +649,9 @@ class Settings(BaseSettings):
     heads_enabled: bool = False
     heads_root: Path = Path(os.environ.get("HOME_HOST", str(Path.home()))) / ".mc" / "heads"
     heads_sync_interval: int = 60
+    # Todo -> checklist sync (services/checklist_todo_sync.py): how often the
+    # working agents' chat transcripts are checked for a new todo snapshot.
+    chat_todo_sync_interval: int = 20
     # Browser sessions (ADR-088, lifecycle step + operator decisions
     # 2026-10-06). The loop runs in the background-services process.
     # browser_sessions_root holds each session's last image

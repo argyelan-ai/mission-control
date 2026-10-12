@@ -220,6 +220,7 @@ async def get_chat_history(
             },
             "hasMore": False,
             "subagentRuns": [],
+            "todos": None,
             "capabilities": capabilities,
         }
 

@@ -445,6 +445,118 @@ def test_history_roundtrip_through_read_history(tmp_path):
     assert "Starting" in texts and "Done" in texts
 
 
+# ── tests: ACP plan -> todo snapshot (chat progress panel) ──────────────────
+
+#: An ACP `plan` update as omp 18.1.10 sends it (entries with content /
+#: status / priority — the ACP spec shape).
+PLAN_UPDATE = {
+    "sessionId": "01a0814f-a62d-76a6-8e8e-3e17841eb215",
+    "update": {
+        "sessionUpdate": "plan",
+        "entries": [
+            {"content": "Inspect the failing test", "priority": "high", "status": "completed"},
+            {"content": "Patch the parser", "priority": "medium", "status": "in_progress"},
+            {"content": "Run the suite", "priority": "low", "status": "pending"},
+        ],
+    },
+}
+
+
+def test_plan_update_is_forwarded_not_dropped():
+    """Before: `plan` fell into the "no chat value" branch and vanished. Now
+    it becomes ONE transcript line (never a preview line — a plan is state
+    the chat must still show after a reload) that the backend parser turns
+    into a `todo` snapshot."""
+    mapper = acp_chat_events.ACPEventMapper()
+    entries = mapper.map_update(PLAN_UPDATE, stream=True)
+    assert len(entries) == 1
+    line = entries[0]
+    assert line["type"] == "custom" and line["customType"] == "acp-plan"
+    assert line["customType"] != acp_chat_events.PREVIEW_CUSTOM_TYPE
+    assert line["id"].startswith("acp")
+
+    events = parse_all(mapper.dump(entries))
+    assert events == [
+        {
+            "kind": "todo",
+            "uuid": line["id"],
+            "ts": line["timestamp"],
+            "source": "acp_plan",
+            "items": [
+                {"content": "Inspect the failing test", "status": "completed", "priority": "high"},
+                {"content": "Patch the parser", "status": "in_progress", "priority": "medium"},
+                {"content": "Run the suite", "status": "pending", "priority": "low"},
+            ],
+        }
+    ]
+
+
+def test_plan_update_keeps_only_plain_fields_and_survives_garbage():
+    """Fail closed: only content/status/priority strings are copied — no
+    unknown field (a future `_meta` blob) rides along into the transcript."""
+    mapper = acp_chat_events.ACPEventMapper()
+    entries = mapper.map_update({"update": {"sessionUpdate": "plan", "entries": [
+        {"content": "keep", "status": "pending", "_meta": {"secret": "x"}},
+        {"content": 5},
+        "nope",
+    ]}})
+    assert entries[0]["data"] == {"entries": [{"content": "keep", "status": "pending"}]}
+    assert mapper.map_update({"update": {"sessionUpdate": "plan"}}) == []
+    assert mapper.map_update({"update": {"sessionUpdate": "plan", "entries": "x"}}) == []
+
+
+def test_plan_history_roundtrip_latest_wins(tmp_path):
+    mapper = acp_chat_events.ACPEventMapper()
+    lines = mapper.dump(mapper.map_update(PLAN_UPDATE, stream=True))
+    second = json.loads(json.dumps(PLAN_UPDATE))
+    second["update"]["entries"][1]["status"] = "completed"
+    lines += mapper.dump(mapper.map_update(second, stream=True))
+    history = as_history(lines, tmp_path)
+    assert [e for e in history["events"] if e["kind"] == "todo"] == []
+    assert [i["status"] for i in history["todos"]["items"]] == ["completed", "completed", "pending"]
+
+
+def test_bridge_run_forwards_plan_into_the_transcript(tmp_path):
+    """Integration: a real omp turn (golden fixture) with a `plan` update
+    inserted crosses run_acp_once — the transcript sink receives the plan
+    line (it was dropped before this change)."""
+    import time as _time
+
+    import bridge
+    from test_acp_adapter import InProcessFake
+
+    rows = [l for l in NORMAL_FIXTURE.read_text().splitlines() if l.strip()]
+    chunk_at = next(i for i, l in enumerate(rows) if "agent_message_chunk" in l)
+    rows.insert(chunk_at + 1, json.dumps({"jsonrpc": "2.0", "method": "session/update", "params": PLAN_UPDATE}))
+    fixture = tmp_path / "acp-plan-turn.ndjson"
+    fixture.write_text("\n".join(rows) + "\n")
+
+    writes: list[str] = []
+    fake = InProcessFake(fixture, [])
+    try:
+        outcome = bridge.run_acp_once(
+            "mach was",
+            cwd=str(HERE),
+            model="m",
+            max_time=10,
+            permission_policy="yolo",
+            task_id="T1",
+            client_factory=lambda: fake.client,
+            ask_fn=lambda task_id, question: "yes",
+            transcript_sink=writes.extend,
+        )
+        assert outcome.final_stop_reason == "end_turn"
+        deadline = _time.time() + 5
+        while _time.time() < deadline and not any("acp-plan" in w for w in writes):
+            _time.sleep(0.05)
+    finally:
+        fake.close()
+    plan_lines = [w for w in writes if "acp-plan" in w]
+    assert len(plan_lines) == 1
+    todo = parse_all(plan_lines)[0]
+    assert todo["kind"] == "todo" and todo["items"][1]["status"] == "in_progress"
+
+
 def test_mapper_never_raises_on_garbage():
     mapper = acp_chat_events.ACPEventMapper()
     for params in (

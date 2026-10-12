@@ -545,6 +545,7 @@ def test_exited_without_a_transcript_is_no_transcript(heads_root):
         "session": {"sessionId": run_id, "live": False, "startedAt": None, "aliveness": "ended"},
         "hasMore": False,
         "subagentRuns": [],
+        "todos": None,
         "source": "none",
         "reader": None,
         "reason": "no_transcript",

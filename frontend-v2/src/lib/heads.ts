@@ -463,6 +463,8 @@ export interface HeadChatHistoryResponse {
   session: import("./chatTypes").ChatSession;
   hasMore: boolean;
   subagentRuns: import("./chatTypes").SubagentRun[];
+  /** Newest todo snapshot of the head's transcript, or `null`/absent. */
+  todos?: import("./chatTypes").TodoEvent | null;
   source: HeadTranscriptSource;
   reader: HeadTranscriptReader;
   reason: HeadTranscriptReason;
