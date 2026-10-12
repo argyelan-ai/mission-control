@@ -1058,7 +1058,7 @@
       "diffWrite": "Written content"
     },
     "diff": {
-      "scopeLabel": "Diff scope",
+      "scopeLabel": "Changes",
       "scopeWorktree": "Uncommitted",
       "scopeLastCommit": "Last commit",
       "refresh": "Refresh",
@@ -1074,7 +1074,14 @@
       "noRepoHint": "Only the repository the chat works in is shown — never another workspace.",
       "loadFailed": "Couldn't load the diff.",
       "ahead": "{count} commits ahead of upstream",
-      "behind": "{count} commits behind upstream"
+      "behind": "{count} commits behind upstream",
+      "tabChat": "This chat",
+      "chatEmpty": "No file changes in this chat yet",
+      "chatEmptyHint": "Files the agent edits in this chat show up here — in any folder, with or without git.",
+      "chatFiles": "{count, plural, one {# file} other {# files}}",
+      "chatEdits": "{count, plural, one {# edit} other {# edits}}",
+      "chatBack": "All files",
+      "chatLoadFailed": "Couldn't load this chat's changes."
     },
     "panels": {
       "diff": "Changes",

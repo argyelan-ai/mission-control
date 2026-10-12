@@ -89,6 +89,7 @@
     "GET /api/v1/agents/metrics/comparison",
     "GET /api/v1/agents/stream",
     "GET /api/v1/agents/{agent_id}",
+    "GET /api/v1/agents/{agent_id}/chat/changes",
     "GET /api/v1/agents/{agent_id}/chat/diff",
     "GET /api/v1/agents/{agent_id}/chat/history",
     "GET /api/v1/agents/{agent_id}/chat/stream",

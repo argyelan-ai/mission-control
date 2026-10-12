@@ -51,6 +51,7 @@ from app.services.reference_ingest import (
     serialize_reference,
     store_reference,
 )
+from app.services.chat_changes import aggregate_changes
 from app.services.sse import _sse_generator
 from app.services.transcript_adapters import adapter_for
 from app.services.checklist_todo_sync import chat_todo_sync
@@ -503,6 +504,61 @@ async def get_chat_diff(
         return await asyncio.to_thread(_pick_and_diff)
     except NoWorkspaceError:
         return JSONResponse(status_code=404, content=_NO_WORKSPACE)
+
+
+#: ``read_history`` page size that means "the whole session" — the changes
+#: list is about everything this chat did, not the last page of it.
+_WHOLE_SESSION = 10**9
+
+
+@router.get("/agents/{agent_id}/chat/changes")
+async def get_chat_changes(
+    agent_id: uuid.UUID,
+    current_user=Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """What THIS chat session changed, per file (``chat_changes``), plus the
+    repository block the git tabs would show (``repo``: the diff endpoint's
+    ``source`` shape, or ``None`` when the chat's folder is no repository —
+    the panel then shows only this list). Built from the per-edit diffs in
+    the transcript, so it works for every harness and without git.
+
+    No transcript yet, or a fresh session (``fresh_session``): an empty
+    list, 200 — "nothing changed yet" is a state, not an error. Read-only.
+    """
+    agent = await _load_agent_or_404(agent_id, session)
+    pick = await _chat_repo_picker(agent, session)
+
+    def _repo() -> dict[str, Any] | None:
+        try:
+            choice, display = pick()
+        except NoWorkspaceError:
+            return None
+        return source_info(choice, display)
+
+    repo = await asyncio.to_thread(_repo)
+    empty = {"files": [], "stats": {"files": 0, "additions": 0, "deletions": 0}, "repo": repo}
+
+    resolved = await _resolve_transcript_path(agent_id, session)
+    if isinstance(resolved, JSONResponse):
+        return empty
+    _agent, path, adapter = resolved
+    if fresh_session.marked_at(str(agent_id)) is not None and await asyncio.to_thread(
+        fresh_session.is_stale, str(agent_id), path
+    ):
+        return empty
+
+    def _read() -> dict[str, Any]:
+        history = read_history(path, adapter, limit=_WHOLE_SESSION)
+        try:
+            cwd = adapter.session_cwd(path)
+        except (OSError, ValueError):
+            cwd = None
+        return aggregate_changes(history["events"], cwd)
+
+    changes = await asyncio.to_thread(_read)
+    changes["repo"] = repo
+    return changes
 
 
 @router.post("/agents/{agent_id}/chat/input", status_code=204)

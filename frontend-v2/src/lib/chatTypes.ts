@@ -5,6 +5,7 @@
  * plus the `state` event from `pane_state.parse_pane_state` (A6). Keep these
  * two files in sync; the backend module docstring is the source of truth.
  */
+import type { ChatDiffSource } from "./types";
 
 /** Woher eine Zeile „von aussen" stammt (Backend `_mention_source` in
  *  `omp_chat.py` bzw. `_parse_teammate_message` in `transcript_chat.py`).
@@ -93,6 +94,35 @@ export interface ToolDiff {
   additions: number;
   deletions: number;
   truncated: boolean;
+}
+
+/** One file this chat changed (backend `chat_changes.py`): every edit of it
+ *  folded together, from the per-edit diffs in the transcript. */
+export interface ChatChangeFile {
+  /** Relative to the chat's folder when inside it, else as the agent wrote it. */
+  path: string;
+  /** Counted from edits with a known before; a Write's lines are not claimed. */
+  additions: number;
+  deletions: number;
+  /** Tool calls that changed this file. */
+  edits: number;
+  /** The first edit said the file was new. */
+  created: boolean;
+  /** At least one Write whose predecessor the transcript does not know. */
+  written: boolean;
+  /** ISO time of the newest edit. */
+  lastAt: string | null;
+  /** All edits of the file, oldest first — rendered by `ToolDiffView`. */
+  diff: ToolDiff;
+}
+
+/** `GET /agents/{id}/chat/changes` — the Changes panel's "This chat" tab.
+ *  `repo` is the diff endpoint's `source` block, or `null` when the chat's
+ *  folder is no git repository (then only this list is shown). */
+export interface ChatChanges {
+  files: ChatChangeFile[];
+  stats: { files: number; additions: number; deletions: number };
+  repo: ChatDiffSource | null;
 }
 
 /** A running tool's output so far (ACP `tool_call_update` in_progress, via

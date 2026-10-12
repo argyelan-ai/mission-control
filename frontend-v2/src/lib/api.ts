@@ -118,6 +118,7 @@ import type {
   HeadStartBody,
   HeadSummary,
 } from "./heads";
+import type { ChatChanges } from "./chatTypes";
 import type { LastNight, NightConfig, NightConfigUpdate, NightEntry, NightTonight } from "./nightShift";
 
 import { AUTH_TOKEN_KEY, BASE_URL, getToken } from "./authToken";
@@ -855,6 +856,8 @@ export const api = {
     },
     diff: (agentId: string, scope: "worktree" | "last-commit" = "worktree") =>
       request<CommitDiff>(`/api/v1/agents/${agentId}/chat/diff?scope=${scope}`),
+    changes: (agentId: string) =>
+      request<ChatChanges>(`/api/v1/agents/${agentId}/chat/changes`),
     streamUrl: (agentId: string) => sseUrls.chat(agentId),
   },
 

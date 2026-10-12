@@ -38,10 +38,21 @@ function splitPath(path: string): { dir: string; base: string } {
  * file and carries its own +/− counts. With one file the card title already
  * names it and the row badge already counts it, so the diff shows neither
  * (K3: each fact once).
+ *
+ * `initialAll`: every line shown, no "show less" — for the Changes panel,
+ * where the diff IS the view the operator tapped into, not a preview in a card.
  */
-export function ToolDiffView({ diff, multi }: { diff: ToolDiff; multi: boolean }) {
+export function ToolDiffView({
+  diff,
+  multi,
+  initialAll = false,
+}: {
+  diff: ToolDiff;
+  multi: boolean;
+  initialAll?: boolean;
+}) {
   const t = useTranslations("sessions.toolCard");
-  const [all, setAll] = useState(false);
+  const [all, setAll] = useState(initialAll);
   const lines = all ? diff.lines : diff.lines.slice(0, DIFF_PREVIEW_LINES);
   const hidden = diff.lines.length - lines.length;
   const label = diff.kind === "create" ? t("diffCreate") : diff.kind === "write" ? t("diffWrite") : null;
@@ -127,7 +138,7 @@ export function ToolDiffView({ diff, multi }: { diff: ToolDiff; multi: boolean }
         })}
       </div>
 
-      {(hidden > 0 || all) && diff.lines.length > DIFF_PREVIEW_LINES && (
+      {!initialAll && (hidden > 0 || all) && diff.lines.length > DIFF_PREVIEW_LINES && (
         <button
           type="button"
           onClick={() => setAll((v) => !v)}

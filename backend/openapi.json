@@ -1074,6 +1074,15 @@
         ]
       }
     },
+    "/api/v1/agents/{agent_id}/chat/changes": {
+      "get": {
+        "operationId": "get_chat_changes_api_v1_agents__agent_id__chat_changes_get",
+        "summary": "Get Chat Changes",
+        "tags": [
+          "agent-chat"
+        ]
+      }
+    },
     "/api/v1/agents/{agent_id}/chat/diff": {
       "get": {
         "operationId": "get_chat_diff_api_v1_agents__agent_id__chat_diff_get",

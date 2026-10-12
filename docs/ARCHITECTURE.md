@@ -1125,6 +1125,12 @@ claude-TUI ──JSONL live──▶  transcript_chat.ChatTailerManager (1s-Poll
   Vor 04.10.2026 gewann immer die zuletzt aktualisierte Task-Zeile; bis 12.10.2026 riet
   eine dritte Stufe („zuletzt benutzt") — ein Chat in `/workspace` (kein Repo) sah dann
   einen fremden, alten Benchmark-Worktree.
+- **Panel „Änderungen" / Reiter „Dieser Chat" (Standard):** `GET /agents/{id}/chat/changes`
+  faltet die Diffs pro Werkzeug-Aufruf aus dem Transkript (P1, `chat_diff.py`) je Datei
+  zusammen (`chat_changes.aggregate_changes`: +/−, Anzahl Bearbeitungen, neueste zuerst,
+  kombinierter Diff; fehlgeschlagene Aufrufe und MC-Hilfsdateien zählen nicht) — für jede
+  Harness und ohne Git. Die Antwort trägt `repo` (derselbe `source`-Block wie oben, oder
+  `null`); nur mit Repo zeigt das Panel die Reiter „Arbeitsstand"/„Letzter Commit".
 - **Adapter-Kontrakt:** die vier Bausteine (Session-Resolution+Parser, Tailer,
   Eingabe-Kanal, Pane-Sonde) sind bewusst austauschbar pro CLI gehalten (Muster wie
   `HOST_ADAPTERS`/ADR-064 und der Turn-Signal-Kontrakt/ADR-071) — v1 liefert nur den
