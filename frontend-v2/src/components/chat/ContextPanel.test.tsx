@@ -6,7 +6,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { ContextPanel, usedTokensOf } from "./ContextPanel";
+import { ContextPanel, usedTokensOf, cacheHitRateOf } from "./ContextPanel";
 import type { UsageEvent } from "@/lib/chatTypes";
 
 function mkUsage(overrides: Partial<UsageEvent> = {}): UsageEvent {
@@ -49,6 +49,24 @@ describe("usedTokensOf", () => {
 
   it("falls back to inputTokens when there is no breakdown", () => {
     expect(usedTokensOf(mkUsage({ components: null, inputTokens: 42_000 }))).toBe(42_000);
+  });
+});
+
+describe("cacheHitRateOf", () => {
+  it("computes cached / (cached + uncached input) for the latest turn", () => {
+    // 138,000 / (138,000 + 10,000) — the GLM-via-omp case this exists for.
+    expect(cacheHitRateOf(mkUsage().components)).toBeCloseTo(0.932432, 5);
+  });
+
+  it("returns null when the harness has no breakdown at all", () => {
+    expect(cacheHitRateOf(null)).toBeNull();
+    expect(cacheHitRateOf(undefined)).toBeNull();
+  });
+
+  it("returns null rather than a fake 0% when both buckets are empty", () => {
+    expect(
+      cacheHitRateOf({ input: 0, cacheRead: 0, cacheCreation: 500, output: 10 }),
+    ).toBeNull();
   });
 });
 
@@ -124,6 +142,17 @@ describe("ContextPanel", () => {
     });
     expect(screen.getByTestId("context-row-input")).toBeInTheDocument();
     expect(screen.queryByTestId("context-row-cacheRead")).not.toBeInTheDocument();
+  });
+
+  it("shows the cache hit rate when the harness reports a breakdown", () => {
+    renderPanel();
+    // 138,000 / 148,000 ≈ 93.2% → rounds to "93%".
+    expect(screen.getByTestId("context-panel-cache-rate")).toHaveTextContent("93%");
+  });
+
+  it("hides the cache hit rate row rather than show a fake 0%", () => {
+    renderPanel({ usage: mkUsage({ components: null, inputTokens: 200_000 }) });
+    expect(screen.queryByTestId("context-panel-cache-rate")).not.toBeInTheDocument();
   });
 
   it("names the provenance of the figures", () => {

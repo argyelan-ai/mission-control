@@ -468,6 +468,28 @@ describe("Composer", () => {
     expect(ring).toHaveAttribute("title");
   });
 
+  it("names the prompt cache hit rate in the ring tooltip when the harness reports one", () => {
+    render(
+      <Composer
+        agentId="a1"
+        usage={mkUsage({
+          components: { input: 10_000, cacheRead: 38_000, cacheCreation: 2_000, output: 1_000 },
+        })}
+        state={null}
+        onSend={vi.fn()}
+        onStop={vi.fn()}
+      />
+    );
+    // 38,000 / (38,000 + 10,000) = 79% — the local-GLM-via-omp case this is for.
+    expect(screen.getByTestId("context-ring")).toHaveAttribute("title", expect.stringContaining("Cache"));
+    expect(screen.getByTestId("context-ring")).toHaveAttribute("title", expect.stringContaining("79"));
+  });
+
+  it("leaves the cache rate out of the tooltip when the harness has no breakdown", () => {
+    render(<Composer agentId="a1" usage={mkUsage({ components: undefined })} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
+    expect(screen.getByTestId("context-ring")).not.toHaveAttribute("title", expect.stringContaining("Cache"));
+  });
+
   it("does not offer the breakdown when there is no usage to break down", () => {
     render(<Composer agentId="a1" usage={null} state={null} onSend={vi.fn()} onStop={vi.fn()} />);
     expect(screen.queryByRole("button", { name: /Kontext:/ })).not.toBeInTheDocument();
