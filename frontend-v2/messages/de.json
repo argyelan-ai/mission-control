@@ -1095,6 +1095,8 @@
         "commit": "Commit",
         "commitTitle": "{count, plural, one {# Datei} other {# Dateien}} auf {branch} committen?",
         "commitMessage": "Commit-Nachricht",
+        "commitFallback": "Einfache Zusammenfassung — das lokale Modell hat nicht rechtzeitig geantwortet.",
+        "commitSuggested": "Vorgeschlagen vom lokalen Modell.",
         "commitHint": "Bleibt auf diesem Rechner — nichts wird gepusht.",
         "committedTitle": "Committet",
         "committed": "{sha} liegt auf {branch}.",
@@ -1107,7 +1109,8 @@
         "prExists": "Für diesen Branch ist schon ein Pull Request offen",
         "cancel": "Abbrechen",
         "close": "Schliessen",
-        "loading": "Lädt"
+        "loading": "Lädt",
+        "suggestAgain": "Neu vorschlagen"
       },
       "reason": {
         "changed_externally": "Die Datei wurde nach der letzten Bearbeitung dieses Chats geändert, darum lässt MC sie in Ruhe.",

@@ -1095,6 +1095,8 @@
         "commit": "Commit",
         "commitTitle": "Commit {count, plural, one {# file} other {# files}} on {branch}?",
         "commitMessage": "Commit message",
+        "commitFallback": "Simple summary — the local model didn't answer in time.",
+        "commitSuggested": "Suggested by the local model.",
         "commitHint": "Stays on this machine — nothing is pushed.",
         "committedTitle": "Committed",
         "committed": "{sha} is on {branch}.",
@@ -1107,7 +1109,8 @@
         "prExists": "This branch already has an open pull request",
         "cancel": "Cancel",
         "close": "Close",
-        "loading": "Loading"
+        "loading": "Loading",
+        "suggestAgain": "Suggest again"
       },
       "reason": {
         "changed_externally": "The file changed after this chat's last edit, so MC leaves it alone.",

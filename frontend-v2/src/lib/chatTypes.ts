@@ -150,6 +150,14 @@ export interface ChatCommitDraft {
   files: ChatPendingFile[];
   /** Suggested conventional-commit message — the operator edits it. */
   message: string;
+  /** "llm" = the local model wrote `message` from the diff + chat intent;
+   *  "fallback" = the deterministic mechanical message (no model answer in
+   *  time, or it answered something unusable). Optional for a moment while
+   *  older cached responses are still around. */
+  source?: "llm" | "fallback";
+  /** Present only when `source` is "llm" — the mechanical message, for a
+   *  quiet "or use the simple one" affordance. */
+  mechanicalMessage?: string;
 }
 
 /** `POST /agents/{id}/chat/commit` */
