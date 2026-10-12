@@ -735,9 +735,12 @@ async def stop_running_reviewer_turn(
     then dies at the end with a bare 409 ("Task ist nicht im Review") and
     the review work is lost without explanation.
 
-    This runs BEFORE the reviewer is released and only fires when a
-    reviewer agent actually holds the card (never on operator-only cards
-    with assigned_agent_id=None):
+    This runs BEFORE the reviewer is released and only fires when an agent
+    that REVIEWED this card holds it (never on operator-only cards with
+    assigned_agent_id=None, never on the builder's own card). The board's
+    reviewer-role agent also builds cards (PR #780) — stop-flagging its own
+    card parked the rework it was about to receive behind
+    run_control="stopped" forever (incident 11.10.2026).
       1. A TaskComment (author_type=system) names the decision and the
          decider — visible to the reviewer in the transcript.
       2. run_control="stopped" — the heartbeat control channel
@@ -745,8 +748,10 @@ async def stop_running_reviewer_turn(
          a hard interrupt for the bridge's live turn, which ends the run
          cleanly instead of letting it crash into the 409.
 
-    The caller clears run_control again on the task's final commit —
-    this is a one-turn interrupt, not a task stop.
+    This is a one-turn interrupt, not a task stop. The flag persists past
+    the decision request so the reviewer's next heartbeat still sees it;
+    on request_changes handle_review_rejection clears it again once the
+    rework is handed to a different agent (stopped_reviewer_id).
 
     Returns True if a running reviewer turn was stopped.
     """
@@ -754,8 +759,15 @@ async def stop_running_reviewer_turn(
     if not reviewer_id:
         return False
     reviewer = await session.get(Agent, reviewer_id)
-    # Only a dedicated reviewer agent can be mid-turn on this card.
+    # Only a dedicated reviewer agent can be mid-turn on this card ...
     if reviewer is None or reviewer.role != "reviewer":
+        return False
+    # ... and only if it actually reviewed THIS card (got its review handoff
+    # or left a review comment). A reviewer-role agent holding a card it
+    # built itself is the builder, not a mid-turn reviewer — same rule as
+    # find_last_developer.
+    from app.services.work_context import agents_who_reviewed_card
+    if reviewer.id not in await agents_who_reviewed_card(session, task.id):
         return False
 
     task.run_control = "stopped"
@@ -923,8 +935,11 @@ async def execute_review_decision(
     # Only when a reviewer agent holds the card and the OPERATOR decides
     # (actor_agent is None). The agent path (actor_agent set) is the
     # reviewer itself — its turn is the one POSTing this decision.
+    stopped_reviewer_id: uuid.UUID | None = None
     if actor_agent is None:
-        await stop_running_reviewer_turn(session, task, decision, actor_name)
+        _holder_id = task.assigned_agent_id
+        if await stop_running_reviewer_turn(session, task, decision, actor_name):
+            stopped_reviewer_id = _holder_id
 
     # ── 1. Comment (always, atomic with the decision) ──────
     comment = TaskComment(
@@ -1160,6 +1175,7 @@ async def execute_review_decision(
         # returns — nothing further to reconcile here.
         await handle_review_rejection(
             session, task, board_id, rejecting_agent=actor_agent,
+            stopped_reviewer_id=stopped_reviewer_id,
         )
 
     elif decision == "hold":
@@ -1179,12 +1195,16 @@ async def execute_review_decision(
     # (routers/agents.py:_heartbeat_control). Clearing it in the same
     # request would erase the interrupt before it is ever delivered —
     # exactly the "reviewer dies with a bare 409" incident this feature
-    # exists to prevent. Downstream paths clean it up on their own:
-    #   - approve/request_changes: handle_review_rejection and the
-    #     requeue/park paths (tasks.py:1476, agent_task_status.py:1922,
-    #     agents.py:3646) reset run_control when the card moves out of
-    #     review, and check_dispatch_allowed blocks a re-dispatch of a
-    #     stopped card in the meantime (operations.py:133).
+    # exists to prevent. Downstream paths clean it up:
+    #   - approve: the card stays assigned to the reviewer, whose heartbeat
+    #     receives the hard interrupt; the requeue/park paths reset
+    #     run_control later.
+    #   - request_changes: handle_review_rejection clears it as soon as the
+    #     rework goes to a different agent than the stopped reviewer
+    #     (stopped_reviewer_id) — otherwise check_dispatch_allowed vetoes
+    #     the builder's re-dispatch and the card hangs in inbox forever
+    #     (incident 11.10.2026). The reviewer loses the card through the
+    #     heartbeat's withdrawn-task guard instead.
     #   - hold: the card stays in review; the operator releases it via the
     #     existing resume flow (operations.py:resume_task_run) — identical
     #     to the operator Stop-Button semantics.
@@ -1836,8 +1856,15 @@ async def handle_review_rejection(
     task: Task,
     board_id: uuid.UUID,
     rejecting_agent: Agent | None = None,
+    stopped_reviewer_id: uuid.UUID | None = None,
 ) -> ReviewRejectionResult:
     """Review rejection: send the task back to the original developer.
+
+    stopped_reviewer_id: the reviewer whose running turn the operator
+    override just stop-flagged (stop_running_reviewer_turn). That
+    run_control="stopped" is a one-turn interrupt for the REVIEWER — when
+    the rework goes to anyone else it is cleared here, before the dispatch
+    guard, so it never blocks the new owner's re-dispatch.
 
     Shared between agent_scoped.py and tasks.py.
     Includes a busy check, queue fallback, and rejection counter.
@@ -1911,6 +1938,13 @@ async def handle_review_rejection(
                 "Review-rejection: no developer found → Board Lead '%s'",
                 _board_lead.name,
             )
+
+    if (
+        stopped_reviewer_id is not None
+        and task.run_control == "stopped"
+        and (original_dev is None or original_dev.id != stopped_reviewer_id)
+    ):
+        task.run_control = None
 
     if not original_dev:
         # Bug C branch (a): no developer reconstructable at all. Force the

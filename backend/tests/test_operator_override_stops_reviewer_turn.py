@@ -14,10 +14,15 @@ for the bridge's live turn. Guardrails:
     "reviewer" is the caller itself;
   - a card with NO reviewer agent assigned is never touched (operator-only
     cards stay stop-free);
+  - only an agent that REVIEWED this card (got its task.review_handoff or
+    left a review comment) is stopped — a reviewer-role agent holding a
+    card it built itself is the builder (see
+    test_reviewer_stop_only_card_reviewer.py);
   - the stop flag PERSISTS past the decision request: the reviewer's next
     heartbeat/poll must still see it to receive the hard interrupt (the
     same-request clear was review blocker B1); downstream requeue/park/
-    resume paths reset it when the card moves on.
+    resume paths reset it when the card moves on, and request_changes
+    clears it once the rework leaves the stopped reviewer.
 """
 import uuid
 from unittest.mock import AsyncMock, patch
@@ -28,6 +33,19 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.task import Task, TaskComment
 from tests.conftest import test_engine
+
+
+async def _review_handoff(board_id, task_id, reviewer_id):
+    """The reviewer received this card's review handoff (as
+    handle_review_handoff records it) — that makes it the card's reviewer."""
+    from app.models.activity import ActivityEvent
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(ActivityEvent(
+            event_type="task.review_handoff", title="handoff",
+            board_id=board_id, task_id=task_id, agent_id=reviewer_id,
+        ))
+        await s.commit()
 
 
 async def _decide(task_row, board_id, decision, comment, *, actor_agent=None):
@@ -58,6 +76,7 @@ async def test_operator_override_stops_running_reviewer_turn(
         board_id=board.id, title="Override Stop",
         status="review", assigned_agent_id=reviewer.id,
     )
+    await _review_handoff(board.id, task.id, reviewer.id)
     await _decide(task, board.id, "approve", "Operator entscheidet selbst.")
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
@@ -162,8 +181,11 @@ async def test_operator_override_on_request_changes_keeps_flow(
     make_board, make_agent, make_task,
 ):
     """request_changes by the operator: stop comment written, reviewer
-    released, and the stop flag PERSISTS with the final inbox state so the
-    reviewer's next heartbeat still hard-interrupts the live turn."""
+    released. The rework leaves the reviewer (here: no developer found →
+    unassigned inbox for the Board Lead path), so the one-turn stop flag is
+    cleared — left set, it vetoed every re-dispatch of the card
+    (incident 11.10.2026). The reviewer loses the card through the
+    heartbeat's withdrawn-task guard."""
     board = await make_board(name="Rework Board", slug="rework-board")
     reviewer = await make_agent(name="Reviewer-Rework", board_id=board.id, role="reviewer")
     developer = await make_agent(name="Dev-Rework", board_id=board.id)
@@ -171,6 +193,7 @@ async def test_operator_override_on_request_changes_keeps_flow(
         board_id=board.id, title="Rework Probe",
         status="review", assigned_agent_id=reviewer.id,
     )
+    await _review_handoff(board.id, task.id, reviewer.id)
     # Developer provenance for handle_review_rejection: the rework comment.
     task.dispatch_intent = "review_rework"
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
@@ -195,14 +218,10 @@ async def test_operator_override_on_request_changes_keeps_flow(
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         t = await s.get(Task, task.id)
-        # Flag persists with the final state (inbox) — the reviewer's next
-        # heartbeat must still see it (B1: same-request clear erased the
-        # interrupt before it was ever delivered).
+        # The card left the reviewer — the stop flag must not follow it.
         assert t.status == "inbox"
-        assert t.run_control == "stopped"
-        from app.routers.agents import _heartbeat_control
-        control = _heartbeat_control(t, reviewer.id, [])
-        assert control is not None and control["interrupt"] == "hard"
+        assert t.assigned_agent_id != reviewer.id
+        assert t.run_control is None
         comments = (await s.exec(
             select(TaskComment).where(TaskComment.task_id == task.id)
             .order_by(TaskComment.created_at.asc())

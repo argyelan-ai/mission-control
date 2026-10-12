@@ -584,6 +584,38 @@ async def find_reviewer(
     return None
 
 
+async def agents_who_reviewed_card(
+    session: AsyncSession,
+    task_id: uuid.UUID,
+) -> set[uuid.UUID]:
+    """Agents that reviewed THIS card: received its `task.review_handoff`
+    or left a `review` comment on it.
+
+    Holding the board's reviewer role is not enough — that agent also builds
+    cards (PR #780). Shared by find_last_developer (who is the builder?) and
+    task_lifecycle.stop_running_reviewer_turn (who is mid-turn reviewing?),
+    so both answer "did this agent review this card" the same way.
+    """
+    from app.models.activity import ActivityEvent
+
+    handoff_result = await session.exec(
+        select(ActivityEvent.agent_id).where(
+            ActivityEvent.task_id == task_id,
+            ActivityEvent.event_type == "task.review_handoff",
+            ActivityEvent.agent_id.is_not(None),  # type: ignore[union-attr]
+        )
+    )
+    review_comment_result = await session.exec(
+        select(TaskComment.author_agent_id).where(
+            TaskComment.task_id == task_id,
+            TaskComment.author_type == "agent",
+            TaskComment.comment_type == "review",
+            TaskComment.author_agent_id.is_not(None),  # type: ignore[union-attr]
+        )
+    )
+    return set(handoff_result.all()) | set(review_comment_result.all())
+
+
 async def find_last_developer(
     session: AsyncSession,
     task: Task,
@@ -613,25 +645,10 @@ async def find_last_developer(
     reviewer = await find_reviewer(session, task.board_id)
     reviewer_id = reviewer.id if reviewer else None
 
-    # Agents that reviewed THIS card: received its review handoff or left a
-    # review comment on it. A reviewer also moves a card in_progress → review
-    # while reviewing it, so those moves must not count as building.
-    handoff_result = await session.exec(
-        select(ActivityEvent.agent_id).where(
-            ActivityEvent.task_id == task.id,
-            ActivityEvent.event_type == "task.review_handoff",
-            ActivityEvent.agent_id.is_not(None),  # type: ignore[union-attr]
-        )
-    )
-    review_comment_result = await session.exec(
-        select(TaskComment.author_agent_id).where(
-            TaskComment.task_id == task.id,
-            TaskComment.author_type == "agent",
-            TaskComment.comment_type == "review",
-            TaskComment.author_agent_id.is_not(None),  # type: ignore[union-attr]
-        )
-    )
-    reviewed_this_card = set(handoff_result.all()) | set(review_comment_result.all())
+    # Agents that reviewed THIS card. A reviewer also moves a card
+    # in_progress → review while reviewing it, so those moves must not count
+    # as building.
+    reviewed_this_card = await agents_who_reviewed_card(session, task.id)
 
     # Primary: agent who set in_progress → review. The board's reviewer-role
     # agent counts here too when it built the card itself (it never got this
