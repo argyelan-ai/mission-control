@@ -439,6 +439,7 @@ def test_read_history_missing_file_returns_empty_session(tmp_path):
         "session": {"sessionId": "does-not-exist", "live": False, "startedAt": None},
         "hasMore": False,
         "subagentRuns": [],
+        "todos": None,
     }
 
 
