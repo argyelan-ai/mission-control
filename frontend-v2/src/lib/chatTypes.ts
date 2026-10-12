@@ -121,6 +121,15 @@ export interface UsageEvent {
    *  `null`/absent means the backend had no breakdown, and consumers show only
    *  used-vs-free rather than inventing segments. */
   components?: UsageComponents | null;
+  /** Prompt cache hit rate for the latest turn: `cacheRead / (cacheRead +
+   *  input)`, 0–1. Computed by the backend from the SAME raw buckets as
+   *  `components` — but unlike `components`, never nulled out when fresh CLI
+   *  statusline state exists (an ACP agent's usage line always carries both
+   *  at once; nulling this too would mean its context panel never shows a
+   *  hit rate — see docker/omp-bridge/acp_chat_events.py `_usage_block`).
+   *  `null`/absent means the harness reported no cache activity at all this
+   *  turn, or no breakdown — never a fake 0%. */
+  cacheHitRate?: number | null;
 }
 
 export interface UsageComponents {

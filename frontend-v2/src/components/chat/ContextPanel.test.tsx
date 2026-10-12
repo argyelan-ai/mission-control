@@ -151,8 +151,25 @@ describe("ContextPanel", () => {
   });
 
   it("hides the cache hit rate row rather than show a fake 0%", () => {
-    renderPanel({ usage: mkUsage({ components: null, inputTokens: 200_000 }) });
+    renderPanel({ usage: mkUsage({ components: null, inputTokens: 200_000, cacheHitRate: null }) });
     expect(screen.queryByTestId("context-panel-cache-rate")).not.toBeInTheDocument();
+  });
+
+  it("shows the cache hit rate for an omp ACP agent (no components breakdown, but the backend still computed a rate from this turn's real numbers — the context panel used to show only Used/Free here)", () => {
+    renderPanel({
+      usage: mkUsage({
+        components: null,
+        inputTokens: 92_799,
+        contextWindow: 500_000,
+        usedPct: 18.6,
+        cacheHitRate: 0.9,
+      }),
+      pct: 18.6,
+    });
+    // Window-breakdown segments stay a single "Used" row (no invented
+    // per-turn/window-wide split), but the hit rate is still honest.
+    expect(screen.getByTestId("context-row-used")).toBeInTheDocument();
+    expect(screen.getByTestId("context-panel-cache-rate")).toHaveTextContent("90%");
   });
 
   it("names the provenance of the figures", () => {
