@@ -1122,8 +1122,22 @@ _WORKING_MARKER = "⟦esc⟧"
 #: ``bridge.py:_COMPOSER_BOTTOM_PREFIX`` — die dortige Regel laeuft seit
 #: 2026-07-12 in Produktion und entscheidet dort ueber Absende-Erfolg.
 _COMPOSER_BOTTOM_PREFIX = "╰─"
-#: Rechtes Ende derselben Zeile — real: ``╰─ <entwurf> … ─╯``.
+#: Rechtes Ende derselben Zeile — real bis omp 18.1.x: ``╰─ <entwurf> … ─╯``
+#: (18.10.1 zeichnet keinen rechten Rand mehr, die Zeile endet nach dem Text).
 _COMPOSER_BOTTOM_SUFFIX = "─╯"
+#: Platzhalter-Hinweis im LEEREN Eingabefeld (omp 18.x, live geprueft an
+#: 18.10.1, in 18.1.10 noch nicht vorhanden): rechtsbuendig
+#: ``<Taste> to change thinking effort`` (frische Sitzung) bzw.
+#: ``<Taste> to see N running agents`` — Quelle omp
+#: ``packages/tui/src/prompt/composer-hints.ts``. ``capture-pane -p`` verliert
+#: die gedimmte Darstellung, ohne diese Regel liest er sich wie ein Entwurf
+#: und eine frisch gestartete TUI stuende fuer immer auf ``working``.
+#: Rechtsbuendig = mindestens zwei Leerzeichen vor der Taste; die Tasten-
+#: Beschriftung darf selbst ein Leerzeichen tragen ("Left Left"). Dieselbe
+#: Regel steht in ``docker/omp-bridge/bridge.py`` (``_COMPOSER_HINT_RE``).
+_COMPOSER_HINT_RE = re.compile(
+    r"^\s{2,}\S+(?: \S+)? to (?:change thinking effort|see \d+ running agents?)\s*$"
+)
 
 
 def _composer_draft(composer_line: str) -> str:
@@ -1137,6 +1151,8 @@ def _composer_draft(composer_line: str) -> str:
     """
     line = composer_line.strip()
     line = line.removeprefix(_COMPOSER_BOTTOM_PREFIX)
+    if _COMPOSER_HINT_RE.match(line):
+        return ""  # nur der Platzhalter des leeren Feldes, kein Entwurf
     line = line.removesuffix(_COMPOSER_BOTTOM_SUFFIX)
     return line.strip()
 

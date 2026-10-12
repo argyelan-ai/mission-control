@@ -11,7 +11,8 @@ connection belongs to from a `/a/<slug>/` path prefix, so the operator's
 per-agent browser panel can show "Alpha's tabs".
 
 Putting the prefix into omp's `browser.cdpUrl` is not enough (live finding
-04.10.2026, verified in the omp 18.1.10 bundle): omp attaches with
+04.10.2026, verified in the omp 18.1.10 bundle, unchanged in the 18.10.1
+source `tools/browser/registry.ts`): omp attaches with
 Puppeteer's `connect({browserURL})`, which fetches
 `new URL("/json/version", browserURL)` — an absolute path that DROPS the
 prefix on exactly the request that hands out the browser WebSocket URL. And

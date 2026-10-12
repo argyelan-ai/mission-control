@@ -23,7 +23,7 @@ Identifying the agent behind a connection
      `browser.cdpUrl` prefix is not enough on its own: Puppeteer's
      `connect({browserURL})` builds `new URL("/json/version", browserURL)`,
      an absolute path that DROPS any prefix (verified in the omp 18.1.10
-     bundle, 04.10.2026). Playwright's connectOverCDP keeps the full path
+     bundle, 04.10.2026; same `browserURL` connect in the 18.10.1 source). Playwright's connectOverCDP keeps the full path
      (bauplan M12), so a prefixed endpoint works there directly.
   2. Header `X-MC-Agent: <slug>`.
   3. Reverse DNS of the peer IP -> `mc-agent-<slug>.<network>` — LAST
@@ -1400,7 +1400,8 @@ class CdpGateway:
         route = local_path.split("?", 1)[0]
         if route in ("/json/list", "/json", "/json/list/", "/json/"):
             # An identified agent's /json/list shows only its own tabs. omp
-            # does not depend on it (checked in the 18.1.10 bundle: it picks
+            # does not depend on it (checked in the 18.1.10 bundle and the 18.10.1
+            # source `tools/browser/attach.ts`: it picks
             # a page from Puppeteer's CDP target list — `browser.targets()` /
             # `browser.pages()`, first visible one — and only SERVES /json/list
             # in its own browser relay), so a fresh agent with no tab of its

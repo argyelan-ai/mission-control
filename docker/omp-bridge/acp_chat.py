@@ -14,7 +14,8 @@ Two things ACP itself does not give the chat, so the daemon does them:
 - a follow-up QUEUE: `prompt` with `mode: "queue"` holds a message sent while
   a reply runs and delivers it when that turn ends (FIFO, `queue_clear` takes
   the held ones back). omp has no steer over ACP — a second `session/prompt`
-  mid-turn CANCELS the running turn (omp 18.1.10 `AcpAgent.prompt`) — so the
+  mid-turn CANCELS the running turn (omp `AcpAgent.prompt`, 18.1.10, re-checked
+  in the 18.10.1 source) — so the
   daemon never forwards one early. Steering needs omp's RPC mode (`steer`).
 - `new_session` for `/new` and `/clear`: omp does not advertise either over
   ACP, so typed as text they only reached the model. A fresh `session/new`

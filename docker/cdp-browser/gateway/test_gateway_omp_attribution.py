@@ -2,7 +2,9 @@
 04.10.2026: every tab showed `agent: null` in `/mc/targets`).
 
 Three facts, all checked against the omp 18.1.10 bundle and the live
-network, that the earlier B1 tests never exercised:
+network, that the earlier B1 tests never exercised (facts 1 and 2 re-checked
+in the omp 18.10.1 source: `tools/browser/registry.ts` connects with
+`browserURL`, `tab-worker.ts` sends `OMP.claimTarget`):
 
 1. omp never creates a tab in "connected" mode. It attaches to an EXISTING
    page (`K$t(browser, {matcher, preferVisible})`), opens a CDP session on it

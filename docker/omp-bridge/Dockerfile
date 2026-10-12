@@ -59,11 +59,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # --- omp install (verified GitHub release binary; pin + sha256 overridable) ---
-# Pin matches the working local binary (omp v16.2.13). sha256 from the upstream
-# Homebrew formula (can1357/tap). Override at build:
-#   --build-arg OMP_VERSION=16.3.0 --build-arg OMP_SHA256=<sha>
-ARG OMP_VERSION=16.2.13
-ARG OMP_SHA256=7cc62ef691d38c837141d7040c0730ed9c66da16a2d77ae5ccec025c099ea89d
+# The canonical pin lives in docker/cli-versions.json; scripts/build-agent-images.sh
+# passes it as build args. These defaults mirror that pin so a bare `docker build`
+# installs the same binary. sha256 = the GitHub release asset digest of
+# omp-linux-arm64. Override at build:
+#   --build-arg OMP_VERSION=<ver> --build-arg OMP_SHA256=<sha>
+ARG OMP_VERSION=18.10.1
+ARG OMP_SHA256=5cad38a8edee60cec9c0ce91810eba38bda0efe349562157023810343dacb8d5
 RUN curl -fsSL \
         "https://github.com/can1357/oh-my-pi/releases/download/v${OMP_VERSION}/omp-linux-arm64" \
         -o /usr/local/bin/omp \

@@ -90,7 +90,10 @@ HEALTH_TIMEOUT_RESTART_OMP = HEALTH_TIMEOUT_RECREATE
 # replacement: the native TUI never prints this string, so there is no
 # false-positive risk for agents still on the native driver. One tuple, three
 # call sites (here, runtime_propagation.py x2) — no drift between them.
-OMP_READY_SIGNALS = ("╭─", "❯", "OMP_ACP_READY")
+# "╰─" is the composer's bottom edge: omp 18.10.1 dropped the boxed welcome
+# banner (`╭─── omp v… ───╮`), which was the only "╭─" on an idle 18.1.10
+# pane, so the native TUI is now anchored on its composer (present in both).
+OMP_READY_SIGNALS = ("╭─", "╰─", "❯", "OMP_ACP_READY")
 
 # OpenAI-compatible runtime types where a `/models` probe is meaningful.
 # Cloud (Anthropic, Ollama) already ship a model_identifier from the seed.

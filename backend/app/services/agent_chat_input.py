@@ -1644,10 +1644,12 @@ _OPENCLAUDE_BUILTIN_SLASH_COMMANDS: tuple[dict[str, str | None], ...] = tuple(
 )
 
 # omp (oh-my-pi) hat ebenfalls eine eigene Builtin-Liste — live durch den
-# Kommando-Picker geblaettert (omp v18.1.10, 06.09.2026, Wegwerf-Session
-# ``omp --no-session --no-tools`` in einem omp-Container). Kein /effort,
-# kein /help, kein /thinking: die Denk-Stufe wechselt omp per Shift+Tab
-# (s. ``_OMP_THINKING_LEVELS``), nicht per Kommando.
+# Kommando-Picker geblaettert (zuerst omp v18.1.10, 06.09.2026; neu
+# aufgenommen an omp v18.10.1, 12.10.2026, Wegwerf-Container ohne Netz,
+# 90 Eintraege). Kein /help, kein /thinking. omp hat seit 18.5.0 ein eigenes
+# /effort; MC wechselt die Denk-Stufe trotzdem weiter per Shift+Tab
+# (s. ``_OMP_THINKING_LEVELS``) — das funktioniert in beiden Versionen.
+# 18.2.1 benannte /drop in /delete um.
 #
 # Beschreibungen woertlich aus dem Picker. Zeilen der Form "Plan: off",
 # "Model: <aktuelles Modell>", "Compact: context 1% used" sind dort
@@ -1667,10 +1669,14 @@ _OMP_BUILTIN_SLASH_COMMANDS: tuple[dict[str, str | None], ...] = (
     {"name": "model", "description": None},
     {"name": "switch", "description": None},
     {"name": "fast", "description": None},
+    {"name": "slow", "description": None},
     {"name": "skillful", "description": None},
     {"name": "extended-context", "description": None},
     {"name": "computer", "description": None},
-    {"name": "prewalk", "description": 'Switch to a fast/cheap model at the next action (works even without --prewalk)'},
+    {"name": "ratchet", "description": 'Build (or reuse) an eval for an LLM flow, then hillclimb it unattended'},
+    {"name": "prewalk", "description": 'Arm, restart, or cancel a one-shot model handoff'},
+    {"name": "modelpreset", "description": None},
+    {"name": "effort", "description": None},
     {"name": "advisor", "description": None},
     {"name": "export", "description": 'Export session to HTML file'},
     {"name": "trace", "description": "Open this session's trace in the stats dashboard"},
@@ -1696,7 +1702,7 @@ _OMP_BUILTIN_SLASH_COMMANDS: tuple[dict[str, str | None], ...] = (
     {"name": "git", "description": 'Open the git UI (split diff viewer, staging, commit composer)'},
     {"name": "hub", "description": 'Open the live Agent Hub'},
     {"name": "branch", "description": 'Rewind to a previous message, keeping the old path as a branch'},
-    {"name": "fork", "description": 'Create a new fork from a previous message'},
+    {"name": "fork", "description": 'Fork this session, or open it in a multiplexer pane or window'},
     {"name": "tree", "description": 'Navigate session tree (switch branches)'},
     {"name": "login", "description": None},
     {"name": "logout", "description": 'Logout from OAuth provider'},
@@ -1705,20 +1711,20 @@ _OMP_BUILTIN_SLASH_COMMANDS: tuple[dict[str, str | None], ...] = (
     {"name": "new", "description": 'Start a new session'},
     {"name": "fresh", "description": None},
     {"name": "clear", "description": None},
-    {"name": "drop", "description": 'Delete the current session and start a new one'},
+    {"name": "delete", "description": 'Delete the current session and start a new one'},
     {"name": "compact", "description": None},
     {"name": "shake", "description": 'Drop heavy content from context (tool results, large blocks)'},
-    {"name": "handoff", "description": 'Hand off session context to a new session'},
+    {"name": "handoff", "description": 'Summarize the session into a handoff document and compact in place'},
     {"name": "resume", "description": 'Resume a different session'},
     {"name": "pin", "description": 'Pin or unpin a session at the top of the resume list'},
-    {"name": "btw", "description": 'Ask an ephemeral side question using the current session context'},
+    {"name": "btw", "description": "Ask a side question, or browse this session's BTW history"},
     {"name": "tan", "description": 'Run a full background agent on tangential work'},
     {"name": "omfg", "description": 'Forge a TTSR rule from a complaint to stop a recurring behavior'},
     {"name": "cleanse", "description": 'Detect and fix project diagnostics with weighted parallel subagents'},
     {"name": "retry", "description": 'Retry the last failed agent turn'},
     {"name": "debug", "description": 'Open debug tools selector'},
     {"name": "memory", "description": 'Inspect and operate memory maintenance'},
-    {"name": "rename", "description": 'Rename the current session'},
+    {"name": "rename", "description": 'Rename the current session (omit title to generate)'},
     {"name": "move", "description": 'Move the current session to a different directory'},
     {"name": "wt", "description": 'Move this session into a new worktree, changes included'},
     {"name": "add-dir", "description": 'Add a workspace directory to this session (multi-root)'},
@@ -1729,13 +1735,16 @@ _OMP_BUILTIN_SLASH_COMMANDS: tuple[dict[str, str | None], ...] = (
     {"name": "marketplace", "description": 'Manage marketplace plugin sources and installed plugins'},
     {"name": "plugins", "description": 'View and manage installed plugins'},
     {"name": "reload-plugins", "description": 'Reload all plugins (skills, commands, hooks, tools, agents, MCP)'},
+    {"name": "skills", "description": 'Search, install, and update skills from the skills.omp.sh registry'},
     {"name": "force", "description": None},
     {"name": "live", "description": 'Start Codex-backed realtime voice mode'},
+    {"name": "record", "description": 'Start or stop recording this screen to a replayable file (omp play)'},
     {"name": "pause", "description": 'Freeze all agents (main, subagents, advisor) until resumed'},
     {"name": "quit", "description": 'Quit the application'},
     {"name": "autoresearch", "description": 'Toggle builtin autoresearch mode, or pass off / clear, or a goal message.'},
     {"name": "green", "description": 'Generate a prompt to iterate on CI failures until the branch is green (bundled)'},
     {"name": "review", "description": 'Launch interactive code review (bundled)'},
+    {"name": "annotate", "description": 'Annotate a diff or text from a file, prompt, latest reply, or session (bundled)'},
     {"name": "init", "description": 'Generate AGENTS.md for current codebase'},
 )
 
