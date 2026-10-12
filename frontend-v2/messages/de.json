@@ -1058,24 +1058,33 @@
       "diffWrite": "Geschriebener Inhalt"
     },
     "diff": {
-      "scopeLabel": "Diff-Bereich",
+      "scopeLabel": "Änderungen",
       "scopeWorktree": "Arbeitsstand",
       "scopeLastCommit": "Letzter Commit",
       "refresh": "Aktualisieren",
       "kind": {
         "task": "Laufende Aufgabe",
         "session": "Chat-Ordner",
-        "recent": "Zuletzt benutzt"
+        "workspace": "Agent-Workspace"
       },
       "commitMeta": "{hash} · {ago}",
       "noChanges": "Keine offenen Änderungen",
       "noCommit": "Noch kein Commit",
-      "noRepo": "Kein Git-Repository gefunden",
-      "noRepoHint": "Weder im Ordner des Chats noch im Workspace des Agenten liegt ein Git-Repository.",
-      "loadFailed": "Diff konnte nicht geladen werden."
+      "noRepo": "Der Ordner dieses Chats ist kein Git-Repository",
+      "noRepoHint": "Gezeigt wird nur das Repository, in dem der Chat arbeitet — nie ein anderer Workspace.",
+      "loadFailed": "Diff konnte nicht geladen werden.",
+      "ahead": "{count} Commits vor dem Upstream",
+      "behind": "{count} Commits hinter dem Upstream",
+      "tabChat": "Dieser Chat",
+      "chatEmpty": "Dieser Chat hat noch keine Dateien geändert",
+      "chatEmptyHint": "Dateien, die der Agent in diesem Chat bearbeitet, erscheinen hier — in jedem Ordner, mit oder ohne Git.",
+      "chatFiles": "{count, plural, one {# Datei} other {# Dateien}}",
+      "chatEdits": "{count, plural, one {# Bearbeitung} other {# Bearbeitungen}}",
+      "chatBack": "Alle Dateien",
+      "chatLoadFailed": "Die Änderungen dieses Chats konnten nicht geladen werden."
     },
     "panels": {
-      "diff": "Diff",
+      "diff": "Änderungen",
       "browser": "Browser",
       "close": "Panel schliessen"
     },

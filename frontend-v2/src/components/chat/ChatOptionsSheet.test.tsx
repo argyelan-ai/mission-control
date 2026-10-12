@@ -59,14 +59,14 @@ describe("ChatOptionsSheet", () => {
     const user = userEvent.setup();
     renderSheet({ onOpenPanel, onClose });
 
-    await user.click(screen.getByRole("button", { name: "Diff" }));
+    await user.click(screen.getByRole("button", { name: "Changes" }));
     expect(onOpenPanel).toHaveBeenCalledWith("diff");
     expect(onClose).toHaveBeenCalled();
   });
 
   it("omits the Panels section when the caller offers none", () => {
     renderSheet({ onOpenPanel: undefined });
-    expect(screen.queryByRole("button", { name: "Diff" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Changes" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Browser" })).not.toBeInTheDocument();
   });
 
@@ -120,7 +120,7 @@ describe("ChatOptionsSheet", () => {
 
   it("keeps Panels and Detail Level for a headless-chat agent", () => {
     renderSheet({ headlessChat: true, onOpenPanel: vi.fn() });
-    expect(screen.getByRole("button", { name: "Diff" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Changes" })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "Normal" })).toBeInTheDocument();
   });
 });

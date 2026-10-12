@@ -21,6 +21,7 @@ Workspace layout (ADR-022, extended by task af914128 2026-09-14):
 
 import logging
 import os
+from pathlib import Path
 
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -269,6 +270,33 @@ def _create_plain_workspace(base_path: str, task_title: str) -> str:
     return task_dir
 
 
+def _exclude_locally(workspace: str, name: str) -> None:
+    """Adds ``name`` to the checkout's local ``info/exclude`` (never to the
+    project's ``.gitignore``): MC's own helper files must not count as the
+    agent's uncommitted work — ``.mc-expected-remote`` showed up as "new
+    file" in the chat's Changes panel (12.10.2026). Resolves a worktree's
+    ``.git`` FILE to the shared git dir, where ``info/exclude`` lives.
+    Idempotent; best-effort (raises ``OSError`` to the caller's handler)."""
+    from app.services.workspace_diff import git_dir
+
+    gd = git_dir(Path(workspace))
+    if gd is None:
+        return
+    common = gd / "commondir"
+    if common.is_file():
+        target = Path(common.read_text(encoding="utf-8").strip())
+        gd = target if target.is_absolute() else (gd / target).resolve()
+    exclude = gd / "info" / "exclude"
+    existing = exclude.read_text(encoding="utf-8") if exclude.is_file() else ""
+    if name in existing.splitlines():
+        return
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    with open(exclude, "a", encoding="utf-8") as f:
+        if existing and not existing.endswith("\n"):
+            f.write("\n")
+        f.write(f"{name}\n")
+
+
 def _write_expected_remote(workspace: str, repo_url: str) -> None:
     """Pin the expected git remote URL for the pre-push hook.
 
@@ -282,6 +310,7 @@ def _write_expected_remote(workspace: str, repo_url: str) -> None:
         with open(marker, "w") as f:
             f.write(repo_url.strip() + "\n")
         os.chmod(marker, 0o644)
+        _exclude_locally(workspace, ".mc-expected-remote")
     except OSError as e:
         # Non-fatal: hook will be silent instead of enforcing. Log loud
         # so we notice if the marker was never written.

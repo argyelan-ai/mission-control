@@ -181,9 +181,10 @@ export interface CommitDiff {
 }
 
 /** Why the chat diff shows this repository — a code the UI translates:
- *  the running task's workspace, the chat session's own folder, or the
- *  repository git touched last in the agent's workspace. */
-export type ChatDiffSourceKind = "task" | "session" | "recent";
+ *  the running task's workspace, the chat session's own folder, or (only
+ *  when the session recorded no folder) the agent's workspace root. Never a
+ *  guessed "last used" repository (removed 12.10.2026). */
+export type ChatDiffSourceKind = "task" | "session" | "workspace";
 
 export interface ChatDiffSource {
   kind: ChatDiffSourceKind;
@@ -193,6 +194,9 @@ export interface ChatDiffSource {
   branch: string | null;
   /** Location as the agent sees it (`/workspace/…`, `~/…`). */
   path: string;
+  /** Commits ahead of / behind the branch's upstream; `null` without one. */
+  ahead?: number | null;
+  behind?: number | null;
 }
 
 export interface Task {

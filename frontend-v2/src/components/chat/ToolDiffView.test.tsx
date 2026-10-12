@@ -55,6 +55,13 @@ describe("ToolDiffView", () => {
     expect(screen.getByRole("button", { name: "Show less" })).toBeInTheDocument();
   });
 
+  it("initialAll shows every line at once and no toggle (the Changes panel's file view)", () => {
+    const lines = Array.from({ length: 30 }, (_, i) => ({ t: "add" as const, text: `line ${i}` }));
+    render(<ToolDiffView diff={{ ...EDIT, lines, additions: 30, deletions: 0 }} multi={false} initialAll />);
+    expect(screen.getByText("line 29")).toBeInTheDocument();
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
   it("names a created file and a write whose before is unknown differently", () => {
     const { rerender } = render(<ToolDiffView diff={{ ...EDIT, kind: "create" }} multi={false} />);
     expect(screen.getByText("New file")).toBeInTheDocument();

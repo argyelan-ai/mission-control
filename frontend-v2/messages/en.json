@@ -1058,24 +1058,33 @@
       "diffWrite": "Written content"
     },
     "diff": {
-      "scopeLabel": "Diff scope",
+      "scopeLabel": "Changes",
       "scopeWorktree": "Uncommitted",
       "scopeLastCommit": "Last commit",
       "refresh": "Refresh",
       "kind": {
         "task": "Running task",
         "session": "Chat folder",
-        "recent": "Last used"
+        "workspace": "Agent workspace"
       },
       "commitMeta": "{hash} · {ago}",
       "noChanges": "No uncommitted changes",
       "noCommit": "No commit yet",
-      "noRepo": "No git repository found",
-      "noRepoHint": "Neither the chat's folder nor the agent's workspace contains a git repository.",
-      "loadFailed": "Couldn't load the diff."
+      "noRepo": "This chat's folder is not a git repository",
+      "noRepoHint": "Only the repository the chat works in is shown — never another workspace.",
+      "loadFailed": "Couldn't load the diff.",
+      "ahead": "{count} commits ahead of upstream",
+      "behind": "{count} commits behind upstream",
+      "tabChat": "This chat",
+      "chatEmpty": "No file changes in this chat yet",
+      "chatEmptyHint": "Files the agent edits in this chat show up here — in any folder, with or without git.",
+      "chatFiles": "{count, plural, one {# file} other {# files}}",
+      "chatEdits": "{count, plural, one {# edit} other {# edits}}",
+      "chatBack": "All files",
+      "chatLoadFailed": "Couldn't load this chat's changes."
     },
     "panels": {
-      "diff": "Diff",
+      "diff": "Changes",
       "browser": "Browser",
       "close": "Close panel"
     },

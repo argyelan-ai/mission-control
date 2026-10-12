@@ -33,6 +33,15 @@ def _init_repo(path: Path) -> None:
     _git("config", "user.name", "MC Test", cwd=path)
 
 
+@pytest.fixture(autouse=True)
+def _no_real_transcripts(tmp_path, monkeypatch):
+    """The router reads the agent's live transcript to find the chat's
+    folder. Without this, an agent named like a real one on the test
+    machine picked up THAT machine's transcript (and its cwd)."""
+    from app.services import transcript_chat
+    monkeypatch.setattr(transcript_chat, "_host_home", lambda: tmp_path / "no-home")
+
+
 @pytest.fixture
 def repo(tmp_path) -> Path:
     """A repo with one commit touching two files, ready for scope=worktree
@@ -363,19 +372,6 @@ def test_current_branch_name_and_detached_head(repo):
     assert wd.current_branch(repo) == sha[:7]
 
 
-def test_repos_under_two_levels_skipping_dot_and_dependency_folders(tmp_path):
-    _init_repo(tmp_path / "direct")
-    _init_repo(tmp_path / "worktrees" / "deep")
-    _init_repo(tmp_path / "a" / "b" / "too-deep")
-    _init_repo(tmp_path / ".hidden" / "x")
-    _init_repo(tmp_path / "node_modules" / "pkg")
-    _init_repo(tmp_path / "direct" / "nested-inside-repo")
-
-    found = {p.relative_to(tmp_path).as_posix() for p in wd.repos_under(tmp_path)}
-
-    assert found == {"direct", "worktrees/deep"}
-
-
 def test_enclosing_repo_climbs_up_but_never_past_the_boundary(tmp_path):
     repo_dir = tmp_path / "ws" / "proj"
     _init_repo(repo_dir)
@@ -460,36 +456,92 @@ def test_choose_repo_session_folder_inside_a_repo_wins_over_fresher_repos(tmp_pa
     _init_repo(fresh)
 
     choice = wd.choose_repo(
-        running_task=None, session_dir=sess_repo / "sub", boundary=ws, fallbacks=(ws,)
+        running_task=None, session_dir=sess_repo / "sub", boundary=ws, workspace_root=ws
     )
 
     assert choice.kind == "session" and choice.path == sess_repo.resolve()
 
 
-def test_choose_repo_most_recent_git_activity_beats_the_last_finished_task(tmp_path):
-    """The incident of 04.10.2026: the chat committed in a fresh repo under
-    the agent's workspace, the panel showed the months-old commit of the
-    last FINISHED task — because that task row always won."""
+def test_choose_repo_never_guesses_a_repo_below_a_plain_session_folder(tmp_path):
+    """The incident of 12.10.2026: the omp agent works in /workspace (no
+    repo); the panel showed the freshest of ~70 old task worktrees below it
+    — an unrelated benchmark. A plain session folder has NO repository."""
     ws = tmp_path / "ws"
-    chat_repo = ws / "scratch"
-    _init_repo(chat_repo)
-    _commit_file(chat_repo, "hello.txt", "hi\n", "chat commit")
-    finished = tmp_path / "elsewhere" / "old-task"
-    _init_repo(finished)
-    _commit_file(finished, "fib.py", "x\n", "months old")
-    _make_stale(finished)
+    bench = ws / "worktrees" / "bench-garden"
+    _init_repo(bench)
+    _commit_file(bench, "bench.py", "x\n", "benchmark from march")
+    (bench / "bench.py").write_text("x\nlocal\n")
+    _init_repo(ws / "scratch")
 
-    choice = wd.choose_repo(
-        running_task=None, session_dir=ws, boundary=ws, fallbacks=(ws, finished)
-    )
+    with pytest.raises(NoWorkspaceError):
+        wd.choose_repo(running_task=None, session_dir=ws, boundary=ws, workspace_root=ws)
 
-    assert choice == wd.RepoChoice(chat_repo, "recent")
+
+def test_choose_repo_without_a_session_folder_uses_the_root_only_when_it_is_a_repo(tmp_path):
+    root = tmp_path / "ws"
+    _init_repo(root / "child")  # a repo BELOW the root never counts
+    with pytest.raises(NoWorkspaceError):
+        wd.choose_repo(running_task=None, session_dir=None, boundary=root, workspace_root=root)
+
+    _init_repo(root)
+    choice = wd.choose_repo(running_task=None, session_dir=None, boundary=root, workspace_root=root)
+    assert choice == wd.RepoChoice(root.resolve(), "workspace")
 
 
 def test_choose_repo_raises_when_nothing_is_a_repo(tmp_path):
     (tmp_path / "plain").mkdir()
     with pytest.raises(NoWorkspaceError):
-        wd.choose_repo(running_task=None, session_dir=None, boundary=None, fallbacks=(tmp_path,))
+        wd.choose_repo(running_task=None, session_dir=None, boundary=None, workspace_root=tmp_path)
+
+
+def test_mc_helper_file_is_never_listed_as_a_change(repo):
+    (repo / ".mc-expected-remote").write_text("https://example.invalid/r.git\n")
+    (repo / "sub").mkdir()
+    (repo / "sub" / ".mc-expected-remote").write_text("x\n")
+    (repo / "real.txt").write_text("agent work\n")
+
+    names = [f["filename"] for f in wd.workspace_diff(repo, "worktree")["files"]]
+
+    assert names == ["real.txt"]
+
+
+def test_source_info_carries_ahead_and_behind_against_the_upstream(tmp_path):
+    origin = tmp_path / "origin.git"
+    _git("init", "--bare", "-b", "main", str(origin), cwd=tmp_path)
+    clone = tmp_path / "clone"
+    _init_repo(clone)
+    _commit_file(clone, "a.txt", "1\n", "one")
+    _git("remote", "add", "origin", str(origin), cwd=clone)
+    _git("push", "-u", "origin", "main", cwd=clone)
+    _commit_file(clone, "a.txt", "2\n", "two")
+    _commit_file(clone, "a.txt", "3\n", "three")
+
+    info = wd.source_info(wd.RepoChoice(clone, "session"), "/workspace/clone")
+    assert (info["ahead"], info["behind"]) == (2, 0)
+
+    _git("checkout", "-b", "no-upstream", cwd=clone)
+    info = wd.source_info(wd.RepoChoice(clone, "session"), "/workspace/clone")
+    assert (info["branch"], info["ahead"], info["behind"]) == ("no-upstream", None, None)
+
+
+def test_expected_remote_marker_is_excluded_locally_even_in_a_worktree(tmp_path):
+    from app.services.cli_bridge_runner import _write_expected_remote
+
+    main = tmp_path / "main"
+    _init_repo(main)
+    _commit_file(main, "a.txt", "1\n", "one")
+    wt = tmp_path / "wt"
+    _git("worktree", "add", "-b", "task", str(wt), cwd=main)
+
+    _write_expected_remote(str(wt), "https://example.invalid/r.git")
+    _write_expected_remote(str(wt), "https://example.invalid/r.git")  # idempotent
+
+    status = subprocess.run(
+        ["git", "status", "--porcelain"], cwd=wt, capture_output=True, text=True, check=True
+    ).stdout
+    assert ".mc-expected-remote" not in status
+    exclude = (main / ".git" / "info" / "exclude").read_text()
+    assert exclude.splitlines().count(".mc-expected-remote") == 1
 
 
 def test_find_repo_root_raises_when_nothing_is_a_repo(tmp_path):
@@ -515,9 +567,11 @@ async def test_diff_router_200_worktree_scope(auth_client: AsyncClient, make_age
     assert body["message"] == ""
     assert body["scope"] == "worktree"
     assert body["files"][0]["filename"] == "a.txt"
-    assert body["source"]["kind"] == "recent"
+    # No transcript: the agent's own workspace root IS the repository.
+    assert body["source"]["kind"] == "workspace"
     assert body["source"]["repo"] == repo.name
     assert body["source"]["branch"] == "main"
+    assert (body["source"]["ahead"], body["source"]["behind"]) == (None, None)
 
 
 async def test_diff_router_200_last_commit_scope(auth_client: AsyncClient, make_agent, repo):
@@ -596,18 +650,16 @@ async def test_diff_router_prefers_current_task_workspace_over_agent_root(
     assert resp.json()["files"][0]["filename"] == "f.txt"
 
 
-async def test_diff_router_falls_back_to_latest_task_workspace_when_idle(
+async def test_diff_router_never_falls_back_to_the_last_finished_task(
     auth_client: AsyncClient, make_agent, make_board, make_task, tmp_path
 ):
-    # Task-Workspace bewusst AUSSERHALB des Agenten-Stamms (z.B. Projekt-
-    # Worktree) — nur der Task-Datensatz kennt den Pfad.
+    """Before 12.10.2026 an idle agent showed the repo of its last task —
+    a guess. Without a running task or a repository folder: 404."""
     root = tmp_path / "agent-root"
     root.mkdir()
     task_dir = tmp_path / "elsewhere" / "done-task"
     _init_repo(task_dir)
-    (task_dir / "g.txt").write_text("x\n")
-    _git("add", "g.txt", cwd=task_dir)
-    _git("commit", "-m", "done work", cwd=task_dir)
+    _commit_file(task_dir, "g.txt", "x\n", "done work")
 
     board = await make_board()
     agent = await make_agent(name="Rex", agent_runtime="cli-bridge", workspace_path=str(root))
@@ -620,8 +672,8 @@ async def test_diff_router_falls_back_to_latest_task_workspace_when_idle(
         f"/api/v1/agents/{agent.id}/chat/diff", params={"scope": "last-commit"}
     )
 
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["message"] == "done work"
+    assert resp.status_code == 404
+    assert resp.json() == {"reason": "no_workspace"}
 
 
 async def test_diff_router_422_invalid_scope(auth_client: AsyncClient, make_agent, repo):
@@ -712,38 +764,40 @@ async def test_diff_router_follows_the_chat_session_not_the_finished_task(
     assert body["message"] == "test: chat commit"
     assert body["source"] == {
         "kind": "session", "repo": "scratch", "branch": "main", "path": "/workspace/scratch",
+        "ahead": None, "behind": None,
     }
     assert work.status_code == 200, work.text
     assert [f["filename"] for f in work.json()["files"]] == ["hello.txt"]
     assert work.json()["source"]["repo"] == "scratch"
 
 
-async def test_diff_router_without_a_session_takes_the_most_recent_repo(
-    auth_client: AsyncClient, make_agent, make_board, make_task, tmp_path
+async def test_diff_router_plain_session_folder_is_404_not_an_old_worktree(
+    auth_client: AsyncClient, make_agent, tmp_path, monkeypatch
 ):
-    """No transcript at all: the freshest repository in the workspace beats
-    the stale repository of the last finished task."""
-    root = tmp_path / "agent-root"
-    fresh = root / "scratch-diff-test"
-    _init_repo(fresh)
-    _commit_file(fresh, "hello.txt", "probe\n", "fresh work")
-    finished = tmp_path / "elsewhere" / "done-task"
-    _init_repo(finished)
-    _commit_file(finished, "fib.py", "x\n", "months old")
-    _make_stale(finished)
+    """The live case of 12.10.2026 end to end through the omp adapter: the
+    session works in /workspace (no repo); a fresh, unrelated worktree lies
+    below it. The panel must say "no repository", never show that one."""
+    from app.services import omp_chat
+    home = tmp_path / "home"
+    monkeypatch.setattr(omp_chat, "_host_home", lambda: home)
+    monkeypatch.setattr(wd, "_host_home", lambda: home)
 
-    board = await make_board()
-    agent = await make_agent(name="Rex", agent_runtime="cli-bridge", workspace_path=str(root))
-    await make_task(
-        board.id, title="Done", status="done",
-        assigned_agent_id=agent.id, workspace_path=str(finished),
+    root = home / ".mc" / "workspaces" / "alpha"
+    bench = root / "worktrees" / "bench-garden"
+    _init_repo(bench)
+    _commit_file(bench, "bench.py", "x\n", "benchmark from march")
+    (bench / ".mc-expected-remote").write_text("x\n")
+    _write_omp_session(home / ".mc" / "agents" / "alpha" / "omp-sessions", "/workspace", sink=True)
+
+    agent = await make_agent(
+        name="Alpha", slug="alpha", harness="omp", agent_runtime="cli-bridge",
+        workspace_path=str(root),
     )
 
-    resp = await auth_client.get(f"/api/v1/agents/{agent.id}/chat/diff", params={"scope": "last-commit"})
-
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["message"] == "fresh work"
-    assert resp.json()["source"]["kind"] == "recent"
+    for scope in ("worktree", "last-commit"):
+        resp = await auth_client.get(f"/api/v1/agents/{agent.id}/chat/diff", params={"scope": scope})
+        assert resp.status_code == 404, resp.text
+        assert resp.json() == {"reason": "no_workspace"}
 
 
 async def test_diff_router_host_agent_session_in_the_mc_home(

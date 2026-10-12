@@ -1112,13 +1112,25 @@ claude-TUI ──JSONL live──▶  transcript_chat.ChatTailerManager (1s-Poll
   `git diff`/`git show` im Agent-Workspace und liefert dieselbe `CommitDiff`-Form, die
   `GitDiffView` schon aus dem Git-Workflow (oben) kennt — read-only, kein Staging/Revert.
   Welches Repo: `workspace_diff.choose_repo` — laufende Task → Ordner der Chat-Sitzung
-  (`TranscriptAdapter.session_cwd`, je Harness aus dem eigenen Transkript) → zuletzt von
-  git berührtes Repo (worktree-fest) in Sitzungsordner, Agent-Workspace und letzter Task.
-  Die Antwort trägt `source{kind,repo,branch,path}`, `scope` und `committed_at` (ISO) —
-  Codes statt Sätze; das Panel benennt damit Repo, Branch und Grund und lädt am Ende
-  jedes Zugs neu. „Arbeitsstand" zeigt auch neue, ungetrackte Dateien (ohne Symlink-Ziele).
-  Vor 04.10.2026 gewann immer die zuletzt aktualisierte Task-Zeile — der Chat sah dann
-  den Monate alten Commit einer erledigten Task.
+  (`TranscriptAdapter.session_cwd`, je Harness aus dem eigenen Transkript; nach oben bis
+  zur Workspace-Grenze) → nur wenn die Sitzung gar keinen Ordner kennt: der Agent-Workspace
+  selbst. **Nie geraten:** unterhalb eines Ordners wird nicht gesucht; ist der Chat-Ordner
+  kein Repo, antwortet der Endpunkt 404 `no_workspace` und das Panel sagt das ehrlich.
+  Die Antwort trägt `source{kind,repo,branch,path,ahead,behind}`, `scope` und
+  `committed_at` (ISO) — Codes statt Sätze; das Panel benennt damit Repo, Branch, Stand
+  zum Upstream und Grund und lädt am Ende jedes Zugs neu. „Arbeitsstand" zeigt auch neue,
+  ungetrackte Dateien (ohne Symlink-Ziele); MCs eigene Hilfsdateien
+  (`workspace_diff.MC_HELPER_FILES`, z. B. `.mc-expected-remote`) erscheinen nie und
+  stehen seit 12.10.2026 auch in `info/exclude` des Checkouts.
+  Vor 04.10.2026 gewann immer die zuletzt aktualisierte Task-Zeile; bis 12.10.2026 riet
+  eine dritte Stufe („zuletzt benutzt") — ein Chat in `/workspace` (kein Repo) sah dann
+  einen fremden, alten Benchmark-Worktree.
+- **Panel „Änderungen" / Reiter „Dieser Chat" (Standard):** `GET /agents/{id}/chat/changes`
+  faltet die Diffs pro Werkzeug-Aufruf aus dem Transkript (P1, `chat_diff.py`) je Datei
+  zusammen (`chat_changes.aggregate_changes`: +/−, Anzahl Bearbeitungen, neueste zuerst,
+  kombinierter Diff; fehlgeschlagene Aufrufe und MC-Hilfsdateien zählen nicht) — für jede
+  Harness und ohne Git. Die Antwort trägt `repo` (derselbe `source`-Block wie oben, oder
+  `null`); nur mit Repo zeigt das Panel die Reiter „Arbeitsstand"/„Letzter Commit".
 - **Adapter-Kontrakt:** die vier Bausteine (Session-Resolution+Parser, Tailer,
   Eingabe-Kanal, Pane-Sonde) sind bewusst austauschbar pro CLI gehalten (Muster wie
   `HOST_ADAPTERS`/ADR-064 und der Turn-Signal-Kontrakt/ADR-071) — v1 liefert nur den

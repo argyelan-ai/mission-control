@@ -16,7 +16,6 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
@@ -52,6 +51,7 @@ from app.services.reference_ingest import (
     serialize_reference,
     store_reference,
 )
+from app.services.chat_changes import aggregate_changes
 from app.services.sse import _sse_generator
 from app.services.transcript_adapters import adapter_for
 from app.services.checklist_todo_sync import chat_todo_sync
@@ -442,41 +442,16 @@ def _chat_session_cwd(agent: Agent) -> str | None:
         return None
 
 
-@router.get("/agents/{agent_id}/chat/diff")
-async def get_chat_diff(
-    agent_id: uuid.UUID,
-    scope: str = Query("worktree", pattern="^(worktree|last-commit)$"),
-    current_user=Depends(require_user),
-    session: AsyncSession = Depends(get_session),
-):
-    """Structured git diff of the repository that shows what the agent is
-    doing: uncommitted changes incl. new files (``scope=worktree``, default)
-    or the most recent commit (``scope=last-commit``). The payload carries a
-    ``source`` block (``kind``/``repo``/``branch``/``path``) so the panel
-    can say WHICH repository it shows and why. 404 ``{"reason":
-    "no_workspace"}`` when no candidate folder holds a git repository.
-
-    Which repository: ``workspace_diff.choose_repo`` — running task first,
-    then the chat session's own folder (``TranscriptAdapter.session_cwd``,
-    harness-neutral), then the most recently git-active repository among the
-    session folder, the agent's workspace root and its last task. Both
-    scopes resolve the SAME repository, so the two tabs never show two
-    different projects."""
-    agent = await _load_agent_or_404(agent_id, session)
-
+async def _chat_repo_picker(agent: Agent, session: AsyncSession):
+    """Collects what the repo choice needs (DB + transcript, async) and
+    returns a SYNCHRONOUS picker for ``asyncio.to_thread`` that yields
+    ``(RepoChoice, display_path)`` or raises ``NoWorkspaceError``. Shared by
+    the diff and the changes endpoint, so both name the same repository."""
     running_task_raw: str | None = None
     if agent.current_task_id:
         current = await session.get(Task, agent.current_task_id)
         if current and current.workspace_path:
             running_task_raw = current.workspace_path
-    latest_raw = (
-        await session.exec(
-            select(Task.workspace_path)
-            .where(Task.assigned_agent_id == agent.id, Task.workspace_path.is_not(None))
-            .order_by(Task.updated_at.desc())
-            .limit(1)
-        )
-    ).first()
 
     runtime = agent.agent_runtime
     root = resolve_workspace_path(agent.workspace_path) if agent.workspace_path else None
@@ -484,24 +459,106 @@ async def get_chat_diff(
     session_dir = host_path_for_agent_cwd(runtime, root, cwd)
     boundary = cwd_boundary(runtime, root)
 
-    def _pick_and_diff() -> dict[str, Any]:
+    def _pick():
         choice = choose_repo(
             running_task=resolve_workspace_path(running_task_raw) if running_task_raw else None,
             session_dir=session_dir,
             boundary=boundary,
-            fallbacks=(
-                root,
-                resolve_workspace_path(latest_raw) if latest_raw else None,
-            ),
+            # A recorded folder that maps to nothing readable is NOT "no
+            # folder": the root then must not stand in for it.
+            workspace_root=root if cwd is None else None,
         )
+        return choice, display_path(runtime, root, choice.path)
+
+    return _pick
+
+
+@router.get("/agents/{agent_id}/chat/diff")
+async def get_chat_diff(
+    agent_id: uuid.UUID,
+    scope: str = Query("worktree", pattern="^(worktree|last-commit)$"),
+    current_user=Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Structured git diff of the repository the chat works in: uncommitted
+    changes incl. new files (``scope=worktree``, default) or the most recent
+    commit (``scope=last-commit``). The payload carries a ``source`` block
+    (``kind``/``repo``/``branch``/``path``/``ahead``/``behind``) so the
+    panel can say WHICH repository it shows. 404 ``{"reason":
+    "no_workspace"}`` when the chat's folder is not a git repository.
+
+    Which repository: ``_chat_repo_picker`` — running task, else the chat session's
+    own folder (``TranscriptAdapter.session_cwd``, harness-neutral). Never a
+    "last used" repository found somewhere below (12.10.2026). Both scopes
+    resolve the SAME repository, so the tabs never show two projects."""
+    agent = await _load_agent_or_404(agent_id, session)
+    pick = await _chat_repo_picker(agent, session)
+
+    def _pick_and_diff() -> dict[str, Any]:
+        choice, display = pick()
         result = workspace_diff(choice.path, scope)
-        result["source"] = source_info(choice, display_path(runtime, root, choice.path))
+        result["source"] = source_info(choice, display)
         return result
 
     try:
         return await asyncio.to_thread(_pick_and_diff)
     except NoWorkspaceError:
         return JSONResponse(status_code=404, content=_NO_WORKSPACE)
+
+
+#: ``read_history`` page size that means "the whole session" — the changes
+#: list is about everything this chat did, not the last page of it.
+_WHOLE_SESSION = 10**9
+
+
+@router.get("/agents/{agent_id}/chat/changes")
+async def get_chat_changes(
+    agent_id: uuid.UUID,
+    current_user=Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """What THIS chat session changed, per file (``chat_changes``), plus the
+    repository block the git tabs would show (``repo``: the diff endpoint's
+    ``source`` shape, or ``None`` when the chat's folder is no repository —
+    the panel then shows only this list). Built from the per-edit diffs in
+    the transcript, so it works for every harness and without git.
+
+    No transcript yet, or a fresh session (``fresh_session``): an empty
+    list, 200 — "nothing changed yet" is a state, not an error. Read-only.
+    """
+    agent = await _load_agent_or_404(agent_id, session)
+    pick = await _chat_repo_picker(agent, session)
+
+    def _repo() -> dict[str, Any] | None:
+        try:
+            choice, display = pick()
+        except NoWorkspaceError:
+            return None
+        return source_info(choice, display)
+
+    repo = await asyncio.to_thread(_repo)
+    empty = {"files": [], "stats": {"files": 0, "additions": 0, "deletions": 0}, "repo": repo}
+
+    resolved = await _resolve_transcript_path(agent_id, session)
+    if isinstance(resolved, JSONResponse):
+        return empty
+    _agent, path, adapter = resolved
+    if fresh_session.marked_at(str(agent_id)) is not None and await asyncio.to_thread(
+        fresh_session.is_stale, str(agent_id), path
+    ):
+        return empty
+
+    def _read() -> dict[str, Any]:
+        history = read_history(path, adapter, limit=_WHOLE_SESSION)
+        try:
+            cwd = adapter.session_cwd(path)
+        except (OSError, ValueError):
+            cwd = None
+        return aggregate_changes(history["events"], cwd)
+
+    changes = await asyncio.to_thread(_read)
+    changes["repo"] = repo
+    return changes
 
 
 @router.post("/agents/{agent_id}/chat/input", status_code=204)

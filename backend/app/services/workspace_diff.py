@@ -36,7 +36,7 @@ import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from app.services.fs_roots import sensitive_subpaths
 from app.services.token_harvester import _host_home
@@ -49,12 +49,10 @@ _MAX_LINES_PER_FILE = 5000
 _MAX_UNTRACKED_BYTES = 1_000_000
 #: git's well-known empty tree — the diff base for a repo without commits.
 _EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
-#: Directory names never descended into while looking for repositories.
-_SKIP_DIRS = frozenset({"node_modules", "__pycache__", ".venv", "venv"})
-#: Upper bound of directory entries ``repos_under`` looks at — keeps a poll
-#: cheap on the bind-mounted workspace even for an agent with hundreds of
-#: task folders.
-_MAX_SCAN_ENTRIES = 2000
+#: Files MC itself writes into an agent's checkout (the pre-push guard's
+#: expected remote, ``cli_bridge_runner._write_expected_remote``). They are
+#: never the agent's work, so the panel never lists them.
+MC_HELPER_FILES = frozenset({".mc-expected-remote"})
 
 _HUNK_HEADER_RE = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 _DIFF_GIT_RE = re.compile(r"^diff --git a/(.+) b/(.+)$")
@@ -240,6 +238,12 @@ def _merge_hunks(
     return numstat_files
 
 
+def is_mc_helper_file(filename: str) -> bool:
+    """True for a file MC wrote into the checkout itself (``MC_HELPER_FILES``),
+    at any depth — it appeared as the agent's "new file" before 12.10.2026."""
+    return filename.rsplit("/", 1)[-1] in MC_HELPER_FILES
+
+
 def _build_result(
     *,
     scope: str,
@@ -250,7 +254,7 @@ def _build_result(
     files: list[dict[str, Any]],
     committed_at: str | None = None,
 ) -> dict[str, Any]:
-    files = files[:_MAX_FILES]
+    files = [f for f in files if not is_mc_helper_file(f["filename"])][:_MAX_FILES]
     return {
         "scope": scope,
         "hash": hash,
@@ -431,39 +435,6 @@ def current_branch(repo: Path) -> str | None:
     return head[:7] or None
 
 
-def repos_under(root: Path, depth: int = 2) -> list[Path]:
-    """Every git repository at most ``depth`` levels below ``root`` (not
-    ``root`` itself). A repository is not descended into; dot-folders and
-    dependency folders are skipped. Two levels because the agent layout puts
-    checkouts at ``<ws>/<task>/`` and ``<ws>/worktrees/<branch>/``."""
-    found: list[Path] = []
-    budget = [_MAX_SCAN_ENTRIES]
-
-    def walk(directory: Path, level: int) -> None:
-        try:
-            entries = sorted(directory.iterdir())
-        except OSError:
-            return
-        for child in entries:
-            if budget[0] <= 0:
-                return
-            budget[0] -= 1
-            if child.name.startswith(".") or child.name in _SKIP_DIRS:
-                continue
-            try:
-                if not child.is_dir():
-                    continue
-            except OSError:
-                continue
-            if _is_git_repo(child):
-                found.append(child)
-            elif level < depth:
-                walk(child, level + 1)
-
-    walk(root, 1)
-    return found
-
-
 def enclosing_repo(path: Path, boundary: Path) -> Path | None:
     """``path`` itself or its nearest ancestor that is a git repository —
     never above ``boundary`` (the agent's workspace root, or the MC home for
@@ -555,10 +526,15 @@ def display_path(runtime: str | None, workspace_root: Path | None, repo: Path) -
 class RepoChoice:
     """The repository the panel shows, and WHY (a code the UI translates):
 
-    * ``"task"``    — the workspace of the task the agent is running now;
-    * ``"session"`` — the folder the chat session itself works in;
-    * ``"recent"``  — the repository git touched last among the places the
-      agent works (session folder, workspace root, last task).
+    * ``"task"``      — the workspace of the task the agent is running now;
+    * ``"session"``   — the folder the chat session itself works in;
+    * ``"workspace"`` — the agent's own workspace root, used only when the
+      session recorded no folder at all (it is where a session starts).
+
+    There is deliberately no "most recently used repository" choice any
+    more: until 12.10.2026 a chat working in a plain folder got the
+    freshest of ~70 old task worktrees below it — an unrelated benchmark
+    repo, shown as if it were the chat's work (operator finding).
     """
 
     path: Path
@@ -570,20 +546,20 @@ def choose_repo(
     running_task: Path | None,
     session_dir: Path | None,
     boundary: Path | None,
-    fallbacks: Iterable[Path | None] = (),
+    workspace_root: Path | None = None,
 ) -> RepoChoice:
-    """Which repository shows "what just happened" for this agent.
+    """Which repository shows "what just happened" for this agent — only
+    one MC KNOWS, never a guess.
 
     1. A running task's workspace — explicit job context, wins.
-    2. The chat session's own folder, when it is inside a repository.
-    3. Otherwise the most recently git-active repository found in the
-       session folder, the fallbacks (agent root, last task) and up to two
-       levels below each.
+    2. The chat session's own folder, when it is inside a repository
+       (climbing up, never past ``boundary``).
+    3. Only when the session recorded no folder: the agent's workspace root,
+       when it is (inside) a repository itself.
 
-    Before 04.10.2026 step 3 was "the most recently UPDATED task row" and
-    won unconditionally — so a chat that just committed showed a months-old
-    commit of a long-finished task (operator finding). Raises
-    ``NoWorkspaceError`` when no repository is found anywhere.
+    Nothing below a folder is ever searched: a session folder that is not a
+    repository has no repository changes — what the chat changed there is in
+    its tool cards (``chat_changes``). Raises ``NoWorkspaceError`` then.
     """
     if running_task is not None:
         try:
@@ -591,40 +567,46 @@ def choose_repo(
         except NoWorkspaceError:
             pass
 
-    if session_dir is not None and boundary is not None:
-        repo = enclosing_repo(session_dir, boundary)
-        if repo is not None:
-            return RepoChoice(repo, "session")
+    if session_dir is not None:
+        if boundary is not None:
+            repo = enclosing_repo(session_dir, boundary)
+            if repo is not None:
+                return RepoChoice(repo, "session")
+        raise NoWorkspaceError(f"chat session folder is not a git repository: {session_dir}")
 
-    pool: dict[Path, Path] = {}
-    for root in (session_dir, *fallbacks):
-        if root is None:
-            continue
-        try:
-            if not root.is_dir():
-                continue
-        except OSError:
-            continue
-        found = [root] if _is_git_repo(root) else repos_under(root)
-        for repo in found:
-            try:
-                pool.setdefault(repo.resolve(), repo)
-            except OSError:
-                continue
-    if not pool:
-        raise NoWorkspaceError("no git repository in any candidate folder")
-    best = max(pool.values(), key=git_activity)
-    return RepoChoice(best, "recent")
+    if workspace_root is not None and boundary is not None:
+        repo = enclosing_repo(workspace_root, boundary)
+        if repo is not None:
+            return RepoChoice(repo, "workspace")
+    raise NoWorkspaceError("the chat session recorded no folder and the agent's workspace is no repository")
+
+
+def ahead_behind(repo: Path) -> tuple[int, int] | None:
+    """Commits the checked-out branch is ahead of / behind its upstream, or
+    ``None`` when there is no upstream (or git can't tell). Local refs only —
+    never fetches (a read-only panel must not touch the network)."""
+    try:
+        raw = _run_git("rev-list", "--left-right", "--count", "HEAD...@{upstream}", cwd=repo)
+    except NoWorkspaceError:
+        return None
+    parts = raw.split()
+    if len(parts) != 2 or not all(p.isdigit() for p in parts):
+        return None
+    return int(parts[0]), int(parts[1])
 
 
 def source_info(choice: RepoChoice, display: str) -> dict[str, Any]:
     """The ``source`` block of the diff payload — codes and machine values
-    only (the UI translates ``kind``)."""
+    only (the UI translates ``kind``). ``ahead``/``behind`` are ``None``
+    without an upstream."""
+    counts = ahead_behind(choice.path)
     return {
         "kind": choice.kind,
         "repo": choice.path.name,
         "branch": current_branch(choice.path),
         "path": display,
+        "ahead": counts[0] if counts else None,
+        "behind": counts[1] if counts else None,
     }
 
 
