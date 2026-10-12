@@ -980,6 +980,7 @@
     "contextTokensUsed": "≈{used}/{win} used. ",
     "contextSourceEstimate": "estimate",
     "contextRingTooltip": "{detail}Source: {source}. The CLI status line shows what is left until auto-compaction instead — different basis, both correct.",
+    "contextRingCacheHint": " Cache {rate}.",
     "contextPanelTitle": "Context",
     "contextPanelSegment": {
       "input": "Input",
@@ -992,6 +993,7 @@
     "contextPanelWindowTotal": "Total window",
     "contextPanelWindowUnknown": "unknown",
     "contextPanelSource": "Source",
+    "contextPanelCacheRate": "Cache hit rate",
     "contextPanelNote": "The CLI status line shows what is left until auto-compaction instead — different basis, both correct.",
     "contextPanelClose": "Close",
     "slashCommands": {
