@@ -741,7 +741,15 @@ class ChatEventSink:
       raises into the ACP turn
     """
 
-    def __init__(self, directory: Optional[Path], session_id: str):
+    def __init__(
+        self, directory: Optional[Path], session_id: str, task_id: Optional[str] = None
+    ):
+        """``task_id``: set for a TASK run (bridge serve loop), ``None`` for
+        the chat daemon. It lands in the session header as ``taskId``: every
+        attempt of a task (continue nudge, reflection retry) is a NEW ACP
+        session without the dispatch prompt, and the backend's todo ->
+        checklist sync finds the task's plan by this tag — not by "newest
+        session", which is the chat (live 12.10.2026)."""
         self._dir = directory
         self._session_id = session_id or "acp-session"
         self._path: Optional[Path] = None
@@ -756,6 +764,8 @@ class ChatEventSink:
                 "cwd": os.environ.get("OMP_ACP_CWD") or "",
                 "bridge": "acp",
             }
+            if task_id:
+                header["taskId"] = task_id
             try:
                 with open(candidate, "a", encoding="utf-8") as fh:
                     fh.write(json.dumps(header, ensure_ascii=False) + "\n")

@@ -53,6 +53,7 @@ from app.services.reference_ingest import (
 )
 from app.services.sse import _sse_generator
 from app.services.transcript_adapters import adapter_for
+from app.services.checklist_todo_sync import chat_todo_sync
 from app.services import fresh_session
 from app.services.transcript_chat import (
     read_history,
@@ -220,7 +221,9 @@ async def get_chat_history(
             },
             "hasMore": False,
             "subagentRuns": [],
-            "todos": None,
+            # A fresh chat has no list of its own — but a task the agent
+            # is working on still shows its list.
+            "todos": await chat_todo_sync.chat_todos(session, agent, adapter, None),
             "capabilities": capabilities,
         }
 
@@ -233,6 +236,10 @@ async def get_chat_history(
         observed_windows=observed_windows,
     )
     history["session"]["aliveness"] = await resolve_aliveness(agent, path, adapter)
+    # While the agent works a task, the panel shows THAT task's list: an ACP
+    # task run writes its plan into its own session file, not into the chat
+    # session this page reads (live 12.10.2026).
+    history["todos"] = await chat_todo_sync.chat_todos(session, agent, adapter, history.get("todos"))
     history["capabilities"] = capabilities
     return history
 

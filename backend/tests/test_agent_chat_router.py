@@ -2253,3 +2253,72 @@ async def test_tailer_rearms_a_torn_stream_on_the_probe_tick(
         assert ensured[0] is agent
     finally:
         await manager.release("agent-rearm")
+
+
+async def test_history_todos_follow_the_task_the_agent_works(auth_client: AsyncClient, tmp_path, monkeypatch):
+    """Live 12.10.2026: an ACP agent's task run writes its plan into its OWN
+    session file; the chat page reads the chat session. While the agent works
+    the task, ``todos`` must carry the task's list."""
+    from datetime import datetime, timedelta, timezone
+    from types import SimpleNamespace
+
+    import app.routers.agent_chat as agent_chat_mod
+    from app.models.agent import Agent
+    from app.models.board import Board
+    from app.models.task import Task
+    from app.services.transcript_adapters import adapter_for as real_adapter_for
+
+    board_id, agent_id, task_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    t0 = (datetime.now(timezone.utc) - timedelta(minutes=5)).replace(microsecond=0)
+    iso = lambda dt: dt.isoformat().replace("+00:00", "Z")  # noqa: E731
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(Board(id=board_id, name="B", slug=f"b-{uuid.uuid4().hex[:8]}"))
+        s.add(Agent(id=agent_id, name="Omp", role="developer", board_id=board_id, slug="omp-x",
+                    agent_runtime="cli-bridge", harness="omp"))
+        s.add(Task(id=task_id, board_id=board_id, title="T", status="in_progress",
+                   assigned_agent_id=agent_id, dispatched_at=t0))
+        await s.commit()
+        agent = await s.get(Agent, agent_id)
+        agent.current_task_id = task_id
+        s.add(agent)
+        await s.commit()
+
+    root = tmp_path / "omp-sessions"
+    ws = root / "--workspace--"
+    ws.mkdir(parents=True)
+    (ws / "task-run.jsonl").write_text(
+        json.dumps({"type": "session", "version": 3, "id": "task-run", "timestamp": iso(t0),
+                    "bridge": "acp", "taskId": str(task_id)}) + "\n"
+        + json.dumps({"type": "custom", "customType": "acp-plan", "id": "p1", "timestamp": iso(t0 + timedelta(seconds=30)),
+                      "data": {"entries": [{"content": "Task step", "status": "in_progress"}]}}) + "\n"
+    )
+    (ws / "chat.jsonl").write_text(
+        json.dumps({"type": "session", "version": 3, "id": "chat", "timestamp": iso(t0), "bridge": "acp"}) + "\n"
+        + json.dumps({"type": "message", "id": "m1", "timestamp": iso(t0 + timedelta(minutes=4)),
+                      "message": {"role": "user", "content": [{"type": "text", "text": "hi"}]}}) + "\n"
+    )
+    adapter = dataclasses.replace(
+        real_adapter_for(SimpleNamespace(harness="omp")),
+        resolve_transcript_dir=lambda a: root,
+        transcript_allowed=lambda a, p: root in p.parents,
+    )
+
+    async def _empty(*_a, **_k):
+        return {}
+
+    async def _alive(*_a, **_k):
+        return "idle"
+
+    monkeypatch.setattr(agent_chat_mod, "adapter_for", lambda a: adapter)
+    monkeypatch.setattr(agent_chat_mod, "effort_capabilities", _empty)
+    monkeypatch.setattr(agent_chat_mod, "slash_command_capabilities", _empty)
+    monkeypatch.setattr(agent_chat_mod, "model_options_capabilities", _empty)
+    monkeypatch.setattr(agent_chat_mod, "resolve_aliveness", _alive)
+    monkeypatch.setattr(agent_chat_mod, "get_observed_model_windows", _empty)
+
+    resp = await auth_client.get(f"/api/v1/agents/{agent_id}/chat/history")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["session"]["sessionId"] == "chat"  # the page is the chat session ...
+    assert body["todos"]["taskId"] == str(task_id)  # ... the panel is the task's list
+    assert [i["content"] for i in body["todos"]["items"]] == ["Task step"]

@@ -34,13 +34,27 @@ Rules (all tested in tests/test_checklist_todo_sync.py):
   otherwise be refused for rows the model already completed.
 
 When does it run? ``ChatTodoSync`` (a background loop, setting
-``chat_todo_sync_interval``) looks at every agent whose ``current_task_id``
-points at a task in ``in_progress`` assigned to it, reads its active chat
-transcript through the same adapter + privacy gate the chat view uses
-(``transcript_adapters.adapter_for``), and applies the newest todo snapshot
-written AFTER the task was dispatched — a list left over from the previous
-task in the same session never lands on the new one. Heads are not synced
-yet (they have no ``current_task_id``).
+``chat_todo_sync_interval``) takes every agent whose ``current_task_id``
+points at a task in ``in_progress`` assigned to it, PLUS every task that left
+``in_progress`` within ``FINAL_SYNC_LOOKBACK`` (from ``task_events``, worker =
+the agent of the last transition into in_progress) — so a card that finishes
+between two ticks still gets its final list.
+
+Which transcript? The TASK's, not "the active chat session" (live failure
+12.10.2026: an ACP agent's chat session and its task runs are different
+files; the plan sat in the task run, the sync read the chat, 0 rows). A
+session file belongs to a task when the omp bridge's session header carries
+``taskId`` (every attempt of a task is a new ACP session) or a user turn
+carries the dispatch prompt's ``**Task ID:** <uuid>`` (Claude Code, older
+bridge images). Inside one file, a todo belongs to the task named last
+before it — a Claude Code session can work several tasks in a row. Only when
+no file names the task does the sync fall back to the active session's
+untagged list. All reads go through the chat view's adapter + privacy gate
+(``transcript_adapters.adapter_for``), and only snapshots written AFTER the
+task was dispatched count. While an agent works a task, its chat panel shows
+that task's list too (``chat_todos`` for the history page, a live
+``chat_event`` push from the loop). Heads are not synced yet (they have no
+``current_task_id``).
 """
 from __future__ import annotations
 
@@ -48,9 +62,10 @@ import asyncio
 import json
 import logging
 import re
+import threading
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -159,14 +174,49 @@ async def apply_todo_snapshot(
 
 # ── the loop ────────────────────────────────────────────────────────────────
 
+#: Where a harness keeps its session files below the transcript root: flat
+#: (Claude Code) or one per-cwd folder deep (omp, Hermes). Deeper files are
+#: subagents, previews or blobs — never a task's own session.
+_SESSION_GLOBS = ("*.jsonl", "*/*.jsonl")
+
+#: Lines that can name the task a session works on: the omp bridge's session
+#: header (``taskId``) or the dispatch prompt (``**Task ID:** <uuid>``).
+_TASK_LINE = re.compile(rb'Task ID:\*\* |"taskId"')
+_DISPATCH_MARKER = re.compile(
+    r"\*\*Task ID:\*\* ([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"
+)
+
+#: How long after a task left ``in_progress`` (review/done/blocked/...) the
+#: loop still settles its checklist with the final snapshot. Several ticks
+#: on purpose: a bind mount can show a file's last bytes a moment late, and
+#: re-applying the same snapshot is free (digest + idempotent apply).
+FINAL_SYNC_LOOKBACK = timedelta(minutes=10)
+#: For the untagged fallback only: a list written this long after the task
+#: left in_progress still counts (the agent's last TodoWrite and its
+#: ``mc review`` can land in either order within one turn).
+FINAL_SYNC_GRACE = timedelta(seconds=60)
+#: A session file last written this long before the task started cannot
+#: hold the task's list (mtime is only a pre-filter; content decides).
+_MTIME_SLACK = timedelta(minutes=2)
+_MAX_CURSORS = 256
+
 
 @dataclass
 class _Cursor:
+    """Incremental reader of ONE session file.
+
+    Every todo snapshot is filed under the task whose marker came last
+    before it in the file (``None`` = no task named yet — a plain chat).
+    One Claude Code session can work several tasks in a row; an omp bridge
+    run names its task once, in the header."""
+
     path: Path
     offset: int = 0
     buffer: bytes = b""
     parser: Callable[..., list[dict[str, Any]]] | None = None
-    latest: dict[str, Any] | None = None
+    segment: str | None = None
+    tasks: set[str] = field(default_factory=set)
+    latest: dict[str | None, dict[str, Any]] = field(default_factory=dict)
 
 
 def _parse_ts(ts: Any) -> datetime | None:
@@ -193,54 +243,238 @@ def _task_window_start(task: Any) -> datetime | None:
     return max(stamps) if stamps else _aware(getattr(task, "created_at", None))
 
 
+def _task_marker(obj: dict[str, Any]) -> str | None:
+    """The task id a transcript entry declares, or ``None``.
+
+    Two sources, both written BEFORE the work they name:
+      * the omp bridge's session header of a task run (``taskId``) — every
+        attempt of a task (continue nudge, reflection retry) is a new ACP
+        session without the dispatch prompt, so the header is what ties it
+        to the task;
+      * the dispatch prompt in a USER turn (``**Task ID:** <uuid>``,
+        ``dispatch_message_builder``) — Claude Code and older bridge images.
+    Tool results and assistant text never count: an agent that prints a
+    dispatch (``mc task show``) does not start working that task."""
+    if obj.get("type") == "session":
+        task_id = obj.get("taskId")
+        return task_id.lower() if isinstance(task_id, str) and task_id else None
+    if obj.get("type") not in ("message", "user"):
+        return None
+    message = obj.get("message")
+    if not isinstance(message, dict) or message.get("role") != "user":
+        return None
+    content = message.get("content")
+    if isinstance(content, str):
+        texts = [content]
+    elif isinstance(content, list):
+        texts = [b.get("text") for b in content if isinstance(b, dict) and b.get("type") == "text"]
+    else:
+        return None
+    for text in texts:
+        if isinstance(text, str):
+            match = _DISPATCH_MARKER.search(text)
+            if match:
+                return match.group(1).lower()
+    return None
+
+
+def _newer(a: dict[str, Any] | None, b: dict[str, Any] | None) -> dict[str, Any] | None:
+    if a is None:
+        return b
+    if b is None:
+        return a
+    ta, tb = _parse_ts(a.get("ts")), _parse_ts(b.get("ts"))
+    if ta is None:
+        return b
+    if tb is None:
+        return a
+    return b if tb >= ta else a
+
+
+def _in_window(todo: dict[str, Any] | None, start: datetime | None, until: datetime | None) -> bool:
+    if todo is None:
+        return False
+    written = _parse_ts(todo.get("ts"))
+    if written is None:
+        return False
+    if start is not None and written < start:
+        return False
+    return until is None or written <= until
+
+
 @dataclass
 class ChatTodoSync:
     """Background loop; also callable once (``sync_once``) for tests."""
 
-    _cursors: dict[str, _Cursor] = field(default_factory=dict)
+    _cursors: dict[Path, _Cursor] = field(default_factory=dict)
     _applied: dict[str, str] = field(default_factory=dict)
+    _broadcast: dict[str, str] = field(default_factory=dict)
+    _lock: threading.Lock = field(default_factory=threading.Lock)
     _task: asyncio.Task | None = None
     _running: bool = False
 
-    def _latest_todo(self, agent: Any, adapter: Any) -> dict[str, Any] | None:
-        """Newest todo snapshot of the agent's ACTIVE session (sync I/O —
-        call via ``asyncio.to_thread``). Reads only new bytes per tick."""
-        tdir = adapter.resolve_transcript_dir(agent)
-        if tdir is None:
-            return None
-        found = adapter.find_active_session(tdir)
-        if not found:
-            return None
-        path = found[0]
-        if not adapter.transcript_allowed(agent, path):
-            return None
-        agent_key = str(agent.id)
-        cursor = self._cursors.get(agent_key)
-        if cursor is None or cursor.path != path:
-            cursor = _Cursor(path=path, parser=adapter.new_parser())
-            self._cursors[agent_key] = cursor
+    # ── reading (sync I/O — always via asyncio.to_thread) ──────────────────
+
+    def _advance(self, path: Path, adapter: Any) -> _Cursor:
+        cursor = self._cursors.get(path)
+        if cursor is None:
+            cursor = _Cursor(path=path, parser=adapter.new_parser(path))
+            self._cursors[path] = cursor
+            while len(self._cursors) > _MAX_CURSORS:
+                self._cursors.pop(next(iter(self._cursors)))
         try:
             with open(path, "rb") as fh:
                 size = fh.seek(0, 2)
                 if size < cursor.offset:  # truncated/replaced: start over
-                    cursor.offset, cursor.buffer, cursor.latest = 0, b"", None
+                    cursor.offset, cursor.buffer, cursor.segment = 0, b"", None
+                    cursor.tasks.clear()
+                    cursor.latest.clear()
                 fh.seek(cursor.offset)
                 chunk = fh.read()
         except OSError:
-            return cursor.latest
+            return cursor
         cursor.offset += len(chunk)
         lines = (cursor.buffer + chunk).split(b"\n")
         cursor.buffer = lines.pop()
         for raw in lines:
-            if not _TODO_LINE.search(raw):
+            names_task = _TASK_LINE.search(raw) is not None
+            has_todo = _TODO_LINE.search(raw) is not None
+            if not (names_task or has_todo):
                 continue
-            for ev in cursor.parser(raw.decode("utf-8", errors="replace").strip(), None):
-                if ev.get("kind") == "todo":
-                    cursor.latest = ev
-        return cursor.latest
+            text = raw.decode("utf-8", errors="replace").strip()
+            if names_task:
+                try:
+                    obj = json.loads(text)
+                except ValueError:
+                    obj = None
+                marker = _task_marker(obj) if isinstance(obj, dict) else None
+                if marker is not None:
+                    cursor.segment = marker
+                    cursor.tasks.add(marker)
+            if has_todo:
+                for ev in cursor.parser(text, None):
+                    if ev.get("kind") == "todo":
+                        cursor.latest[cursor.segment] = ev
+        return cursor
+
+    def _session_files(self, root: Path, since: datetime | None) -> list[Path]:
+        floor = (since - _MTIME_SLACK).timestamp() if since is not None else None
+        found: list[Path] = []
+        for pattern in _SESSION_GLOBS:
+            for path in root.glob(pattern):
+                try:
+                    if floor is not None and path.stat().st_mtime < floor:
+                        continue
+                except OSError:
+                    continue
+                found.append(path)
+        return found
+
+    def find_task_todo(
+        self,
+        agent: Any,
+        adapter: Any,
+        task_id: str,
+        since: datetime | None,
+        until: datetime | None = None,
+    ) -> dict[str, Any] | None:
+        """The newest todo snapshot the agent wrote WHILE working this task.
+
+        Read from every session file that names the task (bridge header or
+        dispatch prompt) — the task's own runs, not "the newest session":
+        an ACP agent's chat session and its task runs are different files
+        (live 12.10.2026: the plan sat in the task run, the sync read the
+        chat and found nothing). Only when no file names the task does it
+        fall back to the active session's untagged list (``until`` bounds
+        that fallback for a task that already finished)."""
+        root = adapter.resolve_transcript_dir(agent)
+        if root is None:
+            return None
+        task_id = task_id.lower()
+        with self._lock:
+            best: dict[str, Any] | None = None
+            tagged = False
+            for path in self._session_files(root, since):
+                if not adapter.transcript_allowed(agent, path):
+                    continue
+                cursor = self._advance(path, adapter)
+                if task_id not in cursor.tasks:
+                    continue
+                tagged = True
+                todo = cursor.latest.get(task_id)
+                if _in_window(todo, since, None):
+                    best = _newer(best, todo)
+            if tagged:
+                return best
+            found = adapter.find_active_session(root)
+            if not found or not adapter.transcript_allowed(agent, found[0]):
+                return None
+            todo = self._advance(found[0], adapter).latest.get(None)
+            return todo if _in_window(todo, since, until) else None
+
+    # ── which tasks ────────────────────────────────────────────────────────
+
+    async def _recently_finished(
+        self, session: AsyncSession, skip: set[uuid.UUID]
+    ) -> list[tuple[Any, Any, datetime]]:
+        """Tasks that LEFT in_progress within ``FINAL_SYNC_LOOKBACK``, with
+        the agent that worked them and when they left.
+
+        Read from the status event log (``task_events``), not from memory:
+        the final pass must not depend on the loop having seen the task
+        while it ran (a card shorter than one interval never was), and it
+        survives a backend restart. The worker is the agent of the latest
+        transition INTO in_progress — after ``review`` the assignee may
+        already be the reviewer."""
+        from app.models.agent import Agent
+        from app.models.task import Task, TaskEvent
+
+        cutoff = utcnow() - FINAL_SYNC_LOOKBACK
+        leaves = (
+            await session.exec(
+                select(TaskEvent)
+                .where(
+                    TaskEvent.from_status == "in_progress",
+                    TaskEvent.to_status != "in_progress",
+                    TaskEvent.created_at >= cutoff,
+                )
+                .order_by(TaskEvent.created_at)
+            )
+        ).all()
+        last_leave: dict[uuid.UUID, Any] = {}
+        for ev in leaves:
+            last_leave[ev.task_id] = ev
+
+        out: list[tuple[Any, Any, datetime]] = []
+        for task_id, leave in last_leave.items():
+            if task_id in skip:
+                continue
+            task = await session.get(Task, task_id)
+            if task is None or task.status == "in_progress":
+                continue
+            start = (
+                await session.exec(
+                    select(TaskEvent)
+                    .where(
+                        TaskEvent.task_id == task_id,
+                        TaskEvent.to_status == "in_progress",
+                        TaskEvent.agent_id.is_not(None),
+                        TaskEvent.created_at <= leave.created_at,
+                    )
+                    .order_by(TaskEvent.created_at.desc())
+                    .limit(1)
+                )
+            ).first()
+            worker_id = (start.agent_id if start else None) or leave.agent_id or task.assigned_agent_id
+            agent = await session.get(Agent, worker_id) if worker_id else None
+            if agent is None:
+                continue
+            out.append((agent, task, _aware(leave.created_at)))
+        return out
 
     async def sync_once(self, session: AsyncSession, adapter_for: Callable[[Any], Any] | None = None) -> int:
-        """One pass over all working agents. Returns the number of tasks
+        """One pass: every task an agent is working on, plus every task that
+        just left in_progress (its final list). Returns the number of tasks
         whose checklist changed."""
         from app.models.agent import Agent
         from app.models.task import Task
@@ -250,32 +484,33 @@ class ChatTodoSync:
 
             adapter_for = _default
 
-        pairs = (
+        working = (
             await session.exec(
                 select(Agent, Task)
                 .join(Task, Agent.current_task_id == Task.id)
                 .where(Task.status == "in_progress", Task.assigned_agent_id == Agent.id)
             )
         ).all()
-        live_agents = {str(a.id) for a, _ in pairs}
-        for stale in set(self._cursors) - live_agents:
-            self._cursors.pop(stale, None)
+        jobs: list[tuple[Any, Any, datetime | None, bool]] = [(a, t, None, True) for a, t in working]
+        finished = await self._recently_finished(session, {t.id for _, t in working})
+        jobs += [(a, t, left + FINAL_SYNC_GRACE, False) for a, t, left in finished]
 
         changed_tasks = 0
-        for agent, task in pairs:
+        for agent, task, until, live in jobs:
             try:
-                todo = await asyncio.to_thread(self._latest_todo, agent, adapter_for(agent))
+                todo = await asyncio.to_thread(
+                    self.find_task_todo, agent, adapter_for(agent), str(task.id), _task_window_start(task), until
+                )
             except Exception:  # noqa: BLE001 — one agent must not stop the pass
                 logger.debug("todo sync: transcript read failed for agent %s", agent.id, exc_info=True)
                 continue
             if todo is None:
                 continue
-            written = _parse_ts(todo.get("ts"))
-            start = _task_window_start(task)
-            if written is None or (start is not None and written < start):
-                continue
             digest = json.dumps(todo.get("items") or [], sort_keys=True)
             task_key = str(task.id)
+            if live and self._broadcast.get(str(agent.id)) != digest:
+                await self._push_to_chat(agent.id, task.id, todo)
+                self._broadcast[str(agent.id)] = digest
             if self._applied.get(task_key) == digest:
                 continue
             if await apply_todo_snapshot(session, task, todo.get("items") or [], agent.id):
@@ -283,6 +518,45 @@ class ChatTodoSync:
                 changed_tasks += 1
             self._applied[task_key] = digest
         return changed_tasks
+
+    # ── the chat panel ─────────────────────────────────────────────────────
+
+    async def chat_todos(
+        self, session: AsyncSession, agent: Any, adapter: Any, own: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        """The list the agent's chat panel shows: while the agent works a
+        task, that task's snapshot (from the task's own session — the
+        operator watches the AGENT's chat, not the task run); otherwise, or
+        when the task has no list yet, the chat session's own (``own``)."""
+        from app.models.task import Task
+
+        task_id = getattr(agent, "current_task_id", None)
+        if task_id is None:
+            return own
+        task = await session.get(Task, task_id)
+        if task is None or task.status != "in_progress" or task.assigned_agent_id != agent.id:
+            return own
+        try:
+            todo = await asyncio.to_thread(
+                self.find_task_todo, agent, adapter, str(task.id), _task_window_start(task)
+            )
+        except Exception:  # noqa: BLE001 — the panel is a nicety, history must load
+            logger.debug("todo panel: task snapshot read failed for agent %s", agent.id, exc_info=True)
+            return own
+        return {**todo, "taskId": str(task.id)} if todo else own
+
+    async def _push_to_chat(self, agent_id: Any, task_id: Any, todo: dict[str, Any]) -> None:
+        """Live update for an open chat: the tailer only follows the chat
+        session, so a task run's new list reaches the panel through here."""
+        try:
+            from app.redis_client import RedisKeys
+            from app.services import sse
+
+            await sse.broadcast(
+                RedisKeys.agent_chat_channel(str(agent_id)), "chat_event", {**todo, "taskId": str(task_id)}
+            )
+        except Exception:  # noqa: BLE001 — a missed live frame heals on reload
+            logger.debug("todo sync: chat broadcast failed for agent %s", agent_id, exc_info=True)
 
     async def start(self) -> None:
         interval = settings.chat_todo_sync_interval
