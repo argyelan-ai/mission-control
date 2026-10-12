@@ -1058,7 +1058,19 @@
       "browser": "Browser",
       "close": "Close panel"
     },
-    "queueTakeBackFailed": "Couldn't take the queued messages back"
+    "queueTakeBackFailed": "Couldn't take the queued messages back",
+    "todo": {
+      "progress": "{done}/{total} done",
+      "panelLabel": "Todo list: {done} of {total} done",
+      "showList": "Show todo list",
+      "hideList": "Hide todo list",
+      "allDone": "All done",
+      "statusPending": "open",
+      "statusInProgress": "in progress",
+      "statusDone": "done",
+      "statusBlocked": "blocked",
+      "statusSkipped": "skipped"
+    }
   },
   "shell": {
     "searchPlaceholder": "Search or command...",

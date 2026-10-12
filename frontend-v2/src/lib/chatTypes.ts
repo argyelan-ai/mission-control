@@ -189,6 +189,27 @@ export interface NotificationEvent {
   summary: string | null;
 }
 
+/** One item of an agent's todo list, normalised across harnesses
+ *  (backend `chat_todos.py`): Claude Code `TodoWrite`, an ACP `plan`,
+ *  Codex `update_plan` all arrive in this one shape. */
+export interface TodoItem {
+  content: string;
+  status: "pending" | "in_progress" | "completed";
+  priority?: "high" | "medium" | "low";
+}
+
+/** The agent's whole todo list at one moment — a SNAPSHOT, never a delta.
+ *  The newest one per session wins (`chatReducer`), it lives in its own slot
+ *  (`todos`), never in the timeline. */
+export interface TodoEvent {
+  kind: "todo";
+  uuid: string;
+  ts: string;
+  /** Where it came from (tool name or `acp_plan`) — for debugging only. */
+  source: string;
+  items: TodoItem[];
+}
+
 export type ChatEvent =
   | MessageEvent
   | ToolEvent
@@ -198,6 +219,7 @@ export type ChatEvent =
   | StateEvent
   | PreviewEvent
   | NotificationEvent
+  | TodoEvent
   | SessionChangedEvent;
 
 /** The subset of ChatEvent kinds that carry a `uuid` and belong in the
@@ -426,6 +448,9 @@ export interface ChatHistoryResponse {
    *  Handshake, nicht ueber den Live-Strom: ein Subagent, der NACH dem Laden
    *  startet, erscheint erst beim naechsten Abruf. */
   subagentRuns?: SubagentRun[];
+  /** The session's newest todo snapshot (whole file, not just this page) or
+   *  `null`. Absent on older backends. Live updates arrive as `todo` events. */
+  todos?: TodoEvent | null;
 }
 
 /** Der Verlauf EINES Subagenten. Wie eine History-Seite, aber ohne

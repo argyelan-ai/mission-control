@@ -1058,7 +1058,19 @@
       "browser": "Browser",
       "close": "Panel schliessen"
     },
-    "queueTakeBackFailed": "Eingereihte Nachrichten konnten nicht zurückgeholt werden"
+    "queueTakeBackFailed": "Eingereihte Nachrichten konnten nicht zurückgeholt werden",
+    "todo": {
+      "progress": "{done}/{total} erledigt",
+      "panelLabel": "Aufgabenliste: {done} von {total} erledigt",
+      "showList": "Aufgabenliste zeigen",
+      "hideList": "Aufgabenliste ausblenden",
+      "allDone": "Alles erledigt",
+      "statusPending": "offen",
+      "statusInProgress": "in Arbeit",
+      "statusDone": "erledigt",
+      "statusBlocked": "blockiert",
+      "statusSkipped": "übersprungen"
+    }
   },
   "shell": {
     "searchPlaceholder": "Suchen oder Befehl...",

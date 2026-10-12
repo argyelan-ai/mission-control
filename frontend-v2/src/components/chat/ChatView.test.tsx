@@ -225,6 +225,7 @@ function mkStream(overrides: Partial<UseChatStreamResult> = {}): UseChatStreamRe
     echoAgentStarting: vi.fn(),
     awaitingResponse: false,
     preview: null,
+    todos: null,
     withdrawQueued: vi.fn(() => []),
     ...overrides,
   };
@@ -513,6 +514,29 @@ function renderChatView(overrides: Partial<React.ComponentProps<typeof ChatView>
 describe("ChatView", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("pins the todo panel under the conversation when the agent has a list", () => {
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG], todos: {
+      kind: "todo" as const,
+      uuid: "t1",
+      ts: "2026-10-12T09:00:00.000Z",
+      source: "TodoWrite",
+      items: [
+        { content: "Read the code", status: "completed" as const },
+        { content: "Write the test", status: "in_progress" as const },
+        { content: "Ship it", status: "pending" as const },
+      ],
+    } }));
+    renderChatView();
+    expect(screen.getByTestId("todo-progress")).toHaveTextContent("1/3 done");
+    expect(screen.getByTestId("todo-current")).toHaveTextContent("Write the test");
+  });
+
+  it("shows no todo panel without a list", () => {
+    mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
+    renderChatView();
+    expect(screen.queryByTestId("todo-panel")).not.toBeInTheDocument();
   });
 
   it("renders the chat timeline in chat mode", () => {
