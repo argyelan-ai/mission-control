@@ -61,6 +61,7 @@ import { TerminalPanel, type AgentWithState } from "./TerminalPanel";
 import { ChatOptionsSheet } from "./ChatOptionsSheet";
 import { VoiceButton } from "@/components/voice/VoiceWidget";
 import { VoiceLiveDock } from "@/components/voice/live/VoiceLive";
+import { useVoiceLiveActive } from "@/components/voice/live/voiceLiveActivity";
 import { CENTER_VIEWS, DETAIL_LEVELS, type CenterView, type DetailLevel } from "./chatOptions";
 import type { PanelKind } from "./PanelRail";
 
@@ -397,6 +398,7 @@ export function ChatView({
   const agentStream = useChatStream(head ? null : agent?.id ?? null, streamEnabled);
   const headStream = useHeadTranscript(head?.run_id ?? null, head?.state ?? null);
   const stream = head ? headStream : agentStream;
+  const voiceCallActive = useVoiceLiveActive(head ? null : agent?.id);
   const headMeta = useHeadTranscriptMeta(head?.run_id ?? null);
 
   /* Live tool output reaches the rows through a store, not a context value:
@@ -975,9 +977,14 @@ export function ChatView({
             ihm genau den Vorteil. Der Knopf bringt seine 44px-Trefferflaeche
             selbst mit; `-m-1` am Rahmen haelt den Kopf auf seiner Hoehe,
             dieselbe Rechnung wie bei `TOUCH_TARGET`. */}
-        <span className="flex md:hidden -m-1">
-          <VoiceButton size={36} />
-        </span>
+        {/* While a live voice call runs in THIS chat, the Jarvis mic steps
+            aside: two mics with two meanings side by side confused the
+            operator (voice PR 1 review). Jarvis itself is unchanged. */}
+        {!voiceCallActive && (
+          <span className="flex md:hidden -m-1">
+            <VoiceButton size={36} />
+          </span>
+        )}
 
         <button
           type="button"
@@ -1314,7 +1321,12 @@ export function ChatView({
               {!isAdmin ? (
                 <AdminOnlyNotice compact message={t("inputAdminOnly")} />
               ) : agent ? (
-                <VoiceLiveDock agentId={agent.id} agentName={agent.name}>
+                <VoiceLiveDock
+                  agentId={agent.id}
+                  agentName={agent.name}
+                  // Delivered by MC already — only the echo, no second send.
+                  onForwarded={(text, midTurn) => stream.echoSent(text, midTurn)}
+                >
                 {(voiceSlot) => (
                 <Composer
                   voiceSlot={voiceSlot}

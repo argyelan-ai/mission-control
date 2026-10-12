@@ -14,9 +14,11 @@ design and are pinned by ``tests/test_voice_live.py``:
 3. The persona is versioned text with a snapshot test, so a wording change is
    a visible diff, never a silent drift.
 
-PR 1 has no tools: the voice can listen and talk, it cannot pass anything to
-the agent yet (``send_to_agent`` arrives in PR 2). The persona says so
-honestly instead of pretending.
+Since PR 2 the voice has two tools, executed by MC (``voice_live_tools``):
+``send_to_agent`` passes the operator's request into this chat (with their
+verbatim words) and ``get_agent_status`` reads a redacted snapshot. Stopping
+the agent by voice comes with PR 4; until then the persona says so honestly
+and points to the Stop button.
 """
 
 from __future__ import annotations
@@ -46,7 +48,7 @@ CLIENT_SECRET_TTL_S = 60
 # speech-to-text model MC already configures (JARVIS_STT_MODEL). Language
 # left unset on purpose: the operator switches between German and English.
 
-PERSONA_VERSION = "v0"
+PERSONA_VERSION = "v1"
 
 Lang = Literal["de", "en"]
 
@@ -73,7 +75,7 @@ _LANG_LINE = {
 
 
 def build_instructions(agent_name: str, lang: Lang) -> str:
-    """Persona v0 — ears and mouth, no hands yet (rules from the Grok
+    """Persona v1 — ears and mouth plus two tools (rules from the Grok
     behaviour table, ``grok-verhalten.md`` §4, and bauplan B2)."""
     name = (agent_name or "the agent").strip()[:80]
     return "\n".join(
@@ -89,27 +91,76 @@ def build_instructions(agent_name: str, lang: Lang) -> str:
             "No lists, no markdown, no code read aloud.",
             "",
             "# Backchannel",
-            "When the operator gives you something to pass on, acknowledge it in a few words.",
+            "Before you pass something on, say one short confirmation, for example "
+            "\"Notiert, geb ich weiter.\" or \"Got it, passing it on.\" Then call the tool.",
             "",
             "# Interruptions",
             "If the operator talks while you speak, stop and listen. Being interrupted is normal; "
-            "never repeat the whole previous answer.",
+            "never repeat the whole previous answer. Talking over you never stops the agent.",
             "",
-            "# What you can do in this version",
-            "You cannot pass messages to the agent yet and you cannot see its progress. "
-            f"If the operator asks you to tell {name} something or to do work, say honestly that "
-            "passing on by voice is not built yet and that they should type it in the chat.",
-            "Small talk and general questions you may answer yourself.",
+            "# Delegation",
+            f"Use send_to_agent for every request that needs {name} to do, change, check or answer "
+            "something about the work. Put the request in text, short, in the operator's words; "
+            "add nothing they did not say. Their exact words are attached automatically.",
+            f"A new request while {name} is working is an addition, never a cancel: pass it on, "
+            "the running work continues.",
+            "Do NOT delegate when: the operator only asks what the agent is doing (use "
+            "get_agent_status), makes small talk, asks a general question you can answer, or "
+            "says yes/no to an approval.",
+            "After send_to_agent, repeat in one sentence what its result says (for example that it "
+            "comes after the current step). If it says NOT delivered, say so plainly and suggest "
+            "typing it in the chat.",
+            "",
+            "# Status",
+            f"When asked what {name} is doing, call get_agent_status and answer from it in one or "
+            "two sentences. Never invent a step, a file or a result that is not in it.",
             "",
             "# Hard rules",
-            "1. You have no hands. Never claim you did, started, sent or changed anything.",
-            "2. Never say something is done, finished or successful. You cannot know it.",
-            f"3. Never invent what {name} is doing or has done. If asked, say you cannot see it yet.",
-            "4. Approvals are never given by voice. If the operator says yes to an approval, "
-            "ask them to tap it in the chat.",
-            "5. Never read out keys, tokens, passwords or file contents.",
+            "1. You have no hands of your own. You only act through send_to_agent. Never claim you "
+            "did, changed or fixed anything yourself.",
+            f"2. Never say something is done, finished or successful unless {name} reported it. "
+            "Passing on is not doing: say \"passed on, he is working on it\".",
+            "3. Approvals are never given by voice. If an approval is needed or the operator says yes "
+            "to one, say: please tap it in the chat (\"bitte im Chat antippen\").",
+            "4. Stopping the agent by voice is not available yet. If the operator wants to stop "
+            f"{name}, say so and point to the Stop button in the chat. Never pass \"stop\" on as a "
+            "message.",
+            "5. Never read out keys, tokens, passwords, file contents or tool output.",
         ]
     )
+
+
+TOOLS = [
+    {
+        "type": "function",
+        "name": "send_to_agent",
+        "description": (
+            "Pass the operator's request on to the agent of this chat as a chat message. "
+            "The running work continues; the request is added, never a cancel. The operator's "
+            "exact words are attached automatically. Returns whether it was delivered."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "text": {
+                    "type": "string",
+                    "description": "The request, short, in the operator's language and words.",
+                }
+            },
+            "required": ["text"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "get_agent_status",
+        "description": (
+            "What the agent is doing right now: state, current step, last tool. "
+            "Read-only; does not disturb the agent."
+        ),
+        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+]
 
 
 def build_session_config(agent_name: str, lang: Lang) -> dict:
@@ -118,6 +169,8 @@ def build_session_config(agent_name: str, lang: Lang) -> dict:
         "model": settings.voice_live_model,
         "instructions": build_instructions(agent_name, lang),
         "output_modalities": ["audio"],
+        "tools": TOOLS,
+        "tool_choice": "auto",
         "audio": {
             "input": {
                 "noise_reduction": {"type": "near_field"},

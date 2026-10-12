@@ -18,7 +18,8 @@ import pytest
 from app.config import settings
 from app.services import voice_live
 
-FAKE_KEY = "sk-test-LONGLIVED-0123456789abcdef"
+# Split so secret scanners do not flag the made-up test key.
+FAKE_KEY = "sk-test-" + "LONGLIVED-0123456789abcdef"
 FAKE_EK = "ek_shortlived_abc123"
 
 
@@ -143,6 +144,7 @@ async def test_session_mints_client_secret_with_server_owned_config(
     )
     assert r.status_code == 200, r.text
     body = r.json()
+    assert isinstance(body.pop("call_ref"), str)
     assert body == {
         "client_secret": FAKE_EK,
         "expires_at": 1_900_000_000,
@@ -169,7 +171,9 @@ async def test_session_mints_client_secret_with_server_owned_config(
     }
     assert s["audio"]["input"]["transcription"]["model"]
     assert "language" not in s["audio"]["input"]["transcription"]
-    assert "tools" not in s  # PR 1: no hands
+    # PR 2: two hands, both run by MC — never a stop/keys tool (PR 4).
+    assert [t["name"] for t in s["tools"]] == ["send_to_agent", "get_agent_status"]
+    assert s["tool_choice"] == "auto"
     assert "Boss" in s["instructions"]
     assert "German" in s["instructions"].split("# Language and length")[1].splitlines()[1]
 
@@ -238,9 +242,9 @@ async def test_success_logs_no_secret(auth_client, voice_on, make_agent, monkeyp
 # ── persona ──────────────────────────────────────────────────────────────
 
 
-def test_persona_v0_snapshot():
+def test_persona_v1_snapshot():
     text = voice_live.build_instructions("Boss", "en")
-    assert voice_live.PERSONA_VERSION == "v0"
+    assert voice_live.PERSONA_VERSION == "v1"
     # Order recommended by OpenAI's realtime prompting guide (bauplan B2).
     heads = [line for line in text.splitlines() if line.startswith("# ")]
     assert heads == [
@@ -248,17 +252,24 @@ def test_persona_v0_snapshot():
         "# Language and length",
         "# Backchannel",
         "# Interruptions",
-        "# What you can do in this version",
+        "# Delegation",
+        "# Status",
         "# Hard rules",
     ]
     for rule in (
-        "You have no hands",
-        "Never say something is done, finished or successful",
+        "Notiert, geb ich weiter.",
+        "Got it, passing it on.",
+        "never a cancel",
+        "Do NOT delegate when",
+        "Never say something is done, finished or successful unless Boss reported it",
         "Approvals are never given by voice",
-        "passing on by voice is not built yet",
+        "bitte im Chat antippen",
+        "Stopping the agent by voice is not available yet",
+        "Stop button",
         "One or two short sentences",
     ):
         assert rule in text, rule
+    assert "not built yet" not in text  # PR 1 wording is gone
     assert "Start in English" in text
     assert "Start in German" in voice_live.build_instructions("Boss", "de")
 

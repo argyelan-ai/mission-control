@@ -1,6 +1,7 @@
 /**
- * Live voice in the chat (voice PR 1) — the call driven end to end through a
- * fake browser (getUserMedia, RTCPeerConnection, fetch) plus the UI states.
+ * Live voice in the chat (voice PR 1 + 2) — the call driven end to end
+ * through a fake browser (getUserMedia, RTCPeerConnection, fetch) plus the
+ * UI states and the two tools relayed to MC.
  */
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -60,6 +61,7 @@ interface Harness {
   trackStop: ReturnType<typeof vi.fn>;
   postOffer: ReturnType<typeof vi.fn>;
   mintSession: ReturnType<typeof vi.fn>;
+  runTool: ReturnType<typeof vi.fn>;
   timers: { fn: () => void; ms: number; cleared: boolean }[];
 }
 
@@ -75,7 +77,13 @@ function harness(over: Partial<VoiceLiveEnv> = {}): Harness {
     voice: "marin",
     calls_url: "https://api.openai.com/v1/realtime/calls",
     agent_name: "Boss",
+    call_ref: "ref-1",
   }));
+  const runTool = vi.fn(async (body: { name: string }) =>
+    body.name === "send_to_agent"
+      ? { output: { delivered: true, when: "now", done: false }, sent_text: "[per Stimme] x", mid_turn: false }
+      : { output: { state: "working", step: "2/3: Tests", last_tool: "Bash · npm test" }, sent_text: null, mid_turn: false },
+  );
   const env: VoiceLiveEnv = {
     isSecureContext: () => true,
     getUserMedia: async () => ({ getTracks: () => [{ stop: trackStop }] }) as unknown as MediaStream,
@@ -87,6 +95,7 @@ function harness(over: Partial<VoiceLiveEnv> = {}): Harness {
     createAudioElement: () => ({ srcObject: null, play: async () => undefined }) as unknown as HTMLAudioElement,
     mintSession,
     postOffer,
+    runTool: runTool as unknown as VoiceLiveEnv["runTool"],
     setTimeout: (fn, ms) => {
       timers.push({ fn, ms, cleared: false });
       return (timers.length - 1) as unknown as ReturnType<typeof setTimeout>;
@@ -97,19 +106,19 @@ function harness(over: Partial<VoiceLiveEnv> = {}): Harness {
     },
     ...over,
   };
-  return { env, pcs, trackStop, postOffer, mintSession, timers };
+  return { env, pcs, trackStop, postOffer, mintSession, runTool, timers };
 }
 
-function renderDock(env: VoiceLiveEnv) {
+function renderDock(env: VoiceLiveEnv, onForwarded?: (text: string, midTurn: boolean) => void) {
   return render(
-    <VoiceLiveDock agentId="agent-1" agentName="Boss" env={env}>
+    <VoiceLiveDock agentId="agent-1" agentName="Boss" env={env} onForwarded={onForwarded}>
       {(slot) => <div data-testid="composer">{slot}</div>}
     </VoiceLiveDock>,
   );
 }
 
-async function startCall(h: Harness) {
-  renderDock(h.env);
+async function startCall(h: Harness, onForwarded?: (text: string, midTurn: boolean) => void) {
+  renderDock(h.env, onForwarded);
   const mic = await screen.findByTestId("voice-mic-button");
   await act(async () => {
     fireEvent.click(mic);
@@ -154,7 +163,7 @@ describe("a call", () => {
 
     act(() => pc.dc.open());
     expect(screen.getByTestId("voice-state")).toHaveTextContent("Listening");
-    expect(screen.getByText("Say something. The voice answers; the work stays in the chat.")).toBeInTheDocument();
+    expect(screen.getByText("Say what Boss should do. The voice passes it on in the chat.")).toBeInTheDocument();
 
     act(() => pc.dc.emit({ type: "output_audio_buffer.started" }));
     expect(screen.getByTestId("voice-state")).toHaveTextContent("Speaking");
@@ -162,7 +171,7 @@ describe("a call", () => {
     expect(screen.getByTestId("voice-state")).toHaveTextContent("Listening");
   });
 
-  it("shows the operator's words as 'by voice' bubbles and the voice's reply, and says nothing was passed on", async () => {
+  it("shows the operator's words as 'by voice' bubbles and the voice's reply, without PR 1's 'not passed on' notice", async () => {
     const h = harness();
     const pc = await startCall(h);
     act(() => pc.dc.open());
@@ -177,7 +186,8 @@ describe("a call", () => {
     const voice = screen.getByTestId("voice-line-voice");
     expect(voice).toHaveTextContent("Boss's voice");
     expect(voice).toHaveTextContent("Ja, ich höre dich.");
-    expect(screen.getByTestId("voice-not-sent")).toHaveTextContent("Not passed on to Boss yet");
+    expect(screen.queryByTestId("voice-not-sent")).toBeNull();
+    expect(you).toHaveAttribute("data-forwarded", "false");
   });
 
   it("hang-up closes mic, data channel and connection and brings the mic back", async () => {
@@ -337,5 +347,187 @@ describe("error states", () => {
     fireEvent.click(screen.getByTestId("voice-dismiss"));
     expect(screen.queryByTestId("voice-call-bar")).toBeNull();
     expect(screen.getByTestId("voice-mic-button")).toBeInTheDocument();
+  });
+});
+
+// ── tools (voice PR 2) ───────────────────────────────────────────────────
+
+function sentTypes(pc: FakePC) {
+  return pc.dc.sent.map((x) => JSON.parse(x));
+}
+
+function sayAndCall(pc: FakePC, words: string, args: object, callId = "call-1", name = "send_to_agent") {
+  act(() => pc.dc.emit({ type: "input_audio_buffer.committed", item_id: "u1" }));
+  act(() => pc.dc.emit({ type: "conversation.item.input_audio_transcription.completed", item_id: "u1", transcript: words }));
+  act(() => pc.dc.emit({ type: "response.created" }));
+  act(() =>
+    pc.dc.emit({
+      type: "response.output_item.done",
+      item: { type: "function_call", call_id: callId, name, arguments: JSON.stringify(args) },
+    }),
+  );
+  act(() => pc.dc.emit({ type: "response.done", response: { status: "completed" } }));
+}
+
+describe("tools", () => {
+  it("send_to_agent: relays to MC with the operator's verbatim words, echoes, answers the model, asks it to speak", async () => {
+    const h = harness();
+    const onForwarded = vi.fn();
+    const pc = await startCall(h, onForwarded);
+    act(() => pc.dc.open());
+    sayAndCall(pc, "und schreib noch Y in die Notiz", { text: "Schreib Y in die Notiz" });
+
+    await waitFor(() => expect(h.runTool).toHaveBeenCalledTimes(1));
+    expect(h.runTool).toHaveBeenCalledWith({
+      call_ref: "ref-1",
+      agent_id: "agent-1",
+      name: "send_to_agent",
+      arguments: { text: "Schreib Y in die Notiz" },
+      transcript: "und schreib noch Y in die Notiz",
+    });
+    await waitFor(() => expect(onForwarded).toHaveBeenCalledWith("[per Stimme] x", false));
+    await waitFor(() => expect(sentTypes(pc).map((e) => e.type)).toContain("response.create"));
+    const out = sentTypes(pc).find((e) => e.type === "conversation.item.create");
+    expect(out.item).toEqual({
+      type: "function_call_output",
+      call_id: "call-1",
+      output: JSON.stringify({ delivered: true, when: "now", done: false }),
+    });
+    expect(screen.getByTestId("voice-line-you")).toHaveAttribute("data-forwarded", "true");
+    expect(screen.getByTestId("voice-line-forwarded")).toHaveTextContent("to Boss");
+    // The agent token never reaches the browser; the OpenAI key never either.
+    expect(JSON.stringify(h.runTool.mock.calls)).not.toMatch(/token|sk-/i);
+  });
+
+  it("waits for a transcription that lands after the function call", async () => {
+    const h = harness();
+    const pc = await startCall(h);
+    act(() => pc.dc.open());
+    act(() => pc.dc.emit({ type: "input_audio_buffer.committed", item_id: "u1" }));
+    act(() =>
+      pc.dc.emit({
+        type: "response.output_item.done",
+        item: { type: "function_call", call_id: "c1", name: "send_to_agent", arguments: '{"text":"Tests laufen lassen"}' },
+      }),
+    );
+    await act(async () => undefined);
+    expect(h.runTool).not.toHaveBeenCalled();
+    act(() =>
+      pc.dc.emit({ type: "conversation.item.input_audio_transcription.completed", item_id: "u1", transcript: "lass mal die Tests laufen" }),
+    );
+    await waitFor(() => expect(h.runTool).toHaveBeenCalledTimes(1));
+    expect(h.runTool.mock.calls[0][0].transcript).toBe("lass mal die Tests laufen");
+  });
+
+  it("the same call announced twice (both OpenAI events) runs once", async () => {
+    const h = harness();
+    const pc = await startCall(h);
+    act(() => pc.dc.open());
+    sayAndCall(pc, "mach Y", { text: "Mach Y" });
+    act(() =>
+      pc.dc.emit({ type: "response.function_call_arguments.done", call_id: "call-1", name: "send_to_agent", arguments: '{"text":"Mach Y"}' }),
+    );
+    await waitFor(() => expect(h.runTool).toHaveBeenCalledTimes(1));
+    await act(async () => undefined);
+    expect(h.runTool).toHaveBeenCalledTimes(1);
+  });
+
+  it("words already delivered are not attached again", async () => {
+    const h = harness();
+    const pc = await startCall(h);
+    act(() => pc.dc.open());
+    sayAndCall(pc, "erstens", { text: "Erstens" }, "c1");
+    await waitFor(() => expect(h.runTool).toHaveBeenCalledTimes(1));
+    act(() => pc.dc.emit({ type: "input_audio_buffer.committed", item_id: "u2" }));
+    act(() => pc.dc.emit({ type: "conversation.item.input_audio_transcription.completed", item_id: "u2", transcript: "zweitens" }));
+    act(() =>
+      pc.dc.emit({ type: "response.output_item.done", item: { type: "function_call", call_id: "c2", name: "send_to_agent", arguments: '{"text":"Zweitens"}' } }),
+    );
+    await waitFor(() => expect(h.runTool).toHaveBeenCalledTimes(2));
+    expect(h.runTool.mock.calls[1][0].transcript).toBe("zweitens");
+  });
+
+  it("not delivered (MC refuses / agent offline): no echo, the model hears NOT delivered", async () => {
+    const h = harness({
+      runTool: vi.fn(async () => {
+        throw new Error('API 403: {"detail":{"reason":"call_unknown"}}');
+      }),
+    });
+    const onForwarded = vi.fn();
+    const pc = await startCall(h, onForwarded);
+    act(() => pc.dc.open());
+    sayAndCall(pc, "mach Y", { text: "Mach Y" });
+    await waitFor(() => expect(sentTypes(pc).some((e) => e.type === "conversation.item.create")).toBe(true));
+    const out = JSON.parse(sentTypes(pc).find((e) => e.type === "conversation.item.create").item.output);
+    expect(out.delivered).toBe(false);
+    expect(out.reason).toBe("call_unknown");
+    expect(out.say).toMatch(/^NOT delivered/);
+    expect(onForwarded).not.toHaveBeenCalled();
+    expect(screen.getByTestId("voice-line-you")).toHaveAttribute("data-forwarded", "false");
+  });
+
+  it("get_agent_status: no transcript wait, no echo, answer handed to the model", async () => {
+    const h = harness();
+    const onForwarded = vi.fn();
+    const pc = await startCall(h, onForwarded);
+    act(() => pc.dc.open());
+    act(() =>
+      pc.dc.emit({ type: "response.output_item.done", item: { type: "function_call", call_id: "s1", name: "get_agent_status", arguments: "{}" } }),
+    );
+    await waitFor(() => expect(h.runTool).toHaveBeenCalledTimes(1));
+    expect(h.runTool.mock.calls[0][0]).toMatchObject({ name: "get_agent_status", transcript: "" });
+    await waitFor(() => expect(sentTypes(pc).map((e) => e.type)).toContain("response.create"));
+    expect(onForwarded).not.toHaveBeenCalled();
+  });
+
+  it("response.create waits until the running response is done", async () => {
+    let release: () => void = () => undefined;
+    const h = harness({
+      runTool: vi.fn(
+        () =>
+          new Promise((r) => {
+            release = () => r({ output: { state: "idle" }, sent_text: null, mid_turn: false });
+          }),
+      ) as unknown as VoiceLiveEnv["runTool"],
+    });
+    const pc = await startCall(h);
+    act(() => pc.dc.open());
+    act(() => pc.dc.emit({ type: "response.created" }));
+    act(() =>
+      pc.dc.emit({ type: "response.output_item.done", item: { type: "function_call", call_id: "s1", name: "get_agent_status", arguments: "{}" } }),
+    );
+    await waitFor(() => expect(screen.getByTestId("voice-state")).toHaveTextContent("Passing on…"));
+    await act(async () => release());
+    await waitFor(() => expect(sentTypes(pc).some((e) => e.type === "conversation.item.create")).toBe(true));
+    expect(sentTypes(pc).map((e) => e.type)).not.toContain("response.create");
+    act(() => pc.dc.emit({ type: "response.done", response: { status: "completed" } }));
+    expect(sentTypes(pc).map((e) => e.type)).toContain("response.create");
+  });
+
+  it("unknown tool names are ignored (the voice has no stop or keys tool)", async () => {
+    const h = harness();
+    const pc = await startCall(h);
+    act(() => pc.dc.open());
+    act(() =>
+      pc.dc.emit({ type: "response.output_item.done", item: { type: "function_call", call_id: "x", name: "stop_agent", arguments: "{}" } }),
+    );
+    await act(async () => undefined);
+    expect(h.runTool).not.toHaveBeenCalled();
+  });
+});
+
+describe("transcript box", () => {
+  it("fades the top only once older lines have scrolled out", async () => {
+    const h = harness();
+    const pc = await startCall(h);
+    act(() => pc.dc.open());
+    act(() => pc.dc.emit({ type: "conversation.item.input_audio_transcription.completed", item_id: "u1", transcript: "eins" }));
+    const box = screen.getByTestId("voice-transcript");
+    expect(box).toHaveAttribute("data-scrolled", "false");
+    expect(box.className).not.toContain("mask-image");
+    Object.defineProperty(box, "scrollTop", { configurable: true, get: () => 40, set: () => undefined });
+    fireEvent.scroll(box);
+    expect(box).toHaveAttribute("data-scrolled", "true");
+    expect(box.className).toContain("mask-image");
   });
 });

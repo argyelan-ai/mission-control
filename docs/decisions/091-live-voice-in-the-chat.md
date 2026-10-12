@@ -47,9 +47,22 @@
    operator's words (always with the literal transcript) as a chat message
    marked "by voice"; stop only on a whole-sentence "stop"; a spoken "yes" is
    never an approval.
-5. **Off by default** (`VOICE_LIVE_ENABLED=false`). Off or no OpenAI key =
+5. **The voice's tools run in MC, not in the browser (PR 2).** When the
+   realtime model calls `send_to_agent` or `get_agent_status`, the browser
+   posts the call to `POST /api/v1/voice/live/tool` (admin only) with the
+   call's `call_ref` from `/session`. MC checks that the call is known,
+   unexpired and was opened for this very agent, rate-limits per call, caps
+   lengths, and then uses the chat's own input path (`send_text`: ACP agents
+   get the message with `mode="queue"`, TUI agents have it typed as a steer —
+   never a cancel). The message carries the marker `[per Stimme]`, the
+   operator's verbatim words (`Wortlaut: „…“`) and a note for the agent; no
+   verbatim words → nothing is sent. `get_agent_status` returns a redacted
+   snapshot (state, todo step, last tool title; paths cut to their last
+   segment, no tool output). Stopping by voice comes with PR 4; until then the
+   voice points to the Stop button.
+6. **Off by default** (`VOICE_LIVE_ENABLED=false`). Off or no OpenAI key =
    the endpoints answer 404 and no mic is shown. Turning it off is the undo.
-6. **Amends ADR-083 decision 2 and ADR-089 §6** once accepted: the live
+7. **Amends ADR-083 decision 2 and ADR-089 §6** once accepted: the live
    voice delegates to the chat agent (not to a backend model), and live comes
    before the local voice note. Jarvis stays as it is until the operator
    decides on pausing it after two weeks of daily use (ADR-089 §6).
@@ -83,7 +96,8 @@
 
 ## References
 
-- Files: `backend/app/services/voice_live.py`, `backend/app/routers/voice_live.py`,
+- Files: `backend/app/services/voice_live.py`, `backend/app/services/voice_live_tools.py`,
+  `backend/app/routers/voice_live.py`,
   `frontend-v2/src/components/voice/live/*`, `frontend-v2/src/components/chat/Composer.tsx`
 - Related ADRs: ADR-061, ADR-082, ADR-083, ADR-089 §6, ADR-090
 - OpenAI docs: guides `realtime-webrtc`, `realtime-vad`; API reference

@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Live voice in the chat — the visible part (voice PR 1).
+ * Live voice in the chat — the visible part (voice PR 1, tools since PR 2).
  *
  * - `VoiceMicButton`: secondary icon button in the composer, left of send
  *   (DESIGN K11: send stays the one primary action). Greyed on plain http,
@@ -9,17 +9,19 @@
  *   phone explains nothing).
  * - `VoiceCallBar`: sits above the composer while a call runs or failed:
  *   live captions ("by voice" bubbles for the operator, a quiet line for the
- *   voice), one state word, hang-up. The composer stays usable below — in
- *   PR 1 the voice cannot pass anything on, so typing is the way to the agent.
+ *   voice), one state word, hang-up. The composer stays usable below. What
+ *   the voice passed on appears in the chat itself as the operator's message
+ *   with a "by voice" label (ChatMessage); here the line gets a quiet tick.
  */
 
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
-import { Mic, PhoneOff, RotateCcw, X } from "lucide-react";
+import { Check, Mic, PhoneOff, RotateCcw, X } from "lucide-react";
 import { C } from "@/lib/colors";
 import { ERROR_MESSAGE_KEY, MAX_CALL_MS, isRetryable, type VoiceLiveStatus } from "./voiceLiveCore";
 import { browserVoiceLiveEnv, useVoiceLive, type VoiceLiveCall, type VoiceLiveEnv } from "./useVoiceLive";
 import { useVoiceLiveEnabled } from "./useVoiceLiveConfig";
+import { setVoiceLiveActive } from "./voiceLiveActivity";
 
 const STATE_KEY: Record<Exclude<VoiceLiveStatus, "idle">, string> = {
   connecting: "stateConnecting",
@@ -61,14 +63,21 @@ export function VoiceCallBar({ call, agentName }: { call: VoiceLiveCall; agentNa
   const lineCount = call.transcript.length;
   const lastText = call.transcript[lineCount - 1]?.text ?? "";
 
+  // Pinned to the newest line. When older lines scroll out at the top they
+  // fade instead of being cut through the middle of a word (PR 1 review:
+  // "tun?" showed half a line).
+  const [scrolled, setScrolled] = useState(false);
   useEffect(() => {
     const el = listRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    setScrolled(el.scrollTop > 0);
   }, [lineCount, lastText]);
 
   if (call.status === "idle") return null;
   const isError = call.status === "error" && call.error !== null;
-  const hasYou = call.transcript.some((l) => l.who === "you");
+  const stateKey =
+    call.passing && call.status !== "error" ? "statePassing" : STATE_KEY[call.status as Exclude<VoiceLiveStatus, "idle">];
 
   return (
     <div
@@ -82,26 +91,37 @@ export function VoiceCallBar({ call, agentName }: { call: VoiceLiveCall; agentNa
         <div
           ref={listRef}
           data-testid="voice-transcript"
+          data-scrolled={scrolled}
           aria-live="polite"
-          className="max-h-48 overflow-y-auto px-3 pt-3 flex flex-col gap-2"
+          onScroll={(e) => setScrolled(e.currentTarget.scrollTop > 0)}
+          className={`max-h-40 overflow-y-auto overscroll-contain px-3 pt-3 pb-1 flex flex-col gap-2 ${
+            scrolled ? "[mask-image:linear-gradient(to_bottom,transparent_1.25rem,black_3.5rem)]" : ""
+          }`}
         >
           {call.transcript.map((line) =>
             line.who === "you" ? (
               <div
                 key={`you-${line.id}`}
                 data-testid="voice-line-you"
-                className="self-end max-w-[85%] rounded-xl px-3 py-2"
+                data-forwarded={line.forwarded === true}
+                className="self-end shrink-0 max-w-[85%] rounded-xl px-3 py-2"
                 style={{ backgroundColor: C.accentSubtle }}
               >
-                <div className="text-xs" style={{ color: C.textMuted }}>
+                <div className="flex items-center gap-1 text-xs" style={{ color: C.textMuted }}>
                   {t("byVoice")}
+                  {line.forwarded && (
+                    <span className="inline-flex items-center gap-1" data-testid="voice-line-forwarded">
+                      · <Check size={12} aria-hidden="true" />
+                      {t("forwarded", { name: agentName })}
+                    </span>
+                  )}
                 </div>
                 <div className="text-sm" style={{ color: line.final ? C.textPrimary : C.textSecondary }}>
                   {line.text}
                 </div>
               </div>
             ) : (
-              <div key={`voice-${line.id}`} data-testid="voice-line-voice" className="max-w-[85%]">
+              <div key={`voice-${line.id}`} data-testid="voice-line-voice" className="shrink-0 max-w-[85%]">
                 <div className="text-xs" style={{ color: C.textMuted }}>
                   {t("voiceOf", { name: agentName })}
                 </div>
@@ -111,16 +131,11 @@ export function VoiceCallBar({ call, agentName }: { call: VoiceLiveCall; agentNa
               </div>
             ),
           )}
-          {hasYou && (
-            <div data-testid="voice-not-sent" className="text-xs pb-1" style={{ color: C.textMuted }}>
-              {t("notSentYet", { name: agentName })}
-            </div>
-          )}
         </div>
       ) : (
         !isError && (
           <div className="px-3 pt-3 text-sm" style={{ color: C.textMuted }}>
-            {t("emptyHint")}
+            {t("emptyHint", { name: agentName })}
           </div>
         )
       )}
@@ -162,7 +177,7 @@ export function VoiceCallBar({ call, agentName }: { call: VoiceLiveCall; agentNa
             style={{ backgroundColor: call.status === "connecting" ? C.textDim : C.accent }}
           />
           <span className="flex-1 text-sm" data-testid="voice-state" style={{ color: C.textPrimary }}>
-            {t(STATE_KEY[call.status as Exclude<VoiceLiveStatus, "idle">])}
+            {t(stateKey)}
           </span>
           <button
             type="button"
@@ -189,16 +204,24 @@ export function VoiceLiveDock({
   agentId,
   agentName,
   children,
+  onForwarded,
   env = browserVoiceLiveEnv,
 }: {
   agentId: string;
   agentName: string;
   children: (voiceSlot: ReactNode) => ReactNode;
+  /** The voice passed a message on: echo it in the chat right away. */
+  onForwarded?: (text: string, midTurn: boolean) => void;
   env?: VoiceLiveEnv;
 }) {
   const locale = useLocale();
   const enabled = useVoiceLiveEnabled();
-  const call = useVoiceLive(agentId, locale === "de" ? "de" : "en", env);
+  const call = useVoiceLive(agentId, locale === "de" ? "de" : "en", env, { onForwarded });
+  const callActive = call.status !== "idle";
+  useEffect(() => {
+    setVoiceLiveActive(agentId, callActive);
+    return () => setVoiceLiveActive(agentId, false);
+  }, [agentId, callActive]);
   // Read after mount: the server render has no window.
   const [secure, setSecure] = useState(true);
   useEffect(() => setSecure(env.isSecureContext()), [env]);

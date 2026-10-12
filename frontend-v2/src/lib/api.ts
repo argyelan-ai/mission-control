@@ -2137,11 +2137,22 @@ export const api = {
       voice: string;
       calls_url: string;
       agent_name: string;
+      call_ref: string;
     }> =>
       request("/api/v1/voice/live/session", {
         method: "POST",
         body: JSON.stringify({ agent_id: agentId, lang }),
       }),
+    /** One tool call of a live voice call (voice PR 2). MC runs it for the
+     *  agent the call was opened for; the browser only relays. */
+    tool: (body: {
+      call_ref: string;
+      agent_id: string;
+      name: "send_to_agent" | "get_agent_status";
+      arguments: Record<string, unknown>;
+      transcript: string;
+    }): Promise<{ output: Record<string, unknown>; sent_text: string | null; mid_turn: boolean }> =>
+      request("/api/v1/voice/live/tool", { method: "POST", body: JSON.stringify(body) }),
   },
 
   spark: {

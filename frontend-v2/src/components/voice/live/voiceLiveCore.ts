@@ -4,7 +4,8 @@
  * No React, no WebRTC here, so every transition is unit-tested.
  *
  * The voice is the chat agent's ears and mouth, never its hands (ADR-089 §6).
- * In PR 1 nothing it hears reaches the agent; the transcript is shown only.
+ * Since PR 2 it can pass the operator's words on (`send_to_agent`, see
+ * tools.ts); lines that reached the agent are marked `forwarded`.
  */
 
 export type VoiceLiveStatus = "idle" | "connecting" | "listening" | "speaking" | "error";
@@ -25,15 +26,19 @@ export interface TranscriptLine {
   who: "you" | "voice";
   text: string;
   final: boolean;
+  /** This utterance reached the agent's chat (voice PR 2). */
+  forwarded?: boolean;
 }
 
 export interface VoiceLiveState {
   status: VoiceLiveStatus;
   error: VoiceLiveErrorKind | null;
   transcript: TranscriptLine[];
+  /** A tool call is running in MC right now ("Gibt weiter…"). */
+  passing: boolean;
 }
 
-export const INITIAL_VOICE_STATE: VoiceLiveState = { status: "idle", error: null, transcript: [] };
+export const INITIAL_VOICE_STATE: VoiceLiveState = { status: "idle", error: null, transcript: [], passing: false };
 
 /** Hard cap per call on the client (bauplan B6: 20 min). The server-side
  *  timer and the daily budget come with PR 6. */
@@ -48,12 +53,19 @@ export type VoiceLiveAction =
   | { type: "connected" }
   | { type: "fail"; error: VoiceLiveErrorKind }
   | { type: "hangup" }
+  | { type: "tool_busy"; busy: boolean }
+  | { type: "forwarded"; ids: string[] }
   | { type: "server_event"; event: RealtimeServerEvent };
 
 /** The subset of Realtime server events PR 1 reads. Unknown events are ignored. */
 export interface RealtimeServerEvent {
   type: string;
   item_id?: string;
+  /** Function calls (voice PR 2, see tools.ts). */
+  call_id?: string;
+  name?: string;
+  arguments?: string;
+  item?: { type?: string; call_id?: string; name?: string; arguments?: string } | null;
   delta?: string;
   transcript?: string;
   error?: { type?: string; code?: string | null; message?: string } | null;
@@ -123,11 +135,12 @@ function onServerEvent(state: VoiceLiveState, ev: RealtimeServerEvent): VoiceLiv
       }
       return {
         ...state,
-        transcript: upsertLine(state.transcript, ev.item_id, "you", () => ({
+        transcript: upsertLine(state.transcript, ev.item_id, "you", (p) => ({
           id: ev.item_id!,
           who: "you",
           text,
           final: true,
+          forwarded: p?.forwarded,
         })),
       };
     }
@@ -175,12 +188,22 @@ function onServerEvent(state: VoiceLiveState, ev: RealtimeServerEvent): VoiceLiv
 export function voiceLiveReducer(state: VoiceLiveState, action: VoiceLiveAction): VoiceLiveState {
   switch (action.type) {
     case "start":
-      return { status: "connecting", error: null, transcript: [] };
+      return { status: "connecting", error: null, transcript: [], passing: false };
     case "connected":
       return state.status === "connecting" ? { ...state, status: "listening" } : state;
     case "fail":
       // The transcript stays: what was said before the drop is still worth reading.
-      return { ...state, status: "error", error: action.error };
+      return { ...state, status: "error", error: action.error, passing: false };
+    case "tool_busy":
+      return state.status === "idle" || state.status === "error" ? state : { ...state, passing: action.busy };
+    case "forwarded": {
+      if (action.ids.length === 0) return state;
+      const ids = new Set(action.ids);
+      return {
+        ...state,
+        transcript: state.transcript.map((l) => (l.who === "you" && ids.has(l.id) ? { ...l, forwarded: true } : l)),
+      };
+    }
     case "hangup":
       return INITIAL_VOICE_STATE;
     case "server_event":

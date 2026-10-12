@@ -4788,6 +4788,15 @@
         ]
       }
     },
+    "/api/v1/voice/live/tool": {
+      "post": {
+        "operationId": "run_tool_api_v1_voice_live_tool_post",
+        "summary": "Run Tool",
+        "tags": [
+          "voice-live"
+        ]
+      }
+    },
     "/api/v1/voice/token": {
       "post": {
         "operationId": "issue_voice_token_api_v1_voice_token_post",

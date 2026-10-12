@@ -549,6 +549,7 @@
     "POST /api/v1/voice/display",
     "POST /api/v1/voice/graph-highlight",
     "POST /api/v1/voice/live/session",
+    "POST /api/v1/voice/live/tool",
     "POST /api/v1/voice/token",
     "PUT /api/v1/agent/config/soul_md",
     "PUT /api/v1/agent/groups/{group_id}/document",

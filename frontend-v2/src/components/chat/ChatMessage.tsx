@@ -1,10 +1,11 @@
 "use client";
 
-import { AlertTriangle, Clock, Pencil, Users, X } from "lucide-react";
+import { AlertTriangle, Clock, Mic, Pencil, Users, X } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 import { MarkdownContent } from "@/components/chat/MarkdownContent";
 import { splitAttachments } from "./attachments";
+import { parseVoiceMessage } from "@/components/voice/live/voiceMessage";
 import { ChatAttachmentTile } from "./ChatAttachmentTile";
 import { ClampedContent, USER_CLAMP_MAX_PX } from "./ClampedContent";
 import { ChatErrorCard } from "./ChatErrorCard";
@@ -92,6 +93,7 @@ export function ChatMessage({
   live?: boolean;
 }) {
   const t = useTranslations("chat");
+  const tv = useTranslations("voiceLive");
   // Rueckmeldung eines Subagenten / einer anderen Sitzung. Claude Code legt
   // die als gewoehnlichen USER-Turn ab — ohne eigene Behandlung erschiene sie
   // als rechtsbuendige Blase, also als etwas, das der Operator selbst getippt
@@ -151,7 +153,26 @@ export function ChatMessage({
   // wurde restlos weggeworfen. ChatMessage ist nicht memoisiert, das fiel also
   // bei jedem Stream-Tick fuer jede sichtbare Zeile an.
   if (ev.role === "user") {
-    const parsed = splitAttachments(ev.text);
+    // Passed on by the live voice (voice PR 2): marker and agent note are
+    // hidden, a small label says where it came from, and the operator's own
+    // words stay visible next to the voice's wording.
+    const voice = parseVoiceMessage(ev.text);
+    const parsed = splitAttachments(voice ? voice.text : ev.text);
+    const voiceLabel = voice ? (
+      <div
+        data-testid="voice-label"
+        className="mb-1 flex items-center gap-1 text-xs"
+        style={{ color: C.textMuted }}
+      >
+        <Mic size={12} aria-hidden="true" />
+        {tv("byVoice")}
+      </div>
+    ) : null;
+    const voiceVerbatim = voice?.verbatim ? (
+      <div data-testid="voice-verbatim" className="mt-1 text-xs" style={{ color: C.textMuted }}>
+        {tv("verbatim")}: „{voice.verbatim}“
+      </div>
+    ) : null;
     const unconfirmed = echoStatus === "unconfirmed";
     // Queued and starting are WAITS, not problems: the CLI genuinely holds a
     // message sent mid-turn until the turn ends, and a booting agent will get it
@@ -188,6 +209,7 @@ export function ChatMessage({
             }}
           >
             <span className="sr-only">Du</span>
+            {voiceLabel}
             {parsed.attachments.length > 0 && (
               <div className="flex flex-col gap-1.5 mb-1">
                 {parsed.attachments.map((a) => (
@@ -198,6 +220,7 @@ export function ChatMessage({
             {parsed.text && (
               <div className="whitespace-pre-wrap break-words line-clamp-2">{parsed.text}</div>
             )}
+            {voiceVerbatim}
             <div
               className="mt-1 flex items-center gap-2.5 text-[11.5px]"
               style={{ color: C.textMuted }}
@@ -263,6 +286,7 @@ export function ChatMessage({
           }}
         >
           <span className="sr-only">Du</span>
+          {voiceLabel}
           {parsed.attachments.length > 0 && (
             <div className="flex flex-col gap-1.5 mb-1.5">
               {parsed.attachments.map((a) => (
@@ -271,6 +295,7 @@ export function ChatMessage({
             </div>
           )}
           {parsed.text && <ClampedUserContent text={parsed.text} />}
+          {voiceVerbatim}
           {unconfirmed && (
             // Truthful, not reassuring: after the timeout we genuinely do not
             // know whether the CLI received this, so it says so and names the
