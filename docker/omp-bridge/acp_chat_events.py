@@ -45,12 +45,32 @@ backend/tests/test_omp_chat.py):
   * tool_call_update with a terminal status (completed/failed/error) emits a
     `toolResult` message (role "toolResult", toolCallId linking it back);
     read_history/the tailer merge it onto the card by id — the same pairing
-    that resolves omp's parallel tool calls. Interim in_progress updates are
-    folded silently: the card exists, partial output would just overwrite
-    itself repeatedly.
+    that resolves omp's parallel tool calls. Its ``details`` also carry
+    ``diffs`` (ACP content ``type:"diff"`` — path/oldText/newText, one per
+    edited file, texts capped at ``_DIFF_TEXT_LIMIT``) and ``locations``
+    (the file paths ACP named for the call), both only when present.
+
+  * LIVE TOOL OUTPUT (chat package P1): an in_progress ``tool_call_update``
+    carries the WHOLE output so far (omp 18.10.1 sends a snapshot per
+    output line, verified in rpc/acp-tool-live-diff-cost-18.10.1.ndjson).
+    It becomes a VOLATILE ``custom_message``/``acp-tool-output`` line with
+    ``data.toolCallId`` — routed to the preview channel (``is_volatile``),
+    never the transcript: ANSI stripped, tail-capped at
+    ``_TOOL_OUTPUT_TAIL_CHARS`` on a line boundary, at most one line per
+    ``_TOOL_OUTPUT_INTERVAL_S`` per call, identical snapshots skipped. A
+    withheld newer snapshot flushes with the next update of any kind OR,
+    if the command then goes quiet, via ``ToolOutputPump`` (a burst
+    followed by silence must not freeze the phone on its first line). The
+    settled toolResult replaces it on the card and drops anything withheld.
+
+  * The ``tool_call`` seed's ``locations`` ride on the ``toolCall`` block as
+    ``locations: [path, ...]`` — so a running card already names its file.
 
   * usage_update (size/used — context window, NOT tokens) is remembered and
     stamped onto assistant lines as message.usage.contextWindow/usedTokens;
+    its ``cost`` ({amount, currency}, SESSION-cumulative, sent by omp only
+    when > 0) becomes message.usage.sessionCost — a key of its own, because
+    omp's native per-message ``usage.cost`` means something else;
     the prompt RESULT's usage (inputTokens/outputTokens, from
     session/prompt reply — same fields omp native writes) becomes a proper
     usage block on the final assistant flush.
@@ -85,13 +105,16 @@ notice, a parser must not die on them).
 from __future__ import annotations
 
 import json
+import math
 import os
+import re
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 # omp entry ids are 8 hex chars; ours carry a distinct prefix so a mixed
 # history (native + bridged lines in one file) stays attributable.
@@ -116,6 +139,49 @@ PLAN_CUSTOM_TYPE = "acp-plan"
 CHAT_ERROR_CUSTOM_TYPE = "chat_error"
 
 _TITLE_TRUNCATE_LEN = 200
+
+# customType of a live tool-output snapshot (chat package P1). VOLATILE: it
+# rides the preview channel next to the text previews and never enters the
+# transcript JSONL — see ``is_volatile``. The backend's preview-channel
+# reader turns it into a ``tool_output`` chat event.
+TOOL_OUTPUT_CUSTOM_TYPE = "acp-tool-output"
+
+# Live output: the newest this many characters (cut back to a whole line) —
+# a phone shows ~12 lines; a 50 MB `npm install` log must never travel.
+_TOOL_OUTPUT_TAIL_CHARS = 2000
+# At most one snapshot per call per this many seconds (omp sends one per
+# output line; a chatty build would otherwise write hundreds per second).
+_TOOL_OUTPUT_INTERVAL_S = 0.5
+
+# Per-file diff texts (whole-file old/new from omp) are capped here; a
+# capped pair is marked ``truncated`` so the card can say so.
+_DIFF_TEXT_LIMIT = 60_000
+_MAX_DIFFS = 20
+_MAX_LOCATIONS = 20
+_LOCATION_LEN = 500
+
+# CSI (ESC [ … final), OSC (ESC ] … BEL/ST) and lone two-byte escapes, plus
+# C0 controls except \n and \t. Terminal colour codes are noise on a phone.
+_ANSI_RE = re.compile(
+    r"\x1b\[[0-?]*[ -/]*[@-~]"
+    r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"
+    r"|\x1b[@-Z\\-_]"
+)
+_CTRL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+
+
+def strip_ansi(text: str) -> str:
+    """Terminal escapes out, CRLF/CR to LF, other C0 controls out."""
+    s = _ANSI_RE.sub("", text)
+    s = s.replace("\r\n", "\n").replace("\r", "\n")
+    return _CTRL_RE.sub("", s)
+
+
+def is_volatile(entry: dict[str, Any]) -> bool:
+    """True for lines that belong on the PREVIEW channel, never the
+    transcript: text previews and live tool output. Both callers
+    (bridge.run_acp_once and the chat daemon) route on this."""
+    return entry.get("customType") in (PREVIEW_CUSTOM_TYPE, TOOL_OUTPUT_CUSTOM_TYPE)
 
 # ACP toolCall status values that settle a tool call.
 _TERMINAL_STATUSES = ("completed", "failed", "error")
@@ -171,6 +237,78 @@ def _content_text(content: Any) -> str:
     return "".join(parts)
 
 
+def _tail(text: str, limit: int = _TOOL_OUTPUT_TAIL_CHARS) -> str:
+    """The newest ``limit`` characters, cut back to a whole line and marked
+    with a leading ``…`` line when anything was dropped."""
+    if len(text) <= limit:
+        return text
+    tail = text[-limit:]
+    nl = tail.find("\n")
+    if 0 <= nl < len(tail) - 1:
+        tail = tail[nl + 1:]
+    return "…\n" + tail
+
+
+def _clean_locations(raw: Any) -> list[str]:
+    """ACP ``locations`` ([{path, line?}]) -> unique path strings, capped.
+    Anything not a non-empty string path is dropped (fail closed)."""
+    out: list[str] = []
+    if not isinstance(raw, list):
+        return out
+    for loc in raw:
+        path = loc.get("path") if isinstance(loc, dict) else None
+        if not isinstance(path, str) or not path.strip():
+            continue
+        path = path.strip()[:_LOCATION_LEN]
+        if path not in out:
+            out.append(path)
+        if len(out) >= _MAX_LOCATIONS:
+            break
+    return out
+
+
+def _clean_diffs(content: Any) -> list[dict[str, Any]]:
+    """ACP tool ``content`` -> the ``type:"diff"`` items as
+    {path, oldText, newText[, truncated]}. ``oldText`` stays ``None`` for a
+    created file (ACP: null). Texts are capped at ``_DIFF_TEXT_LIMIT``."""
+    out: list[dict[str, Any]] = []
+    if not isinstance(content, list):
+        return out
+    for item in content:
+        if not isinstance(item, dict) or item.get("type") != "diff":
+            continue
+        path = item.get("path")
+        if not isinstance(path, str) or not path.strip():
+            continue
+        old, new = item.get("oldText"), item.get("newText")
+        old = old if isinstance(old, str) else None
+        new = new if isinstance(new, str) else ""
+        diff: dict[str, Any] = {"path": path.strip()[:_LOCATION_LEN], "oldText": old, "newText": new}
+        if (old is not None and len(old) > _DIFF_TEXT_LIMIT) or len(new) > _DIFF_TEXT_LIMIT:
+            diff["oldText"] = old[:_DIFF_TEXT_LIMIT] if old is not None else None
+            diff["newText"] = new[:_DIFF_TEXT_LIMIT]
+            diff["truncated"] = True
+        out.append(diff)
+        if len(out) >= _MAX_DIFFS:
+            break
+    return out
+
+
+def _clean_cost(raw: Any) -> Optional[dict[str, Any]]:
+    """ACP usage_update ``cost`` -> {amount, currency} only for a real,
+    positive, finite amount; anything else -> None (never a fake figure)."""
+    if not isinstance(raw, dict):
+        return None
+    amount = raw.get("amount")
+    if isinstance(amount, bool) or not isinstance(amount, (int, float)):
+        return None
+    if not math.isfinite(amount) or amount <= 0:
+        return None
+    currency = raw.get("currency")
+    currency = currency.strip().upper()[:8] if isinstance(currency, str) and currency.strip() else "USD"
+    return {"amount": float(amount), "currency": currency}
+
+
 @dataclass
 class ACPEventMapper:
     """Accumulates one ACP run's events into omp-format transcript line dicts.
@@ -203,6 +341,15 @@ class ACPEventMapper:
     _prompt_usage: Optional[dict[str, Any]] = None
     # REAL ACP sessionId (set via set_session_id once session/new replied).
     _session_id: Optional[str] = None
+    # Latest usage_update cost ({amount, currency}), session-cumulative.
+    _cost: Optional[dict[str, Any]] = None
+    # Live tool output (P1): toolCallId -> {"text", "at", "pending"}.
+    _live: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Injectable monotonic clock (tests drive the throttle deterministically).
+    clock: Callable[[], float] = field(default=time.monotonic)
+    # map_update runs on the ACP reader thread, ToolOutputPump on its own:
+    # one re-entrant lock keeps the live state and the entry ids consistent.
+    _lock: Any = field(default_factory=threading.RLock, repr=False, compare=False)
 
     # ------------------------------------------------------------------
     # mapping
@@ -223,31 +370,50 @@ class ACPEventMapper:
             update = params.get("update") or {}
             if not isinstance(update, dict):
                 return []
-            su = update.get("sessionUpdate")
-            if su == "agent_message_chunk":
-                if stream:
-                    return self._preview_chunk(update, "text")
-                return self._chunk(update, self._text_by_message, "text")
-            if su == "agent_thought_chunk":
-                if stream:
-                    return self._preview_chunk(update, "thinking")
-                return self._chunk(update, self._thought_by_message, "thinking")
-            if su == "tool_call":
-                return self._tool_seed(update)
-            if su == "tool_call_update":
-                return self._tool_update(update)
-            if su == "usage_update":
-                size, used = update.get("size"), update.get("used")
-                if isinstance(size, int) and size > 0 and isinstance(used, int):
-                    self._usage_window = {"size": size, "used": used}
-                return []
-            if su == "plan":
-                return self._plan(update)
-            # config_option_update / available_commands_update /
-            # session_info_update / anything unknown — no chat value.
-            return []
+            with self._lock:
+                # A withheld live-output snapshot whose interval has passed
+                # rides out with whatever update comes next (P1 coalescing).
+                flushed = self._flush_due_tool_output()
+                return flushed + self._map_one(update, stream)
         except Exception:  # noqa: BLE001 — a broken update must not kill the run
             return []
+
+    def flush_tool_output(self) -> list[dict[str, Any]]:
+        """Withheld live-output snapshots whose interval has passed — for
+        ``ToolOutputPump`` when no further update arrives. Never raises."""
+        try:
+            with self._lock:
+                return self._flush_due_tool_output()
+        except Exception:  # noqa: BLE001
+            return []
+
+    def _map_one(self, update: dict[str, Any], stream: bool) -> list[dict[str, Any]]:
+        su = update.get("sessionUpdate")
+        if su == "agent_message_chunk":
+            if stream:
+                return self._preview_chunk(update, "text")
+            return self._chunk(update, self._text_by_message, "text")
+        if su == "agent_thought_chunk":
+            if stream:
+                return self._preview_chunk(update, "thinking")
+            return self._chunk(update, self._thought_by_message, "thinking")
+        if su == "tool_call":
+            return self._tool_seed(update)
+        if su == "tool_call_update":
+            return self._tool_update(update)
+        if su == "usage_update":
+            size, used = update.get("size"), update.get("used")
+            if isinstance(size, int) and size > 0 and isinstance(used, int):
+                self._usage_window = {"size": size, "used": used}
+            cost = _clean_cost(update.get("cost"))
+            if cost is not None:
+                self._cost = cost
+            return []
+        if su == "plan":
+            return self._plan(update)
+        # config_option_update / available_commands_update /
+        # session_info_update / anything unknown — no chat value.
+        return []
 
     def _plan(self, update: dict[str, Any]) -> list[dict[str, Any]]:
         """ACP ``plan`` -> one ``custom``/``acp-plan`` transcript line.
@@ -435,8 +601,9 @@ class ACPEventMapper:
     # ------------------------------------------------------------------
 
     def _next_id(self) -> str:
-        self.seq += 1
-        return f"{_ID_PREFIX}{self.seq:05x}"
+        with self._lock:
+            self.seq += 1
+            return f"{_ID_PREFIX}{self.seq:05x}"
 
     @staticmethod
     def _tool_title_of(tool: dict[str, Any]) -> str:
@@ -468,7 +635,7 @@ class ACPEventMapper:
             return None
         usage = self._prompt_usage or {}
         window = self._usage_window or {}
-        return {
+        block: dict[str, Any] = {
             "input": int(usage.get("inputTokens") or 0),
             "cacheRead": int(usage.get("cachedReadTokens") or 0),
             "cacheWrite": int(usage.get("cachedWriteTokens") or 0),
@@ -476,6 +643,12 @@ class ACPEventMapper:
             "contextWindow": window.get("size"),
             "usedTokens": window.get("used"),
         }
+        # P1: the session's running cost, only when the harness reported a
+        # real one (omp omits it at 0 — a local model costs nothing, and
+        # "0.00 $" next to it would be a number nobody measured).
+        if self._cost is not None:
+            block["sessionCost"] = dict(self._cost)
+        return block
 
     def _chunk(
         self,
@@ -588,11 +761,21 @@ class ACPEventMapper:
         raw_input = update.get("rawInput")
         arguments = dict(raw_input) if isinstance(raw_input, dict) else {}
         arguments.setdefault("i", title)
+        locations = _clean_locations(update.get("locations"))
         self._tools[tool_call_id] = {
             "name": _KIND_TO_NAME.get(kind, kind),
             "title": title,
             "arguments": arguments,
+            "locations": locations,
         }
+        block: dict[str, Any] = {
+            "type": "toolCall",
+            "id": tool_call_id,
+            "name": self._tools[tool_call_id]["name"],
+            "arguments": arguments,
+        }
+        if locations:
+            block["locations"] = list(locations)
         return [
             {
                 "type": "message",
@@ -601,14 +784,7 @@ class ACPEventMapper:
                 "timestamp": _now_iso(),
                 "message": {
                     "role": "assistant",
-                    "content": [
-                        {
-                            "type": "toolCall",
-                            "id": tool_call_id,
-                            "name": self._tools[tool_call_id]["name"],
-                            "arguments": arguments,
-                        }
-                    ],
+                    "content": [block],
                     "model": None,
                 },
             }
@@ -619,22 +795,32 @@ class ACPEventMapper:
         if not isinstance(tool_call_id, str) or not tool_call_id:
             return []
         status = str(update.get("status") or "").lower()
-        if status not in _TERMINAL_STATUSES:
-            # in_progress/pending: the card already exists from tool_call;
-            # partial output would overwrite itself repeatedly — stay quiet.
-            return []
         tool = self._tools.get(tool_call_id)
-        # A settled update for an id we never seeded: without title/name we
-        # know too little to render a card — show nothing rather than invent
-        # (fail closed).
+        # An update for an id we never seeded: without title/name we know
+        # too little to render a card — show nothing rather than invent
+        # (fail closed). Same for live output: no card, nothing to stream into.
         if tool is None:
             return []
+        for path in _clean_locations(update.get("locations")):
+            if path not in tool["locations"] and len(tool["locations"]) < _MAX_LOCATIONS:
+                tool["locations"].append(path)
+        if status not in _TERMINAL_STATUSES:
+            # in_progress/pending: the running command's output so far.
+            return self._tool_progress(tool_call_id, update)
+        # Settled: a withheld snapshot is stale now — the result replaces it.
+        self._live.pop(tool_call_id, None)
         raw_output = update.get("rawOutput")
         # rawOutput is {"content": [blocks], "details": {...}} in the fixture;
         # tolerate a bare block list too.
         if isinstance(raw_output, dict):
             raw_output = raw_output.get("content")
-        output_text = _trunc(_content_text(raw_output))
+        output_text = _trunc(strip_ansi(_content_text(raw_output)))
+        details: dict[str, Any] = {"title": tool["title"], "status": status}
+        diffs = _clean_diffs(update.get("content"))
+        if diffs:
+            details["diffs"] = diffs
+        if tool["locations"]:
+            details["locations"] = list(tool["locations"])
         return [
             {
                 "type": "message",
@@ -646,11 +832,58 @@ class ACPEventMapper:
                     "toolCallId": tool_call_id,
                     "toolName": tool["name"],
                     "content": [{"type": "text", "text": output_text}],
-                    "details": {"title": tool["title"], "status": status},
+                    "details": details,
                     "isError": status in ("failed", "error"),
                 },
             }
         ]
+
+    def _tool_progress(self, tool_call_id: str, update: dict[str, Any]) -> list[dict[str, Any]]:
+        """One in_progress snapshot -> 0..1 volatile ``acp-tool-output`` line
+        (throttled per call; see the module docstring, LIVE TOOL OUTPUT)."""
+        raw_output = update.get("rawOutput")
+        if isinstance(raw_output, dict):
+            raw_output = raw_output.get("content")
+        text = _tail(strip_ansi(_content_text(raw_output)).rstrip())
+        if not text.strip():
+            return []
+        live = self._live.setdefault(tool_call_id, {"text": None, "at": None, "pending": None})
+        if text == live["text"]:
+            live["pending"] = None
+            return []
+        now = self.clock()
+        if live["at"] is not None and now - live["at"] < _TOOL_OUTPUT_INTERVAL_S:
+            live["pending"] = text
+            return []
+        return [self._emit_tool_output(tool_call_id, text, now)]
+
+    def _flush_due_tool_output(self) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        if not self._live:
+            return out
+        now = self.clock()
+        for tool_call_id, live in list(self._live.items()):
+            pending = live.get("pending")
+            if pending is None or live["at"] is None:
+                continue
+            if now - live["at"] >= _TOOL_OUTPUT_INTERVAL_S:
+                out.append(self._emit_tool_output(tool_call_id, pending, now))
+        return out
+
+    def _emit_tool_output(self, tool_call_id: str, text: str, now: float) -> dict[str, Any]:
+        live = self._live.setdefault(tool_call_id, {"text": None, "at": None, "pending": None})
+        live.update(text=text, at=now, pending=None)
+        return {
+            "type": "custom_message",
+            "customType": TOOL_OUTPUT_CUSTOM_TYPE,
+            "content": text,
+            "display": True,
+            "attribution": "agent",
+            "data": {"toolCallId": tool_call_id},
+            "id": self._next_id(),
+            "parentId": None,
+            "timestamp": _now_iso(),
+        }
 
     # ------------------------------------------------------------------
     # serialization
@@ -665,6 +898,55 @@ class ACPEventMapper:
             except (TypeError, ValueError):
                 continue
         return out
+
+
+class ToolOutputPump:
+    """Trailing flush for live tool output (chat package P1).
+
+    The mapper withholds snapshots that arrive faster than
+    ``_TOOL_OUTPUT_INTERVAL_S`` and normally releases the newest one with
+    the next update. A command that prints a burst and then goes quiet
+    sends no next update — without this pump the phone would sit on the
+    burst's first line until the command ended. A daemon thread asks the
+    mapper every interval and hands anything due to ``emit`` (the preview
+    sink). Failure-proof like the sinks: an exception is swallowed, a dead
+    pump only means a slightly staler live view.
+    """
+
+    def __init__(
+        self,
+        mapper: "ACPEventMapper",
+        emit: Callable[[list[dict[str, Any]]], None],
+        interval: float = _TOOL_OUTPUT_INTERVAL_S,
+    ):
+        self._mapper = mapper
+        self._emit = emit
+        self._interval = interval
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self) -> "ToolOutputPump":
+        if self._thread is None:
+            self._thread = threading.Thread(
+                target=self._run, name="acp-tool-output-pump", daemon=True
+            )
+            self._thread.start()
+        return self
+
+    def _run(self) -> None:
+        while not self._stop.wait(self._interval):
+            try:
+                entries = self._mapper.flush_tool_output()
+                if entries:
+                    self._emit(entries)
+            except Exception:  # noqa: BLE001 — never kill the turn
+                pass
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=2)
+            self._thread = None
 
 
 def _encode_cwd(path: str) -> str:

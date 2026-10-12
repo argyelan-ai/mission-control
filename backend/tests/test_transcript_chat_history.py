@@ -303,7 +303,12 @@ def test_read_history_edit_stats_computed_from_old_new_string(tmp_path):
     result = read_history(f, limit=200, adapter=CLAUDE)
     tool_event = [e for e in result["events"] if e["kind"] == "tool"][0]
 
-    assert tool_event["stats"] == {"additions": 3, "deletions": 2}
+    # Chat package P1: the badge counts the real diff the card now shows
+    # (one line added, nothing removed) — it used to count every line of
+    # old_string/new_string (+3 −2), which disagreed with the diff beside it.
+    assert tool_event["stats"] == {"additions": 1, "deletions": 0}
+    assert [ln["t"] for ln in tool_event["diffs"][0]["lines"]] == ["hunk", "ctx", "ctx", "add"]
+    assert tool_event["locations"] == ["/app/a.py"]
 
 
 def test_read_history_no_stats_for_non_edit_write_tools(tmp_path):
@@ -335,6 +340,9 @@ def test_read_history_no_stats_when_write_has_no_old_new_string(tmp_path):
     tool_event = [e for e in result["events"] if e["kind"] == "tool"][0]
 
     assert tool_event["stats"] is None
+    # P1: the written content is shown — as "write", never as a new file
+    # (the transcript does not know what was there before).
+    assert tool_event["diffs"][0]["kind"] == "write"
 
 
 # ── paging (before_uuid, hasMore) ────────────────────────────────────────────

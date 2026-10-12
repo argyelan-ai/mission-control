@@ -180,6 +180,10 @@ class ChatSession:
 
         self._full_text: list[str] = []
         self._throttle: dict = {"chars": -10 ** 9, "at": 0.0, "pending": None}
+        # P1: trailing flush of withheld live tool output (see
+        # acp_chat_events.ToolOutputPump) — one per daemon, started in
+        # start(), stopped in close().
+        self._pump: Optional[acp_chat_events.ToolOutputPump] = None
 
     # ------------------------------------------------------------------
     # lifecycle
@@ -195,6 +199,10 @@ class ChatSession:
         lost = self._previous_queue()
         self._connect(persisted)
         self._write_state()
+        if self._pump is None:
+            self._pump = acp_chat_events.ToolOutputPump(
+                self._mapper, self._emit_preview
+            ).start()
         if lost:
             self._report_lost_queue(lost)
 
@@ -281,6 +289,9 @@ class ChatSession:
         with self._lock:
             self._closed = True
             client = self._client
+            pump, self._pump = self._pump, None
+        if pump is not None:
+            pump.stop()
         if client is not None:
             try:
                 client.close()
@@ -664,8 +675,13 @@ class ChatSession:
                 self._write_state()
 
             for entry in self._mapper.map_update(params, stream=True):
-                if entry.get("customType") != acp_chat_events.PREVIEW_CUSTOM_TYPE:
+                if not acp_chat_events.is_volatile(entry):
                     self._emit_transcript([entry])
+                    continue
+                if entry.get("customType") == acp_chat_events.TOOL_OUTPUT_CUSTOM_TYPE:
+                    # Live tool output (P1): own per-call throttle in the
+                    # mapper, never the text-preview throttle below.
+                    self._emit_preview([entry])
                     continue
                 body = entry.get("content") or ""
                 grew = len(body) - self._throttle["chars"] > _PREVIEW_GROWTH_CHARS

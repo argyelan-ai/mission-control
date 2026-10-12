@@ -1214,3 +1214,129 @@ def test_omp_adapter_carries_the_preview_channel():
     assert _omp_adapter().preview_channel(session) is None
     assert _claude_adapter().preview_channel is None
     assert _omp_adapter().preview_channel is preview_channel
+
+
+# ── Chat-Paket P1: Live-Ausgabe, Diff pro Edit, Datei-Orte, Kosten ──────────
+# Zeilenformen exakt wie die Bridge sie aus dem echten omp-18.10.1-Lauf
+# schreibt (docker/omp-bridge/rpc/acp-tool-live-diff-cost-18.10.1.ndjson).
+
+ACP_EDIT_SEED_LINE = json.dumps({
+    "type": "message", "id": "acp00007", "parentId": None, "timestamp": "2026-10-12T16:18:09.000Z",
+    "message": {"role": "assistant", "model": None, "content": [{
+        "type": "toolCall", "id": "call_edit_1", "name": "edit",
+        "arguments": {"path": "/workspace/demo.py", "old_string": "    return 1\n",
+                      "new_string": "    # doubled\n    return 2\n", "i": "edit: /workspace/demo.py"},
+        "locations": ["/workspace/demo.py"],
+    }]},
+})
+
+ACP_EDIT_RESULT_LINE = json.dumps({
+    "type": "message", "id": "acp00008", "parentId": None, "timestamp": "2026-10-12T16:18:09.100Z",
+    "message": {"role": "toolResult", "toolCallId": "call_edit_1", "toolName": "edit",
+                "content": [{"type": "text", "text": "[/workspace/demo.py]\n1:def value():"}],
+                "details": {"title": "edit: /workspace/demo.py", "status": "completed",
+                            "diffs": [{"path": "/workspace/demo.py",
+                                       "oldText": "def value():\n    return 1\n",
+                                       "newText": "def value():\n    # doubled\n    return 2\n"}],
+                            "locations": ["/workspace/demo.py"]},
+                "isError": False},
+})
+
+# omp's OWN (TUI) transcript writes the edit details itself — same diff.
+NATIVE_EDIT_RESULT_LINE = json.dumps({
+    "type": "message", "id": "9e9e9e9e", "parentId": None, "timestamp": "2026-10-12T16:18:09.100Z",
+    "message": {"role": "toolResult", "toolCallId": "tool-eee", "toolName": "edit",
+                "content": [{"type": "text", "text": "ok"}],
+                "details": {"diff": " 1|a\n-2|b\n+2|c", "path": "/workspace/x.txt",
+                            "oldText": "a\nb\n", "newText": "a\nc\n", "firstChangedLine": 2},
+                "isError": False},
+})
+
+ACP_TOOL_OUTPUT_LINE = json.dumps({
+    "type": "custom_message", "customType": "acp-tool-output", "content": "step 1\nstep 2",
+    "display": True, "attribution": "agent", "data": {"toolCallId": "call_bash_1"},
+    "id": "acp00003", "parentId": None, "timestamp": "2026-10-12T16:18:08.000Z",
+})
+
+ACP_FINAL_WITH_COST_LINE = json.dumps({
+    "type": "message", "id": "acp00010", "parentId": None, "timestamp": "2026-10-12T16:18:13.900Z",
+    "message": {"role": "assistant", "model": None, "stopReason": "stop",
+                "content": [{"type": "text", "text": "MOCK-OK P1 probe"}],
+                "usage": {"input": 3900, "cacheRead": 0, "cacheWrite": 0, "output": 77,
+                          "contextWindow": 131072, "usedTokens": 1400,
+                          "sessionCost": {"amount": 0.012855, "currency": "USD"}}},
+})
+
+
+def test_acp_tool_call_locations_ride_on_the_tool_event():
+    tool = [e for e in parse(ACP_EDIT_SEED_LINE) if e["kind"] == "tool"][0]
+    assert tool["locations"] == ["/workspace/demo.py"]
+    # A call without locations carries no empty key (K3: nothing empty).
+    assert "locations" not in [e for e in parse(MULTI_TOOL_LINE) if e["kind"] == "tool"][0]
+
+
+def test_acp_tool_result_carries_a_structured_diff_and_locations():
+    (res,) = parse(ACP_EDIT_RESULT_LINE)
+    assert res["kind"] == "_tool_result"
+    (diff,) = res["diffs"]
+    assert diff["path"] == "/workspace/demo.py"
+    assert (diff["additions"], diff["deletions"], diff["kind"]) == (2, 1, "edit")
+    assert [ln["t"] for ln in diff["lines"]] == ["hunk", "ctx", "del", "add", "add"]
+    assert res["locations"] == ["/workspace/demo.py"]
+
+
+def test_native_omp_edit_details_become_the_same_diff():
+    (res,) = parse(NATIVE_EDIT_RESULT_LINE)
+    (diff,) = res["diffs"]
+    assert (diff["path"], diff["additions"], diff["deletions"]) == ("/workspace/x.txt", 1, 1)
+
+
+def test_plain_tool_result_keeps_its_old_shape():
+    (res,) = parse(TOOL_RESULT_B_LINE)
+    assert set(res) == {"kind", "tool_use_id", "content", "is_error"}
+
+
+def test_acp_tool_output_is_a_volatile_tool_output_event_not_a_message():
+    (ev,) = parse(ACP_TOOL_OUTPUT_LINE)
+    assert ev == {"kind": "tool_output", "uuid": None, "ts": "2026-10-12T16:18:08.000Z",
+                  "toolUseId": "call_bash_1", "text": "step 1\nstep 2"}
+
+
+def test_acp_tool_output_without_tool_id_is_dropped():
+    line = json.loads(ACP_TOOL_OUTPUT_LINE)
+    line["data"] = {}
+    assert parse(json.dumps(line)) == []
+
+
+def test_session_cost_lands_on_the_usage_event_only_when_reported():
+    usage = [e for e in parse(ACP_FINAL_WITH_COST_LINE) if e["kind"] == "usage"][0]
+    assert usage["sessionCost"] == {"amount": 0.012855, "currency": "USD"}
+    # omp's NATIVE per-message ``cost`` (ASSISTANT_LINE, total 0) is not a
+    # session cost and must not be turned into one.
+    native = [e for e in parse(ASSISTANT_LINE) if e["kind"] == "usage"][0]
+    assert "sessionCost" not in native
+    bad = json.loads(ACP_FINAL_WITH_COST_LINE)
+    for cost in ({"amount": 0, "currency": "USD"}, {"amount": "x"}, None, {"amount": -1}):
+        bad["message"]["usage"]["sessionCost"] = cost
+        usage = [e for e in parse(json.dumps(bad)) if e["kind"] == "usage"][0]
+        assert "sessionCost" not in usage, cost
+
+
+def test_history_merges_diff_locations_and_true_stats_onto_the_card(tmp_path):
+    from app.services.transcript_adapters import adapter_for
+    from app.services.transcript_chat import read_history
+
+    class _Agent:
+        harness = "omp"
+
+    f = tmp_path / "sess.jsonl"
+    f.write_text("\n".join([SESSION_LINE, ACP_EDIT_SEED_LINE, ACP_TOOL_OUTPUT_LINE,
+                            ACP_EDIT_RESULT_LINE, ACP_FINAL_WITH_COST_LINE]) + "\n")
+    result = read_history(f, adapter_for(_Agent()), limit=200)
+    kinds = [e["kind"] for e in result["events"]]
+    assert "tool_output" not in kinds, "volatile live output never enters the history"
+    tool = [e for e in result["events"] if e["kind"] == "tool"][0]
+    assert tool["result"].startswith("[/workspace/demo.py]")
+    assert tool["diffs"][0]["additions"] == 2
+    assert tool["stats"] == {"additions": 2, "deletions": 1}
+    assert tool["locations"] == ["/workspace/demo.py"]

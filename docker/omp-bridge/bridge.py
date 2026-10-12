@@ -4344,8 +4344,14 @@ def run_acp_once(
         # flushed unconditionally at the end of the run so the preview never
         # rests on a stale snapshot.
         for entry in mapper.map_update(params, stream=True):
-            if entry.get("customType") != acp_chat_events.PREVIEW_CUSTOM_TYPE:
+            if not acp_chat_events.is_volatile(entry):
                 emit_transcript([entry])
+                continue
+            if entry.get("customType") == acp_chat_events.TOOL_OUTPUT_CUSTOM_TYPE:
+                # Live tool output (P1): volatile like the text preview, but
+                # throttled per tool call inside the mapper — not through the
+                # text snapshot throttle below, whose state it would corrupt.
+                emit_preview([entry])
                 continue
             entry_text = entry.get("content") or ""
             grew = len(entry_text) - _throttle["chars"] > 200
@@ -4455,12 +4461,21 @@ def run_acp_once(
 
         watcher = threading.Thread(target=watch_cancel, name="acp-cancel", daemon=True)
         watcher.start()
+        # P1: a quiet command after an output burst still gets its newest
+        # snapshot onto the phone (ToolOutputPump docstring). Only with a
+        # preview channel — the pure driver path stays thread-free.
+        pump = (
+            acp_chat_events.ToolOutputPump(mapper, emit_preview).start()
+            if preview_sink is not None else None
+        )
         try:
             prompt_result = client.prompt(sid, acp_context_prefix(cwd) + prompt,
                                           timeout=float(max_time) + 120.0)
         finally:
             stop_watcher.set()
             watcher.join(timeout=2)
+            if pump is not None:
+                pump.stop()
         sys.stderr.write(
             f"[acp] session {sid[:8]} turn end: stopReason="
             f"{getattr(prompt_result, 'stopReason', '?')!r} after "
