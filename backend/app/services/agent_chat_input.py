@@ -1979,19 +1979,14 @@ async def _discover_skill_commands(slug: str) -> list[dict[str, str | None]]:
     return discovered
 
 
-# Top-level command names hidden from the slash picker entirely because they
-# CAN be used to install/modify something (even though some of their own
-# subcommands are read-only — the picker only knows the command name, not
-# the subcommand the operator is about to type, so a per-subcommand toggle
-# isn't possible here the way ``_blocked_install_command`` does it for the
-# actual guard). Same operator rule as ``InstallCommandBlockedError``: no
-# approval-card flow exists yet, so these stay out of the autocomplete list
-# until it does. Typing the read-only form by hand (``/marketplace list``)
-# still works — ``send_text``'s guard allows it; only the picker suggestion
-# is gone.
-_PICKER_HIDDEN_COMMAND_NAMES: frozenset[str] = frozenset(
-    _BLOCKED_INSTALL_VERBS.keys() | _BARE_BLOCKED_COMMANDS
-)
+# Command names hidden from the slash picker: only commands whose EVERY use
+# installs or modifies something (bare ``/install``). Commands with read-only
+# subcommands (``/skills``, ``/mcp``, ``/marketplace list``, ``/plugin list``)
+# stay in the picker — the picker only knows the command name, and hiding
+# them would also hide the harmless listing. The install/modify forms are
+# refused by ``send_text``'s guard (``InstallCommandBlockedError``) until the
+# approval-card flow exists.
+_PICKER_HIDDEN_COMMAND_NAMES: frozenset[str] = frozenset(_BARE_BLOCKED_COMMANDS)
 
 
 def _hide_install_capable_commands(
@@ -2004,9 +1999,8 @@ async def slash_command_capabilities(agent) -> dict[str, object]:
     """``{"slashCommands": [{"name": str, "description": str|None}, ...]}``
     — builtins merged with this agent's installed skills. Docker/cli-bridge
     only: every other runtime gets builtins alone (no ``claude-config``
-    mount to scan for skills). Install-capable commands (``/marketplace``,
-    ``/plugin(s)``, ``/mcp``, ``/skills``, ``/install``) are filtered out of
-    this list entirely by ``_hide_install_capable_commands`` — see its
+    mount to scan for skills). Install-only commands (bare ``/install``)
+    are filtered out of this list by ``_hide_install_capable_commands`` — see its
     docstring; they are still refused if typed by hand, by ``send_text``'s
     own guard."""
     if headless_chat_kind(agent) is not None:

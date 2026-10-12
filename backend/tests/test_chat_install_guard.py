@@ -270,10 +270,10 @@ async def test_router_allows_read_only_marketplace_list(auth_client, make_agent,
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# Slash picker — install-capable commands hidden from autocomplete entirely
-# (coarser than the text guard: the picker only knows the command NAME, not
-# which subcommand the operator is about to type, so a whole name is hidden
-# rather than toggled per-subcommand). Covers both paths
+# Slash picker — only install-only commands (bare ``/install``) are hidden.
+# Commands with harmless read-only subcommands (``/skills``, ``/mcp``,
+# ``/marketplace``, ``/plugins``) stay listed; their install forms are refused
+# by the send guard above. Covers both paths
 # ``slash_command_capabilities`` has: the static builtin table (claude/
 # openclaude/omp over its TUI) and the headless ACP-advertised list (omp/
 # hermes chat daemons).
@@ -288,8 +288,7 @@ async def test_picker_hides_install_capable_builtins_for_claude_harness():
         c["name"]
         for c in (await agent_chat_input.slash_command_capabilities(agent))["slashCommands"]
     }
-    for hidden in ("marketplace", "plugin", "plugins", "mcp", "skills", "install"):
-        assert hidden not in names
+    assert "install" not in names
     # The claude builtin table's own harmless entries must still be there —
     # proves the filter removed specific names, not everything.
     assert "model" in names
@@ -311,6 +310,7 @@ async def test_picker_hides_install_capable_acp_advertised_commands(monkeypatch)
             {"name": "marketplace", "description": "Manage plugins from marketplaces", "input": None},
             {"name": "plugins", "description": "Manage plugins", "input": None},
             {"name": "mcp", "description": "Manage MCP servers", "input": None},
+            {"name": "install", "description": "Install a package", "input": None},
         ],
     }
     monkeypatch.setattr(agent_chat_input, "read_acp_chat_state", lambda agent: state)
@@ -322,5 +322,6 @@ async def test_picker_hides_install_capable_acp_advertised_commands(monkeypatch)
         for c in (await agent_chat_input.slash_command_capabilities(agent))["slashCommands"]
     }
     assert "usage" in names
-    for hidden in ("marketplace", "plugins", "mcp"):
-        assert hidden not in names
+    assert "install" not in names
+    for kept in ("marketplace", "plugins", "mcp"):
+        assert kept in names
