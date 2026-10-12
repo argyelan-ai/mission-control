@@ -1083,6 +1083,24 @@
         ]
       }
     },
+    "/api/v1/agents/{agent_id}/chat/commit": {
+      "post": {
+        "operationId": "post_chat_commit_api_v1_agents__agent_id__chat_commit_post",
+        "summary": "Post Chat Commit",
+        "tags": [
+          "agent-chat"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/chat/commit/draft": {
+      "get": {
+        "operationId": "get_chat_commit_draft_api_v1_agents__agent_id__chat_commit_draft_get",
+        "summary": "Get Chat Commit Draft",
+        "tags": [
+          "agent-chat"
+        ]
+      }
+    },
     "/api/v1/agents/{agent_id}/chat/diff": {
       "get": {
         "operationId": "get_chat_diff_api_v1_agents__agent_id__chat_diff_get",
@@ -1128,10 +1146,37 @@
         ]
       }
     },
+    "/api/v1/agents/{agent_id}/chat/pr": {
+      "post": {
+        "operationId": "post_chat_pr_api_v1_agents__agent_id__chat_pr_post",
+        "summary": "Post Chat Pr",
+        "tags": [
+          "agent-chat"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/chat/pr/draft": {
+      "get": {
+        "operationId": "get_chat_pr_draft_api_v1_agents__agent_id__chat_pr_draft_get",
+        "summary": "Get Chat Pr Draft",
+        "tags": [
+          "agent-chat"
+        ]
+      }
+    },
     "/api/v1/agents/{agent_id}/chat/queue/clear": {
       "post": {
         "operationId": "post_chat_queue_clear_api_v1_agents__agent_id__chat_queue_clear_post",
         "summary": "Post Chat Queue Clear",
+        "tags": [
+          "agent-chat"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/chat/revert": {
+      "post": {
+        "operationId": "post_chat_revert_api_v1_agents__agent_id__chat_revert_post",
+        "summary": "Post Chat Revert",
         "tags": [
           "agent-chat"
         ]

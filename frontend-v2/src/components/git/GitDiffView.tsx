@@ -95,7 +95,16 @@ export function fileStatus(file: CommitDiffFile): "added" | "deleted" | "modifie
 
 const MAX_LINES = 500;
 
-function FileDiff({ file, defaultOpen = true }: { file: CommitDiffFile; defaultOpen?: boolean }) {
+function FileDiff({
+  file,
+  defaultOpen = true,
+  action,
+}: {
+  file: CommitDiffFile;
+  defaultOpen?: boolean;
+  /** Optional per-file control shown above the opened diff (e.g. Revert). */
+  action?: ReactNode;
+}) {
   const t = useTranslations("gitDiff");
   const [open, setOpen] = useState(defaultOpen);
   const ext = getFileExt(file.filename);
@@ -191,6 +200,7 @@ function FileDiff({ file, defaultOpen = true }: { file: CommitDiffFile; defaultO
             transition={{ duration: 0.18, ease: "easeOut" }}
             style={{ overflow: "hidden" }}
           >
+            {action}
             <div style={{ overflowX: "auto", maxHeight: 480, overflowY: "auto" }}>
               <table
                 className="font-mono text-[11px]"
@@ -347,10 +357,13 @@ function DiffBar({ additions, deletions }: { additions: number; deletions: numbe
 export function GitDiffView({
   diff,
   subtitle,
+  fileAction,
 }: {
   diff: CommitDiff;
   /** Optional second line under the message (e.g. short id · time). */
   subtitle?: ReactNode;
+  /** Optional control per file, shown when the file is open (null = none). */
+  fileAction?: (file: CommitDiffFile) => ReactNode;
 }) {
   const t = useTranslations("gitDiff");
   return (
@@ -383,7 +396,12 @@ export function GitDiffView({
 
       {/* Files */}
       {diff.files.map((file) => (
-        <FileDiff key={file.filename} file={file} defaultOpen={diff.files.length <= 3} />
+        <FileDiff
+          key={file.filename}
+          file={file}
+          defaultOpen={diff.files.length <= 3}
+          action={fileAction?.(file)}
+        />
       ))}
     </div>
   );

@@ -114,6 +114,70 @@ export interface ChatChangeFile {
   lastAt: string | null;
   /** All edits of the file, oldest first — rendered by `ToolDiffView`. */
   diff: ToolDiff;
+  /** MC put the file back (Revert) in this session and it still holds
+   *  exactly that content. Absent = not reverted. */
+  reverted?: boolean;
+}
+
+/** Whether Commit / Open PR can run for the chat's repository (Changes panel, part 3). A
+ *  `reason` is a code the panel translates (`sessions.diff.reason.*`). */
+export interface ChatActionAvailability {
+  ok: boolean;
+  reason: string | null;
+  files?: number;
+}
+
+/** `POST /agents/{id}/chat/revert` */
+export interface ChatRevertResult {
+  status: "reverted" | "already";
+  path: string;
+  /** "git" = restored the last committed version through git. */
+  method: "chat" | "git" | null;
+  deleted: boolean;
+  edits: number;
+}
+
+export interface ChatPendingFile {
+  path: string;
+  status: "added" | "modified" | "deleted" | "renamed";
+  additions: number;
+  deletions: number;
+}
+
+/** `GET /agents/{id}/chat/commit/draft` */
+export interface ChatCommitDraft {
+  branch: string;
+  files: ChatPendingFile[];
+  /** Suggested conventional-commit message — the operator edits it. */
+  message: string;
+}
+
+/** `POST /agents/{id}/chat/commit` */
+export interface ChatCommitResult {
+  status: "committed" | "nothing_to_commit";
+  branch: string;
+  sha: string | null;
+  subject?: string;
+}
+
+/** `GET /agents/{id}/chat/pr/draft` */
+export interface ChatPrDraft {
+  branch: string;
+  base: string;
+  /** The newest commit's subject — editable. */
+  title: string;
+  ahead: number | null;
+  /** Uncommitted files that the PR will NOT contain. */
+  uncommitted: number;
+}
+
+/** `POST /agents/{id}/chat/pr` — `exists` = an open PR for the branch was
+ *  found and returned instead of a second one. */
+export interface ChatPrResult {
+  status: "opened" | "exists";
+  url: string;
+  branch: string;
+  base: string;
 }
 
 /** `GET /agents/{id}/chat/changes` — the Changes panel's "This chat" tab.
@@ -123,6 +187,8 @@ export interface ChatChanges {
   files: ChatChangeFile[];
   stats: { files: number; additions: number; deletions: number };
   repo: ChatDiffSource | null;
+  /** Only with a repository. */
+  actions?: { commit: ChatActionAvailability; pr: ChatActionAvailability };
 }
 
 /** A running tool's output so far (ACP `tool_call_update` in_progress, via

@@ -23,11 +23,21 @@ Shape (``ToolDiff`` in ``frontend-v2/src/lib/chatTypes.ts``)::
   diff therefore never disagree.
 
 Pure, never raises on odd input (returns ``None``/``[]`` instead).
+
+**Raw texts for "Revert file" (Changes panel, part 3).** Only inside
+``capture_texts()`` does every diff also carry ``_texts`` — the edit's
+untruncated before/after (``scope`` ``"file"`` = whole file, ``"snippet"``
+= a Claude Edit's ``old_string``/``new_string``) and whether the harness
+handed them over whole (``complete``). ``chat_actions`` reads them to put a
+file back; the history and SSE paths never enter that context, so no
+whole-file text ever rides a chat frame.
 """
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import difflib
-from typing import Any
+from typing import Any, Iterator
 
 #: Lines handed to the frontend per diff — a phone shows a dozen, "show all"
 #: a few hundred; a 20k-line rewrite must not ride every SSE frame.
@@ -42,6 +52,20 @@ _CONTEXT = 2
 
 _CLAUDE_EDIT_TOOLS = ("Edit", "MultiEdit", "Write")
 
+_CAPTURE: contextvars.ContextVar[bool] = contextvars.ContextVar("chat_diff_capture", default=False)
+
+
+@contextlib.contextmanager
+def capture_texts() -> Iterator[None]:
+    """While active (same thread), every built diff keeps its raw texts
+    under ``_texts`` — see the module docstring. Never used on a path that
+    sends events to a client."""
+    token = _CAPTURE.set(True)
+    try:
+        yield
+    finally:
+        _CAPTURE.reset(token)
+
 
 def _clip(line: str) -> str:
     return line if len(line) <= _MAX_LINE_CHARS else line[:_MAX_LINE_CHARS] + "…"
@@ -54,13 +78,17 @@ def build_diff(
     *,
     kind: str | None = None,
     truncated: bool = False,
+    scope: str = "file",
+    replace_all: bool = False,
 ) -> dict[str, Any] | None:
     """Unified diff of ``old`` -> ``new``. ``old is None`` = created file
-    (unless ``kind`` says otherwise). Identical texts -> ``None``."""
+    (unless ``kind`` says otherwise). Identical texts -> ``None``.
+    ``scope``/``replace_all`` only matter for ``capture_texts()``."""
     if new is not None and not isinstance(new, str):
         return None
     if old is not None and not isinstance(old, str):
         return None
+    raw_old, raw_new, handed_whole = old, new, not truncated
     new_text = new or ""
     old_text = old or ""
     if old is not None and old_text == new_text:
@@ -95,7 +123,7 @@ def build_diff(
             truncated = True
     if additions == 0 and deletions == 0:
         return None
-    return {
+    out: dict[str, Any] = {
         "path": path.strip() if isinstance(path, str) and path.strip() else None,
         "kind": kind or ("create" if old is None else "edit"),
         "lines": lines,
@@ -103,6 +131,15 @@ def build_diff(
         "deletions": deletions,
         "truncated": bool(truncated),
     }
+    if _CAPTURE.get():
+        out["_texts"] = {
+            "old": raw_old,
+            "new": raw_new,
+            "scope": scope,
+            "complete": handed_whole,
+            "replaceAll": bool(replace_all),
+        }
+    return out
 
 
 def diffs_from_acp(raw: Any) -> list[dict[str, Any]]:
@@ -141,7 +178,8 @@ def diffs_from_claude_tool(name: str, tool_input: Any) -> list[dict[str, Any]]:
     if name == "Edit":
         old, new = tool_input.get("old_string"), tool_input.get("new_string")
         if isinstance(old, str) and isinstance(new, str):
-            diff = build_diff(path, old, new)
+            diff = build_diff(path, old, new, scope="snippet",
+                              replace_all=bool(tool_input.get("replace_all")))
             if diff is not None:
                 out.append(diff)
     elif name == "MultiEdit":
@@ -151,7 +189,8 @@ def diffs_from_claude_tool(name: str, tool_input: Any) -> list[dict[str, Any]]:
                 continue
             old, new = edit.get("old_string"), edit.get("new_string")
             if isinstance(old, str) and isinstance(new, str):
-                diff = build_diff(path, old, new)
+                diff = build_diff(path, old, new, scope="snippet",
+                                  replace_all=bool(edit.get("replace_all")))
                 if diff is not None:
                     out.append(diff)
     else:  # Write

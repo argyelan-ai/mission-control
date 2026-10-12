@@ -12,15 +12,18 @@
  * machine value, K7), its folder and how often/when it changed sit quietly
  * below; +/− on the right in tabular numbers. Tap → the file's combined diff
  * (all its edits, oldest first) in the same `ToolDiffView` the tool cards use,
- * with a back row. No actions here (revert/commit come later, separately).
+ * with a back row. The detail view carries "Revert" (part 3): one tap opens the
+ * confirmation sheet (`RevertSheet`); a file MC already put back says so
+ * instead (`reverted`).
  */
 import { useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
-import { ChevronLeft, ChevronRight, FilePen } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, FilePen, RotateCcw } from "lucide-react";
 import { C, STATUS_TEXT } from "@/lib/colors";
 import { timeAgo } from "@/lib/utils";
 import type { ChatChangeFile, ChatChanges } from "@/lib/chatTypes";
 import { ToolDiffView } from "./ToolDiffView";
+import { RevertSheet, type RevertTarget } from "./ChangesActions";
 
 function splitPath(path: string): { dir: string; base: string } {
   const i = path.lastIndexOf("/");
@@ -79,7 +82,15 @@ function FileRow({ file, onOpen }: { file: ChatChangeFile; onOpen: () => void })
   );
 }
 
-function FileDetail({ file, onBack }: { file: ChatChangeFile; onBack: () => void }) {
+function FileDetail({
+  file,
+  onBack,
+  onRevert,
+}: {
+  file: ChatChangeFile;
+  onBack: () => void;
+  onRevert?: () => void;
+}) {
   const t = useTranslations("sessions.diff");
   const meta = useMeta(file, false);
   return (
@@ -104,6 +115,29 @@ function FileDetail({ file, onBack }: { file: ChatChangeFile; onBack: () => void
         </span>
         <Counts file={file} />
       </div>
+      {file.reverted ? (
+        <p
+          data-testid="chat-change-reverted"
+          className="flex items-center gap-2 px-3 text-sm"
+          style={{ color: C.textMuted }}
+        >
+          <Check size={14} aria-hidden="true" />
+          {t("act.reverted")}
+        </p>
+      ) : (
+        onRevert && (
+          <button
+            type="button"
+            onClick={onRevert}
+            data-testid="chat-change-revert"
+            className="self-start flex items-center gap-2 px-3 min-h-11 text-sm cursor-pointer bg-transparent border-0"
+            style={{ color: C.textSecondary }}
+          >
+            <RotateCcw size={14} aria-hidden="true" />
+            {t("act.revert")}
+          </button>
+        )
+      )}
       <div className="px-3">
         <ToolDiffView diff={file.diff} multi={false} initialAll />
       </div>
@@ -111,12 +145,28 @@ function FileDetail({ file, onBack }: { file: ChatChangeFile; onBack: () => void
   );
 }
 
-export function ChatChangesList({ changes }: { changes: ChatChanges }) {
+export function ChatChangesList({ changes, agentId }: { changes: ChatChanges; agentId?: string }) {
   const t = useTranslations("sessions.diff");
   const [openPath, setOpenPath] = useState<string | null>(null);
+  const [revert, setRevert] = useState<RevertTarget | null>(null);
   const open = openPath ? changes.files.find((f) => f.path === openPath) : undefined;
 
-  if (open) return <FileDetail file={open} onBack={() => setOpenPath(null)} />;
+  if (open) {
+    return (
+      <>
+        <FileDetail
+          file={open}
+          onBack={() => setOpenPath(null)}
+          onRevert={
+            agentId
+              ? () => setRevert({ path: open.path, edits: open.edits, created: open.created })
+              : undefined
+          }
+        />
+        {agentId && <RevertSheet agentId={agentId} target={revert} onClose={() => setRevert(null)} />}
+      </>
+    );
+  }
 
   if (changes.files.length === 0) {
     return (
