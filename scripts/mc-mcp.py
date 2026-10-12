@@ -2,6 +2,19 @@
 """
 Mission Control MCP Server
 Gibt Claude direkten Zugriff auf MC API, Bridge und Docker-Logs.
+
+Two kinds of users, two modes (ADR-085 §4: the admin tool stays an operator
+tool):
+
+* Operator mode — no agent identity in the environment (Claude Code sessions
+  in the MC folder). Admin helper `_api()` with the operator `.env`, every
+  tool is offered. Unchanged behaviour.
+* Agent mode — the host runtime passed MC_AGENT_TOKEN or MC_AGENT_ENV_FILE.
+  The operator `.env` is never read, no admin JWT is ever minted, every tool
+  goes through the agent-scoped routes (`/agent/...`, own board only) and a
+  401/403 is reported as is — never retried as the operator. Operator-only
+  tools (task creation, phase completion, worker restart, logs, system
+  status) are not registered at all, so they are absent from the tool list.
 """
 
 import json
@@ -19,6 +32,23 @@ MC_BASE = "http://localhost/api/v1"
 BRIDGE_URL = "http://localhost:18792"
 PROJECT_DIR = Path(__file__).parent.parent
 
+
+def _agent_mode_from_env() -> bool:
+    return bool(
+        os.environ.get("MC_AGENT_TOKEN", "").strip()
+        or os.environ.get("MC_AGENT_ENV_FILE", "").strip()
+    )
+
+
+# Decided once at start: controls which tools are registered. A process that
+# started as an agent stays an agent (no later switch to the admin path).
+AGENT_MODE = _agent_mode_from_env()
+
+
+def _is_agent() -> bool:
+    return AGENT_MODE or _agent_mode_from_env()
+
+
 def _load_env() -> dict:
     env = {}
     env_file = PROJECT_DIR / ".env"
@@ -30,10 +60,13 @@ def _load_env() -> dict:
                 env[k.strip()] = v.strip()
     return env
 
-ENV = _load_env()
+# Agent mode never reads the operator `.env` (it holds the admin secret).
+ENV: dict = {} if AGENT_MODE else _load_env()
 
 def _get_token() -> str:
-    """JWT-Token via Login generieren."""
+    """JWT-Token via Login generieren (operator mode only)."""
+    if _is_agent():
+        raise RuntimeError("no admin token in agent mode")
     import jose.jwt as jwt
     secret = ENV.get("JWT_SECRET_KEY", "")
     payload = {
@@ -49,7 +82,16 @@ def _headers() -> dict:
     except Exception:
         return {}
 
+_ADMIN_BLOCKED = (
+    "Operator-Weg im Agenten-Modus gesperrt — dieser Server handelt fuer "
+    "Agenten nur ueber die Agenten-Wege (kein Admin-Zugriff)."
+)
+
+
 def _api(method: str, path: str, **kwargs) -> dict:
+    """Admin call as the operator. Refuses outright in agent mode."""
+    if _is_agent():
+        return {"error": _ADMIN_BLOCKED}
     try:
         with httpx.Client(timeout=15) as c:
             r = c.request(method, f"{MC_BASE}{path}", headers=_headers(), **kwargs)
@@ -118,14 +160,87 @@ def _bridge(method: str, path: str, **kwargs) -> dict:
         return {"error": str(e)}
 
 
+_NO_AGENT_TOKEN = (
+    "kein Agent-Token verfuegbar (MC_AGENT_TOKEN / MC_AGENT_ENV_FILE pruefen) — "
+    "Aufruf NICHT als Operator wiederholt"
+)
+
+
+def _agent_call(method: str, path: str, **kwargs):
+    """Agent-scoped call for agent mode: a missing token is an error, never a
+    reason to fall back to the admin path."""
+    r = _api_agent(method, path, **kwargs)
+    if r is None:
+        return {"error": _NO_AGENT_TOKEN}
+    return r
+
+
+def _is_error(r) -> bool:
+    return isinstance(r, dict) and "error" in r
+
+
+def _agent_board(board_id: str = "") -> tuple[str, str]:
+    """The agent's board: the given one, else its own (GET /agent/me).
+    Returns (board_id, error)."""
+    if board_id:
+        return board_id, ""
+    me = _agent_call("GET", "/agent/me")
+    if _is_error(me):
+        return "", f"Fehler: {me['error']}"
+    bid = (me or {}).get("board_id") if isinstance(me, dict) else None
+    if not bid:
+        return "", "Fehler: Agent ist keinem Board zugeordnet"
+    return bid, ""
+
+
+def _agent_tasks(board_id: str = "", status: str = "", limit: int = 200) -> tuple[list[dict], str]:
+    """Tasks of the agent's own board (newest first, max 200).
+    Returns (tasks, error)."""
+    bid, err = _agent_board(board_id)
+    if err:
+        return [], err
+    params: dict = {"limit": max(1, min(int(limit or 200), 200))}
+    if status:
+        params["status"] = status
+    r = _agent_call("GET", f"/agent/boards/{bid}/tasks", params=params)
+    if _is_error(r):
+        return [], f"Fehler: {r['error']}"
+    tasks = r if isinstance(r, list) else (r or {}).get("tasks", [])
+    for t in tasks:
+        t["_board_id"] = bid
+    return tasks, ""
+
+
 # ── MCP Server ────────────────────────────────────────────────────────────────
 
 mcp = FastMCP("Mission Control")
 
 
+def _operator_tool(fn):
+    """Register a tool only in operator mode. In agent mode the function
+    stays importable but is not offered in the MCP tool list."""
+    if AGENT_MODE:
+        return fn
+    return mcp.tool()(fn)
+
+
 @mcp.tool()
 def mc_agents(board_id: str = "") -> str:
-    """Alle Agents auflisten — optional gefiltert nach board_id."""
+    """Alle Agents auflisten — optional gefiltert nach board_id.
+    Als Agent: nur die Agents des eigenen Boards."""
+    if _is_agent():
+        bid, err = _agent_board(board_id)
+        if err:
+            return err
+        r = _agent_call("GET", f"/agent/boards/{bid}/agents")
+        if _is_error(r):
+            return f"Fehler: {r['error']}"
+        lines = [
+            f"- {a.get('name', '?')} | {a.get('role') or '?'} | "
+            f"{a.get('provision_status', '?')} | id={str(a.get('id', '?'))[:8]}"
+            for a in (r or [])
+        ]
+        return "\n".join(lines) if lines else "Keine Agents gefunden"
     params = {}
     if board_id:
         params["board_id"] = board_id
@@ -182,8 +297,14 @@ def _get_tasks_from_boards(board_id: str = "", status: str = "", limit: int = 20
 
 @mcp.tool()
 def mc_tasks(board_id: str = "", status: str = "", agent_name: str = "", limit: int = 20) -> str:
-    """Tasks auflisten — filterbar nach board_id, status (inbox/in_progress/review/done/blocked/failed), agent_name."""
-    tasks = _get_tasks_from_boards(board_id=board_id, status=status, limit=limit)
+    """Tasks auflisten — filterbar nach board_id, status (inbox/in_progress/review/done/blocked/failed), agent_name.
+    Als Agent: nur das eigene Board."""
+    if _is_agent():
+        tasks, err = _agent_tasks(board_id=board_id, status=status, limit=limit)
+        if err:
+            return err
+    else:
+        tasks = _get_tasks_from_boards(board_id=board_id, status=status, limit=limit)
     if agent_name:
         tasks = [t for t in tasks if agent_name.lower() in (t.get("assigned_agent_name") or "").lower()]
     lines = []
@@ -199,8 +320,17 @@ def mc_tasks(board_id: str = "", status: str = "", agent_name: str = "", limit: 
 @mcp.tool()
 def mc_task_detail(task_id: str, board_id: str = "") -> str:
     """Details eines Tasks inkl. Kommentare — task_id kann auch ein 8-Zeichen Prefix sein."""
+    if _is_agent():
+        task_id, board_id, err = _resolve_task_board(task_id, board_id)
+        if err:
+            return err
+        result = _agent_call("GET", f"/agent/boards/{board_id}/tasks/{task_id}/detail")
+        if _is_error(result):
+            return f"Fehler: {result['error']}"
+        comments = _agent_call("GET", f"/agent/boards/{board_id}/tasks/{task_id}/comments")
+        result["comments"] = comments if isinstance(comments, list) else []
     # Vollstaendige UUID + board_id bekannt → direkt
-    if len(task_id) == 36 and board_id:
+    elif len(task_id) == 36 and board_id:
         result = _api("GET", f"/boards/{board_id}/tasks/{task_id}")
         if "error" in result:
             return f"Fehler: {result['error']}"
@@ -230,17 +360,18 @@ def mc_task_detail(task_id: str, board_id: str = "") -> str:
     if comments:
         lines.append(f"\n--- {len(comments)} Kommentar(e) ---")
         for c in comments[-5:]:
-            author = c.get("author_name") or c.get("author_agent_name") or "?"
-            body = c.get("body", "")[:200]
+            author = (c.get("author_name") or c.get("author_agent_name")
+                      or c.get("author_type") or "?")
+            body = (c.get("content") or c.get("body") or "")[:200]
             lines.append(f"\n[{author}]\n{body}")
 
     return "\n".join(lines)
 
 
-@mcp.tool()
+@_operator_tool
 def mc_create_task(title: str, description: str = "", board_id: str = "",
                    agent_name: str = "", priority: str = "medium") -> str:
-    """Neuen Task erstellen."""
+    """Neuen Task erstellen (nur Operator — Agenten bekommen dieses Werkzeug nicht)."""
     # Board-ID auflösen falls nicht angegeben
     if not board_id:
         boards = _api("GET", "/boards")
@@ -253,7 +384,6 @@ def mc_create_task(title: str, description: str = "", board_id: str = "",
     payload: dict = {
         "title": title,
         "description": description,
-        "board_id": board_id,
         "priority": priority,
     }
 
@@ -265,7 +395,9 @@ def mc_create_task(title: str, description: str = "", board_id: str = "",
         if match:
             payload["assigned_agent_id"] = match["id"]
 
-    result = _api("POST", "/tasks", json=payload)
+    # The operator create route is board-scoped (routers/tasks.py); the old
+    # `POST /tasks` never existed and answered 404.
+    result = _api("POST", f"/boards/{board_id}/tasks", json=payload)
     if "error" in result:
         return f"Fehler: {result['error']}"
     return f"Task erstellt: {result.get('id', '?')[:8]} — {result.get('title', '?')}"
@@ -273,7 +405,7 @@ def mc_create_task(title: str, description: str = "", board_id: str = "",
 
 @mcp.tool()
 def mc_patch_task(task_id: str, status: str = "", comment: str = "", board_id: str = "",
-                  attempt_id: str = "") -> str:
+                  attempt_id: str = "", comment_type: str = "message") -> str:
     """Task-Status aktualisieren und/oder Kommentar hinzufügen.
 
     Args:
@@ -284,29 +416,51 @@ def mc_patch_task(task_id: str, status: str = "", comment: str = "", board_id: s
         attempt_id: Dispatch attempt id from the [MC DISPATCH] header. Sent as
             X-Dispatch-Attempt-Id — status changes on a dispatched task are
             rejected (409) without it.
+        comment_type: Kommentar-Typ, Standard "message". Fuer den Wechsel auf
+            review/done verlangt MC eine Reflexion: comment_type="reflection"
+            — sie wird dann VOR dem Statuswechsel gepostet, damit das
+            Reflexions-Tor sie schon sieht.
 
     Returns: Human-readable status string with one entry per applied change.
     """
-    # Prefix-Auflösung über board-scoped task list (admin endpoint)
-    if len(task_id) < 36 or not board_id:
-        all_tasks = _get_tasks_from_boards(board_id=board_id, limit=200)
-        matches = [t for t in all_tasks if t.get("id", "").startswith(task_id)]
-        if not matches:
-            return f"Task '{task_id}' nicht gefunden"
-        task = matches[0]
-        task_id = task["id"]
-        if not board_id:
-            board_id = task.get("board_id") or task.get("_board_id", "")
-    if not board_id:
-        return f"Task {task_id} hat keine board_id (corrupt) — kann PATCH nicht ausführen"
+    task_id, board_id, err = _resolve_task_board(task_id, board_id)
+    if err:
+        return err
 
     results = []
+
+    def _post_comment() -> str:
+        # Post AS the agent (author_type='agent') via the agent-scoped endpoint.
+        # NEVER fall back to the operator endpoint here: that records
+        # author_type='user' → the comment shows up as '👤 Du' (the logged-in
+        # operator) and echoes back to the agent as a "new user comment". A
+        # missing/invalid MC_AGENT_TOKEN is a provisioning fault to surface,
+        # not to paper over by impersonating the operator.
+        r = _api_agent("POST", f"/agent/boards/{board_id}/tasks/{task_id}/comments",
+                       json={"content": comment, "comment_type": comment_type or "message"})
+        if r is None:
+            return ("Kommentar-Fehler: kein MC_AGENT_TOKEN in der Umgebung — "
+                    "Kommentar NICHT gepostet (würde sonst als Operator '👤 Du' "
+                    "erscheinen). agent.env prüfen / Bridge neu starten.")
+        if _is_error(r):
+            return f"Kommentar-Fehler (Agent-Endpoint): {r['error']}"
+        results.append("Kommentar hinzugefügt")
+        return ""
+
+    # A reflection is what the gate before review/done looks for — post it
+    # first so the status change in the same call can pass.
+    comment_first = bool(comment) and comment_type == "reflection"
+    if comment_first:
+        err = _post_comment()
+        if err:
+            return err
+
     if status:
         # Change status AS the agent via the agent-scoped state-machine endpoint
         # (ACK handshake, review handoff, parent reactivation) — the same path
-        # Docker agents use. Falls back to the admin endpoint ONLY without an
-        # agent token (operator use of this server). With a token, a rejected
-        # agent call (e.g. the 409 dispatch-attempt guard) is surfaced, never
+        # Docker agents use. Falls back to the admin endpoint ONLY in operator
+        # mode (no agent identity). With an agent identity, a rejected agent
+        # call (e.g. the 409 dispatch-attempt guard) is surfaced, never
         # retried as the operator: that bypassed the guard and recorded the
         # change without the agent (changed_by='user'), so a later "request
         # changes" could not find the builder and went to the Board Lead.
@@ -314,26 +468,18 @@ def mc_patch_task(task_id: str, status: str = "", comment: str = "", board_id: s
         r = _api_agent("PATCH", f"/agent/boards/{board_id}/tasks/{task_id}",
                        extra_headers=extra, json={"status": status})
         if r is None:
+            if _is_agent():
+                return f"Status-Fehler: {_NO_AGENT_TOKEN}"
             r = _api("PATCH", f"/boards/{board_id}/tasks/{task_id}", json={"status": status})
-        if "error" in r:
-            return f"Status-Fehler: {r['error']}"
+        if _is_error(r):
+            return f"Status-Fehler: {r['error']}" + (
+                f" (vorher: {', '.join(results)})" if results else "")
         results.append(f"Status → {status}")
 
-    if comment:
-        # Post AS the agent (author_type='agent') via the agent-scoped endpoint.
-        # NEVER fall back to the operator endpoint here: that records
-        # author_type='user' → the comment shows up as '👤 Du' (the logged-in
-        # operator, i.e. Mark) and echoes back to the agent as a "new user
-        # comment". A missing/invalid MC_AGENT_TOKEN is a provisioning fault to
-        # surface, not to paper over by impersonating the operator.
-        r = _api_agent("POST", f"/agent/boards/{board_id}/tasks/{task_id}/comments", json={"content": comment})
-        if r is None:
-            return ("Kommentar-Fehler: kein MC_AGENT_TOKEN in der Umgebung — "
-                    "Kommentar NICHT gepostet (würde sonst als Operator '👤 Du' "
-                    "erscheinen). agent.env prüfen / Bridge neu starten.")
-        if "error" in r:
-            return f"Kommentar-Fehler (Agent-Endpoint): {r['error']}"
-        results.append("Kommentar hinzugefügt")
+    if comment and not comment_first:
+        err = _post_comment()
+        if err:
+            return err
 
     return " | ".join(results) if results else "Nichts geändert"
 
@@ -341,10 +487,24 @@ def mc_patch_task(task_id: str, status: str = "", comment: str = "", board_id: s
 def _resolve_task_board(task_id: str, board_id: str) -> tuple[str, str, str]:
     """Resolve a (possibly prefix) task_id + optional board_id to full IDs.
 
-    Returns (task_id, board_id, error); error is '' on success. Mirrors the
-    inline resolution in mc_patch_task so the checklist tools accept the same
-    short task-id prefixes.
+    Returns (task_id, board_id, error); error is '' on success. Used by every
+    tool that takes a task id, so all accept the same short prefixes.
+    Agent mode: only the agent's own board (newest 200 cards) is searched.
     """
+    if _is_agent():
+        board_id, err = _agent_board(board_id)
+        if err:
+            return "", "", err
+        if len(task_id) < 36:
+            tasks, err = _agent_tasks(board_id=board_id, limit=200)
+            if err:
+                return "", "", err
+            matches = [t for t in tasks if t.get("id", "").startswith(task_id)]
+            if not matches:
+                return "", "", (f"Task '{task_id}' nicht gefunden "
+                                "(gesucht: neueste 200 Karten des eigenen Boards)")
+            task_id = matches[0]["id"]
+        return task_id, board_id, ""
     if len(task_id) < 36 or not board_id:
         all_tasks = _get_tasks_from_boards(board_id=board_id, limit=200)
         matches = [t for t in all_tasks if t.get("id", "").startswith(task_id)]
@@ -406,6 +566,7 @@ def mc_checklist(task_id: str, board_id: str = "") -> str:
         return err
     r = _api_agent("GET", f"/agent/boards/{board_id}/tasks/{task_id}/checklist")
     if r is None:
+        # Operator mode only — in agent mode _api() refuses on its own.
         r = _api("GET", f"/boards/{board_id}/tasks/{task_id}/checklist")
     if isinstance(r, dict) and "error" in r:
         return f"Fehler: {r['error']}"
@@ -469,7 +630,7 @@ def mc_bridge_status() -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
+@_operator_tool
 def mc_restart_worker(agent_slug: str) -> str:
     """Worker (und Shell) Session eines CLI-Agents neu starten."""
     result = _bridge("POST", f"/worker/{agent_slug}/restart")
@@ -480,7 +641,7 @@ def mc_restart_worker(agent_slug: str) -> str:
     return f"Restart {agent_slug}: worker={worker} shell={shell}"
 
 
-@mcp.tool()
+@_operator_tool
 def mc_logs(service: str = "backend", lines: int = 30) -> str:
     """Docker Compose Logs abrufen.
     service: backend | frontend | db | redis | caddy
@@ -497,7 +658,7 @@ def mc_logs(service: str = "backend", lines: int = 30) -> str:
         return f"Fehler: {e}"
 
 
-@mcp.tool()
+@_operator_tool
 def mc_system_status() -> str:
     """Überblick: Docker Services, Backend Health, Bridge, aktive tmux Sessions."""
     lines = []
@@ -547,8 +708,12 @@ def mc_system_status() -> str:
 
 @mcp.tool()
 def mc_get_project(project_id: str) -> str:
-    """Projekt-Details + Phasen + Briefing abrufen (fuer Agent-Kontext)."""
-    data = _api("GET", f"/projects/{project_id}")
+    """Projekt-Details + Phasen + Briefing abrufen (fuer Agent-Kontext).
+    Als Agent: nur Projekte des eigenen Boards (Recht project:read)."""
+    if _is_agent():
+        data = _agent_call("GET", f"/agent/projects/{project_id}")
+    else:
+        data = _api("GET", f"/projects/{project_id}")
     if "error" in data:
         return f"Fehler: {data['error']}"
     project = data
@@ -567,15 +732,21 @@ def mc_get_project(project_id: str) -> str:
 
 
 @mcp.tool()
-def mc_get_deliverables(task_id: str, board_id: str) -> str:
+def mc_get_deliverables(task_id: str, board_id: str = "") -> str:
     """Deliverables eines Tasks abrufen.
 
     Args:
-        task_id: UUID des Tasks
-        board_id: UUID des Boards
+        task_id: UUID des Tasks (voll oder Prefix)
+        board_id: UUID des Boards (optional, wird aus dem Task aufgeloest)
     """
-    data = _api("GET", f"/boards/{board_id}/tasks/{task_id}/deliverables")
-    if "error" in data:
+    task_id, board_id, err = _resolve_task_board(task_id, board_id)
+    if err:
+        return err
+    if _is_agent():
+        data = _agent_call("GET", f"/agent/boards/{board_id}/tasks/{task_id}/deliverables")
+    else:
+        data = _api("GET", f"/boards/{board_id}/tasks/{task_id}/deliverables")
+    if _is_error(data):
         return f"Fehler: {data['error']}"
     items = data if isinstance(data, list) else []
     if not items:
@@ -592,8 +763,8 @@ def mc_get_deliverables(task_id: str, board_id: str) -> str:
 @mcp.tool()
 def mc_register_deliverable(
     task_id: str,
-    board_id: str,
-    title: str,
+    board_id: str = "",
+    title: str = "",
     deliverable_type: str = "document",
     content: str = "",
     path: str = "",
@@ -606,9 +777,9 @@ def mc_register_deliverable(
     """Deliverable fuer einen Task registrieren.
 
     Args:
-        task_id: UUID des Tasks
-        board_id: UUID des Boards
-        title: Titel des Deliverables
+        task_id: UUID des Tasks (voll oder Prefix)
+        board_id: UUID des Boards (optional, wird aus dem Task aufgeloest)
+        title: Titel des Deliverables (Pflicht)
         deliverable_type: screenshot | file | url | artifact | document | data
         content: Text-Inhalt (fuer Markdown-Deliverables)
         path: Datei-Pfad (fuer file/screenshot/artifact). Akzeptiert Docker-Form
@@ -636,8 +807,19 @@ def mc_register_deliverable(
     if tags:
         payload["tags"] = [t.strip() for t in tags.split(",") if t.strip()]
 
-    data = _api("POST", f"/boards/{board_id}/tasks/{task_id}/deliverables", json=payload)
-    if "error" in data:
+    if not title.strip():
+        return "Fehler: title fehlt"
+    task_id, board_id, err = _resolve_task_board(task_id, board_id)
+    if err:
+        return err
+    if _is_agent():
+        # Agent route: records the agent as author (duplicate guard, board
+        # memory, git commit, vault folder) — the admin route records none.
+        data = _agent_call("POST", f"/agent/boards/{board_id}/tasks/{task_id}/deliverables",
+                           json=payload)
+    else:
+        data = _api("POST", f"/boards/{board_id}/tasks/{task_id}/deliverables", json=payload)
+    if _is_error(data):
         return f"Fehler: {data['error']}"
 
     result = f"Deliverable registriert: {title}"
@@ -750,7 +932,7 @@ def mc_msg(body: str, thread_id: str = "", message_type: str = "message") -> str
     )
 
 
-@mcp.tool()
+@_operator_tool
 def mc_complete_phase(project_id: str, phase_id: str) -> str:
     """Phase als abgeschlossen markieren.
 
