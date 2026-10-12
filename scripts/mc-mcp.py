@@ -360,7 +360,8 @@ def mc_task_detail(task_id: str, board_id: str = "") -> str:
     if comments:
         lines.append(f"\n--- {len(comments)} Kommentar(e) ---")
         for c in comments[-5:]:
-            author = c.get("author_name") or c.get("author_agent_name") or "?"
+            author = (c.get("author_name") or c.get("author_agent_name")
+                      or c.get("author_type") or "?")
             body = (c.get("content") or c.get("body") or "")[:200]
             lines.append(f"\n[{author}]\n{body}")
 
