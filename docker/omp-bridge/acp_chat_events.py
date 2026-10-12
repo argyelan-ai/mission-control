@@ -55,6 +55,12 @@ backend/tests/test_omp_chat.py):
     session/prompt reply — same fields omp native writes) becomes a proper
     usage block on the final assistant flush.
 
+  * plan (the agent's full todo list, sent whole on every change) becomes a
+    ``custom`` line with customType ``acp-plan`` and ``data.entries`` =
+    [{content, status, priority}]. The backend parser maps it to the
+    harness-neutral ``todo`` snapshot event (backend chat_todos.py) for the
+    chat's progress panel. Before, plan updates were dropped.
+
   * ACP PREVIEW (Vorschau-Kanal, Folge-PR zu #471): agent text/thought
     chunks NEVER touch this transcript file. They stream into a SIBLING
     file — ``previews/<ts>_<sessionId>_<uniq>.jsonl`` in the SAME session
@@ -99,6 +105,11 @@ _RESULT_TRUNCATE_LEN = 4000
 # file (never the transcript JSONL). Shared by bridge.run_acp_once's routing
 # and the tests.
 PREVIEW_CUSTOM_TYPE = "acp-preview"
+
+# customType of a forwarded ACP `plan` update (the agent's todo list). The
+# backend's omp_chat parser turns it into a `todo` snapshot event
+# (backend/app/services/chat_todos.py).
+PLAN_CUSTOM_TYPE = "acp-plan"
 
 # customType of a chat-visible failure line (chat over ACP). The backend's
 # _parse_custom_message turns it into an error-styled chat event.
@@ -230,11 +241,55 @@ class ACPEventMapper:
                 if isinstance(size, int) and size > 0 and isinstance(used, int):
                     self._usage_window = {"size": size, "used": used}
                 return []
+            if su == "plan":
+                return self._plan(update)
             # config_option_update / available_commands_update /
             # session_info_update / anything unknown — no chat value.
             return []
         except Exception:  # noqa: BLE001 — a broken update must not kill the run
             return []
+
+    def _plan(self, update: dict[str, Any]) -> list[dict[str, Any]]:
+        """ACP ``plan`` -> one ``custom``/``acp-plan`` transcript line.
+
+        A plan is the agent's full todo list (ACP sends the WHOLE list on
+        every change). The backend (``omp_chat`` -> ``chat_todos``) turns
+        the line into a harness-neutral ``todo`` snapshot for the chat's
+        progress panel; newest line wins. A ``custom`` entry, not a
+        ``custom_message``: it is state, not a conversation turn — an older
+        backend that does not know ``acp-plan`` skips ``custom`` lines
+        silently instead of printing them as a system notice.
+
+        Fail closed: only the three ACP entry fields (content/status/
+        priority, strings) are copied; anything else (``_meta``) stays out
+        of the transcript. Not a list -> no line.
+        """
+        raw = update.get("entries")
+        if not isinstance(raw, list):
+            return []
+        entries: list[dict[str, str]] = []
+        for entry in raw:
+            if not isinstance(entry, dict):
+                continue
+            content = entry.get("content")
+            if not isinstance(content, str) or not content.strip():
+                continue
+            clean = {"content": _trunc(content.strip(), _TITLE_TRUNCATE_LEN)}
+            for key in ("status", "priority"):
+                value = entry.get(key)
+                if isinstance(value, str) and value:
+                    clean[key] = value[:32]
+            entries.append(clean)
+        return [
+            {
+                "type": "custom",
+                "customType": PLAN_CUSTOM_TYPE,
+                "data": {"entries": entries},
+                "id": self._next_id(),
+                "parentId": None,
+                "timestamp": _now_iso(),
+            }
+        ]
 
     def begin_turn(self) -> None:
         """Reset the per-turn chunk accumulators, keeping identity + seq.
