@@ -247,16 +247,15 @@ export default function Sidebar() {
         padding: sidebarCollapsed ? "10px 0" : "10px",
       }}
     >
-      {/* Zone 1 — where am I, and the voice assistant.
-          The mic used to sit inside the search field, where it read as "search
-          by voice" — it starts Jarvis and has nothing to do with search. */}
+      {/* Zone 1 — where am I. With one board this is plain text (operator
+          decision 12.10.2026, variant B) — BoardPicker decides that itself
+          via canSwitchBoards(). The voice assistant used to live here; it
+          now sits beside the search row (zone 2) instead, see the note
+          there for why. */}
       <div className={sidebarCollapsed ? "px-2.5" : "flex items-center gap-2"}>
         <div className={sidebarCollapsed ? "" : "flex-1 min-w-0"}>
           <BoardPicker collapsed={sidebarCollapsed} />
         </div>
-        {!sidebarCollapsed && (
-          <VoiceButton size={34} variant="sidebar" enforceTouchTarget={false} />
-        )}
       </div>
 
       {/* Zone 2 — search / jump */}
@@ -271,7 +270,7 @@ export default function Sidebar() {
           >
             <Search size={16} />
           </button>
-          <VoiceButton size={30} variant="sidebar" enforceTouchTarget={false} />
+          <VoiceButton size={30} variant="sidebar" enforceTouchTarget={false} label={tShell("voiceButton")} />
         </div>
       ) : (
         // Auslöser der Befehlspalette — bewusst als KNOPF gestaltet, nicht als
@@ -286,45 +285,61 @@ export default function Sidebar() {
         // beim Überfahren Fläche + hellerer Text — dieselbe Rückmeldung wie die
         // Navigationszeilen darunter. Das Tastenkürzel wird zur Hauptaussage
         // statt zur Fussnote, denn es IST die Bedienung.
-        <button
-          onClick={() => setCommandPaletteOpen(true)}
-          className="flex items-center gap-2 mt-2 shrink-0 w-full cursor-pointer text-left px-3"
-          style={{
-            height: 36,
-            borderRadius: "var(--radius-md)",
-            backgroundColor: "transparent",
-            border: "1px solid var(--color-p2-line)",
-            ...MONO,
-            fontSize: "11.5px",
-            color: "var(--color-p2-dim)",
-            transition: "background-color 160ms ease, color 160ms ease",
-          }}
-          onMouseEnter={(e) => {
-            const el = e.currentTarget as HTMLElement;
-            el.style.backgroundColor = "var(--color-p2-pan2)";
-            el.style.color = "var(--color-p2-txt)";
-          }}
-          onMouseLeave={(e) => {
-            const el = e.currentTarget as HTMLElement;
-            el.style.backgroundColor = "transparent";
-            el.style.color = "var(--color-p2-dim)";
-          }}
-        >
-          <Search size={13} className="shrink-0" />
-          <span className="truncate">{tShell("search")}</span>
-          <kbd
-            className="ml-auto shrink-0 px-1.5 py-0.5"
+        //
+        // The voice assistant (Jarvis) rides along in this row, not inside
+        // the search button — a bare mic next to "Search" read as "search by
+        // voice" once already (commit f61f392a, Aug 2026) and a floating mic
+        // alone up by the board name read as decoration with nothing behind
+        // it (operator feedback 12.10.2026). A separate ghost button, same
+        // height, with its own "Voice (Jarvis)" label avoids both: one clear
+        // target next to the other.
+        <div className="flex items-center gap-2 mt-2">
+          <button
+            onClick={() => setCommandPaletteOpen(true)}
+            className="flex items-center gap-2 shrink-0 flex-1 min-w-0 cursor-pointer text-left px-3"
             style={{
+              height: 36,
+              borderRadius: "var(--radius-md)",
+              backgroundColor: "transparent",
               border: "1px solid var(--color-p2-line)",
-              borderRadius: "var(--radius-sm)",
-              fontSize: "10px",
-              color: "var(--color-p2-txt)",
-              backgroundColor: "var(--color-p2-pan2)",
+              ...MONO,
+              fontSize: "11.5px",
+              color: "var(--color-p2-dim)",
+              transition: "background-color 160ms ease, color 160ms ease",
+            }}
+            onMouseEnter={(e) => {
+              const el = e.currentTarget as HTMLElement;
+              el.style.backgroundColor = "var(--color-p2-pan2)";
+              el.style.color = "var(--color-p2-txt)";
+            }}
+            onMouseLeave={(e) => {
+              const el = e.currentTarget as HTMLElement;
+              el.style.backgroundColor = "transparent";
+              el.style.color = "var(--color-p2-dim)";
             }}
           >
-            ⌘K
-          </kbd>
-        </button>
+            <Search size={13} className="shrink-0" />
+            <span className="truncate">{tShell("search")}</span>
+            <kbd
+              className="ml-auto shrink-0 px-1.5 py-0.5"
+              style={{
+                border: "1px solid var(--color-p2-line)",
+                borderRadius: "var(--radius-sm)",
+                fontSize: "10px",
+                color: "var(--color-p2-txt)",
+                backgroundColor: "var(--color-p2-pan2)",
+              }}
+            >
+              ⌘K
+            </kbd>
+          </button>
+          <VoiceButton
+            size={36}
+            variant="sidebar"
+            enforceTouchTarget={false}
+            label={tShell("voiceButton")}
+          />
+        </div>
       )}
 
       {/* Zones 3 + 4 — pinned rows, then the rest of the tree one click deep */}
