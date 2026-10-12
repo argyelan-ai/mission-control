@@ -34,6 +34,7 @@ from app.services.agent_chat_input import (
     EffortSwitchFailedError,
     EffortSwitchRejectedError,
     InputNotSupportedError,
+    InstallCommandBlockedError,
     can_receive_input,
     clear_queue,
     effort_capabilities,
@@ -519,7 +520,12 @@ async def post_chat_input(
     respawn is mid-flight, and nothing was typed (see
     ``agent_chat_input._wait_for_send_readiness``). Headless (ACP) agents:
     409 ``{"reason":"acp_refused","error":code}`` when the chat daemon refused
-    without putting a card into the chat itself."""
+    without putting a card into the chat itself. 409
+    ``{"reason":"install_blocked","command":str}`` when the message's first
+    slash command would install/modify a plugin, marketplace, MCP server or
+    skill — the operator-approval-card flow for that does not exist yet
+    (decided 12.10.2026), so chat refuses it outright rather than letting
+    the agent's own CLI act on it unsupervised."""
     agent = await _load_agent_or_404(agent_id, session)
 
     if not body.text or not body.text.strip():
@@ -536,6 +542,11 @@ async def post_chat_input(
 
     try:
         await send_text(agent, body.text)
+    except InstallCommandBlockedError as e:
+        return JSONResponse(
+            status_code=409,
+            content={"reason": "install_blocked", "command": e.command},
+        )
     except InputNotSupportedError:
         return JSONResponse(status_code=409, content=_INPUT_NOT_SUPPORTED)
     except AgentStartingError:

@@ -1246,6 +1246,28 @@ describe("ChatView", () => {
     await waitFor(() => expect(echoFailed).toHaveBeenCalledWith("geht nicht"));
   });
 
+  it("names the install-approval-card refusal instead of a generic send failure", async () => {
+    // Operator rule (12.10.2026): no approval card exists yet, so the
+    // backend refuses install/modify slash commands with a named 409
+    // rather than silently forwarding them — the composer must say THAT,
+    // not the generic "Send failed".
+    const echoFailed = vi.fn();
+    const errorSpy = vi.spyOn(notify, "error");
+    vi.mocked(api.chat.sendText).mockRejectedValue(
+      new Error('API 409: {"reason":"install_blocked","command":"/marketplace install"}')
+    );
+    mockUseChatStream.mockReturnValue(mkStream({ echoFailed }));
+    const user = userEvent.setup();
+    renderChatView();
+
+    await user.type(screen.getByPlaceholderText("Message the agent…"), "/marketplace install evil@market");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(echoFailed).toHaveBeenCalledWith("/marketplace install evil@market"));
+    expect(errorSpy).toHaveBeenCalledWith("Installs need an approval card — not available from chat yet.");
+    errorSpy.mockRestore();
+  });
+
   // Befund 10.09.2026 (Operator): die Bildschirm-Vorschau (tmux-Abgriff) zeigte
   // Bruchstuecke, Werkzeug-Rahmen und den Dispatch-Prompt — "buggy, bewegt
   // sich zu viel". Sie wird nicht mehr gezeigt; was der Agent tut, sagt die

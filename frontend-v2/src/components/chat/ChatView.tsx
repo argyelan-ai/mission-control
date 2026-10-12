@@ -27,7 +27,12 @@ import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import { useChatStream } from "@/hooks/useChatStream";
 import { useHeadTranscript, useHeadTranscriptMeta } from "@/hooks/useHeadTranscript";
-import { isAgentStartingError, isNoTranscriptError, resolveSessionAliveness } from "@/lib/chatTypes";
+import {
+  isAgentStartingError,
+  isInstallBlockedError,
+  isNoTranscriptError,
+  resolveSessionAliveness,
+} from "@/lib/chatTypes";
 import type { StateEvent, TimelineChatEvent } from "@/lib/chatTypes";
 import { isHeadDone, type HeadRun } from "@/lib/heads";
 import { HeadChatHeader } from "@/components/heads/HeadChatHeader";
@@ -594,6 +599,12 @@ export function ChatView({
         return;
       }
       stream.echoFailed(text);
+      if (isInstallBlockedError(err)) {
+        // A real, named refusal — not a transport failure — so it gets its
+        // own honest wording instead of the generic "Send failed".
+        notify.error(t("installBlocked"));
+        return;
+      }
       notify.error(t("sendFailed"));
     });
   }

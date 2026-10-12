@@ -970,6 +970,7 @@
     "noMessagesYet": "Noch keine Nachrichten",
     "noMessagesHint": "Schreib unten die erste Nachricht an {name} — oder öffne das Terminal, um die rohe Sitzung zu sehen.",
     "sendFailed": "Senden fehlgeschlagen",
+    "installBlocked": "Installationen brauchen eine Freigabe-Karte — aus dem Chat noch nicht möglich.",
     "stopActionFailed": "Stop fehlgeschlagen",
     "answerFailed": "Antwort fehlgeschlagen",
     "options": "Optionen",
