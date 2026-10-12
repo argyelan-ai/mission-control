@@ -35,12 +35,7 @@ export default function BoardPicker({ collapsed = false }: { collapsed?: boolean
 
   const { data } = useQuery({ queryKey: ["boards"], queryFn: api.boards.list });
 
-  useEffect(() => {
-    if (data && data !== boards) {
-      setBoards(data);
-      if (!activeBoardId && data.length > 0) setActiveBoardId(data[0].id);
-    }
-  }, [data, boards, activeBoardId, setBoards, setActiveBoardId]);
+  // Loading the list and choosing the active board: useBoardsBootstrap (AppShell).
 
   const displayBoards = data ?? boards;
   const active = displayBoards.find((b) => b.id === activeBoardId) ?? displayBoards[0];
@@ -111,12 +106,7 @@ function Switcher({ collapsed }: { collapsed: boolean }) {
 
   const { data } = useQuery({ queryKey: ["boards"], queryFn: api.boards.list });
 
-  useEffect(() => {
-    if (data && data !== boards) {
-      setBoards(data);
-      if (!activeBoardId && data.length > 0) setActiveBoardId(data[0].id);
-    }
-  }, [data, boards, activeBoardId, setBoards, setActiveBoardId]);
+  // Loading the list and choosing the active board: useBoardsBootstrap (AppShell).
 
   const createMutation = useMutation({
     mutationFn: (payload: Partial<Board>) => api.boards.create(payload),

@@ -1,5 +1,7 @@
+import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "./api";
+import { useAppStore } from "./store";
 import type { Board } from "./types";
 
 /**
@@ -30,4 +32,29 @@ export function canSwitchBoards(boards: Board[]): boolean {
 export function useCanSwitchBoards(): boolean {
   const { data } = useQuery<Board[]>({ queryKey: ["boards"], queryFn: api.boards.list });
   return canSwitchBoards(data ?? []);
+}
+
+/**
+ * Loads the board list into the store and keeps a valid active board — for
+ * every page, whether or not a board switcher is on screen.
+ *
+ * This used to live inside `BoardPicker`. Once the sidebar stopped rendering
+ * the picker with a single board (12.10.2026), nothing loaded the boards or
+ * chose one, and a fresh browser showed "No board selected". `AppShell` calls
+ * this once, after the auth guard has let the user in.
+ */
+export function useBoardsBootstrap(authorized: boolean): void {
+  const { boards, activeBoardId, setBoards, setActiveBoardId } = useAppStore();
+  const { data } = useQuery<Board[]>({
+    queryKey: ["boards"],
+    queryFn: api.boards.list,
+    enabled: authorized,
+  });
+
+  useEffect(() => {
+    if (!data) return;
+    if (data !== boards) setBoards(data);
+    const stillThere = activeBoardId != null && data.some((b) => b.id === activeBoardId);
+    if (!stillThere && data.length > 0) setActiveBoardId(data[0].id);
+  }, [data, boards, activeBoardId, setBoards, setActiveBoardId]);
 }
