@@ -9,7 +9,7 @@ Read this first; it points to the rest. Human contributors: see
 |---|---|
 | Why MC exists, build/evidence/decision/language rules | [docs/PRINCIPLES.md](docs/PRINCIPLES.md) |
 | Current stage, what is next, what is stopped | [docs/ROADMAP.md](docs/ROADMAP.md) |
-| Decisions and their reasons (ADRs, index + template) | [docs/decisions/README.md](docs/decisions/README.md) — direction since [ADR-085](docs/decisions/085-head-per-job.md) + [ADR-086](docs/decisions/086-harness-runtime-cross-switch.md) + [ADR-089](docs/decisions/089-lead-agent-with-hands.md) |
+| Decisions and their reasons (ADRs, index + template) | [docs/decisions/README.md](docs/decisions/README.md) — direction since [ADR-085](docs/decisions/085-head-per-job.md) + [ADR-086](docs/decisions/086-harness-runtime-cross-switch.md) + [ADR-089](docs/decisions/089-lead-agent-with-hands.md) + [ADR-090](docs/decisions/090-chat-as-remote-control.md) |
 | Architecture, "where do I change what" | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
 | Product and design | [PRODUCT.md](PRODUCT.md) · [DESIGN.md](DESIGN.md) + [docs/design/ui-craft.md](docs/design/ui-craft.md) |
 | Product map, rule register, known gaps (checked by `kz check`) | [docs/produkt/README.md](docs/produkt/README.md) |
