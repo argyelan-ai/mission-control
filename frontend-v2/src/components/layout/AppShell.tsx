@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAppStore } from "@/lib/store";
+import { useBoardsBootstrap } from "@/lib/boards";
 import { api, getToken, getStoredUser, setStoredUser } from "@/lib/api";
 import { AmbientBackground } from "./AmbientBackground";
 import Sidebar from "./Sidebar";
@@ -54,6 +55,7 @@ export default function AppShell({
   const [authorized, setAuthorized] = useState(false);
 
   useKeyboardShortcuts();
+  useBoardsBootstrap(authorized);
 
   // Auth guard
   useEffect(() => {
