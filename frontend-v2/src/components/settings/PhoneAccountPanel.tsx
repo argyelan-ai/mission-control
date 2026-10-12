@@ -16,6 +16,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Check, ChevronDown, LogOut } from "lucide-react";
 import { api, clearToken } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
+import { canSwitchBoards } from "@/lib/boards";
 import type { Board } from "@/lib/types";
 import { C } from "@/lib/colors";
 import { EntityIcon } from "@/components/shared/EntityIcon";
@@ -50,7 +51,7 @@ export function PhoneAccountPanel() {
   const { data: boardsData } = useQuery<Board[]>({ queryKey: ["boards"], queryFn: api.boards.list });
   const boards = boardsData ?? [];
   const activeBoard = boards.find((b) => b.id === activeBoardId) ?? boards[0] ?? null;
-  const canSwitch = boards.length > 1;
+  const canSwitch = canSwitchBoards(boards);
 
   function logout() {
     clearToken();

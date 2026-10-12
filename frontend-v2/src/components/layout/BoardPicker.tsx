@@ -9,6 +9,7 @@ import { Plus, Check } from "lucide-react";
 import { useAppStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { slugify } from "@/lib/utils";
+import { canSwitchBoards } from "@/lib/boards";
 import type { Board } from "@/lib/types";
 import { P2, WORKSPACE_COLORS as BOARD_COLORS } from "@/lib/colors";
 import { EntityIcon, ENTITY_ICON_KEYS } from "@/components/shared/EntityIcon";
@@ -19,8 +20,81 @@ const MONO = { fontFamily: "var(--font-p2-mono)" };
 /**
  * BoardPicker — Shell v4 zone 1. Replaces the 48px WorkspaceSwitcher rail:
  * same boards, same create flow, one row instead of a column.
+ *
+ * Operator decision (12.10.2026, variant B): with nothing to switch between,
+ * the switcher (name + dropdown) is not shown at all — it becomes a plain,
+ * non-interactive label with the one board's name, same as the sidebar
+ * always showed before boards existed. No chevron, no dropdown, no lone "+".
+ * "Create board" moves to Settings → Profile (`BoardsCard`) instead, so the
+ * capability is not lost. The rule itself (`canSwitchBoards`) is shared with
+ * the phone settings panel so it is decided once, not twice.
  */
 export default function BoardPicker({ collapsed = false }: { collapsed?: boolean }) {
+  const t = useTranslations("shell");
+  const { boards, activeBoardId, setActiveBoardId, setBoards } = useAppStore();
+
+  const { data } = useQuery({ queryKey: ["boards"], queryFn: api.boards.list });
+
+  useEffect(() => {
+    if (data && data !== boards) {
+      setBoards(data);
+      if (!activeBoardId && data.length > 0) setActiveBoardId(data[0].id);
+    }
+  }, [data, boards, activeBoardId, setBoards, setActiveBoardId]);
+
+  const displayBoards = data ?? boards;
+  const active = displayBoards.find((b) => b.id === activeBoardId) ?? displayBoards[0];
+  const canSwitch = canSwitchBoards(displayBoards);
+
+  if (!canSwitch) {
+    return <StaticBoardLabel board={active} collapsed={collapsed} boardPickerLabel={t("boardPicker")} />;
+  }
+
+  return <Switcher collapsed={collapsed} />;
+}
+
+/** Nothing to switch to — the board name as plain text, not a control. */
+function StaticBoardLabel({
+  board,
+  collapsed,
+  boardPickerLabel,
+}: {
+  board: Board | undefined;
+  collapsed: boolean;
+  boardPickerLabel: string;
+}) {
+  const activeColor = board?.color ?? P2.amb;
+  return (
+    <div
+      className="w-full flex items-center gap-3 shrink-0 text-xs"
+      title={collapsed ? (board?.name ?? boardPickerLabel) : undefined}
+      style={{
+        height: "38px",
+        padding: collapsed ? 0 : "0 12px",
+        justifyContent: collapsed ? "center" : "flex-start",
+        ...MONO,
+        color: "var(--color-p2-txt)",
+      }}
+    >
+      <span
+        className="shrink-0 flex items-center justify-center"
+        style={{
+          width: collapsed ? 20 : 10,
+          height: collapsed ? 20 : 10,
+          borderRadius: "var(--radius-full)",
+          backgroundColor: collapsed ? "transparent" : activeColor,
+          color: activeColor,
+        }}
+      >
+        {collapsed && (board?.icon ? <EntityIcon value={board.icon} size={16} /> : null)}
+      </span>
+      {!collapsed && <span className="truncate">{board?.name ?? boardPickerLabel}</span>}
+    </div>
+  );
+}
+
+/** Two or more boards — the ordinary switcher, unchanged. */
+function Switcher({ collapsed }: { collapsed: boolean }) {
   const t = useTranslations("shell");
   const { boards, activeBoardId, setActiveBoardId, setBoards } = useAppStore();
   const [open, setOpen] = useState(false);

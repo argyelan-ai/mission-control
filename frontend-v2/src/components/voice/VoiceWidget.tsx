@@ -239,6 +239,13 @@ interface VoiceButtonProps {
   size?: number;
   variant?: "header" | "sidebar";
   enforceTouchTarget?: boolean;
+  /**
+   * Overrides the idle aria-label/title (localized, e.g. "Voice (Jarvis)").
+   * Sidebar callers pass this — the mic sits right beside the search field
+   * there, and a bare "Start voice" read as "search by voice" (operator
+   * feedback 12.10.2026). Other callers (MobileNav) keep the default.
+   */
+  label?: string;
 }
 
 export function VoiceButton({
@@ -250,8 +257,10 @@ export function VoiceButton({
    * sits in. Touch surfaces keep it.
    */
   enforceTouchTarget = true,
+  label,
 }: VoiceButtonProps) {
   const { active, connecting, anchorRef, toggleButton } = useVoiceContext();
+  const idleLabel = label ?? "Start voice assistant";
 
   return (
     <button
@@ -277,8 +286,8 @@ export function VoiceButton({
             : "1px solid transparent",
         color: active ? C.accentHover : "var(--color-text-secondary)",
       }}
-      aria-label={active ? "Manage voice session" : "Start voice assistant"}
-      title={active ? "Voice active — click for options" : "Start voice"}
+      aria-label={active ? "Manage voice session" : idleLabel}
+      title={active ? "Voice active — click for options" : idleLabel}
     >
       {connecting ? (
         <div

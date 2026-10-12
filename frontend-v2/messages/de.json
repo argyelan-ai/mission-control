@@ -72,7 +72,11 @@
     "title": "Profil",
     "description": "Deine persönlichen Angaben.",
     "timezoneAria": "Zeitzone wählen",
-    "roleHint": "Kann nur von einem Admin geändert werden."
+    "roleHint": "Kann nur von einem Admin geändert werden.",
+    "boards": {
+      "title": "Boards",
+      "description": "Gerade nur ein Board — der Umschalter in der Seitenleiste kommt automatisch zurück, sobald ein zweites existiert."
+    }
   },
   "home": {
     "consoleOverview": "Konsole · Übersicht",
@@ -1098,7 +1102,8 @@
     "settings": "Einstellungen",
     "boardPicker": "Board wählen",
     "collapseSidebar": "Leiste einklappen",
-    "expandSidebar": "Leiste ausklappen"
+    "expandSidebar": "Leiste ausklappen",
+    "voiceButton": "Sprache (Jarvis)"
   },
   "login": {
     "consoleAccess": "Konsole · Zugang",

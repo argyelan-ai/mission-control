@@ -24,6 +24,12 @@ vi.mock("@/lib/api", () => ({
           approvals: { pending: 0 },
         }),
     },
+    // Sidebar's useCanSwitchBoards() (lib/boards.ts) queries this too, to
+    // decide whether to reserve a board row at all — unrelated to this
+    // test's assertion, so a single empty board is enough.
+    boards: {
+      list: () => Promise.resolve([{ id: "b1", name: "Board", slug: "board", description: null, icon: null, color: null }]),
+    },
   },
 }));
 vi.mock("@/lib/store", () => ({
