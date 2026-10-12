@@ -2112,6 +2112,44 @@ async def sync_agent_config_to_gateway(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
+    # Regenerate TOOLS.md from the builder (ADR-006: templates/builders are
+    # the single source of truth) — not just mirror the stored copy to disk.
+    # Without this, a fix to tools_md_builder.py (e.g. #785 removing a dead
+    # route) never reaches an agent that already has a token: TOOLS.md was
+    # only (re)generated at agent creation / reset-token, and sync-config
+    # just wrote the stale DB copy to the claude-config file (steps 4 in
+    # sync_docker_agent_files/sync_host_agent_files below).
+    #
+    # This matches how SOUL.md is already always re-rendered on every
+    # sync-config — TOOLS.md gets the same "templates win" treatment, so an
+    # operator's manual edit via PUT .../config/tools_md is intentionally
+    # not sticky across a sync-config, exactly like soul_md.
+    #
+    # Token: never minted here. generate_tools_md() has not embedded a
+    # literal bearer token since the $MC_AGENT_TOKEN placeholder was
+    # introduced (commit d1a4884c) — the real secret lives in
+    # agent.agent_token_hash + the vault (`mc_token_{slug}`), untouched by
+    # this call. We still thread through whatever _extract_token_from_tools_md
+    # finds in the current copy (legacy/defensive — some very old stored
+    # copies predate the placeholder switch), falling back to the
+    # placeholder marker when there is nothing to extract, which keeps this
+    # path identical in spirit to setup_agent_coordination()'s pattern
+    # without silently skipping the fix for the common case (no literal
+    # token to find) that is exactly what's broken today.
+    existing_token = _extract_token_from_tools_md(agent.tools_md or "") or "unused-see-vault"
+    agent.tools_md = _generate_tools_md(
+        agent.name,
+        agent.emoji or "🤖",
+        existing_token,
+        str(agent.board_id) if agent.board_id else None,
+        is_board_lead=agent.is_board_lead or False,
+        scopes=agent.scopes or [],
+        runtime=getattr(agent, "agent_runtime", "docker") or "docker",
+        comm_v2=getattr(agent, "comm_v2", False),
+    )
+    agent.updated_at = utcnow()
+    session.add(agent)
+
     # cli-bridge (Docker-V2 / Host-Legacy) path: renders templates into the
     # claude-config bind mount; the Docker container reads SOUL.md on
     # openclaude startup via the start-claude.sh wrapper.
