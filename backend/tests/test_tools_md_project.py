@@ -35,13 +35,16 @@ def test_project_read_shows_get_project_endpoint():
     assert "/api/v1/agent/projects/{project_id}" in result
 
 
-def test_project_write_shows_complete_phase_endpoint():
+def test_project_write_does_not_advertise_dead_agent_complete_route():
+    # There is no POST /api/v1/agent/phases/{phase_id}/complete route — phase
+    # completion is operator-only (decision 12.10.2026). TOOLS.md must not
+    # teach agents a route that doesn't exist.
     result = generate_tools_md(
         name="FreeCode", emoji="💻", raw_token="tok123",
         board_id="board-1", scopes=PROJECT_SCOPES,
     )
-    assert "/api/v1/agent/phases/" in result
-    assert "complete" in result
+    assert "/api/v1/agent/phases/" not in result
+    assert "operator" in result.lower()
 
 
 def test_project_write_shows_deliverable_v2_fields():

@@ -539,14 +539,10 @@ curl -s -X POST "$MC_API_URL/api/v1/agent/boards/{board_id}/tasks" \\
 
 triggered_by_deliverable_id: ALWAYS set when created from a deliverable (provenance!)
 
-## Complete phase
+## Phase completion
 
-```
-curl -s -X POST "$MC_API_URL/api/v1/agent/phases/{{phase_id}}/complete" \\
-  -H "Authorization: Bearer $MC_AGENT_TOKEN"
-```
-
-Only call this once ALL tasks of the phase are `done`.""")
+Phase completion is operator-only — there is no agent endpoint for it. Once
+ALL tasks of a phase are `done`, tell the operator so they can complete it.""")
 
         if parts:
             board_section = "\n\n".join(parts) + "\n"
