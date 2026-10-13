@@ -478,3 +478,15 @@ async def test_default_target_404_without_any_lead(auth_client, voice_on, make_a
     r = await auth_client.get("/api/v1/voice/live/default-target")
     assert r.status_code == 404
     assert r.json()["detail"] == "no_lead"
+
+
+def test_pinned_voice_language_never_switches():
+    """Operator 13.10.2026: with "Deutsch" chosen in Settings the voice must
+    speak German even when spoken to in English (live: an English greeting
+    got an English answer). "Automatic" keeps mirroring the speaker."""
+    from app.services import voice_live
+    pinned = voice_live.build_session_config("Lead", "de", "de")["instructions"]
+    assert "Always speak German" in pinned
+    assert "switch to English" not in pinned
+    auto = voice_live.build_session_config("Lead", "de", None)["instructions"]
+    assert "switch to English" in auto
