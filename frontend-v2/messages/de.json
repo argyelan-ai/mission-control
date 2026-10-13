@@ -3957,8 +3957,11 @@
     "stateSpeaking": "Spricht",
     "statePassing": "Gibt weiter…",
     "stateNarrating": "Erzählt Fortschritt",
+    "stateMuted": "Stumm",
     "stateEnded": "Getrennt",
     "hangUp": "Auflegen",
+    "mute": "Mikrofon stumm schalten",
+    "unmute": "Mikrofon wieder an",
     "retry": "Nochmal",
     "close": "Schliessen",
     "byVoice": "per Stimme",
@@ -3973,6 +3976,7 @@
     "errNoCredits": "Kein OpenAI-Guthaben mehr für die Stimme.",
     "errRateLimited": "OpenAI ist gerade ausgelastet. In einer Minute nochmal versuchen.",
     "errUnavailable": "Die Stimme ist gerade nicht verfügbar.",
-    "errMaxLength": "Gespräch nach {minutes} Minuten beendet."
+    "errMaxLength": "Gespräch nach {minutes} Minuten beendet.",
+    "errMutedTooLong": "Nach 5 Minuten stumm aufgelegt."
   }
 }

@@ -11,9 +11,15 @@ import type { StateEvent, TimelineChatEvent } from "@/lib/chatTypes";
 import { FINAL_SETTLE_MS, type ProgressSnapshot } from "./progress";
 import { PROGRESS_TICK_MS, type VoiceLiveEnv } from "./useVoiceLive";
 import { resetVoiceLiveConfigCache } from "./useVoiceLiveConfig";
-import { DISCONNECT_GRACE_MS, MAX_CALL_MS } from "./voiceLiveCore";
+import { DISCONNECT_GRACE_MS, MAX_CALL_MS, MUTED_MAX_MS } from "./voiceLiveCore";
 
-vi.mock("@/lib/api", () => ({ api: { voiceLive: { config: vi.fn(), session: vi.fn() } } }));
+vi.mock("@/lib/api", () => ({
+  api: {
+    voiceLive: { config: vi.fn(), session: vi.fn() },
+    // The chat's key path (Stop button, approval taps). The voice never uses it.
+    chat: { sendKeys: vi.fn(), sendText: vi.fn() },
+  },
+}));
 const mockRequest = vi.mocked(api.voiceLive.config);
 
 type Handler = ((e: unknown) => void) | null;
@@ -61,6 +67,7 @@ interface Harness {
   env: VoiceLiveEnv;
   pcs: FakePC[];
   trackStop: ReturnType<typeof vi.fn>;
+  track: { stop: ReturnType<typeof vi.fn>; enabled: boolean; kind: string };
   postOffer: ReturnType<typeof vi.fn>;
   mintSession: ReturnType<typeof vi.fn>;
   runTool: ReturnType<typeof vi.fn>;
@@ -72,6 +79,7 @@ interface Harness {
 function harness(over: Partial<VoiceLiveEnv> = {}): Harness {
   const pcs: FakePC[] = [];
   const trackStop = vi.fn();
+  const track = { stop: trackStop, enabled: true, kind: "audio" };
   const timers: Harness["timers"] = [];
   const postOffer = vi.fn(async () => new Response("v=0 answer", { status: 201 }));
   const mintSession = vi.fn(async () => ({
@@ -95,7 +103,7 @@ function harness(over: Partial<VoiceLiveEnv> = {}): Harness {
   }));
   const env: VoiceLiveEnv = {
     isSecureContext: () => true,
-    getUserMedia: async () => ({ getTracks: () => [{ stop: trackStop }] }) as unknown as MediaStream,
+    getUserMedia: async () => ({ getTracks: () => [track] }) as unknown as MediaStream,
     createPeerConnection: () => {
       const pc = new FakePC();
       pcs.push(pc);
@@ -117,7 +125,9 @@ function harness(over: Partial<VoiceLiveEnv> = {}): Harness {
     },
     ...over,
   };
-  return { env, pcs, trackStop, postOffer, mintSession, runTool, progress, clock, timers };
+  // An overridden runTool is the one the test inspects.
+  const usedRunTool = (over.runTool as unknown as typeof runTool | undefined) ?? runTool;
+  return { env, pcs, trackStop, track, postOffer, mintSession, runTool: usedRunTool, progress, clock, timers };
 }
 
 function renderDock(env: VoiceLiveEnv, onForwarded?: (text: string, midTurn: boolean) => void) {
@@ -515,12 +525,12 @@ describe("tools", () => {
     expect(sentTypes(pc).map((e) => e.type)).toContain("response.create");
   });
 
-  it("unknown tool names are ignored (the voice has no stop or keys tool)", async () => {
+  it("unknown tool names are ignored (the voice has no keys or approval tool)", async () => {
     const h = harness();
     const pc = await startCall(h);
     act(() => pc.dc.open());
     act(() =>
-      pc.dc.emit({ type: "response.output_item.done", item: { type: "function_call", call_id: "x", name: "stop_agent", arguments: "{}" } }),
+      pc.dc.emit({ type: "response.output_item.done", item: { type: "function_call", call_id: "x", name: "press_keys", arguments: "{}" } }),
     );
     await act(async () => undefined);
     expect(h.runTool).not.toHaveBeenCalled();
@@ -762,5 +772,234 @@ describe("listening along (voice PR 3)", () => {
     act(() => pc.dc.emit({ type: "session.created" }));
     fireEvent.click(screen.getByTestId("voice-hangup"));
     expect(h.timers.filter((t) => t.ms === PROGRESS_TICK_MS && !t.cleared && !t.ran)).toHaveLength(0);
+  });
+});
+
+// ── stop, barge-in, mute, approvals (voice PR 4) ─────────────────────────
+
+function utter(pc: FakePC, id: string, words: string) {
+  act(() => pc.dc.emit({ type: "input_audio_buffer.committed", item_id: id }));
+  act(() => pc.dc.emit({ type: "conversation.item.input_audio_transcription.completed", item_id: id, transcript: words }));
+}
+
+function modelCalls(pc: FakePC, name: string, callId: string, args: object = {}) {
+  act(() => pc.dc.emit({ type: "response.created" }));
+  act(() =>
+    pc.dc.emit({
+      type: "response.output_item.done",
+      item: { type: "function_call", call_id: callId, name, arguments: JSON.stringify(args) },
+    }),
+  );
+  act(() => pc.dc.emit({ type: "response.done", response: { status: "completed" } }));
+}
+
+async function startStopCall(h: Harness, onStopped?: (takenBack: string[] | null) => void) {
+  render(
+    <VoiceLiveDock agentId="agent-1" agentName="Boss" env={h.env} onStopped={onStopped}>
+      {(slot) => <div data-testid="composer">{slot}</div>}
+    </VoiceLiveDock>,
+  );
+  const mic = await screen.findByTestId("voice-mic-button");
+  await act(async () => {
+    fireEvent.click(mic);
+  });
+  await waitFor(() => expect(h.pcs[0]?.remote).toBeTruthy());
+  const pc = h.pcs[0];
+  act(() => pc.dc.open());
+  return pc;
+}
+
+describe("stop by voice (voice PR 4)", () => {
+  it("stop_agent goes to MC with the operator's LAST utterance only; the chat takes the queue back", async () => {
+    const h = harness({
+      runTool: vi.fn(async () => ({
+        output: { stopped: true, confirmed: true, say: "Stopped. Say only Gestoppt." },
+        sent_text: null,
+        mid_turn: false,
+        stopped: true,
+        taken_back: ["[per Stimme] noch Y"],
+      })) as unknown as VoiceLiveEnv["runTool"],
+    });
+    const onStopped = vi.fn();
+    const pc = await startStopCall(h, onStopped);
+    utter(pc, "u1", "Ich glaube das dauert zu lange.");
+    utter(pc, "u2", "Stopp!");
+    modelCalls(pc, "stop_agent", "c-stop");
+
+    await waitFor(() => expect(h.runTool).toHaveBeenCalledTimes(1));
+    expect(h.runTool).toHaveBeenCalledWith({
+      call_ref: "ref-1",
+      agent_id: "agent-1",
+      name: "stop_agent",
+      arguments: {},
+      transcript: "Stopp!",
+    });
+    await waitFor(() => expect(onStopped).toHaveBeenCalledWith(["[per Stimme] noch Y"]));
+    // The voice speaks only after MC's answer is in.
+    await waitFor(() => expect(sentTypes(pc).map((e) => e.type)).toContain("response.create"));
+    const types = sentTypes(pc).map((e) => e.type);
+    expect(types.indexOf("conversation.item.create")).toBeLessThan(types.lastIndexOf("response.create"));
+    const out = sentTypes(pc).find((e) => e.type === "conversation.item.create" && e.item?.call_id === "c-stop");
+    expect(JSON.parse(out.item.output)).toMatchObject({ stopped: true, confirmed: true });
+  });
+
+  it("the stop utterance is not attached to a later send as the operator's words", async () => {
+    const h = harness({
+      runTool: vi.fn(async (body: { name: string }) =>
+        body.name === "stop_agent"
+          ? { output: { stopped: true, confirmed: true }, sent_text: null, mid_turn: false, stopped: true, taken_back: null }
+          : { output: { delivered: true }, sent_text: "[per Stimme] x", mid_turn: false },
+      ) as unknown as VoiceLiveEnv["runTool"],
+    });
+    const pc = await startStopCall(h);
+    utter(pc, "u1", "Stopp");
+    modelCalls(pc, "stop_agent", "c1");
+    await waitFor(() => expect(h.runTool).toHaveBeenCalledTimes(1));
+    utter(pc, "u2", "Mach jetzt die Tests");
+    modelCalls(pc, "send_to_agent", "c2", { text: "Mach die Tests" });
+    await waitFor(() => expect(h.runTool).toHaveBeenCalledTimes(2));
+    expect(h.runTool.mock.calls[1][0]).toMatchObject({ name: "send_to_agent", transcript: "Mach jetzt die Tests" });
+  });
+
+  it("MC refused the stop: the chat keeps its queue, the voice hears why", async () => {
+    const h = harness({
+      runTool: vi.fn(async () => ({
+        output: { stopped: false, reason: "not_a_stop_command", say: "NOT stopped: pass it on." },
+        sent_text: null,
+        mid_turn: false,
+        stopped: false,
+        taken_back: null,
+      })) as unknown as VoiceLiveEnv["runTool"],
+    });
+    const onStopped = vi.fn();
+    const pc = await startStopCall(h, onStopped);
+    utter(pc, "u1", "Stopp den Container");
+    modelCalls(pc, "stop_agent", "c1");
+    await waitFor(() => expect(sentTypes(pc).some((e) => e.item?.call_id === "c1")).toBe(true));
+    expect(h.runTool.mock.calls[0][0]).toMatchObject({ name: "stop_agent", transcript: "Stopp den Container" });
+    expect(onStopped).not.toHaveBeenCalled();
+  });
+
+  it("MC unreachable: an honest NOT stopped that points to the Stop button", async () => {
+    const h = harness({
+      runTool: vi.fn(async () => {
+        throw new TypeError("Failed to fetch");
+      }) as unknown as VoiceLiveEnv["runTool"],
+    });
+    const onStopped = vi.fn();
+    const pc = await startStopCall(h, onStopped);
+    utter(pc, "u1", "Stopp");
+    modelCalls(pc, "stop_agent", "c1");
+    await waitFor(() => expect(sentTypes(pc).some((e) => e.item?.call_id === "c1")).toBe(true));
+    const out = JSON.parse(sentTypes(pc).find((e) => e.item?.call_id === "c1").item.output);
+    expect(out).toMatchObject({ stopped: false, reason: "network" });
+    expect(out.say).toMatch(/Stop button/);
+    expect(onStopped).not.toHaveBeenCalled();
+  });
+});
+
+describe("barge-in (voice PR 4)", () => {
+  it("talking over the voice silences only the voice — no tool, no key, nothing to the agent", async () => {
+    const h = harness();
+    const onStopped = vi.fn();
+    const pc = await startStopCall(h, onStopped);
+    act(() => pc.dc.emit({ type: "response.created" }));
+    act(() => pc.dc.emit({ type: "output_audio_buffer.started" }));
+    expect(screen.getByTestId("voice-state")).toHaveTextContent("Speaking");
+    pc.dc.sent.length = 0;
+    // OpenAI's semantic VAD (interrupt_response) cancels and truncates the
+    // voice's answer server-side; the browser only sees the effects.
+    act(() => pc.dc.emit({ type: "input_audio_buffer.speech_started" }));
+    act(() => pc.dc.emit({ type: "output_audio_buffer.cleared" }));
+    act(() => pc.dc.emit({ type: "response.done", response: { status: "cancelled" } }));
+    await act(async () => undefined);
+    expect(screen.getByTestId("voice-state")).toHaveTextContent("Listening");
+    expect(h.runTool).not.toHaveBeenCalled();
+    expect(vi.mocked(api.chat.sendKeys)).not.toHaveBeenCalled();
+    expect(onStopped).not.toHaveBeenCalled();
+    // Nothing goes out on the browser's side either (no stop, no extra response).
+    expect(sentTypes(pc).map((e) => e.type)).toEqual([]);
+    expect(pc.close).not.toHaveBeenCalled();
+  });
+});
+
+describe("approvals (voice PR 4)", () => {
+  it("a spoken 'ja' while an approval waits never reaches an approval endpoint", async () => {
+    const h = harness();
+    const r = render(<Dock env={h.env} progress={snapOf("working")} />);
+    const mic = await screen.findByTestId("voice-mic-button");
+    await act(async () => {
+      fireEvent.click(mic);
+    });
+    await waitFor(() => expect(h.pcs[0]?.remote).toBeTruthy());
+    const pc = h.pcs[0];
+    act(() => pc.dc.open());
+    r.rerender(<Dock env={h.env} progress={{ ...snapOf("working"), state: st("permission_prompt", "Allow deploy?") }} />);
+    await waitFor(() =>
+      expect(h.progress).toHaveBeenCalledWith(expect.objectContaining({ kind: "approval", question: "Allow deploy?" })),
+    );
+    utter(pc, "u1", "Ja");
+    // Even a model that tries to approve finds no tool for it.
+    modelCalls(pc, "approve", "c-approve", { answer: "yes" });
+    await act(async () => undefined);
+    expect(h.runTool).not.toHaveBeenCalled();
+    expect(vi.mocked(api.chat.sendKeys)).not.toHaveBeenCalled();
+    expect(vi.mocked(api.chat.sendText)).not.toHaveBeenCalled();
+  });
+});
+
+describe("mute (voice PR 4)", () => {
+  it("mutes the mic track, keeps the call open, shows it clearly, and unmutes", async () => {
+    const h = harness();
+    const pc = await startStopCall(h);
+    const btn = screen.getByTestId("voice-mute");
+    expect(btn).toHaveAttribute("aria-pressed", "false");
+    expect(btn).toHaveAccessibleName("Mute microphone");
+    fireEvent.click(btn);
+    expect(h.track.enabled).toBe(false);
+    expect(btn).toHaveAttribute("aria-pressed", "true");
+    expect(btn).toHaveAccessibleName("Unmute microphone");
+    expect(screen.getByTestId("voice-call-bar")).toHaveAttribute("data-muted", "true");
+    expect(screen.getByTestId("voice-state")).toHaveTextContent("Muted");
+    expect(pc.close).not.toHaveBeenCalled();
+    expect(h.trackStop).not.toHaveBeenCalled();
+    // The voice still talks (speaker stays on); the word stays "Muted"
+    act(() => pc.dc.emit({ type: "output_audio_buffer.started" }));
+    expect(screen.getByTestId("voice-state")).toHaveTextContent("Muted");
+    fireEvent.click(btn);
+    expect(h.track.enabled).toBe(true);
+    expect(screen.getByTestId("voice-call-bar")).toHaveAttribute("data-muted", "false");
+  });
+
+  it("muted for too long hangs up by itself (idle cost)", async () => {
+    const h = harness();
+    const pc = await startStopCall(h);
+    fireEvent.click(screen.getByTestId("voice-mute"));
+    const cap = h.timers.find((t) => t.ms === MUTED_MAX_MS && !t.cleared)!;
+    expect(cap).toBeTruthy();
+    act(() => cap.fn());
+    expect(screen.getByTestId("voice-error")).toHaveAttribute("data-error", "muted_too_long");
+    expect(pc.close).toHaveBeenCalled();
+  });
+
+  it("unmuting cancels the mute timer; a new call starts unmuted", async () => {
+    const h = harness();
+    await startStopCall(h);
+    fireEvent.click(screen.getByTestId("voice-mute"));
+    fireEvent.click(screen.getByTestId("voice-mute"));
+    expect(h.timers.find((t) => t.ms === MUTED_MAX_MS)!.cleared).toBe(true);
+    fireEvent.click(screen.getByTestId("voice-mute"));
+    fireEvent.click(screen.getByTestId("voice-hangup"));
+    h.track.enabled = true;
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("voice-mic-button"));
+    });
+    await waitFor(() => expect(h.pcs).toHaveLength(2));
+    // No mute while connecting: there is no call to mute yet.
+    expect(screen.queryByTestId("voice-mute")).toBeNull();
+    await waitFor(() => expect(h.pcs[1].remote).toBeTruthy());
+    act(() => h.pcs[1].dc.open());
+    expect(screen.getByTestId("voice-mute")).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByTestId("voice-call-bar")).toHaveAttribute("data-muted", "false");
   });
 });

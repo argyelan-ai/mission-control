@@ -110,6 +110,9 @@ def test_approval_line_says_tap_never_spoken_yes():
     item = voice_progress.build_item("approval", "Rex", question=f"Allow rm -rf /home/someone/x? {SECRET}")
     assert "tap it in the chat" in item["text"]
     assert "spoken yes does not count" in item["text"]
+    # voice PR 4: the voice says it and asks for the tap, in so many words
+    assert "Bitte im Chat antippen." in item["text"]
+    assert "never pass a yes or no on" in item["text"]
     assert SECRET not in item["text"] and "someone" not in item["text"]
 
 

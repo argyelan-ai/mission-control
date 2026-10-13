@@ -18,7 +18,8 @@ export type VoiceLiveErrorKind =
   | "no_credits"
   | "rate_limited"
   | "unavailable"
-  | "max_length";
+  | "max_length"
+  | "muted_too_long";
 
 export interface TranscriptLine {
   /** Realtime item id — deltas and the final text of one utterance merge on it. */
@@ -38,6 +39,8 @@ export interface VoiceLiveState {
   passing: boolean;
   /** The voice is telling the agent's progress on its own (voice PR 3). */
   narrating: boolean;
+  /** The operator's mic track is off; the call stays open (voice PR 4). */
+  muted: boolean;
 }
 
 export const INITIAL_VOICE_STATE: VoiceLiveState = {
@@ -46,11 +49,15 @@ export const INITIAL_VOICE_STATE: VoiceLiveState = {
   transcript: [],
   passing: false,
   narrating: false,
+  muted: false,
 };
 
 /** Hard cap per call on the client (bauplan B6: 20 min). The server-side
  *  timer and the daily budget come with PR 6. */
 export const MAX_CALL_MS = 20 * 60 * 1000;
+/** Muted this long with the call open: hang up (bauplan B6 — the session
+ *  bills time while muted, and a forgotten muted call is pure cost). */
+export const MUTED_MAX_MS = 5 * 60 * 1000;
 /** `disconnected` may heal by itself; only after this long it counts as lost. */
 export const DISCONNECT_GRACE_MS = 5_000;
 /** Keep the caption list short — it is a live caption, not a chat log. */
@@ -64,6 +71,7 @@ export type VoiceLiveAction =
   | { type: "tool_busy"; busy: boolean }
   | { type: "forwarded"; ids: string[] }
   | { type: "narrating"; on: boolean }
+  | { type: "muted"; on: boolean }
   | { type: "server_event"; event: RealtimeServerEvent };
 
 /** The subset of Realtime server events PR 1 reads. Unknown events are ignored. */
@@ -197,18 +205,22 @@ function onServerEvent(state: VoiceLiveState, ev: RealtimeServerEvent): VoiceLiv
 export function voiceLiveReducer(state: VoiceLiveState, action: VoiceLiveAction): VoiceLiveState {
   switch (action.type) {
     case "start":
-      return { status: "connecting", error: null, transcript: [], passing: false, narrating: false };
+      return { status: "connecting", error: null, transcript: [], passing: false, narrating: false, muted: false };
     case "connected":
       return state.status === "connecting" ? { ...state, status: "listening" } : state;
     case "fail":
       // The transcript stays: what was said before the drop is still worth reading.
-      return { ...state, status: "error", error: action.error, passing: false, narrating: false };
+      return { ...state, status: "error", error: action.error, passing: false, narrating: false, muted: false };
     case "tool_busy":
       return state.status === "idle" || state.status === "error" ? state : { ...state, passing: action.busy };
     case "narrating":
       return state.status === "idle" || state.status === "error" || state.narrating === action.on
         ? state
         : { ...state, narrating: action.on };
+    case "muted":
+      return state.status === "idle" || state.status === "error" || state.muted === action.on
+        ? state
+        : { ...state, muted: action.on };
     case "forwarded": {
       if (action.ids.length === 0) return state;
       const ids = new Set(action.ids);
@@ -260,9 +272,16 @@ export const ERROR_MESSAGE_KEY: Record<VoiceLiveErrorKind, string> = {
   rate_limited: "errRateLimited",
   unavailable: "errUnavailable",
   max_length: "errMaxLength",
+  muted_too_long: "errMutedTooLong",
 };
 
 /** Errors where trying again can help (shows a retry button). */
 export function isRetryable(kind: VoiceLiveErrorKind): boolean {
-  return kind === "network" || kind === "rate_limited" || kind === "unavailable" || kind === "max_length";
+  return (
+    kind === "network" ||
+    kind === "rate_limited" ||
+    kind === "unavailable" ||
+    kind === "max_length" ||
+    kind === "muted_too_long"
+  );
 }
