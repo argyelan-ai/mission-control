@@ -877,7 +877,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
           {/* min-w-0: the model chip is the one element of this row that may
               shrink — with context ring, mode chip and effort chip on a
               390 px phone, a long model name wrapped onto two lines. */}
-          <div className="relative min-w-0" ref={modelBoxRef}>
+          <div className="relative min-w-0 max-w-40" ref={modelBoxRef}>
             {modelOptions.length === 0 ? (
               /* Fremde CLI (kimi, omp): das Backend meldet explizit keine
                  /model-Aliasse — dann ist der Chip ein ehrliches Label statt
@@ -885,7 +885,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
               <span
                 data-testid="model-chip-static"
                 title={modelLabel}
-                className="inline-flex max-w-40 items-center whitespace-nowrap font-mono text-xs font-medium px-2 py-1 rounded-lg"
+                className="inline-flex max-w-full items-center whitespace-nowrap font-mono text-xs font-medium px-2 py-1 rounded-lg"
                 style={{ color: C.textMuted, border: `1px solid ${C.border}` }}
               >
                 <span className="truncate">{modelLabel}</span>
@@ -901,7 +901,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
               // "selected"). It lights up on hover and while open.
               data-testid="model-chip"
               title={modelLabel}
-              className="inline-flex max-w-40 items-center gap-1 whitespace-nowrap font-mono text-xs font-medium px-2 py-1 rounded-lg cursor-pointer transition-colors"
+              className="inline-flex max-w-full items-center gap-1 whitespace-nowrap font-mono text-xs font-medium px-2 py-1 rounded-lg cursor-pointer transition-colors"
               style={{
                 backgroundColor: modelOpen ? C.bgHover : "transparent",
                 color: modelOpen ? C.textPrimary : C.textSecondary,

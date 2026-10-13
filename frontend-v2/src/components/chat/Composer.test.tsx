@@ -641,10 +641,11 @@ describe("Composer", () => {
       );
       const chip = screen.getByTestId("model-chip-static");
       expect(chip.className).toContain("whitespace-nowrap");
-      expect(chip.className).toContain("max-w-40");
+      expect(chip.className).toContain("max-w-full");
       expect(chip).toHaveAttribute("title", long);
       expect(chip.querySelector(".truncate")).toHaveTextContent(long);
       expect(chip.parentElement!.className).toContain("min-w-0");
+      expect(chip.parentElement!.className).toContain("max-w-40");
     });
 
     it("offers no slash palette — Claude builtins would be a false promise", async () => {
