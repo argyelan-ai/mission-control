@@ -296,6 +296,11 @@ interface ChatViewProps {
    *  (resolve_transcript_dir). `false` skips the history/SSE fetch outright
    *  and forces terminal mode — there's nothing to chat with. */
   hasTranscript: boolean;
+  /** The chat is actually on screen (default). The sessions page keeps the
+   *  last chat mounted but hidden behind the list on the phone — then a live
+   *  voice call must not dock into it (nobody could see or hang up), it
+   *  floats instead (live finding 13.10.2026). */
+  voiceOnScreen?: boolean;
   detailLevel: DetailLevel;
   onDetailLevelChange: (level: DetailLevel) => void;
   centerView: CenterView;
@@ -337,6 +342,7 @@ export function ChatView({
   agent,
   head = null,
   hasTranscript,
+  voiceOnScreen = true,
   detailLevel,
   onDetailLevelChange,
   centerView,
@@ -1351,6 +1357,7 @@ export function ChatView({
                   // the follow-ups the daemon held go back into the composer.
                   onStopped={handleVoiceStopped}
                   progress={voiceProgress}
+                  onScreen={voiceOnScreen}
                 >
                 {(voiceSlot) => (
                 <Composer

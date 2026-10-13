@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 /**
  * Chat history on the phone — back from an open chat lands on the chats list.
  *
@@ -36,6 +37,24 @@ export function isPhoneViewport(): boolean {
   } catch {
     return false;
   }
+}
+
+/** `isPhoneViewport()` that follows rotation and window resizes. */
+export function usePhoneViewport(): boolean {
+  const [phone, setPhone] = useState(false);
+  useEffect(() => {
+    setPhone(isPhoneViewport());
+    let mq: MediaQueryList | null = null;
+    try {
+      mq = window.matchMedia("(max-width: 767px)");
+    } catch {
+      return;
+    }
+    const onChange = () => setPhone(isPhoneViewport());
+    mq?.addEventListener?.("change", onChange);
+    return () => mq?.removeEventListener?.("change", onChange);
+  }, []);
+  return phone;
 }
 
 let directLoadTaken = false;
