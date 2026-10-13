@@ -321,9 +321,10 @@ export function VoiceCallCompact({
   const t = useTranslations("voiceLive");
   if (call.status === "idle") return null;
   const isError = call.status === "error" && call.error !== null;
+  // Short form: the compact row is narrow on a phone, the seconds must show.
   const stateKey =
     call.idleWarning && call.status !== "error"
-      ? "stateIdleWarning"
+      ? "stateIdleWarningShort"
       : call.muted && call.status !== "error"
       ? "stateMuted"
       : call.passing && call.status !== "error"

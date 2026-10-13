@@ -3998,6 +3998,7 @@
     "micBudgetReached": "Tagesbudget erreicht",
     "stateIdleWarning": "Stille — Auflegen in {seconds} s",
     "errIdle": "Nach {seconds} s Stille aufgelegt.",
-    "errBudgetReached": "Tagesbudget für die Stimme erreicht. Ab Mitternacht wieder frei."
+    "errBudgetReached": "Tagesbudget für die Stimme erreicht. Ab Mitternacht wieder frei.",
+    "stateIdleWarningShort": "Legt auf in {seconds} s"
   }
 }

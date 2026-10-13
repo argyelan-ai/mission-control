@@ -3998,6 +3998,7 @@
     "micBudgetReached": "Daily budget reached",
     "stateIdleWarning": "Silence — hanging up in {seconds} s",
     "errIdle": "Hung up after {seconds} s of silence.",
-    "errBudgetReached": "Daily voice budget reached. Free again after midnight."
+    "errBudgetReached": "Daily voice budget reached. Free again after midnight.",
+    "stateIdleWarningShort": "Hangs up in {seconds} s"
   }
 }

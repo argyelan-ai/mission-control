@@ -10,7 +10,9 @@ import { api } from "@/lib/api";
 import type { ProgressSnapshot } from "./progress";
 import type { VoiceLiveEnv } from "./useVoiceLive";
 import { resetVoiceLiveConfigCache } from "./useVoiceLiveConfig";
-import { FloatingVoiceCall, VoiceLiveCallProvider, resetLeadTargetCache } from "./VoiceLiveCall";
+import { FloatingVoiceCall, VoiceCallCompact, VoiceLiveCallProvider, resetLeadTargetCache } from "./VoiceLiveCall";
+import type { VoiceLiveCall } from "./useVoiceLive";
+import { INITIAL_VOICE_STATE } from "./voiceLiveCore";
 import { NavVoiceButton } from "./NavVoiceButton";
 import { VoiceLiveDock } from "./VoiceLive";
 
@@ -313,5 +315,38 @@ describe("the call survives navigation", () => {
     await waitFor(() => expect(h.mintSession).toHaveBeenCalledTimes(1));
     expect(h.mintSession.mock.calls[0][0]).toBe("dev-1");
     expect(screen.getByTestId("voice-call-bar")).toBeInTheDocument();
+  });
+});
+
+describe("compact bar (voice PR 6)", () => {
+  const call = (over: Partial<VoiceLiveCall>): VoiceLiveCall => ({
+    ...INITIAL_VOICE_STATE,
+    status: "listening",
+    connectedAt: 1_000,
+    start: async () => undefined,
+    hangUp: () => undefined,
+    dismiss: () => undefined,
+    toggleMute: () => undefined,
+    agentId: "lead-1",
+    now: () => 1_000 + 125_000,
+    ...over,
+  });
+
+  it("shows the elapsed time and a short idle warning that fits a phone row", () => {
+    render(<VoiceCallCompact call={call({ idleWarning: true })} target={{ agentId: "lead-1", agentName: "Chief" }} />);
+    expect(screen.getByTestId("voice-elapsed")).toHaveTextContent("2:05");
+    expect(screen.getByTestId("voice-compact-state")).toHaveTextContent("Hangs up in 15 s");
+  });
+
+  it("budget error in the compact row: honest text, no retry", () => {
+    render(
+      <VoiceCallCompact
+        call={call({ status: "error", error: "budget_reached" })}
+        target={{ agentId: "lead-1", agentName: "Chief" }}
+      />,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent("Daily voice budget reached.");
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+    expect(screen.getAllByRole("button")).toHaveLength(1); // only close
   });
 });
