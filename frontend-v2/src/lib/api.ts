@@ -119,6 +119,7 @@ import type {
   HeadSummary,
 } from "./heads";
 import type { ChatChanges } from "./chatTypes";
+import type { ProgressRequest } from "@/components/voice/live/progress";
 import type { LastNight, NightConfig, NightConfigUpdate, NightEntry, NightTonight } from "./nightShift";
 
 import { AUTH_TOKEN_KEY, BASE_URL, getToken } from "./authToken";
@@ -2175,6 +2176,12 @@ export const api = {
       transcript: string;
     }): Promise<{ output: Record<string, unknown>; sent_text: string | null; mid_turn: boolean }> =>
       request("/api/v1/voice/live/tool", { method: "POST", body: JSON.stringify(body) }),
+    /** One redacted progress line for the voice (voice PR 3). The browser
+     *  says WHEN (milestone), MC says WHAT (redacted, shortened). */
+    progress: (
+      body: { call_ref: string; agent_id: string } & ProgressRequest,
+    ): Promise<{ text: string; agent_final: boolean }> =>
+      request("/api/v1/voice/live/progress", { method: "POST", body: JSON.stringify(body) }),
   },
 
   spark: {

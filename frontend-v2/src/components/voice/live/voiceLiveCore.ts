@@ -36,9 +36,17 @@ export interface VoiceLiveState {
   transcript: TranscriptLine[];
   /** A tool call is running in MC right now ("Gibt weiter…"). */
   passing: boolean;
+  /** The voice is telling the agent's progress on its own (voice PR 3). */
+  narrating: boolean;
 }
 
-export const INITIAL_VOICE_STATE: VoiceLiveState = { status: "idle", error: null, transcript: [], passing: false };
+export const INITIAL_VOICE_STATE: VoiceLiveState = {
+  status: "idle",
+  error: null,
+  transcript: [],
+  passing: false,
+  narrating: false,
+};
 
 /** Hard cap per call on the client (bauplan B6: 20 min). The server-side
  *  timer and the daily budget come with PR 6. */
@@ -55,6 +63,7 @@ export type VoiceLiveAction =
   | { type: "hangup" }
   | { type: "tool_busy"; busy: boolean }
   | { type: "forwarded"; ids: string[] }
+  | { type: "narrating"; on: boolean }
   | { type: "server_event"; event: RealtimeServerEvent };
 
 /** The subset of Realtime server events PR 1 reads. Unknown events are ignored. */
@@ -188,14 +197,18 @@ function onServerEvent(state: VoiceLiveState, ev: RealtimeServerEvent): VoiceLiv
 export function voiceLiveReducer(state: VoiceLiveState, action: VoiceLiveAction): VoiceLiveState {
   switch (action.type) {
     case "start":
-      return { status: "connecting", error: null, transcript: [], passing: false };
+      return { status: "connecting", error: null, transcript: [], passing: false, narrating: false };
     case "connected":
       return state.status === "connecting" ? { ...state, status: "listening" } : state;
     case "fail":
       // The transcript stays: what was said before the drop is still worth reading.
-      return { ...state, status: "error", error: action.error, passing: false };
+      return { ...state, status: "error", error: action.error, passing: false, narrating: false };
     case "tool_busy":
       return state.status === "idle" || state.status === "error" ? state : { ...state, passing: action.busy };
+    case "narrating":
+      return state.status === "idle" || state.status === "error" || state.narrating === action.on
+        ? state
+        : { ...state, narrating: action.on };
     case "forwarded": {
       if (action.ids.length === 0) return state;
       const ids = new Set(action.ids);
