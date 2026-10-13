@@ -86,7 +86,7 @@ function harness() {
     agent_name: agentId,
     call_ref: `ref-${agentId}`,
   }));
-  const runTool = vi.fn(async () => ({
+  const runTool = vi.fn(async (_body: { agent_id: string; call_ref: string }) => ({
     output: { delivered: true },
     sent_text: "[per Stimme] tests",
     mid_turn: false,
