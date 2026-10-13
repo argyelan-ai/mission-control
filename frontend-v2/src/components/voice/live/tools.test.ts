@@ -17,7 +17,11 @@ describe("functionCallFromEvent", () => {
   });
 
   it("ignores unknown tools, messages and broken arguments safely", () => {
-    expect(functionCallFromEvent({ type: "response.output_item.done", item: { type: "function_call", call_id: "c", name: "stop_agent" } })).toBeNull();
+    expect(functionCallFromEvent({ type: "response.output_item.done", item: { type: "function_call", call_id: "c", name: "press_keys" } })).toBeNull();
+    // voice PR 4: stop_agent is a known tool now
+    expect(
+      functionCallFromEvent({ type: "response.output_item.done", item: { type: "function_call", call_id: "s", name: "stop_agent", arguments: "{}" } }),
+    ).toEqual({ callId: "s", name: "stop_agent", args: {} });
     expect(functionCallFromEvent({ type: "response.output_item.done", item: { type: "message" } })).toBeNull();
     expect(
       functionCallFromEvent({ type: "response.output_item.done", item: { type: "function_call", call_id: "c", name: "send_to_agent", arguments: "{oops" } }),
@@ -56,6 +60,19 @@ describe("UtteranceLog", () => {
     expect(log.take()).toEqual({ ids: ["u3"], text: "drittens" });
   });
 
+  it("last(): the newest finished, unsent utterance on its own (the stop check)", () => {
+    const log = new UtteranceLog();
+    expect(log.last()).toBeNull();
+    log.final("u1", "mach erst X");
+    log.final("u2", " Stopp! ");
+    log.committed("u3"); // still transcribing: not the last FINISHED one
+    expect(log.last()).toEqual({ id: "u2", text: "Stopp!" });
+    log.consume(["u2"]);
+    expect(log.last()).toEqual({ id: "u1", text: "mach erst X" });
+    log.failed("u3");
+    expect(log.last()).toEqual({ id: "u1", text: "mach erst X" });
+  });
+
   it("a failed transcription is not waited for and adds nothing", () => {
     const log = new UtteranceLog();
     log.committed("u1");
@@ -74,6 +91,13 @@ describe("toolFailureOutput", () => {
       delivered: false,
       reason: "network",
     });
+  });
+
+  it("a failed stop is NOT stopped and points to the Stop button", () => {
+    const out = toolFailureOutput("stop_agent", new Error('API 403: {"detail":{"reason":"call_unknown"}}'));
+    expect(out).toMatchObject({ stopped: false, reason: "call_unknown" });
+    expect(String(out.say)).toMatch(/^NOT stopped/);
+    expect(String(out.say)).toMatch(/Stop button/);
   });
 
   it("a failed status read says unknown, never a guess", () => {

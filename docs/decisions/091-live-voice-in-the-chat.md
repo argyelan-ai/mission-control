@@ -58,8 +58,18 @@
    operator's verbatim words (`Wortlaut: „…“`) and a note for the agent; no
    verbatim words → nothing is sent. `get_agent_status` returns a redacted
    snapshot (state, todo step, last tool title; paths cut to their last
-   segment, no tool output). Stopping by voice comes with PR 4; until then the
-   voice points to the Stop button.
+   segment, no tool output).
+   **Stop, mute, approvals (PR 4):** `stop_agent` runs only when the
+   operator's last utterance, verbatim, is a stop command as a whole
+   ("Stopp", "Stop", "Halt", "Abbrechen", "Stopp <this agent>"); MC re-checks
+   the words itself — "Stopp den Container" is passed on, never a cancel. It
+   uses the chat Stop button's path (headless: take the queue back, ACP
+   `cancel`; TUI: `Escape`) and the voice says "Gestoppt" only once MC saw
+   the turn end. Barge-in stays OpenAI's VAD `interrupt_response`: it cancels
+   only the voice's own answer, never the agent. Mute turns the mic track off
+   (the call hangs up after 5 min muted). A voice message is never typed into
+   an open permission prompt or choice menu (Enter there would pick an
+   option); the voice says what the agent wants and asks for a tap.
 6. **Off by default** (`VOICE_LIVE_ENABLED=false`). Off or no OpenAI key =
    the endpoints answer 404 and no mic is shown. Turning it off is the undo.
 7. **Amends ADR-083 decision 2 and ADR-089 §6** once accepted: the live

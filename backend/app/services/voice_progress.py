@@ -184,7 +184,8 @@ def build_item(
         q = redact_short(question, QUESTION_MAX_CHARS)
         body = (
             f"{name} waits for an approval{': ' + q if q else ''}. The operator must tap it in the chat; "
-            "a spoken yes does not count."
+            "a spoken yes does not count. Tell them in one short sentence what he wants and ask for the "
+            "tap (\"Bitte im Chat antippen.\"); never pass a yes or no on."
         )
     elif kind == "question":
         q = redact_short(question, QUESTION_MAX_CHARS)

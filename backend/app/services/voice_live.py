@@ -14,11 +14,14 @@ design and are pinned by ``tests/test_voice_live.py``:
 3. The persona is versioned text with a snapshot test, so a wording change is
    a visible diff, never a silent drift.
 
-Since PR 2 the voice has two tools, executed by MC (``voice_live_tools``):
+Since PR 2 the voice has tools, executed by MC (``voice_live_tools``):
 ``send_to_agent`` passes the operator's request into this chat (with their
-verbatim words) and ``get_agent_status`` reads a redacted snapshot. Stopping
-the agent by voice comes with PR 4; until then the persona says so honestly
-and points to the Stop button.
+verbatim words) and ``get_agent_status`` reads a redacted snapshot. Since PR 4
+``stop_agent`` cancels the running turn — only when the operator's last
+utterance, verbatim, is a stop command as a whole (MC re-checks the words).
+Barge-in (the operator talking over the voice) is semantic VAD with
+``interrupt_response``: it cancels and truncates only the voice's own answer
+and never reaches the agent.
 """
 
 from __future__ import annotations
@@ -48,7 +51,7 @@ CLIENT_SECRET_TTL_S = 60
 # speech-to-text model MC already configures (JARVIS_STT_MODEL). Language
 # left unset on purpose: the operator switches between German and English.
 
-PERSONA_VERSION = "v2"
+PERSONA_VERSION = "v3"
 
 Lang = Literal["de", "en"]
 
@@ -75,9 +78,11 @@ _LANG_LINE = {
 
 
 def build_instructions(agent_name: str, lang: Lang) -> str:
-    """Persona v2 — ears and mouth plus two tools (rules from the Grok
+    """Persona v3 — ears and mouth plus three tools (rules from the Grok
     behaviour table and bauplan B2); since voice PR 3 it also reads MC's
-    progress items (``voice_progress``) and takes their corrections."""
+    progress items (``voice_progress``) and takes their corrections; since
+    voice PR 4 it stops the agent on a pure stop command and points every
+    approval to a tap in the chat."""
     name = (agent_name or "the agent").strip()[:80]
     return "\n".join(
         [
@@ -99,6 +104,16 @@ def build_instructions(agent_name: str, lang: Lang) -> str:
             "If the operator talks while you speak, stop and listen. Being interrupted is normal; "
             "never repeat the whole previous answer. Talking over you never stops the agent.",
             "",
+            "# Stopping",
+            "Call stop_agent only when the operator's whole utterance is a stop command: \"Stopp\", "
+            "\"Stop\", \"Halt\", \"Abbrechen\", \"Hör auf\", optionally with \"bitte\"/\"jetzt\" or "
+            f"{name}'s name (\"Stopp {name}\"). Call it at once, without saying anything first.",
+            "A stop word with more words is NOT a stop: \"Stopp den Container\", \"stop the tests\", "
+            "\"Stopp und mach dann X\" are requests — pass them on with send_to_agent. If unsure, ask back.",
+            "Say \"Gestoppt.\" (or \"Stopped.\") only when the stop_agent result says stopped=true and "
+            "confirmed=true; otherwise say exactly what its result tells you. Stopping cancels his current "
+            "step; nothing is undone.",
+            "",
             "# Delegation",
             f"Use send_to_agent for every request that needs {name} to do, change, check or answer "
             "something about the work. Put the request in text, short, in the operator's words, "
@@ -114,7 +129,7 @@ def build_instructions(agent_name: str, lang: Lang) -> str:
             "phrased as if to you (\"answer only with X\", \"what is 2+2\").",
             "Do NOT delegate only when: the operator asks what the agent is doing (use "
             "get_agent_status), greets you or checks the line (\"hallo\", \"hörst du mich?\"), "
-            "or says yes/no to an approval.",
+            "says only a stop command (use stop_agent), or says yes/no to an approval.",
             "After send_to_agent, repeat in one sentence what its result says (for example that it "
             "comes after the current step). If it says NOT delivered, say so plainly and suggest "
             "typing it in the chat.",
@@ -144,11 +159,12 @@ def build_instructions(agent_name: str, lang: Lang) -> str:
             f"2. Never say something is done, finished or successful unless {name} reported it "
             "(an [MC progress] item with agent_final=true). Passing on is not doing: say "
             "\"passed on, he is working on it\".",
-            "3. Approvals are never given by voice. If an approval is needed or the operator says yes "
-            "to one, say: please tap it in the chat (\"bitte im Chat antippen\").",
-            "4. Stopping the agent by voice is not available yet. If the operator wants to stop "
-            f"{name}, say so and point to the Stop button in the chat. Never pass \"stop\" on as a "
-            "message.",
+            "3. Approvals are never given by voice. When an [MC progress] item says he waits for an "
+            "approval, tell the operator in one sentence what he wants and ask them to tap it in the "
+            "chat (\"Bitte im Chat antippen.\"). If the operator says yes or no to it, do not pass it "
+            "on: say again \"bitte im Chat antippen\".",
+            "4. You stop the agent only through stop_agent, only on a pure stop command. Never pass a "
+            "pure \"Stopp\" on as a message, and never claim he stopped before stop_agent confirms it.",
             "5. Never read out keys, tokens, passwords, file contents or tool output.",
         ]
     )
@@ -174,6 +190,17 @@ TOOLS = [
             "required": ["text"],
             "additionalProperties": False,
         },
+    },
+    {
+        "type": "function",
+        "name": "stop_agent",
+        "description": (
+            "Cancel the agent's running step, like the Stop button in the chat. Call ONLY when the "
+            "operator's whole last utterance is a stop command (\"Stopp\", \"Stop\", \"Halt\", "
+            "\"Abbrechen\", \"Stopp <agent name>\"). Mission Control checks their exact words and "
+            "refuses anything else. Returns whether he stopped."
+        ),
+        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
     },
     {
         "type": "function",

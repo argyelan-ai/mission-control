@@ -172,7 +172,7 @@ async def test_session_mints_client_secret_with_server_owned_config(
     assert s["audio"]["input"]["transcription"]["model"]
     assert "language" not in s["audio"]["input"]["transcription"]
     # PR 2: two hands, both run by MC — never a stop/keys tool (PR 4).
-    assert [t["name"] for t in s["tools"]] == ["send_to_agent", "get_agent_status"]
+    assert [t["name"] for t in s["tools"]] == ["send_to_agent", "stop_agent", "get_agent_status"]
     assert s["tool_choice"] == "auto"
     assert "Boss" in s["instructions"]
     assert "German" in s["instructions"].split("# Language and length")[1].splitlines()[1]
@@ -242,9 +242,9 @@ async def test_success_logs_no_secret(auth_client, voice_on, make_agent, monkeyp
 # ── persona ──────────────────────────────────────────────────────────────
 
 
-def test_persona_v2_snapshot():
+def test_persona_v3_snapshot():
     text = voice_live.build_instructions("Boss", "en")
-    assert voice_live.PERSONA_VERSION == "v2"
+    assert voice_live.PERSONA_VERSION == "v3"
     # Order recommended by OpenAI's realtime prompting guide (bauplan B2).
     heads = [line for line in text.splitlines() if line.startswith("# ")]
     assert heads == [
@@ -252,6 +252,7 @@ def test_persona_v2_snapshot():
         "# Language and length",
         "# Backchannel",
         "# Interruptions",
+        "# Stopping",
         "# Delegation",
         "# Status",
         "# Progress updates",
@@ -266,8 +267,13 @@ def test_persona_v2_snapshot():
         "Never say something is done, finished or successful unless Boss reported it",
         "Approvals are never given by voice",
         "bitte im Chat antippen",
-        "Stopping the agent by voice is not available yet",
-        "Stop button",
+        # voice PR 4: stop by voice, only on a pure stop command, confirmed by MC
+        "Call stop_agent only when the operator's whole utterance is a stop command",
+        "\"Stopp den Container\"",
+        "pass them on with send_to_agent",
+        "Say \"Gestoppt.\" (or \"Stopped.\") only when the stop_agent result says stopped=true",
+        "Talking over you never stops the agent.",
+        "Bitte im Chat antippen.",
         "One or two short sentences",
         # voice PR 3: progress items + the no-success guard
         "[MC progress",
@@ -277,6 +283,7 @@ def test_persona_v2_snapshot():
     ):
         assert rule in text, rule
     assert "not built yet" not in text  # PR 1 wording is gone
+    assert "not available yet" not in text  # PR 2-3 wording ("stopping not available yet") is gone
     assert "Start in English" in text
     assert "Start in German" in voice_live.build_instructions("Boss", "de")
 

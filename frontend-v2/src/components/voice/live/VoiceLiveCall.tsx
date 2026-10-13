@@ -54,6 +54,14 @@ export interface VoiceTarget {
 }
 
 type ForwardFn = (text: string, midTurn: boolean) => void;
+type StoppedFn = (takenBack: string[] | null) => void;
+
+/** What a chat on screen hands the call: the echo of forwarded messages and
+ *  the follow-ups a voice stop took back (voice PR 4), both for its composer. */
+export interface DockHandlers {
+  onForwarded?: ForwardFn;
+  onStopped?: StoppedFn;
+}
 
 export interface VoiceLiveCallContextValue {
   /** The backend has the live voice on (`VOICE_LIVE_ENABLED` + key). */
@@ -67,7 +75,7 @@ export interface VoiceLiveCallContextValue {
   lead: VoiceTarget | null;
   startCall: (target: VoiceTarget) => void;
   /** A chat for `agentId` is on screen; returns the unregister. */
-  registerDock: (agentId: string, onForwarded?: ForwardFn) => () => void;
+  registerDock: (agentId: string, handlers: DockHandlers) => () => void;
   /** The docked chat's live stream, for the voice to listen along. */
   feedProgress: (agentId: string, snap: ProgressSnapshot | undefined) => void;
   /** Agent ids whose chat is on screen right now. */
@@ -160,17 +168,23 @@ export function VoiceLiveCallProvider({
   const [target, setTarget] = useState<VoiceTarget | null>(null);
   const [progress, setProgress] = useState<ProgressSnapshot | undefined>(undefined);
   const [docks, setDocks] = useState<string[]>([]);
-  const forwards = useRef(new Map<string, ForwardFn>());
+  const docksRef = useRef(new Map<string, DockHandlers>());
   const targetRef = useRef<VoiceTarget | null>(null);
 
+  // Only the docked chat gets these; with the chat closed, it reloads its
+  // history when opened, so nothing is lost.
   const onForwarded = useCallback((text: string, midTurn: boolean) => {
     const id = targetRef.current?.agentId;
-    if (id) forwards.current.get(id)?.(text, midTurn);
+    if (id) docksRef.current.get(id)?.onForwarded?.(text, midTurn);
+  }, []);
+  const onStopped = useCallback((takenBack: string[] | null) => {
+    const id = targetRef.current?.agentId;
+    if (id) docksRef.current.get(id)?.onStopped?.(takenBack);
   }, []);
 
   // The hook's own agentId stays fixed (""): the agent is picked per call via
   // start(id), so a page change never "switches agent" and ends the call.
-  const call = useVoiceLive("", locale === "de" ? "de" : "en", env, { onForwarded, progress });
+  const call = useVoiceLive("", locale === "de" ? "de" : "en", env, { onForwarded, onStopped, progress });
   const active = call.status !== "idle";
 
   const startFn = call.start;
@@ -185,11 +199,11 @@ export function VoiceLiveCallProvider({
     [startFn],
   );
 
-  const registerDock = useCallback((agentId: string, fwd?: ForwardFn) => {
-    if (fwd) forwards.current.set(agentId, fwd);
+  const registerDock = useCallback((agentId: string, handlers: DockHandlers) => {
+    docksRef.current.set(agentId, handlers);
     setDocks((d) => [...d, agentId]);
     return () => {
-      if (forwards.current.get(agentId) === fwd) forwards.current.delete(agentId);
+      if (docksRef.current.get(agentId) === handlers) docksRef.current.delete(agentId);
       setDocks((d) => {
         const i = d.indexOf(agentId);
         return i < 0 ? d : [...d.slice(0, i), ...d.slice(i + 1)];
@@ -253,7 +267,9 @@ export function VoiceCallCompact({
   if (call.status === "idle") return null;
   const isError = call.status === "error" && call.error !== null;
   const stateKey =
-    call.passing && call.status !== "error"
+    call.muted && call.status !== "error"
+      ? "stateMuted"
+      : call.passing && call.status !== "error"
       ? "statePassing"
       : call.narrating && call.status === "speaking"
         ? "stateNarrating"
@@ -300,8 +316,8 @@ export function VoiceCallCompact({
         <>
           <span
             aria-hidden
-            className={`shrink-0 inline-block w-2 h-2 rounded-full ${call.status === "speaking" ? "motion-safe:animate-pulse" : ""}`}
-            style={{ backgroundColor: call.status === "connecting" ? C.textDim : C.accent }}
+            className={`shrink-0 inline-block w-2 h-2 rounded-full ${call.status === "speaking" && !call.muted ? "motion-safe:animate-pulse" : ""}`}
+            style={{ backgroundColor: call.status === "connecting" || call.muted ? C.textDim : C.accent }}
           />
           <span className="flex-1 min-w-0 truncate text-sm" aria-live="polite">
             <span style={{ color: C.textPrimary, fontWeight: 500 }}>{target.agentName}</span>

@@ -22,6 +22,14 @@
  * free — never over the operator. A success claim in the voice's own words
  * before the agent's final reply gets a correction item (no-success guard).
  *
+ * Stop and mute (voice PR 4): `stop_agent` carries the operator's LAST
+ * utterance verbatim — MC stops only when that, as a whole, is a stop
+ * command, through the chat Stop button's own path; follow-ups the agent's
+ * daemon held back come back for the composer (`options.onStopped`).
+ * Barge-in needs nothing here: OpenAI's semantic VAD (`interrupt_response`)
+ * cancels and truncates only the voice's own answer. Mute turns the mic
+ * track off and keeps the call; after `MUTED_MAX_MS` the call hangs up.
+ *
  * Everything the browser offers (getUserMedia, RTCPeerConnection, fetch,
  * isSecureContext) comes through `VoiceLiveEnv`, so tests drive the whole
  * call without a browser.
@@ -33,6 +41,7 @@ import {
   DISCONNECT_GRACE_MS,
   INITIAL_VOICE_STATE,
   MAX_CALL_MS,
+  MUTED_MAX_MS,
   micErrorKind,
   sessionErrorKind,
   voiceLiveReducer,
@@ -81,6 +90,11 @@ export interface VoiceToolResponse {
   output: Record<string, unknown>;
   sent_text: string | null;
   mid_turn: boolean;
+  /** `stop_agent`: the stop went out. */
+  stopped?: boolean;
+  /** `stop_agent` on a headless agent: follow-ups taken back from its
+   *  daemon (oldest first); `null` = nothing taken back. */
+  taken_back?: string[] | null;
 }
 
 export interface VoiceProgressResponse {
@@ -141,6 +155,8 @@ export interface VoiceLiveCall extends VoiceLiveState {
   hangUp: () => void;
   /** Leave the error state without calling again. */
   dismiss: () => void;
+  /** Mic on/off; the call stays open (voice PR 4). */
+  toggleMute: () => void;
 }
 
 export interface VoiceLiveOptions {
@@ -150,6 +166,10 @@ export interface VoiceLiveOptions {
   /** The chat's live stream (state, timeline, todos) — what the voice
    *  listens along to (voice PR 3). */
   progress?: ProgressSnapshot;
+  /** `stop_agent` stopped the agent's turn (voice PR 4). `takenBack` = the
+   *  follow-ups its daemon held, for the composer — like the Stop button;
+   *  `null` when nothing was taken back (TUI agents keep their own queue). */
+  onStopped?: (takenBack: string[] | null) => void;
 }
 
 /** How often the progress clock runs while a call is open (final settle,
@@ -168,6 +188,8 @@ interface Live {
   audio: HTMLAudioElement;
   timers: ReturnType<typeof setTimeout>[];
   disconnectTimer: ReturnType<typeof setTimeout> | null;
+  muteTimer: ReturnType<typeof setTimeout> | null;
+  muted: boolean;
   callRef: string;
   utterances: UtteranceLog;
   seenCalls: Set<string>;
@@ -209,6 +231,8 @@ export function useVoiceLive(
   const liveRef = useRef<Live | null>(null);
   const onForwardedRef = useRef(options.onForwarded);
   onForwardedRef.current = options.onForwarded;
+  const onStoppedRef = useRef(options.onStopped);
+  onStoppedRef.current = options.onStopped;
   const progressSnap = options.progress;
   const progressRef = useRef(progressSnap);
   progressRef.current = progressSnap;
@@ -222,6 +246,8 @@ export function useVoiceLive(
     if (!live) return;
     live.timers.forEach((t) => env.clearTimeout(t));
     if (live.disconnectTimer) env.clearTimeout(live.disconnectTimer);
+    if (live.muteTimer) env.clearTimeout(live.muteTimer);
+    live.muteTimer = null;
     if (live.tickTimer) env.clearTimeout(live.tickTimer);
     live.tickTimer = null;
     live.connected = false;
@@ -363,6 +389,14 @@ export function useVoiceLive(
           await waitForTranscript(live);
           if (liveRef.current !== live) return;
           ({ ids, text: transcript } = live.utterances.take());
+        } else if (fc.name === "stop_agent") {
+          // Only the last utterance: "Stopp" after "mach erst X" is a stop,
+          // and MC must see exactly that, not the two joined.
+          await waitForTranscript(live);
+          if (liveRef.current !== live) return;
+          const last = live.utterances.last();
+          ids = last ? [last.id] : [];
+          transcript = last?.text ?? "";
         }
         const res = await env.runTool({
           call_ref: live.callRef,
@@ -372,6 +406,11 @@ export function useVoiceLive(
           transcript,
         });
         output = res.output;
+        if (fc.name === "stop_agent" && res.stopped === true && liveRef.current === live) {
+          // Spent: a later send must not attach "Stopp" as the operator's words.
+          live.utterances.consume(ids);
+          onStoppedRef.current?.(res.taken_back ?? null);
+        }
         if (res.sent_text && liveRef.current === live) {
           live.utterances.consume(ids);
           live.tracker.forwarded(res.mid_turn === true, env.now());
@@ -536,6 +575,8 @@ export function useVoiceLive(
       audio,
       timers: [],
       disconnectTimer: null,
+      muteTimer: null,
+      muted: false,
       callRef: session.call_ref ?? "",
       utterances: new UtteranceLog(),
       seenCalls: new Set(),
@@ -637,6 +678,27 @@ export function useVoiceLive(
 
   const dismiss = hangUp;
 
+  /** Mic track off/on. The call (and billing time) stays open, so a muted
+   *  call hangs up by itself after MUTED_MAX_MS. The voice can still speak:
+   *  mute is the operator's mic, not the speaker. */
+  const toggleMute = useCallback(() => {
+    const live = liveRef.current;
+    if (!live) return;
+    const on = !live.muted;
+    live.muted = on;
+    const tracks = live.stream.getAudioTracks?.() ?? live.stream.getTracks();
+    tracks.forEach((t) => {
+      t.enabled = !on;
+    });
+    if (live.muteTimer) env.clearTimeout(live.muteTimer);
+    live.muteTimer = on
+      ? env.setTimeout(() => {
+          if (liveRef.current === live && live.muted) fail("muted_too_long");
+        }, MUTED_MAX_MS)
+      : null;
+    dispatch({ type: "muted", on });
+  }, [env, fail]);
+
   // Every change of the chat's live stream is looked at once.
   useEffect(() => {
     const live = liveRef.current;
@@ -664,5 +726,5 @@ export function useVoiceLive(
     };
   }, [agentId, teardown]);
 
-  return { ...state, start, hangUp, dismiss, agentId: callAgent };
+  return { ...state, start, hangUp, dismiss, toggleMute, agentId: callAgent };
 }
