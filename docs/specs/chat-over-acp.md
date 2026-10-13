@@ -70,6 +70,30 @@ The queue lives in the daemon's memory only. A daemon restart (container recreat
 | `cancel` | `{"op":"cancel"}` | `{"ok":true}` (no-op when idle) |
 | `config` | `{"op":"config","id":"thinking","value":"high"}` | `{"ok":true,"configOptions":[...]}` / `{"ok":false,"error":"rpc_error","detail":"..."}` |
 | `state` | `{"op":"state"}` | `{"ok":true, ...state}` |
+| `answer` (P3) | `{"op":"answer","id":"el-…","action":"accept"\|"decline"\|"cancel","content"?:{…}}` | `{"ok":true,"status":"answered"\|"declined"\|"cancelled"}` · `{"ok":false,"error":"not_pending"}` (answered elsewhere, turn over, daemon restarted) · `{"ok":false,"error":"bad_content"\|"bad_action","detail":"…"}` (checked against the question's schema before omp sees it) |
+
+**Question cards and plan mode (chat package P3).** Only the omp container's
+chat daemon advertises `clientCapabilities.elicitation.form` (`ChatSession(...,
+elicitation=True)` in `build_session`); task runs (`bridge.run_acp_once`) and
+the Hermes host chat do not, so an unattended run never stops on a question.
+omp then asks through `elicitation/create` (form mode): the daemon keeps the
+JSON-RPC request open under its own id `el-<12 hex>`, writes a
+`custom_message`/`acp-elicitation` line (`content` = question text, `data =
+{elicitationId, message, schema}` with the schema cut down to the rendered
+fields) and lists the id in the state file's `elicitations`. The `answer` op
+replies to omp and writes a `custom`/`acp-elicitation-result` line (`data =
+{elicitationId, status, content?}`). A question still open when its turn ends
+(omp's own timeout — form mode has no `elicitation/complete` — or Stop), on
+`/new` or a child restart is answered `cancel` and marked `expired`; ids a
+previous daemon still listed are marked `expired` at start. URL-mode requests
+and unusable schemas are declined at once. Plan mode needs no op of its own:
+`config` with `{"id":"mode","value":"plan"|"default"}`; `current_mode_update`
+updates the `mode` row of `configOptions` and writes a quiet `custom`/`acp-mode`
+line (`data = {modeId}`); `session_info_update` is mirrored as `sessionInfo`.
+Backend: `POST /agents/{id}/chat/elicitation/{elicitation_id}` (admin, 409
+`elicitation_not_pending`), `POST /agents/{id}/chat/mode` (admin; only values in
+`capabilities.modeOptions`, which lists modes only when the agent reports at
+least two).
 
 `state` / `acp-chat-state.json` schema:
 
