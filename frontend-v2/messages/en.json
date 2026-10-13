@@ -3579,6 +3579,34 @@
       "starting": "Agent starting — will be delivered…",
       "withdraw": "Take back queued message",
       "edit": "Edit queued message"
+    },
+    "question": {
+      "aria": "Question from the agent",
+      "send": "Send answer",
+      "skip": "Skip",
+      "yes": "Yes",
+      "no": "No",
+      "other": "Other…",
+      "otherPlaceholder": "Type your own answer",
+      "placeholder": "Your answer",
+      "recommended": "Recommended",
+      "answered": "Answered",
+      "answeredWith": "Answered: {answer}",
+      "declined": "Declined",
+      "cancelled": "Skipped",
+      "expired": "No longer open — the agent moved on",
+      "waiting": "Waiting for an answer",
+      "notOpen": "This question is no longer open.",
+      "failed": "Answer not sent — try again."
+    },
+    "mode": {
+      "label": "Mode",
+      "plan": "Plan",
+      "default": "Standard",
+      "switchTo": "Switch to {mode} mode",
+      "planHint": "Plan mode: the agent only reads and drafts a plan; you approve it before any change.",
+      "failed": "Mode not switched — try again.",
+      "busy": "The agent is busy — switch the mode when the reply has ended."
     }
   },
   "heads": {

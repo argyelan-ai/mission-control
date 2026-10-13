@@ -1,0 +1,67 @@
+/** Plan-mode chip (chat package P3). */
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+
+import { api } from "@/lib/api";
+import type { ChatCapabilities, ModeEvent } from "@/lib/chatTypes";
+import { ModeChip } from "./ModeChip";
+
+vi.mock("@/lib/api", () => ({ api: { chat: { setMode: vi.fn() } } }));
+vi.mock("@/lib/notify", () => ({
+  notify: { error: vi.fn(), success: vi.fn(), info: vi.fn(), warning: vi.fn() },
+}));
+
+const mockSetMode = vi.mocked(api.chat.setMode);
+
+const CAPS = {
+  effortLevels: [],
+  canSwitchEffort: false,
+  modeOptions: [{ value: "default", name: "Default" }, { value: "plan", name: "Plan" }],
+  mode: "default",
+} as ChatCapabilities;
+
+const modeEvent = (modeId: string, uuid = "acp00020"): ModeEvent => ({
+  kind: "mode", uuid, ts: "2026-10-13T10:00:00Z", modeId,
+});
+
+beforeEach(() => {
+  mockSetMode.mockReset();
+  mockSetMode.mockResolvedValue(undefined);
+});
+
+describe("ModeChip", () => {
+  it("is absent unless the agent reports a plan mode", () => {
+    const { container, rerender } = render(<ModeChip agentId="a1" capabilities={null} liveMode={null} />);
+    expect(container).toBeEmptyDOMElement();
+    rerender(
+      <ModeChip
+        agentId="a1"
+        capabilities={{ ...CAPS, modeOptions: [] }}
+        liveMode={null}
+      />,
+    );
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("switches to plan and shows it", async () => {
+    render(<ModeChip agentId="a1" capabilities={CAPS} liveMode={null} />);
+    const chip = screen.getByTestId("mode-chip");
+    expect(chip).toHaveAttribute("data-mode", "default");
+    expect(chip).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(chip);
+    await waitFor(() => expect(mockSetMode).toHaveBeenCalledWith("a1", "plan"));
+    await waitFor(() => expect(screen.getByTestId("mode-chip")).toHaveAttribute("data-mode", "plan"));
+  });
+
+  it("follows the transcript: omp leaves plan mode after the approval", () => {
+    const { rerender } = render(<ModeChip agentId="a1" capabilities={CAPS} liveMode={modeEvent("plan")} />);
+    expect(screen.getByTestId("mode-chip")).toHaveAttribute("data-mode", "plan");
+    rerender(<ModeChip agentId="a1" capabilities={CAPS} liveMode={modeEvent("default", "acp00021")} />);
+    expect(screen.getByTestId("mode-chip")).toHaveAttribute("data-mode", "default");
+  });
+
+  it("waits while the agent works", () => {
+    render(<ModeChip agentId="a1" capabilities={CAPS} liveMode={null} busy />);
+    expect(screen.getByTestId("mode-chip")).toBeDisabled();
+  });
+});

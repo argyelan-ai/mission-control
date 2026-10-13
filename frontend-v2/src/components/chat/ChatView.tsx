@@ -54,6 +54,8 @@ import { ToolOutputContext, createToolOutputStore, type ToolOutputStore } from "
 import { ChatMediaContext } from "./chatMedia";
 import { CommandRow } from "./CommandRow";
 import { ApprovalCard } from "./ApprovalCard";
+import { ElicitationCard } from "./ElicitationCard";
+import { ModeChip } from "./ModeChip";
 import { StatusLine } from "./StatusLine";
 import { Composer } from "./Composer";
 import { useIsAdmin } from "@/hooks/useIsAdmin";
@@ -1227,6 +1229,17 @@ export function ChatView({
                     />
                   );
                 }
+                if (item.event.kind === "elicitation") {
+                  return (
+                    <ElicitationCard
+                      key={item.event.uuid}
+                      ev={item.event}
+                      result={stream.elicitationResults[item.event.elicitationId] ?? null}
+                      // A head's transcript is read-only: outcome, no buttons.
+                      agentId={head ? null : agent?.id ?? null}
+                    />
+                  );
+                }
                 return renderTimelineEvent(
                   item.event,
                   detailLevel,
@@ -1374,6 +1387,16 @@ export function ChatView({
                    * nie widerlegbar, also bleibt Stop erreichbar. */
                   paneObservable={agent.agent_runtime === "cli-bridge"}
                   capabilities={stream.capabilities}
+                  modeSlot={
+                    headlessChat ? (
+                      <ModeChip
+                        agentId={agent.id}
+                        capabilities={stream.capabilities}
+                        liveMode={stream.mode}
+                        busy={stream.state?.status === "working"}
+                      />
+                    ) : null
+                  }
                 />
                 )}
                 </VoiceLiveDock>

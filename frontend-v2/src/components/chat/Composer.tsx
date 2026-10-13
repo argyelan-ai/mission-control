@@ -208,6 +208,9 @@ interface ComposerProps {
   /** Live-voice mic (voice PR 1), rendered left of send/stop. `null` when
    *  the feature is off — then nothing is shown (K3). */
   voiceSlot?: ReactNode;
+  /** Plan/Standard switch of a headless (ACP) agent (P3, `ModeChip`), left
+   *  of the effort chip. `null`/absent = the agent reports no plan mode. */
+  modeSlot?: ReactNode;
 }
 
 /**
@@ -231,7 +234,7 @@ interface ComposerProps {
  *  globals.css passen. */
 export const EFFORT_SETTLE_MS = 320;
 
-export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = true, capabilities = null, paneObservable = true, prefill = null, barBelow = false, voiceSlot = null }: ComposerProps) {
+export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = true, capabilities = null, paneObservable = true, prefill = null, barBelow = false, voiceSlot = null, modeSlot = null }: ComposerProps) {
   const t = useTranslations("sessions");
   const locale = useLocale();
   const [text, setText] = useState("");
@@ -1052,6 +1055,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
               (18.08.2026): a control that is missing when you need it is worse
               than one that waits. */}
           <div className="ml-auto flex items-center gap-1.5">
+          {modeSlot}
           {(currentEffort ||
             (effortSupported && effortLevels.length > 0) ||
             /* Der Chip erscheint AUCH ohne bekannte Stufe, sobald das Backend
