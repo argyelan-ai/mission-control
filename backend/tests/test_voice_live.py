@@ -261,7 +261,8 @@ def test_persona_v2_snapshot():
         "Notiert, geb ich weiter.",
         "Got it, passing it on.",
         "never a cancel",
-        "Do NOT delegate when",
+        "Do NOT delegate only when",
+        "Default: pass it on.",
         "Never say something is done, finished or successful unless Boss reported it",
         "Approvals are never given by voice",
         "bitte im Chat antippen",
@@ -283,3 +284,15 @@ def test_persona_v2_snapshot():
 def test_persona_clamps_agent_name():
     text = voice_live.build_instructions("x" * 500, "en")
     assert "x" * 81 not in text
+
+
+
+def test_voice_delegates_by_default_not_general_questions():
+    """Live test 13.10.2026: "Antworte bitte nur mit dem Wort Kirsche" was
+    answered by the voice itself instead of reaching the agent. The operator's
+    rule: the chat mic talks to THIS agent (like Hermes) — the voice answers
+    itself only for status, greetings/line checks and approvals."""
+    from app.services import voice_live
+    src = __import__("inspect").getsource(voice_live)
+    assert "general question you can answer" not in src
+    assert "Default: pass it on." in src
