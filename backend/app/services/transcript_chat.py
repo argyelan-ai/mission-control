@@ -1321,7 +1321,13 @@ async def resolve_aliveness(agent, session_path: Path, adapter: Any | None = Non
         )
     except OSError:
         active = None
-    if active is not None and active[0] != session_path:
+    # Compared by SESSION, not by path: omp under ACP keeps two files per
+    # session, and the sibling being newest does not end anything (P3 live
+    # test 13.10.2026: the open chat read "ended" right after /new).
+    session_id_for = getattr(adapter, "session_id_for", lambda p: p.stem)
+    if active is not None and active[0] != session_path and (
+        session_id_for(active[0]) != session_id_for(session_path)
+    ):
         return "ended"
 
     alive = await process_alive(agent, adapter.process_name)
@@ -2455,7 +2461,13 @@ class ChatTailerManager:
         session_id_for calls entirely) before the harness-aware compare."""
         if new_path == current_path:
             return False
-        return adapter.session_id_for(new_path) != adapter.session_id_for(current_path)
+        if adapter.session_id_for(new_path) != adapter.session_id_for(current_path):
+            return True
+        # Same session, other file: only the one-way move onto the file the
+        # harness prefers (omp/ACP: the bridge sink's file, which alone
+        # carries question cards and chat errors — P3 live test 13.10.2026).
+        preferred = getattr(adapter, "preferred_sibling", None)
+        return bool(preferred and preferred(new_path, current_path))
 
     @staticmethod
     def _transcript_suggests_turn_ended(path: Path) -> bool:

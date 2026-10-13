@@ -209,6 +209,15 @@ def find_active_session(tdir: Path) -> tuple[Path, dict[str, Any]] | None:
     if newest_path is None:
         return None
 
+    # Under OMP_DRIVER=acp one session has TWO files (see session_id_for):
+    # omp's own and the bridge sink's. Only the sink carries what MC adds —
+    # question cards, chat errors, mode lines — so it must be THE file of
+    # the session, every time. Ranking alone flips between the two (omp's
+    # file is created first and often written last), and the chat then
+    # tailed omp's file: no card until a reload, status "ended" (P3 live
+    # test 13.10.2026).
+    newest_path = bridge_sibling(newest_path)
+
     return newest_path, {
         "sessionId": newest_path.stem,
         "mtime": datetime.fromtimestamp(newest_mtime, tz=timezone.utc).isoformat(),
@@ -311,9 +320,9 @@ def session_id_for(path: Path) -> str:
 _SESSION_HEADER_SCAN_LINES = 10
 
 
-def _header_cwd(path: Path) -> str | None:
-    """``cwd`` of the ``{"type": "session", ...}`` header line, or ``None``
-    when the file has none or records it empty."""
+def _session_header(path: Path) -> dict[str, Any] | None:
+    """The ``{"type": "session", ...}`` header line of a session file, or
+    ``None``. Reads at most ``_SESSION_HEADER_SCAN_LINES`` lines."""
     try:
         with path.open("r", encoding="utf-8", errors="replace") as fh:
             for i, line in enumerate(fh):
@@ -327,11 +336,71 @@ def _header_cwd(path: Path) -> str | None:
                 except ValueError:
                     continue
                 if isinstance(entry, dict) and entry.get("type") == "session":
-                    cwd = entry.get("cwd")
-                    return cwd if isinstance(cwd, str) and cwd else None
+                    return entry
     except OSError:
         return None
     return None
+
+
+#: ``is_bridge_file`` answers, by ``(path, inode)``. The tailer asks every
+#: tick; the header never changes once written, so one read per file is
+#: enough. A file without a header yet (just created) is not cached.
+_BRIDGE_FILE_CACHE: dict[tuple[str, int], bool] = {}
+
+
+def is_bridge_file(path: Path) -> bool:
+    """Written by the omp-bridge ACP sink (header ``"bridge": "acp"``,
+    ``acp_chat_events.ChatEventSink``) rather than by omp itself."""
+    try:
+        key = (str(path), path.stat().st_ino)
+    except OSError:
+        return False
+    cached = _BRIDGE_FILE_CACHE.get(key)
+    if cached is not None:
+        return cached
+    header = _session_header(path)
+    if header is None:
+        return False
+    answer = header.get("bridge") == "acp"
+    if len(_BRIDGE_FILE_CACHE) > 4096:
+        _BRIDGE_FILE_CACHE.clear()
+    _BRIDGE_FILE_CACHE[key] = answer
+    return answer
+
+
+def bridge_sibling(path: Path) -> Path:
+    """The bridge sink's file of the same session as ``path`` (same folder,
+    same embedded session id), or ``path`` itself when there is none or
+    ``path`` already is it."""
+    if is_bridge_file(path):
+        return path
+    session_id = session_id_for(path)
+    try:
+        siblings = sorted(path.parent.glob("*.jsonl"))
+    except OSError:
+        return path
+    for sibling in siblings:
+        if sibling != path and session_id_for(sibling) == session_id and is_bridge_file(sibling):
+            return sibling
+    return path
+
+
+def prefers_sibling(new_path: Path, current_path: Path) -> bool:
+    """For the tailer: switch from ``current_path`` to its same-session
+    sibling ``new_path``? Only towards the bridge file, never back — a
+    one-way move cannot flip-flop (the reason same-session switches were
+    banned, see ``session_id_for``)."""
+    return is_bridge_file(new_path) and not is_bridge_file(current_path)
+
+
+def _header_cwd(path: Path) -> str | None:
+    """``cwd`` of the ``{"type": "session", ...}`` header line, or ``None``
+    when the file has none or records it empty."""
+    header = _session_header(path)
+    if header is None:
+        return None
+    cwd = header.get("cwd")
+    return cwd if isinstance(cwd, str) and cwd else None
 
 
 def session_cwd(path: Path) -> str | None:
