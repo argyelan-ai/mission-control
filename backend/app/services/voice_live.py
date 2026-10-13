@@ -76,6 +76,12 @@ def is_enabled() -> bool:
     return bool(settings.voice_live_enabled and settings.openai_api_key)
 
 
+#: Used when the operator pinned a voice language in Settings: no switching.
+_LANG_PINNED = {
+    "de": "The operator chose German as the voice language. Always speak German, even if they speak English or another language.",
+    "en": "The operator chose English as the voice language. Always speak English, even if they speak German or another language.",
+}
+
 _LANG_LINE = {
     "de": "The operator's app is set to German. Start in German; if they speak English, switch to English.",
     "en": "The operator's app is set to English. Start in English; if they speak German, switch to German.",
@@ -125,7 +131,7 @@ async def load_voice_language_preference(session: AsyncSession, user_id: uuid.UU
     return value if isinstance(value, str) else None
 
 
-def build_instructions(agent_name: str, lang: Lang) -> str:
+def build_instructions(agent_name: str, lang: Lang, pinned: bool = False) -> str:
     """Persona v3 — ears and mouth plus three tools (rules from the Grok
     behaviour table and bauplan B2); since voice PR 3 it also reads MC's
     progress items (``voice_progress``) and takes their corrections; since
@@ -140,7 +146,7 @@ def build_instructions(agent_name: str, lang: Lang) -> str:
             "Calm, friendly, direct. Speak like a capable colleague on the phone.",
             "",
             "# Language and length",
-            _LANG_LINE[lang],
+            (_LANG_PINNED if pinned else _LANG_LINE)[lang],
             "Always answer in the language the operator just used. One or two short sentences. "
             "No lists, no markdown, no code read aloud.",
             "",
@@ -272,7 +278,7 @@ def build_session_config(agent_name: str, lang: Lang, transcription_lang: Lang |
     return {
         "type": "realtime",
         "model": settings.voice_live_model,
-        "instructions": build_instructions(agent_name, lang),
+        "instructions": build_instructions(agent_name, lang, pinned=transcription_lang is not None),
         "output_modalities": ["audio"],
         "tools": TOOLS,
         "tool_choice": "auto",
