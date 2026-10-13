@@ -4824,6 +4824,15 @@
         ]
       }
     },
+    "/api/v1/voice/live/default-target": {
+      "get": {
+        "operationId": "get_default_target_api_v1_voice_live_default_target_get",
+        "summary": "Get Default Target",
+        "tags": [
+          "voice-live"
+        ]
+      }
+    },
     "/api/v1/voice/live/progress": {
       "post": {
         "operationId": "progress_item_api_v1_voice_live_progress_post",

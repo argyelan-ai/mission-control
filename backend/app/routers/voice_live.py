@@ -2,6 +2,9 @@
 
 - ``GET  /api/v1/voice/live/config``  — is the feature on? 404 when off or
   no OpenAI key, so the UI shows no mic at all (DESIGN K3: nothing empty).
+- ``GET  /api/v1/voice/live/default-target`` — which agent the navigation
+  mic talks to: the lead agent of the active board (voice PR 5). 404
+  ``no_lead`` when the fleet has none — the UI then keeps Jarvis on that mic.
 - ``POST /api/v1/voice/live/session`` — mint a short-lived client secret for
   one call with the given chat agent. The browser uses it once to open WebRTC
   to OpenAI; the long-lived key stays here. Also returns ``call_ref``: the
@@ -28,6 +31,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.auth import Role, require_role
@@ -74,6 +78,40 @@ async def get_config(_user=Depends(require_role(Role.ADMIN))) -> VoiceLiveConfig
     return VoiceLiveConfig(
         enabled=True, model=settings.voice_live_model, voice=settings.voice_live_voice
     )
+
+
+class VoiceLiveTarget(BaseModel):
+    agent_id: uuid.UUID
+    agent_name: str
+
+
+@router.get("/default-target", response_model=VoiceLiveTarget)
+async def get_default_target(
+    board_id: uuid.UUID | None = None,
+    _user=Depends(require_role(Role.ADMIN)),
+    session: AsyncSession = Depends(get_session),
+) -> VoiceLiveTarget:
+    """The lead agent the navigation mic calls (operator rule 12.10.2026).
+
+    The active board's lead first; with no board picked yet or a board
+    without a lead, the fleet's lead (oldest first, so the answer is stable).
+    The name comes from the data — the public repo never hardcodes it.
+    """
+    _require_enabled()
+    base = (
+        select(Agent)
+        .where(Agent.is_board_lead == True)  # noqa: E712
+        .where(col(Agent.archived_at).is_(None))
+        .order_by(col(Agent.created_at), col(Agent.name))
+    )
+    lead: Agent | None = None
+    if board_id is not None:
+        lead = (await session.exec(base.where(Agent.board_id == board_id).limit(1))).first()
+    if lead is None:
+        lead = (await session.exec(base.limit(1))).first()
+    if lead is None:
+        raise HTTPException(status_code=404, detail="no_lead")
+    return VoiceLiveTarget(agent_id=lead.id, agent_name=lead.name)
 
 
 @router.post("/session", response_model=VoiceLiveSession)

@@ -75,6 +75,13 @@ vi.mock("@/components/voice/VoiceWidget", () => ({
   useVoiceContext: () => voice,
 }));
 
+// Voice PR 5: with a lead agent known the top-bar mic is the live voice and
+// Jarvis moves into this sheet. Default here: no lead (live voice off).
+const live = vi.hoisted(() => ({ lead: null as null | { agentId: string; agentName: string } }));
+vi.mock("@/components/voice/live/VoiceLiveCall", () => ({
+  useVoiceLiveCall: () => (live.lead ? { lead: live.lead } : null),
+}));
+
 // The New-task modal is a large component of its own; here only "it opens".
 vi.mock("@/components/shared/CreateTaskModal", () => ({
   CreateTaskModal: ({ openRequest }: { openRequest?: number }) =>
@@ -234,6 +241,28 @@ describe("⊕ sheet — variant B, level 1", () => {
     await userEvent.click(within(bar()).getByRole("button", { name: "New" }));
     await userEvent.click(screen.getByTestId("quick-voice"));
     expect(voice.toggleButton).toHaveBeenCalledTimes(1);
+  });
+
+  it("with the live voice on, the voice row is Jarvis (classic voice) and still starts Jarvis", async () => {
+    live.lead = { agentId: "lead-1", agentName: "Chief" };
+    try {
+      renderNav();
+      await userEvent.click(within(bar()).getByRole("button", { name: "New" }));
+      const row = screen.getByTestId("quick-voice");
+      expect(row).toHaveTextContent("Jarvis (classic voice)");
+      expect(row).not.toHaveTextContent("Voice command");
+      voice.toggleButton.mockClear();
+      await userEvent.click(row);
+      expect(voice.toggleButton).toHaveBeenCalledTimes(1);
+    } finally {
+      live.lead = null;
+    }
+  });
+
+  it("with the live voice off, the voice row stays as it was", async () => {
+    renderNav();
+    await userEvent.click(within(bar()).getByRole("button", { name: "New" }));
+    expect(screen.getByTestId("quick-voice")).not.toHaveTextContent("Jarvis");
   });
 
   it("hides the last-chat row when this device has no recent chat", async () => {
