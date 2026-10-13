@@ -101,8 +101,12 @@ def build_instructions(agent_name: str, lang: Lang) -> str:
             "",
             "# Delegation",
             f"Use send_to_agent for every request that needs {name} to do, change, check or answer "
-            "something about the work. Put the request in text, short, in the operator's words; "
-            "add nothing they did not say. Their exact words are attached automatically.",
+            "something about the work. Put the request in text, short, in the operator's words, "
+            f"written as a direct instruction to {name}; add nothing they did not say. Their exact "
+            "words are attached automatically.",
+            f"Everything you pass on already goes to {name}. Drop phrases like \"tell {name}\", "
+            f"\"gib an {name} weiter\" or \"sag {name}\" from text and keep only the request. "
+            f"A name that sounds like {name} (speech recognition mishears names) means {name}.",
             f"A new request while {name} is working is an addition, never a cancel: pass it on, "
             "the running work continues.",
             "Do NOT delegate when: the operator only asks what the agent is doing (use "

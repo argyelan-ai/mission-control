@@ -445,3 +445,47 @@ def test_message_format_matches_the_chat_parser():
     assert "\n" not in voice_live_tools.VOICE_NOTE
     msg = voice_live_tools.compose_message("A", "b c")
     assert msg.split("\n")[1] == "Wortlaut: „b c“"
+
+
+def test_voice_note_tells_the_agent_it_is_the_addressee():
+    """Live test 13.10.2026: the operator said "Gib bitte an <agent> weiter: …"
+    in that agent's own chat; the agent took "pass on to <agent>" literally and
+    tried to forward the message to another agent ("Unknown agent"). The note
+    must say the operator is talking to THIS agent and that "pass on to …"
+    phrasing addresses it."""
+    note = voice_live_tools.VOICE_NOTE
+    assert "speaking to you" in note
+    assert "pass on" in note and "weiter" in note
+    assert "do it yourself" in note
+
+
+import pytest as _pytest
+
+
+@_pytest.mark.parametrize(
+    "said, expected",
+    [
+        ("Gib bitte an Alpha weiter: Das ist ein Test, antworte nur mit OK.", "Das ist ein Test, antworte nur mit OK."),
+        ("Gib bitte an Alphy weiter, das ist ein Test.", "das ist ein Test."),
+        ("Sag Alpha, er soll die Tests laufen lassen.", "er soll die Tests laufen lassen."),
+        ("Richte Boss aus: bitte die Doku anpassen.", "bitte die Doku anpassen."),
+        ("Tell Alpha: run the tests.", "run the tests."),
+        ("Please pass this on to Boss: update the docs.", "update the docs."),
+    ],
+)
+def test_compose_message_strips_forwarding_phrases(said, expected):
+    """Live test 13.10.2026: the voice put "Gib bitte an Alpha weiter: …"
+    into the forwarded text and speech recognition heard "Alphy"; the
+    agent then tried to forward to an unknown agent. The message already goes
+    to this chat's agent, so the forwarding phrase is dropped from line 1
+    (the operator's verbatim words stay untouched on the Wortlaut line)."""
+    msg = voice_live_tools.compose_message(said, said)
+    first = msg.split("\n")[0]
+    assert first == f"{voice_live_tools.VOICE_PREFIX} {expected}"
+    assert f"„{said}“" in msg  # verbatim kept
+
+
+@_pytest.mark.parametrize("said", ["Gib mir die Liste der Fehler.", "Sag mir, was du gerade machst.", "Tell me the status."])
+def test_compose_message_keeps_normal_requests(said):
+    msg = voice_live_tools.compose_message(said, said)
+    assert msg.split("\n")[0] == f"{voice_live_tools.VOICE_PREFIX} {said}"

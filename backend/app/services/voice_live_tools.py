@@ -52,8 +52,12 @@ VERBATIM_LABEL = "Wortlaut:"
 #: Last line of every voice message: tells the AGENT how to read it. The UI
 #: hides this line (it is for the agent, not the operator).
 VOICE_NOTE = (
-    "(Voice transcript: may contain mis-hearings. The Wortlaut line is what the "
-    "operator actually said. Keep the reply short; report success only when it is real.)"
+    "(Voice transcript: the operator is speaking to you through MC's voice; it "
+    "may contain mis-hearings. The Wortlaut line is what the operator actually said. "
+    "Phrases like \"pass on to <you>\" / \"gib an <dich> weiter\" / \"sag <dir>\" mean "
+    "this request is for you: do it yourself, never forward it to another agent "
+    "unless the operator names a different one. Keep the reply short; report "
+    "success only when it is real.)"
 )
 
 MAX_TEXT_CHARS = 1000
@@ -150,11 +154,38 @@ def clean_line(text: str) -> str:
     return " ".join(_CONTROL.sub(" ", text or "").split())
 
 
+#: "Gib bitte an Alpha weiter: …", "Sag Boss, …", "Tell Alpha: …" — the
+#: message already goes to this chat's agent, so a leading forwarding phrase
+#: only confuses it (live 13.10.2026: a misheard name made the agent try to
+#: forward to an unknown agent). Names are capitalised; "sag mir …" /
+#: "tell me …" never match. Only line 1 is cleaned; the Wortlaut stays as said.
+_FORWARD_PHRASES = (
+    re.compile(
+        r"^\s*(?i:bitte\s+)?(?i:gib|sag|richte|teile?|leite)\s+(?i:(?:es|das|bitte|doch)\s+)*"
+        r"(?i:an\s+|dem\s+|der\s+)?[A-ZÄÖÜ][\w-]{1,20}(?i:\s+(?:bitte|doch))*"
+        r"(?i:\s+(?:weiter|aus|mit))?\s*[:,]\s*"
+    ),
+    re.compile(
+        r"^\s*(?i:please\s+)?(?i:tell|ask|pass\s+(?:this\s+|it\s+)?on\s+to)\s+"
+        r"[A-Z][\w-]{1,20}\s*[:,]\s*"
+    ),
+)
+
+
+def strip_forwarding(text: str) -> str:
+    for pattern in _FORWARD_PHRASES:
+        stripped = pattern.sub("", text, count=1)
+        if stripped != text and stripped.strip():
+            return stripped.strip()
+    return text
+
+
 def compose_message(text: str, verbatim: str) -> str:
     """The chat message the agent receives. Line 1 = the voice's wording with
-    the marker, line 2 = the operator's own words (left out only when they
-    are the same text), line 3 = the note for the agent."""
-    said = clean_line(text)
+    the marker (a leading "pass on to <agent>" phrase removed), line 2 = the
+    operator's own words (left out only when they are the same text), line 3 =
+    the note for the agent."""
+    said = strip_forwarding(clean_line(text))
     words = clean_line(verbatim)
     lines = [f"{VOICE_PREFIX} {said}"]
     if _norm(said) != _norm(words):

@@ -314,7 +314,7 @@ describe("Horizontale Umbruch-Regel (Operator 15.09.: chat ist am Handy horizont
 
 describe("ChatMessage — passed on by the live voice (voice PR 2)", () => {
   const NOTE =
-    "(Voice transcript: may contain mis-hearings. The Wortlaut line is what the operator actually said. Keep the reply short; report success only when it is real.)";
+    "(Voice transcript: the operator is speaking to you through MC's voice; it may contain mis-hearings. The Wortlaut line is what the operator actually said. Phrases like \"pass on to <you>\" / \"gib an <dich> weiter\" / \"sag <dir>\" mean this request is for you: do it yourself, never forward it to another agent unless the operator names a different one. Keep the reply short; report success only when it is real.)";
 
   it("shows the 'by voice' label and the operator's own words, hides marker and agent note", () => {
     const text = `[per Stimme] Schreib Y in die Notiz\nWortlaut: „und schreib noch Y in die Notiz“\n${NOTE}`;
