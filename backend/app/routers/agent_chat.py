@@ -54,7 +54,7 @@ from app.services.reference_ingest import (
     store_reference,
 )
 from app.models.activity import ActivityEvent
-from app.services import chat_actions, chat_media
+from app.services import chat_actions, chat_media, commit_llm
 from app.services.activity import emit_event
 from app.services.chat_changes import aggregate_changes
 from app.services.chat_diff import capture_texts
@@ -861,6 +861,27 @@ async def _chat_repo_or_refuse(agent: Agent, session: AsyncSession) -> tuple[Pat
     return await asyncio.to_thread(_pick), folders
 
 
+async def _recent_user_messages(agent_id: uuid.UUID, session: AsyncSession) -> list[str]:
+    """The chat's last few operator messages, for the LLM suggestion's
+    intent context (``commit_llm``). Best effort: any resolution failure
+    (no transcript, odd adapter, …) just loses that context — it never
+    breaks the draft, which has a mechanical fallback regardless."""
+    try:
+        resolved = await _resolve_transcript_path(agent_id, session)
+        if isinstance(resolved, JSONResponse):
+            return []
+        _agent, tpath, adapter = resolved
+
+        def _read() -> list[str]:
+            history = read_history(tpath, adapter, limit=_WHOLE_SESSION)
+            return commit_llm.extract_user_messages(history["events"])
+
+        return await asyncio.to_thread(_read)
+    except Exception:  # noqa: BLE001 — best-effort context, never breaks the draft
+        logger.warning("commit draft: could not read chat history for LLM context", exc_info=True)
+        return []
+
+
 @router.get("/agents/{agent_id}/chat/commit/draft")
 async def get_chat_commit_draft(
     agent_id: uuid.UUID,
@@ -869,7 +890,12 @@ async def get_chat_commit_draft(
 ):
     """What a commit would take and a suggested message (editable in the
     confirmation sheet): ``{branch, files: [{path, status, additions,
-    deletions}], message}``. Read-only."""
+    deletions}], message, source, mechanicalMessage?}``. ``message`` is the
+    local model's suggestion (``commit_llm``) when it answered something
+    usable in time; otherwise the deterministic mechanical message
+    (``source: "fallback"``) — the sheet always has something to show and
+    always lets the operator edit it. Read-only (the LLM call makes no
+    change, just reads the diff)."""
     agent = await _load_agent_or_404(agent_id, session)
     try:
         repo, _folders = await _chat_repo_or_refuse(agent, session)
@@ -878,11 +904,25 @@ async def get_chat_commit_draft(
             branch = chat_actions.commit_guard(repo)
             files = chat_actions.pending_files(repo)
             return {"branch": branch, "files": files,
-                    "message": chat_actions.suggest_commit_message(files)}
+                    "message": chat_actions.suggest_commit_message(files), "source": "fallback"}
 
-        return await asyncio.to_thread(_draft)
+        draft = await asyncio.to_thread(_draft)
     except chat_actions.Refused as e:
         return _refused(e)
+
+    if not draft["files"]:
+        return draft
+
+    diff_text = await asyncio.to_thread(chat_actions.diff_text_for_commit, repo, draft["files"])
+    user_messages = await _recent_user_messages(agent_id, session)
+    suggestion = await commit_llm.suggest_commit_message(
+        branch=draft["branch"], files=draft["files"], diff_text=diff_text, user_messages=user_messages,
+    )
+    if suggestion:
+        draft["mechanicalMessage"] = draft["message"]
+        draft["message"] = suggestion
+        draft["source"] = "llm"
+    return draft
 
 
 @router.post("/agents/{agent_id}/chat/commit")
