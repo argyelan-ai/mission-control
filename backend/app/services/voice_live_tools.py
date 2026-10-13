@@ -152,7 +152,7 @@ def clean_line(text: str) -> str:
     return " ".join(_CONTROL.sub(" ", text or "").split())
 
 
-#: "Gib bitte an Sparky weiter: …", "Sag Boss, …", "Tell Sparky: …" — the
+#: "Gib bitte an Alpha weiter: …", "Sag Boss, …", "Tell Alpha: …" — the
 #: message already goes to this chat's agent, so a leading forwarding phrase
 #: only confuses it (live 13.10.2026: a misheard name made the agent try to
 #: forward to an unknown agent). Names are capitalised; "sag mir …" /

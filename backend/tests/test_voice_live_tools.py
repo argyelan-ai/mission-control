@@ -465,17 +465,17 @@ import pytest as _pytest
 @_pytest.mark.parametrize(
     "said, expected",
     [
-        ("Gib bitte an Sparky weiter: Das ist ein Test, antworte nur mit OK.", "Das ist ein Test, antworte nur mit OK."),
-        ("Gib bitte an Sparkly weiter, das ist ein Test.", "das ist ein Test."),
-        ("Sag Sparky, er soll die Tests laufen lassen.", "er soll die Tests laufen lassen."),
+        ("Gib bitte an Alpha weiter: Das ist ein Test, antworte nur mit OK.", "Das ist ein Test, antworte nur mit OK."),
+        ("Gib bitte an Alphy weiter, das ist ein Test.", "das ist ein Test."),
+        ("Sag Alpha, er soll die Tests laufen lassen.", "er soll die Tests laufen lassen."),
         ("Richte Boss aus: bitte die Doku anpassen.", "bitte die Doku anpassen."),
-        ("Tell Sparky: run the tests.", "run the tests."),
+        ("Tell Alpha: run the tests.", "run the tests."),
         ("Please pass this on to Boss: update the docs.", "update the docs."),
     ],
 )
 def test_compose_message_strips_forwarding_phrases(said, expected):
-    """Live test 13.10.2026: the voice put "Gib bitte an Sparky weiter: …"
-    into the forwarded text and speech recognition heard "Sparkly"; the
+    """Live test 13.10.2026: the voice put "Gib bitte an Alpha weiter: …"
+    into the forwarded text and speech recognition heard "Alphy"; the
     agent then tried to forward to an unknown agent. The message already goes
     to this chat's agent, so the forwarding phrase is dropped from line 1
     (the operator's verbatim words stay untouched on the Wortlaut line)."""
