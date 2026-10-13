@@ -32,8 +32,13 @@ from dataclasses import dataclass
 from typing import Literal
 
 import httpx
+import uuid
+
+from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.config import settings
+from app.models.user import UserSettings
 
 logger = logging.getLogger("mc.voice_live")
 
@@ -75,6 +80,49 @@ _LANG_LINE = {
     "de": "The operator's app is set to German. Start in German; if they speak English, switch to English.",
     "en": "The operator's app is set to English. Start in English; if they speak German, switch to German.",
 }
+
+# ── voice language preference (operator request 13.10.2026) ────────────
+# Settings → Profile lets the operator pin the voice to one language
+# instead of following the UI locale (the default). ``AUTO`` is the stored
+# sentinel for "keep following the UI" — the only value that is not itself
+# a key of ``_LANG_LINE``. Adding a language: extend ``_LANG_LINE``, the
+# ``Lang`` literal above, and the frontend list (``messages/*.json`` +
+# ``VoiceLanguageField`` in ``frontend-v2/src/app/settings/page.tsx``).
+VOICE_LANGUAGE_SETTING_KEY = "voice_language"
+VOICE_LANGUAGE_AUTO = "auto"
+VOICE_LANGUAGE_CHOICES: tuple[str, ...] = (VOICE_LANGUAGE_AUTO, *_LANG_LINE.keys())
+
+
+def resolve_voice_language(preference: str | None, ui_lang: Lang) -> tuple[Lang, Lang | None]:
+    """``(lang, transcription_hint)``. An explicit preference (a real
+    language, not "auto") overrides the UI locale and also hands the
+    realtime session a transcription language hint, so the voice answers in
+    that language even when the UI itself is in the other one. "auto",
+    unset, or an unknown/garbage stored value keeps today's behaviour:
+    follow the UI, with no hint (so the operator can still switch at will)."""
+    if preference in _LANG_LINE:
+        lang = preference  # type: ignore[assignment]
+        return lang, lang
+    return ui_lang, None
+
+
+async def load_voice_language_preference(session: AsyncSession, user_id: uuid.UUID) -> str | None:
+    """Reads the operator's stored "Voice language" choice (reuses the
+    generic per-user preference store, ``GET/PUT /api/v1/settings/{key}``
+    — ``routers/settings.py``). Returns ``None`` when nothing was saved yet
+    (treated the same as "auto" by ``resolve_voice_language``)."""
+    row = (
+        await session.exec(
+            select(UserSettings).where(
+                UserSettings.user_id == user_id,
+                UserSettings.key == VOICE_LANGUAGE_SETTING_KEY,
+            )
+        )
+    ).first()
+    if row is None or not isinstance(row.value, dict):
+        return None
+    value = row.value.get("language")
+    return value if isinstance(value, str) else None
 
 
 def build_instructions(agent_name: str, lang: Lang) -> str:
@@ -214,7 +262,13 @@ TOOLS = [
 ]
 
 
-def build_session_config(agent_name: str, lang: Lang) -> dict:
+def build_session_config(agent_name: str, lang: Lang, transcription_lang: Lang | None = None) -> dict:
+    transcription: dict[str, str] = {"model": settings.jarvis_stt_model}
+    if transcription_lang is not None:
+        # Only set on an explicit voice-language preference (never for
+        # "auto"): a fixed hint would stop the operator switching between
+        # German and English mid-call, which "auto" exists to preserve.
+        transcription["language"] = transcription_lang
     return {
         "type": "realtime",
         "model": settings.voice_live_model,
@@ -225,7 +279,7 @@ def build_session_config(agent_name: str, lang: Lang) -> dict:
         "audio": {
             "input": {
                 "noise_reduction": {"type": "near_field"},
-                "transcription": {"model": settings.jarvis_stt_model},
+                "transcription": transcription,
                 "turn_detection": {
                     "type": "semantic_vad",
                     "create_response": True,
@@ -251,12 +305,14 @@ def _transport() -> httpx.AsyncBaseTransport | None:
     return None
 
 
-async def mint_client_secret(agent_name: str, lang: Lang) -> MintedSession:
+async def mint_client_secret(
+    agent_name: str, lang: Lang, transcription_lang: Lang | None = None
+) -> MintedSession:
     if not is_enabled():
         raise VoiceLiveError("disabled", 404)
     body = {
         "expires_after": {"anchor": "created_at", "seconds": CLIENT_SECRET_TTL_S},
-        "session": build_session_config(agent_name, lang),
+        "session": build_session_config(agent_name, lang, transcription_lang),
     }
     try:
         async with httpx.AsyncClient(timeout=15.0, transport=_transport()) as client:
