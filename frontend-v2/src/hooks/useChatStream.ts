@@ -9,6 +9,8 @@ import type {
   ChatCapabilities,
   ChatEvent,
   ChatSession,
+  ElicitationResultEvent,
+  ModeEvent,
   PreviewEvent,
   StateEvent,
   TimelineChatEvent,
@@ -267,14 +269,23 @@ export interface ChatReducerState {
    *  a new session clears all of them. Replaced as a whole object on every
    *  change, so consumers can select by identity. */
   toolOutputs: Record<string, ToolOutputEvent>;
+  /** What became of each question card (chat package P3), by
+   *  `elicitationId`. A side slot: the card in the timeline reads it to show
+   *  "answered: X" / "no longer open" — also after a reload, since the
+   *  result is a transcript line. */
+  elicitationResults: Record<string, ElicitationResultEvent>;
+  /** The newest session-mode change (plan mode on/off), or `null`. */
+  mode: ModeEvent | null;
 }
 
 const NO_TOOL_OUTPUTS: Record<string, ToolOutputEvent> = {};
+const NO_ELICITATION_RESULTS: Record<string, ElicitationResultEvent> = {};
 
 export function createInitialChatState(): ChatReducerState {
   return {
     events: [], index: new Map(), state: null, usage: null, preview: null,
     sessionChangedAt: 0, todos: null, toolOutputs: NO_TOOL_OUTPUTS,
+    elicitationResults: NO_ELICITATION_RESULTS, mode: null,
   };
 }
 
@@ -396,6 +407,8 @@ export function chatReducer(state: ChatReducerState, event: ChatEvent): ChatRedu
         preview: null,
         todos: null,
         toolOutputs: NO_TOOL_OUTPUTS,
+        elicitationResults: NO_ELICITATION_RESULTS,
+        mode: null,
         sessionChangedAt: state.sessionChangedAt + 1,
       };
     case "message":
@@ -416,7 +429,20 @@ export function chatReducer(state: ChatReducerState, event: ChatEvent): ChatRedu
     case "thinking":
     case "command":
     case "notification":
+    case "elicitation":
       return pushOrReplace(state, event);
+    case "elicitation_result":
+      /* First result wins: a question is answered once. A later line for the
+         same card (an `expired` written by a restart after the answer) must
+         not turn "answered" back into "no longer open". */
+      if (state.elicitationResults[event.elicitationId]) return state;
+      return {
+        ...state,
+        elicitationResults: { ...state.elicitationResults, [event.elicitationId]: event },
+      };
+    case "mode":
+      if (state.mode && event.ts < state.mode.ts) return state;
+      return { ...state, mode: event };
     default:
       return state;
   }
@@ -535,6 +561,11 @@ export interface UseChatStreamResult {
   todos: TodoEvent | null;
   /** Live output of running tools by `toolUseId` — see ChatReducerState. */
   toolOutputs: Record<string, ToolOutputEvent>;
+  /** Fate of each question card by `elicitationId` (P3). */
+  elicitationResults: Record<string, ElicitationResultEvent>;
+  /** Newest live mode change (P3), or `null` — `capabilities.mode` is the
+   *  value at history time. */
+  mode: ModeEvent | null;
 }
 
 /**
@@ -879,5 +910,7 @@ export function useChatStream(agentId: string | null, enabled = true): UseChatSt
     preview: chatState.preview,
     todos: chatState.todos,
     toolOutputs: chatState.toolOutputs,
+    elicitationResults: chatState.elicitationResults,
+    mode: chatState.mode,
   };
 }

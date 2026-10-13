@@ -63,6 +63,8 @@ function mkHeadStream(overrides: Partial<UseChatStreamResult> = {}): UseChatStre
   return {
     events: [],
     toolOutputs: {},
+    elicitationResults: {},
+    mode: null,
     subagentRuns: [],
     state: null,
     usage: null,

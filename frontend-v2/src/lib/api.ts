@@ -852,6 +852,27 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ level }),
       }),
+    /** Antwort auf eine Rueckfrage-Karte (P3). `content` nur bei `accept`.
+     *  409 `elicitation_not_pending` = die Karte ist nicht mehr offen. */
+    answerElicitation: (
+      agentId: string,
+      elicitationId: string,
+      action: "accept" | "decline" | "cancel",
+      content?: Record<string, unknown>,
+    ) =>
+      request<{ status: string; stopped?: boolean }>(
+        `/api/v1/agents/${agentId}/chat/elicitation/${encodeURIComponent(elicitationId)}`,
+        {
+          method: "POST",
+          body: JSON.stringify(action === "accept" ? { action, content } : { action }),
+        },
+      ),
+    /** Plan-Modus ein/aus (P3) — nur Werte aus `capabilities.modeOptions`. */
+    setMode: (agentId: string, mode: string) =>
+      request<void>(`/api/v1/agents/${agentId}/chat/mode`, {
+        method: "POST",
+        body: JSON.stringify({ mode }),
+      }),
     /** Laedt eine Datei hoch und liefert den Pfad, unter dem der Agent sie
      *  lesen kann. FormData setzt seine eigene multipart-Grenze, darum an
      *  `request` vorbei (gleiches Muster wie references.upload).

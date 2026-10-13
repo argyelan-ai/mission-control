@@ -15,7 +15,13 @@ haelt:
 ``cancel``       —                                       ``{"ok":true}``
 ``config``       ``{"id":"thinking","value":"high"}``    ``{"ok":true,"configOptions":[...]}``
 ``state``        —                                       ``{"ok":true, ...state}``
+``answer``       ``{"id":"el-…","action":"accept",``     ``{"ok":true,"status":"answered"}`` ·
+                 ``"content"?:{...}}`` (P3)              ``{"ok":false,"error":"not_pending"}`` ·
+                                                         ``{"ok":false,"error":"bad_content",...}``
 ===============  ======================================  ==========================
+
+Plan-Modus braucht keine eigene Op: ``config`` mit ``{"id":"mode","value":
+"plan"|"default"}`` (omp meldet ``mode`` in ``configOptions``).
 
 ``mode: "queue"`` ist die Folge-Nachricht des Chats: laeuft gerade ein Zug,
 haelt der Daemon den Auftrag zurueck und liefert ihn, sobald der Zug endet.
@@ -106,6 +112,17 @@ class ChatTransport(Protocol):
     async def config(self, id: str, value: str) -> dict: ...
 
     async def state(self) -> dict: ...
+
+    async def answer(self, id: str, action: str, content: dict | None = None) -> dict: ...
+
+
+def _answer_payload(id: str, action: str, content: dict | None) -> dict[str, Any]:
+    """``answer``-Op (P3): ``content`` nur bei ``accept`` — der Daemon prueft
+    es gegen das Schema der Frage."""
+    payload: dict[str, Any] = {"id": id, "action": action}
+    if content is not None:
+        payload["content"] = content
+    return payload
 
 
 def headless_chat_kind(agent) -> str | None:
@@ -229,6 +246,9 @@ class DockerCtlTransport:
     async def state(self) -> dict:
         return await self._call("state")
 
+    async def answer(self, id: str, action: str, content: dict | None = None) -> dict:
+        return await self._call("answer", _answer_payload(id, action, content))
+
 
 class HttpCtlTransport:
     """Steuerkanal zur hermes-bridge auf dem Host (``POST /chat/<op>``).
@@ -281,6 +301,11 @@ class HttpCtlTransport:
 
     async def state(self) -> dict:
         return await self._call("state")
+
+    async def answer(self, id: str, action: str, content: dict | None = None) -> dict:
+        # Die Host-Bruecke routet ``answer`` (noch) nicht — ihr Chat-Daemon
+        # fragt auch nie (Elicitation ist dort aus).
+        return await self._call("answer", _answer_payload(id, action, content))
 
 
 def transport_for(agent) -> ChatTransport:
@@ -341,7 +366,7 @@ def read_acp_chat_state(agent) -> dict | None:
     return parsed if isinstance(parsed, dict) else None
 
 
-def read_acp_turn_status(agent) -> str | None:
+def read_acp_turn_status(agent, *, with_questions: bool = False) -> str | None:
     """``"working"`` / ``"idle"`` / ``None`` — der Zug-Zustand eines
     kopflosen ACP-Agenten, direkt aus ``busy`` in ``read_acp_chat_state``.
 
@@ -365,4 +390,10 @@ def read_acp_turn_status(agent) -> str | None:
     busy = state.get("busy")
     if not isinstance(busy, bool):
         return None
+    if busy and with_questions and state.get("elicitations"):
+        # P3: the turn waits on the OPERATOR (an open question card), not
+        # on the model — the chat's status line must say so, not "Thinking"
+        # (live 13.10.2026). Opt-in: other callers (voice stop) keep the
+        # plain working/idle answer.
+        return "waiting_input"
     return "working" if busy else "idle"

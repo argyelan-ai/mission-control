@@ -190,6 +190,13 @@ class TranscriptAdapter:
     #: Geschwisterdatei ist keine neue Sitzung.
     session_id_for: Callable[[Path], str] = lambda path: path.stem
 
+    #: ``(new, current) -> bool``: within ONE session, should the tailer move
+    #: from ``current`` to the sibling file ``new``? omp under ACP: yes when
+    #: ``new`` is the bridge sink's file (it alone carries MC's question
+    #: cards and error lines) and ``current`` is not — one-way, so it cannot
+    #: flip-flop. Default: never (one file per session).
+    preferred_sibling: Callable[[Path, Path], bool] = lambda new, current: False
+
     #: Glob (relative to a head run folder, forward slashes) that finds this
     #: harness's TOP-LEVEL transcript file(s) among `scripts/head/mc-head`'s
     #: run layout (docs/specs/head-launcher.md §6.1) — ``None`` for a harness
@@ -264,6 +271,7 @@ def _omp_adapter() -> TranscriptAdapter:
         parse_pane_state=omp_chat.parse_pane_state,
         process_name=omp_chat.PROCESS_NAME,
         session_id_for=omp_chat.session_id_for,
+        preferred_sibling=omp_chat.prefers_sibling,
         head_transcript_glob="omp-sessions/*.jsonl",
     )
 

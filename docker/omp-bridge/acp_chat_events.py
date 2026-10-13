@@ -140,6 +140,21 @@ CHAT_ERROR_CUSTOM_TYPE = "chat_error"
 
 _TITLE_TRUNCATE_LEN = 200
 
+# Chat package P3 — question cards and plan mode.
+# A question omp asks over ACP (`elicitation/create`, form mode): ONE
+# ``custom_message`` line carrying the question text (``content``, so an
+# older backend still shows it as a plain notice) and in ``data`` the card's
+# id + the requested schema the frontend builds buttons/fields from.
+ELICITATION_CUSTOM_TYPE = "acp-elicitation"
+# The fate of that question, as its own ``custom`` line (state, not a turn):
+# ``data = {elicitationId, status: answered|declined|cancelled|expired,
+# content?}``. The card reads it to show "answered: X" for good — also after
+# a reload, because it is in the transcript.
+ELICITATION_RESULT_CUSTOM_TYPE = "acp-elicitation-result"
+# ACP ``current_mode_update`` (plan mode on/off) as a quiet ``custom`` line
+# ``data = {modeId}`` — the composer's mode chip follows it.
+MODE_CUSTOM_TYPE = "acp-mode"
+
 # customType of a live tool-output snapshot (chat package P1). VOLATILE: it
 # rides the preview channel next to the text previews and never enters the
 # transcript JSONL — see ``is_volatile``. The backend's preview-channel
@@ -279,6 +294,34 @@ _KIND_TO_NAME = {
     "delete": "delete",
     "search": "grep",
 }
+
+
+#: A tool name as omp writes it (``ask``, ``browser``, ``web_search`` …).
+_TOOL_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,63}$")
+
+#: How much of omp's own session file the name lookup reads (from the end):
+#: the call was written moments ago, so it sits near the end.
+_NAME_LOOKUP_TAIL_BYTES = 512 * 1024
+
+
+def omp_tool_name(session_file: Optional[Path], tool_call_id: str) -> Optional[str]:
+    """The tool name omp stored for ``tool_call_id`` in its own session
+    file (``{"type":"toolCall","id":…,"name":…}``), or ``None``. Reads only
+    the file's tail. Never raises."""
+    if session_file is None or not tool_call_id:
+        return None
+    try:
+        size = session_file.stat().st_size
+        with open(session_file, "rb") as fh:
+            fh.seek(max(0, size - _NAME_LOOKUP_TAIL_BYTES))
+            tail = fh.read().decode("utf-8", errors="replace")
+    except OSError:
+        return None
+    match = re.search(
+        r'"id"\s*:\s*"' + re.escape(tool_call_id) + r'"\s*,\s*"name"\s*:\s*"([^"]{1,64})"',
+        tail,
+    )
+    return match.group(1) if match else None
 
 
 def _now_iso() -> str:
@@ -433,6 +476,13 @@ class ACPEventMapper:
     # map_update runs on the ACP reader thread, ToolOutputPump on its own:
     # one re-entrant lock keeps the live state and the entry ids consistent.
     _lock: Any = field(default_factory=threading.RLock, repr=False, compare=False)
+    # ACP carries no tool NAME — only a coarse ``kind`` ("other" for ask,
+    # task, browser, …) and a title (often the model's intent). The chat
+    # daemon plugs in a lookup into omp's own session file, where the call
+    # is stored with its real name (P3 live finding: "other: …" cards).
+    tool_name_resolver: Optional[Callable[[str], Optional[str]]] = field(
+        default=None, repr=False, compare=False
+    )
 
     # ------------------------------------------------------------------
     # mapping
@@ -494,9 +544,76 @@ class ACPEventMapper:
             return []
         if su == "plan":
             return self._plan(update)
+        if su == "current_mode_update":
+            return self.map_mode(update.get("currentModeId"))
         # config_option_update / available_commands_update /
-        # session_info_update / anything unknown — no chat value.
+        # session_info_update / anything unknown — no chat value
+        # (the chat daemon mirrors them into its state file instead).
         return []
+
+    def map_mode(self, mode_id: Any) -> list[dict[str, Any]]:
+        """``current_mode_update`` -> one quiet ``custom``/``acp-mode`` line.
+        Not a card: the composer's mode chip reads it (newest wins)."""
+        if not isinstance(mode_id, str) or not mode_id.strip():
+            return []
+        return [
+            {
+                "type": "custom",
+                "customType": MODE_CUSTOM_TYPE,
+                "data": {"modeId": mode_id.strip()[:64]},
+                "id": self._next_id(),
+                "parentId": None,
+                "timestamp": _now_iso(),
+            }
+        ]
+
+    def map_elicitation(
+        self, elicitation_id: str, message: str, schema: dict[str, Any],
+        *, plan_approval: bool = False,
+    ) -> list[dict[str, Any]]:
+        """An open question (``elicitation/create``) -> one visible
+        ``custom_message``/``acp-elicitation`` line. ``schema`` is the
+        already-cleaned ``requestedSchema`` (see acp_chat.clean_schema)."""
+        text = str(message or "").strip() or "?"
+        return [
+            {
+                "type": "custom_message",
+                "customType": ELICITATION_CUSTOM_TYPE,
+                "content": text[:_RESULT_TRUNCATE_LEN],
+                "display": True,
+                "attribution": "agent",
+                "id": self._next_id(),
+                "parentId": None,
+                "timestamp": _now_iso(),
+                "data": {
+                    "elicitationId": elicitation_id,
+                    "message": text[:_RESULT_TRUNCATE_LEN],
+                    "schema": schema,
+                    # omp's plan approval (acp_chat.is_plan_approval): the card
+                    # offers "Cancel (stops agent)" instead of "Skip".
+                    "planApproval": bool(plan_approval),
+                },
+            }
+        ]
+
+    def map_elicitation_result(
+        self, elicitation_id: str, status: str, content: Optional[dict[str, Any]] = None
+    ) -> list[dict[str, Any]]:
+        """What became of a question -> one ``custom``/``acp-elicitation-result``
+        line (state for the card, never a row of its own)."""
+        data: dict[str, Any] = {"elicitationId": elicitation_id, "status": status}
+        if content:
+            data["content"] = content
+        return [
+            {
+                "type": "custom",
+                "customType": ELICITATION_RESULT_CUSTOM_TYPE,
+                "data": data,
+                "id": self._next_id(),
+                "parentId": None,
+                "timestamp": _now_iso(),
+            }
+        ]
 
     def _plan(self, update: dict[str, Any]) -> list[dict[str, Any]]:
         """ACP ``plan`` -> one ``custom``/``acp-plan`` transcript line.
@@ -846,7 +963,7 @@ class ACPEventMapper:
         arguments.setdefault("i", title)
         locations = _clean_locations(update.get("locations"))
         self._tools[tool_call_id] = {
-            "name": _KIND_TO_NAME.get(kind, kind),
+            "name": self._tool_name(tool_call_id, kind),
             "title": title,
             "arguments": arguments,
             "locations": locations,
@@ -872,6 +989,21 @@ class ACPEventMapper:
                 },
             }
         ]
+
+    def _tool_name(self, tool_call_id: str, kind: str) -> str:
+        """The kinds that name exactly one tool map directly; any other kind
+        asks ``tool_name_resolver`` for the real name and keeps the kind when
+        it has no answer. Never raises."""
+        if kind in _KIND_TO_NAME:
+            return _KIND_TO_NAME[kind]
+        if self.tool_name_resolver is not None:
+            try:
+                name = self.tool_name_resolver(tool_call_id)
+            except Exception:  # noqa: BLE001 — a lookup must not break the turn
+                name = None
+            if isinstance(name, str) and _TOOL_NAME_RE.match(name):
+                return name
+        return kind
 
     def _tool_update(self, update: dict[str, Any]) -> list[dict[str, Any]]:
         tool_call_id = update.get("toolCallId")

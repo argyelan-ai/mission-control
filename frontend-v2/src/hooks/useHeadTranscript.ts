@@ -151,6 +151,8 @@ export function useHeadTranscript(runId: string | null, headState: HeadState | n
     preview: null,
     todos: chatState.todos,
     toolOutputs: chatState.toolOutputs, // a finished head's history carries none; kept for shape parity
+    elicitationResults: chatState.elicitationResults, // a head is read-only: its cards show their outcome
+    mode: null,
   };
 }
 

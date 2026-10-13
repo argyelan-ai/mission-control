@@ -632,6 +632,22 @@ describe("Composer", () => {
       expect(screen.queryByRole("button", { name: /kimi-code/ })).not.toBeInTheDocument();
     });
 
+    it("keeps a long model name on one line (truncated, full name in the tooltip)", () => {
+      // P3 live finding at 390 px: next to context ring + mode chip the
+      // model chip wrapped onto two lines.
+      const long = "mc-openai/GLM-5.3-Flash-EXL3-very-long-model-name";
+      render(
+        <Composer agentId="a1" usage={mkUsage({ model: long, effort: null })} capabilities={FOREIGN} state={null} onSend={vi.fn()} onStop={vi.fn()} />
+      );
+      const chip = screen.getByTestId("model-chip-static");
+      expect(chip.className).toContain("whitespace-nowrap");
+      expect(chip.className).toContain("max-w-full");
+      expect(chip).toHaveAttribute("title", long);
+      expect(chip.querySelector(".truncate")).toHaveTextContent(long);
+      expect(chip.parentElement!.className).toContain("min-w-0");
+      expect(chip.parentElement!.className).toContain("max-w-40");
+    });
+
     it("offers no slash palette — Claude builtins would be a false promise", async () => {
       const user = userEvent.setup();
       render(

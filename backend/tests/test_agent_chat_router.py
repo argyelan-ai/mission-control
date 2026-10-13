@@ -136,6 +136,9 @@ async def test_history_200_for_agent_with_fixture_transcript(auth_client: AsyncC
         "modelOptions": (await agent_chat_input_mod.model_options_capabilities(agent))[
             "modelOptions"
         ],
+        # P3: no mode switch for a TUI agent (only ACP agents report modes).
+        "modeOptions": [],
+        "mode": None,
     }
 
 
@@ -191,6 +194,9 @@ async def test_history_200_capabilities_boss_cannot_switch_effort(auth_client: A
         "modelOptions": (await agent_chat_input_mod.model_options_capabilities(agent))[
             "modelOptions"
         ],
+        # P3: Boss has no ACP chat -> no mode switch.
+        "modeOptions": [],
+        "mode": None,
     }
 
 
