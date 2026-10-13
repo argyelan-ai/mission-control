@@ -143,9 +143,10 @@ async def test_call_for_another_agent_refused(auth_client, voice_on, make_agent,
 async def test_expired_call_refused(auth_client, voice_on, make_agent, acp, monkeypatch):
     agent, ref = await _call(make_agent)
     real_now = voice_live_tools._now
-    monkeypatch.setattr(voice_live_tools, "_now", lambda: real_now() + voice_live_tools.CALL_TTL_S + 1)
+    monkeypatch.setattr(voice_live_tools, "_now", lambda: real_now() + voice_live_tools.call_ttl_s() + 1)
     r = await auth_client.post(URL, json=_send(agent, ref))
     assert r.status_code == 403
+    assert r.json() == {"detail": {"reason": "call_expired"}}
     assert acp.calls == []
 
 

@@ -71,9 +71,19 @@ VOICE_NOTE = (
 MAX_TEXT_CHARS = 1000
 MAX_TRANSCRIPT_CHARS = 4000
 
-#: A call lives at most 20 min (client cap, bauplan B6) — plus slack for a
-#: slow last tool call. After that its ``call_ref`` is worthless.
-CALL_TTL_S = 21 * 60
+#: A call's tools work for its max length (``voice_live_max_call_s``, voice
+#: PR 6) plus a short grace for a slow last tool call. After that its
+#: ``call_ref`` is worthless: MC refuses the tools even if the browser kept
+#: the call open (server-side half of the max length).
+def call_ttl_s() -> float:
+    from app.services.voice_live_usage import MAX_LENGTH_GRACE_S, limits
+
+    return float(limits()["max_call_s"] + MAX_LENGTH_GRACE_S)
+
+
+#: Expired calls stay known this long, so a late tool call hears "the call
+#: ran out" instead of "unknown call".
+_FORGET_AFTER_S = 3600.0
 DUPLICATE_WINDOW_S = 10.0
 RATE_WINDOW_S = 60.0
 #: Per call and minute. A spoken conversation passes on a handful of
@@ -118,17 +128,19 @@ def _now() -> float:
 def open_call(agent_id: uuid.UUID) -> str:
     """Registers a new call for ``agent_id`` and returns its reference."""
     now = _now()
-    for ref in [r for r, c in _CALLS.items() if c.expires_at <= now]:
+    for ref in [r for r, c in _CALLS.items() if c.expires_at + _FORGET_AFTER_S <= now]:
         _CALLS.pop(ref, None)
     ref = secrets.token_urlsafe(24)
-    _CALLS[ref] = _Call(agent_id=agent_id, expires_at=now + CALL_TTL_S)
+    _CALLS[ref] = _Call(agent_id=agent_id, expires_at=now + call_ttl_s())
     return ref
 
 
 def check_call(ref: str, agent_id: uuid.UUID) -> _Call:
     call = _CALLS.get(ref or "")
-    if call is None or call.expires_at <= _now():
+    if call is None:
         raise VoiceToolError("call_unknown", 403)
+    if call.expires_at <= _now():
+        raise VoiceToolError("call_expired", 403)
     if call.agent_id != agent_id:
         # A call opened for agent A must never reach agent B.
         raise VoiceToolError("wrong_agent", 403)

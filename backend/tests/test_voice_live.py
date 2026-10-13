@@ -75,7 +75,10 @@ async def test_config_404_when_key_missing(auth_client, monkeypatch):
 async def test_config_on(auth_client, voice_on):
     r = await auth_client.get("/api/v1/voice/live/config")
     assert r.status_code == 200
-    assert r.json() == {"enabled": True, "model": "gpt-realtime-2.1", "voice": "marin"}
+    body = r.json()
+    # PR 6: the brakes the browser enforces and today's budget come along.
+    assert {k: body.pop(k) for k in ("limits", "budget")}.keys() == {"limits", "budget"}
+    assert body == {"enabled": True, "model": "gpt-realtime-2.1", "voice": "marin"}
     assert FAKE_KEY not in r.text
 
 
@@ -145,6 +148,7 @@ async def test_session_mints_client_secret_with_server_owned_config(
     assert r.status_code == 200, r.text
     body = r.json()
     assert isinstance(body.pop("call_ref"), str)
+    assert set(body.pop("limits")) == {"idle_hangup_s", "idle_warn_s", "max_call_s"}
     assert body == {
         "client_secret": FAKE_EK,
         "expires_at": 1_900_000_000,
