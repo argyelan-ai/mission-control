@@ -1022,6 +1022,17 @@ class OmpLineParser:
             locations = _clean_locations(details.get("locations"))
             if locations:
                 result["locations"] = locations
+        # P2: the bridge stored the tool's pictures next to the transcript
+        # (media/<sha256>.<ext>) and left only their references here.
+        # Internal: ``_merge_tool_result`` turns them into card ``images``.
+        if isinstance(details, dict) and isinstance(details.get("images"), list):
+            refs = [
+                {"sha256": i.get("sha256"), "mimeType": i.get("mimeType")}
+                for i in details["images"]
+                if isinstance(i, dict)
+            ]
+            if refs:
+                result["image_refs"] = refs
         if not diffs and not is_error and write_args is not None:
             # omp's `write` tool result repeats only "wrote N bytes" / the
             # resolved path (native: {"resolvedPath": ...}; ACP-forwarded:

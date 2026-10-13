@@ -51,6 +51,7 @@ import { ThinkingRow } from "./ThinkingRow";
 import { SubagentGroup } from "./SubagentGroup";
 import { ToolGroup } from "./ToolGroup";
 import { ToolOutputContext, createToolOutputStore, type ToolOutputStore } from "./toolOutputStore";
+import { ChatMediaContext } from "./chatMedia";
 import { CommandRow } from "./CommandRow";
 import { ApprovalCard } from "./ApprovalCard";
 import { StatusLine } from "./StatusLine";
@@ -837,6 +838,9 @@ export function ChatView({
 
   return (
     <ToolOutputContext.Provider value={toolOutputStore}>
+    {/* P2: tool pictures load from THIS agent's media route; a head (no
+        agent row) shows none rather than guessing an address. */}
+    <ChatMediaContext.Provider value={agent?.id ?? null}>
     <div ref={rootRef} className="flex flex-col flex-1 min-h-0 overflow-hidden">
       {/* One header for both breakpoints — the parts that only make sense on
           a phone (back chevron, context line, options button) carry
@@ -1386,6 +1390,7 @@ export function ChatView({
         />
       )}
     </div>
+    </ChatMediaContext.Provider>
     </ToolOutputContext.Provider>
   );
 }

@@ -1,3 +1,4 @@
+import asyncio
 import re
 import logging
 import uuid
@@ -1318,6 +1319,15 @@ async def delete_agent(
         await delete_references_for(session, agent_id=agent_id)
     except Exception:  # noqa: BLE001
         logger.warning("Agent-Referenzen nicht löschbar", exc_info=True)
+
+    # Chat package P2: the pictures its tools produced in the chat go with
+    # the agent (same never-block-the-delete convention).
+    try:
+        from app.services import chat_media
+
+        await asyncio.to_thread(chat_media.delete_for_agent, str(agent_id))
+    except Exception:  # noqa: BLE001
+        logger.warning("Chat-Bilder nicht löschbar", exc_info=True)
 
     # FK-Aufräumen — aus dem Schema abgeleitet, nicht aus einer Liste.
     #
