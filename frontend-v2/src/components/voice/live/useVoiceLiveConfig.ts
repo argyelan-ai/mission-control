@@ -35,7 +35,10 @@ export function resetVoiceLiveConfigCache(): void {
 export function useVoiceLiveEnabled(active = true): boolean {
   const [enabled, setEnabled] = useState(false);
   useEffect(() => {
-    if (!active) return;
+    if (!active) {
+      setEnabled(false);
+      return;
+    }
     let alive = true;
     void loadVoiceLiveConfig().then((c) => {
       if (alive) setEnabled(c !== null);
