@@ -362,3 +362,39 @@ def test_task_run_factory_writes_the_picture(tmp_path, monkeypatch):
     sha = hashlib.sha256(raw).hexdigest()
     found = list((tmp_path / "agent" / "sessions").rglob(f"media/{sha}.webp"))
     assert found and found[0].read_bytes() == raw
+
+
+# ── omp's js browser tool (live 13.10.2026) ────────────────────────────────
+
+
+def test_js_eval_screenshot_settles_with_one_picture():
+    """The `eval` tool (js cell with ``tab.screenshot()``) as omp 18.10.1
+    sends it over ACP: ``content`` carries the RESOLVED base64 picture
+    (acp-agent.ts resolveImageData), ``rawOutput`` the session's own
+    ``blob:sha256:`` reference plus the cell details (shape of the live
+    native transcript, 13.10.2026). One picture, from ``content``; the blob
+    reference is never mistaken for bytes."""
+    raw = (ROOT.parent.parent / "backend" / "tests" / "fixtures" / "omp_js_screenshot"
+           / "fb94467986aa47ebe8ab906f027f7e8b5055e6e1ca1c8c7c6f984b1a0d04d5bd.webp").read_bytes()
+    text = "Screenshot captured\nFormat: image/webp (23.79 KB)\nDimensions: 800x600"
+    mapper = acp_chat_events.ACPEventMapper()
+    mapper.map_update({"sessionId": "s", "update": {
+        "sessionUpdate": "tool_call", "toolCallId": "call_js", "kind": "execute",
+        "title": "[js] Capturing screenshot of example.org", "status": "pending",
+        "rawInput": {"code": "const tab = await browser.tab(\"example-org\");\nawait tab.screenshot({});",
+                     "language": "js", "title": "Capturing screenshot of example.org"},
+    }}, stream=True)
+    out = _settle(mapper, tool_id="call_js", content=[
+        {"type": "content", "content": {"type": "text", "text": text}},
+        _img_item(raw, "image/webp"),
+    ], raw={
+        "content": [{"type": "text", "text": text},
+                    {"type": "image", "data": "blob:sha256:" + hashlib.sha256(raw).hexdigest(),
+                     "mimeType": "image/webp"}],
+        "details": {"language": "js", "cells": [{"index": 0, "status": "complete"}]},
+    })
+    entry = _tool_results(out)[0]
+    assert entry["message"]["details"]["images"] == [
+        {"sha256": hashlib.sha256(raw).hexdigest(), "mimeType": "image/webp", "bytes": len(raw)}
+    ]
+    assert entry["message"]["content"][0]["text"].startswith("Screenshot captured")

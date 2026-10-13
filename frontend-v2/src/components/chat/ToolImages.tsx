@@ -86,11 +86,21 @@ function Thumb({
   );
 }
 
-export function ToolImages({ images }: { images: ToolImage[] | null | undefined }) {
+/** Each picture once, first occurrence wins. Two tool calls can return the
+ *  very same picture (live 13.10.2026: example.com and example.org render
+ *  identically, so both screenshots had one sha256) — a group strip then
+ *  showed it twice under one React key. */
+export function uniqueImages(images: ToolImage[] | null | undefined): ToolImage[] {
+  const seen = new Set<string>();
+  return (images ?? []).filter((img) => !seen.has(img.id) && !!seen.add(img.id));
+}
+
+export function ToolImages({ images: given }: { images: ToolImage[] | null | undefined }) {
   const t = useTranslations("sessions.toolCard");
   const mediaUrl = useChatMediaUrl();
   const [open, setOpen] = useState<number | null>(null);
-  if (!mediaUrl || !images || images.length === 0) return null;
+  const images = uniqueImages(given);
+  if (!mediaUrl || images.length === 0) return null;
 
   const overflow = images.length > MAX_TILES;
   const tiles = overflow ? images.slice(0, MAX_TILES) : images;
