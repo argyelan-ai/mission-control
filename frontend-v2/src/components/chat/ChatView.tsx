@@ -1235,8 +1235,9 @@ export function ChatView({
                       key={item.event.uuid}
                       ev={item.event}
                       result={stream.elicitationResults[item.event.elicitationId] ?? null}
-                      // A head's transcript is read-only: outcome, no buttons.
-                      agentId={head ? null : agent?.id ?? null}
+                      // Read-only for a head's transcript and for a non-admin
+                      // (the answer endpoint is operator-only, like the composer).
+                      agentId={head || !isAdmin ? null : agent?.id ?? null}
                     />
                   );
                 }

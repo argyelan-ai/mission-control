@@ -536,6 +536,63 @@ describe("ChatView", () => {
     expect(screen.getByTestId("todo-current")).toHaveTextContent("Write the test");
   });
 
+  describe("question cards and plan mode (P3)", () => {
+    const QUESTION = {
+      kind: "elicitation" as const,
+      uuid: "q1",
+      ts: "2026-10-13T10:00:00Z",
+      elicitationId: "el-0123456789ab",
+      message: "Which database?",
+      schema: {
+        type: "object" as const,
+        properties: { value: { type: "string" as const, enum: ["Postgres", "SQLite"] } },
+      },
+    };
+
+    it("renders an open question card with its choices for the operator", () => {
+      mockUseChatStream.mockReturnValue(mkStream({ events: [MSG, QUESTION] }));
+      renderChatView();
+      expect(screen.getByTestId("elicitation-card")).toHaveAttribute("data-status", "open");
+      expect(screen.getByRole("button", { name: "SQLite" })).toBeInTheDocument();
+    });
+
+    it("a non-admin sees the question but cannot answer it", () => {
+      setRole("viewer");
+      mockUseChatStream.mockReturnValue(mkStream({ events: [MSG, QUESTION] }));
+      renderChatView();
+      expect(screen.getByTestId("elicitation-card")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "SQLite" })).not.toBeInTheDocument();
+    });
+
+    it("settles the card from the stream's outcome slot", () => {
+      mockUseChatStream.mockReturnValue(mkStream({
+        events: [MSG, QUESTION],
+        elicitationResults: {
+          "el-0123456789ab": {
+            kind: "elicitation_result", uuid: "r1", ts: "2026-10-13T10:01:00Z",
+            elicitationId: "el-0123456789ab", status: "answered", content: { value: "SQLite" },
+          },
+        },
+      }));
+      renderChatView();
+      expect(screen.getByTestId("elicitation-outcome")).toHaveTextContent("Answered: SQLite");
+    });
+
+    it("offers the plan-mode chip only to a headless agent that reports plan mode", () => {
+      const capabilities = {
+        effortLevels: [], canSwitchEffort: false,
+        modeOptions: [{ value: "default", name: "Default" }, { value: "plan", name: "Plan" }],
+        mode: "default",
+      };
+      mockUseChatStream.mockReturnValue(mkStream({ events: [MSG], capabilities }));
+      const { unmount } = renderChatView({ agent: mkAgent({ headless_chat: true }) });
+      expect(screen.getByTestId("mode-chip")).toHaveAttribute("data-mode", "default");
+      unmount();
+      renderChatView({ agent: mkAgent({ headless_chat: false }) });
+      expect(screen.queryByTestId("mode-chip")).not.toBeInTheDocument();
+    });
+  });
+
   it("shows no todo panel without a list", () => {
     mockUseChatStream.mockReturnValue(mkStream({ events: [MSG] }));
     renderChatView();
