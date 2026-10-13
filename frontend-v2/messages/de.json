@@ -1061,7 +1061,24 @@
       "diffShowLess": "Weniger zeigen",
       "diffTruncated": "Diff gekürzt — die ganze Änderung steht in der Datei.",
       "diffCreate": "Neue Datei",
-      "diffWrite": "Geschriebener Inhalt"
+      "diffWrite": "Geschriebener Inhalt",
+      "images": "Bilder dieses Werkzeugs",
+      "openImage": "Bild {n} von {total} öffnen",
+      "moreImages": "{count, plural, one {# weiteres Bild öffnen} other {# weitere Bilder öffnen}}",
+      "imageUnavailable": "Bild nicht verfügbar",
+      "viewer": {
+        "title": "Bildansicht",
+        "alt": "Bild {n} von {total} aus dem Werkzeug",
+        "counter": "{n} / {total}",
+        "close": "Schliessen",
+        "download": "Herunterladen",
+        "copy": "Bild kopieren",
+        "copied": "Kopiert",
+        "copyFailed": "Kopieren nicht möglich",
+        "previous": "Vorheriges Bild",
+        "next": "Nächstes Bild",
+        "unavailable": "Bild nicht verfügbar"
+      }
     },
     "diff": {
       "scopeLabel": "Änderungen",
