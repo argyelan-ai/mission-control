@@ -3,6 +3,13 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { ImageViewer } from "./ImageViewer";
 import type { ToolImage } from "@/lib/chatTypes";
 
+/** A fetch answer without undici: a real Response around a jsdom Blob is
+ *  read differently per Node version (Node 22 in CI never resolved the
+ *  blob). An explicit object gives the same result on every runtime. */
+function fakeResponse(ok: boolean, type = "image/png") {
+  return { ok, status: ok ? 200 : 404, blob: async () => new Blob(["x"], { type }) } as unknown as Response;
+}
+
 const images: ToolImage[] = [1, 2, 3].map((n) => ({
   id: String(n).repeat(64),
   mime: n === 2 ? "image/jpeg" : "image/png",
@@ -13,10 +20,7 @@ const images: ToolImage[] = [1, 2, 3].map((n) => ({
 const mediaUrl = (id: string, v: "thumb" | "full") => `/m/${id}?variant=${v}`;
 
 beforeEach(() => {
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async () => new Response(new Blob(["x"], { type: "image/png" }), { status: 200 })),
-  );
+  vi.stubGlobal("fetch", vi.fn(async () => fakeResponse(true)));
   let n = 0;
   vi.stubGlobal("URL", Object.assign(URL, { createObjectURL: () => `blob:mock-${++n}`, revokeObjectURL: () => {} }));
 });

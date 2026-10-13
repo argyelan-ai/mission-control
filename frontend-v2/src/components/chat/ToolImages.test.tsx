@@ -4,6 +4,13 @@ import { ToolImages } from "./ToolImages";
 import { ChatMediaContext } from "./chatMedia";
 import type { ToolImage } from "@/lib/chatTypes";
 
+/** A fetch answer without undici: a real Response around a jsdom Blob is
+ *  read differently per Node version (Node 22 in CI never resolved the
+ *  blob). An explicit object gives the same result on every runtime. */
+function fakeResponse(ok: boolean, type = "image/png") {
+  return { ok, status: ok ? 200 : 404, blob: async () => new Blob(["x"], { type }) } as unknown as Response;
+}
+
 const AGENT = "11111111-2222-3333-4444-555555555555";
 
 function img(n: number, over: Partial<ToolImage> = {}): ToolImage {
@@ -17,7 +24,7 @@ function withAgent(ui: React.ReactNode, agentId: string | null = AGENT) {
 let fetchMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
-  fetchMock = vi.fn(async () => new Response(new Blob(["x"], { type: "image/webp" }), { status: 200 }));
+  fetchMock = vi.fn(async () => fakeResponse(true, "image/webp"));
   vi.stubGlobal("fetch", fetchMock);
   let n = 0;
   vi.stubGlobal("URL", Object.assign(URL, { createObjectURL: () => `blob:mock-${++n}`, revokeObjectURL: () => {} }));
@@ -71,7 +78,7 @@ describe("ToolImages", () => {
   });
 
   it("names a picture that cannot be loaded instead of an empty frame", async () => {
-    fetchMock.mockImplementation(async () => new Response("nope", { status: 404 }));
+    fetchMock.mockImplementation(async () => fakeResponse(false));
     render(withAgent(<ToolImages images={[img(8)]} />));
     expect(await screen.findByText("Picture not available")).toBeInTheDocument();
   });

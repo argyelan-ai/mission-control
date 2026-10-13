@@ -10,6 +10,13 @@ import { ToolGroup } from "./ToolGroup";
 import { ChatMediaContext } from "./chatMedia";
 import type { ToolEvent, ToolImage } from "@/lib/chatTypes";
 
+/** A fetch answer without undici: a real Response around a jsdom Blob is
+ *  read differently per Node version (Node 22 in CI never resolved the
+ *  blob). An explicit object gives the same result on every runtime. */
+function fakeResponse(ok: boolean, type = "image/png") {
+  return { ok, status: ok ? 200 : 404, blob: async () => new Blob(["x"], { type }) } as unknown as Response;
+}
+
 const SHOT: ToolImage = { id: "a".repeat(64), mime: "image/png", width: 1280, height: 800, bytes: 9000 };
 
 function tool(overrides: Partial<ToolEvent> = {}): ToolEvent {
@@ -34,7 +41,7 @@ const wrap = (ui: React.ReactNode) => (
 );
 
 beforeEach(() => {
-  vi.stubGlobal("fetch", vi.fn(async () => new Response(new Blob(["x"]), { status: 200 })));
+  vi.stubGlobal("fetch", vi.fn(async () => fakeResponse(true)));
   vi.stubGlobal("URL", Object.assign(URL, { createObjectURL: () => "blob:x", revokeObjectURL: () => {} }));
 });
 afterEach(() => vi.unstubAllGlobals());
