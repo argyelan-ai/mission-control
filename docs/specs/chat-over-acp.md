@@ -75,7 +75,7 @@ The queue lives in the daemon's memory only. A daemon restart (container recreat
 **Question cards and plan mode (chat package P3).** Only the omp container's
 chat daemon advertises `clientCapabilities.elicitation.form` (`ChatSession(...,
 elicitation=True)` in `build_session`); task runs (`bridge.run_acp_once`) and
-the Hermes host chat do not, so an unattended run never stops on a question.
+the host-side chat bridge do not, so an unattended run never stops on a question.
 omp then asks through `elicitation/create` (form mode): the daemon keeps the
 JSON-RPC request open under its own id `el-<12 hex>`, writes a
 `custom_message`/`acp-elicitation` line (`content` = question text, `data =

@@ -359,7 +359,7 @@ def test_restart_expires_what_the_previous_daemon_held(tmp_path):
 
 def test_daemon_without_opt_in_never_asks(tmp_path):
     client = ElicitingClient(session_result=SESSION_RESULT)
-    sess = make_session(tmp_path, client)  # default: elicitation off (Hermes)
+    sess = make_session(tmp_path, client)  # default: elicitation off (host chat)
     sess.start()
     assert client._elicit is None
     sess.close()

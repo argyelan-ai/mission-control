@@ -154,7 +154,7 @@ class ChatSession:
         self._task_id = task_id
         # P3: ask the operator (question cards, plan approval). Opt-in per
         # daemon: the omp container chat turns it on (build_session); the
-        # Hermes host chat has no `answer` route yet and stays off.
+        # host-side chat bridge has no `answer` route yet and stays off.
         self._elicitation_enabled = bool(elicitation)
 
         self._client: Any = None

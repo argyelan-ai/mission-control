@@ -303,8 +303,8 @@ class HttpCtlTransport:
         return await self._call("state")
 
     async def answer(self, id: str, action: str, content: dict | None = None) -> dict:
-        # Die hermes-bridge routet ``answer`` (noch) nicht — ihr Daemon fragt
-        # auch nie (Elicitation ist dort aus).
+        # Die Host-Bruecke routet ``answer`` (noch) nicht — ihr Chat-Daemon
+        # fragt auch nie (Elicitation ist dort aus).
         return await self._call("answer", _answer_payload(id, action, content))
 
 
