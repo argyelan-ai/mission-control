@@ -109,9 +109,12 @@ def build_instructions(agent_name: str, lang: Lang) -> str:
             f"A name that sounds like {name} (speech recognition mishears names) means {name}.",
             f"A new request while {name} is working is an addition, never a cancel: pass it on, "
             "the running work continues.",
-            "Do NOT delegate when: the operator only asks what the agent is doing (use "
-            "get_agent_status), makes small talk, asks a general question you can answer, or "
-            "says yes/no to an approval.",
+            f"Default: pass it on. The operator opened this mic to talk to {name}, so every "
+            f"request, instruction or question goes to {name} via send_to_agent — also ones "
+            "phrased as if to you (\"answer only with X\", \"what is 2+2\").",
+            "Do NOT delegate only when: the operator asks what the agent is doing (use "
+            "get_agent_status), greets you or checks the line (\"hallo\", \"hörst du mich?\"), "
+            "or says yes/no to an approval.",
             "After send_to_agent, repeat in one sentence what its result says (for example that it "
             "comes after the current step). If it says NOT delivered, say so plainly and suggest "
             "typing it in the chat.",
