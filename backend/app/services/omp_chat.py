@@ -682,6 +682,10 @@ class OmpLineParser:
                         data.get("entries"), uuid=d.get("id"), ts=d.get("timestamp")
                     )
                     return [todo] if todo is not None else []
+                if d.get("customType") == ACP_ELICITATION_RESULT_CUSTOM_TYPE:
+                    return _elicitation_result_event(d)
+                if d.get("customType") == ACP_MODE_CUSTOM_TYPE:
+                    return _mode_event(d)
                 if d.get("customType") not in _SILENT_CUSTOM_TYPES:
                     logger.debug("omp_chat: unbekannter custom-Typ %s", d.get("customType"))
                 return []
@@ -1118,6 +1122,15 @@ class OmpLineParser:
                     "text": content[:_RESULT_TRUNCATE_LEN],
                 }
             ]
+        if custom_type == ACP_ELICITATION_CUSTOM_TYPE:
+            # Chat-Paket P3: eine Rueckfrage des Agenten (ACP form
+            # elicitation). Eigene Art, damit das Frontend eine Karte mit
+            # Knoepfen/Feldern baut. Ohne brauchbares Schema faellt die Zeile
+            # unten durch und erscheint als schlichter Systemhinweis — die
+            # Frage geht nie verloren.
+            event = _elicitation_event(d, entry_id, ts, content)
+            if event is not None:
+                return [event]
         if custom_type == "chat_error":
             # Chat over ACP: der Chat-Daemon hat keinen anderen Weg, einen
             # Fehler sichtbar zu machen — er schreibt ihn als eigene Zeile ins
@@ -1156,6 +1169,77 @@ class OmpLineParser:
                 "sidechain": False,
             }
         ]
+
+
+#: Chat-Paket P3 (docker/omp-bridge/acp_chat_events.py): Rueckfrage-Karte,
+#: ihr Ausgang, und der Sitzungsmodus (Plan-Modus).
+ACP_ELICITATION_CUSTOM_TYPE = "acp-elicitation"
+ACP_ELICITATION_RESULT_CUSTOM_TYPE = "acp-elicitation-result"
+ACP_MODE_CUSTOM_TYPE = "acp-mode"
+_ELICITATION_STATUSES = frozenset({"answered", "declined", "cancelled", "expired"})
+
+
+def _elicitation_event(
+    d: dict[str, Any], entry_id: Any, ts: Any, content: str
+) -> dict[str, Any] | None:
+    """``acp-elicitation`` -> ``{"kind": "elicitation", ...}`` oder ``None``,
+    wenn Kennung oder Schema fehlen (dann zeigt der Aufrufer die Frage als
+    schlichten Systemhinweis). Das Schema hat der Chat-Daemon bereits auf die
+    gerenderten Felder beschnitten (``acp_chat.clean_schema``)."""
+    data = d.get("data") if isinstance(d.get("data"), dict) else {}
+    elicitation_id = data.get("elicitationId")
+    schema = data.get("schema")
+    if (
+        not isinstance(elicitation_id, str)
+        or not elicitation_id
+        or not isinstance(schema, dict)
+        or not isinstance(schema.get("properties"), dict)
+        or not schema["properties"]
+    ):
+        return None
+    message = data.get("message") if isinstance(data.get("message"), str) else content
+    return {
+        "kind": "elicitation",
+        "uuid": entry_id,
+        "ts": ts,
+        "elicitationId": elicitation_id,
+        "message": message[:_RESULT_TRUNCATE_LEN],
+        "schema": schema,
+    }
+
+
+def _elicitation_result_event(d: dict[str, Any]) -> list[dict[str, Any]]:
+    """``acp-elicitation-result`` -> ``{"kind": "elicitation_result", ...}``.
+    Kein Zeitleisten-Eintrag: das Frontend legt es neben die Karte mit
+    derselben ``elicitationId`` (beantwortet / abgelaufen)."""
+    data = d.get("data") if isinstance(d.get("data"), dict) else {}
+    elicitation_id = data.get("elicitationId")
+    status = data.get("status")
+    if not isinstance(elicitation_id, str) or status not in _ELICITATION_STATUSES:
+        return []
+    if not d.get("id") or not d.get("timestamp"):
+        return []
+    answer = data.get("content") if isinstance(data.get("content"), dict) else None
+    return [
+        {
+            "kind": "elicitation_result",
+            "uuid": d["id"],
+            "ts": d["timestamp"],
+            "elicitationId": elicitation_id,
+            "status": status,
+            "content": answer,
+        }
+    ]
+
+
+def _mode_event(d: dict[str, Any]) -> list[dict[str, Any]]:
+    """``acp-mode`` -> ``{"kind": "mode", "modeId"}`` — der Modus-Chip im
+    Composer folgt dem neuesten (leise, keine Karte)."""
+    data = d.get("data") if isinstance(d.get("data"), dict) else {}
+    mode_id = data.get("modeId")
+    if not isinstance(mode_id, str) or not mode_id or not d.get("id") or not d.get("timestamp"):
+        return []
+    return [{"kind": "mode", "uuid": d["id"], "ts": d["timestamp"], "modeId": mode_id[:64]}]
 
 
 def new_parser(session_path: Path | None = None) -> OmpLineParser:

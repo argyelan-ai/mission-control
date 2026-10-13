@@ -32,17 +32,21 @@ from app.services.agent_chat_input import (
     AgentBusyError,
     AgentStartingError,
     BossDeliveryError,
+    ElicitationNotPendingError,
     EffortSwitchFailedError,
     EffortSwitchRejectedError,
     InputNotSupportedError,
     InstallCommandBlockedError,
+    answer_elicitation,
     can_receive_input,
     clear_queue,
     effort_capabilities,
+    mode_capabilities,
     model_options_capabilities,
     send_keys,
     send_text,
     set_effort,
+    set_mode,
     slash_command_capabilities,
 )
 from app.services.harness_catalog import get_observed_model_windows
@@ -133,6 +137,26 @@ class ChatEffortBody(BaseModel):
     level: str
 
 
+class ChatElicitationAnswerBody(BaseModel):
+    """P3: answer to a question card. ``content`` only with ``accept`` —
+    keys and values must match the question's schema (checked by the chat
+    daemon before omp sees them)."""
+
+    action: str
+    content: dict[str, Any] | None = None
+
+
+class ChatModeBody(BaseModel):
+    mode: str
+
+
+#: A card id as the chat daemon mints it (``el-`` + 12 hex). Checked before
+#: it travels into a ``docker exec`` argument.
+_ELICITATION_ID_RE = re.compile(r"^el-[0-9a-f]{12}$")
+#: An answer is one short form; anything larger is not a click.
+_MAX_ELICITATION_CONTENT_BYTES = 32_000
+
+
 async def _resolve_transcript_path(
     agent_id: uuid.UUID, session: AsyncSession
 ) -> tuple[Agent, Path, Any] | JSONResponse:
@@ -208,6 +232,7 @@ async def get_chat_history(
         **await effort_capabilities(agent),
         **await slash_command_capabilities(agent),
         **await model_options_capabilities(agent),
+        **await mode_capabilities(agent),
     }
 
     # Frische Sitzung ohne Datei (omp ``/new``, siehe ``fresh_session``):
@@ -1296,3 +1321,74 @@ async def post_chat_effort(
         return _acp_unreachable(e)
     except BossDeliveryError as e:
         return _boss_delivery_failed(e)
+
+
+@router.post("/agents/{agent_id}/chat/elicitation/{elicitation_id}")
+async def post_chat_elicitation_answer(
+    agent_id: uuid.UUID,
+    elicitation_id: str,
+    body: ChatElicitationAnswerBody,
+    current_user=Depends(require_role(Role.ADMIN)),
+    session: AsyncSession = Depends(get_session),
+):
+    """Answers a question card (chat package P3) of a headless (ACP) agent:
+    ``action`` = ``accept`` (with ``content``) | ``decline`` | ``cancel``.
+    Same operator gate as every other chat control (admin role). 200
+    ``{"status": "answered"|"declined"|"cancelled"}``; 422 for a malformed id
+    or an answer that does not fit the question; 409
+    ``{"reason":"elicitation_not_pending"}`` when the card is no longer open
+    (answered elsewhere, its turn ended, the chat daemon restarted); 409
+    ``input_not_supported`` for agents without an ACP chat (or an image
+    without the op); 502 ``acp_unreachable`` when the daemon does not
+    answer."""
+    agent = await _load_agent_or_404(agent_id, session)
+    if not _ELICITATION_ID_RE.match(elicitation_id):
+        raise HTTPException(status_code=422, detail="malformed elicitation id")
+    if body.content is not None and len(
+        json.dumps(body.content, ensure_ascii=False)
+    ) > _MAX_ELICITATION_CONTENT_BYTES:
+        raise HTTPException(status_code=422, detail="answer too large")
+
+    try:
+        status = await answer_elicitation(agent, elicitation_id, body.action, body.content)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    except ElicitationNotPendingError:
+        return JSONResponse(status_code=409, content={"reason": "elicitation_not_pending"})
+    except InputNotSupportedError:
+        return JSONResponse(status_code=409, content=_INPUT_NOT_SUPPORTED)
+    except AgentStartingError:
+        return JSONResponse(status_code=409, content=_AGENT_STARTING)
+    except AgentBusyError:
+        return JSONResponse(status_code=409, content=_AGENT_BUSY)
+    except AcpChatRefusedError as e:
+        return JSONResponse(status_code=409, content={"reason": "acp_refused", "error": e.code})
+    except AcpChatUnreachableError as e:
+        return _acp_unreachable(e)
+    return {"status": status}
+
+
+@router.post("/agents/{agent_id}/chat/mode", status_code=204)
+async def post_chat_mode(
+    agent_id: uuid.UUID,
+    body: ChatModeBody,
+    current_user=Depends(require_role(Role.ADMIN)),
+    session: AsyncSession = Depends(get_session),
+):
+    """Switches a headless (ACP) agent's session mode (chat package P3:
+    ``plan`` / ``default``) through ``config id=mode``. Only modes the agent
+    itself reports in ``capabilities.modeOptions``: 422 for any other value,
+    409 ``input_not_supported`` when the agent reports no mode switch, 409
+    ``acp_refused`` when the agent declined (the chat shows its own error
+    card), 502 ``acp_unreachable`` when the daemon does not answer."""
+    agent = await _load_agent_or_404(agent_id, session)
+    try:
+        await set_mode(agent, body.mode)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    except InputNotSupportedError:
+        return JSONResponse(status_code=409, content=_INPUT_NOT_SUPPORTED)
+    except AcpChatRefusedError as e:
+        return JSONResponse(status_code=409, content={"reason": "acp_refused", "error": e.code})
+    except AcpChatUnreachableError as e:
+        return _acp_unreachable(e)

@@ -15,7 +15,13 @@ haelt:
 ``cancel``       —                                       ``{"ok":true}``
 ``config``       ``{"id":"thinking","value":"high"}``    ``{"ok":true,"configOptions":[...]}``
 ``state``        —                                       ``{"ok":true, ...state}``
+``answer``       ``{"id":"el-…","action":"accept",``     ``{"ok":true,"status":"answered"}`` ·
+                 ``"content"?:{...}}`` (P3)              ``{"ok":false,"error":"not_pending"}`` ·
+                                                         ``{"ok":false,"error":"bad_content",...}``
 ===============  ======================================  ==========================
+
+Plan-Modus braucht keine eigene Op: ``config`` mit ``{"id":"mode","value":
+"plan"|"default"}`` (omp meldet ``mode`` in ``configOptions``).
 
 ``mode: "queue"`` ist die Folge-Nachricht des Chats: laeuft gerade ein Zug,
 haelt der Daemon den Auftrag zurueck und liefert ihn, sobald der Zug endet.
@@ -106,6 +112,17 @@ class ChatTransport(Protocol):
     async def config(self, id: str, value: str) -> dict: ...
 
     async def state(self) -> dict: ...
+
+    async def answer(self, id: str, action: str, content: dict | None = None) -> dict: ...
+
+
+def _answer_payload(id: str, action: str, content: dict | None) -> dict[str, Any]:
+    """``answer``-Op (P3): ``content`` nur bei ``accept`` — der Daemon prueft
+    es gegen das Schema der Frage."""
+    payload: dict[str, Any] = {"id": id, "action": action}
+    if content is not None:
+        payload["content"] = content
+    return payload
 
 
 def headless_chat_kind(agent) -> str | None:
@@ -229,6 +246,9 @@ class DockerCtlTransport:
     async def state(self) -> dict:
         return await self._call("state")
 
+    async def answer(self, id: str, action: str, content: dict | None = None) -> dict:
+        return await self._call("answer", _answer_payload(id, action, content))
+
 
 class HttpCtlTransport:
     """Steuerkanal zur hermes-bridge auf dem Host (``POST /chat/<op>``).
@@ -281,6 +301,11 @@ class HttpCtlTransport:
 
     async def state(self) -> dict:
         return await self._call("state")
+
+    async def answer(self, id: str, action: str, content: dict | None = None) -> dict:
+        # Die hermes-bridge routet ``answer`` (noch) nicht — ihr Daemon fragt
+        # auch nie (Elicitation ist dort aus).
+        return await self._call("answer", _answer_payload(id, action, content))
 
 
 def transport_for(agent) -> ChatTransport:
