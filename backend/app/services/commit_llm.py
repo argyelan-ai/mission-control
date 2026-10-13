@@ -81,7 +81,7 @@ _HOME_PATH_RE = re.compile(r"(/(?:Users|home)/)([^/\s]+)")
 
 def redact(text: str) -> str:
     """Strips anything that looks like a secret, and anonymises a home
-    directory path (``/Users/henry/...`` -> ``/Users/«redacted»/...``) —
+    directory path (``/Users/testuser/...`` -> ``/Users/«redacted»/...``) —
     best effort, never a guarantee, applied to everything built into the
     prompt before it leaves this process."""
     out = text

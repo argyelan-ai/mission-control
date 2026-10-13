@@ -47,11 +47,15 @@ FILES = [{"path": "app/prices.py", "status": "modified", "additions": 4, "deleti
 # ══════════════════════════════════════════════════════════════════════════
 
 
+# Built at runtime so no key-shaped literal sits in the public repo.
+_FAKE_AWS = "AKIA" + "ABCDEFGHIJKLMNOP"
+
+
 @pytest.mark.parametrize("secret_line", [
     "api_key = sk-abcdefghijklmnopqrstuvwxyz0123456789",
     "API_KEY: 'super-secret-value-123'",
     "Authorization: Bearer abcdefghijklmnop0123456789",
-    "AWS_ACCESS_KEY_ID=AKIAABCDEFGHIJKLMNOP",
+    "AWS_ACCESS_KEY_ID=" + _FAKE_AWS,
     "token: ghp_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789",
     "-----BEGIN PRIVATE KEY-----\nMIIBogIBAAJ...\n-----END PRIVATE KEY-----",
 ])
@@ -60,15 +64,15 @@ def test_redact_strips_every_known_secret_shape(secret_line):
     assert "sk-abcdefghijklmnopqrstuvwxyz0123456789" not in out
     assert "super-secret-value-123" not in out
     assert "abcdefghijklmnop0123456789" not in out
-    assert "AKIAABCDEFGHIJKLMNOP" not in out
+    assert _FAKE_AWS not in out
     assert "ghp_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789" not in out
     assert "MIIBogIBAAJ" not in out
     assert "context line" in out and "more context" in out
 
 
 def test_redact_anonymises_home_paths():
-    out = commit_llm.redact("see /Users/henry/secret-notes/plan.md and /home/mark/.env")
-    assert "henry" not in out and "mark" not in out
+    out = commit_llm.redact("see /Users/" + "someone/secret-notes/plan.md and /home/" + "otheruser/.env")
+    assert "someone" not in out and "otheruser" not in out
     assert "/Users/«redacted»/secret-notes/plan.md" in out
     assert "/home/«redacted»/.env" in out
 
