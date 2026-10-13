@@ -1,12 +1,13 @@
 /**
- * Live voice — the voice's two tools, browser side (voice PR 2). Pure parts
+ * Live voice — the voice's tools, browser side (voice PR 2; `stop_agent`
+ * since voice PR 4). Pure parts
  * only: reading a function call out of the Realtime events, collecting the
  * operator's verbatim words, and turning MC's answer (or a failure) into the
  * `function_call_output` the model reads. The tools RUN in MC
  * (`POST /api/v1/voice/live/tool`); the browser only relays.
  */
 
-export const VOICE_TOOL_NAMES = ["send_to_agent", "get_agent_status"] as const;
+export const VOICE_TOOL_NAMES = ["send_to_agent", "get_agent_status", "stop_agent"] as const;
 export type VoiceToolName = (typeof VOICE_TOOL_NAMES)[number];
 
 export interface FunctionCall {
@@ -39,7 +40,8 @@ function isToolName(name: string | undefined): name is VoiceToolName {
 /** A finished function call, from either event OpenAI sends for it
  *  (`response.output_item.done` carries the whole item; the arguments event
  *  carries the name too). The caller dedupes on `callId`. Unknown tool
- *  names are `null`: the model only has these two. */
+ *  names are `null`: the model only has these three — none presses keys or
+ *  answers an approval. */
 export function functionCallFromEvent(ev: FunctionCallEvent): FunctionCall | null {
   if (ev.type === "response.output_item.done" && ev.item?.type === "function_call") {
     const { call_id, name, arguments: args } = ev.item;
@@ -105,6 +107,19 @@ export class UtteranceLog {
     return this.order.some((id) => !this.consumed.has(id) && !this.done.has(id));
   }
 
+  /** The newest finished, non-empty, unsent utterance on its own — what
+   *  `stop_agent` carries: MC stops only when THIS, as a whole, is a stop
+   *  command (voice PR 4). */
+  last(): { id: string; text: string } | null {
+    for (let i = this.order.length - 1; i >= 0; i--) {
+      const id = this.order[i];
+      if (this.consumed.has(id) || !this.done.has(id)) continue;
+      const text = this.texts.get(id) ?? "";
+      if (text) return { id, text };
+    }
+    return null;
+  }
+
   /** The words to attach: finished, not yet delivered, non-empty. */
   take(): { ids: string[]; text: string } {
     const ids = this.order.filter((id) => !this.consumed.has(id) && this.done.has(id) && this.texts.get(id));
@@ -134,6 +149,13 @@ export function toolFailureOutput(name: VoiceToolName, err: unknown): Record<str
   }
   if (name === "get_agent_status") {
     return { state: "unknown", reason, note: "Could not read the status. Say so; do not guess." };
+  }
+  if (name === "stop_agent") {
+    return {
+      stopped: false,
+      reason,
+      say: "NOT stopped: Mission Control did not answer. Tell the operator to tap the Stop button in the chat.",
+    };
   }
   const say: Record<string, string> = {
     call_unknown: "NOT delivered: this call lost its link to Mission Control. Ask the operator to hang up and call again.",

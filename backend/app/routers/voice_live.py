@@ -7,8 +7,8 @@
   to OpenAI; the long-lived key stays here. Also returns ``call_ref``: the
   call's handle for the tool endpoint below (voice PR 2).
 - ``POST /api/v1/voice/live/tool`` — runs one tool call the realtime model
-  emitted (``send_to_agent`` / ``get_agent_status``) for the agent the call
-  was opened for. See ``services/voice_live_tools.py``.
+  emitted (``send_to_agent`` / ``get_agent_status`` / ``stop_agent``) for
+  the agent the call was opened for. See ``services/voice_live_tools.py``.
 - ``POST /api/v1/voice/live/progress`` — one redacted context line for the
   voice about the agent's progress (voice PR 3). The browser watches the
   chat's live stream and says WHEN; ``services/voice_progress.py`` says WHAT.
@@ -107,10 +107,12 @@ async def create_session(
 class VoiceToolBody(BaseModel):
     call_ref: str = Field(min_length=1, max_length=128)
     agent_id: uuid.UUID
-    name: Literal["send_to_agent", "get_agent_status"]
+    name: Literal["send_to_agent", "get_agent_status", "stop_agent"]
     arguments: dict[str, Any] = Field(default_factory=dict)
-    #: The operator's own words since the last delivered send, exactly as the
-    #: speech-to-text heard them. Required for ``send_to_agent``.
+    #: The operator's own words, exactly as the speech-to-text heard them.
+    #: ``send_to_agent``: everything since the last delivered send (required).
+    #: ``stop_agent``: the operator's LAST utterance only (required) — MC
+    #: re-checks that it is a stop command as a whole.
     transcript: str = Field(default="", max_length=voice_live_tools.MAX_TRANSCRIPT_CHARS)
 
 
@@ -122,6 +124,12 @@ class VoiceToolResult(BaseModel):
     sent_text: str | None = None
     #: ``send_to_agent`` only: was the agent mid-turn (echo shows "queued")?
     mid_turn: bool = False
+    #: ``stop_agent`` only: the stop went out (the chat may drop its queued rows).
+    stopped: bool = False
+    #: ``stop_agent`` on a headless agent: the follow-ups the daemon held
+    #: back, oldest first — the chat puts them back into the composer, like
+    #: the Stop button. ``None`` = nothing was taken back (TUI, or no answer).
+    taken_back: list[str] | None = None
 
 
 def _tool_error(exc: VoiceToolError) -> JSONResponse:
@@ -138,23 +146,61 @@ _NOT_DELIVERED_SAY = {
     "agent_busy": "NOT delivered: the agent refused a message right now. Tell the operator to type it in the chat.",
     "acp_refused": "NOT delivered: the agent refused it. Tell the operator to type it in the chat.",
     "install_blocked": "NOT delivered: installs are blocked in the chat.",
+    "approval_pending": (
+        "NOT delivered: he waits for an approval or a choice in the chat. A spoken answer never "
+        "counts. Ask the operator to tap it in the chat (\"bitte im Chat antippen\")."
+    ),
 }
+
+
+async def _turn_status(agent: Agent) -> tuple[str | None, bool]:
+    """``(status, headless)`` — ``working``/``idle``/``permission_prompt``/
+    ``waiting_input`` or ``None`` (unknown). Read-only; never touches the agent."""
+    from app.services import acp_chat_transport
+    from app.services import transcript_chat
+
+    headless = acp_chat_transport.headless_chat_kind(agent) is not None
+    try:
+        if headless:
+            status = await asyncio.to_thread(acp_chat_transport.read_acp_turn_status, agent)
+        else:
+            status = (transcript_chat.tailer_manager.last_state(str(agent.id)) or {}).get("status")
+    except Exception:  # noqa: BLE001 — a hint for the wording, never a blocker
+        status = None
+    return status, headless
 
 
 async def _agent_is_mid_turn(agent: Agent) -> tuple[bool, bool]:
     """``(mid_turn, headless)``. Read-only; never touches the agent."""
-    from app.services.acp_chat_transport import headless_chat_kind, read_acp_turn_status
-    from app.services.transcript_chat import tailer_manager
-
-    headless = headless_chat_kind(agent) is not None
-    try:
-        if headless:
-            status = await asyncio.to_thread(read_acp_turn_status, agent)
-        else:
-            status = (tailer_manager.last_state(str(agent.id)) or {}).get("status")
-    except Exception:  # noqa: BLE001 — a hint for the wording, never a blocker
-        status = None
+    status, headless = await _turn_status(agent)
     return status == "working", headless
+
+
+#: Prompt states where typing text + Enter picks an option in the TUI.
+_PROMPT_STATES = frozenset({"permission_prompt", "waiting_input"})
+
+
+async def _prompt_open(agent: Agent, status: str | None, headless: bool) -> bool:
+    """Is a permission prompt or a choice menu open in this agent's TUI?
+    A voice message ends with Enter; typed into such a prompt, Enter picks the
+    highlighted option — an approval by voice (bauplan B2 rule 5). The
+    tailer's state can lag a few seconds, so a docker agent's pane is also
+    read fresh. Headless (ACP) agents queue text and never answer a prompt
+    with it."""
+    if headless:
+        return False
+    if status in _PROMPT_STATES:
+        return True
+    from app.services import pane_state, transcript_adapters
+
+    try:
+        pane = await pane_state.capture_pane(agent)
+        if pane is None:
+            return False
+        fresh = transcript_adapters.adapter_for(agent).parse_pane_state(pane, False)["status"]
+    except Exception:  # noqa: BLE001 — no pane, no prompt we could hit
+        return False
+    return fresh in _PROMPT_STATES
 
 
 async def _send_to_agent(agent: Agent, call, body: VoiceToolBody) -> VoiceToolResult:
@@ -187,8 +233,14 @@ async def _send_to_agent(agent: Agent, call, body: VoiceToolBody) -> VoiceToolRe
         )
 
     message = voice_live_tools.compose_message(text, body.transcript)
-    mid_turn, headless = await _agent_is_mid_turn(agent)
+    status, headless = await _turn_status(agent)
+    mid_turn = status == "working"
     reason: str | None = None
+    if await _prompt_open(agent, status, headless):
+        logger.info("voice_live tool send_to_agent agent=%s not delivered: approval_pending", agent.id)
+        return VoiceToolResult(
+            output={"delivered": False, "reason": "approval_pending", "say": _NOT_DELIVERED_SAY["approval_pending"]}
+        )
     try:
         await chat_input.send_text(agent, message)
     except chat_input.InstallCommandBlockedError:
@@ -228,6 +280,106 @@ async def _send_to_agent(agent: Agent, call, body: VoiceToolBody) -> VoiceToolRe
         output={"delivered": True, "when": when, "done": False, "say": say},
         sent_text=message,
         mid_turn=mid_turn,
+    )
+
+
+_STOP_SAY = {
+    "no_transcript": (
+        "NOT stopped: I did not catch the operator's exact words. Ask whether you should stop "
+        "him; he stops only when they say \"Stopp\" on its own."
+    ),
+    "not_a_stop_command": (
+        "NOT stopped: the operator said more than a stop command. If it is a request (for example "
+        "\"Stopp den Container\"), pass it on with send_to_agent; if unsure, ask back."
+    ),
+    "not_working": "Nothing to stop: he is not working right now. Say so in one short sentence.",
+    "failed": (
+        "NOT stopped: the stop did not reach him. Tell the operator to tap the Stop button in the chat."
+    ),
+}
+
+
+async def _wait_until_stopped(agent: Agent) -> bool:
+    """Watches the turn end for a few seconds after a stop. True = seen idle
+    (or prompt-free and not working); False = not confirmed in time."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + voice_live_tools.STOP_CONFIRM_S
+    while True:
+        status, _headless = await _turn_status(agent)
+        if status is not None and status != "working":
+            return True
+        if loop.time() >= deadline:
+            return False
+        await asyncio.sleep(voice_live_tools.STOP_POLL_S)
+
+
+async def _stop_agent(agent: Agent, body: VoiceToolBody) -> VoiceToolResult:
+    """Stop by voice (voice PR 4): the operator's LAST utterance, verbatim,
+    must be a stop command as a whole — the model calling the tool is not
+    enough. Then the chat Stop button's own path: headless agents first hand
+    back the follow-ups their daemon holds (they would start the moment the
+    turn ends), then ACP ``cancel``; TUI agents get ``Escape`` (their
+    interrupt key). "Gestoppt" only once the turn is seen to end."""
+    from app.services import agent_chat_input as chat_input
+    from app.services.acp_chat_transport import AcpChatUnreachableError
+
+    words = voice_live_tools.clean_line(body.transcript)
+
+    def refuse(reason: str) -> VoiceToolResult:
+        logger.info("voice_live tool stop_agent agent=%s not stopped: %s", agent.id, reason)
+        return VoiceToolResult(output={"stopped": False, "reason": reason, "say": _STOP_SAY[reason]})
+
+    if not words:
+        return refuse("no_transcript")
+    if not voice_live_tools.is_stop_command(words, agent.name):
+        return refuse("not_a_stop_command")
+    status, headless = await _turn_status(agent)
+    if status == "idle":
+        return refuse("not_working")
+
+    taken_back: list[str] | None = None
+    if headless:
+        try:
+            taken_back = await chat_input.clear_queue(agent)
+        except (chat_input.InputNotSupportedError, AcpChatUnreachableError):
+            taken_back = None  # the daemon keeps them; the cancel goes out regardless
+    try:
+        await chat_input.send_keys(agent, ["Escape"])
+    except (
+        chat_input.InputNotSupportedError,
+        AcpChatUnreachableError,
+        chat_input.BossDeliveryError,
+        ValueError,
+    ) as exc:
+        logger.info("voice_live tool stop_agent agent=%s failed: %s", agent.id, type(exc).__name__)
+        result = refuse("failed")
+        result.taken_back = taken_back
+        return result
+
+    confirmed = await _wait_until_stopped(agent)
+    back = len(taken_back or [])
+    back_note = (
+        f" {back} queued message{'s' if back != 1 else ''} went back into the chat input, not sent."
+        if back
+        else ""
+    )
+    if confirmed:
+        say = (
+            "Stopped: his current step was cancelled; nothing was undone. Say only \"Gestoppt.\" "
+            "(German) or \"Stopped.\" (English)." + back_note
+        )
+    else:
+        say = (
+            "Stop sent, but his turn has not ended yet. Do NOT say \"Gestoppt\" or \"stopped\". Say: "
+            "\"Stopp ist raus, er hält gleich an.\" or \"Stop sent, he is halting.\"" + back_note
+        )
+    logger.info(
+        "voice_live tool stop_agent agent=%s stopped confirmed=%s taken_back=%d", agent.id, confirmed, back
+    )
+    return VoiceToolResult(
+        output={"stopped": True, "confirmed": confirmed, "taken_back": back, "say": say},
+        stopped=True,
+        taken_back=taken_back,
     )
 
 
@@ -273,6 +425,8 @@ async def run_tool(
         voice_live_tools.take_rate(call, body.name)
         if body.name == "send_to_agent":
             return await _send_to_agent(agent, call, body)
+        if body.name == "stop_agent":
+            return await _stop_agent(agent, body)
         return await _get_agent_status(agent, session)
     except VoiceToolError as exc:
         return _tool_error(exc)

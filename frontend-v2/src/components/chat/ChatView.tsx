@@ -642,6 +642,15 @@ export function ChatView({
     api.chat.sendKeys(agent.id, ["Escape"]).catch(() => notify.error(t("stopActionFailed")));
   }
 
+  /** The voice stopped the turn (voice PR 4). MC already took the queue
+   *  back from the daemon (`takenBack`, `null` when it could not or the
+   *  agent is a TUI); drop the local queued rows and refill the composer. */
+  function handleVoiceStopped(takenBack: string[] | null) {
+    if (takenBack === null) return;
+    stream.withdrawQueued();
+    if (takenBack.length > 0) setComposerPrefill({ text: takenBack.join("\n\n"), at: Date.now() });
+  }
+
   /** Takes the follow-ups a headless agent's daemon still holds back and
    *  drops their local rows — only once the daemon has answered. `null` when
    *  it could not: the rows stay (the daemon still holds the messages) and,
@@ -1296,6 +1305,8 @@ export function ChatView({
                 prompt={prompt}
                 onAnswer={handleAnswer}
                 onShowTerminal={() => onCenterViewChange("terminal")}
+                // The voice asks for a tap; the card shows where (voice PR 4).
+                attention={voiceCallActive}
               />
             </div>
           )}
@@ -1332,6 +1343,9 @@ export function ChatView({
                   agentName={agent.name}
                   // Delivered by MC already — only the echo, no second send.
                   onForwarded={(text, midTurn) => stream.echoSent(text, midTurn)}
+                  // Stopped by voice: same aftermath as the Stop button —
+                  // the follow-ups the daemon held go back into the composer.
+                  onStopped={handleVoiceStopped}
                   progress={voiceProgress}
                 >
                 {(voiceSlot) => (

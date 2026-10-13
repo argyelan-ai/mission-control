@@ -2171,10 +2171,18 @@ export const api = {
     tool: (body: {
       call_ref: string;
       agent_id: string;
-      name: "send_to_agent" | "get_agent_status";
+      name: "send_to_agent" | "get_agent_status" | "stop_agent";
       arguments: Record<string, unknown>;
       transcript: string;
-    }): Promise<{ output: Record<string, unknown>; sent_text: string | null; mid_turn: boolean }> =>
+    }): Promise<{
+      output: Record<string, unknown>;
+      sent_text: string | null;
+      mid_turn: boolean;
+      /** `stop_agent` (voice PR 4): the stop went out. */
+      stopped?: boolean;
+      /** `stop_agent` on a headless agent: follow-ups taken back, oldest first. */
+      taken_back?: string[] | null;
+    }> =>
       request("/api/v1/voice/live/tool", { method: "POST", body: JSON.stringify(body) }),
     /** One redacted progress line for the voice (voice PR 3). The browser
      *  says WHEN (milestone), MC says WHAT (redacted, shortened). */

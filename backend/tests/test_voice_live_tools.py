@@ -166,8 +166,8 @@ async def test_text_and_transcript_length_caps(auth_client, voice_on, make_agent
         URL, json=_send(agent, ref, transcript="x" * (voice_live_tools.MAX_TRANSCRIPT_CHARS + 1))
     )
     assert r.status_code == 422
-    r = await auth_client.post(URL, json={**_send(agent, ref), "name": "stop_agent"})
-    assert r.status_code == 422  # no such tool: stopping is PR 4
+    r = await auth_client.post(URL, json={**_send(agent, ref), "name": "press_keys"})
+    assert r.status_code == 422  # no such tool: the voice never presses keys
     assert acp.calls == []
 
 

@@ -6,7 +6,7 @@ and hands the answer back as ``function_call_output``. Nothing about an
 agent (token, pane, transcript) ever travels to the browser for this; the
 browser only carries the operator's own words and our short answers.
 
-Two tools, both bound to ONE call (``call_ref`` from ``POST /session``):
+Three tools, all bound to ONE call (``call_ref`` from ``POST /session``):
 
 ``send_to_agent(text)``
     Types a chat message into THIS chat's agent through the chat's own input
@@ -25,7 +25,15 @@ Two tools, both bound to ONE call (``call_ref`` from ``POST /session``):
     read from MC's own state. Read-only: the agent is not asked and not
     disturbed. Tool OUTPUTS are never part of it.
 
-Guards (pinned by ``tests/test_voice_live_tools.py``): call must be known,
+``stop_agent()`` (voice PR 4)
+    Cancels the running turn through the chat Stop button's own path —
+    only when the operator's LAST utterance, verbatim, is a stop command as a
+    whole (``is_stop_command``). The model calling the tool is not enough:
+    the router re-checks the words it was handed and refuses otherwise
+    ("Stopp den Container" is a request to pass on, never a cancel).
+
+Guards (pinned by ``tests/test_voice_live_tools.py`` and
+``tests/test_voice_live_stop.py``): call must be known,
 unexpired and opened for this very agent; per-call rate limits; length caps;
 an identical send within ``DUPLICATE_WINDOW_S`` is dropped (the model
 sometimes repeats a call).
@@ -72,9 +80,14 @@ RATE_WINDOW_S = 60.0
 #: requests a minute at most; more is a loop in the model. ``progress`` is
 #: the browser's context feed (voice PR 3): milestones plus at most one
 #: heartbeat per 15 s — 40 a minute is a runaway, not a busy agent.
-RATE_LIMITS = {"send_to_agent": 6, "get_agent_status": 20, "progress": 40}
+RATE_LIMITS = {"send_to_agent": 6, "get_agent_status": 20, "stop_agent": 6, "progress": 40}
 
-TOOL_NAMES = ("send_to_agent", "get_agent_status")
+TOOL_NAMES = ("send_to_agent", "get_agent_status", "stop_agent")
+
+#: After a stop, how long MC watches for the turn to end before it answers
+#: "stop sent, not confirmed yet" instead of "stopped".
+STOP_CONFIRM_S = 4.0
+STOP_POLL_S = 0.5
 
 
 class VoiceToolError(Exception):
@@ -192,6 +205,88 @@ def compose_message(text: str, verbatim: str) -> str:
         lines.append(f"{VERBATIM_LABEL} „{words}“")
     lines.append(VOICE_NOTE)
     return "\n".join(lines)
+
+
+# ── stop command (voice PR 4) ─────────────────────────────────────────────
+
+#: Words that stop on their own. "halt" counts only because the WHOLE
+#: utterance must be stop words ("Das ist halt so" has other words).
+_STOP_WORDS = frozenset({"stopp", "stop", "halt", "abbrechen", "abbruch", "cancel"})
+#: Two-word stop commands, as token pairs.
+_STOP_PAIRS = frozenset({("hör", "auf"), ("hoer", "auf"), ("hor", "auf")})
+#: Politeness and urgency around a stop: "Bitte stopp", "Stop now", "Okay, stopp".
+_STOP_FILLERS = frozenset(
+    {"bitte", "please", "ok", "okay", "jetzt", "now", "sofort", "immediately", "hey", "sofortig", "right"}
+)
+#: An utterance longer than this is a sentence, not a stop command.
+_STOP_MAX_CHARS = 60
+_WORD = re.compile(r"[^\W\d_]+(?:-[^\W\d_]+)*", re.UNICODE)
+
+
+def _tokens(text: str) -> list[str]:
+    return _WORD.findall(unicodedata.normalize("NFKC", text or "").casefold())
+
+
+def _edit_distance(a: str, b: str) -> int:
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def _name_matches(heard: list[str], name: list[str]) -> bool:
+    """The agent's name as heard. Speech-to-text mishears names, so a long
+    name word may be a letter or two off ("Alfa" for "Alpha"); short ones
+    (< 4 letters) must match exactly — "Rey" is not "Rex"."""
+    if not name or len(heard) != len(name):
+        return False
+
+    def close(h: str, n: str) -> bool:
+        if h == n:
+            return True
+        if len(n) < 4:
+            return False
+        return _edit_distance(h, n) <= (1 if len(n) < 5 else 2)
+
+    return all(close(h, n) for h, n in zip(heard, name))
+
+
+def is_stop_command(transcript: str, agent_name: str) -> bool:
+    """True only when the WHOLE utterance is a stop command: stop words
+    ("Stopp", "Stop", "Halt", "Abbrechen", "Hör auf"), optionally with
+    politeness ("bitte", "now") and THIS agent's name at the start or end.
+    Anything else — an object ("Stopp den Container"), a negation ("Stopp
+    nicht"), a question, another agent's name — is not a stop (bauplan B3:
+    "only if the last user utterance as a whole is a stop phrase")."""
+    if not transcript or len(transcript.strip()) > _STOP_MAX_CHARS:
+        return False
+    words = _tokens(transcript)
+    if not words:
+        return False
+    name = _tokens(agent_name)
+    if name and len(words) > len(name):
+        if _name_matches(words[-len(name):], name):
+            words = words[: -len(name)]
+        elif _name_matches(words[: len(name)], name):
+            words = words[len(name):]
+    saw_stop = False
+    i = 0
+    while i < len(words):
+        w = words[i]
+        if w in _STOP_WORDS:
+            saw_stop = True
+            i += 1
+        elif i + 1 < len(words) and (w, words[i + 1]) in _STOP_PAIRS:
+            saw_stop = True
+            i += 2
+        elif w in _STOP_FILLERS:
+            i += 1
+        else:
+            return False
+    return saw_stop
 
 
 # ── status snapshot ──────────────────────────────────────────────────────

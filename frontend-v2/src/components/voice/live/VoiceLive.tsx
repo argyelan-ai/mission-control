@@ -14,11 +14,14 @@
  *   with a "by voice" label (ChatMessage); here the line gets a quiet tick.
  *   While the voice tells the agent's progress on its own (voice PR 3) the
  *   state word says so ("Erzählt Fortschritt") — nothing else changes.
+ *   Mute (voice PR 4) is a symbol toggle next to hang-up: mic track off,
+ *   call open, the state word says "Stumm" and the dot goes grey. The
+ *   agent's own Stop stays the composer's button (one meaning per button).
  */
 
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
-import { Check, Mic, PhoneOff, RotateCcw, X } from "lucide-react";
+import { Check, Mic, MicOff, PhoneOff, RotateCcw, X } from "lucide-react";
 import { C } from "@/lib/colors";
 import { ERROR_MESSAGE_KEY, MAX_CALL_MS, isRetryable, type VoiceLiveStatus } from "./voiceLiveCore";
 import { browserVoiceLiveEnv, useVoiceLive, type VoiceLiveCall, type VoiceLiveEnv } from "./useVoiceLive";
@@ -80,7 +83,9 @@ export function VoiceCallBar({ call, agentName }: { call: VoiceLiveCall; agentNa
   if (call.status === "idle") return null;
   const isError = call.status === "error" && call.error !== null;
   const stateKey =
-    call.passing && call.status !== "error"
+    call.muted && call.status !== "error"
+      ? "stateMuted"
+      : call.passing && call.status !== "error"
       ? "statePassing"
       : call.narrating && call.status === "speaking"
         ? "stateNarrating"
@@ -92,6 +97,7 @@ export function VoiceCallBar({ call, agentName }: { call: VoiceLiveCall; agentNa
       data-testid="voice-call-bar"
       data-status={call.status}
       data-narrating={call.narrating}
+      data-muted={call.muted}
       className="mx-3 mt-2 md:mx-4 rounded-xl"
       style={{ backgroundColor: C.bgSurface, border: `1px solid ${C.border}` }}
     >
@@ -181,12 +187,31 @@ export function VoiceCallBar({ call, agentName }: { call: VoiceLiveCall; agentNa
         <div className="flex items-center gap-3 px-3 py-2">
           <span
             aria-hidden
-            className={`inline-block w-2 h-2 rounded-full ${call.status === "speaking" ? "motion-safe:animate-pulse" : ""}`}
-            style={{ backgroundColor: call.status === "connecting" ? C.textDim : C.accent }}
+            className={`inline-block w-2 h-2 rounded-full ${
+              call.status === "speaking" && !call.muted ? "motion-safe:animate-pulse" : ""
+            }`}
+            style={{ backgroundColor: call.status === "connecting" || call.muted ? C.textDim : C.accent }}
           />
           <span className="flex-1 text-sm" data-testid="voice-state" style={{ color: C.textPrimary }}>
             {t(stateKey)}
           </span>
+          {call.status !== "connecting" && (
+            <button
+              type="button"
+              onClick={call.toggleMute}
+              aria-pressed={call.muted}
+              aria-label={call.muted ? t("unmute") : t("mute")}
+              title={call.muted ? t("unmute") : t("mute")}
+              data-testid="voice-mute"
+              className="shrink-0 inline-flex items-center justify-center w-11 h-11 md:w-8 md:h-8 rounded-full cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
+              style={{
+                color: call.muted ? C.textPrimary : C.textSecondary,
+                backgroundColor: call.muted ? C.bgHover : undefined,
+              }}
+            >
+              {call.muted ? <MicOff size={17} /> : <Mic size={17} />}
+            </button>
+          )}
           <button
             type="button"
             onClick={call.hangUp}
@@ -213,6 +238,7 @@ export function VoiceLiveDock({
   agentName,
   children,
   onForwarded,
+  onStopped,
   progress,
   env = browserVoiceLiveEnv,
 }: {
@@ -221,13 +247,16 @@ export function VoiceLiveDock({
   children: (voiceSlot: ReactNode) => ReactNode;
   /** The voice passed a message on: echo it in the chat right away. */
   onForwarded?: (text: string, midTurn: boolean) => void;
+  /** The voice stopped the agent's turn (voice PR 4): put the follow-ups
+   *  taken back into the composer, like the Stop button does. */
+  onStopped?: (takenBack: string[] | null) => void;
   /** The chat's live stream, for the voice to listen along (voice PR 3). */
   progress?: ProgressSnapshot;
   env?: VoiceLiveEnv;
 }) {
   const locale = useLocale();
   const enabled = useVoiceLiveEnabled();
-  const call = useVoiceLive(agentId, locale === "de" ? "de" : "en", env, { onForwarded, progress });
+  const call = useVoiceLive(agentId, locale === "de" ? "de" : "en", env, { onForwarded, onStopped, progress });
   const callActive = call.status !== "idle";
   useEffect(() => {
     setVoiceLiveActive(agentId, callActive);
