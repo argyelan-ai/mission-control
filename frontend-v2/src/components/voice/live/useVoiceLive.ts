@@ -30,23 +30,38 @@
  * cancels and truncates only the voice's own answer. Mute turns the mic
  * track off and keeps the call; after `MUTED_MAX_MS` the call hangs up.
  *
+ * Cost and brakes (voice PR 6): every `response.done` carries OpenAI's
+ * token usage; the hook sums it per call and posts the totals to MC
+ * (`POST /api/v1/voice/live/usage`, at most every `USAGE_POST_MS` and once
+ * more when the call ends, whatever ended it). MC books the cost with its
+ * own prices and may answer "hang up" (daily budget, max length). Silence on
+ * both sides for `limits.idle_hangup_s` hangs up; `limits.idle_warn_s`
+ * before, a soft tone plays and the bar says so. Any speech resets it.
+ *
  * Everything the browser offers (getUserMedia, RTCPeerConnection, fetch,
- * isSecureContext) comes through `VoiceLiveEnv`, so tests drive the whole
- * call without a browser.
+ * isSecureContext, a tone) comes through `VoiceLiveEnv`, so tests drive the
+ * whole call without a browser.
  */
 
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import {
+  ACTIVITY_EVENTS,
+  DEFAULT_LIMITS,
   DISCONNECT_GRACE_MS,
   INITIAL_VOICE_STATE,
-  MAX_CALL_MS,
   MUTED_MAX_MS,
+  ZERO_USAGE,
+  addUsage,
   micErrorKind,
+  offerErrorKind,
+  openaiCallId,
   sessionErrorKind,
   voiceLiveReducer,
   type RealtimeServerEvent,
+  type UsageTotals,
   type VoiceLiveErrorKind,
+  type VoiceLiveLimits,
   type VoiceLiveState,
 } from "./voiceLiveCore";
 import {
@@ -76,6 +91,31 @@ export interface VoiceLiveSessionResponse {
   calls_url: string;
   agent_name: string;
   call_ref: string;
+  /** The brakes MC wants for this call (voice PR 6). */
+  limits?: VoiceLiveLimits;
+}
+
+export interface VoiceUsageRequest {
+  call_ref: string;
+  agent_id: string;
+  usage: UsageTotals;
+  ended?: boolean;
+  end_reason?: string;
+  openai_call_id?: string | null;
+}
+
+export interface VoiceUsageResponse {
+  call_cost_usd: number;
+  today_usd: number;
+  budget_usd: number;
+  hang_up: "budget_reached" | "max_length" | null;
+}
+
+/** A soft notice tone. Made inside the tap that starts the call (iOS only
+ *  lets audio play that a gesture began), played before an idle hang-up. */
+export interface WarnTone {
+  play: () => void;
+  close: () => void;
 }
 
 export interface VoiceToolRequest {
@@ -111,6 +151,10 @@ export interface VoiceLiveEnv {
   postOffer: (url: string, secret: string, sdp: string) => Promise<Response>;
   runTool: (body: VoiceToolRequest) => Promise<VoiceToolResponse>;
   progress: (body: { call_ref: string; agent_id: string } & ProgressRequest) => Promise<VoiceProgressResponse>;
+  /** Books the call's token totals in MC (voice PR 6). Optional: without
+   *  it nothing is booked (tests of other parts). */
+  reportUsage?: (body: VoiceUsageRequest) => Promise<VoiceUsageResponse>;
+  createWarnTone?: () => WarnTone | null;
   now: () => number;
   setTimeout: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
   clearTimeout: (id: ReturnType<typeof setTimeout>) => void;
@@ -140,6 +184,40 @@ export const browserVoiceLiveEnv: VoiceLiveEnv = {
     }),
   runTool: (body) => api.voiceLive.tool(body),
   progress: (body) => api.voiceLive.progress(body),
+  reportUsage: (body) => api.voiceLive.usage(body),
+  createWarnTone: () => {
+    if (typeof window === "undefined") return null;
+    const Ctx =
+      window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!Ctx) return null;
+    let ctx: AudioContext;
+    try {
+      ctx = new Ctx();
+    } catch {
+      return null;
+    }
+    return {
+      play: () => {
+        try {
+          void ctx.resume?.();
+          const t = ctx.currentTime;
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = "sine";
+          osc.frequency.value = 660;
+          gain.gain.setValueAtTime(0, t);
+          gain.gain.linearRampToValueAtTime(0.06, t + 0.04);
+          gain.gain.linearRampToValueAtTime(0, t + 0.4);
+          osc.connect(gain).connect(ctx.destination);
+          osc.start(t);
+          osc.stop(t + 0.42);
+        } catch {
+          /* no sound is fine: the bar says it too */
+        }
+      },
+      close: () => void ctx.close?.().catch?.(() => undefined),
+    };
+  },
   now: () => Date.now(),
   setTimeout: (fn, ms) => setTimeout(fn, ms),
   clearTimeout: (id) => clearTimeout(id),
@@ -157,6 +235,8 @@ export interface VoiceLiveCall extends VoiceLiveState {
   dismiss: () => void;
   /** Mic on/off; the call stays open (voice PR 4). */
   toggleMute: () => void;
+  /** The clock `connectedAt` is measured on (the call bar's elapsed time). */
+  now: () => number;
 }
 
 export interface VoiceLiveOptions {
@@ -178,6 +258,9 @@ export const PROGRESS_TICK_MS = 1_000;
 /** After the operator stops talking the model answers by itself; a held
  *  progress update waits this long so it never races that answer. */
 export const AFTER_SPEECH_MS = 1_500;
+/** Usage goes to MC at most this often while a call runs (plus once at the
+ *  end) — often enough for the daily budget, cheap for the backend. */
+export const USAGE_POST_MS = 10_000;
 
 interface Live {
   /** The agent this call talks to — fixed for the call's whole life. */
@@ -218,6 +301,17 @@ interface Live {
   narrating: boolean;
   /** Voice items already corrected by the no-success guard. */
   corrected: Set<string>;
+  // ── cost and brakes (voice PR 6) ──
+  limits: VoiceLiveLimits;
+  usage: UsageTotals;
+  usageDirty: boolean;
+  lastUsagePostAt: number;
+  usageInFlight: boolean;
+  openaiCallId: string | null;
+  idleWarnTimer: ReturnType<typeof setTimeout> | null;
+  idleHangTimer: ReturnType<typeof setTimeout> | null;
+  idleWarned: boolean;
+  tone: WarnTone | null;
 }
 
 export function useVoiceLive(
@@ -240,10 +334,36 @@ export function useVoiceLive(
   // prompt, mint, SDP answer) must not resurrect a call the operator ended.
   const attemptRef = useRef(0);
 
-  const teardown = useCallback(() => {
+  /** Books the call's totals in MC. The final report goes out whatever
+   *  ended the call — hang-up, error, idle, budget — so every call is booked. */
+  const postUsage = useCallback(
+    (live: Live, final: { reason: string } | null) => {
+      if (!env.reportUsage || !live.callRef) return undefined;
+      live.usageDirty = false;
+      live.lastUsagePostAt = env.now();
+      const body: VoiceUsageRequest = {
+        call_ref: live.callRef,
+        agent_id: live.agentId,
+        usage: { ...live.usage },
+        ...(live.openaiCallId ? { openai_call_id: live.openaiCallId } : {}),
+        ...(final ? { ended: true, end_reason: final.reason } : {}),
+      };
+      return env.reportUsage(body).catch(() => null);
+    },
+    [env],
+  );
+
+  const teardown = useCallback((reason = "hangup") => {
     const live = liveRef.current;
     liveRef.current = null;
     if (!live) return;
+    void postUsage(live, { reason });
+    live.tone?.close();
+    live.tone = null;
+    if (live.idleWarnTimer) env.clearTimeout(live.idleWarnTimer);
+    if (live.idleHangTimer) env.clearTimeout(live.idleHangTimer);
+    live.idleWarnTimer = null;
+    live.idleHangTimer = null;
     live.timers.forEach((t) => env.clearTimeout(t));
     if (live.disconnectTimer) env.clearTimeout(live.disconnectTimer);
     if (live.muteTimer) env.clearTimeout(live.muteTimer);
@@ -265,7 +385,63 @@ export function useVoiceLive(
     live.pc.close();
     live.audio.srcObject = null;
     live.waiters = [];
-  }, [env]);
+  }, [env, postUsage]);
+
+  const fail = useCallback(
+    (error: VoiceLiveErrorKind) => {
+      attemptRef.current += 1;
+      teardown(error);
+      dispatch({ type: "fail", error });
+    },
+    [teardown],
+  );
+  const failRef = useRef(fail);
+  failRef.current = fail;
+
+  /** Idle brake: (re)armed whenever someone stops talking; off while anyone
+   *  talks. Warning first (tone + notice), then hang up. */
+  const armIdle = useCallback(
+    (live: Live) => {
+      if (liveRef.current !== live) return;
+      if (live.idleWarnTimer) env.clearTimeout(live.idleWarnTimer);
+      if (live.idleHangTimer) env.clearTimeout(live.idleHangTimer);
+      live.idleWarnTimer = null;
+      live.idleHangTimer = null;
+      if (live.idleWarned) {
+        live.idleWarned = false;
+        dispatch({ type: "idle_warning", on: false });
+      }
+      if (live.userSpeaking || live.voicePlaying) return;
+      const { idle_hangup_s: hang, idle_warn_s: warn } = live.limits;
+      if (warn > 0 && warn < hang) {
+        live.idleWarnTimer = env.setTimeout(() => {
+          if (liveRef.current !== live) return;
+          live.idleWarned = true;
+          dispatch({ type: "idle_warning", on: true });
+          live.tone?.play();
+        }, (hang - warn) * 1000);
+      }
+      live.idleHangTimer = env.setTimeout(() => {
+        if (liveRef.current === live) failRef.current("idle");
+      }, hang * 1000);
+    },
+    [env],
+  );
+
+  /** Posts the running totals now and acts on MC's answer. */
+  const flushUsage = useCallback(
+    (live: Live) => {
+      if (live.usageInFlight || !env.reportUsage) return;
+      live.usageInFlight = true;
+      void Promise.resolve(postUsage(live, null)).then((res) => {
+        live.usageInFlight = false;
+        if (liveRef.current !== live || !res) return;
+        if (res.hang_up === "budget_reached") failRef.current("budget_reached");
+        else if (res.hang_up === "max_length") failRef.current("max_length");
+      });
+    },
+    [env, postUsage],
+  );
 
   const sendEvent = useCallback((live: Live, event: object) => {
     if (liveRef.current !== live || live.dc.readyState !== "open") return;
@@ -353,6 +529,7 @@ export function useVoiceLive(
     if (liveRef.current !== live || !live.connected) return;
     for (const m of live.tracker.tick(env.now())) deliver(live, m);
     flushSpeak(live);
+    if (live.usageDirty && env.now() - live.lastUsagePostAt >= USAGE_POST_MS) flushUsage(live);
     live.tickTimer = env.setTimeout(() => tickRef.current(live), PROGRESS_TICK_MS);
   };
 
@@ -473,6 +650,10 @@ export function useVoiceLive(
           }
           break;
         case "response.done":
+          if (ev.response?.usage) {
+            live.usage = addUsage(live.usage, ev.response.usage);
+            live.usageDirty = true;
+          }
           live.responseActive = false;
           if (live.narrating) {
             live.narrating = false;
@@ -499,23 +680,16 @@ export function useVoiceLive(
           }
           break;
       }
+      if (ACTIVITY_EVENTS.has(ev.type)) armIdle(live);
       const fc = functionCallFromEvent(ev);
       if (fc && !live.seenCalls.has(fc.callId)) {
         live.seenCalls.add(fc.callId);
         live.toolChain = live.toolChain.then(() => runCall(live, fc)).catch(() => undefined);
       }
     },
-    [env, requestResponse, runCall, flushSpeak, deliver],
+    [env, requestResponse, runCall, flushSpeak, deliver, armIdle],
   );
 
-  const fail = useCallback(
-    (error: VoiceLiveErrorKind) => {
-      attemptRef.current += 1;
-      teardown();
-      dispatch({ type: "fail", error });
-    },
-    [teardown],
-  );
 
   const start = useCallback(async (override?: string) => {
     const target = override || agentId;
@@ -529,6 +703,12 @@ export function useVoiceLive(
     }
     // Created inside the tap handler so iOS lets it play later.
     const audio = env.createAudioElement();
+    let tone: WarnTone | null = null;
+    try {
+      tone = env.createWarnTone?.() ?? null;
+    } catch {
+      tone = null;
+    }
 
     let stream: MediaStream;
     try {
@@ -536,12 +716,14 @@ export function useVoiceLive(
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
     } catch (err) {
+      tone?.close();
       if (attempt === attemptRef.current) dispatch({ type: "fail", error: micErrorKind(err) });
       return;
     }
     const stale = () => {
       if (attempt === attemptRef.current) return false;
       stream.getTracks().forEach((t) => t.stop());
+      tone?.close();
       return true;
     };
     if (stale()) return;
@@ -551,6 +733,7 @@ export function useVoiceLive(
       session = await env.mintSession(target, lang);
     } catch (err) {
       stream.getTracks().forEach((t) => t.stop());
+      tone?.close();
       if (attempt === attemptRef.current) dispatch({ type: "fail", error: sessionErrorKind(err) });
       return;
     }
@@ -564,6 +747,7 @@ export function useVoiceLive(
     } catch {
       // No (usable) WebRTC in this browser: end honestly, release the mic.
       stream.getTracks().forEach((t) => t.stop());
+      tone?.close();
       dispatch({ type: "fail", error: "unavailable" });
       return;
     }
@@ -596,8 +780,19 @@ export function useVoiceLive(
       narrateNext: false,
       narrating: false,
       corrected: new Set(),
+      limits: session.limits ?? DEFAULT_LIMITS,
+      usage: ZERO_USAGE,
+      usageDirty: false,
+      lastUsagePostAt: env.now(),
+      usageInFlight: false,
+      openaiCallId: null,
+      idleWarnTimer: null,
+      idleHangTimer: null,
+      idleWarned: false,
+      tone,
     };
     liveRef.current = live;
+    dispatch({ type: "limits", limits: live.limits });
 
     pc.ontrack = (e) => {
       audio.srcObject = e.streams[0] ?? null;
@@ -611,7 +806,8 @@ export function useVoiceLive(
     }
     dc.onopen = () => {
       if (liveRef.current !== live) return;
-      dispatch({ type: "connected" });
+      dispatch({ type: "connected", at: env.now() });
+      armIdle(live);
       // Listening along starts here: baseline of the chat as it is now, then
       // the progress clock.
       live.connected = true;
@@ -650,7 +846,7 @@ export function useVoiceLive(
     live.timers.push(
       env.setTimeout(() => {
         if (liveRef.current === live) fail("max_length");
-      }, MAX_CALL_MS),
+      }, live.limits.max_call_s * 1000),
     );
 
     try {
@@ -659,8 +855,16 @@ export function useVoiceLive(
       const resp = await env.postOffer(session.calls_url, session.client_secret, offer.sdp ?? "");
       if (liveRef.current !== live) return;
       if (!resp.ok) {
-        fail(resp.status === 429 ? "rate_limited" : "unavailable");
+        const kind = await offerErrorKind(resp);
+        if (liveRef.current === live) fail(kind);
         return;
+      }
+      // OpenAI's id for this call, when the browser may read it: MC then
+      // hangs up server-side at max length or budget (voice PR 6).
+      try {
+        live.openaiCallId = openaiCallId(resp.headers?.get?.("Location"));
+      } catch {
+        live.openaiCallId = null;
       }
       const answer = await resp.text();
       if (liveRef.current !== live) return;
@@ -668,11 +872,11 @@ export function useVoiceLive(
     } catch {
       if (liveRef.current === live) fail("network");
     }
-  }, [agentId, lang, env, teardown, fail, onToolEvent, observeProgress]);
+  }, [agentId, lang, env, teardown, fail, onToolEvent, observeProgress, armIdle]);
 
   const hangUp = useCallback(() => {
     attemptRef.current += 1;
-    teardown();
+    teardown("hangup");
     dispatch({ type: "hangup" });
   }, [teardown]);
 
@@ -710,9 +914,9 @@ export function useVoiceLive(
   useEffect(() => {
     if (state.status === "error" && liveRef.current) {
       attemptRef.current += 1;
-      teardown();
+      teardown(state.error ?? "unavailable");
     }
-  }, [state.status, teardown]);
+  }, [state.status, state.error, teardown]);
 
   // Switching the hook's agent or unmounting ends the call. Since voice PR 5
   // the hook lives in the app-wide VoiceLiveCallProvider (AppShell), which
@@ -721,10 +925,10 @@ export function useVoiceLive(
   useEffect(() => {
     return () => {
       attemptRef.current += 1;
-      teardown();
+      teardown("closed");
       dispatch({ type: "hangup" });
     };
   }, [agentId, teardown]);
 
-  return { ...state, start, hangUp, dismiss, toggleMute, agentId: callAgent };
+  return { ...state, start, hangUp, dismiss, toggleMute, agentId: callAgent, now: env.now };
 }

@@ -22,6 +22,11 @@
  *
  * Jarvis (LiveKit, `VoiceWidget.tsx`) is untouched; it only moved from the
  * navigation mic into the menus (QuickSheet, command palette).
+ *
+ * Cost (voice PR 6): when the daily budget is used up, every mic says so
+ * ("Tagesbudget erreicht") and MC refuses new calls; the config is fetched
+ * again after each call, so the mics learn it without a reload. Both bars
+ * show the call's elapsed time and the idle warning.
  */
 
 import {
@@ -39,12 +44,12 @@ import { useLocale, useTranslations } from "next-intl";
 import { PhoneOff, RotateCcw, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
-import { C } from "@/lib/colors";
+import { C, STATUS_TEXT } from "@/lib/colors";
 import { chatEntryHref } from "@/lib/chatHistory";
 import { useChatStream } from "@/hooks/useChatStream";
-import { ERROR_MESSAGE_KEY, MAX_CALL_MS, isRetryable, type VoiceLiveStatus } from "./voiceLiveCore";
+import { ERROR_MESSAGE_KEY, formatElapsed, isRetryable, type VoiceLiveStatus } from "./voiceLiveCore";
 import { browserVoiceLiveEnv, useVoiceLive, type VoiceLiveCall, type VoiceLiveEnv } from "./useVoiceLive";
-import { useVoiceLiveEnabled } from "./useVoiceLiveConfig";
+import { refreshVoiceLiveConfig, useVoiceLiveConfig } from "./useVoiceLiveConfig";
 import type { ProgressSnapshot } from "./progress";
 import { setVoiceLiveActive } from "./voiceLiveActivity";
 
@@ -66,6 +71,8 @@ export interface DockHandlers {
 export interface VoiceLiveCallContextValue {
   /** The backend has the live voice on (`VOICE_LIVE_ENABLED` + key). */
   enabled: boolean;
+  /** Today's voice budget is used up: MC refuses new calls (voice PR 6). */
+  budgetReached: boolean;
   call: VoiceLiveCall;
   /** A call is open, connecting or shows its error. */
   active: boolean;
@@ -163,7 +170,9 @@ export function VoiceLiveCallProvider({
   resolveLead?: boolean;
 }) {
   const locale = useLocale();
-  const enabled = useVoiceLiveEnabled();
+  const config = useVoiceLiveConfig();
+  const enabled = config !== null;
+  const budgetReached = config?.budget?.reached === true;
   const lead = useLeadTarget(enabled && resolveLead);
   const [target, setTarget] = useState<VoiceTarget | null>(null);
   const [progress, setProgress] = useState<ProgressSnapshot | undefined>(undefined);
@@ -226,11 +235,21 @@ export function VoiceLiveCallProvider({
     return () => setVoiceLiveActive(callAgentId, false);
   }, [callAgentId]);
 
+  // A call cost money (or was refused for the budget): ask MC again, so
+  // every mic shows "budget reached" without a reload.
+  const wasActive = useRef(false);
+  useEffect(() => {
+    if (!enabled) return;
+    const ended = wasActive.current && (!active || call.status === "error");
+    wasActive.current = active && call.status !== "error";
+    if (ended) void refreshVoiceLiveConfig();
+  }, [enabled, active, call.status]);
+
   const docked = callAgentId !== null && docks.includes(callAgentId);
 
   const value = useMemo<VoiceLiveCallContextValue>(
-    () => ({ enabled, call, active, target, lead, startCall, registerDock, feedProgress, docks }),
-    [enabled, call, active, target, lead, startCall, registerDock, feedProgress, docks],
+    () => ({ enabled, budgetReached, call, active, target, lead, startCall, registerDock, feedProgress, docks }),
+    [enabled, budgetReached, call, active, target, lead, startCall, registerDock, feedProgress, docks],
   );
 
   return (
@@ -250,6 +269,42 @@ const STATE_KEY: Record<Exclude<VoiceLiveStatus, "idle">, string> = {
   error: "stateEnded",
 };
 
+/** The call's elapsed time (`m:ss`), ticking once a second while connected. */
+export function CallClock({ call }: { call: VoiceLiveCall }) {
+  const since = call.connectedAt;
+  const now = call.now;
+  const [elapsed, setElapsed] = useState(() => (since === null ? 0 : now() - since));
+  const live = since !== null && call.status !== "error" && call.status !== "idle";
+  useEffect(() => {
+    if (since === null) return;
+    setElapsed(now() - since);
+    if (!live) return;
+    const id = setInterval(() => setElapsed(now() - since), 1000);
+    return () => clearInterval(id);
+  }, [since, now, live]);
+  if (since === null) return null;
+  return (
+    <span
+      data-testid="voice-elapsed"
+      className="shrink-0 font-mono text-xs tabular-nums"
+      style={{ color: C.textMuted }}
+    >
+      {formatElapsed(elapsed)}
+    </span>
+  );
+}
+
+/** i18n key + values of an error, with the call's own limits filled in. */
+export function errorText(
+  t: (key: string, values?: Record<string, string>) => string,
+  call: VoiceLiveCall,
+): string {
+  return t(ERROR_MESSAGE_KEY[call.error!], {
+    minutes: String(Math.round(call.limits.max_call_s / 60)),
+    seconds: String(call.limits.idle_hangup_s),
+  });
+}
+
 /**
  * One row for a call whose chat is not on screen: who, what state, a way to
  * its chat, hang up. In-flow inside another chat; floating otherwise.
@@ -267,7 +322,9 @@ export function VoiceCallCompact({
   if (call.status === "idle") return null;
   const isError = call.status === "error" && call.error !== null;
   const stateKey =
-    call.muted && call.status !== "error"
+    call.idleWarning && call.status !== "error"
+      ? "stateIdleWarning"
+      : call.muted && call.status !== "error"
       ? "stateMuted"
       : call.passing && call.status !== "error"
       ? "statePassing"
@@ -286,7 +343,7 @@ export function VoiceCallCompact({
       {isError ? (
         <>
           <div role="alert" className="flex-1 min-w-0 text-sm" style={{ color: C.textPrimary }}>
-            {t(ERROR_MESSAGE_KEY[call.error!], { minutes: String(MAX_CALL_MS / 60_000) })}
+            {errorText(t, call)}
           </div>
           {isRetryable(call.error!) && (
             <button
@@ -322,10 +379,14 @@ export function VoiceCallCompact({
           <span className="flex-1 min-w-0 truncate text-sm" aria-live="polite">
             <span style={{ color: C.textPrimary, fontWeight: 500 }}>{target.agentName}</span>
             <span style={{ color: C.textMuted }}> · </span>
-            <span data-testid="voice-compact-state" style={{ color: C.textSecondary }}>
-              {t(stateKey)}
+            <span
+              data-testid="voice-compact-state"
+              style={{ color: call.idleWarning ? STATUS_TEXT.warning : C.textSecondary }}
+            >
+              {t(stateKey, { seconds: String(call.limits.idle_warn_s) })}
             </span>
           </span>
+          <CallClock call={call} />
           {showOpen && (
             <Link
               href={chatEntryHref("agent", target.agentId)}

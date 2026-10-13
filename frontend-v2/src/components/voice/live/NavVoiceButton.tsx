@@ -12,6 +12,8 @@
  *
  * While a call runs (with any agent) the mic shows it; a tap opens that
  * call's chat, where the call docks — it never starts a second call.
+ * With today's voice budget used up (voice PR 6) it is greyed and says so;
+ * a tap still tries, and MC's refusal shows in the call bar.
  */
 
 import { useRouter } from "next/navigation";
@@ -46,7 +48,12 @@ export function NavVoiceButton({
   }
 
   const callTarget = ctx.active ? ctx.target : null;
-  const label = callTarget ? t("navMicActive", { name: callTarget.agentName }) : t("navMic", { name: lead.agentName });
+  const budgetReached = !callTarget && ctx.budgetReached;
+  const label = callTarget
+    ? t("navMicActive", { name: callTarget.agentName })
+    : budgetReached
+      ? t("micBudgetReached")
+      : t("navMic", { name: lead.agentName });
   const onClick = () => {
     if (callTarget) router.push(chatEntryHref("agent", callTarget.agentId));
     else ctx.startCall(lead);
@@ -61,6 +68,7 @@ export function NavVoiceButton({
       data-testid="nav-voice-button"
       data-target={lead.agentId}
       data-active={callTarget !== null}
+      data-budget-reached={budgetReached}
       className="flex items-center justify-center rounded-full cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
       style={{
         width: size,
@@ -73,7 +81,7 @@ export function NavVoiceButton({
           : variant === "sidebar"
             ? "1px solid var(--color-p2-line)"
             : "1px solid transparent",
-        color: callTarget ? C.textPrimary : "var(--color-text-secondary)",
+        color: callTarget ? C.textPrimary : budgetReached ? C.textDim : "var(--color-text-secondary)",
       }}
     >
       <Mic size={Math.round(size * 0.5)} />

@@ -17,17 +17,24 @@
  *   Mute (voice PR 4) is a symbol toggle next to hang-up: mic track off,
  *   call open, the state word says "Stumm" and the dot goes grey. The
  *   agent's own Stop stays the composer's button (one meaning per button).
+ * - Cost and brakes (voice PR 6): the bar shows the call's elapsed time next
+ *   to the state word. After a stretch of silence a notice ("Stille — Auflegen
+ *   in 15 s") replaces the state word and a soft tone plays; any speech
+ *   clears it. With today's budget used up the mic is greyed and says so —
+ *   still tappable, so the operator reads why (MC refuses the call).
  */
 
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Check, Mic, MicOff, PhoneOff, RotateCcw, X } from "lucide-react";
-import { C } from "@/lib/colors";
-import { ERROR_MESSAGE_KEY, MAX_CALL_MS, isRetryable, type VoiceLiveStatus } from "./voiceLiveCore";
+import { C, STATUS_TEXT } from "@/lib/colors";
+import { isRetryable, type VoiceLiveStatus } from "./voiceLiveCore";
 import { browserVoiceLiveEnv, type VoiceLiveCall, type VoiceLiveEnv } from "./useVoiceLive";
 import type { ProgressSnapshot } from "./progress";
 import {
+  CallClock,
   VoiceCallCompact,
+  errorText,
   VoiceLiveCallProvider,
   useVoiceLiveCall,
   type VoiceLiveCallContextValue,
@@ -43,14 +50,18 @@ const STATE_KEY: Record<Exclude<VoiceLiveStatus, "idle">, string> = {
 export function VoiceMicButton({
   agentName,
   secure,
+  budgetReached = false,
   onStart,
 }: {
   agentName: string;
   secure: boolean;
+  /** Today's voice budget is used up (voice PR 6). */
+  budgetReached?: boolean;
   onStart: () => void;
 }) {
   const t = useTranslations("voiceLive");
-  const label = secure ? t("micStart", { name: agentName }) : t("micInsecure");
+  const label = !secure ? t("micInsecure") : budgetReached ? t("micBudgetReached") : t("micStart", { name: agentName });
+  const dim = !secure || budgetReached;
   return (
     <button
       type="button"
@@ -59,8 +70,9 @@ export function VoiceMicButton({
       title={label}
       data-testid="voice-mic-button"
       data-secure={secure}
+      data-budget-reached={budgetReached}
       className="shrink-0 inline-flex items-center justify-center w-11 h-11 md:w-8 md:h-8 rounded-full cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
-      style={{ color: secure ? C.textSecondary : C.textDim }}
+      style={{ color: dim ? C.textDim : C.textSecondary }}
     >
       <Mic size={17} />
     </button>
@@ -87,7 +99,9 @@ export function VoiceCallBar({ call, agentName }: { call: VoiceLiveCall; agentNa
   if (call.status === "idle") return null;
   const isError = call.status === "error" && call.error !== null;
   const stateKey =
-    call.muted && call.status !== "error"
+    call.idleWarning && call.status !== "error"
+      ? "stateIdleWarning"
+      : call.muted && call.status !== "error"
       ? "stateMuted"
       : call.passing && call.status !== "error"
       ? "statePassing"
@@ -102,6 +116,7 @@ export function VoiceCallBar({ call, agentName }: { call: VoiceLiveCall; agentNa
       data-status={call.status}
       data-narrating={call.narrating}
       data-muted={call.muted}
+      data-idle-warning={call.idleWarning}
       className="mx-3 mt-2 md:mx-4 rounded-xl"
       style={{ backgroundColor: C.bgSurface, border: `1px solid ${C.border}` }}
     >
@@ -161,7 +176,7 @@ export function VoiceCallBar({ call, agentName }: { call: VoiceLiveCall; agentNa
       {isError ? (
         <div className="flex items-center gap-2 px-3 py-2" role="alert" data-testid="voice-error" data-error={call.error}>
           <div className="flex-1 text-sm" style={{ color: C.textPrimary }}>
-            {t(ERROR_MESSAGE_KEY[call.error!], { minutes: String(MAX_CALL_MS / 60_000) })}
+            {errorText(t, call)}
           </div>
           {isRetryable(call.error!) && (
             <button
@@ -196,9 +211,15 @@ export function VoiceCallBar({ call, agentName }: { call: VoiceLiveCall; agentNa
             }`}
             style={{ backgroundColor: call.status === "connecting" || call.muted ? C.textDim : C.accent }}
           />
-          <span className="flex-1 text-sm" data-testid="voice-state" style={{ color: C.textPrimary }}>
-            {t(stateKey)}
+          <span
+            className="flex-1 min-w-0 text-sm"
+            data-testid="voice-state"
+            role={call.idleWarning ? "status" : undefined}
+            style={{ color: call.idleWarning ? STATUS_TEXT.warning : C.textPrimary }}
+          >
+            {t(stateKey, { seconds: String(call.limits.idle_warn_s) })}
           </span>
+          <CallClock call={call} />
           {call.status !== "connecting" && (
             <button
               type="button"
@@ -283,7 +304,7 @@ function DockInner({
   env = browserVoiceLiveEnv,
   ctx,
 }: VoiceLiveDockProps & { ctx: VoiceLiveCallContextValue }) {
-  const { enabled, call, active, target, startCall, registerDock, feedProgress } = ctx;
+  const { enabled, budgetReached, call, active, target, startCall, registerDock, feedProgress } = ctx;
 
   // Stable registration: the chat hands fresh arrows every render.
   const forwardRef = useRef(onForwarded);
@@ -323,6 +344,7 @@ function DockInner({
     <VoiceMicButton
       agentName={agentName}
       secure={secure}
+      budgetReached={budgetReached}
       onStart={() => startCall({ agentId, agentName })}
     />
   ) : null;

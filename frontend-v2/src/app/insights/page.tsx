@@ -7,6 +7,7 @@
  *   3. Where does the usage come from?                                 (sources)
  *   4. Is the local share going the right way?                         (trend)
  *      How much ran on the local boxes, and how much of it bypassed MC?  (box)
+ *      What did the live voice cost, today and this week?               (voice)
  *   5. What got done?                                                  (done)
  * Everything the old tabs showed lives folded away in "Details".
  * Days and weeks are counted in the browser's time zone.
@@ -23,6 +24,7 @@ import { UsageHeatmap } from "@/components/insights/UsageHeatmap";
 import { SourceSplit } from "@/components/insights/SourceSplit";
 import { LocalShareTrend } from "@/components/insights/LocalShareTrend";
 import { BoxTokens } from "@/components/insights/BoxTokens";
+import { VoiceUsage } from "@/components/insights/VoiceUsage";
 import { DoneSummary } from "@/components/insights/DoneSummary";
 import { InsightsDetails } from "@/components/insights/InsightsDetails";
 
@@ -87,6 +89,7 @@ export default function InsightsPage() {
               <SourceSplit week={weeks[weeks.length - 1]} />
               <LocalShareTrend weeks={weeks} />
               <BoxTokens week={weeks[weeks.length - 1]} since={byWeek.data.box_tracking_since} />
+              <VoiceUsage />
             </div>
           </>
         )}

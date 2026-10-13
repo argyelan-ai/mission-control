@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  ZERO_USAGE,
+  addUsage,
+  formatElapsed,
+  offerErrorKind,
+  openaiCallId,
   INITIAL_VOICE_STATE,
   MAX_TRANSCRIPT_LINES,
   isRetryable,
@@ -147,5 +152,63 @@ describe("error mapping", () => {
     expect(isRetryable("mic_denied")).toBe(false);
     expect(isRetryable("insecure")).toBe(false);
     expect(isRetryable("no_credits")).toBe(false);
+  });
+});
+
+describe("cost and brakes (voice PR 6)", () => {
+  it("addUsage sums tokens; a cached count without split goes to text first", () => {
+    const one = addUsage(ZERO_USAGE, {
+      input_token_details: { text_tokens: 900, audio_tokens: 300, cached_tokens: 1000 },
+      output_token_details: { text_tokens: 20, audio_tokens: 400 },
+    });
+    expect(one).toEqual({
+      input_text_tokens: 900,
+      input_audio_tokens: 300,
+      cached_text_tokens: 900,
+      cached_audio_tokens: 100,
+      output_text_tokens: 20,
+      output_audio_tokens: 400,
+    });
+    expect(addUsage(one, null)).toBe(one);
+    // Garbage from the wire never goes negative or fractional.
+    expect(addUsage(ZERO_USAGE, { output_token_details: { audio_tokens: -5, text_tokens: 2.7 } })).toEqual({
+      ...ZERO_USAGE,
+      output_text_tokens: 2,
+    });
+  });
+
+  it("openaiCallId reads only a real rtc_ id from the Location header", () => {
+    expect(openaiCallId("/v1/realtime/calls/rtc_abc-123")).toBe("rtc_abc-123");
+    expect(openaiCallId("https://api.openai.com/v1/realtime/calls/rtc_x?y=1")).toBe("rtc_x");
+    expect(openaiCallId(null)).toBeNull();
+    expect(openaiCallId("/v1/realtime/calls/../files")).toBeNull();
+  });
+
+  it("offerErrorKind tells quota from rate limit", async () => {
+    const r = (status: number, body: object) => new Response(JSON.stringify(body), { status });
+    expect(await offerErrorKind(r(429, { error: { code: "insufficient_quota" } }))).toBe("no_credits");
+    expect(await offerErrorKind(r(429, { error: { code: "rate_limit_exceeded" } }))).toBe("rate_limited");
+    expect(await offerErrorKind(new Response("nope", { status: 429 }))).toBe("rate_limited");
+    expect(await offerErrorKind(r(500, {}))).toBe("unavailable");
+  });
+
+  it("budget_reached from MC is its own, non-retryable error; idle may retry", () => {
+    expect(sessionErrorKind(new Error('API 402: {"detail":{"reason":"budget_reached"}}'))).toBe("budget_reached");
+    expect(isRetryable("budget_reached")).toBe(false);
+    expect(isRetryable("idle")).toBe(true);
+  });
+
+  it("idle warning only while a call runs; a failure clears it", () => {
+    let s = voiceLiveReducer(live(), { type: "idle_warning", on: true });
+    expect(s.idleWarning).toBe(true);
+    s = voiceLiveReducer(s, { type: "fail", error: "idle" });
+    expect(s.idleWarning).toBe(false);
+    expect(voiceLiveReducer(INITIAL_VOICE_STATE, { type: "idle_warning", on: true }).idleWarning).toBe(false);
+  });
+
+  it("formatElapsed is m:ss", () => {
+    expect(formatElapsed(0)).toBe("0:00");
+    expect(formatElapsed(65_400)).toBe("1:05");
+    expect(formatElapsed(20 * 60_000)).toBe("20:00");
   });
 });

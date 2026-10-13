@@ -19,7 +19,9 @@ export type VoiceLiveErrorKind =
   | "rate_limited"
   | "unavailable"
   | "max_length"
-  | "muted_too_long";
+  | "muted_too_long"
+  | "idle"
+  | "budget_reached";
 
 export interface TranscriptLine {
   /** Realtime item id — deltas and the final text of one utterance merge on it. */
@@ -41,7 +43,33 @@ export interface VoiceLiveState {
   narrating: boolean;
   /** The operator's mic track is off; the call stays open (voice PR 4). */
   muted: boolean;
+  /** Nobody spoke for a while: the call hangs up soon unless someone talks
+   *  (voice PR 6). */
+  idleWarning: boolean;
+  /** `env.now()` when the data channel opened — the call bar's clock. */
+  connectedAt: number | null;
+  /** This call's brakes, from MC (session response; defaults until then). */
+  limits: VoiceLiveLimits;
 }
+
+/** The brakes MC hands the browser (`limits` in the session response,
+ *  settings `VOICE_LIVE_IDLE_HANGUP_S` / `_IDLE_WARN_S` / `_MAX_CALL_S`). */
+export interface VoiceLiveLimits {
+  idle_hangup_s: number;
+  idle_warn_s: number;
+  max_call_s: number;
+}
+
+/** Hard cap per call on the client (bauplan B6: 20 min) until MC's own
+ *  value arrives with the session. MC refuses the call's tools after it and
+ *  hangs up at OpenAI when it knows the call id (voice PR 6). */
+export const MAX_CALL_MS = 20 * 60 * 1000;
+
+export const DEFAULT_LIMITS: VoiceLiveLimits = {
+  idle_hangup_s: 120,
+  idle_warn_s: 15,
+  max_call_s: MAX_CALL_MS / 1000,
+};
 
 export const INITIAL_VOICE_STATE: VoiceLiveState = {
   status: "idle",
@@ -50,11 +78,10 @@ export const INITIAL_VOICE_STATE: VoiceLiveState = {
   passing: false,
   narrating: false,
   muted: false,
+  idleWarning: false,
+  connectedAt: null,
+  limits: DEFAULT_LIMITS,
 };
-
-/** Hard cap per call on the client (bauplan B6: 20 min). The server-side
- *  timer and the daily budget come with PR 6. */
-export const MAX_CALL_MS = 20 * 60 * 1000;
 /** Muted this long with the call open: hang up (bauplan B6 — the session
  *  bills time while muted, and a forgotten muted call is pure cost). */
 export const MUTED_MAX_MS = 5 * 60 * 1000;
@@ -65,7 +92,9 @@ export const MAX_TRANSCRIPT_LINES = 40;
 
 export type VoiceLiveAction =
   | { type: "start" }
-  | { type: "connected" }
+  | { type: "connected"; at?: number }
+  | { type: "limits"; limits: VoiceLiveLimits }
+  | { type: "idle_warning"; on: boolean }
   | { type: "fail"; error: VoiceLiveErrorKind }
   | { type: "hangup" }
   | { type: "tool_busy"; busy: boolean }
@@ -89,8 +118,84 @@ export interface RealtimeServerEvent {
   response?: {
     status?: string;
     status_details?: { error?: { type?: string; code?: string | null } | null } | null;
+    /** Token usage of this response (voice PR 6: cost). */
+    usage?: RealtimeUsage | null;
   } | null;
 }
+
+/** `response.done` → `response.usage` (OpenAI Realtime). Cached tokens are
+ *  part of the input counts. */
+export interface RealtimeUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  input_token_details?: {
+    text_tokens?: number;
+    audio_tokens?: number;
+    cached_tokens?: number;
+    cached_tokens_details?: { text_tokens?: number; audio_tokens?: number } | null;
+  } | null;
+  output_token_details?: { text_tokens?: number; audio_tokens?: number } | null;
+}
+
+/** One call's running totals, as MC books them (`POST /voice/live/usage`).
+ *  Token counts only: MC computes the cost with its own prices. */
+export interface UsageTotals {
+  input_text_tokens: number;
+  input_audio_tokens: number;
+  cached_text_tokens: number;
+  cached_audio_tokens: number;
+  output_text_tokens: number;
+  output_audio_tokens: number;
+}
+
+export const ZERO_USAGE: UsageTotals = {
+  input_text_tokens: 0,
+  input_audio_tokens: 0,
+  cached_text_tokens: 0,
+  cached_audio_tokens: 0,
+  output_text_tokens: 0,
+  output_audio_tokens: 0,
+};
+
+function n(v: unknown): number {
+  return typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0;
+}
+
+/** Adds one `response.done`'s usage to the call's totals. Without a cached
+ *  split, cached tokens count as text first (the instructions are text and
+ *  are what gets cached), then audio. */
+export function addUsage(totals: UsageTotals, usage: RealtimeUsage | null | undefined): UsageTotals {
+  if (!usage) return totals;
+  const inD = usage.input_token_details ?? {};
+  const outD = usage.output_token_details ?? {};
+  const textIn = n(inD.text_tokens);
+  const audioIn = n(inD.audio_tokens);
+  const cached = n(inD.cached_tokens);
+  let cachedText = n(inD.cached_tokens_details?.text_tokens);
+  let cachedAudio = n(inD.cached_tokens_details?.audio_tokens);
+  if (cached > 0 && cachedText + cachedAudio === 0) {
+    cachedText = Math.min(cached, textIn);
+    cachedAudio = Math.min(cached - cachedText, audioIn);
+  }
+  return {
+    input_text_tokens: totals.input_text_tokens + textIn,
+    input_audio_tokens: totals.input_audio_tokens + audioIn,
+    cached_text_tokens: totals.cached_text_tokens + cachedText,
+    cached_audio_tokens: totals.cached_audio_tokens + cachedAudio,
+    output_text_tokens: totals.output_text_tokens + n(outD.text_tokens),
+    output_audio_tokens: totals.output_audio_tokens + n(outD.audio_tokens),
+  };
+}
+
+/** Events that mean someone is talking (or just stopped): they reset the
+ *  idle brake. */
+export const ACTIVITY_EVENTS = new Set([
+  "input_audio_buffer.speech_started",
+  "input_audio_buffer.speech_stopped",
+  "output_audio_buffer.started",
+  "output_audio_buffer.stopped",
+  "output_audio_buffer.cleared",
+]);
 
 function upsertLine(
   lines: TranscriptLine[],
@@ -205,12 +310,28 @@ function onServerEvent(state: VoiceLiveState, ev: RealtimeServerEvent): VoiceLiv
 export function voiceLiveReducer(state: VoiceLiveState, action: VoiceLiveAction): VoiceLiveState {
   switch (action.type) {
     case "start":
-      return { status: "connecting", error: null, transcript: [], passing: false, narrating: false, muted: false };
+      return { ...INITIAL_VOICE_STATE, status: "connecting" };
     case "connected":
-      return state.status === "connecting" ? { ...state, status: "listening" } : state;
+      return state.status === "connecting"
+        ? { ...state, status: "listening", connectedAt: action.at ?? null }
+        : state;
+    case "limits":
+      return { ...state, limits: action.limits };
+    case "idle_warning":
+      return state.status === "idle" || state.status === "error" || state.idleWarning === action.on
+        ? state
+        : { ...state, idleWarning: action.on };
     case "fail":
       // The transcript stays: what was said before the drop is still worth reading.
-      return { ...state, status: "error", error: action.error, passing: false, narrating: false, muted: false };
+      return {
+        ...state,
+        status: "error",
+        error: action.error,
+        passing: false,
+        narrating: false,
+        muted: false,
+        idleWarning: false,
+      };
     case "tool_busy":
       return state.status === "idle" || state.status === "error" ? state : { ...state, passing: action.busy };
     case "narrating":
@@ -257,6 +378,7 @@ export function sessionErrorKind(err: unknown): VoiceLiveErrorKind {
     /* non-JSON body */
   }
   if (reason === "no_credits") return "no_credits";
+  if (reason === "budget_reached") return "budget_reached";
   if (reason === "rate_limited") return "rate_limited";
   if (reason === "upstream_unreachable") return "network";
   return "unavailable";
@@ -273,6 +395,8 @@ export const ERROR_MESSAGE_KEY: Record<VoiceLiveErrorKind, string> = {
   unavailable: "errUnavailable",
   max_length: "errMaxLength",
   muted_too_long: "errMutedTooLong",
+  idle: "errIdle",
+  budget_reached: "errBudgetReached",
 };
 
 /** Errors where trying again can help (shows a retry button). */
@@ -282,6 +406,37 @@ export function isRetryable(kind: VoiceLiveErrorKind): boolean {
     kind === "rate_limited" ||
     kind === "unavailable" ||
     kind === "max_length" ||
-    kind === "muted_too_long"
+    kind === "muted_too_long" ||
+    kind === "idle"
   );
+}
+
+/** The SDP answer's `Location` header names OpenAI's call
+ *  (`/v1/realtime/calls/rtc_…`). MC needs the id to hang up server-side.
+ *  null when the browser may not read the header. */
+export function openaiCallId(location: string | null | undefined): string | null {
+  const id = (location ?? "").split("?")[0].split("/").filter(Boolean).pop() ?? "";
+  return /^rtc_[A-Za-z0-9_-]{1,150}$/.test(id) ? id : null;
+}
+
+/** Errors of the SDP post to OpenAI (`/v1/realtime/calls`). A 429 is either
+ *  no credit or a rate limit; the body tells which. */
+export async function offerErrorKind(resp: Response): Promise<VoiceLiveErrorKind> {
+  if (resp.status !== 429) return "unavailable";
+  let code = "";
+  try {
+    const body = (await resp.json()) as { error?: { code?: string; type?: string } };
+    code = body?.error?.code ?? body?.error?.type ?? "";
+  } catch {
+    /* no JSON body */
+  }
+  return code === "insufficient_quota" ? "no_credits" : "rate_limited";
+}
+
+/** `m:ss` for the call bar's clock. */
+export function formatElapsed(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
 }

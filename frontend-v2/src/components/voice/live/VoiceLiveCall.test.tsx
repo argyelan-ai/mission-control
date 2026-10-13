@@ -188,6 +188,24 @@ describe("the navigation mic talks to the lead agent", () => {
     expect(h.mintSession.mock.calls[0][0]).toBe("lead-1");
   });
 
+  it("says 'daily budget reached' when MC reports it, and learns it after a call without a reload (voice PR 6)", async () => {
+    const h = harness();
+    render(<Shell env={h.env} page={TASKS} />);
+    const mic = await screen.findByTestId("nav-voice-button");
+    expect(mic).toHaveAttribute("data-budget-reached", "false");
+    // The call used up the budget; MC says so on the next config read.
+    config.mockResolvedValue({
+      enabled: true,
+      model: "gpt-realtime-2.1",
+      voice: "marin",
+      budget: { limit_usd: 5, spent_usd: 5.2, reached: true, resets_at: "2026-10-13T22:00:00+00:00" },
+    });
+    await startFromNav(h);
+    await act(async () => fireEvent.click(screen.getByTestId("voice-compact-hangup")));
+    await waitFor(() => expect(screen.getByTestId("nav-voice-button")).toHaveAttribute("data-budget-reached", "true"));
+    expect(screen.getByTestId("nav-voice-button")).toHaveAccessibleName("Daily budget reached");
+  });
+
   it("while a call runs, the mic opens that call's chat instead of a second call", async () => {
     const h = harness();
     render(<Shell env={h.env} page={TASKS} />);

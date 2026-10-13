@@ -1652,6 +1652,17 @@
       "reportsSummary": "letzter {ago}",
       "empty": "In diesem Zeitraum nichts.",
       "noReports": "Noch keine KI-Berichte. Die Analyse läuft einmal am Tag."
+    },
+    "voice": {
+      "title": "Stimme",
+      "period": "Live-Gespräche",
+      "today": "Heute",
+      "week": "7 Tage",
+      "minutes": "{minutes} Min",
+      "budget": "Tagesbudget {budget} · heute aufgebraucht",
+      "budgetLeft": "Tagesbudget {budget}",
+      "perMinute": "≈ {cost} pro Gesprächsminute (7 Tage)",
+      "empty": "Noch keine Live-Gespräche in den letzten 7 Tagen."
     }
   },
   "files": {
@@ -3973,8 +3984,8 @@
     "errMicDenied": "Mikrofon-Zugriff verweigert. Erlaube ihn für diese Seite in den Browser- oder Handy-Einstellungen.",
     "errMicMissing": "Kein Mikrofon auf diesem Gerät gefunden.",
     "errNetwork": "Verbindung weg. Der Agent arbeitet weiter.",
-    "errNoCredits": "Kein OpenAI-Guthaben mehr für die Stimme.",
-    "errRateLimited": "OpenAI ist gerade ausgelastet. In einer Minute nochmal versuchen.",
+    "errNoCredits": "OpenAI-Guthaben/Limit erreicht. Gespräch beendet — Guthaben bei OpenAI prüfen.",
+    "errRateLimited": "OpenAI-Limit erreicht. In einer Minute nochmal versuchen.",
     "errUnavailable": "Die Stimme ist gerade nicht verfügbar.",
     "errMaxLength": "Gespräch nach {minutes} Minuten beendet.",
     "errMutedTooLong": "Nach 5 Minuten stumm aufgelegt.",
@@ -3983,6 +3994,10 @@
     "openChat": "Zum Chat",
     "hangUpWith": "Gespräch mit {name} beenden",
     "jarvisClassic": "Jarvis (klassische Stimme)",
-    "jarvisClassicHint": "Der bisherige Sprachassistent"
+    "jarvisClassicHint": "Der bisherige Sprachassistent",
+    "micBudgetReached": "Tagesbudget erreicht",
+    "stateIdleWarning": "Stille — Auflegen in {seconds} s",
+    "errIdle": "Nach {seconds} s Stille aufgelegt.",
+    "errBudgetReached": "Tagesbudget für die Stimme erreicht. Ab Mitternacht wieder frei."
   }
 }

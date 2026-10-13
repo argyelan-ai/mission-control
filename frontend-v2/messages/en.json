@@ -1652,6 +1652,17 @@
       "reportsSummary": "newest {ago}",
       "empty": "Nothing in this time range.",
       "noReports": "No AI reports yet. The analysis runs once a day."
+    },
+    "voice": {
+      "title": "Voice",
+      "period": "live calls",
+      "today": "Today",
+      "week": "7 days",
+      "minutes": "{minutes} min",
+      "budget": "Daily budget {budget} · used up today",
+      "budgetLeft": "Daily budget {budget}",
+      "perMinute": "≈ {cost} per call minute (7 days)",
+      "empty": "No live calls in the last 7 days."
     }
   },
   "files": {
@@ -3973,8 +3984,8 @@
     "errMicDenied": "Microphone access was denied. Allow it for this site in the browser or phone settings.",
     "errMicMissing": "No microphone found on this device.",
     "errNetwork": "Connection lost. The agent keeps working.",
-    "errNoCredits": "No OpenAI credit left for the voice.",
-    "errRateLimited": "OpenAI is busy right now. Try again in a minute.",
+    "errNoCredits": "OpenAI credit/limit reached. Call ended — check your OpenAI balance.",
+    "errRateLimited": "OpenAI limit reached. Try again in a minute.",
     "errUnavailable": "Voice is not available right now.",
     "errMaxLength": "Call ended after {minutes} minutes.",
     "errMutedTooLong": "Hung up after 5 minutes muted.",
@@ -3983,6 +3994,10 @@
     "openChat": "Open chat",
     "hangUpWith": "End call with {name}",
     "jarvisClassic": "Jarvis (classic voice)",
-    "jarvisClassicHint": "The previous voice assistant"
+    "jarvisClassicHint": "The previous voice assistant",
+    "micBudgetReached": "Daily budget reached",
+    "stateIdleWarning": "Silence — hanging up in {seconds} s",
+    "errIdle": "Hung up after {seconds} s of silence.",
+    "errBudgetReached": "Daily voice budget reached. Free again after midnight."
   }
 }

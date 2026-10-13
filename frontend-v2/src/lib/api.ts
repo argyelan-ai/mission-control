@@ -215,6 +215,36 @@ async function publicRequest<T>(path: string, init?: RequestInit): Promise<T> {
 interface AuthUser { id: string; email: string; name: string; role: string }
 interface TokenResponse { access_token: string; token_type: string; user: AuthUser }
 
+/** Live voice brakes (voice PR 6, settings `VOICE_LIVE_*`). */
+export interface VoiceLiveLimitsResponse {
+  idle_hangup_s: number;
+  idle_warn_s: number;
+  max_call_s: number;
+}
+
+export interface VoiceLiveConfigResponse {
+  enabled: boolean;
+  model: string;
+  voice: string;
+  limits?: VoiceLiveLimitsResponse;
+  budget?: { limit_usd: number; spent_usd: number; reached: boolean; resets_at: string };
+}
+
+export interface VoiceUsageBucket {
+  calls: number;
+  seconds: number;
+  cost_usd: number;
+}
+
+export interface VoiceUsageSummary {
+  enabled: boolean;
+  today: VoiceUsageBucket;
+  week: VoiceUsageBucket;
+  budget_usd: number;
+  budget_reached: boolean;
+  per_minute_usd: number | null;
+}
+
 export const api = {
   // ── Auth ──────────────────────────────────────────────────────────────────
   auth: {
@@ -2146,9 +2176,9 @@ export const api = {
 
   // ── Live voice in the chat (voice PR 1, ADR-091 draft) ─────────────────
   voiceLive: {
-    /** 404 = feature off or no OpenAI key. */
-    config: (): Promise<{ enabled: boolean; model: string; voice: string }> =>
-      request("/api/v1/voice/live/config"),
+    /** 404 = feature off or no OpenAI key. Since voice PR 6 also the
+     *  brakes (`limits`) and today's budget. */
+    config: (): Promise<VoiceLiveConfigResponse> => request("/api/v1/voice/live/config"),
     /** Short-lived client secret for one WebRTC call with this agent. */
     session: (
       agentId: string,
@@ -2161,6 +2191,7 @@ export const api = {
       calls_url: string;
       agent_name: string;
       call_ref: string;
+      limits?: VoiceLiveLimitsResponse;
     }> =>
       request("/api/v1/voice/live/session", {
         method: "POST",
@@ -2190,6 +2221,30 @@ export const api = {
       body: { call_ref: string; agent_id: string } & ProgressRequest,
     ): Promise<{ text: string; agent_final: boolean }> =>
       request("/api/v1/voice/live/progress", { method: "POST", body: JSON.stringify(body) }),
+    /** The call's running token totals (voice PR 6). MC computes the cost
+     *  with its own prices; `hang_up` = end the call now (budget, max length). */
+    usage: (body: {
+      call_ref: string;
+      agent_id: string;
+      usage: {
+        input_text_tokens: number;
+        input_audio_tokens: number;
+        cached_text_tokens: number;
+        cached_audio_tokens: number;
+        output_text_tokens: number;
+        output_audio_tokens: number;
+      };
+      ended?: boolean;
+      end_reason?: string;
+      openai_call_id?: string | null;
+    }): Promise<{
+      call_cost_usd: number;
+      today_usd: number;
+      budget_usd: number;
+      hang_up: "budget_reached" | "max_length" | null;
+    }> => request("/api/v1/voice/live/usage", { method: "POST", body: JSON.stringify(body) }),
+    /** Today's and the last 7 days' live voice minutes and cost (Insights). */
+    usageSummary: (): Promise<VoiceUsageSummary> => request("/api/v1/voice/live/usage/summary"),
     /** The agent the navigation mic talks to: the lead agent of the active
      *  board (voice PR 5). 404 `no_lead` / feature off → the mic stays Jarvis. */
     defaultTarget: (boardId?: string | null): Promise<{ agent_id: string; agent_name: string }> =>
