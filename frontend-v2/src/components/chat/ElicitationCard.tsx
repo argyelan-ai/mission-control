@@ -36,6 +36,7 @@ import {
   type ElicitationResultEvent,
 } from "@/lib/chatTypes";
 import { ClampedContent } from "./ClampedContent";
+import { MarkdownContent } from "./MarkdownContent";
 import { TIMELINE_CARD_GUTTER } from "./timelineCard";
 
 const OTHER_SUFFIX = "__other";
@@ -199,14 +200,20 @@ export function ElicitationCard({ ev, result, agentId }: ElicitationCardProps) {
           <span className="flex h-5 shrink-0 items-center" aria-hidden="true">
             <MessageCircleQuestion size={15} style={{ color: interactive ? C.warning : C.textMuted }} />
           </span>
-          <ClampedContent
-            text={ev.message}
-            testId="elicitation-message"
-            className="min-w-0 break-words whitespace-pre-wrap text-sm leading-snug"
-            style={{ color: open ? C.textPrimary : C.textSecondary }}
-          >
-            {ev.message}
-          </ClampedContent>
+          {/* One column for text AND its "Show more": ClampedContent renders
+              the toggle as a sibling, which in this row became a second
+              column squeezing the text (live, 390 px). Plans arrive as
+              markdown (# title, lists, code) — rendered, not raw. */}
+          <div className="min-w-0 flex-1">
+            <ClampedContent
+              text={ev.message}
+              testId="elicitation-message"
+              className="break-words text-sm leading-snug"
+              style={{ color: open ? C.textPrimary : C.textSecondary }}
+            >
+              <MarkdownContent content={ev.message} compact />
+            </ClampedContent>
+          </div>
         </div>
 
         {interactive &&

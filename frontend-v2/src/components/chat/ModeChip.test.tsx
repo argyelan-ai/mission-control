@@ -60,6 +60,14 @@ describe("ModeChip", () => {
     expect(screen.getByTestId("mode-chip")).toHaveAttribute("data-mode", "default");
   });
 
+  it("names plan mode on the phone too; standard stays icon-only there", () => {
+    const { rerender } = render(<ModeChip agentId="a1" capabilities={CAPS} liveMode={modeEvent("plan")} />);
+    expect(screen.getByTestId("mode-chip-label")).toHaveTextContent("Plan");
+    expect(screen.getByTestId("mode-chip-label").className).not.toContain("hidden");
+    rerender(<ModeChip agentId="a1" capabilities={CAPS} liveMode={modeEvent("default", "acp00021")} />);
+    expect(screen.getByTestId("mode-chip-label").className).toContain("hidden sm:inline");
+  });
+
   it("waits while the agent works", () => {
     render(<ModeChip agentId="a1" capabilities={CAPS} liveMode={null} busy />);
     expect(screen.getByTestId("mode-chip")).toBeDisabled();

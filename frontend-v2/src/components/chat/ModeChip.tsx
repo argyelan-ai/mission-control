@@ -84,9 +84,12 @@ export function ModeChip({ agentId, capabilities, liveMode, busy = false }: Mode
       }}
     >
       <ListChecks size={14} strokeWidth={1.75} aria-hidden="true" />
-      {/* Phone: icon only — the accent look already says "plan is on", and
-          the composer row has no room for a word (K4). */}
-      <span className="hidden sm:inline">{label(current, isPlan ? plan.name : other.name)}</span>
+      {/* Phone: in standard mode the icon alone (the row is full, K4); in
+          plan mode the word too — the agent behaves differently then, and
+          an icon alone did not say what it was (live test 13.10.2026). */}
+      <span data-testid="mode-chip-label" className={isPlan ? "inline" : "hidden sm:inline"}>
+        {label(current, isPlan ? plan.name : other.name)}
+      </span>
     </button>
   );
 }

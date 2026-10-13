@@ -168,6 +168,20 @@ describe("ElicitationCard", () => {
     expect(screen.getByTestId("elicitation-outcome")).toHaveTextContent("Waiting for an answer");
   });
 
+  it("renders the plan as markdown in one column with its show-more toggle", () => {
+    const plan = 'Approve plan "Login" and start implementation?\n\n# Login form\n\n1. Add `/login` route\n2. Session cookie';
+    render(<ElicitationCard ev={card(SELECT, plan)} result={null} agentId="a1" />);
+    const message = screen.getByTestId("elicitation-message");
+    expect(message.querySelector("h1")).toHaveTextContent("Login form");
+    expect(message.querySelectorAll("ol li")).toHaveLength(2);
+    expect(message.querySelector("code")).toHaveTextContent("/login");
+    // The toggle ClampedContent renders as a sibling must land UNDER the
+    // text, not as a second column of the icon row (live, 390 px).
+    const column = message.parentElement!;
+    expect(column.className).toContain("flex-1");
+    expect(column.parentElement!.className).toContain("flex");
+  });
+
   it("summarize words booleans and lists", () => {
     expect(summarize({ value: true }, "Yes", "No")).toBe("Yes");
     expect(summarize({ q0: "Vue", q1: ["lint", "test"], q1__other: "e2e" }, "Yes", "No"))
