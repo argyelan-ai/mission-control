@@ -3973,6 +3973,12 @@
     "errNoCredits": "Kein OpenAI-Guthaben mehr für die Stimme.",
     "errRateLimited": "OpenAI ist gerade ausgelastet. In einer Minute nochmal versuchen.",
     "errUnavailable": "Die Stimme ist gerade nicht verfügbar.",
-    "errMaxLength": "Gespräch nach {minutes} Minuten beendet."
+    "errMaxLength": "Gespräch nach {minutes} Minuten beendet.",
+    "navMic": "Sprache ({name})",
+    "navMicActive": "Gespräch mit {name} öffnen",
+    "openChat": "Zum Chat",
+    "hangUpWith": "Gespräch mit {name} beenden",
+    "jarvisClassic": "Jarvis (klassische Stimme)",
+    "jarvisClassicHint": "Der bisherige Sprachassistent"
   }
 }

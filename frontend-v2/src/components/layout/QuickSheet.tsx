@@ -7,6 +7,7 @@ import { useTranslations } from "next-intl";
 import { useQuery } from "@tanstack/react-query";
 import { AnimatePresence, motion, useReducedMotion, type PanInfo } from "framer-motion";
 import {
+  AudioLines,
   ChevronLeft,
   ChevronRight,
   LayoutGrid,
@@ -24,6 +25,7 @@ import type { NavItem } from "@/lib/nav";
 import { chatHref, type ChatRef } from "@/lib/recentChats";
 import { CreateTaskModal } from "@/components/shared/CreateTaskModal";
 import { useVoiceContext } from "@/components/voice/VoiceWidget";
+import { useVoiceLiveCall } from "@/components/voice/live/VoiceLiveCall";
 import { useMobileNav } from "./MobileNav";
 import { useRecentChats } from "./MobileTabBar";
 
@@ -118,6 +120,10 @@ export function QuickSheet() {
   const { quickOpen, setQuickOpen, quickLevel, setQuickLevel } = useMobileNav();
   const { activeBoardId } = useAppStore();
   const voice = useVoiceContext();
+  const tVoice = useTranslations("voiceLive");
+  // Since voice PR 5 the top-bar mic calls the lead agent; Jarvis (unchanged)
+  // is this row then. With the live voice off the row stays as it was.
+  const jarvisMoved = !!useVoiceLiveCall()?.lead;
   const recent = useRecentChats();
   const [newJobRequest, setNewJobRequest] = useState(0);
   const firstRef = useRef<HTMLButtonElement>(null);
@@ -285,7 +291,11 @@ export function QuickSheet() {
                       voice.toggleButton();
                     }}
                   >
-                    <RowBody icon={Mic} label={t("quick.voice")} hint={t("quick.voiceHint")} />
+                    {jarvisMoved ? (
+                      <RowBody icon={AudioLines} label={tVoice("jarvisClassic")} hint={tVoice("jarvisClassicHint")} />
+                    ) : (
+                      <RowBody icon={Mic} label={t("quick.voice")} hint={t("quick.voiceHint")} />
+                    )}
                   </button>
                   {lastChat && (
                     <Link

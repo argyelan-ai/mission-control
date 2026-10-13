@@ -27,7 +27,7 @@
  * call without a browser.
  */
 
-import { useCallback, useEffect, useReducer, useRef } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import {
   DISCONNECT_GRACE_MS,
@@ -132,7 +132,12 @@ export const browserVoiceLiveEnv: VoiceLiveEnv = {
 };
 
 export interface VoiceLiveCall extends VoiceLiveState {
-  start: () => Promise<void>;
+  /** Opens a call. `agentId` overrides the hook's agent for this one call
+   *  (voice PR 5: the app-wide call picks its agent per tap — the chat's
+   *  agent, or the lead agent from the navigation mic). */
+  start: (agentId?: string) => Promise<void>;
+  /** The agent the open (or last) call talks to. */
+  agentId: string;
   hangUp: () => void;
   /** Leave the error state without calling again. */
   dismiss: () => void;
@@ -155,6 +160,8 @@ export const PROGRESS_TICK_MS = 1_000;
 export const AFTER_SPEECH_MS = 1_500;
 
 interface Live {
+  /** The agent this call talks to — fixed for the call's whole life. */
+  agentId: string;
   pc: RTCPeerConnection;
   stream: MediaStream;
   dc: RTCDataChannel;
@@ -198,6 +205,7 @@ export function useVoiceLive(
   options: VoiceLiveOptions = {},
 ): VoiceLiveCall {
   const [state, dispatch] = useReducer(voiceLiveReducer, INITIAL_VOICE_STATE);
+  const [callAgent, setCallAgent] = useState(agentId);
   const liveRef = useRef<Live | null>(null);
   const onForwardedRef = useRef(options.onForwarded);
   onForwardedRef.current = options.onForwarded;
@@ -290,7 +298,7 @@ export function useVoiceLive(
           );
           let res: VoiceProgressResponse;
           try {
-            res = await env.progress({ call_ref: live.callRef, agent_id: agentId, ...m.req });
+            res = await env.progress({ call_ref: live.callRef, agent_id: live.agentId, ...m.req });
           } catch {
             return;
           }
@@ -303,7 +311,7 @@ export function useVoiceLive(
         })
         .catch(() => undefined);
     },
-    [agentId, env, sendEvent, flushSpeak],
+    [env, sendEvent, flushSpeak],
   );
 
   const observeProgress = useCallback(
@@ -358,7 +366,7 @@ export function useVoiceLive(
         }
         const res = await env.runTool({
           call_ref: live.callRef,
-          agent_id: agentId,
+          agent_id: live.agentId,
           name: fc.name,
           arguments: fc.args,
           transcript,
@@ -379,7 +387,7 @@ export function useVoiceLive(
       sendEvent(live, functionOutputEvent(fc.callId, output));
       requestResponse(live);
     },
-    [agentId, env, sendEvent, requestResponse, waitForTranscript],
+    [env, sendEvent, requestResponse, waitForTranscript],
   );
 
   /** Bookkeeping for the tools, next to the reducer (which owns the UI). */
@@ -470,8 +478,10 @@ export function useVoiceLive(
     [teardown],
   );
 
-  const start = useCallback(async () => {
+  const start = useCallback(async (override?: string) => {
+    const target = override || agentId;
     const attempt = ++attemptRef.current;
+    setCallAgent(target);
     teardown();
     dispatch({ type: "start" });
     if (!env.isSecureContext()) {
@@ -499,7 +509,7 @@ export function useVoiceLive(
 
     let session: VoiceLiveSessionResponse;
     try {
-      session = await env.mintSession(agentId, lang);
+      session = await env.mintSession(target, lang);
     } catch (err) {
       stream.getTracks().forEach((t) => t.stop());
       if (attempt === attemptRef.current) dispatch({ type: "fail", error: sessionErrorKind(err) });
@@ -519,6 +529,7 @@ export function useVoiceLive(
       return;
     }
     const live: Live = {
+      agentId: target,
       pc,
       stream,
       dc,
@@ -641,8 +652,10 @@ export function useVoiceLive(
     }
   }, [state.status, teardown]);
 
-  // A call belongs to one chat: switching agent or leaving the page ends it
-  // (PR 5 moves the call into AppShell so it survives navigation).
+  // Switching the hook's agent or unmounting ends the call. Since voice PR 5
+  // the hook lives in the app-wide VoiceLiveCallProvider (AppShell), which
+  // passes a fixed agentId and picks the agent per call via `start(id)` — so
+  // only leaving the app ends a call there, not leaving a page.
   useEffect(() => {
     return () => {
       attemptRef.current += 1;
@@ -651,5 +664,5 @@ export function useVoiceLive(
     };
   }, [agentId, teardown]);
 
-  return { ...state, start, hangUp, dismiss };
+  return { ...state, start, hangUp, dismiss, agentId: callAgent };
 }

@@ -11,7 +11,7 @@ import { useAppStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { useCanSwitchBoards } from "@/lib/boards";
 import type { SystemMetrics } from "@/lib/types";
-import { VoiceButton } from "@/components/voice/VoiceWidget";
+import { NavVoiceButton } from "@/components/voice/live/NavVoiceButton";
 import BoardPicker from "./BoardPicker";
 import SidebarFooter from "./SidebarFooter";
 import { agentsBadge } from "./agentsBadge";
@@ -287,7 +287,7 @@ export default function Sidebar() {
           >
             <Search size={16} />
           </button>
-          <VoiceButton size={30} variant="sidebar" enforceTouchTarget={false} label={tShell("voiceButton")} />
+          <NavVoiceButton size={30} variant="sidebar" enforceTouchTarget={false} jarvisLabel={tShell("voiceButton")} />
         </div>
       ) : (
         // Auslöser der Befehlspalette — bewusst als KNOPF gestaltet, nicht als
@@ -310,6 +310,11 @@ export default function Sidebar() {
         // it (operator feedback 12.10.2026). A separate ghost button, same
         // height, with its own "Voice (Jarvis)" label avoids both: one clear
         // target next to the other.
+        //
+        // Since voice PR 5 (operator rule 12.10.2026) this mic calls the LEAD
+        // agent with the live voice, labelled "Voice (<lead's name>)" from the
+        // data; Jarvis moved to the command palette (⌘K, also the collapsed
+        // rail's ⋯). Feature off or no lead → it stays Jarvis, as before.
         <div className={`flex items-center gap-2 ${showBoardRow ? "mt-2" : ""}`}>
           <button
             onClick={() => setCommandPaletteOpen(true)}
@@ -350,11 +355,11 @@ export default function Sidebar() {
               ⌘K
             </kbd>
           </button>
-          <VoiceButton
+          <NavVoiceButton
             size={36}
             variant="sidebar"
             enforceTouchTarget={false}
-            label={tShell("voiceButton")}
+            jarvisLabel={tShell("voiceButton")}
           />
         </div>
       )}

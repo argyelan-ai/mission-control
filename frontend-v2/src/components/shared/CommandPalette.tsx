@@ -5,13 +5,15 @@ import { Command } from "cmdk";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { useQuery } from "@tanstack/react-query";
-import { Plus, Inbox, Search } from "lucide-react";
+import { Plus, Inbox, Search, AudioLines } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { NAV_TREE } from "@/lib/nav";
 import { useAppStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { EntityIcon } from "@/components/shared/EntityIcon";
+import { useVoiceContext } from "@/components/voice/VoiceWidget";
+import { useVoiceLiveCall } from "@/components/voice/live/VoiceLiveCall";
 
 import { C, alpha } from "@/lib/colors";
 // ── v3 styles (Tokens only) ─────────────────────────────────────────────────
@@ -42,6 +44,8 @@ export default function CommandPalette() {
   const router = useRouter();
   const { commandPaletteOpen, setCommandPaletteOpen, activeBoardId } =
     useAppStore();
+
+  const jarvisInMenu = !!useVoiceLiveCall()?.lead;
 
   // Body-Scroll-Lock: verhindert Hintergrund-Scrolling auf iOS (MOBILE-SPEC M4)
   useBodyScrollLock(commandPaletteOpen);
@@ -200,6 +204,10 @@ export default function CommandPalette() {
                     />
                     {t("openInbox")}
                   </Command.Item>
+                  {/* Jarvis lives here on the desktop since voice PR 5: the
+                      sidebar mic calls the lead agent now. Only while it
+                      does — with the live voice off, that mic IS Jarvis. */}
+                  {jarvisInMenu && <JarvisPaletteItem onDone={() => setCommandPaletteOpen(false)} />}
                 </Command.Group>
 
                 {/* Agents */}
@@ -232,5 +240,26 @@ export default function CommandPalette() {
         </>
       )}
     </AnimatePresence>
+  );
+}
+
+/** Jarvis (LiveKit, unchanged) from the palette: same toggle as its old mic —
+ *  starts a session, or opens the running one's panel. */
+function JarvisPaletteItem({ onDone }: { onDone: () => void }) {
+  const t = useTranslations("voiceLive");
+  const voice = useVoiceContext();
+  return (
+    <Command.Item
+      value="jarvis classic voice assistant"
+      data-testid="palette-jarvis"
+      onSelect={() => {
+        onDone();
+        voice.toggleButton();
+      }}
+      className={itemClass}
+    >
+      <AudioLines size={15} style={{ color: "var(--color-text-secondary)" }} />
+      {t("jarvisClassic")}
+    </Command.Item>
   );
 }

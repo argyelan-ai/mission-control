@@ -17,14 +17,18 @@
  */
 
 import { type ReactNode, useEffect, useRef, useState } from "react";
-import { useLocale, useTranslations } from "next-intl";
+import { useTranslations } from "next-intl";
 import { Check, Mic, PhoneOff, RotateCcw, X } from "lucide-react";
 import { C } from "@/lib/colors";
 import { ERROR_MESSAGE_KEY, MAX_CALL_MS, isRetryable, type VoiceLiveStatus } from "./voiceLiveCore";
-import { browserVoiceLiveEnv, useVoiceLive, type VoiceLiveCall, type VoiceLiveEnv } from "./useVoiceLive";
-import { useVoiceLiveEnabled } from "./useVoiceLiveConfig";
+import { browserVoiceLiveEnv, type VoiceLiveCall, type VoiceLiveEnv } from "./useVoiceLive";
 import type { ProgressSnapshot } from "./progress";
-import { setVoiceLiveActive } from "./voiceLiveActivity";
+import {
+  VoiceCallCompact,
+  VoiceLiveCallProvider,
+  useVoiceLiveCall,
+  type VoiceLiveCallContextValue,
+} from "./VoiceLiveCall";
 
 const STATE_KEY: Record<Exclude<VoiceLiveStatus, "idle">, string> = {
   connecting: "stateConnecting",
@@ -156,7 +160,7 @@ export function VoiceCallBar({ call, agentName }: { call: VoiceLiveCall; agentNa
           {isRetryable(call.error!) && (
             <button
               type="button"
-              onClick={() => void call.start()}
+              onClick={() => void call.start(call.agentId)}
               data-testid="voice-retry"
               className="shrink-0 inline-flex items-center gap-1 h-11 md:h-8 px-2 rounded-lg text-sm cursor-pointer hover:bg-[var(--color-bg-hover)]"
               style={{ color: C.textSecondary }}
@@ -204,18 +208,32 @@ export function VoiceCallBar({ call, agentName }: { call: VoiceLiveCall; agentNa
 }
 
 /**
- * Wires one chat's call: the bar above the composer plus the mic handed to
- * the composer as its `voiceSlot`. Renders the composer unchanged (and no
- * mic) when the backend reports the feature off.
+ * Wires one chat into the app-wide call (VoiceLiveCallProvider, voice PR 5):
+ * the mic handed to the composer as its `voiceSlot` starts a call with THIS
+ * chat's agent; while that call runs, its bar sits above the composer
+ * ("docked") and listens along to this chat's stream. A call with another
+ * agent shows as one compact row here instead (and no mic: one call at a
+ * time, hang up first). Renders the composer unchanged (and no mic) when the
+ * backend reports the feature off.
+ *
+ * Outside AppShell (a chat on its own, tests) it brings its own provider.
  */
-export function VoiceLiveDock({
-  agentId,
-  agentName,
-  children,
-  onForwarded,
-  progress,
-  env = browserVoiceLiveEnv,
-}: {
+export function VoiceLiveDock(props: VoiceLiveDockProps) {
+  const ctx = useVoiceLiveCall();
+  if (ctx) return <DockInner {...props} ctx={ctx} />;
+  return (
+    <VoiceLiveCallProvider env={props.env} resolveLead={false}>
+      <DockWithOwnProvider {...props} />
+    </VoiceLiveCallProvider>
+  );
+}
+
+function DockWithOwnProvider(props: VoiceLiveDockProps) {
+  const ctx = useVoiceLiveCall();
+  return ctx ? <DockInner {...props} ctx={ctx} /> : <>{props.children(null)}</>;
+}
+
+interface VoiceLiveDockProps {
   agentId: string;
   agentName: string;
   children: (voiceSlot: ReactNode) => ReactNode;
@@ -223,28 +241,59 @@ export function VoiceLiveDock({
   onForwarded?: (text: string, midTurn: boolean) => void;
   /** The chat's live stream, for the voice to listen along (voice PR 3). */
   progress?: ProgressSnapshot;
+  /** Only used when the dock brings its own provider (tests). */
   env?: VoiceLiveEnv;
-}) {
-  const locale = useLocale();
-  const enabled = useVoiceLiveEnabled();
-  const call = useVoiceLive(agentId, locale === "de" ? "de" : "en", env, { onForwarded, progress });
-  const callActive = call.status !== "idle";
+}
+
+function DockInner({
+  agentId,
+  agentName,
+  children,
+  onForwarded,
+  progress,
+  env = browserVoiceLiveEnv,
+  ctx,
+}: VoiceLiveDockProps & { ctx: VoiceLiveCallContextValue }) {
+  const { enabled, call, active, target, startCall, registerDock, feedProgress } = ctx;
+
+  // Stable registration: the chat hands a fresh arrow every render.
+  const forwardRef = useRef(onForwarded);
+  forwardRef.current = onForwarded;
+  useEffect(
+    () => registerDock(agentId, (text, midTurn) => forwardRef.current?.(text, midTurn)),
+    [agentId, registerDock],
+  );
+
+  const mine = active && target?.agentId === agentId;
   useEffect(() => {
-    setVoiceLiveActive(agentId, callActive);
-    return () => setVoiceLiveActive(agentId, false);
-  }, [agentId, callActive]);
+    if (mine) feedProgress(agentId, progress);
+  }, [mine, agentId, progress, feedProgress]);
+
   // Read after mount: the server render has no window.
   const [secure, setSecure] = useState(true);
   useEffect(() => setSecure(env.isSecureContext()), [env]);
 
   if (!enabled) return <>{children(null)}</>;
-  const slot =
-    call.status === "idle" ? (
-      <VoiceMicButton agentName={agentName} secure={secure} onStart={() => void call.start()} />
-    ) : null;
+  if (active && target && !mine) {
+    return (
+      <>
+        <div className="mx-3 mt-2 md:mx-4">
+          <VoiceCallCompact call={call} target={target} />
+        </div>
+        {children(null)}
+      </>
+    );
+  }
+  const slot = !mine ? (
+    <VoiceMicButton
+      agentName={agentName}
+      secure={secure}
+      onStart={() => startCall({ agentId, agentName })}
+    />
+  ) : null;
   return (
     <>
-      <VoiceCallBar call={call} agentName={agentName} />
+      {mine && <VoiceCallBar call={call} agentName={agentName} />}
       {children(slot)}
     </>
   );

@@ -296,3 +296,90 @@ def test_voice_delegates_by_default_not_general_questions():
     src = __import__("inspect").getsource(voice_live)
     assert "general question you can answer" not in src
     assert "Default: pass it on." in src
+
+
+# ── default target: the navigation mic talks to the lead agent (voice PR 5) ──
+
+
+async def _board(async_session, name="Board", slug=None):
+    from app.models.board import Board
+
+    board = Board(name=name, slug=slug or f"b-{uuid.uuid4().hex[:8]}")
+    async_session.add(board)
+    await async_session.commit()
+    await async_session.refresh(board)
+    return board
+
+
+async def test_default_target_404_when_switch_off(auth_client, make_agent, async_session, monkeypatch):
+    monkeypatch.setattr(settings, "voice_live_enabled", False)
+    board = await _board(async_session)
+    await make_agent(name="Lead", board_id=board.id, is_board_lead=True)
+    r = await auth_client.get("/api/v1/voice/live/default-target")
+    assert r.status_code == 404
+
+
+@pytest.mark.parametrize("role", ["operator", "viewer"])
+async def test_default_target_admin_only(client, voice_on, role):
+    from sqlmodel.ext.asyncio.session import AsyncSession
+
+    from app.auth import create_access_token
+    from app.models.user import User
+    from tests.conftest import test_engine
+
+    uid = uuid.uuid4()
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(User(id=uid, email=f"{role}@mc.local", name=role, role=role, is_active=True))
+        await s.commit()
+    client.headers["Authorization"] = f"Bearer {create_access_token(str(uid), role)}"
+    r = await client.get("/api/v1/voice/live/default-target")
+    assert r.status_code == 403
+
+
+async def test_default_target_is_the_board_lead(auth_client, voice_on, make_agent, async_session):
+    board = await _board(async_session)
+    await make_agent(name="Worker", board_id=board.id, is_board_lead=False)
+    lead = await make_agent(name="Chief", board_id=board.id, is_board_lead=True)
+    r = await auth_client.get("/api/v1/voice/live/default-target", params={"board_id": str(board.id)})
+    assert r.status_code == 200
+    assert r.json() == {"agent_id": str(lead.id), "agent_name": "Chief"}
+
+
+async def test_default_target_follows_the_active_board(auth_client, voice_on, make_agent, async_session):
+    a = await _board(async_session, "A")
+    b = await _board(async_session, "B")
+    await make_agent(name="Lead A", board_id=a.id, is_board_lead=True)
+    lead_b = await make_agent(name="Lead B", board_id=b.id, is_board_lead=True)
+    r = await auth_client.get("/api/v1/voice/live/default-target", params={"board_id": str(b.id)})
+    assert r.json()["agent_id"] == str(lead_b.id)
+
+
+async def test_default_target_falls_back_to_any_lead(auth_client, voice_on, make_agent, async_session):
+    """No board picked yet (fresh browser) or a board without a lead: the
+    one lead the fleet has still answers — never Jarvis by surprise."""
+    a = await _board(async_session, "A")
+    empty = await _board(async_session, "Empty")
+    lead = await make_agent(name="Chief", board_id=a.id, is_board_lead=True)
+    for params in ({}, {"board_id": str(empty.id)}):
+        r = await auth_client.get("/api/v1/voice/live/default-target", params=params)
+        assert r.status_code == 200
+        assert r.json()["agent_id"] == str(lead.id)
+
+
+async def test_default_target_skips_archived_leads(auth_client, voice_on, make_agent, async_session):
+    from datetime import datetime, timezone
+
+    board = await _board(async_session)
+    await make_agent(
+        name="Old", board_id=board.id, is_board_lead=True, archived_at=datetime.now(timezone.utc)
+    )
+    r = await auth_client.get("/api/v1/voice/live/default-target", params={"board_id": str(board.id)})
+    assert r.status_code == 404
+    assert r.json()["detail"] == "no_lead"
+
+
+async def test_default_target_404_without_any_lead(auth_client, voice_on, make_agent):
+    await make_agent(name="Solo")
+    r = await auth_client.get("/api/v1/voice/live/default-target")
+    assert r.status_code == 404
+    assert r.json()["detail"] == "no_lead"
