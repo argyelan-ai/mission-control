@@ -12,6 +12,8 @@
  *   voice), one state word, hang-up. The composer stays usable below. What
  *   the voice passed on appears in the chat itself as the operator's message
  *   with a "by voice" label (ChatMessage); here the line gets a quiet tick.
+ *   While the voice tells the agent's progress on its own (voice PR 3) the
+ *   state word says so ("Erzählt Fortschritt") — nothing else changes.
  */
 
 import { type ReactNode, useEffect, useRef, useState } from "react";
@@ -21,6 +23,7 @@ import { C } from "@/lib/colors";
 import { ERROR_MESSAGE_KEY, MAX_CALL_MS, isRetryable, type VoiceLiveStatus } from "./voiceLiveCore";
 import { browserVoiceLiveEnv, useVoiceLive, type VoiceLiveCall, type VoiceLiveEnv } from "./useVoiceLive";
 import { useVoiceLiveEnabled } from "./useVoiceLiveConfig";
+import type { ProgressSnapshot } from "./progress";
 import { setVoiceLiveActive } from "./voiceLiveActivity";
 
 const STATE_KEY: Record<Exclude<VoiceLiveStatus, "idle">, string> = {
@@ -77,13 +80,18 @@ export function VoiceCallBar({ call, agentName }: { call: VoiceLiveCall; agentNa
   if (call.status === "idle") return null;
   const isError = call.status === "error" && call.error !== null;
   const stateKey =
-    call.passing && call.status !== "error" ? "statePassing" : STATE_KEY[call.status as Exclude<VoiceLiveStatus, "idle">];
+    call.passing && call.status !== "error"
+      ? "statePassing"
+      : call.narrating && call.status === "speaking"
+        ? "stateNarrating"
+        : STATE_KEY[call.status as Exclude<VoiceLiveStatus, "idle">];
 
   return (
     <div
       data-region="voice-call"
       data-testid="voice-call-bar"
       data-status={call.status}
+      data-narrating={call.narrating}
       className="mx-3 mt-2 md:mx-4 rounded-xl"
       style={{ backgroundColor: C.bgSurface, border: `1px solid ${C.border}` }}
     >
@@ -205,6 +213,7 @@ export function VoiceLiveDock({
   agentName,
   children,
   onForwarded,
+  progress,
   env = browserVoiceLiveEnv,
 }: {
   agentId: string;
@@ -212,11 +221,13 @@ export function VoiceLiveDock({
   children: (voiceSlot: ReactNode) => ReactNode;
   /** The voice passed a message on: echo it in the chat right away. */
   onForwarded?: (text: string, midTurn: boolean) => void;
+  /** The chat's live stream, for the voice to listen along (voice PR 3). */
+  progress?: ProgressSnapshot;
   env?: VoiceLiveEnv;
 }) {
   const locale = useLocale();
   const enabled = useVoiceLiveEnabled();
-  const call = useVoiceLive(agentId, locale === "de" ? "de" : "en", env, { onForwarded });
+  const call = useVoiceLive(agentId, locale === "de" ? "de" : "en", env, { onForwarded, progress });
   const callActive = call.status !== "idle";
   useEffect(() => {
     setVoiceLiveActive(agentId, callActive);

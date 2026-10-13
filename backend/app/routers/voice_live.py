@@ -9,6 +9,9 @@
 - ``POST /api/v1/voice/live/tool`` — runs one tool call the realtime model
   emitted (``send_to_agent`` / ``get_agent_status``) for the agent the call
   was opened for. See ``services/voice_live_tools.py``.
+- ``POST /api/v1/voice/live/progress`` — one redacted context line for the
+  voice about the agent's progress (voice PR 3). The browser watches the
+  chat's live stream and says WHEN; ``services/voice_progress.py`` says WHAT.
 
 Admin-only, like typing into the chat (``agent_chat.py`` chat/input): the
 voice talks on the operator's behalf. Separate from ``routers/voice.py``
@@ -31,7 +34,7 @@ from app.auth import Role, require_role
 from app.database import get_session
 from app.models.agent import Agent
 from app.config import settings
-from app.services import voice_live, voice_live_tools
+from app.services import voice_live, voice_live_tools, voice_progress
 from app.services.voice_live_tools import VoiceToolError
 
 logger = logging.getLogger("mc.voice_live")
@@ -273,3 +276,76 @@ async def run_tool(
         return await _get_agent_status(agent, session)
     except VoiceToolError as exc:
         return _tool_error(exc)
+
+
+# ── progress context (voice PR 3) ────────────────────────────────────────
+
+
+class _Strict(BaseModel):
+    # An unknown field is refused, not dropped: a tool OUTPUT must never be
+    # accepted here, not even to be thrown away (bauplan B4).
+    model_config = {"extra": "forbid"}
+
+
+class ProgressStep(_Strict):
+    index: int = Field(ge=0, le=999)
+    total: int = Field(ge=0, le=999)
+    content: str = Field(default="", max_length=500)
+    all_done: bool = False
+
+
+class ProgressTool(_Strict):
+    name: str = Field(max_length=80)
+    title: str = Field(default="", max_length=500)
+    failed: bool = False
+
+
+class VoiceProgressBody(_Strict):
+    call_ref: str = Field(min_length=1, max_length=128)
+    agent_id: uuid.UUID
+    kind: Literal[voice_progress.PROGRESS_KINDS]  # type: ignore[valid-type]
+    step: ProgressStep | None = None
+    tool: ProgressTool | None = None
+    #: ``final`` only: the agent's own last reply (shortened server-side).
+    text: str = Field(default="", max_length=8000)
+    question: str = Field(default="", max_length=1000)
+    error_code: str = Field(default="", max_length=64)
+    elapsed_s: int | None = Field(default=None, ge=0, le=24 * 3600)
+
+
+class VoiceProgressItem(BaseModel):
+    #: The system item text the browser hands the realtime model.
+    text: str
+    #: True only for ``final``: the agent itself reported the end of its turn.
+    agent_final: bool
+
+
+@router.post("/progress", response_model=VoiceProgressItem)
+async def progress_item(
+    body: VoiceProgressBody,
+    _user=Depends(require_role(Role.ADMIN)),
+    session: AsyncSession = Depends(get_session),
+):
+    """One progress line for an open call. Same guards as ``/tool``: feature
+    on, admin, call known and opened for THIS agent, per-call rate limit."""
+    _require_enabled()
+    try:
+        call = voice_live_tools.check_call(body.call_ref, body.agent_id)
+        agent = await session.get(Agent, body.agent_id)
+        if agent is None:
+            raise VoiceToolError("agent_not_found", 404)
+        voice_live_tools.take_rate(call, "progress")
+    except VoiceToolError as exc:
+        return _tool_error(exc)
+    item = voice_progress.progress_line(
+        body.kind,
+        agent.name,
+        str(agent.id),
+        step=body.step.model_dump() if body.step else None,
+        tool=body.tool.model_dump() if body.tool else None,
+        text=body.text,
+        question=body.question,
+        error_code=body.error_code,
+        elapsed_s=body.elapsed_s,
+    )
+    return VoiceProgressItem(**item)

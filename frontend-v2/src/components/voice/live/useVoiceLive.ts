@@ -15,6 +15,13 @@
  * model to speak. `send_to_agent` always carries the operator's verbatim
  * words (UtteranceLog). One tool call runs at a time.
  *
+ * Listening along (voice PR 3, progress.ts): while the call is open the chat
+ * hands its live stream in (`options.progress`). Milestones become one
+ * redacted system item each (`POST /api/v1/voice/live/progress`, MC writes
+ * the words); the voice is asked to speak about it only when the floor is
+ * free — never over the operator. A success claim in the voice's own words
+ * before the agent's final reply gets a correction item (no-success guard).
+ *
  * Everything the browser offers (getUserMedia, RTCPeerConnection, fetch,
  * isSecureContext) comes through `VoiceLiveEnv`, so tests drive the whole
  * call without a browser.
@@ -33,6 +40,15 @@ import {
   type VoiceLiveErrorKind,
   type VoiceLiveState,
 } from "./voiceLiveCore";
+import {
+  ProgressTracker,
+  claimsSuccess,
+  contextItemEvent,
+  speakDecision,
+  type Milestone,
+  type ProgressRequest,
+  type ProgressSnapshot,
+} from "./progress";
 import {
   TRANSCRIPT_WAIT_MS,
   UtteranceLog,
@@ -67,6 +83,11 @@ export interface VoiceToolResponse {
   mid_turn: boolean;
 }
 
+export interface VoiceProgressResponse {
+  text: string;
+  agent_final: boolean;
+}
+
 export interface VoiceLiveEnv {
   isSecureContext: () => boolean;
   getUserMedia: (c: MediaStreamConstraints) => Promise<MediaStream>;
@@ -75,6 +96,8 @@ export interface VoiceLiveEnv {
   mintSession: (agentId: string, lang: "de" | "en") => Promise<VoiceLiveSessionResponse>;
   postOffer: (url: string, secret: string, sdp: string) => Promise<Response>;
   runTool: (body: VoiceToolRequest) => Promise<VoiceToolResponse>;
+  progress: (body: { call_ref: string; agent_id: string } & ProgressRequest) => Promise<VoiceProgressResponse>;
+  now: () => number;
   setTimeout: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
   clearTimeout: (id: ReturnType<typeof setTimeout>) => void;
 }
@@ -102,6 +125,8 @@ export const browserVoiceLiveEnv: VoiceLiveEnv = {
       headers: { Authorization: `Bearer ${secret}`, "Content-Type": "application/sdp" },
     }),
   runTool: (body) => api.voiceLive.tool(body),
+  progress: (body) => api.voiceLive.progress(body),
+  now: () => Date.now(),
   setTimeout: (fn, ms) => setTimeout(fn, ms),
   clearTimeout: (id) => clearTimeout(id),
 };
@@ -117,7 +142,17 @@ export interface VoiceLiveOptions {
   /** A `send_to_agent` reached the agent: `text` is the exact chat message
    *  (the chat echoes it at once), `midTurn` = the agent was working. */
   onForwarded?: (text: string, midTurn: boolean) => void;
+  /** The chat's live stream (state, timeline, todos) — what the voice
+   *  listens along to (voice PR 3). */
+  progress?: ProgressSnapshot;
 }
+
+/** How often the progress clock runs while a call is open (final settle,
+ *  held tool lines, the periodic "still working"). */
+export const PROGRESS_TICK_MS = 1_000;
+/** After the operator stops talking the model answers by itself; a held
+ *  progress update waits this long so it never races that answer. */
+export const AFTER_SPEECH_MS = 1_500;
 
 interface Live {
   pc: RTCPeerConnection;
@@ -136,6 +171,24 @@ interface Live {
   /** A response is being generated: a `response.create` now would be refused. */
   responseActive: boolean;
   wantResponse: boolean;
+  // ── listening along (voice PR 3) ──
+  /** The data channel is open: progress items can be sent. */
+  connected: boolean;
+  tracker: ProgressTracker;
+  /** Progress items go out one after another, in order. */
+  progressChain: Promise<void>;
+  tickTimer: ReturnType<typeof setTimeout> | null;
+  userSpeaking: boolean;
+  voicePlaying: boolean;
+  lastUserSpeechAt: number;
+  lastSpokenProgressAt: number;
+  /** A progress item waits to be spoken once the floor is free. */
+  pendingSpeak: boolean;
+  /** The next response is one we asked for to tell progress. */
+  narrateNext: boolean;
+  narrating: boolean;
+  /** Voice items already corrected by the no-success guard. */
+  corrected: Set<string>;
 }
 
 export function useVoiceLive(
@@ -148,6 +201,9 @@ export function useVoiceLive(
   const liveRef = useRef<Live | null>(null);
   const onForwardedRef = useRef(options.onForwarded);
   onForwardedRef.current = options.onForwarded;
+  const progressSnap = options.progress;
+  const progressRef = useRef(progressSnap);
+  progressRef.current = progressSnap;
   // Bumped on every start/hang-up: a slow step of an older attempt (mic
   // prompt, mint, SDP answer) must not resurrect a call the operator ended.
   const attemptRef = useRef(0);
@@ -158,6 +214,9 @@ export function useVoiceLive(
     if (!live) return;
     live.timers.forEach((t) => env.clearTimeout(t));
     if (live.disconnectTimer) env.clearTimeout(live.disconnectTimer);
+    if (live.tickTimer) env.clearTimeout(live.tickTimer);
+    live.tickTimer = null;
+    live.connected = false;
     try {
       if (live.dc.readyState === "open") live.dc.send(JSON.stringify({ type: "session.close" }));
     } catch {
@@ -195,6 +254,73 @@ export function useVoiceLive(
     },
     [sendEvent],
   );
+
+  /** Speak a waiting progress item — only when nobody is talking and the
+   *  model is not answering the operator. Never interrupts. */
+  const flushSpeak = useCallback(
+    (live: Live) => {
+      if (!live.pendingSpeak || liveRef.current !== live) return;
+      const t = env.now();
+      if (live.userSpeaking || live.voicePlaying || live.responseActive) return;
+      if (t - live.lastUserSpeechAt < AFTER_SPEECH_MS) return;
+      live.pendingSpeak = false;
+      live.narrateNext = true;
+      live.lastSpokenProgressAt = t;
+      requestResponse(live);
+    },
+    [env, requestResponse],
+  );
+
+  /** One milestone → one redacted system item (MC writes the words) →
+   *  maybe a spoken line. A failure only means the voice knows less. */
+  const deliver = useCallback(
+    (live: Live, m: Milestone) => {
+      live.progressChain = live.progressChain
+        .then(async () => {
+          if (liveRef.current !== live) return;
+          const decision = speakDecision(
+            m.speak,
+            {
+              userSpeaking: live.userSpeaking,
+              voiceBusy: live.voicePlaying || live.responseActive,
+              lastUserSpeechAt: live.lastUserSpeechAt,
+              lastSpokenProgressAt: live.lastSpokenProgressAt,
+            },
+            env.now(),
+          );
+          let res: VoiceProgressResponse;
+          try {
+            res = await env.progress({ call_ref: live.callRef, agent_id: agentId, ...m.req });
+          } catch {
+            return;
+          }
+          if (liveRef.current !== live || !res?.text) return;
+          sendEvent(live, contextItemEvent(res.text));
+          if (decision !== "no") {
+            live.pendingSpeak = true;
+            flushSpeak(live);
+          }
+        })
+        .catch(() => undefined);
+    },
+    [agentId, env, sendEvent, flushSpeak],
+  );
+
+  const observeProgress = useCallback(
+    (live: Live, snap: ProgressSnapshot | undefined) => {
+      if (!snap || !live.connected || liveRef.current !== live) return;
+      for (const m of live.tracker.observe(snap, env.now())) deliver(live, m);
+    },
+    [env, deliver],
+  );
+
+  const tickRef = useRef<(live: Live) => void>(() => undefined);
+  tickRef.current = (live: Live) => {
+    if (liveRef.current !== live || !live.connected) return;
+    for (const m of live.tracker.tick(env.now())) deliver(live, m);
+    flushSpeak(live);
+    live.tickTimer = env.setTimeout(() => tickRef.current(live), PROGRESS_TICK_MS);
+  };
 
   const waitForTranscript = useCallback(
     (live: Live) =>
@@ -240,6 +366,7 @@ export function useVoiceLive(
         output = res.output;
         if (res.sent_text && liveRef.current === live) {
           live.utterances.consume(ids);
+          live.tracker.forwarded(res.mid_turn === true, env.now());
           dispatch({ type: "forwarded", ids });
           onForwardedRef.current?.(res.sent_text, res.mid_turn === true);
         }
@@ -274,14 +401,54 @@ export function useVoiceLive(
           if (id) live.utterances.failed(id);
           live.waiters = live.waiters.filter((w) => !w());
           break;
+        case "input_audio_buffer.speech_started":
+          live.userSpeaking = true;
+          live.lastUserSpeechAt = env.now();
+          break;
+        case "input_audio_buffer.speech_stopped":
+          live.userSpeaking = false;
+          live.lastUserSpeechAt = env.now();
+          break;
+        case "output_audio_buffer.started":
+          live.voicePlaying = true;
+          break;
+        case "output_audio_buffer.stopped":
+        case "output_audio_buffer.cleared":
+          live.voicePlaying = false;
+          flushSpeak(live);
+          break;
         case "response.created":
           live.responseActive = true;
+          if (live.narrateNext) {
+            live.narrateNext = false;
+            live.narrating = true;
+            dispatch({ type: "narrating", on: true });
+          }
           break;
         case "response.done":
           live.responseActive = false;
+          if (live.narrating) {
+            live.narrating = false;
+            dispatch({ type: "narrating", on: false });
+          }
           if (live.wantResponse) {
             live.wantResponse = false;
             requestResponse(live);
+          } else {
+            flushSpeak(live);
+          }
+          break;
+        case "response.output_audio_transcript.done":
+          // No-success guard (bauplan B4 layer b): the voice claimed success
+          // while the agent still owes its result → correct it at once.
+          if (
+            id &&
+            !live.corrected.has(id) &&
+            live.tracker.guardArmed() &&
+            claimsSuccess(ev.transcript ?? "")
+          ) {
+            live.corrected.add(id);
+            deliver(live, { req: { kind: "premature_success" }, speak: "always" });
           }
           break;
       }
@@ -291,7 +458,7 @@ export function useVoiceLive(
         live.toolChain = live.toolChain.then(() => runCall(live, fc)).catch(() => undefined);
       }
     },
-    [requestResponse, runCall],
+    [env, requestResponse, runCall, flushSpeak, deliver],
   );
 
   const fail = useCallback(
@@ -365,6 +532,18 @@ export function useVoiceLive(
       waiters: [],
       responseActive: false,
       wantResponse: false,
+      connected: false,
+      tracker: new ProgressTracker(),
+      progressChain: Promise.resolve(),
+      tickTimer: null,
+      userSpeaking: false,
+      voicePlaying: false,
+      lastUserSpeechAt: -Infinity,
+      lastSpokenProgressAt: -Infinity,
+      pendingSpeak: false,
+      narrateNext: false,
+      narrating: false,
+      corrected: new Set(),
     };
     liveRef.current = live;
 
@@ -379,7 +558,13 @@ export function useVoiceLive(
       return;
     }
     dc.onopen = () => {
-      if (liveRef.current === live) dispatch({ type: "connected" });
+      if (liveRef.current !== live) return;
+      dispatch({ type: "connected" });
+      // Listening along starts here: baseline of the chat as it is now, then
+      // the progress clock.
+      live.connected = true;
+      observeProgress(live, progressRef.current);
+      live.tickTimer = env.setTimeout(() => tickRef.current(live), PROGRESS_TICK_MS);
     };
     dc.onmessage = (e: MessageEvent) => {
       if (liveRef.current !== live) return;
@@ -431,7 +616,7 @@ export function useVoiceLive(
     } catch {
       if (liveRef.current === live) fail("network");
     }
-  }, [agentId, lang, env, teardown, fail, onToolEvent]);
+  }, [agentId, lang, env, teardown, fail, onToolEvent, observeProgress]);
 
   const hangUp = useCallback(() => {
     attemptRef.current += 1;
@@ -440,6 +625,12 @@ export function useVoiceLive(
   }, [teardown]);
 
   const dismiss = hangUp;
+
+  // Every change of the chat's live stream is looked at once.
+  useEffect(() => {
+    const live = liveRef.current;
+    if (live) observeProgress(live, progressSnap);
+  }, [progressSnap, observeProgress]);
 
   // A fatal server event (quota mid-call) flips the reducer to "error" — the
   // connection must close with it, or the mic stays open and billing runs.

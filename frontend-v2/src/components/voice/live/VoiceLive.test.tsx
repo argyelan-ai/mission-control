@@ -7,7 +7,9 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/lib/api";
 import { VoiceLiveDock } from "./VoiceLive";
-import type { VoiceLiveEnv } from "./useVoiceLive";
+import type { StateEvent, TimelineChatEvent } from "@/lib/chatTypes";
+import { FINAL_SETTLE_MS, type ProgressSnapshot } from "./progress";
+import { PROGRESS_TICK_MS, type VoiceLiveEnv } from "./useVoiceLive";
 import { resetVoiceLiveConfigCache } from "./useVoiceLiveConfig";
 import { DISCONNECT_GRACE_MS, MAX_CALL_MS } from "./voiceLiveCore";
 
@@ -62,7 +64,9 @@ interface Harness {
   postOffer: ReturnType<typeof vi.fn>;
   mintSession: ReturnType<typeof vi.fn>;
   runTool: ReturnType<typeof vi.fn>;
-  timers: { fn: () => void; ms: number; cleared: boolean }[];
+  progress: ReturnType<typeof vi.fn>;
+  clock: { t: number };
+  timers: { fn: () => void; ms: number; cleared: boolean; ran?: boolean }[];
 }
 
 function harness(over: Partial<VoiceLiveEnv> = {}): Harness {
@@ -84,6 +88,11 @@ function harness(over: Partial<VoiceLiveEnv> = {}): Harness {
       ? { output: { delivered: true, when: "now", done: false }, sent_text: "[per Stimme] x", mid_turn: false }
       : { output: { state: "working", step: "2/3: Tests", last_tool: "Bash · npm test" }, sent_text: null, mid_turn: false },
   );
+  const clock = { t: 1_000_000 };
+  const progress = vi.fn(async (body: { kind: string }) => ({
+    text: `[MC progress · agent_final=${body.kind === "final"}] ${body.kind}`,
+    agent_final: body.kind === "final",
+  }));
   const env: VoiceLiveEnv = {
     isSecureContext: () => true,
     getUserMedia: async () => ({ getTracks: () => [{ stop: trackStop }] }) as unknown as MediaStream,
@@ -96,6 +105,8 @@ function harness(over: Partial<VoiceLiveEnv> = {}): Harness {
     mintSession,
     postOffer,
     runTool: runTool as unknown as VoiceLiveEnv["runTool"],
+    progress: progress as unknown as VoiceLiveEnv["progress"],
+    now: () => clock.t,
     setTimeout: (fn, ms) => {
       timers.push({ fn, ms, cleared: false });
       return (timers.length - 1) as unknown as ReturnType<typeof setTimeout>;
@@ -106,7 +117,7 @@ function harness(over: Partial<VoiceLiveEnv> = {}): Harness {
     },
     ...over,
   };
-  return { env, pcs, trackStop, postOffer, mintSession, runTool, timers };
+  return { env, pcs, trackStop, postOffer, mintSession, runTool, progress, clock, timers };
 }
 
 function renderDock(env: VoiceLiveEnv, onForwarded?: (text: string, midTurn: boolean) => void) {
@@ -529,5 +540,227 @@ describe("transcript box", () => {
     fireEvent.scroll(box);
     expect(box).toHaveAttribute("data-scrolled", "true");
     expect(box.className).toContain("mask-image");
+  });
+});
+
+// ── listening along (voice PR 3) ─────────────────────────────────────────
+
+function Dock({ env, progress }: { env: VoiceLiveEnv; progress: ProgressSnapshot }) {
+  return (
+    <VoiceLiveDock agentId="agent-1" agentName="Boss" env={env} progress={progress}>
+      {(slot) => <div data-testid="composer">{slot}</div>}
+    </VoiceLiveDock>
+  );
+}
+
+const st = (status: StateEvent["status"], question?: string): StateEvent => ({
+  kind: "state",
+  status,
+  prompt: question ? { question, options: [] } : null,
+});
+const snapOf = (status: StateEvent["status"], events: TimelineChatEvent[] = []): ProgressSnapshot => ({
+  state: st(status),
+  events,
+  todos: null,
+});
+const reply = (text: string, uuid = "r1"): TimelineChatEvent => ({
+  kind: "message",
+  uuid,
+  ts: "2026-10-13T10:00:00Z",
+  role: "assistant",
+  text,
+  model: null,
+  sidechain: false,
+});
+
+async function listen(h: Harness, initial: ProgressSnapshot) {
+  const r = render(<Dock env={h.env} progress={initial} />);
+  const mic = await screen.findByTestId("voice-mic-button");
+  await act(async () => {
+    fireEvent.click(mic);
+  });
+  await waitFor(() => expect(h.pcs[0]?.remote).toBeTruthy());
+  const pc = h.pcs[0];
+  act(() => pc.dc.open());
+  return { pc, update: (p: ProgressSnapshot) => r.rerender(<Dock env={h.env} progress={p} />) };
+}
+
+/** Runs the newest pending progress-clock tick (it re-arms itself). */
+function runTick(h: Harness) {
+  const t = [...h.timers].reverse().find((x) => x.ms === PROGRESS_TICK_MS && !x.cleared && !x.ran);
+  expect(t).toBeTruthy();
+  t!.ran = true;
+  act(() => t!.fn());
+}
+
+/** Lets the response the tool answer asked for finish, so the floor is free. */
+function finishResponse(pc: FakePC) {
+  act(() => pc.dc.emit({ type: "response.created" }));
+  act(() => pc.dc.emit({ type: "response.done", response: { status: "completed" } }));
+}
+
+const contextItems = (pc: FakePC) =>
+  sentTypes(pc).filter((e) => e.type === "conversation.item.create" && e.item?.role === "system");
+
+async function forward(h: Harness, pc: FakePC) {
+  sayAndCall(pc, "lass die Schleife laufen", { text: "Lass die Schleife laufen" });
+  await waitFor(() => expect(sentTypes(pc).map((e) => e.type)).toContain("response.create"));
+  finishResponse(pc);
+  h.clock.t += 5_000;
+  pc.dc.sent.length = 0;
+}
+
+describe("listening along (voice PR 3)", () => {
+  it("the agent starts on the forwarded request: one redacted system item, then the voice speaks", async () => {
+    const h = harness();
+    const { pc, update } = await listen(h, snapOf("idle"));
+    expect(h.progress).not.toHaveBeenCalled(); // baseline: history is never news
+    await forward(h, pc);
+
+    update(snapOf("working"));
+    await waitFor(() => expect(h.progress).toHaveBeenCalledTimes(1));
+    expect(h.progress.mock.calls[0][0]).toEqual({ call_ref: "ref-1", agent_id: "agent-1", kind: "started" });
+    await waitFor(() => expect(sentTypes(pc).map((e) => e.type)).toContain("response.create"));
+    expect(contextItems(pc)[0].item).toEqual({
+      type: "message",
+      role: "system",
+      content: [{ type: "input_text", text: "[MC progress · agent_final=false] started" }],
+    });
+    // the context item goes in BEFORE the voice is asked to speak
+    const types = sentTypes(pc).map((e) => e.type);
+    expect(types.indexOf("conversation.item.create")).toBeLessThan(types.indexOf("response.create"));
+
+    act(() => pc.dc.emit({ type: "response.created" }));
+    act(() => pc.dc.emit({ type: "output_audio_buffer.started" }));
+    expect(screen.getByTestId("voice-call-bar")).toHaveAttribute("data-narrating", "true");
+    expect(screen.getByTestId("voice-state")).toHaveTextContent("Telling progress");
+    act(() => pc.dc.emit({ type: "response.done", response: { status: "completed" } }));
+    expect(screen.getByTestId("voice-call-bar")).toHaveAttribute("data-narrating", "false");
+  });
+
+  it("never talks over the operator: the item goes in, the voice waits until the floor is free", async () => {
+    const h = harness();
+    const { pc, update } = await listen(h, snapOf("working"));
+    // A busy agent at call start: one silent snapshot item, no speech.
+    await waitFor(() => expect(contextItems(pc)).toHaveLength(1));
+    expect(h.progress.mock.calls[0][0].kind).toBe("snapshot");
+    expect(sentTypes(pc).map((e) => e.type)).not.toContain("response.create");
+    pc.dc.sent.length = 0;
+    act(() => pc.dc.emit({ type: "input_audio_buffer.speech_started" }));
+    update({ ...snapOf("working"), state: st("permission_prompt", "Allow deploy?") });
+    await waitFor(() => expect(contextItems(pc)).toHaveLength(1));
+    expect(h.progress.mock.calls.at(-1)?.[0]).toMatchObject({ kind: "approval", question: "Allow deploy?" });
+    h.clock.t += 3_000;
+    runTick(h);
+    expect(sentTypes(pc).map((e) => e.type)).not.toContain("response.create");
+
+    act(() => pc.dc.emit({ type: "input_audio_buffer.speech_stopped" }));
+    // The model answers the operator by itself first …
+    act(() => pc.dc.emit({ type: "response.created" }));
+    h.clock.t += 2_000;
+    runTick(h);
+    expect(sentTypes(pc).map((e) => e.type)).not.toContain("response.create");
+    // … and only after that answer the waiting update is spoken.
+    act(() => pc.dc.emit({ type: "response.done", response: { status: "completed" } }));
+    expect(sentTypes(pc).filter((e) => e.type === "response.create")).toHaveLength(1);
+  });
+
+  it("final comes from the agent's real reply, through the progress clock", async () => {
+    const h = harness();
+    const { pc, update } = await listen(h, snapOf("idle"));
+    await forward(h, pc);
+    update(snapOf("working"));
+    await waitFor(() => expect(h.progress).toHaveBeenCalledTimes(1));
+    update(snapOf("idle", [reply("Die Schleife ist durch, 30 von 30. Sonst nichts.")]));
+    runTick(h);
+    expect(h.progress).toHaveBeenCalledTimes(1); // not settled yet
+    h.clock.t += FINAL_SETTLE_MS;
+    runTick(h);
+    await waitFor(() => expect(h.progress).toHaveBeenCalledTimes(2));
+    expect(h.progress.mock.calls[1][0]).toMatchObject({
+      kind: "final",
+      text: "Die Schleife ist durch, 30 von 30. Sonst nichts.",
+    });
+  });
+
+  it("no-success guard: the voice says done before the agent did → correction item, spoken", async () => {
+    const h = harness();
+    const { pc } = await listen(h, snapOf("idle"));
+    await forward(h, pc);
+    act(() => pc.dc.emit({ type: "response.output_audio_transcript.done", item_id: "v1", transcript: "Erledigt, er ist fertig." }));
+    await waitFor(() => expect(h.progress).toHaveBeenCalledWith(expect.objectContaining({ kind: "premature_success" })));
+    await waitFor(() => expect(sentTypes(pc).map((e) => e.type)).toContain("response.create"));
+    // the same item again is not corrected twice; an honest line never
+    act(() => pc.dc.emit({ type: "response.output_audio_transcript.done", item_id: "v1", transcript: "Erledigt." }));
+    act(() =>
+      pc.dc.emit({ type: "response.output_audio_transcript.done", item_id: "v2", transcript: "Noch nicht fertig, er arbeitet." }),
+    );
+    await act(async () => undefined);
+    expect(h.progress.mock.calls.filter((c) => c[0].kind === "premature_success")).toHaveLength(1);
+  });
+
+  it("after the agent's final the guard is quiet", async () => {
+    const h = harness();
+    const { pc, update } = await listen(h, snapOf("idle"));
+    await forward(h, pc);
+    update(snapOf("working"));
+    update(snapOf("idle", [reply("Fertig.")]));
+    h.clock.t += FINAL_SETTLE_MS;
+    runTick(h);
+    await waitFor(() => expect(h.progress).toHaveBeenCalledWith(expect.objectContaining({ kind: "final" })));
+    act(() => pc.dc.emit({ type: "response.output_audio_transcript.done", item_id: "v9", transcript: "Er ist fertig." }));
+    await act(async () => undefined);
+    expect(h.progress.mock.calls.some((c) => c[0].kind === "premature_success")).toBe(false);
+  });
+
+  it("a tool's output never leaves the browser — only its name and title", async () => {
+    const h = harness();
+    const { pc, update } = await listen(h, snapOf("working"));
+    const running: TimelineChatEvent = {
+      kind: "tool",
+      uuid: "t1",
+      ts: "2026-10-13T10:00:00Z",
+      name: "Bash",
+      title: "for i in $(seq 30); do sleep 1; done",
+      detail: { command: "secret-detail" },
+      toolUseId: "use-1",
+      result: null,
+      status: "done",
+      stats: null,
+      sidechain: false,
+    };
+    update(snapOf("working", [running]));
+    h.clock.t += 5_000;
+    update(snapOf("working", [{ ...running, result: "SECRET-OUTPUT line 1\nline 2" }]));
+    await waitFor(() => expect(h.progress.mock.calls.map((c) => c[0].kind)).toContain("tool_finished"));
+    const wire = JSON.stringify(h.progress.mock.calls) + JSON.stringify(pc.dc.sent);
+    expect(wire).not.toContain("SECRET-OUTPUT");
+    expect(wire).not.toContain("secret-detail");
+    expect(h.progress.mock.calls.find((c) => c[0].kind === "tool_started")?.[0].tool).toEqual({
+      name: "Bash",
+      title: "for i in $(seq 30); do sleep 1; done",
+    });
+  });
+
+  it("MC unreachable for a progress line: nothing is sent, the call goes on", async () => {
+    const h = harness({
+      progress: vi.fn(async () => {
+        throw new Error("API 429: {}");
+      }) as unknown as VoiceLiveEnv["progress"],
+    });
+    const { pc, update } = await listen(h, snapOf("idle"));
+    pc.dc.sent.length = 0;
+    update(snapOf("working"));
+    await act(async () => undefined);
+    expect(contextItems(pc)).toHaveLength(0);
+    expect(screen.getByTestId("voice-call-bar")).toHaveAttribute("data-status", "listening");
+  });
+
+  it("hang-up stops the progress clock", async () => {
+    const h = harness();
+    const { pc } = await listen(h, snapOf("working"));
+    act(() => pc.dc.emit({ type: "session.created" }));
+    fireEvent.click(screen.getByTestId("voice-hangup"));
+    expect(h.timers.filter((t) => t.ms === PROGRESS_TICK_MS && !t.cleared && !t.ran)).toHaveLength(0);
   });
 });

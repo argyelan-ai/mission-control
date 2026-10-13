@@ -65,8 +65,10 @@ CALL_TTL_S = 21 * 60
 DUPLICATE_WINDOW_S = 10.0
 RATE_WINDOW_S = 60.0
 #: Per call and minute. A spoken conversation passes on a handful of
-#: requests a minute at most; more is a loop in the model.
-RATE_LIMITS = {"send_to_agent": 6, "get_agent_status": 20}
+#: requests a minute at most; more is a loop in the model. ``progress`` is
+#: the browser's context feed (voice PR 3): milestones plus at most one
+#: heartbeat per 15 s — 40 a minute is a runaway, not a busy agent.
+RATE_LIMITS = {"send_to_agent": 6, "get_agent_status": 20, "progress": 40}
 
 TOOL_NAMES = ("send_to_agent", "get_agent_status")
 
@@ -184,6 +186,8 @@ def redact_short(text: str, limit: int = STATUS_FIELD_MAX) -> str:
     out = redact_secrets(clean_line(text))
 
     def _last_segment(m: re.Match[str]) -> str:
+        if re.fullmatch(r"[\d/]+", m.group(0)):
+            return m.group(0)  # "12/12", "3/5": a count, not a path
         parts = [p for p in m.group(0).split("/") if p and p not in ("~", ".", "..")]
         return parts[-1] if parts else m.group(0)
 

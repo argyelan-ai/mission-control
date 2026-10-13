@@ -3956,6 +3956,7 @@
     "stateListening": "Listening",
     "stateSpeaking": "Speaking",
     "statePassing": "Passing on…",
+    "stateNarrating": "Telling progress",
     "stateEnded": "Disconnected",
     "hangUp": "Hang up",
     "retry": "Try again",

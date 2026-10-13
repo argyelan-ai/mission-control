@@ -699,6 +699,12 @@ export function ChatView({
   /* Meldungen, die zu einem Werkzeugaufruf gehoeren, werden in dessen Karte
      gezeigt — nicht zusaetzlich als eigene Zeile daneben. */
   const toolNotices = useMemo(() => notificationsByTool(stream.events), [stream.events]);
+  // What a live voice call listens along to (voice PR 3): the same stream the
+  // chat renders. A preview tick changes none of these three, so it costs nothing.
+  const voiceProgress = useMemo(
+    () => ({ state: stream.state, events: stream.events, todos: stream.todos }),
+    [stream.state, stream.events, stream.todos],
+  );
 
   /* useMemo mit Grund: ein preview-Tick (alle 0.3 s ein replace-me-Event)
      erzeugt ein neues `stream`-Objekt, veraendert aber `events` nicht. Ohne
@@ -1326,6 +1332,7 @@ export function ChatView({
                   agentName={agent.name}
                   // Delivered by MC already — only the echo, no second send.
                   onForwarded={(text, midTurn) => stream.echoSent(text, midTurn)}
+                  progress={voiceProgress}
                 >
                 {(voiceSlot) => (
                 <Composer

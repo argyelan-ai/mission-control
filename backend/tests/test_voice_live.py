@@ -242,9 +242,9 @@ async def test_success_logs_no_secret(auth_client, voice_on, make_agent, monkeyp
 # ── persona ──────────────────────────────────────────────────────────────
 
 
-def test_persona_v1_snapshot():
+def test_persona_v2_snapshot():
     text = voice_live.build_instructions("Boss", "en")
-    assert voice_live.PERSONA_VERSION == "v1"
+    assert voice_live.PERSONA_VERSION == "v2"
     # Order recommended by OpenAI's realtime prompting guide (bauplan B2).
     heads = [line for line in text.splitlines() if line.startswith("# ")]
     assert heads == [
@@ -254,6 +254,7 @@ def test_persona_v1_snapshot():
         "# Interruptions",
         "# Delegation",
         "# Status",
+        "# Progress updates",
         "# Hard rules",
     ]
     for rule in (
@@ -267,6 +268,11 @@ def test_persona_v1_snapshot():
         "Stopping the agent by voice is not available yet",
         "Stop button",
         "One or two short sentences",
+        # voice PR 3: progress items + the no-success guard
+        "[MC progress",
+        "agent_final=true",
+        "[MC correction",
+        "Never interrupt the operator",
     ):
         assert rule in text, rule
     assert "not built yet" not in text  # PR 1 wording is gone

@@ -3956,6 +3956,7 @@
     "stateListening": "Hört zu",
     "stateSpeaking": "Spricht",
     "statePassing": "Gibt weiter…",
+    "stateNarrating": "Erzählt Fortschritt",
     "stateEnded": "Getrennt",
     "hangUp": "Auflegen",
     "retry": "Nochmal",

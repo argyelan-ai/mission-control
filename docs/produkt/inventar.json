@@ -553,6 +553,7 @@
     "POST /api/v1/vault/track-view",
     "POST /api/v1/voice/display",
     "POST /api/v1/voice/graph-highlight",
+    "POST /api/v1/voice/live/progress",
     "POST /api/v1/voice/live/session",
     "POST /api/v1/voice/live/tool",
     "POST /api/v1/voice/token",
