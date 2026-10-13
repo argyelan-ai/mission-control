@@ -124,8 +124,15 @@ async def create_session(
     agent = await session.get(Agent, body.agent_id)
     if agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")
+    # Settings → Profile "Voice language" (operator request 13.10.2026): an
+    # explicit preference overrides the UI locale in ``body.lang`` and also
+    # sets the realtime transcription hint, so the voice speaks German even
+    # when the UI itself is in English. "auto" (default) keeps following
+    # the UI, exactly as before.
+    preference = await voice_live.load_voice_language_preference(session, _user.id)
+    lang, transcription_lang = voice_live.resolve_voice_language(preference, body.lang)
     try:
-        minted = await voice_live.mint_client_secret(agent.name, body.lang)
+        minted = await voice_live.mint_client_secret(agent.name, lang, transcription_lang)
     except voice_live.VoiceLiveError as exc:
         return JSONResponse(status_code=exc.status, content={"detail": {"reason": exc.reason}})
     return VoiceLiveSession(

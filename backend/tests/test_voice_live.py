@@ -178,6 +178,83 @@ async def test_session_mints_client_secret_with_server_owned_config(
     assert "German" in s["instructions"].split("# Language and length")[1].splitlines()[1]
 
 
+# ── voice language preference (operator request 13.10.2026) ─────────────
+# "Automatic" (default) keeps following the UI locale, as above. An explicit
+# preference overrides the UI and also sets the realtime transcription hint,
+# so German answers happen even on an English UI.
+
+
+async def _set_voice_language(auth_client, value):
+    r = await auth_client.put("/api/v1/settings/voice_language", json={"value": {"language": value}})
+    assert r.status_code == 200, r.text
+
+
+async def test_voice_language_preference_sets_transcription_hint_and_persona(
+    auth_client, voice_on, make_agent, monkeypatch
+):
+    await _set_voice_language(auth_client, "de")
+    seen = _upstream(monkeypatch, _ok)
+    agent = await _agent(make_agent, name="Boss")
+    r = await auth_client.post(
+        "/api/v1/voice/live/session", json={"agent_id": str(agent.id), "lang": "en"}
+    )
+    assert r.status_code == 200, r.text
+    sent = json.loads(seen[0].content)
+    s = sent["session"]
+    assert s["audio"]["input"]["transcription"]["language"] == "de"
+    assert "German" in s["instructions"].split("# Language and length")[1].splitlines()[1]
+
+
+async def test_voice_language_preference_english_overrides_german_ui(
+    auth_client, voice_on, make_agent, monkeypatch
+):
+    await _set_voice_language(auth_client, "en")
+    seen = _upstream(monkeypatch, _ok)
+    agent = await _agent(make_agent, name="Boss")
+    r = await auth_client.post(
+        "/api/v1/voice/live/session", json={"agent_id": str(agent.id), "lang": "de"}
+    )
+    assert r.status_code == 200, r.text
+    sent = json.loads(seen[0].content)
+    s = sent["session"]
+    assert s["audio"]["input"]["transcription"]["language"] == "en"
+    assert "English" in s["instructions"].split("# Language and length")[1].splitlines()[1]
+
+
+async def test_voice_language_preference_auto_follows_ui_like_before(
+    auth_client, voice_on, make_agent, monkeypatch
+):
+    await _set_voice_language(auth_client, "auto")
+    seen = _upstream(monkeypatch, _ok)
+    agent = await _agent(make_agent, name="Boss")
+    r = await auth_client.post(
+        "/api/v1/voice/live/session", json={"agent_id": str(agent.id), "lang": "de"}
+    )
+    assert r.status_code == 200, r.text
+    sent = json.loads(seen[0].content)
+    s = sent["session"]
+    assert "language" not in s["audio"]["input"]["transcription"]
+    assert "German" in s["instructions"].split("# Language and length")[1].splitlines()[1]
+
+
+async def test_voice_language_preference_unknown_value_falls_back_to_auto(
+    auth_client, voice_on, make_agent, monkeypatch
+):
+    # A stray/garbage stored value must never break minting — fall back to
+    # following the UI, exactly like "auto".
+    await _set_voice_language(auth_client, "fr")
+    seen = _upstream(monkeypatch, _ok)
+    agent = await _agent(make_agent, name="Boss")
+    r = await auth_client.post(
+        "/api/v1/voice/live/session", json={"agent_id": str(agent.id), "lang": "en"}
+    )
+    assert r.status_code == 200, r.text
+    sent = json.loads(seen[0].content)
+    s = sent["session"]
+    assert "language" not in s["audio"]["input"]["transcription"]
+    assert "English" in s["instructions"].split("# Language and length")[1].splitlines()[1]
+
+
 @pytest.mark.parametrize(
     "status,payload,reason,expected_status",
     [
@@ -291,6 +368,17 @@ def test_persona_v3_snapshot():
 def test_persona_clamps_agent_name():
     text = voice_live.build_instructions("x" * 500, "en")
     assert "x" * 81 not in text
+
+
+def test_resolve_voice_language_explicit_preference_wins():
+    assert voice_live.resolve_voice_language("de", "en") == ("de", "de")
+    assert voice_live.resolve_voice_language("en", "de") == ("en", "en")
+
+
+def test_resolve_voice_language_auto_or_unknown_follows_ui_with_no_hint():
+    assert voice_live.resolve_voice_language("auto", "de") == ("de", None)
+    assert voice_live.resolve_voice_language(None, "en") == ("en", None)
+    assert voice_live.resolve_voice_language("fr", "en") == ("en", None)
 
 
 
