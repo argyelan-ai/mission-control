@@ -298,6 +298,7 @@
     "GET /api/v1/vault/search",
     "GET /api/v1/vault/topics",
     "GET /api/v1/voice/live/config",
+    "GET /api/v1/voice/live/default-target",
     "GET /health",
     "PATCH /api/v1/agent-templates/{template_id}",
     "PATCH /api/v1/agent/agents/{target_agent_id}/plugins",

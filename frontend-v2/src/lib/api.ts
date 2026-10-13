@@ -2195,6 +2195,12 @@ export const api = {
       body: { call_ref: string; agent_id: string } & ProgressRequest,
     ): Promise<{ text: string; agent_final: boolean }> =>
       request("/api/v1/voice/live/progress", { method: "POST", body: JSON.stringify(body) }),
+    /** The agent the navigation mic talks to: the lead agent of the active
+     *  board (voice PR 5). 404 `no_lead` / feature off → the mic stays Jarvis. */
+    defaultTarget: (boardId?: string | null): Promise<{ agent_id: string; agent_name: string }> =>
+      request(
+        `/api/v1/voice/live/default-target${boardId ? `?board_id=${encodeURIComponent(boardId)}` : ""}`,
+      ),
   },
 
   spark: {

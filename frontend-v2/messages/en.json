@@ -3994,6 +3994,12 @@
     "errRateLimited": "OpenAI is busy right now. Try again in a minute.",
     "errUnavailable": "Voice is not available right now.",
     "errMaxLength": "Call ended after {minutes} minutes.",
-    "errMutedTooLong": "Hung up after 5 minutes muted."
+    "errMutedTooLong": "Hung up after 5 minutes muted.",
+    "navMic": "Voice ({name})",
+    "navMicActive": "Open call with {name}",
+    "openChat": "Open chat",
+    "hangUpWith": "End call with {name}",
+    "jarvisClassic": "Jarvis (classic voice)",
+    "jarvisClassicHint": "The previous voice assistant"
   }
 }

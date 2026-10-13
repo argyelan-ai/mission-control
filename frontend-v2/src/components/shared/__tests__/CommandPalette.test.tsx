@@ -42,6 +42,15 @@ const apiMock = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/api", () => ({ api: apiMock }));
 
+// Voice PR 5: Jarvis is reachable from the palette while the sidebar mic is
+// the lead agent's live voice. Default: no lead → no Jarvis item.
+const live = vi.hoisted(() => ({ lead: null as null | { agentId: string; agentName: string } }));
+vi.mock("@/components/voice/live/VoiceLiveCall", () => ({
+  useVoiceLiveCall: () => (live.lead ? { lead: live.lead } : null),
+}));
+const jarvis = vi.hoisted(() => ({ toggleButton: vi.fn() }));
+vi.mock("@/components/voice/VoiceWidget", () => ({ useVoiceContext: () => jarvis }));
+
 import CommandPalette from "../CommandPalette";
 
 beforeAll(() => {
@@ -82,5 +91,26 @@ describe("CommandPalette — no one-keystroke bulk approval", () => {
     renderPalette();
     expect(screen.queryByText("Cmd+N")).not.toBeInTheDocument();
     expect(screen.queryByText("Cmd+Shift+A")).not.toBeInTheDocument();
+  });
+});
+
+describe("CommandPalette — Jarvis (classic voice), voice PR 5", () => {
+  it("offers Jarvis while the sidebar mic is the lead's live voice; selecting it starts Jarvis and closes", () => {
+    live.lead = { agentId: "lead-1", agentName: "Chief" };
+    try {
+      renderPalette();
+      const item = screen.getByTestId("palette-jarvis");
+      expect(item).toHaveTextContent(en.voiceLive.jarvisClassic);
+      item.click();
+      expect(jarvis.toggleButton).toHaveBeenCalledTimes(1);
+      expect(state.setCommandPaletteOpen).toHaveBeenCalledWith(false);
+    } finally {
+      live.lead = null;
+    }
+  });
+
+  it("no Jarvis item when the live voice is off — the sidebar mic is Jarvis then", () => {
+    renderPalette();
+    expect(screen.queryByTestId("palette-jarvis")).toBeNull();
   });
 });
