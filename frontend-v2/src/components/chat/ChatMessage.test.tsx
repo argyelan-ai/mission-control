@@ -311,3 +311,30 @@ describe("Horizontale Umbruch-Regel (Operator 15.09.: chat ist am Handy horizont
     expect(screen.getByRole("link")).toBeTruthy();
   });
 });
+
+describe("ChatMessage — passed on by the live voice (voice PR 2)", () => {
+  const NOTE =
+    "(Voice transcript: the operator is speaking to you through MC's voice; it may contain mis-hearings. The Wortlaut line is what the operator actually said. Phrases like \"pass on to <you>\" / \"gib an <dich> weiter\" / \"sag <dir>\" mean this request is for you: do it yourself, never forward it to another agent unless the operator names a different one. Keep the reply short; report success only when it is real.)";
+
+  it("shows the 'by voice' label and the operator's own words, hides marker and agent note", () => {
+    const text = `[per Stimme] Schreib Y in die Notiz\nWortlaut: „und schreib noch Y in die Notiz“\n${NOTE}`;
+    render(<ChatMessage ev={mkEvent({ role: "user", text })} />);
+    expect(screen.getByTestId("voice-label")).toHaveTextContent("by voice");
+    expect(screen.getByText("Schreib Y in die Notiz")).toBeInTheDocument();
+    expect(screen.getByTestId("voice-verbatim")).toHaveTextContent("Your words: „und schreib noch Y in die Notiz“");
+    expect(screen.queryByText(/\[per Stimme\]/)).toBeNull();
+    expect(screen.queryByText(/Voice transcript:/)).toBeNull();
+  });
+
+  it("labels a queued (mid-turn) voice echo too", () => {
+    const text = `[per Stimme] Mach die Tests\n${NOTE}`;
+    render(<ChatMessage ev={mkEvent({ role: "user", text })} echoStatus="queued" />);
+    expect(screen.getByTestId("voice-label")).toBeInTheDocument();
+    expect(screen.queryByTestId("voice-verbatim")).toBeNull();
+  });
+
+  it("a typed message that only mentions the marker stays a typed message", () => {
+    render(<ChatMessage ev={mkEvent({ role: "user", text: "was heisst [per Stimme] im Chat?" })} />);
+    expect(screen.queryByTestId("voice-label")).toBeNull();
+  });
+});

@@ -15,6 +15,7 @@ import pytest
 from httpx import AsyncClient
 
 from app.services.chat_changes import MAX_COMBINED_LINES, aggregate_changes
+from app.services.chat_diff import capture_texts
 from app.services.transcript_adapters import adapter_for
 from app.services.transcript_chat import read_history
 
@@ -76,7 +77,11 @@ def _claude_tool(n: int, name: str, tool_input: dict, *, error: bool = False,
 def _events(tmp_path: Path, lines: list[str], adapter) -> list[dict]:
     f = tmp_path / "sess.jsonl"
     f.write_text("\n".join(lines) + "\n")
-    return read_history(f, adapter, limit=10**9)["events"]
+    # Same as the router: read inside capture_texts() so each diff carries
+    # ``_texts`` — without it, aggregate_changes cannot compute a net diff
+    # and always falls back to the per-edit sum (also covered below).
+    with capture_texts():
+        return read_history(f, adapter, limit=10**9)["events"]
 
 
 def test_omp_acp_edits_fold_into_one_entry_per_file_newest_first(tmp_path):
@@ -123,6 +128,37 @@ def test_claude_edit_and_write_the_same_harness_neutral_list(tmp_path):
     # A Write's predecessor is unknown: no +/− claimed, but said that it happened.
     assert (written["written"], written["additions"], written["diff"]["kind"]) == (True, 0, "write")
     assert (edited["additions"], edited["deletions"], edited["written"]) == (1, 1, False)
+
+
+def test_created_file_edited_twice_reports_the_net_diff_not_the_sum(tmp_path):
+    """The live bug (12./13.10.2026): a file created at ``price = 1`` then
+    edited to ``price = 2`` and ``price = 3`` summed to "+3 -2" — wrong, the
+    net change against what this chat actually left behind is "+1 -0"."""
+    lines = [OMP_SESSION_LINE]
+    lines += _omp_edit(1, "/workspace/prices.py", None, "price = 1\n", ts="2026-10-12T16:01:00.000Z")
+    lines += _omp_edit(2, "/workspace/prices.py", "price = 1\n", "price = 2\n", ts="2026-10-12T16:02:00.000Z")
+    lines += _omp_edit(3, "/workspace/prices.py", "price = 2\n", "price = 3\n", ts="2026-10-12T16:03:00.000Z")
+
+    out = aggregate_changes(_events(tmp_path, lines, OMP), cwd="/workspace")
+
+    (f,) = out["files"]
+    assert (f["created"], f["edits"]) == (True, 3)
+    assert (f["additions"], f["deletions"]) == (1, 0)
+    assert out["stats"] == {"files": 1, "additions": 1, "deletions": 0}
+
+
+def test_write_then_edit_without_a_known_predecessor_falls_back_to_the_sum(tmp_path):
+    """A Claude ``Write`` never carries its predecessor, so the net diff
+    cannot be computed from it — the sum of the per-edit diffs stands, same
+    as before this fix."""
+    lines = []
+    lines += _claude_tool(1, "Write", {"file_path": "/workspace/app/b.py", "content": "x = 1\ny = 2\n"})
+    lines += _claude_tool(2, "Edit", {"file_path": "/workspace/app/b.py", "old_string": "y = 2", "new_string": "y = 3"})
+
+    out = aggregate_changes(_events(tmp_path, lines, CLAUDE), cwd="/workspace")
+
+    (f,) = out["files"]
+    assert (f["additions"], f["deletions"]) == (1, 1)
 
 
 def test_paths_outside_the_session_folder_stay_whole():

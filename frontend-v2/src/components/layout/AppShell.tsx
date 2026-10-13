@@ -13,6 +13,7 @@ import { QuickSheet } from "./QuickSheet";
 import CommandPalette from "@/components/shared/CommandPalette";
 import ToastRenderer from "@/components/shared/ToastRenderer";
 import { VoiceProvider, VoiceOverlay } from "@/components/voice/VoiceWidget";
+import { FloatingVoiceCall, VoiceLiveCallProvider } from "@/components/voice/live/VoiceLiveCall";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 
 // Refresh the signed-in user from the server once per page load. The stored
@@ -105,6 +106,8 @@ export default function AppShell({
 
   return (
     <VoiceProvider>
+    {/* The live voice call is app-wide (voice PR 5): it survives page changes. */}
+    <VoiceLiveCallProvider>
     <MobileNavProvider>
     <div
       className="flex overflow-hidden relative app-shell-height"
@@ -166,6 +169,10 @@ export default function AppShell({
             wo der Viewport-Bezug von `fixed` unzuverlässig ist. Auf Desktop
             ausgeblendet (md:hidden); dort trägt die Sidebar-Fusszeile den
             Systemzustand. */}
+        {/* A live voice call whose chat is not on screen: compact bar —
+            phone: in the flow right above the tab bar (covers nothing);
+            desktop: a small card bottom-right over the page. */}
+        <FloatingVoiceCall />
         {!mobileChromeless && <MobileTabBar />}
       </div>
 
@@ -180,6 +187,7 @@ export default function AppShell({
       <ToastRenderer />
     </div>
     </MobileNavProvider>
+    </VoiceLiveCallProvider>
     </VoiceProvider>
   );
 }

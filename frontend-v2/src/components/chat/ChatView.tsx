@@ -51,6 +51,7 @@ import { ThinkingRow } from "./ThinkingRow";
 import { SubagentGroup } from "./SubagentGroup";
 import { ToolGroup } from "./ToolGroup";
 import { ToolOutputContext, createToolOutputStore, type ToolOutputStore } from "./toolOutputStore";
+import { ChatMediaContext } from "./chatMedia";
 import { CommandRow } from "./CommandRow";
 import { ApprovalCard } from "./ApprovalCard";
 import { StatusLine } from "./StatusLine";
@@ -60,6 +61,8 @@ import { AdminOnlyNotice } from "@/components/shared/AdminOnlyNotice";
 import { TerminalPanel, type AgentWithState } from "./TerminalPanel";
 import { ChatOptionsSheet } from "./ChatOptionsSheet";
 import { VoiceButton } from "@/components/voice/VoiceWidget";
+import { VoiceLiveDock } from "@/components/voice/live/VoiceLive";
+import { useVoiceLiveActive } from "@/components/voice/live/voiceLiveActivity";
 import { CENTER_VIEWS, DETAIL_LEVELS, type CenterView, type DetailLevel } from "./chatOptions";
 import type { PanelKind } from "./PanelRail";
 
@@ -396,6 +399,7 @@ export function ChatView({
   const agentStream = useChatStream(head ? null : agent?.id ?? null, streamEnabled);
   const headStream = useHeadTranscript(head?.run_id ?? null, head?.state ?? null);
   const stream = head ? headStream : agentStream;
+  const voiceCallActive = useVoiceLiveActive(head ? null : agent?.id);
   const headMeta = useHeadTranscriptMeta(head?.run_id ?? null);
 
   /* Live tool output reaches the rows through a store, not a context value:
@@ -639,6 +643,15 @@ export function ChatView({
     api.chat.sendKeys(agent.id, ["Escape"]).catch(() => notify.error(t("stopActionFailed")));
   }
 
+  /** The voice stopped the turn (voice PR 4). MC already took the queue
+   *  back from the daemon (`takenBack`, `null` when it could not or the
+   *  agent is a TUI); drop the local queued rows and refill the composer. */
+  function handleVoiceStopped(takenBack: string[] | null) {
+    if (takenBack === null) return;
+    stream.withdrawQueued();
+    if (takenBack.length > 0) setComposerPrefill({ text: takenBack.join("\n\n"), at: Date.now() });
+  }
+
   /** Takes the follow-ups a headless agent's daemon still holds back and
    *  drops their local rows — only once the daemon has answered. `null` when
    *  it could not: the rows stay (the daemon still holds the messages) and,
@@ -696,6 +709,12 @@ export function ChatView({
   /* Meldungen, die zu einem Werkzeugaufruf gehoeren, werden in dessen Karte
      gezeigt — nicht zusaetzlich als eigene Zeile daneben. */
   const toolNotices = useMemo(() => notificationsByTool(stream.events), [stream.events]);
+  // What a live voice call listens along to (voice PR 3): the same stream the
+  // chat renders. A preview tick changes none of these three, so it costs nothing.
+  const voiceProgress = useMemo(
+    () => ({ state: stream.state, events: stream.events, todos: stream.todos }),
+    [stream.state, stream.events, stream.todos],
+  );
 
   /* useMemo mit Grund: ein preview-Tick (alle 0.3 s ein replace-me-Event)
      erzeugt ein neues `stream`-Objekt, veraendert aber `events` nicht. Ohne
@@ -819,6 +838,9 @@ export function ChatView({
 
   return (
     <ToolOutputContext.Provider value={toolOutputStore}>
+    {/* P2: tool pictures load from THIS agent's media route; a head (no
+        agent row) shows none rather than guessing an address. */}
+    <ChatMediaContext.Provider value={agent?.id ?? null}>
     <div ref={rootRef} className="flex flex-col flex-1 min-h-0 overflow-hidden">
       {/* One header for both breakpoints — the parts that only make sense on
           a phone (back chevron, context line, options button) carry
@@ -974,9 +996,14 @@ export function ChatView({
             ihm genau den Vorteil. Der Knopf bringt seine 44px-Trefferflaeche
             selbst mit; `-m-1` am Rahmen haelt den Kopf auf seiner Hoehe,
             dieselbe Rechnung wie bei `TOUCH_TARGET`. */}
-        <span className="flex md:hidden -m-1">
-          <VoiceButton size={36} />
-        </span>
+        {/* While a live voice call runs in THIS chat, the Jarvis mic steps
+            aside: two mics with two meanings side by side confused the
+            operator (voice PR 1 review). Jarvis itself is unchanged. */}
+        {!voiceCallActive && (
+          <span className="flex md:hidden -m-1">
+            <VoiceButton size={36} />
+          </span>
+        )}
 
         <button
           type="button"
@@ -1282,6 +1309,8 @@ export function ChatView({
                 prompt={prompt}
                 onAnswer={handleAnswer}
                 onShowTerminal={() => onCenterViewChange("terminal")}
+                // The voice asks for a tap; the card shows where (voice PR 4).
+                attention={voiceCallActive}
               />
             </div>
           )}
@@ -1313,7 +1342,19 @@ export function ChatView({
               {!isAdmin ? (
                 <AdminOnlyNotice compact message={t("inputAdminOnly")} />
               ) : agent ? (
+                <VoiceLiveDock
+                  agentId={agent.id}
+                  agentName={agent.name}
+                  // Delivered by MC already — only the echo, no second send.
+                  onForwarded={(text, midTurn) => stream.echoSent(text, midTurn)}
+                  // Stopped by voice: same aftermath as the Stop button —
+                  // the follow-ups the daemon held go back into the composer.
+                  onStopped={handleVoiceStopped}
+                  progress={voiceProgress}
+                >
+                {(voiceSlot) => (
                 <Composer
+                  voiceSlot={voiceSlot}
                   agentId={agent.id}
                   usage={stream.usage}
                   state={stream.state}
@@ -1327,6 +1368,8 @@ export function ChatView({
                   paneObservable={agent.agent_runtime === "cli-bridge"}
                   capabilities={stream.capabilities}
                 />
+                )}
+                </VoiceLiveDock>
               ) : null}
             </>
           )}
@@ -1347,6 +1390,7 @@ export function ChatView({
         />
       )}
     </div>
+    </ChatMediaContext.Provider>
     </ToolOutputContext.Provider>
   );
 }

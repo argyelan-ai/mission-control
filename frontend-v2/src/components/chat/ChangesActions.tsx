@@ -46,6 +46,23 @@ function basename(path: string): string {
   return i < 0 ? path : path.slice(i + 1);
 }
 
+/** Refusal codes `chat_actions.py` raises for a revert that will not
+ *  succeed by tapping "Revert" again — nothing about the chat's folder, the
+ *  file or what happened since changes by retrying. A sheet showing one of
+ *  these drops the primary button down to "Close" only (the red sentence
+ *  from `ErrorLine` already says why). Everything else — no parsed reason
+ *  at all (a network error) or `agent_busy` ("try again when its turn
+ *  ends") — stays retryable. */
+const PERMANENT_REVERT_REFUSALS = new Set([
+  "not_changed_by_chat",
+  "path_outside",
+  "changed_externally",
+  "too_large",
+  "cannot_restore",
+  "unknown_original",
+  "git_failed",
+]);
+
 /** After any action: the list, both git views and the action availability
  *  are stale. */
 function useRefreshChanges(agentId: string) {
@@ -194,6 +211,8 @@ export function RevertSheet({
 
   const name = target ? basename(target.path) : "";
   const done = mutation.data;
+  const refusal = mutation.isError ? actionReason(mutation.error) : null;
+  const permanentRefusal = refusal !== null && PERMANENT_REVERT_REFUSALS.has(refusal.reason);
   return (
     <ActionSheet
       open={target !== null}
@@ -201,7 +220,7 @@ export function RevertSheet({
       title={done ? t("act.revertedTitle", { file: name }) : t("act.revertTitle", { file: target?.path ?? "" })}
       onClose={onClose}
       busy={mutation.isPending}
-      confirmLabel={done ? undefined : t("act.revert")}
+      confirmLabel={done || permanentRefusal ? undefined : t("act.revert")}
       onConfirm={() => target && mutation.mutate(target.path)}
     >
       {done ? (

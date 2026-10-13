@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
-import { VoiceButton } from "@/components/voice/VoiceWidget";
+import { NavVoiceButton } from "@/components/voice/live/NavVoiceButton";
 import { P2 } from "@/lib/colors";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { useEscapeKey } from "@/hooks/useEscapeKey";
@@ -119,7 +119,8 @@ export default function MobileNav({ showBar = true }: {
         </Link>
 
         <div className="flex items-center gap-2">
-          <VoiceButton size={40} variant="header" />
+          {/* The lead agent's live voice (voice PR 5); Jarvis when that is off. */}
+          <NavVoiceButton size={40} variant="header" />
         </div>
       </header>
     </>

@@ -119,6 +119,7 @@ import type {
   HeadSummary,
 } from "./heads";
 import type { ChatChanges } from "./chatTypes";
+import type { ProgressRequest } from "@/components/voice/live/progress";
 import type { LastNight, NightConfig, NightConfigUpdate, NightEntry, NightTonight } from "./nightShift";
 
 import { AUTH_TOKEN_KEY, BASE_URL, getToken } from "./authToken";
@@ -780,6 +781,11 @@ export const api = {
         `/api/v1/agents/${agentId}/chat/subagent/${encodeURIComponent(runId)}${suffix}`,
       );
     },
+    /** A tool picture (chat package P2). Bearer-authenticated like the
+     *  rest of the chat — fetch it (useAuthBlob), never put it in `<img src>`.
+     *  `thumb` = small WebP for the card, `full` = metadata-free original. */
+    mediaUrl: (agentId: string, mediaId: string, variant: "thumb" | "full" = "thumb"): string =>
+      `${BASE_URL}/api/v1/agents/${encodeURIComponent(agentId)}/chat/media/${encodeURIComponent(mediaId)}?variant=${variant}`,
     history: (agentId: string, params?: { limit?: number; beforeUuid?: string }) => {
       const qs = new URLSearchParams();
       if (params?.limit != null) qs.set("limit", String(params.limit));
@@ -2141,6 +2147,60 @@ export const api = {
       request(`/api/v1/night-shift/tasks/${encodeURIComponent(taskId)}`, { method: "PUT", body: JSON.stringify(body) }),
     unmark: (taskId: string): Promise<{ mark: null }> =>
       request(`/api/v1/night-shift/tasks/${encodeURIComponent(taskId)}`, { method: "DELETE" }),
+  },
+
+  // ── Live voice in the chat (voice PR 1, ADR-091 draft) ─────────────────
+  voiceLive: {
+    /** 404 = feature off or no OpenAI key. */
+    config: (): Promise<{ enabled: boolean; model: string; voice: string }> =>
+      request("/api/v1/voice/live/config"),
+    /** Short-lived client secret for one WebRTC call with this agent. */
+    session: (
+      agentId: string,
+      lang: "de" | "en",
+    ): Promise<{
+      client_secret: string;
+      expires_at: number;
+      model: string;
+      voice: string;
+      calls_url: string;
+      agent_name: string;
+      call_ref: string;
+    }> =>
+      request("/api/v1/voice/live/session", {
+        method: "POST",
+        body: JSON.stringify({ agent_id: agentId, lang }),
+      }),
+    /** One tool call of a live voice call (voice PR 2). MC runs it for the
+     *  agent the call was opened for; the browser only relays. */
+    tool: (body: {
+      call_ref: string;
+      agent_id: string;
+      name: "send_to_agent" | "get_agent_status" | "stop_agent";
+      arguments: Record<string, unknown>;
+      transcript: string;
+    }): Promise<{
+      output: Record<string, unknown>;
+      sent_text: string | null;
+      mid_turn: boolean;
+      /** `stop_agent` (voice PR 4): the stop went out. */
+      stopped?: boolean;
+      /** `stop_agent` on a headless agent: follow-ups taken back, oldest first. */
+      taken_back?: string[] | null;
+    }> =>
+      request("/api/v1/voice/live/tool", { method: "POST", body: JSON.stringify(body) }),
+    /** One redacted progress line for the voice (voice PR 3). The browser
+     *  says WHEN (milestone), MC says WHAT (redacted, shortened). */
+    progress: (
+      body: { call_ref: string; agent_id: string } & ProgressRequest,
+    ): Promise<{ text: string; agent_final: boolean }> =>
+      request("/api/v1/voice/live/progress", { method: "POST", body: JSON.stringify(body) }),
+    /** The agent the navigation mic talks to: the lead agent of the active
+     *  board (voice PR 5). 404 `no_lead` / feature off → the mic stays Jarvis. */
+    defaultTarget: (boardId?: string | null): Promise<{ agent_id: string; agent_name: string }> =>
+      request(
+        `/api/v1/voice/live/default-target${boardId ? `?board_id=${encodeURIComponent(boardId)}` : ""}`,
+      ),
   },
 
   spark: {

@@ -9,8 +9,12 @@
  * double-click (or a slow network) can't fire onAnswer twice. The card
  * re-enables only when the parent hands it a fresh `prompt` object — i.e. a
  * new state event actually arrived, not just a re-render.
+ *
+ * `attention` (voice PR 4): during a live voice call the voice says "bitte im
+ * Chat antippen" — the card then scrolls into view and pulses once, so the
+ * operator finds what to tap. The voice itself never answers the card.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { C } from "@/lib/colors";
 import type { ChatPrompt } from "@/lib/chatTypes";
 
@@ -18,10 +22,28 @@ interface ApprovalCardProps {
   prompt: ChatPrompt;
   onAnswer: (key: string) => void;
   onShowTerminal: () => void;
+  /** A voice call is open in this chat: draw the eye to the card. */
+  attention?: boolean;
 }
 
-export function ApprovalCard({ prompt, onAnswer, onShowTerminal }: ApprovalCardProps) {
+/** How long the one-time pulse runs. */
+const ATTENTION_PULSE_MS = 2_000;
+
+export function ApprovalCard({ prompt, onAnswer, onShowTerminal, attention = false }: ApprovalCardProps) {
   const [answered, setAnswered] = useState(false);
+  const [pulsing, setPulsing] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  // Once per prompt (a new state event), not on every re-render.
+  useEffect(() => {
+    if (!attention) return;
+    const reduce =
+      typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    ref.current?.scrollIntoView?.({ block: "nearest", behavior: reduce ? "auto" : "smooth" });
+    setPulsing(true);
+    const id = setTimeout(() => setPulsing(false), ATTENTION_PULSE_MS);
+    return () => clearTimeout(id);
+  }, [prompt, attention]);
 
   // New prompt object === new state event from the tailer → re-arm.
   useEffect(() => {
@@ -35,7 +57,9 @@ export function ApprovalCard({ prompt, onAnswer, onShowTerminal }: ApprovalCardP
 
   return (
     <div
-      className="flex flex-col gap-3 rounded-lg border px-4 py-3"
+      ref={ref}
+      data-attention={attention}
+      className={`flex flex-col gap-3 rounded-lg border px-4 py-3 ${pulsing ? "motion-safe:animate-pulse" : ""}`}
       style={{ borderColor: C.warning, backgroundColor: C.bgElevated }}
     >
       <p className="text-sm leading-snug" style={{ color: C.textPrimary }}>

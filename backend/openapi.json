@@ -1146,6 +1146,15 @@
         ]
       }
     },
+    "/api/v1/agents/{agent_id}/chat/media/{media_id}": {
+      "get": {
+        "operationId": "get_chat_media_api_v1_agents__agent_id__chat_media__media_id__get",
+        "summary": "Get Chat Media",
+        "tags": [
+          "agent-chat"
+        ]
+      }
+    },
     "/api/v1/agents/{agent_id}/chat/pr": {
       "post": {
         "operationId": "post_chat_pr_api_v1_agents__agent_id__chat_pr_post",
@@ -4812,6 +4821,51 @@
         "summary": "Voice Graph Highlight",
         "tags": [
           "voice"
+        ]
+      }
+    },
+    "/api/v1/voice/live/config": {
+      "get": {
+        "operationId": "get_config_api_v1_voice_live_config_get",
+        "summary": "Get Config",
+        "tags": [
+          "voice-live"
+        ]
+      }
+    },
+    "/api/v1/voice/live/default-target": {
+      "get": {
+        "operationId": "get_default_target_api_v1_voice_live_default_target_get",
+        "summary": "Get Default Target",
+        "tags": [
+          "voice-live"
+        ]
+      }
+    },
+    "/api/v1/voice/live/progress": {
+      "post": {
+        "operationId": "progress_item_api_v1_voice_live_progress_post",
+        "summary": "Progress Item",
+        "tags": [
+          "voice-live"
+        ]
+      }
+    },
+    "/api/v1/voice/live/session": {
+      "post": {
+        "operationId": "create_session_api_v1_voice_live_session_post",
+        "summary": "Create Session",
+        "tags": [
+          "voice-live"
+        ]
+      }
+    },
+    "/api/v1/voice/live/tool": {
+      "post": {
+        "operationId": "run_tool_api_v1_voice_live_tool_post",
+        "summary": "Run Tool",
+        "tags": [
+          "voice-live"
         ]
       }
     },

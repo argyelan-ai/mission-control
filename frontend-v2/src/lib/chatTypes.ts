@@ -76,6 +76,20 @@ export interface ToolEvent {
   /** File paths the call touched (ACP `locations`, Claude `file_path`).
    *  Container/host paths — shown as copyable chips, never opened blindly. */
   locations?: string[] | null;
+  /** Pictures the tool produced (chat package P2): browser screenshots,
+   *  images it read. References only — the bytes come from
+   *  `api.agents.chatMediaUrl` with the chat's auth (backend `chat_media.py`). */
+  images?: ToolImage[] | null;
+}
+
+/** One stored tool picture. `id` is its sha256; width/height are the
+ *  original's, so a thumbnail reserves the right shape before it loads. */
+export interface ToolImage {
+  id: string;
+  mime: "image/png" | "image/jpeg" | "image/webp" | "image/gif";
+  width: number;
+  height: number;
+  bytes: number;
 }
 
 export interface ToolDiffLine {

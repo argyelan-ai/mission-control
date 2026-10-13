@@ -160,6 +160,16 @@ class Settings(BaseSettings):
     jarvis_telegram_enabled: bool = False
     # OpenAI-Key fuer den Text-Brain + Sprachnachrichten-Transkription.
     openai_api_key: str = ""
+    # ── Live voice in the chat (ADR-091, draft) ──────────────────────────
+    # The chat's agent gets "ears and a mouth": the browser talks WebRTC
+    # straight to OpenAI Realtime with a short-lived client secret the backend
+    # mints from openai_api_key above (the key itself never leaves the
+    # backend). Off by default — the mic button only appears when this is true
+    # AND openai_api_key is set. Needs the compose mapping for backend AND
+    # mc-worker (same Settings class in both).
+    voice_live_enabled: bool = False
+    voice_live_model: str = "gpt-realtime-2.1"
+    voice_live_voice: str = "marin"
     # Chat-Modell fuer den Text-Brain (konservativer Default, existiert sicher).
     jarvis_text_model: str = "gpt-4o-mini"
     # Transcription-Modell fuer Telegram-Sprachnotizen (ogg/opus direkt).
@@ -657,6 +667,10 @@ class Settings(BaseSettings):
     # browser_sessions_root holds each session's last image
     # (<root>/<session-id>/last.jpg), derived like heads_root.
     browser_sessions_root: Path = Path(os.environ.get("HOME_HOST", str(Path.home()))) / ".mc" / "browser-sessions"
+    # Chat package P2: pictures from agent tools (screenshots, read images)
+    # shown on the chat's tool cards — <root>/<agent-id>/<sha256>.*, served
+    # by GET /agents/{id}/chat/media/{media_id} (services/chat_media.py).
+    chat_media_root: Path = Path(os.environ.get("HOME_HOST", str(Path.home()))) / ".mc" / "chat-media"
     browser_sessions_interval: int = 15
     # An agent's working phase ends after this long without browser activity.
     browser_session_idle_s: int = 30 * 60

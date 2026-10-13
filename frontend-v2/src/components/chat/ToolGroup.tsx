@@ -26,6 +26,7 @@ import { C, STATUS_TEXT } from "@/lib/colors";
 import type { ThinkingEvent, ToolEvent } from "@/lib/chatTypes";
 import { ToolRow } from "./ToolRow";
 import { ThinkingRow } from "./ThinkingRow";
+import { ToolImages } from "./ToolImages";
 import { useStreamingToolIds } from "./toolOutputStore";
 
 export type ActivityEvent = ToolEvent | ThinkingEvent;
@@ -133,6 +134,10 @@ export function ToolGroup({
   const summary = summarizeActivity(events);
   const label = toolGroupLabel(summary, t);
   const Icon = leadingIcon(summary);
+  // P2: the run's pictures stay visible below a COLLAPSED group — a
+  // screenshot must not hide behind "12 tools used". Opened, every row
+  // shows its own (never twice).
+  const images = events.flatMap((ev) => (ev.kind === "tool" ? (ev.images ?? []) : []));
 
   return (
     <div className="w-full px-4 md:px-5 py-1" data-testid="tool-group">
@@ -184,6 +189,12 @@ export function ToolGroup({
           aria-hidden="true"
         />
       </button>
+
+      {!expanded && images.length > 0 && (
+        <div className="mt-2 ml-3 min-w-0" data-testid="tool-group-images">
+          <ToolImages images={images} />
+        </div>
+      )}
 
       {(expanded || streaming.size > 0) && (
         // 1px hairline rail instead of a card: the rows stay in the timeline's

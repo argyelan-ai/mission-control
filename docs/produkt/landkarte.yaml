@@ -436,6 +436,9 @@ features:
       - "* /api/v1/host-sessions/agents"
       # Browser live panel (BrowserLiveView: target list + CDP screencast WS).
       - "* /api/v1/browser-live/*"
+      # Live voice in the chat (ADR-091 proposed, voice PR 1): composer mic
+      # → config probe + short-lived OpenAI Realtime client secret.
+      - "* /api/v1/voice/live/*"
     tables:
       # Agents in the session sidebar pickers; group chat rows (ADR-075):
       # groups, members, rounds plus thread and message rows.

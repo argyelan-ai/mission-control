@@ -79,3 +79,26 @@ describe("ApprovalCard", () => {
     expect(onShowTerminal).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("ApprovalCard during a voice call (voice PR 4)", () => {
+  it("scrolls into view and pulses once when the voice asks for a tap", () => {
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    const { container, rerender } = render(
+      <ApprovalCard prompt={PROMPT} onAnswer={vi.fn()} onShowTerminal={vi.fn()} attention />,
+    );
+    expect(scroll).toHaveBeenCalledTimes(1);
+    expect(container.firstElementChild).toHaveAttribute("data-attention", "true");
+    // A re-render with the same prompt does not scroll again.
+    rerender(<ApprovalCard prompt={PROMPT} onAnswer={vi.fn()} onShowTerminal={vi.fn()} attention />);
+    expect(scroll).toHaveBeenCalledTimes(1);
+  });
+
+  it("without a call it stays where it is", () => {
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    const { container } = render(<ApprovalCard prompt={PROMPT} onAnswer={vi.fn()} onShowTerminal={vi.fn()} />);
+    expect(scroll).not.toHaveBeenCalled();
+    expect(container.firstElementChild).toHaveAttribute("data-attention", "false");
+  });
+});

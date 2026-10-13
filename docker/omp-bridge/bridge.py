@@ -4226,6 +4226,7 @@ def run_acp_once(
     transcript_sink: Optional[Callable[[list[str]], None]] = None,
     preview_sink: Optional[Callable[[list[str]], None]] = None,
     on_session_id: Optional[Callable[[str], None]] = None,
+    media_sink: Optional[Callable[[str, bytes], bool]] = None,
 ) -> RunOutcome:
     """One task attempt over ACP: prompt in, terminal RunOutcome out.
 
@@ -4260,6 +4261,11 @@ def run_acp_once(
     text (plus usage + the real sessionId) into the transcript. No stacked
     per-chunk bubbles, no 0/0 usage per chunk, no frontend change.
     ``None`` keeps the pure-driver behaviour byte-identical.
+
+    ``media_sink(name, bytes) -> bool`` (chat package P2): stores a tool
+    picture next to the transcript; the line then carries only its
+    reference. ``None`` -> pictures are dropped (no reference without a
+    file).
     """
     import threading
 
@@ -4271,7 +4277,7 @@ def run_acp_once(
         if transcript_sink is None or not entries:
             return
         try:
-            transcript_sink(acp_chat_events.ACPEventMapper.dump(entries))
+            transcript_sink(acp_chat_events.ACPEventMapper.dump(entries, media_writer=media_sink))
         except Exception:  # noqa: BLE001 — the chat view must never kill the run
             sys.stderr.write("[acp] transcript sink write failed\n")
 
@@ -4757,7 +4763,7 @@ def _make_acp_run_factory(
         def on_session_id(session_id: str) -> None:
             holder["session_id"] = session_id
 
-        def sink(lines: list[str]) -> None:
+        def sink_obj_for_session() -> "acp_chat_events.ChatEventSink":
             sink_obj = holder["sink"]
             if sink_obj is None or sink_obj.session_id != holder["session_id"]:
                 directory = acp_chat_events.session_dir(cwd=cwd)
@@ -4765,7 +4771,15 @@ def _make_acp_run_factory(
                     directory, holder["session_id"], task_id=task_id
                 )
                 holder["sink"] = sink_obj
-            sink_obj.write(lines)
+            return sink_obj
+
+        def sink(lines: list[str]) -> None:
+            sink_obj_for_session().write(lines)
+
+        def media_sink(name: str, data: bytes) -> bool:
+            # P2: the picture goes next to the SAME transcript file the line
+            # lands in (dump writes media first, then the line).
+            return sink_obj_for_session().write_media(name, data)
 
         def preview_sink(lines: list[str]) -> None:
             # Vorschau-Kanal (Folge-PR zu #471): the volatile snapshots go to
@@ -4793,6 +4807,7 @@ def _make_acp_run_factory(
             transcript_sink=sink,
             preview_sink=preview_sink,
             on_session_id=on_session_id,
+            media_sink=media_sink,
             context_pct=context_pct,
             **(
                 {"interrupt_state": interrupt_state}

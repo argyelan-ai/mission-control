@@ -740,7 +740,11 @@ class ChatSession:
         if not entries or self._sink is None:
             return
         try:
-            self._sink.write(acp_chat_events.ACPEventMapper.dump(entries))
+            # P2: tool pictures land next to the transcript (media/), the
+            # line keeps only their reference.
+            self._sink.write(acp_chat_events.ACPEventMapper.dump(
+                entries, media_writer=self._sink.write_media
+            ))
         except Exception:  # noqa: BLE001 — the chat view never kills the turn
             logger.exception("transcript write failed")
 
