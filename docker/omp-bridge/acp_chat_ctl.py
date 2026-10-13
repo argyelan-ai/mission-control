@@ -18,6 +18,7 @@ Examples:
     acp_chat_ctl.py new_session
     acp_chat_ctl.py config --json '{"id": "thinking", "value": "high"}'
     acp_chat_ctl.py cancel
+    acp_chat_ctl.py answer --json '{"id": "el-…", "action": "accept", "content": {"value": "Yes"}}'
 """
 from __future__ import annotations
 
@@ -30,7 +31,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import acp_chat  # noqa: E402
 
-OPS = ("prompt", "cancel", "config", "state", "new_session", "queue_clear")
+OPS = ("prompt", "cancel", "config", "state", "new_session", "queue_clear", "answer")
 
 EXIT_OK = 0
 EXIT_NOT_OK = 2

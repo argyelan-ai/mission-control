@@ -135,6 +135,7 @@ class ChatSession:
         prompt_timeout: float = 3600.0,
         task_id: str = "",
         model: Optional[str] = None,
+        elicitation: bool = False,
     ):
         self._client_factory = client_factory
         self._cwd = str(cwd)
@@ -151,6 +152,10 @@ class ChatSession:
         )
         self._prompt_timeout = prompt_timeout
         self._task_id = task_id
+        # P3: ask the operator (question cards, plan approval). Opt-in per
+        # daemon: the omp container chat turns it on (build_session); the
+        # Hermes host chat has no `answer` route yet and stays off.
+        self._elicitation_enabled = bool(elicitation)
 
         self._client: Any = None
         self._session_id: Optional[str] = None
@@ -178,6 +183,16 @@ class ChatSession:
         self._worker: Optional[threading.Thread] = None
         self._closed = False
 
+        # P3: open questions omp asked (`elicitation/create`), by OUR card id:
+        # {"id", "rpcId", "message", "schema", "at"}. In memory only — a
+        # restarted daemon cannot answer its predecessor's JSON-RPC request,
+        # so start() marks whatever the old state mirror still listed as
+        # expired (same pattern as the lost queue).
+        self._elicitations: dict[str, dict] = {}
+        # Last `session_info_update` (title/updatedAt) — mirrored into the
+        # state file, never a chat line.
+        self._session_info: dict = {}
+
         self._full_text: list[str] = []
         self._throttle: dict = {"chars": -10 ** 9, "at": 0.0, "pending": None}
         # P1: trailing flush of withheld live tool output (see
@@ -197,6 +212,7 @@ class ChatSession:
         # Read BEFORE anything rewrites the mirror: the queue lives in memory,
         # so whatever a previous daemon still held is gone after a restart.
         lost = self._previous_queue()
+        lost_questions = self._previous_elicitations()
         self._connect(persisted)
         self._write_state()
         if self._pump is None:
@@ -205,11 +221,27 @@ class ChatSession:
             ).start()
         if lost:
             self._report_lost_queue(lost)
+        for elicitation_id in lost_questions:
+            # Their JSON-RPC request died with the old child: the card must
+            # say "no longer open" instead of offering buttons that can
+            # never reach omp.
+            self._emit_transcript(
+                self._mapper.map_elicitation_result(elicitation_id, "expired")
+            )
 
     def _connect(self, persisted: dict) -> None:
         client = self._client_factory()
         client.on_event(self._on_event)
         client.on_permission(self._on_permission)
+        # P3: only the chat registers an elicitation handler (and with it
+        # advertises `elicitation.form`). Task runs (bridge.run_acp_once)
+        # never do — an unattended run must not stop on a question.
+        if self._elicitation_enabled and hasattr(client, "on_elicitation"):
+            # No `elicitation/complete` handler: omp (18.10.1) sends it for
+            # URL mode only, which _on_elicitation declines. A form question
+            # omp gives up on (its timeout) ends with the turn instead —
+            # _run_turn closes the card then.
+            client.on_elicitation(self._on_elicitation)
         client._ensure_process()
         client.initialize()
         self._client = client
@@ -257,6 +289,16 @@ class ChatSession:
         except (OSError, ValueError, AttributeError):
             return []
         return [j for j in queue or [] if isinstance(j, dict)]
+
+    def _previous_elicitations(self) -> list[str]:
+        """Card ids a previous daemon still held open, from its state mirror."""
+        try:
+            with open(self.state_file, "r", encoding="utf-8") as fh:
+                rows = (json.load(fh) or {}).get("elicitations")
+        except (OSError, ValueError, AttributeError):
+            return []
+        return [str(r["id"]) for r in rows or []
+                if isinstance(r, dict) and isinstance(r.get("id"), str) and r["id"]]
 
     def _report_lost_queue(self, lost: list[dict]) -> None:
         """One card naming what a restart dropped — the operator typed it and
@@ -397,6 +439,68 @@ class ChatSession:
         self._write_state()
         return {"ok": True, "configOptions": options}
 
+    def answer(self, elicitation_id: Any, action: Any, content: Any = None) -> dict:
+        """P3: the operator's answer to an open question card.
+
+        ``action`` is ``accept`` (with ``content`` matching the question's
+        schema), ``decline`` or ``cancel``. The JSON-RPC reply goes to omp,
+        the outcome lands as an ``acp-elicitation-result`` line. A card that
+        is no longer open (answered elsewhere, turn over, daemon restarted)
+        answers ``not_pending`` — a clear refusal, never a crash."""
+        if action not in ELICITATION_ACTIONS:
+            return {"ok": False, "error": "bad_action", "detail": str(action)}
+        elicitation_id = str(elicitation_id or "")
+        with self._lock:
+            pending = self._elicitations.get(elicitation_id)
+            if pending is None:
+                return {"ok": False, "error": "not_pending"}
+            if action == "accept":
+                problem = validate_content(pending["schema"], content)
+                if problem:
+                    return {"ok": False, "error": "bad_content", "detail": problem}
+            del self._elicitations[elicitation_id]
+            client = self._client
+        if action == "accept":
+            reply = {"action": "accept", "content": content}
+            status = "answered"
+        else:
+            reply = {"action": action}
+            status = "declined" if action == "decline" else "cancelled"
+        try:
+            client.respond(pending["rpcId"], reply)
+        except Exception as exc:  # noqa: BLE001 — omp gone: the card is dead
+            logger.warning("elicitation reply failed: %s", exc)
+            self._emit_transcript(
+                self._mapper.map_elicitation_result(elicitation_id, "expired")
+            )
+            self._write_state()
+            return {"ok": False, "error": "not_pending", "detail": f"{exc}"}
+        self._emit_transcript(self._mapper.map_elicitation_result(
+            elicitation_id, status, content if action == "accept" else None,
+        ))
+        self._write_state()
+        return {"ok": True, "status": status}
+
+    def _expire_elicitations(self) -> None:
+        """Close every open card: the turn that asked is over (omp timed the
+        question out, or Stop/restart ended it — form mode has no
+        `elicitation/complete`). omp gets a `cancel` (it drops a late reply
+        silently), the chat gets an ``expired`` line."""
+        with self._lock:
+            pending, self._elicitations = list(self._elicitations.values()), {}
+            client = self._client
+        for item in pending:
+            if client is not None:
+                try:
+                    client.respond(item["rpcId"], {"action": "cancel"})
+                except Exception:  # noqa: BLE001 — best effort, omp may be gone
+                    pass
+            self._emit_transcript(
+                self._mapper.map_elicitation_result(item["id"], "expired")
+            )
+        if pending:
+            self._write_state()
+
     def state(self) -> dict:
         """The `acp-chat-state.json` payload (also the `state` op's body)."""
         with self._lock:
@@ -413,6 +517,11 @@ class ChatSession:
                     {**job, "text": job["text"][:_QUEUE_PREVIEW_CHARS]}
                     for job in self._queue
                 ],
+                "elicitations": [
+                    {"id": e["id"], "at": e["at"], "message": e["message"][:200]}
+                    for e in self._elicitations.values()
+                ],
+                "sessionInfo": dict(self._session_info),
                 "updatedAt": _now_iso(),
                 "lastError": json.loads(json.dumps(self._last_error))
                 if self._last_error else None,
@@ -524,6 +633,8 @@ class ChatSession:
         (omp_chat.find_active_session), and omp may still persist into the old
         session's own file while disposing it — the new header must be later
         than anything that teardown writes."""
+        # A question of the old session can never be answered in the new one.
+        self._expire_elicitations()
         with self._lock:
             client, previous = self._client, self._session_id
             thinking = self._config_value("thinking")
@@ -607,6 +718,10 @@ class ChatSession:
             # stop touching anything (_work only opens the idle flag).
             return
 
+        # A question still open when its turn ends will never be answered
+        # (omp's own timeout fired, or Stop) — close its card first.
+        self._expire_elicitations()
+
         final_text = "".join(self._full_text)
         stop_reason = getattr(result, "stopReason", "") if result is not None else ""
         if result is not None:
@@ -640,6 +755,7 @@ class ChatSession:
 
     def _restart_child(self) -> None:
         """Respawn the child and re-`session/load` — history keeps its file."""
+        self._expire_elicitations()
         try:
             self._client.close()
         except Exception:  # noqa: BLE001
@@ -673,6 +789,24 @@ class ChatSession:
             elif su == "available_commands_update":
                 self._set_commands(update.get("availableCommands"))
                 self._write_state()
+            elif su == "current_mode_update":
+                # P3: plan mode on/off. The configOptions row is what the
+                # backend's mode capabilities read; the mapper below also
+                # writes a quiet `acp-mode` line for the live chip.
+                mode_id = update.get("currentModeId")
+                if isinstance(mode_id, str) and mode_id:
+                    with self._lock:
+                        for opt in self._config_options:
+                            if opt.get("id") == "mode":
+                                opt["currentValue"] = mode_id
+                    self._write_state()
+            elif su == "session_info_update":
+                info = {k: update.get(k) for k in ("title", "updatedAt")
+                        if isinstance(update.get(k), str)}
+                if info:
+                    with self._lock:
+                        self._session_info = {**self._session_info, **info}
+                    self._write_state()
 
             for entry in self._mapper.map_update(params, stream=True):
                 if not acp_chat_events.is_volatile(entry):
@@ -731,6 +865,33 @@ class ChatSession:
         except Exception:  # noqa: BLE001
             pass
         return choice
+
+    def _on_elicitation(self, rpc_id: Any, params: dict) -> None:
+        """P3: omp asks (`elicitation/create`). Called on the ACP reader
+        thread — record, write the card line, return; the operator answers
+        through the `answer` op. Only form mode is supported: a URL-mode
+        request (or a schema we cannot render) is declined at once, so omp
+        falls back to its own default instead of waiting forever."""
+        schema = clean_schema(params.get("requestedSchema")) \
+            if params.get("mode", "form") == "form" else None
+        client = self._client
+        if schema is None:
+            logger.warning("elicitation declined: mode=%r, unusable schema",
+                           params.get("mode"))
+            if client is not None:
+                client.respond(rpc_id, {"action": "decline"})
+            return
+        elicitation_id = "el-" + uuid.uuid4().hex[:12]
+        message = str(params.get("message") or "").strip()[:_MAX_MESSAGE_CHARS]
+        with self._lock:
+            self._elicitations[elicitation_id] = {
+                "id": elicitation_id, "rpcId": rpc_id, "message": message,
+                "schema": schema, "at": _now_iso(),
+            }
+        self._emit_transcript(
+            self._mapper.map_elicitation(elicitation_id, message, schema)
+        )
+        self._write_state()
 
     # ------------------------------------------------------------------
     # sinks + state
@@ -860,6 +1021,124 @@ def _classify_turn(stop_reason: str, final_text: str, error_text: str) -> tuple[
 
 
 # ---------------------------------------------------------------------------
+# P3: question cards (form elicitation)
+# ---------------------------------------------------------------------------
+
+#: The three answers omp understands (ACP `CreateElicitationResponse`).
+ELICITATION_ACTIONS = ("accept", "decline", "cancel")
+_MAX_MESSAGE_CHARS = 4000
+_MAX_PROPERTIES = 24
+_MAX_CHOICES = 50
+_MAX_LABEL_CHARS = 500
+_MAX_ANSWER_CHARS = 20_000
+_PROPERTY_TYPES = ("string", "boolean", "number", "integer", "array")
+
+
+def _label(value: Any) -> Optional[str]:
+    return value.strip()[:_MAX_LABEL_CHARS] if isinstance(value, str) and value.strip() else None
+
+
+def _choices(raw: Any) -> list[dict]:
+    """`oneOf`/`anyOf` entries -> [{const, title, description?}] (strings only)."""
+    out: list[dict] = []
+    for entry in raw if isinstance(raw, list) else []:
+        if not isinstance(entry, dict) or not isinstance(entry.get("const"), str):
+            continue
+        clean = {"const": entry["const"][:_MAX_LABEL_CHARS],
+                 "title": _label(entry.get("title")) or entry["const"][:_MAX_LABEL_CHARS]}
+        if _label(entry.get("description")):
+            clean["description"] = _label(entry.get("description"))
+        out.append(clean)
+        if len(out) >= _MAX_CHOICES:
+            break
+    return out
+
+
+def clean_schema(raw: Any) -> Optional[dict]:
+    """omp's `requestedSchema` -> the fail-closed subset the card renders, or
+    None when nothing usable is left. Only the fields omp 18.10.1 actually
+    sends survive (type, title, description, enum, oneOf, default, items);
+    anything else stays out of the transcript."""
+    if not isinstance(raw, dict) or not isinstance(raw.get("properties"), dict):
+        return None
+    properties: dict[str, dict] = {}
+    for key, prop in raw["properties"].items():
+        if not isinstance(key, str) or not isinstance(prop, dict):
+            continue
+        ptype = prop.get("type")
+        if ptype not in _PROPERTY_TYPES:
+            continue
+        clean: dict[str, Any] = {"type": ptype}
+        for field in ("title", "description"):
+            if _label(prop.get(field)):
+                clean[field] = _label(prop.get(field))
+        if isinstance(prop.get("enum"), list):
+            clean["enum"] = [v[:_MAX_LABEL_CHARS] for v in prop["enum"]
+                             if isinstance(v, str)][:_MAX_CHOICES]
+        if prop.get("oneOf") is not None:
+            clean["oneOf"] = _choices(prop.get("oneOf"))
+        if isinstance(prop.get("default"), (str, bool)):
+            clean["default"] = prop["default"]
+        if ptype == "array":
+            items = prop.get("items") if isinstance(prop.get("items"), dict) else {}
+            clean["items"] = {"anyOf": _choices(items.get("anyOf") or items.get("oneOf"))}
+        properties[key[:64]] = clean
+        if len(properties) >= _MAX_PROPERTIES:
+            break
+    if not properties:
+        return None
+    schema: dict[str, Any] = {"type": "object", "properties": properties}
+    required = [r for r in raw.get("required") or [] if isinstance(r, str) and r in properties]
+    if required:
+        schema["required"] = required
+    return schema
+
+
+def _allowed_values(prop: dict) -> Optional[set]:
+    if prop.get("enum"):
+        return set(prop["enum"])
+    if prop.get("oneOf"):
+        return {c["const"] for c in prop["oneOf"]}
+    return None
+
+
+def validate_content(schema: dict, content: Any) -> Optional[str]:
+    """None when ``content`` is a valid answer to ``schema``, else why not.
+    The daemon checks before it replies — a malformed answer must stay a
+    refusal on OUR side, not a confused agent."""
+    if not isinstance(content, dict):
+        return "content must be an object"
+    properties = schema.get("properties") or {}
+    for key, value in content.items():
+        prop = properties.get(key)
+        if prop is None:
+            return f"unknown field {key!r}"
+        ptype = prop["type"]
+        if ptype == "string":
+            if not isinstance(value, str) or len(value) > _MAX_ANSWER_CHARS:
+                return f"{key!r} must be a string"
+            allowed = _allowed_values(prop)
+            if allowed is not None and value not in allowed:
+                return f"{key!r} is not one of the offered choices"
+        elif ptype == "boolean":
+            if not isinstance(value, bool):
+                return f"{key!r} must be true or false"
+        elif ptype in ("number", "integer"):
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return f"{key!r} must be a number"
+        elif ptype == "array":
+            choices = {c["const"] for c in (prop.get("items") or {}).get("anyOf") or []}
+            if not isinstance(value, list) or not all(
+                isinstance(v, str) and (not choices or v in choices) for v in value
+            ):
+                return f"{key!r} must be a list of the offered choices"
+    for key in schema.get("required") or []:
+        if key not in content:
+            return f"{key!r} is required"
+    return None
+
+
+# ---------------------------------------------------------------------------
 # control protocol
 # ---------------------------------------------------------------------------
 
@@ -877,6 +1156,9 @@ def dispatch(session: ChatSession, request: dict) -> dict:
         return session.cancel()
     if op == "config":
         return session.config(request.get("id"), request.get("value"))
+    if op == "answer":
+        return session.answer(request.get("id"), request.get("action"),
+                              request.get("content"))
     if op == "state":
         return {"ok": True, **session.state()}
     return {"ok": False, "error": "unknown_op", "detail": str(op)}
@@ -1020,6 +1302,7 @@ def build_session() -> ChatSession:
         sessions_dir=sessions_dir,
         driver="omp",
         model=model,
+        elicitation=True,
     )
 
 

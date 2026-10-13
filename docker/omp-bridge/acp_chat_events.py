@@ -140,6 +140,21 @@ CHAT_ERROR_CUSTOM_TYPE = "chat_error"
 
 _TITLE_TRUNCATE_LEN = 200
 
+# Chat package P3 — question cards and plan mode.
+# A question omp asks over ACP (`elicitation/create`, form mode): ONE
+# ``custom_message`` line carrying the question text (``content``, so an
+# older backend still shows it as a plain notice) and in ``data`` the card's
+# id + the requested schema the frontend builds buttons/fields from.
+ELICITATION_CUSTOM_TYPE = "acp-elicitation"
+# The fate of that question, as its own ``custom`` line (state, not a turn):
+# ``data = {elicitationId, status: answered|declined|cancelled|expired,
+# content?}``. The card reads it to show "answered: X" for good — also after
+# a reload, because it is in the transcript.
+ELICITATION_RESULT_CUSTOM_TYPE = "acp-elicitation-result"
+# ACP ``current_mode_update`` (plan mode on/off) as a quiet ``custom`` line
+# ``data = {modeId}`` — the composer's mode chip follows it.
+MODE_CUSTOM_TYPE = "acp-mode"
+
 # customType of a live tool-output snapshot (chat package P1). VOLATILE: it
 # rides the preview channel next to the text previews and never enters the
 # transcript JSONL — see ``is_volatile``. The backend's preview-channel
@@ -494,9 +509,72 @@ class ACPEventMapper:
             return []
         if su == "plan":
             return self._plan(update)
+        if su == "current_mode_update":
+            return self.map_mode(update.get("currentModeId"))
         # config_option_update / available_commands_update /
-        # session_info_update / anything unknown — no chat value.
+        # session_info_update / anything unknown — no chat value
+        # (the chat daemon mirrors them into its state file instead).
         return []
+
+    def map_mode(self, mode_id: Any) -> list[dict[str, Any]]:
+        """``current_mode_update`` -> one quiet ``custom``/``acp-mode`` line.
+        Not a card: the composer's mode chip reads it (newest wins)."""
+        if not isinstance(mode_id, str) or not mode_id.strip():
+            return []
+        return [
+            {
+                "type": "custom",
+                "customType": MODE_CUSTOM_TYPE,
+                "data": {"modeId": mode_id.strip()[:64]},
+                "id": self._next_id(),
+                "parentId": None,
+                "timestamp": _now_iso(),
+            }
+        ]
+
+    def map_elicitation(
+        self, elicitation_id: str, message: str, schema: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        """An open question (``elicitation/create``) -> one visible
+        ``custom_message``/``acp-elicitation`` line. ``schema`` is the
+        already-cleaned ``requestedSchema`` (see acp_chat.clean_schema)."""
+        text = str(message or "").strip() or "?"
+        return [
+            {
+                "type": "custom_message",
+                "customType": ELICITATION_CUSTOM_TYPE,
+                "content": text[:_RESULT_TRUNCATE_LEN],
+                "display": True,
+                "attribution": "agent",
+                "id": self._next_id(),
+                "parentId": None,
+                "timestamp": _now_iso(),
+                "data": {
+                    "elicitationId": elicitation_id,
+                    "message": text[:_RESULT_TRUNCATE_LEN],
+                    "schema": schema,
+                },
+            }
+        ]
+
+    def map_elicitation_result(
+        self, elicitation_id: str, status: str, content: Optional[dict[str, Any]] = None
+    ) -> list[dict[str, Any]]:
+        """What became of a question -> one ``custom``/``acp-elicitation-result``
+        line (state for the card, never a row of its own)."""
+        data: dict[str, Any] = {"elicitationId": elicitation_id, "status": status}
+        if content:
+            data["content"] = content
+        return [
+            {
+                "type": "custom",
+                "customType": ELICITATION_RESULT_CUSTOM_TYPE,
+                "data": data,
+                "id": self._next_id(),
+                "parentId": None,
+                "timestamp": _now_iso(),
+            }
+        ]
 
     def _plan(self, update: dict[str, Any]) -> list[dict[str, Any]]:
         """ACP ``plan`` -> one ``custom``/``acp-plan`` transcript line.
