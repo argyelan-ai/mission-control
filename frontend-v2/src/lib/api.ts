@@ -860,7 +860,7 @@ export const api = {
       action: "accept" | "decline" | "cancel",
       content?: Record<string, unknown>,
     ) =>
-      request<{ status: string }>(
+      request<{ status: string; stopped?: boolean }>(
         `/api/v1/agents/${agentId}/chat/elicitation/${encodeURIComponent(elicitationId)}`,
         {
           method: "POST",

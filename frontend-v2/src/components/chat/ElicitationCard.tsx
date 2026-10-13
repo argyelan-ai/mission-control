@@ -177,7 +177,7 @@ export function ElicitationCard({ ev, result, agentId }: ElicitationCardProps) {
       return said ? t("answeredWith", { answer: said }) : t("answered");
     }
     if (status === "declined") return t("declined");
-    if (status === "cancelled") return t("cancelled");
+    if (status === "cancelled") return ev.planApproval ? t("cancelledStopped") : t("cancelled");
     if (status === "expired") return t("expired");
     return agentId == null ? t("waiting") : null;
   })();
@@ -251,12 +251,16 @@ export function ElicitationCard({ ev, result, agentId }: ElicitationCardProps) {
             <button
               type="button"
               data-testid="elicitation-skip"
+              data-stops={ev.planApproval || undefined}
               disabled={sending}
               onClick={() => void submit("cancel")}
               className="min-h-11 md:min-h-9 rounded-md px-3 text-sm transition-colors hover:bg-[var(--color-bg-hover)] disabled:opacity-40"
               style={{ color: C.textSecondary }}
             >
-              {t("skip")}
+              {/* Plan approval: omp reads a plain cancel as "keep planning"
+                  and asks again at once — the daemon then also stops the
+                  turn, and the button says so (live 13.10.2026). */}
+              {ev.planApproval ? t("cancelStops") : t("skip")}
             </button>
           </div>
         )}

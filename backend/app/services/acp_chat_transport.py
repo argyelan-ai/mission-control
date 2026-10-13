@@ -366,7 +366,7 @@ def read_acp_chat_state(agent) -> dict | None:
     return parsed if isinstance(parsed, dict) else None
 
 
-def read_acp_turn_status(agent) -> str | None:
+def read_acp_turn_status(agent, *, with_questions: bool = False) -> str | None:
     """``"working"`` / ``"idle"`` / ``None`` — der Zug-Zustand eines
     kopflosen ACP-Agenten, direkt aus ``busy`` in ``read_acp_chat_state``.
 
@@ -390,4 +390,10 @@ def read_acp_turn_status(agent) -> str | None:
     busy = state.get("busy")
     if not isinstance(busy, bool):
         return None
+    if busy and with_questions and state.get("elicitations"):
+        # P3: the turn waits on the OPERATOR (an open question card), not
+        # on the model — the chat's status line must say so, not "Thinking"
+        # (live 13.10.2026). Opt-in: other callers (voice stop) keep the
+        # plain working/idle answer.
+        return "waiting_input"
     return "working" if busy else "idle"

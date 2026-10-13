@@ -20,7 +20,7 @@ import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import { C } from "@/lib/colors";
 import { notify } from "@/lib/notify";
-import { isAgentBusyError, type ChatCapabilities, type ModeEvent } from "@/lib/chatTypes";
+import { isAgentBusyError, isQuestionOpenError, type ChatCapabilities, type ModeEvent } from "@/lib/chatTypes";
 
 const PLAN = "plan";
 
@@ -60,7 +60,11 @@ export function ModeChip({ agentId, capabilities, liveMode, busy = false }: Mode
       await api.chat.setMode(agentId, target);
       setConfirmed({ mode: target, seen: liveMode?.uuid ?? null });
     } catch (err) {
-      notify.error(isAgentBusyError(err) ? t("busy") : t("failed"));
+      // The daemon refuses mid-turn and with an open question (an API call
+      // too, not only this chip) — a "not now", not a failure.
+      if (isQuestionOpenError(err)) notify.info(t("questionOpen"));
+      else if (isAgentBusyError(err)) notify.info(t("busy"));
+      else notify.error(t("failed"));
     } finally {
       setPending(null);
     }

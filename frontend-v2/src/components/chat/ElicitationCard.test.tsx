@@ -182,6 +182,26 @@ describe("ElicitationCard", () => {
     expect(column.parentElement!.className).toContain("flex");
   });
 
+  it("plan approval offers Cancel (stops agent) instead of Skip", async () => {
+    // Live 13.10.2026: Skip = cancel = "keep planning" for omp -> asked again.
+    mockAnswer.mockResolvedValue({ status: "cancelled", stopped: true });
+    const plan = { ...card(SELECT, 'Approve plan "Login" and start implementation?'), planApproval: true };
+    render(<ElicitationCard ev={plan} result={null} agentId="a1" />);
+    const cancel = screen.getByTestId("elicitation-skip");
+    expect(cancel).toHaveTextContent("Cancel (stops agent)");
+    expect(screen.queryByText("Skip")).not.toBeInTheDocument();
+    fireEvent.click(cancel);
+    await waitFor(() =>
+      expect(mockAnswer).toHaveBeenCalledWith("a1", "el-0123456789ab", "cancel", undefined),
+    );
+    expect(await screen.findByTestId("elicitation-outcome")).toHaveTextContent("Cancelled — the agent stopped");
+  });
+
+  it("an ordinary question keeps Skip", () => {
+    render(<ElicitationCard ev={card(SELECT)} result={null} agentId="a1" />);
+    expect(screen.getByTestId("elicitation-skip")).toHaveTextContent("Skip");
+  });
+
   it("summarize words booleans and lists", () => {
     expect(summarize({ value: true }, "Yes", "No")).toBe("Yes");
     expect(summarize({ q0: "Vue", q1: ["lint", "test"], q1__other: "e2e" }, "Yes", "No"))

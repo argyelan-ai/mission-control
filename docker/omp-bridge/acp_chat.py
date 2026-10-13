@@ -420,9 +420,19 @@ class ChatSession:
         return {"ok": True}
 
     def config(self, option_id: str, value: Any) -> dict:
-        """Set one config option (`thinking`, `model`, `mode`, ...)."""
+        """Set one config option (`thinking`, `model`, `mode`, ...).
+
+        `mode` is refused while a question is open or a turn runs (P3 live
+        test 13.10.2026): switching plan mode off under an open plan card
+        left omp's request unanswered, the turn hung until the prompt
+        timeout, and the model then looped on a proposal nobody awaited."""
         with self._lock:
             client, sid = self._client, self._session_id
+            if option_id == "mode":
+                if self._elicitations:
+                    return {"ok": False, "error": "question_open"}
+                if self._busy:
+                    return {"ok": False, "error": "busy"}
         if client is None or not sid:
             return {"ok": False, "error": "not_started"}
         try:
@@ -481,6 +491,13 @@ class ChatSession:
             elicitation_id, status, content if action == "accept" else None,
         ))
         self._write_state()
+        if action == "cancel" and pending.get("planApproval"):
+            # omp's plan approval knows only "approve" and "everything else":
+            # a plain cancel means "keep planning", and the model proposes
+            # again at once (live 13.10.2026). Cancel on THIS card means stop
+            # — same path as the Stop button (`session/cancel`).
+            self.cancel()
+            return {"ok": True, "status": status, "stopped": True}
         return {"ok": True, "status": status}
 
     def _expire_elicitations(self) -> None:
@@ -911,14 +928,15 @@ class ChatSession:
             return
         elicitation_id = "el-" + uuid.uuid4().hex[:12]
         message = str(params.get("message") or "").strip()[:_MAX_MESSAGE_CHARS]
+        plan_approval = is_plan_approval(message, schema)
         with self._lock:
             self._elicitations[elicitation_id] = {
                 "id": elicitation_id, "rpcId": rpc_id, "message": message,
-                "schema": schema, "at": _now_iso(),
+                "schema": schema, "at": _now_iso(), "planApproval": plan_approval,
             }
-        self._emit_transcript(
-            self._mapper.map_elicitation(elicitation_id, message, schema)
-        )
+        self._emit_transcript(self._mapper.map_elicitation(
+            elicitation_id, message, schema, plan_approval=plan_approval,
+        ))
         self._write_state()
 
     # ------------------------------------------------------------------
@@ -1120,6 +1138,25 @@ def clean_schema(raw: Any) -> Optional[dict]:
     if required:
         schema["required"] = required
     return schema
+
+
+#: omp 18.10.1 `#requestAcpPlanApprovalChoice`: `Approve plan "<title>" and
+#: start implementation?` + a select of exactly two values (approve/refine).
+_PLAN_APPROVAL_PREFIX = 'Approve plan "'
+
+
+def is_plan_approval(message: str, schema: dict) -> bool:
+    """THE one place that recognises omp's plan approval question. Both
+    signals must hold — the fixed message prefix AND a single select field
+    with exactly two values — so an ordinary question that merely starts
+    with those words is not taken for it."""
+    if not isinstance(message, str) or not message.startswith(_PLAN_APPROVAL_PREFIX):
+        return False
+    properties = (schema or {}).get("properties") or {}
+    if set(properties) != {"value"}:
+        return False
+    prop = properties["value"]
+    return prop.get("type") == "string" and len(prop.get("enum") or []) == 2
 
 
 def _allowed_values(prop: dict) -> Optional[set]:

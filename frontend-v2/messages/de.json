@@ -966,6 +966,7 @@
     "status": {
       "ready": "Bereit",
       "waitingForYou": "Wartet auf dich",
+      "waitingForAnswer": "Wartet auf deine Antwort",
       "waitingApproval": "Wartet auf Genehmigung",
       "unknown": "Status unklar — Terminal prüfen",
       "ended": "Session beendet — neue Nachricht startet die nächste Session",
@@ -3584,6 +3585,7 @@
       "aria": "Rückfrage des Agenten",
       "send": "Antwort senden",
       "skip": "Überspringen",
+      "cancelStops": "Abbrechen (Agent stoppt)",
       "yes": "Ja",
       "no": "Nein",
       "other": "Andere…",
@@ -3594,6 +3596,7 @@
       "answeredWith": "Beantwortet: {answer}",
       "declined": "Abgelehnt",
       "cancelled": "Übersprungen",
+      "cancelledStopped": "Abgebrochen — der Agent hat gestoppt",
       "expired": "Nicht mehr offen — der Agent hat weitergemacht",
       "waiting": "Wartet auf Antwort",
       "notOpen": "Diese Rückfrage ist nicht mehr offen.",
@@ -3606,7 +3609,8 @@
       "switchTo": "In den Modus {mode} wechseln",
       "planHint": "Plan-Modus: der Agent liest nur und entwirft einen Plan; du gibst ihn frei, bevor etwas geändert wird.",
       "failed": "Modus nicht gewechselt — bitte nochmal versuchen.",
-      "busy": "Der Agent arbeitet gerade — wechsle den Modus, wenn die Antwort fertig ist."
+      "busy": "Der Agent arbeitet gerade — wechsle den Modus, wenn die Antwort fertig ist.",
+      "questionOpen": "Erst die offene Rückfrage beantworten, dann den Modus wechseln."
     }
   },
   "heads": {

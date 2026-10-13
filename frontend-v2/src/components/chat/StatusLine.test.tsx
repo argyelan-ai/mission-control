@@ -95,9 +95,9 @@ describe("StatusLine", () => {
     }
   });
 
-  it('shows "Waiting for you" for waiting_input', () => {
+  it('shows "Waiting for your answer" for waiting_input', () => {
     render(<StatusLine state={mkState("waiting_input")} connected />);
-    expect(screen.getByText("Waiting for you")).toBeInTheDocument();
+    expect(screen.getByText("Waiting for your answer")).toBeInTheDocument();
   });
 
   it('shows "Waiting for approval" for permission_prompt', () => {

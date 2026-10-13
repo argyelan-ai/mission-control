@@ -1394,7 +1394,10 @@ export function ChatView({
                         agentId={agent.id}
                         capabilities={stream.capabilities}
                         liveMode={stream.mode}
-                        busy={stream.state?.status === "working"}
+                        busy={
+                          stream.state?.status === "working" ||
+                          stream.state?.status === "waiting_input"
+                        }
                       />
                     ) : null
                   }

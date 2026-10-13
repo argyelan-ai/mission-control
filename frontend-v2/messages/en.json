@@ -966,6 +966,7 @@
     "status": {
       "ready": "Ready",
       "waitingForYou": "Waiting for you",
+      "waitingForAnswer": "Waiting for your answer",
       "waitingApproval": "Waiting for approval",
       "unknown": "Status unknown — check the terminal",
       "ended": "Session ended — a new message starts the next session",
@@ -3584,6 +3585,7 @@
       "aria": "Question from the agent",
       "send": "Send answer",
       "skip": "Skip",
+      "cancelStops": "Cancel (stops agent)",
       "yes": "Yes",
       "no": "No",
       "other": "Other…",
@@ -3594,6 +3596,7 @@
       "answeredWith": "Answered: {answer}",
       "declined": "Declined",
       "cancelled": "Skipped",
+      "cancelledStopped": "Cancelled — the agent stopped",
       "expired": "No longer open — the agent moved on",
       "waiting": "Waiting for an answer",
       "notOpen": "This question is no longer open.",
@@ -3606,7 +3609,8 @@
       "switchTo": "Switch to {mode} mode",
       "planHint": "Plan mode: the agent only reads and drafts a plan; you approve it before any change.",
       "failed": "Mode not switched — try again.",
-      "busy": "The agent is busy — switch the mode when the reply has ended."
+      "busy": "The agent is busy — switch the mode when the reply has ended.",
+      "questionOpen": "Answer the open question first, then switch the mode."
     }
   },
   "heads": {

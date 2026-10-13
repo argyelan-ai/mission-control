@@ -568,7 +568,8 @@ class ACPEventMapper:
         ]
 
     def map_elicitation(
-        self, elicitation_id: str, message: str, schema: dict[str, Any]
+        self, elicitation_id: str, message: str, schema: dict[str, Any],
+        *, plan_approval: bool = False,
     ) -> list[dict[str, Any]]:
         """An open question (``elicitation/create``) -> one visible
         ``custom_message``/``acp-elicitation`` line. ``schema`` is the
@@ -588,6 +589,9 @@ class ACPEventMapper:
                     "elicitationId": elicitation_id,
                     "message": text[:_RESULT_TRUNCATE_LEN],
                     "schema": schema,
+                    # omp's plan approval (acp_chat.is_plan_approval): the card
+                    # offers "Cancel (stops agent)" instead of "Skip".
+                    "planApproval": bool(plan_approval),
                 },
             }
         ]

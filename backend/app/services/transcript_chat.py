@@ -81,6 +81,7 @@ logic (slash-command rule included, for user entries) runs unchanged.
 from __future__ import annotations
 
 import asyncio
+import functools
 import contextlib
 import json
 import logging
@@ -2755,7 +2756,9 @@ class ChatTailerManager:
         # nie gelaufen, Dateisystem-Hickup), faellt das genauso auf die
         # mtime-Heuristik zurueck wie der pane-lose Boss/host-Zweig unten.
         if headless_chat_kind(agent) is not None:
-            status = await asyncio.to_thread(read_acp_turn_status, agent)
+            status = await asyncio.to_thread(
+                functools.partial(read_acp_turn_status, agent, with_questions=True)
+            )
             if status is None:
                 return {
                     "status": "working" if transcript_active else "idle",

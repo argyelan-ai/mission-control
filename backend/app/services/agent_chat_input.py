@@ -1130,6 +1130,12 @@ async def set_model(agent, name: str) -> None:
         )
 
 
+class QuestionOpenError(Exception):
+    """P3: the mode cannot change while a question card is open — the open
+    request would never be answered and the turn would hang (live
+    13.10.2026)."""
+
+
 class ElicitationNotPendingError(Exception):
     """P3: die Rueckfrage ist nicht mehr offen — schon beantwortet (anderer
     Tab, Doppeltipp), ihr Zug ist vorbei (omp hat aufgegeben, Stop) oder der
@@ -1142,7 +1148,7 @@ ELICITATION_ACTIONS = ("accept", "decline", "cancel")
 
 async def answer_elicitation(
     agent, elicitation_id: str, action: str, content: dict | None = None
-) -> str:
+) -> dict:
     """Antwort des Operators auf eine Rueckfrage-Karte (P3) -> ``answer``-Op
     des Chat-Daemons -> JSON-RPC-Antwort an omp. Gibt den Status zurueck
     (``answered`` / ``declined`` / ``cancelled``).
@@ -1150,7 +1156,9 @@ async def answer_elicitation(
     Nur kopflose Agenten (ACP) haben solche Karten. ``ValueError`` (422) fuer
     eine Antwort, die nicht zur Frage passt — der Daemon prueft sie gegen das
     Schema, bevor omp sie sieht. ``ElicitationNotPendingError`` (409), wenn
-    die Karte nicht mehr offen ist."""
+    die Karte nicht mehr offen ist. Rueckgabe ``{"status", "stopped"}`` —
+    ``stopped`` ist wahr, wenn ``cancel`` auf der Plan-Freigabe den Zug
+    angehalten hat."""
     if headless_chat_kind(agent) is None:
         raise InputNotSupportedError()
     if action not in ELICITATION_ACTIONS:
@@ -1162,7 +1170,10 @@ async def answer_elicitation(
         elicitation_id, action, content if action == "accept" else None
     )
     if answer.get("ok"):
-        return str(answer.get("status") or "answered")
+        return {
+            "status": str(answer.get("status") or "answered"),
+            "stopped": bool(answer.get("stopped")),
+        }
     error = answer.get("error")
     if error == "not_pending":
         raise ElicitationNotPendingError()
@@ -1188,9 +1199,16 @@ async def set_mode(agent, mode: str) -> None:
         raise ValueError(f"mode not offered by this agent: {mode!r}")
     answer = await transport_for(agent).config("mode", mode)
     if not answer.get("ok"):
-        # Der Daemon zeigt die Absage selbst als ``chat_error``-Karte; der
-        # Composer muss trotzdem wissen, dass der Chip nicht umgesprungen ist.
-        raise AcpChatRefusedError(str(answer.get("error") or "rejected"))
+        error = answer.get("error")
+        # Mitten im Zug oder bei offener Rueckfrage lehnt der Daemon ab —
+        # auch fuer einen direkten API-Aufruf, nicht nur am Chip.
+        if error == "question_open":
+            raise QuestionOpenError()
+        if error == "busy":
+            raise AgentBusyError()
+        # Sonst zeigt der Daemon die Absage selbst als ``chat_error``-Karte;
+        # der Composer muss trotzdem wissen, dass der Chip nicht umsprang.
+        raise AcpChatRefusedError(str(error or "rejected"))
 
 
 async def mode_capabilities(agent) -> dict[str, object]:

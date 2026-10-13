@@ -429,6 +429,10 @@ export interface ElicitationEvent {
   elicitationId: string;
   message: string;
   schema: ElicitationSchema;
+  /** omp's plan approval (recognised by the bridge, `is_plan_approval`).
+   *  There a plain cancel means "keep planning" and the agent asks again —
+   *  so the card offers "Cancel (stops agent)" instead of "Skip". */
+  planApproval?: boolean;
 }
 
 export type ElicitationStatus = "answered" | "declined" | "cancelled" | "expired";
@@ -779,6 +783,10 @@ export function isInstallBlockedError(err: unknown): boolean {
 /** 409 from `/chat/elicitation/{id}` when the question card is no longer
  *  open — answered elsewhere, its turn ended, or the chat restarted. Not a
  *  failure: the card just says so. */
+export function isQuestionOpenError(err: unknown): boolean {
+  return err instanceof Error && err.message.includes("question_open");
+}
+
 export function isElicitationNotPendingError(err: unknown): boolean {
   return err instanceof Error && err.message.includes("elicitation_not_pending");
 }

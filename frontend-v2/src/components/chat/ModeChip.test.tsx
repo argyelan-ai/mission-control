@@ -10,6 +10,7 @@ vi.mock("@/lib/api", () => ({ api: { chat: { setMode: vi.fn() } } }));
 vi.mock("@/lib/notify", () => ({
   notify: { error: vi.fn(), success: vi.fn(), info: vi.fn(), warning: vi.fn() },
 }));
+import { notify } from "@/lib/notify";
 
 const mockSetMode = vi.mocked(api.chat.setMode);
 
@@ -66,6 +67,16 @@ describe("ModeChip", () => {
     expect(screen.getByTestId("mode-chip-label").className).not.toContain("hidden");
     rerender(<ModeChip agentId="a1" capabilities={CAPS} liveMode={modeEvent("default", "acp00021")} />);
     expect(screen.getByTestId("mode-chip-label").className).toContain("hidden sm:inline");
+  });
+
+  it("a refusal while a question is open is a calm hint, and the chip stays", async () => {
+    mockSetMode.mockRejectedValue(new Error('API 409: {"reason":"question_open"}'));
+    render(<ModeChip agentId="a1" capabilities={CAPS} liveMode={modeEvent("plan")} />);
+    fireEvent.click(screen.getByTestId("mode-chip"));
+    await waitFor(() => expect(notify.info).toHaveBeenCalledWith(
+      "Answer the open question first, then switch the mode."));
+    expect(notify.error).not.toHaveBeenCalled();
+    expect(screen.getByTestId("mode-chip")).toHaveAttribute("data-mode", "plan");
   });
 
   it("waits while the agent works", () => {

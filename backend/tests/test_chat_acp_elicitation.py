@@ -88,7 +88,7 @@ def test_elicitation_line_becomes_a_card_event():
     assert _parse(line) == [{
         "kind": "elicitation", "uuid": "acp00010", "ts": "2026-10-13T10:00:00Z",
         "elicitationId": "el-0123456789ab", "message": 'Approve plan "Login"?',
-        "schema": SCHEMA,
+        "schema": SCHEMA, "planApproval": False,
     }]
 
 
@@ -135,9 +135,9 @@ async def test_answer_goes_through_the_transport(acp_agent, monkeypatch):
     from app.services import agent_chat_input
 
     t = _install(monkeypatch, _Transport())
-    status = await agent_chat_input.answer_elicitation(
+    outcome = await agent_chat_input.answer_elicitation(
         acp_agent, "el-0123456789ab", "accept", {"value": "Refine plan"})
-    assert status == "answered"
+    assert outcome == {"status": "answered", "stopped": False}
     assert t.calls == [("answer", "el-0123456789ab", "accept", {"value": "Refine plan"})]
 
 
@@ -146,7 +146,7 @@ async def test_cancel_sends_no_content(acp_agent, monkeypatch):
 
     t = _install(monkeypatch, _Transport({"answer": {"ok": True, "status": "cancelled"}}))
     assert await agent_chat_input.answer_elicitation(
-        acp_agent, "el-0123456789ab", "cancel", {"value": "x"}) == "cancelled"
+        acp_agent, "el-0123456789ab", "cancel", {"value": "x"}) == {"status": "cancelled", "stopped": False}
     assert t.calls == [("answer", "el-0123456789ab", "cancel", None)]
 
 
@@ -238,7 +238,7 @@ async def test_router_answers_a_card(auth_client, make_agent, monkeypatch):
 
     async def _answer(a, eid, action, content):
         seen.append((eid, action, content))
-        return "answered"
+        return {"status": "answered", "stopped": False}
 
     monkeypatch.setattr(mod, "answer_elicitation", _answer)
     resp = await auth_client.post(
@@ -246,7 +246,7 @@ async def test_router_answers_a_card(auth_client, make_agent, monkeypatch):
         json={"action": "accept", "content": {"value": "Refine plan"}},
     )
     assert resp.status_code == 200, resp.text
-    assert resp.json() == {"status": "answered"}
+    assert resp.json() == {"status": "answered", "stopped": False}
     assert seen == [("el-0123456789ab", "accept", {"value": "Refine plan"})]
 
 
@@ -317,3 +317,97 @@ async def test_router_mode_switch(auth_client, make_agent, monkeypatch):
     monkeypatch.setattr(mod, "set_mode", _none)
     resp = await auth_client.post(f"/api/v1/agents/{agent.id}/chat/mode", json={"mode": "plan"})
     assert resp.status_code == 409 and resp.json()["reason"] == "input_not_supported"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# round 3 (live 13.10.2026)
+# ══════════════════════════════════════════════════════════════════════════
+
+
+def test_plan_approval_flag_reaches_the_card_event():
+    line = {
+        "type": "custom_message", "customType": "acp-elicitation",
+        "content": 'Approve plan "Login"?', "display": True,
+        "id": "acp00020", "parentId": None, "timestamp": "2026-10-13T10:00:00Z",
+        "data": {"elicitationId": "el-0123456789ab", "message": 'Approve plan "Login"?',
+                 "schema": SCHEMA, "planApproval": True},
+    }
+    assert _parse(line)[0]["planApproval"] is True
+    line["data"]["planApproval"] = "yes"  # only a real boolean counts
+    assert _parse(line)[0]["planApproval"] is False
+
+
+async def test_cancel_on_plan_card_reports_the_stop(acp_agent, monkeypatch):
+    from app.services import agent_chat_input
+
+    _install(monkeypatch, _Transport({"answer": {"ok": True, "status": "cancelled", "stopped": True}}))
+    assert await agent_chat_input.answer_elicitation(
+        acp_agent, "el-0123456789ab", "cancel") == {"status": "cancelled", "stopped": True}
+
+
+async def test_mode_switch_refused_mid_turn_and_with_open_question(acp_agent, monkeypatch):
+    from app.services import agent_chat_input
+
+    _install(monkeypatch, _Transport({"config": {"ok": False, "error": "question_open"}}), MODE_STATE)
+    with pytest.raises(agent_chat_input.QuestionOpenError):
+        await agent_chat_input.set_mode(acp_agent, "default")
+    _install(monkeypatch, _Transport({"config": {"ok": False, "error": "busy"}}), MODE_STATE)
+    with pytest.raises(agent_chat_input.AgentBusyError):
+        await agent_chat_input.set_mode(acp_agent, "default")
+
+
+async def test_router_mode_refusals_are_409_with_reason(auth_client, make_agent, monkeypatch):
+    import app.routers.agent_chat as mod
+    from app.services.agent_chat_input import AgentBusyError, QuestionOpenError
+
+    agent = await make_agent(name="Acp One", agent_runtime="cli-bridge")
+    url = f"/api/v1/agents/{agent.id}/chat/mode"
+
+    async def _open(a, mode):
+        raise QuestionOpenError()
+
+    monkeypatch.setattr(mod, "set_mode", _open)
+    resp = await auth_client.post(url, json={"mode": "default"})
+    assert resp.status_code == 409 and resp.json() == {"reason": "question_open"}
+
+    async def _busy(a, mode):
+        raise AgentBusyError()
+
+    monkeypatch.setattr(mod, "set_mode", _busy)
+    resp = await auth_client.post(url, json={"mode": "default"})
+    assert resp.status_code == 409 and resp.json() == {"reason": "agent_busy"}
+
+
+def test_open_question_reads_as_waiting_for_the_operator(monkeypatch):
+    from app.services import acp_chat_transport as t
+
+    state = {"busy": True, "elicitations": [{"id": "el-0123456789ab"}]}
+    monkeypatch.setattr(t, "read_acp_chat_state", lambda agent: state)
+    assert t.read_acp_turn_status(object(), with_questions=True) == "waiting_input"
+    # other callers (voice stop) keep the plain answer
+    assert t.read_acp_turn_status(object()) == "working"
+    state["elicitations"] = []
+    assert t.read_acp_turn_status(object(), with_questions=True) == "working"
+
+
+async def test_chat_status_line_uses_the_question_aware_state(monkeypatch):
+    import app.services.transcript_chat as tc
+
+    seen = {}
+
+    def _status(agent, *, with_questions=False):
+        seen["with_questions"] = with_questions
+        return "waiting_input"
+
+    monkeypatch.setattr(tc, "read_acp_turn_status", _status)
+
+    async def _alive(agent, path, adapter=None):
+        return "active"
+
+    monkeypatch.setattr(tc, "resolve_aliveness", _alive)
+    agent = _StubAgent()
+    session = __import__("pathlib").Path(__import__("tempfile").mkdtemp()) / "s.jsonl"
+    session.write_text("{}\n")
+    state = await tc.ChatTailerManager()._compute_pane_state(agent, session)
+    assert state["status"] == "waiting_input"
+    assert seen["with_questions"] is True

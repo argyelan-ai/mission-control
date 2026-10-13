@@ -1274,6 +1274,9 @@ def _elicitation_event(
         "elicitationId": elicitation_id,
         "message": message[:_RESULT_TRUNCATE_LEN],
         "schema": schema,
+        # omp's plan approval (bridge: acp_chat.is_plan_approval) — the card
+        # offers "Cancel (stops agent)" instead of "Skip".
+        "planApproval": data.get("planApproval") is True,
     }
 
 

@@ -37,6 +37,7 @@ from app.services.agent_chat_input import (
     EffortSwitchRejectedError,
     InputNotSupportedError,
     InstallCommandBlockedError,
+    QuestionOpenError,
     answer_elicitation,
     can_receive_input,
     clear_queue,
@@ -1334,7 +1335,9 @@ async def post_chat_elicitation_answer(
     """Answers a question card (chat package P3) of a headless (ACP) agent:
     ``action`` = ``accept`` (with ``content``) | ``decline`` | ``cancel``.
     Same operator gate as every other chat control (admin role). 200
-    ``{"status": "answered"|"declined"|"cancelled"}``; 422 for a malformed id
+    ``{"status": "answered"|"declined"|"cancelled", "stopped": bool}``
+    (``stopped``: cancel on omp's plan approval also stopped the turn —
+    there a plain cancel means "keep planning"); 422 for a malformed id
     or an answer that does not fit the question; 409
     ``{"reason":"elicitation_not_pending"}`` when the card is no longer open
     (answered elsewhere, its turn ended, the chat daemon restarted); 409
@@ -1350,7 +1353,7 @@ async def post_chat_elicitation_answer(
         raise HTTPException(status_code=422, detail="answer too large")
 
     try:
-        status = await answer_elicitation(agent, elicitation_id, body.action, body.content)
+        outcome = await answer_elicitation(agent, elicitation_id, body.action, body.content)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
     except ElicitationNotPendingError:
@@ -1365,7 +1368,7 @@ async def post_chat_elicitation_answer(
         return JSONResponse(status_code=409, content={"reason": "acp_refused", "error": e.code})
     except AcpChatUnreachableError as e:
         return _acp_unreachable(e)
-    return {"status": status}
+    return outcome
 
 
 @router.post("/agents/{agent_id}/chat/mode", status_code=204)
@@ -1379,13 +1382,20 @@ async def post_chat_mode(
     ``plan`` / ``default``) through ``config id=mode``. Only modes the agent
     itself reports in ``capabilities.modeOptions``: 422 for any other value,
     409 ``input_not_supported`` when the agent reports no mode switch, 409
-    ``acp_refused`` when the agent declined (the chat shows its own error
-    card), 502 ``acp_unreachable`` when the daemon does not answer."""
+    ``question_open`` while a question card is open, 409 ``agent_busy``
+    while a turn runs (switching then left an open plan question
+    unanswered — live 13.10.2026), 409 ``acp_refused`` when the agent
+    declined (the chat shows its own error card), 502 ``acp_unreachable``
+    when the daemon does not answer."""
     agent = await _load_agent_or_404(agent_id, session)
     try:
         await set_mode(agent, body.mode)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
+    except QuestionOpenError:
+        return JSONResponse(status_code=409, content={"reason": "question_open"})
+    except AgentBusyError:
+        return JSONResponse(status_code=409, content=_AGENT_BUSY)
     except InputNotSupportedError:
         return JSONResponse(status_code=409, content=_INPUT_NOT_SUPPORTED)
     except AcpChatRefusedError as e:

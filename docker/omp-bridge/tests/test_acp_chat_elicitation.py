@@ -466,6 +466,74 @@ def test_omp_tool_name_reads_only_matching_ids(tmp_path):
     assert acp_chat_events.omp_tool_name(None, "call_a") is None
 
 
+# ── round 3: plan approval cancel stops; no mode switch mid-question ────────
+
+
+def test_plan_approval_is_recognised_in_one_place():
+    schema = PLAN_PARAMS["requestedSchema"]
+    assert acp_chat.is_plan_approval(PLAN_PARAMS["message"], schema) is True
+    # same words, but an ordinary select with three values
+    three = {"type": "object", "properties": {"value": {
+        "type": "string", "enum": ["a", "b", "c"]}}}
+    assert acp_chat.is_plan_approval(PLAN_PARAMS["message"], three) is False
+    # two values, but not omp's plan message
+    assert acp_chat.is_plan_approval("Which database?", schema) is False
+    assert acp_chat.is_plan_approval(SELECT_PARAMS["message"], SELECT_PARAMS["requestedSchema"]) is False
+
+
+def test_cancel_on_the_plan_card_stops_the_turn(tmp_path):
+    """Live 13.10.2026: "Skip" = cancel = "keep planning" for omp, and the
+    model proposed again 6 s later. On the plan card cancel also stops."""
+    client, sess = _started(tmp_path, turns=[{"block": True, "stopReason": "cancelled"}])
+    sess.prompt("plan it")
+    _wait_busy(sess)
+    client.ask(31, PLAN_PARAMS)
+    card = _cards(read_lines(sess.transcript_path))[0]
+    assert card["data"]["planApproval"] is True
+    answer = sess.answer(card["data"]["elicitationId"], "cancel")
+    assert answer == {"ok": True, "status": "cancelled", "stopped": True}
+    assert client.replies == [(31, {"action": "cancel"})]
+    assert any(c[0] == "cancel" for c in client.calls), "the turn must be stopped"
+    assert sess.wait_idle(timeout=5)
+    sess.close()
+
+
+def test_cancel_on_an_ordinary_card_lets_the_agent_continue(tmp_path):
+    gate = threading.Event()
+    client, sess = _started(tmp_path, turns=[{"gate": gate}])
+    sess.prompt("x")
+    _wait_busy(sess)
+    client.ask(32, SELECT_PARAMS)
+    card = _cards(read_lines(sess.transcript_path))[0]
+    assert card["data"]["planApproval"] is False
+    assert sess.answer(card["data"]["elicitationId"], "cancel") == {"ok": True, "status": "cancelled"}
+    assert not any(c[0] == "cancel" for c in client.calls)
+    gate.set()
+    sess.wait_idle(timeout=5)
+    sess.close()
+
+
+def test_mode_switch_is_refused_while_a_question_is_open_or_a_turn_runs(tmp_path):
+    """Live 13.10.2026: plan mode switched off under an open plan card —
+    the turn hung for the full prompt timeout."""
+    gate = threading.Event()
+    client = ElicitingClient(session_result=MODE_RESULT, turns=[{"gate": gate}])
+    sess = make_session(tmp_path, client, elicitation=True)
+    sess.start()
+    sess.prompt("x")
+    _wait_busy(sess)
+    assert sess.config("mode", "default") == {"ok": False, "error": "busy"}
+    client.ask(33, PLAN_PARAMS)
+    assert sess.config("mode", "default") == {"ok": False, "error": "question_open"}
+    assert not any(c[0] == "set_config_option" and c[2] == "mode" for c in client.calls)
+    # other options stay switchable (the thinking chip works mid-turn)
+    assert sess.config("thinking", "high")["ok"] is True
+    gate.set()
+    sess.wait_idle(timeout=5)
+    assert sess.config("mode", "plan")["ok"] is True
+    sess.close()
+
+
 def test_ctl_shim_knows_the_answer_op():
     import acp_chat_ctl
 
