@@ -166,6 +166,8 @@ class ChatSession:
         # the new lines. A random start offset makes a collision across
         # restarts practically impossible.
         self._mapper.seq = random.randrange(1 << 28)
+        # ACP names no tool; omp's own file of this session does (P3).
+        self._mapper.tool_name_resolver = self._resolve_tool_name
         self._sink: Optional[acp_chat_events.ChatEventSink] = None
         self._preview: Optional[acp_chat_events.PreviewEventSink] = None
 
@@ -865,6 +867,32 @@ class ChatSession:
         except Exception:  # noqa: BLE001
             pass
         return choice
+
+    #: omp persists the assistant message (with the call) at message end,
+    #: just before the tool starts — a short wait covers a slow flush.
+    _NAME_LOOKUP_TRIES = 3
+    _NAME_LOOKUP_WAIT_S = 0.05
+
+    def _omp_session_file(self) -> Optional[Path]:
+        """omp's OWN file of the current session: same folder, same session
+        id in the name, not the bridge sink's file."""
+        sid, own = self._session_id, self.transcript_path
+        if not sid:
+            return None
+        try:
+            candidates = [p for p in self._sessions_dir.glob(f"*_{sid}.jsonl") if p != own]
+            return max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
+        except OSError:
+            return None
+
+    def _resolve_tool_name(self, tool_call_id: str) -> Optional[str]:
+        for attempt in range(self._NAME_LOOKUP_TRIES):
+            name = acp_chat_events.omp_tool_name(self._omp_session_file(), tool_call_id)
+            if name:
+                return name
+            if attempt + 1 < self._NAME_LOOKUP_TRIES:
+                time.sleep(self._NAME_LOOKUP_WAIT_S)
+        return None
 
     def _on_elicitation(self, rpc_id: Any, params: dict) -> None:
         """P3: omp asks (`elicitation/create`). Called on the ACP reader

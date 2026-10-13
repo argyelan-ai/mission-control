@@ -421,6 +421,51 @@ def test_session_info_update_is_mirrored_not_shown(tmp_path):
     sess.close()
 
 
+# ── tool names (ACP sends only a coarse kind) ────────────────────────────────
+
+
+def _tool_call(call_id, kind="other", title="Ask the operator"):
+    return {"sessionId": "sid-1", "update": {
+        "sessionUpdate": "tool_call", "toolCallId": call_id, "kind": kind,
+        "title": title, "status": "pending",
+        "rawInput": {"questions": [{"id": "drink", "question": "Tea?"}]}}}
+
+
+def _tool_names(lines):
+    out = []
+    for line in entries_of_type(lines, "message"):
+        for block in (line.get("message") or {}).get("content") or []:
+            if block.get("type") == "toolCall":
+                out.append(block["name"])
+    return out
+
+
+def test_tool_name_comes_from_omps_own_session_file(tmp_path):
+    """Live 13.10.2026: the ask tool showed as "other: …" in the history.
+    omp's own file of the session (same folder, same session id) has the
+    real name; the chat daemon looks it up."""
+    client, sess = _started(tmp_path)
+    native = sess.transcript_path.parent / "2026-10-13T10-02-56-297Z_sid-1.jsonl"
+    native.write_text(json.dumps({"type": "message", "message": {"role": "assistant", "content": [
+        {"type": "toolCall", "id": "call_ask1", "name": "ask", "arguments": {}}]}},
+        separators=(",", ":")) + "\n")
+    client.fire(_tool_call("call_ask1"))
+    client.fire(_tool_call("call_gone"))          # not in omp's file -> kind stays
+    client.fire(_tool_call("call_rd", kind="read", title="read x"))
+    assert _tool_names(read_lines(sess.transcript_path)) == ["ask", "other", "read"]
+    sess.close()
+
+
+def test_omp_tool_name_reads_only_matching_ids(tmp_path):
+    f = tmp_path / "omp.jsonl"
+    f.write_text('{"type":"toolCall","id":"call_a","name":"ask"}\n'
+                 '{"type": "toolCall", "id": "call_b", "name": "browser"}\n')
+    assert acp_chat_events.omp_tool_name(f, "call_a") == "ask"
+    assert acp_chat_events.omp_tool_name(f, "call_b") == "browser"
+    assert acp_chat_events.omp_tool_name(f, "call_c") is None
+    assert acp_chat_events.omp_tool_name(None, "call_a") is None
+
+
 def test_ctl_shim_knows_the_answer_op():
     import acp_chat_ctl
 

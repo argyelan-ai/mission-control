@@ -296,6 +296,34 @@ _KIND_TO_NAME = {
 }
 
 
+#: A tool name as omp writes it (``ask``, ``browser``, ``web_search`` …).
+_TOOL_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,63}$")
+
+#: How much of omp's own session file the name lookup reads (from the end):
+#: the call was written moments ago, so it sits near the end.
+_NAME_LOOKUP_TAIL_BYTES = 512 * 1024
+
+
+def omp_tool_name(session_file: Optional[Path], tool_call_id: str) -> Optional[str]:
+    """The tool name omp stored for ``tool_call_id`` in its own session
+    file (``{"type":"toolCall","id":…,"name":…}``), or ``None``. Reads only
+    the file's tail. Never raises."""
+    if session_file is None or not tool_call_id:
+        return None
+    try:
+        size = session_file.stat().st_size
+        with open(session_file, "rb") as fh:
+            fh.seek(max(0, size - _NAME_LOOKUP_TAIL_BYTES))
+            tail = fh.read().decode("utf-8", errors="replace")
+    except OSError:
+        return None
+    match = re.search(
+        r'"id"\s*:\s*"' + re.escape(tool_call_id) + r'"\s*,\s*"name"\s*:\s*"([^"]{1,64})"',
+        tail,
+    )
+    return match.group(1) if match else None
+
+
 def _now_iso() -> str:
     return (
         datetime.now(timezone.utc)
@@ -448,6 +476,13 @@ class ACPEventMapper:
     # map_update runs on the ACP reader thread, ToolOutputPump on its own:
     # one re-entrant lock keeps the live state and the entry ids consistent.
     _lock: Any = field(default_factory=threading.RLock, repr=False, compare=False)
+    # ACP carries no tool NAME — only a coarse ``kind`` ("other" for ask,
+    # task, browser, …) and a title (often the model's intent). The chat
+    # daemon plugs in a lookup into omp's own session file, where the call
+    # is stored with its real name (P3 live finding: "other: …" cards).
+    tool_name_resolver: Optional[Callable[[str], Optional[str]]] = field(
+        default=None, repr=False, compare=False
+    )
 
     # ------------------------------------------------------------------
     # mapping
@@ -924,7 +959,7 @@ class ACPEventMapper:
         arguments.setdefault("i", title)
         locations = _clean_locations(update.get("locations"))
         self._tools[tool_call_id] = {
-            "name": _KIND_TO_NAME.get(kind, kind),
+            "name": self._tool_name(tool_call_id, kind),
             "title": title,
             "arguments": arguments,
             "locations": locations,
@@ -950,6 +985,21 @@ class ACPEventMapper:
                 },
             }
         ]
+
+    def _tool_name(self, tool_call_id: str, kind: str) -> str:
+        """The kinds that name exactly one tool map directly; any other kind
+        asks ``tool_name_resolver`` for the real name and keeps the kind when
+        it has no answer. Never raises."""
+        if kind in _KIND_TO_NAME:
+            return _KIND_TO_NAME[kind]
+        if self.tool_name_resolver is not None:
+            try:
+                name = self.tool_name_resolver(tool_call_id)
+            except Exception:  # noqa: BLE001 — a lookup must not break the turn
+                name = None
+            if isinstance(name, str) and _TOOL_NAME_RE.match(name):
+                return name
+        return kind
 
     def _tool_update(self, update: dict[str, Any]) -> list[dict[str, Any]]:
         tool_call_id = update.get("toolCallId")
