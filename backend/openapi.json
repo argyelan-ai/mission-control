@@ -1146,6 +1146,15 @@
         ]
       }
     },
+    "/api/v1/agents/{agent_id}/chat/media/{media_id}": {
+      "get": {
+        "operationId": "get_chat_media_api_v1_agents__agent_id__chat_media__media_id__get",
+        "summary": "Get Chat Media",
+        "tags": [
+          "agent-chat"
+        ]
+      }
+    },
     "/api/v1/agents/{agent_id}/chat/pr": {
       "post": {
         "operationId": "post_chat_pr_api_v1_agents__agent_id__chat_pr_post",

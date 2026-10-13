@@ -160,6 +160,89 @@ _MAX_DIFFS = 20
 _MAX_LOCATIONS = 20
 _LOCATION_LEN = 500
 
+# Images from tool results (chat package P2). The bytes NEVER enter the
+# transcript JSONL: the settled toolResult line carries only a reference
+# (``details.images``) and the picture lands as a file in
+# ``<session dir>/media/<sha256>.<ext>`` (see ``ChatEventSink.write_media``).
+# Only these four raster types, recognised by their MAGIC BYTES — the label
+# a tool puts on the block is not trusted (an SVG can carry script).
+_IMAGE_EXT = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif"}
+_MAX_IMAGE_BYTES = 10 * 1024 * 1024
+_MAX_IMAGES = 8
+_MEDIA_NAME_RE = re.compile(r"^[a-f0-9]{64}\.(?:png|jpg|webp|gif)$")
+
+
+def sniff_image_mime(data: bytes) -> Optional[str]:
+    """The image type the BYTES say, or None for anything off the list."""
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    return None
+
+
+def _image_blocks(update: dict[str, Any]) -> list[dict[str, Any]]:
+    """The image blocks of a settled update: ACP ``content`` items
+    (``{"type":"content","content":{"type":"image",...}}``) first, then
+    ``rawOutput.content`` bare blocks. omp sends the same picture in both
+    (fixture acp-tool-image-18.10.1) — duplicates fold by hash later."""
+    blocks: list[dict[str, Any]] = []
+    content = update.get("content")
+    if isinstance(content, list):
+        for item in content:
+            inner = item.get("content") if isinstance(item, dict) else None
+            if isinstance(inner, dict) and inner.get("type") == "image":
+                blocks.append(inner)
+    raw = update.get("rawOutput")
+    if isinstance(raw, dict):
+        raw = raw.get("content")
+    if isinstance(raw, list):
+        for block in raw:
+            if isinstance(block, dict) and block.get("type") == "image":
+                blocks.append(block)
+    return blocks
+
+
+def _extract_images(update: dict[str, Any]) -> list[tuple[str, str, bytes]]:
+    """(sha256, mime, bytes) per distinct, valid picture — capped. Anything
+    that is not base64 of a whitelisted raster type is dropped silently
+    (an omp ``blob:sha256:`` reference has no bytes here; it never resolves
+    inside the bridge)."""
+    import base64
+    import binascii
+    import hashlib
+
+    out: list[tuple[str, str, bytes]] = []
+    seen: set[str] = set()
+    for block in _image_blocks(update):
+        data = block.get("data")
+        if not isinstance(data, str) or not data or data.startswith("blob:"):
+            continue
+        # base64 is 4/3 the size: a string this long cannot fit the cap.
+        if len(data) > (_MAX_IMAGE_BYTES * 4) // 3 + 8:
+            continue
+        try:
+            raw = base64.b64decode(data, validate=True)
+        except (binascii.Error, ValueError):
+            continue
+        if not raw or len(raw) > _MAX_IMAGE_BYTES:
+            continue
+        mime = sniff_image_mime(raw)
+        if mime is None:
+            continue
+        sha = hashlib.sha256(raw).hexdigest()
+        if sha in seen:
+            continue
+        seen.add(sha)
+        out.append((sha, mime, raw))
+        if len(out) >= _MAX_IMAGES:
+            break
+    return out
+
 # CSI (ESC [ … final), OSC (ESC ] … BEL/ST) and lone two-byte escapes, plus
 # C0 controls except \n and \t. Terminal colour codes are noise on a phone.
 _ANSI_RE = re.compile(
@@ -821,22 +904,31 @@ class ACPEventMapper:
             details["diffs"] = diffs
         if tool["locations"]:
             details["locations"] = list(tool["locations"])
-        return [
-            {
-                "type": "message",
-                "id": self._next_id(),
-                "parentId": None,
-                "timestamp": _now_iso(),
-                "message": {
-                    "role": "toolResult",
-                    "toolCallId": tool_call_id,
-                    "toolName": tool["name"],
-                    "content": [{"type": "text", "text": output_text}],
-                    "details": details,
-                    "isError": status in ("failed", "error"),
-                },
-            }
-        ]
+        entry: dict[str, Any] = {
+            "type": "message",
+            "id": self._next_id(),
+            "parentId": None,
+            "timestamp": _now_iso(),
+            "message": {
+                "role": "toolResult",
+                "toolCallId": tool_call_id,
+                "toolName": tool["name"],
+                "content": [{"type": "text", "text": output_text}],
+                "details": details,
+                "isError": status in ("failed", "error"),
+            },
+        }
+        # P2: pictures as references + an in-memory payload that ``dump``
+        # writes to disk (and strips) before the line is serialised.
+        images = _extract_images(update)
+        if images:
+            details["images"] = [
+                {"sha256": sha, "mimeType": mime, "bytes": len(raw)} for sha, mime, raw in images
+            ]
+            entry["_media"] = [
+                {"name": f"{sha}.{_IMAGE_EXT[mime]}", "data": raw} for sha, mime, raw in images
+            ]
+        return [entry]
 
     def _tool_progress(self, tool_call_id: str, update: dict[str, Any]) -> list[dict[str, Any]]:
         """One in_progress snapshot -> 0..1 volatile ``acp-tool-output`` line
@@ -890,14 +982,58 @@ class ACPEventMapper:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def dump(entries: list[dict[str, Any]]) -> list[str]:
+    def dump(
+        entries: list[dict[str, Any]],
+        media_writer: Optional[Callable[[str, bytes], bool]] = None,
+    ) -> list[str]:
+        """Entries -> JSONL strings. A toolResult's ``_media`` payload (P2)
+        is handed to ``media_writer(name, bytes)`` first and never
+        serialised; a picture the writer did not confirm loses its
+        reference in ``details.images`` — no reference without a file (a
+        dangling one would render a broken image). No writer -> no
+        pictures at all. Never raises."""
         out: list[str] = []
         for entry in entries:
+            media = entry.get("_media") if isinstance(entry, dict) else None
+            if media:
+                entry = _settle_media(entry, media, media_writer)
             try:
                 out.append(json.dumps(entry, ensure_ascii=False))
             except (TypeError, ValueError):
                 continue
         return out
+
+
+def _settle_media(
+    entry: dict[str, Any],
+    media: list[dict[str, Any]],
+    media_writer: Optional[Callable[[str, bytes], bool]],
+) -> dict[str, Any]:
+    """A copy of ``entry`` without ``_media`` whose ``details.images`` keeps
+    only the pictures ``media_writer`` actually stored."""
+    written: set[str] = set()
+    if media_writer is not None:
+        for item in media:
+            name = item.get("name") if isinstance(item, dict) else None
+            data = item.get("data") if isinstance(item, dict) else None
+            if not isinstance(name, str) or not isinstance(data, (bytes, bytearray)):
+                continue
+            try:
+                if media_writer(name, bytes(data)):
+                    written.add(name.split(".", 1)[0])
+            except Exception:  # noqa: BLE001 — a picture never kills the line
+                continue
+    clean = {k: v for k, v in entry.items() if k != "_media"}
+    message = dict(clean.get("message") or {})
+    details = dict(message.get("details") or {})
+    kept = [img for img in details.get("images") or [] if img.get("sha256") in written]
+    if kept:
+        details["images"] = kept
+    else:
+        details.pop("images", None)
+    message["details"] = details
+    clean["message"] = message
+    return clean
 
 
 class ToolOutputPump:
@@ -1082,6 +1218,54 @@ class ChatEventSink:
         except OSError:
             sink._path = None
         return sink
+
+    #: How many pictures ``media/`` keeps (newest by mtime). The backend
+    #: copies each one into its own store the first time a chat shows it,
+    #: so this folder is a transit area, not the archive — but a picture
+    #: pruned before anyone opened the chat stays unavailable.
+    _MEDIA_KEEP = 200
+
+    def write_media(self, name: str, data: bytes) -> bool:
+        """One tool picture into ``<transcript dir>/media/<name>`` (chat
+        package P2). ``name`` must be ``<sha256>.<png|jpg|webp|gif>`` — the
+        hash the mapper computed, so the same picture is one file. Atomic
+        (temp file + rename), idempotent, never raises: False = not stored
+        (the caller then drops the reference)."""
+        if self._path is None or not isinstance(name, str) or not _MEDIA_NAME_RE.match(name):
+            return False
+        try:
+            mdir = self._path.parent / "media"
+            mdir.mkdir(exist_ok=True)
+            target = mdir / name
+            if target.is_file():
+                return True
+            tmp = mdir / f".{name}.{uuid.uuid4().hex[:8]}.tmp"
+            with open(tmp, "wb") as fh:
+                fh.write(data)
+            os.replace(tmp, target)
+            self._prune_media(mdir)
+            return True
+        except OSError:
+            return False
+
+    @classmethod
+    def _prune_media(cls, mdir: Path) -> None:
+        dated: list[tuple[float, Path]] = []
+        try:
+            for candidate in mdir.iterdir():
+                if _MEDIA_NAME_RE.match(candidate.name):
+                    try:
+                        dated.append((candidate.stat().st_mtime, candidate))
+                    except OSError:
+                        continue
+        except OSError:
+            return
+        dated.sort(key=lambda item: item[0], reverse=True)
+        for _mtime, stale in dated[cls._MEDIA_KEEP:]:
+            try:
+                stale.unlink()
+            except OSError:
+                pass
 
     @property
     def session_id(self) -> str:

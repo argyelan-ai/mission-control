@@ -781,6 +781,11 @@ export const api = {
         `/api/v1/agents/${agentId}/chat/subagent/${encodeURIComponent(runId)}${suffix}`,
       );
     },
+    /** A tool picture (chat package P2). Bearer-authenticated like the
+     *  rest of the chat — fetch it (useAuthBlob), never put it in `<img src>`.
+     *  `thumb` = small WebP for the card, `full` = metadata-free original. */
+    mediaUrl: (agentId: string, mediaId: string, variant: "thumb" | "full" = "thumb"): string =>
+      `${BASE_URL}/api/v1/agents/${encodeURIComponent(agentId)}/chat/media/${encodeURIComponent(mediaId)}?variant=${variant}`,
     history: (agentId: string, params?: { limit?: number; beforeUuid?: string }) => {
       const qs = new URLSearchParams();
       if (params?.limit != null) qs.set("limit", String(params.limit));

@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -54,7 +54,7 @@ from app.services.reference_ingest import (
     store_reference,
 )
 from app.models.activity import ActivityEvent
-from app.services import chat_actions
+from app.services import chat_actions, chat_media
 from app.services.activity import emit_event
 from app.services.chat_changes import aggregate_changes
 from app.services.chat_diff import capture_texts
@@ -236,12 +236,16 @@ async def get_chat_history(
         }
 
     observed_windows = await get_observed_model_windows()
-    history = read_history(
+    # In a thread: with P2 a history read may store tool pictures (disk +
+    # PIL); the event loop must never wait on that.
+    history = await asyncio.to_thread(
+        read_history,
         path,
         adapter,
         limit=limit,
         before_uuid=before_uuid,
         observed_windows=observed_windows,
+        media=chat_media.context_for(agent, path),
     )
     history["session"]["aliveness"] = await resolve_aliveness(agent, path, adapter)
     # While the agent works a task, the panel shows THAT task's list: an ACP
@@ -372,6 +376,42 @@ async def get_subagent_history(
     data.pop("subagentRuns", None)
     data["subagent"] = run
     return data
+
+
+@router.get("/agents/{agent_id}/chat/media/{media_id}")
+async def get_chat_media(
+    agent_id: uuid.UUID,
+    media_id: str,
+    variant: str = Query("thumb", pattern="^(thumb|full)$"),
+    current_user=Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """One picture an agent's tool produced (chat package P2): ``thumb`` (a
+    small WebP for the tool card) or ``full`` (re-encoded, all metadata —
+    EXIF, GPS, text chunks — dropped; the stored original is never sent).
+
+    Same auth as the chat history. The id is the picture's sha256 and is
+    looked up only in THIS agent's folder: another agent's id answers 404
+    like an unknown one, and no answer names a path. ``nosniff`` + a
+    sandbox CSP keep a picture a picture."""
+    await _load_agent_or_404(agent_id, session)
+    if not chat_media.is_media_id(media_id):
+        raise HTTPException(status_code=404, detail="not found")
+    found = await asyncio.to_thread(chat_media.open_variant, str(agent_id), media_id, variant)
+    if found is None:
+        raise HTTPException(status_code=404, detail="not found")
+    path, mime = found
+    ext = chat_media.MIME_EXT.get(mime, "img")
+    return FileResponse(
+        path,
+        media_type=mime,
+        headers={
+            "Cache-Control": "private, max-age=604800, immutable",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; sandbox",
+            "Content-Disposition": f'inline; filename="mc-image-{media_id[:12]}.{ext}"',
+        },
+    )
 
 
 @router.get("/agents/{agent_id}/chat/stream")
