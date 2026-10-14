@@ -6,7 +6,12 @@
  * Until PR 4 a call lived inside one chat and ended when the operator left
  * it. Operator rule 12.10.2026: the mic in a chat talks to that chat's agent,
  * the mic in the navigation talks to the LEAD agent, and a call survives
- * moving between pages. So the call moved up here, into AppShell:
+ * moving between pages. So the call moved up here, ABOVE the pages:
+ * `VoiceCallRoot` sits in the root `Providers` (app/providers.tsx). It must
+ * not live in AppShell: every page renders its own AppShell, so a client
+ * navigation remounts it — and a provider there ended the call on every
+ * route change (live finding 13.10.2026, PR #808). AppShell only renders the
+ * floating bar (`FloatingVoiceCall`), which reads this provider.
  *
  * - One call at a time, app-wide. `startCall(target)` opens it for the given
  *   agent (the chat's agent, or the lead agent from the navigation mic).
@@ -40,9 +45,10 @@ import {
   type ReactNode,
 } from "react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { PhoneOff, RotateCcw, X } from "lucide-react";
-import { api } from "@/lib/api";
+import { api, getToken } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
 import { C, STATUS_TEXT } from "@/lib/colors";
 import { chatEntryHref } from "@/lib/chatHistory";
@@ -159,18 +165,38 @@ function CallStreamListener({
   return null;
 }
 
+/**
+ * The one app-wide call, mounted once in the root providers. Only switched
+ * on while someone is signed in: on /login a config request would answer
+ * 401 and bounce back to /login. Re-checked on every route change (login →
+ * app is a client navigation); signing out hangs up.
+ */
+export function VoiceCallRoot({ children, env }: { children: ReactNode; env?: VoiceLiveEnv }) {
+  const pathname = usePathname();
+  const [signedIn, setSignedIn] = useState(false);
+  useEffect(() => setSignedIn(getToken() !== ""), [pathname]);
+  return (
+    <VoiceLiveCallProvider env={env} active={signedIn}>
+      {children}
+    </VoiceLiveCallProvider>
+  );
+}
+
 export function VoiceLiveCallProvider({
   children,
   env = browserVoiceLiveEnv,
   resolveLead = true,
+  active: on = true,
 }: {
   children: ReactNode;
   env?: VoiceLiveEnv;
   /** false = a chat on its own (no AppShell): no navigation mic to feed. */
   resolveLead?: boolean;
+  /** false = nobody signed in: no lookups, no call. */
+  active?: boolean;
 }) {
   const locale = useLocale();
-  const config = useVoiceLiveConfig();
+  const config = useVoiceLiveConfig(on);
   const enabled = config !== null;
   const budgetReached = config?.budget?.reached === true;
   const lead = useLeadTarget(enabled && resolveLead);
@@ -195,6 +221,10 @@ export function VoiceLiveCallProvider({
   // start(id), so a page change never "switches agent" and ends the call.
   const call = useVoiceLive("", locale === "de" ? "de" : "en", env, { onForwarded, onStopped, progress });
   const active = call.status !== "idle";
+  const hangUpFn = call.hangUp;
+  useEffect(() => {
+    if (!on) hangUpFn();
+  }, [on, hangUpFn]);
 
   const startFn = call.start;
   const startCall = useCallback(

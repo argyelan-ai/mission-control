@@ -208,6 +208,9 @@ interface ComposerProps {
   /** Live-voice mic (voice PR 1), rendered left of send/stop. `null` when
    *  the feature is off — then nothing is shown (K3). */
   voiceSlot?: ReactNode;
+  /** Plan/Standard switch of a headless (ACP) agent (P3, `ModeChip`), left
+   *  of the effort chip. `null`/absent = the agent reports no plan mode. */
+  modeSlot?: ReactNode;
 }
 
 /**
@@ -231,7 +234,7 @@ interface ComposerProps {
  *  globals.css passen. */
 export const EFFORT_SETTLE_MS = 320;
 
-export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = true, capabilities = null, paneObservable = true, prefill = null, barBelow = false, voiceSlot = null }: ComposerProps) {
+export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = true, capabilities = null, paneObservable = true, prefill = null, barBelow = false, voiceSlot = null, modeSlot = null }: ComposerProps) {
   const t = useTranslations("sessions");
   const locale = useLocale();
   const [text, setText] = useState("");
@@ -871,17 +874,21 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
           >
             <Paperclip size={15} />
           </button>
-          <div className="relative" ref={modelBoxRef}>
+          {/* min-w-0: the model chip is the one element of this row that may
+              shrink — with context ring, mode chip and effort chip on a
+              390 px phone, a long model name wrapped onto two lines. */}
+          <div className="relative min-w-0 max-w-40" ref={modelBoxRef}>
             {modelOptions.length === 0 ? (
               /* Fremde CLI (kimi, omp): das Backend meldet explizit keine
                  /model-Aliasse — dann ist der Chip ein ehrliches Label statt
                  eines Dropdowns, das Kauderwelsch in die TUI tippen wuerde. */
               <span
                 data-testid="model-chip-static"
-                className="inline-flex items-center font-mono text-xs font-medium px-2 py-1 rounded-lg"
+                title={modelLabel}
+                className="inline-flex max-w-full items-center whitespace-nowrap font-mono text-xs font-medium px-2 py-1 rounded-lg"
                 style={{ color: C.textMuted, border: `1px solid ${C.border}` }}
               >
-                {modelLabel}
+                <span className="truncate">{modelLabel}</span>
               </span>
             ) : (
             <button
@@ -892,17 +899,19 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
               // Quiet by default: this is a switcher, not an active state, so
               // it doesn't get the accent tint (which in this system means
               // "selected"). It lights up on hover and while open.
-              className="inline-flex items-center gap-1 font-mono text-xs font-medium px-2 py-1 rounded-lg cursor-pointer transition-colors"
+              data-testid="model-chip"
+              title={modelLabel}
+              className="inline-flex max-w-full items-center gap-1 whitespace-nowrap font-mono text-xs font-medium px-2 py-1 rounded-lg cursor-pointer transition-colors"
               style={{
                 backgroundColor: modelOpen ? C.bgHover : "transparent",
                 color: modelOpen ? C.textPrimary : C.textSecondary,
                 border: `1px solid ${C.border}`,
               }}
             >
-              {modelLabel}
+              <span className="truncate">{modelLabel}</span>
               <ChevronDown
                 size={11}
-                className="transition-transform duration-150"
+                className="shrink-0 transition-transform duration-150"
                 style={{ transform: modelOpen ? "rotate(180deg)" : undefined }}
               />
             </button>
@@ -1052,6 +1061,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
               (18.08.2026): a control that is missing when you need it is worse
               than one that waits. */}
           <div className="ml-auto flex items-center gap-1.5">
+          {modeSlot}
           {(currentEffort ||
             (effortSupported && effortLevels.length > 0) ||
             /* Der Chip erscheint AUCH ohne bekannte Stufe, sobald das Backend

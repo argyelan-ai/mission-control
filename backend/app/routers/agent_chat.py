@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -32,17 +32,22 @@ from app.services.agent_chat_input import (
     AgentBusyError,
     AgentStartingError,
     BossDeliveryError,
+    ElicitationNotPendingError,
     EffortSwitchFailedError,
     EffortSwitchRejectedError,
     InputNotSupportedError,
     InstallCommandBlockedError,
+    QuestionOpenError,
+    answer_elicitation,
     can_receive_input,
     clear_queue,
     effort_capabilities,
+    mode_capabilities,
     model_options_capabilities,
     send_keys,
     send_text,
     set_effort,
+    set_mode,
     slash_command_capabilities,
 )
 from app.services.harness_catalog import get_observed_model_windows
@@ -54,7 +59,7 @@ from app.services.reference_ingest import (
     store_reference,
 )
 from app.models.activity import ActivityEvent
-from app.services import chat_actions
+from app.services import chat_actions, chat_media, commit_llm
 from app.services.activity import emit_event
 from app.services.chat_changes import aggregate_changes
 from app.services.chat_diff import capture_texts
@@ -133,6 +138,26 @@ class ChatEffortBody(BaseModel):
     level: str
 
 
+class ChatElicitationAnswerBody(BaseModel):
+    """P3: answer to a question card. ``content`` only with ``accept`` —
+    keys and values must match the question's schema (checked by the chat
+    daemon before omp sees them)."""
+
+    action: str
+    content: dict[str, Any] | None = None
+
+
+class ChatModeBody(BaseModel):
+    mode: str
+
+
+#: A card id as the chat daemon mints it (``el-`` + 12 hex). Checked before
+#: it travels into a ``docker exec`` argument.
+_ELICITATION_ID_RE = re.compile(r"^el-[0-9a-f]{12}$")
+#: An answer is one short form; anything larger is not a click.
+_MAX_ELICITATION_CONTENT_BYTES = 32_000
+
+
 async def _resolve_transcript_path(
     agent_id: uuid.UUID, session: AsyncSession
 ) -> tuple[Agent, Path, Any] | JSONResponse:
@@ -208,6 +233,7 @@ async def get_chat_history(
         **await effort_capabilities(agent),
         **await slash_command_capabilities(agent),
         **await model_options_capabilities(agent),
+        **await mode_capabilities(agent),
     }
 
     # Frische Sitzung ohne Datei (omp ``/new``, siehe ``fresh_session``):
@@ -236,12 +262,16 @@ async def get_chat_history(
         }
 
     observed_windows = await get_observed_model_windows()
-    history = read_history(
+    # In a thread: with P2 a history read may store tool pictures (disk +
+    # PIL); the event loop must never wait on that.
+    history = await asyncio.to_thread(
+        read_history,
         path,
         adapter,
         limit=limit,
         before_uuid=before_uuid,
         observed_windows=observed_windows,
+        media=chat_media.context_for(agent, path),
     )
     history["session"]["aliveness"] = await resolve_aliveness(agent, path, adapter)
     # While the agent works a task, the panel shows THAT task's list: an ACP
@@ -372,6 +402,42 @@ async def get_subagent_history(
     data.pop("subagentRuns", None)
     data["subagent"] = run
     return data
+
+
+@router.get("/agents/{agent_id}/chat/media/{media_id}")
+async def get_chat_media(
+    agent_id: uuid.UUID,
+    media_id: str,
+    variant: str = Query("thumb", pattern="^(thumb|full)$"),
+    current_user=Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """One picture an agent's tool produced (chat package P2): ``thumb`` (a
+    small WebP for the tool card) or ``full`` (re-encoded, all metadata —
+    EXIF, GPS, text chunks — dropped; the stored original is never sent).
+
+    Same auth as the chat history. The id is the picture's sha256 and is
+    looked up only in THIS agent's folder: another agent's id answers 404
+    like an unknown one, and no answer names a path. ``nosniff`` + a
+    sandbox CSP keep a picture a picture."""
+    await _load_agent_or_404(agent_id, session)
+    if not chat_media.is_media_id(media_id):
+        raise HTTPException(status_code=404, detail="not found")
+    found = await asyncio.to_thread(chat_media.open_variant, str(agent_id), media_id, variant)
+    if found is None:
+        raise HTTPException(status_code=404, detail="not found")
+    path, mime = found
+    ext = chat_media.MIME_EXT.get(mime, "img")
+    return FileResponse(
+        path,
+        media_type=mime,
+        headers={
+            "Cache-Control": "private, max-age=604800, immutable",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; sandbox",
+            "Content-Disposition": f'inline; filename="mc-image-{media_id[:12]}.{ext}"',
+        },
+    )
 
 
 @router.get("/agents/{agent_id}/chat/stream")
@@ -821,6 +887,27 @@ async def _chat_repo_or_refuse(agent: Agent, session: AsyncSession) -> tuple[Pat
     return await asyncio.to_thread(_pick), folders
 
 
+async def _recent_user_messages(agent_id: uuid.UUID, session: AsyncSession) -> list[str]:
+    """The chat's last few operator messages, for the LLM suggestion's
+    intent context (``commit_llm``). Best effort: any resolution failure
+    (no transcript, odd adapter, …) just loses that context — it never
+    breaks the draft, which has a mechanical fallback regardless."""
+    try:
+        resolved = await _resolve_transcript_path(agent_id, session)
+        if isinstance(resolved, JSONResponse):
+            return []
+        _agent, tpath, adapter = resolved
+
+        def _read() -> list[str]:
+            history = read_history(tpath, adapter, limit=_WHOLE_SESSION)
+            return commit_llm.extract_user_messages(history["events"])
+
+        return await asyncio.to_thread(_read)
+    except Exception:  # noqa: BLE001 — best-effort context, never breaks the draft
+        logger.warning("commit draft: could not read chat history for LLM context", exc_info=True)
+        return []
+
+
 @router.get("/agents/{agent_id}/chat/commit/draft")
 async def get_chat_commit_draft(
     agent_id: uuid.UUID,
@@ -829,7 +916,12 @@ async def get_chat_commit_draft(
 ):
     """What a commit would take and a suggested message (editable in the
     confirmation sheet): ``{branch, files: [{path, status, additions,
-    deletions}], message}``. Read-only."""
+    deletions}], message, source, mechanicalMessage?}``. ``message`` is the
+    local model's suggestion (``commit_llm``) when it answered something
+    usable in time; otherwise the deterministic mechanical message
+    (``source: "fallback"``) — the sheet always has something to show and
+    always lets the operator edit it. Read-only (the LLM call makes no
+    change, just reads the diff)."""
     agent = await _load_agent_or_404(agent_id, session)
     try:
         repo, _folders = await _chat_repo_or_refuse(agent, session)
@@ -838,11 +930,25 @@ async def get_chat_commit_draft(
             branch = chat_actions.commit_guard(repo)
             files = chat_actions.pending_files(repo)
             return {"branch": branch, "files": files,
-                    "message": chat_actions.suggest_commit_message(files)}
+                    "message": chat_actions.suggest_commit_message(files), "source": "fallback"}
 
-        return await asyncio.to_thread(_draft)
+        draft = await asyncio.to_thread(_draft)
     except chat_actions.Refused as e:
         return _refused(e)
+
+    if not draft["files"]:
+        return draft
+
+    diff_text = await asyncio.to_thread(chat_actions.diff_text_for_commit, repo, draft["files"])
+    user_messages = await _recent_user_messages(agent_id, session)
+    suggestion = await commit_llm.suggest_commit_message(
+        branch=draft["branch"], files=draft["files"], diff_text=diff_text, user_messages=user_messages,
+    )
+    if suggestion:
+        draft["mechanicalMessage"] = draft["message"]
+        draft["message"] = suggestion
+        draft["source"] = "llm"
+    return draft
 
 
 @router.post("/agents/{agent_id}/chat/commit")
@@ -1216,3 +1322,83 @@ async def post_chat_effort(
         return _acp_unreachable(e)
     except BossDeliveryError as e:
         return _boss_delivery_failed(e)
+
+
+@router.post("/agents/{agent_id}/chat/elicitation/{elicitation_id}")
+async def post_chat_elicitation_answer(
+    agent_id: uuid.UUID,
+    elicitation_id: str,
+    body: ChatElicitationAnswerBody,
+    current_user=Depends(require_role(Role.ADMIN)),
+    session: AsyncSession = Depends(get_session),
+):
+    """Answers a question card (chat package P3) of a headless (ACP) agent:
+    ``action`` = ``accept`` (with ``content``) | ``decline`` | ``cancel``.
+    Same operator gate as every other chat control (admin role). 200
+    ``{"status": "answered"|"declined"|"cancelled", "stopped": bool}``
+    (``stopped``: cancel on omp's plan approval also stopped the turn —
+    there a plain cancel means "keep planning"); 422 for a malformed id
+    or an answer that does not fit the question; 409
+    ``{"reason":"elicitation_not_pending"}`` when the card is no longer open
+    (answered elsewhere, its turn ended, the chat daemon restarted); 409
+    ``input_not_supported`` for agents without an ACP chat (or an image
+    without the op); 502 ``acp_unreachable`` when the daemon does not
+    answer."""
+    agent = await _load_agent_or_404(agent_id, session)
+    if not _ELICITATION_ID_RE.match(elicitation_id):
+        raise HTTPException(status_code=422, detail="malformed elicitation id")
+    if body.content is not None and len(
+        json.dumps(body.content, ensure_ascii=False)
+    ) > _MAX_ELICITATION_CONTENT_BYTES:
+        raise HTTPException(status_code=422, detail="answer too large")
+
+    try:
+        outcome = await answer_elicitation(agent, elicitation_id, body.action, body.content)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    except ElicitationNotPendingError:
+        return JSONResponse(status_code=409, content={"reason": "elicitation_not_pending"})
+    except InputNotSupportedError:
+        return JSONResponse(status_code=409, content=_INPUT_NOT_SUPPORTED)
+    except AgentStartingError:
+        return JSONResponse(status_code=409, content=_AGENT_STARTING)
+    except AgentBusyError:
+        return JSONResponse(status_code=409, content=_AGENT_BUSY)
+    except AcpChatRefusedError as e:
+        return JSONResponse(status_code=409, content={"reason": "acp_refused", "error": e.code})
+    except AcpChatUnreachableError as e:
+        return _acp_unreachable(e)
+    return outcome
+
+
+@router.post("/agents/{agent_id}/chat/mode", status_code=204)
+async def post_chat_mode(
+    agent_id: uuid.UUID,
+    body: ChatModeBody,
+    current_user=Depends(require_role(Role.ADMIN)),
+    session: AsyncSession = Depends(get_session),
+):
+    """Switches a headless (ACP) agent's session mode (chat package P3:
+    ``plan`` / ``default``) through ``config id=mode``. Only modes the agent
+    itself reports in ``capabilities.modeOptions``: 422 for any other value,
+    409 ``input_not_supported`` when the agent reports no mode switch, 409
+    ``question_open`` while a question card is open, 409 ``agent_busy``
+    while a turn runs (switching then left an open plan question
+    unanswered — live 13.10.2026), 409 ``acp_refused`` when the agent
+    declined (the chat shows its own error card), 502 ``acp_unreachable``
+    when the daemon does not answer."""
+    agent = await _load_agent_or_404(agent_id, session)
+    try:
+        await set_mode(agent, body.mode)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    except QuestionOpenError:
+        return JSONResponse(status_code=409, content={"reason": "question_open"})
+    except AgentBusyError:
+        return JSONResponse(status_code=409, content=_AGENT_BUSY)
+    except InputNotSupportedError:
+        return JSONResponse(status_code=409, content=_INPUT_NOT_SUPPORTED)
+    except AcpChatRefusedError as e:
+        return JSONResponse(status_code=409, content={"reason": "acp_refused", "error": e.code})
+    except AcpChatUnreachableError as e:
+        return _acp_unreachable(e)

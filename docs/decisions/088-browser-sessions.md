@@ -83,7 +83,13 @@ The operator decided the three open lifecycle questions on 2026-10-06:
   new phase with its next tab) — **on by default** (`browser_idle_close_agent_tabs`)
   since a live test (2026-10-07) showed the local omp agent recovers from a tab
   closed under its open connection: its next browser call opened a working tab
-  and answered normally. Setting it to false keeps only the record ending. An agent working without a break past `browser_session_max_age_s`
+  and answered normally. That only holds while another page is left: omp
+  never creates a tab in the shared browser, it adopts an existing page, and
+  on 2026-10-07 21:22 an idle phase end closed the browser's last page (the
+  startup tab omp had claimed) — every omp `browser.open` failed from then on
+  (found 2026-10-13). The cdp-gateway therefore keeps one page: when the
+  browser has none outside agents' and sessions' own contexts, it opens a
+  blank one that belongs to nobody (`keep_shared_page`). Setting it to false keeps only the record ending. An agent working without a break past `browser_session_max_age_s`
   only rolls over: the phase ends in the record and the next pass opens a new
   one, its tabs stay.
 - **(b) The shared Chromium is always on.** Only the per-session parts

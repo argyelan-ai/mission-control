@@ -166,8 +166,15 @@ async def create_session(
     if (await voice_live_usage.budget_state(session)).reached:
         logger.info("voice_live session refused: daily budget reached")
         return JSONResponse(status_code=402, content={"detail": {"reason": "budget_reached"}})
+    # Settings → Profile "Voice language" (operator request 13.10.2026): an
+    # explicit preference overrides the UI locale in ``body.lang`` and also
+    # sets the realtime transcription hint, so the voice speaks German even
+    # when the UI itself is in English. "auto" (default) keeps following
+    # the UI, exactly as before.
+    preference = await voice_live.load_voice_language_preference(session, _user.id)
+    lang, transcription_lang = voice_live.resolve_voice_language(preference, body.lang)
     try:
-        minted = await voice_live.mint_client_secret(agent.name, body.lang)
+        minted = await voice_live.mint_client_secret(agent.name, lang, transcription_lang)
     except voice_live.VoiceLiveError as exc:
         return JSONResponse(status_code=exc.status, content={"detail": {"reason": exc.reason}})
     call_ref = voice_live_tools.open_call(agent.id)

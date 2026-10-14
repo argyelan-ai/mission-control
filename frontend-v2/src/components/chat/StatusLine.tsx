@@ -156,7 +156,9 @@ function resolveDisplay(
       }
       return { dotColor: STATUS.busy, textColor: STATUS_TEXT.info, label: `${workingWord}…`, pulse: true };
     case "waiting_input":
-      return { dotColor: STATUS.busy, textColor: STATUS_TEXT.info, label: t("waitingForYou"), pulse: false };
+      // An open question (ACP card, P3) or a CLI menu waits on the operator,
+      // not on the model — say so instead of "Thinking…" (live 13.10.2026).
+      return { dotColor: STATUS.busy, textColor: STATUS_TEXT.info, label: t("waitingForAnswer"), pulse: false };
     case "permission_prompt":
       return { dotColor: C.warning, textColor: STATUS_TEXT.warning, label: t("waitingApproval"), pulse: false };
     case "idle":

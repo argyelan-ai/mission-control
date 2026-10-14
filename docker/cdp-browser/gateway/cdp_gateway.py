@@ -181,6 +181,9 @@ _SNAPSHOT_QUALITY = 70
 # Chromium is: the backend waits a bounded time for DELETE (its timeout must
 # stay above this). Leftovers are reported, MC's lifecycle loop sweeps them.
 _CLEANUP_DEADLINE = 8.0
+# The spare blank page (see CdpGateway.keep_shared_page) must not hold up the
+# watcher for long; a create that misses this is retried on the next event.
+_SPARE_PAGE_DEADLINE = 5.0
 _ALREADY_GONE = re.compile(r"Failed to find context|No target with given id", re.I)
 
 # Commands that mean "the sending agent is working in this tab now".
@@ -585,6 +588,14 @@ class GatewayState:
             session_id = params.get("sessionId")
             if session_id:
                 self.session_target.pop(session_id, None)
+
+    def has_shared_page(self) -> bool:
+        """Is there a page outside the agents' and sessions' OWN browser
+        contexts — one an omp agent in "connected" mode can attach to?
+        omp never creates a tab in a borrowed browser (it adopts an existing
+        page), so without one its `browser.open` cannot work at all
+        (incident 13.10.2026, see CdpGateway.keep_shared_page)."""
+        return any(t.ctx is None or t.ctx not in self.ctx_owner for t in self.targets.values())
 
     # ── read side for /mc/targets and per-agent /json/list ─────────────────
 
@@ -1030,6 +1041,11 @@ class CdpGateway:
         self._live_conns: dict[str, set[asyncio.Task]] = {}
         # Each such task's client writer, so ending a session can cut it hard.
         self._conn_writers: dict[asyncio.Task, asyncio.StreamWriter] = {}
+        # True once the watcher's discover burst is complete (the reply to
+        # its Target.setDiscoverTargets): only then does an empty `targets`
+        # mean "the browser has no page" and not "we don't know yet".
+        self._watcher_synced = False
+        self._spare_lock = asyncio.Lock()
 
     @property
     def _upstream_netloc(self) -> str:
@@ -1263,6 +1279,8 @@ class CdpGateway:
             # Same rule as for sessions (review M1): never a tab another
             # owner created and the agent only claimed. A tab nobody known
             # created (Chromium's startup tab, omp's reused page) is fine.
+            # If that was the browser's last page, the watcher opens a blank
+            # one right after (keep_shared_page) — omp cannot work without.
             owned_ctx = set(contexts)
             tabs = sorted(set(tabs) | {
                 t.id for t in self.state.targets_for(entry.agent)
@@ -1475,22 +1493,72 @@ class CdpGateway:
                     # from a clean slate so discover's fresh targetCreated
                     # burst is the only truth, not a merge with stale state.
                     self.state.reset_targets()
+                    self._watcher_synced = False
                     await ws.send(json.dumps({"id": 1, "method": "Target.setDiscoverTargets", "params": {"discover": True}}))
                     self._watcher_connected = True
                     while not stop_event.is_set():
                         raw = await ws.recv()
-                        msg = json.loads(raw)
-                        method = msg.get("method", "")
-                        if method.startswith("Target.target"):
-                            self.state.apply_target_event(method.split(".", 1)[1], msg.get("params", {}))
-                        elif method in ("Target.attachedToTarget", "Target.detachedFromTarget"):
-                            self.state.observe_event(method, msg.get("params", {}))
+                        await self.handle_watcher_message(json.loads(raw))
             except Exception as e:
                 logger.info("cdp_gateway watcher: %s, retrying", e)
                 self._watcher_connected = False
+                self._watcher_synced = False
                 await asyncio.sleep(2.0)
             finally:
                 self._watcher_connected = False
+                self._watcher_synced = False
+
+    async def handle_watcher_message(self, msg: dict) -> None:
+        """One message on the watcher connection: keep `GatewayState`
+        current, and keep a page in the browser (keep_shared_page) once the
+        discover burst is complete and whenever a tab goes away."""
+        method = msg.get("method", "")
+        if msg.get("id") == 1:
+            # Reply to Target.setDiscoverTargets: Chromium has sent a
+            # targetCreated for every existing tab before it.
+            self._watcher_synced = True
+            await self.keep_shared_page()
+        elif method.startswith("Target.target"):
+            self.state.apply_target_event(method.split(".", 1)[1], msg.get("params", {}))
+            if method == "Target.targetDestroyed":
+                await self.keep_shared_page()
+        elif method in ("Target.attachedToTarget", "Target.detachedFromTarget"):
+            self.state.observe_event(method, msg.get("params", {}))
+
+    async def keep_shared_page(self) -> Optional[str]:
+        """Open a blank page when the shared browser has none left; returns
+        its target id (None = nothing to do, or the create failed — the next
+        watcher event retries).
+
+        Why (incident 13.10.2026): omp in "connected" mode never creates a
+        tab in the shared browser, it adopts an existing page (omp 18.10.1
+        `tools/browser/attach.ts::pickElectronTarget`; 18.1.10 did the same).
+        Ending an agent's working phase closes the tab it worked in, and
+        that is usually Chromium's startup tab omp had claimed — on
+        07.10.2026 it was the last page, and every omp `browser.open` after
+        that failed. The blank page is created over the gateway's OWN
+        connection, so it belongs to nobody, exactly like the startup tab;
+        whoever uses it next claims it (claim on use)."""
+        async with self._spare_lock:
+            if not self._watcher_synced or self.state.has_shared_page():
+                return None
+            try:
+                [reply] = await self._cdp_call(
+                    [("Target.createTarget", {"url": "about:blank"})], deadline=_SPARE_PAGE_DEADLINE,
+                )
+            except (OSError, asyncio.TimeoutError, RuntimeError, ValueError, websockets.WebSocketException) as e:
+                logger.info("cdp_gateway: could not open a spare page: %s", e)
+                return None
+            tid = (reply.get("result") or {}).get("targetId")
+            if not tid:
+                logger.info("cdp_gateway: could not open a spare page: %s", reply.get("error"))
+                return None
+            # Known at once, so a second check before Chromium's own
+            # targetCreated arrives does not open another one.
+            self.state.apply_target_event("targetCreated", {"targetInfo": {
+                "targetId": tid, "type": "page", "title": "", "url": "about:blank"}})
+            logger.info("cdp_gateway: the browser had no page left — opened blank page %s", tid)
+            return tid
 
     async def proxy_ws(
         self,

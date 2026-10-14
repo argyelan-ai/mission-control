@@ -69,6 +69,12 @@
     "languageHint": "Interface language. Takes effect immediately.",
     "languageEn": "English",
     "languageDe": "Deutsch",
+    "voiceLanguage": "Voice language",
+    "voiceLanguageHint": "The language the voice agent speaks and listens for on a call. \"Automatic\" follows the interface language above.",
+    "voiceLanguageAuto": "Automatic (follow interface language)",
+    "voiceLanguageDe": "Deutsch",
+    "voiceLanguageEn": "English",
+    "voiceLanguageAria": "Select voice language",
     "title": "Profile",
     "description": "Your personal information.",
     "timezoneAria": "Select timezone",
@@ -960,6 +966,7 @@
     "status": {
       "ready": "Ready",
       "waitingForYou": "Waiting for you",
+      "waitingForAnswer": "Waiting for your answer",
       "waitingApproval": "Waiting for approval",
       "unknown": "Status unknown — check the terminal",
       "ended": "Session ended — a new message starts the next session",
@@ -1055,7 +1062,24 @@
       "diffShowLess": "Show less",
       "diffTruncated": "Diff shortened — the whole change is in the file.",
       "diffCreate": "New file",
-      "diffWrite": "Written content"
+      "diffWrite": "Written content",
+      "images": "Pictures from this tool",
+      "openImage": "Open picture {n} of {total}",
+      "moreImages": "{count, plural, one {Open # more picture} other {Open # more pictures}}",
+      "imageUnavailable": "Picture not available",
+      "viewer": {
+        "title": "Picture viewer",
+        "alt": "Picture {n} of {total} from the tool",
+        "counter": "{n} / {total}",
+        "close": "Close",
+        "download": "Download",
+        "copy": "Copy picture",
+        "copied": "Copied",
+        "copyFailed": "Copy not available",
+        "previous": "Previous picture",
+        "next": "Next picture",
+        "unavailable": "Picture not available"
+      }
     },
     "diff": {
       "scopeLabel": "Changes",
@@ -1095,6 +1119,8 @@
         "commit": "Commit",
         "commitTitle": "Commit {count, plural, one {# file} other {# files}} on {branch}?",
         "commitMessage": "Commit message",
+        "commitFallback": "Simple summary — the local model didn't answer in time.",
+        "commitSuggested": "Suggested by the local model.",
         "commitHint": "Stays on this machine — nothing is pushed.",
         "committedTitle": "Committed",
         "committed": "{sha} is on {branch}.",
@@ -1107,7 +1133,8 @@
         "prExists": "This branch already has an open pull request",
         "cancel": "Cancel",
         "close": "Close",
-        "loading": "Loading"
+        "loading": "Loading",
+        "suggestAgain": "Suggest again"
       },
       "reason": {
         "changed_externally": "The file changed after this chat's last edit, so MC leaves it alone.",
@@ -3564,6 +3591,37 @@
       "starting": "Agent starting — will be delivered…",
       "withdraw": "Take back queued message",
       "edit": "Edit queued message"
+    },
+    "question": {
+      "aria": "Question from the agent",
+      "send": "Send answer",
+      "skip": "Skip",
+      "cancelStops": "Cancel (stops agent)",
+      "yes": "Yes",
+      "no": "No",
+      "other": "Other…",
+      "otherPlaceholder": "Type your own answer",
+      "placeholder": "Your answer",
+      "recommended": "Recommended",
+      "answered": "Answered",
+      "answeredWith": "Answered: {answer}",
+      "declined": "Declined",
+      "cancelled": "Skipped",
+      "cancelledStopped": "Cancelled — the agent stopped",
+      "expired": "No longer open — the agent moved on",
+      "waiting": "Waiting for an answer",
+      "notOpen": "This question is no longer open.",
+      "failed": "Answer not sent — try again."
+    },
+    "mode": {
+      "label": "Mode",
+      "plan": "Plan",
+      "default": "Standard",
+      "switchTo": "Switch to {mode} mode",
+      "planHint": "Plan mode: the agent only reads and drafts a plan; you approve it before any change.",
+      "failed": "Mode not switched — try again.",
+      "busy": "The agent is busy — switch the mode when the reply has ended.",
+      "questionOpen": "Answer the open question first, then switch the mode."
     }
   },
   "heads": {

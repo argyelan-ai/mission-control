@@ -23,7 +23,7 @@ import AppShell from "@/components/layout/AppShell";
 import { notify } from "@/lib/notify";
 import { useTerminalRemountSignal } from "@/hooks/useTerminalRemountSignal";
 import { rememberChat } from "@/lib/recentChats";
-import { CHAT_ENTRY_PARAM, chatUrl, isPhoneViewport, takeDirectLoad, type ChatKind } from "@/lib/chatHistory";
+import { CHAT_ENTRY_PARAM, chatUrl, isPhoneViewport, takeDirectLoad, usePhoneViewport, type ChatKind } from "@/lib/chatHistory";
 import { useHeadRuns } from "@/components/heads/useHeadRuns";
 import { HeadChatPlaceholder } from "@/components/heads/HeadChatPlaceholder";
 import { newerHeadRunIdFor, sortHeadsForList, type HeadRun } from "@/lib/heads";
@@ -614,6 +614,10 @@ function SessionsPageContent() {
   // Auch eine Gruppe ist ein „Chat-Bildschirm" im Handy-Stapel — sonst
   // tippt man eine Gruppe an und landet wieder in der Liste.
   const onChatScreen = mobileView === "chat" && (!!selectedLive || !!selectedGroupId || !!selectedHeadId);
+  // On the phone the list screen keeps the last chat mounted but hidden; a
+  // live voice call must float there, not dock into the invisible chat.
+  const phone = usePhoneViewport();
+  const chatOnScreen = !phone || onChatScreen;
   const selectedTaskTitle = selectedLive?.current_task_id
     ? tasks.find((task) => task.id === selectedLive.current_task_id)?.title ?? null
     : null;
@@ -800,6 +804,7 @@ function SessionsPageContent() {
                 key={selectedLive?.id ?? "none"}
                 agent={selectedLive}
                 hasTranscript={agentHasTranscript(selectedLive)}
+                voiceOnScreen={chatOnScreen}
                 detailLevel={detailLevel}
                 onDetailLevelChange={setDetailLevel}
                 centerView={centerView}

@@ -1119,6 +1119,15 @@
         ]
       }
     },
+    "/api/v1/agents/{agent_id}/chat/elicitation/{elicitation_id}": {
+      "post": {
+        "operationId": "post_chat_elicitation_answer_api_v1_agents__agent_id__chat_elicitation__elicitation_id__post",
+        "summary": "Post Chat Elicitation Answer",
+        "tags": [
+          "agent-chat"
+        ]
+      }
+    },
     "/api/v1/agents/{agent_id}/chat/history": {
       "get": {
         "operationId": "get_chat_history_api_v1_agents__agent_id__chat_history_get",
@@ -1141,6 +1150,24 @@
       "post": {
         "operationId": "post_chat_keys_api_v1_agents__agent_id__chat_keys_post",
         "summary": "Post Chat Keys",
+        "tags": [
+          "agent-chat"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/chat/media/{media_id}": {
+      "get": {
+        "operationId": "get_chat_media_api_v1_agents__agent_id__chat_media__media_id__get",
+        "summary": "Get Chat Media",
+        "tags": [
+          "agent-chat"
+        ]
+      }
+    },
+    "/api/v1/agents/{agent_id}/chat/mode": {
+      "post": {
+        "operationId": "post_chat_mode_api_v1_agents__agent_id__chat_mode_post",
+        "summary": "Post Chat Mode",
         "tags": [
           "agent-chat"
         ]

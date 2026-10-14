@@ -21,7 +21,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
-import { Check, ExternalLink, Loader2 } from "lucide-react";
+import { Check, ExternalLink, Loader2, RotateCw } from "lucide-react";
 import { api } from "@/lib/api";
 import { C } from "@/lib/colors";
 import { ResponsiveModal } from "@/components/shared/ResponsiveModal";
@@ -153,6 +153,24 @@ function ActionSheet({
   );
 }
 
+/** Shaped like the message box about to arrive (one long-ish line, two
+ *  shorter ones) — same `animate-pulse` convention as the chat timeline's
+ *  own skeleton, not a spinner parked over empty space. */
+function CommitMessageSkeleton() {
+  return (
+    <div
+      data-testid="commit-message-skeleton"
+      aria-hidden="true"
+      className="flex flex-col gap-2 px-3 py-2 rounded-md animate-pulse"
+      style={{ background: C.bgDeep, border: `1px solid ${C.border}` }}
+    >
+      {["92%", "68%", "40%"].map((w, i) => (
+        <div key={i} className="h-3 rounded-sm" style={{ width: w, background: C.bgElevated }} />
+      ))}
+    </div>
+  );
+}
+
 function DoneLine({ children }: { children: ReactNode }) {
   return (
     <p data-testid="changes-action-done" className="flex items-start gap-2 text-sm" style={{ color: C.textPrimary }}>
@@ -262,6 +280,10 @@ export function CommitSheet({ agentId, open, onClose }: { agentId: string; open:
     : draft.data
       ? t("act.commitTitle", { count: files, branch: draft.data.branch })
       : t("act.commit");
+  // A background refetch ("suggest again") keeps the current field visible
+  // and editable — only the FIRST load (no data yet) shows the skeleton.
+  const regenerating = draft.isFetching && draft.data !== undefined;
+  const source = draft.data?.source;
   return (
     <ActionSheet
       open={open}
@@ -280,14 +302,25 @@ export function CommitSheet({ agentId, open, onClose }: { agentId: string; open:
             : t("reason.nothing_to_commit")}
         </DoneLine>
       ) : draft.isLoading ? (
-        <Loader2 size={16} className="animate-spin" style={{ color: C.textMuted }} aria-label={t("act.loading")} />
+        <CommitMessageSkeleton />
       ) : draft.isError ? (
         <ErrorLine error={draft.error} />
       ) : (
         <>
           <label className="flex flex-col gap-2">
-            <span className="text-xs" style={{ color: C.textMuted }}>
+            <span className="flex items-center justify-between gap-2 text-xs" style={{ color: C.textMuted }}>
               {t("act.commitMessage")}
+              <button
+                type="button"
+                data-testid="commit-suggest-again"
+                onClick={() => void draft.refetch()}
+                disabled={regenerating}
+                className="flex items-center gap-1 cursor-pointer bg-transparent border-0 p-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                style={{ color: C.accent }}
+              >
+                <RotateCw size={12} className={regenerating ? "animate-spin" : undefined} aria-hidden="true" />
+                {t("act.suggestAgain")}
+              </button>
             </span>
             <textarea
               data-testid="commit-message"
@@ -303,6 +336,16 @@ export function CommitSheet({ agentId, open, onClose }: { agentId: string; open:
           <p className="text-xs" style={{ color: C.textMuted }}>
             {t("act.commitHint")}
           </p>
+          {source === "llm" && (
+            <p data-testid="commit-message-source" className="text-xs" style={{ color: C.textMuted }}>
+              {t("act.commitSuggested")}
+            </p>
+          )}
+          {source === "fallback" && (
+            <p data-testid="commit-message-source" className="text-xs" style={{ color: C.textMuted }}>
+              {t("act.commitFallback")}
+            </p>
+          )}
         </>
       )}
       {mutation.isError && <ErrorLine error={mutation.error} />}

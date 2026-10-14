@@ -9,7 +9,9 @@ Normalized event shapes (plain dicts, JSON-serializable):
   {"kind":"tool","uuid":str,"ts":str,"name":str,"title":str,"detail":dict,
    "toolUseId":str|None,"result":str|None,"status":"done"|"error",
    "stats":{"additions":int,"deletions":int}|None,"sidechain":bool,
-   "diffs"?:[ToolDiff],"locations"?:[str]}     (P1; see chat_diff.py)
+   "diffs"?:[ToolDiff],"locations"?:[str],     (P1; see chat_diff.py)
+   "images"?:[{"id":str,"mime":str,"width":int,"height":int,"bytes":int}]}
+                                              (P2; see chat_media.py)
   {"kind":"tool_output","uuid":None,"ts":str,"toolUseId":str,"text":str}
       — VOLATILE (P1): a running tool's output so far, from the ACP preview
         channel; replace-me per toolUseId, never in the history.
@@ -79,6 +81,7 @@ logic (slash-command rule included, for user entries) runs unchanged.
 from __future__ import annotations
 
 import asyncio
+import functools
 import contextlib
 import json
 import logging
@@ -92,6 +95,7 @@ from typing import Any
 from app.config import settings
 from app.services import fresh_session, sse
 from app.services.chat_diff import diffs_from_claude_tool, stats_of
+from app.services import chat_media
 from app.services.chat_todos import todo_event_from_tool
 from app.services.harness_catalog import get_observed_model_windows, observe_model_window
 from app.services.pane_preview import PanePreview
@@ -550,14 +554,25 @@ def _parse_user_entry(d: dict[str, Any]) -> list[dict[str, Any]]:
                     }
                 )
         elif block_type == "tool_result":
-            events.append(
-                {
-                    "kind": "_tool_result",
-                    "tool_use_id": block.get("tool_use_id"),
-                    "content": block.get("content"),
-                    "is_error": bool(block.get("is_error", False)),
-                }
-            )
+            tool_result = {
+                "kind": "_tool_result",
+                "tool_use_id": block.get("tool_use_id"),
+                "content": block.get("content"),
+                "is_error": bool(block.get("is_error", False)),
+            }
+            # P2: a screenshot / image read arrives as base64 image blocks
+            # INSIDE the result (live: Claude Code 2.1.273). They ride along
+            # internally; ``_merge_tool_result`` stores them (chat_media) and
+            # puts only a reference on the card — never the base64.
+            result_content = block.get("content")
+            if isinstance(result_content, list):
+                images = [
+                    b for b in result_content
+                    if isinstance(b, dict) and b.get("type") == "image"
+                ]
+                if images:
+                    tool_result["images"] = images
+            events.append(tool_result)
 
     return events
 
@@ -1307,7 +1322,13 @@ async def resolve_aliveness(agent, session_path: Path, adapter: Any | None = Non
         )
     except OSError:
         active = None
-    if active is not None and active[0] != session_path:
+    # Compared by SESSION, not by path: omp under ACP keeps two files per
+    # session, and the sibling being newest does not end anything (P3 live
+    # test 13.10.2026: the open chat read "ended" right after /new).
+    session_id_for = getattr(adapter, "session_id_for", lambda p: p.stem)
+    if active is not None and active[0] != session_path and (
+        session_id_for(active[0]) != session_id_for(session_path)
+    ):
         return "ended"
 
     alive = await process_alive(agent, adapter.process_name)
@@ -1556,9 +1577,14 @@ def read_history(
     before_uuid: str | None = None,
     observed_windows: dict[str, int] | None = None,
     fileobj: Any = None,
+    media: Any = None,
 ) -> dict[str, Any]:
     """Reads a transcript file top-to-bottom and returns one page of chat
     events plus session metadata.
+
+    ``media`` (chat package P2): a ``chat_media.MediaContext`` — tool
+    pictures become ``images`` references on their cards. ``None`` (heads,
+    subagent runs) shows no pictures.
 
     ``fileobj`` (heads round): an already-OPENED, text-mode file object to
     read instead of this function doing its own ``path.open()`` — used by
@@ -1660,7 +1686,7 @@ def read_history(
                     if ev["kind"] == "_tool_result":
                         tool_ev = tool_events_by_id.get(ev.get("tool_use_id"))
                         if tool_ev is not None:
-                            _merge_tool_result(tool_ev, ev)
+                            _merge_tool_result(tool_ev, ev, media)
                         continue
 
                     if ev["kind"] == "_command_result":
@@ -1738,11 +1764,38 @@ def read_history(
     }
 
 
-def _merge_tool_result(tool_event: dict[str, Any], tool_result: dict[str, Any]) -> None:
+def _result_text(content: Any) -> str:
+    """A tool result as card text. A block list that carries pictures is
+    flattened to its text blocks — ``str()`` of it would put kilobytes of
+    base64 on the card (P2). Every other shape keeps its old rendering."""
+    if isinstance(content, list) and any(
+        isinstance(b, dict) and b.get("type") == "image" for b in content
+    ):
+        return "\n".join(
+            b["text"] for b in content
+            if isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str)
+        )
+    return str(content)
+
+
+def _merge_tool_result(
+    tool_event: dict[str, Any],
+    tool_result: dict[str, Any],
+    media: Any = None,
+) -> None:
     """Merges an internal ``_tool_result`` event onto its matching ``tool``
-    event (already looked up by ``toolUseId`` before this is called)."""
+    event (already looked up by ``toolUseId`` before this is called).
+
+    ``media`` (P2, a ``chat_media.MediaContext``): stores the result's
+    pictures and sets ``images`` = their references on the card. ``None``
+    -> no pictures (fail closed); the bytes never reach the event either
+    way. Disk + PIL work — the live tailer calls this in a thread."""
     content = tool_result.get("content")
-    tool_event["result"] = str(content)[:_RESULT_TRUNCATE_LEN]
+    tool_event["result"] = _result_text(content)[:_RESULT_TRUNCATE_LEN]
+    if media is not None and (tool_result.get("images") or tool_result.get("image_refs")):
+        refs = media.collect(tool_result)
+        if refs:
+            tool_event["images"] = refs
     if tool_result.get("is_error"):
         tool_event["status"] = "error"
     # Chat package P1 (ACP): the settled update carries the diff per edited
@@ -2297,7 +2350,10 @@ class ChatTailerManager:
                             if ev["kind"] == "_tool_result":
                                 tool_ev = tool_events_by_id.pop(ev.get("tool_use_id"), None)
                                 if tool_ev is not None:
-                                    _merge_tool_result(tool_ev, ev)
+                                    # P2: storing pictures is disk + PIL work
+                                    # -> thread, like every disk read here.
+                                    media = chat_media.context_for(agent, current_path)
+                                    await asyncio.to_thread(_merge_tool_result, tool_ev, ev, media)
                                     await sse.broadcast(channel, "chat_event", tool_ev)
                                 continue
 
@@ -2406,7 +2462,13 @@ class ChatTailerManager:
         session_id_for calls entirely) before the harness-aware compare."""
         if new_path == current_path:
             return False
-        return adapter.session_id_for(new_path) != adapter.session_id_for(current_path)
+        if adapter.session_id_for(new_path) != adapter.session_id_for(current_path):
+            return True
+        # Same session, other file: only the one-way move onto the file the
+        # harness prefers (omp/ACP: the bridge sink's file, which alone
+        # carries question cards and chat errors — P3 live test 13.10.2026).
+        preferred = getattr(adapter, "preferred_sibling", None)
+        return bool(preferred and preferred(new_path, current_path))
 
     @staticmethod
     def _transcript_suggests_turn_ended(path: Path) -> bool:
@@ -2694,7 +2756,9 @@ class ChatTailerManager:
         # nie gelaufen, Dateisystem-Hickup), faellt das genauso auf die
         # mtime-Heuristik zurueck wie der pane-lose Boss/host-Zweig unten.
         if headless_chat_kind(agent) is not None:
-            status = await asyncio.to_thread(read_acp_turn_status, agent)
+            status = await asyncio.to_thread(
+                functools.partial(read_acp_turn_status, agent, with_questions=True)
+            )
             if status is None:
                 return {
                     "status": "working" if transcript_active else "idle",

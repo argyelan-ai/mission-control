@@ -811,6 +811,11 @@ export const api = {
         `/api/v1/agents/${agentId}/chat/subagent/${encodeURIComponent(runId)}${suffix}`,
       );
     },
+    /** A tool picture (chat package P2). Bearer-authenticated like the
+     *  rest of the chat — fetch it (useAuthBlob), never put it in `<img src>`.
+     *  `thumb` = small WebP for the card, `full` = metadata-free original. */
+    mediaUrl: (agentId: string, mediaId: string, variant: "thumb" | "full" = "thumb"): string =>
+      `${BASE_URL}/api/v1/agents/${encodeURIComponent(agentId)}/chat/media/${encodeURIComponent(mediaId)}?variant=${variant}`,
     history: (agentId: string, params?: { limit?: number; beforeUuid?: string }) => {
       const qs = new URLSearchParams();
       if (params?.limit != null) qs.set("limit", String(params.limit));
@@ -876,6 +881,27 @@ export const api = {
       request<void>(`/api/v1/agents/${agentId}/chat/effort`, {
         method: "POST",
         body: JSON.stringify({ level }),
+      }),
+    /** Antwort auf eine Rueckfrage-Karte (P3). `content` nur bei `accept`.
+     *  409 `elicitation_not_pending` = die Karte ist nicht mehr offen. */
+    answerElicitation: (
+      agentId: string,
+      elicitationId: string,
+      action: "accept" | "decline" | "cancel",
+      content?: Record<string, unknown>,
+    ) =>
+      request<{ status: string; stopped?: boolean }>(
+        `/api/v1/agents/${agentId}/chat/elicitation/${encodeURIComponent(elicitationId)}`,
+        {
+          method: "POST",
+          body: JSON.stringify(action === "accept" ? { action, content } : { action }),
+        },
+      ),
+    /** Plan-Modus ein/aus (P3) — nur Werte aus `capabilities.modeOptions`. */
+    setMode: (agentId: string, mode: string) =>
+      request<void>(`/api/v1/agents/${agentId}/chat/mode`, {
+        method: "POST",
+        body: JSON.stringify({ mode }),
       }),
     /** Laedt eine Datei hoch und liefert den Pfad, unter dem der Agent sie
      *  lesen kann. FormData setzt seine eigene multipart-Grenze, darum an

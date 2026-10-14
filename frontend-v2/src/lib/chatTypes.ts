@@ -76,6 +76,20 @@ export interface ToolEvent {
   /** File paths the call touched (ACP `locations`, Claude `file_path`).
    *  Container/host paths — shown as copyable chips, never opened blindly. */
   locations?: string[] | null;
+  /** Pictures the tool produced (chat package P2): browser screenshots,
+   *  images it read. References only — the bytes come from
+   *  `api.agents.chatMediaUrl` with the chat's auth (backend `chat_media.py`). */
+  images?: ToolImage[] | null;
+}
+
+/** One stored tool picture. `id` is its sha256; width/height are the
+ *  original's, so a thumbnail reserves the right shape before it loads. */
+export interface ToolImage {
+  id: string;
+  mime: "image/png" | "image/jpeg" | "image/webp" | "image/gif";
+  width: number;
+  height: number;
+  bytes: number;
 }
 
 export interface ToolDiffLine {
@@ -150,6 +164,14 @@ export interface ChatCommitDraft {
   files: ChatPendingFile[];
   /** Suggested conventional-commit message — the operator edits it. */
   message: string;
+  /** "llm" = the local model wrote `message` from the diff + chat intent;
+   *  "fallback" = the deterministic mechanical message (no model answer in
+   *  time, or it answered something unusable). Optional for a moment while
+   *  older cached responses are still around. */
+  source?: "llm" | "fallback";
+  /** Present only when `source` is "llm" — the mechanical message, for a
+   *  quiet "or use the simple one" affordance. */
+  mechanicalMessage?: string;
 }
 
 /** `POST /agents/{id}/chat/commit` */
@@ -368,6 +390,74 @@ export interface TodoEvent {
   taskId?: string;
 }
 
+/** One choice of a question (ACP `oneOf`/`anyOf` entry). `const` is what
+ *  goes back to the agent, `title` what the button says. */
+export interface ElicitationChoice {
+  const: string;
+  title: string;
+  description?: string;
+}
+
+/** One field of a question, already cut down by the chat daemon to what the
+ *  card renders (`acp_chat.clean_schema`). omp sends four shapes:
+ *  select (`string` + `enum`), confirm (`boolean`), input (`string`), and
+ *  per ask-tool question `string` + `oneOf` (+ `default` = recommended) or
+ *  `array` + `items.anyOf` (multi-select), plus `<key>__other` free text. */
+export interface ElicitationProperty {
+  type: "string" | "boolean" | "number" | "integer" | "array";
+  title?: string;
+  description?: string;
+  enum?: string[];
+  oneOf?: ElicitationChoice[];
+  default?: string | boolean;
+  items?: { anyOf: ElicitationChoice[] };
+}
+
+export interface ElicitationSchema {
+  type: "object";
+  properties: Record<string, ElicitationProperty>;
+  required?: string[];
+}
+
+/** A question the agent asked the operator (chat package P3, ACP form
+ *  elicitation) — a timeline card with buttons/fields. Its fate arrives as a
+ *  separate `elicitation_result` with the same `elicitationId`. */
+export interface ElicitationEvent {
+  kind: "elicitation";
+  uuid: string;
+  ts: string;
+  elicitationId: string;
+  message: string;
+  schema: ElicitationSchema;
+  /** omp's plan approval (recognised by the bridge, `is_plan_approval`).
+   *  There a plain cancel means "keep planning" and the agent asks again —
+   *  so the card offers "Cancel (stops agent)" instead of "Skip". */
+  planApproval?: boolean;
+}
+
+export type ElicitationStatus = "answered" | "declined" | "cancelled" | "expired";
+
+/** What became of a question: answered (with the operator's `content`),
+ *  declined/cancelled, or `expired` (its turn ended, the chat restarted). A
+ *  side slot keyed by `elicitationId`, never a row of its own. */
+export interface ElicitationResultEvent {
+  kind: "elicitation_result";
+  uuid: string;
+  ts: string;
+  elicitationId: string;
+  status: ElicitationStatus;
+  content?: Record<string, unknown> | null;
+}
+
+/** The session's mode changed (ACP `current_mode_update`, e.g. plan mode on
+ *  or off). Quiet: only the composer's mode chip follows it. */
+export interface ModeEvent {
+  kind: "mode";
+  uuid: string;
+  ts: string;
+  modeId: string;
+}
+
 export type ChatEvent =
   | MessageEvent
   | ToolEvent
@@ -379,6 +469,9 @@ export type ChatEvent =
   | ToolOutputEvent
   | NotificationEvent
   | TodoEvent
+  | ElicitationEvent
+  | ElicitationResultEvent
+  | ModeEvent
   | SessionChangedEvent;
 
 /** The subset of ChatEvent kinds that carry a `uuid` and belong in the
@@ -389,7 +482,8 @@ export type TimelineChatEvent =
   | ToolEvent
   | ThinkingEvent
   | CommandEvent
-  | NotificationEvent;
+  | NotificationEvent
+  | ElicitationEvent;
 
 /**
  * How alive the underlying CLI session is.
@@ -515,6 +609,17 @@ export interface ChatCapabilities {
    *  ("claude-sonnet-5") — beide Gestalten existieren real in der Flotte.
    *  usage.model gewinnt immer. */
   model?: string | null;
+  /** Session modes the agent reports (ACP `configOptions[id=mode]`, chat
+   *  package P3) — at least two, else empty: the composer then shows no mode
+   *  chip. omp: `default` and, when plan mode is enabled, `plan`. */
+  modeOptions?: ChatModeOption[] | null;
+  /** The current mode at history time; a later `mode` event wins. */
+  mode?: string | null;
+}
+
+export interface ChatModeOption {
+  value: string;
+  name: string;
 }
 
 export interface ChatSlashCommand {
@@ -673,6 +778,17 @@ export function isAgentStartingError(err: unknown): boolean {
  *  why, same as any other rejected send. */
 export function isInstallBlockedError(err: unknown): boolean {
   return err instanceof Error && err.message.includes("install_blocked");
+}
+
+/** 409 from `/chat/elicitation/{id}` when the question card is no longer
+ *  open — answered elsewhere, its turn ended, or the chat restarted. Not a
+ *  failure: the card just says so. */
+export function isQuestionOpenError(err: unknown): boolean {
+  return err instanceof Error && err.message.includes("question_open");
+}
+
+export function isElicitationNotPendingError(err: unknown): boolean {
+  return err instanceof Error && err.message.includes("elicitation_not_pending");
 }
 
 /** 409 from `/chat/effort` when the CLI itself said no and explained why.

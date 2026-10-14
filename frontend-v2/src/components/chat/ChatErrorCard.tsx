@@ -19,6 +19,7 @@ import { useTranslations } from "next-intl";
 import { C, STATUS_TEXT } from "@/lib/colors";
 import type { MessageEvent } from "@/lib/chatTypes";
 import { ClampedContent } from "./ClampedContent";
+import { TIMELINE_CARD_GUTTER } from "./timelineCard";
 
 interface ChatErrorCardProps {
   ev: MessageEvent;
@@ -34,7 +35,7 @@ export function ChatErrorCard({ ev }: ChatErrorCardProps) {
   const detail = ev.error?.detail?.trim() || ev.text;
 
   return (
-    <div className="w-full px-4 md:px-5 py-1">
+    <div className={TIMELINE_CARD_GUTTER}>
       <div
         data-testid="chat-error-card"
         data-code={code}

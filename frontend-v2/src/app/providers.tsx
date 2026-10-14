@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { useKeyboardInset } from "@/hooks/useKeyboardInset";
 import { usePageBeacon } from "@/hooks/usePageBeacon";
 import { startThemeSync } from "@/lib/theme";
+import { VoiceCallRoot } from "@/components/voice/live/VoiceLiveCall";
 
 export function Providers({ children }: { children: React.ReactNode }) {
   // iOS: Tastaturhöhe als --keyboard-inset bereitstellen (MOBILE-SPEC M9)
@@ -28,6 +29,11 @@ export function Providers({ children }: { children: React.ReactNode }) {
   );
 
   return (
-    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    <QueryClientProvider client={queryClient}>
+      {/* The live voice call lives HERE, above every page: each page renders
+          its own AppShell, so anything inside AppShell remounts on a route
+          change (voice PR 5 live finding). */}
+      <VoiceCallRoot>{children}</VoiceCallRoot>
+    </QueryClientProvider>
   );
 }

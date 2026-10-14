@@ -114,7 +114,9 @@ function harness() {
   return { env, pcs, mintSession, runTool, progress };
 }
 
-type Page = { kind: "tasks" } | { kind: "chat"; agentId: string; agentName: string };
+type Page =
+  | { kind: "tasks" }
+  | { kind: "chat"; agentId: string; agentName: string; onScreen?: boolean };
 
 /** A tiny AppShell: provider, the nav mic, one page, the floating slot. */
 function Shell({
@@ -139,6 +141,7 @@ function Shell({
           agentId={page.agentId}
           agentName={page.agentName}
           onForwarded={onForwarded}
+          onScreen={page.onScreen}
           env={env}
         >
           {(slot) => <div data-testid="composer">{slot}</div>}
@@ -151,6 +154,8 @@ function Shell({
 
 const TASKS: Page = { kind: "tasks" };
 const LEAD_CHAT: Page = { kind: "chat", agentId: "lead-1", agentName: "Chief" };
+/** The sessions list on the phone: the lead's chat stays mounted, hidden. */
+const SESSIONS_LIST: Page = { kind: "chat", agentId: "lead-1", agentName: "Chief", onScreen: false };
 const OTHER_CHAT: Page = { kind: "chat", agentId: "dev-1", agentName: "Dev" };
 
 async function startFromNav(h: ReturnType<typeof harness>) {
@@ -348,5 +353,23 @@ describe("compact bar (voice PR 6)", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Daily voice budget reached.");
     expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
     expect(screen.getAllByRole("button")).toHaveLength(1); // only close
+  });
+});
+
+describe("a chat that is mounted but not on screen (sessions list on the phone)", () => {
+  it("does not swallow the call: the floating bar shows, and docks once the chat is opened", async () => {
+    const h = harness();
+    const r = render(<Shell env={h.env} page={TASKS} />);
+    const pc = await startFromNav(h);
+
+    r.rerender(<Shell env={h.env} page={SESSIONS_LIST} />);
+    expect(screen.getByTestId("voice-call-floating")).toBeInTheDocument();
+    expect(screen.getByTestId("voice-compact-hangup")).toBeInTheDocument();
+    expect(screen.queryByTestId("voice-call-bar")).toBeNull();
+
+    r.rerender(<Shell env={h.env} page={LEAD_CHAT} />);
+    expect(screen.getByTestId("voice-call-bar")).toBeInTheDocument();
+    expect(screen.queryByTestId("voice-call-floating")).toBeNull();
+    expect(pc.close).not.toHaveBeenCalled();
   });
 });

@@ -328,6 +328,82 @@ function LanguageField() {
   );
 }
 
+// The key under the generic per-user preference store (routers/settings.py,
+// GET/PUT /api/v1/settings/{key}) — reused rather than a bespoke endpoint.
+// Value shape: {"language": "auto" | "de" | "en" | …}. "auto" (default)
+// follows the interface language above; an explicit choice overrides it,
+// also on the voice call itself (backend/app/services/voice_live.py). Add a
+// language: a new <option> here + the matching key in both messages/*.json
+// + a line in _LANG_LINE server-side.
+const VOICE_LANGUAGE_SETTING_KEY = "voice_language";
+type VoiceLanguagePref = "auto" | "de" | "en";
+
+export function VoiceLanguageField() {
+  const t = useTranslations("settingsProfile");
+  const queryClient = useQueryClient();
+  const [value, setValue] = useState<VoiceLanguagePref>("auto");
+
+  const { data } = useQuery({
+    queryKey: ["voice-language-preference"],
+    queryFn: async (): Promise<VoiceLanguagePref> => {
+      try {
+        const res = await api.settings.get(VOICE_LANGUAGE_SETTING_KEY);
+        const lang = (res.value as { language?: string } | null)?.language;
+        return lang === "de" || lang === "en" ? lang : "auto";
+      } catch {
+        // Nothing saved yet (404) — "auto" is the default, matching the
+        // backend's fallback when no preference row exists.
+        return "auto";
+      }
+    },
+  });
+
+  useEffect(() => {
+    if (data) setValue(data);
+  }, [data]);
+
+  const mutation = useMutation({
+    mutationFn: (next: VoiceLanguagePref) =>
+      api.settings.set(VOICE_LANGUAGE_SETTING_KEY, { language: next }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["voice-language-preference"] });
+    },
+  });
+
+  function handleChange(next: string) {
+    const pref = next as VoiceLanguagePref;
+    setValue(pref);
+    mutation.mutate(pref);
+  }
+
+  return (
+    <div>
+      <FieldLabel>{t("voiceLanguage")}</FieldLabel>
+      <select
+        value={value}
+        onChange={(e) => handleChange(e.target.value)}
+        aria-label={t("voiceLanguageAria")}
+        className={inputBaseClasses}
+        style={{
+          backgroundColor: C.bgDeep,
+          borderWidth: 1,
+          borderStyle: "solid",
+          borderColor: "var(--color-border)",
+          color: "var(--color-text-primary)",
+          cursor: "pointer",
+        }}
+      >
+        <option value="auto">{t("voiceLanguageAuto")}</option>
+        <option value="de">{t("voiceLanguageDe")}</option>
+        <option value="en">{t("voiceLanguageEn")}</option>
+      </select>
+      <p className="text-xs mt-1" style={{ color: "var(--color-text-muted)" }}>
+        {t("voiceLanguageHint")}
+      </p>
+    </div>
+  );
+}
+
 function ProfileSection() {
   const t = useTranslations("settingsProfile");
   const { currentUser, setCurrentUser } = useAppStore();
@@ -416,6 +492,9 @@ function ProfileSection() {
 
         {/* UI language (i18n pattern) */}
         <LanguageField />
+
+        {/* Voice language (operator request 13.10.2026) */}
+        <VoiceLanguageField />
 
         {/* Timezone */}
         <div>

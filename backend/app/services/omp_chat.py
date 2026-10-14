@@ -209,6 +209,15 @@ def find_active_session(tdir: Path) -> tuple[Path, dict[str, Any]] | None:
     if newest_path is None:
         return None
 
+    # Under OMP_DRIVER=acp one session has TWO files (see session_id_for):
+    # omp's own and the bridge sink's. Only the sink carries what MC adds —
+    # question cards, chat errors, mode lines — so it must be THE file of
+    # the session, every time. Ranking alone flips between the two (omp's
+    # file is created first and often written last), and the chat then
+    # tailed omp's file: no card until a reload, status "ended" (P3 live
+    # test 13.10.2026).
+    newest_path = bridge_sibling(newest_path)
+
     return newest_path, {
         "sessionId": newest_path.stem,
         "mtime": datetime.fromtimestamp(newest_mtime, tz=timezone.utc).isoformat(),
@@ -311,9 +320,9 @@ def session_id_for(path: Path) -> str:
 _SESSION_HEADER_SCAN_LINES = 10
 
 
-def _header_cwd(path: Path) -> str | None:
-    """``cwd`` of the ``{"type": "session", ...}`` header line, or ``None``
-    when the file has none or records it empty."""
+def _session_header(path: Path) -> dict[str, Any] | None:
+    """The ``{"type": "session", ...}`` header line of a session file, or
+    ``None``. Reads at most ``_SESSION_HEADER_SCAN_LINES`` lines."""
     try:
         with path.open("r", encoding="utf-8", errors="replace") as fh:
             for i, line in enumerate(fh):
@@ -327,11 +336,71 @@ def _header_cwd(path: Path) -> str | None:
                 except ValueError:
                     continue
                 if isinstance(entry, dict) and entry.get("type") == "session":
-                    cwd = entry.get("cwd")
-                    return cwd if isinstance(cwd, str) and cwd else None
+                    return entry
     except OSError:
         return None
     return None
+
+
+#: ``is_bridge_file`` answers, by ``(path, inode)``. The tailer asks every
+#: tick; the header never changes once written, so one read per file is
+#: enough. A file without a header yet (just created) is not cached.
+_BRIDGE_FILE_CACHE: dict[tuple[str, int], bool] = {}
+
+
+def is_bridge_file(path: Path) -> bool:
+    """Written by the omp-bridge ACP sink (header ``"bridge": "acp"``,
+    ``acp_chat_events.ChatEventSink``) rather than by omp itself."""
+    try:
+        key = (str(path), path.stat().st_ino)
+    except OSError:
+        return False
+    cached = _BRIDGE_FILE_CACHE.get(key)
+    if cached is not None:
+        return cached
+    header = _session_header(path)
+    if header is None:
+        return False
+    answer = header.get("bridge") == "acp"
+    if len(_BRIDGE_FILE_CACHE) > 4096:
+        _BRIDGE_FILE_CACHE.clear()
+    _BRIDGE_FILE_CACHE[key] = answer
+    return answer
+
+
+def bridge_sibling(path: Path) -> Path:
+    """The bridge sink's file of the same session as ``path`` (same folder,
+    same embedded session id), or ``path`` itself when there is none or
+    ``path`` already is it."""
+    if is_bridge_file(path):
+        return path
+    session_id = session_id_for(path)
+    try:
+        siblings = sorted(path.parent.glob("*.jsonl"))
+    except OSError:
+        return path
+    for sibling in siblings:
+        if sibling != path and session_id_for(sibling) == session_id and is_bridge_file(sibling):
+            return sibling
+    return path
+
+
+def prefers_sibling(new_path: Path, current_path: Path) -> bool:
+    """For the tailer: switch from ``current_path`` to its same-session
+    sibling ``new_path``? Only towards the bridge file, never back — a
+    one-way move cannot flip-flop (the reason same-session switches were
+    banned, see ``session_id_for``)."""
+    return is_bridge_file(new_path) and not is_bridge_file(current_path)
+
+
+def _header_cwd(path: Path) -> str | None:
+    """``cwd`` of the ``{"type": "session", ...}`` header line, or ``None``
+    when the file has none or records it empty."""
+    header = _session_header(path)
+    if header is None:
+        return None
+    cwd = header.get("cwd")
+    return cwd if isinstance(cwd, str) and cwd else None
 
 
 def session_cwd(path: Path) -> str | None:
@@ -682,6 +751,10 @@ class OmpLineParser:
                         data.get("entries"), uuid=d.get("id"), ts=d.get("timestamp")
                     )
                     return [todo] if todo is not None else []
+                if d.get("customType") == ACP_ELICITATION_RESULT_CUSTOM_TYPE:
+                    return _elicitation_result_event(d)
+                if d.get("customType") == ACP_MODE_CUSTOM_TYPE:
+                    return _mode_event(d)
                 if d.get("customType") not in _SILENT_CUSTOM_TYPES:
                     logger.debug("omp_chat: unbekannter custom-Typ %s", d.get("customType"))
                 return []
@@ -1022,6 +1095,17 @@ class OmpLineParser:
             locations = _clean_locations(details.get("locations"))
             if locations:
                 result["locations"] = locations
+        # P2: the bridge stored the tool's pictures next to the transcript
+        # (media/<sha256>.<ext>) and left only their references here.
+        # Internal: ``_merge_tool_result`` turns them into card ``images``.
+        if isinstance(details, dict) and isinstance(details.get("images"), list):
+            refs = [
+                {"sha256": i.get("sha256"), "mimeType": i.get("mimeType")}
+                for i in details["images"]
+                if isinstance(i, dict)
+            ]
+            if refs:
+                result["image_refs"] = refs
         if not diffs and not is_error and write_args is not None:
             # omp's `write` tool result repeats only "wrote N bytes" / the
             # resolved path (native: {"resolvedPath": ...}; ACP-forwarded:
@@ -1107,6 +1191,15 @@ class OmpLineParser:
                     "text": content[:_RESULT_TRUNCATE_LEN],
                 }
             ]
+        if custom_type == ACP_ELICITATION_CUSTOM_TYPE:
+            # Chat-Paket P3: eine Rueckfrage des Agenten (ACP form
+            # elicitation). Eigene Art, damit das Frontend eine Karte mit
+            # Knoepfen/Feldern baut. Ohne brauchbares Schema faellt die Zeile
+            # unten durch und erscheint als schlichter Systemhinweis — die
+            # Frage geht nie verloren.
+            event = _elicitation_event(d, entry_id, ts, content)
+            if event is not None:
+                return [event]
         if custom_type == "chat_error":
             # Chat over ACP: der Chat-Daemon hat keinen anderen Weg, einen
             # Fehler sichtbar zu machen — er schreibt ihn als eigene Zeile ins
@@ -1145,6 +1238,80 @@ class OmpLineParser:
                 "sidechain": False,
             }
         ]
+
+
+#: Chat-Paket P3 (docker/omp-bridge/acp_chat_events.py): Rueckfrage-Karte,
+#: ihr Ausgang, und der Sitzungsmodus (Plan-Modus).
+ACP_ELICITATION_CUSTOM_TYPE = "acp-elicitation"
+ACP_ELICITATION_RESULT_CUSTOM_TYPE = "acp-elicitation-result"
+ACP_MODE_CUSTOM_TYPE = "acp-mode"
+_ELICITATION_STATUSES = frozenset({"answered", "declined", "cancelled", "expired"})
+
+
+def _elicitation_event(
+    d: dict[str, Any], entry_id: Any, ts: Any, content: str
+) -> dict[str, Any] | None:
+    """``acp-elicitation`` -> ``{"kind": "elicitation", ...}`` oder ``None``,
+    wenn Kennung oder Schema fehlen (dann zeigt der Aufrufer die Frage als
+    schlichten Systemhinweis). Das Schema hat der Chat-Daemon bereits auf die
+    gerenderten Felder beschnitten (``acp_chat.clean_schema``)."""
+    data = d.get("data") if isinstance(d.get("data"), dict) else {}
+    elicitation_id = data.get("elicitationId")
+    schema = data.get("schema")
+    if (
+        not isinstance(elicitation_id, str)
+        or not elicitation_id
+        or not isinstance(schema, dict)
+        or not isinstance(schema.get("properties"), dict)
+        or not schema["properties"]
+    ):
+        return None
+    message = data.get("message") if isinstance(data.get("message"), str) else content
+    return {
+        "kind": "elicitation",
+        "uuid": entry_id,
+        "ts": ts,
+        "elicitationId": elicitation_id,
+        "message": message[:_RESULT_TRUNCATE_LEN],
+        "schema": schema,
+        # omp's plan approval (bridge: acp_chat.is_plan_approval) — the card
+        # offers "Cancel (stops agent)" instead of "Skip".
+        "planApproval": data.get("planApproval") is True,
+    }
+
+
+def _elicitation_result_event(d: dict[str, Any]) -> list[dict[str, Any]]:
+    """``acp-elicitation-result`` -> ``{"kind": "elicitation_result", ...}``.
+    Kein Zeitleisten-Eintrag: das Frontend legt es neben die Karte mit
+    derselben ``elicitationId`` (beantwortet / abgelaufen)."""
+    data = d.get("data") if isinstance(d.get("data"), dict) else {}
+    elicitation_id = data.get("elicitationId")
+    status = data.get("status")
+    if not isinstance(elicitation_id, str) or status not in _ELICITATION_STATUSES:
+        return []
+    if not d.get("id") or not d.get("timestamp"):
+        return []
+    answer = data.get("content") if isinstance(data.get("content"), dict) else None
+    return [
+        {
+            "kind": "elicitation_result",
+            "uuid": d["id"],
+            "ts": d["timestamp"],
+            "elicitationId": elicitation_id,
+            "status": status,
+            "content": answer,
+        }
+    ]
+
+
+def _mode_event(d: dict[str, Any]) -> list[dict[str, Any]]:
+    """``acp-mode`` -> ``{"kind": "mode", "modeId"}`` — der Modus-Chip im
+    Composer folgt dem neuesten (leise, keine Karte)."""
+    data = d.get("data") if isinstance(d.get("data"), dict) else {}
+    mode_id = data.get("modeId")
+    if not isinstance(mode_id, str) or not mode_id or not d.get("id") or not d.get("timestamp"):
+        return []
+    return [{"kind": "mode", "uuid": d["id"], "ts": d["timestamp"], "modeId": mode_id[:64]}]
 
 
 def new_parser(session_path: Path | None = None) -> OmpLineParser:

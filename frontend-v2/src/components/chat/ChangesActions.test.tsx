@@ -268,6 +268,105 @@ describe("Commit and Open PR", () => {
     expect(await screen.findByText("abc1234 is on feat/prices.")).toBeInTheDocument();
   });
 
+  it("shows a quiet hint when the message came from the local model, and none for old cached drafts", async () => {
+    chat.commitDraft.mockResolvedValue({
+      branch: "feat/prices",
+      files: [{ path: "app/prices.py", status: "modified", additions: 4, deletions: 2 }],
+      message: "feat(prices): round to two decimals\n\n- app/prices.py\n",
+      source: "llm",
+      mechanicalMessage: "chore: update prices.py\n\n- app/prices.py (+4 -2)\n",
+    });
+    const user = userEvent.setup();
+    renderPanel();
+    await user.click(await screen.findByTestId("changes-commit"));
+
+    const box = await screen.findByTestId("commit-message") as HTMLTextAreaElement;
+    expect(box.value).toBe("feat(prices): round to two decimals\n\n- app/prices.py\n");
+    expect(await screen.findByTestId("commit-message-source")).toHaveTextContent("Suggested by the local model.");
+  });
+
+  it("shows the fallback hint when the local model didn't answer", async () => {
+    chat.commitDraft.mockResolvedValue({
+      branch: "feat/prices",
+      files: [{ path: "app/prices.py", status: "modified", additions: 4, deletions: 2 }],
+      message: "chore: update prices.py\n\n- app/prices.py (+4 -2)\n",
+      source: "fallback",
+    });
+    const user = userEvent.setup();
+    renderPanel();
+    await user.click(await screen.findByTestId("changes-commit"));
+
+    expect(await screen.findByTestId("commit-message-source")).toHaveTextContent(
+      "Simple summary — the local model didn't answer in time.",
+    );
+  });
+
+  it("has no source hint at all for an old cached draft without the field", async () => {
+    chat.commitDraft.mockResolvedValue({
+      branch: "feat/prices",
+      files: [{ path: "app/prices.py", status: "modified", additions: 4, deletions: 2 }],
+      message: "chore: update prices.py\n\n- app/prices.py (+4 -2)\n",
+    });
+    const user = userEvent.setup();
+    renderPanel();
+    await user.click(await screen.findByTestId("changes-commit"));
+    await screen.findByTestId("commit-message");
+
+    expect(screen.queryByTestId("commit-message-source")).not.toBeInTheDocument();
+  });
+
+  it("↻ suggest again re-fetches the draft and replaces the message with the new suggestion", async () => {
+    chat.commitDraft
+      .mockResolvedValueOnce({
+        branch: "feat/prices",
+        files: [{ path: "app/prices.py", status: "modified", additions: 4, deletions: 2 }],
+        message: "chore: update prices.py\n\n- app/prices.py (+4 -2)\n",
+        source: "fallback",
+      })
+      .mockResolvedValueOnce({
+        branch: "feat/prices",
+        files: [{ path: "app/prices.py", status: "modified", additions: 4, deletions: 2 }],
+        message: "feat(prices): round to two decimals\n\n- app/prices.py\n",
+        source: "llm",
+      });
+    const user = userEvent.setup();
+    renderPanel();
+    await user.click(await screen.findByTestId("changes-commit"));
+
+    const box = await screen.findByTestId("commit-message") as HTMLTextAreaElement;
+    expect(box.value).toBe("chore: update prices.py\n\n- app/prices.py (+4 -2)\n");
+
+    await user.click(screen.getByTestId("commit-suggest-again"));
+
+    await waitFor(() => expect(chat.commitDraft).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect((screen.getByTestId("commit-message") as HTMLTextAreaElement).value).toBe(
+        "feat(prices): round to two decimals\n\n- app/prices.py\n",
+      ),
+    );
+    expect(await screen.findByTestId("commit-message-source")).toHaveTextContent("Suggested by the local model.");
+  });
+
+  it("shows a loading skeleton for the message while the first draft is pending", async () => {
+    let resolve!: (value: Awaited<ReturnType<typeof chat.commitDraft>>) => void;
+    chat.commitDraft.mockReturnValue(new Promise((r) => { resolve = r; }));
+    const user = userEvent.setup();
+    renderPanel();
+    await user.click(await screen.findByTestId("changes-commit"));
+
+    expect(await screen.findByTestId("commit-message-skeleton")).toBeInTheDocument();
+    expect(screen.queryByTestId("commit-message")).not.toBeInTheDocument();
+
+    resolve({
+      branch: "feat/prices",
+      files: [{ path: "app/prices.py", status: "modified", additions: 4, deletions: 2 }],
+      message: "chore: update prices.py\n\n- app/prices.py (+4 -2)\n",
+      source: "fallback",
+    });
+    await screen.findByTestId("commit-message");
+    expect(screen.queryByTestId("commit-message-skeleton")).not.toBeInTheDocument();
+  });
+
   it("Open PR names branch and base, then shows the link — also after the sheet closes", async () => {
     chat.prDraft.mockResolvedValue({ branch: "feat/prices", base: "main", title: "fix: prices", ahead: 1, uncommitted: 2 });
     chat.openPr.mockResolvedValue({ status: "opened", url: "https://github.com/example/shop/pull/7", branch: "feat/prices", base: "main" });

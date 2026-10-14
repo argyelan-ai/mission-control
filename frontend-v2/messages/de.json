@@ -69,6 +69,12 @@
     "languageHint": "Sprache der Oberfläche. Gilt sofort.",
     "languageEn": "English",
     "languageDe": "Deutsch",
+    "voiceLanguage": "Sprache der Sprachassistenz",
+    "voiceLanguageHint": "Die Sprache, in der der Sprachassistent spricht und zuhört. \"Automatisch\" folgt der Oberflächensprache oben.",
+    "voiceLanguageAuto": "Automatisch (folgt Oberflächensprache)",
+    "voiceLanguageDe": "Deutsch",
+    "voiceLanguageEn": "English",
+    "voiceLanguageAria": "Sprache der Sprachassistenz wählen",
     "title": "Profil",
     "description": "Deine persönlichen Angaben.",
     "timezoneAria": "Zeitzone wählen",
@@ -960,6 +966,7 @@
     "status": {
       "ready": "Bereit",
       "waitingForYou": "Wartet auf dich",
+      "waitingForAnswer": "Wartet auf deine Antwort",
       "waitingApproval": "Wartet auf Genehmigung",
       "unknown": "Status unklar — Terminal prüfen",
       "ended": "Session beendet — neue Nachricht startet die nächste Session",
@@ -1055,7 +1062,24 @@
       "diffShowLess": "Weniger zeigen",
       "diffTruncated": "Diff gekürzt — die ganze Änderung steht in der Datei.",
       "diffCreate": "Neue Datei",
-      "diffWrite": "Geschriebener Inhalt"
+      "diffWrite": "Geschriebener Inhalt",
+      "images": "Bilder dieses Werkzeugs",
+      "openImage": "Bild {n} von {total} öffnen",
+      "moreImages": "{count, plural, one {# weiteres Bild öffnen} other {# weitere Bilder öffnen}}",
+      "imageUnavailable": "Bild nicht verfügbar",
+      "viewer": {
+        "title": "Bildansicht",
+        "alt": "Bild {n} von {total} aus dem Werkzeug",
+        "counter": "{n} / {total}",
+        "close": "Schliessen",
+        "download": "Herunterladen",
+        "copy": "Bild kopieren",
+        "copied": "Kopiert",
+        "copyFailed": "Kopieren nicht möglich",
+        "previous": "Vorheriges Bild",
+        "next": "Nächstes Bild",
+        "unavailable": "Bild nicht verfügbar"
+      }
     },
     "diff": {
       "scopeLabel": "Änderungen",
@@ -1095,6 +1119,8 @@
         "commit": "Commit",
         "commitTitle": "{count, plural, one {# Datei} other {# Dateien}} auf {branch} committen?",
         "commitMessage": "Commit-Nachricht",
+        "commitFallback": "Einfache Zusammenfassung — das lokale Modell hat nicht rechtzeitig geantwortet.",
+        "commitSuggested": "Vorgeschlagen vom lokalen Modell.",
         "commitHint": "Bleibt auf diesem Rechner — nichts wird gepusht.",
         "committedTitle": "Committet",
         "committed": "{sha} liegt auf {branch}.",
@@ -1107,7 +1133,8 @@
         "prExists": "Für diesen Branch ist schon ein Pull Request offen",
         "cancel": "Abbrechen",
         "close": "Schliessen",
-        "loading": "Lädt"
+        "loading": "Lädt",
+        "suggestAgain": "Neu vorschlagen"
       },
       "reason": {
         "changed_externally": "Die Datei wurde nach der letzten Bearbeitung dieses Chats geändert, darum lässt MC sie in Ruhe.",
@@ -3564,6 +3591,37 @@
       "starting": "Agent startet — wird zugestellt…",
       "withdraw": "Eingereihte Nachricht zurückziehen",
       "edit": "Eingereihte Nachricht bearbeiten"
+    },
+    "question": {
+      "aria": "Rückfrage des Agenten",
+      "send": "Antwort senden",
+      "skip": "Überspringen",
+      "cancelStops": "Abbrechen (Agent stoppt)",
+      "yes": "Ja",
+      "no": "Nein",
+      "other": "Andere…",
+      "otherPlaceholder": "Eigene Antwort eingeben",
+      "placeholder": "Deine Antwort",
+      "recommended": "Empfohlen",
+      "answered": "Beantwortet",
+      "answeredWith": "Beantwortet: {answer}",
+      "declined": "Abgelehnt",
+      "cancelled": "Übersprungen",
+      "cancelledStopped": "Abgebrochen — der Agent hat gestoppt",
+      "expired": "Nicht mehr offen — der Agent hat weitergemacht",
+      "waiting": "Wartet auf Antwort",
+      "notOpen": "Diese Rückfrage ist nicht mehr offen.",
+      "failed": "Antwort nicht gesendet — bitte nochmal versuchen."
+    },
+    "mode": {
+      "label": "Modus",
+      "plan": "Plan",
+      "default": "Standard",
+      "switchTo": "In den Modus {mode} wechseln",
+      "planHint": "Plan-Modus: der Agent liest nur und entwirft einen Plan; du gibst ihn frei, bevor etwas geändert wird.",
+      "failed": "Modus nicht gewechselt — bitte nochmal versuchen.",
+      "busy": "Der Agent arbeitet gerade — wechsle den Modus, wenn die Antwort fertig ist.",
+      "questionOpen": "Erst die offene Rückfrage beantworten, dann den Modus wechseln."
     }
   },
   "heads": {

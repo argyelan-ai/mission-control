@@ -298,10 +298,17 @@ features:
       - "POST /api/v1/credentials"
       - "PATCH /api/v1/credentials/{credential_id}"
       - "DELETE /api/v1/credentials/{credential_id}"
-      # Autonomy levels (autonomy tab). The generic key/value settings
-      # endpoints have no caller (internal).
+      # Autonomy levels (autonomy tab).
       - "GET /api/v1/settings/autonomy"
       - "PATCH /api/v1/settings/autonomy"
+      # Generic per-user key/value preference store (routers/settings.py).
+      # Caller: the profile tab's "Voice language" select (VoiceLanguageField
+      # in page.tsx), which saves a {"language": "auto"|"de"|"en"} value
+      # under key "voice_language" — read by voice session minting
+      # (services/voice_live.py) to override the UI locale. GET /settings
+      # (list) still has no caller (internal).
+      - "GET /api/v1/settings/{key}"
+      - "PUT /api/v1/settings/{key}"
       # Version + update hint in the settings footer.
       - "GET /api/v1/system/version"
       # Intelligence analysis-window config + manual trigger (intelligence
@@ -328,6 +335,7 @@ features:
       - secrets
       - credentials
       - model_prices
+      - user_settings
   - id: F-memory
     name: "Memory: the vault"
     ui: {route: [/memory, /memory/graph]}
@@ -729,15 +737,14 @@ internal:
   - "endpoint:POST /api/v1/voice/display"
   - "endpoint:POST /api/v1/voice/graph-highlight"
   # Platform leftovers without a page caller (E3b R8): client helpers exist
-  # in api.ts but no component calls them (settings list/get/set, analytics
-  # usage, intelligence timeseries, system mode read/write); the single-
-  # credential GET, POST /auth/logout (the frontend logs out by dropping the
-  # token locally) and the admin usage-backfill (manual maintenance) have no
-  # caller at all.
+  # in api.ts but no component calls them (settings list, analytics usage,
+  # intelligence timeseries, system mode read/write); the single-credential
+  # GET, POST /auth/logout (the frontend logs out by dropping the token
+  # locally) and the admin usage-backfill (manual maintenance) have no
+  # caller at all. GET/PUT /api/v1/settings/{key} moved to F-settings (voice
+  # language preference).
   - "endpoint:POST /api/v1/auth/logout"
   - "endpoint:GET /api/v1/settings"
-  - "endpoint:GET /api/v1/settings/{key}"
-  - "endpoint:PUT /api/v1/settings/{key}"
   - "endpoint:GET /api/v1/analytics/usage"
   - "endpoint:GET /api/v1/intelligence/costs/timeseries"
   - "endpoint:GET /api/v1/credentials/{credential_id}"
@@ -786,5 +793,3 @@ internal:
   - "table:planner_messages"
   # Dispatch attempt audit log (services/dispatch_attempt_audit.py).
   - "table:task_attempt_audit"
-  # Per-user key/value rows behind the internal generic /settings endpoints.
-  - "table:user_settings"

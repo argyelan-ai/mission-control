@@ -51,8 +51,11 @@ import { ThinkingRow } from "./ThinkingRow";
 import { SubagentGroup } from "./SubagentGroup";
 import { ToolGroup } from "./ToolGroup";
 import { ToolOutputContext, createToolOutputStore, type ToolOutputStore } from "./toolOutputStore";
+import { ChatMediaContext } from "./chatMedia";
 import { CommandRow } from "./CommandRow";
 import { ApprovalCard } from "./ApprovalCard";
+import { ElicitationCard } from "./ElicitationCard";
+import { ModeChip } from "./ModeChip";
 import { StatusLine } from "./StatusLine";
 import { Composer } from "./Composer";
 import { useIsAdmin } from "@/hooks/useIsAdmin";
@@ -295,6 +298,11 @@ interface ChatViewProps {
    *  (resolve_transcript_dir). `false` skips the history/SSE fetch outright
    *  and forces terminal mode — there's nothing to chat with. */
   hasTranscript: boolean;
+  /** The chat is actually on screen (default). The sessions page keeps the
+   *  last chat mounted but hidden behind the list on the phone — then a live
+   *  voice call must not dock into it (nobody could see or hang up), it
+   *  floats instead (live finding 13.10.2026). */
+  voiceOnScreen?: boolean;
   detailLevel: DetailLevel;
   onDetailLevelChange: (level: DetailLevel) => void;
   centerView: CenterView;
@@ -336,6 +344,7 @@ export function ChatView({
   agent,
   head = null,
   hasTranscript,
+  voiceOnScreen = true,
   detailLevel,
   onDetailLevelChange,
   centerView,
@@ -837,6 +846,9 @@ export function ChatView({
 
   return (
     <ToolOutputContext.Provider value={toolOutputStore}>
+    {/* P2: tool pictures load from THIS agent's media route; a head (no
+        agent row) shows none rather than guessing an address. */}
+    <ChatMediaContext.Provider value={agent?.id ?? null}>
     <div ref={rootRef} className="flex flex-col flex-1 min-h-0 overflow-hidden">
       {/* One header for both breakpoints — the parts that only make sense on
           a phone (back chevron, context line, options button) carry
@@ -1217,6 +1229,18 @@ export function ChatView({
                     />
                   );
                 }
+                if (item.event.kind === "elicitation") {
+                  return (
+                    <ElicitationCard
+                      key={item.event.uuid}
+                      ev={item.event}
+                      result={stream.elicitationResults[item.event.elicitationId] ?? null}
+                      // Read-only for a head's transcript and for a non-admin
+                      // (the answer endpoint is operator-only, like the composer).
+                      agentId={head || !isAdmin ? null : agent?.id ?? null}
+                    />
+                  );
+                }
                 return renderTimelineEvent(
                   item.event,
                   detailLevel,
@@ -1347,6 +1371,7 @@ export function ChatView({
                   // the follow-ups the daemon held go back into the composer.
                   onStopped={handleVoiceStopped}
                   progress={voiceProgress}
+                  onScreen={voiceOnScreen}
                 >
                 {(voiceSlot) => (
                 <Composer
@@ -1363,6 +1388,19 @@ export function ChatView({
                    * nie widerlegbar, also bleibt Stop erreichbar. */
                   paneObservable={agent.agent_runtime === "cli-bridge"}
                   capabilities={stream.capabilities}
+                  modeSlot={
+                    headlessChat ? (
+                      <ModeChip
+                        agentId={agent.id}
+                        capabilities={stream.capabilities}
+                        liveMode={stream.mode}
+                        busy={
+                          stream.state?.status === "working" ||
+                          stream.state?.status === "waiting_input"
+                        }
+                      />
+                    ) : null
+                  }
                 />
                 )}
                 </VoiceLiveDock>
@@ -1386,6 +1424,7 @@ export function ChatView({
         />
       )}
     </div>
+    </ChatMediaContext.Provider>
     </ToolOutputContext.Provider>
   );
 }

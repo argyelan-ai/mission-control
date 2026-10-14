@@ -17,7 +17,7 @@ from httpx import AsyncClient
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.services import chat_actions
+from app.services import chat_actions, commit_llm
 from app.services.chat_actions import Edit, Refused, reconstruct_original
 from app.services.chat_diff import build_diff, capture_texts, diffs_from_claude_tool
 
@@ -26,6 +26,21 @@ from tests.test_chat_changes import _claude_tool, _omp_edit, _write_session
 
 def _git(*args: str, cwd: Path) -> str:
     return subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True).stdout
+
+
+@pytest.fixture(autouse=True)
+def no_real_llm_in_tests(monkeypatch):
+    """No test here may reach a real Spark box for the commit-message
+    suggestion (``commit_llm``) — the mechanical fallback is the default
+    unless a test injects its own fake LLM answer. Without this, the draft
+    endpoint's LLM call would try the TEST-NET address in ``app.config``
+    and hang for the full timeout on every test that loads the commit
+    sheet (same reasoning as ``block_real_engine_metrics`` in conftest)."""
+
+    async def _no_suggestion(**kwargs):
+        return None
+
+    monkeypatch.setattr(commit_llm, "suggest_commit_message", _no_suggestion)
 
 
 def _repo(path: Path, branch: str = "main") -> Path:
@@ -421,6 +436,7 @@ async def test_commit_draft_and_commit(auth_client: AsyncClient, make_agent, omp
 
     draft = (await auth_client.get(f"{base}/commit/draft")).json()
     assert draft["branch"] == "feat/x" and draft["message"].startswith("chore: update a.py")
+    assert draft["source"] == "fallback" and "mechanicalMessage" not in draft
     changes = (await auth_client.get(f"{base}/changes")).json()
     assert changes["actions"]["commit"] == {"ok": True, "reason": None, "files": 1}
 
@@ -430,6 +446,55 @@ async def test_commit_draft_and_commit(auth_client: AsyncClient, make_agent, omp
     assert _git("log", "-1", "--format=%s", cwd=repo).strip() == "fix: two"
     (ev,) = await _events(agent.id, "chat.committed")
     assert ev.detail["actor"] == "operator" and ev.detail["branch"] == "feat/x"
+
+
+async def test_commit_draft_prefers_the_local_model_when_it_answers(
+    auth_client: AsyncClient, make_agent, omp_home, monkeypatch
+):
+    """The LLM path end to end: a real diff is built from the repo
+    (``diff_text_for_commit``) and handed to the (faked) model together with
+    the operator's chat messages; a usable answer wins over the mechanical
+    message and is marked ``source: "llm"`` — the mechanical one still rides
+    along as ``mechanicalMessage`` so the sheet could offer it too."""
+    agent, repo = await _repo_agent(make_agent, omp_home, "feat/x")
+    (repo / "a.py").write_text("2\n")
+    base = f"/api/v1/agents/{agent.id}/chat"
+
+    captured: dict = {}
+
+    async def _fake_suggest(*, branch, files, diff_text, user_messages, spark=None):
+        captured["branch"] = branch
+        captured["files"] = files
+        captured["diff_text"] = diff_text
+        captured["user_messages"] = user_messages
+        return "feat(a): tune the rounding\n\n- a.py\n"
+
+    monkeypatch.setattr(commit_llm, "suggest_commit_message", _fake_suggest)
+
+    draft = (await auth_client.get(f"{base}/commit/draft")).json()
+    assert draft["source"] == "llm"
+    assert draft["message"] == "feat(a): tune the rounding\n\n- a.py\n"
+    assert draft["mechanicalMessage"].startswith("chore: update a.py")
+    assert captured["branch"] == "feat/x"
+    assert "a.py" in captured["diff_text"] and "+2" in captured["diff_text"]
+
+
+async def test_commit_draft_falls_back_when_the_model_times_out_or_answers_junk(
+    auth_client: AsyncClient, make_agent, omp_home, monkeypatch
+):
+    agent, repo = await _repo_agent(make_agent, omp_home, "feat/x")
+    (repo / "a.py").write_text("2\n")
+    base = f"/api/v1/agents/{agent.id}/chat"
+
+    async def _junk(**kwargs):
+        return None  # commit_llm already turned the timeout/junk into None
+
+    monkeypatch.setattr(commit_llm, "suggest_commit_message", _junk)
+
+    draft = (await auth_client.get(f"{base}/commit/draft")).json()
+    assert draft["source"] == "fallback"
+    assert draft["message"].startswith("chore: update a.py")
+    assert "mechanicalMessage" not in draft
 
 
 async def test_commit_on_main_with_a_remote_is_refused(auth_client: AsyncClient, make_agent, omp_home):

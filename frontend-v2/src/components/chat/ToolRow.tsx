@@ -7,6 +7,7 @@ import { C, STATUS_TEXT } from "@/lib/colors";
 import type { ToolEvent } from "@/lib/chatTypes";
 import { LocationChips } from "./LocationChips";
 import { ToolDiffView } from "./ToolDiffView";
+import { ToolImages } from "./ToolImages";
 import { useToolOutput } from "./toolOutputStore";
 
 /* Claude Code names its tools in PascalCase, omp/ACP in lower case (the
@@ -92,6 +93,7 @@ export function ToolRow({
   const live = useToolOutput(ev.result == null ? ev.toolUseId : null);
   const diffs = ev.diffs ?? [];
   const locations = ev.locations ?? [];
+  const images = ev.images ?? [];
   // The diff says what the edit did — the raw old/new strings (detail) and
   // the tool's echo of the file (result) would say it a second and third
   // time (K3). An error result still shows: it is the only explanation.
@@ -150,8 +152,12 @@ export function ToolRow({
         )}
       </button>
 
-      {(expanded || live) && (
+      {(expanded || live || images.length > 0) && (
         <div className="mt-1.5 ml-5 space-y-1.5 min-w-0">
+          {/* P2: a tool's pictures show without opening the card — seeing
+              the screenshot is the point of the call; its JSON stays behind
+              the tap. Same left edge as the rest of the card body (K9). */}
+          {images.length > 0 && <ToolImages images={images} />}
           {live && <LiveOutput text={live.text} />}
           {expanded && (
             <>

@@ -290,6 +290,9 @@ interface VoiceLiveDockProps {
   onStopped?: (takenBack: string[] | null) => void;
   /** The chat's live stream, for the voice to listen along (voice PR 3). */
   progress?: ProgressSnapshot;
+  /** false = this chat is mounted but not visible (sessions list on the
+   *  phone): it does not count as a dock, so the call floats instead. */
+  onScreen?: boolean;
   /** Only used when the dock brings its own provider (tests). */
   env?: VoiceLiveEnv;
 }
@@ -301,6 +304,7 @@ function DockInner({
   onForwarded,
   onStopped,
   progress,
+  onScreen = true,
   env = browserVoiceLiveEnv,
   ctx,
 }: VoiceLiveDockProps & { ctx: VoiceLiveCallContextValue }) {
@@ -311,16 +315,15 @@ function DockInner({
   forwardRef.current = onForwarded;
   const stoppedRef = useRef(onStopped);
   stoppedRef.current = onStopped;
-  useEffect(
-    () =>
-      registerDock(agentId, {
-        onForwarded: (text, midTurn) => forwardRef.current?.(text, midTurn),
-        onStopped: (takenBack) => stoppedRef.current?.(takenBack),
-      }),
-    [agentId, registerDock],
-  );
+  useEffect(() => {
+    if (!onScreen) return;
+    return registerDock(agentId, {
+      onForwarded: (text, midTurn) => forwardRef.current?.(text, midTurn),
+      onStopped: (takenBack) => stoppedRef.current?.(takenBack),
+    });
+  }, [agentId, registerDock, onScreen]);
 
-  const mine = active && target?.agentId === agentId;
+  const mine = onScreen && active && target?.agentId === agentId;
   useEffect(() => {
     if (mine) feedProgress(agentId, progress);
   }, [mine, agentId, progress, feedProgress]);
@@ -330,6 +333,7 @@ function DockInner({
   useEffect(() => setSecure(env.isSecureContext()), [env]);
 
   if (!enabled) return <>{children(null)}</>;
+  if (!onScreen) return <>{children(null)}</>;
   if (active && target && !mine) {
     return (
       <>

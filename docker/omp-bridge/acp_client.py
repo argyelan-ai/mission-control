@@ -5,8 +5,9 @@ Protocol over stdio, line-delimited JSON-RPC).
 
 Spawns `omp acp` as a child process and speaks JSON-RPC 2.0 over stdin/stdout
 (one JSON object per line). A dedicated reader thread dispatches responses,
-server->client requests (`session/request_permission`, `fs/*`) and
-notifications (`session/update`).
+server->client requests (`session/request_permission`, `fs/*`, and — only
+when a handler is registered — `elicitation/create`) and notifications
+(`session/update`, `elicitation/complete`).
 
 Wire contract (verified against omp 18.1.10, 2026-09-08, golden fixtures in
 `rpc/acp-*.ndjson`):
@@ -110,6 +111,13 @@ class ACPClient:
 
         self._event_cbs: list[Callable[[dict], None]] = []
         self._permission_cb: Optional[Callable[[dict], str]] = None
+        # Form elicitation (`elicitation/create`, chat package P3). None =
+        # the capability is NOT advertised and omp never asks: select/input
+        # resolve undefined, confirm false, a plan proposal is auto-approved.
+        # Only the chat daemon registers one — an unattended task run must
+        # never block on a question nobody is there to answer.
+        self._elicitation_cb: Optional[Callable[[Any, dict], None]] = None
+        self._elicitation_complete_cb: Optional[Callable[[dict], None]] = None
         self._session_id: Optional[str] = None
         # Full result of the last session/new or session/load — carries
         # `configOptions` and `availableCommands`, which the chat daemon
@@ -191,6 +199,8 @@ class ACPClient:
         if "id" in msg:
             if method == "session/request_permission":
                 self._handle_permission_request(msg)
+            elif method == "elicitation/create" and self._elicitation_cb is not None:
+                self._handle_elicitation_request(msg)
             elif method.startswith("fs/"):
                 # Headless fs requests: satisfy from disk so tools work
                 # without a callback. read: return file content or error.
@@ -203,6 +213,11 @@ class ACPClient:
         # 3. Notification
         if method == "session/update":
             self._fire_event_cbs(msg.get("params") or {})
+        elif method == "elicitation/complete" and self._elicitation_complete_cb is not None:
+            try:
+                self._elicitation_complete_cb(msg.get("params") or {})
+            except Exception:  # noqa: BLE001 — callback isolation
+                logger.exception("on_elicitation complete callback failed")
         else:
             logger.debug("ignoring notification %s", method)
 
@@ -221,6 +236,27 @@ class ACPClient:
             choice = REJECT_ONCE
         option_id = self._resolve_option_id(params, choice)
         self._send_raw(self._permission_reply(rid, option_id))
+
+    def _handle_elicitation_request(self, msg: dict) -> None:
+        """Hand an `elicitation/create` to the registered callback WITHOUT
+        answering it: the operator answers later (seconds or minutes), so
+        the callback only records the request and returns — the reader
+        thread must keep serving `session/update` meanwhile. The answer goes
+        out through :meth:`respond`. A callback that raises declines the
+        request on the spot, so omp is never left waiting on a broken
+        client."""
+        rid = msg["id"]
+        params = msg.get("params") or {}
+        try:
+            self._elicitation_cb(rid, params)  # type: ignore[misc]
+        except Exception:  # noqa: BLE001 — a broken callback must not hang omp
+            logger.exception("on_elicitation callback failed; declining")
+            self.respond(rid, {"action": "decline"})
+
+    def respond(self, request_id: Any, result: dict) -> None:
+        """Answer a server->client request that was left open (elicitation).
+        Raises ACPError when the child is gone."""
+        self._send_raw({"jsonrpc": "2.0", "id": request_id, "result": result})
 
     @staticmethod
     def _permission_reply(rid: Any, option_id: str) -> dict:
@@ -341,10 +377,15 @@ class ACPClient:
     def initialize(self, timeout: float = 30.0) -> dict:
         """Handshake. Returns server capabilities
         (agentInfo, authMethods, protocolCapabilities, ...)."""
+        capabilities: dict = {"fs": {"readTextFile": True,
+                                     "writeTextFile": True}}
+        if self._elicitation_cb is not None:
+            # omp checks `elicitation.form != null` — an empty object is
+            # enough. Only advertised when someone will actually answer.
+            capabilities["elicitation"] = {"form": {}}
         result = self._request("initialize", {
             "protocolVersion": 1,
-            "clientCapabilities": {"fs": {"readTextFile": True,
-                                          "writeTextFile": True}},
+            "clientCapabilities": capabilities,
         }, timeout=timeout)
         return result
 
@@ -467,6 +508,24 @@ class ACPClient:
         Without a callback, every request is rejected once.
         """
         self._permission_cb = cb
+
+    def on_elicitation(
+        self,
+        cb: Callable[[Any, dict], None],
+        on_complete: Optional[Callable[[dict], None]] = None,
+    ) -> None:
+        """Register the form-elicitation handler (chat package P3).
+
+        Must be called BEFORE :meth:`initialize`: registering it is what
+        advertises `clientCapabilities.elicitation.form`. ``cb(request_id,
+        params)`` receives the `elicitation/create` params (mode, sessionId,
+        message, requestedSchema) and must return at once; the answer is sent
+        later with ``respond(request_id, {"action": "accept", "content":
+        {...}})`` or ``{"action": "decline" | "cancel"}``. ``on_complete``
+        gets `elicitation/complete` notifications (omp sends them for URL
+        mode only)."""
+        self._elicitation_cb = cb
+        self._elicitation_complete_cb = on_complete
 
     def close(self, timeout: float = 5.0) -> None:
         """Terminate the child process cleanly."""

@@ -90,7 +90,9 @@ vi.mock("@/components/chat/ChatView", () => ({
     onCenterViewChange,
     onBack,
     contextLine,
+    voiceOnScreen,
   }: {
+    voiceOnScreen?: boolean;
     agent: { name: string } | null;
     head?: { run_id: string; title: string | null } | null;
     hasTranscript: boolean;
@@ -99,7 +101,7 @@ vi.mock("@/components/chat/ChatView", () => ({
     onBack?: () => void;
     contextLine?: string | null;
   }) => (
-    <div data-testid="chat-view-stub">
+    <div data-testid="chat-view-stub" data-voice-on-screen={String(voiceOnScreen ?? true)}>
       {/* Heads in Chats (PR 2): the page's own `selectedHeadRun` resolution
           (recent list vs. the one-off fallback fetch) is observable here. */}
       <span data-testid="chat-view-head">{head ? `Head: ${head.run_id}` : ""}</span>
@@ -1126,6 +1128,30 @@ describe("SessionsPage — phone history puts the list behind every chat", () =>
     rerenderWith(view);
     await waitFor(() => expect(isHidden(list())).toBe(false));
     expect(isHidden(chat())).toBe(true);
+  });
+
+  // Live voice (live finding 13.10.2026): back on the list the last chat
+  // stays mounted, just hidden. A running call must float there, so the
+  // hidden chat must not claim it.
+  it("the chat hidden behind the phone list is not 'on screen' for the live voice", async () => {
+    nav.searchParamsString = "agent=agent-2";
+    const view = renderPage();
+    await waitFor(() => expect(isHidden(chat())).toBe(false));
+    expect(screen.getByTestId("chat-view-stub")).toHaveAttribute("data-voice-on-screen", "true");
+
+    nav.searchParamsString = "";
+    rerenderWith(view);
+    await waitFor(() => expect(isHidden(list())).toBe(false));
+    expect(isHidden(chat())).toBe(true);
+    expect(screen.getByTestId("chat-view-stub")).toHaveAttribute("data-voice-on-screen", "false");
+  });
+
+  it("on the desktop the chat column is always on screen for the live voice", async () => {
+    phone = false;
+    nav.searchParamsString = "agent=agent-2";
+    renderPage();
+    await screen.findByText("Chat: Agent Two");
+    expect(screen.getByTestId("chat-view-stub")).toHaveAttribute("data-voice-on-screen", "true");
   });
 
   it("desktop keeps one entry per link: the marker goes, nothing is pushed", async () => {

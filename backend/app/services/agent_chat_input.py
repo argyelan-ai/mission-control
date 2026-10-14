@@ -1130,6 +1130,106 @@ async def set_model(agent, name: str) -> None:
         )
 
 
+class QuestionOpenError(Exception):
+    """P3: the mode cannot change while a question card is open — the open
+    request would never be answered and the turn would hang (live
+    13.10.2026)."""
+
+
+class ElicitationNotPendingError(Exception):
+    """P3: die Rueckfrage ist nicht mehr offen — schon beantwortet (anderer
+    Tab, Doppeltipp), ihr Zug ist vorbei (omp hat aufgegeben, Stop) oder der
+    Chat-Daemon wurde neu gestartet. Eine klare Absage, kein Fehler."""
+
+
+#: Die drei Antworten, die omp auf ``elicitation/create`` versteht.
+ELICITATION_ACTIONS = ("accept", "decline", "cancel")
+
+
+async def answer_elicitation(
+    agent, elicitation_id: str, action: str, content: dict | None = None
+) -> dict:
+    """Antwort des Operators auf eine Rueckfrage-Karte (P3) -> ``answer``-Op
+    des Chat-Daemons -> JSON-RPC-Antwort an omp. Gibt den Status zurueck
+    (``answered`` / ``declined`` / ``cancelled``).
+
+    Nur kopflose Agenten (ACP) haben solche Karten. ``ValueError`` (422) fuer
+    eine Antwort, die nicht zur Frage passt — der Daemon prueft sie gegen das
+    Schema, bevor omp sie sieht. ``ElicitationNotPendingError`` (409), wenn
+    die Karte nicht mehr offen ist. Rueckgabe ``{"status", "stopped"}`` —
+    ``stopped`` ist wahr, wenn ``cancel`` auf der Plan-Freigabe den Zug
+    angehalten hat."""
+    if headless_chat_kind(agent) is None:
+        raise InputNotSupportedError()
+    if action not in ELICITATION_ACTIONS:
+        raise ValueError(f"unknown action: {action!r}")
+    if action == "accept" and not isinstance(content, dict):
+        raise ValueError("accept needs content")
+
+    answer = await transport_for(agent).answer(
+        elicitation_id, action, content if action == "accept" else None
+    )
+    if answer.get("ok"):
+        return {
+            "status": str(answer.get("status") or "answered"),
+            "stopped": bool(answer.get("stopped")),
+        }
+    error = answer.get("error")
+    if error == "not_pending":
+        raise ElicitationNotPendingError()
+    if error in ("bad_content", "bad_action"):
+        raise ValueError(str(answer.get("detail") or error))
+    _raise_for_acp_refusal(error, getattr(agent, "slug", ""))
+    raise AcpChatRefusedError(str(error or "unknown"))  # _raise_for_acp_refusal kehrt nur bei Karten-Absagen zurueck
+
+
+async def set_mode(agent, mode: str) -> None:
+    """Plan-Modus ein/aus (P3): ``config id=mode``. Nur Werte, die der Agent
+    selbst in ``configOptions[id=mode]`` meldet (omp: ``default`` und — wenn
+    Plan-Modus in seinen Einstellungen an ist — ``plan``). Ohne gemeldeten
+    Modus gibt es keinen Schalter -> ``InputNotSupportedError`` (409)."""
+    if headless_chat_kind(agent) is None:
+        raise InputNotSupportedError()
+    state = await asyncio.to_thread(read_acp_chat_state, agent)
+    options, _current = _acp_config_option(state, "mode")
+    values = [o["value"] for o in options]
+    if len(values) < 2:
+        raise InputNotSupportedError()
+    if mode not in values:
+        raise ValueError(f"mode not offered by this agent: {mode!r}")
+    answer = await transport_for(agent).config("mode", mode)
+    if not answer.get("ok"):
+        error = answer.get("error")
+        # Mitten im Zug oder bei offener Rueckfrage lehnt der Daemon ab —
+        # auch fuer einen direkten API-Aufruf, nicht nur am Chip.
+        if error == "question_open":
+            raise QuestionOpenError()
+        if error == "busy":
+            raise AgentBusyError()
+        # Sonst zeigt der Daemon die Absage selbst als ``chat_error``-Karte;
+        # der Composer muss trotzdem wissen, dass der Chip nicht umsprang.
+        raise AcpChatRefusedError(str(error or "rejected"))
+
+
+async def mode_capabilities(agent) -> dict[str, object]:
+    """``{"modeOptions": [{"value", "name"}], "mode": str|None}`` fuer den
+    Modus-Chip im Composer. Leer fuer jeden Agenten ohne ACP-Chat und fuer
+    einen, der weniger als zwei Modi meldet — ein Schalter mit einer
+    Stellung waere nutzlos (K3). Wirft nie."""
+    if headless_chat_kind(agent) is None:
+        return {"modeOptions": [], "mode": None}
+    state = await asyncio.to_thread(read_acp_chat_state, agent)
+    options, current = _acp_config_option(state, "mode")
+    if len(options) < 2:
+        return {"modeOptions": [], "mode": None}
+    return {
+        "modeOptions": [
+            {"value": o["value"], "name": o.get("name") or o["value"]} for o in options
+        ],
+        "mode": current,
+    }
+
+
 async def _set_effort_omp(agent, level: str) -> None:
     """omp-Variante von ``set_effort`` (02.09.2026): drueckt Shift+Tab
     (``BTab``), bis die Statuszeile die gewuenschte Stufe zeigt.

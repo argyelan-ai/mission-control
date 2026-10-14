@@ -533,6 +533,36 @@ def suggest_commit_message(files: list[dict[str, Any]]) -> str:
     return subject + "\n\n" + "\n".join(body) + "\n"
 
 
+def diff_text_for_commit(repo: Path, files: list[dict[str, Any]], max_chars: int = 6_000) -> str:
+    """A compact unified diff of ``files`` (as ``pending_files`` lists them),
+    capped at ``max_chars`` total — a prompt for the local commit-message
+    model (``commit_llm``), never a full patch. Best effort: a file git
+    cannot diff this way (binary, or something odd) is only named, not
+    shown; never raises."""
+    chunks: list[str] = []
+    budget = max_chars
+    for f in files:
+        if budget <= 0:
+            break
+        path = f.get("path")
+        if not isinstance(path, str) or not path:
+            continue
+        res = _git("diff", "--unified=1", "HEAD", "--", path, cwd=repo)
+        text = res.stdout if res.returncode == 0 else ""
+        if not text.strip():
+            # Untracked (or not yet in any commit): diff against nothing.
+            res2 = _git("diff", "--no-index", "--unified=1", "--", os.devnull, path, cwd=repo)
+            text = res2.stdout if res2.returncode in (0, 1) else ""
+        if not text.strip():
+            chunks.append(f"--- {path} (diff unavailable)\n")
+            continue
+        if len(text) > budget:
+            text = text[:budget] + "\n… (truncated)\n"
+        chunks.append(text)
+        budget -= len(text)
+    return "\n".join(chunks)[:max_chars]
+
+
 def commit_guard(repo: Path) -> str:
     """The branch a commit lands on, or ``Refused``: a detached HEAD has
     none, and the default branch of a repository with a remote is not
