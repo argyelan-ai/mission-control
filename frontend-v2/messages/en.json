@@ -4045,7 +4045,7 @@
     "errNoCredits": "OpenAI credit/limit reached. Call ended — check your OpenAI balance.",
     "errRateLimited": "OpenAI limit reached. Try again in a minute.",
     "errUnavailable": "Voice is not available right now.",
-    "errMaxLength": "Call ended after {minutes} minutes.",
+    "errMaxLength": "Call ended after {minutes, plural, one {# minute} other {# minutes}}.",
     "errMutedTooLong": "Hung up after 5 minutes muted.",
     "navMic": "Voice ({name})",
     "navMicActive": "Open call with {name}",
@@ -4056,7 +4056,8 @@
     "micBudgetReached": "Daily budget reached",
     "stateIdleWarning": "Silence — hanging up in {seconds} s",
     "errIdle": "Hung up after {seconds} s of silence.",
-    "errBudgetReached": "Daily voice budget reached. Free again after midnight.",
-    "stateIdleWarningShort": "Hangs up in {seconds} s"
+    "errBudgetReached": "Daily voice budget reached.",
+    "stateIdleWarningShort": "Hangs up in {seconds} s",
+    "errBudgetReachedUntil": "Daily budget reached — available again at {time}."
   }
 }

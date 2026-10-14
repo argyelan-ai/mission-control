@@ -250,6 +250,10 @@ export interface VoiceLiveOptions {
    *  follow-ups its daemon held, for the composer — like the Stop button;
    *  `null` when nothing was taken back (TUI agents keep their own queue). */
   onStopped?: (takenBack: string[] | null) => void;
+  /** Today's voice budget is used up (voice PR 6, live finding 14.10.):
+   *  `start` then ends at once with `budget_reached` — no mic prompt, no
+   *  session. Read at the tap, so a reset at midnight counts right away. */
+  isBudgetReached?: () => boolean;
 }
 
 /** How often the progress clock runs while a call is open (final settle,
@@ -330,6 +334,8 @@ export function useVoiceLive(
   const progressSnap = options.progress;
   const progressRef = useRef(progressSnap);
   progressRef.current = progressSnap;
+  const budgetRef = useRef(options.isBudgetReached);
+  budgetRef.current = options.isBudgetReached;
   // Bumped on every start/hang-up: a slow step of an older attempt (mic
   // prompt, mint, SDP answer) must not resurrect a call the operator ended.
   const attemptRef = useRef(0);
@@ -699,6 +705,12 @@ export function useVoiceLive(
     dispatch({ type: "start" });
     if (!env.isSecureContext()) {
       dispatch({ type: "fail", error: "insecure" });
+      return;
+    }
+    if (budgetRef.current?.()) {
+      // MC would refuse the call (402) anyway: say so before asking for
+      // the microphone, so a tap never opens a permission prompt for nothing.
+      dispatch({ type: "fail", error: "budget_reached" });
       return;
     }
     // Created inside the tap handler so iOS lets it play later.

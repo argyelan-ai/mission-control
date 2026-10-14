@@ -440,3 +440,26 @@ export function formatElapsed(ms: number): string {
   const s = total % 60;
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
+
+/** Today's budget as MC reports it (`GET /voice/live/config` → `budget`). */
+export interface VoiceBudget {
+  reached: boolean;
+  resets_at: string;
+}
+
+/** The budget blocks new calls: used up AND the reset still ahead. A config
+ *  read before midnight must not keep the mic shut after the reset. */
+export function budgetBlocks(budget: VoiceBudget | null | undefined, now: number): boolean {
+  if (!budget?.reached) return false;
+  const reset = Date.parse(budget.resets_at);
+  return Number.isNaN(reset) || reset > now;
+}
+
+/** `resets_at` as the operator's local wall-clock time ("00:00"); null when
+ *  MC sent nothing usable. */
+export function formatResetTime(iso: string | null | undefined, locale: string): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
+}

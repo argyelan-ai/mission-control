@@ -4045,7 +4045,7 @@
     "errNoCredits": "OpenAI-Guthaben/Limit erreicht. Gespräch beendet — Guthaben bei OpenAI prüfen.",
     "errRateLimited": "OpenAI-Limit erreicht. In einer Minute nochmal versuchen.",
     "errUnavailable": "Die Stimme ist gerade nicht verfügbar.",
-    "errMaxLength": "Gespräch nach {minutes} Minuten beendet.",
+    "errMaxLength": "Gespräch nach {minutes, plural, one {# Minute} other {# Minuten}} beendet.",
     "errMutedTooLong": "Nach 5 Minuten stumm aufgelegt.",
     "navMic": "Sprache ({name})",
     "navMicActive": "Gespräch mit {name} öffnen",
@@ -4056,7 +4056,8 @@
     "micBudgetReached": "Tagesbudget erreicht",
     "stateIdleWarning": "Stille — Auflegen in {seconds} s",
     "errIdle": "Nach {seconds} s Stille aufgelegt.",
-    "errBudgetReached": "Tagesbudget für die Stimme erreicht. Ab Mitternacht wieder frei.",
-    "stateIdleWarningShort": "Legt auf in {seconds} s"
+    "errBudgetReached": "Tagesbudget für die Stimme erreicht.",
+    "stateIdleWarningShort": "Legt auf in {seconds} s",
+    "errBudgetReachedUntil": "Tagesbudget erreicht — wieder ab {time}."
   }
 }

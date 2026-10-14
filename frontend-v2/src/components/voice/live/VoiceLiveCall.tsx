@@ -28,10 +28,12 @@
  * Jarvis (LiveKit, `VoiceWidget.tsx`) is untouched; it only moved from the
  * navigation mic into the menus (QuickSheet, command palette).
  *
- * Cost (voice PR 6): when the daily budget is used up, every mic says so
- * ("Tagesbudget erreicht") and MC refuses new calls; the config is fetched
- * again after each call, so the mics learn it without a reload. Both bars
- * show the call's elapsed time and the idle warning.
+ * Cost (voice PR 6): when the daily budget is used up, every mic is greyed
+ * and a tap starts no call and asks for no microphone — it shows "Tagesbudget
+ * erreicht — wieder ab <Uhrzeit>" where call errors show (live finding
+ * 14.10.). The config is fetched again after each call and at the reset
+ * time, so the mics learn both without a reload. Both bars show the call's
+ * elapsed time and the idle warning.
  */
 
 import {
@@ -53,7 +55,14 @@ import { useAppStore } from "@/lib/store";
 import { C, STATUS_TEXT } from "@/lib/colors";
 import { chatEntryHref } from "@/lib/chatHistory";
 import { useChatStream } from "@/hooks/useChatStream";
-import { ERROR_MESSAGE_KEY, formatElapsed, isRetryable, type VoiceLiveStatus } from "./voiceLiveCore";
+import {
+  ERROR_MESSAGE_KEY,
+  budgetBlocks,
+  formatElapsed,
+  formatResetTime,
+  isRetryable,
+  type VoiceLiveStatus,
+} from "./voiceLiveCore";
 import { browserVoiceLiveEnv, useVoiceLive, type VoiceLiveCall, type VoiceLiveEnv } from "./useVoiceLive";
 import { refreshVoiceLiveConfig, useVoiceLiveConfig } from "./useVoiceLiveConfig";
 import type { ProgressSnapshot } from "./progress";
@@ -77,8 +86,11 @@ export interface DockHandlers {
 export interface VoiceLiveCallContextValue {
   /** The backend has the live voice on (`VOICE_LIVE_ENABLED` + key). */
   enabled: boolean;
-  /** Today's voice budget is used up: MC refuses new calls (voice PR 6). */
+  /** Today's voice budget is used up: the mics are greyed and a tap starts
+   *  no call, it only explains (voice PR 6). */
   budgetReached: boolean;
+  /** When the budget frees up again (ISO, from MC); null when unknown. */
+  budgetResetsAt: string | null;
   call: VoiceLiveCall;
   /** A call is open, connecting or shows its error. */
   active: boolean;
@@ -198,7 +210,23 @@ export function VoiceLiveCallProvider({
   const locale = useLocale();
   const config = useVoiceLiveConfig(on);
   const enabled = config !== null;
-  const budgetReached = config?.budget?.reached === true;
+  const budget = config?.budget ?? null;
+  // Re-render at the reset time: the mics open again without a reload.
+  const [, setResetTick] = useState(0);
+  const budgetReached = budgetBlocks(budget, Date.now());
+  const budgetResetsAt = budget?.resets_at ?? null;
+  useEffect(() => {
+    if (!budgetReached || !budgetResetsAt) return;
+    const wait = Math.min(Math.max(Date.parse(budgetResetsAt) - Date.now(), 0) + 1000, 2_147_483_647);
+    const id = setTimeout(() => {
+      setResetTick((n) => n + 1);
+      void refreshVoiceLiveConfig();
+    }, wait);
+    return () => clearTimeout(id);
+  }, [budgetReached, budgetResetsAt]);
+  const budgetRef = useRef(budget);
+  budgetRef.current = budget;
+  const isBudgetReached = useCallback(() => budgetBlocks(budgetRef.current, Date.now()), []);
   const lead = useLeadTarget(enabled && resolveLead);
   const [target, setTarget] = useState<VoiceTarget | null>(null);
   const [progress, setProgress] = useState<ProgressSnapshot | undefined>(undefined);
@@ -219,7 +247,12 @@ export function VoiceLiveCallProvider({
 
   // The hook's own agentId stays fixed (""): the agent is picked per call via
   // start(id), so a page change never "switches agent" and ends the call.
-  const call = useVoiceLive("", locale === "de" ? "de" : "en", env, { onForwarded, onStopped, progress });
+  const call = useVoiceLive("", locale === "de" ? "de" : "en", env, {
+    onForwarded,
+    onStopped,
+    progress,
+    isBudgetReached,
+  });
   const active = call.status !== "idle";
   const hangUpFn = call.hangUp;
   useEffect(() => {
@@ -278,8 +311,20 @@ export function VoiceLiveCallProvider({
   const docked = callAgentId !== null && docks.includes(callAgentId);
 
   const value = useMemo<VoiceLiveCallContextValue>(
-    () => ({ enabled, budgetReached, call, active, target, lead, startCall, registerDock, feedProgress, docks }),
-    [enabled, budgetReached, call, active, target, lead, startCall, registerDock, feedProgress, docks],
+    () => ({
+      enabled,
+      budgetReached,
+      budgetResetsAt,
+      call,
+      active,
+      target,
+      lead,
+      startCall,
+      registerDock,
+      feedProgress,
+      docks,
+    }),
+    [enabled, budgetReached, budgetResetsAt, call, active, target, lead, startCall, registerDock, feedProgress, docks],
   );
 
   return (
@@ -324,15 +369,26 @@ export function CallClock({ call }: { call: VoiceLiveCall }) {
   );
 }
 
-/** i18n key + values of an error, with the call's own limits filled in. */
+/** i18n key + values of an error, with the call's own limits filled in.
+ *  `resetTime` = when the daily budget frees up (local "HH:MM"). Numbers go
+ *  in as numbers: the texts pick "1 minute" / "2 minutes" (ICU plural). */
 export function errorText(
-  t: (key: string, values?: Record<string, string>) => string,
+  t: (key: string, values?: Record<string, string | number>) => string,
   call: VoiceLiveCall,
+  resetTime: string | null = null,
 ): string {
+  if (call.error === "budget_reached" && resetTime) return t("errBudgetReachedUntil", { time: resetTime });
   return t(ERROR_MESSAGE_KEY[call.error!], {
-    minutes: String(Math.round(call.limits.max_call_s / 60)),
-    seconds: String(call.limits.idle_hangup_s),
+    minutes: Math.max(1, Math.round(call.limits.max_call_s / 60)),
+    seconds: call.limits.idle_hangup_s,
   });
+}
+
+/** The budget's reset as local time, for `errorText` (null outside a provider). */
+export function useBudgetResetTime(): string | null {
+  const ctx = useVoiceLiveCall();
+  const locale = useLocale();
+  return formatResetTime(ctx?.budgetResetsAt, locale);
 }
 
 /**
@@ -349,6 +405,7 @@ export function VoiceCallCompact({
   showOpen?: boolean;
 }) {
   const t = useTranslations("voiceLive");
+  const resetTime = useBudgetResetTime();
   if (call.status === "idle") return null;
   const isError = call.status === "error" && call.error !== null;
   // Short form: the compact row is narrow on a phone, the seconds must show.
@@ -374,7 +431,7 @@ export function VoiceCallCompact({
       {isError ? (
         <>
           <div role="alert" className="flex-1 min-w-0 text-sm" style={{ color: C.textPrimary }}>
-            {errorText(t, call)}
+            {errorText(t, call, resetTime)}
           </div>
           {isRetryable(call.error!) && (
             <button

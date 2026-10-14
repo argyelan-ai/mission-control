@@ -1,6 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import enMessages from "../../../../messages/en.json";
+import deMessages from "../../../../messages/de.json";
 import {
   ZERO_USAGE,
+  budgetBlocks,
+  formatResetTime,
   addUsage,
   formatElapsed,
   offerErrorKind,
@@ -210,5 +214,45 @@ describe("cost and brakes (voice PR 6)", () => {
     expect(formatElapsed(0)).toBe("0:00");
     expect(formatElapsed(65_400)).toBe("1:05");
     expect(formatElapsed(20 * 60_000)).toBe("20:00");
+  });
+});
+
+describe("daily budget gate (live finding 14.10.)", () => {
+  const now = Date.parse("2026-10-14T20:00:00Z");
+  it("blocks only while used up AND the reset is still ahead", () => {
+    expect(budgetBlocks({ reached: true, resets_at: "2026-10-14T22:00:00Z" }, now)).toBe(true);
+    expect(budgetBlocks({ reached: true, resets_at: "2026-10-14T19:59:00Z" }, now)).toBe(false);
+    expect(budgetBlocks({ reached: false, resets_at: "2026-10-14T22:00:00Z" }, now)).toBe(false);
+    expect(budgetBlocks(null, now)).toBe(false);
+    // Unreadable reset: trust "reached" (MC refuses anyway).
+    expect(budgetBlocks({ reached: true, resets_at: "" }, now)).toBe(true);
+  });
+
+  it("formats the reset as local wall-clock time", () => {
+    const iso = "2026-10-14T22:00:00Z";
+    const d = new Date(iso);
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mm = String(d.getMinutes()).padStart(2, "0");
+    expect(formatResetTime(iso, "de")).toBe(`${hh}:${mm}`);
+    expect(formatResetTime("", "de")).toBeNull();
+    expect(formatResetTime("nope", "en")).toBeNull();
+  });
+});
+
+// The real formatter (test-setup mocks next-intl with an English-only stand-in).
+const { createTranslator } = await vi.importActual<typeof import("next-intl")>("next-intl");
+
+describe("voice texts with numbers use ICU plural (live finding 14.10.)", () => {
+  const en = createTranslator({ locale: "en", messages: enMessages, namespace: "voiceLive" });
+  const de = createTranslator({ locale: "de", messages: deMessages, namespace: "voiceLive" });
+  it("max length: 1 minute / 2 minutes, 1 Minute / 2 Minuten", () => {
+    expect(en("errMaxLength", { minutes: 1 })).toBe("Call ended after 1 minute.");
+    expect(en("errMaxLength", { minutes: 2 })).toBe("Call ended after 2 minutes.");
+    expect(de("errMaxLength", { minutes: 1 })).toBe("Gespräch nach 1 Minute beendet.");
+    expect(de("errMaxLength", { minutes: 2 })).toBe("Gespräch nach 2 Minuten beendet.");
+  });
+  it("budget notice names the time", () => {
+    expect(en("errBudgetReachedUntil", { time: "00:00" })).toBe("Daily budget reached — available again at 00:00.");
+    expect(de("errBudgetReachedUntil", { time: "00:00" })).toBe("Tagesbudget erreicht — wieder ab 00:00.");
   });
 });

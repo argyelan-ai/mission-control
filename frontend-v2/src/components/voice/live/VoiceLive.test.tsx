@@ -3,7 +3,7 @@
  * through a fake browser (getUserMedia, RTCPeerConnection, fetch) plus the
  * UI states and the two tools relayed to MC.
  */
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/lib/api";
 import { VoiceLiveDock } from "./VoiceLive";
@@ -1242,17 +1242,72 @@ describe("cost and brakes (voice PR 6)", () => {
     expect(h.trackStop).toHaveBeenCalled();
   });
 
-  it("mic says 'daily budget reached' when MC reports it (greyed, still explains on tap)", async () => {
+  it("budget reached: the mic is greyed, a tap starts no call and asks for no mic, the bar says until when", async () => {
+    const resetsAt = new Date(Date.now() + 3 * 3600_000).toISOString();
     mockRequest.mockResolvedValue({
       enabled: true,
       model: "gpt-realtime-2.1",
       voice: "marin",
-      budget: { limit_usd: 5, spent_usd: 5.1, reached: true, resets_at: "2026-10-13T22:00:00+00:00" },
+      budget: { limit_usd: 5, spent_usd: 5.1, reached: true, resets_at: resetsAt },
     });
-    renderDock(usageHarness().env);
+    const gum = vi.fn(async () => ({ getTracks: () => [] }) as unknown as MediaStream);
+    const mint = vi.fn(async () => {
+      throw new Error("must not mint");
+    });
+    const h = usageHarness({ getUserMedia: gum, mintSession: mint as unknown as VoiceLiveEnv["mintSession"] });
+    renderDock(h.env);
     const mic = await screen.findByTestId("voice-mic-button");
     await waitFor(() => expect(mic).toHaveAttribute("data-budget-reached", "true"));
     expect(mic).toHaveAccessibleName("Daily budget reached");
+    expect(mic).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByTestId("voice-mic-off-icon")).toBeInTheDocument();
+    await act(async () => fireEvent.click(mic));
+    const err = screen.getByTestId("voice-error");
+    expect(err).toHaveAttribute("data-error", "budget_reached");
+    const local = new Date(resetsAt).toLocaleTimeString("en", { hour: "2-digit", minute: "2-digit" });
+    expect(err).toHaveTextContent(`Daily budget reached — available again at ${local}.`);
+    expect(screen.queryByTestId("voice-retry")).toBeNull();
+    expect(gum).not.toHaveBeenCalled();
+    expect(mint).not.toHaveBeenCalled();
+    expect(h.pcs).toHaveLength(0);
+  });
+
+  it("budget reached but its reset time has passed: the mic works again (a stale config must not lock it)", async () => {
+    mockRequest.mockResolvedValue({
+      enabled: true,
+      model: "gpt-realtime-2.1",
+      voice: "marin",
+      budget: { limit_usd: 5, spent_usd: 5.1, reached: true, resets_at: new Date(Date.now() - 60_000).toISOString() },
+    });
+    const h = usageHarness();
+    const pc = await startCall(h); // a real call: mic, session, WebRTC
+    expect(pc).toBeTruthy();
+  });
+
+  it("max length text uses the plural: 1 minute / 2 minutes", async () => {
+    for (const [maxS, text] of [
+      [60, "Call ended after 1 minute."],
+      [120, "Call ended after 2 minutes."],
+    ] as const) {
+      resetVoiceLiveConfigCache();
+      const h = usageHarness({
+        mintSession: vi.fn(async () => ({
+          client_secret: "ek_test",
+          expires_at: 1,
+          model: "gpt-realtime-2.1",
+          voice: "marin",
+          calls_url: "https://api.openai.com/v1/realtime/calls",
+          agent_name: "Boss",
+          call_ref: "ref-1",
+          limits: { idle_hangup_s: 900, idle_warn_s: 15, max_call_s: maxS },
+        })),
+      });
+      const pc = await startCall(h);
+      act(() => pc.dc.open());
+      act(() => timer(h, maxS * 1000)!.fn());
+      expect(screen.getByTestId("voice-error")).toHaveTextContent(text);
+      cleanup();
+    }
   });
 
   it("the call bar shows the elapsed time", async () => {

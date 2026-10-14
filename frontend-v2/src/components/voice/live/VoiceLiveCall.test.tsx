@@ -169,6 +169,10 @@ async function startFromNav(h: ReturnType<typeof harness>) {
   return h.pcs[0];
 }
 
+function inThreeHours(): string {
+  return new Date(Date.now() + 3 * 3600_000).toISOString();
+}
+
 beforeEach(() => {
   resetVoiceLiveConfigCache();
   resetLeadTargetCache();
@@ -205,12 +209,53 @@ describe("the navigation mic talks to the lead agent", () => {
       enabled: true,
       model: "gpt-realtime-2.1",
       voice: "marin",
-      budget: { limit_usd: 5, spent_usd: 5.2, reached: true, resets_at: "2026-10-13T22:00:00+00:00" },
+      budget: { limit_usd: 5, spent_usd: 5.2, reached: true, resets_at: inThreeHours() },
     });
     await startFromNav(h);
     await act(async () => fireEvent.click(screen.getByTestId("voice-compact-hangup")));
     await waitFor(() => expect(screen.getByTestId("nav-voice-button")).toHaveAttribute("data-budget-reached", "true"));
     expect(screen.getByTestId("nav-voice-button")).toHaveAccessibleName("Daily budget reached");
+    // The next tap starts nothing: still exactly the one session from before.
+    await act(async () => fireEvent.click(screen.getByTestId("nav-voice-button")));
+    expect(h.mintSession).toHaveBeenCalledTimes(1);
+    expect(h.pcs).toHaveLength(1);
+  });
+
+  it("budget reached: every mic is greyed, a tap asks for no mic and starts no call, the bar says until when (live finding 14.10.)", async () => {
+    const resetsAt = inThreeHours();
+    config.mockResolvedValue({
+      enabled: true,
+      model: "gpt-realtime-2.1",
+      voice: "marin",
+      budget: { limit_usd: 5, spent_usd: 5.2, reached: true, resets_at: resetsAt },
+    });
+    const local = new Date(resetsAt).toLocaleTimeString("en", { hour: "2-digit", minute: "2-digit" });
+    const notice = `Daily budget reached — available again at ${local}.`;
+    const gum = vi.fn(async () => ({ getTracks: () => [] }) as unknown as MediaStream);
+    const h = harness();
+    h.env.getUserMedia = gum;
+
+    // Navigation mic on a page without a chat: the notice floats.
+    const r = render(<Shell env={h.env} page={TASKS} />);
+    const nav = await screen.findByTestId("nav-voice-button");
+    await waitFor(() => expect(nav).toHaveAttribute("data-budget-reached", "true"));
+    expect(nav).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByTestId("nav-voice-off-icon")).toBeInTheDocument();
+    await act(async () => fireEvent.click(nav));
+    expect(screen.getByTestId("voice-call-compact")).toHaveAttribute("data-status", "error");
+    expect(screen.getByTestId("voice-call-compact")).toHaveTextContent(notice);
+    await act(async () => fireEvent.click(screen.getByTestId("voice-compact-dismiss")));
+
+    // Chat mic (another agent's chat): greyed too, the notice in its call bar.
+    r.rerender(<Shell env={h.env} page={OTHER_CHAT} />);
+    const chatMic = await screen.findByTestId("voice-mic-button");
+    expect(chatMic).toHaveAttribute("aria-disabled", "true");
+    await act(async () => fireEvent.click(chatMic));
+    expect(screen.getByTestId("voice-error")).toHaveTextContent(notice);
+
+    expect(gum).not.toHaveBeenCalled();
+    expect(h.mintSession).not.toHaveBeenCalled();
+    expect(h.pcs).toHaveLength(0);
   });
 
   it("while a call runs, the mic opens that call's chat instead of a second call", async () => {

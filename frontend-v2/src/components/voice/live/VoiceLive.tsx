@@ -20,8 +20,10 @@
  * - Cost and brakes (voice PR 6): the bar shows the call's elapsed time next
  *   to the state word. After a stretch of silence a notice ("Stille — Auflegen
  *   in 15 s") replaces the state word and a soft tone plays; any speech
- *   clears it. With today's budget used up the mic is greyed and says so —
- *   still tappable, so the operator reads why (MC refuses the call).
+ *   clears it. With today's budget used up the mic is greyed (crossed-out
+ *   icon, aria-disabled) and a tap starts no call and asks for no
+ *   microphone: the bar only says "Tagesbudget erreicht — wieder ab <Uhrzeit>"
+ *   (live finding 14.10.: the title alone is invisible on a phone).
  */
 
 import { type ReactNode, useEffect, useRef, useState } from "react";
@@ -35,6 +37,7 @@ import {
   CallClock,
   VoiceCallCompact,
   errorText,
+  useBudgetResetTime,
   VoiceLiveCallProvider,
   useVoiceLiveCall,
   type VoiceLiveCallContextValue,
@@ -62,25 +65,31 @@ export function VoiceMicButton({
   const t = useTranslations("voiceLive");
   const label = !secure ? t("micInsecure") : budgetReached ? t("micBudgetReached") : t("micStart", { name: agentName });
   const dim = !secure || budgetReached;
+  // Not `disabled`: a disabled button on a phone explains nothing. The tap
+  // stays, but the hook ends it at once with the budget notice (no call).
   return (
     <button
       type="button"
       onClick={onStart}
       aria-label={label}
+      aria-disabled={budgetReached || undefined}
       title={label}
       data-testid="voice-mic-button"
       data-secure={secure}
       data-budget-reached={budgetReached}
-      className="shrink-0 inline-flex items-center justify-center w-11 h-11 md:w-8 md:h-8 rounded-full cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
+      className={`shrink-0 inline-flex items-center justify-center w-11 h-11 md:w-8 md:h-8 rounded-full transition-colors ${
+        budgetReached ? "cursor-not-allowed" : "cursor-pointer hover:bg-[var(--color-bg-hover)]"
+      }`}
       style={{ color: dim ? C.textDim : C.textSecondary }}
     >
-      <Mic size={17} />
+      {budgetReached ? <MicOff size={17} data-testid="voice-mic-off-icon" /> : <Mic size={17} />}
     </button>
   );
 }
 
 export function VoiceCallBar({ call, agentName }: { call: VoiceLiveCall; agentName: string }) {
   const t = useTranslations("voiceLive");
+  const resetTime = useBudgetResetTime();
   const listRef = useRef<HTMLDivElement>(null);
   const lineCount = call.transcript.length;
   const lastText = call.transcript[lineCount - 1]?.text ?? "";
@@ -176,7 +185,7 @@ export function VoiceCallBar({ call, agentName }: { call: VoiceLiveCall; agentNa
       {isError ? (
         <div className="flex items-center gap-2 px-3 py-2" role="alert" data-testid="voice-error" data-error={call.error}>
           <div className="flex-1 text-sm" style={{ color: C.textPrimary }}>
-            {errorText(t, call)}
+            {errorText(t, call, resetTime)}
           </div>
           {isRetryable(call.error!) && (
             <button

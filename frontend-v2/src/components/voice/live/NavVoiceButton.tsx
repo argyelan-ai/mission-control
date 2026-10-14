@@ -12,13 +12,14 @@
  *
  * While a call runs (with any agent) the mic shows it; a tap opens that
  * call's chat, where the call docks — it never starts a second call.
- * With today's voice budget used up (voice PR 6) it is greyed and says so;
- * a tap still tries, and MC's refusal shows in the call bar.
+ * With today's voice budget used up (voice PR 6) it is greyed (crossed-out
+ * icon, aria-disabled); a tap starts no call and asks for no microphone, the
+ * call bar only says "Tagesbudget erreicht — wieder ab <Uhrzeit>".
  */
 
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
-import { Mic } from "lucide-react";
+import { Mic, MicOff } from "lucide-react";
 import { C } from "@/lib/colors";
 import { chatEntryHref } from "@/lib/chatHistory";
 import { VoiceButton } from "@/components/voice/VoiceWidget";
@@ -64,12 +65,15 @@ export function NavVoiceButton({
       type="button"
       onClick={onClick}
       aria-label={label}
+      aria-disabled={budgetReached || undefined}
       title={label}
       data-testid="nav-voice-button"
       data-target={lead.agentId}
       data-active={callTarget !== null}
       data-budget-reached={budgetReached}
-      className="flex items-center justify-center rounded-full cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
+      className={`flex items-center justify-center rounded-full transition-colors ${
+        budgetReached ? "cursor-not-allowed" : "cursor-pointer hover:bg-[var(--color-bg-hover)]"
+      }`}
       style={{
         width: size,
         height: size,
@@ -84,7 +88,11 @@ export function NavVoiceButton({
         color: callTarget ? C.textPrimary : budgetReached ? C.textDim : "var(--color-text-secondary)",
       }}
     >
-      <Mic size={Math.round(size * 0.5)} />
+      {budgetReached ? (
+        <MicOff size={Math.round(size * 0.5)} data-testid="nav-voice-off-icon" />
+      ) : (
+        <Mic size={Math.round(size * 0.5)} />
+      )}
     </button>
   );
 }
