@@ -173,14 +173,13 @@ class Settings(BaseSettings):
     # Cost and brakes (voice PR 6). Prices in USD per 1M tokens of
     # voice_live_model; MC computes each call's cost from the usage OpenAI
     # reports (services/voice_live_usage.py). Audio in/out and cached input:
-    # OpenAI price list for gpt-realtime-2.1, checked 12.10.2026. Text in/out:
-    # gpt-realtime list price, not re-checked for 2.1 (text is a small share
-    # of a voice call) — override via env when OpenAI changes prices.
+    # OpenAI price list for gpt-realtime-2.1, checked 14.10.2026 (text out is
+    # 24, not gpt-realtime's 16) — override via env when OpenAI changes prices.
     voice_live_price_audio_in_per_m: float = 32.0
     voice_live_price_audio_out_per_m: float = 64.0
     voice_live_price_cached_in_per_m: float = 0.40
     voice_live_price_text_in_per_m: float = 4.0
-    voice_live_price_text_out_per_m: float = 16.0
+    voice_live_price_text_out_per_m: float = 24.0
     # Hang up after this long with nobody speaking (operator nor voice); a
     # soft tone + notice voice_live_idle_warn_s before.
     voice_live_idle_hangup_s: int = 120
