@@ -15,6 +15,11 @@
 - ``POST /api/v1/voice/live/progress`` — one redacted context line for the
   voice about the agent's progress (voice PR 3). The browser watches the
   chat's live stream and says WHEN; ``services/voice_progress.py`` says WHAT.
+- ``POST /api/v1/voice/live/usage`` — the call's running token totals from
+  OpenAI's ``response.done`` (voice PR 6). MC books the cost and answers
+  whether the call must end now (daily budget, max length).
+- ``GET  /api/v1/voice/live/usage/summary`` — today's and the last 7 days'
+  minutes and cost, for Insights. See ``services/voice_live_usage.py``.
 
 Admin-only, like typing into the chat (``agent_chat.py`` chat/input): the
 voice talks on the operator's behalf. Separate from ``routers/voice.py``
@@ -38,7 +43,7 @@ from app.auth import Role, require_role
 from app.database import get_session
 from app.models.agent import Agent
 from app.config import settings
-from app.services import voice_live, voice_live_tools, voice_progress
+from app.services import voice_live, voice_live_tools, voice_live_usage, voice_progress
 from app.services.voice_live_tools import VoiceToolError
 
 logger = logging.getLogger("mc.voice_live")
@@ -46,10 +51,35 @@ logger = logging.getLogger("mc.voice_live")
 router = APIRouter(prefix="/api/v1/voice/live", tags=["voice-live"])
 
 
+class VoiceLiveLimits(BaseModel):
+    """The brakes the browser enforces itself (only it hears the audio)."""
+
+    idle_hangup_s: int
+    idle_warn_s: int
+    max_call_s: int
+
+
+class VoiceLiveBudget(BaseModel):
+    limit_usd: float
+    spent_usd: float
+    reached: bool
+    #: Next local midnight (budget time zone), UTC ISO.
+    resets_at: str
+
+
 class VoiceLiveConfig(BaseModel):
     enabled: bool
     model: str
     voice: str
+    limits: VoiceLiveLimits
+    budget: VoiceLiveBudget
+
+
+async def _budget(session: AsyncSession) -> VoiceLiveBudget:
+    b = await voice_live_usage.budget_state(session)
+    return VoiceLiveBudget(
+        limit_usd=b.limit_usd, spent_usd=round(b.spent_usd, 4), reached=b.reached, resets_at=b.resets_at.isoformat()
+    )
 
 
 class VoiceLiveSessionBody(BaseModel):
@@ -65,6 +95,7 @@ class VoiceLiveSession(BaseModel):
     calls_url: str
     agent_name: str
     call_ref: str
+    limits: VoiceLiveLimits
 
 
 def _require_enabled() -> None:
@@ -73,10 +104,17 @@ def _require_enabled() -> None:
 
 
 @router.get("/config", response_model=VoiceLiveConfig)
-async def get_config(_user=Depends(require_role(Role.ADMIN))) -> VoiceLiveConfig:
+async def get_config(
+    _user=Depends(require_role(Role.ADMIN)),
+    session: AsyncSession = Depends(get_session),
+) -> VoiceLiveConfig:
     _require_enabled()
     return VoiceLiveConfig(
-        enabled=True, model=settings.voice_live_model, voice=settings.voice_live_voice
+        enabled=True,
+        model=settings.voice_live_model,
+        voice=settings.voice_live_voice,
+        limits=VoiceLiveLimits(**voice_live_usage.limits()),
+        budget=await _budget(session),
     )
 
 
@@ -124,6 +162,10 @@ async def create_session(
     agent = await session.get(Agent, body.agent_id)
     if agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")
+    # Daily budget first: a call over budget never reaches OpenAI.
+    if (await voice_live_usage.budget_state(session)).reached:
+        logger.info("voice_live session refused: daily budget reached")
+        return JSONResponse(status_code=402, content={"detail": {"reason": "budget_reached"}})
     # Settings → Profile "Voice language" (operator request 13.10.2026): an
     # explicit preference overrides the UI locale in ``body.lang`` and also
     # sets the realtime transcription hint, so the voice speaks German even
@@ -135,6 +177,8 @@ async def create_session(
         minted = await voice_live.mint_client_secret(agent.name, lang, transcription_lang)
     except voice_live.VoiceLiveError as exc:
         return JSONResponse(status_code=exc.status, content={"detail": {"reason": exc.reason}})
+    call_ref = voice_live_tools.open_call(agent.id)
+    await voice_live_usage.open_row(session, call_ref, agent.id, agent.name, minted.model)
     return VoiceLiveSession(
         client_secret=minted.client_secret,
         expires_at=minted.expires_at,
@@ -142,7 +186,8 @@ async def create_session(
         voice=minted.voice,
         calls_url=minted.calls_url,
         agent_name=agent.name,
-        call_ref=voice_live_tools.open_call(agent.id),
+        call_ref=call_ref,
+        limits=VoiceLiveLimits(**voice_live_usage.limits()),
     )
 
 
@@ -548,3 +593,110 @@ async def progress_item(
         elapsed_s=body.elapsed_s,
     )
     return VoiceProgressItem(**item)
+
+
+# ── cost and brakes (voice PR 6) ─────────────────────────────────────────
+
+
+class VoiceUsageTotals(_Strict):
+    """The call's running totals, summed by the browser over every
+    ``response.done`` (``response.usage``). Token counts only — the browser
+    never sends a price or a cost."""
+
+    input_text_tokens: int = Field(default=0, ge=0, le=1_000_000_000)
+    input_audio_tokens: int = Field(default=0, ge=0, le=1_000_000_000)
+    cached_text_tokens: int = Field(default=0, ge=0, le=1_000_000_000)
+    cached_audio_tokens: int = Field(default=0, ge=0, le=1_000_000_000)
+    output_text_tokens: int = Field(default=0, ge=0, le=1_000_000_000)
+    output_audio_tokens: int = Field(default=0, ge=0, le=1_000_000_000)
+
+
+class VoiceUsageBody(_Strict):
+    call_ref: str = Field(min_length=1, max_length=128)
+    agent_id: uuid.UUID
+    usage: VoiceUsageTotals
+    #: The browser is ending the call (last report).
+    ended: bool = False
+    end_reason: str = Field(default="", max_length=32, pattern=r"^[a-z_]*$")
+    #: OpenAI's id for the WebRTC call, when the browser could read it from
+    #: the SDP answer's Location header — lets MC hang up server-side.
+    openai_call_id: str | None = Field(default=None, max_length=160, pattern=voice_live_usage.OPENAI_CALL_ID_RE.pattern)
+
+
+class VoiceUsageResult(BaseModel):
+    call_cost_usd: float
+    today_usd: float
+    budget_usd: float
+    #: ``budget_reached`` / ``max_length``: the browser hangs up now.
+    hang_up: Literal["budget_reached", "max_length"] | None = None
+
+
+@router.post("/usage", response_model=VoiceUsageResult)
+async def report_usage(
+    body: VoiceUsageBody,
+    _user=Depends(require_role(Role.ADMIN)),
+    session: AsyncSession = Depends(get_session),
+):
+    """Books one call's usage. Found by the call's handle in the database
+    (not the in-memory call list), so the cost still lands after a backend
+    restart or past the call's tool lifetime."""
+    _require_enabled()
+    row = await voice_live_usage.find_row(session, body.call_ref)
+    if row is None:
+        return _tool_error(VoiceToolError("call_unknown", 403))
+    if row.agent_id != body.agent_id:
+        return _tool_error(VoiceToolError("wrong_agent", 403))
+    result = await voice_live_usage.record_usage(
+        session,
+        row,
+        body.usage.model_dump(),
+        ended=body.ended,
+        end_reason=body.end_reason or None,
+        openai_call_id=body.openai_call_id,
+    )
+    if body.ended:
+        voice_live_usage.cancel_deadline(row.id)
+    elif row.openai_call_id:
+        from app.database import async_session_maker
+
+        voice_live_usage.schedule_deadline(row, async_session_maker)
+    if result.hang_up == "budget_reached" and row.openai_call_id:
+        # Belt and braces: the browser hangs up on this answer; MC ends the
+        # call at OpenAI too, in case the browser does not.
+        await voice_live_usage.hangup_upstream(row.openai_call_id)
+    if result.hang_up:
+        logger.info("voice_live usage: call %s told to hang up (%s)", row.id, result.hang_up)
+    return VoiceUsageResult(
+        call_cost_usd=result.call_cost_usd,
+        today_usd=result.today_usd,
+        budget_usd=result.budget_usd,
+        hang_up=result.hang_up,
+    )
+
+
+class VoiceUsageBucket(BaseModel):
+    calls: int
+    seconds: int
+    cost_usd: float
+
+
+class VoiceUsageSummary(BaseModel):
+    #: The switch is on (a mic exists). History is shown either way.
+    enabled: bool
+    today: VoiceUsageBucket
+    week: VoiceUsageBucket
+    budget_usd: float
+    budget_reached: bool
+    #: Measured $/min over the last 7 days (None below one minute of calls).
+    per_minute_usd: float | None
+
+
+@router.get("/usage/summary", response_model=VoiceUsageSummary)
+async def usage_summary(
+    _user=Depends(require_role(Role.ADMIN)),
+    session: AsyncSession = Depends(get_session),
+) -> VoiceUsageSummary:
+    """Insights' "Voice" row. Not behind the switch: what was spent stays
+    visible after the voice is turned off."""
+    data = await voice_live_usage.summary(session)
+    return VoiceUsageSummary(enabled=voice_live.is_enabled(), **data)

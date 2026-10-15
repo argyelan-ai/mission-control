@@ -97,3 +97,4 @@ __all__ = [
     "BrowserSession",
 ]
 from app.models.runtime_token import RuntimeTokenCounter, RuntimeTokenHour  # noqa: F401
+from app.models.voice_live_call import VoiceLiveCall  # noqa: F401

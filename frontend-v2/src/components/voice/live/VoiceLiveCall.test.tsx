@@ -10,7 +10,9 @@ import { api } from "@/lib/api";
 import type { ProgressSnapshot } from "./progress";
 import type { VoiceLiveEnv } from "./useVoiceLive";
 import { resetVoiceLiveConfigCache } from "./useVoiceLiveConfig";
-import { FloatingVoiceCall, VoiceLiveCallProvider, resetLeadTargetCache } from "./VoiceLiveCall";
+import { FloatingVoiceCall, VoiceCallCompact, VoiceLiveCallProvider, resetLeadTargetCache } from "./VoiceLiveCall";
+import type { VoiceLiveCall } from "./useVoiceLive";
+import { INITIAL_VOICE_STATE } from "./voiceLiveCore";
 import { NavVoiceButton } from "./NavVoiceButton";
 import { VoiceLiveDock } from "./VoiceLive";
 
@@ -167,6 +169,10 @@ async function startFromNav(h: ReturnType<typeof harness>) {
   return h.pcs[0];
 }
 
+function inThreeHours(): string {
+  return new Date(Date.now() + 3 * 3600_000).toISOString();
+}
+
 beforeEach(() => {
   resetVoiceLiveConfigCache();
   resetLeadTargetCache();
@@ -191,6 +197,65 @@ describe("the navigation mic talks to the lead agent", () => {
     await startFromNav(h);
     expect(h.mintSession).toHaveBeenCalledTimes(1);
     expect(h.mintSession.mock.calls[0][0]).toBe("lead-1");
+  });
+
+  it("says 'daily budget reached' when MC reports it, and learns it after a call without a reload (voice PR 6)", async () => {
+    const h = harness();
+    render(<Shell env={h.env} page={TASKS} />);
+    const mic = await screen.findByTestId("nav-voice-button");
+    expect(mic).toHaveAttribute("data-budget-reached", "false");
+    // The call used up the budget; MC says so on the next config read.
+    config.mockResolvedValue({
+      enabled: true,
+      model: "gpt-realtime-2.1",
+      voice: "marin",
+      budget: { limit_usd: 5, spent_usd: 5.2, reached: true, resets_at: inThreeHours() },
+    });
+    await startFromNav(h);
+    await act(async () => fireEvent.click(screen.getByTestId("voice-compact-hangup")));
+    await waitFor(() => expect(screen.getByTestId("nav-voice-button")).toHaveAttribute("data-budget-reached", "true"));
+    expect(screen.getByTestId("nav-voice-button")).toHaveAccessibleName("Daily budget reached");
+    // The next tap starts nothing: still exactly the one session from before.
+    await act(async () => fireEvent.click(screen.getByTestId("nav-voice-button")));
+    expect(h.mintSession).toHaveBeenCalledTimes(1);
+    expect(h.pcs).toHaveLength(1);
+  });
+
+  it("budget reached: every mic is greyed, a tap asks for no mic and starts no call, the bar says until when (live finding 14.10.)", async () => {
+    const resetsAt = inThreeHours();
+    config.mockResolvedValue({
+      enabled: true,
+      model: "gpt-realtime-2.1",
+      voice: "marin",
+      budget: { limit_usd: 5, spent_usd: 5.2, reached: true, resets_at: resetsAt },
+    });
+    const local = new Date(resetsAt).toLocaleTimeString("en", { hour: "2-digit", minute: "2-digit" });
+    const notice = `Daily budget reached — available again at ${local}.`;
+    const gum = vi.fn(async () => ({ getTracks: () => [] }) as unknown as MediaStream);
+    const h = harness();
+    h.env.getUserMedia = gum;
+
+    // Navigation mic on a page without a chat: the notice floats.
+    const r = render(<Shell env={h.env} page={TASKS} />);
+    const nav = await screen.findByTestId("nav-voice-button");
+    await waitFor(() => expect(nav).toHaveAttribute("data-budget-reached", "true"));
+    expect(nav).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByTestId("nav-voice-off-icon")).toBeInTheDocument();
+    await act(async () => fireEvent.click(nav));
+    expect(screen.getByTestId("voice-call-compact")).toHaveAttribute("data-status", "error");
+    expect(screen.getByTestId("voice-call-compact")).toHaveTextContent(notice);
+    await act(async () => fireEvent.click(screen.getByTestId("voice-compact-dismiss")));
+
+    // Chat mic (another agent's chat): greyed too, the notice in its call bar.
+    r.rerender(<Shell env={h.env} page={OTHER_CHAT} />);
+    const chatMic = await screen.findByTestId("voice-mic-button");
+    expect(chatMic).toHaveAttribute("aria-disabled", "true");
+    await act(async () => fireEvent.click(chatMic));
+    expect(screen.getByTestId("voice-error")).toHaveTextContent(notice);
+
+    expect(gum).not.toHaveBeenCalled();
+    expect(h.mintSession).not.toHaveBeenCalled();
+    expect(h.pcs).toHaveLength(0);
   });
 
   it("while a call runs, the mic opens that call's chat instead of a second call", async () => {
@@ -300,6 +365,39 @@ describe("the call survives navigation", () => {
     await waitFor(() => expect(h.mintSession).toHaveBeenCalledTimes(1));
     expect(h.mintSession.mock.calls[0][0]).toBe("dev-1");
     expect(screen.getByTestId("voice-call-bar")).toBeInTheDocument();
+  });
+});
+
+describe("compact bar (voice PR 6)", () => {
+  const call = (over: Partial<VoiceLiveCall>): VoiceLiveCall => ({
+    ...INITIAL_VOICE_STATE,
+    status: "listening",
+    connectedAt: 1_000,
+    start: async () => undefined,
+    hangUp: () => undefined,
+    dismiss: () => undefined,
+    toggleMute: () => undefined,
+    agentId: "lead-1",
+    now: () => 1_000 + 125_000,
+    ...over,
+  });
+
+  it("shows the elapsed time and a short idle warning that fits a phone row", () => {
+    render(<VoiceCallCompact call={call({ idleWarning: true })} target={{ agentId: "lead-1", agentName: "Chief" }} />);
+    expect(screen.getByTestId("voice-elapsed")).toHaveTextContent("2:05");
+    expect(screen.getByTestId("voice-compact-state")).toHaveTextContent("Hangs up in 15 s");
+  });
+
+  it("budget error in the compact row: honest text, no retry", () => {
+    render(
+      <VoiceCallCompact
+        call={call({ status: "error", error: "budget_reached" })}
+        target={{ agentId: "lead-1", agentName: "Chief" }}
+      />,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent("Daily voice budget reached.");
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+    expect(screen.getAllByRole("button")).toHaveLength(1); // only close
   });
 });
 

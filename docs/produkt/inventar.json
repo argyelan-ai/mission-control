@@ -299,6 +299,7 @@
     "GET /api/v1/vault/topics",
     "GET /api/v1/voice/live/config",
     "GET /api/v1/voice/live/default-target",
+    "GET /api/v1/voice/live/usage/summary",
     "GET /health",
     "PATCH /api/v1/agent-templates/{template_id}",
     "PATCH /api/v1/agent/agents/{target_agent_id}/plugins",
@@ -560,6 +561,7 @@
     "POST /api/v1/voice/live/progress",
     "POST /api/v1/voice/live/session",
     "POST /api/v1/voice/live/tool",
+    "POST /api/v1/voice/live/usage",
     "POST /api/v1/voice/token",
     "PUT /api/v1/agent/config/soul_md",
     "PUT /api/v1/agent/groups/{group_id}/document",
@@ -665,7 +667,8 @@
     "threads",
     "user_settings",
     "user_thread_cursor",
-    "users"
+    "users",
+    "voice_live_calls"
   ],
   "version": 1
 }

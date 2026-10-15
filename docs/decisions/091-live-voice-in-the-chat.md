@@ -98,8 +98,20 @@
 
 ### Negative
 - Cloud cost per minute (audio tokens; rough estimate $0.05–0.15 per talking
-  minute, to be measured in PR 6). Until PR 6: only a 20-minute cap per call
-  in the browser; no server-side cap, no daily budget yet.
+  minute). Since PR 6 MC measures it: the browser posts each call's token
+  totals from OpenAI's `response.done`, MC books the cost in
+  `voice_live_calls` with the prices in settings (`VOICE_LIVE_PRICE_*`), and
+  Insights shows today, 7 days and the measured $/min. The measured value is
+  added here after two weeks of use.
+- Brakes (PR 6, all env settings): hang up after 120 s of silence on both
+  sides (soft tone + notice 15 s before); max 20 min per call — the browser
+  hangs up, MC refuses the call's tools afterwards and, when the browser can
+  read OpenAI's call id from the SDP answer, MC hangs up at OpenAI itself
+  (`/v1/realtime/calls/{id}/hangup`); daily budget $5.00 (local midnight
+  Europe/Zurich): reached = new calls refused before OpenAI is asked, a
+  running call hangs up, the mic says "Tagesbudget erreicht". OpenAI quota
+  or rate limits end the call with an honest "OpenAI-Guthaben/Limit
+  erreicht".
 - The operator's speech goes to OpenAI. From PR 3 short, redacted progress
   digests do too; never tool output, files or keys.
 - Mic only over HTTPS (the browser's rule): via the tailnet HTTPS address.

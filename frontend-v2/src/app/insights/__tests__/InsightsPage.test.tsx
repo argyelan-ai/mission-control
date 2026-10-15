@@ -33,6 +33,7 @@ beforeEach(() => {
   vi.spyOn(api.intelligence, "reports").mockResolvedValue([]);
   vi.spyOn(api.usage, "pages").mockResolvedValue({ generated_at: "", weeks: [] });
   vi.spyOn(api.heads, "list").mockRejectedValue(new Error("heads_disabled"));
+  vi.spyOn(api.voiceLive, "usageSummary").mockRejectedValue(new Error("API 404"));
 });
 
 describe("InsightsPage", () => {
@@ -63,6 +64,54 @@ describe("InsightsPage", () => {
     expect(await screen.findByText("Could not load the usage numbers.")).toBeInTheDocument();
     expect(screen.getByTestId("details-models")).toBeInTheDocument();
     expect(await screen.findByTestId("done-totals")).toBeInTheDocument();
+  });
+
+  it("shows the live voice's minutes and cost after the local boxes (voice PR 6)", async () => {
+    vi.spyOn(api.voiceLive, "usageSummary").mockResolvedValue({
+      enabled: true,
+      today: { calls: 2, seconds: 720, cost_usd: 0.84 },
+      week: { calls: 9, seconds: 2820, cost_usd: 3.1 },
+      budget_usd: 5,
+      budget_reached: false,
+      per_minute_usd: 0.066,
+    });
+    const { container } = renderPage();
+    await screen.findByTestId("voice-usage-today");
+    const regions = [...container.querySelectorAll("[data-region]")].map((el) => el.getAttribute("data-region"));
+    expect(regions).toEqual(["hero", "heatmap", "sources", "trend", "box", "voice", "done", "details"]);
+    expect(screen.getByTestId("voice-usage-today")).toHaveTextContent("Today12 min$0.84");
+    expect(screen.getByTestId("voice-usage-week")).toHaveTextContent("7 days47 min$3.10");
+    expect(screen.getByTestId("voice-usage-budget")).toHaveTextContent("Daily budget $5.00");
+    expect(screen.getByTestId("voice-usage-per-minute")).toHaveTextContent("$0.07 per call minute");
+  });
+
+  it("says when today's voice budget is used up", async () => {
+    vi.spyOn(api.voiceLive, "usageSummary").mockResolvedValue({
+      enabled: true,
+      today: { calls: 5, seconds: 3000, cost_usd: 5.02 },
+      week: { calls: 5, seconds: 3000, cost_usd: 5.02 },
+      budget_usd: 5,
+      budget_reached: true,
+      per_minute_usd: 0.1,
+    });
+    renderPage();
+    expect(await screen.findByTestId("voice-usage-budget")).toHaveTextContent("used up today");
+  });
+
+  it("no voice row while the voice is off and nothing was spent", async () => {
+    vi.spyOn(api.voiceLive, "usageSummary").mockResolvedValue({
+      enabled: false,
+      today: { calls: 0, seconds: 0, cost_usd: 0 },
+      week: { calls: 0, seconds: 0, cost_usd: 0 },
+      budget_usd: 5,
+      budget_reached: false,
+      per_minute_usd: null,
+    });
+    renderPage();
+    await screen.findByTestId("done-totals");
+    await waitFor(() => expect(api.voiceLive.usageSummary).toHaveBeenCalled());
+    expect(screen.queryByTestId("voice-usage-empty")).toBeNull();
+    expect(document.querySelector('[data-region="voice"]')).toBeNull();
   });
 
   it("leaves the heads row out while the launcher is off", async () => {

@@ -3,13 +3,13 @@
  * through a fake browser (getUserMedia, RTCPeerConnection, fetch) plus the
  * UI states and the two tools relayed to MC.
  */
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/lib/api";
 import { VoiceLiveDock } from "./VoiceLive";
 import type { StateEvent, TimelineChatEvent } from "@/lib/chatTypes";
 import { FINAL_SETTLE_MS, type ProgressSnapshot } from "./progress";
-import { PROGRESS_TICK_MS, type VoiceLiveEnv } from "./useVoiceLive";
+import { PROGRESS_TICK_MS, USAGE_POST_MS, type VoiceLiveEnv } from "./useVoiceLive";
 import { resetVoiceLiveConfigCache } from "./useVoiceLiveConfig";
 import { DISCONNECT_GRACE_MS, MAX_CALL_MS, MUTED_MAX_MS } from "./voiceLiveCore";
 
@@ -291,7 +291,7 @@ describe("error states", () => {
     renderDock(h.env);
     const micBtn = await screen.findByTestId("voice-mic-button");
     await act(async () => fireEvent.click(micBtn));
-    expect(screen.getByTestId("voice-error")).toHaveTextContent("No OpenAI credit left for the voice.");
+    expect(screen.getByTestId("voice-error")).toHaveTextContent("OpenAI credit/limit reached.");
     expect(h.trackStop).toHaveBeenCalled();
     expect(screen.queryByTestId("voice-retry")).toBeNull();
   });
@@ -1001,5 +1001,322 @@ describe("mute (voice PR 4)", () => {
     act(() => h.pcs[1].dc.open());
     expect(screen.getByTestId("voice-mute")).toHaveAttribute("aria-pressed", "false");
     expect(screen.getByTestId("voice-call-bar")).toHaveAttribute("data-muted", "false");
+  });
+});
+
+// ── cost and brakes (voice PR 6) ─────────────────────────────────────────
+
+function usageHarness(over: Partial<VoiceLiveEnv> = {}) {
+  const reportUsage = vi.fn(async () => ({ call_cost_usd: 0.01, today_usd: 0.5, budget_usd: 5, hang_up: null }));
+  const tone = { play: vi.fn(), close: vi.fn() };
+  const h = harness({
+    reportUsage: reportUsage as unknown as VoiceLiveEnv["reportUsage"],
+    createWarnTone: () => tone,
+    postOffer: vi.fn(
+      async () =>
+        new Response("v=0 answer", { status: 201, headers: { Location: "/v1/realtime/calls/rtc_test1" } }),
+    ),
+    mintSession: vi.fn(async () => ({
+      client_secret: "ek_test",
+      expires_at: 1,
+      model: "gpt-realtime-2.1",
+      voice: "marin",
+      calls_url: "https://api.openai.com/v1/realtime/calls",
+      agent_name: "Boss",
+      call_ref: "ref-1",
+      limits: { idle_hangup_s: 120, idle_warn_s: 15, max_call_s: 600 },
+    })),
+    ...over,
+  });
+  const used = (over.reportUsage as unknown as typeof reportUsage | undefined) ?? reportUsage;
+  return { ...h, reportUsage: used, tone };
+}
+
+function responseDone(usage: object) {
+  return { type: "response.done", response: { status: "completed", usage } };
+}
+
+const USAGE_A = {
+  input_tokens: 1200,
+  output_tokens: 300,
+  input_token_details: {
+    text_tokens: 1000,
+    audio_tokens: 200,
+    cached_tokens: 800,
+    cached_tokens_details: { text_tokens: 800, audio_tokens: 0 },
+  },
+  output_token_details: { text_tokens: 50, audio_tokens: 250 },
+};
+
+/** Run the newest pending progress tick (it also flushes usage). */
+function tick(h: Harness) {
+  const t = [...h.timers].reverse().find((x) => x.ms === PROGRESS_TICK_MS && !x.cleared && !x.ran);
+  if (t) {
+    t.ran = true;
+    act(() => t.fn());
+  }
+}
+
+/** The newest pending timer with this delay. */
+function timer(h: Harness, ms: number) {
+  return [...h.timers].reverse().find((x) => x.ms === ms && !x.cleared && !x.ran);
+}
+
+describe("cost and brakes (voice PR 6)", () => {
+  it("sums response.done usage per call and books it in MC at most every 10 s, with OpenAI's call id", async () => {
+    const h = usageHarness();
+    const pc = await startCall(h);
+    act(() => pc.dc.open());
+    act(() => pc.dc.emit(responseDone(USAGE_A)));
+    act(() => pc.dc.emit(responseDone(USAGE_A)));
+    tick(h); // too early: nothing yet
+    expect(h.reportUsage).not.toHaveBeenCalled();
+    h.clock.t += USAGE_POST_MS;
+    tick(h);
+    expect(h.reportUsage).toHaveBeenCalledTimes(1);
+    expect(h.reportUsage).toHaveBeenCalledWith({
+      call_ref: "ref-1",
+      agent_id: "agent-1",
+      openai_call_id: "rtc_test1",
+      usage: {
+        input_text_tokens: 2000,
+        input_audio_tokens: 400,
+        cached_text_tokens: 1600,
+        cached_audio_tokens: 0,
+        output_text_tokens: 100,
+        output_audio_tokens: 500,
+      },
+    });
+    // Nothing new → no post.
+    h.clock.t += USAGE_POST_MS;
+    tick(h);
+    expect(h.reportUsage).toHaveBeenCalledTimes(1);
+  });
+
+  it("the end of every call is booked — here a hang-up", async () => {
+    const h = usageHarness();
+    const pc = await startCall(h);
+    act(() => pc.dc.open());
+    act(() => pc.dc.emit(responseDone(USAGE_A)));
+    fireEvent.click(screen.getByTestId("voice-hangup"));
+    expect(h.reportUsage).toHaveBeenLastCalledWith(
+      expect.objectContaining({ ended: true, end_reason: "hangup", usage: expect.objectContaining({ output_audio_tokens: 250 }) }),
+    );
+  });
+
+  it("S10 quota mid-call: honest 'credit/limit' message, clean hang-up, the call still booked", async () => {
+    const h = usageHarness();
+    const pc = await startCall(h);
+    act(() => pc.dc.open());
+    act(() => pc.dc.emit(responseDone(USAGE_A)));
+    act(() => pc.dc.emit({ type: "error", error: { type: "insufficient_quota", code: "insufficient_quota" } }));
+    expect(screen.getByTestId("voice-error")).toHaveTextContent("OpenAI credit/limit reached.");
+    await waitFor(() => expect(pc.close).toHaveBeenCalled());
+    expect(h.trackStop).toHaveBeenCalled();
+    expect(h.reportUsage).toHaveBeenLastCalledWith(expect.objectContaining({ ended: true, end_reason: "no_credits" }));
+  });
+
+  it("S10 quota reported only as a failed response (output_creation_failed) ends the call the same way", async () => {
+    const h = usageHarness();
+    const pc = await startCall(h);
+    act(() => pc.dc.open());
+    act(() =>
+      pc.dc.emit({
+        type: "response.done",
+        response: { status: "failed", status_details: { error: { code: "output_creation_failed" } } },
+      }),
+    );
+    expect(screen.getByTestId("voice-error")).toHaveAttribute("data-error", "no_credits");
+    await waitFor(() => expect(pc.close).toHaveBeenCalled());
+  });
+
+  it("S9 OpenAI 429 on the offer: quota and rate limit told apart from the body", async () => {
+    const quota = usageHarness({
+      postOffer: vi.fn(
+        async () => new Response(JSON.stringify({ error: { code: "insufficient_quota" } }), { status: 429 }),
+      ),
+    });
+    const r1 = renderDock(quota.env);
+    {
+      const micBtn = await screen.findByTestId("voice-mic-button");
+      await act(async () => fireEvent.click(micBtn));
+    }
+    await waitFor(() => expect(screen.getByTestId("voice-error")).toHaveAttribute("data-error", "no_credits"));
+    expect(quota.trackStop).toHaveBeenCalled();
+    r1.unmount();
+
+    const busy = usageHarness({
+      postOffer: vi.fn(
+        async () => new Response(JSON.stringify({ error: { code: "rate_limit_exceeded" } }), { status: 429 }),
+      ),
+    });
+    renderDock(busy.env);
+    {
+      const micBtn = await screen.findByTestId("voice-mic-button");
+      await act(async () => fireEvent.click(micBtn));
+    }
+    await waitFor(() => expect(screen.getByTestId("voice-error")).toHaveAttribute("data-error", "rate_limited"));
+    expect(screen.getByTestId("voice-error")).toHaveTextContent("OpenAI limit reached.");
+  });
+
+  it("S11 silence: soft tone + notice before, hang-up after 120 s; speech clears the warning", async () => {
+    const h = usageHarness();
+    const pc = await startCall(h);
+    act(() => pc.dc.open());
+    const warn = timer(h, 105_000)!;
+    expect(warn).toBeTruthy();
+    act(() => {
+      warn.ran = true;
+      warn.fn();
+    });
+    expect(screen.getByTestId("voice-call-bar")).toHaveAttribute("data-idle-warning", "true");
+    expect(screen.getByTestId("voice-state")).toHaveTextContent("Silence — hanging up in 15 s");
+    expect(h.tone.play).toHaveBeenCalledTimes(1);
+
+    // The operator says something: warning gone, the clock starts over.
+    act(() => pc.dc.emit({ type: "input_audio_buffer.speech_started" }));
+    expect(screen.getByTestId("voice-call-bar")).toHaveAttribute("data-idle-warning", "false");
+    expect(timer(h, 120_000)).toBeUndefined(); // nothing armed while someone talks
+    act(() => pc.dc.emit({ type: "input_audio_buffer.speech_stopped" }));
+    const hang = timer(h, 120_000)!;
+    act(() => {
+      hang.ran = true;
+      hang.fn();
+    });
+    expect(screen.getByTestId("voice-error")).toHaveAttribute("data-error", "idle");
+    expect(screen.getByTestId("voice-error")).toHaveTextContent("Hung up after 120 s of silence.");
+    expect(screen.getByTestId("voice-retry")).toBeInTheDocument();
+    expect(pc.close).toHaveBeenCalled();
+    expect(h.tone.close).toHaveBeenCalled();
+    expect(h.reportUsage).toHaveBeenLastCalledWith(expect.objectContaining({ ended: true, end_reason: "idle" }));
+  });
+
+  it("S11 the voice talking counts as activity: no hang-up while it plays", async () => {
+    const h = usageHarness();
+    const pc = await startCall(h);
+    act(() => pc.dc.open());
+    act(() => pc.dc.emit({ type: "output_audio_buffer.started" }));
+    expect(timer(h, 120_000)).toBeUndefined();
+    expect(timer(h, 105_000)).toBeUndefined();
+  });
+
+  it("S12 budget used up during a call: MC says hang up → 'daily budget' message, no retry", async () => {
+    const reportUsage = vi.fn(async () => ({ call_cost_usd: 0.4, today_usd: 5.02, budget_usd: 5, hang_up: "budget_reached" }));
+    const h = usageHarness({ reportUsage: reportUsage as unknown as VoiceLiveEnv["reportUsage"] });
+    const pc = await startCall(h);
+    act(() => pc.dc.open());
+    act(() => pc.dc.emit(responseDone(USAGE_A)));
+    h.clock.t += USAGE_POST_MS;
+    tick(h);
+    await waitFor(() => expect(screen.getByTestId("voice-error")).toHaveAttribute("data-error", "budget_reached"));
+    expect(screen.getByTestId("voice-error")).toHaveTextContent("Daily voice budget reached.");
+    expect(screen.queryByTestId("voice-retry")).toBeNull();
+    expect(pc.close).toHaveBeenCalled();
+    expect(reportUsage).toHaveBeenLastCalledWith(expect.objectContaining({ ended: true, end_reason: "budget_reached" }));
+  });
+
+  it("S12 max length from MC: the session's limit drives the timer; MC's 'max_length' answer ends it too", async () => {
+    const h = usageHarness();
+    const pc = await startCall(h);
+    act(() => pc.dc.open());
+    const cap = timer(h, 600_000)!;
+    expect(cap).toBeTruthy();
+    act(() => cap.fn());
+    expect(screen.getByTestId("voice-error")).toHaveAttribute("data-error", "max_length");
+    expect(screen.getByTestId("voice-error")).toHaveTextContent("Call ended after 10 minutes.");
+  });
+
+  it("S12 budget reached before the call: MC refuses, honest message, no WebRTC", async () => {
+    const h = usageHarness({
+      mintSession: vi.fn(async () => {
+        throw new Error('API 402: {"detail":{"reason":"budget_reached"}}');
+      }),
+    });
+    renderDock(h.env);
+    {
+      const micBtn = await screen.findByTestId("voice-mic-button");
+      await act(async () => fireEvent.click(micBtn));
+    }
+    expect(screen.getByTestId("voice-error")).toHaveAttribute("data-error", "budget_reached");
+    expect(h.pcs).toHaveLength(0);
+    expect(h.trackStop).toHaveBeenCalled();
+  });
+
+  it("budget reached: the mic is greyed, a tap starts no call and asks for no mic, the bar says until when", async () => {
+    const resetsAt = new Date(Date.now() + 3 * 3600_000).toISOString();
+    mockRequest.mockResolvedValue({
+      enabled: true,
+      model: "gpt-realtime-2.1",
+      voice: "marin",
+      budget: { limit_usd: 5, spent_usd: 5.1, reached: true, resets_at: resetsAt },
+    });
+    const gum = vi.fn(async () => ({ getTracks: () => [] }) as unknown as MediaStream);
+    const mint = vi.fn(async () => {
+      throw new Error("must not mint");
+    });
+    const h = usageHarness({ getUserMedia: gum, mintSession: mint as unknown as VoiceLiveEnv["mintSession"] });
+    renderDock(h.env);
+    const mic = await screen.findByTestId("voice-mic-button");
+    await waitFor(() => expect(mic).toHaveAttribute("data-budget-reached", "true"));
+    expect(mic).toHaveAccessibleName("Daily budget reached");
+    expect(mic).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByTestId("voice-mic-off-icon")).toBeInTheDocument();
+    await act(async () => fireEvent.click(mic));
+    const err = screen.getByTestId("voice-error");
+    expect(err).toHaveAttribute("data-error", "budget_reached");
+    const local = new Date(resetsAt).toLocaleTimeString("en", { hour: "2-digit", minute: "2-digit" });
+    expect(err).toHaveTextContent(`Daily budget reached — available again at ${local}.`);
+    expect(screen.queryByTestId("voice-retry")).toBeNull();
+    expect(gum).not.toHaveBeenCalled();
+    expect(mint).not.toHaveBeenCalled();
+    expect(h.pcs).toHaveLength(0);
+  });
+
+  it("budget reached but its reset time has passed: the mic works again (a stale config must not lock it)", async () => {
+    mockRequest.mockResolvedValue({
+      enabled: true,
+      model: "gpt-realtime-2.1",
+      voice: "marin",
+      budget: { limit_usd: 5, spent_usd: 5.1, reached: true, resets_at: new Date(Date.now() - 60_000).toISOString() },
+    });
+    const h = usageHarness();
+    const pc = await startCall(h); // a real call: mic, session, WebRTC
+    expect(pc).toBeTruthy();
+  });
+
+  it("max length text uses the plural: 1 minute / 2 minutes", async () => {
+    for (const [maxS, text] of [
+      [60, "Call ended after 1 minute."],
+      [120, "Call ended after 2 minutes."],
+    ] as const) {
+      resetVoiceLiveConfigCache();
+      const h = usageHarness({
+        mintSession: vi.fn(async () => ({
+          client_secret: "ek_test",
+          expires_at: 1,
+          model: "gpt-realtime-2.1",
+          voice: "marin",
+          calls_url: "https://api.openai.com/v1/realtime/calls",
+          agent_name: "Boss",
+          call_ref: "ref-1",
+          limits: { idle_hangup_s: 900, idle_warn_s: 15, max_call_s: maxS },
+        })),
+      });
+      const pc = await startCall(h);
+      act(() => pc.dc.open());
+      act(() => timer(h, maxS * 1000)!.fn());
+      expect(screen.getByTestId("voice-error")).toHaveTextContent(text);
+      cleanup();
+    }
+  });
+
+  it("the call bar shows the elapsed time", async () => {
+    const h = usageHarness();
+    const pc = await startCall(h);
+    expect(screen.queryByTestId("voice-elapsed")).toBeNull(); // not before connected
+    act(() => pc.dc.open());
+    expect(screen.getByTestId("voice-elapsed")).toHaveTextContent("0:00");
+    h.clock.t += 65_000;
+    await waitFor(() => expect(screen.getByTestId("voice-elapsed")).toHaveTextContent("1:05"), { timeout: 2500 });
   });
 });

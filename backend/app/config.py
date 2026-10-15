@@ -170,6 +170,28 @@ class Settings(BaseSettings):
     voice_live_enabled: bool = False
     voice_live_model: str = "gpt-realtime-2.1"
     voice_live_voice: str = "marin"
+    # Cost and brakes (voice PR 6). Prices in USD per 1M tokens of
+    # voice_live_model; MC computes each call's cost from the usage OpenAI
+    # reports (services/voice_live_usage.py). Audio in/out and cached input:
+    # OpenAI price list for gpt-realtime-2.1, checked 14.10.2026 (text out is
+    # 24, not gpt-realtime's 16) — override via env when OpenAI changes prices.
+    voice_live_price_audio_in_per_m: float = 32.0
+    voice_live_price_audio_out_per_m: float = 64.0
+    voice_live_price_cached_in_per_m: float = 0.40
+    voice_live_price_text_in_per_m: float = 4.0
+    voice_live_price_text_out_per_m: float = 24.0
+    # Hang up after this long with nobody speaking (operator nor voice); a
+    # soft tone + notice voice_live_idle_warn_s before.
+    voice_live_idle_hangup_s: int = 120
+    voice_live_idle_warn_s: int = 15
+    # Max length of one call. The browser hangs up; MC refuses the call's
+    # tools afterwards and hangs up at OpenAI itself when it knows the call id.
+    voice_live_max_call_s: int = 1200
+    # Daily budget in USD across all calls; reached = new calls are refused
+    # and a running call hangs up. Resets at local midnight in
+    # voice_live_budget_tz. 0 = no budget.
+    voice_live_daily_budget_usd: float = 5.0
+    voice_live_budget_tz: str = "Europe/Zurich"
     # Chat-Modell fuer den Text-Brain (konservativer Default, existiert sicher).
     jarvis_text_model: str = "gpt-4o-mini"
     # Transcription-Modell fuer Telegram-Sprachnotizen (ogg/opus direkt).
