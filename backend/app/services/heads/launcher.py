@@ -240,7 +240,14 @@ async def write_run(
     mode: str = "fresh",
 ) -> dict:
     """Create the run folder. ``restarted_from`` = previous run's spec +
-    derived state (for continue mode and the previous-run block)."""
+    derived state (for continue mode and the previous-run block).
+
+    Raises ``scratch.ScratchSourceMissing`` — before anything is written —
+    for a scratch repo that still needs preparing but has no source."""
+    # file system only, but off the event loop like the git check below
+    scratch_source, origin_pending = await asyncio.to_thread(
+        scratch.plan, repo.full_name, repo.source, repo.url,
+    )
     run_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc)
     env, base_url, model = await head_env(session, harness, runtime)
@@ -271,6 +278,9 @@ async def write_run(
         "no_progress_s": int(no_progress_s),
         "restarted_from": restarted_from["spec"]["run_id"] if restarted_from else None,
         "mode": mode,
+        # A fresh scratch repo: mc-head builds its bare origin from here
+        # (services/heads/scratch.plan); None for every other run.
+        "scratch_source": scratch_source,
         "job_folder": None,  # set below
         "created_by": user_id,
         "created_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -320,7 +330,8 @@ async def write_run(
     job = render_job(
         task, answer=answer, previous=previous, branch=branch,
         # git subprocess — off the event loop
-        scratch_local_origin=await asyncio.to_thread(scratch.local_origin, repo.full_name) is not None,
+        scratch_local_origin=origin_pending
+        or await asyncio.to_thread(scratch.local_origin, repo.full_name) is not None,
     )
     _atomic(folder / "job.md", job)
     _atomic(folder / "procedure.md", procedure)

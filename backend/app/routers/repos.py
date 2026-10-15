@@ -5,6 +5,7 @@ repo; per-repo rules_md is injected into dispatch directives. Deleting a repo
 here NEVER touches GitHub — it only removes the MC registry row.
 """
 
+import re
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -37,11 +38,19 @@ class RepoNew(BaseModel):
     description: str | None = None
 
 
+class RepoScratchNew(BaseModel):
+    name: str  # becomes "scratch/<name>"
+    source: str  # absolute local path or git URL the code comes from
+    default_branch: str = "main"
+    description: str | None = None
+
+
 class RepoUpdate(BaseModel):
     description: str | None = None
     rules_md: str | None = None
     default_branch: str | None = None
     is_active: bool | None = None
+    url: str | None = None  # scratch repos only: where the code comes from
 
 
 class LinkProject(BaseModel):
@@ -361,6 +370,51 @@ async def create_new_repo(
     return _serialize(repo, [])
 
 
+_BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,100}$")
+
+
+@router.post("/repos/scratch", status_code=status.HTTP_201_CREATED)
+async def create_scratch_repo(
+    payload: RepoScratchNew,
+    session: AsyncSession = Depends(get_session),
+    current_user = Depends(require_role(Role.OPERATOR)),
+):
+    """Register a scratch repo for heads (docs/specs/head-launcher.md §9).
+
+    No GitHub call: the code lives at ``source`` (a local path on the host
+    or a git URL). The first head start lists the repo in
+    ``heads/scratch-repos`` and mc-head builds its local bare origin + clone
+    from ``source`` — heads push only to that local origin."""
+    from app.services.heads import scratch
+
+    full_name = f"scratch/{payload.name.strip()}"
+    source = payload.source.strip()
+    if not scratch.AUTO_NAME_RE.match(full_name) or ".." in full_name:
+        raise HTTPException(status_code=422, detail="name: letters, digits, '.', '_' or '-' (starts with a letter or digit)")
+    if not scratch.source_allowed(source):
+        raise HTTPException(status_code=422, detail="source: absolute local path or git URL (no credentials)")
+    if not _BRANCH_RE.match(payload.default_branch) or ".." in payload.default_branch:
+        raise HTTPException(status_code=422, detail="default_branch: not a valid branch name")
+    if await get_repo_by_full_name(session, full_name):
+        raise HTTPException(status_code=409, detail="Repo ist bereits registriert")
+    # not upsert_repo: it strips ".git", and a bare repo's path keeps it
+    repo = Repo(
+        full_name=full_name,
+        url=source,
+        default_branch=payload.default_branch,
+        description=payload.description,
+        source=scratch.SOURCE_SCRATCH,
+    )
+    session.add(repo)
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="Repo ist bereits registriert")
+    await session.refresh(repo)
+    return _serialize(repo, [])
+
+
 @router.patch("/repos/{repo_id}")
 async def update_repo(
     repo_id: uuid.UUID,
@@ -372,6 +426,14 @@ async def update_repo(
     if not repo:
         raise HTTPException(status_code=404, detail="Repo not found")
     data = payload.model_dump(exclude_unset=True)
+    if "url" in data:
+        # A GitHub repo's url comes from GitHub; only a scratch repo's
+        # source is the operator's to change.
+        from app.services.heads import scratch
+
+        data["url"] = (data["url"] or "").strip()
+        if repo.source != scratch.SOURCE_SCRATCH or not scratch.source_allowed(data["url"]):
+            raise HTTPException(status_code=422, detail="url: only a scratch repo's source (absolute path or git URL)")
     for k, v in data.items():
         setattr(repo, k, v)
     repo.updated_at = utcnow()

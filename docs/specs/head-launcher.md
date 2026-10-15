@@ -435,7 +435,7 @@ stoppable) in the runs list on `/runtimes`.
 | exited, `question.md` present, no PR | `needs_you` — **any** exit code: the model cannot set the harness exit code (`exit 3` in a Bash tool call only ends that subshell; `omp -p` / `claude -p` still exit 0) |
 | exited, `pr_url` present (found by the wrapper), valid run record `Status: passed` | `passed` |
 | scratch repo with a local origin (below): exited, `scratch_branch_pushed` true (checked by the wrapper), valid run record `Status: passed` | `passed`, reason `scratch_branch_pushed`, `pr_url` null |
-| exited otherwise | `failed` with reason (`exit_<n>`, `no_progress`, `hard_limit`, `time_limit` (runs before the watchdog), `no_pr`, `run_record_missing`, `engine_not_ready`, `box_busy`, `spec_invalid`) |
+| exited otherwise | `failed` with reason (`exit_<n>`, `no_progress`, `hard_limit`, `time_limit` (runs before the watchdog), `no_pr`, `run_record_missing`, `engine_not_ready`, `box_busy`, `spec_invalid`, `scratch_source_missing`, `scratch_source_failed`) |
 
   `passed` is never claimed by the head alone. The PR URL is found by the
   wrapper itself (`gh pr list --head <branch>`), `status.json` lives in
@@ -452,6 +452,37 @@ stoppable) in the runs list on `/runtimes`.
   on that origin with commits beyond the base branch. The backend honours
   the flag only for a repo still listed in `heads/scratch-repos`. Real repos
   are unchanged: they still need a PR.
+- **Fresh scratch repo — prepared automatically** (live finding 2026-10-04:
+  the first head on a repo outside MC ended with a bare `prepare_failed`,
+  and the operator had to build the layout by hand). A scratch repo is a
+  repos row with `source=scratch`, `full_name=scratch/<name>` and `url` =
+  where its code lives (an absolute path on the host or a git URL;
+  `POST /api/v1/repos/scratch`, editable via `PATCH /repos/{id}` `url`).
+  On every start/restart the backend (`services/heads/scratch.plan`) lists
+  the name in `heads/scratch-repos` (one appended line, idempotent) and,
+  while neither clone nor bare origin exists, writes the row's `url` into
+  `spec.json` as `scratch_source`. mc-head (`prepare_scratch`, before
+  `ensure_clone`) builds `heads/scratch-origin/<name>.git` from it
+  (`git clone --bare --no-local`, then drops the remote back to the source)
+  and clones that into `heads/clones/scratch--<name>` (`--no-local
+  --no-checkout`), each in a temp sibling renamed into place — the exact
+  layout the sandbox's `SCRATCH_ORIGIN` grant already expects, so `head.sb`
+  is unchanged. An existing origin is reused; an existing clone means
+  nothing to do. The prepare runs on the host because the backend container
+  sees only `~/.mc`, never the operator's source path. Refusals are named,
+  never a bare `prepare_failed`: the backend answers 422
+  `scratch_source_missing` ("scratch repo X has no source; add it under
+  Repos") before it writes anything; mc-head ends the run with
+  `scratch_source_missing` (no source on the spec) or `scratch_source_failed`
+  (source not cloneable, no base branch, a non-folder in the way) with the
+  sentence in `detail`, and records what it built in `status.json`
+  `scratch_prepared`. `scratch_source` is validated on both sides with the
+  same pattern (absolute path, `file:///`, `https://` without credentials,
+  `ssh://`, `user@host:path`; no options, no `ext::`, no whitespace, no
+  `..`, nothing inside `heads/`). Residual risk: a backend that can write
+  `spec.json` can make the host copy any git repo it names into
+  `heads/scratch-origin/` (readable by heads); it can already write
+  `scratch-repos` and run folders today.
 - **Sync job** `heads_sync` (scheduler, 60 s): for active runs only, derive the
   state and mirror the task (§6.2, via `mirror_path`). Task missing → no
   write, flag `task_deleted`. No restart, no kill, no approvals. The
