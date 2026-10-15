@@ -87,5 +87,4 @@ x-casaos:
   icon: https://raw.githubusercontent.com/argyelan-ai/mission-control/main/frontend-v2/src/app/icon.png
   screenshot_link:
     - https://raw.githubusercontent.com/argyelan-ai/mission-control/main/docs/assets/mc-home.png
-    - https://raw.githubusercontent.com/argyelan-ai/mission-control/main/docs/assets/mc-sessions.png
-    - https://raw.githubusercontent.com/argyelan-ai/mission-control/main/docs/assets/mc-agents.png
+    - https://raw.githubusercontent.com/argyelan-ai/mission-control/main/docs/assets/mc-setup-wizard.png

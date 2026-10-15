@@ -3,7 +3,7 @@
 Self-hosted command center for AI agent fleets — create agents, dispatch
 tasks over Kanban boards, and watch them ship.
 
-![Sessions](https://raw.githubusercontent.com/argyelan-ai/mission-control/main/docs/assets/mc-sessions.png)
+![Mission Control](https://raw.githubusercontent.com/argyelan-ai/mission-control/main/docs/assets/mc-home.png)
 
 ## Highlights
 
