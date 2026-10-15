@@ -37,7 +37,10 @@ lock refuses it while the engine is still serving requests.
 
 Three recipes install with one click today; two more start with one click
 once the weights are on the box, and the [catalog](backend/config/local-recipes.json)
-lists further models. Numbers: our own benchmark (tokens counted from the
+lists further models. The recipes build on other people's engines, quants and
+models — see [CREDITS](CREDITS.md). Note: the GLM recipe's default speculative
+drafter is licensed CC BY-NC-ND 4.0 (non-commercial); a licence-free drafter
+option exists. Numbers: our own benchmark (tokens counted from the
 API's `usage`, greedy, 512-token answers, 08 Oct 2026); the same weights on
 the plain vLLM recipe reach 34.6 tok/s — the dedicated recipe is ~1.8×
 faster. How it works: [ADR-077](docs/decisions/077-rezept-modell-ein-startbefehl.md)
@@ -312,6 +315,16 @@ and some code comments are German; the UI, README and setup are English
 - **Bugs** — [GitHub Issues](https://github.com/argyelan-ai/mission-control/issues)
 - **Contributing** — [CONTRIBUTING.md](CONTRIBUTING.md)
 - **Security** — [SECURITY.md](SECURITY.md)
+
+## Credits
+
+Mission Control's local-inference recipes build on open models and engines from
+Alibaba (Qwen), DeepSeek, Z.ai (GLM), Google DeepMind (Gemma), poolside
+(Laguna), turboderp (ExLlamaV3/EXL3), ashhart (TensorFold), Inco AI (DFlash2),
+antirez (DwarfStar 4), Local Inference Lab (SparkInfer), the DGX Spark recipes
+by Mia's AI Lab, and the coding harnesses Claude Code, OpenClaude, omp,
+Hermes Agent, Kimi Code and Grok Build. Full list
+with licences and links: [CREDITS.md](./CREDITS.md).
 
 ## License
 
