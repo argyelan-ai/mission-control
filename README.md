@@ -7,18 +7,43 @@ self-hosted, with approval gates.**
 
 Ask your lead agent from the couch, watch every edit land as a live diff,
 answer its questions with a tap — and keep the risky steps behind your
-approval. Runs on your hardware, prefers your local models, AGPL.
+approval. Runs on your hardware, prefers your local models, AGPL —
+with **one-click model recipes for one or two NVIDIA DGX Spark boxes**.
 
 [![CI](https://github.com/argyelan-ai/mission-control/actions/workflows/ci.yml/badge.svg)](https://github.com/argyelan-ai/mission-control/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/argyelan-ai/mission-control?labelColor=1c1c1c)](https://github.com/argyelan-ai/mission-control/releases)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-informational?labelColor=1c1c1c)](LICENSE)
 
-[Install](#install) · [What it does](#what-it-does) · [Maturity](#what-is-stable-and-what-is-not) ·
+[Spark recipes](#one-click-model-recipes-for-dgx-spark--one-box-or-two) · [Install](#install) · [What it does](#what-it-does) · [Maturity](#what-is-stable-and-what-is-not) ·
 [Docs](#docs) · [Roadmap](#where-its-going) · [Community](#community)
 
 <img src="docs/assets/mc-remote-phone.gif" width="260" alt="Phone: the operator taps an answer card, the local agent writes the file and the diff appears in the chat">
 
 </div>
+
+## One-click model recipes for DGX Spark — one box or two
+
+Pick a recipe on the **Runtimes** page and click **Install** — the recipe
+downloads the weights and sets up its engine while MC shows the live install
+log. For two-box recipes MC picks a free second box and wires it in. One
+click on **Start** switches a box (or a pair) to another recipe; a switch
+lock refuses it while the engine is still serving requests.
+
+| Recipe | Boxes | Engine | Measured on 2× DGX Spark |
+|---|---|---|---|
+| **GLM-5.3-Flash** · EXL3 4-bit · TensorFold | **2** (tensor parallel) | TensorFold | **62.6 tok/s** single stream · **211 tok/s** at 16 parallel · 1M context per request · prefill ~1,800 tok/s |
+| **DeepSeek-V4-Flash** · SparkInfer | 1 | vLLM | — |
+| **DeepSeek-V4-Flash** · ds4 | 1 | ds4 | — |
+
+Three recipes install with one click today; two more start with one click
+once the weights are on the box, and the [catalog](backend/config/local-recipes.json)
+lists further models. Numbers: our own benchmark (tokens counted from the
+API's `usage`, greedy, 512-token answers, 08 Oct 2026); the same weights on
+the plain vLLM recipe reach 34.6 tok/s — the dedicated recipe is ~1.8×
+faster. How it works: [ADR-077](docs/decisions/077-rezept-modell-ein-startbefehl.md)
+· [Runtimes](docs/handbook/concepts/runtimes.md).
+
+![Runtimes page: GPU boxes with the running model, context, speed, load and the Switch model button (demo data)](docs/assets/mc-runtimes.png)
 
 ## Why
 
@@ -92,7 +117,6 @@ For each agent you choose the runtime yourself; heads (preview) pre-select a
 local runtime when one exists. There is no automatic fallback from local to
 cloud yet.
 
-![Runtimes page: two GPU boxes, each serving a local model with context size, speed and GPU/RAM load](docs/assets/mc-runtimes.png)
 
 Not every coding tool runs on every model. The matrix shows what works
 today — and says **no**, with the reason, where it doesn't:
