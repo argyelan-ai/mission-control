@@ -229,7 +229,6 @@ filtering socket-proxy, secrets are Fernet-encrypted.
 
 ### Talk to your agents — live
 
-![Live agent terminal](docs/assets/mc-sessions.png)
 
 Every agent runs in a real terminal session you can watch and type into from
 the browser — the same Claude Code (or local-LLM) REPL the agent itself uses.
@@ -266,16 +265,11 @@ Step-by-step guide (token scopes, verifying the connection,
 troubleshooting): [docs/setup/github.md](docs/setup/github.md).
 
 <details>
-<summary><b>More screenshots</b> — first-run wizard, agent registry, runtime manager</summary>
+<summary><b>More screenshots</b> — first-run wizard</summary>
 
 *The first-run wizard — from empty install to configured in four steps:*
 ![First-run wizard](docs/assets/mc-setup-wizard.png)
 
-*The agent registry — one fleet, mixed runtimes (Claude + local Qwen via vLLM):*
-![Agent registry](docs/assets/mc-agents.png)
-
-*The runtime manager — GPU hosts, models, live binding of agents to runtimes:*
-![Runtime manager](docs/assets/mc-runtimes.png)
 </details>
 
 ## Architecture
