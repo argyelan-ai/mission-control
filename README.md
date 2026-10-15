@@ -17,7 +17,7 @@ with **one-click model recipes for one or two NVIDIA DGX Spark boxes**.
 [Spark recipes](#one-click-model-recipes-for-dgx-spark--one-box-or-two) · [Install](#install) · [What it does](#what-it-does) · [Maturity](#what-is-stable-and-what-is-not) ·
 [Docs](#docs) · [Roadmap](#where-its-going) · [Community](#community)
 
-<img src="docs/assets/mc-remote-phone.gif" width="260" alt="Phone: the operator taps an answer card, the local agent writes the file and the diff appears in the chat">
+<img src="docs/assets/mc-hero.gif" width="100%" alt="Mission Control in 18 seconds: send a task from the phone, the agent asks and you tap, you approve the plan, it builds with live diffs — on your own models">
 
 </div>
 
@@ -86,6 +86,8 @@ you open the PR.
 ![Commit dialog with a commit message suggested by the local model](docs/assets/mc-chat-commit.png)
 
 ### Answer questions and approve plans from your phone
+
+<p align="center"><img src="docs/assets/mc-remote-phone.gif" width="260" alt="Phone: the operator taps an answer card, the local agent writes the file and the diff appears in the chat"></p>
 
 The local omp agent can stop and ask. Its questions arrive as **question
 cards**; in **plan mode** it writes a plan first and waits for *Approve*,
