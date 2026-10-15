@@ -71,3 +71,22 @@ images instead of following `latest`. Check the
 
 - Migrations are forward-only — take a database backup first (`./backup.sh`).
 - Read the release notes; breaking changes are called out there.
+
+## Coming from the fleet model?
+
+If your install predates [ADR-085](../decisions/085-head-per-job.md)
+(22.09.2026), updating does not touch your data — your agents, boards and
+tasks all stay exactly as they were. What changes is which agents receive
+*new* work:
+
+- Every agent you had keeps running if it was already running; none of them
+  are deleted, renamed or reconfigured by the update.
+- New work after the update goes to whichever agent has `is_board_lead`
+  (your **lead agent**) and, for local jobs, to a local **omp agent** — not
+  spread across your old role-based fleet the way it used to be.
+- Nothing forces you onto this: if you don't touch the new chat features or
+  the `HEADS_ENABLED`/`NIGHT_SHIFT_ENABLED`/`VOICE_LIVE_ENABLED` flags
+  (all default off), your install keeps behaving the way it always did.
+- Read [Heads and remote control](../handbook/concepts/heads-and-remote-control.md)
+  for what actually changed and why, and [the FAQ](../handbook/faq.md#where-did-the-agent-fleet-go)
+  for the short version.

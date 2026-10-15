@@ -1,62 +1,141 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="290" viewBox="0 0 1200 290" font-family="ui-sans-serif, -apple-system, 'Segoe UI', sans-serif">
-  <rect width="1200" height="290" rx="14" fill="#0A0A0A"/>
-  <rect x="0.5" y="0.5" width="1199" height="289" rx="14" fill="none" stroke="#232323"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="640" viewBox="0 0 960 640" role="img" aria-labelledby="t d" font-family="'General Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <title id="t">How Mission Control works</title>
+  <desc id="d">You monitor and steer from your phone. Mission Control runs a lead agent and one local omp agent behind approval gates. The agents run on your local GPU boxes, on Claude through your Claude Code login, or on a cloud model you choose, and their work lands in your git repo as a pull request. Heads per job, the night shift and live voice are opt-in previews.</desc>
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#EBE8DE"/>
+    </marker>
+    <style>
+      .mono { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .lbl  { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; font-weight: 600; letter-spacing: 1.6px; fill: #B3B3B3; }
+      .h    { font-size: 17px; font-weight: 600; fill: #F2F2F2; }
+      .t    { font-size: 13.5px; fill: #C9C9C9; }
+      .s    { font-size: 12.5px; fill: #B3B3B3; }
+      .card { fill: #262626; stroke: rgba(168,168,168,0.16); }
+      .sub  { fill: #313131; stroke: rgba(168,168,168,0.16); }
+    </style>
+  </defs>
 
-  <!-- step 1: create task -->
-  <g transform="translate(40,58)">
-    <rect width="230" height="150" rx="10" fill="#0D0D0D" stroke="#232323"/>
-    <text x="16" y="30" fill="#0FA3A3" font-size="12" font-weight="700" letter-spacing="2">1 · YOU</text>
-    <text x="16" y="56" fill="#F5F5F5" font-size="16" font-weight="600">Create a task</text>
-    <rect x="16" y="72" width="198" height="26" rx="5" fill="#161616" stroke="#2A2A2A"/>
-    <text x="26" y="89" fill="#B8B8B8" font-size="12">Build the landing page</text>
-    <rect x="16" y="104" width="120" height="26" rx="5" fill="#161616" stroke="#2A2A2A"/>
-    <text x="26" y="121" fill="#6E6E6E" font-size="12">priority: high</text>
+  <!-- canvas -->
+  <rect width="960" height="640" rx="20" fill="#181818"/>
+  <rect x="0.5" y="0.5" width="959" height="639" rx="20" fill="none" stroke="rgba(168,168,168,0.16)"/>
+
+  <text x="32" y="44" font-size="20" font-weight="600" fill="#F2F2F2">Monitor and steer from your phone.</text>
+  <text x="32" y="68" class="t">The work runs on your models, behind your approval gates, and lands in your repo as a pull request.</text>
+
+  <!-- ───────────── 1 · PHONE ───────────── -->
+  <text x="32" y="112" class="lbl">1 · YOU</text>
+  <g transform="translate(32,124)">
+    <rect width="212" height="336" rx="28" fill="#1C1C1C" stroke="rgba(235,232,222,0.30)" stroke-width="1.5"/>
+    <rect x="80" y="12" width="52" height="6" rx="3" fill="#3A3A3A"/>
+    <text x="18" y="46" class="h" font-size="15">Lead agent</text>
+    <circle cx="186" cy="41" r="4" fill="#68BC76"/>
+
+    <!-- live diff -->
+    <rect x="14" y="60" width="184" height="62" rx="10" class="sub"/>
+    <text x="24" y="78" class="mono" font-size="11" fill="#B3B3B3">api/retry.py</text>
+    <text x="24" y="96" class="mono" font-size="12" fill="#FF867A">− tries = 1</text>
+    <text x="24" y="113" class="mono" font-size="12" fill="#68BC76">+ tries = 3</text>
+
+    <!-- changes panel -->
+    <rect x="14" y="132" width="184" height="54" rx="10" class="sub"/>
+    <text x="24" y="152" font-size="12.5" font-weight="600" fill="#F2F2F2">Changes · 2 files</text>
+    <text x="24" y="174" font-size="12" fill="#C9C9C9">Revert · Commit · Open PR</text>
+
+    <!-- question card -->
+    <rect x="14" y="196" width="184" height="78" rx="10" fill="rgba(235,232,222,0.10)" stroke="rgba(235,232,222,0.30)"/>
+    <text x="24" y="216" font-size="12.5" font-weight="600" fill="#F2F2F2">Question · plan mode</text>
+    <text x="24" y="236" font-size="12" fill="#C9C9C9">Approve this plan?</text>
+    <rect x="24" y="246" width="110" height="20" rx="6" fill="#EBE8DE"/>
+    <text x="79" y="260" font-size="9.5" font-weight="600" fill="#151411" text-anchor="middle">Approve and execute</text>
+    <text x="141" y="260" font-size="9.5" fill="#C9C9C9">Refine plan</text>
+
+    <!-- composer -->
+    <rect x="14" y="284" width="184" height="34" rx="17" fill="#262626" stroke="rgba(168,168,168,0.16)"/>
+    <text x="30" y="306" font-size="12" fill="#B3B3B3">Ask, steer, stop …</text>
+  </g>
+  <text x="32" y="486" class="s">MC web app · add to home screen</text>
+  <text x="32" y="504" class="s">live diffs · screenshots · cards</text>
+
+  <!-- arrows phone <-> MC -->
+  <line x1="252" y1="250" x2="296" y2="250" stroke="#EBE8DE" stroke-width="1.6" marker-end="url(#arr)"/>
+  <line x1="296" y1="290" x2="252" y2="290" stroke="#EBE8DE" stroke-width="1.6" marker-end="url(#arr)"/>
+  <text x="274" y="240" class="s" font-size="11" text-anchor="middle">steer</text>
+  <text x="274" y="308" class="s" font-size="11" text-anchor="middle">live</text>
+
+  <!-- ───────────── 2 · MISSION CONTROL ───────────── -->
+  <text x="304" y="112" class="lbl">2 · MISSION CONTROL · SELF-HOSTED</text>
+  <g transform="translate(304,124)">
+    <rect width="320" height="336" rx="20" class="card"/>
+
+    <rect x="16" y="16" width="140" height="84" rx="14" class="sub"/>
+    <text x="30" y="44" class="h" font-size="15">Lead agent</text>
+    <text x="30" y="66" class="s">plans and works,</text>
+    <text x="30" y="84" class="s">talks to you</text>
+
+    <rect x="164" y="16" width="140" height="84" rx="14" class="sub"/>
+    <text x="178" y="44" class="h" font-size="15">Local agent</text>
+    <text x="178" y="66" class="s">omp on your box,</text>
+    <text x="178" y="84" class="s">small jobs</text>
+
+    <text x="16" y="128" class="s">Both live in the chat.</text>
+
+    <!-- gates -->
+    <rect x="16" y="144" width="288" height="96" rx="14" fill="rgba(235,232,222,0.10)" stroke="rgba(235,232,222,0.30)"/>
+    <text x="32" y="172" class="h" font-size="15">Approval gates</text>
+    <text x="32" y="194" class="t" font-size="13">Auto / Notify / Approve, approval cards,</text>
+    <text x="32" y="214" class="t" font-size="13">ADR gate: agents ask, risky steps</text>
+    <text x="32" y="232" class="t" font-size="13">wait for your tap.</text>
+
+    <!-- insights -->
+    <rect x="16" y="254" width="288" height="66" rx="14" class="sub"/>
+    <text x="32" y="280" class="h" font-size="15">Insights</text>
+    <text x="32" y="302" class="s">tokens via MC vs. direct · local share</text>
   </g>
 
-  <!-- arrow -->
-  <g stroke="#0FA3A3" stroke-width="2" fill="none">
-    <path d="M282 133 h 36"/><path d="M312 126 l 8 7 -8 7"/>
+  <!-- arrows MC -> models / repo -->
+  <line x1="632" y1="206" x2="676" y2="206" stroke="#EBE8DE" stroke-width="1.6" marker-end="url(#arr)"/>
+  <line x1="632" y1="404" x2="676" y2="404" stroke="#EBE8DE" stroke-width="1.6" marker-end="url(#arr)"/>
+
+  <!-- ───────────── 3 · MODELS ───────────── -->
+  <text x="684" y="112" class="lbl">3 · YOUR MODELS</text>
+  <g transform="translate(684,124)">
+    <rect width="244" height="208" rx="20" class="card"/>
+    <text x="16" y="34" class="h" font-size="15">Local GPU boxes</text>
+    <text x="16" y="54" class="s">local first, via omp / OpenClaude</text>
+    <line x1="16" y1="72" x2="228" y2="72" stroke="rgba(168,168,168,0.16)"/>
+    <text x="16" y="98" class="h" font-size="15">Claude</text>
+    <text x="16" y="118" class="s">via your Claude Code login</text>
+    <line x1="16" y1="136" x2="228" y2="136" stroke="rgba(168,168,168,0.16)"/>
+    <text x="16" y="162" class="h" font-size="15">Cloud models</text>
+    <text x="16" y="182" class="s">any OpenAI-compatible endpoint</text>
   </g>
 
-  <!-- step 2: dispatch -->
-  <g transform="translate(332,58)">
-    <rect width="230" height="150" rx="10" fill="#0D0D0D" stroke="#232323"/>
-    <text x="16" y="30" fill="#0FA3A3" font-size="12" font-weight="700" letter-spacing="2">2 · MISSION CONTROL</text>
-    <text x="16" y="56" fill="#F5F5F5" font-size="16" font-weight="600">Dispatches an agent</text>
-    <circle cx="30" cy="106" r="12" fill="#161616" stroke="#0FA3A3"/>
-    <text x="30" y="110" fill="#0FA3A3" font-size="11" text-anchor="middle">⚡</text>
-    <text x="52" y="102" fill="#B8B8B8" font-size="12">Sparky · claims the task</text>
-    <text x="52" y="120" fill="#6E6E6E" font-size="11">Claude Code or any local LLM</text>
+  <!-- ───────────── 4 · REPO ───────────── -->
+  <text x="684" y="366" class="lbl">4 · YOUR REPO</text>
+  <g transform="translate(684,378)">
+    <rect width="244" height="82" rx="20" class="card"/>
+    <text x="16" y="32" class="mono" font-size="13" fill="#F2F2F2">branch → pull request</text>
+    <text x="16" y="56" class="s">respects your branch protection;</text>
+    <text x="16" y="73" class="s">the merge stays your call</text>
   </g>
 
-  <g stroke="#0FA3A3" stroke-width="2" fill="none">
-    <path d="M574 133 h 36"/><path d="M604 126 l 8 7 -8 7"/>
-  </g>
+  <!-- ───────────── PREVIEW / OPT-IN ───────────── -->
+  <g transform="translate(32,528)">
+    <rect width="896" height="84" rx="14" fill="none" stroke="rgba(168,168,168,0.40)" stroke-dasharray="6 5"/>
+    <rect x="16" y="-10" width="150" height="20" rx="6" fill="#181818"/>
+    <text x="24" y="5" class="lbl">PREVIEW · OPT-IN</text>
 
-  <!-- step 3: agent works -->
-  <g transform="translate(624,58)">
-    <rect width="230" height="150" rx="10" fill="#0D0D0D" stroke="#232323"/>
-    <text x="16" y="30" fill="#0FA3A3" font-size="12" font-weight="700" letter-spacing="2">3 · AGENT</text>
-    <text x="16" y="56" fill="#F5F5F5" font-size="16" font-weight="600">Codes on a branch</text>
-    <text x="16" y="86" fill="#B8B8B8" font-size="12" font-family="ui-monospace, monospace">git checkout -b task/landing</text>
-    <text x="16" y="106" fill="#B8B8B8" font-size="12" font-family="ui-monospace, monospace">… work, commit, push …</text>
-    <text x="16" y="126" fill="#2B9A4A" font-size="12" font-family="ui-monospace, monospace">↑ opens a pull request</text>
-  </g>
+    <text x="24" y="38" font-size="14" font-weight="600" fill="#F2F2F2">Heads per job</text>
+    <text x="24" y="60" class="s">own worktree, ends with a PR</text>
+    <text x="24" y="76" class="mono" font-size="11" fill="#B3B3B3">HEADS_ENABLED · macOS host</text>
 
-  <g stroke="#0FA3A3" stroke-width="2" fill="none">
-    <path d="M866 133 h 36"/><path d="M896 126 l 8 7 -8 7"/>
-  </g>
+    <text x="324" y="38" font-size="14" font-weight="600" fill="#F2F2F2">Night shift</text>
+    <text x="324" y="60" class="s">queued jobs overnight, morning report</text>
+    <text x="324" y="76" class="mono" font-size="11" fill="#B3B3B3">NIGHT_SHIFT_ENABLED · macOS host</text>
 
-  <!-- step 4: review & done -->
-  <g transform="translate(916,58)">
-    <rect width="230" height="150" rx="10" fill="#0D0D0D" stroke="#232323"/>
-    <text x="16" y="30" fill="#0FA3A3" font-size="12" font-weight="700" letter-spacing="2">4 · REVIEW GATE</text>
-    <text x="16" y="56" fill="#F5F5F5" font-size="16" font-weight="600">Reviewed, merged</text>
-    <text x="16" y="86" fill="#B8B8B8" font-size="12">Reviewer agent checks the PR,</text>
-    <text x="16" y="104" fill="#B8B8B8" font-size="12">watchdogs catch silent failures.</text>
-    <rect x="16" y="116" width="86" height="24" rx="12" fill="#101510" stroke="#2B9A4A"/>
-    <text x="59" y="132" fill="#2B9A4A" font-size="12" text-anchor="middle" font-weight="600">✓ done</text>
+    <text x="624" y="38" font-size="14" font-weight="600" fill="#F2F2F2">Voice</text>
+    <text x="624" y="60" class="s">OpenAI Realtime, your key, daily cap</text>
+    <text x="624" y="76" class="mono" font-size="11" fill="#B3B3B3">VOICE_LIVE_ENABLED</text>
   </g>
-
-  <text x="600" y="252" fill="#6E6E6E" font-size="13" text-anchor="middle">You stay in the control room — boards, live terminals, approvals. The fleet does the typing.</text>
 </svg>

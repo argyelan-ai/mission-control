@@ -1,5 +1,12 @@
 # Runtimes
 
+> **Where this fits today:** the two agents that receive new work — the lead
+> agent and the local omp agent — are bound to runtimes exactly the way
+> described below. "Local first" means local runtimes are the default where
+> they are good enough, with your Claude Code login or a cloud endpoint as
+> fallback — not that everything always stays on your box. See
+> [Heads and remote control](heads-and-remote-control.md).
+
 A runtime answers the question "which model, on which machine, answers this agent's requests?". Mission Control keeps that separate from the agent itself: agents live on boards and own their identity and permissions, runtimes live in a registry and own an endpoint and a model. Bind one to the other and the agent starts thinking with that model; rebind it and — after a container restart — it thinks with a different one. The **Runtimes** page is where you manage this: register endpoints, start and stop remote engines, watch which model each one is actually serving, and switch an agent from Claude to a local model in one click, with an automatic rollback if the switch fails.
 
 Do not confuse the two meanings of "runtime" in this codebase. `agents.agent_runtime` says **where the agent process runs** (`cli-bridge`, `host`, `claude-code`, `manual`). The runtime *registry* says **which LLM endpoint it talks to**. This page covers both, in that order.

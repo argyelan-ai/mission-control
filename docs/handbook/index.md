@@ -1,14 +1,22 @@
 # Mission Control Handbook
 
-Mission Control is a self-hosted command center for AI agent fleets: you
-describe work on boards, agents pick it up in real terminal sessions, code
-on their own branches, open PRs, and watchdogs plus review gates keep the
-whole thing honest. Everything runs on your own hardware — with your
-Claude subscription, your own GPU, or both in one fleet.
+Mission Control is a self-hosted command center for coding agents: you
+describe work on boards, agents work it on their own branches and open PRs,
+and watchdogs plus review gates keep the whole thing honest. Today's working
+set is a **lead agent** plus **one local omp agent**, steered from the MC
+chat — away from the desk, that chat is your remote control. Everything runs
+on your own hardware — with your Claude subscription, your own GPU, or both.
+The rest of the machinery below (role templates, the agent fleet pages, a
+persistent multi-agent board) still exists and still works, but is paused for
+*new* work since [ADR-085](../decisions/085-head-per-job.md) — see
+[Heads and remote control](concepts/heads-and-remote-control.md) for the
+current direction before you read the rest of this page as "how MC runs
+today."
 
 This handbook is the map. Installation lives in the
 [README](../../README.md); this is everything after `docker compose up`.
-Where the project is heading and the rules it builds by:
+[Quickstart: install to your first remote-controlled agent](howto/quickstart.md)
+is the short path. Where the project is heading and the rules it builds by:
 [Principles](../PRINCIPLES.md) · [Roadmap](../ROADMAP.md).
 
 ## Five-minute tour
@@ -32,6 +40,7 @@ Where the project is heading and the rules it builds by:
 
 | Page | What it explains |
 |---|---|
+| [Heads & remote control](concepts/heads-and-remote-control.md) | The current direction: lead agent + local omp agent, the MC chat as remote control, heads as an opt-in preview |
 | [Boards & tasks](concepts/boards-and-tasks.md) | Boards, the pipeline, projects & phases, task lifecycle |
 | [Agents & souls](concepts/agents-and-souls.md) | Registry vs. provisioned agents, SOUL/TOOLS templates, roles |
 | [Runtimes](concepts/runtimes.md) | Claude vs. OpenAI-compatible, harness decoupling, switching |
@@ -43,7 +52,8 @@ Where the project is heading and the rules it builds by:
 
 | Page | What you get |
 |---|---|
-| [Your first agent](howto/first-agent.md) | From fresh install to a working agent |
+| [Quickstart](howto/quickstart.md) | From fresh install to your first remote-controlled agent (lead agent + local omp agent) |
+| [Your first agent](howto/first-agent.md) | From fresh install to a working agent, full detail + troubleshooting |
 | [Run a local LLM](howto/local-llm.md) | LM Studio / Ollama / vLLM as a runtime |
 | [GitHub workflow](howto/github-workflow.md) | Repos, work rules, branch-per-task PR flow |
 | [Integrations](howto/integrations.md) | Slack, Discord, Telegram, voice |
@@ -65,7 +75,7 @@ Quick answers: [FAQ](faq.md)
 ## Where deeper truth lives
 
 - [Architecture](../ARCHITECTURE.md) — the living system doc
-- [Decision records](../decisions/) — 70+ ADRs explaining *why* things
+- [Decision records](../decisions/) — 90 ADRs explaining *why* things
   are built the way they are
 - [Flows](../flows/) — dispatch, task lifecycle, watchdogs, provisioning
   in detail
