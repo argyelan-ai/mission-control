@@ -212,12 +212,9 @@ class _Run:
         present the key stored there (re-onboarding a known box); a new box is
         learned here and checked again in step 3."""
         from app.database import async_session_maker
-        from sqlmodel import select
 
         async with async_session_maker() as session:
-            existing = (
-                await session.exec(select(Host).where(Host.ssh_host == self.params.address))
-            ).first()
+            existing = await ssh_host_keys.host_row_for_address(session, self.params.address)
         if existing is not None:
             return ssh_host_keys.pin_for_host_row(existing)
         return HostKeyPin(label=self.params.address)
@@ -379,7 +376,6 @@ class _Run:
 
     async def run(self) -> None:
         from app.database import async_session_maker
-        from sqlmodel import select
 
         p = self.params
         try:
@@ -401,9 +397,7 @@ class _Run:
                 async with async_session_maker() as session:
                     from app.routers.nodes import _unique_slug  # noqa: SLF001
 
-                    existing_host = (
-                        await session.exec(select(Host).where(Host.ssh_host == p.address))
-                    ).first()
+                    existing_host = await ssh_host_keys.host_row_for_address(session, p.address)
                     self.host_slug = existing_host.slug if existing_host else await _unique_slug(
                         session, p.display_name or p.address
                     )
@@ -432,9 +426,9 @@ class _Run:
                 session.add(credential)
                 await session.flush()
 
-                existing_host = (
-                    await session.exec(select(Host).where(Host.ssh_host == p.address))
-                ).first()
+                # Same row as step 1 checked the key against (deterministic
+                # when several rows share the address).
+                existing_host = await ssh_host_keys.host_row_for_address(session, p.address)
                 if existing_host:
                     existing_host.ssh_user = p.username
                     existing_host.ssh_credential_id = credential.id

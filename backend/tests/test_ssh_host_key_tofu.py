@@ -38,8 +38,13 @@ CLIENT_KEY = asyncssh.generate_private_key("ssh-ed25519")
 class _Box:
     """One SSH server = one physical device on the network."""
 
-    def __init__(self) -> None:
-        self.host_key = asyncssh.generate_private_key("ssh-ed25519")
+    def __init__(self, *algs: str) -> None:
+        # Like a real sshd: one host key per type. Default: ed25519 only.
+        self.keys = [
+            asyncssh.generate_private_key(a, key_size=2048) if a == "ssh-rsa" else asyncssh.generate_private_key(a)
+            for a in (algs or ("ssh-ed25519",))
+        ]
+        self.host_key = self.keys[0]
         self.commands: list[str] = []
         self.passwords: list[str] = []
         self.server = None
@@ -48,6 +53,9 @@ class _Box:
     @property
     def fingerprint(self) -> str:
         return self.host_key.convert_to_public().get_fingerprint()
+
+    def public(self, alg: str) -> asyncssh.SSHKey:
+        return next(k for k in self.keys if k.get_algorithm() == alg).convert_to_public()
 
     async def start(self) -> "_Box":
         box = self
@@ -75,7 +83,7 @@ class _Box:
             process.exit(0)
 
         self.server = await asyncssh.create_server(
-            _Server, "127.0.0.1", 0, server_host_keys=[self.host_key], process_factory=_handle,
+            _Server, "127.0.0.1", 0, server_host_keys=self.keys, process_factory=_handle,
         )
         self.port = self.server.sockets[0].getsockname()[1]
         return self
@@ -385,3 +393,115 @@ def test_pin_kwargs_never_disable_checking():
     pin = ssh_host_keys.HostKeyPin(label="x", host_id=uuid.uuid4())
     kw = pin.connect_kwargs()
     assert kw["known_hosts"] is not None and kw["known_hosts"] != b""
+
+
+# ── review #822 H1: no host_id → pinned to the row with the same address ─────
+
+
+async def test_settings_fallback_is_pinned_to_the_row_with_the_same_address(network, boxes, monkeypatch):
+    """Idle stop / readiness gate pass to_registry_dict() (no host_id) and land
+    on the settings fallback — same address as the registered row. That row's
+    key must be learned and enforced, not skipped."""
+    from app.services.host_resolver import settings_fallback_host
+
+    real, impostor = boxes
+    monkeypatch.setattr("app.config.settings.dgx_ssh_host", "127.0.0.1")
+    monkeypatch.setattr("app.config.settings.dgx_ssh_user", "mc")
+    host = await _make_host(slug="dgx-box")
+    target = settings_fallback_host()
+    assert target.host_id is None and target.source == "settings"
+
+    assert (await runtime_manager._ssh_run("docker stop x", host=target))[2] == 0
+    assert ssh_host_keys.fingerprint((await _reload(host.id)).ssh_host_key) == real.fingerprint
+
+    network.box = impostor
+    with pytest.raises(ssh_host_keys.HostKeyMismatchError) as exc_info:
+        await runtime_manager._ssh_run("docker stop y", host=settings_fallback_host())
+    assert impostor.commands == []
+    assert "/api/v1/hosts/dgx-box/ssh-host-key/trust" in str(exc_info.value)
+    assert ssh_host_keys.fingerprint((await _reload(host.id)).ssh_host_key_rejected) == impostor.fingerprint
+
+
+async def test_two_rows_on_one_address_the_row_with_a_key_wins(network, boxes):
+    real, impostor = boxes
+    await _make_host(slug="a-unpinned-duplicate")
+    keyed = await _make_host(
+        slug="z-pinned", ssh_host_key=ssh_host_keys.export_key(real.host_key.convert_to_public()),
+    )
+    network.box = impostor
+    target = ResolvedHost(ssh_host="127.0.0.1", ssh_user="mc", source="legacy_host_field")
+    with pytest.raises(ssh_host_keys.HostKeyMismatchError):
+        await runtime_manager._ssh_run("x", host=target)
+    assert impostor.commands == []
+    assert (await _reload(keyed.id)).ssh_host_key_rejected is not None
+
+
+# ── review #822 M1/M2: which key is learned, and the pin holds ───────────────
+
+
+@pytest.fixture
+async def multi_key_boxes():
+    real = await _Box("ssh-rsa", "ecdsa-sha2-nistp256", "ssh-ed25519").start()
+    swapped = await _Box("ssh-rsa", "ecdsa-sha2-nistp256", "ssh-ed25519").start()
+    yield real, swapped
+    await real.stop()
+    await swapped.stop()
+
+
+async def test_box_with_rsa_and_ed25519_learns_ed25519(network, multi_key_boxes):
+    real, _ = multi_key_boxes
+    network.box = real
+    host = await _make_host()
+    await runtime_manager._ssh_run("learn", host=resolved_host_from_row(host))
+
+    stored = ssh_host_keys.parse_key((await _reload(host.id)).ssh_host_key)
+    assert stored.get_algorithm() == "ssh-ed25519"
+    assert stored == real.public("ssh-ed25519")
+    event = (await _events("host.ssh_key_learned"))[0]
+    assert event.detail["algorithm"] == "ssh-ed25519"
+    assert event.detail["key_file"] == "/etc/ssh/ssh_host_ed25519_key.pub"
+
+    # the pin holds: the same box connects again with the learned ed25519 key
+    assert (await runtime_manager._ssh_run("again", host=resolved_host_from_row(await _reload(host.id))))[2] == 0
+
+
+async def test_existing_rsa_pin_keeps_working_and_mismatch_names_rsa(network, multi_key_boxes):
+    """A row that learned RSA (asyncssh's own default before this fix) must
+    keep connecting — asyncssh negotiates exactly the pinned algorithm — and a
+    mismatch must point at the RSA key file, not at ed25519."""
+    real, swapped = multi_key_boxes
+    network.box = real
+    host = await _make_host(ssh_host_key=ssh_host_keys.export_key(real.public("ssh-rsa")))
+
+    assert (await runtime_manager._ssh_run("rsa ok", host=resolved_host_from_row(host)))[2] == 0
+    assert ssh_host_keys.parse_key((await _reload(host.id)).ssh_host_key) == real.public("ssh-rsa")
+
+    network.box = swapped
+    with pytest.raises(ssh_host_keys.HostKeyMismatchError) as exc_info:
+        await runtime_manager._ssh_run("x", host=resolved_host_from_row(await _reload(host.id)))
+    err = exc_info.value
+    assert swapped.commands == []
+    assert err.expected_algorithm == "ssh-rsa" and err.presented_algorithm == "ssh-rsa"
+    assert "ssh-rsa " + swapped.public("ssh-rsa").get_fingerprint() in str(err)
+    assert "/etc/ssh/ssh_host_rsa_key.pub" in str(err)
+    event = (await _events("host.ssh_key_mismatch"))[0]
+    assert event.detail["presented_algorithm"] == "ssh-rsa"
+    assert event.detail["key_file"] == "/etc/ssh/ssh_host_rsa_key.pub"
+
+
+async def test_rsa_only_box_still_learns(network):
+    box = await _Box("ssh-rsa").start()
+    try:
+        network.box = box
+        host = await _make_host()
+        assert (await runtime_manager._ssh_run("x", host=resolved_host_from_row(host)))[2] == 0
+        assert ssh_host_keys.parse_key((await _reload(host.id)).ssh_host_key).get_algorithm() == "ssh-rsa"
+        assert (await runtime_manager._ssh_run("y", host=resolved_host_from_row(await _reload(host.id))))[2] == 0
+    finally:
+        await box.stop()
+
+
+def test_key_file_per_algorithm():
+    assert ssh_host_keys.host_key_file("ssh-ed25519") == "/etc/ssh/ssh_host_ed25519_key.pub"
+    assert ssh_host_keys.host_key_file("ecdsa-sha2-nistp256") == "/etc/ssh/ssh_host_ecdsa_key.pub"
+    assert ssh_host_keys.host_key_file("ssh-rsa") == "/etc/ssh/ssh_host_rsa_key.pub"

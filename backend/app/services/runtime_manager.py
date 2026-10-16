@@ -419,11 +419,14 @@ async def _ssh_run(
             "/hosts anlegen und die Runtime binden."
         )
     # Host key: trust on first use, pinned on the host row (services/
-    # ssh_host_keys.py). Registry hosts are pinned; a target without a row
-    # (ad-hoc wizard probe, legacy runtime.host, bare settings fallback) has
-    # nothing to pin to and stays unchecked — logged once per address.
+    # ssh_host_keys.py). A target without host_id (settings fallback, legacy
+    # runtime.host, to_registry_dict() callers) is pinned to the row with the
+    # same address; only an address with no row at all (ad-hoc wizard probe)
+    # stays unchecked — logged once per address.
     pin = await ssh_host_keys.load_pin(
-        target.host_id, label=target.slug or target.display_name or target.ssh_host
+        target.host_id,
+        label=target.slug or target.display_name or target.ssh_host,
+        address=target.ssh_host,
     )
     if pin is None:
         ssh_host_keys.warn_unpinned(target.ssh_host, target.source)

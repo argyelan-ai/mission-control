@@ -26,11 +26,20 @@ The rule now, for every SSH connection to a registry host:
      (:func:`trust_rejected_key`). The fingerprint has to match, so what gets
      trusted is the key the operator looked at, not whatever answers next.
 
-Connections without a host row (the box wizard's ad-hoc probe of a box that
-has no row yet, the legacy ``runtime.host`` field, the ``settings.dgx_ssh_*``
-fallback without a seeded row) have nothing to pin to and stay unpinned —
-with a warning in the log. The host seeder creates a row for the settings
-box, so in practice this is the wizard's first probe only.
+A connection whose target carries no ``host_id`` (the ``settings.dgx_ssh_*``
+fallback, the legacy ``runtime.host`` field, callers passing
+``to_registry_dict()`` like the idle stop or the readiness gate, memory prep)
+is pinned to the host row with the same address (``Host.ssh_host``) — the
+settings box has such a row from the host seeder. Only an address with no
+row at all (the box wizard's ad-hoc probe of a box not yet added) stays
+unpinned, with a warning in the log. Several rows on one address: the row
+that already holds a key wins, then the oldest (:func:`pick_host_row`).
+
+Which key gets learned: asyncssh's default order prefers RSA; in learn mode
+MC asks for ed25519 first, then ECDSA, then RSA (:data:`LEARN_HOST_KEY_ALGS`).
+Once pinned, asyncssh negotiates exactly the stored key's algorithm, so a
+row that already learned an RSA key keeps working. Messages and events name
+the algorithm and the matching ``/etc/ssh/ssh_host_*_key.pub`` file.
 
 The system ``ssh`` binary is used in one place: backend container → the MC
 host itself (``host.docker.internal``, host-agent launchctl calls). Those
@@ -56,6 +65,37 @@ logger = logging.getLogger("mc.ssh_host_keys")
 #: Stable code for the mismatch — UI/clients match on this, not on the sentence.
 MISMATCH_CODE = "ssh_host_key_mismatch"
 
+#: Learn mode: host-key algorithms in MC's order of preference. asyncssh's
+#: default puts RSA first; ed25519 is the key every current OpenSSH server
+#: has and the one an operator usually compares.
+LEARN_HOST_KEY_ALGS = [
+    "ssh-ed25519",
+    "ecdsa-sha2-nistp256",
+    "ecdsa-sha2-nistp384",
+    "ecdsa-sha2-nistp521",
+    "rsa-sha2-512",
+    "rsa-sha2-256",
+    "ssh-rsa",
+]
+
+
+def host_key_file(algorithm: str) -> str:
+    """Where the box keeps the public half of a host key of this type."""
+    if algorithm == "ssh-ed25519":
+        name = "ed25519"
+    elif algorithm.startswith("ecdsa-"):
+        name = "ecdsa"
+    elif algorithm in ("ssh-rsa", "rsa-sha2-256", "rsa-sha2-512"):
+        name = "rsa"
+    else:
+        name = "*"
+    return f"/etc/ssh/ssh_host_{name}_key.pub"
+
+
+def describe(key: asyncssh.SSHKey) -> str:
+    """'ssh-ed25519 SHA256:...' — algorithm plus fingerprint, as ssh-keygen -l shows both."""
+    return f"{key.get_algorithm()} {key.get_fingerprint()}"
+
 
 class HostKeyMismatchError(asyncssh.HostKeyNotVerifiable):
     """The box presented a different host key than the one MC stored.
@@ -68,11 +108,13 @@ class HostKeyMismatchError(asyncssh.HostKeyNotVerifiable):
     # `code` is asyncssh's disconnect code (keep it); this is ours.
     error_code = MISMATCH_CODE
 
-    def __init__(self, *, label: str, host_ref: str | None, expected_fp: str, presented_fp: str):
+    def __init__(self, *, label: str, host_ref: str | None, expected: asyncssh.SSHKey, presented: asyncssh.SSHKey):
         self.label = label
         self.host_ref = host_ref
-        self.expected_fingerprint = expected_fp
-        self.presented_fingerprint = presented_fp
+        self.expected_fingerprint = expected.get_fingerprint()
+        self.presented_fingerprint = presented_fp = presented.get_fingerprint()
+        self.expected_algorithm = expected.get_algorithm()
+        self.presented_algorithm = presented.get_algorithm()
         how = (
             f"POST /api/v1/hosts/{host_ref}/ssh-host-key/trust with "
             f'{{"fingerprint": "{presented_fp}"}}'
@@ -81,10 +123,10 @@ class HostKeyMismatchError(asyncssh.HostKeyNotVerifiable):
         )
         message = (
             f"SSH host key of '{label}' has changed — connection refused. "
-            f"Expected {expected_fp}, the box presented {presented_fp}. "
+            f"Expected {describe(expected)}, the box presented {describe(presented)}. "
             "This happens after a reinstall, but it is also what a different "
             "device on that address looks like. Check the fingerprint on the box "
-            f"(ssh-keygen -lf /etc/ssh/ssh_host_*_key.pub); if it matches, {how}."
+            f"(ssh-keygen -lf {host_key_file(self.presented_algorithm)}); if it matches, {how}."
         )
         super().__init__(message)
 
@@ -151,11 +193,14 @@ class HostKeyPin:
         ``~/.ssh/known_hosts`` of the container user) — an explicit
         (trusted, ca, revoked) tuple is exactly "trust these keys, nothing else".
         """
-        trusted = [self.expected] if self.expected is not None else []
-        return {
-            "known_hosts": (trusted, [], []),
-            "client_factory": lambda: _PinningClient(self),
-        }
+        kwargs: dict = {"client_factory": lambda: _PinningClient(self)}
+        if self.expected is not None:
+            # Pinned: asyncssh offers only the stored key's algorithm.
+            kwargs["known_hosts"] = ([self.expected], [], [])
+        else:
+            kwargs["known_hosts"] = ([], [], [])
+            kwargs["server_host_key_algs"] = LEARN_HOST_KEY_ALGS
+        return kwargs
 
     @property
     def learned(self) -> asyncssh.SSHKey | None:
@@ -170,10 +215,7 @@ class HostKeyPin:
         if self.expected is None or self.presented is None or self.presented == self.expected:
             return None
         return HostKeyMismatchError(
-            label=self.label,
-            host_ref=self.host_ref,
-            expected_fp=self.expected.get_fingerprint(),
-            presented_fp=self.presented.get_fingerprint(),
+            label=self.label, host_ref=self.host_ref, expected=self.expected, presented=self.presented,
         )
 
 
@@ -187,21 +229,53 @@ def pin_for_host_row(host) -> HostKeyPin:
     )
 
 
-async def load_pin(host_id: uuid.UUID | None, *, label: str) -> HostKeyPin | None:
-    """Pin for a registry host, read fresh from the DB (short-lived session,
-    like runtime_manager._load_vault_ssh_private_key). None when there is no
-    row to pin to — the caller then connects unpinned and says so in the log."""
-    if host_id is None:
+def pick_host_row(rows):
+    """Deterministic choice among host rows sharing one address: a row that
+    already holds a key wins (that key must keep being enforced), then the
+    oldest row, then the slug."""
+    rows = list(rows)
+    if not rows:
         return None
+    return sorted(
+        rows,
+        key=lambda h: (h.ssh_host_key is None, h.created_at is None, str(h.created_at or ""), h.slug or ""),
+    )[0]
+
+
+async def host_row_for_address(session, address: str | None):
+    """The host row registered for this SSH address (see pick_host_row)."""
+    from sqlmodel import select
+
+    from app.models.host import Host
+
+    if not address:
+        return None
+    rows = (await session.exec(select(Host).where(Host.ssh_host == address))).all()
+    return pick_host_row(rows)
+
+
+async def load_pin(host_id: uuid.UUID | None, *, label: str, address: str | None = None) -> HostKeyPin | None:
+    """Pin for a host, read fresh from the DB (short-lived session, like
+    runtime_manager._load_vault_ssh_private_key).
+
+    ``host_id`` set: that row. Not set: the row with the same address, so the
+    settings fallback and ``to_registry_dict()`` callers are pinned to the
+    registered box they really talk to. None only when no row exists — the
+    caller then connects unpinned and says so in the log."""
     from sqlmodel.ext.asyncio.session import AsyncSession
 
     from app.database import engine
     from app.models.host import Host
 
+    if host_id is None and not address:
+        return None
     async with AsyncSession(engine, expire_on_commit=False) as session:
-        host = await session.get(Host, host_id)
+        host = await session.get(Host, host_id) if host_id is not None else None
+        if host is None:
+            if host_id is not None:
+                logger.warning("SSH to '%s': host row %s is gone — trying the address.", label, host_id)
+            host = await host_row_for_address(session, address)
     if host is None:
-        logger.warning("SSH to '%s': host row %s is gone — connecting without host-key pin.", label, host_id)
         return None
     return pin_for_host_row(host)
 
@@ -267,10 +341,7 @@ async def remember_learned_key(pin: HostKeyPin) -> HostKeyMismatchError | None:
             host = await session.get(Host, pin.host_id)
             stored = parse_key(host.ssh_host_key) if host is not None else None
             if stored is not None and stored != key:
-                return HostKeyMismatchError(
-                    label=pin.label, host_ref=pin.host_ref,
-                    expected_fp=stored.get_fingerprint(), presented_fp=key.get_fingerprint(),
-                )
+                return HostKeyMismatchError(label=pin.label, host_ref=pin.host_ref, expected=stored, presented=key)
             return None
     await emit_learned_event(pin.host_id, pin.label, key)
     return None
@@ -281,9 +352,14 @@ async def emit_learned_event(host_id: uuid.UUID, label: str, key: asyncssh.SSHKe
     logger.info("SSH host key of '%s' learned: %s", label, key.get_fingerprint())
     await _emit(
         "host.ssh_key_learned",
-        f"SSH host key of '{label}' stored (first connection): {key.get_fingerprint()}",
+        f"SSH host key of '{label}' stored (first connection): {describe(key)}",
         "info",
-        {"host_id": str(host_id), "fingerprint": key.get_fingerprint(), "algorithm": key.get_algorithm()},
+        {
+            "host_id": str(host_id),
+            "fingerprint": key.get_fingerprint(),
+            "algorithm": key.get_algorithm(),
+            "key_file": host_key_file(key.get_algorithm()),
+        },
     )
 
 
@@ -317,7 +393,10 @@ async def record_mismatch(pin: HostKeyPin, err: HostKeyMismatchError) -> None:
                 "code": MISMATCH_CODE,
                 "host_id": str(pin.host_id),
                 "expected_fingerprint": err.expected_fingerprint,
+                "expected_algorithm": err.expected_algorithm,
                 "presented_fingerprint": err.presented_fingerprint,
+                "presented_algorithm": err.presented_algorithm,
+                "key_file": host_key_file(err.presented_algorithm),
             },
         )
 
