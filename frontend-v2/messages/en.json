@@ -1208,7 +1208,7 @@
   },
   "login": {
     "consoleAccess": "Console · Access",
-    "tagline": "The control room for your agent fleet. One signal, no noise.",
+    "tagline": "A phone remote for coding agents on your own models.",
     "createFirstAdmin": "Create the first admin account",
     "signIn": "Sign in",
     "signingIn": "Signing in…",
