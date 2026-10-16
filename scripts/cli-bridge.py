@@ -19,7 +19,7 @@ Auth: every endpoint except /ping — and every WebSocket PTY attach on
 WS_PORT — requires the header ``X-MC-Bridge-Token`` with the shared secret.
 The secret lives in a 0600 file (CLI_BRIDGE_TOKEN_FILE, default
 $HOME/.mc/secrets/cli-bridge.token) and is created on first start. Missing or
-wrong token → HTTP 401 / WebSocket close 1008. See docs/setup/cli-bridge-auth.md.
+wrong token → HTTP 401 (for the WebSocket already in the handshake). See docs/setup/cli-bridge-auth.md.
 
 Bind: CLI_BRIDGE_BIND (default 127.0.0.1). Docker Desktop on macOS forwards
 host.docker.internal to the host's loopback, so the backend container still
@@ -44,7 +44,8 @@ import sys
 import termios
 import threading
 from datetime import datetime
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http import HTTPStatus
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 import time
 from typing import Optional
@@ -74,14 +75,27 @@ TOKEN_FILE = Path(
 BRIDGE_TOKEN: Optional[str] = None
 
 
+MIN_TOKEN_LEN = 32
+
+
+class WeakTokenError(ValueError):
+    """Configured token is too short — the helper refuses to start."""
+
+
 def _load_or_create_token(path: Path) -> str:
     """Return the shared token; create the 0600 token file once if missing.
 
     CLI_BRIDGE_TOKEN (env) wins over the file — for supervisors that inject
-    secrets themselves. Never logs or prints the token value.
+    secrets themselves. A token shorter than MIN_TOKEN_LEN (env or file) raises
+    WeakTokenError: better no helper than a guessable one. Never logs or
+    prints the token value.
     """
     env_token = os.environ.get("CLI_BRIDGE_TOKEN", "").strip()
     if env_token:
+        if len(env_token) < MIN_TOKEN_LEN:
+            raise WeakTokenError(
+                f"CLI_BRIDGE_TOKEN is shorter than {MIN_TOKEN_LEN} characters"
+            )
         return env_token
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -89,9 +103,13 @@ def _load_or_create_token(path: Path) -> str:
     except FileNotFoundError:
         token = ""
     if token:
+        if len(token) < MIN_TOKEN_LEN:
+            raise WeakTokenError(
+                f"token file {str(path)!r} holds fewer than {MIN_TOKEN_LEN} characters"
+            )
         if path.stat().st_mode & 0o077:
             os.chmod(path, 0o600)
-            log(f"WARN: token file {path} was readable by others — tightened to 0600")
+            log(f"WARN: token file {str(path)!r} was readable by others — tightened to 0600")
         return token
     token = _secrets.token_urlsafe(32)
     tmp = path.with_name(path.name + f".tmp-{os.getpid()}")
@@ -102,7 +120,7 @@ def _load_or_create_token(path: Path) -> str:
         os.close(fd)
     os.chmod(tmp, 0o600)
     os.replace(tmp, path)
-    log(f"Created new bridge token file {path} (0600)")
+    log(f"Created new bridge token file {str(path)!r} (0600)")
     return token
 
 
@@ -975,6 +993,9 @@ def _fetch_omp_sha256(version: str) -> dict:
 
 
 class Handler(BaseHTTPRequestHandler):
+    # Socket timeout per connection: a client that opens a connection and
+    # never finishes its request is dropped instead of holding a thread.
+    timeout = 30
     def log_message(self, fmt, *args):
         log(f"{self.address_string()} {fmt % args}")
 
@@ -1370,8 +1391,9 @@ async def _pty_ws_handler(websocket):
 
     The browser never talks to this port: it connects to the backend's WS
     proxy (stream ticket + admin role), and the backend dials here with the
-    shared token header. Without a valid token: close 1008 before any tmux
-    call — no session lookup, no PTY.
+    shared token header. The handshake gate (_ws_process_request) already
+    answers 401; this check is defence in depth for any other serve() call:
+    close 1008 before any tmux call — no session lookup, no PTY.
     """
     if not _token_valid(websocket.request.headers.get(TOKEN_HEADER)):
         peer = websocket.remote_address[0] if websocket.remote_address else "?"
@@ -1483,9 +1505,32 @@ async def _pty_ws_handler(websocket):
         log(f"WS PTY closed: session={session}")
 
 
-async def _run_ws_server():
+def _ws_process_request(connection, request):
+    """Handshake gate: no valid token → plain HTTP 401, the WebSocket is
+    never opened (and _pty_ws_handler never runs)."""
+    if _token_valid(request.headers.get(TOKEN_HEADER)):
+        return None
+    peer = connection.remote_address[0] if connection.remote_address else "?"
+    log(f"WS AUTH: rejected PTY handshake from {peer} (missing or wrong {TOKEN_HEADER})")
+    return connection.respond(HTTPStatus.UNAUTHORIZED, "unauthorized\n")
+
+
+def _ws_serve(host: str, port: int):
+    """The PTY WebSocket server (async context manager) — one definition for
+    main and tests, so the handshake gate cannot be left out."""
     import websockets as _ws
-    async with _ws.serve(_pty_ws_handler, BIND, WS_PORT):
+    return _ws.serve(_pty_ws_handler, host, port, process_request=_ws_process_request)
+
+
+def _make_http_server(host: str, port: int) -> ThreadingHTTPServer:
+    """Threaded: one slow or stuck client cannot block MC's other calls."""
+    server = ThreadingHTTPServer((host, port), Handler)
+    server.daemon_threads = True
+    return server
+
+
+async def _run_ws_server():
+    async with _ws_serve(BIND, WS_PORT):
         log(f"WS PTY server listening on ws://{BIND}:{WS_PORT} (token required)")
         await asyncio.Future()  # run forever
 
@@ -1496,14 +1541,18 @@ def _start_ws_server():
 
 
 if __name__ == "__main__":
-    if "--init-token" in sys.argv[1:]:
-        # Rollout/installer helper: make sure the token file exists, print
-        # only its path (the value never goes to stdout or the log).
-        _load_or_create_token(TOKEN_FILE)
-        print(TOKEN_FILE)
-        sys.exit(0)
-    log(f"CLI Agent Bridge starting on port {PORT}")
-    BRIDGE_TOKEN = _load_or_create_token(TOKEN_FILE)
+    try:
+        if "--init-token" in sys.argv[1:]:
+            # Rollout/installer helper: make sure the token file exists, print
+            # only its path (the value never goes to stdout or the log).
+            _load_or_create_token(TOKEN_FILE)
+            print(TOKEN_FILE)
+            sys.exit(0)
+        log(f"CLI Agent Bridge starting on port {PORT}")
+        BRIDGE_TOKEN = _load_or_create_token(TOKEN_FILE)
+    except WeakTokenError as e:
+        log(f"FATAL: {e} — refusing to start (see docs/setup/cli-bridge-auth.md)")
+        sys.exit(2)
     _check_tmux()
     ws_thread = threading.Thread(target=_start_ws_server, daemon=True)
     ws_thread.start()
@@ -1513,6 +1562,6 @@ if __name__ == "__main__":
     for agent_dir in (AGENTS_DIR.iterdir() if AGENTS_DIR.is_dir() else []):
         if agent_dir.is_dir() and (agent_dir / "settings.json").exists() and (agent_dir / "worker.sh").exists():
             _start_worker_session(agent_dir.name)
-    server = HTTPServer((BIND, PORT), Handler)
+    server = _make_http_server(BIND, PORT)
     log(f"Listening on http://{BIND}:{PORT} (token required except /ping)")
     server.serve_forever()

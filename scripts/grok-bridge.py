@@ -65,7 +65,7 @@ from typing import Optional
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import context_detect  # noqa: E402
 
-# Ports: 18792/18793 = free-code-bridge, 18794 = hermes-bridge, 18795 = grok-bridge.
+# Ports: 18792/18793 = cli-bridge, 18794 = hermes-bridge, 18795 = grok-bridge.
 PORT = 18795
 HOST = "127.0.0.1"  # localhost only, never the wildcard bind (same L-C rule as hermes-bridge)
 HOME_DIR = Path(os.environ.get("HOME_HOST", str(Path.home())))

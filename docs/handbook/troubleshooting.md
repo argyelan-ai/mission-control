@@ -153,8 +153,14 @@ make bridge-install                 # or: python3 scripts/cli-bridge.py &
 - `/ping` fails from the container but works on the host (Linux): the helper
   listens on `127.0.0.1`; set `CLI_BRIDGE_BIND` to the docker bridge address.
 - Backend log shows `rejected (401)`: the backend cannot read
-  `~/.mc/secrets/cli-bridge.token` — set `CLI_BRIDGE_TOKEN` in `.env` to the
-  file's value and recreate `backend` + `mc-worker`.
+  `~/.mc/secrets/cli-bridge.token` — point `CLI_BRIDGE_TOKEN_FILE` at a 0600
+  file under `~/.mc/` that both sides read, then recreate `backend` +
+  `mc-worker` (`CLI_BRIDGE_TOKEN` in `.env` only as a last resort: agent
+  containers can read `.env`).
+- `make bridge-install` stops with "port 18792 is still in use": an older
+  helper under another launchd label or a hand-started one still runs. The
+  message names the process; stop it (or name its label in
+  `CLI_BRIDGE_LEGACY_LABELS`) and re-run.
 
 Details: [CLI-Bridge auth](../setup/cli-bridge-auth.md).
 

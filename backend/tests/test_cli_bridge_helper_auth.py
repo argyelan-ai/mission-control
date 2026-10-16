@@ -10,17 +10,32 @@ import asyncio
 import importlib.util
 import json
 import os
+import socket
 import stat
+import subprocess
+import sys
 import threading
+import time
 import urllib.error
 import urllib.request
-from http.server import HTTPServer
 from pathlib import Path
 
 import pytest
 
 _SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "cli-bridge.py"
 TOKEN = "test-token-0123456789abcdef0123456789abcdef"
+# The helper's `_sp` IS the subprocess module, and the autouse fixture below
+# stubs it out; tests that really start a child process use this original.
+_REAL_RUN = subprocess.run
+_REAL_POPEN = subprocess.Popen
+
+
+@pytest.fixture
+def real_subprocess(monkeypatch):
+    """Undo the host-side-effect stub for tests that start the script as a
+    separate process (it only reads env and exits)."""
+    monkeypatch.setattr(subprocess, "run", _REAL_RUN)
+    monkeypatch.setattr(subprocess, "Popen", _REAL_POPEN)
 
 
 @pytest.fixture(scope="module")
@@ -43,7 +58,7 @@ def bridge(tmp_path_factory):
 
 @pytest.fixture(scope="module")
 def http_base(bridge):
-    server = HTTPServer(("127.0.0.1", 0), bridge.Handler)
+    server = bridge._make_http_server("127.0.0.1", 0)
     t = threading.Thread(target=server.serve_forever, daemon=True)
     t.start()
     yield f"http://127.0.0.1:{server.server_address[1]}"
@@ -142,47 +157,99 @@ def test_rejection_log_never_contains_the_token(bridge, http_base):
 # ── WebSocket PTY ────────────────────────────────────────────────────────
 
 
-def _ws_attach(bridge, headers: dict | None):
+def _ws_handshake(bridge, headers: dict | None):
+    """Connect to the helper's real PTY server definition (_ws_serve).
+    Returns ("http", status) when the handshake is refused, or
+    ("ws", close_code, close_reason) when the WebSocket opened."""
     import websockets
+
+    async def run():
+        async with bridge._ws_serve("127.0.0.1", 0) as server:
+            port = server.sockets[0].getsockname()[1]
+            try:
+                async with websockets.connect(
+                    f"ws://127.0.0.1:{port}/some-task", additional_headers=headers or {}
+                ) as ws:
+                    try:
+                        await asyncio.wait_for(ws.recv(), timeout=5)
+                    except websockets.ConnectionClosed:
+                        pass
+                    return ("ws", ws.close_code, ws.close_reason)
+            except websockets.InvalidStatus as e:
+                return ("http", e.response.status_code)
+
+    return asyncio.run(run())
+
+
+def test_ws_without_token_is_refused_in_the_handshake(bridge, monkeypatch):
+    calls = []
+    monkeypatch.setattr(bridge._sp, "run", lambda *a, **k: calls.append(a) or _NoSessions())
+    assert _ws_handshake(bridge, None) == ("http", 401)
+    assert calls == []  # no session lookup, no PTY
+
+
+def test_ws_wrong_token_is_refused_in_the_handshake(bridge):
+    assert _ws_handshake(bridge, {"X-MC-Bridge-Token": "nope"}) == ("http", 401)
+
+
+def test_ws_correct_token_passes_the_gate(bridge):
+    """Past the gate the handler looks for the tmux session; none exists here,
+    so the close reason proves the token was accepted."""
+    assert _ws_handshake(bridge, {"X-MC-Bridge-Token": TOKEN}) == ("ws", 1008, "Session not found")
+
+
+def test_ws_handler_itself_also_checks_the_token(bridge, monkeypatch):
+    """Defence in depth: served WITHOUT the handshake gate, the handler still
+    closes 1008 before any tmux call."""
+    import websockets
+
+    calls = []
+    monkeypatch.setattr(bridge._sp, "run", lambda *a, **k: calls.append(a) or _NoSessions())
 
     async def run():
         async with websockets.serve(bridge._pty_ws_handler, "127.0.0.1", 0) as server:
             port = server.sockets[0].getsockname()[1]
-            async with websockets.connect(
-                f"ws://127.0.0.1:{port}/some-task", additional_headers=headers or {}
-            ) as ws:
+            async with websockets.connect(f"ws://127.0.0.1:{port}/x") as ws:
                 try:
                     await asyncio.wait_for(ws.recv(), timeout=5)
                 except websockets.ConnectionClosed:
                     pass
                 return ws.close_code, ws.close_reason
 
-    return asyncio.run(run())
+    assert asyncio.run(run()) == (1008, "unauthorized")
+    assert calls == []
 
 
-def test_ws_without_token_is_closed_before_any_tmux_call(bridge, monkeypatch):
-    calls = []
-    monkeypatch.setattr(bridge._sp, "run", lambda *a, **k: calls.append(a) or _NoSessions())
-    code, reason = _ws_attach(bridge, None)
-    assert (code, reason) == (1008, "unauthorized")
-    assert calls == []  # no session lookup, no PTY
+# ── threading: a stuck client cannot block the helper ─────────────────────
 
 
-def test_ws_wrong_token_is_closed(bridge, monkeypatch):
-    monkeypatch.setattr(bridge._sp, "run", lambda *a, **k: _NoSessions())
-    code, reason = _ws_attach(bridge, {"X-MC-Bridge-Token": "nope"})
-    assert (code, reason) == (1008, "unauthorized")
+def test_stuck_client_does_not_block_other_requests(bridge):
+    server = bridge._make_http_server("127.0.0.1", 0)
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    host, port = server.server_address
+    stuck = socket.create_connection((host, port), timeout=5)
+    try:
+        stuck.sendall(b"GET /ping HTTP/1.1\r\nHost: x\r\n")  # never finishes
+        time.sleep(0.2)
+        started = time.monotonic()
+        status, body = _call(f"http://{host}:{port}/ping")
+        assert status == 200 and json.loads(body) == {"status": "ok"}
+        assert time.monotonic() - started < 3
+    finally:
+        stuck.close()
+        server.shutdown()
+        server.server_close()
 
 
-def test_ws_correct_token_passes_the_gate(bridge, monkeypatch):
-    """Past the gate the handler looks for the tmux session; none exists here,
-    so the close reason proves the token was accepted."""
-    monkeypatch.setattr(bridge._sp, "run", lambda *a, **k: _NoSessions())
-    code, reason = _ws_attach(bridge, {"X-MC-Bridge-Token": TOKEN})
-    assert (code, reason) == (1008, "Session not found")
+def test_handler_has_a_socket_timeout(bridge):
+    assert 0 < bridge.Handler.timeout <= 60
 
 
-# ── token file + bind ─────────────────────────────────────────────────────
+# ── token file ────────────────────────────────────────────────────────────
+
+
+LONG = "x" * 40
 
 
 def test_token_file_created_once_0600(bridge, tmp_path, monkeypatch):
@@ -198,20 +265,88 @@ def test_token_file_created_once_0600(bridge, tmp_path, monkeypatch):
 def test_token_file_open_permissions_are_tightened(bridge, tmp_path, monkeypatch):
     monkeypatch.delenv("CLI_BRIDGE_TOKEN", raising=False)
     path = tmp_path / "cli-bridge.token"
-    path.write_text("abc\n")
+    path.write_text(LONG + "\n")
     path.chmod(0o644)
-    assert bridge._load_or_create_token(path) == "abc"
+    assert bridge._load_or_create_token(path) == LONG
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
 def test_env_token_wins_over_file(bridge, tmp_path, monkeypatch):
-    monkeypatch.setenv("CLI_BRIDGE_TOKEN", "from-env")
+    monkeypatch.setenv("CLI_BRIDGE_TOKEN", "e" * 32)
     path = tmp_path / "cli-bridge.token"
-    assert bridge._load_or_create_token(path) == "from-env"
+    assert bridge._load_or_create_token(path) == "e" * 32
     assert not path.exists()
+
+
+def test_short_env_token_refuses_to_start(bridge, tmp_path, monkeypatch):
+    monkeypatch.setenv("CLI_BRIDGE_TOKEN", "e" * 31)
+    with pytest.raises(bridge.WeakTokenError) as exc:
+        bridge._load_or_create_token(tmp_path / "cli-bridge.token")
+    assert "e" * 31 not in str(exc.value)
+
+
+def test_short_token_file_refuses_to_start(bridge, tmp_path, monkeypatch):
+    monkeypatch.delenv("CLI_BRIDGE_TOKEN", raising=False)
+    path = tmp_path / "cli-bridge.token"
+    path.write_text("short\n")
+    with pytest.raises(bridge.WeakTokenError):
+        bridge._load_or_create_token(path)
+
+
+def test_short_token_exits_the_process_nonzero(tmp_path, real_subprocess):
+    """End to end: the script itself refuses to start (exit 2), logs why,
+    and never writes the value anywhere."""
+    env = {**os.environ, "CLI_BRIDGE_TOKEN": "too-short-value",
+           "CLI_BRIDGE_LOG_DIR": str(tmp_path), "HOME": str(tmp_path)}
+    r = _REAL_RUN([sys.executable, str(_SCRIPT), "--init-token"], env=env,
+                       capture_output=True, text=True, timeout=30)
+    assert r.returncode == 2
+    assert "refusing to start" in r.stdout
+    assert "too-short-value" not in r.stdout + r.stderr
+    assert "too-short-value" not in (tmp_path / "cli-bridge.log").read_text()
+
+
+# ── bind ──────────────────────────────────────────────────────────────────
+
+
+def _non_loopback_ipv4() -> str | None:
+    """This machine's primary non-loopback address (no packet is sent)."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("192.0.2.1", 9))  # TEST-NET-1, routing lookup only
+        ip = s.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        s.close()
+    return None if ip.startswith("127.") else ip
 
 
 def test_default_bind_is_loopback(bridge):
     assert bridge.BIND == "127.0.0.1"
-    src = _SCRIPT.read_text()
-    assert '"0.0.0.0"' not in src
+    assert '"0.0.0.0"' not in _SCRIPT.read_text()
+
+
+def test_server_on_default_bind_listens_on_loopback_only(bridge):
+    server = bridge._make_http_server(bridge.BIND, 0)
+    try:
+        assert server.socket.getsockname()[0] == "127.0.0.1"
+        port = server.server_address[1]
+        ip = _non_loopback_ipv4()
+        if ip is None:
+            pytest.skip("no non-loopback IPv4 address on this machine")
+        with pytest.raises(OSError):  # refused: nothing listens on that address
+            socket.create_connection((ip, port), timeout=2).close()
+    finally:
+        server.server_close()
+
+
+def test_bind_env_is_honoured(tmp_path, real_subprocess):
+    env = {**os.environ, "CLI_BRIDGE_BIND": "0.0.0.0", "CLI_BRIDGE_LOG_DIR": str(tmp_path)}
+    code = (
+        "import importlib.util,sys;"
+        f"s=importlib.util.spec_from_file_location('b', {str(_SCRIPT)!r});"
+        "m=importlib.util.module_from_spec(s);s.loader.exec_module(m);print(m.BIND)"
+    )
+    r = _REAL_RUN([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=30)
+    assert r.stdout.strip() == "0.0.0.0", r.stderr
