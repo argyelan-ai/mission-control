@@ -314,6 +314,19 @@ rules:
     status: active
     checked: 2026-10-01
 
+  - id: R-ssh-host-key-pinned
+    says: "SSH to a registered box checks its host key: learned on first use, a changed key is refused until an admin trusts exactly that key; the system ssh never runs with StrictHostKeyChecking=no."
+    source: "SECURITY-FINDINGS.md (SSH host-key check)"
+    owner: backend/app/services/ssh_host_keys.py
+    applies_to: ["backend/app/services/ssh_host_keys.py", "backend/app/services/runtime_manager.py", "backend/app/services/host_onboarding.py", "backend/app/services/agent_bootstrap.py", "backend/app/routers/cli_terminal.py"]
+    enforced_by:
+      - {test: "backend/tests/test_ssh_host_key_tofu.py::test_first_connection_stores_host_key_and_logs_event"}
+      - {test: "backend/tests/test_ssh_host_key_tofu.py::test_swapped_key_is_refused_before_any_command"}
+      - {test: "backend/tests/test_ssh_host_key_tofu.py::test_retrust_accepts_exactly_the_refused_key"}
+      - {test: "backend/tests/test_ssh_host_key_tofu.py::test_no_system_ssh_path_disables_host_key_checking"}
+    status: active
+    checked: 2026-10-16
+
 rejected:
   - id: X-own-control-room
     idea: "An own control-room UI, job page or coordinator for heads"

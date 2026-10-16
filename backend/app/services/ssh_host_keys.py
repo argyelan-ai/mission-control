@@ -114,6 +114,7 @@ def fingerprint(key_line: str | None) -> str | None:
 # ── the pin: what one connection must see ────────────────────────────────────
 
 
+# rule: R-ssh-host-key-pinned - a box must present the key it presented first
 class _PinningClient(asyncssh.SSHClient):
     """Records the key the server presented. asyncssh only asks this client
     when the key is NOT among the trusted keys we passed in — so with a
