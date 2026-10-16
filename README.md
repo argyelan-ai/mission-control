@@ -8,20 +8,20 @@ self-hosted, with approval gates.**
 Ask your lead agent from the couch, watch every edit land as a live diff,
 answer its questions with a tap — and keep the risky steps behind your
 approval. Runs on your hardware, prefers your local models, AGPL —
-with **one-click model recipes for one or two NVIDIA DGX Spark boxes**.
+with a **one-click model recipe for NVIDIA DGX Spark**.
 
 [![CI](https://github.com/argyelan-ai/mission-control/actions/workflows/ci.yml/badge.svg)](https://github.com/argyelan-ai/mission-control/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/argyelan-ai/mission-control?labelColor=1c1c1c)](https://github.com/argyelan-ai/mission-control/releases)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-informational?labelColor=1c1c1c)](LICENSE)
 
-[Spark recipes](#one-click-model-recipes-for-dgx-spark--one-box-or-two) · [Install](#install) · [What it does](#what-it-does) · [Maturity](#what-is-stable-and-what-is-not) ·
+[Spark recipe](#one-click-local-ai-on-dgx-spark) · [Install](#install) · [What it does](#what-it-does) · [Maturity](#what-is-stable-and-what-is-not) ·
 [Docs](#docs) · [Roadmap](#where-its-going) · [Community](#community)
 
 <img src="docs/assets/mc-hero.gif" width="100%" alt="Mission Control in 18 seconds: send a task from the phone, the agent asks and you tap, you approve the plan, it builds with live diffs — on your own models">
 
 </div>
 
-## One-click model recipes for DGX Spark — one box or two
+## One-click local AI on DGX Spark
 
 Pick a recipe on the **Runtimes** page and click **Install** — the recipe
 downloads the weights and sets up its engine while MC shows the live install
@@ -32,12 +32,9 @@ lock refuses it while the engine is still serving requests.
 | Recipe | Boxes | Engine | Measured on 2× DGX Spark |
 |---|---|---|---|
 | **GLM-5.3-Flash** · EXL3 4-bit · TensorFold | **2** (tensor parallel) | TensorFold | **62.6 tok/s** single stream · **211 tok/s** at 16 parallel · 1M context per request · prefill ~1,800 tok/s |
-| **DeepSeek-V4-Flash** · SparkInfer | 1 | vLLM | — |
-| **DeepSeek-V4-Flash** · ds4 | 1 | ds4 | — |
 
-Three recipes install with one click today; two more start with one click
-once the weights are on the box, and the [catalog](backend/config/local-recipes.json)
-lists further models. The recipes build on other people's engines, quants and
+This is the recipe MC ships today; more recipes are on the way and land in
+the same [catalog](backend/config/local-recipes.json). The recipe builds on other people's engines, quants and
 models — see [CREDITS](CREDITS.md). Note: the GLM recipe's default speculative
 drafter is licensed CC BY-NC-ND 4.0 (non-commercial); a licence-free drafter
 option exists. Numbers: our own benchmark (tokens counted from the
@@ -318,13 +315,11 @@ and some code comments are German; the UI, README and setup are English
 
 ## Credits
 
-Mission Control's local-inference recipes build on open models and engines from
-Alibaba (Qwen), DeepSeek, Z.ai (GLM), Google DeepMind (Gemma), poolside
-(Laguna), turboderp (ExLlamaV3/EXL3), ashhart (TensorFold), Inco AI (DFlash2),
-antirez (DwarfStar 4), Local Inference Lab (SparkInfer), the DGX Spark recipes
-by Mia's AI Lab, and the coding harnesses Claude Code, OpenClaude, omp,
-Hermes Agent, Kimi Code and Grok Build. Full list
-with licences and links: [CREDITS.md](./CREDITS.md).
+Mission Control's DGX Spark recipe builds on GLM-5.3-Flash by Z.ai, the
+EXL3 quantization format and ExLlamaV3 by turboderp, the TensorFold engine by
+ashhart, the DFlash2 drafter by Inco AI and the recipe work of Mia's AI Lab.
+MC drives the coding harnesses Claude Code, OpenClaude, omp, Hermes Agent,
+Kimi Code and Grok Build. Full list with licences and links: [CREDITS.md](./CREDITS.md).
 
 ## License
 
