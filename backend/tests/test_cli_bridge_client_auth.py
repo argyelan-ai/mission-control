@@ -265,18 +265,27 @@ def test_ws_proxy_sends_the_token_in_the_handshake(
 # ── guard: no caller builds bridge requests on its own ───────────────────
 
 
-def test_every_bridge_caller_uses_bridge_auth():
+def test_every_bridge_request_carries_bridge_headers():
+    """Per call site, not per file: every place that builds a request from
+    free_code_bridge_url (an f-string URL or an httpx base_url) must pass
+    bridge_headers() within the next few lines. Mentions in messages
+    (``bridge_url`` in a health payload, a log hint) are not requests."""
     offenders = []
     for path in APP_DIR.rglob("*.py"):
-        text = path.read_text()
-        if "free_code_bridge_url" not in text or path.name in ("config.py", "cli_bridge_auth.py"):
+        if path.name in ("config.py", "cli_bridge_auth.py"):
             continue
-        uses_url_for_requests = re.search(
-            r"free_code_bridge_url\}?[/\"']|base_url=settings\.free_code_bridge_url", text
-        )
-        if uses_url_for_requests and "bridge_headers" not in text:
-            offenders.append(str(path.relative_to(APP_DIR)))
-    assert offenders == [], f"bridge callers without X-MC-Bridge-Token: {offenders}"
+        lines = path.read_text().splitlines()
+        for i, line in enumerate(lines):
+            is_request = (
+                re.search(r"\{settings\.free_code_bridge_url\}[/{]", line)
+                or "base_url=settings.free_code_bridge_url" in line
+            )
+            if not is_request:
+                continue
+            window = "\n".join(lines[i : i + 8])
+            if "bridge_headers()" not in window:
+                offenders.append(f"{path.relative_to(APP_DIR)}:{i + 1}")
+    assert offenders == [], f"bridge requests without X-MC-Bridge-Token: {offenders}"
 
 
 def test_every_bridge_ws_connect_carries_the_headers():

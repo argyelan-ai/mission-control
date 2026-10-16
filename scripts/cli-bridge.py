@@ -1361,7 +1361,9 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
 
 
-WS_PORT = 18793
+# Overridable like PORT so a second instance (tests/migrations) does not
+# collide with the live PTY server; the backend derives 18793 from 18792.
+WS_PORT = int(os.environ.get("CLI_BRIDGE_WS_PORT", "18793"))
 
 async def _pty_ws_handler(websocket):
     """WebSocket handler: proxies browser ↔ PTY ↔ tmux attach.
@@ -1507,7 +1509,8 @@ if __name__ == "__main__":
     ws_thread.start()
     log(f"WS PTY server started on port {WS_PORT}")
     # Worker-Sessions für alle konfigurierten Agents starten
-    for agent_dir in AGENTS_DIR.iterdir():
+    # A fresh install has no ~/.mc/agents yet — that is not a crash.
+    for agent_dir in (AGENTS_DIR.iterdir() if AGENTS_DIR.is_dir() else []):
         if agent_dir.is_dir() and (agent_dir / "settings.json").exists() and (agent_dir / "worker.sh").exists():
             _start_worker_session(agent_dir.name)
     server = HTTPServer((BIND, PORT), Handler)
