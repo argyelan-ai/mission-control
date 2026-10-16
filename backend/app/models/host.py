@@ -71,6 +71,21 @@ class Host(SQLModel, table=True):
         default=None, foreign_key="credentials.id", ondelete="SET NULL", index=True
     )
 
+    # SSH host key, trust on first use (services/ssh_host_keys.py, migration
+    # 0216). The first connection stores the box's public host key here;
+    # every later connection must present the same key or is refused.
+    # ssh_host_key_rejected holds the DIFFERENT key a box presented the last
+    # time it was refused — the operator accepts exactly that key via
+    # POST /hosts/{id}/ssh-host-key/trust, never "whatever comes next".
+    ssh_host_key: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    ssh_host_key_learned_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
+    ssh_host_key_rejected: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    ssh_host_key_rejected_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
+
     # Tailscale address for this box, when it has one (100.64.0.0/10 or a
     # *.ts.net MagicDNS name — see services/address_classify). Optional and
     # separate from ssh_host on purpose: SSH from the backend container often

@@ -36,6 +36,7 @@ from app.models.agent import Agent
 from app.models.runtime import Runtime
 from app.routers.internal import build_runtime_env
 from app.services.activity import emit_event
+from app.services import ssh_host_keys
 from app.utils import utcnow
 
 logger = logging.getLogger("mc.agent_bootstrap")
@@ -191,8 +192,9 @@ def _launchctl_bootstrap_argv(plist_path: Path) -> list[str]:
     return [
         "ssh",
         "-o", "BatchMode=yes",
-        "-o", "StrictHostKeyChecking=no",
-        "-o", "UserKnownHostsFile=/dev/null",
+        # Host key: learn on first contact, refuse a changed key (MC-owned
+        # known_hosts under ~/.mc/ssh — services/ssh_host_keys.py).
+        *ssh_host_keys.system_ssh_host_key_options(),
         "-o", "ConnectTimeout=5",
         "-i", "/home/mcuser/.ssh/id_rsa",
         f"{effective_host_ssh_user()}@host.docker.internal",
@@ -269,8 +271,9 @@ def _launchctl_bootout_argv(label: str) -> list[str]:
     return [
         "ssh",
         "-o", "BatchMode=yes",
-        "-o", "StrictHostKeyChecking=no",
-        "-o", "UserKnownHostsFile=/dev/null",
+        # Host key: learn on first contact, refuse a changed key (MC-owned
+        # known_hosts under ~/.mc/ssh — services/ssh_host_keys.py).
+        *ssh_host_keys.system_ssh_host_key_options(),
         "-o", "ConnectTimeout=5",
         "-i", "/home/mcuser/.ssh/id_rsa",
         f"{effective_host_ssh_user()}@host.docker.internal",

@@ -33,7 +33,7 @@ from app.database import get_session
 from app.models.host import Host, normalise_role
 from app.models.runtime import Runtime
 from app.redis_client import RedisKeys, get_redis
-from app.services import host_bootstrap, host_metrics_history, host_onboarding, host_probe, launch_template, runtime_manager
+from app.services import host_bootstrap, host_metrics_history, host_onboarding, host_probe, launch_template, runtime_manager, ssh_host_keys
 from app.services.host_resolver import ResolvedHost, resolved_host_from_row, ssh_capable
 
 router = APIRouter(prefix="/api/v1/hosts", tags=["hosts"])
@@ -207,6 +207,10 @@ def _serialize_host(host: Host, current_user) -> dict:
     """
     data = host.model_dump(mode="json")
     data.pop("agent_token_hash", None)
+    # SSH host key (TOFU): public keys, not secrets — the fingerprints are
+    # what an operator compares with `ssh-keygen -lf` on the box.
+    data["ssh_host_key_fingerprint"] = ssh_host_keys.fingerprint(host.ssh_host_key)
+    data["ssh_host_key_rejected_fingerprint"] = ssh_host_keys.fingerprint(host.ssh_host_key_rejected)
     if current_user.role == Role.VIEWER:
         for field in _VIEWER_HIDDEN_FIELDS:
             data.pop(field, None)
@@ -539,6 +543,37 @@ async def bootstrap_log(
     if not host:
         raise HTTPException(status_code=404, detail=f"Host '{host_id}' nicht gefunden")
     return await host_bootstrap.read_log(str(host.id), cursor)
+
+
+class HostKeyTrustBody(BaseModel):
+    """The fingerprint the operator checked on the box (``ssh-keygen -lf``)."""
+
+    fingerprint: str = Field(min_length=1, max_length=128)
+
+
+@router.post("/{host_id}/ssh-host-key/trust")
+async def trust_ssh_host_key(
+    host_id: str,
+    body: HostKeyTrustBody,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_role(Role.ADMIN)),
+):
+    """Re-trust a box whose SSH host key changed (services/ssh_host_keys.py).
+
+    Accepts exactly the key the box presented when MC last refused it, and
+    only if ``fingerprint`` matches that key — so what gets trusted is the
+    key the operator compared, never "whatever answers next". 409 when no
+    refused key is waiting or the fingerprint does not match.
+    """
+    host = await _get_host(session, host_id)
+    if not host:
+        raise HTTPException(status_code=404, detail=f"Host '{host_id}' nicht gefunden")
+    try:
+        new_fp = await ssh_host_keys.trust_rejected_key(session, host, body.fingerprint)
+    except ssh_host_keys.TrustError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await session.refresh(host)
+    return {"status": "trusted", "fingerprint": new_fp, "host": _serialize_host(host, current_user)}
 
 
 @router.patch("/{host_id}")

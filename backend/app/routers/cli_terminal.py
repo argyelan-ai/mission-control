@@ -24,6 +24,7 @@ from app.auth import Role, generate_agent_token, require_role, require_user
 from app.config import effective_host_ssh_user, settings
 from app.database import get_session, release_session
 from app.models.agent import Agent
+from app.services import ssh_host_keys
 
 
 class CliProvisionPayload(BaseModel):
@@ -1109,8 +1110,9 @@ async def _ssh_host(command: str, timeout: int = 30) -> str:
     proc = await asyncio.create_subprocess_exec(
         "ssh",
         "-o", "BatchMode=yes",
-        "-o", "StrictHostKeyChecking=no",
-        "-o", "UserKnownHostsFile=/dev/null",
+        # Host key: learn on first contact, refuse a changed key (MC-owned
+        # known_hosts under ~/.mc/ssh — services/ssh_host_keys.py).
+        *ssh_host_keys.system_ssh_host_key_options(),
         "-o", "ConnectTimeout=5",
         "-i", "/home/mcuser/.ssh/id_rsa",
         f"{effective_host_ssh_user()}@host.docker.internal",
