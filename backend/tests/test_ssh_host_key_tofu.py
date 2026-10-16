@@ -17,6 +17,7 @@ Core assertions (each one was sabotage-checked, see the PR):
 """
 from __future__ import annotations
 
+import asyncio
 import uuid
 from pathlib import Path
 
@@ -80,8 +81,12 @@ class _Box:
         return self
 
     async def stop(self) -> None:
+        # Bounded: a connection a (sabotaged) test left open must not hang teardown.
         self.server.close()
-        await self.server.wait_closed()
+        try:
+            await asyncio.wait_for(self.server.wait_closed(), timeout=5)
+        except asyncio.TimeoutError:
+            pass
 
 
 class _Network:
@@ -289,7 +294,8 @@ async def test_onboarding_known_box_with_swapped_key_never_gets_the_password(net
         "job-x", host_onboarding.OnboardParams(address="127.0.0.1", username="mc", password="pw-should-not-leak"),
     )
     with pytest.raises(host_onboarding.OnboardingError) as exc_info:
-        await run._connect_with_supplied_credential()
+        leaked = await run._connect_with_supplied_credential()
+        leaked.close()  # only reached when the check is broken
 
     assert exc_info.value.status == "failed"
     assert "has changed" in exc_info.value.message
@@ -309,7 +315,8 @@ async def test_onboarding_new_box_learns_key_and_rejects_swap_before_gegenprobe(
 
     network.box = impostor  # swapped between step 1 and step 3
     with pytest.raises(host_onboarding.OnboardingError) as exc_info:
-        await run._connect_with_new_key(CLIENT_KEY)
+        leaked = await run._connect_with_new_key(CLIENT_KEY)
+        leaked.close()  # only reached when the check is broken
     assert "has changed" in exc_info.value.message
 
 
