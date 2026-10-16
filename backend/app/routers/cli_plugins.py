@@ -16,7 +16,6 @@ from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.auth import Role, require_role, require_user
-from app.config import settings
 from app.database import get_session
 from app.models.agent import Agent
 from app.models.activity import ActivityEvent
@@ -219,16 +218,16 @@ async def plugins_shell_websocket(
 
     await websocket.accept()
 
-    # Bridge WebSocket URL
-    bridge_ws_url = settings.free_code_bridge_url.replace("http://", "ws://").replace("https://", "wss://")
-    bridge_ws_url = bridge_ws_url.replace(":18792", ":18793")
-    ws_url = f"{bridge_ws_url}/plugins-shell"
+    # Bridge WebSocket URL — the helper only trusts the backend's token header.
+    from app.services.cli_bridge_auth import bridge_headers, bridge_ws_base_url
+
+    ws_url = f"{bridge_ws_base_url()}/plugins-shell"
 
     logger.info("Plugins shell WS proxy → %s", ws_url)
 
     try:
         import websockets as _ws
-        async with _ws.connect(ws_url) as bridge_ws:
+        async with _ws.connect(ws_url, additional_headers=bridge_headers()) as bridge_ws:
             async def browser_to_bridge():
                 while True:
                     try:

@@ -127,8 +127,11 @@ async def installed_version_host(tool: str) -> str | None:
         return None
     binary = config.get("binary", tool)
     try:
+        from app.services.cli_bridge_auth import bridge_headers
+
         async with httpx.AsyncClient(
-            base_url=settings.free_code_bridge_url, timeout=_HTTP_TIMEOUT
+            base_url=settings.free_code_bridge_url, timeout=_HTTP_TIMEOUT,
+            headers=bridge_headers(),
         ) as client:
             resp = await client.get(f"/host-cli/{binary}/version")
             if resp.status_code != 200:

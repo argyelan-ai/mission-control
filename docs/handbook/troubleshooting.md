@@ -131,21 +131,32 @@ create a user, or restore/reset the database
 
 ### "Provision" button errors or times out
 
-**Cause** — `scripts/cli-bridge.py` is not running. Provisioning (workspace
+**Cause** — `scripts/cli-bridge.py` is not running, not reachable from the
+backend container, or rejects the backend's token. Provisioning (workspace
 creation, rendering `SOUL.md`/`TOOLS.md`/`settings.json`) happens on the host,
 not in a container.
 
 ```bash
-curl http://localhost:18792/health
-docker compose exec backend curl -s http://host.docker.internal:18792/health
+curl http://localhost:18792/ping                                   # running? (no token needed)
+docker compose exec backend curl -s http://host.docker.internal:18792/ping   # reachable from the container?
+curl -s -o /dev/null -w '%{http_code}\n' http://localhost:18792/health      # 401 = token enforced (expected)
+docker compose logs backend | grep 'rejected (401)'                # backend sends no/wrong token
 ```
 
 **Fix**
 
 ```bash
 python3 -m pip install --user jinja2 websockets
-python3 scripts/cli-bridge.py &     # keep it under tmux/screen/launchd
+make bridge-install                 # or: python3 scripts/cli-bridge.py &
 ```
+
+- `/ping` fails from the container but works on the host (Linux): the helper
+  listens on `127.0.0.1`; set `CLI_BRIDGE_BIND` to the docker bridge address.
+- Backend log shows `rejected (401)`: the backend cannot read
+  `~/.mc/secrets/cli-bridge.token` — set `CLI_BRIDGE_TOKEN` in `.env` to the
+  file's value and recreate `backend` + `mc-worker`.
+
+Details: [CLI-Bridge auth](../setup/cli-bridge-auth.md).
 
 ### Agent card stuck on "Provisioning"; container restarts
 

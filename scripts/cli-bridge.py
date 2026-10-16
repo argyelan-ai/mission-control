@@ -13,13 +13,29 @@ GET    /sessions
 GET    /status/{task_id}
 GET    /output/{task_id}
 DELETE /sessions/{task_id}
+GET    /ping                 liveness only, no auth (answers {"status": "ok"})
+
+Auth: every endpoint except /ping — and every WebSocket PTY attach on
+WS_PORT — requires the header ``X-MC-Bridge-Token`` with the shared secret.
+The secret lives in a 0600 file (CLI_BRIDGE_TOKEN_FILE, default
+$HOME/.mc/secrets/cli-bridge.token) and is created on first start. Missing or
+wrong token → HTTP 401 / WebSocket close 1008. See docs/setup/cli-bridge-auth.md.
+
+Bind: CLI_BRIDGE_BIND (default 127.0.0.1). Docker Desktop on macOS forwards
+host.docker.internal to the host's loopback, so the backend container still
+reaches it; Linux hosts need the docker bridge address (see the doc above).
+
+Run ``python3 scripts/cli-bridge.py --init-token`` to create the token file
+without starting the servers (prints the path, never the token).
 """
 import asyncio
 import fcntl
+import hmac
 import json
 import os
 import pty
 import re
+import secrets as _secrets
 import shlex
 import shutil
 import struct
@@ -38,6 +54,68 @@ import uuid
 # side stays on the default (free_code_bridge_url / host.docker.internal:18792).
 PORT = int(os.environ.get("CLI_BRIDGE_PORT", "18792"))
 HOME = Path.home()
+
+# Listen address for HTTP + WebSocket. Loopback by default: nothing on the LAN
+# may reach a helper that starts agents and attaches terminals. Docker Desktop
+# (macOS) delivers host.docker.internal connections to the host's loopback, so
+# the backend container is unaffected. Linux: see docs/setup/cli-bridge-auth.md.
+BIND = os.environ.get("CLI_BRIDGE_BIND", "").strip() or "127.0.0.1"
+
+# Shared secret between MC (backend) and this helper. The token itself is the
+# load-bearing protection — the bind is defence in depth, because any local
+# process or container that can reach host.docker.internal reaches the port.
+TOKEN_HEADER = "X-MC-Bridge-Token"
+TOKEN_FILE = Path(
+    os.environ.get("CLI_BRIDGE_TOKEN_FILE", "").strip()
+    or (HOME / ".mc" / "secrets" / "cli-bridge.token")
+)
+# Set in main() via _load_or_create_token(). None = no token loaded → every
+# request is rejected (fail closed), never "auth off".
+BRIDGE_TOKEN: Optional[str] = None
+
+
+def _load_or_create_token(path: Path) -> str:
+    """Return the shared token; create the 0600 token file once if missing.
+
+    CLI_BRIDGE_TOKEN (env) wins over the file — for supervisors that inject
+    secrets themselves. Never logs or prints the token value.
+    """
+    env_token = os.environ.get("CLI_BRIDGE_TOKEN", "").strip()
+    if env_token:
+        return env_token
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        token = path.read_text().strip()
+    except FileNotFoundError:
+        token = ""
+    if token:
+        if path.stat().st_mode & 0o077:
+            os.chmod(path, 0o600)
+            log(f"WARN: token file {path} was readable by others — tightened to 0600")
+        return token
+    token = _secrets.token_urlsafe(32)
+    tmp = path.with_name(path.name + f".tmp-{os.getpid()}")
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, (token + "\n").encode("ascii"))
+    finally:
+        os.close(fd)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+    log(f"Created new bridge token file {path} (0600)")
+    return token
+
+
+def _token_valid(presented: Optional[str]) -> bool:
+    """Constant-time check of a presented token against BRIDGE_TOKEN."""
+    expected = BRIDGE_TOKEN
+    if not expected or not presented:
+        return False
+    return hmac.compare_digest(
+        presented.strip().encode("utf-8", "replace"),
+        expected.encode("utf-8", "replace"),
+    )
+
 LOG_DIR = Path(os.environ.get("CLI_BRIDGE_LOG_DIR", HOME / "Workspace/Sandboxes/free-code-local/logs"))
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 LOG_FILE = LOG_DIR / "cli-bridge.log"
@@ -913,7 +991,23 @@ class Handler(BaseHTTPRequestHandler):
         body = self.rfile.read(length).decode("utf-8")
         return json.loads(body)
 
+    def _authorized(self) -> bool:
+        """Gate for every endpoint except /ping. On failure answers 401
+        itself (generic body — never echoes what was presented)."""
+        if _token_valid(self.headers.get(TOKEN_HEADER)):
+            return True
+        log(f"AUTH: rejected {self.command} {self.path.split('?', 1)[0]} "
+            f"from {self.client_address[0]} (missing or wrong {TOKEN_HEADER})")
+        self._json({"error": "unauthorized"}, status=401)
+        return False
+
     def do_GET(self):
+        # Liveness only: tells a caller nothing a port scan would not.
+        if self.path == "/ping":
+            self._json({"status": "ok"})
+            return
+        if not self._authorized():
+            return
         if self.path == "/health":
             self._json({"status": "ok", "bridge": "cli-agent"})
 
@@ -1011,6 +1105,8 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
 
     def do_POST(self):
+        if not self._authorized():
+            return
         if self.path == "/start":
             try:
                 length = int(self.headers.get("Content-Length", 0))
@@ -1227,6 +1323,8 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
 
     def do_DELETE(self):
+        if not self._authorized():
+            return
         if self.path.startswith("/provision/"):
             agent_name = self.path.split("/provision/")[1]
             result = _deprovision_agent(agent_name)
@@ -1266,9 +1364,21 @@ class Handler(BaseHTTPRequestHandler):
 WS_PORT = 18793
 
 async def _pty_ws_handler(websocket):
-    """WebSocket handler: proxies browser ↔ PTY ↔ tmux attach."""
+    """WebSocket handler: proxies browser ↔ PTY ↔ tmux attach.
+
+    The browser never talks to this port: it connects to the backend's WS
+    proxy (stream ticket + admin role), and the backend dials here with the
+    shared token header. Without a valid token: close 1008 before any tmux
+    call — no session lookup, no PTY.
+    """
+    if not _token_valid(websocket.request.headers.get(TOKEN_HEADER)):
+        peer = websocket.remote_address[0] if websocket.remote_address else "?"
+        log(f"WS AUTH: rejected PTY attach from {peer} (missing or wrong {TOKEN_HEADER})")
+        await websocket.close(1008, "unauthorized")
+        return
+
     # Path format: /{task_id}
-    path = websocket.request.path  # websockets v13+ uses request.path
+    path = websocket.request.path.split("?", 1)[0]  # websockets v13+ uses request.path
     task_id = path.strip("/")
 
     # Find session name
@@ -1373,8 +1483,8 @@ async def _pty_ws_handler(websocket):
 
 async def _run_ws_server():
     import websockets as _ws
-    async with _ws.serve(_pty_ws_handler, "0.0.0.0", WS_PORT):
-        log(f"WS PTY server listening on ws://0.0.0.0:{WS_PORT}")
+    async with _ws.serve(_pty_ws_handler, BIND, WS_PORT):
+        log(f"WS PTY server listening on ws://{BIND}:{WS_PORT} (token required)")
         await asyncio.Future()  # run forever
 
 
@@ -1384,7 +1494,14 @@ def _start_ws_server():
 
 
 if __name__ == "__main__":
+    if "--init-token" in sys.argv[1:]:
+        # Rollout/installer helper: make sure the token file exists, print
+        # only its path (the value never goes to stdout or the log).
+        _load_or_create_token(TOKEN_FILE)
+        print(TOKEN_FILE)
+        sys.exit(0)
     log(f"CLI Agent Bridge starting on port {PORT}")
+    BRIDGE_TOKEN = _load_or_create_token(TOKEN_FILE)
     _check_tmux()
     ws_thread = threading.Thread(target=_start_ws_server, daemon=True)
     ws_thread.start()
@@ -1393,6 +1510,6 @@ if __name__ == "__main__":
     for agent_dir in AGENTS_DIR.iterdir():
         if agent_dir.is_dir() and (agent_dir / "settings.json").exists() and (agent_dir / "worker.sh").exists():
             _start_worker_session(agent_dir.name)
-    server = HTTPServer(("0.0.0.0", PORT), Handler)
-    log(f"Listening on http://0.0.0.0:{PORT}")
+    server = HTTPServer((BIND, PORT), Handler)
+    log(f"Listening on http://{BIND}:{PORT} (token required except /ping)")
     server.serve_forever()
