@@ -317,7 +317,6 @@ scripts/auto-rebuild-agents-on-drift.sh: sparky
 scripts/build-agent-images.sh: sparky
 scripts/cli-bridge.py: freecode
 scripts/context_detect.py: shakespeare, sparky
-scripts/free-code-bridge.py: freecode
 scripts/init-mc-deliverables-dirs.sh: davinci, freecode, shakespeare, sparky
 scripts/mc-cli/mc_cli/commands.py: davinci, sparky
 scripts/mc-cli/mc_cli/config.py: davinci

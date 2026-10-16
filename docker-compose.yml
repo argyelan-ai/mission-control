@@ -323,6 +323,10 @@ services:
       # attach to. Without this, getuid() returns 1000 (the in-container user)
       # and the bridge fails with "no such file or directory" on the host.
       HOST_UID: ${HOST_UID:-502}
+      # cli-bridge host helper auth (docs/setup/cli-bridge-auth.md). Empty =
+      # read ~/.mc/secrets/cli-bridge.token through the ~/.mc mount below.
+      CLI_BRIDGE_TOKEN: ${CLI_BRIDGE_TOKEN:-}
+      CLI_BRIDGE_TOKEN_FILE: ${CLI_BRIDGE_TOKEN_FILE:-}
       # ADR-022: MC-Home unter ~/.mc/. Stage-2-Entkopplung (2026-06-01): aller
       # Backend-Code referenziert jetzt direkt ~/.mc/...; der Legacy ~/.openclaw
       # Mount wurde entfernt (Host-Symlinks bleiben bis Stage 3 bestehen).
@@ -563,6 +567,8 @@ services:
       MC_AGENT_IMAGE_PREFIX: ${MC_AGENT_IMAGE_PREFIX-ghcr.io/argyelan-ai/}
       MC_AGENT_IMAGE_TAG: ${MC_AGENT_IMAGE_TAG:-latest}
       HOST_UID: ${HOST_UID:-502}
+      CLI_BRIDGE_TOKEN: ${CLI_BRIDGE_TOKEN:-}
+      CLI_BRIDGE_TOKEN_FILE: ${CLI_BRIDGE_TOKEN_FILE:-}
       MC_MCP_REGISTRY_DIR: ${HOME}/.mc/mcp-servers
       MC_AGENTS_ROOT: ${HOME}/.mc/agents
     volumes:

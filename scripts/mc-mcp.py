@@ -151,9 +151,32 @@ def _api_agent(method: str, path: str, extra_headers: dict | None = None, **kwar
     except Exception as e:
         return {"error": str(e)}
 
+def _bridge_headers() -> dict:
+    """X-MC-Bridge-Token for the cli-bridge helper — operator mode only.
+
+    Same source as the helper (scripts/cli-bridge.py): CLI_BRIDGE_TOKEN, else
+    the 0600 file CLI_BRIDGE_TOKEN_FILE / ~/.mc/secrets/cli-bridge.token.
+    Agent mode never reads it (an agent gets no operator power over the
+    host helper); its only bridge call is the unauthenticated /ping.
+    """
+    if _is_agent():
+        return {}
+    token = os.environ.get("CLI_BRIDGE_TOKEN", "").strip()
+    if not token:
+        path = Path(
+            os.environ.get("CLI_BRIDGE_TOKEN_FILE", "").strip()
+            or (Path.home() / ".mc" / "secrets" / "cli-bridge.token")
+        )
+        try:
+            token = path.read_text().strip()
+        except OSError:
+            token = ""
+    return {"X-MC-Bridge-Token": token} if token else {}
+
+
 def _bridge(method: str, path: str, **kwargs) -> dict:
     try:
-        with httpx.Client(timeout=10) as c:
+        with httpx.Client(timeout=10, headers=_bridge_headers()) as c:
             r = c.request(method, f"{BRIDGE_URL}{path}", **kwargs)
             return r.json()
     except Exception as e:
@@ -606,7 +629,7 @@ def mc_checklist_done(task_id: str, item_id: str, status: str = "done", board_id
 @mcp.tool()
 def mc_bridge_status() -> str:
     """CLI-Bridge Status + Queue-Status aller Agents."""
-    status = _bridge("GET", "/health")
+    status = _bridge("GET", "/ping")  # liveness only, no token needed
     if "error" in status:
         return f"Bridge nicht erreichbar: {status['error']}"
 
@@ -690,7 +713,7 @@ def mc_system_status() -> str:
         lines.append("\n## Backend: nicht erreichbar")
 
     # Bridge
-    bridge = _bridge("GET", "/health")
+    bridge = _bridge("GET", "/ping")
     lines.append(f"\n## Bridge (18792): {'OK' if 'error' not in bridge else 'nicht erreichbar'}")
 
     # tmux Sessions

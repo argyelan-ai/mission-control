@@ -24,6 +24,7 @@ from app.auth import Role, generate_agent_token, require_role, require_user
 from app.config import effective_host_ssh_user, settings
 from app.database import get_session, release_session
 from app.models.agent import Agent
+from app.services.cli_bridge_auth import bridge_headers, bridge_ws_base_url
 
 
 class CliProvisionPayload(BaseModel):
@@ -130,15 +131,32 @@ router = APIRouter(prefix="/api/v1", tags=["cli-terminal"])
 
 
 # ── Bridge HTTP Helpers ───────────────────────────────────────────────────────
+# Every call carries X-MC-Bridge-Token (app/services/cli_bridge_auth.py).
+
+
+def _log_bridge_failure(method: str, path: str, exc: Exception) -> None:
+    """One log line per failed bridge call; a 401 gets an actionable hint.
+    str(exc) of a urllib HTTPError is "HTTP Error 401: ..." — it never
+    contains request headers, so the token cannot leak here."""
+    if isinstance(exc, urllib.error.HTTPError) and exc.code == 401:
+        logger.warning(
+            "Bridge %s %s rejected (401): cli-bridge token missing or different "
+            "from the helper's token file — see docs/setup/cli-bridge-auth.md",
+            method, path,
+        )
+        return
+    logger.warning("Bridge %s %s failed: %s", method, path, exc)
+
 
 def _bridge_get(path: str):
     """Synchronous GET to the bridge. Returns None on error."""
     url = f"{settings.free_code_bridge_url}{path}"
+    req = urllib.request.Request(url, headers=bridge_headers(), method="GET")
     try:
-        with urllib.request.urlopen(url, timeout=5) as resp:
+        with urllib.request.urlopen(req, timeout=5) as resp:
             return json.loads(resp.read().decode())
     except Exception as e:
-        logger.warning("Bridge GET %s failed: %s", path, e)
+        _log_bridge_failure("GET", path, e)
         return None
 
 
@@ -147,25 +165,26 @@ def _bridge_post(path: str, body: dict, timeout: int = 5) -> dict:
     url = f"{settings.free_code_bridge_url}{path}"
     payload = json.dumps(body).encode()
     req = urllib.request.Request(url, data=payload,
-                                  headers={"Content-Type": "application/json"},
+                                  headers={"Content-Type": "application/json",
+                                           **bridge_headers()},
                                   method="POST")
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode())
     except Exception as e:
-        logger.warning("Bridge POST %s failed: %s", path, e)
+        _log_bridge_failure("POST", path, e)
         return {"ok": False, "error": str(e)}
 
 
 def _bridge_delete(path: str) -> dict:
     """Synchronous DELETE to the bridge."""
     url = f"{settings.free_code_bridge_url}{path}"
-    req = urllib.request.Request(url, method="DELETE")
+    req = urllib.request.Request(url, headers=bridge_headers(), method="DELETE")
     try:
         with urllib.request.urlopen(req, timeout=5) as resp:
             return json.loads(resp.read().decode())
     except Exception as e:
-        logger.warning("Bridge DELETE %s failed: %s", path, e)
+        _log_bridge_failure("DELETE", path, e)
         return {"ok": False, "error": str(e)}
 
 
@@ -270,16 +289,16 @@ async def _proxy_terminal_websocket(
     await websocket.accept()
 
     # Bridge WebSocket URL (host.docker.internal because backend is in Docker)
-    bridge_ws_url = settings.free_code_bridge_url.replace("http://", "ws://").replace("https://", "wss://")
     # free_code_bridge_url is http://host.docker.internal:18792 → ws://host.docker.internal:18793
-    bridge_ws_url = bridge_ws_url.replace(":18792", ":18793")
-    ws_url = f"{bridge_ws_url}/{session_key}"
+    ws_url = f"{bridge_ws_base_url()}/{session_key}"
 
     logger.info("WS proxy: agent=%s session=%s → %s", agent_id, session_key, ws_url)
 
     try:
         import websockets as _ws
-        async with _ws.connect(ws_url) as bridge_ws:
+        # The browser authenticated above (ticket + admin); the helper only
+        # trusts the backend, via the shared token in the handshake header.
+        async with _ws.connect(ws_url, additional_headers=bridge_headers()) as bridge_ws:
 
             async def browser_to_bridge():
                 while True:

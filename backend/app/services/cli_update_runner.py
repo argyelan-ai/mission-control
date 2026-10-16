@@ -100,8 +100,11 @@ def _utcnow_iso() -> str:
 def _client(timeout: float = 30.0) -> httpx.AsyncClient:
     """Async httpx client bound to the host bridge. Isolated in one helper so
     tests can patch it to inject an ``httpx.MockTransport``."""
+    from app.services.cli_bridge_auth import bridge_headers
+
     return httpx.AsyncClient(
-        base_url=settings.free_code_bridge_url, timeout=timeout
+        base_url=settings.free_code_bridge_url, timeout=timeout,
+        headers=bridge_headers(),
     )
 
 
