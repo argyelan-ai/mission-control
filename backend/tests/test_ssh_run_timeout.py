@@ -12,6 +12,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from tests.conftest import test_engine
+
+
+@pytest.fixture(autouse=True)
+def _point_database_engine_at_test_engine(monkeypatch):
+    """_ssh_run looks up the host row for the address (SSH host-key pin,
+    services/ssh_host_keys.py) — that read must hit the test DB."""
+    monkeypatch.setattr("app.database.engine", test_engine)
+
 from app.services import runtime_manager
 from app.services.host_resolver import ResolvedHost
 

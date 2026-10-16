@@ -488,6 +488,7 @@
     "POST /api/v1/hosts/probe",
     "POST /api/v1/hosts/{host_id}/bootstrap",
     "POST /api/v1/hosts/{host_id}/recipes/{slug}/start",
+    "POST /api/v1/hosts/{host_id}/ssh-host-key/trust",
     "POST /api/v1/intelligence/trigger",
     "POST /api/v1/knowledge",
     "POST /api/v1/knowledge/{entry_id}/attachments",

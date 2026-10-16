@@ -66,7 +66,9 @@ from app.models.host import Host
 from app.services.encryption import encrypt
 from app.services.host_resolver import ResolvedHost
 from app.services.job_log import JobLog
-from app.utils import create_tracked_task
+from app.services import ssh_host_keys
+from app.services.ssh_host_keys import HostKeyMismatchError, HostKeyPin
+from app.utils import create_tracked_task, utcnow
 
 logger = logging.getLogger("mc.host_onboarding")
 
@@ -188,6 +190,9 @@ class _Run:
         self.job = job_for(job_id)
         self.host_id: str | None = None
         self.host_slug: str | None = None
+        # Host key seen in step 1 (TOFU, services/ssh_host_keys.py) — step 3
+        # must see the same key, and a new host row starts with it.
+        self.host_key: asyncssh.SSHKey | None = None
 
     async def log(self, text: str, level: str = "info") -> None:
         await self.job.append(text, level)
@@ -202,13 +207,30 @@ class _Run:
 
     # ── step 1+3: connect (initial credential, then key-only proof) ────────
 
+    async def _initial_pin(self) -> HostKeyPin:
+        """Step 1's host-key pin. A box that already has a host row must
+        present the key stored there (re-onboarding a known box); a new box is
+        learned here and checked again in step 3."""
+        from app.database import async_session_maker
+
+        async with async_session_maker() as session:
+            existing = await ssh_host_keys.host_row_for_address(session, self.params.address)
+        if existing is not None:
+            return ssh_host_keys.pin_for_host_row(existing)
+        return HostKeyPin(label=self.params.address)
+
     async def _connect_with_supplied_credential(self):
         """Step 1 — connect with whatever the operator gave us. The password
         (if any) lives ONLY in this call's kwargs and this function's local
-        scope; nothing here stores or logs it."""
+        scope; nothing here stores or logs it.
+
+        Host key (TOFU): checked BEFORE authentication — a box presenting a
+        different key than the one stored for this address never sees the
+        password."""
         p = self.params
+        pin = await self._initial_pin()
         connect_kwargs: dict = dict(
-            host=p.address, username=p.username, known_hosts=None, connect_timeout=_CONNECT_TIMEOUT,
+            host=p.address, username=p.username, connect_timeout=_CONNECT_TIMEOUT,
         )
         if p.existing_credential_id is not None:
             from app.services.runtime_manager import _load_vault_ssh_private_key  # noqa: SLF001
@@ -228,25 +250,35 @@ class _Run:
             connect_kwargs["password"] = p.password  # local only — see docstring above
 
         try:
-            return await asyncssh.connect(**connect_kwargs)
+            conn = await ssh_host_keys.connect(pin, **connect_kwargs)
+        except HostKeyMismatchError as e:
+            raise OnboardingError("failed", str(e))
         except asyncssh.PermissionDenied as e:
             _record_auth_failure(p.address)
             raise OnboardingError("auth_failed", f"SSH-Login fehlgeschlagen (falsches Passwort/Key?): {e}")
         except (asyncssh.Error, OSError, asyncio.TimeoutError) as e:
             raise OnboardingError("unreachable", f"Box nicht erreichbar unter '{p.address}': {e}")
+        self.host_key = pin.expected or pin.presented
+        return conn
 
     async def _connect_with_new_key(self, private_key: asyncssh.SSHKey):
         """Step 3 — the gegenprobe: reconnect using ONLY the freshly
         generated key, no password, no other fallback. Proof-before-persist:
-        nothing is written to the Vault/hosts table until this succeeds."""
+        nothing is written to the Vault/hosts table until this succeeds.
+
+        Host key: must be the one step 1 saw (or the stored one) — a box
+        swapped in between the two connections is refused."""
+        pin = HostKeyPin(label=self.params.address, expected=self.host_key)
         try:
-            return await asyncssh.connect(
+            return await ssh_host_keys.connect(
+                pin,
                 host=self.params.address,
                 username=self.params.username,
                 client_keys=[private_key],
-                known_hosts=None,
                 connect_timeout=_CONNECT_TIMEOUT,
             )
+        except HostKeyMismatchError as e:
+            raise OnboardingError("failed", str(e))
         except (asyncssh.Error, OSError, asyncio.TimeoutError) as e:
             raise OnboardingError(
                 "failed",
@@ -344,7 +376,6 @@ class _Run:
 
     async def run(self) -> None:
         from app.database import async_session_maker
-        from sqlmodel import select
 
         p = self.params
         try:
@@ -366,9 +397,7 @@ class _Run:
                 async with async_session_maker() as session:
                     from app.routers.nodes import _unique_slug  # noqa: SLF001
 
-                    existing_host = (
-                        await session.exec(select(Host).where(Host.ssh_host == p.address))
-                    ).first()
+                    existing_host = await ssh_host_keys.host_row_for_address(session, p.address)
                     self.host_slug = existing_host.slug if existing_host else await _unique_slug(
                         session, p.display_name or p.address
                     )
@@ -397,9 +426,9 @@ class _Run:
                 session.add(credential)
                 await session.flush()
 
-                existing_host = (
-                    await session.exec(select(Host).where(Host.ssh_host == p.address))
-                ).first()
+                # Same row as step 1 checked the key against (deterministic
+                # when several rows share the address).
+                existing_host = await ssh_host_keys.host_row_for_address(session, p.address)
                 if existing_host:
                     existing_host.ssh_user = p.username
                     existing_host.ssh_credential_id = credential.id
@@ -421,6 +450,14 @@ class _Run:
                         ssh_credential_id=credential.id,
                         role=p.role,
                     )
+                # TOFU: the key both connections of this run saw. An existing
+                # row keeps its stored key (step 1 already enforced it, or
+                # learned it into the row when it had none).
+                new_host_key = None
+                if host.ssh_host_key is None and self.host_key is not None:
+                    new_host_key = ssh_host_keys.export_key(self.host_key)
+                    host.ssh_host_key = new_host_key
+                    host.ssh_host_key_learned_at = utcnow()
                 session.add(host)
                 try:
                     await session.commit()
@@ -444,6 +481,10 @@ class _Run:
                 await session.refresh(host)
             self.host_id = str(host.id)
             await self.log(f"Zugang im Vault gespeichert, Host '{self.host_slug}' angelegt/aktualisiert.")
+            if new_host_key is not None:
+                fp = ssh_host_keys.fingerprint(new_host_key)
+                await self.log(f"SSH host key stored (trust on first use): {fp}")
+                await ssh_host_keys.emit_learned_event(host.id, self.host_slug, self.host_key)
 
             resolved = ResolvedHost(
                 ssh_host=p.address, ssh_user=p.username, ssh_credential_id=host.ssh_credential_id,
