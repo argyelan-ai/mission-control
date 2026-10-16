@@ -167,10 +167,6 @@ export default function LoginPage() {
             letterSpacing: "0.14em",
           }}
         >
-          <span>47.3769° N · 8.5417° E</span>
-          <span aria-hidden style={{ color: "var(--color-border-accent)" }}>
-            /
-          </span>
           <span>Fleet · Live</span>
           <span aria-hidden style={{ color: "var(--color-border-accent)" }}>
             /
