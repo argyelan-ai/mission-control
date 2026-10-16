@@ -34,6 +34,7 @@ from app.utils import utcnow, ensure_aware
 from app.redis_client import RedisKeys, get_redis, try_claim_heal
 from app.scopes import Scope, get_agent_effective_scopes
 from app.services.activity import emit_event
+from app.services.cli_bridge_auth import bridge_headers
 from app.services.dispatch import auto_dispatch_task, TURN_SIGNAL_HEARTBEAT_MAX_AGE_SECONDS
 from app.services.messaging import last_task_activity, maybe_post_finish_nudge
 from app.services.operator_notices import raise_notice
@@ -877,7 +878,8 @@ class TaskRunnerService:
         agent_slug = agent.name.lower().replace(" ", "-")
         try:
             url = f"{settings.free_code_bridge_url}/queue/status/{agent_slug}/{task.id}"
-            with urllib.request.urlopen(url, timeout=3) as resp:
+            req = urllib.request.Request(url, headers=bridge_headers())
+            with urllib.request.urlopen(req, timeout=3) as resp:
                 data = _json.loads(resp.read().decode())
             queue_status = data.get("status", "unknown")
             if queue_status in ("pending", "running"):
@@ -949,7 +951,8 @@ class TaskRunnerService:
         agent_slug = agent.name.lower().replace(" ", "-")
         try:
             url = f"{settings.free_code_bridge_url}/queue/status/{agent_slug}/{task.id}"
-            with urllib.request.urlopen(url, timeout=3) as resp:
+            req = urllib.request.Request(url, headers=bridge_headers())
+            with urllib.request.urlopen(req, timeout=3) as resp:
                 data = _json.loads(resp.read().decode())
             queue_status = data.get("status", "unknown")
         except Exception:
@@ -1010,7 +1013,7 @@ class TaskRunnerService:
             req = urllib.request.Request(
                 f"{settings.free_code_bridge_url}/start",
                 data=payload,
-                headers={"Content-Type": "application/json"},
+                headers={"Content-Type": "application/json", **bridge_headers()},
                 method="POST",
             )
             with urllib.request.urlopen(req, timeout=5) as resp:

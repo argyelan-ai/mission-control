@@ -329,9 +329,10 @@ async def _auto_provision_cli_bridge(agent_id: uuid.UUID, raw_token: str) -> Non
                     session,
                     "agent.provision_failed",
                     f"{agent.name}: cli-bridge host helper not reachable "
-                    f"({_settings.free_code_bridge_url}). Start it with "
-                    "`python3 scripts/cli-bridge.py`, then click Provision on "
-                    "the agent page — see docs/setup/first-agent.md.",
+                    f"({_settings.free_code_bridge_url}) or it rejected MC's token. "
+                    "Start it with `make bridge-install`, then click Provision on "
+                    "the agent page — see docs/setup/first-agent.md and "
+                    "docs/setup/cli-bridge-auth.md.",
                     severity="warning",
                     agent_id=agent.id,
                     board_id=agent.board_id,
