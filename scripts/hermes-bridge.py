@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """hermes-bridge.py — host-side bridge for Hermes Worker (Phase 24).
 
-Pattern source: the former scripts/free-code-bridge.py (removed; cli-bridge.py replaced it)
+Pattern source: scripts/free-code-bridge.py
 Diverges in: binds 127.0.0.1 only (per Phase 24 L-C decision); spawns long-lived
 tmux 'hermes-worker' session running the Hermes binary in a watchdog loop via
 entrypoint.sh.
@@ -42,7 +42,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import context_detect  # noqa: E402
 import hermes_acp_chat  # noqa: E402
 
-# Ports: 18792/18793 = cli-bridge (HTTP/WS), 18794 = hermes-bridge
+# Ports: 18792 = free-code-bridge, 18793 = bridge-WS, 18794 = hermes-bridge
 PORT = 18794
 HOST = "127.0.0.1"  # L-C: localhost only, no public bind
 HOME_DIR = Path(os.environ.get("HOME_HOST", str(Path.home())))
