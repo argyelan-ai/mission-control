@@ -295,3 +295,40 @@ def test_every_bridge_ws_connect_carries_the_headers():
         assert connects, name
         for args in connects:
             assert "additional_headers=bridge_headers()" in args, f"{name}: {args}"
+
+
+# ── scripts/mc-mcp.py (host-side operator tool) ───────────────────────────
+
+
+def _load_mc_mcp(tmp_path):
+    import importlib.util
+    import shutil
+
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    shutil.copy(APP_DIR.parents[1] / "scripts" / "mc-mcp.py", scripts / "mc-mcp.py")
+    spec = importlib.util.spec_from_file_location("mc_mcp_bridge_auth_test", scripts / "mc-mcp.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_mc_mcp_operator_mode_sends_the_token(monkeypatch, tmp_path):
+    f = tmp_path / "cli-bridge.token"
+    f.write_text("operator-file-token\n")
+    monkeypatch.delenv("MC_AGENT_TOKEN", raising=False)
+    monkeypatch.delenv("MC_AGENT_ENV_FILE", raising=False)
+    monkeypatch.delenv("CLI_BRIDGE_TOKEN", raising=False)
+    monkeypatch.setenv("CLI_BRIDGE_TOKEN_FILE", str(f))
+    mod = _load_mc_mcp(tmp_path)
+    assert mod._bridge_headers() == {HEADER: "operator-file-token"}
+
+
+def test_mc_mcp_agent_mode_never_reads_the_token(monkeypatch, tmp_path):
+    """An agent gets no operator power over the host helper."""
+    f = tmp_path / "cli-bridge.token"
+    f.write_text("operator-file-token\n")
+    monkeypatch.setenv("MC_AGENT_TOKEN", "agent-tok")
+    monkeypatch.setenv("CLI_BRIDGE_TOKEN_FILE", str(f))
+    mod = _load_mc_mcp(tmp_path)
+    assert mod._bridge_headers() == {}
