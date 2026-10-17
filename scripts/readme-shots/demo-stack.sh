@@ -38,6 +38,12 @@ token() { grep '^LOCAL_AUTH_TOKEN=' "$ENV_FILE" | cut -d= -f2; }
 
 case "${1:-}" in
   build)
+    # Disk preflight like every other build path (docker/shared/disk-preflight.sh):
+    # two images, a full disk would die mid-layer-write.
+    MC_ENV_FILE="${MC_ENV_FILE:-$REPO/.env}"
+    export MC_ENV_FILE
+    . "$REPO/docker/shared/disk-preflight.sh"
+    mc_disk_preflight
     docker build -t mc-demo-backend:demo "$REPO/backend"
     # Build the frontend from a clean export of the committed tree: no local
     # node_modules (the Dockerfile copies the whole context) and no
