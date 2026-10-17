@@ -423,7 +423,13 @@ boot_stack() {
   if [ "$channel" = stable ] && docker compose pull backend frontend >/dev/null 2>&1; then
     say "→ using prebuilt images ($(mc_env_get MC_IMAGE_TAG)), starting the stack ..."
     docker compose pull >/dev/null 2>&1 || true   # rest (db/redis/caddy/qdrant)
-    docker compose up -d
+    docker compose up -d || {
+      # Usually a slow first boot (migrations on an SD card) that outlasted
+      # the backend's start period. The stack is safe to start again.
+      warn "The stack did not come up in time — on slow machines the first start can take several minutes."
+      say "→ trying once more ..."
+      docker compose up -d || fail "Mission Control did not start. Check: docker compose logs backend --tail 50 — a re-run of this installer is safe and keeps everything done so far."
+    }
   else
     [ "$channel" = stable ] && warn "Prebuilt images for $(mc_env_get MC_IMAGE_TAG) not pullable — building this release locally instead."
     say "→ building images locally (first build takes a few minutes) ..."
