@@ -39,10 +39,22 @@ SUFFIXES = {".py", ".ts", ".tsx"}
 # reference harness names as data, not as branching logic.
 EXCLUDE_NAME_PARTS = ("__tests__", "/tests/", ".test.", "_test.py", "test_")
 
+# `\b` before "harness"/"runtime_type" fails inside a snake_case identifier
+# like `effective_harness` or `new_runtime_type`, because `_` is a \w
+# character and so no word boundary exists between it and the following
+# letter. That naming style (a prefix/suffix added to the plain name) is the
+# *dominant* way harness/runtime_type variables are written in this codebase
+# (see task_runner.py, agent_runtime_switch.py, runtime_propagation.py), so a
+# bare `\b` would let exactly the comparisons this ratchet exists to catch
+# slip through silently. A negative lookbehind that only excludes a letter or
+# digit immediately before (not an underscore) keeps "theharness"-style
+# false positives out while still matching "_harness" / "effective_harness".
+_NAME = r'(?:harness|runtime_type)'
+_NOT_BEFORE_WORD_CHAR = r'(?<![A-Za-z0-9])'
 _PATTERN = re.compile(
-    r'\b(harness|runtime_type)\s*(===?|!==?)\s*["\']'
-    r'|["\']\s*(===?|!==?)\s*[\w.]*\.(harness|runtime_type)\b'
-    r'|\b(harness|runtime_type)\s+(in|not in)\s*[\(\[\{]'
+    _NOT_BEFORE_WORD_CHAR + _NAME + r'\s*(===?|!==?)\s*["\']'
+    r'|["\']\s*(===?|!==?)\s*[\w.]*\.' + _NAME + r'\b'
+    r'|' + _NOT_BEFORE_WORD_CHAR + _NAME + r'\s+(in|not in)\s*[\(\[\{]'
 )
 
 

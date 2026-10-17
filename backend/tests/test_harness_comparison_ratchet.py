@@ -73,6 +73,13 @@ def test_removing_a_known_comparison_line_turns_the_ratchet_red():
     this test injects a NEW comparison line into a file's text and asserts
     the scanner's count for that file would exceed its baseline, proving
     the pattern that guards task_runner.py actually fires.
+
+    Covers both the bare name (``runtime_type == "omp"``) and the
+    prefixed-name style (``effective_harness == "omp"``), since that
+    prefixed/suffixed snake_case form is the dominant way this codebase
+    actually writes these comparisons (task_runner.py, agent_runtime_switch.py,
+    runtime_propagation.py all use it) — a sabotage probe that only tries the
+    bare form would pass even if the pattern silently missed that shape.
     """
     baseline = _load_baseline()
     from app.services.harness_comparison_scan import _PATTERN
@@ -80,10 +87,14 @@ def test_removing_a_known_comparison_line_turns_the_ratchet_red():
     target = "backend/app/services/task_runner.py"
     task_runner_path = REPO_ROOT / target
     original_text = task_runner_path.read_text(encoding="utf-8")
-    sabotage_line = '\n    if runtime_type == "omp":\n        pass\n'
-    injected_count = len(_PATTERN.findall(original_text + sabotage_line))
     baseline_count = baseline.get(target, 0)
-    assert injected_count > baseline_count, (
-        "sabotage line did not increase the match count — the pattern is "
-        "not catching the example shape from the PR brief"
-    )
+
+    for sabotage_line in (
+        '\n    if runtime_type == "omp":\n        pass\n',
+        '\n    if effective_harness == "omp":\n        pass\n',
+    ):
+        injected_count = len(_PATTERN.findall(original_text + sabotage_line))
+        assert injected_count > baseline_count, (
+            f"sabotage line {sabotage_line!r} did not increase the match "
+            "count — the pattern is not catching this shape"
+        )
