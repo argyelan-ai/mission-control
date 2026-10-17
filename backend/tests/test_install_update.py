@@ -56,6 +56,9 @@ case "$1" in
         fi
         exit "${STUB_UP_RC:-0}" ;;
       exec)
+        # `docker compose exec -T` forwards stdin: under `curl | bash` it
+        # would eat the rest of the script. Record anything it receives.
+        if IFS= read -r -t 1 line; then echo "exec read stdin: $line" >> "$STUB_LOG"; fi
         [ -n "${STUB_DB_DOWN:-}" ] && exit 1
         sql="${!#}"
         case "$sql" in
@@ -74,11 +77,19 @@ exit 0
 # test can prove the backup happened BEFORE the code switch.
 FAKE_BACKUP = r"""#!/usr/bin/env bash
 echo "backup.sh on $(git describe --tags --exact-match HEAD 2>/dev/null || echo none)" >> "$STUB_LOG"
+if IFS= read -r -t 1 line; then echo "backup.sh read stdin: $line" >> "$STUB_LOG"; fi
 if [ "${STUB_BACKUP_RC:-0}" != 0 ]; then echo "pg_dump: connection refused" >&2; exit "$STUB_BACKUP_RC"; fi
-mkdir -p backups
-f="backups/mc_backup_$(date +%Y-%m-%d_%H-%M-%S).sql.gz"
+case "${STUB_BACKUP_STYLE:-old}" in
+  old) dir=backups ;;                      # backup.sh up to 0.3.x
+  new)                                     # MC_BACKUP_DIR: env, then .env, default ~/mc-backups
+    dir="${MC_BACKUP_DIR:-$(grep -E '^MC_BACKUP_DIR=' .env | tail -n 1 | cut -d= -f2-)}"
+    dir="${dir:-$HOME/mc-backups}"; dir="${dir/#\~/$HOME}" ;;
+  elsewhere) dir="$STUB_BACKUP_ELSEWHERE" ;;
+esac
+mkdir -p "$dir"
+f="$dir/mc_backup_$(date +%Y-%m-%d_%H-%M-%S).sql.gz"
 echo dump > "$f"
-echo "DB backup: $f"
+echo "Database backup: $f"
 """
 
 
@@ -136,16 +147,21 @@ def world(tmp_path: Path):
         "COMPOSE_PROJECT_NAME": "",
         "MC_HEALTH_TIMEOUT": "1",
         "MC_HEALTH_INTERVAL": "0.2",
+        "HOME": str(tmp_path / "home"),
     }
     env.pop("MC_BACKUP_DIR", None)
 
-    def run(*flags: str, **stub: str):
+    home = tmp_path / "home"
+    home.mkdir()
+
+    def run(*flags: str, stdin_data: str | None = None, **stub: str):
         # start_new_session: no controlling terminal → /dev/tty is not
         # usable, exactly like cron or `curl | bash` without a terminal.
         r = subprocess.run(
             ["bash", str(INSTALL_SH), "--update", *flags],
             cwd=inst, env={**env, **stub}, capture_output=True, text=True,
             timeout=120, start_new_session=True,
+            input=stdin_data if stdin_data is not None else "",
         )
         r.out = r.stdout + r.stderr  # type: ignore[attr-defined]
         r.calls = log.read_text()  # type: ignore[attr-defined]
@@ -293,3 +309,87 @@ def test_fresh_install_and_update_share_the_health_wait():
     assert "mc_wait_healthy" in update and "mc_wait_healthy" in fresh
     assert update.index('boot_stack "$CHANNEL"') < update.index("mc_wait_healthy")
     assert update.index("mc_wait_healthy") < update.index("Update complete")
+
+
+# ── where backup.sh wrote: found, never guessed wrong ──────────────────────
+
+def _files(d: Path) -> list[Path]:
+    return sorted(d.glob("mc_backup_*")) if d.is_dir() else []
+
+
+def test_backup_in_the_new_default_folder_is_named_on_failure(world):
+    """backup.sh with MC_BACKUP_DIR writes to ~/mc-backups by default."""
+    run, _head, inst = world
+    r = run(STUB_HEALTHY="0", STUB_BACKUP_STYLE="new")
+    assert "Update failed" in r.out
+    (f,) = _files(inst.parent / "home" / "mc-backups")
+    assert f"./backup.sh restore {f}" in r.out
+    assert "no backup from this run" not in r.out
+
+
+def test_backup_dir_from_dotenv_relative_to_the_install_is_found(world):
+    run, _head, inst = world
+    with (inst / ".env").open("a") as fh:
+        fh.write("MC_BACKUP_DIR=../my-backups\n")
+    r = run(STUB_BACKUP_STYLE="new")
+    assert r.returncode == 0, r.out
+    (f,) = _files(inst.parent / "my-backups")
+    assert f.name in r.out
+
+
+def test_backup_that_ran_but_cannot_be_found_is_not_called_missing(world, tmp_path):
+    """A backup that succeeded must never be reported as 'no backup'."""
+    run, _head, _inst = world
+    r = run(STUB_HEALTHY="0", STUB_BACKUP_STYLE="elsewhere",
+            STUB_BACKUP_ELSEWHERE=str(tmp_path / "odd-place"))
+    assert "Update failed" in r.out
+    assert "no backup from this run" not in r.out
+    assert "none" not in r.out.split("Backup", 1)[1].split("\n", 1)[0]
+    assert "./backup.sh restore <" in r.out, "points at restoring the file from backup.sh's output"
+    assert "backup.sh" in r.out and "output above" in r.out
+
+
+def test_no_backup_failure_with_changed_schema_says_there_is_no_backup(world):
+    run, _head, _inst = world
+    r = run("--no-backup", STUB_HEALTHY="0")
+    assert "no backup from this run (--no-backup)" in r.out
+
+
+# ── stdin: `curl | bash` must not lose the script to docker exec ───────────
+
+def test_db_queries_and_backup_do_not_read_the_installers_stdin(world):
+    run, _head, _inst = world
+    r = run(stdin_data="echo rest-of-the-script\n")
+    assert r.returncode == 0, r.out
+    assert "read stdin" not in r.calls, r.calls
+
+
+# ── one clear message when the database is down ────────────────────────────
+
+def test_database_down_stops_once_before_the_backup(world):
+    run, head_tag, _inst = world
+    r = run(STUB_DB_DOWN="1")
+    assert r.returncode != 0
+    assert "continuing" not in r.out
+    assert "database is not reachable" in r.out
+    assert "docker compose up -d db" in r.out and "--no-backup" in r.out
+    assert "backup.sh on" not in r.calls
+    assert head_tag() == "v0.1.0"
+
+
+def test_database_down_with_no_backup_goes_ahead(world):
+    run, head_tag, _inst = world
+    r = run("--no-backup", STUB_DB_DOWN="1")
+    assert r.returncode == 0, r.out
+    assert head_tag() == "v0.2.0"
+
+
+# ── MC_HEALTH_TIMEOUT is checked ───────────────────────────────────────────
+
+def test_health_timeout_that_is_not_a_number_is_a_clear_error(world):
+    run, head_tag, _inst = world
+    r = run(MC_HEALTH_TIMEOUT="5min")
+    assert r.returncode != 0
+    assert "MC_HEALTH_TIMEOUT" in r.out and "whole number of seconds" in r.out
+    assert "syntax error" not in r.out
+    assert head_tag() == "v0.1.0"

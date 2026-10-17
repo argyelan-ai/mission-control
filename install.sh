@@ -270,6 +270,14 @@ mc_guard_single_stack() {
 # SD card, docker-compose.yml); the wait must outlast it, not give up at 2 min.
 MC_HEALTH_TIMEOUT="${MC_HEALTH_TIMEOUT:-360}"
 
+# mc_check_health_timeout — a non-number would break the arithmetic below
+# (and bash would then report success); say it in plain words instead.
+mc_check_health_timeout() {
+  case "$MC_HEALTH_TIMEOUT" in
+    ''|*[!0-9]*) fail "MC_HEALTH_TIMEOUT must be a whole number of seconds (got '$MC_HEALTH_TIMEOUT')." ;;
+  esac
+}
+
 # mc_wait_healthy — 0 as soon as the backend answers /health, 1 when it has
 # not answered within MC_HEALTH_TIMEOUT seconds.
 mc_wait_healthy() {
@@ -296,9 +304,11 @@ mc_warn_if_degraded() {
 }
 
 # mc_db_value <sql> — one value from the running database, "" when the
-# database is not reachable. Read-only queries only.
+# database is not reachable. Read-only queries only. stdin is closed:
+# `docker compose exec -T` forwards it and under `curl | bash` would eat
+# the rest of this script.
 mc_db_value() {
-  docker compose exec -T db psql -U mc -d mission_control -tAc "$1" 2>/dev/null | tr -d '[:space:]' || true
+  docker compose exec -T db psql -U mc -d mission_control -tAc "$1" </dev/null 2>/dev/null | tr -d '[:space:]' || true
 }
 
 # mc_running_task_count — tasks an agent is working on right now ("" = unknown).
@@ -306,23 +316,27 @@ mc_running_task_count() {
   mc_db_value "select count(*) from tasks where status = 'in_progress'"
 }
 
-# mc_backup_dir — where backup.sh writes (it owns the setting; this is only
-# used to point the operator at the newest file afterwards).
-mc_backup_dir() {
+# mc_backup_dirs — the folders backup.sh may have written to, one per line.
+# backup.sh owns the setting; this mirrors it only to name the new file:
+# MC_BACKUP_DIR from the environment, then from .env, default ~/mc-backups
+# (relative paths are relative to this directory), plus ./backups where
+# backup.sh up to 0.3.x writes — the update runs the OLD release's script.
+mc_backup_dirs() {
   local d="${MC_BACKUP_DIR:-}"
   [ -n "$d" ] || d="$(mc_env_get MC_BACKUP_DIR)"
-  printf '%s\n' "${d:-./backups}"
+  d="${d:-$HOME/mc-backups}"
+  d="${d/#\~/$HOME}"
+  printf '%s\n' "$d" ./backups
 }
 
 # mc_newest_backup <marker> — newest database backup written after <marker>
 # (a file touched right before backup.sh ran), or nothing.
 mc_newest_backup() {
-  local marker="$1" dir f
-  dir="$(mc_backup_dir)"
-  dir="${dir/#\~/$HOME}"
-  [ -d "$dir" ] || return 0
-  f="$(find "$dir" -maxdepth 1 -type f -name 'mc_backup_*' -newer "$marker" 2>/dev/null | sort | tail -n 1)"
-  [ -z "$f" ] || printf '%s\n' "$f"
+  local marker="$1" dir
+  while IFS= read -r dir; do
+    [ -d "$dir" ] || continue
+    find "$dir" -maxdepth 1 -type f -name 'mc_backup_*.sql.gz' -newer "$marker" 2>/dev/null
+  done < <(mc_backup_dirs) | sort | tail -n 1
 }
 
 [ "${MC_INSTALL_LIB_ONLY:-0}" = 1 ] && return 0 2>/dev/null
@@ -365,6 +379,7 @@ if [ -n "$VERSION" ]; then
   [ "$CHANNEL_ARG" = edge ] && fail "--version and --channel edge contradict each other."
   CHANNEL_ARG=stable
 fi
+mc_check_health_timeout
 # `curl | bash` has no usable stdin — prompt via /dev/tty when present.
 if [ "$INTERACTIVE" = 1 ] && { [ ! -e /dev/tty ] || ! : </dev/tty; } 2>/dev/null; then
   INTERACTIVE=0
@@ -561,6 +576,7 @@ resolve_release() { # -> TAG (explicit --version or latest release)
 UPDATE_PHASE=check        # check → switched → finished
 UPDATE_BACKUP=""          # file written by backup.sh, "" when skipped/unknown
 UPDATE_BACKUP_NOTE=""
+UPDATE_BACKUP_RAN=0       # 1 = backup.sh succeeded (even if its file was not found)
 UPDATE_OLD_REF=""         # what to check out to go back
 UPDATE_DB_REV_BEFORE=""   # alembic revision before the switch ("" = unknown)
 UPDATE_ENV_COPY=".env.backup-pre-update"
@@ -590,6 +606,10 @@ mc_update_on_exit() {
       echo "    # database schema unchanged ($UPDATE_DB_REV_BEFORE) — no restore needed"
     elif [ -n "$UPDATE_BACKUP" ]; then
       echo "    ./backup.sh restore $UPDATE_BACKUP   # database as it was before the update"
+    elif [ "$UPDATE_BACKUP_RAN" = 1 ]; then
+      echo "    ./backup.sh restore <the mc_backup_….sql.gz file backup.sh named above>"
+    elif [ "$NO_BACKUP" = 1 ]; then
+      echo "    # the database may already be migrated — no backup from this run (--no-backup)"
     else
       echo "    # the database may already be migrated and there is no backup from this run"
     fi
@@ -605,7 +625,11 @@ mc_update_check_running_tasks() {
   [ "$IGNORE_RUNNING" = 1 ] && return 0
   n="$(mc_running_task_count)"
   case "$n" in
-    ''|*[!0-9]*) warn "Could not count running tasks (database not reachable) — continuing."; return 0 ;;
+    ''|*[!0-9]*)
+      # Without the database there is no backup either — say it once, here.
+      [ "$NO_BACKUP" = 1 ] || fail "The database is not reachable — the update backs it up first, so it has to run. Start it (docker compose up -d db) and re-run, or update without a backup: --no-backup"
+      warn "Could not count running tasks (database not reachable) — continuing because of --no-backup."
+      return 0 ;;
     0) return 0 ;;
   esac
   warn "$n task(s) are in progress right now — the update restarts Mission Control and interrupts them."
@@ -621,7 +645,7 @@ mc_update_check_running_tasks() {
 # unless --no-backup was given. Only backup.sh's command line and exit code
 # are relied on; it decides where and how it writes.
 mc_update_backup() {
-  local marker
+  local marker backup_in=/dev/null
   if [ "$NO_BACKUP" = 1 ]; then
     warn "--no-backup: updating WITHOUT a backup first."
     UPDATE_BACKUP_NOTE="none — skipped with --no-backup"
@@ -630,14 +654,24 @@ mc_update_backup() {
   [ -x ./backup.sh ] || fail "./backup.sh not found — cannot take the backup before the update. Run with --no-backup to update without one."
   say "→ backing up before the update (./backup.sh) ..."
   marker="$(mktemp)"
-  if ! ./backup.sh; then
+  # backup.sh may ask for a passphrase: give it the terminal when there is
+  # one, never the installer's own stdin (`curl | bash` = the script itself).
+  if [ "$NONINTERACTIVE_FLAG" = 0 ] && [ -e /dev/tty ] && { : </dev/tty; } 2>/dev/null; then
+    backup_in=/dev/tty
+  fi
+  if ! ./backup.sh <"$backup_in"; then
     rm -f "$marker"
     fail "The backup failed — the update did not start. Is the database running (docker compose up -d db)? Fix the backup (output above) and re-run, or update without one: --no-backup"
   fi
+  UPDATE_BACKUP_RAN=1
   UPDATE_BACKUP="$(mc_newest_backup "$marker")"
   rm -f "$marker"
-  UPDATE_BACKUP_NOTE="written by ./backup.sh (see its output above, $(mc_backup_dir))"
-  [ -n "$UPDATE_BACKUP" ] && say "✓ backup: $UPDATE_BACKUP" || say "✓ backup done ($(mc_backup_dir))"
+  if [ -n "$UPDATE_BACKUP" ]; then
+    say "✓ backup: $UPDATE_BACKUP"
+  else
+    UPDATE_BACKUP_NOTE="written by ./backup.sh — the file is named in its output above (not found in: $(mc_backup_dirs | paste -sd ' ' -))"
+    say "✓ backup done — see the file named in backup.sh's output above"
+  fi
 }
 
 # Last step before the code changes: remember the way back, then back up.
