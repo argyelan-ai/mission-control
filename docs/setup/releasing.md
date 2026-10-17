@@ -23,7 +23,15 @@ How a version reaches users. The rules behind it:
    be pulled.
 
 If the workflow fails, nothing user-facing moved: `latest` still points to
-the previous release. Fix, delete the tag, tag again.
+the previous release. Tags are protected by a repository rule and cannot be
+deleted, so fix on `main` and release the **next patch version**
+(`vX.Y.Z+1`); note the unreleased tag in `CHANGELOG.md`. Never publish a
+GitHub release for a tag whose workflow failed.
+
+**Dry run first:** before tagging, start `release.yml` by hand on `main`
+(*Actions → Release Images → Run workflow*). It builds and verifies every
+image under `sha-<commit>` only — nothing is promoted — so a broken build
+path shows up before a version number is spent.
 
 ## Safety net in the installer
 
