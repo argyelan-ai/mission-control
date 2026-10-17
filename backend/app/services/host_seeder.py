@@ -77,7 +77,9 @@ async def seed_hosts(session: AsyncSession) -> tuple[int, int]:
     # ── 2. flask_wol boxes from their legacy runtime rows ─────────────────
     rt_result = await session.exec(
         select(Runtime)
-        .where(Runtime.runtime_type == "flask_wol")
+        # A sleeping box is a runtime MC powers itself — selected by that
+        # capability, not by a type name (harness-comparison ratchet, #848).
+        .where(Runtime.power_managed == True)  # noqa: E712
         .where(Runtime.host_id == None)  # noqa: E711
         .order_by(Runtime.slug)
     )
