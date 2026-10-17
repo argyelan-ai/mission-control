@@ -6,6 +6,10 @@ follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
 
 ## [Unreleased]
 
+- Fix: the installer's closing lines (and the browser it opens) lead to the
+  setup wizard at `/setup` instead of `scripts/demo-seed.py` and
+  `docs/setup/first-agent.md` — the wizard covers both.
+
 ## [0.3.1] - 2026-10-17
 
 - Fix: `scripts/build-agent-images.sh --sync-only` runs without a `.env` —

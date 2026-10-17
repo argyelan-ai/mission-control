@@ -372,3 +372,24 @@ def test_update_runs_setup_sh_after_the_code_switch():
     assert code.index("./setup.sh") < code.index('boot_stack "$CHANNEL"')
     last_switch = max(i for i, l in enumerate(code) if "with_fleet_carried" in l)
     assert last_switch < code.index("./setup.sh")
+
+
+# ── the closing lines lead to the setup wizard ──────────────────────────────
+
+def _closing_lines() -> str:
+    text = INSTALL_SH.read_text()
+    return text[text.index('MC_URL=$(mc_access_url .env)'):]
+
+
+def test_installer_ends_at_the_setup_wizard():
+    end = _closing_lines()
+    # every line that shows or opens the address points at the wizard —
+    # with and without a registered admin, the browser and the SSH tunnel
+    shown = [l for l in end.splitlines() if "$MC_URL" in l and ("echo" in l or "open " in l)]
+    assert len(shown) == 4, shown
+    for l in shown:
+        assert "$MC_URL/setup" in l, l
+    assert "http://localhost:8080/setup" in end
+    # the wizard covers the demo board and the first agent — no side doors
+    assert "demo-seed" not in end
+    assert "first-agent.md" not in end
