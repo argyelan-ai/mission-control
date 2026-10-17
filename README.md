@@ -196,41 +196,60 @@ through it.
 
 ## Install
 
+**You need:** git, curl, openssl and Docker with Compose v2. The installer
+checks all of them at once and prints the exact command for anything that is
+missing — it never installs system packages on its own.
+
+```bash
+# Debian / Ubuntu / Raspberry Pi OS
+sudo apt update && sudo apt install -y git curl openssl
+curl -fsSL https://get.docker.com | sh && sudo usermod -aG docker "$USER"   # then log out and in again
+# macOS: install Docker Desktop (and git via Xcode tools or Homebrew)
+```
+
+Then:
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/argyelan-ai/mission-control/main/install.sh | bash
 ```
 
 ![Installing Mission Control](docs/assets/install-demo.svg)
 
-The installer checks prerequisites, clones the repo, writes `.env` with
-fresh secrets, pulls the prebuilt images (or builds locally), starts the
-stack and opens the browser. A first-run wizard then asks for the admin
-account and LLM access (an API key or your Claude Code login) and offers the
-demo board. Update later with `./install.sh --update`.
+The installer installs the **latest release** — code and prebuilt images of
+the same version (amd64 and arm64), so nothing has to be built. It writes
+`.env` with fresh secrets, starts the stack and prints the address to open.
+Developers who want `main` can pass `--channel edge` (built locally, not for
+everyday use). Update an install later from its folder with
+`curl -fsSL https://raw.githubusercontent.com/argyelan-ai/mission-control/main/install.sh | bash -s -- --update`
+(never downgrades). Release rules: [ADR-092](docs/decisions/092-release-channels.md).
 
-**After the install, no agent is running yet.** The one-liner gives you the
-core stack. To get a lead agent and a local omp agent you can steer from the
-chat, follow
+**On a server or a Pi without a screen** the installer notices and asks
+whether you will open MC from another device. If yes, it creates the first
+admin account right there in the terminal (password hidden) and only then
+opens MC to your network — nobody else on the LAN can grab the admin account.
+Flags: `--remote`, `--public-host <address>`, `--local`. Prefer to keep MC
+private? Use an SSH tunnel (`ssh -L 8080:localhost:80 you@server`, then open
+`http://localhost:8080`) or [Tailscale](https://tailscale.com)
+(`tailscale serve --bg 80`). Raspberry Pi notes (8 GB, SSD, memory cgroup):
+[docs/setup/raspberry-pi.md](docs/setup/raspberry-pi.md).
+
+On Linux, MC runs as your own user id (`PUID`/`PGID` in `.env`, set by the
+installer). If `/health` reports `degraded`, the message says what to fix.
+Run one-off commands as that user: `docker compose exec -u mcuser backend …`.
+
+After the first login the **setup wizard** opens by itself and stays until
+it is done. **After the install, no agent is running yet.** To get a lead
+agent and a local omp agent you can steer from the chat, follow
 **[Quickstart: install to your first remote-controlled agent](docs/handbook/howto/quickstart.md)**.
-
-Manual install:
-
-```bash
-git clone https://github.com/argyelan-ai/mission-control.git
-cd mission-control
-./setup.sh                    # writes .env with secure secrets
-docker compose up --build -d  # build + start, migrations run automatically
-```
-
-Then open **http://localhost** and register the first admin user.
 
 ### Reach it from your phone
 
-MC binds to `127.0.0.1` by default. To use it from your phone, put the
-machine on a [Tailscale](https://tailscale.com) tailnet (or your own VPN),
-set `MC_BIND_ADDRESS=0.0.0.0` and `PUBLIC_HOST` in `.env` after the first
-admin exists, and restart Caddy and the backend. Keep MC off the public
-internet. Voice on the phone needs HTTPS (for example with `tailscale cert`). Guide: [Reverse proxy & remote access](docs/handbook/operations/reverse-proxy.md).
+Keep MC off the public internet. The easiest way to your phone is
+[Tailscale](https://tailscale.com): `tailscale serve --bg 80` gives you an
+HTTPS address inside your tailnet without opening MC to the LAN — HTTPS is
+also what voice on the phone needs. Add MC to your home screen to use it as
+an app. Other options (LAN address, your own reverse proxy):
+[Reverse proxy & remote access](docs/handbook/operations/reverse-proxy.md).
 
 ## Platforms
 

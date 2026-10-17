@@ -13,11 +13,12 @@ you want the concept before the steps.
 curl -fsSL https://raw.githubusercontent.com/argyelan-ai/mission-control/main/install.sh | bash
 ```
 
-or clone and run `./setup.sh` yourself. Either way you end with
-`docker compose up -d` running Postgres, Redis, Qdrant, the backend and the
-frontend, and a first admin user registered at `http://localhost`. No agent
-exists yet — this step alone is boards, vault and API, nothing that talks to
-a model.
+It installs the latest release, starts Postgres, Redis, Qdrant, the backend
+and the frontend, and prints the address to open (on a server without a
+screen it creates the first admin in the terminal — see the README's
+Install section). After the first login the setup wizard opens by itself.
+No agent exists yet — this step alone is boards, vault and API, nothing that
+talks to a model.
 
 ## 2. Pick your model and get a key in place
 
@@ -36,28 +37,39 @@ a model.
 You can do both — the lead agent and the local omp agent below use different
 credentials and can run side by side.
 
-## 3. Build the agent image(s) you need
+## 3. Get the agent image(s) you need
+
+The Claude Code agent image is published with every release (amd64 and
+arm64) and is pulled automatically. The local omp agent image is built on
+your machine (arm64 only for now):
 
 ```bash
-./scripts/build-agent-images.sh claude   # for the lead agent, if it runs on Claude Code
-./scripts/build-agent-images.sh omp      # for the local omp agent
+./scripts/build-agent-images.sh omp      # for the local omp agent (one-time, ~6 min on a Pi 4)
 ```
 
-Agent containers are not published as prebuilt images; building them is a
-one-time step (and again whenever `docker/cli-versions.json` changes).
+Build the Claude image yourself only on `--channel edge`
+(`./scripts/build-agent-images.sh claude`).
 
 ## 4. Start the host helper
 
+The host helper (`scripts/cli-bridge.py`) is a small process the backend
+calls to provision an agent's workspace and render its config files. Without
+it, the **Provision** button fails. Install its dependencies once, then run it
+as a managed service (launchd on macOS, a systemd user unit on Linux):
+
 ```bash
-python3 -m pip install --user jinja2 websockets   # one-time
-brew install tmux                                 # or your platform's package manager
-python3 scripts/cli-bridge.py &                    # keep this running
+# macOS
+python3 -m pip install --user jinja2 websockets && brew install tmux
+# Debian / Ubuntu / Raspberry Pi OS
+sudo apt install -y tmux python3-jinja2 python3-websockets nodejs npm
+curl -fsSL https://claude.ai/install.sh | bash      # Claude Code CLI, if the lead agent runs on Claude
+
+make bridge-install        # run inside your Mission Control folder
 ```
 
-This is a small, unmanaged process the backend calls to provision an agent's
-workspace and render its config files. Without it, the **Provision** button
-in the UI fails. Keep it alive under `tmux`/`screen`/your own service
-manager — there is no bundled service unit for it yet.
+The helper listens on `127.0.0.1` only and accepts requests only with a
+shared token that MC creates on first start — see
+[Host helper authentication](../../setup/cli-bridge-auth.md).
 
 ## 5. Create your lead agent
 
