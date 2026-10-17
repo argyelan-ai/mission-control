@@ -19,9 +19,17 @@ set -euo pipefail
 #                    repo (a fresh clone must not delete them) and outside ~/.mc
 #                    (the data archive must not contain older backups).
 #   MC_BACKUP_KEEP   how many daily backups to keep. Default: 7.
+#   MC_BACKUP_MIN_FREE_MB
+#                    free space that must stay on the backup disk after a
+#                    backup (Postgres and Docker need room too). Default: 5120.
+#   MC_INSTALL_DIR   the install folder (compose file, .env). Default: the
+#                    working directory when it holds an install, else the
+#                    folder of this script.
 #
 # Backups written before MC_BACKUP_DIR existed live in ./backups. They are still
-# listed and restorable, and never rotated away by this script.
+# listed and restorable, and count towards MC_BACKUP_KEEP: once enough newer
+# backups exist, the oldest ones there are rotated away like any other (so an
+# upgrade never doubles the disk use). Other files in ./backups stay.
 #
 # Restore order — nothing is changed before the archive has been checked:
 #   1. check the archive pair (gzip integrity, pg_dump header and footer, tar)
@@ -33,7 +41,17 @@ set -euo pipefail
 
 umask 077
 
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+START_DIR="$PWD"
+# The install folder. Older schedules run a backup.sh from another copy with
+# the install as working directory (the old script worked relative to it), so
+# a working directory that holds an install wins over the script's own folder.
+if [[ -n "${MC_INSTALL_DIR:-}" ]]; then
+    REPO_DIR="$(cd "$MC_INSTALL_DIR" && pwd)"
+elif [[ -f "$PWD/docker-compose.yml" && -f "$PWD/backup.sh" ]]; then
+    REPO_DIR="$PWD"
+else
+    REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fi
 LEGACY_DIR="$REPO_DIR/backups"
 DB_NAME="mission_control"
 DB_USER="mc"
@@ -57,10 +75,15 @@ cfg() {
 
 BACKUP_DIR="$(cfg MC_BACKUP_DIR "$HOME/mc-backups")"
 KEEP_LAST="$(cfg MC_BACKUP_KEEP 7)"
+MIN_FREE_MB="$(cfg MC_BACKUP_MIN_FREE_MB 5120)"
 MC_DATA_DIR="$HOME/.mc"
 
 if ! [[ "$KEEP_LAST" =~ ^[1-9][0-9]*$ ]]; then
     echo "MC_BACKUP_KEEP must be a whole number of at least 1 (got '$KEEP_LAST')." >&2
+    exit 2
+fi
+if ! [[ "$MIN_FREE_MB" =~ ^[0-9]+$ ]]; then
+    echo "MC_BACKUP_MIN_FREE_MB must be a whole number of megabytes (got '$MIN_FREE_MB')." >&2
     exit 2
 fi
 
@@ -120,19 +143,30 @@ check_data() {
     tar -tzf "$f" >/dev/null 2>&1
 }
 
-# All daily DB archives from both locations, newest first (by timestamp in
-# the name, so a copied file with a fresh mtime does not jump the queue).
-list_dumps() {
-    local d
-    for d in "$BACKUP_DIR" "$LEGACY_DIR"; do
-        [[ -d "$d" ]] || continue
-        find -H "$d" -maxdepth 1 -name 'mc_backup_[0-9]*.sql.gz' -type f 2>/dev/null
-    done | awk -F/ '{print $NF "\t" $0}' | sort -r | cut -f2-
+# The folders backups are read from: the backup folder, plus ./backups when
+# it is a different folder.
+backup_dirs() {
+    printf '%s\n' "$BACKUP_DIR"
+    [[ "$LEGACY_DIR" != "$BACKUP_DIR" ]] && printf '%s\n' "$LEGACY_DIR"
+    return 0
 }
+
+# Files matching <pattern> in all backup folders, newest first (by timestamp
+# in the name, so a copied file with a fresh mtime does not jump the queue).
+find_backups() {
+    local d
+    while IFS= read -r d; do
+        [[ -d "$d" ]] || continue
+        find -H "$d" -maxdepth 1 -name "$1" -type f 2>/dev/null
+    done < <(backup_dirs) | awk -F/ '{print $NF "\t" $0}' | sort -r | cut -f2-
+}
+
+# All daily DB archives from both locations, newest first.
+list_dumps() { find_backups 'mc_backup_[0-9]*.sql.gz'; }
 
 rotate() {
     local pattern="$1" keep="$2" label="$3" old
-    old="$(find -H "$BACKUP_DIR" -maxdepth 1 -name "$pattern" -type f 2>/dev/null | sort -r | tail -n +$((keep + 1)))"
+    old="$(find_backups "$pattern" | tail -n +$((keep + 1)))"
     if [[ -n "$old" ]]; then
         while IFS= read -r f; do rm -f -- "$f"; done <<<"$old"
         echo "Removed old $label (keeping the last $keep)."
@@ -140,18 +174,20 @@ rotate() {
 }
 
 # Refuse to start when the backup folder cannot hold another backup of the
-# size of the newest one (+10 %). A full disk otherwise ends in a half archive.
+# size of the newest one (+10 %) and still keep MC_BACKUP_MIN_FREE_MB free.
+# A full disk otherwise ends in a half archive — and stalls Postgres.
 check_free_space() {
-    local newest need_kb=0 free_kb data
+    local newest need_kb=0 free_kb data reserve_kb=$((MIN_FREE_MB * 1024))
     newest="$(list_dumps | head -n 1)"
-    [[ -n "$newest" ]] || return 0
-    need_kb=$(du -k "$newest" | cut -f1)
-    data="$(data_archive_for "$newest")"
-    [[ -f "$data" ]] && need_kb=$((need_kb + $(du -k "$data" | cut -f1)))
-    need_kb=$((need_kb + need_kb / 10))
+    if [[ -n "$newest" ]]; then
+        need_kb=$(du -k "$newest" | cut -f1)
+        data="$(data_archive_for "$newest")"
+        [[ -f "$data" ]] && need_kb=$((need_kb + $(du -k "$data" | cut -f1)))
+        need_kb=$((need_kb + need_kb / 10))
+    fi
     free_kb="$(df -Pk "$BACKUP_DIR" | awk 'NR==2 {print $4}')"
-    if [[ -n "$free_kb" && "$free_kb" -lt "$need_kb" ]]; then
-        die "not enough free space in $BACKUP_DIR: $((free_kb / 1024)) MB free, about $((need_kb / 1024)) MB needed (size of the last backup). Free space or lower MC_BACKUP_KEEP."
+    if [[ -n "$free_kb" && "$free_kb" -lt $((need_kb + reserve_kb)) ]]; then
+        die "not enough free space in $BACKUP_DIR: $((free_kb / 1024)) MB free, about $((need_kb / 1024)) MB needed for the backup plus $MIN_FREE_MB MB that must stay free (MC_BACKUP_MIN_FREE_MB). Free space (old backups in $BACKUP_DIR or $LEGACY_DIR) or lower MC_BACKUP_KEEP."
     fi
 }
 
@@ -194,7 +230,8 @@ make_backup() {
             # Agents keep writing while the backup runs. A file that changed
             # or vanished mid-read is normal (GNU tar exits 1 for it); any
             # other message — an unreadable file, a full disk — is a failure.
-            if [[ ! -s "$tar_err" ]] || grep -v -E 'file changed as we read it|File removed before we read it|socket ignored' "$tar_err" | grep -q .; then
+            # bsdtar (macOS) says "Truncated input file" for a file that shrank.
+            if [[ ! -s "$tar_err" ]] || grep -v -E 'file changed as we read it|File removed before we read it|socket ignored|Truncated input file' "$tar_err" | grep -q .; then
                 die "MC data archive failed (tar errors above) — the database backup $db is fine, the ~/.mc half is missing."
             fi
             echo "  Note: some files changed while they were read (agents were working); the archive is still valid."
@@ -220,7 +257,7 @@ cmd_list() {
     local f status data full=0
     [[ "${1:-}" == "--full" ]] && full=1
     echo "Backup folder: $BACKUP_DIR"
-    [[ -d "$LEGACY_DIR" ]] && echo "Older folder:  $LEGACY_DIR (still read)"
+    [[ -d "$LEGACY_DIR" && "$LEGACY_DIR" != "$BACKUP_DIR" ]] && echo "Older folder:  $LEGACY_DIR (still read)"
     local found=0
     while IFS= read -r f; do
         [[ -n "$f" ]] || continue
@@ -235,7 +272,7 @@ cmd_list() {
             data="+ data $(du -h "$data" | cut -f1)"
         fi
         printf '%-8s %s  %s %s\n' "$status" "$f" "$(du -h "$f" | cut -f1)" "$data"
-    done < <(list_dumps; find -H "$BACKUP_DIR" -maxdepth 1 -name 'mc_backup_pre-restore_*.sql.gz' -type f 2>/dev/null | sort -r)
+    done < <(list_dumps; find_backups 'mc_backup_pre-restore_*.sql.gz')
     [[ "$found" == 1 ]] || echo "No backups found."
 }
 
@@ -262,6 +299,7 @@ cmd_restore() {
     # 1. Pick and check the archive pair. Nothing has been changed yet.
     local explicit="$file"
     if [[ -n "$file" ]]; then
+        [[ "$file" != /* ]] && file="$START_DIR/$file"   # relative to where you stand
         [[ -f "$file" ]] || die "no such file: $file"
         file="$(cd "$(dirname "$file")" && pwd)/$(basename "$file")"
         echo "Checking $file ..."
@@ -344,7 +382,9 @@ cmd_restore() {
     # 5. ~/.mc, then start again.
     if [[ -f "$data" ]]; then
         echo "Restoring MC data to ~/.mc ..."
-        tar -xzf "$data" -C "$HOME"
+        # Modes come from the archive, not from this script's umask 077:
+        # agents and other containers read shared files in ~/.mc.
+        (umask 022; tar -xpzf "$data" -C "$HOME")
         echo "MC data restored from: $data"
     fi
     trap - ERR

@@ -26,11 +26,20 @@ follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
 - Fix: backups are private (`umask 077`: files 600, folder 700), a failing
   `~/.mc` archive is reported instead of silently skipped, half-written files
   never look like finished backups, and a backup refuses to start when the
-  disk cannot hold another one.
+  disk cannot hold another one and still keep `MC_BACKUP_MIN_FREE_MB`
+  (default 5120) free — also on the very first run.
+- Fix: `restore` puts `~/.mc` back with the file modes from the archive, not
+  with the script's private `umask` (other containers keep reading shared
+  files). A relative `restore <file>` is read from where you stand.
 - Change: backups go to `MC_BACKUP_DIR` (default `$HOME/mc-backups`, outside
   the repo and `~/.mc`) and keep `MC_BACKUP_KEEP` daily runs (default 7, was
-  4). Existing `./backups` stay readable for `list` and `restore` and are not
-  rotated. New: `./backup.sh list [--full]` and `./backup.sh dir`.
+  4). Existing `./backups` stay readable for `list` and `restore` and count
+  towards `MC_BACKUP_KEEP`, so their oldest daily backups are rotated away
+  once enough newer ones exist (the disk use does not double after the
+  upgrade). A `backup.sh` started from another copy with an install as the
+  working directory (older schedules) uses that install's `.env` and
+  `./backups`; `MC_INSTALL_DIR` sets it explicitly. New:
+  `./backup.sh list [--full]` and `./backup.sh dir`.
 
 ## [0.3.1] - 2026-10-17
 

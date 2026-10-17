@@ -383,3 +383,157 @@ def test_auto_pick_skips_a_pair_whose_data_archive_is_damaged(env):
     assert r.returncode == 0, r.stdout + r.stderr
     assert f"Database restored from: {older}" in r.stdout
     assert _rows(env.pg) == 5
+
+
+# ── review fixes: modes, disk, old installs, transaction ────────────────────
+
+def test_restore_keeps_the_file_modes_from_the_archive(env):
+    """backup.sh runs under umask 077; extraction must not make ~/.mc private.
+
+    Containers with another uid read shared files (e.g. screenshots) after a
+    restore — a 0644 file must come back 0644, a 0755 folder 0755.
+    """
+    shared = env.home / ".mc" / "shared"
+    shared.mkdir()
+    shared.chmod(0o755)
+    (shared / "new.txt").write_text("a")
+    (shared / "new.txt").chmod(0o644)
+    kept = env.home / ".mc" / "kept.txt"
+    kept.write_text("b")
+    kept.chmod(0o644)
+    dump = _make_backup(env)
+    shutil.rmtree(shared)
+    kept.write_text("changed")
+    kept.chmod(0o644)
+
+    r = env.run("restore", str(dump), "--yes", "--no-safety-copy", stdin="")
+
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert stat.S_IMODE(shared.stat().st_mode) == 0o755
+    assert stat.S_IMODE((shared / "new.txt").stat().st_mode) == 0o644
+    assert kept.read_text() == "b"
+    assert stat.S_IMODE(kept.stat().st_mode) == 0o644
+
+
+def _fake_df(tmp_path: Path, free_kb: int) -> Path:
+    fake = tmp_path / "fakedf"
+    fake.mkdir(exist_ok=True)
+    (fake / "df").write_text(
+        "#!/bin/bash\necho 'Filesystem 1024-blocks Used Available Capacity Mounted'\n"
+        f"echo '/dev/fake 999999999 1 {free_kb} 99% /'\n"
+    )
+    (fake / "df").chmod(0o755)
+    return fake
+
+
+def test_first_backup_still_keeps_a_free_space_reserve(env, tmp_path):
+    """No earlier backup to measure: the reserve alone must still be checked."""
+    fake = _fake_df(tmp_path, 1024 * 1024)  # 1 GB free, default reserve is larger
+
+    r = env.run(extra={"PATH": f"{fake}:{env.env['PATH']}"})
+
+    assert r.returncode != 0
+    assert "not enough free space" in r.stderr
+    assert not env.backups.exists() or not list(env.backups.glob("mc_*"))
+
+
+def test_reserve_is_added_to_the_size_of_the_last_backup(env, tmp_path):
+    _make_backup(env)
+    before = sorted(p.name for p in env.backups.iterdir())
+    fake = _fake_df(tmp_path, 3 * 1024 * 1024)  # room for the tiny backup, not for the reserve
+    time.sleep(1.1)
+
+    r = env.run(extra={"PATH": f"{fake}:{env.env['PATH']}", "MC_BACKUP_MIN_FREE_MB": "4096"})
+    assert r.returncode != 0
+    assert "not enough free space" in r.stderr
+    assert sorted(p.name for p in env.backups.iterdir()) == before
+
+    r = env.run(extra={"PATH": f"{fake}:{env.env['PATH']}", "MC_BACKUP_MIN_FREE_MB": "1024"})
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_rotation_counts_the_old_backups_folder(env):
+    """Old ./backups plus a new folder must not double the disk use."""
+    legacy = env.repo / "backups"
+    legacy.mkdir()
+    for day in (1, 2, 3):
+        (legacy / f"mc_backup_2000-01-0{day}_00-00-00.sql.gz").write_bytes(b"x")
+        (legacy / f"mc_data_2000-01-0{day}_00-00-00.tar.gz").write_bytes(b"x")
+    (legacy / "backup.log").write_text("log\n")
+    (legacy / "mc_backup_pre-restore_2000-01-01_00-00-00.sql.gz").write_bytes(b"x")
+
+    r = env.run(extra={"MC_BACKUP_KEEP": "2"})
+
+    assert r.returncode == 0, r.stdout + r.stderr
+    left = sorted(p.name for p in legacy.glob("mc_backup_2*.sql.gz"))
+    assert left == ["mc_backup_2000-01-03_00-00-00.sql.gz"], left
+    assert sorted(p.name for p in legacy.glob("mc_data_2*.tar.gz")) == ["mc_data_2000-01-03_00-00-00.tar.gz"]
+    assert len(list(env.backups.glob("mc_backup_2*.sql.gz"))) == 1
+    assert (legacy / "backup.log").exists()
+    assert (legacy / "mc_backup_pre-restore_2000-01-01_00-00-00.sql.gz").exists()
+
+
+def test_scheduler_that_runs_another_copy_uses_the_install_in_its_working_dir(env, tmp_path):
+    """Old schedules run a backup.sh from elsewhere with the install as cwd.
+
+    The old script worked relative to the working directory; settings in that
+    install's .env (and its ./backups) must still be found.
+    """
+    elsewhere = tmp_path / "checkout"
+    elsewhere.mkdir()
+    shutil.copy(BACKUP_SH, elsewhere / "backup.sh")
+    (env.repo / "docker-compose.yml").write_text("services: {}\n")
+    (env.repo / ".env").write_text("MC_BACKUP_DIR=~/from-install-env\n")
+    env_no_var = {k: v for k, v in env.env.items() if k != "MC_BACKUP_DIR"}
+
+    r = subprocess.run(["bash", str(elsewhere / "backup.sh"), "dir"], cwd=env.repo, env=env_no_var,
+                       capture_output=True, text=True)
+
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == str(env.home / "from-install-env")
+
+
+def test_relative_restore_path_is_taken_from_where_you_stand(env, tmp_path):
+    dump = _make_backup(env)
+    here = tmp_path / "here"
+    (here / "sub").mkdir(parents=True)
+    shutil.copy(dump, here / "sub" / "copy.sql.gz")
+    _psql(env.pg, "insert into notes values (42, 'later')")
+
+    r = subprocess.run(["bash", str(env.repo / "backup.sh"), "restore", "sub/copy.sql.gz", "--yes",
+                        "--no-safety-copy"], cwd=here, env=env.env, input="",
+                       capture_output=True, text=True, timeout=180)
+
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert _rows(env.pg) == 5
+
+
+def test_a_dump_that_fails_while_loading_leaves_no_half_database(env):
+    """--single-transaction: a load error must not leave half the tables."""
+    bad = env.repo / "fails_late.sql.gz"
+    with gzip.open(bad, "wt") as fh:
+        fh.write("--\n-- PostgreSQL database dump\n--\n\n"
+                 "CREATE TABLE early (id int);\n"
+                 "INSERT INTO early VALUES (1);\n"
+                 "SELECT * FROM table_that_does_not_exist;\n"
+                 "\n--\n-- PostgreSQL database dump complete\n--\n")
+
+    r = env.run("restore", str(bad), "--yes", "--no-safety-copy", stdin="")
+
+    assert r.returncode != 0
+    assert "RESTORE FAILED" in r.stderr
+    exists = _psql(env.pg, "select count(*) from pg_tables where tablename = 'early'")
+    assert exists.returncode == 0, exists.stderr
+    assert exists.stdout.strip() == "0", "the part before the error must be rolled back"
+
+
+def test_backup_dir_equal_to_old_folder_lists_each_backup_once(env):
+    dump = _make_backup(env)
+    legacy = env.repo / "backups"
+    legacy.mkdir()
+    shutil.move(dump, legacy / dump.name)
+
+    r = env.run("list", stdin="", extra={"MC_BACKUP_DIR": str(legacy)})
+
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.count(dump.name) == 1, r.stdout
