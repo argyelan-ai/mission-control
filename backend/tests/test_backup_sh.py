@@ -537,3 +537,110 @@ def test_backup_dir_equal_to_old_folder_lists_each_backup_once(env):
 
     assert r.returncode == 0, r.stderr
     assert r.stdout.count(dump.name) == 1, r.stdout
+# ── .env: only encrypted, only with the user's passphrase ───────────────────
+
+ENV_BODY = "SECRETS_ENCRYPTION_KEY=k3y-original-value\nDB_PASSWORD=db-original\nJWT_SECRET_KEY=jwt\n"
+
+
+def _env_archive_for(dump: Path) -> Path:
+    return Path(str(dump).replace("mc_backup_", "mc_env_").replace(".sql.gz", ".env.enc"))
+
+
+def _decrypt(path: Path, passphrase: str) -> subprocess.CompletedProcess:
+    """Decrypts with plain openssl — proves the archive needs no MC tooling."""
+    r = subprocess.run(
+        ["openssl", "enc", "-d", "-aes-256-cbc", "-pbkdf2", "-iter", "600000", "-md", "sha256",
+         "-pass", "env:PW", "-in", str(path)],
+        env={**os.environ, "PW": passphrase}, capture_output=True,
+    )
+    r.stdout = r.stdout.decode("utf-8", "replace")
+    return r
+
+
+def test_env_is_backed_up_encrypted_with_the_passphrase(env):
+    (env.repo / ".env").write_text(ENV_BODY)
+    r = env.run(extra={"MC_BACKUP_PASSPHRASE": "correct horse"})
+    assert r.returncode == 0, r.stdout + r.stderr
+    dump = sorted(env.backups.glob("mc_backup_2*.sql.gz"))[-1]
+    enc = _env_archive_for(dump)
+
+    assert enc.exists(), r.stdout
+    assert stat.S_IMODE(enc.stat().st_mode) == 0o600
+    assert b"k3y-original-value" not in enc.read_bytes()
+    plain = _decrypt(enc, "correct horse")
+    assert plain.returncode == 0
+    assert "SECRETS_ENCRYPTION_KEY=k3y-original-value" in plain.stdout
+    assert _decrypt(enc, "wrong").stdout.find("k3y-original-value") == -1
+
+
+def test_passphrase_can_come_from_a_file(env, tmp_path):
+    (env.repo / ".env").write_text(ENV_BODY)
+    pwfile = tmp_path / "pw"
+    pwfile.write_text("from file\n")
+    r = env.run(extra={"MC_BACKUP_PASSPHRASE_FILE": str(pwfile)})
+    assert r.returncode == 0, r.stdout + r.stderr
+    dump = sorted(env.backups.glob("mc_backup_2*.sql.gz"))[-1]
+    assert "k3y-original-value" in _decrypt(_env_archive_for(dump), "from file").stdout
+
+
+def test_without_passphrase_env_is_skipped_with_a_clear_notice(env):
+    (env.repo / ".env").write_text(ENV_BODY)
+    r = env.run(stdin="")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not list(env.backups.glob("mc_env_*"))
+    assert ".env was not backed up" in (r.stdout + r.stderr).lower()
+    assert "MC_BACKUP_PASSPHRASE" in r.stdout + r.stderr
+
+
+def test_restore_puts_env_back_in_place_and_keeps_the_current_one(env):
+    envfile = env.repo / ".env"
+    envfile.write_text(ENV_BODY)
+    r = env.run(extra={"MC_BACKUP_PASSPHRASE": "pw"})
+    assert r.returncode == 0, r.stdout + r.stderr
+    dump = sorted(env.backups.glob("mc_backup_2*.sql.gz"))[-1]
+    changed = "SECRETS_ENCRYPTION_KEY=other-machine\nDB_PASSWORD=db-other\n"
+    envfile.write_text(changed)
+    inode = envfile.stat().st_ino
+    time.sleep(1.1)
+
+    r = env.run("restore", str(dump), "--yes", stdin="", extra={"MC_BACKUP_PASSPHRASE": "pw"})
+
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert envfile.read_text() == ENV_BODY
+    assert envfile.stat().st_ino == inode, "rewritten in place: bind mounts keep seeing it"
+    kept = list(env.repo.glob(".env.backup-pre-restore-*"))
+    assert len(kept) == 1 and kept[0].read_text() == changed
+    assert stat.S_IMODE(kept[0].stat().st_mode) == 0o600
+    assert "docker compose up -d" in r.stdout
+
+
+def test_restore_aligns_the_db_role_password_with_the_restored_env(env):
+    envfile = env.repo / ".env"
+    envfile.write_text(ENV_BODY)
+    assert env.run(extra={"MC_BACKUP_PASSPHRASE": "pw"}).returncode == 0
+    dump = sorted(env.backups.glob("mc_backup_2*.sql.gz"))[-1]
+    envfile.write_text("SECRETS_ENCRYPTION_KEY=x\nDB_PASSWORD=db-other\n")
+    _psql(env.pg, "ALTER ROLE mc PASSWORD 'db-other'")
+    before = _psql(env.pg, "select rolpassword from pg_authid where rolname='mc'").stdout
+
+    r = env.run("restore", str(dump), "--yes", stdin="", extra={"MC_BACKUP_PASSPHRASE": "pw"})
+
+    assert r.returncode == 0, r.stdout + r.stderr
+    after = _psql(env.pg, "select rolpassword from pg_authid where rolname='mc'").stdout
+    assert after.strip() and after != before
+
+
+def test_wrong_passphrase_aborts_before_anything_changes(env):
+    (env.repo / ".env").write_text(ENV_BODY)
+    assert env.run(extra={"MC_BACKUP_PASSPHRASE": "right"}).returncode == 0
+    dump = sorted(env.backups.glob("mc_backup_2*.sql.gz"))[-1]
+    _psql(env.pg, "insert into notes values (42, 'later')")
+    env.log.write_text("")
+
+    r = env.run("restore", str(dump), "--yes", stdin="", extra={"MC_BACKUP_PASSPHRASE": "wrong"})
+
+    assert r.returncode != 0
+    assert "passphrase" in (r.stdout + r.stderr).lower()
+    assert _rows(env.pg) == 6
+    assert "DROP" not in env.log.read_text()
+    assert (env.repo / ".env").read_text() == ENV_BODY
