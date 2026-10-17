@@ -66,10 +66,10 @@ seed-clean: ## Remove the demo board
 update: ## Update an existing install (pull, refresh images, migrate)
 	./install.sh --update
 
-backup: ## Back up DB + ~/.mc now (keeps the last 10)
+backup: ## Back up DB + ~/.mc (+ .env encrypted) to MC_BACKUP_DIR; keeps MC_BACKUP_KEEP (7)
 	./backup.sh
 
-backup-schedule: ## Install a daily 03:00 automatic backup (launchd/cron)
+backup-schedule: ## Install a daily 03:00 backup (launchd/cron); log in the backup folder
 	./scripts/schedule-backup.sh
 
 bridge-install: ## Run cli-bridge.py as a managed service (launchd/systemd)
