@@ -143,7 +143,7 @@ services:
       LOCAL_AUTH_TOKEN: ${LOCAL_AUTH_TOKEN}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production}
       # User session lifetime; override in .env (e.g. 43200 = 30 days on a Tailscale-only install)
-      JWT_ACCESS_TOKEN_EXPIRE_MINUTES: ${JWT_ACCESS_TOKEN_EXPIRE_MINUTES:-480}
+      JWT_ACCESS_TOKEN_EXPIRE_MINUTES: ${JWT_ACCESS_TOKEN_EXPIRE_MINUTES:-10080}
       # Streams (SSE/WebSocket) open with single-use tickets (?ticket=). The
       # old login token in the URL (?token=) leaks into proxy logs and is off;
       # true re-enables it for one transition release only.
@@ -481,7 +481,7 @@ services:
       AUTH_MODE: local
       LOCAL_AUTH_TOKEN: ${LOCAL_AUTH_TOKEN}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production}
-      JWT_ACCESS_TOKEN_EXPIRE_MINUTES: ${JWT_ACCESS_TOKEN_EXPIRE_MINUTES:-480}
+      JWT_ACCESS_TOKEN_EXPIRE_MINUTES: ${JWT_ACCESS_TOKEN_EXPIRE_MINUTES:-10080}
       SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY:-}
       # Plattenplatz: der Waechter laeuft hier (ENABLE_BACKGROUND_SERVICES),
       # also muss mindestens DISK_WATCHDOG_PERCENT hier stehen — sonst laeuft
