@@ -253,7 +253,7 @@ jobs:
         # against a local git repo and file:// "API" answers, so they are
         # deterministic and need no GitHub API quota.
         run: |
-          shellcheck -x install.sh
+          shellcheck -x -S warning install.sh   # info-level notes differ between shellcheck versions
           pip install -q pytest
           python3 -m pytest -q -p no:cacheprovider --noconftest backend/tests/test_install_release_pinning.py
       - name: --here ran the checkout, not a published image
