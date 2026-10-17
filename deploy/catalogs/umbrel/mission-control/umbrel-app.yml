@@ -4,7 +4,7 @@ id: mission-control
 # getumbrel/umbrel-apps before submitting (e.g. ollama's manifest).
 category: ai
 name: Mission Control
-version: "0.2.0"
+version: "0.3.1"
 tagline: Coding agents on your own models, with approval gates
 description: >-
   Mission Control is a self-hosted home base for coding agents on your

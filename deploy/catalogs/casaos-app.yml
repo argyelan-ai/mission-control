@@ -25,7 +25,7 @@ services:
     restart: unless-stopped
     command: ["redis-server", "--requirepass", "$REDIS_PASSWORD"]
   backend:
-    image: ghcr.io/argyelan-ai/mc-backend:0.2.0@sha256:9a8176f638e21ff585e7d49cb3a9c068741380fb69e48f0b7312641a351899ce
+    image: ghcr.io/argyelan-ai/mc-backend:0.3.1@sha256:199aaf4d668ff6833d2fc9957c6b30f11c5f3c573471653de86d84a4724e0c72
     restart: unless-stopped
     depends_on: [db, redis]
     environment:
@@ -33,11 +33,15 @@ services:
       REDIS_URL: redis://:$REDIS_PASSWORD@redis:6379/0
       JWT_SECRET_KEY: $JWT_SECRET_KEY
       SECRETS_ENCRYPTION_KEY: $SECRETS_ENCRYPTION_KEY
+      # backend/app/config.py:895 validate_boot_secrets() refuses to boot
+      # with ENVIRONMENT=production and this empty (PR #404) — the API
+      # container would crash-loop without it.
+      INTERNAL_BOOTSTRAP_SECRET: $INTERNAL_BOOTSTRAP_SECRET
       ENVIRONMENT: production
     volumes:
       - /DATA/AppData/mission-control/mc:/home/mcuser/.mc
   frontend:
-    image: ghcr.io/argyelan-ai/mc-frontend:0.2.0@sha256:01a4246e52aaaa4b88e9117e2a573dfb96d1f794e01fa087ef3f80a294009f22
+    image: ghcr.io/argyelan-ai/mc-frontend:0.3.1@sha256:0ecb3f68ac53d70b943dc489cf0e9f387f6610bf1082ee9680f82b3b8949c7de
     restart: unless-stopped
     depends_on: [backend]
   proxy:
