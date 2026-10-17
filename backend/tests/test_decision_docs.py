@@ -42,7 +42,9 @@ from app.services.decision_docs import (
 #   operator accepts or rejects it in the voice PR 1 review.
 # +1 on 2026-10-17: ADR-092 (release channels stable/edge) — Accepted,
 #   accepted by the dev lead on behalf of the operator (17.10.).
-EXPECTED_DECISION_DOCS = 91
+# +1 on 2026-10-17: ADR-093 (user-configurable and extensible by design) —
+#   operator rule of 2026-10-17, accepted.
+EXPECTED_DECISION_DOCS = 92
 
 
 def _repo_root() -> Path:
