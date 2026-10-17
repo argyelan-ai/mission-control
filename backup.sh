@@ -8,7 +8,8 @@ set -euo pipefail
 #
 # Usage:
 #   ./backup.sh                          create a backup
-#   ./backup.sh list                     list backups (newest first) with a check
+#   ./backup.sh list [--full]            list backups (newest first) with a check;
+#                                        --full also reads every data archive (slow)
 #   ./backup.sh dir                      print the backup folder
 #   ./backup.sh restore [file] [--yes]   restore the newest valid backup, or <file>
 #                       [--no-safety-copy]
@@ -125,13 +126,13 @@ list_dumps() {
     local d
     for d in "$BACKUP_DIR" "$LEGACY_DIR"; do
         [[ -d "$d" ]] || continue
-        find "$d" -maxdepth 1 -name 'mc_backup_[0-9]*.sql.gz' -type f 2>/dev/null
+        find -H "$d" -maxdepth 1 -name 'mc_backup_[0-9]*.sql.gz' -type f 2>/dev/null
     done | awk -F/ '{print $NF "\t" $0}' | sort -r | cut -f2-
 }
 
 rotate() {
     local pattern="$1" keep="$2" label="$3" old
-    old="$(find "$BACKUP_DIR" -maxdepth 1 -name "$pattern" -type f 2>/dev/null | sort -r | tail -n +$((keep + 1)))"
+    old="$(find -H "$BACKUP_DIR" -maxdepth 1 -name "$pattern" -type f 2>/dev/null | sort -r | tail -n +$((keep + 1)))"
     if [[ -n "$old" ]]; then
         while IFS= read -r f; do rm -f -- "$f"; done <<<"$old"
         echo "Removed old $label (keeping the last $keep)."
@@ -216,7 +217,8 @@ cmd_backup() {
 }
 
 cmd_list() {
-    local f status data
+    local f status data full=0
+    [[ "${1:-}" == "--full" ]] && full=1
     echo "Backup folder: $BACKUP_DIR"
     [[ -d "$LEGACY_DIR" ]] && echo "Older folder:  $LEGACY_DIR (still read)"
     local found=0
@@ -225,9 +227,15 @@ cmd_list() {
         found=1
         if check_dump "$f"; then status="ok"; else status="DAMAGED"; fi
         data="$(data_archive_for "$f")"
-        if [[ -f "$data" ]]; then data="+ data $(du -h "$data" | cut -f1)"; else data="(no data archive)"; fi
+        if [[ ! -f "$data" ]]; then
+            data="(no data archive)"
+        elif [[ "$full" == 1 ]]; then
+            if check_data "$data"; then data="+ data $(du -h "$data" | cut -f1) ok"; else data="+ data DAMAGED"; fi
+        else
+            data="+ data $(du -h "$data" | cut -f1)"
+        fi
         printf '%-8s %s  %s %s\n' "$status" "$f" "$(du -h "$f" | cut -f1)" "$data"
-    done < <(list_dumps; find "$BACKUP_DIR" -maxdepth 1 -name 'mc_backup_pre-restore_*.sql.gz' -type f 2>/dev/null | sort -r)
+    done < <(list_dumps; find -H "$BACKUP_DIR" -maxdepth 1 -name 'mc_backup_pre-restore_*.sql.gz' -type f 2>/dev/null | sort -r)
     [[ "$found" == 1 ]] || echo "No backups found."
 }
 
@@ -252,6 +260,7 @@ cmd_restore() {
     done
 
     # 1. Pick and check the archive pair. Nothing has been changed yet.
+    local explicit="$file"
     if [[ -n "$file" ]]; then
         [[ -f "$file" ]] || die "no such file: $file"
         file="$(cd "$(dirname "$file")" && pwd)/$(basename "$file")"
@@ -262,14 +271,19 @@ cmd_restore() {
         while IFS= read -r f; do
             [[ -n "$f" ]] || continue
             echo "Checking $f ..."
-            if check_dump "$f"; then file="$f"; break; fi
-            echo "  damaged, skipped."
+            if ! check_dump "$f"; then echo "  damaged, skipped."; continue; fi
+            if [[ -f "$(data_archive_for "$f")" ]] && ! check_data "$(data_archive_for "$f")"; then
+                echo "  its MC data archive is damaged, skipped."
+                continue
+            fi
+            file="$f"
+            break
         done < <(list_dumps)
         [[ -n "$file" ]] || die "no valid backup found in $BACKUP_DIR or $LEGACY_DIR — nothing changed."
     fi
     local data
     data="$(data_archive_for "$file")"
-    if [[ -f "$data" ]]; then
+    if [[ -n "$explicit" && -f "$data" ]]; then
         echo "Checking $data ..."
         check_data "$data" || die "MC data archive damaged: $data — nothing changed."
     fi
@@ -345,7 +359,7 @@ cmd_restore() {
 
 case "${1:-}" in
     ""|backup) cmd_backup ;;
-    list) cmd_list ;;
+    list) shift; cmd_list "$@" ;;
     dir) printf '%s\n' "$BACKUP_DIR" ;;
     restore) shift; cmd_restore "$@" ;;
     -h|--help|help) awk 'NR > 3 && /^#/ { sub(/^# ?/, ""); print; next } NR > 3 { exit }' "$0" ;;

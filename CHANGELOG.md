@@ -18,6 +18,19 @@ follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
   Behaviour change: with the database stopped, `--update` now stops (the
   backup needs it) instead of starting the stack — start it with
   `docker compose up -d db` or pass `--no-backup`.
+- Fix: `backup.sh restore` checks the archive (gzip, pg_dump header and
+  completion marker, tar) **before** it changes anything, saves the current
+  state as a `pre-restore` backup, stops `backend` **and** `mc-worker`, and
+  loads the dump in one transaction. A damaged archive is never picked as
+  "the newest" — the newest valid pair is used instead.
+- Fix: backups are private (`umask 077`: files 600, folder 700), a failing
+  `~/.mc` archive is reported instead of silently skipped, half-written files
+  never look like finished backups, and a backup refuses to start when the
+  disk cannot hold another one.
+- Change: backups go to `MC_BACKUP_DIR` (default `$HOME/mc-backups`, outside
+  the repo and `~/.mc`) and keep `MC_BACKUP_KEEP` daily runs (default 7, was
+  4). Existing `./backups` stay readable for `list` and `restore` and are not
+  rotated. New: `./backup.sh list [--full]` and `./backup.sh dir`.
 
 ## [0.3.1] - 2026-10-17
 

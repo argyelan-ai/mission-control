@@ -367,3 +367,19 @@ def test_dir_prints_the_configured_folder_and_reads_env_file(env):
                        capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     assert r.stdout.strip() == str(env.home / "elsewhere")
+
+
+def test_auto_pick_skips_a_pair_whose_data_archive_is_damaged(env):
+    older = _make_backup(env)
+    time.sleep(1.1)
+    newer = _make_backup(env)
+    assert newer != older
+    newer_data = Path(str(newer).replace("mc_backup_", "mc_data_").replace(".sql.gz", ".tar.gz"))
+    newer_data.write_bytes(newer_data.read_bytes()[:50])
+    _psql(env.pg, "insert into notes values (42, 'later')")
+
+    r = env.run("restore", "--yes", stdin="")
+
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert f"Database restored from: {older}" in r.stdout
+    assert _rows(env.pg) == 5
