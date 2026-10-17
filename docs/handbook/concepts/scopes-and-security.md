@@ -72,6 +72,8 @@ Human authentication is JWT-based with three roles in a strict hierarchy: `admin
 
 Registration is open **only while no user exists** — the first account you create is the admin, and the endpoint closes behind you. Register that first admin before you widen network access, not after.
 
+Logging out or changing your password signs out **every** session of that account, on all devices (each login token carries a version number that both actions bump). After a password change the device you changed it on gets a fresh token and stays signed in. An admin who sets another user's password signs that user out everywhere.
+
 ## Secrets vs. credentials
 
 There are two encrypted stores, both using Fernet, and confusing them has cost real debugging time — which is why [ADR-033](../../decisions/033-secrets-vs-credentials-boundary.md) codified the boundary instead of merging them.

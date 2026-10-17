@@ -108,7 +108,7 @@ an opt-in preview, macOS host only — see
 **Migrations:** 75 total (0001 → 0075). Neueste: 0073 host runtime, 0074 install_requests table, 0075 install_log + approval failure_reason.
 
 **Auth-System (3-Tier):**
-1. **User JWT (HS256)** — Login via `auth/login`, localStorage-Storage, `token_version` für Logout-Invalidierung
+1. **User JWT (HS256)** — Login via `auth/login`, localStorage-Storage, `token_version` für Logout-Invalidierung (auch Passwortwechsel: alle anderen Sitzungen abgemeldet, die eigene bekommt einen neuen Token)
 2. **Agent PBKDF2 (200k iter)** — `POST /agents` erzeugt Token einmalig, Redis-Cache `SHA256(token) → agent_id` (5min TTL) verhindert N×200ms Hash pro Request
 3. **Legacy LOCAL_AUTH_TOKEN** — nur falls explizit gesetzt, Fallback
 
