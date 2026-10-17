@@ -11,6 +11,7 @@
  * doesn't see a frozen WebSocket pointing at the old container.
  */
 
+import { BASE_URL } from "@/lib/authToken";
 import { useSSE } from "@/lib/sse";
 
 export interface TerminalRemountPayload {
@@ -18,8 +19,6 @@ export interface TerminalRemountPayload {
   image_changed?: boolean;
   ts?: number;
 }
-
-const BASE_URL = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
 
 /** Built on useSSE: every (re)connect fetches its own single-use stream
  *  ticket (lib/streamTicket.ts) — the login token never goes into the URL,

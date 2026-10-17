@@ -26,6 +26,11 @@
 #                      Always builds the checkout locally (edge semantics).
 #   --dir <path>       target directory (default: ./mission-control)
 #   --non-interactive  never prompt, use defaults/flags
+#   --remote           MC will be opened from other devices: after the first
+#                      admin is created (in the terminal), listen on the
+#                      network and set PUBLIC_HOST (address auto-detected)
+#   --public-host <a>  same, with this address (IP or name.local)
+#   --local            localhost only, never ask (the default without a TTY)
 #   --update           update an existing install (run inside the checkout):
 #                      move to the latest release (or main on edge), refresh
 #                      images, restart, migrate. Works from any version:
@@ -164,28 +169,29 @@ mc_current_release_tag() {
   printf '%s\n' "$t"
 }
 
-# .env helpers — replace-or-append without sed (a value containing sed
-# metacharacters like & or \ would silently corrupt the .env otherwise).
-# Written IN PLACE (`cat >`), never via `mv`/`sed -i`: backend and worker
-# bind-mount .env as a single file, and a bind mount follows the inode — a
-# replaced file (new inode) leaves the running containers reading the OLD
-# one. backend/tests/test_install_release_pinning.py pins the inode.
-mc_env_set() {
-  local tmp
-  tmp="$(mktemp)"
-  grep -v "^$1=" .env > "$tmp" 2>/dev/null || true
-  printf '%s=%s\n' "$1" "$2" >> "$tmp"
-  cat "$tmp" > .env
-  rm -f "$tmp"
+# Shared helpers: the .env functions (mc_env_get / mc_env_set /
+# mc_env_unset — ONE implementation, written in place so the inode that
+# backend and worker bind-mount stays; backend/tests/
+# test_install_release_pinning.py pins it) and the remote-access step. They
+# live in scripts/lib/remote-access.sh because setup.sh and
+# scripts/open-network.sh need them too. Taken from next to this script
+# (same version); under `curl | bash` there is no such file, so it comes from
+# main — the same place this installer was fetched from. A release checkout
+# older than the library is never used for it (that would mix versions).
+mc_load_lib() {
+  local self="${BASH_SOURCE[0]:-}" lib=""
+  if [ -n "$self" ] && [ -f "$self" ]; then
+    lib="$(cd "$(dirname "$self")" && pwd)/scripts/lib/remote-access.sh"
+  fi
+  if [ -z "$lib" ] || [ ! -f "$lib" ]; then
+    lib="$(mktemp)"
+    curl -fsSL "${INSTALLER_URL%/install.sh}/scripts/lib/remote-access.sh" -o "$lib" \
+      || fail "Could not download the installer's helper library (scripts/lib/remote-access.sh) — check the network and re-run."
+  fi
+  # shellcheck source=scripts/lib/remote-access.sh
+  . "$lib"
 }
-mc_env_unset() {
-  local tmp
-  tmp="$(mktemp)"
-  grep -v "^$1=" .env > "$tmp" 2>/dev/null || true
-  cat "$tmp" > .env
-  rm -f "$tmp"
-}
-mc_env_get() { if [ -f .env ]; then sed -n "s/^$1=//p" .env | tail -n 1; fi; }
+mc_load_lib
 
 # Pin channel + image tags in .env so `docker compose` resolves exactly the
 # images that belong to the checked-out code.
@@ -258,6 +264,8 @@ INTERACTIVE=1
 UPDATE=0
 CHANNEL_ARG="${MC_CHANNEL:-}"
 VERSION="${MC_VERSION:-}"
+MC_REMOTE="${MC_REMOTE:-}"
+MC_PUBLIC_HOST="${MC_PUBLIC_HOST:-}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --here) HERE=1; INTERACTIVE=0 ;;
@@ -265,6 +273,9 @@ while [ $# -gt 0 ]; do
     --dir) TARGET_DIR="$2"; shift ;;
     --channel) CHANNEL_ARG="$2"; shift ;;
     --version) VERSION="$2"; shift ;;
+    --remote) MC_REMOTE=yes ;;
+    --public-host) MC_REMOTE=yes; MC_PUBLIC_HOST="$2"; shift ;;
+    --local) MC_REMOTE=no ;;
     --non-interactive) INTERACTIVE=0 ;;
     *) echo "Unknown flag: $1" >&2; exit 1 ;;
   esac
@@ -565,7 +576,8 @@ else
 fi
 
 # ── 3. Configure ─────────────────────────────────────────────────────────────
-./setup.sh
+# The remote-access question is asked below, with the other questions.
+MC_SETUP_VIA_INSTALLER=1 ./setup.sh
 mc_write_pins "$CHANNEL" "$TAG"
 
 ask "Your name (how agents address you)" "Operator"
@@ -610,6 +622,12 @@ ask "Enable browser sidecars (Playwright visual-verify)? y/N" "n"
 case "$REPLY" in y|Y|yes) PROFILES="${PROFILES:+$PROFILES,}browser" ;; esac
 mc_env_set COMPOSE_PROFILES "$PROFILES"
 
+# Remote access: decided now, applied only AFTER the first admin exists (the
+# stack starts on 127.0.0.1; until an admin is registered anyone on the LAN
+# could claim that account). Sets MC_REMOTE_HOST, writes nothing.
+MC_INTERACTIVE="$INTERACTIVE" MC_REMOTE="$MC_REMOTE" MC_PUBLIC_HOST="$MC_PUBLIC_HOST" \
+  mc_remote_decide .env
+
 # ── 4. Boot ──────────────────────────────────────────────────────────────────
 boot_stack "$CHANNEL"
 
@@ -632,19 +650,30 @@ case "$HEALTH" in
     ;;
 esac
 
+# Remote access, step 2: first admin (terminal, over localhost), then open.
+MC_INTERACTIVE="$INTERACTIVE" mc_remote_finish "$MC_REMOTE_HOST" .env
+
+MC_URL=$(mc_access_url .env)
 echo
 say "✅ Mission Control is running! ($( [ "$CHANNEL" = stable ] && echo "release $TAG" || echo "edge — local build of $(git rev-parse --short HEAD 2>/dev/null || echo 'this checkout')" ))"
 echo
-echo "  1. Open http://localhost and register the first admin user."
+if mc_admin_exists; then
+  echo "  1. Open $MC_URL and log in — the setup wizard starts there."
+else
+  echo "  1. Open $MC_URL and register the first admin user."
+fi
+if [ "$MC_URL" = "http://localhost" ] && mc_is_headless; then
+  echo "     (no browser here: use the SSH tunnel shown above → http://localhost:8080)"
+fi
 echo "  2. Recommended: make backup-schedule  (daily 03:00 backup of DB + data)"
 echo "  3. Optional: python3 scripts/demo-seed.py  (populates a demo board)"
 echo "  4. First agent: docs/setup/first-agent.md"
 echo "  Update later (from inside $(pwd)):"
 echo "     curl -fsSL $INSTALLER_URL | bash -s -- --update"
 echo
-if [ "$INTERACTIVE" = 1 ]; then
+if [ "$INTERACTIVE" = 1 ] && ! mc_is_headless; then
   case "$OS" in
-    Darwin) open http://localhost >/dev/null 2>&1 || true ;;
-    Linux)  command -v xdg-open >/dev/null && xdg-open http://localhost >/dev/null 2>&1 || true ;;
+    Darwin) open "$MC_URL" >/dev/null 2>&1 || true ;;
+    Linux)  command -v xdg-open >/dev/null && xdg-open "$MC_URL" >/dev/null 2>&1 || true ;;
   esac
 fi

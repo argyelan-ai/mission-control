@@ -16,6 +16,10 @@ sed_i() {
   fi
 }
 
+# Next to this script, not the working directory (the tests run it elsewhere).
+# shellcheck source=scripts/lib/remote-access.sh
+. "$(dirname "$0")/scripts/lib/remote-access.sh"
+
 if [ -f .env ]; then
   echo "✅ .env already exists, skipping generation"
 else
@@ -105,8 +109,15 @@ echo ""
 echo "Next steps:"
 echo "  1. Start the stack:    docker compose up --build -d"
 echo "     (database migrations run automatically inside the backend)"
-echo "  2. Open http://localhost and register the first admin user"
+echo "  2. Open $(mc_access_url .env) and register the first admin user"
 echo "     (POST /api/v1/auth/register works only while no user exists)."
+# No browser on this machine: MC stays on localhost until an admin exists
+# (anyone on the network could claim it before). install.sh does both steps.
+if [ -z "${MC_SETUP_VIA_INSTALLER:-}" ] && mc_is_headless \
+  && [ "$(mc_access_url .env)" = "http://localhost" ]; then
+  mc_print_tunnel_hint
+  mc_print_open_command
+fi
 echo ""
 echo "Optional integrations (Discord, Telegram, voice) are configured via"
 echo ".env — every key is documented in .env.example. GitHub can also be"

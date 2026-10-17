@@ -6,6 +6,7 @@ import { useTranslations } from "next-intl";
 import { motion } from "framer-motion";
 import { Loader2, Eye, EyeOff } from "lucide-react";
 import { AUTH_TOKEN_KEY, api, setStoredUser } from "@/lib/api";
+import { postLoginPath } from "@/lib/firstRun";
 import { AmbientBackground } from "@/components/layout/AmbientBackground";
 import { C, alpha } from "@/lib/colors";
 
@@ -80,8 +81,9 @@ export default function LoginPage() {
 
       localStorage.setItem(AUTH_TOKEN_KEY, res.access_token);
       setStoredUser(res.user);
-      // Erst-Registrierung -> First-Run-Wizard (Provider-Key, Startinhalte)
-      router.replace(mode === "register" ? "/setup" : "/");
+      // First registration -> setup wizard; a later login goes there too
+      // while the wizard is still pending (lib/firstRun.ts).
+      router.replace(await postLoginPath(mode === "register" ? "register" : "login"));
     } catch (err) {
       const msg =
         err instanceof Error ? err.message : t("connectionFailed");

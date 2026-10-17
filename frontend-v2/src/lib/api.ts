@@ -254,6 +254,11 @@ export const api = {
     register: (email: string, name: string, password: string) =>
       publicRequest<TokenResponse>("/api/v1/auth/register", { method: "POST", body: JSON.stringify({ email, name, password }) }),
     me: () => request<AuthUser & { preferred_name?: string; avatar_url?: string; timezone?: string }>("/api/v1/auth/me"),
+    /** Is the first-run setup wizard still due for the caller? (admins only;
+     *  installs older than the marker are never pending — see lib/firstRun.ts) */
+    firstRun: () => request<{ wizard_pending: boolean }>("/api/v1/auth/first-run"),
+    completeFirstRun: () =>
+      request<{ wizard_pending: boolean }>("/api/v1/auth/first-run/complete", { method: "POST" }),
     updateProfile: (data: { name?: string; preferred_name?: string; timezone?: string; current_password?: string; new_password?: string }) =>
       request<AuthUser & { preferred_name?: string; avatar_url?: string; timezone?: string }>("/api/v1/auth/me", { method: "PATCH", body: JSON.stringify(data) }),
     users: {
@@ -2468,8 +2473,7 @@ export const api = {
 /** WebSocket base: the configured API origin with ws(s) scheme, or "" for
  *  same-origin relative URLs. */
 function wsBase(): string {
-  const base = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
-  return base.replace(/^http/, "ws");
+  return BASE_URL.replace(/^http/, "ws");
 }
 
 // Separate helper (not on `api`, mirrors cliSessions.*WsUrl). Async: fetches a

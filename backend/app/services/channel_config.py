@@ -85,6 +85,7 @@ async def stored_overrides(session: AsyncSession) -> dict[str, object]:
     warning (an old row must never break startup)."""
     from app.services.ai_provider_config import AI_PROVIDER_SETTING_FIELDS
     from app.services.heads.night_store import SETTING_FIELDS as NIGHT_SHIFT_SETTING_FIELDS
+    from app.services.first_run import FIRST_RUN_SETTING_FIELDS
 
     rows = (await session.exec(select(AppSetting))).all()
     out: dict[str, object] = {}
@@ -93,7 +94,11 @@ async def stored_overrides(session: AsyncSession) -> dict[str, object]:
             # app_settings is one KV table shared by several settings pages.
             # A key another page owns is not "unknown" — only warn for rows no
             # allowlist claims, otherwise every AI-provider row logs a warning.
-            if row.key not in AI_PROVIDER_SETTING_FIELDS and row.key not in NIGHT_SHIFT_SETTING_FIELDS:
+            if (
+                row.key not in AI_PROVIDER_SETTING_FIELDS
+                and row.key not in NIGHT_SHIFT_SETTING_FIELDS
+                and row.key not in FIRST_RUN_SETTING_FIELDS
+            ):
                 logger.warning("app_settings: unbekannter Key %r ignoriert", row.key)
             continue
         out[row.key] = _coerce(row.key, row.value)
