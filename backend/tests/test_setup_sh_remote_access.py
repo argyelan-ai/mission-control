@@ -73,30 +73,53 @@ def test_unattended_setup_stays_local_only(tmp_path: Path):
     assert "Open http://localhost and register" in proc.stdout
 
 
-def test_setup_with_an_address_opens_mc_before_the_first_start(tmp_path: Path):
-    proc = _run_setup_sh(tmp_path, MC_PUBLIC_HOST="192.0.2.20")
+def test_setup_never_opens_the_network_before_an_admin_exists(tmp_path: Path):
+    """Review finding: setup.sh runs before the first start — no admin exists
+    yet, so opening the LAN would let anyone register as admin. Even an
+    explicit address leaves the binding alone; open-network.sh does it later."""
+    proc = _run_setup_sh(tmp_path, MC_REMOTE="yes", MC_PUBLIC_HOST="192.0.2.20")
     assert proc.returncode == 0, proc.stderr or proc.stdout
     env_file = tmp_path / ".env"
-    assert _env_value(env_file, "MC_BIND_ADDRESS") == "0.0.0.0"
-    assert _env_value(env_file, "PUBLIC_HOST") == "192.0.2.20"
-    # The printed next step is the URL that works from the other device …
-    assert "Open http://192.0.2.20 and register" in proc.stdout
-    # … together with what opening the network means.
-    assert "ANYONE on this network" in proc.stdout
-    assert "tailscale serve" in proc.stdout
+    assert _env_value(env_file, "MC_BIND_ADDRESS") == "127.0.0.1"
+    assert _env_value(env_file, "PUBLIC_HOST") == ""
 
 
-def test_installer_run_leaves_the_question_to_install_sh(tmp_path: Path):
-    """install.sh asks itself (with its flags); setup.sh must not decide first."""
-    proc = _run_setup_sh(tmp_path, MC_SETUP_VIA_INSTALLER="1", MC_PUBLIC_HOST="192.0.2.20")
+def test_headless_setup_prints_tunnel_and_open_command(tmp_path: Path):
+    proc = _run_setup_sh(tmp_path, SSH_CONNECTION="198.51.100.7 51515 192.0.2.30 22")
     assert proc.returncode == 0, proc.stderr or proc.stdout
-    assert _env_value(tmp_path / ".env", "PUBLIC_HOST") == ""
+    assert "ssh -L 8080:localhost:80" in proc.stdout
+    assert "@192.0.2.30" in proc.stdout
+    assert "bash scripts/open-network.sh" in proc.stdout
 
 
-def test_rerun_with_an_existing_env_does_not_ask_again(tmp_path: Path):
-    first = _run_setup_sh(tmp_path, MC_PUBLIC_HOST="192.0.2.20")
-    assert first.returncode == 0, first.stderr or first.stdout
-    second = _run_setup_sh(tmp_path, MC_PUBLIC_HOST="198.51.100.9")
-    assert second.returncode == 0, second.stderr or second.stdout
-    assert _env_value(tmp_path / ".env", "PUBLIC_HOST") == "192.0.2.20"
-    assert "Open http://192.0.2.20 and register" in second.stdout
+def test_installer_run_leaves_the_hints_to_install_sh(tmp_path: Path):
+    proc = _run_setup_sh(
+        tmp_path, MC_SETUP_VIA_INSTALLER="1", SSH_CONNECTION="198.51.100.7 1 192.0.2.30 22"
+    )
+    assert proc.returncode == 0, proc.stderr or proc.stdout
+    assert "open-network.sh" not in proc.stdout
+
+
+def test_open_network_refuses_without_an_admin(tmp_path: Path):
+    """scripts/open-network.sh is the only later way to open the LAN; with no
+    admin (here: no backend at all) and no terminal it changes nothing."""
+    (tmp_path / "scripts" / "lib").mkdir(parents=True)
+    for rel in ("scripts/open-network.sh", "scripts/lib/remote-access.sh"):
+        (tmp_path / rel).write_text((_REPO_ROOT / rel).read_text(encoding="utf-8"), encoding="utf-8")
+    (tmp_path / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
+    env_file = tmp_path / ".env"
+    env_file.write_text("MC_BIND_ADDRESS=127.0.0.1\nPUBLIC_HOST=\n", encoding="utf-8")
+    proc = subprocess.run(
+        ["bash", str(tmp_path / "scripts" / "open-network.sh"), "192.0.2.20"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        stdin=subprocess.DEVNULL,
+        start_new_session=True,  # no controlling terminal → no prompts
+        # Port 9 (discard) is closed: "no backend" must read as "no admin".
+        env={**os.environ, "HOME": str(tmp_path), "MC_API_URL": "http://127.0.0.1:9"},
+    )
+    assert proc.returncode != 0
+    assert "no admin" in proc.stdout + proc.stderr
+    assert _env_value(env_file, "MC_BIND_ADDRESS") == "127.0.0.1"
+    assert _env_value(env_file, "PUBLIC_HOST") == ""

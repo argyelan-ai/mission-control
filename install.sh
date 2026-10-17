@@ -129,11 +129,24 @@ else
 fi
 
 # ── 3. Configure ─────────────────────────────────────────────────────────────
-# setup.sh would ask the remote-access question itself; here it is asked
-# below, together with the other questions (and the flags above).
+# The remote-access question is asked below, with the other questions.
 MC_SETUP_VIA_INSTALLER=1 ./setup.sh
-# shellcheck source=scripts/lib/remote-access.sh
-. ./scripts/lib/remote-access.sh
+
+# Remote-access library (scripts/lib/remote-access.sh). A checkout older than
+# the library does not ship it — then it comes from main: it is
+# self-contained and version-independent, and `set -e` must not end the
+# install on a missing file.
+load_remote_access_lib() {
+  local lib=./scripts/lib/remote-access.sh
+  if [ ! -f "$lib" ]; then
+    lib="$(mktemp)"
+    curl -fsSL "https://raw.githubusercontent.com/argyelan-ai/mission-control/main/scripts/lib/remote-access.sh" -o "$lib" \
+      || fail "This version predates the remote-access helper and it could not be downloaded — check the network and re-run."
+  fi
+  # shellcheck source=scripts/lib/remote-access.sh
+  . "$lib"
+}
+load_remote_access_lib
 
 # Portable in-place sed (BSD/macOS vs GNU) — mirrors setup.sh.
 sed_i() { if sed --version >/dev/null 2>&1; then sed -i "$@"; else sed -i '' "$@"; fi }
@@ -179,10 +192,11 @@ if [ -n "$GITHUB_OWNER_INPUT" ]; then
   fi
 fi
 
-# Remote access BEFORE the first start: Caddy reads MC_BIND_ADDRESS when the
-# container is created, and a headless box cannot open http://localhost.
+# Remote access: decided now, applied only AFTER the first admin exists (the
+# stack starts on 127.0.0.1; until an admin is registered anyone on the LAN
+# could claim that account). Sets MC_REMOTE_HOST, writes nothing.
 MC_INTERACTIVE="$INTERACTIVE" MC_REMOTE="$MC_REMOTE" MC_PUBLIC_HOST="$MC_PUBLIC_HOST" \
-  mc_configure_access .env
+  mc_remote_decide .env
 
 PROFILES=""
 ask "Enable voice stack (LiveKit — needs API keys later)? y/N" "n"
@@ -233,11 +247,18 @@ for i in $(seq 1 60); do
   sleep 2
 done
 
+# Remote access, step 2: first admin (terminal, over localhost), then open.
+MC_INTERACTIVE="$INTERACTIVE" mc_remote_finish "$MC_REMOTE_HOST" .env
+
 MC_URL=$(mc_access_url .env)
 echo
 say "✅ Mission Control is running!"
 echo
-echo "  1. Open $MC_URL and register the first admin user."
+if mc_admin_exists; then
+  echo "  1. Open $MC_URL and log in — the setup wizard starts there."
+else
+  echo "  1. Open $MC_URL and register the first admin user."
+fi
 if [ "$MC_URL" = "http://localhost" ] && mc_is_headless; then
   echo "     (no browser here: use the SSH tunnel shown above → http://localhost:8080)"
 fi

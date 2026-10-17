@@ -20,12 +20,10 @@ sed_i() {
 # shellcheck source=scripts/lib/remote-access.sh
 . "$(dirname "$0")/scripts/lib/remote-access.sh"
 
-CREATED_ENV=0
 if [ -f .env ]; then
   echo "✅ .env already exists, skipping generation"
 else
   cp .env.example .env
-  CREATED_ENV=1
 
   # Generate secure values for every cryptographic placeholder — a fresh
   # install must never run with weak defaults.
@@ -73,15 +71,6 @@ grep -q '^MC_REPO_PATH=' .env || { echo "MC_REPO_PATH=$(pwd)" >> .env; echo "✅
 # schreibt docker/.env.shared neu, ueber das die Container den Wert bekommen.
 grep -q '^INTERNAL_BOOTSTRAP_SECRET=' .env || { echo "INTERNAL_BOOTSTRAP_SECRET=$(openssl rand -hex 32)" >> .env; echo "✅ backfilled INTERNAL_BOOTSTRAP_SECRET (neu erzeugt — danach scripts/start-all.sh ausfuehren)"; }
 
-# Will MC be opened from another device? Asked once, when the .env is new and
-# before the first start (scripts/lib/remote-access.sh). install.sh asks it
-# itself, together with its other questions, and sets MC_SETUP_VIA_INSTALLER.
-if [ "$CREATED_ENV" = 1 ] && [ -z "${MC_SETUP_VIA_INSTALLER:-}" ]; then
-  _mc_tty=0
-  { [ -t 0 ] && [ -e /dev/tty ]; } && _mc_tty=1
-  MC_INTERACTIVE="$_mc_tty" mc_configure_access .env
-fi
-
 # Your own agent fleet. Same pattern as .env from .env.example above, and for
 # the same reason: docker/docker-compose.agents.yml has to exist BEFORE the
 # first agent is created, or the first runtime bind fails inside a background
@@ -103,6 +92,13 @@ echo "  1. Start the stack:    docker compose up --build -d"
 echo "     (database migrations run automatically inside the backend)"
 echo "  2. Open $(mc_access_url .env) and register the first admin user"
 echo "     (POST /api/v1/auth/register works only while no user exists)."
+# No browser on this machine: MC stays on localhost until an admin exists
+# (anyone on the network could claim it before). install.sh does both steps.
+if [ -z "${MC_SETUP_VIA_INSTALLER:-}" ] && mc_is_headless \
+  && [ "$(mc_access_url .env)" = "http://localhost" ]; then
+  mc_print_tunnel_hint
+  mc_print_open_command
+fi
 echo ""
 echo "Optional integrations (Discord, Telegram, voice) are configured via"
 echo ".env — every key is documented in .env.example. GitHub can also be"
