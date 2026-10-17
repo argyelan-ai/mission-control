@@ -292,7 +292,7 @@ async def isolate_redis_singleton():
 
 
 @pytest.fixture(autouse=True)
-def block_real_docker():
+def block_real_docker(request):
     """No test may reach the developer's real Docker daemon.
 
     Same reasoning as ``isolate_redis_singleton`` above, and it cost us a live
@@ -312,6 +312,15 @@ def block_real_docker():
     replaces this guard, so nothing here gets in their way.
     """
     import subprocess
+
+    # The one opt-out: a test marked ``throwaway_docker`` starts its own,
+    # uniquely named container (``docker run --rm`` with a random suffix) and
+    # removes it again — e.g. the backup.sh restore tests, which must prove
+    # "truncated archive -> database unchanged" against a real Postgres. Such a
+    # test never addresses a container it did not create.
+    if request.node.get_closest_marker("throwaway_docker") is not None:
+        yield
+        return
 
     # ``Popen`` bleibt bewusst unangetastet: es ist eine KLASSE, und Bibliotheken
     # annotieren damit (``subprocess.Popen[bytes]``) — als Funktion ersetzt,
