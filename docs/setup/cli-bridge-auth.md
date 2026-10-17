@@ -87,7 +87,7 @@ Backend and helper are updated separately. Order matters: **backend first.**
 2. Deploy the new backend + worker. They read the file and send the header.
    The old helper ignores the header, so nothing breaks in between.
 3. Check that the backend sees the file (prints `True`, not the token):
-   `docker compose exec backend python -c "from app.services.cli_bridge_auth import bridge_token; print(bool(bridge_token()))"`
+   `docker compose exec -u mcuser backend python -c "from app.services.cli_bridge_auth import bridge_token; print(bool(bridge_token()))"`
    If it prints `False`, set `CLI_BRIDGE_TOKEN_FILE` to a 0600 file under
    `~/.mc/` that both sides can read. Only if that is impossible, use
    `CLI_BRIDGE_TOKEN` in `.env` (see the warning above). Then recreate

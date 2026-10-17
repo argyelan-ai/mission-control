@@ -3,10 +3,10 @@ Markdown wrappers + hardlinked attachments. Part of Phase A vault-as-brain.
 
 Usage (inside the backend container):
 
-    docker compose exec backend python -m scripts.backfill_deliverable_wrappers --dry-run
-    docker compose exec backend python -m scripts.backfill_deliverable_wrappers
-    docker compose exec backend python -m scripts.backfill_deliverable_wrappers --limit 10
-    docker compose exec backend python -m scripts.backfill_deliverable_wrappers --force
+    docker compose exec -u mcuser backend python -m scripts.backfill_deliverable_wrappers --dry-run
+    docker compose exec -u mcuser backend python -m scripts.backfill_deliverable_wrappers
+    docker compose exec -u mcuser backend python -m scripts.backfill_deliverable_wrappers --limit 10
+    docker compose exec -u mcuser backend python -m scripts.backfill_deliverable_wrappers --force
 
 Default behaviour is idempotent — existing wrappers are kept untouched. Use
 ``--force`` to overwrite (helpful when the wrapper template changes).

@@ -140,7 +140,7 @@ async def index_memory(memory: BoardMemory) -> Optional[str]:
         # No endpoint configured (fresh install / cleared URL): retrying
         # cannot succeed until an operator sets one, so no retry enqueue.
         # These rows stay vector-less until the operator runs the one-time
-        # backfill (docker compose exec backend python -m
+        # backfill (docker compose exec -u mcuser backend python -m
         # scripts.backfill_memory_embeddings) — deliberately not automatic.
         logger.info(
             "Embedding uebersprungen fuer memory %s (layer=%s): %s",

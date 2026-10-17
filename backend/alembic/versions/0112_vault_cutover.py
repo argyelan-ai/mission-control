@@ -30,7 +30,7 @@ OPERATOR STEPS (run manually after merging this commit):
 
 2. Apply migration::
 
-       docker compose exec backend alembic upgrade head
+       docker compose exec -u mcuser backend alembic upgrade head
 
 3. Verify counts::
 
@@ -50,7 +50,7 @@ OPERATOR STEPS (run manually after merging this commit):
 
 ROLLBACK::
 
-    docker compose exec backend alembic downgrade -1
+    docker compose exec -u mcuser backend alembic downgrade -1
 
     This removes the ``frozen_at`` column only. Vault files remain on
     disk — they are now stale read-only history, but no data is lost.

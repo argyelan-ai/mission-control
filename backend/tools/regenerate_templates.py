@@ -4,7 +4,7 @@ One-off script: regenerates soul_md and tools_md for all provisioned agents
 from the current templates (SOUL.md.j2 + tools_md_builder).
 
 Run inside the backend container:
-  docker compose exec backend python tools/regenerate_templates.py
+  docker compose exec -u mcuser backend python tools/regenerate_templates.py
 """
 import asyncio
 import sys

@@ -232,7 +232,7 @@ board on the homepage shows all agents' lanes at a glance.
 | Symptom | Check |
 |---|---|
 | Agent card stuck on "Provisioning" | `docker logs mc-agent-<slug>` — look for `[entrypoint] FEHLER: CLAUDE_CODE_OAUTH_TOKEN fehlt` (secret missing/misnamed, step 2) or a bootstrap-retry loop (backend unreachable) |
-| Provision button errors / times out | Is `scripts/cli-bridge.py` (step 3) actually running? `curl http://localhost:18792/ping` from the host. Also check the backend container can reach it: `docker compose exec backend curl -s http://host.docker.internal:18792/ping`. Backend log `rejected (401)` = token mismatch, see [CLI-Bridge auth](cli-bridge-auth.md) |
+| Provision button errors / times out | Is `scripts/cli-bridge.py` (step 3) actually running? `curl http://localhost:18792/ping` from the host. Also check the backend container can reach it: `docker compose exec -u mcuser backend curl -s http://host.docker.internal:18792/ping`. Backend log `rejected (401)` = token mismatch, see [CLI-Bridge auth](cli-bridge-auth.md) |
 | Container never appears (`docker ps` shows nothing) | Run `./scripts/start-all.sh` explicitly — bringing an agent up for the first time needs its service block picked up by `docker compose up -d` |
 | Agent never ACKs a dispatched task | Is the tmux session actually inside the container? `docker exec -itu agent mc-agent-<slug> tmux capture-pane -p -t <slug>:1` (window 1 = `poll.sh` — should show poll activity, not a crash loop) |
 | `image not found` / container won't start | Did you run `scripts/build-agent-images.sh` for the image your runtime needs (`claude` vs `openclaude` vs `omp`)? `docker images | grep mc-`. |

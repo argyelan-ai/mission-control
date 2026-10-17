@@ -156,7 +156,7 @@ not in a container.
 
 ```bash
 curl http://localhost:18792/ping                                   # running? (no token needed)
-docker compose exec backend curl -s http://host.docker.internal:18792/ping   # reachable from the container?
+docker compose exec -u mcuser backend curl -s http://host.docker.internal:18792/ping   # reachable from the container?
 curl -s -o /dev/null -w '%{http_code}\n' http://localhost:18792/health      # 401 = token enforced (expected)
 docker compose logs backend | grep 'rejected (401)'                # backend sends no/wrong token
 ```

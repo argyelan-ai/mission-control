@@ -18,6 +18,7 @@
 #   C  no PUID                     → process still runs as uid 1000 (macOS default unchanged)
 #   D  root-owned deliverables dir (what Docker creates for a missing bind
 #      source) + PUID              → entrypoint hands it to 1001
+#   E/F PUID=0 / PGID=0            → refused with a clear message
 set -euo pipefail
 
 IMAGE="${MC_TEST_IMAGE:-ghcr.io/argyelan-ai/mc-backend:latest}"
@@ -96,6 +97,12 @@ set +e
 OUT_E=$(run_mc -e PUID=0 "$IMAGE" true 2>&1); RC_E=$?
 set -e
 [ "$RC_E" != 0 ] && printf '%s' "$OUT_E" | grep -q 'PUID=0' && pass "refused with a clear message" || fail "rc=$RC_E: $OUT_E"
+
+echo "F: PGID=0 is refused"
+set +e
+OUT_F=$(run_mc -e PUID=1001 -e PGID=0 "$IMAGE" true 2>&1); RC_F=$?
+set -e
+[ "$RC_F" != 0 ] && printf '%s' "$OUT_F" | grep -q 'PGID=0' && pass "refused with a clear message" || fail "rc=$RC_F: $OUT_F"
 
 echo
 if [ "$FAILS" = 0 ]; then echo "host-uid test OK"; else echo "host-uid test: $FAILS failure(s)"; exit 1; fi

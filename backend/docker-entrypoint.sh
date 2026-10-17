@@ -51,6 +51,12 @@ if [ "$(id -u)" = "0" ]; then
       echo "FATAL: PUID=0 (root) is not supported — set PUID to your login user's \`id -u\` in .env" >&2
       exit 1
     fi
+    # gid 0 = Gruppe root: jede root-Gruppen-Datei im Container waere
+    # schreibbar — genauso abgelehnt wie PUID=0.
+    if [ "$_mc_gid" = "0" ]; then
+      echo "FATAL: PGID=0 (root group) is not supported — set PGID to your login user's \`id -g\` in .env" >&2
+      exit 1
+    fi
     if [ "$_mc_gid" != "$_cur_gid" ]; then
       sed -i "s/^mcuser:x:[0-9]*:/mcuser:x:${_mc_gid}:/" /etc/group
     fi

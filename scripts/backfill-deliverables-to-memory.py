@@ -9,13 +9,13 @@ Idempotent: ein Deliverable das bereits einen Memory-Eintrag mit Tag
 "deliverable:<id>" hat, wird uebersprungen.
 
 Aufruf (im Backend-Container):
-    docker compose exec -T -e PYTHONPATH=/app backend \\
+    docker compose exec -T -u mcuser -e PYTHONPATH=/app backend \\
         python3 /app/scripts/backfill-deliverables-to-memory.py
 
 Oder vom Host mit Bind-Mount des scripts-Ordners:
     docker cp scripts/backfill-deliverables-to-memory.py \\
         mission-control-backend-1:/tmp/backfill.py
-    docker compose exec -T -e PYTHONPATH=/app backend python3 /tmp/backfill.py
+    docker compose exec -T -u mcuser -e PYTHONPATH=/app backend python3 /tmp/backfill.py
 """
 import asyncio
 import sys

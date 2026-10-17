@@ -65,8 +65,13 @@ that for missing mount sources), also run
 `sudo chown -R $(id -u):$(id -g) ~/.mc` once. The warning clears by itself
 within 30 seconds.
 
-- One-off commands that write files: use `docker compose exec -u mcuser backend …`
-  (plain `exec` runs as root since the image starts as root).
+- One-off commands: always `docker compose exec -u mcuser backend …` (same for
+  `mc-worker`). `exec` skips the entrypoint, so without `-u mcuser` the command
+  runs as root with `HOME=/root` and can leave root-owned files in `~/.mc`.
+  There is no clean compose default for this: `user: mcuser` on the service
+  would also start the entrypoint without root and switch the remap off. The
+  repo's scripts and docs all use `-u mcuser`; a test
+  (`backend/tests/test_compose_exec_runs_as_mcuser.py`) keeps it that way.
 - Check by hand: `docker compose exec -u mcuser backend python -m app.services.mc_home_preflight`
   (prints JSON, exit code 1 on a problem).
 - Test a different uid without touching your stack: `bash scripts/test-host-uid.sh`

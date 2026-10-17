@@ -5,8 +5,8 @@ Runs in the backend container and outputs a structured report
 about the current state of an agent.
 
 Usage:
-  docker compose exec -T backend python3 tools/agent_check.py <agent_name>
-  docker compose exec -T backend python3 tools/agent_check.py --all
+  docker compose exec -T -u mcuser backend python3 tools/agent_check.py <agent_name>
+  docker compose exec -T -u mcuser backend python3 tools/agent_check.py --all
 """
 
 import asyncio
