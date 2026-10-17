@@ -3,7 +3,7 @@
 
 .DEFAULT_GOAL := help
 .PHONY: help setup up down build build-dev test test-backend test-frontend backend-venv lock \
-        migrate logs ps seed seed-clean update backup backup-schedule
+        migrate logs ps seed seed-clean update backup backup-schedule reset-password
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -47,6 +47,9 @@ test-frontend: ## Frontend tests (vitest) + type check
 
 migrate: ## Run DB migrations manually (they also run on backend start)
 	docker compose exec -u mcuser backend alembic upgrade head
+
+reset-password: ## Reset a password in the terminal, signs out all sessions (EMAIL=... if several admins)
+	docker compose exec -u mcuser backend python -m scripts.reset_password $(if $(EMAIL),--email '$(EMAIL)',)
 
 logs: ## Tail backend logs
 	docker compose logs backend --tail=50 -f

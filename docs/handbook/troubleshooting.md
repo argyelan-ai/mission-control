@@ -139,9 +139,27 @@ already registered.
 curl -s http://localhost:8000/api/v1/auth/setup-required
 ```
 
-**Fix** — log in with the existing account. If you lost it, have an admin
-create a user, or restore/reset the database
-([Backup & restore](operations/backup-restore.md)).
+**Fix** — log in with the existing account. Forgot its password? Reset it in
+the terminal (next section) — no need to touch the database.
+
+### Forgot the admin password
+
+**Fix** — reset it in the terminal, from the repo folder, while the stack runs:
+
+```bash
+make reset-password                          # the only admin account
+make reset-password EMAIL=you@example.org    # pick one when there are several
+```
+
+It asks for the new password twice (hidden) and signs out **every** existing
+session of that account — on all devices. Log in again with the new password.
+
+- Without `make`: `docker compose exec -u mcuser backend python -m scripts.reset_password`
+  (add `--email ...` to pick the account).
+- Scripted: pipe the password in with `--password-stdin`; it is never a
+  command-line option, so it does not end up in your shell history.
+- Login still refused with HTTP 429 ("Zu viele Login-Versuche")? The lock-out lasts 15 minutes
+  after 5 wrong tries — wait it out.
 
 ---
 
