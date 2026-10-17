@@ -1,6 +1,6 @@
 # ADR-092 — Release channels: stable and edge
 
-**Status:** Proposed
+**Status:** Accepted
 **Datum:** 2026-10-17
 **Scope:** Install · Infra/Release
 

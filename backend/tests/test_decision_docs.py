@@ -40,8 +40,8 @@ from app.services.decision_docs import (
 # +1 on 2026-10-12: ADR-090 (chat as remote control), confirmed on purpose.
 # +1 on 2026-10-12: ADR-091 (live voice in the chat) — status Proposed, the
 #   operator accepts or rejects it in the voice PR 1 review.
-# +1 on 2026-10-17: ADR-092 (release channels stable/edge) — status Proposed,
-#   the operator accepts it in the review of the installer PR.
+# +1 on 2026-10-17: ADR-092 (release channels stable/edge) — Accepted,
+#   accepted by the dev lead on behalf of the operator (17.10.).
 EXPECTED_DECISION_DOCS = 91
 
 
