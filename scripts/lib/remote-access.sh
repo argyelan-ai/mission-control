@@ -206,7 +206,7 @@ mc_configure_access() {
     host="$REPLY"
   fi
   if ! mc_valid_host "$host"; then
-    echo "✗ '${host}' is not a usable address (expected an IP like 192.168.1.20 or name.local)."
+    echo "✗ '${host}' is not a usable address (expected a bare IP address or name.local, no http:// or port)."
     echo "  Staying local-only."
     mc_print_tunnel_hint
     return 0
