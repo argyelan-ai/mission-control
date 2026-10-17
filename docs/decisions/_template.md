@@ -19,6 +19,13 @@ Welche anderen Wege gab es? Warum wurden sie verworfen?
 - **Alternative A:** Beschreibung → Verworfen weil …
 - **Alternative B:** Beschreibung → Verworfen weil …
 
+## Später ändern (ADR-093)
+
+Wie sieht, testet, ersetzt oder entfernt der Nutzer das später in MC — ohne
+`.env` oder Terminal? Wo ist die Stelle in der UI, und wie kommt ein neuer
+Eintrag (Provider, Harness, Rezept) dazu, ohne Sonderfall? „Nicht nötig"
+ist erlaubt, braucht aber einen Satz Begründung.
+
 ## Konsequenzen
 
 ### Positiv

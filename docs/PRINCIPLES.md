@@ -99,6 +99,14 @@ their knowledge, their hardware and their evidence.
     rewriting a part stays a legitimate option when it is clearly simpler and
     better — decide it explicitly (ADR or PR note), with a migration and
     rollback path, never as an accident. (Operator decision, 2026-10-04.)
+11. **Whatever a user may change later is changeable in MC — and designed in
+    from the start.** Tokens, providers, harnesses, runtimes, devices and
+    other settings can be viewed, tested on save, replaced and removed in the
+    UI; container components can be installed from MC, host installs stay in
+    the installer with an explicit yes. Providers, harnesses and recipes are
+    registry entries with an icon, a test and an install procedure — adding
+    one is an entry plus an adapter, not a new page or special case
+    (ADR-093, operator decision 2026-10-17).
 
 ## 4 · Evidence rules
 
@@ -201,6 +209,10 @@ the rules every UI change is checked against. Visual rules:
 11. **One type scale, one Markdown renderer.**
 12. **Pages scheduled for removal get no polish** — only what shared
     building blocks bring along.
+13. **What belongs together lives together.** One page per concept with
+    consistent icons — all model providers (cloud and local) on one page,
+    all harnesses on one, all devices on one; settings link there instead of
+    repeating them (ADR-093).
 
 ## 8 · What MC deliberately does NOT do
 

@@ -51,6 +51,10 @@ Every review (self-review, fresh reviewer, PR review) answers these, with eviden
    still reach its end — is a button missing, or is something useless (nobody
    calls or sees it)?
 
+And one check that comes with every new feature or component (ADR-093):
+**How does the user change it later?** — view, test, replace, remove in the
+MC UI; a new provider/harness/recipe as a registry entry, not a special case.
+
 ## Merging — no bypass, ever
 
 - `main` is protected by a ruleset with a merge queue and required checks.
