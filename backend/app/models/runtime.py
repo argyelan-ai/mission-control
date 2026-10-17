@@ -60,8 +60,8 @@ class Runtime(SQLModel, table=True):
     # Kept as legacy fallback in the resolver chain, do not use for new runtimes.
     host: str | None = Field(default=None, max_length=128)
 
-    # ── Power-managed runtime (unsloth_porsche) ──────────────────────────────
-    # For a runtime on a host that is NOT always on (the PORSCHE Windows box with
+    # ── Power-managed runtime (flask_wol) ──────────────────────────────
+    # For a runtime on a host that is NOT always on (a power-managed Windows box with
     # a local unsloth OpenAI server). Unlike the DGX (SSH/tmux, always up), this
     # host sleeps and is controlled via its Flask `:5555` server + Wake-on-LAN.
     # All three are nullable / default-off so every existing runtime is unaffected.

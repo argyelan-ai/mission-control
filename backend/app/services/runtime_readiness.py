@@ -1,8 +1,8 @@
-"""Runtime-readiness dispatch gate for power-managed runtimes (unsloth_porsche).
+"""Runtime-readiness dispatch gate for power-managed runtimes (flask_wol).
 
-See docs/plans/2026-06-24-porsche-unsloth-runtime-design.md §9.
+See ADR-042 (power-managed runtime) and its design plan §9.
 
-Power-managed runtimes (the PORSCHE box) sleep when idle. A task must not be
+Power-managed runtimes (a Wake-on-LAN box) sleep when idle. A task must not be
 injected into an agent's session while that agent's LLM backend is unreachable,
 so this gate is consulted at both dispatch entry points:
   - operations.check_dispatch_allowed  (the push dispatch sites)

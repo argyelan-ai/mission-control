@@ -75,8 +75,8 @@ async def _seed_local_recipes() -> None:
 async def _seed_hosts() -> None:
     """Bootstrap the host registry from settings + legacy runtime fields (ADR-048).
 
-    Runs AFTER _seed_runtimes — the porsche host is derived from the
-    unsloth-porsche runtime row. Idempotent; fresh installs without a GPU
+    Runs AFTER _seed_runtimes — a flask_wol host is derived from a
+    legacy flask_wol runtime row that has no host yet. Idempotent; fresh installs without a GPU
     box end up with 0 hosts and 0 errors (cloud runtimes need no host).
     """
     try:

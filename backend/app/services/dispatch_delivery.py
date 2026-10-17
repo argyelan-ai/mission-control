@@ -139,7 +139,7 @@ async def _check_runtime_readiness(
 
     Verzögert wird NUR für Agenten an einer Slot-Zeile. Jede andere Bindung
     verhält sich exakt wie vorher — dieselbe Zurückhaltung, mit der auch das
-    Porsche-Tor (``services/runtime_readiness``) gebaut ist: ein Tor-Fehler
+    Readiness-Tor (``services/runtime_readiness``) gebaut ist: ein Tor-Fehler
     darf niemals die ganze Flotte anhalten.
 
     WIE DIE VERZÖGERUNG WIRKT (am Code nachgeprüft, nicht angenommen)

@@ -4,6 +4,13 @@
 **Datum:** 2026-06-24
 **Scope:** Infra/Runtime · Backend/Runtime · Backend/Dispatch · Backend/DB
 
+> **Note 2026-10-17:** the runtime_type value `unsloth_porsche` is now
+> `flask_wol` (same word as the host kind, ADR-048); migration
+> `0217_runtime_type_flask_wol` rewrites existing rows, slug and names stay.
+> Settings `PORSCHE_*` are now `WOL_LAN_IP`, `WOL_MAC`, `WOL_BROADCAST`,
+> `WOL_CONTROL_URL` (fallbacks only — the runtime/host row wins). The
+> decision itself is unchanged.
+
 ## Kontext
 
 PORSCHE ist eine **Windows-Box** (LAN `192.0.2.20`, Tailscale `<tailscale-ip>`,

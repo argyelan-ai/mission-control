@@ -986,7 +986,7 @@ async def wake_runtime(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Wake a power_managed runtime's host via Wake-on-LAN (e.g. PORSCHE).
+    """Wake a power_managed runtime's host via Wake-on-LAN.
 
     Drops a trigger file for the host-side launchd watcher (the Docker backend
     cannot send an L2 broadcast). Only valid for runtimes with power_managed=true.

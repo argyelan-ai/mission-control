@@ -116,7 +116,7 @@ async def check_dispatch_allowed(
     1. System HALTED → blocks everything
     2. Task run_control → blocks this task
     3. Agent PAUSED → blocks this agent
-    3.5 Runtime-Readiness → power-managed backend (PORSCHE) must be awake
+    3.5 Runtime-Readiness → power-managed backend (Wake-on-LAN box) must be awake
     4. System DRAINING → blocks non-continuation flows
 
     `session` is optional: the runtime-readiness gate only kicks in when it's
@@ -148,7 +148,7 @@ async def check_dispatch_allowed(
     if agent and agent.operational_mode == "paused":
         return False, f"Agent {agent.name} PAUSED"
 
-    # 3.5 Runtime-Readiness Gate — a power-managed backend (e.g. PORSCHE
+    # 3.5 Runtime-Readiness Gate — a power-managed backend (e.g. a Wake-on-LAN box
     # unsloth) must be awake + serving before a task is injected.
     # Only kicks in when a session is present AND the agent is bound to a
     # power_managed runtime — every other agent is unaffected (fail-open on

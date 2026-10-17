@@ -1918,7 +1918,7 @@ export const api = {
       ),
     restart: (id: string): Promise<RuntimeActionResult> =>
       request(`/api/v1/runtimes/${id}/restart`, { method: "POST" }),
-    // Wake a power_managed runtime's host via Wake-on-LAN (e.g. PORSCHE).
+    // Wake a power_managed runtime's host via Wake-on-LAN.
     wake: (id: string): Promise<{ ok: boolean; message: string }> =>
       request(`/api/v1/runtimes/${id}/wake`, { method: "POST" }),
     probeModel: (runtimeId: string): Promise<{

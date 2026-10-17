@@ -192,7 +192,7 @@ async def test_state_unknown_without_any_handle():
 @pytest.mark.asyncio
 async def test_probe_path_does_not_double_the_v1_segment():
     """endpoint ".../v1" + health "/v1/models" probed ".../v1/v1/models" → 404
-    on every healthy engine. Same normalization as unsloth_porsche."""
+    on every healthy engine. Same normalization as flask_wol."""
     seen = {}
 
     async def probe(endpoint, path):

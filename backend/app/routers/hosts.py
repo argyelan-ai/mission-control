@@ -644,7 +644,7 @@ async def host_metrics(
     - ssh       → nvidia-smi + free -m via SSH (get_host_metrics)
     - agent     → node-agent push telemetry if <60s fresh (routers/nodes.py),
       otherwise the same SSH probe as above (falls back byte-identically)
-    - flask_wol → awake/health of the control server (mirrors unsloth_porsche state)
+    - flask_wol → awake/health of the control server (mirrors flask_wol state)
     - local     → empty object with kind field (the MC host doesn't measure itself)
 
     Side effect (Bühne v2 §6 PR 3): a reachable ssh/agent reading also feeds

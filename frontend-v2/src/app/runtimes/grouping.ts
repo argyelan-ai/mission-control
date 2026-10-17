@@ -139,7 +139,7 @@ export function groupRuntimes(runtimes: Runtime[], hosts: Host[]): RuntimeGroups
 // start/stop/restart paths don't recognize them yet and return
 // "Unbekannter runtime_type" (HTTP 400) — no backend lifecycle support exists.
 const LIFECYCLE_TYPES = new Set<string>([
-  "vllm_docker", "lmstudio", "unsloth", "unsloth_porsche",
+  "vllm_docker", "lmstudio", "unsloth", "flask_wol",
   // ssh_process (PR #285, DwarfStar 4): start/stop go through the same
   // runtime_manager paths incl. exclusive-memory eviction + grace phases —
   // verified against backend start_runtime (SSH_PROCESS_TYPE branches).
@@ -148,7 +148,7 @@ const LIFECYCLE_TYPES = new Set<string>([
 
 // Copied from the old page.tsx `isProbeable` list — do not widen without backend support.
 const PROBEABLE_TYPES = new Set<string>([
-  "vllm_docker", "lmstudio", "openai_compatible", "unsloth", "unsloth_porsche",
+  "vllm_docker", "lmstudio", "openai_compatible", "unsloth", "flask_wol",
 ]);
 
 export interface PanelCapabilities {
