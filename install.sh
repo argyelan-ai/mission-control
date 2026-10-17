@@ -35,6 +35,12 @@
 #                      move to the latest release (or main on edge), refresh
 #                      images, restart, migrate. Works from any version:
 #                      curl -fsSL <url above> | bash -s -- --update
+#                      Takes a backup (./backup.sh) before switching, stops
+#                      when agents are working, waits for /health and says
+#                      "Update failed" with the way back when it is not.
+#   --no-backup        --update without the backup first (on purpose only)
+#   --ignore-running-tasks  --update even while tasks are in progress
+#                      (without a terminal the update stops otherwise)
 set -euo pipefail
 
 REPO_URL="${MC_REPO_URL:-https://github.com/argyelan-ai/mission-control.git}"
@@ -255,6 +261,70 @@ mc_guard_single_stack() {
              --format '{{.Label "com.docker.compose.project"}}|{{.Label "com.docker.compose.project.working_dir"}}|{{.Image}}' 2>/dev/null || true)
 }
 
+# ── Health + update safety helpers ──────────────────────────────────────────
+# Shared by the fresh install and --update; backend/tests/test_install_update.py
+# drives them (and the whole --update path) against a fake docker in PATH.
+
+# How long to wait for /health after the stack is up. The backend's
+# healthcheck grants a slow first boot start_period: 300s (migrations on an
+# SD card, docker-compose.yml); the wait must outlast it, not give up at 2 min.
+MC_HEALTH_TIMEOUT="${MC_HEALTH_TIMEOUT:-360}"
+
+# mc_wait_healthy — 0 as soon as the backend answers /health, 1 when it has
+# not answered within MC_HEALTH_TIMEOUT seconds.
+mc_wait_healthy() {
+  local deadline=$((SECONDS + MC_HEALTH_TIMEOUT))
+  until curl -sf --max-time 5 "$(_mc_api)/health" >/dev/null 2>&1; do
+    [ "$SECONDS" -lt "$deadline" ] || return 1
+    sleep "${MC_HEALTH_INTERVAL:-2}"
+  done
+}
+
+# The API answers 200 even when ~/.mc is not writable (status "degraded"), so
+# the rest of the stack still starts — say it instead of a silent success.
+mc_warn_if_degraded() {
+  local health
+  health=$(curl -sf --max-time 5 "$(_mc_api)/health" 2>/dev/null || true)
+  case "$health" in
+    *'"status":"degraded"'*)
+      printf '\033[1;33m%s\033[0m\n' "⚠ Mission Control started, but the backend cannot write ~/.mc:" >&2
+      printf '%s\n' "$health" | python3 -c 'import json,sys; d=json.load(sys.stdin).get("mc_home") or {}; print("  " + d.get("hint", "see docker compose logs backend"))' 2>/dev/null \
+        || echo "  see: curl -s $(_mc_api)/health" >&2
+      echo "  Guide: docs/handbook/operations/platforms.md#host-user-id-linux-nas" >&2
+      ;;
+  esac
+}
+
+# mc_db_value <sql> — one value from the running database, "" when the
+# database is not reachable. Read-only queries only.
+mc_db_value() {
+  docker compose exec -T db psql -U mc -d mission_control -tAc "$1" 2>/dev/null | tr -d '[:space:]' || true
+}
+
+# mc_running_task_count — tasks an agent is working on right now ("" = unknown).
+mc_running_task_count() {
+  mc_db_value "select count(*) from tasks where status = 'in_progress'"
+}
+
+# mc_backup_dir — where backup.sh writes (it owns the setting; this is only
+# used to point the operator at the newest file afterwards).
+mc_backup_dir() {
+  local d="${MC_BACKUP_DIR:-}"
+  [ -n "$d" ] || d="$(mc_env_get MC_BACKUP_DIR)"
+  printf '%s\n' "${d:-./backups}"
+}
+
+# mc_newest_backup <marker> — newest database backup written after <marker>
+# (a file touched right before backup.sh ran), or nothing.
+mc_newest_backup() {
+  local marker="$1" dir f
+  dir="$(mc_backup_dir)"
+  dir="${dir/#\~/$HOME}"
+  [ -d "$dir" ] || return 0
+  f="$(find "$dir" -maxdepth 1 -type f -name 'mc_backup_*' -newer "$marker" 2>/dev/null | sort | tail -n 1)"
+  [ -z "$f" ] || printf '%s\n' "$f"
+}
+
 [ "${MC_INSTALL_LIB_ONLY:-0}" = 1 ] && return 0 2>/dev/null
 
 # ── Arguments ────────────────────────────────────────────────────────────────
@@ -262,6 +332,9 @@ TARGET_DIR="./mission-control"
 HERE=0
 INTERACTIVE=1
 UPDATE=0
+NO_BACKUP=0
+IGNORE_RUNNING=0
+NONINTERACTIVE_FLAG=0
 CHANNEL_ARG="${MC_CHANNEL:-}"
 VERSION="${MC_VERSION:-}"
 MC_REMOTE="${MC_REMOTE:-}"
@@ -270,13 +343,15 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --here) HERE=1; INTERACTIVE=0 ;;
     --update) UPDATE=1; INTERACTIVE=0 ;;
+    --no-backup) NO_BACKUP=1 ;;
+    --ignore-running-tasks) IGNORE_RUNNING=1 ;;
     --dir) TARGET_DIR="$2"; shift ;;
     --channel) CHANNEL_ARG="$2"; shift ;;
     --version) VERSION="$2"; shift ;;
     --remote) MC_REMOTE=yes ;;
     --public-host) MC_REMOTE=yes; MC_PUBLIC_HOST="$2"; shift ;;
     --local) MC_REMOTE=no ;;
-    --non-interactive) INTERACTIVE=0 ;;
+    --non-interactive) INTERACTIVE=0; NONINTERACTIVE_FLAG=1 ;;
     *) echo "Unknown flag: $1" >&2; exit 1 ;;
   esac
   shift
@@ -478,7 +553,107 @@ resolve_release() { # -> TAG (explicit --version or latest release)
 }
 
 # ── Update mode: refresh an existing install ────────────────────────────────
+# Order: checks (nothing changes) → backup → switch code + pins → setup.sh →
+# boot → wait for /health. Only a healthy backend is reported as success; any
+# exit after the switch prints "Update failed" with the backup and the way
+# back (mc_update_on_exit). Kept small on purpose: the update engine planned
+# for the in-app button (scripts/mc_update.py) takes these steps over.
+UPDATE_PHASE=check        # check → switched → finished
+UPDATE_BACKUP=""          # file written by backup.sh, "" when skipped/unknown
+UPDATE_BACKUP_NOTE=""
+UPDATE_OLD_REF=""         # what to check out to go back
+UPDATE_DB_REV_BEFORE=""   # alembic revision before the switch ("" = unknown)
+UPDATE_ENV_COPY=".env.backup-pre-update"
+
+mc_update_on_exit() {
+  local rc=$? rev_after
+  [ "$rc" != 0 ] || return 0
+  if [ "$UPDATE_PHASE" = check ]; then
+    printf '\033[1;31m%s\033[0m\n' "✗ Update aborted — nothing was changed (see the reason above)." >&2
+    return 0
+  fi
+  [ "$UPDATE_PHASE" = switched ] || return 0
+  rev_after="$(mc_db_value 'select version_num from alembic_version')"
+  {
+    echo
+    printf '\033[1;31m%s\033[0m\n' "✗ Update failed — Mission Control is not confirmed running on the new version."
+    echo "  Logs:    docker compose logs backend --tail 50"
+    if [ -n "$UPDATE_BACKUP" ]; then
+      echo "  Backup taken right before the switch: $UPDATE_BACKUP"
+    else
+      echo "  Backup: ${UPDATE_BACKUP_NOTE:-none}"
+    fi
+    echo "  Re-running the same update is safe. To go back to ${UPDATE_OLD_REF}:"
+    echo "    git checkout -q ${UPDATE_OLD_REF}"
+    echo "    cp ${UPDATE_ENV_COPY} .env              # the .env from before the update"
+    if [ -n "$UPDATE_DB_REV_BEFORE" ] && [ "$rev_after" = "$UPDATE_DB_REV_BEFORE" ]; then
+      echo "    # database schema unchanged ($UPDATE_DB_REV_BEFORE) — no restore needed"
+    elif [ -n "$UPDATE_BACKUP" ]; then
+      echo "    ./backup.sh restore $UPDATE_BACKUP   # database as it was before the update"
+    else
+      echo "    # the database may already be migrated and there is no backup from this run"
+    fi
+    echo "    docker compose up -d"
+    echo "  (If git refuses because of $FLEET_FILE: move that file aside, check out, move it back.)"
+  } >&2
+}
+
+# Stop before anything changes while agents are working: the restart cuts
+# their runs off mid-task. A terminal may answer; without one the update stops.
+mc_update_check_running_tasks() {
+  local n
+  [ "$IGNORE_RUNNING" = 1 ] && return 0
+  n="$(mc_running_task_count)"
+  case "$n" in
+    ''|*[!0-9]*) warn "Could not count running tasks (database not reachable) — continuing."; return 0 ;;
+    0) return 0 ;;
+  esac
+  warn "$n task(s) are in progress right now — the update restarts Mission Control and interrupts them."
+  if [ "$NONINTERACTIVE_FLAG" = 0 ] && [ -e /dev/tty ] && { : </dev/tty; } 2>/dev/null; then
+    printf 'Update anyway? y/N: ' >/dev/tty
+    IFS= read -r REPLY </dev/tty || REPLY=""
+    case "$REPLY" in y|Y|yes) return 0 ;; esac
+  fi
+  fail "Stopped: let the tasks finish (or pause them) and re-run. To update anyway: --ignore-running-tasks"
+}
+
+# Backup right before the switch — the update does not start without one
+# unless --no-backup was given. Only backup.sh's command line and exit code
+# are relied on; it decides where and how it writes.
+mc_update_backup() {
+  local marker
+  if [ "$NO_BACKUP" = 1 ]; then
+    warn "--no-backup: updating WITHOUT a backup first."
+    UPDATE_BACKUP_NOTE="none — skipped with --no-backup"
+    return 0
+  fi
+  [ -x ./backup.sh ] || fail "./backup.sh not found — cannot take the backup before the update. Run with --no-backup to update without one."
+  say "→ backing up before the update (./backup.sh) ..."
+  marker="$(mktemp)"
+  if ! ./backup.sh; then
+    rm -f "$marker"
+    fail "The backup failed — the update did not start. Is the database running (docker compose up -d db)? Fix the backup (output above) and re-run, or update without one: --no-backup"
+  fi
+  UPDATE_BACKUP="$(mc_newest_backup "$marker")"
+  rm -f "$marker"
+  UPDATE_BACKUP_NOTE="written by ./backup.sh (see its output above, $(mc_backup_dir))"
+  [ -n "$UPDATE_BACKUP" ] && say "✓ backup: $UPDATE_BACKUP" || say "✓ backup done ($(mc_backup_dir))"
+}
+
+# Last step before the code changes: remember the way back, then back up.
+mc_update_prepare_switch() {
+  UPDATE_OLD_REF="${CURRENT_TAG:-$(git rev-parse --short HEAD)}"
+  UPDATE_DB_REV_BEFORE="$(mc_db_value 'select version_num from alembic_version')"
+  mc_update_backup
+  # The old .env, for the way back (setup.sh may add keys, pins change).
+  # Git-ignored (.env.backup*), owner-only like .env itself.
+  rm -f "$UPDATE_ENV_COPY"
+  (umask 077 && cp .env "$UPDATE_ENV_COPY")
+  UPDATE_PHASE=switched
+}
+
 if [ "$UPDATE" = 1 ]; then
+  trap mc_update_on_exit EXIT
   [ -f docker-compose.yml ] && [ -f .env ] || fail "--update expects to run inside an installed Mission Control directory."
   CURRENT_TAG="$(mc_current_release_tag || true)"
   ON_BRANCH="$(git symbolic-ref -q --short HEAD || true)"
@@ -490,6 +665,7 @@ if [ "$UPDATE" = 1 ]; then
     # database check.
     CHANNEL=stable
   fi
+  mc_update_check_running_tasks
 
   if [ "$CHANNEL" = stable ]; then
     resolve_release
@@ -502,6 +678,7 @@ if [ "$UPDATE" = 1 ]; then
     fetch_tag "$TAG"
     if [ -n "$CURRENT_TAG" ] && [ "$TAG" = "$CURRENT_TAG" ]; then
       say "✓ already on $TAG — refreshing images and restarting."
+      mc_update_prepare_switch
     elif [ -n "$CURRENT_TAG" ] && mc_version_gt "$CURRENT_TAG" "$TAG"; then
       fail "This install runs $CURRENT_TAG, newer than $TAG — refusing to downgrade (migrations are forward-only)."
     else
@@ -509,8 +686,7 @@ if [ "$UPDATE" = 1 ]; then
         # Not on a release (old main-tracking install or a dev checkout):
         # only switch when the database schema is one $TAG knows — otherwise
         # the release's backend would refuse to start on a newer schema.
-        DB_REV="$(docker compose exec -T db psql -U mc -d mission_control -tAc \
-                  'select version_num from alembic_version' 2>/dev/null | tr -d '[:space:]' || true)"
+        DB_REV="$(mc_db_value 'select version_num from alembic_version')"
         if [ -z "$DB_REV" ]; then
           fail "This checkout is not on a release (${ON_BRANCH:-detached}) and the database is not reachable to check its schema. Start the stack (docker compose up -d db) and re-run, or stay on main: ./install.sh --update --channel edge"
         fi
@@ -521,11 +697,13 @@ if [ "$UPDATE" = 1 ]; then
       else
         say "→ updating $CURRENT_TAG → $TAG ..."
       fi
+      mc_update_prepare_switch
       with_fleet_carried git -c advice.detachedHead=false checkout -q "refs/tags/$TAG"
     fi
     mc_write_pins stable "$TAG"
   else
     say "→ edge channel: updating to the latest main (local build — not recommended for production use) ..."
+    mc_update_prepare_switch
     if [ -n "$ON_BRANCH" ] && [ "$ON_BRANCH" != main ]; then
       with_fleet_carried git pull -q --ff-only        # developer on a feature branch
     else
@@ -546,7 +724,12 @@ if [ "$UPDATE" = 1 ]; then
   # it only backfills missing keys — appending, so the inode stays.
   ./setup.sh
   boot_stack "$CHANNEL"
-  say "✅ Update complete — $( [ "$CHANNEL" = stable ] && echo "release $TAG" || echo "main @ $(git rev-parse --short HEAD)" ) (migrations ran inside the backend on start)."
+  say "→ waiting for the API (migrations run inside the backend on start; up to $((MC_HEALTH_TIMEOUT / 60)) min on slow machines) ..."
+  mc_wait_healthy || fail "The backend did not become healthy within ${MC_HEALTH_TIMEOUT}s."
+  mc_warn_if_degraded
+  UPDATE_PHASE=finished
+  say "✅ Update complete — $( [ "$CHANNEL" = stable ] && echo "release $TAG" || echo "main @ $(git rev-parse --short HEAD)" ) is running and healthy."
+  [ -n "$UPDATE_BACKUP" ] && echo "  Backup from before the update: $UPDATE_BACKUP"
   exit 0
 fi
 
@@ -637,24 +820,9 @@ MC_INTERACTIVE="$INTERACTIVE" MC_REMOTE="$MC_REMOTE" MC_PUBLIC_HOST="$MC_PUBLIC_
 # ── 4. Boot ──────────────────────────────────────────────────────────────────
 boot_stack "$CHANNEL"
 
-say "→ waiting for the API (migrations run inside the backend on start) ..."
-for i in $(seq 1 60); do
-  curl -sf http://localhost:8000/health >/dev/null 2>&1 && break
-  [ "$i" = 60 ] && { docker compose logs backend --tail=30; fail "backend did not become healthy — logs above."; }
-  sleep 2
-done
-
-# The API answers 200 even when ~/.mc is not writable (status "degraded"), so
-# the rest of the stack still starts — say it here instead of a silent success.
-HEALTH=$(curl -sf http://localhost:8000/health 2>/dev/null || true)
-case "$HEALTH" in
-  *'"status":"degraded"'*)
-    printf '\033[1;33m%s\033[0m\n' "⚠ Mission Control started, but the backend cannot write ~/.mc:" >&2
-    printf '%s\n' "$HEALTH" | python3 -c 'import json,sys; d=json.load(sys.stdin).get("mc_home") or {}; print("  " + d.get("hint", "see docker compose logs backend"))' 2>/dev/null \
-      || echo "  see: curl -s http://localhost:8000/health" >&2
-    echo "  Guide: docs/handbook/operations/platforms.md#host-user-id-linux-nas" >&2
-    ;;
-esac
+say "→ waiting for the API (migrations run inside the backend on start; up to $((MC_HEALTH_TIMEOUT / 60)) min on slow machines) ..."
+mc_wait_healthy || { docker compose logs backend --tail=30; fail "backend did not become healthy within ${MC_HEALTH_TIMEOUT}s — logs above. A re-run of this installer is safe."; }
+mc_warn_if_degraded
 
 # Remote access, step 2: first admin (terminal, over localhost), then open.
 MC_INTERACTIVE="$INTERACTIVE" mc_remote_finish "$MC_REMOTE_HOST" .env

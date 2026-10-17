@@ -9,6 +9,12 @@ follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
 - Fix: the installer's closing lines (and the browser it opens) lead to the
   setup wizard at `/setup` instead of `scripts/demo-seed.py` and
   `docs/setup/first-agent.md` — the wizard covers both.
+- Fix: `install.sh --update` tells the truth. It backs up with `./backup.sh`
+  before switching (and stops when that fails; `--no-backup` skips it on
+  purpose), stops when tasks are in progress and no terminal can confirm
+  (`--ignore-running-tasks`), waits for `/health` past the backend's 5-minute
+  start period, and says "Update complete" only when the backend is healthy.
+  Otherwise it says "Update failed" with the backup file and the commands back.
 
 ## [0.3.1] - 2026-10-17
 
