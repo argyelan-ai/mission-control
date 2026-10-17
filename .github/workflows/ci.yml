@@ -282,6 +282,18 @@ jobs:
           test -n "$TOKEN"
           curl -sf -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/v1/boards >/dev/null
           echo "fresh-boot E2E OK"
+      - name: Fresh install seeds no example hardware and no demo agent
+        # Migrations + boot seeders on an empty database: only the cloud
+        # provider anchors from runtimes.json, no runtime on a host address,
+        # no host, no agent (test_fresh_install_seed.py is the unit side).
+        run: |
+          q() { docker compose exec -T db psql -U mc -d mission_control -Atc "$1"; }
+          echo "runtimes: $(q "select string_agg(slug, ',' order by slug) from runtimes")"
+          test "$(q "select count(*) from agents")" = "0"
+          test "$(q "select count(*) from hosts")" = "0"
+          test "$(q "select count(*) from runtimes where endpoint !~ '^https://'")" = "0"
+          test "$(q "select count(*) from runtimes")" = "$(python3 -c 'import json; print(len(json.load(open("backend/config/runtimes.json"))))')"
+          echo "fresh-install seed OK"
       - name: Host uid != 1000 — backend writes ~/.mc as the runner user
         run: |
           echo "runner uid=$(id -u) gid=$(id -g)"

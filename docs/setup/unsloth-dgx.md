@@ -34,12 +34,12 @@ Das Studio ist jetzt unter `http://<dgx-ip>:8888` erreichbar.
 
 ## Start (über MC)
 
-1. In `backend/config/runtimes.json` ist der Seed-Eintrag `unsloth-studio` bereits enthalten (disabled).
-2. Nach dem nächsten Backend-Start (Seeder läuft idempotent) erscheint die Runtime im UI unter `/runtimes`.
-3. Runtime aktivieren: PATCH via UI oder direkt SQL:
-   ```sql
-   UPDATE runtimes SET enabled = TRUE WHERE slug = 'unsloth-studio';
-   ```
+1. Runtime anlegen (frische Installationen bringen seit 2026-10 keine Beispiel-Runtimes mehr mit):
+   `POST /api/v1/runtimes/db` mit `slug: "unsloth-studio"`, `runtime_type: "unsloth"`,
+   `endpoint: "http://<dgx-ip>:8888"`, `healthcheck_path: "/api/health"`, `enabled: true`.
+   Bestehende Installationen haben die Zeile schon (aus dem alten Seed) und aktivieren sie nur.
+2. Die Runtime erscheint im UI unter `/runtimes`.
+3. Eine vorhandene, deaktivierte Zeile aktivieren: PATCH via UI (`PATCH /api/v1/runtimes/db/unsloth-studio` mit `enabled: true`).
 4. Auf der Runtimes-Seite auf **Start** klicken. MC führt per SSH
    ```
    tmux new-session -d -s unsloth-studio 'cd ~ && unsloth studio -H 0.0.0.0 -p 8888'

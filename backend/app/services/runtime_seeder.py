@@ -4,8 +4,12 @@ Called during app startup lifespan. Idempotent: existing runtimes (matched by
 slug) are left untouched. New runtimes are inserted. The JSON file stays in the
 repo as a seed template for open-source first-deploys.
 
-For open-source users: runtimes.json can ship with placeholder hosts. On first
-startup the seeder populates the DB; users then edit runtimes via UI.
+Since 2026-10 runtimes.json holds cloud provider anchors only (Anthropic,
+Ollama Cloud, Grok, Jarvis voice). A fresh install gets no example hardware —
+no placeholder boxes that show up as permanently offline. Local boxes and
+engines are added by the operator (UI / ``POST /runtimes/db``). The seeder
+never deletes: an existing install keeps every row, including the old
+example rows it was once seeded with.
 
 IMPORTANT — runtimes.json is SEED-ONLY, the DB is the truth after first run.
 Once a slug exists in the DB (`existing_slugs`, see below), this file is never

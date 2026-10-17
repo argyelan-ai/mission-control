@@ -16,7 +16,7 @@
  * -runtimes-slot-stage-design.md.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Pencil, Plus, Server, Trash2, X } from "lucide-react";
@@ -581,7 +581,17 @@ function HostCard({
 
 // ── Hosts Section ─────────────────────────────────────────────────────────────
 
-export function HostsSection({ embedded = false }: { embedded?: boolean } = {}) {
+export function HostsSection({
+  embedded = false,
+  addDeviceRequested = false,
+  onAddDeviceRequestHandled,
+}: {
+  embedded?: boolean;
+  /** Set by the Fleet tab's empty view: open THIS section's "Add device"
+   *  chooser on arrival, so there is one add path, not two (ADR-093). */
+  addDeviceRequested?: boolean;
+  onAddDeviceRequestHandled?: () => void;
+} = {}) {
   const t = useTranslations("runtimes.hosts");
   const queryClient = useQueryClient();
   const currentUser = useAppStore((s) => s.currentUser);
@@ -601,6 +611,12 @@ export function HostsSection({ embedded = false }: { embedded?: boolean } = {}) 
    * Modell-Schritte des Wizards) hängt sich an den `onboard`-Zweig bzw. an
    * ein Fertig-Signal des HostOnboardDialog, ohne den Chooser anzufassen.
    */
+  useEffect(() => {
+    if (!addDeviceRequested) return;
+    if (isAdmin) setChooserOpen(true);
+    onAddDeviceRequestHandled?.();
+  }, [addDeviceRequested, isAdmin, onAddDeviceRequestHandled]);
+
   const openRoute = (route: DeviceRoute) => {
     setChooserOpen(false);
     switch (route) {

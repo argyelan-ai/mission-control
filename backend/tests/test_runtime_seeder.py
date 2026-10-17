@@ -14,8 +14,8 @@ async def test_seed_inserts_all_from_json(async_session):
 
     rows = (await async_session.exec(select(Runtime))).scalars().all()
     slugs = {r.slug for r in rows}
-    # Seeded runtimes from runtimes.json
-    assert "nemotron-super" in slugs or "qwen-general" in slugs
+    # Seeded runtimes from runtimes.json — cloud provider anchors only
+    assert "anthropic-claude-opus" in slugs
 
 
 @pytest.mark.asyncio

@@ -399,8 +399,14 @@ Drei bewusste Unterschiede:
 `vllm_docker`. "Recipe" heisst dort sparkrun-Recipe, das es nur fuer vLLM auf
 dem Spark gibt. Modellwechsel bei llama.cpp = anderer Container bzw. anderes
 `launch_command`; hot-swapping hinter einem Port waere ein spaeterer
-llama-swap-PR. Seed-Vorlage: `llamacpp-example` in `backend/config/runtimes.json`
-(`enabled: false`).
+llama-swap-PR. Vorlage (seit 2026-10 nicht mehr im Seed — frische Installationen
+bekommen keine Beispiel-Hardware; anlegen ueber `POST /api/v1/runtimes/db`):
+`runtime_type: "llamacpp_docker"`, `endpoint: "http://<box>:8080/v1"`,
+`healthcheck_path: "/health"`, `container_name: "mc-llamacpp-<slug>"`,
+`launch_command: "docker run -d --rm --name mc-llamacpp-<slug> --label mc.runtime.slug=<slug> -p 8080:8080 ghcr.io/ggml-org/llama.cpp:server-cuda -hf Qwen/Qwen3-8B-GGUF:Q4_K_M --host 0.0.0.0 --port 8080 -c 32768 --jinja"`.
+Das Label `mc.runtime.slug=<slug>` ist Pflicht: Stop, Restart und die
+Start-Pruefung finden den Container darueber. Auf einer reinen CPU-Box `:server`
+statt `:server-cuda`.
 
 ##### `ssh_process` — Host-Engine statt Container (NEU 2026-08-06)
 

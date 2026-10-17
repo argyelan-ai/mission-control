@@ -12,6 +12,11 @@ replaces that with a DB-driven runtime assignment.
 The runtime row is also shipped in backend/config/runtimes.json so fresh
 deployments seed it identically. Here we insert it defensively so the
 subsequent UPDATE finds it even if the seeder hasn't run yet.
+
+Fresh databases (2026-10): the row is example hardware (an LM Studio box at a
+placeholder address). A database with no agents yet is a fresh install that
+has no such box, so the INSERT only runs when a fleet already exists. Existing
+installs ran this migration long ago and are not affected.
 """
 import uuid
 from alembic import op
@@ -55,6 +60,7 @@ def upgrade() -> None:
             4, true,
             NOW(), NOW()
         WHERE NOT EXISTS (SELECT 1 FROM runtimes WHERE slug = 'qwen-coder-lms')
+          AND EXISTS (SELECT 1 FROM agents)
         """
     )
 
