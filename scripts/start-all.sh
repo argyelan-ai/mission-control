@@ -62,7 +62,7 @@ bash scripts/ensure-agents-yml.sh | sed 's/^/  [1c]  /'
 
 # 2. Agent-Tokens aus Vault generieren (falls vorhanden)
 ENV_AGENTS="docker/.env.agents"
-GENERATED=$(docker compose exec -T backend python3 -c "
+GENERATED=$(docker compose exec -T -u mcuser backend python3 -c "
 import asyncio
 import re
 from sqlmodel import select

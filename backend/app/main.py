@@ -155,15 +155,9 @@ async def lifespan(app: FastAPI):
     # Qdrant-Index-Setup: siehe prepare_process() — geteilter Boot-Vorbe-
     # reitungspfad mit backend/app/worker.py (Rex-Review PR #479, Blocker B2).
     await prepare_process()
-    # Portability fail-loud: warn (don't crash) if the MC home mount is absent.
-    # Unconditional — Files API + deliverables (HTTP, nicht nur file_indexer)
-    # haengen von MC_HOME ab, unabhaengig von ENABLE_BACKGROUND_SERVICES.
-    from app.services.fs_roots import mc_home as _mc_home
-    if not _mc_home().is_dir():
-        logging.getLogger("mc.startup").warning(
-            "MC_HOME %s is not a directory — Files API + deliverables will be empty. "
-            "Set HOME_HOST to the host's $HOME.", _mc_home()
-        )
+    # Portability fail-loud for the MC home mount (absent, not writable, wrong
+    # owner): prepare_process() above runs app.services.mc_home_preflight —
+    # one clear log line + a /health detail, never a crash.
     # ENABLE_BACKGROUND_SERVICES (Architektur E, Teil 1): Default True, damit
     # sich am heutigen Verhalten nichts aendert, solange kein Worker-Container
     # existiert (Teil 2). Siehe backend/app/worker.py + Inventar-Tabelle im PR.
@@ -395,6 +389,12 @@ limiter = Limiter(
 )
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# 422 without the client's input: FastAPI's default echoes the rejected value
+# (a too-short password, a whole credentials body) — app/validation_errors.py.
+from app.validation_errors import install_validation_error_handlers
+
+install_validation_error_handlers(app)
 app.add_middleware(PathExemptSlowAPIMiddleware)
 
 # Register all routers

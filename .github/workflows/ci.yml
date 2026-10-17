@@ -213,11 +213,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - name: Prepare ~/.mc for the container user
-        # Runner-UID (1001) != Container-UID (mcuser 1000): das ${HOME}/.mc
-        # Bind-Mount muss fuer den Containernutzer beschreibbar sein
-        # (vault/agents/deliverables werden zur Laufzeit angelegt).
-        run: mkdir -p ~/.mc && chmod 777 ~/.mc
+      # No "chmod 777 ~/.mc" here any more: the runner user is uid 1001, the
+      # image default is 1000 — exactly the fresh-Linux case that used to crash
+      # migration 0112. setup.sh now writes PUID/PGID from `id -u`/`id -g` and
+      # the backend runs as the runner's uid; this job proves it end to end.
       - name: docker compose config validates
         run: |
           ./setup.sh   # nur fuer die config-Validierung; install.sh ruft es erneut (idempotent)
@@ -247,6 +246,27 @@ jobs:
         env:
           BUILD_MIN_FREE_GB: "5"
         run: ./install.sh --here
+      - name: install.sh — shellcheck + release-pinning helpers
+        # The one-liner a user runs unseen via curl | bash. shellcheck -x
+        # follows the sourced disk-preflight library. The helper tests run
+        # against a local git repo and file:// "API" answers, so they are
+        # deterministic and need no GitHub API quota.
+        run: |
+          shellcheck -x -S warning install.sh scripts/release-image-tags.sh   # info-level notes differ between shellcheck versions
+          pip install -q pytest
+          python3 -m pytest -q -p no:cacheprovider --noconftest backend/tests/test_install_release_pinning.py backend/tests/test_release_image_tags.py
+      - name: --here ran the checkout, not a published image
+        # CI has no release that matches the branch under test, so --here
+        # must take the edge path: MC_IMAGE_TAG=edge (a tag no registry
+        # publishes) and a local build. If it ever pulled a release image
+        # instead, this job would test old code and stay green.
+        run: |
+          grep -qx 'MC_CHANNEL=edge' .env
+          grep -qx 'MC_IMAGE_TAG=edge' .env
+          img="$(docker inspect --format '{{.Config.Image}}' "$(docker compose ps -q backend)")"
+          echo "backend runs: $img"
+          test "$img" = "ghcr.io/argyelan-ai/mc-backend:edge"
+          docker compose exec -T -u mcuser backend test -f /app/app/worker.py
       - name: Register first admin + authenticated API call
         run: |
           TOKEN=$(curl -sf -X POST http://localhost:8000/api/v1/auth/register \
@@ -256,6 +276,19 @@ jobs:
           test -n "$TOKEN"
           curl -sf -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/v1/boards >/dev/null
           echo "fresh-boot E2E OK"
+      - name: Host uid != 1000 — backend writes ~/.mc as the runner user
+        run: |
+          echo "runner uid=$(id -u) gid=$(id -g)"
+          grep -E '^P(U|G)ID=' .env
+          HEALTH=$(curl -sf http://localhost:8000/health)
+          echo "$HEALTH"
+          echo "$HEALTH" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["status"] == "ok", d'
+          # Created by the backend's boot step (not by setup.sh) → must belong to us.
+          test "$(stat -c %u ~/.mc/vault)" = "$(id -u)"
+          test "$(stat -c %u ~/.mc/wake-requests)" = "$(id -u)"
+          echo "host-uid E2E OK"
+      - name: Host uid matrix (entrypoint remap, readable failure, PUID=0 refused)
+        run: bash scripts/test-host-uid.sh
       - name: Logs on failure
         if: failure()
         run: docker compose logs backend db --tail=80

@@ -1,0 +1,162 @@
+"""scripts/cli-bridge-service.sh against stubbed launchctl/lsof/curl/uname.
+
+The install must retire the legacy launchd label first (else the old process
+keeps :18792 open on all interfaces without a token and the new service
+crash-loops), be idempotent, refuse to start while a foreign process holds the
+port, and check the address it was told to bind.
+"""
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "cli-bridge-service.sh"
+LEGACY = "com.example.old-bridge"  # any hand-made label that runs cli-bridge.py
+
+pytestmark = pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
+
+# State lives in $STATE: loaded-<label> marks a loaded launchd job,
+# foreign-listener simulates a process we do not own on the port.
+STUBS = {
+    "uname": "#!/bin/bash\necho Darwin\n",
+    "launchctl": r"""#!/bin/bash
+echo "launchctl $*" >> "$STATE/calls"
+label="${2##*/}"
+case "$1" in
+  print) [[ -f "$STATE/loaded-$label" ]] ;;
+  bootout) rm -f "$STATE/loaded-$label" ;;
+  bootstrap) touch "$STATE/loaded-com.mc.cli-bridge" ;;
+  *) exit 0 ;;
+esac
+""",
+    "lsof": r"""#!/bin/bash
+echo "lsof $*" >> "$STATE/calls"
+echo "COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME"
+[[ -f "$STATE/foreign-listener" ]] && echo "nc 4242 u 3u IPv4 0 0t0 TCP *:18792 (LISTEN)"
+[[ -f "$STATE/loaded-com.example.old-bridge" ]] && echo "Python 747 u 3u IPv4 0 0t0 TCP *:18792 (LISTEN)"
+[[ -f "$STATE/loaded-com.mc.cli-bridge" ]] && echo "Python 900 u 3u IPv4 0 0t0 TCP ${STUB_BIND:-127.0.0.1}:18792 (LISTEN)"
+exit 0
+""",
+    "curl": "#!/bin/bash\necho \"curl $*\" >> \"$STATE/calls\"\nexit 0\n",
+    "sleep": "#!/bin/bash\nexit 0\n",
+}
+
+
+@pytest.fixture
+def env(tmp_path):
+    home = tmp_path / "home"
+    (home / "Library" / "LaunchAgents").mkdir(parents=True)
+    state = tmp_path / "state"
+    state.mkdir()
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    for name, body in STUBS.items():
+        f = bindir / name
+        f.write_text(body)
+        f.chmod(0o755)
+    e = {
+        "HOME": str(home),
+        "STATE": str(state),
+        "PATH": f"{bindir}:{os.environ['PATH']}",
+        "CLI_BRIDGE_PYTHON": sys.executable,
+        "CLI_BRIDGE_PORT_WAIT": "1",
+    }
+    for k in ("CLI_BRIDGE_BIND", "CLI_BRIDGE_TOKEN", "CLI_BRIDGE_TOKEN_FILE", "CLI_BRIDGE_PORT"):
+        e.pop(k, None)
+    return e, home, state
+
+
+def _run(e, *args):
+    return subprocess.run(["bash", str(SCRIPT), *args], env=e, capture_output=True,
+                          text=True, timeout=60)
+
+
+def _calls(state: Path) -> list[str]:
+    f = state / "calls"
+    return f.read_text().splitlines() if f.exists() else []
+
+
+def test_install_retires_the_legacy_label_before_starting(env):
+    e, home, state = env
+    legacy_plist = home / "Library" / "LaunchAgents" / f"{LEGACY}.plist"
+    legacy_plist.write_text(
+        "<plist><string>/usr/bin/python3</string>"
+        "<string>/somewhere/mission-control/scripts/cli-bridge.py</string></plist>"
+    )
+    other = home / "Library" / "LaunchAgents" / "com.example.unrelated.plist"
+    other.write_text("<plist><string>/usr/local/bin/something-else</string></plist>")
+    (state / f"loaded-{LEGACY}").touch()
+
+    r = _run(e)
+    assert r.returncode == 0, r.stdout + r.stderr
+    calls = _calls(state)
+    bootout_legacy = next(i for i, c in enumerate(calls) if c.endswith(f"bootout gui/{os.getuid()}/{LEGACY}"))
+    bootstrap_new = next(i for i, c in enumerate(calls) if c.startswith("launchctl bootstrap"))
+    assert bootout_legacy < bootstrap_new
+    assert not legacy_plist.exists()
+    backups = list((home / ".mc" / "backups" / "launchd").glob(f"{LEGACY}.plist.bak-*"))
+    assert len(backups) == 1
+    assert f"Stopped legacy launchd service {LEGACY}" in r.stdout
+    assert "Listening on: 127.0.0.1:18792" in r.stdout
+    assert other.exists()  # only plists that run cli-bridge.py are touched
+    assert not any("com.example.unrelated" in c for c in calls)
+    assert (home / ".mc" / "secrets" / "cli-bridge.token").exists()
+
+
+def test_extra_legacy_label_from_env(env):
+    e, _, state = env
+    (state / "loaded-com.example.other").touch()
+    r = _run({**e, "CLI_BRIDGE_LEGACY_LABELS": "com.example.other"})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "Stopped legacy launchd service com.example.other" in r.stdout
+
+
+def test_install_is_idempotent(env):
+    e, home, state = env
+    assert _run(e).returncode == 0
+    r = _run(e)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "legacy" not in r.stdout.lower()
+    assert not (home / ".mc" / "backups").exists()
+
+
+def test_install_refuses_while_a_foreign_process_holds_the_port(env):
+    e, _, state = env
+    (state / "foreign-listener").touch()
+    r = _run(e)
+    assert r.returncode == 1
+    assert "still in use" in r.stderr and "nc 4242" in r.stderr
+    assert not any(c.startswith("launchctl bootstrap") for c in _calls(state))
+
+
+def test_status_probes_the_configured_bind(env):
+    e, _, state = env
+    e = {**e, "CLI_BRIDGE_BIND": "10.0.0.5", "STUB_BIND": "10.0.0.5"}
+    r = _run(e, "--status")
+    assert "10.0.0.5:18792" in r.stdout
+    assert any("http://10.0.0.5:18792/ping" in c for c in _calls(state))
+
+
+def test_status_reads_the_bind_from_the_installed_unit(env):
+    """`make bridge-status` has no env: it must check the address the
+    service was installed with, not hard-coded loopback."""
+    if not Path("/usr/libexec/PlistBuddy").exists():
+        pytest.skip("PlistBuddy is macOS-only")
+    e, _, state = env
+    assert _run({**e, "CLI_BRIDGE_BIND": "10.0.0.5", "STUB_BIND": "10.0.0.5"}).returncode == 0
+    (state / "calls").unlink()
+    _run(e, "--status")
+    assert any("http://10.0.0.5:18792/ping" in c for c in _calls(state))
+
+
+def test_plist_carries_bind_and_token_file(env):
+    e, home, _ = env
+    assert _run(e).returncode == 0
+    plist = (home / "Library" / "LaunchAgents" / "com.mc.cli-bridge.plist").read_text()
+    assert "<key>CLI_BRIDGE_BIND</key>\n        <string>127.0.0.1</string>" in plist
+    assert "<key>CLI_BRIDGE_TOKEN_FILE</key>" in plist

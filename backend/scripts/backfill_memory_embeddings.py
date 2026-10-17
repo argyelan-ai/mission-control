@@ -1,10 +1,10 @@
 """One-time backfill: index existing BoardMemory entries into Qdrant.
 
 Usage (inside the backend container):
-    docker compose exec backend python -m scripts.backfill_memory_embeddings
-    docker compose exec backend python -m scripts.backfill_memory_embeddings --dry-run
-    docker compose exec backend python -m scripts.backfill_memory_embeddings --limit 100
-    docker compose exec backend python -m scripts.backfill_memory_embeddings --force
+    docker compose exec -u mcuser backend python -m scripts.backfill_memory_embeddings
+    docker compose exec -u mcuser backend python -m scripts.backfill_memory_embeddings --dry-run
+    docker compose exec -u mcuser backend python -m scripts.backfill_memory_embeddings --limit 100
+    docker compose exec -u mcuser backend python -m scripts.backfill_memory_embeddings --force
 
 Default: only memories that don't have a Qdrant point yet (idempotent). With
 --force, all are re-indexed (for model changes).

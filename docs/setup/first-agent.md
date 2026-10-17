@@ -142,10 +142,25 @@ on port `18792`. The backend container reaches it at
 will fail.
 
 ```bash
-python3 -m pip install --user jinja2 websockets   # one-time
-brew install tmux                                 # if you don't have it
+# macOS (Homebrew) — one-time
+python3 -m pip install --user jinja2 websockets
+brew install tmux node                            # node/npm only for the npm install of the claude CLI
+
+# Debian / Ubuntu / Raspberry Pi OS — one-time. Use apt, not pip: Debian 12+
+# refuses `pip install --user` outside a venv ("externally-managed-environment").
+sudo apt install -y tmux python3-jinja2 python3-websockets nodejs npm
+
+# Claude Code CLI on the host (only for `claude setup-token` in step 2), any OS:
+curl -fsSL https://claude.ai/install.sh | bash    # or: npm install -g @anthropic-ai/claude-code
+
 make bridge-install                               # supervised service: starts at login, respawns on crash
 ```
+
+The helper only answers MC: it listens on `127.0.0.1` and requires a shared
+token, which it creates on first start in `~/.mc/secrets/cli-bridge.token`
+(the backend reads the same file — nothing to copy). On Linux set
+`CLI_BRIDGE_BIND` to the docker bridge address — see
+[CLI-Bridge auth](cli-bridge-auth.md).
 
 `make bridge-install` sets up a launchd agent (macOS) or a systemd user unit
 (Linux) via `scripts/cli-bridge-service.sh`. `make bridge-status` checks it,
@@ -226,7 +241,7 @@ board on the homepage shows all agents' lanes at a glance.
 | Symptom | Check |
 |---|---|
 | Agent card stuck on "Provisioning" | `docker logs mc-agent-<slug>` — look for `[entrypoint] FEHLER: CLAUDE_CODE_OAUTH_TOKEN fehlt` (secret missing/misnamed, step 2) or a bootstrap-retry loop (backend unreachable) |
-| Provision button errors / times out | Is `scripts/cli-bridge.py` (step 3) actually running? `curl http://localhost:18792/health` from the host. Also check the backend container can reach it: `docker compose exec backend curl -s http://host.docker.internal:18792/health` |
+| Provision button errors / times out | Is `scripts/cli-bridge.py` (step 3) actually running? `curl http://localhost:18792/ping` from the host. Also check the backend container can reach it: `docker compose exec -u mcuser backend curl -s http://host.docker.internal:18792/ping`. Backend log `rejected (401)` = token mismatch, see [CLI-Bridge auth](cli-bridge-auth.md) |
 | Container never appears (`docker ps` shows nothing) | Run `./scripts/start-all.sh` explicitly — bringing an agent up for the first time needs its service block picked up by `docker compose up -d` |
 | Agent never ACKs a dispatched task | Is the tmux session actually inside the container? `docker exec -itu agent mc-agent-<slug> tmux capture-pane -p -t <slug>:1` (window 1 = `poll.sh` — should show poll activity, not a crash loop) |
 | `image not found` / container won't start | Did you run `scripts/build-agent-images.sh` for the image your runtime needs (`claude` vs `openclaude` vs `omp`)? `docker images | grep mc-`. |

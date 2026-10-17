@@ -64,13 +64,25 @@ runs **outside Docker, directly on the host**: `scripts/cli-bridge.py` on port
 `http://host.docker.internal:18792`. Without it, the Provision button fails.
 
 ```bash
-python3 -m pip install --user jinja2 websockets   # one-time
-brew install tmux                                 # or your platform's package manager
-python3 scripts/cli-bridge.py &                   # keep it running
+# macOS (Homebrew) — one-time
+python3 -m pip install --user jinja2 websockets
+brew install tmux node
+
+# Debian / Ubuntu / Raspberry Pi OS — one-time (apt, not pip: Debian 12+
+# refuses `pip install --user` outside a venv)
+sudo apt install -y tmux python3-jinja2 python3-websockets nodejs npm
+
+# Claude Code CLI (for `claude setup-token` in step 2), any OS
+curl -fsSL https://claude.ai/install.sh | bash    # or: npm install -g @anthropic-ai/claude-code
+
+make bridge-install                               # managed service (launchd/systemd)
 ```
 
-There is no bundled service unit for this. For anything beyond a local test,
-keep it alive under `tmux`, `screen`, or your own `launchd`/`systemd` job.
+`make bridge-install` keeps it running (`python3 scripts/cli-bridge.py &` is
+fine for a quick test). The helper listens on `127.0.0.1` and only answers
+requests with its shared token (`~/.mc/secrets/cli-bridge.token`, created on
+first start; the backend reads the same file). Linux needs
+`CLI_BRIDGE_BIND` — see [CLI-Bridge auth](../../setup/cli-bridge-auth.md).
 
 ## 4. Create a board, then the agent
 
@@ -128,9 +140,9 @@ default — or the watchdog steps in) → `review` → `done`.
 - **No prebuilt agent images.** The core stack pulls prebuilt images from
   GHCR; agent images you build yourself (step 1). Publishing them is on the
   roadmap.
-- **No managed cli-bridge service.** `scripts/cli-bridge.py` is a foreground
-  process you supervise yourself, and it needs `tmux` and a POSIX host. A
-  managed service unit is on the roadmap.
+- **cli-bridge needs a POSIX host.** `scripts/cli-bridge.py` needs `tmux`;
+  `make bridge-install` supervises it via launchd (macOS) or a systemd user
+  unit (Linux).
 - **Host agents are macOS-only.** Agents that run as native `launchd` jobs
   instead of containers (`agent_runtime: host`) are a separate, macOS-specific
   path. The Docker fleet is not macOS-bound.

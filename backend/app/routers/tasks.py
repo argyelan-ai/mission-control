@@ -2423,9 +2423,11 @@ async def delete_task(
             assigned_agent = await session.get(Agent, task.assigned_agent_id)
             if assigned_agent and getattr(assigned_agent, "agent_runtime", "openclaw") in ("free-code-bridge", "cli-bridge"):
                 from app.config import settings
+                from app.services.cli_bridge_auth import bridge_headers
                 import urllib.request
                 req = urllib.request.Request(
                     f"{settings.free_code_bridge_url}/sessions/{task_id}",
+                    headers=bridge_headers(),
                     method="DELETE"
                 )
                 urllib.request.urlopen(req, timeout=3)

@@ -40,7 +40,9 @@ from app.services.decision_docs import (
 # +1 on 2026-10-12: ADR-090 (chat as remote control), confirmed on purpose.
 # +1 on 2026-10-12: ADR-091 (live voice in the chat) — status Proposed, the
 #   operator accepts or rejects it in the voice PR 1 review.
-EXPECTED_DECISION_DOCS = 90
+# +1 on 2026-10-17: ADR-092 (release channels stable/edge) — Accepted,
+#   accepted by the dev lead on behalf of the operator (17.10.).
+EXPECTED_DECISION_DOCS = 91
 
 
 def _repo_root() -> Path:

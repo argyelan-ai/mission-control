@@ -26,8 +26,8 @@ unveraendert.
 Ausfuehrung (braucht DB-Zugriff, den ein Agent-Token nicht hat — Aendern
 fremder Agent-Rollen ist eine Operator-Aktion, siehe Team Charter Punkt 6):
 
-    docker compose exec backend python -m scripts.fix_legacy_agent_roles --board-id <id> --dry-run
-    docker compose exec backend python -m scripts.fix_legacy_agent_roles --board-id <id>
+    docker compose exec -u mcuser backend python -m scripts.fix_legacy_agent_roles --board-id <id> --dry-run
+    docker compose exec -u mcuser backend python -m scripts.fix_legacy_agent_roles --board-id <id>
 
 Idempotent: ein Agent, dessen role-Spalte bereits den Ziel-Enum-Wert
 traegt, wird uebersprungen (kein no-op Write, kein doppeltes Logging).

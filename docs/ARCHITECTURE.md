@@ -205,7 +205,8 @@ an opt-in preview, macOS host only — see
 
 **Hinweis:** Der OpenClaw Gateway (WebSocket-Daemon auf Port `18789`) wurde mit v0.9 (ADR-039) komplett entfernt — als Runtime, Code-Pfad, DB-Schema, Frontend-Konzept und Host-Service. Verbleibende Host-Komponenten:
 
-**CLI-Bridge** (`scripts/cli-bridge.py`) — Host-HTTP-Server auf Port `18792`:
+**CLI-Bridge** (`scripts/cli-bridge.py`) — Host-HTTP-Server auf Port `18792` (+ WebSocket-PTY `18793`):
+- **Auth:** jede Anfrage ausser `GET /ping` und jeder PTY-Attach braucht den Header `X-MC-Bridge-Token` (HTTP 401, auch schon im WS-Handshake). Token-Datei `~/.mc/secrets/cli-bridge.token` (0600, beim ersten Start erzeugt); Backend + Worker lesen sie über den `~/.mc`-Mount oder `CLI_BRIDGE_TOKEN`. Einzige Header-Quelle im Backend: `services/cli_bridge_auth.py`. Der Browser spricht nie direkt mit der Bridge — Terminal und Plugin-Shell laufen über den Backend-WS-Proxy (Stream-Ticket + Admin). Bind `CLI_BRIDGE_BIND`, Default `127.0.0.1`. Details + Rollout: `docs/setup/cli-bridge-auth.md`.
 - Rendert Agent-Konfig aus Jinja2-Templates (`backend/templates/*.j2`):
   - `cli_agent_settings.json.j2` → `settings.json` + `claude-config/settings.json` (Kopie, **kein Symlink** — Docker-Kompatibilität)
   - `cli_agent.env.j2` → `agent.env` (MC_AGENT_TOKEN)
@@ -1572,6 +1573,19 @@ Alle ADRs in `docs/decisions/`:
 
 ## Änderungshistorie (high-level)
 
+- **2026-10-17** — **Any host uid on Linux:** the backend image starts as root only in
+  `backend/docker-entrypoint.sh`, gives `mcuser` the host user's ids (`PUID`/`PGID` from `.env`,
+  written by `setup.sh` on Linux; empty = uid 1000 as before, macOS/Windows unchanged) and drops
+  to it with `setpriv` before migrations/server. Migration 0112 no longer touches the disk on a
+  fresh database; the `~/.mc` core directories come from the boot step
+  `services/mc_home_preflight.py` (in `prepare_process`, API + worker), which reports a
+  non-writable `~/.mc` as one log line and `/health` `status: degraded` + `mc_home` instead of
+  crashing. Guide: `docs/handbook/operations/platforms.md#host-user-id-linux-nas`.
+- **2026-10-16** — **cli-bridge auth:** the host helper (`scripts/cli-bridge.py`) listened on
+  `0.0.0.0` without auth (HTTP 18792 + WebSocket PTY 18793). It now requires `X-MC-Bridge-Token`
+  on everything except `GET /ping`, binds `127.0.0.1` by default (`CLI_BRIDGE_BIND`), and creates
+  its 0600 token file on first start. Backend side: `services/cli_bridge_auth.py`. Rollout
+  backend-first: `docs/setup/cli-bridge-auth.md`.
 - **2026-10-09** — **Stale thread messages no longer wake an agent (rule R-stale-messages-do-not-wake, ADR-071
   pull delivery):** `/me/poll` (source of the poll.sh/bridge "📬 … mc inbox" nudge) and `GET /me/inbox` share
   `routers/agents._pending_thread_messages`. Operator messages never expire. A system notice older than

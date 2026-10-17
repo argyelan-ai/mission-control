@@ -46,7 +46,7 @@ test-frontend: ## Frontend tests (vitest) + type check
 	cd frontend-v2 && npx tsc --noEmit && npm run test:run
 
 migrate: ## Run DB migrations manually (they also run on backend start)
-	docker compose exec backend alembic upgrade head
+	docker compose exec -u mcuser backend alembic upgrade head
 
 logs: ## Tail backend logs
 	docker compose logs backend --tail=50 -f

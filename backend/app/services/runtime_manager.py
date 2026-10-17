@@ -39,7 +39,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.config import settings
 from app.models.runtime import Runtime
-from app.services import address_classify, host_memory_prep, runtime_grace, runtime_ownership
+from app.services import address_classify, host_memory_prep, runtime_grace, runtime_ownership, ssh_host_keys
 from app.utils import ensure_aware, utcnow
 from app.services.host_resolver import (
     ResolvedHost,
@@ -418,25 +418,44 @@ async def _ssh_run(
             "Legacy-host-Feld und settings.dgx_ssh_host ist leer. Host unter "
             "/hosts anlegen und die Runtime binden."
         )
-    async with asyncssh.connect(
-        host=target.ssh_host,
-        # Registry hosts without their own user/key inherit the settings values —
-        # same semantics as the seeder (host_seeder.py).
-        username=target.ssh_user or settings.dgx_ssh_user,
-        client_keys=await _resolve_ssh_client_keys(target),
-        known_hosts=None,  # No known_hosts check on the local network
-        connect_timeout=10,
-    ) as conn:
-        result = await conn.run(
-            command,
-            check=False,
-            timeout=_SSH_COMMAND_TIMEOUT if timeout is None else timeout,
-        )
-        return (
-            result.stdout.strip() if result.stdout else "",
-            result.stderr.strip() if result.stderr else "",
-            result.exit_status if result.exit_status is not None else -1,
-        )
+    # Host key: trust on first use, pinned on the host row (services/
+    # ssh_host_keys.py). A target without host_id (settings fallback, legacy
+    # runtime.host, to_registry_dict() callers) is pinned to the row with the
+    # same address; only an address with no row at all (ad-hoc wizard probe)
+    # stays unchecked — logged once per address.
+    pin = await ssh_host_keys.load_pin(
+        target.host_id,
+        label=target.slug or target.display_name or target.ssh_host,
+        address=target.ssh_host,
+    )
+    if pin is None:
+        ssh_host_keys.warn_unpinned(target.ssh_host, target.source)
+    try:
+        async with asyncssh.connect(
+            host=target.ssh_host,
+            # Registry hosts without their own user/key inherit the settings values —
+            # same semantics as the seeder (host_seeder.py).
+            username=target.ssh_user or settings.dgx_ssh_user,
+            client_keys=await _resolve_ssh_client_keys(target),
+            connect_timeout=10,
+            **ssh_host_keys.connect_kwargs(pin),
+        ) as conn:
+            await ssh_host_keys.after_connect(pin)
+            result = await conn.run(
+                command,
+                check=False,
+                timeout=_SSH_COMMAND_TIMEOUT if timeout is None else timeout,
+            )
+            return (
+                result.stdout.strip() if result.stdout else "",
+                result.stderr.strip() if result.stderr else "",
+                result.exit_status if result.exit_status is not None else -1,
+            )
+    except asyncssh.HostKeyNotVerifiable as exc:
+        err = await ssh_host_keys.refused(pin, exc)
+        if err is None:
+            raise
+        raise err from None
 
 
 def join_probe_url(endpoint: str, healthcheck_path: str) -> str:

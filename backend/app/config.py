@@ -459,6 +459,12 @@ class Settings(BaseSettings):
 
     # Free-Code Bridge: HTTP endpoint on the host (outside Docker)
     free_code_bridge_url: str = "http://host.docker.internal:18792"
+    # Shared secret for that helper (header X-MC-Bridge-Token, see
+    # app/services/cli_bridge_auth.py). Empty = read the helper's token file:
+    # cli_bridge_token_file, or <home_host>/.mc/secrets/cli-bridge.token when
+    # that is empty too. Env: CLI_BRIDGE_TOKEN / CLI_BRIDGE_TOKEN_FILE.
+    cli_bridge_token: str = ""
+    cli_bridge_token_file: str = ""
 
     # Free-Code path mapping: Docker path → host path (for bridge requests)
     # Multiple mappings as a semicolon-separated list: "docker_path:host_path;..."
