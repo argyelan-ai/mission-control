@@ -15,6 +15,10 @@
 #   --non-interactive  never prompt, use defaults/flags
 #   --update           update an existing install (run inside the checkout):
 #                      git pull, refresh images, restart, migrate
+#   --remote           MC will be opened from other devices: listen on the
+#                      network and set PUBLIC_HOST (address auto-detected)
+#   --public-host <a>  same, with this address (IP or name.local)
+#   --local            localhost only, never ask (the default without a TTY)
 set -euo pipefail
 
 REPO_URL="https://github.com/argyelan-ai/mission-control.git"
@@ -23,11 +27,16 @@ HERE=0
 INTERACTIVE=1
 
 UPDATE=0
+MC_REMOTE="${MC_REMOTE:-}"
+MC_PUBLIC_HOST="${MC_PUBLIC_HOST:-}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --here) HERE=1; INTERACTIVE=0 ;;
     --update) UPDATE=1; INTERACTIVE=0 ;;
     --dir) TARGET_DIR="$2"; shift ;;
+    --remote) MC_REMOTE=yes ;;
+    --public-host) MC_REMOTE=yes; MC_PUBLIC_HOST="$2"; shift ;;
+    --local) MC_REMOTE=no ;;
     --non-interactive) INTERACTIVE=0 ;;
     *) echo "Unknown flag: $1" >&2; exit 1 ;;
   esac
@@ -120,7 +129,11 @@ else
 fi
 
 # ── 3. Configure ─────────────────────────────────────────────────────────────
-./setup.sh
+# setup.sh would ask the remote-access question itself; here it is asked
+# below, together with the other questions (and the flags above).
+MC_SETUP_VIA_INSTALLER=1 ./setup.sh
+# shellcheck source=scripts/lib/remote-access.sh
+. ./scripts/lib/remote-access.sh
 
 # Portable in-place sed (BSD/macOS vs GNU) — mirrors setup.sh.
 sed_i() { if sed --version >/dev/null 2>&1; then sed -i "$@"; else sed -i '' "$@"; fi }
@@ -166,6 +179,11 @@ if [ -n "$GITHUB_OWNER_INPUT" ]; then
   fi
 fi
 
+# Remote access BEFORE the first start: Caddy reads MC_BIND_ADDRESS when the
+# container is created, and a headless box cannot open http://localhost.
+MC_INTERACTIVE="$INTERACTIVE" MC_REMOTE="$MC_REMOTE" MC_PUBLIC_HOST="$MC_PUBLIC_HOST" \
+  mc_configure_access .env
+
 PROFILES=""
 ask "Enable voice stack (LiveKit — needs API keys later)? y/N" "n"
 case "$REPLY" in y|Y|yes) PROFILES="voice" ;; esac
@@ -174,11 +192,29 @@ case "$REPLY" in y|Y|yes) PROFILES="${PROFILES:+$PROFILES,}browser" ;; esac
 if grep -q '^COMPOSE_PROFILES=' .env; then sed_i "s|^COMPOSE_PROFILES=.*|COMPOSE_PROFILES=$PROFILES|" .env; else echo "COMPOSE_PROFILES=$PROFILES" >> .env; fi
 
 # ── 4. Boot ──────────────────────────────────────────────────────────────────
+# The published images are built when a release is tagged, the checkout is
+# whatever main is today. When they differ, the browser runs older frontend
+# code than the repo shows — measured 17.10.2026: a fresh install pulled a
+# frontend whose live streams dialled a hard-coded localhost:8000 (fixed in
+# the repo weeks before). Say so instead of failing quietly.
+warn_if_images_older_than_checkout() {
+  local head rev
+  head=$(git rev-parse HEAD 2>/dev/null) || return 0
+  rev=$(docker image inspect "ghcr.io/argyelan-ai/mc-frontend:${MC_IMAGE_TAG:-latest}" \
+    --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' 2>/dev/null) || return 0
+  [ -n "$rev" ] && [ "$rev" != "<no value>" ] || return 0
+  [ "$rev" = "$head" ] && return 0
+  printf '\033[1;33m%s\033[0m\n' "⚠ The prebuilt images (${rev:0:8}) are not built from this checkout (${head:0:8})."
+  echo "  They come from the latest release; fixes merged since then are not in them."
+  echo "  To run exactly this checkout: docker compose up --build -d  (slow on small boards)"
+}
+
 # Bevorzugt die offiziellen GHCR-Images (Minuten -> Sekunden); Fallback ist
 # der lokale Build. --here (CI / Entwickler-Checkout) baut IMMER lokal —
 # sonst wuerde die CI publizierte Images statt des Checkouts testen.
 if [ "$HERE" = 0 ] && docker compose pull backend frontend >/dev/null 2>&1; then
   say "→ using prebuilt images, starting the stack ..."
+  warn_if_images_older_than_checkout
   docker compose pull >/dev/null 2>&1 || true   # Rest (db/redis/caddy/qdrant)
   docker compose up -d
 else
@@ -197,17 +233,21 @@ for i in $(seq 1 60); do
   sleep 2
 done
 
+MC_URL=$(mc_access_url .env)
 echo
 say "✅ Mission Control is running!"
 echo
-echo "  1. Open http://localhost and register the first admin user."
+echo "  1. Open $MC_URL and register the first admin user."
+if [ "$MC_URL" = "http://localhost" ] && mc_is_headless; then
+  echo "     (no browser here: use the SSH tunnel shown above → http://localhost:8080)"
+fi
 echo "  2. Recommended: make backup-schedule  (daily 03:00 backup of DB + data)"
 echo "  3. Optional: python3 scripts/demo-seed.py  (populates a demo board)"
 echo "  4. First agent: docs/setup/first-agent.md"
 echo
-if [ "$INTERACTIVE" = 1 ]; then
+if [ "$INTERACTIVE" = 1 ] && ! mc_is_headless; then
   case "$OS" in
-    Darwin) open http://localhost >/dev/null 2>&1 || true ;;
-    Linux)  command -v xdg-open >/dev/null && xdg-open http://localhost >/dev/null 2>&1 || true ;;
+    Darwin) open "$MC_URL" >/dev/null 2>&1 || true ;;
+    Linux)  command -v xdg-open >/dev/null && xdg-open "$MC_URL" >/dev/null 2>&1 || true ;;
   esac
 fi
