@@ -6,6 +6,50 @@ follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-17
+
+The release behind the new README: Mission Control as **a phone remote for
+coding agents on your own models**, and a fresh install that works again
+from zero on Linux, macOS and a Raspberry Pi.
+
+### Highlights
+- **The chat is your remote control** (ADR-090): live tool output and a diff
+  per edit, a Changes panel with Revert / Commit / Open PR, the agent's todo
+  list as the task checklist, tool screenshots, **question cards** and **plan
+  mode** for omp agents (ask → tap → it continues; plans wait for approval).
+- **One-click DGX Spark recipe**: GLM-5.3-Flash (EXL3 4-bit, TensorFold) on
+  two boxes from the Runtimes page; switch lock while serving; credits in
+  `CREDITS.md`.
+- **Optional live voice in the chat** (preview, ADR-091): talk to the agent,
+  stop it by voice, a daily budget, silence and max-length hang-up, cost in
+  Insights.
+- **Fresh install fixed** (ADR-092): the installer installs the latest
+  release — code and prebuilt images of the same version, amd64 and arm64;
+  prerequisites checked in one pass; headless servers get the first admin
+  in the terminal before MC is opened to the network; Linux runs as your own
+  user id (`PUID`/`PGID`); the setup wizard opens by itself after the first
+  login; release images are verified before they are tagged.
+
+### Security
+- The host helper (`cli-bridge.py`) listens on `127.0.0.1` only and requires
+  a shared token (HTTP and WebSocket).
+- SSH host keys are pinned on first use; a changed key is refused before any
+  password is sent.
+- 422 validation errors no longer echo the submitted input (passwords,
+  tokens, credentials).
+- The login screen no longer shows a fixed location.
+
+### Upgrade notes
+- Existing installs: update with
+  `curl -fsSL https://raw.githubusercontent.com/argyelan-ai/mission-control/main/install.sh | bash -s -- --update`.
+  Migrations run on start (up to `0216`).
+- After updating, reinstall the host helper once: `make bridge-install`
+  (it replaces an older hand-made service and creates the token).
+- One-off commands into the backend now need `-u mcuser`
+  (`docker compose exec -u mcuser backend …`).
+
+### Further changes since 0.2.0
+
 ### Added
 - **Disk preflight in front of every build, plus a watchdog that reports
   before the disk hits 95 %.** `docker system df` measured 75.8 GB of build
