@@ -682,7 +682,13 @@ features:
     name: "First-run wizard"
     ui: {route: /setup}
     status: internal
-    source: "shown once after the first registration"
+    source: "shown after the first registration until its last step is reached"
+    api:
+      # Wizard state (services/first_run.py, app_settings key
+      # first_run_wizard): the login page and AppShell ask GET whether to
+      # send the admin to /setup; the wizard's last step POSTs complete.
+      - "GET /api/v1/auth/first-run"
+      - "POST /api/v1/auth/first-run/complete"
 
 internal:
   # Agent-scoped machine API (ADR-009: separate from the user router).
