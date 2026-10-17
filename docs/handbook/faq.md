@@ -149,11 +149,14 @@ forward-only — take a backup first. Pin a version with `MC_IMAGE_TAG` in
 make backup-schedule     # daily 03:00 (launchd on macOS, cron on Linux)
 ```
 
-Each run dumps the database and archives `~/.mc` into `./backups/`, keeping
-the last 10. **Not** included: `.env` (back it up separately — without
-`SECRETS_ENCRYPTION_KEY` the restored secrets are useless), the Qdrant vector
-index and other Docker volumes, and `.git` directories inside agent
-workspaces. Restore with `./backup.sh restore`. Full detail:
+Each run dumps the database and archives `~/.mc` into `$HOME/mc-backups`
+(`MC_BACKUP_DIR`), keeping the last 7 (`MC_BACKUP_KEEP`). `.env` goes in only
+**encrypted**, with a passphrase you give (`MC_BACKUP_PASSPHRASE` or a prompt)
+— without one it is left out, and then the restored secrets are useless on
+another machine. **Not** included: the Qdrant vector index and other Docker
+volumes, and `.git` directories inside agent workspaces (unpushed agent work).
+Restore with `./backup.sh restore` — it checks the archive and saves the
+current state before it changes anything. Full detail:
 [Backup & restore](operations/backup-restore.md).
 
 ### Do I have to expose it to the internet?
