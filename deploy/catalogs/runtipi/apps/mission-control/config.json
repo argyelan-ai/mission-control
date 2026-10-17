@@ -13,7 +13,7 @@
     "ai",
     "automation"
   ],
-  "version": "0.2.0",
+  "version": "0.3.1",
   "tipi_version": 1,
   "short_desc": "Self-hosted home base for coding agents on your own models",
   "description": "Mission Control is a self-hosted home base for coding agents on your own models — task boards, approval gates, a knowledge vault, token and cost insights, and runtimes for Claude Code, vLLM, LM Studio and any OpenAI-compatible API. A first-run wizard walks you through the admin account and an LLM provider, and offers a demo board. The catalog install runs the core stack; agents you steer from the phone chat need the full install described in the project README.",
@@ -44,6 +44,12 @@
       "label": "Secrets encryption passphrase",
       "min": 32,
       "env_variable": "MC_SECRETS_ENCRYPTION_KEY"
+    },
+    {
+      "type": "random",
+      "label": "Internal bootstrap secret",
+      "min": 32,
+      "env_variable": "MC_BOOTSTRAP_SECRET"
     }
   ],
   "dynamic_config": true

@@ -8,3 +8,9 @@ export APP_MISSION_CONTROL_JWT_SECRET="$(derive_entropy "mission-control-jwt-sec
 # (~172 bits of entropy). Verified against cryptography.fernet.Fernet.
 mission_control_fernet_hex="$(derive_entropy "mission-control-fernet-key")"
 export APP_MISSION_CONTROL_FERNET_KEY="${mission_control_fernet_hex:0:43}="
+
+# Bearer secret for GET /api/v1/internal/bootstrap (backend/app/config.py
+# INTERNAL_BOOTSTRAP_SECRET, PR #404). Since 0.3.1 validate_boot_secrets()
+# refuses to boot in production without it — any stable string works, no
+# Fernet encoding needed here.
+export APP_MISSION_CONTROL_BOOTSTRAP_SECRET="$(derive_entropy "mission-control-bootstrap-secret")"
