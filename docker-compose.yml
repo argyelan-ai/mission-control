@@ -323,6 +323,12 @@ services:
       # attach to. Without this, getuid() returns 1000 (the in-container user)
       # and the bridge fails with "no such file or directory" on the host.
       HOST_UID: ${HOST_UID:-502}
+      # Run as the host user's uid/gid so the ~/.mc bind mount is writable on
+      # Linux (docker-entrypoint.sh remaps mcuser, then drops root). setup.sh
+      # fills both from `id -u`/`id -g` on Linux. Empty = mcuser 1000 as before
+      # (macOS/Windows Docker Desktop map uids themselves).
+      PUID: ${PUID:-}
+      PGID: ${PGID:-}
       # cli-bridge host helper auth (docs/setup/cli-bridge-auth.md). Empty =
       # read ~/.mc/secrets/cli-bridge.token through the ~/.mc mount below.
       CLI_BRIDGE_TOKEN: ${CLI_BRIDGE_TOKEN:-}
@@ -567,6 +573,9 @@ services:
       MC_AGENT_IMAGE_PREFIX: ${MC_AGENT_IMAGE_PREFIX-ghcr.io/argyelan-ai/}
       MC_AGENT_IMAGE_TAG: ${MC_AGENT_IMAGE_TAG:-latest}
       HOST_UID: ${HOST_UID:-502}
+      # Same uid alignment as the backend service (see there).
+      PUID: ${PUID:-}
+      PGID: ${PGID:-}
       CLI_BRIDGE_TOKEN: ${CLI_BRIDGE_TOKEN:-}
       CLI_BRIDGE_TOKEN_FILE: ${CLI_BRIDGE_TOKEN_FILE:-}
       MC_MCP_REGISTRY_DIR: ${HOME}/.mc/mcp-servers

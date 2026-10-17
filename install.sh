@@ -620,6 +620,18 @@ for i in $(seq 1 60); do
   sleep 2
 done
 
+# The API answers 200 even when ~/.mc is not writable (status "degraded"), so
+# the rest of the stack still starts — say it here instead of a silent success.
+HEALTH=$(curl -sf http://localhost:8000/health 2>/dev/null || true)
+case "$HEALTH" in
+  *'"status":"degraded"'*)
+    printf '\033[1;33m%s\033[0m\n' "⚠ Mission Control started, but the backend cannot write ~/.mc:" >&2
+    printf '%s\n' "$HEALTH" | python3 -c 'import json,sys; d=json.load(sys.stdin).get("mc_home") or {}; print("  " + d.get("hint", "see docker compose logs backend"))' 2>/dev/null \
+      || echo "  see: curl -s http://localhost:8000/health" >&2
+    echo "  Guide: docs/handbook/operations/platforms.md#host-user-id-linux-nas" >&2
+    ;;
+esac
+
 echo
 say "✅ Mission Control is running! ($( [ "$CHANNEL" = stable ] && echo "release $TAG" || echo "edge — local build of $(git rev-parse --short HEAD 2>/dev/null || echo 'this checkout')" ))"
 echo

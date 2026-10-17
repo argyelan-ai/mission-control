@@ -34,6 +34,24 @@ grep -E '^(JWT_SECRET_KEY|SECRETS_ENCRYPTION_KEY)=' .env
 docker compose up -d
 ```
 
+### Linux: `MC HOME NOT WRITABLE` / `/health` says `degraded`
+
+**Cause** — `~/.mc` belongs to your login user, but the backend runs with a
+different uid (the image default is 1000). Typical on NAS boxes, company
+accounts and second users. Before the fix it crashed migration 0112 with
+`PermissionError` and the backend never became healthy.
+
+```bash
+id -u; id -g
+grep -E '^P(U|G)ID=' .env
+curl -s http://localhost:8000/health    # "mc_home": {"hint": ...}
+```
+
+**Fix** — set `PUID`/`PGID` in `.env` to the two numbers above (`./setup.sh`
+does it on Linux), then `docker compose up -d`. Folders Docker created as root:
+`sudo chown -R $(id -u):$(id -g) ~/.mc`. Details:
+[Platforms → Host user id](operations/platforms.md#host-user-id-linux-nas).
+
 ### `install.sh` aborts on prerequisites
 
 **Cause** — Docker daemon not running, Compose v1 instead of v2, or a missing
@@ -138,7 +156,7 @@ not in a container.
 
 ```bash
 curl http://localhost:18792/ping                                   # running? (no token needed)
-docker compose exec backend curl -s http://host.docker.internal:18792/ping   # reachable from the container?
+docker compose exec -u mcuser backend curl -s http://host.docker.internal:18792/ping   # reachable from the container?
 curl -s -o /dev/null -w '%{http_code}\n' http://localhost:18792/health      # 401 = token enforced (expected)
 docker compose logs backend | grep 'rejected (401)'                # backend sends no/wrong token
 ```

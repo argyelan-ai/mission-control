@@ -1,7 +1,7 @@
 """
 Create ACP agent — Claude Code CLI as an agent in Mission Control.
 
-Usage: docker compose exec backend python3 scripts/create_acp_agent.py
+Usage: docker compose exec -u mcuser backend python3 scripts/create_acp_agent.py
 
 The ACP agent works directly in the filesystem via Claude Code CLI,
 not through the OpenClaw Gateway.

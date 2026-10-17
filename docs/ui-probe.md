@@ -24,7 +24,7 @@ keeps in local storage (`mc_auth_token`, browser dev tools) or a short-lived
 one signed inside the backend container:
 
 ```bash
-docker compose exec -T backend python -c "
+docker compose exec -T -u mcuser backend python -c "
 from datetime import timedelta
 from app.auth import create_access_token
 print(create_access_token('<admin user id>', 'admin', <token_version>, timedelta(hours=3)))"

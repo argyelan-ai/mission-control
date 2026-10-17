@@ -16,9 +16,9 @@ Handarbeit.
 
 Benutzung (im Backend-Container):
 
-    docker compose exec backend python -m scripts.slot_rollback --dry-run
-    docker compose exec backend python -m scripts.slot_rollback
-    docker compose exec backend python -m scripts.slot_rollback --keep-rows
+    docker compose exec -u mcuser backend python -m scripts.slot_rollback --dry-run
+    docker compose exec -u mcuser backend python -m scripts.slot_rollback
+    docker compose exec -u mcuser backend python -m scripts.slot_rollback --keep-rows
 
 ``--dry-run`` schreibt nichts und zeigt nur, was passieren würde.
 ``--keep-rows`` hängt die Agenten zurück, lässt die Slot-Zeilen aber stehen

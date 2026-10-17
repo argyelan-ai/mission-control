@@ -1,7 +1,7 @@
 """
 Create Free Code agent — Free Code CLI as an agent in Mission Control.
 
-Usage: docker compose exec backend python3 scripts/create_free_code_agent.py
+Usage: docker compose exec -u mcuser backend python3 scripts/create_free_code_agent.py
 
 The Free Code agent works directly in the filesystem via Free Code CLI,
 not through the OpenClaw Gateway.

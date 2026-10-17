@@ -1568,6 +1568,14 @@ Alle ADRs in `docs/decisions/`:
 
 ## Änderungshistorie (high-level)
 
+- **2026-10-17** — **Any host uid on Linux:** the backend image starts as root only in
+  `backend/docker-entrypoint.sh`, gives `mcuser` the host user's ids (`PUID`/`PGID` from `.env`,
+  written by `setup.sh` on Linux; empty = uid 1000 as before, macOS/Windows unchanged) and drops
+  to it with `setpriv` before migrations/server. Migration 0112 no longer touches the disk on a
+  fresh database; the `~/.mc` core directories come from the boot step
+  `services/mc_home_preflight.py` (in `prepare_process`, API + worker), which reports a
+  non-writable `~/.mc` as one log line and `/health` `status: degraded` + `mc_home` instead of
+  crashing. Guide: `docs/handbook/operations/platforms.md#host-user-id-linux-nas`.
 - **2026-10-16** — **cli-bridge auth:** the host helper (`scripts/cli-bridge.py`) listened on
   `0.0.0.0` without auth (HTTP 18792 + WebSocket PTY 18793). It now requires `X-MC-Bridge-Token`
   on everything except `GET /ping`, binds `127.0.0.1` by default (`CLI_BRIDGE_BIND`), and creates

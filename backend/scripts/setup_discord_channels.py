@@ -1,7 +1,7 @@
 """
 Discord server setup — creates categories + channels and stores IDs in Redis.
 
-Usage: docker compose exec backend python3 scripts/setup_discord_channels.py
+Usage: docker compose exec -u mcuser backend python3 scripts/setup_discord_channels.py
 
 Prerequisite: DISCORD_BOT_TOKEN and DISCORD_GUILD_ID in .env.
 """

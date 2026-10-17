@@ -40,6 +40,54 @@ to `127.0.0.1` by default, so set `MC_BIND_ADDRESS` and `PUBLIC_HOST` — see
 Host-side agents are macOS-only (launchd). The Docker agent fleet works
 everywhere Docker does.
 
+### Host user id (Linux, NAS)
+
+MC keeps its files in `~/.mc` on the host and mounts that folder into the
+backend and worker containers. On Linux the container needs the **same user
+id as your login user** to write there. The image default is uid 1000 — the
+first user on most distributions, but not on NAS boxes, company accounts, a
+second login or CI runners (often 1001, 1026 or 100).
+
+`setup.sh` handles it: on Linux it writes your ids into `.env`:
+
+```bash
+PUID=1001   # id -u
+PGID=1001   # id -g
+```
+
+The container starts as root only long enough to give its `mcuser` these
+ids, then drops to that user before migrations or the server run. Without
+`PUID`/`PGID` nothing changes (uid 1000) — that is the right setting on macOS
+and Windows, where Docker Desktop maps ids by itself.
+
+**If it is wrong**, the stack still starts and tells you:
+
+- `docker compose logs backend` shows one line `MC HOME NOT WRITABLE — …` with
+  the uid that owns `~/.mc`, the uid the backend runs as and the fix;
+- `curl -s http://localhost:8000/health` answers `"status": "degraded"` with an
+  `mc_home` block (directory, owner, hint).
+
+Fix: put your `id -u` / `id -g` into `PUID` / `PGID` in `.env`, then
+`docker compose up -d`. If Docker already created folders as root (it does
+that for missing mount sources), also run
+`sudo chown -R $(id -u):$(id -g) ~/.mc` once. The warning clears by itself
+within 30 seconds.
+
+- One-off commands: always `docker compose exec -u mcuser backend …` (same for
+  `mc-worker`). `exec` skips the entrypoint, so without `-u mcuser` the command
+  runs as root with `HOME=/root` and can leave root-owned files in `~/.mc`.
+  There is no clean compose default for this: `user: mcuser` on the service
+  would also start the entrypoint without root and switch the remap off. The
+  repo's scripts and docs all use `-u mcuser`; a test
+  (`backend/tests/test_compose_exec_runs_as_mcuser.py`) keeps it that way.
+- Check by hand: `docker compose exec -u mcuser backend python -m app.services.mc_home_preflight`
+  (prints JSON, exit code 1 on a problem).
+- Test a different uid without touching your stack: `bash scripts/test-host-uid.sh`
+  (throwaway Docker volume owned by uid 1001; CI runs it on every push).
+- Agent containers (`docker/mc-*-agent`) have their own user and are not
+  remapped by `PUID`/`PGID`; on a host whose uid is not 1000 check their
+  workspace folders under `~/.mc/agents/` if an agent cannot write.
+
 ## NAS and self-hosting catalogs
 
 Catalog installs run the **core stack** — boards, tasks, vault, sessions,
