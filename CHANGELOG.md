@@ -6,7 +6,17 @@ follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
 
 ## [Unreleased]
 
-## [0.3.0] - 2026-10-17
+## [0.3.1] - 2026-10-17
+
+- Fix: `scripts/build-agent-images.sh --sync-only` runs without a `.env` —
+  the release build in a fresh checkout stopped with exit 2 before any image
+  was built.
+
+`v0.3.0` was tagged but its image build failed before any image existed; it
+was never published (no images, no GitHub release). Tags are protected, so
+the fix ships as 0.3.1. Everything below is part of 0.3.1.
+
+## [0.3.0] - 2026-10-17 (not released)
 
 The release behind the new README: Mission Control as **a phone remote for
 coding agents on your own models**, and a fresh install that works again
