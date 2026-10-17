@@ -372,7 +372,7 @@ async def test_create_tag_loop_rejects_unknown_tag(auth_client, make_board):
         "backlog_source": "tag", "backlog_tag": "gibt-es-nicht",
     })
     assert r.status_code == 400
-    assert "existiert nicht" in r.json()["detail"]
+    assert "does not exist" in r.json()["detail"]
 
 
 # ── L3: Budget-Stop an der Rundengrenze ───────────────────────────────
