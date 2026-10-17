@@ -142,8 +142,17 @@ on port `18792`. The backend container reaches it at
 will fail.
 
 ```bash
-python3 -m pip install --user jinja2 websockets   # one-time
-brew install tmux                                 # if you don't have it
+# macOS (Homebrew) — one-time
+python3 -m pip install --user jinja2 websockets
+brew install tmux node                            # node/npm only for the npm install of the claude CLI
+
+# Debian / Ubuntu / Raspberry Pi OS — one-time. Use apt, not pip: Debian 12+
+# refuses `pip install --user` outside a venv ("externally-managed-environment").
+sudo apt install -y tmux python3-jinja2 python3-websockets nodejs npm
+
+# Claude Code CLI on the host (only for `claude setup-token` in step 2), any OS:
+curl -fsSL https://claude.ai/install.sh | bash    # or: npm install -g @anthropic-ai/claude-code
+
 make bridge-install                               # supervised service: starts at login, respawns on crash
 ```
 

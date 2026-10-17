@@ -82,9 +82,17 @@ jobs:
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: ghcr.io/argyelan-ai/${{ matrix.image }}
+          # install.sh pins MC_IMAGE_TAG to the release version WITHOUT the
+          # "v" ({{version}}: v0.3.0 → 0.3.0) — keep the two in step
+          # (backend/tests/test_install_release_pinning.py checks this line).
+          # `latest` and X.Y move only on a release tag: a manual run from a
+          # branch must never put unreleased code under the tag every
+          # unpinned install pulls. Such a run gets a sha-<commit> tag only.
           tags: |
             type=semver,pattern={{version}}
-            type=raw,value=latest
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=sha,enable=${{ !startsWith(github.ref, 'refs/tags/v') }}
 
       - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
@@ -101,6 +109,30 @@ jobs:
             OPENCLAUDE_VERSION=${{ steps.cliversions.outputs.openclaude }}
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,scope=${{ matrix.image }},mode=max
+
+      # Proof, not trust: the pushed manifest really carries both
+      # architectures (a Pi or an Apple-silicon Mac pulls arm64), and the
+      # backend image — which also runs mc-worker (`python -m app.worker`,
+      # same image in docker-compose.yml) — really contains the worker
+      # module on both. A release whose worker module is missing is exactly
+      # the endless crash this check exists for.
+      - name: Verify published architectures (+ worker module in mc-backend)
+        env:
+          IMAGE: ${{ fromJSON(steps.meta.outputs.json).tags[0] }}
+          IS_BACKEND: ${{ matrix.image == 'mc-backend' }}
+        run: |
+          set -euo pipefail
+          plats="$(docker buildx imagetools inspect "$IMAGE" | sed -n 's/^ *Platform: *//p' | sort -u)"
+          echo "$IMAGE:"; echo "$plats"
+          for p in linux/amd64 linux/arm64; do
+            grep -qx "$p" <<<"$plats" || { echo "::error::$IMAGE lacks $p"; exit 1; }
+          done
+          if [ "$IS_BACKEND" = true ]; then
+            for p in linux/amd64 linux/arm64; do
+              docker run --rm --platform "$p" --entrypoint test "$IMAGE" -f /app/app/worker.py \
+                || { echo "::error::$IMAGE ($p) has no app/worker.py — mc-worker would crash-loop"; exit 1; }
+            done
+          fi
 
       # Cache begrenzen — nur nach einem erfolgreichen Push (ein Fehlschlag
       # oben bricht den Job vorher ab, der Layer-Cache bleibt fuer den Retry).

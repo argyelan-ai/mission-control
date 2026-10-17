@@ -448,7 +448,9 @@ _SKIP_PARTS = ("test_disk_preflight", "test_compose_preflight", "test_agent_imag
 #     `docker build` lines are separate — its guard still covers both.
 _EXPECTED_BUILD_SITES = {
     "Makefile": (4, 3),
-    "install.sh": (2, 2),
+    # One build_locally() helper since release pinning (fresh install and
+    # --update share it) — one build, one guard.
+    "install.sh": (1, 1),
     "scripts/build-agent-images.sh": (3, 1),
     "scripts/start-all.sh": (1, 1),
     "scripts/vault-cleanup-orchestrate.py": (1, 2),

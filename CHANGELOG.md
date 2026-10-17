@@ -188,6 +188,29 @@ follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
   settings and compose passthroughs (safe to delete from `.env`; unknown
   keys are ignored), and `scripts/backfill_images.py`.
 
+### Fixed
+- **Fresh installs crash-looped: code from `main`, images from the last
+  release.** The one-liner cloned `main` but pulled `ghcr.io/…:latest`, which
+  only release tags publish — today's compose file on top of the last
+  release's backend image (e.g. `mc-worker` running `python -m app.worker`,
+  a module that image does not have). `install.sh` now clones the **latest
+  release tag** (GitHub API, falling back to the repository's `vX.Y.Z` tags
+  when rate-limited) and pins `MC_IMAGE_TAG` / `MC_AGENT_IMAGE_TAG` in `.env`
+  to the same version. `--update` follows the same rule, refuses downgrades
+  (lower release, or a release older than the database schema) and carries
+  the fleet file across tag switches. `--channel edge` (alias `main`) keeps
+  the old developer path: `main`, built locally, `MC_IMAGE_TAG=edge`.
+  `--version vX.Y.Z` pins a specific release.
+- **`install.sh` reports every missing prerequisite at once** (git, curl,
+  openssl, docker, compose v2, daemon/permission) with the exact install
+  command for Debian/Ubuntu/Raspberry Pi OS, Fedora or macOS — nothing is
+  installed automatically. It also warns when Docker has no memory-limit
+  support (Raspberry Pi OS default; see `docs/setup/raspberry-pi.md`).
+- **Release images:** `latest` (and the new `X.Y` tag) move only on a release
+  tag — a manual run from a branch gets a `sha-…` tag. Each release now
+  verifies both architectures (`linux/amd64`, `linux/arm64`) and that the
+  backend image contains the worker module.
+
 ## [0.2.0] - 2026-08-06
 
 **Release highlights:** problem-first README + 18-page user handbook ·
