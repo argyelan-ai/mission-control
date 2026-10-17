@@ -8,24 +8,58 @@ GitHub Releases; works offline, the hint just stays silent).
 
 ```bash
 cd <your-mission-control-directory>
-./install.sh --update
+curl -fsSL https://raw.githubusercontent.com/argyelan-ai/mission-control/main/install.sh | bash -s -- --update
 ```
 
-That pulls the latest code, refreshes the images (prebuilt from GHCR when
-available, local rebuild otherwise), restarts the stack and runs database
-migrations.
+Running the installer from `main` means you always get the newest updater,
+whatever version is installed. (`./install.sh --update` works the same once
+your checkout carries this updater.)
 
-> **Crossing the release that takes the agent fleet out of version control?**
-> Do the four commands under *Your agent fleet leaves version control* below
-> FIRST — the `install.sh` sitting in your checkout does not know about that
-> release yet and stops at the pull.
+What it does on the default **stable** channel:
+
+1. looks up the latest release (GitHub API; when that is rate-limited or
+   offline, the highest `vX.Y.Z` tag of the repository) — and skips a
+   release whose images are not published yet, taking the newest one that
+   has them,
+2. checks out exactly that tag — your agent fleet file is carried across,
+3. runs `./setup.sh`, which adds `.env` keys the new version needs (it never
+   regenerates an existing `.env`),
+4. pins `MC_IMAGE_TAG` and `MC_AGENT_IMAGE_TAG` in `.env` to the same
+   version (`0.3.0` for `v0.3.0`) — written in place, so running containers
+   that mount `.env` see the change,
+5. pulls those prebuilt images (local build of the same tag if that fails),
+   restarts the stack — migrations run automatically on backend start.
+
+It refuses to start when another Mission Control stack runs on the machine
+(a second stack would fight it for ports 80/8000), or when a stack with the
+same compose project name runs from a different directory.
+
+Code and images therefore always come from the same release. It refuses to
+move backwards: no lower release than the installed one, and no release
+whose migrations do not include your database's current schema.
+
+**Installed before release pinning?** Older installers cloned `main`. On
+the first `--update`, such an install moves to the latest release only if
+its database schema is part of that release; otherwise the updater stops
+and tells you to stay on `main` for now:
+`./install.sh --update --channel edge` (local build), until the next
+release catches up.
+
+**Developers:** `--channel edge` (alias `main`) follows the `main` branch and
+builds the images locally (`MC_IMAGE_TAG=edge`). Not recommended for users —
+`main` is unreleased and can break between releases. `--version vX.Y.Z`
+targets one specific release instead of the latest. Channels and their
+rules: [ADR-092](../decisions/092-release-channels.md); how releases are cut:
+[releasing](releasing.md).
 
 ## Manually
 
 ```bash
+git fetch origin tag v0.3.0            # the release you want
 scripts/migrate-agents-yml.sh save     # no-op unless your fleet file is still tracked
-git pull
+git checkout v0.3.0
 scripts/migrate-agents-yml.sh restore
+# in .env: MC_IMAGE_TAG=0.3.0 and MC_AGENT_IMAGE_TAG=0.3.0 (no "v")
 docker compose pull backend frontend   # or: docker compose up --build -d
 docker compose up -d                   # migrations run automatically on backend start
 ```
@@ -57,15 +91,20 @@ Step 2 is the one that matters: it puts the committed version back so the pull
 has nothing to trip over, while your real file waits outside the repo. After
 step 4 the file is untracked and git-ignored — hand-added mounts and all.
 
-From then on you never think about it again: `./install.sh --update` wraps
-every pull in `scripts/migrate-agents-yml.sh save` / `restore`, which do
-exactly the above and are no-ops once your file is untracked.
+From then on you never think about it again: `install.sh --update` carries
+the file across every switch itself (copy aside, clean path for git, switch,
+copy back) — in both directions, also onto an older release that still
+tracked it. `scripts/migrate-agents-yml.sh save` / `restore` do the same for
+the manual path above.
 
 ## Pinning a version
 
-Set `MC_IMAGE_TAG` in `.env` (e.g. `MC_IMAGE_TAG=0.1.0`) to pin the GHCR
-images instead of following `latest`. Check the
-[CHANGELOG](../../CHANGELOG.md) before jumping versions.
+Every install is pinned: `install.sh` writes `MC_IMAGE_TAG` (and
+`MC_AGENT_IMAGE_TAG`) into `.env`, matching the checked-out release. Change
+versions with `--update --version vX.Y.Z`, never by editing `MC_IMAGE_TAG`
+alone — images of one release on the code of another is the mismatch that
+breaks the stack (e.g. a worker service whose module the image lacks). Check
+the [CHANGELOG](../../CHANGELOG.md) before jumping versions.
 
 ## Before big jumps
 

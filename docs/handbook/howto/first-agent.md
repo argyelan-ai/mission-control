@@ -64,8 +64,17 @@ runs **outside Docker, directly on the host**: `scripts/cli-bridge.py` on port
 `http://host.docker.internal:18792`. Without it, the Provision button fails.
 
 ```bash
-python3 -m pip install --user jinja2 websockets   # one-time
-brew install tmux                                 # or your platform's package manager
+# macOS (Homebrew) — one-time
+python3 -m pip install --user jinja2 websockets
+brew install tmux node
+
+# Debian / Ubuntu / Raspberry Pi OS — one-time (apt, not pip: Debian 12+
+# refuses `pip install --user` outside a venv)
+sudo apt install -y tmux python3-jinja2 python3-websockets nodejs npm
+
+# Claude Code CLI (for `claude setup-token` in step 2), any OS
+curl -fsSL https://claude.ai/install.sh | bash    # or: npm install -g @anthropic-ai/claude-code
+
 make bridge-install                               # managed service (launchd/systemd)
 ```
 
