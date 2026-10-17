@@ -135,6 +135,17 @@ export function clearToken() {
   }
 }
 
+/** A password change signs out every other session; the backend hands the
+ *  calling session a fresh `access_token` in the same response. Store it at
+ *  once, or the next request would 401 with the now-revoked old token. */
+function adoptFreshToken<T>(res: T): T {
+  const token = (res as { access_token?: unknown } | null)?.access_token;
+  if (typeof token === "string" && token && typeof window !== "undefined") {
+    localStorage.setItem(AUTH_TOKEN_KEY, token);
+  }
+  return res;
+}
+
 export function getStoredUser(): { id: string; email: string; name: string; role: string } | null {
   if (typeof window === "undefined") return null;
   try {
@@ -260,13 +271,13 @@ export const api = {
     completeFirstRun: () =>
       request<{ wizard_pending: boolean }>("/api/v1/auth/first-run/complete", { method: "POST" }),
     updateProfile: (data: { name?: string; preferred_name?: string; timezone?: string; current_password?: string; new_password?: string }) =>
-      request<AuthUser & { preferred_name?: string; avatar_url?: string; timezone?: string }>("/api/v1/auth/me", { method: "PATCH", body: JSON.stringify(data) }),
+      request<AuthUser & { preferred_name?: string; avatar_url?: string; timezone?: string; access_token?: string }>("/api/v1/auth/me", { method: "PATCH", body: JSON.stringify(data) }).then(adoptFreshToken),
     users: {
       list: () => request<(AuthUser & { is_active: boolean; has_password: boolean; created_at: string })[]>("/api/v1/auth/users"),
       create: (data: { email: string; name: string; password: string; role?: string }) =>
         request<AuthUser>("/api/v1/auth/users", { method: "POST", body: JSON.stringify(data) }),
       update: (id: string, data: { name?: string; role?: string; is_active?: boolean; password?: string }) =>
-        request<AuthUser>(`/api/v1/auth/users/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+        request<AuthUser & { access_token?: string }>(`/api/v1/auth/users/${id}`, { method: "PATCH", body: JSON.stringify(data) }).then(adoptFreshToken),
     },
   },
 
