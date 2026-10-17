@@ -190,5 +190,7 @@ def test_seed_file_contains_only_the_merged_row(slug):
         (pathlib.Path(__file__).parents[1] / "config" / "runtimes.json").read_text()
     )
     lmstudio = {e["id"] for e in entries if e.get("runtime_type") == "lmstudio"}
-    assert lmstudio == {"qwen-coder-lms"}
-    assert (slug in lmstudio) == (slug == "qwen-coder-lms")
+    # Since 2026-10 the seed ships no local example at all (test_fresh_install_seed);
+    # the fiction row in particular must never come back.
+    assert "nemotron-super" not in lmstudio
+    assert lmstudio <= {"qwen-coder-lms"}

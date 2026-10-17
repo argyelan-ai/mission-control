@@ -6,6 +6,8 @@ where it deliberately differs — default health path, start-verification, and
 label-scoped stop/restart — plus its membership in the type sets that decide
 whether an agent may bind it at all.
 """
+from pathlib import Path
+
 import pytest
 from unittest.mock import AsyncMock, patch
 
@@ -290,13 +292,14 @@ async def test_restart_without_any_container_fails_honestly():
     assert "Kein laufender" in result["message"]
 
 
-# ── Seed template ────────────────────────────────────────────────────────────
-def test_seed_ships_a_disabled_llamacpp_template():
-    entries = [rt for rt in runtime_manager.load_registry()
-               if rt["runtime_type"] == "llamacpp_docker"]
-    assert entries, "expected a llamacpp_docker example in config/runtimes.json"
-    for entry in entries:
-        assert entry["enabled"] is False, "the template must never seed enabled"
-        # Lifecycle finds the container by label — a template without it teaches
-        # the wrong pattern and start-verification would fail on every copy.
-        assert f"mc.runtime.slug={entry['id']}" in (entry.get("launch_command") or "")
+# ── Template (documented, not seeded) ────────────────────────────────────────
+def test_documented_llamacpp_template_keeps_the_slug_label():
+    """Fresh installs get no example runtime any more (test_fresh_install_seed);
+    the llama.cpp template lives in ARCHITECTURE.md instead. Lifecycle finds the
+    container by label — a template without it teaches the wrong pattern and
+    start-verification would fail on every copy."""
+    doc = (Path(__file__).resolve().parents[2] / "docs" / "ARCHITECTURE.md").read_text()
+    template = next(line for line in doc.splitlines()
+                    if line.startswith("`launch_command:") and "llama.cpp" in line)
+    assert "--label mc.runtime.slug=<slug>" in template
+    assert "--name mc-llamacpp-<slug>" in template

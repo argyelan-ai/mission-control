@@ -136,7 +136,6 @@ backend/app/services/tools_md_builder.py: davinci, freecode, shakespeare, sparky
 backend/app/services/transcript_chat.py: davinci
 backend/app/services/work_context.py: freecode
 backend/app/verticals/bench_studio/orchestrator.py: sparky
-backend/config/runtimes.json: sparky
 backend/scripts/create_free_code_agent.py: freecode
 backend/templates/SOUL.md.j2: davinci, freecode, shakespeare, sparky
 backend/templates/docs/pdf-office.md.j2: freecode

@@ -70,6 +70,15 @@ def upgrade() -> None:
 
     conn = op.get_bind()
 
+    # Fresh-install gate (2026-10): the Hermes runtime + agent describe one
+    # existing fleet's host-side worker. A database without any agent is a
+    # fresh install — it gets neither the example runtime nor a demo agent.
+    # Installs that already had a fleet ran this migration long ago.
+    fleet_exists = conn.execute(sa.text("SELECT EXISTS (SELECT 1 FROM agents)")).scalar()
+    if not fleet_exists:
+        logger.info("0095: added runtimes.single_instance (fresh database, no Hermes seed)")
+        return
+
     # 2. Seed Hermes runtime. ON CONFLICT (slug) DO UPDATE SET single_instance=true
     #    so a pre-seeded row from runtimes.json (via lifespan seeder) converges
     #    to the correct flag without duplication.
