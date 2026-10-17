@@ -35,6 +35,11 @@ ENV NEXT_PUBLIC_BRAND=$NEXT_PUBLIC_BRAND
 ARG API_PROXY_TARGET=http://backend:8000
 ENV API_PROXY_TARGET=$API_PROXY_TARGET
 RUN npm run build
+# Every build path (CI, release.yml, local `docker compose build`) fails here
+# when the browser bundle carries a hard-coded backend origin: NEXT_PUBLIC_*
+# values are frozen in, and a localhost:8000 in a published image points every
+# remote viewer at their own machine (finding 17.10.2026).
+RUN node scripts/check-bundle-origins.mjs .next/static
 
 # Production runner
 # ── dev target ───────────────────────────────────────────────────────────────
