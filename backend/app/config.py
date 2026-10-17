@@ -42,7 +42,10 @@ class Settings(BaseSettings):
 
     # JWT Auth
     jwt_secret_key: str = "change-me-in-production"
-    jwt_access_token_expire_minutes: int = 480  # 8 hours
+    # Login lifetime: 7 days (was 8 h). Safe since a password change signs out
+    # every other session. Env JWT_ACCESS_TOKEN_EXPIRE_MINUTES overrides it;
+    # keep the compose default in docker-compose.yml in step.
+    jwt_access_token_expire_minutes: int = 10080
 
     # Stream auth (services/stream_tickets.py). SSE/WebSocket connections
     # authenticate with a short-lived single-use ticket (?ticket=…), never with
