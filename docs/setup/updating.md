@@ -31,7 +31,13 @@ What it does on the default **stable** channel:
    has them,
 3. **takes a backup** with `./backup.sh` right before the switch. When the
    backup fails, the update does not start. `--no-backup` skips it — only
-   when you have a fresh backup of your own,
+   when you have a fresh backup of your own. The backup needs the database:
+   **a stopped stack now stops the update** (before, `--update` just started
+   it). Start the database first (`docker compose up -d db`) or pass
+   `--no-backup`. The backup is a normal `./backup.sh` run, so it also
+   archives `~/.mc` (can be several GB) and rotates old backups — the
+   update may remove your oldest backup (up to 0.3.x: `./backups`, the last
+   4 are kept; newer versions: `MC_BACKUP_DIR`, `MC_BACKUP_KEEP`),
 4. keeps a copy of your current `.env` as `.env.backup-pre-update`
    (git-ignored, owner-only) for the way back,
 5. checks out exactly that tag — your agent fleet file is carried across,
@@ -52,11 +58,11 @@ example:
 
 ```text
 ✗ Update failed — Mission Control is not confirmed running on the new version.
-  Backup taken right before the switch: ./backups/mc_backup_2026-10-17_09-00-00.sql.gz
+  Backup taken right before the switch: ~/mc-backups/mc_backup_2026-10-17_09-00-00.sql.gz
   Re-running the same update is safe. To go back to v0.3.0:
     git checkout -q v0.3.0
     cp .env.backup-pre-update .env
-    ./backup.sh restore ./backups/mc_backup_2026-10-17_09-00-00.sql.gz
+    ./backup.sh restore ~/mc-backups/mc_backup_2026-10-17_09-00-00.sql.gz
     docker compose up -d
 ```
 

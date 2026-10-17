@@ -15,6 +15,9 @@ follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
   (`--ignore-running-tasks`), waits for `/health` past the backend's 5-minute
   start period, and says "Update complete" only when the backend is healthy.
   Otherwise it says "Update failed" with the backup file and the commands back.
+  Behaviour change: with the database stopped, `--update` now stops (the
+  backup needs it) instead of starting the stack — start it with
+  `docker compose up -d db` or pass `--no-backup`.
 
 ## [0.3.1] - 2026-10-17
 
