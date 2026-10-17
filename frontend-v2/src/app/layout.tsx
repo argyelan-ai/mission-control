@@ -7,7 +7,7 @@ import { THEME_COLOR, THEME_INIT_SCRIPT } from "@/lib/themeScript";
 
 export const metadata: Metadata = {
   title: process.env.NEXT_PUBLIC_BRAND?.replace(".", "") || "Mission Control",
-  description: "AI Agent Command Center",
+  description: "A phone remote for coding agents on your own models.",
   manifest: "/manifest.webmanifest",
   appleWebApp: {
     capable: true,
