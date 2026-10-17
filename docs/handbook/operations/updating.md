@@ -33,7 +33,7 @@ Database migrations run **automatically inside the backend on start** — there
 is no separate migrate step in the normal flow. To run them by hand:
 
 ```bash
-make migrate    # docker compose exec backend alembic upgrade head
+make migrate    # docker compose exec -u mcuser backend alembic upgrade head
 ```
 
 Set `MC_SKIP_MIGRATIONS=1` in `.env` if you manage migrations yourself.

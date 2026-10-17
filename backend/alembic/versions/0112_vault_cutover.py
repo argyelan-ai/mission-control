@@ -104,8 +104,8 @@ def upgrade() -> None:
     migration continues. This is intentional — we do NOT want one bad row
     to roll back the schema change for 800 good rows.
     """
-    _migrate_rows_to_vault()
-    _add_frozen_at_column()
+    copied = _migrate_rows_to_vault()
+    _add_frozen_at_column(stamp=copied)
 
 
 def downgrade() -> None:
@@ -125,12 +125,17 @@ def downgrade() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _migrate_rows_to_vault() -> None:
-    vault = _vault_root()
-    vault.mkdir(parents=True, exist_ok=True)
-    memory_root = vault / "memory"
-    memory_root.mkdir(parents=True, exist_ok=True)
+def _migrate_rows_to_vault() -> bool:
+    """Copy rows to the vault. Returns False when the copy was skipped.
 
+    File-system rule (2026-10, fresh installs with a host uid != 1000):
+    a migration must not create directories. On a fresh database there is
+    nothing to copy, so this touches the disk not at all — the vault tree is
+    created by the boot step (app.services.mc_home_preflight). When there ARE
+    rows but ~/.mc is not writable, the copy is skipped with a warning instead
+    of crashing the whole migration chain; the rows stay in board_memory
+    unstamped (frozen_at NULL), nothing is lost.
+    """
     conn = op.get_bind()
     rows = conn.execute(
         sa.text(
@@ -151,6 +156,25 @@ def _migrate_rows_to_vault() -> None:
             """
         )
     ).fetchall()
+
+    if not rows:
+        logger.info("Vault cutover: board_memory is empty — nothing to copy, disk untouched")
+        return True
+
+    vault = _vault_root()
+    memory_root = vault / "memory"
+    try:
+        memory_root.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        msg = (
+            f"Vault cutover SKIPPED: cannot create {memory_root} ({exc}). "
+            f"{len(rows)} board_memory rows stay in the database unstamped. "
+            "The backend user cannot write ~/.mc — set PUID/PGID in .env to the "
+            "host user's `id -u`/`id -g` (docs/handbook/operations/platforms.md#host-user-id-linux-nas)."
+        )
+        print(msg)
+        logger.warning(msg)
+        return False
 
     stats = {
         "total": len(rows),
@@ -202,13 +226,16 @@ def _migrate_rows_to_vault() -> None:
     summary = f"Vault migration complete: {stats}"
     print(summary)
     logger.info(summary)
+    return True
 
 
-def _add_frozen_at_column() -> None:
+def _add_frozen_at_column(stamp: bool = True) -> None:
     """Add ``frozen_at`` column + stamp every existing row with NOW().
 
     Idempotent against re-run: if the column already exists, we still
     re-stamp NULL rows (no-op if everything was stamped previously).
+    ``stamp=False`` (the vault copy was skipped) adds the column only, so
+    the uncopied rows stay recognisable by ``frozen_at IS NULL``.
     """
     bind = op.get_bind()
     inspector = sa.inspect(bind)
@@ -220,6 +247,8 @@ def _add_frozen_at_column() -> None:
             sa.Column("frozen_at", sa.TIMESTAMP(timezone=True), nullable=True),
         )
 
+    if not stamp:
+        return
     # Stamp any rows that don't have it yet. Using NOW() in SQL keeps the
     # timestamp in the DB's clock — matches what subsequent triggers expect.
     op.execute(

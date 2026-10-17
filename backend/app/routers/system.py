@@ -37,7 +37,13 @@ async def health(request: Request, session: AsyncSession = Depends(get_session))
 
     The response contains `status`, `version`, and `review_monitoring` with the count of
     review tasks and the age of the oldest review task in minutes.
+
+    When the MC home tree (`~/.mc`) is not writable for the backend, `status` is
+    `degraded` and `mc_home` says which directory, which uid owns it, which uid the
+    backend runs as and what to do (`hint`). The answer stays HTTP 200 so the rest
+    of the stack still starts and the operator can read the reason.
     """
+    from app.services.mc_home_preflight import health_detail
     from app.models.task import Task
     from sqlmodel import func, select
 
@@ -54,7 +60,7 @@ async def health(request: Request, session: AsyncSession = Depends(get_session))
             (utcnow() - ensure_aware(oldest_review_updated_at)).total_seconds() / 60
         )
 
-    return {
+    body = {
         "status": "ok",
         "version": request.app.version,
         "review_monitoring": {
@@ -62,6 +68,11 @@ async def health(request: Request, session: AsyncSession = Depends(get_session))
             "oldest_review_task_age_minutes": oldest_review_task_age_minutes,
         },
     }
+    mc_home = health_detail()
+    if mc_home is not None:
+        body["status"] = "degraded"
+        body["mc_home"] = mc_home
+    return body
 
 
 @router.get("/api/v1/system/version")

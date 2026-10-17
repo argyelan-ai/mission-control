@@ -328,6 +328,17 @@ async def prepare_process() -> None:
     # Fail fast on placeholder secrets (default JWT key = forgeable admin
     # tokens) BEFORE anything else touches the DB or starts services.
     validate_boot_secrets()
+    # ~/.mc boot step (create the core directories, verify they are writable,
+    # say in one log line + /health what to do if not). Never fatal. Runs in
+    # BOTH processes: the worker writes into ~/.mc as much as the API does.
+    # Directory creation lives here and not in a migration — migrations run
+    # before anything could report a permission problem readably.
+    try:
+        from app.services.mc_home_preflight import ensure_mc_home
+
+        ensure_mc_home()
+    except Exception as e:  # pragma: no cover — the check itself must never block boot
+        logger.warning("MC home check failed (non-fatal): %s", e)
     # Seed helpers + Slot-Runtime-Abgleich leben in app.seeds (Rex-Review
     # PR #500, Blocker B1: vorher wurden sie aus app.main importiert, was
     # den kompletten FastAPI-Rumpf samt aller Router in den Worker zog).
