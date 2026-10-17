@@ -115,6 +115,7 @@ jobs:
           # Unused args are ignored by images whose Dockerfile doesn't declare
           # them — only the agent images consume these.
           build-args: |
+            APP_VERSION=${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'dev' }}
             CLAUDE_VERSION=${{ steps.cliversions.outputs.claude }}
             OPENCLAUDE_VERSION=${{ steps.cliversions.outputs.openclaude }}
           cache-from: type=gha,scope=${{ matrix.image }}

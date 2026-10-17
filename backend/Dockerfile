@@ -66,6 +66,9 @@ CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload
 
 # ── release target (default) ─────────────────────────────────────────────────
 FROM base AS release
+# Release version (release.yml: the git tag, e.g. v0.3.1). Local builds: "dev".
+ARG APP_VERSION=dev
+ENV APP_VERSION=${APP_VERSION}
 COPY . .
 
 # Create non-root user and give write access to config.

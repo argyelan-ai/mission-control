@@ -71,6 +71,8 @@ async def test_version_endpoint(auth_client: AsyncClient, fake_redis, monkeypatc
 
     import app.services.update_check as uc
     monkeypatch.setattr(uc, "get_latest_release", fake_latest)
+    # A release build (the image carries its tag as APP_VERSION).
+    monkeypatch.setattr(config.settings, "app_version", "v0.3.1")
 
     r = await auth_client.get("/api/v1/system/version")
     assert r.status_code == 200
@@ -79,3 +81,20 @@ async def test_version_endpoint(auth_client: AsyncClient, fake_redis, monkeypatc
     assert body["latest"] == "v99.0.0"
     assert body["update_available"] is True
     assert body["release_url"] == "https://example.com/rel"
+
+
+@pytest.mark.asyncio
+async def test_version_endpoint_dev_build_never_offers_an_update(
+    auth_client: AsyncClient, fake_redis, monkeypatch
+):
+    from app import config
+    import app.services.update_check as uc
+
+    async def fake_latest(_fetch=None):
+        return {"tag": "v99.0.0", "url": "https://example.com/rel"}
+
+    monkeypatch.setattr(uc, "get_latest_release", fake_latest)
+    monkeypatch.setattr(config.settings, "app_version", "dev")
+    r = await auth_client.get("/api/v1/system/version")
+    assert r.json()["current"] == "dev"
+    assert r.json()["update_available"] is False
