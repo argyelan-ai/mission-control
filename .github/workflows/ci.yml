@@ -235,6 +235,12 @@ jobs:
           $errs = $null
           $null = [System.Management.Automation.Language.Parser]::ParseFile("$PWD/setup.ps1", [ref]$null, [ref]$errs)
           if ($errs.Count -gt 0) { $errs | ForEach-Object { Write-Error $_.Message }; exit 1 }
+      - name: Remote-access step (install.sh / setup.sh) — tests + shellcheck
+        # scripts/lib/remote-access.sh decides whether MC listens on the
+        # network; an unattended install must never open it (ci-safe test).
+        run: |
+          bash scripts/tests/test_remote_access.sh
+          shellcheck -x -S warning install.sh setup.sh scripts/lib/remote-access.sh scripts/tests/test_remote_access.sh
       - name: install.sh — the advertised one-liner IS the tested path
         # Baut + bootet den vollen Stack, laeuft Migrationen, wartet auf health.
         #
@@ -306,6 +312,16 @@ jobs:
           . ./docker/shared/disk-preflight.sh
           mc_disk_preflight
           docker build -t mc-frontend-v2-test ./frontend-v2
+
+      # The browser bundle must not carry a backend origin: NEXT_PUBLIC_*
+      # values are frozen in at build time, and a localhost:8000 in the
+      # published image points every remote viewer at their own machine
+      # (finding 17.10.2026). Same script as `npm run check:bundle`.
+      - name: Frontend bundle has no localhost:8000
+        run: |
+          docker run --rm \
+            -v "$PWD/frontend-v2/scripts/check-bundle-origins.mjs:/check.mjs:ro" \
+            --entrypoint node mc-frontend-v2-test /check.mjs /app/.next/static
 
       # PR #544 review (W1): this image was never built in CI, so the line
       # that could make the container PERMANENTLY unhealthy (installing the
