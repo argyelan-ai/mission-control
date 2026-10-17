@@ -4,8 +4,9 @@ set -euo pipefail
 # ============================================================
 # Mission Control — install a daily automatic backup schedule
 #
-# Runs ./backup.sh every day at 03:00 (DB dump + ~/.mc archive,
-# keeps the last 10). Idempotent — safe to run again.
+# Runs ./backup.sh every day at 03:00 (DB dump + ~/.mc archive into
+# MC_BACKUP_DIR, keeps MC_BACKUP_KEEP — default 7). Idempotent — safe to run
+# again; run it again after changing MC_BACKUP_DIR so the log moves too.
 #
 #   ./scripts/schedule-backup.sh            → install
 #   ./scripts/schedule-backup.sh --remove   → uninstall
@@ -15,7 +16,8 @@ set -euo pipefail
 # ============================================================
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-LOG_FILE="$REPO_DIR/backups/backup.log"
+BACKUP_DIR="$("$REPO_DIR/backup.sh" dir)"
+LOG_FILE="$BACKUP_DIR/backup.log"
 MARKER="mission-control-backup"
 
 case "$(uname -s)" in
@@ -27,7 +29,8 @@ case "$(uname -s)" in
         echo "Removed daily backup schedule ($PLIST)."
         exit 0
     fi
-    mkdir -p "$REPO_DIR/backups" "$HOME/Library/LaunchAgents"
+    (umask 077; mkdir -p "$BACKUP_DIR")
+    mkdir -p "$HOME/Library/LaunchAgents"
     # launchd does NOT inherit a login shell PATH — without Homebrew/
     # Docker Desktop paths, `docker compose` inside backup.sh fails silently.
     cat > "$PLIST" <<EOF
@@ -77,7 +80,7 @@ EOF
         echo "Removed daily backup schedule (crontab)."
         exit 0
     fi
-    mkdir -p "$REPO_DIR/backups"
+    (umask 077; mkdir -p "$BACKUP_DIR")
     CRON_LINE="0 3 * * * cd $REPO_DIR && ./backup.sh >> $LOG_FILE 2>&1 # $MARKER"
     (crontab -l 2>/dev/null | grep -v "$MARKER"; echo "$CRON_LINE") | crontab -
     echo "Daily backup installed: 03:00 via crontab"

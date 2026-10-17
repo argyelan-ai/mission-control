@@ -72,4 +72,5 @@ filterwarnings = [
 markers = [
     "integration: live integration test requiring Spark/network reachability",
     "postgres: needs the real Postgres schema (Alembic + triggers + row locks); runs only on the Postgres CI lane",
+    "throwaway_docker: starts its OWN uniquely named throwaway container (e.g. mc-test-backup-*) and touches nothing else; lifts block_real_docker for that test only",
 ]
