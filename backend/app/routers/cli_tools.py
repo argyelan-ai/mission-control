@@ -169,9 +169,9 @@ async def update_cli_tool(
     try:
         await start_update(tool)
     except UnknownTool:
-        raise HTTPException(status_code=404, detail=f"Unbekanntes CLI-Tool: '{tool}'")
+        raise HTTPException(status_code=404, detail=f"Unknown CLI tool: '{tool}'")
     except UpdateAlreadyRunning:
         raise HTTPException(
-            status_code=409, detail="Es läuft bereits ein CLI-Tool-Update."
+            status_code=409, detail="A CLI tool update is already running."
         )
     return {"status": "started"}

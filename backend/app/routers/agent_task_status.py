@@ -3393,7 +3393,7 @@ async def agent_report_back(
     if payload.status not in allowed:
         raise HTTPException(
             status_code=400,
-            detail=f"Ungültiger report_back Übergang: {current} → {payload.status}",
+            detail=f"Invalid report_back transition: {current} → {payload.status}",
         )
 
     task.report_back_status = payload.status

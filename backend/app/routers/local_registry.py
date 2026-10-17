@@ -260,11 +260,11 @@ async def _get_ssh_host(session: AsyncSession, host_id: str) -> Host:
             # fehlt nur die Adresse — ein Zustand, den der Betreiber beheben kann.
             raise HTTPException(
                 status_code=409,
-                detail=f"Box '{host.slug}' hat keinen SSH-Zugang — Installation braucht eine SSH-Adresse.",
+                detail=f"Box '{host.slug}' has no SSH access — installation needs an SSH address.",
             )
         raise HTTPException(
             status_code=400,
-            detail=f"Host '{host.slug}' hat kind='{host.kind}' — Installation gibt es nur für SSH-Hosts.",
+            detail=f"Host '{host.slug}' has kind='{host.kind}' — installation is only available for SSH hosts.",
         )
     return host
 
@@ -329,7 +329,7 @@ async def install_recipe(
     if current and current.get("status") == recipe_install.STATUS_RUNNING:
         raise HTTPException(
             status_code=409,
-            detail=f"Für '{recipe.display_name}' läuft auf '{host.slug}' bereits eine Installation.",
+            detail=f"An installation for '{recipe.display_name}' is already running on '{host.slug}'.",
         )
 
     worker_resolved = None

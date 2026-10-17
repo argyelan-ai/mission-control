@@ -594,7 +594,7 @@ async def group_document(
         ).first()
         if snap is None:
             raise HTTPException(
-                status_code=404, detail=f"Kein Dokument-Snapshot für Runde {version}"
+                status_code=404, detail=f"No document snapshot for round {version}"
             )
         return {
             "rel_path": group.result_doc_rel_path,
@@ -670,7 +670,7 @@ async def memorize_group_result(
     content = await group_service.read_result_document(group)
     if not content.strip():
         raise HTTPException(
-            status_code=422, detail="Es gibt noch kein Ergebnis zum Übernehmen"
+            status_code=422, detail="There is no result yet to adopt"
         )
 
     memory = BoardMemory(

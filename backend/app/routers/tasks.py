@@ -81,7 +81,7 @@ async def _enforce_board_rules(
                 "current_status": current,
                 "expected": new_status,
                 "allowed": sorted(allowed),
-                "message": f"Ungültiger Status-Übergang: {from_label} → {to_label}",
+                "message": f"Invalid status transition: {from_label} → {to_label}",
             },
         )
 

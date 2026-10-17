@@ -425,7 +425,7 @@ async def test_done_to_in_progress_triggers_rejection(client, fake_redis):
 
     # done→in_progress is blocked via agent API (UI-only transition)
     assert resp.status_code == 400
-    assert "manuell" in resp.json()["detail"]
+    assert "manually" in resp.json()["detail"]
 
 
 @pytest.mark.asyncio

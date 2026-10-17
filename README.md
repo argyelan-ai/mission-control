@@ -38,9 +38,14 @@ the same [catalog](backend/config/local-recipes.json). The recipe builds on othe
 models — see [CREDITS](CREDITS.md). Note: the GLM recipe's default speculative
 drafter is licensed CC BY-NC-ND 4.0 (non-commercial); a licence-free drafter
 option exists. Numbers: our own benchmark (tokens counted from the
-API's `usage`, greedy, 512-token answers, 08 Oct 2026); the same weights on
-the plain vLLM recipe reach 34.6 tok/s — the dedicated recipe is ~1.8×
-faster. How it works: [ADR-077](docs/decisions/077-rezept-modell-ein-startbefehl.md)
+API's `usage`, greedy, 512-token answers, on our own 2× DGX Spark pair,
+08 Oct 2026); the same weights on the plain vLLM recipe reach 34.6 tok/s —
+the dedicated recipe is ~1.8× faster. **Catalog status:** this entry's
+`gb10_validated` flag is currently `false` — the catalog's own marker for
+"actually watched running on a GB10 box" is not yet set for this recipe,
+even though the numbers above come from a real run; if you install it and
+hit a mismatch, open an issue with your own numbers. How it works:
+[ADR-077](docs/decisions/077-rezept-modell-ein-startbefehl.md)
 · [Runtimes](docs/handbook/concepts/runtimes.md).
 
 ![Runtimes page: GPU boxes with the running model, context, speed, load and the Switch model button (demo data)](docs/assets/mc-runtimes.png)

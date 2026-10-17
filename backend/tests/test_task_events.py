@@ -274,7 +274,7 @@ async def test_invalid_transition_rejected(auth_client, make_board, make_task):
     assert detail["error"] == "invalid_transition"
     assert detail["current_status"] == "inbox"
     assert detail["expected"] == "done"
-    assert "Ungültiger Status-Übergang" in detail["message"]
+    assert "Invalid status transition" in detail["message"]
 
 
 @pytest.mark.asyncio

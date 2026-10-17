@@ -154,16 +154,16 @@ async def update_credential(
             raise HTTPException(
                 status_code=422,
                 detail=(
-                    "ssh_key-Credentials werden von der Geräte-Einrichtung verwaltet — "
-                    "der Typ kann hier nicht geändert werden."
+                    "ssh_key credentials are managed by device onboarding — "
+                    "the type cannot be changed here."
                 ),
             )
         if payload.data is not None and not str(payload.data.get("private_key_pem") or "").strip():
             raise HTTPException(
                 status_code=422,
                 detail=(
-                    "ssh_key-Credentials: private_key_pem darf nicht geleert werden — "
-                    "der zugehörige Host würde seinen Vault-Zugang verlieren."
+                    "ssh_key credentials: private_key_pem cannot be cleared — "
+                    "the associated host would lose its Vault access."
                 ),
             )
 

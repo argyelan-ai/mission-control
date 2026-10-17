@@ -83,12 +83,12 @@ async def create_loop(
     current_user = Depends(require_user),
 ):
     if payload.backlog_source not in BACKLOG_SOURCES:
-        raise HTTPException(status_code=400, detail=f"backlog_source muss eines von {BACKLOG_SOURCES} sein")
+        raise HTTPException(status_code=400, detail=f"backlog_source must be one of {BACKLOG_SOURCES}")
     if payload.backlog_source == "markdown" and not (payload.backlog_md or "").strip():
-        raise HTTPException(status_code=400, detail="backlog_md ist Pflicht bei backlog_source=markdown")
+        raise HTTPException(status_code=400, detail="backlog_md is required when backlog_source=markdown")
     if payload.backlog_source == "tag":
         if not (payload.backlog_tag or "").strip():
-            raise HTTPException(status_code=400, detail="backlog_tag ist Pflicht bei backlog_source=tag")
+            raise HTTPException(status_code=400, detail="backlog_tag is required when backlog_source=tag")
         # Review-Fund L2: Tag wird gegen Tag.slug gematcht — ohne Existenz-
         # Check läuft ein Tippfehler auf ein still-leeres Backlog pro Runde.
         from app.models.tag import Tag
@@ -98,14 +98,14 @@ async def create_loop(
         if not tag_row:
             raise HTTPException(
                 status_code=400,
-                detail=f"Tag '{payload.backlog_tag}' existiert nicht (erwartet wird der Tag-SLUG)",
+                detail=f"Tag '{payload.backlog_tag}' does not exist (expected the tag slug)",
             )
     if payload.max_rounds < 1:
-        raise HTTPException(status_code=400, detail="max_rounds muss >= 1 sein")
+        raise HTTPException(status_code=400, detail="max_rounds must be >= 1")
     if payload.budget_usd is not None and payload.budget_usd <= 0:
-        raise HTTPException(status_code=400, detail="budget_usd muss > 0 sein")
+        raise HTTPException(status_code=400, detail="budget_usd must be > 0")
     if payload.budget_tokens is not None and payload.budget_tokens <= 0:
-        raise HTTPException(status_code=400, detail="budget_tokens muss > 0 sein")
+        raise HTTPException(status_code=400, detail="budget_tokens must be > 0")
     board = await session.get(Board, payload.board_id)
     if not board:
         raise HTTPException(status_code=404, detail="Board not found")
@@ -145,14 +145,14 @@ async def update_loop(
     if not loop:
         raise HTTPException(status_code=404, detail="Loop not found")
     if loop.status in TERMINAL_LOOP_STATUSES:
-        raise HTTPException(status_code=409, detail="Loop ist abgeschlossen")
+        raise HTTPException(status_code=409, detail="Loop is finished")
     data = payload.model_dump(exclude_unset=True)
     if "max_rounds" in data and (data["max_rounds"] is None or data["max_rounds"] < 1):
-        raise HTTPException(status_code=400, detail="max_rounds muss >= 1 sein")
+        raise HTTPException(status_code=400, detail="max_rounds must be >= 1")
     if "pause_on_failed_rounds" in data and (data["pause_on_failed_rounds"] or 0) < 1:
-        raise HTTPException(status_code=400, detail="pause_on_failed_rounds muss >= 1 sein")
+        raise HTTPException(status_code=400, detail="pause_on_failed_rounds must be >= 1")
     if "human_every_n_rounds" in data and (data["human_every_n_rounds"] or 0) < 0:
-        raise HTTPException(status_code=400, detail="human_every_n_rounds muss >= 0 sein")
+        raise HTTPException(status_code=400, detail="human_every_n_rounds must be >= 0")
     for k, v in data.items():
         setattr(loop, k, v)
     loop.updated_at = utcnow()
@@ -189,7 +189,7 @@ async def pause_loop(
     if not loop:
         raise HTTPException(status_code=404, detail="Loop not found")
     if loop.status not in ("running", "waiting_gate"):
-        raise HTTPException(status_code=409, detail=f"Loop ist nicht aktiv (Status '{loop.status}')")
+        raise HTTPException(status_code=409, detail=f"Loop is not active (status '{loop.status}')")
     loop.status = "paused"
     loop.updated_at = utcnow()
     await _supersede_pending_gates(session, loop.id)
@@ -216,7 +216,7 @@ async def stop_loop(
     if not loop:
         raise HTTPException(status_code=404, detail="Loop not found")
     if loop.status in TERMINAL_LOOP_STATUSES:
-        raise HTTPException(status_code=409, detail="Loop ist bereits abgeschlossen")
+        raise HTTPException(status_code=409, detail="Loop is already finished")
     # Laufende Runde in der Historie sauber abschliessen (Review Mi5) —
     # der Runden-Task selbst läuft als normaler Task weiter.
     if loop.current_task_id is not None:
@@ -258,7 +258,7 @@ async def delete_loop(
     if not loop:
         raise HTTPException(status_code=404, detail="Loop not found")
     if loop.status in ACTIVE_STATUSES:
-        raise HTTPException(status_code=409, detail="Aktiven Loop erst stoppen, dann löschen")
+        raise HTTPException(status_code=409, detail="Stop the active loop first, then delete it")
     rounds = (await session.exec(
         select(LoopRound).where(LoopRound.loop_id == loop_id)
     )).all()

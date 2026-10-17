@@ -371,7 +371,7 @@ async def trigger_kv_reset(current_user=Depends(require_user)):
         if not result["ok"]:
             errors.append(model_id)
     if errors:
-        raise HTTPException(status_code=500, detail=f"Reload fehlgeschlagen für: {', '.join(errors)}")
+        raise HTTPException(status_code=500, detail=f"Reload failed for: {', '.join(errors)}")
     return {"ok": True, "message": f"{len(loaded)} Modell(e) neu geladen.", "reloaded": loaded}
 
 
@@ -438,7 +438,7 @@ async def search_lmstudio_catalog(q: str = "", current_user=Depends(require_user
 async def get_hf_repo_files(repo: str, current_user=Depends(require_user)):
     """Returns all GGUF files of a HuggingFace repo."""
     if not _MODEL_ID_PATTERN.match(repo):
-        raise HTTPException(status_code=400, detail="Ungültige Repo-ID")
+        raise HTTPException(status_code=400, detail="Invalid repo ID")
     return await runtime_manager.get_hf_repo_files(repo)
 
 
@@ -1320,8 +1320,8 @@ async def _load_autostart_runtime(session: AsyncSession, slug: str) -> Runtime:
     if not rt.autostart_supported:
         raise HTTPException(
             status_code=422,
-            detail=f"Runtime '{slug}' unterstützt kein Autostart-Flag "
-            f"(autostart_supported=false — PATCH /runtimes/db/{slug} zum Aktivieren)",
+            detail=f"Runtime '{slug}' does not support an autostart flag "
+            f"(autostart_supported=false — PATCH /runtimes/db/{slug} to enable it)",
         )
     if not rt.autostart_flag_path:
         raise HTTPException(

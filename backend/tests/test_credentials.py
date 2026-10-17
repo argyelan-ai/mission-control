@@ -323,7 +323,7 @@ async def test_ssh_key_credential_type_cannot_be_changed_via_patch(auth_client: 
         f"/api/v1/credentials/{created['id']}", json={"credential_type": "custom"}
     )
     assert resp.status_code == 422
-    assert "Typ" in resp.json()["detail"]
+    assert "type" in resp.json()["detail"]
 
     unchanged = (await auth_client.get(f"/api/v1/credentials/{created['id']}")).json()
     assert unchanged["credential_type"] == "ssh_key"

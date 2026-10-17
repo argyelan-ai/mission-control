@@ -269,7 +269,7 @@ async def _authenticate_node(
     for host in candidates:
         if hmac.compare_digest(host.agent_token_hash, presented_hash):
             return host
-    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Ungültiger Node-Token")
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid node token")
 
 
 # ── Pydantic bodies ──────────────────────────────────────────────────────────
@@ -492,10 +492,10 @@ async def create_pairing_code(
         try:
             host_uuid = uuid.UUID(body.host_id)
         except ValueError:
-            raise HTTPException(status_code=422, detail="host_id ist keine gültige UUID")
+            raise HTTPException(status_code=422, detail="host_id is not a valid UUID")
         host = await session.get(Host, host_uuid)
         if not host:
-            raise HTTPException(status_code=404, detail=f"Host '{body.host_id}' nicht gefunden")
+            raise HTTPException(status_code=404, detail=f"Host '{body.host_id}' not found")
 
     pairing = await mint_pairing_code(
         session,
@@ -562,18 +562,18 @@ async def pair(body: PairRequest, session: AsyncSession = Depends(get_session)):
         stmt = stmt.with_for_update()
     pairing = (await session.exec(stmt)).first()
     if not pairing:
-        raise HTTPException(status_code=404, detail="Pairing-Code unbekannt")
+        raise HTTPException(status_code=404, detail="Unknown pairing code")
     if pairing.used_at is not None:
-        raise HTTPException(status_code=409, detail="Pairing-Code wurde bereits eingelöst")
+        raise HTTPException(status_code=409, detail="Pairing code has already been redeemed")
     if ensure_aware(pairing.expires_at) < utcnow():
-        raise HTTPException(status_code=410, detail="Pairing-Code ist abgelaufen (15-Minuten-Frist)")
+        raise HTTPException(status_code=410, detail="Pairing code has expired (15-minute limit)")
 
     if pairing.host_id:
         host = await session.get(Host, pairing.host_id)
         if not host:
             raise HTTPException(
                 status_code=404,
-                detail="Der Host zu diesem Pairing-Code wurde inzwischen gelöscht",
+                detail="The host for this pairing code has since been deleted",
             )
     else:
         slug = await _unique_slug(session, body.hostname)
@@ -616,7 +616,7 @@ async def pair(body: PairRequest, session: AsyncSession = Depends(get_session)):
         await session.rollback()
         raise HTTPException(
             status_code=409,
-            detail="Pairing-Code wurde gerade gleichzeitig eingelöst — bitte erneut versuchen.",
+            detail="Pairing code was just redeemed concurrently — please try again.",
         )
     await session.refresh(host)
 
@@ -642,7 +642,7 @@ async def heartbeat(
         if age_s < _HEARTBEAT_MIN_INTERVAL_S:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=f"Heartbeat zu häufig — mindestens {_HEARTBEAT_MIN_INTERVAL_S}s Abstand",
+                detail=f"Heartbeat too frequent — minimum {_HEARTBEAT_MIN_INTERVAL_S}s interval",
             )
 
     host.agent_telemetry = body.telemetry.model_dump(mode="json")

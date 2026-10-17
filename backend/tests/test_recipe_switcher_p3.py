@@ -761,7 +761,7 @@ async def test_switching_on_without_any_recipe_is_refused_with_a_sentence(auth_c
     box_a = await _host(session, "box-a")
     resp = await auth_client.put(f"/api/v1/hosts/{box_a.id}/autostart", json={"enabled": True})
     assert resp.status_code == 422
-    assert "Rezept" in resp.json()["detail"]
+    assert "recipe" in resp.json()["detail"]
 
 
 @pytest.mark.asyncio

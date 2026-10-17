@@ -220,7 +220,7 @@ async def update_github_config(
         if not re.match(_OWNER_PATTERN, payload.owner.strip()):
             raise HTTPException(
                 status_code=400,
-                detail="Ungültiger GitHub-Owner (nur Buchstaben, Ziffern, Bindestriche).",
+                detail="Invalid GitHub owner (letters, digits, hyphens only).",
             )
 
     updates = (
@@ -325,7 +325,7 @@ async def create_new_repo(
 
     slug = slugify_project(payload.name)
     if not slug:
-        raise HTTPException(status_code=400, detail="Ungültiger Repo-Name")
+        raise HTTPException(status_code=400, detail="Invalid repo name")
     try:
         full_name = f"{await require_github_owner(session)}/{slug}"
     except RuntimeError as e:
@@ -396,7 +396,7 @@ async def delete_repo(
         names = ", ".join(p.name for p in linked[:5])
         raise HTTPException(
             status_code=409,
-            detail=f"Repo ist mit Projekten verknüpft ({names}) — erst entkoppeln",
+            detail=f"Repo is linked to projects ({names}) — unlink first",
         )
     await session.delete(repo)
     await session.commit()
@@ -466,7 +466,7 @@ async def unlink_project(
         raise HTTPException(status_code=404, detail="Repo not found")
     project = await session.get(Project, project_id)
     if not project or project.repo_id != repo_id:
-        raise HTTPException(status_code=404, detail="Projekt ist nicht mit diesem Repo verknüpft")
+        raise HTTPException(status_code=404, detail="Project is not linked to this repo")
     clear_repo_link(project)
     session.add(project)
     await session.commit()

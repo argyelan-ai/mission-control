@@ -425,7 +425,7 @@ async def enforce_board_rules_agent(
     if current == "done" and new_status == "in_progress":
         raise HTTPException(
             status_code=400,
-            detail="Ein abgeschlossener Task kann nur manuell über die UI wieder geöffnet werden",
+            detail="A completed task can only be reopened manually via the UI",
         )
 
     allowed = VALID_TRANSITIONS.get(current, set())
@@ -434,7 +434,7 @@ async def enforce_board_rules_agent(
         to_label = STATUS_LABELS.get(new_status, new_status)
         raise HTTPException(
             status_code=400,
-            detail=f"Ungültiger Status-Übergang: {from_label} → {to_label}",
+            detail=f"Invalid status transition: {from_label} → {to_label}",
         )
 
     # Rule 1: parent/child integrity — parent must not be closed while children are open
