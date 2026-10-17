@@ -92,7 +92,12 @@ done
 # then always shadows the registry pull. Both variables must mirror the
 # renderer (compose_renderer.py) or local builds stop shadowing pulls.
 IMAGE_PREFIX="${MC_AGENT_IMAGE_PREFIX-ghcr.io/argyelan-ai/}"
-IMAGE_TAG="${MC_AGENT_IMAGE_TAG:-latest}"
+# The tag also falls back to .env: install.sh pins MC_AGENT_IMAGE_TAG to the
+# installed release (e.g. 0.2.0), and the backend — hence the renderer — reads
+# it from there. Without this fallback a local build would land on :latest
+# and never shadow the pinned image the compose file actually asks for.
+IMAGE_TAG="${MC_AGENT_IMAGE_TAG:-$(sed -n 's/^MC_AGENT_IMAGE_TAG=//p' "$MC_ENV_FILE" 2>/dev/null | tail -n 1)}"
+IMAGE_TAG="${IMAGE_TAG:-latest}"
 
 tag_prefixed() {
   local tag="$1"

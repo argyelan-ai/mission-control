@@ -8,13 +8,21 @@ things, so here is the honest split.
 |---|---|
 | **Linux (x86_64)** | CI-tested on every push — the fresh-boot E2E job runs `./install.sh` on `ubuntu-latest`, migrates an empty database, registers an admin and makes an authenticated API call. |
 | **macOS** | The maintainers' daily driver. Not in CI. The only platform for host-side (launchd) agents. |
+| **Raspberry Pi 4/5 (arm64)** | Prebuilt `arm64` images; measured on a fresh Pi 4 (RAM, disk, build time). Turn on the memory cgroup first — see [Raspberry Pi](../../setup/raspberry-pi.md). Not in CI. |
 | **Windows via WSL2** | Experimental — community-tested, not in CI. CI does check that `setup.ps1` still parses. |
 | **NAS / self-hosting catalogs** | Manifests are prepared and were verified locally end-to-end; store availability varies (see below). |
 | **Windows Server / hypervisors** | Run a Linux VM. Not in CI. |
 
-Prerequisites everywhere: Docker with Compose v2, `git`, `openssl`, optionally
-`python3` for nicer secret generation. `install.sh` refuses to continue on any
-OS other than Linux or macOS.
+Prerequisites everywhere: Docker with Compose v2, `git`, `curl`, `openssl`,
+optionally `python3` for nicer secret generation. `install.sh` checks all of
+them up front and prints the install command for each missing one (apt,
+dnf or Homebrew) — it never installs anything itself. It refuses to continue
+on any OS other than Linux or macOS.
+
+`install.sh` installs the **latest release**: it clones that release's tag
+and pins the prebuilt images to the same version (`MC_IMAGE_TAG` in `.env`),
+so code and images always match. Developers who want the unreleased `main`
+branch use `--channel edge` (built locally, not recommended for users).
 
 ## Linux headless server (the default)
 

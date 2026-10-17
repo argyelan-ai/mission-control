@@ -246,6 +246,27 @@ jobs:
         env:
           BUILD_MIN_FREE_GB: "5"
         run: ./install.sh --here
+      - name: install.sh — shellcheck + release-pinning helpers
+        # The one-liner a user runs unseen via curl | bash. shellcheck -x
+        # follows the sourced disk-preflight library. The helper tests run
+        # against a local git repo and file:// "API" answers, so they are
+        # deterministic and need no GitHub API quota.
+        run: |
+          shellcheck -x -S warning install.sh scripts/release-image-tags.sh   # info-level notes differ between shellcheck versions
+          pip install -q pytest
+          python3 -m pytest -q -p no:cacheprovider --noconftest backend/tests/test_install_release_pinning.py backend/tests/test_release_image_tags.py
+      - name: --here ran the checkout, not a published image
+        # CI has no release that matches the branch under test, so --here
+        # must take the edge path: MC_IMAGE_TAG=edge (a tag no registry
+        # publishes) and a local build. If it ever pulled a release image
+        # instead, this job would test old code and stay green.
+        run: |
+          grep -qx 'MC_CHANNEL=edge' .env
+          grep -qx 'MC_IMAGE_TAG=edge' .env
+          img="$(docker inspect --format '{{.Config.Image}}' "$(docker compose ps -q backend)")"
+          echo "backend runs: $img"
+          test "$img" = "ghcr.io/argyelan-ai/mc-backend:edge"
+          docker compose exec -T backend test -f /app/app/worker.py
       - name: Register first admin + authenticated API call
         run: |
           TOKEN=$(curl -sf -X POST http://localhost:8000/api/v1/auth/register \
