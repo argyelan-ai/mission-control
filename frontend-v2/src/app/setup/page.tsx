@@ -11,6 +11,7 @@ import { useTranslations } from "next-intl";
 import { motion } from "framer-motion";
 import { Check, ExternalLink, Loader2, Rocket } from "lucide-react";
 import { AUTH_TOKEN_KEY, api } from "@/lib/api";
+import { markWizardDone } from "@/lib/firstRun";
 import { AmbientBackground } from "@/components/layout/AmbientBackground";
 import { C, alpha } from "@/lib/colors";
 
@@ -94,6 +95,14 @@ export default function SetupWizardPage() {
       .then((boards) => setHasExistingData(boards.length > 0))
       .catch(() => setHasExistingData(false));
   }, [router]);
+
+  // Step 4 reached = the provider key and GitHub steps are behind the
+  // operator (saved or skipped). From here on the wizard is done: the app
+  // stops sending them back to /setup, even if they leave via a link instead
+  // of the last button. /setup itself stays reachable.
+  useEffect(() => {
+    if (step === 4) void markWizardDone();
+  }, [step]);
 
   async function saveKey() {
     const p = providers[selected];
@@ -459,7 +468,10 @@ export default function SetupWizardPage() {
               )}
 
               <button
-                onClick={() => router.replace("/")}
+                onClick={async () => {
+                  await markWizardDone();
+                  router.replace("/");
+                }}
                 className="w-full text-[var(--color-on-accent)] font-medium text-sm rounded-lg px-4 py-2.5 flex items-center justify-center gap-2 cursor-pointer transition-all duration-200"
                 style={{ background: `linear-gradient(135deg, ${C.accent}, ${C.accentHover})` }}
               >

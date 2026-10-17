@@ -13,6 +13,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.auth import (
     Role,
     create_access_token,
+    has_role,
     hash_password,
     require_role,
     require_user,
@@ -21,6 +22,7 @@ from app.auth import (
 from app.config import settings
 from app.database import get_session
 from app.models.user import User
+from app.services import first_run
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
@@ -159,6 +161,10 @@ async def register(payload: RegisterRequest, session: AsyncSession = Depends(get
         )
         session.add(user)
 
+    # The first admin of a NEW install: the setup wizard is due. Same commit
+    # as the user, so there is never an admin without this marker.
+    await first_run.set_state(session, first_run.PENDING, commit=False)
+
     await session.commit()
     await session.refresh(user)
 
@@ -249,6 +255,33 @@ async def logout(
 async def get_me(current_user: User = Depends(require_user)):
     """Get current authenticated user info."""
     return _user_dict(current_user)
+
+
+@router.get("/first-run")
+async def get_first_run(
+    current_user: User = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """Is the first-run setup wizard still due for THIS user?
+    (services/first_run.py)
+
+    The frontend sends the caller to /setup while this is true — after the
+    registration, but also after any later login or reload, until the wizard
+    is finished. Only admins: the wizard writes provider keys and the GitHub
+    config, which nobody else may do. Installs older than the marker are
+    never pending."""
+    pending = has_role(current_user, Role.ADMIN) and await first_run.wizard_pending(session)
+    return {"wizard_pending": pending}
+
+
+@router.post("/first-run/complete")
+async def complete_first_run(
+    _user: User = Depends(require_role(Role.ADMIN)),
+    session: AsyncSession = Depends(get_session),
+):
+    """The operator left the wizard via its final button — never again."""
+    await first_run.set_state(session, first_run.DONE)
+    return {"wizard_pending": False}
 
 
 class StreamTicketRequest(BaseModel):

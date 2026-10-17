@@ -1585,6 +1585,24 @@
         ]
       }
     },
+    "/api/v1/auth/first-run": {
+      "get": {
+        "operationId": "get_first_run_api_v1_auth_first_run_get",
+        "summary": "Get First Run",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/first-run/complete": {
+      "post": {
+        "operationId": "complete_first_run_api_v1_auth_first_run_complete_post",
+        "summary": "Complete First Run",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
     "/api/v1/auth/login": {
       "post": {
         "operationId": "login_api_v1_auth_login_post",

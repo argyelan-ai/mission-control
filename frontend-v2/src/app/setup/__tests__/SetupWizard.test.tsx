@@ -81,15 +81,22 @@ describe("First-Run-Wizard", () => {
       .spyOn(api.agents, "create")
       .mockResolvedValue({ id: "a1" } as never);
     const task = vi.spyOn(api.tasks, "create").mockResolvedValue({} as never);
+    const done = vi
+      .spyOn(api.auth, "completeFirstRun")
+      .mockResolvedValue({ wizard_pending: false });
 
     render(<SetupWizardPage />);
     await screen.findByText("Connect an LLM provider");
     await userEvent.click(screen.getByRole("button", { name: "Skip" }));
 
     await screen.findByRole("heading", { name: "Connect GitHub" });
+    // Not done yet: the operator is still inside the configuration steps.
+    expect(done).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole("button", { name: "Skip for now" }));
 
     await screen.findByText("Ready to get started");
+    // Last step reached: the app stops sending the operator back to /setup.
+    await waitFor(() => expect(done).toHaveBeenCalled());
     await userEvent.click(
       screen.getByRole("button", { name: /Create demo board/ }),
     );

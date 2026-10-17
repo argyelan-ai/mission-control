@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useAppStore } from "@/lib/store";
 import { useBoardsBootstrap } from "@/lib/boards";
 import { api, getToken, getStoredUser, setStoredUser } from "@/lib/api";
+import { SETUP_PATH, shouldRedirectToSetup } from "@/lib/firstRun";
 import { AmbientBackground } from "./AmbientBackground";
 import Sidebar from "./Sidebar";
 import MobileNav, { MobileNavProvider } from "./MobileNav";
@@ -72,6 +73,13 @@ export default function AppShell({
     }
 
     setAuthorized(true);
+
+    // A fresh install whose wizard is not finished yet: send the admin there
+    // (once per page load — see lib/firstRun.ts). Without this a reload or a
+    // second device after the registration landed on an empty Home.
+    shouldRedirectToSetup().then((due) => {
+      if (due) router.replace(SETUP_PATH);
+    });
 
     if (!userRefreshed) {
       userRefreshed = true;
