@@ -29,8 +29,10 @@ the end. A run that fails leaves no file that looks like a finished backup,
 and it ends with an error instead of "Done". Files are readable by you only
 (`600`, folder `700`) — they contain agent tokens.
 
-If the disk cannot hold another backup of the size of the last one, the run
-stops before it starts writing.
+If the disk cannot hold another backup of the size of the last one **and**
+still keep `MC_BACKUP_MIN_FREE_MB` free afterwards, the run stops before it
+starts writing — also on the very first run, when there is no earlier backup
+to measure. A full disk would stall Postgres and Docker, not only the backup.
 
 ### Where backups go, and how many
 
@@ -38,6 +40,8 @@ stops before it starts writing.
 |---|---|---|
 | `MC_BACKUP_DIR` | `$HOME/mc-backups` | The backup folder. Outside the repo (a fresh clone must not delete your backups) and outside `~/.mc` (the data archive would contain the older backups — the script refuses such a folder). |
 | `MC_BACKUP_KEEP` | `7` | How many daily backups are kept. Older ones are deleted after a successful run. |
+| `MC_BACKUP_MIN_FREE_MB` | `5120` | Free space (MB) that must stay on the backup disk after a backup. |
+| `MC_INSTALL_DIR` | see below | The install folder (`docker-compose.yml`, `.env`). Rarely needed. |
 
 Set them in `.env` or in the environment. `./backup.sh dir` prints the folder
 in use. Each daily backup is roughly *database dump + compressed `~/.mc`* —
@@ -45,10 +49,24 @@ agent workspaces make `~/.mc` the big part. Check `./backup.sh list` once and
 multiply by `MC_BACKUP_KEEP` before you pick a disk.
 
 **Installed before this change?** Your older backups stay in `./backups` in
-the repo. `list` and `restore` still read them; the script never deletes
-them. New backups go to `MC_BACKUP_DIR`. Once you have a few new ones, move or
-delete the old folder yourself. If you had a schedule, run
-`make backup-schedule` once more so the log moves to the new folder too.
+the repo. `list` and `restore` still read them. New backups go to
+`MC_BACKUP_DIR`, and the old daily backups **count towards `MC_BACKUP_KEEP`**:
+after each successful run, the oldest daily backups across both folders go
+first, so the upgrade never doubles the disk use. Other files in `./backups`
+(a log, `pre-restore` copies) are left alone. If you had a schedule, run
+`make backup-schedule` once more so the log moves to the new folder too. Any
+job of your own that copies backups elsewhere should read the folder from
+`./backup.sh dir` instead of a fixed path.
+
+If your disk is already tight, free space **before** the first new run (move
+older `./backups` files elsewhere): the free-space check counts the reserve on
+top of the size of the last backup.
+
+**Which install is used.** The script works on the install in the working
+directory when that folder holds `docker-compose.yml` and `backup.sh` (the
+old behaviour — a schedule that runs a `backup.sh` from another copy keeps
+working), otherwise on the folder the script lives in. `MC_INSTALL_DIR`
+overrides both.
 
 ### The `.env` and your passphrase
 
@@ -141,6 +159,8 @@ What it does, in this order — **your data is not touched before step 4**:
    script points you to the safety copy.
 6. **`~/.mc`:** extracts the data archive over `$HOME`. It overwrites files
    from the archive; files created since the backup stay (not a clean slate).
+   File modes come from the archive, so files other containers read stay
+   readable for them.
 7. **`.env`** (only with the passphrase): the current one is kept as
    `.env.backup-pre-restore-<time>`, the restored one is written in place,
    and the database password is set to the restored `DB_PASSWORD`.
