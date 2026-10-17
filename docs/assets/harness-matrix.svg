@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="604" viewBox="0 0 960 604" role="img" aria-labelledby="t d" font-family="'General Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <title id="t">Harness × runtime compatibility</title>
+  <desc id="d">Which coding harness can run on which model runtime today. Claude Code runs on Claude only; it cannot use a local or hosted OpenAI-compatible model because that needs a protocol proxy, which MC does not build. OpenClaude, omp and hermes run on local GPU boxes and hosted OpenAI-compatible APIs, but not on the Claude subscription login. Kimi Code and grok talk only to their own vendor endpoint. Source: backend/app/services/harness_compat.py, ADR-086.</desc>
+  <style>
+    .mono { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .lbl  { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; font-weight: 600; letter-spacing: 1.6px; fill: #B3B3B3; }
+    .h    { font-size: 15px; font-weight: 600; fill: #F2F2F2; }
+    .s    { font-size: 12px; fill: #B3B3B3; }
+    .yes  { font-size: 14px; font-weight: 600; fill: #F2F2F2; }
+    .no   { font-size: 14px; fill: #B3B3B3; }
+  </style>
+  <rect width="960" height="604" rx="20" fill="#181818"/>
+  <rect x="0.5" y="0.5" width="959" height="603" rx="20" fill="none" stroke="rgba(168,168,168,0.16)"/>
+  <text x="32" y="44" font-size="20" font-weight="600" fill="#F2F2F2">Harness × runtime: what works today</text>
+  <text x="32" y="68" font-size="13.5" fill="#C9C9C9">Pick a coding harness and a model runtime per agent. A “no” is shown with its reason, never hidden.</text>
+  <rect x="32" y="96" width="896" height="398" rx="14" fill="#262626" stroke="rgba(168,168,168,0.16)"/>
+  <text x="48" y="124" class="lbl">HARNESS ↓</text>
+  <text x="48" y="142" class="lbl">RUNTIME →</text>
+  <text x="248" y="124" class="h">Local GPU box</text>
+  <text x="248" y="143" class="s">OpenAI-compatible</text>
+  <text x="422" y="124" class="h">Hosted cloud</text>
+  <text x="422" y="143" class="s">OpenAI-compatible</text>
+  <text x="596" y="124" class="h">Claude</text>
+  <text x="596" y="143" class="s">Claude Code login</text>
+  <text x="770" y="124" class="h">Vendor-fixed</text>
+  <text x="770" y="143" class="s">Kimi, xAI endpoints</text>
+  <line x1="232" y1="96" x2="232" y2="494" stroke="rgba(168,168,168,0.10)"/>
+  <line x1="406" y1="96" x2="406" y2="494" stroke="rgba(168,168,168,0.10)"/>
+  <line x1="580" y1="96" x2="580" y2="494" stroke="rgba(168,168,168,0.10)"/>
+  <line x1="754" y1="96" x2="754" y2="494" stroke="rgba(168,168,168,0.10)"/>
+  <line x1="32" y1="158" x2="928" y2="158" stroke="rgba(168,168,168,0.16)"/>
+  <text x="48" y="191" class="h">Claude Code</text>
+  <circle cx="253" cy="177" r="4.5" fill="none" stroke="#A3A3A3" stroke-width="1.5"/>
+  <text x="265" y="182" class="no">no</text>
+  <text x="248" y="200" class="s">needs a protocol proxy *</text>
+  <circle cx="427" cy="177" r="4.5" fill="none" stroke="#A3A3A3" stroke-width="1.5"/>
+  <text x="439" y="182" class="no">no</text>
+  <text x="422" y="200" class="s">needs a protocol proxy</text>
+  <circle cx="601" cy="177" r="5" fill="#68BC76"/>
+  <text x="613" y="182" class="yes">yes</text>
+  <text x="596" y="200" class="s">your subscription login</text>
+  <circle cx="775" cy="186" r="4.5" fill="none" stroke="#A3A3A3" stroke-width="1.5"/>
+  <text x="787" y="191" class="no">no</text>
+  <line x1="32" y1="214" x2="928" y2="214" stroke="rgba(168,168,168,0.16)"/>
+  <text x="48" y="247" class="h">OpenClaude</text>
+  <circle cx="253" cy="242" r="5" fill="#68BC76"/>
+  <text x="265" y="247" class="yes">yes</text>
+  <circle cx="427" cy="242" r="5" fill="#68BC76"/>
+  <text x="439" y="247" class="yes">yes</text>
+  <circle cx="601" cy="233" r="4.5" fill="none" stroke="#A3A3A3" stroke-width="1.5"/>
+  <text x="613" y="238" class="no">no</text>
+  <text x="596" y="256" class="s">login is Claude Code only</text>
+  <circle cx="775" cy="242" r="4.5" fill="none" stroke="#A3A3A3" stroke-width="1.5"/>
+  <text x="787" y="247" class="no">no</text>
+  <line x1="32" y1="270" x2="928" y2="270" stroke="rgba(168,168,168,0.16)"/>
+  <text x="48" y="303" class="h">omp</text>
+  <circle cx="253" cy="289" r="5" fill="#68BC76"/>
+  <text x="265" y="294" class="yes">yes</text>
+  <text x="248" y="312" class="s">default local harness</text>
+  <circle cx="427" cy="298" r="5" fill="#68BC76"/>
+  <text x="439" y="303" class="yes">yes</text>
+  <circle cx="601" cy="289" r="4.5" fill="none" stroke="#A3A3A3" stroke-width="1.5"/>
+  <text x="613" y="294" class="no">no</text>
+  <text x="596" y="312" class="s">login is Claude Code only</text>
+  <circle cx="775" cy="298" r="4.5" fill="none" stroke="#A3A3A3" stroke-width="1.5"/>
+  <text x="787" y="303" class="no">no</text>
+  <line x1="32" y1="326" x2="928" y2="326" stroke="rgba(168,168,168,0.16)"/>
+  <text x="48" y="350" class="h">hermes</text>
+  <text x="48" y="368" class="s">host harness · macOS</text>
+  <circle cx="253" cy="354" r="5" fill="#68BC76"/>
+  <text x="265" y="359" class="yes">yes</text>
+  <circle cx="427" cy="354" r="5" fill="#68BC76"/>
+  <text x="439" y="359" class="yes">yes</text>
+  <circle cx="601" cy="345" r="4.5" fill="none" stroke="#A3A3A3" stroke-width="1.5"/>
+  <text x="613" y="350" class="no">no</text>
+  <text x="596" y="368" class="s">login is Claude Code only</text>
+  <circle cx="775" cy="354" r="4.5" fill="none" stroke="#A3A3A3" stroke-width="1.5"/>
+  <text x="787" y="359" class="no">no</text>
+  <line x1="32" y1="382" x2="928" y2="382" stroke="rgba(168,168,168,0.16)"/>
+  <text x="48" y="415" class="h">Kimi Code</text>
+  <circle cx="253" cy="410" r="4.5" fill="none" stroke="#A3A3A3" stroke-width="1.5"/>
+  <text x="265" y="415" class="no">no</text>
+  <circle cx="427" cy="410" r="4.5" fill="none" stroke="#A3A3A3" stroke-width="1.5"/>
+  <text x="439" y="415" class="no">no</text>
+  <circle cx="601" cy="410" r="4.5" fill="none" stroke="#A3A3A3" stroke-width="1.5"/>
+  <text x="613" y="415" class="no">no</text>
+  <circle cx="775" cy="401" r="5" fill="#68BC76"/>
+  <text x="787" y="406" class="yes">yes</text>
+  <text x="770" y="424" class="s">Kimi endpoint only</text>
+  <line x1="32" y1="438" x2="928" y2="438" stroke="rgba(168,168,168,0.16)"/>
+  <text x="48" y="462" class="h">grok</text>
+  <text x="48" y="480" class="s">host harness · macOS</text>
+  <circle cx="253" cy="466" r="4.5" fill="none" stroke="#A3A3A3" stroke-width="1.5"/>
+  <text x="265" y="471" class="no">no</text>
+  <circle cx="427" cy="466" r="4.5" fill="none" stroke="#A3A3A3" stroke-width="1.5"/>
+  <text x="439" y="471" class="no">no</text>
+  <circle cx="601" cy="466" r="4.5" fill="none" stroke="#A3A3A3" stroke-width="1.5"/>
+  <text x="613" y="471" class="no">no</text>
+  <circle cx="775" cy="457" r="5" fill="#68BC76"/>
+  <text x="787" y="462" class="yes">yes</text>
+  <text x="770" y="480" class="s">xAI endpoint only</text>
+  <text x="32" y="528" font-size="13" fill="#C9C9C9">* For heads (preview, opt-in) Claude Code × local is <tspan font-weight="600" fill="#F2F2F2">experimental</tspan> where the local engine itself</text>
+  <text x="32" y="548" font-size="13" fill="#C9C9C9">   serves the Anthropic route (<tspan class="mono" font-size="12">/v1/messages</tspan>) — no proxy in between. The agent runtime switch says no.</text>
+  <text x="32" y="576" class="s">Single source of truth: <tspan class="mono" font-size="11.5">backend/app/services/harness_compat.py</tspan> (ADR-086). Turning a “no” into a “yes” needs its own ADR.</text>
+</svg>

@@ -452,6 +452,8 @@ _EXPECTED_BUILD_SITES = {
     # --update share it) — one build, one guard.
     "install.sh": (1, 1),
     "scripts/build-agent-images.sh": (3, 1),
+    # README screenshots: an isolated demo stack (backend + frontend images).
+    "scripts/readme-shots/demo-stack.sh": (2, 1),
     "scripts/start-all.sh": (1, 1),
     "scripts/vault-cleanup-orchestrate.py": (1, 2),
 }

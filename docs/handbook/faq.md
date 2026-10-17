@@ -2,6 +2,36 @@
 
 Questions a self-hoster asks before and shortly after the first install.
 
+### Where did the agent fleet go?
+
+It is paused, not gone. Since [ADR-085](../decisions/085-head-per-job.md)
+(22.09.2026), the previously persistent, many-agent fleet does not receive
+new work. Two agents are active day to day: a **lead agent** and **one local
+omp agent**, steered from the MC chat. A fresh install's setup wizard still
+seeds the classic multi-agent demo board, and every fleet page (Agents,
+templates, roles) still exists and still works the same way underneath — it
+is just not where new work is assigned. See
+[Heads and remote control](concepts/heads-and-remote-control.md).
+
+### What is a "head"?
+
+A head is one short-lived coding session for a single job: its own git
+worktree, its own plan, and it ends with a pull request (or a documented
+abort). It is the replacement for "dispatch this to an agent and the agent
+stays assigned to it." Heads are an **opt-in preview** today
+(`HEADS_ENABLED`, default off, macOS host only) — see
+[Heads and remote control](concepts/heads-and-remote-control.md).
+
+### Does it run fully local?
+
+It can, for the local omp agent and for heads on local engines: your own
+GPU box, no cloud call for the model itself. Two things are not local even
+in that setup: the Claude Code runtime (if you use it, it talks to
+Anthropic) and the optional voice feature (OpenAI's Realtime API, your own
+key, billed per audio token). "Local-first" in this project means local
+runtimes are the default choice where they are good enough, with a cloud
+fallback — not a guarantee that zero bytes ever leave your network.
+
 ### Do I need a Claude subscription?
 
 No. An agent runs on whatever runtime you bind it to — Claude Code, a
@@ -161,7 +191,7 @@ is a conversation with the maintainer.
 On readiness: versions are `0.x` with an explicit "expect movement" caveat,
 and the changelog has already carried breaking changes. It is used daily in
 its home lab, CI runs a fresh-boot end-to-end install on every push, and there
-are over 5,000 tests — but treat it as a self-hosted power tool, not a hardened
+are over 10,000 backend and 3,000 frontend tests — but treat it as a self-hosted power tool, not a hardened
 multi-tenant SaaS. Do not put it on the public internet.
 
 ### Why are parts of the code and UI in German?

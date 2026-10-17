@@ -274,7 +274,8 @@ docker/omp-bridge/tests/test_serve_loop.py: sparky
 docker/shared/poll.sh: freecode, sparky
 docs/ARCHITECTURE.md: davinci, freecode, shakespeare, sparky
 docs/agent-configuration-standard.md: davinci, freecode, shakespeare, sparky
-docs/assets/how-it-works.svg: sparky
+docs/archive/lifecycle-safety-watchdog-REPORT.md: sparky
+docs/archive/omp-runtime-REPORT.md: sparky
 docs/decisions/005-board-lead-first-dispatch.md: freecode
 docs/decisions/017-runtime-registry-db.md: sparky
 docs/decisions/019-claude-fleet-hybrid.md: davinci, freecode, shakespeare, sparky
@@ -297,8 +298,6 @@ docs/decisions/056-harness-provider-decoupling.md: sparky
 docs/decisions/073-sessions-chat-transcript-tailing.md: sparky
 docs/decisions/084-omp-acp-harness-property.md: freecode, sparky
 docs/decisions/README.md: sparky
-docs/lifecycle-safety-watchdog-REPORT.md: sparky
-docs/omp-runtime-REPORT.md: sparky
 docs/setup/slack.md: freecode
 frontend-v2/src/app/runtimes/__tests__/cloud-usage.test.tsx: davinci, freecode, shakespeare, sparky
 frontend-v2/src/components/chat/SessionSidebar.test.tsx: sparky

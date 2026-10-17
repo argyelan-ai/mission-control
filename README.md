@@ -2,492 +2,347 @@
 
 # Mission Control
 
-**Your self-hosted AI agent fleet — with guardrails, a real git workflow
-and zero cloud.**
+**A phone remote for coding agents on your own models —
+self-hosted, with approval gates.**
 
-Create agents, give them souls, dispatch tasks, watch them ship — from a
-single dark-mode control room, running entirely on your own hardware.
+Ask your lead agent from the couch, watch every edit land as a live diff,
+answer its questions with a tap — and keep the risky steps behind your
+approval. Runs on your hardware, prefers your local models, AGPL —
+with a **one-click model recipe for NVIDIA DGX Spark**.
 
 [![CI](https://github.com/argyelan-ai/mission-control/actions/workflows/ci.yml/badge.svg)](https://github.com/argyelan-ai/mission-control/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/argyelan-ai/mission-control?color=0fa3a3&labelColor=1c1c1c)](https://github.com/argyelan-ai/mission-control/releases)
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-0fa3a3?labelColor=1c1c1c)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/argyelan-ai/mission-control?labelColor=1c1c1c)](https://github.com/argyelan-ai/mission-control/releases)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-informational?labelColor=1c1c1c)](LICENSE)
 
-[![Claude Code](https://img.shields.io/badge/Claude_Code-Pro%2FMax_ready-0fa3a3?labelColor=1c1c1c&logo=claude&logoColor=white)](#run-your-own-models--zero-cloud)
-[![vLLM](https://img.shields.io/badge/vLLM-self--hosted-0fa3a3?labelColor=1c1c1c)](#run-your-own-models--zero-cloud)
-[![Ollama](https://img.shields.io/badge/Ollama-supported-0fa3a3?labelColor=1c1c1c&logo=ollama&logoColor=white)](#run-your-own-models--zero-cloud)
-[![LM Studio](https://img.shields.io/badge/LM_Studio-supported-0fa3a3?labelColor=1c1c1c)](#run-your-own-models--zero-cloud)
-[![OpenAI-compatible](https://img.shields.io/badge/any_OpenAI--compatible-%2Fv1-0fa3a3?labelColor=1c1c1c)](#run-your-own-models--zero-cloud)
+[Spark recipe](#one-click-local-ai-on-dgx-spark) · [Install](#install) · [What it does](#what-it-does) · [Maturity](#what-is-stable-and-what-is-not) ·
+[Docs](#docs) · [Roadmap](#where-its-going) · [Community](#community)
 
-[Install](#install-in-one-line) · [Why](#why-mission-control) ·
-[Platforms](#runs-on) · [Handbook](docs/handbook/index.md) · [Roadmap](#roadmap) ·
-[Community](#community)
-
-![Mission Control — control room](docs/assets/mc-home.png)
+<img src="docs/assets/mc-hero.gif" width="100%" alt="Mission Control in 18 seconds: send a task from the phone, the agent asks and you tap, you approve the plan, it builds with live diffs — on your own models">
 
 </div>
 
-## Why Mission Control
+## One-click local AI on DGX Spark
 
-Running one AI coding agent is easy. Running several is chaos — and that's
-the problem Mission Control exists to solve:
+Pick a recipe on the **Runtimes** page and click **Install** — the recipe
+downloads the weights and sets up its engine while MC shows the live install
+log. For two-box recipes MC picks a free second box and wires it in. One
+click on **Start** switches a box (or a pair) to another recipe; a switch
+lock refuses it while the engine is still serving requests.
 
-- **Terminals everywhere.** Five agents in five windows, no overview of who
-  is doing what, no record of what happened overnight. MC gives you one
-  control room: task boards, live terminals, full history.
-- **No guardrails.** Agents stall silently, wander off-task, or need a
-  babysitter. MC adds structure: a dispatch handshake (work counts as picked
-  up only when the agent confirms), watchdogs for everything that hangs,
-  review gates before anything merges, human approvals for risky actions.
-- **The cloud sees your code.** Agent SaaS means your repos and prompts on
-  someone else's servers. MC is fully self-hosted — and if you pair it with
-  vLLM, LM Studio or Ollama, nothing leaves your network. Not the code, not
-  the prompts, not the model.
-- **From prompt to merge is a manual slog.** Copy-pasting agent output into
-  commits doesn't scale. In MC every task gets its own branch, an automatic
-  PR and a review — the way a real team works.
-- **Paying twice for the same model.** Most agent platforms want an API key
-  and bill per token — on top of the Claude subscription you already have.
-  MC runs the real Claude Code binary on your **existing Pro/Max plan**
-  (`claude setup-token`): no API key, no separate metered bill. Or skip
-  Anthropic entirely and use your own GPU.
+| Recipe | Boxes | Engine | Measured on 2× DGX Spark |
+|---|---|---|---|
+| **GLM-5.3-Flash** · EXL3 4-bit · TensorFold | **2** (tensor parallel) | TensorFold | **62.6 tok/s** single stream · **211 tok/s** at 16 parallel · 1M context per request · prefill ~1,800 tok/s |
 
-## How it works
+This is the recipe MC ships today; more recipes are on the way and land in
+the same [catalog](backend/config/local-recipes.json). The recipe builds on other people's engines, quants and
+models — see [CREDITS](CREDITS.md). Note: the GLM recipe's default speculative
+drafter is licensed CC BY-NC-ND 4.0 (non-commercial); a licence-free drafter
+option exists. Numbers: our own benchmark (tokens counted from the
+API's `usage`, greedy, 512-token answers, 08 Oct 2026); the same weights on
+the plain vLLM recipe reach 34.6 tok/s — the dedicated recipe is ~1.8×
+faster. How it works: [ADR-077](docs/decisions/077-rezept-modell-ein-startbefehl.md)
+· [Runtimes](docs/handbook/concepts/runtimes.md).
 
-![How Mission Control works](docs/assets/how-it-works.svg)
+![Runtimes page: GPU boxes with the running model, context, speed, load and the Switch model button (demo data)](docs/assets/mc-runtimes.png)
 
-You describe the work on a Kanban board. Mission Control dispatches it to an
-agent — a Claude Code instance or any OpenAI-compatible LLM (vLLM, LM Studio,
-Ollama) in a Docker container. The agent codes on its own branch, opens a PR,
-a reviewer agent gates the merge, and watchdogs catch anything that stalls.
+## Why
 
-## Install in one line
+Coding agents are good enough to work while you are away from the desk.
+The tools around them are not:
+
+- **You can't see what they do.** A terminal on another machine is no use on
+  a phone. MC turns the agent's work into a chat you can read anywhere:
+  every tool call, every edit as a diff, every file it touched.
+- **You can't step in.** When an agent asks a question or wants approval, it
+  waits — until you are back at a keyboard. In MC the question arrives as a
+  card on your phone; you tap the answer and it carries on.
+- **Your code and prompts go to someone else's cloud.** MC is self-hosted.
+  Point the local agent at your own GPU box (vLLM, LM Studio, Ollama, any
+  OpenAI-compatible `/v1`) and that work never leaves your network.
+- **"Autonomous" usually means "unsupervised".** In MC, agents ask before
+  risky actions — deploys, config changes, external posts — and your
+  autonomy level decides whether that becomes a card you have to approve.
+  MC also tells you exactly where the tokens went.
+
+## What it does
+
+MC is built around **two fixed agents** and one chat to steer them:
+
+- a **lead agent** — your right hand, on Claude Code or on a local model;
+- a **local omp agent** — small jobs on your own GPU box, driven over ACP.
+
+### Watch every edit as it happens
+
+Live tool output, a diff for each edit, file chips and the session cost —
+in the chat, on phone and desktop. The **Changes panel** lists what this chat
+changed, file by file, with **Revert**, **Commit** and **Open PR**.
+
+![Desktop chat: the lead agent fixes a rounding bug; each edit shows as a diff and the Changes panel offers Revert, Commit and Open PR](docs/assets/mc-chat-desktop.png)
+
+The commit message is suggested by your local model when one is set up
+(otherwise MC writes a plain summary). The commit stays on your machine until
+you open the PR.
+
+![Commit dialog with a commit message suggested by the local model](docs/assets/mc-chat-commit.png)
+
+### Answer questions and approve plans from your phone
+
+<p align="center"><img src="docs/assets/mc-remote-phone.gif" width="260" alt="Phone: the operator taps an answer card, the local agent writes the file and the diff appears in the chat"></p>
+
+The local omp agent can stop and ask. Its questions arrive as **question
+cards**; in **plan mode** it writes a plan first and waits for *Approve*,
+*Refine* or *Cancel*. Screenshots taken by browser tools show up right on
+the tool card.
+
+<p align="center">
+  <img src="docs/assets/mc-phone-question.png" width="260" alt="Phone: the local agent asks two questions as tappable cards">
+  <img src="docs/assets/mc-phone-plan.png" width="260" alt="Phone: plan approval card with Approve and execute, Refine plan, Cancel">
+</p>
+
+Phone use is **monitor and steer**: read, answer, approve, stop, send the
+next instruction. Full editing stays at the desk. MC installs as a home
+screen app (PWA manifest); it is not an offline app.
+
+### Optional: talk to it
+
+Call your lead agent from the chat and give instructions by voice. This uses
+**OpenAI Realtime with your own API key** and has a **daily budget cap**
+(default 5 USD). It is off by default (`VOICE_LIVE_ENABLED`) and in preview
+([ADR-091](docs/decisions/091-live-voice-in-the-chat.md), still *Proposed*). On a phone the
+browser only allows the microphone over HTTPS — see
+[Reverse proxy & remote access](docs/handbook/operations/reverse-proxy.md#https-with-your-own-certificate).
+
+## Local first, honestly
+
+Your GPU boxes show up as runtimes with model, context, speed and load.
+For each agent you choose the runtime yourself; heads (preview) pre-select a
+local runtime when one exists. There is no automatic fallback from local to
+cloud yet.
+
+
+Not every coding tool runs on every model. The matrix shows what works
+today — and says **no**, with the reason, where it doesn't:
+
+![Harness × runtime matrix: which coding tool runs on which kind of model, including the pairs that do not work](docs/assets/harness-matrix.svg)
+
+- **Claude Code runs on Claude.** It uses your own Claude Code login. Check
+  your plan's terms for automated use.
+- **Local models run through omp or OpenClaude.** Claude Code on a local
+  model is not offered for agents.
+- Switching an agent between runtimes goes through one switch service with a
+  health check and rollback.
+
+Details: [Runtimes](docs/handbook/concepts/runtimes.md) ·
+[Run agents on a local LLM](docs/handbook/howto/local-llm.md).
+
+## Guardrails
+
+Agents ask MC before risky actions, and your settings decide what happens:
+
+- **Autonomy levels per action.** For each kind of action you choose
+  *Auto* (done), *Notify* (done, and you are told) or *Approve* (a card that
+  waits for you). Deploys, config changes and external posts are set to
+  *Approve* by default.
+- **Approval cards.** An action set to *Approve* becomes a card in your inbox
+  — one tap to allow or refuse, from the phone too.
+- **Honest limit:** this gate works because the agent asks. MC does not yet
+  block an agent that skips the question, and the local omp agent runs its
+  own tools without per-call prompts. The enforced gates today are the ADR
+  gate below and your Git host's branch protection.
+- **ADR gate.** A pull request that changes a decision record cannot merge
+  until you have approved that exact text. Editing it afterwards voids the
+  approval.
+- **Git, not magic.** Work lands on branches and pull requests. Merges use
+  the GitHub CLI (`gh pr merge --squash`) and respect your branch protection
+  and merge queue. There is no merge button in the phone chat.
+
+![Settings → Autonomy: Auto, Notify or Approve for each action type](docs/assets/mc-autonomy.png)
+
+## See where the tokens go
+
+**Insights** shows tokens per day, the share that ran locally, where usage
+comes from (lead agent, omp agents, heads, you) and the local share per
+week. Costs are shown at list price, even on flat-rate plans, so you can
+compare. The chat's context ring shows the prompt cache hit rate.
+
+![Insights with demo data: tokens per day, the share that ran locally, usage by source and local share per week](docs/assets/mc-insights.png)
+
+*The numbers in this picture are demo data.*
+
+## What is stable and what is not
+
+MC is changing direction ([ADR-085](docs/decisions/085-head-per-job.md),
+[ADR-089](docs/decisions/089-lead-agent-with-hands.md),
+[ADR-090](docs/decisions/090-chat-as-remote-control.md)): away from a
+permanent fleet of named agents, towards one lead agent, one local agent and
+the chat as remote control. Here is where each part stands.
+
+| Status | What | How to get it |
+|---|---|---|
+| **Stable** | Core stack (boards, tasks, inbox, memory/vault, runtimes, insights, settings) · autonomy levels, approval cards, ADR gate · runtime switch with rollback | Default install |
+| **New (Oct 2026), live** | Chat with live diffs and Changes panel (Revert / Commit / Open PR) · question cards and plan mode for omp agents · tool screenshots. In daily use; the phone acceptance check and reliability work are still open ([ROADMAP](docs/ROADMAP.md)) | Default install |
+| **Preview, opt-in** | **Heads** — one short-lived coding session per job, in its own git worktree, ending in a PR and a run record | `HEADS_ENABLED=true` · **macOS host** (launchd + sandbox profile) |
+| **Preview, opt-in** | **Night shift** — "run tonight" jobs and a morning report | `NIGHT_SHIFT_ENABLED=true` · needs heads, so **macOS host** |
+| **Preview, opt-in** | **Live voice** in the chat ([ADR-091](docs/decisions/091-live-voice-in-the-chat.md)) | `VOICE_LIVE_ENABLED=true` + `OPENAI_API_KEY` · daily budget cap · HTTPS on the phone |
+| **Frozen** | The persistent agent fleet (dispatch, healers, group chat) · Skill Lab, ClawHub and plugin management | Still in the code, no new work; being removed step by step ([ROADMAP](docs/ROADMAP.md) E5) |
+
+**Fresh installs still start with the classic board.** The first-run wizard
+offers a demo board with a small demo crew of agents and sample tasks. That
+is the older picture of MC. The two-agent setup above is not created by the
+wizard yet — the [quickstart](docs/handbook/howto/quickstart.md) walks you
+through it.
+
+![Home after the first run: the classic demo board with tasks in Inbox, In progress and Review](docs/assets/mc-home.png)
+
+## Install
+
+**You need:** git, curl, openssl and Docker with Compose v2. The installer
+checks all of them at once and prints the exact command for anything that is
+missing — it never installs system packages on its own.
+
+```bash
+# Debian / Ubuntu / Raspberry Pi OS
+sudo apt update && sudo apt install -y git curl openssl
+curl -fsSL https://get.docker.com | sh && sudo usermod -aG docker "$USER"   # then log out and in again
+# macOS: install Docker Desktop (and git via Xcode tools or Homebrew)
+```
+
+Then:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/argyelan-ai/mission-control/main/install.sh | bash
+```
 
 ![Installing Mission Control](docs/assets/install-demo.svg)
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/argyelan-ai/mission-control/main/install.sh | bash
-```
+The installer installs the **latest release** — code and prebuilt images of
+the same version (amd64 and arm64), so nothing has to be built. It writes
+`.env` with fresh secrets, starts the stack and prints the address to open.
+Developers who want `main` can pass `--channel edge` (built locally, not for
+everyday use). Update an install later from its folder with
+`curl -fsSL https://raw.githubusercontent.com/argyelan-ai/mission-control/main/install.sh | bash -s -- --update`
+(never downgrades). Release rules: [ADR-092](docs/decisions/092-release-channels.md).
 
-It checks prerequisites, pulls the prebuilt images (or builds locally),
-configures secrets, boots the stack and opens the browser — where a first-run
-wizard walks you through admin account, LLM access (an API key — or just your
-existing Claude subscription) and a demo board.
-Updating later is `./install.sh --update`.
+**On a server or a Pi without a screen** the installer notices and asks
+whether you will open MC from another device. If yes, it creates the first
+admin account right there in the terminal (password hidden) and only then
+opens MC to your network — nobody else on the LAN can grab the admin account.
+Flags: `--remote`, `--public-host <address>`, `--local`. Prefer to keep MC
+private? Use an SSH tunnel (`ssh -L 8080:localhost:80 you@server`, then open
+`http://localhost:8080`) or [Tailscale](https://tailscale.com)
+(`tailscale serve --bg 80`, with `sudo` on Linux). Raspberry Pi notes (8 GB, SSD, memory cgroup):
+[docs/setup/raspberry-pi.md](docs/setup/raspberry-pi.md).
 
-### Runs on
+On Linux, MC runs as your own user id (`PUID`/`PGID` in `.env`, set by the
+installer). If `/health` reports `degraded`, the message says what to fix.
+Run one-off commands as that user: `docker compose exec -u mcuser backend …`.
 
-| Platform | Path | Effort |
+After the first login the **setup wizard** opens by itself and stays until
+it is done. **After the install, no agent is running yet.** To get a lead
+agent and a local omp agent you can steer from the chat, follow
+**[Quickstart: install to your first remote-controlled agent](docs/handbook/howto/quickstart.md)**.
+
+### Reach it from your phone
+
+Keep MC off the public internet. The easiest way to your phone is
+[Tailscale](https://tailscale.com): `tailscale serve --bg 80` (`sudo` on Linux) gives you an
+HTTPS address inside your tailnet without opening MC to the LAN — HTTPS is
+also what voice on the phone needs. Add MC to your home screen to use it as
+an app. Other options (LAN address, your own reverse proxy):
+[Reverse proxy & remote access](docs/handbook/operations/reverse-proxy.md).
+
+## Platforms
+
+| Platform | Path | Notes |
 |---|---|---|
-| **Linux server / NAS** (headless) | the one-liner above | ~5 min |
-| **macOS** | the one-liner above | ~5 min |
-| **Runtipi** | [community app store](https://github.com/argyelan-ai/tipi-store) — add it under *Settings → App Stores*, then install from the store | 2 clicks |
-| **Portainer** | [`deploy/catalogs/portainer-template.json`](deploy/catalogs/portainer-template.json) as an App Template source | a few clicks |
-| **Umbrel / CasaOS** | manifests [prepared](deploy/catalogs/), store submissions in progress | — |
-| **Windows 10/11** | `.\setup.ps1` — bootstraps WSL2 + Docker, then runs the standard installer ([guide](docs/setup/windows.md)) | 2–3 clicks |
-| **Windows Server / company VM** (Hyper-V, VMware ESXi) | a small Linux VM next to your Windows VMs — [guide](docs/setup/windows.md#windows-server--company-hypervisors) | ~10 min |
+| **macOS** | the one-liner | Everything, including heads and night shift (preview) |
+| **Linux server / NAS** | the one-liner | Core stack and Docker agents; no heads or host agents (they need macOS launchd) |
+| **Windows 10/11** | `.\setup.ps1` — sets up WSL2 + Docker, then runs the installer ([guide](docs/setup/windows.md)) | Same as Linux |
+| **Windows Server / company VM** | a small Linux VM next to your Windows VMs ([guide](docs/setup/windows.md#windows-server--company-hypervisors)) | Same as Linux |
+| **Runtipi** | [community app store](https://github.com/argyelan-ai/tipi-store) | Core stack only |
+| **Portainer** | [`deploy/catalogs/portainer-template.json`](deploy/catalogs/portainer-template.json) as an App Template source | Core stack only |
+| **Umbrel / CasaOS** | manifests prepared in [`deploy/catalogs/`](deploy/catalogs/), not submitted | — |
 
-Details: [Quickstart](#quickstart) · [Handbook](docs/handbook/index.md) ·
-[Windows](docs/setup/windows.md) ·
-[Updating](docs/setup/updating.md) ·
-[Build a vertical](docs/setup/build-a-vertical.md).
+Catalog installs run the core stack. Agents, heads and host-level extras
+need the full install.
 
-## Run your own models — zero cloud
+## How it fits together
 
-Mission Control treats local LLMs as first-class citizens, not a fallback.
-Point an agent at any OpenAI-compatible endpoint — a vLLM box with your GPU,
-LM Studio on your desktop, Ollama, or a hosted `/v1` — or run Claude Code
-with your Anthropic subscription. Mix both in one fleet — and that mix is
-where the money is: give your lead agent a frontier model for the hard
-calls, and let cheap local models grind through the routine tasks. Most
-agent tools force one provider for the whole team; MC decides per agent.
+![How Mission Control works: phone → MC with lead agent and local omp agent, approval gates and insights → local or cloud models → your repo, branch and pull request](docs/assets/how-it-works.svg)
 
-![One team, mixed runtimes — every agent runs its own brain](docs/assets/mixed-fleet.svg)
+- **Backend:** Python 3.12, FastAPI, SQLModel, PostgreSQL 16, Redis 7,
+  Qdrant, Alembic, server-sent events.
+- **Frontend:** Next.js 15 (App Router), TypeScript strict, Tailwind CSS v4,
+  TanStack Query.
+- **Infrastructure:** Docker Compose, Caddy. The backend reaches Docker only
+  through a filtering socket proxy.
 
-**Already on Claude Pro or Max? You're done.** Agents run the genuine Claude
-Code binary authenticated via `claude setup-token` — your existing
-subscription powers the whole fleet. No API key, no second metered bill.
+Full map and "where do I change what": [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-| Runtime | What it is | Agent harness |
-|---|---|---|
-| **Claude Code** (Anthropic) | Opus/Sonnet via Pro/Max subscription — `claude setup-token` | `claude` binary in `mc-claude-agent` |
-| **vLLM** (self-hosted) | Your own GPU box; lifecycle (start/stop) managed over SSH | OpenAI-shim in `mc-agent-base` |
-| **llama.cpp** (self-hosted) | `llama-server` from the official multi-arch image — small GGUF models next to the big vLLM one, same tag on ARM64 (DGX Spark) and x86 | OpenAI-shim in `mc-agent-base` |
-| **Any `/v1` host process** | Community inference servers that aren't Docker at all (e.g. DwarfStar 4 serving DeepSeek-V4-Flash on a DGX Spark) — start/stop/health over SSH | OpenAI-shim in `mc-agent-base` |
-| **LM Studio** | Locally loaded models, `lms load/unload` managed | OpenAI-shim in `mc-agent-base` |
-| **Ollama Cloud / any OpenAI-compatible `/v1`** | Hosted or hand-registered endpoints | OpenAI-shim in `mc-agent-base` |
-| **omp** (headless) | Structured NDJSON lifecycle instead of a scraped terminal — newest harness (ADR-045) | `bridge.py` in `mc-omp-agent` |
-| **Host agents** | Native processes on the host machine (macOS launchd) instead of containers | native `claude` binary |
+## Docs
 
-Agents are bound to a runtime and can be **switched in one click** — Claude ↔
-local model — through an atomic switch service: config is re-rendered, the
-container swaps only when the image family changes (seconds for same-family
-switches), a health check gates the result and everything rolls back on
-failure. Credential routing is centralized: Anthropic runtimes get the OAuth
-token, everything else gets `OPENAI_BASE_URL`/`OPENAI_MODEL` — the paths never
-mix.
-
-**Finding and deploying local models is a click, not an SSH session.** A
-curated **local model registry** ships with MC and refreshes from online
-registries on demand — every entry credited to the people who published the
-recipe or quant. The **model browser** on the runtimes page shows what fits
-your hardware (VRAM/context check before deploy, validated-hardware badges)
-and deploys onto your box through the existing runtime machinery. New GPU
-box? The **box wizard** connects it end to end: SSH probe, hardware
-inventory, an idempotent bootstrap that installs the Docker basics (never
-`curl | sh` — the installer is downloaded, checksummed and logged first),
-then engine + model + a registered runtime.
-
-## Highlights
-
-**Orchestration with guardrails**
-Boards, projects and phase-based planning; a dispatch-ACK handshake so no
-task silently disappears; review gates and human approval queues;
-autonomous loops that grind through a backlog round by round — each round
-passing the same gates (ADR-051); cron jobs with run history;
-21 fine-grained API scopes per agent.
-
-**Resilient by design**
-Watchdogs for timeouts, stuck reviews and silent aborts; automatic
-re-assignment when an agent goes dark; **context recovery** — a crashed or
-recycled agent reconstructs its task thread and keeps going instead of
-starting from zero; runtime switches roll back automatically on failed
-health checks; a **switch grace state** so a model swap or a 10-minute
-first load never fires false unreachable alarms; **runtime auto-recovery**
-— when a crashed GPU box comes back, the watcher restarts its runtime by
-itself (one attempt, cooldown, gives up loudly after two failures);
-automatic daily backups (`make backup-schedule`).
-
-**A real git workflow**
-One repo per project, one branch per task, automatic PRs and squash-merges
-via the GitHub CLI. A first-class repos registry with per-repo work rules
-(test commands, branch policy, house style) injected into every dispatch.
-
-**Your fleet, in your pocket**
-Run the whole operation from Slack: dispatch work by chat message, get
-reports and files back in-thread, approve risky actions from your phone —
-plus Discord per-agent channels, Telegram approvals and a real-time voice
-assistant. Remote access via [Tailscale](#access-from-your-phone-anywhere-tailscale),
-never the public internet.
-
-**Knowledge & memory**
-A Markdown vault as source of truth, hybrid full-text + vector search
-(Qdrant), per-agent lessons, daily LLM-distilled insights — and full cost
-transparency: token spend and cost per agent and per task.
-
-**Live & hands-on**
-A real terminal into every agent from the browser — watch it work, type
-into its session; one-click agent creation from role templates (reviewer,
-lead, researcher); a playful 3D office view of who's working on what.
-
-**Built in the open**
-[71 architecture decision records](docs/decisions/), 5,000+ tests, and a CI
-pipeline that boots a fresh install end-to-end on every commit — the same
-one-liner you run is the one that's tested. Secure by default: everything
-binds to localhost until you opt in, Docker is reachable only through a
-filtering socket-proxy, secrets are Fernet-encrypted.
-
-<details>
-<summary><b>Full feature list</b></summary>
-
-### Orchestration
-- **Home pipeline** — swim-lane view of tasks across inbox, in progress, review, blocked, done
-- **Projects & phases** — Linear-style hierarchy: lead agent plans phases, subtasks auto-dispatch to workers
-- **Dispatch ACK handshake** — a task counts as picked up only when the agent explicitly confirms
-- **Git workflow** — repo per project, branch per task, PR on review, squash-merge on approval
-- **Repos registry** — one repo shared across projects, GitHub import, per-repo work rules injected into every dispatch (ADR-050)
-- **Approvals & inbox** — human sign-off gates for risky actions, with a review queue
-- **Scheduler** — cron jobs with run history
-- **Autonomous loops** — agents work down a backlog in rounds, every round passing the full gates (ADR-051)
-- **Multi-agent consensus** — ask several agents the same question, aggregate the answers
-- **Watchdogs** — ACK timeouts, stuck-review escalation, silent-abort auto-block (ADR-046)
-- **Context recovery** — crashed/recycled agents reconstruct their task thread and continue (ADR-026)
-
-### Agents & runtimes
-- **Agent registry & detail** — overview, skills, config and memory per agent; templates for one-click roles
-- **Multi-runtime fleet** — agents as Docker containers or native host processes
-- **Runtime registry & one-click switching** — move an agent between Claude and local models with rollback
-- **Local model registry & browser** — curated, UI-refreshable catalog of local models/recipes with hardware-fit checks, one-click deploy and credits to the recipe/quant authors
-- **Box wizard** — connect a fresh GPU box from the UI: SSH probe, hardware inventory, checksummed bootstrap, engine + model, done
-- **Three local engines** — vLLM for the big workhorse models, llama.cpp for small GGUF models beside it, and any `/v1`-speaking host process (ssh_process) for community servers that ship without Docker
-- **Switch grace & auto-recovery** — model swaps show a loading state instead of false alarms; runtimes on a crashed-and-returned box restart themselves
-- **Live sessions** — real terminal into every agent, right in the browser
-- **Scope-based permissions** — 21 fine-grained API scopes per agent, PBKDF2 agent tokens
-- **Skills & CLI plugins** — per-agent capability allow-lists from a shared plugin cache
-- **Slack, Discord & Telegram** — team chat with the agents, per-agent channels, notifications, approvals on your phone
-- **Voice assistant** — real-time spoken conversation with the fleet
-- **Office view** — a playful 3D visualization of who's working on what
-
-### Knowledge & operations
-- **Memory & knowledge base** — board memory, agent lessons, global knowledge with vector search
-- **Vault & files** — searchable notes archive and a workspace file browser
-- **Insights** — KPIs, cost/token tracking, failure patterns, daily LLM-distilled reports
-- **Secrets & credentials** — Fernet-encrypted stores for provider keys and task-scoped logins
-- **Research & webhooks** — AI-assisted research into the knowledge base; external event ingestion
-- **First-run wizard & demo seed** — from empty install to a working board in minutes
-
-</details>
-
-### Talk to your agents — live
-
-
-Every agent runs in a real terminal session you can watch and type into from
-the browser — the same Claude Code (or local-LLM) REPL the agent itself uses.
-
-### Git integration — rules that travel with the code
-
-Mission Control manages GitHub the way a team would: **one repo per
-project, one branch per task.** An agent picking up a task clones (or
-already has) the project's repo, works on `task/<slug>`, and on review opens
-a PR via the GitHub CLI; a reviewer agent or a human merges (squash) and the
-branch is deleted. Ad-hoc tasks with no project share a single
-`mc-workspace` repo instead of leaving orphaned branches around.
-
-Repos live in a shared registry (**`/repos`**) — import an existing GitHub
-repo or let Mission Control create one, link it to multiple projects, and
-write **work rules** once (test commands, branch policy, house style).
-Those rules are injected into every dispatch for that codebase, so an agent
-working on repo X always sees X's conventions instead of a generic default.
-
-**Connecting GitHub:** none of this needs GitHub to be reachable — MC runs
-fine without it, just without version control for task work. Once you want
-it, there are three equivalent ways to connect, in order of precedence:
-
-1. **Settings → GitHub** — owner + token, applies live, no restart. A
-   "Test connection" button checks login, owner reachability and rate
-   limit against the live API.
-2. **`install.sh`** — asks for owner + token interactively during setup
-   (token entry is silent, both optional/skippable).
-3. **`.env`** — classic `GITHUB_OWNER` + `GH_TOKEN`.
-
-The first-run setup wizard also has an optional "Connect GitHub" step, and
-`/repos` shows an onboarding banner until a connection is configured.
-Step-by-step guide (token scopes, verifying the connection,
-troubleshooting): [docs/setup/github.md](docs/setup/github.md).
-
-<details>
-<summary><b>More screenshots</b> — first-run wizard</summary>
-
-*The first-run wizard — from empty install to configured in four steps:*
-![First-run wizard](docs/assets/mc-setup-wizard.png)
-
-</details>
-
-## Architecture
-
-```
-Browser → Caddy (:80) → Frontend (:3000) / Backend (:8000)
-                          ↓                    ↓
-                     Next.js 15           FastAPI + SSE
-                                              ↓
-                              PostgreSQL 16 + Redis 7 + Qdrant
-                                              ↓
-                                   ┌──────────────────────────────┐
-                                   │ Multi-Runtime Agent Dispatch │
-                                   │  • cli-bridge (Docker)       │
-                                   │  • host agents (optional)    │
-                                   │     ↑ poll loop              │
-                                   └──────────────────────────────┘
-```
-
-- **Backend**: Python 3.12, FastAPI, SQLModel, asyncpg, PostgreSQL 16,
-  Redis 7, Alembic, sse-starlette
-- **Frontend**: Next.js 15 (App Router), TypeScript strict, Tailwind CSS v4,
-  TanStack Query v5, Zustand, Recharts
-- **Infrastructure**: Docker Compose, Caddy reverse proxy
-
-Living architecture doc: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) ·
-Decision records: [`docs/decisions/`](docs/decisions/)
-
-## Quickstart
-
-Prerequisites: Docker (with Compose v2), `git`, `openssl`, and optionally
-`python3` (nicer secret generation). Platform specifics — including Windows
-(WSL2) and Windows Server — are covered in the [Runs on](#runs-on) matrix
-above; host-side agents (launchd) are macOS-only, the Docker fleet is not.
-
-One line (checks prerequisites, clones, configures, pulls the prebuilt
-images from GHCR — or builds locally as fallback — boots and migrates):
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/argyelan-ai/mission-control/main/install.sh | bash
-```
-
-Or manually:
-
-```bash
-git clone https://github.com/argyelan-ai/mission-control.git
-cd mission-control
-
-./setup.sh                                            # generates .env with secure secrets
-docker compose up --build -d                          # build + start (migrations run automatically)
-```
-
-Then open **http://localhost** and register the first admin user (the
-register endpoint only works while no user exists).
-
-That's a full working core: UI, task boards, knowledge base, API. Everything
-below is optional and off by default.
-
-### Install from a self-hosting catalog
-
-- **Runtipi** — add our custom app store under *Settings → App Stores*:
-  `https://github.com/argyelan-ai/tipi-store`, then install Mission
-  Control from your app store.
-- **Portainer** — add the raw URL of
-  [`deploy/catalogs/portainer-template.json`](deploy/catalogs/portainer-template.json)
-  as an App Template source (*Settings → App Templates*).
-- CasaOS and Umbrel manifests are prepared in
-  [`deploy/catalogs/`](deploy/catalogs/) — store submissions are in
-  progress.
-
-Catalog installs run the core stack (boards, API runtimes, vault,
-sessions); host-level fleet extras need the manual install above.
-
-### Optional integrations
-
-| Feature | How to configure it |
+| You want to… | Read |
 |---|---|
-| Agent git workflow (repos, PRs, merges) | Settings → GitHub (in-app) or `GH_TOKEN`+`GITHUB_OWNER` in `.env` |
-| Slack team chat with the fleet | Settings → Slack (in-app), step-by-step: [docs/setup/slack.md](docs/setup/slack.md) |
-| Discord notifications + per-agent channels | `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID` |
-| Telegram approvals / reports / team chat | `TELEGRAM_*` tokens + chat IDs, step-by-step: [docs/setup/telegram.md](docs/setup/telegram.md) |
-| MC's own AI: embeddings, insights, HuggingFace | `AI_*` provider routing + keys, step-by-step: [docs/setup/ai-providers.md](docs/setup/ai-providers.md) |
-| Voice agent (LiveKit + realtime speech) | `LIVEKIT_*`, `XAI_API_KEY`, `JARVIS_AGENT_TOKEN`, `JARVIS_LIVE_BACKEND_MODEL` (ADR-083, `gpt-live-1` full-duplex transport — provider/model/api come from the MC runtime binding, ADR-082, `VOICE_MODEL`/`VOICE_PROVIDER` are only the fallback) |
-| Remote LLM runtime host via SSH | `DGX_SSH_HOST`, `DGX_SSH_USER` + SSH-key mount |
-| Reachability from other devices | `PUBLIC_HOST`, `LIVEKIT_NODE_IP`, TLS via `caddy/Caddyfile.tls.example` |
+| Find your way around `docs/` | [docs/README.md](docs/README.md) |
+| Get from install to a remote-controlled agent | [Quickstart](docs/handbook/howto/quickstart.md) |
+| Understand the lead agent, heads and the chat as remote control | [Heads and remote control](docs/handbook/concepts/heads-and-remote-control.md) |
+| Look things up | [Handbook](docs/handbook/index.md) · [FAQ](docs/handbook/faq.md) |
+| Connect GitHub | [docs/setup/github.md](docs/setup/github.md) |
+| Update or back up | [Updating](docs/setup/updating.md) · [Backup & restore](docs/handbook/operations/backup-restore.md) |
+| Know why things are built this way | [PRINCIPLES](docs/PRINCIPLES.md) · [90 decision records](docs/decisions/) |
 
-Voice (LiveKit) and the Playwright visual-verify sidecars are behind
-compose profiles — enable with `COMPOSE_PROFILES=voice,browser` in `.env`
-(the default boot is the lean core stack).
+## Where it's going
 
-Want something to look at before provisioning your first agent?
+No dates are promised; stages move when their acceptance check passes.
+Next in the chat: session list, resume and fork (P4), sending images,
+installing plugins, skills and MCP servers through an approval card. The
+lead agent's own merge and deploy gate is planned and not built yet. Full
+status: [docs/ROADMAP.md](docs/ROADMAP.md).
+
+## Built in the open
+
+- **90 decision records** in [`docs/decisions/`](docs/decisions/), each with
+  its reason. Some are still *Proposed*; the status line says which.
+- **10,000+ backend and 3,000+ frontend tests**, and a CI pipeline that
+  boots a fresh install end to end.
+- **Secure defaults:** ports bind to localhost until you opt in (the
+  opt-in `voice` profile's LiveKit media ports are the exception),
+  Docker only through a filtering socket proxy, secrets encrypted with
+  Fernet. Reporting a vulnerability: [SECURITY.md](SECURITY.md).
+
+Development:
 
 ```bash
-python3 scripts/demo-seed.py            # demo board + tasks across the pipeline
-python3 scripts/demo-seed.py --cleanup  # remove it again
+cd backend && python3.12 -m venv .venv && source .venv/bin/activate
+pip install -e ".[test]" && pytest -q                  # backend
+cd frontend-v2 && npm install && npm run test:run      # frontend
 ```
 
-Host-specific mounts (SSH keys, sandbox dirs, custom Caddyfile) go into
-`docker-compose.override.yml` — see
-[`docker-compose.override.example.yml`](docker-compose.override.example.yml).
+`make help` lists the common entry points. Rules for contributors and coding
+agents: [CONTRIBUTING.md](CONTRIBUTING.md) · [AGENTS.md](AGENTS.md).
 
-### The agent fleet (advanced)
-
-The Docker agent fleet (`docker/docker-compose.agents.yml`) is a separate,
-host-coupled layer on top of the core stack: it provisions per-agent
-containers with tmux sessions, a poll loop, and rendered SOUL/TOOLS files.
-Start with the core stack first; provision agents via the UI (Agents → New →
-Provision) once it runs.
-
-That compose file is **yours**, not the project's: MC rewrites it every time
-you add an agent or switch a runtime, so it is git-ignored. `./setup.sh`
-creates it from `docker/docker-compose.agents.example.yml`, which ships
-deliberately empty — nobody should download somebody else's fleet. You never
-have to edit it by hand. Agent souls and settings are rendered from
-`backend/templates/*.j2` — customize `USER.md.j2` (who you are) and set
-`OPERATOR_NAME` in `.env` (how agents address you).
-
-Step-by-step: [docs/setup/first-agent.md](docs/setup/first-agent.md).
-Updating an install: [docs/setup/updating.md](docs/setup/updating.md).
-
-## Access from your phone, anywhere (Tailscale)
-
-MC binds to localhost by default — nothing is reachable from other machines
-until you opt in. The recommended way to reach it from your phone, laptop or
-office is [Tailscale](https://tailscale.com) (free for personal use, zero
-config):
-
-1. Install Tailscale on the machine running MC and on your phone (same account).
-2. In `.env`, open the front door and allow the origin:
-   - `MC_BIND_ADDRESS=0.0.0.0` (lets Caddy accept non-localhost connections —
-     do this only after the first admin account is registered, or on a
-     network you trust)
-   - `PUBLIC_HOST=your-machine.tailnet-name.ts.net` (adds it to the CORS allowlist)
-3. Apply with `docker compose up -d caddy backend`.
-4. Open `http://your-machine.tailnet-name.ts.net` on the phone. Done — the
-   full control room, task approvals and live agent terminals, from anywhere.
-
-For HTTPS on the tailnet, see `caddy/Caddyfile.tls.example`. This setup keeps
-MC completely unreachable from the public internet — exactly how it's meant
-to run.
-
-## Backups
-
-`./backup.sh` (or `make backup`) dumps the database **and** archives `~/.mc`
-(vault key material, agent configs, deliverables) into `./backups/`, keeping
-the last 10. Install a daily 03:00 schedule with `make backup-schedule`
-(launchd on macOS, cron on Linux). Restore the latest pair with
-`./backup.sh restore` — it recreates the database and restores `~/.mc`.
-
-## Roadmap
-
-Direction and build rules: [docs/PRINCIPLES.md](docs/PRINCIPLES.md) · stage-by-stage status: [docs/ROADMAP.md](docs/ROADMAP.md) ([ADR-085](docs/decisions/085-head-per-job.md)).
-
-Earlier plan, written before ADR-085 (the fleet layer is now in build stop; these items are reviewed at stop 1 and 2):
-
-- **Umbrel & CasaOS store listings** — manifests are ready, submissions in
-  progress.
-- **GPU box provisioning wizard** — add a GPU machine (e.g. DGX Spark or an
-  RTX workstation) from the UI: SSH bootstrap, driver check, vLLM /
-  llama.cpp recipe, health check, runtime registered. In design.
-- **Docs site & German translation** — the handbook is being restructured to
-  become a proper docs site.
+**Language note:** the project grew in a German-speaking home lab. Many ADRs
+and some code comments are German; the UI, README and setup are English
+(the UI also ships in German).
 
 ## Community
 
 - **Questions & ideas** — [GitHub Discussions](https://github.com/argyelan-ai/mission-control/discussions)
 - **Bugs** — [GitHub Issues](https://github.com/argyelan-ai/mission-control/issues)
-- **Contributing** — see [CONTRIBUTING.md](CONTRIBUTING.md); the
-  [ADRs](docs/decisions/) are the best way to understand why things are
-  built the way they are.
-- **Security reports** — see [SECURITY.md](SECURITY.md).
+- **Contributing** — [CONTRIBUTING.md](CONTRIBUTING.md)
+- **Security** — [SECURITY.md](SECURITY.md)
 
-## Development
+## Credits
 
-`make help` shows the common entry points (`make test`, `make up`,
-`make build-dev`, …). Manually:
-
-```bash
-# Backend tests (pytest — SQLite in-memory + fakeredis, no Docker needed)
-cd backend && python3.12 -m venv .venv && source .venv/bin/activate
-pip install -e ".[test]" && pytest -v
-
-# Frontend tests (vitest — jsdom, no browser needed)
-cd frontend-v2 && npm install && npm run test:run
-
-# Rebuild after code changes
-docker compose up --build -d backend
-docker compose up --build -d frontend
-```
-
-5,000+ tests total (≈4,600 backend, ≈400 frontend). Design system spec lives
-in [`DESIGN.md`](DESIGN.md) (dark-mode only, single teal accent) and
-[`PRODUCT.md`](PRODUCT.md).
-
-## Language note
-
-The codebase grew in a German-speaking home lab: many ADRs
-(`docs/decisions/`), inline comments and some UI strings are German.
-The README, setup flow and API are English; full i18n is on the roadmap
-and contributions are welcome.
-
-## Security notes
-
-- The backend reaches Docker only through a filtering socket-proxy
-  (whitelisted API paths, no build/swarm/system — see
-  [ADR-047](docs/decisions/047-docker-socket-proxy.md)). Container lifecycle
-  control is still powerful: run MC only on hosts you trust end-to-end, and
-  never expose the stack directly to the internet.
-- All service ports — including Caddy (:80/:443) — bind to `127.0.0.1` by
-  default. Set `MC_BIND_ADDRESS=0.0.0.0` in `.env` to opt in to LAN/VPN
-  access (do it after registering the first admin: registration is open
-  until one exists).
-- Secrets live in the encrypted `secrets` table (Fernet) or in `.env` —
-  see [SECURITY.md](SECURITY.md) for reporting vulnerabilities.
+Mission Control's DGX Spark recipe builds on GLM-5.3-Flash by Z.ai, the
+EXL3 quantization format and ExLlamaV3 by turboderp, the TensorFold engine by
+ashhart, the DFlash2 drafter by Inco AI and the recipe work of Mia's AI Lab.
+MC drives the coding harnesses Claude Code, OpenClaude, omp, Hermes Agent,
+Kimi Code and Grok Build. Full list with licences and links: [CREDITS.md](./CREDITS.md).
 
 ## License
 
-AGPL-3.0 — see [LICENSE](LICENSE). Use it, self-host it, modify it freely;
-if you distribute a modified version or offer it as a network service, share
-your changes under the same license. For commercial licensing beyond AGPL,
+AGPL-3.0 — see [LICENSE](LICENSE). Use it, self-host it, change it. If you
+distribute a modified version or offer it as a network service, share your
+changes under the same license. For commercial licensing beyond AGPL,
 contact the maintainer.

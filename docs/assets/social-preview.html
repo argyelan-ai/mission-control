@@ -1,0 +1,89 @@
+<!doctype html>
+<!--
+  Source of docs/assets/social-preview.png (GitHub social preview, 1280 x 640).
+  Render: open at a 1280 x 640 viewport and screenshot the page, e.g.
+    npx playwright screenshot --viewport-size=1280,640 --wait-for-timeout=500 "file://$PWD/docs/assets/social-preview.html" docs/assets/social-preview.png
+  Fonts come from frontend-v2/public/fonts (Signal palette, DESIGN.md).
+  No screenshots, no real data — everything here is drawn.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mission Control — social preview</title>
+<style>
+  @font-face { font-family: "Clash Display"; src: url("../../frontend-v2/public/fonts/ClashDisplay-600.woff2") format("woff2"); font-weight: 600; }
+  @font-face { font-family: "General Sans"; src: url("../../frontend-v2/public/fonts/GeneralSans-400.woff2") format("woff2"); font-weight: 400; }
+  @font-face { font-family: "General Sans"; src: url("../../frontend-v2/public/fonts/GeneralSans-500.woff2") format("woff2"); font-weight: 500; }
+  @font-face { font-family: "General Sans"; src: url("../../frontend-v2/public/fonts/GeneralSans-600.woff2") format("woff2"); font-weight: 600; }
+  @font-face { font-family: "JetBrains Mono"; src: url("../../frontend-v2/public/fonts/JetBrainsMono-Regular.woff2") format("woff2"); font-weight: 400; }
+  @font-face { font-family: "JetBrains Mono"; src: url("../../frontend-v2/public/fonts/JetBrainsMono-Bold.woff2") format("woff2"); font-weight: 700; }
+
+  :root {
+    --accent: #EBE8DE; --on-accent: #151411;
+    --bg-deep: #1C1C1C; --bg-base: #181818; --bg-surface: #262626; --bg-elevated: #313131; --bg-hover: #3A3A3A;
+    --text-primary: #F2F2F2; --text-secondary: #C9C9C9; --text-muted: #B3B3B3;
+    --border: rgba(168,168,168,0.16); --border-accent: rgba(235,232,222,0.30); --accent-subtle: rgba(235,232,222,0.10);
+    --ok: #68BC76; --err: #FF867A;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { width: 1280px; height: 640px; overflow: hidden; background: var(--bg-base); }
+  body { font-family: "General Sans", -apple-system, "Segoe UI", sans-serif; color: var(--text-primary); position: relative; }
+
+  /* corner ticks — the instrument signature */
+  .tick { position: absolute; width: 22px; height: 22px; border-color: var(--border-accent); border-style: solid; }
+  .tl { top: 40px; left: 40px; border-width: 1.5px 0 0 1.5px; }
+  .br { bottom: 40px; right: 40px; border-width: 0 1.5px 1.5px 0; }
+
+  .copy { position: absolute; left: 96px; top: 0; bottom: 0; width: 700px; display: flex; flex-direction: column; justify-content: center; }
+  .kicker { font-family: "JetBrains Mono", monospace; font-size: 15px; font-weight: 700; letter-spacing: 0.16em; color: var(--text-muted); text-transform: uppercase; margin-bottom: 26px; }
+  .word { font-family: "Clash Display", "General Sans", sans-serif; font-weight: 600; font-size: 92px; line-height: 0.98; letter-spacing: -0.02em; color: var(--text-primary); }
+  .rule { width: 72px; height: 3px; background: var(--accent); margin: 34px 0 30px; border-radius: 9999px; }
+  .tag { font-size: 34px; line-height: 1.28; font-weight: 500; color: var(--text-primary); max-width: 660px; }
+  .tag span { color: var(--text-secondary); font-weight: 400; }
+
+  /* phone */
+  .phone { position: absolute; right: 120px; top: 104px; width: 300px; height: 432px; border-radius: 28px; background: var(--bg-deep); border: 1.5px solid var(--border-accent); padding: 26px 18px; }
+  .notch { width: 70px; height: 7px; border-radius: 4px; background: var(--bg-hover); margin: 0 auto 22px; }
+  .head { display: flex; align-items: center; justify-content: space-between; margin: 0 4px 14px; font-weight: 600; font-size: 16px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--ok); }
+  .card { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px; margin-bottom: 10px; }
+  .mono { font-family: "JetBrains Mono", monospace; font-size: 14px; line-height: 1.6; }
+  .meta { font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
+  .del { color: var(--err); } .add { color: var(--ok); }
+  .t1 { font-size: 15px; font-weight: 600; } .t2 { font-size: 14px; color: var(--text-secondary); margin-top: 4px; }
+  .ask { background: var(--accent-subtle); border-color: var(--border-accent); }
+  .btns { display: flex; gap: 12px; align-items: center; margin-top: 10px; }
+  .primary { background: var(--accent); color: var(--on-accent); font-weight: 600; font-size: 14px; padding: 6px 14px; border-radius: 10px; }
+  .ghost { font-size: 14px; color: var(--text-secondary); }
+  .composer { margin-top: 12px; border-radius: 999px; background: var(--bg-surface); border: 1px solid var(--border); padding: 11px 16px; font-size: 14px; color: var(--text-muted); }
+</style>
+</head>
+<body>
+  <div class="tick tl"></div><div class="tick br"></div>
+
+  <div class="copy">
+    <div class="kicker">Self-hosted · open source</div>
+    <div class="word">Mission<br>Control</div>
+    <div class="rule"></div>
+    <div class="tag">A phone remote for coding agents<br>on your own models <span>— self-hosted,<br>with approval gates.</span></div>
+  </div>
+
+  <div class="phone" aria-hidden="true">
+    <div class="notch"></div>
+    <div class="head">Lead agent <span class="dot"></span></div>
+    <div class="card">
+      <div class="meta">api/retry.py</div>
+      <div class="mono"><span class="del">− tries = 1</span><br><span class="add">+ tries = 3</span></div>
+    </div>
+    <div class="card">
+      <div class="t1">Changes · 2 files</div>
+      <div class="t2">Revert · Commit · Open PR</div>
+    </div>
+    <div class="card ask">
+      <div class="t1">Approve this plan?</div>
+      <div class="btns"><span class="primary">Approve</span><span class="ghost">Change</span></div>
+    </div>
+    <div class="composer">Ask, steer, stop …</div>
+  </div>
+</body>
+</html>

@@ -1,5 +1,14 @@
 # Agents and Souls
 
+> **Where this fits today:** since [ADR-085](../../decisions/085-head-per-job.md),
+> new work goes to two agents — the lead agent and one local omp agent — not
+> dispatched across a persistent, many-role fleet. Everything below (roles,
+> templates, SOUL/TOOLS rendering, scopes) is still how the two of them, and
+> any other agent you provision, actually work; it is just no longer "create
+> a team of ten and they pick up work." See
+> [Heads and remote control](heads-and-remote-control.md) for the current
+> direction.
+
 An agent in Mission Control is a row in the database plus a process somewhere that keeps asking "do you have work for me?". The database row is the identity: name, role, permissions, token, personality, and which runtime it is bound to. The process is a real CLI — Claude Code, an OpenAI-compatible harness, or a host-side binary — running in a tmux session you can attach to from the browser. Everything the agent knows about itself and about your system arrives as generated Markdown files (`SOUL.md`, `TOOLS.md`, `USER.md`, `CARD.md`) that are rendered from templates whenever the agent is provisioned or synced. This page explains that split and the pieces you configure.
 
 ## Registered vs. provisioned

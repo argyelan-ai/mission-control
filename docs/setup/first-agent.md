@@ -1,6 +1,6 @@
 # Your first agent
 
-You've run the [Quickstart](../../README.md#quickstart): the core stack is up and
+You've run the [install](../../README.md#install): the core stack is up and
 you've registered the admin user. This guide takes you from there to a running
 Docker agent that can pick up a task.
 

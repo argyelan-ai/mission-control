@@ -9,7 +9,7 @@
 
 ## Übersicht
 
-Mission Control (MC) ist ein selbst-gehostetes AI Agent Command Center. Es orchestriert mehrere AI-Agents (Claude Code, openclaude, custom), verteilt Tasks via strukturierte Dispatch-Messages, überwacht deren Ausführung und aggregiert Learnings. Ziel: der Operator kann Ideen beschreiben, das Agent-Team setzt sie um — koordiniert durch Henry (Board Lead) und unterstützt durch spezialisierte Worker.
+Mission Control (MC) ist ein selbst-gehostetes AI Agent Command Center. Es orchestriert AI-Agents (Claude Code, openclaude/omp, custom), verteilt Tasks via strukturierte Dispatch-Messages, überwacht deren Ausführung und aggregiert Learnings. Ziel: der Operator kann Ideen beschreiben, Agents setzen sie um. **Seit ADR-085/089/090 (22.09.2026) ist die Dauer-Flotte pausiert** — aktiv sind nur der Lead-Agent (koordiniert, hat Hände) und ein lokaler omp-Agent; der MC-Chat ist die Fernbedienung des Betreibers, kurzlebige „Heads" pro Auftrag sind die Opt-in-Preview für neue Arbeit. Details: [PRINCIPLES.md](PRINCIPLES.md), [ROADMAP.md](ROADMAP.md).
 
 **Zentrale Eigenschaften:**
 - **Selbst-gehostet**: Läuft vollständig lokal auf Mac Mini M4 (Docker Compose)
@@ -23,19 +23,25 @@ Mission Control (MC) ist ein selbst-gehostetes AI Agent Command Center. Es orche
 
 ## Stack-Übersicht
 
+```mermaid
+flowchart TB
+    Browser["Browser / phone<br/>(Caddy :80)"] --> Frontend["Frontend<br/>Next.js 15 (:3000)"]
+    Frontend --> Backend["Backend<br/>FastAPI (:8000)"]
+    Backend --> DB[("PostgreSQL 16 (:5432)<br/>Redis 7 (:6379)<br/>Qdrant (:6333)")]
+    Backend --> LeadAgent["Lead agent<br/>host launchd (macOS) · tmux + native binary<br/>HTTP-poll /agent/me/poll"]
+    Backend --> OmpAgent["Local omp agent<br/>Docker container mc-agent-*<br/>tmux + poll.sh"]
+    Backend -. preview, opt-in .-> Heads["Heads per job<br/>short-lived CLI session, own git worktree<br/>HEADS_ENABLED (macOS host)"]
+    LeadAgent --> Models["Your models<br/>local GPU (omp/OpenClaude) · Claude Code · cloud fallback"]
+    OmpAgent --> Models
+    Heads --> Models
+    LeadAgent --> Repo[("Your git repo<br/>branch → PR")]
+    Heads --> Repo
 ```
-Browser (Caddy :80) → Frontend (Next.js 15, :3000)
-                     → Backend (FastAPI, :8000)
-                        ↓
-                     PostgreSQL 16 (:5432) + Redis 7 (:6379) + Qdrant (:6333)
-                        ↓
-               ┌────────┴────────┐
-               ↓                 ↓
-     Host launchd Agents    Docker Agent Container (mc-agent-*)
-     (Boss, Hermes)         (9 Container, claude/openclaude + tmux + poll.sh)
-     tmux + native binary   HTTP-Poll /api/v1/agent/me/next-task
-     HTTP-Poll
-```
+
+All runtimes are poll-based (agent asks the backend for work, not the other
+way round); see [Runtimes](handbook/concepts/runtimes.md). "Heads per job" is
+an opt-in preview, macOS host only — see
+[Heads and remote control](handbook/concepts/heads-and-remote-control.md).
 
 **Backend-Volumes (kritisch):**
 - `${HOME}/.openclaw` — Agent-Workspaces, settings.json, Tokens
@@ -1558,10 +1564,9 @@ Alle ADRs in `docs/decisions/`:
 ## Referenzen
 
 - **Projekt-Regeln:** [`CLAUDE.md`](../CLAUDE.md) (Root)
-- **Code Map (Dependencies):** [`docs/code-map.md`](code-map.md) — Auto-generiert via `tools/generate-code-map.py`
-- **Agent State:** [`docs/agent-state.md`](agent-state.md) — Auto-generiert via `tools/generate-agent-map.py`
-- **V2 Release Notes:** [`docs/mc-v2-release.md`](mc-v2-release.md)
-- **V2 Design Spec:** `../MC-CLI-TMUX-PATCH/docs/superpowers/specs/2026-04-07-mc-v2-full-design.md`
+- **Code Map (Dependencies):** `docs/code-map.md` — generiert lokal via `python3 tools/generate-code-map.py`, gitignored, kein Checked-in-Dokument
+- **Agent State:** `docs/agent-state.md` — generiert lokal via `python3 tools/generate-agent-map.py`, gitignored, kein Checked-in-Dokument
+- **Releases:** [`CHANGELOG.md`](../CHANGELOG.md)
 - **Design Decisions:** [`docs/decisions/`](decisions/)
 
 ---

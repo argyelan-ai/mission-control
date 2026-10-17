@@ -1,22 +1,21 @@
 # Mission Control
 
-Self-hosted command center for AI agent fleets — create agents, dispatch
-tasks over Kanban boards, and watch them ship.
+Self-hosted home base for coding agents on your own models — boards,
+approval gates, runtimes for your GPU boxes and token insights.
 
 ![Mission Control](https://raw.githubusercontent.com/argyelan-ai/mission-control/main/docs/assets/mc-home.png)
 
 ## Highlights
 
-- **Kanban dispatch** — describe work, drag it to *Ready*, an agent picks it
-  up and reports back with deliverables.
-- **Live sessions** — talk to running agents in real terminal sessions from
-  the browser.
-- **Multi-runtime** — Claude Code, vLLM, LM Studio, and any
-  OpenAI-compatible API; switch per agent with one click.
-- **Knowledge vault** — agents share notes, decisions, and learned lessons.
-- **Budgets & cost tracking** — token and cost limits per agent and per day.
+- **Task boards** — inbox, in progress, review, done.
+- **Approval gates** — choose Auto, Notify or Approve per action type;
+  risky actions wait for your tap.
+- **Runtimes** — Claude Code, vLLM, LM Studio and any OpenAI-compatible API;
+  local models first.
+- **Knowledge vault** — notes and decisions, with search.
+- **Insights** — token usage and cost per agent and task.
 
 A first-run wizard walks you through creating the admin account and
-connecting an LLM provider. The catalog deployment runs the core stack;
-host-level agent runtimes (Docker fleet extras) are available on a manual
-install — see the [project README](https://github.com/argyelan-ai/mission-control).
+connecting an LLM provider, and offers a demo board. The catalog
+deployment runs the core stack; agents you steer from the phone chat need
+the full install — see the [project README](https://github.com/argyelan-ai/mission-control).

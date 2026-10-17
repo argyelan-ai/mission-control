@@ -79,10 +79,12 @@ x-casaos:
     en_us: Mission Control
   description:
     en_us: >-
-      Self-hosted command center for AI agent fleets — create agents,
-      dispatch tasks over Kanban boards, watch them ship.
+      Self-hosted home base for coding agents on your own models — boards,
+      approval gates, runtimes for your GPU boxes and token insights. The
+      catalog install runs the core stack; agents you steer from the phone
+      chat need the full install (see the project README).
   tagline:
-    en_us: Your AI agent fleet, on your hardware.
+    en_us: Coding agents on your own models, with approval gates.
   developer: argyelan-ai
   icon: https://raw.githubusercontent.com/argyelan-ai/mission-control/main/frontend-v2/src/app/icon.png
   screenshot_link:
