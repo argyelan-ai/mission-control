@@ -405,6 +405,11 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
+      # First boot on slow hardware (Raspberry Pi, SD card): migrations and
+      # the first vector-store collections run past a minute. Failed probes
+      # inside start_period do not count, and the first good probe marks the
+      # backend healthy at once — fast machines are not slowed down.
+      start_period: 300s
 
   # Architektur E Teil 2: eigener Hintergrund-Dienst-Container. Gleiches
   # Image wie die API (backend), aber Einstiegspunkt `python -m app.worker`
