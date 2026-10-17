@@ -24,6 +24,10 @@ if [ -f .env ]; then
   echo "✅ .env already exists, skipping generation"
 else
   cp .env.example .env
+  # .env holds DB/JWT/encryption secrets — lock it to the owner right away.
+  # chmod only flips permission bits, it never touches the inode (unlike
+  # `sed -i` on some platforms, which can replace the file).
+  chmod 600 .env
 
   # Generate secure values for every cryptographic placeholder — a fresh
   # install must never run with weak defaults.
@@ -69,6 +73,12 @@ else
     echo "   PUID / PGID:            $(id -u) / $(id -g)"
   fi
 fi
+
+# Backfill the owner-only permission for .env files that predate this check
+# (upgrades, hand-copied .env.example) — the fresh-install branch above never
+# runs for those. chmod only flips permission bits; it leaves the file (and
+# its inode) exactly as it was — never `sed -i`/rewrite .env here.
+chmod 600 .env
 
 # Backfill host-specific keys for .env files that predate them (upgrades /
 # hand-copied .env.example) — the fresh-install branch above never runs then.

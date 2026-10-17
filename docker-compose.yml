@@ -638,7 +638,12 @@ services:
       retries: 3
 
   qdrant:
-    image: qdrant/qdrant:latest
+    # Pinned (not :latest) so a `docker compose pull`/recreate can't silently
+    # swap the vector-store binary under existing mc_qdrant_data. Bump this
+    # tag deliberately when upgrading; check release notes for storage-format
+    # changes first. Verified current as of 2026-10-17 (matched :latest's
+    # digest via `docker buildx imagetools inspect`).
+    image: qdrant/qdrant:v1.19.2
     restart: unless-stopped
     # Same Docker-Desktop default gap as db (1s without this line). qdrant is
     # the vector store behind Vault and Memory (mc_qdrant_data holds the
@@ -712,7 +717,10 @@ services:
   # 'key: secret', including the space" wenn der Space fehlt. --dev = self-
   # signed TLS, kein Cert-Needed.
   livekit:
-    image: livekit/livekit-server:latest
+    # Pinned (not :latest) — avoids an unexpected server swap on recreate.
+    # Verified current as of 2026-10-17 (matched :latest's digest via
+    # `docker buildx imagetools inspect`).
+    image: livekit/livekit-server:v1.13.10
     # Optional: nur mit COMPOSE_PROFILES=voice (oder --profile voice) aktiv.
     profiles: ["voice"]
     restart: unless-stopped
