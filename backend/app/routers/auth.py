@@ -110,6 +110,39 @@ def _user_dict(user: User) -> dict:
     }
 
 
+def _set_session_cookie(response: JSONResponse, request: Request, token: str) -> None:
+    """Set the mc_sse_token session cookie (HttpOnly — no JS access, no token
+    in URL logs). require_user falls back to it on every route, so it must be
+    renewed whenever a fresh token is issued (login, password change)."""
+    response.set_cookie(
+        key="mc_sse_token",
+        value=token,
+        httponly=True,
+        samesite="lax",
+        max_age=settings.jwt_access_token_expire_minutes * 60,
+        path="/",
+        # Secure only when the request actually arrived over TLS. Behind
+        # Caddy (TLS termination) uvicorn runs with --proxy-headers
+        # (backend/Dockerfile), so ProxyHeadersMiddleware rewrites
+        # scope["scheme"] from X-Forwarded-Proto and this is "https".
+        # A plain-HTTP login (localhost / LAN / Tailscale without TLS)
+        # must NOT get Secure — the browser would drop the cookie and
+        # lock the user out of their own UI. Never set this unconditionally.
+        secure=request.url.scheme == "https",
+    )
+
+
+def _set_password(user: User, new_password: str) -> None:
+    """Store a new password and sign out every existing session of the user.
+
+    Bumping token_version makes require_user refuse every JWT issued before
+    (same mechanism as logout). Callers that act for the user's own session
+    hand back a fresh token, so only the *other* sessions are signed out.
+    """
+    user.password_hash = hash_password(new_password)
+    user.token_version = (user.token_version or 0) + 1
+
+
 # ── Public Endpoints ──────────────────────────────────────────────────────────
 
 @router.get("/setup-required")
@@ -214,22 +247,7 @@ async def login(
     response = JSONResponse(
         content=TokenResponse(access_token=token, user=_user_dict(user)).model_dump(),
     )
-    response.set_cookie(
-        key="mc_sse_token",
-        value=token,
-        httponly=True,
-        samesite="lax",
-        max_age=settings.jwt_access_token_expire_minutes * 60,
-        path="/",
-        # Secure only when the request actually arrived over TLS. Behind
-        # Caddy (TLS termination) uvicorn runs with --proxy-headers
-        # (backend/Dockerfile), so ProxyHeadersMiddleware rewrites
-        # scope["scheme"] from X-Forwarded-Proto and this is "https".
-        # A plain-HTTP login (localhost / LAN / Tailscale without TLS)
-        # must NOT get Secure — the browser would drop the cookie and
-        # lock the user out of their own UI. Never set this unconditionally.
-        secure=request.url.scheme == "https",
-    )
+    _set_session_cookie(response, request, token)
     return response
 
 
@@ -343,6 +361,7 @@ async def issue_stream_ticket(
 @router.patch("/me")
 async def update_me(
     payload: UpdateProfileRequest,
+    request: Request,
     current_user: User = Depends(require_user),
     session: AsyncSession = Depends(get_session),
 ):
@@ -355,6 +374,7 @@ async def update_me(
         current_user.timezone = payload.timezone
 
     # Password change requires current password verification
+    password_changed = False
     if payload.new_password is not None:
         if not payload.current_password:
             raise HTTPException(
@@ -368,12 +388,20 @@ async def update_me(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Aktuelles Passwort ist falsch.",
             )
-        current_user.password_hash = hash_password(payload.new_password)
+        _set_password(current_user, payload.new_password)
+        password_changed = True
 
     session.add(current_user)
     await session.commit()
     await session.refresh(current_user)
-    return _user_dict(current_user)
+    if not password_changed:
+        return _user_dict(current_user)
+    # Every other session is signed out now; this one carries on with a
+    # fresh token (the frontend stores access_token right away).
+    token = create_access_token(str(current_user.id), current_user.role, current_user.token_version)
+    response = JSONResponse(content={**_user_dict(current_user), "access_token": token})
+    _set_session_cookie(response, request, token)
+    return response
 
 
 # ── Admin: User Management ───────────────────────────────────────────────────
@@ -427,6 +455,7 @@ async def create_user(
 async def update_user(
     user_id: uuid.UUID,
     payload: UpdateUserRequest,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     admin: User = Depends(require_role(Role.ADMIN)),
 ):
@@ -462,9 +491,19 @@ async def update_user(
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Letzten Admin kann man nicht deaktivieren.")
         user.is_active = payload.is_active
     if payload.password is not None:
-        user.password_hash = hash_password(payload.password)
+        # Signs the user out on every device (a reset is what an admin does
+        # when an account may be compromised).
+        _set_password(user, payload.password)
 
     session.add(user)
     await session.commit()
     await session.refresh(user)
-    return {**_user_dict(user), "is_active": user.is_active}
+    result = {**_user_dict(user), "is_active": user.is_active}
+    if payload.password is not None and user.id == admin.id:
+        # An admin resetting their own password through the user list keeps
+        # this session, like PATCH /me does.
+        token = create_access_token(str(user.id), user.role, user.token_version)
+        response = JSONResponse(content={**result, "access_token": token})
+        _set_session_cookie(response, request, token)
+        return response
+    return result
