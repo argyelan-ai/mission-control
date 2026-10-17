@@ -230,7 +230,7 @@ opens MC to your network — nobody else on the LAN can grab the admin account.
 Flags: `--remote`, `--public-host <address>`, `--local`. Prefer to keep MC
 private? Use an SSH tunnel (`ssh -L 8080:localhost:80 you@server`, then open
 `http://localhost:8080`) or [Tailscale](https://tailscale.com)
-(`tailscale serve --bg 80`). Raspberry Pi notes (8 GB, SSD, memory cgroup):
+(`tailscale serve --bg 80`, with `sudo` on Linux). Raspberry Pi notes (8 GB, SSD, memory cgroup):
 [docs/setup/raspberry-pi.md](docs/setup/raspberry-pi.md).
 
 On Linux, MC runs as your own user id (`PUID`/`PGID` in `.env`, set by the
@@ -245,7 +245,7 @@ agent and a local omp agent you can steer from the chat, follow
 ### Reach it from your phone
 
 Keep MC off the public internet. The easiest way to your phone is
-[Tailscale](https://tailscale.com): `tailscale serve --bg 80` gives you an
+[Tailscale](https://tailscale.com): `tailscale serve --bg 80` (`sudo` on Linux) gives you an
 HTTPS address inside your tailnet without opening MC to the LAN — HTTPS is
 also what voice on the phone needs. Add MC to your home screen to use it as
 an app. Other options (LAN address, your own reverse proxy):
