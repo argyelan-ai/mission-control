@@ -1,6 +1,8 @@
 # Contributing to Mission Control
 
 Thanks for your interest! A few ground rules keep this codebase healthy.
+Everyone participating is expected to follow the
+[Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Getting started
 

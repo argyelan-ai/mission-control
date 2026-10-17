@@ -335,6 +335,7 @@ and some code comments are German; the UI, README and setup are English
 - **Questions & ideas** — [GitHub Discussions](https://github.com/argyelan-ai/mission-control/discussions)
 - **Bugs** — [GitHub Issues](https://github.com/argyelan-ai/mission-control/issues)
 - **Contributing** — [CONTRIBUTING.md](CONTRIBUTING.md)
+- **Code of Conduct** — [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
 - **Security** — [SECURITY.md](SECURITY.md)
 
 ## Credits
