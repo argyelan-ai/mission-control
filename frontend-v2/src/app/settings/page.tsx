@@ -681,6 +681,10 @@ function SecuritySection() {
           )}
         </div>
 
+        <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
+          {t("signsOutOthers")}
+        </p>
+
         <SaveButton
           onClick={handleSubmit}
           loading={mutation.isPending}

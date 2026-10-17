@@ -1777,7 +1777,8 @@
       "confirmPassword": "Confirm New Password",
       "confirmPasswordPlaceholder": "Enter again",
       "mismatch": "Passwords do not match.",
-      "tooShort": "New password must be at least 6 characters long."
+      "tooShort": "New password must be at least 6 characters long.",
+      "signsOutOthers": "Changing it signs you out on all other devices. This one stays signed in."
     },
     "autonomy": {
       "title": "Autonomy Levels",

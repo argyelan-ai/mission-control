@@ -1777,7 +1777,8 @@
       "confirmPassword": "Neues Passwort bestätigen",
       "confirmPasswordPlaceholder": "Nochmals eingeben",
       "mismatch": "Passwörter stimmen nicht überein.",
-      "tooShort": "Das neue Passwort muss mindestens 6 Zeichen lang sein."
+      "tooShort": "Das neue Passwort muss mindestens 6 Zeichen lang sein.",
+      "signsOutOthers": "Danach bist du auf allen anderen Geräten abgemeldet. Dieses Gerät bleibt angemeldet."
     },
     "autonomy": {
       "title": "Autonomie-Stufen",
