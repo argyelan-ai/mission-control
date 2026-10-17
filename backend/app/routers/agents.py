@@ -1281,7 +1281,7 @@ async def delete_agent(
     if _is_singleton_bridge(agent):
         raise HTTPException(
             status_code=422,
-            detail=f"{agent.slug} ist eine Singleton-Host-Bridge und wird über launchd/das Runtime-Cockpit verwaltet, nicht über Archive/Delete",
+            detail=f"{agent.slug} is a singleton host bridge managed via launchd/the runtime cockpit, not via archive/delete",
         )
 
     # Two-stage lifecycle (2026-07-13): hard delete is gated on archive.
@@ -1290,7 +1290,7 @@ async def delete_agent(
     if agent.archived_at is None:
         raise HTTPException(
             status_code=409,
-            detail="Agent muss erst archiviert werden, bevor er gelöscht werden kann.",
+            detail="Agent must be archived before it can be deleted.",
         )
 
     # Gateway cleanup removed (Phase 29). DB delete + FK cleanup is now

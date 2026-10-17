@@ -328,3 +328,25 @@ du -sh /var/lib/docker/containers/* 2>/dev/null | sort -h | tail
 
 **Fix** — update, then recreate the containers (`docker compose up -d`) so the
 new logging options apply. `docker system prune` reclaims the rest.
+
+---
+
+## A backend error shows up in German
+
+**Cause** — `work_language` (the language between agents and in API text,
+[PRINCIPLES.md §6](../PRINCIPLES.md)) is `en` by default, and most
+`HTTPException` detail text across the REST routers and services is English.
+Two areas are a known, open gap, tracked for a dedicated follow-up rather
+than papered over here:
+
+- `routers/auth.py` — password-change/session text is mid-migration in a
+  parallel change at the time of writing.
+- the agent-CLI protocol surface (`routers/agent_scoped.py`,
+  `routers/agent_task_status.py`, `services/task_lifecycle.py`, the
+  `mc report`/`mc finish` messages in `services/work_context.py`) — these
+  strings are between agents, not shown to the operator in the UI, and are
+  large enough (~250 strings) to need their own PR.
+
+If you hit German text anywhere else, that is a bug — open an issue with the
+endpoint and the exact string (`tests/test_error_messages_english.py` guards
+the routers/services covered so far).

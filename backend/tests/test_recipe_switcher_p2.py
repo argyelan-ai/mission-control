@@ -292,7 +292,7 @@ async def test_probe_and_bootstrap_accept_agent_host_with_ssh_and_refuse_without
         ok = await auth_client.post("/api/v1/hosts/probe", json={"host_id": str(with_ssh.id)})
         refused = await auth_client.post("/api/v1/hosts/probe", json={"host_id": str(without.id)})
     assert ok.status_code == 200, ok.text
-    assert refused.status_code == 400 and "keinen SSH-Zugang" in refused.json()["detail"]
+    assert refused.status_code == 400 and "has no SSH access" in refused.json()["detail"]
 
     with patch("app.services.host_bootstrap.get_status", AsyncMock(return_value=None)), \
          patch("app.services.host_bootstrap.start_bootstrap", AsyncMock()) as start:
@@ -300,7 +300,7 @@ async def test_probe_and_bootstrap_accept_agent_host_with_ssh_and_refuse_without
         refused = await auth_client.post(f"/api/v1/hosts/{without.id}/bootstrap")
     assert ok.status_code == 202, ok.text
     start.assert_awaited_once()
-    assert refused.status_code == 400 and "keinen SSH-Zugang" in refused.json()["detail"]
+    assert refused.status_code == 400 and "has no SSH access" in refused.json()["detail"]
 
 
 @pytest.mark.asyncio
@@ -641,4 +641,4 @@ async def test_recipe_install_accepts_agent_box_with_ssh_and_refuses_without(aut
     assert ok.status_code == 202, ok.text
     assert started == [(str(with_ssh.id), "192.0.2.10")]
     assert refused.status_code == 409
-    assert refused.json()["detail"] == "Box 'box-b' hat keinen SSH-Zugang — Installation braucht eine SSH-Adresse."
+    assert refused.json()["detail"] == "Box 'box-b' has no SSH access — installation needs an SSH address."

@@ -76,7 +76,7 @@ async def start_recipe_for_host(
     host = await _host_or_404(session, host_id)
     recipe = (await session.exec(select(LocalRecipe).where(LocalRecipe.slug == slug))).first()
     if recipe is None:
-        raise HTTPException(status_code=404, detail=f"Rezept '{slug}' nicht gefunden")
+        raise HTTPException(status_code=404, detail=f"Recipe '{slug}' not found")
     # Wer hat gewechselt? Am 01.10.2026 liess sich ein Rezeptwechsel nicht
     # zuordnen (Backend-Logs nach einem Deploy weg, ein Token = ein Konto für
     # Browser UND Skripte). Der Client-Kopf trennt Browser von curl/Agent.

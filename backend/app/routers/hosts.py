@@ -58,27 +58,27 @@ def _validate_fabric_ip(v: str | None) -> str | None:
 
 
 def _require_ssh_capable(host: Host, what: str) -> None:
-    """400 mit Satz, wenn MC die Box nicht per SSH erreichen kann.
+    """400 with a sentence when MC cannot reach the box over SSH.
 
-    Seit P2 zählt nicht mehr ``kind == "ssh"``, sondern ob eine SSH-Adresse
-    da ist (host_resolver.ssh_capable): eine per Pairing angelegte
-    ``kind=agent``-Box mit ``ssh_host`` ist genauso erreichbar.
+    Since P2 this no longer checks ``kind == "ssh"`` but whether an SSH
+    address exists (host_resolver.ssh_capable): a ``kind=agent`` box created
+    by pairing with an ``ssh_host`` is just as reachable.
     """
     if ssh_capable(host):
         return
     if host.kind == "agent":
         detail = (
-            f"Box '{host.slug}' hat keinen SSH-Zugang — {what} braucht eine SSH-Adresse. "
-            "Unter Geräte-Einstellungen 'SSH-Adresse' eintragen."
+            f"Box '{host.slug}' has no SSH access — {what} needs an SSH address. "
+            "Enter the 'SSH address' under device settings."
         )
     else:
-        detail = f"Host '{host.slug}' hat kind='{host.kind}' — {what} gibt es nur für SSH-Hosts."
+        detail = f"Host '{host.slug}' has kind='{host.kind}' — {what} is only available for SSH hosts."
     raise HTTPException(status_code=400, detail=detail)
 
 
 def _validate_kind(v: str) -> str:
     if v not in _ALLOWED_KINDS:
-        raise ValueError(f"kind muss eines von {list(_ALLOWED_KINDS)} sein")
+        raise ValueError(f"kind must be one of {list(_ALLOWED_KINDS)}")
     return v
 
 
@@ -86,7 +86,7 @@ def _validate_control_url(v: str | None) -> str | None:
     # Same rule as RuntimeCreate.control_url — prevents a typo'd scheme
     # (ftp://…) from later being addressed as a control server.
     if v is not None and not (v.startswith("http://") or v.startswith("https://")):
-        raise ValueError("control_url muss mit http:// oder https:// beginnen")
+        raise ValueError("control_url must start with http:// or https://")
     return v
 
 
@@ -285,7 +285,7 @@ async def probe_host(
     if body.host_id:
         host = await _get_host(session, body.host_id)
         if not host:
-            raise HTTPException(status_code=404, detail=f"Host '{body.host_id}' nicht gefunden")
+            raise HTTPException(status_code=404, detail=f"Host '{body.host_id}' not found")
         _require_ssh_capable(host, "Probe")
         resolved = resolved_host_from_row(host)
     else:
@@ -373,7 +373,7 @@ async def onboard_host(
 
         credential = await session.get(Credential, existing_credential_id)
         if not credential:
-            raise HTTPException(status_code=404, detail="Credential nicht gefunden.")
+            raise HTTPException(status_code=404, detail="Credential not found.")
         if credential.credential_type != "ssh_key":
             raise HTTPException(
                 status_code=422,
@@ -397,7 +397,7 @@ async def onboard_host(
     except host_onboarding.RateLimitExceeded:
         raise HTTPException(
             status_code=429,
-            detail=f"Zu viele fehlgeschlagene SSH-Logins für '{body.address}' — bitte 10 Minuten warten.",
+            detail=f"Too many failed SSH logins for '{body.address}' — please wait 10 minutes.",
         )
     return {"job_id": job_id}
 
@@ -513,14 +513,14 @@ async def bootstrap_host(
     """
     host = await _get_host(session, host_id)
     if not host:
-        raise HTTPException(status_code=404, detail=f"Host '{host_id}' nicht gefunden")
+        raise HTTPException(status_code=404, detail=f"Host '{host_id}' not found")
     _require_ssh_capable(host, "Bootstrap")
 
     current = await host_bootstrap.get_status(str(host.id))
     if current and current.get("status") == host_bootstrap.STATUS_RUNNING:
         raise HTTPException(
             status_code=409,
-            detail=f"Für Host '{host.slug}' läuft bereits ein Bootstrap.",
+            detail=f"A bootstrap is already running for host '{host.slug}'.",
         )
 
     await host_bootstrap.start_bootstrap(str(host.id), resolved_host_from_row(host))
@@ -541,7 +541,7 @@ async def bootstrap_log(
     """
     host = await _get_host(session, host_id)
     if not host:
-        raise HTTPException(status_code=404, detail=f"Host '{host_id}' nicht gefunden")
+        raise HTTPException(status_code=404, detail=f"Host '{host_id}' not found")
     return await host_bootstrap.read_log(str(host.id), cursor)
 
 
@@ -567,7 +567,7 @@ async def trust_ssh_host_key(
     """
     host = await _get_host(session, host_id)
     if not host:
-        raise HTTPException(status_code=404, detail=f"Host '{host_id}' nicht gefunden")
+        raise HTTPException(status_code=404, detail=f"Host '{host_id}' not found")
     try:
         new_fp = await ssh_host_keys.trust_rejected_key(session, host, body.fingerprint)
     except ssh_host_keys.TrustError as exc:
@@ -590,7 +590,7 @@ async def update_host(
     """
     host = await _get_host(session, host_id)
     if not host:
-        raise HTTPException(status_code=404, detail=f"Host '{host_id}' nicht gefunden")
+        raise HTTPException(status_code=404, detail=f"Host '{host_id}' not found")
     changes = body.model_dump(exclude_unset=True)
     new_slug = changes.get("slug")
     if new_slug and new_slug != host.slug:
@@ -616,16 +616,16 @@ async def delete_host(
     so no runtime silently falls back to the settings fallback box."""
     host = await _get_host(session, host_id)
     if not host:
-        raise HTTPException(status_code=404, detail=f"Host '{host_id}' nicht gefunden")
+        raise HTTPException(status_code=404, detail=f"Host '{host_id}' not found")
     bound = (await session.exec(select(Runtime).where(Runtime.host_id == host.id))).all()
     if bound:
         slugs = ", ".join(sorted(rt.slug for rt in bound))
         raise HTTPException(
             status_code=409,
             detail=(
-                f"Host '{host.slug}' hat noch {len(bound)} gebundene Runtime(s): "
-                f"{slugs}. Erst umbinden (PATCH /api/v1/runtimes/db/{{slug}} "
-                f"mit host_id=null oder anderer Host-UUID), dann löschen."
+                f"Host '{host.slug}' still has {len(bound)} bound runtime(s): "
+                f"{slugs}. Rebind first (PATCH /api/v1/runtimes/db/{{slug}} "
+                f"with host_id=null or another host UUID), then delete."
             ),
         )
     await session.delete(host)
@@ -654,7 +654,7 @@ async def host_metrics(
     """
     host = await _get_host(session, host_id)
     if not host:
-        raise HTTPException(status_code=404, detail=f"Host '{host_id}' nicht gefunden")
+        raise HTTPException(status_code=404, detail=f"Host '{host_id}' not found")
 
     if host.kind == "local":
         return {"kind": "local", "slug": host.slug, "reachable": True}
@@ -706,7 +706,7 @@ async def host_pulse(
     """
     host = await _get_host(session, host_id)
     if not host:
-        raise HTTPException(status_code=404, detail=f"Host '{host_id}' nicht gefunden")
+        raise HTTPException(status_code=404, detail=f"Host '{host_id}' not found")
 
     redis = await get_redis()
     raw_points = await redis.lrange(RedisKeys.host_pulse(str(host.id)), 0, -1)
@@ -757,7 +757,7 @@ async def host_metrics_history_endpoint(
     beim Schreibweg oben, mit derselben gedrosselten Log-Warnung."""
     host = await _get_host(session, host_id)
     if not host:
-        raise HTTPException(status_code=404, detail=f"Host '{host_id}' nicht gefunden")
+        raise HTTPException(status_code=404, detail=f"Host '{host_id}' not found")
 
     try:
         redis = await get_redis()
@@ -851,7 +851,7 @@ async def get_host_autostart(
     """Steht der Autostart dieser Box an oder aus — und für welches Rezept?"""
     host = await _get_host(session, host_id)
     if not host:
-        raise HTTPException(status_code=404, detail=f"Host '{host_id}' nicht gefunden")
+        raise HTTPException(status_code=404, detail=f"Host '{host_id}' not found")
     return await _autostart_view(session, host)
 
 
@@ -869,7 +869,7 @@ async def set_host_autostart(
 
     host = await _get_host(session, host_id)
     if not host:
-        raise HTTPException(status_code=404, detail=f"Host '{host_id}' nicht gefunden")
+        raise HTTPException(status_code=404, detail=f"Host '{host_id}' not found")
 
     slug = (body.recipe_slug or "").strip() or None
     if slug is not None:
@@ -877,7 +877,7 @@ async def set_host_autostart(
         if recipe is None:
             raise HTTPException(
                 status_code=422,
-                detail=f"Rezept '{slug}' steht nicht im Katalog — erst anlegen, dann einschalten.",
+                detail=f"Recipe '{slug}' is not in the catalog — create it first, then enable.",
             )
         host.autostart_recipe_slug = slug
     # Einschalten, ohne je ein Rezept gestartet zu haben, wäre ein Schalter ins
@@ -887,8 +887,8 @@ async def set_host_autostart(
         raise HTTPException(
             status_code=422,
             detail=(
-                "Für diese Box ist noch kein Rezept hinterlegt — erst ein Rezept "
-                "über den Umschalter starten, dann den Autostart einschalten."
+                "No recipe is set for this box yet — start one via the "
+                "switcher first, then enable autostart."
             ),
         )
 
