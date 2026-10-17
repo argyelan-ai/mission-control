@@ -25,6 +25,12 @@ set -euo pipefail
 #   MC_INSTALL_DIR   the install folder (compose file, .env). Default: the
 #                    working directory when it holds an install, else the
 #                    folder of this script.
+#   MC_BACKUP_PASSPHRASE / MC_BACKUP_PASSPHRASE_FILE
+#                    passphrase (or a file holding it) that encrypts .env into
+#                    the backup (openssl, AES-256, PBKDF2). Without one, a
+#                    backup run in a terminal asks; an unattended run skips
+#                    .env and says so. Keep the passphrase outside this machine
+#                    (password manager): without it the .env copy is useless.
 #
 # Backups written before MC_BACKUP_DIR existed live in ./backups. They are still
 # listed and restorable, and count towards MC_BACKUP_KEEP: once enough newer
@@ -36,7 +42,8 @@ set -euo pipefail
 #   2. save the current state as a "pre-restore" backup
 #   3. stop backend and mc-worker
 #   4. drop and recreate the database, load the dump in one transaction
-#   5. extract the ~/.mc archive, start the services again
+#   5. extract the ~/.mc archive, put .env back (if one was saved and the
+#      passphrase is given), start the services again
 # ============================================================
 
 umask 077
@@ -57,6 +64,10 @@ DB_NAME="mission_control"
 DB_USER="mc"
 PRE_RESTORE_KEEP=3
 STOP_SERVICES=(backend mc-worker)
+ENV_FILE="$REPO_DIR/.env"
+ENV_MARKER="MC-ENV-BACKUP v1"
+ENC_ARGS=(-aes-256-cbc -pbkdf2 -iter 600000 -md sha256)
+PASSPHRASE=""
 
 # Read a setting: environment first, then a NAME=value line in .env.
 cfg() {
@@ -122,6 +133,59 @@ ensure_backup_dir() {
 data_archive_for() {
     local f="${1/mc_backup_/mc_data_}"
     printf '%s' "${f%.sql.gz}.tar.gz"
+}
+
+env_archive_for() {
+    local f="${1/mc_backup_/mc_env_}"
+    printf '%s' "${f%.sql.gz}.env.enc"
+}
+
+# Value of NAME in a .env text (last assignment wins, quotes stripped).
+env_value() {
+    local v
+    v="$(grep -E "^$1=" <<<"$2" | tail -n 1 | cut -d= -f2- || true)"
+    v="${v%\"}"; v="${v#\"}"; v="${v%\'}"; v="${v#\'}"
+    printf '%s' "$v"
+}
+
+# Sets PASSPHRASE: environment, then a passphrase file, then — only in a
+# terminal — a prompt. Stays empty when none is available.
+get_passphrase() {
+    local purpose="$1" pf again=""
+    PASSPHRASE=""
+    if [[ -n "${MC_BACKUP_PASSPHRASE:-}" ]]; then
+        PASSPHRASE="$MC_BACKUP_PASSPHRASE"
+        return 0
+    fi
+    pf="$(cfg MC_BACKUP_PASSPHRASE_FILE "")"
+    if [[ -n "$pf" ]]; then
+        [[ -r "$pf" ]] || die "MC_BACKUP_PASSPHRASE_FILE is set but cannot be read: $pf"
+        IFS= read -r PASSPHRASE < "$pf" || true
+        return 0
+    fi
+    [[ -t 0 ]] || return 0
+    if [[ "$purpose" == "backup" ]]; then
+        read -r -s -p "Passphrase to encrypt .env into this backup (Enter = leave .env out): " PASSPHRASE || true
+        echo
+        if [[ -n "$PASSPHRASE" ]]; then
+            read -r -s -p "Same passphrase again: " again || true
+            echo
+            [[ "$again" == "$PASSPHRASE" ]] || die "the two passphrases differ — nothing written."
+        fi
+    else
+        read -r -s -p "Passphrase of the .env in this backup (Enter = keep the current .env): " PASSPHRASE || true
+        echo
+    fi
+}
+
+# Prints the .env stored in an encrypted archive, or fails (wrong passphrase,
+# damaged file). The passphrase goes to openssl on a file descriptor, never
+# on the command line.
+decrypt_env() {
+    local out
+    out="$(openssl enc -d "${ENC_ARGS[@]}" -pass fd:3 -in "$1" 3<<<"$PASSPHRASE" 2>/dev/null)" || return 1
+    [[ "${out%%$'\n'*}" == "$ENV_MARKER" ]] || return 1
+    printf '%s\n' "${out#*$'\n'}"
 }
 
 # A database archive is valid when gzip is intact and the content is a
@@ -243,13 +307,38 @@ make_backup() {
     else
         echo "No $MC_DATA_DIR directory — only the database was backed up."
     fi
+
+    # .env holds the master keys (SECRETS_ENCRYPTION_KEY, DB_PASSWORD,
+    # JWT_SECRET_KEY). It is only ever stored encrypted.
+    if [[ -f "$ENV_FILE" ]]; then
+        local envf tmp_env
+        envf="$(env_archive_for "$db")"
+        tmp_env="$envf.partial"
+        PARTIALS+=("$tmp_env")
+        if [[ -z "$PASSPHRASE" ]]; then
+            echo "NOTE: .env was not backed up — no passphrase. Without .env a restore on another"
+            echo "      machine cannot read the stored API keys. Set MC_BACKUP_PASSPHRASE or"
+            echo "      MC_BACKUP_PASSPHRASE_FILE, or run ./backup.sh in a terminal to be asked."
+        elif ! command -v openssl >/dev/null 2>&1; then
+            echo "NOTE: .env was not backed up — openssl is not installed."
+        else
+            { printf '%s\n' "$ENV_MARKER"; cat "$ENV_FILE"; } \
+                | openssl enc -e "${ENC_ARGS[@]}" -salt -pass fd:3 -out "$tmp_env" 3<<<"$PASSPHRASE" \
+                || die "encrypting .env failed."
+            decrypt_env "$tmp_env" >/dev/null || die "the encrypted .env failed its check."
+            mv -f -- "$tmp_env" "$envf"
+            echo "Encrypted .env: $envf"
+        fi
+    fi
     LAST_BACKUP="$db"
 }
 
 cmd_backup() {
+    [[ -f "$ENV_FILE" ]] && get_passphrase backup
     make_backup ""
     rotate 'mc_backup_[0-9]*.sql.gz' "$KEEP_LAST" "database backups"
     rotate 'mc_data_[0-9]*.tar.gz' "$KEEP_LAST" "MC data backups"
+    rotate 'mc_env_[0-9]*.env.enc' "$KEEP_LAST" "encrypted .env copies"
     echo "Done."
 }
 
@@ -326,6 +415,18 @@ cmd_restore() {
         check_data "$data" || die "MC data archive damaged: $data — nothing changed."
     fi
 
+    local envf new_env="" restore_env=0
+    envf="$(env_archive_for "$file")"
+    if [[ -f "$envf" ]]; then
+        get_passphrase restore
+        if [[ -n "$PASSPHRASE" ]]; then
+            command -v openssl >/dev/null 2>&1 || die "this backup holds an encrypted .env, but openssl is not installed — nothing changed."
+            new_env="$(decrypt_env "$envf")" \
+                || die "wrong passphrase or damaged .env archive: $envf — nothing changed."
+            restore_env=1
+        fi
+    fi
+
     echo
     echo "WARNING: this replaces the current database (drop + recreate)."
     echo "  Database: $file"
@@ -333,6 +434,13 @@ cmd_restore() {
         echo "  MC data:  $data  (extracted over ~/.mc)"
     else
         echo "  MC data:  no matching mc_data archive — ~/.mc is NOT restored."
+    fi
+    if [[ "$restore_env" == 1 ]]; then
+        echo "  .env:     $envf  (the current .env is kept as .env.backup-pre-restore-<time>)"
+    elif [[ -f "$envf" ]]; then
+        echo "  .env:     not restored (no passphrase) — the current .env stays."
+    else
+        echo "  .env:     not in this backup — the current .env stays."
     fi
     if [[ "$safety" == 1 ]]; then
         echo "  The current state is saved first as a pre-restore backup in $BACKUP_DIR."
@@ -356,6 +464,7 @@ cmd_restore() {
         safety_file="$LAST_BACKUP"
         rotate 'mc_backup_pre-restore_*.sql.gz' "$PRE_RESTORE_KEEP" "pre-restore copies"
         rotate 'mc_data_pre-restore_*.tar.gz' "$PRE_RESTORE_KEEP" "pre-restore data copies"
+        rotate 'mc_env_pre-restore_*.env.enc' "$PRE_RESTORE_KEEP" "pre-restore .env copies"
     fi
 
     # 3. Stop everything that writes to the database.
@@ -387,7 +496,43 @@ cmd_restore() {
         (umask 022; tar -xpzf "$data" -C "$HOME")
         echo "MC data restored from: $data"
     fi
+    local env_changed=0 current_env=""
+    if [[ "$restore_env" == 1 ]]; then
+        [[ -f "$ENV_FILE" ]] && current_env="$(cat "$ENV_FILE")"
+        if [[ "$new_env" != "$current_env" ]]; then
+            local kept old_pw new_pw
+            kept="$REPO_DIR/.env.backup-pre-restore-$(date +%Y-%m-%d_%H-%M-%S)"
+            if [[ -f "$ENV_FILE" ]]; then
+                cp -p -- "$ENV_FILE" "$kept"
+                chmod 600 "$kept"
+            fi
+            # Rewrite in place (same inode): containers bind-mount .env.
+            printf '%s\n' "$new_env" > "$ENV_FILE"
+            chmod 600 "$ENV_FILE"
+            echo ".env restored from: $envf"
+            [[ -f "$kept" ]] && echo "Previous .env kept in: $kept"
+            # The database role keeps the password it was created with; make
+            # it match the restored DB_PASSWORD so the backend can log in.
+            old_pw="$(env_value DB_PASSWORD "$current_env")"
+            new_pw="$(env_value DB_PASSWORD "$new_env")"
+            if [[ -n "$new_pw" && "$new_pw" != "$old_pw" ]]; then
+                printf "ALTER ROLE %s PASSWORD '%s';\n" "$DB_USER" "${new_pw//\'/\'\'}" \
+                    | docker compose exec -T db psql -U "$DB_USER" -d postgres --quiet -v ON_ERROR_STOP=1 >/dev/null
+                echo "Database password updated to the restored DB_PASSWORD."
+            fi
+            env_changed=1
+        else
+            echo ".env in the backup is the same as the current one — unchanged."
+        fi
+    fi
     trap - ERR
+    if [[ "$env_changed" == 1 ]]; then
+        [[ -n "$safety_file" ]] && echo "Previous state kept in: $safety_file"
+        echo
+        echo "The running containers still carry the old .env values."
+        echo "Start everything with the restored .env:  docker compose up -d"
+        exit 0
+    fi
     if [[ -n "$stopped" ]]; then
         echo "Starting $(tr '\n' ' ' <<<"$stopped")..."
         # shellcheck disable=SC2086

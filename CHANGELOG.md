@@ -40,6 +40,14 @@ follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
   working directory (older schedules) uses that install's `.env` and
   `./backups`; `MC_INSTALL_DIR` sets it explicitly. New:
   `./backup.sh list [--full]` and `./backup.sh dir`.
+  4). Existing `./backups` stay readable for `list` and `restore` and are not
+  rotated. New: `./backup.sh list [--full]` and `./backup.sh dir`.
+- New: `.env` goes into the backup **encrypted** (openssl AES-256, PBKDF2)
+  with a passphrase from `MC_BACKUP_PASSPHRASE`, `MC_BACKUP_PASSPHRASE_FILE`
+  or a prompt. Without a passphrase `.env` is left out and the run says so.
+  Restore decrypts it before changing anything (wrong passphrase → nothing
+  changed), keeps the current `.env` as `.env.backup-pre-restore-<time>`,
+  rewrites `.env` in place and aligns the database password with it.
 
 ## [0.3.1] - 2026-10-17
 
