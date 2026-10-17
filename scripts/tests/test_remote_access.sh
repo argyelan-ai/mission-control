@@ -232,7 +232,7 @@ INSTALL="$HERE/../../install.sh"
 SETUP="$HERE/../../setup.sh"
 line() { grep -n "$1" "$2" | head -n 1 | cut -d: -f1; }
 decide=$(line 'mc_remote_decide .env' "$INSTALL")
-health=$(line 'localhost:8000/health' "$INSTALL")
+health=$(line '^mc_wait_healthy ||' "$INSTALL")   # the fresh install's health wait
 finish=$(line 'mc_remote_finish "$MC_REMOTE_HOST"' "$INSTALL")
 url=$(line 'MC_URL=$(mc_access_url' "$INSTALL")
 if [ -n "$decide" ] && [ -n "$health" ] && [ -n "$finish" ] && [ -n "$url" ] \

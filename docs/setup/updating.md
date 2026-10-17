@@ -21,18 +21,53 @@ your checkout carries this updater.)
 
 What it does on the default **stable** channel:
 
-1. looks up the latest release (GitHub API; when that is rate-limited or
+1. **stops first when agents are working**: it counts the tasks in progress.
+   With a terminal it asks whether to go ahead; without one (cron, scripts)
+   it stops. `--ignore-running-tasks` goes ahead anyway — the restart
+   interrupts those runs,
+2. looks up the latest release (GitHub API; when that is rate-limited or
    offline, the highest `vX.Y.Z` tag of the repository) — and skips a
    release whose images are not published yet, taking the newest one that
    has them,
-2. checks out exactly that tag — your agent fleet file is carried across,
-3. runs `./setup.sh`, which adds `.env` keys the new version needs (it never
+3. **takes a backup** with `./backup.sh` right before the switch. When the
+   backup fails, the update does not start. `--no-backup` skips it — only
+   when you have a fresh backup of your own. The backup needs the database:
+   **a stopped stack now stops the update** (before, `--update` just started
+   it). Start the database first (`docker compose up -d db`) or pass
+   `--no-backup`. The backup is a normal `./backup.sh` run, so it also
+   archives `~/.mc` (can be several GB) and rotates old backups — the
+   update may remove your oldest backup (up to 0.3.x: `./backups`, the last
+   4 are kept; newer versions: `MC_BACKUP_DIR`, `MC_BACKUP_KEEP`),
+4. keeps a copy of your current `.env` as `.env.backup-pre-update`
+   (git-ignored, owner-only) for the way back,
+5. checks out exactly that tag — your agent fleet file is carried across,
+6. runs `./setup.sh`, which adds `.env` keys the new version needs (it never
    regenerates an existing `.env`),
-4. pins `MC_IMAGE_TAG` and `MC_AGENT_IMAGE_TAG` in `.env` to the same
+7. pins `MC_IMAGE_TAG` and `MC_AGENT_IMAGE_TAG` in `.env` to the same
    version (`0.3.0` for `v0.3.0`) — written in place, so running containers
    that mount `.env` see the change,
-5. pulls those prebuilt images (local build of the same tag if that fails),
-   restarts the stack — migrations run automatically on backend start.
+8. pulls those prebuilt images (local build of the same tag if that fails),
+   restarts the stack — migrations run automatically on backend start,
+9. **waits until the backend answers `/health`** — up to 6 minutes, longer
+   than the 5 minutes a slow first boot is allowed (`MC_HEALTH_TIMEOUT`
+   changes it).
+
+Only then does it say **"Update complete"**. Anything else ends with
+**"Update failed"**, the backup file it took and the commands back, for
+example:
+
+```text
+✗ Update failed — Mission Control is not confirmed running on the new version.
+  Backup taken right before the switch: ~/mc-backups/mc_backup_2026-10-17_09-00-00.sql.gz
+  Re-running the same update is safe. To go back to v0.3.0:
+    git checkout -q v0.3.0
+    cp .env.backup-pre-update .env
+    ./backup.sh restore ~/mc-backups/mc_backup_2026-10-17_09-00-00.sql.gz
+    docker compose up -d
+```
+
+The restore line only appears when the database schema changed during the
+failed update; otherwise it says that no restore is needed.
 
 It refuses to start when another Mission Control stack runs on the machine
 (a second stack would fight it for ports 80/8000), or when a stack with the

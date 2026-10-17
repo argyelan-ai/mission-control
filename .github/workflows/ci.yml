@@ -252,15 +252,15 @@ jobs:
         env:
           BUILD_MIN_FREE_GB: "5"
         run: ./install.sh --here
-      - name: install.sh — shellcheck + release-pinning helpers
+      - name: install.sh — shellcheck + release-pinning helpers + honest --update
         # The one-liner a user runs unseen via curl | bash. shellcheck -x
         # follows the sourced disk-preflight library. The helper tests run
         # against a local git repo and file:// "API" answers, so they are
         # deterministic and need no GitHub API quota.
         run: |
           shellcheck -x -S warning install.sh scripts/release-image-tags.sh   # info-level notes differ between shellcheck versions
-          pip install -q pytest
-          python3 -m pytest -q -p no:cacheprovider --noconftest backend/tests/test_install_release_pinning.py backend/tests/test_release_image_tags.py
+          pip install -q pytest pyyaml
+          python3 -m pytest -q -p no:cacheprovider --noconftest backend/tests/test_install_release_pinning.py backend/tests/test_install_update.py backend/tests/test_release_image_tags.py
       - name: --here ran the checkout, not a published image
         # CI has no release that matches the branch under test, so --here
         # must take the edge path: MC_IMAGE_TAG=edge (a tag no registry
