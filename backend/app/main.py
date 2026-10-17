@@ -395,6 +395,12 @@ limiter = Limiter(
 )
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# 422 without the client's input: FastAPI's default echoes the rejected value
+# (a too-short password, a whole credentials body) — app/validation_errors.py.
+from app.validation_errors import install_validation_error_handlers
+
+install_validation_error_handlers(app)
 app.add_middleware(PathExemptSlowAPIMiddleware)
 
 # Register all routers
