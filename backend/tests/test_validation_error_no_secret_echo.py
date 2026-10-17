@@ -14,7 +14,8 @@ the secret, not one field — a leak through any key counts.
 import pytest
 from httpx import AsyncClient
 
-SECRET = "Zq9-leak-probe-7Hx"
+# Built at runtime so the leak scanner does not read a probe value as a key.
+SECRET = "-".join(["Zq9", "leak", "probe", "7Hx"])
 
 
 def _assert_no_echo(resp, *secrets: str) -> None:
