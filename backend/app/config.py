@@ -424,7 +424,10 @@ class Settings(BaseSettings):
     environment: str = "development"
     # Matches the public release tag (CHANGELOG.md / GitHub Releases).
     # Release process: bump here + pyproject.toml + CHANGELOG, then tag.
-    app_version: str = "0.1.1"
+    # Set at image build time (release.yml passes the tag as APP_VERSION, the
+    # backend Dockerfile turns it into an env var). Local and edge builds are
+    # "dev" — not a version number, so the update check never flags them.
+    app_version: str = "dev"
     # Fallback working directory for tasks WITHOUT project context.
     # Primarily dispatch.py uses project.workspace_path (via default_project_id on board).
     # mc_repo_path only kicks in when there is no project and no agent workspace.
