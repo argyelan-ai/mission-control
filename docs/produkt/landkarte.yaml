@@ -758,7 +758,11 @@ internal:
   - "endpoint:PUT /api/v1/system/mode"
   - "endpoint:POST /api/v1/admin/usage/backfill-attribution"
   # Liveness probe: container healthchecks, e2e preflight and status scripts
-  # poll the bare /health endpoint (no auth, router docstring).
+  # poll the bare /health endpoint (no auth, router docstring). Since the
+  # host-uid fix it also answers `status: degraded` + an `mc_home` block when
+  # the backend cannot write ~/.mc (boot step services/mc_home_preflight.py,
+  # run in prepare_process for API + worker); install.sh and the CI fresh-boot
+  # job read that field. Still HTTP 200 so the stack starts and shows why.
   - "endpoint:GET /health"
   # Agent container bootstrap: container entrypoints fetch the agent token
   # and runtime env from the Vault at boot (ADR-019 bootstrap endpoint,

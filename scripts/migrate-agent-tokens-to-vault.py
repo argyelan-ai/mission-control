@@ -4,7 +4,7 @@
 Einmalig ausfuehren. Danach generiert start-all.sh die .env.agents aus der DB.
 
 Usage:
-    docker compose exec backend python3 /app/scripts/migrate-agent-tokens-to-vault.py
+    docker compose exec -u mcuser backend python3 /app/scripts/migrate-agent-tokens-to-vault.py
 
 Oder vom Host (mit Backend-venv):
     cd backend && source .venv/bin/activate

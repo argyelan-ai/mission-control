@@ -8,8 +8,8 @@ from the JSONL source files (see token_harvester.split_omp_context) and UPDATEs
 the affected model_usage_events rows, including cost_usd.
 
 Usage (inside the backend container):
-    docker compose exec backend python -m scripts.backfill_omp_token_deltas --dry-run
-    docker compose exec backend python -m scripts.backfill_omp_token_deltas
+    docker compose exec -u mcuser backend python -m scripts.backfill_omp_token_deltas --dry-run
+    docker compose exec -u mcuser backend python -m scripts.backfill_omp_token_deltas
 
 Idempotent: run it twice — the second run corrects 0 events (every row already
 matches the pure-function derivation from the source files).

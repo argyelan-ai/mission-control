@@ -4,9 +4,9 @@ Phase 28 of v0.9 OpenClaw Gateway Sunset. Single operator-facing
 wrapper around Alembic migration 0122_henry_sunset_boss_promotion.
 
 Usage (im backend container):
-    docker compose exec backend python -m scripts.mc_henry_sunset
-    docker compose exec backend python -m scripts.mc_henry_sunset --dry-run
-    docker compose exec backend python -m scripts.mc_henry_sunset --commit
+    docker compose exec -u mcuser backend python -m scripts.mc_henry_sunset
+    docker compose exec -u mcuser backend python -m scripts.mc_henry_sunset --dry-run
+    docker compose exec -u mcuser backend python -m scripts.mc_henry_sunset --commit
 
 --dry-run (Default): Inventory Henry's footprint + render Markdown
                      report + post to DISCORD_WEBHOOK_OPS. ZERO DB
@@ -264,7 +264,7 @@ def _render_dry_run_md(fp: HenryFootprint) -> str:
         "### Next step",
         "1. The operator reviews this report.",
         "2. `./backup.sh` (manual Pre-Step, CONTEXT.md D-04).",
-        "3. `docker compose exec backend python -m scripts.mc_henry_sunset --commit`",
+        "3. `docker compose exec -u mcuser backend python -m scripts.mc_henry_sunset --commit`",
         "",
         "_This is a DRY RUN - no database changes have been made._",
     ]

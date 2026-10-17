@@ -24,7 +24,7 @@ Thanks for your interest! A few ground rules keep this codebase healthy.
 - **Tests**: changes to backend logic need pytest coverage; frontend
   components need vitest coverage. The suite must be green before review.
 - **Migrations**: any model change requires an Alembic migration
-  (`docker compose exec backend alembic revision --autogenerate -m "..."`).
+  (`docker compose exec -u mcuser backend alembic revision --autogenerate -m "..."`).
   Never edit an already-merged migration.
 - **Architecture changes** (new service, new runtime, new dispatch flow, new
   table): update `docs/ARCHITECTURE.md` and add an ADR in `docs/decisions/`

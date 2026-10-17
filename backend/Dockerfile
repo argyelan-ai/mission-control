@@ -42,7 +42,9 @@ COPY . .
 RUN uv pip install --system --no-cache -e ".[test]" \
     && adduser --disabled-password --gecos "" mcuser \
     && chown -R mcuser:mcuser /app/config
-USER mcuser
+# No `USER mcuser`: the entrypoint starts as root only to line mcuser up with
+# the host user (PUID/PGID, see docker-entrypoint.sh) and then drops to mcuser
+# via setpriv before running anything — same as the release target below.
 EXPOSE 8000
 COPY --chmod=755 docker-entrypoint.sh /docker-entrypoint.sh
 ENTRYPOINT ["/docker-entrypoint.sh"]
@@ -66,10 +68,15 @@ CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload
 FROM base AS release
 COPY . .
 
-# Create non-root user and give write access to config
+# Create non-root user and give write access to config.
+# The process still runs as mcuser — but the image starts as root so that
+# docker-entrypoint.sh can give mcuser the host user's uid/gid (PUID/PGID from
+# .env; on Linux the ~/.mc bind mount is only writable for that uid) and then
+# drops privileges with setpriv before migrations or the server start. Without
+# PUID/PGID (macOS/Windows Docker Desktop, older installs) mcuser stays 1000.
+# For one-off commands that write files use `docker compose exec -u mcuser`.
 RUN adduser --disabled-password --gecos "" mcuser \
     && chown -R mcuser:mcuser /app/config
-USER mcuser
 
 EXPOSE 8000
 

@@ -48,6 +48,13 @@ else
   # absolute repo path for cross-image runtime switches (see docker-compose.yml).
   sed_i "s|^HOST_UID=.*|HOST_UID=$(id -u)|" .env
   sed_i "s|^MC_REPO_PATH=.*|MC_REPO_PATH=$(pwd)|" .env
+  # PUID/PGID → the backend runs as YOUR uid/gid so it can write the ~/.mc
+  # bind mount (Linux only; Docker Desktop on macOS maps uids by itself, there
+  # they stay empty = unchanged image default).
+  if [ "$(uname -s)" = "Linux" ]; then
+    sed_i "s|^PUID=.*|PUID=$(id -u)|" .env
+    sed_i "s|^PGID=.*|PGID=$(id -g)|" .env
+  fi
 
   echo "✅ .env created with generated secrets"
   echo "   LOCAL_AUTH_TOKEN:       ${LOCAL_AUTH_TOKEN:0:8}..."
@@ -58,12 +65,21 @@ else
   echo "   INTERNAL_BOOTSTRAP_SECRET: ${INTERNAL_BOOTSTRAP_SECRET:0:8}..."
   echo "   HOST_UID:               $(id -u)"
   echo "   MC_REPO_PATH:           $(pwd)"
+  if [ "$(uname -s)" = "Linux" ]; then
+    echo "   PUID / PGID:            $(id -u) / $(id -g)"
+  fi
 fi
 
 # Backfill host-specific keys for .env files that predate them (upgrades /
 # hand-copied .env.example) — the fresh-install branch above never runs then.
 grep -q '^HOST_UID=' .env || { echo "HOST_UID=$(id -u)" >> .env; echo "✅ backfilled HOST_UID=$(id -u)"; }
 grep -q '^MC_REPO_PATH=' .env || { echo "MC_REPO_PATH=$(pwd)" >> .env; echo "✅ backfilled MC_REPO_PATH=$(pwd)"; }
+# PUID/PGID (Linux): an .env from before the key existed has no line at all;
+# an empty line is left alone (it is the documented "image default" choice).
+if [ "$(uname -s)" = "Linux" ]; then
+  grep -q '^PUID=' .env || { echo "PUID=$(id -u)" >> .env; echo "✅ backfilled PUID=$(id -u)"; }
+  grep -q '^PGID=' .env || { echo "PGID=$(id -g)" >> .env; echo "✅ backfilled PGID=$(id -g)"; }
+fi
 # Ohne dieses Secret antwortet /api/v1/internal/bootstrap mit 401 und JEDER
 # Agent-Container bricht beim Start ab (docker/*/entrypoint.sh). Ein .env aus
 # der Zeit vor PR #404 hat den Key nicht — der Fresh-Install-Zweig oben laeuft
@@ -85,6 +101,9 @@ if [ -x scripts/init-mc-deliverables-dirs.sh ]; then
   echo "🗂️  Initializing ~/.mc/deliverables/..."
   bash scripts/init-mc-deliverables-dirs.sh
 fi
+# Same reason for the other bind-mount source the compose file names directly
+# (Docker would create a missing one as root on Linux).
+mkdir -p "${HOME}/.mc/mcp-screenshots"
 
 echo ""
 echo "Next steps:"

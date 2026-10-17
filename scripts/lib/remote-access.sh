@@ -58,6 +58,18 @@ mc_env_set() {
   cat "$tmp" >"$file" && rm -f "$tmp"
 }
 
+# mc_env_unset KEY [file] — drop every KEY= line, same in-place write.
+mc_env_unset() {
+  local key="$1" file="${2:-.env}" tmp line
+  [ -f "$file" ] || return 0
+  tmp="${file}.tmp.$$"
+  : >"$tmp"
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in "${key}="*) ;; *) printf '%s\n' "$line" >>"$tmp" ;; esac
+  done <"$file"
+  cat "$tmp" >"$file" && rm -f "$tmp"
+}
+
 # mc_is_headless — 0 when nobody can open a browser ON this machine: an SSH
 # session, or Linux without a graphical session.
 mc_is_headless() {

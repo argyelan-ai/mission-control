@@ -11,7 +11,7 @@ Verifiziert die volle Verkettung mit live docker-compose stack:
 Muss IM Backend-Container laufen (sidecar hostname `mc-playwright:8790` nur
 im Compose-Netzwerk). Aus dem Repo-Root:
 
-  docker compose exec -T backend python3 /app/scripts/e2e-pdf-test.py
+  docker compose exec -T -u mcuser backend python3 /app/scripts/e2e-pdf-test.py
 
 Exit-Code 0 = PASS, !=0 = FAIL mit detailliertem Trace.
 
