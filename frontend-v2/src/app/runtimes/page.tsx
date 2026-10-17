@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 import { motion } from "framer-motion";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -44,6 +44,8 @@ import { RuntimeDetailPanel } from "./RuntimeDetailPanel";
 import { MODELS_TAB_EVENT, openModelsTab, type ModelsTab } from "./modelsTab";
 import { HeadDiskWarning, HeadOrphanRuns } from "@/components/heads/HeadOccupancy";
 import { fetchWithCache, loadCached } from "./queryCache";
+import { RuntimesEmptyView } from "./RuntimesEmptyView";
+import { useAppStore } from "@/lib/store";
 
 // ── Active Downloads Panel ────────────────────────────────────────────────────
 
@@ -759,9 +761,15 @@ function UnassignedRow({ runtime, onOpen }: { runtime: Runtime; onOpen: (rt: Run
 export default function RuntimesPage() {
   const t = useTranslations("runtimes");
   const tSlot = useTranslations("runtimes.slotPage");
+  const tHosts = useTranslations("runtimes.hosts");
   const [addOpen, setAddOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [pageTab, setPageTab] = useState<"fleet" | "cloud" | "models" | "infra">("fleet");
+  // Fleet's empty view asks the Infrastructure tab's HostsSection to open its
+  // own "Add device" chooser — one add path, not a copy of it (ADR-093).
+  const [addDeviceRequested, setAddDeviceRequested] = useState(false);
+  const clearAddDeviceRequest = useCallback(() => setAddDeviceRequested(false), []);
+  const isAdmin = useAppStore((s) => s.currentUser?.role === "admin");
 
   // FreeBox/EmptyStage's "add model" actions (and anyone else firing openModelsTab) must land on
   // the Models tab — the inner ModelsSection listener only sets its sub-tab.
@@ -780,7 +788,7 @@ export default function RuntimesPage() {
     refetchInterval: 15_000,
   });
 
-  const { data: hostsData } = useQuery<Host[]>({
+  const { data: hostsData, isLoading: hostsLoading } = useQuery<Host[]>({
     queryKey: ["hosts"],
     queryFn: () => fetchWithCache("hosts", () => api.hosts.list()),
     placeholderData: () => loadCached<Host[]>("hosts"),
@@ -832,7 +840,16 @@ export default function RuntimesPage() {
   const selectedLive = selectedRuntime ? live?.[selectedRuntime.slug ?? selectedRuntime.id] : undefined;
   const openPanel = (rt: Runtime) => setSelectedId(rt.id);
 
-  const isEmpty = !isLoading && !error && allRuntimes.length === 0;
+  // Per-tab empty views (fresh install): Fleet has nothing to stage when no
+  // box is registered and no runtime is waiting for one; Cloud when no hosted
+  // API row exists. Each view says what belongs there and links the existing
+  // add path — the whole-page "no runtimes" block they replace said neither.
+  const fleetEmpty =
+    !hostsLoading &&
+    stageGroups.length === 0 &&
+    sleepingGroups.length === 0 &&
+    unassignedRuntimes.length === 0;
+  const cloudEmpty = groups.cloud.length === 0;
 
   return (
     <AppShell>
@@ -885,22 +902,6 @@ export default function RuntimesPage() {
           </div>
         )}
 
-        {isEmpty && (
-          <div className="flex flex-col items-center gap-3 py-16 text-center">
-            <span className="text-sm" style={{ color: C.textMuted }}>{tSlot("emptyTitle")}</span>
-            <span className="text-xs max-w-xs" style={{ color: C.textDim }}>{tSlot("emptyHint")}</span>
-            <button
-              onClick={() => setAddOpen(true)}
-              className="mt-1 flex items-center gap-1.5 text-xs px-3 py-2 sm:py-1.5 min-h-11 sm:min-h-0 rounded-md transition-all cursor-pointer"
-              style={{ color: C.accent, border: `1px solid ${C.borderAccent}`, background: C.accentSubtle }}
-            >
-              <Plus size={11} />
-              {t("addRuntime")}
-            </button>
-          </div>
-        )}
-
-
         {/* Tabs sit at the top (operator feedback: easier to reach).
             Monitoring lives ONLY on the Fleet tab (full stage) — a compact
             monitoring strip on the other tabs was tried and removed on
@@ -943,7 +944,30 @@ export default function RuntimesPage() {
               })}
             </div>
 
-            {pageTab === "fleet" && !isEmpty && (
+            {pageTab === "fleet" && fleetEmpty && (
+              <>
+                <HeadDiskWarning />
+                <RuntimesEmptyView
+                  region="fleet"
+                  text={tSlot("emptyFleet")}
+                  primary={
+                    isAdmin
+                      ? {
+                          label: tHosts("addDeviceButton"),
+                          onClick: () => {
+                            setPageTab("infra");
+                            setAddDeviceRequested(true);
+                          },
+                        }
+                      : undefined
+                  }
+                  secondary={{ label: tSlot("emptyConnectByAddress"), onClick: () => setAddOpen(true) }}
+                />
+                <HeadOrphanRuns />
+              </>
+            )}
+
+            {pageTab === "fleet" && !fleetEmpty && (
               <>
                 {/* Above the stage, right under the tab bar (round 4
                     review finding): stage groups stack at ~490px per card
@@ -985,16 +1009,28 @@ export default function RuntimesPage() {
               </>
             )}
 
-            {pageTab === "cloud" && !isEmpty && (
-              <CloudUsage runtimes={groups.cloud} onOpen={openPanel} />
-            )}
+            {pageTab === "cloud" &&
+              (cloudEmpty ? (
+                <RuntimesEmptyView
+                  region="cloud"
+                  text={tSlot("emptyCloud")}
+                  primary={{ label: tSlot("emptyPickProviderModel"), onClick: () => openModelsTab("providers") }}
+                  secondary={{ label: tSlot("emptyConnectByAddress"), onClick: () => setAddOpen(true) }}
+                />
+              ) : (
+                <CloudUsage runtimes={groups.cloud} onOpen={openPanel} />
+              ))}
 
             {pageTab === "models" && <ModelsSection embedded />}
 
             {pageTab === "infra" && (
               <div className="flex flex-col gap-5">
                 <RuntimeRegister runtimes={allRuntimes} onOpen={openPanel} />
-                <HostsSection embedded />
+                <HostsSection
+                  embedded
+                  addDeviceRequested={addDeviceRequested}
+                  onAddDeviceRequestHandled={clearAddDeviceRequest}
+                />
                 <KvResetScheduleToggle />
                 <VllmContainerCatalog />
                 <CliToolsSection embedded />
