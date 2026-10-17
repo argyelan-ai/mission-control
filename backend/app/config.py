@@ -660,15 +660,15 @@ class Settings(BaseSettings):
     dgx_ssh_user: str = ""
     dgx_ssh_key_path: str = "/home/mcuser/.ssh/id_rsa"
 
-    # ── PORSCHE power-managed runtime (unsloth_porsche) ───────────────────────
-    # The PORSCHE Windows box runs a local unsloth OpenAI server but sleeps when
+    # ── Power-managed box runtime (flask_wol) ─────────────────────────────
+    # A power-managed Windows box runs a local OpenAI-compatible server but sleeps when
     # idle. Controlled via its Flask :5555 server (PowerShell) and woken via
     # Wake-on-LAN. These are fallback defaults — the authoritative values live on
     # the runtime row (control_url / wol_mac_address / endpoint / host).
-    porsche_lan_ip: str = ""
-    porsche_mac: str = ""
-    porsche_broadcast: str = "192.0.2.255"
-    porsche_control_url: str = ""
+    wol_lan_ip: str = ""
+    wol_mac: str = ""
+    wol_broadcast: str = "192.0.2.255"
+    wol_control_url: str = ""
     # Directory (under the ~/.mc host bind-mount, same absolute path in Docker via
     # HOME_HOST) where the backend drops Wake-on-LAN trigger files for the
     # host-side launchd watcher. Backend can't send L2 broadcast from Docker, so

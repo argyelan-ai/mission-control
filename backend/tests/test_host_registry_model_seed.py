@@ -3,7 +3,7 @@
 Covers:
 - Host model: defaults, persistence, unique slug
 - Runtime.host_id FK (nullable, host delete → SET NULL semantics via ondelete)
-- Seed: dgx-spark from settings, porsche from the legacy unsloth-porsche runtime
+- Seed: dgx-spark from settings, a flask_wol box from its legacy runtime row
 - Seed idempotency (second run = no-op)
 - Fresh install without dgx_ssh_host → 0 hosts, no error
 
@@ -132,15 +132,15 @@ async def test_seed_skips_when_ssh_host_already_registered(session, monkeypatch)
     assert len(result.scalars().all()) == 1
 
 
-# ── porsche seed from the legacy runtime ───────────────────────────────────
+# ── flask_wol box seed from the legacy runtime ─────────────────────────────
 
 
-async def test_seed_porsche_from_legacy_runtime(session, monkeypatch):
+async def test_seed_flask_wol_box_from_legacy_runtime(session, monkeypatch):
     monkeypatch.setattr(settings, "dgx_ssh_host", "")
     session.add(
         _make_runtime(
-            "unsloth-porsche",
-            runtime_type="unsloth_porsche",
+            "wake-box-runtime",
+            runtime_type="flask_wol",
             endpoint="http://192.0.2.77:8000/v1",
             host="192.0.2.77",
             control_url="http://192.0.2.77:5555",
@@ -153,7 +153,7 @@ async def test_seed_porsche_from_legacy_runtime(session, monkeypatch):
     inserted, linked = await seed_hosts(session)
 
     assert inserted == 1
-    result = await session.exec(select(Host).where(Host.slug == "porsche"))
+    result = await session.exec(select(Host).where(Host.slug == "wake-box-runtime-box"))
     host = result.scalars().one()
     assert host.kind == "flask_wol"
     assert host.ssh_host == "192.0.2.77"
@@ -163,13 +163,13 @@ async def test_seed_porsche_from_legacy_runtime(session, monkeypatch):
 
     # Runtime was bound to the host via endpoint IP
     assert linked == 1
-    result = await session.exec(select(Runtime).where(Runtime.slug == "unsloth-porsche"))
+    result = await session.exec(select(Runtime).where(Runtime.slug == "wake-box-runtime"))
     assert result.scalars().one().host_id == host.id
 
 
-async def test_no_porsche_seed_without_control_url(session, monkeypatch):
+async def test_no_box_seed_without_control_url(session, monkeypatch):
     monkeypatch.setattr(settings, "dgx_ssh_host", "")
-    session.add(_make_runtime("unsloth-porsche", runtime_type="unsloth_porsche"))
+    session.add(_make_runtime("wake-box-runtime", runtime_type="flask_wol"))
     await session.commit()
 
     inserted, linked = await seed_hosts(session)
@@ -177,15 +177,14 @@ async def test_no_porsche_seed_without_control_url(session, monkeypatch):
     assert (inserted, linked) == (0, 0)
 
 
-async def test_no_porsche_seed_for_disabled_runtime(session, monkeypatch):
-    """The example seed from runtimes.json is enabled=false — an OSS
-    fresh install must NOT materialize a phantom host from it
+async def test_no_box_seed_for_disabled_runtime(session, monkeypatch):
+    """A disabled template row must NOT materialize a phantom host
     (spec goal: 0 hosts, 0 errors without a real GPU box)."""
     monkeypatch.setattr(settings, "dgx_ssh_host", "")
     session.add(
         _make_runtime(
-            "unsloth-porsche",
-            runtime_type="unsloth_porsche",
+            "wake-box-runtime",
+            runtime_type="flask_wol",
             endpoint="http://192.0.2.20:8000/v1",
             host="192.0.2.20",
             control_url="http://192.0.2.20:5555",
@@ -201,15 +200,15 @@ async def test_no_porsche_seed_for_disabled_runtime(session, monkeypatch):
     assert result.scalars().all() == []
 
 
-async def test_no_duplicate_porsche_after_slug_rename(session, monkeypatch):
-    """Slug rename of the seeded porsche host (PATCH slug) must not create
+async def test_no_duplicate_box_after_slug_rename(session, monkeypatch):
+    """Slug rename of the seeded box host (PATCH slug) must not create
     a duplicate host with the same control_url on the next boot —
     two rows with the same ssh_host make linking nondeterministic."""
     monkeypatch.setattr(settings, "dgx_ssh_host", "")
     session.add(
         _make_runtime(
-            "unsloth-porsche",
-            runtime_type="unsloth_porsche",
+            "wake-box-runtime",
+            runtime_type="flask_wol",
             endpoint="http://192.0.2.77:8000/v1",
             host="192.0.2.77",
             control_url="http://192.0.2.77:5555",
@@ -269,3 +268,27 @@ async def test_seed_never_overwrites_existing_binding(session, monkeypatch):
 
     result = await session.exec(select(Runtime).where(Runtime.slug == "pinned"))
     assert result.scalars().one().host_id == other.id
+
+
+async def test_existing_install_with_a_bound_box_gets_no_new_host(session, monkeypatch):
+    """An existing install: the box runtime (renamed to flask_wol by migration
+    0217) is already bound to the host the operator named — the seeder adds
+    nothing and changes neither row."""
+    monkeypatch.setattr(settings, "dgx_ssh_host", "")
+    host = Host(slug="my-box", display_name="My Box", kind="flask_wol",
+                ssh_host="192.0.2.77", control_url="http://192.0.2.77:5555",
+                power_managed=True)
+    session.add(host)
+    await session.commit()
+    session.add(_make_runtime(
+        "my-box-runtime", runtime_type="flask_wol",
+        endpoint="http://192.0.2.77:8000/v1", host="192.0.2.77",
+        control_url="http://192.0.2.77:5555", power_managed=True, host_id=host.id,
+    ))
+    await session.commit()
+
+    inserted, linked = await seed_hosts(session)
+
+    assert (inserted, linked) == (0, 0)
+    hosts = (await session.exec(select(Host))).scalars().all()
+    assert [(h.slug, h.display_name) for h in hosts] == [("my-box", "My Box")]

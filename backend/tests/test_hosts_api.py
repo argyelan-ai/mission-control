@@ -95,7 +95,7 @@ async def test_create_invalid_kind_and_control_url_422(auth_client):
     assert bad_kind.status_code == 422
     bad_url = await auth_client.post(
         "/api/v1/hosts",
-        json=_ssh_host_body(slug="porsche-bad", kind="flask_wol",
+        json=_ssh_host_body(slug="wol-bad", kind="flask_wol",
                             control_url="ftp://192.0.2.20:5555"),
     )
     assert bad_url.status_code == 422
@@ -289,8 +289,8 @@ async def test_host_metrics_flask_wol_awake_and_asleep(auth_client):
         await auth_client.post(
             "/api/v1/hosts",
             json={
-                "slug": "porsche-test",
-                "display_name": "PORSCHE",
+                "slug": "wol-test",
+                "display_name": "Wake box",
                 "kind": "flask_wol",
                 "control_url": "http://192.0.2.20:5555",
                 "wol_mac_address": "00:00:5E:00:53:01",
@@ -300,20 +300,20 @@ async def test_host_metrics_flask_wol_awake_and_asleep(auth_client):
     ).json()
 
     with patch(
-        "app.services.runtime_manager._porsche_reachable",
+        "app.services.runtime_manager._control_server_reachable",
         new=AsyncMock(return_value=True),
     ):
         awake = (await auth_client.get(f"/api/v1/hosts/{created['id']}/metrics")).json()
     assert awake == {
         "kind": "flask_wol",
-        "slug": "porsche-test",
+        "slug": "wol-test",
         "reachable": True,
         "awake": True,
         "status": "awake",
     }
 
     with patch(
-        "app.services.runtime_manager._porsche_reachable",
+        "app.services.runtime_manager._control_server_reachable",
         new=AsyncMock(return_value=False),
     ):
         asleep = (await auth_client.get(f"/api/v1/hosts/{created['id']}/metrics")).json()

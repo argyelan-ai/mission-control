@@ -209,8 +209,8 @@ async def test_flask_wol_and_local_hosts_never_recorded(auth_client):
         await auth_client.post(
             "/api/v1/hosts",
             json={
-                "slug": "porsche-hist-test",
-                "display_name": "PORSCHE",
+                "slug": "wol-hist-test",
+                "display_name": "Wake box",
                 "kind": "flask_wol",
                 "control_url": "http://192.0.2.21:5555",
                 "wol_mac_address": "00:00:5E:00:53:02",
@@ -218,7 +218,7 @@ async def test_flask_wol_and_local_hosts_never_recorded(auth_client):
             },
         )
     ).json()
-    with patch("app.services.runtime_manager._porsche_reachable", new=AsyncMock(return_value=True)):
+    with patch("app.services.runtime_manager._control_server_reachable", new=AsyncMock(return_value=True)):
         await auth_client.get(f"/api/v1/hosts/{created['id']}/metrics")
     hist = (await auth_client.get(f"/api/v1/hosts/{created['id']}/metrics/history")).json()
     assert hist["points"] == []

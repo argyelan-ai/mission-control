@@ -116,7 +116,7 @@ async def test_stage1_flask_wol_host_carries_control_fields(session, no_dgx_sett
     session.add(host)
     await session.commit()
     await session.refresh(host)
-    rt = _make_runtime(runtime_type="unsloth_porsche", host_id=host.id)
+    rt = _make_runtime(runtime_type="flask_wol", host_id=host.id)
 
     resolved = await resolve_host_for_runtime(session, rt)
     assert resolved.kind == "flask_wol"
@@ -268,7 +268,7 @@ async def test_get_host_metrics_flask_wol_uses_health_not_ssh():
     )
     ssh = AsyncMock()
     with patch.object(runtime_manager, "_ssh_run", ssh), \
-         patch.object(runtime_manager, "_porsche_reachable", AsyncMock(return_value=True)):
+         patch.object(runtime_manager, "_control_server_reachable", AsyncMock(return_value=True)):
         metrics = await runtime_manager.get_host_metrics(box)
 
     assert metrics["reachable"] is True

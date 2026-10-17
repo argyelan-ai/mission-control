@@ -40,7 +40,7 @@ function makeHost(over: Partial<Host> = {}): Host {
 function makeRuntime(over: Partial<Runtime> = {}): Runtime {
   return {
     id: "rt-1", slug: "spark-power", display_name: "Qwen3.8 Flash Next",
-    runtime_type: "unsloth_porsche", provider: "vllm",
+    runtime_type: "flask_wol", provider: "vllm",
     endpoint: "http://192.0.2.10:8000/v1", healthcheck_path: "/health",
     container_name: null, role_tags: [], supports_tools: true,
     supports_reasoning: false, supports_streaming: true,

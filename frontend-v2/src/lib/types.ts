@@ -1720,7 +1720,7 @@ export type RuntimeType =
   | "ssh_process"
   | "lmstudio"
   | "unsloth"
-  | "unsloth_porsche"
+  | "flask_wol"
   | "openai_compatible"
   | "cloud"
   | "hermes"
@@ -1814,7 +1814,7 @@ export interface Runtime {
   startup_notes: string;
   ui_order: number;
   enabled: boolean;
-  // Power-managed runtime (unsloth_porsche): box sleeps when idle, woken via WoL.
+  // Power-managed runtime (flask_wol): box sleeps when idle, woken via WoL.
   control_url?: string | null;      // Flask :5555 control plane (e.g. http://192.0.2.20:5555)
   wol_mac_address?: string | null;  // target MAC for the Wake-on-LAN magic packet
   power_managed?: boolean;          // true → runtime sleeps when idle, gets a "Wecken" action
@@ -2570,7 +2570,7 @@ export interface Host {
   // Only a Credential id reference; the key material itself never reaches
   // the frontend (see services/encryption.NEVER_EXPOSE_CREDENTIAL_FIELDS).
   ssh_credential_id: string | null;
-  control_url: string | null;      // flask_wol control plane (PORSCHE :5555)
+  control_url: string | null;      // flask_wol control plane (control server :5555)
   wol_mac_address: string | null;  // target MAC for the Wake-on-LAN magic packet
   power_managed: boolean;
   notes: string | null;

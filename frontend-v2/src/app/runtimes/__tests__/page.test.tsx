@@ -134,13 +134,13 @@ describe("RuntimesPage", () => {
     // host is treated as AsleepBox material, so this host stays in
     // stageGroups and (nothing serving) becomes a FreeBox — the old
     // SleepingHostLine silently returned null for exactly this case.
-    const host = makeHost({ slug: "porsche", display_name: "Porsche Box", enabled: true, power_managed: true });
+    const host = makeHost({ slug: "wake-box", display_name: "Wake Box", enabled: true, power_managed: true });
     const bound = makeRuntime({
-      slug: "unsloth1", display_name: "Unsloth Porsche", runtime_type: "unsloth_porsche", state: "stopped",
-      host: { id: "porsche", slug: "porsche", display_name: "Porsche Box" },
+      slug: "unsloth1", display_name: "Unsloth Wake", runtime_type: "flask_wol", state: "stopped",
+      host: { id: "wake-box", slug: "wake-box", display_name: "Wake Box" },
     });
     // A second, serving host keeps FleetStage out of its isFullyEmpty
-    // branch, so Porsche Box renders as its own FreeBox with its name
+    // branch, so Wake Box renders as its own FreeBox with its name
     // visible (EmptyStage shows no per-host names at all).
     const otherHost = makeHost({ slug: "spark", display_name: "DGX Spark", enabled: true, ui_order: 1 });
     const elsewhere = makeRuntime({
@@ -153,12 +153,12 @@ describe("RuntimesPage", () => {
     const { container } = renderPage();
 
     // Host-scoped selector, not text content (Fund #442 CI-Flake, PR 6
-    // Nachlese) — same reasoning as test (b): "Porsche Box" as a text query
+    // Nachlese) — same reasoning as test (b): "Wake Box" as a text query
     // risks matching a transiently-free "spark" card before `runtimes.list`
-    // settles, or nothing at all if the resolved element isn't porsche's.
+    // settles, or nothing at all if the resolved element isn't the wake box's.
     // `data-host-slug` (FreeBox.tsx) removes the ambiguity outright.
     await waitFor(() => {
-      expect(container.querySelector('[data-testid="free-box"][data-host-slug="porsche"]')).toBeInTheDocument();
+      expect(container.querySelector('[data-testid="free-box"][data-host-slug="wake-box"]')).toBeInTheDocument();
     });
     expect(screen.queryByTestId("asleep-box")).not.toBeInTheDocument();
   });

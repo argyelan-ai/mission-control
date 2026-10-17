@@ -24,7 +24,7 @@ async def _mk_runtime(session, *, power_managed: bool, slug: str) -> Runtime:
     rt = Runtime(
         slug=slug,
         display_name=f"RT {slug}",
-        runtime_type="unsloth_porsche" if power_managed else "vllm_docker",
+        runtime_type="flask_wol" if power_managed else "vllm_docker",
         endpoint="http://192.0.2.20:8000/v1",
         power_managed=power_managed,
     )
@@ -55,7 +55,7 @@ async def test_gate_allows_non_power_managed(async_session):
 
 @pytest.mark.asyncio
 async def test_gate_blocks_power_managed_not_ready(async_session):
-    rt = await _mk_runtime(async_session, power_managed=True, slug="porsche-a")
+    rt = await _mk_runtime(async_session, power_managed=True, slug="wol-a")
     agent = SimpleNamespace(runtime_id=rt.id)
     with patch.object(runtime_readiness, "is_runtime_ready", new=AsyncMock(return_value=False)):
         ok, reason = await runtime_ready_for_agent(agent, async_session)
@@ -65,7 +65,7 @@ async def test_gate_blocks_power_managed_not_ready(async_session):
 
 @pytest.mark.asyncio
 async def test_gate_allows_power_managed_ready(async_session):
-    rt = await _mk_runtime(async_session, power_managed=True, slug="porsche-b")
+    rt = await _mk_runtime(async_session, power_managed=True, slug="wol-b")
     agent = SimpleNamespace(runtime_id=rt.id)
     with patch.object(runtime_readiness, "is_runtime_ready", new=AsyncMock(return_value=True)):
         ok, reason = await runtime_ready_for_agent(agent, async_session)
@@ -74,7 +74,7 @@ async def test_gate_allows_power_managed_ready(async_session):
 
 @pytest.mark.asyncio
 async def test_gate_killswitch_off(async_session):
-    rt = await _mk_runtime(async_session, power_managed=True, slug="porsche-c")
+    rt = await _mk_runtime(async_session, power_managed=True, slug="wol-c")
     agent = SimpleNamespace(runtime_id=rt.id)
     with patch.object(runtime_readiness.settings, "enable_runtime_readiness_gate", False), \
          patch.object(runtime_readiness, "is_runtime_ready", new=AsyncMock(side_effect=AssertionError("flag off → no probe"))):
@@ -84,7 +84,7 @@ async def test_gate_killswitch_off(async_session):
 
 @pytest.mark.asyncio
 async def test_gate_fails_open_on_error(async_session):
-    rt = await _mk_runtime(async_session, power_managed=True, slug="porsche-d")
+    rt = await _mk_runtime(async_session, power_managed=True, slug="wol-d")
     agent = SimpleNamespace(runtime_id=rt.id)
     with patch.object(runtime_readiness, "is_runtime_ready", new=AsyncMock(side_effect=RuntimeError("boom"))):
         ok, reason = await runtime_ready_for_agent(agent, async_session)
@@ -117,15 +117,15 @@ async def _setup_worker_with_runtime(*, power_managed: bool, slug: str):
 
 @pytest.mark.asyncio
 async def test_poll_holds_task_when_power_managed_asleep(client, fake_redis):
-    """PORSCHE asleep → inbox task is held (idle/runtime_not_ready), stays inbox."""
+    """the wake box asleep → inbox task is held (idle/runtime_not_ready), stays inbox."""
     from app.models.task import Task
 
     board_id, worker_id, token = await _setup_worker_with_runtime(
-        power_managed=True, slug="porsche-poll-1"
+        power_managed=True, slug="wol-poll-1"
     )
     task_id = uuid.uuid4()
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
-        s.add(Task(id=task_id, board_id=board_id, title="Needs PORSCHE",
+        s.add(Task(id=task_id, board_id=board_id, title="Needs the wake box",
                    status="inbox", assigned_agent_id=worker_id))
         await s.commit()
 
@@ -146,15 +146,15 @@ async def test_poll_holds_task_when_power_managed_asleep(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_poll_delivers_task_when_power_managed_ready(client, fake_redis):
-    """PORSCHE ready → the held task is delivered on the next poll."""
+    """the wake box ready → the held task is delivered on the next poll."""
     from app.models.task import Task
 
     board_id, worker_id, token = await _setup_worker_with_runtime(
-        power_managed=True, slug="porsche-poll-2"
+        power_managed=True, slug="wol-poll-2"
     )
     task_id = uuid.uuid4()
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
-        s.add(Task(id=task_id, board_id=board_id, title="Run on PORSCHE",
+        s.add(Task(id=task_id, board_id=board_id, title="Run on the wake box",
                    status="inbox", assigned_agent_id=worker_id))
         await s.commit()
 
@@ -207,7 +207,7 @@ async def _user_token(role: str) -> str:
 
 
 _RT_BODY = {
-    "slug": "evil-rt", "display_name": "Evil", "runtime_type": "unsloth_porsche",
+    "slug": "evil-rt", "display_name": "Evil", "runtime_type": "flask_wol",
     "endpoint": "http://192.0.2.20:8000/v1",
     "launch_command": "Start-Process calc.exe",  # would be RCE if a viewer could set it
     "control_url": "http://192.0.2.20:5555", "power_managed": True,
@@ -217,7 +217,7 @@ _RT_BODY = {
 @pytest.mark.asyncio
 async def test_runtime_db_create_forbidden_for_viewer(client, fake_redis):
     """A viewer must NOT be able to set launch_command/control_url (→ PowerShell
-    RCE on PORSCHE). Runtime writes are admin-only now."""
+    RCE on the wake box). Runtime writes are admin-only now."""
     token = await _user_token("viewer")
     resp = await client.post("/api/v1/runtimes/db",
                              headers={"Authorization": f"Bearer {token}"}, json=_RT_BODY)

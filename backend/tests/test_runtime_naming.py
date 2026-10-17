@@ -127,7 +127,7 @@ def test_provider_is_not_matched_on_a_foreign_wire_protocol():
         # 2 — curated local/infrastructure runtimes: untouched.
         ("http://192.0.2.10:8000/v1", "poolside/Laguna-S-2.1-NVFP4", "vllm_docker", None),
         ("http://127.0.0.1:11434/v1", "deepseek-v4-pro:cloud", "hermes", None),
-        ("http://192.0.2.20:8000/v1", "gemma-4-26B-A4B-it-qat", "unsloth_porsche", None),
+        ("http://192.0.2.20:8000/v1", "gemma-4-26B-A4B-it-qat", "flask_wol", None),
         ("http://192.0.2.10:8000/v1", "poolside/Laguna-S-2.1-NVFP4", "omp", None),
         # 3 — no model_identifier: nothing to derive from.
         ("https://api.anthropic.com/v1/messages", None, "cloud", None),

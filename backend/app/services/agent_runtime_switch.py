@@ -106,7 +106,7 @@ _PROBEABLE_RUNTIME_TYPES = {
     "lmstudio",
     "openai_compatible",
     "unsloth",
-    "unsloth_porsche",
+    "flask_wol",
     # omp is a CLI harness, but its runtime row points at an OpenAI-compatible
     # endpoint (the same vLLM the TUI talks to). Without this entry the runtime
     # watcher never probes omp rows, so engine-side model drift never reaches

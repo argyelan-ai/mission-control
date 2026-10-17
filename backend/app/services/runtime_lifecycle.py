@@ -1,6 +1,6 @@
 """Power-managed runtime auto-lifecycle: idle-stop + auto-start-on-demand.
 
-Closes the demand-driven loop for power_managed runtimes (PORSCHE unsloth):
+Closes the demand-driven loop for power_managed runtimes (flask_wol boxes):
   - idle-stop: a periodic monitor stops the model when the runtime has been
     unused for settings.runtime_idle_stop_minutes → frees the GPU/VRAM.
   - auto-start: when the readiness gate holds a task because the box is asleep

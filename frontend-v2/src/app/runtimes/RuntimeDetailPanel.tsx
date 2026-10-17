@@ -37,7 +37,7 @@ import { fmtCtx } from "@/lib/utils";
 // the runtimes-redesign reference so the label text doesn't drift.
 const TYPE_LABELS: Record<string, string> = {
   vllm_docker: "vLLM Docker", lmstudio: "LM Studio", unsloth: "Unsloth",
-  unsloth_porsche: "Unsloth · PORSCHE", openai_compatible: "OpenAI-compatible",
+  flask_wol: "Wake-on-LAN box", openai_compatible: "OpenAI-compatible",
   cloud: "Cloud API", hermes: "Hermes", grok: "Grok", kimi: "Kimi",
   omp: "OMP", llamacpp_docker: "llama.cpp",
 };
@@ -386,7 +386,7 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
   // then "unknown" for a known reason, which is worth showing everywhere.
   const probeTimedOut = runtime.container_status === "probe_timeout";
 
-  // Power-managed runtime (unsloth_porsche): box sleeps when idle. The backend
+  // Power-managed runtime (flask_wol): box sleeps when idle. The backend
   // reports container_status "asleep" (:5555 down), "booted_no_model" (box awake,
   // model not serving) or "serving" (ready). WoL only wakes the box; the model is
   // loaded on demand via Start.

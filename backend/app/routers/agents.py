@@ -3421,7 +3421,7 @@ async def agent_poll(
                     task = candidate
                     break
 
-            # Runtime-readiness gate (power-managed backends, e.g. PORSCHE
+            # Runtime-readiness gate (power-managed backends, e.g. a Wake-on-LAN box
             # unsloth). Don't inject a fresh inbox task into the session while
             # the agent's LLM backend is asleep — the task stays inbox (parked)
             # until the box is woken + the model is serving. Only affects agents

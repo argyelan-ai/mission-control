@@ -38,7 +38,7 @@ Three cases, on purpose
    name and slug are DERIVED. This is where drift happens, because the catalog
    creates rows next to hand-written ones.
 2. **Local / infrastructure runtimes** (vllm_docker, llamacpp_docker,
-   lmstudio, unsloth, unsloth_porsche, omp, hermes) → the CURATED name is kept. A generic rule
+   lmstudio, unsloth, flask_wol, omp, hermes) → the CURATED name is kept. A generic rule
    would make them worse, not better: "Spark vLLM (Laguna/Qwen — switchable)"
    says which host it runs on and that it is recipe-switchable — neither fact
    is in ``model_identifier`` — and "Hermes (Local Ollama → Cloud DeepSeek v4
@@ -137,7 +137,7 @@ PROVIDERS: tuple[ProviderNaming, ...] = (
 #: failure mode this set exists to prevent for every other display-anchor row.
 CURATED_RUNTIME_TYPES: frozenset[str] = frozenset(
     {
-        "vllm_docker", "llamacpp_docker", "lmstudio", "unsloth", "unsloth_porsche",
+        "vllm_docker", "llamacpp_docker", "lmstudio", "unsloth", "flask_wol",
         "omp", "hermes", "voice_openai", "voice_xai",
     }
 )

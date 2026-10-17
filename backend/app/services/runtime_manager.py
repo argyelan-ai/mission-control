@@ -1292,7 +1292,7 @@ def _ssh_probe_path(endpoint: str, healthcheck_path: str | None) -> str:
     Endpoints for these engines are written as ``http://box:8888/v1`` while the
     default health path is ``/v1/models`` — concatenated naively that probes
     ``/v1/v1/models`` and every healthy engine reads as down. Same
-    normalization as the unsloth_porsche arm and probe_runtime_model.
+    normalization as the flask_wol arm and probe_runtime_model.
     """
     path = healthcheck_path or _FALLBACK_HEALTHCHECK_PATH
     if endpoint.rstrip("/").endswith("/v1") and path.startswith("/v1"):
@@ -1531,14 +1531,14 @@ async def stop_ssh_process(runtime: dict, *, host: ResolvedHost | None = None) -
     }
 
 
-# ── PORSCHE control plane (unsloth_porsche) ──────────────────────────────────
-# The PORSCHE Windows box is NOT reachable via SSH/tmux like the DGX. It runs a
+# ── Control-server plane (flask_wol) ─────────────────────────────────────
+# A flask_wol box (Windows) is NOT reachable via SSH/tmux like the DGX. It runs a
 # Flask control server on :5555 (POST /powershell, GET /health) and sleeps when
-# idle. These helpers are the unsloth_porsche analogue to _ssh_run / DGX checks.
+# idle. These helpers are the flask_wol analogue to _ssh_run / DGX checks.
 
 
-async def _porsche_reachable(control_url: str) -> bool:
-    """True if PORSCHE's :5555 control server answers — i.e. the box is awake and
+async def _control_server_reachable(control_url: str) -> bool:
+    """True if the box's :5555 control server answers — i.e. the box is awake and
     logged in (work-ready). Fails fast (3s) when the box is asleep."""
     url = control_url.rstrip("/") + "/health"
     try:
@@ -1549,10 +1549,10 @@ async def _porsche_reachable(control_url: str) -> bool:
         return False
 
 
-async def _porsche_powershell(
+async def _control_server_powershell(
     control_url: str, command: str, timeout: int = 60
 ) -> tuple[str, str, int]:
-    """Run a PowerShell command on PORSCHE via its Flask :5555 control server.
+    """Run a PowerShell command on a flask_wol box via its Flask :5555 control server.
 
     Mirrors _ssh_run (DGX): returns (stdout, stderr, returncode). returncode is
     -1 on any transport/HTTP failure so callers treat it like a failed exec.
@@ -1570,21 +1570,21 @@ async def _porsche_powershell(
                 int(data.get("returncode", -1)),
             )
     except Exception as e:
-        return ("", f"PORSCHE control error: {e}", -1)
+        return ("", f"control server error: {e}", -1)
 
 
-def _porsche_port_from_endpoint(endpoint: str) -> int | None:
+def _endpoint_port(endpoint: str) -> int | None:
     """Extract the OpenAI server port from the runtime endpoint (e.g.
     http://192.0.2.20:8000/v1 → 8000). Used to build the default stop command."""
     m = re.search(r"://[^/:]+:(\d+)", endpoint or "")
     return int(m.group(1)) if m else None
 
 
-def _porsche_default_stop_command(endpoint: str) -> str:
+def _control_server_stop_command(endpoint: str) -> str:
     """PowerShell that stops the unsloth OpenAI server by killing whatever
     process listens on its port (frees the VRAM). Best-effort; an operator can
     override via the runtime's launch_command sibling once a clean stop exists."""
-    port = _porsche_port_from_endpoint(endpoint)
+    port = _endpoint_port(endpoint)
     if not port:
         return "'no-port'"
     return (
@@ -1728,7 +1728,7 @@ async def get_runtime_state(runtime: dict, *, host: ResolvedHost | None = None) 
             "container_status": "tmux_running",
         }
 
-    if runtime_type == "unsloth_porsche":
+    if runtime_type == "flask_wol":
         # Power-managed Windows host: box sleeps, woken via WoL, controlled via
         # Flask :5555. Two-tier check → honest UI states:
         #   :5555 down            → stopped / "asleep"        (UI: Wecken)
@@ -1741,9 +1741,9 @@ async def get_runtime_state(runtime: dict, *, host: ResolvedHost | None = None) 
         control_url = (
             (host.control_url if host else None)
             or runtime.get("control_url")
-            or settings.porsche_control_url
+            or settings.wol_control_url
         )
-        if not await _porsche_reachable(control_url):
+        if not await _control_server_reachable(control_url):
             return {"state": "stopped", "http_reachable": False, "container_status": "asleep"}
         # The double-"/v1" guard now lives in join_probe_url(), applied by
         # _probe_http() for every runtime type — not just this branch.
@@ -2553,27 +2553,27 @@ async def _start_runtime_impl(runtime: dict, *, host: ResolvedHost | None = None
             logger.error("Unsloth Start fehlgeschlagen für %s: %s", runtime["id"], e)
             return {"ok": False, "message": f"SSH-Fehler: {e}"}
 
-    if runtime_type == "unsloth_porsche":
+    if runtime_type == "flask_wol":
         control_url = (
             (host.control_url if host else None)
             or runtime.get("control_url")
-            or settings.porsche_control_url
+            or settings.wol_control_url
         )
         launch_cmd = runtime.get("launch_command")
         if not launch_cmd or launch_cmd.strip().startswith("TODO"):
             return {
                 "ok": False,
                 "message": "launch_command nicht konfiguriert — echten PowerShell-Befehl "
-                "eintragen, der den unsloth-OpenAI-Server auf PORSCHE startet (detached, z.B. Start-Process).",
+                "eintragen, der den unsloth-OpenAI-Server auf der Box startet (detached, z.B. Start-Process).",
             }
-        if not await _porsche_reachable(control_url):
+        if not await _control_server_reachable(control_url):
             return {
                 "ok": False,
-                "message": "PORSCHE nicht erreichbar (:5555). Box zuerst wecken (Wake-on-LAN).",
+                "message": "Box nicht erreichbar (:5555). Box zuerst wecken (Wake-on-LAN).",
             }
-        _, stderr, rc = await _porsche_powershell(control_url, launch_cmd, timeout=60)
+        _, stderr, rc = await _control_server_powershell(control_url, launch_cmd, timeout=60)
         if rc == 0:
-            logger.info("unsloth_porsche gestartet via %s", control_url)
+            logger.info("flask_wol gestartet via %s", control_url)
             return {
                 "ok": True,
                 "message": f"{runtime['display_name']} wird gestartet. Modell-Warmup kann 1-3 Minuten dauern.",
@@ -2666,23 +2666,23 @@ async def stop_runtime(runtime: dict, *, host: ResolvedHost | None = None) -> di
             logger.error("Unsloth Stop fehlgeschlagen für %s: %s", runtime["id"], e)
             return {"ok": False, "message": f"SSH-Fehler: {e}"}
 
-    if runtime_type == "unsloth_porsche":
+    if runtime_type == "flask_wol":
         control_url = (
             (host.control_url if host else None)
             or runtime.get("control_url")
-            or settings.porsche_control_url
+            or settings.wol_control_url
         )
-        if not await _porsche_reachable(control_url):
+        if not await _control_server_reachable(control_url):
             # Box already asleep / unreachable → nothing to stop.
             return {"ok": True, "message": f"{runtime['display_name']} nicht erreichbar — gilt als gestoppt."}
-        if not _porsche_port_from_endpoint(runtime.get("endpoint", "")):
+        if not _endpoint_port(runtime.get("endpoint", "")):
             # No derivable port → we cannot build a real kill command. Fail loudly
             # instead of running a no-op that would falsely report VRAM freed.
             return {"ok": False, "message": "Kein Port aus endpoint ableitbar — Stop-Befehl manuell konfigurieren."}
-        stop_cmd = _porsche_default_stop_command(runtime.get("endpoint", ""))
-        _, stderr, rc = await _porsche_powershell(control_url, stop_cmd, timeout=30)
+        stop_cmd = _control_server_stop_command(runtime.get("endpoint", ""))
+        _, stderr, rc = await _control_server_powershell(control_url, stop_cmd, timeout=30)
         if rc == 0:
-            logger.info("unsloth_porsche gestoppt via %s", control_url)
+            logger.info("flask_wol gestoppt via %s", control_url)
             return {"ok": True, "message": f"{runtime['display_name']} wurde gestoppt (Modell aus VRAM entladen)."}
         return {"ok": False, "message": stderr or f"PowerShell-Stop schlug fehl (rc {rc})"}
 
@@ -2851,7 +2851,7 @@ async def _restart_runtime_impl(
             return stop_result
         return await start_runtime(runtime, host=host)
 
-    if runtime_type == "unsloth_porsche":
+    if runtime_type == "flask_wol":
         stop_result = await stop_runtime(runtime, host=host)
         if not stop_result["ok"]:
             return stop_result
@@ -2866,7 +2866,7 @@ async def wake_runtime(runtime: dict, *, host: ResolvedHost | None = None) -> di
     The backend runs in Docker and cannot send an L2 broadcast magic packet, so
     it drops a trigger file into settings.wake_request_dir (under the ~/.mc host
     bind-mount). A launchd watcher on the Mac host picks it up and runs the wake
-    script (skills/wake-porsche/wake_porsche.py). See the WoL host-helper docs.
+    script configured for the watcher. See the WoL host-helper docs.
 
     host: resolved host (ADR-048) — registry values (power_managed, MAC, IP)
     take precedence, legacy runtime fields + settings remain as fallback.
@@ -2880,7 +2880,7 @@ async def wake_runtime(runtime: dict, *, host: ResolvedHost | None = None) -> di
     mac = (
         (host.wol_mac_address if host else None)
         or runtime.get("wol_mac_address")
-        or settings.porsche_mac
+        or settings.wol_mac
     )
     if not mac:
         return {"ok": False, "message": "Keine wol_mac_address konfiguriert."}
@@ -2895,8 +2895,8 @@ async def wake_runtime(runtime: dict, *, host: ResolvedHost | None = None) -> di
         # (box moved, IP maintained in the hosts UI).
         "ip": (host.ssh_host if host else None)
         or runtime.get("host")
-        or settings.porsche_lan_ip,
-        "broadcast": settings.porsche_broadcast,
+        or settings.wol_lan_ip,
+        "broadcast": settings.wol_broadcast,
         "requested_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
     }
     try:
@@ -3226,7 +3226,7 @@ async def get_host_metrics(host: ResolvedHost | None) -> dict:
     - host=None         → settings fallback in _ssh_run (classic single-box).
     """
     if host is not None and host.kind == "flask_wol":
-        reachable = bool(host.control_url) and await _porsche_reachable(host.control_url)
+        reachable = bool(host.control_url) and await _control_server_reachable(host.control_url)
         return {**dict(_SPARK_UNREACHABLE), "reachable": reachable}
     if host is not None and host.kind == "local":
         return dict(_SPARK_UNREACHABLE)

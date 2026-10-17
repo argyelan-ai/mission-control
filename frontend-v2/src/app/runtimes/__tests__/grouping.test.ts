@@ -189,7 +189,7 @@ describe("panelCapabilities", () => {
   });
 
   it("power-managed runtime gets wake; autostart follows autostart_supported", () => {
-    const c = panelCapabilities(makeRuntime({ runtime_type: "unsloth_porsche", power_managed: true, autostart_supported: true }));
+    const c = panelCapabilities(makeRuntime({ runtime_type: "flask_wol", power_managed: true, autostart_supported: true }));
     expect(c.wake).toBe(true);
     expect(c.autostart).toBe(true);
   });

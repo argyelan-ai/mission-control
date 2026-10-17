@@ -7,7 +7,7 @@
  */
 const TYPE_LABELS: Record<string, string> = {
   vllm_docker: "vLLM Docker", lmstudio: "LM Studio", unsloth: "Unsloth",
-  unsloth_porsche: "Unsloth · PORSCHE", openai_compatible: "OpenAI-compatible",
+  flask_wol: "Wake-on-LAN box", openai_compatible: "OpenAI-compatible",
   cloud: "Cloud API", hermes: "Hermes", grok: "Grok", kimi: "Kimi",
   omp: "OMP", llamacpp_docker: "llama.cpp", ssh_process: "SSH process",
 };

@@ -1,7 +1,7 @@
 """Host model — generic multi-host registry (ADR-048, Host Registry Welle 1).
 
 Replaces the "new box = new runtime_type + copy-paste control code" pattern
-(unsloth_porsche ADR-042, hermes, omp). A Host describes a machine the
+(flask_wol ADR-042, hermes, omp). A Host describes a machine the
 control-plane can reach (SSH box, flask_wol sleeper, or the local MC host);
 runtimes bind to it via runtimes.host_id. Legacy per-runtime fields
 (host / control_url / wol_mac_address / power_managed) stay as fallback —
@@ -42,7 +42,7 @@ class Host(SQLModel, table=True):
     __tablename__ = "hosts"
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
-    slug: str = Field(index=True, unique=True, max_length=64)  # e.g. dgx-spark, porsche
+    slug: str = Field(index=True, unique=True, max_length=64)  # e.g. dgx-spark, workstation
     display_name: str = Field(max_length=128)
 
     # How the control-plane talks to this box:
