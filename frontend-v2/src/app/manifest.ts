@@ -4,7 +4,7 @@ export default function manifest(): MetadataRoute.Manifest {
   return {
     name: process.env.NEXT_PUBLIC_BRAND?.replace(".", "") || "Mission Control",
     short_name: process.env.NEXT_PUBLIC_BRAND?.replace(".", "") || "Mission Control",
-    description: "AI Agent Command Center",
+    description: "A phone remote for coding agents on your own models.",
     start_url: "/",
     display: "standalone",
     theme_color: "#1C1C1C", // dark = default (ADR-087); lib/theme.ts THEME_COLOR

@@ -156,25 +156,6 @@ export default function LoginPage() {
             {t("tagline")}
           </p>
         </motion.div>
-
-        {/* Koordinaten-Fusszeile — Mono-Instrumenten-Detail */}
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.4, duration: 0.5 }}
-          className="flex items-center gap-6 font-mono uppercase"
-          style={{
-            color: "var(--color-text-dim)",
-            fontSize: "10px",
-            letterSpacing: "0.14em",
-          }}
-        >
-          <span>Fleet · Live</span>
-          <span aria-hidden style={{ color: "var(--color-border-accent)" }}>
-            /
-          </span>
-          <span>v3</span>
-        </motion.div>
       </div>
 
       {/* ── Form-Zone ───────────────────────────────────────────────────── */}
