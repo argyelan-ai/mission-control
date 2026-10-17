@@ -4,10 +4,27 @@ name: Release Images
 # lokal bauen (Install-Zeit ~10min -> ~1min, halbe Fehlerklasse weg).
 # Laeuft NUR im oeffentlichen Repo: im privaten Dev-Repo haette GITHUB_TOKEN
 # keine Schreibrechte auf ghcr.io/argyelan-ai/* und jeder Tag-Push waere rot.
+#
+# Two stages, so a broken image can never land under a tag users pull:
+#   1. images  — build + push each image ONLY as sha-<commit>, then verify it
+#                (both architectures; mc-backend contains app/worker.py).
+#   2. promote — runs only when ALL images verified; re-tags the very same
+#                manifests (no rebuild) with `docker buildx imagetools create`
+#                to X.Y.Z, and for a stable tag also X.Y + latest. The tag
+#                list comes from scripts/release-image-tags.sh (tested).
+# A manual run from a branch stops after stage 1: sha-<commit> only.
+# Publish the GitHub release only after this workflow is green — see
+# docs/setup/releasing.md; install.sh additionally skips a release whose
+# images are not there yet.
 
 on:
   push:
-    tags: ["v*"]
+    # Strict release tags only (GitHub filter patterns match the whole name):
+    # vX.Y.Z and pre-releases vX.Y.Z-<suffix>. A loose tag like v0.5
+    # triggers nothing.
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*"
   workflow_dispatch:
 
 jobs:
@@ -82,17 +99,10 @@ jobs:
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: ghcr.io/argyelan-ai/${{ matrix.image }}
-          # install.sh pins MC_IMAGE_TAG to the release version WITHOUT the
-          # "v" ({{version}}: v0.3.0 → 0.3.0) — keep the two in step
-          # (backend/tests/test_install_release_pinning.py checks this line).
-          # `latest` and X.Y move only on a release tag: a manual run from a
-          # branch must never put unreleased code under the tag every
-          # unpinned install pulls. Such a run gets a sha-<commit> tag only.
+          # Stage 1 pushes ONLY the commit tag. Release tags (X.Y.Z, X.Y,
+          # latest) are set by the promote job after every image verified.
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-            type=sha,enable=${{ !startsWith(github.ref, 'refs/tags/v') }}
+            type=sha,format=long,prefix=sha-
 
       - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
@@ -143,3 +153,37 @@ jobs:
         run: |
           . ./docker/shared/disk-preflight.sh
           mc_build_cache_cleanup
+
+  promote:
+    # Only after EVERY image above passed its verify step — otherwise a
+    # verified frontend could be promoted next to an unverified backend and
+    # `latest` would mix versions.
+    needs: images
+    if: github.repository == 'argyelan-ai/mission-control' && startsWith(github.ref, 'refs/tags/v')
+    name: Promote verified images to release tags
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Re-tag sha-<commit> as X.Y.Z (+ X.Y, latest for stable tags)
+        run: |
+          set -euo pipefail
+          mapfile -t tags < <(bash scripts/release-image-tags.sh "$GITHUB_REF")
+          if [ "${#tags[@]}" -eq 0 ]; then
+            echo "::error::$GITHUB_REF is not a release tag — nothing to promote"; exit 1
+          fi
+          echo "promoting $GITHUB_SHA to: ${tags[*]}"
+          for image in mc-backend mc-frontend mc-claude-agent mc-agent-base; do
+            src="ghcr.io/argyelan-ai/$image:sha-$GITHUB_SHA"
+            args=()
+            for t in "${tags[@]}"; do args+=(-t "ghcr.io/argyelan-ai/$image:$t"); done
+            docker buildx imagetools create "${args[@]}" "$src"
+          done

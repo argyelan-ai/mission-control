@@ -94,6 +94,56 @@ mc_latest_release_tag() {
   printf '%s\n' "$tag"
 }
 
+# Strict release tags on stdin → newest first (numeric, no `sort -V`, which
+# BSD/macOS sort lacks in older versions).
+mc_sort_releases_desc() {
+  local t i n tags=()
+  while IFS= read -r t; do mc_is_release_tag "$t" && tags+=("$t"); done
+  n=${#tags[@]}
+  # insertion sort — a handful of tags
+  for ((i = 1; i < n; i++)); do
+    t="${tags[i]}"; local j=$((i - 1))
+    while ((j >= 0)) && mc_version_gt "$t" "${tags[j]}"; do tags[j + 1]="${tags[j]}"; j=$((j - 1)); done
+    tags[j + 1]="$t"
+  done
+  ((n == 0)) || printf '%s\n' "${tags[@]}"
+}
+
+# Registry the core images come from (override only for tests).
+MC_IMAGE_REGISTRY="${MC_IMAGE_REGISTRY:-ghcr.io/argyelan-ai}"
+
+# True when the core images (backend + frontend) of release <tag> exist on
+# the registry — a manifest lookup, nothing is downloaded.
+mc_images_published() {
+  local v
+  v="$(mc_image_tag "$1")"
+  docker manifest inspect "$MC_IMAGE_REGISTRY/mc-backend:$v" >/dev/null 2>&1 \
+    && docker manifest inspect "$MC_IMAGE_REGISTRY/mc-frontend:$v" >/dev/null 2>&1
+}
+
+# The release to install: the latest release whose images are published.
+# A release is tagged before release.yml has finished (or after it failed);
+# taking it would mean a local build on every install in that window. So a
+# release without images is skipped for the next lower one (at most 3 back).
+# When none has images (registry unreachable), the latest release is used —
+# boot_stack then builds that same tag locally: slower, still consistent.
+mc_pick_release() {
+  local latest t n=0
+  latest="$(mc_latest_release_tag)" || return 1
+  while IFS= read -r t; do
+    if mc_version_gt "$t" "$latest"; then continue; fi
+    n=$((n + 1)); [ "$n" -le 4 ] || break
+    if mc_images_published "$t"; then
+      [ "$t" = "$latest" ] || warn "Release $latest has no published images yet (still building?) — installing $t instead."
+      printf '%s\n' "$t"; return 0
+    fi
+  done < <( { printf '%s\n' "$latest"
+              git ls-remote --tags --refs "$REPO_URL" 'v*' 2>/dev/null | sed 's|.*refs/tags/||'
+            } | mc_sort_releases_desc | uniq )
+  warn "Could not confirm published images for $latest (registry unreachable?) — it will be built locally if the pull fails."
+  printf '%s\n' "$latest"
+}
+
 # Image tag for a release tag: release.yml publishes semver WITHOUT the "v"
 # (docker/metadata-action type=semver,pattern={{version}} → 0.2.0).
 mc_image_tag() { printf '%s\n' "${1#v}"; }
@@ -116,14 +166,24 @@ mc_current_release_tag() {
 
 # .env helpers — replace-or-append without sed (a value containing sed
 # metacharacters like & or \ would silently corrupt the .env otherwise).
+# Written IN PLACE (`cat >`), never via `mv`/`sed -i`: backend and worker
+# bind-mount .env as a single file, and a bind mount follows the inode — a
+# replaced file (new inode) leaves the running containers reading the OLD
+# one. backend/tests/test_install_release_pinning.py pins the inode.
 mc_env_set() {
-  grep -v "^$1=" .env > .env.tmp 2>/dev/null || true
-  mv .env.tmp .env
-  printf '%s=%s\n' "$1" "$2" >> .env
+  local tmp
+  tmp="$(mktemp)"
+  grep -v "^$1=" .env > "$tmp" 2>/dev/null || true
+  printf '%s=%s\n' "$1" "$2" >> "$tmp"
+  cat "$tmp" > .env
+  rm -f "$tmp"
 }
 mc_env_unset() {
-  grep -v "^$1=" .env > .env.tmp 2>/dev/null || true
-  mv .env.tmp .env
+  local tmp
+  tmp="$(mktemp)"
+  grep -v "^$1=" .env > "$tmp" 2>/dev/null || true
+  cat "$tmp" > .env
+  rm -f "$tmp"
 }
 mc_env_get() { if [ -f .env ]; then sed -n "s/^$1=//p" .env | tail -n 1; fi; }
 
@@ -154,6 +214,39 @@ mc_ref_has_revision() {
   local ref="$1" rev="$2"
   [[ "$rev" =~ ^[A-Za-z0-9_]+$ ]] || return 1
   git grep -qE "^revision(: *str)? *= *['\"]${rev}['\"]" "$ref" -- backend/alembic/versions 2>/dev/null
+}
+
+# The compose project name `docker compose` will use in the current
+# directory: COMPOSE_PROJECT_NAME from the environment, then from .env, then
+# the directory name — normalised the way compose does it.
+mc_compose_project() {
+  local p="${COMPOSE_PROJECT_NAME:-}"
+  [ -n "$p" ] || p="$(mc_env_get COMPOSE_PROJECT_NAME)"
+  [ -n "$p" ] || p="$(basename "$(pwd -P)")"
+  printf '%s\n' "$p" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_-]//g'
+}
+
+# Never start a second Mission Control stack next to a running one — above
+# all not next to the operator's own install. Two cases are refused:
+#   * a stack with the SAME project name runs from ANOTHER directory: `up`
+#     here would recreate its containers with this checkout's code;
+#   * a stack with a DIFFERENT project name runs: a second stack fights it
+#     for ports 80/8000 and doubles every agent.
+# Only the stack of this very directory may be (re)started.
+mc_guard_single_stack() {
+  local proj here here_p p wd image
+  proj="$(mc_compose_project)"
+  here="$(pwd)"; here_p="$(pwd -P)"
+  while IFS='|' read -r p wd image; do
+    [ -n "$p" ] || continue
+    case "$image" in *mc-backend*) ;; *) continue ;; esac
+    if [ "$p" = "$proj" ] && { [ "$wd" = "$here" ] || [ "$wd" = "$here_p" ]; }; then continue; fi
+    if [ "$p" = "$proj" ]; then
+      fail "A Mission Control stack named '$p' is already running from ${wd:-another directory}. Starting here would replace its containers with this checkout. Update that install from its own directory, or set COMPOSE_PROJECT_NAME in this .env to a different name."
+    fi
+    fail "Another Mission Control stack ('$p' in ${wd:-an unknown directory}) is already running on this machine. A second stack would fight it for ports 80/8000. Stop it first (docker compose -p $p down) or install on another machine."
+  done < <(docker ps --filter label=com.docker.compose.service=backend \
+             --format '{{.Label "com.docker.compose.project"}}|{{.Label "com.docker.compose.project.working_dir"}}|{{.Image}}' 2>/dev/null || true)
 }
 
 [ "${MC_INSTALL_LIB_ONLY:-0}" = 1 ] && return 0 2>/dev/null
@@ -289,8 +382,6 @@ if [ "$OS" = Linux ] && printf '%s' "${DOCKER_INFO:-}" | grep -q "No memory limi
   warn "  /boot/firmware/cmdline.txt, then reboot. Details: docs/setup/raspberry-pi.md"
 fi
 
-# Portable in-place sed (BSD/macOS vs GNU) — mirrors setup.sh.
-sed_i() { if sed --version >/dev/null 2>&1; then sed -i "$@"; else sed -i '' "$@"; fi }
 
 # Local build of the checked-out code — the one build path of this script
 # (disk-space preflight first: without it the build dies mid-layer with a raw
@@ -317,6 +408,7 @@ build_locally() {
 # run the same version, so the fallback is slower, never inconsistent.
 boot_stack() {
   local channel="$1"
+  mc_guard_single_stack
   if [ "$channel" = stable ] && docker compose pull backend frontend >/dev/null 2>&1; then
     say "→ using prebuilt images ($(mc_env_get MC_IMAGE_TAG)), starting the stack ..."
     docker compose pull >/dev/null 2>&1 || true   # rest (db/redis/caddy/qdrant)
@@ -365,7 +457,7 @@ fetch_tag() {
 
 resolve_release() { # -> TAG (explicit --version or latest release)
   if [ -n "$VERSION" ]; then TAG="$VERSION"; return; fi
-  TAG="$(mc_latest_release_tag)" || fail "Could not determine the latest release (no network to GitHub?). Re-run with --version vX.Y.Z, or --channel edge."
+  TAG="$(mc_pick_release)" || fail "Could not determine the latest release (no network to GitHub?). Re-run with --version vX.Y.Z, or --channel edge."
 }
 
 # ── Update mode: refresh an existing install ────────────────────────────────
@@ -384,6 +476,12 @@ if [ "$UPDATE" = 1 ]; then
 
   if [ "$CHANNEL" = stable ]; then
     resolve_release
+    if [ -n "$CURRENT_TAG" ] && [ -z "$VERSION" ] && mc_version_gt "$CURRENT_TAG" "$TAG"; then
+      # The newest release has no images yet and mc_pick_release fell back
+      # below what is installed — nothing newer to go to, not a downgrade.
+      say "✓ no newer release with published images than $CURRENT_TAG — staying."
+      TAG="$CURRENT_TAG"
+    fi
     fetch_tag "$TAG"
     if [ -n "$CURRENT_TAG" ] && [ "$TAG" = "$CURRENT_TAG" ]; then
       say "✓ already on $TAG — refreshing images and restarting."
@@ -426,6 +524,10 @@ if [ "$UPDATE" = 1 ]; then
     fi
     mc_write_pins edge
   fi
+  # The new version may need .env keys the old one did not know (e.g.
+  # INTERNAL_BOOTSTRAP_SECRET): setup.sh never regenerates an existing .env,
+  # it only backfills missing keys — appending, so the inode stays.
+  ./setup.sh
   boot_stack "$CHANNEL"
   say "✅ Update complete — $( [ "$CHANNEL" = stable ] && echo "release $TAG" || echo "main @ $(git rev-parse --short HEAD)" ) (migrations ran inside the backend on start)."
   exit 0
@@ -467,7 +569,7 @@ fi
 mc_write_pins "$CHANNEL" "$TAG"
 
 ask "Your name (how agents address you)" "Operator"
-if grep -q '^OPERATOR_NAME=' .env; then sed_i "s|^OPERATOR_NAME=.*|OPERATOR_NAME=$REPLY|" .env; else echo "OPERATOR_NAME=$REPLY" >> .env; fi
+mc_env_set OPERATOR_NAME "$REPLY"
 
 # GitHub integration (optional but recommended): MC creates one private repo
 # per project and one branch per task; agents push their work and open PRs
@@ -506,7 +608,7 @@ ask "Enable voice stack (LiveKit — needs API keys later)? y/N" "n"
 case "$REPLY" in y|Y|yes) PROFILES="voice" ;; esac
 ask "Enable browser sidecars (Playwright visual-verify)? y/N" "n"
 case "$REPLY" in y|Y|yes) PROFILES="${PROFILES:+$PROFILES,}browser" ;; esac
-if grep -q '^COMPOSE_PROFILES=' .env; then sed_i "s|^COMPOSE_PROFILES=.*|COMPOSE_PROFILES=$PROFILES|" .env; else echo "COMPOSE_PROFILES=$PROFILES" >> .env; fi
+mc_env_set COMPOSE_PROFILES "$PROFILES"
 
 # ── 4. Boot ──────────────────────────────────────────────────────────────────
 boot_stack "$CHANNEL"

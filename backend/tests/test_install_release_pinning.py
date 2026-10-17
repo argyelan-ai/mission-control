@@ -102,10 +102,14 @@ def test_highest_release_tag_ignores_prereleases_and_loose_tags():
 
 
 def test_image_tag_drops_the_v_like_release_yml():
-    # release.yml: docker/metadata-action type=semver,pattern={{version}} → "0.2.0"
+    # release.yml promotes to the tags scripts/release-image-tags.sh prints;
+    # its first line (X.Y.Z) must be exactly what install.sh pins.
     assert _run("mc_image_tag v0.2.0").stdout.strip() == "0.2.0"
-    release_yml = (ROOT / ".github" / "workflows" / "release.yml").read_text()
-    assert "type=semver,pattern={{version}}" in release_yml
+    promoted = subprocess.run(
+        ["bash", str(ROOT / "scripts" / "release-image-tags.sh"), "refs/tags/v0.2.0"],
+        capture_output=True, text=True, check=True,
+    ).stdout.split()
+    assert promoted[0] == "0.2.0"
 
 
 @pytest.mark.parametrize(
@@ -223,3 +227,148 @@ def test_lib_only_mode_does_not_run_the_installer():
     assert r.returncode == 0, r.stderr
     assert r.stdout.strip() == "loaded"
     assert "Mission Control installer" not in r.stdout + r.stderr
+
+
+# ── .env is written in place (bind mounts follow the inode) ─────────────────
+
+def test_env_writes_keep_the_inode(tmp_path: Path):
+    """backend/worker bind-mount .env as a single file; a replaced file (new
+    inode via mv / sed -i) leaves the running containers on the OLD content."""
+    env = tmp_path / ".env"
+    env.write_text("A=1\nMC_IMAGE_TAG=latest\n")
+    before = env.stat().st_ino
+    r = _run(
+        "mc_env_set A 2; mc_env_set NEW 'x&y|z'; mc_env_unset MC_IMAGE_TAG; "
+        "mc_write_pins stable v0.2.0; mc_write_pins edge",
+        cwd=tmp_path,
+    )
+    assert r.returncode == 0, r.stderr
+    assert env.stat().st_ino == before
+    lines = env.read_text().splitlines()
+    assert "A=2" in lines and "NEW=x&y|z" in lines
+    assert "MC_IMAGE_TAG=edge" in lines and "A=1" not in lines
+    assert not list(tmp_path.glob(".env.tmp*"))
+
+
+def test_installer_has_no_inode_replacing_env_writes():
+    text = INSTALL_SH.read_text()
+    code = "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#"))
+    assert "mv .env.tmp .env" not in code
+    assert "sed_i" not in code and "sed -i" not in code
+
+
+# ── pick the newest release WITH published images ───────────────────────────
+
+def _stub_docker(tmp_path: Path) -> Path:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    stub = bin_dir / "docker"
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        'if [ "$1 $2" = "manifest inspect" ]; then\n'
+        '  tag="${3##*:}"\n'
+        '  for t in ${STUB_PUBLISHED:-}; do [ "$t" = "$tag" ] && exit 0; done\n'
+        "  exit 1\n"
+        "fi\n"
+        'if [ "$1" = ps ]; then printf "%b" "${STUB_PS:-}"; exit 0; fi\n'
+        "exit 0\n"
+    )
+    stub.chmod(0o755)
+    return bin_dir
+
+
+def test_sort_releases_desc():
+    r = _run("printf 'v0.9.0\\nv0.10.0\\nv0.5\\nv0.1.0\\nv1.0.0-rc1\\n' | mc_sort_releases_desc")
+    assert r.stdout.split() == ["v0.10.0", "v0.9.0", "v0.1.0"]
+
+
+@pytest.mark.parametrize(
+    "published,want,warned",
+    [("0.10.0", "v0.10.0", False), ("0.9.0 0.2.0", "v0.9.0", True), ("", "v0.10.0", True)],
+)
+def test_pick_release_skips_a_release_without_images(tmp_path, tagged_repo, published, want, warned):
+    api = tmp_path / "latest.json"
+    api.write_text(json.dumps({"tag_name": "v0.10.0"}))
+    bin_dir = _stub_docker(tmp_path)
+    r = _run(
+        "mc_pick_release",
+        env={"MC_RELEASE_API": api.as_uri(), "MC_REPO_URL": str(tagged_repo),
+             "STUB_PUBLISHED": published, "PATH": f"{bin_dir}:{os.environ['PATH']}"},
+    )
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == want
+    assert (r.stderr != "") is warned
+
+
+# ── never a second stack next to a running one ──────────────────────────────
+
+def _guard(tmp_path: Path, ps: str, project_env: str = ""):
+    d = tmp_path / "mission-control"
+    d.mkdir(exist_ok=True)
+    (d / ".env").write_text(project_env)
+    bin_dir = _stub_docker(tmp_path)
+    return d, _run(
+        "mc_guard_single_stack && echo ok",
+        cwd=d,
+        env={"STUB_PS": ps, "PATH": f"{bin_dir}:{os.environ['PATH']}", "COMPOSE_PROJECT_NAME": ""},
+    )
+
+
+def test_guard_allows_no_stack_and_this_directorys_stack(tmp_path):
+    _d, r = _guard(tmp_path, "")
+    assert r.returncode == 0 and r.stdout.strip() == "ok", r.stderr
+    d = tmp_path / "mission-control"
+    _d, r = _guard(tmp_path, f"mission-control|{d.resolve()}|ghcr.io/argyelan-ai/mc-backend:edge\\n")
+    assert r.returncode == 0 and r.stdout.strip() == "ok", r.stderr
+
+
+def test_guard_refuses_same_project_from_another_directory(tmp_path):
+    _d, r = _guard(tmp_path, "mission-control|/srv/other/mission-control|ghcr.io/argyelan-ai/mc-backend:latest\\n")
+    assert r.returncode != 0
+    assert "already running from /srv/other/mission-control" in r.stderr
+
+
+def test_guard_refuses_a_second_stack_with_another_name(tmp_path):
+    _d, r = _guard(tmp_path, "prod|/srv/prod|ghcr.io/argyelan-ai/mc-backend:0.2.0\\n")
+    assert r.returncode != 0
+    assert "Another Mission Control stack ('prod'" in r.stderr
+
+
+def test_guard_uses_the_project_name_from_env_and_ignores_other_apps(tmp_path):
+    # .env renames this install's project, so the running "mission-control"
+    # stack is someone else's and must be refused.
+    _d, r = _guard(tmp_path, "mission-control|/srv/x|ghcr.io/argyelan-ai/mc-backend:latest\\n",
+                   "COMPOSE_PROJECT_NAME=MC-Test\n")
+    assert r.returncode != 0 and "('mission-control'" in r.stderr
+    # a different app that happens to have a "backend" service is not MC
+    _d, r = _guard(tmp_path, "shop|/srv/shop|example/shop-api:1\\n")
+    assert r.returncode == 0, r.stderr
+
+
+def test_compose_project_name_resolution(tmp_path):
+    d = tmp_path / "My Mission.Control"
+    d.mkdir()
+    (d / ".env").write_text("")
+    r = _run("mc_compose_project", cwd=d, env={"COMPOSE_PROJECT_NAME": ""})
+    assert r.stdout.strip() == "mymissioncontrol"
+    (d / ".env").write_text("COMPOSE_PROJECT_NAME=alpha\n")
+    assert _run("mc_compose_project", cwd=d, env={"COMPOSE_PROJECT_NAME": ""}).stdout.strip() == "alpha"
+    assert _run("mc_compose_project", cwd=d, env={"COMPOSE_PROJECT_NAME": "beta"}).stdout.strip() == "beta"
+
+
+def test_every_boot_goes_through_the_stack_guard():
+    text = INSTALL_SH.read_text()
+    body = text.split("boot_stack() {", 1)[1].split("\n}", 1)[0]
+    assert body.lstrip().startswith('local channel="$1"\n  mc_guard_single_stack')
+
+
+# ── --update backfills new .env keys ────────────────────────────────────────
+
+def test_update_runs_setup_sh_after_the_code_switch():
+    text = INSTALL_SH.read_text()
+    block = text.split('if [ "$UPDATE" = 1 ]; then', 1)[1].split("\n  exit 0\nfi", 1)[0]
+    code = [l.strip() for l in block.splitlines() if not l.lstrip().startswith("#")]
+    assert "./setup.sh" in code, "update path must backfill .env via setup.sh"
+    assert code.index("./setup.sh") < code.index('boot_stack "$CHANNEL"')
+    last_switch = max(i for i, l in enumerate(code) if "with_fleet_carried" in l)
+    assert last_switch < code.index("./setup.sh")

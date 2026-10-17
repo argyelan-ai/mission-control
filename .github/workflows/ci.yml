@@ -253,9 +253,9 @@ jobs:
         # against a local git repo and file:// "API" answers, so they are
         # deterministic and need no GitHub API quota.
         run: |
-          shellcheck -x -S warning install.sh   # info-level notes differ between shellcheck versions
+          shellcheck -x -S warning install.sh scripts/release-image-tags.sh   # info-level notes differ between shellcheck versions
           pip install -q pytest
-          python3 -m pytest -q -p no:cacheprovider --noconftest backend/tests/test_install_release_pinning.py
+          python3 -m pytest -q -p no:cacheprovider --noconftest backend/tests/test_install_release_pinning.py backend/tests/test_release_image_tags.py
       - name: --here ran the checkout, not a published image
         # CI has no release that matches the branch under test, so --here
         # must take the edge path: MC_IMAGE_TAG=edge (a tag no registry

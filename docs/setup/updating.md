@@ -18,12 +18,21 @@ your checkout carries this updater.)
 What it does on the default **stable** channel:
 
 1. looks up the latest release (GitHub API; when that is rate-limited or
-   offline, the highest `vX.Y.Z` tag of the repository),
+   offline, the highest `vX.Y.Z` tag of the repository) — and skips a
+   release whose images are not published yet, taking the newest one that
+   has them,
 2. checks out exactly that tag — your agent fleet file is carried across,
-3. pins `MC_IMAGE_TAG` and `MC_AGENT_IMAGE_TAG` in `.env` to the same
-   version (`0.3.0` for `v0.3.0`),
-4. pulls those prebuilt images (local build of the same tag if that fails),
+3. runs `./setup.sh`, which adds `.env` keys the new version needs (it never
+   regenerates an existing `.env`),
+4. pins `MC_IMAGE_TAG` and `MC_AGENT_IMAGE_TAG` in `.env` to the same
+   version (`0.3.0` for `v0.3.0`) — written in place, so running containers
+   that mount `.env` see the change,
+5. pulls those prebuilt images (local build of the same tag if that fails),
    restarts the stack — migrations run automatically on backend start.
+
+It refuses to start when another Mission Control stack runs on the machine
+(a second stack would fight it for ports 80/8000), or when a stack with the
+same compose project name runs from a different directory.
 
 Code and images therefore always come from the same release. It refuses to
 move backwards: no lower release than the installed one, and no release
@@ -39,7 +48,9 @@ release catches up.
 **Developers:** `--channel edge` (alias `main`) follows the `main` branch and
 builds the images locally (`MC_IMAGE_TAG=edge`). Not recommended for users —
 `main` is unreleased and can break between releases. `--version vX.Y.Z`
-targets one specific release instead of the latest.
+targets one specific release instead of the latest. Channels and their
+rules: [ADR-092](../decisions/092-release-channels.md); how releases are cut:
+[releasing](releasing.md).
 
 ## Manually
 

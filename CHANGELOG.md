@@ -206,10 +206,17 @@ follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
   command for Debian/Ubuntu/Raspberry Pi OS, Fedora or macOS — nothing is
   installed automatically. It also warns when Docker has no memory-limit
   support (Raspberry Pi OS default; see `docs/setup/raspberry-pi.md`).
-- **Release images:** `latest` (and the new `X.Y` tag) move only on a release
-  tag — a manual run from a branch gets a `sha-…` tag. Each release now
-  verifies both architectures (`linux/amd64`, `linux/arm64`) and that the
-  backend image contains the worker module.
+- **Release images: verify first, tag second** (ADR-092). `release.yml` runs
+  only for strict `vX.Y.Z` / `vX.Y.Z-pre` tags, pushes every image as
+  `sha-<commit>`, verifies both architectures and the worker module, and only
+  then re-tags the verified manifests to `X.Y.Z` (+ `X.Y`, `latest` for
+  stable tags). A broken image never lands under `latest`. Release steps:
+  `docs/setup/releasing.md` — publish the GitHub release after the workflow
+  is green; the installer also skips a release whose images are missing.
+- **`install.sh` keeps the `.env` inode** (writes in place instead of
+  `mv`/`sed -i` — running containers bind-mount the file), runs `setup.sh` on
+  `--update` so new keys are backfilled, and refuses to start a second
+  Mission Control stack or to recreate one that runs from another directory.
 
 ## [0.2.0] - 2026-08-06
 
