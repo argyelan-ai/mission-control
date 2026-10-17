@@ -96,7 +96,12 @@ IMAGE_PREFIX="${MC_AGENT_IMAGE_PREFIX-ghcr.io/argyelan-ai/}"
 # installed release (e.g. 0.2.0), and the backend — hence the renderer — reads
 # it from there. Without this fallback a local build would land on :latest
 # and never shadow the pinned image the compose file actually asks for.
-IMAGE_TAG="${MC_AGENT_IMAGE_TAG:-$(sed -n 's/^MC_AGENT_IMAGE_TAG=//p' "$MC_ENV_FILE" 2>/dev/null | tail -n 1)}"
+# No .env is normal (CI release builds, a fresh clone): then no pin, no error.
+# Under `set -euo pipefail` a failing sed would end the script with exit 2.
+IMAGE_TAG="${MC_AGENT_IMAGE_TAG:-}"
+if [ -z "$IMAGE_TAG" ] && [ -f "$MC_ENV_FILE" ]; then
+  IMAGE_TAG="$(sed -n 's/^MC_AGENT_IMAGE_TAG=//p' "$MC_ENV_FILE" | tail -n 1)"
+fi
 IMAGE_TAG="${IMAGE_TAG:-latest}"
 
 tag_prefixed() {
