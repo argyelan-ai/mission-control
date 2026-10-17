@@ -663,23 +663,24 @@ MC_URL=$(mc_access_url .env)
 echo
 say "✅ Mission Control is running! ($( [ "$CHANNEL" = stable ] && echo "release $TAG" || echo "edge — local build of $(git rev-parse --short HEAD 2>/dev/null || echo 'this checkout')" ))"
 echo
+# Everything after the install happens in the setup wizard (/setup): AI
+# provider key, a starter board or demo crew, the first agent. Without a
+# login it sends to /login first and comes back after the registration.
 if mc_admin_exists; then
-  echo "  1. Open $MC_URL and log in — the setup wizard starts there."
+  echo "  1. Open $MC_URL/setup and log in — the setup wizard takes you from there."
 else
-  echo "  1. Open $MC_URL and register the first admin user."
+  echo "  1. Open $MC_URL/setup and register the first admin — the setup wizard starts right after."
 fi
 if [ "$MC_URL" = "http://localhost" ] && mc_is_headless; then
-  echo "     (no browser here: use the SSH tunnel shown above → http://localhost:8080)"
+  echo "     (no browser here: use the SSH tunnel shown above → http://localhost:8080/setup)"
 fi
 echo "  2. Recommended: make backup-schedule  (daily 03:00 backup of DB + data)"
-echo "  3. Optional: python3 scripts/demo-seed.py  (populates a demo board)"
-echo "  4. First agent: docs/setup/first-agent.md"
 echo "  Update later (from inside $(pwd)):"
 echo "     curl -fsSL $INSTALLER_URL | bash -s -- --update"
 echo
 if [ "$INTERACTIVE" = 1 ] && ! mc_is_headless; then
   case "$OS" in
-    Darwin) open "$MC_URL" >/dev/null 2>&1 || true ;;
-    Linux)  command -v xdg-open >/dev/null && xdg-open "$MC_URL" >/dev/null 2>&1 || true ;;
+    Darwin) open "$MC_URL/setup" >/dev/null 2>&1 || true ;;
+    Linux)  command -v xdg-open >/dev/null && xdg-open "$MC_URL/setup" >/dev/null 2>&1 || true ;;
   esac
 fi
