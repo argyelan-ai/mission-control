@@ -1,8 +1,12 @@
 # Updating Mission Control
 
-MC never updates itself — you decide when. The UI shows a hint under
-**Settings → Über** when a newer release exists (checked once a day against
-GitHub Releases; works offline, the hint just stays silent).
+MC never updates on its own — no auto-update, nothing in the background.
+You decide when: today by running the command below; later also with a
+click under **Settings → System**, where the click is that decision (see
+[ADR-094](../decisions/094-self-update-from-settings.md) — the button is not
+shipped yet). The UI shows a hint under **Settings → Über** when a newer
+release exists (checked once a day against GitHub Releases; works offline,
+the hint just stays silent).
 
 ## The short way
 

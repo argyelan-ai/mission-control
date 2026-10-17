@@ -44,7 +44,10 @@ from app.services.decision_docs import (
 #   accepted by the dev lead on behalf of the operator (17.10.).
 # +1 on 2026-10-17: ADR-093 (user-configurable and extensible by design) —
 #   operator rule of 2026-10-17, accepted.
-EXPECTED_DECISION_DOCS = 92
+# +2 on 2026-10-17: ADR-094 (self-update from Settings) and ADR-095 (docker
+#   socket proxy hardening) — Accepted, the operator approved the update
+#   plan's recommendations on 2026-10-17.
+EXPECTED_DECISION_DOCS = 94
 
 
 def _repo_root() -> Path:
