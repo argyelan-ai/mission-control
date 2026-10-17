@@ -266,7 +266,7 @@ jobs:
           img="$(docker inspect --format '{{.Config.Image}}' "$(docker compose ps -q backend)")"
           echo "backend runs: $img"
           test "$img" = "ghcr.io/argyelan-ai/mc-backend:edge"
-          docker compose exec -T backend test -f /app/app/worker.py
+          docker compose exec -T -u mcuser backend test -f /app/app/worker.py
       - name: Register first admin + authenticated API call
         run: |
           TOKEN=$(curl -sf -X POST http://localhost:8000/api/v1/auth/register \
