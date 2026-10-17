@@ -16,8 +16,9 @@ sed_i() {
   fi
 }
 
+# Next to this script, not the working directory (the tests run it elsewhere).
 # shellcheck source=scripts/lib/remote-access.sh
-. ./scripts/lib/remote-access.sh
+. "$(dirname "$0")/scripts/lib/remote-access.sh"
 
 CREATED_ENV=0
 if [ -f .env ]; then

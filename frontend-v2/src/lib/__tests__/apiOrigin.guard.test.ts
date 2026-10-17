@@ -67,11 +67,12 @@ describe("API base without NEXT_PUBLIC_API_URL (the prebuilt-image case)", () =>
     else process.env.NEXT_PUBLIC_API_URL = original;
   });
 
-  it("builds relative request, stream and socket URLs", async () => {
+  it("builds relative request and stream URLs", async () => {
     vi.resetModules();
     delete process.env.NEXT_PUBLIC_API_URL;
     const fetchMock = vi.fn(
-      async () => new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }),
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }),
     );
     vi.stubGlobal("fetch", fetchMock);
     const api = await import("@/lib/api");
