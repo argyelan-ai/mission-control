@@ -12,7 +12,7 @@ Sicherheit:
   (kein Auth-Bypass, keine Direkt-DB).
 
 Feature-Gate: aktiv nur wenn ``JARVIS_TELEGRAM_ENABLED=true`` UND ein
-``OPENAI_API_KEY`` UND ein ``JARVIS_AGENT_TOKEN`` gesetzt sind. Sonst bleibt das
+OpenAI-Key (Tresor zuerst, ``OPENAI_API_KEY`` als Rueckfall) UND ein ``JARVIS_AGENT_TOKEN`` gesetzt sind. Sonst bleibt das
 Verhalten exakt wie zuvor (nur Approval-URL-Buttons).
 """
 
@@ -47,6 +47,13 @@ except Exception as _exc:  # noqa: BLE001 — degrade gracefully if package abse
     _JARVIS_CORE_OK = False
 
 
+async def _api_key() -> str:
+    """The OpenAI key: vault first, ``OPENAI_API_KEY`` as fallback."""
+    from app.services.secrets_helper import effective_secret
+
+    return await effective_secret("openai_api_key")
+
+
 def _history_key(chat_id: str) -> str:
     return f"mc:jarvis:tg:history:{chat_id}"
 
@@ -67,15 +74,15 @@ class JarvisTelegramHandler:
         """Whether the shared jarvis_core package imported (mount present)."""
         return _JARVIS_CORE_OK
 
-    @property
-    def enabled(self) -> bool:
-        return bool(
+    async def is_enabled(self) -> bool:
+        if not (
             _JARVIS_CORE_OK
             and settings.jarvis_telegram_enabled
-            and settings.openai_api_key
             and settings.jarvis_agent_token
             and settings.telegram_chat_id
-        )
+        ):
+            return False
+        return bool(await _api_key())
 
     # ── History (Redis) ──────────────────────────────────────────────────
 
@@ -168,7 +175,7 @@ class JarvisTelegramHandler:
             return await transcribe_audio(
                 audio,
                 filename="voice.ogg",
-                api_key=settings.openai_api_key,
+                api_key=await _api_key(),
                 model=settings.jarvis_stt_model,
             )
         except Exception as e:  # noqa: BLE001
@@ -180,7 +187,7 @@ class JarvisTelegramHandler:
     async def _run_brain(self, chat_id: str, text: str) -> str:
         history = await self._load_history(chat_id)
         brain = JarvisBrain(
-            api_key=settings.openai_api_key,
+            api_key=await _api_key(),
             model=settings.jarvis_text_model,
             client=mc_client,
             channel=TELEGRAM,

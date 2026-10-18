@@ -60,6 +60,7 @@ class Settings(BaseSettings):
 
     # Discord
     discord_webhook_ops: str = ""
+    # Fallback only — a token saved in the MC vault wins (effective_secret).
     discord_bot_token: str = ""
     # Phase 29 (ADR-039) — Discord guild + category previously lived on the
     # legacy `gateways` DB row. The new routers/discord.py (D-04) reads them
@@ -162,6 +163,8 @@ class Settings(BaseSettings):
     # Aktiv nur wenn JARVIS_TELEGRAM_ENABLED=true UND openai_api_key gesetzt ist.
     jarvis_telegram_enabled: bool = False
     # OpenAI-Key fuer den Text-Brain + Sprachnachrichten-Transkription.
+    # Only the FALLBACK: services read it via secrets_helper.effective_secret
+    # ("openai_api_key"), where a key saved in the MC vault wins (ADR-093).
     openai_api_key: str = ""
     # ── Live voice in the chat (ADR-091, draft) ──────────────────────────
     # The chat's agent gets "ears and a mouth": the browser talks WebRTC

@@ -91,7 +91,7 @@ async def transcribe_event_audio(event: dict) -> str | None:
     if file is None:
         return None
 
-    transcriber = get_voice_transcriber()
+    transcriber = await get_voice_transcriber()
     if transcriber is not None:
         audio = await download_slack_audio(file)
         if audio:

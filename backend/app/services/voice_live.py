@@ -6,7 +6,8 @@ the short-lived client secret for that, with the whole session config
 (model, voice, VAD, persona) fixed server-side. Three properties carry the
 design and are pinned by ``tests/test_voice_live.py``:
 
-1. ``settings.openai_api_key`` never leaves this module — not in a response,
+1. The OpenAI key (``effective_secret("openai_api_key")``: vault first,
+   ``.env`` as fallback) never leaves this module — not in a response,
    not in a log line, not in an exception message. Upstream error bodies are
    reduced to a fixed reason code; their text is dropped.
 2. The switch (``voice_live_enabled``) and the key are checked together:
@@ -72,8 +73,15 @@ class VoiceLiveError(Exception):
         self.status = status
 
 
-def is_enabled() -> bool:
-    return bool(settings.voice_live_enabled and settings.openai_api_key)
+async def _api_key() -> str:
+    from app.services.secrets_helper import effective_secret
+
+    return await effective_secret("openai_api_key")
+
+
+async def is_enabled() -> bool:
+    # Switch first: with the feature off there is no reason to read the vault.
+    return bool(settings.voice_live_enabled and await _api_key())
 
 
 #: Used when the operator pinned a voice language in Settings: no switching.
@@ -314,7 +322,8 @@ def _transport() -> httpx.AsyncBaseTransport | None:
 async def mint_client_secret(
     agent_name: str, lang: Lang, transcription_lang: Lang | None = None
 ) -> MintedSession:
-    if not is_enabled():
+    api_key = await _api_key() if settings.voice_live_enabled else ""
+    if not api_key:
         raise VoiceLiveError("disabled", 404)
     body = {
         "expires_after": {"anchor": "created_at", "seconds": CLIENT_SECRET_TTL_S},
@@ -324,7 +333,7 @@ async def mint_client_secret(
         async with httpx.AsyncClient(timeout=15.0, transport=_transport()) as client:
             resp = await client.post(
                 OPENAI_CLIENT_SECRETS_URL,
-                headers={"Authorization": f"Bearer {settings.openai_api_key}"},
+                headers={"Authorization": f"Bearer {api_key}"},
                 json=body,
             )
     except httpx.HTTPError as exc:
@@ -357,7 +366,7 @@ async def mint_client_secret(
         raise VoiceLiveError("upstream_error", 502) from None
     # Guard against ever handing the long-lived key to a browser: a client
     # secret is a different, short value ("ek_…").
-    if not isinstance(secret, str) or not secret or secret == settings.openai_api_key:
+    if not isinstance(secret, str) or not secret or secret == api_key:
         logger.warning("voice_live mint: upstream returned no usable client secret")
         raise VoiceLiveError("upstream_error", 502)
     logger.info(

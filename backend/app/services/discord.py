@@ -16,8 +16,14 @@ SEVERITY_COLORS = {
     "critical": 0x7C1FFF,
 }
 
-def _bot_headers() -> dict[str, str]:
-    bot_token = settings.discord_bot_token
+async def _bot_token() -> str:
+    """The Discord bot token: vault first, ``DISCORD_BOT_TOKEN`` as fallback."""
+    from app.services.secrets_helper import effective_secret
+
+    return await effective_secret("discord_bot_token")
+
+
+def _bot_headers(bot_token: str) -> dict[str, str]:
     if not bot_token:
         raise RuntimeError("Discord bot token is not configured")
     return {"Authorization": f"Bot {bot_token}"}
@@ -58,7 +64,7 @@ async def send_to_discord_channel(
     embed: dict | None = None,
 ) -> None:
     """Post a message to a specific Discord channel via bot token."""
-    bot_token = settings.discord_bot_token
+    bot_token = await _bot_token()
     if not bot_token:
         return
 
@@ -76,7 +82,7 @@ async def send_to_discord_channel(
             resp = await client.post(
                 f"https://discord.com/api/v10/channels/{channel_id}/messages",
                 json=payload,
-                headers=_bot_headers(),
+                headers=_bot_headers(bot_token),
             )
             if resp.status_code >= 400:
                 logger.warning("Discord Bot API error %d: %s", resp.status_code, resp.text[:200])

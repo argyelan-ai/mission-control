@@ -7,9 +7,10 @@ container. Three properties carry the whole design and are asserted here:
    start of every call; a 500 or a raised exception would end with Jarvis
    silent, which is strictly worse than Jarvis talking to yesterday's
    provider.
-2. It never returns key material. The API keys live in the voice-worker's own
-   env. MC neither stores nor forwards them — ADR-056 Finding 5 is the scar
-   from a global key leaking into runtimes that had no business holding one.
+2. It never returns key material — ADR-056 Finding 5 is the scar from a
+   global key leaking into runtimes that had no business holding one. A key
+   the operator saved in the MC vault reaches the worker through the separate,
+   Jarvis-only ``/voice/credentials`` (tests/test_effective_secret.py).
 3. Only the Jarvis agent itself may call it — every other agent gets 403.
 """
 import uuid

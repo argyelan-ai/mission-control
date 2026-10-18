@@ -194,7 +194,8 @@ async def lifespan(app: FastAPI):
 
     # ── Jarvis Morning Briefing (ADR-062) ─────────────────────────────
     # Daily LLM-generated briefing as a vault note. Feature-gated: the loop
-    # returns immediately unless JARVIS_BRIEFING_ENABLED + OPENAI_API_KEY are set.
+    # returns immediately unless JARVIS_BRIEFING_ENABLED is set; the OpenAI key
+    # (vault first, env fallback) is checked per run in run_briefing_once.
     # NICHT Teil des ENABLE_BACKGROUND_SERVICES-Inventars — laeuft unconditional.
     app.state.jarvis_briefing_task = None
     try:

@@ -18,7 +18,7 @@ import logging
 logger = logging.getLogger("mc.voice_transcription")
 
 
-def get_voice_transcriber():
+async def get_voice_transcriber():
     """Async ``(audio_bytes, filename) -> str | None``, or None when STT is
     unavailable. Bound to the shared jarvis_core chain — the exact voice path
     the Jarvis channel uses, never a second STT stack.
@@ -30,12 +30,18 @@ def get_voice_transcriber():
         never leaves the machine, and NO cloud key is required: demanding one
         here would defeat the reason local STT exists. When both are
         configured, local wins — the URL was set deliberately.
-      * otherwise — the OpenAI cloud with ``openai_api_key``, as before.
+      * otherwise — the OpenAI cloud with the OpenAI key (vault first,
+        ``OPENAI_API_KEY`` as fallback — ``effective_secret``).
+
+    Async because the key is read from the vault per call: a key saved in
+    the app is used from the next voice note on, without a restart.
     """
     from app.config import settings
+    from app.services.secrets_helper import effective_secret
 
     local_url = (settings.stt_base_url or "").strip()
-    if not local_url and not settings.openai_api_key:
+    api_key = await effective_secret("openai_api_key")
+    if not local_url and not api_key:
         return None
     try:
         from jarvis_core import brain
@@ -53,7 +59,7 @@ def get_voice_transcriber():
                     # A local server does not check the key, but the OpenAI
                     # client insists on one — any non-empty value satisfies it
                     # without pretending a real credential exists.
-                    api_key=settings.openai_api_key or "local",
+                    api_key=api_key or "local",
                     model=(settings.stt_model or "").strip()
                     or settings.jarvis_stt_model,
                     base_url=local_url,
@@ -61,7 +67,7 @@ def get_voice_transcriber():
             return await brain.transcribe_audio(
                 audio,
                 filename=filename,
-                api_key=settings.openai_api_key,
+                api_key=api_key,
                 model=settings.jarvis_stt_model,
             )
         except Exception as e:  # noqa: BLE001 — a bad clip must not kill ingest

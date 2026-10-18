@@ -85,6 +85,7 @@
     "GET /api/v1/agent/vault/related/{task_id}",
     "GET /api/v1/agent/vault/search",
     "GET /api/v1/agent/voice/config",
+    "GET /api/v1/agent/voice/credentials",
     "GET /api/v1/agents",
     "GET /api/v1/agents/metrics/comparison",
     "GET /api/v1/agents/stream",

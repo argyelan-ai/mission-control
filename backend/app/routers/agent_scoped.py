@@ -85,6 +85,7 @@ from app.models.board import Board, Project
 from app.models.chat import ChatMessage
 from app.models.memory import BoardMemory
 from app.models.task import Task, TaskComment
+from app.services.harness_compat import is_voice_harness
 from app.services.activity import emit_event
 from app.services.task_state import lock_and_set
 from app.services.thread_scope import thread_agent_may_write_to
@@ -5171,11 +5172,11 @@ async def agent_get_voice_config(
     das abfragen; jeder andere Agent bekommt 403 (die Bindung ist Jarvis'
     Privatsache, kein generisches Runtime-Introspektions-Endpoint).
 
-    Enthaelt bewusst KEIN Schluesselmaterial. Die API-Keys liegen
-    ausschliesslich in der Env des voice-worker-Containers; MC speichert sie
-    nicht und reicht sie nicht durch (ADR-056 Finding 5).
+    Enthaelt bewusst KEIN Schluesselmaterial (ADR-056 Finding 5). Keys, die
+    der Operator im MC-Tresor gespeichert hat, holt der Worker getrennt und
+    eng begrenzt ueber ``/voice/credentials`` (unten); sonst gilt seine Env.
     """
-    if agent.harness != "jarvis":
+    if not is_voice_harness(agent.harness):
         raise HTTPException(
             status_code=403,
             detail="Nur der Jarvis-Agent darf seine Voice-Bindung abfragen.",
@@ -5184,6 +5185,46 @@ async def agent_get_voice_config(
     from app.services.voice_runtime import resolve_voice_config
 
     return await resolve_voice_config(agent, session)
+
+
+#: Vault key -> the env var name the voice worker (and its livekit plugins)
+#: read. Only keys the worker actually uses; nothing else crosses this wire.
+_VOICE_WORKER_VAULT_KEYS = {"openai_api_key": "OPENAI_API_KEY"}
+
+
+@router.get("/voice/credentials")
+async def agent_get_voice_credentials(
+    session: AsyncSession = Depends(get_session),
+    agent: Agent = Depends(require_scope(Scope.TASKS_READ)),
+):
+    """Provider keys the operator saved in the MC vault, for the voice worker.
+
+    The worker is its own process without vault access; before this, a key
+    saved under Settings -> API keys never reached it (only its ``.env``).
+    It calls this at the start of every call and uses a returned key in
+    place of its env value (vault first, env as fallback — ADR-093).
+
+    Deliberately narrow (ADR-056 Finding 5 is about keys leaking to runtimes
+    that should not hold them):
+      * only the Jarvis agent may call it — every other agent gets 403;
+      * only keys the worker uses (``_VOICE_WORKER_VAULT_KEYS``);
+      * only values that come from the VAULT. A key that lives only in
+        ``.env`` is not sent: the worker already has it in its own env.
+    """
+    if not is_voice_harness(agent.harness):
+        raise HTTPException(
+            status_code=403,
+            detail="Only the Jarvis agent may fetch voice credentials.",
+        )
+
+    from app.services.secrets_helper import resolve_secret
+
+    keys: dict[str, str] = {}
+    for vault_key, env_name in _VOICE_WORKER_VAULT_KEYS.items():
+        value, source = await resolve_secret(vault_key, session=session)
+        if source == "vault":
+            keys[env_name] = value
+    return {"keys": keys}
 
 
 class VoiceUnsupportedModelReport(BaseModel):
@@ -5211,7 +5252,7 @@ async def agent_report_voice_unsupported_model(
     Immer 200 — ein fehlschlagender Melde-Call darf den Worker nicht
     zusaetzlich stoeren.
     """
-    if agent.harness != "jarvis":
+    if not is_voice_harness(agent.harness):
         raise HTTPException(
             status_code=403,
             detail="Nur der Jarvis-Agent darf eine Voice-API-Inkompatibilitaet melden.",

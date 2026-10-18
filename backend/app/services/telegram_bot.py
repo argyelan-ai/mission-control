@@ -426,7 +426,7 @@ class TelegramBotService:
                 "— Telegram-Jarvis disabled (check the ./jarvis_core mount)."
             )
         team_chat = settings.telegram_team_chat_enabled
-        if not (self._jarvis.enabled or team_chat):
+        if not (team_chat or await self._jarvis.is_enabled()):
             logger.info("Telegram bot ready (inbound disabled — URL-button approvals only)")
             return
         if not self.configured:
@@ -521,17 +521,17 @@ class TelegramBotService:
 
         async with AsyncSession(engine, expire_on_commit=False) as session:
             await ingest_inbound_message(
-                session, message, bot=self, transcribe=self._voice_transcriber()
+                session, message, bot=self, transcribe=await self._voice_transcriber()
             )
 
-    def _voice_transcriber(self):
+    async def _voice_transcriber(self):
         """Async ``(audio_bytes) -> str | None`` bound to the shared STT chain,
         or None when unavailable. The wiring lives in `voice_transcription`
         since Slack voice arrived — one chain, imported by both channels, so
         they cannot drift apart on how the operator's voice becomes text."""
         from app.services.voice_transcription import get_voice_transcriber
 
-        transcriber = get_voice_transcriber()
+        transcriber = await get_voice_transcriber()
         if transcriber is None:
             return None
 
