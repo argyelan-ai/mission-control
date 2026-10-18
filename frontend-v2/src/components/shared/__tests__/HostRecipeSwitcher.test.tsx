@@ -183,6 +183,23 @@ describe("HostRecipeSwitcher", () => {
     expect(screen.queryByTestId("recipe-start-error")).not.toBeInTheDocument();
   });
 
+  it("names a paused instance in a sentence instead of showing its JSON", async () => {
+    vi.spyOn(api.hosts, "startRecipe").mockRejectedValue(
+      new Error(
+        'API 409: {"detail":{"code":"runtime_paused","runtime_id":"rt-9","runtime_slug":"recipe-y-box-a","message":"paused"}}',
+      ),
+    );
+    renderWithQuery(<HostRecipeSwitcher hostId="box-a" />);
+    await openList();
+    await act(async () => { screen.getByTestId("recipe-option-recipe-y").click(); });
+    await act(async () => { screen.getByTestId("recipe-confirm-start").click(); });
+
+    const err = await screen.findByTestId("recipe-start-error");
+    expect(err).toHaveTextContent("recipe-y-box-a");
+    expect(err).toHaveTextContent("is paused on this box");
+    expect(err).not.toHaveTextContent("runtime_paused");
+  });
+
   it("with zero recipes keeps the trigger and says so in the list — unless hideWhenEmpty", async () => {
     vi.spyOn(api.hosts, "recipes").mockResolvedValue([]);
     const { unmount } = renderWithQuery(<HostRecipeSwitcher hostId="box-a" servingName="Engine X" />);

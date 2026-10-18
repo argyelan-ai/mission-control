@@ -3093,7 +3093,8 @@
         "quiet": "Start angenommen, aber die Engine antwortet noch nicht."
       },
       "close": "Schliessen",
-      "rowActions": "Weitere Aktionen für {name}"
+      "rowActions": "Weitere Aktionen für {name}",
+      "startPausedElsewhere": "Die Runtime {slug} für dieses Rezept ist auf dieser Box pausiert — MC legt keine zweite an. Fortsetzen geht im Deploy-Dialog des Rezepts („Fortsetzen und starten“)."
     },
     "bindAgentModal": {
       "title": "Agent binden",
@@ -3215,7 +3216,8 @@
       "workerEnvMissing": "Dem Rezept fehlt die Umgebungs-Zuordnung — MC kann die .env auf dieser Box nicht schreiben.",
       "startingDuo": "startet {name} auf {head} + {worker} …",
       "startingDuoNoHead": "startet {name} — zweite Box: {worker} …",
-      "capacityNotes": "Hinweise zur Kapazität"
+      "capacityNotes": "Hinweise zur Kapazität",
+      "startPaused": "Die Runtime {slug} für dieses Rezept ist auf dieser Box pausiert — MC legt keine zweite an. Fortsetzen geht im Deploy-Dialog des Rezepts („Fortsetzen und starten“)."
     },
     "cloudUsage": {
       "sectionTitle": "Cloud — wer nutzt was",

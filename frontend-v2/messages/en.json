@@ -3093,7 +3093,8 @@
         "quiet": "Start accepted, but the engine does not answer yet."
       },
       "close": "Close",
-      "rowActions": "More actions for {name}"
+      "rowActions": "More actions for {name}",
+      "startPausedElsewhere": "The runtime {slug} for this recipe is paused on this box — MC does not create a second one. Resume it in the recipe’s deploy dialog (“Resume and start”)."
     },
     "bindAgentModal": {
       "title": "Bind agent",
@@ -3215,7 +3216,8 @@
       "workerEnvMissing": "The recipe has no environment mapping — MC cannot write the .env on this box.",
       "startingDuo": "starting {name} on {head} + {worker} …",
       "startingDuoNoHead": "starting {name} — second box: {worker} …",
-      "capacityNotes": "Capacity notes"
+      "capacityNotes": "Capacity notes",
+      "startPaused": "The runtime {slug} for this recipe is paused on this box — MC does not create a second one. Resume it in the recipe’s deploy dialog (“Resume and start”)."
     },
     "cloudUsage": {
       "sectionTitle": "Cloud — who's using what",
