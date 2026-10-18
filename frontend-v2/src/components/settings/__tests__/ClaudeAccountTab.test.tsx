@@ -42,8 +42,6 @@ const check = (over: Partial<ConfigCheckItem> = {}): ConfigCheckItem => ({
   checked_at: minutesAgo(3),
   age_seconds: 180,
   value_changed: false,
-  reason: null,
-  reason_params: {},
   ...over,
 });
 
