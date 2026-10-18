@@ -945,6 +945,15 @@
         ]
       }
     },
+    "/api/v1/agent/voice/credentials": {
+      "get": {
+        "operationId": "agent_get_voice_credentials_api_v1_agent_voice_credentials_get",
+        "summary": "Agent Get Voice Credentials",
+        "tags": [
+          "agent-scoped"
+        ]
+      }
+    },
     "/api/v1/agent/voice/unsupported-model": {
       "post": {
         "operationId": "agent_report_voice_unsupported_model_api_v1_agent_voice_unsupported_model_post",
