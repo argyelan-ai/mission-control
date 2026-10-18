@@ -142,6 +142,8 @@ describe("Claude card — German screen", () => {
     expect(await screen.findByTestId("claude-stale")).toHaveTextContent("1 Agent nutzt noch den alten Token");
     expect(screen.getByRole("button", { name: "Neu starten (1 Agent)" })).toBeInTheDocument();
     expect(document.body.textContent).not.toContain("1 Agenten");
+    expect(screen.getByTestId("claude-stale")).toHaveTextContent("Er hat den Token beim Start bekommen");
+    expect(document.body.textContent).not.toContain("gibt ihnen");
   });
 
   it("two agents: '2 Agenten nutzen …' and 'Neu starten (2 Agenten)'", async () => {

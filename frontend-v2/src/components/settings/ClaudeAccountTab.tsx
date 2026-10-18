@@ -377,7 +377,7 @@ function StaleAgents({ status, onRestarted }: { status: ClaudeAccountStatus; onR
         </span>
       </div>
       <p className="text-sm" style={{ color: "var(--color-text-secondary)", maxWidth: "72ch" }}>
-        {t("staleBody")}
+        {t("staleBody", { count: status.stale_agents.length })}
       </p>
       <ul className="space-y-1 text-sm">
         {status.stale_agents.map((agent) => (

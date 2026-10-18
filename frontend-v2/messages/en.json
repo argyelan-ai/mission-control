@@ -2309,7 +2309,7 @@
       "disconnected": "Claude disconnected.",
       "disconnectFailed": "Could not disconnect.",
       "staleTitle": "{count, plural, one {# agent still uses the old token} other {# agents still use the old token}}",
-      "staleBody": "They got the token when they started. A restart gives them the new one.",
+      "staleBody": "{count, plural, one {It got the token when it started. A restart gives it the new one.} other {They got the token when they started. A restart gives them the new one.}}",
       "staleBusy": "working on a task",
       "staleBusyNote": "Busy agents are left alone. Restart them once their task is done.",
       "restartAgents": "{count, plural, one {Restart # agent} other {Restart # agents}}",

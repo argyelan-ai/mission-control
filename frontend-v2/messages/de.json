@@ -2309,7 +2309,7 @@
       "disconnected": "Claude getrennt.",
       "disconnectFailed": "Trennen hat nicht geklappt.",
       "staleTitle": "{count, plural, one {# Agent nutzt noch den alten Token} other {# Agenten nutzen noch den alten Token}}",
-      "staleBody": "Sie haben den Token beim Start bekommen. Ein Neustart gibt ihnen den neuen.",
+      "staleBody": "{count, plural, one {Er hat den Token beim Start bekommen. Ein Neustart gibt ihm den neuen.} other {Sie haben den Token beim Start bekommen. Ein Neustart gibt ihnen den neuen.}}",
       "staleBusy": "arbeitet an einer Aufgabe",
       "staleBusyNote": "Beschäftigte Agenten bleiben in Ruhe. Starte sie neu, wenn ihre Aufgabe fertig ist.",
       "restartAgents": "{count, plural, one {Neu starten (# Agent)} other {Neu starten (# Agenten)}}",
