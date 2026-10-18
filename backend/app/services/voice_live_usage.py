@@ -279,13 +279,18 @@ async def hangup_upstream(openai_call_id: str) -> bool:
     """Ends the call at OpenAI with the server key. Best effort: a call that
     already ended answers 404 — that is fine too. Never logs the key or the
     upstream body."""
-    if not OPENAI_CALL_ID_RE.match(openai_call_id or "") or not settings.openai_api_key:
+    if not OPENAI_CALL_ID_RE.match(openai_call_id or ""):
+        return False
+    from app.services.secrets_helper import effective_secret
+
+    api_key = await effective_secret("openai_api_key")
+    if not api_key:
         return False
     try:
         async with httpx.AsyncClient(timeout=10.0, transport=_transport()) as client:
             resp = await client.post(
                 OPENAI_HANGUP_URL.format(call_id=openai_call_id),
-                headers={"Authorization": f"Bearer {settings.openai_api_key}"},
+                headers={"Authorization": f"Bearer {api_key}"},
             )
     except httpx.HTTPError as exc:
         logger.warning("voice_live hangup: upstream unreachable (%s)", type(exc).__name__)

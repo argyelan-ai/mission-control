@@ -263,12 +263,15 @@ async def test_briefing_loop_starts_without_env_key(monkeypatch, env_empty):
     monkeypatch.setattr(settings, "jarvis_briefing_enabled", True)
     monkeypatch.setattr(jb, "_JARVIS_CORE_OK", True)
 
-    async def _cancel(_delay):
-        raise asyncio.CancelledError
+    slept: list[float] = []
+
+    async def _cancel(delay):
+        slept.append(delay)
+        raise asyncio.CancelledError  # the loop treats this as shutdown
 
     monkeypatch.setattr(jb.asyncio, "sleep", _cancel)
-    with pytest.raises(asyncio.CancelledError):
-        await jb.jarvis_briefing_loop()  # reached the sleep = the loop started
+    await jb.jarvis_briefing_loop()
+    assert len(slept) == 1  # reached the daily sleep = the loop started
 
 
 # ── dictation / voice notes (voice_transcription.py) ─────────────────────

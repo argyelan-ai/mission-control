@@ -98,8 +98,8 @@ class VoiceLiveSession(BaseModel):
     limits: VoiceLiveLimits
 
 
-def _require_enabled() -> None:
-    if not voice_live.is_enabled():
+async def _require_enabled() -> None:
+    if not await voice_live.is_enabled():
         raise HTTPException(status_code=404, detail="voice_live_disabled")
 
 
@@ -108,7 +108,7 @@ async def get_config(
     _user=Depends(require_role(Role.ADMIN)),
     session: AsyncSession = Depends(get_session),
 ) -> VoiceLiveConfig:
-    _require_enabled()
+    await _require_enabled()
     return VoiceLiveConfig(
         enabled=True,
         model=settings.voice_live_model,
@@ -135,7 +135,7 @@ async def get_default_target(
     without a lead, the fleet's lead (oldest first, so the answer is stable).
     The name comes from the data — the public repo never hardcodes it.
     """
-    _require_enabled()
+    await _require_enabled()
     base = (
         select(Agent)
         .where(Agent.is_board_lead == True)  # noqa: E712
@@ -158,7 +158,7 @@ async def create_session(
     _user=Depends(require_role(Role.ADMIN)),
     session: AsyncSession = Depends(get_session),
 ):
-    _require_enabled()
+    await _require_enabled()
     agent = await session.get(Agent, body.agent_id)
     if agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -504,7 +504,7 @@ async def run_tool(
     """One tool call of a live voice call. Guards, in order: feature on,
     admin, the call is known and was opened for THIS agent, the agent still
     exists and is not archived, per-call rate limit, argument limits."""
-    _require_enabled()
+    await _require_enabled()
     try:
         call = voice_live_tools.check_call(body.call_ref, body.agent_id)
         agent = await session.get(Agent, body.agent_id)
@@ -572,7 +572,7 @@ async def progress_item(
 ):
     """One progress line for an open call. Same guards as ``/tool``: feature
     on, admin, call known and opened for THIS agent, per-call rate limit."""
-    _require_enabled()
+    await _require_enabled()
     try:
         call = voice_live_tools.check_call(body.call_ref, body.agent_id)
         agent = await session.get(Agent, body.agent_id)
@@ -640,7 +640,7 @@ async def report_usage(
     """Books one call's usage. Found by the call's handle in the database
     (not the in-memory call list), so the cost still lands after a backend
     restart or past the call's tool lifetime."""
-    _require_enabled()
+    await _require_enabled()
     row = await voice_live_usage.find_row(session, body.call_ref)
     if row is None:
         return _tool_error(VoiceToolError("call_unknown", 403))
@@ -699,4 +699,4 @@ async def usage_summary(
     """Insights' "Voice" row. Not behind the switch: what was spent stays
     visible after the voice is turned off."""
     data = await voice_live_usage.summary(session)
-    return VoiceUsageSummary(enabled=voice_live.is_enabled(), **data)
+    return VoiceUsageSummary(enabled=await voice_live.is_enabled(), **data)

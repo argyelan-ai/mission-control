@@ -125,7 +125,14 @@ async def run_briefing_once(now: datetime | None = None) -> dict:
     als ``{"ok": False, ...}`` zurueckgegeben und der Idempotenz-Guard wieder
     freigegeben.
     """
-    if not (_JARVIS_CORE_OK and settings.jarvis_briefing_enabled and settings.openai_api_key):
+    if not (_JARVIS_CORE_OK and settings.jarvis_briefing_enabled):
+        return {"ok": False, "reason": "disabled"}
+    # Vault first, OPENAI_API_KEY as fallback — read per run, so a key saved
+    # in the app works from the next briefing on, without a restart.
+    from app.services.secrets_helper import effective_secret
+
+    api_key = await effective_secret("openai_api_key")
+    if not api_key:
         return {"ok": False, "reason": "disabled"}
 
     from app.redis_client import RedisKeys, get_redis
@@ -148,7 +155,7 @@ async def run_briefing_once(now: datetime | None = None) -> dict:
         text = await frontier.complete_text(
             system=system,
             user=user,
-            api_key=settings.openai_api_key,
+            api_key=api_key,
             model=settings.jarvis_frontier_model or None,
             max_tokens=frontier.BRIEFING_MAX_TOKENS,
         )
@@ -182,13 +189,14 @@ async def run_briefing_once(now: datetime | None = None) -> dict:
 async def jarvis_briefing_loop() -> None:
     """Loop: schlaeft bis zur naechsten JARVIS_BRIEFING_HOUR, generiert, wiederholt.
 
-    Startet nur bei aktivem Feature + vorhandenem Key (die Gate-Pruefung erfolgt
-    auch in ``run_briefing_once``, hier zusaetzlich, um den Loop gar nicht erst zu
-    starten). Per-Iteration-Fehler werden geloggt, der Loop laeuft weiter; nur ein
+    Startet nur bei aktivem Feature. Der OpenAI-Key wird NICHT hier geprueft,
+    sondern pro Lauf in ``run_briefing_once`` (Tresor zuerst, env als
+    Rueckfall) — sonst wirkte ein spaeter in der App gespeicherter Key erst nach
+    einem Neustart. Per-Iteration-Fehler werden geloggt, der Loop laeuft weiter; nur ein
     ``CancelledError`` (Shutdown) bricht ab.
     """
-    if not (_JARVIS_CORE_OK and settings.jarvis_briefing_enabled and settings.openai_api_key):
-        logger.info("jarvis_briefing_loop not started (feature disabled or no OPENAI_API_KEY)")
+    if not (_JARVIS_CORE_OK and settings.jarvis_briefing_enabled):
+        logger.info("jarvis_briefing_loop not started (feature disabled)")
         return
 
     hour, minute = parse_hhmm(settings.jarvis_briefing_hour)
