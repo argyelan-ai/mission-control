@@ -86,7 +86,7 @@ vi.setConfig({ testTimeout: 20_000 });
 const ALL = [
   "profile", "security", "appearance", "shortcuts",
   "autonomy", "intelligence", "costs", "night-shift",
-  "github", "slack", "telegram", "ai-providers",
+  "claude", "github", "slack", "telegram", "ai-providers",
   "apikeys", "credentials",
   "users", "about",
 ];

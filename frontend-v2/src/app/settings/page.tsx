@@ -22,6 +22,8 @@ import {
   MessageSquare,
   Send,
   ChevronLeft,
+  Bot,
+  type LucideIcon,
 } from "lucide-react";
 import { api, setStoredUser } from "@/lib/api";
 import { useAppStore, type AuthUser } from "@/lib/store";
@@ -40,6 +42,7 @@ import { CostPricesTab } from "@/components/settings/CostPricesTab";
 import { SlackTab } from "@/components/settings/SlackTab";
 import { TelegramTab } from "@/components/settings/TelegramTab";
 import { AiProvidersTab } from "@/components/settings/AiProvidersTab";
+import { ClaudeAccountTab } from "@/components/settings/ClaudeAccountTab";
 import { AppearanceSection } from "@/components/settings/AppearanceSection";
 import { NightShiftTab } from "@/components/settings/NightShiftTab";
 import { PhoneAccountPanel } from "@/components/settings/PhoneAccountPanel";
@@ -1139,11 +1142,57 @@ function IntelligenceSection({
 
 // ── API Keys Section (Admin only) ─────────────────────────────────────────────
 
+// Must match routers/secrets.py PROVIDER_TEMPLATES.
+const CLAUDE_TOKEN_KEY = "claude_code_oauth_token";
+
+/** A key that has its own section: one pointer instead of a second editor. */
+function ManagedElsewhere({
+  icon: Icon,
+  name,
+  hint,
+  action,
+  onGo,
+}: {
+  icon: LucideIcon;
+  name: string;
+  hint: string;
+  action: string;
+  onGo: () => void;
+}) {
+  return (
+    <div className="mc-card p-4" style={cardStyle}>
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <Icon size={14} style={{ color: "var(--color-text-muted)" }} />
+            <span className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>
+              {name}
+            </span>
+          </div>
+          <p className="text-xs mt-0.5" style={{ color: "var(--color-text-muted)" }}>
+            {hint}
+          </p>
+        </div>
+        <button
+          onClick={onGo}
+          className="flex items-center gap-1.5 shrink-0 px-2.5 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-colors"
+          style={{ backgroundColor: C.accentSubtle, color: C.accent }}
+        >
+          {action}
+          <ExternalLink size={12} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function ApiKeysSection({
+  onNavigateToClaude,
   onNavigateToGithub,
   onNavigateToSlack,
   onNavigateToTelegram,
 }: {
+  onNavigateToClaude: () => void;
   onNavigateToGithub: () => void;
   onNavigateToSlack: () => void;
   onNavigateToTelegram: () => void;
@@ -1213,7 +1262,11 @@ function ApiKeysSection({
   // which explains what each one is for and can test them.
   const nonGithubProviders = (providers ?? []).filter(
     (tmpl) =>
-      tmpl.provider !== "github" && tmpl.provider !== "slack" && tmpl.provider !== "telegram"
+      tmpl.provider !== "github" &&
+      tmpl.provider !== "slack" &&
+      tmpl.provider !== "telegram" &&
+      // The Claude account has its own section (status, reconnect, restart).
+      tmpl.key !== CLAUDE_TOKEN_KEY
   );
   const hasGithubSecret = (secrets ?? []).some(
     (s) => s.provider === "github" || s.key === "github_owner" || s.key === "github_token"
@@ -1238,80 +1291,17 @@ function ApiKeysSection({
         </div>
       ) : (
         <div className="space-y-3">
+          {/* Always shown: before, the Claude token was a row of this list,
+              so this is where people look for it. */}
+          <ManagedElsewhere icon={Bot} name="Claude" hint={t("claudeManagedHint")} action={t("goToClaude")} onGo={onNavigateToClaude} />
           {hasGithubSecret && (
-            <div className="mc-card p-4" style={cardStyle}>
-              <div className="flex items-center justify-between gap-4">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <Github size={14} style={{ color: "var(--color-text-muted)" }} />
-                    <span className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>
-                      GitHub
-                    </span>
-                  </div>
-                  <p className="text-xs mt-0.5" style={{ color: "var(--color-text-muted)" }}>
-                    {t("githubManagedHint")}
-                  </p>
-                </div>
-                <button
-                  onClick={onNavigateToGithub}
-                  className="flex items-center gap-1.5 shrink-0 px-2.5 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-colors"
-                  style={{ backgroundColor: C.accentSubtle, color: C.accent }}
-                >
-                  {t("goToGithub")}
-                  <ExternalLink size={12} />
-                </button>
-              </div>
-            </div>
+            <ManagedElsewhere icon={Github} name="GitHub" hint={t("githubManagedHint")} action={t("goToGithub")} onGo={onNavigateToGithub} />
           )}
           {hasSlackSecret && (
-            <div className="mc-card p-4" style={cardStyle}>
-              <div className="flex items-center justify-between gap-4">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <MessageSquare size={14} style={{ color: "var(--color-text-muted)" }} />
-                    <span className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>
-                      Slack
-                    </span>
-                  </div>
-                  <p className="text-xs mt-0.5" style={{ color: "var(--color-text-muted)" }}>
-                    {t("slackManagedHint")}
-                  </p>
-                </div>
-                <button
-                  onClick={onNavigateToSlack}
-                  className="flex items-center gap-1.5 shrink-0 px-2.5 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-colors"
-                  style={{ backgroundColor: C.accentSubtle, color: C.accent }}
-                >
-                  {t("goToSlack")}
-                  <ExternalLink size={12} />
-                </button>
-              </div>
-            </div>
+            <ManagedElsewhere icon={MessageSquare} name="Slack" hint={t("slackManagedHint")} action={t("goToSlack")} onGo={onNavigateToSlack} />
           )}
           {hasTelegramSecret && (
-            <div className="mc-card p-4" style={cardStyle}>
-              <div className="flex items-center justify-between gap-4">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <Send size={14} style={{ color: "var(--color-text-muted)" }} />
-                    <span className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>
-                      Telegram
-                    </span>
-                  </div>
-                  <p className="text-xs mt-0.5" style={{ color: "var(--color-text-muted)" }}>
-                    {t("telegramManagedHint")}
-                  </p>
-                </div>
-                <button
-                  onClick={onNavigateToTelegram}
-                  className="flex items-center gap-1.5 shrink-0 px-2.5 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-colors"
-                  style={{ backgroundColor: C.accentSubtle, color: C.accent }}
-                >
-                  {t("goToTelegram")}
-                  <ExternalLink size={12} />
-                </button>
-              </div>
-            </div>
+            <ManagedElsewhere icon={Send} name="Telegram" hint={t("telegramManagedHint")} action={t("goToTelegram")} onGo={onNavigateToTelegram} />
           )}
           {nonGithubProviders.map((tmpl) => {
             const existing = secretsByKey.get(tmpl.key);
@@ -2554,11 +2544,13 @@ function SettingsContent() {
               )}
               {activeSection === "apikeys" && isAdmin && (
                 <ApiKeysSection
+                  onNavigateToClaude={() => selectSection("claude")}
                   onNavigateToGithub={() => selectSection("github")}
                   onNavigateToSlack={() => selectSection("slack")}
                   onNavigateToTelegram={() => selectSection("telegram")}
                 />
               )}
+              {activeSection === "claude" && isAdmin && <ClaudeAccountTab />}
               {activeSection === "github" && isAdmin && <GithubSection />}
               {activeSection === "slack" && isAdmin && <SlackTab />}
               {activeSection === "telegram" && isAdmin && <TelegramTab />}

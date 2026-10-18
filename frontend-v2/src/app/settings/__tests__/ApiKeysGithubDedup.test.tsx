@@ -195,4 +195,36 @@ describe("ApiKeysSection GitHub dedup (Settings)", () => {
 
     expect(await screen.findByRole("heading", { name: "GitHub" })).toBeInTheDocument();
   });
+
+  it("keeps the Claude token out of the list and points to the Claude section", async () => {
+    vi.spyOn(api.secrets, "providers").mockResolvedValue([
+      ...PROVIDERS,
+      {
+        provider: "anthropic-claude-code",
+        key: "claude_code_oauth_token",
+        label: "Claude Code OAuth Token",
+        description: "For cli-bridge agents",
+        placeholder: "sk-ant-oat01-...",
+      },
+    ]);
+    vi.spyOn(api.secrets, "list").mockResolvedValue([]);
+    vi.spyOn(api.claudeAccount, "status").mockResolvedValue({
+      configured: false,
+      token_updated_at: null,
+      check: null,
+      claude_agents: 0,
+      host_agents: 0,
+      stale_agents: [],
+      login: { state: "idle", url: null, error: null },
+    });
+
+    renderPage();
+
+    await screen.findByRole("heading", { name: "API Keys" });
+    expect(await screen.findByText("Claude account is managed in the Claude section.")).toBeInTheDocument();
+    expect(screen.queryByText("Claude Code OAuth Token")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /Go to Claude/i }));
+    expect(await screen.findByRole("heading", { name: "Claude" })).toBeInTheDocument();
+  });
 });

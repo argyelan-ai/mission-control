@@ -1199,6 +1199,30 @@ export interface ConfigCheckRunResult {
   notRunnable: "not_configured" | "not_testable" | null;
 }
 
+export interface ClaudeLoginState {
+  state: "idle" | "starting" | "waiting_for_code" | "verifying" | "connected" | "failed";
+  url: string | null;
+  error: string | null;
+}
+
+export interface ClaudeStaleAgent {
+  id: string;
+  name: string;
+  busy: boolean;
+  started_at: string;
+}
+
+/** GET /api/v1/claude-account — the Claude account card. */
+export interface ClaudeAccountStatus {
+  configured: boolean;
+  token_updated_at: string | null;
+  check: ConfigCheckItem | null;
+  claude_agents: number;
+  host_agents: number;
+  stale_agents: ClaudeStaleAgent[];
+  login: ClaudeLoginState;
+}
+
 export interface Credential {
   id: string;
   name: string;

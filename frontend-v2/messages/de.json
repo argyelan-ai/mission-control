@@ -1772,7 +1772,8 @@
       "telegram": "Telegram",
       "aiProviders": "KI-Provider",
       "nightShift": "Nachtschicht",
-      "appearance": "Darstellung"
+      "appearance": "Darstellung",
+      "claude": "Claude"
     },
     "security": {
       "title": "Sicherheit",
@@ -1894,7 +1895,9 @@
       "delete": "Löschen",
       "telegramManagedHint": "Telegram-Tokens werden in der Telegram-Sektion verwaltet, zusammen mit Verbindungstest und Funktions-Schaltern.",
       "goToTelegram": "Zu Telegram",
-      "cancel": "Abbrechen"
+      "cancel": "Abbrechen",
+      "claudeManagedHint": "Das Claude-Konto verwaltest du im Bereich Claude.",
+      "goToClaude": "Zu Claude"
     },
     "github": {
       "title": "GitHub",
@@ -2277,6 +2280,61 @@
     "phoneList": {
       "label": "Einstellungsbereiche",
       "back": "Zurück zu Einstellungen"
+    },
+    "claude": {
+      "title": "Claude",
+      "intro": "Das Claude-Pro- oder -Max-Abo, mit dem sich deine Claude-Agenten anmelden. Ein Token für alle, verschlüsselt in MC gespeichert.",
+      "statusNotConnected": "Nicht verbunden",
+      "statusOk": "Verbunden · geprüft {ago}",
+      "statusNeverTested": "Noch nicht geprüft",
+      "statusFail": "Claude lehnt den Token ab",
+      "notConnectedHint": "Claude-Agenten starten erst, wenn ein Konto verbunden ist.",
+      "tokenSaved": "Token gespeichert {ago}. Tokens aus claude setup-token gelten ein Jahr.",
+      "testCostHint": "Ein Test schickt eine winzige Anfrage an Claude und braucht etwas von deinem Abo.",
+      "testNow": "Jetzt prüfen",
+      "testing": "Prüfe…",
+      "testOk": "Claude antwortet.",
+      "testFailed": "Claude lehnt den Token ab.",
+      "connect": "Claude verbinden",
+      "reconnect": "Neu verbinden",
+      "disconnect": "Trennen",
+      "disconnectTitle": "Claude trennen?",
+      "disconnectBody": "MC löscht den gespeicherten Token. Laufende Agenten behalten den alten, bis sie neu starten; danach starten Claude-Agenten erst wieder, wenn du neu verbindest.",
+      "disconnected": "Claude getrennt.",
+      "disconnectFailed": "Trennen hat nicht geklappt.",
+      "staleTitle": "{count, plural, one {# Agent nutzt noch den alten Token} other {# Agenten nutzen noch den alten Token}}",
+      "staleBody": "Sie haben den Token beim Start bekommen. Ein Neustart gibt ihnen den neuen.",
+      "staleBusy": "arbeitet an einer Aufgabe",
+      "staleBusyNote": "Beschäftigte Agenten bleiben in Ruhe. Starte sie neu, wenn ihre Aufgabe fertig ist.",
+      "restartAgents": "{count, plural, one {# Agenten neu starten} other {# Agenten neu starten}}",
+      "restartTitle": "Agenten neu starten?",
+      "restartBody": "{count, plural, one {# Agent startet neu und meldet sich mit dem neuen Token an. Er ist in etwa einer Minute zurück.} other {# Agenten starten neu und melden sich mit dem neuen Token an. Sie sind in etwa einer Minute zurück.}}",
+      "restartConfirm": "Neu starten",
+      "restarted": "{count, plural, one {# Agent neu gestartet.} other {# Agenten neu gestartet.}}",
+      "restartFailed": "{name} konnte nicht neu starten.",
+      "hostNote": "{count, plural, one {# Agent läuft direkt auf diesem Computer und liest den Token aus der .env — diese Seite ändert ihn nicht.} other {# Agenten laufen direkt auf diesem Computer und lesen den Token aus der .env — diese Seite ändert sie nicht.}}",
+      "login": {
+        "starting": "Claude-Anmeldung startet…",
+        "step1": "Claude-Anmeldeseite öffnen",
+        "step1Hint": "Melde dich mit dem Konto an, das dein Claude-Abo hat. Danach zeigt Claude einen Code.",
+        "codeLabel": "Code von Claude",
+        "codePlaceholder": "Code hier einfügen",
+        "finish": "Fertig",
+        "verifying": "Claude prüft den Code…",
+        "connected": "Claude ist verbunden.",
+        "savedNotWorking": "Der neue Token ist gespeichert, aber Claude nimmt ihn nicht an.",
+        "startAgain": "Neu beginnen",
+        "cancel": "Abbrechen",
+        "failed": "Die Anmeldung hat nicht geklappt."
+      },
+      "paste": {
+        "toggle": "Stattdessen einen Token einfügen",
+        "label": "Token aus claude setup-token",
+        "hint": "Führe claude setup-token auf einem Computer mit Claude Code aus und füge den Token ein, den es ausgibt.",
+        "save": "Speichern und prüfen",
+        "saved": "Token gespeichert.",
+        "saveFailed": "Token konnte nicht gespeichert werden."
+      }
     }
   },
   "skills": {

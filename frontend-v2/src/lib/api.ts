@@ -1,5 +1,7 @@
 import type {
   ActivityEvent,
+  ClaudeAccountStatus,
+  ClaudeLoginState,
   Agent,
   AgentMetrics,
   AgentSkillsResponse,
@@ -1776,6 +1778,19 @@ export const api = {
         throw err;
       }
     },
+  },
+
+  // ── Claude account card (status, reconnect via claude setup-token) ─────────
+  claudeAccount: {
+    status: () => request<ClaudeAccountStatus>("/api/v1/claude-account"),
+    startLogin: () => request<ClaudeLoginState>("/api/v1/claude-account/login", { method: "POST" }),
+    loginStatus: () => request<ClaudeLoginState>("/api/v1/claude-account/login"),
+    submitCode: (code: string) =>
+      request<ClaudeLoginState>("/api/v1/claude-account/login/code", {
+        method: "POST",
+        body: JSON.stringify({ code }),
+      }),
+    cancelLogin: () => request<ClaudeLoginState>("/api/v1/claude-account/login", { method: "DELETE" }),
   },
 
   // ── Slack (team chat channel; Socket Mode) ─────────────────────────────────

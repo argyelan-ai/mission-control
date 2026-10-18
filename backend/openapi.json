@@ -2319,6 +2319,47 @@
         ]
       }
     },
+    "/api/v1/claude-account": {
+      "get": {
+        "operationId": "get_claude_account_api_v1_claude_account_get",
+        "summary": "Get Claude Account",
+        "tags": [
+          "claude-account"
+        ]
+      }
+    },
+    "/api/v1/claude-account/login": {
+      "delete": {
+        "operationId": "cancel_claude_login_api_v1_claude_account_login_delete",
+        "summary": "Cancel Claude Login",
+        "tags": [
+          "claude-account"
+        ]
+      },
+      "get": {
+        "operationId": "get_claude_login_api_v1_claude_account_login_get",
+        "summary": "Get Claude Login",
+        "tags": [
+          "claude-account"
+        ]
+      },
+      "post": {
+        "operationId": "start_claude_login_api_v1_claude_account_login_post",
+        "summary": "Start Claude Login",
+        "tags": [
+          "claude-account"
+        ]
+      }
+    },
+    "/api/v1/claude-account/login/code": {
+      "post": {
+        "operationId": "submit_claude_login_code_api_v1_claude_account_login_code_post",
+        "summary": "Submit Claude Login Code",
+        "tags": [
+          "claude-account"
+        ]
+      }
+    },
     "/api/v1/clawhub/install": {
       "post": {
         "operationId": "install_skill_api_v1_clawhub_install_post",
