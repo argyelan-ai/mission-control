@@ -22,9 +22,11 @@ import {
   SshProcessDeployDialog,
   defaultPortFor,
   exclusiveNeighbours,
+  pausedRuntimeDetail,
   slugify,
   sshCapable,
 } from "../SshProcessDeployDialog";
+import { recipeStartStage } from "../RecipeStartProgress";
 import { api } from "@/lib/api";
 import type {
   Host,
@@ -661,5 +663,146 @@ describe("compose-based deploy", () => {
 
     await waitFor(() => expect(create).toHaveBeenCalled());
     expect(create.mock.calls[0][0].container_name).toBeUndefined();
+  });
+
+  // ── Start feedback + paused instance (field findings 2026-10-18) ──────────
+
+  describe("start feedback", () => {
+    const duo = () => mkRecipe({ slug: "duo-recipe", topology: { nodes: 2 }, port: 8000 });
+    const liveOf = (entry: Record<string, unknown> | null) => ({
+      live: entry ? { "duo-recipe-spark": entry } : {},
+      watcher_enabled: true,
+      interval: 30,
+    });
+
+    function mockBase() {
+      vi.spyOn(api.hosts, "list").mockResolvedValue([mkHost()]);
+      vi.spyOn(api.runtimes, "list").mockResolvedValue(mkRuntimes([]));
+      vi.spyOn(api.localRegistry, "installLog").mockResolvedValue(
+        mkLog({ status: "done", lines: [{ ts: null, level: "info", text: "old install line" }] }),
+      );
+    }
+
+    it("maps the watcher's live status to one stage", () => {
+      expect(recipeStartStage(true, false, undefined)).toBe("sending");
+      expect(recipeStartStage(false, true, undefined)).toBe("already");
+      expect(recipeStartStage(false, false, undefined)).toBe("waiting");
+      const base = { reachable: false, served_model: null, latency_ms: null, last_probe_at: "", consecutive_failures: 0, drift: false };
+      expect(recipeStartStage(false, false, { ...base, status: "switching", phase: "evicting" })).toBe("evicting");
+      expect(recipeStartStage(false, false, { ...base, status: "switching", phase: "loading" })).toBe("loading");
+      expect(recipeStartStage(false, false, { ...base, status: "switching", phase: "warming" })).toBe("starting");
+      expect(recipeStartStage(false, false, { ...base, reachable: true, status: "ok" })).toBe("serving");
+      expect(recipeStartStage(false, false, { ...base, status: "unreachable" })).toBe("quiet");
+    });
+
+    it("shows the start's progress instead of the old install log after the click", async () => {
+      mockBase();
+      vi.spyOn(api.hosts, "startRecipe").mockResolvedValue({
+        ok: true,
+        created: false,
+        runtime_slug: "duo-recipe-spark",
+      } as Awaited<ReturnType<typeof api.hosts.startRecipe>>);
+      const live = vi
+        .spyOn(api.runtimes, "liveStatus")
+        .mockResolvedValue(liveOf({ reachable: false, status: "switching", phase: "loading" }) as never);
+
+      renderDialog(duo());
+      await screen.findByTestId("ssh-deploy-install-log");
+      const create = await screen.findByTestId("ssh-deploy-create");
+      await waitFor(() => expect(create).toBeEnabled());
+      await userEvent.click(create);
+
+      const progress = await screen.findByTestId("recipe-start-progress");
+      await waitFor(() => expect(progress.dataset.stage).toBe("loading"));
+      expect(progress.textContent).toContain("Loading the weights");
+      expect(live).toHaveBeenCalled();
+      // The old install log is history now — it no longer hides the start.
+      expect(screen.queryByTestId("ssh-deploy-install-log")).toBeNull();
+    });
+
+    it("says when the engine answers", async () => {
+      mockBase();
+      vi.spyOn(api.hosts, "startRecipe").mockResolvedValue({
+        ok: true,
+        runtime_slug: "duo-recipe-spark",
+      } as Awaited<ReturnType<typeof api.hosts.startRecipe>>);
+      vi.spyOn(api.runtimes, "liveStatus").mockResolvedValue(
+        liveOf({ reachable: true, status: "ok", served_model: "org/duo" }) as never,
+      );
+
+      renderDialog(duo());
+      const create = await screen.findByTestId("ssh-deploy-create");
+      await waitFor(() => expect(create).toBeEnabled());
+      await userEvent.click(create);
+
+      const progress = await screen.findByTestId("recipe-start-progress");
+      await waitFor(() => expect(progress.dataset.stage).toBe("serving"));
+      expect(progress.textContent).toContain("org/duo");
+    });
+
+    it("shows a sending state while the start request runs", async () => {
+      mockBase();
+      let release: (v: unknown) => void = () => undefined;
+      vi.spyOn(api.hosts, "startRecipe").mockReturnValue(
+        new Promise((resolve) => {
+          release = resolve;
+        }) as never,
+      );
+      vi.spyOn(api.runtimes, "liveStatus").mockResolvedValue(liveOf(null) as never);
+
+      renderDialog(duo());
+      const create = await screen.findByTestId("ssh-deploy-create");
+      await waitFor(() => expect(create).toBeEnabled());
+      await userEvent.click(create);
+
+      const progress = await screen.findByTestId("recipe-start-progress");
+      expect(progress.dataset.stage).toBe("sending");
+      release({ ok: true, runtime_slug: "duo-recipe-spark" });
+      await waitFor(() => expect(progress.dataset.stage).toBe("waiting"));
+    });
+
+    it("parses the paused 409 and nothing else", () => {
+      const err = new Error(
+        'API 409: {"detail":{"code":"runtime_paused","runtime_id":"rt-9","runtime_slug":"duo-recipe-spark","message":"paused"}}',
+      );
+      expect(pausedRuntimeDetail(err)?.runtime_slug).toBe("duo-recipe-spark");
+      expect(pausedRuntimeDetail(new Error('API 409: {"detail":"busy"}'))).toBeNull();
+      expect(pausedRuntimeDetail(new Error("boom"))).toBeNull();
+    });
+
+    it("offers an explicit resume for a paused instance instead of a second runtime", async () => {
+      mockBase();
+      const start = vi
+        .spyOn(api.hosts, "startRecipe")
+        .mockRejectedValueOnce(
+          new Error(
+            'API 409: {"detail":{"code":"runtime_paused","runtime_id":"rt-9","runtime_slug":"duo-recipe-spark","message":"paused"}}',
+          ),
+        )
+        .mockResolvedValueOnce({
+          ok: true,
+          resumed: true,
+          runtime_slug: "duo-recipe-spark",
+        } as Awaited<ReturnType<typeof api.hosts.startRecipe>>);
+      vi.spyOn(api.runtimes, "liveStatus").mockResolvedValue(liveOf(null) as never);
+
+      renderDialog(duo());
+      const create = await screen.findByTestId("ssh-deploy-create");
+      await waitFor(() => expect(create).toBeEnabled());
+      await userEvent.click(create);
+
+      const notice = await screen.findByTestId("ssh-deploy-paused");
+      expect(notice.textContent).toContain("duo-recipe-spark");
+      expect(screen.queryByTestId("ssh-deploy-error")).toBeNull();
+      expect(screen.queryByTestId("recipe-start-progress")).toBeNull();
+      expect(start).toHaveBeenLastCalledWith("host-1", "duo-recipe", undefined);
+
+      await userEvent.click(screen.getByTestId("ssh-deploy-resume"));
+      await waitFor(() =>
+        expect(start).toHaveBeenLastCalledWith("host-1", "duo-recipe", { resume_paused: true }),
+      );
+      await screen.findByTestId("ssh-deploy-created");
+      expect(screen.queryByTestId("ssh-deploy-paused")).toBeNull();
+    });
   });
 });

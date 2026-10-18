@@ -2301,6 +2301,9 @@ export interface HostRecipeStartResult {
   /** Das Rezept lief schon — nichts wurde angefasst (keine Verdrängung,
    *  keine Speicher-Prep, keine .env). */
   already_running?: boolean;
+  /** The instance was paused (`enabled = false`) and this start, asked with
+   *  `resume_paused`, switched it back on — instead of creating a second row. */
+  resumed?: boolean;
 }
 
 // ── Autostart je Box (Rezept-Umschalter P3) ──────────────────────────────────

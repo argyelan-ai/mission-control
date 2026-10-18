@@ -3076,7 +3076,22 @@
       "installRunning": "Installing…",
       "installDone": "Installation finished.",
       "installCreateAndStart": "Create runtime & start",
-      "installRuntimeCreated": "Runtime created and started — weights are still loading.",
+      "startProgressLabel": "Start",
+      "startProgressHint": "You can close this dialog — the start keeps running. The runtimes page shows the same status.",
+      "startPausedNotice": "This box already has a runtime for this recipe ({slug}), but it is paused. MC does not create a second one. Resume it to start — the watcher will then look after it again.",
+      "startResumeAndStart": "Resume and start",
+      "startStage": {
+        "sending": "Sending the start to the box — freeing memory and launching can take a few minutes.",
+        "waiting": "Start sent. Waiting for the first status from the box…",
+        "evicting": "Freeing the box — the previous model is being stopped.",
+        "launching": "Launching the engine on the box.",
+        "loading": "Loading the weights — large models take 8–30 minutes.",
+        "starting": "Starting — planned downtime, not an outage.",
+        "serving": "Ready — the engine answers.",
+        "servingModel": "Ready — the engine answers with {model}.",
+        "already": "Already running — nothing was changed.",
+        "quiet": "Start accepted, but the engine does not answer yet."
+      },
       "close": "Close",
       "rowActions": "More actions for {name}"
     },

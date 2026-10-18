@@ -1906,24 +1906,34 @@ async def ensure_exclusive_host(
 
     slug = _grace_slug(runtime)
     if session is not None:
-        return await _ensure_exclusive_host(session, runtime, slug, host=host, host_id=host_id)
+        targets = await _exclusive_targets(session, slug, host=host, host_id=host_id)
+        # Same rule for a caller's session: its transaction ends before the
+        # stops. A commit (not a rollback): the only caller (the recipe
+        # switcher's worker eviction) has nothing pending, and a rollback
+        # would expire the rows it still reads afterwards.
+        if session.in_transaction():
+            await session.commit()
+    else:
+        from app.services.runtime_model_resolver import session_scope
 
-    from app.services.runtime_model_resolver import session_scope
+        # Read in a short session and CLOSE it before stopping anything: the
+        # stops below are SSH calls that can take minutes, and a pooled
+        # connection must not wait idle in a transaction meanwhile
+        # (DB connection held 32.4s on a recipe start, 2026-10-18).
+        async with session_scope() as own_session:
+            targets = await _exclusive_targets(own_session, slug, host=host, host_id=host_id)
+    return await _free_exclusive_targets(slug, targets, host=host)
 
-    async with session_scope() as own_session:
-        return await _ensure_exclusive_host(
-            own_session, runtime, slug, host=host, host_id=host_id
-        )
 
-
-async def _ensure_exclusive_host(
+async def _exclusive_targets(
     session: AsyncSession,
-    runtime: dict,
     slug: str | None,
     *,
     host: ResolvedHost | None = None,
     host_id: uuid.UUID | None = None,
-) -> dict:
+) -> list[tuple[Runtime, dict, ResolvedHost | None]]:
+    """DB half of :func:`ensure_exclusive_host`: every OTHER enabled exclusive
+    runtime on the target box, with its resolved host. No network here."""
     from app.services.host_resolver import resolve_host_for_runtime
 
     row = (await session.exec(select(Runtime).where(Runtime.slug == slug))).first() if slug else None
@@ -1983,9 +1993,7 @@ async def _ensure_exclusive_host(
                 rt for rt in member_runtimes if rt.slug != slug and rt.id not in known
             )
 
-    # First look, then stop: which of them still runs? Those are the engines
-    # this start would end — the switch lock (E1, ADR-085) asks them first.
-    live: list[tuple[Runtime, dict, ResolvedHost | None]] = []
+    targets: list[tuple[Runtime, dict, ResolvedHost | None]] = []
     for other in others:
         other_dict = other.to_registry_dict()
         try:
@@ -1993,7 +2001,21 @@ async def _ensure_exclusive_host(
         except Exception as exc:  # noqa: BLE001
             logger.warning("exclusive: host resolution failed for %s: %s", other.slug, exc)
             other_host = host
+        targets.append((other, other_dict, other_host))
+    return targets
 
+
+async def _free_exclusive_targets(
+    slug: str | None,
+    targets: list[tuple[Runtime, dict, ResolvedHost | None]],
+    *,
+    host: ResolvedHost | None = None,
+) -> dict:
+    """Network half of :func:`ensure_exclusive_host` — probes and stops, no DB."""
+    # First look, then stop: which of them still runs? Those are the engines
+    # this start would end — the switch lock (E1, ADR-085) asks them first.
+    live: list[tuple[Runtime, dict, ResolvedHost | None]] = []
+    for other, other_dict, other_host in targets:
         try:
             state = await get_runtime_state(other_dict, host=other_host)
         except Exception as exc:  # noqa: BLE001

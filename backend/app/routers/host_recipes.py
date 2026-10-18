@@ -58,6 +58,10 @@ class StartRecipeBody(BaseModel):
     zuerst), damit ein Klick ohne Dialog weiter funktioniert."""
 
     worker_host_id: str | None = None
+    #: The explicit "yes, turn the pause off": an instance of this recipe on
+    #: this box that is paused (``enabled = false``) is reused and enabled
+    #: again. Without it such a start is a 409 ``runtime_paused``.
+    resume_paused: bool = False
 
 
 @router.post("/{host_id}/recipes/{slug}/start")
@@ -89,6 +93,7 @@ async def start_recipe_for_host(
                 "host_id": str(host.id),
                 "recipe_slug": recipe.slug,
                 "worker_host_id": body.worker_host_id if body else None,
+                "resume_paused": bool(body and body.resume_paused),
                 "user_id": str(getattr(current_user, "id", "") or ""),
                 "client": (request.headers.get("user-agent") or "")[:160],
             },
@@ -97,7 +102,11 @@ async def start_recipe_for_host(
         await session.rollback()
     try:
         return await recipe_switcher.start_recipe_on_host(
-            session, host, recipe, worker_host_id=(body.worker_host_id if body else None)
+            session,
+            host,
+            recipe,
+            worker_host_id=(body.worker_host_id if body else None),
+            resume_paused=bool(body and body.resume_paused),
         )
     except recipe_switcher.RecipeStartError as exc:
         raise HTTPException(status_code=exc.status, detail=exc.detail) from exc

@@ -2418,7 +2418,9 @@ export const api = {
     startRecipe: (
       hostId: string,
       slug: string,
-      body?: { worker_host_id: string },
+      // resume_paused: the explicit "turn the pause off" for an instance of
+      // this recipe on this box that is disabled (409 runtime_paused otherwise).
+      body?: { worker_host_id?: string; resume_paused?: boolean },
     ): Promise<import("@/lib/types").HostRecipeStartResult> =>
       request(`/api/v1/hosts/${hostId}/recipes/${encodeURIComponent(slug)}/start`, {
         method: "POST",
