@@ -425,10 +425,12 @@ async def test_embeddings_button_records_the_active_provider(
 
     provider = embedding_provider.active_embedding_provider()
 
-    async def fake_embed(text: str):
+    async def fake_embed(self, text: str):
         return [0.0] * embedding_provider.EMBED_DIM
 
-    monkeypatch.setattr(provider, "embed", fake_embed)
+    # Patch the class, not the shared instance: undoing an instance patch
+    # would leave a bound method behind and leak into later tests.
+    monkeypatch.setattr(type(provider), "embed", fake_embed)
     body = (await auth_client.post("/api/v1/ai-providers/embeddings/test-connection")).json()
     assert body["connected"] is True
     item = (await auth_client.get(f"/api/v1/config-checks/embeddings/{provider.key}")).json()
