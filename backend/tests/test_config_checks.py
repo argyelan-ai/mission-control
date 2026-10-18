@@ -162,7 +162,7 @@ async def test_list_shows_every_subject_including_never_tested(auth_client: Asyn
 async def test_wrong_key_is_stored_as_fail_without_the_key(
     auth_client: AsyncClient, mock_http
 ):
-    await _store_secret("openai_api_key", "sk-WRONG-KEY-123456")
+    await _store_secret("openai_api_key", "WRONG-KEY-VALUE")
     mock_http["status"]["api.openai.com"] = 401
 
     resp = await auth_client.post("/api/v1/config-checks/secret/openai_api_key/run")
@@ -178,7 +178,7 @@ async def test_wrong_key_is_stored_as_fail_without_the_key(
     assert (rows[0].kind, rows[0].subject_id, rows[0].ok) == ("secret", "openai_api_key", False)
     assert "WRONG-KEY" not in rows[0].message
     # The procedure really called the provider with the stored key.
-    assert mock_http["calls"][0].headers["authorization"] == "Bearer sk-WRONG-KEY-123456"
+    assert mock_http["calls"][0].headers["authorization"] == "Bearer WRONG-KEY-VALUE"
 
     again = (await auth_client.get("/api/v1/config-checks/secret/openai_api_key")).json()
     assert again["state"] == "fail"
