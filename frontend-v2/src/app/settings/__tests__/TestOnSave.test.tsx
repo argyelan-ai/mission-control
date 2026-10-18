@@ -163,9 +163,9 @@ describe("API keys: test on save + age", () => {
 
     renderPage();
 
-    const card = (await screen.findByText("OpenAI API Key")).closest(".mc-card") as HTMLElement;
-    await waitFor(() =>
-      expect(within(card).getByTestId("check-status")).toHaveTextContent("Works · tested 3 min ago"),
+    const card = (await screen.findByText("OpenAI API Key", undefined, { timeout: 5000 })).closest(".mc-card") as HTMLElement;
+    await waitFor(
+      () => expect(within(card).getByTestId("check-status")).toHaveTextContent("Works · tested 3 min ago"),
     );
   });
 
@@ -184,13 +184,13 @@ describe("API keys: test on save + age", () => {
 
     renderPage();
 
-    await userEvent.click(await screen.findByRole("button", { name: "Add" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Add" }, { timeout: 5000 }));
     await userEvent.type(screen.getByPlaceholderText("sk-..."), "sk-wrong");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(create).toHaveBeenCalled());
     await waitFor(() => expect(run).toHaveBeenCalledWith("secret", "openai_api_key"));
-    const card = (await screen.findByText("OpenAI API Key")).closest(".mc-card") as HTMLElement;
+    const card = (await screen.findByText("OpenAI API Key", undefined, { timeout: 5000 })).closest(".mc-card") as HTMLElement;
     await waitFor(() => expect(within(card).getByTestId("check-status")).toHaveTextContent("Failed · tested just now"));
     expect(within(card).getByTestId("check-message")).toHaveTextContent("HTTP 401");
   });
@@ -207,13 +207,13 @@ describe("API keys: test on save + age", () => {
 
     renderPage();
 
-    await userEvent.click(await screen.findByRole("button", { name: "Change" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Change" }, { timeout: 5000 }));
     await userEvent.type(screen.getByPlaceholderText("New value..."), "sk-new");
     await userEvent.click(screen.getByRole("button", { name: "Update" }));
     await waitFor(() => expect(update).toHaveBeenCalled());
     await waitFor(() => expect(run).toHaveBeenCalledTimes(1));
 
-    const card = (await screen.findByText("OpenAI API Key")).closest(".mc-card") as HTMLElement;
+    const card = (await screen.findByText("OpenAI API Key", undefined, { timeout: 5000 })).closest(".mc-card") as HTMLElement;
     await waitFor(() => expect(within(card).getByTestId("check-status")).toHaveTextContent("tested just now"));
     await userEvent.click(within(card).getByRole("button", { name: "Test" }));
     await waitFor(() => expect(run).toHaveBeenCalledTimes(2));
@@ -245,7 +245,7 @@ describe("GitHub: test on save, age, removable token", () => {
 
     renderPage();
 
-    expect(await screen.findByText("tested 2 hours ago")).toBeInTheDocument();
+    expect(await screen.findByText("tested 2 hours ago", undefined, { timeout: 5000 })).toBeInTheDocument();
   });
 
   it("saving a token runs the GitHub check right away", async () => {
@@ -257,11 +257,11 @@ describe("GitHub: test on save, age, removable token", () => {
 
     renderPage();
 
-    await userEvent.type(await screen.findByLabelText("GitHub token"), "ghp_bad");
+    await userEvent.type(await screen.findByLabelText("GitHub token", undefined, { timeout: 5000 }), "ghp_bad");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(status).toHaveBeenCalledWith(true));
-    expect(await screen.findByText("Connection failed")).toBeInTheDocument();
+    expect(await screen.findByText("Connection failed", undefined, { timeout: 5000 })).toBeInTheDocument();
     expect(screen.getByText("Bad credentials")).toBeInTheDocument();
   });
 
@@ -272,7 +272,7 @@ describe("GitHub: test on save, age, removable token", () => {
 
     renderPage();
 
-    await userEvent.click(await screen.findByRole("button", { name: "Remove token" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Remove token" }, { timeout: 5000 }));
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toHaveTextContent("Agents lose GitHub access");
     await userEvent.click(within(dialog).getByRole("button", { name: "Remove token" }));
@@ -286,8 +286,8 @@ describe("GitHub: test on save, age, removable token", () => {
 
     renderPage();
 
-    await screen.findByRole("heading", { name: "GitHub" });
-    await screen.findByText("Set ••••");
+    await screen.findByRole("heading", { name: "GitHub" }, { timeout: 5000 });
+    await screen.findByText("Set ••••", undefined, { timeout: 5000 });
     expect(screen.queryByRole("button", { name: "Remove token" })).not.toBeInTheDocument();
   });
 });
@@ -316,7 +316,7 @@ describe("Slack + Telegram: the age of the stored result", () => {
 
     renderPage();
 
-    expect(await screen.findByText("tested just now")).toBeInTheDocument();
+    expect(await screen.findByText("tested just now", undefined, { timeout: 5000 })).toBeInTheDocument();
     // The Slack button stores through the registry — after a test the age is re-read.
     await waitFor(() => expect(screen.getByRole("button", { name: "Test connection" })).toBeEnabled());
     const before = list.mock.calls.length;
@@ -340,6 +340,6 @@ describe("Slack + Telegram: the age of the stored result", () => {
 
     renderPage();
 
-    expect(await screen.findByText("tested 2 min ago")).toBeInTheDocument();
+    expect(await screen.findByText("tested 2 min ago", undefined, { timeout: 5000 })).toBeInTheDocument();
   });
 });

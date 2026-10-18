@@ -435,8 +435,13 @@ export function SlackTab() {
             {testing && (
               <Loader2 size={12} className="animate-spin" style={{ color: "var(--color-text-muted)" }} />
             )}
+            {!nothingSet && !testing && slackCheck?.configured && (
+              <>
+                <span className="text-xs" style={{ color: "var(--color-text-muted)" }}>·</span>
+                <CheckStatus item={slackCheck} variant="age" />
+              </>
+            )}
           </div>
-          {!nothingSet && !testing && <CheckStatus item={slackCheck} variant="age" />}
 
           {status?.connected && status.bot_user && (
             <div className="flex items-center gap-2 text-xs">

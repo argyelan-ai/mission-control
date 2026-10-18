@@ -81,6 +81,9 @@ export function CheckStatus({
   ) : null;
 
   if (variant === "age") {
+    // Nothing known yet (list still loading) or nothing set: say nothing
+    // rather than a "never tested" that may be wrong a moment later.
+    if (!running && (!item || !item.configured)) return null;
     return (
       <div
         data-testid="check-status"

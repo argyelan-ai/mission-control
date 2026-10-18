@@ -1357,14 +1357,7 @@ function ApiKeysSection({
                         {existing.value_masked}
                       </div>
                     )}
-                    {existing && (
-                      <CheckStatus
-                        className="mt-1"
-                        item={findSecretCheck(checks?.items, tmpl.key)}
-                        running={isRunning(runCheck, "secret", tmpl.key)}
-                        onTest={() => testKey(tmpl.key)}
-                      />
-                    )}
+
                   </div>
 
                   {/* Actions */}
@@ -1409,6 +1402,16 @@ function ApiKeysSection({
                     )}
                   </div>
                 </div>
+
+                {/* Test on save: the latest result with its age, full card width */}
+                {existing && (
+                  <CheckStatus
+                    className="mt-1"
+                    item={findSecretCheck(checks?.items, tmpl.key)}
+                    running={isRunning(runCheck, "secret", tmpl.key)}
+                    onTest={() => testKey(tmpl.key)}
+                  />
+                )}
 
                 {/* Add form */}
                 {isAdding && (
@@ -1681,8 +1684,13 @@ function GithubSection() {
                 {statusLabel}
               </span>
               {probing && <Loader2 size={12} className="animate-spin" style={{ color: "var(--color-text-muted)" }} />}
+              {effective?.configured && !probing && ghCheck?.configured && (
+                <>
+                  <span className="text-xs" style={{ color: "var(--color-text-muted)" }}>·</span>
+                  <CheckStatus item={ghCheck} variant="age" />
+                </>
+              )}
             </div>
-            {effective?.configured && !probing && <CheckStatus item={ghCheck} variant="age" />}
 
             <div className="flex items-center gap-2 text-xs">
               <span style={{ color: "var(--color-text-muted)" }}>{t("owner")}</span>
@@ -1710,7 +1718,7 @@ function GithubSection() {
               )}
             </div>
 
-            {connected !== null && (
+            {(effective?.login || effective?.owner_type || effective?.rate_limit_total != null) && (
               <div className="pt-2 mt-1 space-y-1 text-xs" style={{ borderTop: `1px solid ${C.borderSubtle}`, color: "var(--color-text-muted)" }}>
                 {effective?.login && (
                   <div>{t("authenticatedAs")} <span className="font-mono" style={{ color: "var(--color-text-secondary)" }}>{effective.login}</span></div>
