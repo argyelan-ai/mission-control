@@ -456,7 +456,7 @@ export function SshProcessDeployDialog({
                 data-testid="ssh-deploy-resume"
                 onClick={() => createAndStart({ resumePaused: true })}
                 disabled={busy}
-                className="self-start inline-flex items-center gap-2 rounded-md px-3 py-2 min-h-11 sm:min-h-0 text-xs text-primary underline underline-offset-2 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                className="self-start inline-flex items-center gap-2 rounded-md py-2 min-h-11 sm:min-h-0 text-xs text-primary underline underline-offset-2 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 {t("startResumeAndStart")}
               </button>
