@@ -412,6 +412,17 @@ MemAvailable bleibt (das liest nur). Die Instanz erbt das Feld beim Anlegen.
 
 Erstes Rezept auf diesem Weg: `glm53-flash-exl3-tensorfold` (Seed).
 
+*Korrektur (18.10.2026):* Beim echten Deploy von null zeigte sich zweimal das
+Gegenteil — direkt nach dem Download (~176 GB) fand `start.sh` zu wenig
+MemAvailable und startete mit ~224k statt 1M Kontext; erst ein Cache-Drop half.
+Das TensorFold-Rezept steht darum auf `drop_page_cache: true`. Der Schalter
+bleibt für Engines, die den Cache wirklich selbst als frei zählen. Gleicher
+Tag: Rezept auf 2× GB10 gemessen → `gb10_validated: true`. Die Installation
+gibt ausserdem Dateien des Rezepts im HF-Cache, die root gehören (Reste eines
+Container-Downloads als root), vor `prepare.sh` an den Box-Nutzer zurück
+(veraltete Locks löschen, Rest per Einmal-Container, ohne sudo). Bestehende
+Rezept-Zeilen ändert das nicht (der Seed fügt nur ein).
+
 ## Referenzen
 
 - Betroffene Dateien:
