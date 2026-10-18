@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import logging
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -113,19 +112,6 @@ async def put_ai_provider_settings(
     }
 
 
-async def _hf_whoami(token: str) -> tuple[int, dict]:
-    """HuggingFace ``whoami-v2`` — the HF twin of Telegram's ``getMe``."""
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        resp = await client.get(
-            "https://huggingface.co/api/whoami-v2",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        try:
-            return resp.status_code, resp.json()
-        except Exception:  # noqa: BLE001 — HF served HTML/an empty body
-            return resp.status_code, {}
-
-
 @router.post("/huggingface/test-connection")
 async def huggingface_test_connection(
     session: AsyncSession = Depends(get_session),
@@ -146,18 +132,15 @@ async def huggingface_test_connection(
     }
     if not token:
         return result
+    # The whoami procedure lives in the check registry (kind ``secret``,
+    # subject ``hf_token``), which also stores the result with its age.
+    from app.services import config_checks
+
     try:
-        status_code, data = await _hf_whoami(token)
-        if status_code == 200:
-            result["connected"] = True
-            result["username"] = data.get("name") or data.get("fullname")
-        elif status_code == 401:
-            result["error"] = "Token abgelehnt (401) — abgelaufen oder widerrufen?"
-        else:
-            result["error"] = f"HuggingFace antwortete mit HTTP {status_code}"
-    except Exception as e:  # noqa: BLE001 — reportable state, not a 500
-        result["error"] = f"{type(e).__name__}: {e}"
-    return result
+        run = await config_checks.run_check(session, "secret", HF_TOKEN_SECRET_KEY)
+    except (config_checks.CheckNotRunnable, config_checks.UnknownCheck):
+        return result
+    return {**result, **{k: run.outcome.detail.get(k) for k in ("connected", "username", "error")}}
 
 
 @router.post("/embeddings/test-connection")
@@ -171,28 +154,9 @@ async def embeddings_test_connection(
     e.g. 1024 dims would silently poison the 768-dim Qdrant collections, so
     "reachable" alone is not the interesting answer.
     """
-    from app.services.embedding_provider import EMBED_DIM, active_embedding_provider
+    from app.services import config_checks
+    from app.services.embedding_provider import active_embedding_provider
 
-    provider = active_embedding_provider()
-    result: dict = {
-        "provider": provider.key,
-        "label": provider.label,
-        "url": provider.url(),
-        "model": provider.model(),
-        "connected": False,
-        "dimension": None,
-        "expected_dimension": EMBED_DIM,
-        "error": None,
-    }
-    try:
-        vec = await provider.embed("ping")
-        result["connected"] = True
-        result["dimension"] = len(vec)
-        if len(vec) != EMBED_DIM:
-            result["error"] = (
-                f"Antwort hat {len(vec)} Dimensionen statt {EMBED_DIM} — "
-                f"passt nicht zu den bestehenden Vektoren."
-            )
-    except Exception as e:  # noqa: BLE001 — reportable state, not a 500
-        result["error"] = f"{type(e).__name__}: {e}"
-    return result
+    # Procedure + stored result: check registry, kind ``embeddings``.
+    run = await config_checks.run_check(session, "embeddings", active_embedding_provider().key)
+    return run.outcome.detail

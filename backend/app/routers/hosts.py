@@ -287,7 +287,13 @@ async def probe_host(
         if not host:
             raise HTTPException(status_code=404, detail=f"Host '{body.host_id}' not found")
         _require_ssh_capable(host, "Probe")
-        resolved = resolved_host_from_row(host)
+        # A stored box: run through the check registry so the result is
+        # kept with its age (kind ``host``). Ad-hoc probes below have no
+        # stored thing to attach a result to.
+        from app.services import config_checks
+
+        run = await config_checks.run_check(session, "host", str(host.id))
+        return run.outcome.detail
     else:
         if not body.ssh_host:
             raise HTTPException(

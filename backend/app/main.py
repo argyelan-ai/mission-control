@@ -62,6 +62,7 @@ from app.routers import (
     agent_templates,
     agents,
     ai_providers,
+    config_checks,
     approvals,
     auth,
     files,
@@ -439,6 +440,7 @@ app.include_router(secrets.router)
 app.include_router(slack.router)  # /api/v1/slack — Slack channel setup + connection test
 app.include_router(channels.router)  # /api/v1/channels — channel settings page + Telegram connection test
 app.include_router(ai_providers.router)  # /api/v1/ai-providers — provider routing for MC's own AI functions
+app.include_router(config_checks.router)  # /api/v1/config-checks — check registry: status + run now (Welle 2)
 app.include_router(credentials.router)
 app.include_router(skills.router)
 app.include_router(clawhub.router)

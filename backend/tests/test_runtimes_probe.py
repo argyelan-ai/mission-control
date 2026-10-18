@@ -57,7 +57,7 @@ async def test_probe_model_changes_identifier(async_session, auth_client):
         return "qwen-3-coder-next"
 
     with patch(
-        "app.routers.runtimes.probe_runtime_model",
+        "app.services.agent_runtime_switch.probe_runtime_model",
         side_effect=fake_probe,
     ):
         resp = await auth_client.post(f"/api/v1/runtimes/{rt.slug}/probe-model")
@@ -87,7 +87,7 @@ async def test_probe_model_unchanged(async_session, auth_client):
     )
 
     with patch(
-        "app.routers.runtimes.probe_runtime_model",
+        "app.services.agent_runtime_switch.probe_runtime_model",
         side_effect=lambda _r: "glm-5.1",
     ):
         resp = await auth_client.post(f"/api/v1/runtimes/{rt.slug}/probe-model")
@@ -143,7 +143,7 @@ async def test_probe_model_works_with_uuid(async_session, auth_client):
     )
 
     with patch(
-        "app.routers.runtimes.probe_runtime_model",
+        "app.services.agent_runtime_switch.probe_runtime_model",
         side_effect=lambda _r: "qwen-new",
     ):
         resp = await auth_client.post(f"/api/v1/runtimes/{rt.id}/probe-model")
@@ -168,7 +168,7 @@ async def test_probe_model_idempotent(async_session, auth_client):
     )
 
     with patch(
-        "app.routers.runtimes.probe_runtime_model",
+        "app.services.agent_runtime_switch.probe_runtime_model",
         side_effect=lambda _r: "fresh-model",
     ):
         first = await auth_client.post(f"/api/v1/runtimes/{rt.slug}/probe-model")

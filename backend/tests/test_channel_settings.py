@@ -227,14 +227,14 @@ async def test_channels_endpoints_require_admin(client: AsyncClient):
 async def test_telegram_test_connection_reports_both_bots(
     auth_client: AsyncClient, monkeypatch
 ):
-    from app.routers import channels as channels_router
+    from app.services.config_checks import kinds as check_kinds
 
     async def fake_get_me(token: str) -> dict:
         if token == "ok-token":
             return {"ok": True, "result": {"username": "mc_bot"}}
         return {"ok": False, "description": "Unauthorized"}
 
-    monkeypatch.setattr(channels_router, "_get_me", fake_get_me)
+    monkeypatch.setattr(check_kinds, "telegram_get_me", fake_get_me)
     settings.telegram_bot_token = "ok-token"
     settings.telegram_chat_id = "42"
     settings.telegram_reports_bot_token = "bad-token"
