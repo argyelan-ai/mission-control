@@ -5,6 +5,7 @@ See ``registry.py`` for the entry shape, ``kinds.py`` for the entries and
 """
 from app.services.config_checks.registry import (
     COST_HINTS,
+    REASON_CODES,
     REGISTRY,
     CheckKind,
     Outcome,
@@ -24,6 +25,7 @@ from app.services.config_checks import kinds  # noqa: E402,F401 — registers th
 
 __all__ = [
     "COST_HINTS",
+    "REASON_CODES",
     "REGISTRY",
     "CheckKind",
     "CheckNotRunnable",

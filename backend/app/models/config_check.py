@@ -11,13 +11,17 @@ value itself). When the value is replaced later — through any path, the
 secrets page, the GitHub form or ``.env`` — the fingerprint no longer
 matches and the result reads "never tested" again instead of a stale green.
 
-``message`` is a short, human sentence with secrets scrubbed out; it is safe
-to show in the UI and in a support report.
+``reason`` is the machine-readable cause (``rejected``, ``timeout`` … — the
+list is ``config_checks.REASON_CODES``) and ``reason_params`` its values
+(``{"status": 401}``). The UI words the result from these two in the
+operator's language. ``message`` is a short English sentence with secrets
+scrubbed out — only the "details" fold shows it. Rows written before the
+reason existed have ``reason`` NULL and read as ``unknown`` / ``ok``.
 """
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, UniqueConstraint, text
+from sqlalchemy import JSON, DateTime, UniqueConstraint, text
 from sqlmodel import Column, Field, SQLModel
 
 from app.utils import utcnow
@@ -32,6 +36,8 @@ class ConfigCheck(SQLModel, table=True):
     subject_id: str = Field(max_length=160)
     ok: bool = Field(default=False)
     message: str = Field(default="", max_length=300)
+    reason: str | None = Field(default=None, max_length=32)
+    reason_params: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
     duration_ms: int | None = Field(default=None)
     value_fingerprint: str | None = Field(default=None, max_length=64)
     checked_at: datetime = Field(

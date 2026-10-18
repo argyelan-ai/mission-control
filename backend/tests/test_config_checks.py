@@ -380,6 +380,9 @@ async def test_telegram_button_records_both_bots_and_keeps_its_answer(
     assert rows["command_bot"].ok is True
     assert rows["reports_bot"].ok is False
     assert "222:bad" not in rows["reports_bot"].message
+    assert rows["command_bot"].reason == "ok"
+    assert rows["command_bot"].reason_params == {"account": "mc_bot"}
+    assert rows["reports_bot"].reason == "rejected"
 
 
 @pytest.mark.asyncio
@@ -397,6 +400,7 @@ async def test_slack_button_records_its_result(auth_client: AsyncClient, monkeyp
     (row,) = [r for r in await _rows() if r.kind == "slack"]
     assert row.ok is False and row.subject_id == "workspace"
     assert "REVOKED" not in row.message
+    assert row.reason == "rejected" and row.reason_params == {"code": "invalid_auth"}
 
 
 @pytest.mark.asyncio
@@ -415,6 +419,7 @@ async def test_huggingface_button_records_into_the_hf_token_secret(
     assert body["connected"] is False and "401" in body["error"]
     item = (await auth_client.get("/api/v1/config-checks/secret/hf_token")).json()
     assert item["state"] == "fail"
+    assert item["reason"] == "rejected" and item["reason_params"] == {"status": 401}
 
 
 @pytest.mark.asyncio
@@ -435,6 +440,8 @@ async def test_embeddings_button_records_the_active_provider(
     assert body["connected"] is True
     item = (await auth_client.get(f"/api/v1/config-checks/embeddings/{provider.key}")).json()
     assert item["state"] == "ok"
+    assert item["reason"] == "ok"
+    assert item["reason_params"] == {"dimension": embedding_provider.EMBED_DIM}
 
 
 @pytest.mark.asyncio
@@ -511,6 +518,7 @@ async def test_github_probe_records_its_result(auth_client: AsyncClient):
     item = (await auth_client.get("/api/v1/config-checks/github/connection")).json()
     assert item["state"] == "fail" and "401" in item["message"]
     assert "ghp_BAD" not in str(item)
+    assert item["reason"] == "rejected"
 
 
 @pytest.mark.asyncio
@@ -532,6 +540,7 @@ async def test_host_probe_records_for_a_stored_host_only(auth_client: AsyncClien
     assert body["reachable"] is False
     item = (await auth_client.get(f"/api/v1/config-checks/host/{host_id}")).json()
     assert item["state"] == "fail" and "refused" in item["message"]
+    assert item["reason"] == "unreachable"
 
     # Ad-hoc probe in the add-box wizard: there is no stored thing to attach to.
     await auth_client.post("/api/v1/hosts/probe", json={"ssh_host": "192.0.2.11"})
@@ -559,3 +568,184 @@ async def test_runtime_model_probe_records_and_keeps_its_answer(
     assert body["changed"] is False and body["new_model_identifier"] == "old"
     item = (await auth_client.get(f"/api/v1/config-checks/runtime/{rt_id}")).json()
     assert item["state"] == "fail"
+    assert item["reason"] == "no_model"
+
+
+# ── 8. a machine-readable reason, kept across a reload ──────────────────
+#
+# The UI words a result in the operator's language from ``reason`` (+
+# ``reason_params``); ``message`` is only the English free text for the
+# "details" fold. So every procedure sets a code from ``REASON_CODES``, and a
+# reload (fresh session, stored row) gives the same code back.
+
+
+async def _reload(kind: str, subject_id: str) -> dict:
+    from app.services import config_checks
+
+    async with _session() as s:
+        return await config_checks.status_item(s, kind, subject_id)
+
+
+def test_reason_codes_are_a_closed_list():
+    from app.services.config_checks import REASON_CODES
+
+    assert {
+        "ok", "rejected", "rate_limited", "http_error", "unreachable", "timeout",
+        "undecryptable", "dimension_mismatch", "not_configured", "unknown",
+    } <= set(REASON_CODES)
+    for code in REASON_CODES:
+        assert len(code) <= 32 and code == code.lower()
+
+
+@pytest.mark.asyncio
+async def test_list_response_names_the_reason_codes(auth_client: AsyncClient):
+    from app.services.config_checks import REASON_CODES
+
+    body = (await auth_client.get("/api/v1/config-checks")).json()
+    assert body["reason_codes"] == list(REASON_CODES)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status, ok, reason, params",
+    [
+        (200, True, "ok", {}),
+        (401, False, "rejected", {"status": 401}),
+        (403, False, "rejected", {"status": 403}),
+        (429, False, "rate_limited", {"status": 429}),
+        (500, False, "http_error", {"status": 500}),
+    ],
+)
+async def test_secret_check_sets_a_reason_that_survives_a_reload(
+    auth_client: AsyncClient, mock_http, status, ok, reason, params
+):
+    await _store_secret("anthropic_api_key", "sk-ant-REASON")
+    mock_http["status"]["api.anthropic.com"] = status
+
+    ran = (await auth_client.post("/api/v1/config-checks/secret/anthropic_api_key/run")).json()
+    assert (ran["state"] == "ok") is ok
+    assert ran["reason"] == reason and ran["reason_params"] == params
+
+    again = await _reload("secret", "anthropic_api_key")
+    assert again["reason"] == reason and again["reason_params"] == params
+    (row,) = await _rows()
+    assert row.reason == reason
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "exc, reason",
+    [
+        (httpx.ConnectError("no route"), "unreachable"),
+        (httpx.ReadTimeout("slow"), "timeout"),
+        (RuntimeError("something odd"), "unknown"),
+    ],
+)
+async def test_a_procedure_error_gets_a_reason(
+    auth_client: AsyncClient, monkeypatch, exc, reason
+):
+    from app.services.config_checks import kinds
+
+    async def boom(method, url, headers, body=None):
+        raise exc
+
+    monkeypatch.setattr(kinds, "_http_status", boom)
+    await _store_secret("openai_api_key", "sk-boom")
+    ran = (await auth_client.post("/api/v1/config-checks/secret/openai_api_key/run")).json()
+    assert ran["state"] == "fail" and ran["reason"] == reason
+    assert (await _reload("secret", "openai_api_key"))["reason"] == reason
+
+
+@pytest.mark.asyncio
+async def test_undecryptable_secret_has_its_own_reason(auth_client: AsyncClient):
+    from app.models.secret import Secret
+
+    async with _session() as s:
+        s.add(Secret(key="openai_api_key", encrypted_value="not-a-fernet-token"))
+        await s.commit()
+    ran = (await auth_client.post("/api/v1/config-checks/secret/openai_api_key/run")).json()
+    assert ran["reason"] == "undecryptable"
+    assert (await _reload("secret", "openai_api_key"))["reason"] == "undecryptable"
+
+
+@pytest.mark.asyncio
+async def test_wrong_embedding_size_is_dimension_mismatch(
+    auth_client: AsyncClient, monkeypatch
+):
+    from app.services import embedding_provider
+
+    provider = embedding_provider.active_embedding_provider()
+
+    async def short_embed(self, text: str):
+        return [0.0] * 3
+
+    monkeypatch.setattr(type(provider), "embed", short_embed)
+    ran = (await auth_client.post(f"/api/v1/config-checks/embeddings/{provider.key}/run")).json()
+    assert ran["state"] == "fail" and ran["reason"] == "dimension_mismatch"
+    assert ran["reason_params"] == {"dimension": 3, "expected": embedding_provider.EMBED_DIM}
+    again = await _reload("embeddings", provider.key)
+    assert again["reason_params"] == ran["reason_params"]
+
+
+@pytest.mark.asyncio
+async def test_a_row_without_a_reason_reads_unknown_or_ok(auth_client: AsyncClient):
+    """Rows written before the reason existed: a failure reads ``unknown``
+    (the UI then shows the free text as a detail), a pass reads ``ok``."""
+    from app.services import config_checks
+
+    await _store_secret("openai_api_key", "sk-old")
+    await _store_secret("anthropic_api_key", "sk-old2")
+    async with _session() as s:
+        await config_checks.store._record(
+            s, "secret", "openai_api_key", ok=False, message="old text",
+            duration_ms=1, value_fingerprint=config_checks.store.fingerprint("sk-old"),
+        )
+        await config_checks.store._record(
+            s, "secret", "anthropic_api_key", ok=True, message="old ok",
+            duration_ms=1, value_fingerprint=config_checks.store.fingerprint("sk-old2"),
+        )
+    failed = await _reload("secret", "openai_api_key")
+    assert failed["reason"] == "unknown" and failed["reason_params"] == {}
+    assert failed["message"] == "old text"
+    assert (await _reload("secret", "anthropic_api_key"))["reason"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_a_never_tested_item_has_no_reason(auth_client: AsyncClient):
+    await _store_secret("openai_api_key", "sk-fresh")
+    item = await _reload("secret", "openai_api_key")
+    assert item["reason"] is None and item["reason_params"] == {}
+
+
+@pytest.mark.asyncio
+async def test_an_unlisted_reason_from_a_procedure_is_stored_as_unknown(monkeypatch):
+    from app.services.config_checks import Outcome, kinds
+
+    async def odd(token: str):
+        return Outcome(False, "odd", reason="not-a-real-code")
+
+    monkeypatch.setitem(
+        kinds.SECRET_TESTERS, "openai_api_key", kinds.SecretTester("free", odd)
+    )
+    await _store_secret("openai_api_key", "sk-odd")
+    from app.services import config_checks
+
+    async with _session() as s:
+        run = await config_checks.run_check(s, "secret", "openai_api_key")
+    assert run.item["reason"] == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_reason_params_never_carry_the_secret(auth_client: AsyncClient, monkeypatch):
+    from app.services.config_checks import Outcome, kinds
+
+    async def leaky(token: str):
+        return Outcome(False, "x", reason="rejected", params={"status": 401, "note": token})
+
+    monkeypatch.setitem(
+        kinds.SECRET_TESTERS, "openai_api_key", kinds.SecretTester("free", leaky)
+    )
+    await _store_secret("openai_api_key", "sk-PARAM-LEAK")
+    ran = (await auth_client.post("/api/v1/config-checks/secret/openai_api_key/run")).json()
+    assert "PARAM-LEAK" not in str(ran)
+    assert "PARAM-LEAK" not in str((await _rows())[0].reason_params)

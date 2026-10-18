@@ -1,7 +1,8 @@
 """Config checks: the latest result per checked thing (Welle 2, PR 2-1).
 
 One row per (kind, subject_id): which registry check ran on what, ok or not,
-a short secret-free text, how long it took, a keyed hash of the tested value
+a machine-readable reason code with its parameters (the UI words the result
+from these), a short secret-free English text, how long it took, a keyed hash of the tested value
 (so a replaced value reads "never tested" again) and when it ran.
 
 Additive only: no existing table changes. Downgrade drops the table; the
@@ -27,6 +28,8 @@ def upgrade() -> None:
         sa.Column("subject_id", sa.String(length=160), nullable=False),
         sa.Column("ok", sa.Boolean(), nullable=False, server_default=sa.false()),
         sa.Column("message", sa.String(length=300), nullable=False, server_default=""),
+        sa.Column("reason", sa.String(length=32), nullable=True),
+        sa.Column("reason_params", sa.JSON(), nullable=True),
         sa.Column("duration_ms", sa.Integer(), nullable=True),
         sa.Column("value_fingerprint", sa.String(length=64), nullable=True),
         sa.Column(

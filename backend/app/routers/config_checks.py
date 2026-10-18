@@ -19,18 +19,23 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.auth import Role, require_role, require_user
 from app.database import get_session
 from app.services import config_checks
-from app.services.config_checks import COST_HINTS, CheckNotRunnable, UnknownCheck
+from app.services.config_checks import COST_HINTS, REASON_CODES, CheckNotRunnable, UnknownCheck
 
 router = APIRouter(prefix="/api/v1/config-checks", tags=["config-checks"])
 
 
 def _for_viewer(item: dict, user) -> dict:
-    """Viewers see state and age; the result text stays with admins."""
+    """Viewers see state, reason code and age; the result text (and any
+name in the reason parameters) stays with admins."""
     from app.auth import ROLE_HIERARCHY
 
     if ROLE_HIERARCHY.get(getattr(user, "role", None), 0) >= ROLE_HIERARCHY[Role.ADMIN]:
         return item
-    return {**item, "message": None}
+    # Numbers (an HTTP status, a vector size) stay; names and texts go.
+    params = {
+        k: v for k, v in (item.get("reason_params") or {}).items() if not isinstance(v, str)
+    }
+    return {**item, "message": None, "reason_params": params}
 
 
 @router.get("")
@@ -46,6 +51,7 @@ async def list_config_checks(
     return {
         "kinds": config_checks.kinds_catalog(),
         "cost_hints": COST_HINTS,
+        "reason_codes": list(REASON_CODES),
         "items": [_for_viewer(i, current_user) for i in items],
     }
 

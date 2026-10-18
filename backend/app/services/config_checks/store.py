@@ -22,7 +22,14 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.config import settings
 from app.log_redaction import redact_secrets
 from app.models.config_check import ConfigCheck
-from app.services.config_checks.registry import REGISTRY, CheckKind, Outcome, Subject
+from app.services.config_checks.registry import (
+    REASON_CODES,
+    REGISTRY,
+    CheckKind,
+    Outcome,
+    Subject,
+    reason_for_exception,
+)
 
 logger = logging.getLogger("mc.config_checks")
 
@@ -85,6 +92,25 @@ def scrub(message: str, material: Any) -> str:
     return text[: MESSAGE_MAX - 1] + "…" if len(text) > MESSAGE_MAX else text
 
 
+def _reason(outcome: Outcome) -> str:
+    if outcome.reason in REASON_CODES:
+        return outcome.reason
+    if outcome.reason is None and outcome.ok:
+        return "ok"
+    return "unknown"
+
+
+def _params(params: dict, material: Any) -> dict:
+    """Only short scalars, strings scrubbed like ``message``."""
+    clean: dict = {}
+    for key, value in (params or {}).items():
+        if isinstance(value, bool) or isinstance(value, (int, float)):
+            clean[str(key)] = value
+        elif isinstance(value, str):
+            clean[str(key)] = scrub(value, material)[:120]
+    return clean
+
+
 def _aware(dt: datetime | None) -> datetime | None:
     if dt is None:
         return None
@@ -134,6 +160,8 @@ def _item(kind: CheckKind, subject: Subject, row: ConfigCheck | None) -> dict:
         "testable": subject.testable,
         "cost": subject.cost or kind.cost,
         "state": ("ok" if row.ok else "fail") if fresh else "never_tested",
+        "reason": (row.reason or ("ok" if row.ok else "unknown")) if fresh else None,
+        "reason_params": (row.reason_params or {}) if fresh else {},
         "message": row.message if fresh else None,
         "duration_ms": row.duration_ms if fresh else None,
         "checked_at": checked_at.isoformat() if checked_at else None,
@@ -191,7 +219,9 @@ async def run_check(session: AsyncSession, kind_key: str, subject_id: str) -> Ch
     try:
         outcome = await kind.run(session, subject)
     except Exception as exc:  # noqa: BLE001 — a reportable state
-        outcome = Outcome(ok=False, message=f"{type(exc).__name__}: {exc}")
+        outcome = Outcome(
+            ok=False, message=f"{type(exc).__name__}: {exc}", reason=reason_for_exception(exc)
+        )
     duration_ms = int((time.monotonic() - started) * 1000)
 
     row = await _record(
@@ -200,6 +230,8 @@ async def run_check(session: AsyncSession, kind_key: str, subject_id: str) -> Ch
         subject.id,
         ok=outcome.ok,
         message=scrub(outcome.message, subject.material),
+        reason=_reason(outcome),
+        reason_params=_params(outcome.params, subject.material),
         duration_ms=duration_ms,
         value_fingerprint=fingerprint(subject.material),
     )

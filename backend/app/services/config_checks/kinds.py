@@ -23,7 +23,13 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.config import settings
-from app.services.config_checks.registry import CheckKind, Outcome, Subject, register
+from app.services.config_checks.registry import (
+    CheckKind,
+    Outcome,
+    Subject,
+    reason_for_exception,
+    register,
+)
 
 _TIMEOUT = 10.0
 
@@ -39,12 +45,23 @@ async def _http_status(method: str, url: str, headers: dict, body: dict | None =
 
 def _status_outcome(code: int, provider: str) -> Outcome:
     if 200 <= code < 300:
-        return Outcome(True, f"{provider} accepted the key (HTTP {code}).")
+        return Outcome(True, f"{provider} accepted the key (HTTP {code}).", reason="ok")
+    status = {"status": code}
     if code in (401, 403):
-        return Outcome(False, f"{provider} rejected the key (HTTP {code}) — expired, revoked or mistyped?")
+        return Outcome(
+            False,
+            f"{provider} rejected the key (HTTP {code}) — expired, revoked or mistyped?",
+            reason="rejected",
+            params=status,
+        )
     if code == 429:
-        return Outcome(False, f"{provider} is rate limiting (HTTP 429) — try again later.")
-    return Outcome(False, f"{provider} answered HTTP {code}.")
+        return Outcome(
+            False,
+            f"{provider} is rate limiting (HTTP 429) — try again later.",
+            reason="rate_limited",
+            params=status,
+        )
+    return Outcome(False, f"{provider} answered HTTP {code}.", reason="http_error", params=status)
 
 
 # ── kind: secret (API keys) ───────────────────────────────────────────────
@@ -71,6 +88,7 @@ async def hf_whoami(token: str) -> tuple[int, dict]:
 
 async def _test_hf(token: str) -> Outcome:
     detail: dict = {"connected": False, "username": None, "error": None}
+    reason, params = "unknown", {}
     try:
         code, data = await hf_whoami(token)
         if code == 200:
@@ -78,13 +96,25 @@ async def _test_hf(token: str) -> Outcome:
             detail["username"] = data.get("name") or data.get("fullname")
         elif code == 401:
             detail["error"] = "Token abgelehnt (401) — abgelaufen oder widerrufen?"
+            reason, params = "rejected", {"status": code}
+        elif code == 429:
+            detail["error"] = f"HuggingFace antwortete mit HTTP {code}"
+            reason, params = "rate_limited", {"status": code}
         else:
             detail["error"] = f"HuggingFace antwortete mit HTTP {code}"
+            reason, params = "http_error", {"status": code}
     except Exception as e:  # noqa: BLE001 — reportable state
         detail["error"] = f"{type(e).__name__}: {e}"
+        reason = reason_for_exception(e)
     if detail["connected"]:
-        return Outcome(True, f"Signed in as {detail['username'] or 'a HuggingFace account'}.", detail)
-    return Outcome(False, detail["error"] or "HuggingFace check failed.", detail)
+        return Outcome(
+            True,
+            f"Signed in as {detail['username'] or 'a HuggingFace account'}.",
+            detail,
+            reason="ok",
+            params={"account": detail["username"]} if detail["username"] else {},
+        )
+    return Outcome(False, detail["error"] or "HuggingFace check failed.", detail, reason, params)
 
 
 async def _test_claude_token(token: str) -> Outcome:
@@ -216,6 +246,7 @@ async def _run_secret(session: AsyncSession, subject: Subject) -> Outcome:
             False,
             "Cannot decrypt the stored value — was it saved with another "
             "SECRETS_ENCRYPTION_KEY? Restore that .env or enter the value again.",
+            reason="undecryptable",
         )
     return await SECRET_TESTERS[subject.id].run(subject.material)
 
@@ -267,6 +298,7 @@ def telegram_unset_entry(subject_id: str) -> dict:
 
 async def _run_telegram(session: AsyncSession, subject: Subject) -> Outcome:
     entry = telegram_unset_entry(subject.id)
+    reason, params = "unknown", {}
     try:
         data = await telegram_get_me(subject.material)
         if data.get("ok"):
@@ -274,11 +306,26 @@ async def _run_telegram(session: AsyncSession, subject: Subject) -> Outcome:
             entry["bot_username"] = data.get("result", {}).get("username")
         else:
             entry["error"] = str(data.get("description", "Telegram API error"))
+            code = data.get("error_code")
+            if isinstance(code, int):
+                params = {"status": code}
+            # getMe with a bad token: 401 Unauthorized (404 for a malformed one).
+            if code in (401, 403, 404) or entry["error"].lower().startswith(("unauthorized", "not found")):
+                reason = "rejected"
+            elif code == 429:
+                reason = "rate_limited"
     except Exception as e:  # noqa: BLE001 — reportable state, not a 500
         entry["error"] = f"{type(e).__name__}: {e}"
+        reason = reason_for_exception(e)
     if entry["connected"]:
-        return Outcome(True, f"Bot @{entry['bot_username']} answers.", entry)
-    return Outcome(False, entry["error"] or "Telegram check failed.", entry)
+        return Outcome(
+            True,
+            f"Bot @{entry['bot_username']} answers.",
+            entry,
+            reason="ok",
+            params={"account": entry["bot_username"]} if entry["bot_username"] else {},
+        )
+    return Outcome(False, entry["error"] or "Telegram check failed.", entry, reason, params)
 
 
 register(CheckKind("telegram", "Telegram bots", "free", _telegram_subjects, _run_telegram))
@@ -309,12 +356,30 @@ async def _run_slack(session: AsyncSession, subject: Subject) -> Outcome:
 
     result = await slack_client.test_connection(session)
     detail = result.to_dict()
+    names = {k: v for k, v in (("team", result.team), ("account", result.bot_user)) if v}
     if result.connected:
         msg = f"Connected to {result.team or 'the workspace'} as {result.bot_user or 'the bot'}."
         if not result.socket_mode_ready:
             msg += " Socket Mode is not ready (app token)."
-        return Outcome(True, msg, detail)
-    return Outcome(False, result.error or "Slack check failed.", detail)
+            return Outcome(True, msg, detail, reason="socket_mode_not_ready", params=names)
+        return Outcome(True, msg, detail, reason="ok", params=names)
+    reason, params = _slack_reason(result.error_code)
+    return Outcome(False, result.error or "Slack check failed.", detail, reason, params)
+
+
+_SLACK_REJECTED = {"invalid_auth", "not_authed", "account_inactive", "token_revoked", "token_expired"}
+
+
+def _slack_reason(code: str | None) -> tuple[str, dict]:
+    if not code:
+        return "unknown", {}
+    if code in _SLACK_REJECTED:
+        return "rejected", {"code": code}
+    if code == "ratelimited":
+        return "rate_limited", {}
+    if code in ("missing_scope", "wrong_token_type", "unreachable", "not_configured"):
+        return code, {}
+    return "unknown", ({"code": code[:40]} if re.fullmatch(r"[a-z_]+", code) else {})
 
 
 register(CheckKind("slack", "Slack", "free", _slack_subjects, _run_slack))
@@ -352,6 +417,7 @@ async def _run_github(session: AsyncSession, subject: Subject) -> Outcome:
         "rate_limit_total": None,
         "error": None,
     }
+    reason = "unknown"
     git = GitService()
     try:
         user_out = await asyncio.wait_for(git._run_cmd("gh", "api", "user"), timeout=15)
@@ -368,11 +434,32 @@ async def _run_github(session: AsyncSession, subject: Subject) -> Outcome:
         detail["connected"] = True
     except asyncio.TimeoutError:
         detail["error"] = "GitHub nicht erreichbar (Timeout nach 15s)."
+        reason = "timeout"
     except (RuntimeError, ValueError) as e:
         detail["error"] = str(e)[:300]
+        reason = _github_reason(detail["error"])
     if detail["connected"]:
-        return Outcome(True, f"Signed in as {detail['login']}.", detail)
-    return Outcome(False, detail["error"] or "GitHub check failed.", detail)
+        return Outcome(
+            True,
+            f"Signed in as {detail['login']}.",
+            detail,
+            reason="ok",
+            params={"account": detail["login"]} if detail["login"] else {},
+        )
+    return Outcome(False, detail["error"] or "GitHub check failed.", detail, reason)
+
+
+def _github_reason(error: str) -> str:
+    text = error.lower()
+    if text.startswith("ungültiger github-owner"):
+        return "invalid_owner"
+    if "401" in text or "bad credentials" in text:
+        return "rejected"
+    if "rate limit" in text:
+        return "rate_limited"
+    if "could not resolve host" in text or "connection refused" in text:
+        return "unreachable"
+    return "unknown"
 
 
 register(CheckKind("github", "GitHub", "rate_limited", _github_subjects, _run_github))
@@ -421,6 +508,7 @@ async def _run_embeddings(session: AsyncSession, subject: Subject) -> Outcome:
         "expected_dimension": EMBED_DIM,
         "error": None,
     }
+    reason, params = "unknown", {}
     try:
         vec = await provider.embed("ping")
         detail["connected"] = True
@@ -430,11 +518,23 @@ async def _run_embeddings(session: AsyncSession, subject: Subject) -> Outcome:
                 f"Antwort hat {len(vec)} Dimensionen statt {EMBED_DIM} — "
                 f"passt nicht zu den bestehenden Vektoren."
             )
+            reason, params = "dimension_mismatch", {"dimension": len(vec), "expected": EMBED_DIM}
     except Exception as e:  # noqa: BLE001 — reportable state, not a 500
         detail["error"] = f"{type(e).__name__}: {e}"
+        reason = reason_for_exception(e)
+        status = getattr(getattr(e, "response", None), "status_code", None)
+        if isinstance(status, int):
+            params = {"status": status}
+            reason = "rejected" if status in (401, 403) else "rate_limited" if status == 429 else "http_error"
     if detail["connected"] and not detail["error"]:
-        return Outcome(True, f"Answers with {detail['dimension']} dimensions.", detail)
-    return Outcome(False, detail["error"] or "Embeddings check failed.", detail)
+        return Outcome(
+            True,
+            f"Answers with {detail['dimension']} dimensions.",
+            detail,
+            reason="ok",
+            params={"dimension": detail["dimension"]},
+        )
+    return Outcome(False, detail["error"] or "Embeddings check failed.", detail, reason, params)
 
 
 register(CheckKind("embeddings", "Embeddings", "free", _embeddings_subjects, _run_embeddings))
@@ -468,8 +568,10 @@ async def _run_host(session: AsyncSession, subject: Subject) -> Outcome:
 
     result = await host_probe.probe_host(resolved_host_from_row(subject.ref))
     if result.get("reachable"):
-        return Outcome(True, "Reachable over SSH.", result)
-    return Outcome(False, result.get("reason") or "Not reachable over SSH.", result)
+        return Outcome(True, "Reachable over SSH.", result, reason="ok")
+    return Outcome(
+        False, result.get("reason") or "Not reachable over SSH.", result, reason="unreachable"
+    )
 
 
 register(CheckKind("host", "Boxes (SSH)", "free", _host_subjects, _run_host))
@@ -501,8 +603,8 @@ async def _run_runtime(session: AsyncSession, subject: Subject) -> Outcome:
     model_id = await agent_runtime_switch.probe_runtime_model(subject.ref)
     detail = {"model_id": model_id}
     if model_id:
-        return Outcome(True, f"Serves {model_id}.", detail)
-    return Outcome(False, "No chat model answered at the endpoint.", detail)
+        return Outcome(True, f"Serves {model_id}.", detail, reason="ok", params={"model": model_id})
+    return Outcome(False, "No chat model answered at the endpoint.", detail, reason="no_model")
 
 
 register(CheckKind("runtime", "Model runtimes", "free", _runtime_subjects, _run_runtime))

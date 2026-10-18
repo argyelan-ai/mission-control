@@ -115,6 +115,9 @@ class SlackConnectionResult:
     socket_mode_ready: bool = False
     # Problem with the bot token / the Slack call itself.
     error: str | None = None
+    # The same problem as a short code: Slack's own (``invalid_auth`` …) or
+    # ``not_configured`` / ``wrong_token_type`` / ``unreachable``.
+    error_code: str | None = None
     # Problem with the app-level token — deliberately a SEPARATE field so a
     # missing Socket-Mode token is never reported as "bot token invalid".
     app_token_error: str | None = None
@@ -218,11 +221,13 @@ async def test_connection(session: AsyncSession) -> SlackConnectionResult:
             "No bot token set. Add the Bot User OAuth Token (xoxb-...) from "
             "OAuth & Permissions."
         )
+        result.error_code = "not_configured"
         return result
 
     prefix_problem = _describe_wrong_prefix(bot_token, field="bot")
     if prefix_problem:
         result.error = prefix_problem
+        result.error_code = "wrong_token_type"
         return result
 
     body = await _call_auth_test(bot_token)
@@ -241,6 +246,7 @@ async def test_connection(session: AsyncSession) -> SlackConnectionResult:
 
     code = str(body.get("error") or "unknown_error")
     result.error = explain_slack_error(code)
+    result.error_code = "unreachable" if code.startswith("could not reach") else code
     log.warning("slack auth.test failed — error=%s", code)
     return result
 

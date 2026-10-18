@@ -25,6 +25,43 @@ COST_HINTS: dict[str, str] = {
 }
 
 
+#: Why a check ended the way it did — machine-readable, so the UI can word it
+#: in the operator's language (``reason_params`` carry the values, e.g.
+#: ``{"status": 401}``). ``message`` stays as the English free text for the
+#: "details" fold. A procedure that sets a code outside this list is stored
+#: as ``unknown``. Max 32 characters (the column width).
+REASON_CODES: tuple[str, ...] = (
+    "ok",                     # passed
+    "socket_mode_not_ready",  # Slack: passed, but the app token is missing/wrong
+    "rejected",               # the provider refused the key/token  {status?, code?}
+    "rate_limited",           # the provider is rate limiting  {status?}
+    "http_error",             # another HTTP answer  {status}
+    "unreachable",            # no connection (DNS, refused, SSH down)
+    "timeout",                # no answer in time
+    "undecryptable",          # stored with another SECRETS_ENCRYPTION_KEY
+    "dimension_mismatch",     # embeddings: wrong vector size  {dimension, expected}
+    "wrong_token_type",       # Slack: a token of the wrong kind (xapp- for xoxb- …)
+    "missing_scope",          # Slack: the bot token lacks a scope
+    "invalid_owner",          # GitHub: the owner name is not valid
+    "no_model",               # runtime: no chat model answered
+    "not_configured",         # nothing set to test
+    "unknown",                # anything else — the UI shows the free text
+)
+
+
+def reason_for_exception(exc: BaseException) -> str:
+    """``timeout`` / ``unreachable`` / ``unknown`` for an error a procedure raised."""
+    import asyncio
+
+    import httpx
+
+    if isinstance(exc, (asyncio.TimeoutError, TimeoutError, httpx.TimeoutException)):
+        return "timeout"
+    if isinstance(exc, (httpx.ConnectError, httpx.NetworkError, ConnectionError)):
+        return "unreachable"
+    return "unknown"
+
+
 @dataclass
 class Subject:
     """One thing a kind can check — a secret key, a host, a bot.
@@ -51,13 +88,18 @@ class Subject:
 
 @dataclass
 class Outcome:
-    """What a procedure found. ``message`` is short and shown to the user;
-    ``detail`` is the procedure's full answer, which old endpoints return
-    unchanged (never stored)."""
+    """What a procedure found. ``reason`` (one of :data:`REASON_CODES`) and
+    ``params`` are what the UI words; ``message`` is a short English
+    sentence for the details fold; ``detail`` is the procedure's full
+    answer, which old endpoints return unchanged (never stored).
+
+    ``reason`` left out means ``ok`` for a pass and ``unknown`` otherwise."""
 
     ok: bool
     message: str
     detail: dict = field(default_factory=dict)
+    reason: str | None = None
+    params: dict = field(default_factory=dict)
 
 
 ListSubjects = Callable[[AsyncSession], Awaitable[list[Subject]]]
