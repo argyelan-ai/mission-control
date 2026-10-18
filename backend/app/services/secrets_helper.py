@@ -11,7 +11,7 @@ the claude-config bind mount during sync-config.
 """
 import logging
 import uuid
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -80,6 +80,66 @@ async def get_secret_plaintext_by_key(
         return None
 
     return safe_decrypt(secret.encrypted_value)
+
+
+#: Vault keys that have an env fallback of the same name on ``Settings``
+#: (pydantic maps ``OPENAI_API_KEY`` -> ``settings.openai_api_key``). The
+#: allowlist is the boundary: ``effective_secret`` never hands out an arbitrary
+#: Settings field (crypto keys, JWT secret). A new consumer adds its key here
+#: and offers it in ``routers/secrets.py::PROVIDER_TEMPLATES``.
+EFFECTIVE_SECRET_KEYS: frozenset[str] = frozenset({
+    "openai_api_key",
+    "discord_bot_token",
+})
+
+SecretSource = Literal["vault", "env"]
+
+
+async def resolve_secret(
+    key: str,
+    *,
+    session: AsyncSession | None = None,
+) -> tuple[str, SecretSource | None]:
+    """The value a service should use for ``key``, and where it came from.
+
+    **Vault first, env only as the fallback** (ADR-093): a key saved in MC's
+    API-keys page wins over ``.env``; a plain ``.env`` install keeps working
+    unchanged. Read on every call (no cache) so a save, a replacement or a
+    delete takes effect at once in every process (API and mc-worker each read
+    the shared DB). Never raises on a vault problem — a DB hiccup or a wrong
+    encryption key degrades to the env value, logged.
+    """
+    if key not in EFFECTIVE_SECRET_KEYS:
+        raise ValueError(f"{key!r} is not an effective secret (see EFFECTIVE_SECRET_KEYS)")
+
+    vault: str | None = None
+    try:
+        if session is not None:
+            vault = await get_secret_plaintext_by_key(session, key)
+        else:
+            from app import database
+
+            async with database.async_session_maker() as own:
+                vault = await get_secret_plaintext_by_key(own, key)
+    except Exception as e:  # noqa: BLE001 — vault down must not break an env install
+        logger.warning("resolve_secret(%s): vault lookup failed, env fallback (%s)", key, type(e).__name__)
+        vault = None
+
+    vault = (vault or "").strip()
+    if vault:
+        return vault, "vault"
+
+    from app.config import settings
+
+    env = (getattr(settings, key, "") or "").strip()
+    return (env, "env") if env else ("", None)
+
+
+async def effective_secret(key: str, *, session: AsyncSession | None = None) -> str:
+    """The value to use for ``key``: vault first, env as fallback, ``""`` if
+    neither is set. See ``resolve_secret`` for the rules."""
+    value, _source = await resolve_secret(key, session=session)
+    return value
 
 
 async def upsert_secret_by_key(
