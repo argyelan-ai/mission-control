@@ -430,15 +430,32 @@ def _field_default(attr: str):
     return None if info.is_required() else info.default
 
 
+def _canonical(value):
+    """One spelling per value, whatever read it: a whole-number float is an
+    int (``178.0`` from the driver, ``178`` from JSON or ``row_to_json``),
+    nested dicts and lists are normalised the same way. Key order does not
+    matter (``sort_keys``)."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, dict):
+        return {str(k): _canonical(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_canonical(v) for v in value]
+    return value
+
+
 def catalog_fingerprint(values: dict) -> str:
     """A stable hash of one recipe's managed columns.
 
     Values equal to the schema default are left out, so adding a new
     optional field (its default fills old rows and old catalog entries alike)
     never changes the fingerprint of anything that was shipped before it.
+    Numbers are compared by value, not by type (``_canonical``).
     """
     canonical = {
-        attr: values[attr]
+        attr: _canonical(values[attr])
         for attr in MANAGED_FIELDS
         if RecipeSpec.model_fields[attr].is_required() or values[attr] != _field_default(attr)
     }

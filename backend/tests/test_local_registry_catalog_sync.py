@@ -483,3 +483,57 @@ async def test_an_install_with_the_old_tensorfold_row_gets_the_fixed_recipe(sess
     session.expire_all()
     rt = (await session.exec(select(Runtime).where(Runtime.slug == "glm53-flash-exl3-tensorfold-a"))).first()
     assert rt.drop_page_cache is True
+
+
+# ── The same row, read three ways (Postgres round trip) ──────────────────────
+
+ROW_TO_JSON = Path(__file__).resolve().parent / "fixtures" / "local-recipe-row-to-json-tensorfold.json"
+
+
+def _row_from_json(raw: dict) -> LocalRecipe:
+    from app.services.local_registry import MANAGED_FIELDS
+
+    return LocalRecipe(slug=raw["slug"], **{k: raw[k] for k in MANAGED_FIELDS})
+
+
+def test_a_row_exported_with_row_to_json_matches_its_shipped_version():
+    """Read-only export of an untouched install row (Postgres ``row_to_json``):
+    a float column holding 178 comes out as ``178``, the catalog says
+    ``178`` and pydantic makes it ``178.0``, the driver hands back ``178.0``.
+    All three must give the same fingerprint, or no real install is recognised."""
+    raw = json.loads(ROW_TO_JSON.read_text(encoding="utf-8"))
+    assert isinstance(raw["est_weights_gb"], int)  # the export spells it as an int
+    fp = row_fingerprint(_row_from_json(raw))
+    assert fp in load_shipped_fingerprints(REAL_SEED.with_name("local-recipes.shipped.json"))[raw["slug"]]
+
+    as_driver = _row_from_json({**raw, "est_weights_gb": 178.0, "min_vram_gb": 110.0})
+    assert row_fingerprint(as_driver) == fp
+
+
+def test_number_spelling_and_key_order_do_not_change_a_fingerprint():
+    a = RecipeSpec.model_validate(_recipe("x", est_weights_gb=178, topology={"nodes": 2, "tp": 2}))
+    b = RecipeSpec.model_validate(_recipe("x", est_weights_gb=178.0, topology={"tp": 2.0, "nodes": 2}))
+    assert spec_fingerprint(a) == spec_fingerprint(b)
+    assert spec_fingerprint(a) != spec_fingerprint(
+        RecipeSpec.model_validate(_recipe("x", est_weights_gb=178.5))
+    )
+
+
+@pytest.mark.postgres
+async def test_postgres_round_trip_keeps_the_fingerprint(session, catalog):
+    """Real Postgres (CI lane): seed, then read the row back both through the
+    ORM and as ``row_to_json`` — the export an operator would hand over."""
+    from sqlalchemy import text
+
+    catalog.ship(V1)
+    await seed_local_recipes(session)
+    expected = spec_fingerprint(RecipeSpec.model_validate(V1[0]))
+
+    assert row_fingerprint(await _row(session, "tf-glm")) == expected
+    exported = (
+        await session.exec(
+            text("select row_to_json(t) from local_recipes t where slug = 'tf-glm'")
+        )
+    ).scalar_one()
+    raw = exported if isinstance(exported, dict) else json.loads(exported)
+    assert row_fingerprint(_row_from_json(raw)) == expected
