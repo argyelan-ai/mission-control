@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { api } from "@/lib/api";
 
@@ -50,6 +50,8 @@ function checkItem(
     testable: true,
     cost: "quota" as const,
     state,
+    reason: state === "fail" ? "rejected" : state === "ok" ? "ok" : null,
+    reason_params: (state === "fail" ? { status: 401 } : {}) as Record<string, number>,
     message: state === "fail" ? "Claude rejected the key (HTTP 401) — expired, revoked or mistyped?" : null,
     duration_ms: 120,
     checked_at: state === "never_tested" ? null : new Date().toISOString(),
@@ -173,7 +175,11 @@ describe("First-Run-Wizard", () => {
     await userEvent.type(screen.getByLabelText("Key"), "sk-ant-oat01-wrong");
     await userEvent.click(screen.getByRole("button", { name: /Save & continue/ }));
 
-    expect(await screen.findByText(/The key did not work: Claude rejected the key \(HTTP 401\)/)).toBeInTheDocument();
+    const keyError = await screen.findByTestId("setup-key-error");
+    expect(keyError).toHaveTextContent("The key did not work.");
+    // Worded from the reason code, not the server's sentence (finding 1).
+    expect(keyError).toHaveTextContent("Rejected (HTTP 401) — the key is expired, revoked or mistyped.");
+    expect(keyError).not.toHaveTextContent("Claude rejected the key");
     // Still on the key step, and the same key cannot be sent on again.
     expect(screen.getByRole("heading", { name: "Connect an LLM provider" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Save & continue/ })).toBeDisabled();
@@ -229,7 +235,7 @@ describe("First-Run-Wizard", () => {
     vi.spyOn(api.secrets, "providers").mockResolvedValue(PROVIDERS as never);
     vi.spyOn(api.repos, "setGithubConfig").mockResolvedValue({} as never);
     const run = vi.spyOn(api.configChecks, "run").mockResolvedValue({
-      item: checkItem("fail", "github", { message: "gh: Bad credentials (HTTP 401)" }),
+      item: checkItem("fail", "github", { message: "gh: Bad credentials (HTTP 401)", reason: "unknown", reason_params: {} }),
       notRunnable: null,
     });
 
@@ -241,9 +247,25 @@ describe("First-Run-Wizard", () => {
     await userEvent.type(screen.getByLabelText("Personal access token"), "ghp_bad");
     await userEvent.click(screen.getByRole("button", { name: /Save & continue/ }));
 
-    expect(await screen.findByText(/GitHub did not accept this: gh: Bad credentials/)).toBeInTheDocument();
+    const ghError = await screen.findByTestId("setup-github-error");
+    expect(ghError).toHaveTextContent("GitHub did not accept this.");
+    expect(ghError).toHaveTextContent("The test failed for a reason MC does not know.");
+    // An unknown reason keeps the server's text — folded away as a detail.
+    expect(within(ghError).getByTestId("check-detail")).toHaveTextContent("gh: Bad credentials");
     expect(run).toHaveBeenCalledWith("github", "connection");
     expect(screen.getByRole("heading", { name: "Connect GitHub" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Save & continue/ })).toBeDisabled();
+  });
+
+  it("on a phone the step bar is one line: 'Step 2 of 4 · Provider Key'", async () => {
+    mockAuthed();
+    vi.spyOn(api.secrets, "providers").mockResolvedValue(PROVIDERS as never);
+    render(<SetupWizardPage />);
+    await screen.findByText("Connect an LLM provider");
+    const compact = screen.getByTestId("setup-steps-compact");
+    expect(compact).toHaveTextContent("Step 2 of 4 · Provider Key");
+    // The compact bar is the phone's; the labelled row only from md up.
+    expect(compact.className).toMatch(/(^|\s)md:hidden(\s|$)/);
+    expect(screen.getByTestId("setup-steps").className).toMatch(/(^|\s)hidden md:flex(\s|$)/);
   });
 });

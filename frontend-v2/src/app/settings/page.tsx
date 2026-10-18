@@ -48,7 +48,7 @@ import { PhoneSectionList } from "@/components/settings/PhoneSectionList";
 import { GROUP_ORDER, SECTIONS, sectionHref } from "@/components/settings/sections";
 import { StatusDot } from "@/components/shared/StatusDot";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
-import { CheckStatus, checkPhase } from "@/components/shared/CheckStatus";
+import { CheckReason, CheckStatus, checkPhase } from "@/components/shared/CheckStatus";
 import {
   findCheck,
   findSecretCheck,
@@ -1737,11 +1737,16 @@ function GithubSection() {
               </div>
             )}
 
-            {(effective?.error || (connected === false && !probeResult && ghCheck?.message)) && (
+            {/* The probe stores its result in the registry: its reason code is
+                worded in the UI language. The probe's own text only shows when
+                the registry has no failed result (e.g. MC itself was not reached). */}
+            {ghCheck?.state === "fail" && connected !== true ? (
+              <CheckReason item={ghCheck} className="text-xs pt-1" style={{ color: STATUS_TEXT.error }} />
+            ) : effective?.error ? (
               <p className="text-xs pt-1" style={{ color: STATUS_TEXT.error }}>
-                {effective?.error || ghCheck?.message}
+                {effective.error}
               </p>
-            )}
+            ) : null}
 
             <button
               onClick={() => handleTest()}

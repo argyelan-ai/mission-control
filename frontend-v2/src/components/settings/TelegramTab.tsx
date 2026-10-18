@@ -15,7 +15,7 @@ import type {
 } from "@/lib/types";
 import { C, STATUS_TEXT } from "@/lib/colors";
 import { StatusDot } from "@/components/shared/StatusDot";
-import { CheckStatus } from "@/components/shared/CheckStatus";
+import { CheckReason, CheckStatus } from "@/components/shared/CheckStatus";
 import { findCheck, refreshChecks, useConfigChecks } from "@/lib/configChecks";
 import type { ConfigCheckItem } from "@/lib/types";
 
@@ -275,11 +275,18 @@ function BotStatusLine({
         </span>
       </div>
       {status?.token_set && !testing && <CheckStatus item={check} variant="age" className="pl-6" />}
-      {status?.error && (
+      {check?.state === "fail" && !testing ? (
+        <CheckReason
+          item={check}
+          detail={status?.error}
+          className="text-xs pl-6"
+          style={{ color: STATUS_TEXT.error }}
+        />
+      ) : status?.error ? (
         <p className="text-xs pl-6" style={{ color: STATUS_TEXT.error }}>
           {status.error}
         </p>
-      )}
+      ) : null}
     </div>
   );
 }

@@ -1254,11 +1254,11 @@
     "saveFailed": "Speichern fehlgeschlagen.",
     "demoBoardFailed": "Demo-Board konnte nicht erstellt werden.",
     "testingKey": "Schlüssel wird geprüft…",
-    "keyRejected": "Der Schlüssel funktioniert nicht: {reason}",
+    "keyRejected": "Der Schlüssel funktioniert nicht.",
     "keyRejectedHint": "Schlüssel prüfen und nochmals speichern, oder den Schritt überspringen.",
     "checkFailed": "Der Schlüssel ist gespeichert, aber der Test konnte nicht laufen: {error}",
-    "githubRejected": "GitHub hat das nicht angenommen: {reason}",
-    "checkNoReason": "ohne Angabe"
+    "githubRejected": "GitHub hat das nicht angenommen.",
+    "stepOf": "Schritt {n} von {total} · {label}"
   },
   "schedule": {
     "title": "Zeitplan",
@@ -4109,6 +4109,27 @@
     },
     "test": "Testen",
     "testQuotaHint": "Schickt eine winzige echte Anfrage — verbraucht ein wenig vom Abo-Kontingent.",
-    "testFailed": "Der Test konnte nicht laufen: {error}"
+    "testFailed": "Der Test konnte nicht laufen: {error}",
+    "reason": {
+      "ok": "Funktioniert.",
+      "socket_mode_not_ready": "Verbunden, aber Socket Mode ist nicht bereit — App-Token (xapp-…) prüfen.",
+      "rejected": "Abgelehnt — der Schlüssel ist abgelaufen, widerrufen oder falsch eingegeben.",
+      "rejectedStatus": "Abgelehnt (HTTP {status}) — der Schlüssel ist abgelaufen, widerrufen oder falsch eingegeben.",
+      "rate_limited": "Gerade zu viele Anfragen. In einer Minute nochmals versuchen.",
+      "rate_limitedStatus": "Gerade zu viele Anfragen (HTTP {status}). In einer Minute nochmals versuchen.",
+      "http_errorStatus": "Unerwartete Antwort vom Anbieter (HTTP {status}).",
+      "unreachable": "Nicht erreichbar. Adresse und Netzwerk prüfen.",
+      "timeout": "Keine Antwort in der Wartezeit. Später nochmals versuchen.",
+      "undecryptable": "Der gespeicherte Wert lässt sich nicht entschlüsseln. Er wurde mit einem anderen SECRETS_ENCRYPTION_KEY gespeichert: diese .env wiederherstellen oder den Wert neu eingeben.",
+      "dimension_mismatch": "Antwortet mit {dimension} statt {expected} Dimensionen. Das passt nicht zu den bestehenden Vektoren.",
+      "dimension_mismatchPlain": "Die Vektoren haben die falsche Grösse. Das passt nicht zu den bestehenden.",
+      "wrong_token_type": "Falsche Token-Art. Der Bot-Token beginnt mit xoxb-.",
+      "missing_scope": "Dem Token fehlt eine Berechtigung (Scope). Ergänzen und die App neu installieren.",
+      "invalid_owner": "Der Owner-Name ist ungültig.",
+      "no_model": "An diesem Endpunkt antwortet kein Chat-Modell.",
+      "not_configured": "Es ist nichts eingetragen, das sich prüfen liesse.",
+      "unknown": "Die Prüfung ist fehlgeschlagen. Den Grund kennt MC nicht."
+    },
+    "details": "Details vom Server (englisch)"
   }
 }

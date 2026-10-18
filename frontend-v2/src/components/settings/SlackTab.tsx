@@ -11,7 +11,7 @@ import type { ChannelSettingsResponse, SecretEntry, SlackConnectionResult } from
 import { C, STATUS_TEXT } from "@/lib/colors";
 import { StatusDot } from "@/components/shared/StatusDot";
 import { ChannelToggleRow } from "@/components/settings/TelegramTab";
-import { CheckStatus } from "@/components/shared/CheckStatus";
+import { CheckReason, CheckStatus } from "@/components/shared/CheckStatus";
 import { findCheck, refreshChecks, useConfigChecks } from "@/lib/configChecks";
 
 // The two fixed fields. Key names match the backend secret catalog
@@ -459,11 +459,19 @@ export function SlackTab() {
             </span>
           </div>
 
-          {status?.error && (
+          {slackCheck?.state === "fail" && !testing && !nothingSet ? (
+            <CheckReason
+              item={slackCheck}
+              detail={status?.error}
+              testId="slack-error"
+              className="text-xs pt-1"
+              style={{ color: STATUS_TEXT.error }}
+            />
+          ) : status?.error && !nothingSet ? (
             <p className="text-xs pt-1" style={{ color: STATUS_TEXT.error }} data-testid="slack-error">
               {status.error}
             </p>
-          )}
+          ) : null}
           {status?.app_token_error && (
             <p className="text-xs" style={{ color: STATUS_TEXT.warning }} data-testid="slack-app-token-error">
               {status.app_token_error}

@@ -1168,7 +1168,13 @@ export interface ConfigCheckItem {
   testable: boolean;
   cost: ConfigCheckCost;
   state: ConfigCheckState;
-  /** Admin-only; null for viewers. */
+  /** Why it ended this way — machine-readable, worded by the UI through
+   *  i18n (lib/checkReason). null while never tested. */
+  reason: string | null;
+  /** Values for the reason, e.g. `{status: 401}`. Viewers get numbers only. */
+  reason_params: Record<string, string | number | boolean>;
+  /** English free text from the server — shown only as the detail of an
+   *  `unknown` reason. Admin-only; null for viewers. */
   message: string | null;
   duration_ms: number | null;
   checked_at: string | null;
@@ -1182,6 +1188,8 @@ export interface ConfigCheckItem {
 export interface ConfigChecksResponse {
   kinds: { key: string; label: string; cost: ConfigCheckCost }[];
   cost_hints: Record<ConfigCheckCost, string>;
+  /** The backend's closed list of reason codes (REASON_CODES). */
+  reason_codes?: string[];
   items: ConfigCheckItem[];
 }
 

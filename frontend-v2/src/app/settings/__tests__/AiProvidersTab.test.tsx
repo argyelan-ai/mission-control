@@ -386,7 +386,7 @@ describe("AiProvidersTab (Settings)", () => {
 describe("AiProvidersTab — test on save + age", () => {
   const ago = (s: number) => ({ age_seconds: s, checked_at: new Date(Date.now() - s * 1000).toISOString() });
   const base = {
-    label: "x", configured: true, testable: true, cost: "free" as const, message: null,
+    label: "x", configured: true, testable: true, cost: "free" as const, message: null, reason: null, reason_params: {},
     duration_ms: null, value_changed: false, checked_at: null, age_seconds: null,
   };
 

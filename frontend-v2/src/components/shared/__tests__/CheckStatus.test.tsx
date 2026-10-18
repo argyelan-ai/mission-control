@@ -15,6 +15,8 @@ function item(over: Partial<ConfigCheckItem> = {}): ConfigCheckItem {
     testable: true,
     cost: "free",
     state: "never_tested",
+    reason: null,
+    reason_params: {},
     message: null,
     duration_ms: null,
     checked_at: null,
@@ -45,14 +47,22 @@ describe("<CheckStatus>", () => {
   it("red: says it failed, with the age and the reason on its own line", () => {
     render(
       <CheckStatus
-        item={tested("fail", 10, { message: "OpenAI rejected the key (HTTP 401)" })}
+        item={tested("fail", 10, {
+          reason: "rejected",
+          reason_params: { status: 401 },
+          message: "OpenAI rejected the key (HTTP 401)",
+        })}
       />,
     );
     const box = screen.getByTestId("check-status");
     expect(box).toHaveAttribute("data-state", "fail");
     expect(box).toHaveTextContent("Failed");
     expect(box).toHaveTextContent("tested just now");
-    expect(screen.getByTestId("check-message")).toHaveTextContent("OpenAI rejected the key (HTTP 401)");
+    // Worded from the reason code; the server's sentence is not shown for a known reason.
+    expect(screen.getByTestId("check-message")).toHaveTextContent(
+      "Rejected (HTTP 401) — the key is expired, revoked or mistyped.",
+    );
+    expect(screen.getByTestId("check-status")).not.toHaveTextContent("OpenAI rejected the key");
   });
 
   it("never tested: says so and shows no age", () => {

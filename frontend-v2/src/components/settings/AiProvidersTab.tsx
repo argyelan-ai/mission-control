@@ -15,7 +15,7 @@ import type {
 } from "@/lib/types";
 import { C, STATUS_TEXT } from "@/lib/colors";
 import { StatusDot } from "@/components/shared/StatusDot";
-import { CheckStatus, checkPhase } from "@/components/shared/CheckStatus";
+import { CheckReason, CheckStatus, checkPhase } from "@/components/shared/CheckStatus";
 import { findCheck, findSecretCheck, refreshChecks, useConfigChecks } from "@/lib/configChecks";
 import type { ConfigCheckItem } from "@/lib/types";
 
@@ -333,15 +333,19 @@ function EmbeddingsStatusLine({
         </p>
       )}
       {status && !testing && <CheckStatus item={check} variant="age" className="pl-6" />}
-      {status?.error && (
-        <p
-          data-testid="embeddings-error"
+      {check?.state === "fail" && !testing ? (
+        <CheckReason
+          item={check}
+          detail={status?.error}
+          testId="embeddings-error"
           className="text-xs pl-6"
           style={{ color: STATUS_TEXT.error }}
-        >
+        />
+      ) : status?.error ? (
+        <p data-testid="embeddings-error" className="text-xs pl-6" style={{ color: STATUS_TEXT.error }}>
           {status.error}
         </p>
-      )}
+      ) : null}
     </div>
   );
 }
@@ -383,15 +387,19 @@ function HfStatusLine({
         </span>
       </div>
       {status?.token_set && !testing && <CheckStatus item={check} variant="age" className="pl-6" />}
-      {status?.error && (
-        <p
-          data-testid="hf-error"
+      {check?.state === "fail" && !testing ? (
+        <CheckReason
+          item={check}
+          detail={status?.error}
+          testId="hf-error"
           className="text-xs pl-6"
           style={{ color: STATUS_TEXT.error }}
-        >
+        />
+      ) : status?.error ? (
+        <p data-testid="hf-error" className="text-xs pl-6" style={{ color: STATUS_TEXT.error }}>
           {status.error}
         </p>
-      )}
+      ) : null}
     </div>
   );
 }

@@ -1254,11 +1254,11 @@
     "saveFailed": "Failed to save.",
     "demoBoardFailed": "Failed to create demo board.",
     "testingKey": "Testing the key…",
-    "keyRejected": "The key did not work: {reason}",
+    "keyRejected": "The key did not work.",
     "keyRejectedHint": "Check the key and save again, or skip this step.",
     "checkFailed": "The key was saved, but the test could not run: {error}",
-    "githubRejected": "GitHub did not accept this: {reason}",
-    "checkNoReason": "no reason given"
+    "githubRejected": "GitHub did not accept this.",
+    "stepOf": "Step {n} of {total} · {label}"
   },
   "schedule": {
     "title": "Schedule",
@@ -4109,6 +4109,27 @@
     },
     "test": "Test",
     "testQuotaHint": "Sends one tiny real request — uses a little of the plan's quota.",
-    "testFailed": "The test could not run: {error}"
+    "testFailed": "The test could not run: {error}",
+    "reason": {
+      "ok": "Works.",
+      "socket_mode_not_ready": "Connected, but Socket Mode is not ready — check the app token (xapp-…).",
+      "rejected": "Rejected — the key is expired, revoked or mistyped.",
+      "rejectedStatus": "Rejected (HTTP {status}) — the key is expired, revoked or mistyped.",
+      "rate_limited": "Too many requests right now. Try again in a minute.",
+      "rate_limitedStatus": "Too many requests right now (HTTP {status}). Try again in a minute.",
+      "http_errorStatus": "Unexpected answer from the provider (HTTP {status}).",
+      "unreachable": "Not reachable. Check the address and the network.",
+      "timeout": "No answer in time. Try again later.",
+      "undecryptable": "The stored value cannot be decrypted. It was saved with another SECRETS_ENCRYPTION_KEY: restore that .env, or enter the value again.",
+      "dimension_mismatch": "Answers with {dimension} dimensions instead of {expected}. That does not fit the existing vectors.",
+      "dimension_mismatchPlain": "The vectors have the wrong size. That does not fit the existing ones.",
+      "wrong_token_type": "Wrong kind of token. The bot token starts with xoxb-.",
+      "missing_scope": "The token lacks a permission (scope). Add it and reinstall the app.",
+      "invalid_owner": "The owner name is not valid.",
+      "no_model": "No chat model answers at this endpoint.",
+      "not_configured": "Nothing is set that could be tested.",
+      "unknown": "The test failed for a reason MC does not know."
+    },
+    "details": "Details from the server"
   }
 }

@@ -58,6 +58,8 @@ async function fakeBackend(page: Page, opts: { acceptKey: (v: string) => boolean
       testable: true,
       cost: key === "claude_code_oauth_token" ? "quota" : "free",
       state: c ? (c.ok ? "ok" : "fail") : "never_tested",
+      reason: c ? (c.ok ? "ok" : "rejected") : null,
+      reason_params: c && !c.ok ? { status: 401 } : {},
       message: c?.message ?? null,
       duration_ms: c ? 140 : null,
       checked_at: c ? new Date(c.at).toISOString() : null,
@@ -160,7 +162,9 @@ test("API keys: a rejected key is red with the reason", async ({ page }) => {
   await card(page).getByRole("button", { name: "Save" }).click();
 
   await expect(card(page).getByTestId("check-status")).toHaveText(/Failed · tested just now/, { timeout: 30_000 });
-  await expect(card(page).getByTestId("check-message")).toContainText("HTTP 401");
+  await expect(card(page).getByTestId("check-message")).toHaveText(
+    "Rejected (HTTP 401) — the key is expired, revoked or mistyped.",
+  );
 });
 
 test("Setup wizard: an invalid key → no 'continue', a clear reason; a good key goes on", async ({ page }) => {
@@ -170,7 +174,9 @@ test("Setup wizard: an invalid key → no 'continue', a clear reason; a good key
   await page.getByLabel("Key").fill("sk-ant-oat01-bad");
   await page.getByRole("button", { name: /Save & continue/ }).click();
 
-  await expect(page.getByText(/The key did not work: Rejected the key \(HTTP 401\)/)).toBeVisible({ timeout: 30_000 });
+  const keyError = page.getByTestId("setup-key-error");
+  await expect(keyError).toContainText("The key did not work.", { timeout: 30_000 });
+  await expect(keyError).toContainText("Rejected (HTTP 401) — the key is expired, revoked or mistyped.");
   await expect(page.getByRole("heading", { name: "Connect an LLM provider" })).toBeVisible();
   await expect(page.getByRole("button", { name: /Save & continue/ })).toBeDisabled();
 

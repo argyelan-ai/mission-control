@@ -8,12 +8,15 @@
 //
 // Colour carries the state once (the dot); words stay neutral so a failure
 // is not signalled twice (DESIGN K6). The reason of a failure follows on its
-// own line, short and secret-free (the backend scrubs it).
-import { useEffect, useState } from "react";
+// own line, worded from the backend's reason code in the UI language
+// (<CheckReason>, lib/checkReason). The server's English free text appears
+// only for an unknown reason, folded away as a detail.
+import { useEffect, useState, type CSSProperties } from "react";
 import { useTranslations } from "next-intl";
 import { Loader2 } from "lucide-react";
 import type { ConfigCheckItem } from "@/lib/types";
 import { ageBucket, currentAgeSeconds } from "@/lib/configChecks";
+import { checkReasonMessage } from "@/lib/checkReason";
 import { StatusDot } from "@/components/shared/StatusDot";
 
 type Phase = "running" | "ok" | "fail" | "never" | "changed" | "notTestable" | "notSet";
@@ -45,6 +48,44 @@ export function CheckAge({ item }: { item: ConfigCheckItem }) {
   if (age == null) return null;
   const { key, n } = ageBucket(age);
   return <span data-testid="check-age">{t(`age.${key}`, { n })}</span>;
+}
+
+/** The reason of a result in the UI language. For `unknown`, the server's
+ *  free text (English, scrubbed) sits in a fold below — never in the line. */
+export function CheckReason({
+  item,
+  detail: detailText,
+  testId = "check-message",
+  className,
+  style,
+}: {
+  item: ConfigCheckItem | undefined | null;
+  /** Free text for the fold of an unknown reason (default: item.message) —
+   *  e.g. the older test button's own answer. */
+  detail?: string | null;
+  testId?: string;
+  className?: string;
+  style?: CSSProperties;
+}) {
+  const t = useTranslations("checks");
+  const reason = checkReasonMessage(item);
+  if (!reason) return null;
+  const detail = reason.code === "unknown" ? (detailText ?? item?.message) : null;
+  return (
+    <div data-testid={testId} data-reason={reason.code} className={className} style={style}>
+      <span>{t(`reason.${reason.key}`, reason.values)}</span>
+      {detail && (
+        <details className="mt-1" data-testid="check-detail">
+          <summary className="cursor-pointer" style={{ color: "var(--color-text-muted)" }}>
+            {t("details")}
+          </summary>
+          <span className="block mt-1 font-mono break-words" style={{ color: "var(--color-text-muted)" }}>
+            {detail}
+          </span>
+        </details>
+      )}
+    </div>
+  );
 }
 
 export function CheckStatus({
@@ -127,14 +168,12 @@ export function CheckStatus({
         </span>
         {testButton}
       </div>
-      {phase === "fail" && item?.message && (
-        <p
-          data-testid="check-message"
+      {phase === "fail" && (
+        <CheckReason
+          item={item}
           className="text-xs mt-1"
           style={{ color: "var(--color-text-secondary)", maxWidth: "72ch" }}
-        >
-          {item.message}
-        </p>
+        />
       )}
     </div>
   );

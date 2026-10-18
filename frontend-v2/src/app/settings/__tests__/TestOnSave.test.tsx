@@ -97,6 +97,8 @@ function check(over: Partial<ConfigCheckItem>): ConfigCheckItem {
     testable: true,
     cost: "free",
     state: "never_tested",
+    reason: null,
+    reason_params: {},
     message: null,
     duration_ms: null,
     checked_at: null,
@@ -178,7 +180,13 @@ describe("API keys: test on save + age", () => {
       return OPENAI_SECRET;
     });
     const run = vi.spyOn(api.configChecks, "run").mockResolvedValue({
-      item: check({ state: "fail", message: "OpenAI rejected the key (HTTP 401)", ...ago(0) }),
+      item: check({
+        state: "fail",
+        reason: "rejected",
+        reason_params: { status: 401 },
+        message: "OpenAI rejected the key (HTTP 401)",
+        ...ago(0),
+      }),
       notRunnable: null,
     });
 
@@ -263,6 +271,30 @@ describe("GitHub: test on save, age, removable token", () => {
     await waitFor(() => expect(status).toHaveBeenCalledWith(true));
     expect(await screen.findByText("Connection failed", undefined, { timeout: 5000 })).toBeInTheDocument();
     expect(screen.getByText("Bad credentials")).toBeInTheDocument();
+  });
+
+  it("a stored failed result is worded from its reason code, not the server's text", async () => {
+    vi.spyOn(api.repos, "githubStatus").mockResolvedValue(GH);
+    listChecks([
+      check({
+        kind: "github",
+        subject_id: "connection",
+        secret_key: "github_token",
+        cost: "rate_limited",
+        state: "fail",
+        reason: "rejected",
+        reason_params: {},
+        message: "HTTP 401: Bad credentials",
+        ...ago(60),
+      }),
+    ]);
+
+    renderPage();
+
+    expect(
+      await screen.findByText("Rejected — the key is expired, revoked or mistyped.", undefined, { timeout: 5000 }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Bad credentials/)).not.toBeInTheDocument();
   });
 
   it("a token saved in the app can be removed (confirm first)", async () => {

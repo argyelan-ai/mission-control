@@ -14,8 +14,9 @@ import { AUTH_TOKEN_KEY, api } from "@/lib/api";
 import { markWizardDone } from "@/lib/firstRun";
 import { AmbientBackground } from "@/components/layout/AmbientBackground";
 import { C, alpha } from "@/lib/colors";
+import { CheckReason } from "@/components/shared/CheckStatus";
 
-import type { GithubConfigUpdate, Priority, TaskStatus } from "@/lib/types";
+import type { ConfigCheckItem, GithubConfigUpdate, Priority, TaskStatus } from "@/lib/types";
 
 // Keep in sync with scripts/demo-seed.py (same crew, same board) until the
 // seed moves into one backend endpoint.
@@ -64,6 +65,8 @@ export default function SetupWizardPage() {
   // on. A rejected value cannot be sent on again unchanged.
   const [testingKey, setTestingKey] = useState(false);
   const [rejectedValue, setRejectedValue] = useState<string | null>(null);
+  // The failed check: its reason is worded in the UI language (CheckReason).
+  const [keyCheck, setKeyCheck] = useState<ConfigCheckItem | null>(null);
   const [storedKeys, setStoredKeys] = useState<Set<string>>(() => new Set());
 
   // Connect GitHub (step 3)
@@ -74,6 +77,7 @@ export default function SetupWizardPage() {
   const [githubSkipped, setGithubSkipped] = useState(false);
   const [githubError, setGithubError] = useState("");
   const [githubRejected, setGithubRejected] = useState<string | null>(null);
+  const [githubCheck, setGithubCheck] = useState<ConfigCheckItem | null>(null);
 
   // Demo board (step 4)
   const [seeding, setSeeding] = useState(false);
@@ -112,18 +116,19 @@ export default function SetupWizardPage() {
 
   /** Runs the registry check. null = the wizard may go on (it works, or no
    *  test procedure exists for it). Otherwise the reason, and whether the
-   *  value itself was rejected (then the same value cannot be sent again)
-   *  or only the test could not run (a retry may help). */
+   *  value itself was rejected (then the same value cannot be sent again;
+   *  `item` carries the reason code) or only the test could not run (a
+   *  retry may help). */
   async function checkSaved(
     kind: string,
     subjectId: string,
-  ): Promise<{ rejected: boolean; reason: string } | null> {
+  ): Promise<{ rejected: true; item: ConfigCheckItem } | { rejected: false; error: string } | null> {
     try {
       const { item, notRunnable } = await api.configChecks.run(kind, subjectId);
       if (notRunnable || item.state === "ok") return null;
-      return { rejected: true, reason: item.message || t("checkNoReason") };
+      return { rejected: true, item };
     } catch (err) {
-      return { rejected: false, reason: err instanceof Error ? err.message : String(err) };
+      return { rejected: false, error: err instanceof Error ? err.message : String(err) };
     }
   }
 
@@ -133,6 +138,7 @@ export default function SetupWizardPage() {
     if (!p || !value) return;
     setSaving(true);
     setError("");
+    setKeyCheck(null);
     try {
       // A retry after a rejection replaces the stored value instead of
       // creating the same key twice.
@@ -158,12 +164,12 @@ export default function SetupWizardPage() {
     setTestingKey(false);
     setSaving(false);
     if (problem) {
-      setError(
-        problem.rejected
-          ? t("keyRejected", { reason: problem.reason })
-          : t("checkFailed", { error: problem.reason }),
-      );
-      if (problem.rejected) setRejectedValue(value);
+      if (problem.rejected) {
+        setKeyCheck(problem.item);
+        setRejectedValue(value);
+      } else {
+        setError(t("checkFailed", { error: problem.error }));
+      }
       return;
     }
     setRejectedValue(null);
@@ -174,6 +180,7 @@ export default function SetupWizardPage() {
   async function saveGithub() {
     setGithubSaving(true);
     setGithubError("");
+    setGithubCheck(null);
     const payload: GithubConfigUpdate = {};
     if (githubOwner.trim()) payload.owner = githubOwner.trim();
     if (githubToken.trim()) payload.token = githubToken.trim();
@@ -187,12 +194,12 @@ export default function SetupWizardPage() {
     const problem = await checkSaved("github", "connection");
     setGithubSaving(false);
     if (problem) {
-      setGithubError(
-        problem.rejected
-          ? t("githubRejected", { reason: problem.reason })
-          : t("checkFailed", { error: problem.reason }),
-      );
-      if (problem.rejected) setGithubRejected(`${payload.owner ?? ""}\u0000${payload.token ?? ""}`);
+      if (problem.rejected) {
+        setGithubCheck(problem.item);
+        setGithubRejected(`${payload.owner ?? ""}\u0000${payload.token ?? ""}`);
+      } else {
+        setGithubError(t("checkFailed", { error: problem.error }));
+      }
       return;
     }
     setGithubRejected(null);
@@ -263,8 +270,27 @@ export default function SetupWizardPage() {
         transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
         className="w-full max-w-md px-4 relative z-10"
       >
-        {/* Step indicator */}
-        <div className="flex items-center justify-center gap-3 mb-8">
+        {/* Step indicator. On a phone the four labelled steps do not fit in
+            390 px: one line "Step 2 of 4 · Provider Key" plus a quiet bar. */}
+        <div className="md:hidden mb-6" data-testid="setup-steps-compact">
+          <p className="text-xs" style={{ color: "var(--color-text-secondary)" }}>
+            {t("stepOf", {
+              n: step,
+              total: steps.length,
+              label: steps.find((s) => s.n === step)?.label ?? "",
+            })}
+          </p>
+          <div className="mt-2 flex gap-2" aria-hidden="true">
+            {steps.map((s) => (
+              <span
+                key={s.n}
+                className="h-1 flex-1 rounded-full"
+                style={{ background: s.done || step === s.n ? C.accent : C.border }}
+              />
+            ))}
+          </div>
+        </div>
+        <div className="hidden md:flex items-center justify-center gap-3 mb-8" data-testid="setup-steps">
           {steps.map((s, i) => (
             <div key={s.n} className="flex items-center gap-3">
               <div className="flex items-center gap-2">
@@ -317,6 +343,7 @@ export default function SetupWizardPage() {
                   onChange={(e) => {
                     setSelected(Number(e.target.value));
                     setRejectedValue(null);
+                    setKeyCheck(null);
                     setError("");
                   }}
                   className={inputClasses}
@@ -352,8 +379,10 @@ export default function SetupWizardPage() {
                 />
               </div>
 
-              {error && (
-                <p
+              {(error || keyCheck) && (
+                <div
+                  role="alert"
+                  data-testid="setup-key-error"
                   className="text-xs rounded-lg px-3 py-2"
                   style={{
                     color: "var(--color-error)",
@@ -361,13 +390,20 @@ export default function SetupWizardPage() {
                     border: `1px solid ${alpha(C.error, 0.15)}`,
                   }}
                 >
-                  {error}
+                  {keyCheck ? (
+                    <>
+                      <span className="block font-medium">{t("keyRejected")}</span>
+                      <CheckReason item={keyCheck} className="mt-1" />
+                    </>
+                  ) : (
+                    error
+                  )}
                   {rejectedValue !== null && (
                     <span className="block mt-1" style={{ color: "var(--color-text-secondary)" }}>
                       {t("keyRejectedHint")}
                     </span>
                   )}
-                </p>
+                </div>
               )}
 
               <div className="flex items-center gap-3">
@@ -431,8 +467,10 @@ export default function SetupWizardPage() {
                 />
               </div>
 
-              {githubError && (
-                <p
+              {(githubError || githubCheck) && (
+                <div
+                  role="alert"
+                  data-testid="setup-github-error"
                   className="text-xs rounded-lg px-3 py-2"
                   style={{
                     color: "var(--color-error)",
@@ -440,8 +478,15 @@ export default function SetupWizardPage() {
                     border: `1px solid ${alpha(C.error, 0.15)}`,
                   }}
                 >
-                  {githubError}
-                </p>
+                  {githubCheck ? (
+                    <>
+                      <span className="block font-medium">{t("githubRejected")}</span>
+                      <CheckReason item={githubCheck} className="mt-1" />
+                    </>
+                  ) : (
+                    githubError
+                  )}
+                </div>
               )}
 
               <div className="flex items-center gap-3">
