@@ -35,6 +35,8 @@ const check = (over: Partial<ConfigCheckItem> = {}): ConfigCheckItem => ({
   testable: true,
   cost: "quota",
   state: "ok",
+  reason: "ok",
+  reason_params: {},
   message: "Claude accepted the key (HTTP 200).",
   duration_ms: 420,
   checked_at: minutesAgo(3),
@@ -94,11 +96,21 @@ describe("ClaudeAccountTab — status", () => {
 
   it("broken token: shows Claude's answer and makes Reconnect the main action", async () => {
     vi.spyOn(api.claudeAccount, "status").mockResolvedValue(
-      status({ check: check({ state: "fail", message: "Claude rejected the key (HTTP 401) — expired, revoked or mistyped?" }) })
+      status({
+        check: check({
+          state: "fail",
+          reason: "rejected",
+          reason_params: { status: 401 },
+          message: "Claude rejected the key (HTTP 401) — expired, revoked or mistyped?",
+        }),
+      })
     );
     renderTab();
     expect(await screen.findByTestId("claude-status-headline")).toHaveTextContent("Claude refused the token");
-    expect(screen.getByTestId("claude-check-message")).toHaveTextContent("HTTP 401");
+    // Worded from the reason code, not the server's English sentence.
+    const line = screen.getByTestId("claude-check-message");
+    expect(line).toHaveTextContent("Claude refuses the token (HTTP 401) — it is expired, revoked or mistyped.");
+    expect(line).not.toHaveTextContent("rejected the key");
     expect(screen.getByRole("button", { name: "Reconnect" })).toBeInTheDocument();
   });
 

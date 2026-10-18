@@ -2310,7 +2310,7 @@
       "staleBody": "Sie haben den Token beim Start bekommen. Ein Neustart gibt ihnen den neuen.",
       "staleBusy": "arbeitet an einer Aufgabe",
       "staleBusyNote": "Beschäftigte Agenten bleiben in Ruhe. Starte sie neu, wenn ihre Aufgabe fertig ist.",
-      "restartAgents": "{count, plural, one {# Agenten neu starten} other {# Agenten neu starten}}",
+      "restartAgents": "{count, plural, one {Neu starten (# Agent)} other {Neu starten (# Agenten)}}",
       "restartTitle": "Agenten neu starten?",
       "restartBody": "{count, plural, one {# Agent startet neu und meldet sich mit dem neuen Token an. Er ist in etwa einer Minute zurück.} other {# Agenten starten neu und melden sich mit dem neuen Token an. Sie sind in etwa einer Minute zurück.}}",
       "restartConfirm": "Neu starten",
@@ -2345,6 +2345,18 @@
         "save": "Speichern und prüfen",
         "saved": "Token gespeichert.",
         "saveFailed": "Token konnte nicht gespeichert werden."
+      },
+      "reasons": {
+        "rejected": "Claude lehnt den Token ab — er ist abgelaufen, widerrufen oder falsch eingegeben. Verbinde neu.",
+        "rejectedStatus": "Claude lehnt den Token ab (HTTP {status}) — er ist abgelaufen, widerrufen oder falsch eingegeben. Verbinde neu.",
+        "rate_limited": "Claude bremst gerade die Anfragen. Prüfe in einer Minute nochmals.",
+        "rate_limitedStatus": "Claude bremst gerade die Anfragen (HTTP {status}). Prüfe in einer Minute nochmals.",
+        "http_errorStatus": "Unerwartete Antwort von Claude (HTTP {status}). Prüfe später nochmals.",
+        "unreachable": "MC erreicht Claude nicht. Prüfe die Internetverbindung.",
+        "timeout": "Claude hat nicht rechtzeitig geantwortet. Prüfe später nochmals.",
+        "undecryptable": "MC kann den gespeicherten Token nicht entschlüsseln. Er wurde mit einem anderen SECRETS_ENCRYPTION_KEY gespeichert: diese .env wiederherstellen oder neu verbinden.",
+        "unknown": "Die Prüfung ist fehlgeschlagen. Den Grund kennt MC nicht.",
+        "details": "Details vom Server (englisch)"
       }
     }
   },

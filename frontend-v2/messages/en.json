@@ -2345,6 +2345,18 @@
         "save": "Save and test",
         "saved": "Token saved.",
         "saveFailed": "Could not save the token."
+      },
+      "reasons": {
+        "rejected": "Claude refuses the token — it is expired, revoked or mistyped. Connect again.",
+        "rejectedStatus": "Claude refuses the token (HTTP {status}) — it is expired, revoked or mistyped. Connect again.",
+        "rate_limited": "Claude is limiting requests right now. Test again in a minute.",
+        "rate_limitedStatus": "Claude is limiting requests right now (HTTP {status}). Test again in a minute.",
+        "http_errorStatus": "Unexpected answer from Claude (HTTP {status}). Test again later.",
+        "unreachable": "MC cannot reach Claude. Check the internet connection.",
+        "timeout": "Claude did not answer in time. Test again later.",
+        "undecryptable": "MC cannot decrypt the stored token. It was saved with another SECRETS_ENCRYPTION_KEY: restore that .env, or connect again.",
+        "unknown": "The test failed for a reason MC does not know.",
+        "details": "Details from the server"
       }
     }
   },

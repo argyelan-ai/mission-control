@@ -18,7 +18,7 @@ import { useLocale, useTranslations } from "next-intl";
 import { ExternalLink, Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
-import type { ClaudeAccountStatus, ClaudeLoginState } from "@/lib/types";
+import type { ClaudeAccountStatus, ClaudeLoginState, ConfigCheckItem } from "@/lib/types";
 import { C, STATUS_TEXT } from "@/lib/colors";
 import { timeAgo } from "@/lib/utils";
 import { StatusDot } from "@/components/shared/StatusDot";
@@ -61,6 +61,44 @@ function QuietButton({ danger, ...props }: React.ButtonHTMLAttributes<HTMLButton
       className="min-h-11 rounded-lg text-sm cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
       style={{ color: danger ? STATUS_TEXT.error : "var(--color-text-secondary)" }}
     />
+  );
+}
+
+// The check result comes with a reason code (backend config_checks
+// REASON_CODES); the card words it in the UI language. The server's English
+// text only appears for an unknown reason, folded away as a detail.
+const CHECK_REASONS = ["rejected", "rate_limited", "http_error", "unreachable", "timeout", "undecryptable"] as const;
+type CheckReasonCode = (typeof CHECK_REASONS)[number];
+const isCheckReason = (v: string | null | undefined): v is CheckReasonCode =>
+  !!v && (CHECK_REASONS as readonly string[]).includes(v);
+
+function CheckReasonLine({ check }: { check: ConfigCheckItem }) {
+  const t = useTranslations("settings.claude.reasons");
+  const code = isCheckReason(check.reason) ? check.reason : "unknown";
+  const status = typeof check.reason_params?.status === "number" ? check.reason_params.status : null;
+  const key =
+    code === "http_error"
+      ? status != null
+        ? "http_errorStatus"
+        : "unknown"
+      : (code === "rejected" || code === "rate_limited") && status != null
+      ? `${code}Status`
+      : code;
+  const detail = key === "unknown" ? check.message : null;
+  return (
+    <div className="text-sm" style={{ color: STATUS_TEXT.error }} data-testid="claude-check-message" data-reason={code}>
+      <span>{t(key, status != null ? { status } : {})}</span>
+      {detail && (
+        <details className="mt-1 text-xs" data-testid="claude-check-detail">
+          <summary className="cursor-pointer" style={{ color: "var(--color-text-muted)" }}>
+            {t("details")}
+          </summary>
+          <span className="block mt-1 font-mono break-words" style={{ color: "var(--color-text-muted)" }}>
+            {detail}
+          </span>
+        </details>
+      )}
+    </div>
   );
 }
 
@@ -497,11 +535,7 @@ export function ClaudeAccountTab() {
               )}
             </div>
 
-            {state === "fail" && check?.message && (
-              <p className="text-sm" style={{ color: STATUS_TEXT.error }} data-testid="claude-check-message">
-                {check.message}
-              </p>
-            )}
+            {state === "fail" && check && <CheckReasonLine check={check} />}
             <p
               className="text-xs"
               style={{ color: "var(--color-text-muted)", maxWidth: "72ch" }}
