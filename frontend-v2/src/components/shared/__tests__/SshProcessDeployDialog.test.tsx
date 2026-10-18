@@ -24,6 +24,7 @@ import {
   exclusiveNeighbours,
   pausedRuntimeDetail,
   slugify,
+  splitRecipeNotes,
   sshCapable,
 } from "../SshProcessDeployDialog";
 import { recipeStartStage } from "../RecipeStartProgress";
@@ -109,6 +110,9 @@ const mkRuntime = (overrides: Partial<Runtime> = {}): Runtime =>
     startup_notes: "",
     ui_order: 1,
     enabled: true,
+    // Default: a genuinely running row — individual tests override `state`
+    // to exercise the "old, dead runtime row" case (Befund 5).
+    state: "ready",
     ...overrides,
   }) as Runtime;
 
@@ -164,6 +168,49 @@ describe("ssh_process deploy", () => {
     ];
     expect(exclusiveNeighbours(runtimes, "host-1").map((r) => r.display_name)).toEqual(["A"]);
     expect(exclusiveNeighbours(runtimes, null)).toEqual([]);
+  });
+
+  // Befund 5 (18.10.2026): the live GLM-5.3-Flash-TensorFold deploy showed 5
+  // old, inactive runtime rows in this warning — enabled rows left over from
+  // earlier setups that are not actually running any more.
+  it("excludes an enabled-but-not-running row, and never a slot row", () => {
+    const runtimes = [
+      mkRuntime({
+        id: "live",
+        display_name: "Qwen General",
+        exclusive_memory: true,
+        state: "ready",
+        host: { id: "host-1" } as Runtime["host"],
+      }),
+      mkRuntime({
+        id: "stale",
+        display_name: "Old DeepSeek Setup",
+        exclusive_memory: true,
+        enabled: true,
+        state: "stopped",
+        host: { id: "host-1" } as Runtime["host"],
+      }),
+      mkRuntime({
+        id: "unknown-state",
+        display_name: "Never Probed",
+        exclusive_memory: true,
+        enabled: true,
+        state: "unknown",
+        host: { id: "host-1" } as Runtime["host"],
+      }),
+      mkRuntime({
+        id: "slot",
+        display_name: "Box Slot",
+        exclusive_memory: true,
+        enabled: true,
+        state: "ready",
+        is_slot: true,
+        host: { id: "host-1" } as Runtime["host"],
+      }),
+    ];
+    expect(exclusiveNeighbours(runtimes, "host-1").map((r) => r.display_name)).toEqual([
+      "Qwen General",
+    ]);
   });
 
   it("slugifies a display name", () => {
@@ -359,15 +406,46 @@ describe("ssh_process deploy", () => {
 
   // ── Two-box recipes (topology.nodes >= 2) ─────────────────────────────────
 
-  it("shows the recipe notes (licence) before anything is installed", async () => {
+  it("shows the short description up front, with the licence notes behind Details", async () => {
     vi.spyOn(api.hosts, "list").mockResolvedValue([mkHost()]);
     vi.spyOn(api.runtimes, "list").mockResolvedValue(mkRuntimes([]));
     vi.spyOn(api.localRegistry, "installLog").mockResolvedValue(mkLog());
     const install = vi.spyOn(api.localRegistry, "install");
-    renderDialog(mkRecipe({ notes: "LICENCE - NON-COMMERCIAL USE ONLY (CC BY-NC-ND drafter)" }));
+    renderDialog(
+      mkRecipe({ notes: "LICENCE - NON-COMMERCIAL USE ONLY (CC BY-NC-ND drafter)" }),
+    );
 
+    // The one-sentence description is visible right away — no click needed.
+    expect(await screen.findByText(/DwarfStar 4 engine/)).toBeInTheDocument();
+    // The long notes wall is not in the document until "Details" is opened.
+    expect(screen.queryByText(/NON-COMMERCIAL USE ONLY/)).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId("ssh-deploy-notes-toggle"));
     expect(await screen.findByText(/NON-COMMERCIAL USE ONLY/)).toBeInTheDocument();
     expect(install).not.toHaveBeenCalled();
+  });
+
+  it("splits a wall of recipe notes into paragraphs by section label", () => {
+    const tensorfoldNotes =
+      "LICENCE - NON-COMMERCIAL USE ONLY (CC BY-NC-ND drafter): the default drafter is " +
+      "licensed CC BY-NC-ND 4.0, so this recipe as shipped may only be used non-commercially. " +
+      "PREREQUISITES: 2x GB10 with 128 GB; cabled over QSFP. " +
+      "INSTALL (hours, once): MC writes the .env on the head and pulls the image. " +
+      "START: ./start.sh with PREPARE=0; ready when GET /v1/models answers on port 8000.";
+    const paragraphs = splitRecipeNotes(tensorfoldNotes);
+    expect(paragraphs).toHaveLength(4);
+    expect(paragraphs[0]).toMatch(/^LICENCE/);
+    expect(paragraphs[0]).toMatch(/non-commercially\.$/);
+    expect(paragraphs[1]).toMatch(/^PREREQUISITES:/);
+    expect(paragraphs[2]).toMatch(/^INSTALL/);
+    expect(paragraphs[3]).toMatch(/^START:/);
+  });
+
+  it("keeps a notes text with no section labels as a single paragraph", () => {
+    expect(splitRecipeNotes("Just a short, plain note with no headers.")).toEqual([
+      "Just a short, plain note with no headers.",
+    ]);
+    expect(splitRecipeNotes("")).toEqual([]);
   });
 
   it("installs a two-box recipe on its own port and starts it through the recipe switcher", async () => {

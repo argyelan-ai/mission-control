@@ -3071,6 +3071,7 @@
       "installPortLabel": "Port",
       "installEnvLabel": "Engine-Tuning",
       "installEnvHint": "Diese Werte schreibt MC in die compose.override.yaml auf der Box — sie überleben jeden Neustart und jeden Re-Deploy.",
+      "installNotesDetails": "Details",
       "installExclusiveWarning": "Der Start stoppt auf dieser Box: {names}. Zwei grosse Modelle passen nicht gleichzeitig hinein.",
       "installStart": "Installieren",
       "installRunning": "Installation läuft…",

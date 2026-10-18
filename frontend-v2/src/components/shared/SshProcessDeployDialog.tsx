@@ -31,6 +31,7 @@ import { useTranslations } from "next-intl";
 import {
   AlertTriangle,
   CheckCircle2,
+  ChevronDown,
   Download,
   Loader2,
   Rocket,
@@ -47,6 +48,7 @@ import type {
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { RecipeStartProgress } from "@/components/shared/RecipeStartProgress";
 import { pausedRuntimeDetail, type PausedRuntimeDetail } from "@/lib/recipeStart";
+import { Unfold } from "@/components/ui/Unfold";
 
 export { pausedRuntimeDetail };
 
@@ -112,14 +114,109 @@ export function slugify(value: string): string {
 }
 
 /**
+ * Ob eine Runtime-Zeile gerade tatsächlich läuft (nicht nur aktiviert ist).
+ * Dieselben drei Zustände, die auch der Status-Punkt im RuntimeDetailPanel
+ * als "an" zeigt (dotColor): ready/starting/warming. stopped/failed/unknown
+ * sind alte oder tote Zeilen — der Start-Pfad stoppt dort nichts.
+ */
+function isRuntimeActive(rt: Runtime): boolean {
+  return rt.state === "ready" || rt.state === "starting" || rt.state === "warming";
+}
+
+/**
  * Was beim Start dieser Runtime gestoppt würde: jede andere aktivierte
- * Runtime mit exclusive_memory auf derselben Box. Genau die Regel, die
- * runtime_manager.ensure_exclusive_host durchsetzt — hier nur vorgelesen.
+ * Runtime mit exclusive_memory auf derselben Box, die auch wirklich läuft.
+ * Genau die Regel, die runtime_manager.ensure_exclusive_host durchsetzt
+ * (es stoppt nur, was sein eigener Live-Check noch antworten sieht) — hier
+ * nur vorgelesen. Eine Slot-Zeile (is_slot) ist nie Verdrängungsopfer
+ * (ADR-078, derselbe Riegel wie im Backend) und eine alte, nicht mehr
+ * laufende Zeile gehört nicht in diese Warnung, auch wenn sie noch
+ * `enabled` ist.
  */
 export function exclusiveNeighbours(runtimes: Runtime[], hostId: string | null): Runtime[] {
   if (!hostId) return [];
   return runtimes.filter(
-    (rt) => rt.exclusive_memory === true && rt.enabled !== false && rt.host?.id === hostId,
+    (rt) =>
+      rt.exclusive_memory === true &&
+      rt.enabled !== false &&
+      rt.is_slot !== true &&
+      rt.host?.id === hostId &&
+      isRuntimeActive(rt),
+  );
+}
+
+/**
+ * Eine informelle Rezept-Beschreibung (Katalog-Englisch, nie übersetzt) in
+ * Absätze zerlegen statt als eine Textwand zu zeigen. Diese Notes-Texte
+ * folgen durchgehend derselben Konvention: GROSSBUCHSTABEN-Label + ":" markiert
+ * einen neuen Abschnitt (z.B. "PREREQUISITES:", "INSTALL (hours, once):").
+ * Ohne so ein Label bleibt der Text ein einziger Absatz — strikt besser als
+ * vorher (er steckt jetzt hinter "Details"), nie schlechter.
+ */
+export function splitRecipeNotes(notes: string): string[] {
+  const trimmed = notes.trim();
+  if (!trimmed) return [];
+  const header = "[A-Z][A-Z0-9/-]*(?:[ -][A-Z0-9/-]+)*(?:\\s*\\([^)]{0,60}\\))?:";
+  const re = new RegExp(`(?<=\\.)\\s+(?=${header})`, "g");
+  return trimmed
+    .split(re)
+    .map((p) => p.trim())
+    .filter(Boolean);
+}
+
+/**
+ * Die Katalog-Beschreibung im Deploy-Dialog: `description` (ein, zwei
+ * Sätze) steht immer da; `notes` — bei TensorFold eine ~2500-Zeichen-Wand
+ * aus Lizenz/Voraussetzungen/Install/Start — liegt geschlossen hinter
+ * "Details" und wird erst beim Aufklappen gemountet (Unfold, wie im
+ * Insights-Details-Muster). Beide Texte bleiben Katalog-Englisch — nur die
+ * Darstellung ändert sich.
+ */
+function RecipeDescription({ recipe }: { recipe: LocalRecipe }) {
+  const t = useTranslations("runtimes.localRegistry");
+  const [open, setOpen] = useState(false);
+  const paragraphs = recipe.notes ? splitRecipeNotes(recipe.notes) : [];
+  if (!recipe.description && paragraphs.length === 0) return null;
+
+  return (
+    <div className="flex flex-col gap-2">
+      {recipe.description && (
+        <p className="text-xs text-muted">{recipe.description}</p>
+      )}
+      {paragraphs.length > 0 && (
+        <div>
+          <button
+            type="button"
+            data-testid="ssh-deploy-notes-toggle"
+            onClick={() => setOpen((o) => !o)}
+            aria-expanded={open}
+            aria-controls="ssh-deploy-notes-panel"
+            className="inline-flex items-center gap-1 text-xs text-muted cursor-pointer"
+          >
+            {t("installNotesDetails")}
+            <ChevronDown
+              size={12}
+              aria-hidden
+              className="transition-transform"
+              style={open ? { transform: "rotate(180deg)" } : undefined}
+            />
+          </button>
+          <Unfold open={open}>
+            <div
+              id="ssh-deploy-notes-panel"
+              data-testid="ssh-deploy-notes"
+              className="flex flex-col gap-2 pt-2"
+            >
+              {paragraphs.map((p, i) => (
+                <p key={i} className="text-xs text-muted whitespace-pre-wrap">
+                  {p}
+                </p>
+              ))}
+            </div>
+          </Unfold>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -356,9 +453,7 @@ export function SshProcessDeployDialog({
         </div>
 
         <div className="flex flex-col gap-3 p-5 overflow-y-auto">
-          {recipe.notes && (
-            <p className="text-[11px] text-muted whitespace-pre-wrap">{recipe.notes}</p>
-          )}
+          <RecipeDescription recipe={recipe} />
 
           <label className="flex flex-col gap-1">
             <span className="label-sys label-sys--dim">{t("installHostLabel")}</span>
