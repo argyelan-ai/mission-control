@@ -11,6 +11,9 @@ set -euo pipefail
 #   ./backup.sh list [--full]            list backups (newest first) with a check;
 #                                        --full also reads every data archive (slow)
 #   ./backup.sh dir                      print the backup folder
+#   ./backup.sh project                  print the docker compose project name
+#                                        this run would use (debugging "service
+#                                        db is not running")
 #   ./backup.sh restore [file] [--yes]   restore the newest valid backup, or <file>
 #                       [--no-safety-copy]
 #
@@ -25,6 +28,15 @@ set -euo pipefail
 #   MC_INSTALL_DIR   the install folder (compose file, .env). Default: the
 #                    working directory when it holds an install, else the
 #                    folder of this script.
+#   COMPOSE_PROJECT_NAME
+#                    the docker compose project to talk to. Default: the name
+#                    a running "db" container for this install already has
+#                    (see compose_project_name() below), else docker compose's
+#                    own default — the install folder's name. Without this, a
+#                    backup run from a differently-named checkout of the repo
+#                    (a worktree, a renamed clone) cannot find its containers
+#                    ("service db is not running") because `docker compose`
+#                    guesses the project name from the current directory.
 #   MC_BACKUP_PASSPHRASE / MC_BACKUP_PASSPHRASE_FILE
 #                    passphrase (or a file holding it) that encrypts .env into
 #                    the backup (openssl, AES-256, PBKDF2). Without one, a
@@ -99,6 +111,42 @@ if ! [[ "$MIN_FREE_MB" =~ ^[0-9]+$ ]]; then
 fi
 
 cd "$REPO_DIR"   # docker compose needs the repo's compose file
+
+# The compose project name docker commands below are pinned to.
+# COMPOSE_PROJECT_NAME (env or .env, same precedence as any other setting
+# here) wins — same as plain `docker compose` would read it. Otherwise ask
+# Docker directly: a running "db" container whose compose working_dir label
+# matches this install tells us the project name compose actually used to
+# start it, which is what lets a backup started from a differently-named
+# checkout (a worktree, a renamed clone) still find its containers. Last
+# resort: docker compose's own default when nothing is running yet — the
+# install folder's name, lowercased and stripped of characters compose does
+# not allow in a project name.
+compose_project_name() {
+    local name
+    name="$(cfg COMPOSE_PROJECT_NAME "")"
+    if [[ -n "$name" ]]; then
+        printf '%s' "$name"
+        return 0
+    fi
+    name="$(docker ps -a \
+        --filter 'label=com.docker.compose.service=db' \
+        --filter "label=com.docker.compose.project.working_dir=$REPO_DIR" \
+        --format '{{.Label "com.docker.compose.project"}}' 2>/dev/null | head -n 1)" || true
+    if [[ -n "$name" ]]; then
+        printf '%s' "$name"
+        return 0
+    fi
+    name="$(basename "$REPO_DIR" | tr '[:upper:]' '[:lower:]' | tr -dc 'a-z0-9_-')"
+    [[ -z "$name" ]] && name="mission-control"
+    printf '%s' "$name"
+}
+
+PROJECT_NAME="$(compose_project_name)"
+
+# Every docker compose call goes through here, pinned to $PROJECT_NAME
+# instead of letting compose guess again from the current directory.
+dc() { docker compose -p "$PROJECT_NAME" "$@"; }
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
@@ -269,7 +317,7 @@ make_backup() {
     check_free_space
 
     echo "Backing up the database..."
-    if ! docker compose exec -T db pg_dump -U "$DB_USER" "$DB_NAME" | gzip > "$tmp_db"; then
+    if ! dc exec -T db pg_dump -U "$DB_USER" "$DB_NAME" | gzip > "$tmp_db"; then
         die "database dump failed — no backup written. Is the db container running?"
     fi
     check_dump "$tmp_db" || die "the new database dump failed its check — no backup written."
@@ -367,7 +415,7 @@ cmd_list() {
 
 running_services() {
     local svc running
-    running="$(docker compose ps --services --filter status=running 2>/dev/null || true)"
+    running="$(dc ps --services --filter status=running 2>/dev/null || true)"
     for svc in "${STOP_SERVICES[@]}"; do
         grep -qx -- "$svc" <<<"$running" && printf '%s\n' "$svc"
     done
@@ -475,16 +523,16 @@ cmd_restore() {
     if [[ -n "$stopped" ]]; then
         echo "Stopping $(tr '\n' ' ' <<<"$stopped")..."
         # shellcheck disable=SC2086
-        docker compose stop $stopped >/dev/null
+        dc stop $stopped >/dev/null
     fi
 
     # 4. Recreate the database and load the dump in one transaction.
     echo "Recreating the database..."
-    docker compose exec -T db psql -U "$DB_USER" -d postgres --quiet -v ON_ERROR_STOP=1 \
+    dc exec -T db psql -U "$DB_USER" -d postgres --quiet -v ON_ERROR_STOP=1 \
         -c "DROP DATABASE IF EXISTS $DB_NAME WITH (FORCE);" \
         -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;"
     echo "Loading the dump..."
-    gzip -dc "$file" | docker compose exec -T db psql -U "$DB_USER" -d "$DB_NAME" \
+    gzip -dc "$file" | dc exec -T db psql -U "$DB_USER" -d "$DB_NAME" \
         --quiet -v ON_ERROR_STOP=1 --single-transaction >/dev/null
     echo "Database restored from: $file"
 
@@ -517,7 +565,7 @@ cmd_restore() {
             new_pw="$(env_value DB_PASSWORD "$new_env")"
             if [[ -n "$new_pw" && "$new_pw" != "$old_pw" ]]; then
                 printf "ALTER ROLE %s PASSWORD '%s';\n" "$DB_USER" "${new_pw//\'/\'\'}" \
-                    | docker compose exec -T db psql -U "$DB_USER" -d postgres --quiet -v ON_ERROR_STOP=1 >/dev/null
+                    | dc exec -T db psql -U "$DB_USER" -d postgres --quiet -v ON_ERROR_STOP=1 >/dev/null
                 echo "Database password updated to the restored DB_PASSWORD."
             fi
             env_changed=1
@@ -536,7 +584,7 @@ cmd_restore() {
     if [[ -n "$stopped" ]]; then
         echo "Starting $(tr '\n' ' ' <<<"$stopped")..."
         # shellcheck disable=SC2086
-        docker compose start $stopped >/dev/null
+        dc start $stopped >/dev/null
     fi
     [[ -n "$safety_file" ]] && echo "Previous state kept in: $safety_file"
     echo "Done."
@@ -546,7 +594,8 @@ case "${1:-}" in
     ""|backup) cmd_backup ;;
     list) shift; cmd_list "$@" ;;
     dir) printf '%s\n' "$BACKUP_DIR" ;;
+    project) printf '%s\n' "$PROJECT_NAME" ;;
     restore) shift; cmd_restore "$@" ;;
     -h|--help|help) awk 'NR > 3 && /^#/ { sub(/^# ?/, ""); print; next } NR > 3 { exit }' "$0" ;;
-    *) die "unknown command: $1 (use: backup, list, dir, restore)" ;;
+    *) die "unknown command: $1 (use: backup, list, dir, project, restore)" ;;
 esac
