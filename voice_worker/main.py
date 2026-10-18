@@ -88,12 +88,19 @@ from jarvis_core.persona import (
 from jarvis_core.voice_greeting import build_greeting, track_latency
 from jarvis_core.voice_provider import (
     VoiceChoice,
+    apply_vault_keys,
+    key_env_snapshot,
     resolve_live_backend_model,
     resolve_voice_choice,
 )
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("voice_worker")
+
+# The provider keys from this container's env, as started. A key saved in the
+# MC vault overrides them per call (entrypoint -> apply_vault_keys); when it
+# is removed again, these come back.
+_BASELINE_KEY_ENV = key_env_snapshot(os.environ)
 
 # GPT-Live-Plugin (ADR-083) kommt aus livekit-plugins-openai >= 1.8.1, gepinnt
 # in voice_worker/requirements.txt. Import-Fehler wird trotzdem abgefangen
@@ -637,6 +644,11 @@ async def entrypoint(ctx: JobContext) -> None:
     # ohne Container-Neustart ab dem naechsten Anruf. Fail-soft: mc_config
     # bleibt None bei Backend-Ausfall, resolve_voice_choice faellt dann auf die
     # Env-Defaults zurueck (raist nur, wenn wirklich kein API-Key existiert).
+    # Keys saved in the MC vault win over this container's env (ADR-093);
+    # without one the env the container started with stays in place.
+    apply_vault_keys(
+        await mc_client.voice_credentials(), env=os.environ, baseline=_BASELINE_KEY_ENV
+    )
     mc_config = await mc_client.voice_config()
     voice_choice = resolve_voice_choice(mc_config)
 

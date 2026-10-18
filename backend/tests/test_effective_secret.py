@@ -418,3 +418,41 @@ def test_worker_entrypoint_applies_vault_keys_before_choosing_a_provider():
     assert "mc_client.voice_credentials()" in body
     assert "apply_vault_keys(" in body
     assert body.index("apply_vault_keys(") < body.index("resolve_voice_choice(")
+
+
+# ── the worker's fetch is fail-soft (jarvis_core/mc_client.py) ───────────
+
+
+def _load_mc_client():
+    import importlib.util
+
+    path = Path(__file__).resolve().parents[2] / "jarvis_core" / "mc_client.py"
+    spec = importlib.util.spec_from_file_location("voice_mc_client_creds", path)
+    mod = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _resp(status: int, body=None):
+    from unittest.mock import MagicMock
+
+    r = MagicMock()
+    r.status_code = status
+    r.json = MagicMock(return_value=body)
+    return r
+
+
+async def test_worker_fetch_returns_the_vault_keys():
+    mc = _load_mc_client()
+    mc._client.get = AsyncMock(return_value=_resp(200, {"keys": {"OPENAI_API_KEY": VAULT_KEY}}))
+    assert await mc.voice_credentials() == {"OPENAI_API_KEY": VAULT_KEY}
+    assert mc._client.get.await_args.args[0] == "/api/v1/agent/voice/credentials"
+
+
+async def test_worker_fetch_backend_error_means_keep_env():
+    mc = _load_mc_client()
+    mc._client.get = AsyncMock(return_value=_resp(403, {"detail": "no"}))
+    assert await mc.voice_credentials() is None
+    mc._client.get = AsyncMock(side_effect=httpx.ConnectError("down"))
+    assert await mc.voice_credentials() is None

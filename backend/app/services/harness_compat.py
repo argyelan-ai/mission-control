@@ -81,9 +81,21 @@ HARNESS_PROTOCOLS: dict[str, frozenset[str]] = {
     # jarvis is the voice concierge, not a CLI harness: it speaks realtime
     # speech-to-speech to one cloud provider. Its runtime rows are display
     # anchors that carry WHICH provider, nothing else — the voice-worker reads
-    # the binding per call and holds the API keys in its own env (ADR-082).
+    # the binding per call; its API keys come from its own env or, when the
+    # operator saved one in the MC vault, from /agent/voice/credentials
+    # (ADR-082, ADR-093).
     "jarvis": frozenset({"voice"}),
 }
+
+
+def is_voice_harness(harness: str | None) -> bool:
+    """The voice worker's own agent (the harness that speaks "voice").
+
+    The only agent allowed to read its voice binding and its provider keys
+    (agent_scoped ``/voice/*``). A registry lookup, so a second voice harness
+    is a new ``HARNESS_PROTOCOLS`` entry, not a new string comparison.
+    """
+    return "voice" in HARNESS_PROTOCOLS.get((harness or "").strip(), frozenset())
 
 
 def runtime_protocol(runtime: Runtime | None) -> str | None:

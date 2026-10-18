@@ -414,6 +414,27 @@ async def voice_config() -> dict[str, Any] | None:
         return None
 
 
+async def voice_credentials() -> dict[str, str] | None:
+    """GET /api/v1/agent/voice/credentials — provider keys saved in the MC vault.
+
+    Called per call right before the provider is chosen, so a key saved or
+    replaced in the app works from the next call on, without a restart.
+    Returns ``{env_name: value}`` (empty = nothing in the vault, use env), or
+    None when the backend did not answer — the caller then keeps its env.
+    Never logs the response body.
+    """
+    try:
+        resp = await _client.get("/api/v1/agent/voice/credentials", timeout=3.0)
+        if resp.status_code != 200:
+            logger.warning("voice_credentials fetch failed: HTTP %s", resp.status_code)
+            return None
+        keys = (resp.json() or {}).get("keys") or {}
+        return {str(k): str(v) for k, v in keys.items() if isinstance(v, str)}
+    except Exception as e:  # noqa: BLE001 — fail-soft, Jarvis darf nicht verstummen
+        logger.warning("voice_credentials fetch failed: %s", type(e).__name__)
+        return None
+
+
 async def report_voice_unsupported(provider: str, model: str | None, api: str) -> None:
     """POST /api/v1/agent/voice/unsupported-model — macht einen stillen
     Fehlschlag laut (ADR-082 Follow-up).

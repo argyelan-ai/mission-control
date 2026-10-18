@@ -105,6 +105,11 @@ async def test_start_skips_when_team_chat_on_but_unconfigured(bot, monkeypatch):
 # ── Produktions-Transkriber ist an dieselbe STT-Kette gebunden ────────────
 
 
-def test_voice_transcriber_none_without_openai_key(bot, monkeypatch):
+@pytest.mark.asyncio
+async def test_voice_transcriber_none_without_openai_key(bot, monkeypatch):
+    from tests.conftest import test_engine
+
+    monkeypatch.setattr("app.database.engine", test_engine)  # empty vault
     monkeypatch.setattr(settings, "openai_api_key", "", raising=False)
-    assert bot._voice_transcriber() is None
+    monkeypatch.setattr(settings, "stt_base_url", "", raising=False)
+    assert await bot._voice_transcriber() is None

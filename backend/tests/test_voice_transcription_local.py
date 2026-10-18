@@ -20,6 +20,15 @@ from app.services.voice_transcription import get_voice_transcriber
 
 
 @pytest.fixture(autouse=True)
+def _vault_is_the_empty_test_db(monkeypatch):
+    """The key is read vault-first (effective_secret); point that read at the
+    empty test DB so these tests state their world through env alone."""
+    from tests.conftest import test_engine
+
+    monkeypatch.setattr("app.database.engine", test_engine)
+
+
+@pytest.fixture(autouse=True)
 def _reset_settings():
     """Each test states its own STT world; none may leak into the next."""
     before = (settings.openai_api_key, settings.stt_base_url, settings.stt_model)
@@ -41,7 +50,7 @@ async def test_local_endpoint_works_without_an_openai_key():
     settings.stt_base_url = "http://host.docker.internal:8585/v1"
     settings.stt_model = ""
 
-    transcriber = get_voice_transcriber()
+    transcriber = await get_voice_transcriber()
     assert transcriber is not None, (
         "a configured local endpoint must give the channel ears — "
         "requiring a cloud key here defeats the purpose of local STT"
@@ -60,7 +69,7 @@ async def test_cloud_stays_the_default_when_no_local_url_is_set():
     settings.openai_api_key = "sk-test"
     settings.stt_base_url = ""
 
-    transcriber = get_voice_transcriber()
+    transcriber = await get_voice_transcriber()
     assert transcriber is not None
 
     with _capture() as call:
@@ -73,11 +82,12 @@ async def test_cloud_stays_the_default_when_no_local_url_is_set():
     )
 
 
-def test_no_key_and_no_local_url_still_means_no_ears():
+@pytest.mark.asyncio
+async def test_no_key_and_no_local_url_still_means_no_ears():
     """The old guard holds when NOTHING is configured."""
     settings.openai_api_key = ""
     settings.stt_base_url = ""
-    assert get_voice_transcriber() is None
+    assert await get_voice_transcriber() is None
 
 
 @pytest.mark.asyncio
@@ -88,7 +98,7 @@ async def test_stt_model_overrides_the_cloud_model_name():
     settings.stt_base_url = "http://host.docker.internal:8585/v1"
     settings.stt_model = "parakeet-tdt-0.6b-v3"
 
-    transcriber = get_voice_transcriber()
+    transcriber = await get_voice_transcriber()
     with _capture() as call:
         await transcriber(b"audio")
 
@@ -102,7 +112,7 @@ async def test_local_endpoint_wins_over_a_configured_cloud_key():
     settings.openai_api_key = "sk-test"
     settings.stt_base_url = "http://host.docker.internal:8585/v1"
 
-    transcriber = get_voice_transcriber()
+    transcriber = await get_voice_transcriber()
     with _capture() as call:
         await transcriber(b"audio")
 

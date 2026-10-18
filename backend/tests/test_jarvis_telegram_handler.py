@@ -73,14 +73,19 @@ def _patch_brain(monkeypatch, text="Erledigt.", actions=None):
 # ── enabled gate ─────────────────────────────────────────────────────────
 
 
-def test_disabled_by_default(bot):
+@pytest.mark.asyncio
+async def test_disabled_by_default(bot):
     handler = JarvisTelegramHandler(bot)
     # No enable fixture → feature off → handler inert.
-    assert handler.enabled is False
+    assert await handler.is_enabled() is False
 
 
-def test_enabled_when_gated_on(bot, enable_jarvis):
-    assert JarvisTelegramHandler(bot).enabled is True
+@pytest.mark.asyncio
+async def test_enabled_when_gated_on(bot, enable_jarvis, monkeypatch):
+    from tests.conftest import test_engine
+
+    monkeypatch.setattr("app.database.engine", test_engine)  # empty vault -> env key
+    assert await JarvisTelegramHandler(bot).is_enabled() is True
 
 
 # ── chat_id gate (security) ──────────────────────────────────────────────

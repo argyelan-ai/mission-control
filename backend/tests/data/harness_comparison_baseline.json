@@ -1,6 +1,5 @@
 {
   "backend/app/models/agent.py": 1,
-  "backend/app/routers/agent_scoped.py": 2,
   "backend/app/routers/agents.py": 1,
   "backend/app/routers/internal.py": 8,
   "backend/app/services/acp_chat_transport.py": 2,

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Mapping, MutableMapping
 from dataclasses import dataclass
 
 logger = logging.getLogger("jarvis_core.voice_provider")
@@ -71,6 +72,39 @@ class VoiceChoice:
             f"model={self.model or '<plugin-default>'} voice={self.voice} "
             f"api={self.api} source={self.source}"
         )
+
+
+def key_env_snapshot(env: Mapping[str, str]) -> dict[str, str]:
+    """The provider keys as this process found them at start — the
+    ``baseline`` for ``apply_vault_keys``."""
+    return {name: env.get(name, "") for name in _KEY_ENV.values()}
+
+
+def apply_vault_keys(
+    vault_keys: dict[str, str] | None,
+    *,
+    env: MutableMapping[str, str],
+    baseline: Mapping[str, str],
+) -> None:
+    """Vault first, the worker's own env as fallback — per call.
+
+    ``vault_keys`` is the ``keys`` object of GET /api/v1/agent/voice/credentials
+    (env var name -> value, only keys the operator saved in the MC vault).
+    ``baseline`` is the env this process was started with. For every provider
+    key: a vault value wins; otherwise the baseline value comes back, so a key
+    removed from the vault falls back to ``.env`` instead of lingering. ``None``
+    (backend unreachable) leaves the env as it is — Jarvis must not go silent
+    because MC is down. Names outside ``_KEY_ENV`` are ignored: nothing else
+    in the environment can be set through this path.
+    """
+    if vault_keys is None:
+        return
+    for name in _KEY_ENV.values():
+        value = (vault_keys.get(name) or "").strip() or (baseline.get(name) or "").strip()
+        if value:
+            env[name] = value
+        else:
+            env.pop(name, None)
 
 
 def _has_key(provider: str, env: dict[str, str]) -> bool:
