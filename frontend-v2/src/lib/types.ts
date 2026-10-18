@@ -1199,6 +1199,35 @@ export interface ConfigCheckRunResult {
   notRunnable: "not_configured" | "not_testable" | null;
 }
 
+export interface ClaudeLoginState {
+  state: "idle" | "starting" | "waiting_for_code" | "verifying" | "connected" | "failed";
+  url: string | null;
+  /** A code (image_unavailable, setup_token_failed, timeout, code_rejected,
+   *  store_failed, saved_not_accepted) — the card words it via i18n. */
+  error: string | null;
+}
+
+export interface ClaudeStaleAgent {
+  id: string;
+  name: string;
+  busy: boolean;
+  started_at: string;
+}
+
+/** GET /api/v1/claude-account — the Claude account card. */
+export interface ClaudeAccountStatus {
+  configured: boolean;
+  /** .env / docker/.env.shared still holds a token the agents fall back to
+   *  when MC has none (yes/no only, never the value). */
+  env_fallback: boolean;
+  token_updated_at: string | null;
+  check: ConfigCheckItem | null;
+  claude_agents: number;
+  host_agents: number;
+  stale_agents: ClaudeStaleAgent[];
+  login: ClaudeLoginState;
+}
+
 export interface Credential {
   id: string;
   name: string;

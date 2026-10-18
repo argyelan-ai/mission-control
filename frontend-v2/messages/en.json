@@ -1772,7 +1772,8 @@
       "telegram": "Telegram",
       "aiProviders": "AI providers",
       "nightShift": "Night shift",
-      "appearance": "Appearance"
+      "appearance": "Appearance",
+      "claude": "Claude"
     },
     "security": {
       "title": "Security",
@@ -1894,7 +1895,9 @@
       "delete": "Delete",
       "telegramManagedHint": "Telegram tokens are managed in the Telegram section, together with the connection test and the function toggles.",
       "goToTelegram": "Go to Telegram",
-      "cancel": "Cancel"
+      "cancel": "Cancel",
+      "claudeManagedHint": "Claude account is managed in the Claude section.",
+      "goToClaude": "Go to Claude"
     },
     "github": {
       "title": "GitHub",
@@ -2277,6 +2280,86 @@
     "phoneList": {
       "label": "Settings sections",
       "back": "Back to Settings"
+    },
+    "claude": {
+      "title": "Claude",
+      "intro": "The Claude Pro or Max subscription your Claude agents sign in with. One token for all of them, stored encrypted in MC.",
+      "statusNotConnected": "Not connected",
+      "statusOk": "Connected · tested {ago}",
+      "statusNeverTested": "Not tested yet",
+      "statusFail": "Claude refused the token",
+      "statusCheckFailed": "Test failed",
+      "notConnectedHint": "Claude agents cannot start until an account is connected.",
+      "statusEnvFallback": "Signed in through .env",
+      "envFallbackHint": "Your Claude agents sign in with the token in the .env file. MC cannot test or replace it there. Connect here to keep the token in MC; it then takes over from the .env one.",
+      "envAlsoSet": "The .env file holds a token too. It only counts if the token here is removed.",
+      "tokenSaved": "Token saved {ago}. Tokens from claude setup-token last one year.",
+      "testCostHint": "A test sends one tiny request to Claude and uses a little of your plan.",
+      "testNow": "Test now",
+      "testing": "Testing…",
+      "testOk": "Claude answers.",
+      "testFailed": "Claude refused the token.",
+      "testCheckFailed": "The test failed.",
+      "connect": "Connect Claude",
+      "reconnect": "Reconnect",
+      "disconnect": "Disconnect",
+      "disconnectTitle": "Disconnect Claude?",
+      "disconnectBody": "MC deletes the stored token. Running agents keep the old one until they restart; after that, Claude agents cannot start until you connect again.",
+      "disconnectBodyEnv": "MC deletes the token stored here. Your .env file also holds a token: after their next restart, your Claude agents sign in with that one. To stop them completely, also delete CLAUDE_CODE_OAUTH_TOKEN from .env and docker/.env.shared.",
+      "disconnected": "Claude disconnected.",
+      "disconnectFailed": "Could not disconnect.",
+      "staleTitle": "{count, plural, one {# agent still uses the old token} other {# agents still use the old token}}",
+      "staleBody": "{count, plural, one {It got the token when it started. A restart gives it the new one.} other {They got the token when they started. A restart gives them the new one.}}",
+      "staleBusy": "working on a task",
+      "staleBusyNote": "Busy agents are left alone. Restart them once their task is done.",
+      "restartAgents": "{count, plural, one {Restart # agent} other {Restart # agents}}",
+      "restartTitle": "Restart agents?",
+      "restartBody": "{count, plural, one {# agent restarts and signs in with the new token. It is back in about a minute.} other {# agents restart and sign in with the new token. They are back in about a minute.}}",
+      "restartConfirm": "Restart",
+      "restarted": "{count, plural, one {# agent restarted.} other {# agents restarted.}}",
+      "restartFailed": "Could not restart {name}.",
+      "hostNote": "{count, plural, one {# agent runs directly on this computer and reads the token from .env — this page does not change it.} other {# agents run directly on this computer and read the token from .env — this page does not change them.}}",
+      "login": {
+        "starting": "Starting the Claude sign-in…",
+        "step1": "Open the Claude sign-in page",
+        "step1Hint": "Sign in with the account that has your Claude plan. Claude then shows a code.",
+        "codeLabel": "Code from Claude",
+        "codePlaceholder": "Paste the code here",
+        "finish": "Finish",
+        "verifying": "Checking the code with Claude…",
+        "connected": "Claude is connected.",
+        "savedNotWorking": "The new token is saved, but Claude did not accept it.",
+        "startAgain": "Start again",
+        "cancel": "Cancel",
+        "failed": "The sign-in did not work.",
+        "errors": {
+          "image_unavailable": "Could not start the Claude agent image. Check that Docker is running and the mc-claude-agent image is there.",
+          "setup_token_failed": "Could not run claude setup-token in the agent image.",
+          "timeout": "The sign-in took too long. Start again.",
+          "code_rejected": "Claude did not accept the code. Start again and paste the whole code.",
+          "store_failed": "Claude created a token, but MC could not save it. Start again."
+        }
+      },
+      "paste": {
+        "toggle": "Paste a token instead",
+        "label": "Token from claude setup-token",
+        "hint": "Run claude setup-token on any computer with Claude Code and paste the token it prints.",
+        "save": "Save and test",
+        "saved": "Token saved.",
+        "saveFailed": "Could not save the token."
+      },
+      "reasons": {
+        "rejected": "Expired, revoked or mistyped. Connect again.",
+        "rejectedStatus": "Expired, revoked or mistyped (HTTP {status}). Connect again.",
+        "rate_limited": "Claude is limiting requests right now. Test again in a minute.",
+        "rate_limitedStatus": "Claude is limiting requests right now (HTTP {status}). Test again in a minute.",
+        "http_errorStatus": "Unexpected answer from Claude (HTTP {status}). Test again later.",
+        "unreachable": "MC cannot reach Claude. Check the internet connection.",
+        "timeout": "Claude did not answer in time. Test again later.",
+        "undecryptable": "MC cannot decrypt the stored token. It was saved with another SECRETS_ENCRYPTION_KEY: restore that .env, or connect again.",
+        "unknown": "The test failed for a reason MC does not know.",
+        "details": "Details from the server"
+      }
     }
   },
   "skills": {
