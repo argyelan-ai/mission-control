@@ -39,6 +39,9 @@ import type {
   SkillsResponse,
   SlackConnectionResult,
   ChannelSettingsResponse,
+  ConfigCheckItem,
+  ConfigCheckRunResult,
+  ConfigChecksResponse,
   TelegramConnectionResult,
   AiProviderSettingsResponse,
   HfConnectionResult,
@@ -1736,6 +1739,43 @@ export const api = {
     // Phase 31 / OCS-15: secrets.syncToGateway removed — Phase 29 deleted
     // the gateway sync route; LLM-Provider-Keys now live per-runtime via
     // `runtime_manager.build_runtime_env()`.
+  },
+
+  // ── Config checks (one registry for every "test this setting", ADR-093) ────
+  configChecks: {
+    list: (kind?: string) =>
+      request<ConfigChecksResponse>(
+        `/api/v1/config-checks${kind ? `?kind=${encodeURIComponent(kind)}` : ""}`,
+      ),
+    get: (kind: string, subjectId: string) =>
+      request<ConfigCheckItem>(
+        `/api/v1/config-checks/${encodeURIComponent(kind)}/${encodeURIComponent(subjectId)}`,
+      ),
+    /** Runs the registry procedure now and stores the result. A thing that
+     *  cannot run (no value / no procedure) answers 409 with its item — that is
+     *  a state to show, not an error. */
+    run: async (kind: string, subjectId: string): Promise<ConfigCheckRunResult> => {
+      try {
+        const item = await request<ConfigCheckItem>(
+          `/api/v1/config-checks/${encodeURIComponent(kind)}/${encodeURIComponent(subjectId)}/run`,
+          { method: "POST" },
+        );
+        return { item, notRunnable: null };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "";
+        if (msg.startsWith("API 409: ")) {
+          try {
+            const detail = JSON.parse(msg.slice("API 409: ".length))?.detail;
+            if (detail?.item && (detail.code === "not_configured" || detail.code === "not_testable")) {
+              return { item: detail.item as ConfigCheckItem, notRunnable: detail.code };
+            }
+          } catch {
+            /* not the registry's 409 shape — rethrow below */
+          }
+        }
+        throw err;
+      }
+    },
   },
 
   // ── Slack (team chat channel; Socket Mode) ─────────────────────────────────

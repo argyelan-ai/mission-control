@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { api } from "@/lib/api";
 
@@ -36,6 +36,31 @@ const PROVIDERS = [
   },
 ];
 
+function checkItem(
+  state: "ok" | "fail" | "never_tested",
+  kind = "secret",
+  over: Record<string, unknown> = {},
+) {
+  return {
+    kind,
+    subject_id: kind === "github" ? "connection" : "claude_code_oauth_token",
+    label: "x",
+    secret_key: null,
+    configured: true,
+    testable: true,
+    cost: "quota" as const,
+    state,
+    reason: state === "fail" ? "rejected" : state === "ok" ? "ok" : null,
+    reason_params: (state === "fail" ? { status: 401 } : {}) as Record<string, number>,
+    message: state === "fail" ? "Claude rejected the key (HTTP 401) — expired, revoked or mistyped?" : null,
+    duration_ms: 120,
+    checked_at: state === "never_tested" ? null : new Date().toISOString(),
+    age_seconds: state === "never_tested" ? null : 0,
+    value_changed: false,
+    ...over,
+  };
+}
+
 describe("First-Run-Wizard", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -54,6 +79,7 @@ describe("First-Run-Wizard", () => {
     mockAuthed();
     vi.spyOn(api.secrets, "providers").mockResolvedValue(PROVIDERS as never);
     const create = vi.spyOn(api.secrets, "create").mockResolvedValue({} as never);
+    const run = vi.spyOn(api.configChecks, "run").mockResolvedValue({ item: checkItem("ok"), notRunnable: null });
 
     render(<SetupWizardPage />);
     await screen.findByText("Connect an LLM provider");
@@ -62,6 +88,8 @@ describe("First-Run-Wizard", () => {
     await userEvent.click(screen.getByRole("button", { name: /Save & continue/ }));
 
     await screen.findByRole("heading", { name: "Connect GitHub" });
+    // Test on save (ADR-093 §2): the key is checked before the wizard moves on.
+    expect(run).toHaveBeenCalledWith("secret", "claude_code_oauth_token");
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({
         key: "claude_code_oauth_token",
@@ -116,6 +144,7 @@ describe("First-Run-Wizard", () => {
     mockAuthed();
     vi.spyOn(api.secrets, "providers").mockResolvedValue(PROVIDERS as never);
     const setGithub = vi.spyOn(api.repos, "setGithubConfig").mockResolvedValue({} as never);
+    vi.spyOn(api.configChecks, "run").mockResolvedValue({ item: checkItem("ok", "github"), notRunnable: null });
 
     render(<SetupWizardPage />);
     await screen.findByText("Connect an LLM provider");
@@ -128,5 +157,158 @@ describe("First-Run-Wizard", () => {
 
     await screen.findByText("Ready to get started");
     expect(setGithub).toHaveBeenCalledWith({ owner: "acme", token: "ghp_xyz123" });
+  });
+
+  it("an invalid key: no 'continue', a clear reason — then a corrected key passes", async () => {
+    mockAuthed();
+    vi.spyOn(api.secrets, "providers").mockResolvedValue(PROVIDERS as never);
+    const create = vi.spyOn(api.secrets, "create").mockResolvedValue({} as never);
+    const update = vi.spyOn(api.secrets, "update").mockResolvedValue({} as never);
+    const run = vi
+      .spyOn(api.configChecks, "run")
+      .mockResolvedValueOnce({ item: checkItem("fail"), notRunnable: null })
+      .mockResolvedValueOnce({ item: checkItem("ok"), notRunnable: null });
+
+    render(<SetupWizardPage />);
+    await screen.findByText("Connect an LLM provider");
+
+    await userEvent.type(screen.getByLabelText("Key"), "sk-ant-oat01-wrong");
+    await userEvent.click(screen.getByRole("button", { name: /Save & continue/ }));
+
+    const keyError = await screen.findByTestId("setup-key-error");
+    expect(keyError).toHaveTextContent("The key did not work.");
+    // Worded from the reason code, not the server's sentence (finding 1).
+    expect(keyError).toHaveTextContent("Rejected (HTTP 401) — the key is expired, revoked or mistyped.");
+    expect(keyError).not.toHaveTextContent("Claude rejected the key");
+    // Still on the key step, and the same key cannot be sent on again.
+    expect(screen.getByRole("heading", { name: "Connect an LLM provider" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Save & continue/ })).toBeDisabled();
+    // Skipping stays possible.
+    expect(screen.getByRole("button", { name: "Skip" })).toBeEnabled();
+
+    // A corrected key: the stored entry is replaced (not created twice) and tested again.
+    await userEvent.clear(screen.getByLabelText("Key"));
+    await userEvent.type(screen.getByLabelText("Key"), "sk-ant-oat01-right");
+    await userEvent.click(screen.getByRole("button", { name: /Save & continue/ }));
+
+    await screen.findByRole("heading", { name: "Connect GitHub" });
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(update).toHaveBeenCalledWith("claude_code_oauth_token", { value: "sk-ant-oat01-right" });
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it("a provider without a test procedure is saved and the wizard moves on", async () => {
+    mockAuthed();
+    vi.spyOn(api.secrets, "providers").mockResolvedValue(PROVIDERS as never);
+    vi.spyOn(api.secrets, "create").mockResolvedValue({} as never);
+    vi.spyOn(api.configChecks, "run").mockResolvedValue({
+      item: checkItem("never_tested", "secret", { testable: false }),
+      notRunnable: "not_testable",
+    });
+
+    render(<SetupWizardPage />);
+    await screen.findByText("Connect an LLM provider");
+    await userEvent.type(screen.getByLabelText("Key"), "some-key");
+    await userEvent.click(screen.getByRole("button", { name: /Save & continue/ }));
+
+    await screen.findByRole("heading", { name: "Connect GitHub" });
+  });
+
+  it("a test that cannot run blocks 'continue' with the reason, skip stays", async () => {
+    mockAuthed();
+    vi.spyOn(api.secrets, "providers").mockResolvedValue(PROVIDERS as never);
+    vi.spyOn(api.secrets, "create").mockResolvedValue({} as never);
+    vi.spyOn(api.configChecks, "run").mockRejectedValue(new Error("API 500: boom"));
+
+    render(<SetupWizardPage />);
+    await screen.findByText("Connect an LLM provider");
+    await userEvent.type(screen.getByLabelText("Key"), "sk-ant-oat01-xyz");
+    await userEvent.click(screen.getByRole("button", { name: /Save & continue/ }));
+
+    expect(await screen.findByText(/the test could not run: API 500: boom/)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Connect an LLM provider" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Skip" })).toBeEnabled();
+  });
+
+  it("GitHub step: a rejected token keeps the wizard on the step with GitHub's reason", async () => {
+    mockAuthed();
+    vi.spyOn(api.secrets, "providers").mockResolvedValue(PROVIDERS as never);
+    vi.spyOn(api.repos, "setGithubConfig").mockResolvedValue({} as never);
+    const run = vi.spyOn(api.configChecks, "run").mockResolvedValue({
+      item: checkItem("fail", "github", { message: "gh: Bad credentials (HTTP 401)", reason: "rejected", reason_params: {} }),
+      notRunnable: null,
+    });
+
+    render(<SetupWizardPage />);
+    await screen.findByText("Connect an LLM provider");
+    await userEvent.click(screen.getByRole("button", { name: "Skip" }));
+    await screen.findByRole("heading", { name: "Connect GitHub" });
+    await userEvent.type(screen.getByLabelText("Owner"), "acme");
+    await userEvent.type(screen.getByLabelText("Personal access token"), "ghp_bad");
+    await userEvent.click(screen.getByRole("button", { name: /Save & continue/ }));
+
+    const ghError = await screen.findByTestId("setup-github-error");
+    expect(ghError).toHaveTextContent("GitHub did not accept this.");
+    expect(ghError).toHaveTextContent("Rejected — the key is expired, revoked or mistyped.");
+    expect(ghError).not.toHaveTextContent("Bad credentials");
+    expect(run).toHaveBeenCalledWith("github", "connection");
+    expect(screen.getByRole("heading", { name: "Connect GitHub" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Save & continue/ })).toBeDisabled();
+  });
+
+  it("on a phone the step bar is one line: 'Step 2 of 4 · Provider Key'", async () => {
+    mockAuthed();
+    vi.spyOn(api.secrets, "providers").mockResolvedValue(PROVIDERS as never);
+    render(<SetupWizardPage />);
+    await screen.findByText("Connect an LLM provider");
+    const compact = screen.getByTestId("setup-steps-compact");
+    expect(compact).toHaveTextContent("Step 2 of 4 · Provider Key");
+    // The compact bar is the phone's; the labelled row only from md up.
+    expect(compact.className).toMatch(/(^|\s)md:hidden(\s|$)/);
+    expect(screen.getByTestId("setup-steps").className).toMatch(/(^|\s)hidden md:flex(\s|$)/);
+  });
+
+  it("a test that did not get through (unknown reason): server text folded, the same value may be retried", async () => {
+    mockAuthed();
+    vi.spyOn(api.secrets, "providers").mockResolvedValue(PROVIDERS as never);
+    vi.spyOn(api.repos, "setGithubConfig").mockResolvedValue({} as never);
+    vi.spyOn(api.configChecks, "run").mockResolvedValue({
+      item: checkItem("fail", "github", { message: "gh: something odd", reason: "unknown", reason_params: {} }),
+      notRunnable: null,
+    });
+
+    render(<SetupWizardPage />);
+    await screen.findByText("Connect an LLM provider");
+    await userEvent.click(screen.getByRole("button", { name: "Skip" }));
+    await screen.findByRole("heading", { name: "Connect GitHub" });
+    await userEvent.type(screen.getByLabelText("Owner"), "acme");
+    await userEvent.type(screen.getByLabelText("Personal access token"), "ghp_ok");
+    await userEvent.click(screen.getByRole("button", { name: /Save & continue/ }));
+
+    const ghError = await screen.findByTestId("setup-github-error");
+    expect(ghError).toHaveTextContent("GitHub is saved, but the test did not get through.");
+    expect(ghError).toHaveTextContent("The test failed for a reason MC does not know.");
+    expect(within(ghError).getByTestId("check-detail")).toHaveTextContent("gh: something odd");
+    expect(screen.getByRole("button", { name: /Save & continue/ })).toBeEnabled();
+  });
+
+  it("a key test that timed out does not lock the value: 'continue' can be tried again", async () => {
+    mockAuthed();
+    vi.spyOn(api.secrets, "providers").mockResolvedValue(PROVIDERS as never);
+    vi.spyOn(api.secrets, "create").mockResolvedValue({} as never);
+    vi.spyOn(api.configChecks, "run").mockResolvedValue({
+      item: checkItem("fail", "secret", { reason: "timeout", reason_params: {}, message: "ReadTimeout" }),
+      notRunnable: null,
+    });
+
+    render(<SetupWizardPage />);
+    await screen.findByText("Connect an LLM provider");
+    await userEvent.type(screen.getByLabelText("Key"), "sk-ant-oat01-xyz");
+    await userEvent.click(screen.getByRole("button", { name: /Save & continue/ }));
+
+    const keyError = await screen.findByTestId("setup-key-error");
+    expect(keyError).toHaveTextContent("The key is saved, but the test did not get through.");
+    expect(keyError).toHaveTextContent("No answer in time.");
+    expect(screen.getByRole("button", { name: /Save & continue/ })).toBeEnabled();
   });
 });

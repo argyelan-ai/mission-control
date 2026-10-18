@@ -1151,6 +1151,54 @@ export interface SecretEntry {
   updated_at: string | null;
 }
 
+// ── Config checks (Welle 2, ADR-093 §2 "test on save") ──────────────────────
+// One row per thing the backend check registry can test (GET /config-checks).
+// Never carries key material — only state, a short scrubbed text and an age.
+
+export type ConfigCheckState = "ok" | "fail" | "never_tested";
+export type ConfigCheckCost = "free" | "rate_limited" | "quota";
+
+export interface ConfigCheckItem {
+  kind: string;
+  subject_id: string;
+  label: string;
+  /** The secret key this thing reads (lets a key field find its check). */
+  secret_key: string | null;
+  configured: boolean;
+  testable: boolean;
+  cost: ConfigCheckCost;
+  state: ConfigCheckState;
+  /** Why it ended this way — machine-readable, worded by the UI through
+   *  i18n (lib/checkReason). null while never tested. */
+  reason: string | null;
+  /** Values for the reason, e.g. `{status: 401}`. Viewers get numbers only. */
+  reason_params: Record<string, string | number | boolean>;
+  /** English free text from the server — shown only as the detail of an
+   *  `unknown` reason. Admin-only; null for viewers. */
+  message: string | null;
+  duration_ms: number | null;
+  checked_at: string | null;
+  age_seconds: number | null;
+  /** The stored value changed since the last test (state is then never_tested). */
+  value_changed: boolean;
+  /** Client-side: when this item arrived (ms), so the age can keep counting. */
+  received_at_ms?: number;
+}
+
+export interface ConfigChecksResponse {
+  kinds: { key: string; label: string; cost: ConfigCheckCost }[];
+  cost_hints: Record<ConfigCheckCost, string>;
+  /** The backend's closed list of reason codes (REASON_CODES). */
+  reason_codes?: string[];
+  items: ConfigCheckItem[];
+}
+
+/** Result of POST …/run: the stored item, or why it could not run (409). */
+export interface ConfigCheckRunResult {
+  item: ConfigCheckItem;
+  notRunnable: "not_configured" | "not_testable" | null;
+}
+
 export interface Credential {
   id: string;
   name: string;

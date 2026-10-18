@@ -14,8 +14,10 @@ import { AUTH_TOKEN_KEY, api } from "@/lib/api";
 import { markWizardDone } from "@/lib/firstRun";
 import { AmbientBackground } from "@/components/layout/AmbientBackground";
 import { C, alpha } from "@/lib/colors";
+import { CheckReason } from "@/components/shared/CheckStatus";
+import { isValueRejected } from "@/lib/checkReason";
 
-import type { GithubConfigUpdate, Priority, TaskStatus } from "@/lib/types";
+import type { ConfigCheckItem, GithubConfigUpdate, Priority, TaskStatus } from "@/lib/types";
 
 // Keep in sync with scripts/demo-seed.py (same crew, same board) until the
 // seed moves into one backend endpoint.
@@ -60,6 +62,13 @@ export default function SetupWizardPage() {
   const [saving, setSaving] = useState(false);
   const [keySaved, setKeySaved] = useState(false);
   const [error, setError] = useState("");
+  // Test on save (ADR-093 §2, S5): the key is checked before the wizard moves
+  // on. A rejected value cannot be sent on again unchanged.
+  const [testingKey, setTestingKey] = useState(false);
+  const [rejectedValue, setRejectedValue] = useState<string | null>(null);
+  // The failed check: its reason is worded in the UI language (CheckReason).
+  const [keyCheck, setKeyCheck] = useState<ConfigCheckItem | null>(null);
+  const [storedKeys, setStoredKeys] = useState<Set<string>>(() => new Set());
 
   // Connect GitHub (step 3)
   const [githubOwner, setGithubOwner] = useState("");
@@ -68,6 +77,8 @@ export default function SetupWizardPage() {
   const [githubSaved, setGithubSaved] = useState(false);
   const [githubSkipped, setGithubSkipped] = useState(false);
   const [githubError, setGithubError] = useState("");
+  const [githubRejected, setGithubRejected] = useState<string | null>(null);
+  const [githubCheck, setGithubCheck] = useState<ConfigCheckItem | null>(null);
 
   // Demo board (step 4)
   const [seeding, setSeeding] = useState(false);
@@ -104,43 +115,101 @@ export default function SetupWizardPage() {
     if (step === 4) void markWizardDone();
   }, [step]);
 
+  /** Runs the registry check. null = the wizard may go on (it works, or no
+   *  test procedure exists for it). Otherwise the reason, and whether the
+   *  value itself was rejected (then the same value cannot be sent again;
+   *  `item` carries the reason code) or only the test could not run (a
+   *  retry may help). */
+  async function checkSaved(
+    kind: string,
+    subjectId: string,
+  ): Promise<{ rejected: true; item: ConfigCheckItem } | { rejected: false; error: string } | null> {
+    try {
+      const { item, notRunnable } = await api.configChecks.run(kind, subjectId);
+      if (notRunnable || item.state === "ok") return null;
+      return { rejected: true, item };
+    } catch (err) {
+      return { rejected: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
   async function saveKey() {
     const p = providers[selected];
-    if (!p || !keyValue.trim()) return;
+    const value = keyValue.trim();
+    if (!p || !value) return;
     setSaving(true);
     setError("");
+    setKeyCheck(null);
     try {
-      await api.secrets.create({
-        key: p.key,
-        value: keyValue.trim(),
-        provider: p.provider,
-        label: p.label,
-        description: p.description,
-      });
-      setKeySaved(true);
-      setStep(3);
+      // A retry after a rejection replaces the stored value instead of
+      // creating the same key twice.
+      if (storedKeys.has(p.key)) {
+        await api.secrets.update(p.key, { value });
+      } else {
+        await api.secrets.create({
+          key: p.key,
+          value,
+          provider: p.provider,
+          label: p.label,
+          description: p.description,
+        });
+        setStoredKeys((prev) => new Set(prev).add(p.key));
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : t("saveFailed"));
-    } finally {
       setSaving(false);
+      return;
     }
+    setTestingKey(true);
+    const problem = await checkSaved("secret", p.key);
+    setTestingKey(false);
+    setSaving(false);
+    if (problem) {
+      if (problem.rejected) {
+        setKeyCheck(problem.item);
+        // Only a refused value is locked; a test that did not get through
+        // (timeout, network, rate limit) may be retried with the same value.
+        setRejectedValue(isValueRejected(problem.item) ? value : null);
+      } else {
+        setError(t("checkFailed", { error: problem.error }));
+      }
+      return;
+    }
+    setRejectedValue(null);
+    setKeySaved(true);
+    setStep(3);
   }
 
   async function saveGithub() {
     setGithubSaving(true);
     setGithubError("");
+    setGithubCheck(null);
+    const payload: GithubConfigUpdate = {};
+    if (githubOwner.trim()) payload.owner = githubOwner.trim();
+    if (githubToken.trim()) payload.token = githubToken.trim();
     try {
-      const payload: GithubConfigUpdate = {};
-      if (githubOwner.trim()) payload.owner = githubOwner.trim();
-      if (githubToken.trim()) payload.token = githubToken.trim();
       await api.repos.setGithubConfig(payload);
-      setGithubSaved(true);
-      setStep(4);
     } catch (err) {
       setGithubError(err instanceof Error ? err.message : t("saveFailed"));
-    } finally {
       setGithubSaving(false);
+      return;
     }
+    const problem = await checkSaved("github", "connection");
+    setGithubSaving(false);
+    if (problem) {
+      if (problem.rejected) {
+        setGithubCheck(problem.item);
+        setGithubRejected(
+          isValueRejected(problem.item) ? `${payload.owner ?? ""}\u0000${payload.token ?? ""}` : null,
+        );
+      } else {
+        setGithubError(t("checkFailed", { error: problem.error }));
+      }
+      return;
+    }
+    setGithubRejected(null);
+    setGithubSaved(true);
+    setStep(4);
   }
 
   async function seedDemo() {
@@ -206,8 +275,27 @@ export default function SetupWizardPage() {
         transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
         className="w-full max-w-md px-4 relative z-10"
       >
-        {/* Step indicator */}
-        <div className="flex items-center justify-center gap-3 mb-8">
+        {/* Step indicator. On a phone the four labelled steps do not fit in
+            390 px: one line "Step 2 of 4 · Provider Key" plus a quiet bar. */}
+        <div className="md:hidden mb-6" data-testid="setup-steps-compact">
+          <p className="text-xs" style={{ color: "var(--color-text-secondary)" }}>
+            {t("stepOf", {
+              n: step,
+              total: steps.length,
+              label: steps.find((s) => s.n === step)?.label ?? "",
+            })}
+          </p>
+          <div className="mt-2 flex gap-2" aria-hidden="true">
+            {steps.map((s) => (
+              <span
+                key={s.n}
+                className="h-1 flex-1 rounded-full"
+                style={{ background: s.done || step === s.n ? C.accent : C.border }}
+              />
+            ))}
+          </div>
+        </div>
+        <div className="hidden md:flex items-center justify-center gap-3 mb-8" data-testid="setup-steps">
           {steps.map((s, i) => (
             <div key={s.n} className="flex items-center gap-3">
               <div className="flex items-center gap-2">
@@ -257,7 +345,12 @@ export default function SetupWizardPage() {
                 <select
                   id="provider"
                   value={selected}
-                  onChange={(e) => setSelected(Number(e.target.value))}
+                  onChange={(e) => {
+                    setSelected(Number(e.target.value));
+                    setRejectedValue(null);
+                    setKeyCheck(null);
+                    setError("");
+                  }}
                   className={inputClasses}
                   style={inputStyle}
                 >
@@ -291,8 +384,10 @@ export default function SetupWizardPage() {
                 />
               </div>
 
-              {error && (
-                <p
+              {(error || keyCheck) && (
+                <div
+                  role="alert"
+                  data-testid="setup-key-error"
                   className="text-xs rounded-lg px-3 py-2"
                   style={{
                     color: "var(--color-error)",
@@ -300,19 +395,33 @@ export default function SetupWizardPage() {
                     border: `1px solid ${alpha(C.error, 0.15)}`,
                   }}
                 >
-                  {error}
-                </p>
+                  {keyCheck ? (
+                    <>
+                      <span className="block font-medium">
+                        {isValueRejected(keyCheck) ? t("keyRejected") : t("keyNotConfirmed")}
+                      </span>
+                      <CheckReason item={keyCheck} className="mt-1" />
+                    </>
+                  ) : (
+                    error
+                  )}
+                  {rejectedValue !== null && (
+                    <span className="block mt-1" style={{ color: "var(--color-text-secondary)" }}>
+                      {t("keyRejectedHint")}
+                    </span>
+                  )}
+                </div>
               )}
 
               <div className="flex items-center gap-3">
                 <button
                   onClick={saveKey}
-                  disabled={saving || !keyValue.trim()}
+                  disabled={saving || !keyValue.trim() || rejectedValue === keyValue.trim()}
                   className="flex-1 text-[var(--color-on-accent)] font-medium text-sm rounded-lg px-4 py-2.5 flex items-center justify-center gap-2 cursor-pointer transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
                   style={{ background: `linear-gradient(135deg, ${C.accent}, ${C.accentHover})` }}
                 >
                   {saving && <Loader2 className="animate-spin" size={14} />}
-                  {t("saveContinue")}
+                  {testingKey ? t("testingKey") : t("saveContinue")}
                 </button>
                 <button
                   onClick={() => setStep(3)}
@@ -365,8 +474,10 @@ export default function SetupWizardPage() {
                 />
               </div>
 
-              {githubError && (
-                <p
+              {(githubError || githubCheck) && (
+                <div
+                  role="alert"
+                  data-testid="setup-github-error"
                   className="text-xs rounded-lg px-3 py-2"
                   style={{
                     color: "var(--color-error)",
@@ -374,14 +485,27 @@ export default function SetupWizardPage() {
                     border: `1px solid ${alpha(C.error, 0.15)}`,
                   }}
                 >
-                  {githubError}
-                </p>
+                  {githubCheck ? (
+                    <>
+                      <span className="block font-medium">
+                        {isValueRejected(githubCheck) ? t("githubRejected") : t("githubNotConfirmed")}
+                      </span>
+                      <CheckReason item={githubCheck} className="mt-1" />
+                    </>
+                  ) : (
+                    githubError
+                  )}
+                </div>
               )}
 
               <div className="flex items-center gap-3">
                 <button
                   onClick={saveGithub}
-                  disabled={githubSaving || (!githubOwner.trim() && !githubToken.trim())}
+                  disabled={
+                    githubSaving ||
+                    (!githubOwner.trim() && !githubToken.trim()) ||
+                    githubRejected === `${githubOwner.trim()}\u0000${githubToken.trim()}`
+                  }
                   className="flex-1 text-[var(--color-on-accent)] font-medium text-sm rounded-lg px-4 py-2.5 flex items-center justify-center gap-2 cursor-pointer transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
                   style={{ background: `linear-gradient(135deg, ${C.accent}, ${C.accentHover})` }}
                 >

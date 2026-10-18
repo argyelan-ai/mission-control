@@ -15,6 +15,9 @@ import type {
 } from "@/lib/types";
 import { C, STATUS_TEXT } from "@/lib/colors";
 import { StatusDot } from "@/components/shared/StatusDot";
+import { CheckReason, CheckStatus } from "@/components/shared/CheckStatus";
+import { findCheck, refreshChecks, useConfigChecks } from "@/lib/configChecks";
+import type { ConfigCheckItem } from "@/lib/types";
 
 // Key names match the backend catalogs (routers/secrets.py PROVIDER_TEMPLATES
 // and services/channel_config.CHANNEL_SETTING_FIELDS).
@@ -235,7 +238,17 @@ function TokenField({
 
 // ── Bot status line ───────────────────────────────────────────────────────
 
-function BotStatusLine({ label, status }: { label: string; status: TelegramBotStatus | undefined }) {
+function BotStatusLine({
+  label,
+  status,
+  check,
+  testing,
+}: {
+  label: string;
+  status: TelegramBotStatus | undefined;
+  check: ConfigCheckItem | undefined;
+  testing: boolean;
+}) {
   const t = useTranslations("settings.telegram");
   const dot: "online" | "warning" | "error" | "idle" = !status || !status.token_set
     ? "idle"
@@ -261,11 +274,19 @@ function BotStatusLine({ label, status }: { label: string; status: TelegramBotSt
           {text}
         </span>
       </div>
-      {status?.error && (
+      {status?.token_set && !testing && <CheckStatus item={check} variant="age" className="pl-6" />}
+      {check?.state === "fail" && !testing ? (
+        <CheckReason
+          item={check}
+          detail={status?.error}
+          className="text-xs pl-6"
+          style={{ color: STATUS_TEXT.error }}
+        />
+      ) : status?.error ? (
         <p className="text-xs pl-6" style={{ color: STATUS_TEXT.error }}>
           {status.error}
         </p>
-      )}
+      ) : null}
     </div>
   );
 }
@@ -294,7 +315,13 @@ export function TelegramTab() {
     refetch,
   } = useQuery<TelegramConnectionResult>({
     queryKey: ["telegram-connection"],
-    queryFn: () => api.channels.telegramTestConnection(),
+    // A registry procedure (kind "telegram") that stores each bot's result —
+    // re-read the list so the ages below are the ones just written.
+    queryFn: async () => {
+      const result = await api.channels.telegramTestConnection();
+      void refreshChecks(queryClient);
+      return result;
+    },
     staleTime: 60_000,
     refetchOnWindowFocus: false,
     retry: false,
@@ -329,6 +356,7 @@ export function TelegramTab() {
     onSettled: () => setSavingSetting(null),
   });
 
+  const { data: checks } = useConfigChecks();
   const byKey = new Map((secrets ?? []).map((s) => [s.key, s]));
   const values = channelSettings?.values ?? {};
   const boolOf = (key: string, fallback: boolean) =>
@@ -362,8 +390,18 @@ export function TelegramTab() {
       <div className="space-y-4">
         {/* Status — both bots at a glance */}
         <div className="mc-card p-4 space-y-2.5" style={cardStyle}>
-          <BotStatusLine label={t("commandBot")} status={status?.command_bot} />
-          <BotStatusLine label={t("reportsBot")} status={status?.reports_bot} />
+          <BotStatusLine
+            label={t("commandBot")}
+            status={status?.command_bot}
+            check={findCheck(checks?.items, "telegram", "command_bot")}
+            testing={testing}
+          />
+          <BotStatusLine
+            label={t("reportsBot")}
+            status={status?.reports_bot}
+            check={findCheck(checks?.items, "telegram", "reports_bot")}
+            testing={testing}
+          />
           <button
             onClick={() => refetch()}
             disabled={testing}

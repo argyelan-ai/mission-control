@@ -15,6 +15,9 @@ import type {
 } from "@/lib/types";
 import { C, STATUS_TEXT } from "@/lib/colors";
 import { StatusDot } from "@/components/shared/StatusDot";
+import { CheckReason, CheckStatus, checkPhase } from "@/components/shared/CheckStatus";
+import { findCheck, findSecretCheck, refreshChecks, useConfigChecks } from "@/lib/configChecks";
+import type { ConfigCheckItem } from "@/lib/types";
 
 // Key names match the backend catalogs (routers/secrets.py PROVIDER_TEMPLATES
 // and services/ai_provider_config.AI_PROVIDER_SETTING_FIELDS).
@@ -204,6 +207,7 @@ function TokenField({
   existing,
   onSave,
   saving,
+  check,
 }: {
   label: string;
   secretKey: string;
@@ -212,6 +216,8 @@ function TokenField({
   existing: SecretEntry | undefined;
   onSave: (value: string) => void;
   saving: boolean;
+  /** The key's own registry check, for keys no status line above covers. */
+  check?: ConfigCheckItem;
 }) {
   const t = useTranslations("settings.aiProviders");
   const [value, setValue] = useState("");
@@ -219,7 +225,7 @@ function TokenField({
   const inputId = `ai-${secretKey}`;
 
   return (
-    <div>
+    <div data-key-field={secretKey}>
       <label htmlFor={inputId}>
         <FieldLabel>{label}</FieldLabel>
       </label>
@@ -267,14 +273,36 @@ function TokenField({
       <p className="text-xs mt-1.5" style={{ color: "var(--color-text-muted)" }}>
         {hint}
       </p>
+      {existing && check && <CheckStatus item={check} className="mt-1" />}
     </div>
   );
 }
 
 // ── Status lines ──────────────────────────────────────────────────────────
 
-function EmbeddingsStatusLine({ status }: { status: EmbeddingsConnectionResult | undefined }) {
+function EmbeddingsStatusLine({
+  status,
+  check,
+  testing,
+}: {
+  status: EmbeddingsConnectionResult | undefined;
+  check: ConfigCheckItem | undefined;
+  testing: boolean;
+}) {
   const t = useTranslations("settings.aiProviders");
+  // Not probed on this visit (opening the page must not wake the GPU box):
+  // show the last stored result and its age instead of "not tested".
+  const stored = checkPhase(check);
+  if (!status && !testing && (stored === "ok" || stored === "fail")) {
+    return (
+      <div className="flex items-center gap-2" data-testid="embeddings-check">
+        <span className="text-xs shrink-0" style={{ color: "var(--color-text-muted)" }}>
+          {t("embeddings")}
+        </span>
+        <CheckStatus item={check} />
+      </div>
+    );
+  }
   const dot: "online" | "warning" | "error" | "idle" = !status
     ? "idle"
     : status.connected
@@ -304,20 +332,33 @@ function EmbeddingsStatusLine({ status }: { status: EmbeddingsConnectionResult |
           {status.model}
         </p>
       )}
-      {status?.error && (
-        <p
-          data-testid="embeddings-error"
+      {status && !testing && <CheckStatus item={check} variant="age" className="pl-6" />}
+      {check?.state === "fail" && !testing ? (
+        <CheckReason
+          item={check}
+          detail={status?.error}
+          testId="embeddings-error"
           className="text-xs pl-6"
           style={{ color: STATUS_TEXT.error }}
-        >
+        />
+      ) : status?.error ? (
+        <p data-testid="embeddings-error" className="text-xs pl-6" style={{ color: STATUS_TEXT.error }}>
           {status.error}
         </p>
-      )}
+      ) : null}
     </div>
   );
 }
 
-function HfStatusLine({ status }: { status: HfConnectionResult | undefined }) {
+function HfStatusLine({
+  status,
+  check,
+  testing,
+}: {
+  status: HfConnectionResult | undefined;
+  check: ConfigCheckItem | undefined;
+  testing: boolean;
+}) {
   const t = useTranslations("settings.aiProviders");
   const dot: "online" | "warning" | "error" | "idle" = !status
     ? "idle"
@@ -345,15 +386,20 @@ function HfStatusLine({ status }: { status: HfConnectionResult | undefined }) {
           {text}
         </span>
       </div>
-      {status?.error && (
-        <p
-          data-testid="hf-error"
+      {status?.token_set && !testing && <CheckStatus item={check} variant="age" className="pl-6" />}
+      {check?.state === "fail" && !testing ? (
+        <CheckReason
+          item={check}
+          detail={status?.error}
+          testId="hf-error"
           className="text-xs pl-6"
           style={{ color: STATUS_TEXT.error }}
-        >
+        />
+      ) : status?.error ? (
+        <p data-testid="hf-error" className="text-xs pl-6" style={{ color: STATUS_TEXT.error }}>
           {status.error}
         </p>
-      )}
+      ) : null}
     </div>
   );
 }
@@ -382,7 +428,12 @@ export function AiProvidersTab() {
     refetch: refetchHf,
   } = useQuery<HfConnectionResult>({
     queryKey: ["hf-connection"],
-    queryFn: () => api.aiProviders.huggingfaceTestConnection(),
+    // Registry procedure (secret "hf_token"): it stores the result — re-read the age.
+    queryFn: async () => {
+      const result = await api.aiProviders.huggingfaceTestConnection();
+      void refreshChecks(queryClient);
+      return result;
+    },
     staleTime: 60_000,
     refetchOnWindowFocus: false,
     retry: false,
@@ -396,7 +447,11 @@ export function AiProvidersTab() {
     refetch: refetchEmb,
   } = useQuery<EmbeddingsConnectionResult>({
     queryKey: ["embeddings-connection"],
-    queryFn: () => api.aiProviders.embeddingsTestConnection(),
+    queryFn: async () => {
+      const result = await api.aiProviders.embeddingsTestConnection();
+      void refreshChecks(queryClient);
+      return result;
+    },
     enabled: false,
     retry: false,
   });
@@ -417,7 +472,11 @@ export function AiProvidersTab() {
       await queryClient.invalidateQueries({ queryKey: ["secrets"] });
       await queryClient.invalidateQueries({ queryKey: ["ai-provider-settings"] });
       notify.success(t("tokenSaved"));
+      // Test on save (ADR-093 §2). An explicit save may wake the GPU box —
+      // only opening the page must not.
       if (key === HF_TOKEN_KEY) await refetchHf();
+      else if (key === EMB_KEY || key === EMB_CLOUD_KEY) await refetchEmb();
+      else void refreshChecks(queryClient);
     },
     onError: () => notify.error(t("tokenSaveFailed")),
     onSettled: () => setSavingKey(null),
@@ -427,14 +486,17 @@ export function AiProvidersTab() {
     mutationFn: ({ key, value }: { key: string; value: string }) =>
       api.aiProviders.updateSettings({ [key]: value }),
     onMutate: ({ key }) => setSavingSetting(key),
-    onSuccess: async () => {
+    onSuccess: async (_res, { key }) => {
       await queryClient.invalidateQueries({ queryKey: ["ai-provider-settings"] });
       notify.success(t("settingSaved"));
+      // An embeddings endpoint, model or provider is a setting to test, too.
+      if (key.startsWith("ai_embeddings_")) await refetchEmb();
     },
     onError: () => notify.error(t("settingSaveFailed")),
     onSettled: () => setSavingSetting(null),
   });
 
+  const { data: checks } = useConfigChecks();
   const byKey = new Map((secrets ?? []).map((s) => [s.key, s]));
   const values = providerSettings?.values ?? {};
   const overridden = new Set(providerSettings?.overridden ?? []);
@@ -473,8 +535,16 @@ export function AiProvidersTab() {
       <div className="space-y-4">
         {/* Status — what MC's own AI is doing right now */}
         <div className="mc-card p-4 space-y-2.5" style={cardStyle}>
-          <EmbeddingsStatusLine status={embStatus} />
-          <HfStatusLine status={hfStatus} />
+          <EmbeddingsStatusLine
+            status={embStatus}
+            check={findCheck(checks?.items, "embeddings", embStatus?.provider ?? activeEmbProvider)}
+            testing={testingEmb}
+          />
+          <HfStatusLine
+            status={hfStatus}
+            check={findSecretCheck(checks?.items, HF_TOKEN_KEY)}
+            testing={testingHf}
+          />
           <div className="flex gap-2 pt-1">
             <button
               onClick={() => refetchEmb()}
@@ -661,6 +731,7 @@ export function AiProvidersTab() {
             hint={t("ollamaKeyHint")}
             placeholder="oll-..."
             existing={byKey.get(OLLAMA_KEY)}
+            check={findSecretCheck(checks?.items, OLLAMA_KEY)}
             saving={savingKey === OLLAMA_KEY}
             onSave={(value) => saveToken.mutate({ key: OLLAMA_KEY, value })}
           />

@@ -1252,7 +1252,15 @@
     "goToCommandCenter": "Zum Command Center",
     "changeableLater": "Alles hier lässt sich später unter Einstellungen ändern.",
     "saveFailed": "Speichern fehlgeschlagen.",
-    "demoBoardFailed": "Demo-Board konnte nicht erstellt werden."
+    "demoBoardFailed": "Demo-Board konnte nicht erstellt werden.",
+    "testingKey": "Schlüssel wird geprüft…",
+    "keyRejected": "Der Schlüssel funktioniert nicht.",
+    "keyNotConfirmed": "Der Schlüssel ist gespeichert, aber die Prüfung ging nicht durch.",
+    "keyRejectedHint": "Schlüssel prüfen und nochmals speichern, oder den Schritt überspringen.",
+    "checkFailed": "Der Schlüssel ist gespeichert, aber der Test konnte nicht laufen: {error}",
+    "githubRejected": "GitHub hat das nicht angenommen.",
+    "githubNotConfirmed": "GitHub ist gespeichert, aber die Prüfung ging nicht durch.",
+    "stepOf": "Schritt {n} von {total} · {label}"
   },
   "schedule": {
     "title": "Zeitplan",
@@ -1913,7 +1921,11 @@
       "ownerPlaceholder": "dein-github-user-oder-org",
       "ownerAria": "GitHub-Owner",
       "tokenPlaceholderRotate": "unverändert — zum Rotieren einfügen",
-      "tokenAria": "GitHub-Token"
+      "tokenAria": "GitHub-Token",
+      "removeToken": "Token entfernen",
+      "removeTokenTitle": "GitHub-Token entfernen?",
+      "removeTokenBody": "Agenten verlieren den GitHub-Zugang (Push, Pull Requests), bis ein neuer Token gespeichert ist. Steht ein Token in der .env, nutzt MC wieder diesen.",
+      "tokenRemoved": "Token entfernt."
     },
     "users": {
       "title": "Benutzer verwalten",
@@ -3222,7 +3234,7 @@
     },
     "cloudUsage": {
       "sectionTitle": "Cloud — wer nutzt was",
-      "collapseRow": "{n} Modelle ohne Agent — alle zeigen",
+      "collapseRow": "{n, plural, one {# Modell ohne Agent — alle zeigen} other {# Modelle ohne Agent — alle zeigen}}",
       "bindCta": "binden ›"
     },
     "slotPage": {
@@ -4080,5 +4092,46 @@
     "errBudgetReached": "Tagesbudget für die Stimme erreicht.",
     "stateIdleWarningShort": "Legt auf in {seconds} s",
     "errBudgetReachedUntil": "Tagesbudget erreicht — wieder ab {time}."
+  },
+  "checks": {
+    "state": {
+      "ok": "Funktioniert",
+      "fail": "Fehlgeschlagen",
+      "never": "Nie geprüft",
+      "changed": "Geändert — noch nicht geprüft",
+      "notTestable": "Noch nicht prüfbar",
+      "notSet": "Nicht gesetzt"
+    },
+    "running": "Wird geprüft…",
+    "age": {
+      "justNow": "gerade geprüft",
+      "minutes": "geprüft vor {n} min",
+      "hours": "{n, plural, one {geprüft vor # Stunde} other {geprüft vor # Stunden}}",
+      "days": "{n, plural, one {geprüft vor # Tag} other {geprüft vor # Tagen}}"
+    },
+    "test": "Testen",
+    "testQuotaHint": "Schickt eine winzige echte Anfrage — verbraucht ein wenig vom Abo-Kontingent.",
+    "testFailed": "Der Test konnte nicht laufen: {error}",
+    "reason": {
+      "ok": "Funktioniert.",
+      "socket_mode_not_ready": "Verbunden, aber Socket Mode ist nicht bereit — App-Token (xapp-…) prüfen.",
+      "rejected": "Abgelehnt — der Schlüssel ist abgelaufen, widerrufen oder falsch eingegeben.",
+      "rejectedStatus": "Abgelehnt (HTTP {status}) — der Schlüssel ist abgelaufen, widerrufen oder falsch eingegeben.",
+      "rate_limited": "Gerade zu viele Anfragen. In einer Minute nochmals versuchen.",
+      "rate_limitedStatus": "Gerade zu viele Anfragen (HTTP {status}). In einer Minute nochmals versuchen.",
+      "http_errorStatus": "Unerwartete Antwort vom Anbieter (HTTP {status}).",
+      "unreachable": "Nicht erreichbar. Adresse und Netzwerk prüfen.",
+      "timeout": "Keine Antwort in der Wartezeit. Später nochmals versuchen.",
+      "undecryptable": "Der gespeicherte Wert lässt sich nicht entschlüsseln. Er wurde mit einem anderen SECRETS_ENCRYPTION_KEY gespeichert: diese .env wiederherstellen oder den Wert neu eingeben.",
+      "dimension_mismatch": "Antwortet mit {dimension} statt {expected} Dimensionen. Das passt nicht zu den bestehenden Vektoren.",
+      "dimension_mismatchPlain": "Die Vektoren haben die falsche Grösse. Das passt nicht zu den bestehenden.",
+      "wrong_token_type": "Falsche Token-Art. Der Bot-Token beginnt mit xoxb-.",
+      "missing_scope": "Dem Token fehlt eine Berechtigung (Scope). Ergänzen und die App neu installieren.",
+      "invalid_owner": "Der Owner-Name ist ungültig.",
+      "no_model": "An diesem Endpunkt antwortet kein Chat-Modell.",
+      "not_configured": "Es ist nichts eingetragen, das sich prüfen liesse.",
+      "unknown": "Die Prüfung ist fehlgeschlagen. Den Grund kennt MC nicht."
+    },
+    "details": "Details vom Server (englisch)"
   }
 }
