@@ -3,6 +3,10 @@
     "slug": "glm53-flash-exl3-tensorfold",
     "display_name": "GLM-5.3 Flash EXL3 (TensorFold, 2x Spark)",
     "description": "NON-COMMERCIAL USE ONLY with the default drafter (incoai/GLM-5.3-Flash-DFlash2, CC BY-NC-ND 4.0). GLM-5.3 Flash with TensorFold across two DGX Sparks (tensor parallel over RoCE): 1M-token window, 4 requests at once, OpenAI /v1 API on port 8000. Installs itself on both boxes.",
+    "summary": {
+      "en": "GLM-5.3 Flash on two DGX Sparks: 1M-token window, 4 requests at once, OpenAI API on port 8000; it installs itself on both boxes. Non-commercial use only with the default drafter (CC BY-NC-ND 4.0) - DRAFTER=mtp needs no extra licence but is slower and serves one request at a time.",
+      "de": "GLM-5.3 Flash auf zwei DGX Sparks: 1 Mio. Token Kontext, 4 Anfragen gleichzeitig, OpenAI-API auf Port 8000; installiert sich selbst auf beiden Boxen. Mit dem Standard-Drafter nur nicht-kommerziell nutzbar (CC BY-NC-ND 4.0) - DRAFTER=mtp braucht keine Zusatzlizenz, ist aber langsamer und bedient nur eine Anfrage gleichzeitig."
+    },
     "engine": "ssh_process",
     "model_identifier": "GLM-5.3-Flash-EXL3",
     "quant": "exl3-4bpw",

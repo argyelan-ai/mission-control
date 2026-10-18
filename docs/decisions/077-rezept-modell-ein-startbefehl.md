@@ -457,3 +457,51 @@ Rezept-Zeilen ändert das nicht (der Seed fügt nur ein).
   Tests: `backend/tests/test_recipe_switcher_p4.py`,
   `frontend-v2/src/components/shared/__tests__/HostRecipeSwitcher.capacity.test.tsx`
 - Skill für neue Rezepte: `~/.claude/skills/mc-recipe-integration/SKILL.md`
+
+## Nachtrag (18.10.2026) — Mitgelieferte Rezepte folgen dem Katalog
+
+**Lücke:** `seed_local_recipes` fügt nur ein. Ein Fix an einem mitgelieferten
+Rezept (neues `install_template`, `drop_page_cache`, `gb10_validated`) kam
+darum nie bei einer bestehenden Installation an — wer MC aktualisierte,
+behielt die alte Install- und Startvorlage.
+
+**Entscheid (ohne Schema-Änderung):**
+
+1. **Nachführen beim Start** (`local_registry.sync_builtin_recipes`, direkt
+   nach Seed und Legacy-Reparatur): eine Zeile mit `source_registry='builtin'`
+   wird auf den Katalogstand gebracht, wenn ihr Inhalt einer Version
+   entspricht, die der Katalog schon einmal ausgeliefert hat.
+2. **„Ausgeliefert" ist eine Liste im Repo**, nicht eine Spalte:
+   `backend/config/local-recipes.shipped.json` hält je Rezept die
+   Fingerabdrücke (SHA-256 der Katalogfelder) aller ausgelieferten Versionen,
+   rückwirkend aus der Git-Geschichte erzeugt (`backend/scripts/record_shipped_recipes.py`).
+   Ein Test schlägt fehl, wenn die aktuelle Katalogversion fehlt. Felder auf
+   ihrem Standardwert zählen nicht mit — ein neues optionales Feld ändert
+   keinen alten Fingerabdruck. `enabled` zählt nie mit.
+   Warum keine Spalte „zuletzt gesät": sie hätte für die schon vorhandenen
+   Zeilen keinen Wert — genau die, um die es geht.
+3. **Lokal geändert = jeder andere Inhalt.** Diese Zeile bleibt unverändert;
+   MC meldet es im Log und einmal je Katalogversion als Aktivität
+   (`local_model.catalog_update_kept_local`, „catalog has a newer version,
+   local edits kept"). Zeilen, die eine Registry übernommen hat
+   (`source_registry` ≠ `builtin`), fasst der Abgleich nicht an.
+4. **Nie löschen:** ein Rezept, das den Katalog verlassen hat, behält seine Zeile.
+5. **Instanzen folgen `drop_page_cache`:** eine Runtime mit Rückverweis
+   `topology.recipe_slug`, die noch den alten Rezeptwert trägt, bekommt den
+   neuen (gilt auch für einen Registry-Refresh). In MC lässt sich das Feld an
+   der Instanz nicht setzen; ein abweichender Wert gilt als von Hand gesetzt
+   und bleibt. Slot-Zeilen bleiben unberührt. Andere kopierte Felder
+   (Startbefehl, Vision) folgen bewusst noch nicht.
+6. **Kurztext je UI-Sprache:** optionales Katalogfeld `summary`
+   (`{"en": …, "de": …}`, ein bis zwei Sätze). Der Deploy-Dialog zeigt die
+   Sprache der Oberfläche; die lange englische `description` bleibt unter
+   „Details". Ohne Spalte: der Text kommt direkt aus dem mitgelieferten
+   Katalog, nur für `builtin`-Zeilen. Ältere MCs ignorieren das Feld
+   (`RecipeSpec`, `extra="ignore"`).
+
+**Wie ändert der Nutzer das später (ADR-093)?** Noch nicht in der
+Oberfläche: eine lokal geänderte Zeile auf den Katalogstand zurücksetzen
+geht heute nur über die Datenbank. Ein Knopf „Katalogstand übernehmen" ist
+die offene Lücke.
+
+Tests: `backend/tests/test_local_registry_catalog_sync.py`.

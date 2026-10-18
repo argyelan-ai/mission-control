@@ -27,7 +27,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -165,23 +165,49 @@ export function splitRecipeNotes(notes: string): string[] {
 }
 
 /**
- * Die Katalog-Beschreibung im Deploy-Dialog: `description` (ein, zwei
- * Sätze) steht immer da; `notes` — bei TensorFold eine ~2500-Zeichen-Wand
- * aus Lizenz/Voraussetzungen/Install/Start — liegt geschlossen hinter
- * "Details" und wird erst beim Aufklappen gemountet (Unfold, wie im
- * Insights-Details-Muster). Beide Texte bleiben Katalog-Englisch — nur die
- * Darstellung ändert sich.
+ * Welcher Text oben im Dialog steht (UI-Sprache nie mischen):
+ * `summary[locale]` — der Kurztext des Katalogs in der Sprache der
+ * Oberfläche. Fehlt er, steht die englische `description` nur in einer
+ * englischen Oberfläche oben; sonst wandert sie hinter "Details", wo ohnehin
+ * der englische Katalogtext steht.
+ */
+export function recipeIntro(
+  recipe: Pick<LocalRecipe, "summary" | "description">,
+  locale: string,
+): { lead: string | null; descriptionInDetails: boolean } {
+  const short = recipe.summary?.[locale]?.trim();
+  if (short) return { lead: short, descriptionInDetails: Boolean(recipe.description) };
+  if (locale === "en" && recipe.description) {
+    return { lead: recipe.description, descriptionInDetails: false };
+  }
+  return { lead: null, descriptionInDetails: Boolean(recipe.description) };
+}
+
+/**
+ * Die Katalog-Beschreibung im Deploy-Dialog: oben der Kurztext in der
+ * Sprache der Oberfläche (`recipeIntro`); die lange englische
+ * `description` und die `notes` — bei TensorFold eine ~2500-Zeichen-Wand
+ * aus Lizenz/Voraussetzungen/Install/Start — liegen geschlossen hinter
+ * "Details" und werden erst beim Aufklappen gemountet (Unfold, wie im
+ * Insights-Details-Muster).
  */
 function RecipeDescription({ recipe }: { recipe: LocalRecipe }) {
   const t = useTranslations("runtimes.localRegistry");
+  const locale = useLocale();
   const [open, setOpen] = useState(false);
-  const paragraphs = recipe.notes ? splitRecipeNotes(recipe.notes) : [];
-  if (!recipe.description && paragraphs.length === 0) return null;
+  const { lead, descriptionInDetails } = recipeIntro(recipe, locale);
+  const paragraphs = [
+    ...(descriptionInDetails && recipe.description ? [recipe.description] : []),
+    ...(recipe.notes ? splitRecipeNotes(recipe.notes) : []),
+  ];
+  if (!lead && paragraphs.length === 0) return null;
 
   return (
     <div className="flex flex-col gap-2">
-      {recipe.description && (
-        <p className="text-xs text-muted">{recipe.description}</p>
+      {lead && (
+        <p data-testid="ssh-deploy-lead" className="text-xs text-muted">
+          {lead}
+        </p>
       )}
       {paragraphs.length > 0 && (
         <div>
