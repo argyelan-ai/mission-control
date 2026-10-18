@@ -42,8 +42,14 @@ async def health(request: Request, session: AsyncSession = Depends(get_session))
     `degraded` and `mc_home` says which directory, which uid owns it, which uid the
     backend runs as and what to do (`hint`). The answer stays HTTP 200 so the rest
     of the stack still starts and the operator can read the reason.
+
+    When `SECRETS_ENCRYPTION_KEY` no longer matches the key this database's
+    secrets were encrypted with (e.g. the DB moved to a new host without its
+    matching `.env`), `status` is `degraded` and `message` explains it — never
+    the key or any decrypted value.
     """
     from app.services.mc_home_preflight import health_detail
+    from app.services.secrets_probe import secrets_decryptable
     from app.models.task import Task
     from sqlmodel import func, select
 
@@ -72,6 +78,12 @@ async def health(request: Request, session: AsyncSession = Depends(get_session))
     if mc_home is not None:
         body["status"] = "degraded"
         body["mc_home"] = mc_home
+    if not secrets_decryptable():
+        body["status"] = "degraded"
+        body["message"] = (
+            "secrets cannot be decrypted — restore the .env that belongs to "
+            "this database (see backup docs)"
+        )
     return body
 
 
