@@ -26,5 +26,11 @@ async def slack_test_connection(
     Always 200 — a failed Slack handshake is a reportable state, not an HTTP
     error, so the UI can render the reason inline instead of a toast.
     """
-    result = await test_connection(session)
-    return result.to_dict()
+    from app.services import config_checks
+
+    try:
+        run = await config_checks.run_check(session, "slack", "workspace")
+        return run.outcome.detail
+    except config_checks.CheckNotRunnable:
+        # No bot token: nothing to call — the old answer says what is missing.
+        return (await test_connection(session)).to_dict()

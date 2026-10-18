@@ -25,6 +25,8 @@ logger = logging.getLogger("mc.github_config")
 
 OWNER_SECRET_KEY = "github_owner"
 TOKEN_SECRET_KEY = "github_token"
+#: A GitHub user/org name (39 chars, alnum + single inner dashes).
+OWNER_PATTERN = r"^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$"
 
 _CACHE_TTL_SECONDS = 30.0
 

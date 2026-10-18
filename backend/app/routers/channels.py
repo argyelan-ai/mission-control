@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import logging
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -92,13 +91,6 @@ async def put_channel_settings(
     }}
 
 
-async def _get_me(token: str) -> dict:
-    """Telegram ``getMe`` — the Telegram twin of Slack's ``auth.test``."""
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        resp = await client.get(f"https://api.telegram.org/bot{token}/getMe")
-        return resp.json()
-
-
 @router.post("/telegram/test-connection")
 async def telegram_test_connection(
     session: AsyncSession = Depends(get_session),
@@ -108,35 +100,17 @@ async def telegram_test_connection(
 
     Mirrors Slack's contract: separate result per token so a broken reports
     bot can never masquerade as a broken command bot. No token material in
-    the response.
+    the response. The procedure lives in the check registry
+    (``config_checks`` kind ``telegram``), which also stores each result.
     """
+    from app.services import config_checks
+    from app.services.config_checks.kinds import telegram_unset_entry
+
     result: dict = {}
-    for label, token, chat_id in (
-        ("command_bot", settings.telegram_bot_token, settings.telegram_chat_id),
-        (
-            "reports_bot",
-            settings.telegram_reports_bot_token,
-            settings.telegram_reports_chat_id,
-        ),
-    ):
-        entry: dict = {
-            "token_set": bool(token),
-            "chat_id_set": bool(chat_id),
-            "connected": False,
-            "bot_username": None,
-            "error": None,
-        }
-        if token:
-            try:
-                data = await _get_me(token)
-                if data.get("ok"):
-                    entry["connected"] = True
-                    entry["bot_username"] = data.get("result", {}).get("username")
-                else:
-                    entry["error"] = str(
-                        data.get("description", "Telegram API error")
-                    )
-            except Exception as e:  # noqa: BLE001 — reportable state, not a 500
-                entry["error"] = f"{type(e).__name__}: {e}"
-        result[label] = entry
+    for label in ("command_bot", "reports_bot"):
+        try:
+            run = await config_checks.run_check(session, "telegram", label)
+            result[label] = run.outcome.detail
+        except config_checks.CheckNotRunnable:
+            result[label] = telegram_unset_entry(label)
     return result

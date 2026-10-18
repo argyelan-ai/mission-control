@@ -28,7 +28,6 @@ from app.services import (
 )
 from app.services.agent_runtime_switch import (
     _PROBEABLE_RUNTIME_TYPES,
-    probe_runtime_model,
 )
 from app.services.endpoint_probe import probe_endpoint_url
 from app.services.heads import box_guard as head_box_guard
@@ -1037,7 +1036,14 @@ async def probe_model_endpoint(
         )
 
     old_model = rt.model_identifier
-    probed = await probe_runtime_model(rt)
+    # Procedure + stored result: check registry, kind ``runtime``.
+    from app.services import config_checks
+
+    try:
+        run = await config_checks.run_check(session, "runtime", str(rt.id))
+        probed = run.outcome.detail.get("model_id")
+    except config_checks.CheckNotRunnable:
+        probed = None  # no endpoint set — nothing to probe
     new_model = probed if probed else old_model
     changed = bool(probed) and probed != old_model
 

@@ -394,7 +394,7 @@ async def test_hf_test_without_token_is_an_ok_state(auth_client: AsyncClient):
 async def test_hf_test_reports_a_rejected_token_without_echoing_it(
     auth_client: AsyncClient, monkeypatch
 ):
-    from app.routers import ai_providers as ai_router
+    from app.services.config_checks import kinds as check_kinds
     from app.services.secrets_helper import upsert_secret_by_key
 
     async with await _session() as s:
@@ -403,7 +403,7 @@ async def test_hf_test_reports_a_rejected_token_without_echoing_it(
     async def fake_whoami(token: str):
         return 401, {}
 
-    monkeypatch.setattr(ai_router, "_hf_whoami", fake_whoami)
+    monkeypatch.setattr(check_kinds, "hf_whoami", fake_whoami)
     resp = await auth_client.post("/api/v1/ai-providers/huggingface/test-connection")
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -414,7 +414,7 @@ async def test_hf_test_reports_a_rejected_token_without_echoing_it(
 
 @pytest.mark.asyncio
 async def test_hf_test_reports_a_working_token(auth_client: AsyncClient, monkeypatch):
-    from app.routers import ai_providers as ai_router
+    from app.services.config_checks import kinds as check_kinds
     from app.services.secrets_helper import upsert_secret_by_key
 
     async with await _session() as s:
@@ -424,7 +424,7 @@ async def test_hf_test_reports_a_working_token(auth_client: AsyncClient, monkeyp
         assert token == "hf_GOOD"
         return 200, {"name": "some-account"}
 
-    monkeypatch.setattr(ai_router, "_hf_whoami", fake_whoami)
+    monkeypatch.setattr(check_kinds, "hf_whoami", fake_whoami)
     body = (
         await auth_client.post("/api/v1/ai-providers/huggingface/test-connection")
     ).json()
@@ -435,7 +435,7 @@ async def test_hf_test_reports_a_working_token(auth_client: AsyncClient, monkeyp
 async def test_hf_test_turns_a_transport_error_into_a_state(
     auth_client: AsyncClient, monkeypatch
 ):
-    from app.routers import ai_providers as ai_router
+    from app.services.config_checks import kinds as check_kinds
     from app.services.secrets_helper import upsert_secret_by_key
 
     async with await _session() as s:
@@ -444,7 +444,7 @@ async def test_hf_test_turns_a_transport_error_into_a_state(
     async def boom(token: str):
         raise RuntimeError("DNS ist weg")
 
-    monkeypatch.setattr(ai_router, "_hf_whoami", boom)
+    monkeypatch.setattr(check_kinds, "hf_whoami", boom)
     resp = await auth_client.post("/api/v1/ai-providers/huggingface/test-connection")
     assert resp.status_code == 200, resp.text
     assert "DNS ist weg" in resp.json()["error"]

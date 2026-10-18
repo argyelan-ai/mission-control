@@ -1,0 +1,85 @@
+"""Config checks API — the one place to read and run "test this setting".
+
+``GET /config-checks`` lists every thing the registry knows with its latest
+result ("never tested" included); ``GET /config-checks/{kind}/{subject_id}``
+reads one; ``POST …/run`` runs the registry procedure now and stores the
+result. Responses never carry key material — only states, short scrubbed
+texts and ages. The older per-page test buttons stay and write here too.
+
+Reading is open to signed-in users (states only, no values); the text of
+a result is admin-only, since a box probe's reason can name an address.
+Running is admin-only: it calls out with stored credentials and may spend rate limit
+or plan quota (see the ``cost`` hint per item).
+"""
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlmodel.ext.asyncio.session import AsyncSession
+
+from app.auth import Role, require_role, require_user
+from app.database import get_session
+from app.services import config_checks
+from app.services.config_checks import COST_HINTS, REASON_CODES, CheckNotRunnable, UnknownCheck
+
+router = APIRouter(prefix="/api/v1/config-checks", tags=["config-checks"])
+
+
+def _for_viewer(item: dict, user) -> dict:
+    """Viewers see state, reason code and age; the result text (and any
+name in the reason parameters) stays with admins."""
+    from app.auth import ROLE_HIERARCHY
+
+    if ROLE_HIERARCHY.get(getattr(user, "role", None), 0) >= ROLE_HIERARCHY[Role.ADMIN]:
+        return item
+    # Numbers (an HTTP status, a vector size) stay; names and texts go.
+    params = {
+        k: v for k, v in (item.get("reason_params") or {}).items() if not isinstance(v, str)
+    }
+    return {**item, "message": None, "reason_params": params}
+
+
+@router.get("")
+async def list_config_checks(
+    kind: str | None = None,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    try:
+        items = await config_checks.status_items(session, kind)
+    except UnknownCheck:
+        raise HTTPException(status_code=404, detail=f"Unknown check kind '{kind}'")
+    return {
+        "kinds": config_checks.kinds_catalog(),
+        "cost_hints": COST_HINTS,
+        "reason_codes": list(REASON_CODES),
+        "items": [_for_viewer(i, current_user) for i in items],
+    }
+
+
+@router.get("/{kind}/{subject_id}")
+async def get_config_check(
+    kind: str,
+    subject_id: str,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    try:
+        return _for_viewer(await config_checks.status_item(session, kind, subject_id), current_user)
+    except UnknownCheck:
+        raise HTTPException(status_code=404, detail=f"Unknown check '{kind}/{subject_id}'")
+
+
+@router.post("/{kind}/{subject_id}/run")
+async def run_config_check(
+    kind: str,
+    subject_id: str,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_role(Role.ADMIN)),
+):
+    try:
+        run = await config_checks.run_check(session, kind, subject_id)
+    except UnknownCheck:
+        raise HTTPException(status_code=404, detail=f"Unknown check '{kind}/{subject_id}'")
+    except CheckNotRunnable as e:
+        raise HTTPException(status_code=409, detail={"code": e.code, "item": e.item})
+    return run.item

@@ -111,7 +111,7 @@ async def list_import_candidates(
 
 # ── GitHub connection (ADR-055) ──────────────────────────────────────────────
 
-_OWNER_PATTERN = r"^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$"
+from app.services.github_config import OWNER_PATTERN as _OWNER_PATTERN  # noqa: E402
 
 
 def _github_config_body(cfg) -> dict:
@@ -132,10 +132,6 @@ async def github_status(
 ):
     """GitHub connection status. With ?probe=true the token is verified live
     against the GitHub API (login, owner reachability, rate limit)."""
-    import asyncio
-    import json
-    import re
-
     from app.services.github_config import resolve_github_config
 
     cfg = await resolve_github_config(session, fresh=True)
@@ -165,30 +161,11 @@ async def github_status(
         )
         return body
 
-    from app.services.git_service import GitService
+    # Procedure + stored result: check registry, kind ``github``.
+    from app.services import config_checks
 
-    git = GitService()
-    try:
-        user_out = await asyncio.wait_for(git._run_cmd("gh", "api", "user"), timeout=15)
-        body["login"] = json.loads(user_out).get("login")
-        if re.match(_OWNER_PATTERN, cfg.owner):
-            owner_out = await asyncio.wait_for(
-                git._run_cmd("gh", "api", f"users/{cfg.owner}"), timeout=15,
-            )
-            body["owner_type"] = json.loads(owner_out).get("type")
-        else:
-            raise RuntimeError(f"Ungültiger GitHub-Owner: {cfg.owner!r}")
-        rate_out = await asyncio.wait_for(git._run_cmd("gh", "api", "rate_limit"), timeout=15)
-        core = json.loads(rate_out).get("resources", {}).get("core", {})
-        body["rate_limit_remaining"] = core.get("remaining")
-        body["rate_limit_total"] = core.get("limit")
-        body["connected"] = True
-    except asyncio.TimeoutError:
-        body["connected"] = False
-        body["error"] = "GitHub nicht erreichbar (Timeout nach 15s)."
-    except (RuntimeError, ValueError) as e:
-        body["connected"] = False
-        body["error"] = str(e)[:300]
+    run = await config_checks.run_check(session, "github", "connection")
+    body.update(run.outcome.detail)
     return body
 
 
