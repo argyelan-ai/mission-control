@@ -452,6 +452,8 @@ async def _host_subjects(session: AsyncSession) -> list[Subject]:
             id=str(h.id),
             label=h.display_name or h.slug,
             configured=True,
+            # Known limit: the key FILE's contents are not fingerprinted. Swapping
+            # the key behind the same path keeps the old result; re-run the probe.
             material=(h.ssh_host, h.ssh_user, h.ssh_key_path),
             ref=h,
         )
