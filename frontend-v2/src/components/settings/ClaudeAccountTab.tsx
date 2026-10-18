@@ -66,6 +66,19 @@ function QuietButton({ danger, ...props }: React.ButtonHTMLAttributes<HTMLButton
 
 const LOGIN_ACTIVE: ClaudeLoginState["state"][] = ["starting", "waiting_for_code", "verifying", "failed"];
 
+// The backend sends these codes in `login.error` (services/claude_account.py);
+// anything else reads as the generic "did not work" — never the raw code.
+const LOGIN_ERROR_CODES = [
+  "image_unavailable",
+  "setup_token_failed",
+  "timeout",
+  "code_rejected",
+  "store_failed",
+] as const;
+type LoginErrorCode = (typeof LOGIN_ERROR_CODES)[number];
+const isLoginErrorCode = (v: string | null): v is LoginErrorCode =>
+  !!v && (LOGIN_ERROR_CODES as readonly string[]).includes(v);
+
 // ── Reconnect panel ─────────────────────────────────────────────────────────
 
 function LoginPanel({
@@ -80,29 +93,37 @@ function LoginPanel({
   const t = useTranslations("settings.claude.login");
   const [code, setCode] = useState("");
 
-  // The link appears a few seconds after start; ask until it does.
+  // The link appears a few seconds after start; ask until it does. After the
+  // code is sent, keep asking until the token is in: the submit gives up
+  // waiting after 30 s and may return while Claude is still busy.
+  const polling = login.state === "starting" || login.state === "verifying";
   const { data: polled } = useQuery<ClaudeLoginState>({
-    queryKey: ["claude-login"],
+    // One key per phase, so an answer from the link phase never lands in the code phase.
+    queryKey: ["claude-login", login.state],
     queryFn: () => api.claudeAccount.loginStatus(),
-    enabled: login.state === "starting",
+    enabled: polling,
     refetchInterval: 1500,
     retry: false,
   });
   useEffect(() => {
-    if (polled && login.state === "starting" && polled.state !== "starting") onChange(polled);
+    if (!polled) return;
+    if (login.state === "starting" && polled.state !== "starting") onChange(polled);
+    // While verifying, only the end counts: a poll that ran before the code
+    // reached the server still says "waiting_for_code".
+    if (login.state === "verifying" && (polled.state === "connected" || polled.state === "failed")) onChange(polled);
   }, [polled, login.state, onChange]);
 
   const submit = useMutation({
     mutationFn: (value: string) => api.claudeAccount.submitCode(value),
     onMutate: () => onChange({ ...login, state: "verifying" }),
     onSuccess: (next) => onChange(next),
-    onError: () => onChange({ state: "failed", url: null, error: t("failed") }),
+    onError: () => onChange({ state: "failed", url: null, error: null }),
   });
 
   const restart = useMutation({
     mutationFn: () => api.claudeAccount.startLogin(),
     onSuccess: (next) => onChange(next),
-    onError: () => onChange({ state: "failed", url: null, error: t("failed") }),
+    onError: () => onChange({ state: "failed", url: null, error: null }),
   });
 
   const cancel = async () => {
@@ -132,7 +153,7 @@ function LoginPanel({
     return (
       <div className="space-y-2">
         <p className="text-sm" style={{ color: STATUS_TEXT.error }} data-testid="claude-login-error">
-          {login.error || t("failed")}
+          {isLoginErrorCode(login.error) ? t(`errors.${login.error}`) : t("failed")}
         </p>
         <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
           <QuietButton onClick={() => restart.mutate()} disabled={restart.isPending} type="button">
@@ -280,8 +301,19 @@ function StaleAgents({ status, onRestarted }: { status: ClaudeAccountStatus; onR
 
   const restart = useMutation({
     mutationFn: async () => {
+      // "busy" on screen is from when the card loaded; an agent may have
+      // picked up a task since. Ask again right before restarting anyone.
+      let current = idle;
+      try {
+        const fresh = await api.claudeAccount.status();
+        const nowIdle = new Set(fresh.stale_agents.filter((a) => !a.busy).map((a) => a.id));
+        current = idle.filter((a) => nowIdle.has(a.id));
+      } catch {
+        // Status unreadable: restart nobody rather than guess.
+        current = [];
+      }
       let done = 0;
-      for (const agent of idle) {
+      for (const agent of current) {
         try {
           await api.agents.restartContainer(agent.id);
           done += 1;
@@ -337,6 +369,7 @@ function StaleAgents({ status, onRestarted }: { status: ClaudeAccountStatus; onR
         title={t("restartTitle")}
         body={t("restartBody", { count: idle.length })}
         confirmLabel={t("restartConfirm")}
+        cancelLabel={t("login.cancel")}
         danger={false}
         loading={restart.isPending}
         onConfirm={() => restart.mutate()}
@@ -384,7 +417,7 @@ export function ClaudeAccountTab() {
     mutationFn: () => api.claudeAccount.startLogin(),
     onMutate: () => setLogin({ state: "starting", url: null, error: null }),
     onSuccess: (next) => setLogin(next),
-    onError: () => setLogin({ state: "failed", url: null, error: tLogin("failed") }),
+    onError: () => setLogin({ state: "failed", url: null, error: null }),
   });
 
   const test = useMutation({
@@ -410,11 +443,15 @@ export function ClaudeAccountTab() {
 
   const check = status?.check ?? null;
   const configured = !!status?.configured;
-  const state = !configured ? "none" : check?.state ?? "never_tested";
+  const envFallback = !!status?.env_fallback;
+  // "env": no token in MC, but the agents still sign in with the one in .env.
+  const state = !configured ? (envFallback ? "env" : "none") : check?.state ?? "never_tested";
   const dot = state === "ok" ? "online" : state === "fail" ? "error" : state === "none" ? "idle" : "warning";
   const headline =
     state === "none"
       ? t("statusNotConnected")
+      : state === "env"
+      ? t("statusEnvFallback")
       : state === "ok"
       ? t("statusOk", { ago: timeAgo(check?.checked_at ?? null, locale) })
       : state === "fail"
@@ -465,11 +502,22 @@ export function ClaudeAccountTab() {
                 {check.message}
               </p>
             )}
-            <p className="text-xs" style={{ color: "var(--color-text-muted)", maxWidth: "72ch" }}>
+            <p
+              className="text-xs"
+              style={{ color: "var(--color-text-muted)", maxWidth: "72ch" }}
+              data-testid={state === "env" ? "claude-env-note" : undefined}
+            >
               {configured
                 ? t("tokenSaved", { ago: timeAgo(status.token_updated_at, locale) })
+                : envFallback
+                ? t("envFallbackHint")
                 : t("notConnectedHint")}
             </p>
+            {configured && envFallback && (
+              <p className="text-xs" style={{ color: "var(--color-text-muted)", maxWidth: "72ch" }} data-testid="claude-env-note">
+                {t("envAlsoSet")}
+              </p>
+            )}
 
             {loginOpen && activeLogin ? (
               <div className="pt-2">
@@ -531,8 +579,9 @@ export function ClaudeAccountTab() {
         open={confirmDisconnect}
         kicker={t("title")}
         title={t("disconnectTitle")}
-        body={t("disconnectBody")}
+        body={envFallback ? t("disconnectBodyEnv") : t("disconnectBody")}
         confirmLabel={t("disconnect")}
+        cancelLabel={tLogin("cancel")}
         loading={disconnect.isPending}
         onConfirm={() => disconnect.mutate()}
         onCancel={() => setConfirmDisconnect(false)}

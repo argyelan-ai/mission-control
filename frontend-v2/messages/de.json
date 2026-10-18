@@ -2289,6 +2289,9 @@
       "statusNeverTested": "Noch nicht geprüft",
       "statusFail": "Claude lehnt den Token ab",
       "notConnectedHint": "Claude-Agenten starten erst, wenn ein Konto verbunden ist.",
+      "statusEnvFallback": "Angemeldet über die .env",
+      "envFallbackHint": "Deine Claude-Agenten melden sich mit dem Token aus der .env-Datei an. Dort kann MC ihn weder prüfen noch ersetzen. Verbinde hier, damit der Token in MC liegt; er löst dann den aus der .env ab.",
+      "envAlsoSet": "Die .env-Datei enthält ebenfalls einen Token. Er zählt nur, wenn der Token hier entfernt wird.",
       "tokenSaved": "Token gespeichert {ago}. Tokens aus claude setup-token gelten ein Jahr.",
       "testCostHint": "Ein Test schickt eine winzige Anfrage an Claude und braucht etwas von deinem Abo.",
       "testNow": "Jetzt prüfen",
@@ -2300,6 +2303,7 @@
       "disconnect": "Trennen",
       "disconnectTitle": "Claude trennen?",
       "disconnectBody": "MC löscht den gespeicherten Token. Laufende Agenten behalten den alten, bis sie neu starten; danach starten Claude-Agenten erst wieder, wenn du neu verbindest.",
+      "disconnectBodyEnv": "MC löscht den hier gespeicherten Token. Deine .env-Datei enthält aber auch einen: Nach dem nächsten Neustart melden sich deine Claude-Agenten damit an. Um sie ganz abzumelden, lösche CLAUDE_CODE_OAUTH_TOKEN auch aus der .env und aus docker/.env.shared.",
       "disconnected": "Claude getrennt.",
       "disconnectFailed": "Trennen hat nicht geklappt.",
       "staleTitle": "{count, plural, one {# Agent nutzt noch den alten Token} other {# Agenten nutzen noch den alten Token}}",
@@ -2325,7 +2329,14 @@
         "savedNotWorking": "Der neue Token ist gespeichert, aber Claude nimmt ihn nicht an.",
         "startAgain": "Neu beginnen",
         "cancel": "Abbrechen",
-        "failed": "Die Anmeldung hat nicht geklappt."
+        "failed": "Die Anmeldung hat nicht geklappt.",
+        "errors": {
+          "image_unavailable": "Das Claude-Agenten-Image startet nicht. Prüfe, ob Docker läuft und das Image mc-claude-agent vorhanden ist.",
+          "setup_token_failed": "claude setup-token liess sich im Agenten-Image nicht starten.",
+          "timeout": "Die Anmeldung hat zu lange gedauert. Beginne neu.",
+          "code_rejected": "Claude hat den Code nicht angenommen. Beginne neu und füge den ganzen Code ein.",
+          "store_failed": "Claude hat einen Token erstellt, aber MC konnte ihn nicht speichern. Beginne neu."
+        }
       },
       "paste": {
         "toggle": "Stattdessen einen Token einfügen",

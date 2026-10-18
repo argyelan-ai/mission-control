@@ -2289,6 +2289,9 @@
       "statusNeverTested": "Not tested yet",
       "statusFail": "Claude refused the token",
       "notConnectedHint": "Claude agents cannot start until an account is connected.",
+      "statusEnvFallback": "Signed in through .env",
+      "envFallbackHint": "Your Claude agents sign in with the token in the .env file. MC cannot test or replace it there. Connect here to keep the token in MC; it then takes over from the .env one.",
+      "envAlsoSet": "The .env file holds a token too. It only counts if the token here is removed.",
       "tokenSaved": "Token saved {ago}. Tokens from claude setup-token last one year.",
       "testCostHint": "A test sends one tiny request to Claude and uses a little of your plan.",
       "testNow": "Test now",
@@ -2300,6 +2303,7 @@
       "disconnect": "Disconnect",
       "disconnectTitle": "Disconnect Claude?",
       "disconnectBody": "MC deletes the stored token. Running agents keep the old one until they restart; after that, Claude agents cannot start until you connect again.",
+      "disconnectBodyEnv": "MC deletes the token stored here. Your .env file also holds a token: after their next restart, your Claude agents sign in with that one. To stop them completely, also delete CLAUDE_CODE_OAUTH_TOKEN from .env and docker/.env.shared.",
       "disconnected": "Claude disconnected.",
       "disconnectFailed": "Could not disconnect.",
       "staleTitle": "{count, plural, one {# agent still uses the old token} other {# agents still use the old token}}",
@@ -2325,7 +2329,14 @@
         "savedNotWorking": "The new token is saved, but Claude did not accept it.",
         "startAgain": "Start again",
         "cancel": "Cancel",
-        "failed": "The sign-in did not work."
+        "failed": "The sign-in did not work.",
+        "errors": {
+          "image_unavailable": "Could not start the Claude agent image. Check that Docker is running and the mc-claude-agent image is there.",
+          "setup_token_failed": "Could not run claude setup-token in the agent image.",
+          "timeout": "The sign-in took too long. Start again.",
+          "code_rejected": "Claude did not accept the code. Start again and paste the whole code.",
+          "store_failed": "Claude created a token, but MC could not save it. Start again."
+        }
       },
       "paste": {
         "toggle": "Paste a token instead",

@@ -47,6 +47,7 @@ const check = (over: Partial<ConfigCheckItem> = {}): ConfigCheckItem => ({
 
 const status = (over: Partial<ClaudeAccountStatus> = {}): ClaudeAccountStatus => ({
   configured: true,
+  env_fallback: false,
   token_updated_at: minutesAgo(60 * 24 * 2),
   check: check(),
   claude_agents: 2,
@@ -184,7 +185,7 @@ describe("ClaudeAccountTab — reconnect via claude setup-token", () => {
     vi.spyOn(api.claudeAccount, "submitCode").mockResolvedValue({
       state: "failed",
       url: null,
-      error: "Claude did not accept the code. Start again and paste the whole code.",
+      error: "code_rejected",
     });
     renderTab();
 
@@ -248,3 +249,94 @@ describe("ClaudeAccountTab — paste a token, disconnect", () => {
   });
 });
 
+
+describe("ClaudeAccountTab — review findings (PR #858)", () => {
+  it("a token only in .env reads as connected through .env, not as 'not connected'", async () => {
+    vi.spyOn(api.claudeAccount, "status").mockResolvedValue(
+      status({ configured: false, env_fallback: true, token_updated_at: null, check: null })
+    );
+    renderTab();
+    expect(await screen.findByTestId("claude-status-headline")).toHaveTextContent("Signed in through .env");
+    expect(screen.queryByText(/cannot start until an account is connected/)).toBeNull();
+    expect(screen.getByTestId("claude-env-note")).toHaveTextContent(".env");
+  });
+
+  it("disconnect warns that the .env token keeps the agents signed in", async () => {
+    vi.spyOn(api.claudeAccount, "status").mockResolvedValue(status({ env_fallback: true }));
+    renderTab();
+    await userEvent.click(await screen.findByRole("button", { name: "Disconnect" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("CLAUDE_CODE_OAUTH_TOKEN");
+    expect(dialog).not.toHaveTextContent("cannot start until you connect again");
+  });
+
+  it("login errors arrive as codes and are worded in the user's language", async () => {
+    vi.spyOn(api.claudeAccount, "status").mockResolvedValue(
+      status({ login: { state: "failed", url: null, error: "timeout" } })
+    );
+    renderTab();
+    const error = await screen.findByTestId("claude-login-error");
+    expect(error).toHaveTextContent("The sign-in took too long");
+    expect(error).not.toHaveTextContent("timeout");
+  });
+
+  it("an unknown error code falls back to the generic text, never the raw code", async () => {
+    vi.spyOn(api.claudeAccount, "status").mockResolvedValue(
+      status({ login: { state: "failed", url: null, error: "something_new" } })
+    );
+    renderTab();
+    const error = await screen.findByTestId("claude-login-error");
+    expect(error).toHaveTextContent("The sign-in did not work.");
+    expect(error).not.toHaveTextContent("something_new");
+  });
+
+  it("keeps asking while Claude is still checking the code, until it is connected", async () => {
+    vi.spyOn(api.claudeAccount, "status").mockResolvedValue(status());
+    vi.spyOn(api.claudeAccount, "startLogin").mockResolvedValue({
+      state: "waiting_for_code",
+      url: "https://claude.ai/oauth/authorize?state=xyz",
+      error: null,
+    });
+    // The submit returns after its wait while Claude is still busy …
+    vi.spyOn(api.claudeAccount, "submitCode").mockResolvedValue({ state: "verifying", url: null, error: null });
+    // … and a later poll sees the token arrive.
+    const poll = vi
+      .spyOn(api.claudeAccount, "loginStatus")
+      .mockResolvedValue({ state: "connected", url: null, error: null });
+    vi.spyOn(api.claudeAccount, "cancelLogin").mockResolvedValue(IDLE);
+    renderTab();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Reconnect" }));
+    await userEvent.type(await screen.findByLabelText("Code from Claude"), "abc123");
+    await userEvent.click(screen.getByRole("button", { name: "Finish" }));
+
+    await waitFor(() => expect(poll).toHaveBeenCalled(), { timeout: 5000 });
+    await waitFor(() => expect(notify.success).toHaveBeenCalled(), { timeout: 5000 });
+  });
+
+  it("re-reads who is busy when Restart is clicked and leaves a now-busy agent alone", async () => {
+    const before = status({
+      stale_agents: [
+        { id: "a1", name: "Builder", busy: false, started_at: minutesAgo(300) },
+        { id: "a2", name: "Tester", busy: false, started_at: minutesAgo(300) },
+      ],
+    });
+    const now = status({
+      stale_agents: [
+        { id: "a1", name: "Builder", busy: false, started_at: minutesAgo(300) },
+        { id: "a2", name: "Tester", busy: true, started_at: minutesAgo(300) },
+      ],
+    });
+    vi.spyOn(api.claudeAccount, "status").mockResolvedValueOnce(before).mockResolvedValue(now);
+    const restart = vi
+      .spyOn(api.agents, "restartContainer")
+      .mockResolvedValue({ ok: true, container: "mc-agent-builder", state: "running" });
+    renderTab();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Restart 2 agents" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Restart" }));
+
+    await waitFor(() => expect(restart).toHaveBeenCalledTimes(1));
+    expect(restart).toHaveBeenCalledWith("a1");
+  });
+});

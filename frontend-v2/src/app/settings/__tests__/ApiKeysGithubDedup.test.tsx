@@ -210,6 +210,7 @@ describe("ApiKeysSection GitHub dedup (Settings)", () => {
     vi.spyOn(api.secrets, "list").mockResolvedValue([]);
     vi.spyOn(api.claudeAccount, "status").mockResolvedValue({
       configured: false,
+      env_fallback: false,
       token_updated_at: null,
       check: null,
       claude_agents: 0,
