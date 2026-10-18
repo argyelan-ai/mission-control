@@ -27,6 +27,8 @@ type Check = {
   testable: boolean;
   cost: string;
   state: "ok" | "fail" | "never_tested";
+  reason: string | null;
+  reason_params: Record<string, number>;
   message: string | null;
   duration_ms: number | null;
   checked_at: string | null;

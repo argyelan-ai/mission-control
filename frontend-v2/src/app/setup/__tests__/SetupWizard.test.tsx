@@ -235,7 +235,7 @@ describe("First-Run-Wizard", () => {
     vi.spyOn(api.secrets, "providers").mockResolvedValue(PROVIDERS as never);
     vi.spyOn(api.repos, "setGithubConfig").mockResolvedValue({} as never);
     const run = vi.spyOn(api.configChecks, "run").mockResolvedValue({
-      item: checkItem("fail", "github", { message: "gh: Bad credentials (HTTP 401)", reason: "unknown", reason_params: {} }),
+      item: checkItem("fail", "github", { message: "gh: Bad credentials (HTTP 401)", reason: "rejected", reason_params: {} }),
       notRunnable: null,
     });
 
@@ -249,9 +249,8 @@ describe("First-Run-Wizard", () => {
 
     const ghError = await screen.findByTestId("setup-github-error");
     expect(ghError).toHaveTextContent("GitHub did not accept this.");
-    expect(ghError).toHaveTextContent("The test failed for a reason MC does not know.");
-    // An unknown reason keeps the server's text — folded away as a detail.
-    expect(within(ghError).getByTestId("check-detail")).toHaveTextContent("gh: Bad credentials");
+    expect(ghError).toHaveTextContent("Rejected — the key is expired, revoked or mistyped.");
+    expect(ghError).not.toHaveTextContent("Bad credentials");
     expect(run).toHaveBeenCalledWith("github", "connection");
     expect(screen.getByRole("heading", { name: "Connect GitHub" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Save & continue/ })).toBeDisabled();
@@ -267,5 +266,49 @@ describe("First-Run-Wizard", () => {
     // The compact bar is the phone's; the labelled row only from md up.
     expect(compact.className).toMatch(/(^|\s)md:hidden(\s|$)/);
     expect(screen.getByTestId("setup-steps").className).toMatch(/(^|\s)hidden md:flex(\s|$)/);
+  });
+
+  it("a test that did not get through (unknown reason): server text folded, the same value may be retried", async () => {
+    mockAuthed();
+    vi.spyOn(api.secrets, "providers").mockResolvedValue(PROVIDERS as never);
+    vi.spyOn(api.repos, "setGithubConfig").mockResolvedValue({} as never);
+    vi.spyOn(api.configChecks, "run").mockResolvedValue({
+      item: checkItem("fail", "github", { message: "gh: something odd", reason: "unknown", reason_params: {} }),
+      notRunnable: null,
+    });
+
+    render(<SetupWizardPage />);
+    await screen.findByText("Connect an LLM provider");
+    await userEvent.click(screen.getByRole("button", { name: "Skip" }));
+    await screen.findByRole("heading", { name: "Connect GitHub" });
+    await userEvent.type(screen.getByLabelText("Owner"), "acme");
+    await userEvent.type(screen.getByLabelText("Personal access token"), "ghp_ok");
+    await userEvent.click(screen.getByRole("button", { name: /Save & continue/ }));
+
+    const ghError = await screen.findByTestId("setup-github-error");
+    expect(ghError).toHaveTextContent("GitHub is saved, but the test did not get through.");
+    expect(ghError).toHaveTextContent("The test failed for a reason MC does not know.");
+    expect(within(ghError).getByTestId("check-detail")).toHaveTextContent("gh: something odd");
+    expect(screen.getByRole("button", { name: /Save & continue/ })).toBeEnabled();
+  });
+
+  it("a key test that timed out does not lock the value: 'continue' can be tried again", async () => {
+    mockAuthed();
+    vi.spyOn(api.secrets, "providers").mockResolvedValue(PROVIDERS as never);
+    vi.spyOn(api.secrets, "create").mockResolvedValue({} as never);
+    vi.spyOn(api.configChecks, "run").mockResolvedValue({
+      item: checkItem("fail", "secret", { reason: "timeout", reason_params: {}, message: "ReadTimeout" }),
+      notRunnable: null,
+    });
+
+    render(<SetupWizardPage />);
+    await screen.findByText("Connect an LLM provider");
+    await userEvent.type(screen.getByLabelText("Key"), "sk-ant-oat01-xyz");
+    await userEvent.click(screen.getByRole("button", { name: /Save & continue/ }));
+
+    const keyError = await screen.findByTestId("setup-key-error");
+    expect(keyError).toHaveTextContent("The key is saved, but the test did not get through.");
+    expect(keyError).toHaveTextContent("No answer in time.");
+    expect(screen.getByRole("button", { name: /Save & continue/ })).toBeEnabled();
   });
 });

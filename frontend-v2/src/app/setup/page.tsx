@@ -15,6 +15,7 @@ import { markWizardDone } from "@/lib/firstRun";
 import { AmbientBackground } from "@/components/layout/AmbientBackground";
 import { C, alpha } from "@/lib/colors";
 import { CheckReason } from "@/components/shared/CheckStatus";
+import { isValueRejected } from "@/lib/checkReason";
 
 import type { ConfigCheckItem, GithubConfigUpdate, Priority, TaskStatus } from "@/lib/types";
 
@@ -166,7 +167,9 @@ export default function SetupWizardPage() {
     if (problem) {
       if (problem.rejected) {
         setKeyCheck(problem.item);
-        setRejectedValue(value);
+        // Only a refused value is locked; a test that did not get through
+        // (timeout, network, rate limit) may be retried with the same value.
+        setRejectedValue(isValueRejected(problem.item) ? value : null);
       } else {
         setError(t("checkFailed", { error: problem.error }));
       }
@@ -196,7 +199,9 @@ export default function SetupWizardPage() {
     if (problem) {
       if (problem.rejected) {
         setGithubCheck(problem.item);
-        setGithubRejected(`${payload.owner ?? ""}\u0000${payload.token ?? ""}`);
+        setGithubRejected(
+          isValueRejected(problem.item) ? `${payload.owner ?? ""}\u0000${payload.token ?? ""}` : null,
+        );
       } else {
         setGithubError(t("checkFailed", { error: problem.error }));
       }
@@ -392,7 +397,9 @@ export default function SetupWizardPage() {
                 >
                   {keyCheck ? (
                     <>
-                      <span className="block font-medium">{t("keyRejected")}</span>
+                      <span className="block font-medium">
+                        {isValueRejected(keyCheck) ? t("keyRejected") : t("keyNotConfirmed")}
+                      </span>
                       <CheckReason item={keyCheck} className="mt-1" />
                     </>
                   ) : (
@@ -480,7 +487,9 @@ export default function SetupWizardPage() {
                 >
                   {githubCheck ? (
                     <>
-                      <span className="block font-medium">{t("githubRejected")}</span>
+                      <span className="block font-medium">
+                        {isValueRejected(githubCheck) ? t("githubRejected") : t("githubNotConfirmed")}
+                      </span>
                       <CheckReason item={githubCheck} className="mt-1" />
                     </>
                   ) : (

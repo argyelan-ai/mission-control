@@ -33,6 +33,22 @@ export function isCheckReasonCode(v: unknown): v is CheckReasonCode {
   return typeof v === "string" && (CHECK_REASON_CODES as readonly string[]).includes(v);
 }
 
+/** Reasons that say the VALUE is wrong (send a different one), as opposed
+ *  to the test not getting through (timeout, network, rate limit, unknown —
+ *  the same value may well work on a retry). */
+const VALUE_REASONS: readonly CheckReasonCode[] = [
+  "rejected",
+  "undecryptable",
+  "dimension_mismatch",
+  "wrong_token_type",
+  "missing_scope",
+  "invalid_owner",
+];
+
+export function isValueRejected(item: Pick<ConfigCheckItem, "state" | "reason"> | null | undefined): boolean {
+  return !!item && item.state === "fail" && isCheckReasonCode(item.reason) && VALUE_REASONS.includes(item.reason);
+}
+
 /** The catalog key under `checks.reason` and its values, or null when there
  *  is nothing to say (never tested). An unlisted or missing code on a failed
  *  result reads as `unknown`. Codes with an optional HTTP status have a

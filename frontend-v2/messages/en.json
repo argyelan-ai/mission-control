@@ -1255,9 +1255,11 @@
     "demoBoardFailed": "Failed to create demo board.",
     "testingKey": "Testing the key…",
     "keyRejected": "The key did not work.",
+    "keyNotConfirmed": "The key is saved, but the test did not get through.",
     "keyRejectedHint": "Check the key and save again, or skip this step.",
     "checkFailed": "The key was saved, but the test could not run: {error}",
     "githubRejected": "GitHub did not accept this.",
+    "githubNotConfirmed": "GitHub is saved, but the test did not get through.",
     "stepOf": "Step {n} of {total} · {label}"
   },
   "schedule": {
