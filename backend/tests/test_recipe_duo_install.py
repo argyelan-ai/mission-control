@@ -397,7 +397,18 @@ def test_tf_recipe_is_a_generic_duo_entry():
     assert tf["exclusive"] is True
     assert tf["context_len"] == 1048576
     assert tf["process_name"] == "glm53-flash-tf"            # = start.sh's CONTAINER_NAME
-    assert tf["drop_page_cache"] is False
+    # Field finding 2026-10-18 (twice): after the install's ~176 GB download the
+    # head's page cache was so full that start.sh sized the window at ~224k
+    # instead of 1M tokens; only a cache drop helped. So MC drops it.
+    assert tf["drop_page_cache"] is True
+    assert "drop_page_cache=false" not in tf["notes"]
+    assert "does not drop the page cache" not in tf["notes"]
+    assert "drop_page_cache=true" in tf["notes"]
+    # Run and measured on two GB10s by MC on 2026-10-18 — the flag says so,
+    # and the notes carry the date and the numbers behind it.
+    assert tf["gb10_validated"] is True
+    assert "Not validated on a GB10" not in tf["notes"]
+    assert "2026-10-18" in tf["notes"] and "58" in tf["notes"] and "GSM8K" in tf["notes"]
     assert tf["recipe_ref"].startswith("https://github.com/MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks-TensorFold")
     assert tf["env_map"]["WORKER"] == "{worker_ssh}"
     assert tf["env_map"]["FABRIC_PEER"] == "{worker_fabric_ip}"
@@ -428,7 +439,8 @@ async def test_tf_recipe_seeds_and_is_env_ready(session):
     row = (await session.exec(select(LocalRecipe).where(LocalRecipe.slug == TF_SLUG))).one()
     assert recipe_switcher.recipe_env_ready(row)
     assert recipe_switcher.recipe_nodes(row.topology) == 2
-    assert row.drop_page_cache is False
+    assert row.drop_page_cache is True
+    assert row.gb10_validated is True
 
 
 def _rendered_tf_commands() -> dict[str, str]:
@@ -484,11 +496,20 @@ _FAKE_CONFIG = """\
 WORKER="${WORKER:-mc@192.0.2.11}"
 TP="${TP:-2}"
 IMAGE=tensorfold-glm53:v0.6.0
+MODEL_ID=example/GLM-Model
+DFLASH2_ID=example/GLM-Drafter
+HF_CACHE="${HF_CACHE:-$STUB/head-hf}"
+STATE_DIR="$STUB/state"
 die() { echo "DIE: $*"; exit 7; }
 prebuilt_image() { echo "ghcr.io/example/tf@sha256:abc"; }
 """
 _FAKE_NODES = """\
-worker() { local i=$1; shift; [[ "$i" =~ ^[0-9]+$ ]] || { echo "BAD-WORKER-INDEX $i"; exit 9; }; SIDE=worker "$@"; }
+worker() {
+  local i=$1; shift; [[ "$i" =~ ^[0-9]+$ ]] || { echo "BAD-WORKER-INDEX $i"; exit 9; }
+  # one argument = a command line the remote shell parses (as over the real link)
+  if [ $# = 1 ]; then SIDE=worker bash -c "$1"; else SIDE=worker "$@"; fi
+}
+worker_hf_cache() { echo "$STUB/worker-hf"; }
 need_worker() { local i=$1; [ "$i" = 1 ] || die "need_worker $i"; }
 image_ident() { docker image inspect -f X "$1" >/dev/null && echo "ident-$(cat "$STUB/ident-head")" || echo missing; }
 worker_image_ident() { worker "$1" docker image inspect -f X "$2" >/dev/null && echo "ident-$(cat "$STUB/ident-worker")" || echo missing; }
@@ -498,13 +519,31 @@ _FAKE_DOCKER = """\
 echo "${SIDE:-head} docker $*" >> "$STUB/calls"
 case "$*" in
   *RepoDigests*) echo "[ghcr.io/example/tf@sha256:abc]" ;;
+  # the one-off root container: from now on this side's files count as ours
+  *"--entrypoint chown"*) [ -f "$STUB/chown-fails" ] || touch "$STUB/chowned-${SIDE:-head}" ;;
 esac
+exit 0
+"""
+# `id -u` answers a foreign uid while $STUB/foreign-<side> exists and that
+# side has not been chowned yet: every file in the stand-in cache then reads
+# as "not ours", exactly like a root-owned leftover does for find ! -user.
+_FAKE_ID = """\
+#!/usr/bin/env bash
+side=${SIDE:-head}
+if [ "$1" = -u ] && [ -f "$STUB/foreign-$side" ] && [ ! -f "$STUB/chowned-$side" ]; then echo 4242; exit 0; fi
+PATH=${PATH#*:} exec id "$@"
+"""
+_FAKE_FLOCK = """\
+#!/usr/bin/env bash
+[ -f "$STUB/prepare-running" ] && exit 1
 exit 0
 """
 
 
 def _run_tf_install(tmp_path: Path, *, head: str = "same", worker: str = "same",
-                    template: str | None = None, env: dict[str, str] | None = None):
+                    template: str | None = None, env: dict[str, str] | None = None,
+                    prepared: dict[str, tuple[str, ...]] | None = None,
+                    foreign: tuple[str, ...] = (), flags: tuple[str, ...] = ()):
     """Run the rendered install for real against the stand-in checkout.
 
     Returns ``(stdout, calls)``: what the install printed (with recipe_install's
@@ -523,10 +562,21 @@ def _run_tf_install(tmp_path: Path, *, head: str = "same", worker: str = "same",
     stub.mkdir()
     (stub / "docker").write_text(_FAKE_DOCKER)
     (stub / "git").write_text("#!/usr/bin/env bash\nexit 0\n")
-    for tool in ("docker", "git"):
+    (stub / "id").write_text(_FAKE_ID)
+    (stub / "flock").write_text(_FAKE_FLOCK)
+    for tool in ("docker", "git", "id", "flock"):
         (stub / tool).chmod(0o755)
     (stub / "ident-head").write_text(head)
     (stub / "ident-worker").write_text(worker)
+    for side in ("head", "worker"):
+        for name in (prepared or {}).get(side, ()):
+            target = stub / f"{side}-hf" / "hub" / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("x")
+        if side in (foreign or ()):
+            (stub / f"foreign-{side}").write_text("")
+    for flag in flags or ():
+        (stub / flag).write_text("")
     tf = _tf_spec()
     install = launch_template.build_install_command(
         slug=TF_SLUG, install_template=template or tf["install_template"], port=8000,
@@ -590,6 +640,89 @@ def test_tf_install_has_no_image_step_splice_left():
     assert "mc-prepare-weights" not in install
     assert "awk" not in install
     assert install.count("./scripts/prepare.sh") == 1
+
+
+# ── 6. root-owned leftovers in the Hugging Face cache ───────────────────────
+# Field finding 2026-10-18: the DFlash2 download stopped with PermissionError on
+# hub/.locks/models--<drafter>/*.lock — root's, left by an earlier download that
+# ran in a container as root. Upstream's prepare.sh downloads as the box user
+# (host hf CLI, or a container with --user), so every later run failed on them.
+# The install now finds such files of THIS recipe's repos, drops the stale
+# locks, hands the rest back with a one-off root container (the user is in the
+# docker group — no sudo), and says so; on both boxes, before prepare.sh.
+
+_CACHE = {
+    "head": (".locks/models--example--GLM-Drafter/abc.lock", "models--example--GLM-Drafter/blobs/abc",
+             "models--example--GLM-Model/blobs/def",
+             # another model in the same cache: none of the recipe's business
+             ".locks/models--other--Model/zzz.lock"),
+    "worker": ("models--example--GLM-Drafter/blobs/abc",),
+}
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
+def test_tf_install_leaves_a_cache_it_owns_alone(tmp_path):
+    out, calls = _run_tf_install(tmp_path, prepared=_CACHE)
+    assert "MC_EXIT:0" in out, out
+    assert "PREPARE-RAN" in out
+    assert "--entrypoint chown" not in calls
+    assert "belong to another user" not in out
+    assert (tmp_path / "stub/head-hf/hub/.locks/models--example--GLM-Drafter/abc.lock").exists()
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
+def test_tf_install_takes_back_root_owned_cache_files_on_the_head(tmp_path):
+    out, calls = _run_tf_install(tmp_path, prepared=_CACHE, foreign=("head",))
+    assert "MC_EXIT:0" in out, out
+    assert "PREPARE-RAN" in out
+    hub = tmp_path / "stub/head-hf/hub"
+    # a clear message, on the box that has the problem
+    assert "[mc] " in out and "belong to another user" in out and str(hub) in out
+    # the recipe's stale locks are gone; another model's lock is untouched
+    assert not (hub / ".locks/models--example--GLM-Drafter/abc.lock").exists()
+    assert (hub / ".locks/models--other--Model/zzz.lock").exists()
+    # the rest goes back to the user through a root container, no sudo
+    chown = [c for c in calls.splitlines() if "--entrypoint chown" in c]
+    assert chown and all(c.startswith("head docker run --rm --network none --user 0:0") for c in chown), calls
+    assert "tensorfold-glm53:v0.6.0" in chown[-1]
+    # to the user `id` names (the stand-in id says 4242 until the chown ran)
+    assert f"-R 4242:{os.getgid()} " in chown[-1]
+    assert f"{hub}/models--example--GLM-Drafter" in chown[-1]
+    assert f"{hub}/models--example--GLM-Model" in chown[-1]
+    assert "models--other--Model" not in "".join(chown)
+    assert "sudo" not in calls
+    # before prepare.sh, never after
+    assert out.index("belong to another user") < out.index("PREPARE-RAN")
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
+def test_tf_install_takes_back_root_owned_cache_files_on_the_worker(tmp_path):
+    out, calls = _run_tf_install(tmp_path, prepared=_CACHE, foreign=("worker",))
+    assert "MC_EXIT:0" in out, out
+    assert "PREPARE-RAN" in out
+    chown = [c for c in calls.splitlines() if "--entrypoint chown" in c]
+    assert chown and all(c.startswith("worker docker run") for c in chown), calls
+    assert str(tmp_path / "stub/worker-hf/hub/models--example--GLM-Drafter") in chown[-1]
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
+def test_tf_install_stops_with_the_manual_fix_when_the_cache_stays_foreign(tmp_path):
+    out, _ = _run_tf_install(tmp_path, prepared=_CACHE, foreign=("head",), flags=("chown-fails",))
+    assert "MC_EXIT:7" in out, out
+    assert "PREPARE-RAN" not in out
+    assert "sudo chown -R" in out
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
+def test_tf_install_never_touches_locks_while_prepare_sh_runs(tmp_path):
+    """A running prepare.sh holds those locks for real: the install waits for
+    nobody and deletes nothing, it stops and says why."""
+    out, calls = _run_tf_install(tmp_path, prepared=_CACHE, foreign=("head",), flags=("prepare-running",))
+    assert "MC_EXIT:7" in out, out
+    assert "PREPARE-RAN" not in out
+    assert "prepare.sh is still running" in out
+    assert (tmp_path / "stub/head-hf/hub/.locks/models--example--GLM-Drafter/abc.lock").exists()
+    assert "--entrypoint chown" not in calls
 
 
 @pytest.mark.asyncio
