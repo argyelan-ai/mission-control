@@ -6,8 +6,9 @@ reads one; ``POST …/run`` runs the registry procedure now and stores the
 result. Responses never carry key material — only states, short scrubbed
 texts and ages. The older per-page test buttons stay and write here too.
 
-Reading is open to signed-in users (states only, no values). Running is
-admin-only: it calls out with stored credentials and may spend rate limit
+Reading is open to signed-in users (states only, no values); the text of
+a result is admin-only, since a box probe's reason can name an address.
+Running is admin-only: it calls out with stored credentials and may spend rate limit
 or plan quota (see the ``cost`` hint per item).
 """
 from __future__ import annotations
@@ -23,6 +24,15 @@ from app.services.config_checks import COST_HINTS, CheckNotRunnable, UnknownChec
 router = APIRouter(prefix="/api/v1/config-checks", tags=["config-checks"])
 
 
+def _for_viewer(item: dict, user) -> dict:
+    """Viewers see state and age; the result text stays with admins."""
+    from app.auth import ROLE_HIERARCHY
+
+    if ROLE_HIERARCHY.get(getattr(user, "role", None), 0) >= ROLE_HIERARCHY[Role.ADMIN]:
+        return item
+    return {**item, "message": None}
+
+
 @router.get("")
 async def list_config_checks(
     kind: str | None = None,
@@ -36,7 +46,7 @@ async def list_config_checks(
     return {
         "kinds": config_checks.kinds_catalog(),
         "cost_hints": COST_HINTS,
-        "items": items,
+        "items": [_for_viewer(i, current_user) for i in items],
     }
 
 
@@ -48,7 +58,7 @@ async def get_config_check(
     current_user=Depends(require_user),
 ):
     try:
-        return await config_checks.status_item(session, kind, subject_id)
+        return _for_viewer(await config_checks.status_item(session, kind, subject_id), current_user)
     except UnknownCheck:
         raise HTTPException(status_code=404, detail=f"Unknown check '{kind}/{subject_id}'")
 

@@ -2391,6 +2391,33 @@
         ]
       }
     },
+    "/api/v1/config-checks": {
+      "get": {
+        "operationId": "list_config_checks_api_v1_config_checks_get",
+        "summary": "List Config Checks",
+        "tags": [
+          "config-checks"
+        ]
+      }
+    },
+    "/api/v1/config-checks/{kind}/{subject_id}": {
+      "get": {
+        "operationId": "get_config_check_api_v1_config_checks__kind___subject_id__get",
+        "summary": "Get Config Check",
+        "tags": [
+          "config-checks"
+        ]
+      }
+    },
+    "/api/v1/config-checks/{kind}/{subject_id}/run": {
+      "post": {
+        "operationId": "run_config_check_api_v1_config_checks__kind___subject_id__run_post",
+        "summary": "Run Config Check",
+        "tags": [
+          "config-checks"
+        ]
+      }
+    },
     "/api/v1/credentials": {
       "get": {
         "operationId": "list_credentials_api_v1_credentials_get",

@@ -337,8 +337,21 @@ async def test_running_a_check_requires_admin(client: AsyncClient):
     assert (
         await client.post("/api/v1/config-checks/secret/openai_api_key/run", headers=headers)
     ).status_code == 403
-    # Reading the status (no values, no spend) stays open to signed-in users.
-    assert (await client.get("/api/v1/config-checks", headers=headers)).status_code == 200
+    # Reading the status (no values, no spend) stays open to signed-in users,
+    # without the result text (a box probe's reason can name an address).
+    from app.services import config_checks
+
+    async with _session() as s:
+        await config_checks.store._record(
+            s, "secret", "openai_api_key", ok=False, message="refused by 192.0.2.5",
+            duration_ms=1, value_fingerprint=config_checks.store.fingerprint("sk-x"),
+        )
+    resp = await client.get("/api/v1/config-checks", headers=headers)
+    assert resp.status_code == 200
+    (item,) = [i for i in resp.json()["items"] if i["subject_id"] == "openai_api_key"]
+    assert item["state"] == "fail" and item["message"] is None
+    one = await client.get("/api/v1/config-checks/secret/openai_api_key", headers=headers)
+    assert one.json()["message"] is None
 
 
 # ── 7. the old test buttons write through the registry ───────────────────
