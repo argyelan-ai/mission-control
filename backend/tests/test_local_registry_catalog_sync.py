@@ -150,13 +150,16 @@ async def test_a_seeded_row_has_the_fingerprint_of_its_catalog_entry(session, ca
         assert row_fingerprint(row) == spec_fingerprint(RecipeSpec.model_validate(raw))
 
 
-def test_a_new_optional_field_with_its_default_keeps_old_fingerprints():
-    """Fields at their default are left out, so a catalog version shipped
-    before a field existed still matches the row seeded from it."""
-    old = RecipeSpec.model_validate(_recipe("x"))
-    with_default = RecipeSpec.model_validate(_recipe("x", supports_vision=False, exclusive=None))
-    assert spec_fingerprint(old) == spec_fingerprint(with_default)
-    assert spec_fingerprint(old) != spec_fingerprint(RecipeSpec.model_validate(_recipe("x", notes="new")))
+def test_a_new_optional_field_with_its_default_keeps_old_fingerprints(monkeypatch):
+    """Fields at their default are left out, so adding a field to the schema
+    (the code before it did not know it) changes no fingerprint that was
+    shipped before — otherwise every install would look locally edited."""
+    spec = RecipeSpec.model_validate(_recipe("x"))
+    today = spec_fingerprint(spec)
+    older_code = tuple(f for f in lr.MANAGED_FIELDS if f not in ("supports_vision", "exclusive"))
+    monkeypatch.setattr(lr, "MANAGED_FIELDS", older_code)
+    assert spec_fingerprint(spec) == today
+    assert today != spec_fingerprint(RecipeSpec.model_validate(_recipe("x", notes="new")))
 
 
 def test_enabled_is_not_part_of_the_fingerprint():
@@ -377,3 +380,25 @@ async def test_the_startup_seed_runs_the_sync(session, catalog, monkeypatch):
     await seeds._seed_local_recipes()
 
     assert (await _row(session, "tf-glm")).gb10_validated is True
+
+
+async def test_a_registry_refresh_carries_drop_page_cache_into_instances(
+    session, catalog, monkeypatch, fake_redis
+):
+    """Same rule on the other write path: a registry that flips the flag."""
+    from tests.test_local_registry import json_source, mock_httpx, use_fake_redis, use_sources
+
+    use_fake_redis(monkeypatch, fake_redis)
+    entry = _recipe("tf-glm", source_registry="community")
+    use_sources(monkeypatch, "https://registry.invalid/recipes.json")
+    mock_httpx(monkeypatch, json_source(entry))
+    await lr.refresh_from_sources(session)
+    session.add(_instance("tf-glm-a", "tf-glm", drop=False))
+    await session.commit()
+
+    mock_httpx(monkeypatch, json_source({**entry, "drop_page_cache": True}))
+    await lr.refresh_from_sources(session)
+
+    session.expire_all()
+    rt = (await session.exec(select(Runtime).where(Runtime.slug == "tf-glm-a"))).first()
+    assert rt.drop_page_cache is True
