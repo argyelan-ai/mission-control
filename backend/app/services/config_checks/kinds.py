@@ -382,15 +382,24 @@ register(CheckKind("github", "GitHub", "rate_limited", _github_subjects, _run_gi
 
 
 async def _embeddings_subjects(session: AsyncSession) -> list[Subject]:
+    from app.services import ai_provider_config
     from app.services.embedding_provider import active_embedding_provider
 
     provider = active_embedding_provider()
+    # The bearer key is part of what gets tested: without it a replaced key
+    # would keep the old green (ADR-093 §2). It also puts the key into
+    # ``scrub()``. Each arm reads its own key (see embedding_provider.headers).
+    get_key = (
+        ai_provider_config.get_embeddings_cloud_api_key
+        if provider.key == "cloud"
+        else ai_provider_config.get_embeddings_api_key
+    )
     return [
         Subject(
             id=provider.key,
             label=provider.label,
             configured=True,
-            material=(provider.url(), provider.model()),
+            material=(provider.url(), provider.model(), await get_key() or None),
             ref=provider,
         )
     ]

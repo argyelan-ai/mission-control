@@ -438,6 +438,66 @@ async def test_embeddings_button_records_the_active_provider(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "arm, getter",
+    [("spark", "get_embeddings_api_key"), ("cloud", "get_embeddings_cloud_api_key")],
+)
+async def test_replacing_the_embeddings_key_turns_the_result_into_never_tested(
+    auth_client: AsyncClient, monkeypatch, arm: str, getter: str
+):
+    """The bearer key is part of what was tested: a new key that nobody
+    tried must not inherit the old green (ADR-093 §2). Each arm has its own
+    key; only that arm's getter is patched."""
+    from app.config import settings
+    from app.services import ai_provider_config, embedding_provider
+
+    monkeypatch.setattr(settings, "ai_embeddings_provider", arm, raising=False)
+    provider = embedding_provider.active_embedding_provider()
+    assert provider.key == arm
+    current = {"key": "emb-first-value"}
+
+    async def fake_key():
+        return current["key"]
+
+    async def fake_embed(self, text: str):
+        return [0.0] * embedding_provider.EMBED_DIM
+
+    monkeypatch.setattr(ai_provider_config, getter, fake_key)
+    monkeypatch.setattr(type(provider), "embed", fake_embed)
+    ran = (await auth_client.post(f"/api/v1/config-checks/embeddings/{provider.key}/run")).json()
+    assert ran["state"] == "ok"
+
+    current["key"] = "emb-second-value"
+    item = (await auth_client.get(f"/api/v1/config-checks/embeddings/{provider.key}")).json()
+    assert item["state"] == "never_tested"
+    assert item["value_changed"] is True
+
+
+@pytest.mark.asyncio
+async def test_an_embeddings_error_that_echoes_the_key_is_scrubbed(
+    auth_client: AsyncClient, monkeypatch
+):
+    from app.services import ai_provider_config, embedding_provider
+
+    provider = embedding_provider.active_embedding_provider()
+
+    async def fake_key():
+        return "emb-leaky-value"
+
+    async def failing_embed(self, text: str):
+        raise RuntimeError("upstream said: bad bearer emb-leaky-value")
+
+    monkeypatch.setattr(ai_provider_config, "get_embeddings_api_key", fake_key)
+    monkeypatch.setattr(ai_provider_config, "get_embeddings_cloud_api_key", fake_key)
+    monkeypatch.setattr(type(provider), "embed", failing_embed)
+    ran = (await auth_client.post(f"/api/v1/config-checks/embeddings/{provider.key}/run")).json()
+    assert ran["state"] == "fail"
+    assert "emb-leaky-value" not in (ran.get("message") or "")
+    item = (await auth_client.get(f"/api/v1/config-checks/embeddings/{provider.key}")).json()
+    assert "emb-leaky-value" not in (item.get("message") or "")
+
+
+@pytest.mark.asyncio
 async def test_github_probe_records_its_result(auth_client: AsyncClient):
     await _store_secret("github_owner", "some-owner")
     await _store_secret("github_token", "ghp_BAD")
