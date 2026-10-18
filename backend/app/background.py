@@ -361,6 +361,19 @@ async def prepare_process() -> None:
     # NACH _seed_hosts: die Slot-Zeilen leiten sich aus den Boxen ab.
     await _ensure_slot_runtimes()
     await _seed_github_token()
+    # PR 2-5 (Welle 2, Z3): probe once whether SECRETS_ENCRYPTION_KEY can
+    # actually decrypt an existing secret. A wrong key after moving the DB
+    # to a new host used to fail silently (safe_decrypt -> None everywhere);
+    # now /health turns "degraded" with a readable message instead. Never
+    # fatal — a probe failure must not block boot, it only marks /health.
+    try:
+        from app.database import async_session_maker
+        from app.services.secrets_probe import probe_secrets_decryptable
+
+        async with async_session_maker() as _secrets_probe_session:
+            await probe_secrets_decryptable(_secrets_probe_session)
+    except Exception as e:
+        logger.warning("secrets decrypt probe failed to run (non-fatal): %s", e)
     # MEM-04 (Phase 2): ensure Qdrant has agent_id + board_id keyword
     # indexes on all three memory layers. Idempotent — safe across restarts.
     # Existing collections created before this code do NOT have the full
