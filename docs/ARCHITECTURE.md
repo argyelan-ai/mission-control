@@ -573,7 +573,11 @@ Watermark (`services/host_memory_prep`), nur das MemAvailable-Warten.
 Credits: `local_recipes.author` / `author_url` stehen auf jeder Karte im
 Modell-Browser („von {author} ↗"). Fuer die mitgelieferten Rezepte traegt die
 Migration 0177 sie nach — der Seeder ist insert-only und haette bestehende
-Zeilen nie wieder angefasst.
+Zeilen nie wieder angefasst. Seit 18.10.2026 fuehrt `sync_builtin_recipes`
+unveraenderte `builtin`-Zeilen beim Start auf den Katalogstand nach
+(Fingerabdruecke in `config/local-recipes.shipped.json`, nach jeder
+Katalog-Aenderung `backend/scripts/record_shipped_recipes.py` laufen lassen);
+lokal geaenderte Zeilen bleiben (ADR-077, Nachtrag 18.10.2026).
 
 ##### Box-Wizard — eine GPU-Box per Klick anbinden
 
