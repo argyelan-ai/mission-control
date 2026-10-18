@@ -41,8 +41,26 @@ from app.services.local_registry import (
     seed_local_recipes,
 )
 
+# The live catalog (config/local-recipes.json) now ships only the recipes MC
+# supports today. These tests exercise the seed MECHANICS with the full legacy
+# catalog, frozen as a fixture, so they keep covering every template shape.
+LEGACY_SEED = Path(__file__).resolve().parent / "fixtures" / "local-recipes-legacy.json"
+
+
+@pytest.fixture(autouse=True)
+def _legacy_seed():
+    # Deliberately not ``monkeypatch``: requesting it in an autouse fixture
+    # moves its teardown behind the app's, which leaves a redis client bound
+    # to this test's event loop and breaks later test modules.
+    from app.services import local_registry as _lr
+    saved = _lr._SEED_PATH
+    _lr._SEED_PATH = LEGACY_SEED
+    yield
+    _lr._SEED_PATH = saved
+
+
 MIGRATIONS = Path(__file__).resolve().parents[1] / "alembic" / "versions"
-SEED_FILE = Path(__file__).resolve().parents[1] / "config" / "local-recipes.json"
+SEED_FILE = Path(__file__).resolve().parent / "fixtures" / "local-recipes-legacy.json"
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
