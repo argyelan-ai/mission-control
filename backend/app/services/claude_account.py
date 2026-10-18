@@ -21,6 +21,23 @@ three questions the settings card asks and adds no second way to store it:
 
 Host agents (on the machine itself, not in Docker) read the token from
 ``.env`` instead; the status counts them apart so the card can say so.
+
+**The .env fallback.** Installs from before the vault keep
+``CLAUDE_CODE_OAUTH_TOKEN`` in the root ``.env``; ``scripts/start-all.sh``
+copies it into ``docker/.env.shared``, which every Claude container loads. The
+entrypoint only replaces it when the bootstrap returns a vault token, so with
+no vault token the containers still sign in with the .env one — and removing
+the vault token does not stop them. The status therefore reports whether such
+a fallback exists (``env_fallback``, a yes/no — the value is never read out).
+
+**Errors are codes** (``login.error``: ``image_unavailable``,
+``setup_token_failed``, ``timeout``, ``code_rejected``, ``store_failed``,
+``saved_not_accepted``); the card words them in the user's language.
+
+**One worker only.** The running login lives in this process (``_LOGIN``).
+That is right while the backend runs a single uvicorn worker (the backend
+Dockerfile starts ``--workers 1``); with several workers a poll could land
+on a worker that knows nothing about the login.
 """
 from __future__ import annotations
 
@@ -32,6 +49,7 @@ import subprocess
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -45,6 +63,12 @@ CHECK_KIND = "secret"
 LOGIN_CONTAINER_PREFIX = "mc-claude-login-"
 LOGIN_LABEL = "mc.role=claude-login"
 _TMUX_SESSION = "mclogin"
+#: ``claude setup-token`` quits ~0.5 s after printing the token, and a tmux
+#: session ends with its command — taking the pane (and the token) with it.
+#: A shell that keeps running after claude keeps the pane readable until MC
+#: has read it and removed the container (checked by hand with tmux:
+#: ``'echo …'`` alone → "no server running"; ``'echo …; sleep 900'`` → readable).
+_LOGIN_COMMAND = "claude setup-token; sleep 900"
 #: The container ends itself after this long even if MC forgets it.
 _CONTAINER_LIFETIME_S = 900
 #: A login nobody finishes is given up after this long.
@@ -63,19 +87,48 @@ CODE_RE = re.compile(r"^[A-Za-z0-9_\-#.~]{1,512}$")
 # ── docker (one seam, patched in tests) ───────────────────────────────────
 
 
-def _docker(args: list[str], timeout: float) -> tuple[int, str]:
-    """Run ``docker <args>`` and return (exit code, stdout+stderr)."""
+def _docker(args: list[str], timeout: float, input: str | None = None) -> tuple[int, str]:
+    """Run ``docker <args>`` (``input`` goes to stdin) and return (exit code, stdout+stderr)."""
     try:
         proc = subprocess.run(
-            ["docker", *args], capture_output=True, text=True, timeout=timeout
+            ["docker", *args], capture_output=True, text=True, timeout=timeout, input=input
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return 1, f"{type(exc).__name__}"
     return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
 
 
-async def _run_docker(args: list[str], timeout: float = 15) -> tuple[int, str]:
-    return await asyncio.to_thread(_docker, args, timeout)
+async def _run_docker(args: list[str], timeout: float = 15, input: str | None = None) -> tuple[int, str]:
+    return await asyncio.to_thread(_docker, args, timeout, input)
+
+
+# ── the .env fallback (yes/no only) ───────────────────────────────────────
+
+_ENV_FILES = (".env", "docker/.env.shared")
+_ENV_LINE_RE = re.compile(r"^\s*(?:export\s+)?CLAUDE_CODE_OAUTH_TOKEN\s*=\s*(.*)$")
+
+
+def env_fallback_set() -> bool:
+    """Whether ``.env`` or ``docker/.env.shared`` holds a non-empty token.
+
+    Only the presence is reported, never the value. Both files are visible to
+    the backend container (``.env`` read-only, ``docker/`` as the renderer's
+    mount); the containers load ``docker/.env.shared``, which ``start-all.sh``
+    regenerates from ``.env`` — so either one counts.
+    """
+    from app.config import settings
+
+    root = Path(settings.mc_repo_path)
+    for rel in _ENV_FILES:
+        try:
+            text = (root / rel).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            m = _ENV_LINE_RE.match(line)
+            if m and m.group(1).strip().strip("\"'").strip():
+                return True
+    return False
 
 
 # ── status ────────────────────────────────────────────────────────────────
@@ -174,6 +227,7 @@ async def account_status(session: AsyncSession) -> dict:
     docker_agents, host_agents = await _claude_agents(session)
     return {
         "configured": row is not None,
+        "env_fallback": env_fallback_set(),
         "token_updated_at": changed_at.isoformat() if changed_at else None,
         "check": check,
         "claude_agents": len(docker_agents),
@@ -248,19 +302,16 @@ async def start_login() -> dict:
         if code != 0:
             logger.warning("claude login: could not start the login container (%s)", out.strip()[:200])
             _LOGIN.state = "failed"
-            _LOGIN.error = (
-                "Could not start the Claude agent image. Is Docker running and the "
-                "mc-claude-agent image available?"
-            )
+            _LOGIN.error = "image_unavailable"
             return login_view()
         code, _ = await _run_docker(
             [
                 "exec", name, "tmux", "new-session", "-d", "-s", _TMUX_SESSION,
-                "-x", "400", "-y", "80", "claude", "setup-token",
+                "-x", "400", "-y", "80", _LOGIN_COMMAND,
             ]
         )
         if code != 0:
-            await _finish("failed", "Could not run claude setup-token in the agent image.")
+            await _finish("failed", "setup_token_failed")
         logger.info("claude login: started in %s", name)
         return login_view()
 
@@ -297,7 +348,7 @@ async def _advance(session: AsyncSession) -> None:
     if _LOGIN is None or _LOGIN.state in ("connected", "failed"):
         return
     if time.monotonic() - _LOGIN.started > LOGIN_TIMEOUT_S:
-        await _finish("failed", "The sign-in took too long. Start again.")
+        await _finish("failed", "timeout")
         return
     text = await _pane()
     token_match = _TOKEN_RE.search(text)
@@ -306,14 +357,25 @@ async def _advance(session: AsyncSession) -> None:
         del text  # the scrollback held the token; drop our copy before anything else
         # The container goes first: its scrollback is the only other copy.
         await _remove(_LOGIN.container)
-        ok = await _store_token(session, token)
+        try:
+            ok = await _store_token(session, token)
+        except Exception as exc:  # noqa: BLE001 — the login must end, not hang in "verifying"
+            del token
+            # Only the type: the message of a DB error could quote the value.
+            logger.error("claude login: storing the new token failed (%s)", type(exc).__name__)
+            try:
+                await session.rollback()
+            except Exception:  # noqa: BLE001
+                pass
+            _LOGIN.state, _LOGIN.error = "failed", "store_failed"
+            return
         del token
         _LOGIN.state = "connected"
-        _LOGIN.error = None if ok else "Saved, but Claude did not accept the new token — see the check."
+        _LOGIN.error = None if ok else "saved_not_accepted"
         logger.info("claude login: new token stored (check %s)", "ok" if ok else "failed")
         return
     if _LOGIN.code_sent and _FAILURE_RE.search(text):
-        await _finish("failed", "Claude did not accept the code. Start again and paste the whole code.")
+        await _finish("failed", "code_rejected")
         return
     if _LOGIN.url is None:
         url_match = _URL_RE.search(text)
@@ -337,7 +399,14 @@ async def submit_code(session: AsyncSession, code: str) -> dict:
     async with _LOCK:
         if _LOGIN is None or _LOGIN.state not in ("starting", "waiting_for_code", "verifying"):
             raise NoLogin()
-        await _run_docker(["exec", _LOGIN.container, "tmux", "send-keys", "-t", _TMUX_SESSION, "-l", code])
+        # The code goes in on stdin (tmux buffer), not as an argument: arguments
+        # show up in the host's process list while docker runs.
+        await _run_docker(
+            ["exec", "-i", _LOGIN.container, "tmux", "load-buffer", "-b", "mccode", "-"], input=code
+        )
+        await _run_docker(
+            ["exec", _LOGIN.container, "tmux", "paste-buffer", "-d", "-b", "mccode", "-t", _TMUX_SESSION]
+        )
         await _run_docker(["exec", _LOGIN.container, "tmux", "send-keys", "-t", _TMUX_SESSION, "Enter"])
         _LOGIN.code_sent = True
         _LOGIN.state = "verifying"

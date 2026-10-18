@@ -21,6 +21,7 @@ Docker and Claude are always mocked: no test reaches a container or Anthropic.
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -78,16 +79,35 @@ def _no_login_left_over():
 
 
 class FakeDocker:
-    """Stands in for the docker CLI: records every call, answers by verb."""
+    """Stands in for the docker CLI: records every call, answers by verb.
+
+    It models the one tmux rule the login depends on: a session ends together
+    with its command. Once ``claude_exited`` is set (``claude setup-token``
+    prints the token and quits ~0.5 s later), ``capture-pane`` fails with
+    "no server running" unless the session runs a shell that keeps going
+    after claude (``'claude setup-token; sleep …'``).
+    """
 
     def __init__(self):
         self.calls: list[list[str]] = []
+        self.inputs: list[str | None] = []
         self.started_at: dict[str, tuple[str, str]] = {}  # container -> (status, iso)
         self.pane = ""
         self.fail_run = False
+        self.claude_exited = False
+        self.buffer: str | None = None
 
-    def __call__(self, args: list[str], timeout: float) -> tuple[int, str]:
+    def _pane_survives_exit(self) -> bool:
+        new = next((c for c in self.calls if c[0] == "exec" and "new-session" in c), None)
+        if new is None:
+            return False
+        cmd = new[new.index("80") + 1:]
+        # A single shell string that runs something after claude keeps the pane.
+        return len(cmd) == 1 and re.search(r"claude setup-token\s*;", cmd[0]) is not None
+
+    def __call__(self, args: list[str], timeout: float, input: str | None = None) -> tuple[int, str]:
         self.calls.append(list(args))
+        self.inputs.append(input)
         verb = args[0]
         if verb == "inspect":
             lines = []
@@ -99,11 +119,25 @@ class FakeDocker:
         if verb == "run":
             return (1, "Unable to find image") if self.fail_run else (0, "c0ffee\n")
         if verb == "exec" and "capture-pane" in args:
+            if self.claude_exited and not self._pane_survives_exit():
+                return 1, "no server running on /tmp/tmux-0/default\n"
             return 0, self.pane
+        if verb == "exec" and "load-buffer" in args:
+            self.buffer = input
         return 0, ""
 
     def verbs(self) -> list[str]:
         return [c[0] for c in self.calls]
+
+    def typed(self) -> list[str]:
+        """What reached the claude prompt: pasted buffers and literal keys."""
+        out = []
+        for c in self.calls:
+            if c[0] == "exec" and "paste-buffer" in c:
+                out.append(self.buffer or "")
+            if c[0] == "exec" and "send-keys" in c:
+                out.append(c[-1])
+        return out
 
 
 @pytest.fixture
@@ -266,7 +300,7 @@ async def test_reconnect_starts_setup_token_in_a_throwaway_container(auth_client
     # No secret goes into the throwaway container.
     assert not any("TOKEN" in a for a in run)
     tmux = next(c for c in docker.calls if c[0] == "exec" and "new-session" in c)
-    assert tmux[-2:] == ["claude", "setup-token"]
+    assert tmux[-1].startswith("claude setup-token")
 
 
 async def test_the_sign_in_link_is_shown_once_claude_prints_it(auth_client, docker):
@@ -299,10 +333,10 @@ async def test_submitting_the_code_stores_the_token_and_runs_the_check_once(
     body = resp.json()
     assert body["state"] == "connected"
 
-    # The code went in as literal keys, then Enter.
-    sends = [c for c in docker.calls if c[0] == "exec" and "send-keys" in c]
-    assert sends[0][-2:] == ["-l", "abc123#state-xyz"]
-    assert sends[1][-1] == "Enter"
+    # The code went in through a tmux buffer fed on stdin, then Enter — never
+    # as a command-line argument (visible in the host's process list).
+    assert docker.typed() == ["abc123#state-xyz", "Enter"]
+    assert not any("abc123#state-xyz" in a for c in docker.calls for a in c)
 
     # Stored in the vault through the shared helper, and checked once (E8a: on save).
     from app.services.secrets_helper import get_secret_plaintext_by_key
@@ -341,7 +375,8 @@ async def test_claude_refusing_the_code_reads_failed_without_storing(auth_client
     docker.pane += "\nOAuth error: Invalid code. Please make sure the full code was copied\n"
     body = (await auth_client.post("/api/v1/claude-account/login/code", json={"code": "wrong"})).json()
     assert body["state"] == "failed"
-    assert body["error"]
+    # A code, not English prose: the card words it in the user's language.
+    assert body["error"] == "code_rejected"
     from app.services.secrets_helper import get_secret_plaintext_by_key
 
     async with _session() as s:
@@ -353,7 +388,7 @@ async def test_image_missing_reads_failed_with_a_reason(auth_client, docker):
     docker.fail_run = True
     body = (await auth_client.post("/api/v1/claude-account/login")).json()
     assert body["state"] == "failed"
-    assert body["error"]
+    assert body["error"] == "image_unavailable"
 
 
 async def test_cancel_removes_the_container(auth_client, docker):
@@ -370,3 +405,108 @@ async def test_a_new_login_replaces_an_unfinished_one(auth_client, docker):
     name = first[first.index("--name") + 1]
     await auth_client.post("/api/v1/claude-account/login")
     assert ["rm", "-f", name] in docker.calls
+
+
+# ── 4. Review findings (PR #858) ──────────────────────────────────────────
+
+_TOKEN_SCREEN = (
+    "\n✓ Long-lived authentication token created successfully!\n\n"
+    f"Your OAuth token (valid for 1 year):\n\n{FAKE_TOKEN}\n\n"
+    "Store this token securely.\n"
+)
+
+
+async def _login_waiting_for_code(auth_client, docker):
+    await auth_client.post("/api/v1/claude-account/login")
+    docker.pane = f"Use the url below to sign in:\n{LOGIN_URL}\nPaste code here if prompted >\n"
+    assert (await auth_client.get("/api/v1/claude-account/login")).json()["state"] == "waiting_for_code"
+
+
+async def test_the_token_is_kept_when_setup_token_quits_right_after_printing_it(
+    auth_client, docker, claude_check
+):
+    """claude setup-token prints the token and exits ~0.5 s later. A tmux
+    session ends with its command, so the pane must outlive it — otherwise
+    MC never reads the one-year token that was just created."""
+    await _login_waiting_for_code(auth_client, docker)
+    docker.pane += _TOKEN_SCREEN
+    docker.claude_exited = True
+    body = (await auth_client.post("/api/v1/claude-account/login/code", json={"code": "abc123#s"})).json()
+    assert body["state"] == "connected"
+    from app.services.secrets_helper import get_secret_plaintext_by_key
+
+    async with _session() as s:
+        assert await get_secret_plaintext_by_key(s, TOKEN_KEY) == FAKE_TOKEN
+
+
+async def test_a_vault_error_ends_the_login_as_failed_without_leaking_the_token(
+    auth_client, docker, claude_check, monkeypatch, caplog
+):
+    caplog.set_level(logging.DEBUG)
+
+    async def boom(*_a, **_kw):
+        raise RuntimeError("database is gone")
+
+    monkeypatch.setattr("app.services.secrets_helper.upsert_secret_by_key", boom)
+    await _login_waiting_for_code(auth_client, docker)
+    docker.pane += _TOKEN_SCREEN
+    resp = await auth_client.post("/api/v1/claude-account/login/code", json={"code": "abc123#s"})
+    assert resp.status_code == 200
+    assert (resp.json()["state"], resp.json()["error"]) == ("failed", "store_failed")
+    assert FAKE_TOKEN not in resp.text
+    assert FAKE_TOKEN not in caplog.text
+
+
+async def test_a_login_nobody_finishes_fails_with_the_timeout_code(auth_client, docker, monkeypatch):
+    from app.services import claude_account
+
+    await auth_client.post("/api/v1/claude-account/login")
+    monkeypatch.setattr(claude_account, "LOGIN_TIMEOUT_S", -1)
+    body = (await auth_client.get("/api/v1/claude-account/login")).json()
+    assert body == {"state": "failed", "url": None, "error": "timeout"}
+
+
+async def test_a_token_claude_does_not_accept_is_saved_with_a_code(auth_client, docker, claude_check, monkeypatch):
+    from app.services import claude_account
+
+    bad = "sk-ant-oat01-bad" + "c" * 40
+    monkeypatch.setattr(claude_account, "_TOKEN_RE", re.compile(re.escape(bad)))
+    await _login_waiting_for_code(auth_client, docker)
+    docker.pane += f"\n{bad}\n"
+    body = (await auth_client.post("/api/v1/claude-account/login/code", json={"code": "abc"})).json()
+    assert (body["state"], body["error"]) == ("connected", "saved_not_accepted")
+
+
+@pytest.fixture
+def repo_root(tmp_path, monkeypatch):
+    from app.config import settings
+
+    (tmp_path / "docker").mkdir()
+    monkeypatch.setattr(settings, "mc_repo_path", str(tmp_path))
+    return tmp_path
+
+
+async def test_status_reports_a_token_in_env_as_fallback_without_its_value(auth_client, docker, repo_root):
+    """Older installs keep the token only in .env; the agents still sign in
+    with it. The card must not call such an install "not connected"."""
+    env_token = "sk-ant-oat01-fromenv-" + "e" * 40
+    (repo_root / ".env").write_text(f"OTHER=1\nCLAUDE_CODE_OAUTH_TOKEN={env_token}\n")
+    resp = await auth_client.get("/api/v1/claude-account")
+    body = resp.json()
+    assert body["configured"] is False
+    assert body["env_fallback"] is True
+    assert env_token not in resp.text
+
+
+async def test_the_agents_env_file_alone_also_counts_as_fallback(auth_client, docker, repo_root):
+    (repo_root / "docker" / ".env.shared").write_text('CLAUDE_CODE_OAUTH_TOKEN="sk-ant-oat01-x"\n')
+    assert (await auth_client.get("/api/v1/claude-account")).json()["env_fallback"] is True
+
+
+@pytest.mark.parametrize(
+    "content",
+    ["", "CLAUDE_CODE_OAUTH_TOKEN=\n", "# CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-old\n", 'CLAUDE_CODE_OAUTH_TOKEN=""\n'],
+)
+async def test_an_empty_or_commented_env_entry_is_no_fallback(auth_client, docker, repo_root, content):
+    (repo_root / ".env").write_text(content)
+    assert (await auth_client.get("/api/v1/claude-account")).json()["env_fallback"] is False
