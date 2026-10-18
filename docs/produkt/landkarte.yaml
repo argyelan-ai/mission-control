@@ -329,6 +329,11 @@ features:
       # per-tab test buttons write through it. No UI caller yet (PR 2-2).
       - "* /api/v1/config-checks"
       - "* /api/v1/config-checks/*"
+      # Claude account card (Welle 2, PR 2-4): token status from the check
+      # registry, reconnect via claude setup-token in a throwaway container,
+      # agents still holding the old token. Settings -> Claude.
+      - "* /api/v1/claude-account"
+      - "* /api/v1/claude-account/*"
     tables:
       # Settings storage: app_settings rows back the AI-provider, channel
       # and night-shift window config (services/*_config.py,
