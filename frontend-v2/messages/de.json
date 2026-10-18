@@ -3076,9 +3076,25 @@
       "installRunning": "Installation läuft…",
       "installDone": "Installation abgeschlossen.",
       "installCreateAndStart": "Runtime anlegen & starten",
-      "installRuntimeCreated": "Runtime angelegt und gestartet — Gewichte laden noch.",
+      "startProgressLabel": "Start",
+      "startProgressHint": "Du kannst diesen Dialog schliessen — der Start läuft weiter. Die Runtimes-Seite zeigt denselben Stand.",
+      "startPausedNotice": "Auf dieser Box gibt es schon eine Runtime für dieses Rezept ({slug}), sie ist aber pausiert. MC legt keine zweite an. Setz sie fort, um zu starten — danach passt der Wächter wieder auf sie auf.",
+      "startResumeAndStart": "Fortsetzen und starten",
+      "startStage": {
+        "sending": "Start geht an die Box — Speicher freimachen und Starten kann ein paar Minuten dauern.",
+        "waiting": "Start gesendet. Warte auf den ersten Stand von der Box…",
+        "evicting": "Box wird frei gemacht — das vorige Modell wird gestoppt.",
+        "launching": "Engine startet auf der Box.",
+        "loading": "Gewichte laden — grosse Modelle brauchen 8–30 Minuten.",
+        "starting": "Startet — geplante Pause, kein Ausfall.",
+        "serving": "Bereit — die Engine antwortet.",
+        "servingModel": "Bereit — die Engine antwortet mit {model}.",
+        "already": "Läuft schon — nichts wurde verändert.",
+        "quiet": "Start angenommen, aber die Engine antwortet noch nicht."
+      },
       "close": "Schliessen",
-      "rowActions": "Weitere Aktionen für {name}"
+      "rowActions": "Weitere Aktionen für {name}",
+      "startPausedElsewhere": "Die Runtime {slug} für dieses Rezept ist auf dieser Box pausiert — MC legt keine zweite an. Fortsetzen geht im Deploy-Dialog des Rezepts („Fortsetzen und starten“)."
     },
     "bindAgentModal": {
       "title": "Agent binden",
@@ -3200,7 +3216,8 @@
       "workerEnvMissing": "Dem Rezept fehlt die Umgebungs-Zuordnung — MC kann die .env auf dieser Box nicht schreiben.",
       "startingDuo": "startet {name} auf {head} + {worker} …",
       "startingDuoNoHead": "startet {name} — zweite Box: {worker} …",
-      "capacityNotes": "Hinweise zur Kapazität"
+      "capacityNotes": "Hinweise zur Kapazität",
+      "startPaused": "Die Runtime {slug} für dieses Rezept ist auf dieser Box pausiert — MC legt keine zweite an. Fortsetzen geht im Deploy-Dialog des Rezepts („Fortsetzen und starten“)."
     },
     "cloudUsage": {
       "sectionTitle": "Cloud — wer nutzt was",

@@ -54,6 +54,7 @@ import { ListRow, MetaChip, MetaText, RowAction } from "@/components/shared/List
 import { OverflowMenu } from "@/components/shared/OverflowMenu";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { SshProcessDeployDialog } from "@/components/shared/SshProcessDeployDialog";
+import { pausedRuntimeDetail } from "@/lib/recipeStart";
 
 /**
  * Grober Passt-Check gegen eine Box der Spark-Klasse (GB10, 128 GB Unified
@@ -391,9 +392,12 @@ export function LocalModelBrowser({ embedded = false }: { embedded?: boolean } =
     },
     onError: (err: Error) => {
       setPending(null);
+      const paused = pausedRuntimeDetail(err);
       addNotification({
         type: "error",
-        message: t("deployFailed", { message: err.message }),
+        message: paused
+          ? t("startPausedElsewhere", { slug: paused.runtime_slug })
+          : t("deployFailed", { message: err.message }),
         persistent: false,
       });
     },

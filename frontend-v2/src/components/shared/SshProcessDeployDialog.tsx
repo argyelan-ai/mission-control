@@ -45,6 +45,10 @@ import type {
   Runtime,
 } from "@/lib/types";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
+import { RecipeStartProgress } from "@/components/shared/RecipeStartProgress";
+import { pausedRuntimeDetail, type PausedRuntimeDetail } from "@/lib/recipeStart";
+
+export { pausedRuntimeDetail };
 
 /**
  * Welche Boxen MC per SSH starten kann — dieselbe Regel wie im Backend
@@ -136,6 +140,13 @@ export function SshProcessDeployDialog({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [created, setCreated] = useState(false);
+  // The start's own trace (field finding 2026-10-18: after the click only the
+  // old install log was visible). `starting` = request in flight; startSlug =
+  // the instance whose live status the progress block follows.
+  const [starting, setStarting] = useState(false);
+  const [startSlug, setStartSlug] = useState<string | null>(null);
+  const [alreadyRunning, setAlreadyRunning] = useState(false);
+  const [paused, setPaused] = useState<PausedRuntimeDetail | null>(null);
   const [log, setLog] = useState<HostBootstrapLogLine[]>([]);
   const [status, setStatus] = useState<RecipeInstallLog["status"]>("idle");
   // Two-box recipes: the second box the install was set up with — the start
@@ -233,25 +244,32 @@ export function SshProcessDeployDialog({
     }
   }
 
-  async function createAndStart() {
+  async function createAndStart(opts: { resumePaused?: boolean } = {}) {
     if (!host) return;
     setBusy(true);
+    setStarting(true);
     setError(null);
+    setPaused(null);
     try {
       if (isTwoBox(recipe)) {
         // Through the recipe switcher, not POST /runtimes: only it picks the
         // second box, writes the recipe's .env, records both boxes and copies
         // the recipe's topology onto the instance.
-        const result = await api.hosts.startRecipe(
-          host.id,
-          recipe.slug,
-          workerId ? { worker_host_id: workerId } : undefined,
-        );
+        const body =
+          workerId || opts.resumePaused
+            ? {
+                ...(workerId ? { worker_host_id: workerId } : {}),
+                ...(opts.resumePaused ? { resume_paused: true } : {}),
+              }
+            : undefined;
+        const result = await api.hosts.startRecipe(host.id, recipe.slug, body);
         // Refusals arrive as HTTP errors (409/422 with a sentence); a body
         // with ok:false carries the backend's own sentence.
         if (result.ok === false && result.message) throw new Error(result.message);
         queryClient.invalidateQueries({ queryKey: ["runtimes"] });
         queryClient.invalidateQueries({ queryKey: ["local-registry"] });
+        setStartSlug(result.runtime_slug ?? null);
+        setAlreadyRunning(result.already_running === true);
         setCreated(true);
         return;
       }
@@ -290,13 +308,22 @@ export function SshProcessDeployDialog({
       await api.runtimes.start(runtime.id);
       queryClient.invalidateQueries({ queryKey: ["runtimes"] });
       queryClient.invalidateQueries({ queryKey: ["local-registry"] });
+      setStartSlug(runtime.slug ?? runtimeSlug);
       setCreated(true);
     } catch (err) {
-      setError(extractApiError(err));
+      const pausedDetail = pausedRuntimeDetail(err);
+      if (pausedDetail) setPaused(pausedDetail);
+      else setError(extractApiError(err));
     } finally {
       setBusy(false);
+      setStarting(false);
     }
   }
+
+  // The install log is history once a start is under way — the start's own
+  // progress takes its place (unless an install is still running).
+  const startShown = starting || created;
+  const showInstallLog = log.length > 0 && (!startShown || polling);
 
   return (
     <div
@@ -418,7 +445,35 @@ export function SshProcessDeployDialog({
             </div>
           )}
 
-          {log.length > 0 && (
+          {paused && (
+            <div
+              data-testid="ssh-deploy-paused"
+              className="flex flex-col gap-2 rounded-md border border-warn bg-warn-subtle px-3 py-2 text-xs text-warn"
+            >
+              <span>{t("startPausedNotice", { slug: paused.runtime_slug })}</span>
+              <button
+                type="button"
+                data-testid="ssh-deploy-resume"
+                onClick={() => createAndStart({ resumePaused: true })}
+                disabled={busy}
+                className="self-start inline-flex items-center gap-2 rounded-md py-2 min-h-11 sm:min-h-0 text-xs text-primary underline underline-offset-2 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {t("startResumeAndStart")}
+              </button>
+            </div>
+          )}
+
+          {startShown && (
+            <div data-testid={created ? "ssh-deploy-created" : undefined}>
+              <RecipeStartProgress
+                runtimeSlug={startSlug}
+                sending={starting}
+                alreadyRunning={alreadyRunning}
+              />
+            </div>
+          )}
+
+          {showInstallLog && (
             <div
               data-testid="ssh-deploy-install-log"
               className="rounded-md border border-subtle bg-surface px-2.5 py-2 max-h-48 overflow-y-auto font-mono text-[10px] flex flex-col gap-0.5"
@@ -451,15 +506,6 @@ export function SshProcessDeployDialog({
             </div>
           )}
 
-          {created && (
-            <div
-              data-testid="ssh-deploy-created"
-              className="flex items-center gap-1.5 text-[11px] text-ok"
-            >
-              <CheckCircle2 size={12} />
-              {t("installRuntimeCreated")}
-            </div>
-          )}
         </div>
 
         <div className="flex flex-wrap items-center justify-end gap-2 px-5 py-4 border-t border-subtle">
@@ -476,7 +522,7 @@ export function SshProcessDeployDialog({
           <button
             type="button"
             data-testid="ssh-deploy-create"
-            onClick={createAndStart}
+            onClick={() => createAndStart()}
             disabled={busy || polling || !hostId || !runtimeSlug || created}
             className="inline-flex items-center gap-1.5 rounded-md border border-accent bg-accent-subtle px-3 py-2.5 sm:py-1.5 min-h-11 sm:min-h-0 text-xs text-accent cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
           >

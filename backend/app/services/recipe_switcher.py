@@ -92,6 +92,89 @@ def reason_worker_not_free(slug: str) -> str:
     return f"Box '{slug}' steht als zweite Box nicht zur Verfügung (belegt, aus oder ohne SSH-Zugang)"
 
 
+#: Machine code of the 409 for a paused instance — the dialog turns it into
+#: its own (i18n) sentence and an explicit "resume and start" button.
+CODE_RUNTIME_PAUSED = "runtime_paused"
+
+
+def paused_instance_detail(runtime: Runtime) -> dict[str, str]:
+    """409 detail: this box already has an instance of the recipe, but it is
+    paused (``runtimes.enabled = false``, e.g. for a hand test).
+
+    A start must neither create a second row next to it (field finding
+    2026-10-18: ``…-2``) nor switch the pause off behind the operator's back
+    — the pause is a decision. So the start stops here and says which row it
+    is; ``resume_paused`` is the explicit "yes, turn it back on".
+    """
+    return {
+        "code": CODE_RUNTIME_PAUSED,
+        "runtime_id": str(runtime.id),
+        "runtime_slug": runtime.slug,
+        "message": (
+            f"Runtime '{runtime.slug}' for this recipe already exists on this box but is "
+            f"paused (disabled). Resume it to start — MC does not create a second one."
+        ),
+    }
+
+
+async def _end_transaction(session: AsyncSession) -> None:
+    """End the session's open (autobegun) transaction before a long box step.
+
+    The request session of ``POST /hosts/{id}/recipes/{slug}/start`` used to
+    sit in an open transaction while MC talked SSH to the boxes — measured
+    2026-10-18: "DB connection held 32.4s … OPEN transaction" (the pool
+    exhaustion signature of the 2026-09-14 incident, see
+    ``database.release_session``). A commit, not a close: it keeps anything
+    a caller (the watcher's autostart) still has pending, returns the pooled
+    connection, and with ``expire_on_commit=False`` loaded rows stay
+    readable. The next query simply checks out a connection again — briefly.
+    """
+    if session.in_transaction():
+        await session.commit()
+
+
+async def _find_paused_instance(
+    session: AsyncSession, recipe: LocalRecipe, host: Host
+) -> Runtime | None:
+    """A disabled instance of this recipe headed on this box, newest first.
+
+    ``load_fleet_state`` only carries enabled rows (a paused runtime must not
+    occupy a box), which is exactly why the start used to miss it.
+    """
+    rows = (
+        await session.exec(
+            select(Runtime)
+            .where(
+                Runtime.host_id == host.id,
+                Runtime.enabled == False,  # noqa: E712
+                Runtime.is_slot == False,  # noqa: E712 — ADR-078
+            )
+            .order_by(Runtime.created_at.desc())
+        )
+    ).all()
+    return next((rt for rt in rows if recipe_matches_runtime(recipe, rt)), None)
+
+
+async def _resume_paused_instance(session: AsyncSession, instance: Runtime) -> None:
+    """The explicit resume: ``enabled = true`` plus an activity event, so the
+    feed shows who turned the pause off and why."""
+    from app.services.activity import emit_event
+
+    instance.enabled = True
+    session.add(instance)
+    await session.commit()
+    await session.refresh(instance)
+    try:
+        await emit_event(
+            session,
+            "runtime.resumed_by_recipe_start",
+            f"{instance.slug}: resumed by a recipe start",
+            detail={"runtime_id": str(instance.id), "slug": instance.slug},
+        )
+    except Exception:  # noqa: BLE001 — a note never blocks a start
+        await session.rollback()
+
+
 def reason_host_unreachable(slug: str) -> str:
     return f"Box '{slug}' ist per SSH nicht erreichbar — Start abgebrochen, bevor etwas angefasst wird"
 
@@ -1062,8 +1145,17 @@ async def start_recipe_on_host(
     host: Host,
     recipe: LocalRecipe,
     worker_host_id: str | None = None,
+    resume_paused: bool = False,
 ) -> dict[str, Any]:
     """Ein Rezept auf einer Box starten — Solo wie Verbund (P3).
+
+    An instance that exists but is paused (``enabled = false``) is reused,
+    never duplicated: without ``resume_paused`` the start is a 409
+    (:func:`paused_instance_detail`); with it the row is switched back on —
+    only after every offline check passed — and started.
+
+    No DB transaction stays open across a box step (SSH, engine probe,
+    eviction, the start itself): :func:`_end_transaction` before each.
 
     ``host`` ist immer der HEAD: die Box, mit der MC redet. Bei einem
     Zweibox-Rezept kommen drei Schritte dazu, mehr nicht (ADR-077, Regel 5 —
@@ -1107,6 +1199,13 @@ async def start_recipe_on_host(
         ),
         None,
     )
+    paused = False
+    if instance is None:
+        instance = await _find_paused_instance(session, recipe, host)
+        if instance is not None:
+            if not resume_paused:
+                raise RecipeStartError(409, paused_instance_detail(instance))
+            paused = True
 
     # VOR dem Anlegen der Instanz: eine Host-Engine ohne Handle darf gar nicht
     # erst in den Startpfad. Sonst legt MC eine Zeile an, räumt die Box frei
@@ -1127,8 +1226,11 @@ async def start_recipe_on_host(
     # selbst hielt, und endete mit 400). Nur lesen; eine Instanz ohne
     # Startbefehl fällt unten wie bisher auf ihren eigenen Satz.
     if instance is not None and command_ok:
+        await _end_transaction(session)
         already = await runtime_manager.already_running(instance.model_dump(), host=resolved)
         if already is not None:
+            if paused:
+                await _resume_paused_instance(session, instance)
             topology = instance.topology if isinstance(instance.topology, dict) else {}
             worker_id = _as_uuid(topology.get("worker_host_id"))
             worker_row = state.host_by_id.get(worker_id) if worker_id else None
@@ -1143,6 +1245,7 @@ async def start_recipe_on_host(
                 "worker_slug": worker_row.slug if worker_row is not None else None,
                 "env_written": [],
                 "switch_lock": {"state": "no_switch", "unknown": []},
+                "resumed": paused,
             }
 
     worker: Host | None = None
@@ -1198,6 +1301,7 @@ async def start_recipe_on_host(
     occupants = [rt for hid in affected_boxes for rt in state.occupied.get(hid, [])]
     displaces = any(instance is None or rt.id != instance.id for rt in occupants)
     box_guard.check_displacement(affected_boxes, "switch", displaces_engine=displaces)
+    await _end_transaction(session)
     lock_unknown = await box_guard.check_engine_idle(occupants) if displaces else []
 
     # P4 „Vorflug": passen die Zahlen? Steht ohne Netzzugriff fest und läuft
@@ -1227,6 +1331,9 @@ async def start_recipe_on_host(
         created = True
     elif not (instance.launch_command or "").strip():
         raise RecipeStartError(422, REASON_NO_COMMAND)
+    elif paused:
+        # Every offline check passed — only now does the pause come off.
+        await _resume_paused_instance(session, instance)
 
     env_written: list[str] = []
     if worker is not None:
@@ -1241,6 +1348,7 @@ async def start_recipe_on_host(
         await session.commit()
         await session.refresh(instance)
         await set_runtime_members(session, instance, host, worker)
+        await _end_transaction(session)
 
         await _require_ssh_alive(host)
         await _require_ssh_alive(worker)
@@ -1250,6 +1358,8 @@ async def start_recipe_on_host(
         # Andersherum stünde der Head kurz leer, während die Worker-Box noch
         # das alte Modell hält — und der Start liefe in eine halb belegte Box.
         if instance.exclusive_memory:
+            # The eviction ends this session's transaction after its reads,
+            # before it stops anything (SSH, minutes).
             freed = await runtime_manager.ensure_exclusive_host(
                 instance.model_dump(),
                 host=resolved_host_from_row(worker),
@@ -1281,6 +1391,8 @@ async def start_recipe_on_host(
         await runtime_grace.mark_switching(
             slot.slug, runtime_grace.PHASE_LOADING, runtime_grace.SOURCE_SWITCH
         )
+    # The long one: memory prep (up to minutes) and the launch over SSH.
+    await _end_transaction(session)
 
     try:
         result = await runtime_manager.start_runtime(instance.model_dump(), host=resolved)
@@ -1357,6 +1469,7 @@ async def start_recipe_on_host(
         "runtime_id": str(instance.id),
         "runtime_slug": instance.slug,
         "created": created,
+        "resumed": paused,
         "worker_host_id": str(worker.id) if worker is not None else None,
         "worker_slug": worker.slug if worker is not None else None,
         "env_written": env_written,

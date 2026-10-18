@@ -28,6 +28,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import { ChevronDown } from "lucide-react";
 import { api } from "@/lib/api";
+import { pausedRuntimeDetail } from "@/lib/recipeStart";
 import { C, STATUS, STATUS_TEXT, alpha } from "@/lib/colors";
 import { useHeadConflictText } from "@/components/heads/HeadOccupancy";
 import type { HostRecipe } from "@/lib/types";
@@ -214,7 +215,12 @@ export function HostRecipeSwitcher({
     },
     onError: (err: Error) => {
       setStarting(null);
-      setError(headConflictText(err) ?? t("startFailed", { message: humanApiError(err) }));
+      const paused = pausedRuntimeDetail(err);
+      setError(
+        paused
+          ? t("startPaused", { slug: paused.runtime_slug })
+          : (headConflictText(err) ?? t("startFailed", { message: humanApiError(err) })),
+      );
     },
   });
 
