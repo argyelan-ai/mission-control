@@ -82,6 +82,9 @@ class LocalRecipeOut(BaseModel):
     drop_page_cache: bool
     tags: list[str]
     notes: str | None
+    # Short dialog text per UI language ({"en": …, "de": …}) — builtin
+    # recipes only, read from the shipped catalog. None = none shipped.
+    summary: dict[str, str] | None = None
     enabled: bool
     first_seen_at: str | None
     updated_at: str | None
@@ -151,6 +154,11 @@ def _serialize(recipe: LocalRecipe, running: bool) -> LocalRecipeOut:
         drop_page_cache=recipe.drop_page_cache,
         tags=list(recipe.tags or []),
         notes=recipe.notes,
+        summary=(
+            local_registry.builtin_summaries().get(recipe.slug)
+            if recipe.source_registry == "builtin"
+            else None
+        ),
         enabled=recipe.enabled,
         first_seen_at=recipe.first_seen_at.isoformat() if recipe.first_seen_at else None,
         updated_at=recipe.updated_at.isoformat() if recipe.updated_at else None,

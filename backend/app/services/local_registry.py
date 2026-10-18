@@ -149,6 +149,11 @@ class RecipeSpec(BaseModel):
     supports_vision: bool = False
     tags: list[str] = PydanticField(default_factory=list)
     notes: str | None = None
+    # Short text for the deploy dialog in the UI's language, e.g.
+    # {"en": "...", "de": "..."} — one or two sentences. ``description``
+    # stays the long English text under "Details". Optional: an entry
+    # without it (and an older MC, which ignores the key) behaves as before.
+    summary: dict[str, str] | None = None
     enabled: bool = True
 
     @property
@@ -673,6 +678,33 @@ async def sync_builtin_recipes(session: AsyncSession) -> CatalogSyncResult:
         except Exception:  # noqa: BLE001 — a lost event must not fail the startup pass
             logger.exception("local registry: kept-local event for %s failed", row.slug)
     return result
+
+
+_summary_cache: tuple[Path, float, dict[str, dict[str, str]]] | None = None
+
+
+def builtin_summaries() -> dict[str, dict[str, str]]:
+    """``summary`` per slug, read from the shipped catalog (cached per mtime).
+
+    Display text, not row content: it is served straight from the catalog
+    file, so it needs no column and is always the shipped version. Only
+    builtin rows get it (routers/local_registry._serialize).
+    """
+    global _summary_cache
+    path = _SEED_PATH
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return {}
+    if _summary_cache and _summary_cache[0] == path and _summary_cache[1] == mtime:
+        return _summary_cache[2]
+    table = {
+        spec.slug: {str(k): str(v) for k, v in spec.summary.items() if str(v).strip()}
+        for spec in _load_seed()
+        if spec.summary
+    }
+    _summary_cache = (path, mtime, table)
+    return table
 
 
 # ── Refresh ──────────────────────────────────────────────────────────────────

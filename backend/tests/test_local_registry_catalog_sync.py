@@ -402,3 +402,50 @@ async def test_a_registry_refresh_carries_drop_page_cache_into_instances(
     session.expire_all()
     rt = (await session.exec(select(Runtime).where(Runtime.slug == "tf-glm-a"))).first()
     assert rt.drop_page_cache is True
+
+
+# ── Short text per UI language (summary) ─────────────────────────────────────
+
+
+def test_the_tensorfold_recipe_ships_a_short_text_in_english_and_german():
+    """The deploy dialog shows this in the UI's language; the long English
+    description stays under Details (never mix UI languages)."""
+    entry = next(
+        e for e in json.loads(REAL_SEED.read_text(encoding="utf-8"))
+        if e["slug"] == "glm53-flash-exl3-tensorfold"
+    )
+    summary = RecipeSpec.model_validate(entry).summary
+    assert set(summary) == {"en", "de"}
+    for lang, text in summary.items():
+        assert 0 < len(text) <= 360, lang
+        assert "CC BY-NC-ND" in text, f"{lang}: the drafter licence must be named"
+    assert "nicht-kommerziell" in summary["de"]
+    assert "Non-commercial" in summary["en"]
+
+
+def test_an_older_mc_ignores_summary():
+    """RecipeSpec drops unknown keys — that is what lets a newer catalog
+    reach an older MC. Shown here for the inverse: the key parses today."""
+    spec = RecipeSpec.model_validate(_recipe("x", summary={"en": "a", "de": "b"}, future_key=1))
+    assert spec.summary == {"en": "a", "de": "b"}
+
+
+async def test_the_list_endpoint_serves_summary_for_builtin_rows_only(auth_client, session, catalog):
+    catalog.ship([
+        _recipe("tf-glm", summary={"en": "Two boxes.", "de": "Zwei Boxen."}),
+        _recipe("no-summary"),
+    ])
+    await seed_local_recipes(session)
+    session.add(
+        LocalRecipe(
+            slug="from-registry", display_name="R", engine="vllm_docker",
+            model_identifier="org/r", source_registry="community",
+        )
+    )
+    await session.commit()
+
+    body = (await auth_client.get("/api/v1/local-registry")).json()
+    by_slug = {r["slug"]: r for r in body["recipes"]}
+    assert by_slug["tf-glm"]["summary"] == {"en": "Two boxes.", "de": "Zwei Boxen."}
+    assert by_slug["no-summary"]["summary"] is None
+    assert by_slug["from-registry"]["summary"] is None
