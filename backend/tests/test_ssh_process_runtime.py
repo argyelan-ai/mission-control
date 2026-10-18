@@ -18,6 +18,7 @@ Only RFC 5737 placeholder IPs (192.0.2.x) — public repo.
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from pathlib import Path
 from sqlmodel import select
 
 from app.models.host import Host
@@ -29,6 +30,24 @@ from app.services.harness_compat import _OPENAI_TYPES, runtime_protocol
 from app.services.host_resolver import ResolvedHost
 from app.services.launch_template import build_install_command, build_launch_command
 from app.services.task_runner import _SLOW_RUNTIME_TYPES
+
+# The live catalog (config/local-recipes.json) now ships only the recipes MC
+# supports today. These tests exercise the seed MECHANICS with the full legacy
+# catalog, frozen as a fixture, so they keep covering every template shape.
+LEGACY_SEED = Path(__file__).resolve().parent / "fixtures" / "local-recipes-legacy.json"
+
+
+@pytest.fixture(autouse=True)
+def _legacy_seed():
+    # Deliberately not ``monkeypatch``: requesting it in an autouse fixture
+    # moves its teardown behind the app's, which leaves a redis client bound
+    # to this test's event loop and breaks later test modules.
+    from app.services import local_registry as _lr
+    saved = _lr._SEED_PATH
+    _lr._SEED_PATH = LEGACY_SEED
+    yield
+    _lr._SEED_PATH = saved
+
 
 SSH_PROCESS = runtime_manager.SSH_PROCESS_TYPE
 

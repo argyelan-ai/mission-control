@@ -295,8 +295,10 @@ async def test_a_running_duo_install_is_409_before_the_env_is_touched(auth_clien
 
 
 @pytest.mark.asyncio
-async def test_a_single_box_install_is_unchanged(auth_client, session):
+async def test_a_single_box_install_is_unchanged(monkeypatch, auth_client, session):
     """No .env, no worker, the same command as before this change."""
+    # ds4 left the live catalog; the single-box path is checked against the frozen legacy seed.
+    monkeypatch.setattr(local_registry, "_SEED_PATH", Path(__file__).resolve().parent / "fixtures" / "local-recipes-legacy.json")
     await local_registry.seed_local_recipes(session)
     await _host(session, "box-a")
     await _host(session, "box-b", ssh_host="192.0.2.11", role="worker")

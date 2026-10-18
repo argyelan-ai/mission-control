@@ -29,9 +29,11 @@ log. For two-box recipes MC picks a free second box and wires it in. One
 click on **Start** switches a box (or a pair) to another recipe; a switch
 lock refuses it while the engine is still serving requests.
 
+<!-- recipes:start -->
 | Recipe | Boxes | Engine | Measured on 2× DGX Spark |
 |---|---|---|---|
 | **GLM-5.3-Flash** · EXL3 4-bit · TensorFold | **2** (tensor parallel) | TensorFold | **62.6 tok/s** single stream · **211 tok/s** at 16 parallel · 1M context per request · prefill ~1,800 tok/s |
+<!-- recipes:end -->
 
 This is the recipe MC ships today; more recipes are on the way and land in
 the same [catalog](backend/config/local-recipes.json). The recipe builds on other people's engines, quants and
