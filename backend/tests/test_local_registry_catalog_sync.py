@@ -434,14 +434,14 @@ async def test_the_list_endpoint_serves_summary_for_builtin_rows_only(auth_clien
     catalog.ship([
         _recipe("tf-glm", summary={"en": "Two boxes.", "de": "Zwei Boxen."}),
         _recipe("no-summary"),
+        _recipe("from-registry", summary={"en": "Catalog text.", "de": "Katalogtext."}),
     ])
     await seed_local_recipes(session)
-    session.add(
-        LocalRecipe(
-            slug="from-registry", display_name="R", engine="vllm_docker",
-            model_identifier="org/r", source_registry="community",
-        )
-    )
+    # A registry refresh took this slug over: its text is the registry's
+    # business, not the shipped catalog's.
+    taken = await _row(session, "from-registry")
+    taken.source_registry = "community"
+    session.add(taken)
     await session.commit()
 
     body = (await auth_client.get("/api/v1/local-registry")).json()
