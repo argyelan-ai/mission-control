@@ -23,11 +23,13 @@ import {
   defaultPortFor,
   exclusiveNeighbours,
   pausedRuntimeDetail,
+  recipeIntro,
   slugify,
   splitRecipeNotes,
   sshCapable,
 } from "../SshProcessDeployDialog";
 import { recipeStartStage } from "../RecipeStartProgress";
+import * as intl from "next-intl";
 import { api } from "@/lib/api";
 import type {
   Host,
@@ -423,6 +425,78 @@ describe("ssh_process deploy", () => {
     await userEvent.click(screen.getByTestId("ssh-deploy-notes-toggle"));
     expect(await screen.findByText(/NON-COMMERCIAL USE ONLY/)).toBeInTheDocument();
     expect(install).not.toHaveBeenCalled();
+  });
+
+  // ── Short text in the UI's language (catalog `summary`) ────────────────────
+
+  const tensorfoldSummary = {
+    en: "GLM-5.3 Flash on two DGX Sparks. Non-commercial use only with the default drafter (CC BY-NC-ND 4.0).",
+    de: "GLM-5.3 Flash auf zwei DGX Sparks. Mit dem Standard-Drafter nur nicht-kommerziell nutzbar (CC BY-NC-ND 4.0).",
+  };
+
+  const mockDialogApis = () => {
+    vi.spyOn(api.hosts, "list").mockResolvedValue([mkHost()]);
+    vi.spyOn(api.runtimes, "list").mockResolvedValue(mkRuntimes([]));
+    vi.spyOn(api.localRegistry, "installLog").mockResolvedValue(mkLog());
+  };
+
+  it("shows the German short text in a German UI and keeps the English description behind Details", async () => {
+    vi.spyOn(intl, "useLocale").mockReturnValue("de");
+    mockDialogApis();
+    renderDialog(mkRecipe({ summary: tensorfoldSummary, notes: "LICENCE - see upstream." }));
+
+    expect(await screen.findByTestId("ssh-deploy-lead")).toHaveTextContent(
+      "nur nicht-kommerziell nutzbar",
+    );
+    // No English paragraph in the German dialog until the user asks for it.
+    expect(screen.queryByText(/DwarfStar 4 engine/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Non-commercial use only/)).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId("ssh-deploy-notes-toggle"));
+    const details = await screen.findByTestId("ssh-deploy-notes");
+    expect(details).toHaveTextContent("DwarfStar 4 engine");
+    expect(details).toHaveTextContent("LICENCE - see upstream.");
+  });
+
+  it("shows the English short text in an English UI", async () => {
+    vi.spyOn(intl, "useLocale").mockReturnValue("en");
+    mockDialogApis();
+    renderDialog(mkRecipe({ summary: tensorfoldSummary }));
+
+    expect(await screen.findByTestId("ssh-deploy-lead")).toHaveTextContent(
+      "Non-commercial use only",
+    );
+    expect(screen.queryByText(/DwarfStar 4 engine/)).not.toBeInTheDocument();
+  });
+
+  it("puts no English text up front in a German UI when the recipe has no German short text", async () => {
+    vi.spyOn(intl, "useLocale").mockReturnValue("de");
+    mockDialogApis();
+    renderDialog(mkRecipe({ summary: { en: "English only." } }));
+
+    await screen.findByTestId("ssh-deploy-notes-toggle");
+    expect(screen.queryByTestId("ssh-deploy-lead")).not.toBeInTheDocument();
+    expect(screen.queryByText(/English only/)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("ssh-deploy-notes-toggle"));
+    expect(await screen.findByTestId("ssh-deploy-notes")).toHaveTextContent("DwarfStar 4 engine");
+  });
+
+  it("recipeIntro — summary in the UI language, else the description only in English", () => {
+    const recipe = { summary: { en: "EN", de: "DE" }, description: "Long English." };
+    expect(recipeIntro(recipe, "de")).toEqual({ lead: "DE", descriptionInDetails: true });
+    expect(recipeIntro(recipe, "en")).toEqual({ lead: "EN", descriptionInDetails: true });
+    expect(recipeIntro({ summary: null, description: "Long English." }, "en")).toEqual({
+      lead: "Long English.",
+      descriptionInDetails: false,
+    });
+    expect(recipeIntro({ summary: { de: "  " }, description: "Long English." }, "de")).toEqual({
+      lead: null,
+      descriptionInDetails: true,
+    });
+    expect(recipeIntro({ summary: undefined, description: null }, "de")).toEqual({
+      lead: null,
+      descriptionInDetails: false,
+    });
   });
 
   it("splits a wall of recipe notes into paragraphs by section label", () => {

@@ -2044,6 +2044,9 @@ export interface LocalRecipe {
   drop_page_cache?: boolean;
   tags: string[];
   notes: string | null;
+  /** Kurztext je UI-Sprache ({ en, de }), ein bis zwei Sätze — nur für
+   *  mitgelieferte Rezepte, direkt aus dem Katalog. Fehlt bei älteren MCs. */
+  summary?: Record<string, string> | null;
   enabled: boolean;
   first_seen_at: string | null; // ISO
   updated_at: string | null; // ISO
