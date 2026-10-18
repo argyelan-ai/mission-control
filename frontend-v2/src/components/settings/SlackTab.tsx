@@ -11,6 +11,8 @@ import type { ChannelSettingsResponse, SecretEntry, SlackConnectionResult } from
 import { C, STATUS_TEXT } from "@/lib/colors";
 import { StatusDot } from "@/components/shared/StatusDot";
 import { ChannelToggleRow } from "@/components/settings/TelegramTab";
+import { CheckStatus } from "@/components/shared/CheckStatus";
+import { findCheck, refreshChecks, useConfigChecks } from "@/lib/configChecks";
 
 // The two fixed fields. Key names match the backend secret catalog
 // (routers/secrets.py) so an operator finds them instead of inventing them.
@@ -343,7 +345,13 @@ export function SlackTab() {
     refetch,
   } = useQuery<SlackConnectionResult>({
     queryKey: ["slack-connection"],
-    queryFn: () => api.slack.testConnection(),
+    // This button is a registry procedure (kind "slack") and stores its
+    // result — re-read the list so the age below is the one just written.
+    queryFn: async () => {
+      const result = await api.slack.testConnection();
+      void refreshChecks(queryClient);
+      return result;
+    },
     // The status is the point of this page, so it runs once on open. It stays
     // put afterwards: no window-focus refetch hammering the Slack API.
     staleTime: 60_000,
@@ -368,6 +376,9 @@ export function SlackTab() {
     onError: () => notify.error(t("tokenSaveFailed")),
     onSettled: () => setSavingKey(null),
   });
+
+  const { data: checks } = useConfigChecks();
+  const slackCheck = findCheck(checks?.items, "slack", "workspace");
 
   const byKey = new Map((secrets ?? []).map((s) => [s.key, s]));
   const botSecret = byKey.get(BOT_TOKEN_KEY);
@@ -425,6 +436,7 @@ export function SlackTab() {
               <Loader2 size={12} className="animate-spin" style={{ color: "var(--color-text-muted)" }} />
             )}
           </div>
+          {!nothingSet && !testing && <CheckStatus item={slackCheck} variant="age" />}
 
           {status?.connected && status.bot_user && (
             <div className="flex items-center gap-2 text-xs">

@@ -380,3 +380,77 @@ describe("AiProvidersTab (Settings)", () => {
     expect(screen.queryByTestId("ollama-key-warning")).not.toBeInTheDocument();
   });
 });
+
+// ── Test on save + stored age (Welle 2, ADR-093 §2) ───────────────────────
+
+describe("AiProvidersTab — test on save + age", () => {
+  const ago = (s: number) => ({ age_seconds: s, checked_at: new Date(Date.now() - s * 1000).toISOString() });
+  const base = {
+    label: "x", configured: true, testable: true, cost: "free" as const, message: null,
+    duration_ms: null, value_changed: false, checked_at: null, age_seconds: null,
+  };
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    mockAppState.state.currentUser = { id: "u1", email: "a@b.com", name: "Admin", role: "admin" };
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } })
+    );
+    vi.spyOn(api.secrets, "list").mockResolvedValue([]);
+    vi.spyOn(api.aiProviders, "getSettings").mockResolvedValue(DEFAULTS);
+    vi.spyOn(api.aiProviders, "huggingfaceTestConnection").mockResolvedValue(HF_ANONYMOUS);
+  });
+
+  it("embeddings not probed on open, but the last stored result and its age are shown", async () => {
+    const probe = vi.spyOn(api.aiProviders, "embeddingsTestConnection").mockResolvedValue(EMB_OK);
+    vi.spyOn(api.configChecks, "list").mockResolvedValue({
+      kinds: [], cost_hints: {} as never,
+      items: [{ ...base, kind: "embeddings", subject_id: "spark", secret_key: null, state: "ok", ...ago(86400 * 2) }],
+    });
+    renderPage();
+
+    const line = await screen.findByTestId("embeddings-check");
+    await waitFor(() => expect(within(line).getByTestId("check-status")).toHaveTextContent("Works · tested 2 days ago"));
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  it("saving an embeddings key tests the active embeddings provider right away", async () => {
+    const probe = vi.spyOn(api.aiProviders, "embeddingsTestConnection").mockResolvedValue(EMB_OK);
+    vi.spyOn(api.configChecks, "list").mockResolvedValue({ kinds: [], cost_hints: {} as never, items: [] });
+    vi.spyOn(api.secrets, "create").mockResolvedValue(HF_SECRET);
+    renderPage();
+
+    const field = await screen.findByLabelText("Self-hosted — key (optional)");
+    await userEvent.type(field, "emb-TESTONLY");
+    await userEvent.click(
+      within(field.closest("div.mc-card") as HTMLElement).getAllByRole("button", { name: "Save" })[1]
+    );
+
+    await waitFor(() => expect(probe).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText("GPU box answers (768 dimensions)")).toBeInTheDocument();
+  });
+
+  it("switching the embeddings provider tests the new one (an endpoint is a setting too)", async () => {
+    const probe = vi.spyOn(api.aiProviders, "embeddingsTestConnection").mockResolvedValue(EMB_OK);
+    vi.spyOn(api.configChecks, "list").mockResolvedValue({ kinds: [], cost_hints: {} as never, items: [] });
+    vi.spyOn(api.aiProviders, "updateSettings").mockResolvedValue({ ok: true, applied: ["ai_embeddings_provider"] });
+    renderPage();
+
+    await userEvent.selectOptions(await screen.findByTestId("ai_embeddings_provider"), "cloud");
+    await waitFor(() => expect(probe).toHaveBeenCalledTimes(1));
+  });
+
+  it("a key without a test procedure says so instead of pretending", async () => {
+    vi.spyOn(api.aiProviders, "embeddingsTestConnection").mockResolvedValue(EMB_OK);
+    vi.spyOn(api.secrets, "list").mockResolvedValue([{ ...HF_SECRET, key: "ollama_api_key", provider: "ollama" }]);
+    vi.spyOn(api.configChecks, "list").mockResolvedValue({
+      kinds: [], cost_hints: {} as never,
+      items: [{ ...base, kind: "secret", subject_id: "ollama_api_key", secret_key: "ollama_api_key", testable: false, state: "never_tested" }],
+    });
+    renderPage();
+
+    const field = await screen.findByLabelText("Ollama Cloud key");
+    const block = field.closest("[data-key-field]") as HTMLElement;
+    await waitFor(() => expect(within(block).getByTestId("check-status")).toHaveTextContent("Can't be tested yet"));
+  });
+});

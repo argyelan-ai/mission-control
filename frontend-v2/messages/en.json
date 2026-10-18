@@ -1252,7 +1252,13 @@
     "goToCommandCenter": "Go to command center",
     "changeableLater": "Everything here can be changed later under Settings.",
     "saveFailed": "Failed to save.",
-    "demoBoardFailed": "Failed to create demo board."
+    "demoBoardFailed": "Failed to create demo board.",
+    "testingKey": "Testing the key…",
+    "keyRejected": "The key did not work: {reason}",
+    "keyRejectedHint": "Check the key and save again, or skip this step.",
+    "checkFailed": "The key was saved, but the test could not run: {error}",
+    "githubRejected": "GitHub did not accept this: {reason}",
+    "checkNoReason": "no reason given"
   },
   "schedule": {
     "title": "Schedule",
@@ -1913,7 +1919,11 @@
       "ownerPlaceholder": "your-github-user-or-org",
       "ownerAria": "GitHub owner",
       "tokenPlaceholderRotate": "unchanged — paste to rotate",
-      "tokenAria": "GitHub token"
+      "tokenAria": "GitHub token",
+      "removeToken": "Remove token",
+      "removeTokenTitle": "Remove the GitHub token?",
+      "removeTokenBody": "Agents lose GitHub access (push, pull requests) until a new token is saved. If a token is set in .env, MC uses that one again.",
+      "tokenRemoved": "Token removed."
     },
     "users": {
       "title": "Manage Users",
@@ -3222,7 +3232,7 @@
     },
     "cloudUsage": {
       "sectionTitle": "Cloud — who's using what",
-      "collapseRow": "{n} models without an agent — show all",
+      "collapseRow": "{n, plural, one {# model without an agent — show all} other {# models without an agent — show all}}",
       "bindCta": "bind ›"
     },
     "slotPage": {
@@ -4080,5 +4090,25 @@
     "errBudgetReached": "Daily voice budget reached.",
     "stateIdleWarningShort": "Hangs up in {seconds} s",
     "errBudgetReachedUntil": "Daily budget reached — available again at {time}."
+  },
+  "checks": {
+    "state": {
+      "ok": "Works",
+      "fail": "Failed",
+      "never": "Never tested",
+      "changed": "Changed — not tested yet",
+      "notTestable": "Can't be tested yet",
+      "notSet": "Not set"
+    },
+    "running": "Testing…",
+    "age": {
+      "justNow": "tested just now",
+      "minutes": "tested {n} min ago",
+      "hours": "{n, plural, one {tested # hour ago} other {tested # hours ago}}",
+      "days": "{n, plural, one {tested # day ago} other {tested # days ago}}"
+    },
+    "test": "Test",
+    "testQuotaHint": "Sends one tiny real request — uses a little of the plan's quota.",
+    "testFailed": "The test could not run: {error}"
   }
 }

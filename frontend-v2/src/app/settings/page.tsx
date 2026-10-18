@@ -48,6 +48,15 @@ import { PhoneSectionList } from "@/components/settings/PhoneSectionList";
 import { GROUP_ORDER, SECTIONS, sectionHref } from "@/components/settings/sections";
 import { StatusDot } from "@/components/shared/StatusDot";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { CheckStatus, checkPhase } from "@/components/shared/CheckStatus";
+import {
+  findCheck,
+  findSecretCheck,
+  isRunning,
+  refreshChecks,
+  useConfigChecks,
+  useRunCheck,
+} from "@/lib/configChecks";
 import { C, STATUS_TEXT, alpha } from "@/lib/colors";
 
 // ── Section Registry ──────────────────────────────────────────────────────────
@@ -1149,6 +1158,11 @@ function ApiKeysSection({
   const [editValue, setEditValue] = useState("");
   const [showValue, setShowValue] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ProviderTemplate | null>(null);
+  // Test on save (ADR-093 §2): every saved key runs its registry check, and
+  // each card shows the latest result with its age.
+  const { data: checks } = useConfigChecks();
+  const runCheck = useRunCheck();
+  const testKey = (key: string) => runCheck.mutate({ kind: "secret", subjectId: key });
 
   const { data: providers } = useQuery<ProviderTemplate[]>({
     queryKey: ["secret-providers"],
@@ -1163,20 +1177,22 @@ function ApiKeysSection({
   const createMutation = useMutation({
     mutationFn: (data: { key: string; value: string; provider?: string; label?: string; description?: string }) =>
       api.secrets.create(data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["secrets"] });
+    onSuccess: async (_res, data) => {
       setAddingKey(null);
       setNewValue("");
+      await queryClient.invalidateQueries({ queryKey: ["secrets"] });
+      testKey(data.key);
     },
   });
 
   const updateMutation = useMutation({
     mutationFn: ({ key, value }: { key: string; value: string }) =>
       api.secrets.update(key, { value }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["secrets"] });
+    onSuccess: async (_res, { key }) => {
       setEditingKey(null);
       setEditValue("");
+      await queryClient.invalidateQueries({ queryKey: ["secrets"] });
+      testKey(key);
     },
   });
 
@@ -1184,6 +1200,7 @@ function ApiKeysSection({
     mutationFn: (key: string) => api.secrets.delete(key),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["secrets"] });
+      void refreshChecks(queryClient);
     },
   });
 
@@ -1317,17 +1334,17 @@ function ApiKeysSection({
                       >
                         {tmpl.label}
                       </span>
-                      <span
-                        className="text-[10px] px-1.5 py-0.5 rounded-sm uppercase"
-                        style={{
-                          backgroundColor: isSet
-                            ? alpha(C.online, 0.1)
-                            : "var(--color-bg-elevated)",
-                          color: isSet ? C.online : "var(--color-text-muted)",
-                        }}
-                      >
-                        {isSet ? t("set") : t("notSet")}
-                      </span>
+                      {!isSet && (
+                        <span
+                          className="text-[10px] px-1.5 py-0.5 rounded-sm uppercase"
+                          style={{
+                            backgroundColor: "var(--color-bg-elevated)",
+                            color: "var(--color-text-muted)",
+                          }}
+                        >
+                          {t("notSet")}
+                        </span>
+                      )}
                     </div>
                     <p className="text-xs mt-0.5" style={{ color: "var(--color-text-muted)" }}>
                       {tProviderDesc.has(tmpl.key) ? tProviderDesc(tmpl.key) : tmpl.description}
@@ -1339,6 +1356,14 @@ function ApiKeysSection({
                       >
                         {existing.value_masked}
                       </div>
+                    )}
+                    {existing && (
+                      <CheckStatus
+                        className="mt-1"
+                        item={findSecretCheck(checks?.items, tmpl.key)}
+                        running={isRunning(runCheck, "secret", tmpl.key)}
+                        onTest={() => testKey(tmpl.key)}
+                      />
                     )}
                   </div>
 
@@ -1526,6 +1551,9 @@ function GithubSection() {
   const [probeResult, setProbeResult] = useState<GithubStatus | null>(null);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const { data: checks } = useConfigChecks();
+  const ghCheck = findCheck(checks?.items, "github", "connection");
 
   const { data: status, isLoading } = useQuery<GithubStatus>({
     queryKey: ["github-status"],
@@ -1538,13 +1566,19 @@ function GithubSection() {
 
   const saveMutation = useMutation({
     mutationFn: (payload: GithubConfigUpdate) => api.repos.setGithubConfig(payload),
-    onSuccess: async () => {
+    onSuccess: async (_res, payload) => {
+      const removedToken = payload.token === "";
       setToken("");
       setOwnerTouched(false);
       setProbeResult(null);
       setSaveError(null);
-      setSaveMessage(t("savedMsg"));
+      setSaveMessage(removedToken ? t("tokenRemoved") : t("savedMsg"));
+      setConfirmRemove(false);
       await queryClient.invalidateQueries({ queryKey: ["github-status"] });
+      // Test on save (ADR-093 §2): a new token or owner is checked right away.
+      // A removal has nothing new to test; the stored result is re-read.
+      if (removedToken) void refreshChecks(queryClient);
+      else await handleTest({ keepMessage: true });
     },
     onError: (err) => {
       setSaveMessage(null);
@@ -1571,9 +1605,9 @@ function GithubSection() {
     saveMutation.mutate(payload);
   }
 
-  async function handleTest() {
+  async function handleTest({ keepMessage = false }: { keepMessage?: boolean } = {}) {
     setProbing(true);
-    setSaveMessage(null);
+    if (!keepMessage) setSaveMessage(null);
     setSaveError(null);
     try {
       const result = await api.repos.githubStatus(true);
@@ -1594,11 +1628,22 @@ function GithubSection() {
       });
     } finally {
       setProbing(false);
+      // The probe stores its result in the check registry — re-read the age.
+      void refreshChecks(queryClient);
     }
   }
 
   const effective = probeResult ?? status ?? null;
-  const connected = effective?.connected ?? null;
+  // No live probe this visit: fall back to the last stored result, so the
+  // card is not "not tested" when the registry knows better.
+  const storedPhase = checkPhase(ghCheck);
+  const connected =
+    effective?.connected ??
+    (effective?.configured && storedPhase === "ok"
+      ? true
+      : effective?.configured && storedPhase === "fail"
+      ? false
+      : null);
   const dotStatus: "online" | "error" | "idle" =
     connected === true ? "online" : connected === false ? "error" : "idle";
   const statusLabel =
@@ -1637,6 +1682,7 @@ function GithubSection() {
               </span>
               {probing && <Loader2 size={12} className="animate-spin" style={{ color: "var(--color-text-muted)" }} />}
             </div>
+            {effective?.configured && !probing && <CheckStatus item={ghCheck} variant="age" />}
 
             <div className="flex items-center gap-2 text-xs">
               <span style={{ color: "var(--color-text-muted)" }}>{t("owner")}</span>
@@ -1652,6 +1698,16 @@ function GithubSection() {
                 {effective?.token_set ? t("tokenSet") : t("tokenNotSet")}
               </span>
               <GithubSourceBadge source={effective?.token_source ?? null} />
+              {status?.token_source === "vault" && (
+                <button
+                  type="button"
+                  onClick={() => setConfirmRemove(true)}
+                  className="ml-auto min-h-11 px-2 text-xs cursor-pointer"
+                  style={{ color: STATUS_TEXT.error }}
+                >
+                  {t("removeToken")}
+                </button>
+              )}
             </div>
 
             {connected !== null && (
@@ -1673,14 +1729,14 @@ function GithubSection() {
               </div>
             )}
 
-            {effective?.error && (
+            {(effective?.error || (connected === false && !probeResult && ghCheck?.message)) && (
               <p className="text-xs pt-1" style={{ color: STATUS_TEXT.error }}>
-                {effective.error}
+                {effective?.error || ghCheck?.message}
               </p>
             )}
 
             <button
-              onClick={handleTest}
+              onClick={() => handleTest()}
               disabled={probing}
               className="mt-1 text-xs px-2.5 py-1.5 rounded-lg cursor-pointer disabled:opacity-50 transition-all"
               style={{ background: "var(--color-bg-elevated)", color: "var(--color-text-secondary)" }}
@@ -1733,6 +1789,15 @@ function GithubSection() {
           </div>
         </div>
       )}
+      <ConfirmDialog
+        open={confirmRemove}
+        title={t("removeTokenTitle")}
+        body={t("removeTokenBody")}
+        confirmLabel={t("removeToken")}
+        loading={saveMutation.isPending}
+        onConfirm={() => saveMutation.mutate({ token: "" })}
+        onCancel={() => setConfirmRemove(false)}
+      />
     </SectionMotion>
   );
 }

@@ -1252,7 +1252,13 @@
     "goToCommandCenter": "Zum Command Center",
     "changeableLater": "Alles hier lässt sich später unter Einstellungen ändern.",
     "saveFailed": "Speichern fehlgeschlagen.",
-    "demoBoardFailed": "Demo-Board konnte nicht erstellt werden."
+    "demoBoardFailed": "Demo-Board konnte nicht erstellt werden.",
+    "testingKey": "Schlüssel wird geprüft…",
+    "keyRejected": "Der Schlüssel funktioniert nicht: {reason}",
+    "keyRejectedHint": "Schlüssel prüfen und nochmals speichern, oder den Schritt überspringen.",
+    "checkFailed": "Der Schlüssel ist gespeichert, aber der Test konnte nicht laufen: {error}",
+    "githubRejected": "GitHub hat das nicht angenommen: {reason}",
+    "checkNoReason": "ohne Angabe"
   },
   "schedule": {
     "title": "Zeitplan",
@@ -1913,7 +1919,11 @@
       "ownerPlaceholder": "dein-github-user-oder-org",
       "ownerAria": "GitHub-Owner",
       "tokenPlaceholderRotate": "unverändert — zum Rotieren einfügen",
-      "tokenAria": "GitHub-Token"
+      "tokenAria": "GitHub-Token",
+      "removeToken": "Token entfernen",
+      "removeTokenTitle": "GitHub-Token entfernen?",
+      "removeTokenBody": "Agenten verlieren den GitHub-Zugang (Push, Pull Requests), bis ein neuer Token gespeichert ist. Steht ein Token in der .env, nutzt MC wieder diesen.",
+      "tokenRemoved": "Token entfernt."
     },
     "users": {
       "title": "Benutzer verwalten",
@@ -3222,7 +3232,7 @@
     },
     "cloudUsage": {
       "sectionTitle": "Cloud — wer nutzt was",
-      "collapseRow": "{n} Modelle ohne Agent — alle zeigen",
+      "collapseRow": "{n, plural, one {# Modell ohne Agent — alle zeigen} other {# Modelle ohne Agent — alle zeigen}}",
       "bindCta": "binden ›"
     },
     "slotPage": {
@@ -4080,5 +4090,25 @@
     "errBudgetReached": "Tagesbudget für die Stimme erreicht.",
     "stateIdleWarningShort": "Legt auf in {seconds} s",
     "errBudgetReachedUntil": "Tagesbudget erreicht — wieder ab {time}."
+  },
+  "checks": {
+    "state": {
+      "ok": "Funktioniert",
+      "fail": "Fehlgeschlagen",
+      "never": "Nie geprüft",
+      "changed": "Geändert — noch nicht geprüft",
+      "notTestable": "Noch nicht prüfbar",
+      "notSet": "Nicht gesetzt"
+    },
+    "running": "Wird geprüft…",
+    "age": {
+      "justNow": "gerade geprüft",
+      "minutes": "geprüft vor {n} min",
+      "hours": "{n, plural, one {geprüft vor # Stunde} other {geprüft vor # Stunden}}",
+      "days": "{n, plural, one {geprüft vor # Tag} other {geprüft vor # Tagen}}"
+    },
+    "test": "Testen",
+    "testQuotaHint": "Schickt eine winzige echte Anfrage — verbraucht ein wenig vom Abo-Kontingent.",
+    "testFailed": "Der Test konnte nicht laufen: {error}"
   }
 }

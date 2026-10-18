@@ -170,4 +170,36 @@ describe("CloudUsage", () => {
     const toggle = await screen.findByTestId("cloud-usage-collapse-toggle");
     expect(toggle).toHaveTextContent("1");
   });
+
+  it("says '1 model' for one unbound runtime and '2 models' for two (ICU plural, both catalogs)", async () => {
+    const bound = makeRuntime({ slug: "grok", display_name: "Grok", model_identifier: "grok-4.5" });
+    const one = makeRuntime({ slug: "kimi", display_name: "Kimi", model_identifier: "kimi-k3" });
+    const two = makeRuntime({ slug: "gemini", display_name: "Gemini", model_identifier: "gemini-3-pro" });
+    vi.spyOn(api.runtimes.db, "agents").mockImplementation((slug) =>
+      Promise.resolve(
+        slug === "grok"
+          ? agentsResponse("grok", [{ id: "a1", name: "Grok", agent_runtime: "cli-bridge" }])
+          : agentsResponse(slug, [])
+      )
+    );
+
+    const { unmount } = renderWithQuery(<CloudUsage runtimes={[bound, one]} onOpen={() => {}} />);
+    expect(await screen.findByTestId("cloud-usage-collapse-toggle")).toHaveTextContent(
+      "1 model without an agent — show all"
+    );
+    unmount();
+
+    renderWithQuery(<CloudUsage runtimes={[bound, one, two]} onOpen={() => {}} />);
+    expect(await screen.findByTestId("cloud-usage-collapse-toggle")).toHaveTextContent(
+      "2 models without an agent — show all"
+    );
+  });
+
+  it("keeps a real plural form in the German catalog too", async () => {
+    const de = (await import("../../../../messages/de.json")).default as {
+      runtimes: { cloudUsage: { collapseRow: string } };
+    };
+    expect(de.runtimes.cloudUsage.collapseRow).toMatch(/one \{# Modell ohne Agent/);
+    expect(de.runtimes.cloudUsage.collapseRow).toMatch(/other \{# Modelle ohne Agent/);
+  });
 });

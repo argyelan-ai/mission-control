@@ -60,6 +60,11 @@ export default function SetupWizardPage() {
   const [saving, setSaving] = useState(false);
   const [keySaved, setKeySaved] = useState(false);
   const [error, setError] = useState("");
+  // Test on save (ADR-093 §2, S5): the key is checked before the wizard moves
+  // on. A rejected value cannot be sent on again unchanged.
+  const [testingKey, setTestingKey] = useState(false);
+  const [rejectedValue, setRejectedValue] = useState<string | null>(null);
+  const [storedKeys, setStoredKeys] = useState<Set<string>>(() => new Set());
 
   // Connect GitHub (step 3)
   const [githubOwner, setGithubOwner] = useState("");
@@ -68,6 +73,7 @@ export default function SetupWizardPage() {
   const [githubSaved, setGithubSaved] = useState(false);
   const [githubSkipped, setGithubSkipped] = useState(false);
   const [githubError, setGithubError] = useState("");
+  const [githubRejected, setGithubRejected] = useState<string | null>(null);
 
   // Demo board (step 4)
   const [seeding, setSeeding] = useState(false);
@@ -104,43 +110,94 @@ export default function SetupWizardPage() {
     if (step === 4) void markWizardDone();
   }, [step]);
 
+  /** Runs the registry check. null = the wizard may go on (it works, or no
+   *  test procedure exists for it). Otherwise the reason, and whether the
+   *  value itself was rejected (then the same value cannot be sent again)
+   *  or only the test could not run (a retry may help). */
+  async function checkSaved(
+    kind: string,
+    subjectId: string,
+  ): Promise<{ rejected: boolean; reason: string } | null> {
+    try {
+      const { item, notRunnable } = await api.configChecks.run(kind, subjectId);
+      if (notRunnable || item.state === "ok") return null;
+      return { rejected: true, reason: item.message || t("checkNoReason") };
+    } catch (err) {
+      return { rejected: false, reason: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
   async function saveKey() {
     const p = providers[selected];
-    if (!p || !keyValue.trim()) return;
+    const value = keyValue.trim();
+    if (!p || !value) return;
     setSaving(true);
     setError("");
     try {
-      await api.secrets.create({
-        key: p.key,
-        value: keyValue.trim(),
-        provider: p.provider,
-        label: p.label,
-        description: p.description,
-      });
-      setKeySaved(true);
-      setStep(3);
+      // A retry after a rejection replaces the stored value instead of
+      // creating the same key twice.
+      if (storedKeys.has(p.key)) {
+        await api.secrets.update(p.key, { value });
+      } else {
+        await api.secrets.create({
+          key: p.key,
+          value,
+          provider: p.provider,
+          label: p.label,
+          description: p.description,
+        });
+        setStoredKeys((prev) => new Set(prev).add(p.key));
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : t("saveFailed"));
-    } finally {
       setSaving(false);
+      return;
     }
+    setTestingKey(true);
+    const problem = await checkSaved("secret", p.key);
+    setTestingKey(false);
+    setSaving(false);
+    if (problem) {
+      setError(
+        problem.rejected
+          ? t("keyRejected", { reason: problem.reason })
+          : t("checkFailed", { error: problem.reason }),
+      );
+      if (problem.rejected) setRejectedValue(value);
+      return;
+    }
+    setRejectedValue(null);
+    setKeySaved(true);
+    setStep(3);
   }
 
   async function saveGithub() {
     setGithubSaving(true);
     setGithubError("");
+    const payload: GithubConfigUpdate = {};
+    if (githubOwner.trim()) payload.owner = githubOwner.trim();
+    if (githubToken.trim()) payload.token = githubToken.trim();
     try {
-      const payload: GithubConfigUpdate = {};
-      if (githubOwner.trim()) payload.owner = githubOwner.trim();
-      if (githubToken.trim()) payload.token = githubToken.trim();
       await api.repos.setGithubConfig(payload);
-      setGithubSaved(true);
-      setStep(4);
     } catch (err) {
       setGithubError(err instanceof Error ? err.message : t("saveFailed"));
-    } finally {
       setGithubSaving(false);
+      return;
     }
+    const problem = await checkSaved("github", "connection");
+    setGithubSaving(false);
+    if (problem) {
+      setGithubError(
+        problem.rejected
+          ? t("githubRejected", { reason: problem.reason })
+          : t("checkFailed", { error: problem.reason }),
+      );
+      if (problem.rejected) setGithubRejected(`${payload.owner ?? ""}\u0000${payload.token ?? ""}`);
+      return;
+    }
+    setGithubRejected(null);
+    setGithubSaved(true);
+    setStep(4);
   }
 
   async function seedDemo() {
@@ -257,7 +314,11 @@ export default function SetupWizardPage() {
                 <select
                   id="provider"
                   value={selected}
-                  onChange={(e) => setSelected(Number(e.target.value))}
+                  onChange={(e) => {
+                    setSelected(Number(e.target.value));
+                    setRejectedValue(null);
+                    setError("");
+                  }}
                   className={inputClasses}
                   style={inputStyle}
                 >
@@ -301,18 +362,23 @@ export default function SetupWizardPage() {
                   }}
                 >
                   {error}
+                  {rejectedValue !== null && (
+                    <span className="block mt-1" style={{ color: "var(--color-text-secondary)" }}>
+                      {t("keyRejectedHint")}
+                    </span>
+                  )}
                 </p>
               )}
 
               <div className="flex items-center gap-3">
                 <button
                   onClick={saveKey}
-                  disabled={saving || !keyValue.trim()}
+                  disabled={saving || !keyValue.trim() || rejectedValue === keyValue.trim()}
                   className="flex-1 text-[var(--color-on-accent)] font-medium text-sm rounded-lg px-4 py-2.5 flex items-center justify-center gap-2 cursor-pointer transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
                   style={{ background: `linear-gradient(135deg, ${C.accent}, ${C.accentHover})` }}
                 >
                   {saving && <Loader2 className="animate-spin" size={14} />}
-                  {t("saveContinue")}
+                  {testingKey ? t("testingKey") : t("saveContinue")}
                 </button>
                 <button
                   onClick={() => setStep(3)}
@@ -381,7 +447,11 @@ export default function SetupWizardPage() {
               <div className="flex items-center gap-3">
                 <button
                   onClick={saveGithub}
-                  disabled={githubSaving || (!githubOwner.trim() && !githubToken.trim())}
+                  disabled={
+                    githubSaving ||
+                    (!githubOwner.trim() && !githubToken.trim()) ||
+                    githubRejected === `${githubOwner.trim()}\u0000${githubToken.trim()}`
+                  }
                   className="flex-1 text-[var(--color-on-accent)] font-medium text-sm rounded-lg px-4 py-2.5 flex items-center justify-center gap-2 cursor-pointer transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
                   style={{ background: `linear-gradient(135deg, ${C.accent}, ${C.accentHover})` }}
                 >
