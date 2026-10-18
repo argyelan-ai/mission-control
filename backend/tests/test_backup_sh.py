@@ -45,12 +45,25 @@ pytestmark = [
 ]
 
 SHIM = r"""#!/bin/bash
-# Test shim for `docker compose`: db exec goes to the throwaway container,
-# everything else is only logged. Any other docker call is refused, so the
-# script under test can never reach a real container.
+# Test shim for `docker`.
+#   docker compose [-p PROJECT] ...   db exec goes to the throwaway
+#                                     container; every call — with any -p it
+#                                     carried — is logged to $FAKE_LOG so
+#                                     tests can assert which project name
+#                                     backup.sh picked.
+#   docker ps --filter ... --format   answers from $FAKE_CONTAINERS ("project
+#                                     <TAB> working_dir <TAB> service" per
+#                                     line), filtered the same way backup.sh's
+#                                     real compose-project lookup filters —
+#                                     so that lookup is exercised for real,
+#                                     not just stubbed.
+# Any other docker call is refused, so the script under test can never reach
+# a real container.
 if [[ "${1:-}" == "compose" ]]; then
     shift
-    echo "compose $*" >> "$FAKE_LOG"
+    project=""
+    while [[ "${1:-}" == "-p" ]]; do project="$2"; shift 2; done
+    echo "compose ${project:+-p $project }$*" >> "$FAKE_LOG"
     case "${1:-}" in
         exec)
             shift
@@ -70,6 +83,32 @@ if [[ "${1:-}" == "compose" ]]; then
             exit 0
             ;;
     esac
+fi
+if [[ "${1:-}" == "ps" ]]; then
+    shift
+    service="" wd=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --filter)
+                case "$2" in
+                    label=com.docker.compose.service=*)
+                        service="${2#label=com.docker.compose.service=}" ;;
+                    label=com.docker.compose.project.working_dir=*)
+                        wd="${2#label=com.docker.compose.project.working_dir=}" ;;
+                esac
+                shift 2 ;;
+            --format) shift 2 ;;
+            -a) shift ;;
+            *) shift ;;
+        esac
+    done
+    while IFS=$'\t' read -r proj proj_wd svc; do
+        [[ -z "$proj" ]] && continue
+        [[ -n "$service" && "$svc" != "$service" ]] && continue
+        [[ -n "$wd" && "$proj_wd" != "$wd" ]] && continue
+        printf '%s\n' "$proj"
+    done <<< "${FAKE_CONTAINERS:-}"
+    exit 0
 fi
 echo "test shim: refusing 'docker $*'" >&2
 exit 97
@@ -148,6 +187,8 @@ def env(tmp_path: Path, pg_container: str):
     }
     run_env.pop("MC_BACKUP_KEEP", None)
     run_env.pop("MC_BACKUP_PASSPHRASE", None)
+    run_env.pop("COMPOSE_PROJECT_NAME", None)
+    run_env.pop("FAKE_CONTAINERS", None)
 
     class E:
         pass
@@ -231,13 +272,16 @@ def test_restore_makes_safety_copy_then_stops_backend_and_worker(env):
     assert list(env.backups.glob("mc_data_pre-restore_*.tar.gz"))
 
     lines = env.log.read_text().splitlines()
-    idx_stop_backend = next(i for i, ln in enumerate(lines) if ln.startswith("compose stop") and "backend" in ln)
-    idx_stop_worker = next(i for i, ln in enumerate(lines) if ln.startswith("compose stop") and "mc-worker" in ln)
+    # Every logged call carries -p repo (see test_backup_passes_the_detected_
+    # project_name_to_every_compose_call) — match on the subcommand, not the
+    # start of the line.
+    idx_stop_backend = next(i for i, ln in enumerate(lines) if " stop " in ln and "backend" in ln)
+    idx_stop_worker = next(i for i, ln in enumerate(lines) if " stop " in ln and "mc-worker" in ln)
     idx_drop = next(i for i, ln in enumerate(lines) if "DROP DATABASE" in ln)
     idx_dump = next(i for i, ln in enumerate(lines) if "pg_dump" in ln)
     assert idx_dump < idx_stop_backend < idx_drop
     assert idx_stop_worker < idx_drop
-    assert any(ln.startswith("compose start") and "mc-worker" in ln for ln in lines[idx_drop:])
+    assert any(" start " in ln and "mc-worker" in ln for ln in lines[idx_drop:])
 
 
 def test_newest_damaged_archive_is_never_picked(env):
@@ -644,3 +688,73 @@ def test_wrong_passphrase_aborts_before_anything_changes(env):
     assert _rows(env.pg) == 6
     assert "DROP" not in env.log.read_text()
     assert (env.repo / ".env").read_text() == ENV_BODY
+
+
+# ── compose project name: find the real containers, not just the folder ────
+#
+# A scheduled backup started from a differently-named checkout (a worktree
+# like "deploy-main") must still find the containers "docker compose" itself
+# started under the install's real project name. These exercise only
+# compose_project_name() via `./backup.sh project` — no throwaway Postgres
+# writes needed, but the module fixtures still require a docker daemon
+# (see pytestmark above), so they live in this file rather than a separate
+# fake-docker-only module.
+
+def test_project_defaults_to_install_folder_name(env):
+    r = env.run("project", stdin="")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert r.stdout.strip() == "repo"
+
+
+def test_compose_project_name_env_var_wins(env):
+    r = env.run("project", stdin="", extra={"COMPOSE_PROJECT_NAME": "mission-control"})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert r.stdout.strip() == "mission-control"
+
+
+def test_compose_project_name_from_env_file(env):
+    (env.repo / ".env").write_text("COMPOSE_PROJECT_NAME=mission-control\n")
+    r = env.run("project", stdin="")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert r.stdout.strip() == "mission-control"
+
+
+def test_running_container_label_overrides_folder_guess(env):
+    """The actual bug: folder is named differently (a worktree, "deploy-main"),
+    but a "db" container is already running for this install under its real
+    project name — found via the compose working_dir label, not the folder."""
+    r = env.run(
+        "project", stdin="",
+        extra={"FAKE_CONTAINERS": f"mission-control\t{env.repo}\tdb"},
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert r.stdout.strip() == "mission-control"
+
+
+def test_running_container_for_a_different_working_dir_is_ignored(env):
+    r = env.run(
+        "project", stdin="",
+        extra={"FAKE_CONTAINERS": "other-install\t/some/other/path\tdb"},
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert r.stdout.strip() == "repo"
+
+
+def test_running_container_for_a_different_service_is_ignored(env):
+    r = env.run(
+        "project", stdin="",
+        extra={"FAKE_CONTAINERS": f"other-install\t{env.repo}\tbackend"},
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert r.stdout.strip() == "repo"
+
+
+def test_backup_passes_the_detected_project_name_to_every_compose_call(env):
+    """The actual fix: `docker compose exec ...` must carry `-p <project>` so
+    it finds the install's containers regardless of the current folder name —
+    this is what -p lets backup.sh survive a run from the wrong directory."""
+    _make_backup(env)
+    log = env.log.read_text()
+    assert log, "no compose calls were logged"
+    for line in log.splitlines():
+        assert line.startswith("compose -p repo "), line
