@@ -1,0 +1,52 @@
+{
+  "_comment": "Fingerprints of every builtin recipe version MC has shipped. A builtin row that still matches one of them follows the current catalog on startup; any other content counts as a local edit and is kept. Written by backend/scripts/record_shipped_recipes.py - append only.",
+  "fingerprints": {
+    "deepseek-v4-flash-ds4": [
+      "sha256:161675688cfa12b9eb24422e737f31cb3b88977fc564bf30b2599246070d31f6"
+    ],
+    "deepseek-v4-flash-spark": [
+      "sha256:1a5738742952b9cb737797a7ccda50ee633be37f4284a740ce2722f21e6d081f",
+      "sha256:f2a000bbad157e48b1d860e938978e411e9354b72513e4070cd09725b0efa66d",
+      "sha256:f5a3df4685758bf7d1635e81728f0ce6e907c41c5b27c767238da6d4a3f92894"
+    ],
+    "deepseek-v4-flash-sparkinfer": [
+      "sha256:735c60a1abf687ff9c715189bd2b9770dae8d0f7186b5b25509e6d1136e7dba8",
+      "sha256:b773aa1fbbd27faea36e8746a3bee2815f1b3a8ae37f62c6f6444279e856e351"
+    ],
+    "gemma4-27b-nvfp4": [
+      "sha256:0ea8090138c507812d0e9d6ef6a230bab954b48bf560a071a1f4b70a03e2b9da",
+      "sha256:df1fdb58ba231b64f5d53968b05e81c9e69df624358806cceb841497b4da2e40"
+    ],
+    "glm53-flash-exl3-tensorfold": [
+      "sha256:0e26302b6221da9d63532cccf51a5233220013a43c4819e170a9e04fed24b58a",
+      "sha256:64ae0889eeebb9962d6291b142003c5d42f861eeb900ad62321825a141a71193",
+      "sha256:c9eaefc1a1548ab4498dc6e8efdc30c7bc41f3cc966c22536fc313bfb7b666fb"
+    ],
+    "laguna-s21-nvfp4": [
+      "sha256:78c892a13ae6344e8e7d61caf1ad0839236bfcaecb0004af97a6976fa228bacf",
+      "sha256:a11d4fb863898da65bf05804c86a1b24cbdf39a136f53e69550384aadafa84b2",
+      "sha256:f92ceb867e0f487142569cd4ed285ba4ad0d6ba1d7cbd3ce1f983f585345b54d"
+    ],
+    "qwen3-8b-gguf-q4": [
+      "sha256:40d2b655bc037a9dd6c67baa4c4704855772417004ac0b5799b4c8f088028f60",
+      "sha256:c827fe95979912aa9c2428c65bcf78ba3faade197b2bfb5c61afcfcf964930e5"
+    ],
+    "qwen3-coder-next-80b-a3b-gb10": [
+      "sha256:886236b7a8da77eb315bc815e3f892d2c49bcdde2e4bdbe4c60a7d82f4b6d83f",
+      "sha256:ee7413a322c7c66f00d90d8747447190c8c604bd502ee1a1cd150cd3edbabbb2"
+    ],
+    "qwen3-embedding-0.6b": [
+      "sha256:9e25ae4b1c840cd53d8caecf6bb3df654b51d1f47d90f4f14f0e43993ee6d9fa",
+      "sha256:a143217c181b535777a69b88ee3a8c10967e53ae8f67cef3ca5a468b49c382f6"
+    ],
+    "qwen36-27b-nvfp4": [
+      "sha256:43ce50a6759d82987abf887bc1bd69fbfe64d10d88ff07d941b76534032eaa4f",
+      "sha256:c021d3deef8d43c052820b03dd392ba666faae8131c5268fec55d7378af64ac6"
+    ],
+    "qwen36-general-spark": [
+      "sha256:32a2d8b3c78fd9c548863e90335c78fc89ddd32c3c920fbc5f67f632937f8d26",
+      "sha256:83b393722e376b8b30137eadaa3e6fb7b1ecb9189d242dbe2162362f98cbb0fb",
+      "sha256:ff8d4218063a264421e11fd9ac0e05e553e9a6dfec49b9b10e96bb46f1c6ede7"
+    ]
+  }
+}

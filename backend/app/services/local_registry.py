@@ -12,6 +12,12 @@ Three jobs, deliberately in one module because they share the upsert rules:
    ``services/runtime_seeder.py``: once a slug exists, the file is never
    consulted for it again, so a hand-edit in the DB cannot be undone by a
    deploy.
+1b. **Follow the shipped catalog** (``sync_builtin_recipes``) — right after
+   the seed: a builtin row that still holds a version the catalog once
+   shipped (``config/local-recipes.shipped.json``) is brought up to the
+   current one, so a fixed install template reaches existing installs. A
+   row with any other content was edited locally and is kept, with a log
+   line and one activity event.
 2. **Refresh** (``refresh_from_sources``) — pull curated registries over HTTP
    and upsert them. Operator-triggered from the UI, plus a slow background loop.
 3. **Notify** — a slug that was never seen before raises
@@ -41,6 +47,7 @@ refresh endpoint keeps working.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 from dataclasses import dataclass, field
@@ -60,6 +67,7 @@ from app.utils import utcnow
 logger = logging.getLogger("mc.local_registry")
 
 EVENT_NEW_LOCAL_MODEL = "local_model.new_available"
+EVENT_CATALOG_KEPT_LOCAL = "local_model.catalog_update_kept_local"
 
 _SEED_PATH = Path(__file__).parent.parent.parent / "config" / "local-recipes.json"
 
@@ -356,51 +364,134 @@ def _row_from_spec(spec: RecipeSpec) -> LocalRecipe:
     )
 
 
-def _apply_update(row: LocalRecipe, spec: RecipeSpec) -> bool:
-    """Copy changed fields onto an existing row. Returns True if anything moved.
+#: The catalog-owned columns: what a seed or a refresh writes, in one place.
+#: ``enabled`` and ``first_seen_at`` are NOT in it: the first is the
+#: operator's decision (a refresh must never un-hide a recipe), the second is
+#: the definition of "when did MC first learn about this".
+MANAGED_FIELDS: tuple[str, ...] = (
+    "display_name",
+    "description",
+    "engine",
+    "model_identifier",
+    "quant",
+    "est_weights_gb",
+    "min_vram_gb",
+    "context_len",
+    "arch",
+    "gb10_validated",
+    "recipe_ref",
+    "launch_template",
+    "install_template",
+    "stop_template",
+    "process_name",
+    "author",
+    "author_url",
+    "source_registry",
+    "source_url",
+    "env",
+    "topology",
+    "port",
+    "exclusive",
+    "env_file",
+    "env_map",
+    "drop_page_cache",
+    "supports_vision",
+    "tags",
+    "notes",
+)
 
-    ``enabled`` and ``first_seen_at`` are NOT in the list: the first is the
-    operator's decision (a refresh must never un-hide a recipe), the second is
-    the definition of "when did MC first learn about this".
-    """
+
+def _spec_values(spec: RecipeSpec) -> dict:
+    """The managed columns exactly as a row built from ``spec`` holds them."""
     spec = spec.normalised()
+    values = {attr: getattr(spec, attr) for attr in MANAGED_FIELDS}
+    values["env"] = spec.env_tuning or None
+    values["topology"] = spec.topology_map
+    values["env_map"] = spec.env_map_clean
+    values["tags"] = list(spec.tags or [])
+    return values
+
+
+def _row_values(row: LocalRecipe) -> dict:
+    values = {attr: getattr(row, attr) for attr in MANAGED_FIELDS}
+    values["tags"] = list(row.tags or [])
+    return values
+
+
+def _field_default(attr: str):
+    info = RecipeSpec.model_fields[attr]
+    if info.default_factory is not None:
+        return info.default_factory()
+    return None if info.is_required() else info.default
+
+
+def catalog_fingerprint(values: dict) -> str:
+    """A stable hash of one recipe's managed columns.
+
+    Values equal to the schema default are left out, so adding a new
+    optional field (its default fills old rows and old catalog entries alike)
+    never changes the fingerprint of anything that was shipped before it.
+    """
+    canonical = {
+        attr: values[attr]
+        for attr in MANAGED_FIELDS
+        if RecipeSpec.model_fields[attr].is_required() or values[attr] != _field_default(attr)
+    }
+    blob = json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return "sha256:" + hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def spec_fingerprint(spec: RecipeSpec) -> str:
+    return catalog_fingerprint(_spec_values(spec))
+
+
+def row_fingerprint(row: LocalRecipe) -> str:
+    return catalog_fingerprint(_row_values(row))
+
+
+def _apply_update(row: LocalRecipe, spec: RecipeSpec) -> bool:
+    """Copy changed managed fields onto an existing row. True if anything moved."""
     changed = False
-    for attr, value in (
-        ("display_name", spec.display_name),
-        ("description", spec.description),
-        ("engine", spec.engine),
-        ("model_identifier", spec.model_identifier),
-        ("quant", spec.quant),
-        ("est_weights_gb", spec.est_weights_gb),
-        ("min_vram_gb", spec.min_vram_gb),
-        ("context_len", spec.context_len),
-        ("arch", spec.arch),
-        ("gb10_validated", spec.gb10_validated),
-        ("recipe_ref", spec.recipe_ref),
-        ("launch_template", spec.launch_template),
-        ("install_template", spec.install_template),
-        ("stop_template", spec.stop_template),
-        ("process_name", spec.process_name),
-        ("author", spec.author),
-        ("author_url", spec.author_url),
-        ("source_registry", spec.source_registry),
-        ("source_url", spec.source_url),
-        ("env", spec.env_tuning or None),
-        ("topology", spec.topology_map),
-        ("port", spec.port),
-        ("exclusive", spec.exclusive),
-        ("env_file", spec.env_file),
-        ("env_map", spec.env_map_clean),
-        ("drop_page_cache", spec.drop_page_cache),
-        ("supports_vision", spec.supports_vision),
-        ("tags", list(spec.tags or [])),
-        ("notes", spec.notes),
-    ):
+    for attr, value in _spec_values(spec).items():
         if getattr(row, attr) != value:
             setattr(row, attr, value)
             changed = True
     if changed:
         row.updated_at = utcnow()
+    return changed
+
+
+async def follow_recipe_into_runtimes(
+    session: AsyncSession, slug: str, old_drop_page_cache: bool, new_drop_page_cache: bool
+) -> list[str]:
+    """Carry a changed ``drop_page_cache`` into the recipe's instances.
+
+    An instance copies the flag once, when the switcher builds it
+    (``recipe_switcher.build_runtime_from_recipe``). Nothing in MC lets a
+    user set it on the instance afterwards, so an instance that still holds
+    the recipe's OLD value got it from the recipe and follows the new one.
+    An instance with a different value was changed by hand and is left alone.
+    Only explicit instances count (``topology.recipe_slug``) — never a slot
+    row, never a runtime that merely serves the same model.
+
+    Does not commit. Returns the slugs of the runtimes it changed.
+    """
+    if old_drop_page_cache == new_drop_page_cache:
+        return []
+    from app.models.runtime import Runtime
+
+    changed: list[str] = []
+    for runtime in (await session.exec(select(Runtime))).all():
+        if runtime.is_slot:
+            continue
+        topology = runtime.topology if isinstance(runtime.topology, dict) else {}
+        if topology.get("recipe_slug") != slug:
+            continue
+        if runtime.drop_page_cache != old_drop_page_cache:
+            continue
+        runtime.drop_page_cache = new_drop_page_cache
+        session.add(runtime)
+        changed.append(runtime.slug)
     return changed
 
 
@@ -434,6 +525,154 @@ async def seed_local_recipes(session: AsyncSession) -> tuple[int, int]:
     else:
         logger.debug("local registry seed: inserted=0 skipped=%d (already seeded)", skipped)
     return (inserted, skipped)
+
+
+def _shipped_path() -> Path:
+    return _SEED_PATH.with_name(_SEED_PATH.stem + ".shipped.json")
+
+
+def load_shipped_fingerprints(path: Path | None = None) -> dict[str, set[str]]:
+    """Every fingerprint the builtin catalog has ever shipped, per slug.
+
+    ``config/local-recipes.shipped.json`` is written by
+    ``scripts/record_shipped_recipes.py`` and guarded by a test: the current
+    catalog's fingerprints must always be in it. A row whose content matches
+    one of them was seeded from a release and never touched since.
+    """
+    path = path or _shipped_path()
+    if not path.exists():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("shipped recipe fingerprints unreadable (%s) — no builtin row is updated", exc)
+        return {}
+    table = raw.get("fingerprints") if isinstance(raw, dict) else None
+    if not isinstance(table, dict):
+        return {}
+    return {str(slug): {str(fp) for fp in fps} for slug, fps in table.items() if isinstance(fps, list)}
+
+
+@dataclass
+class CatalogSyncResult:
+    """What one ``sync_builtin_recipes`` pass did (logged at startup)."""
+
+    updated: list[str] = field(default_factory=list)
+    kept_local: list[str] = field(default_factory=list)
+    runtimes_followed: list[str] = field(default_factory=list)
+
+    def as_dict(self) -> dict:
+        return {
+            "updated": self.updated,
+            "kept_local": self.kept_local,
+            "runtimes_followed": self.runtimes_followed,
+        }
+
+
+async def _announce_kept_local(session: AsyncSession, row: LocalRecipe, catalog_fp: str) -> None:
+    """One activity event per (recipe, catalog version) — not one per boot.
+
+    The dedup lives in the activity table itself, so it survives a Redis
+    flush and needs no new storage.
+    """
+    from app.models.activity import ActivityEvent
+
+    earlier = (
+        await session.exec(
+            select(ActivityEvent).where(ActivityEvent.event_type == EVENT_CATALOG_KEPT_LOCAL)
+        )
+    ).all()
+    for event in earlier:
+        detail = event.detail if isinstance(event.detail, dict) else {}
+        if detail.get("slug") == row.slug and detail.get("catalog_fingerprint") == catalog_fp:
+            return
+    await emit_event(
+        session,
+        EVENT_CATALOG_KEPT_LOCAL,
+        f"{row.display_name}: catalog has a newer version, local edits kept",
+        severity="info",
+        detail={
+            "slug": row.slug,
+            "catalog_fingerprint": catalog_fp,
+            "row_fingerprint": row_fingerprint(row),
+        },
+    )
+
+
+async def sync_builtin_recipes(session: AsyncSession) -> CatalogSyncResult:
+    """Bring untouched builtin rows up to the shipped catalog (startup).
+
+    ``seed_local_recipes`` only inserts, so a fix to a shipped recipe (a new
+    install template, a corrected flag) never reached an existing install.
+    This pass closes that gap without taking anything away from the user:
+
+    * only rows with ``source_registry == "builtin"`` are considered — a row a
+      registry refresh took over belongs to that registry;
+    * a row is updated only when its current content is one the catalog has
+      shipped before (``load_shipped_fingerprints``). Anything else was edited
+      locally: it is kept as it is, with a log line and one activity event
+      ("catalog has a newer version, local edits kept");
+    * ``enabled`` is never touched (the same rule as a refresh);
+    * a recipe that left the catalog keeps its row — never delete;
+    * an instance whose ``drop_page_cache`` came from the recipe follows the
+      new value (``follow_recipe_into_runtimes``).
+
+    Never raises past a log line on a per-row problem; the caller wraps the
+    whole pass like every other startup seed.
+    """
+    result = CatalogSyncResult()
+    specs = _load_seed()
+    if not specs:
+        return result
+    shipped = load_shipped_fingerprints()
+    rows = {
+        row.slug: row
+        for row in (
+            await session.exec(select(LocalRecipe).where(LocalRecipe.source_registry == "builtin"))
+        ).all()
+    }
+
+    kept: list[tuple[LocalRecipe, str]] = []
+    for spec in specs:
+        row = rows.get(spec.slug)
+        if row is None:
+            continue
+        catalog_fp = spec_fingerprint(spec)
+        current_fp = row_fingerprint(row)
+        if current_fp == catalog_fp:
+            continue
+        if current_fp not in shipped.get(spec.slug, set()):
+            kept.append((row, catalog_fp))
+            continue
+        old_drop = row.drop_page_cache
+        if _apply_update(row, spec):
+            session.add(row)
+            result.updated.append(row.slug)
+            result.runtimes_followed += await follow_recipe_into_runtimes(
+                session, row.slug, old_drop, row.drop_page_cache
+            )
+
+    if result.updated:
+        await session.commit()
+        logger.info(
+            "local registry: %d builtin recipe(s) updated to the shipped catalog: %s%s",
+            len(result.updated),
+            ", ".join(result.updated),
+            f" (runtimes following drop_page_cache: {', '.join(result.runtimes_followed)})"
+            if result.runtimes_followed
+            else "",
+        )
+
+    for row, catalog_fp in kept:
+        result.kept_local.append(row.slug)
+        logger.warning(
+            "local registry: %s — catalog has a newer version, local edits kept", row.slug
+        )
+        try:
+            await _announce_kept_local(session, row, catalog_fp)
+        except Exception:  # noqa: BLE001 — a lost event must not fail the startup pass
+            logger.exception("local registry: kept-local event for %s failed", row.slug)
+    return result
 
 
 # ── Refresh ──────────────────────────────────────────────────────────────────
@@ -564,9 +803,14 @@ async def refresh_from_sources(session: AsyncSession) -> RefreshResult:
                 session.add(row)
                 new_rows.append(row)
                 result.added += 1
-            elif _apply_update(existing, spec):
-                session.add(existing)
-                result.updated += 1
+            else:
+                old_drop = existing.drop_page_cache
+                if _apply_update(existing, spec):
+                    session.add(existing)
+                    result.updated += 1
+                    await follow_recipe_into_runtimes(
+                        session, existing.slug, old_drop, existing.drop_page_cache
+                    )
 
     if result.added or result.updated:
         await session.commit()

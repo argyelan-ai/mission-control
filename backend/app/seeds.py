@@ -61,13 +61,21 @@ async def _seed_local_recipes() -> None:
     """Import config/local-recipes.json into the DB on first run (idempotent)."""
     try:
         from sqlmodel.ext.asyncio.session import AsyncSession
-        from app.services.local_registry import repair_legacy_sparkrun_rows, seed_local_recipes
+        from app.services.local_registry import (
+            repair_legacy_sparkrun_rows,
+            seed_local_recipes,
+            sync_builtin_recipes,
+        )
 
         async with AsyncSession(engine, expire_on_commit=False) as session:
             await seed_local_recipes(session)
             # Rezept-Umschalter (02.09.2026): alte engine=sparkrun-Zeilen
             # umwandeln (Befehl bleibt), damit es nur EIN Rezept-Modell gibt.
             await repair_legacy_sparkrun_rows(session)
+            # Builtin rows nobody edited follow the shipped catalog (fixed
+            # install templates, corrected flags). After the repair, so a
+            # converted legacy row is compared in its current shape.
+            await sync_builtin_recipes(session)
     except Exception as e:
         logger.warning("Local recipe seeding failed (non-critical): %s", e)
 
