@@ -2288,6 +2288,7 @@
       "statusOk": "Verbunden · geprüft {ago}",
       "statusNeverTested": "Noch nicht geprüft",
       "statusFail": "Claude lehnt den Token ab",
+      "statusCheckFailed": "Prüfung fehlgeschlagen",
       "notConnectedHint": "Claude-Agenten starten erst, wenn ein Konto verbunden ist.",
       "statusEnvFallback": "Angemeldet über die .env",
       "envFallbackHint": "Deine Claude-Agenten melden sich mit dem Token aus der .env-Datei an. Dort kann MC ihn weder prüfen noch ersetzen. Verbinde hier, damit der Token in MC liegt; er löst dann den aus der .env ab.",
@@ -2298,6 +2299,7 @@
       "testing": "Prüfe…",
       "testOk": "Claude antwortet.",
       "testFailed": "Claude lehnt den Token ab.",
+      "testCheckFailed": "Die Prüfung ist fehlgeschlagen.",
       "connect": "Claude verbinden",
       "reconnect": "Neu verbinden",
       "disconnect": "Trennen",
@@ -2347,8 +2349,8 @@
         "saveFailed": "Token konnte nicht gespeichert werden."
       },
       "reasons": {
-        "rejected": "Claude lehnt den Token ab — er ist abgelaufen, widerrufen oder falsch eingegeben. Verbinde neu.",
-        "rejectedStatus": "Claude lehnt den Token ab (HTTP {status}) — er ist abgelaufen, widerrufen oder falsch eingegeben. Verbinde neu.",
+        "rejected": "Abgelaufen, widerrufen oder falsch eingegeben. Verbinde neu.",
+        "rejectedStatus": "Abgelaufen, widerrufen oder falsch eingegeben (HTTP {status}). Verbinde neu.",
         "rate_limited": "Claude bremst gerade die Anfragen. Prüfe in einer Minute nochmals.",
         "rate_limitedStatus": "Claude bremst gerade die Anfragen (HTTP {status}). Prüfe in einer Minute nochmals.",
         "http_errorStatus": "Unerwartete Antwort von Claude (HTTP {status}). Prüfe später nochmals.",

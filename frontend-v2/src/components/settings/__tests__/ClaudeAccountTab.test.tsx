@@ -109,7 +109,7 @@ describe("ClaudeAccountTab — status", () => {
     expect(await screen.findByTestId("claude-status-headline")).toHaveTextContent("Claude refused the token");
     // Worded from the reason code, not the server's English sentence.
     const line = screen.getByTestId("claude-check-message");
-    expect(line).toHaveTextContent("Claude refuses the token (HTTP 401) — it is expired, revoked or mistyped.");
+    expect(line).toHaveTextContent("Expired, revoked or mistyped (HTTP 401). Connect again.");
     expect(line).not.toHaveTextContent("rejected the key");
     expect(screen.getByRole("button", { name: "Reconnect" })).toBeInTheDocument();
   });

@@ -86,7 +86,7 @@ describe("Claude card — German screen", () => {
     renderTab("de");
     const line = await screen.findByTestId("claude-check-message");
     expect(line).toHaveTextContent(
-      "Claude lehnt den Token ab (HTTP 401) — er ist abgelaufen, widerrufen oder falsch eingegeben. Verbinde neu.",
+      "Abgelaufen, widerrufen oder falsch eingegeben (HTTP 401). Verbinde neu.",
     );
     expect(line.textContent ?? "").not.toMatch(ENGLISH);
     expect(document.body.textContent).not.toContain("rejected the key");
@@ -103,6 +103,27 @@ describe("Claude card — German screen", () => {
     const fold = screen.getByTestId("claude-check-detail");
     expect(fold.tagName).toBe("DETAILS");
     expect(fold).not.toHaveAttribute("open");
+  });
+
+  it("a timeout is not a refusal: the headline says the test failed, the line says why", async () => {
+    vi.spyOn(api.claudeAccount, "status").mockResolvedValue(
+      status({ check: check({ state: "fail", reason: "timeout", reason_params: {}, message: "ReadTimeout: slow" }) }),
+    );
+    renderTab("de");
+    expect(await screen.findByTestId("claude-status-headline")).toHaveTextContent("Prüfung fehlgeschlagen");
+    expect(screen.getByTestId("claude-status-headline")).not.toHaveTextContent("lehnt");
+    expect(screen.getByTestId("claude-check-message")).toHaveTextContent(
+      "Claude hat nicht rechtzeitig geantwortet. Prüfe später nochmals.",
+    );
+  });
+
+  it("a rejected token: the headline says so once, the line does not repeat it", async () => {
+    vi.spyOn(api.claudeAccount, "status").mockResolvedValue(
+      status({ check: check({ state: "fail", reason: "rejected", reason_params: { status: 401 }, message: "x" }) }),
+    );
+    renderTab("de");
+    expect(await screen.findByTestId("claude-status-headline")).toHaveTextContent("Claude lehnt den Token ab");
+    expect(screen.getByTestId("claude-check-message")).not.toHaveTextContent("lehnt");
   });
 
   it("a login error code reads German", async () => {

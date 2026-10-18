@@ -2288,6 +2288,7 @@
       "statusOk": "Connected · tested {ago}",
       "statusNeverTested": "Not tested yet",
       "statusFail": "Claude refused the token",
+      "statusCheckFailed": "Test failed",
       "notConnectedHint": "Claude agents cannot start until an account is connected.",
       "statusEnvFallback": "Signed in through .env",
       "envFallbackHint": "Your Claude agents sign in with the token in the .env file. MC cannot test or replace it there. Connect here to keep the token in MC; it then takes over from the .env one.",
@@ -2298,6 +2299,7 @@
       "testing": "Testing…",
       "testOk": "Claude answers.",
       "testFailed": "Claude refused the token.",
+      "testCheckFailed": "The test failed.",
       "connect": "Connect Claude",
       "reconnect": "Reconnect",
       "disconnect": "Disconnect",
@@ -2347,8 +2349,8 @@
         "saveFailed": "Could not save the token."
       },
       "reasons": {
-        "rejected": "Claude refuses the token — it is expired, revoked or mistyped. Connect again.",
-        "rejectedStatus": "Claude refuses the token (HTTP {status}) — it is expired, revoked or mistyped. Connect again.",
+        "rejected": "Expired, revoked or mistyped. Connect again.",
+        "rejectedStatus": "Expired, revoked or mistyped (HTTP {status}). Connect again.",
         "rate_limited": "Claude is limiting requests right now. Test again in a minute.",
         "rate_limitedStatus": "Claude is limiting requests right now (HTTP {status}). Test again in a minute.",
         "http_errorStatus": "Unexpected answer from Claude (HTTP {status}). Test again later.",

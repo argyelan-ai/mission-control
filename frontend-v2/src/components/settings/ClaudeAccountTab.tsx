@@ -462,7 +462,7 @@ export function ClaudeAccountTab() {
     mutationFn: () => api.configChecks.run("secret", TOKEN_KEY),
     onSuccess: ({ item }) => {
       if (item.state === "ok") notify.success(t("testOk"));
-      else notify.error(t("testFailed"));
+      else notify.error(item.reason === "rejected" ? t("testFailed") : t("testCheckFailed"));
       refresh();
     },
     onError: () => notify.error(t("testFailed")),
@@ -493,7 +493,10 @@ export function ClaudeAccountTab() {
       : state === "ok"
       ? t("statusOk", { ago: timeAgo(check?.checked_at ?? null, locale) })
       : state === "fail"
-      ? t("statusFail")
+      ? // "refuses the token" only when Claude did; a timeout is not a refusal.
+        check?.reason === "rejected"
+        ? t("statusFail")
+        : t("statusCheckFailed")
       : t("statusNeverTested");
   const loginOpen = !!activeLogin && LOGIN_ACTIVE.includes(activeLogin.state);
 
