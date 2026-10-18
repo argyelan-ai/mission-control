@@ -185,6 +185,24 @@ async def test_wrong_key_is_stored_as_fail_without_the_key(
 
 
 @pytest.mark.asyncio
+async def test_a_procedure_error_that_echoes_the_key_is_scrubbed(
+    auth_client: AsyncClient, monkeypatch
+):
+    from app.services.config_checks import kinds
+
+    async def leaky(method, url, headers, body=None):
+        raise RuntimeError(f"connect failed for {headers['Authorization'].split()[-1]}")
+
+    monkeypatch.setattr(kinds, "_http_status", leaky)
+    await _store_secret("openai_api_key", "plainvalue-ECHOED-BACK")
+
+    item = (await auth_client.post("/api/v1/config-checks/secret/openai_api_key/run")).json()
+    assert item["state"] == "fail" and "RuntimeError" in item["message"]
+    assert "ECHOED" not in item["message"]
+    assert "ECHOED" not in (await _rows())[0].message
+
+
+@pytest.mark.asyncio
 async def test_good_key_is_stored_as_ok_and_one_row_per_subject(
     auth_client: AsyncClient, mock_http
 ):
