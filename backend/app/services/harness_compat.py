@@ -164,6 +164,13 @@ def incompat_reason(harness: str, runtime: Runtime) -> str | None:
     )
 
 
+def uses_claude_account(runtime: Runtime | None) -> bool:
+    """True when an agent on this runtime signs in with the shared Claude
+    account token (``claude_code_oauth_token``) — the same rule
+    :func:`resolve_provider_credentials` applies at bootstrap."""
+    return runtime_protocol(runtime) == "anthropic"
+
+
 async def resolve_provider_credentials(
     session: AsyncSession,
     agent: Agent | None,
@@ -186,7 +193,7 @@ async def resolve_provider_credentials(
     call site) — stage 1 (agent.secret_id) is simply skipped then.
     """
     proto = runtime_protocol(runtime)
-    if proto == "anthropic":
+    if uses_claude_account(runtime):
         oauth = await get_secret_plaintext_by_key(session, "claude_code_oauth_token")
         return {"CLAUDE_CODE_OAUTH_TOKEN": oauth} if oauth else {}
 

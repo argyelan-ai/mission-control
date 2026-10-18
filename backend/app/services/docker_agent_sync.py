@@ -965,6 +965,16 @@ def agent_is_archived(agent: "Agent | str") -> bool:
     return getattr(agent, "archived_at", None) is not None
 
 
+def is_host_agent(agent: Agent) -> bool:
+    """True for agents that run on the machine itself, not in a container."""
+    return getattr(agent, "agent_runtime", None) == "host"
+
+
+def agent_container_name(agent: Agent) -> str:
+    """The agent's Docker container (``mc-agent-<slug>``)."""
+    return f"mc-agent-{_agent_slug(agent)}"
+
+
 def restart_docker_agent_container(
     agent: Agent,
     *,
@@ -994,7 +1004,7 @@ def restart_docker_agent_container(
     import subprocess
 
     # Host agents (e.g. Boss) have no Docker container — skip restart.
-    if getattr(agent, "agent_runtime", None) == "host":
+    if is_host_agent(agent):
         logger.debug(
             "Skipping host agent restart %s (runtime=%s)",
             agent.name,
@@ -1015,8 +1025,7 @@ def restart_docker_agent_container(
     if respawn_window_only:
         return _respawn_agent_window(agent)
 
-    slug = _agent_slug(agent)
-    container_name = f"mc-agent-{slug}"
+    container_name = agent_container_name(agent)
     # ADR-059 guard: this function must NEVER be able to target a sparkrun
     # model container (`sparkrun_<hash>_solo`) or the manual `vllm_node`
     # container — those run on the Spark host via SSH/docker (runtime_manager
