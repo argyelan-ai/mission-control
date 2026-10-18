@@ -449,3 +449,37 @@ async def test_the_list_endpoint_serves_summary_for_builtin_rows_only(auth_clien
     assert by_slug["tf-glm"]["summary"] == {"en": "Two boxes.", "de": "Zwei Boxen."}
     assert by_slug["no-summary"]["summary"] is None
     assert by_slug["from-registry"]["summary"] is None
+
+
+# ── The real case (review of PR #860) ────────────────────────────────────────
+
+BEFORE_FIX = Path(__file__).resolve().parent / "fixtures" / "local-recipes-tensorfold-2026-10-18-before-fix.json"
+
+
+async def test_an_install_with_the_old_tensorfold_row_gets_the_fixed_recipe(session, monkeypatch):
+    """An install seeded from the catalog before the TensorFold fix (no HF
+    lock take-back, drop_page_cache=false, gb10_validated=false) and with an
+    instance built from it: one startup later both carry the fix."""
+    slug = "glm53-flash-exl3-tensorfold"
+    monkeypatch.setattr(lr, "_SEED_PATH", BEFORE_FIX)
+    await seed_local_recipes(session)
+    old = await _row(session, slug)
+    assert old.drop_page_cache is False and old.gb10_validated is False
+    session.add(_instance("glm53-flash-exl3-tensorfold-a", slug, drop=False))
+    await session.commit()
+
+    monkeypatch.setattr(lr, "_SEED_PATH", REAL_SEED)
+    result = await sync_builtin_recipes(session)
+
+    assert result.updated == [slug]
+    assert result.runtimes_followed == ["glm53-flash-exl3-tensorfold-a"]
+    row = await _row(session, slug)
+    current = next(
+        e for e in json.loads(REAL_SEED.read_text(encoding="utf-8")) if e["slug"] == slug
+    )
+    assert row.install_template == current["install_template"]
+    assert row.drop_page_cache is current["drop_page_cache"] is True
+    assert row.gb10_validated is current["gb10_validated"] is True
+    session.expire_all()
+    rt = (await session.exec(select(Runtime).where(Runtime.slug == "glm53-flash-exl3-tensorfold-a"))).first()
+    assert rt.drop_page_cache is True
