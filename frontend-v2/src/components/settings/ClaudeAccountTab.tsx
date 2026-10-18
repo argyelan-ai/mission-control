@@ -58,7 +58,7 @@ function QuietButton({ danger, ...props }: React.ButtonHTMLAttributes<HTMLButton
   return (
     <button
       {...props}
-      className="min-h-11 px-3 rounded-lg text-sm cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+      className="min-h-11 rounded-lg text-sm cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
       style={{ color: danger ? STATUS_TEXT.error : "var(--color-text-secondary)" }}
     />
   );
@@ -134,7 +134,7 @@ function LoginPanel({
         <p className="text-sm" style={{ color: STATUS_TEXT.error }} data-testid="claude-login-error">
           {login.error || t("failed")}
         </p>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
           <QuietButton onClick={() => restart.mutate()} disabled={restart.isPending} type="button">
             {t("startAgain")}
           </QuietButton>
@@ -171,7 +171,7 @@ function LoginPanel({
           {t("codeLabel")}
         </label>
         <form
-          className="flex flex-wrap gap-2"
+          className="flex flex-wrap items-center gap-3"
           onSubmit={(e) => {
             e.preventDefault();
             if (code.trim()) submit.mutate(code.trim());
@@ -184,13 +184,13 @@ function LoginPanel({
             placeholder={t("codePlaceholder")}
             autoComplete="off"
             spellCheck={false}
-            className="flex-1 min-w-0 min-h-11 rounded-lg px-3 text-sm outline-none font-mono"
+            className="flex-1 basis-full sm:basis-0 min-w-0 min-h-11 rounded-lg px-3 text-sm outline-none font-mono"
             style={inputStyle}
           />
           <PrimaryButton type="submit" disabled={!code.trim() || submit.isPending}>
             {t("finish")}
           </PrimaryButton>
-          <QuietButton onClick={cancel} type="button">
+          <QuietButton onClick={cancel}  type="button">
             {t("cancel")}
           </QuietButton>
         </form>
@@ -242,7 +242,7 @@ function PasteToken({ configured, onSaved }: { configured: boolean; onSaved: () 
         {t("label")}
       </label>
       <form
-        className="flex flex-wrap gap-2"
+        className="flex flex-wrap items-center gap-3"
         onSubmit={(e) => {
           e.preventDefault();
           if (value.trim()) save.mutate(value.trim());
@@ -256,7 +256,7 @@ function PasteToken({ configured, onSaved }: { configured: boolean; onSaved: () 
           placeholder="sk-ant-oat01-..."
           autoComplete="off"
           spellCheck={false}
-          className="flex-1 min-w-0 min-h-11 rounded-lg px-3 text-sm outline-none font-mono"
+          className="flex-1 basis-full sm:basis-0 min-w-0 min-h-11 rounded-lg px-3 text-sm outline-none font-mono"
           style={inputStyle}
         />
         <QuietButton type="submit" disabled={!value.trim() || save.isPending}>
@@ -481,7 +481,7 @@ export function ClaudeAccountTab() {
               </div>
             ) : (
               <>
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
                   {!configured ? (
                     <PrimaryButton type="button" onClick={() => startLogin.mutate()}>
                       {t("connect")}
