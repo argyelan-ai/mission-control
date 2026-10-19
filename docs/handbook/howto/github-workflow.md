@@ -145,22 +145,28 @@ text and unknown action types default to `L3` (approval required).
 
 ### Proof gate (Beweis-Tor) on review/done
 
-When an agent moves a card that carries a PR (`pr_url`, or `pr_number` with a
-repo) to `review` or `done`, the server checks the claim before the status
-changes. It fetches the evidence itself — what the agent sends along is only a
-claim to compare:
+When an agent moves a card to `review` or `done`, the server checks the claim
+before the status changes. It fetches the evidence itself — what the agent
+sends along is only a claim to compare. The card does not even have to name
+its PR: without `pr_url`/`pr_number` the gate looks for it in the card's own
+data (the source card of a review card, the `PR erstellt:` note, the card's
+branch on GitHub) and checks what it finds (`pr_not_on_card`, notice).
 
 | Check | Finding | Blocks in `enforce` |
 |---|---|---|
 | The PR exists (a repo the token cannot see is only a notice) | `pr_not_found`, `pr_url_invalid` · `repo_not_visible` (notice) | yes · no |
-| The PR is this card's: OPEN (for `done` OPEN or MERGED), on the card's `branch_name`, not held by an unrelated card | `pr_not_open`, `pr_branch_mismatch`, `pr_on_other_card` | yes |
+| A code card has a PR at all: `code_change` on a repo blocks; a work branch or `code_change` without repo is a notice; a repo alone is only logged | `pr_missing` | yes (code_change + repo) |
+| The PR is this card's: OPEN (for `done` OPEN or MERGED), not held by an unrelated card | `pr_not_open`, `pr_on_other_card` | yes |
+| The PR runs on the card's branch (`branch_name` or MC's workspace branch `task/<slug>`). Another name on a PR opened after the card is a notice; a PR older than the card is someone else's | `pr_branch_mismatch` | yes (older PR) |
+| The PR changes at least one file | `pr_empty` | yes |
 | On the developer's move to `review`: a SHA he reports (≥ 7 chars) is the PR head | `sha_mismatch` | yes |
 | The **required** CI checks are green (all checks if the repo has none) | `ci_red`; `ci_pending` on `done` | yes |
-| After the last change request (MC `changes_requested` or GitHub *Request changes*) the PR really changed: the head moved away from the one the server recorded at the last review entry, and the diff is not empty | `no_commit_after_change` | yes |
-| review → done is closed by someone other than the developer, with his own verdict on the card (a reflection does not count) | `self_review`, `reviewer_silent` | yes |
+| After the last change request (MC `changes_requested` or GitHub *Request changes*) the PR really changed. The server compares the PR's own diff (file + blob per changed file) with the one it recorded at the last review entry: an empty commit, a merge from `main` ("Update branch") or the same content force-pushed is no change. Without a recorded diff it walks the new commits and skips merge and empty ones | `no_commit_after_change` | yes |
+| review → done is closed by someone other than the developer, with his own verdict on the card (a reflection or a progress note does not count) | `self_review`, `reviewer_silent` | yes |
+| `done` straight from work, by the developer himself, with no review anywhere (no approve in MC, no review card closed by someone else, no approve by another GitHub login); cards with `skip_review` are exempt. By someone else: notice | `no_independent_review` | yes (developer) |
 | A reviewer the agent names (`--reviewer`) is not the developer and commented himself — MC card, or GitHub without the PR author's login | `reviewer_is_developer`, `reviewer_silent` | yes |
 | A PR URL the agent quotes in his own comments exists — also on cards without `pr_url` | `claimed_pr_not_found` | yes |
-| `done` without any review, or the PR moved after review | `no_independent_review`, `head_moved_since_review` | no (notice) |
+| The PR's own diff changed after it entered review (merges/empty commits are ignored) | `head_moved_since_review` | no (notice) |
 
 Every checked move writes one `task.proof_gate` event: `info` when clean,
 `warning` with findings. Its detail holds the PR head the server saw
@@ -190,7 +196,10 @@ nothing is blocked and the card gets a visible warning instead.
 
 Counting: every gate finding carries `gefangen_von: "tor"` in the event
 detail; `task.review_rejected` events carry `rolle`, `boss` or `mark`
-(`live` is reserved for findings from a live probe). Weekly numbers:
+(`live` is reserved for findings from a live probe). The tally per catcher,
+per finding code and the check count toward the enforce flip:
+`GET /api/v1/activity/proof-gate/stats?days=30` (logged-in user). Weekly
+numbers straight from the database:
 
 ```sql
 select date_trunc('week', created_at)::date as week, event_type,

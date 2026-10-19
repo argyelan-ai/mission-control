@@ -6,13 +6,17 @@ Until now a human (the board lead or the operator) found those by hand, days
 later. This gate checks the claim on the server, at the moment of the status
 change, so ``mc finish --force`` or a raw PATCH cannot walk around it.
 
-What is checked (only for cards that carry a PR). The gate fetches its own
-evidence — what the agent sends along is a claim to compare, never the proof:
+What is checked. The gate fetches its own evidence — what the agent sends
+along is a claim to compare, never the proof. A card that names no PR is not
+skipped: ``discover_pr`` looks in the card's own data (source card, the "PR
+erstellt:" note, the card's branch on GitHub); a code card without any PR is
+itself a finding (``pr_missing``, see ``code_card_level``).
 
   a) ``pr_url`` points at a PR that really exists on GitHub, it is OPEN (for
-     ``done``: OPEN or MERGED), its branch is the card's ``branch_name`` and
-     no unrelated card already holds it — a foreign, merged, green PR does
-     not prove anything about this card.
+     ``done``: OPEN or MERGED), it changes at least one file, no unrelated
+     card already holds it, and it runs on the card's branch (``branch_name``
+     or the workspace branch ``task/<slug>``; another name is only a foreign
+     PR when the PR is older than the card).
   b) the SHA the agent reported (``head_sha``, sent by the mc CLI on the
      developer's move to ``review``) is the PR head on GitHub. The server
      records the PR head itself on every checked move (``head_sha`` in the
@@ -20,12 +24,16 @@ evidence — what the agent sends along is a claim to compare, never the proof:
      not depend on the agent reporting anything.
   c) the required CI checks are green.
   d) after the last "change" feedback (MC ``changes_requested`` or a GitHub
-     *Request changes*) the PR really changed: the head moved away from the
-     SHA recorded when the card last entered review, and the diff between
-     the two is not empty (an empty commit or a faked commit date does not
-     count). Cards without such a record fall back to commit timestamps.
+     *Request changes*) the PR really changed: its own diff (file + blob per
+     changed file, ``diff_fp``) differs from the one recorded when the card
+     last entered review — an empty commit, a merge from main or the same
+     content force-pushed does not count, nor does a faked commit date.
+     Without a recorded diff the new commits are walked (merge and empty
+     ones skipped); without any record, commit timestamps.
   e) review → done is closed by someone other than the developer, who left
-     his own verdict on the card (a reflection does not count); a reviewer
+     his own verdict on the card (a reflection or progress note does not
+     count); the developer closing his own PR card straight from work, with
+     no review anywhere, is refused (``skip_review`` cards exempt); a reviewer
      the agent names must exist, must not be the developer and must have
      commented himself — MC card first, GitHub second (never the PR author's
      own login: the fleet pushes with one shared account).
