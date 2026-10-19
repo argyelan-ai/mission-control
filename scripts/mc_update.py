@@ -177,6 +177,32 @@ def _fault(point: str) -> None:
         os._exit(137)
 
 
+def _journal_boundary(stage: str, label: str) -> None:
+    """Crash matrix hook (scripts/tests/test_mc_update_crash.py), inert
+    unless one of the two test settings is present.
+
+    Every journal write is a boundary, numbered from 1 across the hand-over
+    to the target's engine (the counter lives in the environment, which
+    ``exec`` keeps). ``MC_UPDATE_TEST_SAVE_LOG=<file>`` lists them as
+    "<n> <phase>.<event>"; ``MC_UPDATE_TEST_CRASH_SAVE=<n>:before|after``
+    dies right before / right after write n with exit 137, the way a power
+    cut would stop the run."""
+    spec = os.environ.get("MC_UPDATE_TEST_CRASH_SAVE", "")
+    log = os.environ.get("MC_UPDATE_TEST_SAVE_LOG", "")
+    if not spec and not log:
+        return
+    if stage == "before":
+        n = int(os.environ.get("MC_UPDATE_TEST_SAVE_N", "0") or 0) + 1
+        os.environ["MC_UPDATE_TEST_SAVE_N"] = str(n)
+        if log:
+            with open(log, "a") as f:
+                f.write(f"{n} {label}\n")
+    n = int(os.environ.get("MC_UPDATE_TEST_SAVE_N", "0") or 0)
+    if spec == f"{n}:{stage}":
+        sys.stdout.flush()
+        os._exit(137)
+
+
 def _now() -> _dt.datetime:
     return _dt.datetime.now(_dt.timezone.utc)
 
@@ -576,8 +602,15 @@ class Journal:
         return cls(path, data)
 
     def save(self) -> None:
+        label = self._boundary_label()
+        _journal_boundary("before", label)
         self.data["updated_at"] = _iso()
         atomic_write_json(self.path, self.data)
+        _journal_boundary("after", label)
+
+    def _boundary_label(self) -> str:
+        ev = self.data["events"][-1] if self.data.get("events") else None
+        return f"{ev['phase']}.{ev['event']}" if ev else f"{self.data.get('phase')}.created"
 
     def event(self, phase: str, event: str, detail: str = "") -> None:
         self.data["events"].append({"at": _iso(), "phase": phase, "event": event,
@@ -912,6 +945,13 @@ class Engine:
         assert self.journal is not None
         j = self.journal
         expires = _iso(_now() + _dt.timedelta(seconds=self.drain_ttl))
+        if not (j.data.get("drain") or {}).get("active"):
+            # Journal first, then the row: a crash in between leaves a journal
+            # that owns a drain which may not exist (lifting it is a no-op),
+            # never a drain row no journal knows about (crash matrix).
+            j.data["drain"] = {"active": True, "supported": True, "expires_at": expires}
+            j.event(j.phase, "drain", f"no new work until {expires} at the latest")
+            j.save()
         value = json.dumps({"run_id": j.run_id, "expires_at": expires, "set_by": "mc_update"})
         self.psql("insert into system_state (key, value, updated_at) values "
                   f"('update_drain', '{value}'::jsonb, now()) on conflict (key) do update "
@@ -1068,7 +1108,7 @@ class Engine:
         elif unreadable:
             add("lock", "fail", f"{unreadable} — check the update journal before updating")
         elif open_run is not None:
-            add("lock", "fail", f"run {open_run.run_id} was interrupted in phase {open_run.phase} — resume it first (mc_update.py resume)")
+            add("lock", "fail", f"run {open_run.run_id} was interrupted in phase {open_run.phase} — resume it first: ./install.sh --resume")
         else:
             add("lock", "ok", "no other update running")
 
@@ -1197,6 +1237,10 @@ class Engine:
             self.lock.set_run(self.journal.run_id)
             j = self.journal
             j.data["project"] = self.project()
+            # The install this run belongs to: resume and rollback refuse to
+            # act on it from another folder (the journal lives in the user's
+            # home, shared by every install of that user).
+            j.data["repo"] = os.path.realpath(str(self.repo))
             j.data["from"] = {"tag": pf["current"], "commit": self.git("rev-parse", "HEAD"),
                               "branch": self.git("symbolic-ref", "-q", "--short", "HEAD", check=False) or None,
                               "version": normalize_version(pf["current"])}
@@ -1645,7 +1689,7 @@ class Engine:
             backup = (j.data.get("backup") or {}).get("file")
             self.say("  Mission Control stays in no-new-work mode. On this machine, in the install folder,")
             self.say("  fix the cause above, then run the way back again:")
-            self.say("    python3 scripts/mc_update.py rollback")
+            self.say("    ./install.sh --rollback")
             if backup:
                 self.say(f"  It restores the database from {backup} if the schema changed.")
             return EXIT_ROLLBACK_FAILED
@@ -1785,9 +1829,11 @@ class Engine:
     def cmd_resume(self, run_id: Optional[str]) -> int:
         j = find_run(self.state, run_id) if run_id else find_open_run(self.state)
         if j is None or j.phase in TERMINAL:
+            self.tidy_ended_runs()
             self.emit({"resumed": False, "run_id": j.run_id if j else None, "phase": j.phase if j else None},
                       human="✓ no interrupted update — nothing to resume.")
             return EXIT_OK
+        self.check_install(j)
         self.journal = j
         self.lock.acquire(j.run_id)
         try:
@@ -1809,6 +1855,48 @@ class Engine:
             raise UpdateError(f"unknown phase {j.phase!r} in the journal")
         finally:
             self.lock.release()
+
+    def tidy_ended_runs(self) -> None:
+        """What an ended run may leave behind when it is killed right after
+        its last journal write: its private copies (.env holds secrets) and
+        a drain it had not lifted yet. Also a requested way back killed
+        after it set the drain but before it changed anything (the run stays
+        ``done``). Nothing to do — and no Docker call — in the normal case."""
+        leftovers = []
+        for path in list_runs(self.state):
+            try:
+                j = Journal.load(path)
+            except UpdateError:
+                continue
+            if j.phase in TERMINAL and (j.data.get("drain") or {}).get("active"):
+                leftovers.append(j)
+        if not leftovers:
+            self.prune_private_copies()
+            return
+        try:
+            self.lock.acquire(None)
+        except Locked:
+            return   # a live run owns the drain now; it lifts its own
+        try:
+            self.prune_private_copies()
+            for j in leftovers:
+                self.journal = j
+                self.drain_clear()
+                if not j.data["drain"].get("active"):
+                    j.event(j.phase, "drain", "lifted a drain the run left behind")
+                j.save()
+                self.say(f"→ lifted the no-new-work mode run {j.run_id} left behind")
+        finally:
+            self.journal = None
+            self.lock.release()
+
+    def check_install(self, j: Journal) -> None:
+        """A run belongs to the install it was started in. Resuming or
+        rolling it back from another folder would switch the wrong code."""
+        repo = j.data.get("repo")
+        if repo and os.path.realpath(repo) != os.path.realpath(str(self.repo)):
+            raise Refused(f"run {j.run_id} belongs to another Mission Control install — "
+                          "resume or roll it back from that install's folder")
 
     def resume_after_switch(self) -> int:
         j = self.journal
@@ -1840,6 +1928,7 @@ class Engine:
             self.emit({"ok": False}, human="✗ no update run on this machine — nothing to go back to.")
             return EXIT_USAGE
         self.journal = j
+        self.check_install(j)
         if self.lock.live_holder() is not None:
             if j.phase in PRE_SWITCH and claim_gate(self.run_dir(), "cancel") == "cancel":
                 self.emit({"ok": True, "cancel_requested": True, "run_id": j.run_id},
@@ -1974,7 +2063,7 @@ class Engine:
         self.emit(out, human=(f"Run {out['run_id']}: {out['phase']} ({out['phase_state']}) "
                               f"{out['from'].get('tag') or '?'} → {out['target'].get('tag') or '?'}"
                               + (f"\n  error: {out['error']}" if out["error"] else "")
-                              + ("\n  interrupted — run: mc_update.py resume" if out["interrupted"] else "")))
+                              + ("\n  interrupted — finish it in the install folder: ./install.sh --resume" if out["interrupted"] else "")))
         return EXIT_OK
 
     def emit(self, data: Dict[str, Any], human: str) -> None:

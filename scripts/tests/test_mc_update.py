@@ -534,7 +534,7 @@ def test_r2_without_the_backup_fails_safe_and_can_be_finished_later(world: World
     assert world.head_tag() == "v0.2.0"              # no old code on the new schema
     assert world.get_state()["drain"] is not None    # stays in no-new-work mode
     assert "db_history" not in world.get_state()     # nothing dropped
-    assert "mc_update.py rollback" in r.stdout
+    assert "./install.sh --rollback" in r.stdout
     # The operator puts the backup back and asks for the way back.
     for f in hidden.iterdir():
         shutil.move(str(f), str(world.backups / f.name))
@@ -838,6 +838,24 @@ def test_resume_without_an_open_run_does_nothing(world: World):
     r = world.run("resume")
     assert r.returncode == 0 and "nothing to resume" in r.stdout
     assert len(world.calls()) == n
+
+
+def test_resume_from_another_install_is_refused(world: World):
+    """The journal lives in the user's home, shared by every install of that
+    user: a resume from another folder must not switch that folder's code."""
+    assert world.run("start", fault="up.intent").returncode == 137
+    other = world.tmp / "other-install"
+    other.mkdir()
+    n = len(world.calls())
+    r = world.run("resume", "--repo", str(other))
+    assert r.returncode == 9, r.stdout + r.stderr
+    assert "another Mission Control install" in r.stderr
+    assert world.journal()["phase"] == "up"
+    assert len(world.calls()) == n
+    r = world.run("rollback", "--repo", str(other))
+    assert r.returncode == 9, r.stdout + r.stderr
+    assert world.run("resume").returncode == 0
+    assert world.journal()["phase"] == "done"
 
 
 def test_preflight_refuses_while_a_run_is_interrupted(world: World):
