@@ -1,0 +1,9 @@
+{
+ "session_id": "fixture",
+ "cwd": ".",
+ "tool_name": "Bash",
+ "tool_input": {
+  "command": "git -C hook-repo-clean reset --hard origin/main",
+  "run_in_background": false
+ }
+}
