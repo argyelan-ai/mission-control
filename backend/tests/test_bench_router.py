@@ -476,17 +476,21 @@ async def test_archive_unarchive_and_list_filtering(auth_client, session):
 
 
 @pytest.mark.asyncio
-async def test_get_challenge_reconciles_blocked_entry_then_archivable(
+async def test_get_challenge_shows_blocked_entry_reason_without_finalizing(
     auth_client, session, make_board, make_task
 ):
-    """Fix-vorschlag point 7 (19.10.): a challenge stuck in 'generating'
-    because its only entry's task went 'blocked' (not 'failed') must self-
-    heal on the next GET of the challenge detail — the entry fails with the
-    blocker's reason, the challenge follows to 'failed', and only then can
-    the operator archive it. Before the fix, GET left both stuck at
-    generating/generating and POST /archive 409'd forever."""
+    """Fix-vorschlag point 7 + critic 19.10.: Mark must SEE why an entry
+    waits instead of an eternal spinner — but blocked is temporary, so the
+    entry stays 'generating' (a later delivery is still collected). GET
+    carries a derived per-entry task_state with the blocker question."""
+    from app.models.approval import Approval
+
     board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
     task = await make_task(board.id, title="[Bench] x", status="blocked")
+    session.add(Approval(board_id=board.id, task_id=task.id,
+                         action_type="blocker_decision",
+                         description="Unknown ACP model", status="pending"))
+    await session.commit()
     ch, _ = await _seed_challenge(
         session,
         status="generating",
@@ -496,32 +500,35 @@ async def test_get_challenge_reconciles_blocked_entry_then_archivable(
         ],
     )
 
-    # Still running -> archive is refused.
-    resp = await auth_client.post(f"/api/v1/bench/challenges/{ch.id}/archive")
-    assert resp.status_code == 409
-
-    # Reading the detail runs the reconcile sweep.
     detail = await auth_client.get(f"/api/v1/bench/challenges/{ch.id}")
     assert detail.status_code == 200, detail.text
-    assert detail.json()["status"] == "failed"
-    assert detail.json()["entries"][0]["status"] == "failed"
-
-    # Now archivable.
-    resp = await auth_client.post(f"/api/v1/bench/challenges/{ch.id}/archive")
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["archived_at"] is not None
+    body = detail.json()
+    assert body["status"] == "generating"
+    entry = body["entries"][0]
+    assert entry["status"] == "generating"
+    assert entry["task_state"]["task_status"] == "blocked"
+    assert entry["task_state"]["blocker_reason"] == "Unknown ACP model"
 
 
 @pytest.mark.asyncio
-async def test_retry_entry_available_after_blocked_task_reconcile(
+async def test_stop_challenge_retires_blocked_task_and_unlocks_archive(
     auth_client, session, make_board, make_task
 ):
-    """retry_entry requires status=='failed' (409 otherwise) — reconcile
-    must put a blocked-task entry into exactly that state for the operator's
-    retry button to work, not leave it on 'generating'."""
+    """The existing Stop button is the way out of a hanging challenge. For a
+    BLOCKED task, stop_task_run 409s (no active run) — so the task used to
+    stay blocked with its blocker_decision approval still reminding Mark.
+    Stop now retires it through the lifecycle (blocked -> failed, approval
+    superseded), and the challenge is archivable afterwards (critic, minor)."""
+    from app.models.approval import Approval
+    from app.models.task import Task
+
     board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
     task = await make_task(board.id, title="[Bench] x", status="blocked")
-    ch, entries = await _seed_challenge(
+    approval = Approval(board_id=board.id, task_id=task.id,
+                        action_type="blocker_decision", description="q", status="pending")
+    session.add(approval)
+    await session.commit()
+    ch, _ = await _seed_challenge(
         session,
         status="generating",
         entries=[
@@ -530,11 +537,52 @@ async def test_retry_entry_available_after_blocked_task_reconcile(
         ],
     )
 
-    await auth_client.get(f"/api/v1/bench/challenges/{ch.id}")  # triggers reconcile
-
-    resp = await auth_client.post(f"/api/v1/bench/entries/{entries[0].id}/retry")
+    resp = await auth_client.post(f"/api/v1/bench/challenges/{ch.id}/stop")
     assert resp.status_code == 200, resp.text
-    orchestrator.retry_entry.assert_called_once()
+
+    t = await session.get(Task, task.id)
+    await session.refresh(t)
+    a = await session.get(Approval, approval.id)
+    await session.refresh(a)
+    assert t.status == "failed"
+    assert a.status == "superseded"
+
+    resp = await auth_client.post(f"/api/v1/bench/challenges/{ch.id}/archive")
+    assert resp.status_code == 200, resp.text
+
+
+@pytest.mark.asyncio
+async def test_archive_retires_blocked_task_of_failed_entry(
+    auth_client, session, make_board, make_task
+):
+    """Archiving a finished challenge must not leave a blocked task (and its
+    open approval) behind for one of its entries."""
+    from app.models.approval import Approval
+    from app.models.task import Task
+
+    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
+    task = await make_task(board.id, title="[Bench] x", status="blocked")
+    approval = Approval(board_id=board.id, task_id=task.id,
+                        action_type="blocker_decision", description="q", status="pending")
+    session.add(approval)
+    await session.commit()
+    ch, _ = await _seed_challenge(
+        session,
+        status="failed",
+        entries=[
+            {"model_label": "Pagoda", "source_kind": "agent", "status": "failed",
+             "error": "agent task blocked", "task_id": task.id},
+        ],
+    )
+    resp = await auth_client.post(f"/api/v1/bench/challenges/{ch.id}/archive")
+    assert resp.status_code == 200, resp.text
+
+    t = await session.get(Task, task.id)
+    await session.refresh(t)
+    a = await session.get(Approval, approval.id)
+    await session.refresh(a)
+    assert t.status == "failed"
+    assert a.status == "superseded"
 
 
 @pytest.mark.asyncio

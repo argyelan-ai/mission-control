@@ -28,6 +28,7 @@ import { FilePreview } from "@/components/task/FilePreview";
 import { benchApi } from "@/verticals/bench_studio/api";
 import { BENCH_STATUS_COLOR, ENTRY_STATUS_COLOR } from "./ChallengesTab";
 import { DraftDialog } from "./DraftDialog";
+import { EntryTaskState } from "./EntryTaskState";
 import type { BenchChallenge, ChallengeAction, BenchEntry } from "./types";
 
 function sharedUrl(absPath: string): string {
@@ -495,15 +496,10 @@ export function ChallengeDetail({
             ) : entry.screenshot_path ? (
               <FilePreview fileUrl={sharedUrl(entry.screenshot_path)} path={entry.screenshot_path} />
             ) : entry.status === "generating" || entry.status === "pending" ? (
-              <div
-                className="flex items-center justify-center gap-2 py-8 rounded-lg"
-                style={{ backgroundColor: C.bgDeep, color: C.textMuted }}
-              >
-                <Loader2 size={15} className="animate-spin" />
-                <span className="text-xs">
-                  {entry.status === "generating" ? t("generating") : t("waiting")}
-                </span>
-              </div>
+              <EntryTaskState
+                state={entry.status === "generating" ? entry.task_state : null}
+                generatingLabel={entry.status === "generating" ? t("generating") : t("waiting")}
+              />
             ) : null}
             {entry.error && (
               <span className="text-xs" style={{ color: C.error }}>{entry.error}</span>
