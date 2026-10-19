@@ -78,6 +78,13 @@ python3 tools/guards/install-hooks.py --repo <mc-checkout> \
 It never removes other hooks and replaces only its own entries. `--check`
 exits 1 when an entry is missing (for audits).
 
+The omp fleet loads the same two scripts: `docker/omp-bridge/guard-hook.mjs`
+is an omp hook (`tool_call` before every bash call, `tool_result` after a
+push), passed with `--hook` by `launch-omp.sh` (TUI) and `acp_client.py`
+(ACP). `scripts/build-agent-images.sh` copies `tools/guards/*.sh` into the
+image. Same modes; kill switch `OMP_GUARD_HOOK=0`. It fails open: a guard
+error never stops an agent.
+
 Replay old commands without the scan: `GUARD_HOOK_NO_SCAN=1 bash-hook.sh <json>`.
 
 `proof-push.sh` and `post-deploy-probe.sh` work in two steps: a read-only
