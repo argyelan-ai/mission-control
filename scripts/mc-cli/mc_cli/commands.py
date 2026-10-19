@@ -107,8 +107,39 @@ def resolve_text_arg(value: str | None, *, verb: str) -> str:
     return text
 
 
+def _local_git_head() -> tuple[str | None, str | None]:
+    """(sha, branch) of the git checkout `mc` runs in — or (None, None).
+
+    Evidence for the server's proof gate (Beweis-Tor): on review/done the
+    backend compares this SHA with the PR head on GitHub ("did you push what
+    you report?"). Only sent with a real branch name: the backend skips the
+    comparison when the branch is not the PR's branch, so an unrelated
+    checkout cannot raise a false alarm. Detached HEAD / no git → nothing.
+    """
+    import subprocess
+
+    try:
+        sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"], capture_output=True, text=True, timeout=5,
+        )
+        if sha.returncode != 0:
+            return None, None
+        branch = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None, None
+    name = branch.stdout.strip() if branch.returncode == 0 else ""
+    if not name or name == "HEAD":
+        return None, None
+    return sha.stdout.strip() or None, name
+
+
 def _patch_status(client: Client, cfg: Config, status: str, **extra) -> int:
     board_id, task_id = cfg.require_task_context()
+    if status in ("review", "done") and "head_sha" not in extra:
+        extra["head_sha"], extra["head_branch"] = _local_git_head()
     body = {"status": status, **{k: v for k, v in extra.items() if v is not None}}
     resp = client.request("PATCH", f"/api/v1/agent/boards/{board_id}/tasks/{task_id}", body=body)
     _emit(_require_result(resp, verb=f"Statuswechsel nach '{status}'"))
@@ -378,7 +409,18 @@ def _cmd_done(args, client, cfg):
         return _patch_status(client, cfg, "review")
 
     _warn_report_gate_if_unmet(task, "done")
-    return _patch_status(client, cfg, "done")
+    return _patch_status(client, cfg, "done", reviewer=getattr(args, "reviewer", None))
+
+
+_FORCE_PROOF_GATE_NOTE = (
+    " --force wirkt NICHT auf das Beweis-Tor des Servers (PR echt, Stand "
+    "gepusht, CI gruen, Commit nach Change, Reviewer hat kommentiert)."
+)
+
+_REVIEWER_HELP = (
+    "Reviewer, auf dessen Urteil du dich stuetzt (MC-Agent-Name oder "
+    "GitHub-Login). Das Beweis-Tor prueft, dass er selbst kommentiert hat."
+)
 
 
 def _add_done_args(p):
@@ -390,8 +432,10 @@ def _add_done_args(p):
             "Offene Checklist-Items automatisch auf done setzen bevor der Task "
             "geschlossen wird. Ohne --force blockt das Backend mit 422 bis alle "
             "Items per `mc checklist done <id>` geschlossen sind."
+            + _FORCE_PROOF_GATE_NOTE
         ),
     )
+    p.add_argument("--reviewer", metavar="NAME", help=_REVIEWER_HELP)
 
 
 def _cmd_patch(args, client, cfg):
@@ -1269,7 +1313,9 @@ def _cmd_finish(args, client, cfg):
         )
 
     try:
-        return _patch_status(client, cfg, target_status)
+        return _patch_status(
+            client, cfg, target_status, reviewer=getattr(args, "reviewer", None),
+        )
     except Exception as exc:
         # Comment ist ggf. schon im Audit-Trail. Klare Message zum recovery
         # statt nacktem HTTP-Stacktrace, damit der Agent weiss was zu tun ist.
@@ -1317,8 +1363,10 @@ def _add_finish_args(p):
             "Offene Checklist-Items automatisch auf done setzen bevor `mc finish` "
             "den Task schliesst. Ohne --force bricht der Pre-Flight mit UsageError ab "
             "wenn Items offen sind."
+            + _FORCE_PROOF_GATE_NOTE
         ),
     )
+    p.add_argument("--reviewer", metavar="NAME", help=_REVIEWER_HELP)
     p.add_argument(
         "--needs-decision",
         dest="needs_decision",

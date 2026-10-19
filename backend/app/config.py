@@ -376,6 +376,17 @@ class Settings(BaseSettings):
     # Operational Controls
     enforce_dispatch_attempt_id: bool = True  # Phase B: active — hard 409 on missing/wrong header
 
+    # Proof gate ("Beweis-Tor", services/proof_gate.py): a card carrying a PR
+    # only reaches review/done when the PR exists, the reported SHA is the
+    # remote head, CI is green, a commit followed the last change request and
+    # a named reviewer commented himself. off | warn | enforce. warn = log +
+    # card comment + task.proof_gate event, transition allowed; enforce = 422.
+    proof_gate_mode: str = "warn"
+    # ISO date (e.g. 2026-10-27). While proof_gate_mode=warn, the gate switches
+    # to enforce on this date by itself — "7 days warn, then enforce" without a
+    # second deploy. Empty = stay in warn until the mode is changed.
+    proof_gate_enforce_after: str = ""
+
     # Pre-Dispatch Gating (Phase 1 Systemic Orchestration)
     # False = legacy: dispatch_phase ignored, tasks dispatch immediately
     # True = tasks with dispatch_phase="planning" are NOT auto-dispatched

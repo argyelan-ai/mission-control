@@ -1,0 +1,482 @@
+"""Beweis-Tor (proof gate): a card carrying a PR only reaches review/done with
+evidence that GitHub and MC actually hold.
+
+Sabotage probes, each in BOTH modes (warn: transition allowed + card comment +
+event; enforce: 422 + status unchanged):
+
+  - invented PR URL                    → pr_not_found
+  - PR with red CI                     → ci_red
+  - no commit after a change request   → no_commit_after_change
+  - reviewer closes without comment    → reviewer_silent
+  - reported SHA is not the remote one → sha_mismatch
+
+and the counter-probes:
+
+  - a real, clean case passes without any warning (no comment, no event)
+  - no GitHub token → fail-open with a visible warning, in enforce mode too
+  - there is no server-side "force": an extra field is refused by the schema
+    and the gate runs on every path (`mc finish --force` only closes checklist
+    items client-side)
+"""
+
+import json
+import uuid
+from datetime import date, timedelta
+from unittest.mock import AsyncMock, patch
+
+import pytest
+from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
+
+import app.config
+from app.services import proof_gate
+from app.utils import utcnow
+from tests.conftest import test_engine
+
+PR_URL = "https://github.com/example-org/example-repo/pull/42"
+SHA = "a" * 40
+OTHER_SHA = "b" * 40
+_REFLECTION = (
+    "## Was wurde gemacht\nFeature implementiert inklusive Unit-Tests "
+    "und Doku-Update im README.\n\n"
+    "## Was hat funktioniert\nTDD-Zyklus lief sauber durch, alle Tests "
+    "auf Anhieb gruen.\n\n"
+    "## Was war unklar\nNichts Nennenswertes.\n\n"
+    "## Lesson fuer Agent-Memory\nKeine neue Lesson."
+)
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def gate_mode():
+    original = (app.config.settings.proof_gate_mode, app.config.settings.proof_gate_enforce_after)
+
+    def _set(mode: str, enforce_after: str = ""):
+        app.config.settings.proof_gate_mode = mode
+        app.config.settings.proof_gate_enforce_after = enforce_after
+
+    yield _set
+    app.config.settings.proof_gate_mode, app.config.settings.proof_gate_enforce_after = original
+
+
+def _pr(*, sha=SHA, ci="SUCCESS", commit_at=None, reviews=None, comments=None, branch="feat/x"):
+    commit_at = commit_at or (utcnow() - timedelta(minutes=5))
+    rollup = [] if ci is None else [
+        {"__typename": "CheckRun", "name": "backend", "status": "COMPLETED", "conclusion": ci},
+    ]
+    return {
+        "number": 42,
+        "state": "OPEN",
+        "url": PR_URL,
+        "headRefName": branch,
+        "headRefOid": sha,
+        "statusCheckRollup": rollup,
+        "commits": [{"oid": sha, "committedDate": commit_at.strftime("%Y-%m-%dT%H:%M:%SZ")}],
+        "reviews": reviews or [],
+        "comments": comments or [],
+    }
+
+
+def _gh(pr: dict | None = None, *, rc: int = 0, err: str = ""):
+    calls = []
+
+    async def fake(*args, env=None):
+        calls.append((args, env))
+        if rc:
+            return rc, "", err
+        return 0, json.dumps(pr), ""
+
+    fake.calls = calls
+    return fake
+
+
+async def _seed(*, status="in_progress", pr_url=PR_URL, review_decision=None,
+                decided_at=None, assignee="dev"):
+    from app.auth import generate_agent_token
+    from app.models.agent import Agent
+    from app.models.board import Board
+    from app.models.task import Task, TaskComment
+
+    board = Board(id=uuid.uuid4(), name="Proof Board", slug=f"pg-{uuid.uuid4().hex[:8]}")
+    dev_tok, dev_hash = generate_agent_token()
+    rev_tok, rev_hash = generate_agent_token()
+    dev = Agent(id=uuid.uuid4(), name=f"Cody-{uuid.uuid4().hex[:4]}", role="developer",
+                board_id=board.id, agent_token_hash=dev_hash,
+                scopes=["tasks:read", "tasks:write", "tasks:create"])
+    rev = Agent(id=uuid.uuid4(), name=f"Rex-{uuid.uuid4().hex[:4]}", role="reviewer",
+                board_id=board.id, agent_token_hash=rev_hash,
+                scopes=["tasks:read", "tasks:write"])
+    task = Task(
+        id=uuid.uuid4(), board_id=board.id, title="Feature mit PR", status=status,
+        assigned_agent_id=dev.id if assignee == "dev" else rev.id,
+        pr_url=pr_url, review_decision=review_decision, review_decided_at=decided_at,
+    )
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add_all([board, dev, rev, task])
+        await s.commit()
+        s.add(TaskComment(task_id=task.id, author_type="agent", author_agent_id=dev.id,
+                          comment_type="progress", content="Implementierung fertig"))
+        s.add(TaskComment(task_id=task.id, author_type="agent", author_agent_id=dev.id,
+                          comment_type="reflection", content=_REFLECTION))
+        await s.commit()
+    return {"board": board, "dev": dev, "rev": rev, "task": task,
+            "dev_tok": dev_tok, "rev_tok": rev_tok}
+
+
+def _silence():
+    return (
+        patch("app.routers.agent_task_status.emit_event", new_callable=AsyncMock),
+        patch("app.services.task_lifecycle.update_agent_active_task", new_callable=AsyncMock),
+        patch("app.services.task_lifecycle.handle_review_handoff", new_callable=AsyncMock),
+        patch("app.services.adr_gate.guard_adr_merge", new_callable=AsyncMock),
+    )
+
+
+async def _patch(client, data, body, *, token="dev_tok", gh=None, token_value="tok"):
+    events = AsyncMock()
+    ctx = _silence()
+    with ctx[0], ctx[1], ctx[2], ctx[3], \
+            patch.object(proof_gate, "_github_token", new=AsyncMock(return_value=token_value)), \
+            patch("app.services.pr_merge_monitor._run_gh", new=gh or _gh(_pr())), \
+            patch("app.services.activity.emit_event", new=events):
+        resp = await client.patch(
+            f"/api/v1/agent/boards/{data['board'].id}/tasks/{data['task'].id}",
+            json=body,
+            headers={"Authorization": f"Bearer {data[token]}"},
+        )
+    gate_events = [c for c in events.await_args_list if c.args[1] == proof_gate.PROOF_GATE_EVENT]
+    return resp, gate_events
+
+
+async def _state(task_id):
+    from app.models.task import Task, TaskComment
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        task = await s.get(Task, task_id)
+        comments = (await s.exec(
+            select(TaskComment).where(TaskComment.task_id == task_id,
+                                      TaskComment.content.like("%Beweis-Tor%"))
+        )).all()
+    return task, comments
+
+
+def _codes(resp):
+    return {f["code"] for f in resp.json()["detail"]["findings"]}
+
+
+# ── The clean case ───────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["warn", "enforce"])
+async def test_clean_case_passes_without_any_warning(client, fake_redis, gate_mode, mode):
+    gate_mode(mode)
+    data = await _seed()
+    gh = _gh(_pr())
+    resp, events = await _patch(client, data, {"status": "review", "head_sha": SHA,
+                                               "head_branch": "feat/x"}, gh=gh)
+    assert resp.status_code == 200, resp.text
+    task, comments = await _state(data["task"].id)
+    assert task.status == "review"
+    assert comments == [] and events == []
+    # the gate really asked GitHub — with the resolved token, not the process env
+    assert len(gh.calls) == 1
+    args, env = gh.calls[0]
+    assert "--repo" in args and "example-org/example-repo" in args
+    assert env["GH_TOKEN"] == "tok"
+
+
+# ── Sabotage probes ──────────────────────────────────────────────────────
+
+
+SABOTAGE = {
+    "pr_not_found": dict(gh=lambda: _gh(rc=1, err="GraphQL: Could not resolve to a PullRequest with the number of 42.")),
+    "ci_red": dict(gh=lambda: _gh(_pr(ci="FAILURE"))),
+    "sha_mismatch": dict(gh=lambda: _gh(_pr(sha=OTHER_SHA))),
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", sorted(SABOTAGE))
+async def test_sabotage_warn_allows_but_marks_card(client, fake_redis, gate_mode, code):
+    gate_mode("warn")
+    data = await _seed()
+    resp, events = await _patch(client, data, {"status": "review", "head_sha": SHA,
+                                               "head_branch": "feat/x"},
+                                gh=SABOTAGE[code]["gh"]())
+    assert resp.status_code == 200, resp.text
+    task, comments = await _state(data["task"].id)
+    assert task.status == "review"
+    assert len(comments) == 1 and code in comments[0].content
+    assert len(events) == 1
+    detail = events[0].kwargs["detail"]
+    assert detail["gefangen_von"] == "tor" and detail["blocked"] is False
+    assert code in {f["code"] for f in detail["findings"]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", sorted(SABOTAGE))
+async def test_sabotage_enforce_refuses_with_422(client, fake_redis, gate_mode, code):
+    gate_mode("enforce")
+    data = await _seed()
+    resp, events = await _patch(client, data, {"status": "review", "head_sha": SHA,
+                                               "head_branch": "feat/x"},
+                                gh=SABOTAGE[code]["gh"]())
+    assert resp.status_code == 422, resp.text
+    assert code in _codes(resp)
+    task, comments = await _state(data["task"].id)
+    assert task.status == "in_progress", "422 darf den Status nicht gesetzt haben"
+    assert len(comments) == 1 and "abgelehnt" in comments[0].content
+    assert events and events[0].kwargs["detail"]["blocked"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode,expected", [("warn", 200), ("enforce", 422)])
+async def test_no_commit_after_change_request(client, fake_redis, gate_mode, mode, expected):
+    gate_mode(mode)
+    decided = utcnow() - timedelta(hours=1)
+    data = await _seed(review_decision="changes_requested", decided_at=decided)
+    old_commit = decided - timedelta(hours=2)
+    resp, events = await _patch(client, data, {"status": "review", "head_sha": SHA},
+                                gh=_gh(_pr(commit_at=old_commit)))
+    assert resp.status_code == expected, resp.text
+    assert events and "no_commit_after_change" in {
+        f["code"] for f in events[0].kwargs["detail"]["findings"]}
+
+
+@pytest.mark.asyncio
+async def test_github_change_request_also_counts(client, fake_redis, gate_mode):
+    """Mark's "Request changes" on GitHub is feedback too, not only MC's."""
+    gate_mode("enforce")
+    data = await _seed()
+    review_at = utcnow() - timedelta(minutes=10)
+    pr = _pr(commit_at=review_at - timedelta(hours=1), reviews=[
+        {"author": {"login": "operator"}, "state": "CHANGES_REQUESTED",
+         "submittedAt": review_at.strftime("%Y-%m-%dT%H:%M:%SZ")}])
+    resp, _ = await _patch(client, data, {"status": "review", "head_sha": SHA}, gh=_gh(pr))
+    assert resp.status_code == 422 and "no_commit_after_change" in _codes(resp)
+
+
+@pytest.mark.asyncio
+async def test_commit_after_change_request_passes(client, fake_redis, gate_mode):
+    gate_mode("enforce")
+    decided = utcnow() - timedelta(hours=1)
+    data = await _seed(review_decision="changes_requested", decided_at=decided)
+    resp, events = await _patch(client, data, {"status": "review", "head_sha": SHA},
+                                gh=_gh(_pr(commit_at=decided + timedelta(minutes=30))))
+    assert resp.status_code == 200, resp.text
+    assert events == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode,expected", [("warn", 200), ("enforce", 422)])
+async def test_reviewer_closes_without_own_comment(client, fake_redis, gate_mode, mode, expected):
+    gate_mode(mode)
+    data = await _seed(status="review", assignee="rev")
+    resp, events = await _patch(client, data, {"status": "done"}, token="rev_tok")
+    assert resp.status_code == expected, resp.text
+    assert "reviewer_silent" in {f["code"] for f in events[0].kwargs["detail"]["findings"]}
+    task, _ = await _state(data["task"].id)
+    if mode == "enforce":
+        assert task.status == "review"
+        # the review_decision fallback (approved) was staged before the gate —
+        # the refusal must roll it back, not leave a half-approved card
+        assert task.review_decision != "approved"
+
+
+@pytest.mark.asyncio
+async def test_reviewer_with_own_comment_passes(client, fake_redis, gate_mode):
+    from app.models.task import TaskComment
+
+    gate_mode("enforce")
+    data = await _seed(status="review", assignee="rev")
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(TaskComment(task_id=data["task"].id, author_type="agent",
+                          author_agent_id=data["rev"].id, comment_type="review",
+                          content="Geprueft: Tests gruen, Diff sauber."))
+        await s.commit()
+    resp, events = await _patch(client, data, {"status": "done"}, token="rev_tok")
+    assert resp.status_code == 200, resp.text
+    assert events == []
+
+
+@pytest.mark.asyncio
+async def test_named_reviewer_must_have_commented(client, fake_redis, gate_mode):
+    """`reviewer` names an MC agent who never wrote on the card or the PR."""
+    gate_mode("enforce")
+    data = await _seed()
+    resp, _ = await _patch(client, data, {"status": "review", "head_sha": SHA,
+                                          "reviewer": data["rev"].name})
+    assert resp.status_code == 422 and "reviewer_silent" in _codes(resp)
+
+
+@pytest.mark.asyncio
+async def test_named_reviewer_found_on_github(client, fake_redis, gate_mode):
+    """Not an MC agent → the GitHub review/comment authors are the evidence."""
+    gate_mode("enforce")
+    data = await _seed()
+    pr = _pr(comments=[{"author": {"login": "outside-reviewer"}, "body": "LGTM",
+                        "createdAt": "2026-10-19T10:00:00Z"}])
+    resp, events = await _patch(client, data, {"status": "review", "head_sha": SHA,
+                                               "reviewer": "@Outside-Reviewer"}, gh=_gh(pr))
+    assert resp.status_code == 200, resp.text
+    assert events == []
+
+
+@pytest.mark.asyncio
+async def test_invalid_pr_url_is_a_hard_finding(client, fake_redis, gate_mode):
+    gate_mode("enforce")
+    data = await _seed(pr_url="https://gitlab.example/x/y/-/merge_requests/1")
+    resp, _ = await _patch(client, data, {"status": "review"})
+    assert resp.status_code == 422 and "pr_url_invalid" in _codes(resp)
+
+
+@pytest.mark.asyncio
+async def test_pr_url_given_in_the_same_patch_is_checked(client, fake_redis, gate_mode):
+    """The claim arrives with the transition (mc review --pr-url …) — checked too."""
+    gate_mode("enforce")
+    data = await _seed(pr_url=None)
+    resp, _ = await _patch(client, data, {"status": "review", "pr_url": PR_URL},
+                           gh=_gh(rc=1, err="HTTP 404: Not Found"))
+    assert resp.status_code == 422 and "pr_not_found" in _codes(resp)
+
+
+# ── Fail-open, loud ──────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["warn", "enforce"])
+async def test_missing_token_fails_open_with_visible_warning(client, fake_redis, gate_mode, mode):
+    gate_mode(mode)
+    data = await _seed()
+    gh = _gh(_pr(ci="FAILURE"))
+    resp, events = await _patch(client, data, {"status": "review"}, gh=gh, token_value="")
+    assert resp.status_code == 200, resp.text
+    assert gh.calls == [], "ohne Token darf gh nicht gerufen werden"
+    task, comments = await _state(data["task"].id)
+    assert task.status == "review"
+    assert len(comments) == 1 and "no_github_token" in comments[0].content
+    assert events and events[0].kwargs["detail"]["blocked"] is False
+
+
+@pytest.mark.asyncio
+async def test_github_outage_fails_open(client, fake_redis, gate_mode):
+    gate_mode("enforce")
+    data = await _seed()
+    resp, events = await _patch(client, data, {"status": "review"},
+                                gh=_gh(rc=1, err="error connecting to api.github.com"))
+    assert resp.status_code == 200, resp.text
+    assert "github_unavailable" in {f["code"] for f in events[0].kwargs["detail"]["findings"]}
+
+
+# ── No bypass ────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_no_server_side_force_switch(client, fake_redis, gate_mode):
+    """A client cannot send its way around the gate: unknown fields are refused."""
+    gate_mode("enforce")
+    data = await _seed()
+    for extra in ({"force": True}, {"proof_gate": "off"}, {"skip_proof_gate": True}):
+        resp, _ = await _patch(client, data, {"status": "review", **extra},
+                               gh=_gh(_pr(ci="FAILURE")))
+        assert resp.status_code == 422, resp.text
+        assert "extra" in resp.text.lower() or "forbidden" in resp.text.lower()
+    task, _ = await _state(data["task"].id)
+    assert task.status == "in_progress"
+
+
+@pytest.mark.asyncio
+async def test_off_mode_does_not_call_github(client, fake_redis, gate_mode):
+    gate_mode("off")
+    data = await _seed()
+    gh = _gh(_pr(ci="FAILURE"))
+    resp, events = await _patch(client, data, {"status": "review"}, gh=gh)
+    assert resp.status_code == 200 and gh.calls == [] and events == []
+
+
+@pytest.mark.asyncio
+async def test_card_without_pr_is_not_gated(client, fake_redis, gate_mode):
+    gate_mode("enforce")
+    data = await _seed(pr_url=None)
+    gh = _gh(_pr(ci="FAILURE"))
+    resp, events = await _patch(client, data, {"status": "review"}, gh=gh)
+    assert resp.status_code == 200 and gh.calls == [] and events == []
+
+
+@pytest.mark.asyncio
+async def test_review_approve_endpoint_is_gated_too(client, fake_redis, gate_mode):
+    """POST /review approve → done is the other road to done."""
+    gate_mode("enforce")
+    data = await _seed(status="review", assignee="rev")
+    ctx = _silence()
+    with ctx[0], ctx[1], ctx[2], ctx[3], \
+            patch.object(proof_gate, "_github_token", new=AsyncMock(return_value="tok")), \
+            patch("app.services.pr_merge_monitor._run_gh", new=_gh(_pr(ci="FAILURE"))), \
+            patch("app.services.activity.emit_event", new=AsyncMock()):
+        resp = await client.post(
+            f"/api/v1/agent/boards/{data['board'].id}/tasks/{data['task'].id}/review",
+            json={"decision": "approve", "comment": "passt"},
+            headers={"Authorization": f"Bearer {data['rev_tok']}"},
+        )
+    assert resp.status_code == 422, resp.text
+    task, _ = await _state(data["task"].id)
+    assert task.status == "review"
+
+
+# ── Mode + gefangen_von ──────────────────────────────────────────────────
+
+
+def test_warn_flips_to_enforce_on_the_configured_date(gate_mode):
+    gate_mode("warn", "2026-10-26")
+    assert proof_gate.effective_mode(date(2026, 10, 25)) == "warn"
+    assert proof_gate.effective_mode(date(2026, 10, 26)) == "enforce"
+    gate_mode("warn", "kein-datum")
+    assert proof_gate.effective_mode(date(2030, 1, 1)) == "warn"
+    gate_mode("bogus")
+    assert proof_gate.effective_mode() == "warn"
+
+
+def test_ci_classification():
+    assert proof_gate.classify_ci([]) == "none"
+    assert proof_gate.classify_ci([{"status": "COMPLETED", "conclusion": "SUCCESS"},
+                                   {"state": "SUCCESS"}]) == "green"
+    assert proof_gate.classify_ci([{"status": "IN_PROGRESS", "conclusion": ""}]) == "pending"
+    assert proof_gate.classify_ci([{"state": "PENDING"}]) == "pending"
+    assert proof_gate.classify_ci([{"status": "COMPLETED", "conclusion": "SUCCESS"},
+                                   {"status": "COMPLETED", "conclusion": "TIMED_OUT"}]) == "red"
+    assert proof_gate.classify_ci([{"state": "ERROR"}]) == "red"
+
+
+def test_caught_by_for_actor():
+    class A:
+        def __init__(self, lead):
+            self.is_board_lead = lead
+
+    assert proof_gate.caught_by_for_actor(None) == "mark"
+    assert proof_gate.caught_by_for_actor(A(True)) == "boss"
+    assert proof_gate.caught_by_for_actor(A(False)) == "rolle"
+    assert set(proof_gate.CAUGHT_BY_VALUES) == {"tor", "rolle", "boss", "mark", "live"}
+
+
+@pytest.mark.asyncio
+async def test_review_rejection_records_who_caught_it(client, fake_redis, gate_mode):
+    """`gefangen_von` on task.review_rejected: an agent reviewer → "rolle"."""
+    gate_mode("off")
+    data = await _seed(status="review", assignee="rev")
+    events = AsyncMock()
+    ctx = _silence()
+    with ctx[0], ctx[1], ctx[2], ctx[3], \
+            patch("app.services.task_lifecycle.emit_event", new=events), \
+            patch("app.services.dispatch.auto_dispatch_task", new=AsyncMock()):
+        resp = await client.post(
+            f"/api/v1/agent/boards/{data['board'].id}/tasks/{data['task'].id}/review",
+            json={"decision": "request_changes", "comment": "CI ist rot, bitte fixen"},
+            headers={"Authorization": f"Bearer {data['rev_tok']}"},
+        )
+    assert resp.status_code == 200, resp.text
+    rejected = [c for c in events.await_args_list if c.args[1] == "task.review_rejected"]
+    assert rejected, [c.args[1] for c in events.await_args_list]
+    assert rejected[0].kwargs["detail"]["gefangen_von"] == "rolle"
