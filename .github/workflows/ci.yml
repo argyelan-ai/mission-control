@@ -165,8 +165,10 @@ jobs:
     # whatever python3 the machine has — macOS ships 3.9, Raspberry Pi OS
     # 3.11 — so both ends are tested. Standard library only; the suite drives
     # it end to end against a local git upstream and a fake docker in PATH
-    # (scripts/tests/fake_docker.py), including real crashes at every
-    # journal boundary followed by `resume`. No Docker, no network.
+    # (scripts/tests/fake_docker.py) and the repository's real backup.sh
+    # (pre-update backup and R2 restore; needs bash, gzip, openssl), including
+    # real crashes at every journal boundary followed by `resume`. No Docker,
+    # no network.
     name: mc-update engine (py${{ matrix.python }})
     runs-on: ubuntu-latest
     strategy:

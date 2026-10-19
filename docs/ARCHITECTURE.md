@@ -1595,6 +1595,17 @@ Alle ADRs in `docs/decisions/`:
 
 ## Änderungshistorie (high-level)
 
+- **2026-10-19** — **Pre-update backup + R2 (ADR-094, update plan PR 2b):** the engine's
+  `backup` phase runs `backup.sh preupdate` (database + pins + encrypted `.env`, prefix
+  `mc_backup_preupdate_*`, own rotation 3 / 14 days, no `~/.mc` archive) from a copy of the
+  script in the run folder, and records the schema it backed up; the switch refuses to start
+  unless that equals `schema_before`. The way back picks R1 only when `alembic_version ==
+  schema_before`; otherwise (new head, half-way chain, unreadable) R2: stop `backend` +
+  `mc-worker`, `backup.sh restore <own backup> --yes --no-safety-copy --keep-env`, check the
+  schema, then R1. `.env` is always written in place. A manual way back is refused (409) when
+  a newer update exists or the run's backup is gone. Tests drive the real `backup.sh` against
+  the fake docker (`scripts/tests/fake_docker.py`); `backend/tests/test_backup_sh.py` covers
+  the new mode against a throwaway Postgres.
 - **2026-10-19** — **Update engine core (ADR-094, update plan PR 2a):** `scripts/mc_update.py`
   (host, python3 standard library) is the one engine for terminal and the Settings button:
   phases `preflight → drain → fetch → verify_release → pull → backup → switch → up → verify`,

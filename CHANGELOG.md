@@ -17,6 +17,17 @@ follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
   cosign container pinned by digest; digest, `revision` label and
   architecture checks) — the self-update engine (ADR-094) uses it; nothing
   calls it on a user's machine yet.
+- Feature: `./backup.sh preupdate` writes the backup an update takes right
+  before it switches versions — database, a plain pins file (tag, commit,
+  schema, image tags) and the encrypted `.env` when a passphrase is set, no
+  `~/.mc` archive — under its own prefix `mc_backup_preupdate_*`. The daily
+  rotation never removes these; they keep their own: newest 3, at most 14
+  days. `./backup.sh restore … --keep-env` leaves `.env` untouched.
+- Feature (update engine, not reachable from the UI yet): when an update fails
+  after the database changed — new schema, a migration chain that stopped
+  half-way, or no readable schema — the engine stops `backend` and
+  `mc-worker`, restores its own pre-update backup and only then starts the
+  previous version (ADR-094 rule R2). Only the latest update can be undone.
 - Fix: the installer's closing lines (and the browser it opens) lead to the
   setup wizard at `/setup` instead of `scripts/demo-seed.py` and
   `docs/setup/first-agent.md` — the wizard covers both.

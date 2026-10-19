@@ -68,6 +68,30 @@ old behaviour — a schedule that runs a `backup.sh` from another copy keeps
 working), otherwise on the folder the script lives in. `MC_INSTALL_DIR`
 overrides both.
 
+### Pre-update backups
+
+Before an update switches versions, the update engine (`scripts/mc_update.py`,
+[ADR-094](../../decisions/094-self-update-from-settings.md)) runs
+`./backup.sh preupdate`. It writes a smaller set under its own prefix into the
+same backup folder:
+
+| File | Contains |
+|---|---|
+| `mc_backup_preupdate_<time>.sql.gz` | Full database dump |
+| `mc_pins_preupdate_<time>.txt` | Plain text, no secrets: git tag and commit, schema version, `MC_CHANNEL`, `MC_IMAGE_TAG`, `MC_AGENT_IMAGE_TAG` — which code belongs to this database |
+| `mc_env_preupdate_<time>.env.enc` | `.env`, encrypted — only with a passphrase (see below) |
+
+There is no `~/.mc` archive in it: an update does not change `~/.mc`. These
+sets are kept apart from the daily ones — `MC_BACKUP_KEEP` never removes them,
+and they have their own rule: the newest **3**, none older than **14 days**
+(an update can be undone for 14 days). `./backup.sh list` shows them; a plain
+`./backup.sh restore` never picks one by itself.
+
+If an update fails after the database was migrated, the engine restores its
+own pre-update backup (`./backup.sh restore <file> --yes --no-safety-copy
+--keep-env`) and then starts the previous version. `--keep-env` leaves `.env`
+alone; the engine writes its own copy back.
+
 ### The `.env` and your passphrase
 
 `.env` holds `SECRETS_ENCRYPTION_KEY`, `DB_PASSWORD` and `JWT_SECRET_KEY`.
@@ -167,6 +191,9 @@ What it does, in this order — **your data is not touched before step 4**:
 8. **Start** the services again. If `.env` was replaced, the script does not
    start them itself; it prints `docker compose up -d`, because running
    containers still carry the old values.
+
+`--keep-env` skips step 7: the current `.env` stays as it is, whatever the
+backup holds.
 
 If a step after 3 fails, the script stops with the services stopped on
 purpose and prints the command that brings back the state from before:
