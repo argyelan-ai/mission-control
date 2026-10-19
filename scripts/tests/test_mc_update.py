@@ -48,6 +48,7 @@ mkdir -p "$dir"
 f="$dir/mc_backup_$(date +%Y-%m-%d_%H-%M-%S).sql.gz"
 echo dump > "$f"
 echo "Database backup: $f"
+if [ -n "${STUB_LOCK_ENV:-}" ]; then chmod 000 .env; fi
 """
 
 FAKE_SETUP = """#!/usr/bin/env bash
@@ -658,11 +659,47 @@ def test_rollback_cancels_a_run_waiting_for_quiet(world: World):
     assert world.head_tag() == "v0.1.0"
 
 
-def test_rollback_of_a_done_run_with_a_new_schema_needs_the_restore(world: World):
+def test_rollback_of_a_done_run_with_a_new_schema_is_refused_untouched(world: World):
+    """The new version runs fine; the engine cannot restore the database yet
+    (R2, PR 2b) — so it refuses up front and leaves run and stack alone."""
+    assert world.run("start").returncode == 0
+    n = len(world.calls())
+    r = world.run("rollback")
+    assert r.returncode == 9, r.stdout + r.stderr
+    assert "backup.sh restore" in r.stderr
+    assert world.journal()["phase"] == "done"
+    assert world.head_tag() == "v0.2.0"
+    assert not any(c[:1] == ["compose"] and c[3:4] in (["stop"], ["up"]) for c in world.calls()[n:])
+
+
+def test_rollback_of_a_done_run_with_unchanged_schema_goes_back(world: World):
+    world.patch_state(schema_for_tag={"0.1.0": "0001", "0.2.0": "0001"})
+    # A release without a migration: its head is the old one.
+    _git(world.up, "tag", "-d", "v0.2.0")
+    (world.up / "backend" / "alembic" / "versions" / "0002_more.py").unlink()
+    _git(world.up, "add", "-A")
+    _git(world.up, "commit", "-q", "-m", "v0.2.0 without migration")
+    _git(world.up, "tag", "v0.2.0")
     assert world.run("start").returncode == 0
     r = world.run("rollback")
-    assert r.returncode == 4
-    assert "backup.sh restore" in world.journal()["error"]
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert world.journal()["phase"] == "rolled_back"
+    assert world.head_tag() == "v0.1.0"
+    assert world.env_value("MC_IMAGE_TAG") == "0.1.0"
+    assert world.get_state()["containers"]["frontend"]["image"] == "sha256:mc-frontend-0.1.0"
+
+
+def test_failure_while_preparing_the_way_back_aborts(world: World):
+    """No copy of .env can be made → the switch never starts → aborted, not
+    "rollback failed" (nothing was changed). The fake backup.sh locks .env
+    right after the backup, i.e. between backup and switch."""
+    r = world.run("start", extra_env={"STUB_LOCK_ENV": "1"})
+    (world.inst / ".env").chmod(0o600)
+    assert r.returncode == 3, r.stdout + r.stderr
+    j = world.journal()
+    assert j["phase"] == "aborted"
+    assert world.head_tag() == "v0.1.0"
+    assert not any(c[:1] == ["compose"] and c[3:4] in (["stop"], ["up"]) for c in world.calls())
 
 
 def test_status_json_is_filtered(world: World):
@@ -671,6 +708,7 @@ def test_status_json_is_filtered(world: World):
     assert st["phase"] == "done" and st["target"]["tag"] == "v0.2.0"
     assert st["backup"] and "/" not in st["backup"]
     assert "env_copy" not in json.dumps(st)
+    assert str(Path.home()) not in json.dumps(st)
 
 
 def test_contract_names_the_journal_schema():

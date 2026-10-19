@@ -1098,7 +1098,7 @@ class Engine:
             self.phase_verify_release()
             self.phase_pull()
             self.phase_backup()
-        except (UpdateError, CancelRequested) as e:
+        except (UpdateError, CancelRequested, OSError) as e:
             return self.abort(str(e), getattr(e, "kind", "cancelled"))
         self.handoff("_continue")
         return self.run_from_switch()
@@ -1108,8 +1108,11 @@ class Engine:
             self.phase_switch(resumed=resumed)
             self.phase_up()
             self.phase_verify()
-        except UpdateError as e:
+        except (UpdateError, OSError) as e:
             self.say(f"✗ {e}")
+            if not self.journal.data["rollback"].get("prepared"):
+                # Failed while recording the way back — before any change.
+                return self.abort(str(e), getattr(e, "kind", "error"))
             return self.rollback(str(e))
         j = self.journal
         assert j is not None
@@ -1332,7 +1335,7 @@ class Engine:
         j = self.journal
         assert j is not None
         rd = self.run_dir()
-        rb: Dict[str, Any] = {"prepared": True, "schema_before": self.schema_now(),
+        rb: Dict[str, Any] = {"prepared": False, "schema_before": self.schema_now(),
                               "ref": j.data["from"].get("tag") or j.data["from"].get("commit"),
                               "commit": j.data["from"].get("commit"), "branch": j.data["from"].get("branch"),
                               "version": j.data["from"].get("version")}
@@ -1344,6 +1347,7 @@ class Engine:
         else:
             rb["fleet_copy"] = None
         rb["images"] = {s: self.container_state(s)[1] for s in MC_SERVICES}
+        rb["prepared"] = True
         j.data["rollback"] = rb
         j.event("switch", "prepared", f"schema_before={rb['schema_before']}")
         j.save()
@@ -1446,7 +1450,7 @@ class Engine:
             self.compose("up", "-d", "--pull", "never", *MC_SERVICES, timeout=1800)
             self.wait_for_success({"images": rb.get("images"), "version": rb.get("version"),
                                    "schema": rb.get("schema_before")}, "previous version")
-        except (UpdateError, RollbackUnavailable) as e:
+        except (UpdateError, RollbackUnavailable, OSError) as e:
             msg = f"the way back failed: {e}"
             j.end("rollback_failed", msg, error=f"{reason} — {msg}")
             self.say(f"✗ Update failed and {msg}")
@@ -1532,7 +1536,7 @@ class Engine:
                 raise UpdateError("the switch never started — nothing to resume")
             self.restore_env_if_missing()
             self.put_fleet_back()
-        except UpdateError as e:
+        except (UpdateError, OSError) as e:
             return self.rollback(str(e))
         redo_switch = j.phase == "switch" and j.data.get("phase_state") != "done"
         if redo_switch:
@@ -1540,7 +1544,7 @@ class Engine:
         try:
             self.phase_up()
             self.phase_verify()
-        except UpdateError as e:
+        except (UpdateError, OSError) as e:
             self.say(f"✗ {e}")
             return self.rollback(str(e))
         self.drain_clear()
@@ -1574,6 +1578,15 @@ class Engine:
                 age = _now() - _parse_iso(j.data.get("finished_at") or j.data["updated_at"])
                 if age > _dt.timedelta(days=14):
                     raise Refused(f"run {j.run_id} finished {age.days} days ago — its backup is older than 14 days")
+                # The new version runs fine. Refuse what this engine cannot do
+                # before touching anything, instead of marking a healthy run
+                # "rollback failed".
+                before, now = j.data["rollback"].get("schema_before"), self.schema_now()
+                if before is None or now != before:
+                    try:
+                        self.restore_database(now)
+                    except RollbackUnavailable as e:
+                        raise Refused(str(e)) from None
             return self.rollback("rollback requested")
         finally:
             self.lock.release()
@@ -1587,18 +1600,23 @@ class Engine:
             self.emit({"run_id": None, "lock": lock}, human="No update run on this machine.")
             return EXIT_OK
         d = j.data
+        home = str(Path.home())
+
+        def clean(text: Any) -> Any:
+            return text.replace(home, "~") if isinstance(text, str) else text
+
         out = {
             "run_id": d["run_id"], "phase": d["phase"], "phase_state": d.get("phase_state"),
             "status": d.get("status"), "source": d.get("source"),
             "from": {k: d.get("from", {}).get(k) for k in ("tag", "version")},
             "target": {k: d.get("target", {}).get(k) for k in ("tag", "version")},
             "created_at": d.get("created_at"), "updated_at": d.get("updated_at"),
-            "finished_at": d.get("finished_at"), "error": d.get("error"),
+            "finished_at": d.get("finished_at"), "error": clean(d.get("error")),
             "failure_kind": d.get("failure_kind"),
             "backup": Path(d["backup"]["file"]).name if d.get("backup", {}).get("file") else None,
             "interrupted": d["phase"] not in TERMINAL and not lock["held"],
             "lock": lock,
-            "events": [{k: e.get(k) for k in ("at", "phase", "event", "detail")} for e in d.get("events", [])[-20:]],
+            "events": [{k: clean(e.get(k)) for k in ("at", "phase", "event", "detail")} for e in d.get("events", [])[-20:]],
         }
         self.emit(out, human=(f"Run {out['run_id']}: {out['phase']} ({out['phase_state']}) "
                               f"{out['from'].get('tag') or '?'} → {out['target'].get('tag') or '?'}"
