@@ -703,12 +703,15 @@ def test_failure_while_preparing_the_way_back_aborts(world: World):
 
 
 def test_status_json_is_filtered(world: World):
-    assert world.run("start").returncode == 0
-    st = json.loads(world.run("status", "--json").stdout)
+    """What the bridge hands to the UI: no file paths of this machine."""
+    home = {"HOME": str(world.tmp)}           # backups live under "home" here
+    assert world.run("start", extra_env=home).returncode == 0
+    st = json.loads(world.run("status", "--json", extra_env=home).stdout)
     assert st["phase"] == "done" and st["target"]["tag"] == "v0.2.0"
     assert st["backup"] and "/" not in st["backup"]
     assert "env_copy" not in json.dumps(st)
-    assert str(Path.home()) not in json.dumps(st)
+    assert str(world.tmp) not in json.dumps(st)
+    assert any((e["detail"] or "").startswith("~/backups/") for e in st["events"])
 
 
 def test_contract_names_the_journal_schema():

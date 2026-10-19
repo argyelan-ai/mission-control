@@ -1585,6 +1585,17 @@ Alle ADRs in `docs/decisions/`:
 
 ## Änderungshistorie (high-level)
 
+- **2026-10-19** — **Update engine core (ADR-094, update plan PR 2a):** `scripts/mc_update.py`
+  (host, python3 standard library) is the one engine for terminal and the Settings button:
+  phases `preflight → drain → fetch → verify_release → pull → backup → switch → up → verify`,
+  an atomic journal per run under `~/.mc/update/journal/`, a `flock` lock with PID + start time,
+  the resume rule (before `switch` → `aborted`; after → finish or go back), rollback R1 (old
+  code, `.env` in place, fleet file, four checks against the old version), the four success
+  checks with failures counted only after the backend's `start_period`, the real compose project
+  name, pulls of `backend`/`frontend` only, the target tag's own engine from `switch` on, and the
+  drain row `system_state.update_drain` (with expiry) the backend reads from PR 4c. Not wired to
+  `install.sh` or the bridge yet (PR 2c / PR 3); R2 (database restore) is PR 2b, signature checks
+  PR 6. Tests: `scripts/tests/test_mc_update.py` (CI job `mc-update`, Python 3.9 + 3.12).
 - **2026-10-17** — **Any host uid on Linux:** the backend image starts as root only in
   `backend/docker-entrypoint.sh`, gives `mcuser` the host user's ids (`PUID`/`PGID` from `.env`,
   written by `setup.sh` on Linux; empty = uid 1000 as before, macOS/Windows unchanged) and drops
