@@ -2757,7 +2757,9 @@ class ChatTailerManager:
         # mtime-Heuristik zurueck wie der pane-lose Boss/host-Zweig unten.
         if headless_chat_kind(agent) is not None:
             status = await asyncio.to_thread(
-                functools.partial(read_acp_turn_status, agent, with_questions=True)
+                functools.partial(
+                    read_acp_turn_status, agent, with_questions=True, with_task=True,
+                )
             )
             if status is None:
                 return {

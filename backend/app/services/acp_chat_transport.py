@@ -354,7 +354,53 @@ def read_acp_chat_state(agent) -> dict | None:
     return parsed if isinstance(parsed, dict) else None
 
 
-def read_acp_turn_status(agent, *, with_questions: bool = False) -> str | None:
+#: The omp bridge's task phase file (docker/omp-bridge/bridge.py::
+#: TaskStateFile), at the ROOT of the sessions tree (task runs use many cwds).
+_TASK_STATE_FILENAME = "acp-task-state.json"
+#: The bridge's heartbeater re-stamps the file every ~30 s while a run lasts;
+#: older than this = the bridge died mid-run, the phase no longer holds.
+_TASK_STATE_MAX_AGE_S = 120.0
+#: Clock skew between the agent container and the backend we still accept.
+_TASK_STATE_MAX_SKEW_S = 60.0
+
+
+def read_acp_task_phase(agent) -> str | None:
+    """``"working"`` / ``"delivered"`` / ``None`` — what the agent's TASK
+    channel does right now (follow-up to ADR-097: while a task ran, the chat
+    said "Ready", because only the chat daemon's ``busy`` was read; a task
+    runs through the bridge's own ACP client). None for idle and for a
+    missing, garbled, stale or future-dated file. Never raises."""
+    from datetime import datetime, timezone
+
+    from app.services.omp_chat import resolve_transcript_dir
+
+    root = resolve_transcript_dir(agent)
+    if root is None:
+        return None
+    try:
+        data = json.loads((root / _TASK_STATE_FILENAME).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    phase = data.get("phase")
+    if phase not in ("working", "delivered"):
+        return None
+    try:
+        stamp = datetime.fromisoformat(str(data.get("updatedAt")).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    age = (datetime.now(timezone.utc) - stamp).total_seconds()
+    if age > _TASK_STATE_MAX_AGE_S or age < -_TASK_STATE_MAX_SKEW_S:
+        return None
+    return phase
+
+
+def read_acp_turn_status(
+    agent, *, with_questions: bool = False, with_task: bool = False,
+) -> str | None:
     """``"working"`` / ``"idle"`` / ``None`` — der Zug-Zustand eines
     kopflosen ACP-Agenten, direkt aus ``busy`` in ``read_acp_chat_state``.
 
@@ -373,6 +419,17 @@ def read_acp_turn_status(agent, *, with_questions: bool = False) -> str | None:
     Statuszeile zeigte trotzdem fortwaehrend "Status unknown — check the
     terminal" ueber dem Composer."""
     state = read_acp_chat_state(agent)
+    # with_task (opt-in, the chat's status line): a task runs through the
+    # bridge's own ACP client, not the chat daemon. Its phase file says
+    # "working" (the model answered -> "task_working", NOT "working": the
+    # chat itself is free, so no Stop button and no "queued" echo) or
+    # "delivered" (picked up, the model has not answered ->
+    # "waiting_model"). A busy CHAT turn still wins.
+    if with_task:
+        chat_busy = isinstance(state, dict) and state.get("busy") is True
+        task_phase = None if chat_busy else read_acp_task_phase(agent)
+        if task_phase is not None:
+            return "task_working" if task_phase == "working" else "waiting_model"
     if state is None:
         return None
     busy = state.get("busy")

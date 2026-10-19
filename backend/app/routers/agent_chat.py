@@ -720,7 +720,8 @@ def _agent_busy(agent_id: uuid.UUID) -> bool:
     """The chat is mid-turn (as the live stream last saw it): writing into
     its files now would race the agent's own edits."""
     state = tailer_manager.last_state(str(agent_id))
-    return isinstance(state, dict) and state.get("status") == "working"
+    # task_working: a TASK turn edits the same files (follow-up to ADR-097).
+    return isinstance(state, dict) and state.get("status") in ("working", "task_working")
 
 
 async def _recorded_reverts(
