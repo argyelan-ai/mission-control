@@ -24,7 +24,8 @@
 #            core.hooksPath <x> / --unset, MC_LEAK_SCAN_SKIP=..., a commit or
 #            push whose checkout is behind a variable, git whose words the
 #            reader cannot see (xargs input, a pipe into a shell, assembled
-#            strings), a command that seems to run outside a checkout while
+#            strings, run-time text from a command that names git, sh -c "$X"
+#            with an unknown X, an unknown wrapper option), a command that seems to run outside a checkout while
 #            the session sits in one, a command the reader fails on.
 #   Spellings read: see cmdparse below (wrappers, bash -c / -lc, eval, ( ),
 #   $( ), pipes and heredocs into a shell, script files, find -exec, awk,

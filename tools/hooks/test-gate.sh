@@ -12,17 +12,23 @@
 #     point; the command reader below can never be complete.
 # What the reader counts as a push / PR creation (see cmdparse):
 #   git push with git -c k=v / --no-pager / -C dir / --git-dir, "git" or
-#   /usr/bin/git, behind env/command/timeout/if..then, inside ( ), $( ),
-#   backticks, bash -c / -lc / -ec '...', eval, a heredoc / here-string / pipe
+#   /usr/bin/git, behind env/sudo/command/timeout/flock/if..then (with their
+#   option values: env -C dir, sudo -u x, flock -c '...'), inside ( ), $( ),
+#   backticks, bash -c / -lc / -ec '...', eval, text built at run time
+#   (eval "$(echo ..)", c=$(echo ..); $c, bash <(..), source <(..)), a heredoc / here-string / pipe
 #   / < file fed to a shell, a script file run with bash/sh/source/./x.sh,
 #   python -c / node -e code, find -exec, awk system(), git aliases (also -c
 #   alias.x=push) and git send-pack; gh pr create / gh pr new, gh aliases, gh
 #   api .../pulls with fields, curl POST to .../pulls.
 #   Blocked as unreadable ("hidden"): git/gh behind a variable or run by
 #   xargs/parallel, a shell fed from a pipe that mentions git, python/node
-#   code that starts programs and glues "push" together.
+#   code that starts programs and glues "push" together, run-time text from
+#   a command that names git, sh -c "$X" / eval "$X" with an unknown X, an
+#   unknown wrapper option before push.
 #   Known gaps (no blacklist reader closes them): curl ... | sh, a compiled
-#   binary, code that builds the word from bytes. --pre-push closes them.
+#   binary, code that builds the word from bytes, run-time text from an
+#   unknown program that never names git (eval "$(tool)"), other programs
+#   that push (make push, npx git push, osascript). --pre-push closes them.
 # Which checkout is tested: the one the command really targets - after cd /
 #   pushd / -C / GIT_DIR (a cd in ( ), $( ), bash -c or a pipe stays inside;
 #   cd -, popd and a cd that may not have run make it unknown = block), the
