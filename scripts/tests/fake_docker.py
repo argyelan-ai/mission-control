@@ -19,10 +19,22 @@ Knobs in the state file (set by the tests):
   up_sleep_for_tag    {"0.2.0": 5}             `up` of that tag hangs this long first
   foreign             ["proj|/dir"]            other MC stacks on the machine
   project_label       "name"                   label of the running stack
+  dump_fail           true|false               pg_dump fails (the backup fails)
+  dump_sleep          seconds                  a slow pg_dump (cancel tests)
+  schema_after_dump   "0002"                   the schema moves right after the dump
+  lock_env_after_dump true|false               .env becomes unreadable after the dump
+  restore_fail        true|false               loading a dump fails
+
+The real backup.sh runs against this fake: ``exec -T db pg_dump`` prints a
+complete-looking dump that carries the current schema, ``exec -T db psql …
+-c DROP … -c CREATE …`` empties the database, and ``exec -T db psql …
+--single-transaction`` reads a dump from stdin and puts its schema back.
+``db_history`` records "dropped" / "restored" in order.
 """
 
 import json
 import os
+import subprocess
 import sys
 import time
 
@@ -114,6 +126,20 @@ def main(argv):
                 s.setdefault("images", {})[f"{REG}/{IMG[svc]}:{tag}"] = f"sha256:{IMG[svc]}-{tag}"
         save(s)
         return 0
+    if sub == "ps" and "--services" in args:
+        # backup.sh: which of the services are running right now.
+        print("db")
+        for svc, c in s.get("containers", {}).items():
+            if c["state"] == "running":
+                print(svc)
+        return 0
+    if sub == "start":
+        for svc in args[1:]:
+            c = s.get("containers", {}).get(svc)
+            if c:
+                c["state"] = "running"
+        save(s)
+        return 0
     if sub == "ps":
         svc = args[-1]
         c = s.get("containers", {}).get(svc)
@@ -155,8 +181,32 @@ def main(argv):
         if s.get("db_down"):
             print("service db is not running", file=sys.stderr)
             return 1
+        cmd = [a for a in args[1:] if a != "-T"][1:]   # drop "-T" and the service
+        if cmd[:1] == ["pg_dump"]:
+            return pg_dump(s)
+        if cmd[:1] == ["psql"] and "-c" in cmd:
+            # backup.sh restore: DROP DATABASE … / CREATE DATABASE …
+            s["schema"] = None
+            s.setdefault("db_history", []).append("dropped")
+            save(s)
+            return 0
+        if cmd[:1] == ["psql"] and "--single-transaction" in cmd:
+            dump = sys.stdin.read()
+            if s.get("restore_fail"):
+                print("ERROR: relation already exists", file=sys.stderr)
+                return 3
+            schema = None
+            for line in dump.splitlines():
+                if line.startswith("-- schema: "):
+                    schema = line.split(": ", 1)[1].strip() or None
+            s["schema"] = schema
+            s.setdefault("db_history", []).append("restored")
+            save(s)
+            return 0
         sql = args[-1]
-        if "alembic_version" in sql:
+        if sql == "select 1":
+            print("1")
+        elif "alembic_version" in sql:
             print(s.get("schema") or "")
         elif "in_progress" in sql:
             seq = s.get("in_progress", [0])
@@ -177,6 +227,30 @@ def main(argv):
             s.setdefault("drain_history", []).append("cleared")
             save(s)
         return 0
+    return 0
+
+
+def pg_dump(s):
+    log = os.environ.get("STUB_BACKUP_LOG")
+    if log:
+        tag = subprocess.run(["git", "describe", "--tags", "--exact-match", "HEAD"],
+                             capture_output=True, text=True).stdout.strip() or "none"
+        with open(log, "a") as f:
+            f.write(f"backup on {tag}\n")
+    if s.get("dump_sleep"):
+        time.sleep(float(s["dump_sleep"]))
+        s = load()
+    if s.get("dump_fail"):
+        print("pg_dump: error: connection to server failed", file=sys.stderr)
+        return 1
+    print("--\n-- PostgreSQL database dump\n--")
+    print(f"-- schema: {s.get('schema') or ''}")
+    print("--\n-- PostgreSQL database dump complete\n--")
+    if s.get("schema_after_dump"):
+        s["schema"] = s["schema_after_dump"]
+        save(s)
+    if s.get("lock_env_after_dump"):
+        os.chmod(os.path.join(s["repo"], ".env"), 0)
     return 0
 
 
