@@ -5,6 +5,13 @@ import pytest
 
 from conftest import commit, git, run_hook, worktree
 
+def app_package(repo):
+    # Real packages: with the operator's venv an editable install of the real
+    # backend sits on sys.path, and a namespace package "app" would lose to it.
+    commit(repo, "backend/app/__init__.py", "")
+    commit(repo, "backend/app/services/__init__.py", "")
+
+
 GREEN = "def test_ok():\n    assert 1 + 1 == 2\n"
 RED = "def test_broken():\n    assert 1 + 1 == 3\n"
 
@@ -97,6 +104,7 @@ def test_changed_source_runs_its_existing_test(repo):
     # The branch only touches app code; the test that covers it already
     # exists on origin/main. Breaking existing behaviour must still block.
     from conftest import git
+    app_package(repo)
     commit(repo, "backend/app/services/pricing.py", "def price():\n    return 1\n")
     commit(repo, "backend/tests/test_pricing.py",
            "from app.services.pricing import price\n\ndef test_price():\n    assert price() == 1\n")
@@ -276,6 +284,7 @@ def test_deleted_test_together_with_its_subject_is_fine(repo):
 
 def test_test_that_imports_the_changed_module_runs(repo):
     # Not named after the module - found through its import.
+    app_package(repo)
     commit(repo, "backend/app/services/pricing.py", "def price():\n    return 1\n")
     commit(repo, "backend/tests/test_billing.py",
            "from app.services.pricing import price\n\ndef test_bill():\n    assert price() == 1\n")
@@ -302,6 +311,7 @@ def test_component_code_runs_its_component_tests(repo):
 
 def test_failure_that_is_already_on_main_does_not_block(repo):
     # The affected test is red on origin/main too: not this branch's fault.
+    app_package(repo)
     commit(repo, "backend/app/services/pricing.py", "def price():\n    return 1\n")
     commit(repo, "backend/tests/test_pricing.py",
            "from app.services.pricing import price\n\ndef test_price():\n    assert price() == 3\n")
