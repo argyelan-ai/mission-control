@@ -701,10 +701,16 @@ class OmpLineParser:
         # nothing to build a diff from and fell back to raw JSON (task 475,
         # live 12.10.2026 omp 18.10.1 over ACP). Popped on first use.
         self._write_args: dict[str, dict[str, str]] = {}
+        # The ACP bridge's sink header names the task a session belongs to
+        # (``{"type":"session", ..., "taskId": ...}``). In such a file every
+        # user line is a prompt MC wrote — files written before the bridge
+        # stamped ``attribution: "mc"`` (19.10.2026) are recognised by this.
+        self._task_session = False
 
     def reset(self) -> None:
         self._effort = None
         self._write_args = {}
+        self._task_session = False
 
     def seed_from(self, session_path: Path) -> None:
         """Liest die zuletzt geschriebene Effort-Stufe aus einer bestehenden
@@ -734,6 +740,9 @@ class OmpLineParser:
 
         entry_type = d.get("type")
         try:
+            if entry_type == "session":
+                self._task_session = bool(d.get("taskId")) and d.get("bridge") == "acp"
+                return []
             if entry_type == "message":
                 return self._parse_message(d, observed_windows)
             if entry_type == "thinking_level_change":
@@ -780,7 +789,7 @@ class OmpLineParser:
 
         role = message.get("role")
         if role == "user":
-            return self._parse_user(entry_id, ts, message)
+            return self._parse_user(entry_id, ts, message, task_session=self._task_session)
         if role == "assistant":
             return self._parse_assistant(entry_id, ts, message, observed_windows)
         if role == "toolResult":
@@ -791,10 +800,40 @@ class OmpLineParser:
         return []
 
     @staticmethod
-    def _parse_user(entry_id: str, ts: str, message: dict[str, Any]) -> list[dict[str, Any]]:
+    def _parse_user(
+        entry_id: str, ts: str, message: dict[str, Any], *, task_session: bool = False,
+    ) -> list[dict[str, Any]]:
         text = _blocks_to_text(message.get("content"))
         if not text:
             return []
+        origin = message.get("origin") if isinstance(message.get("origin"), dict) else None
+        if message.get("attribution") == "mc" or origin is not None or task_session:
+            # A prompt Mission Control wrote into an ACP task session (the
+            # dispatch with its Operating Card, or a continue-nudge). Over
+            # the native TUI the same arrives as an ``@task-….md`` mention
+            # and renders as a task event — over ACP it was a plain user
+            # turn and the chat showed 8000 characters of briefing as the
+            # operator's own bubble (incident 19.10.2026, bench task).
+            kind = (origin or {}).get("kind")
+            if kind not in ("task", "nudge"):
+                kind = "task" if _NEW_TASK_RE.search(text) or task_session else "nudge"
+            title = None
+            if kind == "task":
+                m = _NEW_TASK_RE.search(text)
+                title = m.group("title") if m else None
+            return [
+                {
+                    "kind": "message",
+                    "uuid": entry_id,
+                    "ts": ts,
+                    "role": "teammate",
+                    "teammate": None,
+                    "source": {"kind": kind, "title": title},
+                    "text": text[:_MENTION_TRUNCATE_LEN],
+                    "model": None,
+                    "sidechain": False,
+                }
+            ]
         return [
             {
                 "kind": "message",
@@ -1200,6 +1239,30 @@ class OmpLineParser:
             event = _elicitation_event(d, entry_id, ts, content)
             if event is not None:
                 return [event]
+        if custom_type == "chat_notice":
+            # Something MC decided for the operator (acp_model.py: the model
+            # the session was pinned to is not offered anymore). Not red —
+            # the turn goes on — but visible, with the values the frontend
+            # fills into its localized sentence.
+            data = d.get("data") if isinstance(d.get("data"), dict) else {}
+            notice = {
+                k: data.get(k) for k in ("code", "previous", "current")
+                if isinstance(data.get(k), str) and data.get(k)
+            }
+            return [
+                {
+                    "kind": "message",
+                    "uuid": entry_id,
+                    "ts": ts,
+                    "role": "teammate",
+                    "teammate": custom_type,
+                    "source": {"kind": "notice", "title": notice.get("code")},
+                    "notice": notice or None,
+                    "text": content[:_RESULT_TRUNCATE_LEN],
+                    "model": None,
+                    "sidechain": False,
+                }
+            ]
         if custom_type == "chat_error":
             # Chat over ACP: der Chat-Daemon hat keinen anderen Weg, einen
             # Fehler sichtbar zu machen — er schreibt ihn als eigene Zeile ins

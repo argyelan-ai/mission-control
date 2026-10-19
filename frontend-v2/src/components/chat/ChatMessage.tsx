@@ -9,6 +9,7 @@ import { parseVoiceMessage } from "@/components/voice/live/voiceMessage";
 import { ChatAttachmentTile } from "./ChatAttachmentTile";
 import { ClampedContent, USER_CLAMP_MAX_PX } from "./ClampedContent";
 import { ChatErrorCard } from "./ChatErrorCard";
+import { ChatNoticeCard } from "./ChatNoticeCard";
 import { EventCard } from "./EventCard";
 import type { MessageEvent } from "@/lib/chatTypes";
 
@@ -105,6 +106,11 @@ export function ChatMessage({
   // Streifens (Spec docs/specs/chat-over-acp.md).
   if (ev.role === "teammate" && ev.source?.kind === "error") {
     return <ChatErrorCard ev={ev} />;
+  }
+  // Eine Entscheidung von MC fuer den Operator (z.B. Modell-Rueckfall nach
+  // einem Runtime-Wechsel) — sichtbar, aber kein Fehler.
+  if (ev.role === "teammate" && ev.source?.kind === "notice") {
+    return <ChatNoticeCard ev={ev} />;
   }
   if (ev.role === "teammate" && ev.source) {
     return <EventCard ev={ev} source={ev.source} live={live} />;

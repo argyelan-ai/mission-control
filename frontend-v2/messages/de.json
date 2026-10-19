@@ -3701,6 +3701,11 @@
       "new_session_failed": "Neue Sitzung fehlgeschlagen",
       "queue_lost": "Warteschlange verloren"
     },
+    "notice": {
+      "label": "Hinweis",
+      "model_fallback": "Das zuvor gewählte Modell {previous} ist nicht mehr verfügbar — es wird {current} verwendet.",
+      "model_fallbackLabel": "Modell gewechselt"
+    },
     "queue": {
       "queued": "Eingereiht — wird nach der laufenden Antwort gesendet",
       "steer": "Steuernachricht — greift nach dem laufenden Werkzeug",

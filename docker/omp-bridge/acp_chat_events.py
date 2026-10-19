@@ -137,6 +137,8 @@ PLAN_CUSTOM_TYPE = "acp-plan"
 # customType of a chat-visible failure line (chat over ACP). The backend's
 # _parse_custom_message turns it into an error-styled chat event.
 CHAT_ERROR_CUSTOM_TYPE = "chat_error"
+#: A notice the operator must see, not an error (map_chat_notice).
+CHAT_NOTICE_CUSTOM_TYPE = "chat_notice"
 
 _TITLE_TRUNCATE_LEN = 200
 
@@ -748,24 +750,65 @@ class ACPEventMapper:
             }
         ]
 
-    def map_user_prompt(self, prompt_text: str) -> list[dict[str, Any]]:
+    def map_user_prompt(
+        self, prompt_text: str, *, origin: Optional[str] = None,
+        task_id: str = "",
+    ) -> list[dict[str, Any]]:
         """The user turn itself -> a user message line, so the chat view shows
         what the bridge asked (the native transcript carries the same via the
-        TUI's input echo)."""
+        TUI's input echo).
+
+        ``origin`` names who wrote the turn when it was NOT the operator:
+        ``"task"`` (a task dispatch prompt) or ``"nudge"`` (a continue-nudge).
+        Such a line carries ``attribution: "mc"`` + ``origin``, and the chat
+        renders it as an event "from Mission Control" — not as a bubble the
+        operator typed (incident 19.10.2026: the whole Operating Card of a
+        bench task showed up as the operator's own message). The native TUI
+        path gets the same via its ``@task-….md`` mention."""
         text = str(prompt_text or "").strip()
         if not text:
             return []
+        message: dict[str, Any] = {
+            "role": "user",
+            "content": [{"type": "text", "text": text[:8000]}],
+            "attribution": "user",
+        }
+        if origin:
+            message["attribution"] = "mc"
+            message["origin"] = {"kind": str(origin), "taskId": str(task_id or "") or None}
         return [
             {
                 "type": "message",
                 "id": self._next_id(),
                 "parentId": None,
                 "timestamp": _now_iso(),
-                "message": {
-                    "role": "user",
-                    "content": [{"type": "text", "text": text[:8000]}],
-                    "attribution": "user",
-                },
+                "message": message,
+            }
+        ]
+
+    def map_chat_notice(
+        self, code: str, text: str, data: Optional[dict] = None,
+    ) -> list[dict[str, Any]]:
+        """A chat-visible NOTICE -> ONE ``chat_notice`` custom_message line.
+
+        Not an error: the turn goes on, but the operator must learn that
+        something was decided for them (e.g. ``model_fallback`` — the model
+        the session was pinned to is no longer offered, another one is used).
+        ``data`` carries ``code`` plus the values the frontend fills into its
+        localized sentence; ``content`` is the English fallback text."""
+        payload = {"code": code}
+        payload.update({k: v for k, v in (data or {}).items() if v is not None})
+        return [
+            {
+                "type": "custom_message",
+                "customType": CHAT_NOTICE_CUSTOM_TYPE,
+                "content": str(text or code)[:_RESULT_TRUNCATE_LEN],
+                "display": True,
+                "attribution": "agent",
+                "id": self._next_id(),
+                "parentId": None,
+                "timestamp": _now_iso(),
+                "data": payload,
             }
         ]
 
