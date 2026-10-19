@@ -9,7 +9,7 @@ How a version reaches users. The rules behind it:
    (`## [X.Y.Z] - YYYY-MM-DD`, moved out of `[Unreleased]`).
 2. Tag the release commit with a **strict** tag and push it:
    ```bash
-   git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z
+   git tag -a vX.Y.Z -m "vX.Y.Z" && git -C . push origin vX.Y.Z  # guard-allow: push-gate (a tag on a main commit that CI already scanned)
    ```
    Only `vX.Y.Z` (and pre-releases `vX.Y.Z-rc1`) start `release.yml`; a loose
    tag such as `v0.5` starts nothing.

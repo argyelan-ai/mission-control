@@ -1,0 +1,3 @@
+# Piping a gate into tail used to hide its exit code. run-gates runs every gate
+# with pipefail, so the failure of `false` stays red.
+false | tail -1

@@ -1,0 +1,2 @@
+# A brief: the commands are in backquotes, the ";" after them is prose.
+Gate only. Run: `${TEAM}/scripts/preflight.sh --worktrees 0`; then `mkdir -p "$OUT"`.

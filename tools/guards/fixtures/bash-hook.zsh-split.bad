@@ -1,0 +1,9 @@
+{
+ "session_id": "fixture",
+ "cwd": ".",
+ "tool_name": "Bash",
+ "tool_input": {
+  "command": "for p in \"wt-a feat/a\"; do set -- $p; git worktree add \"../$1\" -b \"$2\" origin/main; done",
+  "run_in_background": false
+ }
+}

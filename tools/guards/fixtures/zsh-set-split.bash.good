@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# A bash script splits an unquoted $var, so `set -- $var` does what it says here
+# (shape of scripts/lib/remote-access.sh).
+set -- $SSH_CONNECTION
+addr="${3:-}"

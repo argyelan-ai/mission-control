@@ -1,0 +1,5 @@
+# The form the mc-deploy skill uses: both scans decide by exit code, and the
+# push only runs when both are clean. `! ... | grep` is red when grep finds something.
+python3 scripts/privacy-scan.py && ! git -C "$WT" diff origin/main | grep -niE 'pattern' && git -C "$WT" push -u origin feat/x
+# A lease-protected force-push with uncut output is fine; 2>&1 alone hides nothing.
+python3 scripts/privacy-scan.py && git -C "$WT" push --force-with-lease origin feat/x 2>&1

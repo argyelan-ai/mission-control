@@ -1,0 +1,6 @@
+# Tests run in the foreground. The commit comes before the report.
+cd backend && pytest -q -k test_example
+git -C "$WT" commit -m "fix: example"
+# A background job is fine when the script waits for it.
+npm run test:run &
+wait

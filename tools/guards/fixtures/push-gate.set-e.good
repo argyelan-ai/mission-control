@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# With set -e, a scan on its own line stops the script when it is red.
+python3 scripts/privacy-scan.py
+git -C "$WT" push -u origin feat/example

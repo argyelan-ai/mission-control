@@ -1,0 +1,9 @@
+{
+ "session_id": "fixture",
+ "cwd": ".",
+ "tool_name": "Bash",
+ "tool_input": {
+  "command": "cd backend && python -m pytest -q tests/test_example.py",
+  "run_in_background": true
+ }
+}

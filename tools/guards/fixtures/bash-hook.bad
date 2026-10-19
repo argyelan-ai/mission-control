@@ -1,0 +1,9 @@
+{
+ "session_id": "fixture",
+ "cwd": ".",
+ "tool_name": "Bash",
+ "tool_input": {
+  "command": "git -C hook-repo-clean push --force-with-lease 2>&1 | tail -1",
+  "run_in_background": false
+ }
+}

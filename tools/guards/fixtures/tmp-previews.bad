@@ -1,0 +1,4 @@
+# The preview lives under /tmp. macOS deletes it after a few days,
+# and the link in the handoff points to nothing.
+OUT=/tmp/preview-b
+npx vercel deploy "$OUT" --prebuilt

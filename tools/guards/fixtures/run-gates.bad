@@ -1,0 +1,4 @@
+# The first gate fails. The runner must stop here and exit red,
+# even though the last gate would succeed.
+false
+true

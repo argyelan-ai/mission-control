@@ -1,0 +1,7 @@
+# Previews and worktrees live in a durable folder.
+OUT="$HOME/previews/preview-c"
+npx vercel deploy "$OUT" --prebuilt
+# Short-lived health files under /tmp are fine.
+test -f /tmp/worker.alive
+# A scratch file can opt out on purpose, with a reason.
+cp shot.png /tmp/preview-scratch.png  # guard-allow: tmp-previews (scratch copy, read once)

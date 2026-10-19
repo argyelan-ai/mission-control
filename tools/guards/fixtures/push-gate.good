@@ -1,0 +1,3 @@
+# The scan gates the push, the push names its worktree,
+# and the output stays complete.
+python3 scripts/privacy-scan.py && git -C "$WT" push -u origin feat/example

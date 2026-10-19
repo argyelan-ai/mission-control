@@ -1,0 +1,9 @@
+{
+ "session_id": "fixture",
+ "cwd": ".",
+ "tool_name": "Bash",
+ "tool_input": {
+  "command": "cd hook-repo-clean && git checkout origin/main -- backend/app/x.py",
+  "run_in_background": false
+ }
+}

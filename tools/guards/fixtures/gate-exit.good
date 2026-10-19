@@ -1,0 +1,13 @@
+# The gate decides: '&&' to the next step, a stop after '||', or the exit code
+# printed for a human to read.
+bash ~/.claude/skills/mc-deploy/preflight.sh && docker compose -p mission-control up --build -d backend
+python3 scripts/privacy-scan.py || exit 1
+bash tools/guards/run-all.sh; echo "rc=$?"
+bash tools/guards/run-all.sh | tail -3
+echo "run preflight.sh | tail -1; build is wrong"
+# The verdict text decides, and a red verdict stops.
+MC_DEPLOY_REF=origin/main bash ~/.claude/skills/mc-deploy/preflight.sh 2>&1 | tail -1 | grep -q "PREFLIGHT OK" || { echo "PREFLIGHT FAILED"; exit 3; }
+# The gate is only read here, not run.
+grep -n "sys.exit" scripts/privacy-scan.py | head; ls docker/shared/disk-preflight.sh
+# The pipe belongs to the later grep, not to the gate; the gate's rc is printed.
+python3 scripts/privacy-scan.py; echo "exit=$?"; grep -rn "x" backend/tests | head -3
