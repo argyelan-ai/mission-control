@@ -31,15 +31,31 @@
 #                      network and set PUBLIC_HOST (address auto-detected)
 #   --public-host <a>  same, with this address (IP or name.local)
 #   --local            localhost only, never ask (the default without a TTY)
-#   --update           update an existing install (run inside the checkout):
-#                      move to the latest release (or main on edge), refresh
-#                      images, restart, migrate. Works from any version:
+#   --update           update an existing install (run inside the checkout).
+#                      Works from any version:
 #                      curl -fsSL <url above> | bash -s -- --update
-#                      Takes a backup (./backup.sh) before switching, stops
-#                      when agents are working, waits for /health and says
-#                      "Update failed" with the way back when it is not.
-#   --no-backup        --update without the backup first (on purpose only)
-#   --ignore-running-tasks  --update even while tasks are in progress
+#                      stable: hands over to the update engine
+#                      (scripts/mc_update.py, ADR-094) — the same steps as the
+#                      button in Settings → System: waits for running work,
+#                      downloads only MC's images, backs up, switches, proves
+#                      the new version (health, images, version, schema) or
+#                      goes back on its own. Needs python3 (3.9+; MC_PYTHON
+#                      picks another one). An unfinished update run is found
+#                      first and has to be resumed.
+#                      edge: moves to the latest main, builds locally, backs
+#                      up first, waits for /health.
+#   --rollback         undo the last update (stable): the previous release,
+#                      its .env and fleet file, and — if the update changed
+#                      the database — the database from the backup taken right
+#                      before it. Asks first at a terminal; unattended: --yes.
+#                      Also finishes a way back that failed half-way.
+#   --resume           finish an update run that was interrupted (power cut,
+#                      closed terminal): before the switch it stops cleanly
+#                      with nothing changed, after it it completes the update
+#                      or goes back.
+#   --yes              --rollback without the question (scripts, no terminal)
+#   --no-backup        edge --update without the backup first (on purpose only)
+#   --ignore-running-tasks  edge --update even while tasks are in progress
 #                      (without a terminal the update stops otherwise)
 #   --bridge           set up (or repair) the cli-bridge service in an
 #                      existing install (run inside the checkout). The bridge
@@ -227,15 +243,6 @@ mc_write_pins() {
   fi
 }
 
-# Does the migration chain of <ref> contain alembic revision <rev>? Used to
-# refuse a switch that would put code BELOW the database (migrations are
-# forward-only; an older backend cannot start on a newer schema).
-mc_ref_has_revision() {
-  local ref="$1" rev="$2"
-  [[ "$rev" =~ ^[A-Za-z0-9_]+$ ]] || return 1
-  git grep -qE "^revision(: *str)? *= *['\"]${rev}['\"]" "$ref" -- backend/alembic/versions 2>/dev/null
-}
-
 # The compose project name `docker compose` will use in the current
 # directory: COMPOSE_PROJECT_NAME from the environment, then from .env, then
 # the directory name — normalised the way compose does it.
@@ -374,6 +381,76 @@ mc_user() { id -un 2>/dev/null || printf '%s\n' "${USER:-}"; }
 # Linger: the user's services keep running without a login session and start
 # at boot. Readable without a session (the update preflight checks the same).
 mc_linger_enabled() { [ -e "${MC_LINGER_DIR:-/var/lib/systemd/linger}/$(mc_user)" ]; }
+# ── Update engine door (ADR-094 decision 2) ─────────────────────────────────
+# On the stable channel --update, --rollback and --resume only open the door
+# to scripts/mc_update.py — the one update engine, the same one the Settings
+# button starts through the cli-bridge. The terminal shows the engine's own
+# lines; this script adds a line before and the next step after.
+# scripts/tests/test_install_door.py drives these functions and the flags.
+
+# The python the engine runs on (standard library only, 3.9 or newer — what
+# macOS ships). MC_PYTHON picks another one (e.g. python3.11).
+MC_PY="${MC_PYTHON:-python3}"
+MC_UPDATE_STATE="${MC_UPDATE_HOME:-$HOME/.mc/update}"
+
+# mc_update_state_shown — the engine's state folder as a user reads it (~/…).
+mc_update_state_shown() {
+  case "$MC_UPDATE_STATE" in
+    "$HOME"/*) printf '~%s\n' "${MC_UPDATE_STATE#"$HOME"}" ;;
+    *) printf '%s\n' "$MC_UPDATE_STATE" ;;
+  esac
+}
+
+# mc_python_ok — 0 when $MC_PY exists and is 3.9 or newer.
+mc_python_ok() {
+  command -v "$MC_PY" >/dev/null 2>&1 \
+    && "$MC_PY" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' </dev/null >/dev/null 2>&1
+}
+
+# mc_update_engine — path of the engine to run, inside the install folder:
+# the install's own (it hands over to the target release's engine at the
+# switch), else the one next to this installer (an install from before the
+# engine, updated with a current installer), else the one on main — the same
+# place `curl | bash` fetched this installer from.
+mc_update_engine() {
+  local self="${BASH_SOURCE[0]:-}" e
+  if [ -f ./scripts/mc_update.py ]; then
+    printf '%s\n' "$(pwd)/scripts/mc_update.py"; return 0
+  fi
+  if [ -n "$self" ] && [ -f "$self" ]; then
+    e="$(cd "$(dirname "$self")" && pwd)/scripts/mc_update.py"
+    if [ -f "$e" ]; then printf '%s\n' "$e"; return 0; fi
+  fi
+  e="$(mktemp)"
+  curl -fsSL "${INSTALLER_URL%/install.sh}/scripts/mc_update.py" -o "$e" </dev/null || return 1
+  printf '%s\n' "$e"
+}
+
+# mc_update_last_run <engine> — "<run-id> <phase> <state> <from-tag>" of the
+# latest update run, where <state> is running (a live engine holds the lock),
+# interrupted (not finished, nobody runs it), failed (rollback_failed: the
+# way back did not finish) or ended. Nothing when there is no run.
+mc_update_last_run() {
+  "$MC_PY" "$1" status --json --repo "$(pwd)" </dev/null 2>/dev/null | "$MC_PY" -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except ValueError:
+    sys.exit(0)
+if not d.get("run_id"):
+    sys.exit(0)
+phase = d.get("phase") or "?"
+if (d.get("lock") or {}).get("held") and phase not in ("done", "aborted", "rolled_back", "rollback_failed"):
+    state = "running"
+elif d.get("interrupted"):
+    state = "interrupted"
+elif phase == "rollback_failed":
+    state = "failed"
+else:
+    state = "ended"
+print(d["run_id"], phase, state, (d.get("from") or {}).get("tag") or "-")
+' 2>/dev/null || true
+}
 
 # mc_confirm "question" — true only on an explicit yes typed at the terminal
 # (MC_TTY, default /dev/tty). No terminal, Enter or anything else → no.
@@ -486,6 +563,84 @@ mc_bridge_offer() {
   esac
 }
 
+# mc_update_guard_open_run <engine> [offer] — before anything restarts the
+# stack: an unfinished update run is finished first. `offer` (a terminal
+# --update) asks to resume it right away; otherwise the command is named and
+# the installer stops. Returns 0 when there is nothing open.
+mc_update_guard_open_run() {
+  local engine="$1" offer="${2:-}" info run phase state rc
+  [ -d "$MC_UPDATE_STATE/journal" ] || return 0   # no engine ever ran here
+  info="$(mc_update_last_run "$engine")"
+  [ -n "$info" ] || return 0
+  read -r run phase state _ <<<"$info"
+  case "$state" in
+    running)
+      fail "An update is running right now (run $run, phase $phase) — let it finish, then re-run. Its progress: $(mc_update_state_shown)/run-$run/engine.log" ;;
+    failed)
+      fail "The last update (run $run) failed and could not go back on its own. Fix the cause it named, then run: ./install.sh --rollback" ;;
+    interrupted)
+      warn "An update was interrupted (run $run, phase $phase) and has to be finished first —"
+      warn "  resuming completes it, or goes back to the previous version when it cannot."
+      if [ "$offer" = offer ] && [ "$NONINTERACTIVE_FLAG" = 0 ] && mc_confirm "Resume it now?"; then
+        rc=0; mc_update_door resume || rc=$?
+        exit "$rc"
+      fi
+      fail "Nothing was changed. Finish the interrupted update first: ./install.sh --resume" ;;
+  esac
+  return 0
+}
+
+# mc_update_explain <command> <rc> — the next step after the engine ended.
+# The engine said what happened; this names what to do now.
+mc_update_explain() {
+  local cmd="$1" rc="$2" run log
+  run="$(mc_update_last_run "$MC_UPDATE_ENGINE" | cut -d' ' -f1)"
+  log="$(mc_update_state_shown)/run-${run:-<id>}/engine.log"
+  case "$rc" in
+    0|5) return 0 ;;
+    1) echo "  What failed and why: docker compose logs backend --tail 50 · the run's log: $log" >&2 ;;
+    3) [ "$cmd" = rollback ] || echo "  Fix the reason above, then run the update again: ./install.sh --update" >&2 ;;
+    4) echo "  The run's log: $log" >&2 ;;
+    9|2) ;;
+    23) echo "  Another update holds the lock — let it finish. If it was interrupted: ./install.sh --resume" >&2 ;;
+    *) printf '\033[1;31m%s\033[0m\n' "✗ The update engine stopped unexpectedly (exit $rc)." >&2
+       echo "  Nothing is lost: ./install.sh --resume finishes the run or goes back to the previous version." >&2
+       [ -z "$run" ] || echo "  The run's log: $log" >&2 ;;
+  esac
+}
+
+# mc_update_door start|resume|rollback — run the engine in this install,
+# show its lines, explain the next step, return its verdict (a requested way
+# back that worked is a success here: exit 0).
+mc_update_door() {
+  local cmd="$1" rc=0 args=()
+  args=("$cmd" --repo "$(pwd)")
+  [ "$cmd" != start ] || args+=(--source terminal)
+  [ "$cmd" != start ] || [ -z "${VERSION:-}" ] || args+=(--version "$VERSION")
+  # </dev/null: under `curl | bash` stdin is the rest of this script.
+  "$MC_PY" "$MC_UPDATE_ENGINE" "${args[@]}" </dev/null || rc=$?
+  mc_update_explain "$cmd" "$rc"
+  if [ "$rc" = 0 ] && [ "$cmd" != rollback ]; then mc_warn_if_degraded; fi
+  [ "$rc" != 5 ] || rc=0
+  return "$rc"
+}
+
+# mc_update_rollback_confirm — going back from a finished update throws away
+# what was written since its backup: asked at a terminal, or --yes.
+mc_update_rollback_confirm() {
+  local info run phase state from
+  info="$(mc_update_last_run "$MC_UPDATE_ENGINE")"
+  [ -n "$info" ] || return 0              # the engine says "nothing to go back to"
+  read -r run phase state from <<<"$info"
+  [ "$phase" = "done" ] || return 0         # a failed or interrupted run: finishing the way back loses nothing more
+  warn "This sets Mission Control back to $from (run $run)."
+  warn "  If that update changed the database, it is restored from the backup taken right"
+  warn "  before it — everything written in Mission Control since then is lost."
+  [ "$ASSUME_YES" = 1 ] && return 0
+  if [ "$NONINTERACTIVE_FLAG" = 0 ] && mc_confirm "Go back to $from?"; then return 0; fi
+  fail "Nothing was changed. To go back, confirm at a terminal or run: ./install.sh --rollback --yes"
+}
+
 [ "${MC_INSTALL_LIB_ONLY:-0}" = 1 ] && return 0 2>/dev/null
 
 # ── Arguments ────────────────────────────────────────────────────────────────
@@ -494,6 +649,9 @@ HERE=0
 INTERACTIVE=1
 UPDATE=0
 BRIDGE_ONLY=0
+ROLLBACK=0
+RESUME=0
+ASSUME_YES=0
 NO_BACKUP=0
 IGNORE_RUNNING=0
 NONINTERACTIVE_FLAG=0
@@ -506,6 +664,9 @@ while [ $# -gt 0 ]; do
     --here) HERE=1; INTERACTIVE=0 ;;
     --update) UPDATE=1; INTERACTIVE=0 ;;
     --bridge) BRIDGE_ONLY=1 ;;
+    --rollback) ROLLBACK=1; INTERACTIVE=0 ;;
+    --resume) RESUME=1; INTERACTIVE=0 ;;
+    --yes) ASSUME_YES=1 ;;
     --no-backup) NO_BACKUP=1 ;;
     --ignore-running-tasks) IGNORE_RUNNING=1 ;;
     --dir) TARGET_DIR="$2"; shift ;;
@@ -527,6 +688,14 @@ if [ -n "$VERSION" ]; then
   mc_is_release_tag "$VERSION" || fail "--version expects a release like v0.2.0, got '$VERSION'."
   [ "$CHANNEL_ARG" = edge ] && fail "--version and --channel edge contradict each other."
   CHANNEL_ARG=stable
+fi
+if [ $((UPDATE + ROLLBACK + RESUME)) -gt 1 ]; then
+  fail "--update, --rollback and --resume are separate steps — use one at a time."
+fi
+if [ "$ROLLBACK" = 1 ] || [ "$RESUME" = 1 ]; then
+  [ -z "$VERSION" ] || fail "--version only goes with --update; --rollback and --resume act on the last update run."
+  [ "$CHANNEL_ARG" != edge ] || fail "--rollback and --resume belong to the update engine of the stable channel; edge has none."
+  [ "$NO_BACKUP" = 0 ] && [ "$IGNORE_RUNNING" = 0 ] || fail "--no-backup and --ignore-running-tasks only go with --update --channel edge."
 fi
 mc_check_health_timeout
 # `curl | bash` has no usable stdin — prompt via /dev/tty when present.
@@ -572,6 +741,7 @@ fix_for() { # fix_for <tool> — print the install command(s) for this platform
     git)     d="sudo apt install -y git";     f="sudo dnf install -y git";     m="xcode-select --install" ;;
     curl)    d="sudo apt install -y curl";    f="sudo dnf install -y curl";    m="brew install curl" ;;
     openssl) d="sudo apt install -y openssl"; f="sudo dnf install -y openssl"; m="brew install openssl" ;;
+    python3) d="sudo apt install -y python3";  f="sudo dnf install -y python3";  m="xcode-select --install   # ships python3" ;;
     docker)
       d="curl -fsSL https://get.docker.com | sudo sh && sudo usermod -aG docker \$USER   # then log out and back in"
       f="curl -fsSL https://get.docker.com | sudo sh && sudo systemctl enable --now docker && sudo usermod -aG docker \$USER   # then log out and back in"
@@ -608,20 +778,36 @@ else
     esac
   fi
 fi
-if [ "${#MISSING[@]}" -gt 0 ] || [ -n "$DOCKER_PROBLEM" ]; then
+# The update engine (scripts/mc_update.py) runs on python3: needed for an
+# update on the stable channel and for --rollback / --resume — part of the
+# same one report, not a surprise after the checks said "ok".
+NEED_ENGINE=0
+if [ "$ROLLBACK" = 1 ] || [ "$RESUME" = 1 ]; then NEED_ENGINE=1; fi
+if [ "$UPDATE" = 1 ] && [ "${CHANNEL_ARG:-$(mc_env_get MC_CHANNEL)}" != edge ]; then NEED_ENGINE=1; fi
+PY_PROBLEM=""
+if [ "$NEED_ENGINE" = 1 ] && ! mc_python_ok; then
+  if command -v "$MC_PY" >/dev/null 2>&1; then
+    PY_PROBLEM="The update engine needs python 3.9 or newer; $MC_PY is older. Install a newer python3, or point MC_PYTHON at one (e.g. MC_PYTHON=python3.11)."
+  else
+    MISSING+=(python3)
+  fi
+fi
+if [ "${#MISSING[@]}" -gt 0 ] || [ -n "$DOCKER_PROBLEM" ] || [ -n "$PY_PROBLEM" ]; then
   printf '\033[1;31m✗ Missing prerequisites:\033[0m\n' >&2
   for tool in ${MISSING[@]+"${MISSING[@]}"}; do
     case "$tool" in
       compose) echo "   • Docker Compose v2 ('docker compose', not the old 'docker-compose')" >&2 ;;
+      python3) echo "   • python3 ($MC_PY) — the update engine (scripts/mc_update.py) runs on it" >&2 ;;
       *)       echo "   • $tool" >&2 ;;
     esac
     fix_for "$tool" >&2
   done
   [ -n "$DOCKER_PROBLEM" ] && echo "   • $DOCKER_PROBLEM" >&2
+  [ -n "$PY_PROBLEM" ] && echo "   • $PY_PROBLEM" >&2
   echo >&2
   fail "Install the missing pieces above, then re-run the installer."
 fi
-say "✓ prerequisites ok (git, curl, openssl, docker, compose v2)"
+say "✓ prerequisites ok (git, curl, openssl, docker, compose v2$( [ "$NEED_ENGINE" = 1 ] && echo ', python3'))"
 
 if [ "$BRIDGE_ONLY" = 1 ]; then
   [ -f docker-compose.yml ] && [ -f .env ] && [ -x scripts/cli-bridge-service.sh ] \
@@ -711,24 +897,18 @@ with_fleet_carried() {
   if [ -n "$park" ]; then cp "$park" "$FLEET_FILE"; rm -f "$park"; fi
 }
 
-fetch_tag() {
-  local tag="$1" depth=()
-  [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = true ] && depth=(--depth 1)
-  git fetch -q ${depth[@]+"${depth[@]}"} "$REPO_URL" "+refs/tags/$tag:refs/tags/$tag" \
-    || fail "Could not fetch release $tag from $REPO_URL."
-}
-
 resolve_release() { # -> TAG (explicit --version or latest release)
   if [ -n "$VERSION" ]; then TAG="$VERSION"; return; fi
   TAG="$(mc_pick_release)" || fail "Could not determine the latest release (no network to GitHub?). Re-run with --version vX.Y.Z, or --channel edge."
 }
 
-# ── Update mode: refresh an existing install ────────────────────────────────
-# Order: checks (nothing changes) → backup → switch code + pins → setup.sh →
+# ── Update mode on the edge channel ─────────────────────────────────────────
+# Stable updates run in the update engine (scripts/mc_update.py, see the door
+# above). The edge channel — main, built locally — keeps this path:
+# checks (nothing changes) → backup → switch code + pins → setup.sh →
 # boot → wait for /health. Only a healthy backend is reported as success; any
 # exit after the switch prints "Update failed" with the backup and the way
-# back (mc_update_on_exit). Kept small on purpose: the update engine planned
-# for the in-app button (scripts/mc_update.py) takes these steps over.
+# back (mc_update_on_exit).
 UPDATE_PHASE=check        # check → switched → finished
 UPDATE_BACKUP=""          # file written by backup.sh, "" when skipped/unknown
 UPDATE_BACKUP_NOTE=""
@@ -842,73 +1022,70 @@ mc_update_prepare_switch() {
   UPDATE_PHASE=switched
 }
 
-if [ "$UPDATE" = 1 ]; then
-  trap mc_update_on_exit EXIT
-  [ -f docker-compose.yml ] && [ -f .env ] || fail "--update expects to run inside an installed Mission Control directory."
-  CURRENT_TAG="$(mc_current_release_tag || true)"
-  ON_BRANCH="$(git symbolic-ref -q --short HEAD || true)"
-  CHANNEL="${CHANNEL_ARG:-$(mc_env_get MC_CHANNEL)}"
-  if [ -z "$CHANNEL" ]; then
-    # Installed before release pinning: no MC_CHANNEL in .env. A checkout on
-    # a release tag is stable; one on a branch (the old installer cloned
-    # main) is offered the move to the latest release below, guarded by the
-    # database check.
-    CHANNEL=stable
+# ── --rollback / --resume: the engine's way back and its way on ────────────
+if [ "$ROLLBACK" = 1 ] || [ "$RESUME" = 1 ]; then
+  [ -f docker-compose.yml ] && [ -f .env ] \
+    || fail "--rollback / --resume expect to run inside an installed Mission Control directory."
+  MC_UPDATE_ENGINE="$(mc_update_engine)" || fail "Could not find or download the update engine (scripts/mc_update.py) — check the network and re-run."
+  rc=0
+  if [ "$ROLLBACK" = 1 ]; then
+    mc_update_rollback_confirm
+    mc_update_door rollback || rc=$?
+  else
+    mc_update_door resume || rc=$?
   fi
-  mc_update_check_running_tasks
+  exit "$rc"
+fi
+
+if [ "$UPDATE" = 1 ]; then
+  [ -f docker-compose.yml ] && [ -f .env ] || fail "--update expects to run inside an installed Mission Control directory."
+  CHANNEL="${CHANNEL_ARG:-$(mc_env_get MC_CHANNEL)}"
+  # Installed before release pinning: no MC_CHANNEL in .env → stable (the
+  # engine also moves a main-tracking checkout to the latest release, when
+  # the database schema is one that release knows).
+  CHANNEL="${CHANNEL:-stable}"
 
   if [ "$CHANNEL" = stable ]; then
-    resolve_release
-    if [ -n "$CURRENT_TAG" ] && [ -z "$VERSION" ] && mc_version_gt "$CURRENT_TAG" "$TAG"; then
-      # The newest release has no images yet and mc_pick_release fell back
-      # below what is installed — nothing newer to go to, not a downgrade.
-      say "✓ no newer release with published images than $CURRENT_TAG — staying."
-      TAG="$CURRENT_TAG"
-    fi
-    fetch_tag "$TAG"
-    if [ -n "$CURRENT_TAG" ] && [ "$TAG" = "$CURRENT_TAG" ]; then
-      say "✓ already on $TAG — refreshing images and restarting."
-      mc_update_prepare_switch
-    elif [ -n "$CURRENT_TAG" ] && mc_version_gt "$CURRENT_TAG" "$TAG"; then
-      fail "This install runs $CURRENT_TAG, newer than $TAG — refusing to downgrade (migrations are forward-only)."
-    else
-      if [ -z "$CURRENT_TAG" ]; then
-        # Not on a release (old main-tracking install or a dev checkout):
-        # only switch when the database schema is one $TAG knows — otherwise
-        # the release's backend would refuse to start on a newer schema.
-        DB_REV="$(mc_db_value 'select version_num from alembic_version')"
-        if [ -z "$DB_REV" ]; then
-          fail "This checkout is not on a release (${ON_BRANCH:-detached}) and the database is not reachable to check its schema. Start the stack (docker compose up -d db) and re-run, or stay on main: ./install.sh --update --channel edge"
-        fi
-        if ! mc_ref_has_revision "refs/tags/$TAG" "$DB_REV"; then
-          fail "Your database (schema $DB_REV) is newer than release $TAG — switching would move the code below it. Stay on main for now: ./install.sh --update --channel edge  (and switch to stable with the next release)."
-        fi
-        say "→ moving this install from ${ON_BRANCH:-a non-release commit} to release $TAG (schema $DB_REV is part of it) ..."
-      else
-        say "→ updating $CURRENT_TAG → $TAG ..."
-      fi
-      mc_update_prepare_switch
-      with_fleet_carried git -c advice.detachedHead=false checkout -q "refs/tags/$TAG"
-    fi
-    mc_write_pins stable "$TAG"
-  else
-    say "→ edge channel: updating to the latest main (local build — not recommended for production use) ..."
-    mc_update_prepare_switch
-    if [ -n "$ON_BRANCH" ] && [ "$ON_BRANCH" != main ]; then
-      with_fleet_carried git pull -q --ff-only        # developer on a feature branch
-    else
-      git fetch -q "$REPO_URL" "+refs/heads/main:refs/remotes/origin/main"
-      if [ -z "$ON_BRANCH" ]; then                     # coming from a release tag
-        if git show-ref -q --verify refs/heads/main; then
-          with_fleet_carried git checkout -q main
-        else
-          with_fleet_carried git checkout -q -b main origin/main
-        fi
-      fi
-      with_fleet_carried git merge -q --ff-only origin/main
-    fi
-    mc_write_pins edge
+    # The update engine (ADR-094): drain, backup, switch, the four checks,
+    # the way back — the same steps as Settings → System.
+    [ "$NO_BACKUP" = 0 ] || fail "--no-backup: a stable update always backs up first (it is the way back if the new version fails). Skipping it exists only for --channel edge."
+    [ "$IGNORE_RUNNING" = 0 ] || fail "--ignore-running-tasks: a stable update waits until running work is done and hands out no new work meanwhile — it never cuts agents off. Going ahead anyway exists only for --channel edge."
+    MC_UPDATE_ENGINE="$(mc_update_engine)" || fail "Could not find or download the update engine (scripts/mc_update.py) — check the network and re-run."
+    mc_update_guard_open_run "$MC_UPDATE_ENGINE" offer
+    say "→ handing over to the update engine — the same steps as Settings → System:"
+    say "  check, wait for running work, download, back up, switch, start, verify — or go back."
+    rc=0
+    mc_update_door start || rc=$?
+    exit "$rc"
   fi
+
+  # edge: the main branch, built locally. The engine updates releases only;
+  # this path stays here (ADR-094 decision 10) — but never on top of an
+  # unfinished engine run.
+  if mc_python_ok && MC_UPDATE_ENGINE="$(mc_update_engine)"; then
+    mc_update_guard_open_run "$MC_UPDATE_ENGINE"
+  fi
+  trap mc_update_on_exit EXIT
+  CURRENT_TAG="$(mc_current_release_tag || true)"
+  ON_BRANCH="$(git symbolic-ref -q --short HEAD || true)"
+  mc_update_check_running_tasks
+
+  say "→ edge channel: updating to the latest main (local build — not recommended for production use) ..."
+  mc_update_prepare_switch
+  if [ -n "$ON_BRANCH" ] && [ "$ON_BRANCH" != main ]; then
+    with_fleet_carried git pull -q --ff-only        # developer on a feature branch
+  else
+    git fetch -q "$REPO_URL" "+refs/heads/main:refs/remotes/origin/main"
+    if [ -z "$ON_BRANCH" ]; then                     # coming from a release tag
+      if git show-ref -q --verify refs/heads/main; then
+        with_fleet_carried git checkout -q main
+      else
+        with_fleet_carried git checkout -q -b main origin/main
+      fi
+    fi
+    with_fleet_carried git merge -q --ff-only origin/main
+  fi
+  mc_write_pins edge
   # The new version may need .env keys the old one did not know (e.g.
   # INTERNAL_BOOTSTRAP_SECRET): setup.sh never regenerates an existing .env,
   # it only backfills missing keys — appending, so the inode stays.
@@ -918,7 +1095,7 @@ if [ "$UPDATE" = 1 ]; then
   mc_wait_healthy || fail "The backend did not become healthy within ${MC_HEALTH_TIMEOUT}s."
   mc_warn_if_degraded
   UPDATE_PHASE=finished
-  say "✅ Update complete — $( [ "$CHANNEL" = stable ] && echo "release $TAG" || echo "main @ $(git rev-parse --short HEAD)" ) is running and healthy."
+  say "✅ Update complete — main @ $(git rev-parse --short HEAD) is running and healthy."
   [ -n "$UPDATE_BACKUP" ] && echo "  Backup from before the update: $UPDATE_BACKUP"
   # --update never sets up a new bridge unasked (MC_BRIDGE=yes does); it
   # asks at a terminal before moving an installed one.
@@ -938,6 +1115,11 @@ else
   if [ -d "$TARGET_DIR" ]; then
     [ -f "$TARGET_DIR/docker-compose.yml" ] || fail "Directory '$TARGET_DIR' exists and is not a Mission Control checkout — choose another."
     cd "$TARGET_DIR"
+    # This boots the whole stack again — never on top of an update run that
+    # did not finish (old containers on new code, or the other way round).
+    if mc_python_ok && MC_UPDATE_ENGINE="$(mc_update_engine)"; then
+      mc_update_guard_open_run "$MC_UPDATE_ENGINE"
+    fi
     # Re-run on an existing checkout: keep its version, never move it here
     # (that is what --update is for, with its downgrade guards).
     if TAG="$(mc_current_release_tag)"; then CHANNEL=stable; else TAG=""; CHANNEL=edge; fi

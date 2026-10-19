@@ -1192,3 +1192,24 @@ def test_status_json_is_filtered(world: World):
 def test_contract_names_the_journal_schema():
     out = subprocess.run([sys.executable, str(ENGINE), "--contract"], capture_output=True, text=True)
     assert json.loads(out.stdout)["journal_schema"] == 1
+
+
+def test_the_real_migration_chain_is_read_by_the_engine(tmp_path: Path):
+    """verify_release refuses a target whose migration chain it cannot read
+    (one head, the database's schema in it). If the spelling of the real
+    chain ever drifts away from what the engine parses, every update would
+    abort — so the engine reads this repository's own chain here."""
+    import re
+    mod = _load_engine_module()
+    eng = mod.Engine(ROOT, tmp_path / "state")
+    revs, downs = eng.alembic_chain("HEAD")
+    on_disk = set()
+    for f in (ROOT / "backend" / "alembic" / "versions").glob("*.py"):
+        m = re.search(r"""^revision(?::\s*str)?\s*=\s*['"]([^'"]+)['"]""", f.read_text(), re.M)
+        if m:
+            on_disk.add(m.group(1))
+    assert len(on_disk) > 100          # the chain is really there
+    assert revs == on_disk
+    head = eng.alembic_head("HEAD")
+    assert head in on_disk and head not in downs
+
