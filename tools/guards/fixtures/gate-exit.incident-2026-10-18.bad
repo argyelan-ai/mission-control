@@ -1,0 +1,3 @@
+# The real command from 2026-10-18 (path shortened to $WT): '| tail -1' turns the
+# scan's exit code into the one of tail, so '&&' lets the push run on a red scan.
+cd $WT && python3 scripts/privacy-scan.py 2>&1 | tail -1 && git -C $WT status --short

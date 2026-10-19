@@ -1,0 +1,4 @@
+# The real command from 2026-09-04 (shortened): the preflight printed FAILED
+# because an agent was working, '| tail -1' and ';' dropped its exit code,
+# and the rebuild ran anyway.
+bash ~/.claude/skills/mc-deploy/preflight.sh | tail -1; docker compose -p mission-control up --build -d backend

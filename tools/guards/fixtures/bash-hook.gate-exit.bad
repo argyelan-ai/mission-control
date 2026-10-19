@@ -1,0 +1,9 @@
+{
+ "session_id": "fixture",
+ "cwd": ".",
+ "tool_name": "Bash",
+ "tool_input": {
+  "command": "bash ~/.claude/skills/mc-deploy/preflight.sh | tail -1; docker compose -p mission-control up --build -d backend",
+  "run_in_background": false
+ }
+}
