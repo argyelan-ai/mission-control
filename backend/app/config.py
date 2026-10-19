@@ -383,9 +383,13 @@ class Settings(BaseSettings):
     # card comment + task.proof_gate event, transition allowed; enforce = 422.
     proof_gate_mode: str = "warn"
     # ISO date (e.g. 2026-10-27). While proof_gate_mode=warn, the gate switches
-    # to enforce on this date by itself — "7 days warn, then enforce" without a
-    # second deploy. Empty = stay in warn until the mode is changed.
+    # to enforce from this date on by itself, without a second deploy.
+    # Empty = stay in warn until the mode is changed.
     proof_gate_enforce_after: str = ""
+    # ...but only once the gate has checked at least this many transitions
+    # (task.proof_gate events). A date alone is no sample at 1-2 finishes a
+    # week. 0 = flip on the date alone.
+    proof_gate_enforce_min_checks: int = 15
 
     # Pre-Dispatch Gating (Phase 1 Systemic Orchestration)
     # False = legacy: dispatch_phase ignored, tasks dispatch immediately

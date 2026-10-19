@@ -146,30 +146,46 @@ text and unknown action types default to `L3` (approval required).
 ### Proof gate (Beweis-Tor) on review/done
 
 When an agent moves a card that carries a PR (`pr_url`, or `pr_number` with a
-repo) to `review` or `done`, the server checks the claim against GitHub and
-the MC database before the status changes:
+repo) to `review` or `done`, the server checks the claim before the status
+changes. It fetches the evidence itself — what the agent sends along is only a
+claim to compare:
 
 | Check | Finding | Blocks in `enforce` |
 |---|---|---|
-| The PR exists | `pr_not_found`, `pr_url_invalid` | yes |
-| The SHA the agent reported is the PR head on GitHub | `sha_mismatch` | yes |
+| The PR exists (a repo the token cannot see is only a notice) | `pr_not_found`, `pr_url_invalid` · `repo_not_visible` (notice) | yes · no |
+| The PR is this card's: OPEN (for `done` OPEN or MERGED), on the card's `branch_name`, not held by an unrelated card | `pr_not_open`, `pr_branch_mismatch`, `pr_on_other_card` | yes |
+| On the developer's move to `review`: a SHA he reports (≥ 7 chars) is the PR head | `sha_mismatch` | yes |
 | The **required** CI checks are green (all checks if the repo has none) | `ci_red`; `ci_pending` on `done` | yes |
-| A commit landed after the last change request (MC `changes_requested` or a GitHub *Request changes*) | `no_commit_after_change` | yes |
-| A reviewer the agent names (`--reviewer`), or the reviewer closing review→done, commented himself — MC card first, then the PR | `reviewer_silent` | yes |
+| After the last change request (MC `changes_requested` or GitHub *Request changes*) the PR really changed: the head moved away from the one the server recorded at the last review entry, and the diff is not empty | `no_commit_after_change` | yes |
+| review → done is closed by someone other than the developer, with his own verdict on the card (a reflection does not count) | `self_review`, `reviewer_silent` | yes |
+| A reviewer the agent names (`--reviewer`) is not the developer and commented himself — MC card, or GitHub without the PR author's login | `reviewer_is_developer`, `reviewer_silent` | yes |
+| A PR URL the agent quotes in his own comments exists — also on cards without `pr_url` | `claimed_pr_not_found` | yes |
+| `done` without any review, or the PR moved after review | `no_independent_review`, `head_moved_since_review` | no (notice) |
 
-`PROOF_GATE_MODE` = `off` · `warn` (default: comment on the card, a
-`task.proof_gate` activity event, the transition still happens) · `enforce`
-(HTTP 422, the card keeps its status). `PROOF_GATE_ENFORCE_AFTER=<ISO date>`
-turns `warn` into `enforce` on that day by itself — roll out with seven days
-of `warn`, then enforce.
+Every checked move writes one `task.proof_gate` event: `info` when clean,
+`warning` with findings. Its detail holds the PR head the server saw
+(`head_sha`) — that record, not the agent's word, is what the change-request
+check compares against later.
 
-The mc CLI sends the evidence itself: `mc review`, `mc done` and `mc finish`
-report the local `HEAD` and branch (only from a named branch — the comparison
-is skipped when that branch is not the PR's). `mc finish --force` / `mc done
+`PROOF_GATE_MODE` = `off` · `warn` (default: comment on the card + a
+`warning` event, the transition still happens) · `enforce` (HTTP 422, the
+card keeps its status). `PROOF_GATE_ENFORCE_AFTER=<ISO date>` turns `warn`
+into `enforce` from that day on — but only once the gate has checked at least
+`PROOF_GATE_ENFORCE_MIN_CHECKS` (default 15) moves; at 1–2 finishes a week a
+date alone is no sample. Read the `warning` events before that point: every
+hard finding there is either a real catch or a false alarm to fix first.
+
+A refused `approve` (e.g. CI still running) keeps the reviewer's verdict as
+his own comment on the card; approve again once CI is green. The same refusal
+is written to the card once per 30 minutes, not once per attempt.
+
+The mc CLI sends the local `HEAD` and branch on `mc review` / `mc done` /
+`mc finish` (only from a named branch). `mc finish --force` / `mc done
 --force` only close open checklist items on your side; there is no request
 field that skips the gate, unknown fields are refused.
 
-Fail-open, but loud: without a GitHub token, or when GitHub cannot be reached,
+Fail-open, but loud: without a GitHub token, when GitHub cannot be reached
+(each `gh` call is cut off after 10 s) or when the token cannot see the repo,
 nothing is blocked and the card gets a visible warning instead.
 
 Counting: every gate finding carries `gefangen_von: "tor"` in the event
@@ -180,7 +196,8 @@ detail; `task.review_rejected` events carry `rolle`, `boss` or `mark`
 select date_trunc('week', created_at)::date as week, event_type,
        detail->>'gefangen_von' as caught_by, count(*)
 from activity_events
-where event_type in ('task.proof_gate', 'task.review_rejected')
+where event_type = 'task.review_rejected'
+   or (event_type = 'task.proof_gate' and severity = 'warning')
 group by 1, 2, 3 order by 1, 2;
 ```
 

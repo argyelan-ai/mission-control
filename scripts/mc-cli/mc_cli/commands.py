@@ -419,7 +419,9 @@ _FORCE_PROOF_GATE_NOTE = (
 
 _REVIEWER_HELP = (
     "Reviewer, auf dessen Urteil du dich stuetzt (MC-Agent-Name oder "
-    "GitHub-Login). Das Beweis-Tor prueft, dass er selbst kommentiert hat."
+    "GitHub-Login). Das Beweis-Tor prueft, dass er nicht du selbst ist und "
+    "selbst kommentiert hat (der PR-Autor auf GitHub zaehlt nicht). Optional: "
+    "den Review-Nachweis ermittelt der Server auch ohne diese Angabe."
 )
 
 

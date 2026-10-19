@@ -2747,7 +2747,7 @@ async def agent_update_task(
     await session.commit()
     await session.refresh(task)
 
-    if _proof_result is not None and _proof_result.visible:
+    if _proof_result is not None and (_proof_result.checked or _proof_result.visible):
         from app.services.proof_gate import publish as _publish_proof_gate
         await _publish_proof_gate(
             session, task_id=task.id, board_id=board_id, title=task.title,
@@ -3466,8 +3466,11 @@ async def agent_review_decision(
         raise HTTPException(status_code=404, detail="Task not found")
 
     # Beweis-Tor: approve is the second road to done. The reviewer's own
-    # comment is written atomically by execute_review_decision, so check (e)
-    # is satisfied by construction; PR, SHA, CI and change-request checks run.
+    # comment is written atomically by execute_review_decision, so the
+    # "verdict on the card" part of (e) holds by construction; PR, CI,
+    # change-request and self-review checks run. A refused approve keeps the
+    # reviewer's words as his comment (verdict_text) — the rollback must not
+    # swallow them.
     _proof_result = None
     if body.decision == "approve" and task.status == "review":
         from app.services.proof_gate import run_proof_gate
@@ -3475,6 +3478,7 @@ async def agent_review_decision(
             session, task,
             target_status="done", old_status=task.status,
             actor_agent=agent, updates={}, reviewer_comment_in_flight=True,
+            verdict_text=body.comment,
         )
 
     from app.services.task_lifecycle import execute_review_decision
@@ -3482,7 +3486,7 @@ async def agent_review_decision(
         session, task, board_id, body.decision, body.comment,
         actor_agent=agent,
     )
-    if _proof_result is not None and _proof_result.visible:
+    if _proof_result is not None and (_proof_result.checked or _proof_result.visible):
         from app.services.proof_gate import publish as _publish_proof_gate
         await _publish_proof_gate(
             session, task_id=task.id, board_id=board_id, title=task.title,

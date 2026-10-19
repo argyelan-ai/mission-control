@@ -61,14 +61,16 @@ def gate_mode():
     app.config.settings.proof_gate_mode, app.config.settings.proof_gate_enforce_after = original
 
 
-def _pr(*, sha=SHA, ci="SUCCESS", commit_at=None, reviews=None, comments=None, branch="feat/x"):
+def _pr(*, sha=SHA, ci="SUCCESS", commit_at=None, reviews=None, comments=None, branch="feat/x",
+        state="OPEN", author="fleet-bot"):
     commit_at = commit_at or (utcnow() - timedelta(minutes=5))
     rollup = [] if ci is None else [
         {"__typename": "CheckRun", "name": "backend", "status": "COMPLETED", "conclusion": ci},
     ]
     return {
         "number": 42,
-        "state": "OPEN",
+        "state": state,
+        "author": {"login": author},
         "url": PR_URL,
         "headRefName": branch,
         "headRefOid": sha,
@@ -83,13 +85,24 @@ _BUCKET = {"SUCCESS": "pass", "NEUTRAL": "pass", "SKIPPED": "skipping",
            "FAILURE": "fail", "CANCELLED": "cancel", "TIMED_OUT": "fail"}
 
 
-def _gh(pr: dict | None = None, *, rc: int = 0, err: str = "", required=None):
-    """Fake `gh`: answers `pr view` with `pr` and `pr checks --required` with
-    `required` — by default every rollup check counts as required."""
+def _gh(pr: dict | None = None, *, rc: int = 0, err: str = "", required=None,
+        repo_visible: bool = True, compare_files: int | None = 3, hang: bool = False):
+    """Fake `gh`: answers `pr view` with `pr`, `pr checks --required` with
+    `required` (default: every rollup check counts as required), `api
+    repos/<o>/<r>` with the repo visibility and `api .../compare/...` with
+    `compare_files` changed files."""
+    import asyncio as _asyncio
+
     calls = []
 
-    async def fake(*args, env=None):
+    async def fake(*args, env=None, timeout=None):
         calls.append((args, env))
+        if hang:
+            raise _asyncio.TimeoutError()
+        if args[1] == "api":
+            if "/compare/" in args[2]:
+                return (0, str(compare_files), "") if compare_files is not None else (1, "", "boom")
+            return (0, "example-org/example-repo", "") if repo_visible else (1, "", "HTTP 404: Not Found")
         if rc:
             return rc, "", err
         if args[2] == "checks":
@@ -107,7 +120,7 @@ def _gh(pr: dict | None = None, *, rc: int = 0, err: str = "", required=None):
 
 
 async def _seed(*, status="in_progress", pr_url=PR_URL, review_decision=None,
-                decided_at=None, assignee="dev"):
+                decided_at=None, assignee="dev", branch_name=None):
     from app.auth import generate_agent_token
     from app.models.agent import Agent
     from app.models.board import Board
@@ -126,6 +139,7 @@ async def _seed(*, status="in_progress", pr_url=PR_URL, review_decision=None,
         id=uuid.uuid4(), board_id=board.id, title="Feature mit PR", status=status,
         assigned_agent_id=dev.id if assignee == "dev" else rev.id,
         pr_url=pr_url, review_decision=review_decision, review_decided_at=decided_at,
+        branch_name=branch_name,
     )
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         s.add_all([board, dev, rev, task])
@@ -148,7 +162,8 @@ def _silence():
     )
 
 
-async def _patch(client, data, body, *, token="dev_tok", gh=None, token_value="tok"):
+async def _patch(client, data, body, *, token="dev_tok", gh=None, token_value="tok",
+                 loud_only=True):
     events = AsyncMock()
     ctx = _silence()
     with ctx[0], ctx[1], ctx[2], ctx[3], \
@@ -161,7 +176,11 @@ async def _patch(client, data, body, *, token="dev_tok", gh=None, token_value="t
             headers={"Authorization": f"Bearer {data[token]}"},
         )
     gate_events = [c for c in events.await_args_list if c.args[1] == proof_gate.PROOF_GATE_EVENT]
-    return resp, gate_events
+    # a clean checked move records an `info` event (the server's own note of
+    # the PR head); only `warning` events are findings
+    if not loud_only:
+        return resp, gate_events
+    return resp, [c for c in gate_events if c.kwargs.get("severity") == "warning"]
 
 
 async def _state(task_id):
@@ -445,8 +464,12 @@ async def test_review_approve_endpoint_is_gated_too(client, fake_redis, gate_mod
 
 def test_warn_flips_to_enforce_on_the_configured_date(gate_mode):
     gate_mode("warn", "2026-10-26")
-    assert proof_gate.effective_mode(date(2026, 10, 25)) == "warn"
-    assert proof_gate.effective_mode(date(2026, 10, 26)) == "enforce"
+    app.config.settings.proof_gate_enforce_min_checks = 0
+    try:
+        assert proof_gate.effective_mode(date(2026, 10, 25)) == "warn"
+        assert proof_gate.effective_mode(date(2026, 10, 26)) == "enforce"
+    finally:
+        app.config.settings.proof_gate_enforce_min_checks = 15
     gate_mode("warn", "kein-datum")
     assert proof_gate.effective_mode(date(2030, 1, 1)) == "warn"
     gate_mode("bogus")
@@ -526,3 +549,292 @@ def test_required_classification():
     assert proof_gate.classify_required([{"bucket": "pass"}, {"bucket": "skipping"}]) == "green"
     assert proof_gate.classify_required([{"bucket": "pass"}, {"bucket": "pending"}]) == "pending"
     assert proof_gate.classify_required([{"bucket": "pending"}, {"bucket": "fail"}]) == "red"
+
+
+# ── Critic round 1 (2026-10-19): the gate fetches its own evidence ──────
+
+
+async def _add_snapshot(task_id, board_id, *, head_sha, at, target="review", blocked=False):
+    """A recorded checked move, as `publish` writes it."""
+    from app.models.activity import ActivityEvent
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(ActivityEvent(
+            event_type=proof_gate.PROOF_GATE_EVENT, title="snap", severity="info",
+            board_id=board_id, task_id=task_id, created_at=at,
+            detail={"gefangen_von": "tor", "target_status": target, "blocked": blocked,
+                    "head_sha": head_sha, "findings": []},
+        ))
+        await s.commit()
+
+
+async def _add_comment(task_id, agent_id, content, ctype="message"):
+    from app.models.task import TaskComment
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(TaskComment(task_id=task_id, author_type="agent", author_agent_id=agent_id,
+                          comment_type=ctype, content=content))
+        await s.commit()
+
+
+@pytest.mark.asyncio
+async def test_merged_foreign_pr_does_not_prove_a_review(client, fake_redis, gate_mode):
+    """Befund 1: a merged, green PR (e.g. #864) used to pass (a) and (c)."""
+    gate_mode("enforce")
+    data = await _seed()
+    resp, _ = await _patch(client, data, {"status": "review"}, gh=_gh(_pr(state="MERGED")))
+    assert resp.status_code == 422 and "pr_not_open" in _codes(resp)
+
+
+@pytest.mark.asyncio
+async def test_closed_pr_does_not_prove_done(client, fake_redis, gate_mode):
+    gate_mode("enforce")
+    data = await _seed()
+    resp, _ = await _patch(client, data, {"status": "done"}, gh=_gh(_pr(state="CLOSED")))
+    assert resp.status_code == 422 and "pr_not_open" in _codes(resp)
+
+
+@pytest.mark.asyncio
+async def test_pr_must_run_on_the_cards_branch(client, fake_redis, gate_mode):
+    gate_mode("enforce")
+    data = await _seed(branch_name="feat/my-card")
+    resp, _ = await _patch(client, data, {"status": "review"}, gh=_gh(_pr(branch="feat/other")))
+    assert resp.status_code == 422 and "pr_branch_mismatch" in _codes(resp)
+
+
+@pytest.mark.asyncio
+async def test_pr_already_held_by_unrelated_card(client, fake_redis, gate_mode):
+    from app.models.task import Task
+
+    gate_mode("enforce")
+    data = await _seed()
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(Task(id=uuid.uuid4(), board_id=data["board"].id, title="Fremde Karte",
+                   status="done", pr_url=PR_URL))
+        await s.commit()
+    resp, _ = await _patch(client, data, {"status": "review"})
+    assert resp.status_code == 422 and "pr_on_other_card" in _codes(resp)
+
+
+@pytest.mark.asyncio
+async def test_review_card_shares_the_pr_of_its_source(client, fake_redis, gate_mode):
+    """Counter-probe: the review card of THIS card carries the same PR by design."""
+    from app.models.task import Task
+
+    gate_mode("enforce")
+    data = await _seed()
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(Task(id=uuid.uuid4(), board_id=data["board"].id, title="Review: Feature",
+                   status="inbox", pr_url=PR_URL, source_task_id=data["task"].id))
+        await s.commit()
+    resp, events = await _patch(client, data, {"status": "review", "head_sha": SHA})
+    assert resp.status_code == 200, resp.text
+    assert events == []
+
+
+@pytest.mark.asyncio
+async def test_clean_move_records_the_pr_head_itself(client, fake_redis, gate_mode):
+    """Befund 2: the server notes the head it saw — no agent report needed."""
+    gate_mode("warn")
+    data = await _seed()
+    resp, events = await _patch(client, data, {"status": "review"}, loud_only=False)
+    assert resp.status_code == 200, resp.text
+    assert len(events) == 1 and events[0].kwargs["severity"] == "info"
+    detail = events[0].kwargs["detail"]
+    assert detail["head_sha"] == SHA and detail["pr_state"] == "OPEN"
+    assert detail["target_status"] == "review" and detail["findings"] == [] or all(
+        f["level"] == "info" for f in detail["findings"])
+
+
+@pytest.mark.asyncio
+async def test_unchanged_head_after_change_request_despite_fake_commit_date(
+        client, fake_redis, gate_mode):
+    """Befund 2+12: no head_sha reported, commit date faked into the future —
+    the server's own record of the head shows nothing changed."""
+    gate_mode("enforce")
+    decided = utcnow() - timedelta(hours=1)
+    data = await _seed(review_decision="changes_requested", decided_at=decided)
+    await _add_snapshot(data["task"].id, data["board"].id, head_sha=SHA,
+                        at=decided - timedelta(hours=2))
+    resp, _ = await _patch(client, data, {"status": "review"},
+                           gh=_gh(_pr(commit_at=utcnow() + timedelta(days=1))))
+    assert resp.status_code == 422 and "no_commit_after_change" in _codes(resp)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("files,expected", [(0, 422), (3, 200)])
+async def test_empty_commit_after_change_request(client, fake_redis, gate_mode, files, expected):
+    """Befund 12: `git commit --allow-empty` moves the SHA but changes nothing."""
+    gate_mode("enforce")
+    decided = utcnow() - timedelta(hours=1)
+    data = await _seed(review_decision="changes_requested", decided_at=decided)
+    await _add_snapshot(data["task"].id, data["board"].id, head_sha=OTHER_SHA,
+                        at=decided - timedelta(hours=2))
+    gh = _gh(_pr(), compare_files=files)
+    resp, _ = await _patch(client, data, {"status": "review"}, gh=gh)
+    assert resp.status_code == expected, resp.text
+    if expected == 422:
+        assert "no_commit_after_change" in _codes(resp)
+    compare = [c for c in gh.calls if c[0][1] == "api" and "/compare/" in c[0][2]]
+    assert compare and compare[0][0][2].endswith(f"{OTHER_SHA}...{SHA}")
+
+
+@pytest.mark.asyncio
+async def test_stale_reviewer_checkout_is_no_sha_mismatch(client, fake_redis, gate_mode):
+    """Befund 9: at review→done the reviewer's local HEAD is not compared."""
+    gate_mode("enforce")
+    data = await _seed(status="review", assignee="rev")
+    await _add_comment(data["task"].id, data["rev"].id, "Geprueft: passt.", "review")
+    resp, _ = await _patch(client, data, {"status": "done", "head_sha": OTHER_SHA,
+                                          "head_branch": "feat/x"}, token="rev_tok")
+    assert resp.status_code == 200, resp.text
+
+
+@pytest.mark.asyncio
+async def test_reflection_is_not_a_reviewers_verdict(client, fake_redis, gate_mode):
+    """Befund 3: `mc finish` writes a reflection right before its PATCH."""
+    gate_mode("enforce")
+    data = await _seed(status="review", assignee="rev")
+    await _add_comment(data["task"].id, data["rev"].id, _REFLECTION, "reflection")
+    resp, _ = await _patch(client, data, {"status": "done"}, token="rev_tok")
+    assert resp.status_code == 422 and "reviewer_silent" in _codes(resp)
+
+
+@pytest.mark.asyncio
+async def test_developer_cannot_close_his_own_review(client, fake_redis, gate_mode):
+    gate_mode("enforce")
+    data = await _seed(status="review")
+    await _add_comment(data["task"].id, data["dev"].id, "Sieht gut aus.", "review")
+    resp, _ = await _patch(client, data, {"status": "done"})
+    assert resp.status_code == 422 and "self_review" in _codes(resp)
+
+
+@pytest.mark.asyncio
+async def test_developer_cannot_name_himself_as_reviewer(client, fake_redis, gate_mode):
+    gate_mode("enforce")
+    data = await _seed()
+    resp, _ = await _patch(client, data, {"status": "review", "reviewer": data["dev"].name})
+    assert resp.status_code == 422 and "reviewer_is_developer" in _codes(resp)
+
+
+@pytest.mark.asyncio
+async def test_pr_author_login_is_no_reviewer(client, fake_redis, gate_mode):
+    """Befund 4 (verified live: every fleet PR is authored by one shared
+    account) — the author's own comment on GitHub proves no review."""
+    gate_mode("enforce")
+    data = await _seed()
+    pr = _pr(author="fleet-bot", comments=[{"author": {"login": "fleet-bot"}, "body": "LGTM"}])
+    resp, _ = await _patch(client, data, {"status": "review", "reviewer": "fleet-bot"}, gh=_gh(pr))
+    assert resp.status_code == 422 and "reviewer_silent" in _codes(resp)
+
+
+@pytest.mark.asyncio
+async def test_hung_gh_fails_open_instead_of_hanging(client, fake_redis, gate_mode):
+    """Befund 6: a gh timeout is an outage → allowed, loud."""
+    gate_mode("enforce")
+    data = await _seed()
+    resp, events = await _patch(client, data, {"status": "review"}, gh=_gh(_pr(), hang=True))
+    assert resp.status_code == 200, resp.text
+    assert "github_unavailable" in {f["code"] for f in events[0].kwargs["detail"]["findings"]}
+
+
+@pytest.mark.asyncio
+async def test_run_gh_kills_a_hung_process():
+    """Befund 6, the real subprocess: `_run_gh` gives up after `timeout`."""
+    import asyncio
+    import time
+
+    from app.services import pr_merge_monitor
+
+    start = time.monotonic()
+    with pytest.raises(asyncio.TimeoutError):
+        await pr_merge_monitor._run_gh("sleep", "5", timeout=0.3)
+    assert time.monotonic() - start < 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("err", ["HTTP 404: Not Found (https://api.github.com/graphql)",
+                                 "GraphQL: Could not resolve to a Repository with the name 'x/y'."])
+async def test_repo_the_token_cannot_see_is_no_false_claim(client, fake_redis, gate_mode, err):
+    """Befund 7: GitHub answers 404 for a private repo without access."""
+    gate_mode("enforce")
+    data = await _seed()
+    resp, events = await _patch(client, data, {"status": "review"},
+                                gh=_gh(rc=1, err=err, repo_visible=False))
+    assert resp.status_code == 200, resp.text
+    assert "repo_not_visible" in {f["code"] for f in events[0].kwargs["detail"]["findings"]}
+
+
+@pytest.mark.asyncio
+async def test_refused_approve_keeps_the_reviewers_verdict(client, fake_redis, gate_mode):
+    """Befund 8: CI still running → 422, but the verdict text survives."""
+    from app.models.task import TaskComment
+
+    gate_mode("enforce")
+    data = await _seed(status="review", assignee="rev")
+    pr = _pr()
+    pr["statusCheckRollup"][0].update(status="IN_PROGRESS", conclusion="")
+    ctx = _silence()
+    with ctx[0], ctx[1], ctx[2], ctx[3], \
+            patch.object(proof_gate, "_github_token", new=AsyncMock(return_value="tok")), \
+            patch("app.services.pr_merge_monitor._run_gh", new=_gh(pr, required=[{"name": "b", "bucket": "pending"}])), \
+            patch("app.services.activity.emit_event", new=AsyncMock()):
+        resp = await client.post(
+            f"/api/v1/agent/boards/{data['board'].id}/tasks/{data['task'].id}/review",
+            json={"decision": "approve", "comment": "Diff gelesen, Tests decken alles ab."},
+            headers={"Authorization": f"Bearer {data['rev_tok']}"},
+        )
+    assert resp.status_code == 422 and "ci_pending" in _codes(resp)
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        kept = (await s.exec(select(TaskComment).where(
+            TaskComment.task_id == data["task"].id,
+            TaskComment.author_agent_id == data["rev"].id))).all()
+    assert any("Tests decken alles ab" in c.content and c.comment_type == "review" for c in kept)
+    task, _ = await _state(data["task"].id)
+    assert task.status == "review"
+
+
+def test_auto_flip_waits_for_enough_checks(gate_mode):
+    """Befund 10: a date alone is no sample."""
+    gate_mode("warn", "2026-10-26")
+    day = date(2026, 11, 2)
+    assert proof_gate.effective_mode(day, checks_so_far=None) == "warn"
+    assert proof_gate.effective_mode(day, checks_so_far=14) == "warn"
+    assert proof_gate.effective_mode(day, checks_so_far=15) == "enforce"
+    assert proof_gate.effective_mode(date(2026, 10, 1), checks_so_far=99) == "warn"
+
+
+@pytest.mark.asyncio
+async def test_repeated_refusals_do_not_flood_the_card(client, fake_redis, gate_mode):
+    """Befund 11: a looping agent gets one comment, not one per attempt."""
+    gate_mode("enforce")
+    data = await _seed()
+    for _ in range(3):
+        resp, _ = await _patch(client, data, {"status": "review"}, gh=_gh(_pr(ci="FAILURE")))
+        assert resp.status_code == 422
+    _, comments = await _state(data["task"].id)
+    assert len(comments) == 1
+
+
+@pytest.mark.asyncio
+async def test_pr_claimed_in_comment_must_exist(client, fake_redis, gate_mode):
+    """Befund 5: the costly pattern is the TEXT "PR open, CI green" — also on
+    a card that carries no pr_url."""
+    gate_mode("enforce")
+    data = await _seed(pr_url=None)
+    await _add_comment(data["task"].id, data["dev"].id,
+                       "Fertig. PR offen: https://github.com/example-org/example-repo/pull/77 — CI gruen.")
+    resp, _ = await _patch(client, data, {"status": "review"},
+                           gh=_gh(rc=1, err="GraphQL: Could not resolve to a PullRequest with the number of 77."))
+    assert resp.status_code == 422 and "claimed_pr_not_found" in _codes(resp)
+
+
+@pytest.mark.asyncio
+async def test_pr_claimed_in_comment_that_exists_passes(client, fake_redis, gate_mode):
+    gate_mode("enforce")
+    data = await _seed(pr_url=None)
+    await _add_comment(data["task"].id, data["dev"].id,
+                       "PR: https://github.com/example-org/example-repo/pull/42")
+    resp, events = await _patch(client, data, {"status": "review"})
+    assert resp.status_code == 200, resp.text
+    assert events == []
