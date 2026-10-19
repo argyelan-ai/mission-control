@@ -23,11 +23,12 @@ What the gateway does:
   read-only calls stay free: they start no work and do not touch what the
   update replaces.
 
-Where the drain comes from: a :class:`DrainSource`. Today that is the
+Where the drain comes from: a :class:`DrainSource`. The
 ``MC_UPDATE_DRAIN`` setting (:class:`SettingsDrainSource`, a manual switch,
-off by default). The self-update API (PR 4c) adds the Postgres drain
-(``system_state``) next to it, e.g.
-``set_drain_source(AnyDrainSource(SettingsDrainSource(), <postgres source>))``. Reads are
+off by default) and the Postgres drain the update engine sets
+(``system_state``, ``services/update_drain.py``); the boot path
+(``background.prepare_process``) wires both with
+``update_drain.install_gateway_source()``. Reads are
 cached for :data:`DRAIN_CACHE_SECONDS` so a busy loop does not query the
 database per container call, and a source that fails keeps the last known
 state — a drain must not lift because one read hiccupped.
@@ -210,7 +211,7 @@ _guard = DrainGuard(SettingsDrainSource())
 
 
 def set_drain_source(source: DrainSource) -> DrainSource:
-    """Swap the drain source (PR 4c: Postgres) and return the previous one."""
+    """Swap the drain source and return the previous one."""
     global _guard
     previous = _guard.source
     _guard = DrainGuard(source)

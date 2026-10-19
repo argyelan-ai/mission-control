@@ -3447,6 +3447,18 @@ async def agent_poll(
                         "detail": _rt_reason,
                         **_poll_extra,
                     }
+                # MC update drain (ADR-094 decision 7): this claim bypasses
+                # check_dispatch_allowed, so it asks the drain itself. The
+                # card stays inbox and is claimed by the first poll after the
+                # update — nothing to catch up.
+                from app.services import update_drain
+                if (await update_drain.current(session)).active:
+                    return {
+                        "state": "idle",
+                        "update_drain": True,
+                        "detail": update_drain.REASON,
+                        **_poll_extra,
+                    }
 
     if task is None:
         return {"state": "idle", **_poll_extra}

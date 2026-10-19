@@ -145,9 +145,14 @@ DB_NAME = "mission_control"
 RELEASE_TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 RUN_ID_RE = re.compile(r"^\d{8}T\d{6}Z-[0-9a-f]{6}$")
 
-# Running work, counted before the switch (ADR-094 decision 7). PR 4c adds
-# group-chat rounds, loops and due schedules next to the tasks.
+# Running work, counted before the switch (ADR-094 decision 7). From schema
+# 0219 on the backend defines it in one place, the SQL function
+# update_running_work() (tasks in progress + open group-chat rounds; a loop's
+# round is a task, due schedules are a preflight check the drain defers) —
+# the UI shows the same numbers the engine waits for. Older schemas: tasks only.
 RUNNING_WORK_SQL = "select count(*) from tasks where status = 'in_progress'"
+RUNNING_WORK_FN = "update_running_work"
+RUNNING_WORK_FN_SQL = f"select coalesce(sum(n), 0) from {RUNNING_WORK_FN}()"
 
 EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_ABORTED, EXIT_ROLLBACK_FAILED = 0, 1, 2, 3, 4
 EXIT_ROLLED_BACK = 5
@@ -937,7 +942,10 @@ class Engine:
         self.journal.data["drain"] = d
 
     def running_work(self) -> Optional[int]:
-        v = self.db_value(RUNNING_WORK_SQL)
+        has_fn = self.db_value(f"select to_regprocedure('public.{RUNNING_WORK_FN}()') is not null")
+        if has_fn is None:
+            return None
+        v = self.db_value(RUNNING_WORK_FN_SQL if has_fn == "t" else RUNNING_WORK_SQL)
         return int(v) if v and v.isdigit() else None
 
     # ── container inspection ───────────────────────────────────────────────
@@ -1113,7 +1121,7 @@ class Engine:
             if work is None:
                 add("work", "fail", "running work could not be counted")
             elif work:
-                add("work", "warn", f"{work} task(s) in progress — the update waits until they are done")
+                add("work", "warn", f"{work} task(s) or group-chat round(s) in progress — the update waits until they are done")
             else:
                 add("work", "ok", "no running work")
 
@@ -1287,8 +1295,8 @@ class Engine:
             if n is None:
                 raise UpdateError("running work could not be counted (database not reachable)")
             if time.monotonic() >= deadline:
-                raise UpdateError(f"{n} task(s) still running after {self.drain_timeout:.0f}s")
-            self.say(f"… waiting for {n} running task(s) to finish")
+                raise UpdateError(f"{n} task(s) or group-chat round(s) still running after {self.drain_timeout:.0f}s")
+            self.say(f"… waiting for {n} running task(s) or group-chat round(s) to finish")
             time.sleep(self.poll)
 
     def phase_drain(self) -> None:

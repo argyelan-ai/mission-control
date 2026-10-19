@@ -107,6 +107,7 @@ from app.routers import (
     skills,
     skill_lab,
     system,
+    system_update,
     tags,
     tasks,
     usage,
@@ -176,6 +177,15 @@ async def lifespan(app: FastAPI):
     # embeddings/watcher/compactor/lint_task) — hier an app.state haengen,
     # die Vault-Read-Routen lesen sie von dort.
     _vault_runtime = await start_vault_services(app)
+    # Self-update history (ADR-094): compare with the journal on the machine
+    # once at start — records how an update ended across the restart it
+    # caused. Off with the feature switch / on a managed install.
+    try:
+        from app.services.mc_update_runner import reconcile_on_boot
+
+        _create_background_task(reconcile_on_boot(), name="mc_update_reconcile")
+    except Exception as e:
+        logger.warning("update history reconcile failed to schedule: %s", e)
     for _key, _obj in _vault_runtime.items():
         setattr(app.state, _key, _obj)
     # ── Vault Decay Cron (Phase 3 Intelligence) ───────────────────────
@@ -403,6 +413,7 @@ app.add_middleware(PathExemptSlowAPIMiddleware)
 # Register all routers
 app.include_router(auth.router)
 app.include_router(system.router)
+app.include_router(system_update.router)  # /api/v1/system/update/* — self-update (ADR-094), behind MC_SELF_UPDATE_ENABLED
 app.include_router(boards.router)
 app.include_router(tasks.router)
 app.include_router(run_record.router)  # /api/v1/tasks/{id}/run-record — Laufakte (Lauf 5, kein Board im Pfad)
