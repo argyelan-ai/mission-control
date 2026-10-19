@@ -239,3 +239,203 @@ async def test_runtime_db_create_rejects_bad_control_url(client, fake_redis):
     resp = await client.post("/api/v1/runtimes/db",
                              headers={"Authorization": f"Bearer {token}"}, json=bad)
     assert resp.status_code == 422
+
+
+# ── Local runtimes (ADR-096, 19.10.2026) ─────────────────────────────────────
+# Local AI is the main part of MC: a task for an agent whose own box is off
+# must wait in the inbox — not be delivered into a session that can never
+# answer (live: Spark :8000 off, task 4de17c6a went "in progress" 4 s after
+# the claim and sat there 20 minutes). Only the poll claim is gated
+# (include_local=True) — push sites (delegation, manual re-dispatch) keep
+# working so a lead can still queue work while the model is down.
+
+async def _mk_local_runtime(session, *, slug: str, host: bool = True) -> Runtime:
+    from app.models.host import Host
+
+    host_id = None
+    if host:
+        h = Host(slug=f"box-{uuid.uuid4().hex[:6]}", display_name="Box", kind="ssh")
+        session.add(h)
+        await session.flush()
+        host_id = h.id
+    rt = Runtime(
+        slug=slug,
+        display_name=f"RT {slug}",
+        runtime_type="openai_compatible",
+        endpoint="http://192.0.2.30:8000/v1",
+        host_id=host_id,
+    )
+    session.add(rt)
+    await session.commit()
+    await session.refresh(rt)
+    return rt
+
+
+@pytest.mark.asyncio
+async def test_local_runtime_down_holds_the_poll_claim(async_session):
+    rt = await _mk_local_runtime(async_session, slug="local-down")
+    agent = SimpleNamespace(runtime_id=rt.id, id=uuid.uuid4(), name="W")
+    with patch.object(runtime_readiness, "is_local_runtime_serving", new=AsyncMock(return_value=False)):
+        ok, reason = await runtime_ready_for_agent(agent, async_session, include_local=True)
+    assert ok is False
+    assert "antwortet nicht" in reason
+
+
+@pytest.mark.asyncio
+async def test_local_runtime_up_passes(async_session):
+    rt = await _mk_local_runtime(async_session, slug="local-up")
+    agent = SimpleNamespace(runtime_id=rt.id, id=uuid.uuid4(), name="W")
+    with patch.object(runtime_readiness, "is_local_runtime_serving", new=AsyncMock(return_value=True)):
+        ok, reason = await runtime_ready_for_agent(agent, async_session, include_local=True)
+    assert ok is True and reason is None
+
+
+@pytest.mark.asyncio
+async def test_push_sites_are_not_gated_for_local_runtimes(async_session):
+    """Without include_local (check_dispatch_allowed) nothing is probed."""
+    rt = await _mk_local_runtime(async_session, slug="local-push")
+    agent = SimpleNamespace(runtime_id=rt.id, id=uuid.uuid4(), name="W")
+    with patch.object(runtime_readiness, "is_local_runtime_serving",
+                      new=AsyncMock(side_effect=AssertionError("push must not probe"))):
+        ok, reason = await runtime_ready_for_agent(agent, async_session)
+    assert ok is True and reason is None
+
+
+@pytest.mark.asyncio
+async def test_cloud_runtime_is_never_probed(async_session):
+    """No host binding = not local (heads.pairs.is_local) — cloud stays untouched."""
+    rt = await _mk_local_runtime(async_session, slug="cloud-like", host=False)
+    agent = SimpleNamespace(runtime_id=rt.id, id=uuid.uuid4(), name="W")
+    with patch.object(runtime_readiness, "is_local_runtime_serving",
+                      new=AsyncMock(side_effect=AssertionError("cloud must not probe"))):
+        ok, reason = await runtime_ready_for_agent(agent, async_session, include_local=True)
+    assert ok is True and reason is None
+
+
+@pytest.mark.asyncio
+async def test_local_gate_killswitch(async_session):
+    rt = await _mk_local_runtime(async_session, slug="local-kill")
+    agent = SimpleNamespace(runtime_id=rt.id, id=uuid.uuid4(), name="W")
+    with patch.object(runtime_readiness.settings, "enable_local_runtime_readiness_gate", False), \
+         patch.object(runtime_readiness, "is_local_runtime_serving",
+                      new=AsyncMock(side_effect=AssertionError("switch off → no probe"))):
+        ok, reason = await runtime_ready_for_agent(agent, async_session, include_local=True)
+    assert ok is True
+
+
+@pytest.mark.asyncio
+async def test_local_gate_fails_open(async_session):
+    rt = await _mk_local_runtime(async_session, slug="local-boom")
+    agent = SimpleNamespace(runtime_id=rt.id, id=uuid.uuid4(), name="W")
+    with patch.object(runtime_readiness, "is_local_runtime_serving", new=AsyncMock(side_effect=RuntimeError("boom"))):
+        ok, reason = await runtime_ready_for_agent(agent, async_session, include_local=True)
+    assert ok is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status,expected", [(200, True), (401, True), (404, True), (503, False)])
+async def test_serving_probe_reads_any_answer_below_500_as_up(status, expected):
+    """The question is 'is the model server there', not 'is the path right':
+    auth or a wrong health path must never stall a running box (fail-open);
+    5xx (engine warming/crashed) holds."""
+    import httpx
+
+    rt = Runtime(slug=f"p-{status}", display_name="P", runtime_type="openai_compatible",
+                 endpoint="http://192.0.2.31:8000/v1")
+    transport = httpx.MockTransport(lambda req: httpx.Response(status))
+    with patch.object(runtime_readiness, "_http_client",
+                      new=lambda: httpx.AsyncClient(transport=transport)):
+        assert await runtime_readiness._probe_serving(rt) is expected
+
+
+@pytest.mark.asyncio
+async def test_serving_probe_connect_error_is_down():
+    import httpx
+
+    def refuse(req):
+        raise httpx.ConnectError("refused", request=req)
+
+    rt = Runtime(slug="p-refused", display_name="P", runtime_type="openai_compatible",
+                 endpoint="http://192.0.2.32:8000/v1")
+    with patch.object(runtime_readiness, "_http_client",
+                      new=lambda: httpx.AsyncClient(transport=httpx.MockTransport(refuse))):
+        assert await runtime_readiness._probe_serving(rt) is False
+
+
+async def _setup_worker_with_local_runtime(slug: str):
+    from app.models.agent import Agent
+    from app.models.board import Board
+    from app.auth import generate_agent_token
+
+    board_id = uuid.uuid4()
+    worker_id = uuid.uuid4()
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        rt = await _mk_local_runtime(s, slug=slug)
+        s.add(Board(id=board_id, name="LocalGate", slug=f"lg-{uuid.uuid4().hex[:6]}"))
+        token_raw, token_hash = generate_agent_token()
+        s.add(Agent(
+            id=worker_id, name="LocalGateWorker", role="developer",
+            board_id=board_id, agent_token_hash=token_hash,
+            scopes=["tasks:read", "tasks:write"],
+            provision_status="provisioned",
+            runtime_id=rt.id,
+        ))
+        await s.commit()
+    return board_id, worker_id, token_raw
+
+
+@pytest.mark.asyncio
+async def test_poll_holds_task_while_local_runtime_is_down(client, fake_redis):
+    """Sabotage scenario from the operator: model off, task assigned → the
+    poll never delivers it (stays inbox, dispatched_at empty) and the card's
+    timeline says why."""
+    from sqlmodel import select
+
+    from app.models.activity import ActivityEvent
+    from app.models.task import Task
+
+    board_id, worker_id, token = await _setup_worker_with_local_runtime("local-poll-down")
+    task_id = uuid.uuid4()
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(Task(id=task_id, board_id=board_id, title="Needs the local model",
+                   status="inbox", assigned_agent_id=worker_id))
+        await s.commit()
+
+    with patch.object(runtime_readiness, "is_local_runtime_serving", new=AsyncMock(return_value=False)):
+        resp = await client.get("/api/v1/agent/me/poll",
+                                headers={"Authorization": f"Bearer {token}"})
+        again = await client.get("/api/v1/agent/me/poll",
+                                 headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["state"] == "idle", body
+    assert body.get("runtime_not_ready") is True
+    assert again.json()["state"] == "idle"
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        t = await s.get(Task, task_id)
+        assert t.status == "inbox"
+        assert t.dispatched_at is None and t.ack_at is None
+        events = (await s.exec(
+            select(ActivityEvent).where(ActivityEvent.task_id == task_id)
+        )).all()
+    held = [e for e in events if e.event_type == "task.dispatch_held_runtime_down"]
+    assert len(held) == 1, [e.event_type for e in events]  # debounced, not per poll
+    assert "antwortet nicht" in held[0].title
+
+
+@pytest.mark.asyncio
+async def test_poll_delivers_once_the_local_runtime_answers(client, fake_redis):
+    from app.models.task import Task
+
+    board_id, worker_id, token = await _setup_worker_with_local_runtime("local-poll-up")
+    task_id = uuid.uuid4()
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(Task(id=task_id, board_id=board_id, title="Model is up",
+                   status="inbox", assigned_agent_id=worker_id))
+        await s.commit()
+
+    with patch.object(runtime_readiness, "is_local_runtime_serving", new=AsyncMock(return_value=True)):
+        resp = await client.get("/api/v1/agent/me/poll",
+                                headers={"Authorization": f"Bearer {token}"})
+    assert resp.json()["state"] == "new_task", resp.json()

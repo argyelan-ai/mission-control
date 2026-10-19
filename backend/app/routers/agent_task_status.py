@@ -2684,6 +2684,19 @@ async def agent_update_task(
             if not (_ack_settings.use_subagent_dispatch and not agent.is_board_lead):
                 if agent.current_task_id != task.id:
                     agent.current_task_id = task.id
+        elif (
+            new_status == "blocked"
+            and old_status == "inbox"
+            and task.ack_at is None
+            and task.dispatched_at is not None
+        ):
+            # Blocked straight from a delivered card (19.10.2026): the agent
+            # answered the delivery — the model never started (runtime down),
+            # so the omp-bridge blocks without ever claiming. Stamp the ACK so
+            # the poll does not read "blocked + ack_at NULL" as "prompt never
+            # delivered" and hand the dead task out again. started_at stays
+            # empty: no work began.
+            task.ack_at = utcnow()
         elif new_status in ("review", "done") and task.ack_at is None:
             # Retroactive ACK: agent worked on the task without explicitly ACKing.
             # Besser spaet als nie — Analytics brauchen den Timestamp.
