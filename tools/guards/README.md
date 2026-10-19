@@ -21,15 +21,41 @@ Exit codes for every guard: `0` green, `1` red, `2` usage or internal error.
 
 | Guard | Lesson it encodes | Use it |
 |---|---|---|
-| `run-gates.sh` | A gate chained with `;` or piped into `tail` reported FAILED and the next step ran anyway. | `run-gates.sh deploy.gates` — one command per line; stops at the first red gate and refuses `;`, `\|\|`, trailing `&`, `\| tail/head/grep`. |
+| `bash-hook.sh` | All of the below happen in live Bash commands, not in files. A replay of 60 days of agent commands (9,422 that push, test or split) found 713 pushes with cut output, 372 without `git -C`, 6 force-pushes without lease, 195 test runs with `run_in_background`, 9 `set -- $var` in zsh — and 0 findings in 1,500 random other commands. | Claude Code `PreToolUse` hook on `Bash` (see **The hook** below). Runs push-gate, zsh-set-split and background-tests on the command, and runs the privacy scan itself before a push. |
+| `run-gates.sh` | A gate chained with `;` or piped into `tail` reported FAILED and the next step ran anyway. | `run-gates.sh deploy.gates` — one command per line; stops at the first red gate and refuses `;`, `\|\|` and a lone `&` outside quotes. Pipes are fine (pipefail). |
 | `zsh-set-split.sh` | The agent shell is zsh: `set -- $var` does not split, so `git worktree add "$1" -b "$2" <ref>` created a branch named after the ref. | Lint scripts and briefs. Fix: `read -r a b <<< "$var"`. |
-| `push-gate.sh` | PRs went red in CI on the privacy scan; a rejected force-push was hidden by `\| tail -1`; pushes without `git -C` hit the wrong checkout. | Lint: every push is `privacy-scan && git -C <worktree> push`, output uncut, no `--no-verify`. |
+| `push-gate.sh` | PRs went red in CI on the privacy scan; a rejected force-push was hidden by `\| tail -1`; pushes without `git -C` hit the wrong checkout. | Lint: every push is `privacy-scan && git -C <worktree> push` (the scan must be a real call joined by `&&` only), output neither cut nor redirected, no `--no-verify`, no force without lease, no push through a variable. Text in quotes is skipped unless it goes to `bash -c`/`eval`/`ssh`. |
 | `proof-push.sh` | A PR text described a state that never reached the remote, and the old branch was merged. | Run after every push: `proof-push.sh -C <worktree>`. Red unless the remote branch SHA equals `HEAD`. |
 | `background-tests.sh` | Agents sent the test suite to the background and ended without commit or report. | Lint briefs and scripts; `--worktree <dir>` is red while the tree has uncommitted changes. |
 | `tmp-previews.sh` | Previews and deploy folders under `/tmp` vanished after a few days and handoffs pointed to nothing. | Lint scripts and briefs. Opt out per line with `guard-allow: tmp-previews (<reason>)`. |
 | `post-deploy-probe.sh` | "Image built, container running" proved nothing; an empty proof was printed and ignored. | After a deploy: `post-deploy-probe.sh --deploy-wt <dir> [--range A..B]`. Read-only. Red on any failed or empty proof. |
 
-`lint.sh <paths>` runs the four lint guards together.
+`lint.sh <paths>` runs the four lint guards together. In Markdown only fenced
+code blocks are checked. CI runs it on `AGENTS.md`, `CLAUDE.md`, `docs`,
+`scripts`, `tools` and `.github`, so a new script or doc that teaches a bad
+shape goes red.
+
+## The hook
+
+`bash-hook.sh` reads the hook JSON on stdin. Heredoc bodies (commit messages,
+PR texts) are skipped. For a push into a checkout that has
+`scripts/privacy-scan.py` it runs the scan there and does not trust the text.
+
+Modes, from `GUARD_HOOK_MODE` or the first word of `~/.mc/guards/mode`:
+
+- `shadow` (default): never blocks; findings go to `~/.mc/guards/hook-log.jsonl`
+  (command excerpt, long tokens redacted). Use it to see the real rate first.
+- `block`: a finding blocks the call (exit 2); Claude gets the reason.
+
+The hook never blocks on its own failure. Install it so it always runs the
+version on `origin/main` (same pattern as `tools/hooks/*`; no-op until merged):
+
+```json
+{ "matcher": "Bash", "hooks": [ { "type": "command", "timeout": 60,
+  "command": "bash -c 'r=<mc-checkout>; t=$(git -C $r rev-parse -q --verify origin/main:tools/guards) || exit 0; d=$HOME/.mc/guards/cache/$t; [ -f $d/bash-hook.sh ] || { mkdir -p $d && git -C $r archive origin/main:tools/guards | tar -x -C $d; } || exit 0; bash $d/bash-hook.sh'" } ] }
+```
+
+Replay old commands without the scan: `GUARD_HOOK_NO_SCAN=1 bash-hook.sh <json>`.
 
 `proof-push.sh` and `post-deploy-probe.sh` work in two steps: a read-only
 capture of the evidence, and an evaluation that decides. The fixtures are
@@ -38,7 +64,9 @@ captured evidence, so CI tests the decision without a remote or a running stack.
 
 ## Adding a guard
 
-1. Write `fixtures/<name>.bad` from the real incident first, and a `.good`.
+1. Write `fixtures/<name>.bad` from the real incident first (the command from
+   the transcript, paths shortened), and a `.good`. Add the bypasses a reviewer
+   finds as further `.bad` fixtures (`push-gate.echo-scan.bad` and friends).
    Run `run-all.sh` — it must fail because the guard is missing.
 2. Write `<name>.sh`. Put the deciding lines between `# >>> guard-logic` and
    `# <<< guard-logic`; the script must still parse when that block is commented out.

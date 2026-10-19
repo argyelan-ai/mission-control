@@ -10,7 +10,7 @@ set -euo pipefail
 BRANCH="${1:?Usage: preview-ui.sh <branch> [port]}"
 PORT="${2:-3001}"
 SLUG=$(echo "$BRANCH" | sed 's|/|-|g' | tr '[:upper:]' '[:lower:]')
-WORKTREE="/tmp/mc-preview-${SLUG}"
+WORKTREE="${MC_PREVIEW_ROOT:-$HOME/.mc/previews}/mc-preview-${SLUG}"  # not /tmp: macOS deletes it
 
 echo "=== MC Preview-UI ==="
 echo "Branch:   $BRANCH"

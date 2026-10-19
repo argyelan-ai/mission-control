@@ -2,6 +2,7 @@ name: Guards
 
 # Lessons as code: every guard in tools/guards must turn its .bad fixtures red
 # and keep its .good fixtures green, and its logic must be what does it.
+# The lint step then runs the guards on the files agents actually follow.
 on:
   pull_request:
     branches: [main]
@@ -13,7 +14,7 @@ permissions:
 
 jobs:
   guards:
-    name: Guards (fixtures + sabotage probe)
+    name: Guards (fixtures + sabotage probe + repo lint)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -27,3 +28,6 @@ jobs:
       - name: Sabotage probe — commenting out a guard's logic must break its fixtures
         if: always()
         run: bash tools/guards/sabotage-probe.sh
+      - name: Lint the files agents follow (scripts, hooks, docs, AGENTS.md)
+        if: always()
+        run: bash tools/guards/lint.sh AGENTS.md CLAUDE.md docs scripts tools .github

@@ -25,6 +25,24 @@ is_comment() {
   esac
 }
 
+# unquoted <text>: the text with everything inside '...' and "..." (and any
+# backslash-escaped character) replaced by '_', so separators in data do not count.
+unquoted() {
+  local s="$1" out="" q="" c i
+  for ((i = 0; i < ${#s}; i++)); do
+    c="${s:i:1}"
+    if [ -n "$q" ]; then
+      if [ "$q" = '"' ] && [ "$c" = '\' ]; then out+="__"; i=$((i + 1)); continue; fi
+      if [ "$c" = "$q" ]; then q=""; out+="$c"; else out+="_"; fi
+    else
+      if [ "$c" = '\' ]; then out+="__"; i=$((i + 1)); continue; fi
+      case "$c" in "'"|'"') q="$c" ;; esac
+      out+="$c"
+    fi
+  done
+  printf '%s' "$out"
+}
+
 # Files to lint: plain files as given, folders searched for text-like files.
 _lint_files() {
   local p
@@ -47,14 +65,20 @@ lint_main() {
     echo "usage: $(basename "$0") <file-or-folder>..." >&2
     exit 2
   fi
-  local files f n line
+  local files f n line md fence
   files="$(_lint_files "$@")" || exit 2
   while IFS= read -r f; do
     [ -n "$f" ] || continue
-    n=0
+    n=0; md=0; fence=0
+    # In Markdown only fenced code blocks are commands; prose and tables are text.
+    case "$f" in *.md) md=1 ;; esac
     if command -v begin_file >/dev/null 2>&1; then begin_file "$f"; fi
     while IFS= read -r line || [ -n "$line" ]; do
       n=$((n + 1))
+      if [ "$md" = 1 ]; then
+        case "$line" in [[:space:]]*'```'*|'```'*) fence=$((1 - fence)); continue ;; esac
+        [ "$fence" = 1 ] || continue
+      fi
       case "$line" in *"guard-allow: $GUARD_NAME"*) continue ;; esac
       check_line "$f" "$n" "$line"
     done < "$f"
