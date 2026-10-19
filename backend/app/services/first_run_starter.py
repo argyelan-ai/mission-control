@@ -18,8 +18,12 @@ Guards (operator decisions 2026-10-16):
 
 * No foreign seed: an install that already has boards or agents is refused
   (``not_fresh``) — starter content is never written into live data.
-* No dead end: without a runtime an agent can run on, nothing is created
-  (``no_brain``) — the wizard says "your agent needs an AI" instead.
+* No dead end: without a runtime the agent can start on NOW — Claude with a
+  connected account, or a model runtime that has its key and is serving —
+  nothing is created (``no_brain``; an explicit choice that is not ready is
+  ``runtime_not_ready`` with a ``reason``). The wizard says "your agent needs
+  an AI" instead. All shipped runtimes are enabled, so "enabled" alone is
+  never enough.
 * Retry-safe: every finished part is recorded in ``app_settings``
   (``first_run_starter``); a second call finishes what is missing and creates
   nothing twice. A retry does not provision again — the agent page's
@@ -58,15 +62,36 @@ STATE_KEY = FIRST_RUN_STARTER_KEY
 LEAD_TEMPLATE_NAME = "Lead"
 LEAD_RUNTIME_TAG = "lead"
 
-BOARD_NAME = "Getting started"
 BOARD_SLUG = "getting-started"
 
 PRACTICE_REPO_SLUG = "mc-practice"
 PRACTICE_REPO_FULL_NAME = f"local/{PRACTICE_REPO_SLUG}"
 PRACTICE_REPO_TEMPLATE = Path(__file__).resolve().parents[2] / "templates" / "practice-repo"
 
-FIRST_JOB_TITLE = "Add a test for parse()"
-FIRST_JOB_DESCRIPTION = """\
+
+@dataclass(frozen=True)
+class StarterTexts:
+    """What the operator reads in the UI as it is stored: board, repo, card.
+
+    Written in the operator's language (the one the agent speaks too), so a
+    German install never shows an English card next to a German UI. Commands,
+    paths and the commit message stay as they are — they are code.
+    """
+
+    board_name: str
+    board_description: str
+    repo_description: str
+    job_title: str
+    job_description: str
+
+
+_TEXTS: dict[str, StarterTexts] = {
+    "en": StarterTexts(
+        board_name="Getting started",
+        board_description="Created by the first run — your lead agent works here.",
+        repo_description="Practice repo for your first agent job — lives on this computer.",
+        job_title="Add a test for parse()",
+        job_description="""\
 A first job on a small practice repo — nothing of the operator's own code is in it.
 
 1. Read `practice/parse.py`.
@@ -81,17 +106,49 @@ A first job on a small practice repo — nothing of the operator's own code is i
    On anything else: make the change, then ask again.
 6. Close the card with `mc finish "<reflection>"`. Do not push — this
    repository lives only on this computer and has no remote.
-"""
+""",
+    ),
+    "de": StarterTexts(
+        board_name="Erste Schritte",
+        board_description="Vom ersten Start angelegt — hier arbeitet dein Lead-Agent.",
+        repo_description="Übungs-Repo für den ersten Auftrag deines Agenten — liegt nur auf diesem Computer.",
+        job_title="Einen Test für parse() schreiben",
+        job_description="""\
+Ein erster Auftrag in einem kleinen Übungs-Repo — von deinem eigenen Code steckt nichts darin.
+
+1. Lies `practice/parse.py`.
+2. Schreib einen Test für `parse()` in `tests/test_parse.py`, im Stil von
+   `tests/test_slug.py`: normale Paare, Leerzeichen um Schlüssel und Werte, ein
+   leeres Paar und den Fall `ValueError`.
+3. Führ `python3 -m unittest` aus, bis alles grün ist.
+4. **Frag mich, bevor du committest.** Noch nicht committen — frag:
+   `mc question "Bereit zum Commit: Test für parse() (tests/test_parse.py). Committen?" --options "Committen,Diff zeigen,Etwas ändern"`
+5. Bei „Committen“: auf deinem Task-Branch committen (`test: add a test for parse()`).
+   Bei „Diff zeigen“: `git diff` als Kommentar posten, dann erneut fragen.
+   Bei allem anderen: die Änderung machen, dann erneut fragen.
+6. Schliess die Karte mit `mc finish "<Reflexion>"`. Nicht pushen — dieses
+   Repository liegt nur auf diesem Computer und hat kein Remote.
+""",
+    ),
+}
+
+
+def texts_for(language: str | None) -> StarterTexts:
+    """The starter texts in ``language`` (``de``, ``de-CH`` …); English otherwise."""
+    base = (language or "en").split("-")[0].split("_")[0].lower()
+    return _TEXTS.get(base, _TEXTS["en"])
 
 
 class StarterError(Exception):
     """A refusal with a stable code the wizard can word in its language."""
 
-    def __init__(self, status: int, code: str, message: str):
+    def __init__(self, status: int, code: str, message: str, *, reason: str | None = None):
         super().__init__(message)
         self.status = status
         self.code = code
         self.message = message
+        #: Finer cause for ``runtime_not_ready`` (see ``NOT_READY_MESSAGES``).
+        self.reason = reason
 
 
 @dataclass
@@ -152,18 +209,69 @@ async def _get(session: AsyncSession, model, raw_id: str | None):
 
 
 def _runnable(runtime: Runtime) -> bool:
-    """An agent can run on it: enabled, and a known harness drives it."""
+    """An agent can be built on it: enabled, and a known harness drives it."""
     from app.services.harness_compat import HARNESSES, derive_harness
 
     return bool(runtime.enabled) and derive_harness(runtime) in HARNESSES
 
 
-async def resolve_brain(session: AsyncSession, runtime_ref: str | None) -> Runtime:
-    """The runtime the lead agent runs on.
+#: Why a runnable runtime still cannot carry the first agent. Stable codes
+#: (``detail.reason``) the wizard words in the operator's language.
+NOT_READY_MESSAGES: dict[str, str] = {
+    "claude_not_connected": "Claude is not connected yet — connect your Claude account first.",
+    "no_api_key": "This AI has no API key in MC yet — add its key first.",
+    "not_serving": "This AI is not answering right now — start it first.",
+    "needs_sign_in": "A new agent on this AI has to sign in by hand first — pick another AI.",
+}
 
-    An explicit choice (the wizard's "Which AI?" step; UUID or slug) wins.
-    Otherwise the registry decides: the first runnable runtime tagged
-    ``lead`` (``role_tags``), else the first runnable one by ``ui_order``.
+
+async def _not_ready(session: AsyncSession, runtime: Runtime) -> str | None:
+    """Why the lead agent could not start on ``runtime`` right now (None = it can).
+
+    No second rulebook — the checks MC already has decide:
+
+    * **Claude** (``uses_claude_account``): the shared Claude account must be
+      connected — ``claude_account.is_connected`` (vault token not rejected by
+      its registry check, or the ``.env`` fallback). Never calls Claude.
+    * **Model runtimes** (OpenAI protocol): a hosted ``cloud`` endpoint answers
+      ``/models`` without a key, so it first needs the key the bootstrap would
+      hand the agent (``resolve_provider_credentials``); then the runtime must
+      be serving (``runtime_readiness.is_runtime_ready`` — cached probe).
+    * **Kimi** signs each new agent in by hand (device login per agent), so a
+      fresh agent cannot start on it without the operator.
+    """
+    from app.services import claude_account, runtime_readiness
+    from app.services.harness_compat import (
+        resolve_provider_credentials,
+        runtime_protocol,
+        uses_claude_account,
+    )
+
+    if uses_claude_account(runtime):
+        return None if await claude_account.is_connected(session) else "claude_not_connected"
+    if runtime_protocol(runtime) != "openai":
+        return "needs_sign_in"
+    if (runtime.runtime_type or "").strip() == "cloud" and not await resolve_provider_credentials(
+        session, None, runtime
+    ):
+        return "no_api_key"
+    try:
+        serving = await runtime_readiness.is_runtime_ready(runtime)
+    except Exception as exc:  # noqa: BLE001 — a probe error means "not answering"
+        logger.warning("first run: readiness probe for %s failed: %s", runtime.slug, exc)
+        serving = False
+    return None if serving else "not_serving"
+
+
+async def resolve_brain(session: AsyncSession, runtime_ref: str | None) -> Runtime:
+    """The runtime the lead agent runs on — one it can start on NOW.
+
+    An explicit choice (the wizard's "Which AI?" step; UUID or slug) wins, but
+    only when it is ready (``runtime_not_ready`` + ``reason`` otherwise).
+    Otherwise the registry decides among the ready runtimes: the first one
+    tagged ``lead`` (``role_tags``), else the first by ``ui_order``. None ready
+    → ``no_brain``: a fresh install without a connected account ends here
+    instead of building a lead that can never start.
     """
     if runtime_ref:
         runtime = None
@@ -180,15 +288,21 @@ async def resolve_brain(session: AsyncSession, runtime_ref: str | None) -> Runti
                 409, "runtime_not_runnable",
                 f"No agent can run on '{runtime.display_name}' — pick another AI.",
             )
+        reason = await _not_ready(session, runtime)
+        if reason:
+            raise StarterError(409, "runtime_not_ready", NOT_READY_MESSAGES[reason], reason=reason)
         return runtime
 
     runtimes = (await session.exec(select(Runtime))).all()
     candidates = sorted((r for r in runtimes if _runnable(r)), key=lambda r: (r.ui_order, r.slug))
-    for runtime in candidates:
-        if LEAD_RUNTIME_TAG in (runtime.role_tags or []):
+    # Lead-tagged first, then the rest — each checked only until one is ready,
+    # so a ready lead runtime never waits on the probes of the others.
+    ordered = [r for r in candidates if LEAD_RUNTIME_TAG in (r.role_tags or [])] + [
+        r for r in candidates if LEAD_RUNTIME_TAG not in (r.role_tags or [])
+    ]
+    for runtime in ordered:
+        if await _not_ready(session, runtime) is None:
             return runtime
-    if candidates:
-        return candidates[0]
     raise StarterError(
         409, "no_brain",
         "Your agent needs an AI. Connect Claude Code or add a model runtime first.",
@@ -274,11 +388,12 @@ async def start(
 
 
 async def _start(session: AsyncSession, *, runtime_ref: str | None, language: str) -> StarterResult:
-    from app.services.git_service import slugify_project
+    from app.services.fs_service import agent_slug
     from app.services.harness_compat import derive_harness
     from app.services.repo_registry import LOCAL_SOURCE, upsert_repo
 
     state = await _read_state(session)
+    texts = texts_for(language)
     created: list[str] = []
     new_token: str | None = None
 
@@ -298,9 +413,9 @@ async def _start(session: AsyncSession, *, runtime_ref: str | None, language: st
     board = await _get(session, Board, state.get("board_id"))
     if board is None:
         board = Board(
-            name=BOARD_NAME,
+            name=texts.board_name,
             slug=BOARD_SLUG,
-            description="Created by the first run — your lead agent works here.",
+            description=texts.board_description,
             auto_dispatch_enabled=True,
         )
         session.add(board)
@@ -319,7 +434,7 @@ async def _start(session: AsyncSession, *, runtime_ref: str | None, language: st
             full_name=PRACTICE_REPO_FULL_NAME,
             url=practice_repo_url(),
             default_branch="main",
-            description="Practice repo for your first agent job — lives on this computer.",
+            description=texts.repo_description,
             visibility="private",
             source=LOCAL_SOURCE,
         )
@@ -361,9 +476,8 @@ async def _start(session: AsyncSession, *, runtime_ref: str | None, language: st
         agent.is_board_lead = True
         agent.agent_runtime = "cli-bridge"
         agent.operator_language = language
-        agent.workspace_path = (
-            f"{settings.home_host}/.mc/workspaces/{slugify_project(agent.name)}"
-        )
+        # The rename-safe slug every other workspace path uses (models/agent.py).
+        agent.workspace_path = f"{settings.home_host}/.mc/workspaces/{agent_slug(agent)}"
         session.add(agent)
         state["agent_id"] = str(agent.id)
         await _write_state(session, state)
@@ -379,8 +493,8 @@ async def _start(session: AsyncSession, *, runtime_ref: str | None, language: st
         task = await create_task_internal(
             session,
             board_id=board.id,
-            title=FIRST_JOB_TITLE,
-            description=FIRST_JOB_DESCRIPTION,
+            title=texts.job_title,
+            description=texts.job_description,
             priority="high",
             assigned_agent_id=agent.id,
             skip_review=True,

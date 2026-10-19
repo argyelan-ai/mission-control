@@ -216,6 +216,25 @@ async def stale_agents(session: AsyncSession, token_changed_at: datetime | None)
     return stale
 
 
+async def is_connected(session: AsyncSession) -> bool:
+    """Can a NEW Claude agent sign in right now? Never calls Claude (E8a).
+
+    The same facts the card shows, read the way a container's bootstrap uses
+    them: the vault token wins when there is one — then its latest registry
+    check must not be a failure (an untested token counts; testing it costs
+    plan quota). Without a vault token the ``.env`` fallback signs the
+    containers in, so it counts as connected too.
+    """
+    from app.models.secret import Secret
+    from app.services import config_checks
+
+    row = (await session.exec(select(Secret).where(Secret.key == TOKEN_KEY))).first()
+    if row is None:
+        return env_fallback_set()
+    check = await config_checks.status_item(session, CHECK_KIND, TOKEN_KEY)
+    return check.get("state") != "fail"
+
+
 async def account_status(session: AsyncSession) -> dict:
     """Everything the card shows. Never calls Claude (E8a)."""
     from app.models.secret import Secret

@@ -62,7 +62,7 @@ def _render(template: str, agent: Agent, on_board: list[Agent]) -> str:
 def test_lone_lead_soul_says_work_yourself_and_ask_before_irreversible_steps():
     lead = _lead()
     soul = _render("SOUL.md.j2", lead, [lead])
-    assert "You do the work yourself" in soul
+    assert "I do the work myself" in soul
     assert "mc question" in soul
     assert "Worker-Truth" in soul, "a hands-on lead closes its own cards like a worker"
     assert "I never write code myself" not in soul
@@ -72,7 +72,7 @@ def test_lead_with_a_team_keeps_the_delegating_soul():
     lead = _lead()
     soul = _render("SOUL.md.j2", lead, [lead, _helper()])
     assert "I never write code myself" in soul
-    assert "You do the work yourself" not in soul
+    assert "I do the work myself" not in soul
 
 
 def test_lone_lead_card_does_not_forbid_writing_code():

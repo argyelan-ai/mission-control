@@ -154,6 +154,32 @@ async def test_repo_required(auth_client, heads_root, make_board, make_task):
     assert resp.status_code == 422 and resp.json()["detail"]["code"] == "repo_required"
 
 
+async def test_a_local_registry_repo_is_refused_cleanly(auth_client, heads_root, make_board, make_task):
+    """A local registry entry (``source="local"``, ``file://`` URL — e.g. the
+    first run's practice repo) cannot be cloned by a head on the host (the
+    head clones by GitHub name). Refuse before anything is written, with a
+    code the UI can word, instead of a head that dies at its clone step."""
+    _, task = await _world(make_board, make_task)
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        local = Repo(full_name="local/mc-practice", url="file:///srv/mc/repos/mc-practice.git",
+                     default_branch="main", source="local")
+        s.add(local)
+        await s.commit()
+        await s.refresh(local)
+        row = await s.get(Task, task.id)
+        row.repo_id = local.id
+        s.add(row)
+        await s.commit()
+
+    resp = await auth_client.post("/api/v1/heads", json={"task_id": str(task.id), "harness": "omp",
+                                                         "runtime_slug": "box-slot"})
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["detail"]["code"] == "local_repo_not_supported"
+    assert not (heads_root / "spool").exists() or not list((heads_root / "spool").iterdir())
+    fresh = await _task(task.id)
+    assert fresh.status == "inbox" and fresh.run_control is None
+
+
 async def test_blocked_pair_is_422_with_reason_code(auth_client, heads_root, make_board, make_task):
     _, task = await _world(make_board, make_task)
     resp = await auth_client.post("/api/v1/heads", json={"task_id": str(task.id), "harness": "omp",

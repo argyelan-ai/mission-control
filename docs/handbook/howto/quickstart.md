@@ -92,8 +92,13 @@ curl -X POST http://localhost:8000/api/v1/first-run/starter \
 ```
 
 It refuses an install that already has boards or agents (`not_fresh`) and
-creates nothing while no AI is connected (`no_brain`). Calling it again only
-finishes what is missing.
+creates nothing while no AI can run the agent yet (`no_brain`): connect your
+Claude account first (the **Claude** card in **Settings**), or have a model runtime
+that is running (a hosted one also needs its API key). A runtime you pass
+that is not ready yet is refused with `runtime_not_ready` and a `reason`
+(`claude_not_connected`, `no_api_key`, `not_serving`, `needs_sign_in`).
+Calling it again only finishes what is missing. The board, the repo and the
+first job are written in the `language` you pass (`en` or `de`).
 
 **By hand instead:** create a board, then **Agents → New agent**, pick the
 **Lead** template, tick **Board lead**, bind your Claude Code (or

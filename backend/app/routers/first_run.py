@@ -6,7 +6,7 @@ today without the wizard, too (curl, a script). ``GET`` returns what an
 earlier call created, for the wizard's progress chain.
 
 Admin only: it creates an agent bound to a provider and writes into the repo
-registry. Refusals come as ``{"detail": {"code", "message"}}`` so the wizard
+registry. Refusals come as ``{"detail": {"code", "message"[, "reason"]}}`` so the wizard
 can word them in the UI language.
 """
 from __future__ import annotations
@@ -32,7 +32,10 @@ class StarterRequest(BaseModel):
 
 
 def _refusal(err: starter.StarterError) -> HTTPException:
-    return HTTPException(status_code=err.status, detail={"code": err.code, "message": err.message})
+    detail = {"code": err.code, "message": err.message}
+    if err.reason:
+        detail["reason"] = err.reason
+    return HTTPException(status_code=err.status, detail=detail)
 
 
 @router.post("/starter")
