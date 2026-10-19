@@ -34,3 +34,6 @@ jobs:
       - name: Hook installer keeps foreign hooks and stays idempotent
         if: always()
         run: python3 -m unittest tools/guards/tests/test_install_hooks.py
+      - name: Push proof against a real bare remote (incident shapes, -c, variable paths)
+        if: always()
+        run: python3 -m unittest tools/guards/tests/test_post_push_live.py
