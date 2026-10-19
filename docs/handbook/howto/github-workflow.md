@@ -150,19 +150,22 @@ before the status changes. It fetches the evidence itself — what the agent
 sends along is only a claim to compare. The card does not even have to name
 its PR: without `pr_url`/`pr_number` the gate looks for it in the card's own
 data (the source card of a review card, the `PR erstellt:` note, the card's
-branch on GitHub) and checks what it finds (`pr_not_on_card`, notice).
+branch on GitHub — an open PR first, never one another card already holds)
+and checks what it finds (`pr_not_on_card`, notice). "Could not look" is not
+"no PR": without a token or when GitHub answers with an error the gate says so
+(`pr_lookup_unavailable`, notice) instead of refusing the card.
 
 | Check | Finding | Blocks in `enforce` |
 |---|---|---|
 | The PR exists (a repo the token cannot see is only a notice) | `pr_not_found`, `pr_url_invalid` · `repo_not_visible` (notice) | yes · no |
-| A code card has a PR at all: `code_change` on a repo blocks; a work branch or `code_change` without repo is a notice; a repo alone is only logged | `pr_missing` | yes (code_change + repo) |
+| A code card has a PR at all: `code_change` on a repo blocks; a work branch or `code_change` without repo is a notice; a repo alone is only logged. Only when GitHub really answered "none" — a failed lookup is `pr_lookup_unavailable` | `pr_missing` · `pr_lookup_unavailable` (notice) | yes (code_change + repo) · no |
 | The PR is this card's: OPEN (for `done` OPEN or MERGED), not held by an unrelated card | `pr_not_open`, `pr_on_other_card` | yes |
-| The PR runs on the card's branch (`branch_name` or MC's workspace branch `task/<slug>`). Another name on a PR opened after the card is a notice; a PR older than the card is someone else's | `pr_branch_mismatch` | yes (older PR) |
+| The PR runs on the card's branch (`branch_name` or MC's workspace branch `task/<slug>`). A PR on the branch of another open card is that card's. Another name: a PR older than the card is someone else's; a newer one is a notice on `review`, and on `done` it needs a second tie — the card id (first 8 characters) in the PR title or body, or MC's own `PR erstellt:` note | `pr_branch_of_other_card` · `pr_branch_mismatch` | yes · yes (older PR, or `done` without tie) |
 | The PR changes at least one file | `pr_empty` | yes |
 | On the developer's move to `review`: a SHA he reports (≥ 7 chars) is the PR head | `sha_mismatch` | yes |
 | The **required** CI checks are green (all checks if the repo has none) | `ci_red`; `ci_pending` on `done` | yes |
-| After the last change request (MC `changes_requested` or GitHub *Request changes*) the PR really changed. The server compares the PR's own diff (file + blob per changed file) with the one it recorded at the last review entry: an empty commit, a merge from `main` ("Update branch") or the same content force-pushed is no change. Without a recorded diff it walks the new commits and skips merge and empty ones | `no_commit_after_change` | yes |
-| review → done is closed by someone other than the developer, with his own verdict on the card (a reflection or a progress note does not count) | `self_review`, `reviewer_silent` | yes |
+| After the last change request (MC `changes_requested` or GitHub *Request changes*) the PR really changed. The server compares the PR's own diff (file + blob per changed file) with the one it recorded at the last review entry: an empty commit, a merge from `main` ("Update branch") or the same content force-pushed is no change. Without a recorded diff it reads the compare: own linear commits with files are a change; with merges in between it walks the own commits (empty ones skipped); a rewritten history with the same tree is no change. When it cannot tell (compare failed, history rewritten, too many commits), it says so | `no_commit_after_change` · `change_unverifiable` (notice) | yes · no |
+| review → done is closed by someone other than the developer (the board lead never counts as the developer), with his own verdict on the card (a reflection or a progress note does not count) | `self_review`, `reviewer_silent` | yes |
 | `done` straight from work, by the developer himself, with no review anywhere (no approve in MC, no review card closed by someone else, no approve by another GitHub login); cards with `skip_review` are exempt. By someone else: notice | `no_independent_review` | yes (developer) |
 | A reviewer the agent names (`--reviewer`) is not the developer and commented himself — MC card, or GitHub without the PR author's login | `reviewer_is_developer`, `reviewer_silent` | yes |
 | A PR URL the agent quotes in his own comments exists — also on cards without `pr_url` | `claimed_pr_not_found` | yes |
@@ -197,7 +200,9 @@ nothing is blocked and the card gets a visible warning instead.
 Counting: every gate finding carries `gefangen_von: "tor"` in the event
 detail; `task.review_rejected` events carry `rolle`, `boss` or `mark`
 (`live` is reserved for findings from a live probe). The tally per catcher,
-per finding code and the check count toward the enforce flip:
+per finding code and the check count toward the enforce flip — all counted
+per **card**, so an agent retrying a refused move five times is one catch
+(the raw number of gate events is `attempts`):
 `GET /api/v1/activity/proof-gate/stats?days=30` (logged-in user). Weekly
 numbers straight from the database:
 

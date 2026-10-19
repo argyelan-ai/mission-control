@@ -14,9 +14,11 @@ itself a finding (``pr_missing``, see ``code_card_level``).
 
   a) ``pr_url`` points at a PR that really exists on GitHub, it is OPEN (for
      ``done``: OPEN or MERGED), it changes at least one file, no unrelated
-     card already holds it, and it runs on the card's branch (``branch_name``
-     or the workspace branch ``task/<slug>``; another name is only a foreign
-     PR when the PR is older than the card).
+     card already holds it, it runs on no other open card's branch, and on
+     the card's branch (``branch_name`` or the workspace branch
+     ``task/<slug>``). Another name: a PR older than the card is foreign; a
+     newer one needs a second tie to close the card (the card id in the PR
+     title/body or MC's own "PR erstellt:" note) — timing alone is no proof.
   b) the SHA the agent reported (``head_sha``, sent by the mc CLI on the
      developer's move to ``review``) is the PR head on GitHub. The server
      records the PR head itself on every checked move (``head_sha`` in the
@@ -28,8 +30,9 @@ itself a finding (``pr_missing``, see ``code_card_level``).
      changed file, ``diff_fp``) differs from the one recorded when the card
      last entered review — an empty commit, a merge from main or the same
      content force-pushed does not count, nor does a faked commit date.
-     Without a recorded diff the new commits are walked (merge and empty
-     ones skipped); without any record, commit timestamps.
+     Without a recorded diff the compare is read (see ``fetch_real_change``);
+     without any record, commit timestamps. "Could not tell" is a visible
+     notice (``change_unverifiable``), never a silent pass.
   e) review → done is closed by someone other than the developer, who left
      his own verdict on the card (a reflection or progress note does not
      count); the developer closing his own PR card straight from work, with
@@ -50,7 +53,8 @@ sample (1–2 finishes a week), so the flip waits for real evidence.
 
 Fail-open, but loud: without a GitHub token, when GitHub cannot be reached
 (every ``gh`` call has a time limit) or when the token cannot see the repo,
-nothing is blocked — the card gets a visible warning instead, because an
+nothing is blocked — the card gets a visible warning instead (also a PR
+lookup that failed: ``pr_lookup_unavailable``, never ``pr_missing``), because an
 outage must not freeze every PR card on the board (same reasoning as the
 ADR gate's inconclusive-lookup path).
 
