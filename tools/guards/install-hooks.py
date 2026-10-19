@@ -9,7 +9,7 @@ the repo), each entry must be the same text so Claude Code de-duplicates them,
 and nothing that is already there may be removed.
 
 Each hook runs the version of tools/guards on origin/main of a local checkout,
-cached by the tree hash (~/.mc/guards/cache/<tree>). Before tools/guards/<script>
+cached by the tree hash (~/.mc/guards/cache/<tree>, used only once marked complete). Before tools/guards/<script>
 exists on origin/main the hook is a no-op (exit 0).
 
 Default is a dry run: it prints what would change and writes nothing.
@@ -43,14 +43,24 @@ _SAFE_PATH = re.compile(r"^[A-Za-z0-9_./~-]+$")
 
 
 def launcher(repo: str, script: str) -> str:
-    """The hook command: run tools/guards/<script> as it is on origin/main."""
+    """The hook command: run tools/guards/<script> as it is on origin/main.
+
+    The tree is extracted into a fresh folder, marked complete as the last step
+    and only then moved into place, so a crashed or parallel first run never
+    leaves a cache with the script but without its helpers (that ran silently
+    green before). A cache without the marker is rebuilt.
+    """
     return (
-        f"bash -c 'r={repo}; "
+        f"bash -c 'set -o pipefail; r={repo}; "
         f"t=$(git -C $r rev-parse -q --verify origin/main:tools/guards/{script} >/dev/null "
         f"&& git -C $r rev-parse origin/main:tools/guards) || exit 0; "
-        f"d=$HOME/.mc/guards/cache/$t; "
-        f"[ -f $d/{script} ] || {{ mkdir -p $d && git -C $r archive origin/main:tools/guards "
-        f"| tar -x -C $d; }} || exit 0; bash $d/{script}'"
+        f"c=$HOME/.mc/guards/cache; d=$c/$t; "
+        f"if [ ! -f $d/.complete ]; then n=$c/.new.$t.$$; rm -rf $n; "
+        f"{{ mkdir -p $n && git -C $r archive origin/main:tools/guards | tar -x -C $n && touch $n/.complete; }} "
+        f"|| {{ rm -rf $n; exit 0; }}; "
+        f"if [ ! -f $d/.complete ]; then rm -rf $d.old.$$; [ ! -d $d ] || mv $d $d.old.$$; "
+        f"mv $n $d 2>/dev/null; rm -rf $d.old.$$; fi; rm -rf $n; fi; "
+        f"[ -f $d/.complete ] || exit 0; bash $d/{script}'"
     )
 
 

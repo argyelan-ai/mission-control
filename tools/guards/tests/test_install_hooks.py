@@ -134,6 +134,42 @@ class InstallHooks(unittest.TestCase):
                            input=b"{}", capture_output=True, env={**os.environ, "HOME": self.tmp.name})
         self.assertEqual(r.returncode, 0)
 
+    def _repo_with_guards_on_origin_main(self):
+        g = os.path.join(self.repo, "tools", "guards")
+        os.makedirs(g)
+        with open(os.path.join(g, "bash-hook.sh"), "w") as f:
+            f.write('. "$(dirname "$0")/helper.sh"\nexit 7\n')   # 7 = helper missing
+        with open(os.path.join(g, "helper.sh"), "w") as f:
+            f.write("exit 3\n")                                   # 3 = full tree ran
+        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
+        subprocess.run(["git", "-C", self.repo, "add", "-A"], check=True)
+        subprocess.run(["git", "-C", self.repo, "commit", "-qm", "g"], check=True, env=env)
+        subprocess.run(["git", "-C", self.repo, "update-ref", "refs/remotes/origin/main", "HEAD"], check=True)
+        tree = subprocess.run(["git", "-C", self.repo, "rev-parse", "origin/main:tools/guards"],
+                              check=True, capture_output=True, text=True).stdout.strip()
+        return os.path.join(self.tmp.name, ".mc", "guards", "cache", tree)
+
+    def _run_launcher(self, script):
+        cmd = ih.launcher(self.repo, script)
+        return subprocess.run(["bash", "-c", cmd.removeprefix("bash -c ").strip("'")],
+                              input=b"{}", capture_output=True, env={**os.environ, "HOME": self.tmp.name})
+
+    def test_launcher_runs_the_full_tree_and_marks_it_complete(self):
+        cache = self._repo_with_guards_on_origin_main()
+        self.assertEqual(self._run_launcher("bash-hook.sh").returncode, 3)
+        self.assertTrue(os.path.isfile(os.path.join(cache, ".complete")))
+        leftovers = [n for n in os.listdir(os.path.dirname(cache)) if n != os.path.basename(cache)]
+        self.assertEqual(leftovers, [])
+
+    def test_launcher_repairs_a_partial_cache(self):
+        # a first run died after the script but before its helpers were extracted
+        cache = self._repo_with_guards_on_origin_main()
+        os.makedirs(cache)
+        with open(os.path.join(cache, "bash-hook.sh"), "w") as f:
+            f.write('. "$(dirname "$0")/helper.sh"\nexit 7\n')
+        self.assertEqual(self._run_launcher("bash-hook.sh").returncode, 3)
+
     def test_unsafe_repo_path_is_refused(self):
         rc = None
         err = io.StringIO()
