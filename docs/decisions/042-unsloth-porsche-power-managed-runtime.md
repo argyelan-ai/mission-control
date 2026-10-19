@@ -10,6 +10,11 @@
 > Settings `PORSCHE_*` are now `WOL_LAN_IP`, `WOL_MAC`, `WOL_BROADCAST`,
 > `WOL_CONTROL_URL` (fallbacks only — the runtime/host row wins). The
 > decision itself is unchanged.
+>
+> **Note 2026-10-19:** point 6 (gate only for `power_managed`) is extended by
+> [ADR-096](096-delivered-is-not-working.md): the poll claim also waits for
+> every local runtime whose models endpoint does not answer. Push sites stay
+> as described here.
 
 ## Kontext
 

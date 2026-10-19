@@ -439,3 +439,9 @@ async def test_poll_delivers_once_the_local_runtime_answers(client, fake_redis):
         resp = await client.get("/api/v1/agent/me/poll",
                                 headers={"Authorization": f"Bearer {token}"})
     assert resp.json()["state"] == "new_task", resp.json()
+
+
+def test_held_event_renders_as_a_dispatch_line_in_the_timeline():
+    from app.routers.tasks import _ACTIVITY_KIND_MAP
+
+    assert _ACTIVITY_KIND_MAP["task.dispatch_held_runtime_down"] == "dispatch"
