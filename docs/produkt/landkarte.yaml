@@ -711,6 +711,12 @@ internal:
   # /api/v1/agent/me/telegram endpoint (FileCard telegram action). No bare
   # /api/v1/agent endpoint exists.
   - "endpoint:* /api/v1/agent/*"
+  # Step-up re-authentication (services/step_up.py, ADR-094 decision 9): a
+  # building block without its own screen. The self-update card (Settings →
+  # System) will ask GET whether to show its button and POST the password in
+  # its confirm sheet; no UI calls it yet.
+  - "endpoint:GET /api/v1/auth/step-up"
+  - "endpoint:POST /api/v1/auth/step-up"
   # Schedule heatmap and upcoming firings: client helpers exist
   # (api.schedule.getHeatmap/getUpcoming) but no component calls them —
   # the schedule page renders ScheduleHeatmap with empty data and the job

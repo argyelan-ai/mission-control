@@ -33,6 +33,36 @@ JWT_ALGORITHM = "HS256"
 LEGACY_ADMIN_NON_UUID_SUBS = frozenset({"mcp-server"})
 
 
+# ── Credential kind of the current request ──────────────────────────────────
+#
+# require_user resolves several credentials to the SAME User row: a login JWT
+# and LOCAL_AUTH_TOKEN both end up as the first admin. Most routes do not
+# care; step-up re-authentication (services/step_up.py) must, because only a
+# human login can be re-confirmed with a password. _authenticate_user records
+# which credential it accepted on ``request.state.mc_auth_method``.
+
+AUTH_METHOD_ATTR = "mc_auth_method"
+AUTH_BEARER_JWT = "bearer_jwt"          # login JWT in the Authorization header
+AUTH_COOKIE_JWT = "cookie_jwt"          # login JWT from the HttpOnly SSE cookie
+AUTH_QUERY_JWT = "query_jwt"            # legacy ?token= (ALLOW_QUERY_TOKEN_AUTH)
+AUTH_STREAM_TICKET = "stream_ticket"    # single-use ?ticket= (SSE/WS)
+AUTH_LOCAL_TOKEN = "local_auth_token"   # LOCAL_AUTH_TOKEN → first admin
+AUTH_SERVICE_JWT = "service_jwt"        # non-UUID service sub (mcp-server) → first admin
+
+
+def _mark_auth_method(request: Request, method: str) -> None:
+    try:
+        setattr(request.state, AUTH_METHOD_ATTR, method)
+    except Exception:  # noqa: BLE001 — a stub request without state
+        pass
+
+
+def auth_method(request: Request) -> str | None:
+    """Which credential authenticated this request (see AUTH_* above), or
+    ``None`` when require_user did not run."""
+    return getattr(getattr(request, "state", None), AUTH_METHOD_ATTR, None)
+
+
 def create_access_token(
     user_id: str,
     role: str,
@@ -297,14 +327,19 @@ async def _authenticate_user(
     # ALLOW_QUERY_TOKEN_AUTH — it leaks into every log that records URLs),
     # and finally the HttpOnly SSE cookie.
     raw_token: str | None = None
+    jwt_method = AUTH_BEARER_JWT
     if credentials:
         raw_token = credentials.credentials
     elif ticket:
-        return await _user_from_stream_ticket(request.url.path, ticket, session)
+        user = await _user_from_stream_ticket(request.url.path, ticket, session)
+        _mark_auth_method(request, AUTH_STREAM_TICKET)
+        return user
     elif token and settings.allow_query_token_auth:
         raw_token = token
+        jwt_method = AUTH_QUERY_JWT
     else:
         raw_token = request.cookies.get("mc_sse_token")
+        jwt_method = AUTH_COOKIE_JWT
 
     if not raw_token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing token")
@@ -336,6 +371,7 @@ async def _authenticate_user(
                     result = await session.exec(select(User).where(User.role == "admin").limit(1))
                     admin = result.first()
                     if admin:
+                        _mark_auth_method(request, AUTH_SERVICE_JWT)
                         return admin
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
             if not user or not user.is_active:
@@ -344,6 +380,7 @@ async def _authenticate_user(
             token_tv = payload.get("tv", 0)
             if token_tv != user.token_version:
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token revoked")
+            _mark_auth_method(request, jwt_method)
             return user
     except JWTError:
         pass
@@ -355,6 +392,7 @@ async def _authenticate_user(
         and secrets.compare_digest(raw_token, settings.local_auth_token)
     ):
         # First admin user, or a synthetic admin while none exists yet.
+        _mark_auth_method(request, AUTH_LOCAL_TOKEN)
         return await _legacy_admin_user(session)
     # If the caller passed an Agent Token (64-char hex) to a User-only route,
     # give a precise hint instead of a generic 401. Agents repeatedly stumble
