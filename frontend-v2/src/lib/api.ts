@@ -273,6 +273,15 @@ export const api = {
     /** Is the first-run setup wizard still due for the caller? (admins only;
      *  installs older than the marker are never pending — see lib/firstRun.ts) */
     firstRun: () => request<{ wizard_pending: boolean }>("/api/v1/auth/first-run"),
+    /** Can this session confirm a dangerous action with its password? */
+    stepUpAvailability: () => request<import("./mcUpdate").StepUpAvailability>("/api/v1/auth/step-up"),
+    /** Confirm the password again → a single-use token (5 min) for ONE
+     *  dangerous request. Wrong password = 401 under /auth/ (no sign-out). */
+    stepUp: (password: string) =>
+      request<{ step_up_token: string; expires_in: number }>("/api/v1/auth/step-up", {
+        method: "POST",
+        body: JSON.stringify({ password }),
+      }),
     completeFirstRun: () =>
       request<{ wizard_pending: boolean }>("/api/v1/auth/first-run/complete", { method: "POST" }),
     updateProfile: (data: { name?: string; preferred_name?: string; timezone?: string; current_password?: string; new_password?: string }) =>
@@ -304,6 +313,42 @@ export const api = {
         method: "PUT",
         body: JSON.stringify({ mode, reason }),
       }),
+    /** Self-update from Settings (ADR-094, routers/system_update.py). Admin
+     *  only; 404 while the feature switch is off, 409 on a managed install.
+     *  `start` and `rollback` need a fresh step-up token (auth.stepUp). */
+    update: {
+      preflight: (expectedTarget?: string | null) =>
+        request<import("./mcUpdate").UpdatePreflight>("/api/v1/system/update/preflight", {
+          method: "POST",
+          body: JSON.stringify(expectedTarget ? { expected_target: expectedTarget } : {}),
+        }),
+      status: () => request<import("./mcUpdate").UpdateStatus>("/api/v1/system/update/status"),
+      history: (limit = 20) =>
+        request<{ runs: import("./mcUpdate").UpdateHistoryRun[] }>(`/api/v1/system/update/history?limit=${limit}`),
+      start: (expectedTarget: string, stepUpToken: string) =>
+        request<{ run_id?: string; state?: string; target?: string; started?: boolean; up_to_date?: boolean; current?: string }>(
+          "/api/v1/system/update/start",
+          {
+            method: "POST",
+            headers: { "X-MC-Step-Up": stepUpToken },
+            body: JSON.stringify({ expected_target: expectedTarget }),
+          },
+        ),
+      rollback: (runId: string | null, stepUpToken: string) =>
+        request<{ run_id?: string; state?: string; phase?: string; cancel_requested?: boolean; ok?: boolean }>(
+          "/api/v1/system/update/rollback",
+          {
+            method: "POST",
+            headers: { "X-MC-Step-Up": stepUpToken },
+            body: JSON.stringify(runId ? { run_id: runId } : {}),
+          },
+        ),
+      resume: (runId: string | null) =>
+        request<{ resumed?: boolean; run_id?: string; state?: string }>("/api/v1/system/update/resume", {
+          method: "POST",
+          body: JSON.stringify(runId ? { run_id: runId } : {}),
+        }),
+    },
   },
 
   // ── Intelligence ──────────────────────────────────────────────────────────────
