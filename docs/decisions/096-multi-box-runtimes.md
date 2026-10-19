@@ -49,16 +49,38 @@ Consequences seen on 2026-10-19 [L]:
   refused — and had to leave the key unset; it also found no catalog field for
   the root setup (the export) the head needs [C, PR #887 description].
 - An engine died during a load and the operator only saw that the model was
-  gone ("why does the watcher just switch off?"). MC itself never stops a
-  running engine except through an operator stop or the eviction done by a
-  start [C: no stop path in runtime_watcher.py]. After
-  `UNREACHABLE_EVENT_THRESHOLD` failed probes the watcher emits
-  `runtime.unreachable` **without a cause** (runtime_watcher.py:369) and
-  auto-recovery runs only if the box has `autostart_enabled` (default off), at
-  most once per 15 minutes and twice in total (:1024–1057) [C]. Which guard
-  killed the engine (the recipe's memory guard, the kernel OOM killer, an exit)
-  is not read anywhere [C]; the cause of the 2026-10-19 death is not verified
-  here [A].
+  gone ("why does the watcher just switch off?"). What happened on 2026-10-19:
+  the DeepSeek duo's rank-0 container was killed by **the recipe's own memory
+  guard** at 18:44:25 UTC and stayed `Exited (137)` until a manual restart at
+  about 19:07 [L: read on the box at 21:09 and recorded in the run record;
+  not re-read for this ADR]. MC did not stop it. MC noticed it, but late and without a cause: `runtime.unreachable` at
+  18:48:18, 3 min 53 s after the death (3 failed probes at the 90 s interval,
+  `UNREACHABLE_EVENT_THRESHOLD`, runtime_watcher.py:89/342; config.py:499)
+  [L: `activity_events`]. That one death produced **three** events within
+  100 ms — for the DeepSeek row, for the GLM row (which was not running at all)
+  and for the box's slot row — because all three share the box's `:8000`
+  endpoint and "down" is decided per endpoint [L: `activity_events`,
+  `runtimes`]. Nothing restarted it: the row is a hand row and the box has
+  `autostart_enabled` off [L].
+- MC **does** stop engines on its own in exactly one case: a confirmed crash
+  loop. `_check_crash_loop` (runtime_watcher.py:732–880) compares Docker's
+  `RestartCount` against a baseline; at `CRASH_LOOP_RESTART_THRESHOLD = 3`
+  restarts within `CRASH_LOOP_WINDOW_SECONDS` (10 min) it runs
+  `docker update --restart=no` + `docker stop`, reads the last
+  `_CRASH_LOG_LINES = 200` lines of the current boot
+  (`_read_container_logs` :911), picks a reason (`_last_error_line` :167,
+  `CRASH_LOOP_LOG_PATTERNS` :141), writes the live status
+  `status=failed, reason=…` and emits `runtime.crash_loop_stopped` [C]. It did
+  not fire on 2026-10-19 [L: no `runtime.crash_loop_stopped` event; the
+  container stayed exited instead of restarting]. Apart from that, MC stops
+  engines only through an operator stop or the eviction done by a start [C].
+  Auto-recovery (`_maybe_auto_recover` :1024) runs only if the box has
+  `autostart_enabled` (default off), and then starts the box's
+  `autostart_recipe_slug` — not necessarily the runtime that died — at most
+  once per `AUTO_RECOVERY_COOLDOWN` (15 min) and `AUTO_RECOVERY_MAX_ATTEMPTS`
+  (2) times within `AUTO_RECOVERY_FAILURE_TTL` (6 h) (:98–104) [C]. For a death
+  that is not a crash loop (exit, memory guard, kernel OOM), no cause is read
+  anywhere [C].
 
 Mechanisms that already exist and are reused, not rebuilt:
 - placeholders `head_ip`, `worker_ip`, `head_fabric_ip`, `worker_fabric_ip`,
@@ -70,7 +92,16 @@ Mechanisms that already exist and are reused, not rebuilt:
   `check_engine_idle`, `ensure_exclusive_host` (recipe_switcher.py:1406,
   1466) — eviction, not refusal [C].
 - the eviction marker `get_evicted` that keeps auto-recovery away from a
-  runtime stopped on purpose (runtime_watcher.py:1070) [C].
+  runtime stopped on purpose (runtime_watcher.py:1070; one hour,
+  `EVICTED_TTL`, runtime_grace.py:112) [C].
+- crash-loop detection and stop (`_check_crash_loop`, `_read_container_logs`,
+  `_last_error_line`, `CRASH_LOOP_*`, `_CRASH_LOG_LINES`), the live status
+  fields `status`/`reason`, and auto-recovery with its budget
+  (`_maybe_auto_recover`, `AUTO_RECOVERY_*`) [C]. §11 extends these; it adds
+  no second log reader, reason field or restart budget.
+- the per-row ownership check `_served_answer_is_own` (runtime_watcher.py:604:
+  container running / process alive, slot rows always own) [C], today used
+  for drift only; §11 also uses it for up/down.
 - the node-agent with a fixed list of root-owned wrappers that reconciles
   desired vs. actual state, including `min_free_kbytes` (plans a write whenever
   actual ≠ desired) [C, scripts/node-agent/mc-node-agent.py].
@@ -123,7 +154,9 @@ is the counter-example: every cluster is a hand-made fragment.
     MemberSpec = (host_id, role, rank)
     members_of(session, runtime) -> list[Member]      # head first, then ranks
 
-Delete-then-insert in one transaction (rank uniqueness, as today). It is the
+Delete-then-insert in one transaction (rank uniqueness, as today), under a row
+lock on the runtime (`SELECT … FOR UPDATE`) so concurrent writers — API and
+worker are separate processes — are serialised (§2). It is the
 only backend code that writes `RuntimeHost` — an architecture test over
 `backend/app` rejects `RuntimeHost(`, `insert(RuntimeHost`,
 `delete(RuntimeHost`, `RuntimeHost.__table__` and `session.delete(` on member
@@ -187,11 +220,18 @@ and needs a follow-up ADR (including per-peer fabric addresses:
 the start enforces it by eviction (§1.2).
 
 `membership_audit()`:
-- **At backend start**, in the startup sequence **before**
-  `runtime_watcher.start()` (background.py:199): repair what is repairable from
-  existing data — legacy `topology.worker_host_id` without rows → rows via
-  `set_members`. The watcher's first cycle (and with it the autostart) runs
-  only after the audit returned, so no start sees half-repaired rows. Each
+- **At worker start** (background.py, which runs in the `mc-worker` container;
+  the API runs with `ENABLE_BACKGROUND_SERVICES=false`, docker-compose.yml),
+  **before** `runtime_watcher.start()` (background.py:199): repair what is
+  repairable from existing data — legacy `topology.worker_host_id` without
+  rows → rows via `set_members`. The watcher's own first cycle (and with it
+  the autostart) runs only after the audit returned. The API process keeps
+  running while the worker restarts, so operator starts and `POST/PATCH` are
+  **not** ordered after the audit. Two rules close that race: `set_members`
+  takes a row lock on the runtime (`SELECT … FOR UPDATE` on `runtimes`) for
+  its delete-then-insert, so every writer is serialised; and the audit skips
+  a runtime that has an active switching marker (`get_switching`) and
+  re-checks I1–I4 under the lock before it writes. Each
   repair writes an activity event that also says what changes for eviction
   ("<box> now counts as used by <runtime>; starting <other> there will stop
   it"). The operator decided on 2026-10-19: write and report, not report only.
@@ -443,45 +483,93 @@ can manage both." Nothing in this ADR may make solo runtimes worse.
 
 ### 11. Engine death: detected, explained, reported
 
-11.1 **Planned vs. unplanned.** Every stop MC causes writes a stop intent
-(who, why, until): operator stop, eviction by a start (the existing
-`get_evicted` marker), recipe switch, pause (`runtimes.enabled`). A transition
-to down **without** an intent is an engine death. Slot rows (ADR-078) report
+This section extends the existing watcher mechanisms (`_check_crash_loop`,
+`_read_container_logs`, `_last_error_line`, `_maybe_auto_recover`, the live
+`status`/`reason` fields, `runtime.unreachable`, `runtime.crash_loop_stopped`).
+It adds no parallel log reader, reason field or restart budget.
+
+11.1 **Planned vs. unplanned.** Every stop MC causes has a stop intent (who,
+why, since): operator stop, eviction by a start (the existing `get_evicted`
+marker), recipe switch, pause (`runtimes.enabled`), and **MC's own crash-loop
+stop** (`_check_crash_loop`; its `runtime.crash_loop_stopped` event stays the
+report for that case — it is never counted as a death a second time). The
+eviction marker expires after an hour (`EVICTED_TTL`); a runtime that was
+switched away therefore also gets a durable intent "not running — switched
+away", **without TTL**, cleared only by its own next start. A transition to
+down **without** an intent is an engine death. Slot rows (ADR-078) report
 through their recipe row only, as today.
 
-11.2 **Detect** at the existing threshold (`UNREACHABLE_EVENT_THRESHOLD`), for
-the head and — via §3.2 — for each member anchor (member death = `degraded`
-or, if the recipe takes the head down with it, a death with cause
-`member_down`).
+11.2 **Detect per runtime, not per endpoint.** On the Sparks several rows
+share one endpoint (`:8000`); a dead engine makes all of them unreachable at
+once (live: three events for one death). "Was up" is therefore decided per row
+by its own anchor (`_served_answer_is_own`: own container running / own
+process alive): only a row whose last healthy probe was its **own** answer can
+die. A row whose anchor never ran (the GLM row on 2026-10-19) gets no death,
+no notification and no restart — whether or not its eviction marker has
+expired. One engine death produces exactly one death. The slot row follows its
+recipe row (11.1).
+
+**Detection target: ≤ 2 probe intervals** after the death (operator
+requirement, 2026-10-19; today up to 3 intervals plus the tick offset, live
+3 min 53 s). Fast path: when a row that was up (own answer, `serving_since`
+set) gets **connection refused** — nothing listens, as opposed to a timeout,
+which a stalling box also produces — the watcher checks the row's anchor once
+(node-agent report §3.2, else one SSH `docker inspect` / process check). Anchor
+gone or exited → death declared at that probe. Anchor still running, or the
+answer is a timeout → the existing threshold of 3 applies unchanged (a box
+mid-stall must not be declared dead). The fast path never stops or starts
+anything by itself. For member anchors (§3.2) a member death is `degraded`,
+or — if the recipe takes the head down with it — a death with cause
+`member_down`.
 
 11.3 **Explain**, once per death, read-only, best effort, bounded to about
-10 s: the anchor's exit state from the node-agent report (exit code,
-`OOMKilled`, finished at) or one on-demand SSH `docker inspect` / process
-check; the last 200 log lines of the anchor matched against the recipe's
+10 s, by **reusing** the crash-loop readers: `_read_container_logs` (current
+boot, `_CRASH_LOG_LINES` = 200) and `_last_error_line`, with the pattern list
+`CRASH_LOOP_LOG_PATTERNS` extended by the recipe's
 `requirements.death_markers` (e.g. the line the recipe's memory guard prints)
-and a built-in list (CUDA out of memory, NCCL error, `Killed`); kernel OOM from
-the node-agent where available. Result on the runtime's live status:
-`stop_reason {code: guard | oom | kernel_oom | exit | member_down | unknown,
-box, detail, at}`. `unknown` is a valid, honest answer.
+and a built-in list (CUDA out of memory, NCCL error, `Killed`). Patterns
+explain, they never decide (as in `_check_crash_loop`). Plus the anchor's exit
+state from the node-agent report (exit code, `OOMKilled`, finished at) or the
+same `docker inspect` the fast path already ran, and kernel OOM from the
+node-agent where available. Example: 2026-10-19 would read exit 137 + the
+guard's marker line → `guard`. The result goes into the **existing** live
+fields: `status=failed`, `reason=<sentence>` (as the crash-loop stop writes
+them today), plus `reason_code` (`guard | oom | kernel_oom | exit |
+member_down | crash_loop | unknown`), `box` and `at`. No separate
+`stop_reason` field. `unknown` is a valid, honest answer.
 
 11.4 **Report**: one notification per death (deduplicated per runtime and
-start) with a reason sentence in DE/EN naming the box ("<runtime> stopped on
-<box>: the recipe's memory guard ended the engine at 21:14"); the Runtimes card
-shows the reason, the time and a link to the last log lines; the
-`runtime.unreachable` event carries the cause.
+start; rows sharing the endpoint add none) with a reason sentence in DE/EN
+naming the box ("<runtime> stopped on <box>: the recipe's memory guard ended
+the engine at 21:14"); the Runtimes card shows the reason, the time and a link
+to the last log lines; the `runtime.unreachable` event carries the cause and
+fires once, for the dead row.
 
 11.5 **Work does not fail silently**: agents bound to a dead runtime keep
 their queued work; delivery waits while the runtime is down (relates to open
 PR #884, whose final shape is not decided here [A]), and every affected task in
 progress gets one visible system comment naming the death and its reason.
 
-11.6 **Restart is optional and bounded.** It stays the box's decision
-(`hosts.autostart_enabled`, default off, ADR-077 P3). New: backoff (15 → 30 →
-60 min), a maximum number of attempts (default 3, changeable in Settings per
-ADR-093), and **no** automatic restart when the same cause hits twice in a row
-— that is a crash loop, MC stops and says so. A duo restarts only as a whole
-recipe start (memprep on all members, §4); MC never restarts a worker alone
-(§3.4). Every attempt and every give-up is notified.
+11.6 **Restart is optional and bounded — by the existing budget.** It stays
+the box's decision (`hosts.autostart_enabled`, default off, ADR-077 P3) and
+stays in `_maybe_auto_recover`; there is no second restart mechanism. Changes
+to it: (a) the cooldown becomes a backoff (15 → 30 → 60 min) on the existing
+`AUTO_RECOVERY_COOLDOWN`; (b) `AUTO_RECOVERY_MAX_ATTEMPTS` (today 2) and the
+6 h `AUTO_RECOVERY_FAILURE_TTL` become Settings values (ADR-093), default
+unchanged; (c) **no** automatic restart when the same `reason_code` hits twice
+in a row — the same rule the crash-loop stop already applies to Docker
+restarts, now for MC's own attempts; MC stops trying and says so; (d) it
+restarts only the runtime that **died** (11.2), and only when that runtime is
+the box's `autostart_recipe_slug` — otherwise it reports and does nothing, so
+a DeepSeek death can never start GLM. A duo restarts only as a whole recipe
+start (memprep on all members, §4); MC never restarts a worker alone (§3.4).
+Every attempt and every give-up is notified.
+
+The motivating case does **not** get a restart from PR 3: the DeepSeek duo is
+a hand row (§8.2: no autostart) and both Sparks have `autostart_enabled` off
+[L]. Until PR 7 makes it a private recipe and the operator switches on
+autostart for the box, a DeepSeek death is detected, explained and reported —
+not restarted.
 
 ### Rollout
 
@@ -494,6 +582,15 @@ placeholders, strict fabric, lint, shadowing check; (6) pre-flight register +
 `requirements`/`options` migration + options block; (7) folder source, lock
 on new multi-box hand rows, DeepSeek duo as private recipe, handbook;
 (8) watermark hold in the node-agent.
+
+PR 3 carries at least these tests for §11: (a) two rows share one endpoint,
+DeepSeek dies while GLM has been evicted for more than one hour → exactly one
+death, one notification, for DeepSeek, and no autostart of GLM; (b) a ready
+engine whose probe gets connection refused and whose anchor has exited is
+declared dead within 2 probe intervals; a timeout with the anchor still
+running is not; (c) a crash-loop stop is reported once (as
+`runtime.crash_loop_stopped`), not again as a death; (d) the same
+`reason_code` twice → no third start attempt.
 
 ### Later (named, not decided here)
 
@@ -511,7 +608,7 @@ wrapper; recipe editor UI on top of the folder source.
 - **Keep writing `topology.worker_host_id` for one release** → rejected: transition copies tend to stay; deriving it on read keeps old readers working with one stored truth.
 - **Occupancy check (409) inside `set_members`** → rejected: would forbid switching between two duos, or solo ↔ duo, on the same boxes; eviction at start is the existing, correct policy.
 - **Head row for solo runtimes too** → rejected: more uniform, but rewrites every existing row for no user gain; `members_of` computes the implicit head instead.
-- **Healer writing in every watcher cycle** → rejected: races with a concurrent start (no shared lock) and silently changes eviction; it writes only at backend start, before the watcher.
+- **Healer writing in every watcher cycle** → rejected: silently changes eviction every 90 s and multiplies the race with operator starts; it writes only once at worker start, before the watcher, under the runtime row lock and skipping runtimes that are switching (§2).
 - **Per-member SSH liveness probe every tick** → rejected: SSH load on the head path; node-agent report instead.
 - **Per-member liveness as a second Redis status** → rejected: two answers to "is it running"; one status with `degraded`.
 - **DB trigger for the invariants** → rejected: cross-table trigger, opaque errors, hard to test.
@@ -578,8 +675,9 @@ wrapper; recipe editor UI on top of the folder source.
 - backend/app/services/recipe_env.py:56–72, :95–120
 - backend/app/services/launch_template.py:131
 - backend/app/services/host_memory_prep.py:13, :49, :250, :345–352, :729, :831, :870, :951; runtime_manager.py:2231, :2254, :2258
-- backend/app/services/runtime_watcher.py:285, :369, :403, :937, :1024–1110, :1283
-- backend/app/background.py:199
+- backend/app/services/runtime_watcher.py:89, :98–104, :126–144, :167, :285, :342–369, :403, :604, :732–880, :911, :937, :1024–1110, :1283
+- backend/app/services/runtime_grace.py:85 (`get_switching`), :112 (`EVICTED_TTL`), :142 (`get_evicted`); backend/app/config.py:499 (`runtime_watcher_interval`)
+- backend/app/background.py:199; docker-compose.yml (API: `ENABLE_BACKGROUND_SERVICES=false`, background services in `mc-worker`)
 - backend/app/services/config_checks/registry.py; backend/alembic/versions/0218_config_checks.py
 - backend/app/services/local_registry.py:86, :136
 - backend/app/routers/nodes.py (pairing ignores device `ssh_host`); routers/hosts.py (`_validate_fabric_ip`)
