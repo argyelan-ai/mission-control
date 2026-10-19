@@ -9,7 +9,11 @@ Zwei Wege, in dieser Reihenfolge (ADR-078, 05.09.2026):
    ``models.yml`` + ``omp.env`` im laufenden Container neu. ``launch-omp.sh``
    liest ``omp.env`` bei jedem Window-Respawn neu ein, und die Bridge respawnt
    Window 0 für jede Aufgabe — die nächste Aufgabe fährt also auf dem neuen
-   Modell, ohne Neustart. Wichtig, seit alle Agenten einer Box an derselben
+   Modell, ohne Neustart. Unter ``OMP_DRIVER=acp`` gibt es kein Window-0-omp:
+   dort lesen der Chat-Daemon (``acp_chat.py``) und der Task-Pfad
+   (``bridge.py``) den Selektor bei JEDER neuen Sitzung frisch aus ``omp.env``
+   (``docker/omp-bridge/acp_model.py``) — vorher behielten beide tagelang das
+   Modell ihres Starts (Vorfall 19.10.2026: „Unknown ACP model"). Wichtig, seit alle Agenten einer Box an derselben
    Slot-Zeile hängen: ein Wechsel flaggt die ganze Flotte, und serielle
    Neustarts mit je 60 s Health-Frist wären Minuten Stillstand.
 2. **Neustart (Rückfall, und der einzige Weg für alle anderen Harnesses).**
