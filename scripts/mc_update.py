@@ -633,7 +633,7 @@ class Engine:
         self._project: Optional[str] = None
         self.poll = _float_setting("MC_UPDATE_POLL_INTERVAL", 5.0)
         self.start_period = _float_setting("MC_UPDATE_START_PERIOD", 300.0)
-        # ADR-094 decision 4: 25 min on arm64 (Pi, Spark, Apple silicon), else 12.
+        # ADR-094 decision 4: 25 min on arm64 (single-board computers, Apple silicon, …), else 12.
         arm = platform.machine().lower() in ("aarch64", "arm64", "armv7l")
         self.verify_timeout = _float_setting("MC_UPDATE_VERIFY_TIMEOUT", 1500.0 if arm else 720.0)
         self.drain_timeout = _float_setting("MC_UPDATE_DRAIN_TIMEOUT", 1800.0)
