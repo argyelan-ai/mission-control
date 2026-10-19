@@ -177,6 +177,18 @@ function Sentence({ children, testId, tone = "primary" }: { children: React.Reac
   );
 }
 
+/** A state sentence led by a status dot on its first line. */
+function Lead({ dot, children }: { dot: "online" | "warning" | "error"; children: React.ReactNode }) {
+  return (
+    <div className="flex items-start gap-3">
+      <span className="h-5 flex items-center shrink-0">
+        <StatusDot status={dot} />
+      </span>
+      <Sentence testId="update-sentence">{children}</Sentence>
+    </div>
+  );
+}
+
 function Muted({ children, testId }: { children: React.ReactNode; testId?: string }) {
   return (
     <p className="text-xs" data-testid={testId} style={{ color: "var(--color-text-muted)", maxWidth: "72ch" }}>
@@ -222,29 +234,94 @@ function CheckRow({ check }: { check: UpdateCheck }) {
   const t = useTranslations("settings.update.checks");
   const key = checkKey(check);
   const label = key && t.has(key) ? t(key) : t("generic", { id: check.id });
-  return (
-    <li className="flex items-start gap-3 py-2" data-testid="update-check" data-check={check.id} data-status={check.status}>
-      <span className="pt-2">
+  const attention = check.status !== "ok";
+  const head = (
+    <>
+      {/* h-5 = one line of text-sm: the dot sits on the first line */}
+      <span className="h-5 flex items-center shrink-0">
         <StatusDot status={DOT[check.status]} size="sm" />
       </span>
-      <div className="flex-1 min-w-0 space-y-2">
-        <p className="text-sm" style={{ color: check.status === "ok" ? "var(--color-text-secondary)" : "var(--color-text-primary)" }}>
-          {label}
-        </p>
-        {check.status !== "ok" && check.command && <CommandLine command={check.command} />}
-        {check.status !== "ok" && <MachineDetail text={check.message} />}
-      </div>
+      <span
+        className="min-w-0 text-sm"
+        style={{ color: attention ? "var(--color-text-primary)" : "var(--color-text-secondary)", maxWidth: "72ch" }}
+      >
+        {label}
+      </span>
+    </>
+  );
+  return (
+    <li className="space-y-2" data-testid="update-light" data-check={check.id} data-status={check.status}>
+      {attention && check.message ? (
+        // The machine's own (English) words fold out under the row — one
+        // language on screen (K10), the numbers still one tap away.
+        <details className="group">
+          <summary className="flex items-start gap-3 cursor-pointer list-none [&::-webkit-details-marker]:hidden">
+            {head}
+            <ChevronDown
+              size={16}
+              className="shrink-0 mt-1 transition-transform group-open:rotate-180"
+              style={{ color: "var(--color-text-muted)" }}
+              aria-hidden
+            />
+          </summary>
+          <span className="block pl-6 pt-1 text-xs font-mono break-words" style={{ color: "var(--color-text-muted)" }}>
+            {check.message}
+          </span>
+        </details>
+      ) : (
+        <div className="flex items-start gap-3">{head}</div>
+      )}
+      {attention && check.command && (
+        <div className="pl-6">
+          <CommandLine command={check.command} />
+        </div>
+      )}
     </li>
   );
 }
 
+/** Red and yellow lights in full; the green ones folded into one line (K4). */
 function CheckList({ checks }: { checks: UpdateCheck[] }) {
+  const t = useTranslations("settings.update");
+  const [showOk, setShowOk] = useState(false);
+  const sorted = sortChecks(checks);
+  const attention = sorted.filter((c) => c.status !== "ok");
+  const ok = sorted.filter((c) => c.status === "ok");
   return (
-    <ul className="divide-y" style={{ borderColor: C.borderSubtle }} data-testid="update-checks">
-      {sortChecks(checks).map((c) => (
-        <CheckRow key={`${c.id}-${c.status}`} check={c} />
-      ))}
-    </ul>
+    <div className="space-y-3" data-testid="update-checks">
+      {attention.length > 0 && (
+        <ul className="space-y-3">
+          {attention.map((c) => (
+            <CheckRow key={`${c.id}-${c.status}`} check={c} />
+          ))}
+        </ul>
+      )}
+      {ok.length > 0 && (
+        <div>
+          <button
+            type="button"
+            onClick={() => setShowOk((v) => !v)}
+            aria-expanded={showOk}
+            className="min-h-11 flex items-center gap-3 text-sm cursor-pointer"
+            style={{ color: "var(--color-text-secondary)" }}
+            data-testid="update-checks-ok"
+          >
+            <span className="h-5 flex items-center shrink-0">
+              <StatusDot status="online" size="sm" />
+            </span>
+            {t("okCount", { count: ok.length })}
+            <ChevronDown size={16} style={{ transform: showOk ? "rotate(180deg)" : undefined }} className="transition-transform" />
+          </button>
+          <Unfold open={showOk}>
+            <ul className="space-y-3 pt-1 pb-2">
+              {ok.map((c) => (
+                <CheckRow key={`${c.id}-${c.status}`} check={c} />
+              ))}
+            </ul>
+          </Unfold>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -867,7 +944,7 @@ export function MCUpdateCard({
         <>
           <Sentence testId="update-sentence">{t("running", { target })}</Sentence>
           <PhaseBar step={state.step} />
-          {state.step >= 1 && <Muted>{t("restartSoon")}</Muted>}
+          {state.step >= 2 && <Muted>{t("restartSoon")}</Muted>}
           {state.stale && <Muted testId="update-stale">{t("staleNote")}</Muted>}
           {isPreSwitch(state.run.phase) && (
             <QuietButton type="button" onClick={() => setSheet("cancel")} data-testid="update-cancel">
@@ -926,10 +1003,7 @@ export function MCUpdateCard({
       const when = formatStamp(backupTakenAt(state.run) ?? state.run.finished_at, locale);
       body = (
         <>
-          <div className="flex items-center gap-2">
-            <StatusDot status="online" />
-            <Sentence testId="update-sentence">{t("success", { version: v })}</Sentence>
-          </div>
+          <Lead dot="online">{t("success", { version: v })}</Lead>
           {when && <Muted testId="update-backup">{t("successBackup", { when })}</Muted>}
           {watched && <Muted>{t("reloading")}</Muted>}
         </>
@@ -941,18 +1015,13 @@ export function MCUpdateCard({
       const stepName = state.step !== null ? t(`steps.${STEPS[state.step]}`) : null;
       body = (
         <>
-          <div className="flex items-start gap-2">
-            <span className="pt-2">
-              <StatusDot status={state.requested ? "online" : "error"} />
-            </span>
-            <Sentence testId="update-sentence">
-              {state.requested
-                ? t("rolledBackRequested", { from })
-                : stepName
-                  ? t("rolledBack", { step: stepName, from })
-                  : t("rolledBackNoStep", { from })}
-            </Sentence>
-          </div>
+          <Lead dot={state.requested ? "online" : "error"}>
+            {state.requested
+              ? t("rolledBackRequested", { from })
+              : stepName
+                ? t("rolledBack", { step: stepName, from })
+                : t("rolledBackNoStep", { from })}
+          </Lead>
           {!state.requested && <LogBlock run={state.run} />}
         </>
       );
@@ -988,22 +1057,14 @@ export function MCUpdateCard({
     case "interrupted": {
       body = state.bridgeReachable ? (
         <>
-          <div className="flex items-center gap-2">
-            <StatusDot status="warning" />
-            <Sentence testId="update-sentence">{t("interrupted")}</Sentence>
-          </div>
+          <Lead dot="warning">{t("interrupted")}</Lead>
           <QuietButton type="button" onClick={() => resume.mutate()} disabled={resume.isPending} data-testid="update-resume">
             {t("resumeNow")}
           </QuietButton>
         </>
       ) : (
         <>
-          <div className="flex items-start gap-2">
-            <span className="pt-2">
-              <StatusDot status="warning" />
-            </span>
-            <Sentence testId="update-sentence">{t("interruptedNoBridge")}</Sentence>
-          </div>
+          <Lead dot="warning">{t("interruptedNoBridge")}</Lead>
           <CommandLine command={state.command} />
         </>
       );
@@ -1012,12 +1073,7 @@ export function MCUpdateCard({
     case "rollbackFailed": {
       body = (
         <>
-          <div className="flex items-start gap-2">
-            <span className="pt-2">
-              <StatusDot status="error" />
-            </span>
-            <Sentence testId="update-sentence">{t("rollbackFailed")}</Sentence>
-          </div>
+          <Lead dot="error">{t("rollbackFailed")}</Lead>
           <CommandLine command={status?.command ?? CMD_ROLLBACK} />
           <LogBlock run={state.run} />
         </>

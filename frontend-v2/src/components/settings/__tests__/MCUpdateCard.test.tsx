@@ -175,8 +175,11 @@ describe("available → check → lights → password → start", () => {
     await userEvent.click(screen.getByTestId("update-check"));
     await waitFor(() => expect(card().dataset.state).toBe("ready"));
     expect(m.preflight).toHaveBeenCalledWith("v0.9.3");
-    const lights = screen.getAllByTestId("update-check").filter((el) => el.tagName === "LI");
-    // red/yellow first
+    // Yellow in full; the green ones folded into one line until asked for.
+    expect(screen.getAllByTestId("update-light").map((l) => l.dataset.check)).toEqual(["work"]);
+    expect(screen.getByTestId("update-checks-ok")).toHaveTextContent("2 checks passed");
+    await userEvent.click(screen.getByTestId("update-checks-ok"));
+    const lights = screen.getAllByTestId("update-light");
     expect(lights[0].dataset.status).toBe("warn");
     expect(lights.map((l) => l.dataset.check)).toEqual(["work", "bridge", "disk"]);
 
