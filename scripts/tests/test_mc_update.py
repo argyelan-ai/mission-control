@@ -510,6 +510,28 @@ def test_live_lock_holder_gets_423(world: World):
     assert world.run("start").returncode == 0
 
 
+def test_status_and_preflight_never_take_the_lock(world: World):
+    """They are polled by the UI. A live holder is read from the record —
+    the probe must not grab the flock (a start at that instant would get 423)."""
+    world.state.mkdir(parents=True, exist_ok=True)
+    mod = _load_engine_module()
+    (world.state / "lock").write_text(json.dumps({"pid": os.getpid(), "start": mod.process_start(os.getpid()),
+                                                  "run_id": "x"}))
+    st = json.loads(world.run("status", "--json").stdout)
+    assert st["lock"]["held"] is True
+    pf = json.loads(world.run("preflight", "--json").stdout)
+    assert any(c["id"] == "lock" and c["status"] == "fail" for c in pf["checks"])
+    calls = []
+    real_flock = mod.fcntl.flock
+    mod.fcntl.flock = lambda *a: (calls.append(a), real_flock(*a))[1]
+    try:
+        eng = mod.Engine(world.inst, world.state)
+        assert eng.lock.live_holder() is not None
+    finally:
+        mod.fcntl.flock = real_flock
+    assert calls == []
+
+
 def test_lock_left_by_a_dead_process_does_not_block(world: World):
     dead = subprocess.Popen([sys.executable, "-c", "pass"])
     dead.wait()

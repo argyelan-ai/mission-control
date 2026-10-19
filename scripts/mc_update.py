@@ -395,20 +395,16 @@ class RunLock:
         rec["alive"] = pid_alive(int(rec["pid"]), rec.get("start"))
         return rec
 
-    def is_free(self) -> bool:
+    def live_holder(self) -> Optional[Dict[str, Any]]:
+        """The record of a live holder, or None.
+
+        Read-only on purpose: status and preflight are polled by the UI, and a
+        probe that took the flock for a moment could make a start that
+        happens at that instant fail with "locked"."""
         if self.fd is not None:
-            return False
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(str(self.path), os.O_RDWR | os.O_CREAT, 0o600)
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError as e:
-            if e.errno in (errno.EWOULDBLOCK, errno.EAGAIN, errno.EACCES):
-                return False
-            raise
-        finally:
-            os.close(fd)   # closing drops the probe lock again
-        return True
+            return {"pid": os.getpid(), "alive": True}
+        h = self.holder()
+        return h if h and h.get("alive") else None
 
     def acquire(self, run_id: Optional[str]) -> None:
         inherited = os.environ.get("MC_UPDATE_LOCK_FD")
@@ -951,9 +947,9 @@ class Engine:
         else:
             add("channel", "ok", "channel stable")
 
-        lock_free = self.lock.fd is not None or self.lock.is_free()
+        busy = self.lock.fd is None and self.lock.live_holder() is not None
         open_run = find_open_run(self.state)
-        if not lock_free:
+        if busy:
             add("lock", "fail", "another update is running")
         elif open_run is not None:
             add("lock", "fail", f"run {open_run.run_id} was interrupted in phase {open_run.phase} — resume it first (mc_update.py resume)")
@@ -1558,7 +1554,7 @@ class Engine:
             self.emit({"ok": False}, human="✗ no update run on this machine — nothing to go back to.")
             return EXIT_USAGE
         self.journal = j
-        if not self.lock.is_free():
+        if self.lock.live_holder() is not None:
             if j.phase in PRE_SWITCH:
                 (self.run_dir() / "cancel").parent.mkdir(parents=True, exist_ok=True)
                 (self.run_dir() / "cancel").write_text(_iso() + "\n")
@@ -1594,7 +1590,7 @@ class Engine:
     def cmd_status(self, run_id: Optional[str]) -> int:
         j = find_run(self.state, run_id)
         holder = self.lock.holder()
-        lock = {"held": not self.lock.is_free(), "pid": holder.get("pid") if holder else None,
+        lock = {"held": bool(holder and holder.get("alive")), "pid": holder.get("pid") if holder else None,
                 "pid_alive": holder.get("alive") if holder else None}
         if j is None:
             self.emit({"run_id": None, "lock": lock}, human="No update run on this machine.")
