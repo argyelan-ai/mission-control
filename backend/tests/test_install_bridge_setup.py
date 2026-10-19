@@ -252,3 +252,32 @@ def test_installer_offers_the_bridge_on_install_update_and_by_flag():
     assert "mc_bridge_setup ask" in body and "mc_bridge_setup batch" in body
     main = text.split('[ "${MC_INSTALL_LIB_ONLY:-0}" = 1 ]', 1)[1]
     assert main.count("mc_bridge_offer") >= 2      # after a fresh install and after --update
+
+
+def test_bridge_flag_sets_it_up_in_an_existing_install(box):
+    """`./install.sh --bridge` end to end: prerequisites, then only the bridge."""
+    inst, state, env, _ = box
+    shutil.copy(INSTALL_SH, inst / "install.sh")
+    (inst / "scripts" / "lib").mkdir()
+    shutil.copy(ROOT / "scripts" / "lib" / "remote-access.sh", inst / "scripts" / "lib" / "remote-access.sh")
+    run_env = {k: v for k, v in env.items() if k != "MC_INSTALL_LIB_ONLY"}
+    r = subprocess.run(["bash", "install.sh", "--bridge", "--non-interactive"], cwd=inst, env=run_env,
+                       capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert _lines(state, "service") == ["bind=172.18.0.1"]
+    assert _lines(state, "sudo") == []
+    # nothing else of the installer ran: no clone, no setup.sh, no stack boot
+    assert not any(c.startswith(("docker compose pull", "docker compose up -d\n")) or c == "docker compose up -d"
+                   for c in _lines(state, "docker"))
+
+
+def test_bridge_flag_outside_an_install_changes_nothing(box, tmp_path):
+    _, state, env, _ = box
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    run_env = {k: v for k, v in env.items() if k != "MC_INSTALL_LIB_ONLY"}
+    r = subprocess.run(["bash", str(INSTALL_SH), "--bridge", "--non-interactive"], cwd=empty, env=run_env,
+                       capture_output=True, text=True, timeout=60)
+    assert r.returncode != 0
+    assert "installed Mission Control directory" in r.stderr
+    assert _lines(state, "service") == []
