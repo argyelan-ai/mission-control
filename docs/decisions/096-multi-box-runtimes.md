@@ -9,7 +9,8 @@
 > Basis: `origin/main` @ 8ef7862e, after PR #878 (writes `runtime_hosts` on
 > `POST/PATCH /runtimes/db`). Line numbers below are from that commit.
 > Evidence marks: [C] code, [L] live read on 2026-10-19, [A] assumption.
-> The working draft called this ADR-096; that number is taken by an open PR.
+> Number: 096 was reserved for this ADR; ADR-097 (delivered is not working,
+> PR #884) landed first.
 
 ## Kontext
 
