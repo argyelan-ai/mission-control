@@ -174,6 +174,24 @@ def test_daemon_pins_the_current_model_after_a_runtime_switch(tmp_path):
         sess.close()
 
 
+def test_daemon_follows_the_file_even_when_the_old_model_is_still_offered(tmp_path):
+    """Layer 1 on its own: while both models are offered, only the re-read
+    omp.env can tell the daemon that the runtime moved on — the offered
+    check cannot (sabotage probe S2 survived without this test)."""
+    env_file = tmp_path / "omp.env"
+    write_env(env_file, NEW)
+    client = StrictClient(session_result=session_result(OLD, NEW))
+    sess = make_session(
+        tmp_path, client, model=OLD,
+        model_resolver=lambda: acp_model.current_selector({"OMP_ENV_FILE": str(env_file)}),
+    )
+    sess.start()
+    try:
+        assert model_pins(client) == [NEW]
+    finally:
+        sess.close()
+
+
 def test_daemon_never_sends_a_stale_selector_even_if_the_file_is_stale(tmp_path):
     """Generic guard: even when the resolver still says OLD (file not yet
     re-rendered), a session that only offers NEW gets NEW + a notice."""
