@@ -1689,7 +1689,7 @@ def drive_live_run(
             # nudges + comments on an already-done task). Only a CONFIRMED
             # False stops the loop — True/None (undeterminable) keep the
             # exact old fail-open behavior.
-            if lifecycle.task_is_active(task_id) is False:
+            if _ownership_lost(lifecycle, task_id, acked=acked or ack_gate is None):
                 _log_halted_external(lifecycle, task_id)
                 return LifecycleAction(
                     action="halted_external", classification=cls,
@@ -1703,7 +1703,7 @@ def drive_live_run(
             outcome = continue_once(nudge_prompt)
             continue
         if action.action == "retry" and attempts_left > 0:
-            if lifecycle.task_is_active(task_id) is False:
+            if _ownership_lost(lifecycle, task_id, acked=acked or ack_gate is None):
                 _log_halted_external(lifecycle, task_id)
                 return LifecycleAction(
                     action="halted_external", classification=cls,
@@ -1792,6 +1792,39 @@ def drive_live_run(
             )
         action.reflection = outcome.reflection_block
         return action
+
+
+def _ownership_lost(lifecycle: MCLifecycle, task_id: str, *, acked: bool) -> bool:
+    """Was the task taken away from this run (closed, reassigned)?
+
+    Claimed (or no ack gate): #881's rule — ``task_is_active`` must say a
+    CONFIRMED False. Delivered but not claimed yet (ack gate, the model has
+    not answered): the card is legitimately still ``inbox``, so ``inbox``
+    counts as ours too; only another status or another assignee is a loss.
+    Without this, the first retry on an unclaimed card read ``inbox`` as
+    "taken away" and the run ended silently (the safety net only looks at
+    in_progress cards). Unreadable = not lost (fail-open)."""
+    if acked:
+        return lifecycle.task_is_active(task_id) is False
+    read = getattr(lifecycle, "task_state", None)
+    if read is None:
+        return False
+    try:
+        state = read(task_id)
+    except Exception:  # noqa: BLE001 — a read never breaks the loop
+        return False
+    if not state:
+        return False
+    if state.get("status") not in ("inbox", "in_progress", "waiting"):
+        return True
+    assigned = state.get("assigned_agent_id")
+    if not assigned:
+        return True  # unassigned = taken away from this agent
+    try:
+        me = lifecycle.own_agent_id(task_id)
+    except Exception:  # noqa: BLE001
+        me = None
+    return bool(me and assigned != me)
 
 
 def _log_halted_external(lifecycle: MCLifecycle, task_id: str) -> None:

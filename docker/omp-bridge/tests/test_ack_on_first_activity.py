@@ -221,6 +221,70 @@ def test_output_without_a_gate_signal_still_claims_before_terminal():
     assert lc.kinds() == ["ack", "finish"], lc.calls
 
 
+class OwnershipReading(Recording):
+    """Lifecycle with #881's real ownership read: ``task_state`` +
+    ``own_agent_id`` and the production ``task_is_active`` rule
+    (in_progress/waiting + mine)."""
+
+    _ACTIVE_STATUSES = bridge.McCliLifecycle._ACTIVE_STATUSES
+
+    def __init__(self, status: str, assigned: str = "ME"):
+        super().__init__()
+        self.status = status
+        self.assigned = assigned
+
+    def task_state(self, task_id):
+        return {"status": self.status, "assigned_agent_id": self.assigned}
+
+    def own_agent_id(self, task_id):
+        return "ME"
+
+    def task_is_active(self, task_id):
+        return bridge.McCliLifecycle.task_is_active(self, task_id)
+
+
+def test_unclaimed_inbox_card_is_still_ours_for_a_retry():
+    """#881 x #884: a delivered, not-yet-claimed card is legitimately
+    ``inbox``. The ownership check before a retry must not read that as
+    "taken away" (halted_external) — the run would end silently with no
+    blocker, because the safety net only looks at in_progress cards."""
+    lc = OwnershipReading("inbox")
+    gate = bridge.FirstActivityAck(lc, "T1")
+    runs: list[int] = []
+
+    def run_once():
+        runs.append(1)
+        return _dead_model_outcome()
+
+    action = bridge.drive_live_run(
+        lc, run_once, task_id="T1", board_requires_review=False,
+        retries_left=1, ack_gate=gate, classify_fn=bridge.classify_acp,
+    )
+    assert action.action != "halted_external", (action, lc.calls)
+    assert len(runs) == 2, runs
+    assert "blocker" in lc.kinds(), lc.calls
+
+
+def test_unclaimed_card_given_to_someone_else_halts():
+    lc = OwnershipReading("inbox", assigned="OTHER")
+    gate = bridge.FirstActivityAck(lc, "T1")
+    action = bridge.drive_live_run(
+        lc, _dead_model_outcome, task_id="T1", board_requires_review=False,
+        retries_left=1, ack_gate=gate, classify_fn=bridge.classify_acp,
+    )
+    assert action.action == "halted_external", (action, lc.calls)
+
+
+def test_claimed_card_back_in_inbox_halts():
+    """Once claimed, ``inbox`` means MC took the card back — stop."""
+    lc = OwnershipReading("inbox")
+    action = bridge.drive_live_run(
+        lc, _dead_model_outcome, task_id="T1", board_requires_review=False,
+        retries_left=1, pre_acked=True, classify_fn=bridge.classify_acp,
+    )
+    assert action.action == "halted_external", (action, lc.calls)
+
+
 # ── 3. serve loop, ACP branch, production wiring ────────────────────────────
 
 _ENV_KEYS = (
