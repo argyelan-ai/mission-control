@@ -185,7 +185,20 @@ async def mark_stopped(slug: str | None) -> None:
     try:
         redis = await get_redis()
         await redis.setex(_stopped_key(slug), STOPPED_TTL, _utcnow_iso())
-        await redis.delete(crash_key(slug))
+        # The crash was mirrored onto the box's slot row(s) (engine_death):
+        # the acknowledgement covers them too, else the slot line stays
+        # "crashed" for days while the box is idle.
+        raw = await redis.get(crash_key(slug))
+        if isinstance(raw, bytes):
+            raw = raw.decode()
+        mirrors: list = []
+        if raw:
+            try:
+                doc = json.loads(raw)
+                mirrors = [m for m in (doc.get("mirrored_to") or []) if isinstance(m, str)]
+            except (ValueError, AttributeError):
+                mirrors = []
+        await redis.delete(crash_key(slug), *(crash_key(m) for m in mirrors))
     except Exception as exc:  # noqa: BLE001
         logger.debug("mark_stopped(%s) failed: %s", slug, exc)
 

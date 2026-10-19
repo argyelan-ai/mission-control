@@ -28,11 +28,14 @@ three-probe threshold that already raised ``runtime.unreachable``:
    by the watcher's live snapshot as ``status="crashed"`` until the engine
    serves again or MC stops the runtime (a stop is the acknowledgement).
 4. **Tell**: exactly one ``runtime.engine_died`` event per death and port —
-   rows sharing an endpoint are deduplicated, a slot row leaves the event to
-   the recipe row that names the model.
-5. **Hand back**: running tasks of agents bound to the dead row go back to
-   the inbox with a system comment saying why, instead of failing silently
-   later. With ADR-096's local readiness gate (PR #884) the poll then holds
+   rows sharing an endpoint are deduplicated; a slot row defers entirely to
+   the recipe row that names the model (verdict ``not_ours``), which mirrors
+   its crash doc onto the slot row.
+5. **Hand back**: running tasks of every agent on the dead PORT (live they
+   are bound to the slot row, not the recipe row) go back to the inbox with
+   a system comment saying why, instead of failing silently later — but only
+   when the box confirmed the death. "Box not askable" (``unknown``: SSH
+   timeout, network flap) is reported, and the work stays where it is. With ADR-096's local readiness gate (PR #884) the poll then holds
    them until the model answers again; without it they are delivered again
    on the next poll exactly as before.
 
@@ -81,15 +84,35 @@ CONTAINER_GONE = "container_gone"
 PROCESS_GONE = "process_gone"
 UNKNOWN = "unknown"
 
-_MEMGUARD_NEEDLES = ("memguard",)
+#: A memguard KILL line, not any mention (a start banner says "memguard armed").
+#: Live wording (memguard.log 18.10.): "... under the 2.5 GiB floor: killed container".
+_MEMGUARD_NEEDLE = "memguard"
+_KILL_NEEDLE = "kill"
+#: Reasons the box itself confirmed: the engine is really gone. Only these hand
+#: running tasks back — "unknown" (box not askable: SSH timeout, network or
+#: Tailscale flap, reboot) is no proof of a death.
+CONFIRMED_DEAD = frozenset({OOM, MEMGUARD, KILLED, EXITED_ERROR, EXITED_CLEAN,
+                            CONTAINER_GONE, PROCESS_GONE})
+# Short SSH timeouts: diagnose runs inside the watcher tick, a hanging box must
+# not stall the probes of every other runtime for long.
+_INSPECT_TIMEOUT = 10
+_LOGS_TIMEOUT = 15
+_PGREP_TIMEOUT = 10
+
+
+def _memguard_killed(logs: str) -> bool:
+    return any(
+        _MEMGUARD_NEEDLE in ln and _KILL_NEEDLE in ln
+        for ln in (logs or "").lower().splitlines()
+    )
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _notified_key(runtime: Runtime) -> str:
-    return f"mc:runtime-death-notified:{(runtime.endpoint or runtime.slug).rstrip('/')}"
+def _notified_key_for(endpoint: str | None, slug: str) -> str:
+    return f"mc:runtime-death-notified:{(endpoint or slug).rstrip('/')}"
 
 
 def _last_error_line(logs: str) -> str | None:
@@ -156,7 +179,7 @@ async def diagnose(runtime: Runtime, host) -> dict:
             '"{{.State.Status}}|{{.State.ExitCode}}|{{.State.OOMKilled}}|'
             '{{.State.FinishedAt}}|{{.State.StartedAt}}" '
             f"{q} 2>/dev/null",
-            host=host, timeout=20,
+            host=host, timeout=_INSPECT_TIMEOUT,
         )
     except Exception as exc:  # noqa: BLE001 — box stalling = cannot tell
         logger.debug("engine-death: inspect failed for %s: %s", runtime.slug, exc)
@@ -167,7 +190,7 @@ async def diagnose(runtime: Runtime, host) -> dict:
             diag["reason_code"] = CONTAINER_GONE
             return diag
         try:
-            _, _, pec = await _ssh_run(f"pgrep -x {q} >/dev/null 2>&1", host=host, timeout=15)
+            _, _, pec = await _ssh_run(f"pgrep -x {q} >/dev/null 2>&1", host=host, timeout=_PGREP_TIMEOUT)
         except Exception as exc:  # noqa: BLE001
             logger.debug("engine-death: pgrep failed for %s: %s", runtime.slug, exc)
             return diag
@@ -191,7 +214,7 @@ async def diagnose(runtime: Runtime, host) -> dict:
     try:
         since = f"--since {shlex_quote(started_at)} " if started_at and not started_at.startswith("0001-") else ""
         lout, lerr, _ = await _ssh_run(
-            f"docker logs {since}--tail {_LOG_TAIL} {q} 2>&1", host=host, timeout=30,
+            f"docker logs {since}--tail {_LOG_TAIL} {q} 2>&1", host=host, timeout=_LOGS_TIMEOUT,
         )
         logs = lout or lerr or ""
     except Exception as exc:  # noqa: BLE001 — the reason is a bonus, not a gate
@@ -202,7 +225,7 @@ async def diagnose(runtime: Runtime, host) -> dict:
         diag["reason_code"] = HUNG
     elif oom:
         diag["reason_code"] = OOM
-    elif any(n in logs.lower() for n in _MEMGUARD_NEEDLES):
+    elif exit_code == 137 and _memguard_killed(logs):
         diag["reason_code"] = MEMGUARD
     elif exit_code == 137:
         diag["reason_code"] = KILLED
@@ -257,6 +280,13 @@ async def verdict(
     """
     if not settings.runtime_engine_death_enabled:
         return "plain"
+    if runtime.is_slot and await _owning_sibling_exists(session, runtime, last_served):
+        # The slot row is only the box's address. A recipe row on the same
+        # port names the model that ran: it decides (died / stopped / evicted
+        # / hung), raises the one alarm, hands back the tasks of EVERY agent
+        # on this port (slot-bound ones included) and mirrors its crash doc
+        # onto this row. A second verdict here could only disagree or double.
+        return "not_ours"
     own = runtime.is_slot or (
         last_served is not None and last_served == (runtime.model_identifier or "")
     )
@@ -270,21 +300,29 @@ async def verdict(
         return "plain"
     if await runtime_grace.get_evicted(runtime.slug, redis) is not None:
         return "plain"
-    if runtime.is_slot and await _sibling_stopped_on_purpose(session, redis, runtime):
+    if runtime.is_slot and await _sibling_stopped_on_purpose(session, redis, runtime, last_served):
         # The slot row is only the box's address: when MC stopped or evicted
         # the recipe behind it, the silence on the address is planned too.
         return "plain"
     return "died"
 
 
-async def _sibling_stopped_on_purpose(session: AsyncSession, redis, runtime: Runtime) -> bool:
-    rows = await session.exec(
-        select(Runtime.slug).where(
-            Runtime.endpoint == runtime.endpoint,
-            Runtime.id != runtime.id,
-            Runtime.is_slot.is_(False),
-        )
+async def _sibling_stopped_on_purpose(
+    session: AsyncSession, redis, runtime: Runtime, last_served: str | None
+) -> bool:
+    """Only reached when no enabled recipe row names ``last_served`` (else the
+    slot row defers, see ``verdict``). Only the sibling that SERVED counts:
+    every switch marks the previous recipe evicted for an hour, and that
+    marker must not silence a death of the recipe that came after it. With no
+    known last answer, any planned stop on the port counts (conservative)."""
+    stmt = select(Runtime.slug).where(
+        Runtime.endpoint == runtime.endpoint,
+        Runtime.id != runtime.id,
+        Runtime.is_slot.is_(False),
     )
+    if last_served:
+        stmt = stmt.where(Runtime.model_identifier == last_served)
+    rows = await session.exec(stmt)
     for slug in rows.all():
         if await runtime_grace.was_stopped(slug, redis):
             return True
@@ -321,6 +359,34 @@ async def _owning_sibling_exists(session: AsyncSession, runtime: Runtime, last_s
     return rows.first() is not None
 
 
+async def _is_multi_box(session: AsyncSession, runtime_id) -> bool:
+    """A duo/verbund row: it has a worker member on another box (runtime_hosts)."""
+    from app.models.runtime_host import RuntimeHost
+
+    try:
+        rows = await session.exec(
+            select(RuntimeHost.id).where(
+                RuntimeHost.runtime_id == runtime_id, RuntimeHost.role == "worker"
+            )
+        )
+        return rows.first() is not None
+    except Exception:  # noqa: BLE001 — a hint, never a gate
+        return False
+
+
+async def _slot_slugs_on_port(session: AsyncSession, endpoint: str | None, own_id) -> list[str]:
+    if not endpoint:
+        return []
+    rows = await session.exec(
+        select(Runtime.slug).where(
+            Runtime.endpoint == endpoint,
+            Runtime.id != own_id,
+            Runtime.is_slot.is_(True),
+        )
+    )
+    return list(rows.all())
+
+
 async def record_death(
     session: AsyncSession,
     redis,
@@ -332,6 +398,13 @@ async def record_death(
 ) -> dict | None:
     """Diagnose, store, hand tasks back, notify once. Returns the crash doc,
     or ``None`` when the box says the engine is still alive (``hung``)."""
+    # Plain values first: a rollback inside the hand-back expires every ORM
+    # object of the watcher's session; nothing below may depend on them.
+    slug = runtime.slug
+    display_name = runtime.display_name
+    runtime_id = runtime.id
+    endpoint = runtime.endpoint
+
     diag = await diagnose(runtime, host)
     if diag.get("reason_code") == HUNG:
         # Container/process still running, only the port is silent — a busy
@@ -339,8 +412,10 @@ async def record_death(
         # could cut off work that is still happening (a single-threaded
         # server under a long prefill answers nothing). The caller keeps the
         # plain "unreachable" alarm.
-        logger.info("runtime %s: endpoint silent but engine alive — not a death", runtime.slug)
+        logger.info("runtime %s: endpoint silent but engine alive — not a death", slug)
         return None
+    confirmed = diag.get("reason_code") in CONFIRMED_DEAD
+    multi_box = await _is_multi_box(session, runtime_id)
     crash = {
         **diag,
         "reason": reason_sentence(diag),
@@ -348,46 +423,86 @@ async def record_death(
         "at": diag.get("finished_at") or _now_iso(),
         "model": last_served,
         "autostart": autostart_on,
+        "multi_box": multi_box,
+        # Box not askable: no proof the engine is gone → running work stays.
+        "tasks_kept": not confirmed,
     }
     requeued: list[str] = []
-    if settings.runtime_engine_death_requeue_enabled:
+    rolled_back = False
+    if confirmed and settings.runtime_engine_death_requeue_enabled:
         try:
-            requeued = await requeue_tasks_of_dead_runtime(session, runtime, crash)
+            requeued, rolled_back = await requeue_tasks_on_port(
+                session, endpoint=endpoint, runtime_id=runtime_id,
+                runtime_slug=slug, display_name=display_name, crash=crash,
+            )
         except Exception:  # noqa: BLE001 — never let the hand-back cost the alarm
-            logger.exception("engine-death: requeue failed for %s", runtime.slug)
+            logger.exception("engine-death: requeue failed for %s", slug)
+            rolled_back = True
             try:
                 await session.rollback()
             except Exception:  # noqa: BLE001
                 pass
-    crash["requeued_tasks"] = len(requeued)
-    try:
-        await redis.setex(runtime_grace.crash_key(runtime.slug), CRASH_TTL, json.dumps(crash))
-    except Exception as exc:  # noqa: BLE001 — the event below still fires
-        logger.debug("engine-death: crash doc not stored for %s: %s", runtime.slug, exc)
-
-    quiet = runtime.is_slot and await _owning_sibling_exists(session, runtime, last_served)
-    first = False
-    if not quiet:
+    if rolled_back:
+        # The caller (watcher) keeps using this row after we return.
         try:
-            first = bool(await redis.set(_notified_key(runtime), runtime.slug, nx=True, ex=NOTIFY_DEDUP_TTL))
-        except Exception:  # noqa: BLE001 — Redis down: better twice than never
-            first = True
+            await session.refresh(runtime)
+        except Exception:  # noqa: BLE001
+            logger.exception("engine-death: refresh of %s after rollback failed", slug)
+    crash["requeued_tasks"] = len(requeued)
+
+    # The box's slot row is dark too (slot line, agent pickers): it shows the
+    # same crash. A stop of this row acknowledges both (runtime_grace.mark_stopped).
+    try:
+        mirrors = await _slot_slugs_on_port(session, endpoint, runtime_id)
+    except Exception:  # noqa: BLE001
+        mirrors = []
+    crash["mirrored_to"] = mirrors
+    try:
+        payload = json.dumps(crash)
+        await redis.setex(runtime_grace.crash_key(slug), CRASH_TTL, payload)
+        for mirror in mirrors:
+            await redis.setex(runtime_grace.crash_key(mirror), CRASH_TTL, payload)
+    except Exception as exc:  # noqa: BLE001 — the event below still fires
+        logger.debug("engine-death: crash doc not stored for %s: %s", slug, exc)
+
+    try:
+        first = bool(await redis.set(
+            _notified_key_for(endpoint, slug), slug, nx=True, ex=NOTIFY_DEDUP_TTL,
+        ))
+    except Exception:  # noqa: BLE001 — Redis down: better twice than never
+        first = True
     if first:
         restart = (
-            "Box-Autostart ist an — MC versucht einen Neustart (höchstens 2 Versuche)."
+            # Worded as permission, not a promise: _maybe_auto_recover has its
+            # own cooldown, attempt cap and eviction gates.
+            "Box-Autostart ist an — MC darf einen Neustart versuchen "
+            "(mit Abkühlzeit, höchstens 2 Versuche)."
             if autostart_on
             else "Box-Autostart ist aus — MC startet nicht von selbst neu (Runtimes → Starten)."
         )
-        tasks = f" {len(requeued)} laufende Task(s) zurück in den Eingang." if requeued else ""
+        if not confirmed:
+            tasks = (
+                " Laufende Tasks bleiben, wo sie sind — die Box ist nicht befragbar, "
+                "ein Tod ist nicht belegt."
+            )
+        elif requeued:
+            tasks = f" {len(requeued)} laufende Task(s) zurück in den Eingang."
+        else:
+            tasks = ""
+        duo = (
+            " Verbund: der Worker auf der zweiten Box läuft evtl. noch und belegt "
+            "deren Speicher — Stoppen räumt beide Boxen."
+            if multi_box else ""
+        )
         await emit_event(
             session,
             "runtime.engine_died",
-            f"{runtime.display_name}: Engine ausgefallen — {crash['reason']}.{tasks} {restart}",
+            f"{display_name}: Engine ausgefallen — {crash['reason']}.{tasks}{duo} {restart}",
             severity="error",
             detail={
-                "slug": runtime.slug,
-                "runtime_id": str(runtime.id),
-                "endpoint": runtime.endpoint,
+                "slug": slug,
+                "runtime_id": str(runtime_id),
+                "endpoint": endpoint,
                 "reason_code": crash["reason_code"],
                 "reason": crash["reason"],
                 "exit_code": crash["exit_code"],
@@ -397,20 +512,33 @@ async def record_death(
                 "anchor": crash["anchor"],
                 "model": last_served,
                 "autostart": autostart_on,
+                "multi_box": multi_box,
+                "tasks_kept": crash["tasks_kept"],
                 "requeued_task_ids": requeued,
             },
         )
     logger.warning(
         "runtime %s: engine died (%s) — %d task(s) requeued, notified=%s",
-        runtime.slug, crash["reason_code"], len(requeued), first,
+        slug, crash["reason_code"], len(requeued), first,
     )
     return crash
 
 
-async def requeue_tasks_of_dead_runtime(
-    session: AsyncSession, runtime: Runtime, crash: dict
-) -> list[str]:
-    """Running work of agents bound to ``runtime`` goes back to the inbox.
+async def requeue_tasks_on_port(
+    session: AsyncSession,
+    *,
+    endpoint: str | None,
+    runtime_id,
+    runtime_slug: str,
+    display_name: str,
+    crash: dict,
+) -> tuple[list[str], bool]:
+    """Running work of every agent that talks to the dead port goes back to
+    the inbox. Returns ``(requeued task ids, rolled_back)``.
+
+    "Every agent on the port": agents bound to the dead row AND to any other
+    row with the same endpoint — live, the local agents are bound to the box's
+    slot row, never to the recipe row that names the model.
 
     - ``in_progress`` → ``inbox`` with ``dispatched_at``/``ack_at``/attempt
       cleared (the same reset as ``task_lifecycle.requeue_unblocked_task``),
@@ -420,44 +548,66 @@ async def requeue_tasks_of_dead_runtime(
       delivery is reset.
     One healer per card per round (``try_claim_heal``); a card another healer
     owns this round is skipped, not fought over.
+
+    Each card is re-read under its row lock (``lock_task``) — never trusted
+    from an earlier read — and committed on its own. A lost race (409/404)
+    is answered with a COMMIT of the empty transaction (releases the lock,
+    expires nothing). Any other error rolls back, which expires the session's
+    objects: the loop works on plain ids only, and the caller refreshes what
+    it still holds.
     """
     from app.models.agent import Agent
     from app.models.task import Task, TaskComment
     from app.redis_client import get_redis, try_claim_heal
-    from app.services.dispatch_attempt_audit import clear_dispatch_attempt_id
+    from app.services import dispatch_attempt_audit, task_state
     from app.services.task_lifecycle import record_task_event
-    from app.services.task_state import lock_and_set
 
-    agents = (await session.exec(select(Agent).where(Agent.runtime_id == runtime.id))).all()
-    if not agents:
-        return []
-    by_id = {a.id: a for a in agents}
-    tasks = (await session.exec(
-        select(Task).where(
-            Task.assigned_agent_id.in_(list(by_id)),
+    row_ids = [runtime_id]
+    if endpoint:
+        row_ids = list((await session.exec(
+            select(Runtime.id).where(Runtime.endpoint == endpoint)
+        )).all()) or [runtime_id]
+    agent_ids = list((await session.exec(
+        select(Agent.id).where(Agent.runtime_id.in_(row_ids))
+    )).all())
+    if not agent_ids:
+        return [], False
+    candidates = list((await session.exec(
+        select(Task.id).where(
+            Task.assigned_agent_id.in_(agent_ids),
             Task.status.in_(("in_progress", "inbox")),
         )
-    )).all()
+    )).all())
     redis = await get_redis()
     reason_text = crash.get("reason") or "Grund unbekannt"
     done: list[str] = []
-    for task in tasks:
-        delivered_unclaimed = task.status == "inbox" and task.dispatched_at is not None and task.ack_at is None
-        if task.status != "in_progress" and not delivered_unclaimed:
-            continue
-        task_id: uuid.UUID = task.id
-        if not await try_claim_heal(redis, str(task_id)):
-            logger.info("engine-death: task %s skipped — another healer owns it this round", task_id)
-            continue
+    rolled_back = False
+    for task_id in candidates:
         try:
+            task = await task_state.lock_task(session, task_id)
+            if task is None:
+                await session.commit()
+                continue
+            delivered_unclaimed = (
+                task.status == "inbox" and task.dispatched_at is not None and task.ack_at is None
+            )
+            if task.status != "in_progress" and not delivered_unclaimed:
+                await session.commit()  # release the row lock, nothing written
+                continue
+            if not await try_claim_heal(redis, str(task_id)):
+                await session.commit()
+                logger.info("engine-death: task %s skipped — another healer owns it this round", task_id)
+                continue
             if task.status == "in_progress":
-                task, old_status = await lock_and_set(session, task_id, "inbox", actor="system")
+                task, old_status = await task_state.lock_and_set(
+                    session, task_id, "inbox", actor="system",
+                )
             else:
                 old_status = task.status
             task.dispatched_at = None
             task.ack_at = None
             session.add(task)
-            agent = by_id.get(task.assigned_agent_id)
+            agent = await session.get(Agent, task.assigned_agent_id, populate_existing=True)
             if agent is not None and agent.current_task_id == task.id:
                 agent.current_task_id = None
                 session.add(agent)
@@ -466,7 +616,7 @@ async def requeue_tasks_of_dead_runtime(
                 author_type="system",
                 comment_type="system",
                 content=(
-                    f"Modell ausgefallen: Runtime '{runtime.display_name}' — {reason_text}. "
+                    f"Modell ausgefallen: Runtime '{display_name}' — {reason_text}. "
                     "Der Task ist zurück im Eingang und wird wieder zugestellt, "
                     "sobald das Modell läuft. Bisherige Arbeit im Workspace bleibt erhalten."
                 ),
@@ -476,24 +626,37 @@ async def requeue_tasks_of_dead_runtime(
                     session, task.id, old_status, "inbox",
                     changed_by="system", reason="runtime_engine_died",
                 )
-            await clear_dispatch_attempt_id(
+            await dispatch_attempt_audit.clear_dispatch_attempt_id(
                 session, task, caller="engine_death", reason="runtime_engine_died",
             )
+            title, board_id, agent_id = task.title, task.board_id, task.assigned_agent_id
             await session.commit()
         except HTTPException as exc:  # lost a race with the agent's own PATCH
-            await session.rollback()
+            # Nothing was written yet (lock_and_set raises before its write):
+            # commit the empty transaction to release the lock. A rollback
+            # would expire every object the watcher still holds.
+            try:
+                await session.commit()
+            except Exception:  # noqa: BLE001
+                await session.rollback()
+                rolled_back = True
             logger.info("engine-death: task %s not requeued: %s", task_id, exc.detail)
+            continue
+        except Exception:  # noqa: BLE001 — one card must not cost the others
+            logger.exception("engine-death: task %s not requeued", task_id)
+            await session.rollback()
+            rolled_back = True
             continue
         await emit_event(
             session,
             "task.requeued_runtime_down",
-            f"'{task.title}' zurück im Eingang — Modell ausgefallen ({runtime.display_name})",
+            f"'{title}' zurück im Eingang — Modell ausgefallen ({display_name})",
             severity="warning",
-            board_id=task.board_id,
-            task_id=task.id,
-            agent_id=task.assigned_agent_id,
-            detail={"runtime": runtime.slug, "reason_code": crash.get("reason_code"),
+            board_id=board_id,
+            task_id=task_id,
+            agent_id=agent_id,
+            detail={"runtime": runtime_slug, "reason_code": crash.get("reason_code"),
                     "from_status": old_status},
         )
-        done.append(str(task.id))
-    return done
+        done.append(str(task_id))
+    return done, rolled_back

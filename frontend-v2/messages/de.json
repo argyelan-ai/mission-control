@@ -3446,7 +3446,9 @@
       "crashedLine": "Abgestürzt {time} · {reason}",
       "crashedLineNoTime": "Abgestürzt · {reason}",
       "crashAutostartOff": "Box-Autostart aus — startet nicht von selbst neu",
-      "crashAutostartOn": "Box-Autostart an — MC versucht einen Neustart",
+      "crashAutostartOn": "Box-Autostart an — MC darf einen Neustart versuchen",
+      "crashTasksKept": "Laufende Tasks bleiben, wo sie sind — die Box war nicht befragbar",
+      "crashDuoWorker": "Der Worker auf der zweiten Box läuft evtl. noch — Stoppen räumt beide Boxen",
       "crashRequeued": "{count, plural, one {# Task zurück im Eingang} other {# Tasks zurück im Eingang}}",
       "crashReason": {
         "oom": "Kernel: kein Speicher mehr (OOM)",

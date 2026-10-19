@@ -3446,7 +3446,9 @@
       "crashedLine": "Crashed {time} · {reason}",
       "crashedLineNoTime": "Crashed · {reason}",
       "crashAutostartOff": "Box autostart off — will not restart by itself",
-      "crashAutostartOn": "Box autostart on — MC tries a restart",
+      "crashAutostartOn": "Box autostart on — MC may try a restart",
+      "crashTasksKept": "Running tasks left as they are — the box could not be asked",
+      "crashDuoWorker": "The worker on the second box may still be running — Stop clears both boxes",
       "crashRequeued": "{count, plural, one {# task back in the inbox} other {# tasks back in the inbox}}",
       "crashReason": {
         "oom": "kernel ran out of memory (OOM)",

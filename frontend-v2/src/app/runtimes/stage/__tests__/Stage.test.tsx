@@ -101,6 +101,29 @@ describe("Stage — title + corner", () => {
     expect(screen.getByTestId("restart-now")).toBeInTheDocument();
   });
 
+  it("a crashed duo whose box could not be asked: tasks kept, worker hint, autostart only 'may'", async () => {
+    const rt = makeRuntime({ display_name: "DeepSeek V4.1", state: "stopped", host: { id: "spark", slug: "spark", display_name: "DGX Spark" } });
+    const at = new Date().toISOString();
+    const live = {
+      reachable: false, served_model: null, latency_ms: null, last_probe_at: "", consecutive_failures: 4, drift: false,
+      status: "crashed",
+      crash: {
+        reason_code: "unknown", reason: "x", at, detected_at: at,
+        exit_code: null, oom_killed: null, log_line: null, autostart: true, requeued_tasks: 0,
+        tasks_kept: true, multi_box: true,
+      },
+    };
+    const members = [
+      { host: makeHost({ slug: "spark", display_name: "DGX Spark" }), role: "head" as const },
+      { host: makeHost({ slug: "spark-2", display_name: "DGX Spark 2" }), role: "worker" as const },
+    ];
+    renderWithQuery(<Stage runtime={rt} live={live} members={members} onOpenCockpit={() => {}} />);
+    const followUp = await screen.findByTestId("stage-crash-followup");
+    expect(followUp).toHaveTextContent("Box autostart on — MC may try a restart");
+    expect(followUp).toHaveTextContent("Running tasks left as they are — the box could not be asked");
+    expect(followUp).toHaveTextContent("The worker on the second box may still be running — Stop clears both boxes");
+  });
+
   it("corner shows 'unreachable' for a failed runtime", async () => {
     const rt = makeRuntime({
       display_name: "Qwen3.8 27B", state: "failed",

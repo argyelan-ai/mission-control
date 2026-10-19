@@ -151,6 +151,9 @@ export function Stage({
     ? [
         t(crash.autostart ? "crashAutostartOn" : "crashAutostartOff"),
         (crash.requeued_tasks ?? 0) > 0 ? t("crashRequeued", { count: crash.requeued_tasks ?? 0 }) : null,
+        crash.tasks_kept ? t("crashTasksKept") : null,
+        // A duo head death can leave the worker rank holding box 2's memory.
+        (crash.multi_box ?? members.length > 1) ? t("crashDuoWorker") : null,
       ]
         .filter(Boolean)
         .join(" · ")

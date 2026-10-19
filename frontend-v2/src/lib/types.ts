@@ -2237,6 +2237,10 @@ export interface RuntimeCrash {
   /** Whether the box autostart will try a restart (hosts.autostart_enabled). */
   autostart: boolean;
   requeued_tasks?: number;
+  /** Box not askable (reason "unknown"): no proof of a death, running tasks were left alone. */
+  tasks_kept?: boolean;
+  /** Duo/verbund row: the worker rank on the other box may still be running. */
+  multi_box?: boolean;
 }
 
 export interface RuntimesLiveResponse {
