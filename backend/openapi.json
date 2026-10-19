@@ -2633,6 +2633,22 @@
         ]
       }
     },
+    "/api/v1/first-run/starter": {
+      "get": {
+        "operationId": "get_first_run_starter_api_v1_first_run_starter_get",
+        "summary": "Get First Run Starter",
+        "tags": [
+          "first-run"
+        ]
+      },
+      "post": {
+        "operationId": "start_first_run_api_v1_first_run_starter_post",
+        "summary": "Start First Run",
+        "tags": [
+          "first-run"
+        ]
+      }
+    },
     "/api/v1/groups": {
       "get": {
         "operationId": "list_groups_api_v1_groups_get",

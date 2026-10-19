@@ -49,6 +49,7 @@ const makeRepo = (over: Partial<Repo> = {}): Repo => ({
   visibility: "private",
   is_active: true,
   source: "mc",
+  web_url: "https://github.com/acme/mc-workspace",
   last_synced_at: "2026-07-01T00:00:00Z",
   created_at: "2026-06-01T00:00:00Z",
   updated_at: "2026-07-01T00:00:00Z",

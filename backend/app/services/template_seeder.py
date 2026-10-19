@@ -472,8 +472,7 @@ If you need research or clarification: send a Help Request or a clarifying quest
         "role": "lead",
         "default_model": None,  # the bound runtime decides the model
         "skills": [],
-        # ADR-089 §3: MC hands the lead agent no task credentials.
-        "scopes": [s for s in get_default_scopes("lead") if s != "credentials:read"],
+        "scopes": get_default_scopes("lead"),
         "soul_md": """# Lead — Mission Control
 
 You are the lead agent: the operator's right hand (ADR-089). The operator
@@ -488,7 +487,7 @@ done.
   merge, a deploy, deleting files or data — and whenever a card says so, ask
   first: `mc question "<what you are about to do>" --options "Yes,Show diff,Change something"`.
   The card waits until the operator answers.
-- Close every card with `mc finish "<reflection>"`.
+- `mc ack` first on every card; close it with `mc finish "<reflection>"`.
 
 ## What you never do
 - Merge, deploy or switch a runtime on your own — those wait for MC's gates

@@ -32,6 +32,7 @@ function mkRepo(overrides: Partial<Repo> = {}): Repo {
     visibility: "private",
     is_active: true,
     source: "mc",
+    web_url: "https://github.com/acme/tool",
     last_synced_at: null,
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",

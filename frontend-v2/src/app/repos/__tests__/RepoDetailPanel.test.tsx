@@ -23,6 +23,7 @@ const makeRepo = (over: Partial<Repo> = {}): Repo => ({
   visibility: "private",
   is_active: true,
   source: "mc",
+  web_url: "https://github.com/owner/name",
   last_synced_at: null,
   created_at: "2026-07-01T00:00:00Z",
   updated_at: "2026-07-01T00:00:00Z",
@@ -44,6 +45,23 @@ describe("RepoDetailPanel", () => {
     ).toBeInTheDocument();
     // Save is disabled until something actually changes
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+  });
+
+  it("links a GitHub repo to its page and labels a local repo as on this computer", async () => {
+    vi.spyOn(api.repos, "get").mockResolvedValueOnce(makeRepo());
+    const { unmount } = renderWithQuery(<RepoDetailPanel repoId="repo-1" open onClose={vi.fn()} />);
+    const link = await screen.findByRole("link", { name: /Open on GitHub/ });
+    expect(link).toHaveAttribute("href", "https://github.com/owner/name");
+    unmount();
+
+    // The first run's practice repo: a normal registry entry without a web page.
+    vi.spyOn(api.repos, "get").mockResolvedValueOnce(
+      makeRepo({ full_name: "local/mc-practice", url: "file:///x/mc-practice", source: "local", web_url: null })
+    );
+    renderWithQuery(<RepoDetailPanel repoId="repo-1" open onClose={vi.fn()} />);
+    expect(await screen.findByText("On this computer")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Open on GitHub/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Sync/ })).toBeInTheDocument();
   });
 
   it("saves edited rules via PATCH and shows a confirmation", async () => {

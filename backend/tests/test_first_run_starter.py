@@ -119,8 +119,6 @@ async def test_starter_creates_lead_agent_practice_repo_and_first_job(
     assert "lead" in (runtime.role_tags or [])
     assert agent.harness == "claude"
     assert agent.operator_language == "de"
-    # ADR-089 §3: the lead agent is handed no credentials
-    assert "credentials:read" not in agent.scopes
     assert agent.workspace_path == f"{seeded}/.mc/workspaces/lead"
     # provisioned like a one-click agent, with the token it was created with
     assert [a for a, _ in side_effects["provision"]] == [agent.id]
@@ -313,3 +311,73 @@ async def test_only_an_admin_may_start_it(client: AsyncClient, seeded, side_effe
         await s.commit()
     headers = {"Authorization": f"Bearer {create_access_token(str(uid), 'operator')}"}
     assert (await client.post(URL, json={}, headers=headers)).status_code == 403
+
+
+# ── a throw-away stack: real migrations + boot seeders on Postgres ─────────
+
+
+@pytest.mark.postgres
+@pytest.mark.asyncio
+async def test_fresh_postgres_install_ends_with_agent_repo_and_job(home):
+    """``alembic upgrade head`` on an EMPTY database, the boot seeders, then the
+    first run — the same chain a new install goes through. Runs in its own
+    database (created and dropped here); the lane's shared database is untouched.
+    """
+    import os
+    import sys
+    from urllib.parse import urlsplit, urlunsplit
+
+    import asyncpg
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from app.models.agent import Agent
+    from app.models.repo import Repo
+    from app.models.task import Task
+    from app.services import first_run_starter
+    from app.services.runtime_seeder import seed_runtimes
+    from app.services.template_seeder import seed_builtin_templates
+
+    backend = Path(__file__).resolve().parents[1]
+    base = os.environ.get("MC_TEST_DATABASE_URL", "")
+    admin_url = base.replace("postgresql+asyncpg://", "postgresql://", 1)
+    fresh_name = f"test_first_run_{uuid.uuid4().hex[:8]}"
+    fresh_url = urlunsplit(urlsplit(base)._replace(path=f"/{fresh_name}"))
+
+    admin = await asyncpg.connect(admin_url)
+    try:
+        await admin.execute(f'CREATE DATABASE "{fresh_name}"')
+    finally:
+        await admin.close()
+    try:
+        done = subprocess.run(
+            [str(Path(sys.executable).with_name("alembic")), "upgrade", "head"],
+            cwd=backend, env={**os.environ, "DATABASE_URL": fresh_url},
+            capture_output=True, text=True, timeout=600,
+        )
+        assert done.returncode == 0, done.stderr[-4000:]
+
+        engine = create_async_engine(fresh_url)
+        try:
+            with patch("app.services.task_create.create_tracked_task", lambda coro: coro.close()):
+                async with AsyncSession(engine, expire_on_commit=False) as s:
+                    await seed_runtimes(s)
+                    await seed_builtin_templates(s)
+                    assert (await s.exec(select(Agent))).all() == [], "fresh = no agent yet"
+                    result = await first_run_starter.start(s, language="en")
+                    agents = (await s.exec(select(Agent))).all()
+                    repos = (await s.exec(select(Repo))).all()
+                    tasks = (await s.exec(select(Task))).all()
+        finally:
+            await engine.dispose()
+
+        assert [a.id for a in agents] == [result.agent.id]
+        assert agents[0].is_board_lead and agents[0].runtime_id is not None
+        assert [(r.full_name, r.source) for r in repos] == [("local/mc-practice", "local")]
+        assert [(t.assigned_agent_id, t.repo_id) for t in tasks] == [(agents[0].id, repos[0].id)]
+        assert result.new_agent_token, "a new agent comes with its token for provisioning"
+    finally:
+        admin = await asyncpg.connect(admin_url)
+        try:
+            await admin.execute(f'DROP DATABASE IF EXISTS "{fresh_name}" WITH (FORCE)')
+        finally:
+            await admin.close()

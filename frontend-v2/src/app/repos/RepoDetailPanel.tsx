@@ -7,6 +7,7 @@ import {
   Archive,
   ArchiveRestore,
   ExternalLink,
+  HardDrive,
   Link2,
   Loader2,
   RefreshCw,
@@ -290,16 +291,23 @@ export function RepoDetailPanel({
             {/* Metadata */}
             <div>
               <div className="flex items-center gap-2 flex-wrap mb-2">
-                <a
-                  href={repo.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 text-xs cursor-pointer"
-                  style={{ color: C.accent }}
-                >
-                  <ExternalLink size={11} />
-                  {t("openOnGithub")}
-                </a>
+                {repo.web_url ? (
+                  <a
+                    href={repo.web_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-xs cursor-pointer"
+                    style={{ color: C.accent }}
+                  >
+                    <ExternalLink size={11} />
+                    {t("openOnGithub")}
+                  </a>
+                ) : (
+                  <span className="inline-flex items-center gap-1 text-xs" style={{ color: C.textMuted }}>
+                    <HardDrive size={11} />
+                    {t("onThisComputer")}
+                  </span>
+                )}
                 <button
                   onClick={() => syncMutation.mutate()}
                   disabled={syncMutation.isPending}
@@ -319,7 +327,11 @@ export function RepoDetailPanel({
                 <span className="font-mono" style={{ color: C.textSecondary }}>{repo.default_branch}</span>
                 <span>{t("source")}</span>
                 <span style={{ color: C.textSecondary }}>
-                  {repo.source === "imported" ? t("sourceImported") : t("sourceMc")}
+                  {repo.source === "imported"
+                    ? t("sourceImported")
+                    : repo.source === "local"
+                      ? t("sourceLocal")
+                      : t("sourceMc")}
                 </span>
                 <span>{t("created")}</span>
                 <span style={{ color: C.textSecondary }}>{timeAgo(repo.created_at, locale)}</span>

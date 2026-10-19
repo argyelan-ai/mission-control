@@ -2546,10 +2546,39 @@ export interface SparkMetrics {
   ram_total_mb: number | null;
 }
 
+// ── First run starter (onboarding W3) ─────────────────────────────────────────
+
+export interface FirstRunStarterRequest {
+  /** Runtime UUID or slug from the "Which AI?" step; empty = the lead runtime. */
+  runtime_id?: string;
+  /** UI language — the agent talks to the operator in it. */
+  language?: string;
+}
+
+/** What POST/GET /api/v1/first-run/starter return. */
+export interface FirstRunStarter {
+  board: { id: string; name: string };
+  repo: { id: string; full_name: string; source: RepoSource };
+  agent: {
+    id: string;
+    name: string;
+    emoji: string | null;
+    harness: string | null;
+    provision_status: string;
+    status: string;
+  };
+  runtime: { id: string; display_name: string } | null;
+  task: { id: string; title: string; status: TaskStatus };
+  /** Parts created by THIS call ("board", "repo", "agent", "task"); [] on a retry. */
+  created: string[];
+}
+
 // ── Repos (Repo Registry, ADR-050) ───────────────────────────────────────────
 
 export type RepoVisibility = "private" | "public";
-export type RepoSource = "mc" | "imported";
+/** mc = created by MC on GitHub · imported = existing GitHub repo ·
+ *  local = a repository on this computer (e.g. the first run's practice repo). */
+export type RepoSource = "mc" | "imported" | "local";
 
 export interface RepoLinkedProject {
   id: string;
@@ -2568,6 +2597,8 @@ export interface Repo {
   visibility: RepoVisibility;
   is_active: boolean;
   source: RepoSource;
+  /** The repo's web page; null for a repo without one (a local repo). */
+  web_url: string | null;
   last_synced_at: string | null;
   created_at: string;
   updated_at: string;

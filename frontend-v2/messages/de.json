@@ -2498,6 +2498,8 @@
       "source": "Quelle",
       "sourceImported": "Importiert",
       "sourceMc": "MC",
+      "sourceLocal": "Lokal",
+      "onThisComputer": "Auf diesem Computer",
       "created": "Erstellt",
       "lastSynced": "Zuletzt synchronisiert",
       "never": "nie",

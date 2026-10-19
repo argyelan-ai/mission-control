@@ -73,22 +73,33 @@ shared token that MC creates on first start — see
 
 ## 5. Create your lead agent
 
-Boards come first (**New board**, or `python3 scripts/demo-seed.py` for a
-seeded demo board — a fresh install's setup wizard does this for you and
-shows the classic multi-agent board, not the two-agent view described above;
-that is the current first-run experience, not a bug).
+**One call does it on a fresh install:** `POST /api/v1/first-run/starter`
+(admin; the setup wizard will make this call for you). It creates
 
-Then **Agents → New agent**:
+- the **lead agent** from the built-in **Lead** template — the hands-on lead
+  agent of [ADR-089](../../decisions/089-lead-agent-with-hands.md), marked as
+  board lead and bound to your Claude Code runtime (or the runtime you pass as
+  `runtime_id`), then provisioned like any agent;
+- a **practice repo** on this computer (`~/.mc/repos/mc-practice.git`),
+  registered in **Repos** as a normal local entry — nothing of yours is touched;
+- a **first job** for the lead agent: add a test, and ask you before it commits.
+  The question arrives as a card; answer it from the browser or your phone.
 
-- **Start:** pick a template for an agent that does the work itself — for
-  example **Developer**. Do *not* pick the built-in **Lead** template: it is a
-  pure orchestrator from the old fleet model that only delegates and writes
-  no code. There is no template yet for the hands-on lead agent that
-  [ADR-089](../../decisions/089-lead-agent-with-hands.md) describes.
-- **Identity:** tick **Board lead**. This sets `is_board_lead`; no template
-  sets it for you.
-- Bind it to your Claude Code (or OpenAI-compatible) runtime and click
-  **Provision**.
+```bash
+curl -X POST http://localhost:8000/api/v1/first-run/starter \
+  -H "Authorization: Bearer <your login token>" \
+  -H "Content-Type: application/json" -d '{"language": "en"}'
+```
+
+It refuses an install that already has boards or agents (`not_fresh`) and
+creates nothing while no AI is connected (`no_brain`). Calling it again only
+finishes what is missing.
+
+**By hand instead:** create a board, then **Agents → New agent**, pick the
+**Lead** template, tick **Board lead**, bind your Claude Code (or
+OpenAI-compatible) runtime and click **Provision**. A lead that is alone on its
+board does the work itself; once other agents join the board, it plans and
+delegates instead.
 
 This is the agent you will talk to in the chat: it plans, does the work,
 reads results and reports back to you.
