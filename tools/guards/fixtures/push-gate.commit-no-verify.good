@@ -1,0 +1,4 @@
+# --no-verify on the commit is a different question; the push itself is clean,
+# and a push word inside an awk program is text.
+python3 scripts/privacy-scan.py && git -C "$WT" commit -qm x --no-verify && git -C "$WT" push -u origin feat/x
+awk '/push/{print}' tools/guards/push-gate.sh > "$OUT"

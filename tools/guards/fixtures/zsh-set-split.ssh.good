@@ -1,0 +1,2 @@
+# The loop runs in the remote bash, not in the agent's zsh.
+ssh host 'for r in "a 1" "b 2"; do set -- $r; echo "$1"; done'
