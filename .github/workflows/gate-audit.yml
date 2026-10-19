@@ -3,8 +3,9 @@ name: gate-audit
 # Gate-Ehrlichkeit: every gate (CI job, Claude Code hook, guard script) must be
 # in tools/guards/GATES.md with the case it turns red on and a sabotage probe
 # or a recorded red run. Red on: unregistered gate, gate without red case or
-# probe, stale row, script that can only `exit 0`, soft-fail without a
-# `# gate-audit: soft - <reason>` comment. Rules: tools/guards/gate_audit.py.
+# probe, stale row, script that can only `exit 0`, `if: false` job, soft-fail
+# without a `# gate-audit: soft - <reason>` comment, non-required Gate not
+# marked as such, cited "Rot-Lauf" id that does not exist or was not red. Rules: tools/guards/gate_audit.py.
 # Also runs the hook tests, so a hook that stops blocking turns this red too.
 
 on:
@@ -19,6 +20,7 @@ on:
 
 permissions:
   contents: read
+  actions: read  # R9: look up the run ids cited as evidence in GATES.md
 
 jobs:
   gate-audit:
@@ -31,8 +33,10 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Register vs. tree (tools/guards/GATES.md)
-        run: python3 tools/guards/gate_audit.py
+      - name: Register vs. tree (tools/guards/GATES.md) + cited runs really red
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tools/guards/gate_audit.py --verify-runs
 
       - name: Hook + audit sabotage probes
         run: |

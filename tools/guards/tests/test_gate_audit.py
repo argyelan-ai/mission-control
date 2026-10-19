@@ -150,3 +150,77 @@ def test_cli_exit_codes(tree):
     (tree / "tools/hooks/dummy-gate.sh").write_text("#!/bin/bash\nexit 0\n")
     bad = subprocess.run([sys.executable, str(script), "--root", str(tree)], capture_output=True, text=True)
     assert bad.returncode == 1 and "gate-audit: FAIL" in bad.stdout
+
+
+# --- Kritik 19.10.: form vs. content ----------------------------------------
+
+WF4 = ("name: ci4\non: [push]\njobs:\n    lint:\n        name: Lint\n"
+       "        runs-on: x\n        steps:\n            - run: ruff .\n")
+
+
+def test_four_space_indented_workflow_jobs_are_read(tree):
+    (tree / ".github/workflows/ci4.yml").write_text(WF4)
+    assert any(x.startswith("R1") and "ci:ci4.yml#lint" in x for x in findings(tree))
+    add_rows(tree, row("ci:ci4.yml#lint"))
+    assert findings(tree) == []
+
+
+def test_four_space_continue_on_error_job_as_gate_is_red(tree):
+    (tree / ".github/workflows/ci4.yml").write_text(WF4.replace(
+        "        runs-on:", "        # gate-audit: soft - hint\n        continue-on-error: true\n        runs-on:"))
+    add_rows(tree, row("ci:ci4.yml#lint"))
+    assert any(x.startswith("R7") for x in findings(tree))
+
+
+@pytest.mark.parametrize("cond", ["false", "${{ false }}", "'false'"])
+def test_disabled_job_registered_as_gate_is_red(tree, cond):
+    wf = tree / ".github/workflows/ci.yml"
+    wf.write_text(WORKFLOW.replace("    runs-on:", f"    if: {cond}\n    runs-on:"))
+    assert any(x.startswith("R5") and "if:" in x for x in findings(tree))
+
+
+def test_ci_gate_that_is_not_required_must_say_so(tree):
+    p = tree / "tools/guards/GATES.md"
+    base = p.read_text()
+    p.write_text(base.replace("| `ci:ci.yml#tests` | Gate | does x | test red | run 123 | ja |",
+                              "| `ci:ci.yml#tests` | Gate | does x | test red | run 123 | nein |"))
+    assert any(x.startswith("R8") for x in findings(tree))
+    p.write_text(base.replace("| `ci:ci.yml#tests` | Gate | does x | test red | run 123 | ja |",
+                              "| `ci:ci.yml#tests` | Gate (nicht Pflicht) | does x | test red | run 123 | nein |"))
+    assert findings(tree) == []
+    p.write_text(base.replace("| `ci:ci.yml#tests` | Gate | does x | test red | run 123 | ja |",
+                              "| `ci:ci.yml#tests` | Gate (nicht Pflicht) | does x | test red | run 123 | ja |"))
+    assert any(x.startswith("R8") for x in findings(tree))
+
+
+def _rows(tree, probe):
+    p = tree / "tools/guards/GATES.md"
+    p.write_text(p.read_text().replace("| test red | run 123 | ja |\n", f"| test red | {probe} | ja |\n", 1))
+    (tree / ".github/workflows/ci.yml").write_text(WORKFLOW.replace("    runs-on:", "    name: Tests\n    runs-on:"))
+
+
+def fake_fetch(runs, jobs):
+    def fetch(path):
+        if path.endswith("/jobs?per_page=100"):
+            return {"jobs": jobs.get(int(path.split("/")[-2].split("?")[0]), [])}
+        rid = int(path.rsplit("/", 1)[1])
+        if rid not in runs:
+            raise RuntimeError("HTTP 404")
+        return runs[rid]
+    return fetch
+
+
+def test_red_run_evidence_must_be_a_real_failed_run_of_that_job(tree):
+    _rows(tree, "Rot-Lauf 5550001")
+    ok = fake_fetch({5550001: {"conclusion": "failure", "path": ".github/workflows/ci.yml"}},
+                    {5550001: [{"name": "Tests", "conclusion": "failure"}]})
+    assert gate_audit.verify_runs(tree, ok) == []
+    green = fake_fetch({5550001: {"conclusion": "success", "path": ".github/workflows/ci.yml"}}, {})
+    assert any(x.startswith("R9") and "success" in x for x in gate_audit.verify_runs(tree, green))
+    other_wf = fake_fetch({5550001: {"conclusion": "failure", "path": ".github/workflows/x.yml"}}, {})
+    assert any(x.startswith("R9") and "x.yml" in x for x in gate_audit.verify_runs(tree, other_wf))
+    job_green = fake_fetch({5550001: {"conclusion": "failure", "path": ".github/workflows/ci.yml"}},
+                           {5550001: [{"name": "Tests", "conclusion": "success"}]})
+    assert any(x.startswith("R9") and "Tests" in x for x in gate_audit.verify_runs(tree, job_green))
+    missing = fake_fetch({}, {})
+    assert any(x.startswith("R9") and "404" in x for x in gate_audit.verify_runs(tree, missing))

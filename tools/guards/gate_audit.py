@@ -20,6 +20,17 @@ Red (exit 1) when:
       marker on the same line or in the comment block directly above it
   R7  a job with `continue-on-error: true` is registered as Gate (it can never
       block - register it as Hinweis and say why)
+  R5  also: a job with `if: false` / `if: ${{ false }}` registered as Gate
+  R8  a CI job of kind Gate whose Merge-Pflicht is "nein" (the merge queue
+      ignores it - say so: kind "Gate (nicht Pflicht)"), or the reverse
+  R9  (only with --verify-runs, needs the GitHub API) a run id in the
+      evidence column does not exist, belongs to another workflow, or is
+      called "Rot-Lauf" but did not fail (run, or the row's own job)
+
+Honest limits: this is a static read of the tree. A script that hides its
+exit code (`exit "$?"` after a command that cannot fail) passes R5; whether
+a hook is REGISTERED lives in private Claude Code settings this job cannot
+see. The hook tests (real sabotage probes) are the stronger proof.
 
 Stdlib only (runs on a bare runner and on python 3.9). Sabotage probe:
 tools/guards/tests/test_gate_audit.py (a dummy gate with `exit 0` -> red).
@@ -29,7 +40,8 @@ import re
 import sys
 from pathlib import Path
 
-KINDS = {"gate", "hinweis", "helfer"}
+GATE_KINDS = {"gate", "gate (nicht pflicht)"}
+KINDS = GATE_KINDS | {"hinweis", "helfer"}
 EMPTY = {"", "-", "—", "–", "?", "nie", "never", "n/a"}
 MISSING_PREFIXES = ("offen", "keine", "fehlt", "todo", "none", "missing")
 SOFT_MARKER = re.compile(r"#\s*gate-audit:\s*soft\s*[-—–:]+\s*\S")
@@ -60,24 +72,49 @@ def script_has_red_path(path):
     return any(SH_RED.search(l) for l in lines)
 
 
+DISABLED_IF = re.compile(r"""^(?:false|'false'|"false"|\$\{\{\s*false\s*\}\})\s*(?:#.*)?$""")
+
+
 def workflow_jobs(path):
-    """Job ids under the top-level `jobs:` key (2-space indented keys)."""
+    """Job ids under the top-level `jobs:` key. The indentation is taken from
+    the first key under `jobs:` (2 or 4 spaces both work), job properties
+    from the first key under each job."""
     jobs, in_jobs, current = {}, False, None
+    job_indent, prop_indent = None, None
     for i, line in enumerate(path.read_text().splitlines()):
         if re.match(r"^jobs:\s*$", line):
             in_jobs = True
             continue
         if in_jobs and re.match(r"^\S", line):
             in_jobs = False
-        if not in_jobs:
+        if not in_jobs or not line.strip() or line.lstrip().startswith("#"):
             continue
-        m = re.match(r"^  ([A-Za-z0-9_-]+):\s*$", line)
-        if m:
-            current = m.group(1)
-            jobs[current] = {"line": i + 1, "continue_on_error": False}
+        indent = len(line) - len(line.lstrip(" "))
+        if job_indent is None:
+            job_indent = indent
+        if indent == job_indent:
+            m = re.match(r"^\s*([A-Za-z0-9_-]+):\s*(?:#.*)?$", line)
+            if m:
+                current = m.group(1)
+                jobs[current] = {"line": i + 1, "continue_on_error": False, "disabled": False, "name": ""}
+                prop_indent = None
             continue
-        if current and re.match(r"^    continue-on-error:\s*true\b", line):
+        if current is None or indent < job_indent:
+            continue
+        if prop_indent is None:
+            prop_indent = indent
+        if indent != prop_indent:
+            continue
+        m = re.match(r"^\s*([A-Za-z0-9_-]+):\s*(.*?)\s*$", line)
+        if not m:
+            continue
+        key, val = m.group(1), m.group(2)
+        if key == "continue-on-error" and re.match(r"true\b", val):
             jobs[current]["continue_on_error"] = True
+        elif key == "if" and DISABLED_IF.match(val):
+            jobs[current]["disabled"] = True
+        elif key == "name":
+            jobs[current]["name"] = val.strip("'\"")
     return jobs
 
 
@@ -143,7 +180,8 @@ def audit(root):
             findings.append(f"R3 GATES.md:{r['line']}: {r['error']}")
             continue
         if r["kind"] not in KINDS:
-            findings.append(f"R3 GATES.md:{r['line']}: kind '{r['kind']}' is not Gate/Hinweis/Helfer")
+            findings.append(
+                f"R3 GATES.md:{r['line']}: kind '{r['kind']}' is not Gate / Gate (nicht Pflicht) / Hinweis / Helfer")
         if r["id"] in by_id:
             findings.append(f"R3 GATES.md:{r['line']}: duplicate id {r['id']}")
         by_id[r["id"]] = r
@@ -159,10 +197,15 @@ def audit(root):
             row = by_id.get(gid)
             if not row:
                 findings.append(f"R1 {rel}:{info['line']}: job '{job}' is not in GATES.md (id `{gid}`)")
-            elif info["continue_on_error"] and row["kind"] == "gate":
+            elif info["continue_on_error"] and row["kind"] in GATE_KINDS:
                 findings.append(
                     f"R7 GATES.md:{row['line']}: {gid} has continue-on-error and can never block - "
                     "register it as Hinweis"
+                )
+            elif info["disabled"] and row["kind"] in GATE_KINDS:
+                findings.append(
+                    f"R5 GATES.md:{row['line']}: {gid} has `if: false` at job level and never runs - "
+                    "it cannot turn red"
                 )
 
     # R2: hook and guard scripts
@@ -187,11 +230,20 @@ def audit(root):
             p = root / gid.split(":", 1)[1]
             if not p.exists():
                 findings.append(f"R4 {where}: file does not exist (stale row)")
-            elif r["kind"] == "gate" and gid.startswith("script:") and not script_has_red_path(p):
+            elif r["kind"] in GATE_KINDS and gid.startswith("script:") and not script_has_red_path(p):
                 findings.append(f"R5 {where}: registered as Gate but the script can never exit non-zero")
         elif not gid.startswith("privat:"):
             findings.append(f"R3 {where}: id must start with ci:, script:, test: or privat:")
-        if r["kind"] in ("gate", "hinweis"):
+        if gid.startswith("ci:"):
+            req = r["required"].strip().lower()
+            if r["kind"] == "gate" and req.startswith(("nein", "no")):
+                findings.append(
+                    f"R8 {where}: Gate without merge duty is invisible to the merge queue - "
+                    "register it as 'Gate (nicht Pflicht)' or make it a required check"
+                )
+            elif r["kind"] == "gate (nicht pflicht)" and req.startswith(("ja", "yes")):
+                findings.append(f"R8 {where}: 'Gate (nicht Pflicht)' but Merge-Pflicht says ja")
+        if r["kind"] in GATE_KINDS | {"hinweis"}:
             if missing(r["blocks"]):
                 findings.append(f"R3 {where}: no red case in 'blockt bei'")
             if missing(r["probe"]):
@@ -202,8 +254,10 @@ def audit(root):
     stats = {
         "rows": len(by_id),
         "gates": sum(1 for r in by_id.values() if r["kind"] == "gate"),
+        "optional": sum(1 for r in by_id.values() if r["kind"] == "gate (nicht pflicht)"),
         "hints": sum(1 for r in by_id.values() if r["kind"] == "hinweis"),
         "no_red_case": sum(1 for f in findings if f.startswith(("R5", "R7")) or "no red case" in f),
+        "not_required": sum(1 for f in findings if f.startswith("R8")),
         "no_probe": sum(1 for f in findings if "no sabotage probe" in f),
         "unregistered": sum(1 for f in findings if f.startswith(("R1", "R2"))),
         "unjustified_soft": sum(1 for f in findings if f.startswith("R6")),
@@ -211,18 +265,83 @@ def audit(root):
     return findings, stats
 
 
+RUN_REF = re.compile(r"\b(Rot-Lauf|Lauf)\s+(\d{6,})")
+
+
+def gh_fetch(path):
+    """GET a GitHub API path with `gh api` (needs GH_TOKEN in CI)."""
+    import json
+    import subprocess
+    p = subprocess.run(["gh", "api", path], capture_output=True, text=True, timeout=30)
+    if p.returncode != 0:
+        raise RuntimeError((p.stderr or p.stdout).strip().splitlines()[-1] if (p.stderr or p.stdout) else "gh api failed")
+    return json.loads(p.stdout)
+
+
+def verify_runs(root, fetch, repo="argyelan-ai/mission-control"):
+    """R9: every run id in the evidence column must exist. 'Rot-Lauf <id>'
+    must be a FAILED run of the row's own workflow, and if that job ran in
+    it under its display name, the job itself must have failed. 'Lauf <id>'
+    (no 'Rot-') only has to exist in that workflow (for Hinweis rows that
+    are red-but-green by design, or a job that was skipped)."""
+    root = Path(root)
+    rows = [r for r in parse_register(root / "tools/guards/GATES.md") if "error" not in r]
+    names = {}
+    for wf in (root / ".github/workflows").glob("*.y*ml"):
+        for job, info in workflow_jobs(wf).items():
+            names[f"ci:{wf.name}#{job}"] = info["name"]
+    out = []
+    for r in rows:
+        gid = r["id"]
+        wf_name = gid[3:].split("#")[0] if gid.startswith("ci:") else None
+        for kind, rid in RUN_REF.findall(r["probe"]):
+            where = f"GATES.md:{r['line']} {gid} run {rid}"
+            try:
+                run = fetch(f"repos/{repo}/actions/runs/{rid}")
+            except Exception as e:  # noqa: BLE001 - any failure means unverified
+                out.append(f"R9 {where}: cannot be verified ({e})")
+                continue
+            path = run.get("path", "")
+            if wf_name and not path.endswith(f"/{wf_name}"):
+                out.append(f"R9 {where}: belongs to {path or '?'}, not {wf_name}")
+                continue
+            if kind != "Rot-Lauf":
+                continue
+            if run.get("conclusion") != "failure":
+                out.append(f"R9 {where}: 'Rot-Lauf' but the run ended '{run.get('conclusion')}'")
+                continue
+            display = names.get(gid, "")
+            if not display or "${{" in display:
+                continue
+            try:
+                jobs = fetch(f"repos/{repo}/actions/runs/{rid}/jobs?per_page=100").get("jobs", [])
+            except Exception as e:  # noqa: BLE001
+                out.append(f"R9 {where}: jobs cannot be verified ({e})")
+                continue
+            mine = [j for j in jobs if j.get("name") == display or j.get("name", "").startswith(display + " (")]
+            if mine and not any(j.get("conclusion") == "failure" for j in mine):
+                out.append(f"R9 {where}: job '{display}' did not fail in that run (other jobs did)")
+    return out
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--root", default=Path(__file__).resolve().parents[2])
+    ap.add_argument("--verify-runs", action="store_true",
+                    help="R9: check every run id in the evidence column against the GitHub API (needs gh + token)")
     args = ap.parse_args(argv)
     findings, stats = audit(args.root)
+    if stats and args.verify_runs:
+        findings += verify_runs(args.root, gh_fetch)
     for f in findings:
         print(f"RED  {f}")
     if stats:
         print(
-            f"gate-audit: {stats['rows']} rows ({stats['gates']} Gate, {stats['hints']} Hinweis) | "
-            f"without red case: {stats['no_red_case']} | without probe: {stats['no_probe']} | "
-            f"unregistered: {stats['unregistered']} | unjustified soft-fails: {stats['unjustified_soft']}"
+            f"gate-audit: {stats['rows']} rows ({stats['gates']} Gate, {stats['optional']} Gate nicht Pflicht, "
+            f"{stats['hints']} Hinweis) | without red case: {stats['no_red_case']} | "
+            f"without probe: {stats['no_probe']} | unregistered: {stats['unregistered']} | "
+            f"unjustified soft-fails: {stats['unjustified_soft']} | Gate not required: {stats['not_required']}"
+            + (f" | unverified runs: {sum(1 for f in findings if f.startswith('R9'))}" if args.verify_runs else "")
         )
     print("gate-audit: FAIL" if findings else "gate-audit: ok")
     return 1 if findings else 0

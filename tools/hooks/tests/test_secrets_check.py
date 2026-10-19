@@ -63,3 +63,65 @@ def test_other_commands_untouched(repo):
     stage(repo, "app/config.py", f'TOKEN = "{FAKE_GH}"\n')
     assert run_hook("secrets-check.sh", f"git -C {repo} status").returncode == 0
     assert run_hook("secrets-check.sh", "cat app/config.py", cwd=repo).returncode == 0
+
+
+# --- Kritik 19.10.: bypasses and false alarms -------------------------------
+
+
+def write(repo, rel, text):
+    p = repo / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text)
+
+
+def test_add_all_and_commit_in_one_command_blocks_untracked_token(repo):
+    # The hook runs BEFORE the command, so nothing is staged yet.
+    write(repo, "app/new.py", f'TOKEN = "{FAKE_GH}"\n')
+    r = run_hook("secrets-check.sh", f"cd {repo} && git add -A && git commit -m wip")
+    assert r.returncode == 2, r.stderr
+    assert "app/new.py: GitHub token" in r.stderr
+    assert FAKE_GH not in r.stderr
+
+
+def test_commit_am_blocks_unstaged_token_in_tracked_file(repo):
+    write(repo, "README.md", f"oops {FAKE_GH}\n")  # tracked, modified, not staged
+    for cmd in (f"git -C {repo} commit -am wip", f"git -C {repo} commit --all -m wip",
+                f"git -C {repo} commit -a -m wip", f"git -C {repo} commit -m wip -a",
+                f"git -C {repo} commit -m '-a looks like a flag' --all"):
+        r = run_hook("secrets-check.sh", cmd)
+        assert r.returncode == 2, (cmd, r.stderr)
+        assert "README.md: GitHub token" in r.stderr
+
+
+def test_plain_commit_ignores_unstaged_changes(repo):
+    # Without -a / git add, unstaged lines are not part of the commit.
+    write(repo, "README.md", f"oops {FAKE_GH}\n")
+    assert run_hook("secrets-check.sh", f"git -C {repo} commit -m ok").returncode == 0
+
+
+def test_git_global_options_before_the_verb_do_not_bypass(repo):
+    stage(repo, "app/config.py", f'TOKEN = "{FAKE_GH}"\n')
+    for cmd in (f"git -c core.x=1 -C {repo} commit -m wip",
+                f"git --no-pager -C {repo} commit -m wip",
+                f"cd {repo} && git -c user.name=x commit -m wip"):
+        r = run_hook("secrets-check.sh", cmd)
+        assert r.returncode == 2, (cmd, r.stderr)
+    commit(repo, "notes.md", f"oops {FAKE_GH}\n")
+    r = run_hook("secrets-check.sh", f"cd {repo} && git --no-pager push")
+    assert r.returncode == 2, r.stderr
+
+
+def test_obvious_test_values_pass(repo):
+    stage(repo, "tests/test_slack.py", 'T = "xoxb-TEST-0000-not-a-real-token"\nU = "xoxb-TEST-dummy-value"\n')
+    r = run_hook("secrets-check.sh", f"git -C {repo} commit -m ok")
+    assert r.returncode == 0, r.stderr
+
+
+def test_allow_marker_needs_a_reason(repo):
+    stage(repo, "tests/test_x.py", f'T = "{FAKE_GH}"  # secrets-check: allow\n')
+    r = run_hook("secrets-check.sh", f"git -C {repo} commit -m wip")
+    assert r.returncode == 2
+    assert "reason" in r.stderr
+    stage(repo, "tests/test_x.py", f'T = "{FAKE_GH}"  # secrets-check: allow - redaction fixture\n')
+    r = run_hook("secrets-check.sh", f"git -C {repo} commit -m ok")
+    assert r.returncode == 0, r.stderr
