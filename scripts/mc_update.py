@@ -1383,6 +1383,9 @@ class Engine:
         if schema is None:
             raise UpdateError("the database does not answer — nothing to back up, nothing was changed")
         self.say("→ backing up before the update (./backup.sh preupdate) …")
+        # "Everything written since <taken_at> is lost" on R2: count from the
+        # start of the dump, not its end.
+        taken_at = _iso()
         cp = self.sh(["bash", str(copy), "preupdate"], check=False, env=self.backup_env(), timeout=3600)
         if cp.returncode != 0:
             tail = " | ".join((cp.stderr or cp.stdout or "").strip().splitlines()[-3:])
@@ -1391,7 +1394,7 @@ class Engine:
                  if ln.startswith(PREUPDATE_LINE)]
         if not named or not Path(named[-1]).is_file():
             raise UpdateError("backup.sh did not name a pre-update backup it wrote — nothing was changed")
-        j.data["backup"] = {"file": named[-1], "taken_at": _iso(), "schema": schema,
+        j.data["backup"] = {"file": named[-1], "taken_at": taken_at, "schema": schema,
                             "script": str(copy), "kind": "preupdate"}
         j.finish("backup", named[-1])
         _fault("backup.done")
