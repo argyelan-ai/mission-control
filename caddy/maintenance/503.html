@@ -1,0 +1,115 @@
+{{/*
+  Mission Control maintenance page.
+
+  Served by Caddy's `handle_errors` block (see ../Caddyfile and
+  ../Caddyfile.tls.example) whenever the frontend or backend upstream is
+  down — the restart window of an update (docs/decisions/094-*.md) or any
+  other outage that trips the active health check.
+
+  Rendered through Caddy's built-in `templates` directive (no app server
+  involved, so it still works while MC itself is down). Language is picked
+  from the request's Accept-Language header — EN unless it starts with
+  "de" — and the color scheme follows the browser's OS-level preference
+  (prefers-color-scheme), both decided without JavaScript so the page works
+  with scripting disabled too. The page reloads itself every 5 seconds via
+  <meta http-equiv="refresh">, matching the Retry-After header Caddy sends
+  alongside it.
+*/}}
+{{$lang := "en"}}{{if hasPrefix "de" (.Req.Header.Get "Accept-Language")}}{{$lang = "de"}}{{end}}
+<!doctype html>
+<html lang="{{$lang}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="5">
+<title>{{if eq $lang "de"}}MC startet neu{{else}}MC is restarting{{end}}</title>
+<style>
+  :root {
+    --bg: #181818;
+    --bg-surface: #262626;
+    --border: rgba(168,168,168,0.16);
+    --text: #F2F2F2;
+    --text-muted: #B3B3B3;
+    --accent: #75AEEA;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #F5F4F0;
+      --bg-surface: #FFFFFF;
+      --border: rgba(24,24,24,0.12);
+      --text: #181818;
+      --text-muted: #5A5A5A;
+      --accent: #2E6FB0;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    height: 100%;
+    margin: 0;
+  }
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 24px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "General Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  }
+  main {
+    max-width: 420px;
+    width: 100%;
+    text-align: center;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 40px 32px;
+  }
+  .spinner {
+    width: 32px;
+    height: 32px;
+    margin: 0 auto 24px;
+    border-radius: 50%;
+    border: 3px solid var(--border);
+    border-top-color: var(--accent);
+    animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+  h1 {
+    margin: 0 0 12px;
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  p {
+    margin: 0 0 8px;
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--text-muted);
+  }
+  .hint {
+    margin-top: 20px;
+    font-size: 12px;
+    color: var(--text-muted);
+    opacity: 0.8;
+  }
+</style>
+</head>
+<body>
+  <main>
+    <div class="spinner" aria-hidden="true"></div>
+    {{if eq $lang "de"}}
+    <h1>Mission Control startet neu</h1>
+    <p>Diese Seite meldet sich automatisch wieder, sobald MC bereit ist.</p>
+    <p class="hint">Lädt sich alle 5 Sekunden neu …</p>
+    {{else}}
+    <h1>Mission Control is restarting</h1>
+    <p>This page will come back on its own once MC is ready again.</p>
+    <p class="hint">Reloading every 5 seconds …</p>
+    {{end}}
+  </main>
+</body>
+</html>

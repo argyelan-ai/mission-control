@@ -1,16 +1,41 @@
 # Journey-test stack front door: same routing as the product Caddyfile
 # (/api and /health → backend, rest → frontend), plain HTTP, no LiveKit.
+# Also carries the maintenance-page block (PR 7) so the journeys stack is
+# where that page gets its sabotage probe: stop frontend, expect 503 +
+# Retry-After + the page instead of a bare error.
 :80 {
     handle /api/v1/internal/* {
         respond 403
     }
     handle /api/* {
-        reverse_proxy backend:8000
+        reverse_proxy backend:8000 {
+            health_uri /health
+            health_interval 5s
+            health_timeout 2s
+        }
     }
     handle /health {
-        reverse_proxy backend:8000
+        reverse_proxy backend:8000 {
+            health_uri /health
+            health_interval 5s
+            health_timeout 2s
+        }
     }
     handle {
-        reverse_proxy frontend:3000
+        reverse_proxy frontend:3000 {
+            health_uri /
+            health_interval 5s
+            health_timeout 2s
+        }
+    }
+    handle_errors {
+        @mc_restarting expression {err.status_code} in [502, 503]
+        handle @mc_restarting {
+            header Retry-After "5"
+            rewrite * /503.html
+            templates
+            root * /etc/caddy/maintenance
+            file_server
+        }
     }
 }

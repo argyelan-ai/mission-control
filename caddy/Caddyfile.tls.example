@@ -63,17 +63,51 @@
         respond 403
     }
 
-    # API + health → backend
+    # API + health → backend. Active health checks (rather than just
+    # per-request dial errors) are what let handle_errors below answer
+    # with 503 + Retry-After instead of a bare 502 while backend/frontend
+    # are mid-restart.
     handle /api/* {
-        reverse_proxy backend:8000
+        reverse_proxy backend:8000 {
+            health_uri /health
+            health_interval 5s
+            health_timeout 2s
+        }
     }
     handle /health {
-        reverse_proxy backend:8000
+        reverse_proxy backend:8000 {
+            health_uri /health
+            health_interval 5s
+            health_timeout 2s
+        }
     }
 
     # Default: Next.js frontend
     handle {
-        reverse_proxy frontend:3000
+        reverse_proxy frontend:3000 {
+            health_uri /
+            health_interval 5s
+            health_timeout 2s
+        }
+    }
+
+    # Maintenance page — self-contained, reusable block for your own
+    # Caddyfile. Copy this `handle_errors` block plus
+    # caddy/maintenance/503.html into your setup (adjust the `root` path to
+    # wherever you mount that file). While backend or frontend is down
+    # (health check failing → 503, or a request-time dial failure → 502),
+    # it answers with a self-reloading "MC is restarting" page (EN/DE by
+    # Accept-Language, light/dark by the browser's OS preference) instead
+    # of a bare error.
+    handle_errors {
+        @mc_restarting expression {err.status_code} in [502, 503]
+        handle @mc_restarting {
+            header Retry-After "5"
+            rewrite * /503.html
+            templates
+            root * /etc/caddy/maintenance
+            file_server
+        }
     }
 }
 
