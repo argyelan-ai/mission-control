@@ -446,7 +446,10 @@ async def test_workspace_branch_of_the_card_is_its_branch(client, fake_redis, ga
 
     gate_mode("enforce")
     data = await _seed(branch_name="fix/what-the-dispatcher-asked-for")
-    pr = _pr(branch=f"task/{slugify_workspace_slug('Feature mit PR')}")
+    # a long title: the workspace caps the slug and appends a hash
+    title = "Chat scrollt weiter seitwaerts, der echte Fall des Operators war ein anderer"
+    await _set(data["task"].id, title=title)
+    pr = _pr(branch=f"task/{slugify_workspace_slug(title)}")
     resp, events = await _call(client, data, {"status": "review"}, _fake_gh(pr, files=_FILES))
     assert resp.status_code == 200, resp.text
     assert "pr_branch_mismatch" not in _all_codes(events)
