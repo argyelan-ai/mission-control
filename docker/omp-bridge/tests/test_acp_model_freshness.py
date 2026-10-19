@@ -118,10 +118,11 @@ def test_bridge_task_selector_reads_the_current_file(tmp_path, monkeypatch):
 
 
 def test_bridge_serve_loop_uses_the_fresh_env():
-    """Tripwire: the ACP branch of serve_loop must resolve through
-    _current_omp_env() — the boot-env call was the bug."""
+    """Tripwire: the ACP branch of serve_loop must resolve through the
+    CURRENT omp.env (acp_model.current_selector) — the boot-env call was
+    the bug."""
     src = (ROOT / "bridge.py").read_text(encoding="utf-8")
-    assert "acp_model = _acp_model_selector(_current_omp_env())" in src
+    assert "acp_model = _acp_model_mod.current_selector(required=True)" in src
     assert "acp_model = _acp_model_selector(os.environ)" not in src
 
 

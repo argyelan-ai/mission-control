@@ -33,15 +33,38 @@ from typing import Any, Mapping, Optional
 MODEL_FALLBACK_CODE = "model_fallback"
 
 
+#: Providers omp knows by these names. An ``OPENAI_MODEL`` that already starts
+#: with one of them is a full selector; anything else is a bare model id that
+#: MC serves under its own ``mc-openai`` provider (entrypoint.sh renders it).
+QUALIFIED_PROVIDERS = ("mc-openai", "lm-studio", "openai")
+
+_MISSING_MODEL = "OPENAI_MODEL not set — entrypoint must render models.yml first"
+
+
+def qualify(model: Optional[str]) -> Optional[str]:
+    """Bare model id -> ``mc-openai/<id>``; an already provider-qualified value
+    passes through unchanged (never ``mc-openai/mc-openai/X``). Never a bare
+    token: that mis-resolves against omp's built-in provider catalog."""
+    m = (model or "").strip()
+    if not m:
+        return None
+    if "/" in m and m.split("/", 1)[0] in QUALIFIED_PROVIDERS:
+        return m
+    return f"mc-openai/{m}"
+
+
 def selector_from(env: Mapping[str, str]) -> Optional[str]:
-    """OMP_ACP_MODEL (explicit override) > OMP_MODEL_SELECTOR (rendered) >
-    mc-openai/<OPENAI_MODEL>. None when nothing is set."""
+    """THE selector rule — chat daemon, task bridge and ``launch-omp.sh`` all
+    follow it (``tests/test_model_selector_single_source.py`` runs one table
+    through every entry point):
+
+    ``OMP_ACP_MODEL`` (explicit override) > ``OMP_MODEL_SELECTOR`` (rendered)
+    > :func:`qualify` (``OPENAI_MODEL``). None when nothing is set."""
     for key in ("OMP_ACP_MODEL", "OMP_MODEL_SELECTOR"):
         value = (env.get(key) or "").strip()
         if value:
             return value
-    openai_model = (env.get("OPENAI_MODEL") or "").strip()
-    return f"mc-openai/{openai_model}" if openai_model else None
+    return qualify(env.get("OPENAI_MODEL"))
 
 
 def env_file_path(env: Mapping[str, str]) -> Optional[Path]:
@@ -80,16 +103,38 @@ def read_env_file(path: Optional[Path]) -> dict[str, str]:
     return values
 
 
-def current_selector(env: Optional[Mapping[str, str]] = None) -> Optional[str]:
-    """The selector as of NOW: the process env overlaid with the current
-    omp.env — exactly what ``launch-omp.sh`` does with ``set -a; . omp.env``.
-    ``OMP_ACP_MODEL`` is never written to the file, so an explicit override
-    in the process env still wins."""
+def current_env(env: Optional[Mapping[str, str]] = None) -> dict[str, str]:
+    """The process env overlaid with the CURRENT rendered omp.env — exactly
+    what ``launch-omp.sh`` does with ``set -a; . omp.env``. ``OMP_ACP_MODEL``
+    is never written to the file, so an explicit override in the process env
+    still wins."""
     base = dict(os.environ if env is None else env)
     merged = {**base, **read_env_file(env_file_path(base))}
     if (base.get("OMP_ACP_MODEL") or "").strip():
         merged["OMP_ACP_MODEL"] = base["OMP_ACP_MODEL"]
-    return selector_from(merged)
+    return merged
+
+
+def current_selector(
+    env: Optional[Mapping[str, str]] = None, *, required: bool = False,
+) -> Optional[str]:
+    """The selector as of NOW (:func:`current_env` + :func:`selector_from`).
+
+    ``required=True``: no model configured is a boot error (``RuntimeError``),
+    never a silent fallback to omp's built-in default model (ADR-054)."""
+    selector = selector_from(current_env(env))
+    if selector is None and required:
+        raise RuntimeError(_MISSING_MODEL)
+    return selector
+
+
+def require_selector(env: Mapping[str, str]) -> str:
+    """:func:`selector_from` for an env that is already merged; raises like
+    ``current_selector(required=True)`` when nothing is set."""
+    selector = selector_from(env)
+    if selector is None:
+        raise RuntimeError(_MISSING_MODEL)
+    return selector
 
 
 def offered_models(config_options: Any) -> list[str]:

@@ -2970,7 +2970,9 @@ def serve_loop(
                 # runtime switch re-renders omp.env inside the running
                 # container, but THIS process keeps its boot env for days —
                 # every task was pinned to the old, no longer offered model.
-                acp_model = _acp_model_selector(_current_omp_env())
+                import acp_model as _acp_model_mod  # noqa: PLC0415 — sibling script
+
+                acp_model = _acp_model_mod.current_selector(required=True)
 
                 # Review #464 Major 7: tool liveness for the ACP path. The
                 # native watchdog learns progress from the hook signal file;
@@ -3127,50 +3129,27 @@ def serve_loop(
 
 
 def _current_omp_env() -> dict:
-    """The process env overlaid with the CURRENT rendered omp.env — what
-    launch-omp.sh does with ``set -a; . omp.env``. An explicit
-    ``OMP_ACP_MODEL`` in the process env still wins (the file never sets
-    it). See acp_model.current_selector for the incident."""
+    """Alias of :func:`acp_model.current_env` (kept for existing callers)."""
     import acp_model as _acp_model_mod  # noqa: PLC0415 — sibling script, lazy
 
-    base = dict(os.environ)
-    merged = {**base, **_acp_model_mod.read_env_file(_acp_model_mod.env_file_path(base))}
-    if (base.get("OMP_ACP_MODEL") or "").strip():
-        merged["OMP_ACP_MODEL"] = base["OMP_ACP_MODEL"]
-    return merged
+    return _acp_model_mod.current_env()
 
 
 def _acp_model_selector(env: "Mapping[str, str]") -> str:
-    """The model every ACP session is pinned to — same source of truth as
-    launch-omp.sh: OMP_ACP_MODEL (explicit override) > OMP_MODEL_SELECTOR
-    (entrypoint-rendered) > mc-openai/<OPENAI_MODEL>. Never None: a session
-    without a selector falls back to omp's built-in provider catalog."""
-    explicit = (env.get("OMP_ACP_MODEL") or "").strip()
-    if explicit:
-        return explicit
-    rendered = (env.get("OMP_MODEL_SELECTOR") or "").strip()
-    if rendered:
-        return rendered
-    return _default_model_selector(env.get("OPENAI_MODEL"))
+    """Alias of :func:`acp_model.require_selector` — the ONE selector rule
+    (``acp_model.selector_from``). Never None: a session without a selector
+    would fall back to omp's built-in provider catalog."""
+    import acp_model as _acp_model_mod  # noqa: PLC0415 — sibling script, lazy
+
+    return _acp_model_mod.require_selector(env)
 
 
 def _default_model_selector(openai_model: Optional[str]) -> str:
-    """Build omp's fully-qualified `<provider>/<model>` selector.
+    """Alias of :func:`acp_model.qualify` that fails loud on a missing model
+    (ADR-054: no baked-in default, a missing model is a boot error)."""
+    import acp_model as _acp_model_mod  # noqa: PLC0415 — sibling script, lazy
 
-    entrypoint.sh renders the `mc-openai` provider from OPENAI_MODEL, so the
-    selector is `mc-openai/<OPENAI_MODEL>`. Never a bare token — that
-    mis-resolves against omp's built-in provider catalog. No baked-in
-    default: a missing model is a boot error, not a silent fallback to a
-    stale model (ADR-054).
-    """
-    m = (openai_model or "").strip()
-    if not m:
-        raise RuntimeError(
-            "OPENAI_MODEL not set — entrypoint must render models.yml first"
-        )
-    if "/" in m and m.split("/", 1)[0] in ("mc-openai", "lm-studio", "openai"):
-        return m  # already provider-qualified
-    return f"mc-openai/{m}"
+    return _acp_model_mod.require_selector({"OPENAI_MODEL": openai_model or ""})
 
 
 def _make_http_poll(
