@@ -872,6 +872,11 @@ def drive_run(
         # Terminal from here. A stranded `retry` (budget exhausted or no executor)
         # collapses to a blocker so the run ALWAYS resolves terminally.
         if action.action == "finish":
+            if not acked:
+                # mc finish requires in_progress; a finishing run had output.
+                lifecycle.ack(task_id)
+                acked = True
+                _flush_notes()
             lifecycle.finish(task_id, outcome.reflection_block or "", review=action.review)
         else:
             if action.action == "retry":
@@ -1527,6 +1532,59 @@ def _tmux_window_epoch(session: str, window: str = "0") -> Optional[float]:
         return None
 
 
+class FirstActivityAck:
+    """Claim a task (``mc ack``: inbox -> in_progress) only once the model
+    shows its first sign of life (19.10.2026, "zustellen ist nicht arbeiten").
+
+    Before, serve_loop acked up front — 4 s after the poll claim, while the
+    DGX Spark behind the slot runtime was switched off and nothing could ever
+    answer (live: task 4de17c6a). The card said "in Arbeit" for 20 minutes of
+    a dead endpoint. Now the ACP driver calls :meth:`trigger` from its event
+    reader on the first text/thought chunk or tool call; until then the card
+    stays ``inbox`` with ``dispatched_at`` set — delivered, not yet working.
+
+    The ack itself runs on its own thread so the ACP reader never blocks on
+    the ``mc`` subprocess. :meth:`wait` joins it before any terminal lifecycle
+    step (``mc finish`` needs the in_progress precondition). Idempotent and
+    thread-safe: at most one ``mc ack`` per task attempt.
+    """
+
+    def __init__(self, lifecycle: "MCLifecycle", task_id: str) -> None:
+        self._lifecycle = lifecycle
+        self._task_id = task_id
+        self._lock = threading.Lock()
+        self._thread: Optional[threading.Thread] = None
+        self._done = threading.Event()
+
+    @property
+    def fired(self) -> bool:
+        return self._thread is not None
+
+    def trigger(self) -> None:
+        with self._lock:
+            if self._thread is not None:
+                return
+            self._thread = threading.Thread(
+                target=self._ack, name="ack-on-first-activity", daemon=True,
+            )
+            self._thread.start()
+
+    def _ack(self) -> None:
+        try:
+            self._lifecycle.ack(self._task_id)
+            sys.stderr.write(
+                f"[serve] model answered -> task {self._task_id[:8]} claimed (mc ack)\n"
+            )
+        except Exception as e:  # noqa: BLE001 — a failed claim must never kill the run
+            sys.stderr.write(f"[serve] first-activity ack failed: {type(e).__name__}: {e}\n")
+        finally:
+            self._done.set()
+
+    def wait(self, timeout: float = 90.0) -> bool:
+        """Block until the triggered ack finished (True) or the timeout hit."""
+        return self._done.wait(timeout)
+
+
 def drive_live_run(
     lifecycle: MCLifecycle,
     run_once: Callable[[], RunOutcome],
@@ -1538,6 +1596,7 @@ def drive_live_run(
     continues_left: int = 0,
     continue_once: Optional[Callable[[str], RunOutcome]] = None,
     classify_fn: Optional[Callable[[RunOutcome], "Classification"]] = None,
+    ack_gate: Optional[FirstActivityAck] = None,
 ) -> LifecycleAction:
     """Live-path analogue of drive_run for the omp SUBPROCESS / native-TUI model.
 
@@ -1565,18 +1624,53 @@ def drive_live_run(
     Without injection every ACP outcome fell to ABORT_UNKNOWN — a task could
     never finish and a cancel was retried like an error. Default keeps the
     native behavior byte-identical.
+
+    `ack_gate` (19.10.2026, "zustellen ist nicht arbeiten"): the claim waits
+    for the model. The task is acked only once the gate fired (first model
+    chunk / tool call, see FirstActivityAck) or the outcome shows model
+    output. Until then every bridge comment is HELD BACK — an agent comment
+    on an unclaimed card is itself an implicit ACK in the backend
+    (task_lifecycle.apply_ack_handshake: inbox -> in_progress), so a single
+    "retrying" note would flip the card to "in Arbeit" with nothing running.
+    A run whose model never answered ends as a blocker straight from inbox
+    (a valid transition); the held notes and the classification follow the
+    blocker. ``None`` keeps the old behavior (ack on ``saw_session``).
     """
     attempts_left = retries_left
     continues = continues_left
     acked = pre_acked
+    held_notes: list[str] = []
+
+    def _note(text: str) -> None:
+        if acked or ack_gate is None:
+            lifecycle.comment(task_id, text)
+        else:
+            held_notes.append(text)
+
+    def _flush_notes() -> None:
+        while held_notes:
+            lifecycle.comment(task_id, held_notes.pop(0))
+
+    def _claim_if_live(o: RunOutcome) -> None:
+        nonlocal acked
+        if acked:
+            return
+        if ack_gate is None:
+            if o.saw_session:
+                lifecycle.ack(task_id)
+                acked = True
+            return
+        if ack_gate.fired or o.saw_agent_start:
+            ack_gate.trigger()  # no-op when the reader already fired it
+            ack_gate.wait()
+            acked = True
+            _flush_notes()
     # Fix 1: per-Kind nudge count within this run — the 2nd+ nudge for the SAME
     # Kind escalates to the minimal copy-paste template (see _nudge_prompt_for).
     nudge_counts: dict[Kind, int] = {}
     outcome = run_once()
     while True:
-        if not acked and outcome.saw_session:
-            lifecycle.ack(task_id)
-            acked = True
+        _claim_if_live(outcome)
         cls = classify_fn(outcome) if classify_fn is not None else classify(outcome)
         action = decide_lifecycle(
             cls, board_requires_review=board_requires_review,
@@ -1595,9 +1689,7 @@ def drive_live_run(
                     action="halted_external", classification=cls,
                     reflection=outcome.reflection_block,
                 )
-            lifecycle.comment(
-                task_id, f"omp {cls.reason}; continue-nudge, {continues} left"
-            )
+            _note(f"omp {cls.reason}; continue-nudge, {continues} left")
             continues -= 1
             attempt_index = nudge_counts.get(cls.kind, 0)
             nudge_counts[cls.kind] = attempt_index + 1
@@ -1611,7 +1703,7 @@ def drive_live_run(
                     action="halted_external", classification=cls,
                     reflection=outcome.reflection_block,
                 )
-            lifecycle.comment(task_id, f"omp abort ({cls.reason}); retrying, {attempts_left} left")
+            _note(f"omp abort ({cls.reason}); retrying, {attempts_left} left")
             attempts_left -= 1
             # Fresh session = fresh nudge history: a retry relaunches a BRAND-NEW
             # session that never saw the explanatory first nudge, so escalation
@@ -1650,10 +1742,7 @@ def drive_live_run(
                 block = outcome.reflection_block or ""
                 if _count_present_headers(block) >= 2 and len(block) >= MIN_REFLECTION_CHARS:
                     try:
-                        lifecycle.comment(
-                            task_id,
-                            "Partielle Reflexion (auto-gerettet vor Blocker): " + block,
-                        )
+                        _note("Partielle Reflexion (auto-gerettet vor Blocker): " + block)
                     except Exception as e:  # noqa: BLE001 — best-effort, never breaks the fallback
                         sys.stderr.write(
                             f"[drive_live_run] partial-reflection salvage comment failed "
@@ -1662,13 +1751,38 @@ def drive_live_run(
             # Blocker-Qualität (Fix B §): post the bridge's OWN classification as a
             # fresh comment BEFORE blocking, so Lead/Operator (via Fix A triage)
             # see the real cause — not a stale reflection quoted from the run-up.
-            lifecycle.comment(
-                task_id, f"omp-bridge Klassifikation: {cls.reason} — {cls.detail}"
-            )
-            lifecycle.set_blocker(
-                task_id,
-                blocker_type=action.blocker_type or "technical_problem",
-                question=action.question or cls.detail,
+            # Unclaimed card (ack_gate, model never answered): the order flips —
+            # blocker first, notes after — and the cause goes into the blocker
+            # question itself, which is what the triage reads.
+            classification_note = f"omp-bridge Klassifikation: {cls.reason} — {cls.detail}"
+            if acked:
+                lifecycle.comment(task_id, classification_note)
+                lifecycle.set_blocker(
+                    task_id,
+                    blocker_type=action.blocker_type or "technical_problem",
+                    question=action.question or cls.detail,
+                )
+            else:
+                # The model never answered: block straight from inbox (never
+                # claimed, never "in Arbeit"), THEN post what was held back —
+                # on a blocked card a comment no longer flips the status.
+                question = action.question or cls.detail
+                if outcome.error_message and outcome.error_message not in question:
+                    question = f"{question} — {outcome.error_message}"
+                lifecycle.set_blocker(
+                    task_id,
+                    blocker_type=action.blocker_type or "technical_problem",
+                    question=(
+                        "Das Modell hat nicht geantwortet — Task wurde zugestellt, "
+                        f"aber nie angefangen. {question}"
+                    ),
+                )
+                _flush_notes()
+                lifecycle.comment(task_id, classification_note)
+        if held_notes:
+            sys.stderr.write(
+                f"[drive_live_run] {len(held_notes)} held note(s) dropped "
+                f"(run ended {action.action} without a claim)\n"
             )
         action.reflection = outcome.reflection_block
         return action
@@ -3034,9 +3148,15 @@ def serve_loop(
             # path that still needs the name is the _run_factory test path,
             # which intentionally opts OUT of Fix B (continue -> blocker).
             continue_once: Optional[Callable[[str], RunOutcome]] = None
+            # "Zustellen ist nicht arbeiten" (19.10.2026): on the ACP path the
+            # claim (mc ack -> in_progress) waits for the model's first sign
+            # of life — see FirstActivityAck. The native TUI and the injected
+            # test factory keep the up-front ack (no event stream to hook).
+            ack_gate: Optional[FirstActivityAck] = None
             if _run_factory is not None:
                 run_once = _run_factory(task, cwd)
             elif _acp_env_driver() == "acp":
+                ack_gate = FirstActivityAck(lifecycle, str(task["id"]))
                 # ACP path (OMP_DRIVER=acp): drive `omp acp` via acp_client.
                 # G8 (docs/dispatch-path-parity.md): `cwd` above already
                 # carries the backend-prepared, host-to-container translated
@@ -3130,6 +3250,7 @@ def serve_loop(
                     context_pct=acp_context_pct,
                     cancel_state=acp_cancel,
                     heartbeat_fn=_acp_tool_heartbeat,
+                    on_first_activity=ack_gate.trigger,
                 )
 
                 def run_once(_p=prompt, _cwd=cwd) -> RunOutcome:
@@ -3192,19 +3313,27 @@ def serve_loop(
             # Cleared in finally — after the turn the bridge reports no ids.
             _set_turn_context(str(task["id"]), attempt_id)
             try:
-                # Claim the task up front: stamp ack_at before the (possibly long)
-                # omp run so the 10-min ACK-timeout re-dispatch can't fire and so
-                # `mc finish` sees the in_progress precondition.
-                lifecycle.ack(str(task["id"]))
+                if ack_gate is None:
+                    # Native / injected path: claim up front — stamp ack_at
+                    # before the (possibly long) omp run so the 10-min
+                    # ACK-timeout re-dispatch can't fire and so `mc finish`
+                    # sees the in_progress precondition.
+                    lifecycle.ack(str(task["id"]))
+                # ACP path: the card stays inbox (delivered, dispatched_at set)
+                # until the model answers. The ACK-timeout ladder pauses while
+                # the heartbeat reports "working" (task_runner, Teil 4), and
+                # the heartbeat control channel treats a delivered-unclaimed
+                # card as live work (agents._withdrawn_task_reason).
                 run_action = drive_live_run(
                     lifecycle, run_once,
                     task_id=str(task["id"]),
                     board_requires_review=require_review,
                     retries_left=retries,
-                    pre_acked=True,
+                    pre_acked=ack_gate is None,
                     continues_left=continues,
                     continue_once=continue_once,
                     classify_fn=classify_acp if _acp_env_driver() == "acp" else None,
+                    ack_gate=ack_gate,
                 )
                 # Fix 3 post-processing: an INTERRUPTED run needs NO retry,
                 # NO blocker escalation, NO "omp abort (hang)" comment. The
@@ -3212,7 +3341,12 @@ def serve_loop(
                 # stopped/blocked; for a soft signal the waiting nudge is
                 # delivered right here at the turn boundary and the next
                 # dispatch continues the SAME session (continue_once path).
-                if interrupt_state.fired() and interrupt_state.kind == "soft":
+                if (
+                    interrupt_state.fired() and interrupt_state.kind == "soft"
+                    # An unclaimed card stays unclaimed: an agent comment
+                    # would be an implicit ACK (inbox -> in_progress).
+                    and (ack_gate is None or ack_gate.fired)
+                ):
                     try:
                         lifecycle.comment(
                             str(task["id"]),
@@ -4376,6 +4510,7 @@ def run_acp_once(
     on_session_id: Optional[Callable[[str], None]] = None,
     media_sink: Optional[Callable[[str, bytes], bool]] = None,
     origin_kind: Optional[str] = None,
+    on_first_activity: Optional[Callable[[], None]] = None,
 ) -> RunOutcome:
     """One task attempt over ACP: prompt in, terminal RunOutcome out.
 
@@ -4401,6 +4536,14 @@ def run_acp_once(
     native hook's `tool_start`/`tool_heartbeat` feed — without it a long
     silent ACP tool run looks idle to the watchdog (#410/#411). ``None``
     keeps the pure-driver behaviour.
+
+    ``on_first_activity`` (19.10.2026, "zustellen ist nicht arbeiten"):
+    called ONCE on the model's first sign of life — the first
+    ``agent_message_chunk``/``agent_thought_chunk`` or ``tool_call``. A
+    session that opens but never produces anything (runtime down, model
+    unreachable) never fires it. serve_loop wires FirstActivityAck.trigger
+    here, so the task is claimed when the model works, not when omp accepts
+    the prompt. Exceptions are swallowed: it must never kill the run.
 
     ``context_pct`` (G5 holder, replaces the former module global): the
     caller-owned ACPContextPct the usage_update handler stamps. serve_loop
@@ -4448,9 +4591,22 @@ def run_acp_once(
     # length, last flush time, and the newest withheld snapshot.
     _throttle = {"chars": -10**9, "at": time.monotonic(), "pending": None}
 
+    _first_activity_seen = [False]
+
+    def _first_activity() -> None:
+        if _first_activity_seen[0] or on_first_activity is None:
+            return
+        _first_activity_seen[0] = True
+        try:
+            on_first_activity()
+        except Exception:  # noqa: BLE001 — the claim must never kill the run
+            sys.stderr.write("[acp] on_first_activity failed\n")
+
     def on_event(params: dict) -> None:
         upd = params.get("update") or {}
         su = upd.get("sessionUpdate")
+        if su in ("agent_message_chunk", "agent_thought_chunk", "tool_call"):
+            _first_activity()
         if su in ("agent_message_chunk", "agent_thought_chunk"):
             c = upd.get("content") or {}
             if c.get("type") == "text":
@@ -4895,6 +5051,7 @@ def _make_acp_run_factory(
     context_pct: Optional[ACPContextPct] = None,
     cancel_state: Optional[ACPCancelState] = None,
     heartbeat_fn: Optional[Callable[[], None]] = None,
+    on_first_activity: Optional[Callable[[], None]] = None,
 ) -> Callable[..., RunOutcome]:
     """Bind serve_loop env config into one run_acp_once(prompt) callable.
 
@@ -4991,6 +5148,7 @@ def _make_acp_run_factory(
             task_id=task_id,
             cancel_state=cancel_state,
             heartbeat_fn=heartbeat_fn,
+            on_first_activity=on_first_activity,
             transcript_sink=sink,
             preview_sink=preview_sink,
             on_session_id=on_session_id,
