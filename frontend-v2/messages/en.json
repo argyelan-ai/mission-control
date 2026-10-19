@@ -431,7 +431,9 @@
           "done": "task done",
           "failed": "task failed",
           "aborted": "task aborted"
-        }
+        },
+        "waitingModel": "waiting for its model",
+        "waitingFirstAnswer": "delivered, waiting for the model's first answer"
       },
       "resultFallbackShort": "Latest agent note:",
       "factHeartbeat": "Sign of life",
@@ -447,7 +449,10 @@
         "passed": "Head passed",
         "failed": "Head failed",
         "stopped": "Head stopped"
-      }
+      },
+      "modelWaitDown": "{runtime} does not answer.",
+      "modelWaitDownUnnamed": "The model does not answer.",
+      "modelWaitHint": "Nothing is broken in the task. It starts as soon as the model answers again."
     },
     "pipelineTitle": "Pipeline",
     "pipelineFailedCount": "{count} failed",
@@ -973,7 +978,9 @@
       "unknown": "Status unknown — check the terminal",
       "ended": "Session ended — a new message starts the next session",
       "sent": "Sent…",
-      "workingWords": "Working|Thinking|Pondering|Mulling|Tinkering|Puzzling|Computing|Musing|Figuring|Polishing|Sorting|Combining|Distilling|Tracing|Turning ideas|Pulling threads"
+      "workingWords": "Working|Thinking|Pondering|Mulling|Tinkering|Puzzling|Computing|Musing|Figuring|Polishing|Sorting|Combining|Distilling|Tracing|Turning ideas|Pulling threads",
+      "taskWorking": "Working on a task",
+      "waitingForModel": "Waiting for the model"
     },
     "livePreview": "Live preview",
     "noMessagesYet": "No messages yet",

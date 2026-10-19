@@ -431,7 +431,9 @@
           "done": "Aufgabe erledigt",
           "failed": "Aufgabe fehlgeschlagen",
           "aborted": "Aufgabe abgebrochen"
-        }
+        },
+        "waitingModel": "wartet auf sein Modell",
+        "waitingFirstAnswer": "zugestellt, wartet auf die erste Antwort des Modells"
       },
       "resultFallbackShort": "Letzte Agenten-Notiz:",
       "factHeartbeat": "Lebenszeichen",
@@ -447,7 +449,10 @@
         "passed": "Head bestanden",
         "failed": "Head fehlgeschlagen",
         "stopped": "Head gestoppt"
-      }
+      },
+      "modelWaitDown": "{runtime} antwortet nicht.",
+      "modelWaitDownUnnamed": "Das Modell antwortet nicht.",
+      "modelWaitHint": "An der Aufgabe ist nichts kaputt. Sie startet, sobald das Modell wieder antwortet."
     },
     "pipelineTitle": "Pipeline",
     "pipelineFailedCount": "{count} fehlgeschlagen",
@@ -973,7 +978,9 @@
       "unknown": "Status unklar — Terminal prüfen",
       "ended": "Session beendet — neue Nachricht startet die nächste Session",
       "sent": "Gesendet…",
-      "workingWords": "Arbeitet|Denkt nach|Grübelt|Brütet|Werkelt|Tüftelt|Rechnet|Sinniert|Knobelt|Feilt|Sortiert|Kombiniert|Verdichtet|Spürt nach|Wälzt Ideen|Zieht Fäden"
+      "workingWords": "Arbeitet|Denkt nach|Grübelt|Brütet|Werkelt|Tüftelt|Rechnet|Sinniert|Knobelt|Feilt|Sortiert|Kombiniert|Verdichtet|Spürt nach|Wälzt Ideen|Zieht Fäden",
+      "taskWorking": "Arbeitet an einer Aufgabe",
+      "waitingForModel": "Wartet auf das Modell"
     },
     "livePreview": "Live-Vorschau",
     "noMessagesYet": "Noch keine Nachrichten",

@@ -222,6 +222,26 @@ describe("StatusLine — Arbeits-Verb (Render-Reinheit)", () => {
       spy.mockRestore();
     }
   });
+
+  // Follow-up to ADR-097: a task turn of an ACP agent runs through the
+  // bridge, not the chat — the chat must not say "Ready" meanwhile.
+  it('shows "Working on a task" while a task turn runs, with a live dot', () => {
+    render(<StatusLine state={mkState("task_working")} connected />);
+    expect(screen.queryByText("Ready")).not.toBeInTheDocument();
+    expect(screen.getByTestId("status-label")).toHaveTextContent("Working on a task");
+    expect(screen.getByTestId("status-dot")).toHaveAttribute("data-live", "true");
+  });
+
+  it("a running tool of the task turn is more concrete than the word", () => {
+    render(<StatusLine state={mkState("task_working")} connected activity={{ title: "Read poll.sh" }} />);
+    expect(screen.getByTestId("status-label")).toHaveTextContent("Read poll.sh");
+  });
+
+  it('shows "Waiting for the model" for a delivered task whose model has not answered', () => {
+    render(<StatusLine state={mkState("waiting_model")} connected />);
+    expect(screen.getByTestId("status-label")).toHaveTextContent("Waiting for the model");
+    expect(screen.getByTestId("status-dot")).toHaveAttribute("data-live", "false");
+  });
 });
 
 function workingWordOf() {

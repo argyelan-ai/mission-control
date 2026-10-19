@@ -166,6 +166,14 @@ export function deriveStateLine({
     return { tone: statusTone, word: statusWord, detail: span ? { key: "endedAgo", values: { span } } : null };
   }
 
+  if (card?.kind === "waiting_model") {
+    return {
+      tone: statusTone,
+      word: statusWord,
+      detail: { key: card.ready ? "waitingFirstAnswer" : "waitingModel", values: {} },
+    };
+  }
+
   // No card: inbox, review, anything else.
   if (task.status === "inbox") return { tone: statusTone, word: statusWord, detail: { key: "notStarted", values: {} } };
   return { tone: statusTone, word: statusWord, detail: agentName ? { key: "with", values: { name: agentName } } : null };
