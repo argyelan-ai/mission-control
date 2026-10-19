@@ -89,3 +89,36 @@ def test_files_are_merged_like_claude_code_does(tmp_path):
     a, b = canonical_hooks()
     r = run(settings(tmp_path, [a], "user.json"), settings(tmp_path, [b], "project.json"))
     assert r.returncode == 0, r.stderr
+
+
+def _entry_with_broken_origin(repo, tmp_path):
+    from conftest import git
+    git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")  # main has no tools/hooks
+    return next(h["command"] for h in canonical_hooks(str(repo)) if "test-gate.sh" in h["command"])
+
+
+def test_entry_fails_closed_for_a_push_when_the_hook_cannot_be_loaded(repo, tmp_path):
+    cmd = _entry_with_broken_origin(repo, tmp_path)
+    payload = json.dumps({"tool_input": {"command": "bash -lc 'git push'"}})
+    r = subprocess.run(["bash", "-c", cmd], input=payload, capture_output=True, text=True)
+    assert r.returncode == 2, r.stderr
+    assert "could not load" in r.stderr
+
+
+def test_entry_warns_but_lets_other_commands_run_when_the_hook_cannot_be_loaded(repo, tmp_path):
+    cmd = _entry_with_broken_origin(repo, tmp_path)
+    payload = json.dumps({"tool_input": {"command": "ls -la"}})
+    r = subprocess.run(["bash", "-c", cmd], input=payload, capture_output=True, text=True)
+    assert r.returncode == 0
+    assert "could not load" in r.stderr
+
+
+def test_entry_that_opens_silently_is_red(tmp_path):
+    hooks = canonical_hooks()
+    for h in hooks:
+        h["command"] = ("bash -c 'f=$(mktemp) || exit 0; git -C /r show origin/main:tools/hooks/"
+                        + ("test-gate.sh" if "test-gate" in h["command"] else "secrets-check.sh")
+                        + " > \"$f\" || { rm -f \"$f\"; exit 0; }; bash \"$f\"'")
+    r = run(settings(tmp_path, hooks))
+    assert r.returncode == 1
+    assert "fails open" in r.stderr

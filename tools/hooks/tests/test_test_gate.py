@@ -321,3 +321,87 @@ def test_failure_that_is_already_on_main_does_not_block(repo):
     assert r.returncode == 0, r.stderr
     assert "origin/main too" in r.stderr
     assert "test-gate-base" not in git(repo, "worktree", "list")  # throwaway worktree removed
+
+
+# --- Runde 2b (Kritik tore-dicht): fail closed, more spellings, -x -----------
+
+
+@pytest.mark.parametrize("form", [
+    "(cd /tmp); git push",
+    "cd /tmp && cd - && git push",
+    "pushd /tmp && popd && git push",
+    "false && cd /tmp; git push",
+    "cd /no/such/dir/anywhere; git push",
+    "bash -lc 'git push'",
+    "sh -ec 'git push'",
+    "bash -c -- 'git push'",
+    "echo push | xargs git",
+    "echo push | xargs -I{} git {}",
+    "cat <<'EOF' | bash\ngit push\nEOF",
+    "echo 'git push' | bash",
+    "printf '%s %s' git push | sh",
+    "find . -maxdepth 0 -exec git push \;",
+    "awk 'BEGIN{system(\"git push\")}'",
+    "python3 -c \"import subprocess; subprocess.run(['g'+'it', 'push'])\"",
+])
+def test_round2b_spellings_and_folder_tricks_block(repo, form):
+    # the session sits in the red checkout; none of these may wave it through
+    commit(repo, "backend/tests/test_new.py", RED)
+    r = run_hook("test-gate.sh", form, cwd=repo)
+    assert r.returncode == 2, (form, r.stderr)
+
+
+def test_shell_fed_from_a_file_blocks(repo, tmp_path):
+    commit(repo, "backend/tests/test_new.py", RED)
+    (tmp_path / "s.sh").write_text("git push\n")
+    r = run_hook("test-gate.sh", f"bash < {tmp_path}/s.sh", cwd=repo)
+    assert r.returncode == 2, r.stderr
+
+
+def test_red_on_main_test_does_not_hide_a_new_failure(repo):
+    # Critic probe: with pytest -x, a test that is already red on main ran
+    # first, stopped the run, was found red on main too - and the branch's real
+    # breakage in another file never ran.
+    app_package(repo)
+    commit(repo, "backend/app/foo.py", "def f():\n    return 1\n")
+    commit(repo, "backend/tests/test_foo.py",
+           "from app.foo import f\n\ndef test_env_broken_on_main():\n    assert f() == 99\n")
+    commit(repo, "backend/tests/test_foo_more.py",
+           "from app.foo import f\n\ndef test_f_is_one():\n    assert f() == 1\n")
+    git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    commit(repo, "backend/app/foo.py", "def f():\n    return 2\n", "break it")
+    r = run_hook("test-gate.sh", f"git -C {repo} push")
+    assert r.returncode == 2, r.stderr
+    assert "test_f_is_one" in r.stderr
+
+
+def test_pre_push_mode_blocks_every_spelling(repo, tmp_path):
+    # The real choke point: git runs its pre-push hook for every spelling
+    # (bash -lc, xargs, python, aliases). test-gate.sh --pre-push is that hook.
+    commit(repo, "backend/tests/test_new.py", RED)
+    bare = tmp_path / "remote.git"
+    git(tmp_path, "init", "-q", "--bare", str(bare))
+    git(repo, "remote", "add", "up", str(bare))
+    hooks = tmp_path / "hooks"
+    hooks.mkdir()
+    from conftest import HOOKS
+    (hooks / "pre-push").write_text(f'#!/bin/bash\nexec bash "{HOOKS}/test-gate.sh" --pre-push "$@"\n')
+    (hooks / "pre-push").chmod(0o755)
+    git(repo, "config", "core.hooksPath", str(hooks))
+    import os
+    import subprocess
+    import sys
+    env = dict(os.environ, MC_TEST_GATE_PYTHON=sys.executable, MC_TEST_GATE_TIMEOUT="60")
+    for k in ("MC_HOOK_REPO", "CLAUDE_PROJECT_DIR", "MC_TEST_GATE_BUDGET"):
+        env.pop(k, None)
+    for spelling in ("bash -lc 'git push -q up fix/branch'",
+                     "echo fix/branch | xargs git push -q up",
+                     "python3 -c \"import subprocess,sys; sys.exit(subprocess.call(['g'+'it','push','-q','up','fix/branch']))\""):
+        p = subprocess.run(["bash", "-c", spelling], cwd=repo, capture_output=True, text=True, env=env)
+        assert p.returncode != 0, (spelling, p.stderr)
+        assert "test_broken" in p.stderr, (spelling, p.stderr)
+    assert not git(bare, "for-each-ref")  # nothing reached the remote
+    commit(repo, "backend/tests/test_new.py", GREEN, "fix")
+    p = subprocess.run(["bash", "-lc", "git push -q up fix/branch"], cwd=repo, capture_output=True, text=True, env=env)
+    assert p.returncode == 0, p.stderr
+    assert "fix/branch" in git(bare, "for-each-ref")

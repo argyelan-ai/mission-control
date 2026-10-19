@@ -2,6 +2,7 @@
 credential, and must never echo the value. Fake secrets are assembled at
 runtime so this file itself never contains one (gitleaks scans the tree)."""
 from conftest import commit, git, run_hook
+import pytest  # noqa: E402,F811
 
 FAKE_GH = "gh" + "p_" + "A1b2C3d4" * 5          # 40 chars after the prefix
 FAKE_ANT = "sk-" + "ant-" + "x9Y8z7W6" * 4
@@ -186,3 +187,45 @@ def test_commit_with_unknown_checkout_blocks(repo):
     r = run_hook("secrets-check.sh", 'git -C "$NOT_SET_X" commit -m x', cwd=repo)
     assert r.returncode == 2
     assert "variable" in r.stderr
+
+
+# --- Runde 2b (Kritik tore-dicht) -------------------------------------------
+
+
+@pytest.mark.parametrize("form", [
+    "git -C {r} commit -m x app.py",
+    "git -C {r} commit -m x -- app.py",
+    "git -C {r} commit -o app.py -m x",
+    "git -C {r} commit --only app.py -m x",
+])
+def test_commit_with_a_pathspec_scans_the_unstaged_file(repo, form):
+    commit(repo, "app.py", "A = 1\n")
+    write(repo, "app.py", f'TOKEN = "{FAKE_GH}"\n')  # tracked, changed, NOT staged
+    r = run_hook("secrets-check.sh", form.format(r=repo))
+    assert r.returncode == 2, (form, r.stderr)
+    assert "app.py: GitHub token" in r.stderr
+
+
+@pytest.mark.parametrize("form", [
+    "$(echo git) commit -am x",
+    "echo commit | xargs git",
+    "bash -lc 'git commit -am x'",
+    "(cd /tmp); git commit -am x",
+    "false && cd /tmp; git commit -am x",
+])
+def test_hidden_or_misread_commit_blocks(repo, form):
+    write(repo, "README.md", f"oops {FAKE_GH}\n")
+    r = run_hook("secrets-check.sh", form, cwd=repo)
+    assert r.returncode == 2, (form, r.stderr)
+
+
+def test_allow_marker_only_counts_in_test_files(repo):
+    stage(repo, "app/settings.py", f'T = "{FAKE_GH}"  # secrets-check: allow - harmless, trust me\n')
+    r = run_hook("secrets-check.sh", f"git -C {repo} commit -m wip")
+    assert r.returncode == 2, r.stderr
+    assert "only in test" in r.stderr
+    stage(repo, "app/settings.py", "T = None\n")
+    stage(repo, "backend/tests/fixtures/redact.py", f'T = "{FAKE_GH}"  # secrets-check: allow - redaction fixture\n')
+    r = run_hook("secrets-check.sh", f"git -C {repo} commit -m ok")
+    assert r.returncode == 0, r.stderr
+    assert "allow marker used" in r.stderr  # never silent: the PR reviewer sees it

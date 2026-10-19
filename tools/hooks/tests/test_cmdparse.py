@@ -158,3 +158,113 @@ def test_commit_all_flag(analyze):
 def test_garbage_does_not_crash(analyze):
     for cmd in ("'", '"', "$(", "`", "<<EOF", "git -C", "gh", "(((", "\\"):
         analyze(cmd, "/tmp")
+
+
+# --- Runde 2b (Kritik tore-dicht): the folder model must match the shell's --
+
+
+@pytest.mark.parametrize("cmd", [
+    "(cd /a/b); git push",
+    "(cd /a/b && true); git push",
+    "x=$(cd /a/b); git push",
+    "bash -c 'cd /a/b'; git push",
+    "cd /a/b & git push",
+    "cd /a/b &>/dev/null & git push",
+    "sh -c 'cd /a/b; true' && git push",
+])
+def test_a_cd_in_a_subshell_does_not_move_the_command_after_it(analyze, cmd):
+    ev = [e for k, e in analyze(cmd, "/tmp") if k == "push"]
+    assert ev and ev[0]["dir"] == "/tmp", (cmd, ev)
+
+
+@pytest.mark.parametrize("cmd", [
+    "cd /a && cd - && git push",
+    "pushd /a/b && popd && git push",
+    "pushd && git push",
+    "false && cd /a/b; git push",
+    "true || cd /a/b; git push",
+    "true || cd /a/b && git push",
+    "cd /a/b || true; git push",
+    "cd /a/b | cat; git push",
+])
+def test_a_cd_the_gate_cannot_follow_makes_the_folder_unknown(analyze, cmd):
+    ev = [e for k, e in analyze(cmd, "/tmp") if k == "push"]
+    assert ev and ev[0]["dir"] is None, (cmd, ev)
+
+
+@pytest.mark.parametrize("cmd,where", [
+    ("cd /a/b || exit 1; git push", "/a/b"),
+    ("false && cd /a/b && git push", "/a/b"),
+    ("if cd /a/b; then git push; fi", "/a/b"),
+    ("cd /a/b &>/dev/null && git push", "/a/b"),
+    ("cd /a/b && bash <<'EOF'\ngit push\nEOF", "/a/b"),
+    ("cd /a/b && x=$(git push)", "/a/b"),
+    ("(cd /x); (cd /a/b && git push)", "/a/b"),
+])
+def test_a_cd_the_gate_can_follow_still_counts(analyze, cmd, where):
+    ev = [e for k, e in analyze(cmd, "/tmp") if k == "push"]
+    assert ev and ev[0]["dir"] == where, (cmd, ev)
+
+
+MORE_PUSH_FORMS = [
+    "bash -lc 'git push'",
+    "sh -ec 'git push'",
+    "bash -c -- 'git push'",
+    "bash --login -c 'git push'",
+    "bash -o pipefail -c 'git push'",
+    "cat <<'EOF' | bash\ngit push\nEOF",
+    "echo 'git push' | bash",
+    "echo 'git push' | bash -s",
+    "bash <<< 'git push'",
+    "find . -maxdepth 0 -exec git push \;",
+    "find . -maxdepth 0 -execdir git push ';'",
+    "awk 'BEGIN{system(\"git push\")}'",
+    "timeout 9 bash -lc 'git push'",
+    "echo \"g\"\"it push\" | zsh",
+]
+
+
+@pytest.mark.parametrize("cmd", MORE_PUSH_FORMS)
+def test_more_spellings_of_push_are_seen(analyze, cmd):
+    assert "push" in kinds(analyze(cmd, "/tmp")), cmd
+
+
+def test_shell_reading_a_file_on_stdin_is_read(analyze, tmp_path):
+    (tmp_path / "ship.sh").write_text("git -C /a/b push\n")
+    for cmd in ("bash < ship.sh", "cat ship.sh | bash", "sh -s < ./ship.sh"):
+        ev = [e for k, e in analyze(cmd, str(tmp_path)) if k == "push"]
+        assert ev and ev[0]["dir"] == "/a/b", cmd
+
+
+@pytest.mark.parametrize("cmd", [
+    "echo push | xargs git",
+    "echo push | xargs -I{} git {}",
+    "echo fix/x | xargs git push origin",
+    "printf '%s %s' git push | sh",
+    "python3 -c \"import subprocess; subprocess.run(['g'+'it', 'pu'+'sh'])\"",
+    "node -e \"require('child_process').execSync(['gi','t'].join('') + ' push')\"",
+])
+def test_git_whose_words_come_from_input_is_hidden(analyze, cmd):
+    assert "hidden" in kinds(analyze(cmd, "/tmp")), cmd
+
+
+@pytest.mark.parametrize("cmd", [
+    "echo hi | bash", "ls | xargs wc -l", "git ls-files | xargs git add",
+    "find . -name '*.py' -exec grep -l push {} +", "awk '/push/' log.txt",
+    "python3 -c 'import subprocess; subprocess.run([\"ls\"])'",
+    "(cd /a && make)", "cd - >/dev/null",
+])
+def test_harmless_lookalikes_stay_quiet(analyze, cmd):
+    assert not {"push", "pr", "bypass", "hidden"} & set(kinds(analyze(cmd, "/tmp"))), cmd
+
+
+@pytest.mark.parametrize("cmd,paths", [
+    ("git commit -m x app.py", ["app.py"]),
+    ("git commit -m x -- app.py b.py", ["app.py", "b.py"]),
+    ("git commit -o app.py -m x", ["app.py"]),
+    ("git commit --only -m x app.py", ["app.py"]),
+    ("git commit -m x", []),
+    ("git commit -F- -- a", ["a"]),
+])
+def test_commit_pathspecs_are_read(analyze, cmd, paths):
+    assert dict(analyze(cmd, "/tmp"))["commit"]["paths"] == paths
