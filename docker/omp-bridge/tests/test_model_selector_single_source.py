@@ -45,7 +45,10 @@ TABLE = [
     # Already provider-qualified values pass through unchanged.
     ({"OPENAI_MODEL": "mc-openai/B"}, "mc-openai/B"),
     ({"OPENAI_MODEL": "lm-studio/B"}, "lm-studio/B"),
-    ({"OPENAI_MODEL": "openai/B"}, "openai/B"),
+    # ``openai/`` is NOT a provider MC renders: an HF id such as
+    # openai/gpt-oss-120b served by vLLM would otherwise resolve against omp's
+    # built-in OpenAI provider (no key -> 401). It goes under mc-openai too.
+    ({"OPENAI_MODEL": "openai/gpt-oss-120b"}, "mc-openai/openai/gpt-oss-120b"),
     # Blank values do not count.
     ({"OMP_ACP_MODEL": "  ", "OMP_MODEL_SELECTOR": "", "OPENAI_MODEL": "B"}, "mc-openai/B"),
     ({}, None),

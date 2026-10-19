@@ -45,7 +45,9 @@ if [ -z "$SELECTOR" ]; then
         exit 1
     fi
     case "$_M" in
-        mc-openai/*|lm-studio/*|openai/*) SELECTOR="$_M" ;;
+        # Not openai/*: that is an HF id prefix (openai/gpt-oss-120b), not a
+        # provider MC renders (acp_model.QUALIFIED_PROVIDERS).
+        mc-openai/*|lm-studio/*) SELECTOR="$_M" ;;
         *) SELECTOR="mc-openai/$_M" ;;
     esac
 fi

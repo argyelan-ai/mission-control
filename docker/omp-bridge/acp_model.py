@@ -33,10 +33,13 @@ from typing import Any, Mapping, Optional
 MODEL_FALLBACK_CODE = "model_fallback"
 
 
-#: Providers omp knows by these names. An ``OPENAI_MODEL`` that already starts
-#: with one of them is a full selector; anything else is a bare model id that
-#: MC serves under its own ``mc-openai`` provider (entrypoint.sh renders it).
-QUALIFIED_PROVIDERS = ("mc-openai", "lm-studio", "openai")
+#: Providers MC itself renders into omp's models.yml. An ``OPENAI_MODEL`` that
+#: already starts with one of them is a full selector; anything else is a bare
+#: model id that MC serves under its own ``mc-openai`` provider (entrypoint.sh
+#: renders it). ``openai`` is deliberately NOT here: it is omp's built-in
+#: OpenAI provider (no key in MC), and ``openai/...`` is a real HF model-id
+#: prefix (openai/gpt-oss-120b on vLLM) that must go under mc-openai.
+QUALIFIED_PROVIDERS = ("mc-openai", "lm-studio")
 
 _MISSING_MODEL = "OPENAI_MODEL not set — entrypoint must render models.yml first"
 
