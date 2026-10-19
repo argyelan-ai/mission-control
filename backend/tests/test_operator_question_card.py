@@ -269,3 +269,127 @@ async def test_harness_does_not_matter(client: AsyncClient, fake_redis):
         await _as_operator(client)
         questions = (await client.get(f"/api/v1/agents/{agent.id}/chat/questions")).json()["questions"]
         assert [q["question"] for q in questions] == [f"From {runtime}?"], runtime
+
+
+# ── Review #872: stale questions and system approvals stay out ──────────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("final_status", ["done", "failed", "aborted", "cancelled"])
+async def test_question_on_a_finished_task_is_no_card(client: AsyncClient, fake_redis, final_status):
+    """Nothing clears `awaiting` when a task ends — a question of a finished
+    task must not pin itself above the composer for weeks."""
+    from app.comm_constants import QUESTION_TARGETS
+
+    board, agent, task, token = await _setup(comm_v2=True)
+    _as_agent(client, token)
+    resp = await client.post(
+        "/api/v1/agent/tasks/current/ask",
+        json={"question": "Old one?", "to": QUESTION_TARGETS[0]},
+    )
+    assert resp.status_code == 201, resp.text
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(Approval(
+            board_id=board.id, agent_id=agent.id, task_id=task.id,
+            action_type="clarification_question", description="old",
+            payload={"question": "Old approval?"}, status="pending",
+        ))
+        row = await s.get(Task, task.id)
+        row.status = final_status
+        s.add(row)
+        await s.commit()
+
+    await _as_operator(client)
+    assert (await client.get(f"/api/v1/agents/{agent.id}/chat/questions")).json()["questions"] == []
+
+
+def _system_approval(kind: str, board_id, agent_id, task_id, payload=None) -> Approval:
+    return Approval(
+        board_id=board_id, agent_id=agent_id, task_id=task_id,
+        action_type=kind, description="Freigabe noetig: system text",
+        payload=payload or {}, status="pending",
+    )
+
+
+@pytest.mark.asyncio
+async def test_system_approvals_are_not_the_agent_asking(client: AsyncClient, fake_redis):
+    """Escalations MC raises about an agent (watchdog, dispatch gate, crash
+    triage, review) carry the agent's id but are not its question — the card
+    says "your agent asks you", so only kinds the agent raises are listed."""
+    board, agent, task, _ = await _setup()
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        for kind in (
+            "promote_approval", "lead_escalation", "review_stuck", "dependency_zombie",
+            "dispatch_escalation", "review_escalation", "spawn_agent", "x_post",
+        ):
+            s.add(_system_approval(kind, board.id, agent.id, task.id))
+        # A crash/timeout the harness reports, and the silent-abort watchdog:
+        # technical blockers, not a decision the agent asks for.
+        s.add(_system_approval("blocker_decision", board.id, agent.id, task.id, {
+            "blocker_type": "technical_problem",
+            "question": "ACP stream ended without a turn result",
+        }))
+        await s.commit()
+
+    await _as_operator(client)
+    assert (await client.get(f"/api/v1/agents/{agent.id}/chat/questions")).json()["questions"] == []
+
+
+@pytest.mark.asyncio
+async def test_agent_decision_blocker_is_listed_read_only(client: AsyncClient, fake_redis):
+    """`mc blocked --blocker-type decision_needed` IS the agent asking: listed,
+    answered in its own card (it can cancel or reassign the task)."""
+    board, agent, task, _ = await _setup()
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(_system_approval("blocker_decision", board.id, agent.id, task.id, {
+            "blocker_type": "decision_needed", "question": "Keep the old API?",
+        }))
+        await s.commit()
+
+    await _as_operator(client)
+    questions = (await client.get(f"/api/v1/agents/{agent.id}/chat/questions")).json()["questions"]
+    assert [(q["kind"], q["answerable"], q["question"]) for q in questions] == [
+        ("blocker_decision", False, "Keep the old API?"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_lost_race_on_approval_is_409_not_open(client: AsyncClient, fake_redis):
+    """The other device resolved the approval between our lookup and our
+    resolve: the owning endpoint says 400 'already resolved' — the card must
+    hear 409 question_not_open, not a generic failure."""
+    from fastapi import HTTPException
+
+    board, agent, task, token = await _setup()
+    approval_id = await _mc_question(client, board.id, token, "Go?")
+    await _as_operator(client)
+    with patch(
+        "app.routers.approvals.resolve_approval",
+        new=AsyncMock(side_effect=HTTPException(status_code=400, detail="Approval already resolved")),
+    ):
+        resp = await client.post(
+            f"/api/v1/agents/{agent.id}/chat/questions/{approval_id}/answer",
+            json={"answer": "Yes"},
+        )
+    assert resp.status_code == 409
+    assert resp.json() == {"reason": "question_not_open"}
+
+
+@pytest.mark.asyncio
+async def test_open_questions_filters_by_sender(client: AsyncClient, fake_redis):
+    """messaging.open_questions is the one place that knows 'open'; the card
+    reuses it with a sender filter instead of copying the rule."""
+    from app.comm_constants import QUESTION_TARGETS
+    from app.services.messaging import open_questions
+
+    board, agent, task, token = await _setup(comm_v2=True)
+    _, other, _, other_token = await _setup(comm_v2=True)
+    for tok in (token, other_token):
+        _as_agent(client, tok)
+        resp = await client.post(
+            "/api/v1/agent/tasks/current/ask", json={"question": "Q?", "to": QUESTION_TARGETS[0]},
+        )
+        assert resp.status_code == 201, resp.text
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        mine = await open_questions(s, to=QUESTION_TARGETS[0], sender_id=agent.id)
+    assert [m.sender_id for m in mine] == [agent.id]

@@ -7,16 +7,22 @@ An agent reaches the operator through two existing paths:
 - ``mc ask`` with the operator as target → a ``question`` message on the task
   thread; ``--blocking`` parks the task in ``waiting`` (``services/messaging.py``).
 
-Every other pending approval of the agent (install requests, blockers, …) is
-the agent asking, too. This module folds all of them into one list per agent,
-so the chat shows the same card for every harness and runtime (Welle 3, E11).
-It reads only; answering goes through the existing resolve paths
-(``routers/agent_questions.py``).
+Some approvals are the agent asking, too (an install request, a blocker it
+needs a decision on). Many others carry the agent's id but are MC asking
+about the agent (watchdog escalations, dispatch gates, crash triage) — the
+card says "your agent asks you", so those stay in the inbox. Which kinds
+count is a registry below (ADR-093 §4), not "every pending approval".
+
+This module folds the agent's questions into one list per agent, so the chat
+shows the same card for every harness and runtime (Welle 3, E11). It reads
+only; answering goes through the existing resolve paths
+(``routers/agent_questions.py``). A question whose task already ended is no
+card: nothing clears it when the task finishes, and it can no longer be
+acted on.
 
 Which approval kinds the chat may answer with one tap is a registry entry
-below, not a branch: a kind whose approval has consequences the card cannot
-state (installs, cancelling a task) stays answerable in its own card and the
-chat links there.
+too: a kind whose approval has consequences the card cannot state (installs,
+cancelling a task) stays answerable in its own card and the chat links there.
 """
 from __future__ import annotations
 
@@ -31,8 +37,31 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.comm_constants import QUESTION_TARGETS
 from app.models.approval import Approval
 from app.models.task import Task
-from app.models.thread import Message, Thread
+from app.models.thread import Thread
+from app.services.blocker_triage import OPERATOR_ONLY_BLOCKER_TYPES
+from app.services.messaging import open_questions
 from app.utils import ensure_aware
+
+# Approval kinds the AGENT raises (``mc question``, ``mc install-request``,
+# ``mc blocked``) — the only ones the card shows. Everything else with an
+# agent_id (lead_escalation, review_stuck, promote_approval, spawn_agent,
+# x_post, …) is MC or another actor asking about the agent.
+AGENT_RAISED_APPROVALS: frozenset[str] = frozenset({
+    "clarification_question",
+    "install_skill", "uninstall_skill",
+    "install_plugin", "uninstall_plugin",
+    "install_mcp", "uninstall_mcp",
+    "blocker_decision",
+})
+
+# A blocker is the agent asking only when it needs the operator's decision or
+# permission. A ``technical_problem`` is what the harness reports for a crash
+# or timeout and what the lifecycle watchdog files for a silent agent; the
+# comment fallback files ``other``. Those are reports, not questions.
+AGENT_BLOCKER_TYPES: frozenset[str] = frozenset(OPERATOR_ONLY_BLOCKER_TYPES)
+
+# A question of a task in one of these states can no longer be acted on.
+FINISHED_TASK_STATUSES: frozenset[str] = frozenset({"done", "failed", "aborted", "cancelled"})
 
 # Approval kinds the chat card answers itself: the answer is free text (or one
 # of the agent's options) and resolving it only resumes the task.
@@ -77,19 +106,46 @@ def _approval_text(approval: Approval) -> str:
     return (approval.description or "").strip()
 
 
+def _is_agent_raised(approval: Approval) -> bool:
+    if approval.action_type not in AGENT_RAISED_APPROVALS:
+        return False
+    if approval.action_type == "blocker_decision":
+        return (approval.payload or {}).get("blocker_type") in AGENT_BLOCKER_TYPES
+    return True
+
+
+async def _tasks_by_id(session: AsyncSession, task_ids: set[uuid.UUID]) -> dict[uuid.UUID, Task]:
+    if not task_ids:
+        return {}
+    rows = (await session.exec(select(Task).where(Task.id.in_(task_ids)))).all()  # type: ignore[union-attr]
+    return {t.id: t for t in rows}
+
+
+def _task_finished(task_id: uuid.UUID | None, tasks: dict[uuid.UUID, Task]) -> bool:
+    task = tasks.get(task_id) if task_id is not None else None
+    return task is not None and task.status in FINISHED_TASK_STATUSES
+
+
 async def _approval_questions(session: AsyncSession, agent_id: uuid.UUID) -> list[OperatorQuestion]:
     rows = (
         await session.exec(
-            select(Approval).where(Approval.agent_id == agent_id, Approval.status == "pending")
+            select(Approval).where(
+                Approval.agent_id == agent_id,
+                Approval.status == "pending",
+                Approval.action_type.in_(AGENT_RAISED_APPROVALS),  # type: ignore[attr-defined]
+            )
         )
     ).all()
+    rows = [a for a in rows if _is_agent_raised(a)]
+    tasks = await _tasks_by_id(session, {a.task_id for a in rows if a.task_id is not None})
     out: list[OperatorQuestion] = []
     for a in rows:
+        if _task_finished(a.task_id, tasks):
+            continue
         payload = a.payload or {}
         title = payload.get("task_title")
-        if not isinstance(title, str) and a.task_id is not None:
-            task = await session.get(Task, a.task_id)
-            title = task.title if task else None
+        if not isinstance(title, str) and a.task_id in tasks:
+            title = tasks[a.task_id].title
         answerable = a.action_type in CHAT_ANSWERABLE_APPROVALS
         out.append(OperatorQuestion(
             id=a.id,
@@ -107,24 +163,31 @@ async def _approval_questions(session: AsyncSession, agent_id: uuid.UUID) -> lis
 
 
 async def _thread_questions(session: AsyncSession, agent_id: uuid.UUID) -> list[OperatorQuestion]:
-    rows = (
-        await session.exec(
-            select(Message, Thread)
-            .join(Thread, Thread.id == Message.thread_id)
-            .where(
-                Message.message_type == "question",
-                Message.sender_id == agent_id,
-                Thread.kind == "task",
-                Thread.task_id.is_not(None),  # type: ignore[union-attr]
+    # "Open" is messaging.open_questions' rule (awaiting + target); this only
+    # narrows it to one agent and to task threads of tasks still running.
+    messages = await open_questions(session, to=OPERATOR_TARGET, sender_id=agent_id)
+    if not messages:
+        return []
+    threads = {
+        t.id: t
+        for t in (
+            await session.exec(
+                select(Thread).where(
+                    Thread.id.in_({m.thread_id for m in messages}),  # type: ignore[union-attr]
+                    Thread.kind == "task",
+                    Thread.task_id.is_not(None),  # type: ignore[union-attr]
+                )
             )
-        )
-    ).all()
+        ).all()
+    }
+    tasks = await _tasks_by_id(session, {t.task_id for t in threads.values() if t.task_id is not None})
     out: list[OperatorQuestion] = []
-    for message, thread in rows:
-        meta = message.question_meta or {}
-        if not meta.get("awaiting") or meta.get("to") != OPERATOR_TARGET:
+    for message in messages:
+        thread = threads.get(message.thread_id)
+        if thread is None or _task_finished(thread.task_id, tasks):
             continue
-        task = await session.get(Task, thread.task_id)
+        meta = message.question_meta or {}
+        task = tasks.get(thread.task_id)
         default = meta.get("default")
         out.append(OperatorQuestion(
             id=message.id,

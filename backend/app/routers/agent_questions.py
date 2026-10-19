@@ -105,12 +105,20 @@ async def post_agent_question_answer(
     if question.source == "approval":
         from app.routers.approvals import ApprovalResolve, resolve_approval
 
-        await resolve_approval(
-            question.id,
-            ApprovalResolve(status="approved", resolver_note=body.answer),
-            session=session,
-            current_user=current_user,
-        )
+        try:
+            await resolve_approval(
+                question.id,
+                ApprovalResolve(status="approved", resolver_note=body.answer),
+                session=session,
+                current_user=current_user,
+            )
+        except HTTPException as exc:
+            # Another device (inbox, a second chat) resolved it between our
+            # lookup and this call; the owning endpoint says 400 "already
+            # resolved". The card shows "already answered", not "failed".
+            if exc.status_code == 400 and exc.detail == "Approval already resolved":
+                return JSONResponse(status_code=409, content={"reason": "question_not_open"})
+            raise
     else:
         from app.routers.tasks import ThreadMessageCreate, post_thread_message
 
