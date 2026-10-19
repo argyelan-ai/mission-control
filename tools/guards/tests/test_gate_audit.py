@@ -16,6 +16,9 @@ HEADER = (
     "|---|---|---|---|---|---|\n"
 )
 REAL_GATE = "#!/bin/bash\n# a real gate\nif grep -q bad x; then exit 2; fi\nexit 0\n"
+# a sabotage test that really runs the gate (R10 reads the probe column)
+PROBE_TEST = "def test_red():\n    assert run('real-gate.sh', bad=True) == 2\n"
+PROBE_CELL = "`tools/hooks/tests/test_real_gate.py` (bad input -> exit 2)"
 WORKFLOW = "name: ci\non: [push]\njobs:\n  tests:\n    runs-on: ubuntu-latest\n    steps:\n      - run: pytest\n"
 
 
@@ -29,8 +32,10 @@ def tree(tmp_path):
     (tmp_path / "tools/guards").mkdir(parents=True)
     (tmp_path / ".github/workflows").mkdir(parents=True)
     (tmp_path / "tools/hooks/real-gate.sh").write_text(REAL_GATE)
+    (tmp_path / "tools/hooks/tests").mkdir()
+    (tmp_path / "tools/hooks/tests/test_real_gate.py").write_text(PROBE_TEST)
     (tmp_path / ".github/workflows/ci.yml").write_text(WORKFLOW)
-    rows = row("ci:ci.yml#tests") + row("script:tools/hooks/real-gate.sh")
+    rows = row("ci:ci.yml#tests") + row("script:tools/hooks/real-gate.sh", probe=PROBE_CELL)
     (tmp_path / "tools/guards/GATES.md").write_text("# Gates\n\n" + HEADER + rows)
     return tmp_path
 
@@ -73,7 +78,8 @@ def test_dummy_gate_with_exit_0_registered_as_gate_is_red(tree):
 
 def test_python_guard_without_nonzero_exit_is_red(tree):
     (tree / "tools/guards/check.py").write_text("print('all good')\n")
-    add_rows(tree, row("script:tools/guards/check.py"))
+    (tree / "tools/hooks/tests/test_check.py").write_text("import check\n")
+    add_rows(tree, row("script:tools/guards/check.py", probe="`tools/hooks/tests/test_check.py`"))
     assert any(x.startswith("R5") for x in findings(tree))
     (tree / "tools/guards/check.py").write_text("import sys\nsys.exit(1 if bad() else 0)\n")
     assert findings(tree) == []
@@ -250,3 +256,28 @@ def test_red_run_evidence_must_be_a_real_failed_run_of_that_job(tree):
     assert any(x.startswith("R9") and "Tests" in x for x in gate_audit.verify_runs(tree, job_green))
     missing = fake_fetch({}, {})
     assert any(x.startswith("R9") and "404" in x for x in gate_audit.verify_runs(tree, missing))
+
+
+# --- R10: the probe must be a test file that really exercises the script -----
+
+
+def test_probe_that_is_only_words_is_red(tree):
+    p = tree / "tools/guards/GATES.md"
+    p.write_text(p.read_text().replace(PROBE_CELL, "tested by hand, trust me"))
+    assert any(x.startswith("R10") and "names no test file" in x for x in findings(tree))
+
+
+def test_probe_file_that_does_not_exist_is_red(tree):
+    p = tree / "tools/guards/GATES.md"
+    p.write_text(p.read_text().replace("test_real_gate.py", "test_gone.py"))
+    assert any(x.startswith("R10") and "do not exist" in x for x in findings(tree))
+
+
+def test_probe_file_that_never_runs_the_script_is_red(tree):
+    (tree / "tools/hooks/tests/test_real_gate.py").write_text("def test_nothing():\n    assert True\n")
+    assert any(x.startswith("R10") and "never mention" in x for x in findings(tree))
+
+
+def test_python_hook_scripts_must_be_registered_too(tree):
+    (tree / "tools/hooks/new-check.py").write_text("import sys\nsys.exit(2)\n")
+    assert any(x.startswith("R2") and "new-check.py" in x for x in findings(tree))

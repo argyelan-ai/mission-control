@@ -125,3 +125,64 @@ def test_allow_marker_needs_a_reason(repo):
     stage(repo, "tests/test_x.py", f'T = "{FAKE_GH}"  # secrets-check: allow - redaction fixture\n')
     r = run_hook("secrets-check.sh", f"git -C {repo} commit -m ok")
     assert r.returncode == 0, r.stderr
+
+
+# --- Runde 2 (tore-dicht): switching checks off, other spellings ------------
+
+import pytest  # noqa: E402
+
+from conftest import worktree  # noqa: E402
+
+
+@pytest.mark.parametrize("form", [
+    "git -C {r} push --no-verify",
+    "git -C {r} commit --no-verify -m x",
+    "git -C {r} commit -nm x",
+    "git -c core.hooksPath=/dev/null -C {r} push",
+    "git -C {r} config core.hooksPath /dev/null",
+    "git -C {r} config --unset core.hooksPath",
+    "MC_LEAK_SCAN_SKIP=1 git -C {r} push",
+    "GIT_CONFIG_PARAMETERS=\"'core.hooksPath=/x'\" git -C {r} push",
+    "bash -c 'git -C {r} push --no-verify'",
+])
+def test_switching_a_check_off_blocks(repo, form):
+    # nothing secret anywhere: the block is about the bypass itself
+    r = run_hook("secrets-check.sh", form.format(r=repo))
+    assert r.returncode == 2, (form, r.stderr)
+    assert "dodge" in r.stderr
+
+
+@pytest.mark.parametrize("form", [
+    "git -C {r} commit -m '-n is text'", "git -C {r} push -n", "git -C {r} config --get core.hooksPath",
+])
+def test_lookalikes_pass(repo, form):
+    assert run_hook("secrets-check.sh", form.format(r=repo)).returncode == 0, form
+
+
+@pytest.mark.parametrize("form", [
+    '"git" -C {r} commit -m x',
+    "bash -c 'cd {r} && git commit -m x'",
+    "(cd {r} && git commit -m x)",
+    "eval \"git -C {r} commit -m x\"",
+    "timeout 30 git -C {r} commit -m x",
+])
+def test_other_spellings_of_commit_are_scanned(repo, form):
+    stage(repo, "app/config.py", f'TOKEN = "{FAKE_GH}"\n')
+    r = run_hook("secrets-check.sh", form.format(r=repo))
+    assert r.returncode == 2, (form, r.stderr)
+    assert "GitHub token" in r.stderr
+
+
+def test_push_of_another_branch_scans_that_branch(repo, tmp_path):
+    wt = worktree(repo, "fix/leak", tmp_path / "wt")
+    commit(wt, "notes.md", f"oops {FAKE_GH}\n")
+    # the checkout the command runs in is clean
+    r = run_hook("secrets-check.sh", f"git -C {repo} push origin fix/leak")
+    assert r.returncode == 2, r.stderr
+    assert "notes.md: GitHub token" in r.stderr
+
+
+def test_commit_with_unknown_checkout_blocks(repo):
+    r = run_hook("secrets-check.sh", 'git -C "$NOT_SET_X" commit -m x', cwd=repo)
+    assert r.returncode == 2
+    assert "variable" in r.stderr

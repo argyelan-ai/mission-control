@@ -5,8 +5,13 @@ name: gate-audit
 # or a recorded red run. Red on: unregistered gate, gate without red case or
 # probe, stale row, script that can only `exit 0`, `if: false` job, soft-fail
 # without a `# gate-audit: soft - <reason>` comment, non-required Gate not
-# marked as such, cited "Rot-Lauf" id that does not exist or was not red. Rules: tools/guards/gate_audit.py.
-# Also runs the hook tests, so a hook that stops blocking turns this red too.
+# marked as such, cited "Rot-Lauf" id that does not exist or was not red, a
+# Gate whose probe column names no test file that really mentions the script
+# (R10). Rules: tools/guards/gate_audit.py.
+# Also runs the hook tests - one sabotage case per way around the hooks
+# (test_cmdparse.py: every spelling of push/commit/PR creation; test_test_gate.py
+# and test_secrets_check.py: the hooks really block it) - so a hook that stops
+# blocking, or a side entrance that opens again, turns this red too.
 
 on:
   pull_request:

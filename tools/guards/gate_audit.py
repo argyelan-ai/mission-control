@@ -8,8 +8,8 @@ proves the red case really fires. The register is tools/guards/GATES.md.
 
 Red (exit 1) when:
   R1  a workflow job (.github/workflows/*.yml) is not in GATES.md
-  R2  a hook / guard script (tools/hooks/*.sh, tools/guards/*.py|*.sh) is not
-      in GATES.md
+  R2  a hook / guard script (tools/hooks/*.sh|*.py, tools/guards/*.py|*.sh)
+      is not in GATES.md
   R3  a row of kind Gate or Hinweis has no red case ("blockt bei") or no
       sabotage probe / red-run evidence
   R4  a row points at a file or workflow job that does not exist (stale row)
@@ -23,6 +23,9 @@ Red (exit 1) when:
   R5  also: a job with `if: false` / `if: ${{ false }}` registered as Gate
   R8  a CI job of kind Gate whose Merge-Pflicht is "nein" (the merge queue
       ignores it - say so: kind "Gate (nicht Pflicht)"), or the reverse
+  R10 a script registered as Gate names no existing test file in its probe
+      column that really mentions the script (a probe that is only words, or
+      a test file that never runs this script, proves nothing)
   R9  (only with --verify-runs, needs the GitHub API) a run id in the
       evidence column does not exist, belongs to another workflow, or is
       called "Rot-Lauf" but did not fail (run, or the row's own job)
@@ -160,6 +163,28 @@ def soft_fail_findings(path, rel):
     return findings
 
 
+PROBE_PATH = re.compile(r"`?((?:[\w.-]+/)+[\w.-]+\.(?:py|sh|ts|tsx|mjs))`?")
+
+
+def probe_file_problem(root, script, probe):
+    """R10: None when the probe column names a test file that exists and
+    mentions the script (its file name, or its stem for python imports)."""
+    paths = PROBE_PATH.findall(probe)
+    if not paths:
+        return "probe column names no test file (write the path of the sabotage test)"
+    names = {script.name, script.stem, script.stem.replace("-", "_")}
+    existing = [q for q in paths if (root / q).is_file()]
+    if not existing:
+        return f"probe file(s) {', '.join(paths)} do not exist"
+    for q in existing:
+        if (root / q).resolve() == script.resolve():
+            continue
+        text = (root / q).read_text(errors="replace")
+        if any(n in text for n in names):
+            return None
+    return f"probe file(s) {', '.join(existing)} never mention {script.name} - they do not test it"
+
+
 def parse_register(path):
     rows = []
     for n, line in enumerate(path.read_text().splitlines(), 1):
@@ -229,7 +254,7 @@ def audit(root):
 
     # R2: hook and guard scripts
     script_ids = set()
-    candidates = list((root / "tools/hooks").glob("*.sh")) + [
+    candidates = [p for p in (root / "tools/hooks").glob("*") if p.suffix in (".py", ".sh")] + [
         p for p in (root / "tools/guards").glob("*") if p.suffix in (".py", ".sh")
     ]
     for p in sorted(candidates):
@@ -251,6 +276,10 @@ def audit(root):
                 findings.append(f"R4 {where}: file does not exist (stale row)")
             elif r["kind"] in GATE_KINDS and gid.startswith("script:") and not script_has_red_path(p):
                 findings.append(f"R5 {where}: registered as Gate but the script can never exit non-zero")
+            elif r["kind"] in GATE_KINDS and gid.startswith("script:"):
+                why = probe_file_problem(root, p, r["probe"])
+                if why:
+                    findings.append(f"R10 {where}: {why}")
         elif not gid.startswith("privat:"):
             findings.append(f"R3 {where}: id must start with ci:, script:, test: or privat:")
         if gid.startswith("ci:"):
