@@ -53,6 +53,12 @@ function circleOf(label: string): HTMLElement {
 }
 
 vi.mock("@/hooks/useChatStream", () => ({ useChatStream: vi.fn() }));
+// The question card (E11) reads its own query; here it is driven directly so
+// the agent-era tests keep running without a QueryClientProvider.
+const questionsMock = vi.hoisted(() => ({ list: [] as unknown[] }));
+vi.mock("@/hooks/useAgentQuestions", () => ({
+  useAgentQuestions: () => ({ questions: questionsMock.list, loading: false, refresh: () => {} }),
+}));
 // Heads-in-Chats (PR 2) branch: no test in this file passes a `head` prop
 // (that's ChatView.head.test.tsx's job), but every render still calls this
 // hook unconditionally (rules of hooks) — mocked the same way
@@ -148,7 +154,10 @@ const mockUseChatStream = vi.mocked(useChatStream);
 
 // Typing into a live session is admin-only (backend 403). Every test below
 // runs as an admin unless it says otherwise — see "ChatView — non-admin".
-beforeEach(() => setRole("admin"));
+beforeEach(() => {
+  setRole("admin");
+  questionsMock.list = [];
+});
 
 function mkAgent(overrides: Partial<AgentWithState> = {}): AgentWithState {
   return {
@@ -753,6 +762,33 @@ describe("ChatView", () => {
     expect(screen.getByText("Datei löschen?")).toBeInTheDocument();
   });
 
+  it("shows an mc question of a terminal agent as a card above the composer (E11)", () => {
+    mockUseChatStream.mockReturnValue(mkStream());
+    questionsMock.list = [{
+      id: "q1", source: "approval", kind: "clarification_question", answerable: true,
+      question: "Ready to commit?", options: ["Commit", "Show diff"], default: null,
+      blocking: true, task_id: "t1", task_title: "Add a test", created_at: new Date().toISOString(),
+    }];
+    // A plain Claude terminal agent — no ACP, no headless chat.
+    renderChatView({ agent: mkAgent({ harness: "claude", headless_chat: false }) });
+    const card = screen.getByTestId("question-card");
+    expect(card).toHaveTextContent("Ready to commit?");
+    expect(screen.getByRole("button", { name: "Commit" })).toBeInTheDocument();
+  });
+
+  it("a non-admin sees the agent's question card without buttons", () => {
+    setRole("viewer");
+    mockUseChatStream.mockReturnValue(mkStream());
+    questionsMock.list = [{
+      id: "q1", source: "approval", kind: "clarification_question", answerable: true,
+      question: "Ready to commit?", options: ["Commit"], default: null,
+      blocking: true, task_id: null, task_title: null, created_at: new Date().toISOString(),
+    }];
+    renderChatView();
+    expect(screen.getByTestId("question-card")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Commit" })).toBeNull();
+  });
+
   it("the ApprovalCard's terminal escape hatch calls onCenterViewChange('terminal')", async () => {
     mockUseChatStream.mockReturnValue(
       mkStream({
@@ -767,7 +803,7 @@ describe("ChatView", () => {
     const user = userEvent.setup();
     renderChatView({ onCenterViewChange });
 
-    await user.click(screen.getByText("Im Terminal prüfen"));
+    await user.click(screen.getByText("Check in the terminal"));
     expect(onCenterViewChange).toHaveBeenCalledWith("terminal");
   });
 

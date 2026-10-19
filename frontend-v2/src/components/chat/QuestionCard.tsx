@@ -257,7 +257,9 @@ export function QuestionReceipt({ answer, blocking }: { answer: string; blocking
       className="flex items-start gap-2 rounded-lg px-3 py-2 text-sm"
       style={{ border: `1px solid ${C.border}`, color: C.textSecondary }}
     >
-      <Check size={15} className="mt-0.5 shrink-0" style={{ color: C.online }} aria-hidden="true" />
+      <span className="flex h-5 shrink-0 items-center" aria-hidden="true">
+        <Check size={15} style={{ color: C.online }} />
+      </span>
       <span className="min-w-0 break-words">
         {t("answeredWith", { answer })}
         {blocking && <span style={{ color: C.textMuted }}> · {t("resumes")}</span>}
