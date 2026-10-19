@@ -8,25 +8,13 @@
         respond 403
     }
     handle /api/* {
-        reverse_proxy backend:8000 {
-            health_uri /health
-            health_interval 5s
-            health_timeout 2s
-        }
+        reverse_proxy backend:8000
     }
     handle /health {
-        reverse_proxy backend:8000 {
-            health_uri /health
-            health_interval 5s
-            health_timeout 2s
-        }
+        reverse_proxy backend:8000
     }
     handle {
-        reverse_proxy frontend:3000 {
-            health_uri /
-            health_interval 5s
-            health_timeout 2s
-        }
+        reverse_proxy frontend:3000
     }
     handle_errors {
         @mc_restarting expression {err.status_code} in [502, 503]

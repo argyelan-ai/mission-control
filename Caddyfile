@@ -67,37 +67,32 @@
         respond 403
     }
 
-    # API + Health → backend. Active health checks (rather than just
-    # per-request dial errors) are what let handle_errors below answer
-    # with 503 + Retry-After instead of a bare 502 while backend/frontend
-    # are mid-restart (ADR-094 update window, or any other outage).
+    # API + Health → backend. No active health checks: a dial failure
+    # already gets caught by handle_errors below (Caddy's own matcher is
+    # `in [502, 503]`, which includes 502 dial errors) and turned into the
+    # maintenance page. Active checks were tried and reverted — see the
+    # handle_errors comment and PR 7 of the mc-update plan: a slow but
+    # live backend (one /health call over the check's timeout) made Caddy
+    # mark the whole backend unhealthy and 503 every /api/* request,
+    # including POSTs, which is strictly worse than before.
     handle /api/* {
-        reverse_proxy backend:8000 {
-            health_uri /health
-            health_interval 5s
-            health_timeout 2s
-        }
+        reverse_proxy backend:8000
     }
     handle /health {
-        reverse_proxy backend:8000 {
-            health_uri /health
-            health_interval 5s
-            health_timeout 2s
-        }
+        reverse_proxy backend:8000
     }
 
     # Default: Next.js frontend
     handle {
-        reverse_proxy frontend:3000 {
-            health_uri /
-            health_interval 5s
-            health_timeout 2s
-        }
+        reverse_proxy frontend:3000
     }
 
-    # Maintenance page: while backend or frontend is down (health check
-    # failing → 503, or a request-time dial failure → 502), answer with the
-    # same self-reloading "MC is restarting" page instead of a bare error.
+    # Maintenance page: while backend or frontend is down, a request-time
+    # dial failure to it is a 502 (Caddy's default on a stopped/unreachable
+    # upstream — verified: stopping the backend container here and hitting
+    # /api/* returns exactly 502, no health check needed to produce it).
+    # Answer with a self-reloading "MC is restarting" page instead of a
+    # bare error.
     # Copy this block (and maintenance/503.html) into your own Caddyfile —
     # see caddy/Caddyfile.tls.example for the documented, reusable version.
     handle_errors {
