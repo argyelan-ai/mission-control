@@ -614,9 +614,14 @@ def test_signing_job_checks_the_gate_first_and_signs_by_digest(wf):
 
 
 def test_promote_retags_the_signed_digest_and_proves_the_engine_accepts_it(wf):
-    text = _steps_text(wf["jobs"]["promote"])
-    assert "needs.sign.outputs.digests" in text
-    assert "mc_update_verify.py signature" in text
+    steps = wf["jobs"]["promote"]["steps"]
+    retag = next(s for s in steps if "imagetools create" in (s.get("run") or ""))
+    # promote exactly what was signed — never sha-<commit> again (it could have moved)
+    assert (retag.get("env") or {}).get("DIGESTS") == "${{ needs.sign.outputs.digests }}"
+    assert 'src="ghcr.io/argyelan-ai/$image@$digest"' in retag["run"]
+    assert ":sha-" not in retag["run"]
+    proof = steps[steps.index(retag) + 1:]
+    assert any("mc_update_verify.py signature" in (s.get("run") or "") for s in proof)
 
 
 def test_cosign_versions_agree(mv, wf):

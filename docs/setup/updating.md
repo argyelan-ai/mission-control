@@ -91,6 +91,25 @@ targets one specific release instead of the latest. Channels and their
 rules: [ADR-092](../decisions/092-release-channels.md); how releases are cut:
 [releasing](releasing.md).
 
+## What an update accepts
+
+The in-app update (ADR-094, not shipped yet) installs a release only when all
+of this holds, and stops before changing anything otherwise:
+
+- it is a **published, non-prerelease** GitHub release — read from the GitHub
+  API only; when the API cannot be reached, the update does not start (the
+  terminal `--update` keeps its fallback to git tags, with a warning),
+- it is **newer** than the installed version,
+- `mc-backend` and `mc-frontend` are **signed** by this repository's release
+  workflow for exactly that tag and commit, and exist for this machine's
+  architecture (a Raspberry Pi needs arm64),
+- after the pull, the local images are the signed ones (digest) and were
+  built from the tag's commit (`revision` label).
+
+The signature check runs cosign in a container pinned by digest — nothing to
+install. What the signature proves and what not: [releasing](releasing.md#what-the-signature-proves--literally).
+Check a release yourself: `python3 scripts/mc_update_verify.py release vX.Y.Z --repo-path .`
+
 ## Manually
 
 ```bash
