@@ -22,8 +22,9 @@
 // script fails OPEN (returns nothing) — a guard bug must never stop the agent.
 
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { appendFileSync, existsSync, mkdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 
 const TIMEOUT_PRE_MS = 60_000;   // the privacy scan before a push can take a while
 const TIMEOUT_POST_MS = 30_000;  // one ls-remote
@@ -47,6 +48,24 @@ function runGuard(script, event, command, cwd, timeout) {
   const r = spawnSync("bash", [path], { input, encoding: "utf-8", timeout });
   if (r.error || r.status !== 2) return null;
   return (r.stderr || "").trim() || `${script}: blocked`;
+}
+
+// Shape-drift detector: omp changed the event shape (no input.command) while the
+// result looks like a push. Without this line the fleet's push proof would just
+// be absent; with it the shadow log shows that the hook went blind.
+const PUSH_OUTPUT = /(^|\n)To \S+|\[rejected\]|\[remote rejected\]|\s->\s/;
+function logShapeDrift(ev, why) {
+  try {
+    const text = (Array.isArray(ev && ev.content) ? ev.content : [])
+      .map((c) => (c && typeof c.text === "string" ? c.text : "")).join("\n");
+    if (!PUSH_OUTPUT.test(text)) return;
+    const log = process.env.GUARD_HOOK_LOG || join(homedir(), ".mc", "guards", "hook-log.jsonl");
+    mkdirSync(dirname(log), { recursive: true });
+    appendFileSync(log, JSON.stringify({
+      ts: new Date().toISOString(), hook: "omp-shape", session: process.env.MC_AGENT_NAME || "omp",
+      reason: why, input_keys: Object.keys((ev && ev.input) || {}),
+    }) + "\n");
+  } catch (_e) { /* logging must never break the agent */ }
 }
 
 function commandOf(ev) {
@@ -76,7 +95,11 @@ export default function guardHook(api) {
       try {
         if (!ev || ev.toolName !== "bash") return undefined;
         const command = commandOf(ev);
-        if (!command || !/\bpush\b/.test(command)) return undefined;
+        if (!command) {
+          logShapeDrift(ev, "no command in a bash tool_result (input.command missing: omp event shape changed?)");
+          return undefined;
+        }
+        if (!/\bpush\b/.test(command)) return undefined;
         const reason = runGuard("post-push-hook.sh", "PostToolUse", command, cwdOf(ev, ctx, api), TIMEOUT_POST_MS);
         if (!reason) return undefined;
         const content = Array.isArray(ev.content) ? ev.content : [];

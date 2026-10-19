@@ -139,11 +139,12 @@ sync_recycler_lib_into() {
 }
 
 sync_guards_into() {
-  # tools/guards (lesson guards) for the omp guard hook — scripts only, no fixtures.
+  # tools/guards (lesson guards) for the omp guard hook — scripts and the shared
+  # parser (hookparse.py: without it the hooks fail open), no fixtures or tests.
   local dst="$1/guards"
   rm -rf "$dst"
   mkdir -p "$dst"
-  cp "$ROOT"/tools/guards/*.sh "$dst/"
+  cp "$ROOT"/tools/guards/*.sh "$ROOT"/tools/guards/*.py "$dst/"
   chmod +x "$dst"/*.sh
 }
 
