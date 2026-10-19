@@ -464,19 +464,21 @@ def test_mc_cli_finish_checklist_open_falls_back_to_blocked_when_review_also_fai
 
 
 # ---------------------------------------------------------------------------
-# McCliLifecycle.task_is_active() — parses `mc me` to tell drive_live_run
-# whether a task is still the agent's live current task (2026-07-12
+# McCliLifecycle.task_is_active() — reads the task (`mc task-get`) to tell
+# drive_live_run whether it is still this agent's live task (2026-07-12
 # Bench-Studio incident: the bridge kept nudging/commenting on an already-
-# closed task for 40min because it had no way to check). Best-effort by
-# design: only a confirmed mismatch/null current_task returns False; any
-# subprocess/parse failure returns None (fail-open, same as "keep going").
+# closed task for 40min because it had no way to check; 19.10.2026: the old
+# `mc me` current_task read was null for subagent-dispatch workers).
+# Best-effort by design: only a confirmed other status/assignee returns
+# False; any subprocess/parse failure returns None (fail-open). Full matrix:
+# tests/test_task_ownership.py.
 # ---------------------------------------------------------------------------
 
 class _StdoutProc:
     def __init__(self, rc, stdout):
         self.returncode = rc
         self.stdout = stdout
-        self.stderr = ""  # `_run` falls back to stdout when stderr is empty
+        self.stderr = ""
 
 
 def _fake_run_me(stdout: str, rc: int = 0):
@@ -488,7 +490,7 @@ def _fake_run_me(stdout: str, rc: int = 0):
 def _mc_cli_task_is_active(run_fn, task_id="T1"):
     lc = bridge.McCliLifecycle(
         api_url="http://x", token="t", task_id=task_id,
-        board_id="B", attempt_id="A", mc_bin="mc",
+        board_id="B", attempt_id="A", mc_bin="mc", agent_id="agent-1",
     )
     orig = bridge.subprocess.run
     bridge.subprocess.run = run_fn
@@ -498,22 +500,19 @@ def _mc_cli_task_is_active(run_fn, task_id="T1"):
         bridge.subprocess.run = orig
 
 
-def test_task_is_active_matches_current_task_id():
-    stdout = json.dumps({"id": "agent-1", "current_task": {"id": "T1", "status": "in_progress"}})
-    result = _mc_cli_task_is_active(_fake_run_me(stdout), task_id="T1")
-    assert result is True
+def test_task_is_active_matches_own_in_progress_task():
+    stdout = json.dumps({"id": "T1", "status": "in_progress", "assigned_agent_id": "agent-1"})
+    assert _mc_cli_task_is_active(_fake_run_me(stdout), task_id="T1") is True
 
 
-def test_task_is_active_mismatched_current_task_id():
-    stdout = json.dumps({"id": "agent-1", "current_task": {"id": "OTHER-TASK"}})
-    result = _mc_cli_task_is_active(_fake_run_me(stdout), task_id="T1")
-    assert result is False
+def test_task_is_active_other_assignee():
+    stdout = json.dumps({"id": "T1", "status": "in_progress", "assigned_agent_id": "agent-2"})
+    assert _mc_cli_task_is_active(_fake_run_me(stdout), task_id="T1") is False
 
 
-def test_task_is_active_null_current_task():
-    stdout = json.dumps({"id": "agent-1", "current_task": None})
-    result = _mc_cli_task_is_active(_fake_run_me(stdout), task_id="T1")
-    assert result is False
+def test_task_is_active_closed_task():
+    stdout = json.dumps({"id": "T1", "status": "done", "assigned_agent_id": "agent-1"})
+    assert _mc_cli_task_is_active(_fake_run_me(stdout), task_id="T1") is False
 
 
 def test_task_is_active_tolerates_leading_noise_before_json():
@@ -521,10 +520,9 @@ def test_task_is_active_tolerates_leading_noise_before_json():
     # update nag, ...) before the JSON payload — parsing must find the first
     # `{` rather than choking on the leading garbage.
     stdout = "warning: some noisy preamble\n" + json.dumps(
-        {"id": "agent-1", "current_task": {"id": "T1"}}
+        {"id": "T1", "status": "in_progress", "assigned_agent_id": "agent-1"}
     )
-    result = _mc_cli_task_is_active(_fake_run_me(stdout), task_id="T1")
-    assert result is True
+    assert _mc_cli_task_is_active(_fake_run_me(stdout), task_id="T1") is True
 
 
 def test_task_is_active_garbage_output_returns_none():
