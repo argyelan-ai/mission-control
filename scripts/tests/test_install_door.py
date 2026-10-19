@@ -310,7 +310,7 @@ def test_door_flags_do_not_mix(world: World):
 def test_missing_python_is_explained_before_anything_happens(world: World):
     r = door(world, "--update", extra={"MC_PYTHON": "python3-that-does-not-exist"})
     assert r.returncode != 0
-    assert "python3" in r.out and "install" in r.out.lower()
+    assert "Missing prerequisites" in r.out and "python3" in r.out
     assert re.search(r"(apt|dnf) install -y python3|xcode-select --install", r.out), r.out
     assert runs(world) == []
     # Only the prerequisite probes reached Docker (`docker info`, `docker compose version`).
@@ -330,7 +330,8 @@ def test_too_old_python_is_explained(world: World):
 def test_resume_and_rollback_check_python_too(world: World):
     for flag in ("--resume", "--rollback"):
         r = door(world, flag, extra={"MC_PYTHON": "python3-that-does-not-exist"})
-        assert r.returncode != 0 and "python3" in r.out, flag
+        assert r.returncode != 0, flag
+        assert "Missing prerequisites" in r.out and "the update engine" in r.out, (flag, r.out)
 
 
 # ── which engine runs ───────────────────────────────────────────────────────

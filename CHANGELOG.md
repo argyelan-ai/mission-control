@@ -17,6 +17,20 @@ follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
   cosign container pinned by digest; digest, `revision` label and
   architecture checks) — the self-update engine (ADR-094) uses it; nothing
   calls it on a user's machine yet.
+- Feature: `./install.sh --update` on the stable channel is the door to the
+  update engine (`scripts/mc_update.py`, ADR-094) — the steps the Settings
+  button will take, with the engine's own lines in the terminal: wait for
+  running work, download only Mission Control's images, back up, switch, prove
+  the new version (healthy, right images, version, schema) or go back on its
+  own. New: `./install.sh --resume` finishes an interrupted update,
+  `./install.sh --rollback` (asks first; `--yes` unattended) undoes the last
+  one. An unfinished run is found before anything restarts the stack. Needs
+  `python3` 3.9+ (checked with the other prerequisites; `MC_PYTHON` picks
+  another). Behaviour changes on stable: `--no-backup` and
+  `--ignore-running-tasks` are refused (edge only); "already on the latest
+  release" no longer re-pulls and restarts; when the GitHub release list is
+  unreachable the update stops instead of guessing from git tags (pick one
+  with `--version`). The edge channel keeps the installer's own path.
 - Feature: `./backup.sh preupdate` writes the backup an update takes right
   before it switches versions — database, a plain pins file (tag, commit,
   schema, image tags) and the encrypted `.env` when a passphrase is set, no
