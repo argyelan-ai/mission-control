@@ -125,20 +125,61 @@ async def issue(*, user_id: str, token_version: int) -> str:
     return token
 
 
-async def _redeem(token: str) -> _Grant | None:
-    """Consume ``token``. ``None`` = unknown, expired or already spent.
-    Raises when Redis is unreachable (the caller answers 503, never a pass)."""
+@dataclass(frozen=True)
+class _Spent:
+    """What a redeem took out of Redis, so :func:`give_back` can restore it."""
+
+    key: str
+    raw: str
+    ttl_ms: int
+
+
+_SPENT_ATTR = "mc_step_up_spent"
+
+
+async def _take(token: str) -> tuple[_Grant | None, _Spent | None]:
+    """Consume ``token`` (its remaining lifetime read in the same atomic
+    MULTI). ``(None, None)`` = unknown, expired or already spent. Raises when
+    Redis is unreachable (the caller answers 503, never a pass)."""
     if not token or len(token) > 256:
-        return None
+        return None, None
     redis = await get_redis()
-    raw = await redis.getdel(_key(token))
+    key = _key(token)
+    async with redis.pipeline(transaction=True) as pipe:
+        pipe.pttl(key)
+        pipe.getdel(key)
+        ttl_ms, raw = await pipe.execute()
     if raw is None:
-        return None
+        return None, None
     try:
         data = json.loads(raw)
-        return _Grant(user_id=str(data["uid"]), token_version=int(data["tv"]))
+        grant = _Grant(user_id=str(data["uid"]), token_version=int(data["tv"]))
     except (TypeError, ValueError, KeyError):
-        return None
+        return None, None
+    return grant, _Spent(key=key, raw=raw, ttl_ms=int(ttl_ms) if isinstance(ttl_ms, int) else 0)
+
+
+async def _redeem(token: str) -> _Grant | None:
+    """Consume ``token``. ``None`` = unknown, expired or already spent."""
+    grant, _ = await _take(token)
+    return grant
+
+
+async def give_back(request: Request) -> bool:
+    """Hand the step-up this request spent back — for a protected action that
+    provably did nothing (the update service did not answer). The token keeps
+    its original expiry and becomes spendable once more, so the operator can
+    retry without typing the password again. Best effort, never raises."""
+    spent: _Spent | None = getattr(request.state, _SPENT_ATTR, None)
+    if spent is None or spent.ttl_ms <= 0:
+        return False
+    setattr(request.state, _SPENT_ATTR, None)
+    try:
+        redis = await get_redis()
+        return bool(await redis.set(spent.key, spent.raw, px=spent.ttl_ms, nx=True))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("step-up give-back failed: %s", type(exc).__name__)
+        return False
 
 
 def require_recent_auth():
@@ -158,7 +199,7 @@ def require_recent_auth():
         if not token:
             raise refusal(status.HTTP_403_FORBIDDEN, REQUIRED)
         try:
-            grant = await _redeem(token)
+            grant, spent = await _take(token)
         except Exception as exc:  # noqa: BLE001 — Redis down
             logger.warning("step-up redeem failed: %s", type(exc).__name__)
             raise refusal(status.HTTP_503_SERVICE_UNAVAILABLE, UNAVAILABLE) from exc
@@ -170,6 +211,7 @@ def require_recent_auth():
             if grant is not None:
                 logger.info("step-up token presented by another user/session — burnt")
             raise refusal(status.HTTP_403_FORBIDDEN, REQUIRED)
+        setattr(request.state, _SPENT_ATTR, spent)
         return current_user
 
     return _check

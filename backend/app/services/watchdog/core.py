@@ -189,7 +189,13 @@ class WatchdogService(HealthChecksMixin, SessionMonitorMixin, TaskMonitorMixin):
             if recovered > 0:
                 logger.info("[WATCHDOG] %d orphaned tasks reset to inbox", recovered)
 
-            if system_mode != "halted":
+            # MC update drain (ADR-094 decision 7): promoting and
+            # re-dispatching hand out new work — held like HALTED until the
+            # drain is gone. Health checks and orphan recovery above still run.
+            from app.services import update_drain
+            update_drained = (await update_drain.current(session)).active
+
+            if system_mode != "halted" and not update_drained:
                 # Phase 4A: Promote orchestrator — auto-promote/approval for planned tasks
                 if settings.enable_promote_orchestrator:
                     from app.services.dispatch_gating import process_planned_tasks

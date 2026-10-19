@@ -13,6 +13,7 @@ Knobs in the state file (set by the tests):
   schema_for_tag      {"0.2.0": "0002"}        schema after `up` of that tag
   in_progress         [2, 1, 0]                successive answers to the work count
   drain_table         true|false               does system_state exist
+  work_fn             true|false               does the function update_running_work() exist (schema 0219+)
   db_down             true|false
   pull_fail           true|false
   pull_sleep          seconds                  a slow download (cancel tests)
@@ -214,14 +215,16 @@ def main(argv):
             print("1")
         elif "alembic_version" in sql:
             print(s.get("schema") or "")
-        elif "in_progress" in sql:
+        elif "to_regprocedure" in sql and "update_running_work" in sql:
+            print("t" if s.get("work_fn", False) else "f")
+        elif "to_regclass" in sql:
+            print("t" if s.get("drain_table", True) else "f")
+        elif "in_progress" in sql or "from update_running_work()" in sql:
             seq = s.get("in_progress", [0])
             print(seq[0])
             if len(seq) > 1:
                 s["in_progress"] = seq[1:]
                 save(s)
-        elif "to_regclass" in sql:
-            print("t" if s.get("drain_table", True) else "f")
         elif sql.startswith("insert into system_state"):
             start = sql.index("'{") + 1
             end = sql.index("}'") + 1

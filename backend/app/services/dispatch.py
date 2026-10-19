@@ -503,6 +503,17 @@ async def auto_dispatch_task(
             allowed, reason = await check_dispatch_allowed(task, _guard_agent, session)
             if not allowed:
                 logger.info("Dispatch blocked: '%s' — %s", task.title, reason)
+                from app.services.operations import UPDATE_DRAIN_REASON
+                if reason == UPDATE_DRAIN_REASON:
+                    # Held back by an MC update, not refused: recorded in
+                    # Postgres and dispatched again once the drain is gone
+                    # (update_drain.catch_up), even across the restart.
+                    from app.services import update_drain
+                    await update_drain.defer(
+                        update_drain.KIND_DISPATCH, task.id, bind=session.bind,
+                        run_id=(await update_drain.current()).run_id,
+                        detail=update_drain.dispatch_snapshot(task),
+                    )
                 return
 
             # Dependency check — don't dispatch if predecessors aren't done

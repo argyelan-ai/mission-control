@@ -467,6 +467,19 @@ class Settings(BaseSettings):
     # starts, restarts or removes a container and answers "deferred". Off by
     # default; the self-update API adds the Postgres drain next to it.
     mc_update_drain: bool = False
+    # Self-update from Settings (ADR-094). Feature switch: the update API
+    # answers 404 (code update_disabled) until the button has passed its
+    # acceptance on test machines (ADR-094 decision 13). Env MC_SELF_UPDATE_ENABLED.
+    mc_self_update_enabled: bool = False
+    # "deploy" = an install updated only through its deploy procedure
+    # (ADR-092): no button, every update route answers 409 (code
+    # update_managed), and so does the bridge door. Env MC_UPDATE_MANAGED.
+    mc_update_managed: str = ""
+    # Token of the bridge's update door (header X-MC-Update-Token). Empty =
+    # <home_host>/.mc/secrets/mc-update.token, the file the bridge created —
+    # the backend reads it through the ~/.mc mount. Deliberately no token
+    # value in the environment (ADR-094 decision 6). Env MC_UPDATE_TOKEN_FILE.
+    mc_update_token_file: str = ""
 
     # Free-Code Agent: base directory for task isolation (worktrees or plain workspaces)
     # In the container: /home/mcuser/free-code-projects (mounted from the host,

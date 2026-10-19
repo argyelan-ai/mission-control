@@ -180,6 +180,13 @@ class GroupRunnerService:
     async def _advance(self, session: AsyncSession, group: AgentGroup) -> None:
         round_row = await _latest_round(session, group)
         if round_row is None or round_row.finished_at is not None:
+            # MC update drain (ADR-094 decision 7): a round in flight finishes
+            # (the update waits for it, update_running_work()), but no new
+            # round starts until the drain is gone.
+            from app.services import update_drain
+            if (await update_drain.current(session)).active:
+                logger.info("Gruppe %s: next round waits for the MC update to end", group.id)
+                return
             await self._start_round(session, group)
             return
         await self._continue_round(session, group, round_row)

@@ -334,6 +334,29 @@ def test_drain_waits_for_running_work(world: World):
     assert r.stdout.index("no new work is handed out") < r.stdout.index("waiting for 2")
 
 
+def test_drain_counts_running_work_through_the_backend_function(world: World):
+    """From schema 0219 on, "running work" has one definition: the function
+    update_running_work() (tasks in progress + open group-chat rounds, PR 4c).
+    The engine waits for exactly what the UI shows; older schemas fall back
+    to counting tasks."""
+    world.patch_state(work_fn=True, in_progress=[1, 1, 0])
+    r = world.run("start")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "waiting for 1 running task(s) or group-chat round(s)" in r.stdout
+    counts = [c[-1] for c in world.calls() if c[:1] == ["compose"] and "update_running_work" in c[-1]]
+    assert any(c == "select coalesce(sum(n), 0) from update_running_work()" for c in counts), counts
+    assert not any("status = 'in_progress'" in c[-1] for c in world.calls() if c[:1] == ["compose"])
+
+
+def test_drain_without_the_function_counts_tasks_only(world: World):
+    world.patch_state(work_fn=False, in_progress=[1, 0])
+    r = world.run("start")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert any("status = 'in_progress'" in c[-1] for c in world.calls() if c[:1] == ["compose"])
+    assert not any(c[-1] == "select coalesce(sum(n), 0) from update_running_work()"
+                   for c in world.calls() if c[:1] == ["compose"])
+
+
 def test_running_work_that_never_ends_aborts_without_change(world: World):
     world.patch_state(in_progress=[1])
     r = world.run("start", extra_env={"MC_UPDATE_DRAIN_TIMEOUT": "0.3"})

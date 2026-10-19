@@ -55,6 +55,19 @@ einem Drain „deferred“ statt zu starten; lesende Aufrufe (`ps`, `inspect`,
 `logs`) und `docker exec` bleiben frei. `backend/tests/test_docker_gateway_lint.py`
 wird rot, sobald irgendwo sonst ein verändernder `docker`-Aufruf entsteht.
 
+**Update-Drain (ADR-094 §7):** Der Drain ist eine Zeile in Postgres
+(`system_state`, `key='update_drain'`, mit Ablaufdatum), die der Update-Motor
+per `psql` setzt. `backend/app/services/update_drain.py` liest sie: frisch über
+die Session für Dispatch (`operations.check_dispatch_allowed`, hält auch
+Review-Übergaben an), den Poll-Claim neuer Inbox-Karten, den Watchdog-Redispatch,
+neue Gruppenchat- und Loop-Runden und fällige Zeitpläne; aus einem Cache (alle
+5 s im Watcher aufgefrischt, in API und Worker) fürs Docker-Gateway. Was der
+Drain zurückhält (Dispatch, Zeitplan-Jobs), steht als `deferred:<art>:<id>` in
+`system_state` und wird nachgeholt, sobald er weg ist — auch über den
+Neustart hinweg. „Laufende Arbeit“, auf die der Motor wartet und die die UI
+zeigt, hat eine Definition: die SQL-Funktion `update_running_work()`
+(Migration 0219).
+
 ---
 
 ## Bausteine
@@ -1607,6 +1620,23 @@ Alle ADRs in `docs/decisions/`:
   a newer update exists or the run's backup is gone. Tests drive the real `backup.sh` against
   the fake docker (`scripts/tests/fake_docker.py`); `backend/tests/test_backup_sh.py` covers
   the new mode against a throwaway Postgres.
+- **2026-10-19** — **Self-update API + drain in Postgres (ADR-094, update plan PR 4c):**
+  `backend/app/routers/system_update.py` — `/api/v1/system/update/{preflight,start,status,
+  rollback,resume,history}`, admin only, `start` + `rollback` behind step-up
+  (`services/step_up.py`); `MC_UPDATE_MANAGED=deploy` → `409` on every route, feature switch
+  `MC_SELF_UPDATE_ENABLED` (off) → `404`. The backend only talks to the bridge's update door
+  (`services/mc_update_runner.py`, door token from `~/.mc/secrets/mc-update.token`) and adds
+  what only it can see: scheduled jobs due within 15 min (red), group-chat rounds and loops
+  (notes), step-up availability. Status is filtered (no paths, no raw log), mirrored into the
+  history (`system_updates`) and Redis; the backend reconciles the history with the journal at
+  start. Migration 0219: `system_state` (the engine's drain row + deferred work),
+  `system_updates`, function `update_running_work()` — the engine now waits for tasks in
+  progress **and** open group-chat rounds. The drain (`services/update_drain.py`) holds
+  dispatch, the poll claim, watchdog re-dispatch, new group/loop rounds and due jobs, feeds the
+  Docker gateway, and catches up held-back dispatches and jobs once it is gone. Tests:
+  `backend/tests/test_update_drain.py`, `test_system_update_api.py`,
+  `test_system_update_postgres.py` (Postgres lane: the engine's own SQL against the migrated
+  table).
 - **2026-10-19** — **Update door in the cli-bridge (ADR-094, update plan PR 3):**
   `scripts/mc_update_door.py`, served by `scripts/cli-bridge.py` under `/mc-update/*`: exactly
   five routes (`preflight`, `start`, `status`, `rollback`, `resume`), its own token
