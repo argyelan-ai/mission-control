@@ -38,13 +38,19 @@ tag (``git show <tag>:scripts/mc_update.py``), so the checkout never replaces
 the running script under itself, and the code that finishes the update is the
 code of the version being installed.
 
-This file is PR 2a of the update plan: the state machine, journal, lock,
-resume rule, rollback R1 (code + ``.env`` + fleet file back, database
-untouched), the four success checks and the drain interface. Not here yet,
-and refused honestly instead of guessed at:
+The way back (ADR-094 decision 4) is chosen against ``schema_before``, the
+database schema recorded right before the switch:
 
-* restoring the database when the schema already changed (R2, PR 2b) — the
-  run ends ``rollback_failed`` and names the backup and the command;
+* ``alembic_version == schema_before`` → **R1**: old code, old ``.env``
+  (written in place), old fleet file, ``up``, the four checks;
+* anything else — the new head, a revision half-way along the chain, or no
+  readable version at all → **R2**: stop ``backend`` and ``mc-worker``,
+  restore the database from this run's pre-update backup
+  (``backup.sh preupdate`` / ``restore``), then R1, and the checks also
+  demand ``schema_before`` again. Never a migration downgrade.
+
+Not here yet, and refused honestly instead of guessed at:
+
 * release signature / published-release check (PR 6) — ``verify_release``
   checks format, direction, schema compatibility and the target commit;
 * the bridge door, detaching and boot resume (PR 3) — ``start`` runs in the
@@ -150,7 +156,11 @@ EXIT_REFUSED, EXIT_LOCKED = 9, 23
 # way a power cut would stop it. "<phase>.intent" fires after the intent was
 # journaled, "<phase>.done" after the result was.
 INNER_FAULT_POINTS = ("switch.worker_stopped", "switch.parked", "switch.checked_out",
-                      "switch.fleet_back", "switch.pins", "rolling_back.checked_out")
+                      "switch.fleet_back", "switch.pins", "rolling_back.r2_stopped",
+                      "rolling_back.restored", "rolling_back.checked_out")
+
+# What backup.sh prints for the file it wrote in `preupdate` mode.
+PREUPDATE_LINE = "Pre-update backup: "
 FAULT_POINTS = tuple(f"{p}.{s}" for p in PHASES for s in ("intent", "done")) + INNER_FAULT_POINTS
 
 
@@ -1352,8 +1362,12 @@ class Engine:
     def phase_backup(self) -> None:
         """Right before the switch, so data written after it is seconds, not minutes.
 
-        PR 2b moves this to backup.sh's own pre-update prefix; here it is the
-        normal backup."""
+        ``backup.sh preupdate``: database + pins (+ ``.env`` encrypted, when a
+        passphrase is set), its own prefix and rotation (3, at most 14 days),
+        no ~/.mc archive — an update does not change ~/.mc. The script is
+        copied into the run folder first: the same script that wrote the
+        backup restores it on the way back (R2), whatever the checkout holds
+        by then."""
         j = self.journal
         assert j is not None
         j.begin("backup")
@@ -1361,31 +1375,33 @@ class Engine:
         self._check_cancel()
         self.drain_refresh()
         script = self.repo / "backup.sh"
-        if not os.access(str(script), os.X_OK):
+        if not script.is_file():
             raise UpdateError("./backup.sh not found — the update does not run without a backup")
-        marker = time.time() - 1
-        self.say("→ backing up before the update (./backup.sh) …")
-        cp = self.sh([str(script)], check=False, env={"COMPOSE_PROJECT_NAME": self.project()}, timeout=3600)
+        copy = self.run_dir() / "backup.sh"
+        copy_private(script, copy)
+        schema = self.schema_now()
+        if schema is None:
+            raise UpdateError("the database does not answer — nothing to back up, nothing was changed")
+        self.say("→ backing up before the update (./backup.sh preupdate) …")
+        # "Everything written since <taken_at> is lost" on R2: count from the
+        # start of the dump, not its end.
+        taken_at = _iso()
+        cp = self.sh(["bash", str(copy), "preupdate"], check=False, env=self.backup_env(), timeout=3600)
         if cp.returncode != 0:
             tail = " | ".join((cp.stderr or cp.stdout or "").strip().splitlines()[-3:])
             raise UpdateError(f"the backup failed — nothing was changed ({tail})")
-        j.data["backup"] = {"file": self.newest_backup(marker), "taken_at": _iso()}
-        j.finish("backup", j.data["backup"]["file"] or "written by backup.sh")
+        named = [ln[len(PREUPDATE_LINE):].strip() for ln in cp.stdout.splitlines()
+                 if ln.startswith(PREUPDATE_LINE)]
+        if not named or not Path(named[-1]).is_file():
+            raise UpdateError("backup.sh did not name a pre-update backup it wrote — nothing was changed")
+        j.data["backup"] = {"file": named[-1], "taken_at": taken_at, "schema": schema,
+                            "script": str(copy), "kind": "preupdate"}
+        j.finish("backup", named[-1])
         _fault("backup.done")
 
-    def newest_backup(self, since: float) -> Optional[str]:
-        d = self.setting("MC_BACKUP_DIR", str(Path.home() / "mc-backups"))
-        if d.startswith("~/"):
-            d = str(Path.home() / d[2:])
-        base = Path(d) if os.path.isabs(d) else self.repo / d
-        best = None
-        for folder in (base, self.repo / "backups"):
-            if not folder.is_dir():
-                continue
-            for f in folder.glob("mc_backup_*.sql.gz"):
-                if f.stat().st_mtime >= since and (best is None or f.stat().st_mtime > best.stat().st_mtime):
-                    best = f
-        return str(best) if best else None
+    def backup_env(self) -> Dict[str, str]:
+        """backup.sh talks to this install's stack under its real project name."""
+        return {"COMPOSE_PROJECT_NAME": self.project(), "MC_INSTALL_DIR": str(self.repo)}
 
     # ── hand-over to the target's engine ───────────────────────────────────
 
@@ -1458,7 +1474,17 @@ class Engine:
         j = self.journal
         assert j is not None
         rd = self.run_dir()
-        rb: Dict[str, Any] = {"prepared": False, "schema_before": self.schema_now(),
+        schema = self.schema_now()
+        if schema is None:
+            raise UpdateError("the database schema cannot be read before the switch — "
+                              "without it the way back cannot be chosen")
+        backup = j.data.get("backup") or {}
+        if not backup.get("file") or not Path(backup["file"]).is_file():
+            raise UpdateError("the pre-update backup is missing — the switch does not start without it")
+        if backup.get("schema") not in (None, schema):
+            raise UpdateError(f"the database schema moved from {backup.get('schema')} to {schema} after the backup — "
+                              "the backup would not bring it back")
+        rb: Dict[str, Any] = {"prepared": False, "schema_before": schema,
                               "ref": j.data["from"].get("tag") or j.data["from"].get("commit"),
                               "commit": j.data["from"].get("commit"), "branch": j.data["from"].get("branch"),
                               "version": j.data["from"].get("version")}
@@ -1556,10 +1582,11 @@ class Engine:
     def rollback(self, reason: str, requested: bool = False) -> int:
         """R1: old code, old .env (in place), old fleet file, up, four checks.
 
-        Only when the database schema is still ``schema_before``. Otherwise
-        the database must come back from the pre-update backup first (R2,
-        PR 2b) — until then the run ends ``rollback_failed`` with the backup
-        and the command, instead of starting old code on a newer schema."""
+        R2 first when the schema is not ``schema_before`` any more (or cannot
+        be read): stop backend and mc-worker, restore this run's pre-update
+        backup — never old code on a newer or half-migrated schema, never a
+        migration downgrade. Idempotent: a resume runs it again from the
+        start and finds the database already restored (then it is R1)."""
         j = self.journal
         assert j is not None
         rb = j.data["rollback"]
@@ -1571,7 +1598,14 @@ class Engine:
             if not rb.get("prepared"):
                 raise RollbackUnavailable("the way back was never prepared")
             now = self.schema_now()
-            if rb.get("schema_before") is None or now != rb.get("schema_before"):
+            path = "R1" if rb.get("schema_before") is not None and now == rb.get("schema_before") else "R2"
+            if rb.get("path") != "R2":
+                # Once R2, always R2 for this run (a resume after the restore
+                # sees schema_before again, but the run did restore).
+                rb["path"] = path
+            j.event("rolling_back", "path", f"{path}: schema {now or 'unreadable'}, before {rb.get('schema_before')}")
+            j.save()
+            if path == "R2":
                 self.restore_database(now)
             self.compose("stop", "mc-worker", check=False, timeout=180)
             self.checkout_back()
@@ -1587,20 +1621,25 @@ class Engine:
             j.end("rollback_failed", msg, error=f"{reason} — {msg}")
             self.say(f"✗ Update failed and {msg}")
             backup = (j.data.get("backup") or {}).get("file")
-            self.say("  Mission Control stays in no-new-work mode. On this machine, in the install folder:")
+            self.say("  Mission Control stays in no-new-work mode. On this machine, in the install folder,")
+            self.say("  fix the cause above, then run the way back again:")
+            self.say("    python3 scripts/mc_update.py rollback")
             if backup:
-                self.say(f"    1. ./backup.sh restore {backup} --yes   (the backup from right before the switch)")
-            else:
-                self.say("    1. ./backup.sh restore <the backup from right before the update> --yes")
-            self.say("    2. python3 scripts/mc_update.py rollback")
+                self.say(f"  It restores the database from {backup} if the schema changed.")
             return EXIT_ROLLBACK_FAILED
         self.drain_clear()
-        j.end("rolled_back", f"back on {rb.get('ref')}", error=reason)
+        j.end("rolled_back", f"back on {rb.get('ref')} ({rb.get('path')})", error=reason)
         self.drop_private_copies(j)
+        if rb.get("path") == "R2":
+            b = j.data.get("backup") or {}
+            db_note = (f"the database was restored from the pre-update backup {b.get('file')} — "
+                       f"everything written since {b.get('taken_at')} is lost.")
+        else:
+            db_note = "the database was not changed."
         if requested:
-            self.say(f"✓ Mission Control was set back to {rb.get('ref')} as requested; the database was not changed.")
+            self.say(f"✓ Mission Control was set back to {rb.get('ref')} as requested; {db_note}")
             return EXIT_ROLLED_BACK
-        self.say(f"✗ Update failed ({reason}). Mission Control was set back to {rb.get('ref')}; the database was not changed.")
+        self.say(f"✗ Update failed ({reason}). Mission Control was set back to {rb.get('ref')}; {db_note}")
         return EXIT_FAILED
 
     # ── the run's private copies (.env holds secrets) ──────────────────────
@@ -1637,13 +1676,60 @@ class Engine:
                 if _now() - finished > self.ROLLBACK_WINDOW:
                     self.drop_private_copies(j)
 
-    def restore_database(self, schema_now: Optional[str]) -> None:
+    def backup_for_r2(self) -> Tuple[Path, Path]:
+        """(backup file, script) of this run, or RollbackUnavailable."""
         j = self.journal
         assert j is not None
-        backup = (j.data.get("backup") or {}).get("file") or "<the backup named in the journal>"
-        raise RollbackUnavailable(
-            f"the database changed (schema {schema_now or 'unreadable'}, before {j.data['rollback'].get('schema_before')}) "
-            f"and must be restored first: ./backup.sh restore {backup} --yes — this engine version does not restore automatically yet")
+        b = j.data.get("backup") or {}
+        if not b.get("file"):
+            raise RollbackUnavailable("this run has no pre-update backup to restore")
+        f = Path(b["file"])
+        if not f.is_file():
+            raise RollbackUnavailable(f"the pre-update backup {f} is missing")
+        script = Path(b.get("script") or "")
+        if not script.is_file():
+            script = self.repo / "backup.sh"
+        if not script.is_file():
+            raise RollbackUnavailable("no backup.sh to restore the database with")
+        return f, script
+
+    def restore_database(self, schema_now: Optional[str]) -> None:
+        """R2: database back to ``schema_before`` from this run's backup.
+
+        backend AND mc-worker stop first: the new backend would migrate the
+        restored database forward again on its next start, the worker would
+        write into it. backup.sh restore then finds them stopped and leaves
+        them stopped. ``--no-safety-copy``: the safety copy needs a dumpable
+        database and is no way back for this case; what is lost is what was
+        written since the backup — seconds, and said in the result.
+        ``--keep-env``: the engine writes its own .env copy in place."""
+        j = self.journal
+        assert j is not None
+        rb = j.data["rollback"]
+        f, script = self.backup_for_r2()
+        self.say(f"→ the database changed (schema {schema_now or 'unreadable'}, before {rb.get('schema_before')}) — "
+                 f"restoring the pre-update backup {f.name} …")
+        self.compose("stop", "backend", "mc-worker", timeout=180)
+        _fault("rolling_back.r2_stopped")
+        # The database container itself is third-party and unchanged; make
+        # sure it runs (a reboot may have left it stopped).
+        self.compose("up", "-d", "--pull", "never", "db", check=False, timeout=180)
+        deadline = time.monotonic() + 120
+        while self.db_value("select 1") != "1":
+            if time.monotonic() >= deadline:
+                raise UpdateError("the database container does not answer — cannot restore")
+            time.sleep(min(self.poll, 2.0) or 0.05)
+        cp = self.sh(["bash", str(script), "restore", str(f), "--yes", "--no-safety-copy", "--keep-env"],
+                     check=False, env=self.backup_env(), timeout=3600)
+        if cp.returncode != 0:
+            tail = " | ".join((cp.stderr or cp.stdout or "").strip().splitlines()[-3:])
+            raise UpdateError(f"the database restore failed ({tail})")
+        _fault("rolling_back.restored")
+        got = self.schema_now()
+        if got != rb.get("schema_before"):
+            raise UpdateError(f"after the restore the schema is {got or 'unreadable'}, expected {rb.get('schema_before')}")
+        j.event("rolling_back", "restored", f"{f.name} → schema {got}")
+        j.save()
 
     def checkout_back(self) -> None:
         j = self.journal
@@ -1748,19 +1834,25 @@ class Engine:
                 return EXIT_OK
             if j.phase in PRE_SWITCH:
                 return self.abort(f"cancelled in phase {j.phase} before anything was changed", "cancelled")
+            newer = self.newer_update(j)
+            if newer:
+                raise Refused(f"run {j.run_id} is not the latest update ({newer} came after it) — "
+                              "only the latest update can be undone")
             if j.phase == "done":
                 age = _now() - _parse_iso(j.data.get("finished_at") or j.data["updated_at"])
                 if age > _dt.timedelta(days=14):
                     raise Refused(f"run {j.run_id} finished {age.days} days ago — its backup is older than 14 days")
-                # The new version runs fine. Refuse what this engine cannot do
-                # before touching anything, instead of marking a healthy run
+                # The new version runs fine. Refuse what cannot work before
+                # touching anything, instead of marking a healthy run
                 # "rollback failed".
+                if not j.data["rollback"].get("prepared"):
+                    raise Refused(f"run {j.run_id} recorded no way back")
                 before, now = j.data["rollback"].get("schema_before"), self.schema_now()
                 if before is None or now != before:
                     try:
-                        self.restore_database(now)
+                        self.backup_for_r2()
                     except RollbackUnavailable as e:
-                        raise Refused(str(e)) from None
+                        raise Refused(f"{e} — the database cannot be brought back, nothing was changed") from None
                 # A code switch like any other: no new work, running work
                 # finishes first, nothing is cut off (ADR-094 decision 7).
                 try:
@@ -1772,6 +1864,19 @@ class Engine:
             return self.rollback("rollback requested", requested=True)
         finally:
             self.lock.release()
+
+    def newer_update(self, j: Journal) -> Optional[str]:
+        """Run id of an update after ``j`` that changed something, or None."""
+        for path in reversed(list_runs(self.state)):
+            if path.stem <= j.run_id:
+                break
+            try:
+                other = Journal.load(path)
+            except UpdateError:
+                return path.stem
+            if other.phase != "aborted":
+                return other.run_id
+        return None
 
     def cmd_status(self, run_id: Optional[str]) -> int:
         j = find_run(self.state, run_id)

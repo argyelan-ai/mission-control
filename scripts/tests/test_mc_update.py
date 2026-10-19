@@ -1,10 +1,12 @@
-"""The update engine (scripts/mc_update.py, ADR-094) — PR 2a of the update plan.
+"""The update engine (scripts/mc_update.py, ADR-094) — PR 2a + 2b of the update plan.
 
 Every test runs the real engine end to end in a scratch world:
 
 * a local git "upstream" with two releases, v0.1.0 and v0.2.0, each carrying
-  the engine itself (so the hand-over to the *target's* engine is real), a
-  fake ``backup.sh`` and ``setup.sh`` and a migration chain 0001 → 0002;
+  the engine itself (so the hand-over to the *target's* engine is real), the
+  repository's real ``backup.sh`` (pre-update backup and restore run for
+  real against the fake docker), a fake ``setup.sh`` and a migration chain
+  0001 → 0002;
   v0.1.0 still tracks the fleet file, v0.2.0 no longer does — the case that
   makes git delete it during a plain checkout;
 * an install cloned on v0.1.0 with a ``.env`` and an operator-edited fleet
@@ -39,19 +41,7 @@ FLEET = "docker/docker-compose.agents.yml"
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
 
-FAKE_BACKUP = """#!/usr/bin/env bash
-set -euo pipefail
-echo "backup on $(git describe --tags --exact-match HEAD 2>/dev/null || echo none)" >> "$STUB_BACKUP_LOG"
-if [ -n "${STUB_BACKUP_SLEEP:-}" ]; then sleep "$STUB_BACKUP_SLEEP"; fi
-if [ "${STUB_BACKUP_RC:-0}" != 0 ]; then echo "pg_dump: connection refused" >&2; exit "$STUB_BACKUP_RC"; fi
-dir="${MC_BACKUP_DIR:?}"
-mkdir -p "$dir"
-f="$dir/mc_backup_$(date +%Y-%m-%d_%H-%M-%S).sql.gz"
-echo dump > "$f"
-echo "Database backup: $f"
-if [ -n "${STUB_LOCK_ENV:-}" ]; then chmod 000 .env; fi
-"""
-
+BACKUP_SH = ROOT / "backup.sh"
 FAKE_SETUP = """#!/usr/bin/env bash
 echo "setup on $(git describe --tags --exact-match HEAD 2>/dev/null || echo none)" >> "$STUB_BACKUP_LOG"
 """
@@ -84,9 +74,10 @@ class World:
         up.mkdir()
         _git(up, "init", "-q", "-b", "main")
         (up / "docker-compose.yml").write_text("services: {}\n")
-        for name, body in (("backup.sh", FAKE_BACKUP), ("setup.sh", FAKE_SETUP)):
-            (up / name).write_text(body)
-            (up / name).chmod(0o755)
+        shutil.copy(BACKUP_SH, up / "backup.sh")
+        (up / "backup.sh").chmod(0o755)
+        (up / "setup.sh").write_text(FAKE_SETUP)
+        (up / "setup.sh").chmod(0o755)
         (up / "scripts").mkdir()
         shutil.copy(ENGINE, up / "scripts" / "mc_update.py")
         (up / "docker").mkdir()
@@ -144,6 +135,8 @@ class World:
             "MC_RELEASE_API": self.release_json.as_uri(),
             "MC_API_URL": self.api.as_uri(),
             "MC_BACKUP_DIR": str(self.backups),
+            "MC_BACKUP_MIN_FREE_MB": "1",
+            "HOME": str(self.tmp),
             "MC_UPDATE_POLL_INTERVAL": "0.01",
             "MC_UPDATE_START_PERIOD": "0",
             "MC_UPDATE_VERIFY_TIMEOUT": "5",
@@ -152,7 +145,8 @@ class World:
             "GIT_CONFIG_NOSYSTEM": "1",
         }
         for k in ("MC_UPDATE_TEST_FAULT", "MC_UPDATE_LOCK_FD", "MC_REPO_PATH", "COMPOSE_PROJECT_NAME",
-                  "MC_UPDATE_MANAGED", "MC_IMAGE_TAG"):
+                  "MC_UPDATE_MANAGED", "MC_IMAGE_TAG", "MC_BACKUP_PASSPHRASE", "MC_BACKUP_PASSPHRASE_FILE",
+                  "MC_BACKUP_KEEP", "MC_INSTALL_DIR", "MC_AGENT_IMAGE_TAG", "MC_CHANNEL"):
             self.env.pop(k, None)
         return self
 
@@ -256,12 +250,21 @@ def test_pull_takes_only_mc_images(world: World):
 
 
 def test_backup_runs_on_the_old_release_before_the_switch(world: World):
+    """Sabotage (e): drop the backup step from the engine → red."""
     assert world.run("start").returncode == 0
     log = world.backup_log.read_text().splitlines()
     assert log[0] == "backup on v0.1.0"
     assert "setup on v0.2.0" in log
     j = world.journal()
-    assert j["backup"]["file"] and Path(j["backup"]["file"]).exists()
+    f = Path(j["backup"]["file"])
+    # backup.sh's own pre-update kind: own prefix, pins, no ~/.mc archive.
+    assert f.exists() and f.name.startswith("mc_backup_preupdate_"), f
+    assert j["backup"]["schema"] == "0001" == j["rollback"]["schema_before"]
+    pins = f.with_name(f.name.replace("mc_backup_", "mc_pins_").replace(".sql.gz", ".txt")).read_text()
+    assert "MC_IMAGE_TAG=0.1.0" in pins and "SCHEMA=0001" in pins and "GIT_TAG=v0.1.0" in pins
+    assert not list(world.backups.glob("mc_data_*")), "an update does not archive ~/.mc"
+    # Not the daily kind: the daily rotation can never remove it.
+    assert not list(world.backups.glob("mc_backup_2*"))
 
 
 def test_worker_is_stopped_before_the_code_switch(world: World):
@@ -370,6 +373,10 @@ def test_unhealthy_new_version_rolls_back_to_the_old_tag(world: World):
     assert st["containers"]["mc-worker"]["state"] == "running"
     assert st["drain"] is None
     assert "set back to v0.1.0" in r.stdout
+    # R1: the database was not touched.
+    assert j["rollback"]["path"] == "R1"
+    assert "db_history" not in st
+    assert "database was not changed" in r.stdout
 
 
 def test_wrong_version_after_up_is_a_failure(world: World):
@@ -389,20 +396,171 @@ def test_wrong_version_after_up_is_a_failure(world: World):
     assert "version" in (j["error"] or "")
 
 
-def test_migrated_schema_is_not_rolled_back_onto_old_code(world: World):
-    """Schema already 0002 ≠ schema_before: R1 would start old code on a newer
-    schema. Until R2 (PR 2b) the run ends rollback_failed and names the backup."""
+def _assert_r2(world: World, r, inode: int) -> dict:
+    """The way back restored the database (R2) and then went back like R1."""
+    j = world.journal()
+    assert j["phase"] == "rolled_back", (j["phase"], j.get("error"), r.stdout + r.stderr)
+    assert j["rollback"]["path"] == "R2"
+    st = world.get_state()
+    assert st["schema"] == "0001" == j["rollback"]["schema_before"]
+    assert st["db_history"] == ["dropped", "restored"]
+    assert world.head_tag() == "v0.1.0"
+    assert world.env_value("MC_IMAGE_TAG") == "0.1.0" and world.env_value("DB_PASSWORD") == "keep-me"
+    assert (world.inst / ".env").stat().st_ino == inode, ".env must be written in place"
+    assert (world.inst / FLEET).read_text() == USER_FLEET
+    assert st["containers"]["backend"]["image"] == "sha256:mc-backend-0.1.0"
+    assert st["containers"]["mc-worker"]["image"] == "sha256:mc-backend-0.1.0"
+    assert st["drain"] is None
+    # backend AND mc-worker are stopped before the database is dropped, and
+    # nothing starts them again on the new code after the restore.
+    calls = world.calls()
+    drop = next(i for i, c in enumerate(calls) if c[:1] == ["compose"] and "-c" in c and "pg_dump" not in c)
+    stopped = set()
+    for c in calls[:drop]:
+        if c[:1] == ["compose"] and c[3:4] == ["stop"]:
+            stopped.update(c[4:])
+    assert {"backend", "mc-worker"} <= stopped, stopped
+    after = calls[drop:]
+    assert not any(c[:1] == ["compose"] and c[3:4] in (["start"], ["restart"]) for c in after)
+    # The first `up` after the restore runs the old images.
+    ups = [c for c in after if c[:1] == ["compose"] and c[3:4] == ["up"] and "backend" in c]
+    assert ups
+    return j
+
+
+def _release_with_two_migrations(world: World) -> None:
+    """v0.2.0 brings 0002 and 0003 — a chain that can stop half-way."""
+    _git(world.up, "tag", "-d", "v0.2.0")
+    (world.up / "backend" / "alembic" / "versions" / "0003_even_more.py").write_text(
+        'revision = "0003"\ndown_revision = "0002"\n')
+    _git(world.up, "add", "-A")
+    _git(world.up, "commit", "-q", "-m", "v0.2.0 with two migrations")
+    _git(world.up, "tag", "v0.2.0")
+
+
+def test_migration_chain_stopped_half_way_restores_the_database(world: World):
+    """Sabotage (b): the schema stands on an *intermediate* revision (0002 of
+    0001→0002→0003), neither old nor new. Comparing against the new head would
+    take R1 (old code on a half-migrated database) — the rule is against
+    schema_before, so it must be R2."""
+    _release_with_two_migrations(world)
+    world.patch_state(health_for_tag={"0.2.0": "unhealthy"}, schema_for_tag={"0.1.0": "0001", "0.2.0": "0002"})
+    inode = (world.inst / ".env").stat().st_ino
+    r = world.run("start")
+    assert r.returncode == 1, r.stdout + r.stderr
+    j = _assert_r2(world, r, inode)
+    assert j["target"]["schema_head"] == "0003"
+    assert "restored from the pre-update backup" in r.stdout
+    assert Path(j["backup"]["file"]).name in r.stdout
+
+
+def test_migrated_schema_is_restored_before_old_code_starts(world: World):
+    """Schema already on the new head ≠ schema_before → R2, never old code on a
+    newer schema."""
     world.patch_state(health_for_tag={"0.2.0": "unhealthy"})
+    inode = (world.inst / ".env").stat().st_ino
+    r = world.run("start")
+    assert r.returncode == 1, r.stdout + r.stderr
+    _assert_r2(world, r, inode)
+
+
+def test_unreadable_schema_counts_as_changed(world: World):
+    """The database answers but has no schema version (a broken migration) —
+    the engine cannot tell, so it restores (R2)."""
+    world.patch_state(health_for_tag={"0.2.0": "unhealthy"}, schema_for_tag={"0.1.0": "0001", "0.2.0": ""})
+    inode = (world.inst / ".env").stat().st_ino
+    r = world.run("start")
+    assert r.returncode == 1, r.stdout + r.stderr
+    _assert_r2(world, r, inode)
+
+
+def test_r2_keeps_the_env_and_leaves_no_secret_copies_in_the_install(world: World):
+    """With a passphrase the backup holds an encrypted .env. The restore must
+    not put that one back (--keep-env): the engine writes its own copy in
+    place, and no .env.backup-pre-restore-* file is left in the folder."""
+    world.patch_state(health_for_tag={"0.2.0": "unhealthy"})
+    inode = (world.inst / ".env").stat().st_ino
+    r = world.run("start", extra_env={"MC_BACKUP_PASSPHRASE": "pw"})
+    assert r.returncode == 1, r.stdout + r.stderr
+    j = _assert_r2(world, r, inode)
+    enc = Path(j["backup"]["file"].replace("mc_backup_", "mc_env_").replace(".sql.gz", ".env.enc"))
+    assert enc.exists()
+    assert not list(world.inst.glob(".env.backup-pre-restore-*"))
+
+
+def test_r2_without_the_backup_fails_safe_and_can_be_finished_later(world: World):
+    """The backup vanished between the switch and the way back: no old code on
+    the new schema, MC stays drained, and `rollback` finishes the job once the
+    backup is back."""
+    world.patch_state(health_for_tag={"0.2.0": "unhealthy"})
+    hidden = world.tmp / "hidden"
+    hidden.mkdir()
+    # Hide the backup right after `up`: a shim moves it away on the first `up`.
+    orig = world.env["PATH"]
+    shim = world.tmp / "shim"
+    shim.mkdir()
+    (shim / "docker").write_text(
+        f'#!/bin/sh\ncase "$*" in *" up -d --pull never backend"*) mv "{world.backups}"/mc_backup_preupdate_* "{hidden}"/ 2>/dev/null;; esac\n'
+        f'exec "{sys.executable}" "{FAKE_DOCKER}" "$@"\n')
+    (shim / "docker").chmod(0o755)
+    r = world.run("start", extra_env={"PATH": f"{shim}:{orig}"})
+    assert r.returncode == 4, r.stdout + r.stderr
+    j = world.journal()
+    assert j["phase"] == "rollback_failed"
+    assert "is missing" in j["error"]
+    assert world.head_tag() == "v0.2.0"              # no old code on the new schema
+    assert world.get_state()["drain"] is not None    # stays in no-new-work mode
+    assert "db_history" not in world.get_state()     # nothing dropped
+    assert "mc_update.py rollback" in r.stdout
+    # The operator puts the backup back and asks for the way back.
+    for f in hidden.iterdir():
+        shutil.move(str(f), str(world.backups / f.name))
+    r = world.run("rollback")
+    assert r.returncode == 5, r.stdout + r.stderr
+    j = world.journal()
+    assert j["phase"] == "rolled_back" and j["rollback"]["path"] == "R2"
+    assert world.get_state()["schema"] == "0001" and world.head_tag() == "v0.1.0"
+
+
+def test_failed_restore_ends_rollback_failed_on_the_new_code(world: World):
+    world.patch_state(health_for_tag={"0.2.0": "unhealthy"}, restore_fail=True)
     r = world.run("start")
     assert r.returncode == 4, r.stdout + r.stderr
     j = world.journal()
     assert j["phase"] == "rollback_failed"
-    assert "backup.sh restore" in j["error"]
-    assert world.head_tag() == "v0.2.0"         # no old code on the new schema
-    assert world.get_state()["drain"] is not None   # stays in no-new-work mode
-    # The note names both steps, in the order that works.
-    assert "./backup.sh restore" in r.stdout and "mc_update.py rollback" in r.stdout
-    assert r.stdout.index("./backup.sh restore") < r.stdout.index("mc_update.py rollback")
+    assert "restore" in j["error"]
+    assert world.head_tag() == "v0.2.0"
+    assert world.get_state()["drain"] is not None
+
+
+@pytest.mark.parametrize("fault", ["rolling_back.r2_stopped", "rolling_back.restored",
+                                   "rolling_back.checked_out"])
+def test_crash_during_r2_resumes_the_way_back(world: World, fault: str):
+    world.patch_state(health_for_tag={"0.2.0": "unhealthy"})
+    inode = (world.inst / ".env").stat().st_ino
+    r = world.run("start", fault=fault)
+    assert r.returncode == 137, r.stdout + r.stderr
+    assert world.journal()["phase"] == "rolling_back"
+    r = world.run("resume")
+    assert r.returncode == 1, r.stdout + r.stderr
+    j = world.journal()
+    assert j["phase"] == "rolled_back"
+    st = world.get_state()
+    assert st["schema"] == "0001" and world.head_tag() == "v0.1.0"
+    assert (world.inst / ".env").stat().st_ino == inode
+    assert (world.inst / FLEET).read_text() == USER_FLEET
+
+
+def test_schema_that_moves_after_the_backup_aborts_before_the_switch(world: World):
+    """The backup must hold exactly schema_before — otherwise R2 could not
+    bring the database back to it. Caught before anything changes."""
+    world.patch_state(schema_after_dump="0002")
+    r = world.run("start")
+    assert r.returncode == 3, r.stdout + r.stderr
+    j = world.journal()
+    assert j["phase"] == "aborted" and "after the backup" in j["error"]
+    assert world.head_tag() == "v0.1.0"
+    assert not any(c[:1] == ["compose"] and c[3:4] in (["stop"], ["up"]) for c in world.calls())
 
 
 def test_failures_inside_start_period_do_not_count(world: World):
@@ -423,11 +581,19 @@ def test_unhealthy_after_start_period_fails_before_the_deadline(world: World):
 # ── refusals: nothing changes ───────────────────────────────────────────────
 
 def test_backup_failure_aborts_before_the_switch(world: World):
-    r = world.run("start", extra_env={"STUB_BACKUP_RC": "1"})
+    """Sabotage (a): backup exits 1 → HEAD unchanged, no checkout, no switch."""
+    world.patch_state(dump_fail=True)
+    head = _git(world.inst, "rev-parse", "HEAD")
+    r = world.run("start")
     assert r.returncode == 3, r.stdout + r.stderr
-    assert world.journal()["phase"] == "aborted"
-    assert world.head_tag() == "v0.1.0"
+    j = world.journal()
+    assert j["phase"] == "aborted" and "backup failed" in j["error"]
+    assert not j["backup"].get("file")
+    assert _git(world.inst, "rev-parse", "HEAD") == head
+    assert world.head_tag() == "v0.1.0" and world.env_value("MC_IMAGE_TAG") == "0.1.0"
+    assert not any(e["phase"] == "switch" for e in j["events"])
     assert not any(c[3:] == ["stop", "mc-worker"] for c in world.calls() if c[:1] == ["compose"])
+    assert world.get_state()["drain"] is None
 
 
 def test_pull_failure_aborts_and_is_marked_network(world: World):
@@ -716,7 +882,8 @@ def test_cancel_in_any_phase_before_the_switch_is_honoured(world: World, phase: 
         world.patch_state(pull_sleep=30)
         extra = {}
     else:
-        extra = {"STUB_BACKUP_SLEEP": "1.5"}
+        world.patch_state(dump_sleep=1.5)
+        extra = {}
     t0 = time.monotonic()
     proc = _start_in_background(world, extra)
     try:
@@ -781,16 +948,50 @@ def test_gate_is_won_by_exactly_one_side(tmp_path: Path):
     assert sorted(p.name for p in (tmp_path / "a").iterdir()) == ["gate"]
 
 
-def test_rollback_of_a_done_run_with_a_new_schema_is_refused_untouched(world: World):
-    """The new version runs fine; the engine cannot restore the database yet
-    (R2, PR 2b) — so it refuses up front and leaves run and stack alone."""
+def test_rollback_of_a_done_run_with_a_new_schema_restores_its_backup(world: World):
+    """The manual "back to the previous version": the run's own pre-update
+    backup comes back (R2), then the old code."""
+    inode = (world.inst / ".env").stat().st_ino
     assert world.run("start").returncode == 0
+    assert world.get_state()["schema"] == "0002"
+    r = world.run("rollback")
+    assert r.returncode == 5, r.stdout + r.stderr
+    _assert_r2(world, r, inode)
+    assert "everything written since" in r.stdout
+
+
+def test_rollback_of_a_done_run_without_its_backup_is_refused_untouched(world: World):
+    assert world.run("start").returncode == 0
+    for f in world.backups.glob("mc_backup_preupdate_*"):
+        f.unlink()
     n = len(world.calls())
     r = world.run("rollback")
     assert r.returncode == 9, r.stdout + r.stderr
-    assert "backup.sh restore" in r.stderr
+    assert "is missing" in r.stderr
     assert world.journal()["phase"] == "done"
     assert world.head_tag() == "v0.2.0"
+    assert not any(c[:1] == ["compose"] and c[3:4] in (["stop"], ["up"]) for c in world.calls()[n:])
+
+
+def test_only_the_latest_update_can_be_undone(world: World):
+    """Undoing an older run would restore a database from before a newer
+    update and check out code that does not match it."""
+    assert world.run("start").returncode == 0
+    first = world.journal()["run_id"]
+    # A newer release and a second update on top.
+    _git(world.up, "commit", "-q", "--allow-empty", "-m", "v0.3.0")
+    _git(world.up, "tag", "v0.3.0")
+    world.release_json.write_text(json.dumps({"tag_name": "v0.3.0", "draft": False, "prerelease": False}))
+    s = world.get_state()
+    s["schema_for_tag"]["0.3.0"] = "0002"
+    world.set_state(s)
+    time.sleep(1.1)   # run ids and backup names carry the second
+    assert world.run("start").returncode == 0, world.journal()
+    n = len(world.calls())
+    r = world.run("rollback", "--run", first)
+    assert r.returncode == 9, r.stdout + r.stderr
+    assert "not the latest" in r.stderr
+    assert world.head_tag() == "v0.3.0"
     assert not any(c[:1] == ["compose"] and c[3:4] in (["stop"], ["up"]) for c in world.calls()[n:])
 
 
@@ -925,7 +1126,8 @@ def test_failure_while_preparing_the_way_back_aborts(world: World):
     """No copy of .env can be made → the switch never starts → aborted, not
     "rollback failed" (nothing was changed). The fake backup.sh locks .env
     right after the backup, i.e. between backup and switch."""
-    r = world.run("start", extra_env={"STUB_LOCK_ENV": "1"})
+    world.patch_state(lock_env_after_dump=True)
+    r = world.run("start")
     (world.inst / ".env").chmod(0o600)
     assert r.returncode == 3, r.stdout + r.stderr
     j = world.journal()
