@@ -1118,8 +1118,29 @@ async def _require_ssh_alive(host: Host) -> None:
         raise RecipeStartError(502, reason_host_unreachable(host.slug))
 
 
+async def _delete_member_rows(session: AsyncSession, runtime_id: uuid.UUID) -> None:
+    existing = (
+        await session.exec(select(RuntimeHost).where(RuntimeHost.runtime_id == runtime_id))
+    ).all()
+    for row in existing:
+        await session.delete(row)
+    await session.flush()
+
+
+async def _add_member_rows(
+    session: AsyncSession, runtime_id: uuid.UUID, head_id: uuid.UUID, worker_id: uuid.UUID
+) -> None:
+    session.add(RuntimeHost(runtime_id=runtime_id, host_id=head_id, role="head", node_rank=0))
+    session.add(RuntimeHost(runtime_id=runtime_id, host_id=worker_id, role="worker", node_rank=1))
+
+
 async def set_runtime_members(
-    session: AsyncSession, runtime: Runtime, head: Host, worker: Host
+    session: AsyncSession,
+    runtime: Runtime,
+    head: Host,
+    worker: Host,
+    *,
+    commit: bool = True,
 ) -> None:
     """Der Schreibpfad für ``runtime_hosts`` — idempotent.
 
@@ -1128,16 +1149,98 @@ async def set_runtime_members(
     weg, dann Head (rank 0) und Worker (rank 1) neu. Löschen-dann-schreiben
     statt Upsert, weil sonst der Wechsel der Worker-Box in die Unique-Regel
     (runtime_id, node_rank) liefe.
+
+    ``commit=False``: the caller commits — POST/PATCH /runtimes/db write the
+    runtime row and its membership in ONE transaction, so a failing member
+    write never leaves a half-written duo behind.
     """
-    existing = (
-        await session.exec(select(RuntimeHost).where(RuntimeHost.runtime_id == runtime.id))
-    ).all()
-    for row in existing:
-        await session.delete(row)
-    await session.flush()
-    session.add(RuntimeHost(runtime_id=runtime.id, host_id=head.id, role="head", node_rank=0))
-    session.add(RuntimeHost(runtime_id=runtime.id, host_id=worker.id, role="worker", node_rank=1))
-    await session.commit()
+    await _delete_member_rows(session, runtime.id)
+    await _add_member_rows(session, runtime.id, head.id, worker.id)
+    if commit:
+        await session.commit()
+
+
+async def clear_runtime_members(
+    session: AsyncSession, runtime: Runtime, *, commit: bool = True
+) -> None:
+    """Demote a duo to solo: drop every ``runtime_hosts`` row of this runtime.
+
+    Same table, same single write module as :func:`set_runtime_members`.
+    Without it a duo PATCHed to ``nodes: 1`` kept its worker row — the worker
+    box stayed "in use" forever and restart still drove it as a duo.
+    """
+    await _delete_member_rows(session, runtime.id)
+    if commit:
+        await session.commit()
+
+
+async def recorded_worker_id(session: AsyncSession, runtime_id: uuid.UUID) -> uuid.UUID | None:
+    """The worker box ``runtime_hosts`` holds for this runtime, if any."""
+    row = (
+        await session.exec(
+            select(RuntimeHost).where(
+                RuntimeHost.runtime_id == runtime_id, RuntimeHost.role == "worker"
+            )
+        )
+    ).first()
+    return row.host_id if row is not None else None
+
+
+def reason_duo_role_conflict(box_slug: str, other_runtime: str) -> str:
+    return (
+        f"Box '{box_slug}' would be head in one duo and worker in another "
+        f"('{other_runtime}') — two duos in opposite directions evict each "
+        f"other on every start. Use the same head/worker direction."
+    )
+
+
+async def check_duo_pair(
+    session: AsyncSession, runtime: Runtime, head: Host, worker: Host
+) -> None:
+    """May ``worker`` be this duo's second box? Same rule as the recipe start.
+
+    For the DB-CRUD path (POST/PATCH /runtimes/db). Two checks, no new rule:
+
+    1. **The recipe-start candidate rule** — :func:`duo_worker_candidates`
+       (SSH-capable, not the head, not held by a foreign RUNNING exclusive
+       instance). Only the instances that could actually block the worker box
+       are probed — a CRUD write should not probe the whole fleet.
+    2. **One direction per pair** — a box that is the head of one duo must
+       not be the worker of another (and vice versa). Two duos on the same
+       pair in the same direction stay allowed (live: two recipes on one
+       head→worker pair). Opposite directions make every start of one evict
+       the other on both boxes — the watcher's autostart then flaps them.
+
+    Raises :class:`RecipeStartError` (409) with one sentence.
+    """
+    recipes, hosts, runtimes, members = await _load_fleet(session)
+    others = [rt for rt in runtimes if rt.id != runtime.id]
+
+    for rt in others:
+        worker_ids = {m.host_id for m in members.get(rt.id, []) if m.role == "worker"}
+        if not worker_ids:
+            continue
+        if rt.host_id == worker.id:
+            raise RecipeStartError(409, reason_duo_role_conflict(worker.slug, rt.slug))
+        if head.id in worker_ids:
+            raise RecipeStartError(409, reason_duo_role_conflict(head.slug, rt.slug))
+
+    resolved_by_host_id = {h.id: resolved_host_from_row(h) for h in hosts if host_can_ssh(h)}
+    could_block = [
+        rt
+        for rt in others
+        if rt.exclusive_memory
+        and rt.host_id != head.id
+        and worker.id in runtime_host_ids(rt, members)
+    ]
+    probes = await asyncio.gather(
+        *(probe_running(rt, host=resolved_by_host_id.get(rt.host_id)) for rt in could_block),
+        return_exceptions=True,
+    )
+    running_by_id = {rt.id: (result is True) for rt, result in zip(could_block, probes)}
+    state = FleetState(recipes, hosts, runtimes, members, running_by_id)
+    if not any(c["host_id"] == str(worker.id) for c in duo_worker_candidates(state, head, runtime)):
+        raise RecipeStartError(409, reason_worker_not_free(worker.slug))
 
 
 async def start_recipe_on_host(

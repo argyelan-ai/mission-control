@@ -1137,70 +1137,112 @@ async def _member_hosts_payload(session: AsyncSession, rt: Runtime) -> list[dict
     return out
 
 
-async def _validate_duo_topology(
-    session: AsyncSession, rt: Runtime
-) -> tuple[Host, Host] | None:
-    """Validate ``rt.topology`` for a duo (PR G) — called BEFORE the row is
-    committed, so a 422 here never leaves a half-written runtime behind.
+#: 422 detail for a duo PATCH/POST with no worker box anywhere — names both
+#: ways out (critic finding 19.10.2026: the bare "requires worker_host_id"
+#: left recipe-built rows without a hint).
+DUO_NEEDS_WORKER = (
+    "topology.nodes 2 needs a worker box: set topology.worker_host_id, or start "
+    "the duo via POST /api/v1/hosts/{head_id}/recipes/{recipe_slug}/start "
+    "(it picks a free worker and records it). See ADR-077."
+)
 
-    Mirrors what ``recipe_switcher.start_recipe_on_host`` already does for
-    the sparkrun recipe-switch path (ADR-077 Regel 5): a runtime whose
-    ``topology.nodes >= 2`` needs both a head (``rt.host_id``) and a worker
-    (``topology.worker_host_id``) recorded in ``runtime_hosts`` — without
-    this, a duo created or edited directly via POST/PATCH /runtimes/db never
-    got a worker row, so the worker host never showed as occupied (Mark,
-    19.10.2026: "Head UND Worker müssen das Modell zeigen").
 
-    Returns ``(head, worker)`` when this runtime is a duo that needs its
-    membership written, or ``None`` for ``topology.nodes < 2`` (the
-    overwhelming majority, including every runtime that predates this
-    field) — a deliberate no-op that never touches ``runtime_hosts``. Also
-    does NOT clear member rows when nodes drops back to 1 — demoting a duo
-    to solo is a separate, deliberate decision with its own UI, not a
-    side-effect of an unrelated PATCH.
+def _duo_nodes(topology: dict) -> int:
+    """``topology.nodes`` as a strict int in {1, 2} — 422 for anything else.
+
+    Strict on purpose: "zwei", null, -5, true or 2.9 used to fall back to solo
+    silently and drop a given worker_host_id; nodes=3 was stored with a single
+    worker. There is one worker field, so a duo is the largest topology this
+    endpoint can record.
     """
-    topology = rt.topology if isinstance(rt.topology, dict) else {}
-    try:
-        nodes = int(topology.get("nodes", 1) or 1)
-    except (TypeError, ValueError):
-        nodes = 1
-    if nodes < 2:
-        return None
-
-    worker_host_id = topology.get("worker_host_id")
-    if not worker_host_id:
+    if "nodes" not in topology:
+        return 1
+    nodes = topology["nodes"]
+    if isinstance(nodes, bool) or not isinstance(nodes, int) or nodes < 1:
+        raise HTTPException(
+            status_code=422,
+            detail=f"topology.nodes must be 1 (solo) or 2 (duo), got {nodes!r}",
+        )
+    if nodes > 2:
         raise HTTPException(
             status_code=422,
             detail=(
-                "topology.nodes >= 2 requires topology.worker_host_id — a duo "
-                "needs both a head and a worker host, see ADR-077."
+                f"topology.nodes={nodes} is not supported here — one worker box "
+                "(topology.worker_host_id) means at most 2 nodes"
             ),
         )
-    try:
-        worker_uuid = uuid.UUID(str(worker_host_id))
-    except ValueError:
+    return nodes
+
+
+async def _plan_duo_membership(
+    session: AsyncSession, rt: Runtime
+) -> tuple[str, Host | None, Host | None]:
+    """Decide what ``runtime_hosts`` must hold for ``rt`` after this write (PR G).
+
+    Called BEFORE the commit, so a 4xx here never leaves a half-written
+    runtime behind. Returns one of:
+
+    * ``("set", head, worker)`` — a duo (``topology.nodes == 2``): head is
+      ``rt.host_id``, worker is ``topology.worker_host_id`` or, for a
+      recipe-built row without that key, the worker ``runtime_hosts``
+      already records.
+    * ``("clear", None, None)`` — solo: any member rows of this runtime go
+      (demoting a duo must free its worker box).
+
+    The worker must pass the same rule as the recipe start
+    (``recipe_switcher.check_duo_pair`` → ``duo_worker_candidates``) — no
+    second, looser validator on a table that drives eviction on the worker
+    box. This makes the DB and the "in use" display true; it does not write
+    the recipe's .env on the head — POST /hosts/{id}/recipes/{slug}/start
+    stays the canonical way to start a duo.
+    """
+    topology = rt.topology if isinstance(rt.topology, dict) else {}
+    nodes = _duo_nodes(topology)
+    worker_host_id = topology.get("worker_host_id")
+    if nodes < 2:
+        if worker_host_id:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "topology.worker_host_id is set but topology.nodes is 1 — "
+                    "set nodes to 2 for a duo, or drop worker_host_id"
+                ),
+            )
+        return ("clear", None, None)
+
+    if rt.host_id is None:
         raise HTTPException(
             status_code=422,
-            detail=f"topology.worker_host_id '{worker_host_id}' is not a valid host id",
+            detail=(
+                "topology.nodes 2 requires the runtime's own host_id (the head) — "
+                "to unbind a duo, set topology.nodes to 1 first"
+            ),
         )
+    if worker_host_id:
+        try:
+            worker_uuid = uuid.UUID(str(worker_host_id))
+        except ValueError:
+            raise HTTPException(
+                status_code=422,
+                detail=f"topology.worker_host_id '{worker_host_id}' is not a valid host id",
+            )
+    else:
+        worker_uuid = await recipe_switcher.recorded_worker_id(session, rt.id)
+        if worker_uuid is None:
+            raise HTTPException(status_code=422, detail=DUO_NEEDS_WORKER)
     worker = await session.get(Host, worker_uuid)
     if worker is None:
         raise HTTPException(
             status_code=422,
             detail=(
-                f"topology.worker_host_id {worker_host_id} does not point to a "
+                f"topology.worker_host_id {worker_uuid} does not point to a "
                 "registered host (GET /api/v1/hosts)"
             ),
-        )
-    if rt.host_id is None:
-        raise HTTPException(
-            status_code=422,
-            detail="topology.nodes >= 2 requires the runtime's own host_id (the head)",
         )
     if rt.host_id == worker.id:
         raise HTTPException(
             status_code=422,
-            detail="topology.worker_host_id must differ from the runtime's own host_id (head)",
+            detail="the worker box must differ from the runtime's own host_id (head)",
         )
     head = await session.get(Host, rt.host_id)
     if head is None:
@@ -1208,7 +1250,22 @@ async def _validate_duo_topology(
             status_code=422,
             detail=f"runtime head host_id {rt.host_id} does not point to a registered host",
         )
-    return head, worker
+    try:
+        await recipe_switcher.check_duo_pair(session, rt, head, worker)
+    except recipe_switcher.RecipeStartError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
+    return ("set", head, worker)
+
+
+async def _apply_duo_membership(
+    session: AsyncSession, rt: Runtime, plan: tuple[str, Host | None, Host | None]
+) -> None:
+    """Stage the planned membership in the caller's transaction (no commit)."""
+    action, head, worker = plan
+    if action == "set":
+        await recipe_switcher.set_runtime_members(session, rt, head, worker, commit=False)
+    else:
+        await recipe_switcher.clear_runtime_members(session, rt, commit=False)
 
 
 async def _runtime_row_response(session: AsyncSession, rt: Runtime) -> dict:
@@ -1222,7 +1279,7 @@ async def _runtime_row_response(session: AsyncSession, rt: Runtime) -> dict:
 
     ``member_hosts`` (PR G) gives GET /runtimes parity: a caller that just
     created/patched a duo runtime via this endpoint can see the worker row
-    ``_validate_duo_topology`` + ``recipe_switcher.set_runtime_members``
+    ``_plan_duo_membership`` + ``recipe_switcher.set_runtime_members``
     wrote, in the same response, without a second GET /runtimes round trip.
     """
     host = await resolve_host_for_runtime(session, rt)
@@ -1250,13 +1307,14 @@ async def create_runtime_db(
         await _validate_host_id(session, body.host_id)
     rt = Runtime(**body.model_dump())
     _require_launch_command(rt)
-    duo_hosts = await _validate_duo_topology(session, rt)
+    duo_plan = await _plan_duo_membership(session, rt)
     session.add(rt)
+    if duo_plan[0] == "set":
+        # One transaction: the runtime row and its members commit together.
+        await session.flush()
+        await _apply_duo_membership(session, rt, duo_plan)
     await session.commit()
     await session.refresh(rt)
-    if duo_hosts is not None:
-        head, worker = duo_hosts
-        await recipe_switcher.set_runtime_members(session, rt, head, worker)
     return await _runtime_row_response(session, rt)
 
 
@@ -1296,20 +1354,22 @@ async def update_runtime_db(
         rt.api_key_secret_id = body.api_key_secret_id
     if body.model_fields_set & _LAUNCH_COMMAND_RULE_FIELDS:
         _require_launch_command(rt)
-    # Validate BEFORE commit (same reasoning as create_runtime_db): a 422 here
-    # must not leave an otherwise-valid PATCH half-committed.
-    duo_hosts = (
-        await _validate_duo_topology(session, rt)
-        if "topology" in body.model_fields_set
+    # Validate BEFORE commit (same reasoning as create_runtime_db): a 4xx here
+    # must not leave an otherwise-valid PATCH half-committed. host_id counts
+    # too: moving a duo's head must move its head row (and must not land on
+    # the worker box), or runtime_hosts keeps pointing at the old box.
+    duo_plan = (
+        await _plan_duo_membership(session, rt)
+        if {"topology", "host_id"} & body.model_fields_set
         else None
     )
     rt.updated_at = datetime.now(timezone.utc)
     session.add(rt)
+    if duo_plan is not None:
+        await session.flush()
+        await _apply_duo_membership(session, rt, duo_plan)
     await session.commit()
     await session.refresh(rt)
-    if duo_hosts is not None:
-        head, worker = duo_hosts
-        await recipe_switcher.set_runtime_members(session, rt, head, worker)
 
     # Name-vs-model honesty (the display_name_drift helper from #183, until now
     # only exercised by the migration that introduced it). `qwen-general` was
