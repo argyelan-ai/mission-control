@@ -20,12 +20,15 @@ import {
 import Link from "next/link";
 import { api } from "@/lib/api";
 import { C, STATUS, STATUS_TEXT, alpha } from "@/lib/colors";
-import type { Runtime, RuntimeLiveStatus } from "@/lib/types";
+import type { ConfigCheckItem, Runtime, RuntimeLiveStatus } from "@/lib/types";
 import { SlideOverPanel } from "@/components/shared/SlideOverPanel";
 import { BindAgentModal } from "@/components/shared/BindAgentModal";
 import { HostRecipeSwitcher } from "@/components/shared/HostRecipeSwitcher";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 import { MetaChip } from "@/components/shared/ListRow";
+import { CheckReason } from "@/components/shared/CheckStatus";
+import { StatusDot } from "@/components/shared/StatusDot";
+import { refreshChecks } from "@/lib/configChecks";
 import { panelCapabilities } from "./grouping";
 import { ContextSettingsPanel, loadStoredCtx } from "./ContextSettings";
 import { AutostartToggle } from "./AutostartToggle";
@@ -370,6 +373,10 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
   const tSlot = useTranslations("runtimes.slot");
   const queryClient = useQueryClient();
   const [actionMsg, setActionMsg] = useState<string | null>(null);
+  // A failed re-probe: the stored check, worded from its reason code. The
+  // probe keeps the last known model id when nothing answers, so the
+  // "unchanged" line alone would read as healthy.
+  const [probeCheck, setProbeCheck] = useState<ConfigCheckItem | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   const caps = panelCapabilities(runtime);
@@ -427,6 +434,13 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
   const probeMutation = useMutation({
     mutationFn: () => api.runtimes.probeModel(runtime.id),
     onSuccess: (data) => {
+      void refreshChecks(queryClient);
+      if (data.check?.state === "fail") {
+        setActionMsg(null);
+        setProbeCheck(data.check);
+        return;
+      }
+      setProbeCheck(null);
       const msg = data.changed
         ? t("modelChanged", { old: data.old_model_identifier ?? "—", new: data.new_model_identifier ?? "—" })
         : t("modelUnchanged", { model: data.new_model_identifier ?? "—" });
@@ -434,7 +448,10 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
       queryClient.invalidateQueries({ queryKey: ["runtimes"] });
       queryClient.invalidateQueries({ queryKey: ["agents"] });
     },
-    onError: () => setActionMsg(t("probeFailed")),
+    onError: () => {
+      setProbeCheck(null);
+      setActionMsg(t("probeFailed"));
+    },
   });
 
   const isMutating =
@@ -688,6 +705,20 @@ function RuntimeDetailBody({ runtime, live }: { runtime: Runtime; live?: Runtime
       )}
 
       {/* Mutation feedback */}
+      {probeCheck && (
+        <div
+          role="status"
+          className="text-xs mx-4 mb-3 px-3 py-2 rounded-lg flex items-start gap-2"
+          style={{
+            background: C.accentSubtle,
+            border: `1px solid ${C.borderAccent}`,
+            color: C.textSecondary,
+          }}
+        >
+          <StatusDot status="error" size="sm" className="mt-1" />
+          <CheckReason item={probeCheck} testId="runtime-probe-reason" />
+        </div>
+      )}
       {actionMsg && (
         <div
           className="text-xs mx-4 mb-3 px-3 py-2 rounded-lg"

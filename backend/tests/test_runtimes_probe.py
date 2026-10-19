@@ -102,6 +102,54 @@ async def test_probe_model_unchanged(async_session, auth_client):
     assert rt.model_identifier == "glm-5.1"
 
 
+# ── Test 2b: the model is gone → the answer says so, not "unchanged" ─────
+#
+# Found by the first-run journey (sabotage "model gone"): with the endpoint
+# down, the probe kept the old model id and the panel said "Model unchanged:
+# <old id>". The answer now carries the stored check, so the UI can say "no
+# chat model answers at this endpoint" instead.
+
+
+@pytest.mark.asyncio
+async def test_probe_model_reports_a_gone_model(async_session, auth_client):
+    rt = await _mk_rt(
+        async_session,
+        slug="stub-gone",
+        runtime_type="openai_compatible",
+        model_identifier="stub-model",
+    )
+
+    async def nothing(_runtime):
+        return None  # endpoint down: no /models answer
+
+    with patch("app.services.agent_runtime_switch.probe_runtime_model", side_effect=nothing):
+        resp = await auth_client.post(f"/api/v1/runtimes/{rt.slug}/probe-model")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["changed"] is False
+    assert body["check"]["state"] == "fail"
+    assert body["check"]["reason"] == "no_model"
+    # The last known model is kept (an agent may still be bound to it).
+    await async_session.refresh(rt)
+    assert rt.model_identifier == "stub-model"
+
+
+@pytest.mark.asyncio
+async def test_probe_model_answer_carries_the_passing_check(async_session, auth_client):
+    rt = await _mk_rt(
+        async_session, slug="stub-up", runtime_type="openai_compatible", model_identifier=None
+    )
+    with patch(
+        "app.services.agent_runtime_switch.probe_runtime_model",
+        side_effect=lambda _r: "stub-model",
+    ):
+        body = (await auth_client.post(f"/api/v1/runtimes/{rt.slug}/probe-model")).json()
+    assert body["changed"] is True
+    assert body["check"]["state"] == "ok"
+    assert body["check"]["reason"] == "ok"
+
+
 # ── Test 3: Non-probeable runtime_type → 422 ────────────────────────────
 
 

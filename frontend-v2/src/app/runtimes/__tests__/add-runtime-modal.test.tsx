@@ -62,6 +62,34 @@ describe("AddRuntimeModal", () => {
     expect(screen.queryByRole("button", { name: /add runtime/i })).toBeNull();
   });
 
+  // Found by the first-run journey (sabotage "model gone"): the line was the
+  // raw client error ("[Errno -2] Name does not resolve") in English only.
+  // Now it says what happened in the UI language; the raw text stays as a
+  // muted detail for whoever debugs it.
+  it("unreachable: worded line first, the raw error only as a detail", async () => {
+    vi.spyOn(api.runtimes, "probeEndpoint").mockResolvedValue({
+      reachable: false, models: [], detected_type: null, suggested_model: null,
+      error: "[Errno -2] Name does not resolve",
+    });
+    renderWithQuery(<AddRuntimeModal open={true} onClose={vi.fn()} />);
+    await userEvent.type(screen.getByLabelText("Endpoint URL"), "http://stub-model:8080/v1");
+    await userEvent.click(screen.getByRole("button", { name: /probe/i }));
+
+    const line = await screen.findByTestId("add-runtime-unreachable");
+    expect(line).toHaveTextContent(/^Endpoint unreachable\./);
+    expect(screen.getByTestId("add-runtime-unreachable-detail")).toHaveTextContent(
+      "[Errno -2] Name does not resolve",
+    );
+  });
+
+  it("is a labelled dialog with a labelled URL field and close button", () => {
+    renderWithQuery(<AddRuntimeModal open={true} onClose={vi.fn()} />);
+    const dialog = screen.getByRole("dialog", { name: "Add runtime" });
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    expect(screen.getByLabelText("Endpoint URL")).toHaveAttribute("type", "text");
+    expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
+  });
+
   it("calls create with the right body when confirming", async () => {
     const probeResult: ProbeEndpointResult = {
       reachable: true,
