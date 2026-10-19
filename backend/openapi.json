@@ -15,6 +15,15 @@
         ]
       }
     },
+    "/api/v1/activity/proof-gate/stats": {
+      "get": {
+        "operationId": "proof_gate_stats_api_v1_activity_proof_gate_stats_get",
+        "summary": "Proof Gate Stats",
+        "tags": [
+          "activity"
+        ]
+      }
+    },
     "/api/v1/activity/stream": {
       "get": {
         "operationId": "stream_activity_api_v1_activity_stream_get",
