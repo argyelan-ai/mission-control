@@ -727,7 +727,8 @@ class WatchAnchor(BaseModel):
         if not device_state_service.valid_anchor_name(v):
             raise ValueError(
                 f"name: 1..{device_state_service.ANCHOR_NAME_MAX} Zeichen aus "
-                "[A-Za-z0-9_.-], erstes Zeichen Buchstabe oder Ziffer"
+                "[A-Za-z0-9_.-], erstes Zeichen Buchstabe oder Ziffer, kein "
+                "Allerwelts-Name (bash, python3, dockerd …)"
             )
         return v
 

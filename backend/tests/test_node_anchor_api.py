@@ -169,7 +169,11 @@ def test_limits_match_the_agent():
     assert typing.get_args(WatchAnchor.model_fields["kind"].annotation) == ds.ANCHOR_KINDS
     assert mod.ANCHOR_NAME_MAX == ds.ANCHOR_NAME_MAX
     assert mod.ANCHOR_NAME_CHARS == ds.ANCHOR_NAME_CHARS
-    for name in ("glm-head", "a.b_c-1", "-x", "x y", "a" * 65, "", "../e", "x;y", "ä"):
+    assert mod.ANCHOR_NAME_DENY == ds.ANCHOR_NAME_DENY
+    for name in (
+        "glm-head", "a.b_c-1", "-x", "x y", "a" * 65, "", "../e", "x;y", "ä",
+        "bash", "python3", "python3.12", "DOCKERD", "sshd", "python-engine",
+    ):
         assert mod.valid_anchor_name(name) == ds.valid_anchor_name(name), name
 
 
@@ -190,3 +194,90 @@ async def test_endpoint_flow_running_then_stale(client, auth_client):
     await _age_last_seen(host_id)
     later = utcnow() + timedelta(seconds=ds.STALE_AFTER_S + 5)
     assert ds.anchor_status(dev["device_state"], reported, "container", "glm-head", now=later) == "unknown"
+
+
+# ── handle_status: one generic handle, both kinds, OR (critic finding 2) ─────
+#
+# MC's handle contract (runtime_manager._ssh_handle_names / anchor_running):
+# process_name is a process OR a container name; each handle is checked both
+# ways, one hit is enough. handle_status gives the device_state reader the
+# same rule, so it never becomes a second liveness truth.
+
+
+def _both(name, container, process):
+    return [
+        {"kind": "container", "name": name, "state": container},
+        {"kind": "process", "name": name, "state": process},
+    ]
+
+
+def test_handle_live_shape_container_runs_process_argv_differs():
+    # Live shape: handle = container name; the real process is called
+    # something else, so the process anchor reads stopped.
+    cur = _current(*_both("dsv-duo-tf", "running", "stopped"))
+    assert ds.handle_status(cur, utcnow(), ["dsv-duo-tf"]) == "running"
+
+
+def test_handle_process_runs_without_container():
+    cur = _current(*_both("llama-server", "stopped", "running"))
+    assert ds.handle_status(cur, utcnow(), ["llama-server"]) == "running"
+
+
+def test_handle_stopped_only_if_every_lookup_says_stopped():
+    cur = _current(*_both("h1", "stopped", "stopped"), *_both("h2", "stopped", "stopped"))
+    assert ds.handle_status(cur, utcnow(), ["h1", "h2"]) == "stopped"
+
+
+def test_handle_unknown_beats_stopped():
+    cur = _current(
+        {"kind": "container", "name": "h1", "state": "unknown", "reason": "docker_no_access"},
+        {"kind": "process", "name": "h1", "state": "stopped"},
+    )
+    assert ds.handle_status(cur, utcnow(), ["h1"]) == "unknown"
+
+
+def test_handle_one_kind_missing_is_unknown_not_stopped():
+    # Writer only put one kind into watch: the other lookup is missing, so
+    # "stopped" would be a guess.
+    cur = _current({"kind": "process", "name": "h1", "state": "stopped"})
+    assert ds.handle_status(cur, utcnow(), ["h1"]) == "unknown"
+
+
+def test_handle_running_wins_over_unknown_elsewhere():
+    cur = _current(
+        {"kind": "container", "name": "h1", "state": "unknown"},
+        {"kind": "process", "name": "h1", "state": "running"},
+    )
+    assert ds.handle_status(cur, utcnow(), ["h1", "h2"]) == "running"
+
+
+def test_handle_stale_report_is_unknown_even_if_running():
+    cur = _current(*_both("h1", "running", "running"))
+    old = utcnow() - timedelta(seconds=ds.STALE_AFTER_S + 1)
+    assert ds.handle_status(cur, old, ["h1"]) == "unknown"
+
+
+def test_handle_without_names_is_unknown():
+    cur = _current(*_both("h1", "stopped", "stopped"))
+    assert ds.handle_status(cur, utcnow(), []) == "unknown"
+    assert ds.handle_status(cur, utcnow(), ["", "  "]) == "unknown"
+
+
+def test_handle_watch_entries_cover_both_kinds():
+    """Helper for the writer (PR 6): every generic handle goes into watch
+    as container AND process."""
+    assert ds.handle_watch_entries(["dsv-duo-tf", "dsv-duo-tf", "", "llama-server"]) == [
+        {"kind": "container", "name": "dsv-duo-tf"},
+        {"kind": "process", "name": "dsv-duo-tf"},
+        {"kind": "container", "name": "llama-server"},
+        {"kind": "process", "name": "llama-server"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_put_rejects_generic_process_name(auth_client, client):
+    _token, host_id = await _pair(client, auth_client)
+    r = await auth_client.put(
+        f"/api/v1/nodes/{host_id}/device-state", json={"watch": [{"kind": "process", "name": "python3"}]}
+    )
+    assert r.status_code == 422, r.text

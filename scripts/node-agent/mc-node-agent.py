@@ -159,6 +159,11 @@ gesagt: Docker-Gruppe heisst root-Macht auf der Box — der Agent nutzt davon
 nur den einen Lese-Aufruf. Fehlt das Recht, meldet der Agent `docker:
 no_access` und jeder Container-Anker ist "unknown" — nie "running".
 Prozess-Anker funktionieren weiter (Rückfallweg ohne Docker-Recht).
+Prozess-Treffer: die Kommandozeile IST das Programm (auch hinter
+Interpreter-Optionen, `python -m`, setproctitle, `uv run`) oder der
+Kernel-Name passt exakt (Regel von `pgrep -x`). /proc wird pro Runde einmal
+gelesen. Namen, die auf jeder Box laufen (bash, python3, dockerd …), lehnt
+der Agent ab.
 Ausnahme: /proc mit `hidepid` versteckt fremde Prozesse; dann wirkt ein
 Prozess-Anker "stopped".
 """
@@ -236,6 +241,16 @@ ANCHOR_NAME_MAX = 64
 # oder Ziffer. Kein Leerzeichen, kein `/`, kein `;` — ein Name landet zwar nie
 # in einer Shell, aber eine strenge Liste macht jede spätere Verwendung sicher.
 ANCHOR_NAME_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-"
+# Namen, die auf JEDER Box laufen (Shells, Interpreter, Dienste). Ein Anker mit
+# so einem Namen hiesse "running" für immer — genau das falsche "running", das
+# ADR-096 verbietet. Vergleich ohne Gross/Klein und ohne Versionsendung
+# (`Python3.12` → `python`). IDENTISCH zum Backend (Paritätstest).
+ANCHOR_NAME_DENY = frozenset((
+    "sh", "bash", "dash", "zsh", "ash", "fish", "python", "node", "perl", "ruby", "java",
+    "env", "sudo", "su", "uv", "uvx", "tmux", "screen", "init", "systemd", "cron",
+    "docker", "dockerd", "containerd", "containerd-shim",
+    "runc", "ssh", "sshd", "tailscaled", "nvidia-smi", "containerd-shim-runc-v2",
+))
 DOCKER_SOCKET = "/var/run/docker.sock"
 DOCKER_TIMEOUT_S = 3
 PROC_ROOT = "/proc"
@@ -976,12 +991,16 @@ def collect_device_state(
 
 def valid_anchor_name(name: object) -> bool:
     """Name eines Ankers: 1..ANCHOR_NAME_MAX Zeichen aus ANCHOR_NAME_CHARS,
-    erstes Zeichen Buchstabe/Ziffer. Ohne `re` (Speicher-Diät)."""
+    erstes Zeichen Buchstabe/Ziffer, nicht in ANCHOR_NAME_DENY. Ohne `re`
+    (Speicher-Diät)."""
     if not isinstance(name, str) or not (1 <= len(name) <= ANCHOR_NAME_MAX):
         return False
     if name[0] in "_.-":
         return False
-    return all(ch in ANCHOR_NAME_CHARS for ch in name)
+    if not all(ch in ANCHOR_NAME_CHARS for ch in name):
+        return False
+    lowered = name.lower()
+    return lowered not in ANCHOR_NAME_DENY and lowered.rstrip("0123456789.") not in ANCHOR_NAME_DENY
 
 
 def parse_watch(desired: object) -> tuple[list[dict], list[str]]:
@@ -1100,51 +1119,152 @@ def _is_python(argv0: str) -> bool:
     return base == "python" or base.startswith("python3") or base.startswith("python2")
 
 
-def _argv_matches(argv: list[str], name: str) -> bool:
+# Optionen von `uv run` / `uvx`, die einen Wert nehmen (`--with vllm` heisst
+# NICHT, dass vllm läuft). Unbekannte Optionen gelten als Schalter ohne Wert.
+_UV_OPTS_WITH_VALUE = frozenset((
+    "--with", "-w", "--with-editable", "--with-requirements", "--python", "-p",
+    "--project", "--directory", "--env-file", "--extra", "--group", "--package",
+    "--index", "--index-url", "--extra-index-url", "--from", "--script",
+))
+# Prozess-Namen im Kernel (/proc/<pid>/comm) sind auf 15 Zeichen gekürzt.
+COMM_MAX = 15
+
+
+def _python_target(args: list[str]) -> tuple[str, str] | None:
+    """Was startet `python3 <args>`? ("script", pfad) / ("module", name) / None.
+
+    Überspringt Interpreter-Optionen (`-u`, `-O`, `-B`, `-X utf8`, `-Xutf8`,
+    `-W ignore`, Bündel wie `-uB`). `-c` ist Code, kein Programm → None.
+    """
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--":
+            return ("script", args[i + 1]) if i + 1 < len(args) else None
+        if arg == "-":
+            return None  # Programm von stdin
+        if not arg.startswith("-"):
+            return ("script", arg)
+        if arg.startswith("--"):
+            i += 2 if arg == "--check-hash-based-pycs" else 1
+            continue
+        flags = arg[1:]
+        for j, flag in enumerate(flags):
+            if flag in "XW":
+                if j + 1 == len(flags):
+                    i += 1  # Wert steht im nächsten Argument
+                break
+            if flag == "c":
+                return None
+            if flag == "m":
+                rest = flags[j + 1:]
+                if rest:
+                    return ("module", rest)
+                return ("module", args[i + 1]) if i + 1 < len(args) else None
+        i += 1
+    return None
+
+
+def _uv_command(args: list[str]) -> list[str]:
+    """Das Programm hinter `uv run …` / `uvx …` (ohne uv-Optionen)."""
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--":
+            return args[i + 1:]
+        if not arg.startswith("-"):
+            return args[i:]
+        i += 2 if arg in _UV_OPTS_WITH_VALUE else 1
+    return []
+
+
+def _argv_matches(argv: list[str], name: str, _depth: int = 0) -> bool:
     """Ist das DIESES Programm — nicht nur ein Prozess, der den Namen als
     Argument trägt (`grep vllm`, `docker logs vllm`, `tail -f …/vllm`)?
 
     Treffer nur bei:
-      - Programmname (argv[0], ohne Pfad) == name
-      - Python-Einstiegsskript: `python3 /…/vllm serve` → argv[1] ohne Pfad
-      - Python-Modul: `python3 -m sglang.launch_server` → argv[2]
+      - Programmname (argv[0], ohne Pfad) == name. Hat argv[0] Leerzeichen
+        (setproctitle: `vllm serve /model` als EIN String), zählt das erste Wort.
+      - Python-Einstiegsskript: `python3 [-u|-X utf8|…] /…/vllm serve`
+      - Python-Modul: `python3 [Optionen] -m sglang.launch_server`
+      - Starter `uv run [Optionen] <programm>` / `uvx <programm>`: das Programm
+        dahinter wird mit denselben Regeln geprüft.
     """
-    if not argv:
+    if not argv or _depth > 2:
         return False
-    if os.path.basename(argv[0]) == name:
+    head = argv[0].split()[0] if argv[0].strip() else ""
+    base = os.path.basename(head)
+    if base == name:
         return True
-    if _is_python(argv[0]) and len(argv) > 1:
-        if argv[1] == "-m":
-            return len(argv) > 2 and argv[2] == name
-        if not argv[1].startswith("-") and os.path.basename(argv[1]) == name:
-            return True
+    if _is_python(head):
+        target = _python_target(argv[1:])
+        if target is None:
+            return False
+        kind, value = target
+        return value == name if kind == "module" else os.path.basename(value) == name
+    if base == "uv" and len(argv) > 1 and argv[1] == "run":
+        return _argv_matches(_uv_command(argv[2:]), name, _depth + 1)
+    if base == "uvx":
+        return _argv_matches(_uv_command(argv[1:]), name, _depth + 1)
     return False
 
 
-def process_running(name: str, proc_root: str = PROC_ROOT) -> bool | None:
-    """Läuft ein Prozess mit genau diesem Programmnamen? Über /proc, ohne fork.
+def processes_running(names: list[str], proc_root: str = PROC_ROOT) -> set[str] | None:
+    """Welche dieser Programmnamen laufen? EIN Durchgang durch /proc pro Runde,
+    egal wie viele Prozess-Anker (der Dienst läuft mit CPUQuota/MemoryHigh).
+
+    Treffer, wenn
+      - die Kommandozeile das Programm IST (_argv_matches), oder
+      - der Kernel-Name /proc/<pid>/comm exakt == name ist — dieselbe Regel
+        wie `pgrep -x` in MCs Lebenszyklus (runtime_manager). Wie dort zählt
+        das nur für Namen bis 15 Zeichen: comm ist gekürzt, ein längerer Name
+        über comm wäre ein Präfix-Raten.
 
     Prozesse in Containern sind von der Box aus in /proc sichtbar — deshalb
     funktioniert ein Prozess-Anker auch ohne Docker-Leserecht. Der eigene
     Prozess wird übersprungen. None = /proc nicht lesbar (dann "unknown",
     nicht "stopped")."""
+    wanted = set(names)
+    if not wanted:
+        return set()
+    short = {n for n in wanted if len(n) <= COMM_MAX}
     self_pid = str(os.getpid())
     try:
         pids = os.listdir(proc_root)
     except OSError:
         return None
+    found: set[str] = set()
     for pid in pids:
         if not pid.isdigit() or pid == self_pid:
             continue
+        pid_dir = os.path.join(proc_root, pid)
+        if short - found:
+            try:
+                with open(os.path.join(pid_dir, "comm"), "rb") as f:
+                    comm = f.read(64).decode("utf-8", "replace").rstrip("\n")
+            except OSError:
+                comm = ""
+            if comm in short:
+                found.add(comm)
+        open_names = wanted - found
+        if not open_names:
+            break
         try:
-            with open(os.path.join(proc_root, pid, "cmdline"), "rb") as f:
+            with open(os.path.join(pid_dir, "cmdline"), "rb") as f:
                 raw = f.read(4096)
         except OSError:
             continue  # Prozess ist weg oder gehört jemand anderem
         argv = [a.decode("utf-8", "replace") for a in raw.split(b"\0") if a]
-        if _argv_matches(argv, name):
-            return True
-    return False
+        for name in open_names:
+            if _argv_matches(argv, name):
+                found.add(name)
+    return found
+
+
+def process_running(name: str, proc_root: str = PROC_ROOT) -> bool | None:
+    """Ein einzelner Name — siehe processes_running()."""
+    found = processes_running([name], proc_root=proc_root)
+    return None if found is None else name in found
 
 
 def collect_anchors(
@@ -1165,6 +1285,8 @@ def collect_anchors(
     if container_names:
         docker_status, running = read_docker_running(container_names, socket_path=socket_path)
         out["docker"] = docker_status
+    process_names = [a["name"] for a in watch if a["kind"] == "process"]
+    alive_procs = processes_running(process_names, proc_root=proc_root) if process_names else set()
     anchors: list[dict] = []
     for anchor in watch:
         kind, name = anchor["kind"], anchor["name"]
@@ -1177,12 +1299,11 @@ def collect_anchors(
                 entry["state"] = "unknown"
                 entry["reason"] = f"docker_{docker_status}"
         else:
-            alive = process_running(name, proc_root=proc_root)
-            if alive is None:
+            if alive_procs is None:
                 entry["state"] = "unknown"
                 entry["reason"] = "proc_unavailable"
             else:
-                entry["state"] = "running" if alive else "stopped"
+                entry["state"] = "running" if name in alive_procs else "stopped"
         anchors.append(entry)
     out["anchors"] = anchors
     return out

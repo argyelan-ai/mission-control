@@ -264,6 +264,112 @@ class TestProcessRunning:
     def test_missing_proc_is_false(self, agent, tmp_path):
         assert not agent.process_running("x", proc_root=str(tmp_path / "missing"))
 
+    # ── engine command lines seen in the wild (critic finding 1) ────────────
+
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            ["python3", "-u", "/usr/local/bin/vllm", "serve"],
+            ["python3", "-X", "utf8", "/usr/local/bin/vllm", "serve"],
+            ["python3", "-Xutf8", "-W", "ignore", "/usr/local/bin/vllm", "serve"],
+            ["python3", "-uB", "/usr/local/bin/vllm", "serve"],
+            ["python3", "--", "/usr/local/bin/vllm", "serve"],
+            ["vllm serve /model --port 8000"],  # setproctitle: one string, spaces
+            ["uv", "run", "vllm", "serve", "/model"],
+            ["uv", "run", "--with", "flashinfer", "vllm", "serve"],
+            ["uvx", "vllm", "serve"],
+        ],
+    )
+    def test_real_engine_command_lines_match(self, agent, tmp_path, argv):
+        root = _fake_proc(tmp_path, {101: argv})
+        assert agent.process_running("vllm", proc_root=str(root)), argv
+
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            ["python3", "-X", "utf8", "-m", "sglang.launch_server", "--tp", "2"],
+            ["python3", "-u", "-m", "sglang.launch_server"],
+            ["python3", "-um", "sglang.launch_server"],
+        ],
+    )
+    def test_dash_m_after_interpreter_flags_matches(self, agent, tmp_path, argv):
+        root = _fake_proc(tmp_path, {101: argv})
+        assert agent.process_running("sglang.launch_server", proc_root=str(root)), argv
+
+    def test_kernel_name_comm_matches_like_pgrep_x(self, agent, tmp_path):
+        # argv rewritten by the engine, but the kernel name is the program.
+        root = _fake_proc(tmp_path, {101: ["worker-main", "--lanes", "4"]}, comms={101: "tf-dsv41-lanes"})
+        assert agent.process_running("tf-dsv41-lanes", proc_root=str(root))
+
+    def test_long_name_never_matches_by_truncated_comm(self, agent, tmp_path):
+        # comm holds 15 chars; pgrep -x never matches a longer name by it.
+        root = _fake_proc(tmp_path, {101: ["other"]}, comms={101: "tensorfold-nati"})
+        assert not agent.process_running("tensorfold-native-x", proc_root=str(root))
+
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            ["python3", "-c", "import vllm", "vllm"],
+            ["python3", "-c", "vllm"],
+            ["python3", "-uc", "vllm"],
+            ["python3", "-X", "vllm", "/opt/tools/check.py"],
+            ["python3", "-W", "vllm", "/opt/tools/check.py"],
+            ["uv", "run", "pytest", "vllm"],
+            ["uv", "pip", "install", "vllm"],
+            ["uv", "run", "--with", "vllm", "python3", "check.py"],
+            ["bash", "-lc", "vllm serve /model"],
+            ["sudo vllm serve"],
+        ],
+    )
+    def test_name_in_arguments_still_never_matches(self, agent, tmp_path, argv):
+        root = _fake_proc(tmp_path, {101: argv}, comms={101: os.path.basename(argv[0].split()[0])})
+        assert not agent.process_running("vllm", proc_root=str(root)), argv
+
+    def test_proc_is_read_once_per_round(self, agent, tmp_path, monkeypatch):
+        """collect_anchors snapshots /proc once, not once per process anchor."""
+        root = _fake_proc(tmp_path / "proc", {7: ["/opt/llama/llama-server"], 8: ["/opt/x/engine-b"]})
+        real_listdir = os.listdir
+        calls = {"n": 0}
+
+        def counting_listdir(path):
+            if str(path) == str(root):
+                calls["n"] += 1
+            return real_listdir(path)
+
+        monkeypatch.setattr(agent.os, "listdir", counting_listdir)
+        out = agent.collect_anchors(
+            [
+                {"kind": "process", "name": "llama-server"},
+                {"kind": "process", "name": "engine-b"},
+                {"kind": "process", "name": "engine-c"},
+            ],
+            socket_path="/definitely/not/here.sock",
+            proc_root=str(root),
+        )
+        assert [a["state"] for a in out["anchors"]] == ["running", "running", "stopped"]
+        assert calls["n"] == 1
+
+
+class TestGenericNamesRejected:
+    """A name that is always running on any box (shell, interpreter, daemon)
+    would read "running" forever — a false "running" (critic finding 3)."""
+
+    @pytest.mark.parametrize(
+        "name", ["bash", "sh", "python", "python3", "node", "docker", "dockerd", "containerd", "sshd", "systemd"]
+    )
+    def test_denylisted(self, agent, name):
+        assert not agent.valid_anchor_name(name)
+        watch, errors = agent.parse_watch({"watch": [{"kind": "process", "name": name}]})
+        assert watch == [] and errors
+
+    @pytest.mark.parametrize("name", ["python3.12", "Bash", "DOCKERD"])
+    def test_denylist_is_case_and_version_aware(self, agent, name):
+        assert not agent.valid_anchor_name(name)
+
+    def test_engine_names_still_pass(self, agent):
+        for name in ("vllm", "llama-server", "sglang.launch_server", "glm53-flash-tf", "python-engine"):
+            assert agent.valid_anchor_name(name), name
+
 
 # ── collect_anchors: the allowlist decides what is reported ──────────────────
 
