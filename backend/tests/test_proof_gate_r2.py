@@ -725,6 +725,7 @@ async def test_board_lead_closing_is_not_the_developer(client, fake_redis, gate_
     gate_mode("enforce")
     data = await _reviewed_card()
     await _set_agent(data["rev"].id, is_board_lead=True)
+    data["rev"].is_board_lead = True  # what find_last_developer would load
     with patch("app.services.work_context.find_last_developer",
                new=AsyncMock(return_value=data["rev"])):
         resp, _ = await _call(client, data, {"status": "done"},

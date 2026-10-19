@@ -115,7 +115,7 @@ _NOT_A_PR_BRANCH = {"main", "master", "deploy-main", "develop"}
 _PR_CREATED_MARKER = "PR erstellt:"
 
 _GH_PR_FIELDS = (
-    "number,state,url,author,createdAt,headRefName,headRefOid,changedFiles,statusCheckRollup,commits,"
+    "number,title,body,state,url,author,createdAt,headRefName,headRefOid,changedFiles,statusCheckRollup,commits,"
     "reviews,comments"
 )
 
@@ -232,14 +232,18 @@ def effective_mode(today: date | None = None, checks_so_far: int | None = None) 
 
 
 async def count_checks(session) -> int:
-    """Checked transitions so far (every checked move emits one event)."""
-    from sqlalchemy import func
+    """Cards the gate has checked so far (the rollout sample).
+
+    Cards, not events: every refused retry emits its own event, so a looping
+    agent would otherwise fill the sample on its own.
+    """
+    from sqlalchemy import distinct, func
 
     from app.models.activity import ActivityEvent
 
     try:
         return int((await session.exec(
-            select(func.count()).select_from(ActivityEvent)
+            select(func.count(distinct(ActivityEvent.task_id)))
             .where(ActivityEvent.event_type == PROOF_GATE_EVENT)
         )).one())
     except Exception:  # noqa: BLE001 — counting must never break a PATCH
@@ -267,46 +271,60 @@ async def caught_by_stats(session, days: int = 30) -> dict:
     for the role / lead / operator that sent the card back. Rejections from
     before the field existed count as ``unbekannt``. The ratio tor : rest is
     the measure whether the machine catches what people used to catch.
+
+    Counted per card, not per event: an agent retrying a refused move five
+    times is one catch (``tor``) and one card per finding code; the raw
+    number of gate events is reported as ``attempts``. A rejection counts
+    once per card and catcher.
     """
     from app.models.activity import ActivityEvent
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, int(days)))
     rows = (await session.exec(
-        select(ActivityEvent.event_type, ActivityEvent.detail).where(
+        select(ActivityEvent.id, ActivityEvent.task_id, ActivityEvent.event_type,
+               ActivityEvent.detail).where(
             ActivityEvent.event_type.in_((PROOF_GATE_EVENT, "task.review_rejected")),  # type: ignore[union-attr]
-            ActivityEvent.created_at >= cutoff.replace(tzinfo=None),
+            ActivityEvent.created_at >= cutoff,
         )
     )).all()
-    caught = {key: 0 for key in CAUGHT_BY_VALUES}
-    caught["unbekannt"] = 0
-    findings: dict[str, int] = {}
-    checks = blocked = notices = 0
-    for etype, detail in rows:
+    caught_keys = set(CAUGHT_BY_VALUES) | {"unbekannt"}
+    caught_cards: dict[str, set] = {key: set() for key in caught_keys}
+    finding_cards: dict[str, set] = {}
+    checked, blocked_cards, hard_cards, notice_cards = set(), set(), set(), set()
+    attempts = 0
+    for event_id, task_id, etype, detail in rows:
         detail = detail if isinstance(detail, dict) else {}
+        card = task_id or event_id  # an event without a card counts on its own
         if etype == PROOF_GATE_EVENT:
-            checks += 1
-            blocked += 1 if detail.get("blocked") else 0
+            attempts += 1
+            checked.add(card)
+            if detail.get("blocked"):
+                blocked_cards.add(card)
             levels = set()
             for f in detail.get("findings") or []:
                 if not isinstance(f, dict):
                     continue
                 levels.add(f.get("level"))
                 if f.get("level") in (HARD, NOTICE):
-                    findings[f.get("code") or "?"] = findings.get(f.get("code") or "?", 0) + 1
+                    finding_cards.setdefault(f.get("code") or "?", set()).add(card)
             if HARD in levels:
-                caught["tor"] += 1
+                hard_cards.add(card)
             elif NOTICE in levels:
-                notices += 1
+                notice_cards.add(card)
             continue
         who = detail.get("gefangen_von")
-        caught[who if who in caught else "unbekannt"] += 1
+        caught_cards[who if who in caught_keys else "unbekannt"].add(card)
+    caught_cards["tor"] |= hard_cards
+    caught = {key: len(caught_cards[key]) for key in (*CAUGHT_BY_VALUES, "unbekannt")}
+    findings = {code: len(cards) for code, cards in finding_cards.items()}
     from app.config import settings
 
     return {
         "window_days": max(1, int(days)),
-        "checks": checks,
-        "blocked": blocked,
-        "notices": notices,
+        "checks": len(checked),
+        "attempts": attempts,
+        "blocked": len(blocked_cards),
+        "notices": len(notice_cards - hard_cards),
         "caught_by": caught,
         "findings": dict(sorted(findings.items(), key=lambda kv: -kv[1])),
         "mode": _configured_mode(),
@@ -452,9 +470,16 @@ async def fetch_real_change(owner: str, repo: str, base_sha: str, head_sha: str,
                             token: str) -> bool | None:
     """Did anything real land between two commits? None = unknown.
 
-    Walks the new commits: merge commits (a merge from main brings files
-    that are not this card's work) and empty commits do not count. Used
-    when no diff fingerprint is on record for the old head.
+    Used when no diff fingerprint is on record for the old head.
+
+    - linear history, only own commits: the compare's file list IS the new
+      work — any file means a real change, however many commits;
+    - merge commits in between (a merge from main brings files that are not
+      this card's work): the own commits are walked, empty ones skipped,
+      up to ``MAX_COMMITS_WALKED`` — beyond that it is unknown;
+    - rewritten history (force-push): an identical tree is the same content
+      pushed again, anything else is unknown (the three-dot compare shows
+      the whole PR again, not what changed).
     """
     try:
         rc, out, _err = await _gh(
@@ -469,14 +494,30 @@ async def fetch_real_change(owner: str, repo: str, base_sha: str, head_sha: str,
     try:
         data = json.loads(out or "{}")
         files = int(data.get("files") or 0)
+        status = str(data.get("status") or "").lower()
         commits = [c for c in data.get("commits") or [] if isinstance(c, dict)]
     except (ValueError, TypeError, AttributeError):
         return None
+    if status not in ("ahead", "identical"):
+        trees = []
+        for sha in (base_sha, head_sha):
+            try:
+                rc, out, _err = await _gh(
+                    token, "api", f"repos/{owner}/{repo}/commits/{sha}", "--jq", ".commit.tree.sha",
+                )
+            except GithubUnavailable:
+                return None
+            if rc != 0 or not (out or "").strip():
+                return None
+            trees.append(out.strip())
+        return False if trees[0] == trees[1] else None
     if files == 0:
         return False
     own = [c.get("sha") for c in commits if int(c.get("p") or 0) <= 1 and c.get("sha")]
     if not own:
         return False  # only merge commits ("Update branch")
+    if len(own) == len(commits):
+        return True  # linear, own commits only: the compare's files are the new work
     for sha in list(reversed(own))[:MAX_COMMITS_WALKED]:
         try:
             rc, out, _err = await _gh(
@@ -494,12 +535,17 @@ async def fetch_real_change(owner: str, repo: str, base_sha: str, head_sha: str,
     return False if len(own) <= MAX_COMMITS_WALKED else None
 
 
-async def find_pr_for_branch(owner: str, repo: str, branch: str, token: str) -> str | None:
-    """URL of the newest PR running from ``branch`` (any state), or None."""
+async def find_prs_for_branch(owner: str, repo: str, branch: str,
+                              token: str) -> list[dict] | None:
+    """PRs running from ``branch`` (any state, newest first).
+
+    ``[]`` = GitHub answered: there is none. ``None`` = could not look
+    (timeout, gh error, GitHub 5xx) — never read as "no PR".
+    """
     try:
         rc, out, _err = await _gh(
             token, "pr", "list", "--repo", f"{owner}/{repo}", "--head", branch,
-            "--state", "all", "--json", "number,url", "--limit", "1",
+            "--state", "all", "--json", "number,url,state", "--limit", "10",
         )
     except GithubUnavailable:
         return None
@@ -509,9 +555,9 @@ async def find_pr_for_branch(owner: str, repo: str, branch: str, token: str) -> 
         rows = json.loads(out or "[]")
     except json.JSONDecodeError:
         return None
-    if rows and isinstance(rows[0], dict) and rows[0].get("url"):
-        return str(rows[0]["url"])
-    return None
+    if not isinstance(rows, list):
+        return None
+    return [r for r in rows if isinstance(r, dict) and r.get("url")]
 
 
 def classify_required(checks: list[dict]) -> str:
@@ -681,6 +727,10 @@ async def discover_pr(session, task, token: str) -> tuple[str | None, str]:
     The agent does not have to hand the PR over — the server looks where the
     card's own data points: the source card of a review card, the "PR
     erstellt:" marker the project path writes, the card's branch on GitHub.
+
+    ``(None, "unknown")`` = the branch could not be looked at (no token, no
+    repo on the card, GitHub error) — "could not look" is not "no PR".
+    ``(None, "")`` = looked everywhere, nothing there.
     """
     from app.models.task import Task, TaskComment
     from app.services.pr_merge_monitor import parse_pr_url
@@ -704,13 +754,23 @@ async def discover_pr(session, task, token: str) -> tuple[str | None, str]:
             if parse_pr_url(url):
                 return url, "marker"
     branch = (getattr(task, "branch_name", None) or "").strip()
-    if branch and branch not in _NOT_A_PR_BRANCH and token:
-        full_name = await _repo_full_name(session, task)
-        if full_name:
-            owner, repo_name = full_name.split("/", 1)
-            url = await find_pr_for_branch(owner, repo_name, branch, token)
-            if url and parse_pr_url(url):
-                return url, "branch"
+    if not branch or branch in _NOT_A_PR_BRANCH:
+        return None, ("" if token else "unknown")
+    full_name = await _repo_full_name(session, task) if token else None
+    if not full_name:
+        return None, "unknown"
+    owner, repo_name = full_name.split("/", 1)
+    rows = await find_prs_for_branch(owner, repo_name, branch, token)
+    if rows is None:
+        return None, "unknown"
+    # An open PR first (the newest PR on a reused branch name can be the
+    # previous card's merged one); a PR another card already holds is that
+    # card's work, not this one's.
+    rows = sorted(rows, key=lambda r: 0 if str(r.get("state") or "").upper() == "OPEN" else 1)
+    for row in rows:
+        url = str(row["url"])
+        if parse_pr_url(url) and await _pr_on_other_card(session, task, url) is None:
+            return url, "branch"
     return None, ""
 
 
@@ -831,7 +891,13 @@ async def _board_agent_by_name(session, task, name: str):
 
 
 async def _developer(session, task):
-    """The agent who built the card (server-side, never the agent's word)."""
+    """The agent who built the card (server-side, never the agent's word).
+
+    The board lead is never the developer here: ``find_last_developer`` can
+    name him after an automated in_progress → review move (dry run
+    2026-10-19), and the lead closes cards as part of his job — calling him
+    the developer would refuse his close as a self-review.
+    """
     try:
         from app.services.work_context import find_last_developer
 
@@ -840,7 +906,8 @@ async def _developer(session, task):
             from app.models.task import Task
 
             target = await session.get(Task, task.source_task_id) or task
-        return await find_last_developer(session, target)
+        developer = await find_last_developer(session, target)
+        return None if getattr(developer, "is_board_lead", False) else developer
     except Exception:  # noqa: BLE001 — a lookup failure must not break the PATCH
         logger.info("proof_gate: Entwickler nicht ermittelbar fuer %s", task.id, exc_info=True)
         return None
@@ -863,6 +930,68 @@ async def _independent_review_exists(session, task, developer_id, pr: dict) -> b
     return _github_approved_by_other(pr)
 
 
+def _related_ids(task) -> set:
+    """Cards that share a PR or branch with ``task`` by design: itself, its
+    source card (review card), its parent."""
+    return {x for x in (task.id, getattr(task, "source_task_id", None),
+                        getattr(task, "parent_task_id", None)) if x}
+
+
+def _is_related(other, related: set) -> bool:
+    return (other.id in related or getattr(other, "source_task_id", None) in related
+            or getattr(other, "parent_task_id", None) in related)
+
+
+async def _branch_of_other_card(session, task, branch: str):
+    """An UNRELATED, still open card whose branch this is, or None.
+
+    Its own ``branch_name`` or the workspace branch MC pushes for it
+    (``task/<slug>``). Finished cards do not own a branch any more — a
+    re-dispatched follow-up reuses the name by design.
+    """
+    from app.models.task import Task
+    from app.services.git_service import slugify_project, slugify_workspace_slug
+
+    branch = (branch or "").strip()
+    if not branch or branch in _NOT_A_PR_BRANCH:
+        return None
+    related = _related_ids(task)
+    slug = branch[len("task/"):] if branch.startswith("task/") else None
+    rows = (await session.exec(
+        select(Task).where(Task.id != task.id, Task.status != "done")
+    )).all()
+    for other in rows:
+        if _is_related(other, related):
+            continue
+        if (other.branch_name or "").strip() == branch:
+            return other
+        if slug and other.title and slug in (slugify_workspace_slug(other.title),
+                                             slugify_project(other.title)):
+            return other
+    return None
+
+
+async def _pr_tied_to_card(session, task, pr: dict, pr_url: str) -> bool:
+    """A second signal, independent of timing, that this PR is this card's:
+    the PR names the card (id prefix in title or body), or MC itself wrote
+    the "PR erstellt:" note with this PR on the card."""
+    from app.models.task import TaskComment
+
+    text = f"{pr.get('title') or ''}\n{pr.get('body') or ''}".lower()
+    ids = [task.id] + ([task.source_task_id] if getattr(task, "source_task_id", None) else [])
+    if any(str(i).lower()[:8] in text for i in ids):
+        return True
+    rows = (await session.exec(
+        select(TaskComment.content).where(
+            TaskComment.task_id == task.id,
+            TaskComment.author_type == "system",
+            TaskComment.content.like(f"%{_PR_CREATED_MARKER}%"),  # type: ignore[union-attr]
+        )
+    )).all()
+    return any(_same_pr(url, pr_url) for content in rows
+               for url in _PR_URL_IN_TEXT.findall(content or ""))
+
+
 async def _pr_on_other_card(session, task, pr_url: str):
     """An UNRELATED card that already holds this PR, or None.
 
@@ -877,13 +1006,11 @@ async def _pr_on_other_card(session, task, pr_url: str):
     rows = (await session.exec(
         select(Task).where(Task.id != task.id, Task.pr_url.like(f"%/pull/{m.group(1)}%"))  # type: ignore[union-attr]
     )).all()
-    related = {x for x in (task.id, getattr(task, "source_task_id", None),
-                           getattr(task, "parent_task_id", None)) if x}
+    related = _related_ids(task)
     for other in rows:
         if not _same_pr(other.pr_url, pr_url):
             continue
-        if (other.id in related or other.source_task_id in related
-                or other.parent_task_id in related):
+        if _is_related(other, related):
             continue
         return other
     return None
@@ -1009,6 +1136,7 @@ async def evaluate_proof_gate(
 
     pr_url, ref = await resolve_pr_ref(session, task, updates)
     token = ""
+    where = ""
     if pr_url is None:
         # The card names no PR. The server looks for it itself — what the
         # agent leaves away is no reason to skip the check.
@@ -1026,9 +1154,19 @@ async def evaluate_proof_gate(
             ))
     result.pr_url = pr_url
     if pr_url is None:
-        # b) a code card without any PR is itself a finding
+        # b) a code card without any PR is itself a finding — but only when
+        # the server could look: no token or a GitHub error is no proof that
+        # the PR is missing (fail-open, loud).
         level = code_card_level(task, target_status)
-        if level is not None:
+        if level == HARD and where == "unknown":
+            result.findings.append(Finding(
+                "pr_lookup_unavailable", NOTICE,
+                f"Code-Karte ohne PR auf der Karte, und das Tor konnte Branch "
+                f"'{getattr(task, 'branch_name', None) or '-'}' auf GitHub nicht pruefen "
+                "(kein Token, kein Repo auf der Karte oder GitHub-Fehler) — ungeprueft "
+                "zugelassen. `pr_url` auf der Karte setzen.",
+            ))
+        elif level is not None:
             result.findings.append(Finding(
                 "pr_missing", level,
                 f"Code-Karte ohne PR: weder auf der Karte, noch als PR-Notiz, noch auf "
@@ -1098,22 +1236,44 @@ async def evaluate_proof_gate(
             f"PR #{number} ist {state} — '{target_status}' braucht einen "
             f"{' oder '.join(allowed)}-PR. Ein geschlossener oder fremder PR belegt nichts.",
         ))
+    owner_card = await _branch_of_other_card(session, task, remote_branch)
+    if owner_card is not None:
+        # The PR runs on the branch of another card still in work — that is
+        # the colleague's PR, whatever this card's own branch says.
+        result.findings.append(Finding(
+            "pr_branch_of_other_card", HARD,
+            f"PR #{number} laeuft auf Branch '{remote_branch}' der offenen Karte "
+            f"'{(owner_card.title or '')[:60]}' ({str(owner_card.id)[:8]}) — "
+            "ein fremder PR belegt diese Karte nicht.",
+        ))
     card_branch = (getattr(task, "branch_name", None) or "").strip()
-    if card_branch and remote_branch and remote_branch not in await _card_branches(session, task):
+    if (owner_card is None and card_branch and remote_branch
+            and remote_branch not in await _card_branches(session, task)):
         # Agents pick their own branch names and MC's workspace pushes
         # `task/<slug>` — a different name alone is no foreign PR (dry run
-        # 2026-10-19: 6 of 8 real code cards). A PR opened BEFORE the card
-        # existed cannot be this card's work (createdAt is GitHub's clock,
-        # not the agent's).
+        # 2026-10-19: 6 of 8 real code cards). But "opened after the card"
+        # only proves timing: a colleague's fresh PR qualifies too. A PR
+        # opened BEFORE the card is foreign (createdAt is GitHub's clock);
+        # a newer one needs a second signal (the PR names the card, or MC
+        # created it for this card) to close the card — moving to review
+        # without one stays a notice, the reviewer looks at the PR.
         pr_created = _parse_ts(pr.get("createdAt"))
         card_created = _parse_ts(getattr(task, "created_at", None))
-        foreign = pr_created is None or card_created is None or pr_created < card_created
+        older = pr_created is None or card_created is None or pr_created < card_created
+        tied = (not older) and await _pr_tied_to_card(session, task, pr, pr_url)
+        hard = older or (target_status == "done" and not tied)
+        if older:
+            why = " — und der PR ist aelter als die Karte: nicht der PR dieser Karte."
+        elif tied:
+            why = " — der PR nennt die Karte; Branch auf der Karte nachtragen."
+        else:
+            why = (" — nichts verbindet den PR mit dieser Karte. Karten-ID "
+                   f"'{str(task.id)[:8]}' in Titel oder Beschreibung des PR schreiben"
+                   + (" (ohne das kein 'done')." if target_status == "done" else "."))
         result.findings.append(Finding(
-            "pr_branch_mismatch", HARD if foreign else NOTICE,
+            "pr_branch_mismatch", HARD if hard else NOTICE,
             f"PR #{number} laeuft auf Branch '{remote_branch}', die Karte auf "
-            f"'{card_branch}'"
-            + (" — und der PR ist aelter als die Karte: nicht der PR dieser Karte."
-               if foreign else " — Branch auf der Karte nachtragen."),
+            f"'{card_branch}'" + why,
         ))
     other = await _pr_on_other_card(session, task, pr_url)
     if other is not None:
@@ -1199,6 +1359,15 @@ async def evaluate_proof_gate(
                     f"({old_sha[:12]} → {remote_sha[:12]}): nur leere Commits, ein Merge von "
                     "main oder derselbe Inhalt neu gepusht.",
                 ))
+            elif real is None:
+                # could not tell — never a silent pass (fail-open, loud)
+                result.findings.append(Finding(
+                    "change_unverifiable", NOTICE,
+                    f"Ob seit dem Change-Feedback auf PR #{number} wirklich etwas geaendert "
+                    f"wurde, konnte das Tor nicht pruefen ({old_sha[:12]} → {remote_sha[:12]}: "
+                    "Vergleich fehlgeschlagen, Historie umgeschrieben oder zu viele Commits) — "
+                    "der Reviewer muss es selbst ansehen.",
+                ))
         else:
             # no server record from before the change (older card) → timestamps
             last_commit = _last_commit_at(pr)
@@ -1219,8 +1388,12 @@ async def evaluate_proof_gate(
     developer = await _developer(session, task)
     developer_id = getattr(developer, "id", None)
     if developer_id is None and old_status != "review":
-        # the log names nobody — the card's own assignee built it
-        developer_id = getattr(task, "assigned_agent_id", None)
+        # the log names nobody — the card's own assignee built it (unless
+        # that is the board lead, see ``_developer``)
+        assignee = getattr(task, "assigned_agent_id", None)
+        if assignee and not (actor_agent is not None and actor_agent.id == assignee
+                             and getattr(actor_agent, "is_board_lead", False)):
+            developer_id = assignee
     if reviewer:
         named = await _board_agent_by_name(session, task, reviewer)
         if named is not None and developer_id and named.id == developer_id:
