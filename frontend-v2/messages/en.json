@@ -3734,6 +3734,20 @@
       "notOpen": "This question is no longer open.",
       "failed": "Answer not sent — try again."
     },
+    "operatorQuestion": {
+      "aria": "Your agent asks you",
+      "other": "Other answer…",
+      "placeholder": "Your answer",
+      "send": "Send answer",
+      "answeredWith": "Answered: {answer}",
+      "resumes": "the task continues",
+      "notOpen": "This question was already answered.",
+      "failed": "Answer not sent — try again.",
+      "elsewhereHint": "Answer it on its own card — it says what happens.",
+      "openElsewhere": "Open",
+      "waiting": "Waiting for an answer",
+      "more": "{count, plural, one {# more question waiting} other {# more questions waiting}}"
+    },
     "mode": {
       "label": "Mode",
       "plan": "Plan",
@@ -3743,6 +3757,9 @@
       "failed": "Mode not switched — try again.",
       "busy": "The agent is busy — switch the mode when the reply has ended.",
       "questionOpen": "Answer the open question first, then switch the mode."
+    },
+    "approval": {
+      "checkTerminal": "Check in the terminal"
     }
   },
   "heads": {

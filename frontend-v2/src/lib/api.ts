@@ -123,7 +123,7 @@ import type {
   HeadStartBody,
   HeadSummary,
 } from "./heads";
-import type { ChatChanges } from "./chatTypes";
+import type { ChatChanges, OperatorQuestion } from "./chatTypes";
 import type { ProgressRequest } from "@/components/voice/live/progress";
 import type { LastNight, NightConfig, NightConfigUpdate, NightEntry, NightTonight } from "./nightShift";
 
@@ -917,6 +917,18 @@ export const api = {
           method: "POST",
           body: JSON.stringify(action === "accept" ? { action, content } : { action }),
         },
+      ),
+    /** Open questions of this agent to the operator — `mc question`, a
+     *  blocking `mc ask`, any pending approval — for every harness (E11). */
+    questions: (agentId: string) =>
+      request<{ questions: OperatorQuestion[] }>(`/api/v1/agents/${agentId}/chat/questions`),
+    /** One answer to an open question; MC sends it through the path that owns
+     *  the question, so the task resumes. 409 `question_not_open` = answered
+     *  elsewhere meanwhile. */
+    answerQuestion: (agentId: string, questionId: string, answer: string) =>
+      request<{ status: string; task_status: string | null }>(
+        `/api/v1/agents/${agentId}/chat/questions/${encodeURIComponent(questionId)}/answer`,
+        { method: "POST", body: JSON.stringify({ answer }) },
       ),
     /** Plan-Modus ein/aus (P3) — nur Werte aus `capabilities.modeOptions`. */
     setMode: (agentId: string, mode: string) =>

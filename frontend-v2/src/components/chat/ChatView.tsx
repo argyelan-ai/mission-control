@@ -55,6 +55,7 @@ import { ChatMediaContext } from "./chatMedia";
 import { CommandRow } from "./CommandRow";
 import { ApprovalCard } from "./ApprovalCard";
 import { ElicitationCard } from "./ElicitationCard";
+import { AgentQuestions } from "./QuestionCard";
 import { ModeChip } from "./ModeChip";
 import { StatusLine } from "./StatusLine";
 import { Composer } from "./Composer";
@@ -1334,6 +1335,12 @@ export function ChatView({
               />
             </div>
           )}
+
+          {/* Questions the agent asked the operator through MC (`mc question`,
+              a blocking `mc ask`, a pending approval) — the same card for
+              every harness (E11), pinned like the prompt card above. Read-
+              only for non-admins, like every chat control. */}
+          {!head && agent && <AgentQuestions agentId={agent.id} canAnswer={isAdmin} />}
 
           {/* The agent's todo list, pinned under the conversation (agents and
               heads alike): one line collapsed, the full list on tap. */}
