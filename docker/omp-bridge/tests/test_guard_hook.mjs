@@ -83,6 +83,15 @@ r = await call("tool_result", { type: "tool_result", toolName: "bash", toolCallI
   input: { command: pushCmd }, content, isError: false });
 assert(!r, "post: a proven push changes nothing");
 
+// --- shape drift: a push-looking result without a command is logged, not ignored
+const before = existsSync(process.env.GUARD_HOOK_LOG) ? readFileSync(process.env.GUARD_HOOK_LOG, "utf-8") : "";
+r = await call("tool_result", { type: "tool_result", toolName: "bash", toolCallId: "6b",
+  input: { cmd: pushCmd }, content: [{ type: "text", text: "To example.invalid:x.git\n ! [rejected]  feat/x -> feat/x (stale info)" }], isError: false });
+assert(!r, "drift: no command field — nothing appended");
+const after = existsSync(process.env.GUARD_HOOK_LOG) ? readFileSync(process.env.GUARD_HOOK_LOG, "utf-8") : "";
+const added = after.slice(before.length);
+assert(/"hook": ?"omp-shape"/.test(added) && /no command/.test(added), "drift: a push-looking result without a command writes one omp-shape log line");
+
 // --- shadow mode ----------------------------------------------------------
 process.env.GUARD_HOOK_MODE = "shadow";
 r = await call("tool_call", { type: "tool_call", toolName: "bash", toolCallId: "7",

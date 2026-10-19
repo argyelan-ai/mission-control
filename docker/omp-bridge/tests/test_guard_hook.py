@@ -46,3 +46,30 @@ def test_launch_omp_passes_the_guard_hook():
     text = (HERE.parent / "launch-omp.sh").read_text()
     assert "OMP_GUARD_HOOK_FILE" in text
     assert '--hook "$GUARD_HOOK"' in text or "${GUARD_ARGS[@]" in text
+
+
+def test_image_sync_carries_everything_the_hooks_import(tmp_path):
+    """The image gets tools/guards through sync_guards_into. The hooks import
+    hookparse.py; without it they fail open and the fleet has no guards at all."""
+    import os
+    root = HERE.parent.parent.parent
+    script = (root / "scripts" / "build-agent-images.sh").read_text()
+    start = script.index("sync_guards_into() {")
+    end = script.index("\n}\n", start) + 3
+    fn = script[start:end]
+    subprocess.run(["bash", "-c", fn + '\nsync_guards_into "$1"', "x", str(tmp_path)],
+                   check=True, env={**os.environ, "ROOT": str(root)})
+    synced = tmp_path / "guards"
+    assert (synced / "bash-hook.sh").is_file()
+    assert (synced / "hookparse.py").is_file()
+    hook_json = '{"tool_name": "Bash", "cwd": "/", "tool_input": {"command": "set -- $ITEM"}}'
+    r = subprocess.run(["bash", str(synced / "bash-hook.sh")], input=hook_json, text=True,
+                       capture_output=True, env={**os.environ, "GUARD_HOOK_MODE": "block",
+                                                 "HOME": str(tmp_path), "GUARD_HOOK_LOG": str(tmp_path / "l")})
+    assert r.returncode == 2, r.stderr
+    hook_json = ('{"tool_name": "Bash", "cwd": "/", "tool_input": {"command": '
+                 '"git -C /nonexistent-wt push origin feat/x"}}')
+    r = subprocess.run(["bash", str(synced / "post-push-hook.sh")], input=hook_json, text=True,
+                       capture_output=True, env={**os.environ, "GUARD_HOOK_MODE": "block",
+                                                 "HOME": str(tmp_path), "GUARD_HOOK_LOG": str(tmp_path / "l")})
+    assert r.returncode == 2 and "not provable" in r.stderr, r.stderr
