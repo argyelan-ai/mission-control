@@ -53,8 +53,9 @@ Not here yet, and refused honestly instead of guessed at:
 
 * release signature / published-release check (PR 6) — ``verify_release``
   checks format, direction, schema compatibility and the target commit;
-* the bridge door, detaching and boot resume (PR 3) — ``start`` runs in the
-  foreground here.
+* the bridge door (``scripts/mc_update_door.py``, PR 3) starts this engine
+  detached from the bridge and resumes an interrupted run when the bridge
+  starts; in the terminal ``start`` runs in the foreground.
 
 The button that would start this stays behind a feature switch, off, until
 the release gate (ADR-094 decision 13).
@@ -67,6 +68,7 @@ Usage::
     mc_update.py status    [--run ID] [--json]
     mc_update.py resume    [--run ID] [--json]
     mc_update.py rollback  [--run ID] [--json]
+    mc_update.py drain-sweep [--json]   lift a drain no run owns (bridge start routine)
 
 Settings (environment; ``MC_*`` keys are also read from the install's .env):
 
@@ -525,6 +527,10 @@ def gate_holder(run_dir: Path) -> Optional[str]:
 
 # ── journal ─────────────────────────────────────────────────────────────────
 
+def new_run_id() -> str:
+    return _now().strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:6]
+
+
 class Journal:
     def __init__(self, path: Path, data: Dict[str, Any]):
         self.path = path
@@ -539,8 +545,8 @@ class Journal:
         return self.data["phase"]
 
     @classmethod
-    def create(cls, state: Path, source: str) -> "Journal":
-        run_id = _now().strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:6]
+    def create(cls, state: Path, source: str, run_id: Optional[str] = None) -> "Journal":
+        run_id = run_id or new_run_id()
         data = {
             "schema": JOURNAL_SCHEMA, "run_id": run_id, "source": source,
             "phase": "preflight", "phase_state": "intent", "status": "running",
@@ -1157,7 +1163,15 @@ class Engine:
         self.emit(pf, human="\n".join(["Preflight:"] + [self._check_line(c) for c in pf["checks"]]))
         return EXIT_OK if ok else EXIT_ABORTED
 
-    def cmd_start(self, version: Optional[str], expect: Optional[str], source: str) -> int:
+    def cmd_start(self, version: Optional[str], expect: Optional[str], source: str,
+                  run_id: Optional[str] = None) -> int:
+        if run_id is not None:
+            # The bridge names the run before it starts it detached, so it can
+            # answer the caller with the id without guessing (PR 3).
+            if not RUN_ID_RE.match(run_id):
+                raise UsageError(f"not a run id: {run_id!r}")
+            if (journal_dir(self.state) / f"{run_id}.json").exists():
+                raise UsageError(f"run {run_id} exists already")
         self.lock.acquire(None)
         try:
             self.prune_private_copies()
@@ -1171,7 +1185,7 @@ class Engine:
                 self.emit({"ok": True, "up_to_date": True, "current": pf["current"]},
                           human=f"✓ already on {pf['current']} — nothing to do.")
                 return EXIT_OK
-            self.journal = Journal.create(self.state, source)
+            self.journal = Journal.create(self.state, source, run_id)
             self.lock.set_run(self.journal.run_id)
             j = self.journal
             j.data["project"] = self.project()
@@ -1878,6 +1892,50 @@ class Engine:
                 return other.run_id
         return None
 
+    def cmd_drain_sweep(self) -> int:
+        """Lift a drain no run owns any more (the bridge's start routine).
+
+        A drain outlives its run when the engine could not clear it (the
+        database was down at the end) — the backend would then hand out no
+        work until it expires. Only when no run holds the lock and no run is
+        interrupted: an interrupted run keeps its drain until its resume
+        decides (ADR-094 decision 7)."""
+        try:
+            self.lock.acquire(None)
+        except Locked:
+            self.emit({"lifted": [], "skipped": "an update run holds the lock"},
+                      human="drain sweep skipped: an update run holds the lock")
+            return EXIT_OK
+        try:
+            open_run = find_open_run(self.state)
+            if open_run is not None:
+                self.emit({"lifted": [], "skipped": f"run {open_run.run_id} is interrupted — its resume decides"},
+                          human=f"drain sweep skipped: run {open_run.run_id} is interrupted")
+                return EXIT_OK
+            has_table = self.db_value("select to_regclass('public.system_state') is not null")
+            if has_table is None:
+                raise UpdateError("the database does not answer")
+            if has_table != "t":
+                self.emit({"lifted": [], "supported": False}, human="no drain table in this schema — nothing to lift")
+                return EXIT_OK
+            out = self.psql("delete from system_state where key = 'update_drain' returning value::text")
+            lifted = []
+            for line in out.splitlines():
+                line = line.strip()
+                if not line.startswith("{"):
+                    continue
+                try:
+                    v = json.loads(line)
+                except ValueError:
+                    continue
+                lifted.append({k: v.get(k) for k in ("run_id", "expires_at", "set_by")})
+            self.emit({"lifted": lifted, "supported": True},
+                      human=(f"lifted the drain of run {', '.join(str(x['run_id']) for x in lifted)}"
+                             if lifted else "no drain to lift"))
+            return EXIT_OK
+        finally:
+            self.lock.release()
+
     def cmd_status(self, run_id: Optional[str]) -> int:
         j = find_run(self.state, run_id)
         holder = self.lock.holder()
@@ -1953,6 +2011,9 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--expect", default=None, help="refuse (exit 9) unless the engine's target is this tag")
         if name == "start":
             sp.add_argument("--source", choices=("terminal", "bridge"), default="terminal")
+            sp.add_argument("--run-id", dest="run_id", default=None, help=argparse.SUPPRESS)
+    sp = sub.add_parser("drain-sweep")
+    common(sp)
     for name in ("status", "resume", "rollback", "_continue"):
         sp = sub.add_parser(name)
         common(sp)
@@ -1998,9 +2059,11 @@ def _dispatch(eng: Engine, args: argparse.Namespace) -> int:
     if args.cmd == "preflight":
         return eng.cmd_preflight(args.version, args.expect)
     if args.cmd == "start":
-        return eng.cmd_start(args.version, args.expect, args.source)
+        return eng.cmd_start(args.version, args.expect, args.source, args.run_id)
     if args.cmd == "status":
         return eng.cmd_status(args.run)
+    if args.cmd == "drain-sweep":
+        return eng.cmd_drain_sweep()
     if args.cmd == "resume":
         return eng.cmd_resume(args.run)
     if args.cmd == "rollback":
