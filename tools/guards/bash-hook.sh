@@ -7,6 +7,8 @@
 #                      force without lease, push through a variable.
 #  * privacy scan    — for a push into a checkout that has scripts/privacy-scan.py,
 #                      the hook RUNS the scan there. It does not trust the text.
+#  * gate-exit       — a gate (preflight, privacy scan, ...) whose exit code is
+#                      dropped by '| tail', ';' or '|| true' before the next step.
 #  * zsh-set-split   — `set -- $var` in the agent's zsh.
 #  * background-tests — a test run with the tool flag run_in_background, or sent
 #                      to the background with '&' and no wait.
@@ -68,6 +70,7 @@ add() { printf '%s\n' "$1" >> "$work/findings"; }
 
 # >>> guard-logic
 PUSH_GATE_SCAN=0 bash "$HERE/push-gate.sh" "$work/cmd" | sed -n 's/^.*:[0-9][0-9]*: \[push-gate\] /push-gate: /p' >> "$work/findings"
+bash "$HERE/gate-exit.sh" "$work/cmd" | sed -n 's/^.*:[0-9][0-9]*: \[gate-exit\] /gate-exit: /p' >> "$work/findings"
 bash "$HERE/zsh-set-split.sh" "$work/cmd" | sed -n 's/^.*:[0-9][0-9]*: \[zsh-set-split\] /zsh-set-split: /p' >> "$work/findings"
 bash "$HERE/background-tests.sh" "$work/cmd" | sed -n 's/^.*:[0-9][0-9]*: \[background-tests\] /background-tests: /p' >> "$work/findings"
 if [ "$(cat "$work/bg")" = 1 ] && grep -Eq "$RE_TEST" "$work/cmd"; then

@@ -21,7 +21,8 @@ Exit codes for every guard: `0` green, `1` red, `2` usage or internal error.
 
 | Guard | Lesson it encodes | Use it |
 |---|---|---|
-| `bash-hook.sh` | All of the below happen in live Bash commands, not in files. A replay of 60 days of agent commands (9,422 that push, test or split) found 713 pushes with cut output, 372 without `git -C`, 6 force-pushes without lease, 195 test runs with `run_in_background`, 9 `set -- $var` in zsh — and 0 findings in 1,500 random other commands. | Claude Code `PreToolUse` hook on `Bash` (see **The hook** below). Runs push-gate, zsh-set-split and background-tests on the command, and runs the privacy scan itself before a push. |
+| `bash-hook.sh` | All of the below happen in live Bash commands, not in files. A replay of 60 days of agent commands (9,422 that push, test or split) found 713 pushes with cut output, 372 without `git -C`, 6 force-pushes without lease, 195 test runs with `run_in_background`, 9 `set -- $var` in zsh — and 0 findings in 1,500 random other commands. | Claude Code `PreToolUse` hook on `Bash` (see **The hook** below). Runs push-gate, gate-exit, zsh-set-split and background-tests on the command, and runs the privacy scan itself before a push. |
+| `gate-exit.sh` | `preflight.sh \| tail -1; docker compose up --build` rebuilt while an agent worked (2026-09-04, same on 07-08); `privacy-scan.py 2>&1 \| tail -2; git push` is the #804 shape. Replay: 271 of 1,611 gate calls in 60 days dropped the gate's exit code — often with `echo "EXIT:$?"` afterwards, which prints the exit code of `tail`, not of the gate. | Lint and hook. Red when a gate (preflight, privacy scan, run-all, ...) is piped and the line goes on, followed by `;` and a real command, or by `\|\|` without a stop. Fine: a pipe ending in `grep -q <verdict>`, a gate only read as a file. |
 | `run-gates.sh` | A gate chained with `;` or piped into `tail` reported FAILED and the next step ran anyway. | `run-gates.sh deploy.gates` — one command per line; stops at the first red gate and refuses `;`, `\|\|` and a lone `&` outside quotes. Pipes are fine (pipefail). |
 | `zsh-set-split.sh` | The agent shell is zsh: `set -- $var` does not split, so `git worktree add "$1" -b "$2" <ref>` created a branch named after the ref. | Lint scripts and briefs. Fix: `read -r a b <<< "$var"`. |
 | `push-gate.sh` | PRs went red in CI on the privacy scan; a rejected force-push was hidden by `\| tail -1`; pushes without `git -C` hit the wrong checkout. | Lint: every push is `privacy-scan && git -C <worktree> push` (the scan must be a real call joined by `&&` only), output neither cut nor redirected, no `--no-verify`, no force without lease, no push through a variable. Text in quotes is skipped unless it goes to `bash -c`/`eval`/`ssh`. |
@@ -30,7 +31,7 @@ Exit codes for every guard: `0` green, `1` red, `2` usage or internal error.
 | `tmp-previews.sh` | Previews and deploy folders under `/tmp` vanished after a few days and handoffs pointed to nothing. | Lint scripts and briefs. Opt out per line with `guard-allow: tmp-previews (<reason>)`. |
 | `post-deploy-probe.sh` | "Image built, container running" proved nothing; an empty proof was printed and ignored. | After a deploy: `post-deploy-probe.sh --deploy-wt <dir> [--range A..B]`. Read-only. Red on any failed or empty proof. |
 
-`lint.sh <paths>` runs the four lint guards together. In Markdown only fenced
+`lint.sh <paths>` runs the five lint guards together. In Markdown only fenced
 code blocks are checked. CI runs it on `AGENTS.md`, `CLAUDE.md`, `docs`,
 `scripts`, `tools` and `.github`, so a new script or doc that teaches a bad
 shape goes red.

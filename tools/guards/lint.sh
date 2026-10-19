@@ -9,7 +9,7 @@ set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 [ $# -gt 0 ] || { echo "usage: lint.sh <file-or-folder>..." >&2; exit 2; }
 rc=0
-for g in zsh-set-split push-gate background-tests tmp-previews; do
+for g in zsh-set-split push-gate gate-exit background-tests tmp-previews; do
   bash "$HERE/$g.sh" "$@"
   r=$?
   [ "$r" -gt "$rc" ] && rc=$r

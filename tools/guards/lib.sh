@@ -35,7 +35,11 @@ unquoted() {
       if [ "$q" = '"' ] && [ "$c" = '\' ]; then out+="__"; i=$((i + 1)); continue; fi
       if [ "$c" = "$q" ]; then q=""; out+="$c"; else out+="_"; fi
     else
-      if [ "$c" = '\' ]; then out+="__"; i=$((i + 1)); continue; fi
+      if [ "$c" = '\' ]; then
+        # an escaped char is data — but \` (a backquote in a JS template brief) still ends inline code
+        if [ "${s:i+1:1}" = '`' ]; then out+="_\`"; else out+="__"; fi
+        i=$((i + 1)); continue
+      fi
       case "$c" in "'"|'"') q="$c" ;; esac
       out+="$c"
     fi
