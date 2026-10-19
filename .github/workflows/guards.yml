@@ -1,0 +1,26 @@
+name: Guards
+
+# Lessons as code: every guard in tools/guards must turn its .bad fixtures red
+# and keep its .good fixtures green, and its logic must be what does it.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  guards:
+    name: Guards (fixtures + sabotage probe)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: shellcheck
+        run: shellcheck -S warning tools/guards/*.sh
+      - name: Every .bad is red, every .good is green
+        run: bash tools/guards/run-all.sh
+      - name: Sabotage probe — commenting out a guard's logic must break its fixtures
+        run: bash tools/guards/sabotage-probe.sh
