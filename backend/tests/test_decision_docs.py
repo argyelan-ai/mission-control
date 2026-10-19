@@ -49,7 +49,8 @@ from app.services.decision_docs import (
 #   plan's recommendations on 2026-10-17.
 # +1 on 2026-10-19: ADR-097 (delivered is not working). 096 is reserved for
 #   the multi-box ADR, so the count skips it until that one lands.
-EXPECTED_DECISION_DOCS = 95
+# +1 on 2026-10-19: ADR-096 (multi-box runtimes) — status Proposed.
+EXPECTED_DECISION_DOCS = 96
 
 
 def _repo_root() -> Path:
