@@ -1620,6 +1620,17 @@ Alle ADRs in `docs/decisions/`:
   a newer update exists or the run's backup is gone. Tests drive the real `backup.sh` against
   the fake docker (`scripts/tests/fake_docker.py`); `backend/tests/test_backup_sh.py` covers
   the new mode against a throwaway Postgres.
+- **2026-10-19** — **Self-update card in Settings → About (ADR-094, update plan PR 5):**
+  `frontend-v2/src/components/settings/MCUpdateCard.tsx` — lights of the preflight (red first,
+  green folded), the password sheet (step-up, `ResponsiveModal` = bottom sheet on the phone),
+  waiting for quiet, the five-step phase bar (never backwards), the restart gap (a status call
+  without an answer is "restarting" for up to 25 min, never "failed"), success / set back /
+  aborted / interrupted / the way back failed, *Back to …* within 14 days, history, copyable
+  commands, EN/DE. The state rules live in one place, `frontend-v2/src/lib/mcUpdate.ts`. Admin
+  only; the status API's `404` (switch off) hides the card, a managed install's `409` carries
+  `enabled` so the "deploy procedure" note appears only once the switch is on. Tests:
+  `src/lib/__tests__/mcUpdate.test.ts`, `src/components/settings/__tests__/MCUpdateCard*.test.tsx`,
+  `src/app/settings/__tests__/AboutUpdateCard.test.tsx`, browser: `playwright/mc-update-card.spec.ts`.
 - **2026-10-19** — **Self-update API + drain in Postgres (ADR-094, update plan PR 4c):**
   `backend/app/routers/system_update.py` — `/api/v1/system/update/{preflight,start,status,
   rollback,resume,history}`, admin only, `start` + `rollback` behind step-up

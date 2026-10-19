@@ -2430,6 +2430,7 @@
       "retryNote": "A failed download does not count against the daily limit.",
       "interrupted": "The update was interrupted and is being resumed.",
       "resumeNow": "Resume now",
+      "resumeFailed": "Resuming did not work. On the machine: ./install.sh --resume",
       "interruptedNoBridge": "The update was interrupted. MC hands out no new work until it is finished. On the machine, in the install folder:",
       "rollbackFailed": "The update failed, and setting MC back failed too. MC hands out no new work. On the machine, in the install folder:",
       "checks": {

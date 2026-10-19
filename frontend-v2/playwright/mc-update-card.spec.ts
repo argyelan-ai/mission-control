@@ -364,3 +364,31 @@ test("status API offline for 60 s → the page waits, never 'failed', then succe
   offline = false;
   await expect(card).toHaveAttribute("data-state", "success", { timeout: 30_000 });
 });
+
+// ── composition budget (DESIGN.md K3–K9) of the card, per state ────────────
+
+test("design budget · the card in its busiest states (MC_SHOTS)", async ({ browser }) => {
+  test.skip(!SHOTS, "set MC_SHOTS=<dir> to measure");
+  const { collectRegion, compositionBudget } = await import("../scripts/probe/lib/composition.mjs");
+  const out: Json[] = [];
+  for (const name of ["01-available", "03-ready", "04-blocked", "07-running", "10-rolled-back", "13-rollback-failed"]) {
+    const sc = SCENARIOS.find((s) => s.name === name)!;
+    for (const width of [390, 1440]) {
+      const ctx = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 } });
+      const page = await ctx.newPage();
+      await open(page, sc, { theme: "dark", locale: "de" });
+      await page.waitForTimeout(400);
+      const raw = await page.evaluate(collectRegion, { selector: "[data-region=update-card]", firstScreen: false });
+      const budget = compositionBudget(raw.nodes ?? [], { boxDepth: raw.boxDepth, items: raw.items });
+      out.push({ state: name, width, regionHeight: raw.height, ...budget });
+      if (width === 390) {
+        await page.addStyleTag({ content: "html{filter:blur(10px)}" });
+        await page.getByTestId("update-card").screenshot({ path: join(SHOTS, `blur-${name}.png`) });
+      }
+      await ctx.close();
+    }
+  }
+  mkdirSync(SHOTS, { recursive: true });
+  const { writeFileSync } = await import("node:fs");
+  writeFileSync(join(SHOTS, "budget.json"), JSON.stringify(out, null, 2));
+});

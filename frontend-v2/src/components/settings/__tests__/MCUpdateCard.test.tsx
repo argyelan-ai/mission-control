@@ -132,6 +132,14 @@ describe("visibility", () => {
     expect(container.querySelector("[data-testid=update-card]")).toBeNull();
   });
 
+  it("switch off: the API is asked once, then left alone (no polling)", async () => {
+    m.status.mockRejectedValue(apiErr(404, { code: "update_disabled", message: "off" }));
+    renderCard();
+    await waitFor(() => expect(m.status).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 300)); // 15 poll intervals of FAST
+    expect(m.status).toHaveBeenCalledTimes(1);
+  });
+
   it("not an admin (403) → no card", async () => {
     m.status.mockRejectedValue(apiErr(403, "Forbidden"));
     const { container } = renderCard();
@@ -330,6 +338,20 @@ describe("the states of a run", () => {
     renderCard();
     await waitFor(() => expect(card().dataset.state).toBe("running"));
     expect(screen.getByTestId("update-step-label")).toHaveTextContent("Step 4 of 5 · Restart");
+  });
+});
+
+describe("try again after a failed download", () => {
+  it("puts the result aside for a fresh check, and it stays aside while the status is asked again", async () => {
+    m.status.mockResolvedValue(status(run({ phase: "aborted", running: false, failure_kind: "network", finished_at: ago(MIN) })));
+    m.preflight.mockResolvedValue(PREFLIGHT_OK);
+    renderCard();
+    await waitFor(() => expect(card().dataset.state).toBe("aborted"));
+    const calls = m.status.mock.calls.length;
+    await userEvent.click(screen.getByTestId("update-retry"));
+    await waitFor(() => expect(card().dataset.state).toBe("ready"));
+    await waitFor(() => expect(m.status.mock.calls.length).toBeGreaterThan(calls + 3));
+    expect(card().dataset.state).toBe("ready");
   });
 });
 

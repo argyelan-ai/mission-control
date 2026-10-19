@@ -180,9 +180,9 @@ function Sentence({ children, testId, tone = "primary" }: { children: React.Reac
 /** A state sentence led by a status dot on its first line. */
 function Lead({ dot, children }: { dot: "online" | "warning" | "error"; children: React.ReactNode }) {
   return (
-    <div className="flex items-start gap-3">
-      <span className="h-5 flex items-center shrink-0">
-        <StatusDot status={dot} />
+    <div className="flex items-start">
+      <span className="h-5 w-3 flex items-center shrink-0">
+        <StatusDot status={dot} size="sm" />
       </span>
       <Sentence testId="update-sentence">{children}</Sentence>
     </div>
@@ -238,7 +238,7 @@ function CheckRow({ check }: { check: UpdateCheck }) {
   const head = (
     <>
       {/* h-5 = one line of text-sm: the dot sits on the first line */}
-      <span className="h-5 flex items-center shrink-0">
+      <span className="h-5 w-3 flex items-center shrink-0">
         <StatusDot status={DOT[check.status]} size="sm" />
       </span>
       <span
@@ -255,27 +255,23 @@ function CheckRow({ check }: { check: UpdateCheck }) {
         // The machine's own (English) words fold out under the row — one
         // language on screen (K10), the numbers still one tap away.
         <details className="group">
-          <summary className="flex items-start gap-3 cursor-pointer list-none [&::-webkit-details-marker]:hidden">
+          <summary className="flex items-start cursor-pointer list-none [&::-webkit-details-marker]:hidden">
             {head}
             <ChevronDown
               size={16}
-              className="shrink-0 mt-1 transition-transform group-open:rotate-180"
+              className="shrink-0 mt-1 ml-2 transition-transform group-open:rotate-180"
               style={{ color: "var(--color-text-muted)" }}
               aria-hidden
             />
           </summary>
-          <span className="block pl-6 pt-1 text-xs font-mono break-words" style={{ color: "var(--color-text-muted)" }}>
+          <span className="block pl-3 pt-1 text-xs font-mono break-words" style={{ color: "var(--color-text-muted)" }}>
             {check.message}
           </span>
         </details>
       ) : (
-        <div className="flex items-start gap-3">{head}</div>
+        <div className="flex items-start">{head}</div>
       )}
-      {attention && check.command && (
-        <div className="pl-6">
-          <CommandLine command={check.command} />
-        </div>
-      )}
+      {attention && check.command && <CommandLine command={check.command} />}
     </li>
   );
 }
@@ -302,14 +298,16 @@ function CheckList({ checks }: { checks: UpdateCheck[] }) {
             type="button"
             onClick={() => setShowOk((v) => !v)}
             aria-expanded={showOk}
-            className="min-h-11 flex items-center gap-3 text-sm cursor-pointer"
+            className="min-h-11 flex items-center gap-2 text-sm cursor-pointer"
             style={{ color: "var(--color-text-secondary)" }}
             data-testid="update-checks-ok"
           >
-            <span className="h-5 flex items-center shrink-0">
-              <StatusDot status="online" size="sm" />
+            <span className="flex items-center">
+              <span className="h-5 w-3 flex items-center shrink-0">
+                <StatusDot status="online" size="sm" />
+              </span>
+              {t("okCount", { count: ok.length })}
             </span>
-            {t("okCount", { count: ok.length })}
             <ChevronDown size={16} style={{ transform: showOk ? "rotate(180deg)" : undefined }} className="transition-transform" />
           </button>
           <Unfold open={showOk}>
@@ -582,8 +580,8 @@ function History({ runs }: { runs: UpdateHistoryRun[] }) {
         className="min-h-11 inline-flex items-center gap-2 text-sm cursor-pointer"
         style={{ color: "var(--color-text-secondary)" }}
       >
-        <ChevronDown size={16} style={{ transform: open ? "rotate(180deg)" : undefined }} className="transition-transform" />
         {t("toggle", { count: runs.length })}
+        <ChevronDown size={16} style={{ transform: open ? "rotate(180deg)" : undefined }} className="transition-transform" />
       </button>
       <Unfold open={open}>
         <ul className="space-y-3 pt-2 pb-2">
@@ -649,7 +647,7 @@ export function MCUpdateCard({
   const [now, setNow] = useState(() => Date.now());
   const seenActive = useRef<Set<string>>(new Set());
   const maxStep = useRef<Map<string, number>>(new Map());
-  const pollMs = useRef(timing.idleMs);
+  const pollMs = useRef<number | false>(timing.idleMs);
 
   const statusQ = useQuery<UpdateStatus>({
     queryKey: UPDATE_STATUS_KEY,
@@ -693,11 +691,15 @@ export function MCUpdateCard({
     if (isNoAnswer(e)) setNoAnswerSince((prev) => prev ?? at);
   }, [statusQ.errorUpdatedAt, statusQ.error]);
 
+  // A finished run's result the operator put aside ("try again") stays aside.
+  const [dismissed, setDismissed] = useState<string | null>(null);
   const lastRun = status?.run ?? null;
+  const shownStatus =
+    status && lastRun && dismissed === lastRun.run_id && isTerminal(lastRun.phase) ? { ...status, run: null } : status;
   const activeKnown = !!expect || (!!lastRun && !isTerminal(lastRun.phase));
 
   const state: RunState = deriveRunState({
-    status,
+    status: shownStatus,
     now,
     seenActive: !!lastRun && seenActive.current.has(lastRun.run_id),
     maxStep: lastRun ? (maxStep.current.get(lastRun.run_id) ?? 0) : 0,
@@ -708,7 +710,15 @@ export function MCUpdateCard({
   });
 
   // Poll fast while something happens; tick the clock for "since N min".
-  pollMs.current = noAnswerSince !== null ? timing.noAnswerMs : isActive(state) || expect ? timing.activeMs : timing.idleMs;
+  // Switch off / not an admin: ask once, then leave the API alone.
+  pollMs.current =
+    gate === "hidden" || gate === "managed"
+      ? false
+      : noAnswerSince !== null
+        ? timing.noAnswerMs
+        : isActive(state) || expect
+          ? timing.activeMs
+          : timing.idleMs;
   useEffect(() => {
     if (!(isActive(state) || noAnswerSince !== null)) return;
     const id = setInterval(() => setNow(Date.now()), 10_000);
@@ -765,6 +775,7 @@ export function MCUpdateCard({
 
   const resume = useMutation({
     mutationFn: () => api.system.update.resume(lastRun?.run_id ?? null),
+    onError: () => notify.error(t("resumeFailed")),
     onSettled: () => qc.invalidateQueries({ queryKey: UPDATE_STATUS_KEY }),
   });
 
@@ -868,7 +879,7 @@ export function MCUpdateCard({
           )}
           {!preflight.isPending && (
             <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
-              {pf?.ok && stepUp?.available ? (
+              {pf?.ok && stepUp?.available !== false ? (
                 <PrimaryButton type="button" onClick={() => setSheet("start")} data-testid="update-now">
                   {t("updateNow")}
                 </PrimaryButton>
@@ -1040,10 +1051,9 @@ export function MCUpdateCard({
             <QuietButton
               type="button"
               onClick={() => {
-                // A finished run's result gives way to a fresh check.
-                seenActive.current.delete(state.run.run_id);
+                // The result gives way to a fresh check.
+                setDismissed(state.run.run_id);
                 preflight.mutate();
-                qc.setQueryData<UpdateStatus>(UPDATE_STATUS_KEY, (s) => (s ? { ...s, run: null } : s));
               }}
               data-testid="update-retry"
             >
@@ -1083,7 +1093,7 @@ export function MCUpdateCard({
   }
 
   const showGoBack =
-    !!goBackRun && (state.kind === "success" || state.kind === "idle") && stepUp?.available === true;
+    !!goBackRun && (state.kind === "success" || state.kind === "idle") && stepUp?.available !== false;
 
   return (
     <section

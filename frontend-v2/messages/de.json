@@ -2430,6 +2430,7 @@
       "retryNote": "Ein fehlgeschlagener Download zählt nicht gegen das Tageslimit.",
       "interrupted": "Das Update wurde unterbrochen und wird fortgesetzt.",
       "resumeNow": "Jetzt fortsetzen",
+      "resumeFailed": "Fortsetzen hat nicht geklappt. Auf dem Gerät: ./install.sh --resume",
       "interruptedNoBridge": "Das Update wurde unterbrochen. MC vergibt keine neue Arbeit, bis es fertig ist. Auf dem Gerät, im Installationsordner:",
       "rollbackFailed": "Das Update ist fehlgeschlagen, und auch das Zurücksetzen ist gescheitert. MC vergibt keine neue Arbeit. Auf dem Gerät, im Installationsordner:",
       "checks": {
