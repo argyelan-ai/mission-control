@@ -1,7 +1,7 @@
 """Beweis-Tor round 2: the gate finds its own evidence, an agent that sends
 nothing along is not "unchecked".
 
-Loopholes closed here (critic round 1, ~/team-aus-fehlern), each with a
+Loopholes closed here (critic round 1 on the gate), each with a
 sabotage probe:
 
   b1  a card without pr_url — the server finds the PR itself (branch on
