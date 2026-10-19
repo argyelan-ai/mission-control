@@ -81,9 +81,16 @@ exits 1 when an entry is missing (for audits).
 The omp fleet loads the same two scripts: `docker/omp-bridge/guard-hook.mjs`
 is an omp hook (`tool_call` before every bash call, `tool_result` after a
 push), passed with `--hook` by `launch-omp.sh` (TUI) and `acp_client.py`
-(ACP). `scripts/build-agent-images.sh` copies `tools/guards/*.sh` into the
-image. Same modes; kill switch `OMP_GUARD_HOOK=0`. It fails open: a guard
-error never stops an agent.
+(ACP). `scripts/build-agent-images.sh` copies `tools/guards/*.sh` and
+`*.py` (the shared parser `hookparse.py`; without it the hooks fail open) into
+the image. Same modes; kill switch `OMP_GUARD_HOOK=0`. It fails open: a guard
+error never stops an agent. If a bash result looks like a push but the event
+carries no command (omp changed its event shape), the hook writes one
+`"hook": "omp-shape"` line to the log, so a blind hook shows up in the shadow data.
+The `tool_result` path was checked against a real omp 18.10.1 binary with a
+local fake model: a rejected push (exit 0 and exit 1) reaches the model with the
+GUARD text appended, a proven push stays unchanged, and without the
+`tool_result` handler the text is missing.
 
 Replay old commands without the scan: `GUARD_HOOK_NO_SCAN=1 bash-hook.sh <json>`.
 
