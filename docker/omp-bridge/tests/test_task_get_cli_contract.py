@@ -56,7 +56,7 @@ class _FakeClient:
             "description": "line one\nline two",
             "status": self.status,
             "assigned_agent_id": self.assigned,
-            "assigned_agent_name": "Sparky",
+            "assigned_agent_name": "alpha",
             "dispatch_attempt_id": "A1",
         }
 
