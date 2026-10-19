@@ -46,6 +46,7 @@ import asyncio
 import json
 import logging
 import time
+import uuid
 from datetime import datetime, timezone
 
 from sqlmodel import select
@@ -1183,6 +1184,21 @@ class RuntimeWatcher:
             )
             return
 
+        # A duo needs its recorded worker box, and that box must not be held by
+        # another active engine. Both are DETERMINISTIC refusals, not failed
+        # attempts: counting them burned the two attempts and ended in
+        # ``auto_recovery_given_up`` ("der Wächter schaltet einfach ab",
+        # Mark 19.10.) although nothing had been tried. A missing worker is
+        # reported once a day as ``runtime.members_incomplete`` by the
+        # membership check of this cycle; a busy worker box is the operator's
+        # choice (same rule as the head box above) — auto-recovery never
+        # evicts it.
+        if host_row is not None and recipe is not None:
+            blocked = await self._duo_worker_blocked(session, redis, runtime)
+            if blocked is not None:
+                logger.info("auto-recovery: skipping %s — %s", runtime.slug, blocked)
+                return
+
         if not await self._claim_recovery_cooldown(redis, runtime.slug):
             return
 
@@ -1394,8 +1410,34 @@ class RuntimeWatcher:
         except Exception as exc:  # noqa: BLE001
             logger.debug("autostart: Notiz an %s fehlgeschlagen: %s", host_row.slug, exc)
 
-    async def _active_exclusive_sibling(
+    async def _duo_worker_blocked(
         self, session: AsyncSession, redis, runtime: Runtime
+    ) -> str | None:
+        """Why a duo cannot be revived right now without a decision — or None.
+
+        Solo runtimes: always None (nothing to check, no query beyond one).
+        """
+        from app.services import runtime_membership
+
+        if runtime_membership.topology_nodes(runtime.topology) < 2:
+            return None
+        worker_id = await runtime_membership.recorded_worker_id(session, runtime.id)
+        if worker_id is None:
+            return "Verbund ohne eingetragene Worker-Box"
+        sibling = await self._active_exclusive_sibling(
+            session, redis, runtime, box_id=worker_id
+        )
+        if sibling is not None:
+            return f"Worker-Box ist durch {sibling} belegt"
+        return None
+
+    async def _active_exclusive_sibling(
+        self,
+        session: AsyncSession,
+        redis,
+        runtime: Runtime,
+        *,
+        box_id: uuid.UUID | None = None,
     ) -> str | None:
         """Slug of an ``exclusive_memory`` sibling on the same box that is
         running, loading, or mid memory-prep — or ``None`` if the box has no
@@ -1422,6 +1464,9 @@ class RuntimeWatcher:
         ``host_id`` means the settings-fallback box, so two NULLs are the
         same box.
 
+        ``box_id`` checks another box than the runtime's own — a duo's worker
+        box (ADR-096): the same question, asked about the second box.
+
         Deliberately NOT gated on ``runtime.exclusive_memory`` (the 15.08.26
         incident): a parked, non-exclusive row was auto-recovered while the
         exclusive vLLM engine held the same box — two engines loading at
@@ -1433,15 +1478,16 @@ class RuntimeWatcher:
             Runtime.enabled == True,  # noqa: E712
             Runtime.exclusive_memory == True,  # noqa: E712
         )
+        box = box_id if box_id is not None else runtime.host_id
         statement = (
             statement.where(Runtime.host_id.is_(None))
-            if runtime.host_id is None
-            else statement.where(Runtime.host_id == runtime.host_id)
+            if box is None
+            else statement.where(Runtime.host_id == box)
         )
         siblings = [
             rt for rt in (await session.exec(statement)).all() if rt.slug != runtime.slug
         ]
-        if runtime.host_id is not None:
+        if box is not None:
             # Ein Verbund, dessen Head woanders steht, belegt diese Box als
             # Worker (``runtime_hosts``) — dieselbe Sicht wie die Verdrängung
             # in ``runtime_manager._ensure_exclusive_host``.
@@ -1451,7 +1497,7 @@ class RuntimeWatcher:
                 m.runtime_id
                 for m in (
                     await session.exec(
-                        select(RuntimeHost).where(RuntimeHost.host_id == runtime.host_id)
+                        select(RuntimeHost).where(RuntimeHost.host_id == box)
                     )
                 ).all()
             ]
@@ -1481,7 +1527,14 @@ class RuntimeWatcher:
                 return sibling.slug
 
         try:
-            host = await resolve_host_for_runtime(session, runtime)
+            if box_id is not None and box_id != runtime.host_id:
+                from app.models.host import Host
+                from app.services.host_resolver import resolved_host_from_row
+
+                box_row = await session.get(Host, box_id)
+                host = resolved_host_from_row(box_row) if box_row is not None else None
+            else:
+                host = await resolve_host_for_runtime(session, runtime)
         except Exception as exc:  # noqa: BLE001
             logger.debug("auto-recovery: sibling host resolution failed for %s: %s",
                          runtime.slug, exc)

@@ -1277,7 +1277,11 @@ async def _plan_duo_membership(
 
 
 async def _apply_duo_membership(
-    session: AsyncSession, rt: Runtime, plan: tuple[str, Host | None, Host | None]
+    session: AsyncSession,
+    rt: Runtime,
+    plan: tuple[str, Host | None, Host | None],
+    *,
+    running: bool | None = None,
 ) -> None:
     """Stage the planned membership in the caller's transaction (no commit).
 
@@ -1298,10 +1302,12 @@ async def _apply_duo_membership(
                 ).first()
             await runtime_membership.set_members(
                 session, rt, runtime_membership.duo(head.id, worker.id),
-                recipe=recipe, commit=False,
+                recipe=recipe, running=running, commit=False,
             )
         else:
-            await runtime_membership.clear_members(session, rt, commit=False)
+            await runtime_membership.clear_members(
+                session, rt, running=running, commit=False
+            )
     except runtime_membership.MembershipError as exc:
         await session.rollback()
         raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
@@ -1381,6 +1387,16 @@ async def update_runtime_db(
     rt = (await session.exec(select(Runtime).where(Runtime.slug == slug))).first()
     if not rt:
         raise HTTPException(status_code=404, detail=f"Runtime '{slug}' not found")
+    # "Does it run?" for a duo whose boxes this PATCH may change — asked NOW,
+    # about the boxes it runs on now, and with no transaction open (the probe
+    # is network). Asked after the mutation below it would probe the NEW head
+    # and let a running duo move. Solo runtimes (no rows) never probe.
+    running_before: bool | None = None
+    if {"topology", "host_id"} & body.model_fields_set and await runtime_membership.members_of(
+        session, rt.id
+    ):
+        await session.commit()  # ends the read transaction; nothing is pending
+        running_before = await runtime_membership.is_running(session, rt)
     changes = body.model_dump(exclude_none=True)
     changes.pop("host_id", None)
     changes.pop("api_key_secret_id", None)
@@ -1415,7 +1431,7 @@ async def update_runtime_db(
     session.add(rt)
     if duo_plan is not None:
         await session.flush()
-        await _apply_duo_membership(session, rt, duo_plan)
+        await _apply_duo_membership(session, rt, duo_plan, running=running_before)
     await session.commit()
     await session.refresh(rt)
 

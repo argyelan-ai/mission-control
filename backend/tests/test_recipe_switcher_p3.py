@@ -523,14 +523,25 @@ async def test_the_named_worker_wins_over_the_default_order(auth_client, session
 
 @pytest.mark.asyncio
 async def test_a_busy_named_worker_is_409_with_a_sentence(auth_client, session):
+    """Busy = held by a running duo of ANOTHER head. A plain solo on the box
+    is evictable since Solo<->Duo (test_runtime_membership, critic 19.10.)."""
+    from app.services import runtime_membership
+
     box_a = await _host(session, "box-a")
     box_b = await _host(session, "box-b", ssh_host="192.0.2.11")
+    box_c = await _host(session, "box-c", ssh_host="192.0.2.12")
     await _duo_recipe(session)
-    await _runtime(session, "other-on-b", box_b, endpoint="http://192.0.2.11:8000/v1")
+    other = await _runtime(
+        session, "other-duo-on-c", box_c, endpoint="http://192.0.2.12:8000/v1",
+        topology={"nodes": 2},
+    )
+    await runtime_membership.set_members(
+        session, other, runtime_membership.duo(box_c.id, box_b.id)
+    )
 
     start = AsyncMock()
     with (
-        _probe({"other-on-b"}),
+        _probe({"other-duo-on-c"}),
         patch("app.services.runtime_manager.start_runtime", start),
     ):
         resp = await auth_client.post(
@@ -540,8 +551,9 @@ async def test_a_busy_named_worker_is_409_with_a_sentence(auth_client, session):
     assert resp.status_code == 409
     assert "box-b" in resp.json()["detail"]
     start.assert_not_awaited()
-    assert (await session.exec(select(Runtime))).all() != []  # nur die fremde Instanz
-    assert (await session.exec(select(RuntimeHost))).all() == []
+    # Nur die fremde Instanz und ihre zwei Mitglieder-Zeilen — nichts Neues.
+    assert [rt.slug for rt in (await session.exec(select(Runtime))).all()] == ["other-duo-on-c"]
+    assert len((await session.exec(select(RuntimeHost))).all()) == 2
 
 
 @pytest.mark.asyncio

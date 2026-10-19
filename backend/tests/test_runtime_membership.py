@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import ast
 import json
+import re
 import uuid
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -52,37 +53,88 @@ MODEL = APP / "models" / "runtime_host.py"
 # ── 1. Architecture: one writer ──────────────────────────────────────────────
 
 
-def _writes_runtime_host(tree: ast.AST) -> list[int]:
-    """Line numbers where a function both names RuntimeHost and writes rows.
+#: Calls that may take ``RuntimeHost`` (or its table) as an argument without
+#: writing: building a SELECT, a typed ``session.get``, type checks. Anything
+#: else that receives the model is treated as a write — a ratchet that fails
+#: closed: a new legitimate reader is one entry here, a new writer is red.
+_READ_CALLEES = {"select", "get", "isinstance", "issubclass", "type", "col", "func"}
+_WRITE_CALLEES = {"insert", "delete", "update", "upsert"}
+_RAW_SQL = re.compile(
+    r"\b(insert\s+into|delete\s+from|update|merge\s+into)\s+[\"'`]?runtime_hosts\b",
+    re.IGNORECASE,
+)
 
-    Writes = ``RuntimeHost(...)`` constructor, ``insert/delete/update(RuntimeHost)``,
-    ``RuntimeHost.__table__``, or ``.delete(`` on a session inside a function
-    that also selects RuntimeHost rows (the delete-the-loaded-rows pattern).
+
+def _import_aliases(tree: ast.AST) -> dict[str, str]:
+    """``{local name: original name}`` — ``from sqlalchemy import delete as d``."""
+    out: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                out[alias.asname or alias.name] = alias.name
+    return out
+
+
+def _callee(fn: ast.AST, aliases: dict[str, str]) -> str | None:
+    if isinstance(fn, ast.Name):
+        return aliases.get(fn.id, fn.id)
+    if isinstance(fn, ast.Attribute):
+        return fn.attr
+    return None
+
+
+def _names_runtime_host(arg: ast.AST) -> bool:
+    """``RuntimeHost``, ``RuntimeHost.__table__`` or ``models.RuntimeHost``."""
+    if isinstance(arg, ast.Name) and arg.id == "RuntimeHost":
+        return True
+    if isinstance(arg, ast.Attribute):
+        if arg.attr == "RuntimeHost":
+            return True
+        if arg.attr == "__table__":
+            return _names_runtime_host(arg.value)
+    return False
+
+
+def _writes_runtime_host(tree: ast.AST) -> list[int]:
+    """Line numbers where code writes ``runtime_hosts`` rows.
+
+    Writes = the ``RuntimeHost(...)`` constructor; any use of
+    ``RuntimeHost.__table__`` (Core writes go through it); any call that gets
+    the model as an argument and is not a known read (``insert``/``delete``/
+    ``update`` under any import alias, ``session.execute(...)`` …); ``.delete(``
+    on a session inside a function that also names RuntimeHost (the
+    delete-the-loaded-rows pattern); raw SQL writes in string constants, with
+    any spacing or case.
     """
-    hits: list[int] = []
+    aliases = _import_aliases(tree)
+    hits: set[int] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
-            fn = node.func
-            if isinstance(fn, ast.Name) and fn.id == "RuntimeHost":
-                hits.append(node.lineno)
-            if isinstance(fn, ast.Name) and fn.id in {"insert", "delete", "update"}:
-                if any(isinstance(a, ast.Name) and a.id == "RuntimeHost" for a in node.args):
-                    hits.append(node.lineno)
+            name = _callee(node.func, aliases)
+            if _names_runtime_host(node.func) and not (
+                isinstance(node.func, ast.Attribute) and node.func.attr != "RuntimeHost"
+            ):
+                hits.add(node.lineno)  # RuntimeHost(...) / models.RuntimeHost(...)
+            if any(_names_runtime_host(a) for a in [*node.args, *(k.value for k in node.keywords)]):
+                if name in _WRITE_CALLEES or name not in _READ_CALLEES:
+                    hits.add(node.lineno)
         if (
             isinstance(node, ast.Attribute)
             and node.attr == "__table__"
-            and isinstance(node.value, ast.Name)
-            and node.value.id == "RuntimeHost"
+            and _names_runtime_host(node.value)
         ):
-            hits.append(node.lineno)
+            hits.add(node.lineno)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if _RAW_SQL.search(node.value):
+                hits.add(node.lineno)
     for fn in [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
         names = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)}
         if "RuntimeHost" not in names:
             continue
         for call in [n for n in ast.walk(fn) if isinstance(n, ast.Call)]:
             if isinstance(call.func, ast.Attribute) and call.func.attr == "delete":
-                hits.append(call.lineno)
-    return hits
+                hits.add(call.lineno)
+    return sorted(hits)
 
 
 def test_nobody_but_the_membership_module_writes_runtime_hosts():
@@ -91,31 +143,54 @@ def test_nobody_but_the_membership_module_writes_runtime_hosts():
         if path in (WRITER, MODEL):
             continue
         text = path.read_text()
-        if "RuntimeHost" not in text and "runtime_hosts" not in text:
+        if "RuntimeHost" not in text and "runtime_hosts" not in text.lower():
             continue
-        lowered = text.lower()
-        for verb in ("insert into runtime_hosts", "delete from runtime_hosts", "update runtime_hosts"):
-            if verb in lowered:
-                offenders.append(f"{path.relative_to(APP)}: raw SQL '{verb}'")
         for line in _writes_runtime_host(ast.parse(text)):
             offenders.append(f"{path.relative_to(APP)}:{line}")
     assert offenders == [], "runtime_hosts written outside runtime_membership: " + ", ".join(offenders)
 
 
-def test_the_architecture_check_catches_a_writer():
-    """The check itself must bite (sabotage probe in code form)."""
-    sample = (
+@pytest.mark.parametrize(
+    "sample",
+    [
         "async def f(session, rt, h):\n"
-        "    session.add(RuntimeHost(runtime_id=rt, host_id=h, role='worker', node_rank=1))\n"
-    )
-    assert _writes_runtime_host(ast.parse(sample)) == [2]
-    sample_delete = (
+        "    session.add(RuntimeHost(runtime_id=rt, host_id=h, role='worker', node_rank=1))\n",
         "async def g(session, rid):\n"
         "    rows = (await session.exec(select(RuntimeHost))).all()\n"
         "    for r in rows:\n"
-        "        await session.delete(r)\n"
+        "        await session.delete(r)\n",
+        # aliased Core construct
+        "from sqlalchemy import delete as sa_delete\n"
+        "async def h(session):\n"
+        "    await session.execute(sa_delete(RuntimeHost))\n",
+        # the table object handed to execute / insert
+        "async def i(session):\n"
+        "    await session.execute(RuntimeHost.__table__.delete())\n",
+        # unknown callee getting the model
+        "async def j(session, rows):\n"
+        "    await session.run_sync(lambda s: s.bulk_insert_mappings(RuntimeHost, rows))\n",
+        # raw SQL, other spacing / case / newline
+        "from sqlalchemy import text\n"
+        "async def k(session):\n"
+        "    await session.execute(text('DELETE  FROM\\n runtime_hosts WHERE 1=1'))\n",
+        "async def l(session):\n"
+        "    await session.execute(text(\"Insert Into runtime_hosts VALUES (1)\"))\n",
+    ],
+    ids=["ctor", "loaded-delete", "alias", "table", "bulk", "raw-spacing", "raw-case"],
+)
+def test_the_architecture_check_catches_a_writer(sample):
+    """The check itself must bite (sabotage probe in code form)."""
+    assert _writes_runtime_host(ast.parse(sample)) != []
+
+
+def test_the_architecture_check_lets_readers_pass():
+    sample = (
+        "async def r(session, rid, hid):\n"
+        "    rows = (await session.exec(select(RuntimeHost).where(RuntimeHost.runtime_id == rid))).all()\n"
+        "    one = await session.get(RuntimeHost, hid)\n"
+        "    return rows, one, isinstance(one, RuntimeHost)\n"
     )
-    assert _writes_runtime_host(ast.parse(sample_delete)) == [4]
+    assert _writes_runtime_host(ast.parse(sample)) == []
 
 
 # ── 2. Structure checks ──────────────────────────────────────────────────────
@@ -176,9 +251,9 @@ async def test_unknown_disabled_and_sleeping_boxes_are_422(session):
     rt = await _duo_rt(session, "duo", a)
 
     for worker_id, words in (
-        (uuid.uuid4(), "not a registered host"),
-        (off.id, "switched off"),
-        (sleepy.id, "sleeps on demand"),
+        (uuid.uuid4(), "nicht eingetragen"),
+        (off.id, "ausgeschaltet"),
+        (sleepy.id, "schläft bei Bedarf"),
     ):
         with pytest.raises(rm.MembershipError) as exc:
             await rm.set_members(session, rt, rm.duo(a.id, worker_id))
@@ -316,13 +391,13 @@ async def test_crud_patch_of_a_running_duo_to_another_worker_is_409(auth_client,
             json={"topology": {"nodes": 2, "worker_host_id": str(c.id)}},
         )
     assert resp.status_code == 409, resp.text
-    assert "stop it" in resp.json()["detail"]
+    assert "erst stoppen" in resp.json()["detail"]
     rt = (await session.exec(select(Runtime).where(Runtime.slug == "duo"))).one()
     assert await _rows(session, rt.id) == [("head", 0, a.id), ("worker", 1, b.id)]
 
 
 @pytest.mark.asyncio
-async def test_crud_a_sleeping_worker_is_422(auth_client, session):
+async def test_crud_a_sleeping_worker_is_refused(auth_client, session):
     a = await _host(session, "box-a")
     sleepy = await _host(session, "box-sleepy", ssh_host="192.0.2.13", power_managed=True)
     with _probe(set()):
@@ -330,8 +405,9 @@ async def test_crud_a_sleeping_worker_is_422(auth_client, session):
             "/api/v1/runtimes/db",
             json=_crud_body("duo", a.id, topology={"nodes": 2, "worker_host_id": str(sleepy.id)}),
         )
-    assert resp.status_code == 422, resp.text
-    assert "sleeps on demand" in resp.json()["detail"]
+    # Refused by the candidate rule (same as the recipe start) before any write.
+    assert resp.status_code == 409, resp.text
+    assert "schläft bei Bedarf" in resp.json()["detail"]
     assert (await session.exec(select(Runtime).where(Runtime.slug == "duo"))).first() is None
 
 
@@ -493,7 +569,7 @@ async def test_audit_repairs_a_legacy_worker_field_and_reports_it(session):
         )
     ).all()
     assert len(events) == 1
-    assert "box-b now counts as used" in events[0].title
+    assert "box-b gilt jetzt als belegt" in events[0].title
 
     assert await rm.membership_audit(session, repair=True) == []
 
@@ -572,3 +648,226 @@ def test_startup_audit_runs_before_the_watcher_starts():
 async def test_startup_audit_never_raises():
     with patch.object(rm, "membership_audit", AsyncMock(side_effect=RuntimeError("db down"))):
         assert await rm.startup_audit() == []
+
+
+# ── 8. Solo <-> Duo on the same boxes WITH engines running (critic 19.10.) ───
+
+
+def _evict_ok():
+    return AsyncMock(return_value={"ok": True, "message": "Box freigegeben", "stopped": []})
+
+
+async def _solo_rt(session, slug, host, recipe):
+    return await _runtime(
+        session, slug, host,
+        model_identifier=recipe.model_identifier,
+        topology={"nodes": 1, "recipe_slug": recipe.slug},
+    )
+
+
+@pytest.mark.asyncio
+async def test_two_running_solos_switch_to_the_duo_on_the_same_boxes(auth_client, session):
+    """Mark 19.10.: Solo<->Duo on the same boxes. A solo on the worker box is
+    evicted like the old duo in Duo->Duo (worker first, then head) — not 409."""
+    a = await _host(session, "box-a")
+    b = await _host(session, "box-b", ssh_host="192.0.2.11")
+    solo_x = await _recipe(session, "recipe-x", min_vram_gb=100.0)
+    solo_y = await _recipe(session, "recipe-y", min_vram_gb=100.0)
+    await _duo_recipe(session)
+    await _solo_rt(session, "recipe-x-box-a", a, solo_x)
+    await _solo_rt(session, "recipe-y-box-b", b, solo_y)
+
+    evict = _evict_ok()
+    with patch("app.services.runtime_manager.ensure_exclusive_host", evict):
+        resp, start = await _start(
+            auth_client, a, "recipe-duo", running={"recipe-x-box-a", "recipe-y-box-b"}
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["worker_host_id"] == str(b.id)
+    start.assert_awaited_once()  # the head's own eviction runs inside start_runtime
+    evict.assert_awaited_once()
+    assert evict.await_args.kwargs["host_id"] == b.id  # worker box freed first
+    duo_rt = (
+        await session.exec(select(Runtime).where(Runtime.slug == resp.json()["runtime_slug"]))
+    ).one()
+    assert await _rows(session, duo_rt.id) == [("head", 0, a.id), ("worker", 1, b.id)]
+
+
+@pytest.mark.asyncio
+async def test_a_running_duo_switches_to_a_solo_on_its_worker_box(auth_client, session):
+    """The other direction: the solo start on the worker box evicts the duo
+    (ensure_exclusive_host knows members) instead of answering 409."""
+    a = await _host(session, "box-a")
+    b = await _host(session, "box-b", ssh_host="192.0.2.11")
+    await _recipe(session, "recipe-x", min_vram_gb=100.0)
+    recipe = await _duo_recipe(session)
+    duo_rt = await _runtime(
+        session, "recipe-duo-box-a", a,
+        model_identifier=recipe.model_identifier,
+        topology={"nodes": 2, "recipe_slug": recipe.slug},
+    )
+    await rm.set_members(session, duo_rt, rm.duo(a.id, b.id))
+
+    resp, start = await _start(auth_client, b, "recipe-x", running={"recipe-duo-box-a"})
+    assert resp.status_code == 200, resp.text
+    start.assert_awaited_once()
+    assert resp.json()["switch_lock"]["state"] in {"idle", "unknown"}  # it displaces the duo
+
+
+@pytest.mark.asyncio
+async def test_a_non_exclusive_solo_on_a_running_duos_worker_box_is_still_refused(
+    auth_client, session
+):
+    """A solo that does not claim the box would not evict anything — it would
+    load next to the duo's worker. That stays a 409."""
+    a = await _host(session, "box-a")
+    b = await _host(session, "box-b", ssh_host="192.0.2.11")
+    await _recipe(session, "recipe-small")  # no min_vram_gb → not exclusive
+    recipe = await _duo_recipe(session)
+    duo_rt = await _runtime(
+        session, "recipe-duo-box-a", a,
+        model_identifier=recipe.model_identifier,
+        topology={"nodes": 2, "recipe_slug": recipe.slug},
+    )
+    await rm.set_members(session, duo_rt, rm.duo(a.id, b.id))
+
+    resp, start = await _start(auth_client, b, "recipe-small", running={"recipe-duo-box-a"})
+    assert resp.status_code == 409, resp.text
+    start.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_box_that_heads_another_running_duo_is_not_taken_as_worker(auth_client, session):
+    """Only a plain solo is evictable for a worker slot. A box that heads (or
+    serves as worker for) a duo of another head stays busy."""
+    a = await _host(session, "box-a")
+    b = await _host(session, "box-b", ssh_host="192.0.2.11")
+    c = await _host(session, "box-c", ssh_host="192.0.2.12")
+    await _duo_recipe(session)
+    other = await _duo_rt(session, "other-duo", b)
+    await rm.set_members(session, other, rm.duo(b.id, c.id))
+
+    resp, start = await _start(auth_client, a, "recipe-duo", running={"other-duo"})
+    assert resp.status_code == 409, resp.text
+    start.assert_not_awaited()
+    assert (await session.exec(select(Runtime).where(Runtime.slug != "other-duo"))).all() == []
+
+
+# ── 9. A power-managed box is never offered as a worker (no half row) ────────
+
+
+@pytest.mark.asyncio
+async def test_a_power_managed_box_is_no_worker_candidate_and_leaves_no_row(auth_client, session):
+    a = await _host(session, "box-a")
+    p = await _host(session, "box-p", ssh_host="192.0.2.14", power_managed=True)
+    await _duo_recipe(session)
+
+    resp, start = await _start(auth_client, a, "recipe-duo")
+    assert resp.status_code == 409, resp.text
+    resp, _ = await _start(auth_client, a, "recipe-duo", body={"worker_host_id": str(p.id)})
+    assert resp.status_code == 409, resp.text
+    start.assert_not_awaited()
+    assert (await session.exec(select(Runtime))).all() == []
+    assert await rm.membership_audit(session, repair=False) == []
+
+    with _probe(set()):
+        listed = (await auth_client.get(f"/api/v1/hosts/{a.id}/recipes")).json()
+    entries = listed if isinstance(listed, list) else listed.get("recipes", [])
+    duo_entry = next(e for e in entries if e["slug"] == "recipe-duo")
+    assert all(w["slug"] != "box-p" for w in duo_entry["candidate_workers"])
+
+
+# ── 10. Watcher: a deterministic refusal is not a failed recovery ────────────
+
+
+async def _watched_duo(session, *, worker=True):
+    recipe = await _duo_recipe(session)
+    a = await _host(session, "box-a", autostart_enabled=True, autostart_recipe_slug=recipe.slug)
+    b = await _host(session, "box-b", ssh_host="192.0.2.11")
+    rt = await _runtime(
+        session, "recipe-duo-box-a", a,
+        model_identifier=recipe.model_identifier,
+        topology={"nodes": 2, "recipe_slug": recipe.slug},
+    )
+    if worker:
+        await rm.set_members(session, rt, rm.duo(a.id, b.id))
+    return a, b, rt
+
+
+async def _recovery_events(session):
+    return [
+        e.event_type
+        for e in (await session.exec(select(ActivityEvent))).all()
+        if e.event_type.startswith("runtime.auto_recovery")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_watcher_does_not_burn_attempts_on_a_duo_without_worker(async_session, fake_redis):
+    _, _, rt = await _watched_duo(async_session, worker=False)
+    switcher = AsyncMock(return_value={"ok": True, "message": "Verbund startet"})
+    start = AsyncMock(return_value={"ok": True, "message": "läuft an"})
+    with patch("app.services.recipe_switcher.start_recipe_on_host", switcher):
+        await _run_watcher(async_session, fake_redis, start_mock=start, ticks=8)
+    switcher.assert_not_awaited()
+    assert await _recovery_events(async_session) == []
+    assert await fake_redis.get(RedisKeys.runtime_recovery_failures(rt.slug)) is None
+    # Reported once, as what it is: members incomplete.
+    incomplete = (
+        await async_session.exec(
+            select(ActivityEvent).where(ActivityEvent.event_type == "runtime.members_incomplete")
+        )
+    ).all()
+    assert len(incomplete) == 1
+
+
+@pytest.mark.asyncio
+async def test_watcher_never_evicts_an_active_solo_on_the_duos_worker_box(
+    async_session, fake_redis
+):
+    """Auto-recovery must not overrule the operator: a solo the operator
+    started on the worker box blocks the duo's revival — without counting a
+    failed attempt."""
+    _, b, rt = await _watched_duo(async_session)
+    solo = await _recipe(async_session, "recipe-x", min_vram_gb=100.0)
+    await _solo_rt(async_session, "recipe-x-box-b", b, solo)
+    await fake_redis.set(
+        RedisKeys.runtime_switching("recipe-x-box-b"),
+        json.dumps({"phase": "loading", "source": "switch"}),
+    )
+    switcher = AsyncMock(return_value={"ok": True, "message": "Verbund startet"})
+    start = AsyncMock(return_value={"ok": True, "message": "läuft an"})
+    with patch("app.services.recipe_switcher.start_recipe_on_host", switcher):
+        await _run_watcher(async_session, fake_redis, start_mock=start, ticks=8)
+    switcher.assert_not_awaited()
+    assert await _recovery_events(async_session) == []
+    assert await fake_redis.get(RedisKeys.runtime_recovery_failures(rt.slug)) is None
+
+
+# ── 11. CRUD: "is it running?" is asked about the boxes it runs on NOW ───────
+
+
+@pytest.mark.asyncio
+async def test_crud_moving_the_head_of_a_running_duo_is_409(auth_client, session):
+    """The probe must ask the CURRENT head, before the row is changed. Asked
+    after the mutation it probed the new head, saw nothing and let a running
+    duo move."""
+    a = await _host(session, "box-a")
+    b = await _host(session, "box-b", ssh_host="192.0.2.11")
+    c = await _host(session, "box-c", ssh_host="192.0.2.12")
+    with _probe(set()):
+        await auth_client.post(
+            "/api/v1/runtimes/db",
+            json=_crud_body("duo", a.id, topology={"nodes": 2, "worker_host_id": str(b.id)}),
+        )
+
+    async def _runs_on_a(runtime, host=None, **kw):
+        return runtime.slug == "duo" and host is not None and host.ssh_host == "192.0.2.10"
+
+    with patch("app.services.recipe_switcher.probe_running", _runs_on_a):
+        resp = await auth_client.patch("/api/v1/runtimes/db/duo", json={"host_id": str(c.id)})
+    assert resp.status_code == 409, resp.text
+    rt = (await session.exec(select(Runtime).where(Runtime.slug == "duo"))).one()
+    await session.refresh(rt)
+    assert rt.host_id == a.id
+    assert await _rows(session, rt.id) == [("head", 0, a.id), ("worker", 1, b.id)]

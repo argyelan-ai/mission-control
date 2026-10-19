@@ -89,7 +89,10 @@ def reason_box_is_worker(runtime_name: str) -> str:
 
 
 def reason_worker_not_free(slug: str) -> str:
-    return f"Box '{slug}' steht als zweite Box nicht zur Verfügung (belegt, aus oder ohne SSH-Zugang)"
+    return (
+        f"Box '{slug}' steht als zweite Box nicht zur Verfügung "
+        f"(belegt, aus, schläft bei Bedarf oder ohne SSH-Zugang)"
+    )
 
 
 #: Machine code of the 409 for a paused instance — the dialog turns it into
@@ -380,7 +383,17 @@ def worker_candidates(hosts: list[Host], head: Host, exclusive_busy: set[uuid.UU
     eine Vorbelegung — eine Head-Box steht trotzdem in der Liste, sie
     kommt nur später.
     """
-    free = [h for h in hosts if h.id != head.id and h.id not in exclusive_busy]
+    # Dieselbe Regel wie ``runtime_membership.member_capable``: eine
+    # ausgeschaltete oder bei Bedarf schlafende Box wird nie als Worker
+    # angeboten. Sonst legte ein Start die Instanz an und scheiterte erst
+    # danach am 422 der Mitgliedschaft — eine halbe Zeile (Kritik 19.10.).
+    from app.services.runtime_membership import member_capable
+
+    free = [
+        h
+        for h in hosts
+        if h.id != head.id and h.id not in exclusive_busy and member_capable(h)
+    ]
     free.sort(key=lambda h: (0 if h.role == "worker" else 1, h.ui_order, h.slug))
     return [{"host_id": str(h.id), "slug": h.slug, "role": h.role} for h in free]
 
@@ -996,8 +1009,31 @@ def foreign_exclusive_busy(state: FleetState, head: Host) -> set[uuid.UUID]:
     return {
         hid
         for hid, rts in state.occupied.items()
-        if any(rt.exclusive_memory and rt.host_id != head.id for rt in rts)
+        if any(
+            rt.exclusive_memory
+            and rt.host_id != head.id
+            and not _plain_solo_on(state, rt, hid)
+            for rt in rts
+        )
     }
+
+
+def _plain_solo_on(state: FleetState, rt: Runtime, box_id: uuid.UUID) -> bool:
+    """Is ``rt`` a one-box runtime whose own box is ``box_id``?
+
+    Such a solo is evictable for a duo start exactly like the old duo in
+    Duo->Duo: the start frees the worker box first (``ensure_exclusive_host``
+    with ``host_id``), then the head. Mark 19.10.: Solo<->Duo on the same
+    boxes must work with engines running. A duo of ANOTHER head (as head or as
+    worker) stays busy — stopping it would take a box away from a third one.
+    """
+    from app.services.runtime_membership import topology_nodes
+
+    return (
+        rt.host_id == box_id
+        and not state.members.get(rt.id)
+        and topology_nodes(rt.topology) < 2
+    )
 
 
 def duo_worker_candidates(
@@ -1380,8 +1416,15 @@ async def start_recipe_on_host(
         # dieser Box, belegt sie aber trotzdem (Mitgliedschaft, siehe
         # runtime_host_ids). Ohne diese Prüfung zöge ein Solo-Start dem
         # laufenden Verbund die Box unter den Füssen weg.
+        #
+        # Mark 19.10. (Solo<->Duo on the same boxes): a solo that claims the
+        # box exclusively EVICTS the duo — ``start_runtime`` →
+        # ``ensure_exclusive_host`` also stops runtimes that use this box as a
+        # member, through the duo's own stop command (both boxes). Only a
+        # solo that does not claim the box would load next to the duo's
+        # worker; that one stays refused.
         blocker = next(iter(state.worker_member_runtimes(host.id)), None)
-        if blocker is not None:
+        if blocker is not None and not recipe_claims_box(recipe, instance):
             raise RecipeStartError(409, reason_box_is_worker(blocker.display_name))
 
     # Head launcher (docs/specs/head-launcher.md §6.7): never pull an engine
@@ -1608,9 +1651,9 @@ async def _fill_running_members(
             current = state.host_by_id.get(recorded)
             raise RecipeStartError(
                 409,
-                f"'{instance.slug}' runs with worker box "
-                f"'{current.slug if current else recorded}' — stop it before "
-                "changing its boxes",
+                f"'{instance.slug}' läuft mit der Worker-Box "
+                f"'{current.slug if current else recorded}' — erst stoppen, dann "
+                "die Boxen ändern",
             )
         return recorded
     topology = instance.topology if isinstance(instance.topology, dict) else {}

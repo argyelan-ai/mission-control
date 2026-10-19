@@ -209,6 +209,18 @@ def _as_set(members: Iterable[Any]) -> set[tuple[uuid.UUID, str, int]]:
 # ── Structure check (no occupancy, no reachability) ──────────────────────────
 
 
+def member_capable(host: Host) -> bool:
+    """May this box be a member of a multi-box runtime at all?
+
+    The one rule for ``validate_members`` AND for the recipe switcher's worker
+    candidates: a box switched off in MC or one that sleeps on demand
+    (``power_managed``) never is. Offering such a box in the start dialog and
+    refusing it only after the instance row was written left a half duo
+    behind (critic 19.10.2026).
+    """
+    return bool(host.enabled) and not host.power_managed
+
+
 async def validate_members(
     session: AsyncSession,
     runtime: Runtime,
@@ -227,51 +239,53 @@ async def validate_members(
     if n < 2:
         raise MembershipError(
             422,
-            "a runtime on one box has no member rows — set topology.nodes to 1 instead",
+            "Eine Runtime auf einer Box hat keine Mitglieder-Zeilen — "
+            "topology.nodes auf 1 setzen",
         )
     ranks = sorted(m.rank for m in members)
     if ranks != list(range(n)):
         raise MembershipError(
-            422, f"member ranks must be 0..{n - 1} without gaps or repeats, got {ranks}"
+            422, f"Mitglieder-Ränge müssen 0..{n - 1} ohne Lücke und ohne Doppel sein, nicht {ranks}"
         )
     by_rank = {m.rank: m for m in members}
     head = by_rank[0]
     if runtime.host_id is None or head.host_id != runtime.host_id:
         raise MembershipError(
-            422, "rank 0 must be the runtime's own host_id (the head box)"
+            422, "Rang 0 muss die eigene Box der Runtime sein (host_id, der Head)"
         )
     if head.role != ROLE_HEAD or any(m.role != ROLE_WORKER for m in members if m.rank != 0):
-        raise MembershipError(422, "rank 0 has role 'head', every other rank role 'worker'")
+        raise MembershipError(422, "Rang 0 hat die Rolle 'head', jeder andere Rang 'worker'")
     host_ids = [m.host_id for m in members]
     if len(set(host_ids)) != n:
-        raise MembershipError(422, "every member must be a different box")
+        raise MembershipError(422, "Jedes Mitglied muss eine andere Box sein")
     nodes = topology_nodes(runtime.topology)
     if nodes != n:
         raise MembershipError(
-            422, f"topology.nodes is {nodes} but {n} member boxes were given"
+            422, f"topology.nodes ist {nodes}, aber es wurden {n} Boxen angegeben"
         )
     if recipe is not None:
         recipe_n = topology_nodes(recipe.topology)
         if recipe_n != n:
             raise MembershipError(
                 422,
-                f"recipe '{recipe.slug}' needs {recipe_n} box(es), not {n}",
+                f"Rezept '{recipe.slug}' braucht {recipe_n} Box(en), nicht {n}",
             )
     hosts: dict[uuid.UUID, Host] = {}
     for hid in host_ids:
         host = await session.get(Host, hid)
         if host is None:
             raise MembershipError(
-                422, f"member box {hid} is not a registered host (GET /api/v1/hosts)"
+                422, f"Box {hid} ist in MC nicht eingetragen (GET /api/v1/hosts)"
             )
         if not host.enabled:
             raise MembershipError(
-                422, f"box '{host.slug}' is switched off in MC and cannot be a member"
+                422, f"Box '{host.slug}' ist in MC ausgeschaltet und kann kein Mitglied sein"
             )
-        if host.power_managed:
+        if not member_capable(host):
             raise MembershipError(
                 422,
-                f"box '{host.slug}' sleeps on demand; multi-box runtimes cannot use it yet",
+                f"Box '{host.slug}' schläft bei Bedarf — Mehrbox-Runtimes können sie "
+                "noch nicht nutzen",
             )
         hosts[hid] = host
     return hosts
@@ -280,11 +294,13 @@ async def validate_members(
 # ── Running check ────────────────────────────────────────────────────────────
 
 
-async def _is_running(session: AsyncSession, runtime: Runtime) -> bool:
+async def is_running(session: AsyncSession, runtime: Runtime) -> bool:
     """Does this runtime's engine answer right now? Same probe as the switcher.
 
-    Only called when a write would CHANGE an existing member set, so solo
-    runtimes and unchanged duos never trigger a probe.
+    Asks the runtime's CURRENT head (``runtime.host_id`` as loaded). A caller
+    that is about to change the row (PATCH /runtimes/db) asks this BEFORE the
+    change and with no transaction open, and passes the answer as
+    ``running=`` — asked afterwards, the probe would go to the new head.
     """
     from app.services import recipe_switcher
     from app.services.host_resolver import resolved_host_from_row
@@ -302,7 +318,7 @@ async def _refuse_if_running(
     session: AsyncSession, runtime: Runtime, stored: list[RuntimeHost], running: bool | None
 ) -> None:
     if running is None:
-        running = await _is_running(session, runtime)
+        running = await is_running(session, runtime)
     if not running:
         return
     slugs = []
@@ -311,7 +327,7 @@ async def _refuse_if_running(
         slugs.append(host.slug if host is not None else str(row.host_id))
     raise MembershipError(
         409,
-        f"'{runtime.slug}' runs on {', '.join(slugs)} — stop it before changing its boxes",
+        f"'{runtime.slug}' läuft auf {', '.join(slugs)} — erst stoppen, dann die Boxen ändern",
     )
 
 
@@ -417,8 +433,9 @@ async def _check_one(
         if stored:
             return finding(
                 "rows_on_solo",
-                f"'{runtime.slug}' is recorded as one box but has {len(stored)} member "
-                "row(s) — set topology.nodes or stop and re-save it",
+                f"'{runtime.slug}' ist als Ein-Box-Runtime eingetragen, hat aber "
+                f"{len(stored)} Mitglieder-Zeile(n) — topology.nodes setzen oder stoppen "
+                "und neu speichern",
             )
         return None
 
@@ -428,14 +445,15 @@ async def _check_one(
         if legacy is None or runtime.host_id is None:
             return finding(
                 "members_incomplete",
-                f"'{runtime.slug}' needs {nodes} boxes but no worker box is known — "
-                "pick a worker (PATCH topology.worker_host_id)",
+                f"'{runtime.slug}' braucht {nodes} Boxen, aber keine Worker-Box ist "
+                "eingetragen — Worker wählen (Start-Dialog oder PATCH "
+                "topology.worker_host_id); der Wächter startet sie bis dahin nicht",
             )
         if not repair:
             return finding(
                 "members_incomplete",
-                f"'{runtime.slug}' has its worker only in the old topology field — "
-                "it is recorded at the next backend start",
+                f"'{runtime.slug}' hat seine Worker-Box nur im alten topology-Feld — "
+                "sie wird beim nächsten Backend-Start eingetragen",
             )
         try:
             await set_members(
@@ -444,7 +462,7 @@ async def _check_one(
         except MembershipError as exc:
             await session.rollback()
             return finding("members_invalid", f"'{runtime.slug}': {exc.detail}")
-        return finding("members_repaired", f"'{runtime.slug}': worker box recorded", True)
+        return finding("members_repaired", f"'{runtime.slug}': Worker-Box eingetragen", True)
 
     try:
         await validate_members(
@@ -501,9 +519,9 @@ async def _report_repairs(session: AsyncSession, repaired: list[AuditFinding]) -
         await emit_event(
             session,
             "runtime.members_repaired",
-            f"{runtime.slug}: worker box {worker_slug} recorded as member — "
-            f"{worker_slug} now counts as used by {name}; starting another "
-            f"model there will stop it",
+            f"{runtime.slug}: Worker-Box {worker_slug} als Mitglied eingetragen — "
+            f"{worker_slug} gilt jetzt als belegt durch {name}; ein anderes Modell "
+            f"dort zu starten stoppt es",
             severity="info",
             detail={
                 "runtime_id": str(runtime.id),
