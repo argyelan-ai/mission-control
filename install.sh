@@ -590,6 +590,16 @@ mc_update_guard_open_run() {
   return 0
 }
 
+# mc_update_guard_if_engine_ran — the same guard where python3 is optional
+# (edge update, installer re-run): only when an engine ever ran here, and
+# without downloading anything otherwise.
+mc_update_guard_if_engine_ran() {
+  [ -d "$MC_UPDATE_STATE/journal" ] || return 0
+  mc_python_ok || return 0
+  MC_UPDATE_ENGINE="$(mc_update_engine)" || return 0
+  mc_update_guard_open_run "$MC_UPDATE_ENGINE"
+}
+
 # mc_update_explain <command> <rc> — the next step after the engine ended.
 # The engine said what happened; this names what to do now.
 mc_update_explain() {
@@ -599,7 +609,10 @@ mc_update_explain() {
   case "$rc" in
     0|5) return 0 ;;
     1) echo "  What failed and why: docker compose logs backend --tail 50 · the run's log: $log" >&2 ;;
-    3) [ "$cmd" = rollback ] || echo "  Fix the reason above, then run the update again: ./install.sh --update" >&2 ;;
+    3) case "$cmd" in
+         start)  echo "  Fix the reason above, then run the update again: ./install.sh --update" >&2 ;;
+         resume) echo "  The interrupted run ended before it changed anything. Update again when you are ready: ./install.sh --update" >&2 ;;
+       esac ;;
     4) echo "  The run's log: $log" >&2 ;;
     9|2) ;;
     23) echo "  Another update holds the lock — let it finish. If it was interrupted: ./install.sh --resume" >&2 ;;
@@ -1062,9 +1075,7 @@ if [ "$UPDATE" = 1 ]; then
   # edge: the main branch, built locally. The engine updates releases only;
   # this path stays here (ADR-094 decision 10) — but never on top of an
   # unfinished engine run.
-  if mc_python_ok && MC_UPDATE_ENGINE="$(mc_update_engine)"; then
-    mc_update_guard_open_run "$MC_UPDATE_ENGINE"
-  fi
+  mc_update_guard_if_engine_ran
   trap mc_update_on_exit EXIT
   CURRENT_TAG="$(mc_current_release_tag || true)"
   ON_BRANCH="$(git symbolic-ref -q --short HEAD || true)"
@@ -1117,9 +1128,7 @@ else
     cd "$TARGET_DIR"
     # This boots the whole stack again — never on top of an update run that
     # did not finish (old containers on new code, or the other way round).
-    if mc_python_ok && MC_UPDATE_ENGINE="$(mc_update_engine)"; then
-      mc_update_guard_open_run "$MC_UPDATE_ENGINE"
-    fi
+    mc_update_guard_if_engine_ran
     # Re-run on an existing checkout: keep its version, never move it here
     # (that is what --update is for, with its downgrade guards).
     if TAG="$(mc_current_release_tag)"; then CHANNEL=stable; else TAG=""; CHANNEL=edge; fi

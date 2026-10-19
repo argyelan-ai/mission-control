@@ -858,6 +858,24 @@ def test_resume_from_another_install_is_refused(world: World):
     assert world.journal()["phase"] == "done"
 
 
+def test_no_new_update_on_top_of_a_failed_way_back(world: World):
+    """rollback_failed ends a run, but leaves the install half way (drain on,
+    maybe new code on a restored database). A new update would record that
+    state as its "before" — so it is refused until --rollback finished."""
+    world.patch_state(health_for_tag={"0.2.0": "unhealthy"}, restore_fail=True)
+    assert world.run("start").returncode == 4
+    failed = world.journal()["run_id"]
+    world.patch_state(restore_fail=False, health_for_tag={})
+    n = len(world.calls())
+    r = world.run("start")
+    assert r.returncode == 3, r.stdout + r.stderr
+    assert "./install.sh --rollback" in r.stdout
+    assert world.journal()["run_id"] == failed
+    assert not any(c[:1] == ["compose"] and c[3:4] in (["up"], ["pull"], ["stop"]) for c in world.calls()[n:])
+    pf = json.loads(world.run("preflight", "--json").stdout)
+    assert any(c["id"] == "lock" and c["status"] == "fail" for c in pf["checks"])
+
+
 def test_preflight_refuses_while_a_run_is_interrupted(world: World):
     assert world.run("start", fault="up.intent").returncode == 137
     r = world.run("start")

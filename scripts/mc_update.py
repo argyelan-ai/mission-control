@@ -1100,13 +1100,19 @@ class Engine:
         busy = self.lock.fd is None and self.lock.live_holder() is not None
         try:
             open_run = find_open_run(self.state)
+            last_run = find_run(self.state, None)
             unreadable = None
         except UpdateError as e:
-            open_run, unreadable = None, str(e)
+            open_run, last_run, unreadable = None, None, str(e)
         if busy:
             add("lock", "fail", "another update is running")
         elif unreadable:
             add("lock", "fail", f"{unreadable} — check the update journal before updating")
+        elif last_run is not None and last_run.phase == "rollback_failed":
+            # The install is half way (drain on, maybe new code on a restored
+            # database); a new run would take that as its "before".
+            add("lock", "fail", f"the way back of run {last_run.run_id} did not finish — "
+                                "fix the cause it named, then: ./install.sh --rollback")
         elif open_run is not None:
             add("lock", "fail", f"run {open_run.run_id} was interrupted in phase {open_run.phase} — resume it first: ./install.sh --resume")
         else:
