@@ -1,0 +1,14 @@
+{
+ "session_id": "fixture",
+ "cwd": ".",
+ "hook_event_name": "PostToolUse",
+ "tool_name": "Bash",
+ "tool_input": {
+  "command": "WT=../mc-wt-example; git -C \"$WT\" push origin feat/example 2>&1 | tail -1"
+ },
+ "tool_response": {
+  "stdout": "",
+  "stderr": "",
+  "interrupted": false
+ }
+}

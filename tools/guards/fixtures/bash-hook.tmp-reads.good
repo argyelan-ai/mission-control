@@ -1,0 +1,10 @@
+{
+ "session_id": "fixture",
+ "cwd": ".",
+ "hook_event_name": "PreToolUse",
+ "tool_name": "Bash",
+ "tool_input": {
+  "command": "ls /tmp/preview && cat /tmp/screenshot-notes.txt && du -sh /tmp/handoff && rm -rf /tmp/preview-old",
+  "run_in_background": false
+ }
+}

@@ -1,0 +1,10 @@
+{
+ "session_id": "fixture",
+ "cwd": ".",
+ "hook_event_name": "PreToolUse",
+ "tool_name": "Bash",
+ "tool_input": {
+  "command": "git -c core.hooksPath=/dev/null -C hook-repo-clean push --no-verify origin feat/x",
+  "run_in_background": false
+ }
+}

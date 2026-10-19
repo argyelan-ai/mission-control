@@ -1,0 +1,2 @@
+# A handoff written under /tmp is gone after a few days.
+cat notes.md > /tmp/handoff.md

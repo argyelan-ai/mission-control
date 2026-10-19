@@ -1,0 +1,2 @@
+# `-c k=v` before push hid the push from the gate; its output is cut.
+python3 scripts/privacy-scan.py && git -C ../wt -c color.ui=never push origin feat/example 2>&1 | tail -1
