@@ -12,6 +12,9 @@
 #  * zsh-set-split   — `set -- $var` in the agent's zsh.
 #  * background-tests — a test run with the tool flag run_in_background, or sent
 #                      to the background with '&' and no wait.
+#  * uncommitted-work — `git checkout <ref|file>`, `switch`, `restore`, `reset --hard`,
+#                      `clean -f`, `stash drop` in a tree with uncommitted changes
+#                      (the hook reads `git status` of that tree; read-only).
 #
 # Heredoc bodies are data (commit messages, PR texts) and are not checked.
 #
@@ -48,20 +51,47 @@ cmd = re.sub(r"<<-?\s*['\"]?(\w+)['\"]?[^\n]*\n.*?\n\s*\1\b", "<<HEREDOC-STRIPPE
 cwd = d.get("cwd") or os.getcwd()
 open(os.path.join(w, "cmd"), "w").write(cmd + "\n")
 open(os.path.join(w, "bg"), "w").write("1" if ti.get("run_in_background") else "0")
-targets = []
-for m in re.finditer(r"\bgit\s+(?:-C\s+(\S+)\s+)?(?:-\S+\s+)*push\b", cmd):
-    t = m.group(1)
+def resolve(m, path_group):
+    t = m.group(path_group)
     if t is None:
         cds = re.findall(r"(?:^|&&|;|\n)\s*cd\s+(\S+)", cmd[:m.start()])
         t = cds[-1] if cds else cwd
     t = os.path.expanduser(t.strip("'\""))
     if "$" in t:
-        continue  # a shell variable: cannot be resolved here
-    if not os.path.isabs(t):
-        t = os.path.join(cwd, t)
-    if t not in targets:
-        targets.append(t)
-open(os.path.join(w, "targets"), "w").write("\n".join(targets) + ("\n" if targets else ""))
+        return None  # a shell variable: cannot be resolved here
+    return t if os.path.isabs(t) else os.path.join(cwd, t)
+
+def collect(rx, name, keep=lambda m: True, tag=None):
+    out = []
+    for m in re.finditer(rx, cmd):
+        if not keep(m):
+            continue
+        t = resolve(m, 1)
+        if t and tag:
+            t = f"{tag(m)}\t{t}"
+        if t and t not in out:
+            out.append(t)
+    open(os.path.join(w, name), "w").write("\n".join(out) + ("\n" if out else ""))
+
+collect(r"\bgit\s+(?:-C\s+(\S+)\s+)?(?:-\S+\s+)*push\b", "targets")
+# Commands that throw away uncommitted work: checkout/switch to another state,
+# restore, reset --hard, clean -f, stash drop/clear. Creating a branch keeps it.
+WIPE = (r"\bgit\s+(?:-C\s+(\S+)\s+)?(?:-c\s+\S+\s+)*"
+        r"(checkout|switch|restore|reset|clean|stash)\b([^;&|\n]*)")
+def wipes(m):
+    verb, rest = m.group(2), m.group(3)
+    if verb in ("checkout", "switch"):
+        return not re.search(r"(^|\s)(-b|-B|-c|-C|--orphan|--detach\s+-b)\s", rest + " ") and rest.strip() != ""
+    if verb == "restore":
+        return "--staged" not in rest or "--worktree" in rest
+    if verb == "reset":
+        return "--hard" in rest
+    if verb == "clean":
+        return re.search(r"(^|\s)-[a-zA-Z]*f", rest) is not None
+    if verb == "stash":
+        return re.search(r"^\s*(drop|clear)\b", rest) is not None
+    return False
+collect(WIPE, "wipe_targets", wipes, tag=lambda m: m.group(2))
 PY
 
 RE_TEST='(pytest|vitest|jest|npm[[:space:]]+(run[[:space:]]+)?test|go[[:space:]]+test|cargo[[:space:]]+test)'
@@ -83,6 +113,20 @@ while IFS= read -r t; do
     add "privacy-scan: red in $t — fix it before the push: $(printf '%s' "$out" | tail -3 | tr '\n' ' ')"
   fi
 done < "$work/targets"
+while IFS="$(printf '\t')" read -r verb t; do
+  [ -n "$t" ] || continue
+  # Fixtures carry the tree state as captured evidence (<fixture>.status).
+  if [ -n "$fixture" ]; then
+    st="$(cat "$fixture.status" 2>/dev/null)"
+  else
+    st="$(git -C "$t" status --porcelain 2>/dev/null)" || continue
+  fi
+  # Untracked files survive everything except `git clean`.
+  [ "$verb" = clean ] || st="$(printf '%s\n' "$st" | grep -v '^??')"
+  if [ -n "$st" ]; then
+    add "uncommitted-work: $t has uncommitted changes ($(printf '%s\n' "$st" | wc -l | tr -d ' ') files) — this command can throw them away silently. Commit or WIP-commit first"
+  fi
+done < "$work/wipe_targets"
 # <<< guard-logic
 
 if [ -n "$fixture" ]; then
