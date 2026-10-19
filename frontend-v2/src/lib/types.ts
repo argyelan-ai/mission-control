@@ -2205,6 +2205,38 @@ export interface RuntimeLiveStatus {
    *  der DB-Zeile in jeden Live-Status-Eintrag gespiegelt, damit die Karte es
    *  ohne einen zweiten Request hat. */
   serving_since?: string | null;
+  /** Engine death (backend services/engine_death.py): set while
+   *  `status === "crashed"` — the engine was serving and is gone without a
+   *  planned stop. Cleared by the first serving probe or a stop through MC. */
+  crash?: RuntimeCrash | null;
+  /** The model the port answered with last (carried through an outage). */
+  last_served_model?: string | null;
+}
+
+export type RuntimeCrashReason =
+  | "oom"
+  | "memguard"
+  | "killed"
+  | "exited_error"
+  | "exited_clean"
+  | "hung"
+  | "container_gone"
+  | "process_gone"
+  | "unknown";
+
+export interface RuntimeCrash {
+  reason_code: RuntimeCrashReason | string;
+  /** German sentence (event title convention); the card translates `reason_code`. */
+  reason: string;
+  /** When it died: Docker's own finish time when known, else detection time. */
+  at: string;
+  detected_at: string;
+  exit_code: number | null;
+  oom_killed: boolean | null;
+  log_line: string | null;
+  /** Whether the box autostart will try a restart (hosts.autostart_enabled). */
+  autostart: boolean;
+  requeued_tasks?: number;
 }
 
 export interface RuntimesLiveResponse {

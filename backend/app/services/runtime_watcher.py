@@ -60,7 +60,7 @@ from app.services.agent_runtime_switch import (
     _PROBEABLE_RUNTIME_TYPES,
     probe_runtime_model_info,
 )
-from app.services import host_memory_prep
+from app.services import engine_death, host_memory_prep
 from app.services.host_resolver import resolve_host_for_runtime, ssh_capable
 from app.services.runtime_grace import (
     PHASE_LOADING,
@@ -333,13 +333,57 @@ class RuntimeWatcher:
                 # jedem langsamen Wechsel (Review 05.09.2026, M1).
                 await self._refresh_slot_grace(session, runtime, switching)
                 return
+            # Which model did the port serve last? Carried forward from the
+            # previous snapshot so the threshold tick still knows whose engine
+            # went quiet (engine_death.verdict, shared :8000 ports).
+            prev = await self._read_live(redis, runtime.slug)
+            last_served = (
+                prev.get("served_model") if prev.get("reachable") else prev.get("last_served_model")
+            )
             fails = await self._bump_failures(redis, runtime.slug)
+            death_verdict = "plain"
+            if fails == UNREACHABLE_EVENT_THRESHOLD:
+                try:
+                    death_verdict = await engine_death.verdict(
+                        session, redis, runtime, last_served=last_served
+                    )
+                    if death_verdict == "died":
+                        host_for_death = await resolve_host_for_runtime(session, runtime)
+                        autostart_host, autostart_recipe = await self._autostart_target(
+                            session, runtime
+                        )
+                        recorded = await engine_death.record_death(
+                            session, redis, runtime,
+                            host=host_for_death,
+                            last_served=last_served,
+                            autostart_on=bool(
+                                settings.runtime_auto_recovery_enabled
+                                and autostart_host is not None
+                                and autostart_recipe is not None
+                            ),
+                        )
+                        if recorded is None:  # engine alive, port silent
+                            death_verdict = "plain"
+                except Exception:  # noqa: BLE001 — never let it cost the alarm
+                    logger.exception("engine-death handling failed for %s", runtime.slug)
+                    death_verdict = "plain"
+            crash = await engine_death.get_crash(redis, runtime.slug)
             await self._write_live(
                 redis, runtime.slug,
                 reachable=False, served_model=None, latency_ms=None,
                 consecutive_failures=fails,
+                last_served_model=last_served,
+                **({"status": "crashed", "crash": crash} if crash else {}),
             )
-            if fails == UNREACHABLE_EVENT_THRESHOLD:
+            if fails == UNREACHABLE_EVENT_THRESHOLD and death_verdict != "plain":
+                # "died": runtime.engine_died replaces the generic alarm (one
+                # event per death, deduplicated per port). "not_ours": this row
+                # never ran — the port's last answer was another row's model.
+                if runtime.serving_since is not None:
+                    runtime.serving_since = None
+                    session.add(runtime)
+                    await session.commit()
+            elif fails == UNREACHABLE_EVENT_THRESHOLD:
                 message = (
                     f"{runtime.slug}: endpoint unreachable "
                     f"({fails} consecutive probes)"
@@ -404,6 +448,8 @@ class RuntimeWatcher:
         await redis.delete(RedisKeys.runtime_restart_baseline(runtime.slug))
         await redis.delete(self._fail_key(runtime.slug))
         await redis.delete(RedisKeys.runtime_recovery_failures(runtime.slug))
+        # A death is over once the engine answers; a stop marker is spent.
+        await engine_death.clear_after_serving(redis, runtime.slug)
         await self._write_live(
             redis, runtime.slug,
             reachable=True, served_model=served, latency_ms=latency_ms,
@@ -1524,6 +1570,22 @@ class RuntimeWatcher:
                 nx=True, ex=AUTO_RECOVERY_COOLDOWN,
             )
         )
+
+    async def _read_live(self, redis, slug: str) -> dict:
+        """The previous live snapshot, ``{}`` when absent/unreadable."""
+        try:
+            raw = await redis.get(RedisKeys.runtime_live(slug))
+        except Exception:  # noqa: BLE001
+            return {}
+        if not raw:
+            return {}
+        if isinstance(raw, bytes):
+            raw = raw.decode()
+        try:
+            doc = json.loads(raw)
+        except ValueError:
+            return {}
+        return doc if isinstance(doc, dict) else {}
 
     async def _write_live(self, redis, slug: str, **fields) -> None:
         payload = {"last_probe_at": _utcnow_iso(), **fields}

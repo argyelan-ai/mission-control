@@ -158,6 +158,58 @@ async def get_evicted(slug: str, redis=None) -> dict | None:
     return doc if isinstance(doc, dict) else None
 
 
+# ── Stopped through MC ───────────────────────────────────────────────────
+# An engine MC itself stopped (Stop button, schedule, lifecycle) is not an
+# engine death. The marker outlives the watcher's three-probe threshold by a
+# wide margin and is lifted by the next probe that sees the engine serving
+# (services/engine_death.clear_after_serving).
+STOPPED_TTL = 60 * 60
+
+
+def _stopped_key(slug: str) -> str:
+    return f"mc:runtime-stopped:{slug}"
+
+
+def crash_key(slug: str) -> str:
+    """Where services/engine_death keeps the last engine death of ``slug``."""
+    return f"mc:runtime-crash:{slug}"
+
+
+async def mark_stopped(slug: str | None) -> None:
+    """Remember that MC stopped ``slug`` on purpose. Best-effort — never raises.
+
+    A stop is also the operator's acknowledgement of an earlier engine death:
+    the "crashed" record goes, the card falls back to plain "stopped"."""
+    if not slug:
+        return
+    try:
+        redis = await get_redis()
+        await redis.setex(_stopped_key(slug), STOPPED_TTL, _utcnow_iso())
+        await redis.delete(crash_key(slug))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("mark_stopped(%s) failed: %s", slug, exc)
+
+
+async def clear_stopped(slug: str | None, redis=None) -> None:
+    if not slug:
+        return
+    try:
+        redis = redis or await get_redis()
+        await redis.delete(_stopped_key(slug))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("clear_stopped(%s) failed: %s", slug, exc)
+
+
+async def was_stopped(slug: str, redis=None) -> bool:
+    """True when MC stopped this runtime within ``STOPPED_TTL``. Redis down → False."""
+    try:
+        redis = redis or await get_redis()
+        return bool(await redis.get(_stopped_key(slug)))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("was_stopped(%s) failed: %s", slug, exc)
+        return False
+
+
 def _utcnow_iso() -> str:
     from datetime import datetime, timezone
     return datetime.now(timezone.utc).isoformat()

@@ -74,6 +74,33 @@ describe("Stage — title + corner", () => {
     expect(screen.queryByText(/up \d/)).not.toBeInTheDocument();
   });
 
+  // Engine death (backend engine_death): reason + time instead of a bare
+  // "unreachable", plus whether MC will restart it and what happened to tasks.
+  it("a crashed engine shows reason, time, autostart and requeued tasks", async () => {
+    const rt = makeRuntime({ display_name: "DeepSeek V4.1", state: "stopped", host: { id: "spark", slug: "spark", display_name: "DGX Spark" } });
+    const at = new Date();
+    at.setHours(17, 20, 0, 0);
+    const live = {
+      reachable: false, served_model: null, latency_ms: null, last_probe_at: "", consecutive_failures: 4, drift: false,
+      status: "crashed",
+      crash: {
+        reason_code: "killed", reason: "x", at: at.toISOString(), detected_at: at.toISOString(),
+        exit_code: 137, oom_killed: false, log_line: "Killed by memory guard", autostart: false, requeued_tasks: 2,
+      },
+    };
+    renderWithQuery(<Stage runtime={rt} live={live} members={[{ host: makeHost({ slug: "spark", display_name: "DGX Spark" }), role: "head" }]} onOpenCockpit={() => {}} />);
+    expect(await screen.findByText("crashed")).toBeInTheDocument();
+    const line = screen.getByTestId("stage-now-line");
+    expect(line).toHaveTextContent("Crashed 17:20 · killed from outside (exit 137) — often the memory guard");
+    expect(line).toHaveAttribute("title", "Killed by memory guard");
+    expect(screen.getByTestId("stage-crash-followup")).toHaveTextContent(
+      "Box autostart off — will not restart by itself · 2 tasks back in the inbox",
+    );
+    expect(screen.getByTestId("stage-card")).toHaveAttribute("data-status", "failed");
+    // Trouble actions: restart is the primary button.
+    expect(screen.getByTestId("restart-now")).toBeInTheDocument();
+  });
+
   it("corner shows 'unreachable' for a failed runtime", async () => {
     const rt = makeRuntime({
       display_name: "Qwen3.8 27B", state: "failed",

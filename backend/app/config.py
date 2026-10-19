@@ -515,6 +515,18 @@ class Settings(BaseSettings):
     # switch-grace state — planned switches stay silent either way.
     runtime_auto_recovery_enabled: bool = True
 
+    # Engine death (services/engine_death.py): an engine that was serving and
+    # is gone outside any planned window (no switch grace, not stopped through
+    # MC, not evicted by a start) is reported ONCE as `runtime.engine_died`
+    # with a reason read from the box, the card says "crashed" with reason and
+    # time, and the running tasks of agents bound to that runtime go back to
+    # the inbox instead of failing silently. A restart is NOT part of this —
+    # that stays the box's autostart switch (`hosts.autostart_enabled`,
+    # default off) with its own cooldown and attempt cap.
+    # Kill switch for the whole behaviour; the requeue has its own switch.
+    runtime_engine_death_enabled: bool = True
+    runtime_engine_death_requeue_enabled: bool = True
+
     # Slot-Runtimes (ADR-078): beim Backend-Start bekommt jede Head-Box eine
     # ankerlose Zeile („<Box> :8000"), an der ihre Agenten hängen, statt an der
     # Zeile eines einzelnen Rezepts.

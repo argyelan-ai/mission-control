@@ -2621,6 +2621,11 @@ async def stop_runtime(runtime: dict, *, host: ResolvedHost | None = None) -> di
     """
     runtime_type = runtime["runtime_type"]
     host = host or resolve_host_from_runtime_fields(runtime)
+    # Every stop MC issues (button, schedule, lifecycle, restart) is on
+    # purpose: the watcher must not report the silence that follows as an
+    # engine death (services/engine_death). Set BEFORE the stop so the first
+    # failed probe already sees it.
+    await runtime_grace.mark_stopped(runtime.get("slug"))
 
     if runtime_type == "lmstudio":
         lms_id = runtime.get("lms_identifier", "")
