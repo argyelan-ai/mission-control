@@ -480,7 +480,8 @@ async def test_duo_start_writes_the_env_members_and_the_autostart_slug(auth_clie
     assert {m.host_id for m in members} == {box_a.id, box_b.id}
 
     runtime = (await session.exec(select(Runtime))).one()
-    assert runtime.topology["worker_host_id"] == str(box_b.id)
+    # ADR-096 §1.5: the worker lives in runtime_hosts only, not in topology.
+    assert "worker_host_id" not in runtime.topology
     assert runtime.topology["nodes"] == 2
     assert runtime.host_id == box_a.id
 
@@ -889,10 +890,16 @@ async def test_watcher_starts_a_verbund_through_the_recipe_switcher(async_sessio
         async_session, "box-a", autostart_enabled=True, autostart_recipe_slug=recipe.slug
     )
     box_b = await _host(async_session, "box-b", ssh_host="192.0.2.11")
-    await _runtime(
+    rt = await _runtime(
         async_session, "recipe-duo-box-a", box_a,
         model_identifier=recipe.model_identifier,
-        topology={"nodes": 2, "recipe_slug": recipe.slug, "worker_host_id": str(box_b.id)},
+        topology={"nodes": 2, "recipe_slug": recipe.slug},
+    )
+    # ADR-096 §1.5: the watcher takes the worker from runtime_hosts.
+    from app.services import runtime_membership
+
+    await runtime_membership.set_members(
+        async_session, rt, runtime_membership.duo(box_a.id, box_b.id)
     )
 
     switcher = AsyncMock(return_value={"ok": True, "message": "Verbund startet"})

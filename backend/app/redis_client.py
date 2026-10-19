@@ -634,6 +634,17 @@ class RedisKeys:
     def runtime_agent_model_guard(slug: str) -> str:
         return f"mc:runtime-agent-model:{slug}"
 
+    @staticmethod
+    def runtime_members_issue(slug: str) -> str:
+        """ADR-096 §2: the watcher's read-only mark for a runtime whose
+        members do not fit its topology (JSON ``{code, sentence}``, short TTL)."""
+        return f"mc:runtime-members-issue:{slug}"
+
+    @staticmethod
+    def runtime_members_notice(slug: str) -> str:
+        """ADR-096 §2: dedupe key — one ``runtime.members_incomplete`` event per day."""
+        return f"mc:runtime-members-notice:{slug}"
+
     # ── Switch Grace + Auto-Recovery (PR5, services/runtime_grace.py) ────
     # runtime_switching: "this runtime is expected to be unreachable right
     # now" — set by start_runtime (Rezept-Start), cleared by the watcher once a

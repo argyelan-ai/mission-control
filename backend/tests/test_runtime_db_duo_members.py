@@ -10,8 +10,18 @@ head AND worker must show the model).
 Only RFC 5737 placeholder IPs — public repo, no real addresses.
 """
 import uuid
+from unittest.mock import AsyncMock, patch
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _no_engine_probe():
+    """Changing a stored member set asks whether the engine runs (ADR-096
+    §1.2). No network in tests: every runtime here is stopped unless a test
+    patches ``probe_running`` itself."""
+    with patch("app.services.recipe_switcher.probe_running", AsyncMock(return_value=False)):
+        yield
 
 
 def _ssh_host_body(slug: str = "gpu-box", **overrides) -> dict:
@@ -371,7 +381,7 @@ async def test_patch_duo_without_any_worker_names_the_way_out(auth_client):
 async def test_create_duo_is_atomic_when_member_write_fails(auth_client):
     h = await _hosts(auth_client, "alpha", "beta")
     boom = AsyncMock(side_effect=RuntimeError("member write failed"))
-    with patch("app.services.recipe_switcher._add_member_rows", boom):
+    with patch("app.services.runtime_membership._insert_rows", boom):
         with pytest.raises(RuntimeError):
             await _duo(auth_client, "duo-rt", h["alpha"], h["beta"])
     assert await _runtime_row("duo-rt") is None

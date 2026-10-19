@@ -108,6 +108,8 @@ AUTO_RECOVERY_FAILURE_TTL = 6 * 3600  # attempts "age out" after 6h of quiet
 #: ein laufender Sync (Reload = Sekunden, Neustart = bis 60 s Health-Frist) in
 #: Ruhe durchkommt, kurz genug, dass ein verlorener Sync von allein wiederkehrt.
 AGENT_MODEL_GUARD_TTL = 600
+#: ADR-096 §2 — one "members incomplete" event per runtime and day, not per cycle.
+MEMBERS_NOTICE_TTL = 24 * 3600
 
 # Crash-loop detection (PR8, hardened by Task #24). `restart: unless-stopped`
 # in a compose stack means a container that dies on boot is restarted
@@ -285,11 +287,60 @@ class RuntimeWatcher:
             await host_memory_prep.recover_orphaned_preps()
         except Exception:  # noqa: BLE001
             logger.exception("orphaned memory-prep sweep failed")
+        # Members vs. topology (ADR-096 §2): read-only here — the healer
+        # writes only at backend start, so it never races a running start.
+        try:
+            await self._mark_membership(session)
+        except Exception:  # noqa: BLE001
+            logger.exception("membership check failed")
+            try:
+                await session.rollback()
+            except Exception:  # noqa: BLE001
+                logger.exception("session rollback failed after membership check")
         await sync_pending_agents(session)
         # CLI-Tool-Updates: recreate agents flagged by the CLI update check.
         # Runs after the model-sync pass so a same-tick model change is applied
         # by a plain restart before we (potentially) force-recreate.
         await recreate_pending_agents(session)
+
+    async def _mark_membership(self, session: AsyncSession) -> None:
+        """Mark runtimes whose members do not fit their topology. Never writes rows.
+
+        Per broken runtime: a short-lived Redis mark (``members_incomplete``
+        with the sentence, refreshed every cycle, gone a few cycles after the
+        fix) and ONE activity event per day — not one per cycle.
+        """
+        from app.services import runtime_membership
+
+        findings = await runtime_membership.membership_audit(session, repair=False)
+        if not findings:
+            return
+        redis = await get_redis()
+        for item in findings:
+            await redis.setex(
+                RedisKeys.runtime_members_issue(item.slug),
+                self._interval * 3,
+                json.dumps({"code": item.code, "sentence": item.sentence}),
+            )
+            first = await redis.set(
+                RedisKeys.runtime_members_notice(item.slug),
+                item.code,
+                nx=True,
+                ex=MEMBERS_NOTICE_TTL,
+            )
+            if not first:
+                continue
+            await emit_event(
+                session,
+                "runtime.members_incomplete",
+                item.sentence,
+                severity="warning",
+                detail={
+                    "runtime_id": str(item.runtime_id),
+                    "slug": item.slug,
+                    "code": item.code,
+                },
+            )
 
     async def _probe_one(self, session: AsyncSession, runtime: Runtime) -> None:
         started = time.monotonic()
@@ -1273,14 +1324,26 @@ class RuntimeWatcher:
             nodes = 1
 
         if nodes >= 2 and host_row is not None and recipe is not None:
-            from app.services import recipe_switcher
+            from app.services import recipe_switcher, runtime_membership
 
+            # The worker comes from runtime_hosts (ADR-096 §1.5), never from a
+            # guess: a duo without a recorded worker is not revived on
+            # whichever box happens to be free.
+            worker_id = await runtime_membership.recorded_worker_id(session, runtime.id)
+            if worker_id is None:
+                return {
+                    "ok": False,
+                    "message": (
+                        f"{runtime.slug}: Verbund ohne eingetragene Worker-Box — "
+                        "nicht automatisch gestartet (Worker wählen)"
+                    ),
+                }
             try:
                 return await recipe_switcher.start_recipe_on_host(
                     session,
                     host_row,
                     recipe,
-                    worker_host_id=topology.get("worker_host_id"),
+                    worker_host_id=str(worker_id),
                 )
             except recipe_switcher.RecipeStartError as exc:
                 return {"ok": False, "message": exc.detail}

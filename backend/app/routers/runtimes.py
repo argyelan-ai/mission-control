@@ -19,6 +19,7 @@ from app.config import settings
 from app.database import get_session
 from app.models.agent import Agent
 from app.models.host import Host
+from app.models.local_recipe import LocalRecipe
 from app.models.runtime import Runtime
 from app.models.runtime_host import RuntimeHost, RUNTIME_HOST_ROLES
 from app.redis_client import RedisKeys, get_redis
@@ -40,6 +41,7 @@ from app.services.runtime_manager import add_lmstudio_runtime
 from app.services.runtime_model_resolver import invalidate_cached_model
 from app.services.runtime_propagation import mark_agents_for_sync, sync_pending_agents
 from app.services import activity
+from app.services import runtime_membership
 from app.services.runtime_autostart import (
     AutostartHostUnreachable,
     get_autostart_status,
@@ -659,9 +661,18 @@ async def list_runtimes(
         # Deliberately overwrites the DEPRECATED legacy string field of the
         # same name from model_dump() — frontend type is `host?: HostRef | null`.
         provider = runtime_naming.resolve_provider(rt.endpoint)
+        worker_ref = next(
+            (m for m in member_hosts_by_runtime.get(rt.id, []) if m["role"] == "worker"),
+            None,
+        )
         result.append({
             **rt_dict,
             **state_info,
+            # ADR-096 §1.5: worker_host_id derived from runtime_hosts, never stored.
+            "topology": runtime_membership.with_derived_worker(
+                rt_dict.get("topology"),
+                uuid.UUID(worker_ref["host_id"]) if worker_ref else None,
+            ),
             "host": _host_ref(host),
             # Group label for the UI, derived from the SAME rule the sort and
             # the catalog use. Sent from here so the picker does not re-derive
@@ -824,7 +835,15 @@ async def get_runtime(
     host = await resolve_host_for_runtime(session, rt)
     state_info = await runtime_manager.get_runtime_state(rt_dict, host=host)
     # Same host reference as GET /runtimes (list) — one frontend type.
-    return {**rt_dict, **state_info, "host": _host_ref(host)}
+    return {
+        **rt_dict,
+        **state_info,
+        "topology": runtime_membership.with_derived_worker(
+            rt_dict.get("topology"),
+            await runtime_membership.recorded_worker_id(session, rt.id),
+        ),
+        "host": _host_ref(host),
+    }
 
 
 @router.get("/{runtime_id}/health")
@@ -1227,7 +1246,7 @@ async def _plan_duo_membership(
                 detail=f"topology.worker_host_id '{worker_host_id}' is not a valid host id",
             )
     else:
-        worker_uuid = await recipe_switcher.recorded_worker_id(session, rt.id)
+        worker_uuid = await runtime_membership.recorded_worker_id(session, rt.id)
         if worker_uuid is None:
             raise HTTPException(status_code=422, detail=DUO_NEEDS_WORKER)
     worker = await session.get(Host, worker_uuid)
@@ -1260,12 +1279,32 @@ async def _plan_duo_membership(
 async def _apply_duo_membership(
     session: AsyncSession, rt: Runtime, plan: tuple[str, Host | None, Host | None]
 ) -> None:
-    """Stage the planned membership in the caller's transaction (no commit)."""
+    """Stage the planned membership in the caller's transaction (no commit).
+
+    Goes through the one writer (``runtime_membership``, ADR-096 §1): a
+    structural problem is a 422, moving a RUNNING runtime to other boxes a
+    409. With ``topology.recipe_slug`` the recipe's box count must match.
+    """
     action, head, worker = plan
-    if action == "set":
-        await recipe_switcher.set_runtime_members(session, rt, head, worker, commit=False)
-    else:
-        await recipe_switcher.clear_runtime_members(session, rt, commit=False)
+    try:
+        if action == "set":
+            topology = rt.topology if isinstance(rt.topology, dict) else {}
+            recipe = None
+            if topology.get("recipe_slug"):
+                recipe = (
+                    await session.exec(
+                        select(LocalRecipe).where(LocalRecipe.slug == topology["recipe_slug"])
+                    )
+                ).first()
+            await runtime_membership.set_members(
+                session, rt, runtime_membership.duo(head.id, worker.id),
+                recipe=recipe, commit=False,
+            )
+        else:
+            await runtime_membership.clear_members(session, rt, commit=False)
+    except runtime_membership.MembershipError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
 
 
 async def _runtime_row_response(session: AsyncSession, rt: Runtime) -> dict:
@@ -1285,6 +1324,10 @@ async def _runtime_row_response(session: AsyncSession, rt: Runtime) -> dict:
     host = await resolve_host_for_runtime(session, rt)
     return {
         **rt.model_dump(),
+        # ADR-096 §1.5: worker_host_id is derived from runtime_hosts, never stored.
+        "topology": runtime_membership.with_derived_worker(
+            rt.topology, await runtime_membership.recorded_worker_id(session, rt.id)
+        ),
         "host": _host_ref(host),
         "display_name_drift": runtime_naming.display_name_drift(
             rt.display_name, rt.model_identifier
@@ -1308,6 +1351,9 @@ async def create_runtime_db(
     rt = Runtime(**body.model_dump())
     _require_launch_command(rt)
     duo_plan = await _plan_duo_membership(session, rt)
+    # The worker lives in runtime_hosts only (ADR-096 §1.5) — the request's
+    # topology.worker_host_id was translated above and is not stored.
+    rt.topology = runtime_membership.without_legacy_worker(rt.topology)
     session.add(rt)
     if duo_plan[0] == "set":
         # One transaction: the runtime row and its members commit together.
@@ -1363,6 +1409,8 @@ async def update_runtime_db(
         if {"topology", "host_id"} & body.model_fields_set
         else None
     )
+    if duo_plan is not None:
+        rt.topology = runtime_membership.without_legacy_worker(rt.topology)
     rt.updated_at = datetime.now(timezone.utc)
     session.add(rt)
     if duo_plan is not None:
