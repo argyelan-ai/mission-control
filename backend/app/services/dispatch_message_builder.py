@@ -903,9 +903,17 @@ The requesting agent automatically resumes with your result.
     # + agent_comments.py), but telling the worker up front avoids a wasted
     # review round-trip and a fleeting handoff to the Board Lead. Gated on
     # not human_review_required — those tasks DO go to review (Mark's gate).
+    # ADR-089 (services/lead_mode.py): a board lead alone on its board has
+    # nobody to delegate to — it works the card itself, like a worker. A lead
+    # with a team keeps the delegation block below. Same rule as SOUL.md.
+    from app.services.lead_mode import lead_works_itself
+    _lead_delegates = agent.is_board_lead and not lead_works_itself(
+        is_lead=agent.is_board_lead, teammates=len(ctx.team_agents),
+    )
+
     if (getattr(task, "skip_review", False)
             and not getattr(task, "human_review_required", None)
-            and not agent.is_board_lead):
+            and not _lead_delegates):
         _add(
             "skip_review_hint",
             "\n**Automation task — no review needed.** When finished, close it "
@@ -934,7 +942,7 @@ The requesting agent automatically resumes with your result.
             child_lines.append(f"- [{ct.status}] \"{ct.title}\" ({agent_label})")
         _add("child_tasks", "\n## Active Subtasks\n" + "\n".join(child_lines), priority=2)
 
-    if agent.is_board_lead:
+    if _lead_delegates:
         # ── Board Lead: delegation instructions instead of implementation ──
         create_task_path = f"/api/v1/agent/boards/{task.board_id}/tasks"
 

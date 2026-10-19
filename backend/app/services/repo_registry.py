@@ -19,9 +19,58 @@ logger = logging.getLogger("mc.repo_registry")
 
 
 def clone_url_for(repo: Repo) -> str:
-    """https clone URL (legacy github_repo_url format ends in .git)."""
+    """Clone URL (legacy github_repo_url format ends in .git).
+
+    GitHub entries clone over https; a local entry (``source="local"``, a
+    ``file://`` URL — e.g. the first run's practice repo) clones from the bare
+    repository on this computer. Same rule for both, no special case."""
     base = repo.url.removesuffix(".git")
     return f"{base}.git"
+
+
+# ── Where a registered repository lives ────────────────────────────────────
+# A repo row is a GitHub repository (source "mc" / "imported", https URL) or a
+# repository on this computer (source "local", file:// URL under ~/.mc). The
+# URL scheme decides what the registry can offer for it: a web page to open,
+# and how Sync reads the metadata.
+
+LOCAL_SOURCE = "local"
+_LOCAL_SCHEME = "file://"
+
+
+def is_local_repo(repo: Repo) -> bool:
+    return (repo.url or "").startswith(_LOCAL_SCHEME)
+
+
+def web_url_for(repo: Repo) -> str | None:
+    """The repository's web page, or None when it has none (a local repo)."""
+    url = repo.url or ""
+    return url if url.startswith(("https://", "http://")) else None
+
+
+def local_repo_path(repo: Repo) -> str:
+    """Filesystem path of a local entry's bare repository."""
+    return clone_url_for(repo)[len(_LOCAL_SCHEME):]
+
+
+async def read_local_repo_meta(repo: Repo) -> dict:
+    """Sync for a local entry: read the default branch from the repository
+    itself (there is no GitHub to ask). Raises RuntimeError when the
+    repository is gone or unreadable."""
+    import asyncio
+    import os
+
+    path = local_repo_path(repo)
+    if not os.path.isdir(path):
+        raise RuntimeError(f"local repository not found: {path}")
+    proc = await asyncio.create_subprocess_exec(
+        "git", "--git-dir", path, "symbolic-ref", "--short", "HEAD",
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    out, err = await proc.communicate()
+    if proc.returncode != 0:
+        raise RuntimeError(f"local repository not readable: {err.decode().strip()}")
+    return {"default_branch": out.decode().strip() or "main", "visibility": "private"}
 
 
 def apply_repo_link(project: Project, repo: Repo) -> None:

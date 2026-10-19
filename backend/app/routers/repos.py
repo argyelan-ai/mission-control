@@ -21,7 +21,10 @@ from app.services.repo_registry import (
     apply_repo_link,
     clear_repo_link,
     get_repo_by_full_name,
+    is_local_repo,
+    read_local_repo_meta,
     upsert_repo,
+    web_url_for,
 )
 from app.utils import utcnow
 
@@ -51,6 +54,9 @@ class LinkProject(BaseModel):
 def _serialize(repo: Repo, projects: list[Project]) -> dict:
     return {
         **repo.model_dump(),
+        # None for a repo without a web page (a local repo) — the UI shows
+        # "open on GitHub" only when this is set.
+        "web_url": web_url_for(repo),
         "linked_projects": [
             {
                 "id": str(p.id),
@@ -385,22 +391,29 @@ async def sync_repo(
     session: AsyncSession = Depends(get_session),
     current_user = Depends(require_user),
 ):
-    """Refresh metadata (default_branch, description, visibility) from GitHub."""
+    """Refresh metadata (default_branch, description, visibility) from where
+    the repo lives — GitHub, or the repository itself for a local entry."""
     from app.services.git_service import GitService
 
     repo = await session.get(Repo, repo_id)
     if not repo:
         raise HTTPException(status_code=404, detail="Repo not found")
 
-    git = GitService()
-    try:
-        meta = await git.fetch_repo_meta(repo.full_name)
-    except RuntimeError as e:
-        raise HTTPException(status_code=502, detail=f"gh repo view fehlgeschlagen: {e}")
+    if is_local_repo(repo):
+        try:
+            meta = await read_local_repo_meta(repo)
+        except RuntimeError as e:
+            raise HTTPException(status_code=502, detail=str(e))
+    else:
+        git = GitService()
+        try:
+            meta = await git.fetch_repo_meta(repo.full_name)
+        except RuntimeError as e:
+            raise HTTPException(status_code=502, detail=f"gh repo view fehlgeschlagen: {e}")
 
     repo.default_branch = meta["default_branch"]
     repo.visibility = meta["visibility"]
-    if meta["description"] is not None:
+    if meta.get("description") is not None:
         repo.description = meta["description"]
     repo.last_synced_at = utcnow()
     repo.updated_at = utcnow()

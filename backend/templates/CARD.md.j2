@@ -41,7 +41,7 @@ you must never skip.
 - Raw `PATCH status:` instead of `mc <verb>` (breaks dispatch-attempt
   tracking, gets rejected with 409 by design)
 - Credentials/secrets inline anywhere in task text, comments, or chat
-{%- if role in ("orchestrator", "lead") or is_board_lead %}
+{%- if role == "orchestrator" or ((role == "lead" or is_board_lead) and not lead_works_itself) %}
 - Writing/testing code yourself, delegating to yourself, spawning new CLI
   agents without {{ operator_name }}'s explicit approval
 {%- endif %}
