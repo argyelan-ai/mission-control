@@ -1024,7 +1024,7 @@ def has_xdist(py):
 
 def failed_ids(out, kind):
     if kind == "vitest":
-        return sorted(set(_re.findall(r"FAIL\s+(\S+\.test\.(?:ts|tsx|js|jsx))", out)))
+        return sorted(set(_re.findall(r"FAIL\s+(\S+\.test\.(?:tsx|ts|jsx|js))(?![\w])", out)))
     ids = _re.findall(r"^(?:FAILED|ERROR)\s+(\S+?)(?:\s+-\s.*)?$", out, _re.M)
     return sorted(set(ids))
 
