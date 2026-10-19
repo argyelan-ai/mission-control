@@ -2965,7 +2965,12 @@ def serve_loop(
                 # session started on `openai/gpt-5.5` with the shim key and
                 # died with a 401 before the first token. launch-omp.sh always
                 # passes `--model $OMP_MODEL_SELECTOR`; the ACP path must too.
-                acp_model = _acp_model_selector(os.environ)
+                #
+                # Read at dispatch time, not at boot (incident 19.10.2026): a
+                # runtime switch re-renders omp.env inside the running
+                # container, but THIS process keeps its boot env for days —
+                # every task was pinned to the old, no longer offered model.
+                acp_model = _acp_model_selector(_current_omp_env())
 
                 # Review #464 Major 7: tool liveness for the ACP path. The
                 # native watchdog learns progress from the hook signal file;
@@ -3119,6 +3124,20 @@ def serve_loop(
         _sleep(poll_interval)
 
     return 0
+
+
+def _current_omp_env() -> dict:
+    """The process env overlaid with the CURRENT rendered omp.env — what
+    launch-omp.sh does with ``set -a; . omp.env``. An explicit
+    ``OMP_ACP_MODEL`` in the process env still wins (the file never sets
+    it). See acp_model.current_selector for the incident."""
+    import acp_model as _acp_model_mod  # noqa: PLC0415 — sibling script, lazy
+
+    base = dict(os.environ)
+    merged = {**base, **_acp_model_mod.read_env_file(_acp_model_mod.env_file_path(base))}
+    if (base.get("OMP_ACP_MODEL") or "").strip():
+        merged["OMP_ACP_MODEL"] = base["OMP_ACP_MODEL"]
+    return merged
 
 
 def _acp_model_selector(env: "Mapping[str, str]") -> str:
@@ -4432,11 +4451,37 @@ def run_acp_once(
         # is known: emitting it earlier created a stub-named file
         # ("acp-session") holding exactly one line, and the chat view's
         # session rollover split the turn across two files.
-        emit_transcript(mapper.map_user_prompt(prompt))
+        # Every prompt of a task run is written by MC (dispatch or nudge),
+        # never typed by the operator — the chat must not show it as theirs.
+        emit_transcript(mapper.map_user_prompt(
+            prompt,
+            origin="task" if "# New Task:" in prompt else "nudge",
+            task_id=task_id,
+        ))
         saw_session = True
         outcome.saw_session = True
         if model:
-            client.set_config_option(sid, "model", model)
+            # Never pin a model the session does not offer (acp_model): a
+            # stale selector would end the attempt with "Unknown ACP model"
+            # before the first token.
+            import acp_model as _acp_model_mod  # noqa: PLC0415 — sibling script
+
+            offered_opts = (getattr(client, "last_session_result", None) or {}).get("configOptions")
+            pinned, replaced = _acp_model_mod.choose_model(model, offered_opts)
+            client.set_config_option(sid, "model", pinned)
+            if replaced:
+                emit_transcript(mapper.map_chat_notice(
+                    _acp_model_mod.MODEL_FALLBACK_CODE,
+                    f"Previously chosen model {_acp_model_mod.display_name(replaced)} "
+                    f"is not available anymore — using "
+                    f"{_acp_model_mod.display_name(pinned)}.",
+                    {"previous": _acp_model_mod.display_name(replaced),
+                     "current": _acp_model_mod.display_name(pinned)},
+                ))
+                sys.stderr.write(
+                    f"[acp] model {replaced!r} not offered -> pinned {pinned!r}\n"
+                )
+            model = pinned
         sys.stderr.write(
             f"[acp] session {sid[:8]} started (model={model or 'omp-default'}, "
             f"policy={permission_policy}, cwd={cwd}, task={task_id[:8] if task_id else '-'})\n"
@@ -4491,8 +4536,14 @@ def run_acp_once(
     except acp_client.ACPError as e:
         sys.stderr.write(f"[acp] ACPError: {e}\n")
         outcome.error_message = str(e)
+        # The task's chat showed only the prompt and "ready" — the reason
+        # the agent never started lived in a pane nobody sees (19.10.2026).
+        if saw_session:
+            emit_transcript(mapper.map_chat_error("rpc_error", str(e)))
     except Exception as e:  # noqa: BLE001 — a launch failure must classify, not crash the loop
         outcome.error_message = f"{type(e).__name__}: {e}"
+        if saw_session:
+            emit_transcript(mapper.map_chat_error("rpc_error", outcome.error_message))
     finally:
         client.close()
 

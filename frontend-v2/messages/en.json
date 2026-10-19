@@ -3701,6 +3701,11 @@
       "new_session_failed": "New session failed",
       "queue_lost": "Queue lost"
     },
+    "notice": {
+      "label": "Notice",
+      "model_fallback": "Previously chosen model {previous} is not available anymore — using {current}.",
+      "model_fallbackLabel": "Model switched"
+    },
     "queue": {
       "queued": "Queued — sent when the current reply ends",
       "steer": "Steering message — takes effect after the running tool",

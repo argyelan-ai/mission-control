@@ -60,6 +60,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import acp_chat_events  # noqa: E402
 import acp_client  # noqa: E402
+import acp_model  # noqa: E402
 
 logger = logging.getLogger("acp_chat")
 
@@ -135,6 +136,7 @@ class ChatSession:
         prompt_timeout: float = 3600.0,
         task_id: str = "",
         model: Optional[str] = None,
+        model_resolver: Optional[Callable[[], Optional[str]]] = None,
         elicitation: bool = False,
     ):
         self._client_factory = client_factory
@@ -144,6 +146,12 @@ class ChatSession:
         # None = the agent binary picks (Hermes: `hermes acp` has its own
         # model config, there is nothing to pin).
         self._model = (model or "").strip() or None
+        # Re-reads the selector at pin time (acp_model.current_selector in
+        # production): a runtime switch re-renders omp.env inside the running
+        # container, and this daemon lives for days — the selector of its
+        # boot environment goes stale (incident 19.10.2026). None = only the
+        # fixed `model` above (tests, Hermes).
+        self._model_resolver = model_resolver
         self._state_dir = Path(state_dir)
         self._sessions_dir = Path(sessions_dir)
         self._driver = driver
@@ -325,9 +333,35 @@ class ChatSession:
         has to do the same on every session/new and session/load. A refused
         pin is a chat-visible error, not a crash: the daemon still serves
         state/cancel, and the operator sees WHY in the chat."""
-        if not self._model:
+        previous = self._model
+        fresh = None
+        if self._model_resolver is not None:
+            try:
+                fresh = (self._model_resolver() or "").strip() or None
+            except Exception:  # noqa: BLE001 — an unreadable env file keeps the last selector
+                logger.warning("model resolver failed; keeping %s", previous, exc_info=True)
+        wanted = fresh or previous
+        if not wanted:
             return
-        self.config("model", self._model)
+        with self._lock:
+            options = json.loads(json.dumps(self._config_options))
+        offered = acp_model.offered_models(options)
+        value, replaced = acp_model.choose_model(wanted, options)
+        if replaced is None and previous and previous != value and offered \
+                and previous not in offered:
+            # The selector moved on (runtime switch) and the old one is gone:
+            # the operator saw the old model in this chat — say so once.
+            replaced = previous
+        self._model = value
+        answer = self.config("model", value)
+        if replaced and answer.get("ok"):
+            self._emit_notice(
+                acp_model.MODEL_FALLBACK_CODE,
+                f"Previously chosen model {acp_model.display_name(replaced)} is "
+                f"not available anymore — using {acp_model.display_name(value)}.",
+                {"previous": acp_model.display_name(replaced),
+                 "current": acp_model.display_name(value)},
+            )
 
     def close(self) -> None:
         with self._lock:
@@ -970,6 +1004,9 @@ class ChatSession:
         self._emit_transcript(self._mapper.map_chat_error(code, detail, text))
         self._write_state()
 
+    def _emit_notice(self, code: str, text: str, data: Optional[dict] = None) -> None:
+        self._emit_transcript(self._mapper.map_chat_notice(code, text, data))
+
     def _absorb_session_result(self, result: Optional[dict]) -> None:
         """`session/new`/`session/load` carry the initial configOptions. Live
         omp sends `availableCommands` only as a notification; reading it here
@@ -1330,19 +1367,15 @@ def model_selector(env: "Mapping[str, str]") -> Optional[str]:
     launch-omp.sh and bridge._acp_model_selector, so chat and task sessions
     of one agent can never drift onto different models. None when nothing
     is set (the caller decides whether that is a boot error)."""
-    for key in ("OMP_ACP_MODEL", "OMP_MODEL_SELECTOR"):
-        value = (env.get(key) or "").strip()
-        if value:
-            return value
-    openai_model = (env.get("OPENAI_MODEL") or "").strip()
-    return f"mc-openai/{openai_model}" if openai_model else None
+    return acp_model.selector_from(env)
 
 
 def build_session() -> ChatSession:
     """The production wiring: an `omp acp` child on the pinned ACP cwd, with
     the transcript written where the backend's chat reader tails it."""
     cwd = default_cwd()
-    model = model_selector(os.environ)
+    # The CURRENT omp.env, not only the boot env (acp_model docstring).
+    model = acp_model.current_selector(os.environ)
     if model is None:
         # No baked-in default: a missing model is a boot error, not a silent
         # fallback to omp's built-in provider catalog (ADR-054, as in
@@ -1367,6 +1400,7 @@ def build_session() -> ChatSession:
         sessions_dir=sessions_dir,
         driver="omp",
         model=model,
+        model_resolver=acp_model.current_selector,
         elicitation=True,
     )
 

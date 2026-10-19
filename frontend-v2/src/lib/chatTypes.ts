@@ -17,7 +17,11 @@ import type { ChatDiffSource } from "./types";
  *  docs/specs/chat-over-acp.md). Sie steht als Transkript-Zeile im Verlauf,
  *  weil ein Fehler, den nur das Log kennt, fuer den Operator nicht
  *  stattgefunden hat — der Code liegt dann in `MessageEvent.error`. */
-export type MessageSourceKind = "task" | "nudge" | "inbox" | "teammate" | "system" | "error";
+/*  `notice` = etwas, das MC fuer den Operator entschieden hat, ohne dass der
+ *  Zug scheitert (z.B. `model_fallback`: das gemerkte Modell bietet die
+ *  Runtime nicht mehr an, ein anderes wird genutzt). Werte in
+ *  `MessageEvent.notice`. */
+export type MessageSourceKind = "task" | "nudge" | "inbox" | "teammate" | "system" | "error" | "notice";
 
 export interface MessageSource {
   kind: MessageSourceKind;
@@ -49,6 +53,15 @@ export interface MessageEvent {
    *  Meldung zu verschlucken. `detail` ist der Wortlaut der Quelle und darf
    *  fehlen — dann traegt `text` die Erklaerung. */
   error?: ChatErrorInfo | null;
+  /** Nur bei `source.kind === "notice"`: `code` waehlt den Satz,
+   *  `previous`/`current` sind die Werte darin. */
+  notice?: ChatNoticeInfo | null;
+}
+
+export interface ChatNoticeInfo {
+  code?: string | null;
+  previous?: string | null;
+  current?: string | null;
 }
 
 export interface ChatErrorInfo {
