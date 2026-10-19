@@ -67,6 +67,11 @@ if report and os.path.exists(report):
                     "file": file, "title": spec.get("title"),
                     "status": results[-1].get("status", "skipped"),
                     "duration_ms": results[-1].get("duration"),
+                    # test.step() timings, e.g. the first-run journey's S1–S10
+                    # (wall-clock per step; a slower step is a regression).
+                    "steps": [{"title": st.get("title"), "duration_ms": st.get("duration"),
+                               "failed": bool(st.get("error"))}
+                              for st in results[-1].get("steps", [])],
                 })
         for child in suite.get("suites", []):
             walk(child, file)
@@ -107,8 +112,16 @@ teardown() {
 }
 
 # ── preflight: skip instead of competing with real work ─────────────────────
+# Something accepts connections on localhost:<port> (python3: no lsof on CI).
+port_busy() {
+  python3 -c 'import socket, sys
+s = socket.socket(); s.settimeout(1)
+sys.exit(0 if s.connect_ex(("127.0.0.1", int(sys.argv[1]))) == 0 else 1)' "$1"
+}
+
 skip_reason() {
-  free_gb=$(df -g "$MC_HOME" | awk 'NR==2 {print $4}')
+  # POSIX df (BSD `df -g` does not exist on Linux, where CI runs this too)
+  free_gb=$(df -Pk "$MC_HOME" | awk 'NR==2 {print int($4 / 1048576)}')
   if [ "${free_gb:-0}" -lt "$MIN_FREE_GB" ]; then
     echo "disk: ${free_gb} GB free, need $MIN_FREE_GB"; return
   fi
@@ -125,7 +138,7 @@ skip_reason() {
   if [ -d "$MC_HOME/heads" ] && [ -n "$(find "$MC_HOME/heads" -maxdepth 3 -path '*/.wrapper/heartbeat' -mmin -3 2>/dev/null | head -1)" ]; then
     echo "head running (heartbeat in the last 3 min)"; return
   fi
-  if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+  if port_busy "$PORT"; then
     echo "port $PORT is busy"; return
   fi
   echo ""

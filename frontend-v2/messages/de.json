@@ -134,6 +134,7 @@
       "ago": "vor {age}",
       "names": {
         "J-job-to-merge": "Auftrag bis Merge",
+        "J-first-run": "Erster Start",
         "J-phone-needs-you": "Am Handy antworten",
         "J-runtime-switch": "Runtime wechseln",
         "J-setup": "Einrichten",

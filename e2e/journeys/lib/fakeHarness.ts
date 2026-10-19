@@ -1,9 +1,9 @@
 // The fake harness (concept C6): a stand-in for a real agent runtime that can
-// do only the bare minimum — take a task, ask, block, request an approval,
-// and record everything MC delivers to it. It speaks exactly the HTTP the
-// real bridges speak (GET /agent/me/poll + the agent-scoped endpoints with
-// the agent token), so a journey ends on the EFFECT: "the agent received the
-// answer", not "a button was clicked".
+// do only the bare minimum — take a task, ask (`mc ask` / `mc question`),
+// block, comment, move the task on, and record everything MC delivers to
+// it. It speaks exactly the HTTP the real bridges speak (GET /agent/me/poll
+// + the agent-scoped endpoints with the agent token), so a journey ends on
+// the EFFECT: "the agent received the answer", not "a button was clicked".
 //
 // The agent row is created through the normal API with agent_runtime
 // "manual" (no container provisioning, no docker). comm_v2 has no API
@@ -34,17 +34,21 @@ export class FakeAgent {
   /** `lead`: a board lead. Only leads hold the active-task lock that a
    *  blocking ask needs (workers run parallel sessions, see the
    *  use_subagent_dispatch branches in agent_task_status.py). */
+  /** `runtimeId`: the model runtime the agent is bound to (the operator's
+   *  AI from setup). The fake harness never calls it — it only shows up on
+   *  the agent like on a real one. */
   static async create(
     operatorToken: string,
     boardId: string,
     name: string,
-    opts: { lead?: boolean } = {},
+    opts: { lead?: boolean; runtimeId?: string } = {},
   ): Promise<FakeAgent> {
     const agent = await api<{ id: string; token: string }>("POST", "/agents", operatorToken, {
       name,
       board_id: boardId,
       agent_runtime: "manual",
       is_board_lead: opts.lead ?? false,
+      ...(opts.runtimeId ? { runtime_id: opts.runtimeId } : {}),
     });
     if (!/^[0-9a-f-]{36}$/.test(agent.id)) throw new Error(`unexpected agent id ${agent.id}`);
     sql(`update agents set comm_v2 = true where id = '${agent.id}'`);
@@ -92,6 +96,26 @@ export class FakeAgent {
       blocking: true,
       to: "mark", // the operator target (comm_constants.QUESTION_TARGETS)
     });
+  }
+
+  /** `mc question`: a clarifying question with answer options. MC blocks the
+   *  task and puts a question card in front of the operator (Inbox today;
+   *  the chat card for every agent is ADR-090 P3). */
+  async question(question: string, options?: string[]): Promise<{ approval_id: string; your_status: string }> {
+    return this.call("POST", `/boards/${this.boardId}/clarification`, { question, options });
+  }
+
+  /** A comment on the current task, as the agent (a progress or result line). */
+  async comment(content: string, commentType = "message"): Promise<void> {
+    await this.call("POST", `/boards/${this.boardId}/tasks/${this.taskId}/comments`, {
+      content,
+      comment_type: commentType,
+    });
+  }
+
+  /** Moves the current task on, e.g. to `review` when the work is committed. */
+  async setStatus(status: string): Promise<void> {
+    await this.call("PATCH", `/boards/${this.boardId}/tasks/${this.taskId}`, { status });
   }
 
   /** Reports a blocker that needs the operator's decision. MC itself turns

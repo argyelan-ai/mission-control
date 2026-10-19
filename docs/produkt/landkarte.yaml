@@ -37,6 +37,19 @@ journeys:
     end_state: "The same job continues on the new pair"
     test: e2e/journeys/J-runtime-switch.spec.ts
 
+  - id: J-first-run
+    job: "When I have just installed MC, I want an agent on my own model that asks me before it commits, and I answer it from my phone."
+    source: "Onboarding plan (Welle 3, PR 3-5; operator decisions 2026-10-16: the aha is the commit approved from the phone); ADR-090 (chat as remote control); ADR-093 (test on save)"
+    steps:
+      - {feature: F-login}     # S1: the first visit creates the admin account
+      - {feature: F-setup}     # S1-S2: wizard (cloud key skipped on the own-model track)
+      - {feature: F-runtimes}  # S2: own model added by address, probed, re-probed
+      - {feature: F-home}      # S5: the first job runs on Home
+      - {feature: F-inbox}     # S9: the agent's question, answered at phone width
+      - {feature: F-tasks}     # S10: the agent carries on, the commit waits for review
+    end_state: "The agent received the operator's answer and committed; nothing but the review waits"
+    test: e2e/journeys/J-first-run.spec.ts
+
   - id: J-setup
     job: "When I prepare or reconfigure MC, I want one page for AI providers, secrets and credentials, users, autonomy, model prices, channels and the night-shift window."
     source: "operator decision 2026-09-29; ADR-033 (secrets/credentials); ROADMAP E2 (night-shift window)"

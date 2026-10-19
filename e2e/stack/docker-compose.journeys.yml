@@ -8,6 +8,7 @@
 #     socket, no SSH keys, no channel or provider tokens,
 #   - background services off (scheduler, Slack/Telegram, runtime watcher,
 #     heads) — the API process answers requests only,
+#   - the only "AI" is the stub model below (no provider keys, no network),
 #   - one port, bound to localhost: MC_JOURNEYS_PORT (default 18080).
 # Only e2e/run-journeys.sh starts it; it generates the env file with fresh
 # secrets and tears everything down with `down -v` afterwards.
@@ -88,6 +89,22 @@ services:
       interval: 5s
       timeout: 5s
       retries: 24
+    labels: [mc-journeys=1]
+
+  # Stub model (e2e/stub-model/server.py): an OpenAI-compatible stand-in for
+  # a local model server, reachable only inside this stack as
+  # http://stub-model:8080/v1. The first-run journey adds it as the
+  # operator's AI and stops it for the "model gone" sabotage.
+  stub-model:
+    image: python:3.12-alpine
+    command: ["python", "/stub/server.py", "--host", "0.0.0.0", "--port", "8080"]
+    volumes:
+      - ../stub-model/server.py:/stub/server.py:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
     labels: [mc-journeys=1]
 
   caddy:
