@@ -160,6 +160,32 @@ jobs:
         working-directory: docker/cdp-browser/gateway
         run: python3 -m pytest . -q
 
+  mc-update:
+    # The update engine (scripts/mc_update.py, ADR-094) runs on the HOST with
+    # whatever python3 the machine has — macOS ships 3.9, Raspberry Pi OS
+    # 3.11 — so both ends are tested. Standard library only; the suite drives
+    # it end to end against a local git upstream and a fake docker in PATH
+    # (scripts/tests/fake_docker.py), including real crashes at every
+    # journal boundary followed by `resume`. No Docker, no network.
+    name: mc-update engine (py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.9", "3.12"]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install pytest
+        run: pip install pytest pytest-xdist
+
+      - name: Run update engine tests
+        run: python3 -m pytest scripts/tests/test_mc_update.py -q -p no:cacheprovider -n auto --tb=short
+
   mc-cli:
     name: mc-cli Tests
     runs-on: ubuntu-latest
