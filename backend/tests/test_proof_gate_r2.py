@@ -308,9 +308,10 @@ async def test_new_snapshot_records_the_diff_fingerprint(client, fake_redis, gat
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("commits,commit_files,expected", [
-    ([("m" * 40, 2)], {}, 422),                          # only a merge from main
-    ([("e" * 40, 1), ("m" * 40, 2)], {"e" * 40: 0}, 422),  # empty commit + merge
-    ([("c" * 40, 1), ("m" * 40, 2)], {"c" * 40: 2}, 200),  # one real commit
+    # a merge commit's own file list is main's changes (12) — it must not count
+    ([("m" * 40, 2)], {"m" * 40: 12}, 422),                              # only a merge from main
+    ([("e" * 40, 1), ("m" * 40, 2)], {"e" * 40: 0, "m" * 40: 12}, 422),  # empty commit + merge
+    ([("c" * 40, 1), ("m" * 40, 2)], {"c" * 40: 2, "m" * 40: 12}, 200),  # one real commit
 ])
 async def test_commit_walk_without_fingerprint_skips_merge_and_empty(
         client, fake_redis, gate_mode, commits, commit_files, expected):
