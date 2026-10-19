@@ -138,6 +138,15 @@ sync_recycler_lib_into() {
   chmod +x "$dst"
 }
 
+sync_guards_into() {
+  # tools/guards (lesson guards) for the omp guard hook — scripts only, no fixtures.
+  local dst="$1/guards"
+  rm -rf "$dst"
+  mkdir -p "$dst"
+  cp "$ROOT"/tools/guards/*.sh "$dst/"
+  chmod +x "$dst"/*.sh
+}
+
 sync_sigforward_into() {
   local dst="$1/sigforward.sh"
   cp "$SHARED_SIGFORWARD_SRC" "$dst"
@@ -192,6 +201,8 @@ build_image_omp() {
   sync_cli_into "$ctx"
   echo "→ Syncing shared sigforward.sh into $ctx"
   sync_sigforward_into "$ctx"
+  echo "→ Syncing tools/guards into $ctx"
+  sync_guards_into "$ctx"
   echo "→ Building $tag from $ctx"
   docker build "${version_args[@]}" "${DOCKER_ARGS[@]+"${DOCKER_ARGS[@]}"}" -t "$tag" "$ctx"
   tag_prefixed "$tag"

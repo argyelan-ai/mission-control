@@ -29,6 +29,13 @@ CWD="${1:-${OMP_DEFAULT_CWD:-/workspace}}"
 [ -d "$CWD" ] || CWD="$HOME"
 
 HOOK="${OMP_HOOK_FILE:-/opt/omp-bridge/turn-end-hook.mjs}"
+# Lesson guards (tools/guards, same checks as the Claude Code hooks) on every
+# bash call; kill switch OMP_GUARD_HOOK=0, absent file = old image, no guards.
+GUARD_HOOK="${OMP_GUARD_HOOK_FILE:-/opt/omp-bridge/guard-hook.mjs}"
+GUARD_ARGS=()
+if [ "${OMP_GUARD_HOOK:-1}" != "0" ] && [ -f "$GUARD_HOOK" ]; then
+    GUARD_ARGS=(--hook "$GUARD_HOOK")
+fi
 # Selector comes from the entrypoint-rendered env — never a baked-in model.
 # Same rule as acp_model.selector_from (chat daemon + task bridge; one table
 # in tests/test_model_selector_single_source.py runs through both):
@@ -58,6 +65,7 @@ fi
 #   is the real interactive TUI a human can read and scroll on the Sessions page.
 exec omp \
     --hook "$HOOK" \
+    ${GUARD_ARGS[@]+"${GUARD_ARGS[@]}"} \
     --model "$SELECTOR" \
     --cwd "$CWD" \
     --approval-mode yolo \
