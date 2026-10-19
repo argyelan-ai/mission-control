@@ -143,6 +143,47 @@ Two deliberate failure modes, so the gate is not simply "everything stops":
 No new migration or autonomy config is needed: `approvals.action_type` is free
 text and unknown action types default to `L3` (approval required).
 
+### Proof gate (Beweis-Tor) on review/done
+
+When an agent moves a card that carries a PR (`pr_url`, or `pr_number` with a
+repo) to `review` or `done`, the server checks the claim against GitHub and
+the MC database before the status changes:
+
+| Check | Finding | Blocks in `enforce` |
+|---|---|---|
+| The PR exists | `pr_not_found`, `pr_url_invalid` | yes |
+| The SHA the agent reported is the PR head on GitHub | `sha_mismatch` | yes |
+| The **required** CI checks are green (all checks if the repo has none) | `ci_red`; `ci_pending` on `done` | yes |
+| A commit landed after the last change request (MC `changes_requested` or a GitHub *Request changes*) | `no_commit_after_change` | yes |
+| A reviewer the agent names (`--reviewer`), or the reviewer closing review→done, commented himself — MC card first, then the PR | `reviewer_silent` | yes |
+
+`PROOF_GATE_MODE` = `off` · `warn` (default: comment on the card, a
+`task.proof_gate` activity event, the transition still happens) · `enforce`
+(HTTP 422, the card keeps its status). `PROOF_GATE_ENFORCE_AFTER=<ISO date>`
+turns `warn` into `enforce` on that day by itself — roll out with seven days
+of `warn`, then enforce.
+
+The mc CLI sends the evidence itself: `mc review`, `mc done` and `mc finish`
+report the local `HEAD` and branch (only from a named branch — the comparison
+is skipped when that branch is not the PR's). `mc finish --force` / `mc done
+--force` only close open checklist items on your side; there is no request
+field that skips the gate, unknown fields are refused.
+
+Fail-open, but loud: without a GitHub token, or when GitHub cannot be reached,
+nothing is blocked and the card gets a visible warning instead.
+
+Counting: every gate finding carries `gefangen_von: "tor"` in the event
+detail; `task.review_rejected` events carry `rolle`, `boss` or `mark`
+(`live` is reserved for findings from a live probe). Weekly numbers:
+
+```sql
+select date_trunc('week', created_at)::date as week, event_type,
+       detail->>'gefangen_von' as caught_by, count(*)
+from activity_events
+where event_type in ('task.proof_gate', 'task.review_rejected')
+group by 1, 2, 3 order by 1, 2;
+```
+
 Ad-hoc tasks with no project share a single `mc-workspace` repo rather than
 leaving orphaned branches scattered across project repos.
 

@@ -327,6 +327,21 @@ rules:
     status: active
     checked: 2026-10-16
 
+  - id: R-proof-gate-finish
+    says: "An agent's move to review/done on a card with a PR is checked on the server: the PR exists, the reported SHA is the pushed head, the required CI checks are green, a commit followed the last change request, a named reviewer commented himself. warn = card comment + task.proof_gate event, enforce = 422; no request field skips it."
+    source: "Beweis-Tor (team measure 2026-10-19: false finish reports were found by hand)"
+    owner: backend/app/services/proof_gate.py
+    applies_to: ["backend/app/services/proof_gate.py", "backend/app/routers/agent_task_status.py", "scripts/mc-cli/mc_cli/commands.py"]
+    enforced_by:
+      - {test: "backend/tests/test_proof_gate.py::test_sabotage_enforce_refuses_with_422"}
+      - {test: "backend/tests/test_proof_gate.py::test_no_commit_after_change_request"}
+      - {test: "backend/tests/test_proof_gate.py::test_reviewer_closes_without_own_comment"}
+      - {test: "backend/tests/test_proof_gate.py::test_clean_case_passes_without_any_warning"}
+      - {test: "backend/tests/test_proof_gate.py::test_missing_token_fails_open_with_visible_warning"}
+      - {test: "backend/tests/test_proof_gate.py::test_no_server_side_force_switch"}
+    status: active
+    checked: 2026-10-19
+
 rejected:
   - id: X-own-control-room
     idea: "An own control-room UI, job page or coordinator for heads"

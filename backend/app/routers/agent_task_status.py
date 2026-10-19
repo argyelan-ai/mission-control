@@ -2656,6 +2656,7 @@ async def agent_update_task(
     # class this whole task removes). See
     # tests/test_adr_gate.py::test_agent_patch_done_is_blocked_before_the_status_commits.
     # ── Beweis-Tor (PRE-MUTATION) ─────────────────────────────────
+    # rule: R-proof-gate-finish - false finish reports were found by hand, days later
     # A card that carries a PR reaches review/done only with evidence: the PR
     # exists, the reported SHA is the pushed one, CI is green, a commit
     # followed the last change request, a named reviewer commented himself.

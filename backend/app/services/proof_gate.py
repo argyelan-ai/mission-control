@@ -402,6 +402,7 @@ async def _named_reviewer_in_mc(session, task, name: str, since: datetime | None
 # ── The verdict ─────────────────────────────────────────────────────────
 
 
+# rule: R-proof-gate-finish - every check below is one false-finish pattern
 async def evaluate_proof_gate(
     session,
     task,
