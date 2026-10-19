@@ -8,6 +8,14 @@ shipped yet). The UI shows a hint under **Settings → Über** when a newer
 release exists (checked once a day against GitHub Releases; works offline,
 the hint just stays silent).
 
+The button will reach your machine through the **cli-bridge** — the helper
+service that also runs host agents. Set it up once, from inside the install
+folder: `./install.sh --bridge` (the installer also offers it after an install
+or update). On Linux it asks to enable *linger* (`sudo loginctl
+enable-linger <user>`), so the bridge keeps running after logout and after a
+reboot — that is what lets an update interrupted by a power cut finish on its
+own. Details: [cli-bridge-auth.md](cli-bridge-auth.md#the-update-door-mc-update-adr-094).
+
 ## The short way
 
 ```bash

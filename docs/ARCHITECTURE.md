@@ -216,7 +216,8 @@ wird rot, sobald irgendwo sonst ein verändernder `docker`-Aufruf entsteht.
 **Hinweis:** Der OpenClaw Gateway (WebSocket-Daemon auf Port `18789`) wurde mit v0.9 (ADR-039) komplett entfernt — als Runtime, Code-Pfad, DB-Schema, Frontend-Konzept und Host-Service. Verbleibende Host-Komponenten:
 
 **CLI-Bridge** (`scripts/cli-bridge.py`) — Host-HTTP-Server auf Port `18792` (+ WebSocket-PTY `18793`):
-- **Auth:** jede Anfrage ausser `GET /ping` und jeder PTY-Attach braucht den Header `X-MC-Bridge-Token` (HTTP 401, auch schon im WS-Handshake). Token-Datei `~/.mc/secrets/cli-bridge.token` (0600, beim ersten Start erzeugt); Backend + Worker lesen sie über den `~/.mc`-Mount oder `CLI_BRIDGE_TOKEN`. Einzige Header-Quelle im Backend: `services/cli_bridge_auth.py`. Der Browser spricht nie direkt mit der Bridge — Terminal und Plugin-Shell laufen über den Backend-WS-Proxy (Stream-Ticket + Admin). Bind `CLI_BRIDGE_BIND`, Default `127.0.0.1`. Details + Rollout: `docs/setup/cli-bridge-auth.md`.
+- **Auth:** jede Anfrage ausser `GET /ping` und jeder PTY-Attach braucht den Header `X-MC-Bridge-Token` (HTTP 401, auch schon im WS-Handshake). Token-Datei `~/.mc/secrets/cli-bridge.token` (0600, beim ersten Start erzeugt); Backend + Worker lesen sie über den `~/.mc`-Mount oder `CLI_BRIDGE_TOKEN`. Einzige Header-Quelle im Backend: `services/cli_bridge_auth.py`. Der Browser spricht nie direkt mit der Bridge — Terminal und Plugin-Shell laufen über den Backend-WS-Proxy (Stream-Ticket + Admin). Bind `CLI_BRIDGE_BIND`, Default `127.0.0.1` (Linux: Gateway des Netzes `mission-control_default`, gesetzt von `./install.sh --bridge`, Backend liest `FREE_CODE_BRIDGE_URL`). Details + Rollout: `docs/setup/cli-bridge-auth.md`.
+- **Update-Tür (ADR-094):** `/mc-update/{preflight,start,status,rollback,resume}` mit eigenem Token `X-MC-Update-Token` (`scripts/mc_update_door.py`); startet `scripts/mc_update.py` losgelöst und setzt beim Bridge-Start einen unterbrochenen Lauf fort.
 - Rendert Agent-Konfig aus Jinja2-Templates (`backend/templates/*.j2`):
   - `cli_agent_settings.json.j2` → `settings.json` + `claude-config/settings.json` (Kopie, **kein Symlink** — Docker-Kompatibilität)
   - `cli_agent.env.j2` → `agent.env` (MC_AGENT_TOKEN)
@@ -1606,6 +1607,20 @@ Alle ADRs in `docs/decisions/`:
   a newer update exists or the run's backup is gone. Tests drive the real `backup.sh` against
   the fake docker (`scripts/tests/fake_docker.py`); `backend/tests/test_backup_sh.py` covers
   the new mode against a throwaway Postgres.
+- **2026-10-19** — **Update door in the cli-bridge (ADR-094, update plan PR 3):**
+  `scripts/mc_update_door.py`, served by `scripts/cli-bridge.py` under `/mc-update/*`: exactly
+  five routes (`preflight`, `start`, `status`, `rollback`, `resume`), its own token
+  (`X-MC-Update-Token`, `~/.mc/secrets/mc-update.token`), `409` managed install / target
+  mismatch, `423` live or interrupted run, `429` start limit (`MC_UPDATE_MAX_STARTS_PER_DAY`, 3).
+  The engine runs detached (`systemd-run --user` on Linux, double fork + new session elsewhere;
+  `KillMode=process` / `AbandonProcessGroup` in the service units), its exit code in
+  `~/.mc/update/bridge/`. Start routine: an interrupted run is resumed when the bridge starts and
+  Docker answers; otherwise an orphaned drain is lifted (`mc_update.py drain-sweep`). `/ping`
+  names `api_version`. `install.sh` sets the bridge up after a yes (`--bridge`, offered after
+  install and update); on Linux it binds to the gateway of `mission-control_default`, points
+  backend + worker there (`FREE_CODE_BRIDGE_URL`) and offers linger (explicit yes, sudo). A
+  missing tmux is a warning now, not a crash. Tests: `scripts/tests/test_mc_update_door.py`,
+  `backend/tests/test_install_bridge_setup.py`.
 - **2026-10-19** — **Update engine core (ADR-094, update plan PR 2a):** `scripts/mc_update.py`
   (host, python3 standard library) is the one engine for terminal and the Settings button:
   phases `preflight → drain → fetch → verify_release → pull → backup → switch → up → verify`,

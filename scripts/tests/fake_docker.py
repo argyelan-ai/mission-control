@@ -24,6 +24,7 @@ Knobs in the state file (set by the tests):
   schema_after_dump   "0002"                   the schema moves right after the dump
   lock_env_after_dump true|false               .env becomes unreadable after the dump
   restore_fail        true|false               loading a dump fails
+  info_fail           N                        the next N `docker info` calls fail (daemon still booting)
 
 The real backup.sh runs against this fake: ``exec -T db pg_dump`` prints a
 complete-looking dump that carries the current schema, ``exec -T db psql …
@@ -77,6 +78,11 @@ def main(argv):
         return 1
     cmd = argv[0]
     if cmd == "info":
+        if s.get("info_fail", 0) > 0:
+            s["info_fail"] -= 1
+            save(s)
+            print("Cannot connect to the Docker daemon", file=sys.stderr)
+            return 1
         print("27.0.0")
         return 0
     if cmd == "ps":
@@ -223,6 +229,9 @@ def main(argv):
             s.setdefault("drain_history", []).append("set")
             save(s)
         elif sql.startswith("delete from system_state"):
+            if "returning" in sql and s.get("drain"):
+                print(json.dumps(s["drain"]))
+                print("DELETE 1")
             s["drain"] = None
             s.setdefault("drain_history", []).append("cleared")
             save(s)

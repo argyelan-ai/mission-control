@@ -167,8 +167,11 @@ jobs:
     # it end to end against a local git upstream and a fake docker in PATH
     # (scripts/tests/fake_docker.py) and the repository's real backup.sh
     # (pre-update backup and R2 restore; needs bash, gzip, openssl), including
-    # real crashes at every journal boundary followed by `resume`. No Docker,
-    # no network.
+    # real crashes at every journal boundary followed by `resume`. The bridge's
+    # update door (scripts/mc_update_door.py) runs against the same world: five
+    # routes, its own token, 409/423/429, a detached job that outlives a killed
+    # bridge, and the start routine that resumes an interrupted run.
+    # No Docker, no network.
     name: mc-update engine (py${{ matrix.python }})
     runs-on: ubuntu-latest
     strategy:
@@ -186,7 +189,7 @@ jobs:
         run: pip install pytest pytest-xdist
 
       - name: Run update engine tests
-        run: python3 -m pytest scripts/tests/test_mc_update.py -q -p no:cacheprovider -n auto --tb=short
+        run: python3 -m pytest scripts/tests/test_mc_update.py scripts/tests/test_mc_update_door.py -q -p no:cacheprovider -n auto --tb=short
 
   mc-cli:
     name: mc-cli Tests
@@ -288,7 +291,7 @@ jobs:
         run: |
           shellcheck -x -S warning install.sh scripts/release-image-tags.sh   # info-level notes differ between shellcheck versions
           pip install -q pytest pyyaml
-          python3 -m pytest -q -p no:cacheprovider --noconftest backend/tests/test_install_release_pinning.py backend/tests/test_install_update.py backend/tests/test_release_image_tags.py backend/tests/test_mc_update_verify.py
+          python3 -m pytest -q -p no:cacheprovider --noconftest backend/tests/test_install_release_pinning.py backend/tests/test_install_update.py backend/tests/test_release_image_tags.py backend/tests/test_mc_update_verify.py backend/tests/test_install_bridge_setup.py
       - name: --here ran the checkout, not a published image
         # CI has no release that matches the branch under test, so --here
         # must take the edge path: MC_IMAGE_TAG=edge (a tag no registry
