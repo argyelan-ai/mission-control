@@ -42,6 +42,7 @@ pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
 FAKE_BACKUP = """#!/usr/bin/env bash
 set -euo pipefail
 echo "backup on $(git describe --tags --exact-match HEAD 2>/dev/null || echo none)" >> "$STUB_BACKUP_LOG"
+if [ -n "${STUB_BACKUP_SLEEP:-}" ]; then sleep "$STUB_BACKUP_SLEEP"; fi
 if [ "${STUB_BACKUP_RC:-0}" != 0 ]; then echo "pg_dump: connection refused" >&2; exit "$STUB_BACKUP_RC"; fi
 dir="${MC_BACKUP_DIR:?}"
 mkdir -p "$dir"
@@ -399,6 +400,9 @@ def test_migrated_schema_is_not_rolled_back_onto_old_code(world: World):
     assert "backup.sh restore" in j["error"]
     assert world.head_tag() == "v0.2.0"         # no old code on the new schema
     assert world.get_state()["drain"] is not None   # stays in no-new-work mode
+    # The note names both steps, in the order that works.
+    assert "./backup.sh restore" in r.stdout and "mc_update.py rollback" in r.stdout
+    assert r.stdout.index("./backup.sh restore") < r.stdout.index("mc_update.py rollback")
 
 
 def test_failures_inside_start_period_do_not_count(world: World):
@@ -681,6 +685,102 @@ def test_rollback_cancels_a_run_waiting_for_quiet(world: World):
     assert world.head_tag() == "v0.1.0"
 
 
+def _start_in_background(world: World, extra_env: dict = None) -> subprocess.Popen:
+    env = dict(world.env)
+    env["MC_UPDATE_POLL_INTERVAL"] = "0.05"
+    env.update(extra_env or {})
+    return subprocess.Popen([sys.executable, str(world.inst / "scripts" / "mc_update.py"), "start"],
+                            cwd=world.inst, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+
+def _wait_for_phase(world: World, phase: str, timeout: float = 20) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        js = sorted((world.state / "journal").glob("*.json")) if (world.state / "journal").exists() else []
+        if js:
+            try:
+                if json.loads(js[-1].read_text())["phase"] == phase:
+                    return
+            except ValueError:
+                pass
+        time.sleep(0.02)
+    raise AssertionError(f"the run never reached phase {phase}")
+
+
+@pytest.mark.parametrize("phase", ["pull", "backup"])
+def test_cancel_in_any_phase_before_the_switch_is_honoured(world: World, phase: str):
+    """Regression (review of #868): the cancel was only read in the drain loop —
+    a cancel during the download or the backup was answered "ok" and the run
+    went on to `done`. Sabotage: drop the cancel checks outside the drain → red."""
+    if phase == "pull":
+        world.patch_state(pull_sleep=30)
+        extra = {}
+    else:
+        extra = {"STUB_BACKUP_SLEEP": "1.5"}
+    t0 = time.monotonic()
+    proc = _start_in_background(world, extra)
+    try:
+        _wait_for_phase(world, phase)
+        r = world.run("rollback")
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "cancel requested" in r.stdout
+        rc = proc.wait(timeout=25)
+        out = proc.stdout.read()
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    assert rc == 3, out
+    if phase == "pull":
+        # A running download is stopped, not waited out (it may take an hour).
+        assert time.monotonic() - t0 < 20
+    j = world.journal()
+    assert j["phase"] == "aborted" and j["failure_kind"] == "cancelled"
+    assert world.head_tag() == "v0.1.0"
+    assert world.env_value("MC_IMAGE_TAG") == "0.1.0"
+    assert not any(c[:1] == ["compose"] and c[3:4] in (["up"], ["stop"]) for c in world.calls())
+    assert world.get_state()["drain"] is None
+
+
+def test_a_normal_run_claims_the_switch_before_it_changes_anything(world: World):
+    """The last point before the switch is one atomic decision: whoever claims
+    the run's gate first — the cancel or the switch — wins."""
+    assert world.run("start").returncode == 0
+    j = world.journal()
+    gate = world.state / f"run-{j['run_id']}" / "gate"
+    assert gate.read_text().strip() == "switch"
+    claimed = [i for i, e in enumerate(j["events"]) if e["event"] == "claimed"]
+    first_switch = next(i for i, e in enumerate(j["events"]) if e["phase"] == "switch")
+    assert claimed and claimed[0] < first_switch
+
+
+def test_cancel_after_the_switch_was_claimed_is_answered_too_late(world: World):
+    """A cancel that loses the race against the switch must not say "ok":
+    the run is past the point of no return and finishes or rolls back."""
+    r = world.run("start", fault="backup.done")
+    assert r.returncode == 137
+    j = world.journal()
+    mod = _load_engine_module()
+    run_dir = world.state / f"run-{j['run_id']}"
+    assert mod.claim_gate(run_dir, "switch") == "switch"
+    # A live run that has claimed the switch but not yet journaled it.
+    (world.state / "lock").write_text(json.dumps({"pid": os.getpid(), "start": mod.process_start(os.getpid()),
+                                                  "run_id": j["run_id"]}))
+    r = world.run("rollback")
+    assert r.returncode == 23, r.stdout + r.stderr
+    assert "too late" in r.stderr
+    assert "cancel requested" not in r.stdout
+    assert (run_dir / "gate").read_text().strip() == "switch"
+
+
+def test_gate_is_won_by_exactly_one_side(tmp_path: Path):
+    mod = _load_engine_module()
+    assert mod.claim_gate(tmp_path / "a", "cancel") == "cancel"
+    assert mod.claim_gate(tmp_path / "a", "switch") == "cancel"
+    assert mod.claim_gate(tmp_path / "b", "switch") == "switch"
+    assert mod.claim_gate(tmp_path / "b", "cancel") == "switch"
+    assert sorted(p.name for p in (tmp_path / "a").iterdir()) == ["gate"]
+
+
 def test_rollback_of_a_done_run_with_a_new_schema_is_refused_untouched(world: World):
     """The new version runs fine; the engine cannot restore the database yet
     (R2, PR 2b) — so it refuses up front and leaves run and stack alone."""
@@ -704,11 +804,121 @@ def test_rollback_of_a_done_run_with_unchanged_schema_goes_back(world: World):
     _git(world.up, "tag", "v0.2.0")
     assert world.run("start").returncode == 0
     r = world.run("rollback")
-    assert r.returncode == 1, r.stdout + r.stderr
+    # Its own exit code: a requested way back that worked is not "update failed".
+    assert r.returncode == 5, r.stdout + r.stderr
     assert world.journal()["phase"] == "rolled_back"
     assert world.head_tag() == "v0.1.0"
     assert world.env_value("MC_IMAGE_TAG") == "0.1.0"
     assert world.get_state()["containers"]["frontend"]["image"] == "sha256:mc-frontend-0.1.0"
+
+
+def _release_without_migration(world: World) -> None:
+    world.patch_state(schema_for_tag={"0.1.0": "0001", "0.2.0": "0001"})
+    _git(world.up, "tag", "-d", "v0.2.0")
+    (world.up / "backend" / "alembic" / "versions" / "0002_more.py").unlink()
+    _git(world.up, "add", "-A")
+    _git(world.up, "commit", "-q", "-m", "v0.2.0 without migration")
+    _git(world.up, "tag", "v0.2.0")
+
+
+def test_requested_rollback_drains_and_waits_for_running_work(world: World):
+    """ADR-094 decision 7: every code switch drains first, agent work is never
+    cut off — also the manual way back from a finished run."""
+    _release_without_migration(world)
+    assert world.run("start").returncode == 0
+    world.patch_state(in_progress=[1, 1, 0], drain_history=[])
+    n = len(world.calls())
+    r = world.run("rollback")
+    assert r.returncode == 5, r.stdout + r.stderr
+    assert "waiting for 1 running task(s)" in r.stdout
+    st = world.get_state()
+    assert st["drain_history"][0] == "set" and st["drain_history"][-1] == "cleared"
+    assert st["drain"] is None
+    calls = world.calls()[n:]
+    count_idx = max(i for i, c in enumerate(calls) if "in_progress" in c[-1])
+    stop_idx = next(i for i, c in enumerate(calls) if c[:1] == ["compose"] and c[3:4] == ["stop"])
+    assert count_idx < stop_idx
+
+
+def test_requested_rollback_with_work_that_never_ends_is_refused_untouched(world: World):
+    _release_without_migration(world)
+    assert world.run("start").returncode == 0
+    world.patch_state(in_progress=[1])
+    n = len(world.calls())
+    r = world.run("rollback", extra_env={"MC_UPDATE_DRAIN_TIMEOUT": "0.3"})
+    assert r.returncode == 9, r.stdout + r.stderr
+    assert "still running" in r.stderr
+    assert world.journal()["phase"] == "done"
+    assert world.head_tag() == "v0.2.0"
+    assert world.get_state()["drain"] is None
+    assert not any(c[:1] == ["compose"] and c[3:4] in (["stop"], ["up"]) for c in world.calls()[n:])
+
+
+def test_hanging_up_counts_against_the_same_limit(world: World):
+    """`compose up` blocks until the backend is healthy (depends_on), so its
+    time is part of the 12/25-minute limit, not an extra 30 minutes."""
+    world.patch_state(up_sleep_for_tag={"0.2.0": 30}, schema_for_tag={"0.1.0": "0001", "0.2.0": "0001"})
+    t0 = time.monotonic()
+    r = world.run("start", extra_env={"MC_UPDATE_VERIFY_TIMEOUT": "1.5"})
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert time.monotonic() - t0 < 20
+    assert world.journal()["phase"] == "rolled_back"
+
+
+def test_arm64_gets_the_long_limit_on_every_os(world: World, monkeypatch):
+    mod = _load_engine_module()
+    monkeypatch.delenv("MC_UPDATE_VERIFY_TIMEOUT", raising=False)
+    for system, machine, want in (("Linux", "aarch64", 1500.0), ("Darwin", "arm64", 1500.0),
+                                  ("Linux", "x86_64", 720.0)):
+        monkeypatch.setattr(mod.platform, "system", lambda s=system: s)
+        monkeypatch.setattr(mod.platform, "machine", lambda m=machine: m)
+        assert mod.Engine(world.inst, world.state).verify_timeout == want, (system, machine)
+
+
+def test_resume_after_switch_puts_a_lost_fleet_file_back(world: World):
+    """Something removed the fleet file after the switch (an operator, a
+    `git clean`) — resume writes it back before `up` recreates anything."""
+    assert world.run("start", fault="up.intent").returncode == 137
+    (world.inst / FLEET).unlink()
+    r = world.run("resume")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert (world.inst / FLEET).read_text() == USER_FLEET
+
+
+def test_private_copies_go_with_the_run(world: World):
+    """ADR-094 decision 4: the run's .env copy (secrets) is removed with the
+    run — right away once it is not needed, after 14 days for a done run."""
+    world.patch_state(health_for_tag={"0.2.0": "unhealthy"}, schema_for_tag={"0.1.0": "0001", "0.2.0": "0001"})
+    assert world.run("start").returncode == 1
+    j = world.journal()
+    rd = world.state / f"run-{j['run_id']}"
+    assert not (rd / "env.before").exists() and not (rd / "fleet.before.yml").exists()
+    # A done run keeps them for its 14-day way back …
+    world.patch_state(health_for_tag={}, schema_for_tag={"0.1.0": "0001", "0.2.0": "0002"})
+    assert world.run("start").returncode == 0
+    j2 = world.journal()
+    rd2 = world.state / f"run-{j2['run_id']}"
+    assert (rd2 / "env.before").exists()
+    # … and loses them once that window is over.
+    path = world.state / "journal" / f"{j2['run_id']}.json"
+    data = json.loads(path.read_text())
+    data["finished_at"] = "2000-01-01T00:00:00Z"
+    path.write_text(json.dumps(data))
+    world.run("start")
+    assert not (rd2 / "env.before").exists()
+
+
+def test_unreadable_journal_is_a_clean_failed_check(world: World):
+    (world.state / "journal").mkdir(parents=True)
+    (world.state / "journal" / "20260101T000000Z-abcdef.json").write_text("{ torn")
+    r = world.run("preflight", "--json")
+    assert r.returncode == 3, r.stdout + r.stderr
+    assert "Traceback" not in r.stderr
+    checks = json.loads(r.stdout)["checks"]
+    assert any(c["id"] == "lock" and c["status"] == "fail" and "cannot be read" in c["message"] for c in checks)
+    r = world.run("status")
+    assert r.returncode == 1 and "Traceback" not in r.stderr
+    assert "cannot be read" in r.stderr
 
 
 def test_failure_while_preparing_the_way_back_aborts(world: World):

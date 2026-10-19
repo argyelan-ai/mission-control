@@ -77,9 +77,18 @@ Settings (environment; ``MC_*`` keys are also read from the install's .env):
     MC_UPDATE_POLL_INTERVAL    seconds between polls (default 5)
     MC_UPDATE_MIN_FREE_MB      free disk space the preflight wants (default 3072)
 
-Exit codes: 0 done / nothing to do · 1 failed, rolled back · 2 usage ·
-3 aborted (nothing changed) · 4 rollback failed · 9 refused (managed install,
-target mismatch — the bridge answers 409) · 23 another run holds the lock (423).
+Exit codes: 0 done / nothing to do / cancel accepted · 1 failed, rolled back ·
+2 usage · 3 aborted (nothing changed) · 4 rollback failed · 5 rolled back on
+request (``rollback`` of a finished run) · 9 refused (managed install, target
+mismatch, way back not possible yet — the bridge answers 409) · 23 another run
+holds the lock, or a cancel came too late (423).
+
+Cancel: ``rollback`` on a live run before the switch asks it to stop. The run
+reads that at every phase boundary and while it waits for work or a download;
+a running backup is finished first. The last point before the switch is one
+atomic decision (``run-<id>/gate``, created with ``link``): either the cancel
+or the switch claims it, never both — a cancel that loses is answered "too
+late" (exit 23), not "ok".
 """
 
 from __future__ import annotations
@@ -133,6 +142,7 @@ RUN_ID_RE = re.compile(r"^\d{8}T\d{6}Z-[0-9a-f]{6}$")
 RUNNING_WORK_SQL = "select count(*) from tasks where status = 'in_progress'"
 
 EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_ABORTED, EXIT_ROLLBACK_FAILED = 0, 1, 2, 3, 4
+EXIT_ROLLED_BACK = 5
 EXIT_REFUSED, EXIT_LOCKED = 9, 23
 
 # Crash points for the crash matrix (PR 2c) and the tests: with
@@ -463,6 +473,46 @@ class RunLock:
             os.environ.pop("MC_UPDATE_LOCK_FD", None)
 
 
+# ── cancel-or-switch gate ───────────────────────────────────────────────────
+
+GATE_FILE = "gate"
+
+
+def claim_gate(run_dir: Path, decision: str) -> str:
+    """Claim the run's last decision before the switch; return the winner.
+
+    ``os.link`` of a complete temp file is atomic and fails when the gate
+    exists, so exactly one of "cancel" and "switch" wins, and a reader never
+    sees a half-written gate."""
+    run_dir.mkdir(parents=True, exist_ok=True)
+    gate = run_dir / GATE_FILE
+    tmp = run_dir / f".gate.{os.getpid()}.{uuid.uuid4().hex[:8]}"
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        os.write(fd, (decision + "\n").encode())
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    try:
+        os.link(str(tmp), str(gate))
+        won = True
+    except FileExistsError:
+        won = False
+    finally:
+        tmp.unlink()
+    if won:
+        _fsync_dir(run_dir)
+        return decision
+    return gate_holder(run_dir) or "unknown"
+
+
+def gate_holder(run_dir: Path) -> Optional[str]:
+    try:
+        return (run_dir / GATE_FILE).read_text().strip() or None
+    except OSError:
+        return None
+
+
 # ── journal ─────────────────────────────────────────────────────────────────
 
 class Journal:
@@ -495,8 +545,12 @@ class Journal:
 
     @classmethod
     def load(cls, path: Path) -> "Journal":
-        data = json.loads(path.read_text())
-        if data.get("schema") != JOURNAL_SCHEMA:
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, ValueError) as e:
+            raise UpdateError(f"journal {path.name} cannot be read ({type(e).__name__})") from None
+        if not isinstance(data, dict) or data.get("schema") != JOURNAL_SCHEMA:
+            data = data if isinstance(data, dict) else {}
             raise UpdateError(f"journal {path.name} has schema {data.get('schema')}, this engine reads {JOURNAL_SCHEMA}")
         return cls(path, data)
 
@@ -579,11 +633,14 @@ class Engine:
         self._project: Optional[str] = None
         self.poll = _float_setting("MC_UPDATE_POLL_INTERVAL", 5.0)
         self.start_period = _float_setting("MC_UPDATE_START_PERIOD", 300.0)
-        arm = platform.system() == "Linux" and platform.machine().lower() in ("aarch64", "arm64", "armv7l")
+        # ADR-094 decision 4: 25 min on arm64 (Pi, Spark, Apple silicon), else 12.
+        arm = platform.machine().lower() in ("aarch64", "arm64", "armv7l")
         self.verify_timeout = _float_setting("MC_UPDATE_VERIFY_TIMEOUT", 1500.0 if arm else 720.0)
         self.drain_timeout = _float_setting("MC_UPDATE_DRAIN_TIMEOUT", 1800.0)
         self.drain_ttl = _int_setting("MC_UPDATE_DRAIN_TTL", 3600)
         self.min_free_mb = _int_setting("MC_UPDATE_MIN_FREE_MB", 3072)
+        # Start of the current `up` → the four checks share one limit with it.
+        self._clock: Optional[float] = None
 
     # ── settings ────────────────────────────────────────────────────────────
 
@@ -634,14 +691,17 @@ class Engine:
     # ── subprocess helpers ─────────────────────────────────────────────────
 
     def sh(self, args: List[str], check: bool = True, env: Optional[Dict[str, str]] = None,
-           timeout: Optional[float] = None) -> subprocess.CompletedProcess:
+           timeout: Optional[float] = None, cancellable: bool = False) -> subprocess.CompletedProcess:
         full_env = dict(os.environ)
         full_env.pop("MC_UPDATE_LOCK_FD", None)
         if env:
             full_env.update(env)
         try:
-            cp = subprocess.run(args, cwd=str(self.repo), env=full_env, stdin=subprocess.DEVNULL,
-                                capture_output=True, text=True, timeout=timeout)
+            if cancellable:
+                cp = self._run_cancellable(args, full_env, timeout)
+            else:
+                cp = subprocess.run(args, cwd=str(self.repo), env=full_env, stdin=subprocess.DEVNULL,
+                                    capture_output=True, text=True, timeout=timeout)
         except FileNotFoundError:
             raise UpdateError(f"{args[0]} is not installed or not in PATH") from None
         except subprocess.TimeoutExpired:
@@ -651,13 +711,39 @@ class Engine:
             raise UpdateError(f"`{' '.join(args)}` failed (exit {cp.returncode}): {' | '.join(tail)}")
         return cp
 
+    def _run_cancellable(self, args: List[str], env: Dict[str, str],
+                         timeout: Optional[float]) -> subprocess.CompletedProcess:
+        """subprocess.run that also stops when the run is cancelled (a
+        download can take an hour; the operator should not wait it out)."""
+        proc = subprocess.Popen(args, cwd=str(self.repo), env=env, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        end = None if timeout is None else time.monotonic() + timeout
+        step = min(max(self.poll, 0.05), 1.0)
+        while True:
+            try:
+                out, err = proc.communicate(timeout=step)
+                return subprocess.CompletedProcess(args, proc.returncode, out, err)
+            except subprocess.TimeoutExpired:
+                pass
+            cancelled = self.cancel_requested()
+            if cancelled or (end is not None and time.monotonic() >= end):
+                proc.terminate()
+                try:
+                    proc.communicate(timeout=10)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.communicate()
+                if cancelled:
+                    raise CancelRequested("cancelled during the download — nothing was changed")
+                raise subprocess.TimeoutExpired(args, timeout or 0)
+
     def git(self, *args: str, check: bool = True) -> str:
         return self.sh(["git", *args], check=check).stdout.strip()
 
     def compose(self, *args: str, check: bool = True, env: Optional[Dict[str, str]] = None,
-                timeout: Optional[float] = None) -> subprocess.CompletedProcess:
+                timeout: Optional[float] = None, cancellable: bool = False) -> subprocess.CompletedProcess:
         return self.sh(["docker", "compose", "-p", self.project(), *args], check=check, env=env,
-                       timeout=timeout)
+                       timeout=timeout, cancellable=cancellable)
 
     def psql(self, sql: str, check: bool = True) -> str:
         cp = self.compose("exec", "-T", "db", "psql", "-U", DB_USER, "-d", DB_NAME,
@@ -874,7 +960,7 @@ class Engine:
         Failures count only after the backend's start_period: until then an
         "unhealthy" or a container that is not up yet is the slow first boot
         (migrations on an SD card), not a verdict."""
-        started = time.monotonic()
+        started = self._clock if self._clock is not None else time.monotonic()
         deadline = started + self.verify_timeout
         last = "nothing checked yet"
         while True:
@@ -948,9 +1034,15 @@ class Engine:
             add("channel", "ok", "channel stable")
 
         busy = self.lock.fd is None and self.lock.live_holder() is not None
-        open_run = find_open_run(self.state)
+        try:
+            open_run = find_open_run(self.state)
+            unreadable = None
+        except UpdateError as e:
+            open_run, unreadable = None, str(e)
         if busy:
             add("lock", "fail", "another update is running")
+        elif unreadable:
+            add("lock", "fail", f"{unreadable} — check the update journal before updating")
         elif open_run is not None:
             add("lock", "fail", f"run {open_run.run_id} was interrupted in phase {open_run.phase} — resume it first (mc_update.py resume)")
         else:
@@ -1058,6 +1150,7 @@ class Engine:
     def cmd_start(self, version: Optional[str], expect: Optional[str], source: str) -> int:
         self.lock.acquire(None)
         try:
+            self.prune_private_copies()
             pf = self.preflight_checks(version, expect)
             fails = [c for c in pf["checks"] if c["status"] == "fail"]
             if fails:
@@ -1094,6 +1187,7 @@ class Engine:
             self.phase_verify_release()
             self.phase_pull()
             self.phase_backup()
+            self.claim_switch()
         except (UpdateError, CancelRequested, OSError) as e:
             return self.abort(str(e), getattr(e, "kind", "cancelled"))
         self.handoff("_continue")
@@ -1124,39 +1218,67 @@ class Engine:
         assert j is not None
         self.drain_clear()
         j.end("aborted", reason, error=reason, kind=kind)
+        self.drop_private_copies(j)
         self.say(f"✗ Update aborted — nothing was changed: {reason}")
         return EXIT_ABORTED
 
     # ── phases before the switch (nothing changes on disk or in containers) ──
 
+    def cancel_requested(self) -> bool:
+        return self.journal is not None and gate_holder(self.run_dir()) == "cancel"
+
     def _check_cancel(self) -> None:
-        if (self.run_dir() / "cancel").exists():
-            raise CancelRequested("cancelled before the switch")
+        if self.cancel_requested():
+            raise CancelRequested("cancelled before the switch — nothing was changed")
+
+    def claim_switch(self) -> None:
+        """The point of no return, decided atomically against a cancel."""
+        j = self.journal
+        assert j is not None
+        if claim_gate(self.run_dir(), "switch") != "switch":
+            raise CancelRequested("cancelled before the switch — nothing was changed")
+        j.event("backup", "claimed", "switch")
+        j.save()
+
+    def drain_and_wait(self) -> None:
+        """Drain on, then wait until no work runs (ADR-094 decision 7).
+
+        Used before every code switch: the update's own and a requested way
+        back. Raises UpdateError on timeout; the caller lifts the drain."""
+        if self.drain_supported():
+            self.drain_set()
+            self.say("→ no new work is handed out while the update runs")
+        else:
+            assert self.journal is not None
+            self.journal.data["drain"] = {"active": False, "supported": False}
+            self.say("! this version has no drain switch — only waiting for running work to finish")
+        assert self.journal is not None
+        self.journal.save()
+        deadline = time.monotonic() + self.drain_timeout
+        while True:
+            self._check_cancel()
+            n = self.running_work()
+            if n == 0:
+                return
+            if n is None:
+                raise UpdateError("running work could not be counted (database not reachable)")
+            if time.monotonic() >= deadline:
+                raise UpdateError(f"{n} task(s) still running after {self.drain_timeout:.0f}s")
+            self.say(f"… waiting for {n} running task(s) to finish")
+            time.sleep(self.poll)
 
     def phase_drain(self) -> None:
         j = self.journal
         assert j is not None
         j.begin("drain")
         _fault("drain.intent")
-        if self.drain_supported():
-            self.drain_set()
-            self.say("→ no new work is handed out while the update runs")
-        else:
-            j.data["drain"] = {"active": False, "supported": False}
-            self.say("! this version has no drain switch — only waiting for running work to finish")
-        j.save()
-        deadline = time.monotonic() + self.drain_timeout
-        while True:
-            self._check_cancel()
-            n = self.running_work()
-            if n == 0:
-                break
-            if n is None:
-                raise UpdateError("running work could not be counted (database not reachable)")
-            if time.monotonic() >= deadline:
-                raise UpdateError(f"{n} task(s) still running after {self.drain_timeout:.0f}s — the update did not start")
-            self.say(f"… waiting for {n} running task(s) to finish")
-            time.sleep(self.poll)
+        self._check_cancel()
+        try:
+            self.drain_and_wait()
+        except UpdateError as e:
+            if "still running" in str(e):
+                raise UpdateError(f"{e} — the update did not start", kind=e.kind) from None
+            raise
         j.finish("drain", "quiet")
         _fault("drain.done")
 
@@ -1166,6 +1288,7 @@ class Engine:
         tag = j.data["target"]["tag"]
         j.begin("fetch", tag)
         _fault("fetch.intent")
+        self._check_cancel()
         self.drain_refresh()
         j.data["target"]["commit"] = self.fetch_tag(tag)
         engine = self.run_dir() / "mc_update.py"
@@ -1185,6 +1308,7 @@ class Engine:
         tag = j.data["target"]["tag"]
         j.begin("verify_release", tag)
         _fault("verify_release.intent")
+        self._check_cancel()
         cur = j.data["from"].get("tag")
         if not is_release_tag(tag):
             raise UpdateError(f"{tag} is not a release tag")
@@ -1207,10 +1331,12 @@ class Engine:
         tag = j.data["target"]["tag"]
         j.begin("pull", " ".join(PULL_SERVICES))
         _fault("pull.intent")
+        self._check_cancel()
         self.drain_refresh()
         self.say(f"→ downloading {', '.join(self.image_ref(s, tag) for s in PULL_SERVICES)} …")
         try:
-            self.compose("pull", *PULL_SERVICES, env={"MC_IMAGE_TAG": image_tag(tag)}, timeout=3600)
+            self.compose("pull", *PULL_SERVICES, env={"MC_IMAGE_TAG": image_tag(tag)}, timeout=3600,
+                         cancellable=True)
         except UpdateError as e:
             raise UpdateError(f"download failed — the running version is unchanged ({e})", kind="network") from None
         target_images = {}
@@ -1232,6 +1358,7 @@ class Engine:
         assert j is not None
         j.begin("backup")
         _fault("backup.intent")
+        self._check_cancel()
         self.drain_refresh()
         script = self.repo / "backup.sh"
         if not os.access(str(script), os.X_OK):
@@ -1396,11 +1523,20 @@ class Engine:
         j.begin("up", " ".join(MC_SERVICES))
         _fault("up.intent")
         self.drain_refresh()
-        # --pull never: up uses exactly the images pulled and checked before;
-        # nothing else is downloaded behind the engine's back.
-        self.compose("up", "-d", "--pull", "never", *MC_SERVICES, timeout=1800)
+        self.compose_up()
         j.finish("up")
         _fault("up.done")
+
+    def compose_up(self) -> None:
+        """`up` of the MC services; its time counts against the check limit.
+
+        --pull never: up uses exactly the images pulled and checked before;
+        nothing else is downloaded behind the engine's back. Through
+        depends_on (service_healthy) compose itself blocks until the backend
+        is healthy, so `up` and the four checks share one limit (ADR-094
+        decision 4), counted from here."""
+        self._clock = time.monotonic()
+        self.compose("up", "-d", "--pull", "never", *MC_SERVICES, timeout=max(self.verify_timeout, 1.0))
 
     def phase_verify(self) -> None:
         j = self.journal
@@ -1417,7 +1553,7 @@ class Engine:
 
     # ── the way back ───────────────────────────────────────────────────────
 
-    def rollback(self, reason: str) -> int:
+    def rollback(self, reason: str, requested: bool = False) -> int:
         """R1: old code, old .env (in place), old fleet file, up, four checks.
 
         Only when the database schema is still ``schema_before``. Otherwise
@@ -1443,21 +1579,63 @@ class Engine:
             if not env_copy.is_file():
                 raise RollbackUnavailable(f"the .env copy {env_copy} is missing")
             write_in_place(self.env_path, env_copy.read_bytes())
-            self.compose("up", "-d", "--pull", "never", *MC_SERVICES, timeout=1800)
+            self.compose_up()
             self.wait_for_success({"images": rb.get("images"), "version": rb.get("version"),
                                    "schema": rb.get("schema_before")}, "previous version")
         except (UpdateError, RollbackUnavailable, OSError) as e:
             msg = f"the way back failed: {e}"
             j.end("rollback_failed", msg, error=f"{reason} — {msg}")
             self.say(f"✗ Update failed and {msg}")
-            self.say("  Mission Control stays in no-new-work mode. On this machine run: python3 scripts/mc_update.py rollback")
-            if j.data.get("backup", {}).get("file"):
-                self.say(f"  Backup from right before the switch: {j.data['backup']['file']}")
+            backup = (j.data.get("backup") or {}).get("file")
+            self.say("  Mission Control stays in no-new-work mode. On this machine, in the install folder:")
+            if backup:
+                self.say(f"    1. ./backup.sh restore {backup} --yes   (the backup from right before the switch)")
+            else:
+                self.say("    1. ./backup.sh restore <the backup from right before the update> --yes")
+            self.say("    2. python3 scripts/mc_update.py rollback")
             return EXIT_ROLLBACK_FAILED
         self.drain_clear()
         j.end("rolled_back", f"back on {rb.get('ref')}", error=reason)
+        self.drop_private_copies(j)
+        if requested:
+            self.say(f"✓ Mission Control was set back to {rb.get('ref')} as requested; the database was not changed.")
+            return EXIT_ROLLED_BACK
         self.say(f"✗ Update failed ({reason}). Mission Control was set back to {rb.get('ref')}; the database was not changed.")
         return EXIT_FAILED
+
+    # ── the run's private copies (.env holds secrets) ──────────────────────
+
+    ROLLBACK_WINDOW = _dt.timedelta(days=14)
+
+    def drop_private_copies(self, j: "Journal") -> None:
+        """ADR-094 decision 4: the run's copy of .env and the fleet file is
+        removed with the run — once nothing can need it any more."""
+        rd = self.state / f"run-{j.run_id}"
+        for name in ("env.before", "fleet.before.yml"):
+            try:
+                (rd / name).unlink()
+            except FileNotFoundError:
+                pass
+            except OSError as e:
+                self.say(f"! could not remove the run's private copy {name} ({e})")
+
+    def prune_private_copies(self) -> None:
+        """aborted / rolled_back: right away; done: after its 14-day way back.
+        rollback_failed keeps them — the way back still needs them."""
+        for path in list_runs(self.state):
+            try:
+                j = Journal.load(path)
+            except UpdateError:
+                continue
+            if j.phase in ("aborted", "rolled_back"):
+                self.drop_private_copies(j)
+            elif j.phase == "done":
+                try:
+                    finished = _parse_iso(j.data.get("finished_at") or j.data["updated_at"])
+                except (KeyError, ValueError):
+                    continue
+                if _now() - finished > self.ROLLBACK_WINDOW:
+                    self.drop_private_copies(j)
 
     def restore_database(self, schema_now: Optional[str]) -> None:
         j = self.journal
@@ -1555,13 +1733,13 @@ class Engine:
             return EXIT_USAGE
         self.journal = j
         if self.lock.live_holder() is not None:
-            if j.phase in PRE_SWITCH:
-                (self.run_dir() / "cancel").parent.mkdir(parents=True, exist_ok=True)
-                (self.run_dir() / "cancel").write_text(_iso() + "\n")
+            if j.phase in PRE_SWITCH and claim_gate(self.run_dir(), "cancel") == "cancel":
                 self.emit({"ok": True, "cancel_requested": True, "run_id": j.run_id},
-                          human=f"→ cancel requested for run {j.run_id} (it stops before the switch).")
+                          human=(f"→ cancel requested for run {j.run_id}: it stops before the switch "
+                                 "(a running download is stopped, a running backup is finished first)."))
                 return EXIT_OK
-            raise Locked(f"run {j.run_id} is in phase {j.phase} right now — it rolls back on its own if it fails")
+            raise Locked(f"too late to cancel run {j.run_id}: it is past the point of no return "
+                         f"(phase {j.phase}) — it finishes, or rolls back on its own if it fails")
         self.lock.acquire(j.run_id)
         try:
             if j.phase in ("aborted", "rolled_back"):
@@ -1583,7 +1761,15 @@ class Engine:
                         self.restore_database(now)
                     except RollbackUnavailable as e:
                         raise Refused(str(e)) from None
-            return self.rollback("rollback requested")
+                # A code switch like any other: no new work, running work
+                # finishes first, nothing is cut off (ADR-094 decision 7).
+                try:
+                    self.drain_and_wait()
+                except UpdateError as e:
+                    self.drain_clear()
+                    j.save()
+                    raise Refused(f"{e} — the way back did not start, nothing was changed") from None
+            return self.rollback("rollback requested", requested=True)
         finally:
             self.lock.release()
 

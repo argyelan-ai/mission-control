@@ -15,6 +15,8 @@ Knobs in the state file (set by the tests):
   drain_table         true|false               does system_state exist
   db_down             true|false
   pull_fail           true|false
+  pull_sleep          seconds                  a slow download (cancel tests)
+  up_sleep_for_tag    {"0.2.0": 5}             `up` of that tag hangs this long first
   foreign             ["proj|/dir"]            other MC stacks on the machine
   project_label       "name"                   label of the running stack
 """
@@ -22,6 +24,7 @@ Knobs in the state file (set by the tests):
 import json
 import os
 import sys
+import time
 
 STATE = os.environ["STUB_STATE"]
 LOG = os.environ["STUB_LOG"]
@@ -99,6 +102,9 @@ def main(argv):
         args = args[2:]
     sub = args[0]
     if sub == "pull":
+        if s.get("pull_sleep"):
+            time.sleep(float(s["pull_sleep"]))
+            s = load()
         if s.get("pull_fail"):
             print("net/http: TLS handshake timeout", file=sys.stderr)
             return 1
@@ -123,6 +129,9 @@ def main(argv):
         return 0
     if sub == "up":
         tag = env_tag()
+        if s.get("up_sleep_for_tag", {}).get(tag):
+            time.sleep(float(s["up_sleep_for_tag"][tag]))
+            s = load()
         svcs = [a for a in args[1:] if a in IMG]
         for svc in svcs:
             ref = f"{REG}/{IMG[svc]}:{tag}"
