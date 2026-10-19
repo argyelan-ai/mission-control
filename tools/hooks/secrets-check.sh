@@ -9,7 +9,9 @@
 # Red case (exit 2 = Claude Code blocks the tool call; stderr names the file
 # and the kind of secret, never the value):
 #   git commit -> added lines of the STAGED diff; with -a/--all or a `git add`
-#                 in the same command also unstaged (and, for add, new) files
+#                 in the same command also unstaged (and, for add, new) files;
+#                 with pathspecs (git commit x.py, -o, -i) the named files as
+#                 they are in the working tree
 #   git push   -> added lines of the branch diff against origin/main, for each
 #                 pushed branch (git push origin other-branch scans that one)
 #   matches: private key block, GitHub token (ghp_/gho_/ghs_/github_pat_),
@@ -20,14 +22,21 @@
 #   dodging a check: git push/commit --no-verify (commit -n), git -c
 #            core.hooksPath=..., GIT_CONFIG_* setting core.hooksPath, git config
 #            core.hooksPath <x> / --unset, MC_LEAK_SCAN_SKIP=..., a commit or
-#            push whose checkout is behind a variable.
-#   Any spelling counts (see cmdparse below: wrappers, bash -c, eval, $( ),
-#   script files, aliases).
+#            push whose checkout is behind a variable, git whose words the
+#            reader cannot see (xargs input, a pipe into a shell, assembled
+#            strings), a command that seems to run outside a checkout while
+#            the session sits in one, a command the reader fails on.
+#   Spellings read: see cmdparse below (wrappers, bash -c / -lc, eval, ( ),
+#   $( ), pipes and heredocs into a shell, script files, find -exec, awk,
+#   aliases). It is a blacklist reader and cannot be complete.
 # Exceptions: values containing TEST/dummy/fake/example; a line with
-#   `# secrets-check: allow - <reason>` (a bare marker without reason blocks).
+#   `# secrets-check: allow - <reason>` in a TEST file (tests/, fixtures/,
+#   test_*.py, *.test.ts). A bare marker, or one outside test files, blocks.
+#   Every allowed line is printed as a note, so the reviewer sees it.
 # Honest limits: pattern list, not entropy analysis (CI's gitleaks is the
-# broad scan). A push from a repo without origin/main is not scanned (warns).
-# Only reaches Claude Code sessions that register this hook.
+# broad scan and still sees marked lines). A push from a repo without
+# origin/main is not scanned (warns). Only reaches Claude Code sessions that
+# register this hook.
 # Sabotage probes: tools/hooks/tests/test_secrets_check.py, test_cmdparse.py.
 set -u
 command -v python3 >/dev/null 2>&1 || { echo "secrets-check: python3 missing - check skipped" >&2; exit 0; }
@@ -40,11 +49,19 @@ _sys_boot.stdin = _io.StringIO(_os_boot.environ.get("MC_HOOK_PAYLOAD", ""))
 # backticks, heredocs, cd, wrappers like env/xargs/timeout, bash -c, eval,
 # script files, git/gh aliases) and returns what it would do to git:
 #   ("push",   {"dir", "git_dir", "work_tree", "refs", "flags", "remote"})
-#   ("commit", {"dir", "git_dir", "work_tree", "all"})
+#   ("commit", {"dir", "git_dir", "work_tree", "all", "paths"})
 #   ("add",    {"dir"})
 #   ("pr",     {"dir", "head", "repo"})
 #   ("bypass", {"why"})      - skips a hook (--no-verify, core.hooksPath, ...)
-#   ("hidden", {"why"})      - git/gh behind a variable: cannot be checked
+#   ("hidden", {"why"})      - git/gh whose words the reader cannot see (a
+#                              variable, xargs input, a pipe into a shell,
+#                              assembled strings in python/node code)
+# "dir" is None when the folder cannot be known for sure: a cd behind a
+# variable, cd - / popd, a cd that may or may not have run (false && cd x; ...).
+# ( ), $( ), bash -c and pipeline parts are subshells: their cd stays inside.
+# This is a blacklist reader and cannot be complete (python with split
+# strings, curl | sh, a binary). The pre-push mode of test-gate.sh is the
+# choke point git itself runs for every spelling.
 import os as _os
 import re as _re
 import subprocess as _sp
@@ -75,8 +92,33 @@ _MAX_FILE = 256 * 1024
 
 
 class _W(str):
-    """A word; .dyn is True when it contains an unquoted/double-quoted $ expansion."""
+    """A word; .dyn is True when it contains an unquoted/double-quoted $ expansion.
+    .subs holds the $( ) / backtick bodies inside it (run before the command)."""
     dyn = False
+    subs = ()
+
+
+class _Tok(str):
+    """A marker that is neither a word nor a separator: .body is its text."""
+    body = ""
+
+
+class _HD(_Tok):
+    """stdin from a heredoc or here-string."""
+
+
+class _RIN(_Tok):
+    """stdin from a file (< file)."""
+
+
+class _PS(_Tok):
+    """process substitution <( ) / >( ) - runs in a subshell."""
+
+
+def _tok(cls, body):
+    t = cls(cls.__name__)
+    t.body = body
+    return t
 
 
 _KNOWN_SUBS = ("pwd", "pwd -P", "git rev-parse --show-toplevel")
@@ -87,9 +129,10 @@ def _subst(body):
     return list("$(" + b + ")") if b in _KNOWN_SUBS else list("$(...)")
 
 
-def _word(chars, dyn):
+def _word(chars, dyn, subs=()):
     w = _W("".join(chars))
     w.dyn = dyn
+    w.subs = tuple(subs)
     return w
 
 
@@ -115,21 +158,29 @@ def _matching(s, i, open_c="(", close_c=")"):
     return len(s)
 
 
-def _lex(s):
+def _lex(s, heredocs=()):
     """-> (tokens, substitutions). Separators are plain str tokens ';' '&&' '||'
-    '|' '&' '(' ')'; words are _W. Redirections (> file, 2>&1) are dropped."""
-    toks, subs, cur, dyn, i, n = [], [], None, False, 0, len(s)
+    '|' '&' '(' ')'; words are _W; stdin sources and process substitutions are
+    _Tok markers. Output redirections (> file, 2>&1, &>x) are dropped."""
+    toks, subs, cur, dyn, wsubs, i, n = [], [], None, False, [], 0, len(s)
 
     def flush():
-        nonlocal cur, dyn
+        nonlocal cur, dyn, wsubs
         if cur is not None:
-            toks.append(_word(cur, dyn))
-        cur, dyn = None, False
+            toks.append(_word(cur, dyn, wsubs))
+        cur, dyn, wsubs = None, False, []
 
     while i < n:
         c = s[i]
         if c in " \t\r":
             flush(); i += 1
+        elif c == "\x01":  # a heredoc taken out by _strip_heredocs
+            e = s.find("\x01", i + 1)
+            e = n if e < 0 else e
+            flush()
+            k = s[i + 1:e]
+            body = heredocs[int(k)] if k.isdigit() and int(k) < len(heredocs) else ""
+            toks.append(_tok(_HD, body)); i = e + 1
         elif c == "\\" and i + 1 < n:
             if s[i + 1] == "\n":
                 i += 2
@@ -140,28 +191,18 @@ def _lex(s):
         elif c == "#" and cur is None:
             while i < n and s[i] != "\n":
                 i += 1
-        elif c in "&|":
-            if c == "&" and cur and cur[-1] in "<>":
-                cur.append(c); i += 1
-                continue
-            flush()
-            j = i
-            while j < n and s[j] in "&|":
-                j += 1
-            toks.append(s[i:j]); i = j
-        elif c in "()":
-            flush(); toks.append(c); i += 1
-        elif c in "<>":
-            # redirection: drop operator and its target word
+        elif c in "<>" or (c == "&" and s[i + 1:i + 2] == ">" and cur is None):
+            # redirection: keep stdin sources, drop the rest
             if cur is not None and all(ch.isdigit() for ch in cur):
                 cur, dyn = None, False
             flush()
             j = i
             while j < n and s[j] in "<>&|-":
                 j += 1
-            if s[i:j].startswith("<(") or (j < n and s[j] == "(" and s[i:j] in ("<", ">")):
+            op = s[i:j]
+            if op.startswith("<(") or (j < n and s[j] == "(" and op in ("<", ">")):
                 k = _matching(s, j)
-                subs.append(s[j + 1:k]); i = k + 1
+                subs.append(s[j + 1:k]); toks.append(_tok(_PS, s[j + 1:k])); i = k + 1
                 continue
             while j < n and s[j] in " \t":
                 j += 1
@@ -176,7 +217,22 @@ def _lex(s):
                 elif ch in " \t\n;&|()<>":
                     break
                 k += 1
+            if op in ("<", "<<<"):
+                tw = [t for t in _lex(s[j:k])[0] if isinstance(t, _W)]
+                target = tw[0] if tw else _W("")
+                toks.append(_tok(_RIN if op == "<" else _HD, target))
             i = k
+        elif c in "&|":
+            if c == "&" and cur and cur[-1] in "<>":
+                cur.append(c); i += 1
+                continue
+            flush()
+            j = i
+            while j < n and s[j] in "&|":
+                j += 1
+            toks.append(s[i:j]); i = j
+        elif c in "()":
+            flush(); toks.append(c); i += 1
         elif c == "'":
             k = s.find("'", i + 1)
             k = n if k < 0 else k
@@ -190,12 +246,14 @@ def _lex(s):
                     continue
                 if s[k] == "$" and k + 1 < n and s[k + 1] == "(":
                     e = _matching(s, k + 1)
-                    subs.append(s[k + 2:e]); cur += _subst(s[k + 2:e]); dyn = True; k = e + 1
+                    subs.append(s[k + 2:e]); wsubs.append(s[k + 2:e])
+                    cur += _subst(s[k + 2:e]); dyn = True; k = e + 1
                     continue
                 if s[k] == "`":
                     e = s.find("`", k + 1)
                     e = n if e < 0 else e
-                    subs.append(s[k + 1:e]); cur += list("$(...)"); dyn = True; k = e + 1
+                    subs.append(s[k + 1:e]); wsubs.append(s[k + 1:e])
+                    cur += list("$(...)"); dyn = True; k = e + 1
                     continue
                 if s[k] == "$":
                     dyn = True
@@ -203,11 +261,13 @@ def _lex(s):
             i = k + 1
         elif c == "$" and i + 1 < n and s[i + 1] == "(":
             e = _matching(s, i + 1)
-            subs.append(s[i + 2:e]); cur = (cur or []) + _subst(s[i + 2:e]); dyn = True; i = e + 1
+            subs.append(s[i + 2:e]); wsubs.append(s[i + 2:e])
+            cur = (cur or []) + _subst(s[i + 2:e]); dyn = True; i = e + 1
         elif c == "`":
             e = s.find("`", i + 1)
             e = n if e < 0 else e
-            subs.append(s[i + 1:e]); cur = (cur or []) + list("$(...)"); dyn = True; i = e + 1
+            subs.append(s[i + 1:e]); wsubs.append(s[i + 1:e])
+            cur = (cur or []) + list("$(...)"); dyn = True; i = e + 1
         else:
             if c == "$":
                 dyn = True
@@ -217,11 +277,13 @@ def _lex(s):
 
 
 def _strip_heredocs(s):
+    """Takes heredoc bodies out of the text and leaves a marker where the
+    << was, so the body becomes the stdin of exactly that command."""
     bodies = []
 
     def repl(m):
-        bodies.append((s[:m.start()].rsplit("\n", 1)[-1], m.group(4)))
-        return " " + m.group(3) + "\n"
+        bodies.append(m.group(4))
+        return "\x01%d\x01 %s\n" % (len(bodies) - 1, m.group(3))
     return _HEREDOC.sub(repl, s), bodies
 
 
@@ -282,38 +344,106 @@ class _Ctx:
         self.seen_files = set()
 
 
+_KEEP = object()
+
+
+def _sub(ctx, fn, *args, cwd=_KEEP):
+    """Run fn in a subshell: a cd or export inside does not leak out."""
+    saved = (ctx.cwd, dict(ctx.env))
+    if cwd is not _KEEP:
+        ctx.cwd = cwd
+    try:
+        fn(*args)
+    finally:
+        ctx.cwd, ctx.env = saved
+
+
 def analyze(cmd, cwd, depth=0, _ctx=None):
     """Events for a command line, in order."""
     ctx = _ctx or _Ctx(cwd, {})
-    if depth > 5 or not cmd:
+    if depth > 6 or not cmd:
         return ctx.events
     text, bodies = _strip_heredocs(cmd)
-    for prefix, body in bodies:
-        ptoks, _ = _lex(prefix)
-        words = [t for t in ptoks if isinstance(t, _W)]
-        exe = _effective(words)
-        if exe is None:
-            continue
-        name = _os.path.basename(words[exe])
-        rest = words[exe + 1:]
-        if name in _SHELLS and "-c" not in rest:
-            analyze(body, ctx.cwd, depth + 1, ctx)
-        elif name == "source" or name == ".":
-            analyze(body, ctx.cwd, depth + 1, ctx)
-        elif _INTERP.match(name):
-            _scan_code(body, ctx)
-    toks, subs = _lex(text)
-    for sub in subs:
-        analyze(sub, ctx.cwd, depth + 1, ctx)
-    cmdwords = []
-    for t in toks + [";"]:
-        if isinstance(t, _W):
-            cmdwords.append(t)
-            continue
-        if cmdwords:
-            _simple(cmdwords, ctx, depth)
-        cmdwords = []
+    toks, _ = _lex(text, bodies)
+    _run(toks, ctx, depth)
     return ctx.events
+
+
+def _fresh(cwd):
+    return {"start": cwd, "cond": False, "or": False, "pend": False}
+
+
+def _run(toks, ctx, depth):
+    """Walks the command list like a shell: ( ) is a subshell, a pipeline part
+    is a subshell, and a cd that may not have run makes the folder unknown."""
+    stack, words, extras, prev, up = [], [], [], None, None
+    st = _fresh(ctx.cwd)
+    for t in list(toks) + [";"]:
+        if isinstance(t, _W):
+            words.append(t)
+            continue
+        if isinstance(t, _Tok):
+            extras.append(t)
+            continue
+        if words or extras:
+            if st["pend"]:
+                # "cd x || <this>": unless <this> leaves, it runs in the old folder
+                if not (words and words[0] in ("exit", "return")):
+                    ctx.cwd = None
+                st["pend"] = False
+            before = ctx.cwd
+            _command(words, extras, ctx, depth, up if prev in ("|", "|&") else None)
+            if ctx.cwd != before:
+                if t in ("|", "|&") or prev in ("|", "|&") or prev == "||" or st["or"]:
+                    ctx.cwd = None
+                elif prev == "&&":
+                    st["cond"] = True  # true for the rest of this && chain only
+                elif t == "||":
+                    st["pend"] = True
+            up = (words, extras)
+        words, extras = [], []
+        if t in ("|", "|&"):
+            prev = t
+            continue
+        up = None
+        if t in ("&&", "||"):
+            st["or"] = st["or"] or t == "||"
+            prev = t
+            continue
+        # end of an and-or list: ; & newline ( )
+        if t == "&":
+            ctx.cwd = st["start"]  # the list ran in the background, in a subshell
+        elif st["cond"] and ctx.cwd != st["start"]:
+            ctx.cwd = None
+        if t == "(":
+            stack.append((ctx.cwd, dict(ctx.env)))
+        elif t == ")" and stack:
+            ctx.cwd, ctx.env = stack.pop()
+        st = _fresh(ctx.cwd)
+        prev = None
+
+
+def _command(words, extras, ctx, depth, up):
+    for w in words:  # $( ) and backticks run first, each in a subshell
+        for body in getattr(w, "subs", ()):
+            _sub(ctx, analyze, body, ctx.cwd, depth + 1, ctx)
+    stdin = None
+    for x in extras:
+        if isinstance(x, _PS):
+            _sub(ctx, analyze, x.body, ctx.cwd, depth + 1, ctx)
+        elif isinstance(x, _HD):
+            stdin = ("text", x.body)
+        elif isinstance(x, _RIN):
+            stdin = ("file", x.body)
+    if stdin is None and up is not None:
+        stdin = ("pipe", up)
+    if words:
+        _simple(words, ctx, depth, stdin)
+
+
+_EXEC = {"git", "gh", "curl", "eval", "source", ".", "cd", "pushd", "popd", "find", "awk", "gawk",
+         "mawk", "nawk", "export"}
+_RUNNERS = {"xargs", "parallel"}
 
 
 def _effective(words):
@@ -326,7 +456,7 @@ def _effective(words):
     if _os.path.basename(words[i]) in _WRAPPERS:
         for j in range(i + 1, len(words)):
             b = _os.path.basename(words[j])
-            if b in ("git", "gh", "curl", "eval", "source", ".") or b in _SHELLS or _INTERP.match(b):
+            if b in _EXEC or b in _SHELLS or _INTERP.match(b):
                 return j
             if words[j].dyn and not words[j].startswith("-"):
                 return j
@@ -334,15 +464,119 @@ def _effective(words):
     return i
 
 
-def _scan_code(code, ctx):
+_RUNS = _re.compile(r"subprocess|os\.system|os\.exec|os\.spawn|popen|pty\.spawn|child_process|execSync|"
+                    r"spawnSync|execFile|\bsystem\s*\(|\bexec\s*\(|`|Runtime\.getRuntime|IPC::|qx", _re.I)
+
+
+def _scan_code(code, ctx, inline=False):
+    n0 = len(ctx.events)
     if _CODE_PUSH.search(code):
         ctx.events.append(("push", {"dir": ctx.cwd, "git_dir": None, "work_tree": None,
                                     "refs": [], "flags": set(), "remote": None, "via": "code"}))
     if _CODE_COMMIT.search(code):
         ctx.events.append(("commit", {"dir": ctx.cwd, "git_dir": None, "work_tree": None,
-                                      "all": True, "via": "code"}))
+                                      "all": True, "paths": [], "via": "code"}))
     if _CODE_PR.search(code) or (_CODE_PULLS_POST.search(code) and _re.search(r"\bPOST\b|\.post\(", code)):
         ctx.events.append(("pr", {"dir": ctx.cwd, "head": None, "repo": None, "via": "code"}))
+    if inline and len(ctx.events) == n0 and _RUNS.search(code):
+        # 'g'+'it', ['gi','t'].join(''): glue the pieces and look again
+        glued = _re.sub(r"""['"`+,\s\[\]()]|\.join""", "", code)
+        if _re.search(r"push|commit|send-?pack|prcreate|prnew", glued, _re.I):
+            ctx.events.append(("hidden", {"why": "code that starts programs and names push/commit, "
+                                                 "but not as a plain git command"}))
+
+
+def _shell_args(args):
+    """-> (code, script): the -c string (also in clusters -lc / -ec, after --),
+    or the script file; (None, None) when the shell reads stdin."""
+    i, has_c, stdin = 0, False, False
+    while i < len(args):
+        a = args[i]
+        if a == "--":
+            i += 1
+            break
+        if a == "-":
+            stdin = True
+            i += 1
+            break
+        if a in ("-o", "+o", "-O", "+O", "--rcfile", "--init-file"):
+            i += 2
+            continue
+        if a.startswith("--"):
+            i += 1
+            continue
+        if len(a) > 1 and a[0] in "-+":
+            if a[0] == "-" and "c" in a[1:]:
+                has_c = True
+            if a[0] == "-" and "s" in a[1:]:
+                stdin = True
+            i += 1
+            continue
+        break
+    rest = args[i:]
+    if has_c:
+        return (rest[0] if rest else _W("")), None
+    if stdin:
+        return None, None
+    return None, (rest[0] if rest else None)
+
+
+def _producer(words, extras, ctx):
+    """What the left side of a pipe prints, when it can be told (cat/echo/printf)."""
+    exe = _effective(words)
+    if exe is None:
+        return None
+    name, args = _os.path.basename(words[exe]), words[exe + 1:]
+    if name == "cat":
+        for x in extras:
+            if isinstance(x, _HD):
+                return x.body
+            if isinstance(x, _RIN):
+                p = _abspath(x.body, ctx.cwd)
+                return _read_small(p) if p else None
+        texts = []
+        for a in args:
+            if a.startswith("-"):
+                continue
+            p = _abspath(a, ctx.cwd)
+            t = _read_small(p) if p else None
+            if t:
+                texts.append(t)
+        return "\n".join(texts) or None
+    if name in ("echo", "printf"):
+        a = [x for x in args if not (name == "echo" and x in ("-n", "-e", "-E", "-ne", "-en"))]
+        return " ".join(a).replace("\\n", "\n")
+    return None
+
+
+def _stdin(stdin, ctx, depth, kind):
+    """A shell or interpreter that reads its program from stdin."""
+    if stdin is None:
+        return
+    how, what = stdin
+    upline, code = "", None
+    if how == "text":
+        code = what
+    elif how == "file":
+        p = _abspath(what, ctx.cwd)
+        if kind == "shell":
+            _sub(ctx, _script, p, ctx, depth, True)
+            return
+        code = _read_small(p) if p else None
+    else:
+        uw, ux = what
+        upline = " ".join(uw)
+        code = _producer(uw, ux, ctx)
+    n0 = len(ctx.events)
+    if code is not None:
+        if kind == "shell":
+            _sub(ctx, analyze, code, ctx.cwd, depth + 1, ctx)
+        else:
+            _scan_code(code, ctx, inline=True)
+    if how == "pipe" and not any(k in ("push", "commit", "pr", "hidden") for k, _ in ctx.events[n0:]):
+        if _re.search(r"\b(git|gh|push|commit|send-pack)\b", upline + "\n" + (code or "")):
+            ctx.events.append(("hidden", {"why": f"a {kind} reads its commands from a pipe "
+                                                 f"({' '.join(uw[:3])} | ...)"}))
 
 
 _TELL = _re.compile(r"^(push|commit|pr|create|new|send-pack)$")
@@ -376,7 +610,7 @@ def _expand(w, ctx):
     return nw
 
 
-def _simple(words, ctx, depth):
+def _simple(words, ctx, depth, stdin=None):
     words = [_expand(w, ctx) for w in words]
     for w in words:
         m = _re.match(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", w)
@@ -400,9 +634,19 @@ def _simple(words, ctx, depth):
         if any(_TELL.match(a) for a in args):
             ctx.events.append(("hidden", {"why": f"command behind a variable ({head}) with '{' '.join(args[:3])}'"}))
         return
-    if name in ("cd", "pushd"):
-        tgt = next((a for a in args if not a.startswith("-")), "~")
-        ctx.cwd = _abspath(tgt, ctx.cwd)
+    runner = next((_os.path.basename(w) for w in words[:exe] if _os.path.basename(w) in _RUNNERS), None)
+    if runner and name in ("git", "gh"):
+        verbs = _GIT_VERBS if name == "git" else _GH_TOP
+        verb = next((a for a in args if a in verbs), None)
+        if verb is None or verb in ("push", "commit", "pr", "send-pack", "api") or any("{}" in a for a in args):
+            ctx.events.append(("hidden", {"why": f"{name} run by {runner}: its arguments come from input "
+                                                 f"the gate cannot see"}))
+    if name in ("cd", "pushd", "popd"):
+        pos = [a for a in args if a == "-" or not a.startswith("-")]
+        if name == "popd" or (name == "pushd" and not pos) or (pos and (pos[0] == "-" or pos[0].startswith("+"))):
+            ctx.cwd = None  # a folder from the directory stack: unknown here
+        else:
+            ctx.cwd = _abspath(pos[0] if pos else "~", ctx.cwd)
         return
     if name == "export":
         for w in args:
@@ -424,14 +668,16 @@ def _simple(words, ctx, depth):
     elif name == "eval":
         analyze(" ".join(args), ctx.cwd, depth + 1, ctx)
     elif name in _SHELLS:
-        if "-c" in args:
-            i = args.index("-c")
-            if i + 1 < len(args):
-                analyze(args[i + 1], ctx.cwd, depth + 1, ctx)
-            return
-        script = next((a for a in args if not a.startswith("-")), None)
-        if script:
-            _script(_abspath(script, ctx.cwd), ctx, depth)
+        code, script = _shell_args(args)
+        if code is not None:
+            if "$(...)" in code or (_re.search(r"\$\{?[A-Za-z_]", code) and
+                                    _re.search(r"\b(push|commit|send-pack)\b|\bpr\s+(create|new)\b", code)):
+                ctx.events.append(("hidden", {"why": f"{name} -c with a command behind a variable ({code[:40]})"}))
+            _sub(ctx, analyze, code, ctx.cwd, depth + 1, ctx)
+        elif script:
+            _sub(ctx, _script, _abspath(script, ctx.cwd), ctx, depth)
+        else:
+            _stdin(stdin, ctx, depth, "shell")
     elif name in ("source", "."):
         if args:
             _script(_abspath(args[0], ctx.cwd), ctx, depth)
@@ -440,29 +686,53 @@ def _simple(words, ctx, depth):
             if flag in args:
                 i = args.index(flag)
                 if i + 1 < len(args):
-                    _scan_code(args[i + 1], ctx)
+                    _scan_code(args[i + 1], ctx, inline=True)
                 return
         script = next((a for a in args if not a.startswith("-")), None)
-        if script and "-m" not in args:
+        if "-m" in args:
+            return
+        if script:
             p = _abspath(script, ctx.cwd)
-            if p not in ctx.seen_files:
+            if p and p not in ctx.seen_files:
                 ctx.seen_files.add(p)
                 code = _read_small(p)
                 if code:
                     _scan_code(code, ctx)
+        else:
+            _stdin(stdin, ctx, depth, "interp")
+    elif name == "find":
+        i = 0
+        while i < len(args):
+            if args[i] in ("-exec", "-execdir", "-ok", "-okdir"):
+                j, sub = i + 1, []
+                while j < len(args) and args[j] not in (";", "+"):
+                    sub.append(args[j])
+                    j += 1
+                if sub:  # -execdir runs in each file's folder: unknown
+                    _sub(ctx, _simple, sub, ctx, depth + 1, None,
+                         cwd=ctx.cwd if args[i] in ("-exec", "-ok") else None)
+                i = j
+            i += 1
+    elif name in ("awk", "gawk", "mawk", "nawk"):
+        code = " ".join(args)
+        for j, a in enumerate(args):
+            if a == "-f" and j + 1 < len(args):
+                p = _abspath(args[j + 1], ctx.cwd)
+                code += "\n" + ((_read_small(p) or "") if p else "")
+        _scan_code(code, ctx, inline=True)
     elif "/" in head:
-        _script(_abspath(head, ctx.cwd), ctx, depth)
+        _sub(ctx, _script, _abspath(head, ctx.cwd), ctx, depth)
 
 
-def _script(path, ctx, depth):
-    if path in ctx.seen_files:
+def _script(path, ctx, depth, force_shell=False):
+    if not path or path in ctx.seen_files:
         return
     ctx.seen_files.add(path)
     code = _read_small(path)
     if code is None:
         return
     first = code.split("\n", 1)[0]
-    if first.startswith("#!") and _re.search(r"python|node|perl|ruby", first):
+    if not force_shell and first.startswith("#!") and _re.search(r"python|node|perl|ruby", first):
         _scan_code(code, ctx)
     else:
         analyze(code, ctx.cwd, depth + 1, ctx)
@@ -471,7 +741,7 @@ def _script(path, ctx, depth):
 def _git(args, ctx, depth, cfg=None):
     cfg = dict(cfg or {})
     gdir, wtree = ctx.env.get("GIT_DIR"), ctx.env.get("GIT_WORK_TREE")
-    cwd = ctx.cwd
+    cwd, explicit = ctx.cwd, False
     for k, v in ctx.env.items():
         if (k.startswith("GIT_CONFIG") and "hookspath" in v.lower()) or \
                 (k == "GIT_CONFIG_PARAMETERS" and "hookspath" in v.lower()):
@@ -487,6 +757,7 @@ def _git(args, ctx, depth, cfg=None):
             i += 1
         if key == "-C" and val:
             cwd = _abspath(val, cwd)
+            explicit = True
         elif key == "-c":
             k2, _, v2 = val.partition("=")
             cfg[k2.lower()] = v2
@@ -499,7 +770,7 @@ def _git(args, ctx, depth, cfg=None):
         return
     verb, rest = args[i], args[i + 1:]
     loc = {"dir": cwd, "git_dir": _abspath(gdir, cwd) if gdir else None,
-           "work_tree": _abspath(wtree, cwd) if wtree else None}
+           "work_tree": _abspath(wtree, cwd) if wtree else None, "explicit": explicit or bool(gdir)}
     if verb.dyn:
         ctx.events.append(("hidden", {"why": f"git verb behind a variable ({verb})"}))
         return
@@ -537,21 +808,26 @@ def _git(args, ctx, depth, cfg=None):
         ctx.events.append(("push", dict(loc, refs=pos[1:], remote=pos[0] if pos else None,
                                         flags=flags, via="git")))
     elif verb == "commit":
-        all_, nov, j = False, False, 0
+        all_, nov, paths, j = False, False, [], 0
         while j < len(rest):
             a = rest[j]
             if a in ("-m", "-F", "-c", "-C", "--message", "--file", "--author", "--date",
                      "--reuse-message", "--reedit-message", "--fixup", "--squash", "-t", "--template",
-                     "--trailer", "--cleanup", "-S", "--gpg-sign"):
+                     "--trailer", "--cleanup", "-S", "--gpg-sign", "--pathspec-from-file"):
                 j += 2
                 continue
             if a == "--":
-                break  # pathspecs follow
+                paths += list(rest[j + 1:])  # pathspecs follow
+                break
             if a == "--all":
                 all_ = True
             elif a == "--no-verify":
                 nov = True
-            elif a.startswith("-") and not a.startswith("--") and len(a) > 1:
+            elif a.startswith("--"):
+                pass
+            elif not a.startswith("-") or a == "-":
+                paths.append(a)  # git commit <path>: commits the file as it is NOW, staged or not
+            elif len(a) > 1:
                 cluster = a[1:]
                 for idx, ch in enumerate(cluster):
                     if ch == "a":
@@ -565,7 +841,7 @@ def _git(args, ctx, depth, cfg=None):
             j += 1
         if nov:
             ctx.events.append(("bypass", {"why": "git commit --no-verify / -n skips the commit hooks"}))
-        ctx.events.append(("commit", dict(loc, all=all_, via="git")))
+        ctx.events.append(("commit", dict(loc, all=all_, paths=paths, via="git")))
     elif verb == "add":
         ctx.events.append(("add", dict(loc, via="git")))
     elif verb == "config":
@@ -659,6 +935,10 @@ RULES = [
 # A value that says it is not real (test fixtures: "xoxb-TEST-token").
 PLACEHOLDER = _re.compile(r"test|dummy|fake|example|placeholder|not-a-real|xxxxxxxx", _re.I)
 ALLOW = _re.compile(r"secrets-check:\s*allow\b(.*)", _re.I)
+# The marker is self-certification, so it only counts where fixtures live.
+TEST_PATH = _re.compile(r"(^|/)(tests?|__tests__|fixtures?|testdata)/|(^|/)test_[^/]*$|_test\.(py|go)$|"
+                        r"\.(test|spec)\.[jt]sx?$")
+ALLOWED = []  # (path, kind) of every line let through by a marker - always reported
 REASON = _re.compile(r"^\s*[-—–:]+\s*\S")
 BAD_FILE = _re.compile(r"(^|/)(\.env(\.[A-Za-z0-9_-]+)?|[^/]+\.pem|[^/]+\.p12|id_rsa[^/]*)$")
 
@@ -692,9 +972,13 @@ def scan(path, text, out):
             if not m or PLACEHOLDER.search(m.group(0)):
                 continue
             a = ALLOW.search(line)
-            if a and REASON.match(a.group(1)):
+            if a and REASON.match(a.group(1)) and TEST_PATH.search(path):
+                ALLOWED.append((path, name))
                 continue
-            if a:
+            if a and REASON.match(a.group(1)):
+                out.add(f"{path}: {name} (allow marker counts only in test files - tests/, fixtures/, "
+                        f"test_*.py, *.test.ts; move the fixture there)")
+            elif a:
                 out.add(f"{path}: {name} (allow marker needs a reason: '# secrets-check: allow - <reason>')")
             else:
                 out.add(f"{path}: {name}")
@@ -743,12 +1027,19 @@ def main():
     try:
         events = analyze(cmd, cwd)
     except Exception as exc:
+        if _re.search(r"push|commit", cmd):
+            print(f"secrets-check: BLOCKED - could not read this command ({exc!r}) and it may commit or push. "
+                  f"Write it plainly (git -C <checkout> commit ...) and report the reader bug.", file=sys.stderr)
+            return 2
         print(f"secrets-check: could not read the command ({exc!r}) - not checked", file=sys.stderr)
         return 0
     blocks, out, modes = [], set(), []
+    hook_top = toplevel(cwd)
     for kind, e in events:
         if kind == "bypass":
             blocks.append(e["why"])
+        elif kind == "hidden":
+            blocks.append(f"{e['why']}: what this commits or pushes cannot be checked. Write git literally")
     adds = set()
     for kind, e in events:
         if kind == "add":
@@ -766,8 +1057,21 @@ def main():
             continue
         top = toplevel(e.get("dir"), e.get("git_dir"), e.get("work_tree"))
         if not top:
+            if hook_top and not e.get("explicit"):
+                # the reader's folder may be wrong (a cd it could not follow, a
+                # failed cd); the session's checkout is where git may really run
+                blocks.append(f"git {kind}: the command seems to run in {e.get('dir')}, not a git checkout, "
+                              f"while the session is in {hook_top} - write git -C <checkout> {kind}")
             continue
         if kind == "commit":
+            if e.get("paths"):
+                # git commit <path> / -o / -i: records the files as they are in
+                # the working tree, staged or not
+                p = [x for x in e["paths"] if x]
+                scan_diff(git(top, "diff", "HEAD", "-U0", "--no-color", "--", *p), out)
+                scan_diff(git(top, "diff", "--cached", "-U0", "--no-color"), out)
+                scan_files(top, git(top, "diff", "HEAD", "--name-only", "--diff-filter=ACMR", "--", *p).splitlines(),
+                           out, False)
             if e.get("all") or top in adds:
                 # -a / a `git add` in the same line: the hook runs BEFORE the
                 # command, so also look at what is not staged yet.
@@ -815,6 +1119,9 @@ def main():
         for b in blocks:
             print("  " + b, file=sys.stderr)
         print("Hooks are not optional for agents. If a hook is wrong, report it; the operator decides.",
+              file=sys.stderr)
+    for path, name in sorted(set(ALLOWED)):
+        print(f"secrets-check: note - allow marker used: {path} ({name}); the PR reviewer should look at it",
               file=sys.stderr)
     if out:
         print(f"secrets-check: BLOCKED ({'+'.join(sorted(modes))}) - possible secret in what this would publish:",

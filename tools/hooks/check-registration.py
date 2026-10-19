@@ -17,6 +17,8 @@ Usage:
         - a pre-filter narrows which commands reach it
         - test-gate's timeout is below 300 s (its own budget is 270 s; a hook
           killed by Claude Code does NOT block)
+        - the entry fails open when the script cannot be loaded (no exit 2
+          for commands that may push, commit or open a PR)
   check-registration.py --print --repo DIR
       Prints the canonical PreToolUse entry (JSON) to paste into
       ~/.claude/settings.json - user level, so every session and every
@@ -34,12 +36,22 @@ from pathlib import Path
 HOOKS = {"test-gate.sh": 300, "secrets-check.sh": 30}
 
 
+# What the entry treats as "may push, commit or open a PR" when the hook
+# itself cannot be loaded: then it blocks instead of opening silently.
+RISKY = "push|commit|pulls|send-pack|pr (create|new)"
+
+
 def canonical(repo):
     entries = []
     for name, timeout in HOOKS.items():
-        cmd = ("bash -c 'f=$(mktemp) || exit 0; "
-               f"git -C {repo} show origin/main:tools/hooks/{name} > \"$f\" || {{ rm -f \"$f\"; exit 0; }}; "
-               f"MC_HOOK_REPO={repo} bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc'")
+        cmd = ("bash -c 'p=$(cat); f=$(mktemp) && "
+               f"git -C {repo} show origin/main:tools/hooks/{name} > \"$f\" 2>/dev/null || {{ rm -f \"$f\"; "
+               f"if printf \"%s\" \"$p\" | grep -Eq \"{RISKY}\"; then "
+               f"echo \"{name}: could not load it from origin/main of {repo} - BLOCKED, this command may push, "
+               f"commit or open a PR. Fix: git -C {repo} fetch origin\" >&2; exit 2; fi; "
+               f"echo \"{name}: could not load it from origin/main of {repo} - this command was NOT checked\" >&2; "
+               f"exit 0; }}; "
+               f"printf \"%s\" \"$p\" | MC_HOOK_REPO={repo} bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc'")
         entries.append({"type": "command", "command": cmd, "timeout": timeout})
     return {"PreToolUse": [{"matcher": "Bash", "hooks": entries}]}
 
@@ -78,6 +90,9 @@ def check(paths):
             if not re.search(r"origin/main:tools/hooks/" + re.escape(name), cmd):
                 problems.append(f"{p}: {name} runs a checkout's file, not origin/main - it runs whatever "
                                 f"branch that checkout is on (a placeholder there means no gate)")
+            if "exit 2" not in cmd:
+                problems.append(f"{p}: {name} fails open - if loading it from origin/main fails (no fetch, file "
+                                f"moved), the entry exits 0 without a word and nothing is checked")
             if re.search(r"\bcase\b[^;]*\bin\b", cmd):
                 problems.append(f"{p}: {name} sits behind a pre-filter (case ... in) - commands that do not "
                                 f"match it (gh pr new, git aliases, a script file) never reach the hook")
