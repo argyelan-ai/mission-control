@@ -369,6 +369,7 @@ class _Ctx:
         self.env = dict(env)
         self.events = []
         self.seen_files = set()
+        self.strict = 0  # > 0 while reading text that eval / sh -c / <( ) run as code
 
 
 _KEEP = object()
@@ -454,9 +455,10 @@ def _command(words, extras, ctx, depth, up):
     for w in words:  # $( ) and backticks run first, each in a subshell
         for body in getattr(w, "subs", ()):
             _sub(ctx, analyze, body, ctx.cwd, depth + 1, ctx)
-    stdin = None
+    stdin, ps = None, []
     for x in extras:
         if isinstance(x, _PS):
+            ps.append(x.body)
             _sub(ctx, analyze, x.body, ctx.cwd, depth + 1, ctx)
         elif isinstance(x, _HD):
             stdin = ("text", x.body)
@@ -465,7 +467,7 @@ def _command(words, extras, ctx, depth, up):
     if stdin is None and up is not None:
         stdin = ("pipe", up)
     if words:
-        _simple(words, ctx, depth, stdin)
+        _simple(words, ctx, depth, stdin, ps)
 
 
 _EXEC = {"git", "gh", "curl", "eval", "source", ".", "cd", "pushd", "popd", "find", "awk", "gawk",
@@ -473,22 +475,120 @@ _EXEC = {"git", "gh", "curl", "eval", "source", ".", "cd", "pushd", "popd", "fin
 _RUNNERS = {"xargs", "parallel"}
 
 
+_ASSIGN = _re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+# wrapper -> (options that take a value, plain flags, positional words before the command)
+_TIMEOUT = ({"-s", "--signal", "-k", "--kill-after"}, {"--foreground", "--preserve-status", "-v", "--verbose"}, 1)
+_WRAP_OPTS = {
+    "env": ({"-u", "--unset", "-C", "--chdir", "-S", "--split-string", "-P", "-a", "--argv0",
+             "--default-signal", "--ignore-signal", "--block-signal"},
+            {"-i", "-0", "-v", "--ignore-environment", "--null", "--debug", "-"}, 0),
+    "sudo": ({"-u", "--user", "-g", "--group", "-D", "--chdir", "-C", "--close-from", "-h", "--host",
+              "-p", "--prompt", "-r", "--role", "-t", "--type", "-U", "--other-user", "-T",
+              "--command-timeout", "-R", "--chroot"},
+             {"-A", "-b", "-E", "-H", "-k", "-K", "-n", "-P", "-S", "-B", "-N", "--preserve-env",
+              "--non-interactive", "--set-home", "--askpass", "--stdin", "--reset-timestamp",
+              "--remove-timestamp", "--background", "--bell", "--no-update"}, 0),
+    "doas": ({"-u", "-C"}, {"-n", "-s", "-L"}, 0),
+    "command": (set(), {"-p", "-v", "-V"}, 0),
+    "exec": ({"-a"}, {"-c", "-l"}, 0),
+    "nice": ({"-n", "--adjustment"}, set(), 0),
+    "ionice": ({"-c", "--class", "-n", "--classdata", "-p", "--pid", "-P", "--pgid", "-u", "--uid"},
+               {"-t", "--ignore"}, 0),
+    "timeout": _TIMEOUT, "gtimeout": _TIMEOUT,
+    "stdbuf": ({"-i", "-o", "-e", "--input", "--output", "--error"}, set(), 0),
+    "caffeinate": ({"-t", "-w"}, {"-d", "-i", "-m", "-s", "-u"}, 0),
+    "time": ({"-f", "--format", "-o", "--output"}, {"-p", "-v", "-a", "-l", "--verbose", "--portability",
+                                                    "--append", "-q", "--quiet"}, 0),
+    "flock": ({"-w", "--timeout", "--wait", "-E", "--conflict-exit-code"},
+              {"-s", "-x", "-e", "-n", "-u", "-o", "-F", "--shared", "--exclusive", "--nonblock", "--nb",
+               "--unlock", "--close", "--no-fork", "--verbose", "--fcntl"}, 1),
+    "watch": ({"-n", "--interval", "-q", "--equexit"}, {"-b", "-c", "-d", "-e", "-g", "-p", "-r", "-t",
+                                                        "-x", "-w", "--beep", "--color", "--differences",
+                                                        "--errexit", "--chgexit", "--precise",
+                                                        "--no-title", "--exec", "--no-wrap"}, 0),
+    "script": ({"-F", "-t", "-T", "-I", "-O", "-B", "-E", "-m"}, {"-a", "-d", "-e", "-f", "-k", "-p", "-q",
+                                                              "-r", "--append", "--flush", "--quiet",
+                                                              "--return"}, 1),
+    "xargs": ({"-I", "-J", "-L", "-n", "-P", "-R", "-S", "-s", "-d", "-E", "-a", "--arg-file",
+               "--delimiter", "--max-args", "--max-procs", "--max-lines", "--replace", "--max-chars",
+               "--eof", "--process-slot-var"},
+              {"-0", "-o", "-p", "-r", "-t", "-x", "--null", "--open-tty", "--interactive",
+               "--no-run-if-empty", "--verbose", "--exit"}, 0),
+    "parallel": ({"-j", "--jobs", "-S", "--sshlogin", "-a", "--arg-file", "-I", "--colsep", "-d",
+                  "--delimiter", "--joblog", "--tmpdir", "--results", "-N", "-n", "--max-args"},
+                 {"-k", "--keep-order", "-q", "--quote", "-0", "--null", "-v", "--halt", "--bar",
+                  "--progress", "--eta", "--will-cite", "--dry-run", "-X", "-m"}, 0),
+}
+_WRAP_CHDIR = {("env", "-C"), ("env", "--chdir"), ("sudo", "-D"), ("sudo", "--chdir")}
+# options whose value is a whole command line
+_WRAP_CODE = {("env", "-S"), ("env", "--split-string"), ("flock", "-c"), ("flock", "--command"),
+              ("script", "-c"), ("script", "--command")}
+
+
+def _wrapped(words):
+    """-> (index of the word really executed, or None; info). Skips VAR=x and
+    wrappers WITH their option values (env -C dir, sudo -u x, timeout -s KILL 5,
+    flock file). info: "chdir" (folders the wrapper moves to), "code" (a command
+    line given as an option value: env -S / flock -c / script -c, and the index
+    of the words after it), "unsure" (an option the reader does not know: its
+    value might have been taken for the command)."""
+    info = {"chdir": [], "code": None, "unsure": False}
+    i = 0
+    while i < len(words) and _ASSIGN.match(words[i]):
+        i += 1
+    while i < len(words):
+        name = _os.path.basename(words[i])
+        if name not in _WRAPPERS:
+            return i, info
+        takes, flags, npos = _WRAP_OPTS.get(name, (set(), set(), 0))
+        i += 1
+
+        def options(i):
+            while i < len(words):
+                a = words[i]
+                if a == "--":
+                    return i + 1
+                if name == "env" and _ASSIGN.match(a):
+                    i += 1
+                    continue
+                if not a.startswith("-") or a in ("-", "!") and name != "env" or getattr(a, "dyn", False):
+                    return i
+                opt, val = a, None
+                if a.startswith("--") and "=" in a:
+                    opt, val = a.split("=", 1)
+                elif not a.startswith("--") and len(a) > 2 and a[:2] in takes:
+                    opt, val = a[:2], a[2:]
+                if opt in takes or (name, opt) in _WRAP_CODE:
+                    if val is None:
+                        val = words[i + 1] if i + 1 < len(words) else None
+                        i += 2
+                    else:
+                        i += 1
+                    if (name, opt) in _WRAP_CHDIR:
+                        info["chdir"].append(val)
+                    if (name, opt) in _WRAP_CODE and val is not None:
+                        info["code"] = (val, i)
+                    continue
+                if opt in flags or _re.match(r"^-\d+$", a) or (
+                        not a.startswith("--") and all("-" + c in flags for c in a[1:])):
+                    i += 1
+                    continue
+                info["unsure"] = True
+                i += 1
+            return i
+        i = options(i)
+        for _ in range(npos):
+            if i < len(words) and info["code"] is None:
+                i += 1
+        i = options(i)  # flock file -c '...': options after the positional
+        if info["code"] is not None:
+            return None, info
+    return None, info
+
+
 def _effective(words):
     """Index of the word that is really executed (skips VAR=x and wrappers)."""
-    i = 0
-    while i < len(words) and _re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[i]):
-        i += 1
-    if i >= len(words):
-        return None
-    if _os.path.basename(words[i]) in _WRAPPERS:
-        for j in range(i + 1, len(words)):
-            b = _os.path.basename(words[j])
-            if b in _EXEC or b in _SHELLS or _INTERP.match(b):
-                return j
-            if words[j].dyn and not words[j].startswith("-"):
-                return j
-        return None
-    return i
+    return _wrapped(words)[0]
 
 
 _RUNS = _re.compile(r"subprocess|os\.system|os\.exec|os\.spawn|popen|pty\.spawn|child_process|execSync|"
@@ -637,29 +737,189 @@ def _expand(w, ctx):
     return nw
 
 
-def _simple(words, ctx, depth, stdin=None):
+_MENTION = _re.compile(r"\b(git|gh|push|commit|send-pack)\b")
+
+
+def _src_key(name):
+    return "\0src:" + name  # never a valid variable name, so _expand never reads it
+
+
+def _sources(w, ctx):
+    """The command text behind the dynamic parts of a word: its $( ) / backtick
+    bodies and what earlier assignments of the variables it uses came from."""
+    out = list(getattr(w, "subs", ()))
+    for m in _VAR.finditer(w):
+        out += ctx.env.get(_src_key(m.group(1) or m.group(2)), [])
+    return out
+
+
+def _sub_output(body, ctx):
+    """What a $( ) body prints, when the reader can tell (echo / printf / cat
+    of a readable file); None otherwise."""
+    text, bodies = _strip_heredocs(body)
+    toks, _ = _lex(text, bodies)
+    while toks and toks[-1] == ";":
+        toks = toks[:-1]
+    if not toks or any(not isinstance(t, (_W, _Tok)) for t in toks):
+        return None
+    words = [t for t in toks if isinstance(t, _W)]
+    extras = [t for t in toks if not isinstance(t, _W)]
+    if any(w.subs for w in words):
+        return None
     words = [_expand(w, ctx) for w in words]
-    for w in words:
+    if any(w.dyn for w in words):
+        return None
+    out = _producer(words, extras, ctx)
+    return None if out is None else out.rstrip("\n")
+
+
+def _resolve(w, ctx):
+    """A word with its $( ) and $VAR filled in, or None when a part is unknown."""
+    if not w.dyn:
+        return str(w)
+    text = str(w)
+    for body in w.subs:
+        if " ".join(body.split()) in _KNOWN_SUBS:
+            continue
+        out = _sub_output(body, ctx)
+        if out is None or "$(...)" not in text:
+            return None
+        text = text.replace("$(...)", out, 1)
+    nw = _W(text)
+    nw.dyn = True
+    r = _expand(nw, ctx)
+    return None if r.dyn else str(r)
+
+
+def _hide(ctx, why):
+    ctx.events.append(("hidden", {"why": why}))
+
+
+def _run_text(ws, ctx, depth, what, sub):
+    """eval / sh -c / env -S / flock -c: words that are run as shell code.
+    Text built at run time is filled in when the reader can compute it;
+    otherwise it is blocked when it names git/gh/push/commit (or is a bare
+    unknown variable, which could be anything)."""
+    parts, srcs, dyn = [], [], False
+    for w in ws:
+        dyn = dyn or w.dyn
+        r = _resolve(w, ctx)
+        if r is None:
+            srcs += _sources(w, ctx)
+            parts.append(str(_expand(w, ctx)))
+        else:
+            parts.append(r)
+    text = " ".join(parts)
+    if any(_MENTION.search(x) for x in srcs):
+        _hide(ctx, f"{what} runs text built at run time from a command that names git ({srcs[0][:40]})")
+    n0 = len(ctx.events)
+    ctx.strict += 1
+    try:
+        if sub:
+            _sub(ctx, analyze, text, ctx.cwd, depth + 1, ctx)
+        else:
+            analyze(text, ctx.cwd, depth + 1, ctx)
+    finally:
+        ctx.strict -= 1
+    if dyn and _MENTION.search(text) and \
+            not any(k in ("push", "commit", "pr", "hidden") for k, _ in ctx.events[n0:]):
+        _hide(ctx, f"{what} runs text built at run time that names git ({text[:40]})")
+
+
+def _ps_code(bodies, ctx, depth, kind, sub):
+    """bash <(...) / source <(...): the shell reads a program a command prints."""
+    for body in bodies:
+        out = _sub_output(body, ctx)
+        if out is None:
+            if _MENTION.search(body):
+                _hide(ctx, f"a {kind} runs what <({body[:30]}) prints - the gate cannot see it")
+            continue
+        n0 = len(ctx.events)
+        if kind == "shell":
+            if sub:
+                _sub(ctx, analyze, out, ctx.cwd, depth + 1, ctx)
+            else:
+                analyze(out, ctx.cwd, depth + 1, ctx)
+        else:
+            _scan_code(out, ctx, inline=True)
+        if _MENTION.search(out) and \
+                not any(k in ("push", "commit", "pr", "hidden") for k, _ in ctx.events[n0:]):
+            _hide(ctx, f"a {kind} runs what <({body[:30]}) prints and it names git")
+
+
+def _assign(ctx, orig, value):
+    """NAME=value: remember the value - filled in when the reader can compute a
+    $( ) in it - and, when it cannot, which command text it came from."""
+    m = _re.match(r"^([A-Za-z_][A-Za-z0-9_]*)=", orig)
+    name = m.group(1)
+    if getattr(orig, "dyn", False):
+        val = _W(orig[m.end():])
+        val.dyn, val.subs = True, orig.subs
+        r = _resolve(val, ctx)
+        if r is not None:
+            ctx.env[name] = r
+            ctx.env.pop(_src_key(name), None)
+            return
+        ctx.env[_src_key(name)] = _sources(val, ctx)
+    else:
+        ctx.env.pop(_src_key(name), None)
+    ctx.env[name] = value
+
+
+def _simple(words, ctx, depth, stdin=None, ps=()):
+    orig = list(words)
+    words = [_expand(w, ctx) for w in words]
+    for o, w in zip(orig, words):
         m = _re.match(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", w)
         if not m:
             break
-        ctx.env[m.group(1)] = m.group(2)
+        _assign(ctx, o, m.group(2))
     for w in words:
         if _re.match(r"^MC_LEAK_SCAN_SKIP=", w):
             ctx.events.append(("bypass", {"why": "MC_LEAK_SCAN_SKIP switches off the pre-push leak scan"}))
-    exe = _effective(words)
-    if exe is None:
-        if words and words[0] == "export":
-            for w in words[1:]:
-                m = _re.match(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", w)
-                if m:
-                    ctx.env[m.group(1)] = m.group(2)
-        return
+    exe, info = _wrapped(words)
+    if info["unsure"] and any(_TELL.match(a) for a in words):
+        _hide(ctx, f"a wrapper option the gate does not know ({' '.join(words[:3])} ...) comes before "
+                   f"push/commit - its value may be taken for the command")
+    saved = ctx.cwd
+    if info["chdir"]:  # env -C dir / sudo -D dir: the command runs in dir
+        for d in info["chdir"]:
+            dw = d if isinstance(d, _W) else _W(d or "")
+            if not isinstance(d, _W) and "$" in dw:
+                dw.dyn = True
+            ctx.cwd = _abspath(dw, ctx.cwd) if d else None
+    try:
+        if info["code"] is not None:
+            val, j = info["code"]
+            vw = val if isinstance(val, _W) else _W(val)
+            if not isinstance(val, _W) and "$" in vw:
+                vw.dyn = True
+            rest = [orig[k] for k in range(j, len(orig))]
+            _run_text([vw] + rest, ctx, depth, f"{_os.path.basename(words[0])} with a command option", True)
+            return
+        if exe is None:
+            return
+        _exec(orig, words, exe, ctx, depth, stdin, ps)
+    finally:
+        if info["chdir"]:
+            ctx.cwd = saved
+
+
+def _exec(orig, words, exe, ctx, depth, stdin, ps):
     head, args = words[exe], words[exe + 1:]
     name = _os.path.basename(head)
-    if head.dyn:
+    if head.dyn or (orig[exe].dyn and _re.search(r"\s", head)):
+        r = _resolve(orig[exe], ctx)
+        if r is not None:  # $c / $(echo git push): word splitting gives a new command line
+            analyze(" ".join([r] + [str(a) for a in args]), ctx.cwd, depth + 1, ctx)
+            return
+        srcs = _sources(orig[exe], ctx)
         if any(_TELL.match(a) for a in args):
-            ctx.events.append(("hidden", {"why": f"command behind a variable ({head}) with '{' '.join(args[:3])}'"}))
+            _hide(ctx, f"command behind a variable ({head}) with '{' '.join(args[:3])}'")
+        elif any(_MENTION.search(x) for x in srcs):
+            _hide(ctx, f"command built at run time from a command that names git ({srcs[0][:40]})")
+        elif ctx.strict and not srcs:
+            _hide(ctx, f"code run by eval / sh -c is an unknown variable ({head})")
         return
     runner = next((_os.path.basename(w) for w in words[:exe] if _os.path.basename(w) in _RUNNERS), None)
     if runner and name in ("git", "gh"):
@@ -676,10 +936,10 @@ def _simple(words, ctx, depth, stdin=None):
             ctx.cwd = _abspath(pos[0] if pos else "~", ctx.cwd)
         return
     if name == "export":
-        for w in args:
+        for o, w in zip(orig[exe + 1:], args):
             m = _re.match(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", w)
             if m:
-                ctx.env[m.group(1)] = m.group(2)
+                _assign(ctx, o, m.group(2))
                 if m.group(1) == "MC_LEAK_SCAN_SKIP":
                     ctx.events.append(("bypass", {"why": "MC_LEAK_SCAN_SKIP switches off the pre-push leak scan"}))
         return
@@ -693,21 +953,28 @@ def _simple(words, ctx, depth, stdin=None):
                 _re.search(r"(^|\s)(-X\s*POST|--request\s+POST|-d|--data\S*|--json|-F|--form)(\s|=|$)", joined):
             ctx.events.append(("pr", {"dir": ctx.cwd, "head": None, "repo": None, "via": "curl"}))
     elif name == "eval":
-        analyze(" ".join(args), ctx.cwd, depth + 1, ctx)
+        _run_text(orig[exe + 1:], ctx, depth, "eval", False)
     elif name in _SHELLS:
         code, script = _shell_args(args)
         if code is not None:
-            if "$(...)" in code or (_re.search(r"\$\{?[A-Za-z_]", code) and
-                                    _re.search(r"\b(push|commit|send-pack)\b|\bpr\s+(create|new)\b", code)):
-                ctx.events.append(("hidden", {"why": f"{name} -c with a command behind a variable ({code[:40]})"}))
-            _sub(ctx, analyze, code, ctx.cwd, depth + 1, ctx)
+            ocode = _shell_args(orig[exe + 1:])[0]
+            if "$(...)" in code and _resolve(ocode, ctx) is None:
+                _hide(ctx, f"{name} -c with a command the gate cannot compute ({code[:40]})")
+            elif code.dyn and _re.search(r"\$\{?[A-Za-z_]", code) and \
+                    _re.search(r"\b(push|commit|send-pack)\b|\bpr\s+(create|new)\b", code):
+                _hide(ctx, f"{name} -c with a command behind a variable ({code[:40]})")
+            _run_text([ocode], ctx, depth, f"{name} -c", True)
         elif script:
             _sub(ctx, _script, _abspath(script, ctx.cwd), ctx, depth)
+        elif ps and stdin is None:
+            _ps_code(ps, ctx, depth, "shell", True)
         else:
             _stdin(stdin, ctx, depth, "shell")
     elif name in ("source", "."):
         if args:
             _script(_abspath(args[0], ctx.cwd), ctx, depth)
+        elif ps:
+            _ps_code(ps, ctx, depth, "shell", False)
     elif _INTERP.match(name):
         for flag in ("-c", "-e", "--eval", "-p"):
             if flag in args:
@@ -725,6 +992,8 @@ def _simple(words, ctx, depth, stdin=None):
                 code = _read_small(p)
                 if code:
                     _scan_code(code, ctx)
+        elif ps and stdin is None:
+            _ps_code(ps, ctx, depth, "interp", True)
         else:
             _stdin(stdin, ctx, depth, "interp")
     elif name == "find":
