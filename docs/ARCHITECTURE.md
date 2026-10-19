@@ -47,6 +47,14 @@ an opt-in preview, macOS host only — see
 - `${HOME}/.openclaw` — Agent-Workspaces, settings.json, Tokens
 - `/var/run/docker.sock` — Docker-Zugriff für Agent-Container Lifecycle
 
+**Docker-Aufrufe des Backends:** Jeder Aufruf, der einen Container anlegt,
+ersetzt, startet, neu startet, stoppt oder entfernt, läuft über
+`backend/app/services/docker_gateway.py` (`run` / `create_subprocess`). Das
+Gateway liest den Update-Drain (10-s-Cache, ADR-094 §7) und antwortet in
+einem Drain „deferred“ statt zu starten; lesende Aufrufe (`ps`, `inspect`,
+`logs`) und `docker exec` bleiben frei. `backend/tests/test_docker_gateway_lint.py`
+wird rot, sobald irgendwo sonst ein verändernder `docker`-Aufruf entsteht.
+
 ---
 
 ## Bausteine

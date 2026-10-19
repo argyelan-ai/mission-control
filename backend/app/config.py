@@ -461,6 +461,13 @@ class Settings(BaseSettings):
     # VOR dem Notfall, nicht der Notfall selbst.
     disk_watchdog_percent: int = 95
 
+    # ── Update drain (ADR-094 §7) ─────────────────────────────────────────
+    # Manual drain switch: while true, the Docker gateway
+    # (services/docker_gateway.py) refuses every call that creates, replaces,
+    # starts, restarts or removes a container and answers "deferred". Off by
+    # default; the self-update API adds the Postgres drain next to it.
+    mc_update_drain: bool = False
+
     # Free-Code Agent: base directory for task isolation (worktrees or plain workspaces)
     # In the container: /home/mcuser/free-code-projects (mounted from the host,
     # see docker-compose.override.example.yml)
