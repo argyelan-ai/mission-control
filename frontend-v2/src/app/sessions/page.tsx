@@ -343,7 +343,7 @@ function SessionsPageContent() {
   // `selected` is a SNAPSHOT taken when the row was clicked — it never updates,
   // while the two agent queries refetch every 5–10s. Anything derived from it
   // (status, current task, container state) would be frozen at selection time:
-  // the header's context line would keep naming a task the agent finished ten
+  // the chat's working-on row would keep naming a task the agent finished ten
   // minutes ago, or stay empty for one it has picked up since. Re-resolving the
   // id against the live list fixes that for every consumer at once. The
   // snapshot stays the fallback for the frame before a refetch lands — and for
@@ -618,8 +618,11 @@ function SessionsPageContent() {
   // live voice call must float there, not dock into the invisible chat.
   const phone = usePhoneViewport();
   const chatOnScreen = !phone || onChatScreen;
-  const selectedTaskTitle = selectedLive?.current_task_id
-    ? tasks.find((task) => task.id === selectedLive.current_task_id)?.title ?? null
+  const selectedTask = selectedLive?.current_task_id
+    ? tasks.find((task) => task.id === selectedLive.current_task_id) ?? null
+    : null;
+  const selectedWorkingOn = selectedTask
+    ? { taskId: selectedTask.id, title: selectedTask.title }
     : null;
 
   return (
@@ -812,7 +815,7 @@ function SessionsPageContent() {
                 terminalRemountTick={selectedLive ? restartTick[selectedLive.id] ?? 0 : 0}
                 onStatusChange={setChatStatus}
                 onBack={backToList}
-                contextLine={selectedTaskTitle}
+                workingOn={selectedWorkingOn}
                 onOpenPanel={setActivePanel}
               />
             )}
