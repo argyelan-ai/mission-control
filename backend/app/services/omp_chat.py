@@ -168,45 +168,180 @@ def resolve_transcript_dir(agent) -> Path | None:
     return _host_home() / ".mc" / "agents" / slug / _SESSIONS_DIRNAME
 
 
-def find_active_session(tdir: Path) -> tuple[Path, dict[str, Any]] | None:
-    """Neueste ``*.jsonl``-Session unter ``tdir``.
+#: Name der Zustandsdatei des Chat-Daemons (``docker/omp-bridge/acp_chat.py``
+#: ``_STATE_FILENAME``). Er schreibt sie neben sein Transkript; ihr Feld
+#: ``transcript`` ist der ZEIGER auf die Chat-Sitzung (docs/specs/chat-over-
+#: acp.md). Gilt fuer jeden ACP-Chat-Daemon, der dieses Transkriptformat
+#: schreibt (omp im Container, Hermes auf dem Host).
+CHAT_STATE_FILENAME = "acp-chat-state.json"
 
-    Anders als beim Claude-Adapter wird EINE Ebene tief gesucht: omp legt je
-    Arbeitsverzeichnis einen eigenen Unterordner an (``--workspace--``,
-    ``--workspace-bench-…--``) und schreibt die Session-Datei dort hinein.
-    Ein Agent kann Sessions in mehreren solchen Ordnern haben (der omp-Agent hat
-    sechs) — die aktive ist schlicht die zuletzt geschriebene ueber alle
-    hinweg.
+#: Pfad-Segmente eines Arbeitsverzeichnisses, in dem nur TASKS laufen
+#: (Task-Worktrees, Task-Ordner). Eine Sitzung dort ist nie der Chat.
+_TASK_CWD_SEGMENTS = ("worktrees", "_tasks")
 
-    Rueckgabe wie beim Claude-Adapter: ``(pfad, meta)`` mit
-    ``{"sessionId", "mtime", "live"}``. ``None``, wenn es das Verzeichnis
-    nicht gibt oder keine Session darin liegt.
-    """
-    if not tdir.is_dir():
-        return None
 
-    # Rangfolge nach dem Zeitstempel des LETZTEN EINTRAGS, nicht nach mtime —
-    # eine beruehrte Altdatei wuerde sonst die laufende Sitzung verdecken
-    # (siehe transcript_chat.last_entry_timestamp; derselbe Fehler galt hier).
-    from app.services.transcript_chat import last_entry_timestamp
-
-    newest_path: Path | None = None
+def chat_state_file(tdir: Path) -> Path | None:
+    """Die juengste ``acp-chat-state.json`` unter ``tdir`` (Wurzel oder eine
+    Ebene tief), oder ``None``. Ein Agent kann mehrere cwd-Ordner haben —
+    die zuletzt geschriebene Datei ist die des laufenden Daemons."""
+    newest: Path | None = None
     newest_mtime = -1.0
-    newest_rank = -1.0
-    for pattern in _SESSION_GLOBS:
-        for candidate in tdir.glob(pattern):
+    for pattern in (CHAT_STATE_FILENAME, f"*/{CHAT_STATE_FILENAME}"):
+        try:
+            candidates = list(tdir.glob(pattern))
+        except OSError:
+            continue
+        for candidate in candidates:
             try:
                 mtime = candidate.stat().st_mtime
             except OSError:
                 continue
-            entry_ts = last_entry_timestamp(candidate)
-            rank = mtime if entry_ts is None else entry_ts
-            if (rank, mtime) > (newest_rank, newest_mtime):
-                newest_rank = rank
+            if mtime > newest_mtime:
                 newest_mtime = mtime
-                newest_path = candidate
+                newest = candidate
+    return newest
 
-    if newest_path is None:
+
+def _pointed_chat_transcript(tdir: Path) -> Path | None:
+    """Die Transkript-Datei, die der Chat-Daemon als SEINE Sitzung nennt.
+
+    Der Daemon schreibt den Pfad aus SEINER Sicht (im Container
+    ``/home/agent/.omp/...``) — auf dem Host zaehlen nur der Dateiname und
+    der cwd-Ordner. Aufgeloest wird darum ausschliesslich INNERHALB von
+    ``tdir``: zuerst ``<tdir>/<ordner>/<datei>``, dann neben der
+    Zustandsdatei. Ein Zeiger, der aus dem Baum hinauszeigt oder auf eine
+    (noch) fehlende Datei, zaehlt nicht — dann gilt der Rueckfall."""
+    state_file = chat_state_file(tdir)
+    if state_file is None:
+        return None
+    try:
+        state = json.loads(state_file.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, ValueError):
+        return None
+    raw = state.get("transcript") if isinstance(state, dict) else None
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    pointed = PurePosixPath(raw.replace("\\", "/"))
+    name = pointed.name
+    if not name.endswith(".jsonl") or name in (".", ".."):
+        return None
+    folder = pointed.parent.name
+    candidates = []
+    if folder and folder not in (".", ".."):
+        candidates.append(tdir / folder / name)
+    candidates.append(state_file.parent / name)
+    try:
+        root = tdir.resolve()
+    except OSError:
+        return None
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            continue
+        if root not in resolved.parents:
+            continue
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+#: Sitzungen, die als Task-Sitzung ERKANNT sind, je ``(ordner, sitzungs-id)``.
+#: Nur positive Antworten werden gemerkt: Task-Sein aendert sich nie zurueck,
+#: aber der Kopf mit ``taskId`` (Bridge-Datei) kann eine Sekunde NACH omps
+#: eigener Datei erscheinen — ein gemerktes "nein" waere dann falsch.
+_TASK_SESSION_CACHE: set[tuple[str, str]] = set()
+
+
+def _cwd_is_task_dir(cwd: str | None) -> bool:
+    if not cwd:
+        return False
+    parts = PurePosixPath(cwd).parts
+    return any(seg in parts for seg in _TASK_CWD_SEGMENTS)
+
+
+def is_task_session(path: Path) -> bool:
+    """Gehoert ``path`` zu einer Task-Sitzung (nicht zum Chat)?
+
+    Ja, wenn irgendeine Datei DERSELBEN Sitzung im selben Ordner einen
+    ``taskId`` im Kopf traegt (das schreibt nur der Bridge-Sink des
+    Task-Pfads — omps eigene Datei hat ihn nie) oder wenn die Sitzung in
+    einem Task-Arbeitsverzeichnis laeuft (Worktree, Task-Ordner)."""
+    session_id = session_id_for(path)
+    key = (str(path.parent), session_id)
+    if key in _TASK_SESSION_CACHE:
+        return True
+    try:
+        siblings = [path] + [
+            s for s in path.parent.glob(f"*{session_id}.jsonl") if s != path
+        ]
+    except OSError:
+        siblings = [path]
+    answer = False
+    for sibling in siblings:
+        if session_id_for(sibling) != session_id:
+            continue
+        header = _session_header(sibling)
+        if header is None:
+            continue
+        if header.get("taskId") or _cwd_is_task_dir(header.get("cwd")):
+            answer = True
+            break
+    if answer:
+        if len(_TASK_SESSION_CACHE) > 4096:
+            _TASK_SESSION_CACHE.clear()
+        _TASK_SESSION_CACHE.add(key)
+    return answer
+
+
+def _session_mtime(path: Path) -> float:
+    """Juengste mtime ueber alle Dateien DERSELBEN Sitzung im Ordner — unter
+    ACP schreiben omp und der Bridge-Sink je eine eigene Datei, und
+    ``live`` soll die Sitzung meinen, nicht die eine Datei."""
+    session_id = session_id_for(path)
+    best = -1.0
+    try:
+        files = [path] + list(path.parent.glob(f"*{session_id}.jsonl"))
+    except OSError:
+        files = [path]
+    for f in files:
+        if session_id_for(f) != session_id:
+            continue
+        try:
+            best = max(best, f.stat().st_mtime)
+        except OSError:
+            continue
+    return best
+
+
+def find_active_session(tdir: Path) -> tuple[Path, dict[str, Any]] | None:
+    """Die CHAT-Sitzung unter ``tdir`` — die, die der Agenten-Chat zeigt.
+
+    1. Der Zeiger des Chat-Daemons (``acp-chat-state.json`` → ``transcript``)
+       entscheidet. Ein ACP-Agent fuehrt Chat und Tasks PARALLEL: beide
+       schreiben Transkripte in denselben Baum, oft im Sekundentakt. "Die
+       neueste Datei" sprang darum zwischen Chat und Task hin und her
+       (Operator-Befund 19.10.2026: "als wuerde er zwischen zwei Sessions
+       wechseln") — Verlauf, Live-Strom und Status-Badge gleich mit. Nach
+       ``/new`` schreibt der Daemon den neuen Zeiger, und der Chat folgt.
+    2. Ohne Zeiger (TUI-Treiber, Daemon hat noch nicht geschrieben, Zeiger
+       auf eine fehlende Datei): die zuletzt geschriebene Sitzung — aber NIE
+       eine Task-Sitzung (:func:`is_task_session`).
+
+    omp legt je Arbeitsverzeichnis einen Unterordner an (``--workspace--``,
+    ``--workspace-worktrees-…--``) — gesucht wird darum eine Ebene tief.
+
+    Rueckgabe wie beim Claude-Adapter: ``(pfad, meta)`` mit
+    ``{"sessionId", "mtime", "live"}``. ``None``, wenn es das Verzeichnis
+    nicht gibt oder keine Chat-Sitzung darin liegt.
+    """
+    if not tdir.is_dir():
+        return None
+
+    chosen = _pointed_chat_transcript(tdir)
+    if chosen is None:
+        chosen = _newest_non_task_session(tdir)
+    if chosen is None:
         return None
 
     # Under OMP_DRIVER=acp one session has TWO files (see session_id_for):
@@ -216,13 +351,40 @@ def find_active_session(tdir: Path) -> tuple[Path, dict[str, Any]] | None:
     # file is created first and often written last), and the chat then
     # tailed omp's file: no card until a reload, status "ended" (P3 live
     # test 13.10.2026).
-    newest_path = bridge_sibling(newest_path)
+    chosen = bridge_sibling(chosen)
+    mtime = _session_mtime(chosen)
 
-    return newest_path, {
-        "sessionId": newest_path.stem,
-        "mtime": datetime.fromtimestamp(newest_mtime, tz=timezone.utc).isoformat(),
-        "live": (time.time() - newest_mtime) < _LIVE_WINDOW_SECONDS,
+    return chosen, {
+        "sessionId": chosen.stem,
+        "mtime": datetime.fromtimestamp(max(mtime, 0.0), tz=timezone.utc).isoformat(),
+        "live": (time.time() - mtime) < _LIVE_WINDOW_SECONDS,
     }
+
+
+def _newest_non_task_session(tdir: Path) -> Path | None:
+    """Rueckfall ohne Zeiger: die zuletzt geschriebene Sitzung, Task-
+    Sitzungen ausgenommen.
+
+    Rangfolge nach dem Zeitstempel des LETZTEN EINTRAGS, nicht nach mtime —
+    eine beruehrte Altdatei wuerde sonst die laufende Sitzung verdecken
+    (siehe transcript_chat.last_entry_timestamp)."""
+    from app.services.transcript_chat import last_entry_timestamp
+
+    ranked: list[tuple[float, float, Path]] = []
+    for pattern in _SESSION_GLOBS:
+        for candidate in tdir.glob(pattern):
+            try:
+                mtime = candidate.stat().st_mtime
+            except OSError:
+                continue
+            entry_ts = last_entry_timestamp(candidate)
+            rank = mtime if entry_ts is None else entry_ts
+            ranked.append((rank, mtime, candidate))
+    ranked.sort(key=lambda r: (r[0], r[1]), reverse=True)
+    for _rank, _mtime, candidate in ranked:
+        if not is_task_session(candidate):
+            return candidate
+    return None
 
 
 def session_scan_root(session_path: Path) -> Path:
