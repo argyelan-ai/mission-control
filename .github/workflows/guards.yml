@@ -20,7 +20,10 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: shellcheck
         run: shellcheck -S warning tools/guards/*.sh
+      # Each check runs even when an earlier one failed, so a red run shows every finding.
       - name: Every .bad is red, every .good is green
+        if: always()
         run: bash tools/guards/run-all.sh
       - name: Sabotage probe — commenting out a guard's logic must break its fixtures
+        if: always()
         run: bash tools/guards/sabotage-probe.sh
