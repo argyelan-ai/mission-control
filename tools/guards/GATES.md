@@ -71,8 +71,8 @@ für die Queue unsichtbar — das ist eine Entscheidung des Operators, keine Age
 
 - **Hook-Registrierung — wen die Hooks erreichen:** `test-gate.sh` und `secrets-check.sh`
   blocken nur in **Claude-Code-Sessions**, deren (private) Konfiguration sie als
-  `PreToolUse`-Hook für `Bash` einträgt. Agenten ausserhalb von Claude Code (omp/Sparky,
-  Hermes, Docker-Agenten) sehen sie nie. Was wirklich **alle** erreicht, ist nur CI.
+  `PreToolUse`-Hook für `Bash` einträgt. Agenten ausserhalb von Claude Code (andere Harnesses wie omp,
+  Docker-Agenten) sehen sie nie. Was wirklich **alle** erreicht, ist nur CI.
   Der Eintrag soll das Skript aus `origin/main` laufen lassen, nicht aus einem Checkout,
   auf dem gerade irgendein Feature-Branch liegt, und erst dann `git show` starten, wenn
   der Befehl überhaupt nach Push/Commit aussieht:
