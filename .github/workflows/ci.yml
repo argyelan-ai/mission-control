@@ -286,7 +286,7 @@ jobs:
         run: |
           shellcheck -x -S warning install.sh scripts/release-image-tags.sh   # info-level notes differ between shellcheck versions
           pip install -q pytest pyyaml
-          python3 -m pytest -q -p no:cacheprovider --noconftest backend/tests/test_install_release_pinning.py backend/tests/test_install_update.py backend/tests/test_release_image_tags.py
+          python3 -m pytest -q -p no:cacheprovider --noconftest backend/tests/test_install_release_pinning.py backend/tests/test_install_update.py backend/tests/test_release_image_tags.py backend/tests/test_mc_update_verify.py
       - name: --here ran the checkout, not a published image
         # CI has no release that matches the branch under test, so --here
         # must take the edge path: MC_IMAGE_TAG=edge (a tag no registry

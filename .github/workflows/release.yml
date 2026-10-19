@@ -5,14 +5,21 @@ name: Release Images
 # Laeuft NUR im oeffentlichen Repo: im privaten Dev-Repo haette GITHUB_TOKEN
 # keine Schreibrechte auf ghcr.io/argyelan-ai/* und jeder Tag-Push waere rot.
 #
-# Two stages, so a broken image can never land under a tag users pull:
+# Three stages, so a broken or unapproved image can never land under a tag
+# users pull (ADR-094 decision 5):
 #   1. images  — build + push each image ONLY as sha-<commit>, then verify it
 #                (both architectures; mc-backend contains app/worker.py).
-#   2. promote — runs only when ALL images verified; re-tags the very same
-#                manifests (no rebuild) with `docker buildx imagetools create`
-#                to X.Y.Z, and for a stable tag also X.Y + latest. The tag
-#                list comes from scripts/release-image-tags.sh (tested).
-# A manual run from a branch stops after stage 1: sha-<commit> only.
+#   2. sign    — waits for a maintainer's approval (environment `release`,
+#                required reviewer), refuses to run when that environment is
+#                not protected, then signs every verified image BY DIGEST with
+#                cosign keyless. The signature says: built by this repo's
+#                release.yml, on a push of this tag, at this commit.
+#   3. promote — re-tags exactly the signed digests (no rebuild) with
+#                `docker buildx imagetools create` to X.Y.Z, and for a stable
+#                tag also X.Y + latest (scripts/release-image-tags.sh, tested),
+#                then runs the update engine's own verifier against X.Y.Z.
+# A manual run (workflow_dispatch) stops after stage 1: sha-<commit> only,
+# unsigned. Setup of the environment and the tag rule: docs/setup/releasing.md.
 # Publish the GitHub release only after this workflow is green — see
 # docs/setup/releasing.md; install.sh additionally skips a release whose
 # images are not there yet.
@@ -155,13 +162,65 @@ jobs:
           . ./docker/shared/disk-preflight.sh
           mc_build_cache_cleanup
 
-  promote:
-    # Only after EVERY image above passed its verify step — otherwise a
-    # verified frontend could be promoted next to an unverified backend and
-    # `latest` would mix versions.
+  sign:
+    # Between verify and promote: nothing is signed or promoted before a
+    # maintainer approved this run, and only images that passed stage 1.
     needs: images
+    if: github.repository == 'argyelan-ai/mission-control' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    name: Approve and sign verified images
+    runs-on: ubuntu-latest
+    # Required reviewer = the approval click. GitHub would create a missing
+    # environment on the fly WITHOUT protection — the first step below
+    # stops the job in that case.
+    environment: release
+    permissions:
+      contents: read
+      actions: read     # read the environment's protection rules
+      packages: write   # cosign stores the signature next to the image
+      id-token: write   # keyless: this job's OIDC identity is what gets signed
+    outputs:
+      digests: ${{ steps.sign.outputs.digests }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Release gate — environment must require a reviewer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/release_gate_check.py
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          # Same version as the verifier the engine runs (COSIGN_VERSION in
+          # scripts/mc_update_verify.py; a test keeps the two equal).
+          cosign-release: v3.1.3
+      - name: Sign each verified image by digest
+        id: sign
+        run: |
+          set -euo pipefail
+          digests='{}'
+          for image in mc-backend mc-frontend mc-claude-agent mc-agent-base; do
+            src="ghcr.io/argyelan-ai/$image:sha-$GITHUB_SHA"
+            digest="$(docker buildx imagetools inspect "$src" --format '{{json .Manifest}}' \
+              | python3 -c 'import json,sys; print(json.load(sys.stdin)["digest"])')"
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no digest for $src"; exit 1; }
+            ref="ghcr.io/argyelan-ai/$image@$digest"
+            echo "signing $ref"
+            cosign sign --yes "$ref"
+            digests="$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); d[sys.argv[2]]=sys.argv[3]; print(json.dumps(d))' "$digests" "$image" "$digest")"
+          done
+          echo "digests=$digests" >> "$GITHUB_OUTPUT"
+
+  promote:
+    # Only after every image verified (stage 1) AND was approved and signed
+    # (stage 2) — otherwise a verified frontend could be promoted next to an
+    # unverified backend and `latest` would mix versions.
+    needs: sign
     if: github.repository == 'argyelan-ai/mission-control' && startsWith(github.ref, 'refs/tags/v')
-    name: Promote verified images to release tags
+    name: Promote signed images to release tags
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -174,7 +233,9 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Re-tag sha-<commit> as X.Y.Z (+ X.Y, latest for stable tags)
+      - name: Re-tag the signed digests as X.Y.Z (+ X.Y, latest for stable tags)
+        env:
+          DIGESTS: ${{ needs.sign.outputs.digests }}
         run: |
           set -euo pipefail
           mapfile -t tags < <(bash scripts/release-image-tags.sh "$GITHUB_REF")
@@ -183,8 +244,35 @@ jobs:
           fi
           echo "promoting $GITHUB_SHA to: ${tags[*]}"
           for image in mc-backend mc-frontend mc-claude-agent mc-agent-base; do
-            src="ghcr.io/argyelan-ai/$image:sha-$GITHUB_SHA"
+            # The digest the sign job signed — not sha-<commit> again, which
+            # could have moved in between.
+            digest="$(python3 -c 'import json,os,sys; print(json.loads(os.environ["DIGESTS"])[sys.argv[1]])' "$image")"
+            src="ghcr.io/argyelan-ai/$image@$digest"
             args=()
             for t in "${tags[@]}"; do args+=(-t "ghcr.io/argyelan-ai/$image:$t"); done
             docker buildx imagetools create "${args[@]}" "$src"
           done
+      - name: The update engine accepts this release's signatures
+        # Same verifier, same pinned cosign container as on a user's machine
+        # (scripts/mc_update_verify.py). If what CI signs and what the engine
+        # checks ever drift apart, the release goes red here — before anyone
+        # publishes it. Pre-releases are never offered by the engine: skipped.
+        env:
+          DIGESTS: ${{ needs.sign.outputs.digests }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "pre-release $GITHUB_REF_NAME: the engine never installs it, nothing to prove"; exit 0
+          fi
+          out="$(python3 scripts/mc_update_verify.py signature "$GITHUB_REF_NAME" --commit "$GITHUB_SHA")" \
+            || { echo "::error::engine refuses $GITHUB_REF_NAME: $out"; exit 1; }
+          echo "$out"
+          OUT="$out" python3 -c '
+          import json, os, sys
+          got = json.loads(os.environ["OUT"])["images"]
+          want = json.loads(os.environ["DIGESTS"])
+          bad = [n for n, i in got.items() if i["digest"] != want.get(n)]
+          if bad:
+              sys.exit("::error::X.Y.Z does not resolve to the signed digest for: " + ", ".join(bad))
+          print("engine verification ok:", ", ".join(sorted(got)))
+          '

@@ -6,6 +6,17 @@ follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
 
 ## [Unreleased]
 
+- Release gate: `release.yml` now waits for a maintainer's approval
+  (environment `release` with a required reviewer) after the images are
+  verified, signs every image by digest with cosign keyless, promotes exactly
+  the signed digests and then checks them with the update engine's own
+  verifier. A run stops before signing when the `release` environment has no
+  required reviewer. One-time repository setup (environment + tag-creation
+  rule): `docs/setup/releasing.md`. New `scripts/mc_update_verify.py`
+  (published non-prerelease releases only, no git-tag fallback; signature via a
+  cosign container pinned by digest; digest, `revision` label and
+  architecture checks) — the self-update engine (ADR-094) uses it; nothing
+  calls it on a user's machine yet.
 - Fix: the installer's closing lines (and the browser it opens) lead to the
   setup wizard at `/setup` instead of `scripts/demo-seed.py` and
   `docs/setup/first-agent.md` — the wizard covers both.
