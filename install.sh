@@ -449,24 +449,40 @@ mc_bridge_installed() {
   [ -f "$HOME/Library/LaunchAgents/com.mc.cli-bridge.plist" ] || [ -f "$HOME/.config/systemd/user/mc-cli-bridge.service" ]
 }
 
-# mc_bridge_offer — after an install or an update: set the bridge up (asked,
-# or MC_BRIDGE=yes|no for unattended runs); an installed bridge on Linux
-# follows its network gateway (compose down/up can move it).
+# mc_bridge_offer ask|update|quiet — after an install or an update.
+#   ask    fresh interactive install: asks before setting the bridge up
+#   update after --update: asks at a terminal only to MOVE an installed
+#          bridge; never sets up a new one unasked (MC_BRIDGE=yes does)
+#   quiet  no prompt at all (--non-interactive, curl | bash)
+# MC_BRIDGE=yes|no is the unattended answer and wins over every mode.
+# An installed bridge on Linux must follow MC's network gateway (compose
+# down/up can move it; installs from before the update door never set
+# FREE_CODE_BRIDGE_URL). Moving it restarts the bridge service and recreates
+# backend + mc-worker, so it is never done without a yes or MC_BRIDGE=yes.
 mc_bridge_offer() {
-  local interactive="${1:-0}" gw
+  local mode="${1:-quiet}" gw
   if mc_bridge_installed; then
     [ "$(uname -s)" = Linux ] || return 0
     gw="$(mc_docker_gateway_ip)" || return 0
-    if [ "$(mc_env_get FREE_CODE_BRIDGE_URL)" != "http://$gw:$MC_BRIDGE_PORT" ]; then
-      say "→ MC's Docker network moved to $gw — moving the cli-bridge with it ..."
-      mc_bridge_setup batch || true
-    fi
+    [ "$(mc_env_get FREE_CODE_BRIDGE_URL)" = "http://$gw:$MC_BRIDGE_PORT" ] && return 0
+    echo
+    say "The cli-bridge does not listen on MC's Docker network gateway ($gw) yet — backend and worker cannot reach it there."
+    echo "  Moving it restarts the cli-bridge service (host agents in tmux keep running) and recreates backend + mc-worker."
+    case "${MC_BRIDGE:-}" in
+      yes) mc_bridge_setup batch || true; return 0 ;;
+      no)  ;;
+      *)   if [ "$mode" != quiet ] && mc_confirm "Move the cli-bridge to $gw now?"; then
+             mc_bridge_setup yes || true
+             return 0
+           fi ;;
+    esac
+    echo "  When no agent is working, from inside $(pwd):  ./install.sh --bridge"
     return 0
   fi
   case "${MC_BRIDGE:-}" in
     yes) mc_bridge_setup batch || true ;;
     no)  mc_bridge_hint ;;
-    *)   if [ "$interactive" = 1 ]; then mc_bridge_setup ask || true; else mc_bridge_hint; fi ;;
+    *)   if [ "$mode" = ask ]; then mc_bridge_setup ask || true; else mc_bridge_hint; fi ;;
   esac
 }
 
@@ -904,8 +920,9 @@ if [ "$UPDATE" = 1 ]; then
   UPDATE_PHASE=finished
   say "✅ Update complete — $( [ "$CHANNEL" = stable ] && echo "release $TAG" || echo "main @ $(git rev-parse --short HEAD)" ) is running and healthy."
   [ -n "$UPDATE_BACKUP" ] && echo "  Backup from before the update: $UPDATE_BACKUP"
-  # --update never prompts; MC_BRIDGE=yes sets the bridge up unattended.
-  mc_bridge_offer 0 || true
+  # --update never sets up a new bridge unasked (MC_BRIDGE=yes does); it
+  # asks at a terminal before moving an installed one.
+  mc_bridge_offer "$([ "$NONINTERACTIVE_FLAG" = 1 ] && echo quiet || echo update)" || true
   exit 0
 fi
 
@@ -1004,7 +1021,7 @@ mc_warn_if_degraded
 MC_INTERACTIVE="$INTERACTIVE" mc_remote_finish "$MC_REMOTE_HOST" .env
 
 # The update helper: asked here, never installed without a yes.
-mc_bridge_offer "$INTERACTIVE" || true
+mc_bridge_offer "$([ "$INTERACTIVE" = 1 ] && echo ask || echo quiet)" || true
 
 MC_URL=$(mc_access_url .env)
 echo

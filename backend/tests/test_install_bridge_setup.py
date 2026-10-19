@@ -244,14 +244,130 @@ def test_compose_hands_the_bridge_address_to_backend_and_worker():
 
 
 def test_installer_offers_the_bridge_on_install_update_and_by_flag():
+    """Wiring only — what each mode does is tested on the function below."""
     text = INSTALL_SH.read_text()
     assert "--bridge)" in text
-    # fresh install: asked when interactive, MC_BRIDGE=yes|no for unattended runs
-    assert 'mc_bridge_offer' in text
-    body = text.split("mc_bridge_offer()", 1)[1].split("\n}\n", 1)[0]
-    assert "mc_bridge_setup ask" in body and "mc_bridge_setup batch" in body
     main = text.split('[ "${MC_INSTALL_LIB_ONLY:-0}" = 1 ]', 1)[1]
-    assert main.count("mc_bridge_offer") >= 2      # after a fresh install and after --update
+    update = main.split('if [ "$UPDATE" = 1 ]', 1)[1].split("\n  exit 0\n", 1)[0]
+    # --update: may ask at a terminal, --non-interactive keeps it quiet
+    assert 'mc_bridge_offer "$([ "$NONINTERACTIVE_FLAG" = 1 ] && echo quiet || echo update)"' in update
+    # fresh install: asked when interactive
+    assert 'mc_bridge_offer "$([ "$INTERACTIVE" = 1 ] && echo ask || echo quiet)"' in main
+
+
+# ── mc_bridge_offer: after an install or an update ─────────────────────────
+#
+# An installed bridge on Linux whose address no longer matches MC's network
+# gateway (every Linux install from before this change: FREE_CODE_BRIDGE_URL
+# was never set) must NOT be reinstalled behind the operator's back — a
+# reinstall restarts the bridge service and recreates backend + mc-worker.
+# Only an explicit yes at the terminal or MC_BRIDGE=yes moves it.
+
+def _offer(box, mode: str, env: dict | None = None, installed: bool = True):
+    inst, _, base, tmp = box
+    home = tmp / "home"
+    unit = home / ".config" / "systemd" / "user" / "mc-cli-bridge.service"
+    if installed:
+        unit.parent.mkdir(parents=True, exist_ok=True)
+        unit.write_text("[Service]\n")
+    run_env = {**(env or base), "HOME": str(home)}
+    script = f'set -euo pipefail; . "{INSTALL_SH}"; mc_bridge_offer {mode}'
+    return subprocess.run(["bash", "-c", script], cwd=inst, env=run_env, capture_output=True,
+                          text=True, timeout=60)
+
+
+def _untouched(box, r):
+    inst, state, _, _ = box
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert _lines(state, "service") == []
+    assert not any("compose up" in c for c in _lines(state, "docker"))
+    assert _env_value(inst, "FREE_CODE_BRIDGE_URL") == ""
+    assert "./install.sh --bridge" in r.stdout + r.stderr
+
+
+def _moved(box, r):
+    inst, state, _, _ = box
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert _lines(state, "service") == ["bind=172.18.0.1"]
+    assert _env_value(inst, "FREE_CODE_BRIDGE_URL") == "http://172.18.0.1:18792"
+
+
+@pytest.mark.parametrize("mode", ["update", "quiet", "ask"])
+def test_moved_gateway_without_a_terminal_only_hints(box, mode):
+    """The old --update path reinstalled the bridge here, unattended."""
+    r = _offer(box, mode)
+    _untouched(box, r)
+    assert "172.18.0.1" in r.stdout
+
+
+@pytest.mark.parametrize("answer", ["\n", "n\n", "ja\n"])
+def test_moved_gateway_on_update_needs_a_yes_at_the_terminal(box, answer):
+    _untouched(box, _offer(box, "update", _answer(box, answer)))
+
+
+def test_moved_gateway_on_update_moves_after_a_yes(box):
+    r = _offer(box, "update", _answer(box, "y\nn\n"))
+    _moved(box, r)
+    assert "restarts the cli-bridge" in r.stdout
+
+
+def test_moved_gateway_quiet_never_asks_even_with_a_terminal(box):
+    _untouched(box, _offer(box, "quiet", _answer(box, "y\n")))
+
+
+def test_moved_gateway_with_mc_bridge_no_is_left_alone_even_after_a_yes(box):
+    _, _, env, _ = box
+    for mode in ("update", "ask", "quiet"):
+        r = _offer(box, mode, {**_answer(box, "y\n"), "MC_BRIDGE": "no"})
+        _untouched(box, r)
+
+
+def test_moved_gateway_with_mc_bridge_yes_moves_unattended(box):
+    _, state, env, _ = box
+    r = _offer(box, "quiet", {**env, "MC_BRIDGE": "yes"})
+    _moved(box, r)
+    assert _lines(state, "sudo") == []
+
+
+def test_installed_bridge_at_the_right_address_is_left_alone(box):
+    inst, state, env, _ = box
+    with open(inst / ".env", "a") as f:
+        f.write("FREE_CODE_BRIDGE_URL=http://172.18.0.1:18792\n")
+    for mode in ("update", "ask", "quiet"):
+        r = _offer(box, mode, {**_answer(box, "y\n"), "MC_BRIDGE": "yes"})
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert _lines(state, "service") == []
+        assert _lines(state, "docker") == [] or not any("compose up" in c for c in _lines(state, "docker"))
+
+
+def test_installed_bridge_on_macos_is_left_alone(box):
+    _, state, env, _ = box
+    r = _offer(box, "update", {**_answer(box, "y\n"), "MC_BRIDGE": "yes", "STUB_OS": "Darwin"})
+    assert r.returncode == 0
+    assert _lines(state, "service") == []
+    assert _lines(state, "docker") == []
+
+
+def test_installed_bridge_without_mcs_network_is_left_alone(box):
+    _, state, env, _ = box
+    r = _offer(box, "update", {**_answer(box, "y\n"), "MC_BRIDGE": "yes", "STUB_GW": ""})
+    assert r.returncode == 0
+    assert _lines(state, "service") == []
+
+
+def test_update_never_sets_up_a_new_bridge_unasked(box):
+    """Not installed: --update hints even at a terminal; MC_BRIDGE=yes is the opt-in."""
+    _, state, env, _ = box
+    for mode in ("update", "quiet"):
+        _untouched(box, _offer(box, mode, _answer(box, "y\n"), installed=False))
+    _moved(box, _offer(box, "update", {**env, "MC_BRIDGE": "yes"}, installed=False))
+
+
+def test_fresh_install_asks_and_honours_mc_bridge(box):
+    _, state, env, _ = box
+    _untouched(box, _offer(box, "ask", _answer(box, "\n"), installed=False))
+    _untouched(box, _offer(box, "ask", {**_answer(box, "y\n"), "MC_BRIDGE": "no"}, installed=False))
+    _moved(box, _offer(box, "ask", _answer(box, "y\nn\n"), installed=False))
 
 
 def test_bridge_flag_sets_it_up_in_an_existing_install(box):
