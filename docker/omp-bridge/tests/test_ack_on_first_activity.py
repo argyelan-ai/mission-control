@@ -143,9 +143,20 @@ def test_a_failing_callback_never_breaks_the_run():
 # ── 2. drive_live_run claims only after the gate fired ─────────────────────
 
 def _dead_model_outcome() -> bridge.RunOutcome:
+    """The model endpoint does not answer (follow-up: the run waits for the
+    model instead of a blocker — tests/test_model_wait.py)."""
     o = bridge.RunOutcome()
     o.saw_session = True
     o.error_message = "Internal error: Connection error."
+    return o
+
+
+def _silent_run_outcome() -> bridge.RunOutcome:
+    """omp opened a session, the turn died without a word from the model and
+    without an unreachable-model message (an omp crash)."""
+    o = bridge.RunOutcome()
+    o.saw_session = True
+    o.error_message = "omp acp exited (code 1)"
     return o
 
 
@@ -153,7 +164,7 @@ def test_dead_model_is_blocked_without_ever_claiming():
     lc = Recording()
     gate = bridge.FirstActivityAck(lc, "T1")
     action = bridge.drive_live_run(
-        lc, _dead_model_outcome, task_id="T1", board_requires_review=False,
+        lc, _silent_run_outcome, task_id="T1", board_requires_review=False,
         retries_left=2, ack_gate=gate, classify_fn=bridge.classify_acp,
     )
     assert action.action == "blocker", action
@@ -165,7 +176,7 @@ def test_dead_model_is_blocked_without_ever_claiming():
     # the blocker (the card is no longer inbox then).
     assert lc.kinds().count("comment") >= 3, lc.calls
     question = lc.calls[0][3]
-    assert "Connection error" in question, question
+    assert "omp acp exited" in question, question
 
 
 def test_model_answered_claims_before_finishing():
@@ -254,7 +265,7 @@ def test_unclaimed_inbox_card_is_still_ours_for_a_retry():
 
     def run_once():
         runs.append(1)
-        return _dead_model_outcome()
+        return _silent_run_outcome()
 
     action = bridge.drive_live_run(
         lc, run_once, task_id="T1", board_requires_review=False,
@@ -269,7 +280,7 @@ def test_unclaimed_card_given_to_someone_else_halts():
     lc = OwnershipReading("inbox", assigned="OTHER")
     gate = bridge.FirstActivityAck(lc, "T1")
     action = bridge.drive_live_run(
-        lc, _dead_model_outcome, task_id="T1", board_requires_review=False,
+        lc, _silent_run_outcome, task_id="T1", board_requires_review=False,
         retries_left=1, ack_gate=gate, classify_fn=bridge.classify_acp,
     )
     assert action.action == "halted_external", (action, lc.calls)
@@ -279,7 +290,7 @@ def test_claimed_card_back_in_inbox_halts():
     """Once claimed, ``inbox`` means MC took the card back — stop."""
     lc = OwnershipReading("inbox")
     action = bridge.drive_live_run(
-        lc, _dead_model_outcome, task_id="T1", board_requires_review=False,
+        lc, _silent_run_outcome, task_id="T1", board_requires_review=False,
         retries_left=1, pre_acked=True, classify_fn=bridge.classify_acp,
     )
     assert action.action == "halted_external", (action, lc.calls)
@@ -360,24 +371,22 @@ def _serve_once(fixture: Path, *, retries: str = "1", continues: str = "0") -> l
 
 def test_serve_loop_never_claims_a_task_the_model_cannot_answer():
     """Sabotage scenario from the operator: runtime off, task assigned —
-    the card must never become in_progress."""
+    the card must never become in_progress. (It waits for the model, no
+    blocker: tests/test_model_wait.py.)"""
     calls = _serve_once(UNREACHABLE, retries="1")
     kinds = [c[0] for c in calls]
     assert "ack" not in kinds, calls
-    assert kinds and kinds[0] == "blocker", calls
+    assert "blocker" not in kinds, calls
 
 
 def test_serve_loop_never_claims_on_omps_error_chunk():
     """Operator sabotage probe, live shape: Spark off → omp's ECONNREFUSED
-    chunk + 'refusal'. Continue-nudges included — the card never becomes
-    in_progress and ends blocked with the reason."""
+    chunk + 'refusal'. Continue-nudges available — the card never becomes
+    in_progress, nothing is nudged into the dead endpoint."""
     calls = _serve_once(ECONNREFUSED, retries="1", continues="2")
     kinds = [c[0] for c in calls]
     assert "ack" not in kinds, calls
-    assert kinds and kinds[0] == "blocker", calls
-    assert "Modell hat nicht geantwortet" in calls[0][3], calls[0]
-    # The two continue-nudge notes were held, not lost.
-    assert sum("continue-nudge" in c[2] for c in calls if c[0] == "comment") == 2, calls
+    assert kinds == [], calls
 
 
 def test_serve_loop_claims_once_the_model_answers():
