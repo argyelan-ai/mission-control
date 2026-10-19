@@ -599,10 +599,17 @@ async def test_stop_on_the_crashed_recipe_also_clears_the_slot_crash(async_sessi
 
 @pytest.mark.asyncio
 async def test_duo_head_death_says_the_worker_may_still_run(async_session, fake_redis):
+    from app.models.host import Host
     from app.models.runtime_host import RuntimeHost
 
     _, _, dsv, _, _ = await _live_topology(async_session)
-    async_session.add(RuntimeHost(runtime_id=dsv.id, host_id=uuid.uuid4(), role="worker", node_rank=1))
+    # A real worker box: on Postgres the member row's FK to hosts is enforced
+    # (SQLite let a random host_id through).
+    worker = Host(slug="worker-box", display_name="WORKER", kind="ssh", ssh_host="192.0.2.11")
+    async_session.add(worker)
+    await async_session.commit()
+    await async_session.refresh(worker)
+    async_session.add(RuntimeHost(runtime_id=dsv.id, host_id=worker.id, role="worker", node_rank=1))
     await async_session.commit()
     probe = Probe(None)
     with _stack(FakeBox(), fake_redis, probe):
