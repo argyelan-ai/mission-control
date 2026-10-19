@@ -84,13 +84,24 @@ recreates `backend` + `mc-worker`, which read it (`docker-compose.yml`).
 
 - The gateway belongs to the network: `docker compose down` removes the
   network, and the next `up` can give it another subnet. The helper then
-  cannot bind and its service retries; `./install.sh --update` and
-  `./install.sh --bridge` move it to the new address.
+  cannot bind and its service retries; `./install.sh --bridge` moves it to
+  the new address. `./install.sh --update` notices the mismatch (also on
+  installs from before the update door, which never set
+  `FREE_CODE_BRIDGE_URL`) but only moves the helper after a `y` at the
+  terminal or with `MC_BRIDGE=yes` — moving it restarts the helper and
+  recreates `backend` + `mc-worker`, so pick a moment when no agent works.
+  `MC_BRIDGE=no` or `--non-interactive` leave it alone and print the command.
+- The helper's systemd unit uses `KillMode=process`: restarting or
+  reinstalling it stops the helper only, never the tmux server of the host
+  agents or an update it started. The installer loads the new unit before it
+  stops the old helper, so this holds for the first reinstall too.
 - **Linger** (`sudo loginctl enable-linger <user>`): without it the user's
   services stop at logout and do not start after a reboot. The installer
   offers it and runs it only after an explicit `y`; unattended installs set
   `MC_BRIDGE_LINGER=yes`. The update preflight shows a red check while it is
-  off — an update interrupted by a power cut could not finish otherwise.
+  off, and the door refuses to start an update (422) — a logout would stop
+  the job mid-switch, and an update interrupted by a power cut could not
+  finish.
 
 By hand, the same as the installer does: `CLI_BRIDGE_BIND=<gateway>
 make bridge-install` plus `FREE_CODE_BRIDGE_URL` in `.env`. `0.0.0.0` also
