@@ -47,8 +47,10 @@ export once by hand. Numbers: our own benchmark (tokens counted from the
 API's `usage`, greedy, 512-token answers, on our own 2× DGX Spark pair,
 08 Oct 2026); the same GLM weights on the plain vLLM recipe reach 34.6 tok/s —
 the dedicated recipe is ~1.8× faster. The DeepSeek recipe has no numbers of ours
-yet. **Catalog status:** both entries carry `gb10_validated: true` — the
-catalog's marker for "actually watched running on a GB10 box"; if you install
+yet. **Catalog status:** the GLM entry carries `gb10_validated: true` — the
+catalog's marker for "installed from zero through MC and watched running on a
+GB10 box"; the DeepSeek entry stays `false` until that one-click run and our
+benchmark are done. If you install
 one and hit a mismatch, open an issue with your own numbers. How it works:
 [ADR-077](docs/decisions/077-rezept-modell-ein-startbefehl.md)
 · [Runtimes](docs/handbook/concepts/runtimes.md).
