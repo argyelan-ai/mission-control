@@ -41,6 +41,14 @@
 #   --no-backup        --update without the backup first (on purpose only)
 #   --ignore-running-tasks  --update even while tasks are in progress
 #                      (without a terminal the update stops otherwise)
+#   --bridge           set up (or repair) the cli-bridge service in an
+#                      existing install (run inside the checkout). The bridge
+#                      runs host agents and is the door for the update button
+#                      in Settings → System. On Linux it listens on the
+#                      gateway of MC's Docker network and asks before it
+#                      enables linger (sudo). After a fresh install or an
+#                      update it is offered; unattended: MC_BRIDGE=yes|no,
+#                      MC_BRIDGE_LINGER=yes.
 set -euo pipefail
 
 REPO_URL="${MC_REPO_URL:-https://github.com/argyelan-ai/mission-control.git}"
@@ -339,6 +347,129 @@ mc_newest_backup() {
   done < <(mc_backup_dirs) | sort | tail -n 1
 }
 
+# ── cli-bridge: host helper and update door (ADR-094) ───────────────────────
+# The bridge runs host agents and is the door through which Settings →
+# System updates MC (scripts/mc_update_door.py). It is a service in this
+# user's account, so it is only set up after a yes.
+# backend/tests/test_install_bridge_setup.py drives these functions.
+
+# Compose fixes the name of MC's default network (docker-compose.yml).
+MC_BRIDGE_NETWORK="${MC_BRIDGE_NETWORK:-mission-control_default}"
+MC_BRIDGE_PORT="${CLI_BRIDGE_PORT:-18792}"
+
+mc_is_ipv4() { [[ "${1:-}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; }
+
+# mc_docker_gateway_ip — the gateway of MC's Docker network. On Linux the
+# backend container reaches the host there; the LAN does not.
+mc_docker_gateway_ip() {
+  local gw
+  gw="$(docker network inspect "$MC_BRIDGE_NETWORK" --format '{{range .IPAM.Config}}{{.Gateway}} {{end}}' 2>/dev/null \
+          | tr ' ' '\n' | sed -n '/./{p;q;}')" || true
+  mc_is_ipv4 "$gw" || return 1
+  printf '%s\n' "$gw"
+}
+
+mc_user() { id -un 2>/dev/null || printf '%s\n' "${USER:-}"; }
+
+# Linger: the user's services keep running without a login session and start
+# at boot. Readable without a session (the update preflight checks the same).
+mc_linger_enabled() { [ -e "${MC_LINGER_DIR:-/var/lib/systemd/linger}/$(mc_user)" ]; }
+
+# mc_confirm "question" — true only on an explicit yes typed at the terminal
+# (MC_TTY, default /dev/tty). No terminal, Enter or anything else → no.
+mc_confirm() {
+  local tty="${MC_TTY:-/dev/tty}" reply=""
+  { [ -r "$tty" ] && : <"$tty"; } 2>/dev/null || return 1
+  printf '%s [y/N]: ' "$1" >&2
+  IFS= read -r reply <"$tty" || reply=""
+  case "$reply" in y|Y|yes|Yes|YES) return 0 ;; *) return 1 ;; esac
+}
+
+mc_bridge_hint() {
+  echo "  Update helper (cli-bridge) not set up — Settings → System can only update MC with it."
+  echo "  Later, from inside $(pwd):  ./install.sh --bridge"
+}
+
+# mc_bridge_setup ask|yes|batch — run inside the install folder.
+#   ask   ask before setting up the bridge, then (Linux) offer linger
+#   yes   set up the bridge (the user asked for it), offer linger
+#   batch set up the bridge without any prompt; linger only with
+#         MC_BRIDGE_LINGER=yes (an explicit setting for unattended installs)
+mc_bridge_setup() {
+  local mode="${1:-ask}" os bind="127.0.0.1" gw="" url user
+  os="$(uname -s)"
+  if [ "$mode" = ask ]; then
+    echo
+    say "Update helper (cli-bridge): runs host agents and lets you update MC from Settings → System."
+    if ! mc_confirm "Set it up as a service in your account now?"; then
+      mc_bridge_hint
+      return 0
+    fi
+  fi
+  command -v python3 >/dev/null 2>&1 \
+    || { warn "python3 is missing — the cli-bridge needs it. Install python3, then: ./install.sh --bridge"; return 1; }
+  if [ "$os" = Linux ]; then
+    # 127.0.0.1 is not reachable from the backend container on Linux.
+    gw="$(mc_docker_gateway_ip)" \
+      || { warn "Docker network $MC_BRIDGE_NETWORK not found (or no IPv4 gateway) — start MC first (docker compose up -d), then: ./install.sh --bridge"; return 1; }
+    bind="$gw"
+  fi
+  say "→ installing the cli-bridge service (listens on $bind:$MC_BRIDGE_PORT, token required) ..."
+  CLI_BRIDGE_BIND="$bind" ./scripts/cli-bridge-service.sh \
+    || { warn "The cli-bridge service could not be installed (output above). Fix it, then: ./install.sh --bridge"; return 1; }
+  if [ "$os" = Linux ]; then
+    url="http://$gw:$MC_BRIDGE_PORT"
+    if [ "$(mc_env_get FREE_CODE_BRIDGE_URL)" != "$url" ]; then
+      mc_env_set FREE_CODE_BRIDGE_URL "$url"
+      say "→ pointing backend and worker at the bridge ($url) ..."
+      docker compose up -d backend mc-worker </dev/null \
+        || warn "Could not restart backend + worker — run: docker compose up -d backend mc-worker"
+    fi
+    if ! mc_linger_enabled; then
+      user="$(mc_user)"
+      echo "  Without 'linger' the bridge stops when you log out and does not start after a reboot —"
+      echo "  an update interrupted by a power cut could then not finish on its own."
+      if { [ "$mode" != batch ] && mc_confirm "Enable linger now (runs: sudo loginctl enable-linger $user)?"; } \
+         || { [ "$mode" = batch ] && [ "${MC_BRIDGE_LINGER:-}" = yes ]; }; then
+        if sudo loginctl enable-linger "$user" </dev/null && mc_linger_enabled; then
+          say "✓ linger is on — the bridge survives logout and reboot"
+        else
+          warn "linger is still off — run on this machine: sudo loginctl enable-linger $user"
+        fi
+      else
+        warn "linger is off — when you are ready, run on this machine: sudo loginctl enable-linger $user"
+      fi
+    fi
+  fi
+  say "✓ cli-bridge set up"
+}
+
+# mc_bridge_installed — the service unit of the bridge exists.
+mc_bridge_installed() {
+  [ -f "$HOME/Library/LaunchAgents/com.mc.cli-bridge.plist" ] || [ -f "$HOME/.config/systemd/user/mc-cli-bridge.service" ]
+}
+
+# mc_bridge_offer — after an install or an update: set the bridge up (asked,
+# or MC_BRIDGE=yes|no for unattended runs); an installed bridge on Linux
+# follows its network gateway (compose down/up can move it).
+mc_bridge_offer() {
+  local interactive="${1:-0}" gw
+  if mc_bridge_installed; then
+    [ "$(uname -s)" = Linux ] || return 0
+    gw="$(mc_docker_gateway_ip)" || return 0
+    if [ "$(mc_env_get FREE_CODE_BRIDGE_URL)" != "http://$gw:$MC_BRIDGE_PORT" ]; then
+      say "→ MC's Docker network moved to $gw — moving the cli-bridge with it ..."
+      mc_bridge_setup batch || true
+    fi
+    return 0
+  fi
+  case "${MC_BRIDGE:-}" in
+    yes) mc_bridge_setup batch || true ;;
+    no)  mc_bridge_hint ;;
+    *)   if [ "$interactive" = 1 ]; then mc_bridge_setup ask || true; else mc_bridge_hint; fi ;;
+  esac
+}
+
 [ "${MC_INSTALL_LIB_ONLY:-0}" = 1 ] && return 0 2>/dev/null
 
 # ── Arguments ────────────────────────────────────────────────────────────────
@@ -346,6 +477,7 @@ TARGET_DIR="./mission-control"
 HERE=0
 INTERACTIVE=1
 UPDATE=0
+BRIDGE_ONLY=0
 NO_BACKUP=0
 IGNORE_RUNNING=0
 NONINTERACTIVE_FLAG=0
@@ -357,6 +489,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --here) HERE=1; INTERACTIVE=0 ;;
     --update) UPDATE=1; INTERACTIVE=0 ;;
+    --bridge) BRIDGE_ONLY=1 ;;
     --no-backup) NO_BACKUP=1 ;;
     --ignore-running-tasks) IGNORE_RUNNING=1 ;;
     --dir) TARGET_DIR="$2"; shift ;;
@@ -473,6 +606,13 @@ if [ "${#MISSING[@]}" -gt 0 ] || [ -n "$DOCKER_PROBLEM" ]; then
   fail "Install the missing pieces above, then re-run the installer."
 fi
 say "✓ prerequisites ok (git, curl, openssl, docker, compose v2)"
+
+if [ "$BRIDGE_ONLY" = 1 ]; then
+  [ -f docker-compose.yml ] && [ -f .env ] && [ -x scripts/cli-bridge-service.sh ] \
+    || fail "--bridge expects to run inside an installed Mission Control directory (with scripts/cli-bridge-service.sh)."
+  if [ "$NONINTERACTIVE_FLAG" = 1 ]; then mc_bridge_setup batch; else mc_bridge_setup yes; fi
+  exit $?
+fi
 
 # Raspberry Pi OS (and some other ARM kernels) boot with the memory cgroup
 # off: Docker then ignores every mem_limit in the compose file, so one runaway
@@ -764,6 +904,8 @@ if [ "$UPDATE" = 1 ]; then
   UPDATE_PHASE=finished
   say "✅ Update complete — $( [ "$CHANNEL" = stable ] && echo "release $TAG" || echo "main @ $(git rev-parse --short HEAD)" ) is running and healthy."
   [ -n "$UPDATE_BACKUP" ] && echo "  Backup from before the update: $UPDATE_BACKUP"
+  # --update never prompts; MC_BRIDGE=yes sets the bridge up unattended.
+  mc_bridge_offer 0 || true
   exit 0
 fi
 
@@ -860,6 +1002,9 @@ mc_warn_if_degraded
 
 # Remote access, step 2: first admin (terminal, over localhost), then open.
 MC_INTERACTIVE="$INTERACTIVE" mc_remote_finish "$MC_REMOTE_HOST" .env
+
+# The update helper: asked here, never installed without a yes.
+mc_bridge_offer "$INTERACTIVE" || true
 
 MC_URL=$(mc_access_url .env)
 echo

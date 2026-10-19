@@ -333,6 +333,10 @@ services:
       # read ~/.mc/secrets/cli-bridge.token through the ~/.mc mount below.
       CLI_BRIDGE_TOKEN: ${CLI_BRIDGE_TOKEN:-}
       CLI_BRIDGE_TOKEN_FILE: ${CLI_BRIDGE_TOKEN_FILE:-}
+      # Where the cli-bridge listens. macOS: host.docker.internal (Docker
+      # Desktop delivers it to the host's loopback). Linux: install.sh sets
+      # the gateway of MC's Docker network (./install.sh --bridge, ADR-094).
+      FREE_CODE_BRIDGE_URL: ${FREE_CODE_BRIDGE_URL:-http://host.docker.internal:18792}
       # ADR-022: MC-Home unter ~/.mc/. Stage-2-Entkopplung (2026-06-01): aller
       # Backend-Code referenziert jetzt direkt ~/.mc/...; der Legacy ~/.openclaw
       # Mount wurde entfernt (Host-Symlinks bleiben bis Stage 3 bestehen).
@@ -583,6 +587,10 @@ services:
       PGID: ${PGID:-}
       CLI_BRIDGE_TOKEN: ${CLI_BRIDGE_TOKEN:-}
       CLI_BRIDGE_TOKEN_FILE: ${CLI_BRIDGE_TOKEN_FILE:-}
+      # Where the cli-bridge listens. macOS: host.docker.internal (Docker
+      # Desktop delivers it to the host's loopback). Linux: install.sh sets
+      # the gateway of MC's Docker network (./install.sh --bridge, ADR-094).
+      FREE_CODE_BRIDGE_URL: ${FREE_CODE_BRIDGE_URL:-http://host.docker.internal:18792}
       MC_MCP_REGISTRY_DIR: ${HOME}/.mc/mcp-servers
       MC_AGENTS_ROOT: ${HOME}/.mc/agents
     volumes:
