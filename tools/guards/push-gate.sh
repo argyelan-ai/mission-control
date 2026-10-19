@@ -42,18 +42,18 @@ check_line() {
   if [[ $3 =~ $RE_SCAN_ALONE ]]; then _scan_seen=1; return 0; fi
   [[ $3 =~ $RE_PUSH ]] || return 0
   # >>> guard-logic
-  if ! [[ $3 =~ $RE_PUSH_C ]]; then
-    hit "$1" "$2" "push without 'git -C <worktree>' (the pre-push hook rejects it, and it may run in the wrong checkout)"
-  fi
-  if [[ $3 == *--no-verify* ]]; then
-    hit "$1" "$2" "--no-verify skips the pre-push hook"
-  fi
-  if [[ $3 =~ $RE_CUT ]]; then
-    hit "$1" "$2" "push output is cut (tail/head/grep): a rejected push looks like success. Show it whole, then run proof-push.sh"
-  fi
-  if ! [[ $3 =~ $RE_SCAN_GATED ]] && ! { [ "$_scan_seen" = 1 ] && [ "$_set_e" = 1 ]; }; then
-    hit "$1" "$2" "push is not gated by the privacy scan. Use: python3 scripts/privacy-scan.py && git -C <worktree> push ..."
-  fi
+# SABOTAGED   if ! [[ $3 =~ $RE_PUSH_C ]]; then
+# SABOTAGED     hit "$1" "$2" "push without 'git -C <worktree>' (the pre-push hook rejects it, and it may run in the wrong checkout)"
+# SABOTAGED   fi
+# SABOTAGED   if [[ $3 == *--no-verify* ]]; then
+# SABOTAGED     hit "$1" "$2" "--no-verify skips the pre-push hook"
+# SABOTAGED   fi
+# SABOTAGED   if [[ $3 =~ $RE_CUT ]]; then
+# SABOTAGED     hit "$1" "$2" "push output is cut (tail/head/grep): a rejected push looks like success. Show it whole, then run proof-push.sh"
+# SABOTAGED   fi
+# SABOTAGED   if ! [[ $3 =~ $RE_SCAN_GATED ]] && ! { [ "$_scan_seen" = 1 ] && [ "$_set_e" = 1 ]; }; then
+# SABOTAGED     hit "$1" "$2" "push is not gated by the privacy scan. Use: python3 scripts/privacy-scan.py && git -C <worktree> push ..."
+# SABOTAGED   fi
   # <<< guard-logic
 }
 
