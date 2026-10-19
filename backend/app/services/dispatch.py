@@ -512,6 +512,7 @@ async def auto_dispatch_task(
                     await update_drain.defer(
                         update_drain.KIND_DISPATCH, task.id, bind=session.bind,
                         run_id=(await update_drain.current()).run_id,
+                        detail=update_drain.dispatch_snapshot(task),
                     )
                 return
 

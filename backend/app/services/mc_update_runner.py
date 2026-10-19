@@ -65,7 +65,20 @@ MIRROR_TTL = 7 * 86400
 
 
 class DoorUnreachable(Exception):
-    """The bridge did not answer (not running, wrong address, firewall)."""
+    """The bridge did not answer (not running, wrong address, firewall).
+
+    ``never_sent`` is True when no connection was made, so the request
+    provably did not reach the bridge (connection refused / connect
+    timeout). A read timeout is not that: the action may have started."""
+
+    def __init__(self, message: str = "", *, never_sent: bool = False):
+        super().__init__(message)
+        self.never_sent = never_sent
+
+
+def _unreachable_from(exc: httpx.HTTPError) -> DoorUnreachable:
+    return DoorUnreachable(type(exc).__name__,
+                           never_sent=isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout)))
 
 
 @dataclass(frozen=True)
@@ -117,7 +130,7 @@ class Door:
                 r = await client.request(method, path, json=body if method == "POST" else None,
                                          params=params)
         except httpx.HTTPError as exc:
-            raise DoorUnreachable(type(exc).__name__) from exc
+            raise _unreachable_from(exc) from exc
         try:
             data = r.json()
         except ValueError:
@@ -130,7 +143,7 @@ class Door:
                                          transport=self.transport) as client:
                 r = await client.get("/ping")
         except httpx.HTTPError as exc:
-            raise DoorUnreachable(type(exc).__name__) from exc
+            raise _unreachable_from(exc) from exc
         try:
             data = r.json()
         except ValueError:

@@ -52,6 +52,7 @@ class FakeDoor:
     def __init__(self):
         self.requests: list[httpx.Request] = []
         self.reachable = True
+        self.read_timeout = False
         self.ping = {"status": "ok", "api_version": 1}
         self.replies: dict[str, tuple[int, dict]] = {
             "/mc-update/preflight": (200, {
@@ -72,6 +73,8 @@ class FakeDoor:
         if not self.reachable:
             raise httpx.ConnectError("refused", request=request)
         self.requests.append(request)
+        if self.read_timeout:
+            raise httpx.ReadTimeout("no answer", request=request)
         if request.url.path == "/ping":
             return httpx.Response(200, json=self.ping)
         if request.headers.get(mc_update_runner.TOKEN_HEADER) != TOKEN:
@@ -533,6 +536,53 @@ async def test_status_rejects_a_malformed_run_id(users, door):
 
 
 # ── rollback / resume ──────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path,body", [
+    ("/api/v1/system/update/start", {"expected_target": "v0.9.3"}),
+    ("/api/v1/system/update/rollback", {"run_id": RUN_ID}),
+])
+async def test_bridge_gone_keeps_the_password_confirmation(users, door, path, body):
+    """Nothing happened, so the operator need not type the password again:
+    the step-up token stays spendable for the retry (within its 5 minutes)."""
+    door.reachable = False
+    headers = await _step_up(users)
+    r = await users.post(path, json=body, headers=headers)
+    assert r.status_code == 503 and _code(r) == "bridge_unreachable"
+    door.reachable = True
+    r = await users.post(path, json=body, headers=headers)
+    assert r.status_code == 202, r.text
+    # Spent now: still single-use once something was handed to the bridge.
+    r = await users.post(path, json=body, headers=headers)
+    assert r.status_code == 403 and _code(r) == "step_up_required"
+
+
+@pytest.mark.asyncio
+async def test_a_lost_answer_spends_the_confirmation(users, door):
+    """The bridge got the request but the answer timed out: it may have
+    started, so the confirmation stays spent (no silent second start)."""
+    door.read_timeout = True
+    headers = await _step_up(users)
+    r = await users.post("/api/v1/system/update/start", json={"expected_target": "v0.9.3"}, headers=headers)
+    assert r.status_code == 503
+    door.read_timeout = False
+    r = await users.post("/api/v1/system/update/start", json={"expected_target": "v0.9.3"}, headers=headers)
+    assert r.status_code == 403 and _code(r) == "step_up_required"
+
+
+@pytest.mark.asyncio
+async def test_a_kept_confirmation_keeps_its_expiry(users, door, fake_redis):
+    """Handing the token back must not stretch its lifetime."""
+    from app.services import step_up as step_up_mod
+
+    door.reachable = False
+    headers = await _step_up(users)
+    key = step_up_mod._key(headers["X-MC-Step-Up"])
+    await fake_redis.pexpire(key, 60_000)
+    r = await users.post("/api/v1/system/update/start", json={"expected_target": "v0.9.3"}, headers=headers)
+    assert r.status_code == 503
+    assert 0 < await fake_redis.pttl(key) <= 60_000
 
 
 @pytest.mark.asyncio

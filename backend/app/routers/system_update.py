@@ -208,6 +208,7 @@ async def update_preflight(
 @router.post("/start", status_code=202, dependencies=_ADMIN)
 async def update_start(
     body: StartBody,
+    request: Request,
     session: AsyncSession = Depends(get_session),
     current_user=Depends(step_up.require_recent_auth()),
 ):
@@ -221,7 +222,9 @@ async def update_start(
                    checks=[c for c in await runner.backend_checks(session, None) if c["id"] == "schedules"])
     try:
         reply = await runner.door.start(target)
-    except DoorUnreachable:
+    except DoorUnreachable as exc:
+        if exc.never_sent:  # nothing happened — no second password prompt
+            await step_up.give_back(request)
         raise _unreachable() from None
     if reply.status == 202:
         run_id = reply.data.get("run_id")
@@ -289,6 +292,7 @@ async def update_status(
 
 @router.post("/rollback", dependencies=_ADMIN)
 async def update_rollback(
+    request: Request,
     body: RunBody | None = None,
     session: AsyncSession = Depends(get_session),
     current_user=Depends(step_up.require_recent_auth()),
@@ -299,7 +303,9 @@ async def update_rollback(
     run_id = _valid_run(body.run_id if body else None)
     try:
         reply = await runner.door.rollback(run_id)
-    except DoorUnreachable:
+    except DoorUnreachable as exc:
+        if exc.never_sent:
+            await step_up.give_back(request)
         raise _unreachable() from None
     if reply.status in (200, 202):
         known = run_id or (reply.data.get("run_id") if isinstance(reply.data.get("run_id"), str) else None)

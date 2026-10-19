@@ -1619,11 +1619,28 @@ async def handle_review_handoff(
         return None
 
     # Set dispatch_intent + operational controls guard
+    _intent_before = task.dispatch_intent
     task.dispatch_intent = "review_handoff"
     from app.services.operations import check_dispatch_allowed
     allowed, reason = await check_dispatch_allowed(task, reviewer, session)
     if not allowed:
         logger.info("Review-Handoff blocked: '%s' — %s", task.title, reason)
+        from app.services.operations import UPDATE_DRAIN_REASON
+        if reason == UPDATE_DRAIN_REASON:
+            # The card stays with its author until the catch-up; marked as a
+            # review card it would park the developer like a reviewer.
+            task.dispatch_intent = _intent_before
+            # Held back by an MC update, not refused: the hand-off itself is
+            # recorded and run again once the drain is gone
+            # (update_drain.catch_up). Without it the card would stay on
+            # review with its author and nobody would ever pick a reviewer.
+            from app.services import update_drain
+            await update_drain.defer(
+                update_drain.KIND_REVIEW_HANDOFF, task.id, bind=session.bind,
+                run_id=(await update_drain.current()).run_id,
+                detail={"developer_id": str(developer.id) if developer else (
+                    str(task.assigned_agent_id) if task.assigned_agent_id else None)},
+            )
         return None
 
     # Release the developer lock (clear current_task_id)

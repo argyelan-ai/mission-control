@@ -204,7 +204,7 @@ async def test_catch_up_dispatches_held_work_once_the_drain_is_gone(fake_redis, 
 
     await _clear_drain()
     counts = await update_drain.catch_up(test_engine)
-    assert counts == {"dispatch": 1, "schedule": 1, "skipped": 0}
+    assert counts == {"dispatch": 1, "schedule": 1, "review_handoff": 0, "skipped": 0}
     dispatched.assert_awaited_once_with(task.id, task.board_id)
     executed.assert_awaited_once_with(job_id, retry_attempt=0)
     assert await _deferred_keys() == []
@@ -222,6 +222,181 @@ async def test_catch_up_skips_a_task_someone_already_moved(fake_redis, monkeypat
     assert counts["skipped"] == 1
     dispatched.assert_not_awaited()
     assert await _deferred_keys() == []
+
+
+# ── hand-offs held in the drain (review finding on #886) ───────────────────
+
+
+async def _review_board(make_board, make_agent):
+    board = await make_board(slug=f"rv-{uuid.uuid4().hex[:6]}", auto_dispatch_enabled=True)
+    dev = await make_agent(name=f"Dev-{uuid.uuid4().hex[:6]}", role="developer", board_id=board.id)
+    reviewer = await make_agent(name=f"Reviewer-{uuid.uuid4().hex[:6]}", role="reviewer", board_id=board.id)
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        task = Task(board_id=board.id, title="ready for review", status="review",
+                    assigned_agent_id=dev.id, dispatch_intent="root")
+        s.add(task)
+        await s.commit()
+        await s.refresh(task)
+    return board, dev, reviewer, task
+
+
+@pytest.mark.asyncio
+async def test_review_handoff_in_the_drain_reaches_the_reviewer_after_it(
+    fake_redis, monkeypatch, make_board, make_agent,
+):
+    """Drain → developer hands in for review → drain lifted → the reviewer
+    holds the card. Without the catch-up the card stays on ``review`` with
+    the developer and the watchdog nudges the wrong agent an hour later."""
+    from app.services.task_lifecycle import handle_review_handoff
+
+    board, dev, reviewer, task = await _review_board(make_board, make_agent)
+    dispatched = AsyncMock()
+    monkeypatch.setattr("app.services.dispatch.auto_dispatch_task", dispatched)
+
+    await _set_drain()
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        t = await s.get(Task, task.id)
+        d = await s.get(Agent, dev.id)
+        assert await handle_review_handoff(s, t, board.id, developer=d) is None
+        await s.commit()  # the caller commits its own changes afterwards
+    assert await _deferred_keys() == [f"deferred:review_handoff:{task.id}"]
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        held = await s.get(Task, task.id)
+    assert held.status == "review" and held.assigned_agent_id == dev.id
+    # Not marked as a review card while still with its author: that would
+    # park the developer as if they were the reviewer (review_park).
+    assert held.dispatch_intent == "root"
+
+    # Still drained: nothing is consumed.
+    counts = await update_drain.catch_up(test_engine)
+    assert counts.get("review_handoff", 0) == 0
+    assert len(await _deferred_keys()) == 1
+
+    await _clear_drain()
+    counts = await update_drain.catch_up(test_engine)
+    assert counts["review_handoff"] == 1 and counts["skipped"] == 0
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        handed = await s.get(Task, task.id)
+    assert handed.assigned_agent_id == reviewer.id
+    assert handed.dispatch_intent == "review_handoff" and handed.status == "review"
+    assert await _deferred_keys() == []
+
+
+@pytest.mark.asyncio
+async def test_held_review_handoff_is_dropped_when_the_card_moved_on(
+    fake_redis, monkeypatch, make_board, make_agent,
+):
+    """The operator took the card elsewhere during the update: no hand-off
+    over their decision — and the drop is visible as an event, not silent."""
+    from app.models.activity import ActivityEvent
+
+    board, dev, reviewer, task = await _review_board(make_board, make_agent)
+    await update_drain.defer(update_drain.KIND_REVIEW_HANDOFF, task.id, bind=test_engine,
+                             detail={"developer_id": str(dev.id)})
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        t = await s.get(Task, task.id)
+        t.status = "done"
+        s.add(t)
+        await s.commit()
+    monkeypatch.setattr("app.services.dispatch.auto_dispatch_task", AsyncMock())
+    counts = await update_drain.catch_up(test_engine)
+    assert counts["review_handoff"] == 0 and counts["skipped"] == 1
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        assert (await s.get(Task, task.id)).assigned_agent_id == dev.id
+        events = (await s.exec(select(ActivityEvent).where(
+            ActivityEvent.event_type == "system.update_drain_skipped"))).all()
+    assert [e.task_id for e in events] == [task.id]
+
+
+@pytest.mark.asyncio
+async def test_held_dispatch_of_a_card_past_inbox_is_caught_up(fake_redis, monkeypatch, make_agent):
+    """A test hand-off (user_test, assigned tester) whose dispatch the drain
+    held back is delivered afterwards — not dropped for not being in inbox."""
+    from app.services import dispatch
+
+    monkeypatch.setattr(dispatch, "engine", test_engine)
+    board, task = await _board_task(status="user_test", intent="test_handoff")
+    tester = await make_agent(name=f"Tess-{uuid.uuid4().hex[:6]}", role="tester", board_id=board.id)
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        t = await s.get(Task, task.id)
+        t.assigned_agent_id = tester.id
+        s.add(t)
+        await s.commit()
+    await _set_drain()
+    await dispatch.auto_dispatch_task(task.id, board.id)
+    assert await _deferred_keys() == [f"deferred:dispatch:{task.id}"]
+
+    await _clear_drain()
+    dispatched = AsyncMock()
+    monkeypatch.setattr("app.services.dispatch.auto_dispatch_task", dispatched)
+    counts = await update_drain.catch_up(test_engine)
+    assert counts["dispatch"] == 1 and counts["skipped"] == 0
+    dispatched.assert_awaited_once_with(task.id, board.id)
+
+
+@pytest.mark.asyncio
+async def test_held_dispatch_is_dropped_visibly_when_reassigned(fake_redis, monkeypatch, make_agent):
+    from app.models.activity import ActivityEvent
+    from app.services import dispatch
+
+    monkeypatch.setattr(dispatch, "engine", test_engine)
+    board, task = await _board_task(status="user_test", intent="test_handoff")
+    a = await make_agent(name=f"A-{uuid.uuid4().hex[:6]}", board_id=board.id)
+    b = await make_agent(name=f"B-{uuid.uuid4().hex[:6]}", board_id=board.id)
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        t = await s.get(Task, task.id)
+        t.assigned_agent_id = a.id
+        s.add(t)
+        await s.commit()
+    await _set_drain()
+    await dispatch.auto_dispatch_task(task.id, board.id)
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        t = await s.get(Task, task.id)
+        t.assigned_agent_id = b.id  # someone re-routed it meanwhile
+        s.add(t)
+        await s.commit()
+    await _clear_drain()
+    dispatched = AsyncMock()
+    monkeypatch.setattr("app.services.dispatch.auto_dispatch_task", dispatched)
+    counts = await update_drain.catch_up(test_engine)
+    assert counts["dispatch"] == 0 and counts["skipped"] == 1
+    dispatched.assert_not_awaited()
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        events = (await s.exec(select(ActivityEvent).where(
+            ActivityEvent.event_type == "system.update_drain_skipped"))).all()
+    assert [e.task_id for e in events] == [task.id]
+
+
+@pytest.mark.asyncio
+async def test_operator_reassignment_in_the_drain_is_held_not_lost(
+    auth_client, fake_redis, monkeypatch, make_board, make_agent, make_task,
+):
+    """The operator re-routes an in-progress card during the update: the
+    dispatch to the new agent is recorded and delivered afterwards."""
+    board = await make_board(slug=f"ra-{uuid.uuid4().hex[:6]}", auto_dispatch_enabled=True)
+    a = await make_agent(name=f"A-{uuid.uuid4().hex[:6]}", board_id=board.id)
+    b = await make_agent(name=f"B-{uuid.uuid4().hex[:6]}", board_id=board.id)
+    task = await make_task(board.id, title="re-route me", status="in_progress", assigned_agent_id=a.id)
+    from app.services import dispatch
+    monkeypatch.setattr(dispatch, "engine", test_engine)
+    started = []
+    monkeypatch.setattr("app.routers.tasks.create_tracked_task", lambda coro, **kw: started.append(coro))
+
+    await _set_drain()
+    with patch("app.routers.tasks.emit_event", new_callable=AsyncMock):
+        r = await auth_client.patch(f"/api/v1/boards/{board.id}/tasks/{task.id}",
+                                    json={"assigned_agent_id": str(b.id)})
+    assert r.status_code == 200, r.text
+    for coro in started:
+        await coro
+    assert await _deferred_keys() == [f"deferred:dispatch:{task.id}"]
+
+    await _clear_drain()
+    dispatched = AsyncMock()
+    monkeypatch.setattr("app.services.dispatch.auto_dispatch_task", dispatched)
+    counts = await update_drain.catch_up(test_engine)
+    assert counts["dispatch"] == 1
+    dispatched.assert_awaited_once_with(task.id, board.id)
 
 
 # ── poll claim ─────────────────────────────────────────────────────────────

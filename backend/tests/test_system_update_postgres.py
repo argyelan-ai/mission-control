@@ -184,3 +184,25 @@ async def test_system_state_model_round_trips_jsonb():
         await s.commit()
     rows = await _run("select value->>'kind' from system_state where key = 'deferred:schedule:x'")
     assert rows == [("schedule",)]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_drain_read_leaves_the_callers_transaction_usable(monkeypatch):
+    """A drain read that fails inside the dispatcher's session must not
+    poison it: on Postgres the next query would hit InFailedSqlTransaction."""
+    real = update_drain.read_row
+
+    async def failing(s):
+        await s.exec(text("SELECT * FROM no_such_table_for_the_drain"))
+        return await real(s)
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        board = Board(name="pg-drain", slug=f"pg-drain-{uuid.uuid4().hex[:6]}")
+        s.add(board)
+        await s.flush()  # the caller's own work, still uncommitted
+        monkeypatch.setattr(update_drain, "read_row", failing)
+        state = await update_drain.current(s)
+        assert state.active is False
+        assert (await s.exec(text("SELECT 1"))).scalar() == 1
+        await s.commit()
+        assert await s.get(Board, board.id) is not None

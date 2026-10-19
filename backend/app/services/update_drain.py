@@ -20,6 +20,10 @@ contract:
   ``deferred:<kind>:<id>`` rows and handed out again once the drain is gone
   (ADR-094: "due jobs are caught up after the update"). Rows live in
   Postgres, so they survive the backend and worker restarts an update does.
+  Kinds: a dispatch (re-delivered if the card is still where it was), a
+  review hand-off (run again if the card is still on ``review`` with its
+  author) and a scheduled job. What the catch-up drops because the card
+  moved on is logged and shown as an activity event, never silent.
 
 Why not Redis: the drain must travel with the data the pre-update backup
 holds, and a deliberate ``FLUSHALL`` must not lift it. Redis only mirrors
@@ -59,6 +63,16 @@ WATCH_INTERVAL_SECONDS = 5.0
 #: Kinds of deferred work and what catches them up.
 KIND_DISPATCH = "dispatch"
 KIND_SCHEDULE = "schedule"
+#: A developer's hand-in for review that arrived during the drain. Recorded
+#: before any reviewer is picked, so the catch-up runs the hand-off itself
+#: (``task_lifecycle.handle_review_handoff``) — a plain dispatch would only
+#: re-deliver the card to its author.
+KIND_REVIEW_HANDOFF = "review_handoff"
+KINDS = (KIND_DISPATCH, KIND_SCHEDULE, KIND_REVIEW_HANDOFF)
+
+#: Activity event for held-back work the catch-up did not hand out because
+#: the card moved on during the update (never silent, review finding #886).
+SKIPPED_EVENT = "system.update_drain_skipped"
 
 REASON = "an MC update is in progress — new work starts again after it"
 
@@ -164,15 +178,35 @@ async def current(session: AsyncSession | None = None) -> DrainState:
     work could be handed out just after the engine set the drain. Without:
     the cached state. A failed read keeps the last known state — a drain
     must not lift because one read hiccupped. (The table exists from
-    migration 0219 on; the backend migrates before it serves.)"""
+    migration 0219 on; the backend migrates before it serves.)
+
+    The read runs inside a SAVEPOINT on the caller's connection: on Postgres
+    a failed statement aborts the whole transaction, and the dispatcher's
+    next query would fail with InFailedSqlTransaction. The savepoint is
+    taken on the connection, not via ``session.begin_nested()``, because
+    that would flush the caller's pending changes first."""
     if session is None:
+        return cached_state()
+    try:
+        conn = await session.connection()
+        savepoint = await conn.begin_nested()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("update drain read failed (%s) — keeping the last known state", type(exc).__name__)
         return cached_state()
     try:
         with session.no_autoflush:
             row = await read_row(session)
     except Exception as exc:  # noqa: BLE001 — never let a read break dispatch
+        try:
+            await savepoint.rollback()
+        except Exception:  # noqa: BLE001
+            logger.debug("update drain: savepoint rollback failed", exc_info=True)
         logger.warning("update drain read failed (%s) — keeping the last known state", type(exc).__name__)
         return cached_state()
+    try:
+        await savepoint.commit()
+    except Exception:  # noqa: BLE001 — releasing a read-only savepoint
+        logger.debug("update drain: savepoint release failed", exc_info=True)
     _remember(row)
     return row.state() if row is not None else NOT_DRAINED
 
@@ -284,17 +318,90 @@ async def _take(bind, key: str) -> dict | None:
         return value
 
 
-async def _catch_up_dispatch(bind, task_id: str) -> bool:
+def dispatch_snapshot(task) -> dict:
+    """What a held-back dispatch looked like, for :func:`defer`'s ``detail``.
+
+    The catch-up hands the dispatch out again only if the card is still in
+    that state — a card someone moved or re-routed during the update keeps
+    their decision."""
+    return {
+        "status": task.status,
+        "assigned_agent_id": str(task.assigned_agent_id) if task.assigned_agent_id else None,
+        "dispatch_intent": getattr(task, "dispatch_intent", None),
+    }
+
+
+async def _skipped(bind, task, kind: str, why: str) -> None:
+    """Make a dropped catch-up visible (log + activity event)."""
+    logger.warning("update drain: held-back %s for task %s not handed out — %s", kind, task.id, why)
+    try:
+        from app.services.activity import emit_event
+
+        async with AsyncSession(bind, expire_on_commit=False) as s:
+            await emit_event(
+                s, SKIPPED_EVENT,
+                f"Held back during the MC update, not handed out afterwards: '{task.title}' ({why})",
+                severity="warning", board_id=task.board_id, task_id=task.id,
+                detail={"kind": kind, "reason": why},
+            )
+    except Exception:  # noqa: BLE001 — the event is a courtesy, the log above stays
+        logger.exception("update drain: could not record the skipped %s for task %s", kind, task.id)
+
+
+async def _catch_up_dispatch(bind, task_id: str, held: dict) -> bool:
     from app.models.task import Task
     from app.services.dispatch import auto_dispatch_task
 
     async with AsyncSession(bind, expire_on_commit=False) as s:
         task = await s.get(Task, uuid.UUID(task_id))
-        if task is None or task.status != "inbox" or task.run_control is not None:
-            return False
-        board_id = task.board_id
-    await auto_dispatch_task(task.id, board_id)
+    if task is None:
+        return False
+    # Rows written before the snapshot existed only ever held inbox tasks.
+    want_status = held.get("status") or "inbox"
+    why = None
+    if task.status in ("done", "archived"):
+        why = f"task is {task.status}"
+    elif task.run_control is not None:
+        why = f"run control {task.run_control}"
+    elif task.status != want_status:
+        why = f"status moved from {want_status} to {task.status}"
+    elif "assigned_agent_id" in held and held.get("assigned_agent_id") != (
+        str(task.assigned_agent_id) if task.assigned_agent_id else None
+    ):
+        why = "task was re-assigned"
+    if why:
+        await _skipped(bind, task, KIND_DISPATCH, why)
+        return False
+    await auto_dispatch_task(task.id, task.board_id)
     return True
+
+
+async def _catch_up_review_handoff(bind, task_id: str, held: dict) -> bool:
+    """Run a review hand-off the drain held back — if the card is still on
+    ``review`` with the developer who handed it in."""
+    from app.models.agent import Agent
+    from app.models.task import Task
+    from app.services.task_lifecycle import handle_review_handoff
+
+    async with AsyncSession(bind, expire_on_commit=False) as s:
+        task = await s.get(Task, uuid.UUID(task_id))
+        if task is None:
+            return False
+        dev_id = held.get("developer_id")
+        why = None
+        if task.status != "review":
+            why = f"status moved from review to {task.status}"
+        elif task.run_control is not None:
+            why = f"run control {task.run_control}"
+        elif dev_id and str(task.assigned_agent_id) != dev_id:
+            why = "task was re-assigned"
+        if why:
+            await _skipped(bind, task, KIND_REVIEW_HANDOFF, why)
+            return False
+        developer = await s.get(Agent, uuid.UUID(dev_id)) if dev_id else None
+        reviewer = await handle_review_handoff(s, task, task.board_id, developer=developer)
+        await s.commit()
+        return reviewer is not None
 
 
 async def _catch_up_schedule(job_id: str, retry_attempt: int = 0) -> bool:
@@ -310,7 +417,7 @@ async def catch_up(bind=None) -> dict[str, int]:
     Each row is deleted before its work runs, so a crash in between loses
     that item rather than running it twice."""
     bind = bind or engine
-    counts = {KIND_DISPATCH: 0, KIND_SCHEDULE: 0, "skipped": 0}
+    counts = {**{k: 0 for k in KINDS}, "skipped": 0}
     async with AsyncSession(bind, expire_on_commit=False) as s:
         row = await read_row(s)
         if row is not None and row.state().active:
@@ -323,7 +430,9 @@ async def catch_up(bind=None) -> dict[str, int]:
         kind, ref = value.get("kind"), value.get("id")
         try:
             if kind == KIND_DISPATCH and ref:
-                done = await _catch_up_dispatch(bind, ref)
+                done = await _catch_up_dispatch(bind, ref, value)
+            elif kind == KIND_REVIEW_HANDOFF and ref:
+                done = await _catch_up_review_handoff(bind, ref, value)
             elif kind == KIND_SCHEDULE and ref:
                 attempt = value.get("retry_attempt")
                 done = await _catch_up_schedule(ref, attempt if isinstance(attempt, int) else 0)
@@ -336,10 +445,11 @@ async def catch_up(bind=None) -> dict[str, int]:
             counts[kind] += 1
         else:
             counts["skipped"] += 1
-    if any(counts[k] for k in (KIND_DISPATCH, KIND_SCHEDULE)):
+    if any(counts.values()):
         logger.info(
-            "update drain lifted — caught up %d dispatch(es), %d scheduled job(s)",
-            counts[KIND_DISPATCH], counts[KIND_SCHEDULE],
+            "update drain lifted — caught up %d dispatch(es), %d review hand-off(s), "
+            "%d scheduled job(s); %d skipped",
+            counts[KIND_DISPATCH], counts[KIND_REVIEW_HANDOFF], counts[KIND_SCHEDULE], counts["skipped"],
         )
     return counts
 
