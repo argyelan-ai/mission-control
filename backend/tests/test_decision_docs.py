@@ -47,7 +47,8 @@ from app.services.decision_docs import (
 # +2 on 2026-10-17: ADR-094 (self-update from Settings) and ADR-095 (docker
 #   socket proxy hardening) — Accepted, the operator approved the update
 #   plan's recommendations on 2026-10-17.
-EXPECTED_DECISION_DOCS = 94
+# +1 on 2026-10-19: ADR-096 (delivered is not working).
+EXPECTED_DECISION_DOCS = 95
 
 
 def _repo_root() -> Path:
