@@ -31,3 +31,6 @@ jobs:
       - name: Lint the files agents follow (scripts, hooks, docs, AGENTS.md)
         if: always()
         run: bash tools/guards/lint.sh AGENTS.md CLAUDE.md docs scripts tools .github
+      - name: Hook installer keeps foreign hooks and stays idempotent
+        if: always()
+        run: python3 -m unittest tools/guards/tests/test_install_hooks.py
