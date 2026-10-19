@@ -648,6 +648,32 @@ describe("SessionsPage — the selected agent follows the live data, not the cli
     }
   });
 
+  it("refetches the task list when the agent picks up a task the list does not have yet", async () => {
+    // The board's task list has no refetch of its own. An agent that picks a
+    // task up after the list loaded must still get its working-on row.
+    useAppStore.setState({ activeBoardId: "board-1" });
+    type TaskRow = Awaited<ReturnType<typeof api.tasks.list>>[number];
+    const list = vi
+      .spyOn(api.tasks, "list")
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([{ id: "task-9", title: "Neu aufgenommen" } as unknown as TaskRow]);
+    vi.spyOn(api.agents, "listDockerSessions")
+      .mockResolvedValueOnce([mkAgent({ id: "agent-1", name: "Agent One", current_task_id: null })])
+      .mockResolvedValue([mkAgent({ id: "agent-1", name: "Agent One", current_task_id: "task-9" })]);
+    try {
+      const { qc } = renderPage();
+      await waitFor(() => expect(list).toHaveBeenCalledTimes(1));
+      await qc.invalidateQueries({ queryKey: ["agents", "docker-sessions"] });
+      await waitFor(() =>
+        expect(screen.getByTestId("chat-view-working-on")).toHaveTextContent("task-9|Neu aufgenommen")
+      );
+      // A task the list never has (another board) asks once, not in a loop.
+      expect(list.mock.calls.length).toBeLessThanOrEqual(3);
+    } finally {
+      useAppStore.setState({ activeBoardId: null });
+    }
+  });
+
   it("picks up a changed status on the next refetch", async () => {
     vi.spyOn(api.agents, "listDockerSessions")
       .mockResolvedValueOnce([mkAgent({ id: "agent-1", name: "Agent One", status: "idle" })])

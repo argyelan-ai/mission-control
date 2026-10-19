@@ -265,7 +265,7 @@ function SessionsPageContent() {
     refetchInterval: 15_000,
   });
 
-  const { data: tasks = [] } = useQuery({
+  const { data: tasks = [], refetch: refetchTasks, isSuccess: tasksLoaded } = useQuery({
     queryKey: ["tasks", activeBoardId],
     queryFn: () => api.tasks.list(activeBoardId!),
     enabled: !!activeBoardId,
@@ -350,6 +350,18 @@ function SessionsPageContent() {
   // an agent that has since been deleted, where it is all that is left.
   const selectedLive: AgentWithState | null =
     (selected ? agents.find((a) => a.id === selected.id) : undefined) ?? selected;
+
+  // The chat's working-on row finds the bound task in the board's task list,
+  // and that list has no refetch of its own. An agent that picks up a task
+  // after the list loaded would show no row until something else refetched
+  // it. So when the live agent names a task the list does not have, fetch the
+  // list once more — once per task id, so a task on another board never loops.
+  const workingOnId = selectedLive?.current_task_id ?? null;
+  const workingOnMissing = !!workingOnId && !tasks.some((task) => task.id === workingOnId);
+  // Only after the first load: a fetch still in flight is not "missing".
+  useEffect(() => {
+    if (workingOnMissing && tasksLoaded) void refetchTasks();
+  }, [workingOnId, workingOnMissing, tasksLoaded, refetchTasks]);
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["agents", "docker-sessions"] });
