@@ -74,7 +74,24 @@ async def _sse_generator(
         await pubsub_redis.aclose()
 
 
+#: Headers every SSE response carries. sse-starlette already sends
+#: ``X-Accel-Buffering: no`` and defaults Cache-Control to ``no-store``;
+#: ``no-transform`` is added on top so no proxy may compress (and thereby
+#: buffer) the stream. Live finding 19.10.2026: Next's built-in compression
+#: behind the /api rewrite on :3000 gzipped the chat stream and held ping +
+#: state back — the chat said "Status unklar" while the backend had long
+#: answered. The ``compression`` middleware Next uses skips any response with
+#: ``no-transform``, so this stays safe even if next.config.ts's
+#: ``compress: false`` is ever reverted.
+SSE_HEADERS: dict[str, str] = {"Cache-Control": "no-store, no-transform"}
+
+
+def sse_response(content) -> EventSourceResponse:
+    """The ONE way to build an SSE response in this app (see SSE_HEADERS)."""
+    return EventSourceResponse(content, headers=SSE_HEADERS)
+
+
 def make_sse_response(
     channels: list[str], transform: Transform | None = None
 ) -> EventSourceResponse:
-    return EventSourceResponse(_sse_generator(channels, transform=transform))
+    return sse_response(_sse_generator(channels, transform=transform))
