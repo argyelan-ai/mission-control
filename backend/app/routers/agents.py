@@ -3435,7 +3435,7 @@ async def agent_poll(
                 # the runtime. Not DB work: commit the read transaction
                 # first so no pool connection is pinned across those awaits.
                 await session.commit()
-                # include_local (ADR-096): a local runtime whose model does
+                # include_local (ADR-097): a local runtime whose model does
                 # not answer holds the claim too — delivered is not working.
                 _rt_ready, _rt_reason = await runtime_ready_for_agent(
                     agent, session, include_local=True, task=task,

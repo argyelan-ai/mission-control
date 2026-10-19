@@ -47,7 +47,8 @@ from app.services.decision_docs import (
 # +2 on 2026-10-17: ADR-094 (self-update from Settings) and ADR-095 (docker
 #   socket proxy hardening) — Accepted, the operator approved the update
 #   plan's recommendations on 2026-10-17.
-# +1 on 2026-10-19: ADR-096 (delivered is not working).
+# +1 on 2026-10-19: ADR-097 (delivered is not working). 096 is reserved for
+#   the multi-box ADR, so the count skips it until that one lands.
 EXPECTED_DECISION_DOCS = 95
 
 

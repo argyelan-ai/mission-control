@@ -12,7 +12,7 @@ lifecycle (`mc ack` / `mc finish` / `mc blocked`).
 `in_progress`. A hang, a dead TUI, or a per-task deadline all trip a watchdog
 that SIGKILLs + relaunches the TUI and blocks the task.
 
-**Delivered is not working ([ADR-096](../../docs/decisions/096-delivered-is-not-working.md)).**
+**Delivered is not working ([ADR-097](../../docs/decisions/097-delivered-is-not-working.md)).**
 On the ACP driver (`OMP_DRIVER=acp`) the bridge claims a task (`mc ack` →
 in_progress) only on the model's first work — a thought, a tool call, a second
 text chunk, or a turn that ended normally with text (`FirstActivityAck`,

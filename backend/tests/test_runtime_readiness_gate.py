@@ -241,7 +241,7 @@ async def test_runtime_db_create_rejects_bad_control_url(client, fake_redis):
     assert resp.status_code == 422
 
 
-# ── Local runtimes (ADR-096, 19.10.2026) ─────────────────────────────────────
+# ── Local runtimes (ADR-097, 19.10.2026) ─────────────────────────────────────
 # Local AI is the main part of MC: a task for an agent whose own box is off
 # must wait in the inbox — not be delivered into a session that can never
 # answer (live: Spark :8000 off, task 4de17c6a went "in progress" 4 s after

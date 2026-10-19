@@ -1,4 +1,4 @@
-# ADR-096 — Delivered is not working: claim on the model's first work, hold delivery while a local runtime is down
+# ADR-097 — Delivered is not working: claim on the model's first work, hold delivery while a local runtime is down
 
 **Status:** Accepted
 **Datum:** 2026-10-19
@@ -35,6 +35,9 @@ Two things made that possible:
    comment is an implicit ACK in the backend); a run whose model never
    answered is blocked straight from inbox, with the cause in the blocker
    question. The native TUI path keeps the up-front ack (no event stream).
+   The ownership check before a retry or continue-nudge (`mc task-get`,
+   #881) counts `inbox` as still ours while the card is unclaimed; another
+   status or another assignee still stops the run.
 2. **The backend accepts the delivered-unclaimed shape.** The heartbeat
    control channel treats an inbox card with `dispatched_at` set, no ACK and
    the same dispatch attempt as live work (not "withdrawn"); a requeue still

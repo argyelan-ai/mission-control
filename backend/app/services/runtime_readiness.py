@@ -1,6 +1,6 @@
 """Runtime-readiness dispatch gate — power-managed and local runtimes.
 
-ADR-096 (19.10.2026) extends the gate below to every LOCAL runtime (a runtime
+ADR-097 (19.10.2026) extends the gate below to every LOCAL runtime (a runtime
 bound to one of our own boxes, ``heads.pairs.is_local``) — but only for the
 poll claim (``include_local=True`` from ``agents.agent_poll``): a task for an
 agent whose model is switched off waits in the inbox until the model answers
@@ -187,7 +187,7 @@ async def runtime_ready_for_agent(
 
     (True, None)  → dispatch / poll-claim may proceed (the common case).
     (False, msg)  → the agent's power-managed backend is asleep/not serving,
-                    or (``include_local``, ADR-096) its local model server
+                    or (``include_local``, ADR-097) its local model server
                     does not answer; hold the task until it does.
     ``task`` only feeds the timeline note of a held task.
     """
