@@ -40,6 +40,9 @@ RPC = ROOT / "rpc"
 NORMAL = RPC / "acp-normal-turn.ndjson"
 SILENT = RPC / "acp-silent-cancel.ndjson"
 UNREACHABLE = RPC / "acp-model-unreachable.ndjson"
+# Live shape (task 4de17c6a, Spark :8000 off): omp retried for ~7 min, then
+# sent its error as ONE message chunk and ended the turn "refusal".
+ECONNREFUSED = RPC / "acp-model-econnrefused.ndjson"
 
 _REFLECTION = (
     "\n\n## Was wurde gemacht\nDer Lauf hat die Aufgabe vollstaendig erledigt.\n"
@@ -94,11 +97,23 @@ def _run(fixture: Path, on_first_activity) -> bridge.RunOutcome:
 
 # ── 1. run_acp_once reports the first sign of life ─────────────────────────
 
-def test_first_activity_fires_once_on_the_first_model_chunk():
+def test_first_activity_fires_once_when_the_model_answered():
     hits: list[int] = []
     outcome = _run(NORMAL, lambda: hits.append(1))
-    assert outcome.saw_session and outcome.saw_agent_start
+    assert outcome.saw_session and outcome.model_worked
     assert hits == [1], hits
+
+
+def test_omp_error_chunk_is_not_model_work():
+    """The exact live shape: one chunk with omp's connection error + stopReason
+    'refusal'. Must not claim — the model never ran."""
+    hits: list[int] = []
+    outcome = _run(ECONNREFUSED, lambda: hits.append(1))
+    assert outcome.saw_session
+    assert "ECONNREFUSED" in outcome.final_text
+    assert outcome.final_stop_reason == "refusal"
+    assert outcome.model_worked is False
+    assert hits == []
 
 
 def test_first_activity_never_fires_for_a_session_without_model_output():
@@ -186,15 +201,15 @@ def test_gate_acks_at_most_once_across_threads():
 
 
 def test_output_without_a_gate_signal_still_claims_before_terminal():
-    """Belt: the model produced output (saw_agent_start) but the callback was
-    lost — the claim must still happen before finish (mc finish requires
-    in_progress)."""
+    """Belt: the model worked (model_worked) but the callback was lost — the
+    claim must still happen before finish (mc finish requires in_progress)."""
     lc = Recording()
     gate = bridge.FirstActivityAck(lc, "T1")
 
     def run_once() -> bridge.RunOutcome:
         o = bridge.RunOutcome()
         o.saw_session = o.saw_agent_start = o.saw_agent_end = True
+        o.model_worked = True
         o.final_stop_reason = "end_turn"
         o.final_text = "done" + _REFLECTION
         return o
@@ -217,7 +232,7 @@ _ENV_KEYS = (
 )
 
 
-def _serve_once(fixture: Path, *, retries: str = "1") -> list[tuple]:
+def _serve_once(fixture: Path, *, retries: str = "1", continues: str = "0") -> list[tuple]:
     saved = {k: os.environ.get(k) for k in _ENV_KEYS}
     orig_run = bridge.run_acp_once
     fakes: list = []
@@ -240,7 +255,7 @@ def _serve_once(fixture: Path, *, retries: str = "1") -> list[tuple]:
                 "OMP_MSG_NUDGE_STATE_FILE": str(tmp / "nudge-state"),
                 "OMP_MSG_NUDGE_MSG_FILE": str(tmp / "nudge-msg"),
                 "OMP_MAX_RETRIES": retries,
-                "OMP_MAX_CONTINUES": "0",
+                "OMP_MAX_CONTINUES": continues,
             })
             os.environ.pop("OMP_TASK_DEADLINE", None)
             os.environ.pop("OMP_PROFILE", None)
@@ -286,6 +301,19 @@ def test_serve_loop_never_claims_a_task_the_model_cannot_answer():
     kinds = [c[0] for c in calls]
     assert "ack" not in kinds, calls
     assert kinds and kinds[0] == "blocker", calls
+
+
+def test_serve_loop_never_claims_on_omps_error_chunk():
+    """Operator sabotage probe, live shape: Spark off → omp's ECONNREFUSED
+    chunk + 'refusal'. Continue-nudges included — the card never becomes
+    in_progress and ends blocked with the reason."""
+    calls = _serve_once(ECONNREFUSED, retries="1", continues="2")
+    kinds = [c[0] for c in calls]
+    assert "ack" not in kinds, calls
+    assert kinds and kinds[0] == "blocker", calls
+    assert "Modell hat nicht geantwortet" in calls[0][3], calls[0]
+    # The two continue-nudge notes were held, not lost.
+    assert sum("continue-nudge" in c[2] for c in calls if c[0] == "comment") == 2, calls
 
 
 def test_serve_loop_claims_once_the_model_answers():

@@ -286,6 +286,12 @@ class RunOutcome:
     saw_session: bool = False
     saw_agent_start: bool = False
     saw_agent_end: bool = False
+    # ACP path (19.10.2026): the MODEL worked — a thought, a tool call, real
+    # streamed text (2+ chunks) or a turn that ended normally with text.
+    # Stricter than saw_agent_start: omp reports a dead model endpoint as ONE
+    # message chunk ("ECONNREFUSED: Unable to connect…") + stopReason
+    # "refusal"; that sets saw_agent_start but is not work.
+    model_worked: bool = False
     final_stop_reason: Optional[str] = None
     final_text: str = ""
     error_message: Optional[str] = None
@@ -1660,7 +1666,7 @@ def drive_live_run(
                 lifecycle.ack(task_id)
                 acked = True
             return
-        if ack_gate.fired or o.saw_agent_start:
+        if ack_gate.fired or o.model_worked:
             ack_gate.trigger()  # no-op when the reader already fired it
             ack_gate.wait()
             acked = True
@@ -4538,12 +4544,18 @@ def run_acp_once(
     keeps the pure-driver behaviour.
 
     ``on_first_activity`` (19.10.2026, "zustellen ist nicht arbeiten"):
-    called ONCE on the model's first sign of life — the first
-    ``agent_message_chunk``/``agent_thought_chunk`` or ``tool_call``. A
-    session that opens but never produces anything (runtime down, model
-    unreachable) never fires it. serve_loop wires FirstActivityAck.trigger
-    here, so the task is claimed when the model works, not when omp accepts
-    the prompt. Exceptions are swallowed: it must never kill the run.
+    called ONCE when the model demonstrably works — the first
+    ``agent_thought_chunk`` or ``tool_call``, the SECOND
+    ``agent_message_chunk``, or (short answers) a turn that ended
+    ``end_turn``/``max_tokens`` with text. A lone message chunk is not
+    enough: with the model endpoint down omp retries for minutes and then
+    sends its error as ONE chunk ("ECONNREFUSED: Unable to connect…", live
+    task 4de17c6a) and ends the turn with stopReason ``refusal``. A session
+    that opens but never produces work never fires it, and
+    ``outcome.model_worked`` stays False. serve_loop wires
+    FirstActivityAck.trigger here, so the task is claimed when the model
+    works, not when omp accepts the prompt. Exceptions are swallowed: it must
+    never kill the run.
 
     ``context_pct`` (G5 holder, replaces the former module global): the
     caller-owned ACPContextPct the usage_update handler stamps. serve_loop
@@ -4592,11 +4604,15 @@ def run_acp_once(
     _throttle = {"chars": -10**9, "at": time.monotonic(), "pending": None}
 
     _first_activity_seen = [False]
+    _message_chunks = [0]
 
     def _first_activity() -> None:
-        if _first_activity_seen[0] or on_first_activity is None:
+        if _first_activity_seen[0]:
             return
         _first_activity_seen[0] = True
+        outcome.model_worked = True
+        if on_first_activity is None:
+            return
         try:
             on_first_activity()
         except Exception:  # noqa: BLE001 — the claim must never kill the run
@@ -4605,8 +4621,12 @@ def run_acp_once(
     def on_event(params: dict) -> None:
         upd = params.get("update") or {}
         su = upd.get("sessionUpdate")
-        if su in ("agent_message_chunk", "agent_thought_chunk", "tool_call"):
+        if su in ("agent_thought_chunk", "tool_call"):
             _first_activity()
+        elif su == "agent_message_chunk":
+            _message_chunks[0] += 1
+            if _message_chunks[0] >= 2:
+                _first_activity()
         if su in ("agent_message_chunk", "agent_thought_chunk"):
             c = upd.get("content") or {}
             if c.get("type") == "text":
@@ -4853,6 +4873,13 @@ def run_acp_once(
         outcome.final_stop_reason = prompt_result.stopReason
         outcome.usage = prompt_result.usage
         outcome.saw_agent_end = True
+        # A short, normally ended answer (one chunk) is work too — an omp
+        # error ends "refusal", a cancel "cancelled", neither counts.
+        if (
+            (prompt_result.stopReason or "") in ("end_turn", "max_tokens")
+            and outcome.final_text.strip()
+        ):
+            _first_activity()
         # ONE final assistant line: the complete text + usage stamped here
         # (never 0/0 per chunk) + the real sessionId (Review #465 mid 3/5).
         mapper.set_prompt_usage(prompt_result.usage)
