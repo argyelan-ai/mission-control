@@ -257,14 +257,18 @@ def _omp_adapter(harness: str = OMP) -> TranscriptAdapter:
 
     ``harness`` waehlt nur, WELCHER Treiber-Schalter gilt: der Chat folgt dem
     Zeiger des ACP-Daemons nur, wenn der Chat dieses Harness wirklich ueber
-    ACP laeuft (``omp_chat.chat_runs_over_acp``, zur Aufrufzeit gelesen).
-    Der Adapter-Name bleibt ``omp`` — Leser und Format sind dieselben."""
+    ACP laeuft (``omp_chat.chat_runs_over_acp``, zur Aufrufzeit gelesen —
+    ``omp_chat.find_active_session`` fragt den omp-Treiber selbst). Der
+    Adapter-Name bleibt ``omp`` — Leser und Format sind dieselben."""
     from app.services import omp_chat
 
-    def find_active_session(tdir: Path):
-        return omp_chat.find_active_session(
-            tdir, acp_chat=omp_chat.chat_runs_over_acp(harness)
-        )
+    find_active_session = omp_chat.find_active_session
+    if harness != OMP:
+
+        def find_active_session(tdir: Path):
+            return omp_chat.find_active_session(
+                tdir, acp_chat=omp_chat.chat_runs_over_acp(harness)
+            )
 
     return TranscriptAdapter(
         name=OMP,

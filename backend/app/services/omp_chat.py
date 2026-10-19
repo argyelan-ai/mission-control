@@ -347,15 +347,18 @@ def chat_runs_over_acp(harness: str | None) -> bool:
 
 
 def find_active_session(
-    tdir: Path, *, acp_chat: bool = False
+    tdir: Path, *, acp_chat: bool | None = None
 ) -> tuple[Path, dict[str, Any]] | None:
     """Die CHAT-Sitzung unter ``tdir`` — die, die der Agenten-Chat zeigt.
 
-    ``acp_chat=False`` (nativer Treiber, Standard fuer jeden Aufrufer, der
-    den Treiber nicht kennt): die zuletzt geschriebene Sitzung, nichts
-    ausgenommen — das Verhalten vor dieser Aenderung. Die Adapter
-    (``transcript_adapters``) setzen ``acp_chat`` je Harness ueber
-    :func:`chat_runs_over_acp`.
+    ``acp_chat`` sagt, ob der Chat ueber den ACP-Daemon laeuft. ``None``
+    (der omp-Adapter): zur Aufrufzeit aus dem Treiber des omp-Harness
+    (:func:`chat_runs_over_acp`). Der Hermes-Adapter setzt es aus
+    ``HERMES_DRIVER``.
+
+    ``acp_chat=False`` (nativer Treiber, auch der Flotten-Rueckweg
+    ``OMP_DRIVER_DEFAULT=native``): die zuletzt geschriebene Sitzung, nichts
+    ausgenommen und kein Zeiger — das Verhalten vor dieser Aenderung.
 
     ``acp_chat=True``:
 
@@ -380,6 +383,8 @@ def find_active_session(
     if not tdir.is_dir():
         return None
 
+    if acp_chat is None:
+        acp_chat = chat_runs_over_acp(HARNESS)
     if acp_chat:
         chosen = _pointed_chat_transcript(tdir)
         if chosen is None:

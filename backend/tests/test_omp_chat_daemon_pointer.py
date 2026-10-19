@@ -57,7 +57,7 @@ def _native(folder: Path, stamp: str, sid: str, cwd: str, *entries_ts: str) -> P
          "cwd": cwd},
     ]
     lines += [_msg(i, ts) for i, ts in enumerate(entries_ts)]
-    path.write_text("".join(json.dumps(l) + "\n" for l in lines))
+    path.write_text("".join(json.dumps(line) + "\n" for line in lines))
     return path
 
 
@@ -69,7 +69,7 @@ def _sink(folder: Path, stamp: str, sid: str, *entries_ts: str, task_id: str | N
     if task_id:
         header["taskId"] = task_id
     lines = [header] + [_msg(100 + i, ts) for i, ts in enumerate(entries_ts)]
-    path.write_text("".join(json.dumps(l) + "\n" for l in lines))
+    path.write_text("".join(json.dumps(line) + "\n" for line in lines))
     return path
 
 
