@@ -261,6 +261,48 @@ mc_guard_single_stack() {
              --format '{{.Label "com.docker.compose.project"}}|{{.Label "com.docker.compose.project.working_dir"}}|{{.Image}}' 2>/dev/null || true)
 }
 
+# ── Port preflight ───────────────────────────────────────────────────────────
+# Every host port the stack publishes must be free before it starts. Without
+# this a busy port surfaced as Docker's raw "address already in use" after the
+# pull or the build — on the prebuilt path even as "did not come up in time".
+# backend/tests/test_install_port_preflight.py drives these with a fake docker.
+
+# Host ports from the effective compose config (profiles, override file and
+# .env applied), one per line, sorted.
+mc_published_ports() {
+  docker compose config 2>/dev/null \
+    | sed -n 's/^[[:space:]]*published:[[:space:]]*"\{0,1\}\([0-9][0-9]*\)"\{0,1\}[[:space:]]*$/\1/p' \
+    | sort -un
+}
+
+# True when something already accepts connections on 127.0.0.1:<port>.
+# bash's /dev/tcp: no lsof/ss/python needed (a closed local port refuses at once).
+mc_port_in_use() {
+  (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null
+}
+
+mc_port_preflight() {
+  local port ports=() busy=() hint
+  # A stack of this directory already runs (re-run, --update): the ports
+  # are its own. Another MC stack is mc_guard_single_stack's job.
+  [ -z "$(docker compose ps -q 2>/dev/null || true)" ] || return 0
+  while IFS= read -r port; do
+    [ -n "$port" ] || continue
+    ports+=("$port")
+    mc_port_in_use "$port" && busy+=("$port")
+  done < <(mc_published_ports)
+  [ "${#ports[@]}" -gt 0 ] || return 0
+  if [ "${#busy[@]}" -eq 0 ]; then
+    say "✓ ports free: $(IFS=,; printf '%s' "${ports[*]}" | sed 's/,/, /g')"
+    return 0
+  fi
+  for port in "${busy[@]}"; do
+    if [ "$(uname -s)" = Darwin ]; then hint="lsof -nP -iTCP:$port -sTCP:LISTEN"; else hint="sudo ss -ltnp 'sport = :$port'"; fi
+    printf '\033[1;31m✗ Port %s is already in use on this machine — Mission Control needs it. Find the program: %s\033[0m\n' "$port" "$hint" >&2
+  done
+  fail "Stop the program(s) above or move them to another port, then re-run the installer (safe — nothing was started)."
+}
+
 # ── Health + update safety helpers ──────────────────────────────────────────
 # Shared by the fresh install and --update; backend/tests/test_install_update.py
 # drives them (and the whole --update path) against a fake docker in PATH.
@@ -510,6 +552,7 @@ build_locally() {
 boot_stack() {
   local channel="$1"
   mc_guard_single_stack
+  mc_port_preflight
   if [ "$channel" = stable ] && docker compose pull backend frontend >/dev/null 2>&1; then
     say "→ using prebuilt images ($(mc_env_get MC_IMAGE_TAG)), starting the stack ..."
     docker compose pull >/dev/null 2>&1 || true   # rest (db/redis/caddy/qdrant)
