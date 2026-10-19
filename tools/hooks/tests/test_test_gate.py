@@ -343,6 +343,15 @@ def test_failure_that_is_already_on_main_does_not_block(repo):
     "find . -maxdepth 0 -exec git push \;",
     "awk 'BEGIN{system(\"git push\")}'",
     "python3 -c \"import subprocess; subprocess.run(['g'+'it', 'push'])\"",
+    # Runde 2c (review #894): run-time text and wrapper option values
+    "eval \"$(printf 'git push')\"",
+    "eval $(echo git push)",
+    "eval `echo git push`",
+    "c=$(echo git push); $c",
+    "sh -c \"$X_NOT_SET_ANYWHERE\"",
+    "source <(echo git push)",
+    "bash <(echo git push)",
+    "env -C . git push",
 ])
 def test_round2b_spellings_and_folder_tricks_block(repo, form):
     # the session sits in the red checkout; none of these may wave it through

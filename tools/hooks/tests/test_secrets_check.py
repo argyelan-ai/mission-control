@@ -229,3 +229,18 @@ def test_allow_marker_only_counts_in_test_files(repo):
     r = run_hook("secrets-check.sh", f"git -C {repo} commit -m ok")
     assert r.returncode == 0, r.stderr
     assert "allow marker used" in r.stderr  # never silent: the PR reviewer sees it
+
+
+# --- Runde 2c (Review #894) ---------------------------------------------------
+
+
+@pytest.mark.parametrize("form", [
+    "eval \"$(echo git commit -am x)\"",
+    "c=$(echo git commit -am x); $c",
+    "env -C . git commit -am x",
+    "bash <(echo git commit -am x)",
+])
+def test_run_time_text_and_wrapper_values_cannot_hide_a_commit(repo, form):
+    write(repo, "README.md", f"oops {FAKE_GH}\n")
+    r = run_hook("secrets-check.sh", form, cwd=repo)
+    assert r.returncode == 2, (form, r.stderr)

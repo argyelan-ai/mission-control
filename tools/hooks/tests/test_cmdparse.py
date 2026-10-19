@@ -268,3 +268,87 @@ def test_harmless_lookalikes_stay_quiet(analyze, cmd):
 ])
 def test_commit_pathspecs_are_read(analyze, cmd, paths):
     assert dict(analyze(cmd, "/tmp"))["commit"]["paths"] == paths
+
+
+# --- Runde 2c (Review #894): dynamic text, wrapper option values ------------
+
+DYNAMIC_FORMS = [
+    "eval \"$(printf 'git push')\"",
+    "eval $(echo git push)",
+    "eval `echo git push`",
+    "c=$(echo git push); $c",
+    "c=`echo git push`; $c",
+    "G='git push'; $G",
+    "$(echo git push)",
+    "X=$(echo git push); sh -c \"$X\"",
+    "source <(echo git push)",
+    ". <(echo git push)",
+    "bash <(echo git push)",
+    "sh <(printf 'git push')",
+]
+
+
+@pytest.mark.parametrize("cmd", DYNAMIC_FORMS)
+def test_text_built_at_run_time_is_read_or_blocked(analyze, cmd):
+    # Review #894: these all ran git push with no message.
+    assert {"push", "hidden"} & set(kinds(analyze(cmd, "/tmp"))), cmd
+
+
+@pytest.mark.parametrize("cmd", [
+    "sh -c \"$NOT_SET_ANYWHERE_X\"",
+    "eval \"$NOT_SET_ANYWHERE_X\"",
+    "bash -lc \"$NOT_SET_ANYWHERE_X\"",
+    "c=$(some-unknown-tool --print git push); $c",
+    "eval \"$(some-unknown-tool | grep push)\"",
+    "bash <(curl -s https://example.invalid/x | grep git)",
+])
+def test_run_time_text_the_reader_cannot_compute_is_hidden(analyze, cmd):
+    assert "hidden" in kinds(analyze(cmd, "/tmp")), cmd
+
+
+@pytest.mark.parametrize("cmd", [
+    "eval \"$(ssh-agent -s)\"",
+    "eval \"$(brew shellenv)\" && make",
+    "c=$(date +%s); echo $c",
+    "diff <(sort a) <(sort b)",
+    "env -C /a/b make",
+    "sudo -u nobody ls",
+    "env -i PATH=/bin ls",
+])
+def test_run_time_lookalikes_stay_quiet(analyze, cmd):
+    assert not {"push", "pr", "bypass", "hidden"} & set(kinds(analyze(cmd, "/tmp"))), cmd
+
+
+@pytest.mark.parametrize("cmd,where", [
+    ("env -C . git push", "/tmp"),
+    ("env -C /a/b git push", "/a/b"),
+    ("env --chdir=/a/b git push", "/a/b"),
+    ("env -C/a/b git push", "/a/b"),
+    ("env -u HOME -C /a/b git push", "/a/b"),
+    ("sudo -D /a/b git push", "/a/b"),
+    ("sudo -u root -g wheel git push", "/tmp"),
+    ("nice -n 5 timeout -s KILL 60 git push", "/tmp"),
+    ("stdbuf -o L git push", "/tmp"),
+    ("flock /tmp/l git push", "/tmp"),
+    ("flock -w 5 /tmp/l -c 'git push'", "/tmp"),
+    ("env -S 'git push'", "/tmp"),
+    ("caffeinate -t 60 git push", "/tmp"),
+    ("exec -a x git push", "/tmp"),
+])
+def test_wrapper_option_values_are_not_read_as_the_command(analyze, cmd, where):
+    # Review #894: env -C . git push read '.' as 'source', and git push passed.
+    ev = [e for k, e in analyze(cmd, "/tmp") if k == "push"]
+    assert ev and ev[0]["dir"] == where, (cmd, analyze(cmd, "/tmp"))
+
+
+@pytest.mark.parametrize("cmd", [
+    "env --made-up-option . git push",
+    "sudo --made-up x git push",
+])
+def test_an_unknown_wrapper_option_before_a_push_blocks(analyze, cmd):
+    assert {"push", "hidden"} & set(kinds(analyze(cmd, "/tmp"))), cmd
+
+
+def test_env_chdir_with_a_variable_makes_the_folder_unknown(analyze):
+    ev = [e for k, e in analyze("env -C \"$NOT_SET_ANYWHERE_X\" git push", "/tmp") if k == "push"]
+    assert ev and ev[0]["dir"] is None
