@@ -252,13 +252,24 @@ def _claude_adapter(
     )
 
 
-def _omp_adapter() -> TranscriptAdapter:
+def _omp_adapter(harness: str = OMP) -> TranscriptAdapter:
+    """omp-Transkripte lesen — fuer omp selbst und fuer Hermes.
+
+    ``harness`` waehlt nur, WELCHER Treiber-Schalter gilt: der Chat folgt dem
+    Zeiger des ACP-Daemons nur, wenn der Chat dieses Harness wirklich ueber
+    ACP laeuft (``omp_chat.chat_runs_over_acp``, zur Aufrufzeit gelesen).
+    Der Adapter-Name bleibt ``omp`` — Leser und Format sind dieselben."""
     from app.services import omp_chat
+
+    def find_active_session(tdir: Path):
+        return omp_chat.find_active_session(
+            tdir, acp_chat=omp_chat.chat_runs_over_acp(harness)
+        )
 
     return TranscriptAdapter(
         name=OMP,
         resolve_transcript_dir=omp_chat.resolve_transcript_dir,
-        find_active_session=omp_chat.find_active_session,
+        find_active_session=find_active_session,
         fresh_session_pane_marker=omp_chat.FRESH_SESSION_MARKER,
         preview_channel=omp_chat.preview_channel,
         session_scan_root=omp_chat.session_scan_root,
@@ -285,7 +296,7 @@ _BUILDERS: dict[str, Callable[[], TranscriptAdapter]] = {
     # laesst host+hermes ausdruecklich zu). Ohne diesen Eintrag waere jener
     # Zweig toter Code — der History-Endpunkt fragt immer ueber
     # ``adapter_for``, und ein unbekannter Harness bekommt den Claude-Adapter.
-    HERMES: _omp_adapter,
+    HERMES: lambda: _omp_adapter(HERMES),
 }
 
 #: Harnesses mit eigener Pane-Sonde — und damit die, bei denen ein

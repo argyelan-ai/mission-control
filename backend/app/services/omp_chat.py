@@ -84,6 +84,7 @@ import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
+from types import SimpleNamespace
 from typing import Any
 
 from app.services.transcript_chat import (
@@ -175,9 +176,11 @@ def resolve_transcript_dir(agent) -> Path | None:
 #: schreibt (omp im Container, Hermes auf dem Host).
 CHAT_STATE_FILENAME = "acp-chat-state.json"
 
-#: Pfad-Segmente eines Arbeitsverzeichnisses, in dem nur TASKS laufen
-#: (Task-Worktrees, Task-Ordner). Eine Sitzung dort ist nie der Chat.
-_TASK_CWD_SEGMENTS = ("worktrees", "_tasks")
+#: Arbeitsverzeichnisse IM CONTAINER, in denen unter ACP nur TASKS laufen
+#: (Task-Worktrees, Task-Ordner). Bewusst am Container-Layout verankert, nicht
+#: an einem beliebigen Pfad-Segment: ein Host-Chat (Hermes), dessen eigener
+#: Pfad zufaellig ``worktrees`` enthaelt, ist kein Task.
+_TASK_CWD_PREFIXES = ("/workspace/worktrees/", "/workspace/_tasks/")
 
 
 def chat_state_file(tdir: Path) -> Path | None:
@@ -256,8 +259,8 @@ _TASK_SESSION_CACHE: set[tuple[str, str]] = set()
 def _cwd_is_task_dir(cwd: str | None) -> bool:
     if not cwd:
         return False
-    parts = PurePosixPath(cwd).parts
-    return any(seg in parts for seg in _TASK_CWD_SEGMENTS)
+    norm = cwd.replace("\\", "/").rstrip("/") + "/"
+    return norm.startswith(_TASK_CWD_PREFIXES)
 
 
 def is_task_session(path: Path) -> bool:
@@ -314,8 +317,47 @@ def _session_mtime(path: Path) -> float:
     return best
 
 
-def find_active_session(tdir: Path) -> tuple[Path, dict[str, Any]] | None:
+#: Laufzeit, unter der ein Harness mit omp-Transkripten seinen Chat fuehren
+#: KANN — exakt die zwei Faelle, fuer die :func:`resolve_transcript_dir` ein
+#: Verzeichnis liefert. Damit fragt :func:`chat_runs_over_acp` dieselbe
+#: Entscheidungsfunktion wie jeder andere ACP-Konsument
+#: (``acp_chat_transport.headless_chat_kind``), statt eine zweite zu pflegen.
+_RUNTIME_FOR_HARNESS = {HARNESS: "cli-bridge", "hermes": "host"}
+
+
+def chat_runs_over_acp(harness: str | None) -> bool:
+    """Fuehrt ein Agent dieses Harness seinen Chat ueber den ACP-Daemon?
+
+    Nur dann gibt es einen Zeiger (``acp-chat-state.json``), der etwas
+    bedeutet, und nur dann laufen Tasks in EIGENEN Sitzungen neben dem Chat.
+    Unter dem nativen Treiber (Rueckweg ``OMP_DRIVER_DEFAULT=native`` bzw.
+    ``HERMES_DRIVER`` != acp) tippt der Operator in die TUI in Fenster 0, die
+    die Bridge fuer einen Task mit dem Task-cwd neu startet — dort ist eine
+    Worktree-Sitzung sehr wohl der Chat, und eine liegengebliebene
+    Zustandsdatei aus einer frueheren ACP-Zeit zeigt auf eine tote Sitzung.
+    Der Treiber haengt nur am Harness und an globalen Schaltern, darum
+    reicht der Harness."""
+    from app.services.acp_chat_transport import headless_chat_kind
+
+    runtime = _RUNTIME_FOR_HARNESS.get(harness or "")
+    if runtime is None:
+        return False
+    probe = SimpleNamespace(agent_runtime=runtime, harness=harness)
+    return headless_chat_kind(probe) is not None
+
+
+def find_active_session(
+    tdir: Path, *, acp_chat: bool = False
+) -> tuple[Path, dict[str, Any]] | None:
     """Die CHAT-Sitzung unter ``tdir`` — die, die der Agenten-Chat zeigt.
+
+    ``acp_chat=False`` (nativer Treiber, Standard fuer jeden Aufrufer, der
+    den Treiber nicht kennt): die zuletzt geschriebene Sitzung, nichts
+    ausgenommen — das Verhalten vor dieser Aenderung. Die Adapter
+    (``transcript_adapters``) setzen ``acp_chat`` je Harness ueber
+    :func:`chat_runs_over_acp`.
+
+    ``acp_chat=True``:
 
     1. Der Zeiger des Chat-Daemons (``acp-chat-state.json`` → ``transcript``)
        entscheidet. Ein ACP-Agent fuehrt Chat und Tasks PARALLEL: beide
@@ -338,9 +380,12 @@ def find_active_session(tdir: Path) -> tuple[Path, dict[str, Any]] | None:
     if not tdir.is_dir():
         return None
 
-    chosen = _pointed_chat_transcript(tdir)
-    if chosen is None:
-        chosen = _newest_non_task_session(tdir)
+    if acp_chat:
+        chosen = _pointed_chat_transcript(tdir)
+        if chosen is None:
+            chosen = _newest_session(tdir, skip_tasks=True)
+    else:
+        chosen = _newest_session(tdir, skip_tasks=False)
     if chosen is None:
         return None
 
@@ -361,9 +406,9 @@ def find_active_session(tdir: Path) -> tuple[Path, dict[str, Any]] | None:
     }
 
 
-def _newest_non_task_session(tdir: Path) -> Path | None:
-    """Rueckfall ohne Zeiger: die zuletzt geschriebene Sitzung, Task-
-    Sitzungen ausgenommen.
+def _newest_session(tdir: Path, *, skip_tasks: bool) -> Path | None:
+    """Die zuletzt geschriebene Sitzung — mit ``skip_tasks`` (ACP-Rueckfall
+    ohne Zeiger) ohne Task-Sitzungen.
 
     Rangfolge nach dem Zeitstempel des LETZTEN EINTRAGS, nicht nach mtime —
     eine beruehrte Altdatei wuerde sonst die laufende Sitzung verdecken
@@ -382,7 +427,7 @@ def _newest_non_task_session(tdir: Path) -> Path | None:
             ranked.append((rank, mtime, candidate))
     ranked.sort(key=lambda r: (r[0], r[1]), reverse=True)
     for _rank, _mtime, candidate in ranked:
-        if not is_task_session(candidate):
+        if not skip_tasks or not is_task_session(candidate):
             return candidate
     return None
 
