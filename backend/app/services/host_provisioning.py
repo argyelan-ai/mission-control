@@ -170,7 +170,9 @@ def render_omp_host_models_yml(slug: str, env: dict[str, str], *, home: Path | N
         f"{auth_line}\n"
         "    models:\n"
         f"      - id: {model}\n"
-        "        name: MC model\n"
+        # The model id is the display name omp reports to the composer chip
+        # (same rule as render-omp-config.sh; was the placeholder "MC model").
+        f"        name: {model}\n"
         "        reasoning: true\n"
         f"        contextWindow: {context_window}\n"
         f"        maxTokens: {max_tokens}\n"

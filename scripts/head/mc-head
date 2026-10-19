@@ -875,7 +875,7 @@ def render_omp_profile(home: Path, spec: dict, env: dict) -> Path:
         f"{auth_line}\n"
         "    models:\n"
         f"      - id: {spec['model']}\n"
-        "        name: MC model\n"
+        f"        name: {spec['model']}\n"
         "        reasoning: true\n"
         "        contextWindow: 262144\n"
         "        maxTokens: 32768\n"

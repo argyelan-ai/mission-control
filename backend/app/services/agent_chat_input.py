@@ -710,6 +710,63 @@ def _acp_config_option(state: dict | None, option_id: str) -> tuple[list[dict], 
     return [], None
 
 
+#: Provider prefix of the models MC renders into an agent's own config
+#: (``mc-openai`` from render-omp-config.sh / host_provisioning / mc-head).
+_MC_MODEL_PROVIDER_PREFIX = "mc-"
+#: The name every MC-rendered model carried until 19.10.2026. Old containers
+#: still report it until their config is rendered again.
+_LEGACY_MODEL_PLACEHOLDER_NAME = "MC model"
+
+
+def _model_provider(value: str) -> str:
+    return value.split("/", 1)[0] if "/" in value else ""
+
+
+def _model_tail(value: str) -> str:
+    """``mc-openai/Model-X`` -> ``Model-X`` (twin of the omp bridge's
+    ``acp_model.display_name``)."""
+    return value.split("/", 1)[1] if "/" in value else value
+
+
+def _acp_model_offer(state: dict | None) -> tuple[list[dict], str | None]:
+    """``([{"value", "label"}, ...], current)`` — the models a headless
+    agent may switch to, with an operator-facing label. One source for the
+    composer's picker AND ``set_model``, so a model the picker hides can not
+    be switched to by hand either.
+
+    Generic over runtimes, two rules:
+
+    * **Label.** For a model MC rendered itself (provider ``mc-*``) the label
+      is the model id without the provider — whatever name the config
+      carries (old containers say "MC model"). Any other model keeps the name
+      the agent reports; without one (or with the old placeholder) it falls
+      back to the part after the provider.
+    * **Offer.** When the agent offers MC models, only those are offered:
+      omp also lists its built-in cloud catalogue (``openai/*``), which runs
+      against the vendor with a placeholder key and fails with 401 (live
+      19.10.2026). The model currently running always stays in the list, so
+      the chip keeps its label and the MC model stays the way back. An agent
+      without MC models (another harness, other providers) is not filtered.
+    """
+    options, current = _acp_config_option(state, "model")
+    mc_values = {
+        o["value"] for o in options
+        if _model_provider(o["value"]).startswith(_MC_MODEL_PROVIDER_PREFIX)
+    }
+    offer = []
+    for o in options:
+        value = o["value"]
+        if mc_values and value not in mc_values and value != current:
+            continue
+        name = o.get("name")
+        if value in mc_values or not name or name == _LEGACY_MODEL_PLACEHOLDER_NAME:
+            label = _model_tail(value)
+        else:
+            label = name
+        offer.append({"value": value, "label": label})
+    return offer, current
+
+
 def can_receive_input(agent) -> bool:
     """Kann dieser Agent ueberhaupt Chat-Text empfangen? Oeffentliche,
     ausnahmefreie Form von ``_target_kind`` — der Anhang-Endpunkt fragt das
@@ -1117,7 +1174,7 @@ async def set_model(agent, name: str) -> None:
         raise InputNotSupportedError()
 
     state = await asyncio.to_thread(read_acp_chat_state, agent)
-    options, _current = _acp_config_option(state, "model")
+    options, _current = _acp_model_offer(state)
     values = [o["value"] for o in options]
     if values and name not in values:
         raise ValueError(f"model not offered by this agent: {name!r}")
@@ -2178,15 +2235,15 @@ async def model_options_capabilities(agent) -> dict[str, object]:
         # ``configOptions[id=model]`` des Daemons. ``command`` ist der NACKTE
         # Wert: der Composer schickt die Auswahl als ``/model <command>`` —
         # ein vorangestelltes "/model " ergaebe ``/model /model x``.
-        # ``label`` ist der Anzeigename, den der Agent selbst liefert.
+        # ``label`` und das Angebot: siehe ``_acp_model_offer``.
         state = await asyncio.to_thread(read_acp_chat_state, agent)
-        options, current = _acp_config_option(state, "model")
+        options, current = _acp_model_offer(state)
         observed = await get_observed_model_windows()
         return {
             "modelOptions": [
                 {
                     "command": o["value"],
-                    "label": o.get("name") or o["value"],
+                    "label": o["label"],
                     "contextWindow": resolve_context_window(o["value"], observed),
                 }
                 for o in options
