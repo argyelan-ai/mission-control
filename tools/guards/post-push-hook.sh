@@ -7,35 +7,48 @@
 # the PR text then described a state that never reached the remote, and the old
 # branch was merged. The agent said "pushed"; nothing checked it.
 #
-# What it checks: every `git [-C <dir>] push` in the command (heredoc bodies are
-# data and skipped). The target is -C <dir>, else the last `cd <dir>` before it,
-# else the hook's cwd. Skipped, because there is nothing to compare: --dry-run/-n,
-# --delete/-d, --tags, --all, --mirror, and a refspec that is not HEAD or the
-# branch HEAD is on (pushing another branch says nothing about HEAD).
+# What it checks: every `git [options] push` in the command (hookparse.py, the
+# same parser as bash-hook.sh; heredoc bodies are data, redirections like `2>&1`
+# are not arguments). The target is -C <dir> (after any `cd <dir>`), else the
+# hook's cwd. `$VAR` paths are resolved from assignments in the same command.
+# The remote is the one named, else the one git picks (pushRemote, pushDefault,
+# the branch's remote, origin).
+#
+# Never a silent pass for a push it saw:
+#   * path it cannot resolve, or capture failed (ls-remote error,
+#     unknown remote)                     → finding "not proven / not provable"
+#   * --dry-run/-n, --delete/-d, --tags, --all, --mirror, a delete refspec,
+#     or a refspec for another branch than HEAD's → "skipped" line in the log
 #
 # Modes (GUARD_HOOK_MODE, else the first word of ~/.mc/guards/mode, else shadow):
-#   shadow — findings go to the log (GUARD_HOOK_LOG, default
+#   shadow — findings and skips go to the log (GUARD_HOOK_LOG, default
 #            ~/.mc/guards/hook-log.jsonl), exit 0.
-#   block  — exit 2 with the reason on stderr. A PostToolUse hook cannot undo the
-#            push; exit 2 puts the reason in front of the agent, so it cannot
-#            report "pushed" without seeing that the remote disagrees.
+#   block  — a finding: exit 2 with the reason on stderr. A PostToolUse hook cannot
+#            undo the push; exit 2 puts the reason in front of the agent, so it
+#            cannot report "pushed" without seeing that the remote disagrees.
+#            Skips never block; they are logged.
 # The hook never fails on its own error (missing python3, broken input): exit 0.
 #
 # Usage: as a hook: JSON on stdin.  Test: post-push-hook.sh <hook-json-file>
 #        (fixture mode: the evidence is <fixture>.proof instead of a live
-#        ls-remote; exit 1 red, 0 green, no log, no mode file).
+#        ls-remote — no .proof means the capture failed; exit 1 red, 0 green,
+#        no log, no mode file).
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 fixture=""; [ $# -gt 0 ] && fixture="$1"
 
-work="$(mktemp -d "${TMPDIR:-/tmp}/guard-post.XXXXXX")" || exit 0   # guard-allow: tmp-previews (scratch, removed on exit)
+work="$(mktemp -d "${TMPDIR:-/tmp}/guard-post.XXXXXX")" || exit 0   # scratch, removed on exit
 trap 'rm -rf "$work"' EXIT
 if [ -n "$fixture" ]; then cp "$fixture" "$work/in.json" || exit 2; else cat > "$work/in.json"; fi
 
-# One line per push: <dir>\t<refspecs separated by spaces, may be empty>
-python3 - "$work" <<'PY' || exit 0
-import json, os, re, shlex, sys
-w = sys.argv[1]
+# One line per push, fields split by \037 (not tab: read collapses empty tab fields):
+# <status> <dir> <remote, empty = git picks> <refspecs> <reason>
+# status: check | unresolved (a path the hook cannot know) | skipped (nothing to compare)
+python3 - "$work" "$HERE" <<'PY' || exit 0
+import json, os, sys
+w, here = sys.argv[1], sys.argv[2]
+sys.path.insert(0, here)
+import hookparse
 try:
     d = json.load(open(os.path.join(w, "in.json")))
 except Exception:
@@ -43,55 +56,47 @@ except Exception:
 if d.get("tool_name", "Bash") != "Bash":
     sys.exit(1)
 cmd = (d.get("tool_input") or {}).get("command") or ""
-cmd = re.sub(r"<<-?\s*['\"]?(\w+)['\"]?[^\n]*\n.*?\n\s*\1\b", "<<HEREDOC-STRIPPED", cmd, flags=re.S)
 cwd = d.get("cwd") or os.getcwd()
-SKIP = {"--dry-run", "-n", "--delete", "-d", "--tags", "--all", "--mirror", "--prune"}
-WITH_VALUE = {"-o", "--push-option", "--repo", "--receive-pack", "--exec"}
-out = []
-for m in re.finditer(r"\bgit\s+(?:-C\s+(\S+)\s+)?(?:-\S+\s+)*push\b([^;&|<>\n]*)", cmd):
-    t = m.group(1)
-    if t is None:
-        cds = re.findall(r"(?:^|&&|;|\n)\s*cd\s+(\S+)", cmd[:m.start()])
-        t = cds[-1] if cds else cwd
-    t = os.path.expanduser(t.strip("'\""))
-    if "$" in t:
-        continue  # a shell variable: the push-gate (PreToolUse) already flags it
-    t = t if os.path.isabs(t) else os.path.join(cwd, t)
-    try:
-        words = shlex.split(m.group(2))
-    except ValueError:
-        words = m.group(2).split()
-    if any(x in SKIP or x.startswith("--delete") for x in words):
-        continue
-    pos, skip_next = [], False
-    for x in words:
-        if skip_next:
-            skip_next = False
-            continue
-        if x in WITH_VALUE:
-            skip_next = True
-            continue
-        if x.startswith("-"):
-            continue
-        pos.append(x)
-    refspecs = [r.lstrip("+") for r in pos[1:]]
-    if any(r.startswith(":") for r in refspecs):
-        continue  # deletes a remote branch
-    remote = pos[0] if pos else "origin"
-    out.append(f"{t}\t{remote}\t{' '.join(refspecs)}")
-open(os.path.join(w, "pushes"), "w").write("\n".join(out) + ("\n" if out else ""))
+def clean(x):
+    return str(x).replace("\037", " ").replace("\n", " ")
+rows = ["\037".join([p["status"], clean(p["dir"]), clean(p["remote"]),
+                   clean(" ".join(p["refspecs"])), clean(p["reason"])])
+        for p in hookparse.pushes(cmd, cwd)]
+open(os.path.join(w, "pushes"), "w").write("\n".join(rows) + ("\n" if rows else ""))
 PY
 
-: > "$work/findings"
+: > "$work/findings"; : > "$work/skipped"
 n=0
+# The remote git pushes to when none is named (git's own order).
+default_remote() {
+  local t="$1" b r k
+  b="$(git -C "$t" symbolic-ref -q --short HEAD 2>/dev/null)"
+  for k in ${b:+"branch.$b.pushRemote"} remote.pushDefault ${b:+"branch.$b.remote"}; do
+    r="$(git -C "$t" config --get "$k" 2>/dev/null)" && [ -n "$r" ] && { printf '%s' "$r"; return; }
+  done
+  printf origin
+}
 # >>> guard-logic
-while IFS="$(printf '\t')" read -r t remote refspecs; do
-  [ -n "$t" ] || continue
-  n=$((n + 1)); ev="$work/evidence.$n"
+while IFS="$(printf '\037')" read -r status t remote refspecs reason; do
+  [ -n "$status" ] || continue
+  case "$status" in
+    skipped) printf '%s\n' "$reason" >> "$work/skipped"; continue ;;
+    unresolved)
+      printf 'proof-push: %s — NOT PROVEN. Prove it yourself: tools/guards/proof-push.sh -C <worktree>\n' "$reason" >> "$work/findings"
+      continue ;;
+  esac
+  n=$((n + 1)); ev="$work/evidence.$n"; : > "$ev.err"
   if [ -n "$fixture" ]; then
-    cp "$fixture.proof" "$ev" 2>/dev/null || continue
+    [ -n "$remote" ] || remote=origin
+    cp "$fixture.proof" "$ev" 2>/dev/null || : > "$ev"
   else
-    bash "$HERE/proof-push.sh" --capture -C "$t" --remote "$remote" > "$ev" 2>/dev/null || continue
+    [ -n "$remote" ] || remote="$(default_remote "$t")"
+    bash "$HERE/proof-push.sh" --capture -C "$t" --remote "$remote" > "$ev" 2> "$ev.err" || : > "$ev"
+  fi
+  if ! grep -q '^head=' "$ev"; then
+    printf 'proof-push: %s (remote %s) — push not provable: HEAD or the remote branch could not be read (%s). Check it yourself: tools/guards/proof-push.sh -C <worktree>\n' \
+      "$t" "$remote" "$(tr '\n' ' ' < "$ev.err" | cut -c1-160)" >> "$work/findings"
+    continue
   fi
   branch="$(sed -n 's/^branch=//p' "$ev")"
   if [ -n "$refspecs" ]; then
@@ -102,10 +107,13 @@ while IFS="$(printf '\t')" read -r t remote refspecs; do
       case "$src" in HEAD|"$branch") ;; *) continue ;; esac
       case "$dst" in HEAD|"$branch") hit=1 ;; esac
     done
-    [ "$hit" = 1 ] || continue   # pushed another branch than HEAD's: nothing to compare
+    if [ "$hit" != 1 ]; then   # another branch than HEAD's: nothing to compare
+      printf 'push of %s from %s is not the branch HEAD is on (%s): not compared\n' "$refspecs" "$t" "$branch" >> "$work/skipped"
+      continue
+    fi
   fi
   if ! verdict="$(bash "$HERE/proof-push.sh" "$ev" 2>&1)"; then
-    printf 'proof-push: %s — %s\n' "$t" "$(printf '%s\n' "$verdict" | tr '\n' ' ' | sed 's/  */ /g')" >> "$work/findings"
+    printf 'proof-push: %s (remote %s) — %s\n' "$t" "$remote" "$(printf '%s\n' "$verdict" | tr '\n' ' ' | sed 's/  */ /g')" >> "$work/findings"
   fi
 done < "$work/pushes"
 # <<< guard-logic
@@ -115,7 +123,7 @@ if [ -n "$fixture" ]; then
   echo "[post-push-hook] green"; exit 0
 fi
 
-[ -s "$work/findings" ] || exit 0
+[ -s "$work/findings" ] || [ -s "$work/skipped" ] || exit 0
 mode="${GUARD_HOOK_MODE:-}"
 [ -n "$mode" ] || mode="$(awk 'NR==1{print $1}' "$HOME/.mc/guards/mode" 2>/dev/null)"
 [ -n "$mode" ] || mode=shadow
@@ -132,10 +140,11 @@ print(json.dumps({"ts": datetime.datetime.now().astimezone().isoformat(timespec=
                   "hook": "post", "mode": mode, "session": d.get("session_id", ""),
                   "cwd": d.get("cwd", ""),
                   "findings": open(os.path.join(w, "findings")).read().splitlines(),
+                  "skipped": open(os.path.join(w, "skipped")).read().splitlines(),
                   "command": excerpt}, ensure_ascii=False))
 PY
 
-if [ "$mode" = block ]; then
+if [ "$mode" = block ] && [ -s "$work/findings" ]; then
   {
     echo "GUARD: the push is NOT proven (tools/guards/post-push-hook.sh):"
     sed 's/^/  - /' "$work/findings"
