@@ -16,6 +16,18 @@ enable-linger <user>`), so the bridge keeps running after logout and after a
 reboot — that is what lets an update interrupted by a power cut finish on its
 own. Details: [cli-bridge-auth.md](cli-bridge-auth.md#the-update-door-mc-update-adr-094).
 
+Two switches in `.env` decide whether the button can appear at all (both are
+read by the backend and the worker; recreate them after a change):
+
+| Setting | Effect |
+|---|---|
+| `MC_SELF_UPDATE_ENABLED` | `false` (default) until the button has passed its tests on real machines; while it is off, the update API answers `404` and no button is shown. |
+| `MC_UPDATE_MANAGED=deploy` | For an install that is updated only through its own deploy procedure: no button, ever — the update API **and** the bridge door answer `409`. Wins over the switch above. |
+
+While an update runs, MC hands out no new work: running tasks and group-chat
+rounds finish, nothing new starts, and scheduled jobs that come due are run
+right after the update instead.
+
 ## The short way
 
 ```bash

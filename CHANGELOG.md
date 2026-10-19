@@ -28,6 +28,14 @@ follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
   half-way, or no readable schema — the engine stops `backend` and
   `mc-worker`, restores its own pre-update backup and only then starts the
   previous version (ADR-094 rule R2). Only the latest update can be undone.
+- New (off by default): the backend side of updating MC from Settings →
+  System — `/api/v1/system/update/*` (preflight, start, status, rollback,
+  resume, history; admin only, start and rollback need the password again).
+  It stays off until `MC_SELF_UPDATE_ENABLED=true`; `MC_UPDATE_MANAGED=deploy`
+  keeps it off for good (`409`). While an update runs MC hands out no new work
+  (tasks, group-chat and loop rounds, scheduled jobs) and catches up held-back
+  dispatches and jobs afterwards. Migration `0219` adds `system_state`,
+  `system_updates` and the function `update_running_work()`.
 - Fix: the installer's closing lines (and the browser it opens) lead to the
   setup wizard at `/setup` instead of `scripts/demo-seed.py` and
   `docs/setup/first-agent.md` — the wizard covers both.

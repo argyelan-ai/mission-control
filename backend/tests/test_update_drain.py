@@ -206,7 +206,7 @@ async def test_catch_up_dispatches_held_work_once_the_drain_is_gone(fake_redis, 
     counts = await update_drain.catch_up(test_engine)
     assert counts == {"dispatch": 1, "schedule": 1, "skipped": 0}
     dispatched.assert_awaited_once_with(task.id, task.board_id)
-    executed.assert_awaited_once_with(job_id)
+    executed.assert_awaited_once_with(job_id, retry_attempt=0)
     assert await _deferred_keys() == []
     # Consumed: a second pass does nothing.
     assert (await update_drain.catch_up(test_engine))["dispatch"] == 0

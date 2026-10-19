@@ -297,10 +297,10 @@ async def _catch_up_dispatch(bind, task_id: str) -> bool:
     return True
 
 
-async def _catch_up_schedule(job_id: str) -> bool:
+async def _catch_up_schedule(job_id: str, retry_attempt: int = 0) -> bool:
     from app.services.scheduler import scheduler
 
-    await scheduler.execute_deferred(job_id)
+    await scheduler.execute_deferred(job_id, retry_attempt=retry_attempt)
     return True
 
 
@@ -325,7 +325,8 @@ async def catch_up(bind=None) -> dict[str, int]:
             if kind == KIND_DISPATCH and ref:
                 done = await _catch_up_dispatch(bind, ref)
             elif kind == KIND_SCHEDULE and ref:
-                done = await _catch_up_schedule(ref)
+                attempt = value.get("retry_attempt")
+                done = await _catch_up_schedule(ref, attempt if isinstance(attempt, int) else 0)
             else:
                 done = False
         except Exception:  # noqa: BLE001 — one bad item must not stop the rest

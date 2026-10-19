@@ -57,7 +57,7 @@ class FakeDoor:
             "/mc-update/preflight": (200, {
                 "checks": [
                     {"id": "release", "status": "ok", "message": "v0.9.2 → v0.9.3"},
-                    {"id": "disk", "status": "ok", "message": "enough space in /home/someone/mc"},
+                    {"id": "disk", "status": "ok", "message": "enough space in /home/testuser/mc"},
                 ],
                 "current": "v0.9.2", "target": "v0.9.3", "up_to_date": False, "ok": True,
                 "starts": {"used": 0, "limit": 3}, "api_version": 1,
@@ -92,10 +92,10 @@ def _status_body(**over) -> dict:
         "error": None, "failure_kind": None, "backup": None, "interrupted": False,
         "lock": {"held": True, "pid": 4242, "pid_alive": True},
         "events": [{"at": "2026-10-19T12:00:30Z", "phase": "pull", "event": "intent",
-                    "detail": "pulling into /Users/someone/mission-control", "raw": "secret-ish"}],
-        "out_file": "/home/someone/.mc/update/bridge/start-x.out",
+                    "detail": "pulling into /Users/testuser/mission-control", "raw": "secret-ish"}],
+        "out_file": "/home/testuser/.mc/update/bridge/start-x.out",
         "bridge": {"api_version": 1, "boot": {"state": "idle", "drain_sweep": {"lifted": []}},
-                   "last_job": {"kind": "start", "exit": None, "out_file": "/home/someone/x"},
+                   "last_job": {"kind": "start", "exit": None, "out_file": "/home/testuser/x"},
                    "starts": {"used": 1, "limit": 3}},
     }
     body.update(over)
@@ -496,7 +496,7 @@ async def test_status_with_bridge_gone_shows_last_known_run_and_resume(users, do
 async def test_status_of_a_finished_run_records_the_result(users, door):
     door.replies["/mc-update/status"] = (200, _status_body(
         phase="rolled_back", phase_state="done", lock={"held": False}, finished_at="2026-10-19T12:20:00Z",
-        error="health check failed in /home/someone/mc", failure_kind="health",
+        error="health check failed in /home/testuser/mc", failure_kind="health",
         backup="mc_backup_preupdate_20261019T120500Z.sql.gz"))
     r = await users.get("/api/v1/system/update/status", headers=_bearer())
     assert r.json()["run"]["error"] == "health check failed in ~/mc"

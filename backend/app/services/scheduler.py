@@ -829,11 +829,11 @@ class SchedulerService:
     async def trigger_now(self, job_id: str):
         create_tracked_task(self._execute_job(job_id))
 
-    async def execute_deferred(self, job_id: str) -> None:
+    async def execute_deferred(self, job_id: str, retry_attempt: int = 0) -> None:
         """Run a job the update drain held back (update_drain.catch_up).
         Goes through the normal path, so a drain that came back in the
-        meantime defers it again."""
-        await self._execute_job(job_id)
+        meantime defers it again; a held-back retry keeps its attempt number."""
+        await self._execute_job(job_id, retry_attempt)
 
 
 scheduler = SchedulerService()
