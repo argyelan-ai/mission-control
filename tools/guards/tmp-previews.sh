@@ -11,7 +11,7 @@
 # Opt out on one line with "guard-allow: tmp-previews (<reason>)".
 #
 # Usage: tmp-previews.sh <file-or-folder>...   Exit: 0 green, 1 red, 2 usage.
-GUARD_NAME=tmp-previews
+export GUARD_NAME=tmp-previews
 . "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
 RE_TMP='(^|[^A-Za-z0-9_.-])(/private)?/tmp/|[$][{]?TMPDIR'

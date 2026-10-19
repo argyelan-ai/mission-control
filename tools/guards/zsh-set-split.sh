@@ -9,7 +9,7 @@
 # Fix: `read -r a b <<< "$p"`, or write the commands out one by one.
 #
 # Usage: zsh-set-split.sh <file-or-folder>...   Exit: 0 green, 1 red, 2 usage.
-GUARD_NAME=zsh-set-split
+export GUARD_NAME=zsh-set-split
 . "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
 RE_SET_SPLIT='(^|[;&|[:space:]])set[[:space:]]+--[[:space:]]+[$][{]?[A-Za-z_@*]'

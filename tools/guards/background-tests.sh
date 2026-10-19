@@ -18,7 +18,7 @@
 #
 # Usage: background-tests.sh <file-or-folder>...  |  background-tests.sh --worktree <dir>
 # Exit:  0 green, 1 red, 2 usage.
-GUARD_NAME=background-tests
+export GUARD_NAME=background-tests
 . "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
 if [ "${1:-}" = "--worktree" ]; then

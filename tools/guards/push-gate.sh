@@ -19,7 +19,7 @@
 #     that runs with `set -e` or is a gates file (*.gates, see run-gates.sh).
 #
 # Usage: push-gate.sh <file-or-folder>...   Exit: 0 green, 1 red, 2 usage.
-GUARD_NAME=push-gate
+export GUARD_NAME=push-gate
 . "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
 RE_PUSH='(^|[;&|([:space:]])git([[:space:]]+-C[[:space:]]+[^[:space:]]+)?([[:space:]]+-[^[:space:]]+)*[[:space:]]+push([[:space:]]|$)'
