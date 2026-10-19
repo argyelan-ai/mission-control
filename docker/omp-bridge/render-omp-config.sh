@@ -53,6 +53,49 @@ OMP_HOME="${OMP_HOME:-${HOME}/.omp}"
 OMP_ENV_FILE="${OMP_ENV_FILE:-${OMP_HOME}/omp.env}"
 MODELS_DIR="${HOME}/.omp/profiles/${OMP_PROFILE}/agent"
 
+# ── Atomar schreiben (Fix 19.10.2026) ────────────────────────────────────────
+# `cat > datei` kürzt die Datei zuerst und füllt sie danach. Ein Leser in
+# dieser Lücke (acp_model.read_env_file bei JEDER ACP-Sitzung, launch-omp.sh
+# beim Sourcen) sah eine halbe Datei — fehlte darin OMP_MODEL_SELECTOR, griff
+# still der alte Wert aus der Prozess-Umgebung (Vorfall 19.10.2026). Und
+# `chmod 600` kam erst NACH dem Schreiben: eine neue Datei mit dem API-Schlüssel
+# lag kurz mit 644 da.
+#
+# Darum: Temp-Datei im SELBEN Ordner (mv bleibt ein rename auf demselben
+# Dateisystem), Rechte setzen, dann EIN `mv`. Leser sehen entweder die alte
+# oder die neue Datei, nie eine halbe.
+#
+# ACHTUNG Mounts: wird eine dieser Dateien je EINZELN in den Container
+# gemountet (bind mount einer Datei), bräche `mv` den Mount — der Container
+# sähe die neue Datei, der Host behielte die alte. Heute liegen omp.env und
+# models.yml im Container-Dateisystem (docker inspect, 19.10.2026). Der
+# Wächter unten erkennt einen Einzel-Mount (mountinfo) und schreibt dann in
+# place, mit Warnung.
+_MOUNTINFO="${OMP_RENDER_MOUNTINFO:-/proc/self/mountinfo}"
+_is_mount_target() {
+    [ -r "$_MOUNTINFO" ] || return 1
+    awk -v p="$1" '$5 == p { found = 1 } END { exit found ? 0 : 1 }' "$_MOUNTINFO"
+}
+
+# _atomic_write <ziel> <modus>   — Inhalt kommt auf stdin.
+_atomic_write() {
+    _aw_target="$1"
+    _aw_mode="$2"
+    if _is_mount_target "$_aw_target"; then
+        echo "[render-omp-config] WARN: ${_aw_target} ist einzeln gemountet — schreibe in place (nicht atomar), mv würde den Mount brechen" >&2
+        ( umask 077; cat > "$_aw_target" )
+        chmod "$_aw_mode" "$_aw_target"
+        return 0
+    fi
+    _aw_tmp=$(umask 077; mktemp "${_aw_target}.XXXXXX")
+    if ! cat > "$_aw_tmp"; then
+        rm -f "$_aw_tmp"
+        return 1
+    fi
+    chmod "$_aw_mode" "$_aw_tmp"
+    mv -f "$_aw_tmp" "$_aw_target"
+}
+
 # ── Werte von MC holen ───────────────────────────────────────────────────────
 # Genau die Schlüssel, die das Modell beschreiben. Tokens (MC_AGENT_TOKEN,
 # GH_TOKEN) fasst dieses Skript NICHT an — die gehören dem Entrypoint, und ein
@@ -67,7 +110,8 @@ MODELS_DIR="${HOME}/.omp/profiles/${OMP_PROFILE}/agent"
 fetch_bootstrap() {
     _url="${MC_API_URL:-http://backend:8000}/api/v1/internal/bootstrap?agent_name=${AGENT_NAME:-}"
     _body="/tmp/.render-omp-bootstrap-$$.json"
-    _code=$(curl -s -o "$_body" -w '%{http_code}' --max-time 5 \
+    # umask 077: die Antwort enthält den API-Schlüssel.
+    _code=$(umask 077; curl -s -o "$_body" -w '%{http_code}' --max-time 5 \
         -H "Authorization: Bearer ${INTERNAL_BOOTSTRAP_SECRET:-}" \
         "$_url" 2>/dev/null) || _code=""
     [ -n "$_code" ] || _code="000"
@@ -168,7 +212,8 @@ if [ -n "${OPENAI_API_KEY:-}" ]; then
 else
     _AUTH_LINE="    auth: none"
 fi
-cat > "${MODELS_DIR}/models.yml" <<YAML
+# 600: die Datei trägt den API-Schlüssel (apiKey).
+_atomic_write "${MODELS_DIR}/models.yml" 600 <<YAML
 providers:
   mc-openai:
     name: MC OpenAI-compatible endpoint
@@ -193,7 +238,7 @@ YAML
 # Wird von launch-omp.sh bei JEDEM Respawn neu eingelesen — das ist der Hebel,
 # der den Container-Neustart überflüssig macht.
 mkdir -p "$(dirname "$OMP_ENV_FILE")"
-cat > "$OMP_ENV_FILE" <<ENVFILE
+_atomic_write "$OMP_ENV_FILE" 600 <<ENVFILE
 OPENAI_BASE_URL=${_BASE_URL}
 OPENAI_MODEL=${_MODEL}
 OPENAI_API_KEY=${OPENAI_API_KEY:-sk-noauth}
@@ -207,7 +252,6 @@ OMP_DEFAULT_CWD=${OMP_DEFAULT_CWD:-/workspace}
 HOME=${HOME}
 PATH=${PATH}
 ENVFILE
-chmod 600 "$OMP_ENV_FILE"
 
 # ── Laufende tmux-Sitzung nachziehen ─────────────────────────────────────────
 # Gürtel und Hosenträger: `launch-omp.sh` liest zwar omp.env, aber die
