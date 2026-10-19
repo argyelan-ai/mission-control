@@ -10,6 +10,7 @@ import { postLoginPath } from "@/lib/firstRun";
 import { AmbientBackground } from "@/components/layout/AmbientBackground";
 import { C, alpha } from "@/lib/colors";
 import {
+  flushPendingOnboardingMetrics,
   markOnboardingStart,
   recordOnboardingError,
   recordOnboardingMilestone,
@@ -89,9 +90,14 @@ export default function LoginPage() {
 
       localStorage.setItem(AUTH_TOKEN_KEY, res.access_token);
       setStoredUser(res.user);
-      // Onboarding metric (Welle 3, PR 3-4): time to the first successful
-      // login/registration. Fire-and-forget — never blocks navigation.
-      void recordOnboardingMilestone("login");
+      // Onboarding metrics (Welle 3, PR 3-4): first flush whatever was
+      // buffered locally while there was no session yet (e.g. a failed
+      // attempt's "login_failed"/"register_failed" — see
+      // lib/onboardingMetrics.ts), then record the success itself.
+      // Fire-and-forget — never blocks navigation.
+      void flushPendingOnboardingMetrics().then(() =>
+        recordOnboardingMilestone("login"),
+      );
       // First registration -> setup wizard; a later login goes there too
       // while the wizard is still pending (lib/firstRun.ts).
       router.replace(await postLoginPath(mode === "register" ? "register" : "login"));

@@ -16,7 +16,7 @@
  * an e-mail. Call sites pass one of a small, known vocabulary of codes
  * (see `checkReason.ts` for the config-check reasons, reused as-is).
  */
-import { api } from "./api";
+import { api, getToken } from "./api";
 
 export type OnboardingMilestoneKey =
   | "login"
@@ -47,10 +47,75 @@ export interface OnboardingMetrics {
 
 const SETTINGS_KEY = "onboarding_metrics";
 const T0_STORAGE_KEY = "mc_onboarding_t0";
+/** Browser-local buffer for milestones/errors recorded before a session
+ *  token exists (the login/register screen itself). See `hasToken()`. */
+const PENDING_STORAGE_KEY = "mc_onboarding_pending";
 const MAX_ERRORS = 10;
 
 function emptyMetrics(): OnboardingMetrics {
   return { t0: null, elapsed_ms: {}, errors: [] };
+}
+
+interface PendingMetrics {
+  elapsed_ms: Partial<Record<OnboardingMilestoneKey, number>>;
+  errors: OnboardingErrorEntry[];
+}
+
+function emptyPending(): PendingMetrics {
+  return { elapsed_ms: {}, errors: [] };
+}
+
+/**
+ * Whether a session token exists. Before the first successful login or
+ * registration there is no user to attach server-side `settings` state to:
+ * `GET/PUT /api/v1/settings/{key}` would 401, and `request()` in `lib/api.ts`
+ * treats any 401 outside `/auth/` as an expired session — it clears the
+ * token and sends the whole page to `/login`, wiping whatever the operator
+ * was just shown (including the error message this module was asked to
+ * record). Everything below checks this first and buffers locally instead.
+ */
+function hasToken(): boolean {
+  try {
+    return getToken() !== "";
+  } catch {
+    return false;
+  }
+}
+
+function readPending(): PendingMetrics {
+  const ls = safeLocalStorage();
+  if (!ls) return emptyPending();
+  try {
+    const raw = ls.getItem(PENDING_STORAGE_KEY);
+    if (!raw) return emptyPending();
+    const v = JSON.parse(raw) as Partial<PendingMetrics> | null;
+    if (!v || typeof v !== "object") return emptyPending();
+    return {
+      elapsed_ms: v.elapsed_ms && typeof v.elapsed_ms === "object" ? v.elapsed_ms : {},
+      errors: Array.isArray(v.errors) ? v.errors : [],
+    };
+  } catch {
+    return emptyPending();
+  }
+}
+
+function writePending(p: PendingMetrics): void {
+  const ls = safeLocalStorage();
+  if (!ls) return;
+  try {
+    ls.setItem(PENDING_STORAGE_KEY, JSON.stringify(p));
+  } catch {
+    // Best effort only, same as every other storage access in this module.
+  }
+}
+
+function clearPending(): void {
+  const ls = safeLocalStorage();
+  try {
+    ls?.removeItem(PENDING_STORAGE_KEY);
+  } catch {
+    // ignore
+  }
 }
 
 /** Browser storage can throw (private mode, blocked site data) — every
@@ -127,6 +192,15 @@ async function saveMetrics(m: OnboardingMetrics): Promise<void> {
 export async function recordOnboardingMilestone(
   key: OnboardingMilestoneKey,
 ): Promise<void> {
+  if (!hasToken()) {
+    // No session yet (see hasToken docstring) — buffer locally rather than
+    // hit a KV endpoint that would 401 and bounce the page to /login.
+    const p = readPending();
+    if (p.elapsed_ms[key] !== undefined) return;
+    p.elapsed_ms = { ...p.elapsed_ms, [key]: computeElapsed() };
+    writePending(p);
+    return;
+  }
   const m = await loadMetrics();
   if (m.elapsed_ms[key] !== undefined) return;
   if (m.t0 === null) m.t0 = readT0() ?? new Date().toISOString();
@@ -136,22 +210,71 @@ export async function recordOnboardingMilestone(
   await saveMetrics(m);
 }
 
+/** Elapsed time since t0 (module docstring), 0 when no marker exists. */
+function computeElapsed(): number {
+  const t0 = readT0();
+  const t0Ms = t0 ? new Date(t0).getTime() : NaN;
+  return Number.isFinite(t0Ms) ? Math.max(0, Date.now() - t0Ms) : 0;
+}
+
 /**
  * Records a fixed-vocabulary error code with its timestamp, capped to the
  * most recent `MAX_ERRORS` so the list never grows without bound. Never
  * throws — a failure to store an error code must not raise a second error.
+ *
+ * Before login/registration succeeds there is no token (see `hasToken()`),
+ * so this buffers the entry in `localStorage` instead of calling the
+ * server — `flushPendingOnboardingMetrics()` merges it in once a session
+ * exists.
  */
 export async function recordOnboardingError(code: string): Promise<void> {
+  const entry: OnboardingErrorEntry = { code, at: new Date().toISOString() };
+  if (!hasToken()) {
+    const p = readPending();
+    p.errors = [...p.errors, entry].slice(-MAX_ERRORS);
+    writePending(p);
+    return;
+  }
   const m = await loadMetrics();
-  m.errors = [...m.errors, { code, at: new Date().toISOString() }].slice(-MAX_ERRORS);
+  m.errors = [...m.errors, entry].slice(-MAX_ERRORS);
   await saveMetrics(m);
+}
+
+/**
+ * Merges anything buffered by `recordOnboardingMilestone`/`recordOnboardingError`
+ * while there was no session (the login/register screen) into the real,
+ * per-user metrics now that one exists. Call once, right after a token is
+ * stored (see `app/login/page.tsx`). Never throws.
+ */
+export async function flushPendingOnboardingMetrics(): Promise<void> {
+  const pending = readPending();
+  if (
+    Object.keys(pending.elapsed_ms).length === 0 &&
+    pending.errors.length === 0
+  ) {
+    return;
+  }
+  clearPending();
+  try {
+    const m = await loadMetrics();
+    if (m.t0 === null) m.t0 = readT0() ?? new Date().toISOString();
+    for (const [key, elapsed] of Object.entries(pending.elapsed_ms)) {
+      const k = key as OnboardingMilestoneKey;
+      if (m.elapsed_ms[k] === undefined) m.elapsed_ms[k] = elapsed;
+    }
+    m.errors = [...m.errors, ...pending.errors].slice(-MAX_ERRORS);
+    await saveMetrics(m);
+  } catch {
+    // Metrics are a nice-to-have (module docstring) — losing a buffered
+    // entry on a failed flush is acceptable, raising here is not.
+  }
 }
 
 export async function getOnboardingMetrics(): Promise<OnboardingMetrics> {
   return loadMetrics();
 }
 
-/** Test seam: clears the browser-local t0 marker. */
+/** Test seam: clears the browser-local t0 marker and any pending buffer. */
 export function _resetOnboardingStartForTests(): void {
   const ls = safeLocalStorage();
   try {
@@ -159,4 +282,5 @@ export function _resetOnboardingStartForTests(): void {
   } catch {
     // ignore
   }
+  clearPending();
 }

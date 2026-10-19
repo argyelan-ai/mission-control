@@ -4,10 +4,11 @@
  * anywhere outward. See lib/onboardingMetrics.ts for the privacy rule this
  * enforces (fixed error codes only, never raw text).
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { api } from "@/lib/api";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { AUTH_TOKEN_KEY, api } from "@/lib/api";
 import {
   _resetOnboardingStartForTests,
+  flushPendingOnboardingMetrics,
   getOnboardingMetrics,
   markOnboardingStart,
   recordOnboardingError,
@@ -18,6 +19,12 @@ beforeEach(() => {
   vi.restoreAllMocks();
   _resetOnboardingStartForTests();
   window.localStorage.clear();
+  // Every milestone/error call site other than login/page.tsx's catch block
+  // (first_key_green, first_agent_online, first_question_card, and the
+  // post-login "login" milestone itself) runs with a session already in
+  // place — set the token here so these tests match that, and let the
+  // "without a session token" tests below clear it explicitly.
+  window.localStorage.setItem(AUTH_TOKEN_KEY, "test-token");
 });
 
 describe("markOnboardingStart", () => {
@@ -109,6 +116,97 @@ describe("recordOnboardingError", () => {
     vi.spyOn(api.settings, "set").mockRejectedValue(new Error("offline"));
 
     await expect(recordOnboardingError("timeout")).resolves.toBeUndefined();
+  });
+});
+
+// Bug #870: a wrong password/registration attempt has no session token yet
+// (login/page.tsx calls recordOnboardingError from its catch block, before
+// any token is stored). lib/api.ts treats a 401 outside "/auth/" as an
+// expired session and sends the whole page to /login, which would wipe the
+// error message the operator was just shown and lose the code. These tests
+// run the real request() (mocked fetch, not a mocked api.settings) to prove
+// no 401 round-trip — and so no redirect — happens while logged out.
+describe("recordOnboardingError without a session token", () => {
+  const realFetch = global.fetch;
+  const realLocation = window.location;
+
+  beforeEach(() => {
+    // The outer beforeEach sets a token for the (post-login) default case —
+    // remove it: this describe block is the pre-login state.
+    window.localStorage.removeItem(AUTH_TOKEN_KEY);
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      text: async () => "Unauthorized",
+      json: async () => ({ detail: "Unauthorized" }),
+    } as unknown as Response);
+    // jsdom's window.location.href is not assignable without this.
+    Object.defineProperty(window, "location", {
+      value: { ...realLocation, href: realLocation.href },
+      writable: true,
+    });
+  });
+
+  afterEach(() => {
+    global.fetch = realFetch;
+    Object.defineProperty(window, "location", {
+      value: realLocation,
+      writable: true,
+    });
+  });
+
+  it("never calls the API, so the 401 handler in lib/api.ts never fires", async () => {
+    expect(window.localStorage.getItem(AUTH_TOKEN_KEY)).toBeNull();
+
+    await recordOnboardingError("login_failed");
+
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(window.location.href).toBe(realLocation.href);
+  });
+
+  it("buffers the error locally instead", async () => {
+    await recordOnboardingError("login_failed");
+
+    const raw = window.localStorage.getItem("mc_onboarding_pending");
+    expect(raw).not.toBeNull();
+    const pending = JSON.parse(raw!);
+    expect(pending.errors).toEqual([{ code: "login_failed", at: expect.any(String) }]);
+  });
+});
+
+describe("flushPendingOnboardingMetrics", () => {
+  it("merges a buffered pre-login error into the real metrics once a session exists", async () => {
+    // Step 1: no token — buffers locally (same as login/page.tsx's catch).
+    window.localStorage.removeItem(AUTH_TOKEN_KEY);
+    await recordOnboardingError("login_failed");
+    expect(window.localStorage.getItem("mc_onboarding_pending")).not.toBeNull();
+
+    // Step 2: token now exists (login succeeded) — flush.
+    window.localStorage.setItem(AUTH_TOKEN_KEY, "tok");
+    let stored: any = { t0: null, elapsed_ms: {}, errors: [] };
+    vi.spyOn(api.settings, "get").mockImplementation(async () => ({
+      key: "onboarding_metrics",
+      value: stored,
+    }));
+    const setSpy = vi.spyOn(api.settings, "set").mockImplementation(async (_k, v) => {
+      stored = v;
+      return { key: "onboarding_metrics", value: v };
+    });
+
+    await flushPendingOnboardingMetrics();
+
+    expect(setSpy).toHaveBeenCalledTimes(1);
+    expect(stored.errors).toEqual([{ code: "login_failed", at: expect.any(String) }]);
+    expect(window.localStorage.getItem("mc_onboarding_pending")).toBeNull();
+  });
+
+  it("is a no-op when nothing was buffered", async () => {
+    window.localStorage.setItem(AUTH_TOKEN_KEY, "tok");
+    const setSpy = vi.spyOn(api.settings, "set");
+
+    await flushPendingOnboardingMetrics();
+
+    expect(setSpy).not.toHaveBeenCalled();
   });
 });
 
