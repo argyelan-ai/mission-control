@@ -1069,6 +1069,8 @@ if [ "$UPDATE" = 1 ]; then
     say "  check, wait for running work, download, back up, switch, start, verify — or go back."
     rc=0
     mc_update_door start || rc=$?
+    # Same offer as the edge path below — only after an update that went through.
+    [ "$rc" = 0 ] && { mc_bridge_offer "$([ "$NONINTERACTIVE_FLAG" = 1 ] && echo quiet || echo update)" || true; }
     exit "$rc"
   fi
 

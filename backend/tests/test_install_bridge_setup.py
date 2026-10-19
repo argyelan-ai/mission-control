@@ -251,6 +251,11 @@ def test_installer_offers_the_bridge_on_install_update_and_by_flag():
     update = main.split('if [ "$UPDATE" = 1 ]', 1)[1].split("\n  exit 0\n", 1)[0]
     # --update: may ask at a terminal, --non-interactive keeps it quiet
     assert 'mc_bridge_offer "$([ "$NONINTERACTIVE_FLAG" = 1 ] && echo quiet || echo update)"' in update
+    # stable --update hands over to the engine and exits early: the offer
+    # must still come, and only after the engine succeeded
+    stable = update.split('if [ "$CHANNEL" = stable ]', 1)[1].split("\n  fi\n", 1)[0]
+    door, after = stable.split("mc_update_door start || rc=$?", 1)
+    assert '[ "$rc" = 0 ] && { mc_bridge_offer "$([ "$NONINTERACTIVE_FLAG" = 1 ] && echo quiet || echo update)"' in after.split('exit "$rc"', 1)[0]
     # fresh install: asked when interactive
     assert 'mc_bridge_offer "$([ "$INTERACTIVE" = 1 ] && echo ask || echo quiet)"' in main
 
