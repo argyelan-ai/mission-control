@@ -177,7 +177,23 @@ def test_plist_lets_a_detached_update_outlive_the_bridge(env):
 
 LINUX_STUBS = {
     "uname": "#!/bin/bash\necho Linux\n",
-    "systemctl": "#!/bin/bash\necho \"systemctl $*\" >> \"$STATE/calls\"\nexit 0\n",
+    # Logs every call; for `stop` also the KillMode systemd would apply — the
+    # one in the unit file as of the last daemon-reload (default control-group,
+    # which kills the tmux server the bridge started for host agents).
+    "systemctl": r"""#!/bin/bash
+unit="$HOME/.config/systemd/user/mc-cli-bridge.service"
+case "$*" in
+  "--user daemon-reload")
+    km="$(sed -n 's/^KillMode=//p' "$unit" 2>/dev/null | head -1)"
+    echo "${km:-control-group}" > "$STATE/loaded-killmode" ;;
+esac
+if [ "$2" = stop ]; then
+  echo "systemctl $* killmode=$(cat "$STATE/loaded-killmode" 2>/dev/null || echo none)" >> "$STATE/calls"
+else
+  echo "systemctl $*" >> "$STATE/calls"
+fi
+exit 0
+""",
     "lsof": "#!/bin/bash\nexit 0\n",   # nothing listens (no real lsof answers here)
 }
 
@@ -202,3 +218,22 @@ def test_systemd_unit_keeps_children_on_restart(linux_env):
     assert "KillMode=process" in unit
     assert "Environment=CLI_BRIDGE_BIND=172.18.0.1" in unit
     assert "Environment=MC_UPDATE_TOKEN_FILE=" in unit
+
+
+def test_reinstall_stops_the_old_bridge_under_the_new_kill_mode(linux_env):
+    """An install from before the update door has a unit without KillMode
+    (default control-group): stopping it under the OLD unit kills every child
+    of the bridge — the tmux server of the host agents. The new unit must be
+    loaded (written + daemon-reload) before the stop."""
+    e, home, state = linux_env
+    unit = home / ".config" / "systemd" / "user" / "mc-cli-bridge.service"
+    unit.parent.mkdir(parents=True)
+    unit.write_text("[Service]\nExecStart=/usr/bin/python3 cli-bridge.py\n")
+    (state / "loaded-killmode").write_text("control-group\n")   # the old unit is loaded
+    r = _run({**e, "CLI_BRIDGE_BIND": "172.18.0.1"})
+    assert r.returncode == 0, r.stdout + r.stderr
+    calls = _calls(state)
+    stops = [c for c in calls if " stop " in f"{c} "]
+    assert stops == ["systemctl --user stop mc-cli-bridge.service killmode=process"], calls
+    assert calls.index("systemctl --user daemon-reload") < calls.index(stops[0])
+    assert calls.index(stops[0]) < calls.index("systemctl --user enable --now mc-cli-bridge.service")

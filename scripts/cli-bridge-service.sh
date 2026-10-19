@@ -242,8 +242,11 @@ EOF
     preflight_python
     mkdir -p "$LOG_DIR" "$UNIT_DIR"
     init_token
-    systemctl --user stop mc-cli-bridge.service 2>/dev/null || true
-    wait_port_free
+    # Write the new unit and reload BEFORE stopping the running bridge: the
+    # stop uses the unit systemd has loaded, and a unit from before the update
+    # door has no KillMode (default control-group) — stopping under it would
+    # kill every child of the bridge, including the tmux server of the host
+    # agents. Loaded first, KillMode=process applies to this very restart.
     cat > "$UNIT" <<EOF
 [Unit]
 Description=Mission Control CLI bridge (agent provisioning helper)
@@ -269,6 +272,8 @@ RestartSec=3
 WantedBy=default.target
 EOF
     systemctl --user daemon-reload
+    systemctl --user stop mc-cli-bridge.service 2>/dev/null || true
+    wait_port_free
     systemctl --user enable --now mc-cli-bridge.service
     sleep 2
     status || {
