@@ -1001,12 +1001,41 @@ async def maybe_advance(session: AsyncSession, challenge_id: uuid.UUID) -> None:
     await _render_and_compose(session, challenge, generated)
 
 
+async def _blocked_task_reason(session: AsyncSession, task_id: uuid.UUID) -> str:
+    """Best-effort human-readable reason for a blocked task, taken from its
+    pending blocker_decision approval (the question the operator/Boss would
+    see in the inbox). Falls back to a generic label — the approval may
+    already be resolved/expired by the time reconcile runs (2026-10-19
+    fix-vorschlag point 7: a blocked task must never leave the entry
+    hanging on 'generating' regardless of approval state)."""
+    from app.models.approval import Approval
+
+    result = await session.exec(
+        select(Approval).where(
+            Approval.task_id == task_id,
+            Approval.action_type == "blocker_decision",
+            Approval.status == "pending",
+        )
+    )
+    approval = result.first()
+    if approval is not None and approval.description:
+        return f"agent task blocked: {approval.description}"
+    return "agent task blocked"
+
+
 async def reconcile_challenge(
     session: AsyncSession, challenge: BenchChallenge, entries: list[BenchEntry]
 ) -> None:
-    """GET-time fallback sweep: agent tasks that ended in `failed` never fire
-    the task_done hook — mark their entries failed so nothing hangs silently
-    (spec §7, lesson from the Grok review: uncaught -> eternal in_progress).
+    """GET-time fallback sweep: agent tasks that ended in `failed`,
+    `aborted` or `blocked` never fire the task_done hook — mark their
+    entries failed so nothing hangs silently (spec §7, lesson from the Grok
+    review: uncaught -> eternal in_progress; `aborted`/`blocked` added
+    2026-10-19 after a live incident —
+    Mark saw the Bench Studio grid spin forever on an entry whose task the
+    Bridge itself had blocked). A blocked entry failing here does not touch
+    the task itself — `blocked` stays resumable (task_lifecycle: "blocked is
+    ALWAYS temporary"); only the Bench entry's own, separate state moves to
+    `failed` so `retry_entry` and challenge archiving work again.
 
     Also self-heals entries whose task was deleted (FK SET NULL on
     tasks.id): task_id=None means the task_done hook can never fire for that
@@ -1024,9 +1053,16 @@ async def reconcile_challenge(
             changed = True
             continue
         task = await session.get(Task, entry.task_id)
-        if task is not None and task.status == "failed":
+        if task is None:
+            continue
+        if task.status in ("failed", "aborted"):
             entry.status = "failed"
-            entry.error = "agent task failed"
+            entry.error = f"agent task {task.status}"
+            session.add(entry)
+            changed = True
+        elif task.status == "blocked":
+            entry.status = "failed"
+            entry.error = await _blocked_task_reason(session, task.id)
             session.add(entry)
             changed = True
     if changed:

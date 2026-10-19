@@ -356,6 +356,94 @@ async def test_reconcile_marks_failed_agent_tasks(
 
 
 @pytest.mark.asyncio
+async def test_reconcile_marks_failed_on_blocked_task(
+    session, monkeypatch, make_board, make_task
+):
+    """A blocked agent task also never fires the task_done hook — the entry
+    must not spin forever at 'generating'. Fix-vorschlag point 7 (19.10.):
+    Mark saw a Bench entry stuck on a loading spinner because its task had
+    gone 'blocked', not 'failed'. Reconcile must self-heal it the same way,
+    carrying the blocker's question as the entry's error so retry_entry and
+    challenge archiving become possible again."""
+    from app.models.approval import Approval
+
+    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
+    task = await make_task(board.id, title="[Bench] x", status="blocked")
+    approval = Approval(
+        board_id=board.id,
+        task_id=task.id,
+        action_type="blocker_decision",
+        description="Unknown ACP model: mc-openai/GLM-5.3-Flash-EXL3",
+        status="pending",
+    )
+    session.add(approval)
+    await session.commit()
+    ch, entries = await _seed(
+        session,
+        entry_specs=[
+            {"model_label": "Pagoda", "source_kind": "agent",
+             "status": "generating", "task_id": task.id},
+        ],
+    )
+    monkeypatch.setattr(orchestrator, "record_entry", AsyncMock())
+    await orchestrator.reconcile_challenge(session, ch, entries)
+    await session.refresh(entries[0])
+    await session.refresh(ch)
+    assert entries[0].status == "failed"
+    assert entries[0].error == (
+        "agent task blocked: Unknown ACP model: mc-openai/GLM-5.3-Flash-EXL3"
+    )
+    assert ch.status == "failed"  # only entry failed -> all failed -> archivable
+
+
+@pytest.mark.asyncio
+async def test_reconcile_marks_failed_on_blocked_task_without_approval(
+    session, monkeypatch, make_board, make_task
+):
+    """No pending blocker_decision approval found (already resolved/expired)
+    -> still fails the entry, with a generic reason instead of crashing."""
+    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
+    task = await make_task(board.id, title="[Bench] x", status="blocked")
+    ch, entries = await _seed(
+        session,
+        entry_specs=[
+            {"model_label": "Pagoda", "source_kind": "agent",
+             "status": "generating", "task_id": task.id},
+        ],
+    )
+    monkeypatch.setattr(orchestrator, "record_entry", AsyncMock())
+    await orchestrator.reconcile_challenge(session, ch, entries)
+    await session.refresh(entries[0])
+    assert entries[0].status == "failed"
+    assert entries[0].error == "agent task blocked"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_marks_failed_on_aborted_task(
+    session, monkeypatch, make_board, make_task
+):
+    """Mark's addendum (19.10., point 1 wording "blocked/abgebrochen"):
+    an operator-aborted agent task is the same kind of silent-never-fires
+    terminal as 'failed' — the entry must not hang on 'generating'."""
+    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
+    task = await make_task(board.id, title="[Bench] x", status="aborted")
+    ch, entries = await _seed(
+        session,
+        entry_specs=[
+            {"model_label": "Pagoda", "source_kind": "agent",
+             "status": "generating", "task_id": task.id},
+        ],
+    )
+    monkeypatch.setattr(orchestrator, "record_entry", AsyncMock())
+    await orchestrator.reconcile_challenge(session, ch, entries)
+    await session.refresh(entries[0])
+    await session.refresh(ch)
+    assert entries[0].status == "failed"
+    assert entries[0].error == "agent task aborted"
+    assert ch.status == "failed"
+
+
+@pytest.mark.asyncio
 async def test_reconcile_marks_failed_when_task_deleted(session, monkeypatch):
     """When the underlying task is deleted, the FK SET NULLs task_id but the
     entry is left at generating/agent — the old reconcile skipped these

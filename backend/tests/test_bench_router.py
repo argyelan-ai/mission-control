@@ -476,6 +476,68 @@ async def test_archive_unarchive_and_list_filtering(auth_client, session):
 
 
 @pytest.mark.asyncio
+async def test_get_challenge_reconciles_blocked_entry_then_archivable(
+    auth_client, session, make_board, make_task
+):
+    """Fix-vorschlag point 7 (19.10.): a challenge stuck in 'generating'
+    because its only entry's task went 'blocked' (not 'failed') must self-
+    heal on the next GET of the challenge detail — the entry fails with the
+    blocker's reason, the challenge follows to 'failed', and only then can
+    the operator archive it. Before the fix, GET left both stuck at
+    generating/generating and POST /archive 409'd forever."""
+    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
+    task = await make_task(board.id, title="[Bench] x", status="blocked")
+    ch, _ = await _seed_challenge(
+        session,
+        status="generating",
+        entries=[
+            {"model_label": "Pagoda", "source_kind": "agent",
+             "status": "generating", "task_id": task.id},
+        ],
+    )
+
+    # Still running -> archive is refused.
+    resp = await auth_client.post(f"/api/v1/bench/challenges/{ch.id}/archive")
+    assert resp.status_code == 409
+
+    # Reading the detail runs the reconcile sweep.
+    detail = await auth_client.get(f"/api/v1/bench/challenges/{ch.id}")
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["status"] == "failed"
+    assert detail.json()["entries"][0]["status"] == "failed"
+
+    # Now archivable.
+    resp = await auth_client.post(f"/api/v1/bench/challenges/{ch.id}/archive")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["archived_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_retry_entry_available_after_blocked_task_reconcile(
+    auth_client, session, make_board, make_task
+):
+    """retry_entry requires status=='failed' (409 otherwise) — reconcile
+    must put a blocked-task entry into exactly that state for the operator's
+    retry button to work, not leave it on 'generating'."""
+    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
+    task = await make_task(board.id, title="[Bench] x", status="blocked")
+    ch, entries = await _seed_challenge(
+        session,
+        status="generating",
+        entries=[
+            {"model_label": "Pagoda", "source_kind": "agent",
+             "status": "generating", "task_id": task.id},
+        ],
+    )
+
+    await auth_client.get(f"/api/v1/bench/challenges/{ch.id}")  # triggers reconcile
+
+    resp = await auth_client.post(f"/api/v1/bench/entries/{entries[0].id}/retry")
+    assert resp.status_code == 200, resp.text
+    orchestrator.retry_entry.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_delete_challenge_409_while_running(auth_client, session):
     ch, _ = await _seed_challenge(session, status="rendering")
     resp = await auth_client.delete(f"/api/v1/bench/challenges/{ch.id}")
