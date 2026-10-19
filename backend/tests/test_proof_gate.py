@@ -79,13 +79,27 @@ def _pr(*, sha=SHA, ci="SUCCESS", commit_at=None, reviews=None, comments=None, b
     }
 
 
-def _gh(pr: dict | None = None, *, rc: int = 0, err: str = ""):
+_BUCKET = {"SUCCESS": "pass", "NEUTRAL": "pass", "SKIPPED": "skipping",
+           "FAILURE": "fail", "CANCELLED": "cancel", "TIMED_OUT": "fail"}
+
+
+def _gh(pr: dict | None = None, *, rc: int = 0, err: str = "", required=None):
+    """Fake `gh`: answers `pr view` with `pr` and `pr checks --required` with
+    `required` — by default every rollup check counts as required."""
     calls = []
 
     async def fake(*args, env=None):
         calls.append((args, env))
         if rc:
             return rc, "", err
+        if args[2] == "checks":
+            if required == "none-configured":
+                return 1, "", "no required checks reported on the 'main' branch"
+            checks = required if required is not None else [
+                {"name": c["name"], "bucket": _BUCKET.get(c.get("conclusion") or "", "pending")}
+                for c in pr.get("statusCheckRollup") or []
+            ]
+            return 0, json.dumps(checks), ""
         return 0, json.dumps(pr), ""
 
     fake.calls = calls
@@ -182,7 +196,7 @@ async def test_clean_case_passes_without_any_warning(client, fake_redis, gate_mo
     assert task.status == "review"
     assert comments == [] and events == []
     # the gate really asked GitHub — with the resolved token, not the process env
-    assert len(gh.calls) == 1
+    assert [c[0][2] for c in gh.calls] == ["view", "checks"]
     args, env = gh.calls[0]
     assert "--repo" in args and "example-org/example-repo" in args
     assert env["GH_TOKEN"] == "tok"
@@ -480,3 +494,35 @@ async def test_review_rejection_records_who_caught_it(client, fake_redis, gate_m
     rejected = [c for c in events.await_args_list if c.args[1] == "task.review_rejected"]
     assert rejected, [c.args[1] for c in events.await_args_list]
     assert rejected[0].kwargs["detail"]["gefangen_von"] == "rolle"
+
+
+@pytest.mark.asyncio
+async def test_failing_non_required_check_does_not_count(client, fake_redis, gate_mode):
+    """Live finding 2026-10-19: "kz check (warning only)" is red even on merged
+    PRs of this repo. Green = the REQUIRED checks are green."""
+    gate_mode("enforce")
+    data = await _seed()
+    pr = _pr()
+    pr["statusCheckRollup"].append(
+        {"name": "kz check (warning only)", "status": "COMPLETED", "conclusion": "FAILURE"})
+    gh = _gh(pr, required=[{"name": "backend", "bucket": "pass"}])
+    resp, events = await _patch(client, data, {"status": "review", "head_sha": SHA,
+                                               "head_branch": "feat/x"}, gh=gh)
+    assert resp.status_code == 200, resp.text
+    assert events == []
+
+
+@pytest.mark.asyncio
+async def test_repo_without_required_checks_falls_back_to_rollup(client, fake_redis, gate_mode):
+    gate_mode("enforce")
+    data = await _seed()
+    resp, _ = await _patch(client, data, {"status": "review"},
+                           gh=_gh(_pr(ci="FAILURE"), required="none-configured"))
+    assert resp.status_code == 422 and "ci_red" in _codes(resp)
+
+
+def test_required_classification():
+    assert proof_gate.classify_required([]) == "none"
+    assert proof_gate.classify_required([{"bucket": "pass"}, {"bucket": "skipping"}]) == "green"
+    assert proof_gate.classify_required([{"bucket": "pass"}, {"bucket": "pending"}]) == "pending"
+    assert proof_gate.classify_required([{"bucket": "pending"}, {"bucket": "fail"}]) == "red"

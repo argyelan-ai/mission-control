@@ -194,6 +194,49 @@ async def fetch_pr_evidence(owner: str, repo: str, number: int, token: str) -> d
     return data
 
 
+async def fetch_required_checks(owner: str, repo: str, number: int, token: str) -> list[dict] | None:
+    """The PR's *required* checks (``gh pr checks --required``), or None.
+
+    Why not the whole statusCheckRollup: a repo can run non-blocking checks
+    that fail by design (measured live on this repo: "kz check (warning
+    only)" is red on merged PRs). Green means "the checks the branch rule
+    demands are green". None = the repo has no required checks (or the call
+    failed) → the caller falls back to the full rollup.
+    """
+    import os
+
+    from app.services import pr_merge_monitor
+
+    env = {**os.environ, "GH_TOKEN": token, "GITHUB_TOKEN": token}
+    rc, out, err = await pr_merge_monitor._run_gh(
+        "gh", "pr", "checks", str(number),
+        "--repo", f"{owner}/{repo}",
+        "--required", "--json", "name,bucket",
+        env=env,
+    )
+    if rc not in (0, 8):  # 8 = "checks pending" in gh's exit-code contract
+        if "no required checks" not in (err or "").lower():
+            logger.info("proof_gate: gh pr checks %s/%s#%d failed: %s", owner, repo, number, err)
+        return None
+    try:
+        data = json.loads(out or "[]")
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, list) and data else None
+
+
+def classify_required(checks: list[dict]) -> str:
+    """``green`` | ``red`` | ``pending`` | ``none`` for ``gh pr checks`` buckets."""
+    if not checks:
+        return "none"
+    buckets = {(c.get("bucket") or "").lower() for c in checks if isinstance(c, dict)}
+    if buckets & {"fail", "cancel"}:
+        return "red"
+    if "pending" in buckets:
+        return "pending"
+    return "green"
+
+
 # ── Pure helpers ────────────────────────────────────────────────────────
 
 
@@ -441,8 +484,9 @@ async def evaluate_proof_gate(
             f"({remote_sha[:12]}, Branch '{remote_branch}'). Erst pushen, dann melden.",
         ))
 
-    # (c) CI green
-    ci = classify_ci(pr.get("statusCheckRollup"))
+    # (c) CI green — the required checks when the repo has any, else all
+    required = await fetch_required_checks(owner, repo, number, token)
+    ci = classify_required(required) if required is not None else classify_ci(pr.get("statusCheckRollup"))
     if ci == "red":
         result.findings.append(Finding(
             "ci_red", HARD, f"CI auf PR #{number} ist rot — erst gruen machen, dann melden.",
