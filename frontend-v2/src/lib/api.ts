@@ -70,6 +70,8 @@ import type {
   LMSCatalogModel,
   HFRepoInfo,
   Repo,
+  FirstRunStarter,
+  FirstRunStarterRequest,
   RepoImportCandidate,
   RepoUpdate,
   GithubStatus,
@@ -2354,6 +2356,18 @@ export const api = {
     // Back-compat alias — delegates to the host with slug `dgx-spark` (ADR-048).
     metrics: (): Promise<SparkMetrics> =>
       request("/api/v1/runtimes/spark/metrics"),
+  },
+
+  // ── First run (onboarding W3): lead agent + practice repo + first job ──────
+  // The setup wizard calls start() once the operator picked an AI; get()
+  // feeds its progress chain. Refusals carry detail.code (no_brain,
+  // not_fresh, runtime_not_found, runtime_not_runnable, runtime_not_ready,
+  // not_started); runtime_not_ready adds detail.reason (claude_not_connected,
+  // no_api_key, not_serving, needs_sign_in).
+  firstRun: {
+    start: (body: FirstRunStarterRequest = {}): Promise<FirstRunStarter> =>
+      request("/api/v1/first-run/starter", { method: "POST", body: JSON.stringify(body) }),
+    get: (): Promise<FirstRunStarter> => request("/api/v1/first-run/starter"),
   },
 
   // ── Repos (Repo Registry, ADR-050) ─────────────────────────────────────────

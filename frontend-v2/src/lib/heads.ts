@@ -286,6 +286,7 @@ const ERROR_CODES = new Set([
   "head_active",
   "task_move_failed",
   "repo_required",
+  "local_repo_not_supported",
   "spool_unavailable",
   "heads_disabled",
   "task_not_found",

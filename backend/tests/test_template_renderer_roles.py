@@ -5,6 +5,14 @@ from app.services.template_renderer import build_agent_context, render_agent_fil
 from app.models.agent import Agent
 
 
+def _teammate() -> Agent:
+    """A second agent on the board: with a team, a lead delegates (ADR-089,
+    services/lead_mode.py) — the rules below belong to that delegating lead.
+    A lead alone on its board gets the hands-on block instead
+    (tests/test_lead_works_itself.py)."""
+    return Agent(id=uuid.uuid4(), name="Builder", role="developer", board_id=uuid.uuid4())
+
+
 def _make_agent(name: str, role: str = "developer", is_board_lead: bool = False) -> Agent:
     return Agent(
         id=uuid.uuid4(),
@@ -69,7 +77,7 @@ def test_rendered_developer_soul_no_mc_token():
 def test_henry_soul_has_autonomy_level_rule():
     """Henry's SOUL.md must contain the autonomy_level rule."""
     agent = _make_agent("Henry", role="lead", is_board_lead=True)
-    ctx = build_agent_context(agent, agents_on_board=[])
+    ctx = build_agent_context(agent, agents_on_board=[agent, _teammate()])
     soul = render_agent_file("SOUL.md.j2", ctx)
     assert "autonomy_level" in soul
     assert "execute_low_risk" in soul
@@ -78,7 +86,7 @@ def test_henry_soul_has_autonomy_level_rule():
 def test_henry_soul_has_tags_rule():
     """Henry's SOUL.md must contain the mandatory tags rule."""
     agent = _make_agent("Henry", role="lead", is_board_lead=True)
-    ctx = build_agent_context(agent, agents_on_board=[])
+    ctx = build_agent_context(agent, agents_on_board=[agent, _teammate()])
     soul = render_agent_file("SOUL.md.j2", ctx)
     assert "Setting tags" in soul
 
@@ -86,7 +94,7 @@ def test_henry_soul_has_tags_rule():
 def test_henry_soul_has_preview_url_rule():
     """Henry's SOUL.md must contain the preview URL rule."""
     agent = _make_agent("Henry", role="lead", is_board_lead=True)
-    ctx = build_agent_context(agent, agents_on_board=[])
+    ctx = build_agent_context(agent, agents_on_board=[agent, _teammate()])
     soul = render_agent_file("SOUL.md.j2", ctx)
     assert "Preview-URL" in soul or "target_url" in soul
 
@@ -94,7 +102,7 @@ def test_henry_soul_has_preview_url_rule():
 def test_henry_soul_has_markdown_description_rule():
     """Henry's SOUL.md must contain the mandatory Markdown description rule."""
     agent = _make_agent("Henry", role="lead", is_board_lead=True)
-    ctx = build_agent_context(agent, agents_on_board=[])
+    ctx = build_agent_context(agent, agents_on_board=[agent, _teammate()])
     soul = render_agent_file("SOUL.md.j2", ctx)
     assert "Markdown" in soul and "FORBIDDEN" in soul
 

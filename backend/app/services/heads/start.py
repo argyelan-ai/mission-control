@@ -117,6 +117,15 @@ async def start_head(
     to wait for the night ("night shift"); once the head runs, the head's own
     hold stands and the old reason would only mislead."""
     now = time.time() if now is None else now
+    # A local registry repo (``source="local"``, file:// URL — e.g. the first
+    # run's practice repo, ADR-093) has no GitHub name a head could clone, and
+    # it is not one of the operator's scratch repos (<heads_root>/scratch-origin).
+    # Refuse before anything is written rather than start a head that dies at
+    # its clone step. Bringing the two together is a follow-up (onboarding W3).
+    from app.services.repo_registry import is_local_repo
+
+    if is_local_repo(repo):
+        raise HeadStartError(422, "local_repo_not_supported")
     with task_lock(str(task.id)):
         if active_run_for_task(str(task.id), now) is not None:
             raise HeadStartError(409, "head_active")

@@ -27,8 +27,11 @@ FIRST_RUN_KEY = "first_run_wizard"
 PENDING = "pending"
 DONE = "done"
 
+#: What the first run created (services/first_run_starter.py, JSON of ids).
+FIRST_RUN_STARTER_KEY = "first_run_starter"
+
 #: Keys this module owns in app_settings (channel_config skips them quietly).
-FIRST_RUN_SETTING_FIELDS = frozenset({FIRST_RUN_KEY})
+FIRST_RUN_SETTING_FIELDS = frozenset({FIRST_RUN_KEY, FIRST_RUN_STARTER_KEY})
 
 
 async def _row(session: AsyncSession) -> AppSetting | None:

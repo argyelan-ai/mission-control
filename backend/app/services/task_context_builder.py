@@ -892,6 +892,10 @@ async def _load_dispatch_context(
             )
             return list(result.all())
         except Exception:
+            # An empty team also means "a lone lead works the card itself"
+            # (services/lead_mode.py, ADR-089): on a DB error a lead with a
+            # team gets worker instructions for this one dispatch instead of
+            # delegation ones. Rare and harmless — the card still gets done.
             return []
 
     async def _load_child_tasks() -> list[Task]:

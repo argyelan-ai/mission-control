@@ -334,8 +334,13 @@ def test_soul_teaches_the_closed_task_rule():
 
     # The delegation tables render in the orchestrator branch and in the
     # board-lead/lead branch — exactly the roles that delegate.
+    # A lead delegates only when it has a team on its board (ADR-089,
+    # services/lead_mode.py); alone it works its cards itself.
     for role in ("orchestrator", "lead"):
         agent = Agent(id=uuid.uuid4(), name="X", role=role, board_id=uuid.uuid4())
-        soul = render_agent_file("SOUL.md.j2", build_agent_context(agent, agents_on_board=[]))
+        teammate = Agent(id=uuid.uuid4(), name="Y", role="developer", board_id=agent.board_id)
+        soul = render_agent_file(
+            "SOUL.md.j2", build_agent_context(agent, agents_on_board=[agent, teammate])
+        )
         assert "CLOSED task" in soul, role
         assert "dead order" in soul, role

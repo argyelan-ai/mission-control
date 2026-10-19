@@ -66,6 +66,7 @@ from app.routers import (
     claude_account,
     approvals,
     auth,
+    first_run,
     files,
     boards,
     channels,
@@ -402,6 +403,7 @@ app.add_middleware(PathExemptSlowAPIMiddleware)
 
 # Register all routers
 app.include_router(auth.router)
+app.include_router(first_run.router)  # /api/v1/first-run/starter — lead agent + practice repo + first job (onboarding W3)
 app.include_router(system.router)
 app.include_router(boards.router)
 app.include_router(tasks.router)

@@ -149,12 +149,22 @@ def build_agent_context(
     fallback = "lead" if raw_role == "relay" else raw_role
     role_type = _role_type_map.get(agent.name.lower(), fallback)
 
+    # ADR-089: a lead with nobody on its board does the work itself
+    # (services/lead_mode.py — the dispatch message reads the same rule).
+    from app.services.lead_mode import lead_works_itself as _lead_works_itself
+
+    works_itself = _lead_works_itself(
+        is_lead=bool(agent.is_board_lead) or role_type == "lead",
+        teammates=len(team_list),
+    )
+
     return {
         "agent_name": agent.name,
         "agent_id": str(agent.id),
         "agent_emoji": agent.emoji or "🤖",
         "board_id": effective_board_id,
         "is_board_lead": agent.is_board_lead,
+        "lead_works_itself": works_itself,
         "agent_runtime": getattr(agent, "agent_runtime", "openclaw") or "openclaw",
         # Context-economy Stage 2 (Migration 0151): CARD.md.j2 skips the
         # close-example block for omp — the omp-bridge injects its own

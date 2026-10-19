@@ -701,6 +701,12 @@ features:
       # send the admin to /setup; the wizard's last step POSTs complete.
       - "GET /api/v1/auth/first-run"
       - "POST /api/v1/auth/first-run/complete"
+      # First-run starter (services/first_run_starter.py, onboarding W3 3-1):
+      # lead agent from the built-in Lead template + local practice repo as a
+      # normal repo-registry entry + first job. Called by the wizard once it
+      # has its AI step (frontend api.firstRun); callable by API today.
+      - "POST /api/v1/first-run/starter"
+      - "GET /api/v1/first-run/starter"
 
 internal:
   # Agent-scoped machine API (ADR-009: separate from the user router).

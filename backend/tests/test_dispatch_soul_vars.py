@@ -71,13 +71,15 @@ async def test_dispatch_message_no_mc_token_var():
 @pytest.mark.asyncio
 async def test_board_lead_dispatch_still_emits_curl_env_vars():
     """Board-Lead orchestrator prompt still renders curl with $MC_API_URL +
-    $MC_AGENT_TOKEN (create-task payload is not yet covered by `mc`)."""
+    $MC_AGENT_TOKEN (create-task payload is not yet covered by `mc`).
+    The delegation block needs a team on the board (ADR-089, lead_mode.py)."""
     board_id = uuid.uuid4()
     agent = _make_cli_agent(
         name="Henry", board_id=board_id, role="lead", is_board_lead=True,
     )
     task = _make_task(board_id)
     ctx = DispatchContext()
+    ctx.team_agents = [_make_cli_agent(name="Builder", board_id=board_id)]
     msg = _format_dispatch_message(task, agent, ctx)
     assert "$MC_API_URL" in msg
     assert "$MC_AGENT_TOKEN" in msg
