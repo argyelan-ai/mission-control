@@ -212,6 +212,10 @@ if [ -n "${OPENAI_API_KEY:-}" ]; then
 else
     _AUTH_LINE="    auth: none"
 fi
+# name = the model id: omp reports it in ACP configOptions and the composer
+# chip shows it (a fixed placeholder until 19.10.2026). Same plain form as the
+# id line, so any id that parses there parses as the name. (No comment inside
+# the heredoc below: it is unquoted, backticks there would run as commands.)
 # 600: die Datei trägt den API-Schlüssel (apiKey).
 _atomic_write "${MODELS_DIR}/models.yml" 600 <<YAML
 providers:
@@ -222,7 +226,7 @@ providers:
 ${_AUTH_LINE}
     models:
       - id: ${_MODEL}
-        name: MC model
+        name: ${_MODEL}
         # Ohne diese Fahne rendert omp die getrennten Reasoning-Deltas von vLLM
         # als gewöhnlichen Text statt als einklappbaren Denk-Block. Für Modelle
         # ohne Reasoning schadet sie nicht (das Feld kommt dann nie an).
