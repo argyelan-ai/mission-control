@@ -206,6 +206,23 @@ def test_preflight_on_linux_without_linger_names_the_command(world, tmp_path):
     assert out["ok"] is True
 
 
+def test_start_on_linux_without_linger_is_refused(world, tmp_path):
+    """Defence in depth: without linger a logout stops the user manager and
+    kills the job mid-switch — start refuses, it does not rely on the UI
+    having read preflight.ok."""
+    d = _door(world)
+    d.system = lambda: "Linux"
+    d.linger_dir = tmp_path / "linger"
+    d.linger_dir.mkdir()
+    status, out = call(d, "POST", "/mc-update/start", {"expected_target": "v0.2.0"})
+    assert status == 422, out
+    assert [c["id"] for c in out["checks"]] == ["linger"]
+    assert "sudo loginctl enable-linger" in out["checks"][0]["message"]
+    assert journals(world) == []
+    assert world.head_tag() == "v0.1.0"
+    assert d.last_job is None
+
+
 def test_macos_has_no_linger_check(door):
     status, out = call(door, "POST", "/mc-update/preflight", {})
     assert status == 200
@@ -490,6 +507,9 @@ def test_linux_detaches_through_systemd_run(world, tmp_path):
     d = _door(world, env=env, start_wait=1.0)
     d.detach = None
     d.system = lambda: "Linux"
+    d.linger_dir = tmp_path / "linger"          # linger on: start is allowed
+    d.linger_dir.mkdir()
+    (d.linger_dir / door_mod.current_user()).touch()
     status, out = call(d, "POST", "/mc-update/start", {"expected_target": "v0.2.0"})
     assert status == 202, out          # the fake systemd-run never starts it: "starting"
     argv = rec.read_text().splitlines()
@@ -682,3 +702,32 @@ def test_bridge_start_runs_the_resume_routine(world, tmp_path):
     wait_phase(world, "done")
     wait_lock_free(world)
     assert world.head_tag() == "v0.2.0"
+
+
+def test_bridge_starts_the_boot_routine_only_after_its_bind(tmp_path):
+    """Linux binds to MC's network gateway, which can be missing for a while;
+    systemd then restarts the bridge every few seconds. Each restart must not
+    spawn another boot routine (orphaned `docker info` / drain-sweep children,
+    a relaunched resume job wiping the previous job's files)."""
+    src = (SCRIPTS / "cli-bridge.py").read_text()
+    main = src.split('if __name__ == "__main__":', 1)[1]
+    assert main.index("_make_http_server(BIND, PORT)") < main.index("_start_update_door(UPDATE_DOOR)")
+
+
+def test_launch_prunes_job_files_older_than_two_weeks(world, door):
+    jobs = door._jobs_dir()
+    old = time.time() - 15 * 86400
+    for name in ("start-r1.out", "start-r1.exit", "resume-r1-boot.out", "resume-r1-boot.exit"):
+        (jobs / name).write_text("0\n")
+        os.utime(jobs / name, (old, old))
+    (jobs / "start-r2.exit").write_text("0\n")       # recent: kept
+    keep = jobs / "notes.txt"                          # not a job file: never touched
+    keep.write_text("x")
+    os.utime(keep, (old, old))
+    status, out = call(door, "POST", "/mc-update/start", {"expected_target": "v0.2.0"})
+    assert status in (200, 202), out
+    names = {p.name for p in jobs.iterdir()}
+    assert not names & {"start-r1.out", "start-r1.exit", "resume-r1-boot.out", "resume-r1-boot.exit"}
+    assert {"start-r2.exit", "notes.txt"} <= names
+    wait_phase(world, "done")
+    wait_lock_free(world)

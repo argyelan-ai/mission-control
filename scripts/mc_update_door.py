@@ -62,6 +62,7 @@ MIN_TOKEN_LEN = 32
 MAX_BODY = 4096
 DEFAULT_MAX_STARTS = 3
 LINGER_DIR = Path("/var/lib/systemd/linger")
+JOB_FILE_MAX_AGE = 14 * 86400   # seconds a job's .out/.exit stay in <state>/bridge
 
 # route → (method, allowed body keys)
 ROUTES: Dict[str, Tuple[str, Tuple[str, ...]]] = {
@@ -438,9 +439,24 @@ class Door:
         os.chmod(d, 0o700)
         return d
 
+    @staticmethod
+    def _prune_job_files(jobs: Path) -> None:
+        """One .out/.exit pair per job: drop pairs older than two weeks (the
+        journal keeps the run's history; these are only the raw job output)."""
+        cutoff = time.time() - JOB_FILE_MAX_AGE
+        for p in jobs.iterdir():
+            if not p.name.endswith((".out", ".exit", ".exit.tmp")):
+                continue
+            try:
+                if p.stat().st_mtime < cutoff:
+                    p.unlink()
+            except OSError:
+                pass
+
     def launch(self, kind: str, key: str, engine_args: List[str]) -> Path:
         """Start the engine detached; return the path of its exit-code file."""
         jobs = self._jobs_dir()
+        self._prune_job_files(jobs)
         out = jobs / f"{kind}-{key}.out"
         ex = jobs / f"{kind}-{key}.exit"
         for p in (out, ex, Path(str(ex) + ".tmp")):
@@ -541,6 +557,12 @@ class Door:
             busy = self._busy()
             if busy:
                 return busy
+            # Defence in depth: a failing bridge check (Linux without linger —
+            # a logout would kill the job mid-switch) refuses the start here,
+            # whatever the caller made of preflight.ok.
+            failed = [c for c in self.bridge_checks() if c["status"] == "fail"]
+            if failed:
+                return 422, {"error": "a check failed — nothing was changed", "checks": failed}
             used, limit = self.starts_last_24h(), self.max_starts()
             if used >= limit:
                 return 429, {"error": f"{used} update starts in the last 24 hours — the limit is {limit} "
@@ -699,6 +721,10 @@ class Door:
             self.boot_state = {"state": "resuming", "run_id": open_run.run_id, "phase": open_run.phase,
                                "at": _iso()}
             return dict(self.boot_state)
+        # ADR-094 decision 7 speaks of lifting an *expired* drain recorded in
+        # the history. Here no run is open and no live lock exists, so any
+        # drain left behind has no owner that could ever lift it: the sweep
+        # lifts it regardless of age (the history lands with PR 4c).
         sweep: Dict[str, Any] = {}
         for attempt in range(max(1, sweep_tries)):
             try:

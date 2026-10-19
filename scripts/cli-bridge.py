@@ -1639,8 +1639,6 @@ if __name__ == "__main__":
         sys.exit(2)
     _check_tmux()
     UPDATE_DOOR = _make_update_door(BRIDGE_TOKEN)
-    if UPDATE_DOOR is not None:
-        _start_update_door(UPDATE_DOOR)
     ws_thread = threading.Thread(target=_start_ws_server, daemon=True)
     ws_thread.start()
     log(f"WS PTY server started on port {WS_PORT}")
@@ -1659,5 +1657,10 @@ if __name__ == "__main__":
             "gateway, Docker may not be up yet (the service retries), or the network got "
             "another address — re-run ./install.sh --bridge in the install folder.")
         sys.exit(1)
+    # The boot routine only after a successful bind: while the gateway is
+    # missing, systemd restarts us every few seconds, and each restart must
+    # not leave another routine (docker info / drain-sweep children) behind.
+    if UPDATE_DOOR is not None:
+        _start_update_door(UPDATE_DOOR)
     log(f"Listening on http://{BIND}:{PORT} (token required except /ping)")
     server.serve_forever()
