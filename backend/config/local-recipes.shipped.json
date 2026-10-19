@@ -13,6 +13,9 @@
       "sha256:5e60cdad0a2a30451654c687d15f81b86422878e3aa918dc2948fcbf3d442767",
       "sha256:c35e158d256c979191e00efdc04b224a5a52a9087afb6d29ea0ce0fddb70ac2b"
     ],
+    "deepseek-v41-flash-1017-exl3-tensorfold": [
+      "sha256:0a5ac65b2de42c0d93e29bdb3ef8a932322ce02ca0ff90335bf1614ba6fbb13c"
+    ],
     "gemma4-27b-nvfp4": [
       "sha256:1bddc72137fcd0bcfc386d1863f727fb384477d897bf1c064d00935b996a71f2",
       "sha256:af0d02dd804cabc811ff941bc9d66b2c14c5c4d9ec807bbcf7fdd228a0416602"
