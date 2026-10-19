@@ -1664,6 +1664,22 @@
         ]
       }
     },
+    "/api/v1/auth/step-up": {
+      "get": {
+        "operationId": "step_up_availability_api_v1_auth_step_up_get",
+        "summary": "Step Up Availability",
+        "tags": [
+          "auth"
+        ]
+      },
+      "post": {
+        "operationId": "step_up_confirm_api_v1_auth_step_up_post",
+        "summary": "Step Up Confirm",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
     "/api/v1/auth/stream-ticket": {
       "post": {
         "operationId": "issue_stream_ticket_api_v1_auth_stream_ticket_post",

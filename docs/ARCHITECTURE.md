@@ -112,6 +112,8 @@ an opt-in preview, macOS host only — see
 2. **Agent PBKDF2 (200k iter)** — `POST /agents` erzeugt Token einmalig, Redis-Cache `SHA256(token) → agent_id` (5min TTL) verhindert N×200ms Hash pro Request
 3. **Legacy LOCAL_AUTH_TOKEN** — nur falls explizit gesetzt, Fallback
 
+**Step-up (erneute Passwort-Bestätigung, ADR-094 §9):** gefährliche Admin-Aktionen hängen `Depends(require_recent_auth())` aus `services/step_up.py` an. `POST /api/v1/auth/step-up` prüft das Passwort (gleiche Bremse wie Login, plus pro Konto) und gibt einen Einmal-Token, 5 Min gültig, an Benutzer + `token_version` gebunden; der Client schickt ihn im Header `X-MC-Step-Up`. Abgelehnt: `LOCAL_AUTH_TOKEN` und der MCP-Dienst-Token, Konten ohne Passwort, Cookie/`?token=`. Fehlt der Token → **403** `step_up_required` (nie 401 — das würde die UI abmelden). `GET /api/v1/auth/step-up` sagt der UI, ob der Knopf möglich ist. Welche Anmeldung eine Anfrage trug, steht in `request.state.mc_auth_method` (`app/auth.py`).
+
 **16 Scopes**, default-gefiltert pro Agent-Typ (Lead/Developer/Planner/Reviewer/Deployer/Researcher/Writer). `require_scope()` Dependency erzwingt Scopes backend-seitig, zusätzlich werden TOOLS.md-Sektionen gefiltert (weniger Tokens, weniger Angriffsfläche).
 
 ### 2. Frontend (Next.js 15)
