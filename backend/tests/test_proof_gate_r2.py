@@ -426,3 +426,48 @@ async def test_stats_endpoint_answers_a_user(auth_client, fake_redis):
     assert body["window_days"] == 7
     assert set(proof_gate.CAUGHT_BY_VALUES) <= set(body["caught_by"])
     assert "mode" in body and "enforce_min_checks" in body
+
+
+# ── a: branch binding without false alarms (dry run 2026-10-19) ─────────
+# The dry run over the last 30 done cards showed `pr_branch_mismatch` on 6 of
+# 8 real code cards: MC's workspace pushes `task/<slug>` and agents pick their
+# own branch names, the card keeps the branch it was dispatched with.
+
+
+def _dated(created):
+    pr = _pr(branch="task/other")
+    pr["createdAt"] = created.strftime("%Y-%m-%dT%H:%M:%SZ")
+    return pr
+
+
+@pytest.mark.asyncio
+async def test_workspace_branch_of_the_card_is_its_branch(client, fake_redis, gate_mode):
+    from app.services.git_service import slugify_workspace_slug
+
+    gate_mode("enforce")
+    data = await _seed(branch_name="fix/what-the-dispatcher-asked-for")
+    pr = _pr(branch=f"task/{slugify_workspace_slug('Feature mit PR')}")
+    resp, events = await _call(client, data, {"status": "review"}, _fake_gh(pr, files=_FILES))
+    assert resp.status_code == 200, resp.text
+    assert "pr_branch_mismatch" not in _all_codes(events)
+
+
+@pytest.mark.asyncio
+async def test_own_branch_name_on_a_newer_pr_is_a_notice(client, fake_redis, gate_mode):
+    gate_mode("enforce")
+    data = await _seed(branch_name="fix/card-branch")
+    resp, events = await _call(client, data, {"status": "review"},
+                               _fake_gh(_dated(utcnow() + timedelta(minutes=5)), files=_FILES))
+    assert resp.status_code == 200, resp.text
+    assert "pr_branch_mismatch" in _all_codes(events)
+
+
+@pytest.mark.asyncio
+async def test_foreign_pr_older_than_the_card_is_refused(client, fake_redis, gate_mode):
+    """Sabotage: someone else's PR, opened before this card existed."""
+    gate_mode("enforce")
+    data = await _seed(branch_name="fix/card-branch")
+    resp, _ = await _call(client, data, {"status": "review"},
+                          _fake_gh(_dated(utcnow() - timedelta(days=3)), files=_FILES))
+    assert resp.status_code == 422, resp.text
+    assert "pr_branch_mismatch" in _codes(resp)

@@ -107,7 +107,7 @@ _NOT_A_PR_BRANCH = {"main", "master", "deploy-main", "develop"}
 _PR_CREATED_MARKER = "PR erstellt:"
 
 _GH_PR_FIELDS = (
-    "number,state,url,author,headRefName,headRefOid,changedFiles,statusCheckRollup,commits,"
+    "number,state,url,author,createdAt,headRefName,headRefOid,changedFiles,statusCheckRollup,commits,"
     "reviews,comments"
 )
 
@@ -706,6 +706,30 @@ async def discover_pr(session, task, token: str) -> tuple[str | None, str]:
     return None, ""
 
 
+async def _card_branches(session, task) -> set[str]:
+    """Branch names that belong to this card: the one it carries and the
+    ones MC's workspaces push (``task/<slug>``), also of its source card."""
+    from app.services.git_service import slugify_project, slugify_workspace_slug
+
+    cards = [task]
+    source_id = getattr(task, "source_task_id", None)
+    if source_id:
+        from app.models.task import Task
+
+        source = await session.get(Task, source_id)
+        if source is not None:
+            cards.append(source)
+    names: set[str] = set()
+    for card in cards:
+        if getattr(card, "branch_name", None):
+            names.add(card.branch_name.strip())
+        title = getattr(card, "title", None) or ""
+        if title:
+            names.add(f"task/{slugify_workspace_slug(title)}")
+            names.add(f"task/{slugify_project(title)}")
+    return names
+
+
 def code_card_level(task, target_status: str) -> str | None:
     """How loud "no PR" is for this card: HARD | NOTICE | INFO | None.
 
@@ -1067,11 +1091,21 @@ async def evaluate_proof_gate(
             f"{' oder '.join(allowed)}-PR. Ein geschlossener oder fremder PR belegt nichts.",
         ))
     card_branch = (getattr(task, "branch_name", None) or "").strip()
-    if card_branch and remote_branch and card_branch != remote_branch:
+    if card_branch and remote_branch and remote_branch not in await _card_branches(session, task):
+        # Agents pick their own branch names and MC's workspace pushes
+        # `task/<slug>` — a different name alone is no foreign PR (dry run
+        # 2026-10-19: 6 of 8 real code cards). A PR opened BEFORE the card
+        # existed cannot be this card's work (createdAt is GitHub's clock,
+        # not the agent's).
+        pr_created = _parse_ts(pr.get("createdAt"))
+        card_created = _parse_ts(getattr(task, "created_at", None))
+        foreign = pr_created is None or card_created is None or pr_created < card_created
         result.findings.append(Finding(
-            "pr_branch_mismatch", HARD,
+            "pr_branch_mismatch", HARD if foreign else NOTICE,
             f"PR #{number} laeuft auf Branch '{remote_branch}', die Karte auf "
-            f"'{card_branch}' — das ist nicht der PR dieser Karte.",
+            f"'{card_branch}'"
+            + (" — und der PR ist aelter als die Karte: nicht der PR dieser Karte."
+               if foreign else " — Branch auf der Karte nachtragen."),
         ))
     other = await _pr_on_other_card(session, task, pr_url)
     if other is not None:
