@@ -12,6 +12,8 @@
 #  * zsh-set-split   — `set -- $var` in the agent's zsh.
 #  * background-tests — a test run with the tool flag run_in_background, or sent
 #                      to the background with '&' and no wait.
+#  * tmp-previews    — a preview, deploy folder, handoff or screenshot written
+#                      under /tmp (macOS clears it after a few days).
 #  * uncommitted-work — `git checkout <ref|file>`, `switch`, `restore`, `reset --hard`,
 #                      `clean -f`, `stash drop` in a tree with uncommitted changes
 #                      (the hook reads `git status` of that tree; read-only).
@@ -103,6 +105,7 @@ PUSH_GATE_SCAN=0 bash "$HERE/push-gate.sh" "$work/cmd" | sed -n 's/^.*:[0-9][0-9
 bash "$HERE/gate-exit.sh" "$work/cmd" | sed -n 's/^.*:[0-9][0-9]*: \[gate-exit\] /gate-exit: /p' >> "$work/findings"
 bash "$HERE/zsh-set-split.sh" "$work/cmd" | sed -n 's/^.*:[0-9][0-9]*: \[zsh-set-split\] /zsh-set-split: /p' >> "$work/findings"
 bash "$HERE/background-tests.sh" "$work/cmd" | sed -n 's/^.*:[0-9][0-9]*: \[background-tests\] /background-tests: /p' >> "$work/findings"
+bash "$HERE/tmp-previews.sh" "$work/cmd" | sed -n 's/^.*:[0-9][0-9]*: \[tmp-previews\] /tmp-previews: /p' >> "$work/findings"
 if [ "$(cat "$work/bg")" = 1 ] && grep -Eq "$RE_TEST" "$work/cmd"; then
   add "background-tests: test run with run_in_background — run it in the foreground and commit before the report"
 fi
