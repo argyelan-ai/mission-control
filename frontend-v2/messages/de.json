@@ -949,6 +949,8 @@
     "attachmentExpandImage": "Bild {name} vergrössern",
     "attachmentCollapseImage": "Bild {name} verkleinern",
     "attachmentUnavailable": "nicht mehr verfügbar",
+    "workingOn": "Arbeitet an",
+    "workingOnOpen": "Ansehen",
     "backToSessions": "Zurück zu den Chats",
     "chatOptions": "Chat-Optionen",
     "sessionWaitingAtPrompt": "Session läuft, wartet am Prompt",

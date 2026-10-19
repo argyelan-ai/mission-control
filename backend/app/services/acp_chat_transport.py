@@ -49,7 +49,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from pathlib import Path
 from typing import Any, Protocol
 
 import httpx
@@ -80,8 +79,6 @@ _HTTP_TIMEOUT_SECONDS = 10.0
 #: ``routers/cli_terminal.py`` (18794).
 HERMES_BRIDGE_BASE_URL = "http://host.docker.internal:18794"
 
-#: Name der Zustandsdatei, die der Daemon nach jeder Aenderung neu schreibt.
-_STATE_FILENAME = "acp-chat-state.json"
 
 
 def _with_mode(payload: dict[str, Any], mode: str | None) -> dict[str, Any]:
@@ -331,31 +328,22 @@ def read_acp_chat_state(agent) -> dict | None:
     Der Daemon schreibt sie neben die Transkripte, in den Ordner des
     Arbeitsverzeichnisses (``<sessions-wurzel>/<kodiertes-cwd>/``). Ein Agent
     kann mehrere solcher Ordner haben (verschiedene cwds) — die juengste Datei
-    gewinnt, gleiche Regel wie ``omp_chat.find_active_session``.
+    gewinnt (``omp_chat.chat_state_file``).
 
     Blockierendes I/O; Aufrufer aus dem Request-Pfad wickeln es in
     ``asyncio.to_thread``. Wirft nie: eine fehlende Datei ist der NORMALE
     Zustand, solange der Daemon noch nicht geschrieben hat — die Capabilities
     antworten darauf mit leeren Listen und einem Grund, nicht mit einem
     Fehler."""
-    from app.services.omp_chat import resolve_transcript_dir
+    from app.services.omp_chat import chat_state_file, resolve_transcript_dir
 
     root = resolve_transcript_dir(agent)
     if root is None:
         return None
 
-    newest: Path | None = None
-    newest_mtime = -1.0
-    for pattern in (_STATE_FILENAME, f"*/{_STATE_FILENAME}"):
-        for candidate in root.glob(pattern):
-            try:
-                mtime = candidate.stat().st_mtime
-            except OSError:
-                continue
-            if mtime > newest_mtime:
-                newest_mtime = mtime
-                newest = candidate
-
+    # Dieselbe Datei, die ``omp_chat.find_active_session`` als Zeiger auf die
+    # Chat-Sitzung liest — eine Suchregel, nicht zwei.
+    newest = chat_state_file(root)
     if newest is None:
         return None
     try:
