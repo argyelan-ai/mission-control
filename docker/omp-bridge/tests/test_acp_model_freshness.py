@@ -328,7 +328,8 @@ def test_task_session_marks_the_dispatch_prompt_as_from_mc(tmp_path):
     assert users, "no prompt line"
     msg = users[0]["message"]
     assert msg["attribution"] == "mc"
-    assert msg["origin"] == {"kind": "task", "taskId": "T-bench"}
+    assert msg["origin"] == {"kind": "task", "taskId": "T-bench",
+                             "title": "[Bench] Pagoda — New-Model-2"}
 
 
 def test_task_session_pin_failure_lands_in_the_task_chat(tmp_path):

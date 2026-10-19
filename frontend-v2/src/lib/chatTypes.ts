@@ -26,6 +26,9 @@ export type MessageSourceKind = "task" | "nudge" | "inbox" | "teammate" | "syste
 export interface MessageSource {
   kind: MessageSourceKind;
   title: string | null;
+  /** Nur bei `kind === "task"`: ein Korrektur-Lauf nach einem Review-„Change"
+   *  (`# CORRECTION NEEDED:`), kein neuer Auftrag. */
+  redispatch?: boolean;
 }
 
 export interface MessageEvent {

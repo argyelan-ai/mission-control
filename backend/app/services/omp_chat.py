@@ -644,7 +644,12 @@ def _strip_read_format(content: str) -> str:
 
 _TASK_FILE_RE = re.compile(r"^task-.*\.md$")
 _INBOX_FILE_RE = re.compile(r"^\d{6,}__.*\.msg$")
-_NEW_TASK_RE = re.compile(r"^# New Task:\s*(?P<title>.+?)\s*$", re.MULTILINE)
+# Header of an MC dispatch prompt (dispatch_message_builder): ``New Task`` on
+# the first dispatch, ``CORRECTION NEEDED`` on a re-dispatch after a review
+# change — both are a task, the second one a correction run.
+_NEW_TASK_RE = re.compile(
+    r"^# (?P<header>New Task|CORRECTION NEEDED):\s*(?P<title>.+?)\s*$", re.MULTILINE,
+)
 
 
 def _mention_source(name: str | None, content: str) -> dict[str, Any] | None:
@@ -667,7 +672,10 @@ def _mention_source(name: str | None, content: str) -> dict[str, Any] | None:
         return None
     if _TASK_FILE_RE.match(name):
         m = _NEW_TASK_RE.search(content)
-        return {"kind": "task", "title": m.group("title") if m else None}
+        source: dict[str, Any] = {"kind": "task", "title": m.group("title") if m else None}
+        if m and m.group("header") == "CORRECTION NEEDED":
+            source["redispatch"] = True
+        return source
     if "nudge" in name:
         return {"kind": "nudge", "title": None}
     if _INBOX_FILE_RE.match(name):
@@ -815,12 +823,24 @@ class OmpLineParser:
             # turn and the chat showed 8000 characters of briefing as the
             # operator's own bubble (incident 19.10.2026, bench task).
             kind = (origin or {}).get("kind")
+            m = _NEW_TASK_RE.search(text)
             if kind not in ("task", "nudge"):
-                kind = "task" if _NEW_TASK_RE.search(text) or task_session else "nudge"
+                kind = "task" if m or task_session else "nudge"
+            elif kind == "nudge" and m and m.group("header") == "CORRECTION NEEDED":
+                # Bridges before 19.10.2026 guessed the origin from the text
+                # and knew only "# New Task:" — a correction re-dispatch
+                # landed as an untitled nudge. The header is unambiguous.
+                kind = "task"
             title = None
+            redispatch = False
             if kind == "task":
-                m = _NEW_TASK_RE.search(text)
-                title = m.group("title") if m else None
+                title = (origin or {}).get("title") or (m.group("title") if m else None)
+                redispatch = bool((origin or {}).get("redispatch")) or bool(
+                    m and m.group("header") == "CORRECTION NEEDED"
+                )
+            source: dict[str, Any] = {"kind": kind, "title": title}
+            if redispatch:
+                source["redispatch"] = True
             return [
                 {
                     "kind": "message",
@@ -828,7 +848,7 @@ class OmpLineParser:
                     "ts": ts,
                     "role": "teammate",
                     "teammate": None,
-                    "source": {"kind": kind, "title": title},
+                    "source": source,
                     "text": text[:_MENTION_TRUNCATE_LEN],
                     "model": None,
                     "sidechain": False,

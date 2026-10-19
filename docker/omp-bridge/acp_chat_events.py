@@ -752,7 +752,8 @@ class ACPEventMapper:
 
     def map_user_prompt(
         self, prompt_text: str, *, origin: Optional[str] = None,
-        task_id: str = "",
+        task_id: str = "", title: Optional[str] = None,
+        redispatch: bool = False,
     ) -> list[dict[str, Any]]:
         """The user turn itself -> a user message line, so the chat view shows
         what the bridge asked (the native transcript carries the same via the
@@ -764,7 +765,12 @@ class ACPEventMapper:
         renders it as an event "from Mission Control" — not as a bubble the
         operator typed (incident 19.10.2026: the whole Operating Card of a
         bench task showed up as the operator's own message). The native TUI
-        path gets the same via its ``@task-….md`` mention."""
+        path gets the same via its ``@task-….md`` mention.
+
+        ``title`` / ``redispatch`` (task prompts only): the task's title from
+        its ``# New Task:`` / ``# CORRECTION NEEDED:`` header, and whether it
+        is a correction re-dispatch — the chat titles the task event with it
+        instead of re-parsing the prompt text."""
         text = str(prompt_text or "").strip()
         if not text:
             return []
@@ -776,6 +782,10 @@ class ACPEventMapper:
         if origin:
             message["attribution"] = "mc"
             message["origin"] = {"kind": str(origin), "taskId": str(task_id or "") or None}
+            if title:
+                message["origin"]["title"] = str(title)[:200]
+            if redispatch:
+                message["origin"]["redispatch"] = True
         return [
             {
                 "type": "message",
