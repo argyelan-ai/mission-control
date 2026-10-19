@@ -1,6 +1,6 @@
 """Which model an ACP session is pinned to — read at USE time, never at boot.
 
-Incident 19.10.2026 (Sparky, runtime switch GLM -> DeepSeek): MC re-rendered
+Incident 19.10.2026 (an omp agent, runtime switch GLM -> DeepSeek): MC re-rendered
 ``models.yml`` + ``omp.env`` inside the running container (ADR-078 reload,
 ``runtime_propagation.reload_omp_config``), but the chat daemon
 (``acp_chat.py``) and the task bridge (``bridge.py``) are long-lived processes

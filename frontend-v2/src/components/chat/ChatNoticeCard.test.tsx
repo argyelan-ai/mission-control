@@ -1,5 +1,5 @@
 /**
- * Hinweiskarte im Chat (Vorfall 19.10.2026, Sparky nach Runtime-Wechsel).
+ * Hinweiskarte im Chat (Vorfall 19.10.2026, omp-Agent nach Runtime-Wechsel).
  *
  * Der Chat-Daemon pinnte jede neue Sitzung auf das alte, von der Runtime
  * nicht mehr angebotene Modell. Jetzt nimmt er das aktuelle und schreibt eine

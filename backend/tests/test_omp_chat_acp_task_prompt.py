@@ -74,9 +74,9 @@ def test_operator_turn_in_the_chat_daemon_session_stays_a_user_bubble():
     typed must stay theirs."""
     p = OmpLineParser()
     p(_header(bridge="acp"))
-    [ev] = p(_user("sparky?"))
+    [ev] = p(_user("anyone there?"))
     assert ev["role"] == "user"
-    assert ev["text"] == "sparky?"
+    assert ev["text"] == "anyone there?"
 
 
 def test_reset_forgets_the_task_session():

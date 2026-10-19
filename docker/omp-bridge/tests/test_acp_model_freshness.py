@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Incident 19.10.2026 — a runtime switch must reach long-lived ACP processes.
 
-Sparky's runtime moved GLM -> DeepSeek. MC re-rendered models.yml + omp.env in
+An omp agent's runtime moved GLM -> DeepSeek. MC re-rendered models.yml + omp.env in
 the running container, but the chat daemon (acp_chat.py) and the task bridge
 (bridge.py) kept the OMP_MODEL_SELECTOR of their boot environment (six days
 old). Every new chat session and every task session was pinned to the old
