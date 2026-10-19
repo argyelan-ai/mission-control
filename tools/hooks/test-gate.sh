@@ -1040,6 +1040,8 @@ def suite_cmd(kind, root, py, files, xdist):
     if kind.startswith("py:"):
         d = kind[3:]
         argv = [py, "-m", "pytest", "-q", "-x", "-p", "no:cacheprovider", "-rfE"]
+        if xdist and d.startswith("tools/") and len(files) >= 2:
+            argv += ["-n", "auto"]  # our own tool tests are xdist-safe (CI: gate-audit)
         rel = [f[len(d) + 1:] if d and f.startswith(d + "/") else f for f in files]
         return argv + rel, _os.path.join(root, d), \
             {"PYTHONPATH": _os.pathsep.join([_os.path.join(root, d), _os.path.join(root, "backend")])}
