@@ -1,0 +1,4 @@
+# The push was rejected: the remote still has the old commit.
+branch=feat/example
+head=1111111111111111111111111111111111111111
+remote=2222222222222222222222222222222222222222

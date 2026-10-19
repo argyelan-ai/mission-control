@@ -1,0 +1,2 @@
+# Piping a gate into tail hides its exit code without pipefail.
+false | tail -1

@@ -1,0 +1,31 @@
+# Evidence captured after a deploy (format: "## <name>" then the value).
+## expect_ref
+3e1f15290000000000000000000000000000beef
+## deployed_ref
+3e1f15290000000000000000000000000000beef
+## ref_commit_epoch
+1760860000
+## backend_created_epoch
+1760850000
+## worker_created_epoch
+1760863610
+## expect_workdir
+/srv/deploy-main
+## backend_workdir
+/srv/deploy-main
+## file_compare
+SAME backend/app/services/example.py
+SAME backend/app/routers/example.py
+## api_log
+INFO ENABLE_BACKGROUND_SERVICES=false — background services stay off in this process
+## api_watchdog_count
+0
+## worker_log
+INFO Worker startet Hintergrund-Dienste
+INFO Watchdog started
+## worker_health
+healthy
+## bootstrap_status
+403
+## alembic_current
+0231_example (head)

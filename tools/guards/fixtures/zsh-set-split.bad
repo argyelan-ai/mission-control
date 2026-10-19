@@ -1,0 +1,7 @@
+#!/bin/zsh
+# Creating several worktrees in a loop. zsh does not split $p into words,
+# so $1 is the whole string and $2 is empty.
+for p in "wt-a feat/a" "wt-b feat/b"; do
+  set -- $p
+  git worktree add "../$1" -b "$2" origin/main
+done
