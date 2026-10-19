@@ -144,6 +144,23 @@ nichts, und die Zwangsjacke bleibt so streng wie bisher. Steuerung ist eine bewu
 Nebeneffekt einer Installation. Fehlt die Regel, scheitert jede Setz-Aktion
 mit einer verständlichen Meldung in `device_state.last_error` statt mit
 einem rohen Exit-Code — der Agent stürzt nie ab.
+
+Laufende Engines melden (ab 0.2.0, ADR-096 §3.2 Mehrbox-Runtimes):
+
+MC schickt im Soll-Zustand eine Positivliste `watch` ([{kind, name}], kind =
+container|process). Der Agent meldet in `device_state.anchors` NUR für diese
+Namen running/stopped/unknown, nie eine Liste von allem auf der Box. Rein
+lesend, auch ohne `--allow-control`: Container über ein `GET
+/containers/json` am Docker-Socket, Prozesse über /proc.
+
+Rechte: für Container-Anker muss der Dienst-Benutzer den Docker-Socket lesen
+dürfen (Gruppe `docker`, prüfen mit `id -nG <user>`). Achtung, ehrlich
+gesagt: Docker-Gruppe heisst root-Macht auf der Box — der Agent nutzt davon
+nur den einen Lese-Aufruf. Fehlt das Recht, meldet der Agent `docker:
+no_access` und jeder Container-Anker ist "unknown" — nie "running".
+Prozess-Anker funktionieren weiter (Rückfallweg ohne Docker-Recht).
+Ausnahme: /proc mit `hidepid` versteckt fremde Prozesse; dann wirkt ein
+Prozess-Anker "stopped".
 """
 from __future__ import annotations
 
@@ -158,7 +175,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-AGENT_VERSION = "0.1.0"
+AGENT_VERSION = "0.2.0"
 HEARTBEAT_INTERVAL_S = 15
 MAX_BACKOFF_S = 120
 HTTP_TIMEOUT_S = 10
@@ -202,6 +219,26 @@ MIN_FREE_KBYTES_FILE = Path("/proc/sys/vm/min_free_kbytes")
 OOM_GUARD_UNIT = "earlyoom"
 NET_ROUTE_FILE = Path("/proc/net/route")
 SYS_CLASS_NET = Path("/sys/class/net")
+
+# ── Laufende Engines melden (ADR-096 §3.2, Mehrbox-Runtimes) ─────────────────
+#
+# MC schickt im Soll-Zustand eine POSITIVLISTE `watch`: welche Container bzw.
+# Prozesse auf dieser Box zu einer Runtime gehören. Der Agent meldet NUR für
+# diese Namen "running" / "stopped" / "unknown" — nie eine Liste von allem,
+# was auf der Box läuft (fremde Container gehen MC nichts an).
+# Rein lesend: ein `GET /containers/json` am Docker-Socket, für Prozesse /proc.
+# Grenzen IDENTISCH zu backend/app/services/device_state.py (Paritätstest in
+# backend/tests/test_node_anchor_api.py).
+ANCHOR_KINDS = ("container", "process")
+WATCH_MAX = 16
+ANCHOR_NAME_MAX = 64
+# Docker-Namen erlauben genau diese Zeichen; erstes Zeichen nur Buchstabe
+# oder Ziffer. Kein Leerzeichen, kein `/`, kein `;` — ein Name landet zwar nie
+# in einer Shell, aber eine strenge Liste macht jede spätere Verwendung sicher.
+ANCHOR_NAME_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-"
+DOCKER_SOCKET = "/var/run/docker.sock"
+DOCKER_TIMEOUT_S = 3
+PROC_ROOT = "/proc"
 # Plausibilitätsgrenzen. Ein Wert ausserhalb ist keine Konfiguration, sondern
 # ein Fehler — ablehnen, statt das Gerät unbrauchbar zu machen (min_free von
 # 100 GB macht die Box unbenutzbar, eine MTU von 70 killt das Netz).
@@ -917,6 +954,238 @@ def collect_device_state(
     except OSError:
         state["mtu"] = None
     return state
+
+
+# ── Laufende Engines melden: Positivliste aus dem Soll (ADR-096 §3.2) ────────
+#
+# Drei Regeln:
+#  1. Nur was in `desired_state.watch` steht, wird gemeldet. Was Docker sonst
+#     noch liefert, wird verworfen, bevor es den Agenten verlässt.
+#  2. Nur lesen. Am Docker-Socket genau ein `GET /containers/json`; kein
+#     Start, Stopp, Exec oder Log-Lesen. Für Prozesse nur /proc.
+#  3. Nie ein falsches "running". Kann der Dienst-Benutzer Docker nicht lesen
+#     (nicht in der Gruppe `docker`) oder läuft kein Docker, ist ein
+#     Container-Anker "unknown" mit Grund — nie "running" und auch nicht
+#     "stopped" (das wäre genauso geraten). Prozess-Anker brauchen kein
+#     Docker und funktionieren dann weiter: das ist der Rückfallweg.
+#
+# Warum der Docker-Socket direkt und nicht `docker ps`: kein fork+exec pro
+# Heartbeat, keine Abhängigkeit vom Docker-CLI, und derselbe kleine HTTP-Leser
+# wie für MC (_read_http_response) — siehe Speicher-Diät oben.
+
+
+def valid_anchor_name(name: object) -> bool:
+    """Name eines Ankers: 1..ANCHOR_NAME_MAX Zeichen aus ANCHOR_NAME_CHARS,
+    erstes Zeichen Buchstabe/Ziffer. Ohne `re` (Speicher-Diät)."""
+    if not isinstance(name, str) or not (1 <= len(name) <= ANCHOR_NAME_MAX):
+        return False
+    if name[0] in "_.-":
+        return False
+    return all(ch in ANCHOR_NAME_CHARS for ch in name)
+
+
+def parse_watch(desired: object) -> tuple[list[dict], list[str]]:
+    """Die Positivliste aus dem Soll-Zustand, streng geprüft.
+
+    Rückgabe: (gültige Anker, Fehlerliste). Fehlt `watch`, gibt es nichts zu
+    melden. Ungültige Einträge fallen weg (fail-closed) und werden geloggt.
+    """
+    if not isinstance(desired, dict) or "watch" not in desired:
+        return [], []
+    raw = desired["watch"]
+    if not isinstance(raw, list):
+        return [], ["watch ist keine Liste — ignoriert"]
+    watch: list[dict] = []
+    errors: list[str] = []
+    seen: set = set()
+    for entry in raw:
+        if not isinstance(entry, dict):
+            errors.append(f"watch-Eintrag {entry!r:.80} abgelehnt (Objekt erwartet)")
+            continue
+        kind, name = entry.get("kind"), entry.get("name")
+        if kind not in ANCHOR_KINDS:
+            errors.append(f"watch-Eintrag kind={kind!r:.40} abgelehnt (erlaubt: {', '.join(ANCHOR_KINDS)})")
+            continue
+        if not valid_anchor_name(name):
+            errors.append(f"watch-Eintrag name={name!r:.80} abgelehnt")
+            continue
+        if (kind, name) in seen:
+            continue
+        if len(watch) >= WATCH_MAX:
+            errors.append(f"watch hat mehr als {WATCH_MAX} Einträge — Rest ignoriert")
+            break
+        seen.add((kind, name))
+        watch.append({"kind": kind, "name": name})
+    return watch, errors
+
+
+_URL_SAFE = frozenset(b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-~")
+
+
+def _percent_encode(text: str) -> str:
+    """Minimaler URL-Encoder (kein urllib.parse, Speicher-Diät)."""
+    return "".join(chr(b) if b in _URL_SAFE else f"%{b:02X}" for b in text.encode("utf-8"))
+
+
+def parse_docker_running(body: bytes) -> set[str]:
+    """Namen laufender Container aus einer `/containers/json`-Antwort.
+
+    Docker schreibt Namen mit führendem `/`. Nur `State == "running"` zählt
+    — ein pausierter oder gerade beendeter Container bedient nichts."""
+    data = json.loads(body.decode("utf-8")) if body else []
+    names: set[str] = set()
+    if not isinstance(data, list):
+        raise ValueError("Docker-Antwort ist keine Liste")
+    for item in data:
+        if not isinstance(item, dict) or item.get("State", "running") != "running":
+            continue
+        for raw in item.get("Names") or []:
+            if isinstance(raw, str):
+                names.add(raw[1:] if raw.startswith("/") else raw)
+    return names
+
+
+def read_docker_running(
+    names: list[str], socket_path: str = DOCKER_SOCKET, timeout: float = DOCKER_TIMEOUT_S
+) -> tuple[str, set[str]]:
+    """Fragt den Docker-Socket nach laufenden Containern — nur lesend.
+
+    Rückgabe: (status, laufende Namen). status ist
+      "ok"          Docker gelesen
+      "no_access"   Socket da, aber der Dienst-Benutzer darf nicht (EACCES)
+      "unavailable" kein Socket, kein Docker, Zeitüberschreitung, kaputte Antwort
+    Bei allem ausser "ok" ist die Menge leer — der Aufrufer macht daraus
+    "unknown", nie "running".
+
+    Der Namensfilter geht als `filters` an Docker, damit die Antwort klein
+    bleibt. Docker vergleicht dort unscharf (Teilstring/Regex), deshalb prüft
+    collect_anchors() danach noch einmal exakt.
+    """
+    query = _percent_encode(json.dumps({"name": sorted(set(names))}, separators=(",", ":")))
+    request = (
+        f"GET /containers/json?filters={query} HTTP/1.1\r\n"
+        "Host: docker\r\nAccept: application/json\r\nConnection: close\r\n\r\n"
+    ).encode("ascii")
+    try:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    except (OSError, AttributeError):
+        return "unavailable", set()
+    try:
+        sock.settimeout(timeout)
+        try:
+            sock.connect(socket_path)
+        except PermissionError:
+            return "no_access", set()
+        sock.sendall(request)
+        response = _read_http_response(sock, timeout)
+    except PermissionError:
+        return "no_access", set()
+    except (OSError, ValueError) as e:
+        log.warning("Docker nicht lesbar (%s)", e)
+        return "unavailable", set()
+    finally:
+        sock.close()
+    if response.status != 200:
+        log.warning("Docker-Antwort HTTP %s — Container-Anker bleiben unbekannt", response.status)
+        return "unavailable", set()
+    try:
+        return "ok", parse_docker_running(response.body)
+    except (ValueError, UnicodeDecodeError) as e:
+        log.warning("Docker-Antwort nicht lesbar (%s)", e)
+        return "unavailable", set()
+
+
+def _is_python(argv0: str) -> bool:
+    base = os.path.basename(argv0)
+    return base == "python" or base.startswith("python3") or base.startswith("python2")
+
+
+def _argv_matches(argv: list[str], name: str) -> bool:
+    """Ist das DIESES Programm — nicht nur ein Prozess, der den Namen als
+    Argument trägt (`grep vllm`, `docker logs vllm`, `tail -f …/vllm`)?
+
+    Treffer nur bei:
+      - Programmname (argv[0], ohne Pfad) == name
+      - Python-Einstiegsskript: `python3 /…/vllm serve` → argv[1] ohne Pfad
+      - Python-Modul: `python3 -m sglang.launch_server` → argv[2]
+    """
+    if not argv:
+        return False
+    if os.path.basename(argv[0]) == name:
+        return True
+    if _is_python(argv[0]) and len(argv) > 1:
+        if argv[1] == "-m":
+            return len(argv) > 2 and argv[2] == name
+        if not argv[1].startswith("-") and os.path.basename(argv[1]) == name:
+            return True
+    return False
+
+
+def process_running(name: str, proc_root: str = PROC_ROOT) -> bool | None:
+    """Läuft ein Prozess mit genau diesem Programmnamen? Über /proc, ohne fork.
+
+    Prozesse in Containern sind von der Box aus in /proc sichtbar — deshalb
+    funktioniert ein Prozess-Anker auch ohne Docker-Leserecht. Der eigene
+    Prozess wird übersprungen. None = /proc nicht lesbar (dann "unknown",
+    nicht "stopped")."""
+    self_pid = str(os.getpid())
+    try:
+        pids = os.listdir(proc_root)
+    except OSError:
+        return None
+    for pid in pids:
+        if not pid.isdigit() or pid == self_pid:
+            continue
+        try:
+            with open(os.path.join(proc_root, pid, "cmdline"), "rb") as f:
+                raw = f.read(4096)
+        except OSError:
+            continue  # Prozess ist weg oder gehört jemand anderem
+        argv = [a.decode("utf-8", "replace") for a in raw.split(b"\0") if a]
+        if _argv_matches(argv, name):
+            return True
+    return False
+
+
+def collect_anchors(
+    watch: list[dict], socket_path: str = DOCKER_SOCKET, proc_root: str = PROC_ROOT
+) -> dict:
+    """Zustand jedes Ankers der Positivliste, für device_state.
+
+    Rückgabe: {} ohne Positivliste (dann ändert sich am Heartbeat nichts),
+    sonst {"anchors": [...]} und — nur wenn Container-Anker dabei sind —
+    {"docker": "ok"|"no_access"|"unavailable"}. Jeder Anker:
+    {"kind", "name", "state": "running"|"stopped"|"unknown"[, "reason"]}.
+    """
+    if not watch:
+        return {}
+    out: dict = {}
+    container_names = [a["name"] for a in watch if a["kind"] == "container"]
+    docker_status, running = "ok", set()
+    if container_names:
+        docker_status, running = read_docker_running(container_names, socket_path=socket_path)
+        out["docker"] = docker_status
+    anchors: list[dict] = []
+    for anchor in watch:
+        kind, name = anchor["kind"], anchor["name"]
+        entry: dict = {"kind": kind, "name": name}
+        if kind == "container":
+            if docker_status == "ok":
+                # Exakter Vergleich: Dockers Filter ist unscharf.
+                entry["state"] = "running" if name in running else "stopped"
+            else:
+                entry["state"] = "unknown"
+                entry["reason"] = f"docker_{docker_status}"
+        else:
+            alive = process_running(name, proc_root=proc_root)
+            if alive is None:
+                entry["state"] = "unknown"
+                entry["reason"] = "proc_unavailable"
+            else:
+                entry["state"] = "running" if alive else "stopped"
+        anchors.append(entry)
+    out["anchors"] = anchors
+    return out
 
 
 # ── Soll-Zustand anwenden ────────────────────────────────────────────────────
@@ -2225,6 +2494,10 @@ def run_loop(mc_url: str, token: str) -> None:
     gpu_poll_due = True  # poll once, unconditionally, at startup
     apply_status: dict = {"applied_at": None, "last_error": None}
     tracker = _ApplyTracker()
+    # Positivliste aus dem letzten Soll (ADR-096 §3.2). Gilt ab der NÄCHSTEN
+    # Runde: der Soll kommt erst mit der Antwort auf diesen Heartbeat.
+    watch: list[dict] = []
+    watch_errors_logged: list[str] = []
 
     while True:
         try:
@@ -2248,6 +2521,13 @@ def run_loop(mc_url: str, token: str) -> None:
                 log.warning("Geräte-Zustand nicht lesbar (%s) — Heartbeat geht ohne raus", e)
                 device_state = None
 
+            if device_state is not None and watch:
+                try:
+                    device_state.update(collect_anchors(watch))
+                except Exception as e:  # noqa: BLE001 — Anker sind Zusatz;
+                    # ohne sie geht der Heartbeat trotzdem raus, MC zeigt "unbekannt".
+                    log.warning("Anker nicht lesbar (%s) — Heartbeat geht ohne raus", e)
+
             if scan_due and cached_scan is None:
                 try:
                     entries = scan_model_inventory(inventory_paths)
@@ -2266,6 +2546,14 @@ def run_loop(mc_url: str, token: str) -> None:
                 inventory=inventory_to_send,
                 device_state=device_state,
             )
+
+            new_watch, watch_errors = parse_watch((response or {}).get("desired_state"))
+            if watch_errors != watch_errors_logged:
+                # Nur bei Änderung loggen — sonst steht alle 15 s dieselbe Zeile im Journal.
+                for err in watch_errors:
+                    log.warning("Soll-Zustand: %s", err)
+                watch_errors_logged = watch_errors
+            watch = new_watch
 
             if device_state is not None:
                 desired = (response or {}).get("desired_state")

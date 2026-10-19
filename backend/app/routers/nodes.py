@@ -34,6 +34,7 @@ import socket
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Security, status
@@ -368,6 +369,17 @@ class DeviceMtu(BaseModel):
     value: int | None = None
 
 
+class AnchorReport(BaseModel):
+    """Ein Anker aus der Positivliste, wie der node-agent ihn meldet
+    (ADR-096 §3.2). Locker wie der Rest des Ist-Zustands, aber begrenzt —
+    gespeichert wird nur, was in einen Heartbeat passt."""
+
+    kind: str = Field(max_length=16)
+    name: str = Field(max_length=device_state_service.ANCHOR_NAME_MAX)
+    state: str = Field(max_length=16)
+    reason: str | None = Field(default=None, max_length=64)
+
+
 class DeviceState(BaseModel):
     """IST-Zustand, wie der node-agent ihn meldet (Vertrag 01.09.2026).
 
@@ -390,6 +402,13 @@ class DeviceState(BaseModel):
     mtu: DeviceMtu | None = None
     applied_at: datetime | None = None
     last_error: str | None = Field(default=None, max_length=2048)
+    # ADR-096 §3.2: laufende Engines aus der Positivliste `watch`. Nur Agenten
+    # ab 0.2.0 schicken das; fehlt es, gilt jeder Anker als "unknown".
+    # `docker`: ok | no_access | unavailable — nur bei Container-Ankern.
+    docker: str | None = Field(default=None, max_length=32)
+    anchors: list[AnchorReport] | None = Field(
+        default=None, max_length=2 * device_state_service.WATCH_MAX
+    )
 
 
 class HeartbeatRequest(BaseModel):
@@ -692,6 +711,27 @@ async def get_inventory(
 # ── Geräte-Steuerung (Soll-Zustand, 01.09.2026) ──────────────────────────────
 
 
+class WatchAnchor(BaseModel):
+    """Ein Eintrag der Positivliste (ADR-096 §3.2): welcher Container bzw.
+    Prozess auf dieser Box zu einer Runtime gehört. Streng wie der Rest des
+    Soll-Zustands — der Name verlässt MC in Richtung Box."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["container", "process"]
+    name: str
+
+    @field_validator("name")
+    @classmethod
+    def _check_name(cls, v: str) -> str:
+        if not device_state_service.valid_anchor_name(v):
+            raise ValueError(
+                f"name: 1..{device_state_service.ANCHOR_NAME_MAX} Zeichen aus "
+                "[A-Za-z0-9_.-], erstes Zeichen Buchstabe oder Ziffer"
+            )
+        return v
+
+
 class DesiredState(BaseModel):
     """SOLL-Zustand, wie die Oberfläche ihn setzt.
 
@@ -717,6 +757,9 @@ class DesiredState(BaseModel):
     oom_guard: bool | None = None
     latency_tune: bool | None = None
     mtu: int | None = None
+    # Nur lesend: der Agent meldet, ob diese Container/Prozesse laufen. Kein
+    # Steuer-Feld — erzeugt nie einen Befehl auf dem Gerät.
+    watch: list[WatchAnchor] | None = Field(default=None, max_length=device_state_service.WATCH_MAX)
 
     @field_validator("gpu_mode")
     @classmethod
@@ -859,6 +902,9 @@ async def set_desired_state(
     # exclude_none: ein weggelassenes ODER explizit auf null gesetztes Feld
     # heisst beides "dazu keine Meinung" — genau die Semantik des Vertrags.
     desired = body.model_dump(exclude_none=True)
+    # Leere Positivliste = keine Meinung, wie ein fehlendes Feld.
+    if not desired.get("watch", True):
+        desired.pop("watch")
     host.agent_desired_state = desired or None
     host.updated_at = datetime.now(timezone.utc)
     session.add(host)

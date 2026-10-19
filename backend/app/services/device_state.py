@@ -37,6 +37,20 @@ MTU_RANGE = (1_500, 9_000)                      # Ethernet-Standard … Jumbo-Fr
 # ausfallen, bevor die Ampel meckert — kurze Netzhänger bleiben ruhig.
 STALE_AFTER_S = 120
 
+# Positivliste für laufende Engines (ADR-096 §3.2, Mehrbox-Runtimes): MC
+# schickt im Soll `watch` = [{kind, name}], der node-agent meldet für genau
+# diese Namen running/stopped/unknown. IDENTISCH zu
+# scripts/node-agent/mc-node-agent.py (ANCHOR_KINDS, WATCH_MAX,
+# ANCHOR_NAME_MAX, ANCHOR_NAME_CHARS) — Paritätstest in
+# tests/test_node_anchor_api.py.
+ANCHOR_KINDS = ("container", "process")
+WATCH_MAX = 16
+ANCHOR_NAME_MAX = 64
+ANCHOR_NAME_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-"
+ANCHOR_RUNNING = "running"
+ANCHOR_STOPPED = "stopped"
+ANCHOR_UNKNOWN = "unknown"
+
 # Ampel-Farben. Englische Codes, damit die Oberfläche sie ohne Übersetzung
 # als Schlüssel für ihre i18n-Texte nutzen kann.
 STATUS_GREEN = "green"
@@ -130,3 +144,43 @@ def compute_status(
         return {"status": STATUS_YELLOW, "reason": "pending", "diff": diff, "age_s": age_s}
 
     return {"status": STATUS_GREEN, "reason": "in_sync", "diff": [], "age_s": age_s}
+
+
+def valid_anchor_name(name: object) -> bool:
+    """Name eines Ankers: 1..ANCHOR_NAME_MAX Zeichen aus ANCHOR_NAME_CHARS,
+    erstes Zeichen Buchstabe/Ziffer. Gleiche Regel wie im node-agent."""
+    if not isinstance(name, str) or not (1 <= len(name) <= ANCHOR_NAME_MAX):
+        return False
+    if name[0] in "_.-":
+        return False
+    return all(ch in ANCHOR_NAME_CHARS for ch in name)
+
+
+def anchor_status(
+    current: dict[str, Any] | None,
+    reported_at: datetime | None,
+    kind: str,
+    name: str,
+    now: datetime | None = None,
+) -> str:
+    """Läuft dieser Anker? ``running`` / ``stopped`` / ``unknown``.
+
+    Grundsatz (ADR-096 §3.2): **nie ein falsches "running"**. ``unknown``,
+    wenn die Box nichts gemeldet hat, die Meldung älter als STALE_AFTER_S
+    ist, der Anker nicht in der Meldung steht (alter Agent, noch kein
+    ``watch``) oder der Agent selbst "unknown" sagt (z.B. kein Docker-
+    Leserecht). Der Leser (Runtime-Status, PR 3) baut darauf ``degraded``.
+    """
+    now = now or utcnow()
+    if not current or reported_at is None:
+        return ANCHOR_UNKNOWN
+    if (now - ensure_aware(reported_at)).total_seconds() > STALE_AFTER_S:
+        return ANCHOR_UNKNOWN
+    anchors = current.get("anchors")
+    if not isinstance(anchors, list):
+        return ANCHOR_UNKNOWN
+    for entry in anchors:
+        if isinstance(entry, dict) and entry.get("kind") == kind and entry.get("name") == name:
+            state = entry.get("state")
+            return state if state in (ANCHOR_RUNNING, ANCHOR_STOPPED) else ANCHOR_UNKNOWN
+    return ANCHOR_UNKNOWN
