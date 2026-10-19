@@ -3681,6 +3681,7 @@
     "showLess": "Weniger anzeigen",
     "event": {
       "task": "Aufgabe",
+      "correction": "Korrektur",
       "nudge": "Hinweis",
       "inbox": "Nachricht",
       "teammate": "Rückmeldung",

@@ -1362,11 +1362,10 @@ def request(socket_path: str, payload: dict, timeout: float = 30.0) -> dict:
 
 
 def model_selector(env: "Mapping[str, str]") -> Optional[str]:
-    """OMP_ACP_MODEL (explicit override) > OMP_MODEL_SELECTOR (entrypoint-
-    rendered) > mc-openai/<OPENAI_MODEL> — the same precedence as
-    launch-omp.sh and bridge._acp_model_selector, so chat and task sessions
-    of one agent can never drift onto different models. None when nothing
-    is set (the caller decides whether that is a boot error)."""
+    """Alias of :func:`acp_model.selector_from` — the ONE selector rule the
+    task bridge and launch-omp.sh follow too, so chat and task sessions of
+    one agent can never drift onto different models. None when nothing is
+    set (the caller decides whether that is a boot error)."""
     return acp_model.selector_from(env)
 
 
@@ -1378,8 +1377,8 @@ def build_session() -> ChatSession:
     model = acp_model.current_selector(os.environ)
     if model is None:
         # No baked-in default: a missing model is a boot error, not a silent
-        # fallback to omp's built-in provider catalog (ADR-054, as in
-        # bridge._default_model_selector).
+        # fallback to omp's built-in provider catalog (ADR-054, same rule as
+        # acp_model.current_selector(required=True) on the task path).
         raise RuntimeError(
             "OMP_MODEL_SELECTOR / OPENAI_MODEL not set — entrypoint must "
             "render models.yml first; refusing to open a chat session on "

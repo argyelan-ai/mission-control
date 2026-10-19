@@ -30,7 +30,27 @@ CWD="${1:-${OMP_DEFAULT_CWD:-/workspace}}"
 
 HOOK="${OMP_HOOK_FILE:-/opt/omp-bridge/turn-end-hook.mjs}"
 # Selector comes from the entrypoint-rendered env — never a baked-in model.
-SELECTOR="${OMP_MODEL_SELECTOR:-mc-openai/${OPENAI_MODEL:?OPENAI_MODEL not set — entrypoint must render models.yml first}}"
+# Same rule as acp_model.selector_from (chat daemon + task bridge; one table
+# in tests/test_model_selector_single_source.py runs through both):
+#   OMP_ACP_MODEL (explicit override, never written to omp.env)
+#   > OMP_MODEL_SELECTOR (rendered)
+#   > OPENAI_MODEL, put under mc-openai/ unless it already names a provider.
+_trim() { printf '%s' "$1" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'; }
+SELECTOR="$(_trim "${OMP_ACP_MODEL:-}")"
+[ -n "$SELECTOR" ] || SELECTOR="$(_trim "${OMP_MODEL_SELECTOR:-}")"
+if [ -z "$SELECTOR" ]; then
+    _M="$(_trim "${OPENAI_MODEL:-}")"
+    if [ -z "$_M" ]; then
+        echo "launch-omp.sh: OPENAI_MODEL not set — entrypoint must render models.yml first" >&2
+        exit 1
+    fi
+    case "$_M" in
+        # Not openai/*: that is an HF id prefix (openai/gpt-oss-120b), not a
+        # provider MC renders (acp_model.QUALIFIED_PROVIDERS).
+        mc-openai/*|lm-studio/*) SELECTOR="$_M" ;;
+        *) SELECTOR="mc-openai/$_M" ;;
+    esac
+fi
 
 # --approval-mode yolo: the agent runs unattended (no human at the pane to
 #   approve tool calls). --allow-home: some ad-hoc tasks have no workspace and

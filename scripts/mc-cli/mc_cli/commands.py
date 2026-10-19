@@ -423,7 +423,14 @@ def _cmd_task_get(args, client, cfg):
     """mc task-get — Aktuellen Task-Status abrufen."""
     board_id, task_id = cfg.require_task_context()
     resp = client.request("GET", f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/detail")
-    _emit(resp)
+    # NOT through _emit(): its dict-with-"id" short form printed only the task
+    # UUID, so `mc task-get` never showed the status/description it promises
+    # (task_context_builder points agents here for the "rest" of a cut
+    # description) and the omp-bridge ownership check / end-of-run safety net
+    # (bridge.py McCliLifecycle.task_state) parsed nothing (review 19.10.2026).
+    # Same rule as `mc me`. Contract: docker/omp-bridge/tests/test_task_get_cli_contract.py.
+    if resp is not None:
+        print(json.dumps(resp, indent=2, default=str))
     return 0
 
 

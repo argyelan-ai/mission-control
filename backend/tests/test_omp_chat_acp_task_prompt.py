@@ -100,3 +100,34 @@ def test_chat_notice_line_becomes_a_notice_event_with_its_values():
     assert ev["source"] == {"kind": "notice", "title": "model_fallback"}
     assert ev["notice"] == {"code": "model_fallback", "previous": "Old-1", "current": "New-2"}
     assert "New-2" in ev["text"]
+
+
+# ── correction re-dispatch (fix 19.10.2026) ─────────────────────────────────
+
+CORRECTION = (
+    "# Operating Card — Agent\n\nRole line\n\n---\n\n"
+    "# CORRECTION NEEDED: [Bench] Pagoda — Model-X\n\nReviewer: fix the header.\n"
+)
+
+
+def test_bridge_origin_title_wins_and_marks_the_correction():
+    p = OmpLineParser()
+    p(_header(bridge="acp", taskId="T1"))
+    [ev] = p(_user(CORRECTION, attribution="mc", origin={
+        "kind": "task", "taskId": "T1", "title": "[Bench] Pagoda — Model-X",
+        "redispatch": True,
+    }))
+    assert ev["role"] == "teammate"
+    assert ev["source"] == {"kind": "task", "title": "[Bench] Pagoda — Model-X",
+                            "redispatch": True}
+
+
+def test_old_correction_line_without_origin_title_is_a_task_with_its_title():
+    """Files from bridges before the fix: ``origin.kind`` said ``nudge`` and
+    carried no title — the header still identifies the correction run."""
+    p = OmpLineParser()
+    p(_header(bridge="acp", taskId="T1"))
+    [ev] = p(_user(CORRECTION, attribution="mc", origin={"kind": "nudge", "taskId": "T1"}))
+    assert ev["source"]["kind"] == "task"
+    assert ev["source"]["title"] == "[Bench] Pagoda — Model-X"
+    assert ev["source"]["redispatch"] is True

@@ -745,6 +745,16 @@ class MCLifecycle:
     def set_blocker(self, task_id: str, *, blocker_type: str, question: str) -> None: ...
     def comment(self, task_id: str, text: str) -> None: ...
 
+    def task_state(self, task_id: str) -> Optional[dict]:
+        """``{"status", "assigned_agent_id"}`` of the task as MC sees it NOW,
+        or None when it cannot be read (best-effort, never raises). The
+        serve loop's end-of-run check uses it; None = no check."""
+        return None
+
+    def own_agent_id(self, task_id: str) -> Optional[str]:
+        """This agent's id, or None when unknown (then nothing is compared)."""
+        return None
+
     def task_is_active(self, task_id: str) -> Optional[bool]:
         """Is `task_id` still the agent's live current task?
 
@@ -1194,12 +1204,18 @@ class McCliLifecycle(MCLifecycle):
         board_id: Optional[str],
         attempt_id: Optional[str],
         mc_bin: str = "mc",
+        agent_id: Optional[str] = None,
     ) -> None:
         self.api_url = api_url
         self.token = token
         self.board_id = board_id or ""
         self.attempt_id = attempt_id or ""
         self.mc_bin = mc_bin
+        # The agent's own id — poll hands it over as `my_agent_id`. None:
+        # looked up once via `mc me` the first time ownership is checked.
+        self.agent_id = agent_id or None
+        #: What the last task_state() read saw (for log lines).
+        self.last_task_state: Optional[dict] = None
 
     def _env(self, task_id: str) -> dict:
         env = dict(os.environ)
@@ -1355,35 +1371,81 @@ class McCliLifecycle(MCLifecycle):
         # abort the retry loop).
         self._run(task_id, ["comment", "progress", text], best_effort=True)
 
-    def task_is_active(self, task_id: str) -> Optional[bool]:
-        """`mc me` -> compare its `current_task.id` against `task_id`.
+    #: Task statuses in which a run of THIS bridge may still go on: the task
+    #: is being worked (in_progress) or the agent parked it itself (waiting).
+    _ACTIVE_STATUSES = ("in_progress", "waiting")
 
-        Best-effort by design (fail-open, never raises): a garbled/absent
-        `current_task` or any parse/subprocess failure returns None, which
-        `drive_live_run` treats exactly like True (keep nudging/retrying —
-        the pre-existing behavior). Only a CONFIRMED mismatch (or a null
-        `current_task`, i.e. the agent has no live task at all) returns
-        False, which stops the nudge/retry loop.
+    def _query_json(self, task_id: str, args: list[str]) -> Optional[dict]:
+        """Run a read-only mc subcommand and parse the JSON object on its
+        STDOUT (``_run`` prefers stderr, where a warning would hide the
+        payload). None on any failure — never raises."""
+        cmd = [self.mc_bin, *args]
+        try:
+            proc = subprocess.run(
+                cmd, env=self._env(task_id), capture_output=True, text=True, timeout=60,
+            )
+        except Exception as e:  # noqa: BLE001 — a read must never crash the loop
+            sys.stderr.write(f"[mc-cli] {args[0]} raised {type(e).__name__}: {e}\n")
+            return None
+        if proc.returncode != 0:
+            sys.stderr.write(
+                f"[mc-cli] {args[0]} exit={proc.returncode}: "
+                f"{(proc.stderr or proc.stdout or '').strip()[:400]}\n"
+            )
+            return None
+        text = proc.stdout or ""
+        try:
+            data = json.loads(text[text.index("{"):])
+        except (ValueError, json.JSONDecodeError):
+            return None
+        return data if isinstance(data, dict) else None
+
+    def own_agent_id(self, task_id: str) -> Optional[str]:
+        if self.agent_id is None:
+            me = self._query_json(task_id, ["me"])
+            if me and me.get("id"):
+                self.agent_id = str(me["id"])
+        return self.agent_id
+
+    def task_state(self, task_id: str) -> Optional[dict]:
+        """`mc task-get <id>` -> ``{"status", "assigned_agent_id"}``."""
+        data = self._query_json(task_id, ["task-get", task_id])
+        if not data or not data.get("status"):
+            self.last_task_state = None
+            return None
+        assigned = data.get("assigned_agent_id")
+        state = {
+            "status": str(data["status"]),
+            "assigned_agent_id": str(assigned) if assigned else None,
+        }
+        self.last_task_state = state
+        return state
+
+    def task_is_active(self, task_id: str) -> Optional[bool]:
+        """Reads the TASK itself (`mc task-get`): active <=> status
+        in_progress/waiting AND assigned to this agent.
+
+        Not `mc me`'s ``current_task`` (incident 19.10.2026): for a worker in
+        subagent-dispatch mode MC deliberately leaves ``current_task_id``
+        unset, so ``current_task`` is null while the task is very much this
+        agent's — the old check stopped the retry loop silently.
+
+        Best-effort by design (fail-open, never raises): any read failure
+        returns None, which `drive_live_run` treats exactly like True (keep
+        nudging/retrying — the pre-existing behavior). Only a CONFIRMED other
+        status or other assignee returns False.
         """
-        rc, stdout_text = self._run(task_id, ["me"], best_effort=True)
-        if rc != 0:
+        state = self.task_state(task_id)
+        if state is None:
             return None
-        try:
-            idx = stdout_text.index("{")
-        except ValueError:
-            return None
-        try:
-            data = json.loads(stdout_text[idx:])
-        except (json.JSONDecodeError, ValueError):
-            return None
-        if not isinstance(data, dict):
-            return None
-        current_task = data.get("current_task")
-        if not current_task:
+        if state["status"] not in self._ACTIVE_STATUSES:
             return False
-        if not isinstance(current_task, dict):
-            return None
-        return str(current_task.get("id")) == str(task_id)
+        if state["assigned_agent_id"] is None:
+            return False  # unassigned = taken away from this agent
+        me = self.own_agent_id(task_id)
+        if me is None:
+            return True  # status says active; ownership undeterminable -> fail-open
+        return state["assigned_agent_id"] == me
 
 
 def _set_task_lock(active: bool) -> None:
@@ -1528,10 +1590,7 @@ def drive_live_run(
             # False stops the loop — True/None (undeterminable) keep the
             # exact old fail-open behavior.
             if lifecycle.task_is_active(task_id) is False:
-                sys.stderr.write(
-                    "[drive_live_run] task no longer active (done/review/reassigned) "
-                    "-> stopping without nudge\n"
-                )
+                _log_halted_external(lifecycle, task_id)
                 return LifecycleAction(
                     action="halted_external", classification=cls,
                     reflection=outcome.reflection_block,
@@ -1547,10 +1606,7 @@ def drive_live_run(
             continue
         if action.action == "retry" and attempts_left > 0:
             if lifecycle.task_is_active(task_id) is False:
-                sys.stderr.write(
-                    "[drive_live_run] task no longer active (done/review/reassigned) "
-                    "-> stopping without nudge\n"
-                )
+                _log_halted_external(lifecycle, task_id)
                 return LifecycleAction(
                     action="halted_external", classification=cls,
                     reflection=outcome.reflection_block,
@@ -1616,6 +1672,66 @@ def drive_live_run(
             )
         action.reflection = outcome.reflection_block
         return action
+
+
+def _log_halted_external(lifecycle: MCLifecycle, task_id: str) -> None:
+    """One log line with WHAT the ownership check saw — the old line said
+    "done/review/reassigned" for every case, including the wrong one."""
+    seen = getattr(lifecycle, "last_task_state", None) or {}
+    sys.stderr.write(
+        f"[drive_live_run] task {task_id} no longer active "
+        f"(status={seen.get('status', '?')}, "
+        f"assigned={seen.get('assigned_agent_id') or '-'}) -> stopping without nudge\n"
+    )
+
+
+def ensure_task_not_left_open(
+    lifecycle: MCLifecycle, task_id: str, action: Optional["LifecycleAction"],
+) -> bool:
+    """End-of-run safety net: the bridge never leaves an open task without a
+    blocker and a comment (drive_live_run's own promise: "never left
+    in_progress"). Re-reads the task; still ``in_progress`` and assigned to
+    this agent -> comment + ``technical_problem`` blocker. Returns True when
+    it had to step in.
+
+    Skipped for an interrupted run (the backend owns that state: Stop,
+    foreign block, soft nudge) and when the task cannot be read (fail-open:
+    no guess, no blocker on a hunch)."""
+    if action is not None and action.action == "halted_interrupted":
+        return False
+    read = getattr(lifecycle, "task_state", None)
+    if read is None:
+        return False
+    try:
+        state = read(task_id)
+    except Exception:  # noqa: BLE001 — best-effort, never breaks the loop
+        return False
+    if not state or state.get("status") != "in_progress":
+        return False
+    # Only a CONFIRMED own task gets the blocker — an unreadable identity is
+    # no reason to block a card that may belong to someone else.
+    try:
+        me = lifecycle.own_agent_id(task_id)
+    except Exception:  # noqa: BLE001
+        me = None
+    if not me or state.get("assigned_agent_id") != me:
+        return False
+    cls = action.classification if action is not None else None
+    why = (cls.reason if cls is not None else None) or (action.action if action else "unbekannt")
+    question = (
+        f"omp-bridge: Lauf beendet ({why}), Task war noch offen — bitte pruefen "
+        "und erneut zuweisen."
+    )
+    sys.stderr.write(f"[serve] task {task_id} still in_progress after the run ({why}) -> blocker\n")
+    try:
+        lifecycle.comment(task_id, question)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        lifecycle.set_blocker(task_id, blocker_type="technical_problem", question=question)
+    except Exception as e:  # noqa: BLE001
+        sys.stderr.write(f"[serve] safety-net blocker failed for {task_id}: {e}\n")
+    return True
 
 
 # ── Turn context for the heartbeat control channel (Fix 3b, 2026-09-08) ────
@@ -2904,6 +3020,7 @@ def serve_loop(
                 lifecycle = McCliLifecycle(
                     api_url=api_url, token=token, task_id=str(task["id"]),
                     board_id=task.get("board_id"), attempt_id=task.get("dispatch_attempt_id"),
+                    agent_id=(payload or {}).get("my_agent_id"),
                 )
 
             # M7 (Rex architecture session 2026-09-12): this used to be a
@@ -2970,7 +3087,9 @@ def serve_loop(
                 # runtime switch re-renders omp.env inside the running
                 # container, but THIS process keeps its boot env for days —
                 # every task was pinned to the old, no longer offered model.
-                acp_model = _acp_model_selector(_current_omp_env())
+                import acp_model as _acp_model_mod  # noqa: PLC0415 — sibling script
+
+                acp_model = _acp_model_mod.current_selector(required=True)
 
                 # Review #464 Major 7: tool liveness for the ACP path. The
                 # native watchdog learns progress from the hook signal file;
@@ -3026,7 +3145,7 @@ def serve_loop(
                     # exists, so it passes this check). See the guard's own
                     # docstring for what it does and doesn't cover.
                     _require_prepared_acp_workspace(_cwd)
-                    return acp_run(_p)
+                    return acp_run(_p, origin_kind="task")
 
                 # Continue-Nudge (Fix B, ACP flavour — Review #464 Major 3):
                 # the ACP session survives a turn end, so a continueable abort
@@ -3036,7 +3155,7 @@ def serve_loop(
                     acp_cancel.requested = False
                     interrupt_state.clear()
                     _require_prepared_acp_workspace(_cwd)
-                    return acp_run(nudge)
+                    return acp_run(nudge, origin_kind="nudge")
             else:
                 task_file = _task_file_for(str(task["id"]))
                 _isolate = isolation != "slash"
@@ -3077,7 +3196,7 @@ def serve_loop(
                 # omp run so the 10-min ACK-timeout re-dispatch can't fire and so
                 # `mc finish` sees the in_progress precondition.
                 lifecycle.ack(str(task["id"]))
-                drive_live_run(
+                run_action = drive_live_run(
                     lifecycle, run_once,
                     task_id=str(task["id"]),
                     board_requires_review=require_review,
@@ -3102,6 +3221,11 @@ def serve_loop(
                         )
                     except Exception:  # noqa: BLE001 — best-effort comment
                         pass
+                # Safety net (incident 19.10.2026): whatever path the run took
+                # (halted_external on a wrong ownership read, a finish that did
+                # not land, ...), a task still in_progress and mine gets a
+                # comment + blocker — never a silent open card.
+                ensure_task_not_left_open(lifecycle, str(task["id"]), run_action)
             except Exception as e:  # noqa: BLE001 — resolve terminally, never hang
                 sys.stderr.write(f"[serve] run error: {type(e).__name__}: {e}\n")
                 try:
@@ -3127,50 +3251,27 @@ def serve_loop(
 
 
 def _current_omp_env() -> dict:
-    """The process env overlaid with the CURRENT rendered omp.env — what
-    launch-omp.sh does with ``set -a; . omp.env``. An explicit
-    ``OMP_ACP_MODEL`` in the process env still wins (the file never sets
-    it). See acp_model.current_selector for the incident."""
+    """Alias of :func:`acp_model.current_env` (kept for existing callers)."""
     import acp_model as _acp_model_mod  # noqa: PLC0415 — sibling script, lazy
 
-    base = dict(os.environ)
-    merged = {**base, **_acp_model_mod.read_env_file(_acp_model_mod.env_file_path(base))}
-    if (base.get("OMP_ACP_MODEL") or "").strip():
-        merged["OMP_ACP_MODEL"] = base["OMP_ACP_MODEL"]
-    return merged
+    return _acp_model_mod.current_env()
 
 
 def _acp_model_selector(env: "Mapping[str, str]") -> str:
-    """The model every ACP session is pinned to — same source of truth as
-    launch-omp.sh: OMP_ACP_MODEL (explicit override) > OMP_MODEL_SELECTOR
-    (entrypoint-rendered) > mc-openai/<OPENAI_MODEL>. Never None: a session
-    without a selector falls back to omp's built-in provider catalog."""
-    explicit = (env.get("OMP_ACP_MODEL") or "").strip()
-    if explicit:
-        return explicit
-    rendered = (env.get("OMP_MODEL_SELECTOR") or "").strip()
-    if rendered:
-        return rendered
-    return _default_model_selector(env.get("OPENAI_MODEL"))
+    """Alias of :func:`acp_model.require_selector` — the ONE selector rule
+    (``acp_model.selector_from``). Never None: a session without a selector
+    would fall back to omp's built-in provider catalog."""
+    import acp_model as _acp_model_mod  # noqa: PLC0415 — sibling script, lazy
+
+    return _acp_model_mod.require_selector(env)
 
 
 def _default_model_selector(openai_model: Optional[str]) -> str:
-    """Build omp's fully-qualified `<provider>/<model>` selector.
+    """Alias of :func:`acp_model.qualify` that fails loud on a missing model
+    (ADR-054: no baked-in default, a missing model is a boot error)."""
+    import acp_model as _acp_model_mod  # noqa: PLC0415 — sibling script, lazy
 
-    entrypoint.sh renders the `mc-openai` provider from OPENAI_MODEL, so the
-    selector is `mc-openai/<OPENAI_MODEL>`. Never a bare token — that
-    mis-resolves against omp's built-in provider catalog. No baked-in
-    default: a missing model is a boot error, not a silent fallback to a
-    stale model (ADR-054).
-    """
-    m = (openai_model or "").strip()
-    if not m:
-        raise RuntimeError(
-            "OPENAI_MODEL not set — entrypoint must render models.yml first"
-        )
-    if "/" in m and m.split("/", 1)[0] in ("mc-openai", "lm-studio", "openai"):
-        return m  # already provider-qualified
-    return f"mc-openai/{m}"
+    return _acp_model_mod.require_selector({"OPENAI_MODEL": openai_model or ""})
 
 
 def _make_http_poll(
@@ -4227,6 +4328,34 @@ def _acp_permission_decision_transcribed(
     return choice
 
 
+#: Header line of an MC dispatch prompt (dispatch_message_builder): a first
+#: dispatch says ``New Task``, a re-dispatch after a review change says
+#: ``CORRECTION NEEDED``.
+_TASK_HEADER_RE = re.compile(
+    r"^# (?P<kind>New Task|CORRECTION NEEDED):\s*(?P<title>.+?)\s*$", re.MULTILINE,
+)
+
+
+def task_prompt_origin(prompt: str, kind: Optional[str]) -> dict:
+    """Who wrote a task-session prompt, for the chat line's ``origin``.
+
+    ``kind`` comes from the CALL SITE (``"task"`` for a dispatch or retry,
+    ``"nudge"`` for a continue). None = old callers: then the header decides,
+    both ``# New Task:`` and ``# CORRECTION NEEDED:`` count as a task (the old
+    text test knew only the first, so every correction run showed up as an
+    untitled nudge)."""
+    match = _TASK_HEADER_RE.search(prompt or "")
+    if kind is None:
+        kind = "task" if match else "nudge"
+    if kind != "task":
+        return {"kind": str(kind)}
+    return {
+        "kind": "task",
+        "title": match.group("title") if match else None,
+        "redispatch": bool(match and match.group("kind") == "CORRECTION NEEDED"),
+    }
+
+
 def run_acp_once(
     prompt: str,
     *,
@@ -4246,8 +4375,12 @@ def run_acp_once(
     preview_sink: Optional[Callable[[list[str]], None]] = None,
     on_session_id: Optional[Callable[[str], None]] = None,
     media_sink: Optional[Callable[[str, bytes], bool]] = None,
+    origin_kind: Optional[str] = None,
 ) -> RunOutcome:
     """One task attempt over ACP: prompt in, terminal RunOutcome out.
+
+    ``origin_kind`` (``"task"`` | ``"nudge"``): what the caller sends, for the
+    chat line (:func:`task_prompt_origin`). None = guessed from the header.
 
     Contract parity with the native path:
     - Turn end = the `session/prompt` result (stopReason + usage land on the
@@ -4453,10 +4586,13 @@ def run_acp_once(
         # session rollover split the turn across two files.
         # Every prompt of a task run is written by MC (dispatch or nudge),
         # never typed by the operator — the chat must not show it as theirs.
+        _origin = task_prompt_origin(prompt, origin_kind)
         emit_transcript(mapper.map_user_prompt(
             prompt,
-            origin="task" if "# New Task:" in prompt else "nudge",
+            origin=_origin["kind"],
             task_id=task_id,
+            title=_origin.get("title"),
+            redispatch=bool(_origin.get("redispatch")),
         ))
         saw_session = True
         outcome.saw_session = True
@@ -4759,7 +4895,7 @@ def _make_acp_run_factory(
     context_pct: Optional[ACPContextPct] = None,
     cancel_state: Optional[ACPCancelState] = None,
     heartbeat_fn: Optional[Callable[[], None]] = None,
-) -> Callable[[str], RunOutcome]:
+) -> Callable[..., RunOutcome]:
     """Bind serve_loop env config into one run_acp_once(prompt) callable.
 
     Review #465 Blocker 1 (Mandatory-Test target): the transcript sink MUST
@@ -4802,7 +4938,7 @@ def _make_acp_run_factory(
     cancel_state = cancel_state or ACPCancelState()
     cwd = cwd or os.environ.get("OMP_ACP_CWD") or _acp_cwd_default()
 
-    def run(prompt: str) -> RunOutcome:
+    def run(prompt: str, origin_kind: Optional[str] = None) -> RunOutcome:
         # Sessions chat view: one JSONL transcript per ACP session, written
         # where the backend's omp chat adapter reads. A sink that resolves
         # to None (no PI_CODING_AGENT_DIR — e.g. local replay) degrades to
@@ -4860,6 +4996,7 @@ def _make_acp_run_factory(
             on_session_id=on_session_id,
             media_sink=media_sink,
             context_pct=context_pct,
+            origin_kind=origin_kind,
             **(
                 {"interrupt_state": interrupt_state}
                 if interrupt_state is not None and _RUN_ACP_ACCEPTS_INTERRUPT_STATE
