@@ -48,14 +48,14 @@ export function ChatNoticeCard({ ev }: ChatNoticeCardProps) {
         data-testid="chat-notice-card"
         data-code={code || undefined}
         role="status"
-        className="rounded-lg px-2.5 py-2"
+        className="rounded-lg px-3 py-2"
         style={{ border: `1px solid ${C.warning}`, background: C.bgElevated }}
       >
         <div className="flex items-center gap-2">
           <Info size={14} style={{ color: STATUS_TEXT.warning }} aria-hidden="true" />
           <span
             data-testid="chat-notice-label"
-            className="rounded px-1.5 py-0.5 text-[11px] font-medium"
+            className="rounded px-2 py-1 text-xs font-medium leading-none"
             style={{ color: STATUS_TEXT.warning, border: `1px solid ${C.warning}` }}
           >
             {label}
@@ -64,7 +64,7 @@ export function ChatNoticeCard({ ev }: ChatNoticeCardProps) {
         {sentence && (
           <p
             data-testid="chat-notice-text"
-            className="mt-1.5 break-words whitespace-pre-wrap text-[13px] leading-[1.5]"
+            className="mt-2 break-words whitespace-pre-wrap text-sm leading-normal"
             style={{ color: C.textSecondary }}
           >
             {sentence}
