@@ -1952,6 +1952,7 @@ _ACTIVITY_KIND_MAP: dict[str, str] = {
     "task.dispatch_fallback": "dispatch",
     "task.dispatch_pending": "dispatch",
     "task.dispatch_queued": "dispatch",
+    "task.dispatch_held_runtime_down": "dispatch",
     "task.dispatch_runtime_unsupported": "dispatch",
     "task.unblock_redispatched": "dispatch",
     "task.unblock_requeued": "dispatch",

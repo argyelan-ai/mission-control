@@ -682,6 +682,10 @@ class Settings(BaseSettings):
     # takes the unchanged dispatch path regardless of this flag.
     enable_runtime_readiness_gate: bool = True
     runtime_readiness_cache_ttl: int = 15  # seconds — avoids hammering :5555 on every poll
+    # ADR-097: the poll claim also waits for LOCAL runtimes (own box, OpenAI
+    # protocol) whose model server does not answer. Kill switch + probe timeout.
+    enable_local_runtime_readiness_gate: bool = True
+    local_runtime_probe_timeout: float = 3.0  # seconds, one GET on /v1/models
 
     # Vault Memory (M.1 Read Foundation)
     # Root of the Markdown Vault. Source of Truth for agent memory.
