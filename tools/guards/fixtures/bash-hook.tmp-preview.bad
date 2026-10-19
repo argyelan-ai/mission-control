@@ -1,0 +1,9 @@
+{
+ "session_id": "fixture",
+ "cwd": ".",
+ "tool_name": "Bash",
+ "tool_input": {
+  "command": "bash scripts/preview-ui.sh --out /tmp/mc-preview-feat-x && echo done",
+  "run_in_background": false
+ }
+}
