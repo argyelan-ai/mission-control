@@ -544,6 +544,21 @@ anything by itself. For member anchors (§3.2) a member death is `degraded`,
 or — if the recipe takes the head down with it — a death with cause
 `member_down`.
 
+*Note 2026-10-20 (watcher tick 30 s instead of 90 s, ADR-054 amendment):*
+the window in which the anchor is asked is wall-clock, not a probe count:
+up to 270 s into an outage (`DEATH_CHECK_WINDOW_S`; probes
+1..max(3, ⌈270 s / tick⌉) — 9 at 30 s, 3 at 90 s as before). Connection
+refused is checked at every probe in that window, a timeout once, at the
+threshold. So an engine whose container outlives its closed port (slow
+teardown, a duo shutting down) and a wedged engine killed later are still
+declared with their cause. Past the threshold the row still counts as "was
+up" when its clock was emptied by this outage's own threshold — not when MC
+launched it and it never answered (pending start: its one plain alarm, never
+a death). A node-agent "running" spares the SSH inspect only when it was
+reported after the previous probe that found the port dark: a report counts
+as fresh for 120 s and arrives every 15 s, so one taken just before the death
+would hide it for a tick. The live snapshot lives 3 ticks, at least 270 s.
+
 11.3 **Explain**, once per death, read-only, best effort, bounded to about
 10 s, by **reusing** the crash-loop readers: `_read_container_logs` (current
 boot, `_CRASH_LOG_LINES` = 200) and `_last_error_line`, with the pattern list
@@ -568,6 +583,13 @@ to the last log lines; the `runtime.unreachable` event carries the cause and
 fires once, for the dead row. Recipe rows are probed before slot rows in each
 watcher tick, so a death declared at the threshold (timeout path) is never
 preceded by the slot row's plain alarm for the same outage.
+
+*Note 2026-10-20 (tick 30 s):* the plain alarm (3 probes, 60–90 s) can now
+come before a death that the anchor confirms later in the 270 s window. That
+death then follows as the error with the cause: two `runtime.unreachable`
+events for that outage, the first without a cause. At the 90 s tick the
+window ended at the threshold, so this could not happen; dropping the death
+instead would lose its cause and the task comments (§11.5).
 
 11.5 **Work does not fail silently**: agents bound to a dead runtime keep
 their queued work; delivery waits while the runtime is down (relates to open

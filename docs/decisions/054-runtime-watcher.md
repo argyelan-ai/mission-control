@@ -157,6 +157,37 @@ instead of waiting for the next tick or task end.
 - Migration `0141` adds `agents.pending_runtime_sync` (nullable-safe bool,
   default false) — one more column on an already-wide table.
 
+## Amendment 2026-10-20 — tick 30 s instead of 90 s
+
+Operator decision 2026-10-20, the follow-up named with ADR-096 §11.2: since
+the engine-death fast path declares a death at the next probe, the tick is
+the detection time. `runtime_watcher_interval` now defaults to **30 s**.
+What changes and what deliberately does not:
+
+- **Still counted in probes:** the alarm threshold (point 5: 3 consecutive
+  probes — now 60–90 s into an outage instead of 180–270 s; the stage card
+  turns "failed" at the same count) and the drift confirmation (point 3:
+  two identical probes — now 30–60 s).
+- **Kept in wall-clock time:** what one tick leaves for the readers between
+  ticks (live snapshot, both drift candidates, members mark) lives 3 ticks
+  but at least 270 s; the outage counter 10 ticks but at least 900 s; the
+  engine-death check (ADR-096 §11.2) asks the anchor up to 270 s into an
+  outage; a failed agent sync or CLI recreate waits at least 90 s for its
+  next attempt (`SYNC_RETRY_SPACING`), so its 3 attempts still span at
+  least 3 minutes. The watcher lock is tick − 5 s, at least half the tick.
+- **Busy-agent sync latency** (above): ≤ 30 s after the task ends.
+- Every "≤ tick" here means "≤ tick plus the tick's own run time": the loop
+  sleeps a full tick after each pass, and agent sync, CLI recreate and an
+  auto-recovery start run inside the pass (health waits and the memory-prep
+  wait of up to 180 s each). Running those as their own tasks outside the
+  probe loop would make the cadence exact; it is not part of this change.
+- **Load:** at most 2 ticks per minute instead of 0.67 — up to 3× the
+  `/v1/models` probes (a short model list, no GPU work) and up to 3× the
+  per-probe SSH checks while an outage lasts.
+- **Rollback:** revert and deploy. `backend` and `mc-worker` do not read
+  `.env` for this setting (`docker-compose.yml` has no `env_file` and no
+  `RUNTIME_WATCHER_INTERVAL` line), so setting it in `.env` changes nothing.
+
 ## Referenzen
 
 - Betroffene Dateien: `backend/app/services/runtime_watcher.py`,

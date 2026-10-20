@@ -532,11 +532,14 @@ class Settings(BaseSettings):
     # Runtime & Model Management v1 (ADR-054) — background /v1/models probing.
     runtime_watcher_enabled: bool = True
     # Seconds between probe ticks. 30 since 2026-10-20 (operator decision; was
-    # 90): an engine that dies is declared at the next probe (ADR-096 §11.2),
-    # so the tick is the detection time. What one tick leaves for readers
-    # between ticks keeps its old wall-clock floor (runtime_watcher
-    # STATE_TTL_FLOOR / FAIL_COUNT_TTL_FLOOR); the alarm threshold stays
-    # 3 probes (UNREACHABLE_EVENT_THRESHOLD).
+    # 90; ADR-054 amendment): an engine that dies is declared at the next
+    # probe (ADR-096 §11.2), so the tick (plus the tick's own run time) is the
+    # detection time. What was meant in seconds keeps its old wall-clock value
+    # (runtime_watcher STATE_TTL_FLOOR / FAIL_COUNT_TTL_FLOOR /
+    # DEATH_CHECK_WINDOW_S, runtime_propagation SYNC_RETRY_SPACING); the alarm
+    # threshold stays 3 probes (UNREACHABLE_EVENT_THRESHOLD). The containers
+    # do not read .env for this (no line in docker-compose.yml): going back
+    # means a revert and a deploy.
     runtime_watcher_interval: int = 30
 
     # Runtimes-Buehne v2, PR 1 (docs/specs/runtimes-buehne-v2.md §6/§7) —
@@ -558,7 +561,8 @@ class Settings(BaseSettings):
 
     # Engine death (ADR-096 §11, runtime_watcher._maybe_declare_death): an
     # engine whose row served its own answer and is gone without a stop intent
-    # is declared dead — at once on connection refused, at the threshold of 3
+    # is declared dead — at once on connection refused (and at every later
+    # refused probe up to 270 s into the outage), at the threshold of 3
     # otherwise (a timeout) — when its own anchor (node-agent / docker inspect /
     # handle check) confirms it exited. One runtime.unreachable with the cause
     # (severity error), status "failed" + reason on the card, one comment on

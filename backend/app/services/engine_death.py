@@ -242,9 +242,10 @@ ANSWER_MEMORY_TTL = 7 * 24 * 3600
 
 async def remember_answer(redis, slug: str, *, served: str | None, own: bool) -> None:
     """What the port said at this row's healthy probe, and whether it was the
-    row's OWN engine (§11.2). Durable — unlike the live snapshot (3 probe
-    intervals), so an outage that began while the backend was down still
-    knows who held the port. Never raises."""
+    row's OWN engine (§11.2). Durable — unlike the live snapshot (3 ticks,
+    at least 270 s: ``runtime_watcher.STATE_TTL_FLOOR``), so an outage that
+    began while the backend was down still knows who held the port. Never
+    raises."""
     try:
         await redis.set(
             RedisKeys.runtime_last_answer(slug),
