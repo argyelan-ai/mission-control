@@ -21,8 +21,10 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 
-#: Files the host Python loads. S1-R6 adds model_errors.py here.
-HOST_MODULES = ("acp_chat.py", "acp_chat_events.py", "sink_migration.py")
+#: Files the host Python loads: the two chat modules, what acp_chat.py
+#: imports from this folder at start (model_errors.py since S1-R6) and the
+#: move the operator runs by hand.
+HOST_MODULES = ("acp_chat.py", "acp_chat_events.py", "sink_migration.py", "model_errors.py")
 
 #: Library attributes newer than 3.9: (attribute, where it is new).
 NEWER_ATTRIBUTES = {
