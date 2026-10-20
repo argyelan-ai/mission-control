@@ -14,6 +14,12 @@
  * Signal doctrine (DESIGN.md): colour means status. A notice is the warning
  * tone, on the frame and the label chip only; the sentence stays in calm
  * secondary text (K6: one status colour per area, never doubled).
+ *
+ * S1-Rest (bauplan §9): some notices carry only a code — "new chat started"
+ * after a recreate, "storage not moved" when the move of old chat copies did
+ * not run. Their sentence has no placeholder, so it is translated without
+ * values; before, the card showed the daemon's English text under a German
+ * label (K10).
  */
 import { Info } from "lucide-react";
 import { useTranslations } from "next-intl";
@@ -26,6 +32,15 @@ interface ChatNoticeCardProps {
   ev: MessageEvent;
 }
 
+/** The values a notice sentence needs, per code. A code that is not listed
+ *  has a sentence without placeholders. Written down once so a sentence is
+ *  only filled when ALL its values arrived — a raw `{previous}` never reaches
+ *  the screen (ChatNoticeCard.test.tsx checks this list against the
+ *  catalogs). */
+export const NOTICE_VALUES: Record<string, readonly ("previous" | "current")[]> = {
+  model_fallback: ["previous", "current"],
+};
+
 export function ChatNoticeCard({ ev }: ChatNoticeCardProps) {
   const t = useTranslations("chat");
   const code = ev.notice?.code ?? ev.source?.title ?? "";
@@ -33,12 +48,16 @@ export function ChatNoticeCard({ ev }: ChatNoticeCardProps) {
   const current = ev.notice?.current ?? "";
   const sentenceKey = `notice.${code}`;
   const labelKey = `notice.${code}Label`;
-  // A code we have a sentence for, with its values: the localized line.
-  // Anything else falls back to the daemon's own (English) text — a notice
-  // is never swallowed.
+  // A code we have a sentence for, with every value it needs: the localized
+  // line. Anything else falls back to the daemon's own (English) text — a
+  // notice is never swallowed.
+  const values = { previous, current };
+  const needed = NOTICE_VALUES[code] ?? [];
   const sentence =
-    code && previous && current && t.has(sentenceKey)
-      ? t(sentenceKey, { previous, current })
+    code && t.has(sentenceKey) && needed.every((name) => values[name])
+      ? needed.length > 0
+        ? t(sentenceKey, values)
+        : t(sentenceKey)
       : ev.text;
   const label = code && t.has(labelKey) ? t(labelKey) : t("notice.label");
 

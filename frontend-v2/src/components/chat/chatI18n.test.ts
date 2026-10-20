@@ -40,6 +40,10 @@ const FILES = [
   // Die Fehlerkarte der ACP-Agenten: sie zeigt ihren Text ausschliesslich
   // ueber `chat.error.*` (Spec docs/specs/chat-over-acp.md).
   "ChatErrorCard.tsx",
+  // "Send again" (S1-R7): the contract between ChatView and the card, and
+  // the notice card, whose sentences without values are translated now.
+  "chatResend.tsx",
+  "ChatNoticeCard.tsx",
   "AgentCard.tsx",
   "NotificationRow.tsx",
   "chatOptions.ts",
@@ -193,7 +197,30 @@ const ERROR_CODES = [
   "process_exit",
   "busy",
   "session_reset",
+  "queue_full",
+  "new_session_failed",
+  "queue_lost",
+  // S1-Rest (bauplan §7/§8): a restart during a reply, a model that does not answer.
+  "turn_interrupted",
+  "model_unreachable",
   "generic",
+];
+
+/** The words around the codes: the button, its locked state, the hint and
+ *  link of `model_unreachable`, and the sentences that replace a raw detail. */
+const ERROR_TEXT_KEYS = [
+  "resend",
+  "resent",
+  "modelUnreachableHint",
+  "runtimesLink",
+  "turn_interruptedBody",
+  "process_exitBody",
+  "process_exit_restart_failedBody",
+  "resendQuoteLabel",
+  "resendQuote",
+  "session_resetBody",
+  "session_reset_model_missingBody",
+  "session_reset_transcript_missingBody",
 ];
 
 function errorNs(tree: unknown): Record<string, unknown> {
@@ -206,6 +233,13 @@ describe("chat.error — EN/DE", () => {
     for (const code of ERROR_CODES) {
       expect(typeof errorNs(en)[code], `chat.error.${code} missing in EN`).toBe("string");
       expect(typeof errorNs(de)[code], `chat.error.${code} missing in DE`).toBe("string");
+    }
+  });
+
+  it("defines the button, hint, link and sentence texts, in both locales", () => {
+    for (const key of ERROR_TEXT_KEYS) {
+      expect(typeof errorNs(en)[key], `chat.error.${key} missing in EN`).toBe("string");
+      expect(typeof errorNs(de)[key], `chat.error.${key} missing in DE`).toBe("string");
     }
   });
 

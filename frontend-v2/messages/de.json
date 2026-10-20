@@ -3930,12 +3930,30 @@
       "session_reset": "Sitzung neu gestartet",
       "queue_full": "Warteschlange voll",
       "new_session_failed": "Neue Sitzung fehlgeschlagen",
-      "queue_lost": "Warteschlange verloren"
+      "queue_lost": "Warteschlange verloren",
+      "turn_interrupted": "Unterbrochen",
+      "model_unreachable": "Modell antwortet nicht",
+      "turn_interruptedBody": "Der Chat wurde neu gestartet, während eine Antwort lief. Nichts wurde automatisch neu gesendet.",
+      "process_exitBody": "Der Agent-Prozess wurde unerwartet beendet. Der Chat verbindet sich neu.",
+      "process_exit_restart_failedBody": "Der Agent-Prozess wurde beendet und liess sich nicht neu starten.",
+      "session_resetBody": "Das letzte Gespräch liess sich nicht laden. Ein neues hat begonnen.",
+      "session_reset_model_missingBody": "Das Gespräch lief auf einem Modell, das gerade nicht eingetragen ist. Ein neues Gespräch hat begonnen, das alte bleibt gespeichert.",
+      "session_reset_transcript_missingBody": "Der Verlauf des letzten Gesprächs wurde nicht gefunden. Ein neues Gespräch hat begonnen.",
+      "modelUnreachableHint": "Prüfe die Runtimes-Seite. Deine Nachricht ist nicht verloren.",
+      "runtimesLink": "Zur Runtimes-Seite",
+      "resend": "Nochmal senden",
+      "resent": "Gesendet",
+      "resendQuoteLabel": "Deine Nachricht",
+      "resendQuote": "„{text}“"
     },
     "notice": {
       "label": "Hinweis",
       "model_fallback": "Das zuvor gewählte Modell {previous} ist nicht mehr verfügbar — es wird {current} verwendet.",
-      "model_fallbackLabel": "Modell gewechselt"
+      "model_fallbackLabel": "Modell gewechselt",
+      "chat_started_freshLabel": "Neuer Chat begonnen",
+      "chat_started_fresh": "Nach dem Neustart war nicht klar, welches Gespräch offen war. Ein neues hat begonnen. Frühere Gespräche bleiben gespeichert.",
+      "sink_migration_skippedLabel": "Ablage nicht umgezogen",
+      "sink_migration_skipped": "Ältere Chat-Kopien wurden diesmal nicht umgezogen. Der Chat läuft normal weiter, der nächste Start versucht es erneut."
     },
     "queue": {
       "queued": "Eingereiht — wird nach der laufenden Antwort gesendet",
