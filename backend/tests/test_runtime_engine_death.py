@@ -756,6 +756,11 @@ async def _host_with_agent(session, anchors: list[dict], *, fresh=True) -> Host:
 
 @pytest.mark.asyncio
 async def test_node_agent_running_needs_no_ssh_and_is_no_death(async_session, fake_redis):
+    """A node-agent "running" reported after the port was already seen dark
+    is evidence on its own: no SSH, no death. On the outage's first failed
+    probe there is no such report yet (a report is fresh for 120 s, one
+    taken just before the death still says "running" — critic 2026-10-20):
+    the one SSH inspect decides there."""
     host = await _host_with_agent(async_session, [
         {"kind": "container", "name": "dsv-tf", "state": "running"},
         {"kind": "process", "name": "dsv-tf", "state": "stopped"},
@@ -764,12 +769,20 @@ async def test_node_agent_running_needs_no_ssh_and_is_no_death(async_session, fa
     rt.host_id = host.id
     async_session.add(rt)
     await async_session.commit()
-    box = FakeBox()
-    probe = Probe(failure=FAIL_REFUSED)
+    box = FakeBox(inspect=RUNNING)
+    probe = Probe(served="DeepSeek-V4.1")
+    watcher = RuntimeWatcher(interval=INTERVAL)
     with _stack(box, fake_redis, probe):
-        clock = await _measure(async_session, probe, model="DeepSeek-V4.1", max_ticks=2)
-    assert clock.decided_at is None
-    assert box.inspects == 0
+        await watcher.tick(session=async_session)                # healthy
+        probe.served, probe.failure = None, FAIL_REFUSED
+        await watcher.tick(session=async_session)                # dark: one SSH
+        assert box.inspects == 1
+        host.agent_device_state_updated_at = datetime.now(timezone.utc) + timedelta(seconds=1)
+        async_session.add(host)
+        await async_session.commit()
+        await watcher.tick(session=async_session)                # reported after: no SSH
+    assert box.inspects == 1
+    assert await _deaths(async_session) == []
 
 
 @pytest.mark.asyncio

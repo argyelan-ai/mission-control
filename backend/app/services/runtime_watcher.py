@@ -45,6 +45,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import time
 import uuid
 from datetime import datetime, timezone
@@ -93,6 +94,7 @@ from app.services.runtime_propagation import (
     recreate_pending_agents,
     sync_pending_agents,
 )
+from app.utils import ensure_aware
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +130,17 @@ STATE_TTL_FLOOR = 270
 #: card falls back from "failed" to "unreachable (1)" and the threshold steps
 #: run a second time for the same outage.
 FAIL_COUNT_TTL_FLOOR = 900
+#: How long into an outage the death check may still ask the row's anchor
+#: (ADR-096 §11.2) — 270 s, its window at the old 90 s tick (probes 1..3).
+#: Counted in probes it would shrink to 60–90 s at 30 s, and two real cases
+#: would lose their cause: an engine whose container outlives its closed port
+#: (slow teardown, a duo shutting down) and a wedged engine killed later. So
+#: the probe count follows the tick: max(3, ceil(270 s / tick)) — 9 at 30 s,
+#: 3 at 90 s (unchanged). Connection refused is checked at every probe in the
+#: window; a timeout only at the threshold, as before (a stalling box looks
+#: the same, and SSH to it is what stalls). Each check is bounded
+#: (_ANCHOR_CHECK_TIMEOUT); past the window the box is never asked again.
+DEATH_CHECK_WINDOW_S = 270
 
 # Auto-recovery (PR5). One attempt per runtime per cooldown window; after this
 # many consecutive attempts that did not bring the engine back, stop and hand
@@ -268,6 +281,12 @@ class RuntimeWatcher:
         ``FAIL_COUNT_TTL_FLOOR``."""
         return max(self._interval * 10, FAIL_COUNT_TTL_FLOOR)
 
+    def _death_check_probes(self) -> int:
+        """Up to which failed probe of an outage the death check may ask the
+        anchor: ``DEATH_CHECK_WINDOW_S`` of wall-clock, never under the
+        threshold."""
+        return max(UNREACHABLE_EVENT_THRESHOLD, math.ceil(DEATH_CHECK_WINDOW_S / self._interval))
+
     async def start(self) -> None:
         if not settings.runtime_watcher_enabled:
             logger.info("runtime watcher disabled via settings")
@@ -303,14 +322,16 @@ class RuntimeWatcher:
 
         Never released — it simply expires. So it follows the tick and stays
         BELOW it: a lock that outlived the tick would make this worker's own
-        next tick find it and skip, stretching the tick it stands for.
+        next tick find it and skip, stretching the tick it stands for. Tick
+        minus 5 s, but at least half the tick (and 1 s) — never a fixed floor,
+        which would outlive a short tick (the setting has no lower bound).
         """
         try:
             redis = await get_redis()
             return bool(
                 await redis.set(
                     RedisKeys.runtime_watcher_lock(), "1",
-                    nx=True, ex=max(self._interval - 5, 10),
+                    nx=True, ex=max(self._interval - 5, self._interval // 2, 1),
                 )
             )
         except Exception:  # noqa: BLE001
@@ -1281,30 +1302,45 @@ class RuntimeWatcher:
         no stop intent (operator stop, switched away, schedule, idle unload,
         crash-loop stop) and no eviction marker.
 
-        When to ask the box, at most once per probe and only up to the
-        threshold: at once on ``connection refused`` (nothing listens — the
-        fast path), and at the threshold on any other failure (a timeout is
-        what a stalling box produces too, so the threshold of 3 applies
-        unchanged — ADR-096 §11.2). The row's own anchor decides: exited /
-        gone → death at THIS probe; running, or not checkable (box mid-stall,
-        SSH down) → no death, the plain threshold alarm. Never starts or
-        stops anything.
+        When to ask the box, at most once per probe and only while the outage
+        is young (``DEATH_CHECK_WINDOW_S``, 270 s — 9 probes at 30 s, 3 at
+        90 s): at every probe on ``connection refused`` (nothing listens — the
+        fast path), and once, at the threshold, on any other failure (a
+        timeout is what a stalling box produces too, so the threshold of 3
+        applies unchanged — ADR-096 §11.2). The row's own anchor decides:
+        exited / gone → death at THIS probe; running, or not checkable (box
+        mid-stall, SSH down) → no death now, the plain threshold alarm at
+        probe 3. A death the anchor confirms later in the window (a container
+        that outlives its closed port, a wedged engine killed later) follows
+        that alarm as the error with the cause. Never starts or stops anything.
         """
-        if runtime.is_slot or not was_own or runtime.serving_since is None:
+        if runtime.is_slot or not was_own:
             return None
-        if fails > UNREACHABLE_EVENT_THRESHOLD:
-            return None  # decided long ago — no SSH every tick of a long outage
-        if not (failure == FAIL_REFUSED or fails >= UNREACHABLE_EVENT_THRESHOLD):
-            return None
+        if fails > self._death_check_probes():
+            return None  # the window is over — no SSH every tick of a long outage
+        if failure != FAIL_REFUSED and fails != UNREACHABLE_EVENT_THRESHOLD:
+            return None  # a timeout: asked once, at the threshold
+        if runtime.serving_since is None:
+            # Up to the threshold an empty clock means the row was not up.
+            # Past it, this outage's own threshold emptied it (the plain-alarm
+            # path) — unless MC launched the row and it never answered: a
+            # start that never came up ends in its one plain alarm (§11.2),
+            # never in a death, even when its container exits while loading.
+            if fails <= UNREACHABLE_EVENT_THRESHOLD:
+                return None
+            if await get_start_pending(runtime.slug, redis) is not None:
+                return None
         if await get_stop_intent(runtime.slug, redis) is not None:
             return None
         if await get_evicted(runtime.slug, redis) is not None:
             return None
         if await engine_death.endpoint_had_death(redis, runtime.endpoint):
             return None  # one engine death = one death on that port
+        dark_since = await self._last_dark_probe_at(redis, runtime.slug)
         try:
             anchor = await asyncio.wait_for(
-                self._anchor_exit_state(session, runtime), timeout=_ANCHOR_CHECK_TIMEOUT,
+                self._anchor_exit_state(session, runtime, running_report_after=dark_since),
+                timeout=_ANCHOR_CHECK_TIMEOUT,
             )
         except asyncio.TimeoutError:
             logger.info("runtime %s: anchor check timed out — no verdict", runtime.slug)
@@ -1431,14 +1467,39 @@ class RuntimeWatcher:
             await session.commit()
         return doc
 
-    async def _anchor_exit_state(self, session: AsyncSession, runtime: Runtime) -> dict:
+    async def _last_dark_probe_at(self, redis, slug: str) -> datetime | None:
+        """When the previous probe of this row found the port dark — read from
+        the live snapshot before this probe overwrites it. ``None`` when that
+        probe got an answer (this is the outage's first failed probe) or
+        nothing is known."""
+        try:
+            raw = await redis.get(RedisKeys.runtime_live(slug))
+            doc = json.loads(raw) if raw else None
+        except Exception:  # noqa: BLE001
+            return None
+        if not isinstance(doc, dict) or doc.get("reachable") is not False:
+            return None
+        try:
+            return ensure_aware(datetime.fromisoformat(doc["last_probe_at"]))
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    async def _anchor_exit_state(
+        self, session: AsyncSession, runtime: Runtime, *,
+        running_report_after: datetime | None = None,
+    ) -> dict:
         """Is this row's own engine still there? Read-only.
 
         ``state``: ``running`` | ``exited`` (with exit code / OOMKilled /
         finish time when Docker knows them) | ``gone`` (container removed or
         host process not alive) | ``unknown`` (no anchor, box not askable,
         Docker not readable). The node-agent report (§3.2) is asked first —
-        a fresh "running" there needs no SSH at all.
+        a "running" there needs no SSH, but only when it was reported after
+        ``running_report_after`` (the previous probe that found the port
+        dark). A report counts as fresh for 120 s and arrives every 15 s: one
+        taken just before the death still says "running" and would hide the
+        death for a tick. ``None`` (the outage's first failed probe) → the
+        one SSH inspect decides.
         """
         from app.models.host import Host
         from app.services import device_state
@@ -1469,7 +1530,13 @@ class RuntimeWatcher:
             reported = device_state.handle_status(
                 host_row.agent_device_state, host_row.agent_device_state_updated_at, names,
             )
-            if reported == device_state.ANCHOR_RUNNING:
+            reported_at = host_row.agent_device_state_updated_at
+            if (
+                reported == device_state.ANCHOR_RUNNING
+                and running_report_after is not None
+                and reported_at is not None
+                and ensure_aware(reported_at) > running_report_after
+            ):
                 return {**out, "state": "running", "source": "node_agent"}
         # A fresh node-agent "stopped" (every handle, both kinds) is evidence
         # on its own when SSH cannot add the exit details.
