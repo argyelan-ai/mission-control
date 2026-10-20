@@ -212,6 +212,21 @@ class TranscriptAdapter:
     #: a subagent's.
     head_transcript_glob: str | None = None
 
+    #: ``(transcript_dir, task_id, since_epoch) -> Path | None``: the session
+    #: file a task runs in when that is NOT the chat session — or ``None``
+    #: for a harness whose tasks run inside the chat itself (Claude Code: the
+    #: chat already shows the task's work). Read by the chat's task block
+    #: (``task_activity``, operator finding 20.10.2026: since #898 the chat
+    #: showed nothing of a running ACP task).
+    find_task_session: Callable[[Path, str, float | None], Path | None] | None = None
+
+    #: Does this harness run tasks in sessions of their own RIGHT NOW? Asked
+    #: at call time (omp: only when the chat runs over ACP — under the
+    #: native driver the task IS the chat). Hermes never does: over ACP its
+    #: bridge hands the task to the chat daemon, natively the task is the
+    #: chat too.
+    tasks_in_own_session: Callable[[], bool] = lambda: False
+
 
 def _claude_adapter(
     name: str = CLAUDE, process_name: str = "claude"
@@ -288,6 +303,15 @@ def _omp_adapter(harness: str = OMP) -> TranscriptAdapter:
         session_id_for=omp_chat.session_id_for,
         preferred_sibling=omp_chat.prefers_sibling,
         head_transcript_glob="omp-sessions/*.jsonl",
+        # Only the omp bridge runs a task in a session of its OWN (its own
+        # ACP client beside the chat daemon). The hermes-bridge hands an ACP
+        # task to the chat daemon itself (``deliver_prompt`` ->
+        # ``daemon.prompt``): the chat shows the work, a task block would be
+        # an empty box (review R1, 20.10.2026).
+        find_task_session=omp_chat.find_task_session if harness == OMP else None,
+        tasks_in_own_session=(
+            (lambda: omp_chat.chat_runs_over_acp(harness)) if harness == OMP else (lambda: False)
+        ),
     )
 
 

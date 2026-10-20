@@ -15,7 +15,9 @@ Normalized event shapes (plain dicts, JSON-serializable):
   {"kind":"tool_output","uuid":None,"ts":str,"toolUseId":str,"text":str}
       — VOLATILE (P1): a running tool's output so far, from the ACP preview
         channel; replace-me per toolUseId, never in the history.
-  {"kind":"thinking","uuid":str,"ts":str,"text":str,"sidechain":bool}
+  {"kind":"thinking","uuid":str,"ts":str,"text":str,"sidechain":bool,
+   "durationMs"?:int}  — durationMs only when the harness recorded it
+   (omp bridge, 20.10.2026)
   {"kind":"command","uuid":str,"ts":str,"command":str,"result":str|None}
   {"kind":"todo","uuid":str,"ts":str,"source":str,
    "items":[{"content":str,"status":"pending"|"in_progress"|"completed",
@@ -1876,6 +1878,37 @@ def _stable_prefix(a: str, b: str) -> str:
     return prefix.rstrip()
 
 
+def preview_event(content: str, ts: str, data: Any) -> dict[str, Any]:
+    """One preview snapshot -> the volatile ``preview`` chat event.
+
+    The END of the snapshot is kept (``content[-limit:]``): the chat shows a
+    running preview from its last lines, and keeping the head froze the
+    preview once an answer passed the limit.
+
+    ``data.block == "thinking"`` (the omp bridge marks a thought's preview,
+    20.10.2026) adds ``block``, ``chars`` (the thought's full size — the
+    snapshot itself carries only its end) and ``startedAt``, so the chat
+    shows "Thinking · ≈N tokens · 1:45" instead of a fake answer. Any
+    harness with a preview channel can set it; the event type stays one.
+    """
+    event: dict[str, Any] = {
+        "kind": "preview",
+        "uuid": None,
+        "ts": ts,
+        "text": content[-_RESULT_TRUNCATE_LEN:],
+        "source": "acp",
+    }
+    if isinstance(data, dict) and data.get("block") == "thinking":
+        event["block"] = "thinking"
+        chars = data.get("chars")
+        if isinstance(chars, int) and not isinstance(chars, bool) and chars >= 0:
+            event["chars"] = chars
+        started = data.get("startedAt")
+        if isinstance(started, str) and started:
+            event["startedAt"] = started[:40]
+    return event
+
+
 def _read_preview_channel(state: dict[str, Any]) -> list[dict[str, Any]]:
     """Ein Takt Vorschau-Kanal: neue Zeilen der ACP-Preview-Datei lesen und
     zu ``kind: "preview", source: "acp"``-Ereignissen normalisieren.
@@ -1936,13 +1969,11 @@ def _read_preview_channel(state: dict[str, Any]) -> list[dict[str, Any]]:
                         "text": content[:_RESULT_TRUNCATE_LEN],
                     })
                 continue
-            events.append({
-                "kind": "preview",
-                "uuid": None,
-                "ts": ts if isinstance(ts, str) else datetime.now(timezone.utc).isoformat(),
-                "text": content[:_RESULT_TRUNCATE_LEN],
-                "source": "acp",
-            })
+            events.append(preview_event(
+                content,
+                ts if isinstance(ts, str) else datetime.now(timezone.utc).isoformat(),
+                d.get("data"),
+            ))
 
     # Blocking file I/O off the event loop — same rule as every other disk
     # read in the tailer loop.
