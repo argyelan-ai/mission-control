@@ -20,6 +20,9 @@ import { estimateTokens, formatElapsed } from "./thinkingFormat";
  *
  * Nothing is invented: no start -> no clock, no size -> no token estimate.
  */
+/** No new piece of the thought for this long = the row stops counting. */
+export const QUIET_AFTER_MS = 60_000;
+
 export const LiveThinkingRow = memo(function LiveThinkingRow({ preview }: { preview: PreviewEvent }) {
   const t = useTranslations("sessions");
   const locale = useLocale();
@@ -35,7 +38,16 @@ export const LiveThinkingRow = memo(function LiveThinkingRow({ preview }: { prev
   const tokens = typeof preview.chars === "number" && preview.chars > 0
     ? t("thinkingTokens", { count: new Intl.NumberFormat(locale).format(estimateTokens(preview.chars)) })
     : null;
-  const elapsed = Number.isNaN(startedMs) ? null : formatElapsed(now - startedMs);
+  // A dead engine sends nothing more: the clock must not keep counting as if
+  // the model were still at work (review finding). Past QUIET_AFTER_MS without
+  // a new snapshot the clock stops at the last one and the row says how long
+  // it has been quiet. Whether the model is reachable is the status line's job.
+  const lastMs = Date.parse(preview.ts);
+  const quietMs = Number.isNaN(lastMs) ? 0 : now - lastMs;
+  const quiet = quietMs > QUIET_AFTER_MS;
+  const elapsed = Number.isNaN(startedMs)
+    ? null
+    : formatElapsed((quiet ? lastMs : now) - startedMs);
 
   return (
     <div className="w-full px-4" data-testid="live-thinking" aria-live="polite">
@@ -45,11 +57,16 @@ export const LiveThinkingRow = memo(function LiveThinkingRow({ preview }: { prev
         aria-expanded={open}
         className="w-full min-h-11 flex items-center gap-2 text-left bg-transparent border-0 p-0 cursor-pointer text-xs"
       >
-        <Brain size={14} className="shrink-0 animate-pulse motion-reduce:animate-none" style={{ color: C.textMuted }} aria-hidden="true" />
+        <Brain size={14} className={`shrink-0 ${quiet ? "" : "animate-pulse motion-reduce:animate-none"}`} style={{ color: C.textMuted }} aria-hidden="true" />
         <span className="min-w-0 truncate">
           <span style={{ color: C.textSecondary }}>{t("thinkingLive")}</span>
           {tokens && <span className="tabular-nums" style={{ color: C.textMuted }}> · {tokens}</span>}
           {elapsed && <span className="tabular-nums" style={{ color: C.textMuted }}> · {elapsed}</span>}
+          {quiet && (
+            <span className="tabular-nums" style={{ color: C.textMuted }}>
+              {" · "}{t("thinkingQuiet", { time: formatElapsed(quietMs) })}
+            </span>
+          )}
         </span>
         <ChevronRight
           size={14}

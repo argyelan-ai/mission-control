@@ -958,6 +958,7 @@
     "workingOnOpen": "Ansehen",
     "thinkingLive": "Denkt nach",
     "thinkingDone": "Hat nachgedacht",
+    "thinkingQuiet": "seit {time} still",
     "thinkingTokens": "≈{count} Token",
     "taskActivityLabel": "Aus der Aufgabe",
     "taskDelivered": "Zugestellt {time}",

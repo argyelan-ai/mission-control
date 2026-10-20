@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -46,6 +47,26 @@ _PREVIEW_MAX_AGE = timedelta(minutes=10)
 _PREVIEW_TAIL_BYTES = 512 * 1024
 
 NOT_APPLICABLE: dict[str, Any] = {"applies": False}
+
+#: ``find_task_session`` scans the agent's whole sessions tree (hundreds of
+#: files). The answer changes only when a new attempt starts, so it is kept
+#: for a few seconds per (tree, task) instead of being rescanned every poll
+#: of every open chat.
+_SESSION_CACHE_S = 10.0
+_session_cache: dict[tuple[str, str], tuple[float, Path | None]] = {}
+
+
+def _cached_task_session(adapter: Any, tdir: Path, task_id: str, since: float | None) -> Path | None:
+    key = (str(tdir), task_id)
+    hit = _session_cache.get(key)
+    now = time.monotonic()
+    if hit is not None and now - hit[0] < _SESSION_CACHE_S and (hit[1] is None or hit[1].exists()):
+        return hit[1]
+    path = adapter.find_task_session(tdir, task_id, since)
+    if len(_session_cache) > 256:
+        _session_cache.clear()
+    _session_cache[key] = (now, path)
+    return path
 
 
 def _parse_ts(ts: Any) -> datetime | None:
@@ -161,7 +182,7 @@ async def task_activity(session: AsyncSession, agent: Any) -> dict[str, Any]:
 
     tdir = adapter.resolve_transcript_dir(agent)
     if tdir is not None:
-        path = await asyncio.to_thread(adapter.find_task_session, tdir, str(task.id), since)
+        path = await asyncio.to_thread(_cached_task_session, adapter, tdir, str(task.id), since)
         if path is not None and adapter.transcript_allowed(agent, path):
             has_session = True
             seen, events, preview = await asyncio.to_thread(_read_task_session, adapter, path)

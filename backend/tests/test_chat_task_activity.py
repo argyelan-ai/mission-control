@@ -87,6 +87,15 @@ def _preview_line(ts: str, text: str, *, started: str | None = None, chars: int 
     return line
 
 
+@pytest.fixture(autouse=True)
+def _fresh_session_cache():
+    from app.services import chat_task_activity
+
+    chat_task_activity._session_cache.clear()
+    yield
+    chat_task_activity._session_cache.clear()
+
+
 @pytest.fixture
 def acp_driver(monkeypatch):
     from app.config import settings

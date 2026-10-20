@@ -53,4 +53,16 @@ describe("LiveThinkingRow", () => {
     expect(row).not.toHaveTextContent("tokens");
     expect(row).not.toHaveTextContent(":");
   });
+
+  it("stops counting when nothing new came for a minute — a dead engine is not shown as work", () => {
+    vi.useFakeTimers({ now: NOW });
+    render(<LiveThinkingRow preview={thought({ ts: "2026-10-20T09:03:45.000Z" })} />);
+    const row = screen.getByTestId("live-thinking");
+    // started 09:03:15, last piece 09:03:45, now 09:05:00 -> clock frozen at 0:30
+    expect(row).toHaveTextContent("0:30");
+    expect(row).toHaveTextContent("quiet for 1:15");
+    act(() => { vi.advanceTimersByTime(5_000); });
+    expect(row).toHaveTextContent("0:30");
+    expect(row).toHaveTextContent("quiet for 1:20");
+  });
 });
