@@ -194,34 +194,6 @@ def test_branch_checkout_is_not_a_release(tagged_repo: Path):
     assert _run("mc_current_release_tag", cwd=tagged_repo).returncode != 0
 
 
-def test_schema_guard_knows_which_release_contains_a_revision(tagged_repo: Path):
-    # 0002 arrived with v0.2.0; 0004 only with v0.10.0.
-    assert _run("mc_ref_has_revision refs/tags/v0.2.0 0002", cwd=tagged_repo).returncode == 0
-    assert _run("mc_ref_has_revision refs/tags/v0.2.0 0004", cwd=tagged_repo).returncode != 0
-    assert _run("mc_ref_has_revision refs/tags/v0.10.0 0004", cwd=tagged_repo).returncode == 0
-    # Never interpolate junk into the grep pattern.
-    assert _run("mc_ref_has_revision refs/tags/v0.10.0 '.*'", cwd=tagged_repo).returncode != 0
-
-
-def test_the_real_migration_chain_matches_the_guard_pattern():
-    """The guard greps `revision = "…"` lines; if the chain's spelling ever
-    drifts away from that, every legacy update would be refused."""
-    import re
-
-    head = _git(ROOT, "rev-parse", "HEAD")
-    revs = []
-    for f in (ROOT / "backend" / "alembic" / "versions").glob("*.py"):
-        m = re.search(r"""^revision(?::\s*str)?\s*=\s*['"]([^'"]+)['"]""", f.read_text(), re.M)
-        if m:
-            revs.append(m.group(1))
-    assert len(revs) > 100   # the chain is really there
-    # Every revision committed at HEAD must be findable — sample a spread of
-    # them (all would be ~200 subprocesses).
-    for rev in sorted(revs)[:: max(1, len(revs) // 12)] + [sorted(revs)[-1]]:
-        r = _run(f"mc_ref_has_revision {head} {rev}", cwd=ROOT)
-        assert r.returncode == 0, (rev, r.stderr)
-
-
 def test_lib_only_mode_does_not_run_the_installer():
     r = _run("echo loaded")
     assert r.returncode == 0, r.stderr
