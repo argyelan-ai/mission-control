@@ -1427,9 +1427,62 @@ class RuntimeWatcher:
         sibling = await self._active_exclusive_sibling(
             session, redis, runtime, box_id=worker_id
         )
-        if sibling is not None:
-            return f"Worker-Box ist durch {sibling} belegt"
-        return None
+        notice_key = RedisKeys.runtime_worker_blocked_notice(runtime.slug)
+        if sibling is None:
+            # Block over: the next one is a new episode and is reported again.
+            await redis.delete(notice_key)
+            return None
+        await self._report_worker_blocked(session, redis, runtime, worker_id, sibling)
+        return f"Worker-Box ist durch {sibling} belegt"
+
+    async def _report_worker_blocked(
+        self, session: AsyncSession, redis, runtime: Runtime, worker_id: uuid.UUID, sibling: str
+    ) -> None:
+        """ADR-096 "the operator sees it": the duo stays down because its worker
+        box is held — an activity event, not only a log line.
+
+        The existing exclusivity event (``runtime.exclusive_blocked``,
+        ``box=worker``) — the same one a start that cannot free a box writes.
+        Once per blocking episode and blocker: the key holds the blocker, is
+        dropped as soon as the box is free again, and ages out after a day.
+        """
+        notice_key = RedisKeys.runtime_worker_blocked_notice(runtime.slug)
+        previous = await redis.get(notice_key)
+        if isinstance(previous, bytes):
+            previous = previous.decode()
+        if previous == sibling:
+            return
+        await redis.set(notice_key, sibling, ex=MEMBERS_NOTICE_TTL)
+        from app.models.host import Host
+        from app.services import runtime_manager
+
+        worker = await session.get(Host, worker_id)
+        box = worker.slug if worker is not None else str(worker_id)
+        sentence = {
+            "de": (
+                f"{runtime.slug} wird nicht automatisch neu gestartet: die Worker-Box "
+                f"{box} ist durch {sibling} belegt. Der Wächter stoppt nie, was dort "
+                f"läuft — {sibling} stoppen oder {runtime.slug} selbst starten."
+            ),
+            "en": (
+                f"{runtime.slug} is not restarted automatically: its worker box {box} "
+                f"is held by {sibling}. The watcher never stops what runs there — "
+                f"stop {sibling} or start {runtime.slug} yourself."
+            ),
+        }
+        event_type, title, severity, detail = runtime_manager.exclusive_event(
+            runtime.slug,
+            {"ok": False, "message": sentence["de"]},
+            box="worker",
+            extra={
+                "source": "auto_recovery",
+                "blocked_by": sibling,
+                "worker_host_id": str(worker_id),
+                "worker_slug": box,
+                "sentence": sentence,
+            },
+        )
+        await emit_event(session, event_type, title, severity=severity, detail=detail)
 
     async def _active_exclusive_sibling(
         self,

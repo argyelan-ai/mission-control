@@ -871,3 +871,104 @@ async def test_crud_moving_the_head_of_a_running_duo_is_409(auth_client, session
     await session.refresh(rt)
     assert rt.host_id == a.id
     assert await _rows(session, rt.id) == [("head", 0, a.id), ("worker", 1, b.id)]
+
+
+# ── 12. Review #893: the healer never races a start ──────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_audit_skips_a_runtime_that_is_switching(session):
+    """ADR-096 §2: a runtime with an active switching marker is mid-start —
+    its members are being written right now. The healer does not touch it
+    (no write, no event); the next backend start repairs it if still needed."""
+    from app.services import runtime_grace
+
+    a = await _host(session, "box-a")
+    b = await _host(session, "box-b", ssh_host="192.0.2.11")
+    rt = await _duo_rt(
+        session, "legacy-duo", a, topology={"nodes": 2, "worker_host_id": str(b.id)}
+    )
+    await runtime_grace.mark_switching(
+        "legacy-duo", runtime_grace.PHASE_LAUNCHING, runtime_grace.SOURCE_SWITCH
+    )
+
+    for repair in (True, False):
+        assert await rm.membership_audit(session, repair=repair) == []
+    assert await _rows(session, rt.id) == []
+    events = (
+        await session.exec(
+            select(ActivityEvent).where(ActivityEvent.event_type == "runtime.members_repaired")
+        )
+    ).all()
+    assert events == []
+
+    await runtime_grace.clear_switching("legacy-duo")
+    findings = await rm.membership_audit(session, repair=True)
+    assert [(f.code, f.repaired) for f in findings] == [("members_repaired", True)]
+
+
+@pytest.mark.asyncio
+async def test_audit_rereads_the_runtime_instead_of_trusting_its_snapshot(session):
+    """The healer must decide on the row as it is NOW, not as it was loaded.
+
+    The session already holds the runtime with the legacy worker field (as
+    the old one-shot ``select(Runtime)`` did); another writer has meanwhile
+    dropped that field (a start of the same duo with a new worker). Writing
+    the stale worker back would put the old box into the table."""
+    from tests.conftest import test_engine
+    from sqlmodel.ext.asyncio.session import AsyncSession
+
+    a = await _host(session, "box-a")
+    b = await _host(session, "box-b", ssh_host="192.0.2.11")
+    rt = await _duo_rt(
+        session, "legacy-duo", a, topology={"nodes": 2, "worker_host_id": str(b.id)}
+    )
+    assert rt.topology.get("worker_host_id") == str(b.id)  # the session's snapshot
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as other:
+        fresh = await other.get(Runtime, rt.id, populate_existing=True)
+        fresh.topology = {"nodes": 2}
+        other.add(fresh)
+        await other.commit()
+
+    findings = await rm.membership_audit(session, repair=True)
+    assert [f.code for f in findings] == ["members_incomplete"]
+    assert await _rows(session, rt.id) == []
+
+
+@pytest.mark.asyncio
+async def test_watcher_reports_a_duo_held_back_by_a_busy_worker_box_once(
+    async_session, fake_redis
+):
+    """ADR-096 "Mark sees it": a duo the watcher does NOT revive because its
+    worker box is held by another engine is an activity event — the existing
+    ``runtime.exclusive_blocked`` with ``box=worker`` — not just a log line.
+    Once per blocker, not once per cycle; in both UI languages."""
+    _, b, rt = await _watched_duo(async_session)
+    solo = await _recipe(async_session, "recipe-x", min_vram_gb=100.0)
+    await _solo_rt(async_session, "recipe-x-box-b", b, solo)
+    await fake_redis.set(
+        RedisKeys.runtime_switching("recipe-x-box-b"),
+        json.dumps({"phase": "loading", "source": "switch"}),
+    )
+    switcher = AsyncMock(return_value={"ok": True, "message": "Verbund startet"})
+    start = AsyncMock(return_value={"ok": True, "message": "läuft an"})
+    with patch("app.services.recipe_switcher.start_recipe_on_host", switcher):
+        await _run_watcher(async_session, fake_redis, start_mock=start, ticks=8)
+    switcher.assert_not_awaited()
+
+    blocked = (
+        await async_session.exec(
+            select(ActivityEvent).where(ActivityEvent.event_type == "runtime.exclusive_blocked")
+        )
+    ).all()
+    assert len(blocked) == 1
+    event = blocked[0]
+    assert event.severity == "warning"
+    assert event.detail["slug"] == rt.slug
+    assert event.detail["box"] == "worker"
+    assert event.detail["source"] == "auto_recovery"
+    assert event.detail["blocked_by"] == "recipe-x-box-b"
+    assert "recipe-x-box-b" in event.title and "box-b" in event.title
+    assert set(event.detail["sentence"]) == {"de", "en"}
+    assert "recipe-x-box-b" in event.detail["sentence"]["en"]

@@ -340,6 +340,20 @@ async def _delete_rows(session: AsyncSession, rows: list[RuntimeHost]) -> None:
     await session.flush()
 
 
+async def lock_runtime(session: AsyncSession, runtime_id: uuid.UUID) -> None:
+    """Row lock on the runtime (``SELECT … FOR UPDATE``, ADR-096 §1.1).
+
+    Every membership writer takes it BEFORE it reads the stored set, so two
+    writers of one runtime — the API and the worker are separate processes —
+    run one after the other instead of interleaving their delete-then-insert.
+    Held until the caller's transaction ends. Lock only: the runtime object in
+    the session is not reloaded, so a caller's pending change (a PATCH that
+    moves ``host_id``) is kept. SQLite has no row locks; the clause is dropped
+    there.
+    """
+    await session.exec(select(Runtime.id).where(Runtime.id == runtime_id).with_for_update())
+
+
 async def _insert_rows(
     session: AsyncSession, runtime_id: uuid.UUID, members: list[MemberSpec]
 ) -> None:
@@ -367,11 +381,16 @@ async def set_members(
 
     Delete-then-insert in the caller's transaction (``commit=False``) or its
     own — an upsert would collide with the unique rule (runtime_id, node_rank)
-    when the worker box changes.
+    when the worker box changes. The stored set is read only after
+    :func:`lock_runtime`, so a concurrent writer's rows are seen and replaced,
+    not collided with.
     """
     await validate_members(session, runtime, members, recipe=recipe)
+    await lock_runtime(session, runtime.id)
     stored = await members_of(session, runtime.id)
     if _as_set(stored) == _as_set(members):
+        if commit:
+            await session.commit()  # end the transaction: never sit on the lock
         return False
     if stored:
         await _refuse_if_running(session, runtime, stored, running)
@@ -396,8 +415,11 @@ async def clear_members(
     A solo runtime (zero rows) is a no-op without a probe. A running duo is
     refused (409): its worker would look free while the engine still uses it.
     """
+    await lock_runtime(session, runtime.id)
     stored = await members_of(session, runtime.id)
     if not stored:
+        if commit:
+            await session.commit()  # end the transaction: never sit on the lock
         return False
     await _refuse_if_running(session, runtime, stored, running)
     await _delete_rows(session, stored)
@@ -419,9 +441,23 @@ async def _recipe_for(session: AsyncSession, runtime: Runtime) -> LocalRecipe | 
     ).first()
 
 
+async def _is_switching(slug: str) -> bool:
+    """Is a start/stop of this runtime in flight (``runtime_grace`` marker)?"""
+    from app.services.runtime_grace import get_switching
+
+    return await get_switching(slug) is not None
+
+
 async def _check_one(
-    session: AsyncSession, runtime: Runtime, *, repair: bool
+    session: AsyncSession, runtime: Runtime, *, repair: bool, locked: bool = False
 ) -> AuditFinding | None:
+    """Check one runtime; with ``repair`` fill legacy rows.
+
+    The decision to WRITE is never taken on what was read without the lock:
+    a repair first takes the row lock (:func:`_repair_under_lock`), reloads
+    the runtime and decides again (``locked=True``) — a start that committed
+    a new worker in between is seen, not overwritten (review #893).
+    """
     topology = runtime.topology if isinstance(runtime.topology, dict) else {}
     nodes = topology_nodes(topology)
     stored = await members_of(session, runtime.id)
@@ -455,6 +491,8 @@ async def _check_one(
                 f"'{runtime.slug}' hat seine Worker-Box nur im alten topology-Feld — "
                 "sie wird beim nächsten Backend-Start eingetragen",
             )
+        if not locked:
+            return await _repair_under_lock(session, runtime)
         try:
             await set_members(
                 session, runtime, duo(runtime.host_id, legacy), recipe=recipe, commit=True
@@ -476,21 +514,60 @@ async def _check_one(
     return None
 
 
+async def _repair_under_lock(session: AsyncSession, runtime: Runtime) -> AuditFinding | None:
+    """Take the row lock, reload the runtime, skip it if a switch began, and
+    decide again on the fresh row (ADR-096 §2: re-check I1–I4 under the lock).
+
+    The lock is held from the re-read to the write's commit, so no other
+    membership writer can slip in between. A path that does not write ends
+    the transaction here (rollback) — the healer never sits on the lock.
+    """
+    # The audit only read so far. Ending that read transaction first makes the
+    # locked SELECT see everything committed since (the id is taken before:
+    # a rollback expires the loaded object).
+    runtime_id = runtime.id
+    await session.rollback()
+    fresh = await session.get(
+        Runtime, runtime_id, with_for_update=True, populate_existing=True
+    )
+    try:
+        if fresh is None or fresh.is_slot or await _is_switching(fresh.slug):
+            return None
+        return await _check_one(session, fresh, repair=True, locked=True)
+    finally:
+        if session.in_transaction():
+            await session.rollback()
+
+
 async def membership_audit(session: AsyncSession, *, repair: bool) -> list[AuditFinding]:
     """Check I1–I4 for every runtime; with ``repair`` fill legacy rows.
 
     Slot runtimes (ADR-078) are excluded: they never span boxes. Each runtime
-    is checked on its own; one broken row never stops the others.
+    is checked on its own; one broken row never stops the others. Runtimes
+    with an active switching marker are skipped; a repair re-checks I1–I4
+    under the row lock before it writes (ADR-096 §2).
     """
-    runtimes = (await session.exec(select(Runtime))).all()
+    # Ids only, then each row fresh: a list of Runtime objects loaded once is
+    # a snapshot that ages while the audit works (review #893), and a
+    # rollback after one broken runtime would expire every one of them.
+    targets = (
+        await session.exec(
+            select(Runtime.id, Runtime.slug).where(Runtime.is_slot == False)  # noqa: E712
+        )
+    ).all()
     findings: list[AuditFinding] = []
-    for runtime in runtimes:
-        if runtime.is_slot:
-            continue
+    for runtime_id, slug in targets:
         try:
+            # ADR-096 §2: a runtime that is switching right now is left alone —
+            # its start is writing members; reading it mid-way is no finding.
+            if await _is_switching(slug):
+                continue
+            runtime = await session.get(Runtime, runtime_id, populate_existing=True)
+            if runtime is None or runtime.is_slot:
+                continue
             result = await _check_one(session, runtime, repair=repair)
         except Exception:  # noqa: BLE001 — one runtime must not stop the audit
-            logger.exception("membership audit failed for %s", runtime.slug)
+            logger.exception("membership audit failed for %s", slug)
             try:
                 await session.rollback()
             except Exception:  # noqa: BLE001
