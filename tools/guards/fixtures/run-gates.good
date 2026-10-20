@@ -1,0 +1,3 @@
+# Every gate passes, so the runner exits green.
+true
+test -d .

@@ -1,0 +1,9 @@
+{
+ "session_id": "fixture",
+ "cwd": ".",
+ "tool_name": "Bash",
+ "tool_input": {
+  "command": "git -C hook-repo-clean commit -F - <<'EOF'\nfix: example\n\nNever `git push 2>&1 | tail -1` again.\nEOF",
+  "run_in_background": false
+ }
+}

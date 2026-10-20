@@ -24,7 +24,7 @@ from app.auth import Role, generate_agent_token, require_role, require_user
 from app.config import effective_host_ssh_user, settings
 from app.database import get_session, release_session
 from app.models.agent import Agent
-from app.services import ssh_host_keys
+from app.services import docker_gateway, ssh_host_keys
 from app.services.cli_bridge_auth import bridge_headers, bridge_ws_base_url
 
 
@@ -1677,13 +1677,21 @@ async def restart_host_agent_process(
 
 # ── Container Lifecycle (Start/Stop/Restart) ─────────────────────────────────
 
+def _deferred_http(exc: docker_gateway.DockerDeferred) -> HTTPException:
+    """An update drain refused a container change — try again after it."""
+    return HTTPException(status_code=503, detail=str(exc))
+
+
 async def _docker_action(action: str, container_name: str, timeout: int = 30):
     """Runs docker start|stop|restart|inspect on a container."""
-    proc = await asyncio.create_subprocess_exec(
-        "docker", action, container_name,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
+    try:
+        proc = await docker_gateway.create_subprocess(
+            [action, container_name],
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except docker_gateway.DockerDeferred as exc:
+        raise _deferred_http(exc) from exc
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except asyncio.TimeoutError:
@@ -1901,12 +1909,15 @@ async def force_recreate_agent_container(
     run_env["HOME"] = host_home
 
     started_at = time.monotonic()
-    proc = await asyncio.create_subprocess_exec(
-        "docker", *compose_args,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=run_env,
-    )
+    try:
+        proc = await docker_gateway.create_subprocess(
+            compose_args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=run_env,
+        )
+    except docker_gateway.DockerDeferred as exc:
+        raise _deferred_http(exc) from exc
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=180)
     except asyncio.TimeoutError:

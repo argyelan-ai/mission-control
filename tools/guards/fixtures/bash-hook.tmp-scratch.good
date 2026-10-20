@@ -1,0 +1,9 @@
+{
+ "session_id": "fixture",
+ "cwd": ".",
+ "tool_name": "Bash",
+ "tool_input": {
+  "command": "python3 tools/x.py > /tmp/guard-scratch.txt && wc -l /tmp/guard-scratch.txt",
+  "run_in_background": false
+ }
+}

@@ -1,0 +1,2 @@
+# The scan runs, but ';' lets the push happen even when the scan is red.
+python3 scripts/privacy-scan.py; git -C "$WT" push -u origin feat/example

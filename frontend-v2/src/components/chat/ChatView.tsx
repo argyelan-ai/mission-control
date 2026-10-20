@@ -41,6 +41,7 @@ import { HeadRunRecordCard } from "@/components/heads/HeadRunRecordCard";
 import { HeadNoTranscriptFallback } from "@/components/heads/HeadNoTranscriptFallback";
 import { AgentCard } from "./AgentCard";
 import { NotificationRow } from "./NotificationRow";
+import { WorkingOnRow, type WorkingOn } from "./WorkingOnRow";
 import { isAgentSpawn, matchRuns, notificationsByTool } from "./agentRuns";
 import { buildTimelineItems } from "./buildTimelineItems";
 import { ChatMessage } from "./ChatMessage";
@@ -320,10 +321,13 @@ interface ChatViewProps {
    *  the session list. Omitted on desktop, where the list is always visible
    *  beside the chat and a back affordance would be a lie. */
   onBack?: () => void;
-  /** One short line under the agent name on the mobile header — what this
-   *  session is currently about (its task title). Desktop's header stays a
-   *  single dense row, so this is <md only. */
-  contextLine?: string | null;
+  /** The task this agent is bound to right now. Shown as ONE quiet row at
+   *  the top of the chat ("Working on <title> → View", `WorkingOnRow`) that
+   *  links to the task's own view — the task's session never runs inside
+   *  the chat (the chat shows the chat daemon's session only). It replaces
+   *  the old task line under the agent name: the same fact twice would
+   *  break K3. */
+  workingOn?: WorkingOn | null;
   /** Lets the mobile options sheet open the side panels the desktop rail
    *  owns. Omitted = no Panels section in the sheet. */
   onOpenPanel?: (panel: PanelKind) => void;
@@ -352,7 +356,7 @@ export function ChatView({
   terminalRemountTick = 0,
   onStatusChange,
   onBack,
-  contextLine,
+  workingOn = null,
   onOpenPanel,
   newerHeadRunId = null,
   onSelectHeadRun,
@@ -851,7 +855,7 @@ export function ChatView({
     <ChatMediaContext.Provider value={agent?.id ?? null}>
     <div ref={rootRef} className="flex flex-col flex-1 min-h-0 overflow-hidden">
       {/* One header for both breakpoints — the parts that only make sense on
-          a phone (back chevron, context line, options button) carry
+          a phone (back chevron, options button) carry
           `md:hidden`, the desktop toolbar carries `hidden md:flex`. Rendering
           two headers would duplicate the agent name in the DOM for no gain.
           A head gets its OWN, much smaller header (`HeadChatHeader`) instead
@@ -946,14 +950,6 @@ export function ChatView({
           >
             {agent.name}
           </span>
-          {contextLine && (
-            <span
-              className="text-[11px] md:text-xs truncate max-w-full leading-tight md:min-w-0"
-              style={{ color: C.textMuted }}
-            >
-              {contextLine}
-            </span>
-          )}
         </div>
 
         {/* Rechte Gruppe: EIN ml-auto buendelt Badge und "…" am rechten Rand.
@@ -1135,6 +1131,10 @@ export function ChatView({
         </div>
       </div>
       ) : null}
+
+      {!head && agent && workingOn && (
+        <WorkingOnRow taskId={workingOn.taskId} title={workingOn.title} />
+      )}
 
       {effectiveView === "terminal" ? (
         // Home-Balken freihalten. Die Tab-Leiste trug den Zuschlag

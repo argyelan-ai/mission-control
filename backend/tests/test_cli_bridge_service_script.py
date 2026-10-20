@@ -160,3 +160,80 @@ def test_plist_carries_bind_and_token_file(env):
     plist = (home / "Library" / "LaunchAgents" / "com.mc.cli-bridge.plist").read_text()
     assert "<key>CLI_BRIDGE_BIND</key>\n        <string>127.0.0.1</string>" in plist
     assert "<key>CLI_BRIDGE_TOKEN_FILE</key>" in plist
+
+
+# ── update door (ADR-094): the engine must outlive a bridge restart ─────────
+
+
+def test_plist_lets_a_detached_update_outlive_the_bridge(env):
+    """launchd kills the job's whole process group when the bridge stops,
+    unless AbandonProcessGroup is set — the belt next to the double fork."""
+    e, home, _ = env
+    assert _run(e).returncode == 0
+    plist = (home / "Library" / "LaunchAgents" / "com.mc.cli-bridge.plist").read_text()
+    assert "<key>AbandonProcessGroup</key>\n    <true/>" in plist
+    assert (home / ".mc" / "secrets" / "mc-update.token").exists()
+
+
+LINUX_STUBS = {
+    "uname": "#!/bin/bash\necho Linux\n",
+    # Logs every call; for `stop` also the KillMode systemd would apply — the
+    # one in the unit file as of the last daemon-reload (default control-group,
+    # which kills the tmux server the bridge started for host agents).
+    "systemctl": r"""#!/bin/bash
+unit="$HOME/.config/systemd/user/mc-cli-bridge.service"
+case "$*" in
+  "--user daemon-reload")
+    km="$(sed -n 's/^KillMode=//p' "$unit" 2>/dev/null | head -1)"
+    echo "${km:-control-group}" > "$STATE/loaded-killmode" ;;
+esac
+if [ "$2" = stop ]; then
+  echo "systemctl $* killmode=$(cat "$STATE/loaded-killmode" 2>/dev/null || echo none)" >> "$STATE/calls"
+else
+  echo "systemctl $*" >> "$STATE/calls"
+fi
+exit 0
+""",
+    "lsof": "#!/bin/bash\nexit 0\n",   # nothing listens (no real lsof answers here)
+}
+
+
+@pytest.fixture
+def linux_env(env, tmp_path):
+    e, home, state = env
+    bindir = Path(e["PATH"].split(":", 1)[0])
+    for name, body in LINUX_STUBS.items():
+        (bindir / name).write_text(body)
+        (bindir / name).chmod(0o755)
+    return e, home, state
+
+
+def test_systemd_unit_keeps_children_on_restart(linux_env):
+    """KillMode=process: a restart of the bridge unit stops the bridge, not a
+    run it started (the run normally lives in its own systemd-run unit)."""
+    e, home, _ = linux_env
+    r = _run({**e, "CLI_BRIDGE_BIND": "172.18.0.1"})
+    assert r.returncode == 0, r.stdout + r.stderr
+    unit = (home / ".config" / "systemd" / "user" / "mc-cli-bridge.service").read_text()
+    assert "KillMode=process" in unit
+    assert "Environment=CLI_BRIDGE_BIND=172.18.0.1" in unit
+    assert "Environment=MC_UPDATE_TOKEN_FILE=" in unit
+
+
+def test_reinstall_stops_the_old_bridge_under_the_new_kill_mode(linux_env):
+    """An install from before the update door has a unit without KillMode
+    (default control-group): stopping it under the OLD unit kills every child
+    of the bridge — the tmux server of the host agents. The new unit must be
+    loaded (written + daemon-reload) before the stop."""
+    e, home, state = linux_env
+    unit = home / ".config" / "systemd" / "user" / "mc-cli-bridge.service"
+    unit.parent.mkdir(parents=True)
+    unit.write_text("[Service]\nExecStart=/usr/bin/python3 cli-bridge.py\n")
+    (state / "loaded-killmode").write_text("control-group\n")   # the old unit is loaded
+    r = _run({**e, "CLI_BRIDGE_BIND": "172.18.0.1"})
+    assert r.returncode == 0, r.stdout + r.stderr
+    calls = _calls(state)
+    stops = [c for c in calls if " stop " in f"{c} "]
+    assert stops == ["systemctl --user stop mc-cli-bridge.service killmode=process"], calls
+    assert calls.index("systemctl --user daemon-reload") < calls.index(stops[0])
+    assert calls.index(stops[0]) < calls.index("systemctl --user enable --now mc-cli-bridge.service")

@@ -1,0 +1,2 @@
+# A push without 'git -C <worktree>' can run in the wrong checkout.
+python3 scripts/privacy-scan.py && git push -u origin feat/example

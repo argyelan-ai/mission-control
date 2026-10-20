@@ -3,6 +3,7 @@ import { render, screen, waitFor, fireEvent, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { useAppStore } from "@/lib/store";
 import type { HeadRun } from "@/lib/heads";
 import type { Agent } from "@/lib/types";
 
@@ -89,7 +90,7 @@ vi.mock("@/components/chat/ChatView", () => ({
     centerView,
     onCenterViewChange,
     onBack,
-    contextLine,
+    workingOn,
     voiceOnScreen,
   }: {
     voiceOnScreen?: boolean;
@@ -99,7 +100,7 @@ vi.mock("@/components/chat/ChatView", () => ({
     centerView: string;
     onCenterViewChange: (v: string) => void;
     onBack?: () => void;
-    contextLine?: string | null;
+    workingOn?: { taskId: string; title: string } | null;
   }) => (
     <div data-testid="chat-view-stub" data-voice-on-screen={String(voiceOnScreen ?? true)}>
       {/* Heads in Chats (PR 2): the page's own `selectedHeadRun` resolution
@@ -108,7 +109,7 @@ vi.mock("@/components/chat/ChatView", () => ({
       <span>{agent ? `Chat: ${agent.name}` : "Chat: none"}</span>
       <span data-testid="chat-view-has-transcript">{String(hasTranscript)}</span>
       <span data-testid="chat-view-center">{centerView}</span>
-      <span data-testid="chat-view-context-line">{contextLine ?? ""}</span>
+      <span data-testid="chat-view-working-on">{workingOn ? `${workingOn.taskId}|${workingOn.title}` : ""}</span>
       {/* The agent object the page hands down — the context line, the
           transcript gate and TerminalPanel all read from it, so whether it is
           the live row or a stale click-time snapshot is observable here. */}
@@ -627,6 +628,50 @@ describe("SessionsPage — the selected agent follows the live data, not the cli
     await waitFor(() =>
       expect(screen.getByTestId("chat-view-agent-task")).toHaveTextContent("task-2")
     );
+  });
+
+  it("hands the bound task to the chat as its working-on row", async () => {
+    useAppStore.setState({ activeBoardId: "board-1" });
+    vi.spyOn(api.tasks, "list").mockResolvedValue([
+      { id: "task-1", title: "Login reparieren" } as unknown as Awaited<ReturnType<typeof api.tasks.list>>[number],
+    ]);
+    vi.spyOn(api.agents, "listDockerSessions").mockResolvedValue([
+      mkAgent({ id: "agent-1", name: "Agent One", current_task_id: "task-1" }),
+    ]);
+    try {
+      renderPage();
+      await waitFor(() =>
+        expect(screen.getByTestId("chat-view-working-on")).toHaveTextContent("task-1|Login reparieren")
+      );
+    } finally {
+      useAppStore.setState({ activeBoardId: null });
+    }
+  });
+
+  it("refetches the task list when the agent picks up a task the list does not have yet", async () => {
+    // The board's task list has no refetch of its own. An agent that picks a
+    // task up after the list loaded must still get its working-on row.
+    useAppStore.setState({ activeBoardId: "board-1" });
+    type TaskRow = Awaited<ReturnType<typeof api.tasks.list>>[number];
+    const list = vi
+      .spyOn(api.tasks, "list")
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([{ id: "task-9", title: "Neu aufgenommen" } as unknown as TaskRow]);
+    vi.spyOn(api.agents, "listDockerSessions")
+      .mockResolvedValueOnce([mkAgent({ id: "agent-1", name: "Agent One", current_task_id: null })])
+      .mockResolvedValue([mkAgent({ id: "agent-1", name: "Agent One", current_task_id: "task-9" })]);
+    try {
+      const { qc } = renderPage();
+      await waitFor(() => expect(list).toHaveBeenCalledTimes(1));
+      await qc.invalidateQueries({ queryKey: ["agents", "docker-sessions"] });
+      await waitFor(() =>
+        expect(screen.getByTestId("chat-view-working-on")).toHaveTextContent("task-9|Neu aufgenommen")
+      );
+      // A task the list never has (another board) asks once, not in a loop.
+      expect(list.mock.calls.length).toBeLessThanOrEqual(3);
+    } finally {
+      useAppStore.setState({ activeBoardId: null });
+    }
   });
 
   it("picks up a changed status on the next refetch", async () => {

@@ -1,0 +1,14 @@
+{
+ "session_id": "fixture",
+ "cwd": ".",
+ "hook_event_name": "PostToolUse",
+ "tool_name": "Bash",
+ "tool_input": {
+  "command": "git -C ../mc-wt-example push -u origin HEAD >/dev/null 2>&1; echo pushed"
+ },
+ "tool_response": {
+  "stdout": "",
+  "stderr": "",
+  "interrupted": false
+ }
+}

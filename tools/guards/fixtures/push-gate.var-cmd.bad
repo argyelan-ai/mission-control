@@ -1,0 +1,3 @@
+# Bypass found by the critic (2026-10-19): the push runs through a variable,
+# and its output is cut to one line.
+G=git; $G -C . push 2>&1 | tail -1

@@ -19,7 +19,6 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
-from sse_starlette.sse import EventSourceResponse
 
 from app.auth import Role, require_role, require_user
 from app.database import get_session, release_session
@@ -63,7 +62,7 @@ from app.services import chat_actions, chat_media, commit_llm
 from app.services.activity import emit_event
 from app.services.chat_changes import aggregate_changes
 from app.services.chat_diff import capture_texts
-from app.services.sse import _sse_generator
+from app.services.sse import _sse_generator, sse_response
 from app.services.transcript_adapters import adapter_for
 from app.services.checklist_todo_sync import chat_todo_sync
 from app.services import fresh_session
@@ -481,7 +480,7 @@ async def stream_agent_chat(
         finally:
             await tailer_manager.release(str(agent_id))
 
-    return EventSourceResponse(_generator())
+    return sse_response(_generator())
 
 
 async def _load_agent_or_404(agent_id: uuid.UUID, session: AsyncSession) -> Agent:

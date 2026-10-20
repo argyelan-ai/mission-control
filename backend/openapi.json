@@ -15,6 +15,15 @@
         ]
       }
     },
+    "/api/v1/activity/proof-gate/stats": {
+      "get": {
+        "operationId": "proof_gate_stats_api_v1_activity_proof_gate_stats_get",
+        "summary": "Proof Gate Stats",
+        "tags": [
+          "activity"
+        ]
+      }
+    },
     "/api/v1/activity/stream": {
       "get": {
         "operationId": "stream_activity_api_v1_activity_stream_get",
@@ -1659,6 +1668,22 @@
       "get": {
         "operationId": "check_setup_required_api_v1_auth_setup_required_get",
         "summary": "Check Setup Required",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/step-up": {
+      "get": {
+        "operationId": "step_up_availability_api_v1_auth_step_up_get",
+        "summary": "Step Up Availability",
+        "tags": [
+          "auth"
+        ]
+      },
+      "post": {
+        "operationId": "step_up_confirm_api_v1_auth_step_up_post",
+        "summary": "Step Up Confirm",
         "tags": [
           "auth"
         ]
@@ -4640,6 +4665,60 @@
       "get": {
         "operationId": "system_status_api_v1_system_status_get",
         "summary": "System Status"
+      }
+    },
+    "/api/v1/system/update/history": {
+      "get": {
+        "operationId": "update_history_api_v1_system_update_history_get",
+        "summary": "Update History",
+        "tags": [
+          "system-update"
+        ]
+      }
+    },
+    "/api/v1/system/update/preflight": {
+      "post": {
+        "operationId": "update_preflight_api_v1_system_update_preflight_post",
+        "summary": "Update Preflight",
+        "tags": [
+          "system-update"
+        ]
+      }
+    },
+    "/api/v1/system/update/resume": {
+      "post": {
+        "operationId": "update_resume_api_v1_system_update_resume_post",
+        "summary": "Update Resume",
+        "tags": [
+          "system-update"
+        ]
+      }
+    },
+    "/api/v1/system/update/rollback": {
+      "post": {
+        "operationId": "update_rollback_api_v1_system_update_rollback_post",
+        "summary": "Update Rollback",
+        "tags": [
+          "system-update"
+        ]
+      }
+    },
+    "/api/v1/system/update/start": {
+      "post": {
+        "operationId": "update_start_api_v1_system_update_start_post",
+        "summary": "Update Start",
+        "tags": [
+          "system-update"
+        ]
+      }
+    },
+    "/api/v1/system/update/status": {
+      "get": {
+        "operationId": "update_status_api_v1_system_update_status_get",
+        "summary": "Update Status",
+        "tags": [
+          "system-update"
+        ]
       }
     },
     "/api/v1/system/version": {

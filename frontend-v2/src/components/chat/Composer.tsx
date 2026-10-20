@@ -139,6 +139,15 @@ export interface ModelChoice {
  * learned that lesson (`contextWindow` on the usage event is backend-stamped for
  * the same reason).
  */
+/** Is `option` (a reported model command) the model `current` names? ACP
+ *  agents report the option provider-qualified ("mc-openai/X") while the
+ *  usage event names the bare model ("X"); a match needs the whole part after
+ *  a "/", never a mere suffix ("27B" is not "Qwen3.8-27B"). */
+export function isSameModel(option: string, current: string | null): boolean {
+  if (!current) return false;
+  return option === current || option.endsWith(`/${current}`);
+}
+
 export function resolveModelOptions(
   reported: ChatModelOption[] | null | undefined,
 ): ModelChoice[] {
@@ -609,7 +618,7 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
    * verbatim. */
   const currentModel = usage?.model ?? capabilities?.model ?? null;
   const modelLabel = currentModel
-    ? modelOptions.find((m) => m.name === currentModel)?.label ?? currentModel
+    ? modelOptions.find((m) => isSameModel(m.name, currentModel))?.label ?? currentModel
     : "—";
   // Backend-stamped, never a frontend model→window guess (see claudeCommands.ts).
   const win = usage?.contextWindow;
@@ -919,7 +928,10 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
             {modelOptions.length > 0 && modelOpen && (
               <div
                 role="listbox"
-                className="absolute bottom-full left-0 mb-1.5 w-36 rounded-lg overflow-hidden z-20 p-1"
+                // Sized to the names: real model ids ("GLM-5.3-Flash-EXL3")
+                // are longer than the old aliases; max-w-72 still fits a
+                // 390 px phone from the chip's left edge.
+                className="absolute bottom-full left-0 mb-1.5 min-w-36 w-max max-w-72 rounded-lg overflow-hidden z-20 p-1"
                 style={{
                   backgroundColor: C.bgElevated,
                   border: `1px solid ${C.border}`,
@@ -931,13 +943,14 @@ export function Composer({ agentId, usage, state, onSend, onStop, sessionLive = 
                     key={m.name}
                     type="button"
                     role="option"
-                    aria-selected={m.name === currentModel}
+                    aria-selected={isSameModel(m.name, currentModel)}
                     data-model={m.name}
+                    title={m.label}
                     onClick={() => selectModel(m.name)}
                     className="w-full flex items-center gap-3 text-left px-2 py-1.5 text-[12px] font-mono rounded-md cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
                     style={{
-                      color: m.name === currentModel ? C.accent : C.textPrimary,
-                      backgroundColor: m.name === currentModel ? C.accentSubtle : "transparent",
+                      color: isSameModel(m.name, currentModel) ? C.accent : C.textPrimary,
+                      backgroundColor: isSameModel(m.name, currentModel) ? C.accentSubtle : "transparent",
                     }}
                   >
                     <span className="min-w-0 truncate">{m.label}</span>

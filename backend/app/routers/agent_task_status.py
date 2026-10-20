@@ -32,7 +32,7 @@ from datetime import datetime, timedelta
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlmodel import select, or_, and_
 
@@ -665,6 +665,15 @@ class AgentTaskUpdate(BaseModel):
     # 422 extra_forbidden. Declared so the field reaches the handler;
     # application + permission/cycle checks live in agent_update_task.
     parent_task_id: uuid.UUID | None = None
+    # Beweis-Tor (services/proof_gate.py): evidence that rides along with a
+    # status=review/done transition. Not stored on the card — the gate compares
+    # them against GitHub and the MC database, then they are dropped.
+    # head_sha/head_branch: the local checkout the agent reports from (the mc
+    # CLI fills both). reviewer: the reviewer the agent relies on — he must
+    # have commented himself (MC card first, then the PR on GitHub).
+    head_sha: str | None = Field(default=None, max_length=64)
+    head_branch: str | None = Field(default=None, max_length=255)
+    reviewer: str | None = Field(default=None, max_length=100)
 
 
 class ReviewDecisionBody(BaseModel):
@@ -2646,6 +2655,27 @@ async def agent_update_task(
     # the card sat in `done` with an unresolvable review (the silent-failure
     # class this whole task removes). See
     # tests/test_adr_gate.py::test_agent_patch_done_is_blocked_before_the_status_commits.
+    # ── Beweis-Tor (PRE-MUTATION) ─────────────────────────────────
+    # rule: R-proof-gate-finish - false finish reports were found by hand, days later
+    # A card that carries a PR reaches review/done only with evidence: the PR
+    # exists, the reported SHA is the pushed one, CI is green, a commit
+    # followed the last change request, a named reviewer commented himself.
+    # Server-side on purpose: `mc finish --force` and raw PATCHes run through
+    # here too — there is no request field that skips it. warn = comment +
+    # event, enforce = 422 (services/proof_gate.py, PROOF_GATE_MODE).
+    _proof_head_sha = updates.pop("head_sha", None)
+    _proof_head_branch = updates.pop("head_branch", None)
+    _proof_reviewer = updates.pop("reviewer", None)
+    _proof_result = None
+    if updates.get("status") in ("review", "done") and updates["status"] != old_status:
+        from app.services.proof_gate import run_proof_gate
+        _proof_result = await run_proof_gate(
+            session, task,
+            target_status=updates["status"], old_status=old_status,
+            actor_agent=agent, updates=updates, reviewer=_proof_reviewer,
+            head_sha=_proof_head_sha, head_branch=_proof_head_branch,
+        )
+
     if updates.get("status") == "done" and old_status != "done":
         from app.services.adr_gate import guard_adr_merge
         await guard_adr_merge(
@@ -2684,6 +2714,19 @@ async def agent_update_task(
             if not (_ack_settings.use_subagent_dispatch and not agent.is_board_lead):
                 if agent.current_task_id != task.id:
                     agent.current_task_id = task.id
+        elif (
+            new_status == "blocked"
+            and old_status == "inbox"
+            and task.ack_at is None
+            and task.dispatched_at is not None
+        ):
+            # Blocked straight from a delivered card (19.10.2026): the agent
+            # answered the delivery — the model never started (runtime down),
+            # so the omp-bridge blocks without ever claiming. Stamp the ACK so
+            # the poll does not read "blocked + ack_at NULL" as "prompt never
+            # delivered" and hand the dead task out again. started_at stays
+            # empty: no work began.
+            task.ack_at = utcnow()
         elif new_status in ("review", "done") and task.ack_at is None:
             # Retroactive ACK: agent worked on the task without explicitly ACKing.
             # Besser spaet als nie — Analytics brauchen den Timestamp.
@@ -2716,6 +2759,14 @@ async def agent_update_task(
     session.add(agent)
     await session.commit()
     await session.refresh(task)
+
+    if _proof_result is not None and (_proof_result.checked or _proof_result.visible):
+        from app.services.proof_gate import publish as _publish_proof_gate
+        await _publish_proof_gate(
+            session, task_id=task.id, board_id=board_id, title=task.title,
+            result=_proof_result, agent_id=agent.id,
+        )
+        await session.refresh(task)
 
     # ── Queue Drain (Fix "tote Dispatch-Warteschlange") ───────────────
     # The agent just freed up (task done / failed / aborted — any terminal
@@ -3427,11 +3478,33 @@ async def agent_review_decision(
     if not task or task.board_id != board_id:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    # Beweis-Tor: approve is the second road to done. The reviewer's own
+    # comment is written atomically by execute_review_decision, so the
+    # "verdict on the card" part of (e) holds by construction; PR, CI,
+    # change-request and self-review checks run. A refused approve keeps the
+    # reviewer's words as his comment (verdict_text) — the rollback must not
+    # swallow them.
+    _proof_result = None
+    if body.decision == "approve" and task.status == "review":
+        from app.services.proof_gate import run_proof_gate
+        _proof_result = await run_proof_gate(
+            session, task,
+            target_status="done", old_status=task.status,
+            actor_agent=agent, updates={}, reviewer_comment_in_flight=True,
+            verdict_text=body.comment,
+        )
+
     from app.services.task_lifecycle import execute_review_decision
     await execute_review_decision(
         session, task, board_id, body.decision, body.comment,
         actor_agent=agent,
     )
+    if _proof_result is not None and (_proof_result.checked or _proof_result.visible):
+        from app.services.proof_gate import publish as _publish_proof_gate
+        await _publish_proof_gate(
+            session, task_id=task.id, board_id=board_id, title=task.title,
+            result=_proof_result, agent_id=agent.id,
+        )
     return {"status": "ok", "decision": body.decision}
 
 

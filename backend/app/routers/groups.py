@@ -440,9 +440,8 @@ async def group_stream(
     gerade im Terminal tippt, bevor seine Nachricht gepostet ist. Quelle ist
     derselbe Vorschau-Strom wie im Sessions-Chat (``group_preview``).
     """
-    from sse_starlette.sse import EventSourceResponse
-
     from app.services.group_preview import group_stream_frames
+    from app.services.sse import sse_response
 
     group = await _get_group_or_404(session, group_id)
     # Transkriptpfade JETZT auflösen — die DB-Session lebt nicht so lange
@@ -454,7 +453,7 @@ async def group_stream(
     # explizite Release läuft die Autobegin-Transaktion aus `_get_group_or_404`
     # minutenlang mit (405-s-Befund 2026-09-16).
     await release_session(session, route=request.url.path)
-    return EventSourceResponse(group_stream_frames(str(group_id), sources))
+    return sse_response(group_stream_frames(str(group_id), sources))
 
 
 async def _group_preview_sources(

@@ -160,6 +160,67 @@ jobs:
         working-directory: docker/cdp-browser/gateway
         run: python3 -m pytest . -q
 
+  mc-update:
+    # The update engine (scripts/mc_update.py, ADR-094) runs on the HOST with
+    # whatever python3 the machine has — macOS ships 3.9, Raspberry Pi OS
+    # 3.11 — so both ends are tested. Standard library only; the suite drives
+    # it end to end against a local git upstream and a fake docker in PATH
+    # (scripts/tests/fake_docker.py) and the repository's real backup.sh
+    # (pre-update backup and R2 restore; needs bash, gzip, openssl), including
+    # real crashes at every journal boundary followed by `resume`. The bridge's
+    # update door (scripts/mc_update_door.py) runs against the same world: five
+    # routes, its own token, 409/423/429, a detached job that outlives a killed
+    # bridge, and the start routine that resumes an interrupted run.
+    # No Docker, no network.
+    name: mc-update engine (py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.9", "3.12"]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install pytest
+        run: pip install pytest pytest-xdist
+
+      - name: Run update engine tests
+        run: python3 -m pytest scripts/tests/test_mc_update.py scripts/tests/test_mc_update_door.py -q -p no:cacheprovider -n auto --tb=short
+
+      - name: Run the terminal door (install.sh --update/--rollback/--resume)
+        # The real install.sh with the real engine against the same fake
+        # world: hand-over, output, exit codes, the unfinished-run guard and
+        # the python3 check.
+        run: python3 -m pytest scripts/tests/test_install_door.py -q -p no:cacheprovider -n auto --tb=short
+
+  mc-update-crash:
+    # The crash matrix of the update engine (update plan PR 2c): the engine is
+    # killed right before and right after EVERY journal write — found by a
+    # clean probe run per scenario, not listed by hand — plus the named points
+    # inside a phase and a crash of the resume itself; each case is resumed
+    # and must end done / aborted / rolled_back with one version everywhere,
+    # the fleet file and .env intact, the lock free and no drain left. A few
+    # hundred end-to-end runs: its own job, on the oldest python the engine
+    # supports (macOS ships 3.9).
+    name: mc-update crash matrix
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.9"
+
+      - name: Install pytest
+        run: pip install pytest pytest-xdist
+
+      - name: Kill at every journal boundary, resume, check the end state
+        run: python3 -m pytest scripts/tests/test_mc_update_crash.py -q -p no:cacheprovider -n auto --tb=short
+
   mc-cli:
     name: mc-cli Tests
     runs-on: ubuntu-latest
@@ -260,7 +321,7 @@ jobs:
         run: |
           shellcheck -x -S warning install.sh scripts/release-image-tags.sh   # info-level notes differ between shellcheck versions
           pip install -q pytest pyyaml
-          python3 -m pytest -q -p no:cacheprovider --noconftest backend/tests/test_install_release_pinning.py backend/tests/test_install_update.py backend/tests/test_release_image_tags.py
+          python3 -m pytest -q -p no:cacheprovider --noconftest backend/tests/test_install_release_pinning.py backend/tests/test_install_update.py backend/tests/test_release_image_tags.py backend/tests/test_mc_update_verify.py backend/tests/test_install_bridge_setup.py
       - name: --here ran the checkout, not a published image
         # CI has no release that matches the branch under test, so --here
         # must take the edge path: MC_IMAGE_TAG=edge (a tag no registry

@@ -1,0 +1,4 @@
+# The incident command: no remote, no refspec, output cut. The lease push was rejected.
+branch=feat/example
+head=1111111111111111111111111111111111111111
+remote=2222222222222222222222222222222222222222

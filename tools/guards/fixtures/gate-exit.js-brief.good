@@ -1,0 +1,2 @@
+// A JS template brief: escaped backquotes end the inline command.
+const brief = `Run: \`${TEAM}/scripts/preflight.sh --worktrees 0\`; then \`mkdir -p ${OUT}\`.`

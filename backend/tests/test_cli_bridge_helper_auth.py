@@ -133,9 +133,11 @@ def test_correct_token_is_served(bridge, http_base):
 
 
 def test_ping_is_open_and_reveals_nothing(bridge, http_base):
+    """Liveness plus the update door's API version (ADR-094) — so MC can say
+    "this bridge is too old for the update button" — and nothing else."""
     status, body = _call(http_base + "/ping")
     assert status == 200
-    assert json.loads(body) == {"status": "ok"}
+    assert json.loads(body) == {"status": "ok", "api_version": bridge._door_mod.API_VERSION}
 
 
 def test_no_token_loaded_fails_closed(bridge, http_base, monkeypatch):
@@ -234,7 +236,7 @@ def test_stuck_client_does_not_block_other_requests(bridge):
         time.sleep(0.2)
         started = time.monotonic()
         status, body = _call(f"http://{host}:{port}/ping")
-        assert status == 200 and json.loads(body) == {"status": "ok"}
+        assert status == 200 and json.loads(body)["status"] == "ok"
         assert time.monotonic() - started < 3
     finally:
         stuck.close()

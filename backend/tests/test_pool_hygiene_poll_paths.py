@@ -356,7 +356,7 @@ async def test_poll_releases_connection_before_readiness_gate(
     probe = _PoolProbe(test_engine)
     observed: dict = {}
 
-    async def _probe_gate(a, s):
+    async def _probe_gate(a, s, **_kw):
         # Measured at the moment control enters the non-DB await region.
         observed["held_at_gate"] = probe.held
         return True, None

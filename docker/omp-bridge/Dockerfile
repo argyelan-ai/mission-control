@@ -108,6 +108,10 @@ COPY acp_model.py         /opt/omp-bridge/acp_model.py
 COPY acp_chat_ctl.py      /opt/omp-bridge/acp_chat_ctl.py
 COPY context_detect.py    /opt/omp-bridge/context_detect.py
 COPY turn-end-hook.mjs    /opt/omp-bridge/turn-end-hook.mjs
+# guard-hook.mjs + guards/: the lesson guards (tools/guards, synced into this
+# context by scripts/build-agent-images.sh) on every omp bash call.
+COPY guard-hook.mjs       /opt/omp-bridge/guard-hook.mjs
+COPY guards/              /opt/omp-bridge/guards/
 COPY launch-omp.sh        /opt/omp-bridge/launch-omp.sh
 # render-omp-config.sh (ADR-078): schreibt models.yml + omp.env. Der Entrypoint
 # ruft es beim Start; MC ruft es im LAUFENDEN Container per

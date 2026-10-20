@@ -1,0 +1,3 @@
+# The real command from 2026-10-18 (transcript, path shortened to $WT): the scan
+# output is cut, so its exit code is the one of tail, and the push output is cut too.
+cd $WT && python3 scripts/privacy-scan.py 2>&1 | tail -1 && git -C $WT push --force-with-lease 2>&1 | tail -1

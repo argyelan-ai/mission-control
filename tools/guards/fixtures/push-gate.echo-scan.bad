@@ -1,0 +1,3 @@
+# Bypass found by the critic (2026-10-19): the scan is only a word in an echo,
+# and the push forces without a lease.
+echo privacy-scan && git -C . push --force

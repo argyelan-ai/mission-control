@@ -117,10 +117,21 @@ class BenchEntryUpdate(BaseModel):
     display_tag: str | None = Field(default=None, max_length=80)
 
 
-def _serialize(challenge: BenchChallenge, entries: list[BenchEntry]) -> dict:
+def _serialize(
+    challenge: BenchChallenge,
+    entries: list[BenchEntry],
+    task_states: dict[uuid.UUID, dict] | None = None,
+) -> dict:
+    """task_states (detail endpoint only): derived view of the fleet task
+    behind each running agent entry (orchestrator.entry_task_states) —
+    attached as entry["task_state"], None when absent."""
+    states = task_states or {}
     return {
         **challenge.model_dump(),
-        "entries": [e.model_dump() for e in sorted(entries, key=lambda e: e.model_label)],
+        "entries": [
+            {**e.model_dump(), "task_state": states.get(e.id)}
+            for e in sorted(entries, key=lambda e: e.model_label)
+        ],
     }
 
 
@@ -256,8 +267,11 @@ async def get_challenge(
     entries = await _entries_for(session, challenge_id)
     # Poll-fallback for failed agent tasks (they never fire task_done):
     await orchestrator.reconcile_challenge(session, challenge, entries)
+    # Why a running agent entry waits (blocked + question, last sign of
+    # life) — derived, read-only, never persisted.
+    task_states = await orchestrator.entry_task_states(session, entries)
     return {
-        **_serialize(challenge, entries),
+        **_serialize(challenge, entries, task_states),
         # Extension point (ADR-044): overlay verticals contribute extra
         # operator action buttons for this challenge (e.g. a private
         # catalog_publisher's "Publish"). Detail-only — the list endpoint
@@ -551,6 +565,14 @@ async def archive_challenge(
         session.add(challenge)
         await session.commit()
     entries = await _entries_for(session, challenge_id)
+    # Archiving ends the challenge for good: an entry task still parked in
+    # 'blocked' would keep its approval reminding the operator.
+    for entry in entries:
+        if entry.source_kind == "agent":
+            await orchestrator.retire_blocked_entry_task(
+                session, entry.task_id, reason="bench_challenge_archived",
+                actor_user_id=current_user.id,
+            )
     return _serialize(challenge, entries)
 
 

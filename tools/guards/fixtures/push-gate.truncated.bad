@@ -1,0 +1,2 @@
+# The push output is cut to one line, so a rejected push looks like success.
+python3 scripts/privacy-scan.py && git -C "$WT" push --force-with-lease 2>&1 | tail -1

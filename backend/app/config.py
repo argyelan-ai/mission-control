@@ -376,6 +376,21 @@ class Settings(BaseSettings):
     # Operational Controls
     enforce_dispatch_attempt_id: bool = True  # Phase B: active — hard 409 on missing/wrong header
 
+    # Proof gate ("Beweis-Tor", services/proof_gate.py): a card carrying a PR
+    # only reaches review/done when the PR exists, the reported SHA is the
+    # remote head, CI is green, a commit followed the last change request and
+    # a named reviewer commented himself. off | warn | enforce. warn = log +
+    # card comment + task.proof_gate event, transition allowed; enforce = 422.
+    proof_gate_mode: str = "warn"
+    # ISO date (e.g. 2026-10-27). While proof_gate_mode=warn, the gate switches
+    # to enforce from this date on by itself, without a second deploy.
+    # Empty = stay in warn until the mode is changed.
+    proof_gate_enforce_after: str = ""
+    # ...but only once the gate has checked at least this many transitions
+    # (task.proof_gate events). A date alone is no sample at 1-2 finishes a
+    # week. 0 = flip on the date alone.
+    proof_gate_enforce_min_checks: int = 15
+
     # Pre-Dispatch Gating (Phase 1 Systemic Orchestration)
     # False = legacy: dispatch_phase ignored, tasks dispatch immediately
     # True = tasks with dispatch_phase="planning" are NOT auto-dispatched
@@ -460,6 +475,26 @@ class Settings(BaseSettings):
     # etwas geloescht und nie ein Status geaendert. 95 % ist die Fruehwarnung
     # VOR dem Notfall, nicht der Notfall selbst.
     disk_watchdog_percent: int = 95
+
+    # ── Update drain (ADR-094 §7) ─────────────────────────────────────────
+    # Manual drain switch: while true, the Docker gateway
+    # (services/docker_gateway.py) refuses every call that creates, replaces,
+    # starts, restarts or removes a container and answers "deferred". Off by
+    # default; the self-update API adds the Postgres drain next to it.
+    mc_update_drain: bool = False
+    # Self-update from Settings (ADR-094). Feature switch: the update API
+    # answers 404 (code update_disabled) until the button has passed its
+    # acceptance on test machines (ADR-094 decision 13). Env MC_SELF_UPDATE_ENABLED.
+    mc_self_update_enabled: bool = False
+    # "deploy" = an install updated only through its deploy procedure
+    # (ADR-092): no button, every update route answers 409 (code
+    # update_managed), and so does the bridge door. Env MC_UPDATE_MANAGED.
+    mc_update_managed: str = ""
+    # Token of the bridge's update door (header X-MC-Update-Token). Empty =
+    # <home_host>/.mc/secrets/mc-update.token, the file the bridge created —
+    # the backend reads it through the ~/.mc mount. Deliberately no token
+    # value in the environment (ADR-094 decision 6). Env MC_UPDATE_TOKEN_FILE.
+    mc_update_token_file: str = ""
 
     # Free-Code Agent: base directory for task isolation (worktrees or plain workspaces)
     # In the container: /home/mcuser/free-code-projects (mounted from the host,
@@ -682,6 +717,10 @@ class Settings(BaseSettings):
     # takes the unchanged dispatch path regardless of this flag.
     enable_runtime_readiness_gate: bool = True
     runtime_readiness_cache_ttl: int = 15  # seconds — avoids hammering :5555 on every poll
+    # ADR-097: the poll claim also waits for LOCAL runtimes (own box, OpenAI
+    # protocol) whose model server does not answer. Kill switch + probe timeout.
+    enable_local_runtime_readiness_gate: bool = True
+    local_runtime_probe_timeout: float = 3.0  # seconds, one GET on /v1/models
 
     # Vault Memory (M.1 Read Foundation)
     # Root of the Markdown Vault. Source of Truth for agent memory.

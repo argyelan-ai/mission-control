@@ -1,0 +1,8 @@
+#!/bin/zsh
+# Split explicitly, so the loop behaves the same in bash and zsh.
+for p in "wt-a feat/a" "wt-b feat/b"; do
+  read -r name branch <<< "$p"
+  git worktree add "../$name" -b "$branch" origin/main
+done
+# Quoted positional parameters are fine.
+set -- "$@"

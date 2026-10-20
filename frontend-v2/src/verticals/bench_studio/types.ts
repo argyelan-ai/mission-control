@@ -22,6 +22,19 @@ export interface BenchEntry {
     tok_per_s?: number;
   };
   error: string | null;
+  // Detail endpoint only: derived view of the fleet task behind a running
+  // agent entry (backend orchestrator.entry_task_states) — null otherwise.
+  task_state?: BenchEntryTaskState | null;
+}
+
+export interface BenchEntryTaskState {
+  task_id: string;
+  task_status: string;
+  // Blocker question while the task is blocked (approval → triage → comment).
+  blocker_reason: string | null;
+  blocked_at: string | null;
+  // Last server-observed sign of life (same evidence as the silent-card watchdog).
+  last_activity_at: string | null;
 }
 
 export type BenchChallengeStatus =

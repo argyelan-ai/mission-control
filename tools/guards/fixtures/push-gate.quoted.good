@@ -1,0 +1,3 @@
+# A push inside quotes is a message, not a command.
+echo "next: git push origin feat/x"
+hit "$1" "$2" "Use: python3 scripts/privacy-scan.py && git -C <worktree> push ..."

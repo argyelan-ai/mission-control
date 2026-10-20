@@ -58,7 +58,7 @@ export function EventCard({ ev, source, live }: EventCardProps) {
         <Motif kind={motifForSource(kind)} live={live} size={MOTIF_SIZE} className="shrink-0" />
         <span className="flex min-w-0 flex-1 items-baseline gap-1.5 text-[13px]">
           <span className="shrink-0 font-medium" style={{ color: STATUS_TEXT.info }}>
-            {t(kind)}
+            {t(kind === "task" && source.redispatch ? "correction" : kind)}
           </span>
           {origin && (
             <span className="shrink-0" style={{ color: C.textMuted }}>

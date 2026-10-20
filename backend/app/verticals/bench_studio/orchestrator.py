@@ -612,6 +612,46 @@ async def on_task_review(session: AsyncSession, task) -> bool:
     return True
 
 
+# Prefix reconcile_challenge writes for entries whose task ended failed/
+# aborted. Those task states can be REOPENED (task_status: FAILED -> INBOX,
+# ABORTED -> IN_PROGRESS/INBOX) — a reopened task that then delivers must
+# still land in its entry (critic 19.10.).
+_TASK_ENDED_ERROR_PREFIX = "agent task "
+
+
+async def _readopt_reopened_entry(session: AsyncSession, entry: BenchEntry) -> bool:
+    """Take a late delivery back into an entry reconcile had finalized.
+
+    Only for entries reconcile failed because their task ended
+    failed/aborted (error prefix "agent task ") — never for an operator
+    stop (the operator's decision wins) and never on an archived challenge.
+    entry.task_id == task.id is already guaranteed by the caller's lookup
+    (a retry re-points the entry at a NEW task, so the old one never
+    matches). Flips the challenge back to generating when it had already
+    ended (review/failed), the same way retry_entry does, so maybe_advance
+    renders the grid again with this entry included.
+    """
+    if entry.status != "failed" or not (entry.error or "").startswith(
+        _TASK_ENDED_ERROR_PREFIX
+    ):
+        return False
+    challenge = await session.get(BenchChallenge, entry.challenge_id)
+    if challenge is None or challenge.archived_at is not None:
+        return False
+    if challenge.status in ("review", "failed"):
+        challenge.status = "generating"
+        challenge.error = None
+        challenge.composed_video_path = None
+        session.add(challenge)
+    elif challenge.status != "generating":
+        # drafted/published or mid-render: don't yank a finished/active run.
+        return False
+    entry.status = "generating"
+    entry.error = None
+    session.add(entry)
+    return True
+
+
 async def on_task_done(session: AsyncSession, task) -> None:
     """task_done_hook (core registry, ADR-044): collect the index.html
     deliverable of a bench agent task. Self-filters — silent no-op for tasks
@@ -620,8 +660,11 @@ async def on_task_done(session: AsyncSession, task) -> None:
 
     result = await session.exec(select(BenchEntry).where(BenchEntry.task_id == task.id))
     entry = result.first()
-    if entry is None or entry.status not in ("pending", "generating"):
+    if entry is None:
         return
+    if entry.status not in ("pending", "generating"):
+        if not await _readopt_reopened_entry(session, entry):
+            return
 
     rows = (
         await session.exec(
@@ -1001,12 +1044,156 @@ async def maybe_advance(session: AsyncSession, challenge_id: uuid.UUID) -> None:
     await _render_and_compose(session, challenge, generated)
 
 
+async def _blocked_task_reason(session: AsyncSession, task) -> str | None:
+    """Best-effort human-readable reason a task is blocked, for display only.
+
+    Order: the pending blocker_decision approval (what the operator sees in
+    the inbox) -> the parked Lead-triage payload (stage 1: there is no
+    operator approval yet) -> the agent's own latest blocker comment.
+    None when nothing is found — the UI then shows a generic "blocked".
+    """
+    from app.models.approval import Approval
+    from app.models.task import TaskComment
+    from app.services.blocker_triage import load_triage_payload
+
+    approval = (
+        await session.exec(
+            select(Approval).where(
+                Approval.task_id == task.id,
+                Approval.action_type == "blocker_decision",
+                Approval.status == "pending",
+            )
+        )
+    ).first()
+    if approval is not None and approval.description:
+        return approval.description
+
+    payload = await load_triage_payload(task.id)
+    if payload and (payload.get("question") or "").strip():
+        return payload["question"].strip()
+
+    comment = (
+        await session.exec(
+            select(TaskComment)
+            .where(
+                TaskComment.task_id == task.id,
+                TaskComment.comment_type == "blocker",
+            )
+            .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
+            .limit(1)
+        )
+    ).first()
+    if comment is not None and comment.content.strip():
+        return comment.content.strip()[:1000]
+    return None
+
+
+async def entry_task_states(
+    session: AsyncSession, entries: list[BenchEntry]
+) -> dict[uuid.UUID, dict]:
+    """Derived, read-only view of the fleet task behind each still-running
+    agent entry — so the Studio can say WHY an entry waits instead of
+    spinning forever (fix-vorschlag 19.10. point 7 + critic).
+
+    Nothing is persisted: no new state, no new column. Per entry:
+    - task_status: the task's current status
+    - blocker_reason: the blocker question while the task is blocked
+    - last_activity_at: last server-observed sign of life (same evidence as
+      the silent-card watchdog, services.task_evidence) — covers the
+      "in_progress but nobody works" case (Mark's addendum 1: the bridge
+      sets in_progress on delivery, before the model did anything).
+    """
+    from app.models.task import Task
+    from app.services.task_evidence import last_real_activity_at
+
+    states: dict[uuid.UUID, dict] = {}
+    for entry in entries:
+        if (
+            entry.source_kind != "agent"
+            or entry.status != "generating"
+            or entry.task_id is None
+        ):
+            continue
+        task = await session.get(Task, entry.task_id)
+        if task is None:
+            continue
+        states[entry.id] = {
+            "task_id": task.id,
+            "task_status": task.status,
+            "blocker_reason": (
+                await _blocked_task_reason(session, task)
+                if task.status == "blocked"
+                else None
+            ),
+            "blocked_at": task.blocked_at if task.status == "blocked" else None,
+            "last_activity_at": await last_real_activity_at(session, task),
+        }
+    return states
+
+
+async def retire_blocked_entry_task(
+    session: AsyncSession,
+    task_id: uuid.UUID | None,
+    *,
+    reason: str,
+    actor_user_id: uuid.UUID | None = None,
+) -> bool:
+    """End a bench entry's BLOCKED fleet task through the normal lifecycle
+    when the entry is retried, stopped or archived (critic 19.10., major).
+
+    blocked -> failed is a valid transition; the task's pending
+    blocker_decision / clarification approvals are superseded by the
+    existing approval_cleanup (task status is the source of truth), so Mark
+    gets no further reminders and a late answer can't make the agent do the
+    same work twice. Same steps as rejecting a blocker approval
+    (routers/approvals.py). Non-blocked tasks are left alone (in_progress
+    runs go through stop_task_run). Returns True when the task was retired.
+    Commits.
+    """
+    from app.models.task import Task
+    from app.services.approval_cleanup import cleanup_obsolete_approvals
+    from app.services.task_lifecycle import apply_terminal_unassign, record_task_event
+    from app.services.task_state import lock_and_set
+    from app.utils import utcnow
+
+    if task_id is None:
+        return False
+    task = await session.get(Task, task_id)
+    if task is None or task.status != "blocked":
+        return False
+    try:
+        task, from_status = await lock_and_set(session, task_id, "failed", actor="system")
+    except HTTPException as exc:  # lost a race — task moved on meanwhile
+        logger.info("bench: task %s not retired (%s)", task_id, exc.detail)
+        return False
+    task.updated_at = utcnow()
+    await apply_terminal_unassign(session, task, "failed")
+    session.add(task)
+    await record_task_event(
+        session, task.id, from_status, "failed",
+        changed_by="user" if actor_user_id else "system", reason=reason,
+        actor_user_id=actor_user_id,
+    )
+    await session.commit()
+    await cleanup_obsolete_approvals(session, task.id, "failed", task.board_id)
+    return True
+
+
 async def reconcile_challenge(
     session: AsyncSession, challenge: BenchChallenge, entries: list[BenchEntry]
 ) -> None:
-    """GET-time fallback sweep: agent tasks that ended in `failed` never fire
-    the task_done hook — mark their entries failed so nothing hangs silently
-    (spec §7, lesson from the Grok review: uncaught -> eternal in_progress).
+    """GET-time fallback sweep: agent tasks that ended in `failed` or
+    `aborted` never fire the task_done hook — mark their entries failed so
+    nothing hangs silently (spec §7, lesson from the Grok review: uncaught
+    -> eternal in_progress; `aborted` added 2026-10-19). If such a task is
+    reopened and delivers later, on_task_done re-adopts the entry
+    (_readopt_reopened_entry).
+
+    `blocked` is deliberately NOT finalized here: blocked is always
+    temporary (task_lifecycle) — the Lead's triage or the operator's answer
+    sends it back to work and the delivery must still be collected. The
+    Studio shows the blocker instead (entry_task_states); the operator's
+    way out is the Stop button, which retires the blocked task.
 
     Also self-heals entries whose task was deleted (FK SET NULL on
     tasks.id): task_id=None means the task_done hook can never fire for that
@@ -1024,9 +1211,9 @@ async def reconcile_challenge(
             changed = True
             continue
         task = await session.get(Task, entry.task_id)
-        if task is not None and task.status == "failed":
+        if task is not None and task.status in ("failed", "aborted"):
             entry.status = "failed"
-            entry.error = "agent task failed"
+            entry.error = f"{_TASK_ENDED_ERROR_PREFIX}{task.status}"
             session.add(entry)
             changed = True
     if changed:
@@ -1083,6 +1270,18 @@ async def stop_challenge(
     await session.commit()
 
     for task_id in stop_task_ids:
+        # A blocked task has no active run (stop_task_run would 409) but
+        # still carries an open blocker approval — end it via the lifecycle.
+        try:
+            if await retire_blocked_entry_task(
+                session, task_id, reason="bench_challenge_stopped",
+                actor_user_id=uuid.UUID(user_id),
+            ):
+                continue
+        except Exception:  # noqa: BLE001 — stop must never fail the endpoint
+            logger.exception("bench stop: task %s retire failed", task_id)
+            await session.rollback()
+            continue
         try:
             await stop_task_run(
                 session, task_id, user_id, reason="bench challenge stopped",
@@ -1377,6 +1576,12 @@ async def retry_entry(entry_id: uuid.UUID) -> None:
             challenge = await session.get(BenchChallenge, entry.challenge_id)
             if challenge is None:
                 return
+            # The retry dispatches a NEW task — retire the old one if it is
+            # still blocked, so its open approval stops reminding the
+            # operator and a late answer can't trigger the work twice.
+            await retire_blocked_entry_task(
+                session, entry.task_id, reason="bench_entry_retried"
+            )
             entry.status = "pending"
             entry.error = None
             entry.video_path = None

@@ -1,0 +1,2 @@
+# Push without a privacy scan in front of it.
+git -C "$WT" push -u origin feat/example

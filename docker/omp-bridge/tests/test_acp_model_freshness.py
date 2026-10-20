@@ -118,10 +118,11 @@ def test_bridge_task_selector_reads_the_current_file(tmp_path, monkeypatch):
 
 
 def test_bridge_serve_loop_uses_the_fresh_env():
-    """Tripwire: the ACP branch of serve_loop must resolve through
-    _current_omp_env() — the boot-env call was the bug."""
+    """Tripwire: the ACP branch of serve_loop must resolve through the
+    CURRENT omp.env (acp_model.current_selector) — the boot-env call was
+    the bug."""
     src = (ROOT / "bridge.py").read_text(encoding="utf-8")
-    assert "acp_model = _acp_model_selector(_current_omp_env())" in src
+    assert "acp_model = _acp_model_mod.current_selector(required=True)" in src
     assert "acp_model = _acp_model_selector(os.environ)" not in src
 
 
@@ -327,7 +328,8 @@ def test_task_session_marks_the_dispatch_prompt_as_from_mc(tmp_path):
     assert users, "no prompt line"
     msg = users[0]["message"]
     assert msg["attribution"] == "mc"
-    assert msg["origin"] == {"kind": "task", "taskId": "T-bench"}
+    assert msg["origin"] == {"kind": "task", "taskId": "T-bench",
+                             "title": "[Bench] Pagoda — New-Model-2"}
 
 
 def test_task_session_pin_failure_lands_in_the_task_chat(tmp_path):

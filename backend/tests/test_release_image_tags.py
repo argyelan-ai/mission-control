@@ -79,12 +79,17 @@ def test_build_pushes_only_the_commit_tag():
 
 
 def test_promote_runs_only_after_all_images_and_only_for_tags():
+    # images -> sign (approval + cosign, ADR-094) -> promote: promote waits
+    # for every image AND its signature, and re-tags the signed digest.
+    sign = _code(_job(RELEASE_YML.read_text(), "sign"))
+    assert re.search(r"^\s+needs: images$", sign, re.M)
+    assert ':sha-$GITHUB_SHA"' in sign
     promote = _code(_job(RELEASE_YML.read_text(), "promote"))
-    assert re.search(r"^\s+needs: images$", promote, re.M)
+    assert re.search(r"^\s+needs: sign$", promote, re.M)
     assert "startsWith(github.ref, 'refs/tags/v')" in promote
     assert "scripts/release-image-tags.sh" in promote
     assert "docker buildx imagetools create" in promote
-    assert ':sha-$GITHUB_SHA"' in promote
+    assert '@$digest"' in promote
     assert "build-push-action" not in promote      # re-tag, never rebuild
     for image in ("mc-backend", "mc-frontend", "mc-claude-agent", "mc-agent-base"):
         assert image in promote

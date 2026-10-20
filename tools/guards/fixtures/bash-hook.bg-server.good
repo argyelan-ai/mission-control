@@ -1,0 +1,9 @@
+{
+ "session_id": "fixture",
+ "cwd": ".",
+ "tool_name": "Bash",
+ "tool_input": {
+  "command": "npm run dev -- -p 3049",
+  "run_in_background": true
+ }
+}
