@@ -3740,12 +3740,27 @@
       "session_reset": "Session restarted",
       "queue_full": "Queue full",
       "new_session_failed": "New session failed",
-      "queue_lost": "Queue lost"
+      "queue_lost": "Queue lost",
+      "turn_interrupted": "Interrupted",
+      "model_unreachable": "Model not responding",
+      "turn_interruptedBody": "The chat restarted while a reply was running. Nothing was resent automatically.",
+      "process_exitBody": "The agent process ended unexpectedly.",
+      "session_resetBody": "The last conversation could not be loaded. A new one started.",
+      "session_reset_model_missingBody": "The conversation ran on a model that is not set up right now. A new conversation started; the old one is kept.",
+      "session_reset_transcript_missingBody": "The history of the last conversation was not found. A new conversation started.",
+      "modelUnreachableHint": "Check the Runtimes page. Your message is not lost.",
+      "runtimesLink": "Open Runtimes",
+      "resend": "Send again",
+      "resent": "Sent"
     },
     "notice": {
       "label": "Notice",
       "model_fallback": "Previously chosen model {previous} is not available anymore — using {current}.",
-      "model_fallbackLabel": "Model switched"
+      "model_fallbackLabel": "Model switched",
+      "chat_started_freshLabel": "New chat started",
+      "chat_started_fresh": "After the restart it was unclear which conversation was open. A new one started. Earlier conversations are kept.",
+      "sink_migration_skippedLabel": "Storage not moved",
+      "sink_migration_skipped": "Older chat copies were not moved this time. The chat works as usual; the next start tries again."
     },
     "queue": {
       "queued": "Queued — sent when the current reply ends",

@@ -55,6 +55,7 @@ import { SubagentGroup } from "./SubagentGroup";
 import { ToolGroup } from "./ToolGroup";
 import { ToolOutputContext, createToolOutputStore, type ToolOutputStore } from "./toolOutputStore";
 import { ChatMediaContext } from "./chatMedia";
+import { ChatResendContext, resendableErrorUuid, type ChatResend } from "./chatResend";
 import { CommandRow } from "./CommandRow";
 import { ApprovalCard } from "./ApprovalCard";
 import { ElicitationCard } from "./ElicitationCard";
@@ -804,6 +805,26 @@ export function ChatView({
   // on focus while the pane probe keeps publishing (see resolveSessionAliveness).
   const aliveness = resolveSessionAliveness(stream);
   const prompt = stream.state?.status === "permission_prompt" ? stream.state.prompt : null;
+
+  /* "Send again" on a chat error card (S1-R7, chatResend.tsx): the card sends
+     through handleSend — echo + deliver, the composer's own path, never a
+     second one — and only the newest card holding the operator's text is
+     offered, while nothing was sent after it. Where the composer cannot send
+     (a head's transcript, a non-admin, an ended session) nothing is offered. */
+  const handleSendRef = useRef(handleSend);
+  handleSendRef.current = handleSend;
+  const canSend = !head && !!agent && isAdmin && aliveness !== "ended";
+  const resendUuid = useMemo(
+    () => (canSend ? resendableErrorUuid(stream.events, stream.pendingEchoes.length) : null),
+    [canSend, stream.events, stream.pendingEchoes.length],
+  );
+  const chatResend = useMemo<ChatResend>(
+    () => ({
+      resend: (text) => handleSendRef.current(text),
+      canResend: (uuid) => uuid === resendUuid,
+    }),
+    [resendUuid],
+  );
   // Welches Abzeichen die Kopfzeile gerade zeigt — dieselbe Bedingung wie
   // unten im JSX, hier einmal als Wert, damit die Platzberechnung nicht raet.
   const headerBadge: HeaderBadge = !(canChat && stream.session)
@@ -855,6 +876,7 @@ export function ChatView({
     {/* P2: tool pictures load from THIS agent's media route; a head (no
         agent row) shows none rather than guessing an address. */}
     <ChatMediaContext.Provider value={agent?.id ?? null}>
+    <ChatResendContext.Provider value={chatResend}>
     <div ref={rootRef} className="flex flex-col flex-1 min-h-0 overflow-hidden">
       {/* One header for both breakpoints — the parts that only make sense on
           a phone (back chevron, options button) carry
@@ -1436,6 +1458,7 @@ export function ChatView({
         />
       )}
     </div>
+    </ChatResendContext.Provider>
     </ChatMediaContext.Provider>
     </ToolOutputContext.Provider>
   );
