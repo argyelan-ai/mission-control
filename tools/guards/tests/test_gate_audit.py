@@ -79,6 +79,32 @@ def test_python_guard_without_nonzero_exit_is_red(tree):
     assert findings(tree) == []
 
 
+def test_guard_whose_red_path_is_in_a_sourced_sibling_lib(tree):
+    guard = '#!/bin/bash\n. "$(cd "$(dirname "$0")" && pwd)/lib.sh"\ncheck_line() { :; }\nlint_main "$@"\n'
+    (tree / "tools/guards/lint-x.sh").write_text(guard)
+    add_rows(tree, row("script:tools/guards/lint-x.sh"), row("script:tools/guards/lib.sh", kind="Helfer"))
+    # lib missing -> nothing can exit non-zero
+    assert any(x.startswith("R4") and "lib.sh" in x for x in findings(tree))
+    assert any(x.startswith("R5") and "lint-x.sh" in x for x in findings(tree))
+    # lib that can only succeed -> still red
+    (tree / "tools/guards/lib.sh").write_text("lint_main() { exit 0; }\n")
+    assert any(x.startswith("R5") and "lint-x.sh" in x for x in findings(tree))
+    # lib with a red path -> green
+    (tree / "tools/guards/lib.sh").write_text("lint_main() { [ -n \"$1\" ] || exit 1; exit 0; }\n")
+    assert findings(tree) == []
+
+
+def test_escaped_pipe_stays_in_its_cell_and_extra_columns_are_red(tree):
+    # `\|` is a pipe inside a cell: the row keeps 6 columns and stays green
+    add_rows(tree, row("script:tools/hooks/real-gate.sh".replace("real", "piped"), blocks=r"gate piped into `\| tail`"))
+    (tree / "tools/hooks/piped-gate.sh").write_text(REAL_GATE)
+    assert findings(tree) == []
+    # an unescaped pipe shifts every later column - that must not pass silently
+    add_rows(tree, row("script:tools/hooks/other-gate.sh", blocks="gate piped into `| tail`"))
+    (tree / "tools/hooks/other-gate.sh").write_text(REAL_GATE)
+    assert any("expected 6 columns, got 7" in x for x in findings(tree))
+
+
 def test_unregistered_workflow_job_is_red(tree):
     (tree / ".github/workflows/new.yml").write_text(
         "name: new\non: [push]\njobs:\n  lint:\n    runs-on: x\n    steps:\n      - run: ruff .\n")

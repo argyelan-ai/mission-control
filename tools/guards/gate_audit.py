@@ -28,7 +28,8 @@ Red (exit 1) when:
       called "Rot-Lauf" but did not fail (run, or the row's own job)
 
 Honest limits: this is a static read of the tree. A script that hides its
-exit code (`exit "$?"` after a command that cannot fail) passes R5; whether
+exit code (`exit "$?"` after a command that cannot fail) passes R5, and so does
+a guard whose only red path is in a sibling file it sources (lib.sh); whether
 a hook is REGISTERED lives in private Claude Code settings this job cannot
 see. The hook tests (real sabotage probes) are the stronger proof.
 
@@ -48,6 +49,7 @@ SOFT_MARKER = re.compile(r"#\s*gate-audit:\s*soft\s*[-—–:]+\s*\S")
 
 SH_RED = re.compile(r"\bexit\s+(\$|\"\$|[1-9])|\bset\s+-[a-z]*e|\breturn\s+[1-9]|\bfalse\s*$")
 PY_RED = re.compile(r"sys\.exit\(\s*(?!0\s*\))\S|\braise\b|SystemExit|\bexit\(\s*[1-9]")
+SOURCED = re.compile(r"""^(?:\.|source)\s+(?:.*[/"'\s])?([A-Za-z0-9_.-]+\.sh)["']?\s*(?:#.*)?$""")
 PLACEHOLDER_LINES = {"exit", "exit 0", "true", ":", "set -e", "set -u", "set -eu", "set -euo pipefail"}
 
 
@@ -69,7 +71,20 @@ def script_has_red_path(path):
     lines = strip_sh(text)
     if all(l in PLACEHOLDER_LINES for l in lines):
         return False
-    return any(SH_RED.search(l) for l in lines)
+    if any(SH_RED.search(l) for l in lines):
+        return True
+    # A lint guard often exits through a helper it sources from its own folder
+    # (`. "$(dirname "$0")/lib.sh"` + `lint_main "$@"`): the red path is there.
+    # One level, siblings only - a file outside the folder is not followed.
+    for l in lines:
+        m = SOURCED.match(l)
+        if not m:
+            continue
+        lib = path.parent / m.group(1)
+        if lib.is_file() and lib != path and any(
+                SH_RED.search(x) for x in strip_sh(lib.read_text(errors="replace"))):
+            return True
+    return False
 
 
 DISABLED_IF = re.compile(r"""^(?:false|'false'|"false"|\$\{\{\s*false\s*\}\})\s*(?:#.*)?$""")
@@ -150,8 +165,12 @@ def parse_register(path):
     for n, line in enumerate(path.read_text().splitlines(), 1):
         if not line.startswith("| `"):
             continue
-        cells = [c.strip() for c in line.strip().strip("|").split("|")]
-        if len(cells) < 6:
+        # `\|` is a literal pipe inside a cell (Markdown escape), not a column break.
+        body = line.strip()
+        body = body[1:] if body.startswith("|") else body
+        body = body[:-1] if body.endswith("|") and not body.endswith("\\|") else body
+        cells = [c.strip() for c in re.split(r"(?<!\\)\|", body)]
+        if len(cells) != 6:
             rows.append({"line": n, "error": f"expected 6 columns, got {len(cells)}"})
             continue
         gid = cells[0].strip("`")
