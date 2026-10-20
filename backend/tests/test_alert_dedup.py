@@ -222,3 +222,110 @@ async def test_ohne_detail_faellt_key_auf_thema_zurueck(sent, _redis):
     assert again == "suppressed"
     keys = [k async for k in _redis.scan_iter("mc:alert:dedup:*")]
     assert len(keys) == 1 and keys[0].startswith("mc:alert:dedup:db.outage|")
+
+
+# ── Pflichtfall 5: Eskalation ist keine Wiederholung ─────────────────────
+#
+# Anlass 2026-10-20 (Watcher-Takt 30 s, ADR-096 §11.4): die schlichte
+# Warnung "endpoint unreachable (3 consecutive probes)" oeffnet das Fenster
+# fuer (runtime.unreachable, <slug>). Bestaetigt der Anker den Engine-Tod
+# erst danach (Proben 4..9), kommt derselbe Schluessel als ``error`` mit der
+# Ursache — und wurde bisher als Wiederholung verschluckt. Eine dringendere
+# Meldung zum selben Thema ist Neuigkeit: sie geht raus, uebernimmt das
+# Fenster, und die ueberholte Warnung faellt aus der Sammlung.
+
+
+@pytest.mark.asyncio
+async def test_fehler_nach_warnung_zum_selben_thema_geht_sofort_raus(sent, _redis):
+    first = await discord_notify.notify_event(
+        "runtime.unreachable", "qwen-general: endpoint unreachable (3 consecutive probes)",
+        "warning", detail=RUNTIME_DETAIL,
+    )
+    death = await discord_notify.notify_event(
+        "runtime.unreachable", "qwen-general auf Box A beendet: Exit 137", "error",
+        detail=RUNTIME_DETAIL,
+    )
+    assert first == "queued"
+    assert death == "sent", "Die Ursache darf nicht als Wiederholung der Warnung verschluckt werden"
+    assert [s["severity"] for s in sent] == ["error"]
+    assert sent[0]["title"] == "qwen-general auf Box A beendet: Exit 137"
+    # Das Fenster gehoert jetzt dem Fehler — volle Stunde ab der Eskalation.
+    key = "mc:alert:dedup:runtime.unreachable|qwen-general"
+    assert await _redis.get(key) == "error"
+    assert 3590 <= await _redis.ttl(key) <= 3600
+
+
+@pytest.mark.asyncio
+async def test_nach_der_eskalation_wird_wieder_gesperrt(sent):
+    await discord_notify.notify_event(
+        "runtime.unreachable", "qwen-general: endpoint unreachable", "warning",
+        detail=RUNTIME_DETAIL,
+    )
+    await discord_notify.notify_event(
+        "runtime.unreachable", "qwen-general beendet", "error", detail=RUNTIME_DETAIL,
+    )
+    again = [
+        await discord_notify.notify_event(
+            "runtime.unreachable", "qwen-general beendet", severity, detail=RUNTIME_DETAIL,
+        )
+        for severity in ("error", "warning")
+    ]
+    assert again == ["suppressed", "suppressed"]
+    assert len(sent) == 1
+
+
+@pytest.mark.asyncio
+async def test_warnung_nach_fehler_bleibt_gesperrt(sent, _redis):
+    """Nur aufwaerts ist Neuigkeit: eine leisere Meldung nach einem Fehler
+    ist weiterhin eine Wiederholung und landet auch nicht in der Sammlung."""
+    await discord_notify.notify_event(
+        "runtime.unreachable", "qwen-general beendet", "error", detail=RUNTIME_DETAIL,
+    )
+    later = await discord_notify.notify_event(
+        "runtime.unreachable", "qwen-general: endpoint unreachable", "warning",
+        detail=RUNTIME_DETAIL,
+    )
+    assert later == "suppressed"
+    assert await _redis.llen(discord_notify.DIGEST_KEY) == 0
+    assert len(sent) == 1
+
+
+@pytest.mark.asyncio
+async def test_eskalation_nimmt_die_ueberholte_warnung_aus_der_sammlung(sent, _redis):
+    """Sonst kaeme die Warnung ohne Ursache bis zu 30 min NACH dem Fehler mit
+    Ursache noch einmal an. Warnungen zu anderen Themen bleiben liegen."""
+    await discord_notify.notify_event(
+        "runtime.unreachable", "qwen-general: endpoint unreachable", "warning",
+        detail=RUNTIME_DETAIL,
+    )
+    await discord_notify.notify_event(
+        "runtime.unreachable", "deepseek-v4: endpoint unreachable", "warning",
+        detail={"slug": "deepseek-v4"},
+    )
+    await discord_notify.notify_event(
+        "runtime.unreachable", "qwen-general beendet", "error", detail=RUNTIME_DETAIL,
+    )
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(discord_notify, "DIGEST_WINDOW_SECONDS", 0)
+        flushed = await discord_notify.flush_digest()
+    assert flushed == 1
+    digest = sent[-1]
+    assert "deepseek-v4" in digest["description"]
+    assert "qwen-general" not in digest["description"]
+
+
+@pytest.mark.asyncio
+async def test_alter_sperrschluessel_ohne_stufe_laesst_einen_fehler_durch(sent, _redis):
+    """Schluessel von vor der Eskalationsregel tragen "1" statt der Stufe.
+    Sie zaehlen als Warnung: lieber eine Meldung zu viel als eine verschluckte
+    (dieselbe Abwaegung wie bei den Ziffern im Titel)."""
+    await _redis.set("mc:alert:dedup:runtime.unreachable|qwen-general", 1, ex=3600)
+    error = await discord_notify.notify_event(
+        "runtime.unreachable", "qwen-general beendet", "error", detail=RUNTIME_DETAIL,
+    )
+    warning = await discord_notify.notify_event(
+        "runtime.unreachable", "qwen-general: endpoint unreachable", "warning",
+        detail={"slug": "qwen-general"},
+    )
+    assert error == "sent"
+    assert warning == "suppressed"

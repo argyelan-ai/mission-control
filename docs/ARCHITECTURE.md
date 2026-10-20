@@ -709,13 +709,13 @@ Vor ADR-056 steckte der **Harness** (welches CLI-Binary treibt den Container —
 "Engine leads, MC follows": `services/runtime_watcher.py` is a singleton
 background loop (same pattern as `intelligence.py` — asyncio task, Redis
 lock for multi-worker dedup, `settings.runtime_watcher_enabled` kill-switch,
-`settings.runtime_watcher_interval` default 90s) that supersedes **D-22**
+`settings.runtime_watcher_interval` default 30 s since 2026-10-20, was 90 s) that supersedes **D-22**
 (ADR-028's "no periodic background probing" call — see ADR-054 for the
 full reversal rationale). Every tick it probes all `enabled` runtimes of a
 probeable `runtime_type` (`vllm_docker`, `llamacpp_docker`, `lmstudio`,
 `openai_compatible`, `unsloth`) via `GET {endpoint}/v1/models` (reuses the Phase-15
 `probe_runtime_model` helper) and writes a live snapshot to Redis
-(`mc:runtime-live:{slug}`, TTL 3×interval — `reachable`, `served_model`,
+(`mc:runtime-live:{slug}`, TTL 3 ticks but at least 270 s — `reachable`, `served_model`,
 `latency_ms`, `last_probe_at`), feeding the `/runtimes` cockpit live-dot
 via `GET /api/v1/runtimes/live-status`.
 
@@ -735,11 +735,12 @@ a **plain `docker restart`** (re-runs the container entrypoint →
 deliberately **not** `respawn_window_only` (ADR-028's same-image fast
 path), because a window respawn keeps the stale tmux environment and would
 never pick up the new model. Busy agents (`current_task_id` set) stay
-flagged and are retried by the *next* watcher tick (≤90s after the task
-ends) rather than via a `task_lifecycle` hook — no new coupling into the
+flagged and are retried by the *next* watcher tick (≤ 30 s after the task
+ends, plus the rest of that tick) rather than via a `task_lifecycle` hook — no new coupling into the
 task-completion path. A Redis failure counter trips a circuit breaker after
 3 failed sync attempts (`agent.model_sync_failed`, agent left as-is — no
-restart-loop). Force path for operators who don't want to wait:
+restart-loop); a failed attempt waits at least 90 s for the next one
+(`SYNC_RETRY_SPACING`), so the 30 s tick does not burn the three attempts in a minute. Force path for operators who don't want to wait:
 `POST /runtimes/db/{slug}/sync-agents`.
 
 #### Runtime Pulse — tok/s heat strip poller (NEU 2026-09-06, Runtimes-Bühne v2 PR 1)
@@ -1313,12 +1314,12 @@ Frontend `/insights`: 7 Sektionen (KPIs, Agent-Performance BarChart, Task-Durati
 
 ```
 vLLM / LM Studio: model changed at the engine
-  → Watcher probe (≤90s): served_model ≠ runtime.model_identifier
+  → Watcher probe (≤30s + tick run time): served_model ≠ runtime.model_identifier
   → two-probe confirmation (guards against warm-up flapping)
   → Runtime row updated + resolver cache invalidated + runtime.model_changed event
   → agents bound to this runtime (agent.runtime_id == runtime.id):
       idle  → sync_docker_agent_files() + docker restart (re-bootstrap) → agent.model_synced
-      busy  → pending_runtime_sync=true → banner → synced on next watcher tick (≤90s after task ends)
+      busy  → pending_runtime_sync=true → banner → synced on next watcher tick (≤30s after task ends)
       3 failed sync attempts → circuit breaker → agent.model_sync_failed (manual restart required)
   → /runtimes cockpit shows live model + drift-/pending-sync badges until synced
 ```

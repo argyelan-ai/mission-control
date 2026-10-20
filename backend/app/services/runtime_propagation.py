@@ -70,6 +70,14 @@ _FAIL_TTL = 3600  # failure counter window (seconds)
 #: steht, wird der Agent uebersprungen: hoechstens EIN Neustart je Vorfall,
 #: danach 15 Minuten Ruhe. Ein erzwungener Sync (Marks Knopf) hebt sie auf.
 _GIVEUP_COOLDOWN = 900
+#: Pause after a failed attempt before the next one (seconds). Sync and
+#: recreate run once per watcher tick — 30 s since 2026-10-20 (was 90 s). A
+#: cause that fails fast (a stalled Docker socket on the Mini) would use all
+#: MAX_SYNC_ATTEMPTS in about a minute and give up for 15 minutes while the
+#: agent keeps the old model. 90 s keeps the old pace: three attempts span at
+#: least three minutes, as they did at the 90 s tick. A forced sync (the
+#: operator's button) never waits.
+SYNC_RETRY_SPACING = 90
 #: Health-Frist des Rueckfall-Neustarts fuer alle Nicht-omp-Harnesses.
 _SYNC_HEALTH_TIMEOUT = 60
 _OMP_READY_SIGNALS = OMP_READY_SIGNALS  # omp TUI glyphs + ACP sentinel (ADR-049, fix omp-acp-no-tui-window)
@@ -251,6 +259,14 @@ async def _sync_one(session: AsyncSession, agent: Agent, *, force: bool = False)
         session.add(agent)
         await session.commit()
         return
+
+    # ── Pause after a failed attempt (watcher tick 30 s, 2026-10-20) ────────
+    if not force and await _retry_too_soon(RedisKeys.agent_model_sync_fails(str(agent.id))):
+        logger.debug(
+            "model sync for %s waits — the last attempt failed less than %ss ago",
+            agent.name, SYNC_RETRY_SPACING,
+        )
+        return  # stays flagged; a later tick tries again
 
     if agent.agent_runtime == "host":
         # Host agents (launchd) DO go through agent_runtime_switch now
@@ -446,10 +462,29 @@ async def _bump_failures(key: str) -> int:
     try:
         redis = await get_redis()
         fails = int(await redis.incr(key))
+        # Always reset to the full _FAIL_TTL: _retry_too_soon reads the time
+        # since this failure as _FAIL_TTL - ttl. A different lifetime here
+        # (or a conditional expire) breaks the SYNC_RETRY_SPACING pace.
         await redis.expire(key, _FAIL_TTL)
         return fails
     except Exception:  # noqa: BLE001 — Redis optional; worst case we retry forever
         return 1
+
+
+async def _retry_too_soon(fail_key: str) -> bool:
+    """Did the last attempt fail less than ``SYNC_RETRY_SPACING`` ago? Read
+    from the failure counter itself: every failure (``_bump_failures``) sets
+    its lifetime back to ``_FAIL_TTL``, so the seconds since the last failure
+    are ``_FAIL_TTL - ttl``. No counter, no lifetime, or Redis down → False
+    (try, as before)."""
+    try:
+        redis = await get_redis()
+        ttl = int(await redis.ttl(fail_key))
+    except Exception:  # noqa: BLE001 — Redis optional
+        return False
+    if ttl < 0:
+        return False
+    return _FAIL_TTL - ttl < SYNC_RETRY_SPACING
 
 
 async def _key_exists(key: str) -> bool:
@@ -532,10 +567,18 @@ async def recreate_pending_agents(
     for agent in result.all():
         if is_agent_busy(agent) and not force:
             continue
-        await _recreate_one(session, agent)
+        await _recreate_one(session, agent, force=force)
 
 
-async def _recreate_one(session: AsyncSession, agent: Agent) -> None:
+async def _recreate_one(session: AsyncSession, agent: Agent, *, force: bool = False) -> None:
+    # Same pace as the model sync: a failed recreate waits SYNC_RETRY_SPACING.
+    if not force and await _retry_too_soon(RedisKeys.agent_recreate_fails(str(agent.id))):
+        logger.debug(
+            "recreate for %s waits — the last attempt failed less than %ss ago",
+            agent.name, SYNC_RETRY_SPACING,
+        )
+        return  # stays flagged
+
     runtime = (
         await session.get(Runtime, agent.runtime_id) if agent.runtime_id else None
     )

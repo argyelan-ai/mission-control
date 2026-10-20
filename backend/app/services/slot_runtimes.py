@@ -147,9 +147,9 @@ async def write_slot_state(
 
     Warum „sofort" und nicht „der Wächter macht das schon": der Wächter
     bestätigt eine Drift erst nach ZWEI gleichen Proben
-    (``runtime_watcher._handle_drift``) — bei einem 90-s-Takt bis zu drei
-    Minuten, in denen jeder Agent den alten Modellnamen anfragt und 404
-    bekommt. Der Umschalter weiss das Ziel schon vorher; also schreibt er es.
+    (``runtime_watcher._handle_drift``) — beim 30-s-Takt (seit 20.10.2026,
+    vorher 90 s) bis zu einer Minute plus die Laufzeit der Runden, in der
+    jeder Agent den alten Modellnamen anfragt und 404 bekommt. Der Umschalter weiss das Ziel schon vorher; also schreibt er es.
 
     Gibt die geänderte Zeile zurück (oder ``None``, wenn die Box keine hat).
     """

@@ -1594,7 +1594,7 @@ async def get_runtime_autostart(
 ):
     """Live status of the autostart flag file on the runtime's bound host.
 
-    On-demand, not part of the 90s watcher tick (ADR-054) — this touches SSH
+    On-demand, not part of the watcher tick (ADR-054) — this touches SSH
     and should only run when someone looks at the /runtimes page or hits the
     button, not on a fleet-wide timer.
     """

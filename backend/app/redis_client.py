@@ -686,8 +686,9 @@ class RedisKeys:
 
     # runtime_last_answer (ADR-096 §11.2): what the port said at this row's
     # last healthy probe, and whether it was the row's OWN engine. Durable
-    # (days, not the live snapshot's 3 intervals): a backend that was down
-    # longer than the snapshot lives must still know who held the port.
+    # (days, not the live snapshot's minutes — 3 ticks, at least 270 s): a
+    # backend that was down longer than the snapshot lives must still know
+    # who held the port.
     @staticmethod
     def runtime_last_answer(slug: str) -> str:
         return f"mc:runtime-last-answer:{slug}"
