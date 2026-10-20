@@ -11,6 +11,7 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 
 import { ChatMessage } from "./ChatMessage";
+import { NOTICE_VALUES } from "./ChatNoticeCard";
 import { C } from "@/lib/colors";
 import type { MessageEvent } from "@/lib/chatTypes";
 import de from "../../../messages/de.json";
@@ -86,6 +87,81 @@ describe("Chat-Hinweiskarte (model_fallback)", () => {
 
     expect(screen.getByTestId("chat-notice-text")).toHaveTextContent("something MC decided");
     expect(screen.getByTestId("chat-notice-label")).toHaveTextContent("Notice");
+  });
+});
+
+/* ── S1-R7: notices whose sentence needs no values ─────────────────────────
+   chat_started_fresh (S1-R4: a recreate found no pointer, a new chat began)
+   and sink_migration_skipped (S1-R3/F7: the storage move did not run) carry
+   only a code. Before S1-R7 the card translated a sentence only together
+   with `previous` + `current`, so these showed the daemon's English text
+   under a German label — two languages in one card (K10). */
+describe("Chat-Hinweiskarte — Saetze ohne Werte (S1-R7)", () => {
+  const tDe = () =>
+    createTranslator({ locale: "de", messages: de, namespace: "chat" }) as unknown as (key: string) => string;
+
+  it("[6] chat_started_fresh: translated label and sentence without any values", () => {
+    render(
+      <ChatMessage
+        ev={mkNotice({
+          text: "The chat could not tell which conversation was open — a new one started. Earlier conversations are kept.",
+          source: { kind: "notice", title: "chat_started_fresh" },
+          notice: { code: "chat_started_fresh" },
+        })}
+      />
+    );
+
+    expect(screen.getByTestId("chat-notice-label")).toHaveTextContent("New chat started");
+    expect(screen.getByTestId("chat-notice-text")).toHaveTextContent(
+      "After the restart it was unclear which conversation was open. A new one started. Earlier conversations are kept."
+    );
+    expect(tDe()("notice.chat_started_freshLabel")).toBe("Neuer Chat begonnen");
+    expect(tDe()("notice.chat_started_fresh")).toBe(
+      "Nach dem Neustart war nicht klar, welches Gespräch offen war. Ein neues hat begonnen. Frühere Gespräche bleiben gespeichert."
+    );
+  });
+
+  it("sink_migration_skipped: translated label and sentence", () => {
+    render(
+      <ChatMessage
+        ev={mkNotice({
+          text: "Older chat copies were not moved this time.",
+          source: { kind: "notice", title: "sink_migration_skipped" },
+          notice: { code: "sink_migration_skipped" },
+        })}
+      />
+    );
+
+    expect(screen.getByTestId("chat-notice-label")).toHaveTextContent("Storage not moved");
+    expect(screen.getByTestId("chat-notice-text")).toHaveTextContent(
+      "Older chat copies were not moved this time. The chat works as usual; the next start tries again."
+    );
+    expect(tDe()("notice.sink_migration_skippedLabel")).toBe("Ablage nicht umgezogen");
+  });
+
+  it("never fills a sentence that needs values when the values are missing — the daemon's text stays", () => {
+    render(
+      <ChatMessage
+        ev={mkNotice({ text: "model fallback without names", notice: { code: "model_fallback" } })}
+      />
+    );
+
+    expect(screen.getByTestId("chat-notice-text")).toHaveTextContent("model fallback without names");
+  });
+
+  it("knows every placeholder a notice sentence uses (EN and DE)", () => {
+    // The card fills a sentence only when ALL its values arrived; which
+    // values a code needs is written down once (NOTICE_VALUES). A new
+    // sentence with a {placeholder} must be registered there, or it would be
+    // shown with a raw {name} — this test fails first.
+    const ns = (m: unknown) => (m as { chat: { notice: Record<string, string> } }).chat.notice;
+    for (const tree of [ns(en), ns(de)]) {
+      for (const [key, value] of Object.entries(tree)) {
+        if (key === "label" || key.endsWith("Label")) continue;
+        const used = [...value.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
+        expect(used, `chat.notice.${key}`).toEqual([...(NOTICE_VALUES[key] ?? [])].sort());
+      }
+    }
   });
 });
 

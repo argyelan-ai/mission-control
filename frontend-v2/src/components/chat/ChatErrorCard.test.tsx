@@ -10,11 +10,21 @@
  * sie liefe die Zeile in die neutrale `EventCard` und saehe aus wie eine
  * gewoehnliche Rueckmeldung.
  */
-import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import type { ReactElement } from "react";
 import { ChatMessage } from "./ChatMessage";
+import { ChatResendContext, type ChatResend } from "./chatResend";
 import { C } from "@/lib/colors";
 import type { MessageEvent } from "@/lib/chatTypes";
+import de from "../../../messages/de.json";
+
+const { createTranslator } = await vi.importActual<typeof import("next-intl")>("next-intl");
+/** The global mock answers in English only — German strings are checked
+ *  through the REAL translator against messages/de.json. */
+const tDe = createTranslator({ locale: "de", messages: de, namespace: "chat" }) as unknown as (
+  key: string
+) => string;
 
 function mkError(overrides: Partial<MessageEvent> = {}): MessageEvent {
   return {
@@ -86,11 +96,184 @@ describe("Chat-Fehlerkarte", () => {
       "process_exit",
       "busy",
       "session_reset",
+      "turn_interrupted",
+      "model_unreachable",
     ];
     for (const code of CODES) {
       const { unmount } = render(<ChatMessage ev={mkError({ error: { code, detail: "d" } })} />);
       expect(screen.getByTestId("chat-error-code").textContent).not.toBe("Chat error");
       unmount();
     }
+  });
+});
+
+/* ── S1-R7: known codes speak the operator's language, "Send again" ──────────
+   Bauplan S1-Rest §9 (with the corrections F3/F4 of its review): a card the
+   daemon writes after a restart or a dead model must say in the UI language
+   what happened — the raw detail ("turn 4", omp's ECONNREFUSED line) is only
+   small print below — and, when the backend handed over the operator's own
+   text, offer ONE tap that sends exactly that text again. */
+
+const RETRY = "Count to 20, run `sleep 2` after each number.";
+
+function renderCard(ev: MessageEvent, resend: Partial<ChatResend> = {}): {
+  resendSpy: ReturnType<typeof vi.fn>;
+  rerender: (ui: ReactElement) => void;
+  wrap: (ctx: Partial<ChatResend>) => ReactElement;
+} {
+  const resendSpy = vi.fn();
+  const wrap = (ctx: Partial<ChatResend>) => (
+    <ChatResendContext.Provider value={{ resend: resendSpy, canResend: () => true, ...ctx }}>
+      <ChatMessage ev={ev} />
+    </ChatResendContext.Provider>
+  );
+  const { rerender } = render(wrap(resend));
+  return { resendSpy, rerender, wrap };
+}
+
+const interrupted = (overrides: Partial<MessageEvent> = {}) =>
+  mkError({
+    uuid: "e-int",
+    text: "The chat restarted while a reply was running — nothing was resent automatically.",
+    error: { code: "turn_interrupted", detail: "turn 4", retryText: RETRY },
+    ...overrides,
+  });
+
+const unreachable = () =>
+  mkError({
+    uuid: "e-down",
+    text: "The model is not answering — check the Runtimes page. Your message is not lost.",
+    error: {
+      code: "model_unreachable",
+      detail: "ECONNREFUSED: Unable to connect. Is the computer able to access the url?",
+      retryText: "Where do the tests stand?",
+    },
+  });
+
+describe("Chat-Fehlerkarte — Nochmal senden (S1-R7)", () => {
+  it("[1] shows 'Send again' on a card that carries the operator's text (EN + DE)", () => {
+    renderCard(interrupted());
+
+    expect(screen.getByTestId("chat-error-resend")).toHaveTextContent("Send again");
+    expect(screen.getByTestId("chat-error-resend")).toBeEnabled();
+    expect(tDe("error.resend")).toBe("Nochmal senden");
+    expect(tDe("error.resent")).toBe("Gesendet");
+  });
+
+  it("[2] one tap sends exactly that text once, then locks as 'Sent' — a double tap sends nothing more", () => {
+    const { resendSpy } = renderCard(interrupted());
+
+    const button = screen.getByTestId("chat-error-resend");
+    fireEvent.click(button);
+    fireEvent.click(button);
+
+    expect(resendSpy).toHaveBeenCalledTimes(1);
+    expect(resendSpy).toHaveBeenCalledWith(RETRY);
+    expect(screen.getByTestId("chat-error-resend")).toBeDisabled();
+    expect(screen.getByTestId("chat-error-resend")).toHaveTextContent("Sent");
+  });
+
+  it("[2b] stays locked while the send is on its way, and offers itself again only if it did not go out", () => {
+    // ChatView stops offering the card the moment the echo exists; when the
+    // echo disappears WITHOUT a user line (the request failed, or the
+    // operator took it back), the card is the newest offer again.
+    const { resendSpy, rerender, wrap } = renderCard(interrupted());
+    fireEvent.click(screen.getByTestId("chat-error-resend"));
+
+    rerender(wrap({ canResend: () => false }));
+    expect(screen.getByTestId("chat-error-resend")).toBeDisabled();
+
+    rerender(wrap({ canResend: () => true }));
+    expect(screen.getByTestId("chat-error-resend")).toBeEnabled();
+    expect(screen.getByTestId("chat-error-resend")).toHaveTextContent("Send again");
+    expect(resendSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("[3] shows no button when ChatView does not offer this card (an older card, a reply after it)", () => {
+    renderCard(interrupted(), { canResend: () => false });
+
+    expect(screen.queryByTestId("chat-error-resend")).not.toBeInTheDocument();
+  });
+
+  it("[4] shows no button on a card without the text (older cards, older agent image)", () => {
+    renderCard(interrupted({ error: { code: "turn_interrupted", detail: "turn 4" } }));
+
+    expect(screen.queryByTestId("chat-error-resend")).not.toBeInTheDocument();
+  });
+
+  it("[9] shows no button when the text was too long to hand over (backend left it out, never shortened)", () => {
+    renderCard(interrupted({ error: { code: "turn_interrupted", detail: "turn 4", retryText: null } }));
+    expect(screen.queryByTestId("chat-error-resend")).not.toBeInTheDocument();
+  });
+
+  it("shows no button outside ChatView (a head's transcript, a read-only view)", () => {
+    render(<ChatMessage ev={interrupted()} />);
+
+    expect(screen.queryByTestId("chat-error-resend")).not.toBeInTheDocument();
+  });
+
+  it("[5] model_unreachable: the hint sentence, a link to the Runtimes page and the button", () => {
+    renderCard(unreachable());
+
+    expect(screen.getByTestId("chat-error-code")).toHaveTextContent("Model not responding");
+    expect(screen.getByTestId("chat-error-body")).toHaveTextContent(
+      "Check the Runtimes page. Your message is not lost."
+    );
+    const link = screen.getByTestId("chat-error-runtimes-link");
+    expect(link).toHaveAttribute("href", "/runtimes");
+    expect(link).toHaveTextContent("Open Runtimes");
+    expect(screen.getByTestId("chat-error-resend")).toBeInTheDocument();
+    expect(tDe("error.model_unreachable")).toBe("Modell antwortet nicht");
+    expect(tDe("error.modelUnreachableHint")).toBe(
+      "Prüfe die Runtimes-Seite. Deine Nachricht ist nicht verloren."
+    );
+    expect(tDe("error.runtimesLink")).toBe("Zur Runtimes-Seite");
+  });
+
+  it("puts the translated sentence first and the raw detail only small below it", () => {
+    renderCard(interrupted());
+
+    expect(screen.getByTestId("chat-error-code")).toHaveTextContent("Interrupted");
+    expect(screen.getByTestId("chat-error-body")).toHaveTextContent(
+      "The chat restarted while a reply was running. Nothing was resent automatically."
+    );
+    expect(screen.getByTestId("chat-error-detail")).toHaveTextContent("turn 4");
+    expect(screen.getByTestId("chat-error-detail").className).toContain("text-xs");
+    expect(tDe("error.turn_interrupted")).toBe("Unterbrochen");
+  });
+
+  it("[10] session_reset with detail model_missing shows the translated sentence, not the code word", () => {
+    renderCard(
+      mkError({
+        text: "Could not restore model OLD-1 — started a new conversation.",
+        error: { code: "session_reset", detail: "model_missing" },
+      })
+    );
+
+    expect(screen.getByTestId("chat-error-body")).toHaveTextContent(
+      "The conversation ran on a model that is not set up right now. A new conversation started; the old one is kept."
+    );
+    // K3: the sub-code chose the sentence — it is not printed a second time.
+    expect(screen.queryByTestId("chat-error-detail")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("chat-error-resend")).not.toBeInTheDocument();
+    expect(tDe("error.session_reset_model_missingBody")).toBe(
+      "Das Gespräch lief auf einem Modell, das gerade nicht eingetragen ist. Ein neues Gespräch hat begonnen, das alte bleibt gespeichert."
+    );
+  });
+
+  it("session_reset with detail transcript_missing has its own sentence", () => {
+    renderCard(mkError({ error: { code: "session_reset", detail: "transcript_missing" } }));
+
+    expect(screen.getByTestId("chat-error-body")).toHaveTextContent(
+      "The history of the last conversation was not found. A new conversation started."
+    );
+    expect(screen.queryByTestId("chat-error-detail")).not.toBeInTheDocument();
+  });
+
+  it("keeps today's layout for a code without a sentence: the detail is the text", () => {
+    renderCard(mkError({ error: { code: "rpc_error", detail: "unknown config option: model" } }));
+
+    expect(screen.queryByTestId("chat-error-body")).not.toBeInTheDocument();
+    expect(screen.getByTestId("chat-error-detail")).toHaveTextContent("unknown config option: model");
   });
 });

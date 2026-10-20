@@ -2503,6 +2503,103 @@ describe("Naht: Preview-Tick baut die Zeitachse nicht neu (echtes Modul, echte K
   });
 });
 
+// ── S1-R7: "Send again" on a chat error card ───────────────────────────────
+// Bauplan S1-Rest §9: the button travels the composer's own send path (echo
+// + deliver, never a second one), and only the NEWEST error card that holds
+// the operator's text offers it — and only while nothing has been sent after
+// it. Otherwise a reload of the page would offer an old card a second time.
+function mkErrorCard(uuid: string, retryText: string | null, code = "turn_interrupted"): MessageEvent {
+  return {
+    kind: "message",
+    uuid,
+    ts: "2026-10-20T10:00:00Z",
+    role: "teammate",
+    teammate: "chat_error",
+    text: "The chat restarted while a reply was running — nothing was resent automatically.",
+    model: null,
+    sidechain: false,
+    source: { kind: "error", title: "chat_error" },
+    error: { code, detail: "turn 4", retryText },
+  };
+}
+
+describe("ChatView — Nochmal senden (S1-R7)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    navMock.params = new URLSearchParams();
+    setRole("admin");
+  });
+
+  it("[2] the card's button sends through the composer's path: echo first, then exactly one request with the exact text", () => {
+    const echoSent = vi.fn();
+    vi.mocked(api.chat.sendText).mockResolvedValue(undefined);
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        echoSent,
+        state: { kind: "state", status: "idle", prompt: null },
+        events: [mkMsg({ role: "user", text: "Zähle bis 20" }), mkErrorCard("e1", "Zähle bis 20")],
+      })
+    );
+    renderChatView({ agent: mkAgent({ headless_chat: true }) });
+
+    const button = screen.getByTestId("chat-error-resend");
+    fireEvent.click(button);
+    fireEvent.click(button);
+
+    expect(echoSent).toHaveBeenCalledTimes(1);
+    expect(echoSent).toHaveBeenCalledWith("Zähle bis 20", false);
+    expect(api.chat.sendText).toHaveBeenCalledTimes(1);
+    expect(api.chat.sendText).toHaveBeenCalledWith("agent-1", "Zähle bis 20");
+  });
+
+  it("[3] offers only the newest card with a text, and none once the operator wrote after it or a send is on its way", () => {
+    const older = mkErrorCard("e-old", "first try");
+    const newer = mkErrorCard("e-new", "second try");
+
+    // Newest card with a text, nothing after it -> exactly that card.
+    mockUseChatStream.mockReturnValue(mkStream({ events: [older, mkMsg({ role: "assistant" }), newer] }));
+    const { unmount } = renderChatView({ agent: mkAgent({ headless_chat: true }) });
+    expect(screen.getAllByTestId("chat-error-resend")).toHaveLength(1);
+    expect(screen.getAllByTestId("chat-error-card")[1]).toContainElement(screen.getByTestId("chat-error-resend"));
+    unmount();
+
+    // The operator wrote after the card -> no button anywhere.
+    mockUseChatStream.mockReturnValue(mkStream({ events: [older, newer, mkMsg({ role: "user", text: "next" })] }));
+    const second = renderChatView({ agent: mkAgent({ headless_chat: true }) });
+    expect(screen.queryByTestId("chat-error-resend")).not.toBeInTheDocument();
+    second.unmount();
+
+    // A send is on its way (open echo) -> no button either.
+    mockUseChatStream.mockReturnValue(
+      mkStream({
+        events: [older, newer],
+        pendingEchoes: [{ id: "echo-1", text: "x", sentAt: Date.now(), status: "pending" }],
+      })
+    );
+    renderChatView({ agent: mkAgent({ headless_chat: true }) });
+    expect(screen.queryByTestId("chat-error-resend")).not.toBeInTheDocument();
+  });
+
+  it("a newer card WITHOUT a text does not hide the offer of the newest card that has one", () => {
+    mockUseChatStream.mockReturnValue(
+      mkStream({ events: [mkErrorCard("e-text", "please again"), mkErrorCard("e-none", null, "session_reset")] })
+    );
+    renderChatView({ agent: mkAgent({ headless_chat: true }) });
+
+    const cards = screen.getAllByTestId("chat-error-card");
+    expect(cards[0]).toContainElement(screen.getByTestId("chat-error-resend"));
+  });
+
+  it("offers nothing to a viewer — sending is admin-only", () => {
+    setRole("viewer");
+    mockUseChatStream.mockReturnValue(mkStream({ events: [mkErrorCard("e1", "again")] }));
+    renderChatView({ agent: mkAgent({ headless_chat: true }) });
+
+    expect(screen.getByTestId("chat-error-card")).toBeInTheDocument();
+    expect(screen.queryByTestId("chat-error-resend")).not.toBeInTheDocument();
+  });
+});
+
 describe("ChatView — non-admin (session input is admin-only)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
