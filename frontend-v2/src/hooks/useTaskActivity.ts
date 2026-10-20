@@ -8,6 +8,16 @@ import type { TaskActivity } from "@/lib/chatTypes";
  *  The clock of a running thought ticks locally every second regardless. */
 export const TASK_ACTIVITY_POLL_MS = 2000;
 
+/** How often it asks while the answer is `applies: false` — the chat itself
+ *  shows the task (Claude Code, Kimi, Grok, native omp, Hermes …), which
+ *  does not change from one second to the next (review R2). Not "never":
+ *  an omp ACP agent can answer false for a moment while its pointer is set. */
+export const TASK_ACTIVITY_IDLE_POLL_MS = 30_000;
+
+export function taskActivityInterval(data: TaskActivity | undefined): number {
+  return data?.applies === false ? TASK_ACTIVITY_IDLE_POLL_MS : TASK_ACTIVITY_POLL_MS;
+}
+
 /**
  * What the agent's RUNNING task does, for the chat's task block
  * (`GET /agents/{id}/chat/task-activity`). Only mounted while the chat shows
@@ -19,7 +29,7 @@ export function useTaskActivity(agentId: string): TaskActivity | null {
   const query = useQuery({
     queryKey: ["chat-task-activity", agentId],
     queryFn: () => api.chat.taskActivity(agentId),
-    refetchInterval: TASK_ACTIVITY_POLL_MS,
+    refetchInterval: (q) => taskActivityInterval(q.state.data),
     refetchIntervalInBackground: false,
     retry: false,
   });
