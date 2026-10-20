@@ -110,10 +110,12 @@ notice, a parser must not die on them).
 """
 from __future__ import annotations
 
+import errno
 import json
 import math
 import os
 import re
+import stat
 import threading
 import time
 import uuid
@@ -156,8 +158,11 @@ CHAT_NOTICE_CUSTOM_TYPE = "chat_notice"
 #: (``listAll``). Load and resume take the YOUNGER of two files with one id
 #: — often MC's copy: live 20.10.2026 the current chat failed to load ("ACP
 #: session load was cancelled") and silently started over. Two levels below
-#: the root, ``.mc/`` is outside both globs; the leading dot also keeps it
-#: out of a recursive search (Bun skips dot names unless asked). The
+#: the root, ``.mc/`` is outside both globs — that alone keeps omp 18.10.1
+#: away from it. The leading dot is a second guard for a recursive search
+#: some later omp might run: Bun's docs say ``Bun.Glob`` skips dot names
+#: unless ``dot: true`` (a local Bun 1.3 agrees; NOT checked at the Bun
+#: build inside omp's binary — an assumption). The
 #: backend reads the same name (``omp_chat._MC_SINK_DIRNAME``, pinned by
 #: backend/tests/test_mc_sink_dirname_contract.py); ``sink_migration.py``
 #: moves the copies written before.
@@ -1480,21 +1485,47 @@ def mc_sink_dir(folder: Path) -> Path:
     """``<folder>/.mc`` (``MC_SINK_DIRNAME``) — created, then returned.
 
     Raises OSError when it cannot be created (a file in its place, a
-    read-only tree); the sinks catch that and degrade to a no-op, like an
-    unwritable sessions tree."""
+    read-only tree) or is not a real folder (a symlink — the session folder
+    is the agent's own mount, and MC never writes where a link points); the
+    sinks catch that and degrade to a no-op, like an unwritable sessions
+    tree."""
     target = Path(folder) / MC_SINK_DIRNAME
     target.mkdir(parents=True, exist_ok=True)
+    if target.is_symlink() or not target.is_dir():
+        raise OSError(errno.ENOTDIR, "not a real folder", str(target))
     return target
+
+
+def open_regular(path: Path) -> Optional[Any]:
+    """``path`` opened for reading as text when it is a regular file, else
+    None. Never blocks: a FIFO named like a session would hang a plain
+    ``open()`` until a writer comes (non-blocking open, then a type check on
+    the open file). The caller closes the handle. Never raises."""
+    try:
+        fd = os.open(str(path), os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+    except OSError:
+        return None
+    try:
+        if stat.S_ISREG(os.fstat(fd).st_mode):
+            return os.fdopen(fd, "r", encoding="utf-8", errors="replace")
+    except OSError:
+        pass
+    os.close(fd)
+    return None
 
 
 def session_header(path: Path) -> Optional[dict]:
     """The session header of a JSONL file — line 1, or line 2 when line 1 is
     a ``{"type": "title"}`` line (omp's own rule) — or None when the file has
-    none (not a session for omp either). Never raises."""
+    none (not a session for omp either) or is no regular file. Never raises,
+    never blocks."""
+    fh = open_regular(path)
+    if fh is None:
+        return None
     try:
-        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+        with fh:
             first, second = fh.readline(_HEADER_BYTES), fh.readline(_HEADER_BYTES)
-    except OSError:
+    except (OSError, ValueError):
         return None
     lines = []
     for raw in (first, second):
@@ -1509,12 +1540,17 @@ def session_header(path: Path) -> Optional[dict]:
     return header
 
 
-def is_mc_sink(path: Path) -> bool:
-    """MC's display copy: a session header that names the bridge
-    (``"bridge": "acp"``, written by ``ChatEventSink``). omp never writes
-    that key (live 20.10.2026: 266 copies with it, 468 omp files without)."""
-    header = session_header(path)
+def is_mc_header(header: Optional[dict]) -> bool:
+    """A session header MC wrote: it names the bridge (``"bridge": "acp"``,
+    written by ``ChatEventSink``). omp never writes that key (live
+    20.10.2026: 266 copies with it, 468 omp files without)."""
     return header is not None and header.get("bridge") == "acp"
+
+
+def is_mc_sink(path: Path) -> bool:
+    """MC's display copy: a regular file whose session header names the
+    bridge (``is_mc_header``)."""
+    return is_mc_header(session_header(path))
 
 
 def find_sink(folder: Path, session_id: str) -> Optional[Path]:
@@ -1693,8 +1729,10 @@ class PreviewEventSink:
     """The VOLATILE preview channel (Folge-PR zu #471): appends the mapper's
     preview flushes to
     ``<session_dir>/.mc/previews/<ts>_<sessionId>_<uniq>.jsonl`` (S1-R3:
-    under ``.mc/`` with the transcript copy; an old ``previews/`` next to
-    omp's file is left alone — it only ever held a few volatile files)
+    always next to the transcript copy in use, see ``beside`` — under
+    ``.mc/`` for a new copy, the old ``previews/`` for an old copy resumed
+    in place; the move never touches ``previews/``, it only ever held a few
+    volatile files)
     — a SIBLING of the transcript file, in a subdirectory
     ``find_active_session``/``_SESSION_GLOBS`` never scan, so the backend's
     history/rollover logic cannot mistake preview lines for transcript
@@ -1725,12 +1763,22 @@ class PreviewEventSink:
     #: retention policy.
     _KEEP = 3
 
-    def __init__(self, directory: Optional[Path], session_id: str):
+    def __init__(
+        self,
+        directory: Optional[Path],
+        session_id: str,
+        *,
+        previews_dir: Optional[Path] = None,
+    ):
+        """``directory``: the session folder — the file goes to
+        ``<directory>/.mc/previews/``. ``previews_dir``: the exact folder
+        instead (``beside``)."""
         self._session_id = session_id or "acp-session"
         self._path: Optional[Path] = None
-        if directory is not None:
+        if directory is not None or previews_dir is not None:
             try:
-                pdir = mc_sink_dir(directory) / "previews"
+                pdir = (Path(previews_dir) if previews_dir is not None
+                        else mc_sink_dir(directory) / "previews")
                 pdir.mkdir(parents=True, exist_ok=True)
                 self._prune(pdir)
                 ts = time.strftime("%Y-%m-%dT%H-%M-%S", time.gmtime())
@@ -1738,6 +1786,18 @@ class PreviewEventSink:
                 self._path = pdir / f"{ts}_{self._session_id}_{uniq}.jsonl"
             except OSError:
                 self._path = None
+
+    @classmethod
+    def beside(cls, transcript: Optional[Path], session_id: str) -> "PreviewEventSink":
+        """The preview channel next to the transcript copy IN USE:
+        ``<transcript folder>/previews/`` — where the backend looks
+        (``omp_chat.preview_channel``). For a new copy that is
+        ``.mc/previews/``; for an old copy the daemon resumed in place
+        (``ChatEventSink.appending``, the move did not run) it is the old
+        ``<session folder>/previews/``. No transcript: a no-op sink."""
+        if transcript is None:
+            return cls(None, session_id)
+        return cls(None, session_id, previews_dir=Path(transcript).parent / "previews")
 
     @staticmethod
     def _prune(pdir: Path) -> None:

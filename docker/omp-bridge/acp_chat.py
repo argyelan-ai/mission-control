@@ -297,6 +297,12 @@ class ChatSession:
             logger.warning("sink migration under %s did not run: %s (%s)",
                            root, report.status, report.detail)
             return report.status
+        unsafe = [e["path"] for e in report.skipped if e.get("reason") == "unsafe_target"]
+        if unsafe:
+            # A symlink or a file where `.mc/` belongs: nothing moved there,
+            # and new copies cannot be written there either.
+            logger.warning("sink migration under %s refused unsafe targets: %s",
+                           root, ", ".join(unsafe))
         if counts["moved"] or counts["media"] or counts["skipped"]:
             logger.info("sink migration: moved %d copies (%d mixed, %d task), "
                         "%d pictures, skipped %d", counts["moved"], counts["mixed"],
@@ -343,8 +349,11 @@ class ChatSession:
             self._sink = acp_chat_events.ChatEventSink(
                 self._sessions_dir, self._session_id
             )
-        self._preview = acp_chat_events.PreviewEventSink(
-            self._sessions_dir, self._session_id
+        # Next to the transcript in use — the backend reads the preview from
+        # the transcript's folder. A resumed copy the move skipped still sits
+        # at the old place; its preview must sit there too.
+        self._preview = acp_chat_events.PreviewEventSink.beside(
+            self._sink.path if self._sink is not None else None, self._session_id
         )
         self._absorb_session_result(getattr(client, "last_session_result", None))
         self._pin_model()
@@ -853,7 +862,7 @@ class ChatSession:
             self._session_id = new_id
             self._mapper.set_session_id(new_id)
             self._sink = acp_chat_events.ChatEventSink(self._sessions_dir, new_id)
-            self._preview = acp_chat_events.PreviewEventSink(self._sessions_dir, new_id)
+            self._preview = acp_chat_events.PreviewEventSink.beside(self._sink.path, new_id)
         self._absorb_session_result(result)
         self._pin_model()
         offered = self._config_value("thinking")
@@ -1090,7 +1099,9 @@ class ChatSession:
         session in the session folder. Since S1-R3 MC's copy lives in `.mc/`,
         so that folder holds only omp's files. In a tree not moved yet MC's
         old copy can still sit there (same id, often the younger file):
-        neither our own sink nor any file with MC's header is taken."""
+        neither our own sink nor any file with MC's header is taken. Only
+        regular files: this runs during a turn, and opening a FIFO named
+        like the session would stall it."""
         sid, own = self._session_id, self.transcript_path
         if not sid:
             return None
@@ -1098,7 +1109,8 @@ class ChatSession:
         try:
             candidates = [
                 p for p in self._sessions_dir.iterdir()
-                if p.name.endswith(suffix) and p != own and not acp_chat_events.is_mc_sink(p)
+                if p.name.endswith(suffix) and p != own and p.is_file()
+                and not acp_chat_events.is_mc_sink(p)
             ]
             return max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
         except OSError:
