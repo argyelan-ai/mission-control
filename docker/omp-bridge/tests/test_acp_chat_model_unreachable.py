@@ -146,6 +146,7 @@ class OmpClient(FakeClient):
       "omp_late": lines omp appends only AFTER the reply (the flush at the
                   turn's end is not proven), "late_s" seconds later
       "thoughts": agent_thought_chunk texts before the answer
+      "silent":   omp writes nothing of this turn (not even its user line)
     """
 
     def __init__(self, sessions_dir: Path, **kw):
@@ -164,7 +165,8 @@ class OmpClient(FakeClient):
 
     def prompt(self, session_id, text, timeout=600.0):
         turn = self.turns[0] if self.turns else {}
-        self.append([omp_user(text)] + list(turn.get("omp") or []))
+        if not turn.get("silent"):
+            self.append([omp_user(text)] + list(turn.get("omp") or []))
         for thought in turn.get("thoughts") or []:
             self.fire({"sessionId": session_id, "update": {
                 "sessionUpdate": "agent_thought_chunk", "messageId": "t1",
@@ -523,6 +525,20 @@ def test_14_an_earlier_turns_error_line_never_counts(tmp_path):
         {"chunks": [ECONN_TEXT], "stopReason": "refusal",
          "omp": [omp_assistant("error", error=ECONN_TEXT)]},
         {"chunks": [SHORT_ANSWER], "stopReason": "end_turn", "usage": USAGE, "omp": []},
+    ], texts=["First question.", "Second question."])
+    assert codes(lines) == ["model_unreachable"], "one card, for turn 1 only"
+    assert replies(lines) == [SHORT_ANSWER]
+
+
+def test_14b_nothing_of_this_turn_in_omps_file_is_not_the_earlier_turns_end(tmp_path):
+    """omp has written nothing of turn 2 yet: what was in the file before
+    the turn started is not read at all (the mark), so the earlier error
+    line cannot answer for this turn; the text rule decides (tokens: no
+    card)."""
+    lines, _ = run_turns(tmp_path, [
+        {"chunks": [ECONN_TEXT], "stopReason": "refusal",
+         "omp": [omp_assistant("error", error=ECONN_TEXT)]},
+        {"chunks": [SHORT_ANSWER], "stopReason": "end_turn", "usage": USAGE, "silent": True},
     ], texts=["First question.", "Second question."])
     assert codes(lines) == ["model_unreachable"], "one card, for turn 1 only"
     assert replies(lines) == [SHORT_ANSWER]
