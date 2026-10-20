@@ -2247,7 +2247,11 @@ async def start_runtime(
         # one does not, so a start that never comes up ends in the plain
         # alarm instead of silence. Not cleared when the call fails: the old
         # engine is already gone then, and the dark port is an outage.
-        await runtime_grace.mark_start_pending(slug, grace_source)
+        # It also closes the port's previous outage (one death / one alarm
+        # each): this start gets its own alarm if it never comes up.
+        await runtime_grace.mark_start_pending(
+            slug, grace_source, endpoint=runtime.get("endpoint")
+        )
         await runtime_grace.mark_switching(
             slug, runtime_grace.PHASE_LAUNCHING, grace_source
         )
@@ -2792,7 +2796,9 @@ async def restart_runtime(
         await runtime_grace.clear_stop_intent(slug)
     await runtime_grace.clear_death_record(slug)
     if is_docker:
-        await runtime_grace.mark_start_pending(slug, grace_source)
+        await runtime_grace.mark_start_pending(
+            slug, grace_source, endpoint=runtime.get("endpoint")
+        )
         await runtime_grace.mark_switching(
             slug, runtime_grace.PHASE_LAUNCHING, grace_source
         )

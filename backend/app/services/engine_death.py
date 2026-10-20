@@ -203,6 +203,25 @@ async def endpoint_answered(redis, runtime: Runtime) -> None:
         pass
 
 
+async def start_opened(redis, *, endpoint: str | None, slug: str | None) -> None:
+    """A start of a row on this port opens a new window (§11.2/§11.4): the
+    endpoint's one-death / one-alarm keys belonged to the outage before it.
+    That start gets its own one alarm if it never comes up — after a death,
+    "Restart now" or "Other model" on the card must not end in silence. The
+    death RECORDS of other rows on the port stay: their cards still say why
+    they went dark. Never raises."""
+    key = (endpoint or slug or "").rstrip("/")
+    if not key:
+        return
+    try:
+        await redis.delete(
+            RedisKeys.runtime_endpoint_death(key),
+            RedisKeys.runtime_endpoint_alarm(key),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("engine-death: outage keys not cleared for %s: %s", key, exc)
+
+
 async def claim_endpoint_alarm(redis, runtime: Runtime) -> bool:
     """One plain ``runtime.unreachable`` per endpoint outage (slot row + recipe
     rows on :8000 add none). Redis down → True (better twice than never)."""

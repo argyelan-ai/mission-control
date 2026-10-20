@@ -282,11 +282,16 @@ class RuntimeWatcher:
             await self._tick_inner(own_session)
 
     async def _tick_inner(self, session: AsyncSession) -> None:
+        # Recipe rows before slot rows (ADR-096 §11.4): a death found at the
+        # threshold (timeout path) must be declared before the slot row on the
+        # same port reaches the same threshold — otherwise the port gets a
+        # plain alarm AND the death. It also lets a loading recipe refresh its
+        # slot row's grace before that slot row is probed in the same tick.
         result = await session.exec(
             select(Runtime).where(
                 Runtime.enabled.is_(True),
                 Runtime.runtime_type.in_(sorted(_PROBEABLE_RUNTIME_TYPES)),
-            )
+            ).order_by(Runtime.is_slot)
         )
         runtimes = result.all()
         for idx, runtime in enumerate(runtimes):

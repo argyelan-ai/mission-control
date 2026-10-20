@@ -702,7 +702,8 @@ class RedisKeys:
 
     # One death / one unreachable alarm per ENDPOINT outage (§11.2, §11.4):
     # rows sharing a port (Spark :8000) add none. Cleared by the first probe
-    # on that endpoint that gets an answer.
+    # on that endpoint that gets an answer, and by a start of any row on it
+    # (a new window gets its own one alarm — runtime_grace.mark_start_pending).
     @staticmethod
     def runtime_endpoint_death(endpoint: str) -> str:
         return f"mc:runtime-endpoint-death:{endpoint.rstrip('/')}"

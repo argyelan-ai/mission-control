@@ -263,11 +263,17 @@ def marker_age_seconds(doc: dict | None, field: str) -> float | None:
 # what makes the silence an outage again (one plain alarm) — instead of
 # "a row that never served its own answer" on a shared port, which stays
 # quiet. Ends with the row's next answer (watcher), a stop intent, or the TTL.
+#
+# A start is also a new window for the PORT: the endpoint's one-death /
+# one-alarm keys of the outage before it are closed here (§11.4). Otherwise
+# "Restart now" or "Other model" on a dead card that never comes up stays
+# silent until those keys expire (24 h) — only an answer cleared them.
 
 
-async def mark_start_pending(slug: str | None, source: str) -> None:
+async def mark_start_pending(slug: str | None, source: str, *, endpoint: str | None) -> None:
     """``runtime_manager`` calls this where it opens the switch window.
-    Never raises."""
+    ``endpoint`` is the row's port (``None``: keyed by slug, as the claims
+    are). Never raises."""
     if not slug:
         return
     try:
@@ -279,6 +285,10 @@ async def mark_start_pending(slug: str | None, source: str) -> None:
         )
     except Exception as exc:  # noqa: BLE001
         logger.debug("mark_start_pending(%s) failed: %s", slug, exc)
+        return
+    from app.services import engine_death
+
+    await engine_death.start_opened(redis, endpoint=endpoint, slug=slug)
 
 
 async def clear_start_pending(slug: str | None, redis=None) -> None:

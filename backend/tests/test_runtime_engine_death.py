@@ -1124,7 +1124,7 @@ async def test_a_stop_of_the_loading_recipe_keeps_the_dark_port_planned(async_se
         probe.served = "DeepSeek-V4.1"
         await watcher.tick(session=async_session)
         await runtime_grace.mark_stop_intent(dsv.slug, runtime_grace.INTENT_SWITCHED_AWAY, by=glm.slug)
-        await runtime_grace.mark_start_pending(glm.slug, runtime_grace.SOURCE_SWITCH)
+        await runtime_grace.mark_start_pending(glm.slug, runtime_grace.SOURCE_SWITCH, endpoint=ENDPOINT)
         await runtime_grace.mark_switching(glm.slug, runtime_grace.PHASE_LOADING,
                                            runtime_grace.SOURCE_SWITCH)
         probe.served = None
@@ -1144,7 +1144,7 @@ async def test_a_pending_start_ends_with_the_next_answer(async_session, fake_red
     glm = await _rt(async_session, slug="glm", model="GLM-5.3", process="glm-tf")
     probe = Probe(failure=FAIL_TIMEOUT)
     with _stack(FakeBox(inspect=RUNNING, pgrep_running=True), fake_redis, probe):
-        await runtime_grace.mark_start_pending(glm.slug, runtime_grace.SOURCE_MANUAL)
+        await runtime_grace.mark_start_pending(glm.slug, runtime_grace.SOURCE_MANUAL, endpoint=ENDPOINT)
         assert await fake_redis.ttl(RedisKeys.runtime_start_pending(glm.slug)) > \
             runtime_grace.SWITCHING_TTL                 # outlives every grace
         probe.served = "GLM-5.3"
@@ -1153,3 +1153,188 @@ async def test_a_pending_start_ends_with_the_next_answer(async_session, fake_red
     remembered = await engine_death.last_answer(fake_redis, glm.slug)
     assert remembered["own"] is True and remembered["served_model"] == "GLM-5.3"
     assert await fake_redis.ttl(RedisKeys.runtime_last_answer(glm.slug)) > INTERVAL * 3
+
+
+# ── Review 2026-10-20: the card's own recovery must not end in silence ──
+# After a death (or a plain alarm) the endpoint's one-death / one-alarm keys
+# live 24 h and only an answer on the port cleared them. The card offers
+# "Restart now" and "Other model" — a start from there that never comes up
+# (hangs, or dies again while loading) raised NOTHING. A start opens a new
+# window: the old outage's keys go, this start gets its own one alarm.
+
+
+async def _spark_rows(session) -> tuple[Runtime, Runtime, Runtime]:
+    """The Spark as it runs: a box with its slot row and two recipe rows on
+    one :8000; GLM was switched away when DeepSeek started."""
+    host = Host(slug="box-a", display_name="Box A", kind="ssh", ssh_host="192.0.2.10")
+    session.add(host)
+    await session.commit()
+    slot = await _rt(session, slug="box-slot", model="DeepSeek-V4.1", is_slot=True,
+                     runtime_type="openai_compatible")
+    dsv = await _rt(session, slug="dsv", model="DeepSeek-V4.1")
+    glm = await _rt(session, slug="glm", model="GLM-5.3", process="glm-tf")
+    for r in (slot, dsv, glm):
+        r.host_id = host.id
+        if not r.is_slot:
+            r.launch_command = "./start.sh"
+        session.add(r)
+    await session.commit()
+    await runtime_grace.mark_stop_intent(glm.slug, runtime_grace.INTENT_SWITCHED_AWAY, by=dsv.slug)
+    return slot, dsv, glm
+
+
+def _start_paths():
+    """start_runtime / restart_runtime run for real; only the box is faked."""
+    stack = ExitStack()
+    for ctx in (
+        patch.object(runtime_manager, "stop_ssh_process",
+                     AsyncMock(return_value={"ok": True, "message": "s"})),
+        patch.object(runtime_manager, "already_running", AsyncMock(return_value=None)),
+        patch.object(runtime_manager, "_start_runtime_impl",
+                     AsyncMock(return_value={"ok": True, "message": "launched"})),
+        patch.object(runtime_manager.host_memory_prep, "prepare_for_runtime",
+                     AsyncMock(return_value=None)),
+    ):
+        stack.enter_context(ctx)
+    return stack
+
+
+async def _grace_runs_out(fake_redis, *slugs: str) -> None:
+    """20 min later: the switch-grace markers are gone, and so are the fail
+    counters of the rows that sat in grace (their TTL is 10 intervals = 15 min
+    and grace never bumps them)."""
+    for slug in slugs:
+        await runtime_grace.clear_switching(slug)
+        await fake_redis.delete(RuntimeWatcher._fail_key(slug))
+
+
+async def _plain_alarms(session) -> list[ActivityEvent]:
+    return [e for e in await _events(session, "runtime.unreachable")
+            if not (e.detail or {}).get("engine_death")]
+
+
+def _own_unless_glm():
+    async def _own(self, session, runtime):
+        return runtime.slug != "glm"
+    return patch.object(RuntimeWatcher, "_served_answer_is_own", _own)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [FAIL_REFUSED, FAIL_TIMEOUT])
+async def test_death_then_restart_that_never_comes_up_raises_exactly_one_alarm(
+    async_session, fake_redis, failure,
+):
+    probe = Probe(failure=failure)
+    watcher = RuntimeWatcher(interval=INTERVAL)
+    with _stack(FakeBox(inspect=EXITED_137), fake_redis, probe), _own_unless_glm(), \
+            _start_paths():
+        slot, dsv, _ = await _spark_rows(async_session)
+        probe.served = "DeepSeek-V4.1"
+        await watcher.tick(session=async_session)
+        probe.served = None
+        for _ in range(UNREACHABLE_EVENT_THRESHOLD + 1):
+            await watcher.tick(session=async_session)
+        assert [d.detail["slug"] for d in await _deaths(async_session)] == [dsv.slug]
+        # "Restart now" on the dead card — the same OOM kills it while loading.
+        result = await runtime_manager.restart_runtime(dsv.to_registry_dict(), host=BOX)
+        assert result["ok"], result
+        assert await fake_redis.get(RedisKeys.runtime_endpoint_death(ENDPOINT)) is None
+        for _ in range(3):
+            await watcher.tick(session=async_session)
+        assert await _plain_alarms(async_session) == []            # grace holds
+        await _grace_runs_out(fake_redis, dsv.slug, slot.slug)
+        for _ in range(UNREACHABLE_EVENT_THRESHOLD + 2):
+            await watcher.tick(session=async_session)
+
+    assert len(await _deaths(async_session)) == 1
+    plain = await _plain_alarms(async_session)
+    assert len(plain) == 1, [a.detail for a in plain]
+    assert plain[0].detail["slug"] in {dsv.slug, slot.slug}
+
+
+@pytest.mark.asyncio
+async def test_death_then_other_model_that_never_comes_up_raises_exactly_one_alarm(
+    async_session, fake_redis,
+):
+    probe = Probe(failure=FAIL_REFUSED)
+    watcher = RuntimeWatcher(interval=INTERVAL)
+    with _stack(FakeBox(inspect=EXITED_137), fake_redis, probe), _own_unless_glm(), \
+            _start_paths():
+        slot, dsv, glm = await _spark_rows(async_session)
+        probe.served = "DeepSeek-V4.1"
+        await watcher.tick(session=async_session)
+        probe.served = None
+        for _ in range(UNREACHABLE_EVENT_THRESHOLD + 1):
+            await watcher.tick(session=async_session)
+        assert [d.detail["slug"] for d in await _deaths(async_session)] == [dsv.slug]
+        # "Other model" on the dead card: GLM is started and never answers.
+        await runtime_grace.mark_switching(slot.slug, runtime_grace.PHASE_LOADING,
+                                           runtime_grace.SOURCE_SWITCH)
+        result = await runtime_manager.start_runtime(glm.to_registry_dict(), host=BOX)
+        assert result["ok"], result
+        for _ in range(3):
+            await watcher.tick(session=async_session)
+        assert await _plain_alarms(async_session) == []            # grace holds
+        await _grace_runs_out(fake_redis, glm.slug, slot.slug)
+        for _ in range(UNREACHABLE_EVENT_THRESHOLD + 2):
+            await watcher.tick(session=async_session)
+
+    assert len(await _deaths(async_session)) == 1
+    plain = await _plain_alarms(async_session)
+    assert len(plain) == 1, [a.detail for a in plain]
+    assert plain[0].detail["slug"] in {glm.slug, slot.slug}
+
+
+@pytest.mark.asyncio
+async def test_plain_alarm_then_restart_that_never_comes_up_raises_exactly_one_more(
+    async_session, fake_redis,
+):
+    """A stall (engine still running, port times out) is a plain alarm, not a
+    death. The restart that follows hangs too: one more alarm, not silence."""
+    probe = Probe(failure=FAIL_TIMEOUT)
+    watcher = RuntimeWatcher(interval=INTERVAL)
+    with _stack(FakeBox(inspect=RUNNING), fake_redis, probe), _own_unless_glm(), \
+            _start_paths():
+        slot, dsv, _ = await _spark_rows(async_session)
+        probe.served = "DeepSeek-V4.1"
+        await watcher.tick(session=async_session)
+        probe.served = None
+        for _ in range(UNREACHABLE_EVENT_THRESHOLD + 1):
+            await watcher.tick(session=async_session)
+        assert len(await _plain_alarms(async_session)) == 1
+        result = await runtime_manager.restart_runtime(dsv.to_registry_dict(), host=BOX)
+        assert result["ok"], result
+        assert await fake_redis.get(RedisKeys.runtime_endpoint_alarm(ENDPOINT)) is None
+        for _ in range(3):
+            await watcher.tick(session=async_session)
+        assert len(await _plain_alarms(async_session)) == 1        # grace holds
+        await _grace_runs_out(fake_redis, dsv.slug, slot.slug)
+        for _ in range(UNREACHABLE_EVENT_THRESHOLD + 2):
+            await watcher.tick(session=async_session)
+
+    assert await _deaths(async_session) == []
+    plain = await _plain_alarms(async_session)
+    assert len(plain) == 2, [a.detail for a in plain]
+    assert {a.detail["slug"] for a in plain} <= {dsv.slug, slot.slug}
+
+
+@pytest.mark.asyncio
+async def test_a_timeout_death_on_a_shared_port_is_one_notification_whatever_the_order(
+    async_session, fake_redis,
+):
+    """A timeout death is declared at the threshold — the same probe at which
+    the slot row's plain alarm is due. The slot row was probed first (it is
+    created with the box), so the port got a plain alarm AND the death. Recipe
+    rows are probed first now: the death speaks, the slot row adds nothing."""
+    probe = Probe(failure=FAIL_TIMEOUT)
+    watcher = RuntimeWatcher(interval=INTERVAL)
+    with _stack(FakeBox(inspect=EXITED_137), fake_redis, probe), _own_unless_glm():
+        _, dsv, _ = await _spark_rows(async_session)
+        probe.served = "DeepSeek-V4.1"
+        await watcher.tick(session=async_session)
+        probe.served = None
+        for _ in range(UNREACHABLE_EVENT_THRESHOLD + 2):
+            await watcher.tick(session=async_session)
+    alarms = await _events(async_session, "runtime.unreachable")
+    assert [(a.detail["slug"], bool(a.detail.get("engine_death"))) for a in alarms] == \
+        [(dsv.slug, True)]

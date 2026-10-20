@@ -526,7 +526,10 @@ answer was its own, **or a row MC launched that has not answered yet**
 (pending start, no TTL tied to the grace): a switch whose new recipe never
 comes up (it hangs or dies while loading) ends in that one alarm when the
 20-minute grace runs out, as before this section. When nothing is known about
-the holder, the alarm fires.
+the holder, the alarm fires. Every start MC issues opens a new window on the
+port: the one-death / one-alarm keys of the outage before it are closed, so
+"Restart now" or "Other model" on a dead card (including an auto-recovery
+start) that never comes up ends in its own one alarm instead of silence.
 
 **Detection target: ≤ 2 probe intervals** after the death (operator
 requirement, 2026-10-19; today up to 3 intervals plus the tick offset, live
@@ -562,7 +565,9 @@ start; rows sharing the endpoint add none) with a reason sentence in DE/EN
 naming the box ("<runtime> stopped on <box>: the recipe's memory guard ended
 the engine at 21:14"); the Runtimes card shows the reason, the time and a link
 to the last log lines; the `runtime.unreachable` event carries the cause and
-fires once, for the dead row.
+fires once, for the dead row. Recipe rows are probed before slot rows in each
+watcher tick, so a death declared at the threshold (timeout path) is never
+preceded by the slot row's plain alarm for the same outage.
 
 11.5 **Work does not fail silently**: agents bound to a dead runtime keep
 their queued work; delivery waits while the runtime is down (relates to open
